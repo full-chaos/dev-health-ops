@@ -31,7 +31,16 @@ type fieldActionDoc struct {
 
 func servedRootFields(t *testing.T) []string {
 	t.Helper()
+	served, _ := servedRootFieldsWithOrgArg(t)
+	return served
+}
+
+// servedRootFieldsWithOrgArg also reports which served fields declare an
+// orgId argument, read from the executable schema.
+func servedRootFieldsWithOrgArg(t *testing.T) ([]string, map[string]bool) {
+	t.Helper()
 	schema := NewExecutableSchema(Config{}).Schema()
+	orgArg := map[string]bool{}
 	var served []string
 	for _, root := range []string{"Query", "Mutation", "Subscription"} {
 		def := schema.Types[root]
@@ -43,10 +52,38 @@ func servedRootFields(t *testing.T) []string {
 				continue
 			}
 			served = append(served, root+"."+field.Name)
+			for _, arg := range field.Arguments {
+				if arg.Name == "orgId" {
+					orgArg[root+"."+field.Name] = true
+				}
+			}
 		}
 	}
 	sort.Strings(served)
-	return served
+	return served, orgArg
+}
+
+func resolverPointer(row fieldActionRow) string {
+	return strings.ToLower(row.Type[:1]) + row.Type[1:] + "Resolver." + strings.ToUpper(row.Field[:1]) + row.Field[1:] + " in internal/queryapi/graph/schema.resolvers.go"
+}
+
+// checkFieldActionTruth holds the rows' statements to what the schema and the
+// resolver set say: a field with an orgId argument resolves its organization
+// from that argument, a field without one does not claim to; the resolver
+// pointer is the one the field's name derives.
+func checkFieldActionTruth(orgArg map[string]bool, doc fieldActionDoc) []string {
+	var defects []string
+	for _, row := range doc.Rows {
+		key := row.Type + "." + row.Field
+		if row.Resolver != resolverPointer(row) {
+			defects = append(defects, fmt.Sprintf("%s: resolver %q is not %q", key, row.Resolver, resolverPointer(row)))
+		}
+		byArgument := strings.HasPrefix(row.ResourceResolver, "organization_from_argument:")
+		if orgArg[key] != byArgument {
+			defects = append(defects, fmt.Sprintf("%s: the schema field has an orgId argument = %t, the row's resource_resolver says by-argument = %t", key, orgArg[key], byArgument))
+		}
+	}
+	return defects
 }
 
 func loadFieldActionDoc(t *testing.T) fieldActionDoc {
@@ -129,6 +166,10 @@ func TestEveryServedGraphQLFieldHasExactlyOneActionRowAndNoRowIsOrphaned(t *test
 	for _, defect := range checkFieldActionMap(served, doc, policycatalog.Default()) {
 		t.Error(defect)
 	}
+	_, orgArg := servedRootFieldsWithOrgArg(t)
+	for _, defect := range checkFieldActionTruth(orgArg, doc) {
+		t.Error(defect)
+	}
 }
 
 func TestFieldActionRowsNameTheirResolverMethod(t *testing.T) {
@@ -139,6 +180,9 @@ func TestFieldActionRowsNameTheirResolverMethod(t *testing.T) {
 	text := string(raw)
 	for _, row := range loadFieldActionDoc(t).Rows {
 		want := "func (r *" + strings.ToLower(row.Type[:1]) + row.Type[1:] + "Resolver) " + strings.ToUpper(row.Field[:1]) + row.Field[1:] + "("
+		if row.Resolver != resolverPointer(row) {
+			t.Errorf("%s.%s: row resolver %q is not %q", row.Type, row.Field, row.Resolver, resolverPointer(row))
+		}
 		if !strings.Contains(text, want) {
 			t.Errorf("%s.%s: schema.resolvers.go holds no %q", row.Type, row.Field, want)
 		}
@@ -183,6 +227,39 @@ func TestFieldActionMapChecksCatchPlantedDefects(t *testing.T) {
 		doc := good()
 		c.mutate(&doc)
 		joined := strings.Join(checkFieldActionMap(served, doc, cat), "\n")
+		if !strings.Contains(joined, c.want) {
+			t.Errorf("%s: the check did not report %q, it reported %q", c.name, c.want, joined)
+		}
+	}
+}
+
+func TestFieldActionTruthChecksCatchPlantedDefects(t *testing.T) {
+	orgArg := map[string]bool{"Query.byArg": true}
+	row := func(field, resolver string) fieldActionRow {
+		r := fieldActionRow{Type: "Query", Field: field, ResourceResolver: resolver, Disclosure: "d"}
+		r.Resolver = resolverPointer(r)
+		return r
+	}
+	good := fieldActionDoc{Rows: []fieldActionRow{
+		row("byArg", "organization_from_argument: x"),
+		row("noArg", "organization_from_credential: x"),
+	}}
+	if defects := checkFieldActionTruth(orgArg, good); len(defects) != 0 {
+		t.Fatalf("the clean fixture is refused: %v", defects)
+	}
+	wrongPointer := fieldActionDoc{Rows: []fieldActionRow{row("noArg", "organization_from_credential: x")}}
+	wrongPointer.Rows[0].Resolver = "queryResolver.Missing in internal/queryapi/graph/schema.resolvers.go"
+	cases := []struct {
+		name string
+		doc  fieldActionDoc
+		want string
+	}{
+		{"argument field claimed as credential", fieldActionDoc{Rows: []fieldActionRow{row("byArg", "organization_from_credential: x")}}, "has an orgId argument = true"},
+		{"credential field claimed as argument", fieldActionDoc{Rows: []fieldActionRow{row("noArg", "organization_from_argument: x")}}, "has an orgId argument = false"},
+		{"wrong resolver pointer", wrongPointer, "is not"},
+	}
+	for _, c := range cases {
+		joined := strings.Join(checkFieldActionTruth(orgArg, c.doc), "\n")
 		if !strings.Contains(joined, c.want) {
 			t.Errorf("%s: the check did not report %q, it reported %q", c.name, c.want, joined)
 		}

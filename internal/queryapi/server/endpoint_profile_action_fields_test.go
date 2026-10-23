@@ -2,6 +2,7 @@ package server
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 
@@ -101,7 +102,9 @@ func TestActionFieldRowChecksCatchPlantedDefects(t *testing.T) {
 			"impersonation_policy": "unknown", "disclosure_behavior": "d", "gaps": []any{},
 		}
 	}
-	public := func() map[string]any { return map[string]any{"id": "GET /p", "classification": "public", "gaps": []any{}} }
+	public := func() map[string]any {
+		return map[string]any{"id": "GET /p", "classification": "public", "gaps": []any{}}
+	}
 	if defects := checkActionFieldRows([]map[string]any{protected(), public()}, cat); len(defects) != 0 {
 		t.Fatalf("the clean fixture is refused: %v", defects)
 	}
@@ -119,6 +122,168 @@ func TestActionFieldRowChecksCatchPlantedDefects(t *testing.T) {
 	}
 	for _, c := range cases {
 		joined := strings.Join(checkActionFieldRows([]map[string]any{c.row}, cat), "\n")
+		if !strings.Contains(joined, c.want) {
+			t.Errorf("%s: the check did not report %q, it reported %q", c.name, c.want, joined)
+		}
+	}
+}
+
+// routeFamily names the authentication call a route's handler makes and the
+// file that makes it, read from the route table and the handler files.
+func routeFamily(id, route string) (call, file string) {
+	switch {
+	case route == "/graphql":
+		return "scope.Impersonation(", "graphql_edge_route.go"
+	case strings.Contains(id, "@mcp"):
+		return "mcpAuthenticate(", "mcp_route.go"
+	case route == "/buildinfo":
+		return "authenticateInternalRequest(", "buildinfo_route.go"
+	case strings.HasPrefix(route, "/query"):
+		return "authenticateInternalRequest(", "query_route.go"
+	}
+	for _, rest := range RESTRoutes() {
+		if rest.Pattern == route {
+			return "authenticateRESTRequest(", rest.File
+		}
+	}
+	return "", ""
+}
+
+// checkActionFieldTruth holds the protected rows' statements to the handler
+// source: the authentication function a row cites is the one its handler file
+// calls (and not the other one), a GraphQL row says impersonation applies
+// exactly when its handler chain applies the impersonation middleware, an
+// internal-carrier route that reads an organization says impersonation applies
+// and one that reads none says it has no org context, and a REST data route
+// does not claim more than "unknown".
+func checkActionFieldTruth(rows []map[string]any, read func(file string) string) []string {
+	var defects []string
+	for _, row := range rows {
+		if row["classification"] == "public" {
+			continue
+		}
+		id, _ := row["id"].(string)
+		route, _ := row["route"].(string)
+		call, file := routeFamily(id, route)
+		if call == "" {
+			defects = append(defects, id+": no handler family found for the route")
+			continue
+		}
+		if !strings.Contains(read(file), call) {
+			defects = append(defects, fmt.Sprintf("%s: %s does not call %s", id, file, call))
+			continue
+		}
+		text := fmt.Sprint(row["resource_resolver"], " ", row["current_state_cache_behavior"], " ", row["disclosure_behavior"])
+		policy, _ := row["impersonation_policy"].(string)
+		cites := func(name string) bool { return strings.Contains(text, name) }
+		switch call {
+		case "authenticateRESTRequest(":
+			if cites("authenticateInternalRequest") {
+				defects = append(defects, id+": cites authenticateInternalRequest but its handler calls authenticateRESTRequest")
+			}
+			if policy != "unknown" {
+				defects = append(defects, fmt.Sprintf("%s: impersonation_policy %q, a REST data route is not proven beyond unknown", id, policy))
+			}
+		case "authenticateInternalRequest(":
+			if cites("authenticateRESTRequest") {
+				defects = append(defects, id+": cites authenticateRESTRequest but its handler calls authenticateInternalRequest")
+			}
+			want := "subject_to_impersonation_override"
+			if route == "/buildinfo" {
+				want = "exempt_no_org_context"
+				if !strings.HasPrefix(fmt.Sprint(row["resource_resolver"]), "none:") || cites("organization's rows") {
+					defects = append(defects, id+": /buildinfo reads no organization, its resource_resolver must start none: and name no organization rows")
+				}
+			}
+			if policy != want {
+				defects = append(defects, fmt.Sprintf("%s: impersonation_policy %q, want %q", id, policy, want))
+			}
+		case "scope.Impersonation(":
+			if policy != "subject_to_impersonation_override" {
+				defects = append(defects, fmt.Sprintf("%s: the /graphql chain applies scope.Impersonation, impersonation_policy is %q", id, policy))
+			}
+		case "mcpAuthenticate(":
+			if policy != "unknown" {
+				defects = append(defects, fmt.Sprintf("%s: impersonation_policy %q, the MCP class refuses an impersonating identity: want unknown with a named gap", id, policy))
+			}
+		}
+		if route == "/query/proof-write" && !strings.Contains(fmt.Sprint(row["disclosure_behavior"]), "allowlist") {
+			defects = append(defects, id+": the route is org-allowlist gated, disclosure_behavior must say so")
+		}
+	}
+	return defects
+}
+
+func TestQueryAPIRowStatementsMatchTheHandlerSource(t *testing.T) {
+	read := func(file string) string {
+		raw, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(raw)
+	}
+	for _, defect := range checkActionFieldTruth(loadQueryAPIRows(t), read) {
+		t.Error(defect)
+	}
+}
+
+func TestActionFieldTruthChecksCatchPlantedDefects(t *testing.T) {
+	src := map[string]string{
+		"buildinfo_route.go":    "authenticateInternalRequest(",
+		"query_route.go":        "authenticateInternalRequest(",
+		"graphql_edge_route.go": "scope.Impersonation(",
+		"mcp_route.go":          "mcpAuthenticate(",
+		"heatmap_route.go":      "authenticateRESTRequest(",
+		"rest_routes.go":        "",
+	}
+	read := func(file string) string { return src[file] }
+	rest := func() map[string]any {
+		return map[string]any{"id": "GET /api/v1/heatmap [x]", "route": "/api/v1/heatmap", "classification": "protected",
+			"resource_resolver": "authenticateRESTRequest", "current_state_cache_behavior": "authenticateRESTRequest", "disclosure_behavior": "d", "impersonation_policy": "unknown"}
+	}
+	build := func() map[string]any {
+		return map[string]any{"id": "GET /buildinfo [x]", "route": "/buildinfo", "classification": "protected",
+			"resource_resolver": "none: build identity", "current_state_cache_behavior": "authenticateInternalRequest", "disclosure_behavior": "d", "impersonation_policy": "exempt_no_org_context"}
+	}
+	gql := func() map[string]any {
+		return map[string]any{"id": "GET /graphql [x]", "route": "/graphql", "classification": "protected",
+			"resource_resolver": "r", "current_state_cache_behavior": "c", "disclosure_behavior": "d", "impersonation_policy": "subject_to_impersonation_override"}
+	}
+	proof := func() map[string]any {
+		return map[string]any{"id": "POST /query/proof-write [x]", "route": "/query/proof-write", "classification": "protected",
+			"resource_resolver": "r", "current_state_cache_behavior": "authenticateInternalRequest", "disclosure_behavior": "org allowlist", "impersonation_policy": "subject_to_impersonation_override"}
+	}
+	for _, row := range []map[string]any{rest(), build(), gql(), proof()} {
+		if defects := checkActionFieldTruth([]map[string]any{row}, read); len(defects) != 0 {
+			t.Fatalf("the clean fixture %v is refused: %v", row["id"], defects)
+		}
+	}
+	cases := []struct {
+		name string
+		row  map[string]any
+		want string
+	}{
+		{"graphql claims not applicable", func() map[string]any { r := gql(); r["impersonation_policy"] = "not_applicable_non_main_app"; return r }(), "applies scope.Impersonation"},
+		{"buildinfo claims organization rows", func() map[string]any {
+			r := build()
+			r["resource_resolver"] = "organization_from_credential: x"
+			return r
+		}(), "reads no organization"},
+		{"proof-write drops the allowlist", func() map[string]any {
+			r := proof()
+			r["disclosure_behavior"] = "any caller reads its own organization's rows"
+			return r
+		}(), "org-allowlist gated"},
+		{"rest row cites the internal function", func() map[string]any { r := rest(); r["resource_resolver"] = "authenticateInternalRequest"; return r }(), "calls authenticateRESTRequest"},
+		{"internal row cites the rest function", func() map[string]any { r := proof(); r["resource_resolver"] = "authenticateRESTRequest"; return r }(), "calls authenticateInternalRequest"},
+		{"rest row over-claims impersonation", func() map[string]any {
+			r := rest()
+			r["impersonation_policy"] = "not_applicable_non_main_app"
+			return r
+		}(), "not proven beyond unknown"},
+	}
+	for _, c := range cases {
+		joined := strings.Join(checkActionFieldTruth([]map[string]any{c.row}, read), "\n")
 		if !strings.Contains(joined, c.want) {
 			t.Errorf("%s: the check did not report %q, it reported %q", c.name, c.want, joined)
 		}

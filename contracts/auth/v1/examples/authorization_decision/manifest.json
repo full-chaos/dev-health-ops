@@ -80,13 +80,13 @@
     {
       "file": "decision-invalid-reason-code-free-text.json",
       "expect_instance_location": "/reason_code",
-      "expect_keyword": "pattern",
+      "expect_keyword": "enum",
       "why": "Free text smuggled into the code field: user-facing text is caller-owned."
     },
     {
       "file": "decision-invalid-reason-code-uppercase.json",
       "expect_instance_location": "/reason_code",
-      "expect_keyword": "pattern",
+      "expect_keyword": "enum",
       "why": "Codes are lowercase tokens."
     },
     {
@@ -166,6 +166,18 @@
       "expect_instance_location": "/",
       "expect_keyword": "additionalProperties",
       "why": "Closed document."
+    },
+    {
+      "file": "decision-invalid-reason-code-secret-shaped.json",
+      "expect_instance_location": "/reason_code",
+      "expect_keyword": "enum",
+      "why": "A lowercase secret-shaped token fits the old shape pattern; the closed vocabulary refuses it."
+    },
+    {
+      "file": "decision-invalid-reason-code-not-in-vocabulary.json",
+      "expect_instance_location": "/reason_code",
+      "expect_keyword": "enum",
+      "why": "A well-formed code no producer emits is refused: the vocabulary is closed."
     }
   ],
   "reject_by_client": [

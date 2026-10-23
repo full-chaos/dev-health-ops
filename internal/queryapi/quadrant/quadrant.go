@@ -323,20 +323,20 @@ var PersonMetrics = map[string]MetricSpec{
 		Metric: "throughput", Label: "Throughput", Unit: "items",
 		Table: "work_item_user_metrics_daily AS m", ValueExpr: "sum(m.items_completed)",
 		EntityExpr: "m.user_identity", LabelExpr: "m.user_identity",
-		WhereClause: "AND m.user_identity != ''", Transform: identity,
+		WhereClause: "AND m.user_identity != '' AND " + rowview.OrgPredicate("work_item_user_metrics_daily", "m"), Transform: identity,
 	},
 	"cycle_time": {
 		Metric: "cycle_time", Label: "Cycle Time", Unit: "days",
 		Table: "work_item_user_metrics_daily AS m", ValueExpr: "avg(m.cycle_time_p50_hours)",
 		EntityExpr: "m.user_identity", LabelExpr: "m.user_identity",
-		WhereClause: "AND m.cycle_time_p50_hours IS NOT NULL AND m.user_identity != ''",
+		WhereClause: "AND m.cycle_time_p50_hours IS NOT NULL AND m.user_identity != '' AND " + rowview.OrgPredicate("work_item_user_metrics_daily", "m"),
 		Transform:   hoursToDays,
 	},
 	"wip": {
 		Metric: "wip", Label: "WIP", Unit: "items",
 		Table: "work_item_user_metrics_daily AS m", ValueExpr: "avg(m.wip_count_end_of_day)",
 		EntityExpr: "m.user_identity", LabelExpr: "m.user_identity",
-		WhereClause: "AND m.user_identity != ''", Transform: identity,
+		WhereClause: "AND m.user_identity != '' AND " + rowview.OrgPredicate("work_item_user_metrics_daily", "m"), Transform: identity,
 	},
 	"review_load": {
 		Metric: "review_load", Label: "Review Load", Unit: "reviews",

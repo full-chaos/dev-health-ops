@@ -164,6 +164,7 @@ internal/storage/clickhouse
 internal/storage/clickhouse/latestrow
 internal/storage/clickhouse/liverow
 internal/storage/postgres
+internal/storage/postgres/aclguard
 internal/storage/postgres/authschema
 internal/storage/river
 internal/storage/roleacl

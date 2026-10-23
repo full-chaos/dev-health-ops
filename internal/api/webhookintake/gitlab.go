@@ -1,7 +1,8 @@
 package webhookintake
 
 import (
-	"crypto/hmac"
+	"crypto/sha256"
+	"crypto/subtle"
 	"io"
 	"net/http"
 
@@ -14,21 +15,22 @@ import (
 // compare of X-Gitlab-Token against the configured token (not HMAC -- GitLab
 // sends the shared secret itself, not a signature over the body).
 func verifyGitLabToken(tokenHeader, secret string) bool {
+	return verifyGitLabWithKey(tokenHeader, newVerifyingKey(secret))
+}
+
+func verifyGitLabWithKey(tokenHeader string, key verifyingKey) bool {
 	if tokenHeader == "" {
 		return false
 	}
-	return hmac.Equal([]byte(tokenHeader), []byte(secret))
+	// Digests, so the work does not depend on the length of either side.
+	given := sha256.Sum256([]byte(tokenHeader))
+	return subtle.ConstantTimeCompare(given[:], key.digest[:]) == 1
 }
 
 // handleGitLabWebhook ports router.py's gitlab_webhook.
 func (d Deps) handleGitLabWebhook() http.HandlerFunc {
+	key := newVerifyingKey(d.secrets().GitLab)
 	return func(w http.ResponseWriter, r *http.Request) {
-		secret := d.secrets().GitLab
-		if secret == "" {
-			d.logger().Warn("GITLAB_WEBHOOK_TOKEN not configured - rejecting webhook")
-			policy.WriteDetail(w, http.StatusInternalServerError, "Webhook token not configured", nil)
-			return
-		}
 		// Python declares X-Gitlab-Event as a required FastAPI Header()
 		// param, resolved (and 422'd) ahead of the token-checking body
 		// dependency -- same confirmed-live ordering as GitHub's own two
@@ -37,7 +39,7 @@ func (d Deps) handleGitLabWebhook() http.HandlerFunc {
 			policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail(errs), nil)
 			return
 		}
-		if !verifyGitLabToken(r.Header.Get("X-Gitlab-Token"), secret) {
+		if !verifyGitLabWithKey(r.Header.Get("X-Gitlab-Token"), key) {
 			d.logger().Warn("GitLab webhook token validation failed")
 			policy.WriteDetail(w, http.StatusUnauthorized, "Invalid token", nil)
 			return

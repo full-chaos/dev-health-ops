@@ -114,6 +114,7 @@ internal/pythonparity
 internal/pythonparity/emailvalidator
 internal/pythonparity/pyidna
 internal/pythonparity/pyunicodedata
+internal/queryapi/rowview
 internal/scheduler/sync
 internal/storage/clickhouse
 internal/storage/clickhouse/latestrow

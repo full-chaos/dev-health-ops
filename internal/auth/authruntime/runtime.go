@@ -88,6 +88,7 @@ const maxInFlightRequests = 64
 // flags, all off; prod enablement is a separate decision (CHAOS-3275 D1).
 func sessionRoutes(
 	cfg authconfig.Config, logger *slog.Logger, pool *pgxpool.Pool, schema authschema.ValidatedIdentifier,
+	accessSigner authapi.AccessSigner,
 ) ([]httpapi.Route, error) {
 	if !cfg.Session.Enabled {
 		return nil, nil
@@ -99,7 +100,7 @@ func sessionRoutes(
 	if err != nil {
 		return nil, err
 	}
-	issuer, err := authapi.NewIssuer(cfg.Session.AccessSecret.Reveal(), cfg.Session.AccessIssuer, cfg.Session.AccessAudience)
+	issuer, err := newAccessIssuer(cfg, accessSigner)
 	if err != nil {
 		return nil, err
 	}
@@ -114,6 +115,21 @@ func sessionRoutes(
 		return nil, err
 	}
 	return append(routes, compat...), nil
+}
+
+// newAccessIssuer builds the one issuer of cfg's access token class: the HS256
+// compatibility issuer, or the EdDSA one over signer. Never both.
+func newAccessIssuer(cfg authconfig.Config, signer authapi.AccessSigner) (*authapi.Issuer, error) {
+	switch cfg.Session.AccessClass {
+	case "", authconfig.AccessClassHS256Compat:
+		return authapi.NewIssuer(cfg.Session.AccessSecret.Reveal(), cfg.Session.AccessIssuer, cfg.Session.AccessAudience)
+	case authconfig.AccessClassEdDSA:
+		return authapi.NewEdDSAIssuer(
+			cfg.Session.AccessSecret.Reveal(), cfg.Session.AccessIssuer, cfg.Session.AccessAudience,
+			signer, cfg.TokenIssuerURL,
+		)
+	}
+	return nil, fmt.Errorf("authruntime: unknown access token class %q", cfg.Session.AccessClass)
 }
 
 // compatRoutes builds go-api's compatibility routes over the identity store,
@@ -414,7 +430,7 @@ func configureWithRoutes(
 		return nil, err
 	}
 
-	routes, err := sessionRoutes(cfg, logger, store.Pool(), schemaID)
+	routes, err := sessionRoutes(cfg, logger, store.Pool(), schemaID, signer)
 	if err != nil {
 		closeStore()
 		return nil, err

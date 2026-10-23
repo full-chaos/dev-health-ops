@@ -35,6 +35,7 @@ internal/queryapi/activeteams
 internal/queryapi/deltarule
 internal/queryapi/people
 internal/queryapi/quadrant
+internal/queryapi/rowview
 internal/queryapi/scopelabel
 internal/queryapi/teamscope
 internal/queryapi/timewindow

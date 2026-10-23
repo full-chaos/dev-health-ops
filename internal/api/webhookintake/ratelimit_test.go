@@ -10,14 +10,24 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 )
 
-// hitPagerDuty sends one delivery with no subscription header (a 401 after
+// hitPagerDuty sends one delivery for an id with no binding (a 401 after
 // the limiter) to the binding path from peer, optionally with an
 // X-Forwarded-For header.
+func noBindings(t *testing.T) {
+	t.Helper()
+	previous := loadBinding
+	loadBinding = func(context.Context, *pgxpool.Pool, string) (pagerdutyBinding, error) {
+		return pagerdutyBinding{}, errBindingNotFound
+	}
+	t.Cleanup(func() { loadBinding = previous })
+}
+
 func hitPagerDuty(handler http.HandlerFunc, binding, peer, forwarded string) *httptest.ResponseRecorder {
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/webhooks/pagerduty/"+binding, nil)
 	request.SetPathValue("binding_id", binding)
@@ -34,6 +44,7 @@ func hitPagerDuty(handler http.HandlerFunc, binding, peer, forwarded string) *ht
 // path), so the 61st delivery to one binding from one IP is a 429 and a
 // second binding has its own budget.
 func TestPagerDutyLimitIsPerIPAndBindingPath(t *testing.T) {
+	noBindings(t)
 	t.Setenv("TRUSTED_PROXIES", "")
 	now := time.Now()
 	deps := Deps{Counters: httpapi.NewMemoryCounters(func() time.Time { return now })}
@@ -61,6 +72,7 @@ func TestPagerDutyLimitIsPerIPAndBindingPath(t *testing.T) {
 // in TRUSTED_PROXIES. A header from any other peer must not mint a fresh
 // budget (the previous Go key trusted every X-Forwarded-For).
 func TestPagerDutyForwardedForFromAnUntrustedPeerCannotMintABudget(t *testing.T) {
+	noBindings(t)
 	t.Setenv("TRUSTED_PROXIES", "")
 	deps := Deps{}
 	deps.limiters = newRateLimiters(nil, nil)
@@ -82,6 +94,7 @@ func TestPagerDutyForwardedForFromAnUntrustedPeerCannotMintABudget(t *testing.T)
 // Two api replicas over one store share one budget: 30 deliveries to each
 // are 60 in the window, so the next one is a 429 whichever replica takes it.
 func TestPagerDutyLimitHoldsAcrossReplicasSharingAStore(t *testing.T) {
+	noBindings(t)
 	t.Setenv("TRUSTED_PROXIES", "")
 	store := httpapi.NewMemoryCounters(nil)
 	a, b := Deps{Counters: store}, Deps{Counters: store}

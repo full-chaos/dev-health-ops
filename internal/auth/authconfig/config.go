@@ -38,6 +38,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/clientaddr"
+	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
 
@@ -81,6 +82,9 @@ const (
 	EnvAccessTokenSecret   = "AUTH_JWT_SECRET_KEY"
 	EnvAccessTokenIssuer   = "AUTH_JWT_ISSUER"
 	EnvAccessTokenAudience = "AUTH_JWT_AUDIENCE"
+	// EnvAccessTokenClass picks the one class of access token this service
+	// mints: hs256_compat (the default) or eddsa. Exact match, no fallback.
+	EnvAccessTokenClass = "AUTH_ACCESS_TOKEN_CLASS"
 	// EnvSessionSuccessorKey is the 32-byte session successor key (base64url,
 	// no padding) that derives a rotated refresh credential (CHAOS-10207
 	// ruling Q-B1-1). Secret: environment or _FILE only.
@@ -203,10 +207,18 @@ type Config struct {
 	EnvOnlySettings []string
 }
 
+// Access token classes (EnvAccessTokenClass).
+const (
+	AccessClassHS256Compat = "hs256_compat"
+	AccessClassEdDSA       = "eddsa"
+)
+
 // SessionTokens are the session routes' secrets and the access token's iss
 // and aud.
 type SessionTokens struct {
-	Enabled        bool
+	Enabled bool
+	// AccessClass is AccessClassHS256Compat or AccessClassEdDSA.
+	AccessClass    string
 	AccessSecret   secrets.Value
 	AccessIssuer   string
 	AccessAudience string
@@ -259,6 +271,7 @@ func (c Config) SafeAttrs() []slog.Attr {
 		slog.Int("trusted_proxy_count", c.TrustedProxies.Len()),
 		slog.String("jwt_issuer", c.Session.AccessIssuer),
 		slog.String("jwt_audience", c.Session.AccessAudience),
+		slog.String("access_class", c.Session.AccessClass),
 	}
 }
 
@@ -382,6 +395,23 @@ func Load(spec Spec) (Config, error) {
 	if cfg.Session, err = sessionTokens(lookup); err != nil {
 		return Config{}, err
 	}
+	if cfg.Session.AccessClass == AccessClassEdDSA {
+		// iss and aud are signed byte for byte: a value with surrounding
+		// whitespace is refused, never trimmed into a different claim.
+		for _, name := range []string{EnvTokenIssuerURL, EnvAccessTokenAudience} {
+			if raw := valueOf(lookup, name); raw != strings.TrimSpace(raw) {
+				return Config{}, fmt.Errorf("%s=%s needs %s without surrounding whitespace",
+					EnvAccessTokenClass, AccessClassEdDSA, name)
+			}
+		}
+		if cfg.TokenIssuerURL == "" {
+			return Config{}, fmt.Errorf("%s=%s needs %s", EnvAccessTokenClass, AccessClassEdDSA, EnvTokenIssuerURL)
+		}
+		if _, ok := contracts.AccessTokenScope(cfg.Session.AccessAudience); !ok {
+			return Config{}, fmt.Errorf("%s=%s needs %s to name a user access token audience",
+				EnvAccessTokenClass, AccessClassEdDSA, EnvAccessTokenAudience)
+		}
+	}
 	if cfg.TrustedProxies, err = clientaddr.ParseTrust(valueOf(lookup, EnvTrustedProxies)); err != nil {
 		return Config{}, err
 	}
@@ -407,11 +437,29 @@ func socialClients(lookup secrets.LookupEnv) (map[string]SocialClient, error) {
 	return out, nil
 }
 
+// accessTokenClass reads EnvAccessTokenClass: unset or empty is hs256_compat,
+// the two class names match exactly, anything else is refused (the value is
+// not echoed).
+func accessTokenClass(lookup secrets.LookupEnv) (string, error) {
+	switch valueOf(lookup, EnvAccessTokenClass) {
+	case "", AccessClassHS256Compat:
+		return AccessClassHS256Compat, nil
+	case AccessClassEdDSA:
+		return AccessClassEdDSA, nil
+	}
+	return "", fmt.Errorf("%s must be %s or %s", EnvAccessTokenClass, AccessClassHS256Compat, AccessClassEdDSA)
+}
+
 // sessionTokens resolves the session routes' settings. The two secrets come
 // together or not at all: a deployment with one of them meant to serve the
 // session routes, and silently serving none would hide that.
 func sessionTokens(lookup secrets.LookupEnv) (SessionTokens, error) {
+	class, err := accessTokenClass(lookup)
+	if err != nil {
+		return SessionTokens{}, err
+	}
 	out := SessionTokens{
+		AccessClass:    class,
 		AccessIssuer:   stringOr(lookup, EnvAccessTokenIssuer, defaultAccessTokenIssuer),
 		AccessAudience: stringOr(lookup, EnvAccessTokenAudience, defaultAccessTokenAudience),
 	}

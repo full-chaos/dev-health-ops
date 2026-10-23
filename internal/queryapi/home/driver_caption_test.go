@@ -104,7 +104,7 @@ func TestBuildResponseServesTheDriverCaptionFromOneBatchedRead(t *testing.T) {
 	batches := 0
 	base := orgGoldenHandler(t)
 	client := fakeQueryClient{t: t, handler: func(t *testing.T, q string, b []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
-		if strings.Contains(q, "UNION ALL") && strings.Contains(q, "LIMIT {limit:UInt32} BY metric") {
+		if strings.Contains(q, "UNION ALL") && strings.Contains(q, "LIMIT {limit_n:UInt32} BY metric") {
 			batches++
 		}
 		return base(t, q, b)
@@ -143,7 +143,7 @@ func TestBuildResponseServesTheDriverCaptionFromOneBatchedRead(t *testing.T) {
 func TestBuildResponseSurvivesAFailedDriverCaptionRead(t *testing.T) {
 	base := orgGoldenHandler(t)
 	client := fakeQueryClient{t: t, handler: func(t *testing.T, q string, b []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
-		if strings.Contains(q, "UNION ALL") && strings.Contains(q, "LIMIT {limit:UInt32} BY metric") {
+		if strings.Contains(q, "UNION ALL") && strings.Contains(q, "LIMIT {limit_n:UInt32} BY metric") {
 			return nil, fmt.Errorf("simulated driver-caption read outage")
 		}
 		return base(t, q, b)

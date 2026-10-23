@@ -88,7 +88,7 @@ func ResolveEvents(ctx context.Context, client QueryClient, orgID string, flagKe
 
 	whereClause, bindings := eventWhere(orgID, flagKey, environment)
 
-	rowBindings := append(append([]clickhouse.Binding{}, bindings...), clickhouse.Binding{Name: "limit", Value: clampLimit(limit)})
+	rowBindings := append(append([]clickhouse.Binding{}, bindings...), clickhouse.Binding{Name: "limit_n", Value: clampLimit(limit)})
 
 	rowQuery := `SELECT
     flag_key,
@@ -101,7 +101,7 @@ func ResolveEvents(ctx context.Context, client QueryClient, orgID string, flagKe
 FROM feature_flag_event
 WHERE ` + whereClause + `
 ORDER BY event_ts ASC
-LIMIT {limit:UInt64}`
+LIMIT {limit_n:UInt64}`
 
 	countQuery := `SELECT count() AS total
 FROM feature_flag_event

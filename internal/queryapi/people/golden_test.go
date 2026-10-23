@@ -104,7 +104,7 @@ func TestGoldenNoAliasMapping(t *testing.T) {
 		if v, _ := bindingValue(bindings, "query"); v != "%ali%" {
 			t.Fatalf("query binding = %v, want %%ali%%", v)
 		}
-		if v, _ := bindingValue(bindings, "limit"); v != 20 {
+		if v, _ := bindingValue(bindings, "limit_n"); v != 20 {
 			t.Fatalf("limit binding = %v, want 20", v)
 		}
 		return &fixtureRowScanner{rows: [][]any{

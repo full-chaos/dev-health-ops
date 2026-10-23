@@ -217,13 +217,13 @@ func dedupedEdgesSelect(orgID string, scope *filterScope) (string, []clickhouse.
 // (countMatchingEdges) counts the same select with no tail.
 const dedupedEdgesOrderAndLimit = `
         ORDER BY confidence DESC, edge_id ASC
-        LIMIT {limit:UInt64}
+        LIMIT {limit_n:UInt64}
     `
 
 func fetchDedupedEdgeRows(ctx context.Context, client QueryClient, orgID string, scope *filterScope, limit int) ([]edgeRow, error) {
 	selectSQL, bindings := dedupedEdgesSelect(orgID, scope)
 	query := selectSQL + dedupedEdgesOrderAndLimit
-	bindings = append(bindings, clickhouse.Binding{Name: "limit", Value: limit})
+	bindings = append(bindings, clickhouse.Binding{Name: "limit_n", Value: limit})
 
 	rows, err := client.Query(ctx, query, bindings)
 	if err != nil {
@@ -270,7 +270,7 @@ func queryDependencyEdges(ctx context.Context, client QueryClient, orgID string,
 		return nil, nil
 	}
 	query := selectSQL + dependencyEdgesOrderAndLimit
-	bindings = append(bindings, clickhouse.Binding{Name: "limit", Value: limit})
+	bindings = append(bindings, clickhouse.Binding{Name: "limit_n", Value: limit})
 
 	rows, err := client.Query(ctx, query, bindings)
 	if err != nil {
@@ -306,7 +306,7 @@ const (
 // dependencyEdgesSelect; see dedupedEdgesOrderAndLimit.
 const dependencyEdgesOrderAndLimit = `
         ORDER BY last_synced DESC, edge_id ASC
-        LIMIT {limit:UInt64}
+        LIMIT {limit_n:UInt64}
     `
 
 // dependencyEdgesSelect is the filtered select of the dependency edges with no

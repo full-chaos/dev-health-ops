@@ -65,7 +65,7 @@ func TestResolveWorkUnitTeamAttributions_QueryShape(t *testing.T) {
 	// TRUNC-1: the bound value is limit+1 (a probe row beyond the
 	// caller-visible cap), not limit itself -- see
 	// resolveWorkUnitTeamAttributions' TRUNC-1 doc comment.
-	if v, ok := bindingValue(client.bindings[0], "limit"); !ok || v != uint64(5001) {
+	if v, ok := bindingValue(client.bindings[0], "limit_n"); !ok || v != uint64(5001) {
 		t.Fatalf("limit binding = %v, %v, want probe value 5001 (limit+1)", v, ok)
 	}
 }

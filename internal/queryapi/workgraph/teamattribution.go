@@ -182,15 +182,15 @@ func resolveWorkUnitTeamAttributions(ctx context.Context, client QueryClient, or
         )
         %s
         ORDER BY member_count DESC, work_unit_id
-        LIMIT {limit:UInt64}
+        LIMIT {limit_n:UInt64}
     `, teamAttributionSourceRankSQL, membershipRunSubquery(scope), legacyNodeMaxJoin, workUnitFilter, runScopePredicate, teamFilter)
 
 	// probeLimit is limit+1 -- see this function's TRUNC-1 doc comment
-	// above. The bound SQL parameter is still named "limit" (the query
-	// text above says `LIMIT {limit:UInt64}`); only the VALUE sent is
+	// above. The bound SQL parameter is named "limit_n" (the query
+	// text above says `LIMIT {limit_n:UInt64}`); only the VALUE sent is
 	// widened by one row.
 	probeLimit := limit + 1
-	bindings = append(bindings, clickhouse.Binding{Name: "limit", Value: uint64(probeLimit)})
+	bindings = append(bindings, clickhouse.Binding{Name: "limit_n", Value: uint64(probeLimit)})
 
 	// A ClickHouse client whose Options never set MaxResultRows defaults
 	// its connection-wide ceiling to 1,000 rows (dev-health-go's

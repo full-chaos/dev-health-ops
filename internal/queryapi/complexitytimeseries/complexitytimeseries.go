@@ -189,7 +189,7 @@ type repoTimeseriesRow struct {
 // two branches: repoIDs given -> filter through the repos catalog with NO
 // outer LIMIT (the truncated repoIDs array is itself the bound); repoIDs
 // empty -> a default top-N-by-latest-complexity subquery bounded by
-// {limit:UInt32}. Neither branch appends a LIMIT to the outer query --
+// {limit_n:UInt32}. Neither branch appends a LIMIT to the outer query --
 // this is a deliberate, verified difference from fetchFileTimeseries
 // below (see that function's doc comment).
 func fetchRepoTimeseries(ctx context.Context, client QueryClient, orgID, sinceDay, untilDay string, repoIDs []string, limit int, granularity model.TimeGranularity) ([]repoTimeseriesRow, error) {
@@ -238,10 +238,10 @@ func fetchRepoTimeseries(ctx context.Context, client QueryClient, orgID, sinceDa
                     AND day <= {until_day:Date}
                   GROUP BY repo_id
                   ORDER BY latest_complexity DESC NULLS LAST, repo_id
-                  LIMIT {limit:UInt32}
+                  LIMIT {limit_n:UInt32}
               )
           )`
-		bindings = append(bindings, clickhouse.Binding{Name: "limit", Value: uint32(limit)})
+		bindings = append(bindings, clickhouse.Binding{Name: "limit_n", Value: uint32(limit)})
 	}
 	query += "\nGROUP BY day, repo_id\nORDER BY day, repo_id"
 

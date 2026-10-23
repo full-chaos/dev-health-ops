@@ -38,7 +38,7 @@ func TestResolveScoped_TeamConditionIsInTheInnerWhereBeforeGroupByAndLimit(t *te
 
 	marker := strings.Index(statement, teamscope.Marker)
 	groupBy := strings.Index(statement, "GROUP BY repo_id, reviewer, author, day")
-	limit := strings.Index(statement, "LIMIT {limit:UInt64}")
+	limit := strings.Index(statement, "LIMIT {limit_n:UInt64}")
 	where := strings.Index(statement, "WHERE org_id = {org_id:String}")
 	if marker < 0 {
 		t.Fatalf("statement does not carry the shared team condition (%q): %s", teamscope.Marker, statement)

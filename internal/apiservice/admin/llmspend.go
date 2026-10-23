@@ -235,7 +235,7 @@ WHERE org_id = {org_id:String}
   AND computed_at >= {since:DateTime}
 GROUP BY run_id
 ORDER BY last_at DESC, run_id DESC
-LIMIT {limit:UInt32}`
+LIMIT {limit_n:UInt32}`
 	spendRunsQuery = `SELECT run_id, provider, model, sum(calls) AS calls, sum(input_tokens) AS input_tokens,
     sum(output_tokens) AS output_tokens, max(computed_at) AS last_computed_at
 FROM llm_token_usage
@@ -266,7 +266,7 @@ func (c clickhouseSpend) readSpend(ctx context.Context, orgID string, limit uint
 	sinceText := since.Format("2006-01-02 15:04:05")
 	var summary spendSummary
 	rows, err := c.conn.Query(ctx, spendLatestRunsQuery,
-		clickhouse.Named("org_id", orgID), clickhouse.Named("since", sinceText), clickhouse.Named("limit", limit))
+		clickhouse.Named("org_id", orgID), clickhouse.Named("since", sinceText), clickhouse.Named("limit_n", limit))
 	if err != nil {
 		return summary, err
 	}

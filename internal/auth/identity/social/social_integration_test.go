@@ -192,7 +192,7 @@ func TestProviderEmailCollisionIsAConflict(t *testing.T) {
 			if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 				t.Fatal(err)
 			}
-			if len(got) != 1 || len(got["detail"]) != 2 || got["detail"]["existing_provider"] != "local" {
+			if len(got) != 1 || len(got["detail"]) != 1 || got["detail"]["message"] != AccountExistsMessage {
 				t.Fatalf("attempt %d: body %s", i, rec.Body)
 			}
 		}

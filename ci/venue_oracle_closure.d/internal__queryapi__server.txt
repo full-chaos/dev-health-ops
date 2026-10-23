@@ -130,6 +130,7 @@ internal/queryapi/reports
 internal/queryapi/reports/writeproofcases
 internal/queryapi/reviewedges
 internal/queryapi/routeswitch
+internal/queryapi/rowview
 internal/queryapi/sankey
 internal/queryapi/scopelabel
 internal/queryapi/security

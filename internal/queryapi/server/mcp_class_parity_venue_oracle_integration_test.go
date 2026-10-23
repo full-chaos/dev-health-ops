@@ -367,6 +367,9 @@ func mcpParityInsertSQL(table string, columns []mcpParityColumn, org, repo strin
 // mcpParityOverrides are the columns whose meaning a type cannot give: the row's scope and its owner.
 // entity 0 is the repository, 1 and 2 are teams.
 var mcpParityOverrides = map[string]map[string]string{
+	// row_view is the view of a row: the empty string is a legacy row, which every reader keeps (CHAOS-8863). A
+	// generated string would be a view no reader asks for and the capacity reads would find no rows.
+	"work_item_metrics_daily": {"row_view": "CAST('' AS LowCardinality(String))"},
 	"compounding_risk_daily": {
 		"scope":    "CAST(if(entity = 0, 'repo', 'team') AS Enum8('repo' = 1, 'team' = 2))",
 		"scope_id": "if(entity = 0, '%REPO%', arrayElement(%TEAMS%, entity + 1))",

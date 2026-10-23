@@ -142,7 +142,7 @@ func orgGoldenHandler(t *testing.T) func(t *testing.T, query string, bindings []
 
 		switch {
 		// first: the batch holds the text of every other case
-		case strings.Contains(q, "UNION ALL") && strings.Contains(q, "LIMIT {limit:UInt32} BY metric"):
+		case strings.Contains(q, "UNION ALL") && strings.Contains(q, "LIMIT {limit_n:UInt32} BY metric"):
 			// the batched driver read of the signal captions (CHAOS-8573): metric, id
 			return &fixtureRowScanner{rows: [][]any{{"churn", "repo-alpha"}}}, nil
 

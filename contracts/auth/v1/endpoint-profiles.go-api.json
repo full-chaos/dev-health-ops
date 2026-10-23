@@ -5648,23 +5648,13 @@
       "tenant_requirement": "org_scoped"
     },
     {
-      "accepted_credential_classes": [
-        "external_push_ingest_token"
-      ],
-      "classification": "protected",
+      "accepted_credential_classes": [],
+      "classification": "public",
       "gaps": [],
       "graphql_field_name": null,
       "id": "GET /api/v1/external-ingest/schemas [dev-health-ops-api @api]",
       "method": "GET",
-      "primary_validator": {
-        "anchor": {
-          "line": 143,
-          "note": "Pattern:",
-          "path": "internal/api/externalingest/deps.go"
-        },
-        "description": "The external-ingest handlers authenticate the push token in the Authorization header before any read or write."
-      },
-      "public_rationale": null,
+      "public_rationale": "Public schema document: the contract pushers code against; no tenant data and the same bytes for every caller; the only control is the per-address rate limit. The request-wide org-scope middleware still applies when a bearer and an X-Org-Id are sent (a non-member organisation is refused 403, as on every route); the handler's answer is global.",
       "reachable_validators": [
         {
           "anchor": {
@@ -5694,26 +5684,16 @@
         "line": 143
       },
       "surface_kind": "rest",
-      "tenant_requirement": "org_scoped"
+      "tenant_requirement": "none"
     },
     {
-      "accepted_credential_classes": [
-        "external_push_ingest_token"
-      ],
-      "classification": "protected",
+      "accepted_credential_classes": [],
+      "classification": "public",
       "gaps": [],
       "graphql_field_name": null,
       "id": "GET /api/v1/external-ingest/schemas/{schema_version} [dev-health-ops-api @api]",
       "method": "GET",
-      "primary_validator": {
-        "anchor": {
-          "line": 144,
-          "note": "Pattern:",
-          "path": "internal/api/externalingest/deps.go"
-        },
-        "description": "The external-ingest handlers authenticate the push token in the Authorization header before any read or write."
-      },
-      "public_rationale": null,
+      "public_rationale": "Public schema document: the contract pushers code against; no tenant data and the same bytes for every caller; the only control is the per-address rate limit. The request-wide org-scope middleware still applies when a bearer and an X-Org-Id are sent (a non-member organisation is refused 403, as on every route); the handler's answer is global.",
       "reachable_validators": [
         {
           "anchor": {
@@ -5743,7 +5723,7 @@
         "line": 144
       },
       "surface_kind": "rest",
-      "tenant_requirement": "org_scoped"
+      "tenant_requirement": "none"
     },
     {
       "accepted_credential_classes": [
@@ -6136,7 +6116,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/billing/edge.go",
-        "line": 111
+        "line": 105
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
@@ -6153,7 +6133,7 @@
       "service": "dev-health-ops-billing-edge",
       "source": {
         "file": "internal/api/billing/edge.go",
-        "line": 111
+        "line": 105
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
@@ -6348,7 +6328,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/billing/edge.go",
-        "line": 112
+        "line": 106
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
@@ -6365,7 +6345,7 @@
       "service": "dev-health-ops-billing-edge",
       "source": {
         "file": "internal/api/billing/edge.go",
-        "line": 112
+        "line": 106
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
@@ -12246,7 +12226,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 110,
+          "line": 104,
           "note": "Pattern:",
           "path": "internal/api/billing/edge.go"
         },
@@ -12257,7 +12237,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/billing/edge.go",
-        "line": 110
+        "line": 104
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
@@ -12273,7 +12253,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 110,
+          "line": 104,
           "note": "Pattern:",
           "path": "internal/api/billing/edge.go"
         },
@@ -12284,7 +12264,7 @@
       "service": "dev-health-ops-billing-edge",
       "source": {
         "file": "internal/api/billing/edge.go",
-        "line": 110
+        "line": 104
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"

@@ -20,6 +20,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/full-chaos/dev-health-ops/internal/auth/authapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/authconfig"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
@@ -40,9 +41,17 @@ var probeMethods = []string{
 // with every method in probeMethods through the handlers configure builds, and
 // every answer other than 404 or 405 is a served route. The database is
 // unreachable, so no probe reaches a store.
+// wellKnownIssuer is the issuer the probe configures: with one set, the discovery document is mounted beside the JWKS.
+const wellKnownIssuer = "https://issuer.example.test"
+
 func servedAuthRoutes(t *testing.T) map[string]bool {
+	return servedAuthRoutesWithIssuer(t, wellKnownIssuer)
+}
+
+// servedAuthRoutesWithIssuer is servedAuthRoutes with AUTH_TOKEN_ISSUER_URL set to issuer ("" leaves it unset).
+func servedAuthRoutesWithIssuer(t *testing.T, issuer string) map[string]bool {
 	t.Helper()
-	cfg, err := authconfig.Load(authconfig.Spec{LookupEnv: lookupFrom(ssoEnvironment(compatEnvironment(map[string]string{
+	env := map[string]string{
 		authconfig.EnvDatabaseURI:        "postgres://auth@127.0.0.1:1/devhealth",
 		authconfig.EnvSigningKeyFile:     "/nonexistent",
 		authconfig.EnvSigningKeyID:       "rows-test",
@@ -51,7 +60,11 @@ func servedAuthRoutes(t *testing.T) map[string]bool {
 		authconfig.EnvAPIAddress:         "127.0.0.1:0",
 		authconfig.EnvOperatorAddress:    "127.0.0.1:1",
 		authconfig.EnvSocialLinkRoutes:   "true",
-	})))})
+	}
+	if issuer != "" {
+		env[authconfig.EnvTokenIssuerURL] = issuer
+	}
+	cfg, err := authconfig.Load(authconfig.Spec{LookupEnv: lookupFrom(ssoEnvironment(compatEnvironment(env)))})
 	if err != nil {
 		t.Fatalf("load config: %v", err)
 	}
@@ -97,6 +110,13 @@ func servedAuthRoutes(t *testing.T) map[string]bool {
 	}
 	for _, route := range routes {
 		registered["api"] = append(registered["api"], route.Pattern)
+	}
+	seenWellKnown := map[string]bool{}
+	for _, route := range authapi.WellKnownRoutes(authapi.WellKnownDeps{IssuerURL: issuer}) {
+		if !seenWellKnown[route.Pattern] {
+			seenWellKnown[route.Pattern] = true
+			registered["api"] = append(registered["api"], route.Pattern)
+		}
 	}
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, "../../platform/health/server.go", nil, 0)
@@ -180,8 +200,8 @@ func TestEveryServedAuthRouteHasAnEndpointProfileRowAndNoRowIsStale(t *testing.T
 
 // servedAuthRouteCount is every route the probe serves: four session routes, two social link routes,
 // four compatibility routes, the session issue route, the eight federated sign-in routes and the three operator
-// paths on GET and HEAD.
-const servedAuthRouteCount = 25
+// paths on GET and HEAD, and GET and HEAD of the JWKS and the discovery document.
+const servedAuthRouteCount = 29
 
 // compareServedToRows returns the served routes with no row and the rows for
 // routes nothing serves, per method and listener.
@@ -278,7 +298,8 @@ func TestAuthEndpointProfileAnchorsStillPointAtTheirSymbols(t *testing.T) {
 		"/v1/sessions/revoke": "PatternRevoke", "/v1/sessions/revoke-all": "PatternRevokeAll",
 		"/api/v1/auth/login": "PatternCompatLogin", "/api/v1/auth/refresh": "PatternCompatRefresh",
 		"/api/v1/auth/logout": "PatternCompatLogout", "/api/v1/auth/social-login": "PatternCompatSocialLogin",
-		"/internal/v1/sessions": "PatternIssueSession",
+		"/internal/v1/sessions":  "PatternIssueSession",
+		"/.well-known/jwks.json": "PatternJWKS", "/.well-known/openid-configuration": "PatternDiscovery",
 		"/v1/identities/social": "PatternSocialLink", "/v1/identities/social/{id}": "PatternSocialUnlink",
 	}
 	checked := 0
@@ -388,5 +409,60 @@ func TestRowsThatAcceptNoCredentialListNoClass(t *testing.T) {
 	}
 	if checked == 0 {
 		t.Fatal("no row says it accepts no credential: the test measured nothing")
+	}
+}
+
+var wellKnownServedRoutes = []string{
+	"GET /.well-known/jwks.json@api", "HEAD /.well-known/jwks.json@api",
+	"GET /.well-known/openid-configuration@api", "HEAD /.well-known/openid-configuration@api",
+}
+
+// TestTheRowGateRefusesAPlantedMissingRowForEachWellKnownRoute deletes each
+// well-known row from the real rows file in memory and runs the comparison the
+// gate runs: it must name exactly that route.
+func TestTheRowGateRefusesAPlantedMissingRowForEachWellKnownRoute(t *testing.T) {
+	served := servedAuthRoutes(t)
+	for _, key := range wellKnownServedRoutes {
+		if !served[key] {
+			t.Fatalf("probe does not serve %s: the well-known mounts are missing from the probe", key)
+		}
+		var kept []map[string]any
+		for _, row := range loadAuthServiceRows(t) {
+			id, _ := row["id"].(string)
+			match := authRowID.FindStringSubmatch(id)
+			if match != nil && match[1]+" "+match[2]+"@"+match[3] == key {
+				continue
+			}
+			kept = append(kept, row)
+		}
+		missing, stale := compareServedToRows(t, served, kept)
+		if len(missing) != 1 || missing[0] != key || len(stale) != 0 {
+			t.Errorf("rows without %s: missing %v stale %v, want exactly it missing", key, missing, stale)
+		}
+	}
+}
+
+// TestWithoutAnIssuerTheDiscoveryRowsAreStale pins that the probe really mounts
+// the discovery document: with AUTH_TOKEN_ISSUER_URL unset only the JWKS is
+// served, so the two discovery rows are reported as rows for routes nothing serves.
+func TestWithoutAnIssuerTheDiscoveryRowsAreStale(t *testing.T) {
+	served := servedAuthRoutesWithIssuer(t, "")
+	missing, stale := compareServedToRows(t, served, loadAuthServiceRows(t))
+	wantStale := []string{"GET /.well-known/openid-configuration@api", "HEAD /.well-known/openid-configuration@api"}
+	if len(missing) != 0 || strings.Join(stale, ",") != strings.Join(wantStale, ",") {
+		t.Errorf("without an issuer: missing %v stale %v, want stale %v", missing, stale, wantStale)
+	}
+	if served["GET /.well-known/jwks.json@api"] != true || served["HEAD /.well-known/jwks.json@api"] != true {
+		t.Error("the JWKS must be served without an issuer")
+	}
+}
+
+// TestAWellKnownRowWithNoRouteIsStale is the stale-row control for the new rows.
+func TestAWellKnownRowWithNoRouteIsStale(t *testing.T) {
+	served := servedAuthRoutes(t)
+	ghost := map[string]any{"id": "GET /.well-known/unmounted [dev-health-auth-service @api]", "method": "GET", "route": "/.well-known/unmounted"}
+	_, stale := compareServedToRows(t, served, append(loadAuthServiceRows(t), ghost))
+	if len(stale) != 1 || stale[0] != "GET /.well-known/unmounted@api" {
+		t.Errorf("stale = %v, want the unmounted route", stale)
 	}
 }

@@ -147,6 +147,10 @@ var (
 	// partition is released 'failed' (re-dispatchable) instead of
 	// completed, so a retry can still fill the gap.
 	ReasonPreBridgeFamilyIncomplete = reason("pre_bridge_family_incomplete")
+	// ReasonCredentialShapedValue marks a job cancelled before its handler ran
+	// because a string in its stored arguments has the shape of a credential.
+	// The bounded error names the field path and the rule, never the value.
+	ReasonCredentialShapedValue = reason("credential_shaped_value")
 )
 
 // Result is the runtime decision. A discard is represented by a normal safe

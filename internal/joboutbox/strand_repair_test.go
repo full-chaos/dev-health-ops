@@ -950,8 +950,9 @@ func TestStrandRepairFilterByClaimPreservesEarlierCountsOnLaterUnknownState(t *t
 	if !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("stepShape() error = %v, want ErrUnavailable", err)
 	}
-	if !strings.Contains(err.Error(), `shape "a"`) || !strings.Contains(err.Error(), "dedupe-b") {
-		t.Fatalf("stepShape() error = %v, want it to name shape %q and the offending dedupe key", err, "a")
+	if !strings.Contains(err.Error(), `shape "a"`) || !strings.Contains(err.Error(), "22222222-2222-2222-8222-222222222222") ||
+		strings.Contains(err.Error(), "dedupe-b") {
+		t.Fatalf("stepShape() error = %v, want it to name shape %q and the offending outbox id, not its dedupe key", err, "a")
 	}
 	if result.SkippedClaimLive != 1 {
 		t.Fatalf(

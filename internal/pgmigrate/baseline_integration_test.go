@@ -73,6 +73,7 @@ var productionSettings = pgmigrate.Settings{Cutover: true, RiverSchema: "river"}
 //     application head is refused naming it; a public schema without
 //     alembic_version is refused as foreign.
 func TestBaselineIsTheFrozenPythonUpgrade(t *testing.T) {
+	pgmigrate.UseFrozenChain(t) // the frozen goldens end at pgmigrate.FrozenHead
 	ctx := context.Background()
 	instance, err := containers.StartPostgres(ctx)
 	if err != nil {

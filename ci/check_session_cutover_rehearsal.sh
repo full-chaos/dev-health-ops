@@ -308,7 +308,8 @@ BASE_REV="$(rev)"
 printf 'baseline revision %s\n' "${BASE_REV}"
 K rollout status deploy/"${FULL}-go-api" --timeout=240s
 assert_state baseline unset t t
-EXPECT_SLEEP="${PRESTOP:-$(helm show values "${CHART}" | awk '/^  drain:/ {f=1} f && /preStopSeconds:/ {print $2; exit}')}"
+helm show values "${CHART}" >"${WORK}/chart-values.yaml"
+EXPECT_SLEEP="${PRESTOP:-$(awk '/^  drain:/ {f=1} f && /preStopSeconds:/ {print $2; exit}' "${WORK}/chart-values.yaml")}"
 LIVE_SLEEP="$(K get deploy/"${FULL}-go-api" -o jsonpath='{.spec.template.spec.containers[0].lifecycle.preStop.sleep.seconds}')"
 LIVE_GRACE="$(K get deploy/"${FULL}-go-api" -o jsonpath='{.spec.template.spec.terminationGracePeriodSeconds}')"
 printf 'go-api drain in the live Deployment: preStop sleep [%s], terminationGracePeriodSeconds %s (expected sleep %s)\n' "${LIVE_SLEEP}" "${LIVE_GRACE}" "${EXPECT_SLEEP}"

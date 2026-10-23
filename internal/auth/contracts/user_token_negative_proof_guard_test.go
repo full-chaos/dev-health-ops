@@ -163,6 +163,11 @@ func TestEveryNegativeProofNamesARealTestThatSendsUserTokens(t *testing.T) {
 		if !strings.Contains(body, "All(t)") && !strings.Contains(body, "userTokensWithIssuer(t)") {
 			problems = append(problems, key+": "+proof.test+" does not mint the user tokens (usertokens All)")
 		}
+		// The minted tokens must be USED: assigned, then at least twice more (sent, and checked for an
+		// echo). A body that mints them and drops them proves nothing.
+		if !strings.Contains(body, "tokens :=") || strings.Count(body, "tokens") < 3 {
+			problems = append(problems, key+": "+proof.test+" mints the user tokens but does not send them (no use of the tokens it minted)")
+		}
 		if !strings.Contains(text, "NoLeak(") {
 			problems = append(problems, key+": "+proof.file+" does not check that a refusal echoes no token")
 		}

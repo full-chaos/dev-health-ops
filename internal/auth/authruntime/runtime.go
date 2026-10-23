@@ -100,11 +100,10 @@ func sessionRoutes(
 	if err != nil {
 		return nil, err
 	}
-	issuer, err := newAccessIssuer(cfg, accessSigner)
+	issuer, err := newRecordingIssuer(cfg, accessSigner, sessions)
 	if err != nil {
 		return nil, err
 	}
-	issuer.WithKidRecorder(sessions)
 	routes, err := authapi.Routes(authapi.Deps{
 		Sessions: sessions, Users: authapi.PGUsers{Pool: pool}, Issuer: issuer, Logger: logger,
 	})

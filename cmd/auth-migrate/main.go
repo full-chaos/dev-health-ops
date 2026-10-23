@@ -69,6 +69,9 @@ const (
 )
 
 func main() {
+	// Linked packages (internal/audit) log through slog.Default(); this makes
+	// that the redacting handler, on stderr.
+	logging.InstallDefault(logging.NewJSON(os.Stderr, slog.LevelInfo))
 	os.Exit(execute(context.Background(), os.Args[1:], envsecrets.ProcessLookup, os.Stdout, os.Stderr))
 }
 

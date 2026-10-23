@@ -188,7 +188,8 @@ func passwordRefusal(password string, strength bool) []string {
 	return nil
 }
 
-// Register creates a local account and sends its verification link.
+// Register creates a local account and sends its verification link. The
+// outcome carries no id: a taken address gets the same one.
 func (f *Flows) Register(ctx context.Context, req RegisterRequest) (FlowOutcome, error) {
 	if err := f.gate(); err != nil {
 		return FlowOutcome{}, err
@@ -221,7 +222,7 @@ func (f *Flows) Register(ctx context.Context, req RegisterRequest) (FlowOutcome,
 	if err := f.issueAndSend(ctx, id, PurposeEmailVerification, VerificationTTL, email, req.FullName); err != nil {
 		return FlowOutcome{}, err
 	}
-	return FlowOutcome{Kind: FlowOK, PrincipalID: id}, nil
+	return FlowOutcome{Kind: FlowOK}, nil
 }
 
 // noticeExisting answers a sign-up for a taken address like an accepted one and

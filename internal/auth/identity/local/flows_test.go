@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -236,7 +237,7 @@ func TestFlagOffRefusesEveryFlowBeforeAnyCall(t *testing.T) {
 func TestRegisterCreatesThePrincipalAndSendsOneVerificationLink(t *testing.T) {
 	rig := newFlowRig(t, true)
 	out, err := rig.f.Register(context.Background(), RegisterRequest{Email: "  New@Example.COM ", Password: flowPassword})
-	if err != nil || out.Kind != FlowOK || out.PrincipalID != rig.accounts.newID {
+	if err != nil || out.Kind != FlowOK {
 		t.Fatalf("Register = %+v, %v", out, err)
 	}
 	if want := []string{"ByEmail", "ProvisionLocal", "Issue", "Send"}; !reflect.DeepEqual(rig.rec.names(), want) {
@@ -644,5 +645,24 @@ func TestVerifyAndResetRedeemOnlyTheirOwnPurpose(t *testing.T) {
 	}
 	if want := []Purpose{PurposeEmailVerification, PurposePasswordReset}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("redeemed purposes = %v, want %v", got, want)
+	}
+}
+
+func TestRegisterOutcomeIsTheSameForNewAndExistingAddress(t *testing.T) {
+	fresh := newFlowRig(t, true)
+	newOut, err := fresh.f.Register(context.Background(), RegisterRequest{Email: "new@example.com", Password: flowPassword})
+	if err != nil {
+		t.Fatal(err)
+	}
+	taken := newFlowRig(t, true)
+	taken.user("taken@example.com", true)
+	oldOut, err := taken.f.Register(context.Background(), RegisterRequest{Email: "taken@example.com", Password: flowPassword})
+	if err != nil {
+		t.Fatal(err)
+	}
+	newBytes, _ := json.Marshal(newOut)
+	oldBytes, _ := json.Marshal(oldOut)
+	if !bytes.Equal(newBytes, oldBytes) || !reflect.DeepEqual(newOut, oldOut) || newOut.PrincipalID != uuid.Nil {
+		t.Errorf("outcomes differ or carry an id: new %+v, existing %+v", newOut, oldOut)
 	}
 }

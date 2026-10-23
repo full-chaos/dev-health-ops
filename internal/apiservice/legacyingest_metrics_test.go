@@ -127,7 +127,7 @@ func TestOperatorMetricsExposeTheSignUpMailFamily(t *testing.T) {
 	}
 	for _, want := range []string{
 		"# TYPE devhealth_api_session_mail_sends_total counter",
-		`devhealth_api_session_mail_sends_total{purpose="verification",outcome="dropped"} 0`,
+		`devhealth_api_session_mail_sends_total{purpose="email_verification",outcome="dropped"} 0`,
 		`devhealth_api_session_mail_sends_total{purpose="account_exists",outcome="sent"} 0`,
 	} {
 		if !strings.Contains(out.String(), want) {

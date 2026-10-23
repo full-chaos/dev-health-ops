@@ -34,6 +34,13 @@ const (
 	defaultQueue   = 64
 )
 
+// Purposes and Outcomes are the closed label sets of MetricName; every series
+// is present at 0 from New.
+var (
+	Purposes = []local.Purpose{local.PurposeEmailVerification, local.PurposePasswordReset, local.PurposeAccountExists}
+	Outcomes = []string{OutcomeSent, OutcomeFailed, OutcomeDropped}
+)
+
 // ErrClosed is returned by Send after Close.
 var ErrClosed = errors.New("linkmail: closed")
 
@@ -89,6 +96,12 @@ func New(cfg Config) (*Sender, error) {
 		metric.WithDescription("Link e-mail sends by purpose and outcome (sent, failed, dropped)."))
 	if err != nil {
 		return nil, err
+	}
+	for _, purpose := range Purposes {
+		for _, outcome := range Outcomes {
+			counter.Add(context.Background(), 0, metric.WithAttributes(
+				attribute.String("purpose", string(purpose)), attribute.String("outcome", outcome)))
+		}
 	}
 	s := &Sender{cfg: cfg, jobs: make(chan job, cfg.Queue), sends: counter}
 	for i := 0; i < cfg.Workers; i++ {

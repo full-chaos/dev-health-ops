@@ -14,7 +14,8 @@ const mailSendsMetric = "devhealth_api_session_mail_sends_total"
 
 // Mail purposes and outcomes: the closed label sets of mailSendsMetric.
 const (
-	mailVerification  = "verification"
+	mailVerification  = "email_verification"
+	mailPasswordReset = "password_reset"
 	mailAccountExists = "account_exists"
 
 	outcomeSent    = "sent"
@@ -23,7 +24,7 @@ const (
 )
 
 var (
-	mailPurposes = []string{mailVerification, mailAccountExists}
+	mailPurposes = []string{mailVerification, mailPasswordReset, mailAccountExists}
 	mailOutcomes = []string{outcomeSent, outcomeFailed, outcomeDropped}
 )
 

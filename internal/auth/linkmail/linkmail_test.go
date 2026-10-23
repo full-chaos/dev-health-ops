@@ -311,3 +311,41 @@ func TestAccountExistsNoticeCarriesNoTokenAndUsesThePool(t *testing.T) {
 		t.Errorf("unexpected notice: %+v", got)
 	}
 }
+
+func TestAccountExistsNoticeIsCountedUnderItsOwnPurpose(t *testing.T) {
+	p := &fakeProvider{gate: make(chan struct{})}
+	rd := metric.NewManualReader()
+	s := newSender(t, p, 1, 1, &bytes.Buffer{}, rd)
+	for i := 0; i < 6; i++ {
+		if err := s.Send(context.Background(), local.Message{Purpose: local.PurposeAccountExists, To: "owner@example.com", Deliver: true}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	close(p.gate)
+	closeIn(t, s)
+	var rm metricdata.ResourceMetrics
+	if err := rd.Collect(context.Background(), &rm); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]int64{}
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			if m.Name != MetricName {
+				continue
+			}
+			for _, dp := range m.Data.(metricdata.Sum[int64]).DataPoints {
+				purpose, _ := dp.Attributes.Value("purpose")
+				outcome, _ := dp.Attributes.Value("outcome")
+				got[purpose.AsString()+"/"+outcome.AsString()] += dp.Value
+			}
+		}
+	}
+	for key, value := range got {
+		if value == 0 {
+			delete(got, key)
+		}
+	}
+	if got["account_exists/sent"] < 1 || got["account_exists/dropped"] < 1 || got["account_exists/sent"]+got["account_exists/dropped"] != 6 || len(got) != 2 {
+		t.Fatalf("notice counts %v: want only account_exists sent and dropped, adding up to 6", got)
+	}
+}

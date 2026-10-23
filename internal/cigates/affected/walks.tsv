@@ -32,6 +32,7 @@ internal/auth/contracts	jwks_document_goldens_test.go	unexpressed	-
 internal/auth/contracts	principal_contract_goldens_test.go	unexpressed	-
 internal/auth/contracts	provisioning_event_goldens_test.go	unexpressed	-
 internal/auth/contracts	provisioning_resources_test.go	unexpressed	-
+internal/auth/contracts	reason_code_vocabulary_test.go	unexpressed	-
 internal/auth/contracts	reject_location_test.go	unexpressed	-
 internal/auth/contracts	schema_dialect_test.go	unexpressed	-
 internal/auth/contracts	session_goldens_test.go	unexpressed	-
@@ -78,10 +79,13 @@ internal/cigates/docstools	refusals_pub_test.go	unexpressed	-
 internal/cigates/docstools	refusals_test.go	unexpressed	-
 internal/cigates/docstools	validate_inventory_review.go	unexpressed	-
 internal/cigates/docstools	validate_inventory_review_refusals_test.go	unexpressed	-
+internal/cigates/frozengoldens	frozengoldens.go	unexpressed	-
+internal/cigates/frozengoldens	frozengoldens_test.go	unexpressed	-
 internal/cigates/integrationshards	integration_sharding_test.go	unexpressed	-
 internal/cigates/integrationshards	support_test.go	unexpressed	-
 internal/cigates/nopython	tests_python_test.go	unexpressed	-
 internal/cigates/outboundtransport	outboundtransport_test.go	.	tree
+internal/cigates/queuecreds	queuerows_test.go	unexpressed	-
 internal/cigates/queuecreds	scan.go	unexpressed	-
 internal/cigates/queuecreds	scan_test.go	contracts/jobs/v1	tree
 internal/cigates/raceunweighted	raceunweighted_test.go	unexpressed	-
@@ -176,6 +180,7 @@ internal/jobs/operational	billingemail_test.go	internal/jobs/operational/testdat
 internal/jobs/operational	venue_golden_address_test.go	internal/jobs/operational/testdata/golden	dir
 internal/jobs/workgraph	error_attr_census_test.go	internal/jobs/workgraph	tree
 internal/jobs/workgraph/units	pr_link_protection_test.go	internal	tree
+internal/jobs/workgraph/writercontract	writercontract_test.go	internal	tree
 internal/llmorgsettings	baseurl_reader_guard_test.go	unexpressed	-
 internal/localgit	blame.go	unexpressed	-
 internal/localgit	refs.go	unexpressed	-
@@ -183,8 +188,12 @@ internal/migrationmatrix	restendpoints.go	unexpressed	-
 internal/operationalordering	finalreads_test.go	unexpressed	-
 internal/operationalordering	one_resolver_test.go	.	tree
 internal/ownershipwindow	ownershipwindow_test.go	internal/ownershipwindow	dir
+internal/pgmigrate	chain_tail_integration_test.go	internal/pgmigrate/testdata/postfreeze/two	tree
+internal/pgmigrate	chain_tail_test.go	unexpressed	-
 internal/pgmigrate	handddl_guard_integration_test.go	.	tree
 internal/platform/config	route_switch_absence_test.go	unexpressed	-
+internal/platform/credshape	census_test.go	unexpressed	-
+internal/platform/credshape	credshape_test.go	contracts/jobs/v1/examples	dir
 internal/platform/fernet	fernet_test.go	unexpressed	-
 internal/platform/secrets	declared_fields_test.go	internal	tree
 internal/platform/secrets	envreads_test.go	.	tree
@@ -262,6 +271,7 @@ internal/storage/postgres	posture_cache_cadence_test.go	internal/storage/postgre
 internal/storage/postgres	posture_identity_sites_test.go	internal	tree
 internal/storage/postgres	venue_posture_coverage_test.go	.	tree
 internal/storage/postgres	venue_posture_coverage_test.go	unexpressed	-
+internal/storage/postgres/aclguard	census_test.go	unexpressed	-
 internal/storage/postgres/authschema	sprintf_sql_guard_test.go	internal/storage/postgres/authschema	dir
 internal/storedversion	writers_test.go	unexpressed	-
 internal/streamhandlers	stored_version_invariant_test.go	unexpressed	-

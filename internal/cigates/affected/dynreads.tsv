@@ -73,6 +73,7 @@ internal/auth/contracts	schema_dialect_test.go
 internal/auth/contracts	session_goldens_test.go
 internal/auth/contracts	session_hardening_test.go
 internal/auth/contracts	transport_error_goldens_test.go
+internal/auth/contracts	user_token_negative_proof_guard_test.go
 internal/auth/contracts/provisioning	vocabulary_test.go
 internal/auth/contracts/tokencorpus	corpus.go
 internal/auth/contracts/tokencorpus	corpus_test.go
@@ -180,6 +181,8 @@ internal/cigates/docstools	refusals_test.go
 internal/cigates/docstools	validate_inventory_argparse_test.go
 internal/cigates/docstools	validate_inventory_review.go
 internal/cigates/docstools	validate_inventory_review_cases_test.go
+internal/cigates/frozengoldens	frozengoldens.go
+internal/cigates/frozengoldens	frozengoldens_test.go
 internal/cigates/integrationshards	ci_script_helpers_test.go
 internal/cigates/integrationshards	integration_sharding_test.go
 internal/cigates/livee2e	cli.go
@@ -189,6 +192,7 @@ internal/cigates/nopython	trackedfiles_test.go
 internal/cigates/proofteardown	harness_test.go
 internal/cigates/proofteardown	teardown_test.go
 internal/cigates/queuecreds	gate_test.go
+internal/cigates/queuecreds	queuerows_test.go
 internal/cigates/queuecreds	scan.go
 internal/cigates/queuecreds	scan_test.go
 internal/cigates/raceunweighted	raceunweighted_test.go
@@ -302,6 +306,7 @@ internal/ingressplanes	real_nginx_integration_test.go
 internal/ingressplanes/cmd/routerconf	main.go
 internal/ingressplanes/cmd/routerconf	main_test.go
 internal/jobcontract	capability.go
+internal/jobcontract	guard_test.go
 internal/jobcontract	registry.go
 internal/jobcontract	registry_test.go
 internal/jobcontract	types_test.go
@@ -366,6 +371,8 @@ internal/mintcli/envelopekeys	verify_roundtrip_test.go
 internal/operationalordering	finalreads_test.go
 internal/ownershipwindow	ownershipwindow_test.go
 internal/platform/config	route_switch_absence_test.go
+internal/platform/credshape	census_test.go
+internal/platform/credshape	credshape_test.go
 internal/platform/fernet	fernet_test.go
 internal/platform/logging	binaries_enumeration_test.go
 internal/platform/logging	provider_origin_sources_test.go
@@ -500,6 +507,7 @@ internal/storage/postgres	posture_cache_cadence_test.go
 internal/storage/postgres	posture_identity_sites_test.go
 internal/storage/postgres	provision_script_integration_test.go
 internal/storage/postgres	venue_posture_coverage_test.go
+internal/storage/postgres/aclguard	census_test.go
 internal/storage/postgres/authschema	grant_shape_contract_test.go
 internal/storedversion	writers_test.go
 internal/streamhandlers	external_clickhouse_test.go

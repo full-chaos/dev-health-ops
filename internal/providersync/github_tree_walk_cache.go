@@ -20,6 +20,8 @@ type gitHubTreeWalkCacheKey struct{ org, root string }
 type gitHubTreeWalkCacheEntry struct {
 	key      gitHubTreeWalkCacheKey
 	sha      string
+	variant  string
+	next     string
 	paths    []string
 	sizes    map[string]*int
 	storedAt time.Time
@@ -49,25 +51,36 @@ func (cache *gitHubTreeWalkCache) len() int {
 // get returns a copy of the paths: callers sort them in place. The sizes map is
 // read-only for every caller.
 func (cache *gitHubTreeWalkCache) get(org, root, sha string, now time.Time) ([]string, map[string]*int, bool) {
+	paths, sizes, _, ok := cache.getSlice(org, root, sha, "", now)
+	return paths, sizes, ok
+}
+
+// getSlice is get for one slice of a tree: variant is the slice's lower bound,
+// and next is the lower bound of the part after it ("" for the last slice).
+func (cache *gitHubTreeWalkCache) getSlice(org, root, sha, variant string, now time.Time) ([]string, map[string]*int, string, bool) {
 	cache.mu.Lock()
 	defer cache.mu.Unlock()
 	element, ok := cache.entries[gitHubTreeWalkCacheKey{org, root}]
 	if !ok {
-		return nil, nil, false
+		return nil, nil, "", false
 	}
 	entry := element.Value.(*gitHubTreeWalkCacheEntry)
 	if now.Sub(entry.storedAt) >= gitHubTreeWalkCacheTTL {
 		cache.remove(element)
-		return nil, nil, false
+		return nil, nil, "", false
 	}
-	if entry.sha != sha {
-		return nil, nil, false
+	if entry.sha != sha || entry.variant != variant {
+		return nil, nil, "", false
 	}
 	cache.order.MoveToFront(element)
-	return append([]string(nil), entry.paths...), entry.sizes, true
+	return append([]string(nil), entry.paths...), entry.sizes, entry.next, true
 }
 
 func (cache *gitHubTreeWalkCache) put(org, root, sha string, paths []string, sizes map[string]*int, now time.Time) {
+	cache.putSlice(org, root, sha, "", "", paths, sizes, now)
+}
+
+func (cache *gitHubTreeWalkCache) putSlice(org, root, sha, variant, next string, paths []string, sizes map[string]*int, now time.Time) {
 	if len(paths) > gitHubTreeWalkCacheMaxPaths {
 		return
 	}
@@ -78,7 +91,7 @@ func (cache *gitHubTreeWalkCache) put(org, root, sha string, paths []string, siz
 		cache.remove(element)
 	}
 	entry := &gitHubTreeWalkCacheEntry{
-		key: key, sha: sha, paths: append([]string(nil), paths...), sizes: sizes, storedAt: now,
+		key: key, sha: sha, variant: variant, next: next, paths: append([]string(nil), paths...), sizes: sizes, storedAt: now,
 	}
 	cache.entries[key] = cache.order.PushFront(entry)
 	cache.total += len(entry.paths)

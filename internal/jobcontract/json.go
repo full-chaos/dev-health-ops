@@ -19,14 +19,14 @@ const maxJSONDepth = 16
 // dropped, and rejecting them is not a safety property, it is an inability to
 // read history (CHAOS-3903 follow-up).
 func decodeLenient(data []byte, maxBytes int, destination any) error {
-	return decodeJSON(data, maxBytes, destination, false)
+	return decodeJSON(data, maxBytes, destination, false, nil)
 }
 
 func decodeStrict(data []byte, maxBytes int, destination any) error {
-	return decodeJSON(data, maxBytes, destination, true)
+	return decodeJSON(data, maxBytes, destination, true, nil)
 }
 
-func decodeJSON(data []byte, maxBytes int, destination any, disallowUnknownFields bool) error {
+func decodeJSON(data []byte, maxBytes int, destination any, disallowUnknownFields bool, guard *valueGuard) error {
 	if len(data) == 0 {
 		return errors.New("JSON value is empty")
 	}
@@ -36,7 +36,10 @@ func decodeJSON(data []byte, maxBytes int, destination any, disallowUnknownField
 	if !utf8.Valid(data) {
 		return errors.New("JSON must be UTF-8")
 	}
-	if err := validateJSONTokens(data); err != nil {
+	if err := validateJSONTokens(data, guard); err != nil {
+		if refusal, ok := asValueRefusal(err); ok {
+			return refusal
+		}
 		return errors.New("invalid JSON structure")
 	}
 
@@ -54,10 +57,10 @@ func decodeJSON(data []byte, maxBytes int, destination any, disallowUnknownField
 	return nil
 }
 
-func validateJSONTokens(data []byte) error {
+func validateJSONTokens(data []byte, guard *valueGuard) error {
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.UseNumber()
-	if err := consumeJSONValue(decoder, 0); err != nil {
+	if err := consumeJSONValue(decoder, 0, guard); err != nil {
 		return err
 	}
 	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
@@ -69,7 +72,7 @@ func validateJSONTokens(data []byte) error {
 	return nil
 }
 
-func consumeJSONValue(decoder *json.Decoder, depth int) error {
+func consumeJSONValue(decoder *json.Decoder, depth int, guard *valueGuard) error {
 	if depth > maxJSONDepth {
 		return fmt.Errorf("JSON nesting exceeds %d levels", maxJSONDepth)
 	}
@@ -79,6 +82,9 @@ func consumeJSONValue(decoder *json.Decoder, depth int) error {
 	}
 	delimiter, ok := token.(json.Delim)
 	if !ok {
+		if text, isString := token.(string); isString && guard != nil {
+			return guard.checkString(depth, text)
+		}
 		return nil
 	}
 
@@ -94,11 +100,16 @@ func consumeJSONValue(decoder *json.Decoder, depth int) error {
 			if !ok {
 				return errors.New("object key is not a string")
 			}
+			if guard != nil {
+				if err := guard.checkKey(depth, key); err != nil {
+					return err
+				}
+			}
 			if _, exists := keys[key]; exists {
 				return errors.New("duplicate JSON key")
 			}
 			keys[key] = struct{}{}
-			if err := consumeJSONValue(decoder, depth+1); err != nil {
+			if err := consumeJSONValue(decoder, depth+1, guard); err != nil {
 				return err
 			}
 		}
@@ -111,7 +122,10 @@ func consumeJSONValue(decoder *json.Decoder, depth int) error {
 		}
 	case '[':
 		for decoder.More() {
-			if err := consumeJSONValue(decoder, depth+1); err != nil {
+			if guard != nil {
+				guard.keys[depth+1] = arrayElementMarker
+			}
+			if err := consumeJSONValue(decoder, depth+1, guard); err != nil {
 				return err
 			}
 		}

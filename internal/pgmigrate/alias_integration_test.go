@@ -150,6 +150,7 @@ const aliasPythonBuild = "de4bc686e35308fb20670ad6ce8333952e2b43e6"
 // testdata/golden/alias.json (the recipe regenerates them by execution); the scenarios are part of the
 // golden's key.
 func TestAliasesMatchTheFrozenPythonOutput(t *testing.T) {
+	pgmigrate.UseFrozenChain(t) // the frozen goldens end at pgmigrate.FrozenHead
 	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
 		Path:        "testdata/golden/alias.json",
 		PythonBuild: aliasPythonBuild,

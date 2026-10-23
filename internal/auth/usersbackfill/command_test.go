@@ -54,3 +54,34 @@ func TestVerbIgnoresTheSchemaOwnerDSN(t *testing.T) {
 		t.Fatalf("exit %d, stderr %q", code, stderr.String())
 	}
 }
+
+func reconcileVerb(t *testing.T) cli.Command {
+	t.Helper()
+	for _, c := range Command().Children {
+		if c.Name == "users-reconcile" {
+			return c
+		}
+	}
+	t.Fatal("no users-reconcile verb")
+	return cli.Command{}
+}
+
+func TestReconcileVerbRefusesBadArguments(t *testing.T) {
+	for _, args := range [][]string{{"extra"}, {"-batch", "0"}, {"-batch", "20000"}, {"-dry-run"}} {
+		var stderr bytes.Buffer
+		code := reconcileVerb(t).Run(context.Background(), cli.Env{Args: args,
+			Lookup: func(string) (string, bool) { return "", false }, Stdout: &bytes.Buffer{}, Stderr: &stderr})
+		if code != cli.ExitUsage {
+			t.Fatalf("args %v: exit %d, want %d", args, code, cli.ExitUsage)
+		}
+	}
+}
+
+func TestReconcileVerbWithoutADatabaseFailsWithoutRunning(t *testing.T) {
+	var stderr, stdout bytes.Buffer
+	code := reconcileVerb(t).Run(context.Background(), cli.Env{
+		Lookup: func(string) (string, bool) { return "", false }, Stdout: &stdout, Stderr: &stderr})
+	if code != cli.ExitFailure || !bytes.Contains(stderr.Bytes(), []byte("AUTH_DATABASE_URI")) || stdout.Len() != 0 {
+		t.Fatalf("exit %d, stderr %q, stdout %q", code, stderr.String(), stdout.String())
+	}
+}

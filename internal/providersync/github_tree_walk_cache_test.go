@@ -12,7 +12,10 @@ import (
 
 func cacheInventory(t *testing.T, fake *walkTreeFake, cache *gitHubTreeWalkCache, org, root, sha string) ([]string, map[string]*int, bool, error) {
 	t.Helper()
-	return gitHubFilesInventoryCached(context.Background(), fake.client(t), cache, org, root, sha, "acme/api")
+	segment, err := gitHubFilesInventoryCached(
+		context.Background(), fake.client(t), cache, org, root, githubFilesChunkCursor{Version: 1, TreeRef: sha}, "acme/api",
+	)
+	return segment.paths, segment.sizes, segment.walked, err
 }
 
 func truncatedHybrid() *walkTreeFake {
@@ -52,7 +55,7 @@ func TestGitHubWalkCacheKeyIsOrgRepoAndSha(t *testing.T) {
 	fake := truncatedHybrid()
 	for _, key := range [][3]string{{"org1", "/repos/acme/api", "root"}, {"org2", "/repos/acme/api", "root"}, {"org1", "/repos/acme/other", "root"}} {
 		before := fake.gets
-		if _, _, _, err := gitHubFilesInventoryCached(context.Background(), fake.client(t), cache, key[0], key[1], key[2], "x"); err == nil && fake.gets-before < 2 {
+		if _, _, _, err := cacheInventory(t, fake, cache, key[0], key[1], key[2]); err == nil && fake.gets-before < 2 {
 			t.Fatalf("key %v hit another key's entry", key)
 		}
 	}

@@ -49,6 +49,8 @@ func TestHistoryHoldsTheBaselineHeads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The walk is the frozen Alembic history: it ends at FrozenHead. Go-only revisions above it are the chain's own.
+	chain = ChainThrough(chain, FrozenHead)
 	if want := Heads(baseline, chain); strings.Join(sortedCopy(heads), ",") != strings.Join(want, ",") {
 		t.Errorf("the walk's heads are %v, the baseline and its chain reach %v", heads, want)
 	}
@@ -83,6 +85,7 @@ func TestHistoryWithAChain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	real = ChainThrough(real, FrozenHead)
 	if got := WithChain(entries, baseline, real); !reflect.DeepEqual(got, entries) {
 		t.Errorf("the shipped chain (all Alembic revisions) changed the walk: %d entries, was %d", len(got), len(entries))
 	}

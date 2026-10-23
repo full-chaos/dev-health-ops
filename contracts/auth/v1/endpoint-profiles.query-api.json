@@ -35,11 +35,12 @@
       "current_state_cache_behavior": "none: no authorization decision is cached; the credential is verified on every request (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go)",
       "disclosure_behavior": "behaviour today, no action check: any caller with a verified credential reads its own organization's rows; failed authentication answers 401 (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); no other organization's resource can be named",
       "gaps": [
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
+        "impersonation_policy: this route reads the organization from the credential only (authenticateRESTRequest returns the organization id alone); whether an impersonation session changes it is not proven in this pass"
       ],
       "graphql_field_name": null,
       "id": "GET /api/v1/drilldown/issues [dev-health-query-api @query,internal]",
-      "impersonation_policy": "not_applicable_non_main_app",
+      "impersonation_policy": "unknown",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -83,11 +84,12 @@
       "current_state_cache_behavior": "none: no authorization decision is cached; the credential is verified on every request (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go)",
       "disclosure_behavior": "behaviour today, no action check: any caller with a verified credential reads its own organization's rows; failed authentication answers 401 (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); no other organization's resource can be named",
       "gaps": [
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
+        "impersonation_policy: this route reads the organization from the credential only (authenticateRESTRequest returns the organization id alone); whether an impersonation session changes it is not proven in this pass"
       ],
       "graphql_field_name": null,
       "id": "POST /api/v1/drilldown/issues [dev-health-query-api @query,internal]",
-      "impersonation_policy": "not_applicable_non_main_app",
+      "impersonation_policy": "unknown",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -131,11 +133,12 @@
       "current_state_cache_behavior": "none: no authorization decision is cached; the credential is verified on every request (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go)",
       "disclosure_behavior": "behaviour today, no action check: any caller with a verified credential reads its own organization's rows; failed authentication answers 401 (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); no other organization's resource can be named",
       "gaps": [
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
+        "impersonation_policy: this route reads the organization from the credential only (authenticateRESTRequest returns the organization id alone); whether an impersonation session changes it is not proven in this pass"
       ],
       "graphql_field_name": null,
       "id": "GET /api/v1/drilldown/prs [dev-health-query-api @query,internal]",
-      "impersonation_policy": "not_applicable_non_main_app",
+      "impersonation_policy": "unknown",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -179,11 +182,12 @@
       "current_state_cache_behavior": "none: no authorization decision is cached; the credential is verified on every request (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go)",
       "disclosure_behavior": "behaviour today, no action check: any caller with a verified credential reads its own organization's rows; failed authentication answers 401 (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); no other organization's resource can be named",
       "gaps": [
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
+        "impersonation_policy: this route reads the organization from the credential only (authenticateRESTRequest returns the organization id alone); whether an impersonation session changes it is not proven in this pass"
       ],
       "graphql_field_name": null,
       "id": "POST /api/v1/drilldown/prs [dev-health-query-api @query,internal]",
-      "impersonation_policy": "not_applicable_non_main_app",
+      "impersonation_policy": "unknown",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -227,11 +231,12 @@
       "current_state_cache_behavior": "none: no authorization decision is cached; the credential is verified on every request (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go)",
       "disclosure_behavior": "behaviour today, no action check: any caller with a verified credential reads its own organization's rows; failed authentication answers 401 (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); no other organization's resource can be named",
       "gaps": [
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
+        "impersonation_policy: this route reads the organization from the credential only (authenticateRESTRequest returns the organization id alone); whether an impersonation session changes it is not proven in this pass"
       ],
       "graphql_field_name": null,
       "id": "GET /api/v1/explain [dev-health-query-api @query,internal]",
-      "impersonation_policy": "not_applicable_non_main_app",
+      "impersonation_policy": "unknown",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -275,11 +280,12 @@
       "current_state_cache_behavior": "none: no authorization decision is cached; the credential is verified on every request (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go)",
       "disclosure_behavior": "behaviour today, no action check: any caller with a verified credential reads its own organization's rows; failed authentication answers 401 (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); no other organization's resource can be named",
       "gaps": [
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
+        "impersonation_policy: this route reads the organization from the credential only (authenticateRESTRequest returns the organization id alone); whether an impersonation session changes it is not proven in this pass"
       ],
       "graphql_field_name": null,
       "id": "POST /api/v1/explain [dev-health-query-api @query,internal]",
-      "impersonation_policy": "not_applicable_non_main_app",
+      "impersonation_policy": "unknown",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -323,11 +329,12 @@
       "current_state_cache_behavior": "none: no authorization decision is cached; the credential is verified on every request (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go)",
       "disclosure_behavior": "behaviour today, no action check: any caller with a verified credential reads its own organization's rows; failed authentication answers 401 (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); no other organization's resource can be named",
       "gaps": [
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
+        "impersonation_policy: this route reads the organization from the credential only (authenticateRESTRequest returns the organization id alone); whether an impersonation session changes it is not proven in this pass"
       ],
       "graphql_field_name": null,
       "id": "GET /api/v1/filters/options [dev-health-query-api @query,internal]",
-      "impersonation_policy": "not_applicable_non_main_app",
+      "impersonation_policy": "unknown",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -371,11 +378,12 @@
       "current_state_cache_behavior": "none: no authorization decision is cached; the credential is verified on every request (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go)",
       "disclosure_behavior": "behaviour today, no action check: any caller with a verified credential reads its own organization's rows; failed authentication answers 401 (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); no other organization's resource can be named",
       "gaps": [
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
+        "impersonation_policy: this route reads the organization from the credential only (authenticateRESTRequest returns the organization id alone); whether an impersonation session changes it is not proven in this pass"
       ],
       "graphql_field_name": null,
       "id": "GET /api/v1/flame [dev-health-query-api @query,internal]",
-      "impersonation_policy": "not_applicable_non_main_app",
+      "impersonation_policy": "unknown",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -419,11 +427,12 @@
       "current_state_cache_behavior": "none: no authorization decision is cached; the credential is verified on every request (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go)",
       "disclosure_behavior": "behaviour today, no action check: any caller with a verified credential reads its own organization's rows; failed authentication answers 401 (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); no other organization's resource can be named",
       "gaps": [
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
+        "impersonation_policy: this route reads the organization from the credential only (authenticateRESTRequest returns the organization id alone); whether an impersonation session changes it is not proven in this pass"
       ],
       "graphql_field_name": null,
       "id": "GET /api/v1/flame/aggregated [dev-health-query-api @query,internal]",
-      "impersonation_policy": "not_applicable_non_main_app",
+      "impersonation_policy": "unknown",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -467,11 +476,12 @@
       "current_state_cache_behavior": "none: no authorization decision is cached; the credential is verified on every request (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go)",
       "disclosure_behavior": "behaviour today, no action check: any caller with a verified credential reads its own organization's rows; failed authentication answers 401 (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); no other organization's resource can be named",
       "gaps": [
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
+        "impersonation_policy: this route reads the organization from the credential only (authenticateRESTRequest returns the organization id alone); whether an impersonation session changes it is not proven in this pass"
       ],
       "graphql_field_name": null,
       "id": "GET /api/v1/heatmap [dev-health-query-api @query,internal]",
-      "impersonation_policy": "not_applicable_non_main_app",
+      "impersonation_policy": "unknown",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -515,11 +525,12 @@
       "current_state_cache_behavior": "none: no authorization decision is cached; the credential is verified on every request (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go)",
       "disclosure_behavior": "behaviour today, no action check: any caller with a verified credential reads its own organization's rows; failed authentication answers 401 (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); no other organization's resource can be named",
       "gaps": [
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
+        "impersonation_policy: this route reads the organization from the credential only (authenticateRESTRequest returns the organization id alone); whether an impersonation session changes it is not proven in this pass"
       ],
       "graphql_field_name": null,
       "id": "GET /api/v1/home [dev-health-query-api @query,internal]",
-      "impersonation_policy": "not_applicable_non_main_app",
+      "impersonation_policy": "unknown",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -563,11 +574,12 @@
       "current_state_cache_behavior": "none: no authorization decision is cached; the credential is verified on every request (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go)",
       "disclosure_behavior": "behaviour today, no action check: any caller with a verified credential reads its own organization's rows; failed authentication answers 401 (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); no other organization's resource can be named",
       "gaps": [
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
+        "impersonation_policy: this route reads the organization from the credential only (authenticateRESTRequest returns the organization id alone); whether an impersonation session changes it is not proven in this pass"
       ],
       "graphql_field_name": null,
       "id": "POST /api/v1/home [dev-health-query-api @query,internal]",
-      "impersonation_policy": "not_applicable_non_main_app",
+      "impersonation_policy": "unknown",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -611,11 +623,12 @@
       "current_state_cache_behavior": "none: no authorization decision is cached; the credential is verified on every request (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go)",
       "disclosure_behavior": "behaviour today, no action check: any caller with a verified credential reads its own organization's rows; failed authentication answers 401 (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); no other organization's resource can be named",
       "gaps": [
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
+        "impersonation_policy: this route reads the organization from the credential only (authenticateRESTRequest returns the organization id alone); whether an impersonation session changes it is not proven in this pass"
       ],
       "graphql_field_name": null,
       "id": "GET /api/v1/investment [dev-health-query-api @query,internal]",
-      "impersonation_policy": "not_applicable_non_main_app",
+      "impersonation_policy": "unknown",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -659,11 +672,12 @@
       "current_state_cache_behavior": "none: no authorization decision is cached; the credential is verified on every request (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go)",
       "disclosure_behavior": "behaviour today, no action check: any caller with a verified credential reads its own organization's rows; failed authentication answers 401 (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); no other organization's resource can be named",
       "gaps": [
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
+        "impersonation_policy: this route reads the organization from the credential only (authenticateRESTRequest returns the organization id alone); whether an impersonation session changes it is not proven in this pass"
       ],
       "graphql_field_name": null,
       "id": "POST /api/v1/investment [dev-health-query-api @query,internal]",
-      "impersonation_policy": "not_applicable_non_main_app",
+      "impersonation_policy": "unknown",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -707,11 +721,12 @@
       "current_state_cache_behavior": "none: no authorization decision is cached; the credential is verified on every request (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go)",
       "disclosure_behavior": "behaviour today, no action check: any caller with a verified credential reads its own organization's rows; failed authentication answers 401 (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); no other organization's resource can be named",
       "gaps": [
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
+        "impersonation_policy: this route reads the organization from the credential only (authenticateRESTRequest returns the organization id alone); whether an impersonation session changes it is not proven in this pass"
       ],
       "graphql_field_name": null,
       "id": "POST /api/v1/investment/explain [dev-health-query-api @query,internal]",
-      "impersonation_policy": "not_applicable_non_main_app",
+      "impersonation_policy": "unknown",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -755,11 +770,12 @@
       "current_state_cache_behavior": "none: no authorization decision is cached; the credential is verified on every request (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go)",
       "disclosure_behavior": "behaviour today, no action check: any caller with a verified credential reads its own organization's rows; failed authentication answers 401 (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); no other organization's resource can be named",
       "gaps": [
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
+        "impersonation_policy: this route reads the organization from the credential only (authenticateRESTRequest returns the organization id alone); whether an impersonation session changes it is not proven in this pass"
       ],
       "graphql_field_name": null,
       "id": "GET /api/v1/investment/sunburst [dev-health-query-api @query,internal]",
-      "impersonation_policy": "not_applicable_non_main_app",
+      "impersonation_policy": "unknown",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -819,11 +835,12 @@
       "current_state_cache_behavior": "none: no authorization decision is cached; the credential is verified on every request (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go)",
       "disclosure_behavior": "behaviour today, no action check: any caller with a verified credential reads its own organization's rows; failed authentication answers 401 (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); no other organization's resource can be named",
       "gaps": [
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
+        "impersonation_policy: this route reads the organization from the credential only (authenticateRESTRequest returns the organization id alone); whether an impersonation session changes it is not proven in this pass"
       ],
       "graphql_field_name": null,
       "id": "GET /api/v1/opportunities [dev-health-query-api @query,internal]",
-      "impersonation_policy": "not_applicable_non_main_app",
+      "impersonation_policy": "unknown",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -867,11 +884,12 @@
       "current_state_cache_behavior": "none: no authorization decision is cached; the credential is verified on every request (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go)",
       "disclosure_behavior": "behaviour today, no action check: any caller with a verified credential reads its own organization's rows; failed authentication answers 401 (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); no other organization's resource can be named",
       "gaps": [
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
+        "impersonation_policy: this route reads the organization from the credential only (authenticateRESTRequest returns the organization id alone); whether an impersonation session changes it is not proven in this pass"
       ],
       "graphql_field_name": null,
       "id": "POST /api/v1/opportunities [dev-health-query-api @query,internal]",
-      "impersonation_policy": "not_applicable_non_main_app",
+      "impersonation_policy": "unknown",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -915,11 +933,12 @@
       "current_state_cache_behavior": "none: no authorization decision is cached; the credential is verified on every request (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go)",
       "disclosure_behavior": "behaviour today, no action check: any caller with a verified credential reads its own organization's rows; failed authentication answers 401 (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); no other organization's resource can be named",
       "gaps": [
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
+        "impersonation_policy: this route reads the organization from the credential only (authenticateRESTRequest returns the organization id alone); whether an impersonation session changes it is not proven in this pass"
       ],
       "graphql_field_name": null,
       "id": "GET /api/v1/people [dev-health-query-api @query,internal]",
-      "impersonation_policy": "not_applicable_non_main_app",
+      "impersonation_policy": "unknown",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -964,11 +983,12 @@
       "disclosure_behavior": null,
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
-        "disclosure_behavior: the answer for a person_id outside the caller's organization is not proven in this pass"
+        "disclosure_behavior: the answer for a person_id outside the caller's organization is not proven in this pass",
+        "impersonation_policy: this route reads the organization from the credential only (authenticateRESTRequest returns the organization id alone); whether an impersonation session changes it is not proven in this pass"
       ],
       "graphql_field_name": null,
       "id": "GET /api/v1/people/{person_id}/drilldown/issues [dev-health-query-api @query,internal]",
-      "impersonation_policy": "not_applicable_non_main_app",
+      "impersonation_policy": "unknown",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -1013,11 +1033,12 @@
       "disclosure_behavior": null,
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
-        "disclosure_behavior: the answer for a person_id outside the caller's organization is not proven in this pass"
+        "disclosure_behavior: the answer for a person_id outside the caller's organization is not proven in this pass",
+        "impersonation_policy: this route reads the organization from the credential only (authenticateRESTRequest returns the organization id alone); whether an impersonation session changes it is not proven in this pass"
       ],
       "graphql_field_name": null,
       "id": "GET /api/v1/people/{person_id}/drilldown/prs [dev-health-query-api @query,internal]",
-      "impersonation_policy": "not_applicable_non_main_app",
+      "impersonation_policy": "unknown",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -1062,11 +1083,12 @@
       "disclosure_behavior": null,
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
-        "disclosure_behavior: the answer for a person_id outside the caller's organization is not proven in this pass"
+        "disclosure_behavior: the answer for a person_id outside the caller's organization is not proven in this pass",
+        "impersonation_policy: this route reads the organization from the credential only (authenticateRESTRequest returns the organization id alone); whether an impersonation session changes it is not proven in this pass"
       ],
       "graphql_field_name": null,
       "id": "GET /api/v1/people/{person_id}/metric [dev-health-query-api @query,internal]",
-      "impersonation_policy": "not_applicable_non_main_app",
+      "impersonation_policy": "unknown",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -1111,11 +1133,12 @@
       "disclosure_behavior": null,
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
-        "disclosure_behavior: the answer for a person_id outside the caller's organization is not proven in this pass"
+        "disclosure_behavior: the answer for a person_id outside the caller's organization is not proven in this pass",
+        "impersonation_policy: this route reads the organization from the credential only (authenticateRESTRequest returns the organization id alone); whether an impersonation session changes it is not proven in this pass"
       ],
       "graphql_field_name": null,
       "id": "GET /api/v1/people/{person_id}/summary [dev-health-query-api @query,internal]",
-      "impersonation_policy": "not_applicable_non_main_app",
+      "impersonation_policy": "unknown",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -1159,11 +1182,12 @@
       "current_state_cache_behavior": "none: no authorization decision is cached; the credential is verified on every request (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go)",
       "disclosure_behavior": "behaviour today, no action check: any caller with a verified credential reads its own organization's rows; failed authentication answers 401 (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); no other organization's resource can be named",
       "gaps": [
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
+        "impersonation_policy: this route reads the organization from the credential only (authenticateRESTRequest returns the organization id alone); whether an impersonation session changes it is not proven in this pass"
       ],
       "graphql_field_name": null,
       "id": "GET /api/v1/quadrant [dev-health-query-api @query,internal]",
-      "impersonation_policy": "not_applicable_non_main_app",
+      "impersonation_policy": "unknown",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -1207,11 +1231,12 @@
       "current_state_cache_behavior": "none: no authorization decision is cached; the credential is verified on every request (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go)",
       "disclosure_behavior": "behaviour today, no action check: any caller with a verified credential reads its own organization's rows; failed authentication answers 401 (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); no other organization's resource can be named",
       "gaps": [
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
+        "impersonation_policy: this route reads the organization from the credential only (authenticateRESTRequest returns the organization id alone); whether an impersonation session changes it is not proven in this pass"
       ],
       "graphql_field_name": null,
       "id": "GET /api/v1/sankey [dev-health-query-api @query,internal]",
-      "impersonation_policy": "not_applicable_non_main_app",
+      "impersonation_policy": "unknown",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -1255,11 +1280,12 @@
       "current_state_cache_behavior": "none: no authorization decision is cached; the credential is verified on every request (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go)",
       "disclosure_behavior": "behaviour today, no action check: any caller with a verified credential reads its own organization's rows; failed authentication answers 401 (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); no other organization's resource can be named",
       "gaps": [
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
+        "impersonation_policy: this route reads the organization from the credential only (authenticateRESTRequest returns the organization id alone); whether an impersonation session changes it is not proven in this pass"
       ],
       "graphql_field_name": null,
       "id": "POST /api/v1/sankey [dev-health-query-api @query,internal]",
-      "impersonation_policy": "not_applicable_non_main_app",
+      "impersonation_policy": "unknown",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -1303,11 +1329,12 @@
       "current_state_cache_behavior": "none: no authorization decision is cached; the credential is verified on every request (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go)",
       "disclosure_behavior": "behaviour today, no action check: any caller with a verified credential reads its own organization's rows; failed authentication answers 401 (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); no other organization's resource can be named",
       "gaps": [
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
+        "impersonation_policy: this route reads the organization from the credential only (authenticateRESTRequest returns the organization id alone); whether an impersonation session changes it is not proven in this pass"
       ],
       "graphql_field_name": null,
       "id": "GET /api/v1/work-units [dev-health-query-api @query,internal]",
-      "impersonation_policy": "not_applicable_non_main_app",
+      "impersonation_policy": "unknown",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -1351,11 +1378,12 @@
       "current_state_cache_behavior": "none: no authorization decision is cached; the credential is verified on every request (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go)",
       "disclosure_behavior": "behaviour today, no action check: any caller with a verified credential reads its own organization's rows; failed authentication answers 401 (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); no other organization's resource can be named",
       "gaps": [
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
+        "impersonation_policy: this route reads the organization from the credential only (authenticateRESTRequest returns the organization id alone); whether an impersonation session changes it is not proven in this pass"
       ],
       "graphql_field_name": null,
       "id": "POST /api/v1/work-units [dev-health-query-api @query,internal]",
-      "impersonation_policy": "not_applicable_non_main_app",
+      "impersonation_policy": "unknown",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -1400,11 +1428,12 @@
       "disclosure_behavior": null,
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
-        "disclosure_behavior: the answer for a work_unit_id outside the caller's organization is not proven in this pass"
+        "disclosure_behavior: the answer for a work_unit_id outside the caller's organization is not proven in this pass",
+        "impersonation_policy: this route reads the organization from the credential only (authenticateRESTRequest returns the organization id alone); whether an impersonation session changes it is not proven in this pass"
       ],
       "graphql_field_name": null,
       "id": "POST /api/v1/work-units/{work_unit_id}/explain [dev-health-query-api @query,internal]",
-      "impersonation_policy": "not_applicable_non_main_app",
+      "impersonation_policy": "unknown",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -1437,15 +1466,15 @@
       ],
       "action": null,
       "classification": "protected",
-      "current_state_cache_behavior": "none: no authorization decision is cached; the credential is verified on every request (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go)",
-      "disclosure_behavior": "behaviour today, no action check: any caller with a verified credential reads its own organization's rows; failed authentication answers 401 (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); no other organization's resource can be named",
+      "current_state_cache_behavior": "none: the credential is verified on every request (authenticateInternalRequest, internal/queryapi/server/internal_auth.go)",
+      "disclosure_behavior": "behaviour today, no action check: a verified credential of any organization receives the same process build identity; failed authentication answers 401 (authenticateInternalRequest, internal/queryapi/server/internal_auth.go)",
       "gaps": [
         "The in-cluster internal identity headers are a third carrier accepted only on the internal listener (internal/queryapi/internalidentity, authenticateInternalRequest in internal/queryapi/server/internal_auth.go); the closed credential vocabulary has no class for them, so they are named here, not classified. /buildinfo does not accept the edge access token.",
         "action: build metadata that no catalog action covers; the catalog is closed and gains no action in this change"
       ],
       "graphql_field_name": null,
       "id": "GET /buildinfo [dev-health-query-api @query,internal]",
-      "impersonation_policy": "not_applicable_non_main_app",
+      "impersonation_policy": "exempt_no_org_context",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -1456,7 +1485,7 @@
         "description": "authenticateInternalRequest picks the carrier and refuses ambiguity; the envelope is verified by principal.Verifier.Verify, the edge access token by the live users-row check."
       },
       "public_rationale": null,
-      "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID, authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); no request parameter names the organization",
+      "resource_resolver": "none: the response is the process's build identity; the credential's organization is not read (buildinfo_route.go)",
       "route": "/buildinfo",
       "service": "dev-health-query-api",
       "source": {
@@ -1481,7 +1510,7 @@
       },
       "action": null,
       "classification": "protected",
-      "current_state_cache_behavior": "none: no authorization decision is cached; the credential is verified on every request (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go)",
+      "current_state_cache_behavior": "none: no authorization decision is cached; the organization scope and the impersonation session are read per request (scope.OrgScope and scope.Impersonation, graphQLEdgeChain in internal/queryapi/server/graphql_edge_route.go)",
       "disclosure_behavior": "behaviour today, no action check: failed authentication answers 401 (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); an orgId argument naming another organization answers a whole-operation error before any field runs (OperationOrgGuard); a verified non-impersonating superuser may name another organization",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
@@ -1489,7 +1518,7 @@
       ],
       "graphql_field_name": null,
       "id": "GET /graphql [dev-health-query-api @query,internal]",
-      "impersonation_policy": "not_applicable_non_main_app",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -1525,7 +1554,7 @@
       },
       "action": null,
       "classification": "protected",
-      "current_state_cache_behavior": "none: no authorization decision is cached; the credential is verified on every request (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go)",
+      "current_state_cache_behavior": "none: no authorization decision is cached; the organization scope and the impersonation session are read per request (scope.OrgScope and scope.Impersonation, graphQLEdgeChain in internal/queryapi/server/graphql_edge_route.go)",
       "disclosure_behavior": "behaviour today, no action check: failed authentication answers 401 (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); an orgId argument naming another organization answers a whole-operation error before any field runs (OperationOrgGuard); a verified non-impersonating superuser may name another organization",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
@@ -1533,7 +1562,7 @@
       ],
       "graphql_field_name": null,
       "id": "POST /graphql [dev-health-query-api @query,internal]",
-      "impersonation_policy": "not_applicable_non_main_app",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -1622,15 +1651,15 @@
         "name": "HS256"
       },
       "classification": "protected",
-      "current_state_cache_behavior": "none: no authorization decision is cached; the credential is verified on every request (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go)",
-      "disclosure_behavior": "behaviour today, no action check: any caller with a verified credential reads its own organization's rows; failed authentication answers 401 (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); no other organization's resource can be named",
+      "current_state_cache_behavior": "none: no authorization decision is cached; the credential is verified on every request (authenticateInternalRequest, internal/queryapi/server/internal_auth.go)",
+      "disclosure_behavior": "behaviour today, no action check: failed authentication answers 401 (authenticateInternalRequest, internal/queryapi/server/internal_auth.go); the organization read is the credential's",
       "gaps": [
         "The in-cluster internal identity headers are a third carrier accepted only on the internal listener (internal/queryapi/internalidentity, authenticateInternalRequest in internal/queryapi/server/internal_auth.go); the closed credential vocabulary has no class for them, so they are named here, not classified.",
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
       ],
       "graphql_field_name": null,
       "id": "POST /query [dev-health-query-api @query,internal]",
-      "impersonation_policy": "not_applicable_non_main_app",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -1641,7 +1670,7 @@
         "description": "authenticateInternalRequest picks the carrier and refuses ambiguity; the envelope is verified by principal.Verifier.Verify, the edge access token by the live users-row check."
       },
       "public_rationale": null,
-      "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID, authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); no request parameter names the organization",
+      "resource_resolver": "organization_from_credential: claims.OrgID returned by authenticateInternalRequest, internal/queryapi/server/internal_auth.go",
       "route": "/query",
       "service": "dev-health-query-api",
       "source": {
@@ -1661,15 +1690,16 @@
       "accepted_credential_classes": [],
       "action": "analytics.read",
       "classification": "protected",
-      "current_state_cache_behavior": "none: no authorization decision is cached; the credential is verified on every request (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go)",
-      "disclosure_behavior": "behaviour today, no action check: any caller with a verified credential reads its own organization's rows; failed authentication answers 401 (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); no other organization's resource can be named",
+      "current_state_cache_behavior": "none: the identity headers are read on every request (mcpAuthenticate, internal/queryapi/server/mcp_route.go)",
+      "disclosure_behavior": "behaviour today, no action check: failed authentication answers 401; an identity carrying superuser, impersonation or an operator role is refused (mcpAuthenticate)",
       "gaps": [
         "The MCP caller-class listener accepts only the internal identity headers (no bearer of any class); the closed credential vocabulary has no class for them, so accepted_credential_classes is empty by declaration, not omission.",
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
+        "impersonation_policy: the MCP caller class refuses an impersonating identity (mcpAuthenticate); no schema value names a refusal"
       ],
       "graphql_field_name": null,
       "id": "POST /query [dev-health-query-api @mcp]",
-      "impersonation_policy": "not_applicable_non_main_app",
+      "impersonation_policy": "unknown",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -1680,7 +1710,7 @@
         "description": "mcpAuthenticate: internal identity headers only; any Authorization header is refused with 401."
       },
       "public_rationale": null,
-      "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID, authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); no request parameter names the organization",
+      "resource_resolver": "organization_from_credential: the organization of the internal identity headers (mcpAuthenticate, internal/queryapi/server/mcp_route.go); a bearer token is refused",
       "route": "/query",
       "service": "dev-health-query-api",
       "source": {
@@ -1704,15 +1734,15 @@
         "name": "HS256"
       },
       "classification": "protected",
-      "current_state_cache_behavior": "none: no authorization decision is cached; the credential is verified on every request (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go)",
-      "disclosure_behavior": "behaviour today, no action check: any caller with a verified credential reads its own organization's rows; failed authentication answers 401 (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); no other organization's resource can be named",
+      "current_state_cache_behavior": "none: no authorization decision is cached; the credential is verified on every request (authenticateInternalRequest, internal/queryapi/server/internal_auth.go)",
+      "disclosure_behavior": "behaviour today, no action check: failed authentication answers 401 (authenticateInternalRequest, internal/queryapi/server/internal_auth.go); the organization read is the credential's",
       "gaps": [
         "Same serving pipeline and carrier check as POST /query (query_route.go authenticateInternalRequest call). Mounted only when the deployment posture permits (mountProofRoute).",
         "The in-cluster internal identity headers are a third carrier accepted only on the internal listener (internal/queryapi/internalidentity, authenticateInternalRequest in internal/queryapi/server/internal_auth.go); the closed credential vocabulary has no class for them, so they are named here, not classified."
       ],
       "graphql_field_name": null,
       "id": "POST /query/proof [dev-health-query-api @query,internal]",
-      "impersonation_policy": "not_applicable_non_main_app",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -1723,7 +1753,7 @@
         "description": "authenticateInternalRequest picks the carrier and refuses ambiguity; the envelope is verified by principal.Verifier.Verify, the edge access token by the live users-row check."
       },
       "public_rationale": null,
-      "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID, authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); no request parameter names the organization",
+      "resource_resolver": "organization_from_credential: claims.OrgID returned by authenticateInternalRequest, internal/queryapi/server/internal_auth.go",
       "route": "/query/proof",
       "service": "dev-health-query-api",
       "source": {
@@ -1753,8 +1783,8 @@
         "name": "HS256"
       },
       "classification": "protected",
-      "current_state_cache_behavior": "none: no authorization decision is cached; the credential is verified on every request (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go)",
-      "disclosure_behavior": "behaviour today, no action check: any caller with a verified credential reads its own organization's rows; failed authentication answers 401 (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); no other organization's resource can be named",
+      "current_state_cache_behavior": "none: no authorization decision is cached; the credential is verified on every request (authenticateInternalRequest, internal/queryapi/server/internal_auth.go)",
+      "disclosure_behavior": "behaviour today, internal listener only and mutation-only: an organization not on the go_api_proof_orgs allowlist answers 403 (proof-write org-allowlist refusal, internal/queryapi/server/query_route.go); failed authentication answers 401 (authenticateInternalRequest, internal/queryapi/server/internal_auth.go)",
       "gaps": [
         "Same serving pipeline and carrier check as POST /query (query_route.go authenticateInternalRequest call). Mounted on the internal listener only.",
         "The in-cluster internal identity headers are a third carrier accepted only on the internal listener (internal/queryapi/internalidentity, authenticateInternalRequest in internal/queryapi/server/internal_auth.go); the closed credential vocabulary has no class for them, so they are named here, not classified.",
@@ -1762,7 +1792,7 @@
       ],
       "graphql_field_name": null,
       "id": "POST /query/proof-write [dev-health-query-api @internal]",
-      "impersonation_policy": "not_applicable_non_main_app",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -1773,7 +1803,7 @@
         "description": "authenticateInternalRequest picks the carrier and refuses ambiguity; the envelope is verified by principal.Verifier.Verify, the edge access token by the live users-row check."
       },
       "public_rationale": null,
-      "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID, authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); no request parameter names the organization",
+      "resource_resolver": "organization_from_credential: claims.OrgID returned by authenticateInternalRequest, internal/queryapi/server/internal_auth.go; the organization must be on the go_api_proof_orgs allowlist",
       "route": "/query/proof-write",
       "service": "dev-health-query-api",
       "source": {
@@ -1803,8 +1833,8 @@
         "name": "HS256"
       },
       "classification": "protected",
-      "current_state_cache_behavior": "none: no authorization decision is cached; the credential is verified on every request (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go)",
-      "disclosure_behavior": "behaviour today, no action check: any caller with a verified credential reads its own organization's rows; failed authentication answers 401 (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); no other organization's resource can be named",
+      "current_state_cache_behavior": "none: no authorization decision is cached; the credential is verified on every request (authenticateInternalRequest, internal/queryapi/server/internal_auth.go)",
+      "disclosure_behavior": "behaviour today, no action check: failed authentication answers 401 (authenticateInternalRequest, internal/queryapi/server/internal_auth.go); the organization read is the credential's",
       "gaps": [
         "Same serving pipeline and carrier check as POST /query (query_route.go authenticateInternalRequest call). Mounted on the internal listener only.",
         "The in-cluster internal identity headers are a third carrier accepted only on the internal listener (internal/queryapi/internalidentity, authenticateInternalRequest in internal/queryapi/server/internal_auth.go); the closed credential vocabulary has no class for them, so they are named here, not classified.",
@@ -1812,7 +1842,7 @@
       ],
       "graphql_field_name": null,
       "id": "POST /query/run-operation [dev-health-query-api @internal]",
-      "impersonation_policy": "not_applicable_non_main_app",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -1823,7 +1853,7 @@
         "description": "authenticateInternalRequest picks the carrier and refuses ambiguity; the envelope is verified by principal.Verifier.Verify, the edge access token by the live users-row check."
       },
       "public_rationale": null,
-      "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID, authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); no request parameter names the organization",
+      "resource_resolver": "organization_from_credential: claims.OrgID returned by authenticateInternalRequest, internal/queryapi/server/internal_auth.go",
       "route": "/query/run-operation",
       "service": "dev-health-query-api",
       "source": {

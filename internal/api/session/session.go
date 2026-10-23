@@ -167,7 +167,7 @@ func Routes(deps Deps) []httpapi.Route {
 // fail logs a failure with its step and writes the Python api's bare 500.
 // err must never carry a credential.
 func (h handlers) fail(w http.ResponseWriter, r *http.Request, step string, err error) {
-	attrs := []any{slog.String("path", r.URL.Path), slog.String("step", step)}
+	attrs := []any{slog.String("path", r.Pattern), slog.String("step", step)}
 	if err != nil {
 		attrs = append(attrs, slog.String("error", err.Error()))
 	}

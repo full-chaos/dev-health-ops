@@ -1,0 +1,4 @@
+rule	file	count	reason
+R2	internal/jobs/workgraph/issuepredges/invariant.go	1	organization_id gauge label; per-tenant series, follow-up leaf (not changed here: visible metric shape)
+R2	internal/queryapi/analytics/investmentrepojointelemetry.go	1	org_id counter label; per-tenant series, follow-up leaf (not changed here: visible metric shape)
+R5	internal/workerservice/river_process.go	1	config built by riverConfig, which sets the redacting logger

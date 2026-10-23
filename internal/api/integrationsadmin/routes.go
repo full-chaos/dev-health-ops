@@ -109,7 +109,7 @@ func (h handlers) fail(w http.ResponseWriter, r *http.Request, step string, err 
 		policy.WriteDetail(w, denied.status, denied.message, nil)
 		return
 	}
-	h.Logger.ErrorContext(r.Context(), "api route failed", slog.String("path", r.URL.Path),
+	h.Logger.ErrorContext(r.Context(), "api route failed", slog.String("path", r.Pattern),
 		slog.String("step", step), slog.String("error", err.Error()))
 	if providersync.IsDeadlockDetected(err) {
 		// Backstop only: the selection lock hierarchy prevents the deadlock.

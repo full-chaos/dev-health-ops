@@ -3,6 +3,7 @@ package joboperator
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"regexp"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
@@ -37,7 +38,7 @@ func NewDirectPostgresBackend(pool *pgxpool.Pool, schema string, registry Runtim
 	if pool == nil || registry == nil || !riverSchemaIdentifier.MatchString(schema) {
 		return nil, ErrBackendConfiguration
 	}
-	client, err := river.NewClient(riverpgxv5.New(pool), &river.Config{Schema: schema})
+	client, err := river.NewClient(riverpgxv5.New(pool), &river.Config{Schema: schema, Logger: slog.Default()})
 	if err != nil {
 		return nil, ErrBackendConfiguration
 	}

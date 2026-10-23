@@ -32,7 +32,7 @@ func (h handlers) requireEntitlement(w http.ResponseWriter, r *http.Request, org
 	allowed, err := licensing.OrgHasFeature(r.Context(), h.Pool, orgID, ssoFeature)
 	if err != nil {
 		h.Logger.ErrorContext(r.Context(), "api sso: org entitlement check failed; denying",
-			"feature", ssoFeature, "org_id", orgID, "path", r.URL.Path, "error", err)
+			"feature", ssoFeature, "org_id", orgID, "path", r.Pattern, "error", err)
 	}
 	if allowed {
 		return true

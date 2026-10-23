@@ -41,6 +41,7 @@ func TestBuildHeadsAreTheOldScriptsHeads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	chain = pgmigrate.ChainThrough(chain, pgmigrate.FrozenHead) // the derivation ran over the frozen scripts
 	if got := pgmigrate.Heads(baseline, chain); !reflect.DeepEqual(got, derived) {
 		t.Fatalf("the old script derived the heads %v, the preflight's build_heads are %v", derived, got)
 	}

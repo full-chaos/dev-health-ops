@@ -22,10 +22,21 @@ const (
 	ScopeOrganization = "organization"
 )
 
+const (
+	RiskLow  = "low"
+	RiskHigh = "high"
+
+	CacheNone                  = "none"
+	CacheDecisionBound         = "decision_bound"
+	CacheResourceRevisionBound = "resource_revision_bound"
+)
+
 type Action struct {
 	ID           string
 	Scope        string
 	ResourceKind string
+	RiskClass    string
+	CacheClass   string
 }
 
 type Role struct {
@@ -53,6 +64,8 @@ type actionsFile struct {
 		Action       string `json:"action"`
 		Scope        string `json:"scope"`
 		ResourceKind string `json:"resource_kind"`
+		RiskClass    string `json:"risk_class"`
+		CacheClass   string `json:"cache_class"`
 	} `json:"actions"`
 }
 
@@ -163,7 +176,16 @@ func Load(actionsJSON, rolesJSON []byte) (*Catalog, error) {
 		if _, dup := c.byAct[a.Action]; dup {
 			return nil, invalid("duplicate action %q", a.Action)
 		}
-		act := Action{ID: a.Action, Scope: a.Scope, ResourceKind: a.ResourceKind}
+		if a.RiskClass != RiskLow && a.RiskClass != RiskHigh {
+			return nil, invalid("action %q has a missing or unknown risk_class", a.Action)
+		}
+		if a.CacheClass != CacheNone && a.CacheClass != CacheDecisionBound && a.CacheClass != CacheResourceRevisionBound {
+			return nil, invalid("action %q has a missing or unknown cache_class", a.Action)
+		}
+		if a.RiskClass == RiskHigh && a.CacheClass != CacheNone {
+			return nil, invalid("action %q is high risk and must not be cached", a.Action)
+		}
+		act := Action{ID: a.Action, Scope: a.Scope, ResourceKind: a.ResourceKind, RiskClass: a.RiskClass, CacheClass: a.CacheClass}
 		c.byAct[a.Action] = act
 		c.actions = append(c.actions, act)
 	}

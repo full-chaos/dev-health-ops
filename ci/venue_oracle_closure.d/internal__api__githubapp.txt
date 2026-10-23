@@ -30,6 +30,7 @@ internal/api/restcore
 internal/api/session
 internal/api/sessionissue
 internal/api/sso
+internal/api/standinkey
 internal/api/syncadmin
 internal/api/teamsidentity
 internal/api/telemetry

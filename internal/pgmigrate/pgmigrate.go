@@ -58,6 +58,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync/atomic"
 )
 
 // CutoverEnv gates revision 0066 in the Python upgrade
@@ -76,6 +77,45 @@ var baselineFile []byte
 
 //go:embed sql
 var chainFiles embed.FS
+
+// FrozenHead is the last revision the Python-recorded goldens cover (CHAOS-10365 froze them; no tool can record
+// them again). The chain up to and including it equals those goldens byte for byte and is never edited. A revision
+// above it is Go-only: the Go-owned checks in chain_tail_test.go judge it, and the frozen comparisons run on the
+// chain through FrozenHead (ChainThrough), never on the full chain.
+const FrozenHead = "0152"
+
+// chainFS is where LoadChain and LoadDownChain read the chain (layout sql/ and sql/down/). nil is the embedded
+// chain; only tests install another, through export_test.go.
+var chainFS atomic.Pointer[fs.FS]
+
+func chainSource() fs.FS {
+	if installed := chainFS.Load(); installed != nil {
+		return *installed
+	}
+	return chainFiles
+}
+
+// ChainThrough is the chain files with a revision at or below revision, in order.
+func ChainThrough(chain []ChainFile, revision string) []ChainFile {
+	var out []ChainFile
+	for _, file := range chain {
+		if file.Revision <= revision {
+			out = append(out, file)
+		}
+	}
+	return out
+}
+
+// ChainAbove is the chain files with a revision above revision, in order.
+func ChainAbove(chain []ChainFile, revision string) []ChainFile {
+	var out []ChainFile
+	for _, file := range chain {
+		if file.Revision > revision {
+			out = append(out, file)
+		}
+	}
+	return out
+}
 
 // Baseline is the head: the combination production runs.
 type Baseline struct {
@@ -160,7 +200,8 @@ var chainName = regexp.MustCompile(`^([0-9]{4,})_[a-z0-9_]+\.sql$`)
 
 // LoadChain returns the revisions after the head, in order.
 func LoadChain() ([]ChainFile, error) {
-	entries, err := fs.ReadDir(chainFiles, "sql")
+	source := chainSource()
+	entries, err := fs.ReadDir(source, "sql")
 	if err != nil {
 		return nil, err
 	}
@@ -173,7 +214,7 @@ func LoadChain() ([]ChainFile, error) {
 		if match == nil {
 			return nil, fmt.Errorf("sql/%s is not named <revision>_<slug>.sql", entry.Name())
 		}
-		data, err := chainFiles.ReadFile("sql/" + entry.Name())
+		data, err := fs.ReadFile(source, "sql/"+entry.Name())
 		if err != nil {
 			return nil, err
 		}

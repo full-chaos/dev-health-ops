@@ -78,6 +78,7 @@ internal/cigates/docstools	refusals_pub_test.go	unexpressed	-
 internal/cigates/docstools	refusals_test.go	unexpressed	-
 internal/cigates/docstools	validate_inventory_review.go	unexpressed	-
 internal/cigates/docstools	validate_inventory_review_refusals_test.go	unexpressed	-
+internal/cigates/emitscan	scan.go	unexpressed	-
 internal/cigates/integrationshards	integration_sharding_test.go	unexpressed	-
 internal/cigates/integrationshards	support_test.go	unexpressed	-
 internal/cigates/nopython	tests_python_test.go	unexpressed	-

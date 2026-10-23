@@ -249,9 +249,12 @@ func (h handlers) installCallback(w http.ResponseWriter, r *http.Request) {
 	policy.WriteModel(w, http.StatusOK, out, nil)
 }
 
-// refuseLinkedElsewhere answers an installation another organization holds.
-func (h handlers) refuseLinkedElsewhere(_ context.Context, w http.ResponseWriter) {
-	detail(w, http.StatusConflict, "installation already linked to another organization")
+// refuseLinkedElsewhere answers an installation another organization holds with
+// the answer for an installation the installer cannot access; the log line
+// carries the class only.
+func (h handlers) refuseLinkedElsewhere(ctx context.Context, w http.ResponseWriter) {
+	h.Logger.WarnContext(ctx, "install callback refused: installation not linkable", slog.String("class", "linked_elsewhere"))
+	detail(w, http.StatusForbidden, installerAccessDenied)
 }
 
 // consumeState is _consume_install_state_jti, reporting whether the state was
@@ -280,7 +283,7 @@ func (h handlers) consumeState(ctx context.Context, jti string) bool {
 
 // upsertInstallation is _upsert_installation: insert the row, or claim an
 // existing one that is unowned or already this org's. conflict is true when
-// another org holds it (409).
+// another org holds it (refused like an installation the installer cannot access).
 func (h handlers) upsertInstallation(ctx context.Context, tx pgx.Tx, installationID *big.Int, orgID string, installation *pyjson.Object) (conflict bool, err error) {
 	if !installationID.IsInt64() {
 		return false, errors.New("installation id is outside the bigint range")

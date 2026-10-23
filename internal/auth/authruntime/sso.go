@@ -15,8 +15,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity/oidc"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity/saml"
-	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
-	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
+	"github.com/full-chaos/dev-health-ops/internal/auth/providersecret"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
 
@@ -58,21 +57,6 @@ func ssoRoutes(
 	return routes, nil
 }
 
-func providerSecrets(cfg authconfig.Config) (providerSecretDecrypter, error) {
-	fernet, err := providerfoundation.NewFernetDecryptor(cfg.SSO.EncryptionKey, cfg.SSO.EncryptionSalt)
-	return providerSecretDecrypter{fernet}, err
-}
-
-// providerSecretDecrypter is the oidc.SecretDecrypter over go-api's Fernet key.
-type providerSecretDecrypter struct {
-	providerfoundation.FernetDecryptor
-}
-
-func (d providerSecretDecrypter) Decrypt(stored string) (string, error) {
-	plain, err := d.FernetDecryptor.Decrypt(secrets.NewValue(stored))
-	return string(plain), err
-}
-
 func oidcService(
 	cfg authconfig.Config, logger *slog.Logger, pool *pgxpool.Pool, schema authschema.ValidatedIdentifier,
 	identities *identity.Store, sessions authapi.SSOSessions,
@@ -81,7 +65,7 @@ func oidcService(
 	if err != nil {
 		return nil, err
 	}
-	decrypter, err := providerSecrets(cfg)
+	decrypter, err := providersecret.New(cfg.SSO.EncryptionKey, cfg.SSO.EncryptionSalt)
 	if err != nil {
 		return nil, errors.New("authruntime: the provider secret key is unusable")
 	}

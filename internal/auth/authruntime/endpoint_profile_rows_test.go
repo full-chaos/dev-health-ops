@@ -411,3 +411,58 @@ func TestRowsThatAcceptNoCredentialListNoClass(t *testing.T) {
 		t.Fatal("no row says it accepts no credential: the test measured nothing")
 	}
 }
+
+var wellKnownServedRoutes = []string{
+	"GET /.well-known/jwks.json@api", "HEAD /.well-known/jwks.json@api",
+	"GET /.well-known/openid-configuration@api", "HEAD /.well-known/openid-configuration@api",
+}
+
+// TestTheRowGateRefusesAPlantedMissingRowForEachWellKnownRoute deletes each
+// well-known row from the real rows file in memory and runs the comparison the
+// gate runs: it must name exactly that route.
+func TestTheRowGateRefusesAPlantedMissingRowForEachWellKnownRoute(t *testing.T) {
+	served := servedAuthRoutes(t)
+	for _, key := range wellKnownServedRoutes {
+		if !served[key] {
+			t.Fatalf("probe does not serve %s: the well-known mounts are missing from the probe", key)
+		}
+		var kept []map[string]any
+		for _, row := range loadAuthServiceRows(t) {
+			id, _ := row["id"].(string)
+			match := authRowID.FindStringSubmatch(id)
+			if match != nil && match[1]+" "+match[2]+"@"+match[3] == key {
+				continue
+			}
+			kept = append(kept, row)
+		}
+		missing, stale := compareServedToRows(t, served, kept)
+		if len(missing) != 1 || missing[0] != key || len(stale) != 0 {
+			t.Errorf("rows without %s: missing %v stale %v, want exactly it missing", key, missing, stale)
+		}
+	}
+}
+
+// TestWithoutAnIssuerTheDiscoveryRowsAreStale pins that the probe really mounts
+// the discovery document: with AUTH_TOKEN_ISSUER_URL unset only the JWKS is
+// served, so the two discovery rows are reported as rows for routes nothing serves.
+func TestWithoutAnIssuerTheDiscoveryRowsAreStale(t *testing.T) {
+	served := servedAuthRoutesWithIssuer(t, "")
+	missing, stale := compareServedToRows(t, served, loadAuthServiceRows(t))
+	wantStale := []string{"GET /.well-known/openid-configuration@api", "HEAD /.well-known/openid-configuration@api"}
+	if len(missing) != 0 || strings.Join(stale, ",") != strings.Join(wantStale, ",") {
+		t.Errorf("without an issuer: missing %v stale %v, want stale %v", missing, stale, wantStale)
+	}
+	if served["GET /.well-known/jwks.json@api"] != true || served["HEAD /.well-known/jwks.json@api"] != true {
+		t.Error("the JWKS must be served without an issuer")
+	}
+}
+
+// TestAWellKnownRowWithNoRouteIsStale is the stale-row control for the new rows.
+func TestAWellKnownRowWithNoRouteIsStale(t *testing.T) {
+	served := servedAuthRoutes(t)
+	ghost := map[string]any{"id": "GET /.well-known/unmounted [dev-health-auth-service @api]", "method": "GET", "route": "/.well-known/unmounted"}
+	_, stale := compareServedToRows(t, served, append(loadAuthServiceRows(t), ghost))
+	if len(stale) != 1 || stale[0] != "GET /.well-known/unmounted@api" {
+		t.Errorf("stale = %v, want the unmounted route", stale)
+	}
+}

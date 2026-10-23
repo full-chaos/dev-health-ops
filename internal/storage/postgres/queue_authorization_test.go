@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"errors"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -49,9 +50,13 @@ func TestQueueAuthorizationRejectsMissingOrUnavailablePool(t *testing.T) {
 func TestQueueAuthorizationQueryIsReadOnlyAndChecksExactPrivilegeBoundary(t *testing.T) {
 	t.Parallel()
 
+	// Statement keywords are looked for in the code only: comments and
+	// quoted privilege names ("... WITH GRANT OPTION") are not statements.
+	code := sqlQuotedLiteral.ReplaceAllString(sqlLineComment.ReplaceAllString(queueAuthorizationQuery, ""), "''")
+	upperCode := strings.ToUpper(code)
 	upperQuery := strings.ToUpper(queueAuthorizationQuery)
 	for _, forbidden := range []string{"INSERT INTO", "UPDATE ", "DELETE FROM", "CREATE ", "ALTER ", "DROP ", "GRANT ", "REVOKE "} {
-		if strings.Contains(upperQuery, forbidden) {
+		if strings.Contains(upperCode, forbidden) {
 			t.Fatalf("queue authorization query contains mutating SQL %q", forbidden)
 		}
 	}
@@ -90,9 +95,42 @@ func TestQueueAuthorizationQueryIsReadOnlyAndChecksExactPrivilegeBoundary(t *tes
 		"'TRIGGER'",
 		"'MAINTAIN'",
 		"'TEMPORARY'",
+		"RELATION_HELD",
+		"COLUMN_HELD",
+		"NSPOWNER",
+		"RELOWNER",
+		"PROOWNER",
+		"DATDBA",
+		"' WITH GRANT OPTION'",
+		"'CONNECT WITH GRANT OPTION'",
+		"'USAGE WITH GRANT OPTION'",
+		"IS_GRANTABLE",
 	} {
 		if !strings.Contains(upperQuery, required) {
 			t.Fatalf("queue authorization query omits %q", required)
+		}
+	}
+}
+
+var sqlQuotedLiteral = regexp.MustCompile("'[^']*'")
+
+// The ownership, ambient grant-option and held-privilege predicates are the
+// same bytes in every posture query that carries them.
+func TestPostureQueriesSpliceTheSharedPredicates(t *testing.T) {
+	t.Parallel()
+
+	for name, query := range map[string]string{
+		"queue":  queueAuthorizationQuery,
+		"domain": rolePostureQuery,
+	} {
+		for fragmentName, fragment := range map[string]string{
+			"governed relations": governedRelationsCTESQL,
+			"owns nothing":       ownsNothingPredicateSQL,
+			"ambient options":    ambientGrantOptionSQL,
+		} {
+			if !strings.Contains(query, fragment) {
+				t.Fatalf("%s posture query does not splice the shared %s SQL", name, fragmentName)
+			}
 		}
 	}
 }

@@ -602,7 +602,10 @@ func NewServer(
 	scope ...func(http.Handler) http.Handler,
 ) (*httpapi.Server, error) {
 	noStore := httpapi.NewNoStoreRoutes(httpapi.AdminRoutes)
-	middleware := append([]func(http.Handler) http.Handler{buildinfo.Stamp(version.Current("api")), pyheaders.UnhandledErrorShape, CloseHTTP10, DecodedPathRouting, noStore.Middleware}, scope...)
+	middleware := []func(http.Handler) http.Handler{buildinfo.Stamp(version.Current("api")), pyheaders.UnhandledErrorShape, CloseHTTP10, MarkSignatureOnly, DecodedPathRouting, noStore.Middleware}
+	for _, layer := range scope {
+		middleware = append(middleware, skipScope(layer))
+	}
 	middleware = append(middleware, NewOriginValidation(cfg.CORSAllowedOrigins).Wrap, pyheaders.SecurityHeaders, pyheaders.NewCORS(cfg.CORSAllowedOrigins).Wrap)
 	return httpapi.NewServer(httpapi.ServerOptions{
 		Name:           "api-http",

@@ -48,6 +48,21 @@ route (its own default is off). The URL is this release's auth-service.
 {{- if and $proxyOn (not $proxy.sessions) }}
 {{- fail "goApi.authProxy.sessions must be on when any other goApi.authProxy flag is: the refresh credentials those flows issue are rotated only by the sessions owner" }}
 {{- end }}
+{{- if and $proxy.sessions .Values.authService.enabled }}
+{{- $rd := .Values.authService.migrate.sessionReaders }}
+{{- $missing := list }}
+{{- if not (trim (toString $rd.goApi)) }}{{- $missing = append $missing "authService.migrate.sessionReaders.goApi (go-api's API_DATABASE_ROLE)" }}{{- end }}
+{{- if not (trim (toString $rd.queryApi)) }}{{- $missing = append $missing "authService.migrate.sessionReaders.queryApi (query-api's registry login)" }}{{- end }}
+{{- if $missing }}
+{{- fail (printf "goApi.authProxy.sessions needs the session-reader roles of both services: unset %s" (join ", " $missing)) }}
+{{- end }}
+{{- $miss := list }}
+{{- if not (trim (toString .Values.authService.sessionKeys.successor.secretName)) }}{{- $miss = append $miss "authService.sessionKeys.successor.secretName" }}{{- end }}
+{{- if not (trim (toString .Values.authService.sessionKeys.successor.secretKey)) }}{{- $miss = append $miss "authService.sessionKeys.successor.secretKey" }}{{- end }}
+{{- if $miss }}
+{{- fail (printf "goApi.authProxy.sessions needs the auth-service session keys: unset %s (the access-token key is go-api's JWT_SECRET_KEY Secret)" (join ", " $miss)) }}
+{{- end }}
+{{- end }}
 {{- range .Values.goApi.extraEnv }}
 {{- if hasPrefix "AUTH_PROXY_" .name }}{{- fail "goApi.extraEnv must not set AUTH_PROXY_*: use goApi.authProxy, which the chart checks" }}{{- end }}
 {{- end }}

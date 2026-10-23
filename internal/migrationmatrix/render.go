@@ -128,8 +128,7 @@ func renderRegressions(tickets []string) string {
 func RenderOpsBlock(render *Render, catalog Catalog) string {
 	var b strings.Builder
 
-	b.WriteString(fmt.Sprintf("_Rendered %s against main merge-base `%s`; SDL digest pin `%s`; fleet read %s via %s._\n\n",
-		render.RenderedAt.UTC().Format(time.RFC3339),
+	b.WriteString(fmt.Sprintf("_Rendered against main merge-base `%s`; SDL digest pin `%s`; fleet read %s via %s._\n\n",
 		render.OpsSha,
 		render.SchemaDigest,
 		fleetReadStamp(render.FleetReadAt),

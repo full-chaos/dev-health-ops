@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/pgmigrate/schemagate"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
@@ -232,6 +233,12 @@ func (supervisor *streamConsumerSupervisor) attempt(ctx context.Context) (stream
 		}
 		if opened == nil {
 			return nil, dependencyUnavailable("stream_storage_open_failed")
+		}
+		// A database behind this build keeps the process live and consuming nothing:
+		// the retry loop reopens storage until the migration reaches the build.
+		if schemagate.Enforce(ctx, supervisor.log(), "stream-runner", opened) != nil {
+			opened.Close()
+			return nil, dependencyUnavailable("stream_schema_behind")
 		}
 		// Published before the probes run so the readiness checks and the
 		// posture gauge reflect this storage's live state from now on;

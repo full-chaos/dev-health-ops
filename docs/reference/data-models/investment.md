@@ -63,15 +63,15 @@ Each active donor team contributes all its live, sync-derived
 `provider_access`, and `inferred` ownership sources. It validates the ownership
 interval at the END of the work unit's own span (`to_ts`), never later than the
 materialization timestamp, and joins to this organization's current repository
-catalog. A unit that ended before a team's first ownership row of a repository gets
-no share of that repository on main today; the rule of record (chris 2026-10-12, D5987
-option C) is that the repository's first recorded owners apply backward, tracked in
-CHAOS-10518 (the shared readers of `internal/teamownership` and `internal/queryapi/teamscope`
-apply it since CHAOS-9404). A later change of a team's repositories does not move the effort of a unit that
+catalog. A unit that ended before a repository's first
+ownership record takes the repository's first recorded owners (the rule of record, chris 2026-10-12, D5987 option C,
+`internal/ownershipwindow`, CHAOS-10518): the reader tests a row at the later of the unit's end time and the first
+record of its repository, which is the earliest start of that repository's rows of active teams (an inactive team does
+not set it). A unit that ended in a gap between two records has no owner. A later change of a team's repositories does not move the effort of a unit that
 ended before the change. One run holds units of many end times, so the reader
-loads the donor teams of the issues, and the ownership rows of those donor teams
-that began at or before the materialization timestamp, once; each unit selects
-the rows valid at its own end time. The ownership rows of a team that is no
+loads the donor teams of the issues, the ownership rows of those donor teams
+and the first record of each repository, once; each unit selects the rows valid
+at its own end time (at the first record of the repository when that is later). The ownership rows of a team that is no
 donor of the run's issues are not read. Name-only ownership resolves by provider and
 case-insensitive full repository name. Missing, expired, future, manual,
 foreign-organization, and unmatched repository records cannot supply a share.
@@ -375,6 +375,14 @@ persisted table — it is a query-time CTE (`LATEST_WORK_UNIT_INVESTMENTS_CTE`,
 (CHAOS-2600). `fetch_investment_team_edges` is the reference caller of this join shape; there is no
 `fetch_investment_breakdown(include_team_id=...)` parameter — that phrasing describes the pattern,
 not a real function signature.
+
+**`work_unit_investments.effort_basis` (migration 140, `LowCardinality(String)`, default `''`)** says whether the unit's
+commit effort was measured. Commit stats are capped (50 on a full sync, 300 per project), so a commit with no
+`git_commit_stats` row adds zero effort, the same as a measured zero. The materializer writes `measured` (no linked
+commits, or every linked commit has a stats row), `partial_capped` (some linked commit has no stats row, or all lack one
+but the effort came from another tier) or `unmeasured` (every linked commit lacks a stats row and the effort is 0).
+`''` means "not recorded": every row written before the migration keeps it until the unit is materialized again, and it
+never means "measured". A reader must tolerate the column missing.
 
 **`work_unit_investments.evidence_quote_count` (migration 106, `Nullable(UInt32)`)** is the number of distinct
 `(source_id, quote)` the row's run wrote to `work_unit_investment_quotes`. It is written by the materializer

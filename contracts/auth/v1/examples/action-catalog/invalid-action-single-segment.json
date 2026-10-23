@@ -1,0 +1,12 @@
+{
+  "schema_version": "actions.v1",
+  "catalog_version": 1,
+  "description": "example",
+  "actions": [
+    {
+      "action": "admin",
+      "scope": "organization",
+      "resource_kind": "organization"
+    }
+  ]
+}

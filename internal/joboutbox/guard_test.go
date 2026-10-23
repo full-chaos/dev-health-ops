@@ -178,3 +178,24 @@ func TestReconcilerLoopLogsNoCredentialShapedQueueRowField(t *testing.T) {
 		}
 	}
 }
+
+// An unexpected claim state is reported by outbox id and kind; the dedupe key of
+// the candidate, which is read from a queued row, is not part of the error.
+func TestClaimFilterErrorNamesNoQueueRowKey(t *testing.T) {
+	sentinel := guardSentinel(t)
+	repair := &StrandRepair{queryDomain: func(context.Context, string, ...any) (pgx.Rows, error) {
+		return &fakeStrandSurveyRows{rows: [][]any{{"workgraph.build", sentinel, "unrecognized_disposition"}}}, nil
+	}}
+	_, _, _, err := repair.filterByClaim(context.Background(), []strandCandidate{{
+		outboxID: "00000000-0000-4000-8000-000000000010", jobKind: "workgraph.build", dedupeKey: sentinel,
+	}}, time.Date(2026, time.July, 22, 12, 0, 0, 0, time.UTC))
+	if !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("error = %v, want ErrUnavailable", err)
+	}
+	if strings.Contains(err.Error(), sentinel) || strings.Contains(err.Error(), sentinel[len(sentinel)/2:]) {
+		t.Fatalf("error carries the key: %v", err)
+	}
+	if !strings.Contains(err.Error(), "00000000-0000-4000-8000-000000000010") {
+		t.Fatalf("error lost the outbox id: %v", err)
+	}
+}

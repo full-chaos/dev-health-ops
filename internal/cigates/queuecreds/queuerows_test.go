@@ -246,3 +246,91 @@ func TestEveryQueueRowReadIsClassifiedAndItsGuardIsPresent(t *testing.T) {
 		}
 	}
 }
+
+var (
+	outputCall = regexp.MustCompile(`^(fmt\.(Errorf|Sprintf|Sprint|Sprintln|Fprintf|Printf|Println)|errors\.New|slog\.[A-Z][A-Za-z]*|.*(?:ogger|slog)(?:\(\))?\.(Debug|Info|Warn|Error)[A-Za-z]*)$`)
+	rowKeyName = regexp.MustCompile(`(?i)^(dedupekey|sourcededupekey|idempotencykey|correlationid|encodedargs|args)$`)
+)
+
+// Queue-row fields that a job's own code reads after the decoder has accepted
+// them; the value is guarded because Decode refused anything credential-shaped.
+var decodedRowFieldOutputs = map[string]string{
+	"internal/jobruntime/adapter.go#logStart":   "envelope fields after jobcontract.Decode",
+	"internal/jobruntime/adapter.go#NewAdapter": "the typed argument type's registered kind name, not a queue row value",
+}
+
+// A queue row's dedupe key, idempotency key, correlation id or arguments must
+// not be formatted into an error or a log line unless the enclosing function
+// calls the shared value detector on it, or the value comes from a decoded envelope.
+func TestNoQueueRowFieldIsFormattedIntoAnErrorOrLogUnguarded(t *testing.T) {
+	root := repoRoot(t)
+	fset := token.NewFileSet()
+	seen := map[string]bool{}
+	for _, dir := range []string{"internal/joboutbox", "internal/syncreconciler", "internal/joboperator", "internal/jobruntime", "internal/workersctl"} {
+		entries, err := os.ReadDir(filepath.Join(root, dir))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") || strings.HasSuffix(entry.Name(), "_test.go") {
+				continue
+			}
+			path := filepath.Join(root, dir, entry.Name())
+			source, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			file, err := parser.ParseFile(fset, path, source, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, decl := range file.Decls {
+				fn, ok := decl.(*ast.FuncDecl)
+				if !ok || fn.Body == nil {
+					continue
+				}
+				body := string(source[fset.Position(fn.Pos()).Offset:fset.Position(fn.End()).Offset])
+				where := dir + "/" + entry.Name() + "#" + fn.Name.Name
+				ast.Inspect(fn.Body, func(node ast.Node) bool {
+					call, ok := node.(*ast.CallExpr)
+					if !ok || !outputCall.MatchString(exprText(fset, source, call.Fun)) {
+						return true
+					}
+					for _, arg := range call.Args {
+						ast.Inspect(arg, func(inner ast.Node) bool {
+							name := ""
+							switch typed := inner.(type) {
+							case *ast.Ident:
+								name = typed.Name
+							case *ast.SelectorExpr:
+								name = typed.Sel.Name
+							}
+							if name == "" || !rowKeyName.MatchString(name) {
+								return true
+							}
+							if strings.Contains(body, guardCall) {
+								return true
+							}
+							if _, ok := decodedRowFieldOutputs[where]; ok {
+								seen[where] = true
+								return true
+							}
+							t.Errorf("%s formats %s into an error or log line without %s", where, name, guardCall)
+							return true
+						})
+					}
+					return true
+				})
+			}
+		}
+	}
+	for where := range decodedRowFieldOutputs {
+		if !seen[where] {
+			t.Errorf("classified output %s no longer exists", where)
+		}
+	}
+}
+
+func exprText(fset *token.FileSet, source []byte, expr ast.Expr) string {
+	return string(source[fset.Position(expr.Pos()).Offset:fset.Position(expr.End()).Offset])
+}

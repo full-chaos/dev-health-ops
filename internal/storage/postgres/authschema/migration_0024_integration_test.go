@@ -4,6 +4,7 @@ package authschema
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -78,7 +79,7 @@ func m24Violations(t *testing.T) map[string]func(*testing.T, context.Context, *m
 		"resource_grants_kind_closed": func(t *testing.T, ctx context.Context, env *migrationOnlyFixture) {
 			m24Exec(t, ctx, env,
 				`ALTER TABLE auth.resource_grants DROP CONSTRAINT resource_grants_kind_closed`,
-				`INSERT INTO auth.resource_grants (principal_id, organization_id, role_key, resource_kind, resource_id) VALUES ('`+m24Principal+`', '`+m24Org+`', 'm24.role', 'repo', 'acme/widgets')`,
+				`INSERT INTO auth.resource_grants (principal_id, organization_id, role_key, resource_kind, resource_id) VALUES ('`+m24Principal+`', '`+m24Org+`', 'm24.role', 'repo', 'acme/widgets'), ('`+m24Principal+`', '`+m24Org+`', 'm24.role', 'repo', 'acme/gadgets')`,
 				`ALTER TABLE auth.resource_grants ADD CONSTRAINT resource_grants_kind_closed CHECK (resource_kind IN ('repository')) NOT VALID`)
 		},
 		"resource_grants_repository_key_canonical": func(t *testing.T, ctx context.Context, env *migrationOnlyFixture) {
@@ -108,7 +109,11 @@ func TestMigration0024RefusesAViolatingRow(t *testing.T) {
 				m24Base(t, ctx, env)
 				violate(t, ctx, env)
 			})
-			want := "migration 0024 refused: " + name + " has 1 violating row(s)"
+			rows := 1
+			if name == "resource_grants_kind_closed" {
+				rows = 2
+			}
+			want := fmt.Sprintf("migration 0024 refused: %s has %d violating row(s)", name, rows)
 			if err == nil || !strings.Contains(err.Error(), want) {
 				t.Fatalf("0024 over a violating row = %v, want %q", err, want)
 			}
@@ -118,6 +123,9 @@ func TestMigration0024RefusesAViolatingRow(t *testing.T) {
 			var recorded bool
 			if err := env.conn.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM auth.schema_migrations WHERE version = 24)`).Scan(&recorded); err != nil || recorded {
 				t.Fatalf("a refused 0024 was recorded: %v, %v", recorded, err)
+			}
+			if validated := m24Validated(t, ctx, env); validated != 0 {
+				t.Fatalf("%d constraint(s) validated after a refused 0024, want 0", validated)
 			}
 		})
 	}
@@ -137,10 +145,8 @@ func TestMigration0024ValidatesCleanTables(t *testing.T) {
 	if err != nil {
 		t.Fatalf("0024 over valid rows = %v", err)
 	}
-	var unvalidated int
-	if err := env.conn.QueryRow(ctx, `SELECT count(*) FROM pg_constraint WHERE connamespace = 'auth'::regnamespace AND NOT convalidated
-		AND conname IN ('memberships_active_has_role', 'resource_grants_kind_closed', 'resource_grants_repository_key_canonical', 'service_accounts_named_owner')`).Scan(&unvalidated); err != nil || unvalidated != 0 {
-		t.Fatalf("unvalidated after 0024 = %d, %v", unvalidated, err)
+	if validated := m24Validated(t, ctx, env); validated != 4 {
+		t.Fatalf("validated after 0024 = %d, want 4", validated)
 	}
 	tx, err := env.conn.Begin(ctx)
 	if err != nil {
@@ -154,4 +160,15 @@ func TestMigration0024ValidatesCleanTables(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "service_accounts_named_owner") {
 		t.Fatalf("a service account without an owner after 0024 = %v, want the constraint refusal", err)
 	}
+}
+
+// m24Validated counts how many of the four constraints are validated.
+func m24Validated(t *testing.T, ctx context.Context, env *migrationOnlyFixture) int {
+	t.Helper()
+	var validated int
+	if err := env.conn.QueryRow(ctx, `SELECT count(*) FROM pg_constraint WHERE connamespace = 'auth'::regnamespace AND convalidated
+		AND conname IN ('memberships_active_has_role', 'resource_grants_kind_closed', 'resource_grants_repository_key_canonical', 'service_accounts_named_owner')`).Scan(&validated); err != nil {
+		t.Fatal(err)
+	}
+	return validated
 }

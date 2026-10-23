@@ -1,0 +1,347 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fullchaos.dev/contracts/auth/v1/jsonschema/external-push-lifecycle-event.v1.schema.json",
+  "title": "External Push credential lifecycle event (v1 wire format)",
+  "description": "One lifecycle event of an External Push (fcpush_) credential, as a consumer of the Auth Control Plane receives it. External Push owns the credential: it generates the plaintext, keeps the hashed lookup and validates the data plane (ACP-ADR-09). The Auth Control Plane receives only this metadata projection, so the event is a closed description of lifecycle state and can carry no secret, verifier or token: every member of the envelope and of each change object is named here, additionalProperties is false at every level, and a test walks this schema and fails on any member name that suggests secret material.\n\nTHE IDEMPOTENCY KEY IS (aggregate_type, aggregate_id, revision), and `revision` is PER AGGREGATE (the aggregate is one credential), never global. The `idempotency_key` must equal aggregate_type + \":\" + aggregate_id + \":\" + payload.revision, which the clients enforce. Consumer rule, the same as provisioning-event.v1: apply an event when its revision is exactly the last applied revision + 1 (or 1 for a credential never seen); a revision at or below the last applied one is a duplicate or stale delivery and is ignored; a larger one is a gap, which is not applied and means the consumer must resynchronise.\n\nLIFECYCLE. `created` and `rotated` open an aggregate and are revision 1: a rotation issues a NEW credential (its own aggregate) whose `rotated` event names the credential it replaces in `rotation_parent_id`; the replaced credential's own aggregate then receives `revoked`. `scoped`, `revoked` and `expired` are later events (revision 2 or more). `revoked` and `expired` are terminal. Scopes only narrow after creation and a rotation never widens its parent; the schema cannot compare two events, so the projection core enforces both.\n\n`revision` is an integer token in 1..2^53-1; a decimal- or exponent-form token is refused by the clients on the raw token.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "aggregate_type",
+    "aggregate_id",
+    "event_type",
+    "idempotency_key",
+    "created_at",
+    "payload"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "external-push-lifecycle-event.v1"
+    },
+    "aggregate_type": {
+      "const": "external_push_credential"
+    },
+    "aggregate_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{1,64}$",
+      "description": "The credential's id in the External Push domain (the registry's external_reference)."
+    },
+    "event_type": {
+      "enum": [
+        "external_push_credential.created",
+        "external_push_credential.scoped",
+        "external_push_credential.rotated",
+        "external_push_credential.revoked",
+        "external_push_credential.expired"
+      ]
+    },
+    "idempotency_key": {
+      "type": "string",
+      "pattern": "^external_push_credential:[A-Za-z0-9_-]{1,64}:[0-9]{1,16}$",
+      "description": "Must equal aggregate_type:aggregate_id:payload.revision; the schema pins the shape and the clients enforce the equality (reject_by_client)."
+    },
+    "created_at": {
+      "type": "string",
+      "pattern": "^([0-9]{3}[1-9]|[0-9]{2}[1-9][0-9]|[0-9][1-9][0-9]{2}|[1-9][0-9]{3})-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](\\.[0-9]{1,6})?(Z|[+-](0[0-9]|1[0-9]|2[0-3]):[0-5][0-9])$",
+      "description": "When the mutation committed. RFC 3339, every component bounded as in error.v1."
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "revision",
+        "organization_id",
+        "source_id",
+        "change"
+      ],
+      "properties": {
+        "revision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "organization_id": {
+          "type": "string",
+          "pattern": "^org_[A-Za-z0-9_-]{1,64}$",
+          "description": "The tenant the credential belongs to."
+        },
+        "source_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{1,64}$",
+          "description": "The External Push source the credential is bound to."
+        },
+        "actor_principal_id": {
+          "type": "string",
+          "pattern": "^prn_[A-Za-z0-9_-]{1,64}$"
+        },
+        "request_id": {
+          "type": "string",
+          "pattern": "^req_[A-Za-z0-9_-]{26}$"
+        },
+        "change": {
+          "type": "object"
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "event_type": {
+            "const": "external_push_credential.created"
+          }
+        },
+        "required": [
+          "event_type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "event_type": {
+            "const": "external_push_credential.created"
+          },
+          "payload": {
+            "properties": {
+              "change": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "status",
+                  "fingerprint",
+                  "scopes"
+                ],
+                "properties": {
+                  "status": {
+                    "const": "active"
+                  },
+                  "fingerprint": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{16}$",
+                    "description": "The credential's public fingerprint: 16 lowercase hex characters, the same value credential_registry.fingerprint holds. It identifies the credential and cannot authenticate; it is not derived from a verifier."
+                  },
+                  "scopes": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 64,
+                    "uniqueItems": true,
+                    "items": {
+                      "type": "string",
+                      "pattern": "^[a-z][a-z0-9_]*(:[a-z][a-z0-9_]*)+$",
+                      "maxLength": 64
+                    },
+                    "description": "Scope names, the same shape credential_registry.scopes and principal.v1 carry. A set, at most 64."
+                  },
+                  "expires_at": {
+                    "type": "string",
+                    "pattern": "^([0-9]{3}[1-9]|[0-9]{2}[1-9][0-9]|[0-9][1-9][0-9]{2}|[1-9][0-9]{3})-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](\\.[0-9]{1,6})?(Z|[+-](0[0-9]|1[0-9]|2[0-3]):[0-5][0-9])$",
+                    "description": "RFC 3339, every component bounded as in error.v1."
+                  }
+                }
+              },
+              "revision": {
+                "const": 1
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event_type": {
+            "const": "external_push_credential.rotated"
+          }
+        },
+        "required": [
+          "event_type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "event_type": {
+            "const": "external_push_credential.rotated"
+          },
+          "payload": {
+            "properties": {
+              "change": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "status",
+                  "fingerprint",
+                  "scopes",
+                  "rotation_parent_id"
+                ],
+                "properties": {
+                  "status": {
+                    "const": "active"
+                  },
+                  "fingerprint": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{16}$",
+                    "description": "The credential's public fingerprint: 16 lowercase hex characters, the same value credential_registry.fingerprint holds. It identifies the credential and cannot authenticate; it is not derived from a verifier."
+                  },
+                  "scopes": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 64,
+                    "uniqueItems": true,
+                    "items": {
+                      "type": "string",
+                      "pattern": "^[a-z][a-z0-9_]*(:[a-z][a-z0-9_]*)+$",
+                      "maxLength": 64
+                    },
+                    "description": "Scope names, the same shape credential_registry.scopes and principal.v1 carry. A set, at most 64."
+                  },
+                  "rotation_parent_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9_-]{1,64}$"
+                  },
+                  "expires_at": {
+                    "type": "string",
+                    "pattern": "^([0-9]{3}[1-9]|[0-9]{2}[1-9][0-9]|[0-9][1-9][0-9]{2}|[1-9][0-9]{3})-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](\\.[0-9]{1,6})?(Z|[+-](0[0-9]|1[0-9]|2[0-3]):[0-5][0-9])$",
+                    "description": "RFC 3339, every component bounded as in error.v1."
+                  }
+                }
+              },
+              "revision": {
+                "const": 1
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event_type": {
+            "const": "external_push_credential.scoped"
+          }
+        },
+        "required": [
+          "event_type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "event_type": {
+            "const": "external_push_credential.scoped"
+          },
+          "payload": {
+            "properties": {
+              "change": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "scopes"
+                ],
+                "properties": {
+                  "scopes": {
+                    "type": "array",
+                    "minItems": 0,
+                    "maxItems": 64,
+                    "uniqueItems": true,
+                    "items": {
+                      "type": "string",
+                      "pattern": "^[a-z][a-z0-9_]*(:[a-z][a-z0-9_]*)+$",
+                      "maxLength": 64
+                    },
+                    "description": "Scope names, the same shape credential_registry.scopes and principal.v1 carry. A set, at most 64."
+                  }
+                }
+              },
+              "revision": {
+                "minimum": 2
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event_type": {
+            "const": "external_push_credential.revoked"
+          }
+        },
+        "required": [
+          "event_type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "event_type": {
+            "const": "external_push_credential.revoked"
+          },
+          "payload": {
+            "properties": {
+              "change": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "status"
+                ],
+                "properties": {
+                  "status": {
+                    "const": "revoked"
+                  }
+                }
+              },
+              "revision": {
+                "minimum": 2
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event_type": {
+            "const": "external_push_credential.expired"
+          }
+        },
+        "required": [
+          "event_type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "event_type": {
+            "const": "external_push_credential.expired"
+          },
+          "payload": {
+            "properties": {
+              "change": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "status",
+                  "expires_at"
+                ],
+                "properties": {
+                  "status": {
+                    "const": "expired"
+                  },
+                  "expires_at": {
+                    "type": "string",
+                    "pattern": "^([0-9]{3}[1-9]|[0-9]{2}[1-9][0-9]|[0-9][1-9][0-9]{2}|[1-9][0-9]{3})-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](\\.[0-9]{1,6})?(Z|[+-](0[0-9]|1[0-9]|2[0-3]):[0-5][0-9])$",
+                    "description": "RFC 3339, every component bounded as in error.v1."
+                  }
+                }
+              },
+              "revision": {
+                "minimum": 2
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

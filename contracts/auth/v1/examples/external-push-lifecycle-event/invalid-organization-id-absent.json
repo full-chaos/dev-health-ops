@@ -1,0 +1,19 @@
+{
+  "schema_version": "external-push-lifecycle-event.v1",
+  "aggregate_type": "external_push_credential",
+  "aggregate_id": "EXAMPLE0000000000000001",
+  "event_type": "external_push_credential.created",
+  "idempotency_key": "external_push_credential:EXAMPLE0000000000000001:1",
+  "created_at": "2026-10-23T10:00:00Z",
+  "payload": {
+    "revision": 1,
+    "source_id": "src_EXAMPLE0000000000000001",
+    "change": {
+      "status": "active",
+      "fingerprint": "0123456789abcdef",
+      "scopes": [
+        "ingest:write"
+      ]
+    }
+  }
+}

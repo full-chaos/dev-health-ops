@@ -53,6 +53,7 @@ internal/auth/contracts	endpoint_profiles_go_api_test.go
 internal/auth/contracts	endpoint_profiles_query_api_test.go
 internal/auth/contracts	endpoint_profiles_registry_reconcile_test.go
 internal/auth/contracts	error_envelope_goldens_test.go
+internal/auth/contracts	external_push_lifecycle_event_test.go
 internal/auth/contracts	fixture_secret_scanner_test.go
 internal/auth/contracts	fuzz_test.go
 internal/auth/contracts	jwks_byte_layer_differential_test.go

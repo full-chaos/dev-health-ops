@@ -1,0 +1,21 @@
+{
+  "schema_version": "external-push-lifecycle-event.v1",
+  "aggregate_type": "external_push_credential",
+  "aggregate_id": "EXAMPLE0000000000000002",
+  "event_type": "external_push_credential.rotated",
+  "idempotency_key": "external_push_credential:EXAMPLE0000000000000002:1",
+  "created_at": "2026-10-23T10:00:00Z",
+  "payload": {
+    "revision": 1,
+    "organization_id": "org_EXAMPLE0000000000000001",
+    "source_id": "src_EXAMPLE0000000000000001",
+    "change": {
+      "status": "active",
+      "fingerprint": "fedcba9876543210",
+      "scopes": [
+        "ingest:status"
+      ],
+      "rotation_parent_id": "EXAMPLE0000000000000001"
+    }
+  }
+}

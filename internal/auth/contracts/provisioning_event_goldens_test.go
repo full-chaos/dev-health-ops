@@ -79,6 +79,10 @@ var provisioningSurfaces = []provisioningSurface{
 		_, err := ParseAuditEvent(root, raw)
 		return err
 	}},
+	{ExternalPushLifecycleEventSurface, "contracts/auth/v1/examples/external-push-lifecycle-event", func(root string, raw []byte) error {
+		_, err := ParseExternalPushLifecycleEvent(root, raw)
+		return err
+	}},
 }
 
 func loadWireCorpus(t *testing.T, s provisioningSurface) wireCorpus {

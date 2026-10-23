@@ -109,7 +109,7 @@ func servedAuthRoutesWithIssuer(t *testing.T, issuer string) map[string]bool {
 	if err != nil {
 		t.Fatalf("sessionRoutes: %v", err)
 	}
-	credentials, _, err := credentialRoutes(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), pool, schema)
+	credentials, _, err := credentialRoutes(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), pool, schema, mustLimits(t))
 	if err != nil {
 		t.Fatalf("credentialRoutes: %v", err)
 	}

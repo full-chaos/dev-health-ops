@@ -322,8 +322,8 @@ func checkCallsC(t *testing.T, c oracleCCase, f *fixtureClientC) {
 			}
 			if strings.Contains(st, "FROM ai_policy_events FINAL") {
 				if want := calls["violations"]; want != nil {
-					if float64(val(f.bindings[i], "limit").(uint32)) != want["limit"].(float64) {
-						t.Errorf("violation limit %v, python %v", val(f.bindings[i], "limit"), want["limit"])
+					if float64(val(f.bindings[i], "limit_n").(uint32)) != want["limit"].(float64) {
+						t.Errorf("violation limit %v, python %v", val(f.bindings[i], "limit_n"), want["limit"])
 					}
 				}
 			}
@@ -344,7 +344,11 @@ func checkCallsC(t *testing.T, c oracleCCase, f *fixtureClientC) {
 			if k == "org_id" {
 				continue
 			}
-			got := val(f.bindings[i], k)
+			bound := k
+			if k == "limit" {
+				bound = "limit_n"
+			}
+			got := val(f.bindings[i], bound)
 			switch w := wantV.(type) {
 			case []any:
 				g, _ := got.([]string)

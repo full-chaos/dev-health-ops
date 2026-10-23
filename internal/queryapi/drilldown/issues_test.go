@@ -192,7 +192,7 @@ func TestBlockedIssueSourceDedupsBeforeItFiltersZero(t *testing.T) {
 	if !strings.Contains(query, "nullIf(b.team_name, '') AS team_name") {
 		t.Fatalf("blocked query does not serve team_name:\n%s", query)
 	}
-	if count, limit := strings.Index(query, "count() OVER () AS total_count"), strings.Index(query, "LIMIT {limit:UInt64}"); count == -1 || limit == -1 || count > limit {
+	if count, limit := strings.Index(query, "count() OVER () AS total_count"), strings.Index(query, "LIMIT {limit_n:UInt64}"); count == -1 || limit == -1 || count > limit {
 		t.Fatalf("blocked count must be measured before the page limit:\n%s", query)
 	}
 }
@@ -243,7 +243,7 @@ func TestBuildIssuesResponseBlockedOnlyReturnsAllProviderRowsAndWindowCount(t *t
 		if v, _ := bindingValue(bindings, "scope_ids"); fmt.Sprint(v) != fmt.Sprint([]string{"team-a"}) {
 			t.Fatalf("scope_ids binding = %v, want [team-a]", v)
 		}
-		if v, _ := bindingValue(bindings, "limit"); v == 2 {
+		if v, _ := bindingValue(bindings, "limit_n"); v == 2 {
 			return &fixtureRowScanner{rows: allRows[:2]}, nil
 		}
 		return &fixtureRowScanner{rows: allRows}, nil
@@ -378,7 +378,7 @@ func TestBuildIssuesResponseBindsExpectedParams(t *testing.T) {
 	if v, _ := bindingValue(seenBindings, "org_id"); v != "org-acme" {
 		t.Fatalf("org_id binding = %v, want org-acme", v)
 	}
-	if v, _ := bindingValue(seenBindings, "limit"); v != 50 {
+	if v, _ := bindingValue(seenBindings, "limit_n"); v != 50 {
 		t.Fatalf("limit binding = %v, want 50", v)
 	}
 	if _, ok := bindingValue(seenBindings, "scope_ids"); ok {

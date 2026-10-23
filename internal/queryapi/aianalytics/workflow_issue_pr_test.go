@@ -56,7 +56,7 @@ func (c *issuePRClient) Query(_ context.Context, st string, b []clickhouse.Bindi
 	for _, id := range bindingValue(b, "issue_ids").([]string) {
 		issueIDs[id] = true
 	}
-	limit := int(bindingValue(b, "limit").(uint32))
+	limit := int(bindingValue(b, "limit_n").(uint32))
 	var rows [][]any
 	for _, l := range c.links {
 		pr := fmt.Sprintf("%s:%d", ipRepo, l.prNumber)

@@ -509,7 +509,7 @@
       "graphql_field_name": null,
       "id": "GET /api/v1/auth/verify [dev-health-auth-service @api]",
       "method": "GET",
-      "public_rationale": "E-mail verification link secret in the token query parameter; single use, 24 hours, bound to the verification purpose, consumed on the database clock. Rate limited 10 per hour per client address.",
+      "public_rationale": "E-mail verification link secret in the token query parameter; single use, 24 hours, bound to the verification purpose, consumed on the database clock. Rate limited 10 per hour per client address and per e-mail query parameter value (normalized, unknown when absent); each distinct value has its own counter.",
       "route": "/api/v1/auth/verify",
       "service": "dev-health-auth-service",
       "source": {

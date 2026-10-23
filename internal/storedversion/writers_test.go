@@ -97,6 +97,7 @@ var outOfScopeWriters = map[string]string{
 var unresolvedWriters = map[string]string{
 	"internal/providerfoundation/sinks.go":                   "writes the normalized provider-entity schema (schema_version, dedupe_key, attributes_json), which no in-scope table has",
 	"internal/audit/audit.go":                                "PostgreSQL auth-schema append-only audit and outbox inserts and the per-aggregate revision counter (schema name interpolated); no in-scope ClickHouse table",
+	"internal/auth/identity/backfill.go":                     "PostgreSQL auth-schema principal and user inserts of the users backfill (schema name interpolated); no in-scope ClickHouse table",
 	"internal/auth/identity/identities.go":                   "PostgreSQL auth-schema identity inserts (schema name interpolated); no in-scope ClickHouse table",
 	"internal/auth/identity/local/attempts_pg.go":            "PostgreSQL auth-schema login_attempts insert (schema name interpolated); no in-scope ClickHouse table",
 	"internal/auth/identity/local/linkcred.go":               "PostgreSQL auth-schema link_credentials insert (schema name interpolated); no in-scope ClickHouse table",

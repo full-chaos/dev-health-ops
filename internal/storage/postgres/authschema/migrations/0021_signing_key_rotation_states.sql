@@ -18,7 +18,7 @@ DECLARE
 BEGIN
     SELECT count(*) INTO revoked_rows FROM signing_keys WHERE status = 'revoked' OR revoked_at IS NOT NULL;
     IF revoked_rows > 0 THEN
-        RAISE EXCEPTION 'migration 0018 refused: signing_keys holds % revoked row(s); review and remove them, then migrate again', revoked_rows
+        RAISE EXCEPTION 'migration 0021 refused: signing_keys holds % revoked row(s); review and remove them, then migrate again', revoked_rows
             USING ERRCODE = 'object_not_in_prerequisite_state';
     END IF;
 END

@@ -527,7 +527,7 @@ func TestFreshHandlerRecoversExpiredProcessClaimAndReleasesForRiverRetry(
 		BuildExecutor: func(
 			*providersync.LeaseSession,
 		) (providersync.CompleteRouteExecutor, error) {
-			return providersync.CompleteRouteExecutor{}, errors.New("transient")
+			return providersync.CompleteRouteExecutor{}, &providerfoundation.ProviderError{Class: providerfoundation.ErrorTransient}
 		},
 	}
 	err = fresh.Work(

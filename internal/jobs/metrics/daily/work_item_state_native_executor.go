@@ -13,7 +13,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/workitemblockers"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/workitemmetrics"
-	"github.com/full-chaos/dev-health-ops/internal/teamkeytables"
 )
 
 // unassignedTeamID/unassignedTeamName are package-local names for
@@ -153,17 +152,6 @@ func (executor *WorkItemStateExecutor) ComputeFamily(
 		return wrapWorkItemScopePartialWrite("work_item_state", total, partition, err)
 	}
 	written, err := WriteWorkItemBlockedDurationsDaily(ctx, executor.conn, run.OrganizationID, day, itemRows, computedAt)
-	total += written
-	if err != nil {
-		return wrapWorkItemScopePartialWrite("work_item_state", total, partition, err)
-	}
-	stateKeys := make([]staleKey, 0, len(rows))
-	for _, row := range rows {
-		stateKeys = append(stateKeys, staleKey{row.Provider, row.WorkScopeID, row.TeamID, row.Status})
-	}
-	written, err = retractLegacyViewKeys(
-		ctx, executor.conn, teamkeytables.WorkItemStateDurationsDaily, run.OrganizationID, day, stateKeys, computedAt,
-	)
 	total += written
 	if err != nil {
 		return wrapWorkItemScopePartialWrite("work_item_state", total, partition, err)

@@ -175,22 +175,33 @@ func ValidateEndpointAuthProfile(root string, document any) error {
 // a profile that caches must name an action, and a high-risk catalog action is
 // never cached (CHAOS-10641). The error names the rule and the action id only.
 func CheckActionCachePolicy(profile map[string]any) error {
-	cache, _ := profile["cache_class"].(string)
-	if cache == "" || cache == "none" {
+	raw, present := profile["cache_class"]
+	if !present {
+		return nil
+	}
+	cache, ok := raw.(string)
+	if !ok {
+		return fmt.Errorf("action cache policy: cache_class is %T, not a string", raw)
+	}
+	if cache == "none" {
 		return nil
 	}
 	action, _ := profile["action"].(string)
 	if action == "" {
 		return fmt.Errorf("action cache policy: a cached profile must name an action")
 	}
-	if _, known := catalogActions()[action]; !known {
+	entry, known := catalogActions()[action]
+	if !known {
 		if _, exempt := uncataloguedCachedActions[action]; !exempt {
 			return fmt.Errorf("action cache policy: a cached profile must name a catalog action, not %q", action)
 		}
 		return nil
 	}
-	if catalogActions()[action] {
+	if entry.high {
 		return fmt.Errorf("action cache policy: action %q is high risk and its profile cache_class must be none", action)
+	}
+	if cache != entry.cacheClass {
+		return fmt.Errorf("action cache policy: action %q profile cache_class must be none or the catalog class", action)
 	}
 	return nil
 }
@@ -202,22 +213,28 @@ var uncataloguedCachedActions = map[string]string{
 	"acr.context.read": "acr namespace, not yet catalogued",
 }
 
-// catalogActions maps every catalog action to whether it is high risk. It reads the embedded actions.v1 catalog directly:
+// catalogActions maps every catalog action to its risk and cache class. It reads the embedded actions.v1 catalog directly:
 // internal/auth/policycatalog's own tests import this package, so importing it
 // here would be a cycle.
-var catalogActions = sync.OnceValue(func() map[string]bool {
+type catalogEntry struct {
+	high       bool
+	cacheClass string
+}
+
+var catalogActions = sync.OnceValue(func() map[string]catalogEntry {
 	var catalog struct {
 		Actions []struct {
-			Action    string `json:"action"`
-			RiskClass string `json:"risk_class"`
+			Action     string `json:"action"`
+			RiskClass  string `json:"risk_class"`
+			CacheClass string `json:"cache_class"`
 		} `json:"actions"`
 	}
 	if err := json.Unmarshal(vocabulary.ActionsV1, &catalog); err != nil {
 		panic(fmt.Sprintf("embedded actions.v1 is not JSON: %v", err))
 	}
-	high := map[string]bool{}
+	entries := map[string]catalogEntry{}
 	for _, a := range catalog.Actions {
-		high[a.Action] = a.RiskClass == "high"
+		entries[a.Action] = catalogEntry{high: a.RiskClass == "high", cacheClass: a.CacheClass}
 	}
-	return high
+	return entries
 })

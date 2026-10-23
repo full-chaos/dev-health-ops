@@ -229,10 +229,10 @@ func TestActionCachePolicyOverEveryCatalogActionAndCacheClass(t *testing.T) {
 	catalog := readJSONFile(t, "contracts/auth/v1/vocabulary/actions.v1.json")
 	for _, raw := range catalog["actions"].([]any) {
 		a := raw.(map[string]any)
-		id, risk := a["action"].(string), a["risk_class"].(string)
+		id, risk, own := a["action"].(string), a["risk_class"].(string), a["cache_class"].(string)
 		for _, cache := range []string{"none", "decision_bound", "resource_revision_bound"} {
 			err := CheckActionCachePolicy(map[string]any{"action": id, "cache_class": cache})
-			wantRefused := risk == "high" && cache != "none"
+			wantRefused := cache != "none" && (risk == "high" || cache != own)
 			if wantRefused != (err != nil) {
 				t.Errorf("%s (%s) cache %s: refused=%v want %v", id, risk, cache, err != nil, wantRefused)
 			}
@@ -308,6 +308,47 @@ func TestUncataloguedCachedActionExemptionsArePinnedExactly(t *testing.T) {
 		}
 		if !users[action] {
 			t.Errorf("exemption %s has no valid cached example left: delete it", action)
+		}
+	}
+}
+
+func TestActionCachePolicyRefusesANonStringCacheClass(t *testing.T) {
+	for _, v := range []any{nil, 1, true, []any{"none"}, map[string]any{}} {
+		if err := CheckActionCachePolicy(map[string]any{"action": "metrics.read", "cache_class": v}); err == nil {
+			t.Errorf("cache_class %#v was accepted", v)
+		}
+	}
+	if err := CheckActionCachePolicy(map[string]any{"action": "metrics.read"}); err != nil {
+		t.Errorf("a profile without cache_class was refused: %v", err)
+	}
+}
+
+func TestActionCachePolicyRefusesACatalogActionWithAnotherCacheClass(t *testing.T) {
+	for _, profile := range []map[string]any{
+		{"action": "git.read", "cache_class": "decision_bound"},
+		{"action": "metrics.read", "cache_class": "resource_revision_bound"},
+	} {
+		if err := CheckActionCachePolicy(profile); err == nil {
+			t.Errorf("accepted %v", profile)
+		}
+	}
+	for _, profile := range []map[string]any{
+		{"action": "git.read", "cache_class": "resource_revision_bound"},
+		{"action": "metrics.read", "cache_class": "decision_bound"},
+		{"action": "git.read", "cache_class": "none"},
+	} {
+		if err := CheckActionCachePolicy(profile); err != nil {
+			t.Errorf("refused %v: %v", profile, err)
+		}
+	}
+}
+
+// The exemption matches the action name exactly: no prefix, suffix, case or
+// whitespace variant of a pinned name is exempt.
+func TestExemptionMatchesTheActionNameExactly(t *testing.T) {
+	for _, action := range []string{"acr.context.rea", "acr.context", "acr", "acr.context.read.x", "acr.context.read ", " acr.context.read", "ACR.context.read", "acr.context.reads"} {
+		if err := CheckActionCachePolicy(map[string]any{"action": action, "cache_class": "decision_bound"}); err == nil {
+			t.Errorf("%q was exempt", action)
 		}
 	}
 }

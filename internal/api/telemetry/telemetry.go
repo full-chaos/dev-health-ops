@@ -74,7 +74,7 @@ type orgKey struct{}
 
 func (h handlers) refuse(w http.ResponseWriter, r *http.Request, reason, detail string) {
 	rejected.Add(r.Context(), 1, metric.WithAttributes(attribute.String("reason", reason)))
-	h.logger.WarnContext(r.Context(), "telemetry org refused", slog.String("reason", reason), slog.String("path", r.URL.Path))
+	h.logger.WarnContext(r.Context(), "telemetry org refused", slog.String("reason", reason), slog.String("path", r.Pattern))
 	policy.WriteDetail(w, http.StatusForbidden, detail, nil)
 }
 
@@ -126,7 +126,7 @@ func (h handlers) withOrg(next http.HandlerFunc) http.Handler {
 }
 
 func (h handlers) internal(w http.ResponseWriter, r *http.Request, step string, err error) {
-	h.logger.ErrorContext(r.Context(), "api route failed", slog.String("path", r.URL.Path),
+	h.logger.ErrorContext(r.Context(), "api route failed", slog.String("path", r.Pattern),
 		slog.String("step", step), slog.String("error", err.Error()))
 	policy.WriteInternal(w)
 }

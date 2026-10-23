@@ -1,4 +1,5 @@
-// Command gen writes the signed access-token.v1 golden corpus with fresh keys.
+// Command gen writes the signed access-token.v1 golden corpus (no argument) or
+// the workload-token.v1 one (argument workload-token) with fresh keys.
 // The private keys live in memory only and are discarded.
 package main
 
@@ -21,7 +22,19 @@ func main() {
 	if err != nil {
 		fail(err)
 	}
-	if err := run(root, filepath.Join(root, tokencorpus.Dir), nil); err != nil {
+	surface, out := "", tokencorpus.Dir
+	if len(os.Args) > 1 {
+		surface = os.Args[1]
+	}
+	switch surface {
+	case "":
+		err = run(root, filepath.Join(root, out), nil)
+	case "workload-token":
+		err = runWorkload(root, filepath.Join(root, tokencorpus.WorkloadDir), nil)
+	default:
+		err = fmt.Errorf("unknown corpus %q (none, or workload-token)", surface)
+	}
+	if err != nil {
 		fail(err)
 	}
 }
@@ -33,6 +46,21 @@ func run(root, out string, random io.Reader) error {
 		return err
 	}
 	corpus, err := tokencorpus.Generate(random)
+	if err != nil {
+		return err
+	}
+	if err := tokencorpus.VerifyAll(root, corpus); err != nil {
+		return err
+	}
+	return tokencorpus.Write(out, corpus)
+}
+
+// runWorkload is run for the workload-token.v1 corpus.
+func runWorkload(root, out string, random io.Reader) error {
+	if _, err := contracts.RepoRoot(root); err != nil {
+		return err
+	}
+	corpus, err := tokencorpus.GenerateWorkload(random)
 	if err != nil {
 		return err
 	}

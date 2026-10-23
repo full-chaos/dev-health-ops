@@ -131,7 +131,7 @@ WHERE wct.day >= {start_day:Date} AND wct.day < {end_day:Date}
   AND wct.org_id = {org_id:String}
   %s
 ORDER BY wct.completed_at DESC
-LIMIT {limit:UInt64}
+LIMIT {limit_n:UInt64}
 %s
 `
 
@@ -144,7 +144,7 @@ func fetchPersonIssues(ctx context.Context, client QueryClient, identities []str
 		{Name: "end_day", Value: formatDay(endDay)},
 		{Name: "identities", Value: identities},
 		{Name: "org_id", Value: orgID},
-		{Name: "limit", Value: limit},
+		{Name: "limit_n", Value: limit},
 	}
 	if cursor != nil {
 		cursorFilter = "AND wct.completed_at < {cursor:DateTime64(3, 'UTC')}"

@@ -85,7 +85,7 @@ func recoverToIngestError(logger *slog.Logger, next http.HandlerFunc) http.Handl
 		defer func() {
 			if rec := recover(); rec != nil {
 				if logger != nil {
-					logger.Error("external-ingest: unhandled panic", "panic", rec, "path", r.URL.Path)
+					logger.Error("external-ingest: unhandled panic", "panic", rec, "path", r.Pattern)
 				}
 				writeIngestError(w, newIngestError(http.StatusInternalServerError, "internal_error", "internal server error"))
 			}

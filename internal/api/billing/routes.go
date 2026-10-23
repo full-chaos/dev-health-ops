@@ -172,7 +172,7 @@ func (h handlers) write(w http.ResponseWriter, answer reply) {
 // internal logs err with the route's fields and writes the generic 500 an
 // unhandled Python exception produces.
 func (h handlers) internal(w http.ResponseWriter, r *http.Request, step string, err error) {
-	h.logger.ErrorContext(r.Context(), "api route failed", slog.String("path", r.URL.Path),
+	h.logger.ErrorContext(r.Context(), "api route failed", slog.String("path", r.Pattern),
 		slog.String("step", step), slog.String("error", err.Error()))
 	policy.WriteInternal(w)
 }

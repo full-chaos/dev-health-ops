@@ -370,3 +370,128 @@ func TestMigrateJobClassDecisionLiveSchemaDigest(t *testing.T) {
 		})
 	}
 }
+
+// CHAOS-10754: migrations.hook.clickhouseCloud composes the migrate Job's
+// CLICKHOUSE_URI from three secretKeyRefs by Kubernetes env expansion (an env
+// entry wins over the envFrom key of the same name). Off, the render carries
+// none of it.
+func TestMigrateJobClickHouseCloudDSN(t *testing.T) {
+	const cloud = "migrations.hook.clickhouseCloud."
+	const wantURI = "clickhouse://$(DHO_CH_CLOUD_USER):$(DHO_CH_CLOUD_PASSWORD)@$(DHO_CH_CLOUD_HOST):9440/default?secure=true"
+	ref := func(t *testing.T, env map[string]any, name string) (string, string) {
+		t.Helper()
+		entry, ok := env[name].(map[string]any)
+		if !ok {
+			t.Fatalf("env %s missing", name)
+		}
+		if _, literal := entry["value"]; literal {
+			t.Fatalf("env %s carries a literal value, want a secretKeyRef", name)
+		}
+		secret := entry["valueFrom"].(map[string]any)["secretKeyRef"].(map[string]any)
+		return secret["name"].(string), secret["key"].(string)
+	}
+	envNames := []string{"DHO_CH_CLOUD_HOST", "DHO_CH_CLOUD_USER", "DHO_CH_CLOUD_PASSWORD", "CLICKHOUSE_URI"}
+
+	t.Run("off by default: none of it renders", func(t *testing.T) {
+		for _, sets := range [][]string{nil, {cloud + "enabled=false", cloud + "secretName=ch-cloud-default"}} {
+			jobs, _, refusal := renderJobs(t, sets...)
+			if refusal != "" {
+				t.Fatalf("render refused: %s", refusal)
+			}
+			env := envOf(container(t, jobs["t-dev-health-migrate"], "migrate"))
+			for _, name := range envNames {
+				if _, present := env[name]; present {
+					t.Fatalf("sets %v: env %s present with the block off", sets, name)
+				}
+			}
+		}
+	})
+
+	t.Run("off: an explicit extraEnv CLICKHOUSE_URI is the only DSN source and still renders", func(t *testing.T) {
+		jobs, _, refusal := renderJobs(t, "migrations.hook.extraEnv[0].name=CLICKHOUSE_URI", "migrations.hook.extraEnv[0].value=clickhouse://u:p@h:9000/db")
+		if refusal != "" {
+			t.Fatalf("render refused: %s", refusal)
+		}
+		entry, _ := envOf(container(t, jobs["t-dev-health-migrate"], "migrate"))["CLICKHOUSE_URI"].(map[string]any)
+		if entry["value"] != "clickhouse://u:p@h:9000/db" {
+			t.Fatalf("CLICKHOUSE_URI = %v", entry["value"])
+		}
+	})
+
+	t.Run("on: three secretKeyRefs and the composed URI", func(t *testing.T) {
+		jobs, secrets, refusal := renderJobs(t, cloud+"enabled=true", cloud+"secretName=ch-cloud-default")
+		if refusal != "" {
+			t.Fatalf("render refused: %s", refusal)
+		}
+		job := jobs["t-dev-health-migrate"]
+		env := envOf(container(t, job, "migrate"))
+		for name, wantKey := range map[string]string{"DHO_CH_CLOUD_HOST": "CH_CLOUD_HOST", "DHO_CH_CLOUD_USER": "CH_CLOUD_USER", "DHO_CH_CLOUD_PASSWORD": "CH_CLOUD_PASSWORD"} {
+			if secret, key := ref(t, env, name); secret != "ch-cloud-default" || key != wantKey {
+				t.Fatalf("env %s = secretKeyRef %s/%s, want ch-cloud-default/%s", name, secret, key, wantKey)
+			}
+		}
+		if got := env["CLICKHOUSE_URI"].(map[string]any)["value"]; got != wantURI {
+			t.Fatalf("CLICKHOUSE_URI = %v, want %q", got, wantURI)
+		}
+		var order []string
+		for _, item := range container(t, job, "migrate")["env"].([]any) {
+			order = append(order, item.(map[string]any)["name"].(string))
+		}
+		last := -1
+		for _, name := range []string{"DHO_CH_CLOUD_HOST", "DHO_CH_CLOUD_USER", "DHO_CH_CLOUD_PASSWORD", "CLICKHOUSE_URI"} {
+			at := -1
+			for i, have := range order {
+				if have == name {
+					at = i
+				}
+			}
+			if at <= last {
+				t.Fatalf("env order %v: %s must come after the entries it expands", order, name)
+			}
+			last = at
+		}
+		if got, _ := secrets["t-dev-health-migrate-secrets"]["stringData"].(map[string]any)["CLICKHOUSE_URI"].(string); strings.Contains(got, "secure=true") {
+			t.Fatalf("the chart-made migrate Secret must stay unchanged, got %q", got)
+		}
+	})
+
+	t.Run("on: custom keys, port and database flow through", func(t *testing.T) {
+		jobs, _, refusal := renderJobs(t, cloud+"enabled=true", cloud+"secretName=s", cloud+"hostKey=H", cloud+"userKey=U", cloud+"passwordKey=P", cloud+"port=8443", cloud+"database=analytics")
+		if refusal != "" {
+			t.Fatalf("render refused: %s", refusal)
+		}
+		env := envOf(container(t, jobs["t-dev-health-migrate"], "migrate"))
+		for name, wantKey := range map[string]string{"DHO_CH_CLOUD_HOST": "H", "DHO_CH_CLOUD_USER": "U", "DHO_CH_CLOUD_PASSWORD": "P"} {
+			if secret, key := ref(t, env, name); secret != "s" || key != wantKey {
+				t.Fatalf("env %s = %s/%s, want s/%s", name, secret, key, wantKey)
+			}
+		}
+		want := "clickhouse://$(DHO_CH_CLOUD_USER):$(DHO_CH_CLOUD_PASSWORD)@$(DHO_CH_CLOUD_HOST):8443/analytics?secure=true"
+		if got := env["CLICKHOUSE_URI"].(map[string]any)["value"]; got != want {
+			t.Fatalf("CLICKHOUSE_URI = %v, want %q", got, want)
+		}
+	})
+
+	for name, sets := range map[string][]string{
+		"empty secretName":                    {cloud + "enabled=true"},
+		"port zero":                           {cloud + "enabled=true", cloud + "secretName=s", cloud + "port=0"},
+		"port too large":                      {cloud + "enabled=true", cloud + "secretName=s", cloud + "port=65536"},
+		"port not a number":                   {cloud + "enabled=true", cloud + "secretName=s", cloud + "port=abc"},
+		"database with a slash":               {cloud + "enabled=true", cloud + "secretName=s", cloud + "database=a/b"},
+		"database with a query":               {cloud + "enabled=true", cloud + "secretName=s", cloud + "database=a?x=1"},
+		"hostKey outside the key set":         {cloud + "enabled=true", cloud + "secretName=s", cloud + "hostKey=H K"},
+		"empty passwordKey":                   {cloud + "enabled=true", cloud + "secretName=s", cloud + "passwordKey="},
+		"extraEnv CLICKHOUSE_URI":             {cloud + "enabled=true", cloud + "secretName=s", "migrations.hook.extraEnv[0].name=CLICKHOUSE_URI", "migrations.hook.extraEnv[0].value=x"},
+		"extraEnv CLICKHOUSE_URI_FILE":        {cloud + "enabled=true", cloud + "secretName=s", "migrations.hook.extraEnv[0].name=CLICKHOUSE_URI_FILE", "migrations.hook.extraEnv[0].value=/tmp/dsn"},
+		"hook secretData CLICKHOUSE_URI_FILE": {cloud + "enabled=true", cloud + "secretName=s", "migrations.hook.secretData.CLICKHOUSE_URI_FILE=/tmp/dsn"},
+		"extraEnv DHO_CH_CLOUD_HOST":          {cloud + "enabled=true", cloud + "secretName=s", "migrations.hook.extraEnv[0].name=DHO_CH_CLOUD_HOST", "migrations.hook.extraEnv[0].value=x"},
+		"hook secretData CLICKHOUSE_URI":      {cloud + "enabled=true", cloud + "secretName=s", "migrations.hook.secretData.CLICKHOUSE_URI=clickhouse://u:p@h:9000/db"},
+	} {
+		t.Run("refused: "+name, func(t *testing.T) {
+			_, _, refusal := renderJobs(t, sets...)
+			if !strings.Contains(refusal, "clickhouseCloud") {
+				t.Fatalf("render was not refused by name: %q", refusal)
+			}
+		})
+	}
+}

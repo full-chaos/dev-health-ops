@@ -26,8 +26,8 @@ import (
 // Secrets are the provider-shared webhook secrets (Python's
 // _get_github_webhook_secret/_get_gitlab_webhook_token/_get_jira_webhook_secret,
 // GITHUB_WEBHOOK_SECRET/GITLAB_WEBHOOK_TOKEN/JIRA_WEBHOOK_SECRET), read live
-// per request -- an unset secret is a 500 (router.py's own behavior), not a
-// route that silently never verifies.
+// when each handler is built (startup). An unset secret is checked against a key
+// no caller knows (secrets.go), so its refusal is the same as a wrong signature.
 type Secrets struct {
 	GitHub string
 	GitLab string

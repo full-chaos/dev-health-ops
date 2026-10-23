@@ -14,6 +14,7 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/metric"
 
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/rowview"
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 	"github.com/full-chaos/dev-health-ops/internal/teamactive"
 	"github.com/full-chaos/dev-health-ops/internal/teamownership"
@@ -117,6 +118,7 @@ SELECT user_identity, provider, work_scope_id, team_id, team_name,
        cycle_time_p50_hours, cycle_time_p90_hours
 FROM work_item_user_metrics_daily FINAL
 WHERE day = {day:Date} AND org_id = {org_id:String}
+  AND ` + rowview.OrgPredicate("work_item_user_metrics_daily", "") + `
   AND ` + liverow.Predicate("work_item_user_metrics_daily", "")
 
 // synthesizedRepoNamespace seeds the deterministic repo_id below. A fixed

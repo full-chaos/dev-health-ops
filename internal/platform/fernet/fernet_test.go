@@ -2,6 +2,8 @@ package fernet_test
 
 import (
 	"bytes"
+	"encoding/base64"
+	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -57,6 +59,38 @@ func TestSealRefusesAnOversizedPlaintext(t *testing.T) {
 	c, _ := fernet.New(testKey, "")
 	if _, err := c.Seal(make([]byte, 1<<24+1), time.Now(), bytes.NewReader(make([]byte, 16))); err == nil {
 		t.Fatal("an oversized plaintext was sealed")
+	}
+}
+
+// TestOpenRefusesATokenChangedAfterSealing: one flipped byte in the version,
+// the body, the IV or the signature is refused; the signature check is what
+// refuses a body byte.
+func TestOpenRefusesATokenChangedAfterSealing(t *testing.T) {
+	c, _ := fernet.New(testKey, "")
+	sealed, err := c.Seal([]byte("client-secret-value"), time.Unix(1700000000, 0), bytes.NewReader(make([]byte, 16)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := base64.URLEncoding.DecodeString(strings.TrimPrefix(sealed, fernet.V1Prefix))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, index := range map[string]int{
+		"version":   0,
+		"timestamp": 3,
+		"iv":        fernet.HeaderSize - 1,
+		"body":      fernet.HeaderSize + 2,
+		"signature": len(raw) - 1,
+	} {
+		changed := append([]byte(nil), raw...)
+		changed[index] ^= 0x01
+		token := fernet.V1Prefix + base64.URLEncoding.EncodeToString(changed)
+		if _, err := c.Open(token); !errors.Is(err, fernet.ErrInvalid) {
+			t.Errorf("a flipped %s byte: %v, want ErrInvalid", name, err)
+		}
+	}
+	if _, err := c.Open(sealed); err != nil {
+		t.Fatalf("the untouched token: %v", err)
 	}
 }
 

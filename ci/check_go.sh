@@ -654,15 +654,18 @@ race_weights_file_name() {
   fi
 }
 race_weights_rows() {
-  local f found=0
+  local f
+  local -a files=()
   shopt -s dotglob
   [ -d "${GO_RACE_WEIGHTS_DIR}" ] || die "race weights directory missing: ${GO_RACE_WEIGHTS_DIR}"
   for f in "${GO_RACE_WEIGHTS_DIR}"/*.tsv; do
     [ -f "${f}" ] || continue
-    found=1
-    grep -v '^\(#\|[[:space:]]*$\)' "${f}" || true
+    files+=("${f}")
   done
-  [ "${found}" -eq 1 ] || die "race weights directory holds no .tsv file: ${GO_RACE_WEIGHTS_DIR}"
+  [ "${#files[@]}" -gt 0 ] || die "race weights directory holds no .tsv file: ${GO_RACE_WEIGHTS_DIR}"
+  # One awk over every file (a grep per file launched one process per weights row file, ~870 per call).
+  # shellcheck disable=SC2016
+  printf '%s\0' "${files[@]}" | xargs -0 awk '!/^(#|[[:space:]]*$)/' || true
 }
 # CHAOS-10289: packages that run alone (ci/go_race_solo.tsv): left out of the weight-balanced split, run in their own
 # `go test -race` invocation after the shard's other packages, so no heavy co-tenant can starve them.
@@ -1580,6 +1583,40 @@ PROVIDER_TEST_SHARD_COUNT=0
 PROVIDER_INTEGRATION_TEST_WEIGHT=0
 PROVIDER_ORDINARY_TEST_WEIGHT=0
 
+# scan_listed_go_tests validates the test file names `go list` returned for one package directory, then reads every file
+# in ONE awk pass (a per-file grep + sed launched ~2300 processes per plan). It fills two globals keyed by source path:
+# SCAN_TAGGED (file carries an integration build constraint) and SCAN_TESTS (newline-separated top-level Test names,
+# file order). The names are validated before any file is read; the list goes through NUL-delimited xargs, not argv.
+scan_listed_go_tests() {
+  local label="$1" dir="$2" listed="$3" go_file kind path name
+  local -a paths=()
+  declare -gA SCAN_TAGGED=() SCAN_TESTS=()
+  while IFS= read -r go_file; do
+    [ -n "${go_file}" ] || continue
+    case "${go_file}" in
+      */*|..*) die "go list returned unsafe ${label} test filename '${go_file}'" ;;
+    esac
+    [ -f "${dir}/${go_file}" ] || die "go list returned missing ${label} test file '${go_file}'"
+    paths+=("${dir}/${go_file}")
+  done <<<"${listed}"
+  [ "${#paths[@]}" -gt 0 ] || return 0
+  while IFS=$'\037' read -r kind path name; do
+    case "${kind}" in
+      I) SCAN_TAGGED["${path}"]=1 ;;
+      T) SCAN_TESTS["${path}"]+="${name}"$'\n' ;;
+    esac
+  done < <(
+    # shellcheck disable=SC2016 # the awk program is single-quoted on purpose
+    printf '%s\0' "${paths[@]}" | xargs -0 awk '
+      FNR == 1 { tagged = 0 }
+      !tagged && /^\/\/go:build.*(^|[^[:alnum:]_])integration([^[:alnum:]_]|$)/ { tagged = 1; printf "I\037%s\n", FILENAME }
+      /^func[[:space:]]+Test[A-Za-z0-9_]+[[:space:]]*\(/ {
+        s = $0; sub(/^func[[:space:]]+/, "", s); match(s, /^Test[A-Za-z0-9_]+/)
+        printf "T\037%s\037%s\n", FILENAME, substr(s, 1, RLENGTH)
+      }'
+  )
+}
+
 # discover_integration_packages populates parallel module/package arrays with
 # every module-relative "./pkg/dir" entry that has at least one tracked or
 # untracked, non-vendor *_test.go file whose leading build-constraint comment
@@ -1607,7 +1644,7 @@ discover_integration_packages() {
       case "${go_file}" in
         vendor/*|*/vendor/*) continue ;;
       esac
-      dir="$(dirname -- "${go_file}")"
+      case "${go_file}" in */*) dir="${go_file%/*}" ;; *) dir="." ;; esac
       found+=("./${dir}")
     done < <(printf '%s\n' "${tracked_output}")
     while IFS= read -r -d '' go_file; do
@@ -1617,7 +1654,7 @@ discover_integration_packages() {
       esac
       if grep -qE '^//go:build.*(^|[^[:alnum:]_])integration([^[:alnum:]_]|$)' \
         "${ROOT}/${module_dir}/${go_file}"; then
-        dir="$(dirname -- "${go_file}")"
+        case "${go_file}" in */*) dir="${go_file%/*}" ;; *) dir="." ;; esac
         found+=("./${dir}")
       fi
     done < <(
@@ -1724,7 +1761,7 @@ load_integration_shard_manifest() {
   fi
 
   for file in "${files[@]}"; do
-    base="$(basename "${file}")"
+    base="${file##*/}"
     load_integration_shard_manifest_file "${file}" "${as_dir}" "${base}"
   done
 
@@ -1997,17 +2034,12 @@ discover_providersync_tests() {
 
   PROVIDER_TEST_NAMES=()
   PROVIDER_INTEGRATION_TEST_NAMES=()
+  scan_listed_go_tests 'providersync' "${ROOT}/${PROVIDER_INTEGRATION_PACKAGE_KEY}" "${files_output}"
   while IFS= read -r go_file; do
     [ -n "${go_file}" ] || continue
-    case "${go_file}" in
-      */*|..*) die "go list returned unsafe providersync test filename '${go_file}'" ;;
-    esac
     source_file="${ROOT}/${PROVIDER_INTEGRATION_PACKAGE_KEY}/${go_file}"
-    [ -f "${source_file}" ] \
-      || die "go list returned missing providersync test file '${go_file}'"
     integration_file=0
-    if grep -qE '^//go:build.*(^|[^[:alnum:]_])integration([^[:alnum:]_]|$)' \
-      "${source_file}"; then
+    if [ -n "${SCAN_TAGGED[${source_file}]+set}" ]; then
       integration_file=1
     fi
     while IFS= read -r test_name; do
@@ -2026,10 +2058,7 @@ discover_providersync_tests() {
       if [ "${integration_file}" -eq 1 ]; then
         PROVIDER_INTEGRATION_TEST_NAMES["${test_name}"]=1
       fi
-    done < <(
-      sed -nE 's/^func[[:space:]]+(Test[A-Za-z0-9_]+)[[:space:]]*\(.*/\1/p' \
-        "${source_file}"
-    )
+    done <<<"${SCAN_TESTS[${source_file}]-}"
   done < <(printf '%s\n' "${files_output}")
 
   mapfile -t PROVIDER_TEST_NAMES < <(printf '%s\n' "${PROVIDER_TEST_NAMES[@]}" | LC_ALL=C sort)
@@ -2199,15 +2228,12 @@ discover_daily_tests() {
 
   DAILY_TEST_NAMES=()
   DAILY_INTEGRATION_TEST_NAMES=()
+  scan_listed_go_tests 'daily' "${ROOT}/${DAILY_INTEGRATION_PACKAGE_KEY}" "${files_output}"
   while IFS= read -r go_file; do
     [ -n "${go_file}" ] || continue
-    case "${go_file}" in
-      */*|..*) die "go list returned unsafe daily test filename '${go_file}'" ;;
-    esac
     source_file="${ROOT}/${DAILY_INTEGRATION_PACKAGE_KEY}/${go_file}"
-    [ -f "${source_file}" ] || die "go list returned missing daily test file '${go_file}'"
     integration_file=0
-    if grep -qE '^//go:build.*(^|[^[:alnum:]_])integration([^[:alnum:]_]|$)' "${source_file}"; then
+    if [ -n "${SCAN_TAGGED[${source_file}]+set}" ]; then
       integration_file=1
     fi
     while IFS= read -r test_name; do
@@ -2228,9 +2254,7 @@ discover_daily_tests() {
       if [ "${integration_file}" -eq 1 ]; then
         DAILY_INTEGRATION_TEST_NAMES["${test_name}"]=1
       fi
-    done < <(
-      sed -nE 's/^func[[:space:]]+(Test[A-Za-z0-9_]+)[[:space:]]*\(.*/\1/p' "${source_file}"
-    )
+    done <<<"${SCAN_TESTS[${source_file}]-}"
   done < <(printf '%s\n' "${files_output}")
 
   mapfile -t DAILY_TEST_NAMES < <(printf '%s\n' "${DAILY_TEST_NAMES[@]}" | LC_ALL=C sort)
@@ -2413,15 +2437,12 @@ discover_workerservice_tests() {
 
   WORKERSERVICE_TEST_NAMES=()
   WORKERSERVICE_INTEGRATION_TEST_NAMES=()
+  scan_listed_go_tests 'workerservice' "${ROOT}/${WORKERSERVICE_INTEGRATION_PACKAGE_KEY}" "${files_output}"
   while IFS= read -r go_file; do
     [ -n "${go_file}" ] || continue
-    case "${go_file}" in
-      */*|..*) die "go list returned unsafe workerservice test filename '${go_file}'" ;;
-    esac
     source_file="${ROOT}/${WORKERSERVICE_INTEGRATION_PACKAGE_KEY}/${go_file}"
-    [ -f "${source_file}" ] || die "go list returned missing workerservice test file '${go_file}'"
     integration_file=0
-    if grep -qE '^//go:build.*(^|[^[:alnum:]_])integration([^[:alnum:]_]|$)' "${source_file}"; then
+    if [ -n "${SCAN_TAGGED[${source_file}]+set}" ]; then
       integration_file=1
     fi
     while IFS= read -r test_name; do
@@ -2442,9 +2463,7 @@ discover_workerservice_tests() {
       if [ "${integration_file}" -eq 1 ]; then
         WORKERSERVICE_INTEGRATION_TEST_NAMES["${test_name}"]=1
       fi
-    done < <(
-      sed -nE 's/^func[[:space:]]+(Test[A-Za-z0-9_]+)[[:space:]]*\(.*/\1/p' "${source_file}"
-    )
+    done <<<"${SCAN_TESTS[${source_file}]-}"
   done < <(printf '%s\n' "${files_output}")
 
   mapfile -t WORKERSERVICE_TEST_NAMES < <(printf '%s\n' "${WORKERSERVICE_TEST_NAMES[@]}" | LC_ALL=C sort)
@@ -2627,15 +2646,12 @@ discover_queryapiserver_tests() {
 
   QAPISERVER_TEST_NAMES=()
   QAPISERVER_INTEGRATION_TEST_NAMES=()
+  scan_listed_go_tests 'queryapiserver' "${ROOT}/${QAPISERVER_INTEGRATION_PACKAGE_KEY}" "${files_output}"
   while IFS= read -r go_file; do
     [ -n "${go_file}" ] || continue
-    case "${go_file}" in
-      */*|..*) die "go list returned unsafe queryapiserver test filename '${go_file}'" ;;
-    esac
     source_file="${ROOT}/${QAPISERVER_INTEGRATION_PACKAGE_KEY}/${go_file}"
-    [ -f "${source_file}" ] || die "go list returned missing queryapiserver test file '${go_file}'"
     integration_file=0
-    if grep -qE '^//go:build.*(^|[^[:alnum:]_])integration([^[:alnum:]_]|$)' "${source_file}"; then
+    if [ -n "${SCAN_TAGGED[${source_file}]+set}" ]; then
       integration_file=1
     fi
     while IFS= read -r test_name; do
@@ -2656,9 +2672,7 @@ discover_queryapiserver_tests() {
       if [ "${integration_file}" -eq 1 ]; then
         QAPISERVER_INTEGRATION_TEST_NAMES["${test_name}"]=1
       fi
-    done < <(
-      sed -nE 's/^func[[:space:]]+(Test[A-Za-z0-9_]+)[[:space:]]*\(.*/\1/p' "${source_file}"
-    )
+    done <<<"${SCAN_TESTS[${source_file}]-}"
   done < <(printf '%s\n' "${files_output}")
 
   mapfile -t QAPISERVER_TEST_NAMES < <(printf '%s\n' "${QAPISERVER_TEST_NAMES[@]}" | LC_ALL=C sort)
@@ -2841,15 +2855,12 @@ discover_remaining_tests() {
 
   REMAINING_TEST_NAMES=()
   REMAINING_INTEGRATION_TEST_NAMES=()
+  scan_listed_go_tests 'remaining' "${ROOT}/${REMAINING_INTEGRATION_PACKAGE_KEY}" "${files_output}"
   while IFS= read -r go_file; do
     [ -n "${go_file}" ] || continue
-    case "${go_file}" in
-      */*|..*) die "go list returned unsafe remaining test filename '${go_file}'" ;;
-    esac
     source_file="${ROOT}/${REMAINING_INTEGRATION_PACKAGE_KEY}/${go_file}"
-    [ -f "${source_file}" ] || die "go list returned missing remaining test file '${go_file}'"
     integration_file=0
-    if grep -qE '^//go:build.*(^|[^[:alnum:]_])integration([^[:alnum:]_]|$)' "${source_file}"; then
+    if [ -n "${SCAN_TAGGED[${source_file}]+set}" ]; then
       integration_file=1
     fi
     while IFS= read -r test_name; do
@@ -2870,9 +2881,7 @@ discover_remaining_tests() {
       if [ "${integration_file}" -eq 1 ]; then
         REMAINING_INTEGRATION_TEST_NAMES["${test_name}"]=1
       fi
-    done < <(
-      sed -nE 's/^func[[:space:]]+(Test[A-Za-z0-9_]+)[[:space:]]*\(.*/\1/p' "${source_file}"
-    )
+    done <<<"${SCAN_TESTS[${source_file}]-}"
   done < <(printf '%s\n' "${files_output}")
 
   mapfile -t REMAINING_TEST_NAMES < <(printf '%s\n' "${REMAINING_TEST_NAMES[@]}" | LC_ALL=C sort)

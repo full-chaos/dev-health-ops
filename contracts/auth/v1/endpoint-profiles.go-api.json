@@ -6116,7 +6116,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/billing/edge.go",
-        "line": 111
+        "line": 105
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
@@ -6133,7 +6133,7 @@
       "service": "dev-health-ops-billing-edge",
       "source": {
         "file": "internal/api/billing/edge.go",
-        "line": 111
+        "line": 105
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
@@ -6328,7 +6328,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/billing/edge.go",
-        "line": 112
+        "line": 106
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
@@ -6345,7 +6345,7 @@
       "service": "dev-health-ops-billing-edge",
       "source": {
         "file": "internal/api/billing/edge.go",
-        "line": 112
+        "line": 106
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
@@ -12226,7 +12226,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 110,
+          "line": 104,
           "note": "Pattern:",
           "path": "internal/api/billing/edge.go"
         },
@@ -12237,7 +12237,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/billing/edge.go",
-        "line": 110
+        "line": 104
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
@@ -12253,7 +12253,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 110,
+          "line": 104,
           "note": "Pattern:",
           "path": "internal/api/billing/edge.go"
         },
@@ -12264,7 +12264,7 @@
       "service": "dev-health-ops-billing-edge",
       "source": {
         "file": "internal/api/billing/edge.go",
-        "line": 110
+        "line": 104
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"

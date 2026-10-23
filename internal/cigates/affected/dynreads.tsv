@@ -137,6 +137,7 @@ internal/cigates/bigboyrender	values.go
 internal/cigates/cachepoison	cachepoison_test.go
 internal/cigates/chartgates	helpers_test.go
 internal/cigates/chartgates	overlay_test.go
+internal/cigates/chconstructor	chconstructor_test.go
 internal/cigates/checkgo	check_go_script_test.go
 internal/cigates/checkgo	ci_script_helpers_test.go
 internal/cigates/checkgo	race_solo_load_test.go

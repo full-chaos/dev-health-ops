@@ -74,6 +74,16 @@ VALUES (?, 'linear', ?, ?, 99, ?, ?)`, day, scope.id, scope.team, legacyAt, stal
 			t.Fatalf("seed the legacy row of %s: %v", scope.id, err)
 		}
 	}
+	for _, status := range []string{"done", "in_progress", "blocked", "never-computed"} {
+		if err := conn.Exec(ctx, `INSERT INTO work_item_state_durations_daily (day, provider, work_scope_id, team_id, status, items_touched, duration_hours, computed_at, org_id)
+VALUES (?, 'linear', 'proj-eng', 'ENG', ?, 50, 5, ?, ?)`, day, status, legacyAt, staleKeyAcceptanceOrg); err != nil {
+			t.Fatalf("seed the legacy state row of %s: %v", status, err)
+		}
+	}
+	if err := conn.Exec(ctx, `INSERT INTO work_item_user_metrics_daily (day, provider, work_scope_id, user_identity, team_id, items_completed, computed_at, org_id)
+VALUES (?, 'linear', 'proj-eng', 'ghost', 'ENG', 7, ?, ?)`, day, legacyAt, staleKeyAcceptanceOrg); err != nil {
+		t.Fatalf("seed the legacy user row: %v", err)
+	}
 	const legacyAndOrg = `row_view IN ('', 'org')`
 	const legacyAndScope = `row_view IN ('', 'scope')`
 
@@ -101,12 +111,26 @@ WHERE org_id = ? AND day = ? AND row_view = '' AND work_scope_id = 'proj-eng'`, 
 		t.Fatalf("the legacy row of a computed key still holds %v after the partition wrote", computedKeyLegacy)
 	}
 
+	var liveLegacyBesideOrg uint64
+	if err := conn.QueryRow(ctx, `SELECT count() FROM work_item_state_durations_daily FINAL
+WHERE org_id = ? AND day = ? AND row_view = '' AND items_touched != 0
+  AND status IN (SELECT status FROM work_item_state_durations_daily FINAL WHERE org_id = ? AND day = ? AND row_view = 'org')`,
+		staleKeyAcceptanceOrg, day, staleKeyAcceptanceOrg, day).Scan(&liveLegacyBesideOrg); err != nil {
+		t.Fatal(err)
+	}
+	if liveLegacyBesideOrg != 0 {
+		t.Fatalf("%d live legacy state rows sit beside an org row of the same status after the partition wrote", liveLegacyBesideOrg)
+	}
+
 	// Step 2, the run ends: the legacy row of the key nothing computed goes too.
 	endStaleKeyRun(t, ctx, conn, run, first.Add(time.Minute))
 	for _, predicate := range []string{legacyAndOrg, legacyAndScope} {
 		if got := viewSum(t, ctx, conn, "work_item_metrics_daily", "items_completed", predicate); got != org {
 			t.Fatalf("%s after the run ended = %v, want %v", predicate, got, org)
 		}
+	}
+	if got := viewSum(t, ctx, conn, "work_item_user_metrics_daily", "items_completed", `row_view IN ('', 'org') AND retracted = 0`); got != 0 {
+		t.Fatalf("the legacy user row of a person nothing computed still counts %v after the run ended", got)
 	}
 	for _, table := range []string{"work_item_state_durations_daily"} {
 		orgState := viewSum(t, ctx, conn, table, "items_touched", `row_view = 'org'`)

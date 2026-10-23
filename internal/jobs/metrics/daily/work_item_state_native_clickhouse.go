@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/workitemmetrics"
+	"github.com/full-chaos/dev-health-ops/internal/teamkeytables"
 )
 
 // workItemStateWorkItem is the narrow subset of the `work_items` ClickHouse
@@ -349,14 +350,38 @@ func WriteWorkItemStateDurationsDaily(
 	}
 	dayValue := time.Date(day.UTC().Year(), day.UTC().Month(), day.UTC().Day(), 0, 0, 0, 0, time.UTC)
 	computedAtUTC := computedAt.UTC()
+	keys := make([]staleKey, 0, len(rows))
 	for _, row := range rows {
+		keys = append(keys, staleKey{row.Provider, row.WorkScopeID, row.TeamID, row.Status})
+	}
+	legacy, err := legacyRetractionVersions(ctx, conn, teamkeytables.WorkItemStateDurationsDaily, organizationID, dayValue, keys, computedAtUTC)
+	if err != nil {
+		return 0, err
+	}
+	type entry struct {
+		row  workItemStateDailyRow
+		view string
+		at   time.Time
+	}
+	entries := make([]entry, 0, len(rows)*(len(workItemRowViews)+1))
+	for index, row := range rows {
 		for _, rowView := range workItemRowViews {
-			if err := batch.Append(
-				dayValue, row.Provider, row.WorkScopeID, row.TeamID, row.TeamName, row.Status,
-				row.DurationHours, row.ItemsTouched, row.AvgWIP, computedAtUTC, organizationID, rowView,
-			); err != nil {
-				return 0, fmt.Errorf("append work_item_state_durations_daily row: %w", err)
+			entries = append(entries, entry{row, rowView, computedAtUTC})
+		}
+		if version, retracted := legacy[keys[index].text()]; retracted {
+			zero := workItemStateDailyRow{
+				Provider: row.Provider, WorkScopeID: row.WorkScopeID, TeamID: row.TeamID, TeamName: row.TeamName, Status: row.Status,
 			}
+			entries = append(entries, entry{zero, teamkeytables.LegacyRowView, version})
+		}
+	}
+	for _, item := range entries {
+		row := item.row
+		if err := batch.Append(
+			dayValue, row.Provider, row.WorkScopeID, row.TeamID, row.TeamName, row.Status,
+			row.DurationHours, row.ItemsTouched, row.AvgWIP, item.at, organizationID, item.view,
+		); err != nil {
+			return 0, fmt.Errorf("append work_item_state_durations_daily row: %w", err)
 		}
 	}
 	// CHAOS-5190 confirmation-pass sweep: Send is the one call here that

@@ -12,7 +12,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/workitemmetrics"
-	"github.com/full-chaos/dev-health-ops/internal/teamkeytables"
 )
 
 // WorkItemExecutor is the NATIVE implementation of the `work_item`
@@ -110,28 +109,6 @@ func (executor *WorkItemExecutor) ComputeFamily(
 	}
 	written, err := WriteWorkItemUserMetricsDaily(
 		ctx, executor.conn, run.OrganizationID, scope.day, triplet.UserMetricsDaily, computedAt,
-	)
-	total += written
-	if err != nil {
-		return wrapWorkItemScopePartialWrite("work_item", total, partition, err)
-	}
-	metricKeys := make([]staleKey, 0, len(triplet.MetricsDaily))
-	for _, row := range triplet.MetricsDaily {
-		metricKeys = append(metricKeys, staleKey{row.Provider, row.WorkScopeID, row.TeamID})
-	}
-	written, err = retractLegacyViewKeys(
-		ctx, executor.conn, teamkeytables.WorkItemMetricsDaily, run.OrganizationID, scope.day, metricKeys, computedAt,
-	)
-	total += written
-	if err != nil {
-		return wrapWorkItemScopePartialWrite("work_item", total, partition, err)
-	}
-	userKeys := make([]staleKey, 0, len(triplet.UserMetricsDaily))
-	for _, row := range triplet.UserMetricsDaily {
-		userKeys = append(userKeys, staleKey{row.Provider, row.WorkScopeID, row.UserIdentity})
-	}
-	written, err = retractLegacyViewKeys(
-		ctx, executor.conn, teamkeytables.WorkItemUserMetricsDaily, run.OrganizationID, scope.day, userKeys, computedAt,
 	)
 	total += written
 	if err != nil {

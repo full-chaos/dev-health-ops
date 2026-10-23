@@ -245,8 +245,18 @@ func rawOnlyReadableState(ctx context.Context, t *testing.T, conn driver.Conn, o
 		if rawOnlyDroppedTables[table] {
 			continue
 		}
+		// FINAL is read only for a table that collapses versions; a plain MergeTree
+		// refuses it and a merge never removes one of its rows.
+		var engine string
+		if err := conn.QueryRow(ctx, `SELECT engine FROM system.tables WHERE database = currentDatabase() AND name = ?`, table).Scan(&engine); err != nil {
+			t.Fatalf("read the engine of %s: %v", table, err)
+		}
+		final := ""
+		if strings.Contains(engine, "Replacing") {
+			final = " FINAL"
+		}
 		var count, hash uint64
-		if err := conn.QueryRow(ctx, `SELECT count(), sum(cityHash64(toString(tuple(*)))) FROM `+table+` FINAL WHERE org_id = ?`, orgID).Scan(&count, &hash); err != nil {
+		if err := conn.QueryRow(ctx, `SELECT count(), sum(cityHash64(toString(tuple(*)))) FROM `+table+final+` WHERE org_id = ?`, orgID).Scan(&count, &hash); err != nil {
 			t.Fatalf("read the state of %s: %v", table, err)
 		}
 		state[table] = fmt.Sprintf("%d/%d", count, hash)

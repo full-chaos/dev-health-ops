@@ -1424,7 +1424,10 @@ valkey:
   #    The rule after the hash is internal/auth/ratelimitvalkey ACLRules. LIMIT: the
   #    default user keeps access to every key, the auth rate-limit counters
   #    (dho:rl:auth_svc_*) included, so what bounds who can touch them is the
-  #    network policy around this Valkey, not the ACL. Order: create the Secret
+  #    network policy, not the ACL: the render REFUSES enabled unless
+  #    networkPolicy.enabled=true (that policy admits the whole release namespace).
+  #    The file mode is 0444 (hashes only). Rotation: a changed Secret rolls nothing;
+  #    restart Valkey or run ACL LOAD, and restart auth-service for a new URI. Order: create the Secret
   #    first, then set enabled=true; the Valkey Deployment restarts once.
   acl:
     enabled: false

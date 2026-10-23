@@ -1,0 +1,5 @@
+{
+  "schema_version": "membership-update-request.v1",
+  "role": "admin",
+  "status": "suspended"
+}

@@ -12,7 +12,9 @@
 #              UPDATE on refresh_tokens, then go-api rolls
 #   ROLLBACK_UP  `helm upgrade` with sessions=false: the hook re-GRANTs, then go-api rolls
 #   REFLIP     the flip again (repeatable)
-#   ROLLBACK_HELM  `helm rollback` to the baseline revision: does the grant come back? (measured)
+#   NOHOOKS    negative control: `helm rollback --no-hooks` leaves the grant revoked and the rolled-back pod NotReady
+#   RESTORE, REFLIP2  a flag-off upgrade, then the flip again
+#   ROLLBACK_HELM  `helm rollback` to the baseline revision: the pre-rollback grant hook re-GRANTs (measured)
 #
 # Probes run through every phase: a read probe on go-api's public Service (every 0.25 s), a grant probe
 # on refresh_tokens (every second), and a pod sampler (every second). Each phase reports the old-pod
@@ -21,7 +23,7 @@
 # read-drop shape of a plain pod handover is on record beside the flip. Read drops are a named class (F-A):
 # per upgrade status 000 only, at most 8 probes, inside one window of 2 s at the pod handover; anything else
 # (a 5xx, another answer, more probes, outside the handover) is a FINDING, and REHEARSAL_STRICT=1 fails the
-# job on a FINDING. `helm rollback` not re-granting is a KNOWN finding (F-B), recorded, not failed. A broken
+# job on a FINDING. A broken
 # mechanism (an end state not Ready, a grant not applied) always fails.
 #
 # CI only (needs docker, kind, kubectl, helm). Test Secrets are made in the cluster by this script and
@@ -47,6 +49,10 @@ readonly CLUSTER="rehearsal-$$"
 readonly RELEASE="ap"
 readonly FULL="ap-dev-health"
 readonly STRICT="${REHEARSAL_STRICT:-0}"
+# REHEARSAL_ZERO_DROPS=1: CONTROL and FLIP must show no dropped read at all (the go-api handover drain bar).
+readonly ZERO_DROPS="${REHEARSAL_ZERO_DROPS:-0}"
+# REHEARSAL_PRESTOP: goApi.drain.preStopSeconds for the whole run; unset keeps the chart default, 0 is the drain-off contrast.
+readonly PRESTOP="${REHEARSAL_PRESTOP:-}"
 WORK="$(mktemp -d)"
 readonly WORK
 SAMPLER_PID=""
@@ -121,6 +127,10 @@ for image in rehearsal/dho:local rehearsal/auth-service:local rehearsal/auth-mig
   "${WORK}/kind" load docker-image "${image}" --name "${CLUSTER}"
 done
 kubectl --context "kind-${CLUSTER}" create namespace "${NS}"
+KUBE_SERVER="$(kubectl --context "kind-${CLUSTER}" version -o json | jq -r .serverVersion.gitVersion)"
+printf 'kind node kube version: %s (the native preStop sleep needs >= 1.30)\n' "${KUBE_SERVER}"
+KUBE_MINOR="$(sed -E 's/^v[0-9]+\.([0-9]+).*/\1/' <<<"${KUBE_SERVER}")"
+[ "${KUBE_MINOR}" -ge 30 ] || die "kind node ${KUBE_SERVER} is older than 1.30: the drain hook would be silently dropped"
 
 # --- credentials: test values, mode 0600 files, never argv ----------------------------------------
 API_PASSWORD="$(openssl rand -hex 12)"
@@ -136,6 +146,10 @@ printf 'authService:\n  migrate:\n    sessionReaders:\n      queryApi: devhealth
 CHART="${ROOT}/deploy/helm/dev-health"
 HELM_BASE=("${RELEASE}" "${CHART}" --kube-context "kind-${CLUSTER}" --namespace "${NS}"
   -f "${SCRIPT_DIR}/session_rehearsal/rehearsal-release.yaml" -f "${WORK}/secrets-base.yaml")
+if [ -n "${PRESTOP}" ]; then
+  case "${PRESTOP}" in *[!0-9]*) die "REHEARSAL_PRESTOP must be whole seconds, got ${PRESTOP}" ;; esac
+  HELM_BASE+=(--set "goApi.drain.preStopSeconds=${PRESTOP}")
+fi
 HELM_SESSION=(-f "${WORK}/secrets-session.yaml" -f "${WORK}/successor.yaml")
 
 # --- rev 1: objects only, no hooks, so PostgreSQL exists before the hooks need it -------------------
@@ -256,6 +270,10 @@ analyse() {
       note "${name}: NAMED CLASS F-A: ${fails} probe(s) with status 000 inside one window of $((last_fail - first_fail + 1)) s at the pod handover (${lo}..${hi})"
     fi
   fi
+  if [ "${ZERO_DROPS}" = 1 ] && { [ "${name}" = CONTROL ] || [ "${name}" = FLIP ]; } && [ $((fails + five + wrong)) -gt 0 ]; then
+    class="HARD"
+    finding "${name}: the zero-drop bar (go-api handover drain) is not met: 000=${fails} 5xx=${five} other=${wrong}"
+  fi
   ROWS+=("| ${name} | ${window} | ${zero} | ${fails} / ${five} / ${wrong} | ${class} |")
   if [ "${kind}" != none ]; then
     note "${name}: grant transitions in the phase: ${trans}"
@@ -269,7 +287,7 @@ phase() {
   local name="$1" kind="$2" t0 t1
   shift 2
   t0="$(date +%s)"
-  helm upgrade "${HELM_BASE[@]}" "$@" --wait --timeout 8m
+  helm upgrade "${HELM_BASE[@]}" --history-max 0 "$@" --wait --timeout 8m
   t1="$(date +%s)"
   sleep 10
   analyse "${name}" "${t0}" "${t1}" "${kind}"
@@ -287,11 +305,21 @@ assert_state() { # <name> <flag:true|unset> <insert> <update>
 
 # --- baseline ------------------------------------------------------------------------------------
 printf 'step 3: baseline upgrade with the hooks: sessions=false, readers set (prod today plus the deploy prep leaf)\n'
-helm upgrade "${HELM_BASE[@]}" --wait --timeout 12m
+helm upgrade "${HELM_BASE[@]}" --history-max 0 --wait --timeout 12m
 BASE_REV="$(rev)"
 printf 'baseline revision %s\n' "${BASE_REV}"
 K rollout status deploy/"${FULL}-go-api" --timeout=240s
 assert_state baseline unset t t
+helm show values "${CHART}" >"${WORK}/chart-values.yaml"
+EXPECT_SLEEP="${PRESTOP:-$(awk '/^  drain:/ {f=1} f && /preStopSeconds:/ {print $2; exit}' "${WORK}/chart-values.yaml")}"
+LIVE_SLEEP="$(K get deploy/"${FULL}-go-api" -o jsonpath='{.spec.template.spec.containers[0].lifecycle.preStop.sleep.seconds}')"
+LIVE_GRACE="$(K get deploy/"${FULL}-go-api" -o jsonpath='{.spec.template.spec.terminationGracePeriodSeconds}')"
+printf 'go-api drain in the live Deployment: preStop sleep [%s], terminationGracePeriodSeconds %s (expected sleep %s)\n' "${LIVE_SLEEP}" "${LIVE_GRACE}" "${EXPECT_SLEEP}"
+if [ "${EXPECT_SLEEP}" = 0 ]; then
+  [ -z "${LIVE_SLEEP}" ] || die "drain is off but the live Deployment has a preStop sleep (${LIVE_SLEEP})"
+else
+  [ "${LIVE_SLEEP}" = "${EXPECT_SLEEP}" ] || die "the live Deployment's preStop sleep is [${LIVE_SLEEP}], want ${EXPECT_SLEEP}: the cluster dropped the hook"
+fi
 reader_ok() { # <role>: SELECT on exactly the session columns the cutover reads (a column-level grant)
   local col
   for col in id principal_id revoked_at; do
@@ -313,7 +341,7 @@ case "${EXPECT_CODE}" in 000 | 5??) die "the read probe path does not answer (${
 
 printf 'step 3b: CONTROL: an upgrade that rolls go-api with no flag change (a pod annotation only)\n'
 T0="$(date +%s)"
-helm upgrade "${HELM_BASE[@]}" --set goApi.podAnnotations.rehearsal=control --wait --timeout 8m
+helm upgrade "${HELM_BASE[@]}" --history-max 0 --set goApi.podAnnotations.rehearsal=control --wait --timeout 8m
 T1="$(date +%s)"
 sleep 10
 analyse CONTROL "${T0}" "${T1}" none
@@ -359,24 +387,29 @@ printf 'step 8: REFLIP: the flip again\n'
 phase REFLIP revoke "${HELM_SESSION[@]}" --set goApi.authProxy.sessions=true
 assert_state REFLIP true f f
 
-printf 'step 9: ROLLBACK_HELM: helm rollback to revision %s\n' "${BASE_REV}"
+printf 'step 9: NEGATIVE CONTROL: helm rollback --no-hooks to revision %s (no hook, so no re-GRANT)\n' "${BASE_REV}"
+helm rollback "${RELEASE}" "${BASE_REV}" --kube-context "kind-${CLUSTER}" --namespace "${NS}" --no-hooks --history-max 0
+sleep 30
+[ "$(priv insert)" = f ] || die "NOHOOKS: INSERT on refresh_tokens came back without the hook"
+if K rollout status deploy/"${FULL}-go-api" --timeout=45s >/dev/null 2>&1; then
+  die "NOHOOKS: the rolled-back go-api pod became Ready without the re-GRANT"
+fi
+note "NEGATIVE CONTROL: helm rollback --no-hooks leaves INSERT revoked and the rolled-back go-api pod NotReady (the re-GRANT in the next rollback comes from the hook)"
+printf 'step 10: RESTORE: helm upgrade, sessions=false, after the no-hooks rollback\n'
+phase RESTORE regrant --set goApi.authProxy.sessions=false
+assert_state RESTORE unset t t
+printf 'step 11: REFLIP2: the flip once more, so the rollback below starts from the flipped state\n'
+phase REFLIP2 revoke "${HELM_SESSION[@]}" --set goApi.authProxy.sessions=true
+assert_state REFLIP2 true f f
+
+printf 'step 12: ROLLBACK_HELM: helm rollback to revision %s (the pre-rollback grant hook re-GRANTs)\n' "${BASE_REV}"
 T0="$(date +%s)"
-ROLLBACK_RC=0
-helm rollback "${RELEASE}" "${BASE_REV}" --kube-context "kind-${CLUSTER}" --namespace "${NS}" --wait --timeout 4m || ROLLBACK_RC=$?
+helm rollback "${RELEASE}" "${BASE_REV}" --kube-context "kind-${CLUSTER}" --namespace "${NS}" --wait --timeout 8m --history-max 0
 T1="$(date +%s)"
 sleep 10
-RB_INSERT="$(priv insert)"
-note "ROLLBACK_HELM: helm rollback rc=${ROLLBACK_RC}; api role INSERT on refresh_tokens afterwards: ${RB_INSERT}; go-api env AUTH_PROXY_SESSIONS: $(go_api_env); go-api ready replicas: $(go_api_ready)"
-if [ "${RB_INSERT}" = f ]; then
-  note "KNOWN FINDING F-B: helm rollback alone did not re-GRANT (the hooks run on pre-install and pre-upgrade only): the prod rollback is a helm upgrade with the flag off, never helm rollback"
-  analyse ROLLBACK_HELM "${T0}" "${T1}" none
-  printf 'step 10: FIXUP: helm upgrade, sessions=false, after the helm rollback\n'
-  phase FIXUP regrant --set goApi.authProxy.sessions=false
-  assert_state FIXUP unset t t
-else
-  analyse ROLLBACK_HELM "${T0}" "${T1}" regrant
-  assert_state ROLLBACK_HELM unset t t
-fi
+analyse ROLLBACK_HELM "${T0}" "${T1}" regrant
+assert_state ROLLBACK_HELM unset t t
+reader_ok devhealth_api ROLLBACK_HELM
 
 # --- F3 and the verdict ---------------------------------------------------------------------------------
 note "F3: the two-upgrade form (hook with sessions=true, then go-api flag) is not expressible: templates/river-hooks.yaml and templates/go-api-deployment.yaml both read goApi.authProxy.sessions; the one-upgrade windows above are the whole answer"

@@ -27,7 +27,8 @@ type gitlabReference struct {
 	IID  uint32
 }
 
-// parseGitLabReference parses references.full for the given marker. The project path is "/"-separated segments of
+// parseGitLabReference parses references.full for the given marker. The project path is at least two (namespace/project)
+// "/"-separated segments of
 // [A-Za-z0-9_.-], none empty, "." or "..". The iid is a canonical positive integer that fits uint32, the type
 // issueprlinks.ParsePRSource parses and the pull-request number column holds (providersync must not import issueprlinks: its
 // logging would join this package's dependency set; TestParseGitLabReferenceAgreesWithDerive pins the agreement). No
@@ -52,10 +53,11 @@ func parseGitLabReference(full string, marker byte) (gitlabReference, error) {
 }
 
 func validGitLabProjectPath(path string) bool {
-	if path == "" {
+	segments := strings.Split(path, "/")
+	if len(segments) < 2 {
 		return false
 	}
-	for _, segment := range strings.Split(path, "/") {
+	for _, segment := range segments {
 		if segment == "" || segment == "." || segment == ".." {
 			return false
 		}

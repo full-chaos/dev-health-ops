@@ -512,7 +512,87 @@ func AiOpportunities(ctx context.Context, client QueryClient, orgID string, in *
 	for _, o := range opps {
 		recs = append(recs, o.project(catalogue.repoName(o.repoID), catalogue.teamName(o.teamID)))
 	}
+	if err := hideUnlinkedPullRequestChips(ctx, client, orgID, recs); err != nil {
+		return nil, err
+	}
 	return &model.AIOpportunitiesResult{OrgID: orgID, Recommendations: recs, DetectorReady: true}, nil
+}
+
+// linkedPullRequestsStatement reads which of a page's pull requests have an issue link: any work_graph_issue_pr
+// row of the organization, whatever its provenance tier. The id is the edge-table spelling of prrootid.Format.
+const linkedPullRequestsStatement = `SELECT DISTINCT concat(toString(repo_id), ':', toString(pr_number)) AS pr_id
+FROM work_graph_issue_pr FINAL
+WHERE org_id = {org_id:String}
+  AND concat(toString(repo_id), ':', toString(pr_number)) IN {pr_ids:Array(String)}`
+
+// hideUnlinkedPullRequestChips drops, from each opportunity's work-graph drilldowns, the pull request chips whose
+// pull request has no issue link (CHAOS-10608, D6167: bot and dependency-bump pull requests have none, and their
+// graph walk is empty). Evidence refs, scores and the opportunity list are not touched. One read serves the whole
+// page, and none is made when the page has no pull request chip.
+func hideUnlinkedPullRequestChips(ctx context.Context, client QueryClient, orgID string, recs []model.AIOpportunity) error {
+	seen := map[string]bool{}
+	var ids []string
+	for _, rec := range recs {
+		for _, ref := range rec.WorkGraphDrilldowns {
+			if id, ok := pullRequestChipID(ref); ok && !seen[id] {
+				seen[id] = true
+				ids = append(ids, id)
+			}
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	sort.Strings(ids)
+	rs, err := client.Query(ctx, linkedPullRequestsStatement, []clickhouse.Binding{
+		{Name: "org_id", Value: orgID}, {Name: "pr_ids", Value: ids},
+	})
+	if err != nil {
+		return fmt.Errorf("aianalytics: opportunity linked pull request query: %w", err)
+	}
+	defer rs.Close()
+	linked := make(map[string]bool, len(ids))
+	for rs.Next() {
+		var id string
+		if err := rs.Scan(&id); err != nil {
+			return fmt.Errorf("aianalytics: opportunity linked pull request scan: %w", err)
+		}
+		linked[id] = true
+	}
+	if err := rs.Err(); err != nil {
+		return fmt.Errorf("aianalytics: opportunity linked pull request rows: %w", err)
+	}
+	for i := range recs {
+		kept := make([]model.AIWorkGraphDrilldownRef, 0, len(recs[i].WorkGraphDrilldowns))
+		for _, ref := range recs[i].WorkGraphDrilldowns {
+			if ref.RootType == "pr" {
+				if id, ok := pullRequestChipID(ref); !ok || !linked[id] {
+					continue
+				}
+			}
+			kept = append(kept, ref)
+		}
+		recs[i].WorkGraphDrilldowns = kept
+	}
+	return nil
+}
+
+// pullRequestChipID is the id a pull request chip is looked up by: the lower-case repository uuid and the number
+// in the canonical decimal spelling of the UInt32 column. A chip whose number is not a UInt32 has no id and no
+// row can link it.
+func pullRequestChipID(ref model.AIWorkGraphDrilldownRef) (string, bool) {
+	if ref.RootType != "pr" {
+		return "", false
+	}
+	repo, number, ok := strings.Cut(ref.RootID, prrootid.Separator)
+	if !ok {
+		return "", false
+	}
+	n, err := strconv.ParseUint(number, 10, 32)
+	if err != nil {
+		return "", false
+	}
+	return prrootid.FormatNumber(strings.ToLower(repo), int64(n)), true
 }
 
 // opportunityRepoIDs lists the distinct repositories of a page of opportunities

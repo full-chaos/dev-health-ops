@@ -2,6 +2,7 @@ package social
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -29,10 +30,17 @@ type Authenticator interface {
 	SignedIn(r *http.Request) (SignedIn, bool)
 }
 
+// Domain is the social service the handlers drive (*Service).
+type Domain interface {
+	Exchange(ctx context.Context, provider Provider, token contracts.SecretString, requestID *string) (ExchangeResult, error)
+	Link(ctx context.Context, who SignedIn, provider Provider, token contracts.SecretString) (identity.Identity, error)
+	Unlink(ctx context.Context, who SignedIn, identityID uuid.UUID) error
+}
+
 // Handlers serve the social routes. Errors answer in go-api's body shape
 // ({"detail": ...}) so the compatibility proxy forwards them unchanged.
 type Handlers struct {
-	Service  *Service
+	Service  Domain
 	Sessions SessionWriter
 	Auth     Authenticator
 }

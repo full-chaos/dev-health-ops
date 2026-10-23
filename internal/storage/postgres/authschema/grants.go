@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/aclguard"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -68,6 +69,8 @@ func (t TablePrivilege) privileges() []string {
 //     is changed by a migration or an administrative path, never by the
 //     service evaluating it. A service that can edit the actions it is
 //     checked against can widen its own authority.
+//   - memberships has no DELETE: a member leaves by status 'removed' (0019), so
+//     the edge and its revision history survive.
 //   - platform_role_assignments has no UPDATE: changing an elevation is a
 //     revoke followed by a grant, which leaves two audit rows instead of one
 //     silent mutation.
@@ -80,7 +83,7 @@ func RuntimePosture() []TablePrivilege {
 
 		// Tenancy and non-human principals.
 		{Table: "organizations", Select: true, Insert: true, Update: true},
-		{Table: "memberships", Select: true, Insert: true, Update: true, Delete: true},
+		{Table: "memberships", Select: true, Insert: true, Update: true},
 		{Table: "platform_role_assignments", Select: true, Insert: true, Delete: true},
 		{Table: "service_accounts", Select: true, Insert: true, Update: true},
 		{Table: "workloads", Select: true, Insert: true, Update: true},
@@ -240,6 +243,9 @@ func applyRuntimeGrants(ctx context.Context, conn querier, manifest []TablePrivi
 		return fmt.Errorf("%w: beginning the runtime grants transaction", ErrMigrationFailed)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	if err := aclguard.Lock(ctx, tx); err != nil {
+		return fmt.Errorf("%w: taking the privilege writer lock", ErrMigrationFailed)
+	}
 
 	before, err := snapshotDirectGrants(ctx, tx, options.Schema, options.RuntimeRole)
 	if err != nil {

@@ -38,6 +38,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/clientaddr"
+	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
 
@@ -81,6 +82,9 @@ const (
 	EnvAccessTokenSecret   = "AUTH_JWT_SECRET_KEY"
 	EnvAccessTokenIssuer   = "AUTH_JWT_ISSUER"
 	EnvAccessTokenAudience = "AUTH_JWT_AUDIENCE"
+	// EnvAccessTokenClass picks the one class of access token this service
+	// mints: hs256_compat (the default) or eddsa. Exact match, no fallback.
+	EnvAccessTokenClass = "AUTH_ACCESS_TOKEN_CLASS"
 	// EnvSessionSuccessorKey is the 32-byte session successor key (base64url,
 	// no padding) that derives a rotated refresh credential (CHAOS-10207
 	// ruling Q-B1-1). Secret: environment or _FILE only.
@@ -89,6 +93,9 @@ const (
 	// padding): the HMAC key of the lockout identifier (local.Config). Set,
 	// with the session secrets, it mounts the login route. Secret.
 	EnvLoginLockoutKey = "AUTH_LOGIN_LOCKOUT_KEY"
+	// EnvSocialLinkRoutes ("true" or "false", default false) mounts the
+	// bearer-only social link and unlink routes; it needs the session secrets.
+	EnvSocialLinkRoutes = "AUTH_SOCIAL_LINK_ROUTES"
 	// EnvTrustedProxies lists the proxies whose X-Forwarded-For names the
 	// client (internal/auth/clientaddr).
 	EnvTrustedProxies = clientaddr.Env
@@ -189,6 +196,10 @@ type Config struct {
 	// provider without both values answers go-api's 503.
 	Social map[string]SocialClient
 
+	// SSO holds the federated sign-in settings; a protocol without all of its
+	// values mounts no route.
+	SSO SSO
+
 	// EnvOnlySettings names the non-secret settings that were resolved from
 	// the environment although a canonical flag exists for them. A deployment
 	// configured that way is invisible in `docker compose config`, so the
@@ -196,10 +207,18 @@ type Config struct {
 	EnvOnlySettings []string
 }
 
+// Access token classes (EnvAccessTokenClass).
+const (
+	AccessClassHS256Compat = "hs256_compat"
+	AccessClassEdDSA       = "eddsa"
+)
+
 // SessionTokens are the session routes' secrets and the access token's iss
 // and aud.
 type SessionTokens struct {
-	Enabled        bool
+	Enabled bool
+	// AccessClass is AccessClassHS256Compat or AccessClassEdDSA.
+	AccessClass    string
 	AccessSecret   secrets.Value
 	AccessIssuer   string
 	AccessAudience string
@@ -207,6 +226,8 @@ type SessionTokens struct {
 	// LoginEnabled is set with LockoutKey: the login route is mounted.
 	LoginEnabled bool
 	LockoutKey   secrets.Value
+	// SocialLinkRoutes mounts the social link and unlink routes.
+	SocialLinkRoutes bool
 }
 
 // SocialClient is this service's OAuth client at one social provider.
@@ -246,9 +267,11 @@ func (c Config) SafeAttrs() []slog.Attr {
 		slog.String("signing_key_id", c.SigningKeyID),
 		slog.Bool("api_routes_enabled", c.Session.Enabled),
 		slog.Bool("login_route_enabled", c.Session.LoginEnabled),
+		slog.Bool("social_link_routes_enabled", c.Session.SocialLinkRoutes),
 		slog.Int("trusted_proxy_count", c.TrustedProxies.Len()),
 		slog.String("jwt_issuer", c.Session.AccessIssuer),
 		slog.String("jwt_audience", c.Session.AccessAudience),
+		slog.String("access_class", c.Session.AccessClass),
 	}
 }
 
@@ -372,10 +395,30 @@ func Load(spec Spec) (Config, error) {
 	if cfg.Session, err = sessionTokens(lookup); err != nil {
 		return Config{}, err
 	}
+	if cfg.Session.AccessClass == AccessClassEdDSA {
+		// iss and aud are signed byte for byte: a value with surrounding
+		// whitespace is refused, never trimmed into a different claim.
+		for _, name := range []string{EnvTokenIssuerURL, EnvAccessTokenAudience} {
+			if raw := valueOf(lookup, name); raw != strings.TrimSpace(raw) {
+				return Config{}, fmt.Errorf("%s=%s needs %s without surrounding whitespace",
+					EnvAccessTokenClass, AccessClassEdDSA, name)
+			}
+		}
+		if cfg.TokenIssuerURL == "" {
+			return Config{}, fmt.Errorf("%s=%s needs %s", EnvAccessTokenClass, AccessClassEdDSA, EnvTokenIssuerURL)
+		}
+		if _, ok := contracts.AccessTokenScope(cfg.Session.AccessAudience); !ok {
+			return Config{}, fmt.Errorf("%s=%s needs %s to name a user access token audience",
+				EnvAccessTokenClass, AccessClassEdDSA, EnvAccessTokenAudience)
+		}
+	}
 	if cfg.TrustedProxies, err = clientaddr.ParseTrust(valueOf(lookup, EnvTrustedProxies)); err != nil {
 		return Config{}, err
 	}
 	if cfg.Social, err = socialClients(lookup); err != nil {
+		return Config{}, err
+	}
+	if cfg.SSO, err = ssoSettings(lookup); err != nil {
 		return Config{}, err
 	}
 	return cfg, nil
@@ -394,11 +437,29 @@ func socialClients(lookup secrets.LookupEnv) (map[string]SocialClient, error) {
 	return out, nil
 }
 
+// accessTokenClass reads EnvAccessTokenClass: unset or empty is hs256_compat,
+// the two class names match exactly, anything else is refused (the value is
+// not echoed).
+func accessTokenClass(lookup secrets.LookupEnv) (string, error) {
+	switch valueOf(lookup, EnvAccessTokenClass) {
+	case "", AccessClassHS256Compat:
+		return AccessClassHS256Compat, nil
+	case AccessClassEdDSA:
+		return AccessClassEdDSA, nil
+	}
+	return "", fmt.Errorf("%s must be %s or %s", EnvAccessTokenClass, AccessClassHS256Compat, AccessClassEdDSA)
+}
+
 // sessionTokens resolves the session routes' settings. The two secrets come
 // together or not at all: a deployment with one of them meant to serve the
 // session routes, and silently serving none would hide that.
 func sessionTokens(lookup secrets.LookupEnv) (SessionTokens, error) {
+	class, err := accessTokenClass(lookup)
+	if err != nil {
+		return SessionTokens{}, err
+	}
 	out := SessionTokens{
+		AccessClass:    class,
 		AccessIssuer:   stringOr(lookup, EnvAccessTokenIssuer, defaultAccessTokenIssuer),
 		AccessAudience: stringOr(lookup, EnvAccessTokenAudience, defaultAccessTokenAudience),
 	}
@@ -420,7 +481,15 @@ func sessionTokens(lookup secrets.LookupEnv) (SessionTokens, error) {
 	if err != nil {
 		return SessionTokens{}, err
 	}
+	linkRoutes, err := strictBool(lookup, EnvSocialLinkRoutes)
+	if err != nil {
+		return SessionTokens{}, err
+	}
 	if !hasAccess {
+		if linkRoutes {
+			return SessionTokens{}, fmt.Errorf("%s needs the session secrets (%s and %s)",
+				EnvSocialLinkRoutes, EnvAccessTokenSecret, EnvSessionSuccessorKey)
+		}
 		if hasLockout {
 			return SessionTokens{}, fmt.Errorf("%s needs the session secrets (%s and %s)",
 				EnvLoginLockoutKey, EnvAccessTokenSecret, EnvSessionSuccessorKey)
@@ -438,6 +507,7 @@ func sessionTokens(lookup secrets.LookupEnv) (SessionTokens, error) {
 		)
 	}
 	out.Enabled, out.AccessSecret, out.SuccessorKey = true, access, successor
+	out.SocialLinkRoutes = linkRoutes
 	lockout, _, err := secrets.ResolveSecret(EnvLoginLockoutKey, lookup)
 	if err != nil {
 		return SessionTokens{}, err
@@ -452,6 +522,18 @@ func sessionTokens(lookup secrets.LookupEnv) (SessionTokens, error) {
 	}
 	out.LoginEnabled, out.LockoutKey = true, lockout
 	return out, nil
+}
+
+// strictBool reads an unset or blank name as false and accepts only "true"
+// and "false" otherwise: a typo must not silently leave a route unmounted.
+func strictBool(lookup secrets.LookupEnv, name string) (bool, error) {
+	switch strings.TrimSpace(valueOf(lookup, name)) {
+	case "", "false":
+		return false, nil
+	case "true":
+		return true, nil
+	}
+	return false, fmt.Errorf("%s must be \"true\" or \"false\"", name)
 }
 
 // signingKey resolves the signing-key custody settings.

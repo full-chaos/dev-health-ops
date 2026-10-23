@@ -31,6 +31,7 @@ internal/api/restcore
 internal/api/session
 internal/api/sessionissue
 internal/api/sso
+internal/api/standinkey
 internal/api/syncadmin
 internal/api/teamsidentity
 internal/api/telemetry
@@ -74,6 +75,7 @@ internal/platform/dbphase
 internal/platform/dbspan
 internal/platform/errortext
 internal/platform/errortext/hardened
+internal/platform/fernet
 internal/platform/health
 internal/platform/lifecycle
 internal/platform/logging
@@ -98,6 +100,7 @@ internal/scheduler/sync
 internal/storage/clickhouse
 internal/storage/clickhouse/liverow
 internal/storage/postgres
+internal/storage/postgres/aclguard
 internal/storage/river
 internal/storage/roleacl
 internal/storage/valkey

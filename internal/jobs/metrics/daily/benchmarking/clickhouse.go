@@ -11,6 +11,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/rowview"
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 	"github.com/full-chaos/dev-health-ops/internal/teamactive"
 )
@@ -45,13 +46,17 @@ var metricDefinitions = map[string]MetricDefinition{
 		Table:             "work_item_metrics_daily",
 		ValueColumn:       "cycle_time_p50_hours",
 		ScopeSupport:      map[string]bool{ScopeTeam: true, ScopeGlobal: true},
-		InnerGroupColumns: []string{"team_id", "work_scope_id", "provider"},
+		InnerGroupColumns: []string{"team_id", "work_scope_id", "provider", "row_view"},
+		// Each item once in the organization (CHAOS-8863): legacy rows and the org view.
+		ExtraFilters: []string{rowview.OrgPredicate("work_item_metrics_daily", "")},
 	},
 	"defect_intro_rate": {
 		Table:             "work_item_metrics_daily",
 		ValueColumn:       "defect_intro_rate",
 		ScopeSupport:      map[string]bool{ScopeTeam: true, ScopeGlobal: true},
-		InnerGroupColumns: []string{"team_id", "work_scope_id", "provider"},
+		InnerGroupColumns: []string{"team_id", "work_scope_id", "provider", "row_view"},
+		// Each item once in the organization (CHAOS-8863): legacy rows and the org view.
+		ExtraFilters: []string{rowview.OrgPredicate("work_item_metrics_daily", "")},
 	},
 	"deployment_frequency": {
 		Table:             "dora_metrics_daily",

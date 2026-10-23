@@ -43,11 +43,18 @@ const REQUIRED_GROUPS = {
   // The catalogs are pure schema documents: no client-only rule.
   "action-catalog": ["accept", "reject"],
   "role-catalog": ["accept", "reject"],
+  "organization": ["accept", "reject"],
+  "organization-create-request": ["accept", "reject"],
+  "membership": ["accept", "reject"],
+  "membership-update-request": ["accept", "reject"],
+  "invite": ["accept", "reject"],
+  "invite-create-request": ["accept", "reject"],
+  "invite-accept-request": ["accept", "reject"],
 };
 const DEFAULT_REQUIRED_GROUPS = ["accept", "reject", "reject_by_client"];
 
 // Closed vocabularies (CHAOS-10194): contracts/auth/v1/vocabulary/reason-codes.json
-// is the single source for these three fields. Each entry builds a document
+// is the single source for these four fields. Each entry builds a document
 // from a fixture that carries the field, then sets the field to a value.
 // Approved lists, written by hand on purpose: widening the vocabulary file and
 // the schema enums together must also need a deliberate edit here (CHAOS-10194).
@@ -111,6 +118,12 @@ const APPROVED_AUDIT = [
   "principal_not_found",
   "malformed",
 ];
+const APPROVED_DECISION = [
+  "allowed_by_repository_grant",
+  "grant_absent",
+  "repository_not_granted",
+  "platform_role_absent",
+];
 const NOT_IN_THE_VOCABULARY = [
   "secret_0123456789abcdef0123",
   "key_compromised",
@@ -133,6 +146,12 @@ const VOCABULARY_SURFACES = {
     schemaPath: ["properties", "items", "items", "properties", "revoked_reason"],
     base: "valid-two-items.json",
     set: (doc, v) => { doc.items[1].revoked_reason = v; },
+  },
+  "authorization_decision": {
+    list: "decision_reason_code",
+    schemaPath: ["properties", "reason_code"],
+    base: "decision-valid-deny.json",
+    set: (doc, v) => { doc.reason_code = v; },
   },
   "audit-event": {
     list: "audit_reason_code",
@@ -459,7 +478,7 @@ for (const surface of surfaces) {
     } else {
       const values = readJSON(vocabPath)[vocabulary.list]?.values ?? [];
       if (values.length === 0) fail(`${surface}: the ${vocabulary.list} vocabulary is empty`);
-      const approved = vocabulary.list === "revoked_reason" ? APPROVED_REVOKED : APPROVED_AUDIT;
+      const approved = { revoked_reason: APPROVED_REVOKED, audit_reason_code: APPROVED_AUDIT, decision_reason_code: APPROVED_DECISION }[vocabulary.list];
       if (JSON.stringify([...values].sort()) !== JSON.stringify([...approved].sort())) {
         fail(`${surface}: the ${vocabulary.list} vocabulary file differs from the approved list in run.mjs`);
       }

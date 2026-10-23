@@ -1944,7 +1944,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/integrationsadmin/routes.go",
-        "line": 80
+        "line": 81
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -2176,7 +2176,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/integrationsadmin/routes.go",
-        "line": 82
+        "line": 83
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -2234,7 +2234,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/integrationsadmin/routes.go",
-        "line": 86
+        "line": 87
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -2292,7 +2292,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/integrationsadmin/routes.go",
-        "line": 84
+        "line": 85
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -6708,7 +6708,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/integrationsadmin/routes.go",
-        "line": 83
+        "line": 84
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -6766,7 +6766,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/integrationsadmin/routes.go",
-        "line": 87
+        "line": 88
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -6824,7 +6824,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/integrationsadmin/routes.go",
-        "line": 85
+        "line": 86
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -8158,7 +8158,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/integrationsadmin/routes.go",
-        "line": 81
+        "line": 82
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -8912,7 +8912,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/integrationsadmin/routes.go",
-        "line": 90
+        "line": 91
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -8970,7 +8970,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/integrationsadmin/routes.go",
-        "line": 88
+        "line": 89
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -9028,7 +9028,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/integrationsadmin/routes.go",
-        "line": 89
+        "line": 90
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -13022,7 +13022,7 @@
     },
     {
       "accepted_credential_classes": [
-        "pagerduty_oauth_credential"
+        "pagerduty_webhook_signature"
       ],
       "classification": "protected",
       "gaps": [],

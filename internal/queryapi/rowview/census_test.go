@@ -95,6 +95,7 @@ var viewReaders = map[string][]string{
 	"internal/queryapi/sankey/queries.go":                                  {"rowview.OrgPredicate("},
 	"internal/queryapi/home/queries_metrics.go":                            {"rowview.OrgPredicate(", "GROUP BY day, provider, work_scope_id, team_id, status, row_view"},
 	"internal/queryapi/explain/metrics.go":                                 {"rowview.OrgPredicate("},
+	"internal/jobs/metrics/daily/icfinalize/executor.go":                   {"rowview.OrgPredicate("},
 	"internal/jobs/report/dedup.go":                                        {"rowview.OrgPredicate("},
 	"internal/queryapi/people/metricconfig.go":                             {"rowview.OrgPredicate("},
 	"internal/queryapi/people/summary.go":                                  {"rowview.OrgPredicate("},

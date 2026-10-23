@@ -1,0 +1,480 @@
+{
+  "catalog_version": 2,
+  "description": "Maps every served GraphQL root field to the one catalog action it performs (actions.v1.json), or to null with a named gap where the closed catalog has none. A mapping, not an enforcement: query-api checks no action today.",
+  "rows": [
+    {
+      "action": "analytics.read",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "field": "catalog",
+      "gaps": [],
+      "resolver": "queryResolver.Catalog in internal/queryapi/graph/schema.resolvers.go",
+      "resource_resolver": "organization_from_argument: the orgId argument, refused by OperationOrgGuard (internal/queryapi/graph/operation_org_guard.go) unless it equals the credential's organization; a verified non-impersonating superuser may name another organization",
+      "type": "Query"
+    },
+    {
+      "action": "analytics.read",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "field": "analytics",
+      "gaps": [],
+      "resolver": "queryResolver.Analytics in internal/queryapi/graph/schema.resolvers.go",
+      "resource_resolver": "organization_from_argument: the orgId argument, refused by OperationOrgGuard (internal/queryapi/graph/operation_org_guard.go) unless it equals the credential's organization; a verified non-impersonating superuser may name another organization",
+      "type": "Query"
+    },
+    {
+      "action": "analytics.read",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "field": "productTelemetryDashboard",
+      "gaps": [],
+      "resolver": "queryResolver.ProductTelemetryDashboard in internal/queryapi/graph/schema.resolvers.go",
+      "resource_resolver": "organization_from_argument: the orgId argument, refused by OperationOrgGuard (internal/queryapi/graph/operation_org_guard.go) unless it equals the credential's organization; a verified non-impersonating superuser may name another organization",
+      "type": "Query"
+    },
+    {
+      "action": null,
+      "disclosure_behavior": "behaviour today: only a verified non-impersonating superuser passes, any other caller answers AUTHORIZATION_ERROR",
+      "field": "productTelemetryPlatformDashboard",
+      "gaps": [
+        "action: a cross-organization platform dashboard that no catalog action covers (superuser only today); the catalog is closed and gains no action in this change"
+      ],
+      "resolver": "queryResolver.ProductTelemetryPlatformDashboard in internal/queryapi/graph/schema.resolvers.go",
+      "resource_resolver": "none: platform field; no organization is selected and the caller's organization is not read (producttelemetry.RequirePlatformAdmin)",
+      "type": "Query"
+    },
+    {
+      "action": "analytics.read",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "field": "home",
+      "gaps": [],
+      "resolver": "queryResolver.Home in internal/queryapi/graph/schema.resolvers.go",
+      "resource_resolver": "organization_from_argument: the orgId argument, refused by OperationOrgGuard (internal/queryapi/graph/operation_org_guard.go) unless it equals the credential's organization; a verified non-impersonating superuser may name another organization",
+      "type": "Query"
+    },
+    {
+      "action": "work_items.read",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "field": "workGraphEdges",
+      "gaps": [],
+      "resolver": "queryResolver.WorkGraphEdges in internal/queryapi/graph/schema.resolvers.go",
+      "resource_resolver": "organization_from_argument: the orgId argument, refused by OperationOrgGuard (internal/queryapi/graph/operation_org_guard.go) unless it equals the credential's organization; a verified non-impersonating superuser may name another organization",
+      "type": "Query"
+    },
+    {
+      "action": "git.read",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "field": "pr",
+      "gaps": [],
+      "resolver": "queryResolver.Pr in internal/queryapi/graph/schema.resolvers.go",
+      "resource_resolver": "organization_from_argument: the orgId argument, refused by OperationOrgGuard (internal/queryapi/graph/operation_org_guard.go) unless it equals the credential's organization; a verified non-impersonating superuser may name another organization",
+      "type": "Query"
+    },
+    {
+      "action": "work_items.read",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "field": "workGraphFlow",
+      "gaps": [],
+      "resolver": "queryResolver.WorkGraphFlow in internal/queryapi/graph/schema.resolvers.go",
+      "resource_resolver": "organization_from_argument: the orgId argument, refused by OperationOrgGuard (internal/queryapi/graph/operation_org_guard.go) unless it equals the credential's organization; a verified non-impersonating superuser may name another organization",
+      "type": "Query"
+    },
+    {
+      "action": "work_items.read",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "field": "workGraphArtifacts",
+      "gaps": [],
+      "resolver": "queryResolver.WorkGraphArtifacts in internal/queryapi/graph/schema.resolvers.go",
+      "resource_resolver": "organization_from_argument: the orgId argument, refused by OperationOrgGuard (internal/queryapi/graph/operation_org_guard.go) unless it equals the credential's organization; a verified non-impersonating superuser may name another organization",
+      "type": "Query"
+    },
+    {
+      "action": "integrations.read",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "field": "featureFlags",
+      "gaps": [],
+      "resolver": "queryResolver.FeatureFlags in internal/queryapi/graph/schema.resolvers.go",
+      "resource_resolver": "organization_from_argument: the orgId argument, refused by OperationOrgGuard (internal/queryapi/graph/operation_org_guard.go) unless it equals the credential's organization; a verified non-impersonating superuser may name another organization",
+      "type": "Query"
+    },
+    {
+      "action": "integrations.read",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "field": "featureFlagEvents",
+      "gaps": [],
+      "resolver": "queryResolver.FeatureFlagEvents in internal/queryapi/graph/schema.resolvers.go",
+      "resource_resolver": "organization_from_argument: the orgId argument, refused by OperationOrgGuard (internal/queryapi/graph/operation_org_guard.go) unless it equals the credential's organization; a verified non-impersonating superuser may name another organization",
+      "type": "Query"
+    },
+    {
+      "action": "teams.read",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "field": "workItemTeamAttributions",
+      "gaps": [],
+      "resolver": "queryResolver.WorkItemTeamAttributions in internal/queryapi/graph/schema.resolvers.go",
+      "resource_resolver": "organization_from_argument: the orgId argument, refused by OperationOrgGuard (internal/queryapi/graph/operation_org_guard.go) unless it equals the credential's organization; a verified non-impersonating superuser may name another organization",
+      "type": "Query"
+    },
+    {
+      "action": "teams.read",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "field": "workUnitTeamAttributions",
+      "gaps": [],
+      "resolver": "queryResolver.WorkUnitTeamAttributions in internal/queryapi/graph/schema.resolvers.go",
+      "resource_resolver": "organization_from_argument: the orgId argument, refused by OperationOrgGuard (internal/queryapi/graph/operation_org_guard.go) unless it equals the credential's organization; a verified non-impersonating superuser may name another organization",
+      "type": "Query"
+    },
+    {
+      "action": "git.read",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "field": "securityAlerts",
+      "gaps": [],
+      "resolver": "queryResolver.SecurityAlerts in internal/queryapi/graph/schema.resolvers.go",
+      "resource_resolver": "organization_from_argument: the orgId argument, refused by OperationOrgGuard (internal/queryapi/graph/operation_org_guard.go) unless it equals the credential's organization; a verified non-impersonating superuser may name another organization",
+      "type": "Query"
+    },
+    {
+      "action": "git.read",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "field": "securityOverview",
+      "gaps": [],
+      "resolver": "queryResolver.SecurityOverview in internal/queryapi/graph/schema.resolvers.go",
+      "resource_resolver": "organization_from_argument: the orgId argument, refused by OperationOrgGuard (internal/queryapi/graph/operation_org_guard.go) unless it equals the credential's organization; a verified non-impersonating superuser may name another organization",
+      "type": "Query"
+    },
+    {
+      "action": "analytics.read",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "field": "savedReports",
+      "gaps": [],
+      "resolver": "queryResolver.SavedReports in internal/queryapi/graph/schema.resolvers.go",
+      "resource_resolver": "organization_from_argument: the orgId argument, refused by OperationOrgGuard (internal/queryapi/graph/operation_org_guard.go) unless it equals the credential's organization; a verified non-impersonating superuser may name another organization",
+      "type": "Query"
+    },
+    {
+      "action": "analytics.read",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "field": "savedReport",
+      "gaps": [],
+      "resolver": "queryResolver.SavedReport in internal/queryapi/graph/schema.resolvers.go",
+      "resource_resolver": "organization_from_argument: the orgId argument, refused by OperationOrgGuard (internal/queryapi/graph/operation_org_guard.go) unless it equals the credential's organization; a verified non-impersonating superuser may name another organization",
+      "type": "Query"
+    },
+    {
+      "action": "analytics.read",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "field": "reportRuns",
+      "gaps": [],
+      "resolver": "queryResolver.ReportRuns in internal/queryapi/graph/schema.resolvers.go",
+      "resource_resolver": "organization_from_argument: the orgId argument, refused by OperationOrgGuard (internal/queryapi/graph/operation_org_guard.go) unless it equals the credential's organization; a verified non-impersonating superuser may name another organization",
+      "type": "Query"
+    },
+    {
+      "action": "metrics.read",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "field": "capacityForecast",
+      "gaps": [],
+      "resolver": "queryResolver.CapacityForecast in internal/queryapi/graph/schema.resolvers.go",
+      "resource_resolver": "organization_from_argument: the orgId argument, refused by OperationOrgGuard (internal/queryapi/graph/operation_org_guard.go) unless it equals the credential's organization; a verified non-impersonating superuser may name another organization",
+      "type": "Query"
+    },
+    {
+      "action": "metrics.read",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "field": "capacityForecasts",
+      "gaps": [],
+      "resolver": "queryResolver.CapacityForecasts in internal/queryapi/graph/schema.resolvers.go",
+      "resource_resolver": "organization_from_argument: the orgId argument, refused by OperationOrgGuard (internal/queryapi/graph/operation_org_guard.go) unless it equals the credential's organization; a verified non-impersonating superuser may name another organization",
+      "type": "Query"
+    },
+    {
+      "action": "metrics.read",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "field": "throughputForecast",
+      "gaps": [],
+      "resolver": "queryResolver.ThroughputForecast in internal/queryapi/graph/schema.resolvers.go",
+      "resource_resolver": "organization_from_argument: the orgId argument, refused by OperationOrgGuard (internal/queryapi/graph/operation_org_guard.go) unless it equals the credential's organization; a verified non-impersonating superuser may name another organization",
+      "type": "Query"
+    },
+    {
+      "action": "metrics.read",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "field": "operatingReview",
+      "gaps": [],
+      "resolver": "queryResolver.OperatingReview in internal/queryapi/graph/schema.resolvers.go",
+      "resource_resolver": "organization_from_argument: the orgId argument, refused by OperationOrgGuard (internal/queryapi/graph/operation_org_guard.go) unless it equals the credential's organization; a verified non-impersonating superuser may name another organization",
+      "type": "Query"
+    },
+    {
+      "action": null,
+      "disclosure_behavior": "behaviour today: only a superuser or a caller with the admin, owner or operator role passes, any other caller answers AUTHORIZATION_ERROR (datahealth.RequireOperator)",
+      "field": "dataHealth",
+      "gaps": [
+        "action: an operator-only data-health read that no catalog action covers (superuser or admin, owner or operator role today); the catalog is closed and gains no action in this change"
+      ],
+      "resolver": "queryResolver.DataHealth in internal/queryapi/graph/schema.resolvers.go",
+      "resource_resolver": "organization_from_credential: the credential's organization (claims.OrgID); the field takes no orgId argument, any organization id inside an input object is not read by OperationOrgGuard",
+      "type": "Query"
+    },
+    {
+      "action": "integrations.read",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "field": "sourceHealth",
+      "gaps": [],
+      "resolver": "queryResolver.SourceHealth in internal/queryapi/graph/schema.resolvers.go",
+      "resource_resolver": "organization_from_argument: the orgId argument, refused by OperationOrgGuard (internal/queryapi/graph/operation_org_guard.go) unless it equals the credential's organization; a verified non-impersonating superuser may name another organization",
+      "type": "Query"
+    },
+    {
+      "action": "git.read",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "field": "busFactor",
+      "gaps": [],
+      "resolver": "queryResolver.BusFactor in internal/queryapi/graph/schema.resolvers.go",
+      "resource_resolver": "organization_from_argument: the orgId argument, refused by OperationOrgGuard (internal/queryapi/graph/operation_org_guard.go) unless it equals the credential's organization; a verified non-impersonating superuser may name another organization",
+      "type": "Query"
+    },
+    {
+      "action": "metrics.read",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "field": "compoundingRisk",
+      "gaps": [],
+      "resolver": "queryResolver.CompoundingRisk in internal/queryapi/graph/schema.resolvers.go",
+      "resource_resolver": "organization_from_argument: the orgId argument, refused by OperationOrgGuard (internal/queryapi/graph/operation_org_guard.go) unless it equals the credential's organization; a verified non-impersonating superuser may name another organization",
+      "type": "Query"
+    },
+    {
+      "action": "metrics.read",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "field": "testopsRisk",
+      "gaps": [],
+      "resolver": "queryResolver.TestopsRisk in internal/queryapi/graph/schema.resolvers.go",
+      "resource_resolver": "organization_from_argument: the orgId argument, refused by OperationOrgGuard (internal/queryapi/graph/operation_org_guard.go) unless it equals the credential's organization; a verified non-impersonating superuser may name another organization",
+      "type": "Query"
+    },
+    {
+      "action": "metrics.read",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "field": "testopsJobFailures",
+      "gaps": [],
+      "resolver": "queryResolver.TestopsJobFailures in internal/queryapi/graph/schema.resolvers.go",
+      "resource_resolver": "organization_from_argument: the orgId argument, refused by OperationOrgGuard (internal/queryapi/graph/operation_org_guard.go) unless it equals the credential's organization; a verified non-impersonating superuser may name another organization",
+      "type": "Query"
+    },
+    {
+      "action": "metrics.read",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "field": "coverageBaselines",
+      "gaps": [],
+      "resolver": "queryResolver.CoverageBaselines in internal/queryapi/graph/schema.resolvers.go",
+      "resource_resolver": "organization_from_argument: the orgId argument, refused by OperationOrgGuard (internal/queryapi/graph/operation_org_guard.go) unless it equals the credential's organization; a verified non-impersonating superuser may name another organization",
+      "type": "Query"
+    },
+    {
+      "action": "metrics.read",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "field": "coverageScopeBaseline",
+      "gaps": [],
+      "resolver": "queryResolver.CoverageScopeBaseline in internal/queryapi/graph/schema.resolvers.go",
+      "resource_resolver": "organization_from_argument: the orgId argument, refused by OperationOrgGuard (internal/queryapi/graph/operation_org_guard.go) unless it equals the credential's organization; a verified non-impersonating superuser may name another organization",
+      "type": "Query"
+    },
+    {
+      "action": "git.read",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "field": "complexityTimeseries",
+      "gaps": [],
+      "resolver": "queryResolver.ComplexityTimeseries in internal/queryapi/graph/schema.resolvers.go",
+      "resource_resolver": "organization_from_credential: the credential's organization (claims.OrgID); the field takes no orgId argument, any organization id inside an input object is not read by OperationOrgGuard",
+      "type": "Query"
+    },
+    {
+      "action": "git.read",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "field": "hotspots",
+      "gaps": [],
+      "resolver": "queryResolver.Hotspots in internal/queryapi/graph/schema.resolvers.go",
+      "resource_resolver": "organization_from_credential: the credential's organization (claims.OrgID); the field takes no orgId argument, any organization id inside an input object is not read by OperationOrgGuard",
+      "type": "Query"
+    },
+    {
+      "action": "metrics.read",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "field": "cognitiveLoad",
+      "gaps": [],
+      "resolver": "queryResolver.CognitiveLoad in internal/queryapi/graph/schema.resolvers.go",
+      "resource_resolver": "organization_from_credential: the credential's organization (claims.OrgID); the field takes no orgId argument, any organization id inside an input object is not read by OperationOrgGuard",
+      "type": "Query"
+    },
+    {
+      "action": "git.read",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "field": "reviewEdges",
+      "gaps": [],
+      "resolver": "queryResolver.ReviewEdges in internal/queryapi/graph/schema.resolvers.go",
+      "resource_resolver": "organization_from_credential: the credential's organization (claims.OrgID); the field takes no orgId argument, any organization id inside an input object is not read by OperationOrgGuard",
+      "type": "Query"
+    },
+    {
+      "action": "analytics.read",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "field": "recommendations",
+      "gaps": [],
+      "resolver": "queryResolver.Recommendations in internal/queryapi/graph/schema.resolvers.go",
+      "resource_resolver": "organization_from_argument: the orgId argument, refused by OperationOrgGuard (internal/queryapi/graph/operation_org_guard.go) unless it equals the credential's organization; a verified non-impersonating superuser may name another organization",
+      "type": "Query"
+    },
+    {
+      "action": "analytics.read",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "field": "experiments",
+      "gaps": [],
+      "resolver": "queryResolver.Experiments in internal/queryapi/graph/schema.resolvers.go",
+      "resource_resolver": "organization_from_argument: the orgId argument, refused by OperationOrgGuard (internal/queryapi/graph/operation_org_guard.go) unless it equals the credential's organization; a verified non-impersonating superuser may name another organization",
+      "type": "Query"
+    },
+    {
+      "action": "analytics.read",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "field": "aiImpactSummary",
+      "gaps": [],
+      "resolver": "queryResolver.AiImpactSummary in internal/queryapi/graph/schema.resolvers.go",
+      "resource_resolver": "organization_from_argument: the orgId argument, refused by OperationOrgGuard (internal/queryapi/graph/operation_org_guard.go) unless it equals the credential's organization; a verified non-impersonating superuser may name another organization",
+      "type": "Query"
+    },
+    {
+      "action": "analytics.read",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "field": "aiComparison",
+      "gaps": [],
+      "resolver": "queryResolver.AiComparison in internal/queryapi/graph/schema.resolvers.go",
+      "resource_resolver": "organization_from_argument: the orgId argument, refused by OperationOrgGuard (internal/queryapi/graph/operation_org_guard.go) unless it equals the credential's organization; a verified non-impersonating superuser may name another organization",
+      "type": "Query"
+    },
+    {
+      "action": "analytics.read",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "field": "aiReviewLoad",
+      "gaps": [],
+      "resolver": "queryResolver.AiReviewLoad in internal/queryapi/graph/schema.resolvers.go",
+      "resource_resolver": "organization_from_argument: the orgId argument, refused by OperationOrgGuard (internal/queryapi/graph/operation_org_guard.go) unless it equals the credential's organization; a verified non-impersonating superuser may name another organization",
+      "type": "Query"
+    },
+    {
+      "action": "analytics.read",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "field": "aiRiskBreakdown",
+      "gaps": [],
+      "resolver": "queryResolver.AiRiskBreakdown in internal/queryapi/graph/schema.resolvers.go",
+      "resource_resolver": "organization_from_argument: the orgId argument, refused by OperationOrgGuard (internal/queryapi/graph/operation_org_guard.go) unless it equals the credential's organization; a verified non-impersonating superuser may name another organization",
+      "type": "Query"
+    },
+    {
+      "action": "analytics.read",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "field": "aiOpportunities",
+      "gaps": [],
+      "resolver": "queryResolver.AiOpportunities in internal/queryapi/graph/schema.resolvers.go",
+      "resource_resolver": "organization_from_argument: the orgId argument, refused by OperationOrgGuard (internal/queryapi/graph/operation_org_guard.go) unless it equals the credential's organization; a verified non-impersonating superuser may name another organization",
+      "type": "Query"
+    },
+    {
+      "action": "analytics.read",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "field": "improveOpportunities",
+      "gaps": [],
+      "resolver": "queryResolver.ImproveOpportunities in internal/queryapi/graph/schema.resolvers.go",
+      "resource_resolver": "organization_from_credential: the credential's organization (claims.OrgID); the field takes no orgId argument, any organization id inside an input object is not read by OperationOrgGuard",
+      "type": "Query"
+    },
+    {
+      "action": "analytics.read",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "field": "aiGovernanceSummary",
+      "gaps": [],
+      "resolver": "queryResolver.AiGovernanceSummary in internal/queryapi/graph/schema.resolvers.go",
+      "resource_resolver": "organization_from_argument: the orgId argument, refused by OperationOrgGuard (internal/queryapi/graph/operation_org_guard.go) unless it equals the credential's organization; a verified non-impersonating superuser may name another organization",
+      "type": "Query"
+    },
+    {
+      "action": "analytics.read",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "field": "aiWorkflowDrilldown",
+      "gaps": [],
+      "resolver": "queryResolver.AiWorkflowDrilldown in internal/queryapi/graph/schema.resolvers.go",
+      "resource_resolver": "organization_from_argument: the orgId argument, refused by OperationOrgGuard (internal/queryapi/graph/operation_org_guard.go) unless it equals the credential's organization; a verified non-impersonating superuser may name another organization",
+      "type": "Query"
+    },
+    {
+      "action": "analytics.read",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "field": "aiAttributedPrs",
+      "gaps": [],
+      "resolver": "queryResolver.AiAttributedPrs in internal/queryapi/graph/schema.resolvers.go",
+      "resource_resolver": "organization_from_argument: the orgId argument, refused by OperationOrgGuard (internal/queryapi/graph/operation_org_guard.go) unless it equals the credential's organization; a verified non-impersonating superuser may name another organization",
+      "type": "Query"
+    },
+    {
+      "action": "analytics.read",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "field": "aiAttributionOverview",
+      "gaps": [],
+      "resolver": "queryResolver.AiAttributionOverview in internal/queryapi/graph/schema.resolvers.go",
+      "resource_resolver": "organization_from_argument: the orgId argument, refused by OperationOrgGuard (internal/queryapi/graph/operation_org_guard.go) unless it equals the credential's organization; a verified non-impersonating superuser may name another organization",
+      "type": "Query"
+    },
+    {
+      "action": null,
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "field": "createSavedReport",
+      "gaps": [
+        "action: a saved-report write that no catalog action covers; the catalog is closed and gains no action in this change"
+      ],
+      "resolver": "mutationResolver.CreateSavedReport in internal/queryapi/graph/schema.resolvers.go",
+      "resource_resolver": "organization_from_argument: the orgId argument, refused by OperationOrgGuard (internal/queryapi/graph/operation_org_guard.go) unless it equals the credential's organization; a verified non-impersonating superuser may name another organization",
+      "type": "Mutation"
+    },
+    {
+      "action": null,
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "field": "updateSavedReport",
+      "gaps": [
+        "action: a saved-report write that no catalog action covers; the catalog is closed and gains no action in this change"
+      ],
+      "resolver": "mutationResolver.UpdateSavedReport in internal/queryapi/graph/schema.resolvers.go",
+      "resource_resolver": "organization_from_argument: the orgId argument, refused by OperationOrgGuard (internal/queryapi/graph/operation_org_guard.go) unless it equals the credential's organization; a verified non-impersonating superuser may name another organization",
+      "type": "Mutation"
+    },
+    {
+      "action": null,
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "field": "deleteSavedReport",
+      "gaps": [
+        "action: a saved-report delete that no catalog action covers; the catalog is closed and gains no action in this change"
+      ],
+      "resolver": "mutationResolver.DeleteSavedReport in internal/queryapi/graph/schema.resolvers.go",
+      "resource_resolver": "organization_from_argument: the orgId argument, refused by OperationOrgGuard (internal/queryapi/graph/operation_org_guard.go) unless it equals the credential's organization; a verified non-impersonating superuser may name another organization",
+      "type": "Mutation"
+    },
+    {
+      "action": null,
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "field": "cloneSavedReport",
+      "gaps": [
+        "action: a saved-report write that no catalog action covers; the catalog is closed and gains no action in this change"
+      ],
+      "resolver": "mutationResolver.CloneSavedReport in internal/queryapi/graph/schema.resolvers.go",
+      "resource_resolver": "organization_from_argument: the orgId argument, refused by OperationOrgGuard (internal/queryapi/graph/operation_org_guard.go) unless it equals the credential's organization; a verified non-impersonating superuser may name another organization",
+      "type": "Mutation"
+    },
+    {
+      "action": null,
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "field": "triggerReport",
+      "gaps": [
+        "action: a report-run trigger that no catalog action covers; the catalog is closed and gains no action in this change"
+      ],
+      "resolver": "mutationResolver.TriggerReport in internal/queryapi/graph/schema.resolvers.go",
+      "resource_resolver": "organization_from_argument: the orgId argument, refused by OperationOrgGuard (internal/queryapi/graph/operation_org_guard.go) unless it equals the credential's organization; a verified non-impersonating superuser may name another organization",
+      "type": "Mutation"
+    }
+  ],
+  "schema_version": "graphql-field-actions.v1"
+}

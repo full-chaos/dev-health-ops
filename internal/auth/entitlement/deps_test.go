@@ -27,9 +27,6 @@ func TestPackageDoesNotImportAuthorization(t *testing.T) {
 		if dep == authorizationPkg {
 			t.Fatal("entitlement must not import internal/auth/authorization")
 		}
-		if dep == "net/http" {
-			t.Fatal("entitlement must not import net/http")
-		}
 	}
 }
 

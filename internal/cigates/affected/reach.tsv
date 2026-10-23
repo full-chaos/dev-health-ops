@@ -61,6 +61,7 @@ internal/auth/contracts	contracts.go	internal/api/billing
 internal/auth/contracts	contracts.go	internal/api/externalingest
 internal/auth/contracts	contracts.go	internal/api/legacyingest
 internal/auth/contracts	contracts.go	internal/api/webhookintake
+internal/auth/contracts	contracts.go	internal/apiservice
 internal/auth/contracts	contracts.go	internal/apiservice/acr
 internal/auth/contracts	contracts.go	internal/audit
 internal/auth/contracts	contracts.go	internal/auth/authapi
@@ -89,6 +90,7 @@ internal/auth/contracts/tokencorpus	corpus.go	internal/api/billing
 internal/auth/contracts/tokencorpus	corpus.go	internal/api/externalingest
 internal/auth/contracts/tokencorpus	corpus.go	internal/api/legacyingest
 internal/auth/contracts/tokencorpus	corpus.go	internal/api/webhookintake
+internal/auth/contracts/tokencorpus	corpus.go	internal/apiservice
 internal/auth/contracts/tokencorpus	corpus.go	internal/apiservice/acr
 internal/auth/contracts/tokencorpus	corpus.go	internal/auth/authapi
 internal/auth/contracts/tokencorpus	corpus.go	internal/auth/contracts/tokencorpus

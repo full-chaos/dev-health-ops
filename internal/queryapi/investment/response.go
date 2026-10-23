@@ -59,6 +59,9 @@ type EvidenceQualityStats struct {
 	Total          int                    `json:"total"`
 	BandCounts     pyjson.OrderedMap[int] `json:"band_counts"`
 	QualityDrivers []string               `json:"quality_drivers"`
+	// UncategorizedCount is Go-only (CHAOS-10351): the units of the window under the evidence gate (too little
+	// text), which the theme mix leaves out; Total still counts them. Left out when the window has no unit.
+	UncategorizedCount *int `json:"uncategorized_count,omitempty"`
 }
 
 // SunburstSlice is the wire shape of InvestmentSunburstSlice
@@ -507,9 +510,16 @@ func computeQualityStats(row QualityStatsRow, found bool) EvidenceQualityStats {
 		drivers = append(drivers, "thin_component")
 	}
 
+	var uncategorized *int
+	if row.Total > 0 {
+		count := row.UncategorizedCount
+		uncategorized = &count
+	}
+
 	return EvidenceQualityStats{
 		Mean: mean, Stddev: stddev, Total: row.Total,
 		BandCounts: bandCounts, QualityDrivers: drivers,
+		UncategorizedCount: uncategorized,
 	}
 }
 

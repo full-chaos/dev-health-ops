@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -14,6 +15,8 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/policy"
+	"github.com/full-chaos/dev-health-ops/internal/apiservice"
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/clientaddr"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
@@ -90,20 +93,41 @@ func newRecording() *recordingStore {
 	return &recordingStore{CounterStore: httpapi.NewMemoryCounters(time.Now)}
 }
 
-func assertRateLimited(t *testing.T, name string, response *httptest.ResponseRecorder) {
+func noLeak(t *testing.T, name, body string) {
 	t.Helper()
-	if response.Code != http.StatusTooManyRequests {
-		t.Fatalf("%s = %d, want 429: %s", name, response.Code, response.Body)
-	}
-	body := response.Body.String()
-	if !strings.Contains(body, `"rate_limited"`) {
-		t.Fatalf("%s 429 is not the rate_limited envelope: %s", name, body)
-	}
 	for _, leak := range []string{"auth_svc", "per hour", "per 15", "sentinel", "@", "203.0.113", "10.0.0"} {
 		if strings.Contains(body, leak) {
 			t.Fatalf("%s 429 names %q: %s", name, leak, body)
 		}
 	}
+}
+
+// assertRateLimited is a refusal of a route go-api also serves: go-api's own
+// bytes, no Retry-After.
+func assertRateLimited(t *testing.T, name string, response *httptest.ResponseRecorder) {
+	t.Helper()
+	if response.Code != http.StatusTooManyRequests {
+		t.Fatalf("%s = %d, want 429: %s", name, response.Code, response.Body)
+	}
+	if got := response.Body.String(); got != `{"detail":{"message":"Rate limit exceeded. Please try again later."}}` {
+		t.Fatalf("%s 429 body is not go-api's: %s", name, got)
+	}
+	if response.Header().Get("Retry-After") != "" {
+		t.Fatalf("%s 429 carries Retry-After", name)
+	}
+	noLeak(t, name, response.Body.String())
+}
+
+// assertRateLimitedV1 is a refusal of a /v1 route: the service's own envelope.
+func assertRateLimitedV1(t *testing.T, name string, response *httptest.ResponseRecorder) {
+	t.Helper()
+	if response.Code != http.StatusTooManyRequests {
+		t.Fatalf("%s = %d, want 429: %s", name, response.Code, response.Body)
+	}
+	if !strings.Contains(response.Body.String(), `"rate_limited"`) {
+		t.Fatalf("%s 429 is not the rate_limited envelope: %s", name, response.Body)
+	}
+	noLeak(t, name, response.Body.String())
 }
 
 func TestTheLimitTableIsPinned(t *testing.T) {
@@ -273,8 +297,8 @@ func TestSocialLinkAndUnlinkShareOneBudgetPerAddressAndPrincipal(t *testing.T) {
 			t.Fatalf("request %d was limited early", i+1)
 		}
 	}
-	assertRateLimited(t, "11th link call", send(h, clientPeer, "", http.MethodPost, PatternSocialLink, linkBody, header))
-	assertRateLimited(t, "11th call on a fresh unlink id", send(h, clientPeer, "", http.MethodDelete, "/v1/identities/social/"+uuid.NewString(), "", header))
+	assertRateLimitedV1(t, "11th link call", send(h, clientPeer, "", http.MethodPost, PatternSocialLink, linkBody, header))
+	assertRateLimitedV1(t, "11th call on a fresh unlink id", send(h, clientPeer, "", http.MethodDelete, "/v1/identities/social/"+uuid.NewString(), "", header))
 	if r := send(h, "198.51.100.7:5000", "", http.MethodPost, PatternSocialLink, linkBody, header); r.Code == http.StatusTooManyRequests {
 		t.Fatal("another address was limited by the first one's budget")
 	}
@@ -501,5 +525,50 @@ func TestEverySpellingOfOneMailboxSharesOneBucket(t *testing.T) {
 	}
 	for i, email := range spellings[3:] {
 		assertRateLimited(t, "spelling "+string(rune('4'+i)), send(h, clientPeer, "", http.MethodPost, PatternForgotPassword, `{"email":"`+email+`"}`, nil))
+	}
+}
+
+// A route go-api also serves answers go-api's refusal byte for byte and header
+// for header (apiservice.WriteError, the writer the api mounts); a /v1 route
+// answers the service's own envelope.
+func TestRefusalsMatchGoAPIOnTheSharedRoutes(t *testing.T) {
+	for _, code := range []httpapi.Code{httpapi.CodeRateLimited, httpapi.CodeInternal} {
+		want := httptest.NewRecorder()
+		apiservice.WriteError(want, httptest.NewRequest(http.MethodPost, PatternCompatLogin, nil), code)
+		got := httptest.NewRecorder()
+		goAPIRefusal(got, httptest.NewRequest(http.MethodPost, PatternCompatLogin, nil), code)
+		if got.Code != want.Code || got.Body.String() != want.Body.String() {
+			t.Errorf("%s: status %d body %q, go-api answers %d %q", code, got.Code, got.Body, want.Code, want.Body)
+		}
+		if !reflect.DeepEqual(got.Header(), want.Header()) {
+			t.Errorf("%s: headers %v, go-api sends %v", code, got.Header(), want.Header())
+		}
+	}
+}
+
+// Every shared route answers its refusal in go-api's shape, through the real
+// handler: login, resend, forgot, reset, change-password and verify.
+func TestEverySharedRouteRefusesInGoAPIShape(t *testing.T) {
+	compat := newCompatFixture(t)
+	compat.counters = failingStore{}
+	compat.buildCompat()
+	cred := newCredFixtureWith(t, failingStore{})
+	for name, response := range map[string]*httptest.ResponseRecorder{
+		"login":  compat.do(http.MethodPost, PatternCompatLogin, loginBody(compatEmail, "wrong password", ""), nil),
+		"verify": cred.call(http.MethodGet, PatternVerifyEmail+"?token=x", "", nil),
+		"resend": cred.call(http.MethodPost, PatternResendVerification, `{"email":"a@example.com"}`, nil),
+		"forgot": cred.call(http.MethodPost, PatternForgotPassword, `{"email":"a@example.com"}`, nil),
+		"reset":  cred.call(http.MethodPost, PatternResetPassword, `{"token":"x","new_password":"another-password-1"}`, nil),
+		"change": cred.call(http.MethodPost, PatternChangePassword, `{"current_password":"a-password-1","new_password":"Brand-new-pass-77!"}`, cred.bearer(cred.grant())),
+	} {
+		if response.Code != http.StatusInternalServerError || response.Body.String() != `{"detail":"Internal Server Error"}` ||
+			response.Header().Get(policy.UnhandledErrorHeader) != "1" || response.Header().Get("Content-Type") != "application/json" {
+			t.Errorf("%s with the store down: %d %q %v", name, response.Code, response.Body, response.Header())
+		}
+	}
+	link, _ := linkFixtureWith(t, failingStore{})
+	response := link.do(http.MethodPost, PatternSocialLink, linkBody, link.bearer(link.grant()))
+	if response.Code != http.StatusInternalServerError || !strings.Contains(response.Body.String(), `"internal_error"`) {
+		t.Errorf("link with the store down answers %d %q, want the service envelope", response.Code, response.Body)
 	}
 }

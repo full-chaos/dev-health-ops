@@ -105,7 +105,7 @@ func (h compatHandlers) compatLogin(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !admit(w, r, PatternCompatLogin,
+	if !admit(w, r, goAPIRefusal, PatternCompatLogin,
 		charge{h.loginIP, clientKey(r)},
 		charge{h.loginAccount, h.Limits.accountKey(r, input.email)}) {
 		return

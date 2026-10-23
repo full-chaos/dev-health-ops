@@ -124,7 +124,7 @@ func CredentialRoutes(deps CredentialDeps) ([]httpapi.Route, error) {
 		flows:    deps.Flows,
 		limits:   deps.Limits,
 	}
-	write := func(w http.ResponseWriter, r *http.Request, code httpapi.Code) { httpapi.WriteError(w, r, code) }
+	write := goAPIRefusal
 	limited := func(validate httpapi.RequestValidator, limit httpapi.Limit, key httpapi.KeyFunc, next http.HandlerFunc) http.Handler {
 		return httpapi.ValidateThenLimit(validate, deps.Limits.limiter(limit), key, write)(next)
 	}
@@ -280,7 +280,7 @@ func (h credentialHandlers) resetPassword(flows CredentialFlows) http.Handler {
 			writeValidation(w, errs)
 			return
 		}
-		if !admit(w, r, PatternResetPassword,
+		if !admit(w, r, goAPIRefusal, PatternResetPassword,
 			charge{h.resetIP, clientKey(r)},
 			charge{h.resetToken, h.limits.secretKey(r, token)}) {
 			return

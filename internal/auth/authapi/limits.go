@@ -8,10 +8,12 @@ import (
 	"io"
 	"net/http"
 	"net/netip"
+	"strconv"
 	"time"
 
 	"golang.org/x/crypto/hkdf"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/auth/clientaddr"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
@@ -110,19 +112,40 @@ type charge struct {
 // The refusal names no limit and no key. route is the fixed route name the
 // counter is scoped to, never the request path, so a path parameter cannot
 // multiply the budget.
-func admit(w http.ResponseWriter, r *http.Request, route string, charges ...charge) bool {
+func admit(w http.ResponseWriter, r *http.Request, write httpapi.ErrorWriter, route string, charges ...charge) bool {
 	for _, c := range charges {
 		allowed, err := c.limiter.AllowCounted(r.Context(), c.key, route)
 		if err != nil {
-			httpapi.WriteError(w, r, httpapi.CodeInternal)
+			write(w, r, httpapi.CodeInternal)
 			return false
 		}
 		if !allowed {
-			httpapi.WriteError(w, r, httpapi.CodeRateLimited)
+			write(w, r, httpapi.CodeRateLimited)
 			return false
 		}
 	}
 	return true
+}
+
+// goAPIRefusal is the refusal of a route go-api also serves (/api/v1/auth/*):
+// go-api's own bytes, apiservice.WriteError's, so a client cannot tell which
+// plane answered. A rate limit is 429 {"detail":{"message":"Rate limit
+// exceeded. Please try again later."}} with no Retry-After; a store error is
+// the unhandled-error 500 {"detail":"Internal Server Error"} carrying the
+// unhandled-error marker. The /v1 routes answer the service's own envelope
+// (httpapi.WriteError) instead.
+func goAPIRefusal(w http.ResponseWriter, _ *http.Request, code httpapi.Code) {
+	status, body := http.StatusInternalServerError, `{"detail":"Internal Server Error"}`
+	if code == httpapi.CodeRateLimited {
+		status, body = http.StatusTooManyRequests, `{"detail":{"message":"Rate limit exceeded. Please try again later."}}`
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+	if status == http.StatusInternalServerError {
+		w.Header().Set(policy.UnhandledErrorHeader, "1")
+	}
+	w.WriteHeader(status)
+	_, _ = io.WriteString(w, body)
 }
 
 // clientKey is the caller address the limits key on (clientaddr resolves it:

@@ -97,7 +97,7 @@ func (h socialLinkHandlers) serve(w http.ResponseWriter, r *http.Request, operat
 	// The count comes after the body or the id validated: a refused request
 	// costs nothing, as on the login and credential routes.
 	admitted := func(w http.ResponseWriter, r *http.Request) bool {
-		return admit(w, r, socialLinkRoute, charge{h.limiter, h.limits.principalKey(r, bearer.PrincipalID.String())})
+		return admit(w, r, httpapi.WriteError, socialLinkRoute, charge{h.limiter, h.limits.principalKey(r, bearer.PrincipalID.String())})
 	}
 	run(social.Handlers{Service: h.social, Auth: signedInBearer{who: who}, Admit: admitted})
 }

@@ -1,7 +1,9 @@
 package webhookintake
 
 import (
+	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
@@ -88,69 +90,87 @@ const (
 	throttleExact    = "path_bucket"
 )
 
-// admit counts the request in the client bucket, the route-template bucket
-// and, for PagerDuty, the exact-path bucket, in that order, before any binding
-// or body read. A refusal is one 429 for every id. A store that cannot answer
-// refuses a PagerDuty delivery with the unhandled-error 500 (never a request
-// let through) and lets a GitHub, GitLab or Jira delivery through with a
-// warning: those are verified by their own signature or token afterwards.
-func (d Deps) admit(w http.ResponseWriter, r *http.Request, provider string) bool {
-	if d.limiters == nil {
-		return true
+// Gate counts intake deliveries before any other work on them. It runs ahead
+// of the api's scope middlewares, so every shape of path an intake route
+// answers is counted exactly once.
+type Gate struct {
+	limiters *rateLimiters
+	logger   *slog.Logger
+}
+
+// NewGate counts in store; nil means an in-process store on now.
+func NewGate(store httpapi.CounterStore, now func() time.Time, logger *slog.Logger) *Gate {
+	if logger == nil {
+		logger = slog.Default()
 	}
+	return &Gate{limiters: newRateLimiters(store, now), logger: logger}
+}
+
+// Provider names the intake route a request is for, from its method and
+// escaped path: the three fixed routes, and the PagerDuty route with exactly
+// one segment after its prefix, whatever that segment holds.
+func Provider(method, escapedPath string) (string, bool) {
+	if method != http.MethodPost {
+		return "", false
+	}
+	for provider, template := range routeTemplates {
+		if provider != providerPagerDuty && escapedPath == template {
+			return provider, true
+		}
+	}
+	if id, ok := strings.CutPrefix(escapedPath, routePrefix+"/pagerduty/"); ok && id != "" && !strings.Contains(id, "/") {
+		return providerPagerDuty, true
+	}
+	return "", false
+}
+
+// Admit counts the request in the client bucket, the route-template bucket
+// and, for PagerDuty, the exact-path bucket, in that order. It returns nil
+// when the request may go on, else the refusal to write: one 429 for every id.
+// A store that cannot answer refuses a PagerDuty delivery with the
+// unhandled-error 500 (never a request let through) and lets a GitHub, GitLab
+// or Jira delivery through with a warning: those are verified by their own
+// signature or token afterwards.
+func (g *Gate) Admit(r *http.Request, provider string) func(http.ResponseWriter) {
 	failClosed := provider == providerPagerDuty
 	client := ratelimit.ForwardedIP(r)
-	template := d.limiters.providerRoute
+	template := g.limiters.providerRoute
 	if failClosed {
-		template = d.limiters.pagerdutyTemplate
+		template = g.limiters.pagerdutyTemplate
 	}
-	steps := []struct {
-		limiter    *httpapi.KeyedLimiter
-		path       string
-		reason     string
-		failClosed bool
-	}{
-		{d.limiters.client, intakeClientBucket, throttleClient, failClosed},
-		{template, routeTemplates[provider], throttleTemplate, failClosed},
+	type step struct {
+		limiter *httpapi.KeyedLimiter
+		path    string
+		reason  string
+	}
+	steps := []step{
+		{g.limiters.client, intakeClientBucket, throttleClient},
+		{template, routeTemplates[provider], throttleTemplate},
 	}
 	if failClosed {
-		steps = append(steps, struct {
-			limiter    *httpapi.KeyedLimiter
-			path       string
-			reason     string
-			failClosed bool
-		}{d.limiters.pagerduty, r.URL.Path, throttleExact, true})
+		steps = append(steps, step{g.limiters.pagerduty, r.URL.Path, throttleExact})
 	}
-	for _, step := range steps {
+	for _, s := range steps {
 		var allowed bool
 		var err error
-		if step.failClosed {
-			allowed, err = step.limiter.AllowCounted(r.Context(), client, step.path)
+		if failClosed {
+			allowed, err = s.limiter.AllowCounted(r.Context(), client, s.path)
 		} else {
-			allowed, err = step.limiter.Allow(r.Context(), client, step.path)
+			allowed, err = s.limiter.Allow(r.Context(), client, s.path)
 		}
 		if err != nil {
-			if step.failClosed {
-				policy.WriteInternal(w)
-				return false
+			if failClosed {
+				return policy.WriteInternal
 			}
-			d.logger().WarnContext(r.Context(), "webhook_intake.limiter_unavailable", "provider", provider, "reason", step.reason)
+			g.logger.WarnContext(r.Context(), "webhook_intake.limiter_unavailable", "provider", provider, "reason", s.reason)
 			continue
 		}
 		if !allowed {
-			d.logger().WarnContext(r.Context(), "webhook_intake.throttled", "provider", provider, "reason", step.reason)
-			policy.WriteDetail(w, http.StatusTooManyRequests, policy.ErrorDetail("Rate limit exceeded. Please try again later."), nil)
-			return false
+			g.logger.WarnContext(r.Context(), "webhook_intake.throttled", "provider", provider, "reason", s.reason)
+			return func(w http.ResponseWriter) {
+				policy.WriteDetail(w, http.StatusTooManyRequests, policy.ErrorDetail("Rate limit exceeded. Please try again later."), nil)
+			}
 		}
 	}
-	return true
-}
-
-// limited runs admit before handler.
-func (d Deps) limited(provider string, handler http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if d.admit(w, r, provider) {
-			handler(w, r)
-		}
-	}
+	return nil
 }

@@ -471,9 +471,6 @@ type pagerdutyHTTPError struct {
 // handlePagerDutyWebhook ports pagerduty.py's pagerduty_webhook end to end.
 func (d Deps) handlePagerDutyWebhook() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !d.admit(w, r, providerPagerDuty) {
-			return
-		}
 		subscriptionHeader := r.Header.Get("X-Webhook-Subscription")
 		refusal := ""
 		var binding pagerdutyBinding

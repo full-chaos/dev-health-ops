@@ -27,11 +27,36 @@ func withLimits(t *testing.T, client, route, providerRoute int) {
 	})
 }
 
+func newTestGate(deps Deps) *Gate {
+	return &Gate{limiters: newRateLimiters(deps.Counters, deps.Now), logger: deps.logger()}
+}
+
+// gateHandler is the api's intake gate around one handler, as the server
+// middleware runs it.
+func gateHandler(gate *Gate, provider string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if refuse := gate.Admit(r, provider); refuse != nil {
+			refuse(w)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 func intakeRoutes(t *testing.T, deps Deps) map[string]http.Handler {
 	t.Helper()
 	t.Setenv("TRUSTED_PROXIES", "")
+	gate := newTestGate(deps)
+	providers := map[string]string{}
+	for provider, template := range routeTemplates {
+		providers[template] = provider
+	}
 	out := map[string]http.Handler{}
 	for _, route := range Routes(deps) {
+		if provider, ok := providers[route.Pattern]; ok {
+			out[route.Pattern] = gateHandler(gate, provider, route.Handler)
+			continue
+		}
 		out[route.Pattern] = route.Handler
 	}
 	return out
@@ -131,8 +156,7 @@ func TestThrottledAnswerIsTheSameForKnownAndUnknownIdsAndReadsNothing(t *testing
 	withLimits(t, 100000, 2, 100000)
 	now := time.Now()
 	f.deps.Counters = httpapi.NewMemoryCounters(func() time.Time { return now })
-	f.deps.limiters = newRateLimiters(f.deps.Counters, nil)
-	handler := f.deps.handlePagerDutyWebhook()
+	handler := gateHandler(newTestGate(f.deps), providerPagerDuty, f.deps.handlePagerDutyWebhook())
 	for range 2 {
 		hitPagerDuty(handler, uuid.NewString(), "192.0.2.1", "")
 	}
@@ -176,11 +200,8 @@ func TestStoreFailureLetsProviderDeliveriesThroughAndRefusesPagerDuty(t *testing
 	var logs bytes.Buffer
 	routes := intakeRoutes(t, Deps{Counters: failingCounters{}, Secrets: Secrets{GitHub: "s"}, Logger: slog.New(slog.NewJSONHandler(&logs, nil))})
 	got := deliver(routes[routePrefix+"/github"], routePrefix+"/github", "192.0.2.1", "")
-	if got.Code == http.StatusInternalServerError && strings.Contains(got.Body.String(), "Internal Server Error") {
-		t.Fatalf("a provider delivery was refused by the failing store: %s", got.Body.String())
-	}
-	if got.Code == http.StatusTooManyRequests {
-		t.Fatal("a provider delivery was throttled by the failing store")
+	if got.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("a delivery with the store down = %d %s, want the handler's own refusal of the missing event headers (422)", got.Code, got.Body.String())
 	}
 	if !strings.Contains(logs.String(), `"msg":"webhook_intake.limiter_unavailable"`) || !strings.Contains(logs.String(), `"provider":"github"`) {
 		t.Fatalf("no warning for the unavailable limiter: %q", logs.String())

@@ -6,6 +6,8 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -130,9 +132,18 @@ func TestConfigureWarnsAboutWideTrustedProxyPrefixes(t *testing.T) {
 		for index := len(components) - 1; index >= 0; index-- {
 			_ = components[index].Shutdown(context.Background())
 		}
-		got := strings.Contains(logs.String(), "trusted proxy list holds prefixes wider than a /28")
-		if got != wantWarning {
-			t.Errorf("TRUSTED_PROXIES=%q: warning logged = %v, want %v", raw, got, wantWarning)
+		var found map[string]any
+		for _, line := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
+			var entry map[string]any
+			if json.Unmarshal([]byte(line), &entry) == nil && strings.Contains(fmt.Sprint(entry["msg"]), "trusted proxy list holds prefixes wider than a /28") {
+				found = entry
+			}
+		}
+		if (found != nil) != wantWarning {
+			t.Errorf("TRUSTED_PROXIES=%q: warning logged = %v, want %v", raw, found != nil, wantWarning)
+		}
+		if found != nil && (found["level"] != "WARN" || found["count"] != float64(1)) {
+			t.Errorf("TRUSTED_PROXIES=%q: log entry %v, want level WARN and count 1", raw, found)
 		}
 		if strings.Contains(logs.String(), "10.42.0") {
 			t.Errorf("TRUSTED_PROXIES=%q: the log carries the address", raw)

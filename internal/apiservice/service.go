@@ -428,7 +428,12 @@ func configureWith(
 	if adjust != nil {
 		adjust(&deps)
 	}
-	server, err := NewServer(cfg, logger, Routes(deps, logger), scope...)
+	limits, limitsErr := limitStore(deps)
+	if limitsErr != nil {
+		limits = httpapi.NewMemoryCounters(deps.Now)
+	}
+	deps.Limits = limits
+	server, err := NewServerWithGate(cfg, logger, Routes(deps, logger), webhookintake.NewGate(limits, deps.Now, logger), scope...)
 	if err != nil {
 		return nil, dependencyFailure(ctx, logger, "api_server", "api_server_config_failed", err)
 	}
@@ -605,8 +610,23 @@ func NewServer(
 	routes []httpapi.Route,
 	scope ...func(http.Handler) http.Handler,
 ) (*httpapi.Server, error) {
+	return NewServerWithGate(cfg, logger, routes, nil, scope...)
+}
+
+// NewServerWithGate is NewServer with the webhook intake gate, which counts
+// intake deliveries ahead of the scope middlewares; a nil gate counts nothing.
+func NewServerWithGate(
+	cfg config.Config,
+	logger *slog.Logger,
+	routes []httpapi.Route,
+	gate *webhookintake.Gate,
+	scope ...func(http.Handler) http.Handler,
+) (*httpapi.Server, error) {
 	noStore := httpapi.NewNoStoreRoutes(httpapi.AdminRoutes)
 	middleware := []func(http.Handler) http.Handler{buildinfo.Stamp(version.Current("api")), pyheaders.UnhandledErrorShape, CloseHTTP10, MarkSignatureOnly, DecodedPathRouting, noStore.Middleware}
+	if gate != nil {
+		middleware = append(middleware, intakeGate(gate, cfg.CORSAllowedOrigins))
+	}
 	for _, layer := range scope {
 		middleware = append(middleware, skipScope(layer))
 	}

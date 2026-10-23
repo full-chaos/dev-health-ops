@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph"
@@ -19,15 +18,19 @@ const (
 	FallbackInvariantBreachedLog = "issue-pr fallback invariant breached"
 	// FallbackInvariantHeldLog is the Info line of a build that left none.
 	FallbackInvariantHeldLog = "issue-pr fallback invariant held"
-	// FallbackBesideNativeGauge is set on every check, 0 included, with the
-	// attribute organization_id, so an alert can watch for a value above 0.
-	FallbackBesideNativeGauge = "workgraph_issue_pr_fallback_beside_native_rows"
-	// The same check, one gauge per side, so an alert from metrics alone names
+	// FallbackBesideNativeCounter adds the rows of every check, 0 included. It
+	// carries no attribute: the organization is named by the log line only, so
+	// an alert watches for an increase above 0.
+	FallbackBesideNativeCounter = "workgraph_issue_pr_fallback_beside_native_rows_total"
+	// The same check, one counter per side, so an alert from metrics alone names
 	// which side breached. A row can be on more than one side, so the sides do
 	// not add up to the total.
-	FallbackBesideNativePullRequestGauge = "workgraph_issue_pr_fallback_beside_native_pull_request_rows"
-	FallbackBesideNativeIssueGauge       = "workgraph_issue_pr_fallback_beside_native_issue_rows"
-	FallbackPullRequestIssueSideGauge    = "workgraph_issue_pr_fallback_pull_request_issue_side_rows"
+	FallbackBesideNativePullRequestCounter = "workgraph_issue_pr_fallback_beside_native_pull_request_rows_total"
+	FallbackBesideNativeIssueCounter       = "workgraph_issue_pr_fallback_beside_native_issue_rows_total"
+	FallbackPullRequestIssueSideCounter    = "workgraph_issue_pr_fallback_pull_request_issue_side_rows_total"
+	// FallbackInvariantChecksCounter counts every check that ran, so "no
+	// violation" differs from "the check did not run".
+	FallbackInvariantChecksCounter = "workgraph_issue_pr_fallback_invariant_checks_total"
 )
 
 // InvariantOutcome is one check of the native-first rule for one organization.
@@ -68,21 +71,22 @@ func (service *Service) CheckFallbackInvariant(ctx context.Context, orgID string
 
 func reportFallbackInvariant(ctx context.Context, logger *slog.Logger, outcome InvariantOutcome) {
 	meter := otel.GetMeterProvider().Meter("github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/issuepredges")
-	for _, gauge := range []struct {
-		name, description string
-		value             int
+	for _, counter := range []struct {
+		name, description, unit string
+		value                   int
 	}{
-		{FallbackBesideNativeGauge, "explicit_text and heuristic work_graph_issue_pr rows the native-first rule forbids (their pull request or issue has a native link, or their issue side is a pull request), per organization, after a work-graph build. Must be 0.", outcome.Beside.Total},
-		{FallbackBesideNativePullRequestGauge, "explicit_text and heuristic work_graph_issue_pr rows whose pull request has a native link, per organization, after a work-graph build. Must be 0.", outcome.Beside.ByPullRequest},
-		{FallbackBesideNativeIssueGauge, "explicit_text and heuristic work_graph_issue_pr rows whose issue has a native link, per organization, after a work-graph build. Must be 0.", outcome.Beside.ByIssue},
-		{FallbackPullRequestIssueSideGauge, "explicit_text and heuristic work_graph_issue_pr rows whose issue side is a pull request, per organization, after a work-graph build. Must be 0.", outcome.Beside.PullRequestIssueSide},
+		{FallbackBesideNativeCounter, "explicit_text and heuristic work_graph_issue_pr rows the native-first rule forbids (their pull request or issue has a native link, or their issue side is a pull request), added after every work-graph build. Must not increase.", "{row}", outcome.Beside.Total},
+		{FallbackBesideNativePullRequestCounter, "explicit_text and heuristic work_graph_issue_pr rows whose pull request has a native link, added after every work-graph build. Must not increase.", "{row}", outcome.Beside.ByPullRequest},
+		{FallbackBesideNativeIssueCounter, "explicit_text and heuristic work_graph_issue_pr rows whose issue has a native link, added after every work-graph build. Must not increase.", "{row}", outcome.Beside.ByIssue},
+		{FallbackPullRequestIssueSideCounter, "explicit_text and heuristic work_graph_issue_pr rows whose issue side is a pull request, added after every work-graph build. Must not increase.", "{row}", outcome.Beside.PullRequestIssueSide},
+		{FallbackInvariantChecksCounter, "Native-first rule checks that ran after a work-graph build; one per check, whatever the result.", "{check}", 1},
 	} {
-		instrument, err := meter.Int64Gauge(gauge.name, metric.WithUnit("{row}"), metric.WithDescription(gauge.description))
+		instrument, err := meter.Int64Counter(counter.name, metric.WithUnit(counter.unit), metric.WithDescription(counter.description))
 		if err != nil {
-			logger.Error("issue-pr fallback invariant: gauge unavailable", slog.String("gauge", gauge.name), workgraph.ErrorAttr(err))
+			logger.Error("issue-pr fallback invariant: counter unavailable", slog.String("counter", counter.name), workgraph.ErrorAttr(err))
 			continue
 		}
-		instrument.Record(ctx, int64(gauge.value), metric.WithAttributes(attribute.String("organization_id", outcome.OrganizationID)))
+		instrument.Add(ctx, int64(counter.value))
 	}
 	attrs := []any{
 		slog.String("organization_id", outcome.OrganizationID),

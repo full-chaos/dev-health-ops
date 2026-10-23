@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -68,6 +69,8 @@ type refreshRig struct {
 	base      int64
 	users     *countingUsers
 	projector *countingProjector
+	issuer    *Issuer
+	mints     atomic.Int64
 	audited   atomic.Int64
 	logs      *bytes.Buffer
 	server    http.Handler
@@ -80,7 +83,10 @@ func newRefreshRig(t *testing.T) *refreshRig {
 	if err != nil {
 		t.Fatal(err)
 	}
-	store, err := session.New(session.Config{Pool: pool, Schema: schema,
+	logs := &bytes.Buffer{}
+	logger := slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	// The store logs into the same buffer as the handlers, so the leak check covers its lines too.
+	store, err := session.New(session.Config{Pool: pool, Schema: schema, Logger: logger,
 		SuccessorKey: contracts.NewSecretString("AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8")})
 	if err != nil {
 		t.Fatal(err)
@@ -93,14 +99,15 @@ func newRefreshRig(t *testing.T) *refreshRig {
 	}
 	principal := uuid.New()
 	r := &refreshRig{
-		t: t, connects: connects, logs: &bytes.Buffer{},
+		t: t, connects: connects, logs: logs, issuer: issuer,
 		users: &countingUsers{Users: fakeUsers{
 			users: map[uuid.UUID]UserState{principal: {Email: "ada@example.com", IsActive: true}},
 			roles: map[[2]uuid.UUID]*string{},
 		}},
 		projector: &countingProjector{},
 	}
-	logger := slog.New(slog.NewJSONHandler(r.logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	// Every mint reads the issuer's clock, so a counted clock counts mints.
+	issuer.now = func() time.Time { r.mints.Add(1); return time.Now().UTC() }
 	routes, err := Routes(Deps{Sessions: store, Users: r.users, Issuer: issuer, Logger: logger})
 	if err != nil {
 		t.Fatal(err)
@@ -187,11 +194,25 @@ func TestRefreshRowsRefuseUserTokens(t *testing.T) {
 			if n := r.projector.users.Load() + r.projector.orgs.Load(); n != 0 {
 				t.Errorf("an access token projected %d principal(s)/organization(s), want 0", n)
 			}
+			if n := r.mints.Load(); n != 0 {
+				t.Errorf("an access token caused %d token mint(s), want 0", n)
+			}
 			if n := r.audited.Load(); n != 0 {
 				t.Errorf("an access token wrote %d audit row(s), want 0", n)
 			}
 			usertokens.NoLeak(t, "the logs", r.logs.String(), tokens)
 		})
+	}
+}
+
+// The mint counter sees a mint: the counted clock moves when the real issuer mints a token.
+func TestRefreshRowsControlTheMintCounterSeesAMint(t *testing.T) {
+	r := newRefreshRig(t)
+	if _, err := r.issuer.Access(Grant{PrincipalID: uuid.New(), SessionID: uuid.New(), Role: "member"}); err != nil {
+		t.Fatal(err)
+	}
+	if r.mints.Load() == 0 {
+		t.Fatal("a minted token left the mint counter at zero")
 	}
 }
 

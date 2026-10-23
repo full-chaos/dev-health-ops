@@ -92,12 +92,16 @@ internal/cigates	governance.go	cmd/cigate
 internal/cigates	governance.go	internal/cigates/scripts
 internal/cigates/affected	plan.go	cmd/cigate
 internal/cigates/affected	plan.go	internal/cigates/affected
+internal/cigates/affected	plan.go	internal/cigates/affectedmatrix
 internal/cigates/affected	plan.go	internal/cigates/affectedmodule
+internal/cigates/affected	plan.go	internal/cigates/affectedreject
 internal/cigates/affected	plan.go	internal/cigates/scripts
 internal/cigates/affected	reach.go	cmd/cigate
 internal/cigates/affected	scan.go	cmd/cigate
 internal/cigates/affected	scan.go	internal/cigates/affected
+internal/cigates/affected	scan.go	internal/cigates/affectedmatrix
 internal/cigates/affected	scan.go	internal/cigates/affectedmodule
+internal/cigates/affected	scan.go	internal/cigates/affectedreject
 internal/cigates/affected	scan.go	internal/cigates/scripts
 internal/cigates/affected	tables.go	cmd/cigate
 internal/cigates/affected	tables.go	internal/cigates/affected

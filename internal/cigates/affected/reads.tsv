@@ -5,7 +5,9 @@ cmd/cigate	test	docs-data
 cmd/cigate	test	mkdocs.yml
 cmd/dev-health-migration-matrix	code	contracts
 cmd/dev-health-migration-matrix	code	docs
+cmd/dho	test	.env.example
 cmd/dho	test	compose.yml
+cmd/dho	test	deploy
 cmd/gqlgen-guard	test	contracts
 deploy/helm/dev-health	test	compose.yml
 deploy/helm/dev-health	test	deploy
@@ -18,10 +20,13 @@ internal/audit	test	contracts
 internal/auth/authconfig	test	contracts
 internal/auth/authruntime	test	contracts
 internal/auth/contracts	code	contracts
+internal/auth/contracts	test	README.md
 internal/auth/contracts/tokencorpus	code	contracts
 internal/auth/contracts/tokencorpus	test	README.md
+internal/bigboycompose	test	.env.example
 internal/bigboycompose	test	ci
 internal/bigboycompose	test	compose.yml
+internal/bigboycompose	test	deploy
 internal/cacheinvalidation	test	contracts
 internal/cigates/affected	code	.github
 internal/cigates/affected	code	ci

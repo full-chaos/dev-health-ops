@@ -5,6 +5,7 @@ cmd/dev-health-migration-matrix	contract_test.go
 cmd/dev-health-migration-matrix	main.go
 cmd/dev-health-provider-fixture	main.go
 cmd/dev-health-provider-normalized-fixture	main.go
+cmd/dho	compose_dsn_class_test.go
 cmd/dho	service_migrate_guard_test.go
 cmd/gqlgen-guard	main.go
 cmd/gqlgen-guard	main_test.go
@@ -13,6 +14,7 @@ cmd/strip-agent-attribution	main.go
 cmd/strip-agent-attribution	main_test.go
 internal/api/credentials	probes.go
 internal/api/syncadmin	dataset_writer_census_test.go
+internal/api/syncadmin	dataset_writer_lock_census_test.go
 internal/api/syncadmin	gate_reader_census_test.go
 internal/api/syncadmin	repositories_write_venue_oracle_integration_test.go
 internal/api/teamsidentity	deleted_at_writer_census_test.go
@@ -63,6 +65,7 @@ internal/auth/contracts	openapi_test.go
 internal/auth/contracts	principal_contract_goldens_test.go
 internal/auth/contracts	producer_columns_test.go
 internal/auth/contracts	provisioning_event_goldens_test.go
+internal/auth/contracts	provisioning_resources_test.go
 internal/auth/contracts	reason_code_vocabulary_test.go
 internal/auth/contracts	reject_location_test.go
 internal/auth/contracts	schema_dialect_test.go
@@ -80,6 +83,7 @@ internal/auth/keystore	open_unix.go
 internal/auth/session	credential_test.go
 internal/auth/writerinventory	scan_test.go
 internal/bigboycompose	billing_edge_override_test.go
+internal/bigboycompose	dsn_class_test.go
 internal/bigboycompose	restart_policy_test.go
 internal/bigboycompose	worker_plane_test.go
 internal/chmigrate	ai_impact_counts_float64_integration_test.go
@@ -222,6 +226,7 @@ internal/cigates/workflows	auth_corpus_external_test.go
 internal/cigates/workflows	chart_started_selector_test.go
 internal/cigates/workflows	ci_script_helpers_test.go
 internal/cigates/workflows	docker_images_fanin_behaviour_test.go
+internal/cigates/workflows	go_workers_compose_proof_test.go
 internal/cigates/workflows	live_e2e_no_python_test.go
 internal/cigates/workflows	race_json_artifact_test.go
 internal/cigates/workflows	race_pool_routing_test.go

@@ -4,6 +4,7 @@ cmd/gqlgen-guard	main_test.go	unexpressed	-
 internal/api/integrationsadmin/discoveryvenue	discover_venue_oracle_integration_test.go	internal/api/syncadmin/testdata/jira_recorded	dir
 internal/api/syncadmin	create_config_venue_oracle_integration_test.go	internal/api/syncadmin/testdata/jira_recorded	dir
 internal/api/syncadmin	dataset_writer_census_test.go	unexpressed	-
+internal/api/syncadmin	dataset_writer_lock_census_test.go	unexpressed	-
 internal/api/syncadmin	gate_reader_census_test.go	unexpressed	-
 internal/api/teamsidentity	deleted_at_writer_census_test.go	unexpressed	-
 internal/api/teamsidentity	team_id_writer_census_test.go	unexpressed	-
@@ -28,6 +29,7 @@ internal/auth/contracts	fixture_secret_scanner_test.go	unexpressed	-
 internal/auth/contracts	jwks_document_goldens_test.go	unexpressed	-
 internal/auth/contracts	principal_contract_goldens_test.go	unexpressed	-
 internal/auth/contracts	provisioning_event_goldens_test.go	unexpressed	-
+internal/auth/contracts	provisioning_resources_test.go	unexpressed	-
 internal/auth/contracts	reject_location_test.go	unexpressed	-
 internal/auth/contracts	schema_dialect_test.go	unexpressed	-
 internal/auth/contracts	session_goldens_test.go	unexpressed	-

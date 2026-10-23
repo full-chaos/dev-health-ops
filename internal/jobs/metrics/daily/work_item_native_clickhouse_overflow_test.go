@@ -63,8 +63,12 @@ func TestWorkItemWritersRefuseUInt32OverflowInsteadOfWrapping(t *testing.T) {
 		}},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
-			batch := &recordingBatch{}
-			written, err := testCase.write(&recordingBatchConn{batch: batch})
+			batch := &countingBatch{}
+			conn := &liveLegacyConn{batch: batch}
+			written, err := testCase.write(conn)
+			if conn.prepares != 1 {
+				t.Fatalf("%s: the writer prepared %d batches, want 1: the refusal must come from the counter check, not from an earlier step", testCase.name, conn.prepares)
+			}
 			if !errors.Is(err, ErrInvalidState) {
 				t.Fatalf("writing %d into a UInt32 column returned (%d, %v), want ErrInvalidState -- a bare uint32() cast wraps it to %d instead",
 					overflow, written, err, uint32(overflow))
@@ -82,12 +86,16 @@ func TestWorkItemWritersRefuseUInt32OverflowInsteadOfWrapping(t *testing.T) {
 func TestWorkItemWritersRefuseNegativeCounters(t *testing.T) {
 	ctx := context.Background()
 	day := time.Date(2026, 8, 24, 0, 0, 0, 0, time.UTC)
-	batch := &recordingBatch{}
-	_, err := WriteWorkItemMetricsDaily(ctx, &recordingBatchConn{batch: batch}, "org-a", day,
+	batch := &countingBatch{}
+	conn := &liveLegacyConn{batch: batch}
+	_, err := WriteWorkItemMetricsDaily(ctx, conn, "org-a", day,
 		[]workitemmetrics.MetricsDailyRow{{
 			Day: day, Provider: "github", WorkScopeID: "acme/platform",
 			TeamID: "team-a", TeamName: "Core", WIPCountEndOfDay: -1,
 		}}, day)
+	if conn.prepares != 1 {
+		t.Fatalf("the writer prepared %d batches, want 1: the refusal must come from the counter check", conn.prepares)
+	}
 	if !errors.Is(err, ErrInvalidState) {
 		t.Fatalf("writing -1 into a UInt32 column returned %v, want ErrInvalidState -- a bare cast turns it into %d", err, uint32(4294967295))
 	}

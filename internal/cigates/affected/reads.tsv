@@ -20,6 +20,7 @@ internal/audit	test	contracts
 internal/auth/authconfig	test	contracts
 internal/auth/authruntime	test	contracts
 internal/auth/contracts	code	contracts
+internal/auth/contracts	test	README.md
 internal/auth/contracts/tokencorpus	code	contracts
 internal/auth/contracts/tokencorpus	test	README.md
 internal/bigboycompose	test	.env.example

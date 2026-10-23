@@ -64,6 +64,7 @@ internal/auth/contracts	openapi_test.go
 internal/auth/contracts	principal_contract_goldens_test.go
 internal/auth/contracts	producer_columns_test.go
 internal/auth/contracts	provisioning_event_goldens_test.go
+internal/auth/contracts	provisioning_resources_test.go
 internal/auth/contracts	reason_code_vocabulary_test.go
 internal/auth/contracts	reject_location_test.go
 internal/auth/contracts	schema_dialect_test.go
@@ -494,6 +495,7 @@ internal/storage/postgres	posture_cache_cadence_test.go
 internal/storage/postgres	posture_identity_sites_test.go
 internal/storage/postgres	provision_script_integration_test.go
 internal/storage/postgres	venue_posture_coverage_test.go
+internal/storage/postgres/authschema	grant_shape_contract_test.go
 internal/storedversion	writers_test.go
 internal/streamhandlers	external_clickhouse_test.go
 internal/streamhandlers	stored_version_invariant_test.go

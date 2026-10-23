@@ -15,7 +15,8 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity/oidc"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity/saml"
-	"github.com/full-chaos/dev-health-ops/internal/auth/providersecret"
+	"github.com/full-chaos/dev-health-ops/internal/platform/fernet"
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
 
@@ -57,6 +58,19 @@ func ssoRoutes(
 	return routes, nil
 }
 
+// providerSecrets is the oidc.SecretDecrypter over the settings key; every
+// plaintext it returns is registered with the log redactor.
+type providerSecrets struct{ cipher fernet.Cipher }
+
+func (d providerSecrets) Decrypt(stored string) (string, error) {
+	plain, err := d.cipher.Open(stored)
+	if err != nil {
+		return "", err
+	}
+	secrets.RegisterDecrypted(plain)
+	return string(plain), nil
+}
+
 func oidcService(
 	cfg authconfig.Config, logger *slog.Logger, pool *pgxpool.Pool, schema authschema.ValidatedIdentifier,
 	identities *identity.Store, sessions authapi.SSOSessions,
@@ -65,7 +79,7 @@ func oidcService(
 	if err != nil {
 		return nil, err
 	}
-	decrypter, err := providersecret.New(cfg.SSO.EncryptionKey, cfg.SSO.EncryptionSalt)
+	cipher, err := fernet.New(cfg.SSO.EncryptionKey.Reveal(), cfg.SSO.EncryptionSalt)
 	if err != nil {
 		return nil, errors.New("authruntime: the provider secret key is unusable")
 	}
@@ -76,7 +90,7 @@ func oidcService(
 		Memberships:  oidc.PGMemberships{Pool: pool},
 		Entitlements: oidc.LicensingEntitlements{Pool: pool},
 		Sessions:     sessions.OIDC(),
-		Secrets:      decrypter,
+		Secrets:      providerSecrets{cipher},
 		StateSecret:  contracts.NewSecretString(cfg.SSO.StateKey.Reveal()),
 		AppBaseURL:   cfg.SSO.AppBaseURL,
 		Logger:       logger,

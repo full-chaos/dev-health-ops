@@ -11,6 +11,7 @@
 # secretName and a secretKey line.
 set -euo pipefail
 umask 077
+export LC_ALL=C
 
 case $- in
   *x*) printf 'refused: xtrace is on\n' >&2; exit 2 ;;
@@ -33,8 +34,8 @@ done
 }
 [ -f "$values" ] || { printf 'refused: --values is not a file\n' >&2; exit 2; }
 
-# listed NAME KEY: succeeds when ONE list entry of the values file carries both
-# secretName: NAME and secretKey: KEY as direct fields.
+# listed NAME KEY: succeeds when ONE entry of keySet.keys in the values file
+# carries both secretName: NAME and secretKey: KEY as direct fields.
 listed() {
   awk -v want_name="$1" -v want_key="$2" '
     function clean(v) { sub(/[[:space:]]+#.*$/, "", v); gsub(/^[[:space:]]+|[[:space:]]+$/, "", v); gsub(/^"|"$/, "", v); return v }
@@ -42,6 +43,14 @@ listed() {
     {
       line = $0
       ind = match(line, /[^ ]/) - 1
+      if (blk >= 0 && ind > blk) { next }
+      blk = -1
+      if (line ~ /:[[:space:]]*[|>][-+0-9]*[[:space:]]*$/) { blk = ind }
+      if (inks && ind <= ksind) { inks = 0; inkeys = 0 }
+      if (inkeys && ind < keysind) { inkeys = 0; active = 0 }
+      if (line ~ /^ *keySet:[[:space:]]*$/) { inks = 1; ksind = ind; inkeys = 0; active = 0; next }
+      if (inks && !inkeys && line ~ /^ *keys:[[:space:]]*$/ && ind > ksind) { inkeys = 1; keysind = ind; active = 0; next }
+      if (!inkeys) { next }
       if (line ~ /^ *- /) {
         dash = ind; active = 1; name = ""; key = ""
         sub(/^ *- /, "", line); ind = dash + 2
@@ -54,17 +63,18 @@ listed() {
         if (name == want_name && key == want_key) { found = 1 }
       }
     }
+    BEGIN { blk = -1 }
     END { exit found ? 0 : 1 }
   ' "$values"
 }
 
 dns1123='^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$'
-keyname='^[A-Za-z0-9_-][A-Za-z0-9._-]{0,252}$'
+keyname='^[A-Za-z0-9._-]{1,253}$'
 seen=" "
 for pair in "${keys[@]}"; do
   name="${pair%%:*}"
   key="${pair#*:}"
-  if [ "$name" = "$pair" ] || ! [[ "$name" =~ $dns1123 ]] || [ "${#name}" -gt 253 ] || ! [[ "$key" =~ $keyname ]]; then
+  if [ "$name" = "$pair" ] || ! [[ "$name" =~ $dns1123 ]] || [ "${#name}" -gt 253 ] || ! [[ "$key" =~ $keyname ]] || [ "$key" = . ] || [ "$key" = .. ]; then
     printf 'refused: --key must be <secret-name>:<secret-key> with valid names\n' >&2
     exit 2
   fi
@@ -79,6 +89,7 @@ done
 base="${KEYSET_WORKDIR_BASE:-${XDG_RUNTIME_DIR:-/dev/shm}}"
 [ -d "$base" ] || { printf 'refused: no private work directory\n' >&2; exit 2; }
 workdir="$(mktemp -d "${base%/}/auth-keyset.XXXXXX")"
+errdir="$(mktemp -d "${base%/}/auth-keyset-err.XXXXXX")"
 
 cleanup() {
   local f
@@ -87,7 +98,8 @@ cleanup() {
     [ -e "$f" ] || continue
     shred -u "$f" 2>/dev/null || rm -f "$f"
   done
-  rmdir "$workdir" 2>/dev/null || true
+  rm -f "$errdir/kubectl.err"
+  rmdir "$workdir" "$errdir" 2>/dev/null || true
 }
 trap cleanup EXIT
 
@@ -100,11 +112,11 @@ for pair in "${keys[@]}"; do
   openssl genpkey -algorithm ED25519 -out "$value" >/dev/null 2>&1 || { printf 'STOP %s key generation failed\n' "$name"; exit 1; }
   chmod 0600 "$value"
   if "$kubectl_bin" --context "$context" --namespace "$namespace" create secret generic "$name" \
-    --from-file="${key}=${value}" >/dev/null 2>"$workdir/kubectl.err"; then
+    --from-file="${key}=${value}" >/dev/null 2>"$errdir/kubectl.err"; then
     printf '%s key=%s created\n' "$name" "$key"
     created=$((created + 1))
   else
-    if grep -q 'AlreadyExists' "$workdir/kubectl.err"; then
+    if grep -q 'AlreadyExists' "$errdir/kubectl.err"; then
       printf 'STOP %s exists\n' "$name"
     else
       printf 'STOP %s create failed\n' "$name"
@@ -112,6 +124,6 @@ for pair in "${keys[@]}"; do
     exit 1
   fi
   shred -u "$value" 2>/dev/null || rm -f "$value"
-  rm -f "$workdir/kubectl.err"
+  rm -f "$errdir/kubectl.err"
 done
 printf 'value files removed (%d created)\n' "$created"

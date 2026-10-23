@@ -229,6 +229,34 @@ func TestProjectionRotationParentTerminalOrdering(t *testing.T) {
 			t.Errorf("%s: outcome %s, want %s", name, outcome, tc.want)
 		}
 	}
+	expiring := func(expiresAt string, status Status, terminalAt time.Time) State {
+		p := active
+		p.ExpiresAt, p.Status, p.TerminalAt = expiresAt, status, terminalAt
+		return p
+	}
+	for name, tc := range map[string]struct {
+		parent State
+		want   Outcome
+	}{
+		"expired by time, event not yet seen": {expiring("2026-10-22T10:00:00.000000Z", StatusActive, time.Time{}), RefusedParent},
+		"expired by time, late expired event": {expiring("2026-10-22T10:00:00.000000Z", StatusExpired, t0.Add(time.Hour)), RefusedParent},
+		"expires after the rotation":          {expiring("2026-10-24T10:00:00.000000Z", StatusActive, time.Time{}), Applied},
+		"expires at the rotation":             {expiring("2026-10-23T10:00:00.000000Z", StatusActive, time.Time{}), Applied},
+		"unparseable expiry":                  {expiring("tomorrow", StatusActive, time.Time{}), RefusedParent},
+		"bogus status":                        {expiring("", Status("pending"), time.Time{}), RefusedParent},
+		"empty status":                        {expiring("", StatusUnknown, time.Time{}), RefusedParent},
+		"terminal, zero stamp":                {expiring("", StatusRevoked, time.Time{}), RefusedParent},
+	} {
+		if _, outcome := Apply(State{}, rotation, &tc.parent); outcome != tc.want {
+			t.Errorf("%s: outcome %s, want %s", name, outcome, tc.want)
+		}
+	}
+	zeroTime := rotated(credB, credA, "ingest:write")
+	zeroTime.CreatedAt = contracts.Timestamp{}
+	terminalZero := expiring("", StatusRevoked, time.Time{})
+	if _, outcome := Apply(State{}, zeroTime, &terminalZero); outcome != RefusedParent {
+		t.Errorf("rotation at the zero time over a terminal parent with a zero stamp: outcome %s, want refused_parent", outcome)
+	}
 	noStamp := retire(t0)
 	noStamp.TerminalAt = time.Time{}
 	if _, outcome := Apply(State{}, rotation, &noStamp); outcome != RefusedParent {
@@ -323,5 +351,28 @@ func TestProjectionNeverAppliesToATerminalAggregateAndNeverPanics(t *testing.T) 
 		if !sameState(first, doubled) {
 			t.Fatalf("run %d: delivering every event twice changed the result: %+v vs %+v", run, first, doubled)
 		}
+	}
+}
+
+func TestProjectionRecordsWhenACredentialBecameTerminal(t *testing.T) {
+	active := parentState(t, "ingest:write")
+	at := t0.Add(2 * time.Hour)
+	for name, e := range map[string]contracts.ExternalPushLifecycleEvent{"revoked": revoked(credA, 2), "expired": expired(credA, 2)} {
+		e.CreatedAt = contracts.Timestamp{Time: at}
+		got := mustApply(t, active, e, nil)
+		if !got.TerminalAt.Equal(at) {
+			t.Errorf("%s: TerminalAt = %v, want the event's created_at %v", name, got.TerminalAt, at)
+		}
+	}
+	if !active.TerminalAt.IsZero() {
+		t.Error("an active credential has a TerminalAt")
+	}
+}
+
+func TestProjectionRefusesAParentNeverApplied(t *testing.T) {
+	parent := parentState(t, "ingest:write")
+	parent.Revision = 0
+	if _, outcome := Apply(State{}, rotated(credB, credA, "ingest:write"), &parent); outcome != RefusedParent {
+		t.Fatalf("a parent at revision 0: outcome %s, want refused_parent", outcome)
 	}
 }

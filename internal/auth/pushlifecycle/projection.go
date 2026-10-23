@@ -76,9 +76,13 @@ type State struct {
 // storage keyed by that id inside the event's organization, and Apply trusts
 // only what it can check: the parent's id, organization and source must equal
 // the event's, or the outcome is RefusedParent (so does a nil parent). A parent
-// that was already terminal before the rotation's created_at is RefusedParent;
-// one that became terminal at or after it, in any arrival order, is accepted,
-// because a rotation commits together with the retirement of its parent. A
+// that was already retired before the rotation's created_at is RefusedParent,
+// where retired means the earliest of its terminal event's created_at and its
+// expires_at; one retired at or after it, in any arrival order, is accepted,
+// because a rotation commits together with the retirement of its parent. An
+// unknown status, or a terminal parent without a TerminalAt, is RefusedParent.
+// Apply trusts the producer's created_at: a rotation stamped before its
+// parent's retirement applies, so the producer must stamp from one clock. A
 // parent that has not been seen yet is the caller's nil: retry later. The
 // returned state is state itself unless the outcome is Applied. Apply never panics and never returns Applied for a
 // terminal credential.
@@ -117,7 +121,7 @@ func Apply(state State, event contracts.ExternalPushLifecycleEvent, parent *Stat
 				parent.Revision < 1 {
 				return state, RefusedParent
 			}
-			if parent.Status.Terminal() && parent.TerminalAt.Before(event.CreatedAt.Time) {
+			if !parentUsable(parent, event.CreatedAt.Time) {
 				return state, RefusedParent
 			}
 			if !subset(change.Scopes, parent.Scopes) {
@@ -178,6 +182,38 @@ func normalise(scopes []string) []string {
 func subset(narrow, wide []string) bool {
 	for _, scope := range narrow {
 		if !slices.Contains(wide, scope) {
+			return false
+		}
+	}
+	return true
+}
+
+// parentUsable reports whether a rotation created at rotatedAt may build on
+// parent. It fails closed: an unknown status, a terminal parent with no
+// TerminalAt, or an unparseable ExpiresAt is not usable.
+func parentUsable(parent *State, rotatedAt time.Time) bool {
+	switch parent.Status {
+	case StatusActive:
+	case StatusRevoked, StatusExpired:
+		if parent.TerminalAt.IsZero() {
+			return false
+		}
+	default:
+		return false
+	}
+	var retired []time.Time
+	if !parent.TerminalAt.IsZero() {
+		retired = append(retired, parent.TerminalAt)
+	}
+	if parent.ExpiresAt != "" {
+		expires, err := time.Parse(time.RFC3339Nano, parent.ExpiresAt)
+		if err != nil {
+			return false
+		}
+		retired = append(retired, expires)
+	}
+	for _, at := range retired {
+		if at.Before(rotatedAt) {
 			return false
 		}
 	}

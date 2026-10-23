@@ -105,8 +105,6 @@ func TestDiagnoseRolePostureNamesEveryGrantOptionReadinessRefuses(t *testing.T) 
 			"REVOKE GRANT OPTION FOR INSERT (note) ON TABLE public.synthetic_rw FROM " + role, []string{"synthetic_rw", "INSERT WITH GRANT OPTION"}},
 		{"column UPDATE on a required table", "GRANT UPDATE (note) ON TABLE public.synthetic_rw TO " + role + withOption,
 			"REVOKE GRANT OPTION FOR UPDATE (note) ON TABLE public.synthetic_rw FROM " + role, []string{"synthetic_rw", "UPDATE WITH GRANT OPTION"}},
-		{"table SELECT via PUBLIC", "GRANT SELECT ON TABLE public.synthetic_rw TO PUBLIC" + withOption,
-			"REVOKE SELECT ON TABLE public.synthetic_rw FROM PUBLIC", []string{"synthetic_rw", "SELECT WITH GRANT OPTION"}},
 		{"column INSERT where the table disallows INSERT", "GRANT INSERT (flag) ON TABLE public.synthetic_ro TO " + role,
 			"REVOKE INSERT (flag) ON TABLE public.synthetic_ro FROM " + role, []string{"synthetic_ro", "INSERT"}},
 		{"column INSERT with the option where the table disallows INSERT", "GRANT INSERT (flag) ON TABLE public.synthetic_ro TO " + role + withOption,

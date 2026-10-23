@@ -276,7 +276,7 @@ func poolRoutingDefects(goDoc, dockerDoc yamlMap) []string {
 	noPoll("go-arm64-numeric-parity", parity)
 
 	db := pinJob(dockerDoc, build)
-	expectedIf := "always() && needs.changes.result == 'success' && needs." + dind + ".result != 'failure' && needs." + dind + ".result != 'cancelled' && (" + eligibilityCondition + ")"
+	expectedIf := "always() && needs.changes.result == 'success' && needs.resolve.result == 'success' && needs.resolve.outputs.promoted != 'true' && needs." + dind + ".result != 'failure' && needs." + dind + ".result != 'cancelled' && (" + eligibilityCondition + ")"
 	if got := withoutDraftGate(asString(db["if"])); got != expectedIf {
 		add("%s if %q is not the eligibility and dind-tolerance condition", build, got)
 	}

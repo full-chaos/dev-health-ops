@@ -17,3 +17,7 @@ lifecycle: active
 6. Retain the route, time, correlation or request identifier, and sanitized message.
 
 Do not solve an authorization defect by granting owner access permanently.
+
+## Failed logins or 5xx after a roll
+
+A NetworkPolicy roll and the login flip are separate rolls. Check which one is live with `helm history`, then follow [Auth sessions flip and rollback](../../operate/runbooks/auth-sessions-flip-and-rollback.md). Users who report a verify or reset link that fails after the flip need a new link; links sent before the flip are not accepted.

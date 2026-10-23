@@ -513,6 +513,7 @@ const nullableIntoPlainSites = `
 
 // unverifiedSites is `file|func|destinations|digest|reason`; see reasonClass.
 const unverifiedSites = `
+internal/queryapi/aggflame/clickhouse.go|fetchCycleBreakdown|*string,*float64,*uint64|a003456ad69e|not-describable
 internal/queryapi/aianalytics/ai_opportunities.go|loadClusters|*string,*string,*uint64,*[]string|797f7a3b795e|not-describable
 internal/queryapi/aianalytics/ai_opportunities.go|loadClusters|*string,*uint64,*[]string|797f7a3b795e|not-describable
 internal/queryapi/aianalytics/ai_opportunities.go|loadDocDrift|*string,*uint64,*uint64|10f890afaa03|not-describable
@@ -546,12 +547,13 @@ internal/queryapi/explain/metrics.go|fetchMetricDriverDelta|*string,**float64,*u
 internal/queryapi/explain/metrics.go|fetchMetricValue|**float64,*uint64|473951d9d13d|spliced-select-list
 internal/queryapi/explain/repositories.go|fetchWorkItemProviders|*string|42ca92597595|not-describable
 internal/queryapi/home/queries_metric_drivers_batch.go|fetchMetricDriversBatch|*string,*string|8e8c97ce9520|not-describable
-internal/queryapi/home/queries_metrics.go|fetchChangeFailureView|[]any|55592e42870b|variadic-destinations
-internal/queryapi/home/queries_metrics.go|fetchMetricDriverDelta|*string,**float64,**float64|dd0172c85c4d|not-describable
-internal/queryapi/home/queries_metrics.go|fetchMetricSeries|*time.Time,**float64|42beaf116a09|spliced-select-list
-internal/queryapi/home/queries_metrics.go|fetchMetricValue|*int64,**float64|fdde55eaa07b|spliced-select-list
-internal/queryapi/home/queries_metrics.go|fetchPRReworkView|[]any|6996634017b7|variadic-destinations
-internal/queryapi/home/queries_metrics.go|fetchRateDriverDelta|*string,**float64,**float64|cbaa044e10d6|not-describable
+internal/queryapi/home/queries_metrics.go|fetchBlockedHours|*time.Time,*float64|9742cdcba9c5|not-describable
+internal/queryapi/home/queries_metrics.go|fetchChangeFailureView|[]any|f142e271225d|variadic-destinations
+internal/queryapi/home/queries_metrics.go|fetchMetricDriverDelta|*string,**float64,**float64|c3ed3688bec8|not-describable
+internal/queryapi/home/queries_metrics.go|fetchMetricSeries|*time.Time,**float64|ee830057c835|spliced-select-list
+internal/queryapi/home/queries_metrics.go|fetchMetricValue|*int64,**float64|dcbc26e98882|spliced-select-list
+internal/queryapi/home/queries_metrics.go|fetchPRReworkView|[]any|403719d788df|variadic-destinations
+internal/queryapi/home/queries_metrics.go|fetchRateDriverDelta|*string,**float64,**float64|9068c65461a3|not-describable
 internal/queryapi/home/queries_signals.go|fetchRiskSignals|*string,*string,**float64,*string,*time.Time,**float64|54de9ad8afd6|not-describable
 internal/queryapi/home/queries_sync.go|FetchLatestSuccessfulSyncAt|**time.Time|9dfe899f0474|statement-not-static
 internal/queryapi/home/repolinked.go|readBasis|*string,*string,*uint8|3e248e77f109|spliced-select-list
@@ -561,6 +563,7 @@ internal/queryapi/investmentexplain/reader.go|FetchInvestmentBreakdown|*string,*
 internal/queryapi/investmentexplain/reader.go|FetchInvestmentThemeEffort|*string,*float64,*float64,*float64|66b93f6e2aee|spliced-select-list
 internal/queryapi/investmentexplain/workunitreader.go|FetchWorkUnitInvestments|*string,**string,**string,*time.Time,*time.Time,**string,**string,**string,**float64,*float64,*[]string,*[]float64,*[]string,*[]float64,**string,**float64,**string,**string,**string,**string,*time.Time|cd7a97bbd38c|spliced-select-list
 internal/queryapi/operatingreview/operatingreview.go|fetchChangeFailureAgg|[]any|fa0c9e3b063a|variadic-destinations
+internal/queryapi/operatingreview/operatingreview.go|fetchStateDurations|*string,*uint64,*float64,*float64|83af0b90bb30|not-describable
 internal/queryapi/operatingreview/operatingreview.go|fetchWorkItems|*time.Time,*uint64,*uint64,*uint32,**float64,**float64,**float64,**float64|4e08e84d156f|not-describable
 internal/queryapi/people/metricqueries.go|fetchPersonBreakdown|*string,*float64|a120bde67c22|spliced-select-list
 internal/queryapi/people/metricqueries.go|fetchPersonMetricSeries|*time.Time,*float64|5b284baef0b7|spliced-select-list
@@ -576,7 +579,8 @@ internal/queryapi/reports/writer.go|clone|*string,**string,**string,**string,**s
 internal/queryapi/reports/writer.go|trigger|*bool|a8202561e27c|statement-not-static
 internal/queryapi/reports/writer.go|update|*string,*string,*string,**string,**time.Time,*time.Time|02fbaf29d245|statement-not-static
 internal/queryapi/routeswitch/class_decision_switch.go|Enabled|*string|7a40513e2fab|not-describable
-internal/queryapi/sankey/queries.go|fetchExpenseCounts|*float64,*float64,*float64|53cd7b92e068|not-describable
+internal/queryapi/sankey/queries.go|fetchExpenseCounts|*float64,*float64,*float64|170d0943be21|not-describable
+internal/queryapi/sankey/queries.go|fetchStateStatusCounts|*string,*float64|27a3e6266eae|not-describable
 internal/queryapi/server/mcp_route.go|Scan|[]any|073743d6899c|variadic-destinations
 internal/queryapi/workgraph/edges.go|countMatchingEdges|*uint64|8d8175642fa2|not-describable
 internal/queryapi/workgraph/edges.go|fetchDedupedEdgeRows|*string,*string,*string,*string,*string,*string,*string,*string,*string,*float64,*string|98e2e21bd3c2|statement-not-static

@@ -52,7 +52,8 @@ type DownFile struct {
 
 // LoadDownChain returns the down SQL, ordered by revision.
 func LoadDownChain() ([]DownFile, error) {
-	entries, err := fs.ReadDir(chainFiles, "sql/down")
+	source := chainSource()
+	entries, err := fs.ReadDir(source, "sql/down")
 	if err != nil {
 		return nil, err
 	}
@@ -65,7 +66,7 @@ func LoadDownChain() ([]DownFile, error) {
 		if match == nil {
 			return nil, fmt.Errorf("sql/down/%s is not named <revision>_<slug>.sql", entry.Name())
 		}
-		data, err := chainFiles.ReadFile("sql/down/" + entry.Name())
+		data, err := fs.ReadFile(source, "sql/down/"+entry.Name())
 		if err != nil {
 			return nil, err
 		}

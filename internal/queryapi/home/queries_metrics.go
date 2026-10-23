@@ -32,7 +32,7 @@ func metricFromClause(table, column, scopeFilter, startParam, endParam string) s
 	if !dedup {
 		return table
 	}
-	if table == "work_item_metrics_daily" {
+	if rowview.Has(table) {
 		// Each item once in the organization (CHAOS-8863): legacy rows and the org view. row_view is part of the
 		// natural key above, so a legacy retraction row never merges with an org row under argMax.
 		scopeFilter += "\n              AND " + rowview.OrgPredicate(table, "")
@@ -319,11 +319,12 @@ func fetchBlockedHours(ctx context.Context, client QueryClient, startDay, endDay
               AND status = 'blocked'
             %s
               AND org_id = {org_id:String}
-            GROUP BY day, provider, work_scope_id, team_id, status%s
+              AND %s
+            GROUP BY day, provider, work_scope_id, team_id, status, row_view%s
         )
         GROUP BY day
         ORDER BY day
-    `, scopeFilter, liveRowHaving("work_item_state_durations_daily"))
+    `, scopeFilter, rowview.OrgPredicate("work_item_state_durations_daily", ""), liveRowHaving("work_item_state_durations_daily"))
 	bindings := append([]dhclickhouse.Binding{
 		{Name: "start_day", Value: formatDay(startDay)},
 		{Name: "end_day", Value: formatDay(endDay)},
@@ -392,7 +393,7 @@ func fetchMetricDriverDelta(ctx context.Context, client QueryClient, table, colu
         ) AS previous ON current.id = previous.id
         WHERE delta_pct IS NOT NULL
         ORDER BY delta_pct DESC
-        LIMIT {limit:UInt32}
+        LIMIT {limit_n:UInt32}
     `, deltarule.DriverPercentSQL("current.value", "previous.value", "previous.present"), groupBy, column, currentFrom, groupBy, groupBy, column, previousFrom, groupBy)
 	bindings := append([]dhclickhouse.Binding{
 		{Name: "start_day", Value: formatDay(startDay)},
@@ -400,7 +401,7 @@ func fetchMetricDriverDelta(ctx context.Context, client QueryClient, table, colu
 		{Name: "compare_start", Value: formatDay(compareStart)},
 		{Name: "compare_end", Value: formatDay(compareEnd)},
 		{Name: "org_id", Value: orgID},
-		{Name: "limit", Value: uint32(limit)},
+		{Name: "limit_n", Value: uint32(limit)},
 	}, scopeBindings...)
 
 	rows, err := client.Query(ctx, query, bindings)
@@ -449,7 +450,7 @@ func fetchRateDriverDelta(ctx context.Context, client QueryClient, rateSQL, grou
         ) AS previous ON current.id = previous.id
         WHERE current.value IS NOT NULL AND delta_pct IS NOT NULL
         ORDER BY delta_pct DESC
-        LIMIT {limit:UInt32}
+        LIMIT {limit_n:UInt32}
     `, deltarule.DriverPercentSQL("current.value", "previous.value", "previous.present"), groupBy, rateSQL, currentFrom, groupBy, groupBy, rateSQL, previousFrom, groupBy)
 	bindings := append([]dhclickhouse.Binding{
 		{Name: "start_day", Value: formatDay(startDay)},
@@ -457,7 +458,7 @@ func fetchRateDriverDelta(ctx context.Context, client QueryClient, rateSQL, grou
 		{Name: "compare_start", Value: formatDay(compareStart)},
 		{Name: "compare_end", Value: formatDay(compareEnd)},
 		{Name: "org_id", Value: orgID},
-		{Name: "limit", Value: uint32(limit)},
+		{Name: "limit_n", Value: uint32(limit)},
 	}, scopeBindings...)
 
 	rows, err := client.Query(ctx, query, bindings)

@@ -16,11 +16,15 @@ import (
 // verifyGitHubSignature ports auth.py's verify_github_signature: HMAC-SHA256
 // over the raw body, "sha256=<hex>" in X-Hub-Signature-256.
 func verifyGitHubSignature(body []byte, signatureHeader, secret string) bool {
+	return verifyGitHubWithKey(body, signatureHeader, newVerifyingKey(secret))
+}
+
+func verifyGitHubWithKey(body []byte, signatureHeader string, key verifyingKey) bool {
 	if signatureHeader == "" || !strings.HasPrefix(signatureHeader, "sha256=") {
 		return false
 	}
 	expected := signatureHeader[len("sha256="):]
-	mac := hmac.New(sha256.New, []byte(secret))
+	mac := hmac.New(sha256.New, key.hmacKey)
 	mac.Write(body)
 	computed := hex.EncodeToString(mac.Sum(nil))
 	return hmac.Equal([]byte(computed), []byte(expected))
@@ -28,13 +32,8 @@ func verifyGitHubSignature(body []byte, signatureHeader, secret string) bool {
 
 // handleGitHubWebhook ports router.py's github_webhook.
 func (d Deps) handleGitHubWebhook() http.HandlerFunc {
+	key := newVerifyingKey(d.secrets().GitHub)
 	return func(w http.ResponseWriter, r *http.Request) {
-		secret := d.secrets().GitHub
-		if secret == "" {
-			d.logger().Warn("GITHUB_WEBHOOK_SECRET not configured - rejecting webhook")
-			policy.WriteDetail(w, http.StatusInternalServerError, "Webhook secret not configured", nil)
-			return
-		}
 		// Python declares X-GitHub-Event/X-GitHub-Delivery as required
 		// FastAPI Header() params, resolved (and 422'd) ahead of the
 		// signature-checking body dependency -- confirmed live: a request
@@ -52,7 +51,7 @@ func (d Deps) handleGitHubWebhook() http.HandlerFunc {
 			policy.WriteDetail(w, http.StatusBadRequest, "Invalid request body", nil)
 			return
 		}
-		if !verifyGitHubSignature(body, r.Header.Get("X-Hub-Signature-256"), secret) {
+		if !verifyGitHubWithKey(body, r.Header.Get("X-Hub-Signature-256"), key) {
 			d.logger().Warn("GitHub webhook signature validation failed")
 			policy.WriteDetail(w, http.StatusUnauthorized, "Invalid signature", nil)
 			return

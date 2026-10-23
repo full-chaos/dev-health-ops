@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/aclguard"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -242,6 +243,9 @@ func applyRuntimeGrants(ctx context.Context, conn querier, manifest []TablePrivi
 		return fmt.Errorf("%w: beginning the runtime grants transaction", ErrMigrationFailed)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	if err := aclguard.Lock(ctx, tx); err != nil {
+		return fmt.Errorf("%w: taking the privilege writer lock", ErrMigrationFailed)
+	}
 
 	before, err := snapshotDirectGrants(ctx, tx, options.Schema, options.RuntimeRole)
 	if err != nil {

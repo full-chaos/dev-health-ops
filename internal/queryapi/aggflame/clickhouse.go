@@ -7,6 +7,7 @@ import (
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/rowview"
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
@@ -119,7 +120,8 @@ func fetchCycleBreakdown(ctx context.Context, client QueryClient, orgID string, 
             WHERE org_id = {org_id:String}
               AND day >= {start_day:Date}
               AND day < {end_day:Date}` + filter + `
-            GROUP BY day, provider, work_scope_id, team_id, status
+              AND ` + rowview.OrgPredicate("work_item_state_durations_daily", "") + `
+            GROUP BY day, provider, work_scope_id, team_id, status, row_view
             HAVING ` + liverow.NewestPredicate("work_item_state_durations_daily", "") + `
         )
         GROUP BY status
@@ -163,7 +165,7 @@ func fetchCodeHotspots(ctx context.Context, client QueryClient, orgID string, st
 		{Name: "org_id", Value: orgID},
 		{Name: "start_day", Value: formatDay(startDay)},
 		{Name: "end_day", Value: formatDay(endDay)},
-		{Name: "limit", Value: limit},
+		{Name: "limit_n", Value: limit},
 		{Name: "min_churn", Value: minChurn},
 	}
 	if repoID != "" {
@@ -191,7 +193,7 @@ func fetchCodeHotspots(ctx context.Context, client QueryClient, orgID string, st
         GROUP BY repo_id, path
         HAVING total_churn >= {min_churn:UInt64}
         ORDER BY total_churn DESC
-        LIMIT {limit:UInt64}
+        LIMIT {limit_n:UInt64}
     `
 
 	rows, err := client.Query(ctx, query, bindings)
@@ -276,7 +278,7 @@ func fetchThroughput(ctx context.Context, client QueryClient, orgID string, star
 		{Name: "org_id", Value: orgID},
 		{Name: "start_day", Value: formatDay(startDay)},
 		{Name: "end_day", Value: formatDay(endDay)},
-		{Name: "limit", Value: limit},
+		{Name: "limit_n", Value: limit},
 	}
 	attributionSource := primaryWorkItemTeamAttributionSource
 	if teamID != "" {
@@ -304,7 +306,7 @@ func fetchThroughput(ctx context.Context, client QueryClient, orgID string, star
         GROUP BY coalesce(nullIf(t.team_id, ''), 'unassigned')
         HAVING items_completed > 0
         ORDER BY items_completed DESC
-        LIMIT {limit:UInt64}
+        LIMIT {limit_n:UInt64}
     `
 
 	rows, err := client.Query(ctx, query, bindings)
@@ -336,7 +338,7 @@ func fetchThroughputByType(ctx context.Context, client QueryClient, orgID string
 		{Name: "org_id", Value: orgID},
 		{Name: "start_day", Value: formatDay(startDay)},
 		{Name: "end_day", Value: formatDay(endDay)},
-		{Name: "limit", Value: limit},
+		{Name: "limit_n", Value: limit},
 	}
 	attributionSource := primaryWorkItemTeamAttributionSource
 	if teamID != "" {
@@ -364,7 +366,7 @@ func fetchThroughputByType(ctx context.Context, client QueryClient, orgID string
         GROUP BY work_type, coalesce(nullIf(t.team_id, ''), 'unassigned')
         HAVING items_completed > 0
         ORDER BY items_completed DESC
-        LIMIT {limit:UInt64}
+        LIMIT {limit_n:UInt64}
     `
 
 	rows, err := client.Query(ctx, query, bindings)

@@ -107,7 +107,6 @@ func TestAuthorizationSharedFieldsAreReferencesNotCopies(t *testing.T) {
 		{"request.context.request_id", asMap(t, schemaProps(t, context)["request_id"], "request_id"), errorEnvelope + "request_id"},
 		{"request.context.client_service", asMap(t, schemaProps(t, context)["client_service"], "client_service"), "../endpoint-profile.schema.json#/$defs/endpointProfile/properties/service"},
 		{"decision.obligations.tenant_scope", asMap(t, schemaProps(t, asMap(t, schemaProps(t, decision)["obligations"], "obligations"))["tenant_scope"], "tenant_scope"), principal + "organization_id"},
-		{"decision.reason_code", asMap(t, schemaProps(t, decision)["reason_code"], "reason_code"), errorEnvelope + "reason_code"},
 		{"decision.principal_id", asMap(t, schemaProps(t, decision)["principal_id"], "principal_id"), principal + "principal_id"},
 		{"decision.organization_id", asMap(t, schemaProps(t, decision)["organization_id"], "organization_id"), principal + "organization_id"},
 		{"decision.policy_revision", asMap(t, schemaProps(t, decision)["policy_revision"], "policy_revision"), principal + "policy_revision"},

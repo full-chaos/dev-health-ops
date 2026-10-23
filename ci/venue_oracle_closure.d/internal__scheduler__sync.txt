@@ -1,3 +1,4 @@
+contracts/auth/v1
 internal/api/licensing
 internal/api/policy
 internal/api/pybody
@@ -26,10 +27,13 @@ internal/operationalordering
 internal/ownershipwindow
 internal/pgmigrate
 internal/platform/config
+internal/platform/credshape
 internal/platform/dbphase
 internal/platform/dbspan
+internal/platform/dsnclass
 internal/platform/errortext
 internal/platform/errortext/hardened
+internal/platform/fernet
 internal/platform/health
 internal/platform/logging
 internal/platform/pgident
@@ -47,8 +51,10 @@ internal/pythonparity/emailvalidator
 internal/pythonparity/pyidna
 internal/pythonparity/pyunicodedata
 internal/storage/clickhouse
+internal/storage/clickhouse/engineclause
 internal/storage/clickhouse/liverow
 internal/storage/postgres
+internal/storage/postgres/aclguard
 internal/storage/river
 internal/storage/roleacl
 internal/storedversion

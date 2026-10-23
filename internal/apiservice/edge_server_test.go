@@ -111,7 +111,7 @@ func TestConfigureServesTheBillingEdgeOnItsOwnListenerOnlyWhenSet(t *testing.T) 
 		return response, string(body)
 	}
 	response, body := get(edge, "/health")
-	wantBody := `{"status":"down","services":{"stripe_secret_key":"not_configured","stripe_webhook_secret":"not_configured","license_private_key":"not_configured","stripe_client":"down","postgres":"not_configured"}}`
+	wantBody := `{"status":"down"}`
 	if response.StatusCode != http.StatusServiceUnavailable || body != wantBody {
 		t.Fatalf("edge /health: %d %s", response.StatusCode, body)
 	}

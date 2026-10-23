@@ -151,9 +151,9 @@ func Routes(deps Deps) []httpapi.Route {
 		{Method: http.MethodGet, Pattern: "/api/v1/auth/verify", Handler: guard.Wrap(policy.Public,
 			httpapi.ValidateThenLimit(validateVerify, h.verifyLimiter, queryAuthKey, h.Write)(inner("/api/v1/auth/verify", h.verify)))},
 		{Method: http.MethodPost, Pattern: "/api/v1/auth/resend-verification", Handler: guard.BodyFirst(policy.Public,
-			httpapi.ValidateThenLimit(validateEmailBody, h.resendLimiter, bodyAuthKey, h.Write)(inner("/api/v1/auth/resend-verification", h.resendVerification)))},
+			httpapi.ValidateThenLimit(validateEmailBody, h.resendLimiter, bodyAuthKey, h.Write)(httpapi.LimitWith(httpapi.NewKeyedLimiter(defaults.Limits, resendAddrLimit), addrBucketKey, h.Write)(inner("/api/v1/auth/resend-verification", h.resendVerification))))},
 		{Method: http.MethodPost, Pattern: "/api/v1/auth/forgot-password", Handler: guard.BodyFirst(policy.Public,
-			httpapi.ValidateThenLimit(validateEmailBody, h.forgotLimiter, bodyAuthKey, h.Write)(inner("/api/v1/auth/forgot-password", h.forgotPassword)))},
+			httpapi.ValidateThenLimit(validateEmailBody, h.forgotLimiter, bodyAuthKey, h.Write)(httpapi.LimitWith(httpapi.NewKeyedLimiter(defaults.Limits, forgotAddrLimit), addrBucketKey, h.Write)(inner("/api/v1/auth/forgot-password", h.forgotPassword))))},
 		{Method: http.MethodPost, Pattern: "/api/v1/auth/reset-password", Handler: guard.BodyFirst(policy.Public, inner("/api/v1/auth/reset-password", h.resetPassword))},
 		{Method: http.MethodPost, Pattern: "/api/v1/auth/change-password", Handler: guard.BodyFirst(policy.Authenticated,
 			httpapi.ValidateThenLimit(validateChangePassword, h.changePasswordLimiter, changePasswordKey, h.Write)(inner("/api/v1/auth/change-password", h.changePassword)))},
@@ -167,7 +167,7 @@ func Routes(deps Deps) []httpapi.Route {
 // fail logs a failure with its step and writes the Python api's bare 500.
 // err must never carry a credential.
 func (h handlers) fail(w http.ResponseWriter, r *http.Request, step string, err error) {
-	attrs := []any{slog.String("path", r.URL.Path), slog.String("step", step)}
+	attrs := []any{slog.String("path", r.Pattern), slog.String("step", step)}
 	if err != nil {
 		attrs = append(attrs, slog.String("error", err.Error()))
 	}

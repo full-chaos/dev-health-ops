@@ -45,6 +45,6 @@ var tableReads = map[string]tableRead{
 	"user_metrics_daily":              {Key: []string{"org_id", "repo_id", "author_email", "day"}, Version: "computed_at"},
 	"work_item_completion_daily":      {Key: []string{"org_id", "repo_id", "day", "team_id"}, Version: "computed_at"},
 	"work_item_cycle_times":           {Key: []string{"org_id", "provider", "work_item_id"}, Version: "computed_at"},
-	"work_item_metrics_daily":         {Key: []string{"org_id", "provider", "day", "work_scope_id", "team_id"}, Version: "computed_at"},
-	"work_item_state_durations_daily": {Key: []string{"org_id", "provider", "work_scope_id", "team_id", "status", "day"}, Version: "computed_at"},
+	"work_item_metrics_daily":         {Key: []string{"org_id", "provider", "day", "work_scope_id", "team_id", "row_view"}, Version: "computed_at"},
+	"work_item_state_durations_daily": {Key: []string{"org_id", "provider", "work_scope_id", "team_id", "status", "day", "row_view"}, Version: "computed_at"},
 }

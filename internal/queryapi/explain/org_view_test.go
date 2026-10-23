@@ -15,3 +15,13 @@ func TestMetricFromClauseOfWorkItemMetricsTakesTheOrgView(t *testing.T) {
 		t.Errorf("row_view is not in the group of the source: %s", clause)
 	}
 }
+
+func TestMetricFromClauseOfStateDurationsTakesTheOrgView(t *testing.T) {
+	clause := metricFromClause("work_item_state_durations_daily", "duration_hours", "AND team_id = {team_id:String}", "start_day", "end_day")
+	if !strings.Contains(clause, "(work_item_state_durations_daily.row_view IN ('', 'org'))") {
+		t.Errorf("no org view predicate in the source: %s", clause)
+	}
+	if !strings.Contains(clause, "status,\n        row_view") {
+		t.Errorf("row_view is not in the group of the source: %s", clause)
+	}
+}

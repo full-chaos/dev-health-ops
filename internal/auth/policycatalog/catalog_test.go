@@ -19,8 +19,8 @@ import (
 )
 
 const (
-	actionsSHA = "e53563bacda11b90037d54a26b847304742766b6dfd99d8575349f53cb2dc894"
-	rolesSHA   = "8bf44f475ab6bc4f307b56101b92aa6e978d0fa42d1c56385fb42c5c67fa95d6"
+	actionsSHA = "4337f3509db0ba9bfdbb80f35c30ca450dfe169abb5a1bf18598dc2b92719ccf"
+	rolesSHA   = "867899e8151541437162b6fed8eae0f00fb5c6117367b9e657193d7729418446"
 )
 
 func repoRoot(t *testing.T) string {
@@ -113,7 +113,7 @@ func TestScopesDoNotMix(t *testing.T) {
 }
 
 func TestLoadRefusesMalformedCatalogs(t *testing.T) {
-	const okA = `{"schema_version":"actions.v1","catalog_version":1,"description":"d","actions":[{"action":"a.b","scope":"organization","resource_kind":"organization"},{"action":"a.c","scope":"organization","resource_kind":"organization"}]}`
+	const okA = `{"schema_version":"actions.v1","catalog_version":1,"description":"d","actions":[{"action":"a.b","scope":"organization","resource_kind":"organization","risk_class":"low","cache_class":"decision_bound"},{"action":"a.c","scope":"organization","resource_kind":"organization","risk_class":"low","cache_class":"decision_bound"}]}`
 	const okR = `{"schema_version":"roles.v1","catalog_version":1,"description":"d","roles":[{"role":"r","scope":"organization","actions":["a.b"]}]}`
 	if _, err := Load([]byte(okA), []byte(okR)); err != nil {
 		t.Fatalf("well-formed catalog refused: %v", err)
@@ -135,6 +135,11 @@ func TestLoadRefusesMalformedCatalogs(t *testing.T) {
 		"duplicate nested member":   {okA, strings.Replace(okR, `"scope":"organization","actions"`, `"scope":"organization","scope":"platform","actions"`, 1)},
 		"reserved role superuser":   {okA, strings.Replace(okR, `"role":"r"`, `"role":"superuser"`, 1)},
 		"reserved role root":        {okA, strings.Replace(okR, `"role":"r"`, `"role":"root"`, 1)},
+		"missing risk class":        {strings.Replace(okA, `"risk_class":"low",`, ``, 1), okR},
+		"missing cache class":       {strings.Replace(okA, `,"cache_class":"decision_bound"`, ``, 1), okR},
+		"unknown risk class":        {strings.Replace(okA, `"risk_class":"low"`, `"risk_class":"medium"`, 1), okR},
+		"unknown cache class":       {strings.Replace(okA, `"cache_class":"decision_bound"`, `"cache_class":"forever"`, 1), okR},
+		"high risk cached":          {strings.Replace(okA, `"risk_class":"low"`, `"risk_class":"high"`, 1), okR},
 		"not json":                  {"{", okR},
 		"trailing data":             {okA + "{}", okR},
 	}
@@ -145,8 +150,22 @@ func TestLoadRefusesMalformedCatalogs(t *testing.T) {
 	}
 }
 
+func TestEveryEmbeddedActionHasARiskAndCacheClassAndHighRiskIsNeverCached(t *testing.T) {
+	for _, a := range Default().Actions() {
+		if a.RiskClass == "" || a.CacheClass == "" {
+			t.Errorf("%s: risk %q cache %q", a.ID, a.RiskClass, a.CacheClass)
+		}
+		if a.RiskClass == RiskHigh && a.CacheClass != CacheNone {
+			t.Errorf("%s is high risk but cache_class %s", a.ID, a.CacheClass)
+		}
+		if strings.HasSuffix(a.ID, ".read") != (a.RiskClass == RiskLow) {
+			t.Errorf("%s: risk_class %s does not follow the read/non-read split", a.ID, a.RiskClass)
+		}
+	}
+}
+
 func TestLoadRefusesARoleHoldingEveryAction(t *testing.T) {
-	a := `{"schema_version":"actions.v1","catalog_version":1,"description":"d","actions":[{"action":"a.b","scope":"organization","resource_kind":"organization"},{"action":"a.c","scope":"organization","resource_kind":"organization"}]}`
+	a := `{"schema_version":"actions.v1","catalog_version":1,"description":"d","actions":[{"action":"a.b","scope":"organization","resource_kind":"organization","risk_class":"low","cache_class":"decision_bound"},{"action":"a.c","scope":"organization","resource_kind":"organization","risk_class":"low","cache_class":"decision_bound"}]}`
 	r := `{"schema_version":"roles.v1","catalog_version":1,"description":"d","roles":[{"role":"r","scope":"organization","actions":["a.b","a.c"]}]}`
 	if _, err := Load([]byte(a), []byte(r)); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("err = %v, want ErrInvalid", err)

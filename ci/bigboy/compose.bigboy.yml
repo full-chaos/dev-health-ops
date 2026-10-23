@@ -2094,6 +2094,7 @@ services:
       ACR_CONTEXT_FABRIC_FALKOR_ADDR: falkordb:6379
       ACR_CONTEXT_FABRIC_FALKOR_ALLOW_INSECURE: 'true'
       ACR_CONTEXT_FABRIC_FALKOR_GRAPH_PREFIX: acr-cf
+      ACR_CONTEXT_FABRIC_FALKOR_PASSWORD_FILE: /run/secrets/acr_falkordb_password
       ACR_CONTEXT_FABRIC_FALKOR_TLS: 'false'
       ACR_CONTEXT_FABRIC_GRAPH_READS_ENABLED: 'true'
       ACR_CONTEXT_FABRIC_MODEL: gpt-5.6-luna
@@ -2133,6 +2134,7 @@ services:
     - acr_evidence_keys
     - acr_ops_svc_token
     - acr_openai_api_key
+    - acr_falkordb_password
     user: 1001:1001
     working_dir: /tmp
   acr-projector:
@@ -2157,6 +2159,7 @@ services:
       ACR_CONTEXT_FABRIC_FALKOR_ADDR: falkordb:6379
       ACR_CONTEXT_FABRIC_FALKOR_ALLOW_INSECURE: 'true'
       ACR_CONTEXT_FABRIC_FALKOR_GRAPH_PREFIX: acr-cf
+      ACR_CONTEXT_FABRIC_FALKOR_PASSWORD_FILE: /run/secrets/acr_falkordb_password
       ACR_CONTEXT_FABRIC_FALKOR_TLS: 'false'
       ACR_CONTEXT_FABRIC_PROJECT_TEAMS_PROJECTS_ENABLED: 'true'
       ACR_CONTEXT_FABRIC_PROJECTION_ENABLED: ${ACR_CONTEXT_FABRIC_PROJECTION_ENABLED:-false}
@@ -2173,7 +2176,7 @@ services:
       dho-clickhouse-readers: null
     profiles: [acr]
     restart: unless-stopped
-    secrets: [acr_runtime_dsn, acr_clickhouse_dsn]
+    secrets: [acr_runtime_dsn, acr_clickhouse_dsn, acr_falkordb_password]
     user: 1001:1001
   acr-falkordb:
     container_name: dev-health-acr-mcp-falkordb-1
@@ -2185,18 +2188,27 @@ services:
         reservations:
           cpus: 0.1
           memory: 512M
+    environment:
+      REDIS_ARGS: --aclfile /run/secrets/acr_falkordb_acl
     healthcheck:
       interval: 10s
       retries: 5
       start_period: 10s
-      test: [CMD, redis-cli, GRAPH.QUERY, _acr_health, RETURN 1]
+      test: [CMD-SHELL, 'REDISCLI_AUTH="$$(cat /run/secrets/acr_falkordb_password)" redis-cli GRAPH.QUERY _acr_health "RETURN 1" | grep -q "^1$$"']
       timeout: 5s
     image: ${BIGBOY_ACR_FALKORDB_IMAGE:?BIGBOY_ACR_FALKORDB_IMAGE is required (the acr image pin of ci/bigboy/images.env, kept in _records/images.env)}
     networks:
       acr:
         aliases: [falkordb]
+    ports:
+    - mode: ingress
+      host_ip: 127.0.0.1
+      target: 6379
+      published: '16379'
+      protocol: tcp
     profiles: [acr]
     restart: unless-stopped
+    secrets: [acr_falkordb_acl, acr_falkordb_password]
     volumes:
     - type: bind
       source: /var/lib/oci-cache/mcp-venue/falkordb-data
@@ -2268,6 +2280,10 @@ secrets:
     file: ${ACR_ENTITLEMENT_TOKEN_FILE:-/var/lib/oci-cache/mcp-venue/secrets/entitlement_token}
   acr_ops_svc_token:
     file: ${ACR_OPS_SVC_TOKEN_FILE:-/var/lib/oci-cache/mcp-venue/secrets/ops_svc_acr_token}
+  acr_falkordb_acl:
+    file: ${ACR_FALKORDB_ACL_FILE:-/var/lib/oci-cache/mcp-venue/secrets/falkordb_acl}
+  acr_falkordb_password:
+    file: ${ACR_FALKORDB_PASSWORD_FILE:-/var/lib/oci-cache/mcp-venue/secrets/falkordb_password}
 x-acr-build:
   context: ./acr
   dockerfile: Dockerfile

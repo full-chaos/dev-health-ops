@@ -37,8 +37,8 @@ func TestEdgeHealthStatusGrid(t *testing.T) {
 	}
 }
 
-// TestEdgeHealthBodyShape: the body is {"status", "services"} with the services
-// in the order Python builds them (the three secrets, stripe_client, postgres).
+// TestEdgeHealthBodyShape: the body is {"status"} only, for every input; no
+// per-service or secret state reaches a caller.
 func TestEdgeHealthBodyShape(t *testing.T) {
 	body, err := pyjson.Dumps(edgeHealthBody(edgeHealthInput{
 		Postgres: healthDown, StripeSecretKey: healthOK, StripeWebhookSecret: healthNotConfigured, LicensePrivateKey: healthOK, StripeClient: healthOK,
@@ -46,7 +46,7 @@ func TestEdgeHealthBodyShape(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `{"status": "down", "services": {"stripe_secret_key": "ok", "stripe_webhook_secret": "not_configured", "license_private_key": "ok", "stripe_client": "ok", "postgres": "down"}}`
+	want := `{"status": "down"}`
 	if body != want {
 		t.Fatalf("body\n got %s\nwant %s", body, want)
 	}
@@ -71,6 +71,23 @@ func TestEdgeRoutesAreOnlyTheEdgeSet(t *testing.T) {
 	for key := range want {
 		if !got[key] {
 			t.Fatalf("edge routes %v lack %s", got, key)
+		}
+	}
+}
+
+// TestEdgeHealthBodyNamesNoServiceForAnyInput: whatever the inputs, the body
+// holds the status key only.
+func TestEdgeHealthBodyNamesNoServiceForAnyInput(t *testing.T) {
+	values := []string{healthOK, healthNotConfigured, healthDown}
+	for _, a := range values {
+		for _, b := range values {
+			body, err := pyjson.Dumps(edgeHealthBody(edgeHealthInput{Postgres: a, StripeSecretKey: b, StripeWebhookSecret: a, LicensePrivateKey: b, StripeClient: a}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if body != `{"status": "ok"}` && body != `{"status": "down"}` {
+				t.Fatalf("body %s", body)
+			}
 		}
 	}
 }

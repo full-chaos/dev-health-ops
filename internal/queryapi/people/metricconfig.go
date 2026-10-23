@@ -48,7 +48,10 @@
 // change).
 package people
 
-import "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
+import (
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/rowview"
+	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
+)
 
 // personMetricDefinition ports MetricDefinition (api/models/schemas.py:
 // 424-426): the free-text description/interpretation pair a metric's
@@ -275,8 +278,14 @@ func dedupTable(table string) string {
 // the org_id predicate and the FINAL source. A table with no retraction marker
 // gets no clause.
 func liveWhere(table string) string {
-	if liverow.Registered(table) {
-		return "\n  AND " + liverow.Predicate(table, "")
+	clause := ""
+	if rowview.Has(table) {
+		// Each item once in the organization (CHAOS-8863): the legacy rows and the org view. A person who works in
+		// two work scopes has one row for each; the org view counts each item once.
+		clause += "\n  AND " + rowview.OrgPredicate(table, "")
 	}
-	return ""
+	if liverow.Registered(table) {
+		clause += "\n  AND " + liverow.Predicate(table, "")
+	}
+	return clause
 }

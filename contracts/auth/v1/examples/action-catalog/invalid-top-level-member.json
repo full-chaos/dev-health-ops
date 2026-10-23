@@ -6,7 +6,9 @@
     {
       "action": "members.read",
       "scope": "organization",
-      "resource_kind": "organization"
+      "resource_kind": "organization",
+      "risk_class": "low",
+      "cache_class": "decision_bound"
     }
   ],
   "extra": 1

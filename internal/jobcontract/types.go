@@ -417,7 +417,10 @@ func Decode(kind string, data []byte) (Envelope, error) {
 	}
 
 	var wire wireEnvelope
-	if err := decodeStrict(data, MaxEnvelopeBytes, &wire); err != nil {
+	if err := decodeGuarded(data, MaxEnvelopeBytes, &wire); err != nil {
+		if refusal, ok := asValueRefusal(err); ok {
+			return Envelope{}, refusal
+		}
 		return Envelope{}, fmt.Errorf("decode envelope: %w", err)
 	}
 	if !containsVersion(definition.SupportedVersions, wire.ContractVersion) {
@@ -678,6 +681,9 @@ func MarshalCanonical(envelope Envelope) ([]byte, error) {
 		return nil, fmt.Errorf("encoded envelope exceeds %d bytes", MaxEnvelopeBytes)
 	}
 	if _, err := Decode(kind, data); err != nil {
+		if refusal, ok := asValueRefusal(err); ok {
+			return nil, refusal
+		}
 		return nil, fmt.Errorf("validate encoded envelope: %w", err)
 	}
 	return data, nil

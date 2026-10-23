@@ -38,6 +38,7 @@ const hookStatesSHA256 = "c22eb8928f03fc124cf6eaa400aec43d8cf9ac79aebc59d01817e9
 // cannot give: that one applies the baseline to an EMPTY database, the one starting point the hook
 // never has in production. Trap #415: it runs the verb the hook runs, not a stand-in.
 func TestHookVerbUpgradesAnOldProductionDatabaseToTheAlembicHead(t *testing.T) {
+	pgmigrate.UseFrozenChain(t) // the frozen goldens end at pgmigrate.FrozenHead
 	ctx := context.Background()
 	instance, err := containers.StartPostgres(ctx)
 	if err != nil {

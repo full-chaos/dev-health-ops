@@ -36,6 +36,12 @@ var tables = map[string]struct{}{
 	"work_item_user_metrics_daily":    {},
 }
 
+// Has reports whether table holds the view column.
+func Has(table string) bool {
+	_, ok := tables[table]
+	return ok
+}
+
 // Tables returns the tables that hold the view column, sorted.
 func Tables() []string {
 	names := make([]string, 0, len(tables))

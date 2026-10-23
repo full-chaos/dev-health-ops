@@ -17,8 +17,10 @@ internal/pgmigrate
 internal/platform/config
 internal/platform/dbphase
 internal/platform/dbspan
+internal/platform/dsnclass
 internal/platform/errortext
 internal/platform/errortext/hardened
+internal/platform/fernet
 internal/platform/logging
 internal/platform/pgident
 internal/platform/queuecontrol
@@ -32,6 +34,7 @@ internal/pythonparity/pyidna
 internal/pythonparity/pyunicodedata
 internal/storage/clickhouse
 internal/storage/postgres
+internal/storage/postgres/aclguard
 internal/storage/river
 internal/storage/roleacl
 internal/syncdispatchruntime/synclog

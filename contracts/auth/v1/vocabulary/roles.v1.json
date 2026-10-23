@@ -1,6 +1,6 @@
 {
   "schema_version": "roles.v1",
-  "catalog_version": 1,
+  "catalog_version": 2,
   "description": "The closed role catalog. Each role lists its actions explicitly; there is no inheritance, wildcard or all-actions role. A platform role holds only platform actions; an organization role holds only organization actions.",
   "roles": [
     {

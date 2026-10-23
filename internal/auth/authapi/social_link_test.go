@@ -2,8 +2,14 @@ package authapi
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -194,5 +200,80 @@ func TestSocialUnlinkKeepsTheLastSignInMethodAndHidesAForeignIdentity(t *testing
 func TestSocialLinkRoutesRequireTheirCollaborators(t *testing.T) {
 	if _, err := SocialLinkRoutes(SocialLinkDeps{Social: &fakeLinkDomain{}}); err == nil {
 		t.Fatal("routes built without sessions, users and an issuer")
+	}
+}
+
+type failingLinkDomain struct{ err error }
+
+func (f failingLinkDomain) Exchange(context.Context, social.Provider, contracts.SecretString, *string) (social.ExchangeResult, error) {
+	return social.ExchangeResult{}, f.err
+}
+
+func (f failingLinkDomain) Link(context.Context, social.SignedIn, social.Provider, contracts.SecretString) (identity.Identity, error) {
+	return identity.Identity{}, f.err
+}
+
+func (f failingLinkDomain) Unlink(context.Context, social.SignedIn, uuid.UUID) error { return f.err }
+
+// TestEverySocialLinkAnswerIsADeclaredOpenAPIResponse drives each refusal the
+// social domain can return, and the request refusals, through both routes and
+// requires the status to be a response the operation declares.
+func TestEverySocialLinkAnswerIsADeclaredOpenAPIResponse(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join(repoRoot(t), "contracts", "auth", "v1", "openapi", "auth-v1.openapi.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document struct {
+		Paths map[string]map[string]struct {
+			Responses map[string]any `json:"responses"`
+		} `json:"paths"`
+	}
+	if err := json.Unmarshal(raw, &document); err != nil {
+		t.Fatal(err)
+	}
+	failures := []error{
+		&social.ConflictError{ExistingMethod: "password"}, social.ErrProviderUnavailable, social.ErrProviderNotConfigured,
+		social.ErrProviderRefused, social.ErrEmailUnverified, social.ErrPrincipalDisabled, identity.ErrSignupNotAvailable,
+		social.ErrReauthenticationRequired, identity.ErrIdentityConflict, social.ErrProviderLinked, identity.ErrNotFound,
+		identity.ErrLastSignInMethod, social.ErrUnavailable, errors.New("unclassified"),
+	}
+	calls := []struct {
+		method, path, openapiPath, body string
+	}{
+		{http.MethodPost, PatternSocialLink, "/v1/identities/social", linkBody},
+		{http.MethodDelete, "/v1/identities/social/" + uuid.NewString(), "/v1/identities/social/{id}", ""},
+	}
+	for _, call := range calls {
+		declared := document.Paths[call.openapiPath][strings.ToLower(call.method)].Responses
+		if len(declared) == 0 {
+			t.Fatalf("%s %s: no OpenAPI operation", call.method, call.openapiPath)
+		}
+		for _, failure := range failures {
+			f := newFixture(t)
+			routes, err := SocialLinkRoutes(SocialLinkDeps{Sessions: f.sessions, Users: f.users, Issuer: f.issuer,
+				Logger: slog.New(slog.NewJSONHandler(f.logs, nil)), Social: failingLinkDomain{err: failure}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			mux := http.NewServeMux()
+			for _, route := range routes {
+				mux.Handle(route.Method+" "+route.Pattern, requestid.Middleware(route.Handler))
+			}
+			f.server = mux
+			response := f.do(call.method, call.path, call.body, f.bearer(f.grant()))
+			if _, ok := declared[strconv.Itoa(response.Code)]; !ok {
+				t.Errorf("%s %s: %T answered %d, which the operation does not declare", call.method, call.openapiPath, failure, response.Code)
+			}
+		}
+		for name, body := range map[string]string{"empty body": "{}", "unknown provider": `{"provider":"x","provider_access_token":"t"}`} {
+			if call.method != http.MethodPost {
+				continue
+			}
+			f, _ := linkFixture(t)
+			response := f.do(call.method, call.path, body, f.bearer(f.grant()))
+			if _, ok := declared[strconv.Itoa(response.Code)]; !ok {
+				t.Errorf("%s: %s answered %d, which the operation does not declare", call.openapiPath, name, response.Code)
+			}
+		}
 	}
 }

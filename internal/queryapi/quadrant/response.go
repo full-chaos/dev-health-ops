@@ -303,12 +303,21 @@ func BuildResponse(ctx context.Context, client QueryClient, orgID string, params
 	}
 
 	fetch := func(spec MetricSpec, bucket string) ([]metricRow, error) {
+		if scope == "team" && selected.linked != nil && len(selected.linked.repoIDs) == 0 {
+			return nil, nil
+		}
 		if definition.Type == "cycle_throughput" && scope == "team" && spec.UsePrimaryTeamAttribution {
 			return fetchWorkItemTeamQuadrantMetricIn(ctx, client, spec.Metric, startDay, endDay, bucket, orgID, time.Now().UTC(), selected.attributedTeams)
 		}
 		if scope == "team" && spec.OwnerTeam {
 			read, owners := ownerTeamRead(spec, orgID, selected.teams, time.Now().UTC())
+			if selected.linked != nil {
+				owners = joinScopes(owners, selected.linked.ownerRepoCondition())
+			}
 			return fetchQuadrantMetricIn(ctx, client, read, startDay, endDay, bucket, orgID, "", owners)
+		}
+		if scope == "team" && selected.linked != nil {
+			return fetchLinkedTeamMetric(ctx, client, selected.linked, spec.Metric, startDay, endDay, bucket, orgID, selected.teams)
 		}
 		if scope == "person" {
 			return fetchQuadrantMetricIn(ctx, client, spec, startDay, endDay, bucket, orgID, "", personIdentityScope(spec, personIdentities))

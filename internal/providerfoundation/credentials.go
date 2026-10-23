@@ -1,30 +1,23 @@
 package providerfoundation
 
 import (
-	"bytes"
-	"crypto/aes"
-	"crypto/cipher"
-	"crypto/hmac"
 	"crypto/rand"
-	"crypto/sha256"
-	"encoding/base64"
-	"encoding/binary"
 	"io"
 	"strings"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/platform/fernet"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
-	"golang.org/x/crypto/pbkdf2"
 )
 
 const (
-	credentialCiphertextV1 = "v1:"
-	defaultEncryptionSalt  = "dev-health-ops-settings-encryption-v1"
-	fernetVersion          = byte(0x80)
-	fernetBlockSize        = aes.BlockSize
-	fernetSignatureSize    = sha256.Size
-	fernetHeaderSize       = 1 + 8 + fernetBlockSize
+	credentialCiphertextV1 = fernet.V1Prefix
+	defaultEncryptionSalt  = fernet.DefaultSalt
+	fernetVersion          = fernet.Version
+	fernetBlockSize        = fernet.BlockSize
+	fernetSignatureSize    = fernet.SignatureSize
+	fernetHeaderSize       = fernet.HeaderSize
 )
 
 // FernetDecryptor is wire-compatible with core/encryption.py. It supports
@@ -67,16 +60,15 @@ func (d FernetDecryptor) decrypt(ciphertext secrets.Value) ([]byte, error) {
 	if !d.key.Configured() || !ciphertext.Configured() {
 		return nil, ErrCredentialInvalid
 	}
-	raw := ciphertext.Reveal()
-	key := []byte(d.key.Reveal())
-	if strings.HasPrefix(raw, credentialCiphertextV1) {
-		return decryptFernet(strings.TrimPrefix(raw, credentialCiphertextV1), pbkdf2.Key(key, []byte(d.salt), 600000, 32, sha256.New))
-	}
-	if strings.HasPrefix(raw, "v") && strings.Contains(raw, ":") {
+	cipher, err := fernet.New(d.key.Reveal(), d.salt)
+	if err != nil {
 		return nil, ErrCredentialInvalid
 	}
-	legacy := sha256.Sum256(key)
-	return decryptFernet(raw, legacy[:])
+	plain, err := cipher.Open(ciphertext.Reveal())
+	if err != nil {
+		return nil, ErrCredentialInvalid
+	}
+	return plain, nil
 }
 
 // Encrypt emits the same versioned Fernet format as core/encryption.py. It is
@@ -85,73 +77,31 @@ func (d FernetDecryptor) Encrypt(plaintext []byte) (secrets.Value, error) {
 	if !d.key.Configured() {
 		return secrets.Value{}, ErrCredentialInvalid
 	}
-	key := pbkdf2.Key(
-		[]byte(d.key.Reveal()), []byte(d.salt), 600000, 32, sha256.New,
-	)
-	token, err := encryptFernet(plaintext, key, time.Now(), rand.Reader)
+	cipher, err := fernet.New(d.key.Reveal(), d.salt)
 	if err != nil {
 		return secrets.Value{}, ErrCredentialInvalid
 	}
-	return secrets.NewValue(credentialCiphertextV1 + token), nil
+	sealed, err := cipher.Seal(plaintext, time.Now(), rand.Reader)
+	if err != nil {
+		return secrets.Value{}, ErrCredentialInvalid
+	}
+	return secrets.NewValue(sealed), nil
 }
 
 func encryptFernet(plaintext, key []byte, now time.Time, entropy io.Reader) (string, error) {
-	if len(key) != 32 || entropy == nil {
-		return "", ErrCredentialInvalid
-	}
-	padding := fernetBlockSize - len(plaintext)%fernetBlockSize
-	padded := make([]byte, len(plaintext)+padding)
-	copy(padded, plaintext)
-	copy(padded[len(plaintext):], bytes.Repeat([]byte{byte(padding)}, padding))
-	block, err := aes.NewCipher(key[16:])
+	token, err := fernet.EncryptToken(plaintext, key, now, entropy)
 	if err != nil {
 		return "", ErrCredentialInvalid
 	}
-	iv := make([]byte, fernetBlockSize)
-	if _, err := io.ReadFull(entropy, iv); err != nil {
-		return "", ErrCredentialInvalid
-	}
-	payload := make([]byte, fernetHeaderSize, fernetHeaderSize+len(padded)+fernetSignatureSize)
-	payload[0] = fernetVersion
-	binary.BigEndian.PutUint64(payload[1:9], uint64(now.Unix()))
-	copy(payload[9:fernetHeaderSize], iv)
-	encrypted := make([]byte, len(padded))
-	cipher.NewCBCEncrypter(block, iv).CryptBlocks(encrypted, padded)
-	payload = append(payload, encrypted...)
-	mac := hmac.New(sha256.New, key[:16])
-	_, _ = mac.Write(payload)
-	payload = append(payload, mac.Sum(nil)...)
-	return base64.URLEncoding.EncodeToString(payload), nil
+	return token, nil
 }
 
 func decryptFernet(token string, key []byte) ([]byte, error) {
-	decoded, err := base64.RawURLEncoding.DecodeString(token)
-	if err != nil {
-		decoded, err = base64.URLEncoding.DecodeString(token)
-	}
-	if err != nil || len(decoded) < fernetHeaderSize+fernetSignatureSize || decoded[0] != fernetVersion || len(key) != 32 {
-		return nil, ErrCredentialInvalid
-	}
-	signed := decoded[:len(decoded)-fernetSignatureSize]
-	mac := hmac.New(sha256.New, key[:16])
-	_, _ = mac.Write(signed)
-	if !hmac.Equal(mac.Sum(nil), decoded[len(decoded)-fernetSignatureSize:]) {
-		return nil, ErrCredentialInvalid
-	}
-	block, err := aes.NewCipher(key[16:])
+	plain, err := fernet.DecryptToken(token, key)
 	if err != nil {
 		return nil, ErrCredentialInvalid
 	}
-	if len(signed[fernetHeaderSize:]) == 0 || len(signed[fernetHeaderSize:])%fernetBlockSize != 0 {
-		return nil, ErrCredentialInvalid
-	}
-	plain := make([]byte, len(signed[fernetHeaderSize:]))
-	cipher.NewCBCDecrypter(block, signed[9:fernetHeaderSize]).CryptBlocks(plain, signed[fernetHeaderSize:])
-	padding := int(plain[len(plain)-1])
-	if padding == 0 || padding > fernetBlockSize || padding > len(plain) || !bytes.Equal(plain[len(plain)-padding:], bytes.Repeat([]byte{byte(padding)}, padding)) {
-		return nil, ErrCredentialInvalid
-	}
-	return plain[:len(plain)-padding], nil
+	return plain, nil
 }
 
 // githubFieldAliases mirrors github_credentials_from_mapping's alias dict

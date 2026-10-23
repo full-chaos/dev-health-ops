@@ -17,7 +17,7 @@ var readerRoles = map[string]struct{ role, why string }{
 	"internal/goapiproof/restcorpus.go":                                           {"names", "guard, spec, grant, doc comment or fixture: no row read of its own"},
 	"internal/jobruntime/telemetry.go":                                            {"names", "table names in telemetry labels"},
 	"internal/jobs/metrics/daily/benchmarking/clickhouse.go":                      {"reader-sum", "sums rows of several work scopes: takes the org predicate (CHAOS-8863 PR2)"},
-	"internal/jobs/metrics/daily/icfinalize/executor.go":                          {"reader-nosum", "reads rows with no sum across scopes (a listing or one key)"},
+	"internal/jobs/metrics/daily/icfinalize/executor.go":                          {"reader-sum", "merges the person rows of every work scope into one user row (MergeICUserMetrics sums them): takes the org view (CHAOS-8863 PR2c)"},
 	"internal/jobs/metrics/daily/icfinalize/loader.go":                            {"writer", "writes the table or builds its rows"},
 	"internal/jobs/metrics/daily/stale_team_keys_run.go":                          {"writer", "writes the table or builds its rows"},
 	"internal/jobs/metrics/daily/work_item_native_clickhouse.go":                  {"writer", "writes the table or builds its rows"},

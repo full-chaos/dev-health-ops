@@ -46,6 +46,36 @@
       "expect_instance_location": "/",
       "expect_keyword": "additionalProperties",
       "why": "An extra top-level member."
+    },
+    {
+      "file": "invalid-high-risk-cached.json",
+      "expect_instance_location": "/actions/0/cache_class",
+      "expect_keyword": "const",
+      "why": "A high-risk action is never cached."
+    },
+    {
+      "file": "invalid-risk-class-unknown.json",
+      "expect_instance_location": "/actions/0/risk_class",
+      "expect_keyword": "enum",
+      "why": "A risk class outside the closed set."
+    },
+    {
+      "file": "invalid-cache-class-unknown.json",
+      "expect_instance_location": "/actions/0/cache_class",
+      "expect_keyword": "enum",
+      "why": "A cache class outside the closed set."
+    },
+    {
+      "file": "invalid-risk-class-missing.json",
+      "expect_instance_location": "/actions/0",
+      "expect_keyword": "required",
+      "why": "Every action names its risk class."
+    },
+    {
+      "file": "invalid-cache-class-missing.json",
+      "expect_instance_location": "/actions/0",
+      "expect_keyword": "required",
+      "why": "Every action names its cache class."
     }
   ]
 }

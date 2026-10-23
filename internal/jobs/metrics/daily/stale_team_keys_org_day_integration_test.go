@@ -318,7 +318,9 @@ WHERE org_id = ? AND day = ? AND provider = 'linear' AND work_scope_id = 'board-
 		count(&before)
 		endStaleKeyRun(t, ctx, conn, run, clock.Add(time.Hour))
 		count(&after)
-		if after != before {
+		// Stored versions are counted: a write adds versions and a background merge
+		// only removes them, so growth is the signal and equality is not.
+		if after > before {
 			t.Errorf("a second end of the run wrote %d more row(s) in the repository-scoped tables, want none", after-before)
 		}
 	})

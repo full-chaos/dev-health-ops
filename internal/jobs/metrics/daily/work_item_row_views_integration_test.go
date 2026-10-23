@@ -146,21 +146,29 @@ WHERE org_id = ? AND day = ? AND row_view = '' AND items_touched != 0
 	}
 
 	// Step 3, the day is computed again: nothing a reader sees changes, and no
-	// row of zeros is written over a legacy key that is already retracted.
-	var zerosBefore uint64
-	countLegacy := `SELECT count() FROM work_item_metrics_daily WHERE org_id = ? AND day = ? AND row_view = ''`
-	if err := conn.QueryRow(ctx, countLegacy, staleKeyAcceptanceOrg, day).Scan(&zerosBefore); err != nil {
-		t.Fatal(err)
+	// row of zeros is written over a legacy key that is already retracted. A
+	// new row of zeros has a newer computed_at than every stored legacy row, so
+	// the newest legacy version and the number of legacy keys must not move. The
+	// number of stored legacy row versions is not read: a background merge of
+	// the table collapses versions of one key between two reads.
+	type legacyState struct {
+		newest time.Time
+		keys   uint64
 	}
+	readLegacy := func() legacyState {
+		var state legacyState
+		if err := conn.QueryRow(ctx, `SELECT max(computed_at), count() FROM work_item_metrics_daily FINAL
+WHERE org_id = ? AND day = ? AND row_view = ''`, staleKeyAcceptanceOrg, day).Scan(&state.newest, &state.keys); err != nil {
+			t.Fatal(err)
+		}
+		return state
+	}
+	legacyBefore := readLegacy()
 	second := first.Add(10 * time.Hour)
 	run = runWorkItemFamiliesOnly(t, ctx, conn, second)
 	endStaleKeyRun(t, ctx, conn, run, second.Add(time.Minute))
-	var zerosAfter uint64
-	if err := conn.QueryRow(ctx, countLegacy, staleKeyAcceptanceOrg, day).Scan(&zerosAfter); err != nil {
-		t.Fatal(err)
-	}
-	if zerosAfter != zerosBefore {
-		t.Fatalf("legacy row versions %d -> %d: a recompute must not write over a legacy key that is already retracted", zerosBefore, zerosAfter)
+	if legacyAfter := readLegacy(); !legacyAfter.newest.Equal(legacyBefore.newest) || legacyAfter.keys != legacyBefore.keys {
+		t.Fatalf("legacy rows %+v -> %+v: a recompute must not write over a legacy key that is already retracted", legacyBefore, legacyAfter)
 	}
 	if got := viewSum(t, ctx, conn, "work_item_metrics_daily", "items_completed", legacyAndOrg); got != org {
 		t.Fatalf("legacy + org after the recompute = %v, want %v", got, org)

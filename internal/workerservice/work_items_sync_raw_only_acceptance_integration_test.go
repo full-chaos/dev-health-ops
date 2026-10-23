@@ -236,6 +236,15 @@ func rawOnlyStoredVersions(ctx context.Context, t *testing.T, conn driver.Conn, 
 	return counts
 }
 
+func rawOnlyGrew(before, after map[string]uint64) bool {
+	for table, count := range after {
+		if count > before[table] {
+			return true
+		}
+	}
+	return false
+}
+
 func rawOnlyTotal(counts map[string]uint64) uint64 {
 	var total uint64
 	for _, count := range counts {
@@ -452,7 +461,9 @@ func TestWorkItemsSyncWritesRawRowsOnlyAndTheDailyJobGivesTheWholeDay(t *testing
 		secondClaim := rawOnlyClaim(t, provider, orgID, uuid.NewString(), laterDay.Add(5*time.Hour), laterDay.Add(6*time.Hour))
 		writeRawOnlyUnit(ctx, t, sink, secondClaim, []rawOnlyItem{inA}, laterDay.Add(6*time.Hour+time.Minute))
 		assertRawOnlySinkRefusesDerivedTables(ctx, t, sink, secondClaim)
-		if after := rawOnlyStoredVersions(ctx, t, rig.conn, orgID); fmt.Sprint(after) != fmt.Sprint(before) {
+		// A write adds stored versions and a background merge only removes them:
+		// a table that grew was written to; equality of counts is not required.
+		if after := rawOnlyStoredVersions(ctx, t, rig.conn, orgID); rawOnlyGrew(before, after) {
 			t.Fatalf("%s: stored derived row versions changed with unit 2 and no daily run\n before %v\n after  %v", provider, before, after)
 		}
 		check(provider, "after unit 2 (only the item of repository A), before the daily run",

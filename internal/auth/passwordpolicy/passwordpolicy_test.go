@@ -53,3 +53,17 @@ func TestLengthBoundsAre12To128(t *testing.T) {
 		}
 	}
 }
+
+func TestValidateForHashAddsTheByteLimit(t *testing.T) {
+	ok72 := "A1" + strings.Repeat("b", 70)
+	over := "A1" + strings.Repeat("\u00e9", 36)
+	if got := ValidateForHash(ok72); len(got) != 0 {
+		t.Errorf("72 bytes = %q, want none", got)
+	}
+	if got := ValidateForHash(over); len(got) != 1 || got[0] != ViolationTooLong {
+		t.Errorf("74 bytes = %q, want the byte violation", got)
+	}
+	if got := Validate(over); len(got) != 0 {
+		t.Errorf("Validate counts characters, got %q", got)
+	}
+}

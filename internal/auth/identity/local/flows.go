@@ -36,10 +36,10 @@ const (
 
 // MaxPasswordBytes is bcrypt's limit. A longer password is a policy refusal.
 // It is checked after the shared policy, which counts characters, not bytes.
-const MaxPasswordBytes = 72
+const MaxPasswordBytes = passwordpolicy.MaxBytes
 
 // ViolationTooLong is the violation of a password over MaxPasswordBytes.
-const ViolationTooLong = "Password must be no more than 72 bytes long"
+const ViolationTooLong = passwordpolicy.ViolationTooLong
 
 // FlowOutcome is the result of a flow. Violations is set on FlowPolicy,
 // Issued on a successful Change.
@@ -166,8 +166,9 @@ func (f *Flows) issueAndSend(ctx context.Context, principal uuid.UUID, purpose P
 // Every path that sets a password applies the same rule, so a password that
 // registration refuses is refused on reset and change too:
 //   - Register, Reset and Change call this function;
-//   - the go-api session routes call passwordpolicy.Validate directly;
-//   - the admin set-password and create-user routes and the admin CLI do too.
+//   - the go-api session reset route calls passwordpolicy.ValidateForHash,
+//     the same function, so the byte limit is the same in both services;
+//   - the admin create-user and set-password routes call the same policy.
 //
 // The bounds are passwordpolicy's own (12 to 128 characters). The request
 // model's looser 8 to 128 check runs first in the handlers and only decides
@@ -179,14 +180,13 @@ func (f *Flows) issueAndSend(ctx context.Context, principal uuid.UUID, purpose P
 // so a client that parses them sees no new text for the same mistake.
 // A password over the byte limit gets ViolationTooLong, in the same
 // violation list shape as a policy violation.
+// The byte limit exists because bcrypt reads at most 72 bytes of input;
+// a longer password would otherwise fail later, at hash time, with an
+// error instead of a refusal the caller can show.
+// The text of every violation lives in passwordpolicy, not in this package.
+// This function adds nothing of its own to that list.
 func passwordRefusal(password string) []string {
-	if v := passwordpolicy.Validate(password); len(v) > 0 {
-		return v
-	}
-	if len(password) > MaxPasswordBytes {
-		return []string{ViolationTooLong}
-	}
-	return nil
+	return passwordpolicy.ValidateForHash(password)
 }
 
 // Register creates a local account and sends its verification link.

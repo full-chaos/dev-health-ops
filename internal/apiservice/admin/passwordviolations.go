@@ -8,10 +8,11 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/passwordpolicy"
 )
 
-// refusePasswordPolicy answers 422 with the shared password policy's
-// violations and reports whether it did.
+// refusePasswordPolicy answers 422 in sign-up's shape (detail.message and
+// detail.errors) with the shared password policy's violations and reports
+// whether it did.
 func refusePasswordPolicy(w http.ResponseWriter, password string) bool {
-	violations := passwordpolicy.Validate(password)
+	violations := passwordpolicy.ValidateForHash(password)
 	if len(violations) == 0 {
 		return false
 	}
@@ -19,10 +20,8 @@ func refusePasswordPolicy(w http.ResponseWriter, password string) bool {
 	for i, v := range violations {
 		list[i] = v
 	}
-	detail := pyjson.NewObject()
-	detail.Set("violations", list)
-	out := pyjson.NewObject()
-	out.Set("detail", detail)
-	policy.WriteJSON(w, http.StatusUnprocessableEntity, out, nil)
+	detail := policy.ErrorDetail("Password validation failed")
+	detail.Set("errors", list)
+	policy.WriteDetail(w, http.StatusUnprocessableEntity, detail, nil)
 	return true
 }

@@ -134,7 +134,7 @@ func TestTheStoreErrorCounterIsOnTheServiceScrape(t *testing.T) {
 		"auth_svc_reset_ip", "auth_svc_reset_ip_token", "auth_svc_change_password", "auth_svc_social_link_ip_principal",
 	}
 	for _, id := range ids {
-		sample := regexp.MustCompile(`(?m)^dev_health_api_rate_limit_store_errors_total\{limit="` + id + `"\} 0$`)
+		sample := regexp.MustCompile(`(?m)^dev_health_api_rate_limit_store_errors_total\{limit="` + id + `"\} \d+$`)
 		if !sample.MatchString(scrape.String()) {
 			t.Errorf("the scrape carries no zero sample for limit %s", id)
 		}

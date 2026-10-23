@@ -106,6 +106,15 @@ func newRoutesEnv(t *testing.T, ctx context.Context) *routesEnv {
 		t.Fatal(err)
 	}
 	dsn.User = url.UserPassword(role, password)
+	store, err := containers.StartValkey(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		_ = store.Close(closeCtx)
+	})
 
 	cfg, err := authconfig.Load(authconfig.Spec{LookupEnv: lookupFrom(compatEnvironment(map[string]string{
 		authconfig.EnvDatabaseURI:     dsn.String(),
@@ -114,6 +123,7 @@ func newRoutesEnv(t *testing.T, ctx context.Context) *routesEnv {
 		authconfig.EnvSigningKeyID:    "routes-test",
 		authconfig.EnvAPIAddress:      "127.0.0.1:0",
 		authconfig.EnvOperatorAddress: "127.0.0.1:1",
+		authconfig.EnvValkeyURI:       store.URI,
 	}))})
 	if err != nil {
 		t.Fatalf("load config: %v", err)

@@ -2,6 +2,8 @@ package tracing
 
 import (
 	"context"
+	"sync"
+	"sync/atomic"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/sdk/instrumentation"
@@ -58,9 +60,43 @@ func init() {
 // exceptionTextKeys carry the text of an error (identity-only rule: logging.ErrorSpanAttributes); the type stays.
 var exceptionTextKeys = map[string]bool{"exception.message": true, "exception.stacktrace": true}
 
+// placeholderKey replaces an attribute key that holds a credential; its value is hidden. Any number of such keys on one
+// span collapse to one entry, so the exported key set stays bounded.
+const placeholderKey = "redacted.key"
+
+// cleanKeys remembers keys the redactor left unchanged (a verdict per distinct key, bounded; keys that changed are
+// never stored, so a stream of credential keys cannot grow it).
+var (
+	cleanKeys     sync.Map
+	cleanKeyCount atomic.Int64
+)
+
+const maxCleanKeys = 4096
+
+func keyIsClean(key string) bool {
+	if safeKeys[key] {
+		return true
+	}
+	if _, ok := cleanKeys.Load(key); ok {
+		return true
+	}
+	if logging.RedactText(key) != key {
+		return false
+	}
+	if cleanKeyCount.Load() < maxCleanKeys {
+		if _, loaded := cleanKeys.LoadOrStore(key, struct{}{}); !loaded {
+			cleanKeyCount.Add(1)
+		}
+	}
+	return true
+}
+
 // scrubValue returns the value to export for one attribute; changed is false when kv can go out as it is.
 func scrubValue(kv attribute.KeyValue, exceptionEvent bool) (out attribute.KeyValue, changed bool) {
 	key := string(kv.Key)
+	if !keyIsClean(key) {
+		return attribute.String(placeholderKey, hidden), true
+	}
 	if exceptionEvent && exceptionTextKeys[key] {
 		return attribute.String(key, hidden), true
 	}
@@ -113,7 +149,23 @@ func scrubAttributes(attrs []attribute.KeyValue, exceptionEvent bool) ([]attribu
 	if out == nil {
 		return attrs, false
 	}
-	return out, true
+	return collapsePlaceholders(out), true
+}
+
+// collapsePlaceholders keeps the first placeholder entry and drops the rest.
+func collapsePlaceholders(attrs []attribute.KeyValue) []attribute.KeyValue {
+	seen := false
+	kept := attrs[:0]
+	for _, kv := range attrs {
+		if string(kv.Key) == placeholderKey {
+			if seen {
+				continue
+			}
+			seen = true
+		}
+		kept = append(kept, kv)
+	}
+	return kept
 }
 
 // scrubSet is scrubAttributes over an attribute set: it walks the set and builds a slice only when a value changes.

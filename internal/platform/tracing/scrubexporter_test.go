@@ -6,14 +6,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"go/ast"
-	"go/parser"
-	"go/token"
+	"io"
+	"log/slog"
 	"strings"
 	"testing"
 
+	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
@@ -217,44 +218,102 @@ func TestTheSpanScrubIsTheLogRedactor(t *testing.T) {
 	}
 }
 
-// The scrub is only a guarantee if it is the only way a span leaves the process.
-func TestTheProviderHasOneExportPathAndItIsTheScrub(t *testing.T) {
-	file, err := parser.ParseFile(token.NewFileSet(), "tracing.go", nil, 0)
-	if err != nil {
+// exportSentinelThroughInit starts the process the way a binary does (InitWithServiceName, the production
+// construction), ends a span carrying a credential in its name, an attribute value and an attribute key, and
+// returns an error when any of it reaches the collector exporter.
+func exportSentinelThroughInit(t *testing.T) error {
+	t.Helper()
+	collector := tracetest.NewInMemoryExporter()
+	previousExporter := exporterFor
+	exporterFor = func(context.Context, string) (sdktrace.SpanExporter, error) { return collector, nil }
+	previousProvider := otel.GetTracerProvider()
+	t.Setenv("OTEL_ENABLED", "true")
+	t.Setenv("OTEL_SAMPLE_RATE", "1.0")
+	component := InitWithServiceName(slog.New(slog.NewTextHandler(io.Discard, nil)), "scrub-init-test")
+	defer func() {
+		_ = component.Shutdown(context.Background())
+		otel.SetTracerProvider(previousProvider)
+		exporterFor = previousExporter
+	}()
+	if component.provider == nil {
+		return errors.New("Init built no provider")
+	}
+	token := sentinelToken()
+	_, span := otel.Tracer("init-test").Start(context.Background(), "operation "+token,
+		trace.WithAttributes(attribute.String("note", "value "+token), attribute.String(token, "marker")))
+	span.End()
+	if err := component.provider.ForceFlush(context.Background()); err != nil {
+		return err
+	}
+	spans := collector.GetSpans()
+	if len(spans) == 0 {
+		return errors.New("the collector exporter received no span")
+	}
+	if strings.Contains(exportedText(spans), sentinelCore) {
+		return errors.New("a credential reached the collector exporter through the production construction")
+	}
+	return nil
+}
+
+func TestTheProductionConstructionExportsOnlyScrubbedSpans(t *testing.T) {
+	if err := exportSentinelThroughInit(t); err != nil {
 		t.Fatal(err)
 	}
-	var batchers int
-	ast.Inspect(file, func(node ast.Node) bool {
-		call, ok := node.(*ast.CallExpr)
-		if !ok {
-			return true
+}
+
+// The check above is only worth having if it notices the scrub being gone.
+func TestRemovingTheScrubIsNoticedByTheProductionConstructionTest(t *testing.T) {
+	previous := scrubWrap
+	scrubWrap = func(exporter sdktrace.SpanExporter) sdktrace.SpanExporter { return exporter }
+	defer func() { scrubWrap = previous }()
+	if err := exportSentinelThroughInit(t); err == nil {
+		t.Fatal("with the scrub removed the production-construction test still passed")
+	}
+}
+
+func TestACredentialInAnAttributeKeyNeverReachesTheExporter(t *testing.T) {
+	token := sentinelToken()
+	exporter := tracetest.NewInMemoryExporter()
+	provider := sdktrace.NewTracerProvider(
+		sdktrace.WithResource(resource.NewWithAttributes("", attribute.String("service.name", "svc"), attribute.String(token, "resource-marker"))),
+		sdktrace.WithSyncer(scrubExporter{SpanExporter: exporter}),
+	)
+	ctx := context.Background()
+	tracer := provider.Tracer("keys", trace.WithInstrumentationAttributes(attribute.String(token+"s", "scope-marker")))
+	_, linked := tracer.Start(ctx, "linked")
+	linked.End()
+	_, span := tracer.Start(ctx, "keys",
+		trace.WithAttributes(attribute.String(token+"a", "span-marker"), attribute.Int(token+"b", 7)),
+		trace.WithLinks(trace.Link{SpanContext: linked.SpanContext(), Attributes: []attribute.KeyValue{attribute.String(token+"l", "link-marker")}}))
+	span.AddEvent("ev", trace.WithAttributes(attribute.String(token+"e", "event-marker")))
+	span.End()
+	spans := exporter.GetSpans()
+	text := exportedText(spans)
+	if strings.Contains(text, sentinelCore) {
+		t.Fatalf("a credential-shaped key reached the exporter:\n%s", strings.ReplaceAll(text, "\x00", " | "))
+	}
+	for _, marker := range []string{"span-marker", "link-marker", "event-marker", "scope-marker", "resource-marker"} {
+		if strings.Contains(text, marker) {
+			t.Errorf("the value %q of a redacted key was exported", marker)
 		}
-		selector, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok {
-			return true
-		}
-		switch selector.Sel.Name {
-		case "WithSyncer", "WithBatcher", "WithSpanProcessor":
-			var text bytes.Buffer
-			ast.Fprint(&text, nil, call.Args[0], nil)
-			switch selector.Sel.Name {
-			case "WithBatcher":
-				batchers++
-				if !strings.Contains(text.String(), "scrubExporter") {
-					t.Errorf("the batcher's exporter is not wrapped by scrubExporter")
-				}
-			case "WithSyncer":
-				t.Errorf("a syncer would export without the scrub")
-			case "WithSpanProcessor":
-				if !strings.Contains(text.String(), "endCounter") {
-					t.Errorf("a span processor other than the outcome counter is registered")
-				}
-			}
-		}
-		return true
-	})
-	if batchers != 1 {
-		t.Fatalf("%d batchers, want exactly 1", batchers)
+	}
+	if !strings.Contains(text, placeholderKey) {
+		t.Errorf("no placeholder key was exported: %s", strings.ReplaceAll(text, "\x00", " | "))
+	}
+}
+
+func TestManyCredentialKeysCollapseToOnePlaceholder(t *testing.T) {
+	attrs := make([]attribute.KeyValue, 0, 101)
+	attrs = append(attrs, attribute.String("outcome", "ok"))
+	for i := 0; i < 100; i++ {
+		attrs = append(attrs, attribute.String(fmt.Sprintf("gh"+"p_%s%02d", sentinelCore, i), "v"))
+	}
+	out, changed := scrubAttributes(attrs, false)
+	if !changed || len(out) != 2 {
+		t.Fatalf("changed=%v len=%d, want 2 entries (outcome and one placeholder): %v", changed, len(out), out)
+	}
+	if string(out[1].Key) != placeholderKey || out[1].Value.AsString() != hidden {
+		t.Errorf("placeholder entry = %v", out[1])
 	}
 }
 

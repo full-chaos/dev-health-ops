@@ -31,7 +31,7 @@ func TestUnhandledStripeEventIsLoggedAndCounted(t *testing.T) {
 	var logs bytes.Buffer
 	now := time.Unix(1790000000, 0)
 	h := handlers{stripe: stripeclient.New(stripeclient.Options{Key: "sk_test_unit"}),
-		webhookSecret: secrets.NewValue("whsec_unit"), logger: slog.New(slog.NewJSONHandler(&logs, nil)),
+		webhookSecret: newWebhookCredential(secrets.NewValue("whsec_unit")), logger: slog.New(slog.NewJSONHandler(&logs, nil)),
 		now: func() time.Time { return now }}
 	send := func(eventType, id string) int {
 		body := fmt.Sprintf(`{"id": %q, "object": "event", "type": %q, "data": {"object": {}}}`, id, eventType)

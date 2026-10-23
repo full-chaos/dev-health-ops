@@ -1,0 +1,8 @@
+# Allowed ClickHouse client sites outside a shared constructor: file<TAB>symbol<TAB>kind<TAB>count<TAB>reason. See chconstructor_test.go.
+internal/storage/clickhouse/factory.go	Open	driver-open	1	the shared native constructor itself: pool sizes, lifetime under the Cloud idle cutoff, bounded warm-up
+internal/queryapi/chclient/chclient.go	New	query-client	1	the shared query-client constructor itself: built from Options (pool, lifetime, dial) in this package, then warmed in the background
+internal/cigates/metricsproof/proof.go	OpenClickHouse	driver-open	1	CI proof tool against a throwaway ClickHouse on localhost (one short-lived connection, not a service pool); no RTT to Cloud
+internal/testsupport/containers/harness.go	pingClickHouseOnce	driver-open	1	test harness readiness ping against a local testcontainer; never in a production binary
+internal/testsupport/containers/remote.go	startClickHouseRemote	driver-open	2	test harness readiness check of a remote test ClickHouse; never in a production binary
+internal/testsupport/crossorg/crossorg.go	Start	driver-open	1	test fixture connection to a local testcontainer; never in a production binary
+internal/testsupport/retractionseed/retractionseed.go	Start	driver-open	1	test fixture connection to a local testcontainer; never in a production binary

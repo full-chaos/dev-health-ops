@@ -571,6 +571,223 @@
         },
         "description": "Removes an identity of the bearer's own principal only (404 for any other id); the last sign-in method is never removed (409). A sign-in older than the freshness window is refused (403)."
       }
+    },
+    "/.well-known/jwks.json": {
+      "get": {
+        "operationId": "getJwks",
+        "summary": "The published token verification keys",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "jwks.v1: the public signing keys, cacheable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Jwks"
+                }
+              }
+            },
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "public, max-age bounded below the key-rotation overlap"
+              },
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "strong validator of the document"
+              }
+            }
+          },
+          "304": {
+            "description": "If-None-Match matched the document; no body."
+          },
+          "429": {
+            "description": "The route's rate bucket is spent; answered by the transport before the route, in its own error envelope, transport-error.v1 (not error.v1), with Retry-After.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransportError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "error.v1: no key material is available (retry_after_seconds); never cached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request body could not be read (a transport failure within the size limit); answered by the transport before the route, in its own error envelope, transport-error.v1 (not error.v1).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransportError"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The request body is over the configured limit; answered by the transport before the route, in its own error envelope, transport-error.v1 (not error.v1).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransportError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "head": {
+        "operationId": "headJwks",
+        "summary": "Headers of the published token verification keys",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "The headers of the jwks.v1 answer; no body",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "public, max-age bounded below the key-rotation overlap"
+              },
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "strong validator of the document"
+              }
+            }
+          },
+          "304": {
+            "description": "If-None-Match matched the document; no body."
+          },
+          "429": {
+            "description": "The route's rate bucket is spent; answered by the transport before the route, in its own error envelope, transport-error.v1 (not error.v1), with Retry-After."
+          },
+          "503": {
+            "description": "error.v1: no key material is available (retry_after_seconds); never cached"
+          },
+          "400": {
+            "description": "The request body could not be read (a transport failure within the size limit); answered by the transport before the route, in its own error envelope, transport-error.v1 (not error.v1)."
+          },
+          "413": {
+            "description": "The request body is over the configured limit; answered by the transport before the route, in its own error envelope, transport-error.v1 (not error.v1)."
+          }
+        }
+      }
+    },
+    "/.well-known/openid-configuration": {
+      "get": {
+        "operationId": "getOpenIdConfiguration",
+        "summary": "The issuer discovery document",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "discovery.v1: issuer, jwks_uri and signing algorithms, cacheable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Discovery"
+                }
+              }
+            },
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "public, max-age bounded below the key-rotation overlap"
+              },
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "strong validator of the document"
+              }
+            }
+          },
+          "304": {
+            "description": "If-None-Match matched the document; no body."
+          },
+          "429": {
+            "description": "The route's rate bucket is spent; answered by the transport before the route, in its own error envelope, transport-error.v1 (not error.v1), with Retry-After.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransportError"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request body could not be read (a transport failure within the size limit); answered by the transport before the route, in its own error envelope, transport-error.v1 (not error.v1).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransportError"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The request body is over the configured limit; answered by the transport before the route, in its own error envelope, transport-error.v1 (not error.v1).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransportError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "head": {
+        "operationId": "headOpenIdConfiguration",
+        "summary": "Headers of the issuer discovery document",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "The headers of the discovery.v1 answer; no body",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "public, max-age bounded below the key-rotation overlap"
+              },
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "strong validator of the document"
+              }
+            }
+          },
+          "304": {
+            "description": "If-None-Match matched the document; no body."
+          },
+          "429": {
+            "description": "The route's rate bucket is spent; answered by the transport before the route, in its own error envelope, transport-error.v1 (not error.v1), with Retry-After."
+          },
+          "400": {
+            "description": "The request body could not be read (a transport failure within the size limit); answered by the transport before the route, in its own error envelope, transport-error.v1 (not error.v1)."
+          },
+          "413": {
+            "description": "The request body is over the configured limit; answered by the transport before the route, in its own error envelope, transport-error.v1 (not error.v1)."
+          }
+        }
+      }
     }
   },
   "components": {
@@ -585,6 +802,9 @@
     "schemas": {
       "AccessToken": {
         "$ref": "../jsonschema/access-token.v1.schema.json"
+      },
+      "WorkloadToken": {
+        "$ref": "../jsonschema/workload-token.v1.schema.json"
       },
       "AuditEvent": {
         "$ref": "../jsonschema/audit-event.v1.schema.json"

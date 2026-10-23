@@ -1,3 +1,4 @@
+contracts/auth/v1
 internal/api/apimetrics
 internal/api/audit
 internal/api/authmail
@@ -79,6 +80,7 @@ internal/pgmigrate/schemagate
 internal/pgmigrate/schemagate/schemagatetest
 internal/platform/buildstamp
 internal/platform/config
+internal/platform/credshape
 internal/platform/dbphase
 internal/platform/dbspan
 internal/platform/errortext

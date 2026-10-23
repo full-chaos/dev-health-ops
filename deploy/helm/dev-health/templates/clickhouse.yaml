@@ -8,7 +8,7 @@ metadata:
     {{- include "dev-health.componentLabels" (dict "component" "clickhouse" "context" $) | nindent 4 }}
 spec:
   serviceName: {{ include "dev-health.fullname" . }}-clickhouse
-  replicas: 1
+  replicas: {{ int .Values.clickhouse.replicas }}
   selector:
     matchLabels:
       {{- include "dev-health.componentSelectorLabels" (dict "component" "clickhouse" "context" $) | nindent 6 }}

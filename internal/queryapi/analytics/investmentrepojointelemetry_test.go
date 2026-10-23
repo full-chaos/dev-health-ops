@@ -415,8 +415,33 @@ func TestRecordInvestmentRepoJoinDedupCollisions_FetchFailureIsReported(t *testi
 func TestDefaultRecordInvestmentRepoJoinDedupCollisions_CounterHasNoAttributes(t *testing.T) {
 	ctx := context.Background()
 	const name = "devhealth_query_api_investment_repo_join_dedup_collisions_total"
+	collisionCounterValue := func() (value int64, points int) {
+		var rm metricdata.ResourceMetrics
+		if err := realMeterReader.Collect(ctx, &rm); err != nil {
+			t.Fatalf("reader.Collect error = %v", err)
+		}
+		for _, sm := range rm.ScopeMetrics {
+			for _, m := range sm.Metrics {
+				if m.Name != name {
+					continue
+				}
+				if data, ok := m.Data.(metricdata.Sum[int64]); ok {
+					for _, dp := range data.DataPoints {
+						value += dp.Value
+						points++
+					}
+				}
+			}
+		}
+		return value, points
+	}
+	before, _ := collisionCounterValue()
 	defaultRecordInvestmentRepoJoinDedupCollisions(ctx, "org-synthetic-a", 2)
 	defaultRecordInvestmentRepoJoinDedupCollisions(ctx, "org-synthetic-b", 3)
+	after, _ := collisionCounterValue()
+	if after-before != 2 {
+		t.Errorf("counter increment = %d, want 2 (one per report, whatever the excess count)", after-before)
+	}
 
 	var rm metricdata.ResourceMetrics
 	if err := realMeterReader.Collect(ctx, &rm); err != nil {

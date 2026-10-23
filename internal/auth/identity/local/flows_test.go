@@ -257,26 +257,30 @@ func TestRegisterCreatesThePrincipalAndSendsOneVerificationLink(t *testing.T) {
 }
 
 func TestRegisterRefusals(t *testing.T) {
-	t.Run("taken e-mail is refused before any write", func(t *testing.T) {
+	t.Run("taken e-mail is answered like a new one and writes nothing", func(t *testing.T) {
 		rig := newFlowRig(t, true)
 		rig.user("taken@example.com", true)
 		out, err := rig.f.Register(context.Background(), RegisterRequest{Email: "Taken@Example.com", Password: flowPassword})
-		if err != nil || out.Kind != FlowEmailTaken {
+		if err != nil || out.Kind != FlowOK {
 			t.Fatalf("Register = %+v, %v", out, err)
 		}
-		if want := []string{"ByEmail"}; !reflect.DeepEqual(rig.rec.names(), want) {
+		if want := []string{"ByEmail", "Send"}; !reflect.DeepEqual(rig.rec.names(), want) {
 			t.Errorf("calls = %v, want %v", rig.rec.names(), want)
 		}
+		if len(rig.links.issued) != 0 || len(rig.mail.sent) != 1 || rig.mail.sent[0].Purpose != PurposeAccountExists ||
+			rig.mail.sent[0].To != "taken@example.com" || rig.mail.sent[0].Secret.Reveal() != "" {
+			t.Errorf("want one notice to the owner and no credential: %+v", rig.mail.sent)
+		}
 	})
-	t.Run("race on the unique e-mail is the same refusal", func(t *testing.T) {
+	t.Run("race on the unique e-mail is the same answer", func(t *testing.T) {
 		rig := newFlowRig(t, true)
 		rig.accounts.taken = true
 		out, err := rig.f.Register(context.Background(), RegisterRequest{Email: "x@example.com", Password: flowPassword})
-		if err != nil || out.Kind != FlowEmailTaken {
+		if err != nil || out.Kind != FlowOK {
 			t.Fatalf("Register = %+v, %v", out, err)
 		}
-		if len(rig.links.issued) != 0 || len(rig.mail.sent) != 0 {
-			t.Error("a link was issued for a refused registration")
+		if len(rig.links.issued) != 0 || len(rig.mail.sent) != 1 || rig.mail.sent[0].Purpose != PurposeAccountExists {
+			t.Errorf("want one notice and no credential: %+v", rig.mail.sent)
 		}
 	})
 	t.Run("password policy comes first and writes nothing", func(t *testing.T) {

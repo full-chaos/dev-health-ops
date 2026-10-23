@@ -289,3 +289,25 @@ func TestFullPoolDoesNotWaitOnALogHandler(t *testing.T) {
 	close(h.gate)
 	closeIn(t, s)
 }
+
+func TestAccountExistsNoticeCarriesNoTokenAndUsesThePool(t *testing.T) {
+	provider := &fakeProvider{}
+	sender, err := New(Config{Mail: provider, Links: authmail.Config{AppBaseURL: "https://app.example.test", AppBaseURLSet: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sender.Send(context.Background(), local.Message{Purpose: local.PurposeAccountExists, To: "owner@example.com", Deliver: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := sender.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(provider.got) != 1 {
+		t.Fatalf("sent %d messages, want 1", len(provider.got))
+	}
+	got := provider.got[0]
+	if got.To != "owner@example.com" || got.Subject != "You already have an account" ||
+		!strings.Contains(got.HTML, "https://app.example.test/auth/signin") || strings.Contains(got.HTML, "token=") {
+		t.Errorf("unexpected notice: %+v", got)
+	}
+}

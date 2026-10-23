@@ -114,6 +114,9 @@ func (s *Sender) Send(ctx context.Context, msg local.Message) error {
 	if s.closed {
 		return ErrClosed
 	}
+	if msg.Purpose == local.PurposeAccountExists {
+		return s.sendNotice(ctx, msg)
+	}
 	tpl, ok := templates[msg.Purpose]
 	if !ok {
 		return errors.New("linkmail: unsupported purpose")
@@ -133,6 +136,32 @@ func (s *Sender) Send(ctx context.Context, msg local.Message) error {
 	}
 	select {
 	case s.jobs <- job{purpose: msg.Purpose, message: mail.Message{To: msg.To, Subject: tpl.subject, HTML: html}}:
+	default:
+		s.count(ctx, msg.Purpose, OutcomeDropped)
+		s.dropped.Add(1)
+	}
+	return nil
+}
+
+// sendNotice queues the account-exists mail: no link token, the same pool.
+func (s *Sender) sendNotice(ctx context.Context, msg local.Message) error {
+	name := msg.To
+	if msg.FullName != nil && *msg.FullName != "" {
+		name = *msg.FullName
+	}
+	html, err := mail.RenderTemplate("account_exists", map[string]string{
+		"full_name":  name,
+		"signin_url": s.cfg.Links.BaseURL() + "/auth/signin",
+		"reset_url":  s.cfg.Links.BaseURL() + "/auth/forgot-password",
+	})
+	if err != nil {
+		return err
+	}
+	if !msg.Deliver {
+		return nil
+	}
+	select {
+	case s.jobs <- job{purpose: msg.Purpose, message: mail.Message{To: msg.To, Subject: "You already have an account", HTML: html}}:
 	default:
 		s.count(ctx, msg.Purpose, OutcomeDropped)
 		s.dropped.Add(1)

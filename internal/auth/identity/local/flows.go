@@ -28,7 +28,6 @@ type FlowKind string
 const (
 	FlowOK              FlowKind = "ok"
 	FlowInvalidToken    FlowKind = "invalid_token"
-	FlowEmailTaken      FlowKind = "email_taken"
 	FlowPolicy          FlowKind = "password_policy"
 	FlowCurrentRejected FlowKind = "current_password_rejected"
 	FlowManagedAccount  FlowKind = "password_managed_elsewhere"
@@ -205,16 +204,16 @@ func (f *Flows) Register(ctx context.Context, req RegisterRequest) (FlowOutcome,
 	if err != nil {
 		return FlowOutcome{}, fmt.Errorf("local: loading the user: %w", err)
 	}
-	if existing != nil {
-		return FlowOutcome{Kind: FlowEmailTaken}, nil
-	}
 	hash, err := f.hash(req.Password)
 	if err != nil {
 		return FlowOutcome{}, fmt.Errorf("local: hashing the password: %w", err)
 	}
+	if existing != nil {
+		return f.noticeExisting(ctx, email), nil
+	}
 	id, err := f.accounts.ProvisionLocal(ctx, ProvisionLocalRequest{Email: email, FullName: req.FullName, PasswordHash: hash})
 	if errors.Is(err, identity.ErrEmailTaken) {
-		return FlowOutcome{Kind: FlowEmailTaken}, nil
+		return f.noticeExisting(ctx, email), nil
 	}
 	if err != nil {
 		return FlowOutcome{}, fmt.Errorf("local: creating the account: %w", err)
@@ -223,6 +222,15 @@ func (f *Flows) Register(ctx context.Context, req RegisterRequest) (FlowOutcome,
 		return FlowOutcome{}, err
 	}
 	return FlowOutcome{Kind: FlowOK, PrincipalID: id}, nil
+}
+
+// noticeExisting answers a sign-up for a taken address like an accepted one and
+// tells the owner by mail; the hash of the submitted password is discarded.
+func (f *Flows) noticeExisting(ctx context.Context, email string) FlowOutcome {
+	if err := f.mail.Send(ctx, Message{Purpose: PurposeAccountExists, To: email, Deliver: true}); err != nil {
+		slog.WarnContext(ctx, "local: account notice not sent", logging.ErrorAttr(err))
+	}
+	return FlowOutcome{Kind: FlowOK}
 }
 
 // Verify consumes a verification link and marks the e-mail verified.

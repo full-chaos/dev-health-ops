@@ -125,10 +125,14 @@ func (h handlers) register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if existing != nil {
-		// register.py also emits a failure audit row here, but the
-		// HTTPException that follows rolls the session back, so no row
-		// is ever written.
-		refuse(w, http.StatusBadRequest, "Email already registered")
+		// The answer, the hash work and the queued mail match a new
+		// sign-up's; the hash is discarded.
+		if _, err := passwordhash.Hash(input.password); err != nil {
+			h.fail(w, r, "hash password", err)
+			return
+		}
+		h.queueMail(ctx, "account_exists", func(ctx context.Context) { h.sendAccountExists(ctx, existing) })
+		writeRegisterAccepted(w)
 		return
 	}
 	hash, err := passwordhash.Hash(input.password)
@@ -147,7 +151,6 @@ VALUES ($1, $2, NULL, $3, $4, NULL, 'local', NULL, true, false, false, 0, NULL, 
 		return
 	}
 
-	var orgID *uuid.UUID
 	if h.autoCreateOrg() {
 		name := "My Organization"
 		if input.orgName != nil && *input.orgName != "" {
@@ -171,7 +174,6 @@ VALUES ($1, $2, NULL, $3, $4, NULL, 'local', NULL, true, false, false, 0, NULL, 
 			h.fail(w, r, "audit", err)
 			return
 		}
-		orgID = &id
 	}
 
 	token, err := h.replaceLinkToken(ctx, tx, "email_verification_tokens", user.ID, now, verificationTTL)
@@ -183,15 +185,39 @@ VALUES ($1, $2, NULL, $3, $4, NULL, 'local', NULL, true, false, false, 0, NULL, 
 		h.fail(w, r, "commit", err)
 		return
 	}
-	h.sendVerification(ctx, user, token)
+	h.queueMail(ctx, "verification", func(ctx context.Context) { h.sendVerification(ctx, user, token) })
+	writeRegisterAccepted(w)
+}
 
+// registerAcceptedMessage is the one answer to every sign-up that passed
+// validation.
+const registerAcceptedMessage = "Check your email to continue"
+
+func writeRegisterAccepted(w http.ResponseWriter) {
 	out := pyjson.NewObject()
-	out.Set("message", "Registration successful")
-	out.Set("user_id", user.ID.String())
-	if orgID != nil {
-		out.Set("org_id", orgID.String())
-	} else {
-		out.Set("org_id", nil)
+	out.Set("message", registerAcceptedMessage)
+	policy.WriteModel(w, http.StatusAccepted, out, nil)
+}
+
+// queueMail sends one best-effort mail off the request; the send outlives it.
+func (h handlers) queueMail(ctx context.Context, kind string, send func(context.Context)) {
+	detached := context.WithoutCancel(ctx)
+	if !linkMailQueue.submit(func() { send(detached) }) {
+		h.Logger.WarnContext(ctx, "api session mail dropped: queue full", "kind", kind)
 	}
-	policy.WriteModel(w, http.StatusCreated, out, nil)
+}
+
+// sendAccountExists tells the owner of an existing account that a sign-up was
+// started with the address. It names nothing about the requester.
+func (h handlers) sendAccountExists(ctx context.Context, user *userRow) {
+	name := user.Email
+	if user.FullName != nil && *user.FullName != "" {
+		name = *user.FullName
+	}
+	h.Mail.Send(ctx, h.Logger, "api: failed to send account exists email", user.Email, "You already have an account",
+		"account_exists", map[string]string{
+			"full_name":  name,
+			"signin_url": h.Mail.BaseURL() + "/auth/signin",
+			"reset_url":  h.Mail.BaseURL() + "/auth/forgot-password",
+		}, "user_id", user.ID.String())
 }

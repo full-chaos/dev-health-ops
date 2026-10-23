@@ -256,13 +256,13 @@ func rawOnlyDayValues(
 	statements := map[string]string{
 		"work_item_metrics_daily": `
 SELECT toUInt64(sum(v)) FROM (SELECT argMax(items_completed, computed_at) AS v FROM work_item_metrics_daily
-WHERE org_id = ? AND provider = ? AND day = toDate(?) GROUP BY work_scope_id, team_id)`,
+WHERE org_id = ? AND provider = ? AND day = toDate(?) AND row_view IN ('', 'org') GROUP BY work_scope_id, team_id, row_view)`,
 		"work_item_user_metrics_daily": `
 SELECT toUInt64(sum(v)) FROM (SELECT argMax(items_completed, computed_at) AS v FROM work_item_user_metrics_daily
-WHERE org_id = ? AND provider = ? AND day = toDate(?) GROUP BY work_scope_id, user_identity)`,
+WHERE org_id = ? AND provider = ? AND day = toDate(?) AND row_view IN ('', 'org') GROUP BY work_scope_id, user_identity, row_view)`,
 		"work_item_state_durations_daily": `
 SELECT toUInt64(max(v)) FROM (SELECT argMax(items_touched, computed_at) AS v FROM work_item_state_durations_daily
-WHERE org_id = ? AND provider = ? AND day = toDate(?) GROUP BY work_scope_id, team_id, status)`,
+WHERE org_id = ? AND provider = ? AND day = toDate(?) AND row_view IN ('', 'org') GROUP BY work_scope_id, team_id, status, row_view)`,
 		"work_item_cycle_times": `
 SELECT toUInt64(count()) FROM (SELECT work_item_id FROM work_item_cycle_times
 WHERE org_id = ? AND provider = ? AND day = toDate(?) GROUP BY work_item_id)`,
@@ -542,14 +542,14 @@ func TestFirstSyncMarksEveryWindowDayAndTheDailyJobFillsAQuietDayAndAnOldItem(t 
 		if err := rig.conn.QueryRow(ctx, `
 SELECT toUInt64(count()), sum(hours) FROM (SELECT argMax(duration_hours, computed_at) AS hours
 FROM work_item_state_durations_daily
-WHERE org_id = ? AND provider = ? AND day = toDate(?) AND status = 'in_progress' GROUP BY work_scope_id, team_id, status)`,
+WHERE org_id = ? AND provider = ? AND day = toDate(?) AND status = 'in_progress' AND row_view IN ('', 'org') GROUP BY work_scope_id, team_id, status, row_view)`,
 			orgID, provider, quiet.Format("2006-01-02")).Scan(&stateRows, &stateHours); err != nil {
 			t.Fatal(err)
 		}
 		var wip uint64
 		if err := rig.conn.QueryRow(ctx, `
 SELECT toUInt64(sum(v)) FROM (SELECT argMax(wip_count_end_of_day, computed_at) AS v FROM work_item_metrics_daily
-WHERE org_id = ? AND provider = ? AND day = toDate(?) GROUP BY work_scope_id, team_id)`,
+WHERE org_id = ? AND provider = ? AND day = toDate(?) AND row_view IN ('', 'org') GROUP BY work_scope_id, team_id, row_view)`,
 			orgID, provider, quiet.Format("2006-01-02")).Scan(&wip); err != nil {
 			t.Fatal(err)
 		}

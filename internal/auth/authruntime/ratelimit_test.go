@@ -152,3 +152,74 @@ func TestTheStoreErrorCounterIsOnTheServiceScrape(t *testing.T) {
 		t.Error("a service with no limited route publishes the store-error counter")
 	}
 }
+
+// Roll 18 ships the code with the store's Secret absent and no limited route
+// mounted (prod mounts the JWKS and the discovery document only): the service
+// must boot, hold no store component, and require no "valkey" readiness check.
+func TestTheDormantMountSetBootsWithoutTheStoreSecret(t *testing.T) {
+	boot := func(env map[string]string) (names []string, required int) {
+		t.Helper()
+		env[authconfig.EnvDatabaseURI] = "postgres://auth@127.0.0.1:1/devhealth"
+		env[authconfig.EnvSigningKeyFile] = "/nonexistent"
+		env[authconfig.EnvSigningKeyID] = "boot-test"
+		env[authconfig.EnvAPIAddress] = "127.0.0.1:0"
+		env[authconfig.EnvOperatorAddress] = "127.0.0.1:1"
+		env[authconfig.EnvDatabaseConnectTimeout] = "1s"
+		env[authconfig.EnvTokenIssuerURL] = "https://auth.example.com"
+		cfg, err := authconfig.Load(authconfig.Spec{LookupEnv: lookupFrom(env)})
+		if err != nil {
+			t.Fatalf("load: %v", err)
+		}
+		components, err := configureWithRoutes(context.Background(), cfg, discard(), nil)
+		if err != nil {
+			t.Fatalf("configure: %v", err)
+		}
+		t.Cleanup(func() {
+			for _, component := range components {
+				_ = component.Shutdown(context.Background())
+			}
+		})
+		for _, component := range components {
+			names = append(names, component.Name())
+			if gate, ok := component.(health.Gate); ok {
+				required = gate.Registry.RequiredCount()
+			}
+		}
+		return names, required
+	}
+	names, required := boot(map[string]string{})
+	for _, name := range names {
+		if strings.Contains(name, "valkey") {
+			t.Errorf("a dormant service built the component %q", name)
+		}
+	}
+	if required == 0 {
+		t.Fatal("no readiness gate found: the boot did not reach the end of configure")
+	}
+	// The same service with the session secrets but no limited route: still no store,
+	// and a value in AUTH_VALKEY_URI beside no limited route changes nothing.
+	withURI := sessionEnvironment(map[string]string{})
+	withURI[authconfig.EnvValkeyURI] = testValkeyURI
+	namesURI, requiredURI := boot(withURI)
+	for _, name := range namesURI {
+		if strings.Contains(name, "valkey") {
+			t.Errorf("a service with no limited route built the component %q", name)
+		}
+	}
+	if requiredURI != required {
+		t.Errorf("a service with no limited route requires %d checks, the dormant one %d: the valkey check must be required only while a limited route mounts", requiredURI, required)
+	}
+	// With a limited route the store IS required: one more check and one component.
+	limited := compatEnvironment(map[string]string{})
+	namesLimited, requiredLimited := boot(limited)
+	if requiredLimited != required+1 {
+		t.Errorf("a service with a limited route requires %d checks, want %d", requiredLimited, required+1)
+	}
+	found := false
+	for _, name := range namesLimited {
+		found = found || name == "auth-valkey"
+	}
+	if !found {
+		t.Error("a service with a limited route has no store component")
+	}
+}

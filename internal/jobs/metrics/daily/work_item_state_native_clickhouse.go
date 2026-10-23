@@ -342,12 +342,6 @@ func WriteWorkItemStateDurationsDaily(
 	if conn == nil || strings.TrimSpace(organizationID) == "" {
 		return 0, ErrInvalidState
 	}
-	batch, err := conn.PrepareBatch(ctx, `INSERT INTO work_item_state_durations_daily (
-		day, provider, work_scope_id, team_id, team_name, status,
-		duration_hours, items_touched, avg_wip, computed_at, org_id, row_view)`)
-	if err != nil {
-		return 0, fmt.Errorf("prepare work_item_state_durations_daily batch: %w", err)
-	}
 	dayValue := time.Date(day.UTC().Year(), day.UTC().Month(), day.UTC().Day(), 0, 0, 0, 0, time.UTC)
 	computedAtUTC := computedAt.UTC()
 	keys := make([]staleKey, 0, len(rows))
@@ -358,21 +352,30 @@ func WriteWorkItemStateDurationsDaily(
 	if err != nil {
 		return 0, err
 	}
+	batch, err := conn.PrepareBatch(ctx, `INSERT INTO work_item_state_durations_daily (
+		day, provider, work_scope_id, team_id, team_name, status,
+		duration_hours, items_touched, avg_wip, computed_at, org_id, row_view)`)
+	if err != nil {
+		return 0, fmt.Errorf("prepare work_item_state_durations_daily batch: %w", err)
+	}
+	defer batch.Abort()
 	type entry struct {
 		row  workItemStateDailyRow
 		view string
 		at   time.Time
 	}
 	entries := make([]entry, 0, len(rows)*(len(workItemRowViews)+1))
+	zeroRows := 0
 	for index, row := range rows {
 		for _, rowView := range workItemRowViews {
 			entries = append(entries, entry{row, rowView, computedAtUTC})
 		}
-		if version, retracted := legacy[keys[index].text()]; retracted {
+		if retraction, retracted := legacy[keys[index].text()]; retracted {
 			zero := workItemStateDailyRow{
 				Provider: row.Provider, WorkScopeID: row.WorkScopeID, TeamID: row.TeamID, TeamName: row.TeamName, Status: row.Status,
 			}
-			entries = append(entries, entry{zero, teamkeytables.LegacyRowView, version})
+			entries = append(entries, entry{zero, teamkeytables.LegacyRowView, retraction.version})
+			zeroRows++
 		}
 	}
 	for _, item := range entries {
@@ -393,9 +396,9 @@ func WriteWorkItemStateDurationsDaily(
 	// ambiguity instead of silently open (matches
 	// work_graph_edges_native_clickhouse.go's established pattern).
 	if err := batch.Send(); err != nil {
-		return len(rows), fmt.Errorf("send work_item_state_durations_daily batch: %w", err)
+		return len(rows) + zeroRows, fmt.Errorf("send work_item_state_durations_daily batch: %w", err)
 	}
-	return len(rows), nil
+	return len(rows) + zeroRows, nil
 }
 
 // WriteWorkItemBlockedDurationsDaily writes the per-item source for the

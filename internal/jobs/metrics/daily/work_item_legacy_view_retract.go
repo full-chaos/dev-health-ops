@@ -17,13 +17,18 @@ import (
 // sees a live legacy row beside a live view row, also when the write is ambiguous.
 // produced holds the keys in the order of table.Keys without the row_view value;
 // the result is keyed by staleKey.text() of the produced key. A connection that
-// cannot read (no Query) returns nil: the run-level retraction then settles the key.
+// cannot read (no Query) is an error: the write fails closed. The values a table
+// carries (team of a person) come from the newest stored row of the key, as in
+// writeStaleKeyZeroRows.
 func legacyRetractionVersions(
 	ctx context.Context, conn any, table StaleKeyTable, organizationID string, day time.Time,
 	produced []staleKey, computedAt time.Time,
-) (map[string]time.Time, error) {
+) (map[string]legacyRetraction, error) {
 	reader, ok := conn.(staleKeyConn)
-	if !ok || len(produced) == 0 {
+	if !ok {
+		return nil, ErrInvalidState
+	}
+	if len(produced) == 0 {
 		return nil, nil
 	}
 	if computedAt.IsZero() {
@@ -40,14 +45,37 @@ func legacyRetractionVersions(
 	for _, key := range produced {
 		held[append(append(staleKey{}, key...), teamkeytables.LegacyRowView).text()] = key.text()
 	}
-	retract := map[string]time.Time{}
+	retract := map[string]legacyRetraction{}
+	var carried map[string][]string
 	for _, key := range live {
-		if producedText, ok := held[key.text()]; ok {
-			version, _ := staleKeyVersionAfter(table, computedAt, versions[key.text()])
-			retract[producedText] = version
+		producedText, ok := held[key.text()]
+		if !ok {
+			continue
 		}
+		if carried == nil {
+			if carried, err = loadCarriedValues(ctx, reader, table, organizationID, day); err != nil {
+				return nil, err
+			}
+		}
+		version, _ := staleKeyVersionAfter(table, computedAt, versions[key.text()])
+		retract[producedText] = legacyRetraction{version: version, carried: carried[key.text()]}
 	}
 	return retract, nil
+}
+
+// legacyRetraction is the row of zeros over one live legacy key: its version and
+// the values the table carries from the newest stored row of the key.
+type legacyRetraction struct {
+	version time.Time
+	carried []string
+}
+
+// LegacyWorkItemViewRetraction is the row of zeros over one live legacy key.
+type LegacyWorkItemViewRetraction struct {
+	Version time.Time
+	// Carried holds the values the table carries from the newest stored row of
+	// the key, in the order of the table's Carried columns (empty when none).
+	Carried []string
 }
 
 // LegacyWorkItemViewRetractionVersions is legacyRetractionVersions for a writer
@@ -57,7 +85,7 @@ func legacyRetractionVersions(
 func LegacyWorkItemViewRetractionVersions(
 	ctx context.Context, conn driver.Conn, table string, organizationID string, day time.Time,
 	keys [][]string, computedAt time.Time,
-) (map[string]time.Time, error) {
+) (map[string]LegacyWorkItemViewRetraction, error) {
 	var declared StaleKeyTable
 	switch table {
 	case teamkeytables.WorkItemMetricsDaily.Table:
@@ -73,5 +101,13 @@ func LegacyWorkItemViewRetractionVersions(
 	for _, key := range keys {
 		produced = append(produced, staleKey(key))
 	}
-	return legacyRetractionVersions(ctx, conn, declared, organizationID, day, produced, computedAt)
+	found, err := legacyRetractionVersions(ctx, conn, declared, organizationID, day, produced, computedAt)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]LegacyWorkItemViewRetraction, len(found))
+	for key, retraction := range found {
+		out[key] = LegacyWorkItemViewRetraction{Version: retraction.version, Carried: retraction.carried}
+	}
+	return out, nil
 }

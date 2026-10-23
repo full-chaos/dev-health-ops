@@ -171,6 +171,16 @@ func WriteWorkItemMetricsDaily(
 	if conn == nil || strings.TrimSpace(organizationID) == "" {
 		return 0, ErrInvalidState
 	}
+	dayValue := workitemmetrics.UTCDay(day)
+	computedAtUTC := computedAt.UTC()
+	keys := make([]staleKey, 0, len(rows))
+	for _, row := range rows {
+		keys = append(keys, staleKey{row.Provider, row.WorkScopeID, row.TeamID})
+	}
+	legacy, err := legacyRetractionVersions(ctx, conn, teamkeytables.WorkItemMetricsDaily, organizationID, dayValue, keys, computedAtUTC)
+	if err != nil {
+		return 0, err
+	}
 	batch, err := conn.PrepareBatch(ctx, `INSERT INTO work_item_metrics_daily (
 		day, provider, work_scope_id, team_id, team_name,
 		items_started, items_completed, items_started_unassigned, items_completed_unassigned,
@@ -182,29 +192,22 @@ func WriteWorkItemMetricsDaily(
 	if err != nil {
 		return 0, fmt.Errorf("prepare work_item_metrics_daily batch: %w", err)
 	}
-	dayValue := workitemmetrics.UTCDay(day)
-	computedAtUTC := computedAt.UTC()
-	keys := make([]staleKey, 0, len(rows))
-	for _, row := range rows {
-		keys = append(keys, staleKey{row.Provider, row.WorkScopeID, row.TeamID})
-	}
-	legacy, err := legacyRetractionVersions(ctx, conn, teamkeytables.WorkItemMetricsDaily, organizationID, dayValue, keys, computedAtUTC)
-	if err != nil {
-		return 0, err
-	}
+	defer batch.Abort()
 	type entry struct {
 		row  workitemmetrics.MetricsDailyRow
 		view string
 		at   time.Time
 	}
 	entries := make([]entry, 0, len(rows)*(len(workItemRowViews)+1))
+	zeroRows := 0
 	for index, row := range rows {
 		for _, rowView := range workItemRowViews {
 			entries = append(entries, entry{row, rowView, computedAtUTC})
 		}
-		if version, retracted := legacy[keys[index].text()]; retracted {
+		if retraction, retracted := legacy[keys[index].text()]; retracted {
 			zero := workitemmetrics.MetricsDailyRow{Provider: row.Provider, WorkScopeID: row.WorkScopeID, TeamID: row.TeamID, TeamName: row.TeamName}
-			entries = append(entries, entry{zero, teamkeytables.LegacyRowView, version})
+			entries = append(entries, entry{zero, teamkeytables.LegacyRowView, retraction.version})
+			zeroRows++
 		}
 	}
 	for _, item := range entries {
@@ -246,9 +249,9 @@ func WriteWorkItemMetricsDaily(
 	// ambiguity instead of silently open (matches
 	// work_graph_edges_native_clickhouse.go's established pattern).
 	if err := batch.Send(); err != nil {
-		return len(rows), fmt.Errorf("send work_item_metrics_daily batch: %w", err)
+		return len(rows) + zeroRows, fmt.Errorf("send work_item_metrics_daily batch: %w", err)
 	}
-	return len(rows), nil
+	return len(rows) + zeroRows, nil
 }
 
 // WriteWorkItemUserMetricsDaily ports write_work_item_user_metrics
@@ -265,13 +268,6 @@ func WriteWorkItemUserMetricsDaily(
 	if conn == nil || strings.TrimSpace(organizationID) == "" {
 		return 0, ErrInvalidState
 	}
-	batch, err := conn.PrepareBatch(ctx, `INSERT INTO work_item_user_metrics_daily (
-		day, provider, work_scope_id, user_identity, team_id, team_name,
-		items_started, items_completed, wip_count_end_of_day,
-		cycle_time_p50_hours, cycle_time_p90_hours, computed_at, org_id, row_view, retracted)`)
-	if err != nil {
-		return 0, fmt.Errorf("prepare work_item_user_metrics_daily batch: %w", err)
-	}
 	dayValue := workitemmetrics.UTCDay(day)
 	computedAtUTC := computedAt.UTC()
 	keys := make([]staleKey, 0, len(rows))
@@ -282,6 +278,14 @@ func WriteWorkItemUserMetricsDaily(
 	if err != nil {
 		return 0, err
 	}
+	batch, err := conn.PrepareBatch(ctx, `INSERT INTO work_item_user_metrics_daily (
+		day, provider, work_scope_id, user_identity, team_id, team_name,
+		items_started, items_completed, wip_count_end_of_day,
+		cycle_time_p50_hours, cycle_time_p90_hours, computed_at, org_id, row_view, retracted)`)
+	if err != nil {
+		return 0, fmt.Errorf("prepare work_item_user_metrics_daily batch: %w", err)
+	}
+	defer batch.Abort()
 	type entry struct {
 		row       workitemmetrics.UserMetricsDailyRow
 		view      string
@@ -289,16 +293,21 @@ func WriteWorkItemUserMetricsDaily(
 		retracted uint8
 	}
 	entries := make([]entry, 0, len(rows)*(len(workItemRowViews)+1))
+	zeroRows := 0
 	for index, row := range rows {
 		for _, rowView := range workItemRowViews {
 			entries = append(entries, entry{row, rowView, computedAtUTC, 0})
 		}
-		if version, retracted := legacy[keys[index].text()]; retracted {
+		if retraction, retracted := legacy[keys[index].text()]; retracted {
+			// The team of a person is carried from the newest stored row of the key.
 			zero := workitemmetrics.UserMetricsDailyRow{
 				Provider: row.Provider, WorkScopeID: row.WorkScopeID, UserIdentity: row.UserIdentity,
-				TeamID: row.TeamID, TeamName: row.TeamName,
 			}
-			entries = append(entries, entry{zero, teamkeytables.LegacyRowView, version, 1})
+			if len(retraction.carried) == 2 {
+				zero.TeamID, zero.TeamName = retraction.carried[0], retraction.carried[1]
+			}
+			entries = append(entries, entry{zero, teamkeytables.LegacyRowView, retraction.version, 1})
+			zeroRows++
 		}
 	}
 	for _, item := range entries {
@@ -330,9 +339,9 @@ func WriteWorkItemUserMetricsDaily(
 	// ambiguity instead of silently open (matches
 	// work_graph_edges_native_clickhouse.go's established pattern).
 	if err := batch.Send(); err != nil {
-		return len(rows), fmt.Errorf("send work_item_user_metrics_daily batch: %w", err)
+		return len(rows) + zeroRows, fmt.Errorf("send work_item_user_metrics_daily batch: %w", err)
 	}
-	return len(rows), nil
+	return len(rows) + zeroRows, nil
 }
 
 // WriteWorkItemCycleTimes ports write_work_item_cycle_times

@@ -10,6 +10,8 @@ internal/chmigrate
 internal/cli
 internal/egressguard
 internal/httpguard
+internal/jobs/metrics/querybound
+internal/jobs/metrics/workitemmetrics
 internal/netclass
 internal/operationalordering
 internal/ownershipwindow
@@ -33,6 +35,7 @@ internal/pythonparity/pyidna
 internal/pythonparity/pyunicodedata
 internal/queryapi/activeteams
 internal/queryapi/deltarule
+internal/queryapi/linkeditems
 internal/queryapi/people
 internal/queryapi/quadrant
 internal/queryapi/rowview
@@ -46,6 +49,8 @@ internal/storage/river
 internal/storage/roleacl
 internal/syncdispatchruntime/synclog
 internal/teamactive
+internal/teamattribution
+internal/teamid
 internal/teamkeytables
 internal/testsupport/containers
 internal/testsupport/moduleroot

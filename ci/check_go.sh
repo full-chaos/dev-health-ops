@@ -3539,6 +3539,8 @@ AUTH_FUZZ_TARGETS=(
   "./internal/auth/identity/oidc FuzzParseCallbackBody"
   "./internal/auth/identity/saml FuzzParseSAMLResponse"
   "./internal/auth/identity/saml FuzzSAMLSubject"
+  "./internal/auth/authorization FuzzNormalizeRequest"
+  "./internal/auth/authorization FuzzEvaluateRequest"
 )
 AUTH_FUZZTIME="${AUTH_FUZZTIME:-20s}"
 AUTH_GOVULNCHECK_VERSION="v1.9.0"

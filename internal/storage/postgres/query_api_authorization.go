@@ -87,6 +87,10 @@ import (
 // the goapiproof CLI touches them. No sequence is needed: every id this
 // process writes is supplied by the caller.
 //
+// While auth-service owns sessions the role also holds QueryAPISessionRead (the
+// auth schema's USAGE and the sessions columns the session check reads); the
+// readiness check and the river grant leg add it under the same flag.
+//
 // Any future query-api Postgres access edits this function in the SAME PR
 // that adds it, the discipline domainPosture and apiPosture already follow.
 func queryAPIPosture() RolePosture {
@@ -136,6 +140,24 @@ func QueryAPIPosture() RolePosture {
 	return queryAPIPosture()
 }
 
+// QueryAPISessionRead is the one read query-api holds in the auth schema while
+// auth-service owns sessions (AUTH_PROXY_SESSIONS): USAGE on the schema and
+// column SELECT on its sessions table, the columns the session check reads
+// (internal/api/policy/session.go). It must equal the list auth-migrate grants a
+// session reader role (authschema.SessionReaderColumns; this package cannot import
+// authschema, whose tests import this package, so
+// TestQueryAPISessionReadEqualsTheAuthSessionReaderColumns in rivermigrate pins it).
+type QueryAPISessionRead struct {
+	Schema  string
+	Table   string
+	Columns []string
+}
+
+// QueryAPISessionReadFor is the session read in the named auth schema.
+func QueryAPISessionReadFor(schema string) QueryAPISessionRead {
+	return QueryAPISessionRead{Schema: schema, Table: "sessions", Columns: []string{"id", "principal_id", "revoked_at"}}
+}
+
 // CheckQueryAPIAuthorization is query-api's readiness check when the deployment
 // names a query-api role (QUERY_API_DATABASE_ROLE). "Holds exactly the manifest" is
 // defined ONCE (CHAOS-6804, lead D2616), over the role's EFFECTIVE grants, and
@@ -160,6 +182,16 @@ func QueryAPIPosture() RolePosture {
 // (1.4-1.9 s on the production catalog, CHAOS-6765), so query-api runs it through
 // NewCachedQueryAPIPostureCheck and never per probe.
 func CheckQueryAPIAuthorization(ctx context.Context, pool *pgxpool.Pool, expectedRole, riverSchema string) error {
+	return CheckQueryAPIAuthorizationWithSessions(ctx, pool, expectedRole, riverSchema, nil)
+}
+
+// CheckQueryAPIAuthorizationWithSessions is CheckQueryAPIAuthorization with the
+// auth session read added to the manifest. A nil sessions is the manifest alone;
+// a non-nil one is required to be held exactly, and nothing else in its schema.
+func CheckQueryAPIAuthorizationWithSessions(ctx context.Context, pool *pgxpool.Pool, expectedRole, riverSchema string, sessions *QueryAPISessionRead) error {
+	if sessions != nil && !validRuntimeIdentifier(sessions.Schema) {
+		return ErrUnavailable
+	}
 	if pool == nil || !validRuntimeIdentifier(expectedRole) || !validRuntimeIdentifier(riverSchema) {
 		return ErrUnavailable
 	}
@@ -167,7 +199,7 @@ func CheckQueryAPIAuthorization(ctx context.Context, pool *pgxpool.Pool, expecte
 	// server-side statement_timeout as the other roles' posture checks
 	// (CHAOS-6937): the enumeration is the longest of them.
 	err := runInPostureTx(ctx, pool, rolePostureStatementTimeout, func(q postureQuerier) error {
-		return checkQueryAPIAuthorization(ctx, q, expectedRole)
+		return checkQueryAPIAuthorization(ctx, q, expectedRole, sessions)
 	})
 	if err != nil && !errors.Is(err, ErrUnavailable) {
 		return fmt.Errorf("%w: starting the query-api posture transaction: %w", ErrUnavailable, err)
@@ -175,7 +207,7 @@ func CheckQueryAPIAuthorization(ctx context.Context, pool *pgxpool.Pool, expecte
 	return err
 }
 
-func checkQueryAPIAuthorization(ctx context.Context, pool postureQuerier, expectedRole string) error {
+func checkQueryAPIAuthorization(ctx context.Context, pool postureQuerier, expectedRole string, sessions *QueryAPISessionRead) error {
 	if err := checkRoleIdentity(ctx, pool, expectedRole); err != nil {
 		return err
 	}
@@ -194,7 +226,7 @@ func checkQueryAPIAuthorization(ctx context.Context, pool postureQuerier, expect
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
-	if mismatch := diffQueryAPIGrants(database, queryAPIPosture(), grants); mismatch != "" {
+	if mismatch := diffQueryAPIGrantsWithSessions(database, queryAPIPosture(), sessions, grants); mismatch != "" {
 		return refuseQueryAPI(expectedRole, mismatch)
 	}
 	tableNames := make([]string, len(queryAPIPosture().RequiredTables))
@@ -224,6 +256,13 @@ func refuseQueryAPI(role, mismatch string) error {
 // are reported in enumeration order (sorted), then missing ones (sorted), so the
 // answer is deterministic.
 func diffQueryAPIGrants(database string, posture RolePosture, grants []roleacl.Grant) string {
+	return diffQueryAPIGrantsWithSessions(database, posture, nil, grants)
+}
+
+// diffQueryAPIGrantsWithSessions is diffQueryAPIGrants with the auth session read
+// (USAGE on its schema, column SELECT on its sessions columns) added to the
+// allowed and required sets when sessions is non-nil.
+func diffQueryAPIGrantsWithSessions(database string, posture RolePosture, sessions *QueryAPISessionRead, grants []roleacl.Grant) string {
 	key := func(class, object, privilege string) string { return class + "\x00" + object + "\x00" + privilege }
 	allowed := map[string]struct{}{
 		key("database", database, "CONNECT"): {},
@@ -261,6 +300,15 @@ func diffQueryAPIGrants(database string, posture RolePosture, grants []roleacl.G
 		allowed[key("column", object, column.Privilege)] = struct{}{}
 		required[key("column", object, column.Privilege)] = column.Privilege + " on column " + object
 	}
+	if sessions != nil {
+		allowed[key("schema", sessions.Schema, "USAGE")] = struct{}{}
+		required[key("schema", sessions.Schema, "USAGE")] = "USAGE on schema " + sessions.Schema
+		for _, column := range sessions.Columns {
+			object := sessions.Schema + "." + sessions.Table + "." + column
+			allowed[key("column", object, "SELECT")] = struct{}{}
+			required[key("column", object, "SELECT")] = "SELECT on column " + object
+		}
+	}
 	held := map[string]struct{}{}
 	for _, grant := range grants {
 		k := key(grant.Class, grant.Object, grant.Privilege)
@@ -288,7 +336,15 @@ func diffQueryAPIGrants(database string, posture RolePosture, grants []roleacl.G
 func NewCachedQueryAPIPostureCheck(
 	pool *pgxpool.Pool, expectedRole, riverSchema string, options PostureCheckOptions,
 ) *CachedPostureCheck {
+	return NewCachedQueryAPIPostureCheckWithSessions(pool, expectedRole, riverSchema, nil, options)
+}
+
+// NewCachedQueryAPIPostureCheckWithSessions is NewCachedQueryAPIPostureCheck with
+// the auth session read in the manifest (nil: the manifest alone).
+func NewCachedQueryAPIPostureCheckWithSessions(
+	pool *pgxpool.Pool, expectedRole, riverSchema string, sessions *QueryAPISessionRead, options PostureCheckOptions,
+) *CachedPostureCheck {
 	return newCachedPostureCheck(expectedRole, func(ctx context.Context) error {
-		return CheckQueryAPIAuthorization(ctx, pool, expectedRole, riverSchema)
+		return CheckQueryAPIAuthorizationWithSessions(ctx, pool, expectedRole, riverSchema, sessions)
 	}, options)
 }

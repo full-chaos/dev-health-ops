@@ -33,9 +33,8 @@ func verifyingSecret(configured string) string {
 	return unverifiableKey
 }
 
-// The credentials are read with os.Getenv, not registered with the log redactor: the intake
-// handlers never log a credential, and a registered value would be blanked out of any log text that
-// contains it, so a refusal's log line would depend on the configured credential.
+// The credentials stay in the log redaction registry (they are read with GetenvSecret): a credential
+// echoed into a log line by mistake is blanked. They are read once, when each handler is built.
 
 // verifyingKey is the fixed-size material a handler verifies with, made once when the handler is
 // built (startup): the per-request work then does not depend on the length of the provider

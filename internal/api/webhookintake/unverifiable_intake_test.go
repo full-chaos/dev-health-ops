@@ -3,6 +3,7 @@ package webhookintake
 import (
 	"bytes"
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -315,13 +316,21 @@ func TestDerivedGitLabDigestMatchesADirectCompare(t *testing.T) {
 	}
 }
 
-// The production logger blanks any REGISTERED credential out of log text. A refusal's log line must
-// not depend on the configured credential, even one that is a word of the line itself.
+func realisticCredential() string {
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		panic(err)
+	}
+	return hex.EncodeToString(raw)
+}
+
+// A refusal's log line, through the production logger, is the same for a configured realistic credential
+// and for an absent one.
 func TestRefusalLogLineIsTheSameThroughTheProductionLogger(t *testing.T) {
 	cases := []struct{ provider, envName, word string }{
-		{"github", "GITHUB_WEBHOOK_SECRET", "signature"},
-		{"gitlab", "GITLAB_WEBHOOK_TOKEN", "validation"},
-		{"jira", "JIRA_WEBHOOK_SECRET", "signature"},
+		{"github", "GITHUB_WEBHOOK_SECRET", realisticCredential()},
+		{"gitlab", "GITLAB_WEBHOOK_TOKEN", realisticCredential()},
+		{"jira", "JIRA_WEBHOOK_SECRET", realisticCredential()},
 	}
 	for _, tc := range cases {
 		t.Run(tc.provider, func(t *testing.T) {
@@ -351,6 +360,20 @@ func TestRefusalLogLineIsTheSameThroughTheProductionLogger(t *testing.T) {
 				t.Fatalf("refusal log with a configured credential %q vs an absent one %q", configured, absent)
 			}
 		})
+	}
+}
+
+// The credential stays in the log redaction registry: a log line that carries it by mistake comes out
+// blanked through the production logger.
+func TestConfiguredCredentialIsBlankedFromALogLine(t *testing.T) {
+	token := realisticCredential()
+	t.Setenv("GITLAB_WEBHOOK_TOKEN", token)
+	var out bytes.Buffer
+	logger := logging.NewJSON(&out, slog.LevelDebug)
+	_ = Deps{}.handleGitLabWebhook() // reads and registers the credential
+	logger.Warn("echoed " + token)
+	if strings.Contains(out.String(), token) || !strings.Contains(out.String(), "[REDACTED]") {
+		t.Fatalf("the credential was not blanked: %q", out.String())
 	}
 }
 

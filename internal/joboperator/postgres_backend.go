@@ -438,21 +438,14 @@ func scanProjectedSummary(scanner summaryScanner) (JobSummary, error) {
 
 // omitCredentialShapedArguments drops the argument-derived fields of a summary
 // when any of them has the shape of a credential, as summaryFromRiverRow does
-// for a job the decoder refuses. A guard that cannot load drops them too.
+// for a job the decoder refuses.
 func omitCredentialShapedArguments(summary *JobSummary) {
-	scanner, err := credshape.Default()
-	if err == nil {
-		fields := []string{summary.CorrelationID, summary.Domain.Type, summary.Domain.ID}
-		if summary.OrganizationID != nil {
-			fields = append(fields, *summary.OrganizationID)
-		}
-		refused := false
-		for _, field := range fields {
-			refused = refused || scanner.Match(field) != ""
-		}
-		if !refused {
-			return
-		}
+	fields := []string{summary.CorrelationID, summary.Domain.Type, summary.Domain.ID}
+	if summary.OrganizationID != nil {
+		fields = append(fields, *summary.OrganizationID)
+	}
+	if !credshape.AnyCredentialShaped(fields...) {
+		return
 	}
 	summary.CorrelationID, summary.OrganizationID, summary.Domain = "", nil, jobcontract.DomainLink{}
 	summary.ArgumentsRefused = true

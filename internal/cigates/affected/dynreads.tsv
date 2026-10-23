@@ -189,6 +189,7 @@ internal/cigates/nopython	trackedfiles_test.go
 internal/cigates/proofteardown	harness_test.go
 internal/cigates/proofteardown	teardown_test.go
 internal/cigates/queuecreds	gate_test.go
+internal/cigates/queuecreds	queuerows_test.go
 internal/cigates/queuecreds	scan.go
 internal/cigates/queuecreds	scan_test.go
 internal/cigates/raceunweighted	raceunweighted_test.go

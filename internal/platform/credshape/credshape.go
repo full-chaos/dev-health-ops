@@ -276,3 +276,22 @@ func (scanner *Scanner) Probes() ([]string, error) {
 	}
 	return probes, nil
 }
+
+// AnyCredentialShaped reports whether any value has a credential shape. It
+// fails closed: when the default scanner cannot load, every value counts.
+func AnyCredentialShaped(values ...string) bool {
+	scanner, err := Default()
+	return anyCredentialShaped(scanner, err, values)
+}
+
+func anyCredentialShaped(scanner *Scanner, err error, values []string) bool {
+	if err != nil || scanner == nil {
+		return true
+	}
+	for _, value := range values {
+		if scanner.Match(value) != "" {
+			return true
+		}
+	}
+	return false
+}

@@ -26,17 +26,10 @@ SSO sign-in is served by go-api today. auth-service also carries an SSO
 implementation that is mounted but not in use; a new path is planned. The
 behaviour below holds for the path in use unless a line says otherwise.
 
-## The identity key
+## How a sign-in finds its account
 
-An external identity is the triple **issuer, provider, subject**.
-
-- The three values are compared exactly, byte for byte. Case and white space are
-  not folded; two spellings are two identities.
-- A social provider has a fixed issuer. An SSO subject is scoped to one
-  configured provider row, never to a protocol name, so the same subject at two
-  provider rows is two identities.
-- One account holds at most one identity per provider.
-- A sign-in is matched by this key. The email address never selects an account.
+A sign-in is matched to an account by the identity that the provider asserts for
+the person. The email address never selects an account.
 
 ## Sign-in outcomes
 
@@ -46,7 +39,7 @@ An external identity is the triple **issuer, provider, subject**.
 | The key is new, and an account already holds the email | Refused with a conflict. Nothing is written or linked. For a social sign-in the answer names the existing sign-in method, so the user can sign in that way and then link. |
 | The key is new, no account holds the email, and creation is allowed | An account is created (see below). |
 | The key is new and creation is not allowed | Refused. Nothing is written. |
-| The provider cannot show a verified email (social, OAuth) | Refused. No account is created or linked. |
+| The key is new and the provider cannot show a verified email (social, OAuth) | Refused. No account is created or linked. A key that is already bound signs in without this check. |
 
 ## Explicit link and unlink
 
@@ -59,7 +52,8 @@ when `AUTH_SOCIAL_LINK_ROUTES` is `true` (see
   session is asked to sign in again.
 - The provider token must have been issued to the configured client of that
   provider.
-- Linking an identity the account already holds changes nothing.
+- An account holds at most one identity per provider. Linking an identity the
+  account already holds changes nothing.
 - An identity held by another account is refused with a conflict and is never
   moved.
 - An account that already holds a different identity at the same provider is
@@ -94,9 +88,12 @@ default role (`member` when unset). With `auto_provision_users` on:
    organization with the default role. A member of another organization only is
    refused.
 
-With `auto_provision_users` off, a new key is refused and nothing is written. An SSO
-sign-in always ends in the provider's organization: an account without a
-membership there is refused with `membership_required`.
+With `auto_provision_users` off, a new key is refused and nothing is written, and
+a known account with no membership in the provider's organization is refused
+with `membership_required`. With it on, a known account joins as in step 4;
+`membership_required` then applies to an account that is a member of another
+organization only. An SSO sign-in never issues a session outside the provider's
+organization.
 
 For OAuth providers the provider must report the email as verified. For OIDC and
 SAML providers the identity provider's response is the source of the email.
@@ -116,11 +113,15 @@ SAML providers the identity provider's response is the source of the email.
 
 ## What an administrator sees
 
-The codes below are the auth-service outcome codes; they appear in logs and in
-the `auth.social.outcomes` metric. go-api answers with an HTTP status and a
-fixed message, and carries `identity_conflict`, `membership_required` and
-`oauth_domain_not_allowed` as response codes. Provider text never reaches the
-response.
+**go-api (SSO and social sign-in in use).** A refusal answers with an HTTP
+status and a message. `identity_conflict`, `membership_required` and
+`oauth_domain_not_allowed` are also carried as response codes. The message of an
+OIDC or SAML domain refusal names the email domain. Each SSO sign-in attempt
+writes an `SSO_LOGIN` audit row, with status success or failure.
+
+**auth-service.** Social exchange, link and unlink outcomes are counted by
+`auth.social.outcomes` and logged with a reason code; OIDC outcomes are counted
+by `auth.oidc.outcomes`. The reason codes are:
 
 | Reason | Meaning |
 | --- | --- |
@@ -132,10 +133,12 @@ response.
 | `provisioning_disabled` | The key is new and `auto_provision_users` is off. |
 | `domain_not_allowed` | The email domain is not in `allowed_domains`. |
 | `signup_unavailable` | Account creation is not available on this path. |
-| `principal_deactivated` | The account is disabled (auth-service). |
+| `principal_deactivated` | The account is disabled. |
 | `replayed` | A SAML assertion or flow was already used. |
 
-Link, unlink and creation write audit records (`auth.identity.linked`,
-`auth.identity.unlinked`, `auth.principal.provisioned`) and provisioning events
-(`external_identity.linked`, `external_identity.unlinked`, `principal.created`,
-`user.created`, `user.email_verified`).
+Provider text never reaches an auth-service response.
+
+Link, unlink and creation through auth-service write audit records
+(`auth.identity.linked`, `auth.identity.unlinked`, `auth.principal.provisioned`)
+and provisioning events (`external_identity.linked`, `external_identity.unlinked`,
+`principal.created`, `user.created`, `user.email_verified`).

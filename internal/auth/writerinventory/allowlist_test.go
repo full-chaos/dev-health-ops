@@ -95,6 +95,11 @@ var Allowlist = []Entry{
 	{File: "internal/auth/identity/store.go", Func: "Store.applyProjectionChange", Table: "auth.users", Verb: "UPDATE"},
 	{File: "internal/auth/identity/store.go", Func: "Store.insertProjection", Table: "auth.principals", Verb: "INSERT"},
 	{File: "internal/auth/identity/store.go", Func: "Store.insertProjection", Table: "auth.users", Verb: "INSERT"},
+	// The signing-key rotation operator (auth-migrate keys, migration role): key states, and the sessions a compromise revokes.
+	{File: "internal/auth/keyrotation/store.go", Func: "Operator.revokeSessions", Table: "auth.refresh_credentials", Verb: "UPDATE"},
+	{File: "internal/auth/keyrotation/store.go", Func: "Operator.revokeSessions", Table: "auth.sessions", Verb: "UPDATE"},
+	{File: "internal/auth/keyrotation/store.go", Func: "Operator.write", Table: "auth.signing_keys", Verb: "INSERT"},
+	{File: "internal/auth/keyrotation/store.go", Func: "Operator.write", Table: "auth.signing_keys", Verb: "UPDATE"},
 	// TEMPORARY: the one-time legacy refresh exchange revokes go-api's refresh tokens (authschema.LegacyRefreshTokenGrant). CHAOS-10408 removes both rows with the grant.
 	{File: "internal/auth/session/legacy.go", Func: "Store.ExchangeLegacy", Table: "public.refresh_tokens", Verb: "UPDATE"},
 	{File: "internal/auth/session/legacy.go", Func: "Store.revokeLegacyFamily", Table: "public.refresh_tokens", Verb: "UPDATE"},

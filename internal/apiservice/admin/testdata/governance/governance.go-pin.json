@@ -6,6 +6,7 @@
   "W override delete malformed": "400 {\"detail\":\"Invalid override id\"}",
   "W override patch malformed id": "400 {\"detail\":\"Invalid override id\"}",
   "audit get malformed id": "400 {\"detail\":\"Invalid audit log id\"}",
+  "audit list huge offset": "422 {\"detail\":[{\"type\":\"less_than_equal\",\"loc\":[\"query\",\"offset\"],\"msg\":\"Input should be less than or equal to 9223372036854775807\"}]}",
   "audit list user malformed": "400 {\"detail\":\"Invalid user id\"}",
   "audit user activity malformed": "400 {\"detail\":\"Invalid user id\"}",
   "ip get check path is a uuid error": "400 {\"detail\":\"Invalid IP allowlist entry id\"}",

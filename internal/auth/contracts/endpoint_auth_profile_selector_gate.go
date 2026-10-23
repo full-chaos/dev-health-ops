@@ -82,12 +82,21 @@ func CheckClassSelector(profile map[string]any, registry map[string]RegistryClas
 	}
 }
 
+// mediaType is a Content-Type value's media type: parameters (; charset=...) dropped, trimmed, lower-cased.
+func mediaType(value string) string {
+	base, _, _ := strings.Cut(value, ";")
+	return strings.ToLower(strings.TrimSpace(base))
+}
+
 // Header and scheme names are case-insensitive on the wire; a credential
 // prefix and a JWT header alg or typ are compared exactly against the one
 // spelling the contract files carry.
 func markerMatches(marker ClassMarker, kind, name string) bool {
 	if marker.Kind != kind {
 		return false
+	}
+	if kind == "content_type" {
+		return mediaType(marker.Name) == mediaType(name)
 	}
 	if kind == "credential_prefix" || kind == "jwt_header_alg" || kind == "jwt_header_typ" {
 		return marker.Name == name

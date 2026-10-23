@@ -33,8 +33,33 @@ done
 }
 [ -f "$values" ] || { printf 'refused: --values is not a file\n' >&2; exit 2; }
 
+# listed NAME KEY: succeeds when ONE list entry of the values file carries both
+# secretName: NAME and secretKey: KEY as direct fields.
+listed() {
+  awk -v want_name="$1" -v want_key="$2" '
+    function clean(v) { sub(/[[:space:]]+#.*$/, "", v); gsub(/^[[:space:]]+|[[:space:]]+$/, "", v); gsub(/^"|"$/, "", v); return v }
+    /^[[:space:]]*(#|$)/ { next }
+    {
+      line = $0
+      ind = match(line, /[^ ]/) - 1
+      if (line ~ /^ *- /) {
+        dash = ind; active = 1; name = ""; key = ""
+        sub(/^ *- /, "", line); ind = dash + 2
+      } else if (active && ind <= dash) {
+        active = 0
+      }
+      if (active && ind == dash + 2) {
+        if (line ~ /^ *secretName:/) { v = line; sub(/^ *secretName:/, "", v); name = clean(v) }
+        if (line ~ /^ *secretKey:/) { v = line; sub(/^ *secretKey:/, "", v); key = clean(v) }
+        if (name == want_name && key == want_key) { found = 1 }
+      }
+    }
+    END { exit found ? 0 : 1 }
+  ' "$values"
+}
+
 dns1123='^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$'
-keyname='^[A-Za-z0-9._-]{1,253}$'
+keyname='^[A-Za-z0-9_-][A-Za-z0-9._-]{0,252}$'
 seen=" "
 for pair in "${keys[@]}"; do
   name="${pair%%:*}"
@@ -45,9 +70,8 @@ for pair in "${keys[@]}"; do
   fi
   case "$seen" in *" $pair "*) printf 'refused: repeated --key\n' >&2; exit 2 ;; esac
   seen="$seen$pair "
-  if ! { grep -Eq "^[[:space:]-]*secretName:[[:space:]]*\"?${name//./\\.}\"?[[:space:]]*$" "$values" &&
-    grep -Eq "^[[:space:]-]*secretKey:[[:space:]]*\"?${key//./\\.}\"?[[:space:]]*$" "$values"; }; then
-    printf 'refused: %s key=%s is not named in the values file\n' "$name" "$key" >&2
+  if ! listed "$name" "$key"; then
+    printf 'refused: %s key=%s is not one entry of the values file\n' "$name" "$key" >&2
     exit 2
   fi
 done
@@ -58,6 +82,7 @@ workdir="$(mktemp -d "${base%/}/auth-keyset.XXXXXX")"
 
 cleanup() {
   local f
+  shopt -s dotglob nullglob
   for f in "$workdir"/*; do
     [ -e "$f" ] || continue
     shred -u "$f" 2>/dev/null || rm -f "$f"

@@ -17,6 +17,7 @@ if [ -n "${FAKE_EXISTS:-}" ] && [ "$name" = "$FAKE_EXISTS" ]; then
   exit 1
 fi
 [ -z "${FAKE_FAIL:-}" ] || { printf 'boom\n' >&2; exit 1; }
+if [ -n "${FAKE_FAIL_ON:-}" ] && [ "$name" = "$FAKE_FAIL_ON" ]; then printf 'boom\n' >&2; exit 1; fi
 printf 'secret/%s created\n' "$name"
 FAKE
 chmod +x "$t/bin/kubectl"
@@ -30,6 +31,12 @@ authService:
       - kid: b
         secretName: key-b
         secretKey: signing-key.pem
+      - kid: c
+        secretName: key-c
+        secretKey: other-key.pem
+  database:
+    secretName: key-z
+    secretKey: db.txt
 V
 export PATH="$t/bin:$PATH" KEYSET_WORKDIR_BASE="$t/work" FAKE_ARGV="$t/argv" FAKE_VALUES="$t/values.got"
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
@@ -64,6 +71,25 @@ FAKE_FAIL=1 run --key key-a:signing-key.pem && fail "failure must exit non-zero"
 grep -q 'STOP key-a create failed' "$t/out" || fail "failure message"
 [ -z "$(ls -A "$t/work")" ] || fail "work directory not empty after failure"
 
+# A failure after an earlier Secret was created leaves that Secret alone.
+FAKE_FAIL_ON=key-b run --key key-a:signing-key.pem --key key-b:signing-key.pem && fail "later failure must exit non-zero"
+grep -q 'key-a key=signing-key.pem created' "$t/out" || fail "earlier create not reported"
+grep -q 'STOP key-b create failed' "$t/out" || fail "later failure message"
+grep -Eq ' (delete|replace|apply|patch) ' "$FAKE_ARGV" && fail "an earlier Secret was touched after a later failure"
+[ -z "$(ls -A "$t/work")" ] || fail "work directory not empty after a later failure"
+
+# A hidden key file name is removed on failure.
+cat >"$t/hidden.yaml" <<'V'
+authService:
+  keySet:
+    keys:
+      - kid: h
+        secretName: key-h
+        secretKey: .signing-key.pem
+V
+FAKE_FAIL=1 "$script" --context ctx --namespace ns --values "$t/hidden.yaml" --key key-h:.signing-key.pem >"$t/out" 2>"$t/err" && fail "hidden key failure must exit non-zero"
+[ -z "$(ls -A "$t/work")" ] && [ -z "$(find "$t/work" -mindepth 1 | head -1)" ] || fail "a hidden value file survived a failure"
+
 # Refusals: nothing is created.
 refuse() { run "$@" && fail "should refuse: $*"; [ ! -s "$FAKE_ARGV" ] || fail "kubectl ran on a refusal: $*"; }
 refuse --key other:signing-key.pem
@@ -71,6 +97,11 @@ refuse --key key-a:other.pem
 refuse --key 'Key_A:signing-key.pem'
 refuse --key key-a
 refuse --key key-a:signing-key.pem --key key-a:signing-key.pem
+refuse --key key-a:other-key.pem
+refuse --key key-a:.
+refuse --key key-a:..
+refuse --key key-c:signing-key.pem
+refuse --key key-z:db.txt
 : >"$FAKE_ARGV"
 "$script" --namespace ns --values "$t/values.yaml" --key key-a:signing-key.pem >/dev/null 2>&1 && fail "context is required"
 "$script" --context c --namespace ns --values "$t/missing" --key key-a:signing-key.pem >/dev/null 2>&1 && fail "values file is required"

@@ -17,8 +17,6 @@ import (
 	"io"
 	"strings"
 	"time"
-
-	"golang.org/x/crypto/pbkdf2"
 )
 
 const (
@@ -67,7 +65,11 @@ func (c Cipher) Open(stored string) ([]byte, error) {
 		return nil, ErrInvalid
 	}
 	if strings.HasPrefix(stored, V1Prefix) {
-		return DecryptToken(strings.TrimPrefix(stored, V1Prefix), pbkdf2.Key(c.key, c.salt, pbkdf2Rounds, 32, sha256.New))
+		derived, err := derivedKey(c.key, c.salt)
+		if err != nil {
+			return nil, ErrInvalid
+		}
+		return DecryptToken(strings.TrimPrefix(stored, V1Prefix), derived)
 	}
 	if strings.HasPrefix(stored, "v") && strings.Contains(stored, ":") {
 		return nil, ErrInvalid
@@ -81,7 +83,11 @@ func (c Cipher) Seal(plaintext []byte, now time.Time, entropy io.Reader) (string
 	if len(c.key) == 0 {
 		return "", ErrInvalid
 	}
-	token, err := EncryptToken(plaintext, pbkdf2.Key(c.key, c.salt, pbkdf2Rounds, 32, sha256.New), now, entropy)
+	derived, err := derivedKey(c.key, c.salt)
+	if err != nil {
+		return "", ErrInvalid
+	}
+	token, err := EncryptToken(plaintext, derived, now, entropy)
 	if err != nil {
 		return "", err
 	}

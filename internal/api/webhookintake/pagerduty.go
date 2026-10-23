@@ -18,7 +18,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/licensing"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
-	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -501,11 +500,12 @@ func (d Deps) handlePagerDutyWebhook() http.HandlerFunc {
 			return
 		}
 		if refusal != "" {
+			d.mirrorDecrypt()
 			mirrorSignatureWork(body, r.Header.Get("X-PagerDuty-Signature"))
 			refusePagerDuty(w, r, d.logger(), refusal)
 			return
 		}
-		secretBytes, err := d.Decryptor.Decrypt(secrets.NewValue(binding.SigningSecretEncrypted))
+		secretBytes, err := d.decryptStored(binding.SigningSecretEncrypted)
 		if err != nil {
 			d.logger().Error("pagerduty_webhook decrypt binding secret failed", "binding_id", canonicalBindingID, "error", err)
 			policy.WriteDetail(w, http.StatusInternalServerError, "webhook store is unavailable", nil)

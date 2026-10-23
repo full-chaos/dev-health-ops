@@ -164,7 +164,7 @@ func adminFieldViolations(row map[string]any, scopes map[string]string, root str
 	// a registration that wraps the handler in bodyFirst always says so (a handler may decode first by other means and say so too).
 	if text, ok := disclosure.(string); ok {
 		claims := strings.Contains(text, bodyFirstClause)
-		if registered, found := registeredBodyFirst(row, root); found && registered && !claims {
+		if registered, found := registeredBodyFirst(row, root); found && registered != claims {
 			bad("the body-first clause (%v) disagrees with the route registration (%v)", claims, registered)
 		}
 	}
@@ -187,7 +187,12 @@ func adminFieldViolations(row map[string]any, scopes map[string]string, root str
 
 const bodyFirstClause = "once any body-first validation has run"
 
-var bodyFirstPattern = regexp.MustCompile(`(?i)bodyFirst`)
+// bodyFirstPattern names the registration wrappers that read the body before the guard: Guard.BodyFirst and the
+// handlers' bodyFirst, the customer-push adminBody helper (a BodyFirst closure) and the teams decodeFirst wrapper
+// (decodes the body, then runs the guard). The integrations routes name their BodyFirst closure write.
+var bodyFirstPattern = regexp.MustCompile(`(?i)(bodyFirst|adminBody\(|decodeFirst)`)
+
+var bodyFirstClosures = map[string]string{"internal/api/integrationsadmin/routes.go": "write("}
 
 // registeredBodyFirst reports whether the registration entry at the row's source line wraps its handler in bodyFirst.
 func registeredBodyFirst(row map[string]any, root string) (registered, found bool) {
@@ -206,7 +211,8 @@ func registeredBodyFirst(row map[string]any, root string) (registered, found boo
 	for i := int(line); i < len(lines) && i < int(line)+3 && !strings.Contains(lines[i], "Method:"); i++ {
 		entry += "\n" + lines[i]
 	}
-	return bodyFirstPattern.MatchString(entry), true
+	closure, named := bodyFirstClosures[file]
+	return bodyFirstPattern.MatchString(entry) || (named && strings.Contains(entry, closure)), true
 }
 
 func anchorProblem(root, rel string, line int) string {
@@ -293,6 +299,9 @@ func TestAdminFieldChecksCatchPlantedDefects(t *testing.T) {
 		},
 		"tenant route claims the platform rule": func(r map[string]any) {
 			r["disclosure_behavior"] = platformPrefix + " only a superuser passes, any other caller answers 403 (internal/api/policy/guard.go:137)"
+		},
+		"body-first clause on a route registered without it": func(r map[string]any) {
+			r["disclosure_behavior"] = strings.Replace(r["disclosure_behavior"].(string), "403", bodyFirstClause+", 403", 1)
 		},
 		"claims a denial under impersonation": func(r map[string]any) {
 			r["current_state_cache_behavior"] = cachePrefix + "internal/api/policy/request_reads.go:13); the route is denied under impersonation"

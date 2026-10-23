@@ -7025,7 +7025,7 @@
       "action": null,
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
-      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/apiservice/customerpush/reads.go:174; internal/apiservice/customerpush/reads.go:172); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/apiservice/customerpush/reads.go:174; internal/apiservice/customerpush/reads.go:172); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
       "gaps": [
         "action: no catalog action covers ingest source (this leaf does not extend the vocabulary)"
       ],
@@ -8165,7 +8165,7 @@
       "action": null,
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
-      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
       "gaps": [
         "action: no catalog action covers ingest source (this leaf does not extend the vocabulary)"
       ],
@@ -8230,7 +8230,7 @@
       "action": null,
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
-      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/apiservice/customerpush/reads.go:174; internal/apiservice/customerpush/reads.go:172); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/apiservice/customerpush/reads.go:174; internal/apiservice/customerpush/reads.go:172); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
       "gaps": [
         "action: no catalog action covers ingest token (this leaf does not extend the vocabulary)"
       ],
@@ -8360,7 +8360,7 @@
       "action": null,
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
-      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
       "gaps": [
         "action: no catalog action covers ingest token (this leaf does not extend the vocabulary)"
       ],

@@ -179,8 +179,55 @@ func TestReconcileMissingAndExtraAreReportedBothWays(t *testing.T) {
 	serviceOnly := AuthRow{ID: uuid.New(), Kind: "service_account"}
 	noUser := AuthRow{ID: uuid.New(), Kind: "user", HasUser: false}
 	rep := reconcile(t, []Row{keep, onlyPublic}, []AuthRow{keepAuth, onlyAuth, serviceOnly, noUser}, nil)
-	if rep.Diffs[DiffMissingInAuth] != 1 || rep.Diffs[DiffExtraInAuth] != 1 || rep.GatedTotal() != 2 || rep.Seen != 2 || rep.Matched != 1 {
-		t.Fatalf("reported %+v seen %d matched %d (a service account or a user-less principal is not an extra user)", rep.Diffs, rep.Seen, rep.Matched)
+	if rep.Diffs[DiffMissingInAuth] != 1 || rep.Diffs[DiffExtraInAuth] != 2 || rep.GatedTotal() != 3 || rep.Seen != 2 || rep.Matched != 1 {
+		t.Fatalf("reported %+v seen %d matched %d (a user principal without a users row is an extra; a service account with no users row is not)", rep.Diffs, rep.Seen, rep.Matched)
+	}
+}
+
+// An auth.users row hangs off any principal; one with no public.users row fails
+// the gate whatever the principal's kind.
+func TestReconcileExtraUsersRowOnANonUserPrincipalFailsTheGate(t *testing.T) {
+	for _, kind := range []string{"service_account", "workload", "user"} {
+		extra := AuthRow{ID: uuid.New(), Kind: kind, HasUser: true}
+		rep := reconcile(t, nil, []AuthRow{extra}, nil)
+		if rep.Diffs[DiffExtraInAuth] != 1 || rep.GatedTotal() != 1 {
+			t.Errorf("auth.users row on a %s principal with no public row: %+v", kind, rep.Diffs)
+		}
+	}
+}
+
+// A public row that backfill skips, with no auth row, is the skip class and is
+// not also reported as missing.
+func TestReconcileSkippedRowWithNoAuthRowIsTheSkipClassOnly(t *testing.T) {
+	for _, tc := range []struct {
+		class string
+		plant func(*Row)
+	}{
+		{SkipUnknownHashFormat, func(r *Row) { r.PasswordHash = str("not-a-bcrypt-verifier") }},
+		{SkipInvalidIdentity, func(r *Row) { r.AuthProvider, r.AuthProviderID = str("github"), str("") }},
+	} {
+		row, _ := pair(t)
+		tc.plant(&row)
+		rep := reconcile(t, []Row{row}, nil, nil)
+		if rep.Diffs[tc.class] != 1 || rep.Diffs[DiffMissingInAuth] != 0 || rep.GatedTotal() != 1 {
+			t.Errorf("%s with no auth row: %+v", tc.class, rep.Diffs)
+		}
+	}
+}
+
+// A skipped row still has its independent fields compared.
+func TestReconcileSkippedRowStillShowsIndependentDiffs(t *testing.T) {
+	row, auth := pair(t)
+	row.PasswordHash = str("not-a-bcrypt-verifier")
+	auth.Active = false
+	auth.TokenVersion = 9
+	rep := reconcile(t, []Row{row}, []AuthRow{auth}, nil)
+	if rep.Diffs[SkipUnknownHashFormat] != 1 || rep.Diffs[DiffActive] != 1 || rep.Diffs[DiffTokenVersion] != 1 || rep.GatedTotal() != 3 || rep.Matched != 0 {
+		t.Fatalf("%+v", rep.Diffs)
+	}
+	// An unmappable verifier is not also a password diff: the skip is the reason.
+	if rep.Diffs[DiffPasswordHash] != 0 {
+		t.Fatalf("a skipped hash was also counted as password_hash_diff: %+v", rep.Diffs)
 	}
 }
 

@@ -146,7 +146,7 @@ func TestProjectionNeverWidensScopes(t *testing.T) {
 }
 
 func TestProjectionRotationNeedsTheActiveParent(t *testing.T) {
-	parent := &Parent{Scopes: []string{"ingest:write", "schema:read"}}
+	parent := &Parent{ID: credA, Scopes: []string{"ingest:write", "schema:read"}}
 	state := mustApply(t, State{}, rotated(credB, credA, "ingest:write"), parent)
 	if state.RotationParentID != credA || state.Status != StatusActive {
 		t.Fatalf("after rotated: %+v", state)
@@ -156,11 +156,13 @@ func TestProjectionRotationNeedsTheActiveParent(t *testing.T) {
 		parent *Parent
 		want   Outcome
 	}{
-		"no parent view":       {rotated(credB, credA, "ingest:write"), nil, RefusedParent},
-		"wider than parent":    {rotated(credB, credA, "ingest:write", "ingest:status"), parent, RefusedWiden},
-		"its own parent":       {rotated(credB, credB, "ingest:write"), parent, RefusedTransition},
-		"no parent id":         {rotated(credB, "", "ingest:write"), parent, RefusedTransition},
-		"rotated after create": {rotated(credB, credA, "ingest:write"), parent, RefusedTransition},
+		"no parent view":            {rotated(credB, credA, "ingest:write"), nil, RefusedParent},
+		"wider than parent":         {rotated(credB, credA, "ingest:write", "ingest:status"), parent, RefusedWiden},
+		"its own parent":            {rotated(credB, credB, "ingest:write"), parent, RefusedTransition},
+		"no parent id":              {rotated(credB, "", "ingest:write"), parent, RefusedTransition},
+		"another credential's view": {rotated(credB, credA, "ingest:write"), &Parent{ID: "cred-C", Scopes: []string{"ingest:write"}}, RefusedParent},
+		"view with no id":           {rotated(credB, credA, "ingest:write"), &Parent{Scopes: []string{"ingest:write"}}, RefusedParent},
+		"rotated after create":      {rotated(credB, credA, "ingest:write"), parent, RefusedTransition},
 	}
 	for name, tc := range cases {
 		from := State{}
@@ -224,7 +226,7 @@ func TestProjectionNeverAppliesToATerminalAggregateAndNeverPanics(t *testing.T) 
 			}
 			events = append(events, e)
 		}
-		parent := &Parent{Scopes: scopePool}
+		parent := &Parent{ID: credB, Scopes: scopePool}
 		replay := func() State {
 			state := State{}
 			for _, e := range events {

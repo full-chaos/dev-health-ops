@@ -67,10 +67,13 @@ type State struct {
 	ExpiresAt        string
 }
 
-// Parent is what a rotation is compared with: the scopes of the credential it
-// replaces. A nil Parent for a rotated event is RefusedParent, never "no
-// parent, so apply".
-type Parent struct{ Scopes []string }
+// Parent is what a rotation is compared with: the id and scopes of the
+// credential it replaces. A nil Parent, or one whose ID is not the event's
+// rotation_parent_id, is RefusedParent, never "no parent, so apply".
+type Parent struct {
+	ID     string
+	Scopes []string
+}
 
 // Apply folds event into state. The returned state is state itself unless the
 // outcome is Applied. Apply never panics and never returns Applied for a
@@ -105,7 +108,7 @@ func Apply(state State, event contracts.ExternalPushLifecycleEvent, parent *Pare
 			if change.RotationParentID == "" || change.RotationParentID == event.AggregateID {
 				return state, RefusedTransition
 			}
-			if parent == nil {
+			if parent == nil || parent.ID == "" || parent.ID != change.RotationParentID {
 				return state, RefusedParent
 			}
 			if !subset(change.Scopes, parent.Scopes) {

@@ -51,6 +51,14 @@ func TestRedProofs(t *testing.T) {
 		{"planted raw request path", "func f(r *http.Request) { slog.Info(\"x\", slog.String(\"path\", r.URL.Path)) }", "R6"},
 		{"planted raw request path in loose pairs", "func f(r *http.Request, l *slog.Logger) { l.Error(\"x\", \"path\", r.URL.Path) }", "R6"},
 		{"planted raw query", "func f(r *http.Request, l *slog.Logger) { l.Error(\"x\", \"q\", r.URL.RawQuery) }", "R6"},
+		{"aliased attribute and metric packages", "func f(c metric.Int64Counter, org string) { c.Add(context.Background(), 1, metric.WithAttributes(attribute.String(\"org_id\", org))) }", "R2"},
+		{"attributes built in a slice", "func f(c metric.Int64Counter, org string) { attrs := []attribute.KeyValue{attribute.String(\"org_id\", org)}; c.Add(context.Background(), 1, metric.WithAttributes(attrs...)) }", "R2"},
+		{"attributes built in a set", "func f(c metric.Int64Counter, org string) { set := attribute.NewSet(attribute.String(\"org_id\", org)); c.Add(context.Background(), 1, metric.WithAttributeSet(set)) }", "R2"},
+		{"identity key with a status suffix", "func f(c metric.Int64Counter, org string) { c.Add(context.Background(), 1, metric.WithAttributes(attribute.String(\"org_id_status\", org))) }", "R2"},
+		{"escaped constant key", "const k = \"org\\u005fid\"\nfunc f(c metric.Int64Counter, org string) { c.Add(context.Background(), 1, metric.WithAttributes(attribute.String(k, org))) }", "R2"},
+		{"raw path through a local variable", "func f(r *http.Request, l *slog.Logger) { p := r.URL.Path; l.Error(\"x\", \"path\", p) }", "R6"},
+		{"raw path variable in an attribute", "func f(r *http.Request) { var p = r.URL.RawQuery; slog.Info(\"x\", slog.String(\"q\", p)) }", "R6"},
+		{"discard-named writer is not io.Discard", "type discard struct{}\nfunc (discard) Write(p []byte) (int, error) { return len(p), nil }\nfunc f() { _ = slog.NewJSONHandler(discard{}, nil) }", "R4"},
 		{"planted bare digest as attribute", "func f(v []byte) { _ = attribute.String(\"who\", string(sha256.Sum256(v)[:])) }", "R7"},
 	}
 	for _, tc := range cases {
@@ -60,6 +68,37 @@ func TestRedProofs(t *testing.T) {
 				t.Fatalf("rules = %q, want %s", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestAliasedImportsAreResolved(t *testing.T) {
+	source := "package sample\n\nimport (\n\t\"context\"\n\t\"net/http\"\n\tattrx \"go.opentelemetry.io/otel/attribute\"\n\tmetricx \"go.opentelemetry.io/otel/metric\"\n\tslogx \"log/slog\"\n)\n\n" +
+		"func f(c metricx.Int64Counter, r *http.Request) {\n" +
+		"\tc.Add(context.Background(), 1, metricx.WithAttributes(attrx.String(\"org_id\", \"x\")))\n" +
+		"\t_ = attrx.String(\"api_token\", \"x\")\n" +
+		"\tslogx.Info(\"x\", slogx.String(\"path\", r.URL.Path))\n" +
+		"\t_ = slogx.NewJSONHandler(nil, nil)\n}\n"
+	got := rules(scanSource(t, source))
+	for _, want := range []string{"R1", "R2", "R4", "R6"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("rules = %q, want %s", got, want)
+		}
+	}
+}
+
+func TestTestSupportSourceIsScanned(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "internal", "testsupport", "helper")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	source := header + "func f(r *http.Request) { slog.Info(\"x\", slog.String(\"path\", r.URL.Path)) }\n"
+	if err := os.WriteFile(filepath.Join(dir, "helper.go"), []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := emitscan.Scan(root, []string{"internal"})
+	if err != nil || rules(got) != "R6" {
+		t.Fatalf("rules = %q err = %v, want R6", rules(got), err)
 	}
 }
 

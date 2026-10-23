@@ -2,3 +2,6 @@ rule	file	count	reason
 R2	internal/jobs/workgraph/issuepredges/invariant.go	1	organization_id gauge label; per-tenant series, follow-up leaf (not changed here: visible metric shape)
 R2	internal/queryapi/analytics/investmentrepojointelemetry.go	1	org_id counter label; per-tenant series, follow-up leaf (not changed here: visible metric shape)
 R5	internal/workerservice/river_process.go	1	config built by riverConfig, which sets the redacting logger
+R2	internal/queryapi/analytics/sankeycoverage.go	1	query_id is a span attribute; the function also records a metric whose labels are bounded
+R4	internal/auth/httpapi/server.go	1	handler writes to a local type whose Write drops the output
+R4	internal/testsupport/chlogin/chlogin.go	1	test-only helper: the handler writes to an in-memory buffer

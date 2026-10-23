@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
@@ -71,14 +72,20 @@ var digestFuncs = map[string]bool{
 	"sha256.New": true, "sha1.New": true, "md5.New": true,
 }
 
-// labelWords are words that make a metric label key unbounded or free text.
-var labelWords = map[string]bool{
+// strongLabelWords make a metric label key unbounded whatever word ends it.
+var strongLabelWords = map[string]bool{
 	"id": true, "ids": true, "uuid": true, "email": true, "path": true, "url": true, "uri": true, "query": true,
-	"ip": true, "address": true, "session": true, "user": true, "username": true, "message": true, "msg": true,
-	"text": true, "error": true, "err": true, "request": true, "trace": true, "span": true, "name": true,
+	"ip": true, "address": true, "session": true, "user": true, "username": true, "request": true, "trace": true,
+	"span": true,
 }
 
-// labelAllowedLast are final words that name a bounded class of an unbounded thing.
+// weakLabelWords are free text unless a bounded final word (kind, class, ...) says the value is a class.
+var weakLabelWords = map[string]bool{"message": true, "msg": true, "text": true, "error": true, "err": true, "name": true}
+
+// classLast are final words that turn an unbounded thing into a class of it (path_class): a bounded set by construction.
+var classLast = map[string]bool{"kind": true, "class": true, "category": true}
+
+// labelAllowedLast are final words that name a bounded class of a weak-word thing.
 var labelAllowedLast = map[string]bool{"kind": true, "class": true, "type": true, "category": true, "code": true, "count": true, "status": true}
 
 // Scan walks dirs under root (non-test .go files only) and returns every
@@ -96,7 +103,7 @@ func Scan(root string, dirs []string) ([]Finding, error) {
 				return nil
 			}
 			if entry.IsDir() {
-				if name := entry.Name(); name == "testdata" || name == "testsupport" || strings.HasPrefix(name, ".") {
+				if name := entry.Name(); name == "testdata" || strings.HasPrefix(name, ".") {
 					return filepath.SkipDir
 				}
 				return nil
@@ -135,13 +142,9 @@ func scanFile(path, rel string) []Finding {
 	if err != nil {
 		return []Finding{{Rule: RuleUnparsable, File: rel, Line: 1}}
 	}
-	s := &fileScan{fset: fset, rel: rel, metricAttrs: map[*ast.CallExpr]bool{}, consts: stringConsts(file)}
-	ast.Inspect(file, func(node ast.Node) bool {
-		if call, ok := node.(*ast.CallExpr); ok {
-			s.call(call)
-		}
-		return true
-	})
+	s := &fileScan{fset: fset, rel: rel, metricAttrs: map[*ast.CallExpr]bool{}, consts: stringConsts(file), imports: importNames(file)}
+	s.markMetricFunctions(file)
+	ast.Walk(s, file)
 	return s.out
 }
 
@@ -151,6 +154,121 @@ type fileScan struct {
 	out         []Finding
 	metricAttrs map[*ast.CallExpr]bool
 	consts      map[string]string
+	imports     map[string]string
+	nodes       []ast.Node
+	taints      []map[string]bool
+}
+
+// Visit keeps a stack of the open nodes and, per function, the identifiers that hold a raw request path.
+func (s *fileScan) Visit(node ast.Node) ast.Visitor {
+	if node == nil {
+		top := s.nodes[len(s.nodes)-1]
+		s.nodes = s.nodes[:len(s.nodes)-1]
+		switch top.(type) {
+		case *ast.FuncDecl, *ast.FuncLit:
+			s.taints = s.taints[:len(s.taints)-1]
+		}
+		return nil
+	}
+	s.nodes = append(s.nodes, node)
+	switch fn := node.(type) {
+	case *ast.FuncDecl:
+		s.taints = append(s.taints, rawPathIdents(fn.Body))
+	case *ast.FuncLit:
+		s.taints = append(s.taints, rawPathIdents(fn.Body))
+	case *ast.CallExpr:
+		s.call(fn)
+	}
+	return s
+}
+
+func (s *fileScan) tainted(name string) bool {
+	return len(s.taints) > 0 && s.taints[len(s.taints)-1][name]
+}
+
+// rawPathIdents returns the identifiers a function assigns from a raw request path or query.
+func rawPathIdents(body *ast.BlockStmt) map[string]bool {
+	out := map[string]bool{}
+	if body == nil {
+		return out
+	}
+	ast.Inspect(body, func(node ast.Node) bool {
+		switch n := node.(type) {
+		case *ast.AssignStmt:
+			for i, rhs := range n.Rhs {
+				if i < len(n.Lhs) && rawRequestPart(rhs) {
+					if ident, ok := n.Lhs[i].(*ast.Ident); ok {
+						out[ident.Name] = true
+					}
+				}
+			}
+		case *ast.ValueSpec:
+			for i, value := range n.Values {
+				if i < len(n.Names) && rawRequestPart(value) {
+					out[n.Names[i].Name] = true
+				}
+			}
+		}
+		return true
+	})
+	return out
+}
+
+func importNames(file *ast.File) map[string]string {
+	out := map[string]string{}
+	for _, spec := range file.Imports {
+		path, err := strconv.Unquote(spec.Path.Value)
+		if err != nil {
+			continue
+		}
+		name := path[strings.LastIndex(path, "/")+1:]
+		if spec.Name != nil {
+			name = spec.Name.Name
+		}
+		out[name] = path[strings.LastIndex(path, "/")+1:]
+	}
+	return out
+}
+
+// markMetricFunctions marks every attribute constructor inside a function that builds metric options or an
+// attribute set: a label assembled in a slice or a set is a metric label too.
+func (s *fileScan) markMetricFunctions(file *ast.File) {
+	ast.Inspect(file, func(node ast.Node) bool {
+		var body *ast.BlockStmt
+		switch fn := node.(type) {
+		case *ast.FuncDecl:
+			body = fn.Body
+		case *ast.FuncLit:
+			body = fn.Body
+		}
+		if body == nil || !s.buildsMetricLabels(body) {
+			return true
+		}
+		ast.Inspect(body, func(inner ast.Node) bool {
+			if call, ok := inner.(*ast.CallExpr); ok {
+				if pkg, name, ok := s.qualified(call.Fun); ok && pkg == "attribute" && attrConstructors[name] {
+					s.metricAttrs[call] = true
+				}
+			}
+			return true
+		})
+		return true
+	})
+}
+
+func (s *fileScan) buildsMetricLabels(body *ast.BlockStmt) bool {
+	found := false
+	ast.Inspect(body, func(node ast.Node) bool {
+		if call, ok := node.(*ast.CallExpr); ok {
+			pkg, name, ok := s.qualified(call.Fun)
+			if ok && ((pkg == "metric" && (name == "WithAttributes" || name == "WithAttributeSet")) ||
+				(pkg == "attribute" && name == "NewSet")) {
+				found = true
+			}
+		}
+		return !found
+	})
+	return found
 }
 
 func (s *fileScan) add(rule string, pos token.Pos, detail string) {
@@ -179,8 +297,8 @@ func stringConsts(file *ast.File) map[string]string {
 }
 
 func unquote(literal string) string {
-	if len(literal) >= 2 {
-		return literal[1 : len(literal)-1]
+	if value, err := strconv.Unquote(literal); err == nil {
+		return value
 	}
 	return literal
 }
@@ -200,19 +318,24 @@ func (s *fileScan) keyOf(expr ast.Expr) (string, bool) {
 	return "", false
 }
 
-func qualified(fun ast.Expr) (pkg, name string, ok bool) {
+// qualified names the package (by its import path's last element, whatever the local alias) and the function of a
+// selector call. pkg is the identifier itself when it is not an import (a variable receiver).
+func (s *fileScan) qualified(fun ast.Expr) (pkg, name string, ok bool) {
 	sel, isSel := fun.(*ast.SelectorExpr)
 	if !isSel {
 		return "", "", false
 	}
 	if ident, isIdent := sel.X.(*ast.Ident); isIdent {
+		if canonical, imported := s.imports[ident.Name]; imported {
+			return canonical, sel.Sel.Name, true
+		}
 		return ident.Name, sel.Sel.Name, true
 	}
 	return "", sel.Sel.Name, true
 }
 
 func (s *fileScan) call(call *ast.CallExpr) {
-	pkg, name, ok := qualified(call.Fun)
+	pkg, name, ok := s.qualified(call.Fun)
 	if !ok {
 		return
 	}
@@ -226,7 +349,7 @@ func (s *fileScan) call(call *ast.CallExpr) {
 	case name == "RecordError" && len(call.Args) >= 1:
 		s.add(RuleErrorText, call.Pos(), "RecordError")
 	case pkg == "slog" && (name == "NewJSONHandler" || name == "NewTextHandler"):
-		if !strings.HasPrefix(s.rel, rawHandlerAllowed) && !discardsOutput(call) {
+		if !strings.HasPrefix(s.rel, rawHandlerAllowed) && !s.discardsOutput(call) {
 			s.add(RuleRawHandler, call.Pos(), "slog."+name)
 		}
 	case pkg == "river" && name == "NewClient":
@@ -264,12 +387,23 @@ func (s *fileScan) logCall(call *ast.CallExpr, withContext bool) {
 
 // emitValue applies the value rules shared by every emit path.
 func (s *fileScan) emitValue(value ast.Expr, pos token.Pos) {
-	if rawRequestPart(value) {
+	if rawRequestPart(value) || s.usesTaintedPath(value) {
 		s.add(RuleRawPath, pos, "")
 	}
-	if containsDigest(value) {
+	if s.containsDigest(value) {
 		s.add(RuleIdentityHash, pos, "")
 	}
+}
+
+func (s *fileScan) usesTaintedPath(expr ast.Expr) bool {
+	found := false
+	ast.Inspect(expr, func(node ast.Node) bool {
+		if ident, ok := node.(*ast.Ident); ok && s.tainted(ident.Name) {
+			found = true
+		}
+		return !found
+	})
+	return found
 }
 
 func rawRequestPart(expr ast.Expr) bool {
@@ -298,11 +432,11 @@ func rawRequestPart(expr ast.Expr) bool {
 	return found
 }
 
-func containsDigest(expr ast.Expr) bool {
+func (s *fileScan) containsDigest(expr ast.Expr) bool {
 	found := false
 	ast.Inspect(expr, func(node ast.Node) bool {
 		if call, ok := node.(*ast.CallExpr); ok {
-			if pkg, name, ok := qualified(call.Fun); ok && digestFuncs[pkg+"."+name] {
+			if pkg, name, ok := s.qualified(call.Fun); ok && digestFuncs[pkg+"."+name] {
 				found = true
 			}
 		}
@@ -313,14 +447,14 @@ func containsDigest(expr ast.Expr) bool {
 
 // errorTextValue reports an expression that reads error text: x.Error() or a
 // fmt formatting call.
-func errorTextValue(expr ast.Expr) bool {
+func (s *fileScan) errorTextValue(expr ast.Expr) bool {
 	found := false
 	ast.Inspect(expr, func(node ast.Node) bool {
 		call, ok := node.(*ast.CallExpr)
 		if !ok {
 			return true
 		}
-		pkg, name, ok := qualified(call.Fun)
+		pkg, name, ok := s.qualified(call.Fun)
 		if !ok {
 			return true
 		}
@@ -340,7 +474,7 @@ func (s *fileScan) attribute(call *ast.CallExpr) {
 	if literal && logging.ProtectedKey(key) {
 		s.add(RuleProtectedKey, call.Pos(), key)
 	}
-	if errorTextValue(call.Args[1]) {
+	if s.errorTextValue(call.Args[1]) {
 		s.add(RuleErrorText, call.Pos(), key)
 	}
 	s.emitValue(call.Args[1], call.Pos())
@@ -356,7 +490,7 @@ func (s *fileScan) metricAttributes(call *ast.CallExpr) {
 		if !ok {
 			continue
 		}
-		if pkg, name, ok := qualified(inner.Fun); ok && pkg == "attribute" && attrConstructors[name] {
+		if pkg, name, ok := s.qualified(inner.Fun); ok && pkg == "attribute" && attrConstructors[name] {
 			s.metricAttrs[inner] = true
 			attrs++
 		}
@@ -375,11 +509,19 @@ func (s *fileScan) metricLabel(call *ast.CallExpr, key string, literal bool) {
 	if len(words) == 0 {
 		return
 	}
+	if !classLast[words[len(words)-1]] {
+		for _, word := range words {
+			if strongLabelWords[word] {
+				s.add(RuleMetricLabel, call.Pos(), key)
+				return
+			}
+		}
+	}
 	if labelAllowedLast[words[len(words)-1]] {
 		return
 	}
 	for _, word := range words {
-		if labelWords[word] {
+		if weakLabelWords[word] {
 			s.add(RuleMetricLabel, call.Pos(), key)
 			return
 		}
@@ -414,19 +556,15 @@ func (s *fileScan) riverClient(call *ast.CallExpr) {
 	s.add(RuleRiverLogger, call.Pos(), "no Logger")
 }
 
-// discardsOutput reports a handler that writes to io.Discard or a local
-// discard type: it emits nothing, so it carries nothing.
-func discardsOutput(call *ast.CallExpr) bool {
+// discardsOutput reports a handler that writes to io.Discard: it emits nothing.
+func (s *fileScan) discardsOutput(call *ast.CallExpr) bool {
 	if len(call.Args) == 0 {
 		return false
 	}
-	switch arg := call.Args[0].(type) {
-	case *ast.SelectorExpr:
-		return exprName(arg) == "io.Discard"
-	case *ast.CompositeLit:
-		if ident, ok := arg.Type.(*ast.Ident); ok {
-			return ident.Name == "discard"
-		}
+	sel, ok := call.Args[0].(*ast.SelectorExpr)
+	if !ok || sel.Sel.Name != "Discard" {
+		return false
 	}
-	return false
+	ident, ok := sel.X.(*ast.Ident)
+	return ok && s.imports[ident.Name] == "io"
 }

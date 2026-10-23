@@ -64,7 +64,7 @@ func WriteError(w http.ResponseWriter, r *http.Request, logger *slog.Logger, ste
 	ctx := context.Background()
 	path := ""
 	if r != nil {
-		ctx, path = r.Context(), r.URL.Path
+		ctx, path = r.Context(), r.Pattern
 	}
 	requestID := w.Header().Get(RequestIDHeader)
 	if requestID == "" && r != nil {

@@ -1192,7 +1192,7 @@ var retiredKindsSQL = `
 `
 
 // retiredKindsSQLList renders retiredWorkgraphKinds as SQL literals. They are literals, not a bound array, so the
-// planner can prove the partial index of revision 0153 (WHERE job_kind IN the same list) in a generic plan too.
+// planner can prove the partial index of revision 0154 (WHERE job_kind IN the same list) in a generic plan too.
 // The kinds are constants of this package, never input.
 func retiredKindsSQLList() string {
 	quoted := make([]string, len(retiredWorkgraphKinds))

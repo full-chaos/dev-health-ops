@@ -5654,7 +5654,7 @@
       "graphql_field_name": null,
       "id": "GET /api/v1/external-ingest/schemas [dev-health-ops-api @api]",
       "method": "GET",
-      "public_rationale": "Public schema document: the contract pushers code against; no tenant data and the same bytes for every caller; the only control is the per-address rate limit.",
+      "public_rationale": "Public schema document: the contract pushers code against; no tenant data and the same bytes for every caller; the only control is the per-address rate limit. The request-wide org-scope middleware still applies when a bearer and an X-Org-Id are sent (a non-member organisation is refused 403, as on every route); the handler's answer is global.",
       "reachable_validators": [
         {
           "anchor": {
@@ -5693,7 +5693,7 @@
       "graphql_field_name": null,
       "id": "GET /api/v1/external-ingest/schemas/{schema_version} [dev-health-ops-api @api]",
       "method": "GET",
-      "public_rationale": "Public schema document: the contract pushers code against; no tenant data and the same bytes for every caller; the only control is the per-address rate limit.",
+      "public_rationale": "Public schema document: the contract pushers code against; no tenant data and the same bytes for every caller; the only control is the per-address rate limit. The request-wide org-scope middleware still applies when a bearer and an X-Org-Id are sent (a non-member organisation is refused 403, as on every route); the handler's answer is global.",
       "reachable_validators": [
         {
           "anchor": {

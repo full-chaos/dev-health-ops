@@ -11,7 +11,7 @@ lifecycle: active
 
 # Discover the supported schema
 
-1. Query the schema index or `GET /api/v1/external-ingest/schemas/external-ingest.v1` with a token that has schema access.
+1. Query the schema index or `GET /api/v1/external-ingest/schemas/external-ingest.v1`. Schema discovery is public: no token is needed, and the answer is the same for every caller.
 2. Cache the schema with the integration build artifact, not indefinitely.
 3. Validate generated batches against the returned schema in CI.
 4. Use the server-shipped examples for each record kind as the payload baseline.

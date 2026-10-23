@@ -1,3 +1,4 @@
+contracts/auth/v1/vocabulary
 internal/api/apimetrics
 internal/api/audit
 internal/api/authmail
@@ -39,6 +40,8 @@ internal/api/webhookintake
 internal/apiservice/acr
 internal/apiservice/admin
 internal/apiservice/customerpush
+internal/auth/contracts
+internal/auth/contracts/tokencorpus
 internal/auth/edgetoken
 internal/auth/httpapi
 internal/auth/passwordhash
@@ -132,6 +135,7 @@ internal/testsupport/pgschema
 internal/testsupport/pgseed
 internal/testsupport/proxycapture
 internal/testsupport/pydanticecho
+internal/testsupport/usertokens
 internal/testsupport/venueoracle
 internal/workitemcontract
 ~internal/api/externalingest/testdata

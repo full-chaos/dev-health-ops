@@ -33,9 +33,10 @@ import (
 // the caller's own org, so the operator names it.
 const dhoAPIOrgIDProducer = "org_id"
 
-// External-ingest entries authenticate with the push token (see
-// RESTCredentialPushToken), not the run's bearers, and are compared against
-// the Python api on the same token. POST /batches is deliberately not here: it
+// External-ingest entries send the push token (see RESTCredentialPushToken),
+// not the run's bearers, and are compared against the Python api on the same
+// token. The two schema-discovery entries are public routes that ignore it (it
+// is sent only so one credential serves every external-ingest entry). POST /batches is deliberately not here: it
 // persists a batch, and a synthetic batch in the proof org is not made (real
 // use only; its parity proof is the venue oracle).
 const (

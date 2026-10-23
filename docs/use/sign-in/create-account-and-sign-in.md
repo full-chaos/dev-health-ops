@@ -42,7 +42,7 @@ Expected result: the page confirms that your email was verified and offers **Sig
 
 Things to know:
 
-- An email address can be registered once. Registering it again is refused with "Email already registered". Sign in or [recover access](recover-access.md) instead.
+- If sign-up does not complete, try to [sign in](#sign-in) or [recover access](recover-access.md) before creating another account.
 - Depending on how your deployment is configured, sign-up can also create a workspace for you and make you its owner. If it does not, you join an organization with an invite code at your first sign-in.
 - Sign-up attempts are limited. After too many in a short time you must wait before trying again.
 
@@ -56,7 +56,7 @@ Expected result: you land in the product, or in onboarding on your first sign-in
 Things to know:
 
 - The sign-in page shows a button for GitHub, GitLab, or Google only when your deployment has that provider configured.
-- A wrong password, an unknown email address, a disabled account, and an account that has no password all give the same refusal ("Invalid email or password" on the sign-in page). This is deliberate: it does not reveal whether an account exists.
+- A failed sign-in always gives the same refusal ("Invalid email or password" on the sign-in page), whatever the reason.
 - If your email address is not verified, you are not signed in. The page asks you to verify your email address first. Use the link in the original message, or [request a new one](recover-access.md#request-a-new-verification-email).
 - After repeated failed attempts the account is locked for a short time and sign-in is refused, even with the correct password. Wait, then try again.
 - A signed-in session lasts for a limited time. If it ends, you are asked to sign in again.

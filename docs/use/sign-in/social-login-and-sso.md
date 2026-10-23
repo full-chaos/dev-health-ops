@@ -19,7 +19,7 @@ Dev Health has three ways to sign in. They differ in who holds the credential an
 | --- | --- | --- |
 | Email and password | Dev Health | Always available for accounts created with a password |
 | Social sign-in | GitHub, GitLab, or Google | The deployment: a provider button appears only when the deployment has configured it |
-| Single sign-on (SSO) | Your organization's identity provider | Your organization, on a plan that includes SSO |
+| Single sign-on (SSO) | Your organization's identity provider | Not available yet |
 
 ## Social sign-in
 
@@ -27,7 +27,6 @@ Dev Health has three ways to sign in. They differ in who holds the credential an
 - You sign in at the provider, and Dev Health receives your profile from it. Dev Health never sees your provider password.
 - The first sign-in creates a Dev Health account that is already email-verified and has no Dev Health password. You then continue to onboarding to create or join an organization.
 - If a provider is not configured for the deployment, its button is absent. Asking for it directly is refused with "Social login not configured".
-- If the email address of your provider account is already registered with a different provider, sign-in is refused and names the provider to use. Sign in with that provider instead.
 - A social account has no Dev Health password, so password reset and password change do not apply. See [Recover access](recover-access.md).
 - If you see "Social login failed", try again or use email and password if your account has one.
 
@@ -35,12 +34,7 @@ Which providers appear is decided by whoever runs your deployment, not per organ
 
 ## Single sign-on
 
-- SSO connects Dev Health to your organization's identity provider using OpenID Connect, OAuth, or SAML.
-- SSO is an enterprise feature. Without an entitlement for your organization, SSO requests are refused with a message that the feature is not licensed.
-- Your organization's administrator sets up and activates an SSO provider. To use SSO, or to find out whether your organization has it, ask your organization admin.
-- The Dev Health sign-in page does not show an SSO button. SSO sign-in starts from your organization's identity provider or from a link your administrator gives you.
-- A person's first SSO sign-in creates an account and membership only if the administrator turned automatic account creation on for that provider. Otherwise the sign-in is refused with "User not found and auto-provisioning disabled", and an administrator must add you first.
-- An account managed by SSO has no Dev Health password to change.
+Single sign-on is not available yet through the Dev Health sign-in page, and the sign-in page has no SSO button. To find out whether or when your organization can use it, ask your organization admin.
 
 Administrators diagnosing SSO problems: see [Authentication and role problems](../../admin/troubleshooting/authentication-and-roles.md).
 

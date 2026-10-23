@@ -38,9 +38,6 @@ import (
 	"log/slog"
 	"sync"
 	"time"
-
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/metric"
 )
 
 // repoJoinDedupCollisionCooldown bounds this telemetry to one extra
@@ -148,7 +145,7 @@ SETTINGS max_execution_time = 5
 var recordInvestmentRepoJoinDedupCollisions = defaultRecordInvestmentRepoJoinDedupCollisions
 
 func defaultRecordInvestmentRepoJoinDedupCollisions(ctx context.Context, orgID string, excessRepoIDs int64) {
-	repoJoinDedupCollisionsCounter.Add(ctx, 1, metric.WithAttributes(attribute.String("org_id", orgID)))
+	repoJoinDedupCollisionsCounter.Add(ctx, 1)
 	slog.WarnContext(ctx, "investment repo join: org currently has an unmerged repos duplicate; the join is FINAL-deduped so results are still correct, but this names the window CHAOS-4773's fan-out class depended on",
 		"org_id", orgID, "excess_repo_ids", excessRepoIDs)
 }

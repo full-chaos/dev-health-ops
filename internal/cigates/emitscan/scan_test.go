@@ -103,6 +103,87 @@ func TestPathTaintDoesNotFollowOrdinaryCalls(t *testing.T) {
 	}
 }
 
+func TestInheritedConstantExpressionIsResolved(t *testing.T) {
+	body := "const (\n\tfirst = \"api_\" + \"token\"\n\tinherited\n)\nfunc f(v string) { _ = attribute.String(inherited, v) }\n"
+	if got := rules(scanSource(t, header+body)); got != "R1" {
+		t.Fatalf("rules = %q, want R1", got)
+	}
+}
+
+func TestNestedConstructorAliasDoesNotHideTheOuterOne(t *testing.T) {
+	body := "func f(v string) {\n\tstr := attribute.String\n\tfunc() {\n\t\tstr := slog.String\n\t\t_ = str\n\t}()\n\t_ = str(\"api_token\", v)\n}\n"
+	if got := rules(scanSource(t, header+body)); got != "R1" {
+		t.Fatalf("rules = %q, want R1", got)
+	}
+}
+
+func TestInnerRebindingHidesAnOuterAlias(t *testing.T) {
+	body := "func f(v string) {\n\tstr := attribute.String\n\t_ = str\n\tfunc() {\n\t\tstr := func(k, v string) string { return k + v }\n\t\t_ = str(\"api_token\", v)\n\t}()\n}\n"
+	if got := scanSource(t, header+body); len(got) != 0 {
+		t.Fatalf("findings: %v", got)
+	}
+}
+
+// A With call on any receiver is read as a log call (fail closed): the scan does not trace receivers. A non-logger With
+// that carries a raw request path is a false finding, a named limit of the scan; the repository census has none.
+func TestWithOnAnyReceiverIsReadAsALogCall(t *testing.T) {
+	body := "type builder struct{}\nfunc (builder) With(k string, v string) builder { return builder{} }\nfunc f(r *http.Request) { var b builder; _ = b.With(\"path\", r.URL.Path) }\n"
+	if got := rules(scanSource(t, header+body)); got != "R6" {
+		t.Fatalf("rules = %q, want R6", got)
+	}
+}
+
+func TestWithOnTracedLoggersIsALogCall(t *testing.T) {
+	cases := map[string]string{
+		"default":     "func f(r *http.Request) { slog.Default().With(\"path\", r.URL.Path).Info(\"x\") }",
+		"new":         "func f(r *http.Request, h slog.Handler) { slog.New(h).With(\"path\", r.URL.Path).Info(\"x\") }",
+		"field":       "type srv struct{ logger *slog.Logger }\nfunc (s srv) f(r *http.Request) { s.logger.With(\"path\", r.URL.Path).Info(\"x\") }",
+		"assigned":    "func f(r *http.Request, l *slog.Logger) { m := l.With(\"a\", 1); m.With(\"path\", r.URL.Path).Info(\"x\") }",
+		"helper func": "func get() *slog.Logger { return slog.Default() }\nfunc f(r *http.Request) { get().With(\"path\", r.URL.Path).Info(\"x\") }",
+	}
+	for name, body := range cases {
+		if got := rules(scanSource(t, header+body+"\n")); !strings.Contains(got, "R6") {
+			t.Fatalf("%s: rules = %q, want R6", name, got)
+		}
+	}
+}
+
+func TestIotaOffsetIsCarriedThroughAConstGroup(t *testing.T) {
+	body := "const (\n\tfirst = \"api_token\" + strconv.Itoa(iota)\n\tsecond\n)\nfunc f(v string) { _ = attribute.String(second, v) }\n"
+	source := strings.Replace(header, "\t\"net/http\"\n", "\t\"net/http\"\n\t\"strconv\"\n", 1) + "var _ = strconv.Itoa\n" + body
+	got := scanSource(t, source)
+	if len(got) != 1 || got[0].Rule != "R1" || got[0].Detail != "api_token1" {
+		t.Fatalf("findings = %v, want R1 for the key of the second spec (iota 1)", got)
+	}
+}
+
+func TestReassignedAliasFollowsTheLastAssignment(t *testing.T) {
+	body := "func f(v string) {\n\tstr := slog.String\n\tstr = attribute.String\n\t_ = str(\"api_token\", v)\n}\n"
+	if got := rules(scanSource(t, header+body)); got != "R1" {
+		t.Fatalf("rules = %q, want R1", got)
+	}
+	back := "func f(v string) {\n\tstr := attribute.String\n\t_ = str\n\tstr = func(k, v string) string { return k + v }\n\t_ = str(\"api_token\", v)\n}\n"
+	if got := scanSource(t, header+back); len(got) != 0 {
+		t.Fatalf("findings after the alias was re-assigned away: %v", got)
+	}
+}
+
+func TestFunctionLiteralScopeOfAnAlias(t *testing.T) {
+	body := "func f(v string) {\n\tg := func() {\n\t\tstr := attribute.String\n\t\t_ = str(\"api_token\", v)\n\t}\n\tg()\n\tstr := func(k, v string) string { return k }\n\t_ = str(\"api_token\", v)\n}\n"
+	got := scanSource(t, header+body)
+	if len(got) != 1 || got[0].Rule != "R1" {
+		t.Fatalf("findings = %v, want exactly the one inside the literal", got)
+	}
+}
+
+func TestFunctionLiteralParameterHidesTheOuterAliasOnlyInsideTheLiteral(t *testing.T) {
+	body := "func f(v string) {\n\tstr := attribute.String\n\tfunc(str func(k, v string) string) {\n\t\t_ = str(\"api_token\", v)\n\t}(nil)\n\t_ = str(\"api_token\", v)\n}\n"
+	got := scanSource(t, header+body)
+	if len(got) != 1 || got[0].Rule != "R1" {
+		t.Fatalf("findings = %v, want exactly the call after the literal", got)
+	}
+}
+
 func TestCrossFileConstantKeyIsResolved(t *testing.T) {
 	got := scanFiles(t, map[string]string{
 		"a.go": "package sample\n\nconst Key = \"api_\" + \"token\"\n",

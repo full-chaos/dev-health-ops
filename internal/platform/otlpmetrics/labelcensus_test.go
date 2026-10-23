@@ -26,16 +26,17 @@ var instrumentKinds = map[string]bool{
 	"Int64ObservableUpDownCounter": true, "Float64ObservableUpDownCounter": true,
 }
 
-// manualInstruments are the instruments whose name or labels the census cannot read from the call site: the gauges are named by
+// manualInstruments are the instruments whose name or labels the census cannot read from the call site: the counters are named by
 // the field of a table row and created in a loop. Each entry is checked against the source (the file must hold the constant).
 var manualInstruments = map[string]struct {
 	file, constant string
 	keys           []string
 }{
-	"workgraph_issue_pr_fallback_beside_native_rows":              {"internal/jobs/workgraph/issuepredges/invariant.go", "FallbackBesideNativeGauge", []string{"organization_id"}},
-	"workgraph_issue_pr_fallback_beside_native_pull_request_rows": {"internal/jobs/workgraph/issuepredges/invariant.go", "FallbackBesideNativePullRequestGauge", []string{"organization_id"}},
-	"workgraph_issue_pr_fallback_beside_native_issue_rows":        {"internal/jobs/workgraph/issuepredges/invariant.go", "FallbackBesideNativeIssueGauge", []string{"organization_id"}},
-	"workgraph_issue_pr_fallback_pull_request_issue_side_rows":    {"internal/jobs/workgraph/issuepredges/invariant.go", "FallbackPullRequestIssueSideGauge", []string{"organization_id"}},
+	"workgraph_issue_pr_fallback_beside_native_rows_total":              {"internal/jobs/workgraph/issuepredges/invariant.go", "FallbackBesideNativeCounter", []string{}},
+	"workgraph_issue_pr_fallback_beside_native_pull_request_rows_total": {"internal/jobs/workgraph/issuepredges/invariant.go", "FallbackBesideNativePullRequestCounter", []string{}},
+	"workgraph_issue_pr_fallback_beside_native_issue_rows_total":        {"internal/jobs/workgraph/issuepredges/invariant.go", "FallbackBesideNativeIssueCounter", []string{}},
+	"workgraph_issue_pr_fallback_pull_request_issue_side_rows_total":    {"internal/jobs/workgraph/issuepredges/invariant.go", "FallbackPullRequestIssueSideCounter", []string{}},
+	"workgraph_issue_pr_fallback_invariant_checks_total":                {"internal/jobs/workgraph/issuepredges/invariant.go", "FallbackInvariantChecksCounter", []string{}},
 }
 
 type sourceFile struct {

@@ -483,7 +483,10 @@ func TestPagerDutyWebhookRefusesUnknownAndRevokedBindingsLikeABadSignature(t *te
 	seedFeatureEnabled(t, ctx, pool, orgID)
 	decryptor := newTestDecryptor(t)
 	active := seedPagerDutyBinding(t, ctx, pool, decryptor, orgID, "active", "sub-1", "pd-secret")
-	revoked := seedPagerDutyBinding(t, ctx, pool, decryptor, orgID, "revoked", "sub-2", "pd-secret-2")
+	revoked := seedPagerDutyBinding(t, ctx, pool, decryptor, orgID, "active", "sub-2", "pd-secret-2")
+	if _, err := pool.Exec(ctx, `UPDATE pagerduty_webhook_bindings SET status = 'inactive', revoked_at = now(), credential_id = NULL WHERE id = $1`, revoked); err != nil {
+		t.Fatalf("retire pagerduty binding: %v", err)
+	}
 
 	deps := Deps{Pool: pool, Valkey: client, Decryptor: decryptor, limiters: newRateLimiters(nil, nil)}
 	body := []byte(`{"event":{"id":"E1","event_type":"incident.triggered","occurred_at":"2026-01-01T00:00:00Z","data":{}}}`)

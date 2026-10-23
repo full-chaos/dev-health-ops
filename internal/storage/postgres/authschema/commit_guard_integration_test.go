@@ -16,7 +16,7 @@ var guardedTables = []string{
 	"auth_outbox_events", "security_audit_events", "resource_grants", "memberships",
 	"platform_role_assignments", "policy_revisions", "entitlement_snapshots",
 	"credential_registry", "service_accounts", "workloads", "external_identities",
-	"organizations", "aggregate_revisions",
+	"organizations", "aggregate_revisions", "signing_keys",
 }
 
 // unguardedTables are deliberately outside the guard, each with its reason.
@@ -28,7 +28,6 @@ var unguardedTables = map[string]string{
 	"actions":             "closed vocabulary; the runtime role has no write privilege, so only the migration role writes it",
 	"roles":               "closed vocabulary; the runtime role has no write privilege",
 	"role_actions":        "closed vocabulary; the runtime role has no write privilege",
-	"signing_keys":        "public metadata only; the runtime role has no write privilege",
 	"link_credentials":    "single-use link tokens swept on expiry and removed with their principal; consuming or retargeting one is guarded by column (security columns below)",
 	"login_attempts":      "high-rate lockout counters keyed by an identifier hash; rate limiting, not authority",
 	"sso_flow_states":     "short-lived SSO flow state, consumed once even when the callback is rejected, so its consume cannot require an audit transaction; consumed_at is write-once and every other column is immutable by trigger",
@@ -175,6 +174,7 @@ var unguardedColumns = map[string]map[string]string{
 		"principal_id": "lifecycle", "created_at": "lifecycle", "updated_at": "lifecycle",
 		"email": "security", "email_lower": "security", "email_verified_at": "security",
 		"password_hash": "security", "password_algorithm": "security", "password_updated_at": "security",
+		"legacy_token_version": "security", "last_login_at": "lifecycle",
 	},
 	"sessions": {
 		"id": "lifecycle", "principal_id": "lifecycle", "organization_id": "lifecycle", "issued_at": "lifecycle",

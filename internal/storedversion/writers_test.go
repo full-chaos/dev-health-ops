@@ -97,6 +97,7 @@ var outOfScopeWriters = map[string]string{
 var unresolvedWriters = map[string]string{
 	"internal/providerfoundation/sinks.go":                   "writes the normalized provider-entity schema (schema_version, dedupe_key, attributes_json), which no in-scope table has",
 	"internal/audit/audit.go":                                "PostgreSQL auth-schema append-only audit and outbox inserts and the per-aggregate revision counter (schema name interpolated); no in-scope ClickHouse table",
+	"internal/auth/identity/backfill.go":                     "PostgreSQL auth-schema principal and user inserts of the users backfill (schema name interpolated); no in-scope ClickHouse table",
 	"internal/auth/identity/identities.go":                   "PostgreSQL auth-schema identity inserts (schema name interpolated); no in-scope ClickHouse table",
 	"internal/auth/identity/local/attempts_pg.go":            "PostgreSQL auth-schema login_attempts insert (schema name interpolated); no in-scope ClickHouse table",
 	"internal/auth/identity/local/linkcred.go":               "PostgreSQL auth-schema link_credentials insert (schema name interpolated); no in-scope ClickHouse table",
@@ -105,6 +106,7 @@ var unresolvedWriters = map[string]string{
 	"internal/auth/identity/saml/pgstore.go":                 "PostgreSQL auth-schema sso_flow_states and saml_assertion_uses inserts (schema name interpolated); no in-scope ClickHouse table",
 	"internal/auth/identity/organization.go":                 "PostgreSQL auth-schema organization projection inserts (schema name interpolated); no in-scope ClickHouse table",
 	"internal/auth/identity/store.go":                        "PostgreSQL auth-schema principal projection inserts (schema name interpolated); no in-scope ClickHouse table",
+	"internal/auth/keyrotation/store.go":                     "PostgreSQL auth-schema signing_keys inserts of the key rotation operator (schema name interpolated); no in-scope ClickHouse table",
 	"internal/auth/session/signin.go":                        "PostgreSQL auth-schema sessions and refresh_credentials inserts of a sign-in (schema name interpolated); no in-scope ClickHouse table; a second writer path of store.go's rows until CHAOS-10411 moves Create onto it",
 	"internal/auth/session/store.go":                         "PostgreSQL auth-schema sessions and refresh_credentials inserts (schema name interpolated); no in-scope ClickHouse table",
 	"internal/storage/postgres/authschema/apply.go":          "PostgreSQL schema-migration ledger",

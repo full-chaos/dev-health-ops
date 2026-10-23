@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/numerical"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/rowview"
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
@@ -34,7 +35,11 @@ import (
 func capacityScopeFilters(
 	organizationID string, target capacityTarget, arguments map[string]any,
 ) []string {
-	conditions := []string{"org_id = {org_id:String}"}
+	conditions := []string{
+		"org_id = {org_id:String}",
+		// Each item once in the organization (CHAOS-8863): legacy rows and the org view, never the scope view.
+		rowview.OrgPredicate("work_item_metrics_daily", ""),
+	}
 	arguments["org_id"] = organizationID
 	if target.TeamID != nil && *target.TeamID != "" {
 		conditions = append(conditions, "team_id = {team_id:String}")
@@ -200,6 +205,7 @@ func (executor *CapacityExecutor) resolveScopes(
         FROM work_item_metrics_daily FINAL
         WHERE day >= today() - 30
         AND org_id = {org_id:String}
+        AND ` + rowview.OrgPredicate("work_item_metrics_daily", "") + `
         AND ` + liverow.Predicate("work_item_metrics_daily", "") + `
     `
 	rows, err := executor.conn.Query(
@@ -591,20 +597,22 @@ var capacityTableRequirements = map[string]capacityTableRequirement{
 		// rule of the table, which tests every measure column of it.
 		columns: withLiveRowColumns("work_item_metrics_daily",
 			"day", "org_id", "team_id", "work_scope_id",
-			"items_completed", "wip_count_end_of_day",
+			"items_completed", "wip_count_end_of_day", rowview.Column,
 		),
 		readWithFINAL: true,
 		// Migration 055 converts this table's engine to
 		// ReplacingMergeTree(computed_at), and migration 027 sets its
 		// sorting key to (org_id, provider, day, work_scope_id, team_id) --
-		// neither migration since has changed either. provider is in the
+		// only migration 141 changed the key since, by appending row_view
+		// (see sortingKey below). provider is in the
 		// key deliberately: capacityScopeFilters never filters on it, so the
 		// throughput and backlog queries sum across providers on purpose,
 		// and the sorting key is the only thing left keeping their rows
 		// distinct under FINAL.
 		versionColumn: "computed_at",
+		// Migration 141 (CHAOS-8863) appends row_view as the last key column and these reads take the org view.
 		sortingKey: []string{
-			"org_id", "provider", "day", "work_scope_id", "team_id",
+			"org_id", "provider", "day", "work_scope_id", "team_id", "row_view",
 		},
 	},
 	"capacity_forecasts": {

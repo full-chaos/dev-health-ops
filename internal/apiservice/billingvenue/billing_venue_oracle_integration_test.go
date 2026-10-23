@@ -915,9 +915,12 @@ func TestVenueOracleBillingPlansCheckout(t *testing.T) {
 	// down by one. Both are counted from the refusals Diff declares, never assumed.
 	var refusedNames []string
 	refusedCheckouts := 0
+	pin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/billing-plans-checkout.go-pin.json", SHA256: plansCheckoutPinSHA256, Ruling: overflowPageRuling})
 	receipt := venueoracle.Diff(t, base, main, python[:len(main)], venueoracle.DiffOptions{
 		Normalize:     func(_ venueoracle.Request, body string) string { return normalize(body) },
 		Golden:        golden,
+		Retire:        func(request venueoracle.Request) bool { return request.Name == "list: offset overflow" },
+		Pin:           pin,
 		OrglessTokens: map[string]bool{venue.Tokens["noOrg"]: true}, MaxOrglessRefusals: 3,
 		OnOrglessRefused: func(request venueoracle.Request) {
 			refusedNames = append(refusedNames, request.Name)
@@ -1006,8 +1009,12 @@ func TestVenueOracleBillingPlansCheckout(t *testing.T) {
 		_ = os.WriteFile(path, []byte(receipt), 0o600)
 	}
 	t.Log("\n" + receipt)
+	pin.Finish(t)
 	golden.Finish(t)
 }
+
+// plansCheckoutPinSHA256 is the digest of testdata/billing-plans-checkout.go-pin.json.
+const plansCheckoutPinSHA256 = "e20c8364febd8df034c2768ee4dcd2a3972db8d7867ca1448b146fce1ed805d8"
 
 // billingBareEnv is the other side of every billing configuration knob: no
 // Stripe key (set empty, so an inherited one cannot leak in), one price id

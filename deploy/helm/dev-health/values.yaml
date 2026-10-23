@@ -79,6 +79,16 @@ goApi:
   #    --log-level=debug). Credentials never go here: an argument is visible
   #    to anyone who can read the Pod spec.
   extraArgs: []
+  # -- CHAOS-10718: the old pod keeps serving for preStopSeconds while its endpoint is removed, then
+  #    gets SIGTERM. 0 renders no hook, maximum 600. Native sleep action: Kubernetes >= 1.30 (the image has no shell).
+  drain:
+    preStopSeconds: 10
+  # -- The graceful-shutdown budget the chart passes to go-api (--shutdown-timeout). Whole seconds,
+  #    1s to 10800s (dho api refuses more than 3 h).
+  shutdownTimeout: 30s
+  # -- Must be at least drain.preStopSeconds + shutdownTimeout + 5: kubelet counts the preStop hook
+  #    inside it. The render fails below that. Maximum 86400.
+  terminationGracePeriodSeconds: 45
   # -- Probe timing. The probe targets (/healthz, /readyz on the operator
   #    port) are fixed in the template.
   livenessProbe:
@@ -231,6 +241,14 @@ authService:
     sessionReaders:
       goApi: ""
       queryApi: ""
+    # -- Acknowledges ONE deliberate narrowing of the runtime role's grants: the
+    #    16-hex digest a refused auth-migrate run prints. Rendered as
+    #    `-ack-grant-narrowing=<digest>` into the auth-migrate Job and the
+    #    auth-grants Job, only when set. Set it for the one deploy that carries a
+    #    migration which removes a grant (0019 drops DELETE on memberships) and
+    #    clear it in the next deploy change: a run that narrows nothing ignores
+    #    it, a run that narrows a different set is refused.
+    acknowledgeGrantNarrowing: ""
     hookEvents: [pre-install, pre-upgrade]
     # -- CHAOS-10581: the grants-only pass (`auth-migrate grants`) after the ops
     #    migrate Job, on migrations.hook.events. It fails the release when a

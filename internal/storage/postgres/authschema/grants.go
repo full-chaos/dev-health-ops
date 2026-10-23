@@ -68,6 +68,8 @@ func (t TablePrivilege) privileges() []string {
 //     is changed by a migration or an administrative path, never by the
 //     service evaluating it. A service that can edit the actions it is
 //     checked against can widen its own authority.
+//   - memberships has no DELETE: a member leaves by status 'removed' (0019), so
+//     the edge and its revision history survive.
 //   - platform_role_assignments has no UPDATE: changing an elevation is a
 //     revoke followed by a grant, which leaves two audit rows instead of one
 //     silent mutation.
@@ -80,7 +82,7 @@ func RuntimePosture() []TablePrivilege {
 
 		// Tenancy and non-human principals.
 		{Table: "organizations", Select: true, Insert: true, Update: true},
-		{Table: "memberships", Select: true, Insert: true, Update: true, Delete: true},
+		{Table: "memberships", Select: true, Insert: true, Update: true},
 		{Table: "platform_role_assignments", Select: true, Insert: true, Delete: true},
 		{Table: "service_accounts", Select: true, Insert: true, Update: true},
 		{Table: "workloads", Select: true, Insert: true, Update: true},

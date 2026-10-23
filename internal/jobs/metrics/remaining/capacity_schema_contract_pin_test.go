@@ -63,7 +63,8 @@ func TestCapacityPhysicalContractMatchesMigrationHead(t *testing.T) {
 				"%v with nothing in the chain to check it against",
 			table, requirement.sortingKey)
 	}
-	if !equalStringSlices(sortingKey.columns, requirement.sortingKey) {
+	declared := sortingKey.columns
+	if !equalStringSlices(declared, requirement.sortingKey) {
 		t.Fatalf(
 			"migration %s declares %s's sorting key as %v, but the probe "+
 				"requires %v -- update capacityTableRequirements to match",

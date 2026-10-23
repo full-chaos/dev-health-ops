@@ -376,6 +376,14 @@ persisted table — it is a query-time CTE (`LATEST_WORK_UNIT_INVESTMENTS_CTE`,
 `fetch_investment_breakdown(include_team_id=...)` parameter — that phrasing describes the pattern,
 not a real function signature.
 
+**`work_unit_investments.effort_basis` (migration 140, `LowCardinality(String)`, default `''`)** says whether the unit's
+commit effort was measured. Commit stats are capped (50 on a full sync, 300 per project), so a commit with no
+`git_commit_stats` row adds zero effort, the same as a measured zero. The materializer writes `measured` (no linked
+commits, or every linked commit has a stats row), `partial_capped` (some linked commit has no stats row, or all lack one
+but the effort came from another tier) or `unmeasured` (every linked commit lacks a stats row and the effort is 0).
+`''` means "not recorded": every row written before the migration keeps it until the unit is materialized again, and it
+never means "measured". A reader must tolerate the column missing.
+
 **`work_unit_investments.evidence_quote_count` (migration 106, `Nullable(UInt32)`)** is the number of distinct
 `(source_id, quote)` the row's run wrote to `work_unit_investment_quotes`. It is written by the materializer
 (`internal/jobs/investment`) for every row of a run that persists evidence snippets, and read only by the

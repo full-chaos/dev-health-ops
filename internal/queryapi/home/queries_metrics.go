@@ -10,6 +10,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/deltarule"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/rowview"
 	"strings"
 	"time"
 
@@ -30,6 +31,11 @@ func metricFromClause(table, column, scopeFilter, startParam, endParam string) s
 	naturalKey, dedup := dedupByComputedAt[table]
 	if !dedup {
 		return table
+	}
+	if table == "work_item_metrics_daily" {
+		// Each item once in the organization (CHAOS-8863): legacy rows and the org view. row_view is part of the
+		// natural key above, so a legacy retraction row never merges with an org row under argMax.
+		scopeFilter += "\n              AND " + rowview.OrgPredicate(table, "")
 	}
 	valueColumns := []string{column}
 	if table == changefailure.Table {

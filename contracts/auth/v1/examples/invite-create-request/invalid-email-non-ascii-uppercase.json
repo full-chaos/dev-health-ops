@@ -1,0 +1,5 @@
+{
+  "schema_version": "invite-create-request.v1",
+  "email": "\u00c9@example.com",
+  "role": "member"
+}

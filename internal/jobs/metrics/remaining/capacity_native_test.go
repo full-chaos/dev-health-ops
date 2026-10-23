@@ -99,31 +99,27 @@ func TestTheColumnsOfTheLiveRowRuleAreRequiredAtStartup(t *testing.T) {
 	}
 }
 
-func TestEveryTableReadWithFINALRequiresTheReplacingEngine(t *testing.T) {
-	// The column half of the probe is not the whole precondition. FINAL is a
-	// no-op outside the Replacing family, so a table read with FINAL under a
-	// plain MergeTree returns superseded rows that then aggregate into the
-	// forecast -- a wrong answer reported as a successful write.
-	//
-	// This pins the two halves together: any table whose query text carries
-	// FINAL must also carry the engine requirement. Adding a FINAL read of a
-	// new table without setting readWithFINAL would otherwise reintroduce
-	// exactly the gap this replaces.
-	source := capacityClickHouseSource(t)
-	for table, requirement := range capacityTableRequirements {
-		readWithFINAL := strings.Contains(source, table+" FINAL") ||
-			strings.Contains(source, "SELECT * FROM "+table+" WHERE")
-		if readWithFINAL && !requirement.readWithFINAL {
-			t.Errorf(
-				"%s is read with FINAL but its requirement does not demand the "+
-					"Replacing family, so a plain MergeTree would pass startup",
-				table)
+func TestEveryCollapsedTableIsReadThroughTheNewestRowsSubquery(t *testing.T) {
+	// A table whose requirement demands the version column and sorting key must
+	// be read through the collapse subquery, and FINAL must be gone: FINAL
+	// collapses by the whole deployed key, which the guard does not pin.
+	var code []string
+	for _, line := range strings.Split(capacityClickHouseSource(t), "\n") {
+		if !strings.HasPrefix(strings.TrimSpace(line), "//") {
+			code = append(code, line)
 		}
-		if !readWithFINAL && requirement.readWithFINAL {
-			t.Errorf(
-				"%s demands the Replacing family but nothing reads it with FINAL, "+
-					"so the probe refuses deployments it does not need to",
-				table)
+	}
+	source := strings.Join(code, "\n")
+	for table, requirement := range capacityTableRequirements {
+		if strings.Contains(source, table+" FINAL") {
+			t.Errorf("%s is read with FINAL; it must go through capacityNewestRows", table)
+		}
+		collapsed := strings.Contains(source, "SELECT * FROM "+table+" WHERE")
+		if collapsed && !requirement.readWithFINAL {
+			t.Errorf("%s is collapsed on read but its requirement does not demand the version column and sorting key", table)
+		}
+		if !collapsed && requirement.readWithFINAL {
+			t.Errorf("%s demands the version column and sorting key but nothing collapses it on read", table)
 		}
 	}
 }

@@ -148,9 +148,6 @@ func (h handlers) listInvoices(w http.ResponseWriter, r *http.Request) {
 		if answer != nil || err != nil {
 			return derefReply(answer), err
 		}
-		if page.offset < 0 {
-			return reply{}, errOverflow
-		}
 		filters := []any{org, nonEmpty(status)}
 		const where = `WHERE ($1::uuid IS NULL OR org_id = $1) AND ($2::text IS NULL OR status = $2)`
 		var total int64

@@ -27,6 +27,10 @@ import (
 var (
 	sharedPrefixes = []string{"ci/", ".github/", "internal/testsupport/"}
 	sharedFiles    = map[string]bool{"go.mod": true, "go.sum": true, "go.work": true, "go.work.sum": true}
+	// Pure distribution tables: they move packages between CI shards and change no test, so a change to one is not a shared
+	// change. The set is exact (a new ci/ file is FULL) and is matched against the path as written, never a cleaned one.
+	bookkeepingFiles = map[string]bool{"ci/go_test_weights.tsv": true, "ci/go_providersync_race_weights.tsv": true}
+	bookkeepingDirs  = []string{"ci/go_race_weights.d/", "ci/venue_oracle_weights.d/"}
 	// The planner's code and data, and the workflow steps that build and run it: a change here can steer the verdict of
 	// this very change set, so it is FULL. Test files (outside testdata) are not inputs.
 	plannerDirs  = []string{"cmd/cigate/", "internal/cigates/affected/"}
@@ -268,7 +272,7 @@ func plan(in planInput) (Verdict, error) {
 		if plannerFiles[p] || (hasAnyPrefix(p, plannerDirs) && !strings.HasSuffix(p, "_test.go") && !inTestdata(p)) {
 			return full("planner input: " + p), nil
 		}
-		if sharedFiles[p] || hasAnyPrefix(p, sharedPrefixes) {
+		if !isBookkeepingTable(raw, p) && (sharedFiles[p] || hasAnyPrefix(p, sharedPrefixes)) {
 			return full("shared change: " + p), nil
 		}
 		if goModFiles[path.Base(p)] {
@@ -608,4 +612,21 @@ func symlinkTargets(root string) ([]string, error) {
 		out = append(out, r)
 	}
 	return out, nil
+}
+
+// isBookkeepingTable reports whether the changed path is a pure distribution table: raw is the path as the diff names
+// it and must already be canonical, so a "../" path that cleans into the set stays a shared change.
+func isBookkeepingTable(raw, p string) bool {
+	if raw != p {
+		return false
+	}
+	if bookkeepingFiles[p] {
+		return true
+	}
+	for _, dir := range bookkeepingDirs {
+		if name, ok := strings.CutPrefix(p, dir); ok && name != "" && !strings.Contains(name, "/") && strings.HasSuffix(name, ".tsv") {
+			return true
+		}
+	}
+	return false
 }

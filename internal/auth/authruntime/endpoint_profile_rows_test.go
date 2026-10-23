@@ -50,7 +50,6 @@ func servedAuthRoutes(t *testing.T) map[string]bool {
 		authconfig.EnvRateLimitBurst:     "100000",
 		authconfig.EnvAPIAddress:         "127.0.0.1:0",
 		authconfig.EnvOperatorAddress:    "127.0.0.1:1",
-		authconfig.EnvUsersOwned:         "true",
 	}))})
 	if err != nil {
 		t.Fatalf("load config: %v", err)
@@ -95,11 +94,7 @@ func servedAuthRoutes(t *testing.T) map[string]bool {
 	if err != nil {
 		t.Fatalf("sessionRoutes: %v", err)
 	}
-	credentials, _, err := credentialRoutes(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), pool, schema)
-	if err != nil {
-		t.Fatalf("credentialRoutes: %v", err)
-	}
-	for _, route := range append(routes, credentials...) {
+	for _, route := range routes {
 		registered["api"] = append(registered["api"], route.Pattern)
 	}
 	fset := token.NewFileSet()
@@ -183,9 +178,9 @@ func TestEveryServedAuthRouteHasAnEndpointProfileRowAndNoRowIsStale(t *testing.T
 }
 
 // servedAuthRouteCount is every route the probe serves: four session routes,
-// four compatibility routes, the session issue route, five credentials routes
-// and the three operator paths on GET and HEAD.
-const servedAuthRouteCount = 20
+// four compatibility routes, the session issue route and the three operator
+// paths on GET and HEAD.
+const servedAuthRouteCount = 15
 
 // compareServedToRows returns the served routes with no row and the rows for
 // routes nothing serves, per method and listener.
@@ -283,9 +278,6 @@ func TestAuthEndpointProfileAnchorsStillPointAtTheirSymbols(t *testing.T) {
 		"/api/v1/auth/login": "PatternCompatLogin", "/api/v1/auth/refresh": "PatternCompatRefresh",
 		"/api/v1/auth/logout": "PatternCompatLogout", "/api/v1/auth/social-login": "PatternCompatSocialLogin",
 		"/internal/v1/sessions": "PatternIssueSession",
-		"/api/v1/auth/verify":   "PatternVerifyEmail", "/api/v1/auth/resend-verification": "PatternResendVerification",
-		"/api/v1/auth/forgot-password": "PatternForgotPassword", "/api/v1/auth/reset-password": "PatternResetPassword",
-		"/api/v1/auth/change-password": "PatternChangePassword",
 	}
 	checked := 0
 	var walk func(node any, where string)

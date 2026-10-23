@@ -250,6 +250,7 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 			Cipher: deps.Decryptor, StateSecret: deps.GitHubStateSigner.Secret, Signer: deps.Signer, Inner: proxy.inner,
 			Issuer: deps.SessionIssuer,
 		})...)
+		billing.LogUnconfigured(logger, deps.StripeWebhookSecret, deps.StripeSecretKey)
 		routes = append(routes, billing.Routes(billing.Deps{
 			Pool: deps.Pool, Guard: deps.Guard, Stripe: deps.Stripe, Config: deps.BillingConfig, Logger: logger,
 			WebhookSecret: deps.StripeWebhookSecret, LicensePrivateKey: deps.LicensePrivateKey, StripeKey: deps.StripeSecretKey, Producer: deps.Producer,
@@ -436,6 +437,7 @@ func configureWith(
 	}
 	// The billing-edge listener (CHAOS-6520): opt-in, its own address.
 	if cfg.APIBillingEdgeAddress != "" {
+		billing.LogUnconfigured(logger, deps.StripeWebhookSecret, deps.StripeSecretKey)
 		edge, err := NewEdgeServer(cfg, logger, billing.EdgeRoutes(billing.Deps{
 			Pool: deps.Pool, Stripe: deps.Stripe, Config: deps.BillingConfig, Logger: logger.With(slog.String("listener", "billing-edge")),
 			WebhookSecret: deps.StripeWebhookSecret, LicensePrivateKey: deps.LicensePrivateKey, StripeKey: deps.StripeSecretKey, Producer: deps.Producer,

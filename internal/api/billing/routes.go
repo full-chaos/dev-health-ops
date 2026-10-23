@@ -53,7 +53,7 @@ type handlers struct {
 	pool          *pgxpool.Pool
 	stripe        *stripeclient.Provider
 	config        config.BillingConfig
-	webhookSecret secrets.Value
+	webhookSecret webhookCredential
 	licenseKey    secrets.Value
 	stripeKey     secrets.Value
 	producer      *joboutbox.Producer
@@ -64,7 +64,7 @@ type handlers struct {
 // newHandlers is the handlers of deps, with the defaults a nil logger and
 // clock take.
 func newHandlers(deps Deps) handlers {
-	h := handlers{pool: deps.Pool, stripe: deps.Stripe, config: deps.Config, webhookSecret: deps.WebhookSecret,
+	h := handlers{pool: deps.Pool, stripe: deps.Stripe, config: deps.Config, webhookSecret: newWebhookCredential(deps.WebhookSecret),
 		licenseKey: deps.LicensePrivateKey, stripeKey: deps.StripeKey, producer: deps.Producer, logger: deps.Logger, now: deps.Now}
 	if h.logger == nil {
 		h.logger = slog.Default()

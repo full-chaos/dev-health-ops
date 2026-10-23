@@ -896,3 +896,101 @@ groups:
                           for it at critical.
             Either way it clears itself once a refresh succeeds; nothing needs a
             restart.
+
+  # ---------------------------------------------------------------------------
+  # Auth service (its operator /metrics)
+  # ---------------------------------------------------------------------------
+  # Rule text of record. Nothing loads this file in production (there is no
+  # Prometheus there); the production alert rules are created in SigNoz from
+  # this text. Every rule selects job="auth-service", the scrape job name the
+  # deploy collector assigns to the auth service's operator listener, so a
+  # rename of that job changes this group with it. The only group-by label is
+  # `limit`, a closed set of code-defined limit ids; no caller, org, path or
+  # address ever labels an auth rule.
+  - name: auth_service
+    interval: 30s
+    rules:
+      - alert: AuthServiceTargetDown
+        expr: |
+          up{job="auth-service"} == 0
+        for: 5m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "Auth service target is down"
+          description: |
+            The auth service operator endpoint has not answered a scrape for
+            five minutes. Check the pod, its NetworkPolicy and the collector.
+
+      - alert: AuthServiceMetricsAbsent
+        expr: |
+          absent(up{job="auth-service"})
+        for: 10m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "Auth service metrics are absent"
+          description: |
+            No scrape series exists for the auth service for ten minutes: the
+            scrape job is not configured or the target is not discovered. The
+            target-down rule cannot see this case.
+
+      - alert: AuthRateLimitStoreErrors
+        expr: |
+          sum by (limit) (increase(dev_health_api_rate_limit_store_errors_total{job="auth-service"}[10m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Auth rate-limit store is failing"
+          description: |
+            Limit {{ $labels.limit }} had {{ $value }} store errors in ten
+            minutes; each answered a 500 to a caller.
+
+      - alert: AuthRateLimitStoreErrorsHigh
+        expr: |
+          sum by (limit) (increase(dev_health_api_rate_limit_store_errors_total{job="auth-service"}[10m])) > 20
+        for: 5m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "Auth rate-limit store is failing at volume"
+          description: |
+            Limit {{ $labels.limit }} had {{ $value }} store errors in ten
+            minutes; callers on that route are being refused.
+
+      - alert: AuthRateLimitRejectionsHigh
+        expr: |
+          sum by (limit) (rate(dev_health_api_rate_limit_rejections_total{job="auth-service"}[5m])) > 1
+        for: 10m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Auth rate limit is refusing at a sustained rate"
+          description: |
+            Limit {{ $labels.limit }} refused {{ $value | humanize }} hits per
+            second for ten minutes: a flow is saturated by abuse or a client
+            loop. The threshold is a starting point, not a measured baseline.
+
+      - alert: AuthServiceHighServerErrorRate
+        expr: |
+          (
+            sum(rate(dev_health_api_http_requests_total{job="auth-service",status_class="5xx"}[5m]))
+            /
+            sum(rate(dev_health_api_http_requests_total{job="auth-service"}[5m]))
+          ) > 0.05 and sum(rate(dev_health_api_http_requests_total{job="auth-service"}[5m])) > 0.1
+        for: 10m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "Auth service 5xx rate above 5%"
+          description: |
+            More than 5% of auth service requests answered 5xx for ten
+            minutes, with real traffic (above 0.1 requests per second): one
+            error on an idle service does not fire this.

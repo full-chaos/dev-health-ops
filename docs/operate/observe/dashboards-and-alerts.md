@@ -65,3 +65,9 @@ Writing a rule against a metric nobody emits is worse than having no rule: it
 never fires and it *looks* covered. the Go tests in `internal/syncreconciler/unreclaimable_sweep_test.go`
 pins every metric name these rules read against the Go `WritePrometheus` bodies
 that actually render them.
+
+## Auth service rules
+
+`alerts/rules.yml` carries an `auth_service` group over the auth service's operator `/metrics`: target down, scrape absent, rate-limit store errors (a warning at any error and a critical tier above 20 in ten minutes), a sustained rate-limit rejection rate, and a 5xx ratio above 5% that only fires with real traffic. Every rule selects `job="auth-service"` and the only label a rule groups by is the `limit` id.
+
+The file is the text of record: no Prometheus loads it in production. The production rules are created in SigNoz from this text, and a test pins every metric name a rule reads against the series the service really exposes, so a rule on a name nobody emits fails the build instead of looking covered.

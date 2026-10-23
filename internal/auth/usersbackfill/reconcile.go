@@ -220,43 +220,45 @@ func compareOne(ctx context.Context, tgt Target, row Row, a AuthRow, rep *Reconc
 		if a.TokenVersion != row.TokenVersion {
 			classes = append(classes, DiffTokenVersion)
 		}
-		if key != nil {
-			holder, found, err := tgt.IdentityHolder(ctx, *key)
-			if err != nil {
-				return err
-			}
-			switch {
-			case !found:
-				classes = append(classes, DiffIdentityMissing)
-			case holder != row.ID:
-				classes = append(classes, DiffIdentityConflict)
-			}
-		}
-		// Every auth identity the public row does not name is extra. A public row
-		// with a non-social provider names none, so an SSO provider-row identity
-		// there is only counted; any other identity stays gated.
-		extra, ssoUnmatched := false, false
-		for _, k := range a.Identities {
-			switch {
-			case key != nil && k == *key:
-			case notCarried && k.Provider.IsSSO():
-				ssoUnmatched = true
-			default:
-				extra = true
-			}
-		}
-		if extra {
-			classes = append(classes, DiffExtraIdentity)
-		}
-		if ssoUnmatched {
-			rep.SSOIdentityUnmatched++
-		}
 		if !sameTime(a.LastLoginAt, row.LastLoginAt) {
 			rep.LastLoginDrift++
 		}
-		if a.DisplayName != target.DisplayName {
-			rep.DisplayNameDrift++
+	}
+	// Identities and the display name hang off the principal, not off the users
+	// row, so they are judged on every matched row.
+	if key != nil {
+		holder, found, err := tgt.IdentityHolder(ctx, *key)
+		if err != nil {
+			return err
 		}
+		switch {
+		case !found:
+			classes = append(classes, DiffIdentityMissing)
+		case holder != row.ID:
+			classes = append(classes, DiffIdentityConflict)
+		}
+	}
+	// Every auth identity the public row does not name is extra. A public row
+	// with a non-social provider names none, so an SSO provider-row identity
+	// there is only counted; any other identity stays gated.
+	extra, ssoUnmatched := false, false
+	for _, k := range a.Identities {
+		switch {
+		case key != nil && k == *key:
+		case notCarried && k.Provider.IsSSO():
+			ssoUnmatched = true
+		default:
+			extra = true
+		}
+	}
+	if extra {
+		classes = append(classes, DiffExtraIdentity)
+	}
+	if ssoUnmatched {
+		rep.SSOIdentityUnmatched++
+	}
+	if a.DisplayName != target.DisplayName {
+		rep.DisplayNameDrift++
 	}
 	if len(classes) == 0 {
 		rep.Matched++

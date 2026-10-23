@@ -477,3 +477,41 @@ func TestReconcileExtraIdentityOutputCarriesNoSubject(t *testing.T) {
 		}
 	}
 }
+
+// Identities hang off the principal, not off the users row: every identity
+// class is judged on a matched row whether or not it has an auth.users row.
+func TestReconcileIdentityClassesApplyToAPrincipalWithoutAUsersRow(t *testing.T) {
+	for _, kind := range []string{"user", "service_account"} {
+		row, auth := pair(t)
+		auth.Kind, auth.HasUser = kind, false
+		auth.Identities = []identity.ExternalKey{ghKey("old-subject")}
+		rep := reconcile(t, []Row{row}, []AuthRow{auth}, nil)
+		if rep.Diffs[DiffPrincipalKind] != 1 || rep.Diffs[DiffExtraIdentity] != 1 || rep.GatedTotal() != 2 {
+			t.Errorf("%s without a users row, extra identity: %+v", kind, rep.Diffs)
+		}
+	}
+	row, auth := pair(t)
+	auth.HasUser = false
+	row.AuthProvider, row.AuthProviderID = str("github"), str("subject-1")
+	rep := reconcile(t, []Row{row}, []AuthRow{auth}, &fakeTarget{holders: map[identity.ExternalKey]uuid.UUID{}})
+	if rep.Diffs[DiffPrincipalKind] != 1 || rep.Diffs[DiffIdentityMissing] != 1 || rep.GatedTotal() != 2 {
+		t.Fatalf("missing named identity without a users row: %+v", rep.Diffs)
+	}
+	named := ghKey("subject-1")
+	auth.Identities = []identity.ExternalKey{named}
+	rep = reconcile(t, []Row{row}, []AuthRow{auth}, &fakeTarget{holders: map[identity.ExternalKey]uuid.UUID{named: row.ID}})
+	if rep.Diffs[DiffPrincipalKind] != 1 || rep.GatedTotal() != 1 {
+		t.Fatalf("named identity without a users row: %+v", rep.Diffs)
+	}
+}
+
+// The display name lives on the principal row: its drift is printed whether or not a users row exists.
+func TestReconcileDisplayNameDriftIsCountedWithoutAUsersRow(t *testing.T) {
+	row, auth := pair(t)
+	auth.HasUser = false
+	auth.DisplayName = "Renamed"
+	rep := reconcile(t, []Row{row}, []AuthRow{auth}, nil)
+	if rep.DisplayNameDrift != 1 || rep.Diffs[DiffPrincipalKind] != 1 {
+		t.Fatalf("%+v drift=%d", rep.Diffs, rep.DisplayNameDrift)
+	}
+}

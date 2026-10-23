@@ -79,12 +79,12 @@ ranges (the fenced ports and the internal port), zero-padded so a string sort is
 {{- end }}
 {{- end }}
 {{- $closed := append $fenced (printf "%05d" (int .Values.goApi.internal.port)) }}
+{{- range .Values.goApi.extraEnv }}
+{{- if eq .name "TRUSTED_PROXIES_NETWORK_FENCED" }}{{- fail "goApi.extraEnv must not set TRUSTED_PROXIES_NETWORK_FENCED: the chart sets it only where the request-port fence renders (goApi.networkPolicy.enabled)" }}{{- end }}
+{{- end }}
 {{- if .Values.goApi.internal.enabled }}
 {{- range .Values.goApi.extraArgs }}
 {{- if regexMatch "^--?api-internal-addr" . }}{{- fail "goApi.extraArgs must not set --api-internal-addr: the chart owns the internal listener (goApi.internal.port); a second flag moves it onto a port the internal Service and NetworkPolicy do not gate" }}{{- end }}
-{{- end }}
-{{- range .Values.goApi.extraEnv }}
-{{- if eq .name "TRUSTED_PROXIES_NETWORK_FENCED" }}{{- fail "goApi.extraEnv must not set TRUSTED_PROXIES_NETWORK_FENCED: the chart sets it only where the request-port fence renders (goApi.networkPolicy.enabled)" }}{{- end }}
 {{- end }}
 {{- range .Values.goApi.extraEnv }}
 {{- if eq .name "DEV_HEALTH_API_INTERNAL_ADDR" }}{{- fail "goApi.extraEnv must not set DEV_HEALTH_API_INTERNAL_ADDR: the chart owns the internal listener (goApi.internal.port)" }}{{- end }}
@@ -282,11 +282,9 @@ spec:
               valueFrom: {secretKeyRef: {name: {{ include "dev-health.secretName" . }}, key: AUTH_SESSION_ISSUE_TOKEN}}
             {{- end }}
             {{- end }}
-            {{- if $fence }}
-            {{- /* CHAOS-10743: the marker is rendered only where the request-port fence renders (never from extraEnv, which the render refuses): go-api then reports a wide TRUSTED_PROXIES as fenced. */}}
+            {{- /* CHAOS-10743: always rendered, so an env entry beats a same-named variable from goApi.envFrom: "true" only where the request-port fence renders, "false" everywhere else (goApi.extraEnv may not set it: refused above). go-api reads only the exact string "true". */}}
             - name: TRUSTED_PROXIES_NETWORK_FENCED
-              value: "true"
-            {{- end }}
+              value: {{ ternary "true" "false" (and $fence true) | quote }}
           {{- with .Values.goApi.extraEnv }}
             {{- toYaml . | nindent 12 }}
           {{- end }}

@@ -19,7 +19,7 @@ func wideTrustLog(t *testing.T, trusted, fenced string) string {
 func TestWideTrustIsAWarningWithoutTheFenceMarker(t *testing.T) {
 	for _, marker := range []string{"", "false", "TRUE", "1", "yes"} {
 		got := wideTrustLog(t, "10.42.0.0/24", marker)
-		if !strings.Contains(got, "level=WARN") || strings.Contains(got, "fenced") {
+		if !strings.Contains(got, "level=WARN") || strings.Contains(got, "restricts") {
 			t.Errorf("marker %q: %q, want a warning that does not claim a fence", marker, got)
 		}
 	}

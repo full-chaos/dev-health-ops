@@ -64,9 +64,9 @@ func markerValues(env []envEntry) []string {
 	return values
 }
 
-func TestFenceMarkerRendersOnlyWhereTheFenceRenders(t *testing.T) {
-	if got := markerValues(goAPIEnv(t)); len(got) != 0 {
-		t.Errorf("with the fence off the marker renders %v, want none", got)
+func TestFenceMarkerIsTrueOnlyWhereTheFenceRenders(t *testing.T) {
+	if got := markerValues(goAPIEnv(t)); len(got) != 1 || got[0] != "false" {
+		t.Errorf("with the fence off the marker renders %v, want exactly one \"false\" (an env entry beats the same name from envFrom)", got)
 	}
 	got := markerValues(goAPIEnv(t, "--set", "goApi.networkPolicy.enabled=true"))
 	if len(got) != 1 || got[0] != "true" {
@@ -74,16 +74,73 @@ func TestFenceMarkerRendersOnlyWhereTheFenceRenders(t *testing.T) {
 	}
 }
 
+// The marker and the policy come from one condition: for each setting, the marker is "true" exactly when
+// the request port is closed to a stranger by the rendered policy.
+func TestFenceMarkerAndThePolicyShareOneCondition(t *testing.T) {
+	for name, c := range map[string]struct {
+		args  []string
+		fence bool
+	}{
+		"fence off":                 {nil, false},
+		"fence on":                  {[]string{"--set", "goApi.networkPolicy.enabled=true"}, true},
+		"fence on, extra port":      {[]string{"--set", "goApi.networkPolicy.enabled=true", "--set-json", "goApi.networkPolicy.extraFencedPorts=[8010]"}, true},
+		"fence off, extra port set": {[]string{"--set-json", "goApi.networkPolicy.extraFencedPorts=[8010]"}, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			marker := markerValues(goAPIEnv(t, c.args...))
+			full := append([]string{"template", "fence", ".", "--namespace", releaseNamespace, "--set", "goApi.enabled=true",
+				"--set", "goWorkers.pgbouncer.postgres.networkPolicyCIDR=10.0.0.0/24"}, c.args...)
+			out, err := exec.Command("helm", full...).CombinedOutput()
+			if err != nil {
+				t.Fatalf("render: %v\n%s", err, out)
+			}
+			var policies []netpolDoc
+			for _, document := range strings.Split(string(out), "\n---") {
+				var parsed netpolDoc
+				if err := yaml.Unmarshal([]byte(document), &parsed); err != nil {
+					t.Fatalf("parse: %v", err)
+				}
+				if parsed.Kind == "NetworkPolicy" {
+					policies = append(policies, parsed)
+				}
+			}
+			closedToStranger := false
+			for _, port := range closedPorts(t, policies, sourceStranger) {
+				if port == 8000 {
+					closedToStranger = true
+				}
+			}
+			if closedToStranger != c.fence {
+				t.Fatalf("the request port is closed to a stranger = %v, want %v", closedToStranger, c.fence)
+			}
+			want := "false"
+			if closedToStranger {
+				want = "true"
+			}
+			if len(marker) != 1 || marker[0] != want {
+				t.Errorf("marker %v with the request port closed = %v, want exactly one %q", marker, closedToStranger, want)
+			}
+		})
+	}
+}
+
 func TestFenceMarkerCannotBeSetFromExtraEnv(t *testing.T) {
-	for _, fence := range []string{"false", "true"} {
-		out, err := exec.Command("helm", "template", "marker", ".", "--namespace", releaseNamespace, "--set", "goApi.enabled=true",
-			"--set", "goApi.networkPolicy.enabled="+fence, "--set", "goWorkers.pgbouncer.postgres.networkPolicyCIDR=10.0.0.0/24",
-			"--set-json", `goApi.extraEnv=[{"name":"TRUSTED_PROXIES_NETWORK_FENCED","value":"true"}]`).CombinedOutput()
-		if err == nil {
-			t.Fatalf("fence %s: the render accepted the marker in extraEnv", fence)
-		}
-		if !strings.Contains(string(out), "TRUSTED_PROXIES_NETWORK_FENCED") {
-			t.Errorf("fence %s: the refusal does not name the marker:\n%s", fence, out)
-		}
+	for name, extra := range map[string][]string{
+		"fence off":             nil,
+		"fence on":              {"--set", "goApi.networkPolicy.enabled=true"},
+		"internal listener off": {"--set", "goApi.internal.enabled=false"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			args := append([]string{"template", "marker", ".", "--namespace", releaseNamespace, "--set", "goApi.enabled=true",
+				"--set", "goWorkers.pgbouncer.postgres.networkPolicyCIDR=10.0.0.0/24",
+				"--set-json", `goApi.extraEnv=[{"name":"TRUSTED_PROXIES_NETWORK_FENCED","value":"true"}]`}, extra...)
+			out, err := exec.Command("helm", args...).CombinedOutput()
+			if err == nil {
+				t.Fatal("the render accepted the marker in extraEnv")
+			}
+			if !strings.Contains(string(out), "TRUSTED_PROXIES_NETWORK_FENCED") {
+				t.Errorf("the refusal does not name the marker:\n%s", out)
+			}
+		})
 	}
 }

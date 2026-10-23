@@ -52,6 +52,13 @@ func TestNoChangeSetTouchesAFrozenGoldenOrTheManifest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if baseManifest, ok, err := BaseManifest(root, base); err != nil {
+		t.Fatal(err)
+	} else if ok {
+		if problems := CheckNotBelowBase(root, baseManifest); len(problems) > 0 {
+			t.Errorf("a frozen comparison was removed against the base:\n%s", strings.Join(problems, "\n"))
+		}
+	}
 	if len(changed) > 0 {
 		t.Errorf("this change set edits a frozen golden, a pin source list or the manifest: %v\nThe frozen files are never rewritten; only a human-approved change to %s may do this", changed, ManifestPath)
 	}
@@ -250,5 +257,52 @@ func TestTheGitHalfSeesADeletedGoldenWhateverTheManifestSays(t *testing.T) {
 	got, err := Changed(repo, base, weak.GuardedPaths())
 	if err != nil || len(got) != 1 || got[0] != golden {
 		t.Fatalf("Changed = %v, %v, want just the deleted golden (the added manifest is new, not a change)", got, err)
+	}
+}
+
+// Removing a comparison is red even when the manifest row is lowered in the same change set: the bar is the base's.
+func TestACountLoweredInTheSameChangeSetStillGoesRedAgainstTheBase(t *testing.T) {
+	repo := t.TempDir()
+	source := "internal/pgmigrate/alias_integration_test.go"
+	write := func(path, body string) {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(repo, path)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(repo, path), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(source, "package x\nvar _ = venueoracle.OpenGolden(t, a)\nvar _ = venueoracle.OpenGolden(t, b)\n")
+	write(ManifestPath, "pins\t"+source+"\t"+strings.Repeat("a", 64)+"\topens=2,finishes=0,skips=0\n")
+	git(t, repo, "init", "-q", "-b", "main")
+	git(t, repo, "add", ".")
+	git(t, repo, "commit", "-q", "-m", "base")
+	git(t, repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+	git(t, repo, "checkout", "-q", "-b", "change")
+	base, err := MergeBase(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseManifest, ok, err := BaseManifest(repo, base)
+	if err != nil || !ok {
+		t.Fatalf("BaseManifest = %v, %v", ok, err)
+	}
+	write(source, "package x\nvar _ = venueoracle.OpenGolden(t, a)\n")
+	write(ManifestPath, "pins\t"+source+"\t"+strings.Repeat("a", 64)+"\topens=1,finishes=0,skips=0\n")
+	git(t, repo, "commit", "-q", "-am", "remove a comparison and lower its row")
+	edited, err := os.ReadFile(filepath.Join(repo, ManifestPath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	headManifest, err := Parse(strings.NewReader(string(edited)))
+	if err != nil || !strings.Contains(headManifest.Shape[source], "opens=1") {
+		t.Fatalf("the plant did not lower the manifest row: %v %v", headManifest.Shape, err)
+	}
+	problems := CheckNotBelowBase(repo, baseManifest)
+	if len(problems) != 1 || !strings.Contains(problems[0], "golden-open calls went from 2 to 1 against the base") {
+		t.Fatalf("CheckNotBelowBase = %v", problems)
+	}
+	if got, err := Changed(repo, base, headManifest.GuardedPaths()); err != nil || len(got) != 1 || got[0] != ManifestPath {
+		t.Fatalf("the git half sees %v, %v, want the edited manifest", got, err)
 	}
 }

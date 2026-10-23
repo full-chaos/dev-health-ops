@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -168,6 +169,47 @@ func Check(root string, m Manifest) []string {
 	for rel := range m.Pins {
 		if !seen[rel] {
 			problems = append(problems, rel+": a test source the manifest pins is missing")
+		}
+	}
+	sort.Strings(problems)
+	return problems
+}
+
+var opensCount = regexp.MustCompile(`opens=(\d+)`)
+
+// BaseManifest is the manifest as the base commit holds it; ok is false when the base has none (the change set that
+// introduces the guard).
+func BaseManifest(dir, base string) (m Manifest, ok bool, err error) {
+	out, err := exec.Command("git", "-C", dir, "show", base+":"+ManifestPath).Output()
+	if err != nil {
+		if exec.Command("git", "-C", dir, "cat-file", "-e", base+":"+ManifestPath).Run() != nil {
+			return Manifest{}, false, nil
+		}
+		return Manifest{}, false, fmt.Errorf("git show %s:%s: %w", base, ManifestPath, err)
+	}
+	m, err = Parse(strings.NewReader(string(out)))
+	return m, err == nil, err
+}
+
+// CheckNotBelowBase holds every pinned test source to the base manifest's count of golden-open calls: the count never
+// goes down against the base. Editing the manifest in the same change set cannot lower the bar, because the bar is
+// the BASE's manifest; the git half refuses that edit as well, and this check names the removed comparison.
+func CheckNotBelowBase(root string, base Manifest) []string {
+	var problems []string
+	for rel, shape := range base.Shape {
+		want := opensCount.FindStringSubmatch(shape)
+		if want == nil {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
+		if err != nil {
+			problems = append(problems, rel+": a test source the base manifest pins is missing")
+			continue
+		}
+		before, _ := strconv.Atoi(want[1])
+		after, _ := strconv.Atoi(opensCount.FindStringSubmatch(Shape(data))[1])
+		if after < before {
+			problems = append(problems, fmt.Sprintf("%s: golden-open calls went from %d to %d against the base", rel, before, after))
 		}
 	}
 	sort.Strings(problems)

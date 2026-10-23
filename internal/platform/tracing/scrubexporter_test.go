@@ -347,3 +347,16 @@ func BenchmarkScrubSpan(b *testing.B) {
 		})
 	}
 }
+
+func TestSpanAndLogKeyVerdictsAgree(t *testing.T) {
+	core := strings.Repeat("A1b2C3d4", 5)
+	for _, key := range []string{"gh" + "p_" + core, "repo", "http.method", "count", "svc.name"} {
+		out, changed := scrubValue(attribute.String(key, "v"), false)
+		if spanRedacted := string(out.Key) == placeholderKey; spanRedacted != !keyIsClean(key) || (changed && !spanRedacted && out.Value.AsString() == "v") {
+			t.Errorf("key verdict disagrees for %d-byte key: span=%v clean=%v", len(key), spanRedacted, keyIsClean(key))
+		}
+		if !safeKeys[key] && logging.KeyClean(key) != keyIsClean(key) {
+			t.Errorf("span and log key verdicts differ for %d-byte key", len(key))
+		}
+	}
+}

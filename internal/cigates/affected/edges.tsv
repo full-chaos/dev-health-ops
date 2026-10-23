@@ -78,6 +78,8 @@ internal/cigates/docstools	refusals_pub_test.go	unexpressed
 internal/cigates/docstools	refusals_test.go	**/cmd/cigate
 internal/cigates/docstools	refusals_test.go	unexpressed
 internal/cigates/docstools	validate_inventory_review_refusals_test.go	unexpressed
+internal/cigates/frozengoldens	frozengoldens.go	unexpressed
+internal/cigates/frozengoldens	frozengoldens_test.go	unexpressed
 internal/cigates/integrationshards	ci_script_helpers_test.go	unexpressed
 internal/cigates/integrationshards	free_run_test.go	unexpressed
 internal/cigates/nopython	trackedfiles_test.go	unexpressed

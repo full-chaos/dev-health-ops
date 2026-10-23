@@ -111,8 +111,8 @@ SELECT
 		AND has_table_privilege($1, relation, 'MAINTAIN') AS excess_maintain,
 	-- CHAOS-9588: rolePostureQuery also refuses a role that holds a REQUIRED
 	-- privilege WITH GRANT OPTION (it could re-delegate it), at table level or
-	-- on any column (has_any_column_privilege sees both, and PUBLIC- or
-	-- membership-held options too). has_table_privilege without the option, as
+	-- on any column (has_any_column_privilege sees both, and options held
+	-- through role membership too). has_table_privilege without the option, as
 	-- asked above, passes such a role. Where a privilege is not allowed the
 	-- plain-form excess above already fires, so the option form is asked only
 	-- where the manifest requires the base privilege. DELETE is judged at table

@@ -18,7 +18,7 @@ printf '%s\n' "$@" >>"${FAKE_REC}/argv"
 printf -- '--call--\n' >>"${FAKE_REC}/argv"
 for a in "$@"; do
   case "$a" in
-  --from-file=*) cp "${a#*=}" "${FAKE_REC}/value" ;;
+  --from-file=*) cp "${a##*=}" "${FAKE_REC}/value" ;;
   esac
 done
 case "${FAKE_MODE:-ok}" in
@@ -138,11 +138,8 @@ func TestSessionSecretScriptRefusesWhenSecretExists(t *testing.T) {
 	if !strings.Contains(r.stdout, "STOPPED: the Secret already exists; nothing was changed") {
 		t.Fatalf("no STOPPED line:\n%s", r.stdout)
 	}
-	if got := leaks(r); len(got) != 1 || got[0] != "no value reached kubectl" && len(got) != 0 {
-		t.Fatalf("leak check: %v", got)
-	}
-	if r.value != "" && (strings.Contains(r.stdout, r.value) || strings.Contains(r.stderr, r.value)) {
-		t.Fatal("value leaked on the exists path")
+	if got := leaks(r); len(got) != 0 {
+		t.Fatalf("value leaked on the exists path into %v", got)
 	}
 	if strings.Count(r.argv, "--call--") != 1 {
 		t.Fatalf("expected one create call, got:\n%s", r.argv)

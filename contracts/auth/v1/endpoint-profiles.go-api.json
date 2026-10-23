@@ -12,7 +12,7 @@
       "action": null,
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
-      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/apiservice/admin/credentialdelete.go:59; internal/apiservice/admin/credentialdelete.go:72); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/apiservice/admin/credentialdelete.go:59; internal/apiservice/admin/credentialdelete.go:72); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
       "gaps": [
         "action: no catalog action covers credential (this leaf does not extend the vocabulary)"
       ],
@@ -77,7 +77,7 @@
       "action": null,
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
-      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/apiservice/admin/ipallowlist.go:275; internal/apiservice/admin/ipallowlist.go:269); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/apiservice/admin/ipallowlist.go:275; internal/apiservice/admin/ipallowlist.go:269); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
       "gaps": [
         "action: no catalog action covers IP allowlist entry (this leaf does not extend the vocabulary)"
       ],
@@ -374,7 +374,7 @@
       "action": null,
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
-      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/apiservice/admin/retention.go:288; internal/apiservice/admin/retention.go:296); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/apiservice/admin/retention.go:288; internal/apiservice/admin/retention.go:296); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
       "gaps": [
         "action: no catalog action covers retention policy (this leaf does not extend the vocabulary)"
       ],
@@ -497,7 +497,7 @@
       "action": null,
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
-      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/syncadmin/syncadmin.go:368 (missing; malformed uuid 404s at :359; body via writeConfigNotFound :188); internal/api/syncadmin/store.go:114 (configByID: WHERE org_id=$1 AND id=$2, called with orgID(r) at syncadmin.go:362)); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/syncadmin/syncadmin.go:368 (missing; malformed uuid 404s at :359; body via writeConfigNotFound :188); internal/api/syncadmin/store.go:114 (configByID: WHERE org_id=$1 AND id=$2, called with orgID(r) at syncadmin.go:362)); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
       "gaps": [
         "action: no catalog action covers sync configuration (this leaf does not extend the vocabulary)"
       ],
@@ -562,7 +562,7 @@
       "action": "teams.write",
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
-      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/teamsidentity/teamsidentity.go:337; internal/api/teamsidentity/store.go:125); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/teamsidentity/teamsidentity.go:337; internal/api/teamsidentity/store.go:125); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
       "gaps": [],
       "graphql_field_name": null,
       "id": "DELETE /api/v1/admin/teams/{team_id} [dev-health-ops-api @api]",
@@ -1070,7 +1070,7 @@
       "action": null,
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
-      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
       "gaps": [
         "action: no catalog action covers backfill job (this leaf does not extend the vocabulary)"
       ],
@@ -1135,7 +1135,7 @@
       "action": null,
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
-      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/syncadmin/backfill_detail.go:36; internal/api/syncadmin/store.go:461 (backfillJobByID WHERE id=$1 AND org_id=$2, called at backfill_detail.go:30)); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/syncadmin/backfill_detail.go:36; internal/api/syncadmin/store.go:461 (backfillJobByID WHERE id=$1 AND org_id=$2, called at backfill_detail.go:30)); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
       "gaps": [
         "action: no catalog action covers backfill job (this leaf does not extend the vocabulary)"
       ],
@@ -1200,7 +1200,7 @@
       "action": null,
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
-      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
       "gaps": [
         "action: no catalog action covers credential (this leaf does not extend the vocabulary)"
       ],
@@ -1265,7 +1265,7 @@
       "action": null,
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
-      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/credentials/credentials.go:247; internal/api/credentials/credentials.go:221); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/credentials/credentials.go:247; internal/api/credentials/credentials.go:221); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
       "gaps": [
         "action: no catalog action covers credential (this leaf does not extend the vocabulary)"
       ],
@@ -1852,7 +1852,7 @@
       "action": null,
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
-      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
       "gaps": [
         "action: no catalog action covers identity (this leaf does not extend the vocabulary)"
       ],
@@ -1975,7 +1975,7 @@
       "action": "integrations.read",
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
-      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
       "gaps": [],
       "graphql_field_name": null,
       "id": "GET /api/v1/admin/integrations [dev-health-ops-api @api]",
@@ -2038,7 +2038,7 @@
       "action": "integrations.read",
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
-      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
       "gaps": [],
       "graphql_field_name": null,
       "id": "GET /api/v1/admin/integrations/pagerduty/services [dev-health-ops-api @api]",
@@ -2101,7 +2101,7 @@
       "action": "integrations.read",
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
-      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
       "gaps": [],
       "graphql_field_name": null,
       "id": "GET /api/v1/admin/integrations/pagerduty/status [dev-health-ops-api @api]",
@@ -2164,7 +2164,7 @@
       "action": "integrations.read",
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
-      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/apiservice/admin/pagerduty_bindings.go:499; internal/apiservice/admin/pagerduty_bindings.go:497); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/apiservice/admin/pagerduty_bindings.go:499; internal/apiservice/admin/pagerduty_bindings.go:497); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
       "gaps": [],
       "graphql_field_name": null,
       "id": "GET /api/v1/admin/integrations/pagerduty/webhook-bindings/{binding_id} [dev-health-ops-api @api]",
@@ -2227,7 +2227,7 @@
       "action": "integrations.read",
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
-      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/integrationsadmin/routes.go:154 and internal/api/integrationsadmin/routes.go:161; internal/api/integrationsadmin/store.go:64); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/integrationsadmin/routes.go:154 and internal/api/integrationsadmin/routes.go:161; internal/api/integrationsadmin/store.go:64); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
       "gaps": [],
       "graphql_field_name": null,
       "id": "GET /api/v1/admin/integrations/{integration_id} [dev-health-ops-api @api]",
@@ -2290,7 +2290,7 @@
       "action": "integrations.read",
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
-      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/integrationsadmin/routes.go:154 and internal/api/integrationsadmin/routes.go:161; internal/api/integrationsadmin/store.go:64); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/integrationsadmin/routes.go:154 and internal/api/integrationsadmin/routes.go:161; internal/api/integrationsadmin/store.go:64); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
       "gaps": [],
       "graphql_field_name": null,
       "id": "GET /api/v1/admin/integrations/{integration_id}/datasets [dev-health-ops-api @api]",
@@ -2353,7 +2353,7 @@
       "action": "integrations.read",
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
-      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/integrationsadmin/routes.go:154 and internal/api/integrationsadmin/routes.go:161; internal/api/integrationsadmin/store.go:64); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/integrationsadmin/routes.go:154 and internal/api/integrationsadmin/routes.go:161; internal/api/integrationsadmin/store.go:64); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
       "gaps": [],
       "graphql_field_name": null,
       "id": "GET /api/v1/admin/integrations/{integration_id}/sources [dev-health-ops-api @api]",
@@ -2416,7 +2416,7 @@
       "action": null,
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
-      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
       "gaps": [
         "action: no catalog action covers IP allowlist entry (this leaf does not extend the vocabulary)"
       ],
@@ -2481,7 +2481,7 @@
       "action": null,
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
-      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/apiservice/admin/ipallowlist.go:275; internal/apiservice/admin/ipallowlist.go:269); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/apiservice/admin/ipallowlist.go:275; internal/apiservice/admin/ipallowlist.go:269); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
       "gaps": [
         "action: no catalog action covers IP allowlist entry (this leaf does not extend the vocabulary)"
       ],
@@ -3358,7 +3358,7 @@
       "action": null,
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
-      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
       "gaps": [
         "action: no catalog action covers retention policy (this leaf does not extend the vocabulary)"
       ],
@@ -3423,7 +3423,7 @@
       "action": null,
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
-      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/apiservice/admin/retention.go:288; internal/apiservice/admin/retention.go:296); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/apiservice/admin/retention.go:288; internal/apiservice/admin/retention.go:296); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
       "gaps": [
         "action: no catalog action covers retention policy (this leaf does not extend the vocabulary)"
       ],
@@ -3662,7 +3662,7 @@
       "action": null,
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
-      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
       "gaps": [
         "action: no catalog action covers the sync configuration domain (this leaf does not extend the vocabulary)"
       ],
@@ -3727,7 +3727,7 @@
       "action": null,
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
-      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
       "gaps": [
         "action: no catalog action covers auto-import capability table (this leaf does not extend the vocabulary)"
       ],
@@ -3792,7 +3792,7 @@
       "action": null,
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
-      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/syncadmin/syncadmin.go:368 (missing; malformed uuid 404s at :359; body via writeConfigNotFound :188); internal/api/syncadmin/store.go:114 (configByID: WHERE org_id=$1 AND id=$2, called with orgID(r) at syncadmin.go:362)); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/syncadmin/syncadmin.go:368 (missing; malformed uuid 404s at :359; body via writeConfigNotFound :188); internal/api/syncadmin/store.go:114 (configByID: WHERE org_id=$1 AND id=$2, called with orgID(r) at syncadmin.go:362)); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
       "gaps": [
         "action: no catalog action covers sync configuration (this leaf does not extend the vocabulary)"
       ],
@@ -3857,7 +3857,7 @@
       "action": null,
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
-      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/syncadmin/syncadmin.go:368 (missing; malformed uuid 404s at :359; body via writeConfigNotFound :188); internal/api/syncadmin/store.go:114 (configByID: WHERE org_id=$1 AND id=$2, called with orgID(r) at syncadmin.go:362)); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/syncadmin/syncadmin.go:368 (missing; malformed uuid 404s at :359; body via writeConfigNotFound :188); internal/api/syncadmin/store.go:114 (configByID: WHERE org_id=$1 AND id=$2, called with orgID(r) at syncadmin.go:362)); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
       "gaps": [
         "action: no catalog action covers sync configuration (this leaf does not extend the vocabulary)"
       ],
@@ -3922,7 +3922,7 @@
       "action": null,
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
-      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/syncadmin/syncadmin.go:368 (missing; malformed uuid 404s at :359; body via writeConfigNotFound :188); internal/api/syncadmin/store.go:114 (configByID: WHERE org_id=$1 AND id=$2, called with orgID(r) at syncadmin.go:362)); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/syncadmin/syncadmin.go:368 (missing; malformed uuid 404s at :359; body via writeConfigNotFound :188); internal/api/syncadmin/store.go:114 (configByID: WHERE org_id=$1 AND id=$2, called with orgID(r) at syncadmin.go:362)); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
       "gaps": [
         "action: no catalog action covers sync configuration (this leaf does not extend the vocabulary)"
       ],
@@ -3987,7 +3987,7 @@
       "action": null,
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
-      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/syncadmin/syncadmin.go:368 (missing; malformed uuid 404s at :359; body via writeConfigNotFound :188); internal/api/syncadmin/store.go:114 (configByID: WHERE org_id=$1 AND id=$2, called with orgID(r) at syncadmin.go:362)); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/syncadmin/syncadmin.go:368 (missing; malformed uuid 404s at :359; body via writeConfigNotFound :188); internal/api/syncadmin/store.go:114 (configByID: WHERE org_id=$1 AND id=$2, called with orgID(r) at syncadmin.go:362)); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
       "gaps": [
         "action: no catalog action covers sync configuration (this leaf does not extend the vocabulary)"
       ],
@@ -4052,7 +4052,7 @@
       "action": null,
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
-      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/syncadmin/runs.go:560 (malformed uuid 404 at :551); internal/api/syncadmin/store.go:312 (syncRunByID WHERE id=$1 AND org_id=$2, called at runs.go:554)); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/syncadmin/runs.go:560 (malformed uuid 404 at :551); internal/api/syncadmin/store.go:312 (syncRunByID WHERE id=$1 AND org_id=$2, called at runs.go:554)); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
       "gaps": [
         "action: no catalog action covers sync run (this leaf does not extend the vocabulary)"
       ],
@@ -4117,7 +4117,7 @@
       "action": null,
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
-      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/syncadmin/units.go:65 (malformed uuid 404 at :54); internal/api/syncadmin/store.go:312 (syncRunByID WHERE id=$1 AND org_id=$2, called at units.go:59); units read store runUnits org=$2 (units.go:68)); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/syncadmin/units.go:65 (malformed uuid 404 at :54); internal/api/syncadmin/store.go:312 (syncRunByID WHERE id=$1 AND org_id=$2, called at units.go:59); units read store runUnits org=$2 (units.go:68)); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
       "gaps": [
         "action: no catalog action covers sync run units (this leaf does not extend the vocabulary)"
       ],
@@ -4182,7 +4182,7 @@
       "action": null,
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
-      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
       "gaps": [
         "action: no catalog action covers sync targets (this leaf does not extend the vocabulary)"
       ],
@@ -4247,7 +4247,7 @@
       "action": "teams.read",
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
-      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
       "gaps": [],
       "graphql_field_name": null,
       "id": "GET /api/v1/admin/teams [dev-health-ops-api @api]",
@@ -4310,7 +4310,7 @@
       "action": "teams.read",
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
-      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/teamsidentity/teamsidentity.go:529; internal/api/teamsidentity/store.go:125); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/teamsidentity/teamsidentity.go:529; internal/api/teamsidentity/store.go:125); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
       "gaps": [],
       "graphql_field_name": null,
       "id": "GET /api/v1/admin/teams/{team_id} [dev-health-ops-api @api]",
@@ -4373,7 +4373,7 @@
       "action": null,
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
-      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/teamsidentity/members_discover.go:726; internal/api/teamsidentity/members_discover.go:720 (GetTeam -> store.go:125)); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/teamsidentity/members_discover.go:726; internal/api/teamsidentity/members_discover.go:720 (GetTeam -> store.go:125)); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
       "gaps": [
         "action: no catalog action covers team member discovery (provider call) (this leaf does not extend the vocabulary)"
       ],
@@ -4438,7 +4438,7 @@
       "action": null,
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
-      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/teamsidentity/members_infer.go:392; internal/api/teamsidentity/members_infer.go:386 (GetTeam -> store.go:125)); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/teamsidentity/members_infer.go:392; internal/api/teamsidentity/members_infer.go:386 (GetTeam -> store.go:125)); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
       "gaps": [
         "action: no catalog action covers team member inference (provider call) (this leaf does not extend the vocabulary)"
       ],
@@ -9026,7 +9026,7 @@
       "action": "integrations.write",
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
-      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/apiservice/admin/pagerduty_bindings.go:378; internal/apiservice/admin/pagerduty_bindings.go:387); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/apiservice/admin/pagerduty_bindings.go:378; internal/apiservice/admin/pagerduty_bindings.go:387); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
       "gaps": [],
       "graphql_field_name": null,
       "id": "POST /api/v1/admin/integrations/pagerduty/webhook-bindings/{binding_id}/activate [dev-health-ops-api @api]",
@@ -9284,7 +9284,7 @@
       "action": null,
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
-      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/integrationsadmin/routes.go:154 and 161 (via discover.go:67); internal/api/integrationsadmin/store.go:64 (via discover.go:67)); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/integrationsadmin/routes.go:154 and 161 (via discover.go:67); internal/api/integrationsadmin/store.go:64 (via discover.go:67)); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
       "gaps": [
         "action: no catalog action covers integration source (this leaf does not extend the vocabulary)"
       ],
@@ -9479,7 +9479,7 @@
       "action": null,
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
-      "disclosure_behavior": "no path resource id, behaviour today: the path segment is a fixed mode, not a resource id; the route acts only in the caller's effective organization; once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "disclosure_behavior": "no path resource id, behaviour today: the path segment is a fixed mode, not a resource id; the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
       "gaps": [
         "action: no catalog action covers IP allowlist check (this leaf does not extend the vocabulary)"
       ],
@@ -10276,7 +10276,7 @@
       "action": null,
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
-      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/syncadmin/syncadmin.go:368 (missing; malformed uuid 404s at :359; body via writeConfigNotFound :188); internal/api/syncadmin/store.go:114 (configByID: WHERE org_id=$1 AND id=$2, called with orgID(r) at syncadmin.go:362)); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/syncadmin/syncadmin.go:368 (missing; malformed uuid 404s at :359; body via writeConfigNotFound :188); internal/api/syncadmin/store.go:114 (configByID: WHERE org_id=$1 AND id=$2, called with orgID(r) at syncadmin.go:362)); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
       "gaps": [
         "action: no catalog action covers sync configuration (this leaf does not extend the vocabulary)"
       ],
@@ -10404,7 +10404,7 @@
       "action": null,
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
-      "disclosure_behavior": "no path resource id, behaviour today: the path segment is a fixed mode, not a resource id; the route acts only in the caller's effective organization; once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "disclosure_behavior": "no path resource id, behaviour today: the path segment is a fixed mode, not a resource id; the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
       "gaps": [
         "action: no catalog action covers team import (this leaf does not extend the vocabulary)"
       ],

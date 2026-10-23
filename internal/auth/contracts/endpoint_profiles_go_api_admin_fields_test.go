@@ -163,6 +163,14 @@ func adminFieldViolations(row map[string]any, scopes map[string]string, root str
 		bad("disclosure_behavior is not a string or null")
 	}
 
+	// a registration that wraps the handler in bodyFirst always says so (a handler may decode first by other means and say so too).
+	if text, ok := disclosure.(string); ok {
+		claims := strings.Contains(text, bodyFirstClause)
+		if registered, found := registeredBodyFirst(row, root); found && registered != claims {
+			bad("the body-first clause (%v) disagrees with the route registration (%v)", claims, registered)
+		}
+	}
+
 	// the text is a record, not a policy: no denial under impersonation is claimed, and every anchor resolves.
 	for _, field := range []string{"resource_resolver", "current_state_cache_behavior", "disclosure_behavior"} {
 		text, _ := row[field].(string)
@@ -177,6 +185,36 @@ func adminFieldViolations(row map[string]any, scopes map[string]string, root str
 		}
 	}
 	return out
+}
+
+const bodyFirstClause = "once any body-first validation has run"
+
+// bodyFirstPattern names the registration wrappers that read the body before the guard: Guard.BodyFirst and the
+// handlers' bodyFirst, the customer-push adminBody helper (a BodyFirst closure) and the teams decodeFirst wrapper
+// (decodes the body, then runs the guard). The integrations routes name their BodyFirst closure write.
+var bodyFirstPattern = regexp.MustCompile(`(?i)(bodyFirst|adminBody\(|decodeFirst)`)
+
+var bodyFirstClosures = map[string]string{"internal/api/integrationsadmin/routes.go": "write("}
+
+// registeredBodyFirst reports whether the registration entry at the row's source line wraps its handler in bodyFirst.
+func registeredBodyFirst(row map[string]any, root string) (registered, found bool) {
+	source, _ := row["source"].(map[string]any)
+	file, _ := source["file"].(string)
+	line, _ := source["line"].(float64)
+	raw, err := os.ReadFile(filepath.Join(root, file))
+	if err != nil || int(line) < 1 {
+		return false, false
+	}
+	lines := strings.Split(string(raw), "\n")
+	if int(line) > len(lines) {
+		return false, false
+	}
+	entry := lines[int(line)-1]
+	for i := int(line); i < len(lines) && i < int(line)+3 && !strings.Contains(lines[i], "Method:"); i++ {
+		entry += "\n" + lines[i]
+	}
+	closure, named := bodyFirstClosures[file]
+	return bodyFirstPattern.MatchString(entry) || (named && strings.Contains(entry, closure)), true
 }
 
 func anchorProblem(root, rel string, line int) string {
@@ -279,6 +317,9 @@ func TestAdminFieldChecksCatchPlantedDefects(t *testing.T) {
 		"anchor names a missing file": func(r map[string]any) {
 			r["disclosure_behavior"] = byIDPrefix + " 404 (internal/api/nope/nope.go:5; internal/api/teamsidentity/store.go:125); 403 (internal/api/policy/guard.go:129)"
 		},
+		"body-first clause on a route registered without it": func(r map[string]any) {
+			r["disclosure_behavior"] = strings.Replace(r["disclosure_behavior"].(string), "403", bodyFirstClause+", 403", 1)
+		},
 		"claims a denial under impersonation": func(r map[string]any) {
 			r["current_state_cache_behavior"] = cachePrefix + "internal/api/policy/request_reads.go:13); the route is denied under impersonation"
 		},
@@ -294,4 +335,26 @@ func TestAdminFieldChecksCatchPlantedDefects(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestBodyFirstRegistrationMustBeNamed(t *testing.T) {
+	root := testRoot(t)
+	scopes := catalogScopes(t)
+	for _, row := range coveredAdminRows(t) {
+		if row["id"] != "PATCH /api/v1/admin/credentials/{provider}/{name} [dev-health-ops-api @api]" {
+			continue
+		}
+		raw, _ := json.Marshal(row)
+		var mutated map[string]any
+		_ = json.Unmarshal(raw, &mutated)
+		if got := adminFieldViolations(mutated, scopes, root); len(got) != 0 {
+			t.Fatalf("the unmodified row has violations: %v", got)
+		}
+		mutated["disclosure_behavior"] = strings.ReplaceAll(mutated["disclosure_behavior"].(string), bodyFirstClause+", ", "")
+		if got := adminFieldViolations(mutated, scopes, root); len(got) == 0 {
+			t.Fatal("a bodyFirst-registered route without the clause passed every check")
+		}
+		return
+	}
+	t.Fatal("the credentials update row is missing")
 }

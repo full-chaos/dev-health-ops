@@ -112,7 +112,7 @@ func TestCountQuery_UsesTheSameWhereAsTheRows(t *testing.T) {
 			// Same bindings as the rows, except the limit.
 			var wantBindings []clickhouse.Binding
 			for _, b := range client.bindings {
-				if b.Name != "limit" {
+				if b.Name != "limit_n" {
 					wantBindings = append(wantBindings, b)
 				}
 			}

@@ -83,6 +83,6 @@ func Routes(deps Deps) []httpapi.Route {
 
 // internal logs the failure with its operation and answers the generic 500.
 func (h *handlers) internal(w http.ResponseWriter, r *http.Request, operation string, err error) {
-	h.logger.ErrorContext(r.Context(), "customer-push admin: "+operation+" failed", slog.String("error", err.Error()), slog.String("path", r.URL.Path))
+	h.logger.ErrorContext(r.Context(), "customer-push admin: "+operation+" failed", slog.String("error", err.Error()), slog.String("path", r.Pattern))
 	policy.WriteInternal(w)
 }

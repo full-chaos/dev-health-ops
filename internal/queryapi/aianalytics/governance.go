@@ -52,7 +52,7 @@ WHERE org_id = {org_id:String}
   AND ({team_id:String} = '' OR team_id = {team_id:String})
   AND ({repo_id:String} = '' OR toString(repo_id) = {repo_id:String})
 ORDER BY observed_at DESC
-LIMIT {limit:UInt32}`
+LIMIT {limit_n:UInt32}`
 
 func governanceBindings(orgID string, dr model.AIDateRangeInput, sc scope) []clickhouse.Binding {
 	return []clickhouse.Binding{
@@ -126,7 +126,7 @@ func loadViolations(ctx context.Context, client QueryClient, orgID string, dr mo
 	if limit < 0 {
 		limit = 0
 	}
-	bindings := append(governanceBindings(orgID, dr, sc), clickhouse.Binding{Name: "limit", Value: uint32(limit)})
+	bindings := append(governanceBindings(orgID, dr, sc), clickhouse.Binding{Name: "limit_n", Value: uint32(limit)})
 	rs, err := client.Query(ctx, violationsStatement, bindings)
 	if err != nil {
 		return nil, fmt.Errorf("aianalytics: violations query: %w", err)

@@ -116,7 +116,7 @@ func fetchReviewWaitEvidence(ctx context.Context, client QueryClient, startTS, e
           AND toHour(created_at) = {hour:UInt8}
         %s
         ORDER BY created_at DESC
-        LIMIT {limit:UInt64}
+        LIMIT {limit_n:UInt64}
         %s
     `, scopeFilterSQL, settingsMaxExecutionTime())
 	bindings := append([]dhclickhouse.Binding{
@@ -125,7 +125,7 @@ func fetchReviewWaitEvidence(ctx context.Context, client QueryClient, startTS, e
 		{Name: "weekday", Value: weekday},
 		{Name: "hour", Value: hour},
 		{Name: "org_id", Value: orgID},
-		{Name: "limit", Value: limit},
+		{Name: "limit_n", Value: limit},
 	}, scopeBindings...)
 
 	rows, err := client.Query(ctx, query, bindings)
@@ -182,14 +182,14 @@ func fetchRepoTouchpoints(ctx context.Context, client QueryClient, startTS, endT
         %s
         GROUP BY repos.repo
         ORDER BY total DESC, repo ASC
-        LIMIT {limit:UInt64}
+        LIMIT {limit_n:UInt64}
         %s
     `, scopeFilterSQL, settingsMaxExecutionTime())
 	topBindings := append([]dhclickhouse.Binding{
 		{Name: "start_ts", Value: startTS},
 		{Name: "end_ts", Value: endTS},
 		{Name: "org_id", Value: orgID},
-		{Name: "limit", Value: limit},
+		{Name: "limit_n", Value: limit},
 	}, scopeBindings...)
 
 	topRows, err := client.Query(ctx, topQuery, topBindings)
@@ -288,14 +288,14 @@ func fetchHotspotRisk(ctx context.Context, client QueryClient, startDay, endDay 
         %s
         GROUP BY file_key
         ORDER BY total DESC, file_key ASC
-        LIMIT {limit:UInt64}
+        LIMIT {limit_n:UInt64}
         %s
     `, scopeFilterSQL, settingsMaxExecutionTime())
 	topBindings := append([]dhclickhouse.Binding{
 		{Name: "start_day", Value: dateBindingValue(startDay)},
 		{Name: "end_day", Value: dateBindingValue(endDay)},
 		{Name: "org_id", Value: orgID},
-		{Name: "limit", Value: limit},
+		{Name: "limit_n", Value: limit},
 	}, scopeBindings...)
 
 	topRows, err := client.Query(ctx, topQuery, topBindings)
@@ -400,7 +400,7 @@ func fetchHotspotEvidence(ctx context.Context, client QueryClient, weekStart, we
           AND file_metrics_daily.org_id = {org_id:String}
         %s
         ORDER BY day
-        LIMIT {limit:UInt64}
+        LIMIT {limit_n:UInt64}
         %s
     `, scopeFilterSQL, settingsMaxExecutionTime())
 	bindings := append([]dhclickhouse.Binding{
@@ -408,7 +408,7 @@ func fetchHotspotEvidence(ctx context.Context, client QueryClient, weekStart, we
 		{Name: "week_end", Value: dateBindingValue(weekEnd)},
 		{Name: "file_key", Value: fileKey},
 		{Name: "org_id", Value: orgID},
-		{Name: "limit", Value: limit},
+		{Name: "limit_n", Value: limit},
 	}, scopeBindings...)
 
 	rows, err := client.Query(ctx, query, bindings)
@@ -513,7 +513,7 @@ func fetchIndividualActiveEvidence(ctx context.Context, client QueryClient, star
           AND toHour(author_when) = {hour:UInt8}
           AND (author_email IN {identities:Array(String)} OR author_name IN {identities:Array(String)})
         ORDER BY author_when DESC
-        LIMIT {limit:UInt64}
+        LIMIT {limit_n:UInt64}
         %s
     `, settingsMaxExecutionTime())
 	bindings := []dhclickhouse.Binding{
@@ -522,7 +522,7 @@ func fetchIndividualActiveEvidence(ctx context.Context, client QueryClient, star
 		{Name: "weekday", Value: weekday},
 		{Name: "hour", Value: hour},
 		{Name: "identities", Value: identities},
-		{Name: "limit", Value: limit},
+		{Name: "limit_n", Value: limit},
 		{Name: "org_id", Value: orgID},
 	}
 

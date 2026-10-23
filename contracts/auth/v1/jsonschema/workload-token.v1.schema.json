@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fullchaos.dev/contracts/auth/v1/jsonschema/workload-token.v1.schema.json",
+  "title": "Auth Control Plane workload token (v1 wire format)",
+  "description": "The workload token the auth-service signs for one internal service caller (credential class `workload_token`, TRD section 11): a compact JWS whose protected header and payload, decoded, are the two members of this document. The signature is not part of the document; a verifier checks it with the issuer's jwks.v1 key named by `kid`, and the signed bytes are decided by the golden corpus under golden/workload-token.\n\nA workload token is its own type and its own shape. Its header typ is `workload+jwt` (RFC 8725 explicit typing), exact bytes, so it can never be read as a user access token (`at+jwt`), an ID token or the HS256 token (`JWT`). It names exactly one audience, a service from contracts/auth/v1/vocabulary/audiences.json whose classes include `workload_token`. It has no `org_id`, no `sid` and no `scope`: a workload acts for no organization and no session, and nothing in it grants a permission. Its lifetime is at most 300 seconds (a client rule, WorkloadTokenLifetimeCeiling): a verifier refuses a longer one even when the signature is valid.",
+  "type": "object",
+  "required": [
+    "header",
+    "claims"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "header": {
+      "type": "object",
+      "description": "The JWS protected header. Closed: a verifier never reads a key, key URL or certificate from the token.",
+      "required": [
+        "alg",
+        "typ",
+        "kid"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "alg": {
+          "const": "EdDSA",
+          "description": "Ed25519 only (ACP-ADR-01). A verifier fixes this before it resolves a key."
+        },
+        "typ": {
+          "const": "workload+jwt",
+          "description": "RFC 8725 explicit type, exact bytes. A verifier refuses a case variant, a missing typ, `JWT`, `at+jwt` and an `application/`-prefixed form. It separates this token from the user access token (`at+jwt`)."
+        },
+        "kid": {
+          "$ref": "jwks.v1.schema.json#/properties/keys/items/properties/kid"
+        }
+      }
+    },
+    "claims": {
+      "type": "object",
+      "description": "The JWT claims. Closed to the workload and its validity: no organization, no session, no scope, nothing that grants a permission.",
+      "required": [
+        "iss",
+        "aud",
+        "sub",
+        "principal_type",
+        "jti",
+        "iat",
+        "nbf",
+        "exp"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "iss": {
+          "$ref": "discovery.v1.schema.json#/properties/issuer"
+        },
+        "aud": {
+          "type": "string",
+          "enum": [
+            "auth-service"
+          ],
+          "description": "Exactly one audience: one service. contracts/auth/v1/vocabulary/audiences.json lists every audience and the classes that may carry it; an audience whose classes lack workload_token is refused."
+        },
+        "sub": {
+          "$ref": "principal.v1.schema.json#/properties/principal_id"
+        },
+        "principal_type": {
+          "const": "workload",
+          "description": "A workload token names a workload principal. A human principal holds a user access token."
+        },
+        "jti": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{22,64}$",
+          "description": "Unique token id."
+        },
+        "iat": {
+          "$ref": "#/$defs/numericDate"
+        },
+        "nbf": {
+          "$ref": "#/$defs/numericDate"
+        },
+        "exp": {
+          "$ref": "#/$defs/numericDate"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "numericDate": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 253402300799,
+      "description": "Seconds since the epoch (RFC 7519 NumericDate), no later than 9999-12-31T23:59:59Z."
+    }
+  }
+}

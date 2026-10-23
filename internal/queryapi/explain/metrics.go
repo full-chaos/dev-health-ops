@@ -316,7 +316,7 @@ FROM %s
 GROUP BY %s
 %s
 ORDER BY value DESC
-LIMIT {limit:UInt64}
+LIMIT {limit_n:UInt64}
 %s
 `, groupBy, valueSQL, fromClause, groupBy, "HAVING value IS NOT NULL", settingsMaxExecutionTime())
 
@@ -324,7 +324,7 @@ LIMIT {limit:UInt64}
 		{Name: "start_day", Value: dateBindingValue(startDay)},
 		{Name: "end_day", Value: dateBindingValue(endDay)},
 		{Name: "org_id", Value: orgID},
-		{Name: "limit", Value: limit},
+		{Name: "limit_n", Value: limit},
 	}, scopeBindings...)
 
 	rows, err := reader.client.Query(ctx, query, bindings)
@@ -418,7 +418,7 @@ FULL JOIN (
 ) AS previous ON current.id = previous.id
 WHERE %s OR %s
 ORDER BY delta_pct DESC NULLS LAST
-LIMIT {limit:UInt64}
+LIMIT {limit_n:UInt64}
 %s
 `, currentValue, currentStored, previousStored, deltarule.DriverPercentSQL(currentValue, "previous.value", "previous.present"),
 		groupBy, valueSQL, currentFrom, groupBy, groupBy, valueSQL, previousFrom, groupBy,
@@ -430,7 +430,7 @@ LIMIT {limit:UInt64}
 		{Name: "compare_start", Value: dateBindingValue(compareStart)},
 		{Name: "compare_end", Value: dateBindingValue(compareEnd)},
 		{Name: "org_id", Value: orgID},
-		{Name: "limit", Value: limit},
+		{Name: "limit_n", Value: limit},
 	}, scopeBindings...)
 
 	rows, err := reader.client.Query(ctx, query, bindings)

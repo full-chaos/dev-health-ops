@@ -316,7 +316,7 @@ func TestResolve_RepoScope_NoRepoIDsUsesDefaultSubqueryLimit(t *testing.T) {
 	}
 	var foundLimit bool
 	for _, b := range client.bindings[0] {
-		if b.Name == "limit" {
+		if b.Name == "limit_n" {
 			foundLimit = true
 			if b.Value.(uint32) != uint32(DefaultLimit) {
 				t.Fatalf("limit binding = %v, want %d", b.Value, DefaultLimit)

@@ -119,7 +119,7 @@ WHERE %s
 %s
 GROUP BY theme, subcategory, scope
 ORDER BY value DESC
-LIMIT {limit:Int64}
+LIMIT {limit_n:Int64}
 %s
 `, valueSQL, source, analytics.InvestmentWindowClause(true), scopeSQL, categorySQL, settingsMaxExecutionTime())
 
@@ -138,7 +138,7 @@ LIMIT {limit:Int64}
 		{Name: "start_date", Value: dateBindingValue(filters.StartTS)},
 		{Name: "end_date", Value: dateBindingValue(filters.EndTS)},
 		{Name: "org_id", Value: filters.OrgID},
-		{Name: "limit", Value: int64(filters.Limit)},
+		{Name: "limit_n", Value: int64(filters.Limit)},
 	}
 	bindings = append(bindings, scopeBindings...)
 	bindings = append(bindings, shareBindings...)

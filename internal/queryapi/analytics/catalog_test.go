@@ -78,16 +78,16 @@ func TestCompileCatalogValues_DecisionTable(t *testing.T) {
 		wantBind   []string
 	}{
 		{"repo no filters", DimensionRepo, 101, nil, false,
-			[]string{"FROM repos FINAL", "lowerUTF8(trimBoth(repo))", "org_id = {org_id:String}", "ORDER BY value", "LIMIT {limit:UInt32}"}, nil, []string{"limit", "org_id"}},
+			[]string{"FROM repos FINAL", "lowerUTF8(trimBoth(repo))", "org_id = {org_id:String}", "ORDER BY value", "LIMIT {limit_n:UInt32}"}, nil, []string{"limit_n", "org_id"}},
 		{"repo empty non-org filter object", DimensionRepo, 101, &model.FilterInput{}, false, []string{"FROM repos FINAL"}, nil, nil},
 		{"repo org-level scope only", DimensionRepo, 101, orgScope, false, []string{"FROM repos FINAL"}, nil, nil},
 		{"repo with team scope", DimensionRepo, 101, teamScope, true, nil, nil, nil},
 		{"repo with what filter", DimensionRepo, 101, repoFilter, true, nil, nil, nil},
 		{"team ignores filters", DimensionTeam, 100, teamScope, false,
 			[]string{"FROM teams FINAL", "is_active = 1", "LEFT JOIN", "work_item_completion_daily", "ORDER BY count DESC, t.name ASC, t.id ASC"},
-			[]string{"scope_ids"}, []string{"limit", "org_id"}},
+			[]string{"scope_ids"}, []string{"limit_n", "org_id"}},
 		{"theme investment source", DimensionTheme, 100, nil, false,
-			[]string{"splitByChar('.', subcategory_kv.1)[1]", "work_unit_investments.org_id = {org_id:String}", "ARRAY JOIN", "GROUP BY value", "ORDER BY count DESC, value ASC"}, nil, []string{"limit", "org_id"}},
+			[]string{"splitByChar('.', subcategory_kv.1)[1]", "work_unit_investments.org_id = {org_id:String}", "ARRAY JOIN", "GROUP BY value", "ORDER BY count DESC, value ASC"}, nil, []string{"limit_n", "org_id"}},
 		{"subcategory", DimensionSubcategory, 100, nil, false, []string{"subcategory_kv.1", "work_unit_investments.org_id"}, nil, nil},
 		{"work_type", DimensionWorkType, 100, nil, false, []string{"work_unit_type", "work_unit_investments.org_id"}, nil, nil},
 		{"work_type with team scope is the team's owned repositories", DimensionWorkType, 100, teamScope, false,
@@ -123,7 +123,7 @@ func TestCompileCatalogValues_DecisionTable(t *testing.T) {
 			if got := catalogBindingValue(t, q, "org_id"); got != "org-1" {
 				t.Errorf("org_id binding = %v", got)
 			}
-			if got := catalogBindingValue(t, q, "limit"); got != uint32(tc.limit) {
+			if got := catalogBindingValue(t, q, "limit_n"); got != uint32(tc.limit) {
 				t.Errorf("limit binding = %v (%T), want %d", got, got, tc.limit)
 			}
 			for _, b := range tc.wantBind {
@@ -293,7 +293,7 @@ func TestResolveCatalog_LimitBindingPerDimension(t *testing.T) {
 		var limit, org any
 		for _, b := range client.bindings {
 			switch b.Name {
-			case "limit":
+			case "limit_n":
 				limit = b.Value
 			case "org_id":
 				org = b.Value

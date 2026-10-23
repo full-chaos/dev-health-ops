@@ -321,7 +321,7 @@ func checkCalls(t *testing.T, c oracleBCase, f *fixtureClient) {
 			t.Fatalf("the attributed pull request read did not run")
 		}
 		for _, k := range []string{"limit", "offset"} {
-			if got := num(bs, k); got != want[k] {
+			if got := num(bs, k+"_n"); got != want[k] {
 				t.Errorf("%s = %v, want %v", k, got, want[k])
 			}
 		}
@@ -337,7 +337,7 @@ func checkCalls(t *testing.T, c oracleBCase, f *fixtureClient) {
 	if want, ok := c.Calls["evidence"].(map[string]any); ok {
 		bs := find("subject_type,")
 		for _, k := range []string{"limit", "offset"} {
-			if got := num(bs, k); got != want[k] {
+			if got := num(bs, k+"_n"); got != want[k] {
 				t.Errorf("%s = %v, want %v", k, got, want[k])
 			}
 		}

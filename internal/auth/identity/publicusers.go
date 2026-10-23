@@ -43,11 +43,12 @@ VALUES ($1, $2, NULLIF($3, ''), $4, NULLIF($5, ''), $6, $7, true, $8, false, 0, 
 	return err
 }
 
-// updatePublicPassword copies a new password verifier to public.users. It
-// never writes token_version: the flow that ends the user's sessions owns that
-// bump. A user with no public row fails the transaction.
+// updatePublicPassword copies a new password verifier to public.users and adds
+// 1 to token_version in the same statement, as go-api's own password change
+// does, so a go-api token minted before it is refused. A user with no public
+// row fails the transaction.
 func updatePublicPassword(ctx context.Context, tx audit.TxOps, id uuid.UUID, hash string) error {
-	tag, err := tx.Exec(ctx, `UPDATE public.users SET password_hash = $2, updated_at = now() WHERE id = $1`, id, hash)
+	tag, err := tx.Exec(ctx, `UPDATE public.users SET password_hash = $2, token_version = token_version + 1, updated_at = now() WHERE id = $1`, id, hash)
 	if err != nil {
 		return err
 	}

@@ -84,13 +84,14 @@ func LegacyRefreshTokenGrant() TableWriteGrant {
 // runtime role projects each user it creates or changes to go-api's table in
 // the same transaction (AUTH_USERS_OWNED). INSERT and UPDATE on exactly these
 // columns, no DELETE, no TRUNCATE, no other table. token_version is inserted
-// as 0 and never updated: the flow that ends a user's sessions owns the bump.
+// as 0 and updated only by a password change, which adds 1 in the same
+// transaction (go-api's own reset does), so go-api tokens minted before it end.
 func UsersWriteGrant() (insert, update []string) {
 	return []string{
 			"id", "email", "username", "password_hash", "full_name", "auth_provider", "auth_provider_id",
 			"is_active", "is_verified", "is_superuser", "token_version", "created_at", "updated_at",
 		},
-		[]string{"password_hash", "is_verified", "updated_at"}
+		[]string{"password_hash", "is_verified", "token_version", "updated_at"}
 }
 
 // usersWriteStatements grants UsersWriteGrant when the switch is on. Off, the

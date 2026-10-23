@@ -111,7 +111,9 @@ WHERE principal_id = $1 AND email_verified_at IS DISTINCT FROM $2`, principal, a
 
 // SetPasswordHash sets auth.users.password_hash (a guarded column) to a bcrypt
 // verifier, with password_algorithm bcrypt, in one audit.Commit (reason
-// password_changed). Available only after the users cutover.
+// password_changed) and adds 1 to legacy_token_version, as the public.users
+// token_version gets (a go-api token minted before it ends and the users
+// reconciliation stays at zero diff). Available only after the users cutover.
 func (s *Store) SetPasswordHash(ctx context.Context, principal uuid.UUID, hash string, actor Actor) (err error) {
 	defer func() { s.countLink(ctx, "set_password", err) }()
 	if !s.ownsUsers {
@@ -127,7 +129,8 @@ func (s *Store) SetPasswordHash(ctx context.Context, principal uuid.UUID, hash s
 				return err
 			}
 			_, err := tx.Exec(ctx, `UPDATE `+s.q+`.users
-SET password_hash = $2, password_algorithm = $3, password_updated_at = clock_timestamp(), updated_at = clock_timestamp()
+SET password_hash = $2, password_algorithm = $3, password_updated_at = clock_timestamp(),
+    legacy_token_version = legacy_token_version + 1, updated_at = clock_timestamp()
 WHERE principal_id = $1`, principal, hash, passwordAlgorithm)
 			if err != nil {
 				return err

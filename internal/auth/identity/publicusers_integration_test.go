@@ -133,9 +133,11 @@ func TestProvisionLocalRefusesAnAddressPublicUsersHolds(t *testing.T) {
 	}
 }
 
-// A password change updates both tables in one transaction, never bumps
-// token_version, and a missing public row rolls the auth change back.
-func TestSetPasswordHashProjectsTheVerifierAndLeavesTokenVersionAlone(t *testing.T) {
+// A password change updates both tables in one transaction, bumps
+// public.users.token_version by exactly 1 (go-api's edge tokens carry the
+// version and are refused after it), and a missing public row rolls the auth
+// change back.
+func TestSetPasswordHashProjectsTheVerifierAndBumpsTokenVersion(t *testing.T) {
 	e := getEnv(t)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
@@ -149,11 +151,11 @@ func TestSetPasswordHashProjectsTheVerifierAndLeavesTokenVersionAlone(t *testing
 		t.Fatalf("SetPasswordHash: %v", err)
 	}
 	row, _ := e.publicUser(t, ctx, id)
-	if row.PasswordHash == nil || *row.PasswordHash != second || row.TokenVersion != 0 {
+	if row.PasswordHash == nil || *row.PasswordHash != second || row.TokenVersion != 1 {
 		t.Fatalf("public row after the change: %+v", row)
 	}
-	if n := e.count(t, ctx, `SELECT count(*) FROM auth.users WHERE principal_id = $1 AND password_hash = $2`, id, second); n != 1 {
-		t.Fatalf("auth verifier not updated: %d", n)
+	if n := e.count(t, ctx, `SELECT count(*) FROM auth.users WHERE principal_id = $1 AND password_hash = $2 AND legacy_token_version = $3`, id, second, row.TokenVersion); n != 1 {
+		t.Fatalf("auth verifier or legacy_token_version not updated in step with public.users.token_version: %d", n)
 	}
 
 	if _, err := e.admin.Exec(ctx, `DELETE FROM public.users WHERE id = $1`, id); err != nil {

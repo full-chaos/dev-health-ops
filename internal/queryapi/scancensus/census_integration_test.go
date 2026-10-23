@@ -556,7 +556,7 @@ internal/queryapi/home/queries_metrics.go|fetchPRReworkView|[]any|403719d788df|v
 internal/queryapi/home/queries_metrics.go|fetchRateDriverDelta|*string,**float64,**float64|9068c65461a3|not-describable
 internal/queryapi/home/queries_signals.go|fetchRiskSignals|*string,*string,**float64,*string,*time.Time,**float64|54de9ad8afd6|not-describable
 internal/queryapi/home/queries_sync.go|FetchLatestSuccessfulSyncAt|**time.Time|9dfe899f0474|statement-not-static
-internal/queryapi/home/repolinked.go|readBasis|*string,*string,*uint8|3e248e77f109|spliced-select-list
+internal/queryapi/home/repolinked.go|readBasis|*string,*string,*uint8|ed45fd9e4470|spliced-select-list
 internal/queryapi/hotspots/hotspots.go|queryHotspotRows|*string,*string,*uint64,*uint32,*uint32,*float64,**float64,*float64|448efde8f6df|not-describable
 internal/queryapi/investment/sunburst.go|FetchInvestmentSunburst|*string,*string,*string,*float64|d4d0c8231707|spliced-select-list
 internal/queryapi/investmentexplain/reader.go|FetchInvestmentBreakdown|*string,*string,*float64|2283428d08a0|spliced-select-list

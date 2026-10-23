@@ -84,6 +84,9 @@ ranges (the fenced ports and the internal port), zero-padded so a string sort is
 {{- if regexMatch "^--?api-internal-addr" . }}{{- fail "goApi.extraArgs must not set --api-internal-addr: the chart owns the internal listener (goApi.internal.port); a second flag moves it onto a port the internal Service and NetworkPolicy do not gate" }}{{- end }}
 {{- end }}
 {{- range .Values.goApi.extraEnv }}
+{{- if eq .name "TRUSTED_PROXIES_NETWORK_FENCED" }}{{- fail "goApi.extraEnv must not set TRUSTED_PROXIES_NETWORK_FENCED: the chart sets it only where the request-port fence renders (goApi.networkPolicy.enabled)" }}{{- end }}
+{{- end }}
+{{- range .Values.goApi.extraEnv }}
 {{- if eq .name "DEV_HEALTH_API_INTERNAL_ADDR" }}{{- fail "goApi.extraEnv must not set DEV_HEALTH_API_INTERNAL_ADDR: the chart owns the internal listener (goApi.internal.port)" }}{{- end }}
 {{- end }}
 {{- range .Values.goApi.internal.allowedFrom }}
@@ -278,6 +281,11 @@ spec:
             - name: AUTH_SESSION_ISSUE_TOKEN
               valueFrom: {secretKeyRef: {name: {{ include "dev-health.secretName" . }}, key: AUTH_SESSION_ISSUE_TOKEN}}
             {{- end }}
+            {{- end }}
+            {{- if $fence }}
+            {{- /* CHAOS-10743: the marker is rendered only where the request-port fence renders (never from extraEnv, which the render refuses): go-api then reports a wide TRUSTED_PROXIES as fenced. */}}
+            - name: TRUSTED_PROXIES_NETWORK_FENCED
+              value: "true"
             {{- end }}
           {{- with .Values.goApi.extraEnv }}
             {{- toYaml . | nindent 12 }}

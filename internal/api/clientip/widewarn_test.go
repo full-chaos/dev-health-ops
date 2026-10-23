@@ -22,3 +22,12 @@ func TestWidePrefixesCountsEntriesWiderThanASlash28(t *testing.T) {
 		}
 	}
 }
+
+func TestNetworkFencedIsTrueOnlyForTheExactMarker(t *testing.T) {
+	for raw, want := range map[string]bool{"": false, "true": true, "TRUE": false, "True": false, "1": false, "yes": false, "false": false, " true": false} {
+		t.Setenv(NetworkFencedMarker, raw)
+		if got := NetworkFenced(); got != want {
+			t.Errorf("%q: %v, want %v", raw, got, want)
+		}
+	}
+}

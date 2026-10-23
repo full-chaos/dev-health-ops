@@ -164,3 +164,13 @@ func WidePrefixes() int {
 	}
 	return wide
 }
+
+// NetworkFencedMarker names the variable the chart sets to "true" only where the go-api request
+// ports are fenced to the ingress controller pods by a NetworkPolicy.
+const NetworkFencedMarker = "TRUSTED_PROXIES_NETWORK_FENCED"
+
+// NetworkFenced reports whether the chart declared the request ports fenced: a wide trust list is
+// then reachable only by the proxies the policy admits.
+func NetworkFenced() bool {
+	return os.Getenv(NetworkFencedMarker) == "true"
+}

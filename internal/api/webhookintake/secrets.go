@@ -1,65 +1,48 @@
 package webhookintake
 
 import (
-	"crypto/rand"
 	"crypto/sha256"
 	"io"
 	"log/slog"
 	"sync/atomic"
+
+	"github.com/full-chaos/dev-health-ops/internal/api/standinkey"
 )
 
-// unverifiableKey stands in for a provider whose verification credential is not set: no caller
-// can know it, so every delivery to that provider fails verification after the same work as a
-// delivery to a configured one. It is made once at startup; a failed random read stops the
-// process, it never yields an empty or guessable key (an empty key would let anyone sign).
-var unverifiableKey = mustRandomKey(rand.Reader)
+// The verification material and the stand-in key for an absent credential live in
+// internal/api/standinkey (one rule for every intake route); these are the names this package's
+// handlers and tests use.
 
-const unverifiableKeyLength = 32
+// unverifiableKey is the process-wide stand-in key.
+var unverifiableKey = standinkey.StandIn()
 
-func mustRandomKey(source io.Reader) string {
-	key := make([]byte, unverifiableKeyLength)
-	if _, err := io.ReadFull(source, key); err != nil {
-		panic("webhookintake: no random bytes for the stand-in verification key: " + err.Error())
-	}
-	return string(key)
-}
+func mustRandomKey(source io.Reader) string { return standinkey.MustRandomKey(source) }
 
 // verifyingSecret is the key a delivery is checked against: the configured one, else the
 // stand-in.
-func verifyingSecret(configured string) string {
-	if configured != "" {
-		return configured
-	}
-	return unverifiableKey
-}
+func verifyingSecret(configured string) string { return standinkey.Secret(configured) }
 
 // The credentials stay in the log redaction registry (they are read with GetenvSecret): a credential
 // echoed into a log line by mistake is blanked. They are read once, when each handler is built.
 
 // verifyingKey is the fixed-size material a handler verifies with, made once when the handler is
-// built (startup): the per-request work then does not depend on the length of the provider
-// credential or on whether one is set. hmacKey is at most one SHA-256 block (a longer key is
-// hashed first, which is what HMAC does with it), so every HMAC pays the same two key blocks;
-// digest is the SHA-256 of the credential for a plain token compare.
+// built (startup): see standinkey.Key.
 type verifyingKey struct {
 	hmacKey []byte
 	digest  [sha256.Size]byte
 }
 
-// keyDerivations counts newVerifyingKey calls; a test pins that no request derives one.
-var keyDerivations atomic.Int64
+// keyDerivationCount counts newVerifyingKey calls; a test pins that no request derives one.
+type keyDerivationCount struct{ n atomic.Int64 }
 
-const sha256BlockSize = 64
+func (c *keyDerivationCount) Load() int64 { return c.n.Load() }
+
+var keyDerivations keyDerivationCount
 
 func newVerifyingKey(configured string) verifyingKey {
-	keyDerivations.Add(1)
-	secret := []byte(verifyingSecret(configured))
-	key := secret
-	if len(key) > sha256BlockSize {
-		hashed := sha256.Sum256(key)
-		key = hashed[:]
-	}
-	return verifyingKey{hmacKey: key, digest: sha256.Sum256(secret)}
+	keyDerivations.n.Add(1)
+	key := standinkey.New(configured)
+	return verifyingKey{hmacKey: key.HMACKey, digest: key.Digest}
 }
 
 // LogUnconfiguredSecrets writes one line for each provider with no verification credential. It is

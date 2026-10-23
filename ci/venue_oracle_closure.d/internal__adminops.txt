@@ -15,6 +15,7 @@ internal/api/pybody
 internal/api/pyjson
 internal/api/pytime
 internal/api/restcore
+internal/api/standinkey
 internal/apiservice/admin
 internal/auth/edgetoken
 internal/auth/httpapi

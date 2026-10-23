@@ -42,3 +42,24 @@ func TestRealClickHouse_WorkflowDrilldownWalksTheIssueLink(t *testing.T) {
 		}
 	}
 }
+
+func TestRealClickHouse_UnlinkedPullRequestChipsAreHidden(t *testing.T) {
+	ctx, conn, client := startStore(t)
+	link := func(org, workItem string, number int, provenance string) {
+		exec(t, ctx, conn, `INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id)
+            SELECT '%s', '%s', %d, 0.9, '%s', 'x', now64(3), '%s'`, rA, workItem, number, provenance, org)
+	}
+	link(org1, "jira:ABC-1", 7, "heuristic")
+	link(org2, "jira:LEAK-1", 8, "native")
+
+	chip := func(number string) model.AIWorkGraphDrilldownRef {
+		return model.AIWorkGraphDrilldownRef{RootType: "pr", RootID: rA + ":" + number, Label: "PR " + number}
+	}
+	recs := []model.AIOpportunity{{WorkGraphDrilldowns: []model.AIWorkGraphDrilldownRef{chip("7"), chip("8"), chip("9")}}}
+	if err := hideUnlinkedPullRequestChips(ctx, client, org1, recs); err != nil {
+		t.Fatal(err)
+	}
+	if got := recs[0].WorkGraphDrilldowns; len(got) != 1 || got[0].RootID != rA+":7" {
+		t.Fatalf("chips = %+v, want only PR 7 (linked in this organization at any tier); 8 is linked in another organization, 9 has no link", got)
+	}
+}

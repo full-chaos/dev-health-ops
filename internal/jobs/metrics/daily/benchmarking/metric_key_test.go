@@ -12,6 +12,9 @@ import (
 
 var sortingKeyOf = regexp.MustCompile(`(?is)CREATE TABLE\s+(?:IF NOT EXISTS\s+)?` + "`?" + `(\w+)` + "`?" + `\s*\(.*?\)\s*ENGINE\s*=.*?\bORDER BY\s+\(([^)]*)\)`)
 
+// modifiedSortingKeyOf is an ALTER TABLE that rewrites the sorting key (migration 141 appends row_view).
+var modifiedSortingKeyOf = regexp.MustCompile(`(?is)ALTER TABLE\s+(\w+)\s[^;]*?MODIFY ORDER BY\s*\(([^)]*)\)`)
+
 // Every metric reads one value per key of its table: InnerGroupColumns is the
 // table's sorting key less org_id, the day and a column the metric selects by
 // a filter. A value column in the group (the team of a testops row) splits a
@@ -36,6 +39,13 @@ func TestEveryMetricGroupsByTheKeyOfItsTable(t *testing.T) {
 	}
 	for _, source := range sources {
 		for _, match := range sortingKeyOf.FindAllStringSubmatch(source, -1) {
+			var columns []string
+			for _, column := range strings.Split(match[2], ",") {
+				columns = append(columns, strings.TrimSpace(column))
+			}
+			keys[match[1]] = columns
+		}
+		for _, match := range modifiedSortingKeyOf.FindAllStringSubmatch(source, -1) {
 			var columns []string
 			for _, column := range strings.Split(match[2], ",") {
 				columns = append(columns, strings.TrimSpace(column))

@@ -22,6 +22,10 @@ func TestAuthServiceRateLimitStoreLoginIsOptionalAndByReference(t *testing.T) {
 	if envNames(at(deployment, "spec", "template", "spec", "containers", 0))["AUTH_VALKEY_URI"] {
 		t.Error("AUTH_VALKEY_URI is set with no authService.valkey.secretName")
 	}
+	// Roll 18 ships with the Secret absent: with the name unset nothing in the render may refer to it.
+	if strings.Contains(out, "AUTH_VALKEY_URI") || strings.Contains(out, "auth-valkey") {
+		t.Error("the render refers to the store Secret although authService.valkey.secretName is unset")
+	}
 	docs, out, err = renderAuth(t, append(append([]string{}, authBase...), authValkey...)...)
 	if err != nil {
 		t.Fatalf("render failed: %v\n%.600s", err, out)

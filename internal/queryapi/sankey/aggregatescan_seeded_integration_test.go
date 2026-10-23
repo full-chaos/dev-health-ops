@@ -117,10 +117,11 @@ CREATE TABLE work_item_state_durations_daily (
   items_touched UInt32,
   avg_wip Float64 DEFAULT 0.0,
   computed_at DateTime('UTC'),
-  org_id String DEFAULT 'default'
+  org_id String DEFAULT 'default',
+  row_view LowCardinality(String)
 ) ENGINE = ReplacingMergeTree(computed_at)
 PARTITION BY toYYYYMM(day)
-ORDER BY (org_id, provider, work_scope_id, team_id, status, day);
+ORDER BY (org_id, provider, work_scope_id, team_id, status, day, row_view);
 
 CREATE TABLE file_metrics_daily (
   repo_id UUID,

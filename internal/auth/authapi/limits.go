@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/netip"
 	"strconv"
+	"strings"
 	"time"
 
 	"golang.org/x/crypto/hkdf"
@@ -106,6 +107,14 @@ type charge struct {
 	key     string
 }
 
+// scopeCodes is the closed set of counter scopes admit accepts, each with the
+// neutral code the store keys on. A route outside it is refused, never counted.
+var scopeCodes = map[string]string{
+	PatternCompatLogin:   "s01",
+	PatternResetPassword: "s02",
+	socialLinkRoute:      "s03",
+}
+
 // admit counts each charge in order and reports whether the request may go
 // on. The first refusal answers 429 and stops (the later limiters do not
 // count it); a store error answers the generic 500 and stops, never a pass.
@@ -113,8 +122,13 @@ type charge struct {
 // counter is scoped to, never the request path, so a path parameter cannot
 // multiply the budget.
 func admit(w http.ResponseWriter, r *http.Request, write httpapi.ErrorWriter, route string, charges ...charge) bool {
+	scope, known := scopeCodes[route]
+	if !known {
+		write(w, r, httpapi.CodeInternal)
+		return false
+	}
 	for _, c := range charges {
-		allowed, err := c.limiter.AllowCounted(r.Context(), c.key, route)
+		allowed, err := c.limiter.AllowCounted(r.Context(), c.key, scope)
 		if err != nil {
 			write(w, r, httpapi.CodeInternal)
 			return false
@@ -145,7 +159,10 @@ func goAPIRefusal(w http.ResponseWriter, _ *http.Request, code httpapi.Code) {
 		w.Header().Set(policy.UnhandledErrorHeader, "1")
 	}
 	w.WriteHeader(status)
-	_, _ = io.WriteString(w, body)
+	// A fixed body with a declared Content-Type (the api adds nosniff); it holds no
+	// request data, so there is nothing for an HTML escape to protect (go-api's
+	// writeFixedBody does the same).
+	_, _ = io.Copy(w, strings.NewReader(body))
 }
 
 // clientKey is the caller address the limits key on (clientaddr resolves it:

@@ -572,3 +572,59 @@ func TestEverySharedRouteRefusesInGoAPIShape(t *testing.T) {
 		t.Errorf("link with the store down answers %d %q, want the service envelope", response.Code, response.Body)
 	}
 }
+
+// The counter scopes are a closed, pinned set with neutral codes: no code
+// names or abbreviates its route, and a route outside the set is refused with
+// the generic 500 and counts nothing.
+func TestCounterScopesAreAClosedSetOfNeutralCodes(t *testing.T) {
+	want := map[string]string{PatternCompatLogin: "s01", PatternResetPassword: "s02", socialLinkRoute: "s03"}
+	if !reflect.DeepEqual(scopeCodes, want) {
+		t.Fatalf("scope codes %v, pinned %v", scopeCodes, want)
+	}
+	seen := map[string]bool{}
+	for route, code := range scopeCodes {
+		if seen[code] {
+			t.Errorf("code %q is not unique", code)
+		}
+		seen[code] = true
+		if len(code) != 3 || code[0] != 's' || strings.Trim(code[1:], "0123456789") != "" {
+			t.Errorf("code %q for %q is not neutral", code, route)
+		}
+	}
+	store := newRecording()
+	compat := newCompatFixture(t)
+	compat.counters = store
+	compat.buildCompat()
+	compat.do(http.MethodPost, PatternCompatLogin, loginBody(compatEmail, "wrong password", ""), nil)
+	if len(store.hits) == 0 {
+		t.Fatal("the login counted nothing")
+	}
+	for _, hit := range store.hits {
+		if hit.Path != "s01" {
+			t.Errorf("hit path %q is not a scope code", hit.Path)
+		}
+	}
+	rec := httptest.NewRecorder()
+	if admit(rec, httptest.NewRequest(http.MethodPost, "/unknown", nil), goAPIRefusal, "/unknown") {
+		t.Fatal("an unknown scope was admitted")
+	}
+	if rec.Code != http.StatusInternalServerError || rec.Body.String() != `{"detail":"Internal Server Error"}` {
+		t.Fatalf("unknown scope = %d %q", rec.Code, rec.Body)
+	}
+}
+
+func TestGoAPIRefusalBodiesAndContentType(t *testing.T) {
+	for code, want := range map[httpapi.Code]struct {
+		status int
+		body   string
+	}{
+		httpapi.CodeRateLimited: {http.StatusTooManyRequests, `{"detail":{"message":"Rate limit exceeded. Please try again later."}}`},
+		httpapi.CodeInternal:    {http.StatusInternalServerError, `{"detail":"Internal Server Error"}`},
+	} {
+		rec := httptest.NewRecorder()
+		goAPIRefusal(rec, httptest.NewRequest(http.MethodPost, PatternCompatLogin, nil), code)
+		if rec.Code != want.status || rec.Body.String() != want.body || rec.Header().Get("Content-Type") != "application/json" {
+			t.Errorf("%s: %d %q %v", code, rec.Code, rec.Body, rec.Header())
+		}
+	}
+}

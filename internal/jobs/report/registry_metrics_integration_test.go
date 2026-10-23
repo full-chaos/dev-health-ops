@@ -114,11 +114,6 @@ func TestClickHouseQueryAdapterChartsEveryRegistryMetric(t *testing.T) {
 			if match == nil || match[1] != read.Version {
 				t.Errorf("tableReads[%s]: version %q, engine says %q", table, read.Version, info.full)
 			}
-			// Migration 141 (CHAOS-8863) appends row_view as the last sorting-key column of three tables. The report
-			// reads only legacy rows until the reader change that takes the view, so its dedup key stays the old key.
-			if n := len(sorting); n > len(read.Key) && sorting[n-1] == "row_view" {
-				sorting = sorting[:n-1]
-			}
 			if strings.Join(sorting, ",") != strings.Join(read.Key, ",") {
 				t.Errorf("tableReads[%s]: key %v, ORDER BY is %v", table, read.Key, sorting)
 			}

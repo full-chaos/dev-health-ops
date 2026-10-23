@@ -60,8 +60,47 @@ type running struct {
 	cancel         context.CancelFunc
 }
 
-// start runs the real service through the shell, as `dho query-api` does.
+// defaultedAddrs names the listeners a start would leave on their DEFAULT address: the query listener (:8090) unless
+// --query-addr or QUERY_API_ADDR is given, the operator listener (:8080) unless --http-addr or DEV_HEALTH_HTTP_ADDR is.
+// A test that starts the service on a default port races every other process on the runner for it (CHAOS-10906).
+func defaultedAddrs(args []string, env map[string]string) []string {
+	given := func(flag, name string) bool {
+		for _, arg := range args {
+			if arg == flag || strings.HasPrefix(arg, flag+"=") {
+				return true
+			}
+		}
+		_, ok := env[name]
+		return ok
+	}
+	var defaulted []string
+	if !given("--query-addr", "QUERY_API_ADDR") {
+		defaulted = append(defaulted, ":8090 (--query-addr / QUERY_API_ADDR)")
+	}
+	if !given("--http-addr", "DEV_HEALTH_HTTP_ADDR") {
+		defaulted = append(defaulted, ":8080 (--http-addr / DEV_HEALTH_HTTP_ADDR)")
+	}
+	return defaulted
+}
+
+// start runs the real service through the shell, as `dho query-api` does. It refuses to run a service that would bind a
+// default port: the test must own free addresses (freeAddr, freeAddrs).
 func start(t *testing.T, args []string, env map[string]string) running {
+	t.Helper()
+	if defaulted := defaultedAddrs(args, env); len(defaulted) > 0 {
+		t.Fatalf("this test would start the service on the default address(es) %v: pass explicit free addresses (freeAddrs), never a fixed default port", defaulted)
+	}
+	return launch(t, args, env)
+}
+
+// startUsageOnly runs the service on arguments that end at argument parsing (a usage error, --help): it never opens a
+// listener, so it needs no address.
+func startUsageOnly(t *testing.T, args []string) running {
+	t.Helper()
+	return launch(t, args, nil)
+}
+
+func launch(t *testing.T, args []string, env map[string]string) running {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -194,7 +233,7 @@ func TestUnknownFlagsAndPositionalArgumentsAreUsageErrors(t *testing.T) {
 		"misspelled option":   {"--query-adr", ":9"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			r := start(t, args, nil)
+			r := startUsageOnly(t, args)
 			select {
 			case code := <-r.done:
 				if code != 2 {
@@ -213,7 +252,7 @@ func TestUnknownFlagsAndPositionalArgumentsAreUsageErrors(t *testing.T) {
 // --help is rendered from the option registry and lists every setting of the service,
 // including the ones that used to be environment-only.
 func TestHelpListsTheServicesOptions(t *testing.T) {
-	r := start(t, []string{"--help"}, nil)
+	r := startUsageOnly(t, []string{"--help"})
 	select {
 	case code := <-r.done:
 		if code != 0 {
@@ -338,9 +377,9 @@ func TestTheMCPListenerStartsOnlyWithItsBoundaryMarker(t *testing.T) {
 		"neither":                           {func(string) []string { return nil }, false, ""},
 	} {
 		t.Run(name, func(t *testing.T) {
-			addrs := freeAddrs(t, 2)
-			mcp, operator := addrs[0], addrs[1]
-			r := start(t, append([]string{"--http-addr", operator}, tc.extra(mcp)...), nil)
+			addrs := freeAddrs(t, 3)
+			mcp, operator, query := addrs[0], addrs[1], addrs[2]
+			r := start(t, append([]string{"--http-addr", operator, "--query-addr", query}, tc.extra(mcp)...), nil)
 			if tc.refuse {
 				select {
 				case code := <-r.done:
@@ -368,20 +407,22 @@ func TestTheMCPListenerStartsOnlyWithItsBoundaryMarker(t *testing.T) {
 }
 
 func TestTheMCPListenerMustNotShareAnAddress(t *testing.T) {
-	for name, args := range map[string]func(string) []string{
-		"query": func(a string) []string {
-			return []string{"--query-addr", a, "--mcp-addr", a, "--mcp-boundary", "networkpolicy"}
+	// Each case shares one address between the MCP listener and the listener it names; the OTHER listeners get free
+	// addresses of their own, so no case relies on a default port.
+	for name, args := range map[string]func(shared string, others []string) []string{
+		"query": func(a string, others []string) []string {
+			return []string{"--query-addr", a, "--mcp-addr", a, "--mcp-boundary", "networkpolicy", "--http-addr", others[0]}
 		},
-		"internal": func(a string) []string {
-			return []string{"--internal-addr", a, "--mcp-addr", a, "--mcp-boundary", "networkpolicy"}
+		"internal": func(a string, others []string) []string {
+			return []string{"--internal-addr", a, "--mcp-addr", a, "--mcp-boundary", "networkpolicy", "--query-addr", others[0], "--http-addr", others[1]}
 		},
-		"operator": func(a string) []string {
-			return []string{"--http-addr", a, "--mcp-addr", a, "--mcp-boundary", "networkpolicy"}
+		"operator": func(a string, others []string) []string {
+			return []string{"--http-addr", a, "--mcp-addr", a, "--mcp-boundary", "networkpolicy", "--query-addr", others[0]}
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			addr := freeAddr(t)
-			r := start(t, args(addr), nil)
+			addrs := freeAddrs(t, 3)
+			r := start(t, args(addrs[0], addrs[1:]), nil)
 			select {
 			case code := <-r.done:
 				if code != 1 || !strings.Contains(r.stderr.String(), "must differ") {
@@ -465,5 +506,27 @@ func TestFreeAddrsAreAlwaysDistinct(t *testing.T) {
 		if addrs[0] == addrs[1] || addrs[1] == addrs[2] || addrs[0] == addrs[2] {
 			t.Fatalf("draw %d returned a repeated address: %v", i, addrs)
 		}
+	}
+}
+
+// The guard is red on a start without explicit addresses, and says which default it would have bound.
+func TestTheStartGuardNamesTheDefaultPortsAStartWouldBind(t *testing.T) {
+	for name, test := range map[string]struct {
+		args []string
+		env  map[string]string
+		want []string
+	}{
+		"nothing given (the shape the MCP table had)": {[]string{"--http-addr", "127.0.0.1:0"}, nil, []string{":8090 (--query-addr / QUERY_API_ADDR)"}},
+		"no address at all":                           {nil, nil, []string{":8090 (--query-addr / QUERY_API_ADDR)", ":8080 (--http-addr / DEV_HEALTH_HTTP_ADDR)"}},
+		"query only":                                  {[]string{"--query-addr", "127.0.0.1:0"}, nil, []string{":8080 (--http-addr / DEV_HEALTH_HTTP_ADDR)"}},
+		"both by flag":                                {[]string{"--query-addr", "127.0.0.1:0", "--http-addr=127.0.0.1:0"}, nil, nil},
+		"both by environment":                         {nil, map[string]string{"QUERY_API_ADDR": "127.0.0.1:0", "DEV_HEALTH_HTTP_ADDR": "127.0.0.1:0"}, nil},
+		"flag and environment mixed":                  {[]string{"--http-addr", "127.0.0.1:0"}, map[string]string{"QUERY_API_ADDR": "127.0.0.1:0"}, nil},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := defaultedAddrs(test.args, test.env); strings.Join(got, "|") != strings.Join(test.want, "|") {
+				t.Fatalf("defaultedAddrs = %q, want %q", got, test.want)
+			}
+		})
 	}
 }

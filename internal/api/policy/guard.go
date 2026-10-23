@@ -91,6 +91,7 @@ func NewGuard(auth *Authenticator, logger *slog.Logger) *Guard {
 
 // Wrap returns next behind level. A refused caller never reaches next.
 func (g *Guard) Wrap(level Authz, next http.Handler) http.Handler {
+	next = countGuardLevel(level, next)
 	if level == Public {
 		return next
 	}
@@ -125,6 +126,7 @@ func (g *Guard) Wrap(level Authz, next http.Handler) http.Handler {
 				acting.OrgID = org
 				user = &acting
 			}
+			countRoleClaim(r.Context(), user)
 			if !user.IsAdmin() {
 				WriteDetail(w, http.StatusForbidden, "Admin access required", nil)
 				return

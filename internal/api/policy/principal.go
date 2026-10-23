@@ -83,7 +83,7 @@ func NewAuthenticator(verifier *edgetoken.Verifier, store Store, logger *slog.Lo
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Authenticator{verifier: verifier, store: store, logger: logger}, nil
+	return &Authenticator{verifier: verifier, store: countStore(store), logger: logger}, nil
 }
 
 // BearerToken is extract_token_from_header: exactly two whitespace-separated

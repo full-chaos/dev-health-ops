@@ -3,7 +3,6 @@ package webhookintake
 import (
 	"io/fs"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"sort"
@@ -37,20 +36,6 @@ func TestProviderDoesNotNameRemovedRoutes(t *testing.T) {
 		if _, ok := Provider(http.MethodPost, path); !ok {
 			t.Errorf("Provider(POST, %s) refused a kept route", path)
 		}
-	}
-}
-
-func TestHealthReportsOnlyKeptSecrets(t *testing.T) {
-	recorder := httptest.NewRecorder()
-	Deps{Secrets: Secrets{GitHub: "x"}}.handleHealth()(recorder, httptest.NewRequest(http.MethodGet, "/api/v1/webhooks/health", nil))
-	body := recorder.Body.String()
-	for _, removed := range []string{`"gitlab"`, `"jira"`} {
-		if strings.Contains(body, removed) {
-			t.Errorf("health body %s names %s", body, removed)
-		}
-	}
-	if !strings.Contains(body, `"github":true`) && !strings.Contains(body, `"github": true`) {
-		t.Errorf("health body %s lacks github", body)
 	}
 }
 

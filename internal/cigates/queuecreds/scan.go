@@ -7,9 +7,7 @@ package queuecreds
 import (
 	"bytes"
 	"encoding"
-	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"go/ast"
 	"go/parser"
@@ -24,6 +22,8 @@ import (
 	"strings"
 	"time"
 	"unicode"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/credshape"
 )
 
 // Finding is one place where the scan found a credential carrier.
@@ -108,102 +108,13 @@ func CredentialName(name string) bool {
 	return true
 }
 
-// ValueScanner matches credential-shaped string values.
-type ValueScanner struct {
-	rules []valueRule
-}
+// ValueScanner matches credential-shaped string values. It is the runtime
+// detector: the job contract decoder refuses the values it matches.
+type ValueScanner = credshape.Scanner
 
-type valueRule struct {
-	name    string
-	pattern *regexp.Regexp
-}
-
-// providerTokenShapes is the one table of provider token prefixes. The value rules
-// are generated from it and so are the probes, so a prefix added here is both
-// matched and probed. Class is the character class of the text after the prefix,
-// Sample a character of that class, Min the shortest tail.
-var providerTokenShapes = []struct {
-	Prefix string
-	Class  string
-	Sample string
-	Min    int
-}{
-	{"ghp_", "[A-Za-z0-9]", "a", 20}, {"gho_", "[A-Za-z0-9]", "a", 20}, {"ghu_", "[A-Za-z0-9]", "a", 20},
-	{"ghs_", "[A-Za-z0-9]", "a", 20}, {"ghr_", "[A-Za-z0-9]", "a", 20},
-	{"github_pat_", "[A-Za-z0-9_]", "a", 20},
-	{"glpat-", "[A-Za-z0-9_-]", "a", 16},
-	{"xoxa-", "[A-Za-z0-9-]", "a", 10}, {"xoxb-", "[A-Za-z0-9-]", "a", 10}, {"xoxp-", "[A-Za-z0-9-]", "a", 10},
-	{"xoxr-", "[A-Za-z0-9-]", "a", 10}, {"xoxs-", "[A-Za-z0-9-]", "a", 10},
-	{"AKIA", "[0-9A-Z]", "A", 16}, {"ASIA", "[0-9A-Z]", "A", 16},
-	{"sk_live_", "[A-Za-z0-9]", "a", 16}, {"rk_live_", "[A-Za-z0-9]", "a", 16},
-}
-
-func providerTokenRules() []valueRule {
-	rules := make([]valueRule, 0, len(providerTokenShapes))
-	for _, shape := range providerTokenShapes {
-		rules = append(rules, valueRule{"provider:" + shape.Prefix,
-			regexp.MustCompile(`\b` + regexp.QuoteMeta(shape.Prefix) + shape.Class + `{` + strconv.Itoa(shape.Min) + `,}`)})
-	}
-	return rules
-}
-
-var staticValueRules = []valueRule{
-	{"jwt", regexp.MustCompile(`eyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]*`)},
-	{"private-key-block", regexp.MustCompile(`-----BEGIN [A-Z ]*(PRIVATE KEY|CERTIFICATE)-----`)},
-	{"url-userinfo", regexp.MustCompile(`[a-zA-Z][a-zA-Z0-9+.-]*://[^/\s:@]+:[^/\s@]+@`)},
-}
-
-// NewValueScanner derives the value rules from the credential-classes contract:
-// every credential_prefix marker becomes a prefix rule, every
-// authorization_scheme marker a scheme rule. The static shapes (JWT, PEM,
-// URL userinfo, provider tokens) are added to them. A contract with no prefix
-// marker is an error: a scan with no auth-derived rule did not measure.
+// NewValueScanner derives the value rules from the credential-classes contract.
 func NewValueScanner(credentialClasses []byte) (*ValueScanner, error) {
-	var contract struct {
-		Classes []struct {
-			Markers []struct {
-				Kind string `json:"kind"`
-				Name string `json:"name"`
-			} `json:"markers"`
-		} `json:"classes"`
-	}
-	if err := json.Unmarshal(credentialClasses, &contract); err != nil {
-		return nil, fmt.Errorf("decode credential classes: %w", err)
-	}
-	prefixes, schemes := map[string]struct{}{}, map[string]struct{}{}
-	for _, class := range contract.Classes {
-		for _, marker := range class.Markers {
-			switch marker.Kind {
-			case "credential_prefix":
-				prefixes[marker.Name] = struct{}{}
-			case "authorization_scheme":
-				schemes[marker.Name] = struct{}{}
-			}
-		}
-	}
-	if len(prefixes) == 0 || len(schemes) == 0 {
-		return nil, errors.New("credential classes carry no credential_prefix or authorization_scheme marker")
-	}
-	scanner := &ValueScanner{rules: append(append([]valueRule(nil), staticValueRules...), providerTokenRules()...)}
-	for _, prefix := range sortedKeys(prefixes) {
-		scanner.rules = append(scanner.rules, valueRule{
-			"prefix:" + prefix, regexp.MustCompile(`(?i)(^|[^A-Za-z0-9])` + regexp.QuoteMeta(prefix) + `[A-Za-z0-9_-]{8,}`)})
-	}
-	for _, scheme := range sortedKeys(schemes) {
-		scanner.rules = append(scanner.rules, valueRule{
-			"scheme:" + scheme, regexp.MustCompile(`(?i)\b` + regexp.QuoteMeta(scheme) + `\s+[A-Za-z0-9._~+/=-]{8,}`)})
-	}
-	return scanner, nil
-}
-
-// Match returns the name of the first rule that matches, or "".
-func (scanner *ValueScanner) Match(value string) string {
-	for _, rule := range scanner.rules {
-		if rule.pattern.MatchString(value) {
-			return rule.name
-		}
-	}
-	return ""
+	return credshape.New(credentialClasses)
 }
 
 func sortedKeys(values map[string]struct{}) []string {
@@ -840,49 +751,13 @@ func embeddedTypeName(expr ast.Expr) string {
 }
 
 // CredentialProbes builds one probe string for every credential shape the
-// value scanner knows: a JWT, each credential_prefix marker followed by hex and
-// by base64url text, each authorization_scheme marker followed by a token, a
-// provider token, a PEM header and a URL with userinfo. The probes are built at
-// run time so no secret-shaped literal sits in the tree.
+// value scanner knows, at run time so no secret-shaped literal sits in the tree.
 func CredentialProbes(credentialClasses []byte) ([]string, error) {
-	scanner, err := NewValueScanner(credentialClasses)
+	scanner, err := credshape.New(credentialClasses)
 	if err != nil {
 		return nil, err
 	}
-	segment := func(text string) string { return base64.RawURLEncoding.EncodeToString([]byte(text)) }
-	hexText := strings.Repeat("0123456789abcdef", 2)
-	urlText := segment("probe-probe-probe-probe-probe-probe")
-	probes := []string{
-		segment(`{"alg":"none"}`) + "." + segment(`{"sub":"probe"}`) + "." + segment("probe-signature"),
-		"-----BEGIN " + "PRIVATE KEY-----",
-		"postgres://user:" + "probe@host/db",
-	}
-	for _, shape := range providerTokenShapes {
-		probes = append(probes, shape.Prefix+strings.Repeat(shape.Sample, shape.Min))
-	}
-	for _, rule := range scanner.rules {
-		if prefix, ok := strings.CutPrefix(rule.name, "prefix:"); ok {
-			probes = append(probes, prefix+hexText, prefix+urlText)
-		}
-		if scheme, ok := strings.CutPrefix(rule.name, "scheme:"); ok {
-			probes = append(probes, scheme+" "+urlText)
-		}
-	}
-	for _, probe := range probes {
-		if scanner.Match(probe) == "" {
-			return nil, fmt.Errorf("probe %q matches no value rule", probe)
-		}
-	}
-	for _, rule := range scanner.rules {
-		covered := false
-		for _, probe := range probes {
-			covered = covered || rule.pattern.MatchString(probe)
-		}
-		if !covered {
-			return nil, fmt.Errorf("value rule %s has no probe", rule.name)
-		}
-	}
-	return probes, nil
+	return scanner.Probes()
 }
 
 var (
@@ -1028,20 +903,18 @@ func AdmittingStrings(root string, probes []string) ([]string, error) {
 	return sortedKeys(admitting), nil
 }
 
-// FreeTextIdentifiers are the two envelope strings that accept any bounded
-// token-shaped text (acp, 2026-10-22). The gate pins this list: a third string
-// that accepts a credential-shaped value, or one of these two that stops
-// accepting it, fails the gate. A runtime value guard is tracked separately.
-var FreeTextIdentifiers = []string{
-	"envelope.schema.json $.properties.correlation_id",
-	"envelope.schema.json $.properties.idempotency_key",
-}
+// FreeTextIdentifiers are the envelope strings that accept a credential-shaped
+// value at decode time. The runtime value guard refuses one in every envelope
+// string, so none is left; the gate pins that the list stays empty.
+var FreeTextIdentifiers = []string{}
 
 // RuntimeBoundStrings accept a credential-shaped value in the JSON schema but
-// not at decode time: jobcontract.Decode requires the value to equal the kind's
-// registered domain_link word. The gate executes that refusal.
+// not at decode time: jobcontract.Decode refuses it through the runtime value
+// guard. The gate executes that refusal for each.
 var RuntimeBoundStrings = []string{
+	"envelope.schema.json $.properties.correlation_id",
 	"envelope.schema.json $.properties.domain.properties.type",
+	"envelope.schema.json $.properties.idempotency_key",
 }
 
 // outputShapeFindings reads the keys of map literals, which become JSON object
@@ -1078,7 +951,7 @@ func (parsed PackageTypes) outputShapeFindings(label string) []Finding {
 // ProviderTokenPrefixes lists the provider token prefixes the value rules and
 // the probes are generated from, with the class and shortest length of the tail.
 func ProviderTokenPrefixes() (prefixes, classes []string, minimums []int) {
-	for _, shape := range providerTokenShapes {
+	for _, shape := range credshape.Shapes() {
 		prefixes, classes, minimums = append(prefixes, shape.Prefix), append(classes, shape.Class), append(minimums, shape.Min)
 	}
 	return prefixes, classes, minimums

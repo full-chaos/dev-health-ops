@@ -104,7 +104,7 @@ type catalogValueRow struct {
 // every other dimension counts distinct values from its event source and
 // applies the filter translation the analytics operations share.
 func CompileCatalogValues(dimension Dimension, limit int, orgID string, timeoutSeconds int, filters *model.FilterInput) (compiledQuery, error) {
-	limitBinding := clickhouse.Binding{Name: "limit", Value: uint32(limit)}
+	limitBinding := clickhouse.Binding{Name: "limit_n", Value: uint32(limit)}
 	orgBinding := clickhouse.Binding{Name: "org_id", Value: orgID}
 
 	useInvestment := dimension == DimensionTheme || dimension == DimensionSubcategory || dimension == DimensionWorkType
@@ -128,7 +128,7 @@ WHERE match(
 )
 GROUP BY canonical_repo
 ORDER BY value
-LIMIT {limit:UInt32}
+LIMIT {limit_n:UInt32}
 %s
 `, settingsMaxExecutionTime(timeoutSeconds))
 		return compiledQuery{sql: sql, bindings: []clickhouse.Binding{limitBinding, orgBinding}}, nil
@@ -157,7 +157,7 @@ LEFT JOIN (
     GROUP BY team_id
 ) AS activity ON activity.team_id = t.id
 ORDER BY count DESC, t.name ASC, t.id ASC
-LIMIT {limit:UInt32}
+LIMIT {limit_n:UInt32}
 %s
 `, workItemCompletionEveryNewestRow, settingsMaxExecutionTime(timeoutSeconds))
 		return compiledQuery{sql: sql, bindings: []clickhouse.Binding{limitBinding, orgBinding}}, nil
@@ -202,7 +202,7 @@ WHERE %[1]s IS NOT NULL
 %[5]s
 GROUP BY value
 ORDER BY count DESC, value ASC
-LIMIT {limit:UInt32}
+LIMIT {limit_n:UInt32}
 %[6]s
 `, dimCol, source, extraClauses, alias, fc.sql, settingsMaxExecutionTime(timeoutSeconds))
 

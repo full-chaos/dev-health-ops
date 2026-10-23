@@ -261,7 +261,7 @@ func TestDecodeErrorsDoNotEchoArgumentValues(t *testing.T) {
 	}
 }
 
-func contractRoot(t *testing.T) string {
+func contractRoot(t testing.TB) string {
 	t.Helper()
 	root, err := filepath.Abs(filepath.Join("..", "..", "contracts", "jobs", "v1"))
 	if err != nil {

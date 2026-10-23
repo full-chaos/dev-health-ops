@@ -33,6 +33,10 @@ const (
 	HeaderSize    = 1 + 8 + BlockSize
 
 	pbkdf2Rounds = 600000
+
+	// maxPlaintext bounds what EncryptToken seals: a stored secret is a few
+	// hundred bytes, and the bound keeps the buffer sizes below from overflowing.
+	maxPlaintext = 1 << 24
 )
 
 // ErrInvalid is every refusal: a missing key, a malformed, forged or
@@ -86,7 +90,7 @@ func (c Cipher) Seal(plaintext []byte, now time.Time, entropy io.Reader) (string
 
 // EncryptToken seals plaintext under a 32-byte key (signing half first).
 func EncryptToken(plaintext, key []byte, now time.Time, entropy io.Reader) (string, error) {
-	if len(key) != 32 || entropy == nil {
+	if len(key) != 32 || entropy == nil || len(plaintext) > maxPlaintext {
 		return "", ErrInvalid
 	}
 	padding := BlockSize - len(plaintext)%BlockSize

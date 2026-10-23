@@ -53,6 +53,13 @@ func TestOpenRefusesAWrongKeyAForgedValueAndAMissingKey(t *testing.T) {
 	}
 }
 
+func TestSealRefusesAnOversizedPlaintext(t *testing.T) {
+	c, _ := fernet.New(testKey, "")
+	if _, err := c.Seal(make([]byte, 1<<24+1), time.Now(), bytes.NewReader(make([]byte, 16))); err == nil {
+		t.Fatal("an oversized plaintext was sealed")
+	}
+}
+
 // The provider credential decryptor is this implementation: what it seals
 // opens here and the reverse.
 func TestProviderCredentialDecryptorSharesTheWireFormat(t *testing.T) {

@@ -48,6 +48,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/aclguard"
 	riverstore "github.com/full-chaos/dev-health-ops/internal/storage/river"
 	"github.com/full-chaos/dev-health-ops/internal/storage/roleacl"
 	"github.com/jackc/pgx/v5"
@@ -234,6 +235,9 @@ func Apply(ctx context.Context, pool interface {
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	run := statementRunner{tx: tx}
+	if err := aclguard.Lock(ctx, tx); err != nil {
+		return fmt.Errorf("%w: cannot take the privilege writer lock", ErrProvisioning)
+	}
 
 	var database string
 	if err := tx.QueryRow(ctx, `SELECT current_database()`).Scan(&database); err != nil {

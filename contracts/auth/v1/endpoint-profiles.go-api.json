@@ -13022,7 +13022,7 @@
     },
     {
       "accepted_credential_classes": [
-        "pagerduty_oauth_credential"
+        "pagerduty_webhook_signature"
       ],
       "classification": "protected",
       "gaps": [],

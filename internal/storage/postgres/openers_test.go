@@ -74,6 +74,7 @@ var openers = map[string]struct {
 	"internal/rivermigrate/roles.go":                   {kindDiscarded, "migrate roles' Authenticate closure: the connect error is inspected for SQLSTATE 28P01 only (a wrong password) and its text is never printed or logged; the message names a role label"},
 	"internal/testsupport/containers/remote.go":        {kindTest, "test containers"},
 	"internal/testsupport/pgschema/pgschema.go":        {kindTest, "test schema helper"},
+	"internal/testsupport/usertokens/usertokens.go":    {kindTest, "user-token proof: a pool that refuses every connection and counts the attempts"},
 	"internal/testsupport/venueoracle/venueoracle.go":  {kindTest, "venue oracle harness"},
 	"internal/testsupport/venueoracle/gosubstrate.go":  {kindTest, "venue oracle harness: the Go-built schema of a frozen venue"},
 	"tests/compatibility/river/go/probe.go":            {kindTest, "compatibility probe"},

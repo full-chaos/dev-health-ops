@@ -32,6 +32,7 @@ internal/api/restcore
 internal/api/session
 internal/api/sessionissue
 internal/api/sso
+internal/api/standinkey
 internal/api/teamsidentity
 internal/api/telemetry
 internal/api/webhookintake
@@ -102,6 +103,7 @@ internal/scheduler/sync
 internal/storage/clickhouse
 internal/storage/clickhouse/liverow
 internal/storage/postgres
+internal/storage/postgres/aclguard
 internal/storage/river
 internal/storage/roleacl
 internal/storage/valkey

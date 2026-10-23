@@ -20,8 +20,13 @@ func TestMetricFromClauseOfWorkItemMetricsTakesTheOrgView(t *testing.T) {
 		!strings.Contains(durations, "GROUP BY day, provider, work_scope_id, team_id, status, row_view") {
 		t.Errorf("the state durations source does not take the org view with row_view in its group: %s", durations)
 	}
-	other := metricFromClause("work_item_user_metrics_daily", "items_completed", "", "start_day", "end_day")
+	users := metricFromClause("work_item_user_metrics_daily", "items_completed", "", "start_day", "end_day")
+	if !strings.Contains(users, "(work_item_user_metrics_daily.row_view IN ('', 'org'))") ||
+		!strings.Contains(users, "GROUP BY day, provider, work_scope_id, user_identity, row_view") {
+		t.Errorf("the user metrics source does not take the org view with row_view in its group: %s", users)
+	}
+	other := metricFromClause("repo_metrics_daily", "pr_first_review_p50_hours", "", "start_day", "end_day")
 	if strings.Contains(other, "row_view") {
-		t.Errorf("a user metrics source mentions row_view before its own reader moves: %s", other)
+		t.Errorf("a table without the view column mentions row_view: %s", other)
 	}
 }

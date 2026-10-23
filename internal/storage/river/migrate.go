@@ -15,6 +15,7 @@ import (
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/rivermigrate"
 
+	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/aclguard"
 	"github.com/full-chaos/dev-health-ops/internal/storage/roleacl"
 )
 
@@ -868,6 +869,9 @@ func validIdentifier(value string) bool {
 }
 
 func applyRuntimeGrants(ctx context.Context, tx pgx.Tx, options MigrationOptions) error {
+	if err := aclguard.Lock(ctx, tx); err != nil {
+		return fmt.Errorf("take the privilege writer lock")
+	}
 	if options.QueryAPIRole != "" {
 		// CHAOS-6804 (lead D2616): the query-api role is provisioned from the SAME
 		// enumeration the readiness check reads. Remove every grant it holds in its

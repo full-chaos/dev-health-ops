@@ -10,6 +10,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/standinkey"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
@@ -60,8 +61,8 @@ const (
 //   - a timestamp older than now - 300 s is a signature error (a future one
 //     is accepted).
 //
-// secret is never empty here: the route refuses an empty webhook secret
-// before verifying (get_webhook_secret).
+// An empty secret is checked against the stand-in key (standinkey), so it never
+// verifies.
 func verifyStripeSignature(payload []byte, header, secret string, now time.Time) error {
 	_, err := classifyStripeSignature(payload, header, secret, now)
 	return err
@@ -70,6 +71,14 @@ func verifyStripeSignature(payload []byte, header, secret string, now time.Time)
 // classifyStripeSignature is verifyStripeSignature with the class of a
 // refusal: the class is set when, and only when, the error is errSignature.
 func classifyStripeSignature(payload []byte, header, secret string, now time.Time) (signatureFailure, error) {
+	return classifyStripeSignatureWithKey(payload, header, standinkey.New(secret).HMACKey, now)
+}
+
+// classifyStripeSignatureWithKey is classifyStripeSignature over the HMAC key derived once when the
+// handler is built (standinkey.Key.HMACKey: at most one SHA-256 block, the stand-in for an absent
+// signing secret). The work is the same for every key: one parse of the header, one HMAC, the compare
+// loop.
+func classifyStripeSignatureWithKey(payload []byte, header string, hmacKey []byte, now time.Time) (signatureFailure, error) {
 	if !utf8.Valid(payload) {
 		return "", errWebhookCrash
 	}
@@ -120,7 +129,7 @@ func classifyStripeSignature(payload []byte, header, secret string, now time.Tim
 			signatures = append(signatures, entry.value)
 		}
 	}
-	mac := hmac.New(sha256.New, []byte(secret))
+	mac := hmac.New(sha256.New, hmacKey)
 	mac.Write([]byte(timestamp.String() + "."))
 	mac.Write(payload)
 	expected := hex.EncodeToString(mac.Sum(nil))

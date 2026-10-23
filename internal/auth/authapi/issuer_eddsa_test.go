@@ -141,7 +141,7 @@ func TestEdDSAAccessTokenRoundTripsUnderBothAudiences(t *testing.T) {
 			now := time.Now().UTC().Truncate(time.Second)
 			issuer.now = func() time.Time { return now }
 			org, principal, sessionID := uuid.New(), uuid.New(), uuid.New()
-			compact, err := issuer.Access(context.Background(), Grant{
+			compact, err := issuer.AccessContext(context.Background(), Grant{
 				PrincipalID: principal, OrganizationID: &org, SessionID: sessionID, Role: "admin",
 				User: UserState{Email: "ada@example.com", IsSuperuser: true, TokenVersion: 4},
 			})
@@ -179,7 +179,7 @@ func TestEdDSAAccessTokenRoundTripsUnderBothAudiences(t *testing.T) {
 func TestEdDSAAccessTokenWithoutAnOrganizationOmitsOrgID(t *testing.T) {
 	signer, _, _ := fileSigner(t)
 	issuer := newEdDSAIssuer(t, signer, testAudience)
-	compact, err := issuer.Access(context.Background(), Grant{PrincipalID: uuid.New(), SessionID: uuid.New()})
+	compact, err := issuer.AccessContext(context.Background(), Grant{PrincipalID: uuid.New(), SessionID: uuid.New()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -196,7 +196,7 @@ func TestEdDSAAccessTokenWithoutAnOrganizationOmitsOrgID(t *testing.T) {
 func TestEdDSAIssuerIsByteExactAboutIss(t *testing.T) {
 	signer, _, _ := fileSigner(t)
 	issuer := newEdDSAIssuer(t, signer, testAudience)
-	compact, err := issuer.Access(context.Background(), Grant{PrincipalID: uuid.New(), SessionID: uuid.New()})
+	compact, err := issuer.AccessContext(context.Background(), Grant{PrincipalID: uuid.New(), SessionID: uuid.New()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -216,7 +216,7 @@ func TestEdDSAIssuerIsByteExactAboutIss(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	compact, err = slashed.Access(context.Background(), Grant{PrincipalID: uuid.New(), SessionID: uuid.New()})
+	compact, err = slashed.AccessContext(context.Background(), Grant{PrincipalID: uuid.New(), SessionID: uuid.New()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -279,7 +279,7 @@ func TestEdDSAIssuerFollowsTheKeySetAcrossMints(t *testing.T) {
 	signer, dir, _ := fileSigner(t)
 	issuer := newEdDSAIssuer(t, signer, testAudience)
 	kid := func() string {
-		compact, err := issuer.Access(context.Background(), Grant{PrincipalID: uuid.New(), SessionID: uuid.New()})
+		compact, err := issuer.AccessContext(context.Background(), Grant{PrincipalID: uuid.New(), SessionID: uuid.New()})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -328,7 +328,7 @@ func TestAnIssuerMintsExactlyOneClassNeverBoth(t *testing.T) {
 	if ed.signer != nil || ed.eddsa == nil {
 		t.Fatal("an EdDSA issuer holds an HS256 signer")
 	}
-	compact, err := ed.Access(context.Background(), grant)
+	compact, err := ed.AccessContext(context.Background(), grant)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -351,7 +351,7 @@ func TestAnIssuerMintsExactlyOneClassNeverBoth(t *testing.T) {
 		t.Fatal("an HS256 issuer holds an EdDSA minter")
 	}
 	counter.calls = 0
-	compact, err = hs.Access(context.Background(), grant)
+	compact, err = hs.AccessContext(context.Background(), grant)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -364,11 +364,11 @@ func TestAnIssuerMintsExactlyOneClassNeverBoth(t *testing.T) {
 
 	both := &Issuer{signer: hs.signer, eddsa: ed.eddsa, verifier: hs.verifier, now: time.Now}
 	counter.calls = 0
-	if token, err := both.Access(context.Background(), grant); err == nil || token != "" || counter.calls != 0 {
+	if token, err := both.AccessContext(context.Background(), grant); err == nil || token != "" || counter.calls != 0 {
 		t.Fatalf("an issuer with both classes minted (%d bytes, err %v, %d signer calls)", len(token), err, counter.calls)
 	}
 	none := &Issuer{verifier: hs.verifier, now: time.Now}
-	if token, err := none.Access(context.Background(), grant); err == nil || token != "" {
+	if token, err := none.AccessContext(context.Background(), grant); err == nil || token != "" {
 		t.Fatalf("an issuer with no class minted (%d bytes, err %v)", len(token), err)
 	}
 }
@@ -391,7 +391,7 @@ func TestEdDSACustodyFailureMintsNothingAndNeverFallsBackToHS256(t *testing.T) {
 	for name, signer := range failures {
 		t.Run(name, func(t *testing.T) {
 			issuer := newEdDSAIssuer(t, signer, testAudience)
-			compact, err := issuer.Access(context.Background(), grant)
+			compact, err := issuer.AccessContext(context.Background(), grant)
 			if err == nil || compact != "" || !errors.Is(err, errIssue) {
 				t.Fatalf("minted %d bytes, err %v; want no token and errIssue", len(compact), err)
 			}
@@ -426,7 +426,7 @@ func TestEdDSAIssuerRefusesWhatCannotFormAUserAccessToken(t *testing.T) {
 		"no session":   {PrincipalID: uuid.New()},
 		"no principal": {SessionID: uuid.New()},
 	} {
-		if compact, err := issuer.Access(context.Background(), grant); err == nil || compact != "" {
+		if compact, err := issuer.AccessContext(context.Background(), grant); err == nil || compact != "" {
 			t.Errorf("%s: minted %d bytes", name, len(compact))
 		}
 	}

@@ -1,7 +1,6 @@
 package authapi
 
 import (
-	"context"
 	"testing"
 
 	"github.com/google/uuid"
@@ -16,7 +15,7 @@ func TestIssuerAccessAlwaysCarriesItsSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	principal, sessionID := uuid.New(), uuid.New()
-	token, err := issuer.Access(context.Background(), Grant{PrincipalID: principal, SessionID: sessionID, Role: "member"})
+	token, err := issuer.Access(Grant{PrincipalID: principal, SessionID: sessionID, Role: "member"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -27,10 +26,10 @@ func TestIssuerAccessAlwaysCarriesItsSession(t *testing.T) {
 	if bearer.SessionID != sessionID || bearer.PrincipalID != principal {
 		t.Fatalf("token names session %s of %s, want %s of %s", bearer.SessionID, bearer.PrincipalID, sessionID, principal)
 	}
-	if token, err := issuer.Access(context.Background(), Grant{PrincipalID: principal, Role: "member"}); err == nil || token != "" {
+	if token, err := issuer.Access(Grant{PrincipalID: principal, Role: "member"}); err == nil || token != "" {
 		t.Fatalf("a grant without a session minted a token (%d bytes, err %v); want none", len(token), err)
 	}
-	if token, err := issuer.Access(context.Background(), Grant{SessionID: sessionID, Role: "member"}); err == nil || token != "" {
+	if token, err := issuer.Access(Grant{SessionID: sessionID, Role: "member"}); err == nil || token != "" {
 		t.Fatalf("a grant without a principal minted a token (%d bytes, err %v); want none", len(token), err)
 	}
 }

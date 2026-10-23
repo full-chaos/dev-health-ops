@@ -23,12 +23,8 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 )
 
-// AccessExpiresIn is refresh-response.v1 expires_in: go-api's accessExpiresIn.
-const AccessExpiresIn = int(edgetoken.AccessLifetime / time.Second)
-
-// Issuer verifies the compatibility access token and mints exactly one class
-// of access token: the HS256 compatibility token (signer set) or the EdDSA
-// access-token.v1 token (eddsa set). The constructors set one, never both.
+// Issuer verifies the HS256 compatibility token and mints exactly one class:
+// signer (HS256) or eddsa (access-token.v1), never both.
 type Issuer struct {
 	signer   *edgetoken.Signer
 	eddsa    *eddsaMinter
@@ -61,9 +57,15 @@ type Grant struct {
 // errIssue wraps a failure to mint an access token.
 var errIssue = errors.New("authapi: access token could not be minted")
 
-// Access mints the access token of grant in the Issuer's one class. A failure
-// of that class is final: there is no fallback to the other class.
-func (i *Issuer) Access(ctx context.Context, grant Grant) (string, error) {
+// Access mints the access token of grant in the Issuer's one class: the same
+// as AccessContext with a context that is never cancelled.
+func (i *Issuer) Access(grant Grant) (string, error) {
+	return i.AccessContext(context.Background(), grant)
+}
+
+// AccessContext mints the access token of grant in the Issuer's one class. A
+// failure of that class is final: there is no fallback to the other class.
+func (i *Issuer) AccessContext(ctx context.Context, grant Grant) (string, error) {
 	// go-api and query-api end a token when its session is revoked (the sid
 	// check in policy.Authenticator), so no token is minted without one.
 	if grant.SessionID == uuid.Nil || grant.PrincipalID == uuid.Nil {

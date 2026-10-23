@@ -238,7 +238,7 @@ func (f *fixture) do(method, path, body string, header map[string]string) *httpt
 }
 
 func (f *fixture) bearer(grant Grant) map[string]string {
-	token, err := f.issuer.Access(context.Background(), grant)
+	token, err := f.issuer.Access(grant)
 	if err != nil {
 		f.t.Fatal(err)
 	}

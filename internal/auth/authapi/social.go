@@ -112,7 +112,7 @@ func (h compatHandlers) socialSignedIn(w http.ResponseWriter, r *http.Request, r
 	if membership != nil {
 		org, role = &membership.OrgID, roleText(membership.Role, true)
 	}
-	access, err := h.Issuer.Access(ctx, Grant{PrincipalID: principalID, OrganizationID: org, Role: role, SessionID: issued.Session.ID, User: user})
+	access, err := h.Issuer.AccessContext(ctx, Grant{PrincipalID: principalID, OrganizationID: org, Role: role, SessionID: issued.Session.ID, User: user})
 	if err != nil {
 		h.fail(w, r, opSocialLogin, err)
 		return

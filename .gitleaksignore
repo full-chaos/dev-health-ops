@@ -3,3 +3,7 @@
 # file:rule:line form so the rows still match after a squash; generic-api-key is suppressed on these two lines only.
 internal/platform/errortext/clause_corpus_test.go:generic-api-key:150
 internal/platform/errortext/clause_corpus_test.go:generic-api-key:153
+# CHAOS-10450: the enum value "hs256_compat" of AUTH_ACCESS_TOKEN_CLASS matches generic-api-key by name shape; it is a class name, not a credential.
+# Commit-less file:rule:line form so the rows still match after a squash; generic-api-key is suppressed on these two lines only.
+internal/auth/authconfig/config.go:generic-api-key:205
+docs/reference/auth/configuration.md:generic-api-key:61

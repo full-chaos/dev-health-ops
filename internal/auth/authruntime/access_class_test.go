@@ -2,6 +2,7 @@ package authruntime
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"testing"
 
@@ -27,7 +28,7 @@ func classConfig(t *testing.T, class string) authconfig.Config {
 		authconfig.EnvAccessTokenClass:    class,
 		authconfig.EnvTokenIssuerURL:      "https://auth.example.test",
 		authconfig.EnvAccessTokenSecret:   "class-test-access-secret-0123456789abcdef",
-		authconfig.EnvSessionSuccessorKey: "Y2xhc3MtdGVzdC1zdWNjZXNzb3Ita2V5LTAwMzItYWI",
+		authconfig.EnvSessionSuccessorKey: base64.RawURLEncoding.EncodeToString([]byte("class-test-successor-key-0032-ab")),
 	})})
 	if err != nil {
 		t.Fatalf("load config: %v", err)
@@ -44,7 +45,7 @@ func TestTheConfiguredAccessTokenClassPicksTheIssuer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if token, err := hs.Access(context.Background(), grant); err != nil || token == "" || stub.calls != 0 {
+	if token, err := hs.AccessContext(context.Background(), grant); err != nil || token == "" || stub.calls != 0 {
 		t.Fatalf("hs256_compat: err %v, %d key-set signer calls", err, stub.calls)
 	}
 
@@ -52,7 +53,7 @@ func TestTheConfiguredAccessTokenClassPicksTheIssuer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if token, err := ed.Access(context.Background(), grant); err == nil || token != "" || stub.calls != 1 {
+	if token, err := ed.AccessContext(context.Background(), grant); err == nil || token != "" || stub.calls != 1 {
 		t.Fatalf("eddsa: minted %q, err %v, %d key-set signer calls; want the signer used once and its failure final", token, err, stub.calls)
 	}
 

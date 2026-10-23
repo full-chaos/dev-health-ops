@@ -345,7 +345,7 @@ func (h compatHandlers) compatRefresh(w http.ResponseWriter, r *http.Request) {
 		}
 		role, orgText = roleText(value, member), record.OrganizationID.String()
 	}
-	access, err := h.Issuer.Access(ctx, Grant{
+	access, err := h.Issuer.AccessContext(ctx, Grant{
 		PrincipalID: record.PrincipalID, OrganizationID: record.OrganizationID, Role: role,
 		SessionID: record.ID, User: user,
 	})

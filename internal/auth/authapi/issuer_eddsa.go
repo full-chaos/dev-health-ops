@@ -14,6 +14,9 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 )
 
+// AccessExpiresIn is refresh-response.v1 expires_in: go-api's accessExpiresIn.
+const AccessExpiresIn = int(edgetoken.AccessLifetime / time.Second)
+
 // EdDSAAccessLifetime is the exp - iat of an EdDSA access token (60 min, the
 // ceiling access-token.v1 allows).
 const EdDSAAccessLifetime = contracts.AccessTokenLifetimeCeiling

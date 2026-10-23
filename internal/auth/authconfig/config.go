@@ -261,7 +261,7 @@ func (c Config) SafeAttrs() []slog.Attr {
 		slog.Int("trusted_proxy_count", c.TrustedProxies.Len()),
 		slog.String("jwt_issuer", c.Session.AccessIssuer),
 		slog.String("jwt_audience", c.Session.AccessAudience),
-		slog.String("access_token_class", c.Session.AccessClass),
+		slog.String("access_class", c.Session.AccessClass),
 	}
 }
 

@@ -41,6 +41,7 @@ var manualInstruments = map[string]struct {
 type sourceFile struct {
 	rel, pkg string
 	ast      *ast.File
+	fset     *token.FileSet
 	src      []byte
 }
 
@@ -69,11 +70,12 @@ func loadSources(t *testing.T, root string) []sourceFile {
 		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
 			return nil
 		}
-		parsed, perr := parser.ParseFile(token.NewFileSet(), path, nil, parser.SkipObjectResolution)
+		fset := token.NewFileSet()
+		parsed, perr := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
 		if perr != nil {
 			return perr
 		}
-		files = append(files, sourceFile{rel: rel, pkg: filepath.ToSlash(filepath.Dir(rel)), ast: parsed})
+		files = append(files, sourceFile{rel: rel, pkg: filepath.ToSlash(filepath.Dir(rel)), ast: parsed, fset: fset})
 		return nil
 	})
 	if err != nil {
@@ -587,7 +589,10 @@ func TestLabelsTableEqualsTheCensus(t *testing.T) {
 		}
 	}
 	for file, want := range manualKeys {
-		got := metricLabelKeys(files, file)
+		got, problems := metricLabelKeys(files, file)
+		for _, problem := range problems {
+			t.Errorf("%s", problem)
+		}
 		if strings.Join(got, ",") != strings.Join(sortedKeys(want), ",") {
 			t.Errorf("%s: its metric.WithAttributes sites carry %v, the manual instruments pin %v", file, got, sortedKeys(want))
 		}
@@ -679,35 +684,54 @@ func fieldOf(key ast.Expr) ast.Expr {
 	return key
 }
 
-// metricLabelKeys is the sorted set of literal label keys at the metric.WithAttributes sites of one file.
-func metricLabelKeys(files []sourceFile, rel string) []string {
+// metricLabelKeys is the sorted set of literal label keys at the metric.WithAttributes sites of one file, and every site it
+// cannot read: it fails closed, so a form the scan does not understand is a test failure, never a skipped key.
+func metricLabelKeys(files []sourceFile, rel string) ([]string, []string) {
 	set := map[string]bool{}
+	var problems []string
 	for _, f := range files {
 		if f.rel != rel {
 			continue
 		}
+		at := func(n ast.Node) string { return f.rel + ":" + strconv.Itoa(f.fset.Position(n.Pos()).Line) }
 		ast.Inspect(f.ast, func(n ast.Node) bool {
 			call, ok := n.(*ast.CallExpr)
 			if !ok {
 				return true
 			}
 			sel, ok := call.Fun.(*ast.SelectorExpr)
-			if !ok || sel.Sel.Name != "WithAttributes" || !isPackageIdent(sel.X, "metric") {
+			if !ok || (sel.Sel.Name != "WithAttributes" && sel.Sel.Name != "WithAttributeSet") {
 				return true
+			}
+			if sel.Sel.Name == "WithAttributeSet" || !isPackageIdent(sel.X, "metric") {
+				problems = append(problems, at(call)+": "+sel.Sel.Name+" on something other than the metric package (or WithAttributeSet): the keys cannot be read")
+				return true
+			}
+			if call.Ellipsis != token.NoPos {
+				problems = append(problems, at(call)+": a spread of label attributes: the keys cannot be read")
 			}
 			for _, arg := range call.Args {
 				inner, ok := arg.(*ast.CallExpr)
-				if !ok || len(inner.Args) == 0 {
+				if !ok {
+					problems = append(problems, at(arg)+": a label attribute that is not a call: the key cannot be read")
 					continue
 				}
-				if key, ok := stringLit(inner.Args[0]); ok {
-					set[key] = true
+				constructor, ok := inner.Fun.(*ast.SelectorExpr)
+				if !ok || !isPackageIdent(constructor.X, "attribute") || len(inner.Args) == 0 {
+					problems = append(problems, at(arg)+": a label attribute that is not attribute.<Kind>(key, value): the key cannot be read")
+					continue
 				}
+				key, ok := stringLit(inner.Args[0])
+				if !ok {
+					problems = append(problems, at(arg)+": a label key that is not a string literal")
+					continue
+				}
+				set[key] = true
 			}
 			return true
 		})
 	}
-	return sortedKeys(set)
+	return sortedKeys(set), problems
 }
 
 func isPackageIdent(e ast.Expr, name string) bool {

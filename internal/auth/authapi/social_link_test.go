@@ -257,7 +257,7 @@ func TestEverySocialLinkAnswerIsADeclaredOpenAPIResponse(t *testing.T) {
 		for _, failure := range failures {
 			f := newFixture(t)
 			routes, err := SocialLinkRoutes(SocialLinkDeps{Sessions: f.sessions, Users: f.users, Issuer: f.issuer,
-				Logger: slog.New(slog.NewJSONHandler(f.logs, nil)), Social: failingLinkDomain{err: failure}})
+				Logger: slog.New(slog.NewJSONHandler(f.logs, nil)), Social: failingLinkDomain{err: failure}, Limits: mustLimits(t, httpapi.NewMemoryCounters(nil))})
 			if err != nil {
 				t.Fatal(err)
 			}

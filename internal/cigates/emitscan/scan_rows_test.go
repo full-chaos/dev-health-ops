@@ -1,6 +1,7 @@
 package emitscan_test
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -112,6 +113,97 @@ func TestConstFixpointBounded(t *testing.T) {
 		}
 		if !strings.Contains(got, "R1") {
 			t.Errorf("%s: rules = %q, want R1", row.id, got)
+		}
+	}
+}
+
+func timed(t *testing.T, id string, limit time.Duration, run func() string) string {
+	t.Helper()
+	start := time.Now()
+	got := run()
+	if elapsed := time.Since(start); elapsed > limit {
+		t.Errorf("%s: took %s, want < %s", id, elapsed, limit)
+	}
+	return got
+}
+
+// A right-nested concatenation must cost linear work, and the key it builds must still be read.
+func TestDeepRightNestedConcatIsLinearAndStillRead(t *testing.T) {
+	parts := strings.Split("api_token", "")
+	expr := `""`
+	for i := 0; i < 30; i++ {
+		expr = `"" + (` + expr + `)`
+	}
+	for i := len(parts) - 1; i >= 0; i-- {
+		expr = fmt.Sprintf(`"%s" + (%s)`, parts[i], expr)
+	}
+	body := "const k = " + expr + "\nfunc f(v string) { _ = attribute.String(k, v) }\n"
+	got := timed(t, "depth 40 concat", 100*time.Millisecond, func() string { return rules(scanSource(t, header+body)) })
+	if !strings.Contains(got, "R1") {
+		t.Errorf("rules = %q, want R1", got)
+	}
+}
+
+// A reverse chain longer than the pass bound must not leave a partial value in a constant built from it.
+func TestLongReverseConstChainSaturatesItsDependants(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("const C0 = C1\n")
+	for i := 1; i < 80; i++ {
+		fmt.Fprintf(&b, "const C%d = C%d\n", i, i+1)
+	}
+	b.WriteString("const C80 = \"api_token\"\nfunc g() { const C1 = \"safe\"; _ = C1 }\nfunc f(v string) { _ = attribute.String(C0, v) }\n")
+	got := timed(t, "reverse chain", 100*time.Millisecond, func() string { return rules(scanSource(t, header+b.String())) })
+	if !strings.Contains(got, "R1") {
+		t.Errorf("rules = %q, want R1", got)
+	}
+}
+
+func TestLongAliasChainIsFast(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("func f(v string) {\n\ta0 := attribute.String\n")
+	for i := 1; i < 2000; i++ {
+		fmt.Fprintf(&b, "\ta%d := a%d\n", i, i-1)
+	}
+	b.WriteString("\t_ = a1999(\"api_token\", v)\n}\n")
+	got := timed(t, "alias chain n=2000", time.Second, func() string { return rules(scanSource(t, header+b.String())) })
+	if !strings.Contains(got, "R1") {
+		t.Errorf("rules = %q, want R1", got)
+	}
+}
+
+func TestACallInSpanKeyPositionIsADynamicKey(t *testing.T) {
+	head := strings.Replace(header, "\"net/http\"", "\"net/http\"\n\t\"fmt\"\n\t\"strings\"", 1)
+	for id, body := range map[string]string{
+		"ToLower of a literal":  "func f(v string) { _ = attribute.String(strings.ToLower(\"API_TOKEN\"), v) }\n",
+		"Sprint of a variable":  "func f(v string, n int) { _ = attribute.String(fmt.Sprint(n), v) }\n",
+		"call under conversion": "func f(v string) { _ = attribute.String(string(strings.ToLower(\"x\")), v) }\n",
+	} {
+		got := scanSource(t, head+body)
+		if len(got) != 1 || got[0].Rule != "R2" || got[0].Detail != "dynamic key" {
+			t.Errorf("%s: findings = %v, want one R2 dynamic key", id, got)
+		}
+	}
+	for id, body := range map[string]string{
+		"conversion of a variable": "func f(v, k string) { _ = attribute.String(string(k), v) }\n",
+		"Itoa of a constant":       "func f(v string) { _ = attribute.String(fmt.Sprint(3), v) }\n",
+	} {
+		if got := scanSource(t, head+body); len(got) != 0 {
+			t.Errorf("%s: findings = %v, want none", id, got)
+		}
+	}
+}
+
+// An expression larger than the work bound is unreadable and must be reported, never skipped.
+func TestOversizedKeyExpressionIsAFinding(t *testing.T) {
+	big := strings.Repeat(`"a" + `, 5000) + `"a"`
+	for id, body := range map[string]string{
+		"const":                         "const k = " + big + "\nfunc f(v string) { _ = attribute.String(k, v) }\n",
+		"const beside a readable value": "const k = \"safe\"\nconst k = " + big + "\nfunc f(v string) { _ = attribute.String(k, v) }\n",
+		"direct":                        "func f(v string) { _ = attribute.String(" + big + ", v) }\n",
+	} {
+		got := timed(t, id, time.Second, func() string { return rules(scanSource(t, header+body)) })
+		if !strings.Contains(got, "R1") {
+			t.Errorf("%s: rules = %q, want R1", id, got)
 		}
 	}
 }

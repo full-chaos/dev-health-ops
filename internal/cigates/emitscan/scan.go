@@ -9,8 +9,8 @@
 // read as a log call, and every argument of it is checked. A same-named non-constructor or a non-logger With is a
 // false finding (noise accepted). Only conversions (string(x), a local string type, attribute.Key(x)) and
 // strconv.Itoa / fmt.Sprint of constants are folded into a key; any other call in key position is a dynamic key (R2 on
-// a metric label). Named limits (not seen by the scan): a constant key taken from another package (for example
-// tracing.StageAttribute); a constructor returned by a function call; a constant whose folding exceeds 8 values, 256 bytes or 64 passes (it is marked saturated and a key that uses it is an R1 finding); and a key that is a variable and not a constant.
+// a metric label or a span attribute). Named limits (not seen by the scan): a constant key taken from another package (for example
+// tracing.StageAttribute); a constructor returned by a function call; a constant whose folding exceeds 8 values, 256 bytes, 64 passes or 4096 expression nodes (it, and every constant built from it, is marked saturated and a key that uses it is an R1 finding); a constructor reached through a function parameter, an append, or a map or struct field read under another name; a constructor converted to a function type (T(attribute.String)); a call through a dereferenced pointer ((*p)(...)); and a key that is a variable and not a constant.
 // The runtime sentinel tests are the primary defence.
 package emitscan
 
@@ -41,9 +41,10 @@ const (
 	RuleDotImport     = "R8" // dot-import of a watched package: its calls cannot be matched
 	RuleUnparsable    = "R0" // a file the scan could not read or parse: always a failure
 	maxMetricLabels   = 6
-	maxConstValues    = 8   // folded values kept per constant name
-	maxConstBytes     = 256 // longest folded value kept
-	maxConstPasses    = 64  // passes of the constant fixpoint
+	maxConstValues    = 8    // folded values kept per constant name
+	maxConstBytes     = 256  // longest folded value kept
+	maxConstPasses    = 64   // passes of the constant fixpoint
+	maxFoldWork       = 4096 // expression nodes one fold may visit before it fails closed
 	rawHandlerAllowed = "internal/platform/logging/"
 )
 
@@ -236,7 +237,14 @@ func packageInfo(group []parsedFile) *pkgInfo {
 							changed = true
 							continue
 						}
-						for _, folded := range foldString(values[i], &foldCtx{consts: info.consts, imports: importsOf(parsed), stringTypes: info.stringTypes}, specIndex) {
+						ctx := newFoldCtx(info.consts, importsOf(parsed), info.stringTypes)
+						folds := foldString(values[i], ctx, specIndex)
+						if ctx.over {
+							saturate(name.Name)
+							changed = true
+							continue
+						}
+						for _, folded := range folds {
 							if contains(info.consts[name.Name], folded) {
 								continue
 							}
@@ -261,6 +269,7 @@ func packageInfo(group []parsedFile) *pkgInfo {
 			break
 		}
 	}
+	info.saturateDependants(group)
 	info.collectAliases(group)
 	for changed := true; changed; {
 		changed = false
@@ -290,6 +299,57 @@ func packageInfo(group []parsedFile) *pkgInfo {
 	return info
 }
 
+// saturateDependants closes saturation over the reference graph of the constants: a constant built, directly or through
+// other constants, from a saturated one is saturated too, whatever partial values it holds.
+func (info *pkgInfo) saturateDependants(group []parsedFile) {
+	dependants := map[string][]string{} // referenced name -> constants whose expression names it
+	for _, parsed := range group {
+		ast.Inspect(parsed.file, func(node ast.Node) bool {
+			gen, ok := node.(*ast.GenDecl)
+			if !ok || gen.Tok != token.CONST {
+				return true
+			}
+			var inherited []ast.Expr
+			for _, spec := range gen.Specs {
+				value := spec.(*ast.ValueSpec)
+				values := value.Values
+				if len(values) == 0 {
+					values = inherited
+				} else {
+					inherited = values
+				}
+				for i, name := range value.Names {
+					if i >= len(values) {
+						continue
+					}
+					ast.Inspect(values[i], func(inner ast.Node) bool {
+						if ident, ok := inner.(*ast.Ident); ok {
+							dependants[ident.Name] = append(dependants[ident.Name], name.Name)
+						}
+						return true
+					})
+				}
+			}
+			return true
+		})
+	}
+	var queue []string
+	for name := range info.saturated {
+		queue = append(queue, name)
+	}
+	for len(queue) > 0 {
+		name := queue[0]
+		queue = queue[1:]
+		for _, dependant := range dependants[name] {
+			if !info.saturated[dependant] {
+				info.saturated[dependant] = true
+				delete(info.consts, dependant)
+				queue = append(queue, dependant)
+			}
+		}
+	}
+}
+
 // refsSaturated reports an expression that names a saturated constant: the constant built from it is saturated too.
 func (info *pkgInfo) refsSaturated(expr ast.Expr) bool {
 	found := false
@@ -316,6 +376,12 @@ type foldCtx struct {
 	consts      map[string][]string
 	imports     map[string]string
 	stringTypes map[string]bool
+	work        int  // nodes still allowed
+	over        bool // the work bound was hit: the result is not trustworthy
+}
+
+func newFoldCtx(consts map[string][]string, imports map[string]string, stringTypes map[string]bool) *foldCtx {
+	return &foldCtx{consts: consts, imports: imports, stringTypes: stringTypes, work: maxFoldWork}
 }
 
 func importsOf(parsed parsedFile) map[string]string { return parsed.imports }
@@ -323,6 +389,10 @@ func importsOf(parsed parsedFile) map[string]string { return parsed.imports }
 // foldString evaluates a string constant expression: literals, constant names, + and conversions (string(x), a local
 // string type, attribute.Key(x)) and strconv.Itoa / fmt.Sprint of a folded argument. Any other call is not folded.
 func foldString(expr ast.Expr, ctx *foldCtx, iota int) []string {
+	if ctx.work--; ctx.work < 0 {
+		ctx.over = true
+		return nil
+	}
 	switch e := expr.(type) {
 	case *ast.BasicLit:
 		if e.Kind == token.STRING {
@@ -348,6 +418,9 @@ func foldString(expr ast.Expr, ctx *foldCtx, iota int) []string {
 			if x, ok := fun.X.(*ast.Ident); ok {
 				switch ctx.imports[x.Name] + "." + fun.Sel.Name {
 				case "attribute.Key", "strconv.Itoa", "fmt.Sprint":
+					if lit, ok := e.Args[0].(*ast.BasicLit); ok && lit.Kind == token.INT {
+						return []string{lit.Value}
+					}
 					return foldString(e.Args[0], ctx, iota)
 				}
 			}
@@ -357,8 +430,9 @@ func foldString(expr ast.Expr, ctx *foldCtx, iota int) []string {
 			return nil
 		}
 		var out []string
-		for _, left := range foldString(e.X, ctx, iota) {
-			for _, right := range foldString(e.Y, ctx, iota) {
+		lefts, rights := foldString(e.X, ctx, iota), foldString(e.Y, ctx, iota)
+		for _, left := range lefts {
+			for _, right := range rights {
 				if len(out) < 8 {
 					out = append(out, left+right)
 				}
@@ -411,22 +485,80 @@ func (info *pkgInfo) collectAliases(group []parsedFile) {
 			return true
 		})
 	}
+	dependents := map[string][]int{} // name -> edges whose right side reads that name's alternatives
+	for index, edge := range edges {
+		for _, name := range readNames(edge.rhs, edge.imports) {
+			dependents[name] = append(dependents[name], index)
+		}
+	}
 	seen := map[string]map[[2]string]bool{}
-	for changed := true; changed; {
-		changed = false
-		for _, edge := range edges {
-			for _, alt := range info.altsOf(edge.rhs, edge.imports) {
-				if seen[edge.name] == nil {
-					seen[edge.name] = map[[2]string]bool{}
-				}
-				if !seen[edge.name][alt] {
-					seen[edge.name][alt] = true
-					info.aliases[edge.name] = append(info.aliases[edge.name], alt)
-					changed = true
+	var queue []int
+	queued := map[int]bool{}
+	for index := range edges {
+		queue = append(queue, index)
+		queued[index] = true
+	}
+	for len(queue) > 0 {
+		index := queue[0]
+		queue = queue[1:]
+		queued[index] = false
+		edge := edges[index]
+		grew := false
+		for _, alt := range info.altsOf(edge.rhs, edge.imports) {
+			if seen[edge.name] == nil {
+				seen[edge.name] = map[[2]string]bool{}
+			}
+			if !seen[edge.name][alt] {
+				seen[edge.name][alt] = true
+				info.aliases[edge.name] = append(info.aliases[edge.name], alt)
+				grew = true
+			}
+		}
+		if grew {
+			for _, dependent := range dependents[edge.name] {
+				if !queued[dependent] {
+					queued[dependent] = true
+					queue = append(queue, dependent)
 				}
 			}
 		}
 	}
+}
+
+// readNames lists the names whose alternatives altsOf reads for an expression: it mirrors altsOf.
+func readNames(expr ast.Expr, imports map[string]string) []string {
+	switch e := expr.(type) {
+	case *ast.ParenExpr:
+		return readNames(e.X, imports)
+	case *ast.StarExpr:
+		return readNames(e.X, imports)
+	case *ast.UnaryExpr:
+		return readNames(e.X, imports)
+	case *ast.IndexExpr:
+		return readNames(e.X, imports)
+	case *ast.Ident:
+		return []string{e.Name}
+	case *ast.SelectorExpr:
+		if x, ok := e.X.(*ast.Ident); ok {
+			if _, imported := imports[x.Name]; imported {
+				return nil
+			}
+		}
+		if e.Sel.Name == "With" {
+			return nil
+		}
+		return []string{e.Sel.Name}
+	case *ast.CompositeLit:
+		var out []string
+		for _, element := range e.Elts {
+			if kv, ok := element.(*ast.KeyValueExpr); ok {
+				element = kv.Value
+			}
+			out = append(out, readNames(element, imports)...)
+		}
+		return out
+	}
+	return nil
 }
 
 // altsOf returns the watched constructors an expression holds: a selector of a watched package, a name already known to
@@ -717,9 +849,13 @@ func unquote(literal string) string {
 
 // keysOf returns the key texts an attribute key expression can hold: a string literal, or a constant (folded across the
 // package, concatenations included). ok is false for any other expression.
-func (s *fileScan) keysOf(expr ast.Expr) ([]string, bool) {
-	values := foldString(expr, &foldCtx{consts: s.pkg.consts, imports: s.imports, stringTypes: s.pkg.stringTypes}, 0)
-	return values, len(values) > 0
+func (s *fileScan) keysOf(expr ast.Expr) (keys []string, ok, over bool) {
+	ctx := newFoldCtx(s.pkg.consts, s.imports, s.pkg.stringTypes)
+	values := foldString(expr, ctx, 0)
+	if ctx.over {
+		return nil, false, true
+	}
+	return values, len(values) > 0, false
 }
 
 // qualified names the package (by its import path's last element, whatever the local alias) and the function of a
@@ -949,8 +1085,8 @@ func (s *fileScan) errorTextValue(expr ast.Expr) bool {
 }
 
 func (s *fileScan) attribute(call *ast.CallExpr, keyExpr, value ast.Expr) {
-	keys, literal := s.keysOf(keyExpr)
-	if !literal && s.unfoldableConst(keyExpr) {
+	keys, literal, over := s.keysOf(keyExpr)
+	if !literal && (over || s.unfoldableConst(keyExpr)) {
 		// a constant (or a conversion of one) the scan cannot fold: fail closed rather than skip
 		s.add(RuleProtectedKey, call.Pos(), "unfoldable const key")
 	}
@@ -967,7 +1103,41 @@ func (s *fileScan) attribute(call *ast.CallExpr, keyExpr, value ast.Expr) {
 	s.emitValue(value, call.Pos())
 	if s.metricAttrs[call] {
 		s.metricLabel(call, keys, literal)
+	} else if !literal && s.dynamicCallInKey(keyExpr) {
+		s.add(RuleMetricLabel, call.Pos(), "dynamic key")
 	}
+}
+
+// dynamicCallInKey reports a key expression with a call that is neither a conversion nor foldable (strings.ToLower(x),
+// fmt.Sprint of a variable): the key text is computed at run time.
+func (s *fileScan) dynamicCallInKey(expr ast.Expr) bool {
+	found := false
+	ast.Inspect(expr, func(node ast.Node) bool {
+		call, ok := node.(*ast.CallExpr)
+		if !ok || found {
+			return !found
+		}
+		if s.isConversion(call) {
+			return true
+		}
+		if len(foldString(call, newFoldCtx(s.pkg.consts, s.imports, s.pkg.stringTypes), 0)) == 0 {
+			found = true
+		}
+		return !found
+	})
+	return found
+}
+
+func (s *fileScan) isConversion(call *ast.CallExpr) bool {
+	switch fun := call.Fun.(type) {
+	case *ast.Ident:
+		return fun.Name == "string" || s.pkg.stringTypes[fun.Name]
+	case *ast.SelectorExpr:
+		if x, ok := fun.X.(*ast.Ident); ok {
+			return s.imports[x.Name]+"."+fun.Sel.Name == "attribute.Key"
+		}
+	}
+	return false
 }
 
 // unfoldableConst reports a key expression that names a package constant yet folds to no text.

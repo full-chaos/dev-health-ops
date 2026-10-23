@@ -142,6 +142,7 @@ internal/cigates/chartgates	overlay_test.go
 internal/cigates/chconstructor	chconstructor_test.go
 internal/cigates/checkgo	check_go_script_test.go
 internal/cigates/checkgo	ci_script_helpers_test.go
+internal/cigates/checkgo	discovery_tree_test.go
 internal/cigates/checkgo	race_solo_load_test.go
 internal/cigates/checkgo	race_solo_test.go
 internal/cigates/chparams	chparams_test.go

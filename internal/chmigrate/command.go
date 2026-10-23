@@ -23,6 +23,16 @@ const ClickHouseURIKey = "CLICKHOUSE_URI"
 // chain file's DDL can run far longer than a query.
 const migrationReadTimeout = 10 * time.Minute
 
+// migrationConfig pins the session settings the migrate verbs need on a server
+// whose default login has no settings profile (ClickHouse Cloud `default`).
+func migrationConfig(dsn string) chstorage.Config {
+	config := chstorage.DefaultConfig(dsn)
+	config.MaxOpenConns, config.MaxIdleConns = 1, 1
+	config.ReadTimeout = migrationReadTimeout
+	config.Settings = map[string]any{"alter_sync": 2, "mutations_sync": 2, "max_execution_time": 0}
+	return config
+}
+
 // Command is the `clickhouse` group of `dho migrate`.
 func Command() cli.Command {
 	return cli.Command{
@@ -106,9 +116,7 @@ func run(ctx context.Context, verb string, env cli.Env) int {
 		return writeError(env.Stderr, "configuration_error", ClickHouseURIKey+" is required")
 	}
 	boundary := secrets.NewBoundary(dsn.Reveal())
-	config := chstorage.DefaultConfig(dsn.Reveal())
-	config.MaxOpenConns, config.MaxIdleConns = 1, 1
-	config.ReadTimeout = migrationReadTimeout
+	config := migrationConfig(dsn.Reveal())
 	conn, err := chstorage.Open(ctx, config)
 	if err != nil {
 		return writeError(env.Stderr, "clickhouse_unavailable", boundary.Redact(err).Error())
@@ -224,9 +232,7 @@ func runRepair(ctx context.Context, env cli.Env) int {
 		return writeError(env.Stderr, "configuration_error", ClickHouseURIKey+" is required")
 	}
 	boundary := secrets.NewBoundary(dsn.Reveal())
-	config := chstorage.DefaultConfig(dsn.Reveal())
-	config.MaxOpenConns, config.MaxIdleConns = 1, 1
-	config.ReadTimeout = migrationReadTimeout
+	config := migrationConfig(dsn.Reveal())
 	conn, err := chstorage.Open(ctx, config)
 	if err != nil {
 		return writeError(env.Stderr, "clickhouse_unavailable", boundary.Redact(err).Error())

@@ -42,7 +42,7 @@ var recordIgnoredWebhookEvent = defaultRecordIgnoredWebhookEvent
 func defaultRecordIgnoredWebhookEvent(ctx context.Context, provider, eventType, deliveryID string) {
 	ignoredWebhookEventCounter.Add(ctx, 1, metric.WithAttributes(
 		attribute.String("provider", provider),
-		attribute.String("event_type", eventType),
+		attribute.String("event_type", webhookEventTypeLabel(eventType)),
 	))
 	slog.InfoContext(ctx, "webhook event has no native handler, ignored",
 		"provider", provider, "event_type", eventType, "delivery_id", deliveryID)

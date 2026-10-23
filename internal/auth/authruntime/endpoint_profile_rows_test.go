@@ -42,7 +42,7 @@ var probeMethods = []string{
 // unreachable, so no probe reaches a store.
 func servedAuthRoutes(t *testing.T) map[string]bool {
 	t.Helper()
-	cfg, err := authconfig.Load(authconfig.Spec{LookupEnv: lookupFrom(compatEnvironment(map[string]string{
+	cfg, err := authconfig.Load(authconfig.Spec{LookupEnv: lookupFrom(ssoEnvironment(compatEnvironment(map[string]string{
 		authconfig.EnvDatabaseURI:        "postgres://auth@127.0.0.1:1/devhealth",
 		authconfig.EnvSigningKeyFile:     "/nonexistent",
 		authconfig.EnvSigningKeyID:       "rows-test",
@@ -51,7 +51,7 @@ func servedAuthRoutes(t *testing.T) map[string]bool {
 		authconfig.EnvAPIAddress:         "127.0.0.1:0",
 		authconfig.EnvOperatorAddress:    "127.0.0.1:1",
 		authconfig.EnvSocialLinkRoutes:   "true",
-	}))})
+	})))})
 	if err != nil {
 		t.Fatalf("load config: %v", err)
 	}
@@ -179,9 +179,9 @@ func TestEveryServedAuthRouteHasAnEndpointProfileRowAndNoRowIsStale(t *testing.T
 }
 
 // servedAuthRouteCount is every route the probe serves: four session routes, two social link routes,
-// four compatibility routes, the session issue route and the three operator
+// four compatibility routes, the session issue route, the eight federated sign-in routes and the three operator
 // paths on GET and HEAD.
-const servedAuthRouteCount = 17
+const servedAuthRouteCount = 25
 
 // compareServedToRows returns the served routes with no row and the rows for
 // routes nothing serves, per method and listener.
@@ -368,5 +368,25 @@ func TestClassConsumersNameEveryAuthRouteThatAcceptsThem(t *testing.T) {
 	}
 	if checked == 0 {
 		t.Fatal("no (route, class) pair was checked: the test measured nothing")
+	}
+}
+
+// TestRowsThatAcceptNoCredentialListNoClass: a row whose rationale says the
+// route accepts no credential lists no accepted class, and the other way
+// round, so a pre-session start route cannot claim a credential it never reads.
+func TestRowsThatAcceptNoCredentialListNoClass(t *testing.T) {
+	checked := 0
+	for _, row := range loadAuthServiceRows(t) {
+		why, _ := row["public_rationale"].(string)
+		classes, _ := row["accepted_credential_classes"].([]any)
+		if strings.Contains(why, "accepts no credential") {
+			checked++
+			if len(classes) != 0 {
+				t.Errorf("row %v says it accepts no credential but lists %v", row["id"], classes)
+			}
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no row says it accepts no credential: the test measured nothing")
 	}
 }

@@ -73,6 +73,7 @@ internal/auth/contracts	schema_dialect_test.go
 internal/auth/contracts	session_goldens_test.go
 internal/auth/contracts	session_hardening_test.go
 internal/auth/contracts	transport_error_goldens_test.go
+internal/auth/contracts	user_token_negative_proof_guard_test.go
 internal/auth/contracts/provisioning	vocabulary_test.go
 internal/auth/contracts/tokencorpus	corpus.go
 internal/auth/contracts/tokencorpus	corpus_test.go
@@ -181,6 +182,8 @@ internal/cigates/docstools	validate_inventory_argparse_test.go
 internal/cigates/docstools	validate_inventory_review.go
 internal/cigates/docstools	validate_inventory_review_cases_test.go
 internal/cigates/emitscan	scan.go
+internal/cigates/frozengoldens	frozengoldens.go
+internal/cigates/frozengoldens	frozengoldens_test.go
 internal/cigates/integrationshards	ci_script_helpers_test.go
 internal/cigates/integrationshards	integration_sharding_test.go
 internal/cigates/livee2e	cli.go
@@ -501,6 +504,7 @@ internal/storage/postgres	posture_cache_cadence_test.go
 internal/storage/postgres	posture_identity_sites_test.go
 internal/storage/postgres	provision_script_integration_test.go
 internal/storage/postgres	venue_posture_coverage_test.go
+internal/storage/postgres/aclguard	census_test.go
 internal/storage/postgres/authschema	grant_shape_contract_test.go
 internal/storedversion	writers_test.go
 internal/streamhandlers	external_clickhouse_test.go

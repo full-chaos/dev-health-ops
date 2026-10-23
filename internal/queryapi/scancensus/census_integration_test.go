@@ -567,9 +567,9 @@ internal/queryapi/operatingreview/operatingreview.go|fetchStateDurations|*string
 internal/queryapi/operatingreview/operatingreview.go|fetchWorkItems|*time.Time,*uint64,*uint64,*uint32,**float64,**float64,**float64,**float64|4e08e84d156f|not-describable
 internal/queryapi/people/metricqueries.go|fetchPersonBreakdown|*string,*float64|a120bde67c22|spliced-select-list
 internal/queryapi/people/metricqueries.go|fetchPersonMetricSeries|*time.Time,*float64|5b284baef0b7|spliced-select-list
-internal/queryapi/people/metricqueries.go|fetchPersonMetricValue|*uint64,*float64|ccfb038cf8cf|spliced-select-list
+internal/queryapi/people/metricqueries.go|fetchPersonMetricValue|*uint64,*float64|677b43a8dae6|spliced-select-list
 internal/queryapi/people/search.go|BuildSearchResponse|*string,*time.Time|d71e6f4a1e39|not-describable
-internal/queryapi/people/summary.go|fetchPersonCollaboration|*string,*string,*float64|d3c2e6e50c4f|not-describable
+internal/queryapi/people/summary.go|fetchPersonCollaboration|*string,*string,*float64|c4424f03eb90|not-describable
 internal/queryapi/producttelemetry/platform.go|LoadOrgNames|*string,*string,*string|64c4ca805d17|not-describable
 internal/queryapi/quadrant/quadrant.go|scanMetricRows|*time.Time,*string,*string,*float64|433c0a3205e2|statement-not-static
 internal/queryapi/reports/reports.go|scanCount|*int64|8d2d39db7d2b|not-describable

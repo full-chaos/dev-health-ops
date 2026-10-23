@@ -32,7 +32,7 @@ func metricFromClause(table, column, scopeFilter, startParam, endParam string) s
 	if !dedup {
 		return table
 	}
-	if table == "work_item_metrics_daily" || table == "work_item_state_durations_daily" {
+	if rowview.Has(table) {
 		// Each item once in the organization (CHAOS-8863): legacy rows and the org view. row_view is part of the
 		// natural key above, so a legacy retraction row never merges with an org row under argMax.
 		scopeFilter += "\n              AND " + rowview.OrgPredicate(table, "")

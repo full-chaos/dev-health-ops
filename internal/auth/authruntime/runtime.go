@@ -419,6 +419,19 @@ func configureWithRoutes(
 		logger.Warn("register OTel instruments on the operator /metrics", "error", err)
 	}
 
+	// The rate-limit counters (store errors and refused hits, by limit id) are
+	// scraped from the operator /metrics: the process installs no OTel meter
+	// provider for them, so this is the one place they are observable.
+	for name, source := range map[string]health.MetricsSource{
+		"api_rate_limit_store":      httpapi.RateLimitStoreErrors,
+		"api_rate_limit_rejections": httpapi.RateLimitRejections,
+	} {
+		if err := registry.RegisterMetrics(name, source); err != nil {
+			closeStore()
+			return nil, err
+		}
+	}
+
 	operatorHTTP, err := health.NewServer(health.ServerOptions{
 		Address:  cfg.OperatorAddress,
 		Registry: registry,

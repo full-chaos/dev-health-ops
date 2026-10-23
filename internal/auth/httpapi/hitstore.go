@@ -185,31 +185,47 @@ func (l *KeyedLimiter) Allow(ctx context.Context, key, path string) (bool, error
 	}
 	count, err := l.store.Increment(ctx, Hit{Limit: l.limit, Key: key, Path: path})
 	if errors.Is(err, ErrPathBound) {
+		RateLimitRejections.inc(l.limit.ID)
 		return false, nil
 	}
 	if err != nil {
 		return false, err
 	}
-	return count <= int64(l.limit.Count), nil
+	allowed := count <= int64(l.limit.Count)
+	if !allowed {
+		RateLimitRejections.inc(l.limit.ID)
+	}
+	return allowed, nil
 }
 
-// StoreErrors counts rate-limit store errors per limit id and writes them in
-// the operator endpoint's Prometheus format (it is a health.MetricsSource).
-// The api process installs no OTel meter provider, so an OTel instrument
-// would count into nothing; this is registered on the operator /metrics
-// instead, where a scrape can alert on it.
-type StoreErrors struct {
-	mu     sync.Mutex
-	counts map[string]uint64
+// LimitCounter counts events per limit id and writes them in the operator
+// endpoint's Prometheus format (it is a health.MetricsSource). The api process
+// installs no OTel meter provider, so an OTel instrument would count into
+// nothing; these are registered on the operator /metrics instead, where a
+// scrape can alert on them. The only label is the limit id.
+type LimitCounter struct {
+	name, help string
+	mu         sync.Mutex
+	counts     map[string]uint64
+}
+
+func newLimitCounter(name, help string) *LimitCounter {
+	return &LimitCounter{name: name, help: help, counts: map[string]uint64{}}
 }
 
 // RateLimitStoreErrors is the process-wide counter LimitWith increments; the
-// api registers it as a metrics source at startup.
-var RateLimitStoreErrors = &StoreErrors{counts: map[string]uint64{}}
+// api and the auth service register it as a metrics source at startup.
+var RateLimitStoreErrors = newLimitCounter("dev_health_api_rate_limit_store_errors_total",
+	"Rate-limit store errors on limited routes; each answered a 500.")
+
+// RateLimitRejections counts the hits a limiter refused (each answered a 429),
+// by limit id. A store error is not a rejection.
+var RateLimitRejections = newLimitCounter("dev_health_api_rate_limit_rejections_total",
+	"Hits refused by a rate limit; each answered a 429.")
 
 // declare makes a limit's series exist at zero, so an alert can be written
 // against the absence of failure and not only the absence of a series.
-func (c *StoreErrors) declare(id string) {
+func (c *LimitCounter) declare(id string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if _, ok := c.counts[id]; !ok {
@@ -217,7 +233,7 @@ func (c *StoreErrors) declare(id string) {
 	}
 }
 
-func (c *StoreErrors) inc(id string) {
+func (c *LimitCounter) inc(id string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.counts[id]++
@@ -225,7 +241,7 @@ func (c *StoreErrors) inc(id string) {
 
 // WritePrometheus implements the operator registry's MetricsSource. Label
 // values are limit ids (fixed, code-defined), never a caller key or a path.
-func (c *StoreErrors) WritePrometheus(w io.Writer) error {
+func (c *LimitCounter) WritePrometheus(w io.Writer) error {
 	c.mu.Lock()
 	ids := make([]string, 0, len(c.counts))
 	for id := range c.counts {
@@ -234,11 +250,10 @@ func (c *StoreErrors) WritePrometheus(w io.Writer) error {
 	sort.Strings(ids)
 	lines := make([]string, len(ids))
 	for i, id := range ids {
-		lines[i] = fmt.Sprintf("dev_health_api_rate_limit_store_errors_total{limit=%s} %d\n", strconv.Quote(id), c.counts[id])
+		lines[i] = fmt.Sprintf("%s{limit=%s} %d\n", c.name, strconv.Quote(id), c.counts[id])
 	}
 	c.mu.Unlock()
-	if _, err := io.WriteString(w, "# HELP dev_health_api_rate_limit_store_errors_total Rate-limit store errors on limited routes; each answered a 500.\n"+
-		"# TYPE dev_health_api_rate_limit_store_errors_total counter\n"); err != nil {
+	if _, err := io.WriteString(w, "# HELP "+c.name+" "+c.help+"\n# TYPE "+c.name+" counter\n"); err != nil {
 		return err
 	}
 	for _, line := range lines {
@@ -249,13 +264,14 @@ func (c *StoreErrors) WritePrometheus(w io.Writer) error {
 	return nil
 }
 
-// Declare makes the limiter's store-error series exist at zero, so an alert
+// Declare makes the limiter's store-error and rejection series exist at zero, so an alert
 // can be written against the absence of failure. LimitWith does it for the
 // limiters it wraps; a handler that calls AllowCounted itself calls it once at
 // construction.
 func (l *KeyedLimiter) Declare() {
 	if l != nil {
 		RateLimitStoreErrors.declare(l.limit.ID)
+		RateLimitRejections.declare(l.limit.ID)
 	}
 }
 

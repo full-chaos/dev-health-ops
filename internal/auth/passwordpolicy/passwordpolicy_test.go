@@ -2,6 +2,7 @@ package passwordpolicy
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -41,5 +42,14 @@ func TestValidate(t *testing.T) {
 func TestEmbeddedDenylistParses(t *testing.T) {
 	if len(loadCommonPasswords()) == 0 {
 		t.Fatal("the embedded denylist parsed to no entries")
+	}
+}
+
+func TestLengthBoundsAre12To128(t *testing.T) {
+	build := func(n int) string { return "A1" + strings.Repeat("b", n-2) }
+	for n, want := range map[int]bool{11: false, 12: true, 128: true, 129: false} {
+		if got := len(Validate(build(n))) == 0; got != want {
+			t.Errorf("Validate of %d characters accepted = %v, want %v", n, got, want)
+		}
 	}
 }

@@ -253,6 +253,10 @@ func TestResetLinkIsSingleUseRevokesSessionsAndIsBoundToItsPurpose(t *testing.T)
 	if long.Code != http.StatusUnprocessableEntity || c.fakes.pwdSet != 0 {
 		t.Fatalf("over-long password = %d", long.Code)
 	}
+	eleven := c.call(http.MethodPost, PatternResetPassword, `{"token":"`+secret+`","new_password":"Aa1-xyzabcd"}`, nil)
+	if eleven.Code != http.StatusUnprocessableEntity || c.fakes.pwdSet != 0 || !strings.Contains(eleven.Body.String(), "at least 12 characters") {
+		t.Fatalf("eleven-character password = %d %s, writes %d; want 422 with the policy violation and the link kept", eleven.Code, eleven.Body, c.fakes.pwdSet)
+	}
 	ok1 := c.call(http.MethodPost, PatternResetPassword, `{"token":"`+secret+`","new_password":"another-password-1"}`, nil)
 	if ok1.Code != http.StatusOK || c.fakes.pwdSet != 1 || c.fakes.revoked != 1 {
 		t.Fatalf("reset: %d, writes %d, revokes %d", ok1.Code, c.fakes.pwdSet, c.fakes.revoked)

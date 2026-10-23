@@ -16,7 +16,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/passwordhash"
-	"github.com/full-chaos/dev-health-ops/internal/auth/passwordpolicy"
 )
 
 const usersPrefix = "/api/v1/admin"
@@ -266,6 +265,9 @@ func (h *handlers) createUser(w http.ResponseWriter, r *http.Request) {
 		policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail(errs), nil)
 		return
 	}
+	if password != "" && refusePasswordPolicy(w, password) {
+		return
+	}
 
 	orgID, scoped := h.createUserOrg(ctx, w, r, caller)
 	if !scoped {
@@ -494,16 +496,7 @@ func (h *handlers) setUserPassword(w http.ResponseWriter, r *http.Request) {
 	input, _ := ctx.Value(setPasswordInputKey{}).(setPasswordInput)
 	adminPassword, newPassword := input.AdminPassword, input.Password
 
-	if violations := passwordpolicy.Validate(newPassword); len(violations) > 0 {
-		detail := pyjson.NewObject()
-		list := make([]pyjson.Value, len(violations))
-		for i, v := range violations {
-			list[i] = v
-		}
-		detail.Set("violations", list)
-		out := pyjson.NewObject()
-		out.Set("detail", detail)
-		policy.WriteJSON(w, http.StatusUnprocessableEntity, out, nil)
+	if refusePasswordPolicy(w, newPassword) {
 		return
 	}
 

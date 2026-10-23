@@ -394,7 +394,7 @@ func TestResetRefusesAnOverlongPasswordBeforeBurningTheCredential(t *testing.T) 
 	rig := newFlowRig(t, true)
 	u := rig.user("r@example.com", true)
 	rig.grant("reset-secret", u.ID)
-	out, err := rig.f.Reset(context.Background(), "reset-secret", strings.Repeat("x", 80))
+	out, err := rig.f.Reset(context.Background(), "reset-secret", "Aa1-"+strings.Repeat("x", 76))
 	if err != nil || out.Kind != FlowPolicy || !reflect.DeepEqual(out.Violations, []string{ViolationTooLong}) {
 		t.Fatalf("Reset = %+v, %v", out, err)
 	}
@@ -583,6 +583,7 @@ func TestRevokeFailureAfterAPasswordChangeIsRetriedAndReported(t *testing.T) {
 func TestPasswordBoundsAreRefusedBeforeAnyConsumeInEveryFlow(t *testing.T) {
 	bounds := map[string]string{
 		"7 characters":   "Aa1-xyz",
+		"11 characters":  "Aa1-xyzabcd",
 		"129 characters": "Aa1-" + strings.Repeat("x", 125),
 		"73 bytes":       "Aa1-" + strings.Repeat("x", 69),
 	}
@@ -620,6 +621,39 @@ func TestPasswordBoundsAreRefusedBeforeAnyConsumeInEveryFlow(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// Reset applies the same password policy as register and change: eleven
+// characters are refused and keep the link usable, twelve are accepted, and
+// bcrypt's 72 bytes are the largest accepted size.
+func TestResetUsesSharedPasswordPolicy(t *testing.T) {
+	cases := []struct {
+		name, password string
+		want           FlowKind
+	}{
+		{"11 characters", "Aa1-xyzabcd", FlowPolicy},
+		{"12 characters", "Aa1-xyzabcde", FlowOK},
+		{"no digit", "Abcdefghijkl", FlowPolicy},
+		{"72 bytes", "Aa1-" + strings.Repeat("x", 68), FlowOK},
+		{"73 bytes", "Aa1-" + strings.Repeat("x", 69), FlowPolicy},
+		{"129 characters", "Aa1-" + strings.Repeat("x", 125), FlowPolicy},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rig := newFlowRig(t, true)
+			u := rig.user("r@example.com", true)
+			rig.grant("reset-secret", u.ID)
+			out, err := rig.f.Reset(context.Background(), "reset-secret", tc.password)
+			if err != nil || out.Kind != tc.want {
+				t.Fatalf("Reset = %+v, %v; want kind %s", out, err, tc.want)
+			}
+			if tc.want == FlowPolicy {
+				if _, ok := rig.links.redeem[sha256.Sum256([]byte("reset-secret"))]; !ok {
+					t.Error("a refused password consumed the link")
+				}
+			}
+		})
 	}
 }
 

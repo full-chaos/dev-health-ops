@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"log/slog"
 	"time"
-	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -36,6 +35,7 @@ const (
 )
 
 // MaxPasswordBytes is bcrypt's limit. A longer password is a policy refusal.
+// It is checked after the shared policy, which counts characters, not bytes.
 const MaxPasswordBytes = 72
 
 // ViolationTooLong is the violation of a password over MaxPasswordBytes.
@@ -160,28 +160,28 @@ func (f *Flows) issueAndSend(ctx context.Context, principal uuid.UUID, purpose P
 	return nil
 }
 
-// Password bounds, in code points and bytes. go-api's reset model required 8
-// to 128 characters; bcrypt reads at most 72 bytes.
-const (
-	minPasswordRunes = 8
-	maxPasswordRunes = 128
-)
-
-// passwordRefusal is the one password policy of the flows that set a password,
-// applied before anything is consumed or written. strength adds the strength
-// policy that go-api applies on register and change (its violations come
-// first); every flow gets the bounds.
-func passwordRefusal(password string, strength bool) []string {
-	if strength {
-		if v := passwordpolicy.Validate(password); len(v) > 0 {
-			return v
-		}
-	}
-	switch n := utf8.RuneCountInString(password); {
-	case n < minPasswordRunes:
-		return []string{"Password must be at least 8 characters long"}
-	case n > maxPasswordRunes:
-		return []string{"Password must be no more than 128 characters long"}
+// passwordRefusal is the one password policy of the flows that set a
+// password: passwordpolicy.Validate (length, letter, digit, denylist), then
+// bcrypt's 72-byte limit. It runs before anything is consumed or written.
+// Every path that sets a password applies the same rule, so a password that
+// registration refuses is refused on reset and change too:
+//   - Register, Reset and Change call this function;
+//   - the go-api session routes call passwordpolicy.Validate directly;
+//   - the admin set-password and create-user routes and the admin CLI do too.
+//
+// The bounds are passwordpolicy's own (12 to 128 characters). The request
+// model's looser 8 to 128 check runs first in the handlers and only decides
+// the shape of a length error; it never accepts what the policy refuses.
+// A violation list is returned in the policy's order, then the byte limit.
+// Sign-in never calls this: it compares a stored hash, so an account whose
+// password predates the policy still signs in.
+// Violation strings are the ones go-api returned on register and change,
+// so a client that parses them sees no new text for the same mistake.
+// A password over the byte limit gets ViolationTooLong, in the same
+// violation list shape as a policy violation.
+func passwordRefusal(password string) []string {
+	if v := passwordpolicy.Validate(password); len(v) > 0 {
+		return v
 	}
 	if len(password) > MaxPasswordBytes {
 		return []string{ViolationTooLong}
@@ -198,7 +198,7 @@ func (f *Flows) Register(ctx context.Context, req RegisterRequest) (FlowOutcome,
 	if err != nil {
 		return FlowOutcome{}, fmt.Errorf("local: %w", err)
 	}
-	if v := passwordRefusal(req.Password, true); v != nil {
+	if v := passwordRefusal(req.Password); v != nil {
 		return FlowOutcome{Kind: FlowPolicy, Violations: v}, nil
 	}
 	existing, err := f.accounts.ByEmail(ctx, email)
@@ -279,9 +279,9 @@ func (f *Flows) Reset(ctx context.Context, secret, newPassword string) (FlowOutc
 	if err := f.gate(); err != nil {
 		return FlowOutcome{}, err
 	}
-	// go-api applies no strength policy on reset beyond the model's length.
-	// The refusal comes before the consume, so the link stays usable.
-	if v := passwordRefusal(newPassword, false); v != nil {
+	// The shared policy applies on reset as on register and change; the
+	// refusal comes before the consume, so the link stays usable.
+	if v := passwordRefusal(newPassword); v != nil {
 		return FlowOutcome{Kind: FlowPolicy, Violations: v}, nil
 	}
 	id, ok, err := f.links.Redeem(ctx, RedeemRequest{Purpose: PurposePasswordReset, TokenHash: sha256.Sum256([]byte(secret))})
@@ -333,7 +333,7 @@ func (f *Flows) Change(ctx context.Context, req ChangeRequest) (FlowOutcome, err
 	if req.Impersonated {
 		return FlowOutcome{Kind: FlowNotAllowed}, nil
 	}
-	if v := passwordRefusal(req.New, true); v != nil {
+	if v := passwordRefusal(req.New); v != nil {
 		return FlowOutcome{Kind: FlowPolicy, Violations: v}, nil
 	}
 	var out FlowOutcome

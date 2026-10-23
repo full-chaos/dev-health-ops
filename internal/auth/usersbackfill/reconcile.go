@@ -134,13 +134,14 @@ func Reconcile(ctx context.Context, src Source, tgt Target, batch int) (Reconcil
 			return rep, nil
 		case haveRow && (!haveAuth || bytes.Compare(row.ID[:], a.ID[:]) < 0):
 			rep.Seen++
-			_, skip, notCarried := Map(row)
+			skips, _, _, notCarried := rowFacts(row)
 			if notCarried {
 				rep.IdentityNotCarried++
 			}
-			if skip != "" {
-				rep.Diffs[skip]++
-			} else {
+			for _, class := range skips {
+				rep.Diffs[class]++
+			}
+			if len(skips) == 0 {
 				rep.Diffs[DiffMissingInAuth]++
 			}
 			pub.advance()
@@ -160,17 +161,37 @@ func Reconcile(ctx context.Context, src Source, tgt Target, batch int) (Reconcil
 	}
 }
 
+// rowFacts is what a public row expects of the auth schema, whatever else is
+// wrong with the row: the backfill skip classes it falls into (the hash and the
+// identity are judged independently), its write target, and its social identity
+// read from the row itself rather than from the mapper's early return.
+func rowFacts(row Row) (skips []string, target identity.BackfillTarget, key *identity.ExternalKey, notCarried bool) {
+	target, hashSkip, _ := Map(row)
+	if hashSkip != "" {
+		skips = append(skips, hashSkip)
+	}
+	key, idSkip, notCarried := mapIdentity(row)
+	if idSkip != "" && idSkip != hashSkip {
+		skips = append(skips, idSkip)
+	}
+	return skips, target, key, notCarried
+}
+
 func compareOne(ctx context.Context, tgt Target, row Row, a AuthRow, rep *Reconciliation) error {
-	target, skip, notCarried := Map(row)
+	skips, target, key, notCarried := rowFacts(row)
 	if notCarried {
 		rep.IdentityNotCarried++
 	}
-	var classes []string
-	if skip != "" {
-		classes = append(classes, skip)
-	}
-	if a.Kind != "user" || !a.HasUser {
+	classes := append([]string(nil), skips...)
+	if a.Kind != "user" {
 		classes = append(classes, DiffPrincipalKind)
+	}
+	// Every independent field is compared on any matched row that has an
+	// auth.users row, whatever its principal kind or skip class.
+	if !a.HasUser {
+		if a.Kind == "user" {
+			classes = append(classes, DiffPrincipalKind)
+		}
 	} else {
 		if a.Email != row.Email || a.EmailLower != identity.StoredLoginKey(row.Email) {
 			classes = append(classes, DiffEmail)
@@ -182,7 +203,7 @@ func compareOne(ctx context.Context, tgt Target, row Row, a AuthRow, rep *Reconc
 			classes = append(classes, DiffVerified)
 		}
 		// An unmappable verifier is its own skip class, not a password diff.
-		if skip != SkipUnknownHashFormat && differsString(a.PasswordHash, target.PasswordHash) {
+		if !contains(skips, SkipUnknownHashFormat) && differsString(a.PasswordHash, target.PasswordHash) {
 			classes = append(classes, DiffPasswordHash)
 		}
 		if (row.Superuser && !a.RoleHeld) || (!row.Superuser && a.RoleBackfilled) {
@@ -191,8 +212,8 @@ func compareOne(ctx context.Context, tgt Target, row Row, a AuthRow, rep *Reconc
 		if a.TokenVersion != row.TokenVersion {
 			classes = append(classes, DiffTokenVersion)
 		}
-		if target.Identity != nil {
-			holder, found, err := tgt.IdentityHolder(ctx, *target.Identity)
+		if key != nil {
+			holder, found, err := tgt.IdentityHolder(ctx, *key)
 			if err != nil {
 				return err
 			}
@@ -218,6 +239,15 @@ func compareOne(ctx context.Context, tgt Target, row Row, a AuthRow, rep *Reconc
 		rep.Diffs[c]++
 	}
 	return nil
+}
+
+func contains(list []string, v string) bool {
+	for _, x := range list {
+		if x == v {
+			return true
+		}
+	}
+	return false
 }
 
 func differsString(a, b *string) bool {

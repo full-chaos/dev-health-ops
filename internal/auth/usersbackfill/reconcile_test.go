@@ -320,3 +320,56 @@ func TestReconcileLinesAreStableAndListEveryGatedClass(t *testing.T) {
 		t.Fatalf("lines:\n%s", strings.Join(lines, "\n"))
 	}
 }
+
+// A matched row whose auth principal has the wrong kind still has every
+// independent field compared.
+func TestReconcileWrongKindWithAUsersRowStillComparesOtherFields(t *testing.T) {
+	row, auth := pair(t)
+	auth.Kind = "service_account"
+	auth.Active = false
+	auth.TokenVersion = 9
+	rep := reconcile(t, []Row{row}, []AuthRow{auth}, nil)
+	if rep.Diffs[DiffPrincipalKind] != 1 || rep.Diffs[DiffActive] != 1 || rep.Diffs[DiffTokenVersion] != 1 || rep.GatedTotal() != 3 || rep.Matched != 0 {
+		t.Fatalf("%+v", rep.Diffs)
+	}
+}
+
+// The wrong kind without a users row has no fields to compare: one class.
+func TestReconcileWrongKindWithoutAUsersRowIsOneClass(t *testing.T) {
+	for _, kind := range []string{"service_account", "user"} {
+		row, auth := pair(t)
+		auth.Kind, auth.HasUser = kind, false
+		rep := reconcile(t, []Row{row}, []AuthRow{auth}, nil)
+		if rep.Diffs[DiffPrincipalKind] != 1 || rep.GatedTotal() != 1 {
+			t.Errorf("kind %s without a users row: %+v", kind, rep.Diffs)
+		}
+	}
+}
+
+// An unreadable verifier does not hide a valid identity the auth user lacks,
+// and the identity is judged from the public row, not from the mapper's early return.
+func TestReconcileUnknownHashStillChecksAValidIdentity(t *testing.T) {
+	row, auth := pair(t)
+	row.PasswordHash = str("not-a-bcrypt-verifier")
+	row.AuthProvider, row.AuthProviderID = str("github"), str("subject-1")
+	rep := reconcile(t, []Row{row}, []AuthRow{auth}, &fakeTarget{holders: map[identity.ExternalKey]uuid.UUID{}})
+	if rep.Diffs[SkipUnknownHashFormat] != 1 || rep.Diffs[DiffIdentityMissing] != 1 || rep.GatedTotal() != 2 {
+		t.Fatalf("%+v", rep.Diffs)
+	}
+	key := identity.ExternalKey{Issuer: "https://github.com", Provider: identity.ProviderGitHub, Subject: "subject-1"}
+	rep = reconcile(t, []Row{row}, []AuthRow{auth}, &fakeTarget{holders: map[identity.ExternalKey]uuid.UUID{key: uuid.New()}})
+	if rep.Diffs[SkipUnknownHashFormat] != 1 || rep.Diffs[DiffIdentityConflict] != 1 || rep.GatedTotal() != 2 {
+		t.Fatalf("conflict: %+v", rep.Diffs)
+	}
+}
+
+// Both skip classes are reported when a row falls into both.
+func TestReconcileRowInBothSkipClassesCountsBoth(t *testing.T) {
+	row, _ := pair(t)
+	row.PasswordHash = str("not-a-bcrypt-verifier")
+	row.AuthProvider, row.AuthProviderID = str("github"), str("")
+	rep := reconcile(t, []Row{row}, nil, nil)
+	if rep.Diffs[SkipUnknownHashFormat] != 1 || rep.Diffs[SkipInvalidIdentity] != 1 || rep.Diffs[DiffMissingInAuth] != 0 || rep.GatedTotal() != 2 {
+		t.Fatalf("%+v", rep.Diffs)
+	}
+}

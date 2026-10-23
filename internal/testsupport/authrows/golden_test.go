@@ -3,6 +3,7 @@ package authrows
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -144,6 +145,22 @@ func TestEveryProjectedTableIsAGoldenComparison(t *testing.T) {
 	}
 }
 
+func TestQuirkExtraRowsAreLimitedToTheirCount(t *testing.T) {
+	golden := goldenRows(t)
+	acp := acpRows(t, golden)
+	l, err := NewLedger(forwarded(t, "sessions,local_login,social"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dup := `<nil>pia@example.comloginsessionuser:pia@example.comUser logged in{}{"ip_address": "203.0.113.7", "user_agent": "venue-oracle/1"}success<null>`
+	if !strings.Contains(acp[TableAuditLogs], dup) {
+		t.Fatal("the expected orgless sign-in row changed")
+	}
+	if problems := l.Compare(TableAuditLogs, golden[TableAuditLogs], acp[TableAuditLogs]+rowSeparator+dup); len(problems) == 0 {
+		t.Fatal("a second orgless sign-in row was accepted")
+	}
+}
+
 func TestScriptExportsTheForwardedSetTheTestReads(t *testing.T) {
 	raw, err := os.ReadFile(repoFile(t, "ci", "auth_corpus_external.sh"))
 	if err != nil {
@@ -161,5 +178,27 @@ func TestScriptExportsTheForwardedSetTheTestReads(t *testing.T) {
 	run := strings.Index(script, "go test -trimpath -tags integration")
 	if export < 0 || run < 0 || export > run {
 		t.Errorf("the script must export %s before the corpus runs (export at %d, go test at %d)", EnvForwarded, export, run)
+	}
+}
+
+func TestScriptExportedValueIsTheForwardedSet(t *testing.T) {
+	raw, err := os.ReadFile(repoFile(t, "ci", "auth_corpus_external.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var assign string
+	for _, line := range strings.Split(string(raw), "\n") {
+		if strings.HasPrefix(line, EnvForwarded+"=") {
+			assign = line
+		}
+	}
+	if assign == "" {
+		t.Fatalf("the script does not assign %s", EnvForwarded)
+	}
+	for _, c := range []struct{ array, want string }{{"", ""}, {"sessions", "sessions"}, {"sessions local_login social", "sessions,local_login,social"}} {
+		out, err := exec.Command("bash", "-c", "FORWARDED=("+c.array+"); "+assign+`; printf '%s' "$`+EnvForwarded+`"`).Output()
+		if err != nil || string(out) != c.want {
+			t.Errorf("FORWARDED=(%s) exports %q (%v), want %q", c.array, out, err, c.want)
+		}
 	}
 }

@@ -24,6 +24,7 @@ var Quirks = []Quirk{
 	{
 		ID: "audit-login-without-organization-recorded", Kind: Deliberate, Table: TableAuditLogs, Needs: []Aggregate{LocalLogin},
 		Reason: "auth-service audits every sign-in, with a NULL organization when the user has none; go-api writes an audit row only for a sign-in that resolves an organization",
+		Max:    1,
 		Extra: func(line string) bool {
 			return loginNoOrg.MatchString(line)
 		},

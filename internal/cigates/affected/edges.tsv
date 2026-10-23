@@ -187,6 +187,7 @@ internal/synccli	local_oracle_integration_test.go	unexpressed
 internal/syncdispatchruntime	log_error_text_test.go	internal/syncdispatchruntime
 internal/syncdispatchruntime	post_sync_failure_test.go	unexpressed
 internal/syncdispatchruntime/synclog	synclog_test.go	internal/syncdispatchruntime/synclog
+internal/testsupport/authrows	golden_test.go	unexpressed
 internal/testsupport/goldenscan	vectors_test.go	unexpressed
 internal/testsupport/proxycapture	proxycapture_test.go	unexpressed
 internal/testsupport/ratchet	ratchet.go	unexpressed

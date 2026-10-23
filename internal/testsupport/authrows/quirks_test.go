@@ -18,11 +18,12 @@ func TestQuirkTableIsWellFormed(t *testing.T) {
 		{ID: "e", Kind: Deliberate, Reason: "r", Table: TableUsers, Extra: func(string) bool { return true }},
 		{ID: "f", Kind: Deliberate, Reason: "r", Table: TableUsers, Needs: []Aggregate{"nope"}, Extra: func(string) bool { return true }},
 		{ID: "g", Kind: Deliberate, Reason: "r", Table: TableUsers, Needs: []Aggregate{Sessions}},
+		{ID: "h", Kind: Deliberate, Reason: "r", Table: TableUsers, Needs: []Aggregate{Sessions}, Extra: func(string) bool { return true }},
 		{ID: "g", Kind: Deliberate, Reason: "r", Table: TableUsers, Needs: []Aggregate{Sessions},
 			Extra: func(string) bool { return true }, Rewrite: func(l string) (string, bool) { return l, true }},
 	}
 	problems := CheckTable(bad)
-	for _, want := range []string{"no id", "a: kind", "b: no reason", "c: a gap names", "d: table", "e: needs no aggregate", "f: \"nope\"", "g: exactly one", "g: id repeated"} {
+	for _, want := range []string{"no id", "a: kind", "b: no reason", "c: a gap names", "d: table", "e: needs no aggregate", "f: \"nope\"", "g: exactly one", "g: id repeated", "h: an extra-row quirk sets Max"} {
 		found := false
 		for _, p := range problems {
 			found = found || strings.Contains(p, want)
@@ -39,7 +40,7 @@ func testTable() []Quirk {
 			Rewrite: func(line string) (string, bool) {
 				return strings.Replace(line, "old", "new", 1), strings.Contains(line, "old")
 			}},
-		{ID: "more", Kind: Deliberate, Reason: "r", Table: TableUsers, Needs: []Aggregate{LocalLogin},
+		{ID: "more", Kind: Deliberate, Reason: "r", Table: TableUsers, Needs: []Aggregate{LocalLogin}, Max: 1,
 			Extra: func(line string) bool { return strings.HasPrefix(line, "extra") }},
 	}
 }

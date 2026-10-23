@@ -35,6 +35,8 @@ type Quirk struct {
 	Rewrite func(line string) (rewritten string, ok bool)
 	// Extra is true for a line only the ACP target holds.
 	Extra func(line string) bool
+	// Max is how many rows an Extra quirk may cover in one run; a row beyond it is unclassified.
+	Max int
 }
 
 // CheckTable is every way table is malformed, in the order of the table.
@@ -69,6 +71,12 @@ func CheckTable(table []Quirk) []string {
 			if !isAggregate(a) {
 				problems = append(problems, fmt.Sprintf("%s: %q is not an aggregate", q.ID, a))
 			}
+		}
+		if q.Extra != nil && q.Max < 1 {
+			problems = append(problems, q.ID+": an extra-row quirk sets Max, the rows it may cover")
+		}
+		if q.Extra == nil && q.Max != 0 {
+			problems = append(problems, q.ID+": only an extra-row quirk sets Max")
 		}
 		if (q.Rewrite == nil) == (q.Extra == nil) {
 			problems = append(problems, q.ID+": exactly one of Rewrite and Extra is set")
@@ -147,7 +155,7 @@ func (l *Ledger) Compare(table, golden, acp string) []string {
 		for acpOnly[line] > 0 {
 			covered := false
 			for _, q := range l.table {
-				if q.Table == table && q.live(l.forwarded) && q.Extra != nil && q.Extra(line) {
+				if q.Table == table && q.live(l.forwarded) && q.Extra != nil && l.covered[q.ID] < q.Max && q.Extra(line) {
 					acpOnly[line]--
 					l.covered[q.ID]++
 					covered = true

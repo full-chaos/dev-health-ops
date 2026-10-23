@@ -148,7 +148,7 @@ func githubProjectV2ItemSubject(item gitHubProjectV2ItemPayload) (githubProjectV
 // implementation; tests substitute a fixed prior-state double so the pure
 // diff below is provable without a live ClickHouse.
 type githubProjectV2SnapshotDiffReader interface {
-	PriorActiveSubjects(ctx context.Context, orgID, projectScopeID string) ([]githubProjectV2SnapshotSubject, error)
+	PriorActiveSubjects(ctx context.Context, orgID string, projectScopeIDs []string) (map[string][]githubProjectV2SnapshotSubject, error)
 }
 
 // GitHubProjectV2SnapshotDiffClickHouseReader answers "what does the table
@@ -188,51 +188,79 @@ type githubProjectV2SnapshotDiffReader interface {
 // dedicated backfill pass over the column arm, not a change to this query.
 type GitHubProjectV2SnapshotDiffClickHouseReader struct{ Conn driver.Conn }
 
-// gitHubProjectV2PriorActiveSubjectsQuery reproduces, for ONE project, exactly
-// the `project_membership_presence` view's own `touched`/`latest_membership`
-// computation (migration 077): among every row that TOUCHES this project from
-// either side (from_project_id = ? OR to_project_id = ?), the latest one by
-// (occurred_at, event_id) decides the subject's membership, and it is active
-// here iff that latest row's own to_project_id is this project. FINAL is
+// gitHubProjectV2PriorActiveSubjectsQuery reproduces, for every listed project
+// at once, exactly the `project_membership_presence` view's own
+// `touched`/`latest_membership` computation (migration 077): among every row
+// that TOUCHES a project from either side (from_project_id or to_project_id),
+// the latest one by (occurred_at, event_id) decides the subject's membership
+// in that project, and it is active there iff that latest row's own
+// to_project_id is that project. ARRAY JOIN gives a row that touches two
+// listed projects one group in each, as the one-project read gave it. FINAL is
 // load-bearing for the identical reason the view's own comment gives: argMax
 // over (occurred_at, event_id) is deterministic only because that pair is
 // unique within a group, which FINAL plus the sorting key provide.
 const gitHubProjectV2PriorActiveSubjectsQuery = `
-SELECT subject_kind, repo_id, subject_id FROM (
-    SELECT subject_kind, repo_id, subject_id,
+SELECT project_id, subject_kind, repo_id, subject_id FROM (
+    SELECT project_id, subject_kind, repo_id, subject_id,
            argMax(to_project_id, (occurred_at, event_id)) AS latest_to_project_id
     FROM project_membership_transitions FINAL
-    WHERE org_id = ? AND provider = 'github' AND (from_project_id = ? OR to_project_id = ?)
-    GROUP BY subject_kind, repo_id, subject_id
-) WHERE latest_to_project_id = ?`
+    ARRAY JOIN arrayDistinct(arrayFilter(x -> has(?, x), [from_project_id, to_project_id])) AS project_id
+    WHERE org_id = ? AND provider = 'github' AND (has(?, from_project_id) OR has(?, to_project_id))
+    GROUP BY project_id, subject_kind, repo_id, subject_id
+) WHERE latest_to_project_id = project_id`
+
+// gitHubProjectV2PriorActiveProjectsPerStatement bounds the project list of
+// one prior-state read.
+const gitHubProjectV2PriorActiveProjectsPerStatement = 500
 
 func (reader GitHubProjectV2SnapshotDiffClickHouseReader) PriorActiveSubjects(
-	ctx context.Context, orgID, projectScopeID string,
-) ([]githubProjectV2SnapshotSubject, error) {
-	if reader.Conn == nil || ctx == nil || strings.TrimSpace(orgID) == "" ||
-		strings.TrimSpace(projectScopeID) == "" {
+	ctx context.Context, orgID string, projectScopeIDs []string,
+) (map[string][]githubProjectV2SnapshotSubject, error) {
+	if reader.Conn == nil || ctx == nil || strings.TrimSpace(orgID) == "" {
 		return nil, ErrInvalidConfiguration
 	}
-	result, err := reader.Conn.Query(
-		ctx, gitHubProjectV2PriorActiveSubjectsQuery,
-		orgID, projectScopeID, projectScopeID, projectScopeID,
-	)
-	if err != nil {
-		return nil, err
+	unique := make([]string, 0, len(projectScopeIDs))
+	seen := make(map[string]struct{}, len(projectScopeIDs))
+	for _, id := range projectScopeIDs {
+		if strings.TrimSpace(id) == "" {
+			return nil, ErrInvalidConfiguration
+		}
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		unique = append(unique, id)
 	}
-	defer result.Close()
-	subjects := []githubProjectV2SnapshotSubject{}
-	for result.Next() {
-		var subject githubProjectV2SnapshotSubject
-		if err := result.Scan(&subject.SubjectKind, &subject.RepoID, &subject.SubjectID); err != nil {
+	subjects := make(map[string][]githubProjectV2SnapshotSubject, len(unique))
+	for start := 0; start < len(unique); start += gitHubProjectV2PriorActiveProjectsPerStatement {
+		chunk := unique[start:min(start+gitHubProjectV2PriorActiveProjectsPerStatement, len(unique))]
+		if err := reader.readPriorActive(ctx, orgID, chunk, subjects); err != nil {
 			return nil, err
 		}
-		subjects = append(subjects, subject)
-	}
-	if err := result.Err(); err != nil {
-		return nil, err
 	}
 	return subjects, nil
+}
+
+func (reader GitHubProjectV2SnapshotDiffClickHouseReader) readPriorActive(
+	ctx context.Context, orgID string, projectScopeIDs []string, into map[string][]githubProjectV2SnapshotSubject,
+) error {
+	result, err := reader.Conn.Query(
+		ctx, gitHubProjectV2PriorActiveSubjectsQuery,
+		projectScopeIDs, orgID, projectScopeIDs, projectScopeIDs,
+	)
+	if err != nil {
+		return err
+	}
+	defer result.Close()
+	for result.Next() {
+		var projectID string
+		var subject githubProjectV2SnapshotSubject
+		if err := result.Scan(&projectID, &subject.SubjectKind, &subject.RepoID, &subject.SubjectID); err != nil {
+			return err
+		}
+		into[projectID] = append(into[projectID], subject)
+	}
+	return result.Err()
 }
 
 // githubProjectV2SnapshotDiffCounts is the observable half of the diff --
@@ -325,13 +353,22 @@ func resolveGitHubProjectV2SnapshotDiff(
 ) ([]projectmembership.Row, error) {
 	rows := []projectmembership.Row{}
 	totals := githubProjectV2SnapshotDiffCounts{}
+	projectScopeIDs := make([]string, 0, len(snapshots))
 	for _, snapshot := range snapshots {
-		prior, err := reader.PriorActiveSubjects(ctx, claim.OrgID, snapshot.ProjectScopeID)
+		projectScopeIDs = append(projectScopeIDs, snapshot.ProjectScopeID)
+	}
+	priorByProject := map[string][]githubProjectV2SnapshotSubject{}
+	if len(snapshots) > 0 {
+		var err error
+		priorByProject, err = reader.PriorActiveSubjects(ctx, claim.OrgID, projectScopeIDs)
 		if err != nil {
 			return nil, err
 		}
+	}
+	for _, snapshot := range snapshots {
 		diffRows, counts := diffGitHubProjectV2Snapshot(
-			claim, snapshot.ProjectScopeID, snapshot.Subjects, prior, snapshot.Complete, normalizedAt,
+			claim, snapshot.ProjectScopeID, snapshot.Subjects, priorByProject[snapshot.ProjectScopeID],
+			snapshot.Complete, normalizedAt,
 		)
 		rows = append(rows, diffRows...)
 		totals.IssueAdditions += counts.IssueAdditions

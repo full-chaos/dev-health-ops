@@ -344,3 +344,44 @@ func TestTheRowSchemaRejectsARowWithoutAcceptedCredentialClasses(t *testing.T) {
 		}
 	}
 }
+
+// TestTheRealDeviceCodeAndTokenExchangePairHasAValidInventoryRow validates the row acr publishes for POST
+// /api/v1/oauth/token (the two body-credential classes, picked by Content-Type) against the row schema and the
+// selector gate on the real registry. The wire profile cannot list the exchange class; the inventory row can.
+func TestTheRealDeviceCodeAndTokenExchangePairHasAValidInventoryRow(t *testing.T) {
+	resolved, _ := resolveEndpointProfileSchema(t)
+	document := loadQueryAPIDocument(t)
+	var template map[string]any
+	for _, item := range document["rows"].([]any) {
+		if row := item.(map[string]any); row["class_disambiguator"] != nil {
+			template = row
+			break
+		}
+	}
+	if template == nil {
+		t.Fatal("no multi-class row to clone")
+	}
+	encoded, err := json.Marshal(template)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var row map[string]any
+	if err := json.Unmarshal(encoded, &row); err != nil {
+		t.Fatal(err)
+	}
+	row["id"] = "acr-post-api-v1-oauth-token"
+	row["method"] = "POST"
+	row["route"] = "/api/v1/oauth/token"
+	row["accepted_credential_classes"] = []any{"acr_device_flow_code", "acr_workload_identity_exchange"}
+	row["class_disambiguator"] = map[string]any{"kind": "content_type", "name": "application/json"}
+	for _, key := range []string{"tokens", "token", "access_token_validation", "token_shape"} {
+		delete(row, key)
+	}
+	document["rows"] = append(document["rows"].([]any), row)
+	if err := resolved.Validate(document); err != nil {
+		t.Fatalf("the row schema refused the device-code and token-exchange row: %v", err)
+	}
+	if err := CheckClassSelector(row, realRegistry(t)); err != nil {
+		t.Fatalf("the selector gate refused the device-code and token-exchange row: %v", err)
+	}
+}

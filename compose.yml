@@ -83,13 +83,25 @@ x-go-worker-flag:
   # anywhere under the stream runner's code, now internal/streamrunnerservice).
   log-level: &flag-log-level "--log-level=${LOG_LEVEL:-info}"
 
-# The coordinator group is all-or-none: a service that does not claim
-# coordinator work blanks all four values, merged ahead of the base.
+# A Go worker service carries only the Postgres connection groups its process
+# class reads: river workers (heavy, ops, sync, sync-provider) the domain and
+# queue groups; stream runners the domain group; the reconciler, the scheduler
+# and the route-activate one-shots all three. The base below holds all three;
+# a class that does not read a group takes it back to empty through one of the
+# two anchors here, merged ahead of the base. A group is all-or-none: blank all
+# four values, never HOST alone (a part-set group is a configuration_error).
+# cmd/dho/compose_dsn_class_test.go holds each service to its class.
 x-go-worker-no-coordinator: &go-worker-no-coordinator
   DEV_HEALTH_PG_COORDINATOR_HOST: ""
   DEV_HEALTH_PG_COORDINATOR_PORT: ""
   DEV_HEALTH_PG_COORDINATOR_USER: ""
   DEV_HEALTH_PG_COORDINATOR_PASSWORD: ""
+
+x-go-worker-no-queue: &go-worker-no-queue
+  DEV_HEALTH_PG_QUEUE_HOST: ""
+  DEV_HEALTH_PG_QUEUE_PORT: ""
+  DEV_HEALTH_PG_QUEUE_USER: ""
+  DEV_HEALTH_PG_QUEUE_PASSWORD: ""
 
 x-go-worker-env-base: &go-worker-env-base
   # CHAOS-5568: component form, not a pre-built URI. `POSTGRES_URI`/
@@ -139,18 +151,14 @@ x-go-worker-env-base: &go-worker-env-base
   # provider-sync handler construction fails closed without it. Shared with
   # go-api and query-api via the `x-settings-encryption-key` anchor above, so
   # the value stays byte-identical between the workers and the two planes.
-  # Found by executing the required readyz proof rather than
-  # by inspection): go-worker/go-worker-heavy/go-worker-ops claim
-  # work_graph_execution_requests rows via a coordinator-role connection
-  # (matches the bigboy overlay's own CHAOS-5133 comment) -- without this
-  # in the shared base, sync crash-looped with "worker family builder
-  # failed... syncCoordinator... worker readiness dependency is
-  # unavailable" instead of the expected live-but-unready shape. Default
-  # here, not just on go-reconciler/go-scheduler. The three stream services
-  # take the four values back to empty through `x-go-worker-no-coordinator`
-  # (merged BEFORE this base, so it wins). All four, never HOST alone: the
-  # config loader refuses a part-set group (PORT, USER or PASSWORD set while
-  # HOST is empty is a configuration_error), CHAOS-8599.
+  # Coordinator group: read only by the reconciler, the scheduler and the
+  # `workers` verbs (internal/reconcilerservice, internal/schedulerservice,
+  # internal/workersctl open a coordinator pool). A River worker opens the
+  # domain and queue pools only (internal/workerservice openWorkerDatabase), so
+  # the four River services take the coordinator values back to empty through
+  # `x-go-worker-no-coordinator` (merged BEFORE this base, so it wins). The
+  # stream services also take the queue group back to empty
+  # (`x-go-worker-no-queue`): a stream runner opens the domain pool only.
   DEV_HEALTH_PG_COORDINATOR_HOST: pgbouncer-river-coordinator
   DEV_HEALTH_PG_COORDINATOR_PORT: "6434"
   DEV_HEALTH_PG_COORDINATOR_USER: ${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}
@@ -963,7 +971,7 @@ services:
       - *flag-domain-pooler
       - *flag-log-level
     environment: &go-worker-env
-      <<: *go-worker-env-base
+      <<: [*go-worker-no-coordinator, *go-worker-env-base]
       # Investment shadow categorization (default off; empty = unset). Only this
       # group runs investment.materialize, so the switch and the TypeSafe key
       # are set here and on no other worker: the other groups declare their own
@@ -1030,7 +1038,7 @@ services:
       pgbouncer-river-coordinator:
         condition: service_healthy
     environment:
-      <<: *go-worker-env-base
+      <<: [*go-worker-no-coordinator, *go-worker-env-base]
     stop_grace_period: 960s
 
   # This worker group selects both registered sync queues. Its queue set is
@@ -1063,7 +1071,7 @@ services:
       pgbouncer-river-coordinator:
         condition: service_healthy
     environment:
-      <<: *go-worker-env-base
+      <<: [*go-worker-no-coordinator, *go-worker-env-base]
     stop_grace_period: 960s
 
   # sync_provider is its own process, exactly as the Celery fleet splits
@@ -1099,7 +1107,7 @@ services:
       pgbouncer-river-coordinator:
         condition: service_healthy
     environment:
-      <<: *go-worker-env-base
+      <<: [*go-worker-no-coordinator, *go-worker-env-base]
     stop_grace_period: 960s
 
   # The Go api (`dho api`, the operator image: no new build, no new image) with
@@ -1777,10 +1785,11 @@ services:
       pgbouncer-river-queue:
         condition: service_healthy
     environment:
-      <<: [*go-worker-no-coordinator, *go-worker-env-base]
+      <<: [*go-worker-no-coordinator, *go-worker-no-queue, *go-worker-env-base]
       # Not a River-queue consumer, no coordinator-claim path: the stream
-      # runner opens the domain pool only. All four coordinator values are
-      # blank (see x-go-worker-no-coordinator), never HOST alone.
+      # runner opens the domain pool only. All four queue values and all four
+      # coordinator values are blank (see x-go-worker-no-queue and
+      # x-go-worker-no-coordinator), never HOST alone.
     stop_grace_period: 60s
 
   go-stream-ingest:
@@ -1815,10 +1824,11 @@ services:
       pgbouncer-river-queue:
         condition: service_healthy
     environment:
-      <<: [*go-worker-no-coordinator, *go-worker-env-base]
+      <<: [*go-worker-no-coordinator, *go-worker-no-queue, *go-worker-env-base]
       # Not a River-queue consumer, no coordinator-claim path: the stream
-      # runner opens the domain pool only. All four coordinator values are
-      # blank (see x-go-worker-no-coordinator), never HOST alone.
+      # runner opens the domain pool only. All four queue values and all four
+      # coordinator values are blank (see x-go-worker-no-queue and
+      # x-go-worker-no-coordinator), never HOST alone.
     stop_grace_period: 60s
 
   # PagerDuty webhook delivery is independently routable from dataset sync,
@@ -1856,10 +1866,11 @@ services:
       pgbouncer-river-queue:
         condition: service_healthy
     environment:
-      <<: [*go-worker-no-coordinator, *go-worker-env-base]
+      <<: [*go-worker-no-coordinator, *go-worker-no-queue, *go-worker-env-base]
       # Not a River-queue consumer, no coordinator-claim path: the stream
-      # runner opens the domain pool only. All four coordinator values are
-      # blank (see x-go-worker-no-coordinator), never HOST alone.
+      # runner opens the domain pool only. All four queue values and all four
+      # coordinator values are blank (see x-go-worker-no-queue and
+      # x-go-worker-no-coordinator), never HOST alone.
     stop_grace_period: 60s
 
   # ---------------------------------------------------------------------------

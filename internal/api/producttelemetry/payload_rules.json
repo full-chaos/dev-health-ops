@@ -260,7 +260,7 @@
    "ok": false
   },
   {
-   "name": "empty",
+   "name": "empty (the pattern refuses it; the intake maps it to the anonymous stream before the pattern)",
    "value": "",
    "ok": false
   },

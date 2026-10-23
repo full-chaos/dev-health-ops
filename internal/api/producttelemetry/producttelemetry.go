@@ -316,7 +316,8 @@ func optionalString(problems *[]pybody.Error, object *pyjson.Object, prefix []py
 // not that shape is an envelope error of the whole batch.
 func boundedOrgIDHash(problems *[]pybody.Error, object *pyjson.Object, prefix []pyjson.Value, alias, name string) (*string, bool) {
 	text, ok := optionalString(problems, object, prefix, alias, name)
-	if !ok || text == nil || ruleOrgIDHash.MatchString(*text) {
+	// The empty string names the anonymous stream, as it always did: no new key.
+	if !ok || text == nil || *text == "" || ruleOrgIDHash.MatchString(*text) {
 		return text, ok
 	}
 	_, key, _ := field(object, alias, name)

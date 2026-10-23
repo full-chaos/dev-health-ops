@@ -222,7 +222,6 @@ func TestABadOrgHashCreatesNoKey(t *testing.T) {
 	for _, tc := range []struct{ name, body string }{
 		{"top level, plain text", `{"orgIdHash":"acme","events":[` + validEvent + `]}`},
 		{"top level, snake case alias", `{"org_id_hash":"acme","events":[` + validEvent + `]}`},
-		{"top level, empty", `{"orgIdHash":"","events":[` + validEvent + `]}`},
 		{"top level, path", `{"orgIdHash":"../x","events":[` + validEvent + `]}`},
 		{"top level, lone surrogate", `{"orgIdHash":"\ud800","events":[` + validEvent + `]}`},
 		{"top level, paired surrogates", `{"orgIdHash":"😀","events":[` + validEvent + `]}`},
@@ -282,5 +281,14 @@ func TestAStructureErrorOfAPayloadStaysAWholeBatch422(t *testing.T) {
 	recorder := post(t, streams, logs, `{"events":[`+eventWith(1, `{"a":"ok"}`)+`,`+eventWith(2, `{"a":["x"]}`)+`]}`)
 	if recorder.Code != http.StatusUnprocessableEntity || len(streams.appended) != 0 {
 		t.Fatalf("status = %d, appends = %v, want 422 and no write", recorder.Code, streams.appended)
+	}
+}
+
+// The empty org hash names the anonymous stream, as before: it creates no new key.
+func TestAnEmptyOrgHashStaysTheAnonymousStream(t *testing.T) {
+	streams, logs := &recordingStreams{}, &bytes.Buffer{}
+	recorder := post(t, streams, logs, `{"orgIdHash":"","events":[`+validEvent+`]}`)
+	if recorder.Code != http.StatusAccepted || !strings.Contains(recorder.Body.String(), `"stream":"product-telemetry:anonymous:events"`) {
+		t.Fatalf("status = %d, body %s", recorder.Code, recorder.Body.String())
 	}
 }

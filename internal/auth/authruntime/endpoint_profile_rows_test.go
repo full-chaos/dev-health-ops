@@ -51,6 +51,7 @@ func servedAuthRoutes(t *testing.T) map[string]bool {
 		authconfig.EnvAPIAddress:         "127.0.0.1:0",
 		authconfig.EnvOperatorAddress:    "127.0.0.1:1",
 		authconfig.EnvSocialLinkRoutes:   "true",
+		authconfig.EnvUsersOwned:         "true",
 	})))})
 	if err != nil {
 		t.Fatalf("load config: %v", err)
@@ -95,7 +96,11 @@ func servedAuthRoutes(t *testing.T) map[string]bool {
 	if err != nil {
 		t.Fatalf("sessionRoutes: %v", err)
 	}
-	for _, route := range routes {
+	credentials, _, err := credentialRoutes(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), pool, schema)
+	if err != nil {
+		t.Fatalf("credentialRoutes: %v", err)
+	}
+	for _, route := range append(routes, credentials...) {
 		registered["api"] = append(registered["api"], route.Pattern)
 	}
 	fset := token.NewFileSet()
@@ -179,9 +184,9 @@ func TestEveryServedAuthRouteHasAnEndpointProfileRowAndNoRowIsStale(t *testing.T
 }
 
 // servedAuthRouteCount is every route the probe serves: four session routes, two social link routes,
-// four compatibility routes, the session issue route, the eight federated sign-in routes and the three operator
+// four compatibility routes, the session issue route, the eight federated sign-in routes, the five credentials routes and the three operator
 // paths on GET and HEAD.
-const servedAuthRouteCount = 25
+const servedAuthRouteCount = 30
 
 // compareServedToRows returns the served routes with no row and the rows for
 // routes nothing serves, per method and listener.
@@ -280,6 +285,9 @@ func TestAuthEndpointProfileAnchorsStillPointAtTheirSymbols(t *testing.T) {
 		"/api/v1/auth/logout": "PatternCompatLogout", "/api/v1/auth/social-login": "PatternCompatSocialLogin",
 		"/internal/v1/sessions": "PatternIssueSession",
 		"/v1/identities/social": "PatternSocialLink", "/v1/identities/social/{id}": "PatternSocialUnlink",
+		"/api/v1/auth/verify": "PatternVerifyEmail", "/api/v1/auth/resend-verification": "PatternResendVerification",
+		"/api/v1/auth/forgot-password": "PatternForgotPassword", "/api/v1/auth/reset-password": "PatternResetPassword",
+		"/api/v1/auth/change-password": "PatternChangePassword",
 	}
 	checked := 0
 	var walk func(node any, where string)

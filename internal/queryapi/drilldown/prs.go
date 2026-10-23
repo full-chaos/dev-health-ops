@@ -153,7 +153,7 @@ WHERE pr.created_at >= {start_ts:DateTime64(3, 'UTC')}
   )
 %s
 ORDER BY pr.created_at DESC
-LIMIT {limit:UInt64}
+LIMIT {limit_n:UInt64}
 %s
 `
 
@@ -186,7 +186,7 @@ func BuildPRsResponse(ctx context.Context, reader *Reader, orgID string, params 
 		{Name: "start_ts", Value: params.StartDay},
 		{Name: "end_ts", Value: params.EndDay},
 		{Name: "org_id", Value: orgID},
-		{Name: "limit", Value: params.Limit},
+		{Name: "limit_n", Value: params.Limit},
 	}, scopeBindings...)
 
 	rows, err := reader.client.Query(ctx, query, bindings)

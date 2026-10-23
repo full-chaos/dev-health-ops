@@ -69,14 +69,14 @@ func TestReviewEdgesMatchesTheFrozenGolden(t *testing.T) {
 			params := map[string]any{}
 			limit := -1
 			for _, b := range client.bindings {
-				if b.Name == "limit" {
+				if b.Name == "limit_n" {
 					limit = b.Value.(int)
 					continue
 				}
 				params[b.Name] = b.Value
 			}
 			statement := strings.Join(strings.Fields(client.statement), " ")
-			statement = strings.Replace(statement, "{limit:UInt64}", fmt.Sprint(limit), 1)
+			statement = strings.Replace(statement, "{limit_n:UInt64}", fmt.Sprint(limit), 1)
 			statement = stripGoOnlyFragments(t, statement)
 			if statement != tc.PythonQuery {
 				t.Errorf("query text differs from the golden:\n got  %s\n want %s", statement, tc.PythonQuery)

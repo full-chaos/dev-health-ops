@@ -16,6 +16,7 @@ import (
 	"time"
 
 	clickhouse "github.com/ClickHouse/clickhouse-go/v2"
+	"github.com/full-chaos/dev-health-ops/internal/platform/dsnclass"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/platform/queuecontrol"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
@@ -706,14 +707,7 @@ func Load(spec Spec) (Config, error) {
 	}
 	cfg.TelemetryEndpoint = envOrDefault(lookup, "TELEMETRY_ENDPOINT", "")
 	cfg.TelemetryInstanceID = envOrDefault(lookup, "INSTANCE_ID", "unknown")
-	postgresSchemes := []string{
-		"postgres",
-		"postgresql",
-		"postgres+asyncpg",
-		"postgresql+asyncpg",
-		"postgresql+psycopg",
-		"postgresql+psycopg2",
-	}
+	postgresSchemes := dsnclass.PostgresSchemes()
 	if err := validateURI("POSTGRES_URI", cfg.DomainDatabaseURI, postgresSchemes...); err != nil {
 		return Config{}, err
 	}

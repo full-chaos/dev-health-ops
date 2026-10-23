@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -254,7 +255,7 @@ func NewStrandRepair(
 		return nil, ErrInvalidConfiguration
 	}
 	jobTable := pgx.Identifier{riverSchema, "river_job"}.Sanitize()
-	client, err := river.NewClient(riverpgxv5.New(queueControlPool), &river.Config{Schema: riverSchema})
+	client, err := river.NewClient(riverpgxv5.New(queueControlPool), &river.Config{Schema: riverSchema, Logger: slog.Default()})
 	if err != nil {
 		return nil, ErrInvalidConfiguration
 	}

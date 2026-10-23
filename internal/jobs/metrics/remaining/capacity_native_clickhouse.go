@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"regexp"
 	"strings"
 	"time"
 
@@ -15,15 +14,31 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/numerical"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/rowview"
+	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/engineclause"
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
 // The capacity reads, ported from capacity_queries.py.
 //
-// All three go through work_item_metrics_daily FINAL. FINAL is Python's choice
-// and is reproduced rather than improved on: that table is a ReplacingMergeTree
-// and dropping FINAL would read superseded rows, which is the same class of
-// silent divergence the DORA ordering contract turned out to be.
+// All three read the newest version of each work_item_metrics_daily row, not
+// FINAL. That table is a ReplacingMergeTree and superseded rows must not be
+// summed. FINAL collapses by the WHOLE deployed sorting key, so a key with an
+// extra column would keep rows that should collapse; capacityNewestRows
+// collapses by the required key columns instead, whatever else the key holds.
+
+// capacityNewestRows returns a FROM-clause subquery holding one row per
+// required sorting key: the newest by computed_at.
+//
+// The scope filter sits INSIDE, before LIMIT 1 BY; every filter that tests a
+// key column is safe there. The live-row predicate tests measure columns and
+// must stay OUTSIDE: it has to see the newest row, not skip it for an older
+// live one. cityHash64(tuple(*)) breaks a computed_at tie by row content, so equal
+// versions never pick at random.
+func capacityNewestRows(where string) string {
+	return "(SELECT * FROM work_item_metrics_daily WHERE " + where +
+		" ORDER BY computed_at DESC, cityHash64(tuple(*)) DESC LIMIT 1 BY " +
+		strings.Join(capacityTableRequirements["work_item_metrics_daily"].sortingKey, ", ") + ")"
+}
 
 // capacityScopeFilters builds the shared WHERE fragments.
 //
@@ -82,12 +97,11 @@ func (executor *CapacityExecutor) loadThroughput(
 
 	query := fmt.Sprintf(`
         SELECT day, SUM(items_completed) AS items_completed
-        FROM work_item_metrics_daily FINAL
+        FROM %s
         WHERE %s
-          AND %s
         GROUP BY day
         ORDER BY day
-    `, strings.Join(conditions, " AND "), liverow.Predicate("work_item_metrics_daily", ""))
+    `, capacityNewestRows(strings.Join(conditions, " AND ")), liverow.Predicate("work_item_metrics_daily", ""))
 
 	rows, err := executor.conn.Query(ctx, query, namedArguments(arguments)...)
 	if err != nil {
@@ -132,14 +146,12 @@ func (executor *CapacityExecutor) loadBacklog(
 	// reported that day.
 	query := fmt.Sprintf(`
         SELECT sum(wip_count_end_of_day) AS wip_count_end_of_day
-        FROM work_item_metrics_daily FINAL
-        WHERE %s
-          AND day = (
+        FROM %s
+        WHERE day = (
               SELECT max(day)
-              FROM work_item_metrics_daily FINAL
-              WHERE %s
+              FROM %s
           )
-    `, where, where)
+    `, capacityNewestRows(where), capacityNewestRows(where))
 
 	// sum() over a UInt32 column widens to UInt64, so the destination has to
 	// be uint64 rather than the column's own type. An aggregate always returns
@@ -202,11 +214,9 @@ func (executor *CapacityExecutor) resolveScopes(
 	// team id), not a team with a backlog of zero.
 	query := `
         SELECT DISTINCT team_id, work_scope_id
-        FROM work_item_metrics_daily FINAL
-        WHERE day >= today() - 30
-        AND org_id = {org_id:String}
-        AND ` + rowview.OrgPredicate("work_item_metrics_daily", "") + `
-        AND ` + liverow.Predicate("work_item_metrics_daily", "") + `
+        FROM ` + capacityNewestRows("day >= today() - 30 AND org_id = {org_id:String} AND "+
+		rowview.OrgPredicate("work_item_metrics_daily", "")) + `
+        WHERE ` + liverow.Predicate("work_item_metrics_daily", "") + `
     `
 	rows, err := executor.conn.Query(
 		ctx, query, clickhouse.Named("org_id", organizationID))
@@ -527,24 +537,23 @@ var ErrCapacitySchemaIncompatible = errors.New(
 
 // capacityTableRequirement is what THIS code needs from one table.
 //
-// Columns are the obvious half. The engine is the half the first version of
-// this probe missed: every read below is `FROM work_item_metrics_daily FINAL`,
-// and FINAL is not a hint. On a ReplacingMergeTree it collapses superseded
-// versions to the newest; on any other engine it is silently a NO-OP. A table
-// carrying every required column under a pre-migration plain MergeTree
-// therefore passes a column-only probe, and then two versions of one
-// (org, day, scope, team) both survive into sum() -- items_completed of 5 and
-// 7 reported as 12 rather than 7. That is a successful, well-telemetered,
-// WRONG forecast, which is worse than the retry storm this probe was built to
-// prevent: the retry storm at least announces itself.
+// Columns are the obvious half. The engine version column is the half the
+// first version of this probe missed: every read below collapses superseded
+// versions of work_item_metrics_daily by that column (capacityNewestRows). A table carrying every required column but no version column
+// (a pre-migration plain MergeTree) passes a column-only probe, and then two
+// versions of one (org, day, scope, team) both survive into sum() --
+// items_completed of 5 and 7 reported as 12 rather than 7. That is a
+// successful, well-telemetered, WRONG forecast, which is worse than the retry
+// storm this probe was built to prevent. The engine name is never compared: a
+// Shared*, Replicated* or plain spelling is accepted when the column is right.
 type capacityTableRequirement struct {
 	columns []string
-	// readWithFINAL marks a table this code reads with FINAL, making the
-	// Replacing family a precondition rather than a deployment detail.
-	readWithFINAL bool
+	// collapsedOnRead marks a table this code reads through the newest-row
+	// collapse, making the version column and sorting key preconditions.
+	collapsedOnRead bool
 	// versionColumn and sortingKey are the two pieces of physical contract
-	// FINAL depends on beyond the engine family, checked only when
-	// readWithFINAL is set. Both are set to what the ClickHouse migration
+	// the collapse depends on beyond the engine family, checked only when
+	// collapsedOnRead is set. Both are set to what the ClickHouse migration
 	// chain's head declares for this table, so this probe stays a proxy for
 	// "can THIS code run" without re-deriving storage semantics no query
 	// text states.
@@ -554,10 +563,9 @@ type capacityTableRequirement struct {
 	// clause with no version argument collapses by INSERTION ORDER instead,
 	// which an out-of-order retry can resolve the wrong way.
 	versionColumn string
-	// sortingKey: FINAL only collapses rows that share every column of the
-	// sorting key. A key missing a column this code's WHERE does not filter
-	// on leaves rows that column distinguishes uncollapsed, and they are
-	// then summed together as if they were one.
+	// sortingKey: the columns the read collapses by. A key missing one of them
+	// is refused: the rows that column distinguishes would be collapsed into
+	// each other, or kept apart by another column, depending on the engine.
 	sortingKey []string
 }
 
@@ -599,7 +607,7 @@ var capacityTableRequirements = map[string]capacityTableRequirement{
 			"day", "org_id", "team_id", "work_scope_id",
 			"items_completed", "wip_count_end_of_day", rowview.Column,
 		),
-		readWithFINAL: true,
+		collapsedOnRead: true,
 		// Migration 055 converts this table's engine to
 		// ReplacingMergeTree(computed_at), and migration 027 sets its
 		// sorting key to (org_id, provider, day, work_scope_id, team_id) --
@@ -608,7 +616,7 @@ var capacityTableRequirements = map[string]capacityTableRequirement{
 		// key deliberately: capacityScopeFilters never filters on it, so the
 		// throughput and backlog queries sum across providers on purpose,
 		// and the sorting key is the only thing left keeping their rows
-		// distinct under FINAL.
+		// distinct once the read collapses by the key.
 		versionColumn: "computed_at",
 		// Migration 141 (CHAOS-8863) appends row_view as the last key column and these reads take the org view.
 		sortingKey: []string{
@@ -629,19 +637,11 @@ var capacityTableRequirements = map[string]capacityTableRequirement{
 			"completion_days_values", "completion_days_counts",
 			"completion_items_values", "completion_items_counts",
 		},
-		// Written, never read back with FINAL, so this code does not depend on
+		// Written, never read back through the collapse, so this code does not depend on
 		// the engine collapsing anything here.
-		readWithFINAL: false,
+		collapsedOnRead: false,
 	},
 }
-
-// capacityReplacingEngineMarker matches the Replacing family.
-//
-// Substring rather than equality on purpose: production runs
-// ReplicatedReplacingMergeTree, local and test stacks run ReplacingMergeTree,
-// and both collapse superseded versions under FINAL. Requiring an exact string
-// would refuse a perfectly correct replicated deployment.
-const capacityReplacingEngineMarker = "ReplacingMergeTree"
 
 // verifyCapacitySchema refuses a database this executor cannot compute against.
 //
@@ -678,33 +678,20 @@ func verifyCapacitySchema(ctx context.Context, conn driver.Conn) error {
 			return fmt.Errorf("%w: %s is missing %s",
 				ErrCapacitySchemaIncompatible, table, strings.Join(missing, ", "))
 		}
-		if !requirement.readWithFINAL {
+		if !requirement.collapsedOnRead {
 			continue
 		}
-		engine, err := capacityTableEngine(ctx, conn, table)
-		if err != nil {
-			return err
-		}
-		if !strings.Contains(engine, capacityReplacingEngineMarker) {
-			return fmt.Errorf(
-				"%w: %s is %s, but this executor reads it with FINAL, which only "+
-					"collapses superseded rows on the %s family -- on %s the "+
-					"duplicates stay visible and aggregate into the forecast",
-				ErrCapacitySchemaIncompatible, table, engine,
-				capacityReplacingEngineMarker, engine)
-		}
-
 		version, err := capacityTableVersionColumn(ctx, conn, table)
 		if err != nil {
 			return err
 		}
 		if version != requirement.versionColumn {
 			return fmt.Errorf(
-				"%w: %s has no %s version column on its %s engine -- without "+
-					"it, FINAL collapses superseded rows by INSERTION ORDER "+
+				"%w: %s needs %s as its engine version column, found %q -- without "+
+					"it, the collapse of superseded rows falls back to INSERTION ORDER "+
 					"instead, and a retried write that lands an older row "+
 					"after a newer one leaves the older row as the survivor",
-				ErrCapacitySchemaIncompatible, table, requirement.versionColumn, engine)
+				ErrCapacitySchemaIncompatible, table, requirement.versionColumn, version)
 		}
 
 		sortingKey, err := capacityTableSortingKey(ctx, conn, table)
@@ -714,7 +701,7 @@ func verifyCapacitySchema(ctx context.Context, conn driver.Conn) error {
 		if missing := capacityMissingSortingKeyColumns(requirement.sortingKey, sortingKey); len(missing) > 0 {
 			return fmt.Errorf(
 				"%w: %s sorting key (%s) does not include %s -- this executor "+
-					"reads it with FINAL and needs that column to keep rows "+
+					"collapses it by the required key and needs that column to keep rows "+
 					"it does not filter on from collapsing into each other",
 				ErrCapacitySchemaIncompatible, table,
 				strings.Join(sortingKey, ", "), strings.Join(missing, ", "))
@@ -749,32 +736,6 @@ func capacityTableColumns(
 	return present, nil
 }
 
-// capacityTableEngine reports the engine backing one table.
-//
-// system.tables rather than SHOW CREATE TABLE: the engine column is already the
-// bare family name, so this needs no parsing of DDL text that varies between
-// server versions.
-func capacityTableEngine(
-	ctx context.Context, conn driver.Conn, table string,
-) (string, error) {
-	var engine string
-	if err := conn.QueryRow(ctx, `
-        SELECT engine FROM system.tables
-        WHERE database = currentDatabase() AND name = {table:String}
-    `, clickhouse.Named("table", table)).Scan(&engine); err != nil {
-		return "", fmt.Errorf("inspect %s engine: %w", table, err)
-	}
-	return engine, nil
-}
-
-// capacityVersionColumnPattern extracts a ReplacingMergeTree engine's version
-// argument from engine_full, e.g. "ReplacingMergeTree(computed_at)" ->
-// "computed_at". An engine clause with no argument
-// ("ReplacingMergeTree()") does not match, which is the versionless case:
-// that table still collapses under FINAL, but by insertion order rather than
-// by any named column.
-var capacityVersionColumnPattern = regexp.MustCompile(`ReplacingMergeTree\(\s*` + "`?" + `([^` + "`" + `\s)]+)` + "`?" + `\s*\)`)
-
 // capacityTableVersionColumn reports the column a ReplacingMergeTree table
 // versions on, or "" when its engine clause names none.
 //
@@ -791,11 +752,15 @@ func capacityTableVersionColumn(
     `, clickhouse.Named("table", table)).Scan(&engineFull); err != nil {
 		return "", fmt.Errorf("inspect %s engine_full: %w", table, err)
 	}
-	match := capacityVersionColumnPattern.FindStringSubmatch(engineFull)
-	if match == nil {
-		return "", nil
+	clause, err := engineclause.Parse(engineFull)
+	if err != nil {
+		return "", fmt.Errorf("%w: %s engine_full %q: %v", ErrCapacitySchemaIncompatible, table, engineFull, err)
 	}
-	return match[1], nil
+	version, err := clause.VersionColumn()
+	if err != nil {
+		return "", fmt.Errorf("%w: %s engine_full %q: %v", ErrCapacitySchemaIncompatible, table, engineFull, err)
+	}
+	return version, nil
 }
 
 // capacityTableSortingKey reports a table's ORDER BY columns, in the order
@@ -823,8 +788,8 @@ func capacityTableSortingKey(
 // capacityMissingSortingKeyColumns reports which of the required columns the
 // deployed sorting key omits.
 //
-// A membership check rather than a positional comparison: what makes FINAL
-// safe is that every required column is somewhere in the key collapsing rows
+// A membership check rather than a positional comparison: what makes the
+// collapse safe is that every required column is somewhere in the key collapsing rows
 // on it, not that the key matches the required order column-for-column.
 func capacityMissingSortingKeyColumns(required, deployed []string) []string {
 	present := make(map[string]bool, len(deployed))

@@ -4,7 +4,7 @@
 // routingFakeClient double every other test in this package uses). Every
 // query CompileBreakdown/CompileTimeseries/CompileSankey/CompileFlowMatrix/
 // CompileInvestmentMembershipScope generate ends with
-// `SETTINGS max_execution_time = {timeout:UInt64}` -- a bound native
+// `SETTINGS max_execution_time = <bound timeout parameter>` -- a bound native
 // ClickHouse parameter substituted INSIDE a SETTINGS clause. That fails to
 // PARSE (ClickHouse Code: 62, "Expected substitution type (identifier)")
 // on 26.6.1.1193, the exact digest-pinned image
@@ -102,7 +102,7 @@ func seedWorkItemCompletionRows(t *testing.T, ctx context.Context, conn stdclick
 // fake row-scanner double.
 //
 // RED on origin/main (512c4e77b) and on any commit still emitting
-// `SETTINGS max_execution_time = {timeout:UInt64}`: the query fails to
+// `SETTINGS max_execution_time = <bound timeout parameter>`: the query fails to
 // PARSE with ClickHouse Code: 62, "Expected substitution type
 // (identifier)" -- see this ticket's repros 1/2. GREEN once the timeout
 // is rendered as a literal integer in the SQL text.

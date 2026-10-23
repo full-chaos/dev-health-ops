@@ -241,7 +241,7 @@ func TestResolveWorkItemTeamAttributions_QueryIsOrgScopedFinalAndBounded(t *test
 		"org_id = {org_id:String}",
 		"work_item_id IN {work_item_ids:Array(String)}",
 		"team_id = {team_id:String}",
-		"LIMIT {limit:UInt64}",
+		"LIMIT {limit_n:UInt64}",
 		"max(computed_at)",
 		"GROUP BY work_item_id",
 	} {

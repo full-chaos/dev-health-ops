@@ -23,7 +23,7 @@ type batchCountingClient struct {
 }
 
 func (c *batchCountingClient) Query(ctx context.Context, statement string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
-	if strings.Contains(statement, "LIMIT {limit:UInt32} BY metric") {
+	if strings.Contains(statement, "LIMIT {limit_n:UInt32} BY metric") {
 		c.batches++
 	}
 	return c.QueryClient.Query(ctx, statement, bindings)

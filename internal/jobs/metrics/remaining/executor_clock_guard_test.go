@@ -214,12 +214,8 @@ func (conn constructorConn) QueryRow(
 	case strings.Contains(query, "engine_full"):
 		// From the requirement, so a version-column change cannot leave this
 		// stub satisfying a check the production code no longer makes.
-		return stubRow{value: capacityReplacingEngineMarker + "(" +
+		return stubRow{value: "ReplacingMergeTree(" +
 			capacityTableRequirements["work_item_metrics_daily"].versionColumn + ")"}
-	case strings.Contains(query, "SELECT engine"):
-		// From the constant, so a marker change cannot leave this stub
-		// satisfying a check the production code no longer makes.
-		return stubRow{value: capacityReplacingEngineMarker + "(computed_at)"}
 	}
 	return stubRow{err: errStubExhausted}
 }

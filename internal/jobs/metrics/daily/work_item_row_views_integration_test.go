@@ -42,6 +42,9 @@ func runWorkItemFamiliesOnly(t *testing.T, ctx context.Context, conn driver.Conn
 		}
 	}
 	run.DiscoveredRepoIDs = partition.RepoIDs
+	// Only a run of the whole organization owns the whole day: a work scope no
+	// item reaches (the legacy key nothing computes) is superseded at its end.
+	run.FullOrg = true
 	return run
 }
 

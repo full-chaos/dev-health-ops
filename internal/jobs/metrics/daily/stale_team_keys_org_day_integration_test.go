@@ -193,17 +193,20 @@ FINAL WHERE org_id = ? AND day = ? AND provider = ? AND work_scope_id = ? AND ro
 				line = entry
 			}
 		}
-		// In each work-item table: 4 providers x 2 teams of the scopes with no
-		// item, and one key of board-1 that the first partition wrote before
-		// the second partition attributed its items (the end of a run settles
-		// that key too). One key of a repository in no partition in ai_impact,
+		// In work_item_metrics_daily and work_item_state_durations_daily: 4
+		// providers x 2 teams of the scopes with no item (stored with no view),
+		// and the one key of board-1 that the first partition wrote before the
+		// second partition attributed its items. The partition stored that key
+		// under two views (org and scope), and the end of the run settles each
+		// of them, so it is 2 rows of zeros: 8 + 2. estimate_coverage_metrics_daily
+		// has no view: 8 + 1. One key of a repository in no partition in ai_impact,
 		// and two in team_metrics (that repository, and the row with no
 		// repository).
 		for field, want := range map[string]any{
 			"retraction_scope":                          StaleKeyRetractionOrganizationDay,
-			"work_item_metrics_daily_zero_rows":         float64(9),
+			"work_item_metrics_daily_zero_rows":         float64(10),
 			"estimate_coverage_metrics_daily_zero_rows": float64(9),
-			"work_item_state_durations_daily_zero_rows": float64(9),
+			"work_item_state_durations_daily_zero_rows": float64(10),
 			"ai_governance_coverage_daily_zero_rows":    float64(0),
 			"team_metrics_daily_zero_rows":              float64(2),
 			"ai_impact_metrics_daily_zero_rows":         float64(1),

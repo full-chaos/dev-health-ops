@@ -86,7 +86,13 @@ func insertPartitionKeyItems(t *testing.T, ctx context.Context, conn driver.Conn
 func partitionKeyRows(t *testing.T, ctx context.Context, conn driver.Conn, table, orgID string, day time.Time) uint64 {
 	t.Helper()
 	var rows uint64
-	if err := conn.QueryRow(ctx, `SELECT count() FROM `+table+` WHERE org_id = ? AND day = ?`, orgID, day).Scan(&rows); err != nil {
+	// The three work-item tables hold each row under the org and the scope view
+	// (the same numbers); the key count is read through the org view.
+	view := ""
+	if table != "estimate_coverage_metrics_daily" {
+		view = " AND row_view IN ('', 'org')"
+	}
+	if err := conn.QueryRow(ctx, `SELECT count() FROM `+table+` WHERE org_id = ? AND day = ?`+view, orgID, day).Scan(&rows); err != nil {
 		t.Fatalf("%s: %v", table, err)
 	}
 	return rows

@@ -271,7 +271,7 @@ func TestWorkItemExecutorsRoundTripAgainstRealClickHouse(t *testing.T) {
     team_id String, team_name String,
     items_started UInt32, items_completed UInt32, wip_count_end_of_day UInt32,
     cycle_time_p50_hours Nullable(Float64), cycle_time_p90_hours Nullable(Float64),
-    computed_at DateTime('UTC'), org_id String, row_view LowCardinality(String)
+    computed_at DateTime('UTC'), org_id String, row_view LowCardinality(String), retracted UInt8 DEFAULT 0
 ) ENGINE = ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, provider, work_scope_id, user_identity, day, row_view)`,
 		`CREATE TABLE work_item_cycle_times (
     work_item_id String, provider String, day Date, work_scope_id String,

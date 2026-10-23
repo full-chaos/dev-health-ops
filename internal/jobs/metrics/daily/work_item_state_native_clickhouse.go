@@ -343,18 +343,20 @@ func WriteWorkItemStateDurationsDaily(
 	}
 	batch, err := conn.PrepareBatch(ctx, `INSERT INTO work_item_state_durations_daily (
 		day, provider, work_scope_id, team_id, team_name, status,
-		duration_hours, items_touched, avg_wip, computed_at, org_id)`)
+		duration_hours, items_touched, avg_wip, computed_at, org_id, row_view)`)
 	if err != nil {
 		return 0, fmt.Errorf("prepare work_item_state_durations_daily batch: %w", err)
 	}
 	dayValue := time.Date(day.UTC().Year(), day.UTC().Month(), day.UTC().Day(), 0, 0, 0, 0, time.UTC)
 	computedAtUTC := computedAt.UTC()
 	for _, row := range rows {
-		if err := batch.Append(
-			dayValue, row.Provider, row.WorkScopeID, row.TeamID, row.TeamName, row.Status,
-			row.DurationHours, row.ItemsTouched, row.AvgWIP, computedAtUTC, organizationID,
-		); err != nil {
-			return 0, fmt.Errorf("append work_item_state_durations_daily row: %w", err)
+		for _, rowView := range workItemRowViews {
+			if err := batch.Append(
+				dayValue, row.Provider, row.WorkScopeID, row.TeamID, row.TeamName, row.Status,
+				row.DurationHours, row.ItemsTouched, row.AvgWIP, computedAtUTC, organizationID, rowView,
+			); err != nil {
+				return 0, fmt.Errorf("append work_item_state_durations_daily row: %w", err)
+			}
 		}
 	}
 	// CHAOS-5190 confirmation-pass sweep: Send is the one call here that

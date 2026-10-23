@@ -127,7 +127,7 @@ func TestARunOfTheWholeOrganizationSupersedesEveryKeyOfTheDayItDidNotWrite(t *te
 			{"work_item_state_durations_daily", "duration_hours + items_touched + avg_wip", "team_id"},
 		} {
 			scan("read "+read.table, "SELECT toFloat64(sum("+read.sum+")) FROM "+read.table+
-				" FINAL WHERE org_id = ? AND day = ? AND provider = ? AND work_scope_id = ? AND "+read.teamColumn+" = ?",
+				" FINAL WHERE org_id = ? AND day = ? AND provider = ? AND work_scope_id = ? AND "+read.teamColumn+" = ?"+writerOrgView(read.table),
 				[]any{org, day, provider, scope, team}, &out[index])
 		}
 		return out
@@ -138,7 +138,7 @@ func TestARunOfTheWholeOrganizationSupersedesEveryKeyOfTheDayItDidNotWrite(t *te
 		t.Helper()
 		var value float64
 		scan("read the scope", `SELECT toFloat64(sum(items_started + items_completed + wip_count_end_of_day)) FROM work_item_metrics_daily
-FINAL WHERE org_id = ? AND day = ? AND provider = ? AND work_scope_id = ?`, []any{org, day, provider, scope}, &value)
+FINAL WHERE org_id = ? AND day = ? AND provider = ? AND work_scope_id = ? AND row_view IN ('', 'org')`, []any{org, day, provider, scope}, &value)
 		return value
 	}
 	repoHeld := func(org, table, sum, repo string) float64 {
@@ -233,7 +233,7 @@ FINAL WHERE org_id = ? AND day = ? AND provider = ? AND work_scope_id = ?`, []an
 		// items, and superseded at the end of the run.
 		var transient uint64
 		if err := conn.QueryRow(ctx, `SELECT count() FROM work_item_metrics_daily
-WHERE org_id = ? AND day = ? AND provider = 'linear' AND work_scope_id = 'board-1' AND team_id = 'unassigned'`, org, day).Scan(&transient); err != nil {
+WHERE org_id = ? AND day = ? AND provider = 'linear' AND work_scope_id = 'board-1' AND team_id = 'unassigned' AND row_view IN ('', 'org')`, org, day).Scan(&transient); err != nil {
 			t.Fatal(err)
 		}
 		if transient == 0 || held(org, "linear", "board-1", "unassigned") != zero {

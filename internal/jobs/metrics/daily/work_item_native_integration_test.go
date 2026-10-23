@@ -264,15 +264,15 @@ func TestWorkItemExecutorsRoundTripAgainstRealClickHouse(t *testing.T) {
     bug_completed_ratio Float64, story_points_completed Float64,
     new_bugs_count UInt32, new_items_count UInt32, defect_intro_rate Float64,
     wip_congestion_ratio Float64, predictability_score Float64,
-    computed_at DateTime('UTC'), org_id String
-) ENGINE = ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, provider, day, work_scope_id, team_id)`,
+    computed_at DateTime('UTC'), org_id String, row_view LowCardinality(String)
+) ENGINE = ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, provider, day, work_scope_id, team_id, row_view)`,
 		`CREATE TABLE work_item_user_metrics_daily (
     day Date, provider String, work_scope_id String, user_identity String,
     team_id String, team_name String,
     items_started UInt32, items_completed UInt32, wip_count_end_of_day UInt32,
     cycle_time_p50_hours Nullable(Float64), cycle_time_p90_hours Nullable(Float64),
-    computed_at DateTime('UTC'), org_id String
-) ENGINE = ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, provider, work_scope_id, user_identity, day)`,
+    computed_at DateTime('UTC'), org_id String, row_view LowCardinality(String)
+) ENGINE = ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, provider, work_scope_id, user_identity, day, row_view)`,
 		`CREATE TABLE work_item_cycle_times (
     work_item_id String, provider String, day Date, work_scope_id String,
     team_id Nullable(String), team_name Nullable(String), assignee Nullable(String),
@@ -471,7 +471,7 @@ ORDER BY (org_id, day, provider, work_scope_id, ifNull(team_id, ''))`,
 		rows, err := conn.Query(ctx, `
 SELECT work_scope_id, team_id, team_name, items_started, items_completed,
        wip_count_end_of_day, cycle_time_p50_hours, story_points_completed, predictability_score
-FROM work_item_metrics_daily WHERE org_id = ?
+FROM work_item_metrics_daily WHERE org_id = ? AND row_view IN ('', 'org')
 ORDER BY provider, work_scope_id, ifNull(team_id, '')`, orgA)
 		if err != nil {
 			t.Fatal(err)
@@ -588,7 +588,7 @@ FROM work_item_cycle_times WHERE org_id = ?`, orgA,
 		rows, err := conn.Query(ctx, `
 SELECT work_scope_id, team_id, team_name, items_started, items_completed, wip_count_end_of_day
 FROM work_item_user_metrics_daily FINAL
-WHERE org_id = ? AND provider = 'github' AND work_scope_id = '' AND user_identity = 'unassigned'`, orgA)
+WHERE org_id = ? AND provider = 'github' AND work_scope_id = '' AND user_identity = 'unassigned' AND row_view IN ('', 'org')`, orgA)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -620,7 +620,7 @@ WHERE org_id = ? AND provider = 'github' AND work_scope_id = '' AND user_identit
 	t.Run("org B's rows are untouched", func(t *testing.T) {
 		var count uint64
 		if err := conn.QueryRow(ctx,
-			`SELECT count() FROM work_item_metrics_daily WHERE org_id = ?`, orgB,
+			`SELECT count() FROM work_item_metrics_daily WHERE org_id = ? AND row_view IN ('', 'org')`, orgB,
 		).Scan(&count); err != nil {
 			t.Fatal(err)
 		}
@@ -672,8 +672,8 @@ var productionSchema = []struct {
 	{"work_items", "ReplacingMergeTree(last_synced)", "org_id, repo_id, work_item_id"},
 	{"work_item_transitions", "ReplacingMergeTree(last_synced)", "org_id, repo_id, work_item_id, occurred_at"},
 	{"work_item_team_attributions", "ReplacingMergeTree(computed_at)", "org_id, repo_id, work_item_id, ifNull(team_id, ''), source"},
-	{"work_item_metrics_daily", "ReplacingMergeTree(computed_at)", "org_id, provider, day, work_scope_id, team_id"},
-	{"work_item_user_metrics_daily", "ReplacingMergeTree(computed_at)", "org_id, provider, work_scope_id, user_identity, day"},
+	{"work_item_metrics_daily", "ReplacingMergeTree(computed_at)", "org_id, provider, day, work_scope_id, team_id, row_view"},
+	{"work_item_user_metrics_daily", "ReplacingMergeTree(computed_at)", "org_id, provider, work_scope_id, user_identity, day, row_view"},
 	{"work_item_cycle_times", "ReplacingMergeTree(computed_at)", "org_id, provider, work_item_id"},
 	{"estimate_coverage_metrics_daily", "ReplacingMergeTree(computed_at)", "org_id, day, provider, work_scope_id, ifNull(team_id, '')"},
 }

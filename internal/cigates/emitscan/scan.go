@@ -4,13 +4,13 @@
 // and a file:line only. The redaction rules themselves live in
 // internal/platform/logging; this package keeps no copy of them. It is a best-effort census and it fails closed:
 // scopes and declaration order are not tracked. A name bound anywhere in the package (:=, var, =, a copy, a range, a
-// struct field) to a watched constructor, directly or through other names, makes every call through that name count
+// map entry or struct field in a literal) to a watched constructor, directly or through other names, makes every call through that name count
 // as that constructor; a name that holds several constructors counts as each of them. A With call on any receiver is
 // read as a log call, and every argument of it is checked. A same-named non-constructor or a non-logger With is a
 // false finding (noise accepted). Only conversions (string(x), a local string type, attribute.Key(x)) and
 // strconv.Itoa / fmt.Sprint of constants are folded into a key; any other call in key position is a dynamic key (R2 on
 // a metric label or a span attribute). Named limits (not seen by the scan): a constant key taken from another package (for example
-// tracing.StageAttribute); a constructor returned by a function call; a constant whose folding exceeds 8 values, 256 bytes, 64 passes or 4096 expression nodes (it, and every constant built from it, is marked saturated and a key that uses it is an R1 finding); a constructor reached through a function parameter, an append, or a map or struct field read under another name; a constructor converted to a function type (T(attribute.String)); a call through a dereferenced pointer ((*p)(...)); and a key that is a variable and not a constant.
+// tracing.StageAttribute); a constructor returned by a function call; a constant whose folding exceeds 8 values, 256 bytes, 64 passes or 4096 expression nodes, or that has a declaration the scan cannot read (it, and every constant built from it, is marked saturated and a key that uses it is an R1 finding); a package that exhausts the work budget (one R1 "census incomplete: work budget" finding at its package clause, and its scan stops); a constructor reached through a function parameter, an append, or a map or struct field read under another name; a constructor converted to a function type (T(attribute.String)); a constructor assigned to a map entry or struct field after its literal (m[k] = f, x.f = f); a call through a dereferenced pointer ((*p)(...)); and a key that is a variable and not a constant.
 // The runtime sentinel tests are the primary defence.
 package emitscan
 
@@ -41,10 +41,11 @@ const (
 	RuleDotImport     = "R8" // dot-import of a watched package: its calls cannot be matched
 	RuleUnparsable    = "R0" // a file the scan could not read or parse: always a failure
 	maxMetricLabels   = 6
-	maxConstValues    = 8    // folded values kept per constant name
-	maxConstBytes     = 256  // longest folded value kept
-	maxConstPasses    = 64   // passes of the constant fixpoint
-	maxFoldWork       = 4096 // expression nodes one fold may visit before it fails closed
+	maxConstValues    = 8       // folded values kept per constant name
+	maxConstBytes     = 256     // longest folded value kept
+	maxConstPasses    = 64      // passes of the constant fixpoint
+	maxFoldWork       = 4096    // expression nodes one fold may visit before it fails closed
+	maxPackageWork    = 4000000 // steps of one package scan (fold nodes, key bytes, alias and fixpoint steps) before the package is unscannable
 	rawHandlerAllowed = "internal/platform/logging/"
 )
 
@@ -169,9 +170,20 @@ func Scan(root string, dirs []string) ([]Finding, error) {
 	}
 	for _, group := range byDir {
 		info := packageInfo(group)
+		var found []Finding
 		for _, parsed := range group {
-			out = append(out, scanFile(parsed, info)...)
+			if info.budget.over {
+				break
+			}
+			found = append(found, scanFile(parsed, info)...)
 		}
+		if info.budget.over {
+			first := group[0]
+			out = append(out, Finding{Rule: RuleProtectedKey, File: first.rel, Line: first.fset.Position(first.file.Package).Line,
+				Func: "-", Detail: "census incomplete: work budget"})
+			continue
+		}
+		out = append(out, found...)
 	}
 	sort.SliceStable(out, func(i, j int) bool {
 		if out[i].File != out[j].File {
@@ -183,6 +195,24 @@ func Scan(root string, dirs []string) ([]Finding, error) {
 }
 
 // pkgInfo is what one package directory knows across its files.
+// budget is the one counter of a package scan. Every fold step, key byte, alias step and fixpoint pass charges it; when
+// it runs out the package is unscannable: it reports one finding and its scan stops (fail closed).
+type budget struct {
+	used int
+	over bool
+}
+
+func (b *budget) charge(n int) bool {
+	if b.over {
+		return false
+	}
+	if b.used += n; b.used > maxPackageWork {
+		b.over = true
+		return false
+	}
+	return true
+}
+
 type pkgInfo struct {
 	consts      map[string][]string    // string constants, every value a name holds (function-local names can repeat)
 	rawFuncs    map[string]bool        // functions whose result carries a raw request path or query
@@ -190,11 +220,12 @@ type pkgInfo struct {
 	stringTypes map[string]bool        // package types whose underlying type is string (conversions of a constant keep its text)
 	aliases     map[string][][2]string // every watched constructor a name is ever bound to anywhere in the package, deduped
 	saturated   map[string]bool        // constants whose folding hit a bound: no value is kept, a use is an unfoldable const key
+	budget      *budget
 }
 
 func packageInfo(group []parsedFile) *pkgInfo {
 	info := &pkgInfo{consts: map[string][]string{}, rawFuncs: map[string]bool{}, constNames: map[string]bool{},
-		stringTypes: map[string]bool{}, aliases: map[string][][2]string{}, saturated: map[string]bool{}}
+		stringTypes: map[string]bool{}, aliases: map[string][][2]string{}, saturated: map[string]bool{}, budget: &budget{}}
 	for _, parsed := range group {
 		ast.Inspect(parsed.file, func(node ast.Node) bool {
 			if spec, ok := node.(*ast.TypeSpec); ok {
@@ -209,13 +240,13 @@ func packageInfo(group []parsedFile) *pkgInfo {
 		info.saturated[name] = true
 		delete(info.consts, name)
 	}
-	for pass, changed := 0, true; changed; pass++ {
+	for pass, changed := 0, true; changed && !info.budget.over; pass++ {
 		changed = false
 		growing := map[string]bool{}
 		for _, parsed := range group {
 			ast.Inspect(parsed.file, func(node ast.Node) bool {
 				gen, ok := node.(*ast.GenDecl)
-				if !ok || gen.Tok != token.CONST {
+				if !ok || gen.Tok != token.CONST || !info.budget.charge(1) {
 					return true
 				}
 				var inherited []ast.Expr // a spec without values repeats the expression list of the one before it
@@ -237,7 +268,7 @@ func packageInfo(group []parsedFile) *pkgInfo {
 							changed = true
 							continue
 						}
-						ctx := newFoldCtx(info.consts, importsOf(parsed), info.stringTypes)
+						ctx := newFoldCtx(info.budget, info.consts, importsOf(parsed), info.stringTypes)
 						folds := foldString(values[i], ctx, specIndex)
 						if ctx.over {
 							saturate(name.Name)
@@ -269,17 +300,18 @@ func packageInfo(group []parsedFile) *pkgInfo {
 			break
 		}
 	}
+	info.saturateEmptyDecls(group)
 	info.saturateDependants(group)
 	info.collectAliases(group)
-	for changed := true; changed; {
+	for changed := true; changed && !info.budget.over; {
 		changed = false
 		for _, parsed := range group {
 			for _, decl := range parsed.file.Decls {
 				fn, ok := decl.(*ast.FuncDecl)
-				if !ok || fn.Body == nil || info.rawFuncs[fn.Name.Name] {
+				if !ok || fn.Body == nil || info.rawFuncs[fn.Name.Name] || !info.budget.charge(1) {
 					continue
 				}
-				taint := rawPathIdents(fn.Body, nil, info.rawFuncs)
+				taint := rawPathIdents(fn.Body, nil, info.rawFuncs, info.budget)
 				ast.Inspect(fn.Body, func(node ast.Node) bool {
 					if ret, ok := node.(*ast.ReturnStmt); ok {
 						for _, result := range ret.Results {
@@ -297,6 +329,42 @@ func packageInfo(group []parsedFile) *pkgInfo {
 		}
 	}
 	return info
+}
+
+// saturateEmptyDecls saturates a constant with a declaration that folds to nothing (a function-local redeclaration, an
+// expression the scan cannot read), even when another declaration of the same name folds: the name has a value the scan
+// cannot see. It runs after the fixpoint, so a declaration that waited for a later one is not mistaken for empty.
+func (info *pkgInfo) saturateEmptyDecls(group []parsedFile) {
+	for _, parsed := range group {
+		imports := importsOf(parsed)
+		ast.Inspect(parsed.file, func(node ast.Node) bool {
+			gen, ok := node.(*ast.GenDecl)
+			if !ok || gen.Tok != token.CONST || info.budget.over {
+				return true
+			}
+			var inherited []ast.Expr
+			for specIndex, spec := range gen.Specs {
+				value := spec.(*ast.ValueSpec)
+				values := value.Values
+				if len(values) == 0 {
+					values = inherited
+				} else {
+					inherited = values
+				}
+				for i, name := range value.Names {
+					if i >= len(values) || info.saturated[name.Name] || name.Name == "_" {
+						continue
+					}
+					ctx := newFoldCtx(info.budget, info.consts, imports, info.stringTypes)
+					if folds := foldString(values[i], ctx, specIndex); ctx.over || len(folds) == 0 {
+						info.saturated[name.Name] = true
+						delete(info.consts, name.Name)
+					}
+				}
+			}
+			return true
+		})
+	}
 }
 
 // saturateDependants closes saturation over the reference graph of the constants: a constant built, directly or through
@@ -323,7 +391,7 @@ func (info *pkgInfo) saturateDependants(group []parsedFile) {
 						continue
 					}
 					ast.Inspect(values[i], func(inner ast.Node) bool {
-						if ident, ok := inner.(*ast.Ident); ok {
+						if ident, ok := inner.(*ast.Ident); ok && info.budget.charge(1) {
 							dependants[ident.Name] = append(dependants[ident.Name], name.Name)
 						}
 						return true
@@ -337,7 +405,7 @@ func (info *pkgInfo) saturateDependants(group []parsedFile) {
 	for name := range info.saturated {
 		queue = append(queue, name)
 	}
-	for len(queue) > 0 {
+	for len(queue) > 0 && info.budget.charge(1) {
 		name := queue[0]
 		queue = queue[1:]
 		for _, dependant := range dependants[name] {
@@ -376,12 +444,24 @@ type foldCtx struct {
 	consts      map[string][]string
 	imports     map[string]string
 	stringTypes map[string]bool
-	work        int  // nodes still allowed
-	over        bool // the work bound was hit: the result is not trustworthy
+	work        int     // nodes still allowed
+	over        bool    // a bound was hit: the result is not trustworthy
+	budget      *budget // the package counter
 }
 
-func newFoldCtx(consts map[string][]string, imports map[string]string, stringTypes map[string]bool) *foldCtx {
-	return &foldCtx{consts: consts, imports: imports, stringTypes: stringTypes, work: maxFoldWork}
+func newFoldCtx(b *budget, consts map[string][]string, imports map[string]string, stringTypes map[string]bool) *foldCtx {
+	return &foldCtx{consts: consts, imports: imports, stringTypes: stringTypes, work: maxFoldWork, budget: b}
+}
+
+// bytesOver charges the bytes of a folded value and reports one longer than a key can be.
+func (ctx *foldCtx) bytesOver(values []string) bool {
+	for _, value := range values {
+		if len(value) > maxConstBytes || !ctx.budget.charge(len(value)+1) {
+			ctx.over = true
+			return true
+		}
+	}
+	return false
 }
 
 func importsOf(parsed parsedFile) map[string]string { return parsed.imports }
@@ -389,7 +469,15 @@ func importsOf(parsed parsedFile) map[string]string { return parsed.imports }
 // foldString evaluates a string constant expression: literals, constant names, + and conversions (string(x), a local
 // string type, attribute.Key(x)) and strconv.Itoa / fmt.Sprint of a folded argument. Any other call is not folded.
 func foldString(expr ast.Expr, ctx *foldCtx, iota int) []string {
-	if ctx.work--; ctx.work < 0 {
+	values := foldNode(expr, ctx, iota)
+	if ctx.over || ctx.bytesOver(values) {
+		return nil
+	}
+	return values
+}
+
+func foldNode(expr ast.Expr, ctx *foldCtx, iota int) []string {
+	if ctx.work--; ctx.work < 0 || !ctx.budget.charge(1) {
 		ctx.over = true
 		return nil
 	}
@@ -488,6 +576,9 @@ func (info *pkgInfo) collectAliases(group []parsedFile) {
 	dependents := map[string][]int{} // name -> edges whose right side reads that name's alternatives
 	for index, edge := range edges {
 		for _, name := range readNames(edge.rhs, edge.imports) {
+			if !info.budget.charge(1) {
+				return
+			}
 			dependents[name] = append(dependents[name], index)
 		}
 	}
@@ -504,7 +595,11 @@ func (info *pkgInfo) collectAliases(group []parsedFile) {
 		queued[index] = false
 		edge := edges[index]
 		grew := false
-		for _, alt := range info.altsOf(edge.rhs, edge.imports) {
+		alts := info.altsOf(edge.rhs, edge.imports)
+		if !info.budget.charge(1 + len(alts)) {
+			return
+		}
+		for _, alt := range alts {
 			if seen[edge.name] == nil {
 				seen[edge.name] = map[[2]string]bool{}
 			}
@@ -645,13 +740,13 @@ func (s *fileScan) Visit(node ast.Node) ast.Visitor {
 	switch fn := node.(type) {
 	case *ast.FuncDecl:
 		s.funcs = append(s.funcs, fn.Name.Name)
-		s.taints = append(s.taints, rawPathIdents(fn.Body, nil, s.pkg.rawFuncs))
+		s.taints = append(s.taints, rawPathIdents(fn.Body, nil, s.pkg.rawFuncs, s.pkg.budget))
 	case *ast.FuncLit:
 		var parent map[string]bool
 		if len(s.taints) > 0 {
 			parent = s.taints[len(s.taints)-1]
 		}
-		s.taints = append(s.taints, rawPathIdents(fn.Body, parent, s.pkg.rawFuncs))
+		s.taints = append(s.taints, rawPathIdents(fn.Body, parent, s.pkg.rawFuncs, s.pkg.budget))
 	case *ast.CallExpr:
 		s.call(fn)
 	}
@@ -664,7 +759,7 @@ func (s *fileScan) tainted(name string) bool {
 
 // rawPathIdents returns the identifiers a function (with the identifiers its enclosing function already holds) assigns
 // from a raw request path or query, directly or through other tainted identifiers, to a fixpoint.
-func rawPathIdents(body *ast.BlockStmt, seed map[string]bool, rawFuncs map[string]bool) map[string]bool {
+func rawPathIdents(body *ast.BlockStmt, seed map[string]bool, rawFuncs map[string]bool, b *budget) map[string]bool {
 	out := map[string]bool{}
 	for name := range seed {
 		out[name] = true
@@ -673,11 +768,14 @@ func rawPathIdents(body *ast.BlockStmt, seed map[string]bool, rawFuncs map[strin
 		return out
 	}
 	holds := func(expr ast.Expr) bool { return rawRequestPart(expr, rawFuncs) || carriesTaint(expr, out) }
-	for changed := true; changed; {
+	for changed := true; changed && !b.over; {
 		changed = false
 		ast.Inspect(body, func(node ast.Node) bool {
 			switch n := node.(type) {
 			case *ast.AssignStmt:
+				if !b.charge(1 + len(n.Rhs)) {
+					return false
+				}
 				for i, rhs := range n.Rhs {
 					if i < len(n.Lhs) && holds(rhs) {
 						if ident, ok := n.Lhs[i].(*ast.Ident); ok && !out[ident.Name] {
@@ -687,6 +785,9 @@ func rawPathIdents(body *ast.BlockStmt, seed map[string]bool, rawFuncs map[strin
 					}
 				}
 			case *ast.ValueSpec:
+				if !b.charge(1 + len(n.Values)) {
+					return false
+				}
 				for i, value := range n.Values {
 					if i < len(n.Names) && holds(value) && !out[n.Names[i].Name] {
 						out[n.Names[i].Name] = true
@@ -850,7 +951,7 @@ func unquote(literal string) string {
 // keysOf returns the key texts an attribute key expression can hold: a string literal, or a constant (folded across the
 // package, concatenations included). ok is false for any other expression.
 func (s *fileScan) keysOf(expr ast.Expr) (keys []string, ok, over bool) {
-	ctx := newFoldCtx(s.pkg.consts, s.imports, s.pkg.stringTypes)
+	ctx := newFoldCtx(s.pkg.budget, s.pkg.consts, s.imports, s.pkg.stringTypes)
 	values := foldString(expr, ctx, 0)
 	if ctx.over {
 		return nil, false, true
@@ -1120,7 +1221,7 @@ func (s *fileScan) dynamicCallInKey(expr ast.Expr) bool {
 		if s.isConversion(call) {
 			return true
 		}
-		if len(foldString(call, newFoldCtx(s.pkg.consts, s.imports, s.pkg.stringTypes), 0)) == 0 {
+		if len(foldString(call, newFoldCtx(s.pkg.budget, s.pkg.consts, s.imports, s.pkg.stringTypes), 0)) == 0 {
 			found = true
 		}
 		return !found

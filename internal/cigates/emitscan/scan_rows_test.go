@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/cigates/emitscan"
 )
 
 // probeCase is one planted source; want is the rule it must produce ("" = no assertion except where strict).
@@ -121,7 +123,7 @@ func timed(t *testing.T, id string, limit time.Duration, run func() string) stri
 	t.Helper()
 	start := time.Now()
 	got := run()
-	if elapsed := time.Since(start); elapsed > limit {
+	if elapsed := time.Since(start); elapsed > limit*raceSlowdown {
 		t.Errorf("%s: took %s, want < %s", id, elapsed, limit)
 	}
 	return got
@@ -205,5 +207,49 @@ func TestOversizedKeyExpressionIsAFinding(t *testing.T) {
 		if !strings.Contains(got, "R1") {
 			t.Errorf("%s: rules = %q, want R1", id, got)
 		}
+	}
+}
+
+// A ring of aliases, each holding its own constructor, would hold every constructor in every name: the package must
+// stop on its work budget and say so.
+func TestAliasRingExhaustsTheBudgetAndFailsClosed(t *testing.T) {
+	const n = 1000
+	var b strings.Builder
+	b.WriteString("func f(v string) {\n")
+	for i := 0; i < n; i++ {
+		fmt.Fprintf(&b, "\tr%d = r%d\n\tr%d = slog.F%d\n", i, (i+1)%n, i, i)
+	}
+	b.WriteString("\t_ = r0(\"x\", v)\n}\n")
+	var got []emitscan.Finding
+	timed(t, "ring n=1000", time.Second, func() string { got = scanSource(t, header+b.String()); return "" })
+	if len(got) != 1 || got[0].Rule != "R1" || got[0].Detail != "census incomplete: work budget" {
+		t.Errorf("findings = %v, want one R1 census incomplete: work budget", got)
+	}
+}
+
+// A key longer than a key can be is unreadable and reported, once per site, fast, even at 45 sites.
+func TestLongKeySitesAreFindingsAndFast(t *testing.T) {
+	long := strings.Repeat("W", 2041)
+	var b strings.Builder
+	for i := 0; i < 45; i++ {
+		fmt.Fprintf(&b, "func f%d(v string) { _ = attribute.String(\"%s\", v) }\n", i, long)
+	}
+	var got []emitscan.Finding
+	timed(t, "45 long keys", time.Second, func() string { got = scanSource(t, header+b.String()); return "" })
+	if len(got) != 45 {
+		t.Fatalf("findings = %d, want 45", len(got))
+	}
+	for _, finding := range got {
+		if finding.Rule != "R1" {
+			t.Errorf("finding = %v, want R1", finding)
+		}
+	}
+}
+
+// A name declared twice, once readable and once not, is unreadable.
+func TestPartiallyReadableConstIsAFinding(t *testing.T) {
+	body := "const B = \"x\"\nfunc g(v string) {\n\tconst B = string(rune(97)) + \"pi_token\"\n\t_ = attribute.String(B, v)\n}\n"
+	if got := rules(scanSource(t, header+body)); !strings.Contains(got, "R1") {
+		t.Errorf("rules = %q, want R1", got)
 	}
 }

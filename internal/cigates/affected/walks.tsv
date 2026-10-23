@@ -16,6 +16,7 @@ internal/atlassianteams	vendored_patch_chain_test.go	third_party/vendor/atlassia
 internal/atlassianteams	vendored_patch_chain_test.go	unexpressed	-
 internal/audit	writer_guard_test.go	.	tree
 internal/auth/authruntime	audit_request_id_scan_test.go	unexpressed	-
+internal/auth/authruntime	keystate_source_test.go	internal/auth/authruntime	dir
 internal/auth/contracts	access_token_goldens_test.go	unexpressed	-
 internal/auth/contracts	authorization_goldens_test.go	unexpressed	-
 internal/auth/contracts	credential_goldens_test.go	unexpressed	-

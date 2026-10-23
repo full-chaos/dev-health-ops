@@ -75,6 +75,7 @@ internal/auth/contracts/tokencorpus	corpus_test.go
 internal/auth/httpapi	transport_error_contract_test.go
 internal/auth/identity	externalkey_test.go
 internal/auth/identity/local	corpus_helpers_integration_test.go
+internal/auth/keyrotation	rotation_integration_test.go
 internal/auth/keystore	keystore_test.go
 internal/auth/keystore	open_unix.go
 internal/auth/session	credential_test.go

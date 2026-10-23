@@ -5,7 +5,10 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
+	"slices"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
@@ -19,6 +22,7 @@ import (
 type reasonVocabulary struct {
 	RevokedReason   struct{ Values []string } `json:"revoked_reason"`
 	AuditReasonCode struct{ Values []string } `json:"audit_reason_code"`
+	DecisionReason  struct{ Values []string } `json:"decision_reason_code"`
 }
 
 func loadReasonVocabulary(t *testing.T) reasonVocabulary {
@@ -31,7 +35,7 @@ func loadReasonVocabulary(t *testing.T) reasonVocabulary {
 	if err := json.Unmarshal(raw, &v); err != nil {
 		t.Fatal(err)
 	}
-	if len(v.RevokedReason.Values) == 0 || len(v.AuditReasonCode.Values) == 0 {
+	if len(v.RevokedReason.Values) == 0 || len(v.AuditReasonCode.Values) == 0 || len(v.DecisionReason.Values) == 0 {
 		t.Fatal("the vocabulary is empty; every assertion below would be vacuous")
 	}
 	return v
@@ -161,6 +165,7 @@ func TestSchemaEnumsEqualTheVocabularyFile(t *testing.T) {
 		{"credential-entry.v1.schema.json", []string{"properties", "revoked_reason"}, vocab.RevokedReason.Values},
 		{"credential-list.v1.schema.json", []string{"properties", "items", "items", "properties", "revoked_reason"}, vocab.RevokedReason.Values},
 		{"audit-event.v1.schema.json", []string{"properties", "attributes", "properties", "reason_code"}, vocab.AuditReasonCode.Values},
+		{"authorization_decision.v1.schema.json", []string{"properties", "reason_code"}, vocab.DecisionReason.Values},
 	} {
 		if got := enumAt(c.schema, c.path...); !reflect.DeepEqual(sorted(got), sorted(c.want)) {
 			t.Errorf("%s %v: enum %v, vocabulary %v", c.schema, c.path, got, c.want)
@@ -177,6 +182,27 @@ var approvedRevokedReasons = []string{
 	"compromised",
 	"owner_request",
 }
+
+// decisionReasonSources is the census table: every decision reason code, its
+// outcome and the committed source that names it. A code without a source is
+// not in the vocabulary; it returns as a row when the producer that emits it
+// is added.
+const batchResponseBase = "batch-response-valid-items-disagree.json"
+
+var decisionReasonSources = []struct{ Code, Outcome, Source string }{
+	{"allowed_by_repository_grant", "allow", "contracts/auth/v1/examples/authorization_decision/decision-valid-allow-with-obligations.json"},
+	{"grant_absent", "deny", "contracts/auth/v1/examples/authorization_decision/decision-valid-deny.json"},
+	{"repository_not_granted", "deny", "contracts/auth/v1/examples/authorization_batch_response/batch-response-valid-items-disagree.json"},
+	{"platform_role_absent", "deny", "contracts/auth/v1/examples/authorization_decision/decision-valid-platform-decision-null-org.json"},
+}
+
+var approvedDecisionReasonCodes = func() []string {
+	out := make([]string, 0, len(decisionReasonSources))
+	for _, r := range decisionReasonSources {
+		out = append(out, r.Code)
+	}
+	return out
+}()
 
 var approvedAuditReasonCodes = []string{
 	"allowed_by_repository_grant",
@@ -243,6 +269,7 @@ func TestTheVocabularyFileIsExactlyTheApprovedLists(t *testing.T) {
 	}{
 		{"revoked_reason", vocab.RevokedReason.Values, approvedRevokedReasons},
 		{"audit_reason_code", vocab.AuditReasonCode.Values, approvedAuditReasonCodes},
+		{"decision_reason_code", vocab.DecisionReason.Values, approvedDecisionReasonCodes},
 	} {
 		got := append([]string(nil), c.got...)
 		want := append([]string(nil), c.want...)
@@ -265,6 +292,108 @@ func TestEveryReasonCodeTheAuditProducerAcceptsValidatesOnTheWire(t *testing.T) 
 	for _, v := range producer {
 		if err := Validate(root, AuditEventSurface, withAuditReasonCode(t, v)); err != nil {
 			t.Errorf("producer reason_code %q is refused by audit-event.v1: %v", v, err)
+		}
+	}
+}
+
+func withDecisionReasonCode(t *testing.T, surface, value string) any {
+	t.Helper()
+	const ex = "contracts/auth/v1/examples/"
+	switch surface {
+	case AuthorizationDecisionSurface:
+		d := readJSONFile(t, ex+"authorization_decision/decision-valid-deny.json")
+		d["reason_code"] = value
+		return d
+	case AuthorizationBatchResponseSurface:
+		d := readJSONFile(t, ex+"authorization_batch_response/"+batchResponseBase)
+		d["decisions"].([]any)[0].(map[string]any)["decision"].(map[string]any)["reason_code"] = value
+		return d
+	}
+	t.Fatalf("unknown surface %s", surface)
+	return nil
+}
+
+func TestDecisionReasonCodeIsAClosedVocabulary(t *testing.T) {
+	vocab := loadReasonVocabulary(t)
+	root := testRoot(t)
+	for _, surface := range []string{AuthorizationDecisionSurface, AuthorizationBatchResponseSurface} {
+		for _, v := range vocab.DecisionReason.Values {
+			if err := Validate(root, surface, withDecisionReasonCode(t, surface, v)); err != nil {
+				t.Errorf("%s: listed value %q refused: %v", surface, v, err)
+			}
+		}
+		for _, v := range append([]string{"denied_unknown_thing", "Denied: bob@example.test lacks access to /v1/orgs/org_1"}, notInTheVocabulary...) {
+			if err := Validate(root, surface, withDecisionReasonCode(t, surface, v)); err == nil {
+				t.Errorf("%s: value %q is not in the vocabulary but validates", surface, v)
+			}
+		}
+	}
+}
+
+func reasonCodeMembers(node any) []string {
+	var out []string
+	switch n := node.(type) {
+	case map[string]any:
+		for k, v := range n {
+			if s, ok := v.(string); ok && k == "reason_code" {
+				out = append(out, s)
+				continue
+			}
+			out = append(out, reasonCodeMembers(v)...)
+		}
+	case []any:
+		for _, v := range n {
+			out = append(out, reasonCodeMembers(v)...)
+		}
+	}
+	return out
+}
+
+func TestEveryDecisionReasonCodeHasAnExistingSourceAndAnOutcome(t *testing.T) {
+	root := testRoot(t)
+	for _, r := range decisionReasonSources {
+		if r.Source == "" || (r.Outcome != "allow" && r.Outcome != "deny") {
+			t.Errorf("%s: source %q outcome %q", r.Code, r.Source, r.Outcome)
+			continue
+		}
+		var doc any
+		raw, err := os.ReadFile(filepath.Join(root, r.Source))
+		if err == nil {
+			err = json.Unmarshal(raw, &doc)
+		}
+		if err != nil {
+			t.Errorf("%s: source %s: %v", r.Code, r.Source, err)
+			continue
+		}
+		if !slices.Contains(reasonCodeMembers(doc), r.Code) {
+			t.Errorf("%s: source %s carries no reason_code member with the code", r.Code, r.Source)
+		}
+	}
+}
+
+// Every reason_code a committed decision or batch fixture carries, valid or
+// not, is either in the vocabulary or sits in a fixture the manifest rejects.
+func TestEveryValidDecisionFixtureUsesAListedReasonCode(t *testing.T) {
+	vocab := loadReasonVocabulary(t)
+	listed := map[string]bool{}
+	for _, v := range vocab.DecisionReason.Values {
+		listed[v] = true
+	}
+	for _, dir := range []string{"authorization_decision", "authorization_batch_response"} {
+		files, err := filepath.Glob(filepath.Join(testRoot(t), "contracts/auth/v1/examples", dir, "*valid*.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, f := range files {
+			if strings.Contains(filepath.Base(f), "invalid") {
+				continue
+			}
+			raw, _ := os.ReadFile(f)
+			for _, m := range regexp.MustCompile(`"reason_code": *"([^"]*)"`).FindAllStringSubmatch(string(raw), -1) {
+				if !listed[m[1]] {
+					t.Errorf("%s uses reason_code %q outside the vocabulary", filepath.Base(f), m[1])
+				}
+			}
 		}
 	}
 }

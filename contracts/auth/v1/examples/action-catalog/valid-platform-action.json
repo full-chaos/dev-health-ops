@@ -6,12 +6,16 @@
     {
       "action": "members.read",
       "scope": "organization",
-      "resource_kind": "organization"
+      "resource_kind": "organization",
+      "risk_class": "low",
+      "cache_class": "decision_bound"
     },
     {
       "action": "admin.users",
       "scope": "platform",
-      "resource_kind": "platform"
+      "resource_kind": "platform",
+      "risk_class": "high",
+      "cache_class": "none"
     }
   ]
 }

@@ -91,6 +91,7 @@ Design docs (read the guardrails at minimum):
 | `user_access_token` | **unconsumed** | human | |
 | `internal_svc_authsess_token` | active | service_account | |
 | `link_credential` | active | human | |
+| `pagerduty_webhook_signature` | active | external_source | |
 
 **30 classes at the Wave 0 freeze** (31 with `effective_principal_envelope`, added by CHAOS-4737 below). 6 were not in CHAOS-3273's minimum list and were discovered
 during this inventory (`new_vs_ticket: true` in the JSON):
@@ -138,6 +139,13 @@ Purpose binding is proven by `TestVerifyAndResetRedeemOnlyTheirOwnPurpose` and
 `TestLinkCredentialOfAnotherPurposeIsNotRedeemedBothWays`. Its routes get
 profile rows when they are mounted.
 
+
+**`pagerduty_webhook_signature` (CHAOS-10707).** The inbound delivery signature
+of `POST /api/v1/webhooks/pagerduty/{binding_id}`: `X-PagerDuty-Signature`, a
+comma-separated list of at most 8 `v1=<hex>` HMAC-SHA256 values over the raw
+body, checked against the secret stored encrypted on the addressed binding row.
+It is distinct from `pagerduty_oauth_credential`, the outbound OAuth credential
+that ops sends to PagerDuty.
 **`user_access_token` (CHAOS-10442).** The EdDSA user access token of TRD
 section 11, the successor of `ops_access_token_hs256`. It is class 33. Its wire
 contract is `access-token.v1`: header {alg EdDSA, typ at+jwt, kid}; claims iss,

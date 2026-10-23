@@ -15,6 +15,7 @@ internal/api/pybody
 internal/api/pyjson
 internal/api/pytime
 internal/api/restcore
+internal/api/standinkey
 internal/apiservice/admin
 internal/auth/edgetoken
 internal/auth/httpapi
@@ -58,6 +59,7 @@ internal/pythonparity/pyidna
 internal/pythonparity/pyunicodedata
 internal/storage/clickhouse
 internal/storage/postgres
+internal/storage/postgres/aclguard
 internal/storage/river
 internal/storage/roleacl
 internal/syncdispatchruntime/synclog

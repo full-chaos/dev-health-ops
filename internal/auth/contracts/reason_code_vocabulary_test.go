@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -329,6 +330,25 @@ func TestDecisionReasonCodeIsAClosedVocabulary(t *testing.T) {
 	}
 }
 
+func reasonCodeMembers(node any) []string {
+	var out []string
+	switch n := node.(type) {
+	case map[string]any:
+		for k, v := range n {
+			if s, ok := v.(string); ok && k == "reason_code" {
+				out = append(out, s)
+				continue
+			}
+			out = append(out, reasonCodeMembers(v)...)
+		}
+	case []any:
+		for _, v := range n {
+			out = append(out, reasonCodeMembers(v)...)
+		}
+	}
+	return out
+}
+
 func TestEveryDecisionReasonCodeHasAnExistingSourceAndAnOutcome(t *testing.T) {
 	root := testRoot(t)
 	for _, r := range decisionReasonSources {
@@ -336,13 +356,17 @@ func TestEveryDecisionReasonCodeHasAnExistingSourceAndAnOutcome(t *testing.T) {
 			t.Errorf("%s: source %q outcome %q", r.Code, r.Source, r.Outcome)
 			continue
 		}
+		var doc any
 		raw, err := os.ReadFile(filepath.Join(root, r.Source))
+		if err == nil {
+			err = json.Unmarshal(raw, &doc)
+		}
 		if err != nil {
 			t.Errorf("%s: source %s: %v", r.Code, r.Source, err)
 			continue
 		}
-		if !strings.Contains(string(raw), `"`+r.Code+`"`) {
-			t.Errorf("%s: source %s does not use the code", r.Code, r.Source)
+		if !slices.Contains(reasonCodeMembers(doc), r.Code) {
+			t.Errorf("%s: source %s carries no reason_code member with the code", r.Code, r.Source)
 		}
 	}
 }

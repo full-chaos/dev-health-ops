@@ -187,6 +187,7 @@ var endpointAuthProfileGateRefusals = map[string]string{
 	"invalid-envelope-pins-the-access-token-typ.json":              `class "effective_principal_envelope" pins token_type "at+jwt"; its jwt_header_typ marker is "jwt"`,
 	"invalid-tokens-envelope-and-user-token-typs-swapped.json":     `class "effective_principal_envelope" pins token_type "at+jwt"; its jwt_header_typ marker is "jwt"`,
 	"invalid-user-access-token-pins-hs256.json":                    `class "user_access_token" pins algorithm "HS256"; its jwt_header_alg marker is "EdDSA"`,
+	"invalid-high-risk-action-cacheable.json":                      `action cache policy: action "members.invite" is high risk and its profile cache_class must be none`,
 	"invalid-content-type-selector-no-accepted-class-owns-it.json": `selector content_type/application/x-www-form-urlencoded is declared by none of the accepted classes`,
 }
 
@@ -221,5 +222,37 @@ func TestEndpointAuthProfileGateRefusesEachRejectByClientFixtureForItsOwnRule(t 
 				t.Fatalf("refused, but not by its rule: want %q in %v", want, err)
 			}
 		})
+	}
+}
+
+func TestActionCachePolicyOverEveryCatalogActionAndCacheClass(t *testing.T) {
+	catalog := readJSONFile(t, "contracts/auth/v1/vocabulary/actions.v1.json")
+	for _, raw := range catalog["actions"].([]any) {
+		a := raw.(map[string]any)
+		id, risk := a["action"].(string), a["risk_class"].(string)
+		for _, cache := range []string{"none", "decision_bound", "resource_revision_bound"} {
+			err := CheckActionCachePolicy(map[string]any{"action": id, "cache_class": cache})
+			wantRefused := risk == "high" && cache != "none"
+			if wantRefused != (err != nil) {
+				t.Errorf("%s (%s) cache %s: refused=%v want %v", id, risk, cache, err != nil, wantRefused)
+			}
+			if err != nil && strings.Count(err.Error(), id) != 1 {
+				t.Errorf("refusal must name the action id once and nothing else of the profile: %v", err)
+			}
+		}
+	}
+}
+
+func TestActionCachePolicyRefusesACachedProfileWithoutAnAction(t *testing.T) {
+	for _, profile := range []map[string]any{
+		{"cache_class": "decision_bound"},
+		{"action": "", "cache_class": "resource_revision_bound"},
+	} {
+		if err := CheckActionCachePolicy(profile); err == nil {
+			t.Errorf("accepted a cached profile with no action: %v", profile)
+		}
+	}
+	if err := CheckActionCachePolicy(map[string]any{"classification": "public"}); err != nil {
+		t.Errorf("a profile without cache_class was refused: %v", err)
 	}
 }

@@ -7,6 +7,9 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
+
+	"github.com/full-chaos/dev-health-ops/contracts/auth/v1/vocabulary"
 )
 
 // ClassMarker is one way a credential class announces itself on the request
@@ -162,5 +165,48 @@ func ValidateEndpointAuthProfile(root string, document any) error {
 	if err := CheckClassSelector(profile, registry); err != nil {
 		return err
 	}
-	return CheckTokenPins(profile, registry)
+	if err := CheckTokenPins(profile, registry); err != nil {
+		return err
+	}
+	return CheckActionCachePolicy(profile)
 }
+
+// CheckActionCachePolicy joins a profile's cache_class to the action catalog:
+// a profile that caches must name an action, and a high-risk catalog action is
+// never cached (CHAOS-10641). The error names the rule and the action id only.
+func CheckActionCachePolicy(profile map[string]any) error {
+	cache, _ := profile["cache_class"].(string)
+	if cache == "" || cache == "none" {
+		return nil
+	}
+	action, _ := profile["action"].(string)
+	if action == "" {
+		return fmt.Errorf("action cache policy: a cached profile must name an action")
+	}
+	if highRiskActions()[action] {
+		return fmt.Errorf("action cache policy: action %q is high risk and its profile cache_class must be none", action)
+	}
+	return nil
+}
+
+// highRiskActions reads the embedded actions.v1 catalog directly:
+// internal/auth/policycatalog's own tests import this package, so importing it
+// here would be a cycle.
+var highRiskActions = sync.OnceValue(func() map[string]bool {
+	var catalog struct {
+		Actions []struct {
+			Action    string `json:"action"`
+			RiskClass string `json:"risk_class"`
+		} `json:"actions"`
+	}
+	if err := json.Unmarshal(vocabulary.ActionsV1, &catalog); err != nil {
+		panic(fmt.Sprintf("embedded actions.v1 is not JSON: %v", err))
+	}
+	high := map[string]bool{}
+	for _, a := range catalog.Actions {
+		if a.RiskClass == "high" {
+			high[a.Action] = true
+		}
+	}
+	return high
+})

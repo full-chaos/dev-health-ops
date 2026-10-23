@@ -131,7 +131,7 @@ func (h handlers) register(w http.ResponseWriter, r *http.Request) {
 			h.fail(w, r, "hash password", err)
 			return
 		}
-		h.queueMail(ctx, "account_exists", func(ctx context.Context) { h.sendAccountExists(ctx, existing) })
+		h.queueMail(ctx, mailAccountExists, func(ctx context.Context) error { return h.sendAccountExists(ctx, existing) })
 		writeRegisterAccepted(w)
 		return
 	}
@@ -185,7 +185,7 @@ VALUES ($1, $2, NULL, $3, $4, NULL, 'local', NULL, true, false, false, 0, NULL, 
 		h.fail(w, r, "commit", err)
 		return
 	}
-	h.queueMail(ctx, "verification", func(ctx context.Context) { h.sendVerification(ctx, user, token) })
+	h.queueMail(ctx, mailVerification, func(ctx context.Context) error { return h.sendRegisterVerification(ctx, user, token) })
 	writeRegisterAccepted(w)
 }
 
@@ -200,24 +200,41 @@ func writeRegisterAccepted(w http.ResponseWriter) {
 }
 
 // queueMail sends one best-effort mail off the request; the send outlives it.
-func (h handlers) queueMail(ctx context.Context, kind string, send func(context.Context)) {
+func (h handlers) queueMail(ctx context.Context, purpose string, send func(context.Context) error) {
 	detached := context.WithoutCancel(ctx)
-	if !linkMailQueue.submit(func() { send(detached) }) {
-		h.Logger.WarnContext(ctx, "api session mail dropped: queue full", "kind", kind)
+	run := func() error {
+		err := send(detached)
+		if err != nil {
+			h.Logger.ErrorContext(detached, "api: failed to send sign-up email", "purpose", purpose, "error", err)
+		}
+		return err
+	}
+	if !linkMailQueue.submit(purpose, run) {
+		h.Logger.WarnContext(ctx, "api session mail dropped: queue full", "purpose", purpose)
 	}
 }
 
-// sendAccountExists tells the owner of an existing account that a sign-up was
-// started with the address. It names nothing about the requester.
-func (h handlers) sendAccountExists(ctx context.Context, user *userRow) {
+// sendRegisterVerification is sendVerification with the failure returned.
+func (h handlers) sendRegisterVerification(ctx context.Context, user *userRow, token string) error {
 	name := user.Email
 	if user.FullName != nil && *user.FullName != "" {
 		name = *user.FullName
 	}
-	h.Mail.Send(ctx, h.Logger, "api: failed to send account exists email", user.Email, "You already have an account",
-		"account_exists", map[string]string{
-			"full_name":  name,
-			"signin_url": h.Mail.BaseURL() + "/auth/signin",
-			"reset_url":  h.Mail.BaseURL() + "/auth/forgot-password",
-		}, "user_id", user.ID.String())
+	return h.Mail.Try(ctx, user.Email, "Verify your email address", "verification", map[string]string{
+		"full_name": name, "verification_url": h.Mail.Link("/auth/verify", token),
+	})
+}
+
+// sendAccountExists tells the owner of an existing account that a sign-up was
+// started with the address. It names nothing about the requester.
+func (h handlers) sendAccountExists(ctx context.Context, user *userRow) error {
+	name := user.Email
+	if user.FullName != nil && *user.FullName != "" {
+		name = *user.FullName
+	}
+	return h.Mail.Try(ctx, user.Email, "You already have an account", "account_exists", map[string]string{
+		"full_name":  name,
+		"signin_url": h.Mail.BaseURL() + "/auth/signin",
+		"reset_url":  h.Mail.BaseURL() + "/auth/forgot-password",
+	})
 }

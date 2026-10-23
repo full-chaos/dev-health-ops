@@ -13,6 +13,20 @@ const UserAccessTokenClass = "user_access_token"
 // It is the one place the value lives; the schema names it, the corpus pins it.
 const AccessTokenLifetimeCeiling = 60 * time.Minute
 
+// accessTokenScopes binds each user-token audience to its one scope
+// (vocabulary/audiences.json, access-token.v1 schema).
+var accessTokenScopes = map[string]string{
+	"dev-health-api": "api:access",
+	"auth-service":   "auth:session",
+}
+
+// AccessTokenScope is the scope of a user access token for audience; ok is
+// false for an audience no user access token carries.
+func AccessTokenScope(audience string) (scope string, ok bool) {
+	scope, ok = accessTokenScopes[audience]
+	return scope, ok
+}
+
 // AccessTokenHeader is the JWS protected header of an access-token.v1 token.
 type AccessTokenHeader struct {
 	Alg string `json:"alg"`

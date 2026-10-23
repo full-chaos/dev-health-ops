@@ -10,6 +10,8 @@ internal/chmigrate
 internal/cli
 internal/egressguard
 internal/httpguard
+internal/jobs/metrics/querybound
+internal/jobs/metrics/workitemmetrics
 internal/netclass
 internal/operationalordering
 internal/ownershipwindow
@@ -19,6 +21,7 @@ internal/platform/dbphase
 internal/platform/dbspan
 internal/platform/errortext
 internal/platform/errortext/hardened
+internal/platform/fernet
 internal/platform/logging
 internal/platform/pgident
 internal/platform/queuecontrol
@@ -32,6 +35,7 @@ internal/pythonparity/pyidna
 internal/pythonparity/pyunicodedata
 internal/queryapi/activeteams
 internal/queryapi/deltarule
+internal/queryapi/linkeditems
 internal/queryapi/people
 internal/queryapi/quadrant
 internal/queryapi/rowview
@@ -41,10 +45,13 @@ internal/queryapi/timewindow
 internal/storage/clickhouse
 internal/storage/clickhouse/liverow
 internal/storage/postgres
+internal/storage/postgres/aclguard
 internal/storage/river
 internal/storage/roleacl
 internal/syncdispatchruntime/synclog
 internal/teamactive
+internal/teamattribution
+internal/teamid
 internal/teamkeytables
 internal/testsupport/containers
 internal/testsupport/moduleroot

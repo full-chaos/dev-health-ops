@@ -182,7 +182,7 @@ func (s *Service) authorizeOAuthAdmitted(ctx context.Context, admitted StoredPro
 		s.refused(ctx, routeOAuthAuthorize, admitted.ID, failure)
 		return AuthorizeResult{}, failure
 	}
-	s.succeeded(ctx, routeOAuthAuthorize, admitted.ID, nil)
+	s.succeeded(ctx, routeOAuthAuthorize, admitted.ID)
 	return result, nil
 }
 
@@ -195,7 +195,7 @@ func (s *Service) AuthorizeOAuthByType(ctx context.Context, providerType string,
 		s.refused(ctx, routeOAuthAuthorizeByType, providerID, failure)
 		return AuthorizeResult{}, failure
 	}
-	s.succeeded(ctx, routeOAuthAuthorizeByType, providerID, nil)
+	s.succeeded(ctx, routeOAuthAuthorizeByType, providerID)
 	return result, nil
 }
 
@@ -297,7 +297,7 @@ func (s *Service) callbackOAuthAdmitted(ctx context.Context, admitted StoredProv
 		s.refused(ctx, routeOAuthCallback, admitted.ID, failure)
 		return Login{}, clear, failure
 	}
-	s.succeeded(ctx, routeOAuthCallback, admitted.ID, &login.PrincipalID)
+	s.succeeded(ctx, routeOAuthCallback, admitted.ID)
 	return login, clear, nil
 }
 

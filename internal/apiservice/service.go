@@ -277,6 +277,7 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 			Invites:       deps.Invites,
 		})...)
 	}
+	webhookintake.LogUnconfiguredSecrets(logger)
 	routes = append(routes, webhookintake.Routes(webhookintake.Deps{
 		Pool:      deps.Pool,
 		Valkey:    deps.Valkey,

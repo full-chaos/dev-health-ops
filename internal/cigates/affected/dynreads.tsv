@@ -28,6 +28,7 @@ internal/apiservice/billingvenue	billing_webhook_venue_oracle_integration_test.g
 internal/atlassianteams	absence_test.go
 internal/atlassianteams	vendored_documents_test.go
 internal/atlassianteams	vendored_patch_chain_test.go
+internal/auth/authapi	issuer_eddsa_test.go
 internal/auth/authconfig	config_test.go
 internal/auth/authruntime	audit_request_id_scan_test.go
 internal/auth/authruntime	endpoint_profile_rows_test.go
@@ -131,6 +132,7 @@ internal/cigates/bigboyrender	helpers_test.go
 internal/cigates/bigboyrender	nopython_test.go
 internal/cigates/bigboyrender	parity_test.go
 internal/cigates/bigboyrender	posture.go
+internal/cigates/bigboyrender	values.go
 internal/cigates/cachepoison	cachepoison_test.go
 internal/cigates/chartgates	helpers_test.go
 internal/cigates/chartgates	overlay_test.go
@@ -364,6 +366,7 @@ internal/mintcli/envelopekeys	verify_roundtrip_test.go
 internal/operationalordering	finalreads_test.go
 internal/ownershipwindow	ownershipwindow_test.go
 internal/platform/config	route_switch_absence_test.go
+internal/platform/fernet	fernet_test.go
 internal/platform/logging	binaries_enumeration_test.go
 internal/platform/logging	provider_origin_sources_test.go
 internal/platform/secrets	envreads_test.go
@@ -497,6 +500,7 @@ internal/storage/postgres	posture_cache_cadence_test.go
 internal/storage/postgres	posture_identity_sites_test.go
 internal/storage/postgres	provision_script_integration_test.go
 internal/storage/postgres	venue_posture_coverage_test.go
+internal/storage/postgres/aclguard	census_test.go
 internal/storage/postgres/authschema	grant_shape_contract_test.go
 internal/storedversion	writers_test.go
 internal/streamhandlers	external_clickhouse_test.go

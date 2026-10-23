@@ -223,6 +223,32 @@ func causeClass(err error, timedOut bool) string {
 	return providersync.CauseClassUnclassified
 }
 
+// Per-class try caps for the ordinary retry arm. The registry max_attempts (5)
+// stays the ceiling; a capped class ends earlier under its stored cause class.
+// Python used one try for every class (the next scheduled run was the retry).
+const (
+	// permanentMaxAttempts: the provider refused the same request for good.
+	permanentMaxAttempts = 1
+	// conflictMaxAttempts: a 409 is usually a race with another writer; one retry covers it.
+	conflictMaxAttempts = 2
+	// unclassifiedMaxAttempts: an unknown error may be a short blip; one retry covers it, five hold the org's capacity.
+	unclassifiedMaxAttempts = 2
+)
+
+// retryMaxAttempts is the try cap for the class of err, or 0 for no cap
+// (transient, cancelled and the rest keep the registry ceiling).
+func retryMaxAttempts(err error) int {
+	switch causeClass(err, false) {
+	case causeClassProviderPrefix + string(providerfoundation.ErrorPermanent):
+		return permanentMaxAttempts
+	case causeClassProviderPrefix + string(providerfoundation.ErrorConflict):
+		return conflictMaxAttempts
+	case providersync.CauseClassUnclassified:
+		return unclassifiedMaxAttempts
+	}
+	return 0
+}
+
 func deterministicTerminalCategory(err error) (string, bool) {
 	if providerfoundation.IsEgressRefused(err) {
 		return EgressRefusedCategory, true
@@ -1176,7 +1202,11 @@ func (handler *Handler) Work(
 		return jobruntime.Permanent(jobruntime.WithSafeCauseText(err,
 			safeCause(category, session.Claim, execution, err)))
 	}
-	if execution.Attempt >= execution.Definition.MaxAttempts {
+	maxAttempts := execution.Definition.MaxAttempts
+	if limit := retryMaxAttempts(err); limit > 0 && limit < maxAttempts {
+		maxAttempts = limit
+	}
+	if execution.Attempt >= maxAttempts {
 		// The collector's contract forbids recording a failed CAS attempt, so
 		// this capture (where the prior code discarded the error entirely)
 		// only adds the ability to gate the metric on true success; it does
@@ -1193,6 +1223,10 @@ func (handler *Handler) Work(
 			)
 			handler.observeLeaseRecovery(session.Claim, jobruntime.SyncLeaseResultFailed)
 			handler.logLifecycle(ctx, execution, session.Claim, "sync_provider_unit_finished", "failed", err)
+			if execution.Attempt < execution.Definition.MaxAttempts {
+				return jobruntime.Permanent(jobruntime.WithSafeCauseText(err,
+					safeCause(exhaustedFailureCategory(session.Claim), session.Claim, execution, err)))
+			}
 		}
 		return jobruntime.Retryable(jobruntime.WithSafeCauseText(err,
 			safeCause(exhaustedFailureCategory(session.Claim), session.Claim, execution, err)))

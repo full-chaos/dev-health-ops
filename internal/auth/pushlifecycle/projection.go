@@ -9,6 +9,7 @@ package pushlifecycle
 import (
 	"slices"
 	"sort"
+	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 )
@@ -65,20 +66,23 @@ type State struct {
 	Scopes           []string
 	RotationParentID string
 	ExpiresAt        string
+	// TerminalAt is the created_at of the revoked or expired event that ended
+	// the credential; zero while it is active.
+	TerminalAt time.Time
 }
 
-// Parent is what a rotation is compared with: the id and scopes of the
-// credential it replaces. A nil Parent, or one whose ID is not the event's
-// rotation_parent_id, is RefusedParent, never "no parent, so apply".
-type Parent struct {
-	ID     string
-	Scopes []string
-}
-
-// Apply folds event into state. The returned state is state itself unless the
-// outcome is Applied. Apply never panics and never returns Applied for a
+// Apply folds event into state. For a rotated event, parent is the projected
+// State of the credential named by rotation_parent_id; the caller loads it from
+// storage keyed by that id inside the event's organization, and Apply trusts
+// only what it can check: the parent's id, organization and source must equal
+// the event's, or the outcome is RefusedParent (so does a nil parent). A parent
+// that was already terminal before the rotation's created_at is RefusedParent;
+// one that became terminal at or after it, in any arrival order, is accepted,
+// because a rotation commits together with the retirement of its parent. A
+// parent that has not been seen yet is the caller's nil: retry later. The
+// returned state is state itself unless the outcome is Applied. Apply never panics and never returns Applied for a
 // terminal credential.
-func Apply(state State, event contracts.ExternalPushLifecycleEvent, parent *Parent) (State, Outcome) {
+func Apply(state State, event contracts.ExternalPushLifecycleEvent, parent *State) (State, Outcome) {
 	revision := int64(event.Payload.Revision)
 	switch {
 	case revision < 1 || event.AggregateType != contracts.ExternalPushCredentialAggregate || event.AggregateID == "":
@@ -108,7 +112,12 @@ func Apply(state State, event contracts.ExternalPushLifecycleEvent, parent *Pare
 			if change.RotationParentID == "" || change.RotationParentID == event.AggregateID {
 				return state, RefusedTransition
 			}
-			if parent == nil || parent.ID == "" || parent.ID != change.RotationParentID {
+			if parent == nil || parent.AggregateID == "" || parent.AggregateID != change.RotationParentID ||
+				parent.OrganizationID != event.Payload.OrganizationID || parent.SourceID != event.Payload.SourceID ||
+				parent.Revision < 1 {
+				return state, RefusedParent
+			}
+			if parent.Status.Terminal() && parent.TerminalAt.Before(event.CreatedAt.Time) {
 				return state, RefusedParent
 			}
 			if !subset(change.Scopes, parent.Scopes) {
@@ -135,11 +144,13 @@ func Apply(state State, event contracts.ExternalPushLifecycleEvent, parent *Pare
 			return state, RefusedTransition
 		}
 		next.Status = StatusRevoked
+		next.TerminalAt = event.CreatedAt.Time
 	case contracts.ExternalPushExpired:
 		if state.Status != StatusActive || !sameIdentity(state, event) {
 			return state, RefusedTransition
 		}
 		next.Status = StatusExpired
+		next.TerminalAt = event.CreatedAt.Time
 		next.ExpiresAt = expiry(change)
 	default:
 		return state, RefusedTransition

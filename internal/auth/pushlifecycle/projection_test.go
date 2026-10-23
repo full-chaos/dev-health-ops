@@ -9,6 +9,8 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 )
 
+var t0 = time.Date(2026, 10, 23, 10, 0, 0, 0, time.UTC)
+
 const (
 	org    = "org_EXAMPLE0000000000000001"
 	source = "src_EXAMPLE0000000000000001"
@@ -22,6 +24,7 @@ func event(typ string, id string, revision int64, change contracts.ExternalPushL
 		AggregateType: contracts.ExternalPushCredentialAggregate,
 		AggregateID:   id,
 		EventType:     typ,
+		CreatedAt:     contracts.Timestamp{Time: t0},
 		Payload: contracts.ExternalPushLifecyclePayload{
 			Revision: contracts.Revision(revision), OrganizationID: org, SourceID: source, Change: change,
 		},
@@ -51,7 +54,7 @@ func rotated(id, parent string, scopes ...string) contracts.ExternalPushLifecycl
 		Status: "active", Fingerprint: "fedcba9876543210", Scopes: scopes, RotationParentID: parent})
 }
 
-func mustApply(t *testing.T, state State, e contracts.ExternalPushLifecycleEvent, parent *Parent) State {
+func mustApply(t *testing.T, state State, e contracts.ExternalPushLifecycleEvent, parent *State) State {
 	t.Helper()
 	next, outcome := Apply(state, e, parent)
 	if outcome != Applied {
@@ -99,7 +102,7 @@ func TestProjectionDuplicateAndStaleAreNoOps(t *testing.T) {
 func sameState(a, b State) bool {
 	return a.AggregateID == b.AggregateID && a.OrganizationID == b.OrganizationID && a.SourceID == b.SourceID &&
 		a.Revision == b.Revision && a.Status == b.Status && a.Fingerprint == b.Fingerprint &&
-		slices.Equal(a.Scopes, b.Scopes) && a.RotationParentID == b.RotationParentID && a.ExpiresAt == b.ExpiresAt
+		slices.Equal(a.Scopes, b.Scopes) && a.RotationParentID == b.RotationParentID && a.ExpiresAt == b.ExpiresAt && a.TerminalAt.Equal(b.TerminalAt)
 }
 
 func TestProjectionGapIsRefused(t *testing.T) {
@@ -145,24 +148,40 @@ func TestProjectionNeverWidensScopes(t *testing.T) {
 	}
 }
 
-func TestProjectionRotationNeedsTheActiveParent(t *testing.T) {
-	parent := &Parent{ID: credA, Scopes: []string{"ingest:write", "schema:read"}}
-	state := mustApply(t, State{}, rotated(credB, credA, "ingest:write"), parent)
+// parentState builds the projected state of the credential a rotation names.
+func parentState(t *testing.T, scopes ...string) State {
+	t.Helper()
+	return mustApply(t, State{}, created(credA, scopes...), nil)
+}
+
+func TestProjectionRotationIsBoundToTheNamedParent(t *testing.T) {
+	parent := parentState(t, "ingest:write", "schema:read")
+	state := mustApply(t, State{}, rotated(credB, credA, "ingest:write"), &parent)
 	if state.RotationParentID != credA || state.Status != StatusActive {
 		t.Fatalf("after rotated: %+v", state)
 	}
+	other := func(mutate func(*State)) *State {
+		p := parent
+		mutate(&p)
+		return &p
+	}
 	cases := map[string]struct {
 		e      contracts.ExternalPushLifecycleEvent
-		parent *Parent
+		parent *State
 		want   Outcome
 	}{
-		"no parent view":            {rotated(credB, credA, "ingest:write"), nil, RefusedParent},
-		"wider than parent":         {rotated(credB, credA, "ingest:write", "ingest:status"), parent, RefusedWiden},
-		"its own parent":            {rotated(credB, credB, "ingest:write"), parent, RefusedTransition},
-		"no parent id":              {rotated(credB, "", "ingest:write"), parent, RefusedTransition},
-		"another credential's view": {rotated(credB, credA, "ingest:write"), &Parent{ID: "cred-C", Scopes: []string{"ingest:write"}}, RefusedParent},
-		"view with no id":           {rotated(credB, credA, "ingest:write"), &Parent{Scopes: []string{"ingest:write"}}, RefusedParent},
-		"rotated after create":      {rotated(credB, credA, "ingest:write"), parent, RefusedTransition},
+		"no parent state":          {rotated(credB, credA, "ingest:write"), nil, RefusedParent},
+		"never-seen parent":        {rotated(credB, credA, "ingest:write"), &State{}, RefusedParent},
+		"wider than parent":        {rotated(credB, credA, "ingest:write", "ingest:status"), &parent, RefusedWiden},
+		"its own parent":           {rotated(credB, credB, "ingest:write"), &parent, RefusedTransition},
+		"no parent id":             {rotated(credB, "", "ingest:write"), &parent, RefusedTransition},
+		"another credential":       {rotated(credB, credA, "ingest:write"), other(func(p *State) { p.AggregateID = "cred-C" }), RefusedParent},
+		"parent with no id":        {rotated(credB, credA, "ingest:write"), other(func(p *State) { p.AggregateID = "" }), RefusedParent},
+		"parent in another org":    {rotated(credB, credA, "ingest:write"), other(func(p *State) { p.OrganizationID = "org_EXAMPLE0000000000000002" }), RefusedParent},
+		"parent in another source": {rotated(credB, credA, "ingest:write"), other(func(p *State) { p.SourceID = "src_EXAMPLE0000000000000002" }), RefusedParent},
+		"rotated after create":     {rotated(credB, credA, "ingest:write"), &parent, RefusedTransition},
+		"child org differs":        {withOrg(rotated(credB, credA, "ingest:write"), "org_EXAMPLE0000000000000002"), &parent, RefusedParent},
+		"child source differs":     {withSource(rotated(credB, credA, "ingest:write"), "src_EXAMPLE0000000000000002"), &parent, RefusedParent},
 	}
 	for name, tc := range cases {
 		from := State{}
@@ -173,6 +192,47 @@ func TestProjectionRotationNeedsTheActiveParent(t *testing.T) {
 		if _, outcome := Apply(from, tc.e, tc.parent); outcome != tc.want {
 			t.Errorf("%s: outcome %s, want %s", name, outcome, tc.want)
 		}
+	}
+}
+
+func withOrg(e contracts.ExternalPushLifecycleEvent, org string) contracts.ExternalPushLifecycleEvent {
+	e.Payload.OrganizationID = org
+	return e
+}
+
+func withSource(e contracts.ExternalPushLifecycleEvent, source string) contracts.ExternalPushLifecycleEvent {
+	e.Payload.SourceID = source
+	return e
+}
+
+// TestProjectionRotationParentTerminalOrdering: a parent that became terminal
+// before the rotation's created_at is refused; one that became terminal at or
+// after it is accepted, so rotate-then-retire works in any arrival order.
+func TestProjectionRotationParentTerminalOrdering(t *testing.T) {
+	active := parentState(t, "ingest:write")
+	retire := func(at time.Time) State {
+		e := revoked(credA, 2)
+		e.CreatedAt = contracts.Timestamp{Time: at}
+		return mustApply(t, active, e, nil)
+	}
+	rotation := rotated(credB, credA, "ingest:write")
+	for name, tc := range map[string]struct {
+		parent State
+		want   Outcome
+	}{
+		"retired before the rotation": {retire(t0.Add(-time.Second)), RefusedParent},
+		"retired at the rotation":     {retire(t0), Applied},
+		"retired after the rotation":  {retire(t0.Add(time.Second)), Applied},
+		"still active":                {active, Applied},
+	} {
+		if _, outcome := Apply(State{}, rotation, &tc.parent); outcome != tc.want {
+			t.Errorf("%s: outcome %s, want %s", name, outcome, tc.want)
+		}
+	}
+	noStamp := retire(t0)
+	noStamp.TerminalAt = time.Time{}
+	if _, outcome := Apply(State{}, rotation, &noStamp); outcome != RefusedParent {
+		t.Errorf("terminal parent with no timestamp: outcome %s, want refused_parent (fail closed)", outcome)
 	}
 }
 
@@ -226,7 +286,7 @@ func TestProjectionNeverAppliesToATerminalAggregateAndNeverPanics(t *testing.T) 
 			}
 			events = append(events, e)
 		}
-		parent := &Parent{ID: credB, Scopes: scopePool}
+		parent := &State{AggregateID: credB, OrganizationID: org, SourceID: source, Revision: 1, Status: StatusActive, Scopes: scopePool}
 		replay := func() State {
 			state := State{}
 			for _, e := range events {

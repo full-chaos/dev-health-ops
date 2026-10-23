@@ -35,7 +35,7 @@ func withFastDerive(t *testing.T) *int {
 
 func resetCache() {
 	cacheMu.Lock()
-	cacheEntries = map[[32]byte]*derivation{}
+	cacheEntries = map[cacheID]*derivation{}
 	cacheOrder = nil
 	cacheMu.Unlock()
 }
@@ -70,11 +70,11 @@ func TestKeyIsDerivedOncePerKeyAndSalt(t *testing.T) {
 func TestRealDerivationRunsOnce(t *testing.T) {
 	resetCache()
 	t.Cleanup(resetCache)
+	before := Derivations()
 	cipher, err := New("real-master-key", "real-salt")
 	if err != nil {
 		t.Fatal(err)
 	}
-	before := Derivations()
 	sealed, err := cipher.Seal([]byte("value"), time.Now(), rand.Reader)
 	if err != nil {
 		t.Fatal(err)
@@ -212,18 +212,33 @@ func TestNothingPrintsAKeySaltOrDigest(t *testing.T) {
 	_, _ = cipher.Open("v1:garbage")
 	digest := cacheKey([]byte(key), []byte(salt))
 	cacheMu.Lock()
-	var printed strings.Builder
-	for id, entry := range cacheEntries {
-		fmt.Fprintf(&printed, "%v %+v %#v %s|%v|", entry, entry, entry, entry, id == digest)
-	}
+	printed := fmt.Sprintf("%v|%+v|%#v|%s|%x|%d", cacheEntries, cacheEntries, cacheEntries, cacheOrder, cacheOrder, cacheOrder)
 	cacheMu.Unlock()
 	derived, _ := derivedKey([]byte(key), []byte(salt))
-	hexDigest := fmt.Sprintf("%x", digest)
-	for _, text := range []string{logs.String(), printed.String()} {
+	hexDigest := fmt.Sprintf("%x", [32]byte(digest))
+	for _, text := range []string{logs.String(), printed} {
 		for _, secret := range []string{key, salt, hexDigest, fmt.Sprintf("%x", derived)} {
 			if strings.Contains(text, secret) {
 				t.Errorf("output carries %q", secret[:8])
 			}
 		}
+	}
+}
+
+func TestNewDerivesTheKeyBeforeAnyOpenOrSeal(t *testing.T) {
+	calls := withFastDerive(t)
+	cipher, err := New("construction-key", "salt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if *calls != 1 {
+		t.Fatalf("%d derivations after New, want 1", *calls)
+	}
+	sealed, err := cipher.Seal([]byte("x"), time.Now(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cipher.Open(sealed); err != nil || *calls != 1 {
+		t.Fatalf("open after New: %v with %d derivations, want none more", err, *calls)
 	}
 }

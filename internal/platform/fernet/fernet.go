@@ -55,7 +55,10 @@ func New(key, salt string) (Cipher, error) {
 	if salt == "" {
 		salt = DefaultSalt
 	}
-	return Cipher{key: []byte(key), salt: []byte(salt)}, nil
+	cipher := Cipher{key: []byte(key), salt: []byte(salt)}
+	// Derive now (once per key and salt): no later Open or Seal is the first.
+	_, _ = derivedKey(cipher.key, cipher.salt)
+	return cipher, nil
 }
 
 // Open decrypts a stored value: "v1:" + token (PBKDF2 key) or a bare token

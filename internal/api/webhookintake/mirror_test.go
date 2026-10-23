@@ -2,7 +2,9 @@ package webhookintake
 
 import (
 	"context"
+	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -97,14 +99,43 @@ func TestMirrorTokenIsSealedPerKeyAndResealedWhenItStopsOpening(t *testing.T) {
 		t.Fatal("b's token opens under a's key")
 	}
 	mirrorTokens.mu.Lock()
-	mirrorTokens.byKey[first] = "v1:not-a-token"
+	mirrorTokens.byKey[mirrorKey{first}] = "v1:not-a-token"
 	mirrorTokens.mu.Unlock()
 	a.mirrorDecrypt()
 	fresh := a.mirrorToken()
 	if _, err := first.Decrypt(secrets.NewValue(fresh)); err != nil {
 		t.Fatalf("the token was not sealed again after it stopped opening: %v", err)
 	}
-	if mirrorTokens.byKey[(Deps{}).Decryptor] != "" {
+	mirrorTokens.mu.Lock()
+	_, held := mirrorTokens.byKey[mirrorKey{(Deps{}).Decryptor}]
+	printed := fmt.Sprintf("%v %+v %#v %s", mirrorTokens.byKey, mirrorTokens.byKey, mirrorTokens.byKey, mirrorTokens.order)
+	mirrorTokens.mu.Unlock()
+	if held {
 		t.Fatal("the zero decryptor holds a token")
+	}
+	for _, secret := range []string{"mirror-key-one", "mirror-key-two"} {
+		if strings.Contains(printed, secret) {
+			t.Fatalf("the formatted token map carries a key: %s", printed)
+		}
+	}
+}
+
+func TestAnOversizedStoredSecretIsRefusedLikeAnUnknownBinding(t *testing.T) {
+	f := newRefusalFixture(t, "active")
+	previous := loadBinding
+	loadBinding = func(ctx context.Context, pool *pgxpool.Pool, id string) (pagerdutyBinding, error) {
+		found, err := previous(ctx, pool, id)
+		found.SigningSecretEncrypted += strings.Repeat("A", maxStoredSecretBytes)
+		return found, err
+	}
+	t.Cleanup(func() { loadBinding = previous })
+	body := []byte(`{"event":{}}`)
+	work := decryptWork.Load()
+	got, _ := f.send(f.bindingID, f.sub, pagerdutySign(f.secret, body), body)
+	if got.Code != http.StatusUnauthorized || got.Body.String() != `{"detail":"Invalid signature"}` {
+		t.Fatalf("an oversized stored secret answered %d %s", got.Code, got.Body.String())
+	}
+	if decryptWork.Load()-work != 1 {
+		t.Fatalf("%d decrypt steps, want the one dummy step", decryptWork.Load()-work)
 	}
 }

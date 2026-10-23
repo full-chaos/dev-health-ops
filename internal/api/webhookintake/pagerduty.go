@@ -25,8 +25,11 @@ import (
 )
 
 const (
-	maxWebhookBodyBytes          = 1_048_576
-	maxSignatureCandidates       = 8
+	maxWebhookBodyBytes    = 1_048_576
+	maxSignatureCandidates = 8
+	// maxStoredSecretBytes bounds the stored ciphertext a delivery decrypts: a
+	// signing secret is a few hundred bytes, so a larger value is not usable.
+	maxStoredSecretBytes         = 8192
 	replayRetentionSeconds       = 30 * 24 * 60 * 60
 	pendingReplayClaimTTLSeconds = 5 * 60
 	canonicalIncidentFeatureKey  = "canonical_incident_ingestion"
@@ -486,6 +489,8 @@ func (d Deps) handlePagerDutyWebhook() http.HandlerFunc {
 				d.logger().Error("pagerduty_webhook load binding failed", "binding_id", canonicalBindingID, "error", err)
 				policy.WriteDetail(w, http.StatusInternalServerError, "webhook store is unavailable", nil)
 				return
+			case len(found.SigningSecretEncrypted) > maxStoredSecretBytes:
+				refusal = refusalBindingUnavailable
 			case subscriptionHeader == "":
 				refusal = refusalSubscriptionMissing
 			case found.ID != canonicalBindingID || subscriptionHeader != found.ProviderSubscriptionID:

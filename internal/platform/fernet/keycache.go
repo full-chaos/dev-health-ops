@@ -3,6 +3,7 @@ package fernet
 import (
 	"crypto/sha256"
 	"encoding/binary"
+	"fmt"
 	"sync"
 	"sync/atomic"
 
@@ -24,10 +25,15 @@ type derivation struct {
 func (*derivation) String() string   { return "fernet.derivation" }
 func (*derivation) GoString() string { return "fernet.derivation" }
 
+// cacheID is the digest naming a cache entry; it never prints.
+type cacheID [sha256.Size]byte
+
+func (cacheID) Format(state fmt.State, _ rune) { _, _ = state.Write([]byte("fernet.cacheID")) }
+
 var (
 	cacheMu      sync.Mutex
-	cacheEntries = map[[sha256.Size]byte]*derivation{}
-	cacheOrder   [][sha256.Size]byte
+	cacheEntries = map[cacheID]*derivation{}
+	cacheOrder   []cacheID
 	derivations  atomic.Uint64
 
 	// deriveKey is the real derivation; tests replace it to count or fail.
@@ -41,14 +47,14 @@ func Derivations() uint64 { return derivations.Load() }
 
 // cacheKey identifies a (key, salt) pair without ambiguity: the key's length
 // is part of the hashed input, so ("ab","c") and ("a","bc") differ.
-func cacheKey(key, salt []byte) [sha256.Size]byte {
+func cacheKey(key, salt []byte) cacheID {
 	hash := sha256.New()
 	var length [8]byte
 	binary.BigEndian.PutUint64(length[:], uint64(len(key)))
 	hash.Write(length[:])
 	hash.Write(key)
 	hash.Write(salt)
-	var out [sha256.Size]byte
+	var out cacheID
 	copy(out[:], hash.Sum(nil))
 	return out
 }

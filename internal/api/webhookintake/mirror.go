@@ -1,6 +1,7 @@
 package webhookintake
 
 import (
+	"fmt"
 	"sync"
 	"sync/atomic"
 
@@ -28,14 +29,24 @@ const (
 // secret does. A decryptor with a new key gets its own token.
 var mirrorTokens = struct {
 	mu    sync.Mutex
-	byKey map[providerfoundation.FernetDecryptor]string
-	order []providerfoundation.FernetDecryptor
-}{byKey: map[providerfoundation.FernetDecryptor]string{}}
+	byKey map[mirrorKey]string
+	order []mirrorKey
+}{byKey: map[mirrorKey]string{}}
+
+// mirrorKey names a decryptor in the token map. It never prints: a decryptor's
+// own fields hold the key and salt.
+type mirrorKey struct {
+	decryptor providerfoundation.FernetDecryptor
+}
+
+func (mirrorKey) Format(state fmt.State, _ rune) {
+	_, _ = state.Write([]byte("webhookintake.mirrorKey"))
+}
 
 func (d Deps) mirrorToken() string {
 	mirrorTokens.mu.Lock()
 	defer mirrorTokens.mu.Unlock()
-	if token, ok := mirrorTokens.byKey[d.Decryptor]; ok {
+	if token, ok := mirrorTokens.byKey[mirrorKey{d.Decryptor}]; ok {
 		return token
 	}
 	sealed, err := d.Decryptor.Encrypt([]byte(mirrorPlaintext))
@@ -43,8 +54,8 @@ func (d Deps) mirrorToken() string {
 		return ""
 	}
 	token := sealed.Reveal()
-	mirrorTokens.byKey[d.Decryptor] = token
-	mirrorTokens.order = append(mirrorTokens.order, d.Decryptor)
+	mirrorTokens.byKey[mirrorKey{d.Decryptor}] = token
+	mirrorTokens.order = append(mirrorTokens.order, mirrorKey{d.Decryptor})
 	for len(mirrorTokens.order) > mirrorTokenKeep {
 		delete(mirrorTokens.byKey, mirrorTokens.order[0])
 		mirrorTokens.order = mirrorTokens.order[1:]
@@ -55,9 +66,10 @@ func (d Deps) mirrorToken() string {
 func forgetMirrorToken(decryptor providerfoundation.FernetDecryptor) {
 	mirrorTokens.mu.Lock()
 	defer mirrorTokens.mu.Unlock()
-	delete(mirrorTokens.byKey, decryptor)
+	key := mirrorKey{decryptor}
+	delete(mirrorTokens.byKey, key)
 	for index, held := range mirrorTokens.order {
-		if held == decryptor {
+		if held == key {
 			mirrorTokens.order = append(mirrorTokens.order[:index], mirrorTokens.order[index+1:]...)
 			break
 		}

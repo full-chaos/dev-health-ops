@@ -1,0 +1,41 @@
+{
+  "description": "The golden corpus for the organization-create-request.v1 body. No client-only rule: every rule is a schema rule.",
+  "accept": [
+    {
+      "file": "valid.json",
+      "why": "A slug and a name."
+    }
+  ],
+  "reject": [
+    {
+      "file": "invalid-organization-id-present.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "why": "Ids are server-minted; a caller id is not a member."
+    },
+    {
+      "file": "invalid-status-present.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "why": "A caller cannot set status."
+    },
+    {
+      "file": "invalid-slug-short.json",
+      "expect_instance_location": "/slug",
+      "expect_keyword": "pattern",
+      "why": "A one-character slug."
+    },
+    {
+      "file": "invalid-name-empty.json",
+      "expect_instance_location": "/name",
+      "expect_keyword": "minLength",
+      "why": "An empty name."
+    },
+    {
+      "file": "invalid-slug-absent.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "why": "No slug."
+    }
+  ]
+}

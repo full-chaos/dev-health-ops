@@ -88,7 +88,7 @@ func TestCapacityRefusesAStaleSchema(t *testing.T) {
 		// The staged table is a copy of the migrated table (every column, with its
 		// type), so the ONLY difference from an acceptable deployment is the
 		// engine clause.
-		restageWorkItemMetricsDaily(ctx, t, fresh, "MergeTree ORDER BY (org_id, day, work_scope_id, team_id)")
+		restageWorkItemMetricsDaily(ctx, t, fresh, "MergeTree PRIMARY KEY (org_id) ORDER BY (org_id, day, work_scope_id, team_id)")
 
 		// Guard the guard: if this staging ever stopped producing a table with
 		// all six columns, the refusal below would fire for the COLUMN reason
@@ -216,7 +216,7 @@ func TestCapacityRefusesAStaleSchema(t *testing.T) {
 		// FINAL collapses those rows before aggregation: a multi-provider org
 		// silently loses data, with no error anywhere.
 		fresh := freshMigratedClickHouse(t, ctx, OperationalOrderingRevision)
-		restageWorkItemMetricsDaily(ctx, t, fresh, "ReplacingMergeTree(computed_at) ORDER BY (org_id, day, work_scope_id, team_id)")
+		restageWorkItemMetricsDaily(ctx, t, fresh, "ReplacingMergeTree(computed_at) PRIMARY KEY (org_id) ORDER BY (org_id, day, work_scope_id, team_id)")
 
 		// Guard the guard: columns, engine family and version column must all
 		// look acceptable, or a refusal here would be about one of those and

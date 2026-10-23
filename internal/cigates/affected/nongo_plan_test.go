@@ -80,11 +80,13 @@ func withReads(rows string) string { return fixtureReads + rows }
 const envReader = "package %s\n\nimport \"os\"\n\nfunc Load() ([]byte, error) { return os.ReadFile(os.Getenv(\"READ_PATH\")) }\n"
 
 // Row 1: a package whose non-test code reads a path the tool cannot bound is linked into every test binary that imports
-// it: a non-Go change selects its reverse import closure (b and c), not b alone. A test-file reader stays direct.
+// it: a non-Go change selects its reverse import closure (b and c), not b alone, unless reach.tsv names the programs
+// that call the site (reach_test.go); the `*` row here is a site the call graph does not place. A test-file reader
+// stays direct.
 func TestNonGoPlanCodeScopeUnboundedReaderSelectsItsImporters(t *testing.T) {
 	runNongo(t, []nongoCase{
 		{name: "code_reader_selects_its_importer", head: map[string]string{"b/b_dyn.go": fmt.Sprintf(envReader, "b"),
-			tablesDir + "dynreads.tsv": "b\tb_dyn.go\n"},
+			tablesDir + "dynreads.tsv": "b\tb_dyn.go\n", tablesDir + "reach.tsv": "b\tb_dyn.go\t*\n"},
 			changed: []string{"AGENTS.md"}, want: "AFFECTED 2", keys: []string{"b", "c"}},
 		{name: "test_reader_selects_itself", head: map[string]string{"x/x_dyn_test.go": fmt.Sprintf(envReader, "x"),
 			tablesDir + "dynreads.tsv": "x\tx_dyn_test.go\n"},

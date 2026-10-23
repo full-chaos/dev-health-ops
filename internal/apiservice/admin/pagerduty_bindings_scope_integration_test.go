@@ -28,6 +28,7 @@ func TestPagerDutyBindingOrganizationScope(t *testing.T) {
 	intMain, intOther := uuid.New(), uuid.New()
 	bindMain, bindOther := uuid.New(), uuid.New()
 	unknown := uuid.New()
+	srcNoCred, intNoCred := uuid.New(), uuid.New()
 
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		GoOnly: true,
@@ -60,6 +61,10 @@ VALUES ($1, $2, $3, 'pagerduty', 'service', $4, $4, $4, '{}'::json, true, now(),
 				exec(`INSERT INTO pagerduty_webhook_bindings (id, org_id, integration_source_id, credential_id, provider_subscription_id, signing_secret_encrypted, signing_secret_key_version, status, created_at, updated_at)
 VALUES ($1, $2, $3, $4, $5, 'v1:seed-not-decrypted', 'v1', 'active', now(), now())`, row.bind, row.org, row.src, row.cred, "sub-"+row.bind.String())
 			}
+			exec(`INSERT INTO integrations (id, org_id, provider, name, config, is_active, credential_id, created_at, updated_at)
+VALUES ($1, $2, 'pagerduty', 'int-no-credential', '{}'::json, true, NULL, now(), now())`, intNoCred, orgMain.String())
+			exec(`INSERT INTO integration_sources (id, org_id, integration_id, provider, source_type, external_id, name, full_name, metadata, is_enabled, discovered_at, last_seen_at)
+VALUES ($1, $2, $3, 'pagerduty', 'service', 'src-no-credential', 'src-no-credential', 'src-no-credential', '{}'::json, true, now(), now())`, srcNoCred, orgMain.String(), intNoCred)
 			return map[string]map[string]any{
 				"admin": {"user_id": adminID.String(), "email": "pd-scope-admin@example.com", "org_id": orgMain.String(), "role": "admin"},
 			}
@@ -84,6 +89,10 @@ VALUES ($1, $2, $3, $4, $5, 'v1:seed-not-decrypted', 'v1', 'active', now(), now(
 		equal("source", post(prefix, body(unknown, credMain)), post(prefix, body(srcOther, credMain)))
 		equal("credential", post(prefix, body(srcMain, unknown)), post(prefix, body(srcMain, credOther)))
 		equal("both", post(prefix, body(unknown, unknown)), post(prefix, body(srcOther, credOther)))
+		equal("integration without a credential", post(prefix, body(unknown, credMain)), post(prefix, body(srcNoCred, credMain)))
+		if resp := post(prefix, body(srcNoCred, credMain)); resp.status != http.StatusBadRequest {
+			t.Errorf("integration without a credential: %d %s", resp.status, resp.body)
+		}
 	})
 	t.Run("rotate answers the same for a missing and an other-org binding", func(t *testing.T) {
 		equal("binding", post(prefix+"/"+unknown.String()+"/rotate", body(srcMain, credMain)), post(prefix+"/"+bindOther.String()+"/rotate", body(srcMain, credMain)))

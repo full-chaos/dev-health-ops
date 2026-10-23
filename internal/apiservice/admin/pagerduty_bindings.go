@@ -155,8 +155,8 @@ func (h *handlers) bindingNow() time.Time { return h.store.now().UTC().Truncate(
 const bindingGraphUnavailable = "PagerDuty binding graph was not found"
 
 const bindingGraphSQL = `
-SELECT (s.provider = 'pagerduty' AND i.provider = 'pagerduty' AND c.provider = 'pagerduty'
-        AND i.credential_id = c.id AND s.is_enabled AND i.is_active AND c.is_active)
+SELECT COALESCE(s.provider = 'pagerduty' AND i.provider = 'pagerduty' AND c.provider = 'pagerduty'
+        AND i.credential_id = c.id AND s.is_enabled AND i.is_active AND c.is_active, false)
 FROM integration_sources s
 JOIN integrations i ON s.integration_id = i.id AND i.org_id = $3
 JOIN integration_credentials c ON c.id = $2 AND c.org_id = $3

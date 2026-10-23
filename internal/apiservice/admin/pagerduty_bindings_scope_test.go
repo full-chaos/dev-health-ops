@@ -22,3 +22,10 @@ func TestPagerDutyBindingLookupsFilterByOrganization(t *testing.T) {
 		t.Errorf("graph: integration and credential joins must filter by organisation:\n%s", bindingGraphSQL)
 	}
 }
+
+func TestPagerDutyBindingGraphPredicateIsNeverNull(t *testing.T) {
+	predicate := bindingGraphSQL[strings.Index(bindingGraphSQL, "SELECT"):strings.Index(bindingGraphSQL, "FROM")]
+	if !strings.Contains(predicate, "COALESCE(") || !strings.Contains(predicate, ", false)") {
+		t.Errorf("the graph predicate can be NULL (integrations.credential_id is nullable) and the bool scan then fails; wrap it in COALESCE(..., false):\n%s", bindingGraphSQL)
+	}
+}

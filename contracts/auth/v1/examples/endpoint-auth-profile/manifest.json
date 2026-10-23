@@ -386,6 +386,10 @@
     {
       "file": "invalid-content-type-selector-no-accepted-class-owns-it.json",
       "why": "Schema-valid, refused by the profile gate: the route accepts acr_device_flow_code and acr_client_credential and selects by application/x-www-form-urlencoded, a media type neither declares."
+    },
+    {
+      "file": "invalid-high-risk-action-cacheable.json",
+      "why": "Schema-valid, refused by the profile gate: members.invite is a high-risk catalog action, so its profile cache_class must be none."
     }
   ]
 }

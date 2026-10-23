@@ -196,6 +196,10 @@ type Config struct {
 	// provider without both values answers go-api's 503.
 	Social map[string]SocialClient
 
+	// SSO holds the federated sign-in settings; a protocol without all of its
+	// values mounts no route.
+	SSO SSO
+
 	// EnvOnlySettings names the non-secret settings that were resolved from
 	// the environment although a canonical flag exists for them. A deployment
 	// configured that way is invisible in `docker compose config`, so the
@@ -412,6 +416,9 @@ func Load(spec Spec) (Config, error) {
 		return Config{}, err
 	}
 	if cfg.Social, err = socialClients(lookup); err != nil {
+		return Config{}, err
+	}
+	if cfg.SSO, err = ssoSettings(lookup); err != nil {
 		return Config{}, err
 	}
 	return cfg, nil

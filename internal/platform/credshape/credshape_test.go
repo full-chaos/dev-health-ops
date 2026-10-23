@@ -2,6 +2,7 @@ package credshape
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -188,5 +189,24 @@ func TestNewNeedsAuthDerivedRules(t *testing.T) {
 	}
 	if _, err := New([]byte(`not json`)); err == nil {
 		t.Fatal("invalid JSON built a scanner")
+	}
+}
+
+func TestAnyCredentialShaped(t *testing.T) {
+	scanner := defaultScanner(t)
+	probes, err := scanner.Probes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if AnyCredentialShaped() || AnyCredentialShaped("", "job-heartbeat-0001", "00000000-0000-4000-8000-000000000001") {
+		t.Fatal("benign values counted as credential-shaped")
+	}
+	for _, probe := range probes {
+		if !AnyCredentialShaped("job-heartbeat-0001", probe) {
+			t.Fatalf("a probe of %d bytes was not detected", len(probe))
+		}
+	}
+	if !anyCredentialShaped(nil, errors.New("scanner unavailable"), []string{"job-heartbeat-0001"}) {
+		t.Fatal("an unavailable scanner must count every value as credential-shaped")
 	}
 }

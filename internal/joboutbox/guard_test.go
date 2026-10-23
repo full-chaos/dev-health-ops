@@ -1,14 +1,18 @@
 package joboutbox
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/platform/credshape"
+	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/riverqueue/river"
@@ -117,5 +121,60 @@ func TestRelayRefusesAStoredCredentialShapedRowBeforeAnyRiverInsert(t *testing.T
 	}
 	if _, detail, terminal := failureEvidence(failureContract); strings.Contains(detail, sentinel) || !terminal {
 		t.Fatalf("dead-letter evidence %q terminal=%v", detail, terminal)
+	}
+}
+
+func logLoopResult(t *testing.T, result StepResult) string {
+	t.Helper()
+	var logs bytes.Buffer
+	clock := &testReconcilerClock{now: time.Date(2026, time.July, 22, 12, 0, 0, 0, time.UTC)}
+	loop, err := newReconcilerLoop(loopStepFunc(func(context.Context, time.Time, int) (StepResult, error) {
+		return result, nil
+	}), ReconcilerLoopConfig{
+		PollInterval: minReconcilerPollInterval,
+		Limit:        7,
+		Registry:     health.NewRegistry(time.Second),
+		Logger:       slog.New(slog.NewTextHandler(&logs, nil)),
+	}, clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := loop.step(context.Background(), clock.Now()); err != nil {
+		t.Fatal(err)
+	}
+	return logs.String()
+}
+
+// The retired-kind line and the provider-unit rearm line print fields read from
+// queued rows; a credential-shaped value in one of them is omitted.
+func TestReconcilerLoopLogsNoCredentialShapedQueueRowField(t *testing.T) {
+	sentinel := guardSentinel(t)
+	for name, result := range map[string]StepResult{
+		"retired kind organization": {RetiredKindObservations: []RetiredKindObservation{
+			{OutboxID: "00000000-0000-4000-8000-000000000010", JobKind: "workgraph.retired", OrganizationID: sentinel}}},
+		"provider unit dedupe key": {ProviderUnitRearms: []ProviderUnitRearm{
+			{OutboxID: "00000000-0000-4000-8000-000000000010", DedupeKey: sentinel, RiverJobID: 9}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			text := logLoopResult(t, result)
+			if text == "" {
+				t.Fatal("nothing was logged")
+			}
+			if strings.Contains(text, sentinel) || strings.Contains(text, sentinel[len(sentinel)/2:]) {
+				t.Fatalf("log carries the value: %s", text)
+			}
+			if !strings.Contains(text, "arguments_refused=true") || !strings.Contains(text, "00000000-0000-4000-8000-000000000010") {
+				t.Fatalf("log lost the row identity or the refusal flag: %s", text)
+			}
+		})
+	}
+	benign := logLoopResult(t, StepResult{
+		RetiredKindObservations: []RetiredKindObservation{{OutboxID: "00000000-0000-4000-8000-000000000010", JobKind: "workgraph.retired", OrganizationID: "00000000-0000-4000-8000-000000000002"}},
+		ProviderUnitRearms:      []ProviderUnitRearm{{OutboxID: "00000000-0000-4000-8000-000000000010", DedupeKey: "sync.provider_unit:00000000-0000-4000-8000-000000000003", RiverJobID: 9}},
+	})
+	for _, want := range []string{"organization_id=00000000-0000-4000-8000-000000000002", "dedupe_key=sync.provider_unit:00000000-0000-4000-8000-000000000003"} {
+		if !strings.Contains(benign, want) {
+			t.Fatalf("a benign value was changed: %s", benign)
+		}
 	}
 }

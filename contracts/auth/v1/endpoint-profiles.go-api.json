@@ -6039,7 +6039,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/webhookintake/deps.go",
-        "line": 109
+        "line": 101
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
@@ -12950,7 +12950,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 105,
+          "line": 99,
           "note": "Pattern:",
           "path": "internal/api/webhookintake/deps.go"
         },
@@ -12961,61 +12961,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/webhookintake/deps.go",
-        "line": 105
-      },
-      "surface_kind": "rest",
-      "tenant_requirement": "org_scoped"
-    },
-    {
-      "accepted_credential_classes": [
-        "gitlab_webhook_signature"
-      ],
-      "classification": "protected",
-      "gaps": [],
-      "graphql_field_name": null,
-      "id": "POST /api/v1/webhooks/gitlab [dev-health-ops-api @api]",
-      "method": "POST",
-      "primary_validator": {
-        "anchor": {
-          "line": 106,
-          "note": "Pattern:",
-          "path": "internal/api/webhookintake/deps.go"
-        },
-        "description": "The webhook handler verifies the provider signature over the raw body before it enqueues."
-      },
-      "public_rationale": null,
-      "route": "/api/v1/webhooks/gitlab",
-      "service": "dev-health-ops-api",
-      "source": {
-        "file": "internal/api/webhookintake/deps.go",
-        "line": 106
-      },
-      "surface_kind": "rest",
-      "tenant_requirement": "org_scoped"
-    },
-    {
-      "accepted_credential_classes": [
-        "jira_webhook_signature"
-      ],
-      "classification": "protected",
-      "gaps": [],
-      "graphql_field_name": null,
-      "id": "POST /api/v1/webhooks/jira [dev-health-ops-api @api]",
-      "method": "POST",
-      "primary_validator": {
-        "anchor": {
-          "line": 107,
-          "note": "Pattern:",
-          "path": "internal/api/webhookintake/deps.go"
-        },
-        "description": "The webhook handler verifies the provider signature over the raw body before it enqueues."
-      },
-      "public_rationale": null,
-      "route": "/api/v1/webhooks/jira",
-      "service": "dev-health-ops-api",
-      "source": {
-        "file": "internal/api/webhookintake/deps.go",
-        "line": 107
+        "line": 99
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped"
@@ -13031,7 +12977,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 108,
+          "line": 100,
           "note": "Pattern:",
           "path": "internal/api/webhookintake/deps.go"
         },
@@ -13042,7 +12988,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/webhookintake/deps.go",
-        "line": 108
+        "line": 100
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped"

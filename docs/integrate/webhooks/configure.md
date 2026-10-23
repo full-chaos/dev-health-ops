@@ -1,6 +1,6 @@
 ---
 page_id: int-wh-config
-summary: Configure GitHub, GitLab, Jira, or PagerDuty webhook delivery for the managed synchronization path.
+summary: Configure GitHub or PagerDuty webhook delivery for the managed synchronization path.
 content_type: task-guide
 owner: platform-api
 source_of_truth:
@@ -49,43 +49,6 @@ A provider webhook supplements managed synchronization. It does not replace the 
 7. Save the webhook and send a provider test delivery.
 
 Dev Health validates the GitHub HMAC signature against the original request body before accepting the event.
-
-## GitLab
-
-1. In the GitLab project or group, open **Settings → Webhooks**.
-2. Set **URL** to:
-
-   ```text
-   https://YOUR_HOST/api/v1/webhooks/gitlab
-   ```
-
-3. Set the secret token to the value configured as `GITLAB_WEBHOOK_TOKEN`.
-4. Enable the event families supported by the current handler:
-   - push and tag-push events;
-   - merge-request events;
-   - issue events;
-   - pipeline events;
-   - job events.
-5. Save the webhook and run GitLab's test delivery.
-
-Dev Health validates the `X-Gitlab-Token` value before dispatching the event.
-
-## Jira
-
-1. Sign in as a Jira administrator.
-2. Open **System → Webhooks**.
-3. Select **Create a Webhook**.
-4. Set **URL** to:
-
-   ```text
-   https://YOUR_HOST/api/v1/webhooks/jira
-   ```
-
-5. Configure the supported secret path when `JIRA_WEBHOOK_SECRET` is enabled for the deployment.
-6. Select the supported issue-created, issue-updated, and issue-deleted events.
-7. Save the webhook and send a bounded test event.
-
-Jira Service Management incident ingestion has a separate provider contract and is not made release-ready merely by configuring this generic Jira webhook.
 
 ## PagerDuty V3
 

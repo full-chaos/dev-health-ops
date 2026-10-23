@@ -70,7 +70,6 @@ internal/apiservice/testdata/venue/venue-oracle-credential-repos.json
 internal/apiservice/testdata/venue/venue-oracle-customer-push-reads.json
 internal/apiservice/testdata/venue/venue-oracle-customer-push-validate.json
 internal/apiservice/testdata/venue/venue-oracle-customer-push-writes.json
-internal/apiservice/testdata/venue/webhook-intake-venue-oracle-git-hub-git-lab-jira-health.json
 internal/apiservice/testdata/venue/webhook-intake-venue-oracle-pager-duty.json
 internal/backfillrun/testdata/golden/backfill_run.json
 internal/fixturescli/testdata/golden/ordering.json

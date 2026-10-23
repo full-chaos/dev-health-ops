@@ -54,7 +54,7 @@ func newDelivery(d delivery, tok, authorization string, serial int) *http.Reques
 	return r
 }
 
-// GitHub, GitLab, Jira and PagerDuty deliveries are authenticated by the provider's own secret check. A
+// GitHub and PagerDuty deliveries are authenticated by the provider's own secret check. A
 // user token of any kind, sent as the Authorization bearer and in the place the provider's credential
 // goes (the signature or token header), is refused with the route's own 401, before any database lookup,
 // without the credential echoed in the body or the logs.
@@ -64,7 +64,7 @@ func TestWebhookRoutesRefuseUserTokens(t *testing.T) {
 	var logs bytes.Buffer
 	deps := webhookintake.Deps{
 		Pool:    pool,
-		Secrets: webhookintake.Secrets{GitHub: "github-test-secret", GitLab: "gitlab-test-token", Jira: "jira-test-secret"},
+		Secrets: webhookintake.Secrets{GitHub: "github-test-secret"},
 		Logger:  slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
 	}
 	const prefix = "/api/v1/webhooks"
@@ -74,12 +74,6 @@ func TestWebhookRoutesRefuseUserTokens(t *testing.T) {
 		}},
 		{name: "github bare token as signature", pattern: prefix + "/github", status: 401, detail: "Invalid signature", headers: func(tok string) map[string]string {
 			return map[string]string{"X-GitHub-Event": "ping", "X-GitHub-Delivery": "d-1", "X-Hub-Signature-256": tok}
-		}},
-		{name: "gitlab token", pattern: prefix + "/gitlab", status: 401, detail: "Invalid token", headers: func(tok string) map[string]string {
-			return map[string]string{"X-Gitlab-Event": "Push Hook", "X-Gitlab-Token": tok}
-		}},
-		{name: "jira signature", pattern: prefix + "/jira", status: 401, detail: "Invalid signature", headers: func(tok string) map[string]string {
-			return map[string]string{"X-Hub-Signature": "sha256=" + tok}
 		}},
 		{name: "pagerduty signature (no such binding)", pattern: prefix + "/pagerduty/{binding_id}", status: 401, detail: "Invalid signature", headers: func(tok string) map[string]string {
 			return map[string]string{"X-PagerDuty-Signature": "v1=" + tok, "X-Webhook-Subscription": "sub-1"}
@@ -109,14 +103,14 @@ func TestWebhookRoutesRefuseUserTokens(t *testing.T) {
 	usertokens.NoLeak(t, "the logs", logs.String(), tokens)
 }
 
-// Controls: the provider's real credential passes the gate (GitHub, GitLab, Jira) and a well-formed
+// Controls: the provider's real credential passes the gate (GitHub) and a well-formed
 // PagerDuty binding id reaches the binding lookup, so the same counting pool shows a non-zero count. If
 // these ever read as refusals or zero, the refusals above would prove nothing.
 func TestWebhookControlsTheProvidersOwnCredentialPassesTheGate(t *testing.T) {
 	pool, connects := usertokens.CountingPool(t)
 	deps := webhookintake.Deps{
 		Pool:    pool,
-		Secrets: webhookintake.Secrets{GitHub: "github-test-secret", GitLab: "gitlab-test-token", Jira: "jira-test-secret"},
+		Secrets: webhookintake.Secrets{GitHub: "github-test-secret"},
 		Logger:  slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)),
 	}
 	mac := func(secret string) string {
@@ -128,12 +122,6 @@ func TestWebhookControlsTheProvidersOwnCredentialPassesTheGate(t *testing.T) {
 	for _, c := range []delivery{
 		{name: "github", pattern: prefix + "/github", headers: func(string) map[string]string {
 			return map[string]string{"X-GitHub-Event": "ping", "X-GitHub-Delivery": "d-1", "X-Hub-Signature-256": "sha256=" + mac("github-test-secret")}
-		}},
-		{name: "gitlab", pattern: prefix + "/gitlab", headers: func(string) map[string]string {
-			return map[string]string{"X-Gitlab-Event": "Push Hook", "X-Gitlab-Token": "gitlab-test-token"}
-		}},
-		{name: "jira", pattern: prefix + "/jira", headers: func(string) map[string]string {
-			return map[string]string{"X-Hub-Signature": "sha256=" + mac("jira-test-secret")}
 		}},
 	} {
 		recorder := httptest.NewRecorder()

@@ -16,8 +16,6 @@ import (
 var signatureOnlyRoutes = map[string]string{
 	"POST /api/v1/billing/webhooks/stripe":         "stripe_webhook_signature",
 	"POST /api/v1/webhooks/github":                 "github_webhook_signature",
-	"POST /api/v1/webhooks/gitlab":                 "gitlab_webhook_signature",
-	"POST /api/v1/webhooks/jira":                   "jira_webhook_signature",
 	"POST /api/v1/webhooks/pagerduty/{binding_id}": "pagerduty_webhook_signature",
 }
 

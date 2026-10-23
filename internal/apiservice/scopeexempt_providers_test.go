@@ -42,7 +42,7 @@ func TestProviderIntakeRoutesRunTheirCheckBeforeAnyCredentialDecode(t *testing.T
 		t.Fatal(err)
 	}
 	scope := policy.NewScope(auth, quietLogger())
-	secrets := webhookintake.Secrets{GitHub: "gh-" + uuid.NewString(), GitLab: "gl-" + uuid.NewString(), Jira: "jr-" + uuid.NewString()}
+	secrets := webhookintake.Secrets{GitHub: "gh-" + uuid.NewString()}
 	routes := webhookintake.Routes(webhookintake.Deps{Secrets: secrets, Logger: quietLogger()})
 	server, err := NewServer(apiTestConfig(), quietLogger(), routes, scope.OrgScope, scope.Impersonation)
 	if err != nil {
@@ -67,8 +67,6 @@ func TestProviderIntakeRoutesRunTheirCheckBeforeAnyCredentialDecode(t *testing.T
 	}
 	providers := []provider{
 		{"github", "/api/v1/webhooks/github", map[string]string{"X-GitHub-Event": "ping", "X-GitHub-Delivery": "d1", "X-Hub-Signature-256": "sha256=" + strings.Repeat("0", 64)}, http.StatusUnauthorized},
-		{"gitlab", "/api/v1/webhooks/gitlab", map[string]string{"X-Gitlab-Event": "Push Hook", "X-Gitlab-Token": "wrong"}, http.StatusUnauthorized},
-		{"jira", "/api/v1/webhooks/jira", map[string]string{"X-Hub-Signature": "sha256=" + strings.Repeat("0", 64)}, http.StatusUnauthorized},
 		// no store is configured here, so the handler answers its store-unavailable status
 		{"pagerduty", "/api/v1/webhooks/pagerduty/" + binding, map[string]string{}, http.StatusInternalServerError},
 	}

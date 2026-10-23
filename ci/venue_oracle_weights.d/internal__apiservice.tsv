@@ -10,5 +10,4 @@ internal/apiservice	TestVenueOracleCustomerPushReads	70
 internal/apiservice	TestVenueOracleCustomerPushValidate	56
 internal/apiservice	TestVenueOracleCustomerPushWrites	64
 internal/apiservice	TestVenueOracleProtectedRoutes	131
-internal/apiservice	TestWebhookIntakeVenueOracleGitHubGitLabJiraHealth	54
 internal/apiservice	TestWebhookIntakeVenueOraclePagerDuty	60

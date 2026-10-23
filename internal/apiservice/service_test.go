@@ -237,8 +237,6 @@ func TestRoutesMountsEveryArea(t *testing.T) {
 		"HEAD /health/workers":                                 false,
 		"POST /api/v1/product-telemetry/events":                false,
 		"POST /api/v1/webhooks/github":                         false,
-		"POST /api/v1/webhooks/gitlab":                         false,
-		"POST /api/v1/webhooks/jira":                           false,
 		"POST /api/v1/webhooks/pagerduty/{binding_id}":         false,
 		"GET /api/v1/webhooks/health":                          false,
 	}

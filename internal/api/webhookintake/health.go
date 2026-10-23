@@ -22,8 +22,6 @@ func (d Deps) handleHealth() http.HandlerFunc {
 		secrets := d.secrets()
 		secretsConfigured := pyjson.NewObject()
 		secretsConfigured.Set("github", secrets.GitHub != "")
-		secretsConfigured.Set("gitlab", secrets.GitLab != "")
-		secretsConfigured.Set("jira", secrets.Jira != "")
 		body := pyjson.NewObject()
 		body.Set("status", "ok")
 		body.Set("secrets_configured", secretsConfigured)

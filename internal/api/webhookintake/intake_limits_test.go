@@ -103,10 +103,10 @@ func TestClientBucketCountsEveryIntakeRoute(t *testing.T) {
 	withLimits(t, 6, 100000, 100000)
 	now := time.Now()
 	routes := intakeRoutes(t, Deps{Counters: httpapi.NewMemoryCounters(func() time.Time { return now })})
-	targets := []string{routePrefix + "/github", routePrefix + "/gitlab", routePrefix + "/jira", routePrefix + "/pagerduty/" + uuid.NewString()}
-	patterns := []string{routePrefix + "/github", routePrefix + "/gitlab", routePrefix + "/jira", routePrefix + "/pagerduty/{binding_id}"}
+	targets := []string{routePrefix + "/github", routePrefix + "/pagerduty/" + uuid.NewString()}
+	patterns := []string{routePrefix + "/github", routePrefix + "/pagerduty/{binding_id}"}
 	for i := range 6 {
-		if got := deliver(routes[patterns[i%4]], targets[i%4], "192.0.2.1", "").Code; got == http.StatusTooManyRequests {
+		if got := deliver(routes[patterns[i%2]], targets[i%2], "192.0.2.1", "").Code; got == http.StatusTooManyRequests {
 			t.Fatalf("delivery %d throttled early", i+1)
 		}
 	}
@@ -125,7 +125,7 @@ func TestProviderRouteBucketIsPerRoute(t *testing.T) {
 	withLimits(t, 100000, 100000, 3)
 	now := time.Now()
 	routes := intakeRoutes(t, Deps{Counters: httpapi.NewMemoryCounters(func() time.Time { return now })})
-	for _, route := range []string{"/github", "/gitlab", "/jira"} {
+	for _, route := range []string{"/github"} {
 		for i := range 3 {
 			if got := deliver(routes[routePrefix+route], routePrefix+route, "192.0.2.1", "").Code; got == http.StatusTooManyRequests {
 				t.Fatalf("%s delivery %d throttled early", route, i+1)
@@ -179,15 +179,15 @@ func TestThrottleLogsTheProviderAndReasonClassOnly(t *testing.T) {
 	var logs bytes.Buffer
 	now := time.Now()
 	routes := intakeRoutes(t, Deps{Counters: httpapi.NewMemoryCounters(func() time.Time { return now }), Logger: slog.New(slog.NewJSONHandler(&logs, nil))})
-	handler := routes[routePrefix+"/jira"]
-	deliver(handler, routePrefix+"/jira", "192.0.2.77", "")
+	handler := routes[routePrefix+"/github"]
+	deliver(handler, routePrefix+"/github", "192.0.2.77", "")
 	logs.Reset()
-	deliver(handler, routePrefix+"/jira", "192.0.2.77", "")
+	deliver(handler, routePrefix+"/github", "192.0.2.77", "")
 	var entry map[string]any
 	if err := json.Unmarshal(bytes.TrimSpace(logs.Bytes()), &entry); err != nil {
 		t.Fatalf("want one log line, got %q", logs.String())
 	}
-	if entry["level"] != "WARN" || entry["msg"] != "webhook_intake.throttled" || entry["provider"] != "jira" || entry["reason"] != "route_bucket" || len(entry) != 5 {
+	if entry["level"] != "WARN" || entry["msg"] != "webhook_intake.throttled" || entry["provider"] != "github" || entry["reason"] != "route_bucket" || len(entry) != 5 {
 		t.Fatalf("log entry %v", entry)
 	}
 	if strings.Contains(logs.String(), "192.0.2.77") {

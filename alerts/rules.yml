@@ -912,7 +912,7 @@ groups:
     rules:
       - alert: AuthServiceTargetDown
         expr: |
-          up{job="auth-service"} == 0
+          sum by (job) (up{job="auth-service"}) == 0
         for: 5m
         labels:
           severity: critical
@@ -947,7 +947,7 @@ groups:
         annotations:
           summary: "Auth rate-limit store is failing"
           description: |
-            Limit {{ $labels.limit }} had {{ $value }} store errors in ten
+            Limit {{ $labels.limit }}: an estimated {{ $value | humanize }} store errors in ten
             minutes; each answered a 500 to a caller.
 
       - alert: AuthRateLimitStoreErrorsHigh
@@ -960,7 +960,7 @@ groups:
         annotations:
           summary: "Auth rate-limit store is failing at volume"
           description: |
-            Limit {{ $labels.limit }} had {{ $value }} store errors in ten
+            Limit {{ $labels.limit }}: an estimated {{ $value | humanize }} store errors in ten
             minutes; callers on that route are being refused.
 
       - alert: AuthRateLimitRejectionsHigh

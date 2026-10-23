@@ -134,9 +134,12 @@ func authAlertLabelsAreBounded(g *guard) {
 		for _, m := range groupBy.FindAllStringSubmatch(str(a["expr"]), -1) {
 			for _, label := range strings.Split(m[1], ",") {
 				label = strings.TrimSpace(label)
-				g.expect(label == "limit", "%s groups by %q: only the closed limit id may label an auth rule", str(a["alert"]), label)
+				g.expect(label == "limit" || label == "job", "%s groups by %q: only the closed limit id (and job) may label an auth rule", str(a["alert"]), label)
 			}
 		}
+		expr := strings.TrimSpace(str(a["expr"]))
+		g.expect(strings.Contains(expr, "sum") || strings.Contains(expr, "max(") || strings.HasPrefix(expr, "absent("),
+			"%s is a bare selector: its result would carry the scrape instance (the pod address); aggregate it away", str(a["alert"]))
 		labels := mp(a["labels"])
 		g.expect(str(labels["team"]) == "platform", "%s team label is %q, want the existing groups' value platform", str(a["alert"]), str(labels["team"]))
 		g.expect(str(labels["severity"]) != "", "%s has no severity", str(a["alert"]))
@@ -155,9 +158,19 @@ func authAlertShapes(g *guard) {
 	absent := str(authAlertNamed(g, "AuthServiceMetricsAbsent")["expr"])
 	g.expect(strings.Contains(absent, `absent(up{job="auth-service"})`), "the absent rule must be absent(up{job=\"auth-service\"}): %q", absent)
 	down := str(authAlertNamed(g, "AuthServiceTargetDown")["expr"])
-	g.expect(strings.Contains(down, `up{job="auth-service"} == 0`), "the target-down rule must be up{job=\"auth-service\"} == 0: %q", down)
-	for _, name := range []string{"AuthRateLimitStoreErrors", "AuthRateLimitStoreErrorsHigh"} {
-		g.expect(str(authAlertNamed(g, name)["for"]) != "", "%s has no for: duration", name)
+	g.expect(strings.Contains(down, `sum by (job) (up{job="auth-service"}) == 0`), "the target-down rule must aggregate the instance away: sum by (job) (up{job=\"auth-service\"}) == 0: %q", down)
+	rejections := str(authAlertNamed(g, "AuthRateLimitRejectionsHigh")["expr"])
+	g.expect(regexp.MustCompile(`rate\(dev_health_api_rate_limit_rejections_total\{job="auth-service"\}\[5m\]\)\)\s*>\s*1\s*$`).MatchString(strings.TrimSpace(rejections)),
+		"the rejection rule must be rate(...[5m]) > 1 per limit: %q", rejections)
+	for name, want := range map[string]string{
+		"AuthServiceTargetDown":          "5m",
+		"AuthServiceMetricsAbsent":       "10m",
+		"AuthRateLimitStoreErrors":       "5m",
+		"AuthRateLimitStoreErrorsHigh":   "5m",
+		"AuthRateLimitRejectionsHigh":    "10m",
+		"AuthServiceHighServerErrorRate": "10m",
+	} {
+		g.expect(str(authAlertNamed(g, name)["for"]) == want, "%s for: is %q, want %q", name, str(authAlertNamed(g, name)["for"]), want)
 	}
 }
 
@@ -176,11 +189,15 @@ func TestAuthServiceAlertGuardsPlantedDefects(t *testing.T) {
 	runPlanted(t, []planted{
 		{"alert-renamed", rules, mut(rulesRel, "- alert: AuthServiceMetricsAbsent", "- alert: AuthServiceMetricsAbsentX"), authAlertSetIsExact, "holds"},
 		{"metric-typo", rules, mut(rulesRel, "dev_health_api_rate_limit_rejections_total{", "dev_health_api_rate_limit_rejection_total{"), authAlertMetricsAreEmitted, "never fires"},
-		{"job-selector-dropped", rules, mut(rulesRel, `up{job="auth-service"} == 0`, "up == 0"), authAlertsSelectTheAuthJob, "another service"},
+		{"job-selector-dropped", rules, mut(rulesRel, `sum by (job) (up{job="auth-service"}) == 0`, "sum by (job) (up) == 0"), authAlertsSelectTheAuthJob, "another service"},
 		{"path-label-added", rules, mut(rulesRel, "sum by (limit) (increase(dev_health_api_rate_limit_store_errors_total", "sum by (limit, path) (increase(dev_health_api_rate_limit_store_errors_total"), authAlertLabelsAreBounded, "closed limit id"},
 		{"team-invented", rules, mut(rulesRel, "          team: platform\n        annotations:\n          summary: \"Auth service target is down\"", "          team: identity\n        annotations:\n          summary: \"Auth service target is down\""), authAlertLabelsAreBounded, "want the existing groups"},
 		{"store-error-threshold-raised", rules, mut(rulesRel, "[10m])) > 0\n        for: 5m", "[10m])) > 5\n        for: 5m"), authAlertShapes, "any-nonzero"},
 		{"traffic-floor-removed", rules, mut(rulesRel, " and sum(rate(dev_health_api_http_requests_total{job=\"auth-service\"}[5m])) > 0.1", ""), authAlertShapes, "traffic floor"},
 		{"absent-rule-removed", rules, mut(rulesRel, "absent(up{job=\"auth-service\"})", "up{job=\"auth-service\"}"), authAlertShapes, "absent"},
+		{"instance-label-kept", rules, mut(rulesRel, `sum by (job) (up{job="auth-service"}) == 0`, `up{job="auth-service"} == 0`), authAlertLabelsAreBounded, "bare selector"},
+		{"rejection-threshold-changed", rules, mut(rulesRel, "[5m])) > 1\n        for: 10m", "[5m])) > 10\n        for: 10m"), authAlertShapes, "rejection rule"},
+		{"rejection-for-shortened", rules, mut(rulesRel, "[5m])) > 1\n        for: 10m", "[5m])) > 1\n        for: 1m"), authAlertShapes, "for:"},
+		{"store-error-for-shortened", rules, mut(rulesRel, "[10m])) > 0\n        for: 5m", "[10m])) > 0\n        for: 1m"), authAlertShapes, "for:"},
 	})
 }

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"regexp"
 	"strings"
 	"time"
 
@@ -15,6 +14,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/numerical"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/rowview"
+	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/engineclause"
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
@@ -527,20 +527,20 @@ var ErrCapacitySchemaIncompatible = errors.New(
 
 // capacityTableRequirement is what THIS code needs from one table.
 //
-// Columns are the obvious half. The engine is the half the first version of
-// this probe missed: every read below is `FROM work_item_metrics_daily FINAL`,
-// and FINAL is not a hint. On a ReplacingMergeTree it collapses superseded
-// versions to the newest; on any other engine it is silently a NO-OP. A table
-// carrying every required column under a pre-migration plain MergeTree
-// therefore passes a column-only probe, and then two versions of one
-// (org, day, scope, team) both survive into sum() -- items_completed of 5 and
-// 7 reported as 12 rather than 7. That is a successful, well-telemetered,
-// WRONG forecast, which is worse than the retry storm this probe was built to
-// prevent: the retry storm at least announces itself.
+// Columns are the obvious half. The engine version column is the half the
+// first version of this probe missed: every read below is
+// `FROM work_item_metrics_daily FINAL`, and FINAL collapses superseded versions
+// by that column. A table carrying every required column but no version column
+// (a pre-migration plain MergeTree) passes a column-only probe, and then two
+// versions of one (org, day, scope, team) both survive into sum() --
+// items_completed of 5 and 7 reported as 12 rather than 7. That is a
+// successful, well-telemetered, WRONG forecast, which is worse than the retry
+// storm this probe was built to prevent. The engine name is never compared: a
+// Shared*, Replicated* or plain spelling is accepted when the column is right.
 type capacityTableRequirement struct {
 	columns []string
 	// readWithFINAL marks a table this code reads with FINAL, making the
-	// Replacing family a precondition rather than a deployment detail.
+	// version column and sorting key preconditions.
 	readWithFINAL bool
 	// versionColumn and sortingKey are the two pieces of physical contract
 	// FINAL depends on beyond the engine family, checked only when
@@ -635,14 +635,6 @@ var capacityTableRequirements = map[string]capacityTableRequirement{
 	},
 }
 
-// capacityReplacingEngineMarker matches the Replacing family.
-//
-// Substring rather than equality on purpose: production runs
-// ReplicatedReplacingMergeTree, local and test stacks run ReplacingMergeTree,
-// and both collapse superseded versions under FINAL. Requiring an exact string
-// would refuse a perfectly correct replicated deployment.
-const capacityReplacingEngineMarker = "ReplacingMergeTree"
-
 // verifyCapacitySchema refuses a database this executor cannot compute against.
 //
 // Without it a worker with a reachable but stale database registers the kind,
@@ -681,30 +673,17 @@ func verifyCapacitySchema(ctx context.Context, conn driver.Conn) error {
 		if !requirement.readWithFINAL {
 			continue
 		}
-		engine, err := capacityTableEngine(ctx, conn, table)
-		if err != nil {
-			return err
-		}
-		if !strings.Contains(engine, capacityReplacingEngineMarker) {
-			return fmt.Errorf(
-				"%w: %s is %s, but this executor reads it with FINAL, which only "+
-					"collapses superseded rows on the %s family -- on %s the "+
-					"duplicates stay visible and aggregate into the forecast",
-				ErrCapacitySchemaIncompatible, table, engine,
-				capacityReplacingEngineMarker, engine)
-		}
-
 		version, err := capacityTableVersionColumn(ctx, conn, table)
 		if err != nil {
 			return err
 		}
 		if version != requirement.versionColumn {
 			return fmt.Errorf(
-				"%w: %s has no %s version column on its %s engine -- without "+
+				"%w: %s needs %s as its engine version column, found %q -- without "+
 					"it, FINAL collapses superseded rows by INSERTION ORDER "+
 					"instead, and a retried write that lands an older row "+
 					"after a newer one leaves the older row as the survivor",
-				ErrCapacitySchemaIncompatible, table, requirement.versionColumn, engine)
+				ErrCapacitySchemaIncompatible, table, requirement.versionColumn, version)
 		}
 
 		sortingKey, err := capacityTableSortingKey(ctx, conn, table)
@@ -749,32 +728,6 @@ func capacityTableColumns(
 	return present, nil
 }
 
-// capacityTableEngine reports the engine backing one table.
-//
-// system.tables rather than SHOW CREATE TABLE: the engine column is already the
-// bare family name, so this needs no parsing of DDL text that varies between
-// server versions.
-func capacityTableEngine(
-	ctx context.Context, conn driver.Conn, table string,
-) (string, error) {
-	var engine string
-	if err := conn.QueryRow(ctx, `
-        SELECT engine FROM system.tables
-        WHERE database = currentDatabase() AND name = {table:String}
-    `, clickhouse.Named("table", table)).Scan(&engine); err != nil {
-		return "", fmt.Errorf("inspect %s engine: %w", table, err)
-	}
-	return engine, nil
-}
-
-// capacityVersionColumnPattern extracts a ReplacingMergeTree engine's version
-// argument from engine_full, e.g. "ReplacingMergeTree(computed_at)" ->
-// "computed_at". An engine clause with no argument
-// ("ReplacingMergeTree()") does not match, which is the versionless case:
-// that table still collapses under FINAL, but by insertion order rather than
-// by any named column.
-var capacityVersionColumnPattern = regexp.MustCompile(`ReplacingMergeTree\(\s*` + "`?" + `([^` + "`" + `\s)]+)` + "`?" + `\s*\)`)
-
 // capacityTableVersionColumn reports the column a ReplacingMergeTree table
 // versions on, or "" when its engine clause names none.
 //
@@ -791,11 +744,15 @@ func capacityTableVersionColumn(
     `, clickhouse.Named("table", table)).Scan(&engineFull); err != nil {
 		return "", fmt.Errorf("inspect %s engine_full: %w", table, err)
 	}
-	match := capacityVersionColumnPattern.FindStringSubmatch(engineFull)
-	if match == nil {
-		return "", nil
+	clause, err := engineclause.Parse(engineFull)
+	if err != nil {
+		return "", fmt.Errorf("%w: %s engine_full %q: %v", ErrCapacitySchemaIncompatible, table, engineFull, err)
 	}
-	return match[1], nil
+	version, err := clause.VersionColumn()
+	if err != nil {
+		return "", fmt.Errorf("%w: %s engine_full %q: %v", ErrCapacitySchemaIncompatible, table, engineFull, err)
+	}
+	return version, nil
 }
 
 // capacityTableSortingKey reports a table's ORDER BY columns, in the order

@@ -15,6 +15,8 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/engineclause"
 )
 
 // CHAOS-9556: one-time compaction of the closed ownership intervals that the
@@ -1269,7 +1271,7 @@ var ErrOwnershipCompactionWritesActive = errors.New("ownership compaction: the o
 // ErrOwnershipCompactionTable means the table is not the table the tool was
 // written for. The tool reads the sort key and the version column from the
 // server and refuses anything else, before it reads a row.
-var ErrOwnershipCompactionTable = errors.New("ownership compaction: table engine or sorting key is not the expected one")
+var ErrOwnershipCompactionTable = errors.New("ownership compaction: table version column or sorting key is not the expected one")
 
 func verifyOwnershipTableShape(ctx context.Context, conn driver.Conn, spec ownershipCompactionSpec) error {
 	var engineFull, sortingKey string
@@ -1278,8 +1280,11 @@ func verifyOwnershipTableShape(ctx context.Context, conn driver.Conn, spec owner
 		return fmt.Errorf("%w: %v", ErrOwnershipCompactionTable, err)
 	}
 	wantKey := "org_id, provider, " + spec.natural + ", team_id, source, valid_from"
-	if !strings.HasPrefix(engineFull, "ReplacingMergeTree(updated_at)") || sortingKey != wantKey {
-		return ErrOwnershipCompactionTable
+	if clause, err := engineclause.Parse(engineFull); err != nil || !clause.IsVersionedOn("updated_at") {
+		return fmt.Errorf("%w: %s needs updated_at as its engine version column, found engine %q", ErrOwnershipCompactionTable, spec.table, engineFull)
+	}
+	if sortingKey != wantKey {
+		return fmt.Errorf("%w: %s needs sorting key (%s), found (%s)", ErrOwnershipCompactionTable, spec.table, wantKey, sortingKey)
 	}
 	return nil
 }

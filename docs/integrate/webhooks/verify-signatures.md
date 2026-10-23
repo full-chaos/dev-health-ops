@@ -1,6 +1,6 @@
 ---
 page_id: int-wh-verify
-summary: Verify a webhook signature for GitHub, GitLab, Jira, or PagerDuty against the provider's exact authentication contract and original request bytes.
+summary: Verify a webhook signature for GitHub or PagerDuty against the provider's exact authentication contract and original request bytes.
 content_type: task-guide
 owner: platform-api
 source_of_truth:
@@ -28,8 +28,6 @@ Use this guide when you need to verify a webhook signature or secret-token heade
 | Provider | Current authentication boundary |
 | --- | --- |
 | GitHub | HMAC signature using the configured webhook secret and original body |
-| GitLab | Configured secret token header |
-| Jira | Supported configured secret path where the current handler is enabled |
 | PagerDuty V3 | HMAC-SHA256 `v1=` signatures in `x-pagerduty-signature`, over the exact raw body, using the encrypted secret from the persisted binding |
 
 Do not invent a shared header or algorithm across providers.

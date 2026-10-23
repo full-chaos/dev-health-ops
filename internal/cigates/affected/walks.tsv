@@ -176,6 +176,7 @@ internal/jobs/operational	billingemail_test.go	internal/jobs/operational/testdat
 internal/jobs/operational	venue_golden_address_test.go	internal/jobs/operational/testdata/golden	dir
 internal/jobs/workgraph	error_attr_census_test.go	internal/jobs/workgraph	tree
 internal/jobs/workgraph/units	pr_link_protection_test.go	internal	tree
+internal/jobs/workgraph/writercontract	writercontract_test.go	internal	tree
 internal/llmorgsettings	baseurl_reader_guard_test.go	unexpressed	-
 internal/localgit	blame.go	unexpressed	-
 internal/localgit	refs.go	unexpressed	-

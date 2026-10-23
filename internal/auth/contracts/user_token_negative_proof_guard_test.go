@@ -64,8 +64,6 @@ var negativeProofs = map[string]negativeProof{
 	"go-api|POST /api/v1/ingest/telemetry [dev-health-ops-api @api]":                          {file: proofLegacy, test: legacyTest},
 	"go-api|POST /api/v1/ingest/work-items [dev-health-ops-api @api]":                         {file: proofLegacy, test: legacyTest},
 	"go-api|POST /api/v1/webhooks/github [dev-health-ops-api @api]":                           {file: proofWebhooks, test: webhookTest},
-	"go-api|POST /api/v1/webhooks/gitlab [dev-health-ops-api @api]":                           {file: proofWebhooks, test: webhookTest},
-	"go-api|POST /api/v1/webhooks/jira [dev-health-ops-api @api]":                             {file: proofWebhooks, test: webhookTest},
 	"go-api|POST /api/v1/webhooks/pagerduty/{binding_id} [dev-health-ops-api @api]":           {file: proofWebhooks, test: webhookTest},
 	"query-api|GET /buildinfo [dev-health-query-api @query,internal]":                         {file: proofMCP, test: buildInfoTest},
 	"query-api|POST /query [dev-health-query-api @mcp]":                                       {file: proofMCP, test: mcpTest},
@@ -185,7 +183,7 @@ func TestNegativeProofCensus(t *testing.T) {
 			proven++
 		}
 	}
-	if len(derivedRows(t)) != 27 || proven != 23 || exempt != 4 {
-		t.Fatalf("derived %d rows, %d proven, %d exempt; want 27, 23, 4", len(derivedRows(t)), proven, exempt)
+	if len(derivedRows(t)) != 25 || proven != 21 || exempt != 4 {
+		t.Fatalf("derived %d rows, %d proven, %d exempt; want 25, 21, 4", len(derivedRows(t)), proven, exempt)
 	}
 }

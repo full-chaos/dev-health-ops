@@ -444,6 +444,7 @@ func buildSyncMutationPipeline(
 	}
 	riverClient, err := river.NewClient(riverpgxv5.New(queuePool), &river.Config{
 		Schema: riverSchema,
+		Logger: slog.Default(),
 		// This client only inserts sync-dispatch coordinator jobs; otelriver
 		// still gives the insert side of that boundary a river.insert_many
 		// span, matching the other River client constructions (CHAOS-3993).

@@ -140,11 +140,16 @@ func TestComplexityTimeseriesMatchesTheFrozenGolden(t *testing.T) {
 				t.Fatalf("%d queries, want %d", len(client.statements), len(tc.PythonQueries))
 			}
 			for i, statement := range client.statements {
+				statement = strings.ReplaceAll(statement, "{limit_n:", "{limit:")
 				params := map[string]any{}
 				var limitValue any
 				for _, b := range client.bindings[i] {
-					params[b.Name] = b.Value
-					if b.Name == "limit" {
+					name := b.Name
+					if name == "limit_n" {
+						name = "limit"
+					}
+					params[name] = b.Value
+					if name == "limit" {
 						limitValue = b.Value
 					}
 				}

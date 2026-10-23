@@ -104,11 +104,11 @@ func resolveWorkItemTeamAttributions(ctx context.Context, client QueryClient, or
               GROUP BY work_item_id
           )
         ORDER BY work_item_id, is_primary = 1 DESC, is_primary DESC, source
-        LIMIT {limit:UInt64}
+        LIMIT {limit_n:UInt64}
     `, strings.Join(outerWhere, " AND "), strings.Join(snapshotWhere, " AND "))
 
 	probeLimit := limit + 1
-	bindings = append(bindings, clickhouse.Binding{Name: "limit", Value: uint64(probeLimit)})
+	bindings = append(bindings, clickhouse.Binding{Name: "limit_n", Value: uint64(probeLimit)})
 
 	rows, err := client.Query(ctx, query, bindings)
 	if err != nil {

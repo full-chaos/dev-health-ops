@@ -208,7 +208,7 @@ func providerResponse(p *providerRow) (*pyjson.Object, error) {
 
 // fail logs a failure with its step and writes the Python api's bare 500.
 func (h handlers) fail(w http.ResponseWriter, r *http.Request, step string, err error) {
-	h.Logger.ErrorContext(r.Context(), "api sso route failed", "path", r.URL.Path, "step", step, "error", err.Error())
+	h.Logger.ErrorContext(r.Context(), "api sso route failed", "path", r.Pattern, "step", step, "error", err.Error())
 	if errors.Is(err, sessionissue.ErrUnavailable) {
 		policy.WriteDetail(w, http.StatusServiceUnavailable, policy.ErrorDetail(sessionissue.UnavailableText), nil)
 		return

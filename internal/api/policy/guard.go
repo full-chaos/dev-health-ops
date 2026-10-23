@@ -161,7 +161,7 @@ func (g *Guard) currentUser(w http.ResponseWriter, r *http.Request) (*User, bool
 	if err != nil {
 		if !isRefusal(err) {
 			g.logger.ErrorContext(r.Context(), "api authentication: user lookup failed",
-				slog.String("path", r.URL.Path), slog.Bool("unavailable", isUnavailable(err)))
+				slog.String("path", r.Pattern), slog.Bool("unavailable", isUnavailable(err)))
 		}
 		authFailure(w, "Invalid or expired token", err)
 		return nil, false
@@ -184,7 +184,7 @@ func (g *Guard) optionalUser(w http.ResponseWriter, r *http.Request) (*User, boo
 		return nil, true
 	default:
 		g.logger.ErrorContext(r.Context(), "api optional authentication: user lookup failed",
-			slog.String("path", r.URL.Path), slog.Bool("unavailable", isUnavailable(err)))
+			slog.String("path", r.Pattern), slog.Bool("unavailable", isUnavailable(err)))
 		authFailure(w, "", err)
 		return nil, false
 	}

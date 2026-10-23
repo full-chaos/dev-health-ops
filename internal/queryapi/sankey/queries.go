@@ -164,14 +164,14 @@ func fetchInvestmentFlowItems(ctx context.Context, client QueryClient, startTS, 
             %s
         GROUP BY source, target
         ORDER BY value DESC
-        LIMIT {limit:UInt64}
+        LIMIT {limit_n:UInt64}
         %s
     `, effortShareSQL, analytics.LatestWorkUnitInvestmentsSource(), scopeFilterSQL, settingsMaxExecutionTime())
 	bindings := append([]dhclickhouse.Binding{
 		{Name: "start_ts", Value: startTS},
 		{Name: "end_ts", Value: endTS},
 		{Name: "org_id", Value: orgID},
-		{Name: "limit", Value: limit},
+		{Name: "limit_n", Value: limit},
 	}, scopeBindings...)
 
 	rows, err := client.Query(ctx, query, bindings)
@@ -463,14 +463,14 @@ func fetchHotspotRows(ctx context.Context, client QueryClient, startDay, endDay 
             %[1]s
         GROUP BY repo, directory, file_path
         ORDER BY churn DESC
-        LIMIT {limit:UInt64}
+        LIMIT {limit_n:UInt64}
         %[2]s
     `, scopeFilterSQL, settingsMaxExecutionTime())
 	bindings := append([]dhclickhouse.Binding{
 		{Name: "start_day", Value: dateBindingValue(startDay)},
 		{Name: "end_day", Value: dateBindingValue(endDay)},
 		{Name: "org_id", Value: orgID},
-		{Name: "limit", Value: limit},
+		{Name: "limit_n", Value: limit},
 	}, scopeBindings...)
 
 	rows, err := client.Query(ctx, query, bindings)

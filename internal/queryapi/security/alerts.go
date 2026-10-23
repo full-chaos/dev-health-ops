@@ -109,8 +109,8 @@ func ResolveAlerts(ctx context.Context, client QueryClient, orgID string, filter
 
 	f := buildFilter(orgID, filters)
 	bindings := append(append([]clickhouse.Binding{}, f.bindings...),
-		clickhouse.Binding{Name: "limit", Value: first + 1},
-		clickhouse.Binding{Name: "offset", Value: offset},
+		clickhouse.Binding{Name: "limit_n", Value: first + 1},
+		clickhouse.Binding{Name: "offset_n", Value: offset},
 	)
 	query := `SELECT
     toString(sa.repo_id) AS repo_id,
@@ -131,7 +131,7 @@ FROM security_alerts sa
 INNER JOIN repos r ON sa.repo_id = r.id
 ` + f.sql + `
 ORDER BY ` + severityRank + ` DESC, sa.created_at DESC
-LIMIT {limit:Int64} OFFSET {offset:Int64}`
+LIMIT {limit_n:Int64} OFFSET {offset_n:Int64}`
 
 	rows, err := client.Query(ctx, query, bindings)
 	if err != nil {

@@ -171,7 +171,7 @@ func TestResolveAlerts_Pagination(t *testing.T) {
 		t.Fatal(err)
 	}
 	b := bindingMap(c.bindings[0])
-	if b["limit"] != int64(3) || b["offset"] != int64(10) || b["org_id"] != "o" {
+	if b["limit_n"] != int64(3) || b["offset_n"] != int64(10) || b["org_id"] != "o" {
 		t.Fatalf("bindings %#v", b)
 	}
 	if len(got.Edges) != 2 || got.Edges[0].Cursor != "11" || got.Edges[1].Cursor != "12" {
@@ -192,7 +192,7 @@ func TestResolveAlerts_EmptyAndDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if b := bindingMap(c.bindings[0]); b["limit"] != int64(51) || b["offset"] != int64(0) {
+	if b := bindingMap(c.bindings[0]); b["limit_n"] != int64(51) || b["offset_n"] != int64(0) {
 		t.Fatalf("bindings %#v", b)
 	}
 	if got.Edges == nil || len(got.Edges) != 0 || got.TotalCount != 0 || got.PageInfo.HasNextPage || got.PageInfo.HasPreviousPage || got.PageInfo.StartCursor != nil || got.PageInfo.EndCursor != nil {

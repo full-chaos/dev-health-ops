@@ -181,6 +181,7 @@ func TestCatalogMatchesTheFrozenGolden(t *testing.T) {
 			}
 			for i, statement := range client.statements {
 				text := catalogPlaceholder.ReplaceAllString(strings.Join(strings.Fields(statement), " "), "%($1)s")
+				text = strings.ReplaceAll(text, "%(limit_n)s", "%(limit)s")
 				want := tc.PyQueries[i]
 				if timeout, ok := tc.PyParams[i]["timeout"].(float64); ok {
 					want = strings.ReplaceAll(want, "%(timeout)s", jsonNumberText(timeout))
@@ -192,6 +193,9 @@ func TestCatalogMatchesTheFrozenGolden(t *testing.T) {
 				}
 				gotParams := map[string]any{}
 				for k, v := range client.bindings[i] {
+					if k == "limit_n" {
+						k = "limit"
+					}
 					switch x := v.(type) {
 					case uint32:
 						gotParams[k] = float64(x)

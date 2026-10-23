@@ -10,7 +10,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/workitemmetrics"
-	"github.com/full-chaos/dev-health-ops/internal/teamkeytables"
 )
 
 // workItemStateWorkItem is the narrow subset of the `work_items` ClickHouse
@@ -342,47 +341,18 @@ func WriteWorkItemStateDurationsDaily(
 	if conn == nil || strings.TrimSpace(organizationID) == "" {
 		return 0, ErrInvalidState
 	}
-	dayValue := time.Date(day.UTC().Year(), day.UTC().Month(), day.UTC().Day(), 0, 0, 0, 0, time.UTC)
-	computedAtUTC := computedAt.UTC()
-	keys := make([]staleKey, 0, len(rows))
-	for _, row := range rows {
-		keys = append(keys, staleKey{row.Provider, row.WorkScopeID, row.TeamID, row.Status})
-	}
-	legacy, err := legacyRetractionVersions(ctx, conn, teamkeytables.WorkItemStateDurationsDaily, organizationID, dayValue, keys, computedAtUTC)
-	if err != nil {
-		return 0, err
-	}
 	batch, err := conn.PrepareBatch(ctx, `INSERT INTO work_item_state_durations_daily (
 		day, provider, work_scope_id, team_id, team_name, status,
-		duration_hours, items_touched, avg_wip, computed_at, org_id, row_view)`)
+		duration_hours, items_touched, avg_wip, computed_at, org_id)`)
 	if err != nil {
 		return 0, fmt.Errorf("prepare work_item_state_durations_daily batch: %w", err)
 	}
-	defer batch.Abort()
-	type entry struct {
-		row  workItemStateDailyRow
-		view string
-		at   time.Time
-	}
-	entries := make([]entry, 0, len(rows)*(len(workItemRowViews)+1))
-	zeroRows := 0
-	for index, row := range rows {
-		for _, rowView := range workItemRowViews {
-			entries = append(entries, entry{row, rowView, computedAtUTC})
-		}
-		if retraction, retracted := legacy[keys[index].text()]; retracted {
-			zero := workItemStateDailyRow{
-				Provider: row.Provider, WorkScopeID: row.WorkScopeID, TeamID: row.TeamID, TeamName: row.TeamName, Status: row.Status,
-			}
-			entries = append(entries, entry{zero, teamkeytables.LegacyRowView, retraction.version})
-			zeroRows++
-		}
-	}
-	for _, item := range entries {
-		row := item.row
+	dayValue := time.Date(day.UTC().Year(), day.UTC().Month(), day.UTC().Day(), 0, 0, 0, 0, time.UTC)
+	computedAtUTC := computedAt.UTC()
+	for _, row := range rows {
 		if err := batch.Append(
 			dayValue, row.Provider, row.WorkScopeID, row.TeamID, row.TeamName, row.Status,
-			row.DurationHours, row.ItemsTouched, row.AvgWIP, item.at, organizationID, item.view,
+			row.DurationHours, row.ItemsTouched, row.AvgWIP, computedAtUTC, organizationID,
 		); err != nil {
 			return 0, fmt.Errorf("append work_item_state_durations_daily row: %w", err)
 		}
@@ -396,9 +366,9 @@ func WriteWorkItemStateDurationsDaily(
 	// ambiguity instead of silently open (matches
 	// work_graph_edges_native_clickhouse.go's established pattern).
 	if err := batch.Send(); err != nil {
-		return len(rows) + zeroRows, fmt.Errorf("send work_item_state_durations_daily batch: %w", err)
+		return len(rows), fmt.Errorf("send work_item_state_durations_daily batch: %w", err)
 	}
-	return len(rows) + zeroRows, nil
+	return len(rows), nil
 }
 
 // WriteWorkItemBlockedDurationsDaily writes the per-item source for the

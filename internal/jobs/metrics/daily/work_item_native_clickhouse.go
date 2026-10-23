@@ -11,7 +11,6 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/checkedcast"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/workitemmetrics"
-	"github.com/full-chaos/dev-health-ops/internal/teamkeytables"
 )
 
 // workItemMetricsRow is the `work_items` subset compute_work_item_metrics_daily
@@ -171,16 +170,6 @@ func WriteWorkItemMetricsDaily(
 	if conn == nil || strings.TrimSpace(organizationID) == "" {
 		return 0, ErrInvalidState
 	}
-	dayValue := workitemmetrics.UTCDay(day)
-	computedAtUTC := computedAt.UTC()
-	keys := make([]staleKey, 0, len(rows))
-	for _, row := range rows {
-		keys = append(keys, staleKey{row.Provider, row.WorkScopeID, row.TeamID})
-	}
-	legacy, err := legacyRetractionVersions(ctx, conn, teamkeytables.WorkItemMetricsDaily, organizationID, dayValue, keys, computedAtUTC)
-	if err != nil {
-		return 0, err
-	}
 	batch, err := conn.PrepareBatch(ctx, `INSERT INTO work_item_metrics_daily (
 		day, provider, work_scope_id, team_id, team_name,
 		items_started, items_completed, items_started_unassigned, items_completed_unassigned,
@@ -188,30 +177,13 @@ func WriteWorkItemMetricsDaily(
 		cycle_time_p50_hours, cycle_time_p90_hours, lead_time_p50_hours, lead_time_p90_hours,
 		wip_age_p50_hours, wip_age_p90_hours, bug_completed_ratio, story_points_completed,
 		new_bugs_count, new_items_count, defect_intro_rate, wip_congestion_ratio,
-		predictability_score, computed_at, org_id, row_view)`)
+		predictability_score, computed_at, org_id)`)
 	if err != nil {
 		return 0, fmt.Errorf("prepare work_item_metrics_daily batch: %w", err)
 	}
-	defer batch.Abort()
-	type entry struct {
-		row  workitemmetrics.MetricsDailyRow
-		view string
-		at   time.Time
-	}
-	entries := make([]entry, 0, len(rows)*(len(workItemRowViews)+1))
-	zeroRows := 0
-	for index, row := range rows {
-		for _, rowView := range workItemRowViews {
-			entries = append(entries, entry{row, rowView, computedAtUTC})
-		}
-		if retraction, retracted := legacy[keys[index].text()]; retracted {
-			zero := workitemmetrics.MetricsDailyRow{Provider: row.Provider, WorkScopeID: row.WorkScopeID, TeamID: row.TeamID, TeamName: row.TeamName}
-			entries = append(entries, entry{zero, teamkeytables.LegacyRowView, retraction.version})
-			zeroRows++
-		}
-	}
-	for _, item := range entries {
-		row := item.row
+	dayValue := workitemmetrics.UTCDay(day)
+	computedAtUTC := computedAt.UTC()
+	for _, row := range rows {
 		counters, err := workItemUInt32s("work_item_metrics_daily",
 			fmt.Sprintf("%s %q team %q", row.Provider, row.WorkScopeID, row.TeamID),
 			[]workItemCounter{
@@ -235,7 +207,7 @@ func WriteWorkItemMetricsDaily(
 			row.CycleTimeP50Hours, row.CycleTimeP90Hours, row.LeadTimeP50Hours, row.LeadTimeP90Hours,
 			row.WIPAgeP50Hours, row.WIPAgeP90Hours, row.BugCompletedRatio, row.StoryPointsCompleted,
 			counters[6], counters[7], row.DefectIntroRate,
-			row.WIPCongestionRatio, row.PredictabilityScore, item.at, organizationID, item.view,
+			row.WIPCongestionRatio, row.PredictabilityScore, computedAtUTC, organizationID,
 		); err != nil {
 			return 0, fmt.Errorf("append work_item_metrics_daily row: %w", err)
 		}
@@ -249,9 +221,9 @@ func WriteWorkItemMetricsDaily(
 	// ambiguity instead of silently open (matches
 	// work_graph_edges_native_clickhouse.go's established pattern).
 	if err := batch.Send(); err != nil {
-		return len(rows) + zeroRows, fmt.Errorf("send work_item_metrics_daily batch: %w", err)
+		return len(rows), fmt.Errorf("send work_item_metrics_daily batch: %w", err)
 	}
-	return len(rows) + zeroRows, nil
+	return len(rows), nil
 }
 
 // WriteWorkItemUserMetricsDaily ports write_work_item_user_metrics
@@ -268,50 +240,16 @@ func WriteWorkItemUserMetricsDaily(
 	if conn == nil || strings.TrimSpace(organizationID) == "" {
 		return 0, ErrInvalidState
 	}
-	dayValue := workitemmetrics.UTCDay(day)
-	computedAtUTC := computedAt.UTC()
-	keys := make([]staleKey, 0, len(rows))
-	for _, row := range rows {
-		keys = append(keys, staleKey{row.Provider, row.WorkScopeID, row.UserIdentity})
-	}
-	legacy, err := legacyRetractionVersions(ctx, conn, teamkeytables.WorkItemUserMetricsDaily, organizationID, dayValue, keys, computedAtUTC)
-	if err != nil {
-		return 0, err
-	}
 	batch, err := conn.PrepareBatch(ctx, `INSERT INTO work_item_user_metrics_daily (
 		day, provider, work_scope_id, user_identity, team_id, team_name,
 		items_started, items_completed, wip_count_end_of_day,
-		cycle_time_p50_hours, cycle_time_p90_hours, computed_at, org_id, row_view, retracted)`)
+		cycle_time_p50_hours, cycle_time_p90_hours, computed_at, org_id)`)
 	if err != nil {
 		return 0, fmt.Errorf("prepare work_item_user_metrics_daily batch: %w", err)
 	}
-	defer batch.Abort()
-	type entry struct {
-		row       workitemmetrics.UserMetricsDailyRow
-		view      string
-		at        time.Time
-		retracted uint8
-	}
-	entries := make([]entry, 0, len(rows)*(len(workItemRowViews)+1))
-	zeroRows := 0
-	for index, row := range rows {
-		for _, rowView := range workItemRowViews {
-			entries = append(entries, entry{row, rowView, computedAtUTC, 0})
-		}
-		if retraction, retracted := legacy[keys[index].text()]; retracted {
-			// The team of a person is carried from the newest stored row of the key.
-			zero := workitemmetrics.UserMetricsDailyRow{
-				Provider: row.Provider, WorkScopeID: row.WorkScopeID, UserIdentity: row.UserIdentity,
-			}
-			if len(retraction.carried) == 2 {
-				zero.TeamID, zero.TeamName = retraction.carried[0], retraction.carried[1]
-			}
-			entries = append(entries, entry{zero, teamkeytables.LegacyRowView, retraction.version, 1})
-			zeroRows++
-		}
-	}
-	for _, item := range entries {
-		row := item.row
+	dayValue := workitemmetrics.UTCDay(day)
+	computedAtUTC := computedAt.UTC()
+	for _, row := range rows {
 		counters, err := workItemUInt32s("work_item_user_metrics_daily",
 			fmt.Sprintf("%s %q user %q", row.Provider, row.WorkScopeID, row.UserIdentity),
 			[]workItemCounter{
@@ -325,7 +263,7 @@ func WriteWorkItemUserMetricsDaily(
 		if err := batch.Append(
 			dayValue, row.Provider, row.WorkScopeID, row.UserIdentity, row.TeamID, row.TeamName,
 			counters[0], counters[1], counters[2],
-			row.CycleTimeP50Hours, row.CycleTimeP90Hours, item.at, organizationID, item.view, item.retracted,
+			row.CycleTimeP50Hours, row.CycleTimeP90Hours, computedAtUTC, organizationID,
 		); err != nil {
 			return 0, fmt.Errorf("append work_item_user_metrics_daily row: %w", err)
 		}
@@ -339,9 +277,9 @@ func WriteWorkItemUserMetricsDaily(
 	// ambiguity instead of silently open (matches
 	// work_graph_edges_native_clickhouse.go's established pattern).
 	if err := batch.Send(); err != nil {
-		return len(rows) + zeroRows, fmt.Errorf("send work_item_user_metrics_daily batch: %w", err)
+		return len(rows), fmt.Errorf("send work_item_user_metrics_daily batch: %w", err)
 	}
-	return len(rows) + zeroRows, nil
+	return len(rows), nil
 }
 
 // WriteWorkItemCycleTimes ports write_work_item_cycle_times
@@ -451,8 +389,3 @@ func WriteEstimateCoverageMetricsDaily(
 	}
 	return len(rows), nil
 }
-
-// workItemRowViews are the views every aggregate row of the three work-item
-// daily tables is written under. Until the per-scope dedupe lands both views
-// hold the same numbers; a legacy row is never written again.
-var workItemRowViews = []string{teamkeytables.OrgRowView, teamkeytables.ScopeRowView}

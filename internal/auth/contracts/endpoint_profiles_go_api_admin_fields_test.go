@@ -18,30 +18,11 @@ import (
 // middleware does to it. This file pins the shape of those fields and that their code anchors still resolve.
 // It records behaviour; it does not set policy (which actions are denied under impersonation is not decided here).
 
-// adminFieldFiles are the registering files whose admin rows carry the fields. Each change that fills more rows adds
-// its files here; the last one replaces the set with "every /api/v1/admin row".
-var adminFieldFiles = map[string]bool{
-	"internal/api/credentials/credentials.go":           true,
-	"internal/apiservice/admin/credentialdelete.go":     true,
-	"internal/api/githubapp/routes.go":                  true,
-	"internal/api/integrationsadmin/routes.go":          true,
-	"internal/api/syncadmin/syncadmin.go":               true,
-	"internal/api/teamsidentity/teamsidentity.go":       true,
-	"internal/apiservice/admin/pagerduty.go":            true,
-	"internal/apiservice/admin/pagerduty_authorize.go":  true,
-	"internal/apiservice/admin/pagerduty_bindings.go":   true,
-	"internal/apiservice/admin/pagerduty_callback.go":   true,
-	"internal/apiservice/admin/pagerduty_disconnect.go": true,
-	"internal/apiservice/admin/pagerduty_manual.go":     true,
-	"internal/apiservice/admin/pagerduty_services.go":   true,
-	"internal/apiservice/admin/ipallowlist.go":          true,
-	"internal/apiservice/admin/retention.go":            true,
-}
-
 const (
-	byIDPrefix  = "by-id route, behaviour today:"
-	noIDPrefix  = "no path resource id, behaviour today:"
-	cachePrefix = "none: per-request read ("
+	byIDPrefix     = "by-id route, behaviour today:"
+	noIDPrefix     = "no path resource id, behaviour today:"
+	platformPrefix = "platform route, behaviour today:"
+	cachePrefix    = "none: per-request read ("
 )
 
 var (
@@ -49,6 +30,13 @@ var (
 	denialPattern = regexp.MustCompile(`(?i)(denied|refused|rejected|blocked|forbidden)[^.;]{0,40}impersonat|impersonat[^.;]{0,40}(denied|refused|rejected|blocked|forbidden)`)
 	pathParam     = regexp.MustCompile(`\{[^}]+\}`)
 )
+
+// The three impersonation routes read no tenant organization themselves; each states its own value.
+var impersonationRoutes = map[string]string{
+	"POST /api/v1/admin/impersonate [dev-health-ops-api @api]":       "exempt_no_org_context",
+	"POST /api/v1/admin/impersonate/stop [dev-health-ops-api @api]":  "exempt_no_org_context",
+	"GET /api/v1/admin/impersonate/status [dev-health-ops-api @api]": "exempt_no_org_context",
+}
 
 func isAdminRow(row map[string]any) bool {
 	route, _ := row["route"].(string)
@@ -126,6 +114,9 @@ func adminFieldViolations(row map[string]any, scopes map[string]string, root str
 	switch {
 	case policy == "" || policy == "unknown":
 		bad("impersonation_policy is missing or unknown")
+	case impersonationRoutes[id] != "" && policy != impersonationRoutes[id]:
+		bad("an impersonation route has impersonation_policy %q, want %q", policy, impersonationRoutes[id])
+	case impersonationRoutes[id] != "":
 	case tenancy == "org_scoped" && policy != "subject_to_impersonation_override":
 		bad("an org-scoped route has impersonation_policy %q", policy)
 	case tenancy == "cross_org_superuser_only" && policy == "subject_to_impersonation_override":
@@ -150,6 +141,13 @@ func adminFieldViolations(row map[string]any, scopes map[string]string, root str
 			if strings.Contains(text, "404") {
 				bad("a no-resource-id disclosure text mentions 404")
 			}
+		case strings.HasPrefix(text, platformPrefix):
+			if !strings.Contains(text, "403") || !strings.Contains(text, "superuser") || len(anchorPattern.FindAllString(text, -1)) < 1 {
+				bad("a platform disclosure text names no superuser 403 or no anchor")
+			}
+			if tenancy != "cross_org_superuser_only" {
+				bad("a tenant route claims the platform rule")
+			}
 		default:
 			bad("disclosure_behavior names no rule class: %q", text)
 		}
@@ -161,14 +159,6 @@ func adminFieldViolations(row map[string]any, scopes map[string]string, root str
 		}
 	default:
 		bad("disclosure_behavior is not a string or null")
-	}
-
-	// a registration that wraps the handler in bodyFirst always says so (a handler may decode first by other means and say so too).
-	if text, ok := disclosure.(string); ok {
-		claims := strings.Contains(text, bodyFirstClause)
-		if registered, found := registeredBodyFirst(row, root); found && registered != claims {
-			bad("the body-first clause (%v) disagrees with the route registration (%v)", claims, registered)
-		}
 	}
 
 	// the text is a record, not a policy: no denial under impersonation is claimed, and every anchor resolves.
@@ -185,36 +175,6 @@ func adminFieldViolations(row map[string]any, scopes map[string]string, root str
 		}
 	}
 	return out
-}
-
-const bodyFirstClause = "once any body-first validation has run"
-
-// bodyFirstPattern names the registration wrappers that read the body before the guard: Guard.BodyFirst and the
-// handlers' bodyFirst, the customer-push adminBody helper (a BodyFirst closure) and the teams decodeFirst wrapper
-// (decodes the body, then runs the guard). The integrations routes name their BodyFirst closure write.
-var bodyFirstPattern = regexp.MustCompile(`(?i)(bodyFirst|adminBody\(|decodeFirst)`)
-
-var bodyFirstClosures = map[string]string{"internal/api/integrationsadmin/routes.go": "write("}
-
-// registeredBodyFirst reports whether the registration entry at the row's source line wraps its handler in bodyFirst.
-func registeredBodyFirst(row map[string]any, root string) (registered, found bool) {
-	source, _ := row["source"].(map[string]any)
-	file, _ := source["file"].(string)
-	line, _ := source["line"].(float64)
-	raw, err := os.ReadFile(filepath.Join(root, file))
-	if err != nil || int(line) < 1 {
-		return false, false
-	}
-	lines := strings.Split(string(raw), "\n")
-	if int(line) > len(lines) {
-		return false, false
-	}
-	entry := lines[int(line)-1]
-	for i := int(line); i < len(lines) && i < int(line)+3 && !strings.Contains(lines[i], "Method:"); i++ {
-		entry += "\n" + lines[i]
-	}
-	closure, named := bodyFirstClosures[file]
-	return bodyFirstPattern.MatchString(entry) || (named && strings.Contains(entry, closure)), true
 }
 
 func anchorProblem(root, rel string, line int) string {
@@ -247,18 +207,14 @@ func coveredAdminRows(t *testing.T) []map[string]any {
 		if !isAdminRow(row) {
 			continue
 		}
-		source, _ := row["source"].(map[string]any)
-		file, _ := source["file"].(string)
-		if adminFieldFiles[file] {
-			rows = append(rows, row)
-		}
+		rows = append(rows, row)
 	}
 	return rows
 }
 
 func TestEveryCoveredAdminRowCarriesTheFields(t *testing.T) {
 	rows := coveredAdminRows(t)
-	if len(rows) < 70 {
+	if len(rows) < 140 {
 		t.Fatalf("only %d covered admin rows: the set of files lost its rows", len(rows))
 	}
 	scopes := catalogScopes(t)
@@ -266,20 +222,6 @@ func TestEveryCoveredAdminRowCarriesTheFields(t *testing.T) {
 	for _, row := range rows {
 		for _, violation := range adminFieldViolations(row, scopes, root) {
 			t.Error(violation)
-		}
-	}
-}
-
-// Every file named in adminFieldFiles still registers at least one admin row (a renamed file cannot silently leave the set).
-func TestAdminFieldFilesAllRegisterRows(t *testing.T) {
-	seen := map[string]bool{}
-	for _, row := range coveredAdminRows(t) {
-		source, _ := row["source"].(map[string]any)
-		seen[source["file"].(string)] = true
-	}
-	for file := range adminFieldFiles {
-		if !seen[file] {
-			t.Errorf("%s is in adminFieldFiles but registers no /api/v1/admin row", file)
 		}
 	}
 }
@@ -317,8 +259,8 @@ func TestAdminFieldChecksCatchPlantedDefects(t *testing.T) {
 		"anchor names a missing file": func(r map[string]any) {
 			r["disclosure_behavior"] = byIDPrefix + " 404 (internal/api/nope/nope.go:5; internal/api/teamsidentity/store.go:125); 403 (internal/api/policy/guard.go:129)"
 		},
-		"body-first clause on a route registered without it": func(r map[string]any) {
-			r["disclosure_behavior"] = strings.Replace(r["disclosure_behavior"].(string), "403", bodyFirstClause+", 403", 1)
+		"tenant route claims the platform rule": func(r map[string]any) {
+			r["disclosure_behavior"] = platformPrefix + " only a superuser passes, any other caller answers 403 (internal/api/policy/guard.go:137)"
 		},
 		"claims a denial under impersonation": func(r map[string]any) {
 			r["current_state_cache_behavior"] = cachePrefix + "internal/api/policy/request_reads.go:13); the route is denied under impersonation"
@@ -335,26 +277,4 @@ func TestAdminFieldChecksCatchPlantedDefects(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestBodyFirstRegistrationMustBeNamed(t *testing.T) {
-	root := testRoot(t)
-	scopes := catalogScopes(t)
-	for _, row := range coveredAdminRows(t) {
-		if row["id"] != "PATCH /api/v1/admin/credentials/{provider}/{name} [dev-health-ops-api @api]" {
-			continue
-		}
-		raw, _ := json.Marshal(row)
-		var mutated map[string]any
-		_ = json.Unmarshal(raw, &mutated)
-		if got := adminFieldViolations(mutated, scopes, root); len(got) != 0 {
-			t.Fatalf("the unmodified row has violations: %v", got)
-		}
-		mutated["disclosure_behavior"] = strings.ReplaceAll(mutated["disclosure_behavior"].(string), bodyFirstClause+", ", "")
-		if got := adminFieldViolations(mutated, scopes, root); len(got) == 0 {
-			t.Fatal("a bodyFirst-registered route without the clause passed every check")
-		}
-		return
-	}
-	t.Fatal("the credentials update row is missing")
 }

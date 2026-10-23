@@ -209,8 +209,11 @@ func ScanReads(root string) ([]Read, error) {
 		byDir[d] = append(byDir[d], newSrcFile(rel, fset, f))
 	}
 	module := modulePath(root)
+	programs := execProgramDirs(byDir, module)
 	for _, d := range dirs {
-		reads = append(reads, newDirGroup(d, module, byDir[d]).analyze()...)
+		g := newDirGroup(d, module, byDir[d])
+		g.underProgram = programs[d]
+		reads = append(reads, g.analyze()...)
 	}
 	out := reads
 	sort.SliceStable(out, func(i, j int) bool {

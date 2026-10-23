@@ -185,6 +185,7 @@ internal/operationalordering	one_resolver_test.go	.	tree
 internal/ownershipwindow	ownershipwindow_test.go	internal/ownershipwindow	dir
 internal/pgmigrate	handddl_guard_integration_test.go	.	tree
 internal/platform/config	route_switch_absence_test.go	unexpressed	-
+internal/platform/fernet	fernet_test.go	unexpressed	-
 internal/platform/secrets	declared_fields_test.go	internal	tree
 internal/platform/secrets	envreads_test.go	.	tree
 internal/processreadiness	readiness_timeout_test.go	internal/processreadiness	dir

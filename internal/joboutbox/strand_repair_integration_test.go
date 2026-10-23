@@ -980,6 +980,59 @@ func TestStrandRepairAgainstLivePostgres(t *testing.T) {
 					}
 				})
 			}
+			// CHAOS-8431: the retired-kind survey names rows by job_kind and orders by id; without an index on job_kind
+			// every strand pass walked the primary key of the whole outbox. It is planned with its real values (a
+			// prepared statement plans its first executions that way) and, as the control, with the index dropped inside
+			// a transaction that is rolled back: the control MUST walk the outbox, or the fixture could not tell the two
+			// apart.
+			t.Run("the retired-kind survey probes the job_kind index", func(t *testing.T) {
+				kinds := make([]string, len(retiredWorkgraphKinds))
+				for index, kind := range retiredWorkgraphKinds {
+					kinds[index] = "'" + kind + "'"
+				}
+				survey := strings.NewReplacer(
+					"$1::text[]", "ARRAY["+strings.Join(kinds, ",")+"]::text[]", "$2::int", "100",
+				).Replace(retiredKindsSQL)
+				plan := func(statements ...string) string {
+					t.Helper()
+					connection, err := admin.Acquire(ctx)
+					if err != nil {
+						t.Fatal(err)
+					}
+					defer connection.Release()
+					defer func() { _, _ = connection.Conn().PgConn().Exec(ctx, "ROLLBACK").ReadAll() }()
+					results, err := connection.Conn().PgConn().Exec(ctx, strings.Join(statements, ";")).ReadAll()
+					if err != nil {
+						t.Fatal(err)
+					}
+					var out strings.Builder
+					for _, result := range results {
+						if result.Err != nil {
+							t.Fatal(result.Err)
+						}
+						for _, row := range result.Rows {
+							if len(row) == 1 {
+								out.Write(row[0])
+								out.WriteString("\n")
+							}
+						}
+					}
+					if out.Len() == 0 {
+						t.Fatal("EXPLAIN returned no plan; the assertions below would pass on an empty string")
+					}
+					return out.String()
+				}
+				with := plan("EXPLAIN " + survey)
+				if !strings.Contains(with, "ix_worker_job_outbox_job_kind") ||
+					strings.Contains(with, outboxScan) || strings.Contains(with, "worker_job_outbox_pkey") {
+					t.Fatalf("the retired-kind survey does not find its rows through the job_kind index:\n%s", with)
+				}
+				control := plan("BEGIN", "DROP INDEX public.ix_worker_job_outbox_job_kind", "EXPLAIN "+survey, "ROLLBACK")
+				if !strings.Contains(control, "worker_job_outbox_pkey") && !strings.Contains(control, outboxScan) {
+					t.Fatalf("CONTROL: without the index the retired-kind survey does not walk the outbox, so this "+
+						"fixture cannot tell the two plans apart:\n%s", control)
+				}
+			})
 		})
 	})
 

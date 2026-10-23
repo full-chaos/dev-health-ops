@@ -11,6 +11,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/checkedcast"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/workitemmetrics"
+	"github.com/full-chaos/dev-health-ops/internal/teamkeytables"
 )
 
 // workItemMetricsRow is the `work_items` subset compute_work_item_metrics_daily
@@ -177,39 +178,41 @@ func WriteWorkItemMetricsDaily(
 		cycle_time_p50_hours, cycle_time_p90_hours, lead_time_p50_hours, lead_time_p90_hours,
 		wip_age_p50_hours, wip_age_p90_hours, bug_completed_ratio, story_points_completed,
 		new_bugs_count, new_items_count, defect_intro_rate, wip_congestion_ratio,
-		predictability_score, computed_at, org_id)`)
+		predictability_score, computed_at, org_id, row_view)`)
 	if err != nil {
 		return 0, fmt.Errorf("prepare work_item_metrics_daily batch: %w", err)
 	}
 	dayValue := workitemmetrics.UTCDay(day)
 	computedAtUTC := computedAt.UTC()
 	for _, row := range rows {
-		counters, err := workItemUInt32s("work_item_metrics_daily",
-			fmt.Sprintf("%s %q team %q", row.Provider, row.WorkScopeID, row.TeamID),
-			[]workItemCounter{
-				{"items_started", row.ItemsStarted},
-				{"items_completed", row.ItemsCompleted},
-				{"items_started_unassigned", row.ItemsStartedUnassigned},
-				{"items_completed_unassigned", row.ItemsCompletedUnassigned},
-				{"wip_count_end_of_day", row.WIPCountEndOfDay},
-				{"wip_unassigned_end_of_day", row.WIPUnassignedEndOfDay},
-				{"new_bugs_count", row.NewBugsCount},
-				{"new_items_count", row.NewItemsCount},
-			})
-		if err != nil {
-			return 0, err
-		}
-		if err := batch.Append(
-			dayValue, row.Provider, row.WorkScopeID, row.TeamID, row.TeamName,
-			counters[0], counters[1],
-			counters[2], counters[3],
-			counters[4], counters[5],
-			row.CycleTimeP50Hours, row.CycleTimeP90Hours, row.LeadTimeP50Hours, row.LeadTimeP90Hours,
-			row.WIPAgeP50Hours, row.WIPAgeP90Hours, row.BugCompletedRatio, row.StoryPointsCompleted,
-			counters[6], counters[7], row.DefectIntroRate,
-			row.WIPCongestionRatio, row.PredictabilityScore, computedAtUTC, organizationID,
-		); err != nil {
-			return 0, fmt.Errorf("append work_item_metrics_daily row: %w", err)
+		for _, rowView := range workItemRowViews {
+			counters, err := workItemUInt32s("work_item_metrics_daily",
+				fmt.Sprintf("%s %q team %q", row.Provider, row.WorkScopeID, row.TeamID),
+				[]workItemCounter{
+					{"items_started", row.ItemsStarted},
+					{"items_completed", row.ItemsCompleted},
+					{"items_started_unassigned", row.ItemsStartedUnassigned},
+					{"items_completed_unassigned", row.ItemsCompletedUnassigned},
+					{"wip_count_end_of_day", row.WIPCountEndOfDay},
+					{"wip_unassigned_end_of_day", row.WIPUnassignedEndOfDay},
+					{"new_bugs_count", row.NewBugsCount},
+					{"new_items_count", row.NewItemsCount},
+				})
+			if err != nil {
+				return 0, err
+			}
+			if err := batch.Append(
+				dayValue, row.Provider, row.WorkScopeID, row.TeamID, row.TeamName,
+				counters[0], counters[1],
+				counters[2], counters[3],
+				counters[4], counters[5],
+				row.CycleTimeP50Hours, row.CycleTimeP90Hours, row.LeadTimeP50Hours, row.LeadTimeP90Hours,
+				row.WIPAgeP50Hours, row.WIPAgeP90Hours, row.BugCompletedRatio, row.StoryPointsCompleted,
+				counters[6], counters[7], row.DefectIntroRate,
+				row.WIPCongestionRatio, row.PredictabilityScore, computedAtUTC, organizationID, rowView,
+			); err != nil {
+				return 0, fmt.Errorf("append work_item_metrics_daily row: %w", err)
+			}
 		}
 	}
 	// CHAOS-5190 confirmation-pass sweep: Send is the one call here that
@@ -243,29 +246,31 @@ func WriteWorkItemUserMetricsDaily(
 	batch, err := conn.PrepareBatch(ctx, `INSERT INTO work_item_user_metrics_daily (
 		day, provider, work_scope_id, user_identity, team_id, team_name,
 		items_started, items_completed, wip_count_end_of_day,
-		cycle_time_p50_hours, cycle_time_p90_hours, computed_at, org_id)`)
+		cycle_time_p50_hours, cycle_time_p90_hours, computed_at, org_id, row_view)`)
 	if err != nil {
 		return 0, fmt.Errorf("prepare work_item_user_metrics_daily batch: %w", err)
 	}
 	dayValue := workitemmetrics.UTCDay(day)
 	computedAtUTC := computedAt.UTC()
 	for _, row := range rows {
-		counters, err := workItemUInt32s("work_item_user_metrics_daily",
-			fmt.Sprintf("%s %q user %q", row.Provider, row.WorkScopeID, row.UserIdentity),
-			[]workItemCounter{
-				{"items_started", row.ItemsStarted},
-				{"items_completed", row.ItemsCompleted},
-				{"wip_count_end_of_day", row.WIPCountEndOfDay},
-			})
-		if err != nil {
-			return 0, err
-		}
-		if err := batch.Append(
-			dayValue, row.Provider, row.WorkScopeID, row.UserIdentity, row.TeamID, row.TeamName,
-			counters[0], counters[1], counters[2],
-			row.CycleTimeP50Hours, row.CycleTimeP90Hours, computedAtUTC, organizationID,
-		); err != nil {
-			return 0, fmt.Errorf("append work_item_user_metrics_daily row: %w", err)
+		for _, rowView := range workItemRowViews {
+			counters, err := workItemUInt32s("work_item_user_metrics_daily",
+				fmt.Sprintf("%s %q user %q", row.Provider, row.WorkScopeID, row.UserIdentity),
+				[]workItemCounter{
+					{"items_started", row.ItemsStarted},
+					{"items_completed", row.ItemsCompleted},
+					{"wip_count_end_of_day", row.WIPCountEndOfDay},
+				})
+			if err != nil {
+				return 0, err
+			}
+			if err := batch.Append(
+				dayValue, row.Provider, row.WorkScopeID, row.UserIdentity, row.TeamID, row.TeamName,
+				counters[0], counters[1], counters[2],
+				row.CycleTimeP50Hours, row.CycleTimeP90Hours, computedAtUTC, organizationID, rowView,
+			); err != nil {
+				return 0, fmt.Errorf("append work_item_user_metrics_daily row: %w", err)
+			}
 		}
 	}
 	// CHAOS-5190 confirmation-pass sweep: Send is the one call here that
@@ -389,3 +394,8 @@ func WriteEstimateCoverageMetricsDaily(
 	}
 	return len(rows), nil
 }
+
+// workItemRowViews are the views every aggregate row of the three work-item
+// daily tables is written under. Until the per-scope dedupe lands both views
+// hold the same numbers; a legacy row is never written again.
+var workItemRowViews = []string{teamkeytables.OrgRowView, teamkeytables.ScopeRowView}

@@ -111,8 +111,8 @@ func TestWorkItemStateComputeFamilyWritesBlockedRowsFromOpenBlockers(t *testing.
 		`CREATE TABLE work_item_state_durations_daily (
     day Date, provider String, work_scope_id String, team_id String, team_name String,
     status String, duration_hours Float64, items_touched UInt32, computed_at DateTime,
-    avg_wip Float64, org_id String
-) ENGINE = MergeTree PARTITION BY toYYYYMM(day) ORDER BY (provider, work_scope_id, team_id, status, day)`,
+    avg_wip Float64, org_id String, row_view LowCardinality(String)
+) ENGINE = MergeTree PARTITION BY toYYYYMM(day) ORDER BY (provider, work_scope_id, team_id, status, day, row_view)`,
 		`CREATE TABLE work_item_blocked_durations_daily (
     day Date, provider String, work_scope_id String, team_id String, team_name String,
     work_item_id String, duration_hours Float64, computed_at DateTime64(3, 'UTC'), org_id String
@@ -248,7 +248,7 @@ INSERT INTO work_item_dependencies (source_work_item_id, target_work_item_id, re
 		rows, err := conn.Query(ctx, `
 SELECT status, sum(duration_hours), sum(items_touched)
 FROM work_item_state_durations_daily
-WHERE org_id = ? AND day = toDate('2026-08-24')
+WHERE org_id = ? AND day = toDate('2026-08-24') AND row_view IN ('', 'org')
 GROUP BY status`, org)
 		if err != nil {
 			t.Fatal(err)

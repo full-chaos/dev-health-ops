@@ -479,7 +479,7 @@ func TestARunOfTheWholeOrganizationLeavesTheKeysOfARepositoryTheOrganizationHold
 			t.Fatalf("the newer run lists every repository and still writes %v: the case is not set", notInRun)
 		}
 
-		const itemsHeld = `SELECT toFloat64(sum(items_started + items_completed + wip_count_end_of_day)) FROM work_item_metrics_daily FINAL WHERE org_id = ? AND day = ?`
+		const itemsHeld = `SELECT toFloat64(sum(items_started + items_completed + wip_count_end_of_day)) FROM work_item_metrics_daily FINAL WHERE org_id = ? AND day = ? AND row_view IN ('', 'org')`
 		itemsBefore := float(itemsHeld, org, day)
 		if itemsBefore == 0 {
 			t.Fatalf("the newer run stored no work-item measure: the case is not set")

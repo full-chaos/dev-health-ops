@@ -87,7 +87,7 @@ func TestARunOfTheWholeOrganizationKeepsTheCurrentScopesOfEveryProvider(t *testi
 	}
 	endStaleKeyRun(t, ctx, conn, run, clock)
 
-	const wip = `SELECT toFloat64(sum(wip_count_end_of_day)) FROM work_item_metrics_daily FINAL WHERE org_id = ? AND day = ? AND provider = ? AND work_scope_id = ?`
+	const wip = `SELECT toFloat64(sum(wip_count_end_of_day)) FROM work_item_metrics_daily FINAL WHERE org_id = ? AND day = ? AND provider = ? AND work_scope_id = ? AND row_view IN ('', 'org')`
 	const backlog = `SELECT toFloat64(sum(backlog_size)) FROM estimate_coverage_metrics_daily FINAL WHERE org_id = ? AND day = ? AND provider = ? AND work_scope_id = ?`
 	for _, item := range items {
 		gotWIP := float(wip, org, day, item.provider, item.scope)

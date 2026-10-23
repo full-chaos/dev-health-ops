@@ -221,7 +221,7 @@ FROM work_item_completion_daily WHERE org_id = ? AND day = ?
 GROUP BY repo_id, team_id`, orgID, day)
 	stateRows := discovererMatrixLines(t, ctx, conn, `
 SELECT concat(provider, '|', status, '|hours=', toString(round(duration_hours, 2)), '|items=', toString(items_touched))
-FROM work_item_state_durations_daily FINAL WHERE org_id = ? AND day = ?`, orgID, day)
+FROM work_item_state_durations_daily FINAL WHERE org_id = ? AND day = ? AND row_view IN ('', 'org')`, orgID, day)
 	holds := func(lines []string, want string) bool {
 		for _, line := range lines {
 			if line == want {

@@ -112,13 +112,13 @@ func readWorkScopeRow(t *testing.T, ctx context.Context, conn driver.Conn, orgID
 		into  []any
 	}{
 		{`SELECT toUInt64(sum(items_completed)), toFloat64(sum(story_points_completed)) FROM work_item_metrics_daily FINAL
-			WHERE org_id = ? AND work_scope_id = ? AND day = ?`, []any{&row.itemsCompleted, &row.storyPoints}},
+			WHERE org_id = ? AND work_scope_id = ? AND day = ? AND row_view IN ('', 'org')`, []any{&row.itemsCompleted, &row.storyPoints}},
 		{`SELECT toUInt64(min(items_completed)) FROM work_item_metrics_daily
-			WHERE org_id = ? AND work_scope_id = ? AND day = ?`, []any{&row.itemsCompletedInAnyVersion}},
+			WHERE org_id = ? AND work_scope_id = ? AND day = ? AND row_view IN ('', 'org')`, []any{&row.itemsCompletedInAnyVersion}},
 		{`SELECT toUInt64(sum(items_completed)) FROM work_item_user_metrics_daily FINAL
-			WHERE org_id = ? AND work_scope_id = ? AND day = ?`, []any{&row.userItemsCompleted}},
+			WHERE org_id = ? AND work_scope_id = ? AND day = ? AND row_view IN ('', 'org')`, []any{&row.userItemsCompleted}},
 		{`SELECT toUInt64(max(items_touched)) FROM work_item_state_durations_daily FINAL
-			WHERE org_id = ? AND work_scope_id = ? AND day = ?`, []any{&row.stateItemsTouched}},
+			WHERE org_id = ? AND work_scope_id = ? AND day = ? AND row_view IN ('', 'org')`, []any{&row.stateItemsTouched}},
 		{`SELECT toUInt64(sum(estimated_count)) FROM estimate_coverage_metrics_daily FINAL
 			WHERE org_id = ? AND work_scope_id = ? AND day = ?`, []any{&row.estimatedItems}},
 	} {

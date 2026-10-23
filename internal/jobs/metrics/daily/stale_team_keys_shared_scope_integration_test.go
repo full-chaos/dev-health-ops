@@ -177,11 +177,11 @@ func readSharedScope(t *testing.T, ctx context.Context, conn driver.Conn, org st
 	held := map[string][]string{}
 	for _, read := range []struct{ name, query string }{
 		{"work_item_metrics_daily", `SELECT toString(team_id), toFloat64(sum(items_completed)), toFloat64(sum(wip_count_end_of_day))
-FROM work_item_metrics_daily FINAL WHERE org_id = ? AND day = ? GROUP BY team_id`},
+FROM work_item_metrics_daily FINAL WHERE org_id = ? AND day = ? AND row_view IN ('', 'org') GROUP BY team_id`},
 		{"estimate_coverage_metrics_daily", `SELECT ifNull(team_id, ''), toFloat64(sum(backlog_size)), toFloat64(sum(estimated_count))
 FROM estimate_coverage_metrics_daily FINAL WHERE org_id = ? AND day = ? GROUP BY ifNull(team_id, '')`},
 		{"work_item_state_durations_daily", `SELECT toString(team_id), toFloat64(sum(items_touched)), toFloat64(sum(duration_hours))
-FROM work_item_state_durations_daily FINAL WHERE org_id = ? AND day = ? GROUP BY team_id`},
+FROM work_item_state_durations_daily FINAL WHERE org_id = ? AND day = ? AND row_view IN ('', 'org') GROUP BY team_id`},
 	} {
 		rows, err := conn.Query(ctx, read.query, org, sharedScopeDay)
 		if err != nil {
@@ -220,7 +220,7 @@ func countSharedScopeRowsOfTeamsSince(
 	for _, table := range []string{"work_item_metrics_daily", "estimate_coverage_metrics_daily", "work_item_state_durations_daily"} {
 		var count uint64
 		if err := conn.QueryRow(ctx, "SELECT count() FROM "+table+
-			" WHERE org_id = ? AND day = ? AND ifNull(team_id, '') IN ? AND computed_at >= ?",
+			" WHERE org_id = ? AND day = ? AND ifNull(team_id, '') IN ? AND computed_at >= ?"+writerOrgView(table),
 			org, sharedScopeDay, teams, since).Scan(&count); err != nil {
 			t.Fatalf("count the rows of %v in %s: %v", teams, table, err)
 		}
@@ -386,7 +386,7 @@ func TestTheEndOfARunSettlesTheRowsOfASharedWorkScope(t *testing.T) {
 			byTeam := func() map[string]float64 {
 				t.Helper()
 				rows, err := conn.Query(ctx, "SELECT ifNull(team_id, ''), toFloat64(sum("+testCase.measure+")) FROM "+testCase.table+
-					" FINAL WHERE org_id = ? AND day = ? GROUP BY ifNull(team_id, '') HAVING sum("+testCase.measure+") > 0", org, day)
+					" FINAL WHERE org_id = ? AND day = ?"+writerOrgView(testCase.table)+" GROUP BY ifNull(team_id, '') HAVING sum("+testCase.measure+") > 0", org, day)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -578,13 +578,13 @@ func TestARealRowOfAKeyThatComesBackIsNewerThanItsRowOfZeros(t *testing.T) {
 				{"estimate_coverage_metrics_daily", "backlog_size", ""},
 				{"work_item_state_durations_daily", "items_touched", " AND status = 'in_progress'"},
 			}
-			keyOf := func(extraKey string) string {
-				return " WHERE org_id = ? AND day = ? AND provider = 'linear' AND work_scope_id = 'board-1' AND ifNull(team_id, '') = 'ENG'" + extraKey
+			keyOf := func(table, extraKey string) string {
+				return " WHERE org_id = ? AND day = ? AND provider = 'linear' AND work_scope_id = 'board-1' AND ifNull(team_id, '') = 'ENG'" + extraKey + writerOrgView(table)
 			}
 			newestOf := func(table, extraKey string) time.Time {
 				t.Helper()
 				var newest time.Time
-				if err := conn.QueryRow(ctx, "SELECT max(computed_at) FROM "+table+keyOf(extraKey), org, day).Scan(&newest); err != nil {
+				if err := conn.QueryRow(ctx, "SELECT max(computed_at) FROM "+table+keyOf(table, extraKey), org, day).Scan(&newest); err != nil {
 					t.Fatalf("read the newest row of %s: %v", table, err)
 				}
 				return newest
@@ -605,7 +605,7 @@ func TestARealRowOfAKeyThatComesBackIsNewerThanItsRowOfZeros(t *testing.T) {
 			// The other two forms of "the newest row of a key", for the key of
 			// team ENG in each table.
 			for _, read := range keyTables {
-				where := keyOf(read.extraKey)
+				where := keyOf(read.table, read.extraKey)
 				if real := newestOf(read.table, read.extraKey); !real.After(zeros[read.table]) {
 					t.Errorf("%s: the newest row of the key that came back is at %s, its row of zeros at %s; want strictly newer",
 						read.table, real.Format(time.RFC3339Nano), zeros[read.table].Format(time.RFC3339Nano))

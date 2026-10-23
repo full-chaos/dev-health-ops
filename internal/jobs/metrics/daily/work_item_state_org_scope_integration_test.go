@@ -68,8 +68,8 @@ func TestWorkItemStateComputeFamilyIsolatesTenantsAndReadsPrimaryAttribution(t *
 		`CREATE TABLE work_item_state_durations_daily (
     day Date, provider String, work_scope_id String, team_id String, team_name String,
     status String, duration_hours Float64, items_touched UInt32, computed_at DateTime,
-    avg_wip Float64, org_id String
-) ENGINE = MergeTree PARTITION BY toYYYYMM(day) ORDER BY (provider, work_scope_id, team_id, status, day)`,
+    avg_wip Float64, org_id String, row_view LowCardinality(String)
+) ENGINE = MergeTree PARTITION BY toYYYYMM(day) ORDER BY (provider, work_scope_id, team_id, status, day, row_view)`,
 		`CREATE TABLE work_item_blocked_durations_daily (
     day Date, provider String, work_scope_id String, team_id String, team_name String,
     work_item_id String, duration_hours Float64, computed_at DateTime64(3, 'UTC'), org_id String
@@ -151,7 +151,7 @@ INSERT INTO work_item_team_attributions (org_id, repo_id, work_item_id, provider
 
 func assertWorkItemStateOrgScopedCount(ctx context.Context, t *testing.T, conn driver.Conn, orgID string, want int) {
 	t.Helper()
-	row := conn.QueryRow(ctx, "SELECT count() FROM work_item_state_durations_daily WHERE org_id = ?", orgID)
+	row := conn.QueryRow(ctx, "SELECT count() FROM work_item_state_durations_daily WHERE org_id = ? AND row_view IN ('', 'org')", orgID)
 	var got uint64
 	if err := row.Scan(&got); err != nil {
 		t.Fatalf("org_id=%q: query row: %v", orgID, err)
@@ -163,7 +163,7 @@ func assertWorkItemStateOrgScopedCount(ctx context.Context, t *testing.T, conn d
 
 func assertWorkItemStateTeamID(ctx context.Context, t *testing.T, conn driver.Conn, orgID, wantTeamID string) {
 	t.Helper()
-	row := conn.QueryRow(ctx, "SELECT team_id FROM work_item_state_durations_daily WHERE org_id = ? AND status = 'in_progress'", orgID)
+	row := conn.QueryRow(ctx, "SELECT team_id FROM work_item_state_durations_daily WHERE org_id = ? AND status = 'in_progress' AND row_view IN ('', 'org')", orgID)
 	var got string
 	if err := row.Scan(&got); err != nil {
 		t.Fatalf("org_id=%q: query row: %v", orgID, err)

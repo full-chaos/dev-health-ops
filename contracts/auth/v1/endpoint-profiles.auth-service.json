@@ -520,8 +520,247 @@
         "line": 119
       },
       "surface_kind": "rest"
+    },
+    {
+      "accepted_credential_classes": [
+        "sso_oidc_exchange"
+      ],
+      "classification": "public",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "POST /api/v1/auth/oidc/{provider_id}/authorize [dev-health-auth-service @api]",
+      "issued_credential": [],
+      "method": "POST",
+      "public_rationale": "OIDC authorize; pre-session by design: the browser starts a sign-in and the route accepts no credential. The state, nonce and PKCE verifier it mints are checked at the callback.",
+      "route": "/api/v1/auth/oidc/{provider_id}/authorize",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authruntime/sso.go",
+        "line": 103
+      },
+      "surface_kind": "rest"
+    },
+    {
+      "accepted_credential_classes": [
+        "sso_oidc_exchange"
+      ],
+      "classification": "public",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "POST /api/v1/auth/oidc/{provider_id}/callback [dev-health-auth-service @api]",
+      "issued_credential": [
+        {
+          "algorithm": "HS256",
+          "anchor": {
+            "line": 62,
+            "note": "func (i *Issuer) Access",
+            "path": "internal/auth/authapi/issuer.go"
+          },
+          "audience": "AUTH_JWT_AUDIENCE (default dev-health-api)",
+          "class_id": "ops_access_token_hs256",
+          "direction": "returned_to_caller",
+          "issuer": "AUTH_JWT_ISSUER (default dev-health-ops)",
+          "lifetime_seconds": 3600,
+          "note": "go-api's access claims from the live users and membership rows, plus sid."
+        },
+        {
+          "algorithm": null,
+          "anchor": {
+            "line": 23,
+            "note": "func (s *Store) CreateAudited",
+            "path": "internal/auth/session/signin.go"
+          },
+          "audience": null,
+          "class_id": "refresh_credential",
+          "direction": "returned_to_caller",
+          "issuer": null,
+          "lifetime_seconds": 604800,
+          "note": "The first opaque credential of the session (dhr1_ + 32 random bytes), which starts a new family."
+        }
+      ],
+      "method": "POST",
+      "public_rationale": "OIDC callback; pre-session by design: the authorization code is exchanged at the provider, and the state, nonce, PKCE verifier and browser binding are checked before an account is resolved. An unknown subject is refused; no account is created.",
+      "route": "/api/v1/auth/oidc/{provider_id}/callback",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authruntime/sso.go",
+        "line": 104
+      },
+      "surface_kind": "rest"
+    },
+    {
+      "accepted_credential_classes": [
+        "social_oauth_exchange"
+      ],
+      "classification": "public",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "POST /api/v1/auth/oauth/{provider_id}/authorize [dev-health-auth-service @api]",
+      "issued_credential": [],
+      "method": "POST",
+      "public_rationale": "OAuth authorize; pre-session by design: the browser starts a sign-in and the route accepts no credential.",
+      "route": "/api/v1/auth/oauth/{provider_id}/authorize",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authruntime/sso.go",
+        "line": 105
+      },
+      "surface_kind": "rest"
+    },
+    {
+      "accepted_credential_classes": [
+        "social_oauth_exchange"
+      ],
+      "classification": "public",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "GET /api/v1/auth/oauth/{provider_id}/authorize [dev-health-auth-service @api]",
+      "issued_credential": [],
+      "method": "GET",
+      "public_rationale": "OAuth authorize by provider type (the path segment is the provider type); pre-session by design: the browser starts a sign-in and the route accepts no credential.",
+      "route": "/api/v1/auth/oauth/{provider_id}/authorize",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authruntime/sso.go",
+        "line": 106
+      },
+      "surface_kind": "rest"
+    },
+    {
+      "accepted_credential_classes": [
+        "social_oauth_exchange"
+      ],
+      "classification": "public",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "POST /api/v1/auth/oauth/{provider_id}/callback [dev-health-auth-service @api]",
+      "issued_credential": [
+        {
+          "algorithm": "HS256",
+          "anchor": {
+            "line": 62,
+            "note": "func (i *Issuer) Access",
+            "path": "internal/auth/authapi/issuer.go"
+          },
+          "audience": "AUTH_JWT_AUDIENCE (default dev-health-api)",
+          "class_id": "ops_access_token_hs256",
+          "direction": "returned_to_caller",
+          "issuer": "AUTH_JWT_ISSUER (default dev-health-ops)",
+          "lifetime_seconds": 3600,
+          "note": "go-api's access claims from the live users and membership rows, plus sid."
+        },
+        {
+          "algorithm": null,
+          "anchor": {
+            "line": 23,
+            "note": "func (s *Store) CreateAudited",
+            "path": "internal/auth/session/signin.go"
+          },
+          "audience": null,
+          "class_id": "refresh_credential",
+          "direction": "returned_to_caller",
+          "issuer": null,
+          "lifetime_seconds": 604800,
+          "note": "The first opaque credential of the session (dhr1_ + 32 random bytes), which starts a new family."
+        }
+      ],
+      "method": "POST",
+      "public_rationale": "OAuth callback; pre-session by design: the authorization code is exchanged at the provider and the state and browser binding are checked before an account is resolved. An unknown subject is refused; no account is created.",
+      "route": "/api/v1/auth/oauth/{provider_id}/callback",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authruntime/sso.go",
+        "line": 107
+      },
+      "surface_kind": "rest"
+    },
+    {
+      "accepted_credential_classes": [
+        "sso_saml_exchange"
+      ],
+      "classification": "public",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "GET /api/v1/auth/saml/{provider_id}/metadata [dev-health-auth-service @api]",
+      "issued_credential": [],
+      "method": "GET",
+      "public_rationale": "SAML service-provider metadata; the IdP, not a browser session, is the caller, and the answer carries only public configuration.",
+      "route": "/api/v1/auth/saml/{provider_id}/metadata",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authruntime/sso.go",
+        "line": 146
+      },
+      "surface_kind": "rest"
+    },
+    {
+      "accepted_credential_classes": [
+        "sso_saml_exchange"
+      ],
+      "classification": "public",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "POST /api/v1/auth/saml/{provider_id}/initiate [dev-health-auth-service @api]",
+      "issued_credential": [],
+      "method": "POST",
+      "public_rationale": "SAML sign-in start; pre-session by design: the route mints a request id bound to the browser and accepts no credential.",
+      "route": "/api/v1/auth/saml/{provider_id}/initiate",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authruntime/sso.go",
+        "line": 147
+      },
+      "surface_kind": "rest"
+    },
+    {
+      "accepted_credential_classes": [
+        "sso_saml_exchange"
+      ],
+      "classification": "public",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "POST /api/v1/auth/saml/{provider_id}/acs [dev-health-auth-service @api]",
+      "issued_credential": [
+        {
+          "algorithm": "HS256",
+          "anchor": {
+            "line": 62,
+            "note": "func (i *Issuer) Access",
+            "path": "internal/auth/authapi/issuer.go"
+          },
+          "audience": "AUTH_JWT_AUDIENCE (default dev-health-api)",
+          "class_id": "ops_access_token_hs256",
+          "direction": "returned_to_caller",
+          "issuer": "AUTH_JWT_ISSUER (default dev-health-ops)",
+          "lifetime_seconds": 3600,
+          "note": "go-api's access claims from the live users and membership rows, plus sid."
+        },
+        {
+          "algorithm": null,
+          "anchor": {
+            "line": 23,
+            "note": "func (s *Store) CreateAudited",
+            "path": "internal/auth/session/signin.go"
+          },
+          "audience": null,
+          "class_id": "refresh_credential",
+          "direction": "returned_to_caller",
+          "issuer": null,
+          "lifetime_seconds": 604800,
+          "note": "The first opaque credential of the session (dhr1_ + 32 random bytes), which starts a new family."
+        }
+      ],
+      "method": "POST",
+      "public_rationale": "SAML assertion consumer; pre-session by design: the assertion signature, audience, destination, request binding and one-time use are checked before an account is resolved. An unknown subject is refused; no account is created.",
+      "route": "/api/v1/auth/saml/{provider_id}/acs",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authruntime/sso.go",
+        "line": 148
+      },
+      "surface_kind": "rest"
     }
   ],
   "schema_version": "endpoint-profile.v1",
-  "source_commit": "fc9660b96058e48c9d93e3f54be4d8836bc5596e"
+  "source_commit": "67117b91b31d720363cb4259a015153fbab7e243"
 }

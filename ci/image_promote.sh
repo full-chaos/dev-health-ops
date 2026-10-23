@@ -68,7 +68,7 @@ promote() {
   [ "${EVENT_NAME:-}" = push ] && [ "${REF:-}" = refs/heads/main ] || return 0
   : "${OWNER:?}" "${SHA:?}"
   sha="${SHA}"
-  local mtree prs head_sha pr_number head_tree family image json digest platform rev att certs src src_json
+  local mtree prs head_sha pr_number head_tree family image json digest platform rev att stray src src_json
   local signer="${REPO}/.github/workflows/docker-images.yml"
   local families="dev-health-go-operator dev-health-go-contractcheck dev-health-go-migrate dev-health-go-dho dev-health-go-auth-service dev-health-go-auth-migrate dev-health-go-api-tools"
   local -a digests=()
@@ -114,24 +114,29 @@ promote() {
       decline "${family}: no verifiable build provenance for ${digest} from ${signer}"
       return 0
     fi
-    certs="$(jq -c --arg ref "refs/pull/${pr_number}/merge" '[.[].verificationResult.signature.certificate | select(.githubWorkflowTrigger == "pull_request" and .sourceRepositoryRef == $ref) | .sourceRepositoryDigest] | unique' <<<"${att}" 2>/dev/null)" || certs="[]"
-    if [ "$(jq 'length' <<<"${certs}")" != 1 ]; then
-      decline "${family}: provenance for ${digest} is not exactly one pull_request run on refs/pull/${pr_number}/merge"
+    if ! jq -e 'type == "array" and length > 0' >/dev/null 2>&1 <<<"${att}"; then
+      decline "${family}: provenance for ${digest} is empty or unreadable"
       return 0
     fi
-    src="$(jq -r '.[0]' <<<"${certs}")"
-    if ! src_json="$(commit_json "${src}")"; then
-      decline "${family}: cannot read provenance source commit ${src}"
+    stray="$(jq -r --arg ref "refs/pull/${pr_number}/merge" '[.[].verificationResult.signature.certificate | select((.githubWorkflowTrigger == "pull_request" and .sourceRepositoryRef == $ref) | not)] | length' <<<"${att}" 2>/dev/null)" || stray=1
+    if [ "${stray}" != 0 ]; then
+      decline "${family}: provenance for ${digest} holds a certificate that is not a pull_request run on refs/pull/${pr_number}/merge"
       return 0
     fi
-    if [ "$(jq -r '.tree.sha // empty' <<<"${src_json}")" != "${mtree}" ]; then
-      decline "${family}: provenance source ${src} tree differs from merge tree ${mtree}"
-      return 0
-    fi
-    if ! jq -e --arg h "${head_sha}" '[.parents[].sha] | index($h)' >/dev/null 2>&1 <<<"${src_json}"; then
-      decline "${family}: provenance source ${src} does not contain PR head ${head_sha}"
-      return 0
-    fi
+    while IFS= read -r src; do
+      if ! [[ "${src}" =~ ^[0-9a-f]{40}$ ]] || ! src_json="$(commit_json "${src}")"; then
+        decline "${family}: cannot read provenance source commit '${src}'"
+        return 0
+      fi
+      if [ "$(jq -r '.tree.sha // empty' <<<"${src_json}")" != "${mtree}" ]; then
+        decline "${family}: provenance source ${src} tree differs from merge tree ${mtree}"
+        return 0
+      fi
+      if ! jq -e --arg h "${head_sha}" '[.parents[].sha] | index($h)' >/dev/null 2>&1 <<<"${src_json}"; then
+        decline "${family}: provenance source ${src} does not contain PR head ${head_sha}"
+        return 0
+      fi
+    done < <(jq -r '[.[].verificationResult.signature.certificate.sourceRepositoryDigest] | unique | .[]' <<<"${att}")
     digests+=("${digest}")
   done
 

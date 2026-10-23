@@ -182,10 +182,10 @@ func TestPromoteDeclinesEveryUnprovenCase(t *testing.T) {
 		{"attestation missing", func(f promFix) { f.del("att_" + promKey(promPrefix+promFamilies[5]+"@"+promDigest(5))) }, "no verifiable build provenance"},
 		{"provenance from a push run, not a pull_request run", func(f promFix) {
 			f.attest(0, "push", "refs/heads/main", promMerge)
-		}, "not exactly one pull_request run"},
+		}, "not a pull_request run on refs/pull/"},
 		{"provenance from another PR's merge ref", func(f promFix) {
 			f.attest(1, "pull_request", "refs/pull/99/merge", promMerge)
-		}, "not exactly one pull_request run"},
+		}, "not a pull_request run on refs/pull/"},
 		{"wrong source sha: source commit does not contain the PR head", func(f promFix) { f.commit(promMerge, promTree, promBase, promOther) }, "does not contain PR head"},
 		{"wrong source sha: source commit tree differs from the merge tree", func(f promFix) { f.commit(promMerge, promOther, promBase, promHead) }, "provenance source"},
 		{"revision label is not the PR head", func(f promFix) { f.inspect(promFamilies[2], 2, promOther) }, "revision label"},
@@ -293,5 +293,65 @@ func TestResolveJobWiring(t *testing.T) {
 		if asString(perms["attestations"]) != "write" {
 			t.Errorf("job %s cannot attest hotfix provenance", name)
 		}
+	}
+}
+
+func (f promFix) attestMany(i int, certs ...map[string]string) {
+	var arr []any
+	for _, c := range certs {
+		arr = append(arr, map[string]any{"verificationResult": map[string]any{"signature": map[string]any{"certificate": c}}})
+	}
+	f.put("att_"+promKey(promPrefix+promFamilies[i]+"@"+promDigest(i)), arr)
+}
+
+func promCert(src, run string) map[string]string {
+	return map[string]string{"githubWorkflowTrigger": "pull_request", "sourceRepositoryRef": fmt.Sprintf("refs/pull/%d/merge", promPR), "sourceRepositoryDigest": src, "runInvocationURI": run}
+}
+
+func TestPromoteChecksEveryProvenanceCertificate(t *testing.T) {
+	t.Run("two runs of the same reviewed source are accepted", func(t *testing.T) {
+		f := newPromFix(t)
+		f.attestMany(0, promCert(promMerge, "https://github.com/x/runs/1"), promCert(promMerge, "https://github.com/x/runs/2"))
+		if r := runPromote(t, f, "promote"); r.out["promoted"] != "true" {
+			t.Fatalf("a re-run of the same source must still promote:\n%s", r.stdout)
+		}
+	})
+	t.Run("a second certificate from another source declines", func(t *testing.T) {
+		f := newPromFix(t)
+		f.commit(promOther, promOther, promBase, promHead)
+		f.attestMany(0, promCert(promMerge, "https://github.com/x/runs/1"), promCert(promOther, "https://github.com/x/runs/2"))
+		wantDeclined(t, runPromote(t, f, "promote"), "tree differs from merge tree")
+	})
+	t.Run("a second certificate from a non-PR run declines", func(t *testing.T) {
+		f := newPromFix(t)
+		bad := promCert(promMerge, "https://github.com/x/runs/2")
+		bad["githubWorkflowTrigger"] = "workflow_dispatch"
+		f.attestMany(0, promCert(promMerge, "https://github.com/x/runs/1"), bad)
+		wantDeclined(t, runPromote(t, f, "promote"), "not a pull_request run on refs/pull/")
+	})
+	t.Run("an empty attestation list declines", func(t *testing.T) {
+		f := newPromFix(t)
+		f.put("att_"+promKey(promPrefix+promFamilies[0]+"@"+promDigest(0)), []any{})
+		wantDeclined(t, runPromote(t, f, "promote"), "empty or unreadable")
+	})
+}
+
+func TestLabeledTriggerIsGatedToHotfixImage(t *testing.T) {
+	text := readFile(t, filepath.Join(repoRoot(t), publishWorkflow))
+	doc := loadWf(t, repoRoot(t), "docker-images.yml")
+	on := asMap(doc["on"])
+	types := asList(asMap(on["pull_request"])["types"])
+	hasLabeled := false
+	for _, x := range types {
+		hasLabeled = hasLabeled || asString(x) == "labeled"
+	}
+	if !hasLabeled {
+		t.Error("pull_request types lack labeled: adding the label to an open PR would not build the hotfix images")
+	}
+	if !strings.Contains(asString(asMap(jobsOf(doc)["changes"])["if"]), "github.event.label.name == 'hotfix-image'") {
+		t.Error("changes job does not skip a labeled event of another label: every label would rebuild every image")
+	}
+	if !strings.Contains(text, "github.event.label.name != 'hotfix-image' && '-other-label'") {
+		t.Error("another label's run shares the PR concurrency group and would cancel the real run")
 	}
 }

@@ -2,7 +2,7 @@ name: Build Docker images
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
   merge_group:
   push:
     branches:
@@ -93,7 +93,7 @@ concurrency:
   # The CHAOS-4921 protection itself is unchanged: two different commits'
   # pushes to main, or two merge_group entries, still never share a group
   # and so can never cancel or displace each other's image build.
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event.inputs.ref || ((github.ref == 'refs/heads/main' || github.event_name == 'merge_group') && github.sha) || github.ref }}
+  group: ${{ github.workflow }}${{ github.event.action == 'labeled' && github.event.label.name != 'hotfix-image' && '-other-label' || '' }}-${{ github.event.pull_request.number || github.event.inputs.ref || ((github.ref == 'refs/heads/main' || github.event_name == 'merge_group') && github.sha) || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref != 'refs/heads/main') }}
 
 permissions:
@@ -103,6 +103,9 @@ permissions:
 
 jobs:
   changes:
+    # CHAOS-10923: the `labeled` trigger exists for `hotfix-image` only; any other label skips this whole workflow
+    # (every build job needs `changes`) and sits in its own concurrency group, so it never cancels a real PR run.
+    if: github.event_name != 'pull_request' || github.event.action != 'labeled' || github.event.label.name == 'hotfix-image'
     runs-on: ubuntu-latest
     outputs:
       code: ${{ steps.filter.outputs.code }}

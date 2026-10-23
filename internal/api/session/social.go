@@ -24,6 +24,10 @@ const socialProviderPattern = "^(github|gitlab|google)$"
 // .lower() or a text column): an unhandled exception, the bare 500.
 var errProviderValueType = errors.New("session: provider profile value has an unusable type")
 
+// providerEmailUnverified is the one answer to a profile without a verified e-mail, whether or not an
+// account holds that e-mail.
+const providerEmailUnverified = "The provider has not verified this email address"
+
 // providerText is a provider value used as text: nil stays nil, a str is
 // itself, anything else is errProviderValueType.
 func providerText(value pyjson.Value) (*string, error) {
@@ -69,6 +73,10 @@ func (h handlers) socialLogin(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case errors.As(err, &userInfoErr):
 		h.Logger.WarnContext(ctx, "social login user info fetch failed", "provider", provider, "reason", userInfoErr.Reason)
+		if userInfoErr.Reason == oauthprovider.ReasonNoVerifiedEmail {
+			refuse(w, http.StatusForbidden, providerEmailUnverified)
+			return
+		}
 		refuse(w, http.StatusUnauthorized, "Invalid or expired provider token")
 		return
 	case err != nil:
@@ -96,7 +104,7 @@ func (h handlers) socialLogin(w http.ResponseWriter, r *http.Request) {
 	var email string
 	if user == nil {
 		if !info.EmailVerified {
-			refuse(w, http.StatusForbidden, "The provider has not verified this email address")
+			refuse(w, http.StatusForbidden, providerEmailUnverified)
 			return
 		}
 		if email, ok = info.Email.(string); !ok {

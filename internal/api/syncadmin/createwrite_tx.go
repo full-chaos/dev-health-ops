@@ -92,6 +92,13 @@ VALUES ($1, $2, $3, $4, $5, $6::json, true, $7, $8, $9, $9)`,
 		return nil, fmt.Errorf("insert integration: %w", err)
 	}
 
+	// The integration is new and invisible to every other transaction, so
+	// this lock never waits; it keeps the one rule that every writer of the
+	// integration's dataset rows holds the selection lock before the first row.
+	if err := providersync.LockIntegrationSelection(ctx, tx, in.orgID, integrationID); err != nil {
+		return nil, err
+	}
+
 	targets := make([]pyjson.Value, len(in.syncTargets))
 	for index, target := range in.syncTargets {
 		targets[index] = target

@@ -766,6 +766,14 @@ func TestRoutesAreEmptyWithoutTheSessionSecrets(t *testing.T) {
 	if got, want := mountedBy(withLogin), sessionRoutesText+",POST /api/v1/auth/refresh,POST /api/v1/auth/logout,POST /api/v1/auth/login,POST /internal/v1/sessions,POST /api/v1/auth/social-login"; got != want {
 		t.Fatalf("with the lockout key: mounted %s, want %s", got, want)
 	}
+	withLink := load(func(env map[string]string) map[string]string {
+		env = sessionEnvironment(env)
+		env[authconfig.EnvSocialLinkRoutes] = "true"
+		return env
+	})
+	if got, want := mountedBy(withLink), withoutLogin+",POST /v1/identities/social,DELETE /v1/identities/social/{id}"; got != want {
+		t.Fatalf("with the social link switch: mounted %s, want %s", got, want)
+	}
 }
 
 // TestTheAuthServiceScrapeCarriesItsPerRouteRequestSeries drives the real

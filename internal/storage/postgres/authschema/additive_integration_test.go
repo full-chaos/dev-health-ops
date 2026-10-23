@@ -296,6 +296,26 @@ var additiveExemptions = []additiveExemption{
 		regression: `constraint memberships.memberships_principal_id_fkey redefined "FOREIGN KEY (principal_id) REFERENCES auth.principals(id) ON DELETE CASCADE" -> "FOREIGN KEY (principal_id) REFERENCES auth.principals(id) ON DELETE RESTRICT"`,
 		reason:     "deleting an organization or a principal that still has a membership is refused instead of deleting the memberships (CHAOS-10638)",
 	},
+	{
+		version:    20,
+		regression: `constraint resource_grants.resource_grants_organization_id_fkey redefined "FOREIGN KEY (organization_id) REFERENCES auth.organizations(id) ON DELETE CASCADE" -> "FOREIGN KEY (organization_id) REFERENCES auth.organizations(id) ON DELETE RESTRICT"`,
+		reason:     "deleting an organization or a principal that still owns security state is refused instead of deleting it (CHAOS-10639)",
+	},
+	{
+		version:    20,
+		regression: `constraint resource_grants.resource_grants_principal_id_fkey redefined "FOREIGN KEY (principal_id) REFERENCES auth.principals(id) ON DELETE CASCADE" -> "FOREIGN KEY (principal_id) REFERENCES auth.principals(id) ON DELETE RESTRICT"`,
+		reason:     "deleting an organization or a principal that still owns security state is refused instead of deleting it (CHAOS-10639)",
+	},
+	{
+		version:    20,
+		regression: `constraint service_accounts.service_accounts_organization_id_fkey redefined "FOREIGN KEY (organization_id) REFERENCES auth.organizations(id) ON DELETE CASCADE" -> "FOREIGN KEY (organization_id) REFERENCES auth.organizations(id) ON DELETE RESTRICT"`,
+		reason:     "deleting an organization or a principal that still owns security state is refused instead of deleting it (CHAOS-10639)",
+	},
+	{
+		version:    20,
+		regression: `constraint workloads.workloads_organization_id_fkey redefined "FOREIGN KEY (organization_id) REFERENCES auth.organizations(id) ON DELETE CASCADE" -> "FOREIGN KEY (organization_id) REFERENCES auth.organizations(id) ON DELETE RESTRICT"`,
+		reason:     "deleting an organization or a principal that still owns security state is refused instead of deleting it (CHAOS-10639)",
+	},
 }
 
 // TestEveryMigrationStepIsAdditive applies the lineage ONE MIGRATION AT A TIME

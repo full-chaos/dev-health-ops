@@ -407,7 +407,7 @@ func TestCredentialRegistryTRDColumnsAndLifecycleRules(t *testing.T) {
 			 VALUES ($1, $2, 'workload_token', decode(md5(random()::text), 'hex'), 'sha256', 'NOT-HEX')`, id, credPrincipal), "fingerprint_shape")
 		if err := commitCredential(ctx, env,
 			`INSERT INTO auth.credential_registry (id, principal_id, credential_class, secret_hash, hash_algorithm, fingerprint, domain_owner, external_reference)
-			 VALUES ($1, $2, 'workload_token', decode(md5(random()::text), 'hex'), 'sha256', '0123456789abcdef', 'acr', 'ext-1')`, id, credPrincipal); err != nil {
+			 VALUES ($1, $2, 'workload_token', decode('0123456789abcdef', 'hex'), 'fingerprint', '0123456789abcdef', 'acr', 'ext-1')`, id, credPrincipal); err != nil {
 			t.Fatalf("a well-formed projected credential was refused: %v", err)
 		}
 	})

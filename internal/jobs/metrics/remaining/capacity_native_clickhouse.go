@@ -603,7 +603,8 @@ var capacityTableRequirements = map[string]capacityTableRequirement{
 		// Migration 055 converts this table's engine to
 		// ReplacingMergeTree(computed_at), and migration 027 sets its
 		// sorting key to (org_id, provider, day, work_scope_id, team_id) --
-		// neither migration since has changed either. provider is in the
+		// only migration 141 changed the key since, by appending row_view
+		// (see sortingKey below). provider is in the
 		// key deliberately: capacityScopeFilters never filters on it, so the
 		// throughput and backlog queries sum across providers on purpose,
 		// and the sorting key is the only thing left keeping their rows

@@ -5648,23 +5648,13 @@
       "tenant_requirement": "org_scoped"
     },
     {
-      "accepted_credential_classes": [
-        "external_push_ingest_token"
-      ],
-      "classification": "protected",
+      "accepted_credential_classes": [],
+      "classification": "public",
       "gaps": [],
       "graphql_field_name": null,
       "id": "GET /api/v1/external-ingest/schemas [dev-health-ops-api @api]",
       "method": "GET",
-      "primary_validator": {
-        "anchor": {
-          "line": 143,
-          "note": "Pattern:",
-          "path": "internal/api/externalingest/deps.go"
-        },
-        "description": "The external-ingest handlers authenticate the push token in the Authorization header before any read or write."
-      },
-      "public_rationale": null,
+      "public_rationale": "Public schema document: the contract pushers code against; no tenant data and the same bytes for every caller; the only control is the per-address rate limit.",
       "reachable_validators": [
         {
           "anchor": {
@@ -5694,26 +5684,16 @@
         "line": 143
       },
       "surface_kind": "rest",
-      "tenant_requirement": "org_scoped"
+      "tenant_requirement": "none"
     },
     {
-      "accepted_credential_classes": [
-        "external_push_ingest_token"
-      ],
-      "classification": "protected",
+      "accepted_credential_classes": [],
+      "classification": "public",
       "gaps": [],
       "graphql_field_name": null,
       "id": "GET /api/v1/external-ingest/schemas/{schema_version} [dev-health-ops-api @api]",
       "method": "GET",
-      "primary_validator": {
-        "anchor": {
-          "line": 144,
-          "note": "Pattern:",
-          "path": "internal/api/externalingest/deps.go"
-        },
-        "description": "The external-ingest handlers authenticate the push token in the Authorization header before any read or write."
-      },
-      "public_rationale": null,
+      "public_rationale": "Public schema document: the contract pushers code against; no tenant data and the same bytes for every caller; the only control is the per-address rate limit.",
       "reachable_validators": [
         {
           "anchor": {
@@ -5743,7 +5723,7 @@
         "line": 144
       },
       "surface_kind": "rest",
-      "tenant_requirement": "org_scoped"
+      "tenant_requirement": "none"
     },
     {
       "accepted_credential_classes": [

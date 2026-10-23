@@ -107,8 +107,10 @@ func TestExternalPushControlAPushTokenReachesTheLookup(t *testing.T) {
 	}
 }
 
-// The two schema-discovery routes carry the push profile but the handlers perform no credential check: a
-// user token changes nothing, so the answer equals the anonymous one (no lookup, no echo of the credential).
+// The two schema-discovery routes are PUBLIC in the endpoint profile: the same bytes for every caller, no
+// lookup. Proven for each route against the anonymous answer: a user token of any kind, a different
+// organisation header, a different caller address and several of them together change nothing (status, the
+// body bytes and the validator header), the database is never touched, and the credential is not echoed.
 func TestExternalPushSchemaDiscoveryIgnoresUserTokens(t *testing.T) {
 	tokens := withissuer.All(t)
 	pool, connects := usertokens.CountingPool(t)
@@ -118,17 +120,32 @@ func TestExternalPushSchemaDiscoveryIgnoresUserTokens(t *testing.T) {
 		{"GET", pushPrefix + "/schemas/{schema_version}"},
 	} {
 		handler := route(t, deps, rt.method, rt.pattern)
-		anonymous := httptest.NewRecorder()
-		handler.ServeHTTP(anonymous, newPushRequest(rt.method, rt.pattern, "", 900))
-		serial := 1000
-		for _, tok := range tokens {
+		serial := 900
+		answer := func(authorization, org string) (int, string, string) {
 			serial++
-			recorder := httptest.NewRecorder()
-			handler.ServeHTTP(recorder, newPushRequest(rt.method, rt.pattern, "Bearer "+tok.Value, serial))
-			if recorder.Code != anonymous.Code || recorder.Body.String() != anonymous.Body.String() {
-				t.Errorf("%s with %s: %d %s differs from the anonymous %d %s", rt.pattern, tok.Kind, recorder.Code, recorder.Body.String(), anonymous.Code, anonymous.Body.String())
+			request := newPushRequest(rt.method, rt.pattern, authorization, serial)
+			if org != "" {
+				request.Header.Set("X-Org-Id", org)
 			}
-			usertokens.NoLeak(t, rt.pattern+" body", recorder.Body.String(), tokens)
+			recorder := httptest.NewRecorder()
+			handler.ServeHTTP(recorder, request)
+			return recorder.Code, recorder.Body.String(), recorder.Header().Get("ETag")
+		}
+		code, body, etag := answer("", "")
+		if code != http.StatusOK || body == "" {
+			t.Fatalf("%s anonymous: %d %q, want 200 with the schema document", rt.pattern, code, body)
+		}
+		for _, org := range []string{"", "11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222"} {
+			if c, b, e := answer("", org); c != code || b != body || e != etag {
+				t.Errorf("%s with org %q and no credential differs from the anonymous answer", rt.pattern, org)
+			}
+			for _, tok := range tokens {
+				c, b, e := answer("Bearer "+tok.Value, org)
+				if c != code || b != body || e != etag {
+					t.Errorf("%s with %s and org %q: %d differs from the anonymous %d (bytes equal %v, validator equal %v)", rt.pattern, tok.Kind, org, c, code, b == body, e == etag)
+				}
+				usertokens.NoLeak(t, rt.pattern+" body", b, tokens)
+			}
 		}
 	}
 	if connects.Count() != 0 {

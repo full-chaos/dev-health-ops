@@ -55,6 +55,10 @@ stage-signing-key init container exists.
 {{- if eq (int $a.port) (int $a.operatorPort) }}{{- fail "authService.port and authService.operatorPort must differ: the operator surface is never exposed on the API port" }}{{- end }}
 {{- if not (regexMatch "^[0-9]+s$" (toString $a.shutdownTimeout)) }}{{- fail "authService.shutdownTimeout must be whole seconds such as 20s" }}{{- end }}
 {{- if ge (int (trimSuffix "s" (toString $a.shutdownTimeout))) (int $a.terminationGracePeriodSeconds) }}{{- fail "authService.shutdownTimeout must be below authService.terminationGracePeriodSeconds: the kubelet kills the pod at the grace period, so a longer shutdown bound is never reached" }}{{- end }}
+{{- range $a.extraArgs }}
+{{- if has (trimAll "-" (lower (trim (toString .))) | splitList "=" | first) (list "signing-key-file" "signing-key-id" "signing-keyset-file") }}{{- fail (printf "authService.extraArgs must not set %s: the chart renders the signing key flags (authService.signingKey or authService.keySet)" .) }}{{- end }}
+{{- end }}
+{{- if and $ksOn $a.podAnnotations (hasKey $a.podAnnotations "checksum/keyset") }}{{- fail "authService.podAnnotations must not set checksum/keyset: the chart sets it from the key-set manifest" }}{{- end }}
 {{- range $a.extraEnv }}
 {{- if has .name (list "AUTH_JWT_SECRET_KEY" "AUTH_SESSION_SUCCESSOR_KEY") }}{{- fail (printf "authService.extraEnv must not set %s: use authService.sessionKeys, which reaches the container by secretKeyRef" .name) }}{{- end }}
 {{- if eq .name "AUTH_SIGNING_KEY" }}{{- fail "authService.extraEnv must not set AUTH_SIGNING_KEY: direct-value signing material is rejected by the service (ACP-ADR-02 §4); use authService.signingKey" }}{{- end }}

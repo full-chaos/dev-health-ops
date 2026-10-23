@@ -77,6 +77,7 @@ func TestDownRevision0152DropsTheCheckedAtColumn(t *testing.T) {
 // PlanDowngrade and ParseDowngradeTarget enumerate every cell: each refusal code and
 // each accepted shape is pinned with its exact steps.
 func TestPlanDowngradeCells(t *testing.T) {
+	UseFrozenChain(t) // the cells below are the frozen prefix: their literals name 0152 as the top
 	_, _, _, r, known := downgradeFixture(t)
 	top := r.Covered[len(r.Covered)-1]
 	steps := func(from, to string) []DownStep {

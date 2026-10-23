@@ -24,8 +24,14 @@ import (
 // Surface names the contract the corpus belongs to.
 const Surface = "access-token.v1"
 
-// Dir is the corpus directory, relative to the repo root.
+// SurfaceWorkload names the contract of the workload-token corpus.
+const SurfaceWorkload = "workload-token.v1"
+
+// Dir is the access-token corpus directory, relative to the repo root.
 var Dir = filepath.Join("contracts", "auth", "v1", "golden", "access-token")
+
+// WorkloadDir is the workload-token corpus directory, relative to the repo root.
+var WorkloadDir = filepath.Join("contracts", "auth", "v1", "golden", "workload-token")
 
 // Outcome of a vector, and the closed vocabulary of refusal reasons.
 const (

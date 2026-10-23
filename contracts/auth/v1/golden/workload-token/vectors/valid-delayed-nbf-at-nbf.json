@@ -1,0 +1,5 @@
+{
+  "header_json": "{\"alg\":\"EdDSA\",\"typ\":\"workload+jwt\",\"kid\":\"auth-example-2026-10\"}",
+  "payload_json": "{\"iss\":\"https://auth.example.test\",\"aud\":\"auth-service\",\"sub\":\"prn_AAAAAAAAAAAAAAAAAAAAAA\",\"principal_type\":\"workload\",\"jti\":\"000000000000000000000001\",\"iat\":1760000000,\"nbf\":1760000060,\"exp\":1760000300}",
+  "signature_hex": "4d4d1130ddc830685795390938707299f040b20330607460999710226436cc71f40b3d158eadd4c7f34c702e3fce842cf5aa967f77871b4083acdc6fde414409"
+}

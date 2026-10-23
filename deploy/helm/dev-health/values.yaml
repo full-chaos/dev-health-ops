@@ -895,6 +895,26 @@ migrations:
     #    class rows present and this empty, 0146 refuses and its transaction
     #    rolls back (nothing changes). Format sha256:<64 hex>; not a secret.
     classDecisionLiveSchemaDigest: ""
+    # -- CHAOS-10754: run the migrate Job's ClickHouse step as the Cloud
+    #    `default` login from its own Secret, not as the runtime login in the
+    #    shared Secret's CLICKHOUSE_NATIVE_URI (which cannot run migration
+    #    DDL on ClickHouse Cloud). OFF = today's render, unchanged. ON adds
+    #    three secretKeyRef env entries and sets CLICKHOUSE_URI to
+    #    clickhouse://$(user):$(password)@$(host):<port>/<database>?secure=true,
+    #    expanded by Kubernetes in the Pod; the Secret is operator-created and
+    #    this chart never creates it. Requires migrations.hook.extraEnv and
+    #    migrations.hook.secretData to leave CLICKHOUSE_URI unset.
+    #    CHARSET REQUIREMENT: the expansion does no percent-encoding, so the
+    #    password and user must not contain any of  @ : / ? # %  (URL-safe
+    #    characters only; a hex password is safe). Check before enabling.
+    clickhouseCloud:
+      enabled: false
+      secretName: ""
+      hostKey: CH_CLOUD_HOST
+      userKey: CH_CLOUD_USER
+      passwordKey: CH_CLOUD_PASSWORD
+      port: 9440
+      database: default
     # -- CHAOS-4428: the two migration steps that were previously run by hand.
     #    Ordered by hook weight behind the migrate Job (0): provisionRoles (5)
     #    creates the three runtime logins, riverMigrate (10) applies the River

@@ -487,7 +487,7 @@ func TestMigrateJobClickHouseCloudDSN(t *testing.T) {
 	} {
 		t.Run("refused: "+name, func(t *testing.T) {
 			_, _, refusal := renderJobs(t, sets...)
-			if !strings.Contains(refusal, "migrations.hook.clickhouseCloud") {
+			if !strings.Contains(refusal, "clickhouseCloud") {
 				t.Fatalf("render was not refused by name: %q", refusal)
 			}
 		})

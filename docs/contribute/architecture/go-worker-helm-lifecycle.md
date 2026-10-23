@@ -160,6 +160,19 @@ When it is set, the chart passes it to the weight-0 Job as the env
 `DHO_CLASS_DECISION_LIVE_SCHEMA_DIGEST`; when it is empty, the Job has no such
 env. The chart refuses a value that is not `sha256:<64 hex>`.
 
+`migrations.hook.clickhouseCloud` (CHAOS-10754) is off by default and changes
+nothing while off. When `enabled` is true, the weight-0 Job takes its
+ClickHouse login from the operator-created Secret named by `secretName`
+(keys `hostKey`, `userKey`, `passwordKey`) instead of the shared Secret's
+runtime login, which cannot run migration DDL on ClickHouse Cloud. The chart
+adds three `secretKeyRef` env entries and sets `CLICKHOUSE_URI` to
+`clickhouse://$(user):$(password)@$(host):<port>/<database>?secure=true`;
+Kubernetes expands it in the Pod, so the spec holds no value. No
+percent-encoding happens: the password and user must be URL-safe (none of
+`@ : / ? # %`). The chart refuses an empty `secretName`, a bad port, key or
+database name, and any `migrations.hook.extraEnv` or
+`migrations.hook.secretData` entry that also sets `CLICKHOUSE_URI`.
+
 ## Drain and rollout safety
 
 Three separate properties, each enforced at render time so a misconfiguration

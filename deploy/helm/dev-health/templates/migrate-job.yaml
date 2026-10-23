@@ -14,6 +14,34 @@
 {{- if and $classDecisionDigest (not (regexMatch "^sha256:[0-9a-f]{64}$" $classDecisionDigest)) }}
 {{- fail "migrations.hook.classDecisionLiveSchemaDigest must be empty or sha256:<64 hex> (the schema_digest of the running query-api's GET /registry)" }}
 {{- end }}
+{{- $chCloud := .Values.migrations.hook.clickhouseCloud | default dict }}
+{{- if $chCloud.enabled }}
+{{- if not $chCloud.secretName }}
+{{- fail "migrations.hook.clickhouseCloud.secretName is required when migrations.hook.clickhouseCloud.enabled=true" }}
+{{- end }}
+{{- range $field := list "hostKey" "userKey" "passwordKey" }}
+{{- if not (regexMatch "^[-._a-zA-Z0-9]+$" (toString (index $chCloud $field))) }}
+{{- fail (printf "migrations.hook.clickhouseCloud.%s must be a Secret key name (letters, digits, '-', '_', '.')" $field) }}
+{{- end }}
+{{- end }}
+{{- if not (regexMatch "^[0-9]{1,5}$" (toString $chCloud.port)) }}
+{{- fail "migrations.hook.clickhouseCloud.port must be a TCP port number (1-65535)" }}
+{{- end }}
+{{- if or (lt (int $chCloud.port) 1) (gt (int $chCloud.port) 65535) }}
+{{- fail "migrations.hook.clickhouseCloud.port must be a TCP port number (1-65535)" }}
+{{- end }}
+{{- if not (regexMatch "^[-_a-zA-Z0-9]+$" (toString $chCloud.database)) }}
+{{- fail "migrations.hook.clickhouseCloud.database must be a database name (letters, digits, '-', '_')" }}
+{{- end }}
+{{- range $entry := .Values.migrations.hook.extraEnv }}
+{{- if or (eq $entry.name "CLICKHOUSE_URI") (hasPrefix "DHO_CH_CLOUD_" $entry.name) }}
+{{- fail (printf "migrations.hook.clickhouseCloud.enabled=true composes CLICKHOUSE_URI and DHO_CH_CLOUD_*; migrations.hook.extraEnv must not also set %s" $entry.name) }}
+{{- end }}
+{{- end }}
+{{- if index .Values.migrations.hook.secretData "CLICKHOUSE_URI" }}
+{{- fail "migrations.hook.clickhouseCloud.enabled=true composes CLICKHOUSE_URI from the Secret it names; migrations.hook.secretData.CLICKHOUSE_URI must be empty" }}
+{{- end }}
+{{- end }}
 {{- /*
 Database migration hook (CHAOS-2304).
 
@@ -205,6 +233,27 @@ spec:
             grants on refresh_tokens follow it (postgres.APIPosture). */}}
             - name: AUTH_PROXY_SESSIONS
               value: "true"
+            {{- end }}
+            {{- if $chCloud.enabled }}
+            {{- /*
+            CHAOS-10754: the Cloud login for the DDL this Job runs. An env entry
+            beats the envFrom key of the same name, and Kubernetes expands $(NAME)
+            from entries listed ABOVE it, so the DSN is composed in the Pod spec
+            with no shell and no copy of the password. The spec holds only the
+            $(...) text. No percent-encoding happens: the password must be
+            URL-safe.
+            */}}
+            - name: DHO_CH_CLOUD_HOST
+              valueFrom:
+                secretKeyRef: {name: {{ $chCloud.secretName | quote }}, key: {{ $chCloud.hostKey | quote }}}
+            - name: DHO_CH_CLOUD_USER
+              valueFrom:
+                secretKeyRef: {name: {{ $chCloud.secretName | quote }}, key: {{ $chCloud.userKey | quote }}}
+            - name: DHO_CH_CLOUD_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: {{ $chCloud.secretName | quote }}, key: {{ $chCloud.passwordKey | quote }}}
+            - name: CLICKHOUSE_URI
+              value: {{ printf "clickhouse://$(DHO_CH_CLOUD_USER):$(DHO_CH_CLOUD_PASSWORD)@$(DHO_CH_CLOUD_HOST):%d/%s?secure=true" (int $chCloud.port) $chCloud.database | quote }}
             {{- end }}
             {{- with .Values.migrations.hook.extraEnv }}
             {{- toYaml . | nindent 12 }}

@@ -42,6 +42,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/billing"
 	"github.com/full-chaos/dev-health-ops/internal/api/billing/stripeclient"
 	"github.com/full-chaos/dev-health-ops/internal/api/buildinfo"
+	"github.com/full-chaos/dev-health-ops/internal/api/clientip"
 	"github.com/full-chaos/dev-health-ops/internal/api/credentials"
 	"github.com/full-chaos/dev-health-ops/internal/api/externalingest"
 	"github.com/full-chaos/dev-health-ops/internal/api/githubapp"
@@ -387,6 +388,9 @@ func configureWith(
 		deps.Verifier, deps.Signer = protected.verifier, protected.signer
 		scope = []func(http.Handler) http.Handler{protected.scope.OrgScope, protected.scope.Impersonation}
 	}
+	if wide := clientip.WidePrefixes(); wide > 0 {
+		logger.Warn("api: the trusted proxy list holds prefixes wider than a /28", "count", wide)
+	}
 	if err := RegisterOperatorMetrics(registry, &deps); err != nil {
 		closeComponents(depComponents)
 		return nil, err
@@ -425,7 +429,8 @@ func configureWith(
 	if adjust != nil {
 		adjust(&deps)
 	}
-	server, err := NewServer(cfg, logger, Routes(deps, logger), scope...)
+	gate := NewIntakeGate(&deps, logger)
+	server, err := NewServerWithGate(cfg, logger, Routes(deps, logger), gate, scope...)
 	if err != nil {
 		return nil, dependencyFailure(ctx, logger, "api_server", "api_server_config_failed", err)
 	}
@@ -602,8 +607,23 @@ func NewServer(
 	routes []httpapi.Route,
 	scope ...func(http.Handler) http.Handler,
 ) (*httpapi.Server, error) {
+	return NewServerWithGate(cfg, logger, routes, nil, scope...)
+}
+
+// NewServerWithGate is NewServer with the webhook intake gate, which counts
+// intake deliveries ahead of the scope middlewares; a nil gate counts nothing.
+func NewServerWithGate(
+	cfg config.Config,
+	logger *slog.Logger,
+	routes []httpapi.Route,
+	gate *webhookintake.Gate,
+	scope ...func(http.Handler) http.Handler,
+) (*httpapi.Server, error) {
 	noStore := httpapi.NewNoStoreRoutes(httpapi.AdminRoutes)
 	middleware := []func(http.Handler) http.Handler{buildinfo.Stamp(version.Current("api")), pyheaders.UnhandledErrorShape, CloseHTTP10, MarkSignatureOnly, DecodedPathRouting, noStore.Middleware}
+	if gate != nil {
+		middleware = append(middleware, intakeGate(gate, cfg.CORSAllowedOrigins))
+	}
 	for _, layer := range scope {
 		middleware = append(middleware, skipScope(layer))
 	}

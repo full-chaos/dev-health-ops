@@ -80,7 +80,7 @@ func TestEveryFileThatNamesAViewTableIsInTheReaderAllowlist(t *testing.T) {
 	}
 }
 
-// viewReaders are the reader files that already take their view (CHAOS-8863, the work_item_metrics_daily readers):
+// viewReaders are the reader files that already take their view (CHAOS-8863, the work_item_metrics_daily and work_item_state_durations_daily readers):
 // each must call the helper, and a file that groups by key must carry row_view in the group. A reader that drops the
 // predicate or the group column fails here; the golden statements in the reader packages hold the SQL text.
 var viewReaders = map[string][]string{
@@ -90,11 +90,16 @@ var viewReaders = map[string][]string{
 	"internal/jobs/metrics/daily/benchmarking/clickhouse.go":               {"rowview.OrgPredicate(", `"row_view"`},
 	"internal/queryapi/capacityforecast/clickhouse.go":                     {"rowview.OrgPredicate("},
 	"internal/queryapi/throughputforecast/clickhouse.go":                   {"rowview.OrgPredicate(", "GROUP BY day, provider, work_scope_id, team_id, row_view", "GROUP BY provider, work_scope_id, team_id, row_view", "GROUP BY team_id, work_scope_id, provider, row_view"},
+	"internal/queryapi/aggflame/clickhouse.go":                             {"rowview.OrgPredicate(", "GROUP BY day, provider, work_scope_id, team_id, status, row_view"},
 	"internal/queryapi/aianalytics/flow_opportunities.go":                  {"rowview.OrgPredicate("},
 	"internal/queryapi/sankey/queries.go":                                  {"rowview.OrgPredicate("},
-	"internal/queryapi/home/queries_metrics.go":                            {"rowview.OrgPredicate("},
+	"internal/queryapi/home/queries_metrics.go":                            {"rowview.OrgPredicate(", "GROUP BY day, provider, work_scope_id, team_id, status, row_view"},
 	"internal/queryapi/explain/metrics.go":                                 {"rowview.OrgPredicate("},
-	"internal/queryapi/operatingreview/operatingreview.go":                 {"rowview.OrgPredicate(", "GROUP BY day, provider, work_scope_id, row_view"},
+	"internal/jobs/metrics/daily/icfinalize/executor.go":                   {"rowview.OrgPredicate("},
+	"internal/jobs/report/dedup.go":                                        {"rowview.OrgPredicate("},
+	"internal/queryapi/people/metricconfig.go":                             {"rowview.OrgPredicate("},
+	"internal/queryapi/people/summary.go":                                  {"rowview.OrgPredicate("},
+	"internal/queryapi/operatingreview/operatingreview.go":                 {"rowview.OrgPredicate(", "GROUP BY day, provider, work_scope_id, row_view", "GROUP BY day, provider, work_scope_id, status, row_view"},
 	"internal/queryapi/quadrant/quadrant.go":                               {"rowview.OrgPredicate(", "rowview.ScopePredicate("},
 }
 
@@ -109,7 +114,8 @@ func TestEveryViewReaderCallsTheHelper(t *testing.T) {
 			t.Errorf("%s: %v", file, readErr)
 			continue
 		}
-		if entry, listed := readerRoles[file]; !listed || entry.role != "reader-sum" {
+		// A file that builds a read from a registry (the report dedup source) names no table and is not in readerRoles.
+		if entry, listed := readerRoles[file]; listed && entry.role != "reader-sum" {
 			t.Errorf("%s is a view reader and must be a reader-sum file in readerRoles", file)
 		}
 		for _, needle := range needles {

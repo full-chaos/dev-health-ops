@@ -64,21 +64,22 @@ func (h handlers) stripeWebhook(w http.ResponseWriter, r *http.Request) {
 		h.internal(w, r, "stripe webhook", err)
 		return
 	}
-	client, clientErr := h.stripe.Client()
-	secret := h.webhookSecret.Reveal()
-	if clientErr != nil || secret == "" {
-		h.logger.ErrorContext(ctx, "Stripe config error", "stripe_client_configured", clientErr == nil,
-			"webhook_secret_configured", secret != "")
-		h.write(w, detail(http.StatusInternalServerError, "Billing not configured"))
-		return
-	}
-	switch failure, err := classifyStripeSignature(payload, r.Header.Get("Stripe-Signature"), secret, h.now()); {
+	switch failure, err := classifyStripeSignatureWithKey(payload, r.Header.Get("Stripe-Signature"), h.webhookSecret.key.HMACKey, h.now()); {
 	case errors.Is(err, errSignature):
 		h.signatureRefused(ctx, failure)
 		h.write(w, detail(http.StatusBadRequest, "Invalid Stripe signature"))
 		return
 	case err != nil:
 		h.internal(w, r, "stripe webhook", err)
+		return
+	}
+	// Only Stripe can send a delivery that reaches this point, so an answer that depends on the
+	// API client here is not a caller-observable difference (a limit: a validly signed delivery to
+	// a server with no API client is a 500).
+	client, clientErr := h.stripe.Client()
+	if clientErr != nil {
+		h.logger.ErrorContext(ctx, "Stripe config error", "stripe_client_configured", false)
+		h.write(w, detail(http.StatusInternalServerError, "Billing not configured"))
 		return
 	}
 	event, eventType, dataObject, err := readWebhookEvent(payload)

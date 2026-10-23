@@ -30,7 +30,9 @@
         "required": [
           "action",
           "scope",
-          "resource_kind"
+          "resource_kind",
+          "risk_class",
+          "cache_class"
         ],
         "properties": {
           "action": {
@@ -48,8 +50,42 @@
               "platform",
               "organization"
             ]
+          },
+          "risk_class": {
+            "enum": [
+              "low",
+              "high"
+            ]
+          },
+          "cache_class": {
+            "enum": [
+              "none",
+              "decision_bound",
+              "resource_revision_bound"
+            ]
           }
-        }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "risk_class": {
+                  "const": "high"
+                }
+              },
+              "required": [
+                "risk_class"
+              ]
+            },
+            "then": {
+              "properties": {
+                "cache_class": {
+                  "const": "none"
+                }
+              }
+            }
+          }
+        ]
       }
     }
   }

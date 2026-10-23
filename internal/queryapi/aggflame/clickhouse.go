@@ -7,6 +7,7 @@ import (
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/rowview"
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
@@ -119,7 +120,8 @@ func fetchCycleBreakdown(ctx context.Context, client QueryClient, orgID string, 
             WHERE org_id = {org_id:String}
               AND day >= {start_day:Date}
               AND day < {end_day:Date}` + filter + `
-            GROUP BY day, provider, work_scope_id, team_id, status
+              AND ` + rowview.OrgPredicate("work_item_state_durations_daily", "") + `
+            GROUP BY day, provider, work_scope_id, team_id, status, row_view
             HAVING ` + liverow.NewestPredicate("work_item_state_durations_daily", "") + `
         )
         GROUP BY status

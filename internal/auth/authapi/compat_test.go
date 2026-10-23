@@ -238,9 +238,11 @@ type compatFixture struct {
 	appendErr  error
 	social     SocialExchange
 	creds      *fakeServiceCredentials
-	orgB       uuid.UUID
-	orgD       uuid.UUID
-	counters   httpapi.CounterStore
+	// serviceCreds, when set, replaces creds as the issue route's credential checker.
+	serviceCreds ServiceCredentials
+	orgB         uuid.UUID
+	orgD         uuid.UUID
+	counters     httpapi.CounterStore
 }
 
 const (
@@ -273,6 +275,9 @@ func (f *compatFixture) buildCompat() {
 	var creds ServiceCredentials
 	if f.creds != nil {
 		creds = f.creds
+	}
+	if f.serviceCreds != nil {
+		creds = f.serviceCreds
 	}
 	routes, err := CompatRoutes(CompatDeps{
 		Sessions: f.sessions, Users: f.users, Issuer: f.issuer,

@@ -73,12 +73,7 @@ func TestAuthKeySetRendersManifestAndStaging(t *testing.T) {
 			t.Errorf("auth-service args carry %s beside the key set: %s", forbidden, args)
 		}
 	}
-	script := strings.Join(toStrings(at(pod, "initContainers", 0, "command")), " ")
-	for _, want := range []string{`install -m 0400 "/in/auth-2026-10.pem" "/out/auth-2026-10.pem"`, `install -m 0400 "/in/auth-2026-09.pem" "/out/auth-2026-09.pem"`, "install -m 0400 /in/keyset.json /out/keyset.json"} {
-		if !strings.Contains(script, want) {
-			t.Errorf("init container does not run %q: %s", want, script)
-		}
-	}
+	checkStagedCopies(t, pod, manifest.Keys)
 	volumes, _ := at(pod, "volumes").([]any)
 	var source any
 	for _, v := range volumes {
@@ -185,4 +180,98 @@ func bigKeys() string {
 		b.WriteString(`{"kid":"auth-key-` + strconv.Itoa(i) + `","state":"` + state + `","file":"auth-key-` + strconv.Itoa(i) + `.pem","secretName":"s","secretKey":"k"}`)
 	}
 	return b.String() + "]"
+}
+
+// checkStagedCopies parses the rendered init script: each line must be one
+// install at mode 0400 from /in/<name> to /out/<name>, for exactly the manifest
+// files plus keyset.json, and the projected source must carry the same names.
+func checkStagedCopies(t *testing.T, pod any, keys []map[string]string) {
+	t.Helper()
+	command := toStrings(at(pod, "initContainers", 0, "command"))
+	if len(command) != 3 || command[0] != "sh" || command[1] != "-ec" {
+		t.Fatalf("init command is not sh -ec <script>: %v", command)
+	}
+	want := map[string]bool{"keyset.json": true}
+	for _, key := range keys {
+		want[key["file"]] = true
+	}
+	got := map[string]bool{}
+	for _, line := range strings.Split(strings.TrimSpace(command[2]), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 5 || fields[0] != "install" || fields[1] != "-m" || fields[2] != "0400" {
+			t.Errorf("init script line is not an install at mode 0400: %q", line)
+			continue
+		}
+		in, out := strings.Trim(fields[3], `"`), strings.Trim(fields[4], `"`)
+		name := strings.TrimPrefix(in, "/in/")
+		if name == in || out != "/out/"+name || !want[name] {
+			t.Errorf("init script copies %q to %q, outside the manifest files", in, out)
+		}
+		got[name] = true
+	}
+	for name := range want {
+		if !got[name] {
+			t.Errorf("init script does not stage %s", name)
+		}
+	}
+	volumes, _ := at(pod, "volumes").([]any)
+	paths := map[string]bool{}
+	for _, v := range volumes {
+		if at(v, "name") != "signing-key-source" {
+			continue
+		}
+		sources, _ := at(v, "projected", "sources").([]any)
+		for _, src := range sources {
+			for _, kind := range []string{"secret", "configMap"} {
+				items, _ := at(src, kind, "items").([]any)
+				for _, item := range items {
+					paths[at(item, "path").(string)] = true
+				}
+			}
+		}
+	}
+	for name := range want {
+		if !paths[name] {
+			t.Errorf("projected source carries no %s", name)
+		}
+	}
+	if len(paths) != len(want) {
+		t.Errorf("projected source paths %v differ from the staged names %v", paths, want)
+	}
+}
+
+func TestAuthKeySetChartLimitIsTheKeystoreLimit(t *testing.T) {
+	raw, err := os.ReadFile("templates/auth-service.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := regexp.MustCompile(`gt \(len \$manifest\) (\d+)`).FindSubmatch(raw)
+	if m == nil {
+		t.Fatal("chart manifest size guard not found")
+	}
+	n, _ := strconv.Atoi(string(m[1]))
+	if n != keySetManifestLimit(t) {
+		t.Errorf("chart limit %d differs from keystore.MaxManifestBytes %d", n, keySetManifestLimit(t))
+	}
+}
+
+func TestAuthKeySetRefusesSigningFlagsInExtraArgsAndChecksumAnnotation(t *testing.T) {
+	for name, tc := range map[string]struct {
+		args []string
+		want string
+	}{
+		"key file":        {keySetArgs(twoKeys, "--set-json", `authService.extraArgs=["--signing-key-file=/x"]`), "authService.extraArgs must not set"},
+		"key id spelled":  {keySetArgs(twoKeys, "--set-json", `authService.extraArgs=["-Signing-Key-ID=x"]`), "authService.extraArgs must not set"},
+		"separate arg":    {keySetArgs(twoKeys, "--set-json", `authService.extraArgs=["--signing-key-file","/x"]`), "authService.extraArgs must not set"},
+		"keyset flag":     {keySetArgs(twoKeys, "--set-json", `authService.extraArgs=["--signing-keyset-file=/x"]`), "authService.extraArgs must not set"},
+		"single key form": {append(append([]string{}, authBase...), "--set-json", `authService.extraArgs=["--signing-keyset-file=/x"]`), "authService.extraArgs must not set"},
+		"checksum":        {keySetArgs(twoKeys, "--set-json", `authService.podAnnotations={"checksum/keyset":"x"}`), "must not set checksum/keyset"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, out, err := renderAuth(t, tc.args...)
+			if err == nil || !strings.Contains(out, tc.want) {
+				t.Fatalf("not refused with %q: %.400s", tc.want, out)
+			}
+		})
+	}
 }

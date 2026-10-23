@@ -11,22 +11,14 @@ import (
 // always false: Celery is retired (CHAOS-4026), and the Python route itself
 // only ever reports whether the import succeeds -- the Go api has no such
 // import to attempt, so the honest answer is always false, not omitted.
-// Field order matters here, not just presence: a plain map[string]any
-// through encoding/json (what policy.WriteJSON uses generically) sorts keys
-// alphabetically, which happened to diverge from Python's dict insertion
-// order (status, secrets_configured, celery_available) -- caught by the
-// venue oracle. *pyjson.Object preserves Set() order through
-// policy.WriteJSON via its own MarshalJSON.
+// The Python body also named which provider secrets are set; this route is
+// public, so it answers liveness only and names no server-side secret state.
+// *pyjson.Object keeps the field order (status, celery_available) through
+// policy.WriteModel via its own MarshalJSON.
 func (d Deps) handleHealth() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		secrets := d.secrets()
-		secretsConfigured := pyjson.NewObject()
-		secretsConfigured.Set("github", secrets.GitHub != "")
-		secretsConfigured.Set("gitlab", secrets.GitLab != "")
-		secretsConfigured.Set("jira", secrets.Jira != "")
 		body := pyjson.NewObject()
 		body.Set("status", "ok")
-		body.Set("secrets_configured", secretsConfigured)
 		body.Set("celery_available", false)
 		policy.WriteModel(w, http.StatusOK, body, nil)
 	}

@@ -269,8 +269,8 @@ published on host port `8010`, that answers only the Stripe webhook
 (`POST /api/v1/billing/webhooks/stripe`), `GET|HEAD /health` and a JSON 404 for
 every other path. It needs three secrets in your own `ops/.env`:
 `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` and `LICENSE_PRIVATE_KEY`. With
-any of them unset `/health` answers 503 and names which one is
-`not_configured`; that is the designed bare bring-up, not a fault. Webhook
+any of them unset `/health` answers 503 with a status-only body; the `go-api`
+startup log names an unset `STRIPE_WEBHOOK_SECRET` or `STRIPE_SECRET_KEY`. That is the designed bare bring-up, not a fault. Webhook
 delivery uses the Stripe CLI's own forwarder beside the stack: `stripe listen
 --forward-to http://localhost:8010/api/v1/billing/webhooks/stripe` (run from a
 host shell, not part of this repo). The api listener itself is not published

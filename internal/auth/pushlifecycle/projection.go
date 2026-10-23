@@ -155,7 +155,7 @@ func Apply(state State, event contracts.ExternalPushLifecycleEvent, parent *Stat
 		}
 		next.Status = StatusExpired
 		next.TerminalAt = event.CreatedAt.Time
-		next.ExpiresAt = expiry(change)
+		next.ExpiresAt = earlierExpiry(state.ExpiresAt, expiry(change))
 	default:
 		return state, RefusedTransition
 	}
@@ -218,4 +218,21 @@ func parentUsable(parent *State, rotatedAt time.Time) bool {
 		}
 	}
 	return true
+}
+
+// earlierExpiry keeps the earlier of two expires_at values in the form
+// expiry() writes, so the result does not depend on which event arrived first.
+func earlierExpiry(stored, incoming string) string {
+	if stored == "" {
+		return incoming
+	}
+	if incoming == "" {
+		return stored
+	}
+	a, errA := time.Parse(time.RFC3339Nano, stored)
+	b, errB := time.Parse(time.RFC3339Nano, incoming)
+	if errA != nil || errB != nil || !b.Before(a) {
+		return stored
+	}
+	return incoming
 }

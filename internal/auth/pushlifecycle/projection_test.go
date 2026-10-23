@@ -376,3 +376,29 @@ func TestProjectionRefusesAParentNeverApplied(t *testing.T) {
 		t.Fatalf("a parent at revision 0: outcome %s, want refused_parent", outcome)
 	}
 }
+
+// TestProjectionExpiredKeepsTheEarlierExpiry: whichever order the created and
+// expired events carry their expiry in, the parent keeps the earlier one, so
+// the rotation verdict does not depend on arrival.
+func TestProjectionExpiredKeepsTheEarlierExpiry(t *testing.T) {
+	early := contracts.Timestamp{Time: t0.Add(-2 * time.Hour)}
+	late := contracts.Timestamp{Time: time.Date(2027, 10, 23, 10, 0, 0, 0, time.UTC)}
+	for name, tc := range map[string]struct{ created, expiredAt contracts.Timestamp }{
+		"created early, expired event later": {early, late},
+		"created late, expired event early":  {late, early},
+	} {
+		c := created(credA, "ingest:write")
+		c.Payload.Change.ExpiresAt = &tc.created
+		parent := mustApply(t, State{}, c, nil)
+		e := expired(credA, 2)
+		e.Payload.Change.ExpiresAt = &tc.expiredAt
+		e.CreatedAt = contracts.Timestamp{Time: t0.Add(time.Hour)}
+		parent = mustApply(t, parent, e, nil)
+		if want := "2026-10-23T08:00:00.000000Z"; parent.ExpiresAt != want {
+			t.Errorf("%s: ExpiresAt = %s, want the earlier %s", name, parent.ExpiresAt, want)
+		}
+		if _, outcome := Apply(State{}, rotated(credB, credA, "ingest:write"), &parent); outcome != RefusedParent {
+			t.Errorf("%s: rotation outcome %s, want refused_parent", name, outcome)
+		}
+	}
+}

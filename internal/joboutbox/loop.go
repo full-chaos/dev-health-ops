@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/platform/credshape"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 )
 
@@ -394,11 +395,17 @@ func (loop *ReconcilerLoop) step(ctx context.Context, now time.Time) error {
 	// outside the lock: this can run arbitrarily many times per tick and
 	// must never hold loop.mu across it.
 	for _, observation := range result.RetiredKindObservations {
+		organizationID := observation.OrganizationID
+		refused := credshape.AnyCredentialShaped(observation.OrganizationID)
+		if refused {
+			organizationID = ""
+		}
 		loop.logger().WarnContext(
 			ctx, "outbox row references a retired job kind with no handler",
 			"outbox_id", observation.OutboxID,
 			"job_kind", observation.JobKind,
-			"organization_id", observation.OrganizationID,
+			"organization_id", organizationID,
+			"arguments_refused", refused,
 		)
 	}
 	// r2 finding F3 (P2, codex, CHAOS-4438): the observation query has no
@@ -420,11 +427,17 @@ func (loop *ReconcilerLoop) step(ctx context.Context, now time.Time) error {
 	// loop doing its job, and the condition to alert on is the sweep's
 	// candidate gauge, not a successful recovery.
 	for _, rearm := range result.ProviderUnitRearms {
+		dedupeKey := rearm.DedupeKey
+		refused := credshape.AnyCredentialShaped(rearm.DedupeKey)
+		if refused {
+			dedupeKey = ""
+		}
 		loop.logger().InfoContext(
 			ctx, "provider unit strand rearmed after a terminal river delivery",
 			"outbox_id", rearm.OutboxID,
-			"dedupe_key", rearm.DedupeKey,
+			"dedupe_key", dedupeKey,
 			"river_job_id", rearm.RiverJobID,
+			"arguments_refused", refused,
 		)
 	}
 	// One line per drop. A delivery that never reached River used to leave no

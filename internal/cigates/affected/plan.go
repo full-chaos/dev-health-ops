@@ -174,10 +174,11 @@ type planInput struct {
 	root        string
 	goFilesFull bool
 	always      []string
-	tables      *tables   // the read tables; nil plans every non-Go path FULL
-	guard       []string  // defects of the read tables against the code (plan-reads): any one plans FULL
-	symlinks    []string  // repository paths tracked symlinks point at
-	log         io.Writer // one line per selected package and why; nil discards
+	tables      *tables                  // the read tables; nil plans every non-Go path FULL
+	guard       []string                 // defects of the read tables against the code (plan-reads): any one plans FULL
+	guardFn     func() ([]string, error) // computes guard when the verdict reaches it; nil keeps guard
+	symlinks    []string                 // repository paths tracked symlinks point at
+	log         io.Writer                // one line per selected package and why; nil discards
 }
 
 func hasAnyPrefix(p string, prefixes []string) bool {
@@ -331,8 +332,15 @@ func plan(in planInput) (Verdict, error) {
 	if in.goFilesFull && len(goPaths) > 0 {
 		return full("Go source in the change set: every package runs"), nil
 	}
-	if len(in.guard) > 0 {
-		return full("the read tables differ from the code (cigate plan-reads): " + in.guard[0]), nil
+	guard := in.guard
+	if in.guardFn != nil {
+		var err error
+		if guard, err = in.guardFn(); err != nil {
+			return Verdict{}, err
+		}
+	}
+	if len(guard) > 0 {
+		return full("the read tables differ from the code (cigate plan-reads): " + guard[0]), nil
 	}
 	if t == nil {
 		t = &tables{}
@@ -536,12 +544,14 @@ func PlanVerdict(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
-		reads, err := ScanReads(*root)
-		if err != nil {
-			fmt.Fprintln(stderr, "scan the Go sources for reads:", err)
-			return 1
+		// The scan is the cost of the call (parsing every Go source): it runs only for a verdict that reaches the guard.
+		in.tables, in.guardFn = tb, func() ([]string, error) {
+			reads, err := ScanReads(*root)
+			if err != nil {
+				return nil, fmt.Errorf("scan the Go sources for reads: %w", err)
+			}
+			return checkReads(*root, tb, reads).defects, nil
 		}
-		in.tables, in.guard = tb, checkReads(*root, tb, reads).defects
 		if in.symlinks, err = symlinkTargets(*root); err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1

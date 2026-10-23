@@ -61,6 +61,7 @@ internal/auth/contracts	contracts.go	internal/api/billing
 internal/auth/contracts	contracts.go	internal/api/externalingest
 internal/auth/contracts	contracts.go	internal/api/legacyingest
 internal/auth/contracts	contracts.go	internal/api/webhookintake
+internal/auth/contracts	contracts.go	internal/apiservice
 internal/auth/contracts	contracts.go	internal/apiservice/acr
 internal/auth/contracts	contracts.go	internal/audit
 internal/auth/contracts	contracts.go	internal/auth/authapi
@@ -89,6 +90,7 @@ internal/auth/contracts/tokencorpus	corpus.go	internal/api/billing
 internal/auth/contracts/tokencorpus	corpus.go	internal/api/externalingest
 internal/auth/contracts/tokencorpus	corpus.go	internal/api/legacyingest
 internal/auth/contracts/tokencorpus	corpus.go	internal/api/webhookintake
+internal/auth/contracts/tokencorpus	corpus.go	internal/apiservice
 internal/auth/contracts/tokencorpus	corpus.go	internal/apiservice/acr
 internal/auth/contracts/tokencorpus	corpus.go	internal/auth/authapi
 internal/auth/contracts/tokencorpus	corpus.go	internal/auth/contracts/tokencorpus
@@ -113,12 +115,16 @@ internal/cigates	governance.go	cmd/cigate
 internal/cigates	governance.go	internal/cigates/scripts
 internal/cigates/affected	plan.go	cmd/cigate
 internal/cigates/affected	plan.go	internal/cigates/affected
+internal/cigates/affected	plan.go	internal/cigates/affectedmatrix
 internal/cigates/affected	plan.go	internal/cigates/affectedmodule
+internal/cigates/affected	plan.go	internal/cigates/affectedreject
 internal/cigates/affected	plan.go	internal/cigates/scripts
 internal/cigates/affected	reach.go	cmd/cigate
 internal/cigates/affected	scan.go	cmd/cigate
 internal/cigates/affected	scan.go	internal/cigates/affected
+internal/cigates/affected	scan.go	internal/cigates/affectedmatrix
 internal/cigates/affected	scan.go	internal/cigates/affectedmodule
+internal/cigates/affected	scan.go	internal/cigates/affectedreject
 internal/cigates/affected	scan.go	internal/cigates/scripts
 internal/cigates/affected	tables.go	cmd/cigate
 internal/cigates/affected	tables.go	internal/cigates/affected
@@ -168,6 +174,7 @@ internal/cigates/docstools	pyurl.go	cmd/cigate
 internal/cigates/docstools	pyurl.go	internal/cigates/docstools
 internal/cigates/docstools	validate_inventory_review.go	cmd/cigate
 internal/cigates/docstools	validate_inventory_review.go	internal/cigates/docstools
+internal/cigates/emitscan	scan.go	internal/cigates/emitscan
 internal/cigates/frozengoldens	frozengoldens.go	internal/cigates/frozengoldens
 internal/cigates/livee2e	cli.go	cmd/cigate
 internal/cigates/livee2e	cli.go	internal/cigates/livee2e

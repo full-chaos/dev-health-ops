@@ -172,6 +172,7 @@ internal/jobs/report	test	contracts
 internal/jobs/workgraph	test	contracts
 internal/migrationmatrix	code	contracts
 internal/migrationmatrix	test	ci
+internal/platform/credshape	test	contracts
 internal/providersync	test	README.md
 internal/providersync	test	contracts
 internal/providersync	test	docs

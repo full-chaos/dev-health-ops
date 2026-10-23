@@ -93,6 +93,19 @@
               "pattern": "^(sha256:[0-9a-f]{64})?$",
               "description": "CHAOS-8744: the schema_digest of the running query-api's GET /registry, read before the upgrade; the migrate Job gets it as env DHO_CLASS_DECISION_LIVE_SCHEMA_DIGEST (Postgres migration 0146). Empty means unset."
             },
+            "clickhouseCloud": {
+              "type": "object",
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "secretName": { "type": "string" },
+                "hostKey": { "type": "string", "minLength": 1 },
+                "userKey": { "type": "string", "minLength": 1 },
+                "passwordKey": { "type": "string", "minLength": 1 },
+                "port": { "type": ["integer", "string"] },
+                "database": { "type": "string", "minLength": 1 }
+              },
+              "description": "CHAOS-10754: the migrate Job's CLICKHOUSE_URI composed from a Secret by Kubernetes env expansion. The password must be URL-safe (no percent-encoding happens)."
+            },
             "routeActivate": {
               "type": "object",
               "properties": {

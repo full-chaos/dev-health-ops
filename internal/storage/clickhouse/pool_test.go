@@ -76,31 +76,16 @@ func TestDialTimeoutEnvOverrides(t *testing.T) {
 	}
 }
 
-func TestAsyncInsertDefaultsToOffAndADSNSettingWins(t *testing.T) {
+// An explicit async_insert, even 0, makes ClickHouse stamp a DEFAULT now64() at INSERT start instead of when the
+// data arrives (measured: a native batch delayed 400 ms between PrepareBatch and Send is stamped 401 ms early),
+// which breaks the team_project_ownership last_synced contract. ClickHouse Cloud's own default (async insert on)
+// keeps the stamp at flush time. No shared constructor may send the setting.
+func TestConstructorsLeaveAsyncInsertUnset(t *testing.T) {
 	options, err := clickHouseOptions(DefaultConfig("clickhouse://u:p@ch.example.invalid:9440/db"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := options.Settings[AsyncInsertSetting]; got != 0 {
-		t.Fatalf("async_insert = %v, want 0", got)
-	}
-	options, err = clickHouseOptions(DefaultConfig("clickhouse://u:p@ch.example.invalid:9440/db?async_insert=1"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := options.Settings[AsyncInsertSetting]; got == 0 {
-		t.Fatalf("an explicit DSN async_insert was overwritten: %v", got)
-	}
-}
-
-func TestWithAsyncInsertOff(t *testing.T) {
-	for in, want := range map[string]string{
-		"clickhouse://h:9000/db":                "clickhouse://h:9000/db?async_insert=0",
-		"clickhouse://h:9000/db?secure=true":    "clickhouse://h:9000/db?secure=true&async_insert=0",
-		"clickhouse://h:9000/db?async_insert=1": "clickhouse://h:9000/db?async_insert=1",
-	} {
-		if got := WithAsyncInsertOff(in); got != want {
-			t.Errorf("%q: got %q, want %q", in, got, want)
-		}
+	if _, set := options.Settings["async_insert"]; set {
+		t.Fatalf("clickHouseOptions sets async_insert = %v", options.Settings["async_insert"])
 	}
 }

@@ -34,8 +34,8 @@ func TestNewUnrestrictedReadClickHouseOptions_SetsUnrestrictedMaxBytesToRead(t *
 	if *opts.MaxBytesToRead != 0 {
 		t.Fatalf("MaxBytesToRead = %d, want 0 (ClickHouse's own \"unrestricted\")", *opts.MaxBytesToRead)
 	}
-	if opts.DSN != "clickhouse://irrelevant-dsn?async_insert=0" {
-		t.Fatalf("DSN = %q, want the dsn argument plus the shared async_insert=0 default and nothing else", opts.DSN)
+	if opts.DSN != "clickhouse://irrelevant-dsn" {
+		t.Fatalf("DSN = %q, want the dsn argument passed through unchanged", opts.DSN)
 	}
 }
 

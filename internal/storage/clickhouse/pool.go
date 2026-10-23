@@ -4,7 +4,6 @@ import (
 	"context"
 	"net/http"
 	"os"
-	"strings"
 	"sync"
 	"time"
 )
@@ -65,21 +64,4 @@ func WarmPool(ctx context.Context, ping func(context.Context) error, idle int) {
 		}()
 	}
 	wg.Wait()
-}
-
-// AsyncInsertSetting is the server setting every shared constructor defaults to 0: ClickHouse Cloud defaults
-// async_insert to 1, which would change write semantics (a write returns before it is durable). A per-query
-// setting still overrides it.
-const AsyncInsertSetting = "async_insert"
-
-// WithAsyncInsertOff adds async_insert=0 to a DSN unless the DSN sets it already.
-func WithAsyncInsertOff(dsn string) string {
-	if strings.Contains(dsn, AsyncInsertSetting+"=") {
-		return dsn
-	}
-	separator := "?"
-	if strings.Contains(dsn, "?") {
-		separator = "&"
-	}
-	return dsn + separator + AsyncInsertSetting + "=0"
 }

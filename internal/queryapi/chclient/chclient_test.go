@@ -8,7 +8,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"strings"
 	"testing"
 	"time"
 
@@ -101,14 +100,5 @@ func TestOptionsKeepASmallWarmPoolUnderTheCloudIdleCutoff(t *testing.T) {
 	transport := &http.Transport{}
 	if _, err := options.TransportFunc(transport); err != nil || transport.MaxIdleConnsPerHost != PoolMaxIdleConns {
 		t.Fatalf("transport idle %d err %v", transport.MaxIdleConnsPerHost, err)
-	}
-}
-
-func TestOptionsDefaultAsyncInsertOff(t *testing.T) {
-	if got := Options("clickhouse://u:p@h:9440/db?secure=true").DSN; !strings.Contains(got, "async_insert=0") {
-		t.Fatalf("DSN %q lacks async_insert=0", got)
-	}
-	if got := Options("clickhouse://u:p@h:9440/db?async_insert=1").DSN; strings.Contains(got, "async_insert=0") {
-		t.Fatalf("DSN %q overrides an explicit async_insert", got)
 	}
 }

@@ -213,10 +213,14 @@ func (*countingCounters) Backend() string                                  { ret
 func TestEveryRequestThatReachesAnIntakeHandlerIsCountedOnce(t *testing.T) {
 	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
 	var reached int
+	var sawBinding bool
+	var bindingValue string
 	routes := webhookintake.Routes(webhookintake.Deps{Logger: quiet})
 	for index := range routes {
-		routes[index].Handler = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		routes[index].Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			reached++
+			sawBinding = strings.Contains(r.Pattern, "/pagerduty/")
+			bindingValue = r.PathValue("binding_id")
 			w.WriteHeader(http.StatusNoContent)
 		})
 	}
@@ -241,7 +245,8 @@ func TestEveryRequestThatReachesAnIntakeHandlerIsCountedOnce(t *testing.T) {
 	reachedCount := 0
 	for _, target := range targets {
 		for _, method := range []string{http.MethodPost, http.MethodGet, http.MethodHead} {
-			reached, counters.clientHits, counters.exactHits, counters.routeHits = 0, 0, 0, 0
+			reached, sawBinding, bindingValue = 0, false, ""
+			counters.clientHits, counters.exactHits, counters.routeHits = 0, 0, 0
 			request := httptest.NewRequest(method, target, nil)
 			request.RequestURI = target
 			request.URL.RawPath = ""
@@ -252,11 +257,19 @@ func TestEveryRequestThatReachesAnIntakeHandlerIsCountedOnce(t *testing.T) {
 			server.Handler().ServeHTTP(httptest.NewRecorder(), request)
 			if reached > 0 {
 				reachedCount++
-				// One pass through the gate: the narrow bucket alone (an id that is not
-				// one UUID), or the narrow, client and route buckets once each, or
-				// the client and route buckets once each (the other three routes).
+				// A valid PagerDuty id passes the client, route and exact buckets once
+				// each; an id that is not one UUID is charged only to the shared
+				// bucket for such ids; the other routes pass the client and route
+				// buckets once each.
 				c, e, r := counters.clientHits, counters.exactHits, counters.routeHits
-				if method == http.MethodPost && !((e == 1 && c == 0 && r == 0) || (e == 1 && c == 1 && r == 1) || (e == 0 && c == 1 && r == 1)) {
+				want := [3]int{1, 0, 1}
+				if sawBinding {
+					want = [3]int{1, 1, 1}
+					if _, err := uuid.Parse(bindingValue); err != nil || strings.Contains(bindingValue, "/") {
+						want = [3]int{0, 1, 0}
+					}
+				}
+				if method == http.MethodPost && [3]int{c, e, r} != want {
 					t.Errorf("POST %s reached an intake handler counted client=%d exact=%d route=%d, want one pass", target, c, e, r)
 				}
 			}
@@ -313,16 +326,21 @@ func TestIntakeGateLogsALimiterStoreFailureOnce(t *testing.T) {
 	}
 }
 
-type exactKeyRecorder struct{ keys []string }
+type exactKeyRecorder struct {
+	*httpapi.MemoryCounters
+	keys []string
+}
 
-func (r *exactKeyRecorder) Increment(_ context.Context, hit httpapi.Hit) (int64, error) {
+func newExactKeyRecorder() *exactKeyRecorder {
+	return &exactKeyRecorder{MemoryCounters: httpapi.NewMemoryCounters(nil)}
+}
+
+func (r *exactKeyRecorder) Increment(ctx context.Context, hit httpapi.Hit) (int64, error) {
 	if hit.Limit.ID == "webhook_pagerduty" {
 		r.keys = append(r.keys, hit.Path)
 	}
-	return 1, nil
+	return r.MemoryCounters.Increment(ctx, hit)
 }
-func (*exactKeyRecorder) Peek(context.Context, httpapi.Hit) (int64, error) { return 0, nil }
-func (*exactKeyRecorder) Backend() string                                  { return "memory" }
 
 // The gate keys the per-binding bucket on the id the handler will read: driven
 // through the real server and router, a request that reaches the handler is
@@ -339,7 +357,7 @@ func TestGateAndHandlerAcceptTheSameIdSpellings(t *testing.T) {
 			w.WriteHeader(http.StatusNoContent)
 		})
 	}
-	recorder := &exactKeyRecorder{}
+	recorder := newExactKeyRecorder()
 	server, err := NewServerWithGate(apiTestConfig(), quiet, routes, webhookintake.NewGate(recorder, nil, quiet))
 	if err != nil {
 		t.Fatal(err)
@@ -442,5 +460,63 @@ func TestAFloodOfOneIdDoesNotSpendTheRouteBudgetOfOtherIds(t *testing.T) {
 		if got := send(prefix+uuid.NewString(), "198.51.100.11"); got != http.StatusNoContent {
 			t.Fatalf("other id %d from the same address answered %d, want 204", i+1, got)
 		}
+	}
+}
+
+func TestFreshIdsCreateNoMoreExactCountersThanTheRouteBudget(t *testing.T) {
+	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
+	routes := webhookintake.Routes(webhookintake.Deps{Logger: quiet})
+	for index := range routes {
+		routes[index].Handler = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
+	}
+	recorder := newExactKeyRecorder()
+	server, err := NewServerWithGate(apiTestConfig(), quiet, routes, webhookintake.NewGate(recorder, nil, quiet))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 5000; i++ {
+		request := httptest.NewRequest(http.MethodPost, "/api/v1/webhooks/pagerduty/"+uuid.NewString(), nil)
+		request.RemoteAddr = "198.51.100.30:4242"
+		server.Handler().ServeHTTP(httptest.NewRecorder(), request)
+	}
+	distinct := map[string]bool{}
+	for _, key := range recorder.keys {
+		distinct[key] = true
+	}
+	if len(distinct) > 600 {
+		t.Fatalf("5000 fresh ids from one address created %d exact counters, want at most the route budget of 600", len(distinct))
+	}
+}
+
+func TestARouteRefusedDeliveryChargesNoExactCounter(t *testing.T) {
+	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
+	routes := webhookintake.Routes(webhookintake.Deps{Logger: quiet})
+	for index := range routes {
+		routes[index].Handler = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
+	}
+	recorder := newExactKeyRecorder()
+	server, err := NewServerWithGate(apiTestConfig(), quiet, routes, webhookintake.NewGate(recorder, nil, quiet))
+	if err != nil {
+		t.Fatal(err)
+	}
+	send := func(id string) int {
+		request := httptest.NewRequest(http.MethodPost, "/api/v1/webhooks/pagerduty/"+id, nil)
+		request.RemoteAddr = "198.51.100.31:4242"
+		recorderResponse := httptest.NewRecorder()
+		server.Handler().ServeHTTP(recorderResponse, request)
+		return recorderResponse.Code
+	}
+	for i := 0; i < 600; i++ {
+		if got := send(uuid.NewString()); got != http.StatusNoContent {
+			t.Fatalf("delivery %d answered %d, want 204", i+1, got)
+		}
+	}
+	before := len(recorder.keys)
+	refused := uuid.NewString()
+	if got := send(refused); got != http.StatusTooManyRequests {
+		t.Fatalf("the 601st fresh id answered %d, want 429 from the route budget", got)
+	}
+	if len(recorder.keys) != before {
+		t.Fatalf("a delivery refused by the route budget still charged its exact counter (%d -> %d)", before, len(recorder.keys))
 	}
 }

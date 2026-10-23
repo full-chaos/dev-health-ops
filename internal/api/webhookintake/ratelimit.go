@@ -127,42 +127,33 @@ func Provider(method, path string) (string, bool) {
 	return "", false
 }
 
-// Admit counts the request in the client bucket and the route-template bucket
-// and, for PagerDuty, first in the exact-path bucket (alone, for an id that is
-// not one UUID). It returns nil
-// when the request may go on, else the refusal to write: one 429 for every id.
-// A store that cannot answer refuses a PagerDuty delivery with the
-// unhandled-error 500 (never a request let through) and lets a GitHub, GitLab
-// or Jira delivery through with a warning: those are verified by their own
-// signature or token afterwards.
+// Admit returns nil when the request may go on, else the refusal to write: one
+// 429 for every id. GitHub, GitLab and Jira deliveries count in the client
+// bucket and the route-template bucket. A PagerDuty delivery first PEEKS its
+// per-binding bucket without counting: over its limit, it is refused and
+// nothing is charged, so no refusal spends a broader budget and a fresh id
+// creates no counter before the route budget admits it. Under the limit it
+// counts in the client bucket, the route-template bucket and then the
+// per-binding bucket (whose final count still enforces the limit under races);
+// an id that is not one UUID is charged only to the shared bucket for such ids,
+// never to the client or route budget. A store that cannot answer refuses a
+// PagerDuty delivery with the unhandled-error 500 (never a request let
+// through) and lets a GitHub, GitLab or Jira delivery through with a warning:
+// those are verified by their own signature or token afterwards.
 func (g *Gate) Admit(r *http.Request, provider string) func(http.ResponseWriter) {
-	failClosed := provider == providerPagerDuty
 	client := ratelimit.ForwardedIP(r)
-	template := g.limiters.providerRoute
-	if failClosed {
-		template = g.limiters.pagerdutyTemplate
-	}
 	type step struct {
 		limiter *httpapi.KeyedLimiter
 		path    string
 		reason  string
 	}
-	steps := []step{
-		{g.limiters.client, intakeClientBucket, throttleClient},
-		{template, routeTemplates[provider], throttleTemplate},
-	}
-	if failClosed {
-		// The narrowest bucket is counted first, so a refusal there charges
-		// nothing broader; a delivery whose id is not one UUID is charged only to
-		// the shared malformed bucket and never spends the client or route budget.
-		exact := step{g.limiters.pagerduty, exactBucketPath(r.URL.Path), throttleExact}
-		if strings.HasSuffix(exact.path, "/"+malformedBucket) {
-			steps = []step{exact}
-		} else {
-			steps = append([]step{exact}, steps...)
+	throttled := func(reason string) func(http.ResponseWriter) {
+		g.logger.WarnContext(r.Context(), "webhook_intake.throttled", "provider", provider, "reason", reason)
+		return func(w http.ResponseWriter) {
+			policy.WriteDetail(w, http.StatusTooManyRequests, policy.ErrorDetail("Rate limit exceeded. Please try again later."), nil)
 		}
 	}
-	for _, s := range steps {
+	count := func(s step, failClosed bool) (refuse func(http.ResponseWriter), stop bool) {
 		var allowed bool
 		var err error
 		if failClosed {
@@ -172,16 +163,48 @@ func (g *Gate) Admit(r *http.Request, provider string) func(http.ResponseWriter)
 		}
 		if err != nil {
 			if failClosed {
-				return policy.WriteInternal
+				return policy.WriteInternal, true
 			}
 			g.logger.WarnContext(r.Context(), "webhook_intake.limiter_unavailable", "provider", provider, "reason", s.reason)
-			continue
+			return nil, false
 		}
 		if !allowed {
-			g.logger.WarnContext(r.Context(), "webhook_intake.throttled", "provider", provider, "reason", s.reason)
-			return func(w http.ResponseWriter) {
-				policy.WriteDetail(w, http.StatusTooManyRequests, policy.ErrorDetail("Rate limit exceeded. Please try again later."), nil)
+			return throttled(s.reason), true
+		}
+		return nil, false
+	}
+
+	if provider != providerPagerDuty {
+		for _, s := range []step{
+			{g.limiters.client, intakeClientBucket, throttleClient},
+			{g.limiters.providerRoute, routeTemplates[provider], throttleTemplate},
+		} {
+			if refuse, stop := count(s, false); stop {
+				return refuse
 			}
+		}
+		return nil
+	}
+
+	exact := step{g.limiters.pagerduty, exactBucketPath(r.URL.Path), throttleExact}
+	below, err := exact.limiter.TestCounted(r.Context(), client, exact.path)
+	if err != nil {
+		return policy.WriteInternal
+	}
+	if !below {
+		return throttled(exact.reason)
+	}
+	if strings.HasSuffix(exact.path, "/"+malformedBucket) {
+		refuse, _ := count(exact, true)
+		return refuse
+	}
+	for _, s := range []step{
+		{g.limiters.client, intakeClientBucket, throttleClient},
+		{g.limiters.pagerdutyTemplate, routeTemplates[provider], throttleTemplate},
+		exact,
+	} {
+		if refuse, stop := count(s, true); stop {
+			return refuse
 		}
 	}
 	return nil

@@ -140,7 +140,7 @@ func TestProviderRouteBucketIsPerRoute(t *testing.T) {
 	}
 }
 
-func TestForgedForwardingHeaderFromAnUntrustedPeerMintsNoBucket(t *testing.T) {
+func TestForgedForwardingHeaderFromAnUntrustedPeerCreatesNoBucket(t *testing.T) {
 	withLimits(t, 100000, 100000, 2)
 	now := time.Now()
 	routes := intakeRoutes(t, Deps{Counters: httpapi.NewMemoryCounters(func() time.Time { return now })})
@@ -154,7 +154,7 @@ func TestForgedForwardingHeaderFromAnUntrustedPeerMintsNoBucket(t *testing.T) {
 	}
 }
 
-func TestThrottledAnswerIsTheSameForKnownAndUnknownIdsAndReadsNothing(t *testing.T) {
+func TestThrottledAnswerIsTheSameForKnownUnknownAndMalformedIdsAndReadsNothing(t *testing.T) {
 	f := newRefusalFixture(t, "active")
 	withLimits(t, 100000, 2, 100000)
 	now := time.Now()
@@ -163,14 +163,19 @@ func TestThrottledAnswerIsTheSameForKnownAndUnknownIdsAndReadsNothing(t *testing
 	for range 2 {
 		hitPagerDuty(handler, uuid.NewString(), "192.0.2.1", "")
 	}
+	for range pagerdutyLimitPerMinute {
+		hitPagerDuty(handler, "not-a-uuid", "192.0.2.1", "")
+	}
 	loads := f.loads
 	var answers []string
-	for _, id := range []string{f.bindingID, uuid.NewString(), uuid.NewString()} {
+	for _, id := range []string{f.bindingID, uuid.NewString(), "not-a-uuid", "x/y"} {
 		got := hitPagerDuty(handler, id, "192.0.2.1", "")
 		answers = append(answers, fmt.Sprintf("%d %s %v", got.Code, got.Body.String(), got.Header()))
 	}
-	if answers[0] != answers[1] || answers[1] != answers[2] || !strings.HasPrefix(answers[0], "429 "+throttledBody) {
-		t.Fatalf("throttled answers differ: %q", answers)
+	for index := range answers {
+		if answers[index] != answers[0] || !strings.HasPrefix(answers[index], "429 "+throttledBody) {
+			t.Fatalf("throttled answers differ: %q", answers)
+		}
 	}
 	if f.loads != loads {
 		t.Fatalf("throttled deliveries read %d bindings", f.loads-loads)

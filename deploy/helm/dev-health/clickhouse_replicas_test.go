@@ -45,7 +45,9 @@ func TestClickHouseReplicasIsAValueAndLeavesTheClaimTemplateAlone(t *testing.T) 
 			t.Fatalf("%s: spec.replicas = %v, want int %d", name, c.sts["spec"].(map[string]interface{})["replicas"], c.want)
 		}
 	}
-	claims := func(s map[string]interface{}) interface{} { return s["spec"].(map[string]interface{})["volumeClaimTemplates"] }
+	claims := func(s map[string]interface{}) interface{} {
+		return s["spec"].(map[string]interface{})["volumeClaimTemplates"]
+	}
 	if claims(def) == nil {
 		t.Fatal("default render has no volumeClaimTemplates")
 	}

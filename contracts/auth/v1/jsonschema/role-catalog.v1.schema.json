@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fullchaos.dev/contracts/auth/v1/jsonschema/role-catalog.v1.schema.json",
+  "title": "Auth Control Plane role-catalog (v1)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "catalog_version",
+    "description",
+    "roles"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "roles.v1"
+    },
+    "catalog_version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "description": {
+      "type": "string"
+    },
+    "roles": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "role",
+          "scope",
+          "actions"
+        ],
+        "properties": {
+          "role": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "not": {
+              "enum": [
+                "superuser",
+                "root",
+                "all",
+                "any",
+                "everyone"
+              ]
+            }
+          },
+          "scope": {
+            "enum": [
+              "platform",
+              "organization"
+            ]
+          },
+          "actions": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+$"
+            }
+          }
+        }
+      }
+    }
+  }
+}

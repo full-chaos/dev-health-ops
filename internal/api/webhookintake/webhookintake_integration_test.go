@@ -394,3 +394,61 @@ func TestPagerDutyWebhookReplayReturnsSameOutcomeNoSecondStreamEntry(t *testing.
 		t.Fatalf("stream entries = %d, want exactly 1 (the replay must not write a second)", len(entries))
 	}
 }
+
+func TestPagerDutyWebhookInvalidSignatureRejectedNoStreamEntry(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	pgInstance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = pgInstance.Close(ctx) })
+	pool, err := pgxpool.New(ctx, pgInstance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	createWebhookIntakeTables(t, ctx, pool)
+
+	valkeyInstance, err := containers.StartValkey(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = valkeyInstance.Close(ctx) })
+	client, err := valkey.Open(ctx, valkey.DefaultConfig(valkeyInstance.URI))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(client.Close)
+
+	orgID := uuid.New()
+	seedFeatureEnabled(t, ctx, pool, orgID)
+	decryptor := newTestDecryptor(t)
+	bindingID := seedPagerDutyBinding(t, ctx, pool, decryptor, orgID, "candidate", "sub-1", "pd-secret")
+
+	deps := Deps{Pool: pool, Valkey: client, Decryptor: decryptor, limiters: newRateLimiters(nil, nil)}
+	body := []byte(`{"event":{"id":"E1","event_type":"pagey.ping","occurred_at":"2026-01-01T00:00:00Z","data":{}}}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/webhooks/pagerduty/"+bindingID.String(), bytesReader(body))
+	req.SetPathValue("binding_id", bindingID.String())
+	req.Header.Set("X-Webhook-Subscription", "sub-1")
+	req.Header.Set("X-PagerDuty-Signature", pagerdutySign("another-secret", body))
+	recorder := httptest.NewRecorder()
+	deps.handlePagerDutyWebhook()(recorder, req)
+	if recorder.Code != http.StatusUnauthorized || recorder.Body.String() != `{"detail":"Invalid signature"}` {
+		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	entries, err := client.Do(ctx, client.B().Xrange().Key(pagerdutyStreamName(bindingID.String())).Start("-").End("+").Build()).AsXRange()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("stream entries = %d, want 0", len(entries))
+	}
+	var status string
+	if err := pool.QueryRow(ctx, `SELECT status FROM pagerduty_webhook_bindings WHERE id = $1`, bindingID).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "candidate" {
+		t.Fatalf("binding status = %q, want candidate", status)
+	}
+}

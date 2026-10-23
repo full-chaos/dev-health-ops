@@ -120,6 +120,9 @@ var viewFilledAfterTheCapture = map[string]viewFilledTable{
 // added after the capture: table -> column -> migration. A captured row has no
 // value for them, so the load must leave them empty.
 var emptyColumnsAfterTheCapture = map[string]map[string]string{
+	// Whether a unit's commit effort was measured (CHAOS-9575): a captured row
+	// predates it.
+	"work_unit_investments": {"effort_basis": "140_work_unit_investment_effort_basis.sql"},
 	// The provider fact that decided a project's state category (CHAOS-9438).
 	// Where a project's target date came from (CHAOS-9613).
 	"projects": {

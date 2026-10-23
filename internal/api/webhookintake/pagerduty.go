@@ -489,28 +489,25 @@ func (d Deps) handlePagerDutyWebhook() http.HandlerFunc {
 		refusal := ""
 		var binding pagerdutyBinding
 		canonicalBindingID := ""
-		lookupID := uuid.Nil.String()
-		parsed, parseErr := uuid.Parse(r.PathValue("binding_id"))
-		if parseErr == nil {
-			lookupID = parsed.String()
-			canonicalBindingID = lookupID
-		}
-		found, err := loadBinding(r.Context(), d.Pool, lookupID)
-		switch {
-		case err != nil && !errors.Is(err, errBindingNotFound):
-			d.logger().Error("pagerduty_webhook load binding failed", "binding_id", canonicalBindingID, "error", err)
-			policy.WriteDetail(w, http.StatusInternalServerError, "webhook store is unavailable", nil)
-			return
-		case parseErr != nil:
+		if parsed, err := uuid.Parse(r.PathValue("binding_id")); err != nil {
 			refusal = refusalInvalidBindingID
-		case errors.Is(err, errBindingNotFound):
-			refusal = refusalBindingUnavailable
-		case subscriptionHeader == "":
-			refusal = refusalSubscriptionMissing
-		case found.ID != canonicalBindingID || subscriptionHeader != found.ProviderSubscriptionID:
-			refusal = refusalSubscriptionMismatch
-		default:
-			binding = found
+		} else {
+			canonicalBindingID = parsed.String()
+			found, err := loadBinding(r.Context(), d.Pool, canonicalBindingID)
+			switch {
+			case errors.Is(err, errBindingNotFound):
+				refusal = refusalBindingUnavailable
+			case err != nil:
+				d.logger().Error("pagerduty_webhook load binding failed", "binding_id", canonicalBindingID, "error", err)
+				policy.WriteDetail(w, http.StatusInternalServerError, "webhook store is unavailable", nil)
+				return
+			case subscriptionHeader == "":
+				refusal = refusalSubscriptionMissing
+			case found.ID != canonicalBindingID || subscriptionHeader != found.ProviderSubscriptionID:
+				refusal = refusalSubscriptionMismatch
+			default:
+				binding = found
+			}
 		}
 		body, httpErr := readBodyLimited(r)
 		if httpErr != nil {

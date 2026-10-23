@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -160,7 +161,11 @@ func TestPagerDutyRefusalsShareOneBodyAndLookupWork(t *testing.T) {
 			"missing subscription": run(f.bindingID, "", body),
 			"other subscription":   run(f.bindingID, "other", body),
 		} {
-			if got.code != known.code || got.body != known.body || got.read != known.read || got.loads != 1 {
+			wantLoads := 1
+			if label == "id that is no uuid" {
+				wantLoads = 0
+			}
+			if got.code != known.code || got.body != known.body || got.read != known.read || got.loads != wantLoads {
 				t.Errorf("%s, %s: %+v differs from the known binding's %+v", name, label, got, known)
 			}
 		}
@@ -298,6 +303,18 @@ var pagerdutyRefusalTable = []struct {
 	{"declared length not a number, id that is no uuid", "no-uuid", "known", "ordinary", "not-a-number", 404, 400},
 }
 
+// declaredLengthClasses are run once per ordinary Content-Length shape that
+// does not change the answer: 0, the exact body length, and a value that does
+// not match the real body. Both receivers read the real body and refuse as
+// they would with no header.
+var declaredLengthClasses = []struct{ class, id, subscription string }{
+	{"known binding, other subscription", "known", "other"},
+	{"known binding, missing subscription", "known", "none"},
+	{"known binding and subscription, bad signature", "known", "known"},
+	{"unknown binding", "unknown", "known"},
+	{"id that is no uuid", "no-uuid", "known"},
+}
+
 func retiredPythonStatus(id, subscription, body, declared string) int {
 	switch {
 	case id == "no-uuid":
@@ -348,6 +365,16 @@ func TestPagerDutyRefusalTableMatchesTheHandler(t *testing.T) {
 		}
 		if row.goStatus != row.pythonStatus && row.goStatus < http.StatusBadRequest {
 			t.Errorf("%s: a changed status must still be a refusal", row.class)
+		}
+	}
+	for _, c := range declaredLengthClasses {
+		id := map[string]string{"known": f.bindingID, "unknown": uuid.NewString(), "no-uuid": "not-a-uuid"}[c.id]
+		subscription := map[string]string{"known": f.sub, "other": "other-" + f.sub, "none": ""}[c.subscription]
+		for _, declared := range []string{"0", strconv.Itoa(len(ordinary)), "100"} {
+			got, _ := f.sendDeclared(id, subscription, pagerdutySign("wrong-"+f.secret, ordinary), ordinary, declared)
+			if got.Code != http.StatusUnauthorized {
+				t.Errorf("%s with Content-Length %s: status %d", c.class, declared, got.Code)
+			}
 		}
 	}
 }

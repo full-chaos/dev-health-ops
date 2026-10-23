@@ -13,6 +13,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
+	"github.com/full-chaos/dev-health-ops/internal/platform/credshape"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchcontract"
 
 	"github.com/jackc/pgx/v5"
@@ -377,17 +378,29 @@ func (repair *OrphanedUnitRepair) Step(
 		// Emitted AFTER the commit, for the same reason the counters are merged
 		// after it: a line claiming a re-arm that rolled back is worse than no
 		// line, because it is the line an operator would trust.
-		slog.InfoContext(ctx, "syncreconciler.orphaned_unit_rearmed",
-			"unit_id", record.unitID,
-			"sync_run_id", record.runID,
-			"source_outbox_id", record.sourceOutboxID,
-			"source_dedupe_key", record.sourceDedupeKey,
-			"source_river_job_id", record.sourceRiverJobID,
-			"dedupe_key", record.dedupeKey,
-			"evidence", record.evidence,
-		)
+		slog.InfoContext(ctx, "syncreconciler.orphaned_unit_rearmed", rearmLogAttributes(record)...)
 	}
 	return result, nil
+}
+
+// rearmLogAttributes lists the fields of one re-arm log line. The two dedupe
+// keys are read from queued rows; a credential-shaped key is omitted.
+func rearmLogAttributes(record rearmRecord) []any {
+	sourceKey, key := record.sourceDedupeKey, record.dedupeKey
+	refused := credshape.AnyCredentialShaped(record.sourceDedupeKey, record.dedupeKey)
+	if refused {
+		sourceKey, key = "", ""
+	}
+	return []any{
+		"unit_id", record.unitID,
+		"sync_run_id", record.runID,
+		"source_outbox_id", record.sourceOutboxID,
+		"source_dedupe_key", sourceKey,
+		"source_river_job_id", record.sourceRiverJobID,
+		"dedupe_key", key,
+		"evidence", record.evidence,
+		"arguments_refused", refused,
+	}
 }
 
 // committedOutcome is the mutating half's tally, kept out of the pass result

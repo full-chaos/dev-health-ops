@@ -15,7 +15,6 @@ import (
 // without a server.
 type engineFormsConn struct {
 	driverConnStub
-	engine     string
 	engineFull string
 }
 
@@ -35,8 +34,6 @@ func (conn engineFormsConn) QueryRow(_ context.Context, query string, args ...an
 		return stubRow{value: strings.Join(capacityTableRequirements["work_item_metrics_daily"].sortingKey, ", ")}
 	case strings.Contains(query, "engine_full"):
 		return stubRow{value: conn.engineFull}
-	case strings.Contains(query, "SELECT engine"):
-		return stubRow{value: conn.engine}
 	}
 	return stubRow{err: errStubExhausted}
 }
@@ -47,27 +44,29 @@ func TestSchemaGuardsReadEveryEngineSpelling(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
 		name       string
-		engine     string
 		engineFull string
 		accepted   bool
 	}{
-		{"self-hosted", "ReplacingMergeTree", "ReplacingMergeTree(computed_at) ORDER BY (org_id, day)", true},
-		{"self-hosted backticked", "ReplacingMergeTree", "ReplacingMergeTree(`computed_at`) ORDER BY (org_id, day)", true},
-		{"replicated", "ReplicatedReplacingMergeTree", "ReplicatedReplacingMergeTree('/clickhouse/tables/{shard}/t', '{replica}', computed_at) ORDER BY (org_id, day)", true},
-		{"cloud shared", "SharedReplacingMergeTree", "SharedReplacingMergeTree(" + cloudPath + ", computed_at) ORDER BY (org_id, day)", true},
-		{"cloud shared backticked", "SharedReplacingMergeTree", "SharedReplacingMergeTree(" + cloudPath + ", `computed_at`) ORDER BY (org_id, day)", true},
-		{"cloud shared wrong version column", "SharedReplacingMergeTree", "SharedReplacingMergeTree(" + cloudPath + ", updated_at) ORDER BY (org_id, day)", false},
-		{"cloud shared no version column", "SharedReplacingMergeTree", "SharedReplacingMergeTree(" + cloudPath + ") ORDER BY (org_id, day)", false},
-		{"cloud shared plain MergeTree", "SharedMergeTree", "SharedMergeTree(" + cloudPath + ") ORDER BY (org_id, day)", false},
-		{"cloud shared aggregating", "SharedAggregatingMergeTree", "SharedAggregatingMergeTree(" + cloudPath + ") ORDER BY (org_id, day)", false},
-		{"cloud shared without replication arguments", "SharedReplacingMergeTree", "SharedReplacingMergeTree(computed_at) ORDER BY (org_id, day)", false},
-		{"self-hosted extra is_deleted argument", "ReplacingMergeTree", "ReplacingMergeTree(computed_at, is_deleted) ORDER BY (org_id, day)", false},
-		{"cloud shared extra is_deleted argument", "SharedReplacingMergeTree", "SharedReplacingMergeTree(" + cloudPath + ", computed_at, is_deleted) ORDER BY (org_id, day)", false},
-		{"unparseable engine_full", "SharedReplacingMergeTree", "SharedReplacingMergeTree('/p', '{replica}', computed_at ORDER BY x", false},
-		{"not a MergeTree", "View", "View", false},
+		{"self-hosted", "ReplacingMergeTree(computed_at) ORDER BY (org_id, day)", true},
+		{"self-hosted backticked", "ReplacingMergeTree(`computed_at`) ORDER BY (org_id, day)", true},
+		{"replicated", "ReplicatedReplacingMergeTree('/clickhouse/tables/{shard}/t', '{replica}', computed_at) ORDER BY (org_id, day)", true},
+		{"cloud shared", "SharedReplacingMergeTree(" + cloudPath + ", computed_at) ORDER BY (org_id, day)", true},
+		{"cloud shared backticked", "SharedReplacingMergeTree(" + cloudPath + ", `computed_at`) ORDER BY (org_id, day)", true},
+		{"cloud shared wrong version column", "SharedReplacingMergeTree(" + cloudPath + ", updated_at) ORDER BY (org_id, day)", false},
+		{"cloud shared no version column", "SharedReplacingMergeTree(" + cloudPath + ") ORDER BY (org_id, day)", false},
+		{"cloud shared plain MergeTree", "SharedMergeTree(" + cloudPath + ") ORDER BY (org_id, day)", false},
+		{"cloud shared aggregating", "SharedAggregatingMergeTree(" + cloudPath + ") ORDER BY (org_id, day)", false},
+		{"cloud shared without replication arguments", "SharedReplacingMergeTree(computed_at) ORDER BY (org_id, day)", false},
+		{"self-hosted extra is_deleted argument", "ReplacingMergeTree(computed_at, is_deleted) ORDER BY (org_id, day)", false},
+		{"cloud shared extra is_deleted argument", "SharedReplacingMergeTree(" + cloudPath + ", computed_at, is_deleted) ORDER BY (org_id, day)", false},
+		{"unparseable engine_full", "SharedReplacingMergeTree('/p', '{replica}', computed_at ORDER BY x", false},
+		{"not a MergeTree", "View", false},
+		{"collapsing first argument is not the version column", "CollapsingMergeTree(sign) ORDER BY (org_id, day)", false},
+		{"cloud shared collapsing first argument is not the version column", "SharedCollapsingMergeTree(" + cloudPath + ", sign) ORDER BY (org_id, day)", false},
+		{"cloud shared summing column tuple", "SharedSummingMergeTree(" + cloudPath + ", (a, b)) ORDER BY (org_id, day)", false},
 	}
 	for _, tc := range cases {
-		conn := engineFormsConn{engine: tc.engine, engineFull: tc.engineFull}
+		conn := engineFormsConn{engineFull: tc.engineFull}
 		t.Run("capacity/"+tc.name, func(t *testing.T) {
 			t.Parallel()
 			err := verifyCapacitySchema(context.Background(), conn)

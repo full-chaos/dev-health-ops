@@ -175,17 +175,6 @@ func TestCapacityRefusesAStaleSchema(t *testing.T) {
 						"the version-column check at all", column)
 			}
 		}
-		engine, err := capacityTableEngine(ctx, fresh, "work_item_metrics_daily")
-		if err != nil {
-			t.Fatalf("inspect the staged table engine: %v", err)
-		}
-		if !strings.Contains(engine, capacityReplacingEngineMarker) {
-			t.Fatalf(
-				"the staged table is %s, not in the Replacing family, so a "+
-					"refusal here would be about the engine and this test "+
-					"would not exercise the version-column check at all", engine)
-		}
-
 		_, err = NewCapacityExecutor(ctx, fresh, nil, nil)
 		if err == nil {
 			t.Fatal(
@@ -233,17 +222,6 @@ func TestCapacityRefusesAStaleSchema(t *testing.T) {
 						"the sorting-key check at all", column)
 			}
 		}
-		engine, err := capacityTableEngine(ctx, fresh, "work_item_metrics_daily")
-		if err != nil {
-			t.Fatalf("inspect the staged table engine: %v", err)
-		}
-		if !strings.Contains(engine, capacityReplacingEngineMarker) {
-			t.Fatalf(
-				"the staged table is %s, not in the Replacing family, so a "+
-					"refusal here would be about the engine and this test "+
-					"would not exercise the sorting-key check at all", engine)
-		}
-
 		_, err = NewCapacityExecutor(ctx, fresh, nil, nil)
 		if err == nil {
 			t.Fatal(

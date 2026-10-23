@@ -526,3 +526,24 @@ func TestWorkloadContractRefusesTheAccessTokenCorpus(t *testing.T) {
 		}
 	}
 }
+
+// A verifier that validates the schema and none of the client-only rules (no
+// duplicate-member refusal, no integer-token rule, no nbf/iat/exp ordering or
+// ceiling) must fail the corpus, and the rows that catch it must include the
+// decimal-form NumericDate and the nbf-before-iat vectors.
+func TestWorkloadCorpusFailsAReaderThatSkipsTheClientRules(t *testing.T) {
+	root := testRoot(t)
+	c, err := Load(filepath.Join(root, WorkloadDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = verifyAll(root, c, skipClientRules)
+	if err == nil {
+		t.Fatal("a reader that skips every client rule passed every vector")
+	}
+	for _, row := range []string{"invalid-exp-decimal-form.json", "invalid-nbf-before-iat.json", "invalid-lifetime-over-the-ceiling.json", "invalid-exp-not-after-nbf.json", "invalid-duplicate-claim-aud.json"} {
+		if !strings.Contains(err.Error(), row+":") {
+			t.Errorf("the client-rule mutant was not caught by %s", row)
+		}
+	}
+}

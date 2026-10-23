@@ -13,7 +13,7 @@
       "alg": "EdDSA",
       "use": "sig",
       "kid": "auth-example-2026-04",
-      "x": "IxoibvCFWL7FyOwSfNqo77e5yQPpQGElZYQ77YcXK3U"
+      "x": "ThDGmJV4DBdBGPmGXaKqV05TQoYGFxliYJT8coUFaQQ"
     }
   ],
   "decision_order": [
@@ -178,6 +178,15 @@
       "why": "typ appears twice (at+jwt, then workload+jwt); the signature is valid over those bytes."
     },
     {
+      "file": "invalid-exp-decimal-form.json",
+      "now": 1760000300,
+      "verify_as_audience": "auth-service",
+      "expect": "reject",
+      "reason": "contract",
+      "contract_stage": "decode",
+      "why": "exp in decimal form (a NumericDate is an integer token): the schema accepts 1760000300.0, a client that reads it as a float or as an integer decides differently."
+    },
+    {
       "file": "invalid-exp-equals-now.json",
       "now": 1760000300,
       "verify_as_audience": "auth-service",
@@ -279,6 +288,15 @@
       "reason": "contract",
       "contract_stage": "client_rule",
       "why": "exp - iat one second over the 300 s ceiling."
+    },
+    {
+      "file": "invalid-nbf-before-iat.json",
+      "now": 1760000300,
+      "verify_as_audience": "auth-service",
+      "expect": "reject",
+      "reason": "contract",
+      "contract_stage": "client_rule",
+      "why": "nbf one second before iat: the schema accepts it, only the client rule refuses it."
     },
     {
       "file": "invalid-nbf-one-second-ahead.json",

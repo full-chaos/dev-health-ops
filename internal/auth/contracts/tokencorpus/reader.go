@@ -28,6 +28,9 @@ type Decision struct {
 const (
 	skipRemoved    = "removed_kids"
 	skipNbfFromIat = "nbf_from_iat"
+	// skipClientRules is a reader that checks the schema and nothing else of
+	// the contract: no duplicate-member, integer-token or ordering rule.
+	skipClientRules = "client_rules"
 )
 
 // Check is the reference decision for one vector, in the manifest's decision
@@ -80,6 +83,16 @@ func check(root string, c *Corpus, jwks Jwks, v Vector, now int64, audience stri
 					_, err := contracts.ParseWorkloadToken(root, raw)
 					return nil, err
 				}
+			}
+			if skip == skipClientRules {
+				var doc any
+				if err := json.Unmarshal([]byte(document), &doc); err != nil {
+					return Decision{Reason: ReasonContract, Stage: contracts.StageSyntax}, nil
+				}
+				if err := contracts.Validate(root, c.Manifest.Surface, doc); err != nil {
+					return Decision{Reason: ReasonContract, Stage: contracts.StageSchema}, nil
+				}
+				continue
 			}
 			if _, err := parse(root, []byte(document)); err != nil {
 				var refusal *contracts.CredentialRefusal

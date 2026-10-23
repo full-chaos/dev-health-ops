@@ -179,6 +179,11 @@ func GenerateWorkload(random io.Reader) (*Corpus, error) {
 	notAfter.exp = notAfter.nbf
 	refuse("invalid-exp-not-after-nbf", good, notAfter.text(), active, workloadContractRefusal("client_rule", "exp equals nbf: an empty validity window."))
 
+	earlyNbf := w
+	earlyNbf.nbf = earlyNbf.iat - 1
+	refuse("invalid-nbf-before-iat", good, earlyNbf.text(), active, workloadContractRefusal("client_rule", "nbf one second before iat: the schema accepts it, only the client rule refuses it."))
+	refuse("invalid-exp-decimal-form", good, strings.Replace(w.text(), fmt.Sprintf(`"exp":%d`, w.exp), fmt.Sprintf(`"exp":%d.0`, w.exp), 1), active, workloadContractRefusal("decode", "exp in decimal form (a NumericDate is an integer token): the schema accepts 1760000300.0, a client that reads it as a float or as an integer decides differently."))
+
 	userToken := `{"iss":"` + Issuer + `","aud":"` + AudienceAPI + `","sub":"` + WorkloadSub + `","principal_type":"human","sid":"ses_AAAAAAAAAAAAAAAAAAAAAQ","jti":"000000000000000000000001","iat":1760000000,"nbf":1760000000,"exp":1760000600,"org_id":"00000000-0000-4000-8000-000000000001","scope":"api:access"}`
 	refuse("invalid-user-access-token-signed-by-the-active-key", headerText("EdDSA", "at+jwt", KidActive), userToken, active, workloadContractRefusal("schema", "a genuine user access token signed by the active key and presented as a workload token."))
 

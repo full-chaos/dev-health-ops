@@ -24,7 +24,7 @@ func WithValueRedaction(inner slog.Handler, redact func(string) string) slog.Han
 	if isSlogBuiltinDefault(inner) {
 		inner = slog.NewTextHandler(log.Writer(), nil)
 	}
-	return valueRedactor{inner: inner, redact: redact}
+	return valueRedactor{inner: keyScrubber{inner: inner}, redact: redact}
 }
 
 // isSlogBuiltinDefault reports whether handler is slog's own default handler

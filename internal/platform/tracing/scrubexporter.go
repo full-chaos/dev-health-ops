@@ -2,8 +2,6 @@ package tracing
 
 import (
 	"context"
-	"sync"
-	"sync/atomic"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/sdk/instrumentation"
@@ -62,34 +60,9 @@ var exceptionTextKeys = map[string]bool{"exception.message": true, "exception.st
 
 // placeholderKey replaces an attribute key that holds a credential; its value is hidden. Any number of such keys on one
 // span collapse to one entry, so the exported key set stays bounded.
-const placeholderKey = "redacted.key"
+const placeholderKey = logging.RedactedKeyName
 
-// cleanKeys remembers keys the redactor left unchanged (a verdict per distinct key, bounded; keys that changed are
-// never stored, so a stream of credential keys cannot grow it).
-var (
-	cleanKeys     sync.Map
-	cleanKeyCount atomic.Int64
-)
-
-const maxCleanKeys = 4096
-
-func keyIsClean(key string) bool {
-	if safeKeys[key] {
-		return true
-	}
-	if _, ok := cleanKeys.Load(key); ok {
-		return true
-	}
-	if logging.RedactText(key) != key {
-		return false
-	}
-	if cleanKeyCount.Load() < maxCleanKeys {
-		if _, loaded := cleanKeys.LoadOrStore(key, struct{}{}); !loaded {
-			cleanKeyCount.Add(1)
-		}
-	}
-	return true
-}
+func keyIsClean(key string) bool { return safeKeys[key] || logging.KeyClean(key) }
 
 // scrubValue returns the value to export for one attribute; changed is false when kv can go out as it is.
 func scrubValue(kv attribute.KeyValue, exceptionEvent bool) (out attribute.KeyValue, changed bool) {

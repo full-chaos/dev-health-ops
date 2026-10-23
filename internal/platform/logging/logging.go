@@ -58,7 +58,7 @@ func NewJSON(output io.Writer, level slog.Level) *slog.Logger {
 		Level:       level,
 		ReplaceAttr: attrRedactor{}.replace,
 	})
-	return slog.New(handler)
+	return slog.New(keyScrubber{inner: handler})
 }
 
 // InstallDefault makes logger the process default, so slog.Default(), the
@@ -238,7 +238,16 @@ func redactJSONValue(value any) any {
 		if len(typed) == 0 {
 			return typed
 		}
+		sawPlaceholder := false
 		for key, nested := range typed {
+			if !KeyClean(key) {
+				delete(typed, key)
+				if !sawPlaceholder {
+					sawPlaceholder = true
+					typed[RedactedKeyName] = redacted
+				}
+				continue
+			}
 			if ProtectedKey(key) {
 				typed[key] = redacted
 				continue

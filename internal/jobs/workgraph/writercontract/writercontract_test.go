@@ -104,15 +104,18 @@ func TestIssueCommitEdgesRepoIDIsSourceRepo(t *testing.T) {
 }
 
 // Census guard: operational, flag-guard and issue-issue writers are not
-// pr/commit-sourced by census; every pr/commit-sourced edges.Row literal must
-// live in a file whose deriver is covered above. A SourceType taken from a
-// variable is out of scope.
+// pr/commit-sourced by census. Every composite literal setting a pr/commit
+// SourceType must live in a covered deriver file or a pinned non-writer. A
+// SourceType taken from a variable is out of scope.
 func TestEveryPRAndCommitSourcedWriterIsCovered(t *testing.T) {
 	covered := map[string]bool{
 		"jobs/workgraph/issuepredges/issuepredges.go":         true,
 		"jobs/workgraph/issuepredges/heuristic.go":            true,
 		"jobs/workgraph/prcommit/fastpath.go":                 true,
 		"jobs/workgraph/issuecommitedges/issuecommitedges.go": true,
+	}
+	notWriters := map[string]string{
+		"queryapi/investmentexplain/quotetitles.go": "read-side explain quote lookup key, not a work_graph_edges writer",
 	}
 	root := filepath.Join("..", "..", "..")
 	found := map[string]bool{}
@@ -126,7 +129,7 @@ func TestEveryPRAndCommitSourcedWriterIsCovered(t *testing.T) {
 		}
 		ast.Inspect(file, func(n ast.Node) bool {
 			lit, ok := n.(*ast.CompositeLit)
-			if !ok || !isEdgesRow(lit.Type) {
+			if !ok {
 				return true
 			}
 			for _, elt := range lit.Elts {
@@ -148,7 +151,7 @@ func TestEveryPRAndCommitSourcedWriterIsCovered(t *testing.T) {
 	}
 	var unknown []string
 	for file := range found {
-		if !covered[file] {
+		if !covered[file] && notWriters[file] == "" {
 			unknown = append(unknown, file)
 		}
 	}
@@ -161,15 +164,11 @@ func TestEveryPRAndCommitSourcedWriterIsCovered(t *testing.T) {
 			t.Errorf("covered deriver %s no longer builds a pr/commit-sourced edges.Row: update the contract test", file)
 		}
 	}
-}
-
-func isEdgesRow(expr ast.Expr) bool {
-	sel, ok := expr.(*ast.SelectorExpr)
-	if !ok || sel.Sel.Name != "Row" {
-		return false
+	for file, reason := range notWriters {
+		if !found[file] {
+			t.Errorf("pinned non-writer %s (%s) no longer sets a pr/commit SourceType: drop the pin", file, reason)
+		}
 	}
-	pkg, ok := sel.X.(*ast.Ident)
-	return ok && pkg.Name == "edges"
 }
 
 func isPRorCommit(expr ast.Expr) bool {

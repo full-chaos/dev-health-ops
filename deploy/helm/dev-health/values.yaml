@@ -1360,6 +1360,8 @@ valkey:
 # =============================================================================
 clickhouse:
   enabled: true
+  # StatefulSet replica count. 0 keeps the claim and the data volume and runs no pod.
+  replicas: 1
   image:
     repository: clickhouse/clickhouse-server
     tag: "latest@sha256:d7556a3841027651307b5aa08d72b5c467d0241d3db5b67d9e158ef3975626f5"

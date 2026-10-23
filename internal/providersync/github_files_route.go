@@ -285,7 +285,7 @@ func (handler GitHubFilesRouteHandler) CollectChunks(
 			return emitFinal(cursor)
 		}
 	}
-	paths, sizes, walked, err := gitHubFilesInventory(ctx, client, root, cursor.TreeRef, repoPayload.FullName)
+	paths, sizes, walked, err := gitHubFilesInventory(ctx, client, claim.OrgID, root, cursor.TreeRef, repoPayload.FullName)
 	if err != nil && resumedPin && gitHubFilesPinGone(err) && cursor.PinLost < gitHubFilesMaxRepins {
 		// The tree the cursor pinned no longer exists (its commit was
 		// garbage-collected or force-pushed away), so the cursor can never
@@ -313,7 +313,7 @@ func (handler GitHubFilesRouteHandler) CollectChunks(
 			}
 			return emitFinal(cursor)
 		}
-		paths, sizes, walked, err = gitHubFilesInventory(ctx, client, root, cursor.TreeRef, repoPayload.FullName)
+		paths, sizes, walked, err = gitHubFilesInventory(ctx, client, claim.OrgID, root, cursor.TreeRef, repoPayload.FullName)
 	}
 	if err != nil {
 		return err
@@ -463,7 +463,16 @@ func gitHubFileDeclaredBytes(size *int) int {
 func gitHubFilesInventory(
 	ctx context.Context,
 	client *providerfoundation.HTTPClient,
-	root, treeRef, fullName string,
+	orgID, root, treeRef, fullName string,
+) ([]string, map[string]*int, bool, error) {
+	return gitHubFilesInventoryCached(ctx, client, defaultGitHubTreeWalkCache, orgID, root, treeRef, fullName)
+}
+
+func gitHubFilesInventoryCached(
+	ctx context.Context,
+	client *providerfoundation.HTTPClient,
+	cache *gitHubTreeWalkCache,
+	orgID, root, treeRef, fullName string,
 ) ([]string, map[string]*int, bool, error) {
 	var tree gitHubTreePayload
 	treeErr := fetchObjectRoute(ctx, client, githubTreeRoute, root+"/git/trees/"+url.PathEscape(treeRef)+"?recursive=true", &tree)
@@ -479,11 +488,17 @@ func gitHubFilesInventory(
 		return nil, nil, false, continueGitHubFilesTraversal(treeErr, fullName)
 	}
 	if treeCapExceeded || tree.Truncated {
+		if paths, sizes, ok := cache.get(orgID, root, treeRef, time.Now()); ok {
+			slog.Info("github files tree walk", "walk_cache", "hit", "paths", len(paths))
+			return paths, sizes, true, nil
+		}
 		paths, sizes, stats, walkErr := gitHubWalkTreeLimited(ctx, client, root, treeRef, "", rootListedWalkLimits())
 		if walkErr != nil {
 			logGitHubTreeWalkStop(walkErr, stats)
 			return nil, nil, true, continueGitHubFilesTraversal(fmt.Errorf("ref=%s: %w", treeRef, walkErr), fullName)
 		}
+		cache.put(orgID, root, treeRef, paths, sizes, time.Now())
+		slog.Info("github files tree walk", "walk_cache", "miss", "paths", len(paths), "dirs", stats.dirs, "entries", stats.entries)
 		return paths, sizes, true, nil
 	}
 	paths := make([]string, 0, len(tree.Tree))

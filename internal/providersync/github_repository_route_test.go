@@ -58,6 +58,7 @@ func gitHubRepositoryClient(
 	base string,
 ) *providerfoundation.HTTPClient {
 	t.Helper()
+	defaultGitHubTreeWalkCache.clear()
 	client, err := providerfoundation.NewHTTPClient(
 		"github", base, fakehttp.Client(doer),
 		func(*http.Request) error { return nil },

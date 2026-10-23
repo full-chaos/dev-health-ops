@@ -34,28 +34,44 @@ done
 }
 [ -f "$values" ] || { printf 'refused: --values is not a file\n' >&2; exit 2; }
 
-# listed NAME KEY: succeeds when ONE entry of keySet.keys in the values file
-# carries both secretName: NAME and secretKey: KEY as direct fields.
+# listed NAME KEY: succeeds when ONE entry of authService.keySet.keys in the
+# values file carries both secretName: NAME and secretKey: KEY as direct
+# fields. Anything it cannot read with certainty (a quoted scalar over several
+# lines under that path, a flow-style keys value) fails closed.
 listed() {
   awk -v want_name="$1" -v want_key="$2" '
     function clean(v) { sub(/[[:space:]]+#.*$/, "", v); gsub(/^[[:space:]]+|[[:space:]]+$/, "", v); gsub(/^"|"$/, "", v); return v }
+    function path(   i, p) { p = ""; for (i = 1; i <= depth; i++) p = p "/" sk[i]; return p }
+    function pop_to(limit) { while (depth > 0 && si[depth] >= limit) depth-- }
     /^[[:space:]]*(#|$)/ { next }
     {
       line = $0
       ind = match(line, /[^ ]/) - 1
+      if (qopen != "") { if (index(line, qopen) > 0) { qopen = "" } ; next }
       if (blk >= 0 && ind > blk) { next }
       blk = -1
-      if (line ~ /:[[:space:]]*[|>][-+0-9]*[[:space:]]*$/) { blk = ind }
-      if (inks && ind <= ksind) { inks = 0; inkeys = 0 }
-      if (inkeys && ind < keysind) { inkeys = 0; active = 0 }
-      if (line ~ /^ *keySet:[[:space:]]*$/) { inks = 1; ksind = ind; inkeys = 0; active = 0; next }
-      if (inks && !inkeys && line ~ /^ *keys:[[:space:]]*$/ && ind > ksind) { inkeys = 1; keysind = ind; active = 0; next }
-      if (!inkeys) { next }
-      if (line ~ /^ *- /) {
-        dash = ind; active = 1; name = ""; key = ""
-        sub(/^ *- /, "", line); ind = dash + 2
-      } else if (active && ind <= dash) {
-        active = 0
+      eff = ind
+      isdash = (line ~ /^ *- /)
+      if (isdash) { eff = ind + 2 }
+      if (line ~ /:[[:space:]]+(![^ ]+[[:space:]]+)?[|>][-+0-9]*[[:space:]]*(#.*)?$/) { blk = eff }
+      if (line ~ /:[[:space:]]+"[^"]*$/) { qopen = "\""; if (inpath) { bad = 1 } }
+      else if (line ~ /:[[:space:]]+\x27[^\x27]*$/) { qopen = "\x27"; if (inpath) { bad = 1 } }
+      if (isdash) {
+        pop_to(ind + 1)
+        inpath = (path() == "/authService/keySet/keys")
+        if (inpath) { dash = ind; active = 1; name = ""; key = "" } else { active = 0 }
+        sub(/^ *- /, "", line); ind = eff
+      } else {
+        if (active && ind <= dash) { active = 0 }
+        if (!(active && ind == dash + 2) && !(active && ind > dash)) {
+          if (match(line, /^ *[^ #][^:]*:( |$)/)) {
+            k = line; sub(/^ */, "", k); sub(/:( .*)?$/, "", k)
+            pop_to(ind)
+            depth++; sk[depth] = k; si[depth] = ind
+            inpath = (path() == "/authService/keySet/keys")
+                }
+          next
+        }
       }
       if (active && ind == dash + 2) {
         if (line ~ /^ *secretName:/) { v = line; sub(/^ *secretName:/, "", v); name = clean(v) }
@@ -63,8 +79,8 @@ listed() {
         if (name == want_name && key == want_key) { found = 1 }
       }
     }
-    BEGIN { blk = -1 }
-    END { exit found ? 0 : 1 }
+    BEGIN { blk = -1; qopen = "" }
+    END { exit (bad || !found) ? 1 : 0 }
   ' "$values"
 }
 
@@ -74,7 +90,11 @@ seen=" "
 for pair in "${keys[@]}"; do
   name="${pair%%:*}"
   key="${pair#*:}"
-  if [ "$name" = "$pair" ] || ! [[ "$name" =~ $dns1123 ]] || [ "${#name}" -gt 253 ] || ! [[ "$key" =~ $keyname ]] || [ "$key" = . ] || [ "$key" = .. ]; then
+  case "$key" in
+    ..*) printf 'refused: a secret key must not be "." or start with ".."\n' >&2; exit 2 ;;
+    .) printf 'refused: a secret key must not be "." or start with ".."\n' >&2; exit 2 ;;
+  esac
+  if [ "$name" = "$pair" ] || ! [[ "$name" =~ $dns1123 ]] || [ "${#name}" -gt 253 ] || ! [[ "$key" =~ $keyname ]]; then
     printf 'refused: --key must be <secret-name>:<secret-key> with valid names\n' >&2
     exit 2
   fi
@@ -89,7 +109,11 @@ done
 base="${KEYSET_WORKDIR_BASE:-${XDG_RUNTIME_DIR:-/dev/shm}}"
 [ -d "$base" ] || { printf 'refused: no private work directory\n' >&2; exit 2; }
 workdir="$(mktemp -d "${base%/}/auth-keyset.XXXXXX")"
-errdir="$(mktemp -d "${base%/}/auth-keyset-err.XXXXXX")"
+errdir="$(mktemp -d "${base%/}/auth-keyset-err.XXXXXX")" || {
+  rmdir "$workdir" 2>/dev/null || true
+  printf 'refused: no private error directory\n' >&2
+  exit 2
+}
 
 cleanup() {
   local f

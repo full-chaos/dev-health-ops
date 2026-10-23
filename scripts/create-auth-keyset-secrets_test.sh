@@ -77,7 +77,9 @@ ingress:
     - secretName: key-t
       secretKey: signing-key.pem
 V
-export LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8
+utf8_locale="$(locale -a 2>/dev/null | grep -iE '^en_US\.utf-?8$' | head -1 || true)"
+[ -n "$utf8_locale" ] || utf8_locale="$(locale -a 2>/dev/null | grep -iE '^c\.utf-?8$' | head -1 || true)"
+if [ -n "$utf8_locale" ]; then export LANG="$utf8_locale" LC_ALL="$utf8_locale"; else printf 'SKIP: no UTF-8 locale; the non-ASCII refusals are not exercised\n'; fi
 export PATH="$t/bin:$PATH" KEYSET_WORKDIR_BASE="$t/work" FAKE_ARGV="$t/argv" FAKE_VALUES="$t/values.got"
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
 run() { : >"$FAKE_ARGV"; : >"$FAKE_VALUES"; "$script" --context ctx --namespace ns --values "$t/values.yaml" "$@" >"$t/out" 2>"$t/err" || return $?; }
@@ -138,6 +140,19 @@ grep -q 'BEGIN PRIVATE KEY' "$FAKE_VALUES" || fail "an empty value was handed to
 [ -z "$(find "$t/work" -mindepth 1 | head -1)" ] || fail "work files left after the kubectl.err key"
 
 # Refusals: nothing is created.
+refuse_msg() {
+  want="$1"; shift
+  run "$@" && fail "should refuse: $*"
+  grep -qF -- "$want" "$t/err" || { cat "$t/err"; fail "refusal lacks message $want for $*"; }
+  [ ! -s "$FAKE_ARGV" ] || fail "kubectl ran on a refusal: $*"
+}
+refuse_in() {
+  file="$1"; shift
+  : >"$FAKE_ARGV"
+  "$script" --context ctx --namespace ns --values "$file" "$@" >"$t/out" 2>"$t/err" && fail "should refuse in $file: $*"
+  grep -q refused "$t/err" || fail "no refusal message in $file: $*"
+  [ ! -s "$FAKE_ARGV" ] || fail "kubectl ran on a refusal in $file"
+}
 refuse() { run "$@" && fail "should refuse: $*"; [ ! -s "$FAKE_ARGV" ] || fail "kubectl ran on a refusal: $*"; }
 refuse --key other:signing-key.pem
 refuse --key key-a:other.pem
@@ -145,12 +160,15 @@ refuse --key 'Key_A:signing-key.pem'
 refuse --key key-a
 refuse --key key-a:signing-key.pem --key key-a:signing-key.pem
 # Listed in the values file, refused by the name regexes alone.
-refuse --key Key_E:signing-key.pem
-refuse --key 'key-f:bad key'
-refuse --key 'kéy-g:signing-key.pem'
-refuse --key 'key-h:kéy.pem'
-refuse --key key-i:.
-refuse --key key-j:..
+refuse_msg 'valid names' --key Key_E:signing-key.pem
+refuse_msg 'valid names' --key 'key-f:bad key'
+if [ -n "$utf8_locale" ]; then
+  refuse_msg 'valid names' --key 'kéy-g:signing-key.pem'
+  refuse_msg 'valid names' --key 'key-h:kéy.pem'
+fi
+refuse_msg 'must not be "."' --key key-i:.
+refuse_msg 'must not be "."' --key key-j:..
+refuse_msg 'must not be "."' --key key-k:..data
 # Entries outside keySet.keys do not count: a block scalar, another list, a plain map.
 refuse --key key-s:signing-key.pem
 refuse --key key-v:signing-key.pem
@@ -160,6 +178,85 @@ refuse --key key-x:signing-key.pem
 refuse --key key-a:other-key.pem
 refuse --key key-c:signing-key.pem
 refuse --key key-z:db.txt
+
+# Path anchoring and unreadable shapes fail closed (each file lists a decoy that a looser reader would accept).
+mkv() { cat >"$t/$1"; }
+mkv sib.yaml <<'V'
+authService:
+  keySet:
+    keys:
+      - secretName: key-a
+        secretKey: signing-key.pem
+    retired:
+      - secretName: key-r
+        secretKey: b.pem
+V
+refuse_in "$t/sib.yaml" --key key-r:b.pem
+mkv nested.yaml <<'V'
+authService:
+  keySet:
+    nested:
+      keys:
+        - secretName: key-n
+          secretKey: n.pem
+V
+refuse_in "$t/nested.yaml" --key key-n:n.pem
+mkv other.yaml <<'V'
+queryApi:
+  keySet:
+    keys:
+      - secretName: key-q
+        secretKey: q.pem
+V
+refuse_in "$t/other.yaml" --key key-q:q.pem
+mkv root.yaml <<'V'
+keySet:
+  keys:
+    - secretName: key-q
+      secretKey: q.pem
+V
+refuse_in "$t/root.yaml" --key key-q:q.pem
+for ind in '|' '| # comment' '!!str |' '>-' '|2' '|+'; do
+  {
+    printf 'authService:\n  keySet:\n    keys:\n      - secretName: key-a\n        secretKey: signing-key.pem\n        note: %s\n' "$ind"
+    printf '          - secretName: key-bs\n            secretKey: s.pem\n'
+  } >"$t/bs.yaml"
+  refuse_in "$t/bs.yaml" --key key-bs:s.pem
+done
+mkv multi.yaml <<'V'
+authService:
+  keySet:
+    keys:
+      - secretName: key-a
+        secretKey: signing-key.pem
+        note: "first line
+          - secretName: key-mq
+            secretKey: m.pem
+          last"
+V
+refuse_in "$t/multi.yaml" --key key-mq:m.pem
+refuse_in "$t/multi.yaml" --key key-a:signing-key.pem
+mkv flow.yaml <<'V'
+authService:
+  keySet:
+    keys: [{secretName: key-fl, secretKey: f.pem}]
+V
+refuse_in "$t/flow.yaml" --key key-fl:f.pem
+
+# A failing second mktemp removes the first work directory.
+mkdir -p "$t/mk"
+cat >"$t/mk/mktemp" <<'FAKE'
+#!/usr/bin/env bash
+n=$(cat "$MK_COUNT" 2>/dev/null || echo 0); n=$((n + 1)); echo "$n" >"$MK_COUNT"
+[ "$n" -ge 2 ] && exit 1
+exec /usr/bin/mktemp "$@"
+FAKE
+chmod +x "$t/mk/mktemp"
+: >"$FAKE_ARGV"; rm -f "$t/mkcount"
+MK_COUNT="$t/mkcount" PATH="$t/mk:$PATH" "$script" --context ctx --namespace ns --values "$t/values.yaml" --key key-a:signing-key.pem >"$t/out" 2>"$t/err" && fail "mktemp failure must exit non-zero"
+[ -z "$(find "$t/work" -mindepth 1 | head -1)" ] || fail "work directory left after the error directory failed"
+[ ! -s "$FAKE_ARGV" ] || fail "kubectl ran after the error directory failed"
+
 : >"$FAKE_ARGV"
 "$script" --namespace ns --values "$t/values.yaml" --key key-a:signing-key.pem >/dev/null 2>&1 && fail "context is required"
 "$script" --context c --namespace ns --values "$t/missing" --key key-a:signing-key.pem >/dev/null 2>&1 && fail "values file is required"

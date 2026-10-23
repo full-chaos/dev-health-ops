@@ -148,7 +148,7 @@ func generateServiceToken(service string) (string, error) {
 	prefix := acrTokenPrefix
 	switch service {
 	case ServiceWorkerOperator:
-		prefix = workerOperatorTokenPrefix
+		return "", RetiredServiceRefusal(service)
 	case ServiceAuthSessionIssuer:
 		prefix = authSessionIssuerTokenPrefix
 	}
@@ -215,7 +215,7 @@ func insertCredential(ctx context.Context, tx pgx.Tx, spec ServiceCredentialSpec
 
 // IssueServiceCredential is `service-credentials create`: it returns the token, which is not stored.
 func (o Operator) IssueServiceCredential(ctx context.Context, spec ServiceCredentialSpec) (string, error) {
-	tx, err := o.Pool.Begin(ctx)
+	tx, err := o.beginMint(ctx, spec.Service)
 	if err != nil {
 		return "", err
 	}
@@ -294,7 +294,7 @@ func (item ServiceCredentialMetadata) Document(now time.Time) map[string]any {
 // RotateServiceCredential is `service-credentials rotate`: the credential stays valid for
 // overlapSeconds more (from now, however long it had left), and a replacement is issued.
 func (o Operator) RotateServiceCredential(ctx context.Context, id uuid.UUID, overlapSeconds int, spec ServiceCredentialSpec) (string, error) {
-	tx, err := o.Pool.Begin(ctx)
+	tx, err := o.beginMint(ctx, spec.Service)
 	if err != nil {
 		return "", err
 	}
@@ -339,4 +339,22 @@ func (o Operator) RevokeServiceCredential(ctx context.Context, id uuid.UUID) err
 		return credentialRefusal("service credential not found")
 	}
 	return nil
+}
+
+// ServiceMintRetired reports a service that issues no new credentials: its stored rows can still be listed and revoked.
+func ServiceMintRetired(service string) bool {
+	return service == ServiceWorkerOperator
+}
+
+// RetiredServiceRefusal is the refusal of create and rotate for a retired service.
+func RetiredServiceRefusal(service string) error {
+	return credentialRefusal("service %s is retired (its %s tokens are no longer issued): create and rotate are refused; list and revoke still work", service, workerOperatorTokenPrefix+"*")
+}
+
+// beginMint opens the transaction of create and rotate, after refusing a retired service before any database is touched.
+func (o Operator) beginMint(ctx context.Context, service string) (pgx.Tx, error) {
+	if ServiceMintRetired(service) {
+		return nil, RetiredServiceRefusal(service)
+	}
+	return o.Pool.Begin(ctx)
 }

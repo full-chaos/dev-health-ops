@@ -1,0 +1,3 @@
+# D6129 refusals where Go is stricter than the Python verbs it ports (adminops). case<TAB>python_reference<TAB>go_refusal<TAB>ruling
+# python_reference names the frozen source (src@a4847c5e) site that accepted the input. Rows are answered live by the tests of their own verb.
+service-credentials create|rotate --service worker-operator	src/dev_health_ops/service_credentials.py create/rotate minted svc_worker_ tokens (src@a4847c5e)	service worker-operator is retired (its svc_worker_* tokens are no longer issued): create and rotate are refused; list and revoke still work	CHAOS-10044

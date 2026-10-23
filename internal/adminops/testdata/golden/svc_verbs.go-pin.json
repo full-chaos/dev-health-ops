@@ -1,0 +1,17 @@
+{
+  "step 05 exit": "1",
+  "step 05 stderr": "service worker-operator is retired (its svc_worker_* tokens are no longer issued): create and rotate are refused; list and revoke still work",
+  "step 05 stdout": "",
+  "step 06 exit": "1",
+  "step 06 stderr": "service worker-operator is retired (its svc_worker_* tokens are no longer issued): create and rotate are refused; list and revoke still work",
+  "step 06 stdout": "",
+  "step 07 exit": "1",
+  "step 07 stderr": "service worker-operator is retired (its svc_worker_* tokens are no longer issued): create and rotate are refused; list and revoke still work",
+  "step 07 stdout": "",
+  "step 53 exit": "1",
+  "step 53 stderr": "service worker-operator is retired (its svc_worker_* tokens are no longer issued): create and rotate are refused; list and revoke still work",
+  "step 53 stdout": "",
+  "step 54 exit": "1",
+  "step 54 stderr": "service worker-operator is retired (its svc_worker_* tokens are no longer issued): create and rotate are refused; list and revoke still work",
+  "step 54 stdout": ""
+}

@@ -19,6 +19,9 @@ import (
 // CheckValkey is the readiness check of the shared rate-limit store.
 const CheckValkey = "valkey"
 
+// metricsSourceRateLimit names the store-error counter's source on /metrics.
+const metricsSourceRateLimit = "auth_rate_limit_store"
+
 // valkeyClientName labels this service's connection in CLIENT LIST.
 const valkeyClientName = "auth-service"
 
@@ -115,6 +118,11 @@ func limitStore(
 		}
 		return nil
 	}); err != nil {
+		return nil, nil, err
+	}
+	// The store-error counter is process-wide; only go-api registered it, so
+	// without this it counted into nothing on this service's /metrics.
+	if err := registry.RegisterMetrics(metricsSourceRateLimit, httpapi.RateLimitStoreErrors); err != nil {
 		return nil, nil, err
 	}
 	limits, err := authapi.NewLimits(store, cfg.Session.AccessSecret.Reveal())

@@ -9,6 +9,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
 
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/rowview"
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 	"github.com/full-chaos/dev-health-ops/internal/teamownership"
 
@@ -155,7 +156,8 @@ func (loader *RecommendationsLoader) loadWIPThroughput(
                 FROM work_item_metrics_daily
                 WHERE team_id = {team_id:String}
                   AND day >= {start:Date} AND day < {end:Date}` + loader.orgClause() + `
-                GROUP BY day, provider, work_scope_id` + measuredKeyHaving("work_item_metrics_daily") + `
+                  AND ` + rowview.OrgPredicate("work_item_metrics_daily", "") + `
+                GROUP BY day, provider, work_scope_id, row_view` + measuredKeyHaving("work_item_metrics_daily") + `
             )
             GROUP BY day ORDER BY day
         `
@@ -419,7 +421,8 @@ func (loader *RecommendationsLoader) loadSustainabilitySignals(
                 FROM work_item_metrics_daily
                 WHERE team_id = {team_id:String}
                   AND day >= {start:Date} AND day < {end:Date}` + loader.orgClause() + `
-                GROUP BY day, provider, work_scope_id` + measuredKeyHaving("work_item_metrics_daily") + `
+                  AND ` + rowview.OrgPredicate("work_item_metrics_daily", "") + `
+                GROUP BY day, provider, work_scope_id, row_view` + measuredKeyHaving("work_item_metrics_daily") + `
             )
             GROUP BY day ORDER BY day
         `

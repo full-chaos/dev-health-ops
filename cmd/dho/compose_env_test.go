@@ -55,6 +55,7 @@ var verbServices = map[string]string{
 	"envelope-keys-init":               "`dho mint envelope-keys`: writes key files; only the DSN groups are checked",
 	"auth-keys-init":                   "`dho mint envelope-keys`: writes the auth signing key files; only the DSN groups are checked",
 	"auth-migrate":                     "`auth-migrate`: a standalone one-shot binary that opens the database at once; its own DSN and role settings are not measured here",
+	"auth-grants":                      "`auth-migrate grants`: the same standalone binary with the grants verb; opens the database at once; its own DSN and role settings are not measured here",
 	"go-sync-dispatch-route-activate":  "`dho workers routes apply`: opens the database at once; only the DSN groups are checked",
 	"go-sync-finalize-route-activate":  "`dho workers routes apply`: opens the database at once; only the DSN groups are checked",
 	"go-sync-post-route-activate":      "`dho workers routes apply`: opens the database at once; only the DSN groups are checked",
@@ -367,7 +368,7 @@ func TestComposeEnvGuardSeesPartSetCoordinatorGroup(t *testing.T) {
 	if start < 0 {
 		t.Fatal("go-stream-ingest not found")
 	}
-	const merge = "<<: [*go-worker-no-coordinator, *go-worker-env-base]"
+	const merge = "<<: [*go-worker-no-coordinator, *go-worker-no-queue, *go-worker-env-base]"
 	at := strings.Index(text[start:], merge)
 	if at < 0 {
 		t.Fatal("the plant needs go-stream-ingest to blank its coordinator group through the merge: it has changed")

@@ -124,7 +124,7 @@ func TestCheckPostgresAnswersFromTheRecordedRevisions(t *testing.T) {
 		{"known head", revisionRows("0152"), "ok"},
 		{"minimum", revisionRows("0075"), "ok"},
 		{"unknown newer head", revisionRows("0999"), "ok"},
-		{"unknown newer head beside the cutover branch head", revisionRows("0066", "0153"), "ok"},
+		{"unknown newer head beside the cutover branch head", revisionRows("0066", "9999"), "ok"},
 		{"below the minimum", revisionRows("0074"), "down"},
 		{"cutover branch head alone", revisionRows("0066"), "down"},
 		{"unparseable", revisionRows("abcd"), "down"},

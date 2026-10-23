@@ -313,6 +313,7 @@ var scopeValidators = []string{"func (s *Scope) OrgScope", "func (s *Scope) Impe
 
 func TestEveryAPIListenerRowNamesTheScopeMiddlewaresAsReachableValidators(t *testing.T) {
 	checked := 0
+	seenExempt := map[string]bool{}
 	for _, row := range loadGoAPIRows(t) {
 		key := rowKey(t, row)
 		reachable, _ := row["reachable_validators"].([]any)
@@ -320,6 +321,20 @@ func TestEveryAPIListenerRowNamesTheScopeMiddlewaresAsReachableValidators(t *tes
 			if len(reachable) != 0 {
 				t.Errorf("%s: a listener without the scope middlewares lists %d reachable validators", key, len(reachable))
 			}
+			continue
+		}
+		if wantClass, exempt := signatureOnlyRoutes[strings.Replace(key, "@api", "", 1)]; exempt {
+			if len(reachable) != 0 {
+				t.Errorf("%s skips the scope middlewares but lists %d reachable validators", key, len(reachable))
+			}
+			classes, _ := row["accepted_credential_classes"].([]any)
+			if len(classes) != 1 || classes[0] != wantClass {
+				t.Errorf("%s: signature-only route accepts %v, want exactly [%s]", key, classes, wantClass)
+			}
+			if row["classification"] != "protected" {
+				t.Errorf("%s: signature-only route is not classified protected", key)
+			}
+			seenExempt[key] = true
 			continue
 		}
 		notes := map[string]bool{}
@@ -339,6 +354,11 @@ func TestEveryAPIListenerRowNamesTheScopeMiddlewaresAsReachableValidators(t *tes
 		}
 		checked++
 	}
+	for route := range signatureOnlyRoutes {
+		if !seenExempt[route+"@api"] {
+			t.Errorf("signature-only route %q has no api-listener row", route)
+		}
+	}
 	if checked < 200 {
 		t.Fatalf("only %d api-listener rows were checked", checked)
 	}
@@ -356,7 +376,7 @@ func TestTheScopeMiddlewaresAreWrappedAroundTheAPIListener(t *testing.T) {
 	if !strings.Contains(text, "protected.scope.OrgScope, protected.scope.Impersonation}") {
 		t.Fatal("the api listener no longer installs OrgScope and Impersonation: the rows' reachable validators are stale")
 	}
-	if !strings.Contains(text, "NewServer(cfg, logger, Routes(deps, logger), scope...)") {
+	if !strings.Contains(text, "NewServerWithGate(cfg, logger, Routes(deps, logger), gate, scope...)") {
 		t.Fatal("the api listener is no longer built with the scope middlewares")
 	}
 	for _, listener := range []string{"func NewInternalServer", "func NewEdgeServer"} {

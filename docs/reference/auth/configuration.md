@@ -58,6 +58,8 @@ and `/readyz` fails closed, naming the check. See the
 | (none, secret) | `AUTH_SESSION_SUCCESSOR_KEY` or `AUTH_SESSION_SUCCESSOR_KEY_FILE` | unset | 32 bytes, base64url without padding. Derives the rotated refresh credential that a 30 s grace replay returns again. |
 | `--jwt-issuer` | `AUTH_JWT_ISSUER` | `dev-health-ops` | `iss` of the access token; must equal go-api's `JWT_ISSUER`. |
 | `--jwt-audience` | `AUTH_JWT_AUDIENCE` | `dev-health-api` | `aud` of the access token; must equal go-api's `JWT_AUDIENCE`. |
+| `--social-link-routes` | `AUTH_SOCIAL_LINK_ROUTES` | `false` | `true` mounts the bearer-only social link and unlink routes (`POST /v1/identities/social`, `DELETE /v1/identities/social/{id}`); any other value than `true` or `false` fails startup, and `true` needs the session secrets. |
+| (none) | `AUTH_ACCESS_TOKEN_CLASS` | `hs256_compat` | The one class of access token this service mints: `hs256_compat` or `eddsa` (exact match; any other value fails startup). `eddsa` needs `AUTH_TOKEN_ISSUER_URL` (the `iss`, byte for byte), a signing key, and `AUTH_JWT_AUDIENCE` of `dev-health-api` or `auth-service`; tokens last 60 minutes and carry the access-token.v1 claims only. The session routes still verify HS256 tokens only. |
 | `--version` | | | Prints build metadata as JSON. |
 | `--healthcheck` | | | Probes this deployment's own operator `/readyz` over loopback; exit 0 only on HTTP 200. For container healthchecks. |
 

@@ -142,12 +142,15 @@ on:
       # alone must run go-quality.
       - 'internal/httpguard/*.tsv'
       - 'internal/cigates/affected/*.tsv'
+      - 'internal/cigates/chpin/*.tsv'
+      - 'internal/cigates/frozengoldens/*.tsv'
       - 'internal/cigates/outboundtransport/*.tsv'
       - 'ci/check_venue_oracle_registry.sh'
       - 'ci/lib/venue_oracle_registry.sh'
       - 'ci/check_go_containers.sh'
       - 'ci/check_auth_compose.sh'
       - 'ci/auth_compose_proof.override.yml'
+      - 'ci/go_workers_compose_proof.override.yml'
       - 'ci/check_auth_web_proxy_compose.sh'
       - 'ci/auth_webproof_compose.override.yml'
       - 'ci/auth_webproof_smtp_sink.mjs'
@@ -209,6 +212,7 @@ on:
       # executed or read by internal/cigates (CHAOS-10178): the diff producer, the affected-package selector, the venue
       # run reader and the venue workflow whose step names that reader filters on
       - 'ci/go_relevant_diff.sh'
+      - 'ci/integration_pr_scope.sh'
       - 'ci/last-venue-run.sh'
       - '.github/workflows/venue-oracles.yml'
       # the workflow-shape guards (CHAOS-10177) read EVERY workflow file, the builder-image pin reader and its table,
@@ -362,12 +366,15 @@ on:
       # alone must run go-quality.
       - 'internal/httpguard/*.tsv'
       - 'internal/cigates/affected/*.tsv'
+      - 'internal/cigates/chpin/*.tsv'
+      - 'internal/cigates/frozengoldens/*.tsv'
       - 'internal/cigates/outboundtransport/*.tsv'
       - 'ci/check_venue_oracle_registry.sh'
       - 'ci/lib/venue_oracle_registry.sh'
       - 'ci/check_go_containers.sh'
       - 'ci/check_auth_compose.sh'
       - 'ci/auth_compose_proof.override.yml'
+      - 'ci/go_workers_compose_proof.override.yml'
       - 'ci/check_auth_web_proxy_compose.sh'
       - 'ci/auth_webproof_compose.override.yml'
       - 'ci/auth_webproof_smtp_sink.mjs'
@@ -429,6 +436,7 @@ on:
       # executed or read by internal/cigates (CHAOS-10178): the diff producer, the affected-package selector, the venue
       # run reader and the venue workflow whose step names that reader filters on
       - 'ci/go_relevant_diff.sh'
+      - 'ci/integration_pr_scope.sh'
       - 'ci/last-venue-run.sh'
       - '.github/workflows/venue-oracles.yml'
       # the workflow-shape guards (CHAOS-10177) read EVERY workflow file, the builder-image pin reader and its table,
@@ -677,12 +685,18 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           EVENT_NAME: ${{ github.event_name }}
+          PR_LABELS_JSON: ${{ toJSON(github.event.pull_request.labels.*.name) }}
         run: |
           set -uo pipefail
           out="${RUNNER_TEMP}/affected.txt"
           full() { printf 'FULL %s\n' "$1" > "${out}"; echo "::warning title=INTEGRATION SELECTION FELL BACK TO THE FULL SUITE::$1"; }
           if ! bash ci/go_relevant_diff.sh > "${RUNNER_TEMP}/changed.txt"; then
             full "could not compute the changed-file list"
+          # CHAOS-10700: a pull request runs shards only for a trigger path or the ci:integration label; main push runs all.
+          # A label change starts no run (no `labeled` trigger): it applies at the next push. Any script failure (bad labels JSON, malformed list) falls through to the planner.
+          elif scope="$(PR_LABELS_JSON="${PR_LABELS_JSON}" bash ci/integration_pr_scope.sh "${RUNNER_TEMP}/changed.txt")" && [ "${scope%% *}" = skip ]; then
+            printf "NONE\n" > "${out}"
+            echo "::notice title=INTEGRATION SHARDS SKIPPED ON THIS PULL REQUEST::${scope#skip } (they run on the main push; label ci:integration runs them here)"
           elif ! bash ci/check_go.sh integration-coverage | sed -n 's/^  RUN  //p' > "${RUNNER_TEMP}/keys.txt" \
             || [ ! -s "${RUNNER_TEMP}/keys.txt" ]; then
             full "could not list the integration packages"

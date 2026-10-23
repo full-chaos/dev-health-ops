@@ -192,8 +192,9 @@ func blockingEnds(sourceID, targetID, relationshipType, semanticsVersion string,
 //     "depends on #12" are in the BLOCKED item's text (the row's target,
 //     the normalizer turns the row around), "blocks #12" is in the
 //     blocker's text (the row's source). GitLab's description keywords
-//     store the keyword: "blocked by" is in the target's text, "blocking"
-//     in the source's.
+//     store the keyword behind the text tier ("explicit_text:blocked by"; rows
+//     stored before CHAOS-8736 hold the bare keyword, read the same):
+//     "blocked by" is in the target's text, "blocking" in the source's.
 //   - NOT DERIVABLE: gitlab's raw value "blocks" is both the native link
 //     type and a description keyword, and a row of unknown shape says
 //     nothing. Both items are then taken as writers. That ends the relation
@@ -219,7 +220,7 @@ func RelationWriters(sourceID, targetID, raw string) (source, target bool) {
 			return true, false
 		}
 	case "gitlab":
-		switch raw {
+		switch strings.TrimPrefix(raw, "explicit_text:") {
 		case "blocked by":
 			return false, true
 		case "blocking":

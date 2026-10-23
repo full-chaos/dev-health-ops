@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fullchaos.dev/contracts/auth/v1/jsonschema/action-catalog.v1.schema.json",
+  "title": "Auth Control Plane action-catalog (v1)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "catalog_version",
+    "description",
+    "actions"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "actions.v1"
+    },
+    "catalog_version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "description": {
+      "type": "string"
+    },
+    "actions": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "action",
+          "scope",
+          "resource_kind",
+          "risk_class",
+          "cache_class"
+        ],
+        "properties": {
+          "action": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+$"
+          },
+          "scope": {
+            "enum": [
+              "platform",
+              "organization"
+            ]
+          },
+          "resource_kind": {
+            "enum": [
+              "platform",
+              "organization"
+            ]
+          },
+          "risk_class": {
+            "enum": [
+              "low",
+              "high"
+            ]
+          },
+          "cache_class": {
+            "enum": [
+              "none",
+              "decision_bound",
+              "resource_revision_bound"
+            ]
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "risk_class": {
+                  "const": "high"
+                }
+              },
+              "required": [
+                "risk_class"
+              ]
+            },
+            "then": {
+              "properties": {
+                "cache_class": {
+                  "const": "none"
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  }
+}

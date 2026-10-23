@@ -289,6 +289,288 @@
           }
         }
       }
+    },
+    "/v1/identities/social": {
+      "post": {
+        "operationId": "linkSocialIdentity",
+        "summary": "Link a social provider identity to the bearer's principal",
+        "security": [
+          {
+            "opsAccessToken": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "provider",
+                  "provider_access_token"
+                ],
+                "properties": {
+                  "provider": {
+                    "enum": [
+                      "github",
+                      "gitlab",
+                      "google"
+                    ]
+                  },
+                  "provider_access_token": {
+                    "type": "string",
+                    "description": "The provider's access token; verified with the provider before any link is made."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "linked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "id",
+                    "provider"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "provider": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request body could not be read (a transport failure within the size limit); answered by the transport before the route, in its own error envelope, transport-error.v1 (not error.v1).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransportError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "error.v1 with an auth-outcome.v1 reason code",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "go-api shaped refusal, {\"detail\": ...}; the reason is in the audit row and the log, never in the body.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "go-api shaped refusal, {\"detail\": ...}; the reason is in the audit row and the log, never in the body.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "go-api shaped refusal, {\"detail\": ...}; the reason is in the audit row and the log, never in the body.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The request body is over the configured limit; answered by the transport before the route, in its own error envelope, transport-error.v1 (not error.v1).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransportError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "go-api shaped refusal, {\"detail\": ...}; the reason is in the audit row and the log, never in the body.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The route's rate bucket is spent; answered by the transport before the route, in its own error envelope, transport-error.v1 (not error.v1), with Retry-After.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransportError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "go-api shaped {\"detail\": \"Internal Server Error\"}: the provider or a store could not be reached; nothing is written.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "error.v1: a store or key failure (retry_after_seconds)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "The provider access token in the body is verified with the provider (issued to this service's OAuth client, email verified) and the link is bound to the bearer's principal. A sign-in older than the freshness window is refused (403); an identity bound to another principal is a conflict (409) and nothing is written."
+      }
+    },
+    "/v1/identities/social/{id}": {
+      "delete": {
+        "operationId": "unlinkSocialIdentity",
+        "summary": "Remove one linked social identity of the bearer's principal; the last sign-in method stays",
+        "security": [
+          {
+            "opsAccessToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "unlinked"
+          },
+          "400": {
+            "description": "The request body could not be read (a transport failure within the size limit); answered by the transport before the route, in its own error envelope, transport-error.v1 (not error.v1).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransportError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "error.v1 with an auth-outcome.v1 reason code",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "go-api shaped refusal, {\"detail\": ...}; the reason is in the audit row and the log, never in the body.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "go-api shaped refusal, {\"detail\": ...}; the reason is in the audit row and the log, never in the body.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "go-api shaped refusal, {\"detail\": ...}; the reason is in the audit row and the log, never in the body.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The request body is over the configured limit; answered by the transport before the route, in its own error envelope, transport-error.v1 (not error.v1).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransportError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The route's rate bucket is spent; answered by the transport before the route, in its own error envelope, transport-error.v1 (not error.v1), with Retry-After.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransportError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "go-api shaped {\"detail\": \"Internal Server Error\"}: the provider or a store could not be reached; nothing is written.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "error.v1: a store or key failure (retry_after_seconds)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "Removes an identity of the bearer's own principal only (404 for any other id); the last sign-in method is never removed (409). A sign-in older than the freshness window is refused (403)."
+      }
     }
   },
   "components": {
@@ -360,6 +642,33 @@
       },
       "TransportError": {
         "$ref": "../jsonschema/transport-error.v1.schema.json"
+      },
+      "ActionCatalog": {
+        "$ref": "../jsonschema/action-catalog.v1.schema.json"
+      },
+      "RoleCatalog": {
+        "$ref": "../jsonschema/role-catalog.v1.schema.json"
+      },
+      "Organization": {
+        "$ref": "../jsonschema/organization.v1.schema.json"
+      },
+      "OrganizationCreateRequest": {
+        "$ref": "../jsonschema/organization-create-request.v1.schema.json"
+      },
+      "Membership": {
+        "$ref": "../jsonschema/membership.v1.schema.json"
+      },
+      "MembershipUpdateRequest": {
+        "$ref": "../jsonschema/membership-update-request.v1.schema.json"
+      },
+      "Invite": {
+        "$ref": "../jsonschema/invite.v1.schema.json"
+      },
+      "InviteCreateRequest": {
+        "$ref": "../jsonschema/invite-create-request.v1.schema.json"
+      },
+      "InviteAcceptRequest": {
+        "$ref": "../jsonschema/invite-accept-request.v1.schema.json"
       }
     }
   }

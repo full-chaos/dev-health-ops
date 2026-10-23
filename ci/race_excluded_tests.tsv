@@ -48,3 +48,5 @@ internal/gqlgenguard	TestGenerateOnACopyOfThisRepositoryProducesTheRecordedDiges
 internal/httpguard	TestEveryConcreteTypeThatBecomesAnHTTPDoerIsGuardedOrWrapsTheGuardedDoer
 internal/httpguard	TestEveryHTTPClientSiteIsClassified
 internal/httpguard	TestTheScopePinIsAppliedToTheRealWalk
+# CHAOS-10654: go/types race golang/go#81122 (fix proposed in golang/go#81871); drop this row when the toolchain carries the fix.
+internal/storage/clickhouse	TestEveryServerSideParameterHasAProvenType

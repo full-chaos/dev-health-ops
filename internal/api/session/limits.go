@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"net/http"
+	"net/netip"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
@@ -24,6 +25,11 @@ var (
 	verifyLimit = httpapi.Limit{ID: "auth_verify", Count: 10, Window: time.Hour}
 	resendLimit = httpapi.Limit{ID: "auth_resend_verification", Count: 3, Window: time.Hour}
 	forgotLimit = httpapi.Limit{ID: "auth_forgot_password", Count: 3, Window: time.Hour}
+	// The per-client-address aggregate next to the two per-(address, e-mail) budgets above: one address, however many
+	// e-mail addresses it names, may start this many resend or forgot-password mails an hour (the auth-service cap, same
+	// value and reason). Keyed by addrBucketKey: no e-mail in the key.
+	resendAddrLimit = httpapi.Limit{ID: "auth_resend_verification_addr", Count: 20, Window: time.Hour}
+	forgotAddrLimit = httpapi.Limit{ID: "auth_forgot_password_addr", Count: 20, Window: time.Hour}
 	// change-password (CHAOS-9513) has no Python ancestor: 5/hour per signed-in
 	// user, the admin set-password route's budget.
 	changePasswordLimit = httpapi.Limit{ID: "auth_change_password", Count: 5, Window: time.Hour}
@@ -56,6 +62,24 @@ type (
 type loginInput struct {
 	email, password string
 	orgID           *string
+}
+
+// addrBucketKey is the client address of the aggregate limits: ratelimit.ForwardedIP (the TCP peer; a forwarded client
+// only from a trusted proxy, rightmost untrusted hop), an IPv6 address reduced to its /64 so one network cannot rotate
+// through its 2^64 addresses, an IPv4-mapped IPv6 address as its IPv4 form.
+func addrBucketKey(r *http.Request) string {
+	ip := ratelimit.ForwardedIP(r)
+	addr, err := netip.ParseAddr(ip)
+	if err != nil {
+		return ip
+	}
+	addr = addr.Unmap()
+	if addr.Is6() {
+		if prefix, err := addr.Prefix(64); err == nil {
+			return prefix.String()
+		}
+	}
+	return addr.String()
 }
 
 // forwardedIPKey is get_forwarded_ip, the key of the login and refresh limits.

@@ -21,6 +21,64 @@ dev-health-api.
 {{- if and .Values.goApi.internal.enabled (or (eq (int .Values.goApi.internal.port) (int .Values.goApi.port)) (eq (int .Values.goApi.internal.port) (int .Values.goApi.operatorPort))) }}
 {{- fail "goApi.internal.port must differ from goApi.port and goApi.operatorPort: each listener has its own port" }}
 {{- end }}
+{{- /*
+CHAOS-10743: the request-port fence. goApi.networkPolicy.enabled closes goApi.port and goApi.networkPolicy.extraFencedPorts
+(the billing edge, set by the deploy chart) to every source but the ingress controller pods and
+goApi.networkPolicy.allowedFrom, inside the go-api-internal policy below. $closed holds every port that leaves the open
+ranges (the fenced ports and the internal port), zero-padded so a string sort is a numeric sort.
+*/}}
+{{- $fenceCfg := .Values.goApi.networkPolicy }}
+{{- $fence := $fenceCfg.enabled }}
+{{- $fenced := list }}
+{{- if $fence }}
+{{- if not .Values.goApi.internal.enabled }}
+{{- fail "goApi.networkPolicy.enabled requires goApi.internal.enabled: the fence lives in the go-api-internal NetworkPolicy, the one policy that selects the go-api pods" }}
+{{- end }}
+{{- if eq (int .Values.goApi.port) (int .Values.goApi.operatorPort) }}
+{{- fail "goApi.port must differ from goApi.operatorPort: the operator port (probes, scrapes) is never fenced" }}
+{{- end }}
+{{- if not (toString .Values.networkPolicy.ingressControllerNamespace) }}
+{{- fail "networkPolicy.ingressControllerNamespace is required when goApi.networkPolicy.enabled: it names the namespace of the ingress controller that is admitted to the fenced ports" }}
+{{- end }}
+{{- if not $fenceCfg.ingressControllerPodLabels }}
+{{- fail "goApi.networkPolicy.ingressControllerPodLabels must not be empty: with no pod labels every pod of the controller namespace would reach the fenced ports" }}
+{{- end }}
+{{- $fenced = append $fenced (printf "%05d" (int .Values.goApi.port)) }}
+{{- range $extra := $fenceCfg.extraFencedPorts }}
+{{- if not (has (kindOf $extra) (list "float64" "int64" "int")) }}
+{{- fail (printf "goApi.networkPolicy.extraFencedPorts entry %v is not a number" $extra) }}
+{{- end }}
+{{- if or (ne (float64 $extra) (floor (float64 $extra))) (lt (int $extra) 1) (gt (int $extra) 65535) }}
+{{- fail (printf "goApi.networkPolicy.extraFencedPorts entry %v is not a TCP port (1-65535)" $extra) }}
+{{- end }}
+{{- if or (eq (int $extra) (int $.Values.goApi.operatorPort)) (eq (int $extra) (int $.Values.goApi.internal.port)) }}
+{{- fail (printf "goApi.networkPolicy.extraFencedPorts entry %v is the operator or internal port: the operator port is never fenced and the internal port has its own rule" $extra) }}
+{{- end }}
+{{- $fenced = append $fenced (printf "%05d" (int $extra)) }}
+{{- end }}
+{{- range $peer := $fenceCfg.allowedFrom }}
+{{- if not (kindIs "map" $peer) }}
+{{- fail "goApi.networkPolicy.allowedFrom entries must be objects with podSelector and/or namespaceSelector" }}
+{{- end }}
+{{- range $key := keys $peer }}
+{{- if not (has $key (list "namespaceSelector" "podSelector")) }}
+{{- fail (printf "goApi.networkPolicy.allowedFrom entries take only namespaceSelector and podSelector, not %q: an ipBlock or any other peer is refused" $key) }}
+{{- end }}
+{{- end }}
+{{- if not (or (hasKey $peer "namespaceSelector") (hasKey $peer "podSelector")) }}
+{{- fail "goApi.networkPolicy.allowedFrom entries need a podSelector or a namespaceSelector: an empty entry names nobody" }}
+{{- end }}
+{{- range $name := list "namespaceSelector" "podSelector" }}
+{{- if hasKey $peer $name }}
+{{- $selector := index $peer $name }}
+{{- if not (and (kindIs "map" $selector) (or (and $selector.matchLabels (gt (len $selector.matchLabels) 0)) (and $selector.matchExpressions (gt (len $selector.matchExpressions) 0)))) }}
+{{- fail (printf "goApi.networkPolicy.allowedFrom %s needs a non-empty matchLabels or matchExpressions: an empty selector admits every pod or namespace" $name) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- $closed := append $fenced (printf "%05d" (int .Values.goApi.internal.port)) }}
 {{- if .Values.goApi.internal.enabled }}
 {{- range .Values.goApi.extraArgs }}
 {{- if regexMatch "^--?api-internal-addr" . }}{{- fail "goApi.extraArgs must not set --api-internal-addr: the chart owns the internal listener (goApi.internal.port); a second flag moves it onto a port the internal Service and NetworkPolicy do not gate" }}{{- end }}
@@ -47,6 +105,52 @@ route (its own default is off). The URL is this release's auth-service.
 {{- end }}
 {{- if and $proxyOn (not $proxy.sessions) }}
 {{- fail "goApi.authProxy.sessions must be on when any other goApi.authProxy flag is: the refresh credentials those flows issue are rotated only by the sessions owner" }}
+{{- end }}
+{{- if and $proxy.sessions .Values.authService.enabled }}
+{{- $rd := .Values.authService.migrate.sessionReaders }}
+{{- $missing := list }}
+{{- if not (trim (toString $rd.goApi)) }}{{- $missing = append $missing "authService.migrate.sessionReaders.goApi (go-api's API_DATABASE_ROLE)" }}{{- end }}
+{{- if not (trim (toString $rd.queryApi)) }}{{- $missing = append $missing "authService.migrate.sessionReaders.queryApi (query-api's registry login)" }}{{- end }}
+{{- if $missing }}
+{{- fail (printf "goApi.authProxy.sessions needs the session-reader roles of both services: unset %s" (join ", " $missing)) }}
+{{- end }}
+{{- $miss := list }}
+{{- if not (trim (toString .Values.authService.sessionKeys.successor.secretName)) }}{{- $miss = append $miss "authService.sessionKeys.successor.secretName" }}{{- end }}
+{{- if not (trim (toString .Values.authService.sessionKeys.successor.secretKey)) }}{{- $miss = append $miss "authService.sessionKeys.successor.secretKey" }}{{- end }}
+{{- if $miss }}
+{{- fail (printf "goApi.authProxy.sessions needs the auth-service session keys: unset %s (the access-token key is go-api's JWT_SECRET_KEY Secret)" (join ", " $miss)) }}
+{{- end }}
+{{- end }}
+{{- /*
+CHAOS-10718: the old go-api pod keeps serving while its endpoint is removed. kubelet sends SIGTERM and
+the endpoint removal in parallel, and the pod closes its listener at SIGTERM, so a few new connections
+reached a closed port at every rollout (status 000 in the CHAOS-10407 rehearsal). preStop runs BEFORE
+SIGTERM and counts inside terminationGracePeriodSeconds, so the grace must cover the sleep, the
+shutdown timeout the chart passes (--shutdown-timeout, below) and 5 s. The image is distroless (no
+shell, no sleep binary): the native sleep action, a Kubernetes >= 1.30 feature (on by default).
+*/}}
+{{- $drain := .Values.goApi.drain }}
+{{- /* Bounded BEFORE any arithmetic: Sprig's add wraps near int64 max, and dho api refuses a shutdown timeout above 3 h. */}}
+{{- $sleepRaw := toString $drain.preStopSeconds }}
+{{- if not (regexMatch "^[0-9]{1,3}$" $sleepRaw) }}{{- fail (printf "goApi.drain.preStopSeconds must be whole seconds from 0 to 600 (0 renders no drain hook), got %q" $sleepRaw) }}{{- end }}
+{{- if gt (int $sleepRaw) 600 }}{{- fail (printf "goApi.drain.preStopSeconds must be whole seconds from 0 to 600 (0 renders no drain hook), got %q" $sleepRaw) }}{{- end }}
+{{- $shutdownRaw := toString .Values.goApi.shutdownTimeout }}
+{{- if not (regexMatch "^[1-9][0-9]{0,4}s$" $shutdownRaw) }}{{- fail (printf "goApi.shutdownTimeout must be whole seconds from 1s to 10800s (dho api refuses more than 3 h), got %q" $shutdownRaw) }}{{- end }}
+{{- if gt (int (trimSuffix "s" $shutdownRaw)) 10800 }}{{- fail (printf "goApi.shutdownTimeout must be whole seconds from 1s to 10800s (dho api refuses more than 3 h), got %q" $shutdownRaw) }}{{- end }}
+{{- $graceRaw := toString .Values.goApi.terminationGracePeriodSeconds }}
+{{- if not (regexMatch "^[1-9][0-9]{0,5}$" $graceRaw) }}{{- fail (printf "goApi.terminationGracePeriodSeconds must be whole seconds from 1 to 86400, got %q" $graceRaw) }}{{- end }}
+{{- if gt (int $graceRaw) 86400 }}{{- fail (printf "goApi.terminationGracePeriodSeconds must be whole seconds from 1 to 86400, got %q" $graceRaw) }}{{- end }}
+{{- $sleep := int $sleepRaw }}
+{{- $shutdown := int (trimSuffix "s" $shutdownRaw) }}
+{{- $minGrace := add $sleep $shutdown 5 }}
+{{- if lt (int $graceRaw) $minGrace }}
+{{- fail (printf "goApi.terminationGracePeriodSeconds=%s is below goApi.drain.preStopSeconds (%d) + goApi.shutdownTimeout (%d) + 5 = %d: kubelet counts the preStop hook inside the grace period and kills the pod when it ends, so the ordered shutdown would be cut" $graceRaw $sleep $shutdown $minGrace) }}
+{{- end }}
+{{- range .Values.goApi.extraArgs }}
+{{- if regexMatch "^--?shutdown-timeout" . }}{{- fail "goApi.extraArgs must not set --shutdown-timeout: goApi.shutdownTimeout owns it, and the grace-period guard reads that value" }}{{- end }}
+{{- end }}
+{{- range .Values.goApi.extraEnv }}
+{{- if eq .name "DEV_HEALTH_SHUTDOWN_TIMEOUT" }}{{- fail "goApi.extraEnv must not set DEV_HEALTH_SHUTDOWN_TIMEOUT: goApi.shutdownTimeout owns it, and the grace-period guard reads that value" }}{{- end }}
 {{- end }}
 {{- range .Values.goApi.extraEnv }}
 {{- if hasPrefix "AUTH_PROXY_" .name }}{{- fail "goApi.extraEnv must not set AUTH_PROXY_*: use goApi.authProxy, which the chart checks" }}{{- end }}
@@ -82,15 +186,23 @@ spec:
     spec:
       {{- include "dev-health.imagePullSecrets" . | nindent 6 }}
       serviceAccountName: {{ include "dev-health.serviceAccountName" . }}
+      terminationGracePeriodSeconds: {{ $graceRaw }}
       securityContext: {runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, seccompProfile: {type: RuntimeDefault}}
       containers:
         - name: go-api
           image: {{ include "dev-health.goApiImage" . }}
           imagePullPolicy: {{ .Values.goApi.image.pullPolicy }}
+          {{- if gt $sleep 0 }}
+          lifecycle:
+            preStop:
+              sleep:
+                seconds: {{ $sleep }}
+          {{- end }}
           args:
             - api
             - {{ printf "--api-addr=:%v" .Values.goApi.port | quote }}
             - {{ printf "--http-addr=:%v" .Values.goApi.operatorPort | quote }}
+            - {{ printf "--shutdown-timeout=%s" $shutdownRaw | quote }}
             {{- if .Values.goApi.internal.enabled }}
             - {{ printf "--api-internal-addr=:%v" .Values.goApi.internal.port | quote }}
             {{- end }}
@@ -251,18 +363,51 @@ spec:
     # with, e.g. the billing edge). It is written as the two ranges around the internal port
     # (endPort), not derived from the args/env the process gets: a derived list can miss a
     # listener configured a way the template does not parse and silently deny it.
+    {{- /*
+    CHAOS-10743 (goApi.networkPolicy.enabled): the request ports (goApi.port and
+    goApi.networkPolicy.extraFencedPorts) leave the open ranges too, so the ranges become the gaps
+    around every closed port, and the next rule admits them from the ingress controller pods and
+    goApi.networkPolicy.allowedFrom only. NetworkPolicies are additive, so the ports have to leave
+    THIS policy's open ranges: a second, narrower policy could not close what this one opens. The
+    operator port (probes, scrapes) is never fenced. Fence off: the render is the two ranges as before.
+    */}}
     - ports:
-        {{- $ip := int .Values.goApi.internal.port }}
-        {{- if gt $ip 1 }}
+        {{- $prev := 0 }}
+        {{- range $padded := $closed | uniq | sortAlpha }}
+        {{- $port := atoi (regexReplaceAll "^0+" $padded "") }}
+        {{- if gt $port (add1 $prev) }}
         - protocol: TCP
-          port: 1
-          endPort: {{ sub $ip 1 }}
+          port: {{ add1 $prev }}
+          {{- if gt $port (add (add1 $prev) 1) }}
+          endPort: {{ sub $port 1 }}
+          {{- end }}
         {{- end }}
-        {{- if lt $ip 65535 }}
+        {{- $prev = $port }}
+        {{- end }}
+        {{- if lt $prev 65535 }}
         - protocol: TCP
-          port: {{ add $ip 1 }}
+          port: {{ add1 $prev }}
+          {{- if lt (add1 $prev) 65535 }}
           endPort: 65535
+          {{- end }}
         {{- end }}
+    {{- if $fence }}
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $.Values.networkPolicy.ingressControllerNamespace | quote }}
+          podSelector:
+            matchLabels:
+              {{- toYaml $fenceCfg.ingressControllerPodLabels | nindent 14 }}
+        {{- range $fenceCfg.allowedFrom }}
+        - {{- toYaml (pick . "namespaceSelector" "podSelector") | nindent 10 }}
+        {{- end }}
+      ports:
+        {{- range $fenced | uniq | sortAlpha }}
+        - protocol: TCP
+          port: {{ atoi (regexReplaceAll "^0+" . "") }}
+        {{- end }}
+    {{- end }}
     {{- /*
     The internal listener trusts every peer that can connect, so the network is the boundary:
     only the pod selectors listed in goApi.internal.allowedFrom (acr's api pods, set by the

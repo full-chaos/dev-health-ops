@@ -284,10 +284,6 @@ func (h *handlers) listAuditLogs(w http.ResponseWriter, r *http.Request) {
 		writeInvalidID(w, invalidUserIDDetail)
 		return
 	}
-	if offset < 0 {
-		policy.WriteInternal(w)
-		return
-	}
 	logs, total, err := h.store.auditPage(ctx, conditions, args, limit, offset)
 	if err != nil {
 		h.internalError(ctx, w, "list audit logs", err)
@@ -307,10 +303,6 @@ func (h *handlers) listPlatformAuditLogs(w http.ResponseWriter, r *http.Request)
 	conditions, args, valid := filter.where(nil, nil)
 	if !valid {
 		writeInvalidID(w, invalidUserIDDetail)
-		return
-	}
-	if offset < 0 {
-		policy.WriteInternal(w)
 		return
 	}
 	logs, total, err := h.store.auditPage(ctx, conditions, args, limit, offset)

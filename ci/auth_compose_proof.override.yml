@@ -2,9 +2,19 @@
 # container_name and host port on postgres for the dev stack; a throwaway project name does not
 # isolate either, so the proof drops both and lets compose name the container <project>-postgres-1. The operator
 # port is published on an ephemeral host port; the script reads it back from compose.
+# auth-service pulls in the ops migrate (through auth-grants), so clickhouse and migrate drop their
+# fixed names and host ports the same way. migrate builds a URL from the database password; the proof
+# passes it percent-encoded in AUTH_PROOF_POSTGRES_URI (the auth services use the libpq keyword form).
 services:
   postgres:
     container_name: !reset null
     ports: !reset []
   auth-service:
     ports: !override ["127.0.0.1::8096"]
+  clickhouse:
+    container_name: !reset null
+    ports: !reset []
+  migrate:
+    container_name: !reset null
+    environment:
+      POSTGRES_URI: ${AUTH_PROOF_POSTGRES_URI:-postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-postgres}}

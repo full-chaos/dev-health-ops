@@ -43,6 +43,9 @@ spec:
       containers:
         - name: auth-migrate
           image: {{ include "dev-health.authMigrateImage" . }}
+          {{- with include "dev-health.authAckGrantNarrowing" . }}
+          args: [{{ . | quote }}]
+          {{- end }}
           imagePullPolicy: {{ $m.image.pullPolicy }}
           env:
             - name: AUTH_MIGRATION_DATABASE_URI
@@ -51,7 +54,8 @@ spec:
               value: {{ include "dev-health.authDatabaseSchema" . | quote }}
             - name: AUTH_RUNTIME_DATABASE_ROLE
               value: {{ $m.runtimeRole | quote }}
-            {{- with $m.sessionReaderRoles }}
+            {{- $readers := concat $m.sessionReaderRoles (compact (list (trim (toString $m.sessionReaders.goApi)) (trim (toString $m.sessionReaders.queryApi)))) | uniq }}
+            {{- with $readers }}
             - name: AUTH_SESSION_READER_ROLES
               value: {{ join "," . | quote }}
             {{- end }}

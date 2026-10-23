@@ -57,6 +57,39 @@ type fixtureClientD struct {
 	catalogueReposErr   error
 	catalogueStatements []string
 	catalogueBindings   [][]clickhouse.Binding
+
+	// The linked-pull-request read (CHAOS-10608, D6167) is Go-only too and is answered and recorded apart from the
+	// detector reads. With linkedPRs nil every pull request asked for is linked, so the recorded Python cases keep
+	// every chip; a test sets linkedPRs (non-nil, possibly empty) to name the linked ones.
+	linkedPRs        []string
+	linkedStatements []string
+	linkedBindings   [][]clickhouse.Binding
+}
+
+func (f *fixtureClientD) linkedQuery(st string, b []clickhouse.Binding) (clickhouse.RowScanner, error) {
+	f.linkedStatements = append(f.linkedStatements, st)
+	f.linkedBindings = append(f.linkedBindings, b)
+	var asked []string
+	for _, x := range b {
+		if ids, ok := x.Value.([]string); ok && x.Name == "pr_ids" {
+			asked = ids
+		}
+	}
+	linked := f.linkedPRs
+	if linked == nil {
+		linked = asked
+	}
+	known := map[string]bool{}
+	for _, id := range linked {
+		known[id] = true
+	}
+	var rows [][]any
+	for _, id := range asked {
+		if known[id] {
+			rows = append(rows, []any{id})
+		}
+	}
+	return &scriptedRows{rows: rows}, nil
 }
 
 // catalogueNameRead reports which catalogue a statement reads for display names: "teams", "repos" or "".
@@ -123,6 +156,9 @@ func strList(v any) []string {
 func (f *fixtureClientD) Query(_ context.Context, st string, b []clickhouse.Binding) (clickhouse.RowScanner, error) {
 	if which := catalogueNameRead(st); which != "" {
 		return f.catalogueQuery(which, st, b)
+	}
+	if st == linkedPullRequestsStatement {
+		return f.linkedQuery(st, b)
 	}
 	f.statements = append(f.statements, st)
 	f.bindings = append(f.bindings, b)

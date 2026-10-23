@@ -7,3 +7,5 @@ internal/platform/errortext/clause_corpus_test.go:generic-api-key:153
 # Commit-less file:rule:line form so the rows still match after a squash; generic-api-key is suppressed on these two lines only.
 internal/auth/authconfig/config.go:generic-api-key:205
 docs/reference/auth/configuration.md:generic-api-key:61
+# CHAOS-10450: test fixture (a base64 session successor key) in an earlier branch commit; the test now builds it at runtime. Not a credential.
+internal/auth/authruntime/access_class_test.go:generic-api-key:30

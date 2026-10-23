@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"reflect"
 	"strings"
 	"testing"
@@ -183,5 +184,73 @@ func TestConfigureInstallsTheIntakeGate(t *testing.T) {
 	}
 	if last != http.StatusTooManyRequests {
 		t.Fatalf("the 61st delivery to one PagerDuty path = %d, want 429 from the configured server's gate", last)
+	}
+}
+
+type countingCounters struct{ clientHits int }
+
+func (c *countingCounters) Increment(_ context.Context, hit httpapi.Hit) (int64, error) {
+	if hit.Limit.ID == "webhook_intake_client" {
+		c.clientHits++
+	}
+	return 1, nil
+}
+func (*countingCounters) Peek(context.Context, httpapi.Hit) (int64, error) { return 0, nil }
+func (*countingCounters) Backend() string                                  { return "memory" }
+
+// A request that reaches an intake handler is counted exactly once, whatever
+// spelling of the route it used: the gate matches the path the router routes
+// on, so no encoded, double-encoded, dot-segment or slash variant reaches a
+// handler uncounted.
+func TestEveryRequestThatReachesAnIntakeHandlerIsCountedOnce(t *testing.T) {
+	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
+	var reached int
+	routes := webhookintake.Routes(webhookintake.Deps{Logger: quiet})
+	for index := range routes {
+		routes[index].Handler = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			reached++
+			w.WriteHeader(http.StatusNoContent)
+		})
+	}
+	counters := &countingCounters{}
+	server, err := NewServerWithGate(apiTestConfig(), quiet, routes, webhookintake.NewGate(counters, nil, quiet))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := uuid.NewString()
+	targets := []string{
+		"/api/v1/webhooks/github", "/api/v1/webhooks/gitlab", "/api/v1/webhooks/jira", "/api/v1/webhooks/pagerduty/" + id,
+		"/api/v1/webhooks/%67ithub", "/api/v1/webhooks/%2567ithub", "/api/v1/webhooks/%6aira", "/api/v1/webhooks/%67itlab",
+		"/api/v1/webhooks/%70agerduty/" + id, "/api/v1/webhooks/pagerduty/%2567" + id[2:], "/api/v1/webhooks/pagerduty/%31" + id[1:],
+		"/api/v1/webhooks%2Fgithub", "/api/v1/webhooks%2fgithub", "/api%2Fv1/webhooks/github", "/api%2fv1%2Fwebhooks%2Fjira",
+		"/api/v1/webhooks%2Fgitlab", "/api/v1/webhooks%2fpagerduty/" + id, "/api/v1/webhooks/pagerduty%2F" + id, "/api/v1/webhooks/pagerduty%2f" + id,
+		"/api/v1/webhooks/pagerduty/" + id + "%2F", "/api/v1/webhooks/pagerduty/" + id + "%2f", "/api/v1/webhooks/github%2F", "/api/v1/webhooks/github%2f",
+		"/api/v1/webhooks/github/", "/api/v1/webhooks/gitlab/", "/api/v1/webhooks/jira/", "/api/v1/webhooks/pagerduty/" + id + "/",
+		"//api/v1/webhooks/github", "/api/v1/webhooks//github", "/api/v1/webhooks/pagerduty//" + id,
+		"/api/./v1/webhooks/github", "/api/v1/webhooks/../webhooks/github", "/api/v1/webhooks/./jira",
+		"/API/V1/WEBHOOKS/GITHUB", "/api/v1/webhooks/GitHub", "/api/v1/webhooks/github.", "/api/v1/webhooks/github;x=1",
+	}
+	reachedCount := 0
+	for _, target := range targets {
+		for _, method := range []string{http.MethodPost, http.MethodGet, http.MethodHead} {
+			reached, counters.clientHits = 0, 0
+			request := httptest.NewRequest(method, target, nil)
+			request.RequestURI = target
+			request.URL.RawPath = ""
+			if parsed, err := url.ParseRequestURI(target); err == nil {
+				request.URL = parsed
+			}
+			request.RemoteAddr = "203.0.113.9:4242"
+			server.Handler().ServeHTTP(httptest.NewRecorder(), request)
+			if reached > 0 {
+				reachedCount++
+				if method == http.MethodPost && counters.clientHits != 1 {
+					t.Errorf("POST %s reached an intake handler counted %d times, want once", target, counters.clientHits)
+				}
+			}
+		}
+	}
+	if reachedCount < 8 {
+		t.Fatalf("only %d probes reached an intake handler: the probe no longer reaches the routes", reachedCount)
 	}
 }

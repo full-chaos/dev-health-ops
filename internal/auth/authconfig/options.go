@@ -206,6 +206,10 @@ var optionRegistry = []Option{
 			"_FILE reads it from a mounted file instead. With the session secrets it mounts POST /api/v1/auth/login",
 	},
 	{
+		Flag: "social-link-routes", Env: EnvSocialLinkRoutes, Kind: KindString, Group: GroupSession, Default: "false",
+		Usage: "\"true\" mounts the bearer-only social link and unlink routes (POST /v1/identities/social, DELETE /v1/identities/social/{id}); needs the session secrets",
+	},
+	{
 		Flag: "social-github-client-id", Env: "SOCIAL_GITHUB_CLIENT_ID", Kind: KindString, Group: GroupSession,
 		Usage: "GitHub OAuth client id for POST /api/v1/auth/social-login (go-api's setting)",
 	},

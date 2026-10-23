@@ -154,8 +154,12 @@ func compatRoutes(
 	if err != nil {
 		return nil, err
 	}
+	var link social.Domain
+	if cfg.Session.SocialLinkRoutes {
+		link = socialService
+	}
 	links, err := authapi.SocialLinkRoutes(authapi.SocialLinkDeps{
-		Sessions: sessions, Users: authapi.PGUsers{Pool: pool}, Issuer: issuer, Logger: logger, Social: socialService,
+		Sessions: sessions, Users: authapi.PGUsers{Pool: pool}, Issuer: issuer, Logger: logger, Social: link,
 	})
 	if err != nil {
 		return nil, err

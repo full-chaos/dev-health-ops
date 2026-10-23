@@ -73,16 +73,28 @@ type Custody interface {
 	Sign(ctx context.Context, kid string, message []byte) ([]byte, error)
 }
 
-// Keys describes the single key as an active one-key set.
+// StateOverride replaces each key's state with its effective state from a
+// durable state source (the rotation state machine). It returns the keys in
+// the same order with only State changed, or an error that refuses the set.
+type StateOverride func(ctx context.Context, keys []Key) ([]Key, error)
+
+// Keys describes the single key as an active one-key set, in its effective
+// state when States is set.
 func (s FileSource) Keys(ctx context.Context) ([]Key, error) {
 	metadata, err := s.Describe(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return []Key{{KeyID: metadata.KeyID, State: StateActive, Algorithm: Algorithm, PublicKey: metadata.PublicKey}}, nil
+	keys := []Key{{KeyID: metadata.KeyID, State: StateActive, Algorithm: Algorithm, PublicKey: metadata.PublicKey}}
+	if s.States == nil {
+		return keys, nil
+	}
+	return s.States(ctx, keys)
 }
 
-// Sign signs with the single key, re-reading it under the file contract.
+// Sign signs with the single key, re-reading it under the file contract. With
+// States set, the key signs only while its effective state is active, both
+// before and after the signature is made.
 func (s FileSource) Sign(ctx context.Context, kid string, message []byte) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -96,7 +108,35 @@ func (s FileSource) Sign(ctx context.Context, kid string, message []byte) ([]byt
 	if kid != s.KeyID {
 		return nil, failure(ReasonKeyUnknown, nil)
 	}
-	return signWithFile(s.Path, message)
+	if s.States == nil {
+		return signWithFile(s.Path, message)
+	}
+	key, err := s.effectiveActive(ctx)
+	if err != nil {
+		return nil, err
+	}
+	signature, signer, err := signWithFileKey(s.Path, message)
+	if err != nil {
+		return nil, err
+	}
+	if !signer.Equal(key.PublicKey) {
+		return nil, failure(ReasonKeyNotActive, nil)
+	}
+	if _, err := s.effectiveActive(ctx); err != nil {
+		return nil, err
+	}
+	return signature, nil
+}
+
+func (s FileSource) effectiveActive(ctx context.Context) (Key, error) {
+	keys, err := s.Keys(ctx)
+	if err != nil {
+		return Key{}, err
+	}
+	if len(keys) != 1 || keys[0].State != StateActive {
+		return Key{}, failure(ReasonKeyNotActive, nil)
+	}
+	return keys[0], nil
 }
 
 func signWithFile(path string, message []byte) ([]byte, error) {
@@ -134,15 +174,23 @@ func signWithFileKey(path string, message []byte) ([]byte, ed25519.PublicKey, er
 //
 // A kid this value has seen compromised stays compromised for its life, even
 // when a later manifest names it in another state. The durable deny list is
-// the rotation state machine's.
+// the rotation state machine's: with a StateOverride, each key's state is the
+// one it returns, and a compromise it reports latches here too.
 type FileCustody struct {
 	manifestPath string
+	states       StateOverride
 	compromised  *latch
 }
 
 // NewFileCustody returns custody for the manifest at path.
 func NewFileCustody(path string) *FileCustody {
-	return &FileCustody{manifestPath: path, compromised: &latch{kids: map[string]bool{}, publics: map[string]bool{}}}
+	return NewFileCustodyWithStates(path, nil)
+}
+
+// NewFileCustodyWithStates returns custody for the manifest at path whose key
+// states come from states (nil: the manifest's own).
+func NewFileCustodyWithStates(path string, states StateOverride) *FileCustody {
+	return &FileCustody{manifestPath: path, states: states, compromised: &latch{kids: map[string]bool{}, publics: map[string]bool{}}}
 }
 
 var _ Custody = (*FileCustody)(nil)
@@ -151,6 +199,24 @@ type latch struct {
 	mu      sync.Mutex
 	kids    map[string]bool
 	publics map[string]bool
+}
+
+// latchPublic records one compromised public key.
+func (l *latch) latchPublic(public ed25519.PublicKey) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.publics[string(public)] = true
+}
+
+// latchKids records the kids entries name compromised.
+func (l *latch) latchKids(entries []manifestEntry) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for _, entry := range entries {
+		if entry.State == StateCompromised {
+			l.kids[entry.KeyID] = true
+		}
+	}
 }
 
 // apply records the compromised kids and public keys of keys and returns the
@@ -198,6 +264,9 @@ func (c *FileCustody) Keys(ctx context.Context) ([]Key, error) {
 // contract: a set with any key that is not custodied, or with one key under two
 // kids, is refused whole. States are the effective ones (see latch).
 func (c *FileCustody) readSet(ctx context.Context) ([]manifestEntry, []Key, error) {
+	// load latches every compromised entry (kid and key file) before it
+	// parses the manifest strictly, so nothing below, and no refusal of the
+	// manifest, can skip a compromise.
 	entries, err := c.load(ctx)
 	if err != nil {
 		return nil, nil, err
@@ -218,6 +287,14 @@ func (c *FileCustody) readSet(ctx context.Context) ([]manifestEntry, []Key, erro
 		}
 		publics[string(public)] = true
 		keys = append(keys, Key{KeyID: entry.KeyID, State: entry.State, Algorithm: Algorithm, PublicKey: public})
+	}
+	// The override sees the effective (latched) states, and custody's own
+	// compromises latch before the override can fail.
+	keys = c.compromised.apply(keys)
+	if c.states != nil {
+		if keys, err = c.states(ctx, keys); err != nil {
+			return nil, nil, err
+		}
 	}
 	return entries, c.compromised.apply(keys), nil
 }
@@ -307,7 +384,138 @@ func (c *FileCustody) load(ctx context.Context) ([]manifestEntry, error) {
 	if err != nil {
 		return nil, err
 	}
+	c.latchCompromisedEntries(raw)
 	return parseManifest(raw)
+}
+
+// latchCompromisedEntries walks the manifest token by token, before the
+// strict parse and before any other key file is read, and latches every entry
+// object it reads up to the first syntax error, across every "keys" member.
+// An entry is compromised when ANY of its "state" members is "compromised"
+// (a repeated member cannot hide it). It latches each string kid of the
+// entry, and the public key of each "file" that is a bare name whose file
+// reads and parses, whatever the kid (empty, not a string, missing). Every
+// other error is ignored. Not reached, and refused whole by the strict parse:
+// content after the first syntax error, a top level that is not an object, a
+// "keys" value that is not an array, a byte-order mark.
+func (c *FileCustody) latchCompromisedEntries(raw []byte) {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	if token, err := decoder.Token(); err != nil || token != json.Delim('{') {
+		return
+	}
+	for decoder.More() {
+		name, err := decoder.Token()
+		if err != nil {
+			return
+		}
+		if member, _ := name.(string); !strings.EqualFold(member, "keys") {
+			if skipValue(decoder) != nil {
+				return
+			}
+			continue
+		}
+		token, err := decoder.Token()
+		if err != nil {
+			return
+		}
+		if token != json.Delim('[') {
+			if skipRest(decoder, token) != nil {
+				return
+			}
+			continue
+		}
+		for decoder.More() {
+			if !c.latchEntry(decoder) {
+				return
+			}
+		}
+		if _, err := decoder.Token(); err != nil {
+			return
+		}
+	}
+}
+
+// latchEntry reads one keys[] element and latches it when it is a compromised
+// entry, also when a syntax error ends it early (then it returns false).
+func (c *FileCustody) latchEntry(decoder *json.Decoder) bool {
+	token, err := decoder.Token()
+	if err != nil {
+		return false
+	}
+	if token != json.Delim('{') {
+		return skipRest(decoder, token) == nil
+	}
+	var compromised bool
+	var kids, files []string
+	defer func() {
+		if !compromised {
+			return
+		}
+		for _, kid := range kids {
+			c.compromised.latchKids([]manifestEntry{{KeyID: kid, State: StateCompromised}})
+		}
+		for _, file := range files {
+			if !bareFileName(file) {
+				continue
+			}
+			pemBytes, err := readCustodiedFile(c.keyPath(manifestEntry{File: file}), MaxKeyFileBytes)
+			if err != nil {
+				continue
+			}
+			if public, err := parseEd25519Public(pemBytes); err == nil {
+				c.compromised.latchPublic(public)
+			}
+		}
+	}()
+	for decoder.More() {
+		name, err := decoder.Token()
+		if err != nil {
+			return false
+		}
+		var value json.RawMessage
+		if err := decoder.Decode(&value); err != nil {
+			return false
+		}
+		member, _ := name.(string)
+		var text string
+		isString := json.Unmarshal(value, &text) == nil
+		switch {
+		case strings.EqualFold(member, "state") && isString && State(text) == StateCompromised:
+			compromised = true
+		case strings.EqualFold(member, "kid") && isString && text != "":
+			kids = append(kids, text)
+		case strings.EqualFold(member, "file") && isString:
+			files = append(files, text)
+		}
+	}
+	_, err = decoder.Token()
+	return err == nil
+}
+
+// skipValue reads and discards one JSON value.
+func skipValue(decoder *json.Decoder) error {
+	var value json.RawMessage
+	return decoder.Decode(&value)
+}
+
+// skipRest discards the rest of a value whose first token was read.
+func skipRest(decoder *json.Decoder, first json.Token) error {
+	if first != json.Delim('{') && first != json.Delim('[') {
+		return nil
+	}
+	for depth := 1; depth > 0; {
+		token, err := decoder.Token()
+		if err != nil {
+			return err
+		}
+		switch token {
+		case json.Delim('{'), json.Delim('['):
+			depth++
+		case json.Delim('}'), json.Delim(']'):
+			depth--
+		}
+	}
+	return nil
 }
 
 // parseManifest decodes a closed manifest: an unknown member, trailing data,

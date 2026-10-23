@@ -43,6 +43,13 @@ const REQUIRED_GROUPS = {
   // The catalogs are pure schema documents: no client-only rule.
   "action-catalog": ["accept", "reject"],
   "role-catalog": ["accept", "reject"],
+  "organization": ["accept", "reject"],
+  "organization-create-request": ["accept", "reject"],
+  "membership": ["accept", "reject"],
+  "membership-update-request": ["accept", "reject"],
+  "invite": ["accept", "reject"],
+  "invite-create-request": ["accept", "reject"],
+  "invite-accept-request": ["accept", "reject"],
 };
 const DEFAULT_REQUIRED_GROUPS = ["accept", "reject", "reject_by_client"];
 

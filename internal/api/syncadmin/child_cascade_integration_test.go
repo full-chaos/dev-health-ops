@@ -21,6 +21,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/integrationsadmin"
 	schedsync "github.com/full-chaos/dev-health-ops/internal/scheduler/sync"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
@@ -77,7 +78,11 @@ func startCascadeVenue(t *testing.T, incidentFeature bool) *cascadeVenue {
 	pgseed.Org(ctx, t, pool, org, "enterprise")
 	pgseed.OrgOverride(ctx, t, pool, org, feature, incidentFeature)
 	mux := http.NewServeMux()
-	for _, route := range Routes(Deps{Pool: pool, Guard: testGuard(t), Logger: quiet()}) {
+	guard := testGuard(t)
+	for _, route := range Routes(Deps{Pool: pool, Guard: guard, Logger: quiet()}) {
+		mux.Handle(route.Method+" "+route.Pattern, route.Handler)
+	}
+	for _, route := range integrationsadmin.Routes(integrationsadmin.Deps{Pool: pool, Guard: guard, Logger: quiet()}) {
 		mux.Handle(route.Method+" "+route.Pattern, route.Handler)
 	}
 	server := httptest.NewServer(mux)

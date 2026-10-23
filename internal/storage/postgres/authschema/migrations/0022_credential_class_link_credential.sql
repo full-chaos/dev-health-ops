@@ -1,4 +1,4 @@
--- 0021 credential_registry.credential_class admits link_credential
+-- 0022 credential_registry.credential_class admits link_credential
 -- (CHAOS-10688). NOT ADDITIVE in one place, on purpose: it REDEFINES one CHECK,
 -- and only WIDENS it (nothing is removed from the 0017 list).
 --

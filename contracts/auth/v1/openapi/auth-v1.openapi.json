@@ -654,13 +654,6 @@
         "responses": {
           "200": {
             "description": "The headers of the jwks.v1 answer; no body",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Jwks"
-                }
-              }
-            },
             "headers": {
               "Cache-Control": {
                 "schema": {
@@ -680,44 +673,16 @@
             "description": "If-None-Match matched the document; no body."
           },
           "429": {
-            "description": "The route's rate bucket is spent; answered by the transport before the route, in its own error envelope, transport-error.v1 (not error.v1), with Retry-After.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/TransportError"
-                }
-              }
-            }
+            "description": "The route's rate bucket is spent; answered by the transport before the route, in its own error envelope, transport-error.v1 (not error.v1), with Retry-After."
           },
           "503": {
-            "description": "error.v1: no key material is available (retry_after_seconds); never cached",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
+            "description": "error.v1: no key material is available (retry_after_seconds); never cached"
           },
           "400": {
-            "description": "The request body could not be read (a transport failure within the size limit); answered by the transport before the route, in its own error envelope, transport-error.v1 (not error.v1).",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/TransportError"
-                }
-              }
-            }
+            "description": "The request body could not be read (a transport failure within the size limit); answered by the transport before the route, in its own error envelope, transport-error.v1 (not error.v1)."
           },
           "413": {
-            "description": "The request body is over the configured limit; answered by the transport before the route, in its own error envelope, transport-error.v1 (not error.v1).",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/TransportError"
-                }
-              }
-            }
+            "description": "The request body is over the configured limit; answered by the transport before the route, in its own error envelope, transport-error.v1 (not error.v1)."
           }
         }
       }
@@ -794,13 +759,6 @@
         "responses": {
           "200": {
             "description": "The headers of the discovery.v1 answer; no body",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Discovery"
-                }
-              }
-            },
             "headers": {
               "Cache-Control": {
                 "schema": {
@@ -820,34 +778,13 @@
             "description": "If-None-Match matched the document; no body."
           },
           "429": {
-            "description": "The route's rate bucket is spent; answered by the transport before the route, in its own error envelope, transport-error.v1 (not error.v1), with Retry-After.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/TransportError"
-                }
-              }
-            }
+            "description": "The route's rate bucket is spent; answered by the transport before the route, in its own error envelope, transport-error.v1 (not error.v1), with Retry-After."
           },
           "400": {
-            "description": "The request body could not be read (a transport failure within the size limit); answered by the transport before the route, in its own error envelope, transport-error.v1 (not error.v1).",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/TransportError"
-                }
-              }
-            }
+            "description": "The request body could not be read (a transport failure within the size limit); answered by the transport before the route, in its own error envelope, transport-error.v1 (not error.v1)."
           },
           "413": {
-            "description": "The request body is over the configured limit; answered by the transport before the route, in its own error envelope, transport-error.v1 (not error.v1).",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/TransportError"
-                }
-              }
-            }
+            "description": "The request body is over the configured limit; answered by the transport before the route, in its own error envelope, transport-error.v1 (not error.v1)."
           }
         }
       }

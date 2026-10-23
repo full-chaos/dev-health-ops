@@ -55,10 +55,10 @@
         "drain": {
           "description": "CHAOS-10718: seconds the old go-api pod keeps serving before SIGTERM (native preStop sleep, Kubernetes >= 1.30). 0 renders no hook.",
           "type": "object",
-          "properties": { "preStopSeconds": { "type": "integer", "minimum": 0 } }
+          "properties": { "preStopSeconds": { "type": "integer", "minimum": 0, "maximum": 600 } }
         },
-        "shutdownTimeout": { "type": "string", "pattern": "^[1-9][0-9]*s$" },
-        "terminationGracePeriodSeconds": { "type": "integer", "minimum": 1 },
+        "shutdownTimeout": { "type": "string", "pattern": "^[1-9][0-9]{0,4}s$" },
+        "terminationGracePeriodSeconds": { "type": "integer", "minimum": 1, "maximum": 86400 },
         "authProxy": {
           "description": "CHAOS-10231: the /api/v1/auth/* proxy flags. YAML booleans only: a string such as \"false\" is refused, never read as on.",
           "type": "object",

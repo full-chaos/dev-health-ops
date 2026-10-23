@@ -72,12 +72,16 @@ shutdown timeout the chart passes (--shutdown-timeout, below) and 5 s. The image
 shell, no sleep binary): the native sleep action, a Kubernetes >= 1.30 feature (on by default).
 */}}
 {{- $drain := .Values.goApi.drain }}
+{{- /* Bounded BEFORE any arithmetic: Sprig's add wraps near int64 max, and dho api refuses a shutdown timeout above 3 h. */}}
 {{- $sleepRaw := toString $drain.preStopSeconds }}
-{{- if not (regexMatch "^[0-9]+$" $sleepRaw) }}{{- fail (printf "goApi.drain.preStopSeconds must be whole seconds, 0 or more (0 renders no drain hook), got %q" $sleepRaw) }}{{- end }}
+{{- if not (regexMatch "^[0-9]{1,3}$" $sleepRaw) }}{{- fail (printf "goApi.drain.preStopSeconds must be whole seconds from 0 to 600 (0 renders no drain hook), got %q" $sleepRaw) }}{{- end }}
+{{- if gt (int $sleepRaw) 600 }}{{- fail (printf "goApi.drain.preStopSeconds must be whole seconds from 0 to 600 (0 renders no drain hook), got %q" $sleepRaw) }}{{- end }}
 {{- $shutdownRaw := toString .Values.goApi.shutdownTimeout }}
-{{- if not (regexMatch "^[1-9][0-9]*s$" $shutdownRaw) }}{{- fail (printf "goApi.shutdownTimeout must be whole seconds such as 30s, above zero, got %q" $shutdownRaw) }}{{- end }}
+{{- if not (regexMatch "^[1-9][0-9]{0,4}s$" $shutdownRaw) }}{{- fail (printf "goApi.shutdownTimeout must be whole seconds from 1s to 10800s (dho api refuses more than 3 h), got %q" $shutdownRaw) }}{{- end }}
+{{- if gt (int (trimSuffix "s" $shutdownRaw)) 10800 }}{{- fail (printf "goApi.shutdownTimeout must be whole seconds from 1s to 10800s (dho api refuses more than 3 h), got %q" $shutdownRaw) }}{{- end }}
 {{- $graceRaw := toString .Values.goApi.terminationGracePeriodSeconds }}
-{{- if not (regexMatch "^[1-9][0-9]*$" $graceRaw) }}{{- fail (printf "goApi.terminationGracePeriodSeconds must be whole seconds above zero, got %q" $graceRaw) }}{{- end }}
+{{- if not (regexMatch "^[1-9][0-9]{0,5}$" $graceRaw) }}{{- fail (printf "goApi.terminationGracePeriodSeconds must be whole seconds from 1 to 86400, got %q" $graceRaw) }}{{- end }}
+{{- if gt (int $graceRaw) 86400 }}{{- fail (printf "goApi.terminationGracePeriodSeconds must be whole seconds from 1 to 86400, got %q" $graceRaw) }}{{- end }}
 {{- $sleep := int $sleepRaw }}
 {{- $shutdown := int (trimSuffix "s" $shutdownRaw) }}
 {{- $minGrace := add $sleep $shutdown 5 }}

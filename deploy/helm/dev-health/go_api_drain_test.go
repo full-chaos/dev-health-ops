@@ -137,3 +137,30 @@ func TestGoAPIDrainDoesNotTouchOtherWorkloads(t *testing.T) {
 		}
 	}
 }
+
+// The values are bounded before any arithmetic: Sprig's add wraps near int64 max, which rendered a
+// grace period far below the sleep (review of CHAOS-10718), and dho api refuses a shutdown timeout
+// above 3 hours (internal/platform/config maximumShutdownTimeout).
+func TestGoAPIDrainValuesAreBounded(t *testing.T) {
+	for _, sets := range [][]string{
+		{"--set", "goApi.drain.preStopSeconds=9223372036854775806"},
+		{"--set", "goApi.drain.preStopSeconds=601"},
+		{"--set", "goApi.shutdownTimeout=10801s", "--set", "goApi.terminationGracePeriodSeconds=20000"},
+		{"--set", "goApi.shutdownTimeout=9223372036854775806s", "--set", "goApi.terminationGracePeriodSeconds=45"},
+		{"--set", "goApi.terminationGracePeriodSeconds=86401"},
+		{"--set", "goApi.terminationGracePeriodSeconds=9223372036854775806"},
+	} {
+		// The schema refuses these too; the template must refuse them alone (a values file can skip the
+		// schema), so run both ways.
+		if out := renderGoAPIFails(t, sets...); !strings.Contains(out, "goApi") {
+			t.Errorf("%v: refusal names no goApi key:\n%.300s", sets, out)
+		}
+		if out := renderGoAPIFails(t, append(append([]string{}, sets...), "--skip-schema-validation")...); !strings.Contains(out, "goApi.") {
+			t.Errorf("%v: the template alone does not refuse, or names no goApi key:\n%.300s", sets, out)
+		}
+	}
+	spec := goAPIPodSpec(t, "--set", "goApi.drain.preStopSeconds=600", "--set", "goApi.shutdownTimeout=10800s", "--set", "goApi.terminationGracePeriodSeconds=11405")
+	if spec["terminationGracePeriodSeconds"] != 11405 {
+		t.Errorf("the documented maxima do not render: grace %v", spec["terminationGracePeriodSeconds"])
+	}
+}

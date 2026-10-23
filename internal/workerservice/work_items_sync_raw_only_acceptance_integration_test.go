@@ -236,13 +236,22 @@ func rawOnlyStoredVersions(ctx context.Context, t *testing.T, conn driver.Conn, 
 	return counts
 }
 
-func rawOnlyGrew(before, after map[string]uint64) bool {
-	for table, count := range after {
-		if count > before[table] {
-			return true
+// rawOnlyReadableState is, for each of the derived tables, the number of FINAL
+// rows of the organization and the sum of a hash of every such row.
+func rawOnlyReadableState(ctx context.Context, t *testing.T, conn driver.Conn, orgID string) map[string]string {
+	t.Helper()
+	state := map[string]string{}
+	for _, table := range rawOnlyDerivedTables {
+		if rawOnlyDroppedTables[table] {
+			continue
 		}
+		var count, hash uint64
+		if err := conn.QueryRow(ctx, `SELECT count(), sum(cityHash64(toString(tuple(*)))) FROM `+table+` FINAL WHERE org_id = ?`, orgID).Scan(&count, &hash); err != nil {
+			t.Fatalf("read the state of %s: %v", table, err)
+		}
+		state[table] = fmt.Sprintf("%d/%d", count, hash)
 	}
-	return false
+	return state
 }
 
 func rawOnlyTotal(counts map[string]uint64) uint64 {
@@ -457,14 +466,15 @@ func TestWorkItemsSyncWritesRawRowsOnlyAndTheDailyJobGivesTheWholeDay(t *testing
 		check(provider, "after unit 1 and the daily run of the day", rawOnlyDayValues(ctx, t, rig.conn, orgID, provider, day), whole)
 
 		// Unit 2: only the item of repository A, twenty days later.
-		before := rawOnlyStoredVersions(ctx, t, rig.conn, orgID)
+		before := rawOnlyReadableState(ctx, t, rig.conn, orgID)
 		secondClaim := rawOnlyClaim(t, provider, orgID, uuid.NewString(), laterDay.Add(5*time.Hour), laterDay.Add(6*time.Hour))
 		writeRawOnlyUnit(ctx, t, sink, secondClaim, []rawOnlyItem{inA}, laterDay.Add(6*time.Hour+time.Minute))
 		assertRawOnlySinkRefusesDerivedTables(ctx, t, sink, secondClaim)
-		// A write adds stored versions and a background merge only removes them:
-		// a table that grew was written to; equality of counts is not required.
-		if after := rawOnlyStoredVersions(ctx, t, rig.conn, orgID); rawOnlyGrew(before, after) {
-			t.Fatalf("%s: stored derived row versions changed with unit 2 and no daily run\n before %v\n after  %v", provider, before, after)
+		// The state a reader sees (the FINAL rows) is compared, with a hash of each
+		// row: a background merge never changes it, and any write of a derived
+		// row that a reader could see does.
+		if after := rawOnlyReadableState(ctx, t, rig.conn, orgID); fmt.Sprint(after) != fmt.Sprint(before) {
+			t.Fatalf("%s: the derived rows a reader sees changed with unit 2 and no daily run\n before %v\n after  %v", provider, before, after)
 		}
 		check(provider, "after unit 2 (only the item of repository A), before the daily run",
 			rawOnlyDayValues(ctx, t, rig.conn, orgID, provider, day), whole)

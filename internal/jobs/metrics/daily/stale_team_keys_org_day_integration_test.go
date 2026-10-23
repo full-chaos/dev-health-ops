@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"testing"
@@ -302,26 +303,25 @@ WHERE org_id = ? AND day = ? AND provider = 'linear' AND work_scope_id = 'board-
 		// A second end of the same run writes nothing: a superseded key is
 		// not live.
 		run := Run{ID: uuid.NewString(), OrganizationID: org, TargetDay: day, FullOrg: true, DiscoveredRepoIDs: listed}
-		var before, after uint64
-		count := func(target *uint64) {
+		// The rows a reader sees (FINAL) are compared with a hash of each row: a
+		// background merge never changes them, and a row of zeros written over a
+		// live key, or a new key, does.
+		readable := func() string {
 			t.Helper()
-			total := uint64(0)
+			var state []string
 			for _, table := range []string{"team_metrics_daily", "ai_impact_metrics_daily"} {
-				var rows uint64
-				if err := conn.QueryRow(ctx, "SELECT count() FROM "+table+" WHERE org_id = ? AND day = ?", org, day).Scan(&rows); err != nil {
+				var rows, hash uint64
+				if err := conn.QueryRow(ctx, "SELECT count(), sum(cityHash64(toString(tuple(*)))) FROM "+table+" FINAL WHERE org_id = ? AND day = ?", org, day).Scan(&rows, &hash); err != nil {
 					t.Fatal(err)
 				}
-				total += rows
+				state = append(state, fmt.Sprintf("%s=%d/%d", table, rows, hash))
 			}
-			*target = total
+			return strings.Join(state, " ")
 		}
-		count(&before)
+		before := readable()
 		endStaleKeyRun(t, ctx, conn, run, clock.Add(time.Hour))
-		count(&after)
-		// Stored versions are counted: a write adds versions and a background merge
-		// only removes them, so growth is the signal and equality is not.
-		if after > before {
-			t.Errorf("a second end of the run wrote %d more row(s) in the repository-scoped tables, want none", after-before)
+		if after := readable(); after != before {
+			t.Errorf("a second end of the run changed the rows of the repository-scoped tables, want none:\n before %s\n after  %s", before, after)
 		}
 	})
 

@@ -55,6 +55,7 @@ var DirectWriteActions = []Action{
 	ActionMetricsRemainingStart,
 	ActionMetricsRemainingTriggerBackstop,
 	ActionMetricsRemainingRedrive,
+	ActionMetricsDailyMarkerBackfill,
 	ActionExternalRecomputeReplay,
 }
 

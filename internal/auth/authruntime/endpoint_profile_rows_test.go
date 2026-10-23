@@ -368,3 +368,23 @@ func TestClassConsumersNameEveryAuthRouteThatAcceptsThem(t *testing.T) {
 		t.Fatal("no (route, class) pair was checked: the test measured nothing")
 	}
 }
+
+// TestRowsThatAcceptNoCredentialListNoClass: a row whose rationale says the
+// route accepts no credential lists no accepted class, and the other way
+// round, so a pre-session start route cannot claim a credential it never reads.
+func TestRowsThatAcceptNoCredentialListNoClass(t *testing.T) {
+	checked := 0
+	for _, row := range loadAuthServiceRows(t) {
+		why, _ := row["public_rationale"].(string)
+		classes, _ := row["accepted_credential_classes"].([]any)
+		if strings.Contains(why, "accepts no credential") {
+			checked++
+			if len(classes) != 0 {
+				t.Errorf("row %v says it accepts no credential but lists %v", row["id"], classes)
+			}
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no row says it accepts no credential: the test measured nothing")
+	}
+}

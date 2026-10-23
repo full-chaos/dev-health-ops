@@ -522,9 +522,7 @@
       "surface_kind": "rest"
     },
     {
-      "accepted_credential_classes": [
-        "sso_oidc_exchange"
-      ],
+      "accepted_credential_classes": [],
       "classification": "public",
       "gaps": [],
       "graphql_field_name": null,
@@ -589,9 +587,7 @@
       "surface_kind": "rest"
     },
     {
-      "accepted_credential_classes": [
-        "social_oauth_exchange"
-      ],
+      "accepted_credential_classes": [],
       "classification": "public",
       "gaps": [],
       "graphql_field_name": null,
@@ -608,9 +604,7 @@
       "surface_kind": "rest"
     },
     {
-      "accepted_credential_classes": [
-        "social_oauth_exchange"
-      ],
+      "accepted_credential_classes": [],
       "classification": "public",
       "gaps": [],
       "graphql_field_name": null,
@@ -628,7 +622,7 @@
     },
     {
       "accepted_credential_classes": [
-        "social_oauth_exchange"
+        "sso_oidc_exchange"
       ],
       "classification": "public",
       "gaps": [],
@@ -665,7 +659,7 @@
         }
       ],
       "method": "POST",
-      "public_rationale": "OAuth callback; pre-session by design: the authorization code is exchanged at the provider and the state and browser binding are checked before an account is resolved. An unknown subject is refused; no account is created.",
+      "public_rationale": "OAuth callback; pre-session by design: the authorization code is exchanged at the provider and the state and browser binding are checked before an account is resolved. The body shape is the OIDC callback's (code and state). An unknown subject is refused; no account is created.",
       "route": "/api/v1/auth/oauth/{provider_id}/callback",
       "service": "dev-health-auth-service",
       "source": {
@@ -675,9 +669,7 @@
       "surface_kind": "rest"
     },
     {
-      "accepted_credential_classes": [
-        "sso_saml_exchange"
-      ],
+      "accepted_credential_classes": [],
       "classification": "public",
       "gaps": [],
       "graphql_field_name": null,
@@ -694,9 +686,7 @@
       "surface_kind": "rest"
     },
     {
-      "accepted_credential_classes": [
-        "sso_saml_exchange"
-      ],
+      "accepted_credential_classes": [],
       "classification": "public",
       "gaps": [],
       "graphql_field_name": null,

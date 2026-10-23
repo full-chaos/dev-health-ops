@@ -108,6 +108,7 @@ internal/pythonparity/pyidna
 internal/pythonparity/pyunicodedata
 internal/scheduler/sync
 internal/storage/clickhouse
+internal/storage/clickhouse/engineclause
 internal/storage/clickhouse/liverow
 internal/storage/postgres
 internal/storage/postgres/aclguard

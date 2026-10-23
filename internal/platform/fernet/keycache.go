@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
+	"log/slog"
 	"sync"
 	"sync/atomic"
 
@@ -22,13 +23,17 @@ type derivation struct {
 	err  error
 }
 
-func (*derivation) String() string   { return "fernet.derivation" }
-func (*derivation) GoString() string { return "fernet.derivation" }
+func (*derivation) Format(state fmt.State, _ rune) { _, _ = state.Write([]byte("fernet.derivation")) }
+func (*derivation) LogValue() slog.Value           { return slog.StringValue("fernet.derivation") }
+func (*derivation) MarshalJSON() ([]byte, error)   { return []byte(`"fernet.derivation"`), nil }
 
 // cacheID is the digest naming a cache entry; it never prints.
 type cacheID [sha256.Size]byte
 
 func (cacheID) Format(state fmt.State, _ rune) { _, _ = state.Write([]byte("fernet.cacheID")) }
+func (cacheID) LogValue() slog.Value           { return slog.StringValue("fernet.cacheID") }
+func (cacheID) MarshalText() ([]byte, error)   { return []byte("fernet.cacheID"), nil }
+func (cacheID) MarshalJSON() ([]byte, error)   { return []byte(`"fernet.cacheID"`), nil }
 
 var (
 	cacheMu      sync.Mutex

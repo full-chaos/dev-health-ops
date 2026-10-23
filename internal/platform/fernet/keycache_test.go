@@ -3,6 +3,7 @@ package fernet
 import (
 	"bytes"
 	"crypto/rand"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -240,5 +241,47 @@ func TestNewDerivesTheKeyBeforeAnyOpenOrSeal(t *testing.T) {
 	}
 	if _, err := cipher.Open(sealed); err != nil || *calls != 1 {
 		t.Fatalf("open after New: %v with %d derivations, want none more", err, *calls)
+	}
+}
+
+func TestNoValueHoldingKeyMaterialPrintsInAnyEncoding(t *testing.T) {
+	withFastDerive(t)
+	key, salt := "encoding-master-key-text", "encoding-salt-text"
+	cipher, err := New(key, salt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	derived, _ := derivedKey([]byte(key), []byte(salt))
+	cacheMu.Lock()
+	entry := cacheEntries[cacheKey([]byte(key), []byte(salt))]
+	index := cacheKey([]byte(key), []byte(salt))
+	cacheMu.Unlock()
+	values := map[string]any{"cipher": cipher, "cipher pointer": &cipher, "entry": entry, "index": index, "map": cacheEntries, "order": cacheOrder}
+	var out strings.Builder
+	var jsonBuf, textBuf bytes.Buffer
+	jsonLogger := slog.New(slog.NewJSONHandler(&jsonBuf, nil))
+	textLogger := slog.New(slog.NewTextHandler(&textBuf, nil))
+	for name, value := range values {
+		for _, verb := range []string{"%v", "%+v", "%#v", "%s", "%q", "%x", "%d"} {
+			cacheMu.Lock()
+			fmt.Fprintf(&out, "%s "+verb+"|", name, value)
+			cacheMu.Unlock()
+		}
+		cacheMu.Lock()
+		if raw, err := json.Marshal(value); err == nil {
+			out.Write(raw)
+		}
+		cacheMu.Unlock()
+		jsonLogger.Info("value", name, value)
+		textLogger.Info("value", name, value)
+	}
+	out.Write(jsonBuf.Bytes())
+	out.Write(textBuf.Bytes())
+	digest := cacheKey([]byte(key), []byte(salt))
+	digestBytes := [32]byte(digest)
+	for _, secret := range []string{key, salt, fmt.Sprintf("%x", digestBytes), fmt.Sprintf("%x", derived), fmt.Sprint(digestBytes[:8]), strings.Trim(strings.Join(strings.Fields(fmt.Sprint(digestBytes[:8])), ","), "[]")} {
+		if strings.Contains(out.String(), secret) {
+			t.Errorf("a formatted or encoded value carries %q", secret[:6])
+		}
 	}
 }

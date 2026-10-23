@@ -29,7 +29,7 @@ const (
 	maxSignatureCandidates = 8
 	// maxStoredSecretBytes bounds the stored ciphertext a delivery decrypts: a
 	// signing secret is a few hundred bytes, so a larger value is not usable.
-	maxStoredSecretBytes         = 8192
+	maxStoredSecretBytes         = 1024
 	replayRetentionSeconds       = 30 * 24 * 60 * 60
 	pendingReplayClaimTTLSeconds = 5 * 60
 	canonicalIncidentFeatureKey  = "canonical_incident_ingestion"

@@ -14,7 +14,9 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
+	"log/slog"
 	"strings"
 	"time"
 )
@@ -46,6 +48,11 @@ type Cipher struct {
 	key  []byte
 	salt []byte
 }
+
+// A Cipher never prints: it holds the key and salt.
+func (Cipher) Format(state fmt.State, _ rune) { _, _ = state.Write([]byte("fernet.Cipher")) }
+func (Cipher) LogValue() slog.Value           { return slog.StringValue("fernet.Cipher") }
+func (Cipher) MarshalJSON() ([]byte, error)   { return []byte(`"fernet.Cipher"`), nil }
 
 // New binds the key; an empty salt is DefaultSalt. An empty key is ErrInvalid.
 func New(key, salt string) (Cipher, error) {

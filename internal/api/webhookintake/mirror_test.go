@@ -106,6 +106,9 @@ func TestMirrorTokenIsSealedPerKeyAndResealedWhenItStopsOpening(t *testing.T) {
 	if _, err := first.Decrypt(secrets.NewValue(fresh)); err != nil {
 		t.Fatalf("the token was not sealed again after it stopped opening: %v", err)
 	}
+	if token := (Deps{}).mirrorToken(); token != "" {
+		t.Fatalf("an unconfigured decryptor produced a mirror token %q", token)
+	}
 	mirrorTokens.mu.Lock()
 	_, held := mirrorTokens.byKey[mirrorKey{(Deps{}).Decryptor}]
 	printed := fmt.Sprintf("%v %+v %#v %s", mirrorTokens.byKey, mirrorTokens.byKey, mirrorTokens.byKey, mirrorTokens.order)
@@ -144,7 +147,7 @@ func TestAnOversizedStoredSecretIsRefusedLikeAnUnknownBinding(t *testing.T) {
 // usable binding; the next size up is refused like an unknown binding, with
 // the same single decrypt step.
 func TestStoredSecretCapBoundaryClassesAreEqualOnEitherSide(t *testing.T) {
-	const capBytes = 8192
+	const capBytes = 1024
 	if maxStoredSecretBytes != capBytes {
 		t.Fatalf("the stored-secret cap is %d, the contract is %d", maxStoredSecretBytes, capBytes)
 	}
@@ -159,7 +162,7 @@ func TestStoredSecretCapBoundaryClassesAreEqualOnEitherSide(t *testing.T) {
 		return secret, sealed.Reveal()
 	}
 	var atCap, overCap struct{ secret, ciphertext string }
-	for size := 5000; ; size++ {
+	for size := 300; ; size++ {
 		secret, ciphertext := sealTo(size)
 		if len(ciphertext) > capBytes {
 			overCap.secret, overCap.ciphertext = secret, ciphertext

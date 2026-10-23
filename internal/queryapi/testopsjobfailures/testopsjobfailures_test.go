@@ -184,7 +184,7 @@ func TestResolve_TheListAndTheCountShareOneFilterText(t *testing.T) {
 			}
 		}
 	}
-	if bound(client.countBindings, "limit") != nil {
+	if bound(client.countBindings, "limit_n") != nil {
 		t.Error("the count statement is bound to a limit")
 	}
 	for _, text := range []string{
@@ -220,7 +220,7 @@ func TestResolve_LimitIsClamped(t *testing.T) {
 		if _, err := Resolve(context.Background(), client, "org-1", date(t, "2026-08-01"), date(t, "2026-08-02"), Scope{}, limit); err != nil {
 			t.Fatal(err)
 		}
-		if got := bound(client.listBindings, "limit"); got != want {
+		if got := bound(client.listBindings, "limit_n"); got != want {
 			t.Errorf("limit %d is bound as %v, want %d", limit, got, want)
 		}
 	}

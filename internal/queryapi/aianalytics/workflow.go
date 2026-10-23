@@ -148,7 +148,7 @@ const workflowEdgeStatement = `SELECT * FROM
 WHERE
     (source_type IN {node_types:Array(String)} AND source_id IN {node_ids:Array(String)})
     OR (target_type IN {node_types:Array(String)} AND target_id IN {node_ids:Array(String)})
-LIMIT {limit:UInt32}`
+LIMIT {limit_n:UInt32}`
 
 type nodeKey struct{ typ, id string }
 
@@ -237,7 +237,7 @@ func WorkflowDrilldown(ctx context.Context, client QueryClient, orgID string, ro
 			"deployment_ids":     orEmpty(roles["deployment"]),
 			"incident_ids":       orEmpty(roles["incident"]),
 			"artifact_ids":       orEmpty(artifactIDs),
-			"limit":              uint32(remaining),
+			"limit_n":            uint32(remaining),
 		})
 		if err != nil {
 			return nil, err

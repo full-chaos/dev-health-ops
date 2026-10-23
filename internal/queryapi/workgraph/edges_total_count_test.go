@@ -109,7 +109,7 @@ func TestResolveEdges_TotalCountIsTheMatchingEdgesNotThePage(t *testing.T) {
 	if strings.Contains(statements[0], "LIMIT") || strings.Contains(statements[0], "ORDER BY confidence") {
 		t.Fatalf("the count statement carries the order or the limit of the row statement:\n%s", statements[0])
 	}
-	if _, ok := bindings[0]["limit"]; ok {
+	if _, ok := bindings[0]["limit_n"]; ok {
 		t.Fatal("the count statement was sent the limit binding")
 	}
 	if client.statements[0] != selectSQL+dedupedEdgesOrderAndLimit {
@@ -258,7 +258,7 @@ func TestResolveEdges_TheCountWithDependencyEdgesIsTheUnionOfBothSelects(t *test
 	if !strings.Contains(dependencySelect, "{"+dependencyCountEdgeTypesParam+":Array(String)}") {
 		t.Fatalf("the dependency half of the count statement does not use its own edge-type binding:\n%s", dependencySelect)
 	}
-	if _, ok := bindings[0]["limit"]; ok {
+	if _, ok := bindings[0]["limit_n"]; ok {
 		t.Fatal("the count statement was sent the limit binding")
 	}
 }

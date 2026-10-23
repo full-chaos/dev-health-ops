@@ -39,18 +39,12 @@ func edgeHealthStatus(in edgeHealthInput) string {
 	return "down"
 }
 
-// edgeHealthBody is the body: {"status", "services": {...}} with the services
-// in Python's insertion order (the three secrets, stripe_client, postgres).
+// edgeHealthBody is the body: {"status"} only. The edge is public, so it
+// names no per-service or secret state; the HTTP status (200 or 503) is the
+// readiness signal. The Python body also carried a "services" map.
 func edgeHealthBody(in edgeHealthInput) *pyjson.Object {
-	services := pyjson.NewObject()
-	services.Set("stripe_secret_key", in.StripeSecretKey)
-	services.Set("stripe_webhook_secret", in.StripeWebhookSecret)
-	services.Set("license_private_key", in.LicensePrivateKey)
-	services.Set("stripe_client", in.StripeClient)
-	services.Set("postgres", in.Postgres)
 	body := pyjson.NewObject()
 	body.Set("status", edgeHealthStatus(in))
-	body.Set("services", services)
 	return body
 }
 

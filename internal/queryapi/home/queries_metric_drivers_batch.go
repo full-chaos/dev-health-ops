@@ -45,7 +45,7 @@ func fetchMetricDriversBatch(ctx context.Context, client QueryClient, batch []dr
 %s
         )
         ORDER BY metric, delta_pct DESC, id
-        LIMIT {limit:UInt32} BY metric
+        LIMIT {limit_n:UInt32} BY metric
     `, strings.Join(parts, "\n            UNION ALL\n"))
 	bindings := append([]dhclickhouse.Binding{
 		{Name: "start_day", Value: formatDay(startDay)},
@@ -53,7 +53,7 @@ func fetchMetricDriversBatch(ctx context.Context, client QueryClient, batch []dr
 		{Name: "compare_start", Value: formatDay(compareStart)},
 		{Name: "compare_end", Value: formatDay(compareEnd)},
 		{Name: "org_id", Value: orgID},
-		{Name: "limit", Value: uint32(limit)},
+		{Name: "limit_n", Value: uint32(limit)},
 	}, scopeBindings...)
 
 	rows, err := client.Query(ctx, query, bindings)

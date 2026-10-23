@@ -41,7 +41,7 @@ func TestExclusion_SitsInTheInnerWhereBeforeFiltersGroupByAndLimit(t *testing.T)
 			at := strings.Index(s, frag)
 			until := strings.Index(s, "AND day <= {until_date:Date}")
 			groupBy := strings.Index(s, "GROUP BY")
-			limit := strings.Index(s, "LIMIT {limit:UInt64}")
+			limit := strings.Index(s, "LIMIT {limit_n:UInt64}")
 			if !(until < at && at < groupBy && groupBy < limit) {
 				t.Errorf("order must be window < exclusion < GROUP BY < LIMIT: until=%d at=%d groupBy=%d limit=%d", until, at, groupBy, limit)
 			}
@@ -69,7 +69,7 @@ func TestExclusion_AddsNoBindingAndNoArgument(t *testing.T) {
 	for _, b := range bindings {
 		names[b.Name] = true
 	}
-	for _, want := range []string{"org_id", "since_date", "until_date", "limit"} {
+	for _, want := range []string{"org_id", "since_date", "until_date", "limit_n"} {
 		if !names[want] {
 			t.Errorf("missing binding %q", want)
 		}

@@ -1,6 +1,7 @@
 # Every file under internal/apiservice/billingvenue/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
 # python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
 # header-before-stamp set: 334a68fd4b05797e591eb7875d732c1afcd970d7521299316186d50b31449d27 (8 files)
+a6ac7cb0aa4972a9213009cd2b3591237ae516f31e2763232d305d3328d89756	go-generated	billing-edge-health.go-pin.json
 068111cc889375248bf8b57d22839257c9e6125036701987708c6f56bbfbf448	go-generated	billing-ledger.go-pin.json
 e20c8364febd8df034c2768ee4dcd2a3972db8d7867ca1448b146fce1ed805d8	go-generated	billing-plans-checkout.go-pin.json
 1927064902f678dd9c70d3e70340d1f31e2c9325f4948f8ff9a870245b6f3ddb	header-before-stamp	golden/TestInvoiceWebhookAppliesTestModeEvents.json

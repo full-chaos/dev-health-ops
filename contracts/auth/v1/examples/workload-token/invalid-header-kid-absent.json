@@ -1,0 +1,16 @@
+{
+  "header": {
+    "alg": "EdDSA",
+    "typ": "workload+jwt"
+  },
+  "claims": {
+    "iss": "https://auth.example.test",
+    "aud": "auth-service",
+    "sub": "prn_AAAAAAAAAAAAAAAAAAAAAA",
+    "principal_type": "workload",
+    "jti": "000000000000000000000001",
+    "iat": 1760000000,
+    "nbf": 1760000000,
+    "exp": 1760000300
+  }
+}

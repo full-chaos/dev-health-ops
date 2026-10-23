@@ -88,7 +88,7 @@ func Routes(deps Deps) []httpapi.Route {
 }
 
 func (h handlers) internal(w http.ResponseWriter, r *http.Request, what string, err error) {
-	h.Logger.ErrorContext(r.Context(), "api route failed", slog.String("path", r.URL.Path),
+	h.Logger.ErrorContext(r.Context(), "api route failed", slog.String("path", r.Pattern),
 		slog.String("step", what), slog.String("error", err.Error()))
 	policy.WriteInternal(w)
 }

@@ -85,6 +85,7 @@ internal/auth/identity/local	corpus_helpers_integration_test.go
 internal/auth/keyrotation	rotation_integration_test.go
 internal/auth/keystore	keystore_test.go
 internal/auth/keystore	open_unix.go
+internal/auth/ratelimitvalkey	acl_test.go
 internal/auth/session	credential_test.go
 internal/auth/writerinventory	scan_test.go
 internal/auth/writerinventory	usersowned_census_test.go

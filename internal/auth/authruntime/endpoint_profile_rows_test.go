@@ -20,6 +20,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/full-chaos/dev-health-ops/internal/auth/authapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/authconfig"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
@@ -40,9 +41,17 @@ var probeMethods = []string{
 // with every method in probeMethods through the handlers configure builds, and
 // every answer other than 404 or 405 is a served route. The database is
 // unreachable, so no probe reaches a store.
+// wellKnownIssuer is the issuer the probe configures: with one set, the discovery document is mounted beside the JWKS.
+const wellKnownIssuer = "https://issuer.example.test"
+
 func servedAuthRoutes(t *testing.T) map[string]bool {
+	return servedAuthRoutesWithIssuer(t, wellKnownIssuer)
+}
+
+// servedAuthRoutesWithIssuer is servedAuthRoutes with AUTH_TOKEN_ISSUER_URL set to issuer ("" leaves it unset).
+func servedAuthRoutesWithIssuer(t *testing.T, issuer string) map[string]bool {
 	t.Helper()
-	cfg, err := authconfig.Load(authconfig.Spec{LookupEnv: lookupFrom(ssoEnvironment(compatEnvironment(map[string]string{
+	env := map[string]string{
 		authconfig.EnvDatabaseURI:        "postgres://auth@127.0.0.1:1/devhealth",
 		authconfig.EnvSigningKeyFile:     "/nonexistent",
 		authconfig.EnvSigningKeyID:       "rows-test",
@@ -51,7 +60,11 @@ func servedAuthRoutes(t *testing.T) map[string]bool {
 		authconfig.EnvAPIAddress:         "127.0.0.1:0",
 		authconfig.EnvOperatorAddress:    "127.0.0.1:1",
 		authconfig.EnvSocialLinkRoutes:   "true",
-	})))})
+	}
+	if issuer != "" {
+		env[authconfig.EnvTokenIssuerURL] = issuer
+	}
+	cfg, err := authconfig.Load(authconfig.Spec{LookupEnv: lookupFrom(ssoEnvironment(compatEnvironment(env)))})
 	if err != nil {
 		t.Fatalf("load config: %v", err)
 	}
@@ -97,6 +110,13 @@ func servedAuthRoutes(t *testing.T) map[string]bool {
 	}
 	for _, route := range routes {
 		registered["api"] = append(registered["api"], route.Pattern)
+	}
+	seenWellKnown := map[string]bool{}
+	for _, route := range authapi.WellKnownRoutes(authapi.WellKnownDeps{IssuerURL: issuer}) {
+		if !seenWellKnown[route.Pattern] {
+			seenWellKnown[route.Pattern] = true
+			registered["api"] = append(registered["api"], route.Pattern)
+		}
 	}
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, "../../platform/health/server.go", nil, 0)
@@ -180,8 +200,8 @@ func TestEveryServedAuthRouteHasAnEndpointProfileRowAndNoRowIsStale(t *testing.T
 
 // servedAuthRouteCount is every route the probe serves: four session routes, two social link routes,
 // four compatibility routes, the session issue route, the eight federated sign-in routes and the three operator
-// paths on GET and HEAD.
-const servedAuthRouteCount = 25
+// paths on GET and HEAD, and GET and HEAD of the JWKS and the discovery document.
+const servedAuthRouteCount = 29
 
 // compareServedToRows returns the served routes with no row and the rows for
 // routes nothing serves, per method and listener.
@@ -278,7 +298,8 @@ func TestAuthEndpointProfileAnchorsStillPointAtTheirSymbols(t *testing.T) {
 		"/v1/sessions/revoke": "PatternRevoke", "/v1/sessions/revoke-all": "PatternRevokeAll",
 		"/api/v1/auth/login": "PatternCompatLogin", "/api/v1/auth/refresh": "PatternCompatRefresh",
 		"/api/v1/auth/logout": "PatternCompatLogout", "/api/v1/auth/social-login": "PatternCompatSocialLogin",
-		"/internal/v1/sessions": "PatternIssueSession",
+		"/internal/v1/sessions":  "PatternIssueSession",
+		"/.well-known/jwks.json": "PatternJWKS", "/.well-known/openid-configuration": "PatternDiscovery",
 		"/v1/identities/social": "PatternSocialLink", "/v1/identities/social/{id}": "PatternSocialUnlink",
 	}
 	checked := 0

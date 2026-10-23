@@ -273,3 +273,46 @@ func TestNonGoPlanOsRootReadsAreBounded(t *testing.T) {
 			changed: []string{"docs/a.md"}, want: "FULL *", readsCode: 1, readsWant: []string{"x\tx_root_test.go\tunexpressed\t-"}},
 	})
 }
+
+// CHAOS-10701: runtime.Caller(skip) names the calling file only for skip 0; a read built on any other skip (or on a
+// skip that is not a constant) is unbounded.
+func TestNonGoPlanRuntimeCallerSkipMustBeZero(t *testing.T) {
+	const src = "package x\n\nimport (\n\t\"os\"\n\t\"path/filepath\"\n\t\"runtime\"\n)\n\nfunc read(%s) ([]byte, error) {\n\t_, file, _, _ := runtime.Caller(%s)\n\treturn os.ReadFile(filepath.Join(filepath.Dir(file), \"..\", \"docs\", \"a.md\"))\n}\n"
+	const helper = "package q\n\nimport (\n\t\"os\"\n\t\"path/filepath\"\n\t\"runtime\"\n)\n\nfunc Read() ([]byte, error) {\n\t_, file, _, _ := runtime.Caller(1)\n\treturn os.ReadFile(filepath.Join(filepath.Dir(file), \"..\", \"con\"+\"tracts\", \"c.json\"))\n}\n"
+	const caller = "package x\n\nimport (\n\t\"testing\"\n\n\t\"m/x/q\"\n)\n\nfunc TestR(t *testing.T) { _, _ = q.Read() }\n"
+	own := func(params, skip string) string { return fmt.Sprintf(src, params, skip) }
+	inside := strings.Replace(own("", "1"), `"..", "docs", "a.md"`, `"testdata", "a.txt"`, 1)
+	runNongo(t, []nongoCase{
+		{name: "skip_zero_stays_own_dir", head: map[string]string{"x/x_own_test.go": strings.Replace(own("", "0"), `"..", "docs", "a.md"`, `"testdata", "a.txt"`, 1)},
+			changed: []string{"docs/a.md"}, want: "AFFECTED 1", keys: []string{"a"}},
+		{name: "skip_one_is_unbounded", head: map[string]string{"x/x_own_test.go": inside},
+			changed: []string{"docs/a.md"}, want: "FULL *", readsCode: 1, readsWant: []string{"x\tx_own_test.go"}},
+		{name: "skip_one_with_a_row_selects_the_reader", head: map[string]string{"x/x_own_test.go": inside, tablesDir + "dynreads.tsv": "x\tx_own_test.go\n"},
+			changed: []string{"docs/a.md"}, want: "AFFECTED 2", keys: []string{"a", "x"}},
+		{name: "skip_two_is_unbounded", head: map[string]string{"x/x_own_test.go": strings.Replace(inside, "Caller(1)", "Caller(2)", 1)},
+			changed: []string{"docs/a.md"}, want: "FULL *", readsCode: 1, readsWant: []string{"x\tx_own_test.go"}},
+		{name: "variable_skip_is_unbounded", head: map[string]string{"x/x_own_test.go": strings.Replace(own("n int", "n"), `"..", "docs", "a.md"`, `"testdata", "a.txt"`, 1)},
+			changed: []string{"docs/a.md"}, want: "FULL *", readsCode: 1, readsWant: []string{"x\tx_own_test.go"}},
+		{name: "helper_with_skip_one_needs_a_dyn_row", head: map[string]string{"x/q/h.go": helper, "x/x_r_test.go": caller},
+			changed: []string{"contracts/c.json"}, want: "FULL *", readsCode: 1, readsWant: []string{"x/q\th.go"}},
+	})
+}
+
+// CHAOS-10701: a program (package main) and the packages it imports run under the exec.Cmd.Dir of whichever test starts
+// them, so a relative path read by their non-test code is not below the test binary's directory: it is unbounded.
+func TestNonGoPlanExecDirMovesRelativeReadsOfProgramCode(t *testing.T) {
+	const read = "package %s\n\nimport (\n\t\"os\"\n\t\"path/filepath\"\n)\n\nfunc %s() { _, _ = os.ReadFile(filepath.Join(\"doc\"+\"s\", \"a.md\")) }\n"
+	const run = "package x\n\nimport (\n\t\"os/exec\"\n\t\"testing\"\n)\n\nfunc TestRun(t *testing.T) {\n\tc := exec.Command(\"go\", \"run\", \"./cmd/tool\")\n\tc.Dir = \"..\"\n\t_ = c.Run()\n}\n"
+	prog := fmt.Sprintf(read, "main", "main")
+	lib := fmt.Sprintf(read, "lib", "Read")
+	prog4lib := "package main\n\nimport \"m/x/lib\"\n\nfunc main() { lib.Read() }\n"
+	edges := tablesDir + "edges.tsv"
+	runNongo(t, []nongoCase{
+		{name: "main_package_relative_read_is_unbounded", head: map[string]string{"cmd/tool/data.go": prog, "x/x_run_test.go": run, edges: "x\tx_run_test.go\tcmd/tool\n"},
+			changed: []string{"docs/a.md"}, want: "FULL *", readsCode: 1, readsWant: []string{"cmd/tool\tdata.go"}},
+		{name: "library_of_a_program_relative_read_is_unbounded", head: map[string]string{"cmd/tool/data.go": prog4lib, "x/lib/lib.go": lib, "x/x_run_test.go": run, edges: "x\tx_run_test.go\tcmd/tool\n"},
+			changed: []string{"docs/a.md"}, want: "FULL *", readsCode: 1, readsWant: []string{"x/lib\tlib.go"}},
+		{name: "library_no_program_imports_keeps_the_own_dir_rule", head: map[string]string{"x/lib/lib.go": lib},
+			changed: []string{"docs/a.md"}, want: "AFFECTED 1", keys: []string{"a"}},
+	})
+}

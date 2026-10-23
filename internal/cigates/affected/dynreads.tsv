@@ -130,6 +130,7 @@ internal/cigates/bigboyrender	helpers_test.go
 internal/cigates/bigboyrender	nopython_test.go
 internal/cigates/bigboyrender	parity_test.go
 internal/cigates/bigboyrender	posture.go
+internal/cigates/bigboyrender	values.go
 internal/cigates/cachepoison	cachepoison_test.go
 internal/cigates/chartgates	helpers_test.go
 internal/cigates/chartgates	overlay_test.go

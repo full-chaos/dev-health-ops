@@ -187,6 +187,8 @@ type dirGroup struct {
 	vars   map[string]map[string]ast.Expr // package name -> package variable assigned once at its declaration
 	funcs  map[string][]*funcDecl         // name -> declarations of that name (functions and methods, both packages)
 	chdir  bool
+	// underProgram: the package is a package main or in the import closure of one (execProgramDirs)
+	underProgram bool
 	// chdirOpen: the package changes directory to somewhere that is not a temp dir (or not provably one)
 	chdirOpen bool
 	pkgOf     map[*srcFile]string
@@ -199,6 +201,55 @@ type dirGroup struct {
 type funcDecl struct {
 	decl *ast.FuncDecl
 	file *srcFile
+}
+
+// constZero reports whether e folds to the integer constant 0 (the skip of runtime.Caller that names the call's own file).
+func (c *fileCtx) constZero(e ast.Expr, sc *scope) bool {
+	v, ok := c.fold(e, sc, 0)
+	if !ok || v.Kind() != constant.Int {
+		return false
+	}
+	n, exact := constant.Int64Val(v)
+	return exact && n == 0
+}
+
+// execProgramDirs is the package directories of every package main (non-test file) and of every in-module package they
+// import, directly or not: code any program can run under a Cmd.Dir of its caller's choosing.
+func execProgramDirs(byDir map[string][]*srcFile, module string) map[string]bool {
+	imports := func(dir string) []string {
+		var out []string
+		for _, s := range byDir[dir] {
+			if s.test {
+				continue
+			}
+			for _, p := range s.imports {
+				if rest, ok := strings.CutPrefix(p, module+"/"); ok && byDir[rest] != nil {
+					out = append(out, rest)
+				}
+			}
+		}
+		return out
+	}
+	seen := map[string]bool{}
+	var visit func(string)
+	visit = func(d string) {
+		if seen[d] {
+			return
+		}
+		seen[d] = true
+		for _, n := range imports(d) {
+			visit(n)
+		}
+	}
+	for d, files := range byDir {
+		for _, s := range files {
+			if !s.test && s.file.Name.Name == "main" {
+				visit(d)
+				break
+			}
+		}
+	}
+	return seen
 }
 
 func newDirGroup(dir, module string, files []*srcFile) *dirGroup {
@@ -661,8 +712,9 @@ func (c *fileCtx) resolve(v string) pathInfo {
 	}
 	if !c.s.test {
 		// non-test code runs in the directory of the test binary that links it: a path that stays below it is read
-		// inside that package's directory, anything else is unbounded.
-		if !safeRel(v) {
+		// inside that package's directory, anything else is unbounded. Code a program (package main) links also runs
+		// under that program's exec.Cmd.Dir, which the test binary's directory says nothing about: unbounded.
+		if c.g.underProgram || !safeRel(v) {
 			return dynInfo
 		}
 		return pathInfo{kind: kConst, value: path.Clean(v)}
@@ -710,7 +762,7 @@ func (c *fileCtx) bind(body ast.Node, sc *scope) {
 						}
 						v := dynInfo
 						switch {
-						case name == "runtime.Caller" && i == 1:
+						case name == "runtime.Caller" && i == 1 && len(call.Args) == 1 && c.constZero(call.Args[0], sc):
 							v = pathInfo{kind: kOwn}
 						case (name == "os.MkdirTemp" || name == "os.CreateTemp") && i == 0:
 							v = pathInfo{kind: kTemp}

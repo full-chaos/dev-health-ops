@@ -100,6 +100,8 @@ internal/cigates/bigboyrender	chusers.go	cmd/cigate
 internal/cigates/bigboyrender	chusers.go	internal/cigates/bigboyrender
 internal/cigates/bigboyrender	posture.go	cmd/cigate
 internal/cigates/bigboyrender	posture.go	internal/cigates/bigboyrender
+internal/cigates/bigboyrender	values.go	cmd/cigate
+internal/cigates/bigboyrender	values.go	internal/cigates/bigboyrender
 internal/cigates/docsprepare	docsprepare.go	cmd/cigate
 internal/cigates/docsprepare	docsprepare.go	internal/cigates/docsprepare
 internal/cigates/docstools	a1_pyhelp.go	cmd/cigate

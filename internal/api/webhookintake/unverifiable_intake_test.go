@@ -264,7 +264,10 @@ func TestRefusedDeliveryWorkDoesNotDependOnTheCredential(t *testing.T) {
 				})
 			}
 			absent, short, long := measure(""), measure(strings.Repeat("k", 32)), measure(strings.Repeat("k", 4096))
-			if absent != short || absent != long {
+			// The race detector and the collector add a stray allocation or two; the work this guards
+			// against (registering and hashing a credential per request) was 40 or more.
+			near := func(a, b float64) bool { return a-b <= 3 && b-a <= 3 }
+			if !near(absent, short) || !near(absent, long) {
 				t.Fatalf("allocations per refused delivery: absent %v, 32-byte %v, 4096-byte %v", absent, short, long)
 			}
 		})

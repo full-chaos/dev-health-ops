@@ -63,7 +63,7 @@ func TestVenueOracleProtectedRoutes(t *testing.T) {
 	// are placeholders in the golden on both planes.
 	spec.Scrub = scrubCustomerPushTokens
 	golden := venueoracle.OpenGolden(t, spec)
-	pin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/venue/protected-routes.go-pin.json", SHA256: "e29bf80b7e90865dd1288e6bad1efed4df94a63fa4b83504c7524b23d4861225", Ruling: protectedRoutesPinRuling})
+	pin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/venue/protected-routes.go-pin.json", SHA256: "d285f6d961834243ec7cc19f854763be4e276d455e368302f373403408c5fd59", Ruling: protectedRoutesPinRuling})
 	sent := &sentReports{}
 	endpoint := httptest.NewServer(sent)
 	t.Cleanup(endpoint.Close)
@@ -428,7 +428,7 @@ const teamsRuling = "chris D5685/D5711/D5712/D5714/D5717 (team id carry, CHAOS-8
 // only the event that breaks a rule, and bounds the org hash that names the
 // stream key (CHAOS-10945; stricter than Python, D6129). The rule tests in
 // internal/api/producttelemetry own that contract.
-const productTelemetryRuling = "acp CHAOS-10945 product-telemetry intake value rules, stricter than Python (D6129)"
+const productTelemetryRuling = "CHAOS-10945 intake value rules, stricter than Python (D6129)"
 
 // protectedRoutesPinRuling is the one line the pin file states: both rulings.
 const protectedRoutesPinRuling = teamsRuling + "; " + productTelemetryRuling

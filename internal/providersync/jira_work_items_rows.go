@@ -207,17 +207,48 @@ func (s jiraIssueSource) ParentID() workItemRef {
 	return workItemRefKey(stringFrom(parent["key"]))
 }
 
-// EpicID reads the site's Epic Link field when the dataset option names one.
+// EpicID is the Epic Link field when the dataset option names one and the issue holds a value. Otherwise it is the
+// parent when the parent is an Epic: Jira Cloud links an issue to its epic through fields.parent, and the parent's
+// issuetype.hierarchyLevel is 1 for an epic (CHAOS-9855). The parent rule is Go-only: the Python producer (providers/
+// jira/normalize.py, deleted in 7537adba6f) read the Epic Link field alone.
 func (s jiraIssueSource) EpicID() workItemRef {
-	epicField := jiraOptionString(s.claim, "epic_link_field", "")
-	if epicField == "" {
+	if epicField := jiraOptionString(s.claim, "epic_link_field", ""); epicField != "" {
+		if value := stringFrom(jiraField(s.fields, epicField, s.objectShape)); value != "" {
+			return workItemRefKey(value)
+		}
+	}
+	parent, ok := jiraMapValue(jiraField(s.fields, "parent", s.objectShape))
+	if !ok {
 		return workItemRefAbsent()
 	}
-	value := stringFrom(jiraField(s.fields, epicField, s.objectShape))
-	if value == "" {
+	parentFields, _ := jiraMapValue(parent["fields"])
+	issueType, _ := jiraMapValue(parentFields["issuetype"])
+	if !jiraIsEpicLevel(issueType["hierarchyLevel"]) {
 		return workItemRefAbsent()
 	}
-	return workItemRefKey(value)
+	return workItemRefKey(stringFrom(parent["key"]))
+}
+
+// jiraEpicHierarchyLevel is the issuetype.hierarchyLevel of an epic.
+const jiraEpicHierarchyLevel = 1
+
+// jiraIsEpicLevel reports whether a hierarchyLevel value is the number 1. A string is no number, even a numeric one.
+func jiraIsEpicLevel(value any) bool {
+	switch level := value.(type) {
+	case json.Number:
+		parsed, err := level.Float64()
+		return err == nil && parsed == jiraEpicHierarchyLevel
+	case float64:
+		return level == jiraEpicHierarchyLevel
+	case float32:
+		return level == jiraEpicHierarchyLevel
+	case int:
+		return level == jiraEpicHierarchyLevel
+	case int64:
+		return level == jiraEpicHierarchyLevel
+	default:
+		return false
+	}
 }
 
 // jiraIssueProjectMoves is jiraProjectMoveItems' entry point for a raw issue

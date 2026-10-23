@@ -20,4 +20,4 @@ Rotate a potentially exposed credential; do not paste it into diagnostic output.
 
 ## Verify or reset link does not work
 
-After login and sessions moved to the auth service, a verify or reset link e-mailed before that change no longer works. Ask for a new link. Rate limits for these routes now share one budget across all auth-service replicas, so a limit hit on one replica applies on all.
+After the e-mail link routes move to the auth service, a verify or reset link e-mailed before that change no longer works. Ask for a new link.

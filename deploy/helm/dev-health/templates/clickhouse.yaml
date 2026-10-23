@@ -1,4 +1,11 @@
 {{- if .Values.clickhouse.enabled }}
+{{- $replicas := .Values.clickhouse.replicas }}
+{{- if not (or (kindIs "float64" $replicas) (kindIs "int64" $replicas) (kindIs "int" $replicas)) }}
+{{- fail (printf "clickhouse.replicas must be a nonnegative whole number, got %s (0 is allowed and keeps the volume claim)" (toString $replicas)) }}
+{{- end }}
+{{- if or (lt (float64 $replicas) 0.0) (ne (float64 $replicas) (floor (float64 $replicas))) }}
+{{- fail (printf "clickhouse.replicas must be a nonnegative whole number, got %v" $replicas) }}
+{{- end }}
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -8,7 +15,7 @@ metadata:
     {{- include "dev-health.componentLabels" (dict "component" "clickhouse" "context" $) | nindent 4 }}
 spec:
   serviceName: {{ include "dev-health.fullname" . }}-clickhouse
-  replicas: {{ int .Values.clickhouse.replicas }}
+  replicas: {{ int $replicas }}
   selector:
     matchLabels:
       {{- include "dev-health.componentSelectorLabels" (dict "component" "clickhouse" "context" $) | nindent 6 }}

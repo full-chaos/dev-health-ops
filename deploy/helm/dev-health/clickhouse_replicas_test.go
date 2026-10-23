@@ -67,3 +67,24 @@ func TestClickHouseReplicasIsAValueAndLeavesTheClaimTemplateAlone(t *testing.T) 
 		t.Fatal("the replica count changed more than spec.replicas")
 	}
 }
+
+// A replica count that is not a nonnegative whole number must fail the render: `int` alone turned null and
+// "oops" into 0 and silently stopped ClickHouse.
+func TestClickHouseReplicasRefusesAnythingButANonnegativeWholeNumber(t *testing.T) {
+	if _, err := exec.LookPath("helm"); err != nil {
+		t.Skip("helm is not installed")
+	}
+	for _, c := range [][]string{
+		{"--set-json", "clickhouse.replicas=null"},
+		{"--set-string", "clickhouse.replicas=oops"},
+		{"--set-string", "clickhouse.replicas=1"},
+		{"--set", "clickhouse.replicas=-1"},
+		{"--set-json", "clickhouse.replicas=1.5"},
+		{"--set-json", "clickhouse.replicas=true"},
+	} {
+		out, err := exec.Command("helm", append([]string{"template", "t", ".", "--show-only", "templates/clickhouse.yaml"}, c...)...).CombinedOutput()
+		if err == nil || !strings.Contains(string(out), "clickhouse.replicas") {
+			t.Fatalf("%v: want a render refusal naming clickhouse.replicas, got err=%v out=%.300s", c, err, out)
+		}
+	}
+}

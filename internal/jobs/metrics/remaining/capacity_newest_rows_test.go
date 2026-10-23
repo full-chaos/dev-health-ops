@@ -34,7 +34,7 @@ func TestCapacityNewestRowsCollapsesByTheRequiredKeyAndVersion(t *testing.T) {
 		t.Errorf("LIMIT 1 BY columns = %v, want %v", got, capacityRequiredCollapseKey)
 	}
 
-	order := strings.Index(query, "ORDER BY computed_at DESC, cityHash64(*) DESC")
+	order := strings.Index(query, "ORDER BY computed_at DESC, cityHash64(tuple(*)) DESC")
 	if order < 0 {
 		t.Errorf("newest row must be chosen by computed_at DESC with a content tie-break: %q", query)
 	}

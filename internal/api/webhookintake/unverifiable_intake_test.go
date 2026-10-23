@@ -266,3 +266,48 @@ func TestRefusedDeliveryWorkDoesNotDependOnTheCredential(t *testing.T) {
 		})
 	}
 }
+
+// The material derived once at construction accepts exactly what a direct HMAC with the credential
+// accepted, for every key length around the SHA-256 block size; an absent credential accepts nothing
+// signed with the empty key.
+func TestDerivedVerifyingKeyMatchesDirectHMACForEveryKeyLength(t *testing.T) {
+	body := []byte(`{"zen":"x"}`)
+	direct := func(secret string) string {
+		mac := hmac.New(sha256.New, []byte(secret))
+		mac.Write(body)
+		return hex.EncodeToString(mac.Sum(nil))
+	}
+	for _, length := range []int{1, 63, 64, 65, 128, 4096} {
+		secret := strings.Repeat("k", length-1) + "z"
+		key := newVerifyingKey(secret)
+		good := direct(secret)
+		if !verifyGitHubWithKey(body, "sha256="+good, key) || !verifyJiraWithKey(body, "sha256="+good, key) || !verifyJiraWithKey(body, good, key) {
+			t.Fatalf("length %d: a signature from a direct HMAC was refused", length)
+		}
+		flipped := good[:len(good)-1] + map[bool]string{true: "1", false: "0"}[good[len(good)-1] == '0']
+		if verifyGitHubWithKey(body, "sha256="+flipped, key) || verifyJiraWithKey(body, flipped, key) {
+			t.Fatalf("length %d: a changed signature was accepted", length)
+		}
+		if other := direct(secret + "x"); verifyGitHubWithKey(body, "sha256="+other, key) {
+			t.Fatalf("length %d: a signature of another key was accepted", length)
+		}
+	}
+	empty := newVerifyingKey("")
+	if verifyGitHubWithKey(body, "sha256="+direct(""), empty) || verifyJiraWithKey(body, direct(""), empty) || verifyGitLabWithKey("", empty) {
+		t.Fatal("an absent credential accepted a delivery signed with the empty key")
+	}
+}
+
+func TestDerivedGitLabDigestMatchesADirectCompare(t *testing.T) {
+	for _, length := range []int{1, 63, 64, 65, 4096} {
+		secret := strings.Repeat("t", length)
+		key := newVerifyingKey(secret)
+		for _, token := range []string{secret, secret + "x", secret[:length-1], "", strings.Repeat("t", 5000), "t"} {
+			a, b := sha256.Sum256([]byte(token)), sha256.Sum256([]byte(secret))
+			want := token != "" && a == b
+			if got := verifyGitLabWithKey(token, key); got != want {
+				t.Fatalf("secret length %d, token length %d: got %v, want %v", length, len(token), got, want)
+			}
+		}
+	}
+}

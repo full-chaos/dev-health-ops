@@ -99,7 +99,7 @@ func fetchLinkedTeamMetric(ctx context.Context, client QueryClient, scope *linke
 			continue
 		}
 		for _, row := range rows {
-			if row.TeamID == "" || (len(selected) > 0 && !selected[row.TeamID]) {
+			if row.TeamID == "" || (len(selected) > 0 && !selected[row.TeamID]) || !measurementRow(row) {
 				continue
 			}
 			k := key{bucketStart(bucket, day, startDay), row.TeamID}
@@ -153,4 +153,19 @@ func bucketStart(bucket string, day, startDay time.Time) time.Time {
 		return time.Date(day.Year(), day.Month(), 1, 0, 0, 0, 0, time.UTC)
 	}
 	return day.AddDate(0, 0, -int(day.Weekday()))
+}
+
+// measurementRow is the daily table's live-row rule (teamkeytables.WorkItemMetricsDaily
+// LiveRow): a row with every measure 0 and every nullable measure NULL is a
+// retraction, not a sample of a mean.
+func measurementRow(row workitemmetrics.MetricsDailyRow) bool {
+	return row.ItemsStarted != 0 || row.ItemsCompleted != 0 ||
+		row.ItemsStartedUnassigned != 0 || row.ItemsCompletedUnassigned != 0 ||
+		row.WIPCountEndOfDay != 0 || row.WIPUnassignedEndOfDay != 0 ||
+		row.BugCompletedRatio != 0 || row.StoryPointsCompleted != 0 ||
+		row.NewBugsCount != 0 || row.NewItemsCount != 0 ||
+		row.DefectIntroRate != 0 || row.WIPCongestionRatio != 0 || row.PredictabilityScore != 0 ||
+		row.CycleTimeP50Hours != nil || row.CycleTimeP90Hours != nil ||
+		row.LeadTimeP50Hours != nil || row.LeadTimeP90Hours != nil ||
+		row.WIPAgeP50Hours != nil || row.WIPAgeP90Hours != nil
 }

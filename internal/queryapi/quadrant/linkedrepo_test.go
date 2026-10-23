@@ -124,3 +124,19 @@ func TestBucketStartMatchesClickHouse(t *testing.T) {
 		}
 	}
 }
+
+func TestFetchLinkedTeamMetricSkipsRetractionRowsAsTheLiveRowRuleDoes(t *testing.T) {
+	rows := map[time.Time][]workitemmetrics.MetricsDailyRow{
+		dayOf("2026-09-14"): {{Day: dayOf("2026-09-14"), TeamID: "a", TeamName: "Alpha", ItemsCompleted: 1, WIPCountEndOfDay: 4}},
+		dayOf("2026-09-15"): {{Day: dayOf("2026-09-15"), TeamID: "a", TeamName: "Alpha"}},
+		dayOf("2026-09-16"): {{Day: dayOf("2026-09-16"), TeamID: "a", TeamName: "Alpha", NewItemsCount: 1}},
+	}
+	wip, err := fetchLinkedTeamMetric(context.Background(), nil, linkedScopeWithRows(rows), "wip", dayOf("2026-09-01"), dayOf("2026-09-28"), bucketWindow, "org", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []metricRow{{Bucket: dayOf("2026-09-01"), EntityID: "a", EntityLabel: "Alpha", Value: 2}}
+	if !reflect.DeepEqual(wip, want) {
+		t.Errorf("wip = %+v, want %+v (an all-zero row is no sample of the mean; a row with any measure is)", wip, want)
+	}
+}

@@ -111,8 +111,8 @@ func seedLinkedWorld(ctx context.Context, t *testing.T, admin stdclickhouse.Conn
 	for day := time.Date(2026, 8, 20, 0, 0, 0, 0, time.UTC); day.Before(time.Date(2026, 9, 25, 0, 0, 0, 0, time.UTC)); day = day.AddDate(0, 0, 1) {
 		triplet := workitemmetrics.ComputeStoredItemsDay(day, stored, nil, attributions)
 		for _, row := range triplet.MetricsDaily {
-			crossorg.Exec(ctx, t, admin, `INSERT INTO work_item_metrics_daily (org_id, day, provider, work_scope_id, team_id, team_name, items_started, items_completed, items_started_unassigned, items_completed_unassigned, wip_count_end_of_day, wip_unassigned_end_of_day, bug_completed_ratio, story_points_completed, computed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, 0, 0, 0, now())`,
-				org, row.Day, row.Provider, row.WorkScopeID, row.TeamID, row.TeamName, row.ItemsStarted, row.ItemsCompleted, row.WIPCountEndOfDay)
+			crossorg.Exec(ctx, t, admin, `INSERT INTO work_item_metrics_daily (org_id, day, provider, work_scope_id, team_id, team_name, items_started, items_completed, items_started_unassigned, items_completed_unassigned, wip_count_end_of_day, wip_unassigned_end_of_day, bug_completed_ratio, story_points_completed, new_bugs_count, new_items_count, computed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, now())`,
+				org, row.Day, row.Provider, row.WorkScopeID, row.TeamID, row.TeamName, row.ItemsStarted, row.ItemsCompleted, row.ItemsStartedUnassigned, row.ItemsCompletedUnassigned, row.WIPCountEndOfDay, row.WIPUnassignedEndOfDay, row.BugCompletedRatio, row.StoryPointsCompleted, row.NewBugsCount, row.NewItemsCount)
 		}
 		for _, row := range triplet.CycleTimes {
 			crossorg.Exec(ctx, t, admin, `INSERT INTO work_item_cycle_times (org_id, work_item_id, provider, day, work_scope_id, team_id, team_name, type, status, created_at, started_at, completed_at, cycle_time_hours, lead_time_hours, computed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, now())`,

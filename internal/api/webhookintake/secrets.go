@@ -2,6 +2,7 @@ package webhookintake
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"io"
 	"log/slog"
 )
@@ -29,6 +30,28 @@ func verifyingSecret(configured string) string {
 		return configured
 	}
 	return unverifiableKey
+}
+
+// verifyingKey is the fixed-size material a handler verifies with, made once when the handler is
+// built (startup): the per-request work then does not depend on the length of the provider
+// credential or on whether one is set. hmacKey is at most one SHA-256 block (a longer key is
+// hashed first, which is what HMAC does with it), so every HMAC pays the same two key blocks;
+// digest is the SHA-256 of the credential for a plain token compare.
+type verifyingKey struct {
+	hmacKey []byte
+	digest  [sha256.Size]byte
+}
+
+const sha256BlockSize = 64
+
+func newVerifyingKey(configured string) verifyingKey {
+	secret := []byte(verifyingSecret(configured))
+	key := secret
+	if len(key) > sha256BlockSize {
+		hashed := sha256.Sum256(key)
+		key = hashed[:]
+	}
+	return verifyingKey{hmacKey: key, digest: sha256.Sum256(secret)}
 }
 
 // LogUnconfiguredSecrets writes one line for each provider with no verification credential. It is

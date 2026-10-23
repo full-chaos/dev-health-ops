@@ -15,10 +15,14 @@ import (
 // verifyJiraSignature ports auth.py's verify_jira_signature: HMAC-SHA256 over
 // the raw body in X-Hub-Signature, an optional "sha256=" prefix either way.
 func verifyJiraSignature(body []byte, signatureHeader, secret string) bool {
+	return verifyJiraWithKey(body, signatureHeader, newVerifyingKey(secret))
+}
+
+func verifyJiraWithKey(body []byte, signatureHeader string, key verifyingKey) bool {
 	if signatureHeader == "" {
 		return false
 	}
-	mac := hmac.New(sha256.New, []byte(secret))
+	mac := hmac.New(sha256.New, key.hmacKey)
 	mac.Write(body)
 	computed := hex.EncodeToString(mac.Sum(nil))
 	expected := strings.TrimPrefix(signatureHeader, "sha256=")
@@ -27,14 +31,14 @@ func verifyJiraSignature(body []byte, signatureHeader, secret string) bool {
 
 // handleJiraWebhook ports router.py's jira_webhook.
 func (d Deps) handleJiraWebhook() http.HandlerFunc {
+	key := newVerifyingKey(d.secrets().Jira)
 	return func(w http.ResponseWriter, r *http.Request) {
-		secret := verifyingSecret(d.secrets().Jira)
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
 			policy.WriteDetail(w, http.StatusBadRequest, "Invalid request body", nil)
 			return
 		}
-		if !verifyJiraSignature(body, r.Header.Get("X-Hub-Signature"), secret) {
+		if !verifyJiraWithKey(body, r.Header.Get("X-Hub-Signature"), key) {
 			d.logger().Warn("Jira webhook signature validation failed")
 			policy.WriteDetail(w, http.StatusUnauthorized, "Invalid signature", nil)
 			return

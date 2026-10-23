@@ -171,7 +171,7 @@ func TestStandInKeyFailureStopsStartup(t *testing.T) {
 }
 
 func TestLogUnconfiguredSecretsWritesOneLinePerMissingProvider(t *testing.T) {
-	t.Setenv("GITHUB_WEBHOOK_SECRET", "set")
+	t.Setenv("GITHUB_WEBHOOK_SECRET", "marker-value-1")
 	t.Setenv("GITLAB_WEBHOOK_TOKEN", "")
 	t.Setenv("JIRA_WEBHOOK_SECRET", "")
 	var out bytes.Buffer
@@ -180,8 +180,8 @@ func TestLogUnconfiguredSecretsWritesOneLinePerMissingProvider(t *testing.T) {
 	if len(lines) != 2 || !strings.Contains(out.String(), "provider=gitlab") || !strings.Contains(out.String(), "provider=jira") || strings.Contains(out.String(), "provider=github") {
 		t.Fatalf("log = %q, want one line each for gitlab and jira", out.String())
 	}
-	if strings.Contains(out.String(), "set") && strings.Contains(out.String(), "value") {
-		t.Fatal("the log must not carry a value")
+	if strings.Contains(out.String(), "marker-value-1") {
+		t.Fatalf("the log carries a credential value: %q", out.String())
 	}
 }
 
@@ -224,5 +224,45 @@ func TestVerifyGitLabTokenComparesDigestsOfAnyLength(t *testing.T) {
 		if got := verifyGitLabToken(tc.header, tc.secret); got != tc.want {
 			t.Fatalf("verifyGitLabToken(len %d, len %d) = %v, want %v", len(tc.header), len(tc.secret), got, tc.want)
 		}
+	}
+}
+
+// The work of a refused delivery does not depend on whether a credential is set or on its length:
+// the allocations of one request are the same for an absent credential and for short and long ones.
+func TestRefusedDeliveryWorkDoesNotDependOnTheCredential(t *testing.T) {
+	for _, provider := range []string{"github", "gitlab", "jira"} {
+		t.Run(provider, func(t *testing.T) {
+			sigHeader := map[string]string{"github": "X-Hub-Signature-256", "gitlab": "X-Gitlab-Token", "jira": "X-Hub-Signature"}[provider]
+			headers := map[string]string{sigHeader: "sha256=" + strings.Repeat("0", 64)}
+			if provider == "github" {
+				headers["X-GitHub-Event"], headers["X-GitHub-Delivery"] = "push", "d"
+			}
+			if provider == "gitlab" {
+				headers["X-Gitlab-Event"] = "Push Hook"
+			}
+			measure := func(secret string) float64 {
+				// The production path: the credential comes from the environment, not from Deps.Secrets.
+				t.Setenv("GITHUB_WEBHOOK_SECRET", "")
+				t.Setenv("GITLAB_WEBHOOK_TOKEN", "")
+				t.Setenv("JIRA_WEBHOOK_SECRET", "")
+				t.Setenv(map[string]string{"github": "GITHUB_WEBHOOK_SECRET", "gitlab": "GITLAB_WEBHOOK_TOKEN", "jira": "JIRA_WEBHOOK_SECRET"}[provider], secret)
+				handler, path := intakeDeps(provider, "", slog.New(slog.NewTextHandler(io.Discard, nil)))
+				return testing.AllocsPerRun(100, func() {
+					req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"zen":"x"}`))
+					for k, v := range headers {
+						req.Header.Set(k, v)
+					}
+					rec := httptest.NewRecorder()
+					handler(rec, req)
+					if rec.Code != http.StatusUnauthorized {
+						t.Fatalf("status %d, want 401", rec.Code)
+					}
+				})
+			}
+			absent, short, long := measure(""), measure(strings.Repeat("k", 32)), measure(strings.Repeat("k", 4096))
+			if absent != short || absent != long {
+				t.Fatalf("allocations per refused delivery: absent %v, 32-byte %v, 4096-byte %v", absent, short, long)
+			}
+		})
 	}
 }

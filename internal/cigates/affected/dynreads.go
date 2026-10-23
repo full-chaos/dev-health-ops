@@ -108,12 +108,13 @@ var otherExec = map[string]bool{"os.StartProcess": true, "syscall.Exec": true, "
 
 // srcFile is one parsed Go file of the scan.
 type srcFile struct {
-	rel     string
-	fset    *token.FileSet
-	file    *ast.File
-	test    bool
-	imports map[string]string // local name -> import path
-	dotIO   bool              // dot-imports a package whose calls read paths
+	rel      string
+	fset     *token.FileSet
+	file     *ast.File
+	test     bool
+	imports  map[string]string // local name -> import path
+	allPaths []string          // every import path, blank and dot imports included
+	dotIO    bool              // dot-imports a package whose calls read paths
 }
 
 func newSrcFile(rel string, fset *token.FileSet, f *ast.File) *srcFile {
@@ -123,6 +124,7 @@ func newSrcFile(rel string, fset *token.FileSet, f *ast.File) *srcFile {
 		if err != nil {
 			continue
 		}
+		s.allPaths = append(s.allPaths, p)
 		name := path.Base(p)
 		if i := strings.LastIndexByte(name, '.'); strings.HasPrefix(p, "gopkg.in/") && i > 0 {
 			name = name[:i]
@@ -222,7 +224,7 @@ func execProgramDirs(byDir map[string][]*srcFile, module string) map[string]bool
 			if s.test {
 				continue
 			}
-			for _, p := range s.imports {
+			for _, p := range s.allPaths {
 				if rest, ok := strings.CutPrefix(p, module+"/"); ok && byDir[rest] != nil {
 					out = append(out, rest)
 				}

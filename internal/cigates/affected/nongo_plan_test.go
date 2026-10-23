@@ -312,6 +312,8 @@ func TestNonGoPlanExecDirMovesRelativeReadsOfProgramCode(t *testing.T) {
 			changed: []string{"docs/a.md"}, want: "FULL *", readsCode: 1, readsWant: []string{"cmd/tool\tdata.go"}},
 		{name: "library_of_a_program_relative_read_is_unbounded", head: map[string]string{"cmd/tool/data.go": prog4lib, "x/lib/lib.go": lib, "x/x_run_test.go": run, edges: "x\tx_run_test.go\tcmd/tool\n"},
 			changed: []string{"docs/a.md"}, want: "FULL *", readsCode: 1, readsWant: []string{"x/lib\tlib.go"}},
+		{name: "blank_imported_library_of_a_program_relative_read_is_unbounded", head: map[string]string{"cmd/tool/data.go": "package main\n\nimport _ \"m/x/lib\"\n\nfunc main() {}\n", "x/lib/lib.go": strings.Replace(lib, "func Read()", "func init()", 1), "x/x_run_test.go": run, edges: "x\tx_run_test.go\tcmd/tool\n"},
+			changed: []string{"docs/a.md"}, want: "FULL *", readsCode: 1, readsWant: []string{"x/lib\tlib.go"}},
 		{name: "library_no_program_imports_keeps_the_own_dir_rule", head: map[string]string{"x/lib/lib.go": lib},
 			changed: []string{"docs/a.md"}, want: "AFFECTED 1", keys: []string{"a"}},
 	})

@@ -825,6 +825,70 @@
         "line": 148
       },
       "surface_kind": "rest"
+    },
+    {
+      "accepted_credential_classes": [],
+      "classification": "public",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "GET /.well-known/jwks.json [dev-health-auth-service @api]",
+      "method": "GET",
+      "public_rationale": "The published token verification keys (public keys only), fetched anonymously by relying parties; returns no tenant data.",
+      "route": "/.well-known/jwks.json",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authapi/wellknown.go",
+        "line": 79
+      },
+      "surface_kind": "rest"
+    },
+    {
+      "accepted_credential_classes": [],
+      "classification": "public",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "HEAD /.well-known/jwks.json [dev-health-auth-service @api]",
+      "method": "HEAD",
+      "public_rationale": "The published token verification keys (public keys only), fetched anonymously by relying parties; returns no tenant data.",
+      "route": "/.well-known/jwks.json",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authapi/wellknown.go",
+        "line": 80
+      },
+      "surface_kind": "rest"
+    },
+    {
+      "accepted_credential_classes": [],
+      "classification": "public",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "GET /.well-known/openid-configuration [dev-health-auth-service @api]",
+      "method": "GET",
+      "public_rationale": "The issuer's discovery document (issuer, jwks_uri, signing algorithms), fetched anonymously by relying parties; returns no tenant data.",
+      "route": "/.well-known/openid-configuration",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authapi/wellknown.go",
+        "line": 86
+      },
+      "surface_kind": "rest"
+    },
+    {
+      "accepted_credential_classes": [],
+      "classification": "public",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "HEAD /.well-known/openid-configuration [dev-health-auth-service @api]",
+      "method": "HEAD",
+      "public_rationale": "The issuer's discovery document (issuer, jwks_uri, signing algorithms), fetched anonymously by relying parties; returns no tenant data.",
+      "route": "/.well-known/openid-configuration",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authapi/wellknown.go",
+        "line": 87
+      },
+      "surface_kind": "rest"
     }
   ],
   "schema_version": "endpoint-profile.v1",

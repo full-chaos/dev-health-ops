@@ -88,3 +88,34 @@ func sumChurn(ids []string, table map[string]float64) float64 {
 	// a DIFFERENT effort metric for a churn list that cancels to near zero.
 	return pythonparity.Sum(values)
 }
+
+// Effort basis values of work_unit_investments.effort_basis (migration 140). An empty
+// string is a row written before the column: "not recorded", never "measured".
+const (
+	EffortBasisMeasured      = "measured"
+	EffortBasisPartialCapped = "partial_capped"
+	EffortBasisUnmeasured    = "unmeasured"
+)
+
+// ComputeEffortBasis says whether the unit's commit effort was measured. Commit
+// stats are capped, so a commit with no git_commit_stats row (no key in
+// commitChurn) adds zero to the effort, the same as a measured zero.
+func ComputeEffortBasis(commitIDs []string, commitChurn map[string]float64, effort Effort) string {
+	if len(commitIDs) == 0 {
+		return EffortBasisMeasured
+	}
+	missing := 0
+	for _, id := range commitIDs {
+		if _, ok := commitChurn[id]; !ok {
+			missing++
+		}
+	}
+	switch {
+	case missing == 0:
+		return EffortBasisMeasured
+	case missing == len(commitIDs) && effort.Value == 0:
+		return EffortBasisUnmeasured
+	default:
+		return EffortBasisPartialCapped
+	}
+}

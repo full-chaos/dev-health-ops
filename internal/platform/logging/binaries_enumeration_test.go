@@ -34,7 +34,7 @@ import (
 //	            redacting handler as the process default before dispatch
 var binaryLogging = map[string]string{
 	"ask-dev-jobs-probe":                     "installs",
-	"auth-migrate":                           "silent",
+	"auth-migrate":                           "installs",
 	"auth-service":                           "authruntime",
 	"cigate":                                 "installs",
 	"dev-health-migration-matrix":            "installs",

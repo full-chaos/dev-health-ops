@@ -295,6 +295,8 @@ func markerMatchesTransport(kind, name, head, shape string) bool {
 		return found && markerTransportToken(rest) == name
 	case "dedicated_header", "signature_header":
 		return strings.EqualFold(markerTransportToken(head), name)
+	case "content_type":
+		return strings.Contains(head, "content-type "+name)
 	}
 	return false
 }
@@ -539,5 +541,43 @@ func TestTheProfileSchemaAcceptsAMediaTypeTypAsTheSelectorName(t *testing.T) {
 	profile["class_disambiguator"] = map[string]any{"kind": "jwt_header_typ", "name": "at+jwt"}
 	if err := ValidateEndpointAuthProfile(root, profile); err != nil {
 		t.Fatalf("refused jwt_header_typ/at+jwt as the selector for the envelope vs the user access token: %v", err)
+	}
+}
+
+func TestSelectorGateSeparatesTheTwoBodyCredentialClassesByContentType(t *testing.T) {
+	classes := []any{"acr_device_flow_code", "acr_workload_identity_exchange"}
+	registry := realRegistry(t)
+	for _, name := range []string{"application/json", "application/x-www-form-urlencoded", "Application/JSON; charset=utf-8", "APPLICATION/X-WWW-FORM-URLENCODED;charset=UTF-8"} {
+		profile := multiClassProfile(t, classes, "content_type", name)
+		if err := CheckClassSelector(profile, registry); err != nil {
+			t.Errorf("gate refused content_type %q for the device-code and token-exchange classes: %v", name, err)
+		}
+	}
+	profile := multiClassProfile(t, classes, "content_type", "text/plain")
+	if err := CheckClassSelector(profile, registry); err == nil {
+		t.Error("gate accepted a media type neither class declares")
+	}
+}
+
+func TestSelectorGateRejectsAContentTypeBothAcceptedClassesDeclare(t *testing.T) {
+	shared := ClassMarker{Kind: "content_type", Name: "application/json"}
+	registry := syntheticRegistry(
+		RegistryClass{ClassID: "acr_device_flow_code", Markers: []ClassMarker{shared}},
+		RegistryClass{ClassID: "acr_workload_identity_exchange", Markers: []ClassMarker{{Kind: "content_type", Name: "Application/JSON; charset=utf-8"}}},
+	)
+	profile := multiClassProfile(t, []any{"acr_device_flow_code", "acr_workload_identity_exchange"}, "content_type", "application/json")
+	if err := CheckClassSelector(profile, registry); err == nil {
+		t.Fatal("gate accepted a content_type that both classes declare once parameters and case are ignored")
+	}
+}
+
+func TestSelectorGateDoesNotMatchAContentTypeSelectorAgainstAHeaderMarker(t *testing.T) {
+	registry := syntheticRegistry(
+		RegistryClass{ClassID: "acr_device_flow_code", Markers: []ClassMarker{{Kind: "dedicated_header", Name: "application/json"}}},
+		RegistryClass{ClassID: "acr_workload_identity_exchange", Markers: []ClassMarker{{Kind: "content_type", Name: "application/x-www-form-urlencoded"}}},
+	)
+	profile := multiClassProfile(t, []any{"acr_device_flow_code", "acr_workload_identity_exchange"}, "content_type", "application/json")
+	if err := CheckClassSelector(profile, registry); err == nil {
+		t.Fatal("gate matched a content_type selector against a dedicated_header marker")
 	}
 }

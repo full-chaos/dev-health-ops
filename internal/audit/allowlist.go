@@ -31,6 +31,10 @@ var allowedAttributeKeys = map[string]struct{}{
 	"display_prefix":      {},
 	"source":              {},
 	"amr":                 {},
+	"key_id":              {},
+	"related_key_id":      {},
+	"rotation_verb":       {},
+	"rotation_refusal":    {},
 }
 
 // ValidateAttributes refuses an audit attribute map that has a key outside the
@@ -128,15 +132,24 @@ var attributeVocabulary = map[string][]string{
 		"entitlement_snapshot_applied", "denied_no_membership", "denied_no_grant", "denied_policy",
 		"accepted", "invalid_credentials", "account_locked", "principal_deactivated", "email_unverified",
 		"email_collision", "signup_unavailable", "identity_conflict",
-		"provider_already_linked", "expired", "principal_not_found", "malformed",
+		"provider_already_linked", "expired", "principal_not_found", "malformed", "compromised",
 	},
 	"target_kind": {
 		"principal", "organization", "membership", "role_assignment", "resource_grant", "credential",
 		"session", "external_identity", "service_account", "workload", "policy_revision", "entitlement_snapshot",
+		"signing_key",
 	},
-	"resource_kind":    {"organization", "repository", "project", "team"},
-	"previous_status":  {"active", "disabled", "revoked", "pending", "expired", "suspended"},
-	"new_status":       {"active", "disabled", "revoked", "pending", "expired", "suspended"},
+	"resource_kind":   {"organization", "repository", "project", "team"},
+	"previous_status": {"active", "disabled", "revoked", "pending", "expired", "suspended", "retiring", "retired", "compromised"},
+	"new_status":      {"active", "disabled", "revoked", "pending", "expired", "suspended", "retiring", "retired", "compromised"},
+	// rotation_verb and rotation_refusal are the signing-key state machine's
+	// verbs and refusal reasons (internal/auth/keyrotation).
+	"rotation_verb": {"adopt", "register", "activate", "retire", "rollback", "compromise"},
+	"rotation_refusal": {
+		"table_not_empty", "table_empty", "key_unknown", "key_not_in_custody", "key_registered",
+		"custody_not_one_active", "wrong_state", "floor_not_reached", "compromised_terminal",
+		"successor_ineligible", "unknown_verb", "state_changed",
+	},
 	"provider":         {"local", "github", "gitlab", "jira", "linear", "google", "microsoft", "saml", "oidc"},
 	"client_service":   {"auth-service", "api", "web", "billing-edge", "worker", "acr-api", "acr-mcp"},
 	"credential_class": {"user_access_token", "refresh_credential", "workload_token", "acr_client", "external_push", "service_account_key"},
@@ -168,6 +181,9 @@ var attributeIDRules = map[string]*regexp.Regexp{
 	"role_key":       regexp.MustCompile(`^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*){1,3}$`),
 	"action_key":     regexp.MustCompile(`^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*){1,3}$`),
 	"display_prefix": regexp.MustCompile(`^(fcacr|fcpush|svc|rt)_[A-Za-z0-9]{2,8}$`),
+	// A signing key's kid: public, the JWS header value (keystore.KeyIDPattern).
+	"key_id":         regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`),
+	"related_key_id": regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`),
 }
 
 var uuidPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)

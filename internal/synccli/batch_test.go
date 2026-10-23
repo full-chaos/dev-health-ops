@@ -33,7 +33,11 @@ type batchHarness struct {
 	peak     int
 	fail     func(providersync.InProcessRun) error
 	hold     func(providersync.InProcessRun)
-	opened   int
+	// beforeStart runs before a run is recorded as started: a test delays one start with it.
+	beforeStart func(providersync.InProcessRun)
+	// started, when set, is broadcast (with mu held) each time a run is recorded as started.
+	started *sync.Cond
+	opened  int
 }
 
 func (h *batchHarness) executor() Executor {
@@ -52,11 +56,17 @@ func (h *batchHarness) executor() Executor {
 			return h.repos, h.listErr
 		},
 		Run: func(_ context.Context, run providersync.InProcessRun) (providersync.CompleteRouteExecutionResult, error) {
+			if h.beforeStart != nil {
+				h.beforeStart(run)
+			}
 			h.mu.Lock()
 			h.runs = append(h.runs, run)
 			h.inFlight++
 			h.peak = max(h.peak, h.inFlight)
 			h.events = append(h.events, "start:"+run.SourceExternalID)
+			if h.started != nil {
+				h.started.Broadcast()
+			}
 			h.mu.Unlock()
 			if h.hold != nil {
 				h.hold(run)

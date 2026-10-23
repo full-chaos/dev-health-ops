@@ -490,6 +490,25 @@ func composeStackFindings(text []byte) ([]string, error) {
 	if !usersFileMounted {
 		found("api login: clickhouse does not mount the users file at %s, so the login %s does not exist", apiUsersFileTarget, apiClickHouseUser)
 	}
+	systemLogsMounted := false
+	for _, mount := range clickHouseMounts {
+		if strings.HasSuffix(mount.target, "/docker_related_config.xml") {
+			found("system logs: clickhouse mounts a file over the image's docker_related_config.xml, which makes the server listen on loopback only")
+		}
+		if mount.target != systemLogsFileTarget {
+			continue
+		}
+		systemLogsMounted = true
+		if mount.source != systemLogsFileSource {
+			found("system logs: clickhouse mounts %s at %s, want the checked-in file %s", mount.source, systemLogsFileTarget, systemLogsFileSource)
+		}
+		if !mount.readOnly {
+			found("system logs: the system logs file is mounted read-write")
+		}
+	}
+	if !systemLogsMounted {
+		found("system logs: clickhouse does not mount the system logs file at %s, so the system log tables have no ttl", systemLogsFileTarget)
+	}
 	goAPIEnvironment := stack.Services[goAPIHost].Environment
 	if goAPIEnvironment["DEV_HEALTH_CH_API_HOST"] != clickHouseService || goAPIEnvironment[apiClickHouseUserKey] != apiClickHouseUser || goAPIEnvironment["DEV_HEALTH_CH_API_DB"] == "" {
 		found("api login: go-api has DEV_HEALTH_CH_API_HOST %q, %s %q, DEV_HEALTH_CH_API_DB %q, want host %s, user %s and a database: without them the team and identity admin routes are not mounted",
@@ -692,6 +711,30 @@ func TestComposeStackCheckSeesEachDefect(t *testing.T) {
 			old:  "      - " + apiUsersFileSource + ":" + apiUsersFileTarget + ":ro\n",
 			new:  "      - ./docker/users.xml:" + apiUsersFileTarget + ":ro\n",
 			want: "api login: clickhouse mounts ./docker/users.xml",
+		},
+		{
+			name: "the system logs file not mounted",
+			old:  "      - " + systemLogsFileSource + ":" + systemLogsFileTarget + ":ro\n",
+			new:  "",
+			want: "system logs: clickhouse does not mount the system logs file",
+		},
+		{
+			name: "the system logs file mounted read-write",
+			old:  "      - " + systemLogsFileSource + ":" + systemLogsFileTarget + ":ro\n",
+			new:  "      - " + systemLogsFileSource + ":" + systemLogsFileTarget + "\n",
+			want: "system logs: the system logs file is mounted read-write",
+		},
+		{
+			name: "another file at the system logs target",
+			old:  "      - " + systemLogsFileSource + ":" + systemLogsFileTarget + ":ro\n",
+			new:  "      - ./docker/other.xml:" + systemLogsFileTarget + ":ro\n",
+			want: "system logs: clickhouse mounts ./docker/other.xml",
+		},
+		{
+			name: "docker_related_config.xml replaced",
+			old:  "      - " + systemLogsFileSource + ":" + systemLogsFileTarget + ":ro\n",
+			new:  "      - " + systemLogsFileSource + ":" + systemLogsFileTarget + ":ro\n      - ./docker/x.xml:/etc/clickhouse-server/config.d/docker_related_config.xml:ro\n",
+			want: "docker_related_config.xml",
 		},
 		{
 			name: "go-api without its ClickHouse login",

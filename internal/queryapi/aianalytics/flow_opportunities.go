@@ -14,6 +14,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/activeteams"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/rowview"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/scopelabel"
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
@@ -264,6 +265,7 @@ FROM work_item_metrics_daily FINAL
 WHERE day >= today() - {window_days:UInt32}@@TEAM@@
   AND org_id = {org_id:String}
   AND team_id != ''
+  AND ` + rowview.OrgPredicate("work_item_metrics_daily", "") + `
   AND ` + liverow.Predicate("work_item_metrics_daily", "") + `
 GROUP BY team_id
 HAVING data_days >= 5

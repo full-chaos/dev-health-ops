@@ -69,6 +69,9 @@ func ReasonOf(err error) string {
 	return keystore.ReasonOf(err)
 }
 
+// ValidKeyID reports whether kid has the kid syntax.
+func ValidKeyID(kid string) bool { return keystore.KeyIDPattern.MatchString(kid) }
+
 // KeySet is a validated set of signing keys: exactly one active key (G-61:
 // one active issuer per token class), unique kids.
 type KeySet struct {

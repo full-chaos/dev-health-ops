@@ -342,8 +342,11 @@ func TestVenueOracleBillingLedger(t *testing.T) {
 	}
 	inspected, entitlementsInspected, stripeFailures := 0, 0, 0
 	var orglessRefused []string
+	pin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/billing-ledger.go-pin.json", SHA256: ledgerPinSHA256, Ruling: overflowPageRuling})
 	receipt := venueoracle.Diff(t, base, requests, python, venueoracle.DiffOptions{
 		Golden: golden,
+		Retire: retiredLedgerRequest,
+		Pin:    pin,
 		// D6145: the org-less caller's entitlements and invoice-list reads answer 403 where Python answered another
 		// status or body; neither request writes a row or calls Stripe.
 		OrglessTokens: map[string]bool{venue.Tokens["noOrg"]: true}, MaxOrglessRefusals: 2,
@@ -431,6 +434,7 @@ func TestVenueOracleBillingLedger(t *testing.T) {
 		_ = os.WriteFile(path+".ledger", []byte(receipt), 0o600)
 	}
 	t.Log("\n" + receipt)
+	pin.Finish(t)
 	golden.Finish(t)
 }
 
@@ -540,4 +544,20 @@ func ledgerBareRequests(tokens map[string]string) []venueoracle.Request {
 		{Name: "reconcile: no key", Method: "POST", Path: p + "/reconcile", Headers: headers("super")},
 		{Name: "reconcile: member, no key", Method: "POST", Path: p + "/reconcile", Headers: headers("memberA")},
 	}
+}
+
+// overflowPageRuling retired the Python reference of the billing list requests
+// that carry an offset or limit past int64: Python answered an unhandled 500,
+// the Go api answers the pinned 422 range refusal of every other bad value.
+const overflowPageRuling = "CHAOS-10656 (fcs lead decision 2026-10-22): an offset or limit past int64 answers the pinned 422 range refusal, not the old Python 500"
+
+// ledgerPinSHA256 is the digest of testdata/billing-ledger.go-pin.json.
+const ledgerPinSHA256 = "068111cc889375248bf8b57d22839257c9e6125036701987708c6f56bbfbf448"
+
+func retiredLedgerRequest(request venueoracle.Request) bool {
+	switch request.Name {
+	case "inv list: offset overflow", "refund list: offset overflow", "audit list: limit overflow":
+		return true
+	}
+	return false
 }

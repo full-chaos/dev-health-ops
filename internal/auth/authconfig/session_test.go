@@ -176,3 +176,32 @@ func TestTheCompatSwitchIsGone(t *testing.T) {
 		t.Fatal("the safe attributes still report the switch")
 	}
 }
+
+func TestTheSocialLinkRoutesAreOffUnlessSetToTrueWithTheSessionSecrets(t *testing.T) {
+	cases := map[string]struct {
+		env     map[string]string
+		enabled bool
+		wantErr bool
+	}{
+		"unset":                 {env: compatEnv()},
+		"blank":                 {env: withLink(compatEnv(), " ")},
+		"false":                 {env: withLink(compatEnv(), "false")},
+		"true":                  {env: withLink(compatEnv(), "true"), enabled: true},
+		"true padded":           {env: withLink(compatEnv(), " true "), enabled: true},
+		"1 is refused":          {env: withLink(compatEnv(), "1"), wantErr: true},
+		"TRUE is refused":       {env: withLink(compatEnv(), "TRUE"), wantErr: true},
+		"true without secrets":  {env: withLink(baseEnv(), "true"), wantErr: true},
+		"false without secrets": {env: withLink(baseEnv(), "false")},
+	}
+	for name, tc := range cases {
+		cfg, err := Load(Spec{LookupEnv: lookupFrom(tc.env)})
+		if (err != nil) != tc.wantErr || cfg.Session.SocialLinkRoutes != tc.enabled {
+			t.Errorf("%s: err %v, enabled %v; want err %v, enabled %v", name, err, cfg.Session.SocialLinkRoutes, tc.wantErr, tc.enabled)
+		}
+	}
+}
+
+func withLink(env map[string]string, value string) map[string]string {
+	env[EnvSocialLinkRoutes] = value
+	return env
+}

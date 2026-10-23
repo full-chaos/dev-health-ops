@@ -214,7 +214,7 @@ func deliver(t *testing.T, signingSecret string, now time.Time, body, header str
 
 	var logs bytes.Buffer
 	h := handlers{stripe: stripeclient.New(stripeclient.Options{Key: "sk_test_unit"}),
-		webhookSecret: secrets.NewValue(signingSecret), logger: slog.New(slog.NewJSONHandler(&logs, nil)),
+		webhookSecret: newWebhookCredential(secrets.NewValue(signingSecret)), logger: slog.New(slog.NewJSONHandler(&logs, nil)),
 		now: func() time.Time { return now }}
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/billing/webhooks/stripe", strings.NewReader(body))
 	if header != "" {

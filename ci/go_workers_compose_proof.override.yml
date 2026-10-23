@@ -1,0 +1,37 @@
+# Proof-only override for ci/check_go_workers_compose.sh. compose.yml pins host-global container names and host
+# ports on the data services for the dev stack; a throwaway project name does not isolate either, so the proof drops
+# them and lets compose name each container <project>-<service>-1. Each worker publishes its operator port (8080)
+# on an ephemeral loopback port; the script reads it back from compose.
+services:
+  postgres:
+    container_name: !reset null
+    ports: !reset []
+  pgbouncer:
+    container_name: !reset null
+    ports: !reset []
+  pgbouncer-river-queue:
+    container_name: !reset null
+  pgbouncer-river-coordinator:
+    container_name: !reset null
+  clickhouse:
+    container_name: !reset null
+    ports: !reset []
+  valkey:
+    container_name: !reset null
+    ports: !reset []
+  migrate:
+    container_name: !reset null
+  go-worker-heavy:
+    ports: !override ["127.0.0.1::8080"]
+  go-worker-ops:
+    ports: !override ["127.0.0.1::8080"]
+  go-worker-sync:
+    ports: !override ["127.0.0.1::8080"]
+  go-worker-sync-provider:
+    ports: !override ["127.0.0.1::8080"]
+  go-stream-external:
+    ports: !override ["127.0.0.1::8080"]
+  go-stream-ingest:
+    ports: !override ["127.0.0.1::8080"]
+  go-stream-pagerduty:
+    ports: !override ["127.0.0.1::8080"]

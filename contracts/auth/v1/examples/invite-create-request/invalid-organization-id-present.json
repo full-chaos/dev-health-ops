@@ -1,0 +1,6 @@
+{
+  "schema_version": "invite-create-request.v1",
+  "email": "new.member@example.com",
+  "role": "member",
+  "organization_id": "org_0123456789abcdefghijkl"
+}

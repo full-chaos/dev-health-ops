@@ -135,8 +135,6 @@ type StatusLedger struct {
 // shas of the reading it came from.
 type Render struct {
 	SchemaVersion int `json:"schema_version"`
-	// RenderedAt is when -render ran.
-	RenderedAt time.Time `json:"rendered_at"`
 	// OpsSha is the MERGE-BASE with main at render time -- the last commit
 	// on main that the render observed -- NOT the commit the render ran on.
 	//
@@ -149,10 +147,6 @@ type Render struct {
 	// already on main), and it still bounds staleness, because a render made
 	// from a long-stale branch has a correspondingly old merge-base.
 	OpsSha string `json:"ops_sha"`
-	// RenderCommit is the commit actually checked out when -render ran.
-	// Recorded for the audit trail and NEVER ancestry-checked, precisely
-	// because a branch commit legitimately stops existing after a squash.
-	RenderCommit string `json:"render_commit,omitempty"`
 	// SchemaDigest is the current contracts/graphql/v1/schema-digest.json pin.
 	SchemaDigest string `json:"schema_digest"`
 	// FleetReadAt is when the image labels were read (zero if not read).
@@ -197,6 +191,10 @@ func LoadRender(path string) (*Render, error) {
 		return nil, fmt.Errorf("read render snapshot: %w", err)
 	}
 	var render Render
+	raw, err = dropLegacyRenderFields(raw)
+	if err != nil {
+		return nil, fmt.Errorf("parse %s: %w", path, err)
+	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&render); err != nil {
@@ -373,4 +371,17 @@ func LoadCatalog(path string) (Catalog, error) {
 		return Catalog{}, fmt.Errorf("%s: %w", path, err)
 	}
 	return catalog, nil
+}
+
+// dropLegacyRenderFields removes the two stamps -render no longer writes
+// (CHAOS-8787) so a snapshot committed before that change still loads, and
+// `-render -fleet none` keeps its fleet reading instead of discarding it.
+func dropLegacyRenderFields(raw []byte) ([]byte, error) {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return nil, err
+	}
+	delete(fields, "rendered_at")
+	delete(fields, "render_commit")
+	return json.Marshal(fields)
 }

@@ -74,6 +74,7 @@ const historyPythonBuild = "de4bc686e35308fb20670ad6ce8333952e2b43e6"
 // executed once on historyPythonBuild and are frozen in testdata/golden/history.json (the recipe regenerates
 // them by execution); the scenarios are part of the golden's key.
 func TestHistoryMatchesTheFrozenAlembicOutput(t *testing.T) {
+	pgmigrate.UseFrozenChain(t) // the frozen goldens end at pgmigrate.FrozenHead
 	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
 		Path:        "testdata/golden/history.json",
 		PythonBuild: historyPythonBuild,
@@ -152,6 +153,7 @@ const historyWalkSHA256 = "2908b27a529ed543cde55f821f6a89eec8b30c014d2fc14a4f99e
 // testdata/golden/history_walk.json (CHAOS-7797), so no Python starts here. With DHO_HISTORY_UPDATE=1 it
 // rewrites baseline/history.json from the golden.
 func TestHistoryGraphIsTheAlembicChain(t *testing.T) {
+	pgmigrate.UseFrozenChain(t) // the frozen goldens end at pgmigrate.FrozenHead
 	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
 		Path:        "testdata/golden/history_walk.json",
 		PythonBuild: statesPythonBuild,

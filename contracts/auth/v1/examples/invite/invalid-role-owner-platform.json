@@ -1,0 +1,11 @@
+{
+  "schema_version": "invite.v1",
+  "invite_id": "inv_0123456789abcdefghijkl",
+  "organization_id": "org_0123456789abcdefghijkl",
+  "role": "platform_admin",
+  "status": "pending",
+  "invited_by": "prn_0123456789abcdefghijkl",
+  "created_at": "2026-10-22T10:00:00Z",
+  "expires_at": "2026-10-29T10:00:00Z",
+  "revision": 1
+}

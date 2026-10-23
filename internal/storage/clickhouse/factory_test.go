@@ -56,3 +56,22 @@ func TestOpenReturnsSanitizedUnavailableError(t *testing.T) {
 		t.Fatalf("Open() exposed ClickHouse connection material: %v", err)
 	}
 }
+
+func TestClickHouseOptionsConfigSettingsOverrideDSN(t *testing.T) {
+	config := DefaultConfig("clickhouse://u:p@h:9000/db?mutations_sync=0&join_use_nulls=1")
+	config.Settings = map[string]any{"mutations_sync": 2, "alter_sync": 2}
+	options, err := clickHouseOptions(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if options.Settings["mutations_sync"] != 2 || options.Settings["alter_sync"] != 2 || options.Settings["join_use_nulls"] != 1 {
+		t.Fatalf("settings = %v", options.Settings)
+	}
+	plain, err := clickHouseOptions(DefaultConfig("clickhouse://u:p@h:9000/db?join_use_nulls=1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plain.Settings) != 1 {
+		t.Fatalf("nil Config.Settings changed options: %v", plain.Settings)
+	}
+}

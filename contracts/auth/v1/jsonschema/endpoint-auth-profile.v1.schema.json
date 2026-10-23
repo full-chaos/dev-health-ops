@@ -70,9 +70,41 @@
         },
         "name": {
           "$ref": "../endpoint-profile.schema.json#/$defs/endpointProfile/properties/class_disambiguator/properties/name",
-          "description": "The scheme, prefix, header name, JWT header alg or JWT header typ the selector reads. A name, never a credential value."
+          "description": "The scheme, prefix, header name, JWT header alg, JWT header typ or Content-Type media type the selector reads. A name, never a credential value."
         }
       },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "content_type"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "name": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9.+-]*/[a-z0-9][a-z0-9.+-]*$"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "name": {
+                "type": "string",
+                "not": {
+                  "pattern": "/"
+                }
+              }
+            }
+          }
+        }
+      ],
       "description": "REQUIRED when more than one class is accepted. Declares the selector that picks the class. Without it a multi-class route can only be served by fan-out."
     },
     "token": {

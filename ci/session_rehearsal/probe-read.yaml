@@ -1,0 +1,22 @@
+# Read probe: one request every 0.25 s to go-api's public Service. Each log line is
+# "<epoch seconds> <http status or 000>". 000 = no connection (no ready endpoint).
+apiVersion: v1
+kind: Pod
+metadata:
+  name: probe-read
+  labels: {app: rehearsal-probe}
+spec:
+  restartPolicy: Never
+  terminationGracePeriodSeconds: 0
+  containers:
+    - name: probe
+      image: ${LOCAL_PG}
+      command:
+        - sh
+        - -c
+        - |
+          while true; do
+            code="$(wget -S -T 1 -O /dev/null "http://ap-dev-health-go-api:8000/api/v1/auth/me" 2>&1 | sed -n 's/^ *HTTP\/[0-9.]* \([0-9][0-9][0-9]\).*/\1/p' | head -n 1)"
+            echo "$(date +%s) ${code:-000}"
+            sleep 0.25
+          done

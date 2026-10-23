@@ -622,3 +622,23 @@ func TestPasswordBoundsAreRefusedBeforeAnyConsumeInEveryFlow(t *testing.T) {
 		}
 	}
 }
+
+func TestVerifyAndResetRedeemOnlyTheirOwnPurpose(t *testing.T) {
+	rig := newFlowRig(t, true)
+	u := rig.user("p@example.com", false)
+	rig.grant("verify-secret", u.ID)
+	rig.grant("reset-secret", u.ID)
+	if _, err := rig.f.Verify(context.Background(), "verify-secret"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rig.f.Reset(context.Background(), "reset-secret", "A-new-pass-77"); err != nil {
+		t.Fatal(err)
+	}
+	got := []Purpose{}
+	for _, r := range rig.links.redeemed {
+		got = append(got, r.Purpose)
+	}
+	if want := []Purpose{PurposeEmailVerification, PurposePasswordReset}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("redeemed purposes = %v, want %v", got, want)
+	}
+}

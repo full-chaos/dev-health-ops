@@ -73,6 +73,9 @@ func TestMaterializeComponentGoldenPath(t *testing.T) {
 	if result.Investment.EffortMetric != units.EffortMetricChurnLOC || result.Investment.EffortValue != 42.0 {
 		t.Errorf("effort = (%s, %v), want (%s, 42)", result.Investment.EffortMetric, result.Investment.EffortValue, units.EffortMetricChurnLOC)
 	}
+	if result.Investment.EffortBasis != units.EffortBasisMeasured {
+		t.Errorf("EffortBasis = %q, want %q (the commit has a stats row)", result.Investment.EffortBasis, units.EffortBasisMeasured)
+	}
 	if result.Investment.WorkUnitType == nil || *result.Investment.WorkUnitType != "bug" {
 		t.Errorf("WorkUnitType = %v, want \"bug\"", result.Investment.WorkUnitType)
 	}

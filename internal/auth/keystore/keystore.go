@@ -126,6 +126,8 @@ type FileSource struct {
 	Path string
 	// KeyID is the JWKS `kid` this key is published under.
 	KeyID string
+	// States, when set, gives the key its effective state (see StateOverride).
+	States StateOverride
 }
 
 var (

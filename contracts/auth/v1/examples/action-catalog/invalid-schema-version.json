@@ -1,0 +1,14 @@
+{
+  "schema_version": "actions.v2",
+  "catalog_version": 1,
+  "description": "example",
+  "actions": [
+    {
+      "action": "members.read",
+      "scope": "organization",
+      "resource_kind": "organization",
+      "risk_class": "low",
+      "cache_class": "decision_bound"
+    }
+  ]
+}

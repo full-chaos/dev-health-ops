@@ -1,0 +1,95 @@
+{
+  "schema_version": "roles.v1",
+  "catalog_version": 2,
+  "description": "The closed role catalog. Each role lists its actions explicitly; there is no inheritance, wildcard or all-actions role. A platform role holds only platform actions; an organization role holds only organization actions.",
+  "roles": [
+    {
+      "role": "viewer",
+      "scope": "organization",
+      "actions": [
+        "analytics.read",
+        "git.read",
+        "members.read",
+        "metrics.read",
+        "org.read",
+        "settings.read",
+        "teams.read",
+        "work_items.read"
+      ]
+    },
+    {
+      "role": "member",
+      "scope": "organization",
+      "actions": [
+        "analytics.export",
+        "analytics.read",
+        "git.read",
+        "members.read",
+        "metrics.read",
+        "org.read",
+        "settings.read",
+        "teams.read",
+        "work_items.read"
+      ]
+    },
+    {
+      "role": "admin",
+      "scope": "organization",
+      "actions": [
+        "analytics.export",
+        "analytics.read",
+        "git.read",
+        "git.sync",
+        "integrations.read",
+        "integrations.write",
+        "members.invite",
+        "members.manage",
+        "members.read",
+        "metrics.compute",
+        "metrics.read",
+        "org.read",
+        "org.write",
+        "settings.read",
+        "settings.write",
+        "teams.read",
+        "teams.write",
+        "work_items.read",
+        "work_items.sync"
+      ]
+    },
+    {
+      "role": "owner",
+      "scope": "organization",
+      "actions": [
+        "analytics.export",
+        "analytics.read",
+        "git.read",
+        "git.sync",
+        "integrations.read",
+        "integrations.write",
+        "members.invite",
+        "members.manage",
+        "members.read",
+        "metrics.compute",
+        "metrics.read",
+        "org.delete",
+        "org.read",
+        "org.write",
+        "settings.read",
+        "settings.write",
+        "teams.read",
+        "teams.write",
+        "work_items.read",
+        "work_items.sync"
+      ]
+    },
+    {
+      "role": "platform_admin",
+      "scope": "platform",
+      "actions": [
+        "admin.orgs",
+        "admin.users"
+      ]
+    }
+  ]
+}

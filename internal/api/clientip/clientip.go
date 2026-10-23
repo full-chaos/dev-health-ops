@@ -152,3 +152,15 @@ func (s trustedSet) contains(addr netip.Addr) bool {
 	}
 	return false
 }
+
+// WidePrefixes counts the TRUSTED_PROXIES entries wider than a /28 (IPv4) or a
+// /124 (IPv6): each trusts every address in it as a proxy.
+func WidePrefixes() int {
+	wide := 0
+	for _, prefix := range parseTrusted(os.Getenv("TRUSTED_PROXIES")).prefixes {
+		if prefix.Addr().BitLen()-prefix.Bits() > 4 {
+			wide++
+		}
+	}
+	return wide
+}

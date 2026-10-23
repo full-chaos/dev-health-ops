@@ -125,6 +125,27 @@ func TestLinkCredentialOfAnotherPurposeIsNotRedeemed(t *testing.T) {
 	}
 }
 
+func TestLinkCredentialOfAnotherPurposeIsNotRedeemedBothWays(t *testing.T) {
+	ctx := context.Background()
+	env, links := linkEnv(t, ctx)
+	p := env.principal(t, ctx)
+	for _, tc := range []struct{ issued, wrong Purpose }{
+		{PurposeEmailVerification, PurposePasswordReset},
+		{PurposePasswordReset, PurposeEmailVerification},
+	} {
+		hash := linkHash("both-ways-" + string(tc.issued))
+		if err := links.Issue(ctx, IssueRequest{PrincipalID: p, Purpose: tc.issued, TokenHash: hash, TTL: ResetTTL}); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok, err := links.Redeem(ctx, RedeemRequest{Purpose: tc.wrong, TokenHash: hash}); err != nil || ok {
+			t.Fatalf("issued %s, redeemed as %s = ok %v, err %v", tc.issued, tc.wrong, ok, err)
+		}
+		if _, ok, err := links.Redeem(ctx, RedeemRequest{Purpose: tc.issued, TokenHash: hash}); err != nil || !ok {
+			t.Fatalf("own-purpose Redeem of %s after the refusal = ok %v, err %v", tc.issued, ok, err)
+		}
+	}
+}
+
 // A reissue deletes the prior unconsumed credentials of the same principal and
 // purpose in the issue transaction. Consumed rows and other purposes stay.
 func TestReissueDeletesPriorUnconsumedCredentialsOfThePurpose(t *testing.T) {

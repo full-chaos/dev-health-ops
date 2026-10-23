@@ -1,5 +1,5 @@
 {
-  "description": "The closed vocabularies for two auth wire fields. A value is added only with the PR of the producer that emits it, together with its own migration; no speculative values (CHAOS-10194). error.v1 and authorization_decision.v1 reason_code stay open per surface and are NOT governed by this file.",
+  "description": "The closed vocabularies for three auth wire fields. A value is added only with the PR of the producer that emits it, together with its own migration; no speculative values (CHAOS-10194). error.v1 reason_code stays open (shape only) and is NOT governed by this file; authorization_decision.v1 reason_code is closed by decision_reason_code.",
   "revoked_reason": {
     "fields": [
       "credential-entry.v1 revoked_reason",
@@ -72,5 +72,17 @@
       "malformed"
     ],
     "note": "The codes used by authorization decisions and error.v1 in valid fixtures of this corpus, the revoked_reason values, and the 40 reason codes the merged audit producer (internal/audit attributeVocabulary) accepts. A Go test checks the producer's list against audit-event.v1."
+  },
+  "decision_reason_code": {
+    "fields": [
+      "authorization_decision.v1 reason_code",
+      "authorization_batch_response.v1 decisions[].decision.reason_code"
+    ],
+    "values": [
+      "allowed_by_repository_grant",
+      "grant_absent",
+      "repository_not_granted",
+      "platform_role_absent"
+    ]
   }
 }

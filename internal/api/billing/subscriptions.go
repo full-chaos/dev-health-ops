@@ -33,12 +33,8 @@ func readPage(r *http.Request, errs *pybody.Errors) pageQuery {
 	if limit, ok := errs.QueryInt("limit", pybody.LastQueryValue(query, "limit"), 20, &limitMin, &limitMax); ok {
 		out.limit = limit.Int64()
 	}
-	if offset, ok := errs.QueryInt("offset", pybody.LastQueryValue(query, "offset"), 0, &offsetMin, nil); ok {
-		if offset.IsInt64() {
-			out.offset = offset.Int64()
-		} else {
-			out.offset = -1
-		}
+	if offset, ok := errs.QueryInt("offset", pybody.LastQueryValue(query, "offset"), 0, &offsetMin, pybody.Int64Max()); ok {
+		out.offset = offset.Int64()
 	}
 	out.orgID, _ = errs.QueryUUID("org_id", pybody.LastQueryValue(query, "org_id"))
 	return out
@@ -257,9 +253,6 @@ func (h handlers) listSubscriptions(w http.ResponseWriter, r *http.Request) {
 		if answer != nil || err != nil {
 			return derefReply(answer), err
 		}
-		if page.offset < 0 {
-			return reply{}, errOverflow
-		}
 		where, args := orgFilter(`WHERE true`, nil, org)
 		rows, err := tx.Query(ctx, `SELECT `+subscriptionColumns+` FROM subscriptions s `+where+
 			` ORDER BY s.updated_at DESC LIMIT `+itoa(int(page.limit))+` OFFSET `+itoa(int(page.offset)), args...)
@@ -360,9 +353,6 @@ func (h handlers) subscriptionHistory(w http.ResponseWriter, r *http.Request) {
 		org, answer, err := h.resolveOrg(ctx, tx, policy.UserFrom(ctx), page.orgID)
 		if answer != nil || err != nil {
 			return derefReply(answer), err
-		}
-		if page.offset < 0 {
-			return reply{}, errOverflow
 		}
 		where, args := orgFilter(`WHERE true`, nil, org)
 		from := ` FROM subscription_events e JOIN subscriptions s ON s.id = e.subscription_id `

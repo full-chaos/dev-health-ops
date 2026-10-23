@@ -5,8 +5,8 @@
 // org and kind (ingest:{org}:{kind}) that the stream runner's
 // InternalIngestHandler consumes, and answers 202. Authentication is the
 // route's own, not the api's: an API key and/or an HMAC of the raw body
-// from the environment, failing closed when neither is configured outside
-// a development environment (CHAOS-4720).
+// from the environment, failing closed when neither is configured, in every
+// environment (CHAOS-4720).
 //
 // The order is FastAPI's: the body is read and decoded first (a decode
 // failure is answered before any dependency), then authentication (401),
@@ -137,9 +137,11 @@ func (h handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		var tooLarge *http.MaxBytesError
 		if errors.As(err, &tooLarge) {
+			h.countMalformed()
 			policy.WriteDetail(w, http.StatusRequestEntityTooLarge, "Request Entity Too Large", nil)
 			return
 		}
+		h.countMalformed()
 		h.logger.ErrorContext(r.Context(), "legacy ingest: read body failed", slog.String("error", err.Error()))
 		policy.WriteInternal(w)
 		return
@@ -147,15 +149,18 @@ func (h handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	r.Body = io.NopCloser(bytes.NewReader(raw))
 	body, outcome, failure, err := pybody.Read(r)
 	if err != nil {
+		h.countMalformed()
 		h.logger.ErrorContext(r.Context(), "legacy ingest: read body failed", slog.String("error", err.Error()))
 		policy.WriteInternal(w)
 		return
 	}
 	switch outcome {
 	case pybody.DecodeFailed:
+		h.countMalformed()
 		policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail([]pybody.Error{*failure}), nil)
 		return
 	case pybody.ParseFailed:
+		h.countMalformed()
 		policy.WriteDetail(w, http.StatusBadRequest, "There was an error parsing the body", nil)
 		return
 	}

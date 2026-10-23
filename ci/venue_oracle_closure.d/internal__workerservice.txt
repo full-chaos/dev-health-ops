@@ -1,3 +1,4 @@
+contracts/auth/v1
 internal/aftercommit
 internal/api/apimetrics
 internal/api/externalurl
@@ -86,10 +87,13 @@ internal/pgmigrate
 internal/pgmigrate/schemagate
 internal/pgmigrate/schemagate/schemagatetest
 internal/platform/config
+internal/platform/credshape
 internal/platform/dbphase
 internal/platform/dbspan
+internal/platform/dsnclass
 internal/platform/errortext
 internal/platform/errortext/hardened
+internal/platform/fernet
 internal/platform/health
 internal/platform/lifecycle
 internal/platform/logging
@@ -113,11 +117,14 @@ internal/pythonparity
 internal/pythonparity/emailvalidator
 internal/pythonparity/pyidna
 internal/pythonparity/pyunicodedata
+internal/queryapi/rowview
 internal/scheduler/sync
 internal/storage/clickhouse
+internal/storage/clickhouse/engineclause
 internal/storage/clickhouse/latestrow
 internal/storage/clickhouse/liverow
 internal/storage/postgres
+internal/storage/postgres/aclguard
 internal/storage/postgres/pgconfig
 internal/storage/river
 internal/storage/roleacl

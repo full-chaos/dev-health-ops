@@ -113,6 +113,7 @@ const revisionsPythonBuild = "de4bc686e35308fb20670ad6ce8333952e2b43e6"
 // testdata/golden/revisions.json (the recipe regenerates them by execution); the scenarios are part of the
 // golden's key.
 func TestRevisionsMatchTheFrozenAlembicOutput(t *testing.T) {
+	pgmigrate.UseFrozenChain(t) // the frozen goldens end at pgmigrate.FrozenHead
 	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
 		Path:        "testdata/golden/revisions.json",
 		PythonBuild: revisionsPythonBuild,

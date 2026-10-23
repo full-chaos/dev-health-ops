@@ -68,7 +68,8 @@ spec:
       ports:
         - protocol: TCP
           port: 443
-{{- range $target := list (dict "component" "go-api" "enabled" .Values.goApi.enabled "port" .Values.goApi.port) (dict "component" "web" "enabled" .Values.web.enabled "port" .Values.web.port) (dict "component" "query-api" "enabled" .Values.queryApi.enabled "port" .Values.queryApi.port) }}
+{{- /* CHAOS-10743: with goApi.networkPolicy.enabled the go-api-internal policy admits the controller (its pods, not its namespace) to the fenced ports, so this namespace-wide go-api rule is not rendered. */}}
+{{- range $target := list (dict "component" "go-api" "enabled" (and .Values.goApi.enabled (not .Values.goApi.networkPolicy.enabled)) "port" .Values.goApi.port) (dict "component" "web" "enabled" .Values.web.enabled "port" .Values.web.port) (dict "component" "query-api" "enabled" .Values.queryApi.enabled "port" .Values.queryApi.port) }}
 {{- if $target.enabled }}
 ---
 apiVersion: networking.k8s.io/v1

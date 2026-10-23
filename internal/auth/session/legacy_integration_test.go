@@ -358,8 +358,8 @@ func TestExchangeLegacyRefusesWithoutChangingAnything(t *testing.T) {
 	if err != nil || result.Reason != ReasonPrincipalDeactivated {
 		t.Fatalf("disabled principal: %s, %v; want principal_deactivated", result.Reason, err)
 	}
-	if e.goRevokedAt(t, ctx, "jti-mine") != nil {
-		t.Fatal("a refused exchange for a disabled principal revoked the go-api token")
+	if e.goRevokedAt(t, ctx, "jti-mine") == nil {
+		t.Fatal("a first exchange for a disabled principal left the go-api token live")
 	}
 	if n := e.count(t, ctx, `SELECT count(*) FROM auth.sessions WHERE principal_id = $1`, user.String()); n != 0 {
 		t.Fatalf("%d sessions after only refusals, want 0", n)
@@ -433,5 +433,123 @@ func TestExchangeLegacyRefusesATokenGoAPIRevoked(t *testing.T) {
 	}
 	if n := e.count(t, ctx, `SELECT count(*) FROM auth.sessions WHERE principal_id = $1`, user.String()); n != 0 {
 		t.Fatalf("%d sessions from revoked go-api tokens, want 0", n)
+	}
+}
+
+func (e *env) requireDeactivated(t *testing.T, ctx context.Context, user uuid.UUID, jti string) {
+	t.Helper()
+	result, err := e.store.ExchangeLegacy(ctx, legacy(user, jti))
+	if err != nil || result.Reason != ReasonPrincipalDeactivated || result.Credential.Reveal() != "" {
+		t.Fatalf("exchange of %s = %s, %v; want principal_deactivated and no credential", jti, result.Reason, err)
+	}
+}
+
+func TestExchangeLegacyFirstExchangeForADisabledPrincipalRevokesTheFamily(t *testing.T) {
+	ctx := testContext(t)
+	e := newEnv(t, ctx)
+	user := e.goUser(t, ctx, 0)
+	family := uuid.New()
+	e.goRefresh(t, ctx, user, family, "jti-first", time.Hour)
+	e.goRefresh(t, ctx, user, family, "jti-first-sibling", time.Hour)
+	other := uuid.New()
+	e.goRefresh(t, ctx, user, other, "jti-other-family", time.Hour)
+	e.guarded(t, ctx, `UPDATE auth.principals SET disabled_at = now() WHERE id = $1`, user.String())
+	e.requireDeactivated(t, ctx, user, "jti-first")
+	for _, jti := range []string{"jti-first", "jti-first-sibling"} {
+		if e.goRevokedAt(t, ctx, jti) == nil {
+			t.Fatalf("%s is still live after the family revoke", jti)
+		}
+	}
+	if e.goRevokedAt(t, ctx, "jti-other-family") != nil {
+		t.Fatal("another family was revoked")
+	}
+	if n := e.count(t, ctx, `SELECT count(*) FROM auth.sessions WHERE principal_id = $1`, user.String()); n != 0 {
+		t.Fatalf("%d sessions, want 0", n)
+	}
+	if n := e.count(t, ctx, `SELECT count(*) FROM auth.security_audit_events WHERE event_type = 'auth.session.refresh_reuse_revoked' AND subject_principal_id = $1`, user.String()); n != 0 {
+		t.Fatalf("%d audit rows for a family with no session, want 0", n)
+	}
+	again, err := e.store.ExchangeLegacy(ctx, legacy(user, "jti-first"))
+	if err != nil || again.Reason != ReasonRefreshReused || again.Credential.Reveal() != "" {
+		t.Fatalf("second presentation = %s, %v; want refresh_reused and no credential", again.Reason, err)
+	}
+}
+
+func TestExchangeLegacyFirstExchangeForADisabledPrincipalRevokesExchangedSessions(t *testing.T) {
+	ctx := testContext(t)
+	e := newEnv(t, ctx)
+	user := e.goUser(t, ctx, 0)
+	family := uuid.New()
+	e.goRefresh(t, ctx, user, family, "jti-a", time.Hour)
+	e.goRefresh(t, ctx, user, family, "jti-b", time.Hour)
+	first, err := e.store.ExchangeLegacy(ctx, legacy(user, "jti-a"))
+	if err != nil || first.Reason != ReasonAccepted {
+		t.Fatalf("first exchange = %s, %v", first.Reason, err)
+	}
+	e.guarded(t, ctx, `UPDATE auth.principals SET disabled_at = now() WHERE id = $1`, user.String())
+	e.requireDeactivated(t, ctx, user, "jti-b")
+	if e.goRevokedAt(t, ctx, "jti-b") == nil {
+		t.Fatal("jti-b is still live")
+	}
+	current, err := e.store.Current(ctx, first.Session.ID)
+	if err != nil || current.RevokedAt == nil {
+		t.Fatalf("the exchanged session is live after the family revoke (%v)", err)
+	}
+	if n := e.count(t, ctx, `SELECT count(*) FROM auth.security_audit_events WHERE event_type = 'auth.session.refresh_reuse_revoked' AND subject_principal_id = $1`, user.String()); n != 1 {
+		t.Fatalf("%d audit rows, want 1", n)
+	}
+}
+
+func TestExchangeLegacyFirstExchangeForAMissingPrincipalRevokesTheFamily(t *testing.T) {
+	ctx := testContext(t)
+	e := newEnv(t, ctx)
+	user := uuid.New()
+	tag := user.String()[:8]
+	if _, err := e.admin.Exec(ctx, `INSERT INTO public.users (id, email, username, full_name, password_hash, auth_provider,
+		is_active, is_verified, is_superuser, token_version, created_at, updated_at)
+		VALUES ($1, $2, $3, 'Legacy User', NULL, 'local', true, true, false, 0, now(), now())`,
+		user, "ghost-"+tag+"@example.test", "ghost-"+tag); err != nil {
+		t.Fatalf("seed go-api user without a principal: %v", err)
+	}
+	family := uuid.New()
+	e.goRefresh(t, ctx, user, family, "jti-ghost", time.Hour)
+	e.goRefresh(t, ctx, user, family, "jti-ghost-sibling", time.Hour)
+	e.requireDeactivated(t, ctx, user, "jti-ghost")
+	if e.goRevokedAt(t, ctx, "jti-ghost-sibling") == nil {
+		t.Fatal("the family is still live for a missing principal")
+	}
+}
+
+// A disabled principal does not widen the revoke: a token that is unknown, the
+// subject's of someone else, another organization's or expired is refused as
+// before and no go-api row changes.
+func TestExchangeLegacyRefusalsForADisabledPrincipalRevokeNothing(t *testing.T) {
+	ctx := testContext(t)
+	e := newEnv(t, ctx)
+	user := e.goUser(t, ctx, 0)
+	stranger := e.goUser(t, ctx, 0)
+	e.goRefresh(t, ctx, user, uuid.New(), "jti-mine", time.Hour)
+	e.goRefresh(t, ctx, user, uuid.New(), "jti-expired", -time.Minute)
+	org := uuid.New()
+	e.guarded(t, ctx, `UPDATE auth.principals SET disabled_at = now() WHERE id = $1`, user.String())
+	e.guarded(t, ctx, `UPDATE auth.principals SET disabled_at = now() WHERE id = $1`, stranger.String())
+	for name, tc := range map[string]struct {
+		legacy LegacyRefresh
+		want   Reason
+	}{
+		"unknown jti":          {legacy(user, "jti-nobody"), ReasonRefreshUnknown},
+		"another subject":      {legacy(stranger, "jti-mine"), ReasonRefreshUnknown},
+		"another organization": {LegacyRefresh{PrincipalID: user, OrganizationID: &org, JTI: contracts.NewSecretString("jti-mine")}, ReasonRefreshUnknown},
+		"expired":              {legacy(user, "jti-expired"), ReasonRefreshExpired},
+	} {
+		result, err := e.store.ExchangeLegacy(ctx, tc.legacy)
+		if err != nil || result.Reason != tc.want {
+			t.Fatalf("%s: %s, %v; want %s", name, result.Reason, err, tc.want)
+		}
+	}
+	for _, jti := range []string{"jti-mine", "jti-expired"} {
+		if e.goRevokedAt(t, ctx, jti) != nil {
+			t.Fatalf("a refusal revoked %s", jti)
+		}
 	}
 }

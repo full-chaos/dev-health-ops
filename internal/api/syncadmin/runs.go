@@ -1,7 +1,6 @@
 package syncadmin
 
 import (
-	"errors"
 	"math/big"
 	"net/http"
 	"sort"
@@ -43,22 +42,12 @@ func pageQuery(w http.ResponseWriter, r *http.Request) (limit, offset *big.Int, 
 	query := r.URL.Query()
 	var errs pybody.Errors
 	limit, _ = errs.QueryInt("limit", pybody.LastQuery(query, "limit"), 50, &pageLimitMin, &pageLimitMax)
-	offset, _ = errs.QueryInt("offset", pybody.LastQuery(query, "offset"), 0, &pageOffsetGe, nil)
+	offset, _ = errs.QueryInt("offset", pybody.LastQuery(query, "offset"), 0, &pageOffsetGe, pybody.Int64Max())
 	if len(errs) > 0 {
 		writeQueryErrors(w, errs)
 		return nil, nil, false
 	}
 	return limit, offset, true
-}
-
-// offsetValue is an offset past int64 as Postgres receives it: the Python
-// plane binds it as an int8 parameter too, and asyncpg refuses a value out
-// of that range before any query runs, which FastAPI answers with a 500.
-func offsetValue(offset *big.Int) (int64, bool) {
-	if !offset.IsInt64() {
-		return 0, false
-	}
-	return offset.Int64(), true
 }
 
 // listJobs is list_sync_config_jobs.
@@ -82,11 +71,7 @@ func (h *handlers) listJobs(w http.ResponseWriter, r *http.Request) {
 		policy.WriteModel(w, http.StatusOK, []pyjson.Value{}, nil)
 		return
 	}
-	offsetInt, ok := offsetValue(offset)
-	if !ok {
-		h.fail(w, r, "offset_range", errOffsetRange)
-		return
-	}
+	offsetInt := offset.Int64()
 	runs, err := h.store.jobRuns(ctx, jobIDs, limit.Int64(), offsetInt)
 	if err != nil {
 		h.fail(w, r, "job_runs", err)
@@ -129,8 +114,6 @@ func (h *handlers) listJobs(w http.ResponseWriter, r *http.Request) {
 	}
 	policy.WriteModel(w, http.StatusOK, list, nil)
 }
-
-var errOffsetRange = errors.New("offset is outside the int8 range")
 
 // plannerSyncRunID is _planner_job_run_sync_run_id: result["sync_run_id"]
 // when result is a dict, read as uuid.UUID(str(value)); nil when absent,
@@ -429,11 +412,7 @@ func (h *handlers) listBackfillJobs(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, "count_backfill_jobs", err)
 		return
 	}
-	offsetInt, ok := offsetValue(offset)
-	if !ok {
-		h.fail(w, r, "offset_range", errOffsetRange)
-		return
-	}
+	offsetInt := offset.Int64()
 	jobs, err := h.store.backfillJobs(ctx, org, limit.Int64(), offsetInt)
 	if err != nil {
 		h.fail(w, r, "backfill_jobs", err)

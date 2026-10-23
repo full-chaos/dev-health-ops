@@ -157,16 +157,18 @@ func TestHTTPClientBoundsAndObservesReservationRelease(t *testing.T) {
 	client.Metrics = metrics
 	client.ReservationReleaseTimeout = 10 * time.Millisecond
 
-	started := time.Now()
 	response, err := client.Do(context.Background(), http.MethodGet, "/items", nil)
 	if !errors.Is(err, ErrBudgetUnavailable) || response != nil {
 		t.Fatalf("response=%v error=%v", response, err)
 	}
-	if elapsed := time.Since(started); elapsed > 500*time.Millisecond {
-		t.Fatalf("release exceeded bounded cleanup budget: %s", elapsed)
-	}
+	// Event, not elapsed time: the release blocks until its context ends, so Do
+	// returning at all means the context ended; the budget it carried is what the
+	// release saw on entry, which cannot exceed the configured timeout.
 	if !reservation.deadlineSeen {
 		t.Fatal("release context did not carry a deadline")
+	}
+	if reservation.budgetAtEntry > client.ReservationReleaseTimeout {
+		t.Fatalf("release context budget = %s, want at most %s", reservation.budgetAtEntry, client.ReservationReleaseTimeout)
 	}
 	var output bytes.Buffer
 	if err := metrics.WritePrometheus(&output); err != nil {
@@ -296,11 +298,16 @@ func (s staticBudgetStore) Acquire(context.Context, BudgetKey) (Reservation, err
 }
 
 type blockingReservation struct {
-	deadlineSeen bool
+	deadlineSeen  bool
+	budgetAtEntry time.Duration
 }
 
 func (r *blockingReservation) Release(ctx context.Context) error {
-	_, r.deadlineSeen = ctx.Deadline()
+	var deadline time.Time
+	deadline, r.deadlineSeen = ctx.Deadline()
+	if r.deadlineSeen {
+		r.budgetAtEntry = time.Until(deadline)
+	}
 	<-ctx.Done()
 	return ctx.Err()
 }

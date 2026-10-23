@@ -1,7 +1,8 @@
 // Package affected decides which Go test packages a change set can affect: one verdict for the integration plan job of
 // go.yml and for the go-quality legs. A pull request whose every changed path is a .go file plans AFFECTED: the changed
 // packages' reverse import closure. A non-Go path plans the packages that read it (reads.tsv by class, walks.tsv, dynreads.tsv
-// and edges.tsv, generated from the code and checked by cigate plan-reads), or NONE when no package reads it; a non-Go path
+// and edges.tsv, generated from the code and checked by cigate plan-reads; a code-scope read the tool cannot bound plans
+// the packages whose programs reach it, reach.tsv), or NONE when no package reads it; a non-Go path
 // in no declared class plans FULL, as do shared inputs and every push to main, merge group, schedule or manual run. Any
 // doubt plans FULL.
 package affected
@@ -26,6 +27,10 @@ import (
 var (
 	sharedPrefixes = []string{"ci/", ".github/", "internal/testsupport/"}
 	sharedFiles    = map[string]bool{"go.mod": true, "go.sum": true, "go.work": true, "go.work.sum": true}
+	// Pure distribution tables: they move packages between CI shards and change no test, so a change to one is not a shared
+	// change. The set is exact (a new ci/ file is FULL) and is matched against the path as written, never a cleaned one.
+	bookkeepingFiles = map[string]bool{"ci/go_test_weights.tsv": true, "ci/go_providersync_race_weights.tsv": true}
+	bookkeepingDirs  = []string{"ci/go_race_weights.d/", "ci/venue_oracle_weights.d/"}
 	// The planner's code and data, and the workflow steps that build and run it: a change here can steer the verdict of
 	// this very change set, so it is FULL. Test files (outside testdata) are not inputs.
 	plannerDirs  = []string{"cmd/cigate/", "internal/cigates/affected/"}
@@ -169,10 +174,11 @@ type planInput struct {
 	root        string
 	goFilesFull bool
 	always      []string
-	tables      *tables   // the read tables; nil plans every non-Go path FULL
-	guard       []string  // defects of the read tables against the code (plan-reads): any one plans FULL
-	symlinks    []string  // repository paths tracked symlinks point at
-	log         io.Writer // one line per selected package and why; nil discards
+	tables      *tables                  // the read tables; nil plans every non-Go path FULL
+	guard       []string                 // defects of the read tables against the code (plan-reads): any one plans FULL
+	guardFn     func() ([]string, error) // computes guard when the verdict reaches it; nil keeps guard
+	symlinks    []string                 // repository paths tracked symlinks point at
+	log         io.Writer                // one line per selected package and why; nil discards
 }
 
 func hasAnyPrefix(p string, prefixes []string) bool {
@@ -267,7 +273,7 @@ func plan(in planInput) (Verdict, error) {
 		if plannerFiles[p] || (hasAnyPrefix(p, plannerDirs) && !strings.HasSuffix(p, "_test.go") && !inTestdata(p)) {
 			return full("planner input: " + p), nil
 		}
-		if sharedFiles[p] || hasAnyPrefix(p, sharedPrefixes) {
+		if !isBookkeepingTable(raw, p) && (sharedFiles[p] || hasAnyPrefix(p, sharedPrefixes)) {
 			return full("shared change: " + p), nil
 		}
 		if goModFiles[path.Base(p)] {
@@ -326,16 +332,41 @@ func plan(in planInput) (Verdict, error) {
 	if in.goFilesFull && len(goPaths) > 0 {
 		return full("Go source in the change set: every package runs"), nil
 	}
-	if len(in.guard) > 0 {
-		return full("the read tables differ from the code (cigate plan-reads): " + in.guard[0]), nil
+	guard := in.guard
+	if in.guardFn != nil {
+		var err error
+		if guard, err = in.guardFn(); err != nil {
+			return Verdict{}, err
+		}
+	}
+	if len(guard) > 0 {
+		return full("the read tables differ from the code (cigate plan-reads): " + guard[0]), nil
 	}
 	if t == nil {
 		t = &tables{}
 	}
 	changedPaths := append(append([]string{}, goPaths...), nonGo...)
+	// A code-scope site the tool cannot bound runs only in the programs that reach it (reach.tsv): their packages are
+	// selected (and every key that runs one). A site reach.tsv does not place selects its reverse import closure.
+	unbounded := func(r siteRow, why string) {
+		if r.test() {
+			sel.only(importPath(r.pkg), why)
+			return
+		}
+		rs, ok := t.reachOf(r.pkg, r.site)
+		if !ok {
+			sel.closure(importPath(r.pkg), why)
+			return
+		}
+		for _, p := range sortedKeys(rs) {
+			if p != reachNone {
+				sel.only(importPath(p), why+", reached from "+p+" (reach.tsv)")
+			}
+		}
+	}
 	for _, w := range t.walks {
 		if w.root == unexpressed {
-			sel.reader(importPath(w.pkg), w.test(), "walks.tsv "+w.pkg+" "+w.site+" walks an unbounded root")
+			unbounded(w.siteRow, "walks.tsv "+w.pkg+" "+w.site+" walks an unbounded root")
 			continue
 		}
 		for _, p := range changedPaths {
@@ -362,14 +393,18 @@ func plan(in planInput) (Verdict, error) {
 			sort.Strings(pkgs)
 		}
 		if len(pkgs) == 0 {
-			sel.reader(importPath(e.pkg), e.test(), "edges.tsv "+e.pkg+" "+e.site+" runs "+e.target)
+			if e.target == unexpressed {
+				unbounded(e.siteRow, "edges.tsv "+e.pkg+" "+e.site+" runs "+e.target)
+			} else {
+				sel.reader(importPath(e.pkg), e.test(), "edges.tsv "+e.pkg+" "+e.site+" runs "+e.target)
+			}
 			continue
 		}
 		edges = append(edges, ran{e, pkgs})
 	}
 	// An unbounded read may name a changed Go file as well as a data file: every change set selects its readers.
 	for _, d := range t.dynReads {
-		sel.reader(importPath(d.pkg), d.test(), "dynreads.tsv "+d.pkg+" "+d.site+" reads an unbounded path")
+		unbounded(d, "dynreads.tsv "+d.pkg+" "+d.site+" reads an unbounded path")
 	}
 	always := map[string]bool{}
 	for _, k := range in.always {
@@ -509,12 +544,14 @@ func PlanVerdict(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
-		reads, err := ScanReads(*root)
-		if err != nil {
-			fmt.Fprintln(stderr, "scan the Go sources for reads:", err)
-			return 1
+		// The scan is the cost of the call (parsing every Go source): it runs only for a verdict that reaches the guard.
+		in.tables, in.guardFn = tb, func() ([]string, error) {
+			reads, err := ScanReads(*root)
+			if err != nil {
+				return nil, fmt.Errorf("scan the Go sources for reads: %w", err)
+			}
+			return checkReads(*root, tb, reads).defects, nil
 		}
-		in.tables, in.guard = tb, checkReads(*root, tb, reads).defects
 		if in.symlinks, err = symlinkTargets(*root); err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
@@ -585,4 +622,21 @@ func symlinkTargets(root string) ([]string, error) {
 		out = append(out, r)
 	}
 	return out, nil
+}
+
+// isBookkeepingTable reports whether the changed path is a pure distribution table: raw is the path as the diff names
+// it and must already be canonical, so a "../" path that cleans into the set stays a shared change.
+func isBookkeepingTable(raw, p string) bool {
+	if raw != p {
+		return false
+	}
+	if bookkeepingFiles[p] {
+		return true
+	}
+	for _, dir := range bookkeepingDirs {
+		if name, ok := strings.CutPrefix(p, dir); ok && name != "" && !strings.Contains(name, "/") && strings.HasSuffix(name, ".tsv") {
+			return true
+		}
+	}
+	return false
 }

@@ -30,18 +30,43 @@ type Signer struct {
 
 // FileConfig selects file custody: a key-set manifest, or one key file and its
 // kid (an active one-key set). authconfig makes the two forms exclusive.
+// States, when set, gives every key its durable rotation state.
 type FileConfig struct {
 	KeySetPath string
 	KeyPath    string
 	KeyID      string
+	States     *KeyStates
 }
 
 // NewFileSigner returns a Signer over file custody.
 func NewFileSigner(config FileConfig) *Signer {
-	if config.KeySetPath != "" {
-		return &Signer{custody: keystore.NewFileCustody(config.KeySetPath)}
+	return &Signer{custody: fileCustody(config)}
+}
+
+func fileCustody(config FileConfig) keystore.Custody {
+	var states keystore.StateOverride
+	if config.States != nil {
+		states = config.States.override
 	}
-	return &Signer{custody: keystore.FileSource{Path: config.KeyPath, KeyID: config.KeyID}}
+	if config.KeySetPath != "" {
+		return keystore.NewFileCustodyWithStates(config.KeySetPath, states)
+	}
+	return keystore.FileSource{Path: config.KeyPath, KeyID: config.KeyID, States: states}
+}
+
+// CustodyKeys lists every custodied key with the state custody itself gives
+// it (config.States is not applied): what an operator registers.
+func CustodyKeys(ctx context.Context, config FileConfig) ([]Key, error) {
+	config.States = nil
+	custodied, err := fileCustody(config).Keys(ctx)
+	if err != nil {
+		return nil, err
+	}
+	keys := make([]Key, len(custodied))
+	for i, key := range custodied {
+		keys[i] = Key{KeyID: key.KeyID, State: key.State, Algorithm: key.Algorithm, PublicKey: key.PublicKey}
+	}
+	return keys, nil
 }
 
 // KeySet reads and validates the current key set.

@@ -2,6 +2,7 @@ package syncadmin
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -279,14 +280,45 @@ func deriveShownTargets(ctx context.Context, read func(context.Context, string, 
 	return nil
 }
 
-// selectionLock serialises the saves of one integration's selection for the
-// rest of the transaction, so the rows a save reads are the rows it changes.
-func selectionLock(ctx context.Context, tx pgx.Tx, orgID string, integrationID uuid.UUID) error {
-	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`,
-		fmt.Sprintf("sync-target-dataset-reconcile:%s:%s", orgID, integrationID)); err != nil {
-		return fmt.Errorf("dataset selection lock: %w", err)
+// lockConfigSelections takes the selection locks a save of config needs, in
+// the hierarchy of providersync.LockIntegrationSelection: the parent
+// configuration's integration, the config's own, then the integrations of its
+// children in ascending id (a cascade writes them). A config with no
+// integration takes none.
+func lockConfigSelections(ctx context.Context, tx pgx.Tx, orgID string, config *syncConfig) error {
+	if config.IntegrationID == nil {
+		return nil
 	}
-	return nil
+	first := *config.IntegrationID
+	if config.ParentID != nil {
+		var parent *uuid.UUID
+		if err := tx.QueryRow(ctx, `SELECT integration_id FROM sync_configurations WHERE org_id = $1 AND id = $2`,
+			orgID, *config.ParentID).Scan(&parent); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("read the parent integration to lock: %w", err)
+		}
+		if parent != nil {
+			first = *parent
+		}
+	}
+	others := []uuid.UUID{*config.IntegrationID}
+	rows, err := tx.Query(ctx, `SELECT integration_id FROM sync_configurations
+WHERE org_id = $1 AND parent_id = $2 AND integration_id IS NOT NULL`, orgID, config.ID)
+	if err != nil {
+		return fmt.Errorf("read the child integrations to lock: %w", err)
+	}
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return fmt.Errorf("read a child integration to lock: %w", err)
+		}
+		others = append(others, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("read the child integrations to lock: %w", err)
+	}
+	return providersync.LockIntegrationSelections(ctx, tx, orgID, first, others...)
 }
 
 // applySelectionChange writes the rows of one save: every key of an added
@@ -294,30 +326,41 @@ func selectionLock(ctx context.Context, tx pgx.Tx, orgID string, integrationID u
 // target is switched off (never deleted). No other row is written. It
 // returns the keys whose state changed.
 func applySelectionChange(ctx context.Context, tx pgx.Tx, orgID string, integrationID uuid.UUID, change selectionChange) (enabled, disabled []string, err error) {
-	keys := append([]string{}, change.enableKeys...)
-	sort.Strings(keys)
-	for _, key := range keys {
-		tag, err := tx.Exec(ctx, `INSERT INTO integration_datasets (id, org_id, integration_id, dataset_key, is_enabled, options, state_changed_at, state_changed_by)
+	// One key order for the whole save: ascending over the keys it switches
+	// on and off (the two sets never share a key).
+	type write struct {
+		key string
+		on  bool
+	}
+	writes := make([]write, 0, len(change.enableKeys)+len(change.disableKeys))
+	for _, key := range change.enableKeys {
+		writes = append(writes, write{key, true})
+	}
+	for _, key := range change.disableKeys {
+		writes = append(writes, write{key, false})
+	}
+	sort.SliceStable(writes, func(i, j int) bool { return writes[i].key < writes[j].key })
+	for _, item := range writes {
+		if item.on {
+			tag, err := tx.Exec(ctx, `INSERT INTO integration_datasets (id, org_id, integration_id, dataset_key, is_enabled, options, state_changed_at, state_changed_by)
 VALUES ($1, $2, $3, $4, true, '{}', now(), $5)
 ON CONFLICT (org_id, integration_id, dataset_key) DO UPDATE SET is_enabled = true, state_changed_at = now(), state_changed_by = $5
-WHERE integration_datasets.is_enabled IS NOT true`, uuid.New(), orgID, integrationID, key, providersync.DatasetWriterConfigSave)
-		if err != nil {
-			return nil, nil, fmt.Errorf("enable dataset %s: %w", key, err)
+WHERE integration_datasets.is_enabled IS NOT true`, uuid.New(), orgID, integrationID, item.key, providersync.DatasetWriterConfigSave)
+			if err != nil {
+				return nil, nil, fmt.Errorf("enable dataset %s: %w", item.key, err)
+			}
+			if tag.RowsAffected() > 0 {
+				enabled = append(enabled, item.key)
+			}
+			continue
 		}
-		if tag.RowsAffected() > 0 {
-			enabled = append(enabled, key)
-		}
-	}
-	keys = append([]string{}, change.disableKeys...)
-	sort.Strings(keys)
-	for _, key := range keys {
 		tag, err := tx.Exec(ctx, `UPDATE integration_datasets SET is_enabled = false, state_changed_at = now(), state_changed_by = $4
-WHERE org_id = $1 AND integration_id = $2 AND dataset_key = $3 AND is_enabled IS true`, orgID, integrationID, key, providersync.DatasetWriterConfigSave)
+WHERE org_id = $1 AND integration_id = $2 AND dataset_key = $3 AND is_enabled IS true`, orgID, integrationID, item.key, providersync.DatasetWriterConfigSave)
 		if err != nil {
-			return nil, nil, fmt.Errorf("disable dataset %s: %w", key, err)
+			return nil, nil, fmt.Errorf("disable dataset %s: %w", item.key, err)
 		}
 		if tag.RowsAffected() > 0 {
-			disabled = append(disabled, key)
+			disabled = append(disabled, item.key)
 		}
 	}
 	return enabled, disabled, nil

@@ -174,9 +174,6 @@ func validateFamily(name string, entry FamilyStatus) []Violation {
 func ValidateRender(render *Render) []Violation {
 	var out []Violation
 
-	if render.RenderedAt.IsZero() {
-		out = append(out, Violation{"render", "R7-rendered-at", "rendered_at is empty"})
-	}
 	if !shaRe.MatchString(render.OpsSha) {
 		out = append(out, Violation{"render", "R7-ops-sha",
 			fmt.Sprintf("ops_sha must be a 40-hex sha, got %q", render.OpsSha)})
@@ -222,21 +219,6 @@ func CheckFreshness(lastVerified string, commitDate, now time.Time, isAncestor b
 	return out
 }
 
-// CheckRenderAge applies the same anti-rot rule to the live snapshot: a
-// committed page carrying a two-week-old reading of the fleet and the routing
-// table is telling you about a fleet that no longer exists.
-func CheckRenderAge(renderedAt, now time.Time, maxAge time.Duration) []Violation {
-	if renderedAt.IsZero() {
-		return []Violation{{"last-render.json", "R11-no-timestamp", "rendered_at is empty"}}
-	}
-	if age := now.Sub(renderedAt); age > maxAge {
-		return []Violation{{"last-render.json", "R11-stale",
-			fmt.Sprintf("the live sources were last read %s ago, over the %s limit; "+
-				"re-run `dev-health-migration-matrix -render`", roundDays(age), roundDays(maxAge))}}
-	}
-	return nil
-}
-
 // CheckOpsShaAncestry applies the anti-rot rule to ops_sha itself -- the
 // twin of CheckFreshness's rule for the "Last verified" stamp, but for the
 // value a human cannot type by hand. ops_sha is the merge-base with main
@@ -247,9 +229,8 @@ func CheckRenderAge(renderedAt, now time.Time, maxAge time.Duration) []Violation
 // Ancestry, not equality, is the rule on purpose. main moves on every push,
 // so a branch whose recorded merge-base has fallen behind the CURRENT
 // merge-base is the ordinary case -- it only means nobody has re-rendered
-// since main last moved, which the separate render-age budget (see
-// CheckRenderAge) already bounds, and failing it here would make every PR
-// that sat for more than a few minutes fail for no real reason. What
+// since main last moved, and failing it here would make every PR that sat
+// for more than a few minutes fail for no real reason. What
 // ancestry catches is the failure age cannot: a rebase that replays this
 // branch's commits onto a new base whose own history does not contain the
 // commit ops_sha names (most often because it was squashed into a

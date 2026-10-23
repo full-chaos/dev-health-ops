@@ -2,8 +2,7 @@
 
 // CHAOS-9159: the quadrant takes selected teams and repositories beside its grain.
 // Filters AND and never widen (D5844); a named repository that resolves to nothing
-// leaves no point (D5841); the reason of an empty answer is served; the team grain
-// SAYS that a repository cannot narrow it.
+// leaves no point (D5841); the reason of an empty answer is served.
 package quadrant
 
 import (
@@ -113,32 +112,42 @@ func TestQuadrantSelectedRepositoriesAndTeamsNarrowAndSayWhy(t *testing.T) {
 	}
 }
 
-func TestQuadrantTeamGrainIsNarrowedByTeamsAndSaysARepositoryCannotNarrowIt(t *testing.T) {
+func TestQuadrantTeamGrainIsNarrowedByTeamsAndRepositoriesAndSaysWhyWhenEmpty(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	_, run := seedSelectedFilterWorld(ctx, t)
 	grain := func(teams, repos []string) Params {
 		return Params{Type: "wip_throughput", ScopeType: "team", TeamIDs: teams, RepoRefs: repos}
 	}
+	// The world holds no work item linked to any repository: a named repository leaves
+	// every team without data (the points that remain are the teams in scope, no data).
 	for _, tc := range []struct {
 		name        string
 		params      Params
 		wantPoints  []string
 		wantApplied string
+		wantReason  string
 	}{
-		{"nothing selected: both teams", grain(nil, nil), []string{"team-alpha", "team-beta"}, "null"},
-		{"a selected team narrows the points", grain([]string{"team-alpha"}, nil), []string{"team-alpha"}, "null"},
-		{"a repository cannot narrow the team grain, and it says so", grain(nil, []string{selRepoOwned}), []string{"team-alpha", "team-beta"}, "false"},
-		{"a team narrows, a repository is said not to", grain([]string{"team-beta"}, []string{selRepoOwned}), []string{"team-beta"}, "false"},
-		{"an unknown repository does not empty the team grain: it is not applied", grain(nil, []string{selRepoAbsent}), []string{"team-alpha", "team-beta"}, "false"},
+		{"nothing selected: both teams", grain(nil, nil), []string{"team-alpha", "team-beta"}, "null", "null"},
+		{"a selected team narrows the points", grain([]string{"team-alpha"}, nil), []string{"team-alpha"}, "null", "null"},
+		{"a repository is applied", grain(nil, []string{selRepoOwned}), []string{"team-alpha", "team-beta"}, "true", "null"},
+		{"a team narrows, a repository it does not hold: nothing, and why", grain([]string{"team-beta"}, []string{selRepoOwned}), []string{"team-beta"}, "true", "repository_not_in_team"},
+		{"an unknown repository: nothing, and why", grain(nil, []string{selRepoAbsent}), []string{"team-alpha", "team-beta"}, "true", "repository_not_found"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			resp := run(tc.params)
 			if got := entityIDs(resp); fmt.Sprint(got) != fmt.Sprint(tc.wantPoints) {
 				t.Errorf("points = %v, want %v", got, tc.wantPoints)
 			}
-			if boolText(resp.RepoFilterApplied) != tc.wantApplied || textOf(resp.FilterEmptyReason) != "null" {
-				t.Errorf("repo_filter_applied = %s, filter_empty_reason = %s; want %s, null", boolText(resp.RepoFilterApplied), textOf(resp.FilterEmptyReason), tc.wantApplied)
+			if boolText(resp.RepoFilterApplied) != tc.wantApplied || textOf(resp.FilterEmptyReason) != tc.wantReason {
+				t.Errorf("repo_filter_applied = %s, filter_empty_reason = %s; want %s, %s", boolText(resp.RepoFilterApplied), textOf(resp.FilterEmptyReason), tc.wantApplied, tc.wantReason)
+			}
+			if tc.wantApplied == "true" {
+				for _, point := range resp.Points {
+					if !point.NoData {
+						t.Errorf("point %s plots data though no item is linked to the repository", point.EntityID)
+					}
+				}
 			}
 		})
 	}

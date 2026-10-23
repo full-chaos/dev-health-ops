@@ -1,0 +1,49 @@
+{
+  "description": "The golden corpus for the membership-update-request.v1 body. No client-only rule: every rule is a schema rule.",
+  "accept": [
+    {
+      "file": "valid-role.json",
+      "why": "A role change."
+    },
+    {
+      "file": "valid-status.json",
+      "why": "A status change."
+    },
+    {
+      "file": "valid-both.json",
+      "why": "A role and a status together."
+    }
+  ],
+  "reject": [
+    {
+      "file": "invalid-nothing-to-change.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "minProperties",
+      "why": "A request that changes nothing."
+    },
+    {
+      "file": "invalid-status-invited.json",
+      "expect_instance_location": "/status",
+      "expect_keyword": "enum",
+      "why": "invited is created by an invite, never set."
+    },
+    {
+      "file": "invalid-role-owner-transfer-flag.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "why": "Ownership transfer is not a member of this body."
+    },
+    {
+      "file": "invalid-expected-revision-absent.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "why": "No expected revision."
+    },
+    {
+      "file": "invalid-role-wildcard.json",
+      "expect_instance_location": "/role",
+      "expect_keyword": "enum",
+      "why": "A wildcard is not a role."
+    }
+  ]
+}

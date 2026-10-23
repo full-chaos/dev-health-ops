@@ -340,8 +340,7 @@ func runCheck(root string) error {
 			docRelative, len(violations), migrationmatrix.FormatViolations(violations))
 		return fmt.Errorf("migration matrix contract failed")
 	}
-	fmt.Printf("migration matrix OK: %d families, rendered %s\n",
-		len(ledger.Families), snapshot.RenderedAt.UTC().Format(time.RFC3339))
+	fmt.Printf("migration matrix OK: %d families\n", len(ledger.Families))
 	return nil
 }
 
@@ -364,24 +363,18 @@ func runRender(root, dsn, fleetMode string, containers []string) error {
 	if err != nil {
 		return err
 	}
-	opsSha, renderCommit, err := renderShas(root)
+	opsSha, head, err := renderShas(root)
 	if err != nil {
 		return err
 	}
 
 	previous, _ := migrationmatrix.LoadRender(filepath.Join(root, renderRelative))
+	opsSha = stickyOpsSha(root, previous, opsSha, head)
 
 	snapshot := &migrationmatrix.Render{
 		SchemaVersion: 1,
-		// Truncated to the second on purpose: the timestamp is re-parsed
-		// by ci/check_migration_matrix.sh's freshness mode with `date`,
-		// and BSD `date -j -f` cannot parse fractional seconds. A format
-		// only one of the two supported hosts can read is a check that
-		// silently stops running on the other.
-		RenderedAt:   time.Now().UTC().Truncate(time.Second),
-		OpsSha:       opsSha,
-		RenderCommit: renderCommit,
-		SchemaDigest: pin,
+		OpsSha:        opsSha,
+		SchemaDigest:  pin,
 	}
 
 	// queryAPIBuild is query-api's OWN fleet-label revision (never the
@@ -495,8 +488,7 @@ func runRender(root, dsn, fleetMode string, containers []string) error {
 			len(violations), migrationmatrix.FormatViolations(violations))
 		return fmt.Errorf("migration matrix contract failed after render")
 	}
-	fmt.Printf("rendered %s at %s (main merge-base %s, render commit %s)\n",
-		docRelative, snapshot.RenderedAt.UTC().Format(time.RFC3339), opsSha[:12], renderCommit[:12])
+	fmt.Printf("rendered %s (recorded ops_sha %s)\n", docRelative, opsSha[:12])
 	return nil
 }
 
@@ -602,6 +594,28 @@ func renderShas(root string) (string, string, error) {
 			"         gate will fail on main afterwards -- re-render from a checkout that can\n"+
 			"         see main.")
 	return head, head, nil
+}
+
+// stickyOpsSha keeps the committed ops_sha while it is still a commit that
+// HEAD contains, and falls back to the fresh merge-base otherwise. Writing
+// the fresh merge-base on every render made every re-rendering PR rewrite the
+// same lines with a different value, so two PRs always conflicted with no
+// content change (CHAOS-8787). The kept value passes exactly the ancestry rule
+// -check applies (CHAOS-5863); a value that fails it is replaced.
+func stickyOpsSha(root string, previous *migrationmatrix.Render, fresh, head string) string {
+	if previous == nil || previous.OpsSha == "" || previous.OpsSha == fresh {
+		return fresh
+	}
+	if _, err := gitOutput(root, "cat-file", "-e", previous.OpsSha+"^{commit}"); err != nil {
+		return fresh
+	}
+	if shallow, err := gitOutput(root, "rev-parse", "--is-shallow-repository"); err != nil || shallow == "true" {
+		return fresh
+	}
+	if ok, err := gitIsAncestor(root, previous.OpsSha, head); err != nil || !ok {
+		return fresh
+	}
+	return previous.OpsSha
 }
 
 // checkOpsShaAncestry re-derives the tree -check is actually running

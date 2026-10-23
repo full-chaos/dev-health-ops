@@ -1,0 +1,6 @@
+{
+  "schema_version": "organization-create-request.v1",
+  "slug": "acme-corp",
+  "name": "Acme Corp",
+  "organization_id": "org_0123456789abcdefghijkl"
+}

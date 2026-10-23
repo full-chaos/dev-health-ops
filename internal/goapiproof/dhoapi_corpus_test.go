@@ -97,7 +97,8 @@ func TestDHOAPICorpusPinsItsRoutes(t *testing.T) {
 }
 
 // TestIngestEntriesSendThePushTokenAndTheRestDoNot pins the credential split:
-// every external-ingest entry authenticates with the push token, and no other
+// every external-ingest entry sends the push token (the two schema-discovery
+// entries are public routes that ignore it), and no other
 // dho-api entry does, so a run's own bearers are never sent to the ingest API
 // and the push token is never sent anywhere else.
 func TestIngestEntriesSendThePushTokenAndTheRestDoNot(t *testing.T) {

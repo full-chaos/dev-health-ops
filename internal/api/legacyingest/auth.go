@@ -2,6 +2,7 @@ package legacyingest
 
 import (
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
@@ -31,7 +32,21 @@ var rejectionReasons = []string{"no_credential_configured", "invalid_api_key", "
 type Metrics struct {
 	mu       sync.Mutex
 	rejected map[string]uint64
+	requests map[requestSeries]uint64
 }
+
+// requestsName is the series of the per-route, per-credential-class counter
+// that shows whether any caller still uses the routes.
+const requestsName = "devhealth_ingest_legacy_requests_total"
+
+// Key classes name which configured credential checks stand in force; the
+// outcome is accepted (every configured check passed) or rejected.
+var (
+	keyClasses = []string{"api_key", "signature", "api_key_signature", "none"}
+	outcomes   = []string{"accepted", "rejected", "malformed"}
+)
+
+type requestSeries struct{ route, keyClass, outcome string }
 
 // NewMetrics returns a Metrics with every reason at zero.
 func NewMetrics() *Metrics {
@@ -39,7 +54,27 @@ func NewMetrics() *Metrics {
 	for _, reason := range rejectionReasons {
 		counts[reason] = 0
 	}
-	return &Metrics{rejected: counts}
+	requests := make(map[requestSeries]uint64)
+	for _, item := range routes {
+		for _, class := range keyClasses {
+			for _, outcome := range outcomes {
+				if class == "none" && outcome == "accepted" {
+					continue
+				}
+				requests[requestSeries{item.kind, class, outcome}] = 0
+			}
+		}
+	}
+	return &Metrics{rejected: counts, requests: requests}
+}
+
+func (m *Metrics) countRequest(route, keyClass, outcome string) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.requests[requestSeries{route, keyClass, outcome}]++
 }
 
 func (m *Metrics) count(reason string) {
@@ -61,6 +96,12 @@ func (m *Metrics) WritePrometheus(writer io.Writer) error {
 	for reason, value := range m.rejected {
 		snapshot[reason] = value
 	}
+	requests := make([]requestSeries, 0, len(m.requests))
+	requestCounts := make(map[requestSeries]uint64, len(m.requests))
+	for series, value := range m.requests {
+		requests = append(requests, series)
+		requestCounts[series] = value
+	}
 	m.mu.Unlock()
 	if _, err := io.WriteString(writer, "# HELP "+authRejectedName+
 		" Legacy /api/v1/ingest/* requests refused for their credentials, by reason.\n# TYPE "+authRejectedName+" counter\n"); err != nil {
@@ -73,6 +114,25 @@ func (m *Metrics) WritePrometheus(writer io.Writer) error {
 	sort.Strings(reasons)
 	for _, reason := range reasons {
 		if _, err := fmt.Fprintf(writer, "%s{reason=%q} %d\n", authRejectedName, reason, snapshot[reason]); err != nil {
+			return err
+		}
+	}
+	sort.Slice(requests, func(i, j int) bool {
+		a, b := requests[i], requests[j]
+		if a.route != b.route {
+			return a.route < b.route
+		}
+		if a.keyClass != b.keyClass {
+			return a.keyClass < b.keyClass
+		}
+		return a.outcome < b.outcome
+	})
+	if _, err := io.WriteString(writer, "# HELP "+requestsName+
+		" Legacy /api/v1/ingest/* requests, by route, configured credential class and outcome.\n# TYPE "+requestsName+" counter\n"); err != nil {
+		return err
+	}
+	for _, series := range requests {
+		if _, err := fmt.Fprintf(writer, "%s{route=%q,key_class=%q,outcome=%q} %d\n", requestsName, series.route, series.keyClass, series.outcome, requestCounts[series]); err != nil {
 			return err
 		}
 	}
@@ -121,52 +181,84 @@ func apiKeys(getenv func(string) string) []string {
 	return keys
 }
 
-// developmentEnvironment is is_development_environment: ENVIRONMENT, else
-// APP_ENV, else ENV (an empty value falls through), else "production",
-// stripped and lower-cased, one of development, dev, local.
-func developmentEnvironment(getenv func(string) string) bool {
-	name := "production"
-	for _, key := range []string{"ENVIRONMENT", "APP_ENV", "ENV"} {
-		if value := getenv(key); value != "" {
-			name = value
-			break
-		}
-	}
-	switch pythonparity.Lower(pythonparity.Strip(name)) {
-	case "development", "dev", "local":
-		return true
-	}
-	return false
-}
-
 // reject answers a 401 and counts it.
 func (h handler) reject(w http.ResponseWriter, reason, detail string) {
 	h.metrics.count(reason)
 	policy.WriteDetail(w, http.StatusUnauthorized, detail, nil)
 }
 
+// countMalformed counts a request whose body was refused before any
+// credential check.
+func (h handler) countMalformed() {
+	h.metrics.countRequest(h.route.kind, keyClass(apiKeys(h.getenv), h.getenv("INGEST_SIGNING_SECRET")), "malformed")
+}
+
+// keyClass names the configured checks.
+func keyClass(keys []string, secret string) string {
+	switch {
+	case len(keys) > 0 && secret != "":
+		return "api_key_signature"
+	case len(keys) > 0:
+		return "api_key"
+	case secret != "":
+		return "signature"
+	}
+	return "none"
+}
+
+// keyedDigestSeed keys the digests that equalise key lengths for the
+// comparison; it is random per process and never leaves it.
+var keyedDigestSeed = func() []byte {
+	seed := make([]byte, 32)
+	if _, err := rand.Read(seed); err != nil {
+		panic("legacyingest: no randomness for the key comparison: " + err.Error())
+	}
+	return seed
+}()
+
+func keyedDigest(value string) []byte {
+	mac := hmac.New(sha256.New, keyedDigestSeed)
+	mac.Write([]byte(value))
+	return mac.Sum(nil)
+}
+
+// matchesAnyKey compares the keyed digest of the presented key with the
+// keyed digest of every configured key, without stopping at the first match.
+func matchesAnyKey(presented string, keys []string) bool {
+	want := keyedDigest(presented)
+	matched := 0
+	for _, key := range keys {
+		matched |= subtle.ConstantTimeCompare(want, keyedDigest(key))
+	}
+	return matched == 1
+}
+
 // authenticate is validate_ingest_auth. It reports whether the request may
 // go on; when it does not, the response is written. Either configured
 // credential alone is enough to configure a check; neither configured is a
-// 401 outside a development environment (CHAOS-4720, fail closed).
+// 401 in every environment (CHAOS-4720, fail closed).
 func (h handler) authenticate(w http.ResponseWriter, r *http.Request, raw []byte) bool {
 	keys := apiKeys(h.getenv)
 	secret := h.getenv("INGEST_SIGNING_SECRET")
-	if len(keys) == 0 && secret == "" && !developmentEnvironment(h.getenv) {
-		h.logger.WarnContext(r.Context(), "Neither INGEST_API_KEYS nor INGEST_SIGNING_SECRET is configured outside a development environment - rejecting ingest request (CHAOS-4720)")
+	class := keyClass(keys, secret)
+	ok := h.checkCredentials(w, r, raw, keys, secret)
+	outcome := "accepted"
+	if !ok {
+		outcome = "rejected"
+	}
+	h.metrics.countRequest(h.route.kind, class, outcome)
+	return ok
+}
+
+func (h handler) checkCredentials(w http.ResponseWriter, r *http.Request, raw []byte, keys []string, secret string) bool {
+	if len(keys) == 0 && secret == "" {
+		h.logger.WarnContext(r.Context(), "Neither INGEST_API_KEYS nor INGEST_SIGNING_SECRET is configured - rejecting ingest request (CHAOS-4720)")
 		h.reject(w, "no_credential_configured", "Invalid API key")
 		return false
 	}
 	if len(keys) > 0 {
 		presented := latin1(r.Header.Get("X-API-Key"))
-		found := false
-		for _, key := range keys {
-			if presented == key {
-				found = true
-				break
-			}
-		}
-		if presented == "" || !found {
+		if presented == "" || !matchesAnyKey(presented, keys) {
 			h.reject(w, "invalid_api_key", "Invalid API key")
 			return false
 		}

@@ -157,7 +157,7 @@ func TestGoldenGetDefaultOrgScope(t *testing.T) {
 		if v, _ := bindingValue(bindings, "org_id"); v != "org-acme" {
 			t.Fatalf("org_id binding = %v, want org-acme", v)
 		}
-		if v, _ := bindingValue(bindings, "limit"); v != 50 {
+		if v, _ := bindingValue(bindings, "limit_n"); v != 50 {
 			t.Fatalf("limit binding = %v, want 50 (GET has no limit param)", v)
 		}
 		return &fixtureRowScanner{rows: [][]any{
@@ -282,7 +282,7 @@ func TestGoldenPostTeamScopeLimitFallback(t *testing.T) {
 		// Checked BEFORE the bare "FROM repos" case -- see the sibling
 		// switch's own comment above.
 		case strings.Contains(query, "FROM git_pull_requests"):
-			if v, _ := bindingValue(bindings, "limit"); v != 50 {
+			if v, _ := bindingValue(bindings, "limit_n"); v != 50 {
 				t.Fatalf("limit binding = %v, want 50 (limit=0 falls back)", v)
 			}
 			return &fixtureRowScanner{rows: [][]any{
@@ -427,7 +427,7 @@ func TestGoldenGetDefaultOrgScopeIssues(t *testing.T) {
 		if v, _ := bindingValue(bindings, "org_id"); v != "org-acme" {
 			t.Fatalf("org_id binding = %v, want org-acme", v)
 		}
-		if v, _ := bindingValue(bindings, "limit"); v != 50 {
+		if v, _ := bindingValue(bindings, "limit_n"); v != 50 {
 			t.Fatalf("limit binding = %v, want 50 (GET has no limit param)", v)
 		}
 		return &issuesFixtureRowScanner{rows: [][]any{
@@ -528,7 +528,7 @@ func TestGoldenPostRepoScopeIgnoredLimitFallbackIssues(t *testing.T) {
 		if strings.Contains(query, "scope_ids") {
 			t.Fatalf("repo scope must not add a team scope filter on drilldown/issues:\n%s", query)
 		}
-		if v, _ := bindingValue(bindings, "limit"); v != 50 {
+		if v, _ := bindingValue(bindings, "limit_n"); v != 50 {
 			t.Fatalf("limit binding = %v, want 50 (limit=0 falls back)", v)
 		}
 		return &issuesFixtureRowScanner{rows: [][]any{

@@ -17,7 +17,7 @@ func TestSchemaRevisionSatisfies(t *testing.T) {
 		{"known head", "0152", true},
 		{"known minimum", minimumSchemaRevision, true},
 		{"known interior revision", "0100", true},
-		{"unknown newer head", "0153", true},
+		{"unknown newer head", "9999", true},
 		{"unknown far newer head", "0999", true},
 		{"unknown newer 9999", "9999", true},
 		{"one below the minimum", "0074", false},
@@ -27,10 +27,10 @@ func TestSchemaRevisionSatisfies(t *testing.T) {
 		{"letters", "abcd", false},
 		{"too long", "00751", false},
 		{"five digits above", "12345", false},
-		{"trailing letter", "0153a", false},
+		{"trailing letter", "9999a", false},
 		{"too short", "153", false},
-		{"leading space", " 0153", false},
-		{"trailing newline", "0153\n", false},
+		{"leading space", " 9999", false},
+		{"trailing newline", "9999\n", false},
 		{"sign", "+153", false},
 		{"sign inside", "9+99", false},
 		{"space inside", "9 99", false},
@@ -72,7 +72,7 @@ func TestAnySchemaRevisionSatisfies(t *testing.T) {
 		{"known head", []string{"0152"}, true},
 		{"unknown newer head", []string{"0999"}, true},
 		{"cutover branch head beside a known head", []string{"0066", "0152"}, true},
-		{"cutover branch head beside an unknown newer head", []string{"0066", "0153"}, true},
+		{"cutover branch head beside an unknown newer head", []string{"0066", "9999"}, true},
 		{"cutover branch head alone", []string{"0066"}, false},
 		{"unparseable beside the cutover branch head", []string{"0066", "abcd"}, false},
 		{"no row", nil, false},
@@ -118,11 +118,11 @@ func TestSchemaSatisfiedByRows(t *testing.T) {
 	}{
 		{"known head", &fakeRevisionRows{revisions: []string{"0152"}}, true},
 		{"unknown newer head", &fakeRevisionRows{revisions: []string{"0999"}}, true},
-		{"cutover branch head beside an unknown newer head", &fakeRevisionRows{revisions: []string{"0066", "0153"}}, true},
+		{"cutover branch head beside an unknown newer head", &fakeRevisionRows{revisions: []string{"0066", "9999"}}, true},
 		{"cutover branch head alone", &fakeRevisionRows{revisions: []string{"0066"}}, false},
 		{"unparseable", &fakeRevisionRows{revisions: []string{"abcd"}}, false},
 		{"no row", &fakeRevisionRows{}, false},
-		{"scan error on the second row after a satisfying first row", &fakeRevisionRows{revisions: []string{"0152", "0153"}, failScanAt: 2}, false},
+		{"scan error on the second row after a satisfying first row", &fakeRevisionRows{revisions: []string{"0152", "9999"}, failScanAt: 2}, false},
 		{"iteration error after a satisfying row", &fakeRevisionRows{revisions: []string{"0152"}, iterErr: errors.New("iterate")}, false},
 	}
 	for _, test := range cases {
@@ -131,7 +131,7 @@ func TestSchemaSatisfiedByRows(t *testing.T) {
 			t.Errorf("%s: schemaSatisfiedByRows = %v (read %q), want %v", test.name, got, recorded, test.want)
 		}
 	}
-	if _, recorded := schemaSatisfiedByRows(&fakeRevisionRows{revisions: []string{"0066", "0153"}}); strings.Join(recorded, ",") != "0066,0153" {
+	if _, recorded := schemaSatisfiedByRows(&fakeRevisionRows{revisions: []string{"0066", "9999"}}); strings.Join(recorded, ",") != "0066,9999" {
 		t.Errorf("recorded revisions for the log: %q", recorded)
 	}
 }

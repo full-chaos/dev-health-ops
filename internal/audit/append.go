@@ -16,13 +16,18 @@ import (
 // writes only these, and Commit refuses them. A type is added here, in
 // review, with the code that writes it.
 var appendOnlyEventTypes = map[string]bool{
-	EventLoginFailed: true,
+	EventLoginFailed:       true,
+	EventSigningKeyRefused: true,
 }
 
 // EventLoginFailed is a refused sign-in: wrong or unknown credentials, a
 // locked, disabled or unverified account, or an organization the principal
 // is not a member of.
 const EventLoginFailed = "auth.login.failed"
+
+// EventSigningKeyRefused is a signing-key rotation verb the state machine
+// refused: nothing changed.
+const EventSigningKeyRefused = "auth.signing_key.refused"
 
 // ErrNotAppendOnly reports an Append of an event type outside
 // appendOnlyEventTypes. Nothing is written.

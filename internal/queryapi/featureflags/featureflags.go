@@ -216,7 +216,7 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, provider, pr
 
 	whereClause, bindings := flagWhere(orgID, provider, project, includeArchived)
 
-	rowBindings := append(append([]clickhouse.Binding{}, bindings...), clickhouse.Binding{Name: "limit", Value: clampLimit(limit)})
+	rowBindings := append(append([]clickhouse.Binding{}, bindings...), clickhouse.Binding{Name: "limit_n", Value: clampLimit(limit)})
 
 	rowQuery := `SELECT
     provider,
@@ -236,7 +236,7 @@ FROM (
     GROUP BY provider, project_key, flag_key
 )
 ORDER BY provider, project_key, flag_key
-LIMIT {limit:UInt64}`
+LIMIT {limit_n:UInt64}`
 
 	countQuery := `SELECT count() AS total
 FROM (

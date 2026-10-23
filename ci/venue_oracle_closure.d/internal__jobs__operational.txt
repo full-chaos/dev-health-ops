@@ -1,3 +1,4 @@
+contracts/auth/v1
 internal/api/licensing
 internal/api/policy
 internal/api/pybody
@@ -26,6 +27,7 @@ internal/operationalordering
 internal/ownershipwindow
 internal/pgmigrate
 internal/platform/config
+internal/platform/credshape
 internal/platform/dbphase
 internal/platform/dbspan
 internal/platform/errortext

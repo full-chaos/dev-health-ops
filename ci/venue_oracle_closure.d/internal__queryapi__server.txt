@@ -1,3 +1,4 @@
+contracts/auth/v1
 contracts/graphql/v1
 internal/aftercommit
 internal/api/externalurl
@@ -62,6 +63,7 @@ internal/ownershipwindow
 internal/pgmigrate
 internal/platform/buildstamp
 internal/platform/config
+internal/platform/credshape
 internal/platform/dbphase
 internal/platform/dbspan
 internal/platform/errortext

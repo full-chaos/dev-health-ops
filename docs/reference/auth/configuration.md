@@ -59,6 +59,10 @@ and `/readyz` fails closed, naming the check. See the
 | `--jwt-issuer` | `AUTH_JWT_ISSUER` | `dev-health-ops` | `iss` of the access token; must equal go-api's `JWT_ISSUER`. |
 | `--jwt-audience` | `AUTH_JWT_AUDIENCE` | `dev-health-api` | `aud` of the access token; must equal go-api's `JWT_AUDIENCE`. |
 | `--social-link-routes` | `AUTH_SOCIAL_LINK_ROUTES` | `false` | `true` mounts the bearer-only social link and unlink routes (`POST /v1/identities/social`, `DELETE /v1/identities/social/{id}`); any other value than `true` or `false` fails startup, and `true` needs the session secrets. |
+| `--sso-jit` | `AUTH_SSO_JIT` | `false` | `true` lets a federated sign-in join a known account to the provider's organization and create a new account, in one audit commit with the session; a provider row must allow it too (`auto_provision_users`), and it needs the users cutover. Any other value than `true` or `false` fails startup. |
+| (none, secret) | `AUTH_SSO_STATE_KEY` or `AUTH_SSO_STATE_KEY_FILE` | unset | Key the OIDC and OAuth state is derived from. With `APP_BASE_URL` and `SETTINGS_ENCRYPTION_KEY` it mounts the OIDC and OAuth sign-in routes; SAML needs the last two only. |
+| (none) | `APP_BASE_URL` | unset | go-api's public base URL; the callback and ACS URLs the identity providers hold are built from it. Absolute `http(s)` only. |
+| (none, secret) | `SETTINGS_ENCRYPTION_KEY` or `SETTINGS_ENCRYPTION_KEY_FILE` | unset | go-api's provider-secret key (`SETTINGS_ENCRYPTION_SALT` sets its salt). |
 | (none) | `AUTH_ACCESS_TOKEN_CLASS` | `hs256_compat` | The one class of access token this service mints: `hs256_compat` or `eddsa` (exact match; any other value fails startup). `eddsa` needs `AUTH_TOKEN_ISSUER_URL` (the `iss`, byte for byte), a signing key, and `AUTH_JWT_AUDIENCE` of `dev-health-api` or `auth-service`; tokens last 60 minutes and carry the access-token.v1 claims only. The session routes still verify HS256 tokens only. |
 | `--version` | | | Prints build metadata as JSON. |
 | `--healthcheck` | | | Probes this deployment's own operator `/readyz` over loopback; exit 0 only on HTTP 200. For container healthchecks. |

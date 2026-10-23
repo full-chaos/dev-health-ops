@@ -20,6 +20,9 @@ import (
 type PGStore struct {
 	pool *pgxpool.Pool
 	q    string
+	// usersOwned is the users-cutover switch: with it, a membership in the
+	// auth schema counts as well as one in public.memberships.
+	usersOwned bool
 }
 
 // NewPGStore binds the store to pool and the auth schema.
@@ -28,6 +31,14 @@ func NewPGStore(pool *pgxpool.Pool, schema authschema.ValidatedIdentifier) (*PGS
 		return nil, errors.New("saml: PGStore needs a pool and a schema")
 	}
 	return &PGStore{pool: pool, q: authschema.Quote(schema)}, nil
+}
+
+// WithUsersOwned returns the store reading memberships from both schemas
+// (the users-cutover mode); without it only public.memberships is read.
+func (s *PGStore) WithUsersOwned(owned bool) *PGStore {
+	copied := *s
+	copied.usersOwned = owned
+	return &copied
 }
 
 func hashOf(s string) []byte {
@@ -137,6 +148,11 @@ const memberSQL = `SELECT EXISTS (SELECT 1 FROM public.memberships WHERE user_id
 // Member reports whether the principal is a member of the organization.
 func (s *PGStore) Member(ctx context.Context, principalID, orgID uuid.UUID) (bool, error) {
 	var ok bool
-	err := s.pool.QueryRow(ctx, memberSQL, principalID, orgID).Scan(&ok)
+	if err := s.pool.QueryRow(ctx, memberSQL, principalID, orgID).Scan(&ok); err != nil || ok || !s.usersOwned {
+		return ok, err
+	}
+	err := s.pool.QueryRow(ctx, fmt.Sprintf(authMemberSQL, s.q), principalID, orgID).Scan(&ok)
 	return ok, err
 }
+
+const authMemberSQL = `SELECT EXISTS (SELECT 1 FROM %s.memberships WHERE principal_id = $1 AND organization_id = $2 AND status = 'active')`

@@ -13,11 +13,12 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity/oidc"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity/saml"
+	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 )
 
 const (
 	opSSOSession = "sso_session"
-	ssoProvider  = "sso"
+	ssoProvider  = "oidc"
 	samlProvider = "saml"
 )
 
@@ -86,6 +87,25 @@ func (s oidcSessions) Issue(ctx context.Context, req oidc.SessionRequest) (oidc.
 		return oidc.Tokens{}, err
 	}
 	return oidc.Tokens{AccessToken: out.access, RefreshToken: out.refresh, ExpiresIn: int64(AccessExpiresIn)}, nil
+}
+
+// MintOIDC turns a session already stored by the just-in-time commit into the
+// caller's tokens. It writes nothing: the commit that stored the session also
+// holds the sign-in's audit row (membership_added).
+func (s SSOSessions) MintOIDC(ctx context.Context, issued session.Issued, req oidc.SessionRequest) (oidc.Tokens, error) {
+	user, found, err := s.h.Users.State(ctx, req.PrincipalID)
+	if err != nil {
+		return oidc.Tokens{}, err
+	}
+	if !found {
+		return oidc.Tokens{}, errors.New("authapi: a federated sign-in's user is not in the users store")
+	}
+	role := req.Role
+	access, err := s.h.Issuer.Access(Grant{PrincipalID: req.PrincipalID, OrganizationID: req.OrgID, Role: roleText(&role, req.OrgID != nil), SessionID: issued.Session.ID, User: user})
+	if err != nil {
+		return oidc.Tokens{}, err
+	}
+	return oidc.Tokens{AccessToken: access, RefreshToken: issued.Credential.Reveal(), ExpiresIn: int64(AccessExpiresIn)}, nil
 }
 
 // SAML is the saml.SessionIssuer.

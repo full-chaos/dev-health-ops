@@ -559,12 +559,20 @@ func (s *Service) resolve(ctx context.Context, row Provider, v validated, reques
 	switch {
 	case found:
 		tokens, err = s.cfg.Sessions.Issue(ctx, req)
-	case s.cfg.MembershipJIT != nil:
+	case s.cfg.MembershipJIT != nil && row.AutoProvision:
 		tokens, err = s.cfg.MembershipJIT.JoinAndIssue(ctx, principal.ID, org, req)
 	default:
 		return Login{}, notMember()
 	}
-	if err != nil {
+	switch {
+	case err == nil:
+	case errors.Is(err, ErrSignupNotAvailable):
+		return Login{}, deny(http.StatusForbidden, ReasonSignupUnavailable, "Sign-up through this provider is not available")
+	case errors.Is(err, ErrNotOrgMember):
+		return Login{}, notMember()
+	case errors.Is(err, ErrPrincipalDisabled):
+		return Login{}, deny(http.StatusForbidden, ReasonPrincipalDeactivated, "User account is disabled")
+	default:
 		return Login{}, internal(ReasonStoreUnavailable, err)
 	}
 	return Login{PrincipalID: principal.ID, Email: principal.Email, OrgID: &org, Role: role, Tokens: tokens}, nil
@@ -597,6 +605,8 @@ func (s *Service) newAccount(ctx context.Context, row Provider, v validated, req
 		return Login{}, deny(http.StatusForbidden, ReasonSignupUnavailable, "Sign-up through this provider is not available")
 	case errors.Is(err, ErrIdentityConflict):
 		return Login{}, conflict()
+	case errors.Is(err, ErrPrincipalDisabled):
+		return Login{}, deny(http.StatusForbidden, ReasonPrincipalDeactivated, "User account is disabled")
 	case errors.Is(err, ErrInvalidEmail):
 		return Login{}, deny(http.StatusBadRequest, ReasonMalformed, "Email address from OIDC claims is malformed")
 	case errors.Is(err, ErrInvalidKey):

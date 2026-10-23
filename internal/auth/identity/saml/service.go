@@ -284,7 +284,7 @@ func (s *Service) requireMember(ctx context.Context, p Provider, principalID uui
 	if err != nil {
 		return err
 	}
-	if !member && s.JIT != nil {
+	if !member && s.JIT != nil && p.AutoProvision {
 		if err := s.JIT.JoinOnSignIn(ctx, principalID, p); err != nil {
 			return err
 		}

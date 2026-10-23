@@ -22,6 +22,10 @@ const (
 	// a secret: environment or _FILE only.
 	EnvSettingsEncryptionKey  = "SETTINGS_ENCRYPTION_KEY"
 	EnvSettingsEncryptionSalt = "SETTINGS_ENCRYPTION_SALT"
+	// EnvSSOJIT ("true" or "false", default false) turns on just-in-time
+	// joining and provisioning on the federated sign-in routes. A provider row
+	// must also allow it (auto_provision_users). It needs the users cutover.
+	EnvSSOJIT = "AUTH_SSO_JIT"
 )
 
 var errBaseURL = errors.New(EnvAppBaseURL + " must be an absolute http(s) URL")
@@ -32,6 +36,8 @@ type SSO struct {
 	AppBaseURL     string
 	EncryptionKey  secrets.Value
 	EncryptionSalt string
+	// JIT is AUTH_SSO_JIT: the just-in-time seam is built.
+	JIT bool
 }
 
 // OIDCEnabled is set when the OIDC and OAuth routes have all three values.
@@ -51,7 +57,11 @@ func ssoSettings(lookup secrets.LookupEnv) (SSO, error) {
 	if err != nil {
 		return SSO{}, err
 	}
-	out := SSO{StateKey: state, EncryptionKey: key, EncryptionSalt: strings.TrimSpace(valueOf(lookup, EnvSettingsEncryptionSalt))}
+	jit, err := strictBool(lookup, EnvSSOJIT)
+	if err != nil {
+		return SSO{}, err
+	}
+	out := SSO{JIT: jit, StateKey: state, EncryptionKey: key, EncryptionSalt: strings.TrimSpace(valueOf(lookup, EnvSettingsEncryptionSalt))}
 	if base := strings.TrimRight(strings.TrimSpace(valueOf(lookup, EnvAppBaseURL)), "/"); base != "" {
 		parsed, parseErr := url.Parse(base)
 		if parseErr != nil || (parsed.Scheme != "https" && parsed.Scheme != "http") || parsed.Host == "" {

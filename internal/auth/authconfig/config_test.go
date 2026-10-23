@@ -334,6 +334,8 @@ func TestEveryDeclaredOptionResolves(t *testing.T) {
 		EnvAccessTokenIssuer:      "other-issuer",
 		EnvAccessTokenAudience:    "other-audience",
 		EnvSocialLinkRoutes:       "true",
+		EnvSSOJIT:                 "true",
+		EnvAppBaseURL:             "https://app.example.test",
 		EnvTrustedProxies:         "10.0.0.5,192.168.0.0/16",
 		"SOCIAL_GITHUB_CLIENT_ID": "gh-client",
 		"SOCIAL_GITLAB_CLIENT_ID": "gl-client",
@@ -359,6 +361,8 @@ func TestEveryDeclaredOptionResolves(t *testing.T) {
 		EnvAccessTokenIssuer:      func(c Config) string { return c.Session.AccessIssuer },
 		EnvAccessTokenAudience:    func(c Config) string { return c.Session.AccessAudience },
 		EnvSocialLinkRoutes:       func(c Config) string { return strconv.FormatBool(c.Session.SocialLinkRoutes) },
+		EnvSSOJIT:                 func(c Config) string { return strconv.FormatBool(c.SSO.JIT) },
+		EnvAppBaseURL:             func(c Config) string { return c.SSO.AppBaseURL },
 		EnvTrustedProxies:         func(c Config) string { return itoa(int64(c.TrustedProxies.Len())) },
 		"SOCIAL_GITHUB_CLIENT_ID": func(c Config) string { return c.Social["github"].ID },
 		"SOCIAL_GITLAB_CLIENT_ID": func(c Config) string { return c.Social["gitlab"].ID },
@@ -486,5 +490,23 @@ func TestIssuerURLPatternIsTheDiscoverySchemaPattern(t *testing.T) {
 	}
 	if schema.Properties.Issuer.Pattern != issuerURLPattern.String() {
 		t.Fatalf("issuer pattern drifted from discovery.v1: %q vs %q", issuerURLPattern.String(), schema.Properties.Issuer.Pattern)
+	}
+}
+
+func TestSSOJITIsAStrictBoolean(t *testing.T) {
+	for _, bad := range []string{"1", "yes", "TRUE", "on"} {
+		env := baseEnv()
+		env[EnvSSOJIT] = bad
+		if _, err := Load(Spec{LookupEnv: lookupFrom(env)}); err == nil {
+			t.Errorf("%s=%q was accepted", EnvSSOJIT, bad)
+		}
+	}
+	for value, want := range map[string]bool{"": false, "false": false, "true": true} {
+		env := baseEnv()
+		env[EnvSSOJIT] = value
+		cfg, err := Load(Spec{LookupEnv: lookupFrom(env)})
+		if err != nil || cfg.SSO.JIT != want {
+			t.Errorf("%s=%q: JIT %v, err %v; want %v", EnvSSOJIT, value, cfg.SSO.JIT, err, want)
+		}
 	}
 }

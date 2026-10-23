@@ -55,8 +55,11 @@ func TestOIDCSessionStartsAFederatedSessionInTheSignInOrganization(t *testing.T)
 		t.Fatalf("access token: %+v, %v", bearer, err)
 	}
 	created := f.sessions.created[0]
+	if err := audit.ValidateAttributes(created.event.Attributes); err != nil {
+		t.Fatalf("the sign-in audit attributes are outside the allowlist: %v", err)
+	}
 	if !reflect.DeepEqual(created.amr, []string{"fed"}) || *created.org != f.org ||
-		created.event.EventType != EventLoginSucceeded || created.event.Attributes["provider"] != "sso" {
+		created.event.EventType != EventLoginSucceeded || created.event.Attributes["provider"] != "oidc" {
 		t.Fatalf("session %+v", created)
 	}
 }
@@ -91,6 +94,9 @@ func TestSAMLSessionAnswersTheLoginModelForTheMembersRole(t *testing.T) {
 		t.Fatal("the session answer is cacheable")
 	}
 	created := f.sessions.created[0]
+	if err := audit.ValidateAttributes(created.event.Attributes); err != nil {
+		t.Fatalf("the sign-in audit attributes are outside the allowlist: %v", err)
+	}
 	if *created.org != f.org || created.event.Attributes["provider"] != "saml" {
 		t.Fatalf("session %+v", created)
 	}

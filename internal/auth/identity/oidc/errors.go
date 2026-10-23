@@ -52,6 +52,7 @@ var (
 	ErrIdentityConflict   = errors.New("oidc: the external identity or e-mail belongs to another account")
 	ErrIdentityAmbiguous  = errors.New("oidc: more than one account carries the external identity")
 	ErrNotOrgMember       = errors.New("oidc: the account is not a member of the provider organization")
+	ErrPrincipalDisabled  = identity.ErrPrincipalUnavailable
 	ErrInvalidEmail       = identity.ErrInvalidEmail
 	ErrInvalidKey         = identity.ErrInvalidExternalKey
 )

@@ -4,11 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
 
 // UserState is the live public.users state an access token is minted from.
@@ -47,7 +50,14 @@ type Membership struct {
 // is_superuser, token_version) and memberships (user_id, org_id, role,
 // joined_at, created_at), and nothing else (authschema.PublicReadColumns). The schema is named, so the role's search_path
 // does not decide which table is read.
-type PGUsers struct{ Pool *pgxpool.Pool }
+type PGUsers struct {
+	Pool *pgxpool.Pool
+	// UsersOwned is the users-cutover mode: the active memberships of Schema
+	// (the auth schema) are read as well as public.memberships, and an auth row
+	// wins on role. Off, only public.memberships is read.
+	UsersOwned bool
+	Schema     authschema.ValidatedIdentifier
+}
 
 // errMultipleRows is a lookup that must match at most one row matching more.
 var errMultipleRows = errors.New("authapi: more than one row where one or none was expected")
@@ -77,6 +87,17 @@ func (p PGUsers) State(ctx context.Context, userID uuid.UUID) (UserState, bool, 
 // Role is go-api's membershipRole (internal/api/session/store.go): more than
 // one row is an error, as SQLAlchemy's one_or_none raises.
 func (p PGUsers) Role(ctx context.Context, userID, orgID uuid.UUID) (*string, bool, error) {
+	if p.UsersOwned {
+		var role *string
+		err := p.Pool.QueryRow(ctx, `SELECT role FROM `+authschema.Quote(p.Schema)+`.memberships
+WHERE principal_id = $1 AND organization_id = $2 AND status = 'active'`, userID, orgID).Scan(&role)
+		switch {
+		case err == nil:
+			return role, true, nil
+		case !errors.Is(err, pgx.ErrNoRows):
+			return nil, false, fmt.Errorf("%w: reading auth memberships: %w", errUsersStore, err)
+		}
+	}
 	rows, err := p.Pool.Query(ctx,
 		`SELECT role FROM public.memberships WHERE user_id = $1 AND org_id = $2`, userID, orgID)
 	if err != nil {
@@ -104,6 +125,52 @@ func (p PGUsers) Role(ctx context.Context, userID, orgID uuid.UUID) (*string, bo
 
 // Memberships is go-api's orderedMemberships (internal/api/session/store.go).
 func (p PGUsers) Memberships(ctx context.Context, userID uuid.UUID) ([]Membership, error) {
+	public, err := p.publicMemberships(ctx, userID)
+	if err != nil || !p.UsersOwned {
+		return public, err
+	}
+	rows, err := p.Pool.Query(ctx, `SELECT organization_id, role, joined_at, created_at FROM `+authschema.Quote(p.Schema)+`.memberships
+WHERE principal_id = $1 AND status = 'active'`, userID)
+	if err != nil {
+		return nil, fmt.Errorf("%w: reading auth memberships: %w", errUsersStore, err)
+	}
+	defer rows.Close()
+	byOrg := map[uuid.UUID]Membership{}
+	for _, m := range public {
+		byOrg[m.OrgID] = m
+	}
+	for rows.Next() {
+		var m Membership
+		if err := rows.Scan(&m.OrgID, &m.Role, &m.JoinedAt, &m.CreatedAt); err != nil {
+			return nil, fmt.Errorf("%w: reading auth memberships: %w", errUsersStore, err)
+		}
+		byOrg[m.OrgID] = m
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("%w: reading auth memberships: %w", errUsersStore, err)
+	}
+	out := make([]Membership, 0, len(byOrg))
+	for _, m := range byOrg {
+		out = append(out, m)
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		a, b := out[i], out[j]
+		switch {
+		case a.JoinedAt != nil && b.JoinedAt == nil:
+			return true
+		case a.JoinedAt == nil && b.JoinedAt != nil:
+			return false
+		case a.JoinedAt != nil && !a.JoinedAt.Equal(*b.JoinedAt):
+			return a.JoinedAt.Before(*b.JoinedAt)
+		case !a.CreatedAt.Equal(b.CreatedAt):
+			return a.CreatedAt.Before(b.CreatedAt)
+		}
+		return a.OrgID.String() < b.OrgID.String()
+	})
+	return out, nil
+}
+
+func (p PGUsers) publicMemberships(ctx context.Context, userID uuid.UUID) ([]Membership, error) {
 	rows, err := p.Pool.Query(ctx, `
 		SELECT org_id, role, joined_at, created_at FROM public.memberships
 		WHERE user_id = $1 ORDER BY joined_at ASC, created_at ASC`, userID)

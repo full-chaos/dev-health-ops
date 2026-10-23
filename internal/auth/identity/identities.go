@@ -259,7 +259,19 @@ type ProvisionRequest struct {
 // (ErrSignupNotAvailable before). A key already linked is ErrIdentityTaken; an
 // email another principal holds is ErrEmailTaken, and nothing is linked to that
 // principal.
-func (s *Store) ProvisionFederated(ctx context.Context, req ProvisionRequest) (_ uuid.UUID, err error) {
+func (s *Store) ProvisionFederated(ctx context.Context, req ProvisionRequest) (uuid.UUID, error) {
+	return s.provisionFederated(ctx, req, nil)
+}
+
+// extraWrite is more state written inside the same audit.Commit as a
+// provisioning, after the identity is attached, with the outbox events it adds.
+// An error from apply rolls the whole commit back.
+type extraWrite struct {
+	apply  func(ctx context.Context, tx audit.TxOps, principal uuid.UUID) error
+	events []audit.OutboxEvent
+}
+
+func (s *Store) provisionFederated(ctx context.Context, req ProvisionRequest, extra *extraWrite) (_ uuid.UUID, err error) {
 	defer func() { s.countLink(ctx, "provision", err) }()
 	if !s.ownsUsers {
 		return uuid.Nil, ErrSignupNotAvailable
@@ -275,6 +287,13 @@ func (s *Store) ProvisionFederated(ctx context.Context, req ProvisionRequest) (_
 	subject, target := principal.String(), linkID.String()
 	auditEvent := identityAudit("auth.principal.provisioned", "principal_provisioned", req.Key, target, subject, req.Actor)
 	auditEvent.Attributes["target_kind"], auditEvent.Attributes["target_id"] = "principal", subject
+	events := []audit.OutboxEvent{
+		principalEvent(subject, "principal.created", true), userEvent(subject, "user.created"),
+		userEvent(subject, "user.email_verified"), identityEvent("external_identity.linked", req.Key, target, subject),
+	}
+	if extra != nil {
+		events = append(events, extra.events...)
+	}
 	err = audit.Commit(ctx, s.pool, s.schema, audit.Mutation{
 		Apply: func(ctx context.Context, tx audit.TxOps) error {
 			if _, err := tx.Exec(ctx, `INSERT INTO `+s.q+`.principals (id, kind, display_name) VALUES ($1, 'user', $2)`,
@@ -285,13 +304,16 @@ func (s *Store) ProvisionFederated(ctx context.Context, req ProvisionRequest) (_
 VALUES ($1, $2, $3, clock_timestamp())`, principal, req.Email, emailLower); err != nil {
 				return err
 			}
-			return s.attachIdentity(ctx, tx, linkID, req.Key, principal, true, ErrIdentityTaken, ErrIdentityTaken)
+			if err := s.attachIdentity(ctx, tx, linkID, req.Key, principal, true, ErrIdentityTaken, ErrIdentityTaken); err != nil {
+				return err
+			}
+			if extra != nil {
+				return extra.apply(ctx, tx, principal)
+			}
+			return nil
 		},
-		Audit: auditEvent,
-		Events: []audit.OutboxEvent{
-			principalEvent(subject, "principal.created", true), userEvent(subject, "user.created"),
-			userEvent(subject, "user.email_verified"), identityEvent("external_identity.linked", req.Key, target, subject),
-		},
+		Audit:  auditEvent,
+		Events: events,
 	})
 	switch {
 	case err == nil:

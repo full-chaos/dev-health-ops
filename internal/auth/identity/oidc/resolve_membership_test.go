@@ -223,3 +223,52 @@ func TestResolveMatchedAccountOfAnotherOrganizationIsRefusedEvenWithJIT(t *testi
 		})
 	}
 }
+
+func resolveRunRow(autoProvision bool, ids *resolveIdentities, jit MembershipJIT) (Login, *Error, *resolveSessions) {
+	sessions := &resolveSessions{}
+	svc := &Service{cfg: Config{Identities: ids, Memberships: resolveMembers{}, Sessions: sessions, MembershipJIT: jit}}
+	row := Provider{ID: uuid.New(), OrgID: uuid.New(), Protocol: "oidc", AutoProvision: autoProvision}
+	v := validated{profile: profile{Email: "p@example.com", EmailVerified: true}}
+	login, failure := svc.resolve(context.Background(), row, v, nil)
+	return login, failure, sessions
+}
+
+// The provider row's auto-provision setting gates the join of a known account
+// as well as the creation of a new one.
+func TestResolveKeyHitJoinNeedsTheProviderRowToAllowIt(t *testing.T) {
+	ids := &resolveIdentities{principal: Principal{ID: uuid.New(), Active: true}}
+	jit := &resolveJIT{}
+	_, failure, sessions := resolveRunRow(false, ids, jit)
+	wantRefused(t, failure, http.StatusForbidden, ReasonMembershipRequired)
+	if len(jit.calls) != 0 || jit.writes != 0 || len(sessions.issued) != 0 {
+		t.Fatalf("join calls %d writes %d sessions %d, want none", len(jit.calls), jit.writes, len(sessions.issued))
+	}
+}
+
+func TestResolveJoinRefusalsKeepTheirStatus(t *testing.T) {
+	cases := map[string]struct {
+		err    error
+		status int
+		reason Reason
+	}{
+		"signup not available":  {ErrSignupNotAvailable, http.StatusForbidden, ReasonSignupUnavailable},
+		"membership not active": {ErrNotOrgMember, http.StatusForbidden, ReasonMembershipRequired},
+		"principal disabled":    {ErrPrincipalDisabled, http.StatusForbidden, ReasonPrincipalDeactivated},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			ids := &resolveIdentities{principal: Principal{ID: uuid.New(), Active: true}}
+			_, failure, sessions := resolveRunRow(true, ids, &resolveJIT{err: tc.err})
+			wantRefused(t, failure, tc.status, tc.reason)
+			if len(sessions.issued) != 0 {
+				t.Fatal("a session was issued")
+			}
+		})
+	}
+}
+
+func TestResolveNewAccountJITRefusalsKeepTheirStatus(t *testing.T) {
+	ids := &resolveIdentities{err: ErrIdentityNotFound}
+	_, failure, _ := resolveRunRow(true, ids, &resolveJIT{err: ErrPrincipalDisabled})
+	wantRefused(t, failure, http.StatusForbidden, ReasonPrincipalDeactivated)
+}

@@ -210,6 +210,22 @@ var optionRegistry = []Option{
 		Usage: "\"true\" mounts the bearer-only social link and unlink routes (POST /v1/identities/social, DELETE /v1/identities/social/{id}); needs the session secrets",
 	},
 	{
+		Flag: "sso-jit", Env: EnvSSOJIT, Kind: KindString, Group: GroupSession, Default: "false",
+		Usage: "\"true\" lets a federated sign-in join a known account to the provider's organization, and create a new account, in one commit; a provider row must allow it too, and it needs the users cutover (AUTH_USERS_OWNED)",
+	},
+	{
+		Env: EnvSSOStateKey, Kind: KindString, Secret: true, Group: GroupSession,
+		Usage: "key the OIDC and OAuth state is derived from; " + EnvSSOStateKey + "_FILE reads it from a mounted file. With APP_BASE_URL and SETTINGS_ENCRYPTION_KEY it mounts the OIDC and OAuth sign-in routes",
+	},
+	{
+		Env: EnvAppBaseURL, Kind: KindString, Group: GroupSession,
+		Usage: "go-api's public base URL (APP_BASE_URL): the callback and ACS URLs the identity providers hold are built from it; absolute http(s) only",
+	},
+	{
+		Env: EnvSettingsEncryptionKey, Kind: KindString, Secret: true, Group: GroupSession,
+		Usage: "go-api's provider-secret key (SETTINGS_ENCRYPTION_KEY); " + EnvSettingsEncryptionKey + "_FILE reads it from a mounted file. SETTINGS_ENCRYPTION_SALT sets its salt",
+	},
+	{
 		Flag: "social-github-client-id", Env: "SOCIAL_GITHUB_CLIENT_ID", Kind: KindString, Group: GroupSession,
 		Usage: "GitHub OAuth client id for POST /api/v1/auth/social-login (go-api's setting)",
 	},

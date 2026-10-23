@@ -17,6 +17,7 @@ internal/apiservice	code	contracts
 internal/apiservice	test	ci
 internal/apiservice/billingvenue	test	contracts
 internal/audit	test	contracts
+internal/auth/authapi	test	contracts
 internal/auth/authconfig	test	contracts
 internal/auth/authruntime	test	contracts
 internal/auth/contracts	code	contracts

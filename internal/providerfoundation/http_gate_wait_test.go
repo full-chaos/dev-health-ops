@@ -93,12 +93,21 @@ func TestInPlaceGateWaitsAreBoundedInTotal(t *testing.T) {
 	}
 	// One 30ms wait fits the 50ms bound and is slept; the second would pass it
 	// (30+30 > 50), so the try ends there: two gate reads, one sleep, no request.
-	// The gate-read count is the exact proof (a second sleep would make it three
-	// or send a request); the elapsed window only guards the sleep itself and is
-	// wide enough for a loaded runner.
-	elapsed := time.Since(started)
-	if elapsed < 25*time.Millisecond || elapsed > 200*time.Millisecond || requests.Load() != 0 || gate.calls.Load() != 2 {
-		t.Fatalf("waited %s with %d requests and %d gate reads, want one 30ms sleep inside the 50ms bound, two gate reads and no request", elapsed, requests.Load(), gate.calls.Load())
+	// The bound is checked on events: the waits the client acted on (every gate
+	// read but the last, which ended the try) total at most the bound, and the
+	// one it refused carried back as the remaining wait. The elapsed lower bound
+	// is safe under load, since a sleep never returns early.
+	if elapsed := time.Since(started); elapsed < 25*time.Millisecond {
+		t.Fatalf("waited %s, want at least the one 30ms sleep", elapsed)
+	}
+	reads := int(gate.calls.Load())
+	var slept time.Duration
+	for _, wait := range gate.remaining[:reads-1] {
+		slept += wait
+	}
+	if requests.Load() != 0 || reads != 2 || slept > client.GateWaitMax || providerErr.RetryAfter != 30*time.Millisecond {
+		t.Fatalf("%d requests, %d gate reads, %s slept (bound %s), retry after %s, want no request, two reads, one 30ms sleep inside the 50ms bound and the refused 30ms carried back",
+			requests.Load(), reads, slept, client.GateWaitMax, providerErr.RetryAfter)
 	}
 }
 
@@ -121,17 +130,17 @@ func TestAnInPlaceGateWaitEndsWithTheContext(t *testing.T) {
 // try ends at once with the wait, so the unit defers instead of dying mid-sleep.
 func TestAGateWaitLongerThanTheContextDeadlineEndsTheTryAtOnce(t *testing.T) {
 	t.Parallel()
-	gate := &scriptedGate{remaining: []time.Duration{time.Minute}}
+	gate := &scriptedGate{remaining: []time.Duration{2 * time.Hour}}
 	var requests atomic.Int32
 	client := gateWaitClient(t, gate, &requests)
-	client.GateWaitMax = 10 * time.Minute
-	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	client.GateWaitMax = 3 * time.Hour
+	ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
 	defer cancel()
 
 	_, err := client.Do(ctx, http.MethodGet, "/items", nil)
 	var providerErr *ProviderError
-	if !errors.As(err, &providerErr) || providerErr.Class != ErrorRateLimited || providerErr.RetryAfter != time.Minute {
-		t.Fatalf("err = %v, want rate_limited carrying 1m", err)
+	if !errors.As(err, &providerErr) || providerErr.Class != ErrorRateLimited || providerErr.RetryAfter != 2*time.Hour {
+		t.Fatalf("err = %v, want rate_limited carrying 2h", err)
 	}
 	if calls := gate.calls.Load(); calls != 1 || requests.Load() != 0 {
 		t.Fatalf("gate read %d times and %d requests, want one read, no sleep and no request towards a wait the deadline could not outlast", calls, requests.Load())
@@ -199,8 +208,8 @@ func TestInPlaceGateWaitRespectsTheBoundAndTheDeadlineForAReportingGate(t *testi
 	if _, err := client.Do(context.Background(), http.MethodGet, "/items", nil); err == nil || requests.Load() != 0 {
 		t.Fatalf("err = %v requests = %d, want rate_limited and no request past the bound", err, requests.Load())
 	}
-	client.GateWaitMax = time.Hour
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	client.GateWaitMax = 2 * time.Hour
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	_, err := client.Do(ctx, http.MethodGet, "/items", nil)
 	var providerErr *ProviderError
@@ -220,8 +229,9 @@ func (l *flippingLease) Assert(context.Context) error {
 
 func TestDoUnauthenticatedReassertsTheLeaseAfterTheGateSleep(t *testing.T) {
 	t.Parallel()
-	gate := &reportingGate{}
-	_ = gate.Penalize(context.Background(), 40*time.Millisecond)
+	// Event order, not elapsed time: the first gate read owes 40ms, the next owes nothing. A wall-clock penalty could
+	// expire before the first read under load, so no sleep would happen and the lease would never be asserted again.
+	gate := &scriptedGate{remaining: []time.Duration{40 * time.Millisecond}}
 	var requests atomic.Int32
 	client := gateWaitClient(t, gate, &requests)
 	client.GateWaitMax = time.Second
@@ -268,10 +278,13 @@ func TestARetryRechecksTheGateBeforeItIsSent(t *testing.T) {
 }
 
 // After this client's own 429 the gate is armed with the same delay the retry
-// then waits, so the recheck finds it clear: no second sleep.
+// then waits, so the recheck finds it clear: no second sleep. Checked on events:
+// the gate is armed before the retry wait starts and the retry waits at least the
+// armed delay, so no gate read finds a wait owed; a read that still owed one would
+// be the second sleep.
 func TestARetryAfterOwn429DoesNotSleepTheGateTwice(t *testing.T) {
 	t.Parallel()
-	gate := &reportingGate{}
+	gate := &owingReadsGate{}
 	var calls atomic.Int32
 	policy := RetryPolicy{MaxAttempts: 2, InitialWait: 60 * time.Millisecond, MaxWait: 60 * time.Millisecond}
 	client := newTestHTTPClient(t, fakehttp.Client(HTTPDoerFunc(func(request *http.Request) (*http.Response, error) {
@@ -283,13 +296,26 @@ func TestARetryAfterOwn429DoesNotSleepTheGateTwice(t *testing.T) {
 	client.Gate = gate
 	client.GateWaitMax = 3 * time.Second
 
-	started := time.Now()
 	response, err := client.Do(context.Background(), http.MethodGet, "/items", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	_ = response.Body.Close()
-	if elapsed := time.Since(started); elapsed > 1800*time.Millisecond {
-		t.Fatalf("took %s: the retry slept the 1s Retry-After and then the gate it had armed for the same second", elapsed)
+	if calls.Load() != 2 || gate.owed.Load() != 0 {
+		t.Fatalf("calls = %d, %d gate reads still owed a wait, want 2 calls and none (an owed read is a second sleep of the armed gate)", calls.Load(), gate.owed.Load())
 	}
+}
+
+// owingReadsGate is a reportingGate that counts the reads that still owed a wait.
+type owingReadsGate struct {
+	reportingGate
+	owed atomic.Int32
+}
+
+func (g *owingReadsGate) Wait(ctx context.Context) (time.Duration, error) {
+	wait, err := g.reportingGate.Wait(ctx)
+	if wait > 0 {
+		g.owed.Add(1)
+	}
+	return wait, err
 }

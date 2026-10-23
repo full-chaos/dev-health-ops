@@ -132,18 +132,20 @@ func TestConfigureWarnsAboutWideTrustedProxyPrefixes(t *testing.T) {
 		for index := len(components) - 1; index >= 0; index-- {
 			_ = components[index].Shutdown(context.Background())
 		}
-		var found map[string]any
+		var found []map[string]any
 		for _, line := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
 			var entry map[string]any
 			if json.Unmarshal([]byte(line), &entry) == nil && strings.Contains(fmt.Sprint(entry["msg"]), "trusted proxy list holds prefixes wider than a /28") {
-				found = entry
+				found = append(found, entry)
 			}
 		}
-		if (found != nil) != wantWarning {
-			t.Errorf("TRUSTED_PROXIES=%q: warning logged = %v, want %v", raw, found != nil, wantWarning)
+		if (len(found) > 0) != wantWarning || len(found) > 1 {
+			t.Errorf("TRUSTED_PROXIES=%q: %d warnings logged, want %v (at most one)", raw, len(found), wantWarning)
 		}
-		if found != nil && (found["level"] != "WARN" || found["count"] != float64(1)) {
-			t.Errorf("TRUSTED_PROXIES=%q: log entry %v, want level WARN and count 1", raw, found)
+		for _, entry := range found {
+			if entry["level"] != "WARN" || entry["count"] != float64(1) {
+				t.Errorf("TRUSTED_PROXIES=%q: log entry %v, want level WARN and count 1", raw, entry)
+			}
 		}
 		if strings.Contains(logs.String(), "10.42.0") {
 			t.Errorf("TRUSTED_PROXIES=%q: the log carries the address", raw)

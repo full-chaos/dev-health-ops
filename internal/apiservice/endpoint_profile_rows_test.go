@@ -376,7 +376,7 @@ func TestTheScopeMiddlewaresAreWrappedAroundTheAPIListener(t *testing.T) {
 	if !strings.Contains(text, "protected.scope.OrgScope, protected.scope.Impersonation}") {
 		t.Fatal("the api listener no longer installs OrgScope and Impersonation: the rows' reachable validators are stale")
 	}
-	if !strings.Contains(text, "NewServerWithGate(cfg, logger, Routes(deps, logger), webhookintake.NewGate(limits, deps.Now, logger), scope...)") {
+	if !strings.Contains(text, "NewServerWithGate(cfg, logger, Routes(deps, logger), gate, scope...)") {
 		t.Fatal("the api listener is no longer built with the scope middlewares")
 	}
 	for _, listener := range []string{"func NewInternalServer", "func NewEdgeServer"} {

@@ -106,19 +106,20 @@ func NewGate(store httpapi.CounterStore, now func() time.Time, logger *slog.Logg
 	return &Gate{limiters: newRateLimiters(store, now), logger: logger}
 }
 
-// Provider names the intake route a request is for, from its method and
-// escaped path: the three fixed routes, and the PagerDuty route with exactly
-// one segment after its prefix, whatever that segment holds.
-func Provider(method, escapedPath string) (string, bool) {
+// Provider names the intake route a request is for, from its method and its
+// decoded path (the path the mux routes on): the three fixed routes, and the
+// PagerDuty route with exactly one segment after its prefix, whatever that
+// segment holds.
+func Provider(method, path string) (string, bool) {
 	if method != http.MethodPost {
 		return "", false
 	}
 	for provider, template := range routeTemplates {
-		if provider != providerPagerDuty && escapedPath == template {
+		if provider != providerPagerDuty && path == template {
 			return provider, true
 		}
 	}
-	if id, ok := strings.CutPrefix(escapedPath, routePrefix+"/pagerduty/"); ok && id != "" && !strings.Contains(id, "/") {
+	if id, ok := strings.CutPrefix(path, routePrefix+"/pagerduty/"); ok && id != "" && !strings.Contains(id, "/") {
 		return providerPagerDuty, true
 	}
 	return "", false

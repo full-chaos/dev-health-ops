@@ -428,12 +428,8 @@ func configureWith(
 	if adjust != nil {
 		adjust(&deps)
 	}
-	limits, limitsErr := limitStore(deps)
-	if limitsErr != nil {
-		limits = httpapi.NewMemoryCounters(deps.Now)
-	}
-	deps.Limits = limits
-	server, err := NewServerWithGate(cfg, logger, Routes(deps, logger), webhookintake.NewGate(limits, deps.Now, logger), scope...)
+	gate := NewIntakeGate(&deps, logger)
+	server, err := NewServerWithGate(cfg, logger, Routes(deps, logger), gate, scope...)
 	if err != nil {
 		return nil, dependencyFailure(ctx, logger, "api_server", "api_server_config_failed", err)
 	}

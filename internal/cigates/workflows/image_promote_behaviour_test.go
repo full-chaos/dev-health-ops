@@ -246,6 +246,7 @@ func TestHotfixGate(t *testing.T) {
 		{"fork head", setup(t, "hotfix-image"), pr("HEAD_REPO=evil/dev-health-ops"), "fork"},
 		{"pusher without write", setup(t, "hotfix-image"), pr("ACTORS=alice mallory"), "write is required"},
 		{"re-runner without write", setup(t, "hotfix-image"), pr("ACTORS=mallory alice"), "write is required"},
+		{"PR author without write (labeled event: labeler is sender and actor)", setup(t, "hotfix-image"), pr("ACTORS=alice alice mallory"), "write is required"},
 		{"no actor", setup(t, "hotfix-image"), pr("ACTORS="), "no actor"},
 		{"unreadable permission", setup(t, "hotfix-image"), pr("ACTORS=ghost"), "cannot read the permission"},
 	}
@@ -353,5 +354,19 @@ func TestLabeledTriggerIsGatedToHotfixImage(t *testing.T) {
 	}
 	if !strings.Contains(text, "github.event.label.name != 'hotfix-image' && '-other-label'") {
 		t.Error("another label's run shares the PR concurrency group and would cancel the real run")
+	}
+}
+
+func TestResolveGateChecksLabelerSenderAndPRAuthor(t *testing.T) {
+	var actors string
+	for _, s := range stepsOf(asMap(jobsOf(loadWf(t, repoRoot(t), "docker-images.yml"))["resolve"])) {
+		if asString(s["id"]) == "decide" {
+			actors = asString(asMap(s["env"])["ACTORS"])
+		}
+	}
+	for _, want := range []string{"github.triggering_actor", "github.event.sender.login", "github.event.pull_request.user.login"} {
+		if !strings.Contains(actors, want) {
+			t.Errorf("ACTORS %q lacks %s: on a labeled event the labeler is sender and triggering actor, so the PR author is the only other identity the gate can check", actors, want)
+		}
 	}
 }

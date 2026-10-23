@@ -175,7 +175,7 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          ACTORS: ${{ github.triggering_actor }} ${{ github.event.sender.login }}
+          ACTORS: ${{ github.triggering_actor }} ${{ github.event.sender.login }} ${{ github.event.pull_request.user.login }}
         run: |
           if [[ "${EVENT_NAME}" == "pull_request" ]]; then
             bash ci/image_promote.sh gate

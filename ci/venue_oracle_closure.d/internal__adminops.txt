@@ -58,6 +58,7 @@ internal/pythonparity/pyidna
 internal/pythonparity/pyunicodedata
 internal/storage/clickhouse
 internal/storage/postgres
+internal/storage/postgres/aclguard
 internal/storage/river
 internal/storage/roleacl
 internal/syncdispatchruntime/synclog

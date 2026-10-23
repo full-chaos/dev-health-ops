@@ -15,6 +15,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/workitemblockers"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/workitemmetrics"
+	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/engineclause"
 )
 
 // CHAOS-9706: drain of the blocking relations that the provider no longer
@@ -191,7 +192,7 @@ func verifyDependencyTableShape(ctx context.Context, conn driver.Conn) error {
 		clickhouse.Named("table", WorkItemDependencyDrainTable)).Scan(&engineFull, &sortingKey); err != nil {
 		return fmt.Errorf("%w: %v", ErrWorkItemDependencyDrainTable, err)
 	}
-	if !strings.HasPrefix(engineFull, "ReplacingMergeTree(last_synced)") ||
+	if clause, err := engineclause.Parse(engineFull); err != nil || !clause.IsReplacingOn("last_synced") ||
 		sortingKey != "org_id, source_work_item_id, target_work_item_id, relationship_type" {
 		return ErrWorkItemDependencyDrainTable
 	}

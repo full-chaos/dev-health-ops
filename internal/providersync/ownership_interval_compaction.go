@@ -15,6 +15,8 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/engineclause"
 )
 
 // CHAOS-9556: one-time compaction of the closed ownership intervals that the
@@ -1278,7 +1280,7 @@ func verifyOwnershipTableShape(ctx context.Context, conn driver.Conn, spec owner
 		return fmt.Errorf("%w: %v", ErrOwnershipCompactionTable, err)
 	}
 	wantKey := "org_id, provider, " + spec.natural + ", team_id, source, valid_from"
-	if !strings.HasPrefix(engineFull, "ReplacingMergeTree(updated_at)") || sortingKey != wantKey {
+	if clause, err := engineclause.Parse(engineFull); err != nil || !clause.IsReplacingOn("updated_at") || sortingKey != wantKey {
 		return ErrOwnershipCompactionTable
 	}
 	return nil

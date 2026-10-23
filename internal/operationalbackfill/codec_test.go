@@ -218,3 +218,32 @@ func TestDeriveOrderingEncodesIntegerFloatAndTombstoneRank(t *testing.T) {
 		t.Fatalf("the key does not carry the integer type: %s", live.ConflictKey)
 	}
 }
+
+func TestTableContractReadsCloudAndReplicatedEngines(t *testing.T) {
+	const cloud = "SharedReplacingMergeTree('/clickhouse/tables/{uuid}/{shard}', '{replica}', "
+	const replicated = "ReplicatedReplacingMergeTree('/clickhouse/tables/{shard}/t', '{replica}', "
+	legacy := func(engine string) string {
+		return "CREATE TABLE t (org_id String, id String, source_version_at DateTime64(6, 'UTC')) ENGINE = " + engine + "source_version_at) ORDER BY (org_id, id) SETTINGS index_granularity = 8192"
+	}
+	current := func(engine string) string {
+		return "CREATE TABLE t (org_id String, id String, source_revision UInt128, source_conflict_key String, ingest_revision UInt128, ordering_contract UInt8, CONSTRAINT ordering_contract_v2 CHECK ordering_contract = 2) ENGINE = " + engine + "ingest_revision) PRIMARY KEY (org_id, id) ORDER BY (org_id, id, source_revision, source_conflict_key)"
+	}
+	for name, tc := range map[string]struct {
+		ddl  string
+		want Contract
+		err  bool
+	}{
+		"cloud legacy":         {legacy(cloud), ContractLegacy, false},
+		"cloud current":        {current(cloud), ContractCurrent, false},
+		"replicated legacy":    {legacy(replicated), ContractLegacy, false},
+		"replicated current":   {current(replicated), ContractCurrent, false},
+		"cloud wrong version":  {strings.Replace(current(cloud), "ingest_revision)", "source_version_at)", 1), 0, true},
+		"cloud no replication": {strings.Replace(current(cloud), "'/clickhouse/tables/{uuid}/{shard}', '{replica}', ", "", 1), 0, true},
+		"cloud unclosed":       {strings.Replace(current(cloud), "ingest_revision)", "ingest_revision", 1), 0, true},
+	} {
+		got, err := TableContract(tc.ddl, "t")
+		if (err != nil) != tc.err || got != tc.want {
+			t.Errorf("%s: got %v, %v", name, got, err)
+		}
+	}
+}

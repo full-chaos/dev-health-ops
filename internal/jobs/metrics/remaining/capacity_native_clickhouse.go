@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"regexp"
 	"strings"
 	"time"
 
@@ -15,6 +14,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/numerical"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/rowview"
+	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/engineclause"
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
@@ -635,13 +635,11 @@ var capacityTableRequirements = map[string]capacityTableRequirement{
 	},
 }
 
-// capacityReplacingEngineMarker matches the Replacing family.
-//
-// Substring rather than equality on purpose: production runs
-// ReplicatedReplacingMergeTree, local and test stacks run ReplacingMergeTree,
-// and both collapse superseded versions under FINAL. Requiring an exact string
-// would refuse a perfectly correct replicated deployment.
-const capacityReplacingEngineMarker = "ReplacingMergeTree"
+// capacityReplacingEngineMarker is the Replacing family. Self-hosted runs
+// ReplacingMergeTree, replicated ReplicatedReplacingMergeTree and ClickHouse Cloud
+// SharedReplacingMergeTree; all collapse superseded versions under FINAL, and
+// engineclause strips the Shared/Replicated prefix before the comparison.
+const capacityReplacingEngineMarker = engineclause.FamilyReplacing
 
 // verifyCapacitySchema refuses a database this executor cannot compute against.
 //
@@ -685,7 +683,7 @@ func verifyCapacitySchema(ctx context.Context, conn driver.Conn) error {
 		if err != nil {
 			return err
 		}
-		if !strings.Contains(engine, capacityReplacingEngineMarker) {
+		if clause, err := engineclause.Parse(engine); err != nil || clause.Family != capacityReplacingEngineMarker {
 			return fmt.Errorf(
 				"%w: %s is %s, but this executor reads it with FINAL, which only "+
 					"collapses superseded rows on the %s family -- on %s the "+
@@ -767,14 +765,6 @@ func capacityTableEngine(
 	return engine, nil
 }
 
-// capacityVersionColumnPattern extracts a ReplacingMergeTree engine's version
-// argument from engine_full, e.g. "ReplacingMergeTree(computed_at)" ->
-// "computed_at". An engine clause with no argument
-// ("ReplacingMergeTree()") does not match, which is the versionless case:
-// that table still collapses under FINAL, but by insertion order rather than
-// by any named column.
-var capacityVersionColumnPattern = regexp.MustCompile(`ReplacingMergeTree\(\s*` + "`?" + `([^` + "`" + `\s)]+)` + "`?" + `\s*\)`)
-
 // capacityTableVersionColumn reports the column a ReplacingMergeTree table
 // versions on, or "" when its engine clause names none.
 //
@@ -791,11 +781,15 @@ func capacityTableVersionColumn(
     `, clickhouse.Named("table", table)).Scan(&engineFull); err != nil {
 		return "", fmt.Errorf("inspect %s engine_full: %w", table, err)
 	}
-	match := capacityVersionColumnPattern.FindStringSubmatch(engineFull)
-	if match == nil {
-		return "", nil
+	clause, err := engineclause.Parse(engineFull)
+	if err != nil {
+		return "", fmt.Errorf("%w: %s engine_full %q: %v", ErrCapacitySchemaIncompatible, table, engineFull, err)
 	}
-	return match[1], nil
+	version, err := clause.VersionColumn()
+	if err != nil {
+		return "", fmt.Errorf("%w: %s engine_full %q: %v", ErrCapacitySchemaIncompatible, table, engineFull, err)
+	}
+	return version, nil
 }
 
 // capacityTableSortingKey reports a table's ORDER BY columns, in the order

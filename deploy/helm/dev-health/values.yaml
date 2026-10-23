@@ -53,6 +53,23 @@ goApi:
     #    sets acr's api pods here, for example
     #    `{matchLabels: {app.kubernetes.io/name: acr, app.kubernetes.io/instance: dev-health-acr, app.kubernetes.io/component: api}}`.
     allowedFrom: []
+  # -- The request-port fence (CHAOS-10743). Off, goApi.port is open to every source (every TCP port but the
+  #    internal one is). On, goApi.port and extraFencedPorts are open ONLY to the ingress controller pods
+  #    (networkPolicy.ingressControllerNamespace + ingressControllerPodLabels) and to allowedFrom. The operator port
+  #    (probes, scrapes) stays open. It lives in the go-api-internal NetworkPolicy, so it needs goApi.internal.enabled.
+  #    Rollback: enabled=false (the same policy then opens every port but the internal one again).
+  networkPolicy:
+    enabled: false
+    # -- Further request listeners to close (for example the billing edge port the deploy chart opens through
+    #    DEV_HEALTH_API_BILLING_EDGE_ADDR). A listener not named here stays open.
+    extraFencedPorts: []
+    # -- Labels of the ingress controller pods (the pod of the controller namespace, not every pod of it).
+    ingressControllerPodLabels:
+      app.kubernetes.io/name: ingress-nginx
+      app.kubernetes.io/component: controller
+    # -- More peers for the fenced ports: `{podSelector: {matchLabels: {...}}}` and/or `{namespaceSelector: ...}`
+    #    entries. Empty selectors and ipBlock are refused. Empty admits nobody else.
+    allowedFrom: []
   # -- Comma-separated CORS allow-list, same format and meaning as the Python
   #    api's CORS_ALLOWED_ORIGINS. Empty keeps the binary's default
   #    (http://localhost:3000, the Python api's own default).
@@ -79,6 +96,16 @@ goApi:
   #    --log-level=debug). Credentials never go here: an argument is visible
   #    to anyone who can read the Pod spec.
   extraArgs: []
+  # -- CHAOS-10718: the old pod keeps serving for preStopSeconds while its endpoint is removed, then
+  #    gets SIGTERM. 0 renders no hook, maximum 600. Native sleep action: Kubernetes >= 1.30 (the image has no shell).
+  drain:
+    preStopSeconds: 10
+  # -- The graceful-shutdown budget the chart passes to go-api (--shutdown-timeout). Whole seconds,
+  #    1s to 10800s (dho api refuses more than 3 h).
+  shutdownTimeout: 30s
+  # -- Must be at least drain.preStopSeconds + shutdownTimeout + 5: kubelet counts the preStop hook
+  #    inside it. The render fails below that. Maximum 86400.
+  terminationGracePeriodSeconds: 45
   # -- Probe timing. The probe targets (/healthz, /readyz on the operator
   #    port) are fixed in the template.
   livenessProbe:

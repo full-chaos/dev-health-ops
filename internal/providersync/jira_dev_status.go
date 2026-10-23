@@ -105,7 +105,7 @@ func jiraTrustedSCMHosts() map[string]struct{} {
 	return hosts
 }
 
-func jiraTrustedSCMHostsAndRoots() (map[string]struct{}, map[string][]string) {
+func jiraTrustedSCMHostsAndRoots() (map[string]struct{}, map[string][][]string) {
 	return parseTrustedSCMHostEntries(os.Getenv("JIRA_TRUSTED_SCM_HOSTS"), "github.com", "www.github.com", "gitlab.com")
 }
 
@@ -132,9 +132,10 @@ func jiraDevStatusPullRequestSource(rawURL string) (source string, rejected bool
 	if _, ok := hosts[strings.ToLower(parsed.Host)]; !ok {
 		return "", false
 	}
-	parts, ok := stripSCMURLRoot(roots, parsed.Host, strings.Split(strings.Trim(parsed.Path, "/"), "/"))
+	all := strings.Split(strings.Trim(parsed.Path, "/"), "/")
+	parts, ok := stripSCMURLRoot(roots, parsed.Host, all)
 	if !ok {
-		return "", false
+		return "", scmURLNamesChangeRequest(all)
 	}
 	if len(parts) >= 4 && parts[len(parts)-2] == "pull" {
 		return "ghpr:" + strings.Join(parts[:len(parts)-2], "/") + "#" + parts[len(parts)-1], false
@@ -144,9 +145,7 @@ func jiraDevStatusPullRequestSource(rawURL string) (source string, rejected bool
 		if project[len(project)-1] == "-" {
 			project = project[:len(project)-1]
 		}
-		if len(project) >= 2 {
-			return gitlabMergeRequestSourceID(strings.Join(project, "/"), parts[len(parts)-1])
-		}
+		return gitlabMergeRequestSourceID(strings.Join(project, "/"), parts[len(parts)-1])
 	}
 	return "", false
 }

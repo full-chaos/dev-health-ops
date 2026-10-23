@@ -1,0 +1,14 @@
+{
+  "schema_version": "actions.v1",
+  "catalog_version": 2,
+  "description": "example",
+  "actions": [
+    {
+      "action": "settings.write",
+      "scope": "organization",
+      "resource_kind": "organization",
+      "risk_class": "high",
+      "cache_class": "decision_bound"
+    }
+  ]
+}

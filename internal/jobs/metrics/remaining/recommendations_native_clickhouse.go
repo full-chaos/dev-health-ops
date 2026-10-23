@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/rowview"
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
@@ -36,6 +37,7 @@ var discoverTeamIDsSQL = `
     FROM work_item_metrics_daily FINAL
     WHERE day >= today() - 30
       AND team_id != ''
+      AND ` + rowview.OrgPredicate("work_item_metrics_daily", "") + `
       AND ` + liverow.Predicate("work_item_metrics_daily", "")
 
 // DiscoverTeamIDs returns the teams with recent activity for an org.

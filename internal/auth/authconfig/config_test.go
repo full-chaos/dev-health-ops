@@ -333,6 +333,7 @@ func TestEveryDeclaredOptionResolves(t *testing.T) {
 		EnvTokenIssuerURL:         "https://other-issuer.example.test",
 		EnvAccessTokenIssuer:      "other-issuer",
 		EnvAccessTokenAudience:    "other-audience",
+		EnvSocialLinkRoutes:       "true",
 		EnvTrustedProxies:         "10.0.0.5,192.168.0.0/16",
 		"SOCIAL_GITHUB_CLIENT_ID": "gh-client",
 		"SOCIAL_GITLAB_CLIENT_ID": "gl-client",
@@ -357,6 +358,7 @@ func TestEveryDeclaredOptionResolves(t *testing.T) {
 		EnvTokenIssuerURL:         func(c Config) string { return c.TokenIssuerURL },
 		EnvAccessTokenIssuer:      func(c Config) string { return c.Session.AccessIssuer },
 		EnvAccessTokenAudience:    func(c Config) string { return c.Session.AccessAudience },
+		EnvSocialLinkRoutes:       func(c Config) string { return strconv.FormatBool(c.Session.SocialLinkRoutes) },
 		EnvTrustedProxies:         func(c Config) string { return itoa(int64(c.TrustedProxies.Len())) },
 		"SOCIAL_GITHUB_CLIENT_ID": func(c Config) string { return c.Social["github"].ID },
 		"SOCIAL_GITLAB_CLIENT_ID": func(c Config) string { return c.Social["gitlab"].ID },
@@ -387,6 +389,9 @@ func TestEveryDeclaredOptionResolves(t *testing.T) {
 			if option.Env == EnvSigningKeySetFile {
 				delete(env, EnvSigningKeyFile)
 				delete(env, EnvSigningKeyID)
+			}
+			if option.Env == EnvSocialLinkRoutes {
+				env[EnvAccessTokenSecret], env[EnvSessionSuccessorKey] = testAccessSecret, testSuccessorKey
 			}
 			env[option.Env] = value
 			cfg, err := Load(Spec{LookupEnv: lookupFrom(env)})

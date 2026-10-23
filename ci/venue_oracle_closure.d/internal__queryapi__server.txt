@@ -66,6 +66,7 @@ internal/platform/dbphase
 internal/platform/dbspan
 internal/platform/errortext
 internal/platform/errortext/hardened
+internal/platform/fernet
 internal/platform/health
 internal/platform/logging
 internal/platform/pgident
@@ -117,6 +118,7 @@ internal/queryapi/hotspots
 internal/queryapi/internalidentity
 internal/queryapi/investment
 internal/queryapi/investmentexplain
+internal/queryapi/linkeditems
 internal/queryapi/meta
 internal/queryapi/newestrow
 internal/queryapi/operatingreview
@@ -130,6 +132,7 @@ internal/queryapi/reports
 internal/queryapi/reports/writeproofcases
 internal/queryapi/reviewedges
 internal/queryapi/routeswitch
+internal/queryapi/rowview
 internal/queryapi/sankey
 internal/queryapi/scopelabel
 internal/queryapi/security
@@ -145,6 +148,7 @@ internal/storage/clickhouse
 internal/storage/clickhouse/latestrow
 internal/storage/clickhouse/liverow
 internal/storage/postgres
+internal/storage/postgres/aclguard
 internal/storage/river
 internal/storage/roleacl
 internal/storage/valkey

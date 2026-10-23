@@ -104,6 +104,7 @@ import (
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/activeteams"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/rowview"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
@@ -192,21 +193,21 @@ var TeamMetrics = map[string]MetricSpec{
 		Metric: "throughput", Label: "Throughput", Unit: "items",
 		Table: "work_item_metrics_daily AS m", ValueExpr: "sum(m.items_completed)",
 		EntityExpr: "m.team_id", LabelExpr: teamLabelExpr,
-		WhereClause: "AND m.team_id != ''", Transform: identity,
+		WhereClause: "AND m.team_id != '' AND " + rowview.OrgPredicate("work_item_metrics_daily", "m"), Transform: identity,
 		UsePrimaryTeamAttribution: true,
 	},
 	"cycle_time": {
 		Metric: "cycle_time", Label: "Cycle Time", Unit: "days",
 		Table: "work_item_metrics_daily AS m", ValueExpr: "avg(m.cycle_time_p50_hours)",
 		EntityExpr: "m.team_id", LabelExpr: teamLabelExpr,
-		WhereClause: "AND m.cycle_time_p50_hours IS NOT NULL AND m.team_id != ''",
+		WhereClause: "AND m.cycle_time_p50_hours IS NOT NULL AND m.team_id != '' AND " + rowview.OrgPredicate("work_item_metrics_daily", "m"),
 		Transform:   hoursToDays, UsePrimaryTeamAttribution: true,
 	},
 	"wip": {
 		Metric: "wip", Label: "WIP", Unit: "items",
 		Table: "work_item_metrics_daily AS m", ValueExpr: "avg(m.wip_count_end_of_day)",
 		EntityExpr: "m.team_id", LabelExpr: teamLabelExpr,
-		WhereClause: "AND m.team_id != ''", Transform: identity,
+		WhereClause: "AND m.team_id != '' AND " + rowview.OrgPredicate("work_item_metrics_daily", "m"), Transform: identity,
 	},
 	// review_load and review_latency weigh each row of a repository by the
 	// owner's share of it (owner_share, D5998, CHAOS-9562), so the weights of
@@ -289,8 +290,9 @@ var RepoMetrics = map[string]MetricSpec{
 		Metric: "wip", Label: "WIP", Unit: "items",
 		Table: "work_item_metrics_daily AS m", ValueExpr: "avg(m.wip_count_end_of_day)",
 		EntityExpr: "repos.repo", LabelExpr: "repos.repo",
-		JoinClause:  "INNER JOIN repos FINAL ON repos.repo = m.work_scope_id AND repos.org_id = {org_id:String}",
-		WhereClause: "AND m.work_scope_id != ''", Transform: identity,
+		JoinClause: "INNER JOIN repos FINAL ON repos.repo = m.work_scope_id AND repos.org_id = {org_id:String}",
+		// One row per work scope: each item once per scope (CHAOS-8863), legacy rows and the scope view.
+		WhereClause: "AND m.work_scope_id != '' AND " + rowview.ScopePredicate("work_item_metrics_daily", "m"), Transform: identity,
 	},
 	"review_load": {
 		Metric: "review_load", Label: "Review Load", Unit: "reviews",
@@ -321,20 +323,20 @@ var PersonMetrics = map[string]MetricSpec{
 		Metric: "throughput", Label: "Throughput", Unit: "items",
 		Table: "work_item_user_metrics_daily AS m", ValueExpr: "sum(m.items_completed)",
 		EntityExpr: "m.user_identity", LabelExpr: "m.user_identity",
-		WhereClause: "AND m.user_identity != ''", Transform: identity,
+		WhereClause: "AND m.user_identity != '' AND " + rowview.OrgPredicate("work_item_user_metrics_daily", "m"), Transform: identity,
 	},
 	"cycle_time": {
 		Metric: "cycle_time", Label: "Cycle Time", Unit: "days",
 		Table: "work_item_user_metrics_daily AS m", ValueExpr: "avg(m.cycle_time_p50_hours)",
 		EntityExpr: "m.user_identity", LabelExpr: "m.user_identity",
-		WhereClause: "AND m.cycle_time_p50_hours IS NOT NULL AND m.user_identity != ''",
+		WhereClause: "AND m.cycle_time_p50_hours IS NOT NULL AND m.user_identity != '' AND " + rowview.OrgPredicate("work_item_user_metrics_daily", "m"),
 		Transform:   hoursToDays,
 	},
 	"wip": {
 		Metric: "wip", Label: "WIP", Unit: "items",
 		Table: "work_item_user_metrics_daily AS m", ValueExpr: "avg(m.wip_count_end_of_day)",
 		EntityExpr: "m.user_identity", LabelExpr: "m.user_identity",
-		WhereClause: "AND m.user_identity != ''", Transform: identity,
+		WhereClause: "AND m.user_identity != '' AND " + rowview.OrgPredicate("work_item_user_metrics_daily", "m"), Transform: identity,
 	},
 	"review_load": {
 		Metric: "review_load", Label: "Review Load", Unit: "reviews",

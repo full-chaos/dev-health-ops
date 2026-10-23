@@ -59,6 +59,7 @@ func TestEveryStatusTheStackAnswersIsAnOpenAPIResponse(t *testing.T) {
 		authconfig.EnvRateLimitBurst:         "4",
 		authconfig.EnvAPIAddress:             "127.0.0.1:0",
 		authconfig.EnvOperatorAddress:        "127.0.0.1:1",
+		authconfig.EnvSocialLinkRoutes:       "true",
 	}))})
 	if err != nil {
 		t.Fatalf("load config: %v", err)

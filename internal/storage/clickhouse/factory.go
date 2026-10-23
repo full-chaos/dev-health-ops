@@ -27,6 +27,8 @@ type Config struct {
 	DialTimeout     time.Duration
 	ReadTimeout     time.Duration
 	ConnMaxLifetime time.Duration
+	// Settings are session settings sent with every query; they win over DSN parameters.
+	Settings map[string]any
 }
 
 func DefaultConfig(dsn string) Config {
@@ -74,6 +76,12 @@ func clickHouseOptions(config Config) (*clickhouse.Options, error) {
 	options.DialTimeout = config.DialTimeout
 	options.ReadTimeout = config.ReadTimeout
 	options.ConnMaxLifetime = config.ConnMaxLifetime
+	for name, value := range config.Settings {
+		if options.Settings == nil {
+			options.Settings = clickhouse.Settings{}
+		}
+		options.Settings[name] = value
+	}
 	options.Debug = false
 	options.Debugf = nil
 	options.Logger = nil

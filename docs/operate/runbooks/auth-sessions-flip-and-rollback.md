@@ -11,7 +11,7 @@ lifecycle: active
 
 This runbook covers two prod rolls, in this order: the NetworkPolicy roll (roll A), then the login flip (roll B). Each roll changes one thing. A NetworkPolicy fault and a sessions fault both show as failed logins and 5xx answers, so they never share a roll. Roll B starts only after roll A has run clean in prod.
 
-Roll B also needs the prod ClickHouse to work and the owner's go. Each roll goes through the roll kit: "N START?", then the pm confirm, then the roll lane runs the kit step (`<kit step: roll A>`, `<kit step: roll B>`; exact step names are placeholders until the roll kit names them).
+Roll B also needs the prod ClickHouse to work and the owner's go. Each roll goes through the roll kit: "N START?", then the pm confirm, then the roll lane runs the kit step (`<chaos roll step: NetworkPolicy roll>`, `<chaos roll step: login-flip roll>`; the roll plans by chaos are not written yet, so these names are placeholders). The kit phases are `pre`, `groups`, `drain`, `prep`, `refresh`, `deploy`, `stagecheck` and `rollback-ops`.
 
 ## Rules for every step
 
@@ -19,7 +19,7 @@ Roll B also needs the prod ClickHouse to work and the owner's go. Each roll goes
 - Never run `kubectl exec`. Never run `kubectl get secret` or `kubectl describe secret` in any form. Never read process arguments with a full-argv `ps`.
 - A Secret value never appears in chat, a command argument, a log, a ticket or shell history. Secret creation uses the create-only scripts named below, which print Secret and key names only.
 - A failed read that could print a value is stopped, not retried.
-- Roll commands run through the deploy wrapper and the roll kit. This page gives no prod context or values path.
+- Roll commands run through `<deploy wrapper>` and the roll kit. This page gives no prod context or values path.
 
 ## States
 
@@ -36,9 +36,9 @@ Roll A sets `networkPolicy.enabled=true` and `goWorkers.pgbouncer.postgres.netwo
 | A2 | Set `goWorkers.pgbouncer.postgres.networkPolicyCIDR` from the deploy sources. Use a narrow CIDR. Read no Secret. The render refuses an external Postgres without it. | chart values `goWorkers.pgbouncer.postgres.networkPolicyCIDR` |
 | A3 | Rehearse the real chart on the k3s dev venue. Every Deployment must still reach Postgres, ClickHouse Cloud egress, Valkey and the OTel collector; acr must reach FalkorDB. `networkPolicy.ingressControllerNamespace` must differ from the release namespace. Result: `<link>` (gate; fill after the venue reports). | CHAOS-10949 |
 | A4 | Canary before the full roll. Check each policy-gated path: api to Postgres, api to Valkey, workers to ClickHouse Cloud egress, acr to FalkorDB. A refused path means STOP, report, and roll back (A7). | roll kit |
-| A5 | Run the kit step `<kit step: roll A>`. | roll kit |
+| A5 | Run the kit step `<chaos roll step: NetworkPolicy roll>`. | roll kit |
 | A6 | Readback (below). | |
-| A7 | Rollback: `helm rollback` to the previous revision. Name the revision from `helm history`: the revision before the A5 upgrade. Write it in the roll record before A5. | CHAOS-3270 |
+| A7 | Rollback: the previous helm revision, through the roll-kit phase `rollback-ops`. Name the revision from `helm history`: the revision before the A5 upgrade. Write it in the roll record before A5. | CHAOS-3270 |
 
 Known limit: the release-wide policy admits every pod of the release namespace, so inside the namespace the policy is the only bound.
 
@@ -56,23 +56,25 @@ Roll A readback:
 - Roll A has run clean in prod.
 - Prod ClickHouse works.
 - The owner has given the go for the sessions flip; the sessions-flip leaf tickets are merged.
+- The rollback rehearsal is done: kind rehearsal of the flip and its rollback, record run https://github.com/full-chaos/dev-health-ops/actions/runs/39862584421 (strict, 0 findings; CHAOS-10407). A `helm rollback` rehearsal on the CHAOS-10719 chart is the second gate: result: `<link>`.
 - The previous helm revision number is written in the roll record.
 
-### B1 Valkey Secret (REQUIRED, script TBD)
+### B1 Valkey Secret
 
-Auth-service rate limits use the in-chart Valkey. The Secret holds `AUTH_VALKEY_URI` (chart `authService.valkey.secretName` and `secretKey`). The Secret must exist before `authService.valkey.secretName` is set.
+Auth-service rate limits use the in-chart Valkey. One Secret, `auth-valkey`, holds both keys: `AUTH_VALKEY_URI` (chart `authService.valkey.secretName`) and `users.acl` (chart `valkey.acl.secretName`). Both come from one generated password; the ACL file holds only its hash.
 
-The create-only host script for this Secret is not yet written; the runbook names it once it is filed. Required behaviour:
+Create it with `SECRET-CREATE-10684.sh` (sha256 `581412198c5c02480c9a763537d35e8173a028a4cde9ec51f238996820c2be7b`, pm-approved under D6254 v2). The script:
 
-- Create only. Refuse if the Secret exists.
-- Take key names from the chart sources.
-- Put no value in a command argument, a log or shell history (read it from stdin or a file descriptor).
-- One key per call.
-- pm reviews the script sha before the roll, as for the key-set script.
+- creates only and stops with a fixed message if the Secret exists;
+- keeps the password only in owner-only temporary files that are removed on exit;
+- runs one `kubectl create secret` command and nothing else: no exec, get, describe or apply;
+- prints fixed text and key names only.
+
+Any change to the script is a new sha and a new pm review. A classifier denial goes to the owner as is. Create the Secret before the B4 upgrade sets `authService.valkey.secretName`. To rotate, delete and recreate the Secret, then restart Valkey and auth-service.
 
 ### B2 Valkey ACL file
 
-The ACL file lives in the same Secret under the key `users.acl` (chart `valkey.acl.secretName` and `secretKey`). It defines every user: the default user line and the `auth-service-ratelimit` user with a hashed password. Create the Secret first, then set `valkey.acl.enabled=true`. The chart refuses `valkey.acl.enabled=true` unless `networkPolicy.enabled=true`, which is why roll A comes first. The Valkey Deployment restarts once. To rotate, restart Valkey and auth-service; run no `kubectl exec`.
+The ACL file is the `users.acl` key of the B1 Secret (chart `valkey.acl.secretName` and `secretKey`). It defines every user: the default user line and the `auth-service-ratelimit` user with a hashed password. Create the Secret first, then set `valkey.acl.enabled=true`. The chart refuses `valkey.acl.enabled=true` unless `networkPolicy.enabled=true`, which is why roll A comes first. The Valkey Deployment restarts once. A restart is the only way Valkey rereads the file; run no `kubectl exec`.
 
 Known limit: the default Valkey user can still reach the rate-limit keys; the network policy is the bound.
 
@@ -89,7 +91,7 @@ The key-set names and key ids sit in the deploy prod values under `authService.k
 
 ### B4 Roll
 
-Run the kit step `<kit step: roll B>` with:
+Run the roll step `<chaos roll step: login-flip roll>` with:
 
 - `goApi.authProxy.sessions=true`
 - `authService.sessionKeys` and `authService.sessionKeys.sessionReaders.goApi` and `.queryApi` set to the two reader logins (the render fails while either is empty)
@@ -115,7 +117,7 @@ E-mail verify and reset links that go-api issued before the flip no longer work.
 
 ### B7 Rollback of the flip
 
-Primary: run `helm upgrade` with `goApi.authProxy.sessions=false`. This always works: the grant hook runs on every upgrade and restores the grants (15 s in the rehearsal).
+Primary: run `helm upgrade` with `goApi.authProxy.sessions=false`. This always works: the grant hook runs on every upgrade and restores the grants (13 to 17 s in the rehearsal, record run above).
 
 Use `helm rollback` only to a revision rendered with the chart that carries the pre-rollback grant hook (CHAOS-10719). That chart re-grants on rollback, because the grant hook also runs before a rollback. A rollback to an older revision does not re-grant: the go-api pod refuses to start and the rollback times out.
 

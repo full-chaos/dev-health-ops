@@ -39,7 +39,10 @@ func dispatchWorkgraphListUndelivered(ctx context.Context, runtime *operatorRunt
 	if flags.Parse(args) != nil || flags.NArg() != 0 || *ceilingHours < 1 || *ceilingHours > 24*90 {
 		return writeError(stderr, "invalid_request")
 	}
-	if runtime == nil || runtime.pools == nil {
+	if code, ok := authorizeRead(ctx, runtime, stderr, "workgraph_outbox", "*"); !ok {
+		return code
+	}
+	if runtime.pools == nil {
 		return writeError(stderr, "operator_backend_unavailable")
 	}
 	now := time.Now().UTC()

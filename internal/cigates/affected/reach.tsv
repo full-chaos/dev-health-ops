@@ -115,12 +115,16 @@ internal/cigates	governance.go	cmd/cigate
 internal/cigates	governance.go	internal/cigates/scripts
 internal/cigates/affected	plan.go	cmd/cigate
 internal/cigates/affected	plan.go	internal/cigates/affected
+internal/cigates/affected	plan.go	internal/cigates/affectedmatrix
 internal/cigates/affected	plan.go	internal/cigates/affectedmodule
+internal/cigates/affected	plan.go	internal/cigates/affectedreject
 internal/cigates/affected	plan.go	internal/cigates/scripts
 internal/cigates/affected	reach.go	cmd/cigate
 internal/cigates/affected	scan.go	cmd/cigate
 internal/cigates/affected	scan.go	internal/cigates/affected
+internal/cigates/affected	scan.go	internal/cigates/affectedmatrix
 internal/cigates/affected	scan.go	internal/cigates/affectedmodule
+internal/cigates/affected	scan.go	internal/cigates/affectedreject
 internal/cigates/affected	scan.go	internal/cigates/scripts
 internal/cigates/affected	tables.go	cmd/cigate
 internal/cigates/affected	tables.go	internal/cigates/affected
@@ -332,6 +336,7 @@ internal/localgit	git.go	internal/synccli
 internal/localgit	refs.go	cmd/dho
 internal/localgit	refs.go	internal/localgit
 internal/localgit	refs.go	internal/synccli
+internal/mail	sender.go	cmd/auth-service
 internal/mail	sender.go	cmd/dho
 internal/mail	sender.go	deploy/helm/dev-health
 internal/mail	sender.go	internal/api/githubapp
@@ -354,6 +359,7 @@ internal/mail	sender.go	internal/apiservice/externalingestvenue
 internal/mail	sender.go	internal/apiservice/metricsvenue
 internal/mail	sender.go	internal/apiservice/ownershipvenue
 internal/mail	sender.go	internal/apiservice/ssovenue
+internal/mail	sender.go	internal/auth/authruntime
 internal/mail	sender.go	internal/fixturescli
 internal/mail	sender.go	internal/mail
 internal/mail	sender.go	internal/platform/logging

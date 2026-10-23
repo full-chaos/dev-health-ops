@@ -315,7 +315,7 @@ func TestReconcileLinesAreStableAndListEveryGatedClass(t *testing.T) {
 	for _, class := range GatedClasses {
 		want = append(want, "diff."+class+"=0")
 	}
-	want = append(want, "info.last_login_drift=0", "info.display_name_drift=0", "info.identity_not_carried=0")
+	want = append(want, "info.last_login_drift=0", "info.display_name_drift=0", "info.identity_not_carried=0", "info.sso_identity_unmatched=0")
 	if strings.Join(lines, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("lines:\n%s", strings.Join(lines, "\n"))
 	}
@@ -371,5 +371,109 @@ func TestReconcileRowInBothSkipClassesCountsBoth(t *testing.T) {
 	rep := reconcile(t, []Row{row}, nil, nil)
 	if rep.Diffs[SkipUnknownHashFormat] != 1 || rep.Diffs[SkipInvalidIdentity] != 1 || rep.Diffs[DiffMissingInAuth] != 0 || rep.GatedTotal() != 2 {
 		t.Fatalf("%+v", rep.Diffs)
+	}
+}
+
+func ghKey(subject string) identity.ExternalKey {
+	return identity.ExternalKey{Issuer: "https://github.com", Provider: identity.ProviderGitHub, Subject: subject}
+}
+
+func ssoKey(subject string) identity.ExternalKey {
+	return identity.ExternalKey{Issuer: "https://idp.example.test", Provider: identity.Provider("0b6f7d2e-4c1a-4e7a-9a53-2f4b1c8d9e10"), Subject: subject}
+}
+
+// An auth identity that the public row does not name fails the gate.
+func TestReconcileExtraAuthIdentityOnARowWithNoProviderFailsTheGate(t *testing.T) {
+	row, auth := pair(t)
+	auth.Identities = []identity.ExternalKey{ghKey("old-subject")}
+	rep := reconcile(t, []Row{row}, []AuthRow{auth}, nil)
+	if rep.Diffs[DiffExtraIdentity] != 1 || rep.GatedTotal() != 1 || rep.Matched != 0 {
+		t.Fatalf("%+v", rep.Diffs)
+	}
+}
+
+func TestReconcileExtraAuthIdentityBesideTheNamedOneFailsTheGate(t *testing.T) {
+	row, auth := pair(t)
+	row.AuthProvider, row.AuthProviderID = str("github"), str("subject-1")
+	named := ghKey("subject-1")
+	auth.Identities = []identity.ExternalKey{named}
+	tgt := &fakeTarget{holders: map[identity.ExternalKey]uuid.UUID{named: row.ID}}
+	if rep := reconcile(t, []Row{row}, []AuthRow{auth}, tgt); rep.GatedTotal() != 0 || rep.Matched != 1 {
+		t.Fatalf("only the named identity: %+v", rep.Diffs)
+	}
+	auth.Identities = []identity.ExternalKey{named, ghKey("old-subject"), ghKey("older-subject")}
+	rep := reconcile(t, []Row{row}, []AuthRow{auth}, tgt)
+	if rep.Diffs[DiffExtraIdentity] != 1 || rep.GatedTotal() != 1 {
+		t.Fatalf("named plus two extras counts the user once: %+v", rep.Diffs)
+	}
+}
+
+// A non-social public provider carries no identity into auth; any social
+// identity on the auth side is extra, an SSO provider-row identity is the
+// printed, non-gated class.
+func TestReconcileSSOIdentityOnAnSSOPublicRowIsPrintedNotGated(t *testing.T) {
+	row, auth := pair(t)
+	row.AuthProvider, row.AuthProviderID = str("saml"), str("name-id")
+	auth.Identities = []identity.ExternalKey{ssoKey("subject-a")}
+	rep := reconcile(t, []Row{row}, []AuthRow{auth}, nil)
+	if rep.GatedTotal() != 0 || rep.Matched != 1 || rep.SSOIdentityUnmatched != 1 {
+		t.Fatalf("%+v unmatched=%d", rep.Diffs, rep.SSOIdentityUnmatched)
+	}
+	auth.Identities = []identity.ExternalKey{ssoKey("subject-a"), ghKey("old-subject")}
+	rep = reconcile(t, []Row{row}, []AuthRow{auth}, nil)
+	if rep.Diffs[DiffExtraIdentity] != 1 || rep.GatedTotal() != 1 || rep.SSOIdentityUnmatched != 1 {
+		t.Fatalf("a social identity beside the SSO one stays gated: %+v unmatched=%d", rep.Diffs, rep.SSOIdentityUnmatched)
+	}
+}
+
+// An SSO provider-row identity on a row that names no SSO provider is not excused.
+func TestReconcileSSOIdentityOnALocalRowStaysGated(t *testing.T) {
+	for _, provider := range []*string{nil, str("local"), str("github")} {
+		row, auth := pair(t)
+		row.AuthProvider = provider
+		var tgt *fakeTarget
+		auth.Identities = []identity.ExternalKey{ssoKey("subject-a")}
+		if provider != nil && *provider == "github" {
+			row.AuthProviderID = str("subject-1")
+			tgt = &fakeTarget{holders: map[identity.ExternalKey]uuid.UUID{ghKey("subject-1"): row.ID}}
+			auth.Identities = append(auth.Identities, ghKey("subject-1"))
+		}
+		rep := reconcile(t, []Row{row}, []AuthRow{auth}, tgt)
+		if rep.Diffs[DiffExtraIdentity] != 1 || rep.SSOIdentityUnmatched != 0 {
+			t.Errorf("provider %v: %+v unmatched=%d", provider, rep.Diffs, rep.SSOIdentityUnmatched)
+		}
+	}
+}
+
+// A skipped row and an unmatched auth row do not hide or double count the extra identity.
+func TestReconcileExtraIdentityIsIndependentOfSkipClassesAndUnmatchedRows(t *testing.T) {
+	row, auth := pair(t)
+	row.PasswordHash = str("not-a-bcrypt-verifier")
+	auth.Identities = []identity.ExternalKey{ghKey("old-subject")}
+	rep := reconcile(t, []Row{row}, []AuthRow{auth}, nil)
+	if rep.Diffs[SkipUnknownHashFormat] != 1 || rep.Diffs[DiffExtraIdentity] != 1 || rep.GatedTotal() != 2 {
+		t.Fatalf("%+v", rep.Diffs)
+	}
+	_, onlyAuth := pair(t)
+	onlyAuth.Identities = []identity.ExternalKey{ghKey("old-subject")}
+	rep = reconcile(t, nil, []AuthRow{onlyAuth}, nil)
+	if rep.Diffs[DiffExtraInAuth] != 1 || rep.Diffs[DiffExtraIdentity] != 0 || rep.GatedTotal() != 1 {
+		t.Fatalf("%+v", rep.Diffs)
+	}
+}
+
+func TestReconcileExtraIdentityOutputCarriesNoSubject(t *testing.T) {
+	row, auth := pair(t)
+	auth.Identities = []identity.ExternalKey{ghKey("planted-extra-subject-777"), ssoKey("planted-sso-subject-888")}
+	row.AuthProvider = str("oidc")
+	rep := reconcile(t, []Row{row}, []AuthRow{auth}, nil)
+	out := strings.Join(rep.Lines(), "\n")
+	if rep.GatedTotal() == 0 {
+		t.Fatal("nothing planted was reported")
+	}
+	for _, secret := range []string{"planted-extra-subject-777", "planted-sso-subject-888", "0b6f7d2e", "idp.example.test"} {
+		if strings.Contains(out, secret) {
+			t.Fatalf("report carries %q:\n%s", secret, out)
+		}
 	}
 }

@@ -31,6 +31,8 @@ type AuthRow struct {
 	// RoleHeld is any platform_admin assignment; RoleBackfilled one with no granter.
 	RoleHeld       bool
 	RoleBackfilled bool
+	// Identities are every auth.external_identities row of the principal.
+	Identities []identity.ExternalKey
 }
 
 // Target pages the auth principals in id order and answers who holds an
@@ -53,13 +55,14 @@ const (
 	DiffTokenVersion     = "token_version_diff"
 	DiffIdentityMissing  = "identity_missing"
 	DiffIdentityConflict = "identity_conflict"
+	DiffExtraIdentity    = "extra_identity_in_auth"
 )
 
 // GatedClasses lists every class the gate counts, in report order: the diff
 // classes above, then the backfill skip classes a user can fall into.
 var GatedClasses = []string{
 	DiffMissingInAuth, DiffExtraInAuth, DiffPrincipalKind, DiffEmail, DiffActive, DiffVerified,
-	DiffPasswordHash, DiffPlatformRole, DiffTokenVersion, DiffIdentityMissing, DiffIdentityConflict,
+	DiffPasswordHash, DiffPlatformRole, DiffTokenVersion, DiffIdentityMissing, DiffIdentityConflict, DiffExtraIdentity,
 	SkipUnknownHashFormat, SkipInvalidIdentity,
 }
 
@@ -76,6 +79,10 @@ type Reconciliation struct {
 	LastLoginDrift     int
 	DisplayNameDrift   int
 	IdentityNotCarried int
+	// SSOIdentityUnmatched counts users whose public row names a non-social
+	// provider (saml, oidc, oauth) and whose auth identities include an SSO
+	// provider-row identity the public row cannot match. Printed, never gated.
+	SSOIdentityUnmatched int
 }
 
 // GatedTotal is the number of gated diffs: zero is the gate.
@@ -103,6 +110,7 @@ func (r Reconciliation) Lines() []string {
 		fmt.Sprintf("info.last_login_drift=%d", r.LastLoginDrift),
 		fmt.Sprintf("info.display_name_drift=%d", r.DisplayNameDrift),
 		fmt.Sprintf("info.identity_not_carried=%d", r.IdentityNotCarried),
+		fmt.Sprintf("info.sso_identity_unmatched=%d", r.SSOIdentityUnmatched),
 	)
 	return lines
 }
@@ -223,6 +231,25 @@ func compareOne(ctx context.Context, tgt Target, row Row, a AuthRow, rep *Reconc
 			case holder != row.ID:
 				classes = append(classes, DiffIdentityConflict)
 			}
+		}
+		// Every auth identity the public row does not name is extra. A public row
+		// with a non-social provider names none, so an SSO provider-row identity
+		// there is only counted; any other identity stays gated.
+		extra, ssoUnmatched := false, false
+		for _, k := range a.Identities {
+			switch {
+			case key != nil && k == *key:
+			case notCarried && k.Provider.IsSSO():
+				ssoUnmatched = true
+			default:
+				extra = true
+			}
+		}
+		if extra {
+			classes = append(classes, DiffExtraIdentity)
+		}
+		if ssoUnmatched {
+			rep.SSOIdentityUnmatched++
 		}
 		if !sameTime(a.LastLoginAt, row.LastLoginAt) {
 			rep.LastLoginDrift++

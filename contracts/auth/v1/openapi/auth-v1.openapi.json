@@ -23,11 +23,18 @@
         },
         "responses": {
           "200": {
-            "description": "refresh-response.v1",
+            "description": "refresh-response.v1 (the HS256 access token, emitted today) or refresh-response.v2 (the EdDSA access token, emitted only when the EdDSA access issuer is switched on); the schema_version member says which.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/RefreshResponse"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/RefreshResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/RefreshResponseV2"
+                    }
+                  ]
                 }
               }
             }
@@ -636,6 +643,9 @@
       },
       "RefreshResponse": {
         "$ref": "../jsonschema/refresh-response.v1.schema.json"
+      },
+      "RefreshResponseV2": {
+        "$ref": "../jsonschema/refresh-response.v2.schema.json"
       },
       "Session": {
         "$ref": "../jsonschema/session.v1.schema.json"

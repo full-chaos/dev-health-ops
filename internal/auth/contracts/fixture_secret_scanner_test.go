@@ -137,9 +137,12 @@ func hasAllCharacterClasses(value string) bool {
 
 // syntheticJWS matches a compact JWS whose payload and signature segments both
 // begin with EXAMPLE: unmistakably synthetic, and the only shape the
-// refresh-response access_token pattern lets a fixture take (it pins the HS256
-// header segment, which starts with the JWS marker eyJ).
-var syntheticJWS = regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{6,}\.(?:EXAMPLE[A-Za-z0-9_-]*)?\.EXAMPLE[A-Za-z0-9_-]*\b`)
+// refresh-response.v1 access_token pattern lets a fixture take (it pins the HS256
+// header segment, which starts with the JWS marker eyJ). A refresh-response.v2
+// fixture needs a decodable payload, so the payload segment may also be a JSON
+// object segment (eyJ...); the signature segment must still begin EXAMPLE, which
+// no real signature does.
+var syntheticJWS = regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{6,}\.(?:EXAMPLE[A-Za-z0-9_-]*|eyJ[A-Za-z0-9_-]+)?\.EXAMPLE[A-Za-z0-9_-]*\b`)
 
 func scanFixtureContent(name, content string) []string {
 	var findings []string

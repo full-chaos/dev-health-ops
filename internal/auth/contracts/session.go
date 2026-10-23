@@ -123,7 +123,7 @@ type AuthOutcome struct {
 }
 
 // credentialCarryingSurfaces are the surfaces whose documents carry credentials.
-var credentialCarryingSurfaces = map[string]bool{RefreshRequestSurface: true, RefreshResponseSurface: true, AccessTokenSurface: true}
+var credentialCarryingSurfaces = map[string]bool{RefreshRequestSurface: true, RefreshResponseSurface: true, RefreshResponseV2Surface: true, AccessTokenSurface: true}
 
 // decodeWire runs the shared order: duplicate members, schema, then decode.
 // Validation sees the decoded JSON value, not dest, so a field dest does not
@@ -210,9 +210,15 @@ func ParseRefreshRequest(root string, raw []byte) (*RefreshRequest, error) {
 	return &r, nil
 }
 
-// ParseRefreshResponse validates and parses a refresh-response.v1 document.
+// ParseRefreshResponse validates and parses a refresh-response document of
+// either version: schema_version refresh-response.v2 takes the asymmetric path
+// (parseRefreshResponseV2), every other value the v1 path, whose schema refuses
+// an unknown or missing version.
 // expires_in and refresh_expires_in decode into int, which refuses 3600.0.
 func ParseRefreshResponse(root string, raw []byte) (*RefreshResponse, error) {
+	if refreshResponseVersion(raw) == RefreshResponseV2Surface {
+		return parseRefreshResponseV2(root, raw)
+	}
 	var r RefreshResponse
 	if err := decodeWire(root, RefreshResponseSurface, raw, &r); err != nil {
 		return nil, refuseCredential(RefreshResponseSurface, err)

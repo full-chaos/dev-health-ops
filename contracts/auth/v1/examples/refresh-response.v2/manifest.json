@@ -1,0 +1,140 @@
+{
+  "description": "The golden corpus for the refresh-response.v2 wire contract: a successful refresh whose access token is the EdDSA access-token.v1 JWS. This manifest is the SINGLE inventory: every runner reads THIS file over THESE fixtures (G-70). `reject_by_client` documents are valid against the schema and refused by ParseRefreshResponse: the header and claims rules of access-token.v1 (the same ParseAccessToken), the token's sid against session_id, and expires_in against exp - iat. Tokens are synthetic: real header and payload segments, a signature segment that begins EXAMPLE.",
+  "accept": [
+    {
+      "file": "valid-full-lifetime.json",
+      "why": "An EdDSA access-token.v1 JWS, 60 minutes, and the 7 day refresh credential."
+    },
+    {
+      "file": "valid-short-lifetime.json",
+      "why": "expires_in is exp - iat of the token, not a constant: ten minutes."
+    }
+  ],
+  "reject": [
+    {
+      "file": "invalid-missing-access-token.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "why": "`access_token` is required."
+    },
+    {
+      "file": "invalid-schema-version-v1.json",
+      "expect_instance_location": "/schema_version",
+      "expect_keyword": "const",
+      "why": "The v2 schema accepts only refresh-response.v2; a v1 version string is parsed by the v1 schema."
+    },
+    {
+      "file": "invalid-expires-in-zero.json",
+      "expect_instance_location": "/expires_in",
+      "expect_keyword": "minimum",
+      "why": "A lifetime of zero is not a token anyone can use."
+    },
+    {
+      "file": "invalid-expires-in-past-60-minutes.json",
+      "expect_instance_location": "/expires_in",
+      "expect_keyword": "maximum",
+      "why": "Above the access-token.v1 ceiling (3600)."
+    },
+    {
+      "file": "invalid-expires-in-string.json",
+      "expect_instance_location": "/expires_in",
+      "expect_keyword": "type",
+      "why": "expires_in is an integer."
+    },
+    {
+      "file": "invalid-access-token-not-jws.json",
+      "expect_instance_location": "/access_token",
+      "expect_keyword": "pattern",
+      "why": "Two segments: not a compact JWS."
+    },
+    {
+      "file": "invalid-access-token-empty-segment.json",
+      "expect_instance_location": "/access_token",
+      "expect_keyword": "pattern",
+      "why": "An empty payload segment: not a compact JWS."
+    },
+    {
+      "file": "invalid-extra-field-user.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "why": "The user object is not part of this contract."
+    },
+    {
+      "file": "invalid-refresh-credential-jwt-shaped.json",
+      "expect_instance_location": "/refresh_credential",
+      "expect_keyword": "pattern",
+      "why": "A dot is not in the credential alphabet: a refresh JWT cannot be presented here."
+    },
+    {
+      "file": "invalid-token-type-capitalised.json",
+      "expect_instance_location": "/token_type",
+      "expect_keyword": "const",
+      "why": "`bearer`, lowercase."
+    },
+    {
+      "file": "invalid-session-id-wrong-prefix.json",
+      "expect_instance_location": "/session_id",
+      "expect_keyword": "pattern",
+      "why": "Session ids are ses_-prefixed."
+    }
+  ],
+  "reject_by_client": [
+    {
+      "file": "client-rejected-header-alg-hs256.json",
+      "why": "Header alg HS256: a symmetric algorithm is never this token's (access-token.v1 header)."
+    },
+    {
+      "file": "client-rejected-header-alg-none.json",
+      "why": "Header alg none."
+    },
+    {
+      "file": "client-rejected-header-typ-jwt.json",
+      "why": "Header typ JWT: the HS256 token's type, not at+jwt."
+    },
+    {
+      "file": "client-rejected-header-missing-kid.json",
+      "why": "No kid: a verifier could not pick a key."
+    },
+    {
+      "file": "client-rejected-header-jku-member.json",
+      "why": "A jku member moves key selection out of the verifier's hands."
+    },
+    {
+      "file": "client-rejected-header-duplicate-member.json",
+      "why": "A duplicate member inside the decoded header is refused before any other check."
+    },
+    {
+      "file": "client-rejected-claims-lifetime-over-ceiling.json",
+      "why": "The token lives 3601 s: over the ceiling although expires_in is in range."
+    },
+    {
+      "file": "client-rejected-claims-nbf-before-iat.json",
+      "why": "nbf before iat."
+    },
+    {
+      "file": "client-rejected-expires-in-not-token-lifetime.json",
+      "why": "expires_in 600 for a token that lives 3600 s."
+    },
+    {
+      "file": "client-rejected-session-id-not-token-sid.json",
+      "why": "The token's sid names another session than session_id."
+    },
+    {
+      "file": "client-rejected-segment-not-base64url.json",
+      "why": "The header segment is not decodable base64url (nine characters)."
+    },
+    {
+      "file": "client-rejected-segment-not-object.json",
+      "why": "The header decodes to bytes that are not exactly one JSON object."
+    },
+    {
+      "file": "client-rejected-expires-in-decimal.json",
+      "why": "Schema `integer` admits 3600.0; clients refuse decimal-form tokens."
+    },
+    {
+      "file": "client-rejected-duplicate-access-token.json",
+      "why": "Duplicate member.",
+      "duplicate_member": true
+    }
+  ]
+}

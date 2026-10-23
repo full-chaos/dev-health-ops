@@ -52,6 +52,7 @@ func sessionSurfaces() []sessionSurface {
 		{SessionSurface, "session", func(r string, b []byte) error { _, err := ParseSession(r, b); return err }},
 		{RefreshRequestSurface, "refresh-request", func(r string, b []byte) error { _, err := ParseRefreshRequest(r, b); return err }},
 		{RefreshResponseSurface, "refresh-response", func(r string, b []byte) error { _, err := ParseRefreshResponse(r, b); return err }},
+		{RefreshResponseV2Surface, "refresh-response.v2", func(r string, b []byte) error { _, err := ParseRefreshResponse(r, b); return err }},
 		{AuthOutcomeSurface, "auth-outcome", func(r string, b []byte) error { _, err := ParseAuthOutcome(r, b); return err }},
 	}
 }

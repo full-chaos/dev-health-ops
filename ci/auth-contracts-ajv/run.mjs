@@ -337,16 +337,20 @@ if (surfaces.length === 0) {
 
 // A schema with no corpus would be invisible to this runner.
 const schemaDir = path.join(v1, "jsonschema");
+// A surface directory is "<name>" for the v1 schema and "<name>.v<N>" for a
+// later version of it (refresh-response.v2).
+const schemaFileOf = (surface) => (/\.v[2-9]\d*$/.test(surface) ? `${surface}.schema.json` : `${surface}.v1.schema.json`);
 for (const file of readdirSync(schemaDir)) {
-  const surface = file.replace(/\.v1\.schema\.json$/, "");
-  if (file.endsWith(".v1.schema.json") && !surfaces.includes(surface)) {
+  const later = file.match(/^(.*\.v[2-9]\d*)\.schema\.json$/);
+  const surface = later ? later[1] : file.replace(/\.v1\.schema\.json$/, "");
+  if ((later || file.endsWith(".v1.schema.json")) && !surfaces.includes(surface)) {
     fail(`schema ${file} has no examples/${surface}/ corpus`);
   }
 }
 
 for (const surface of surfaces) {
   const dir = path.join(v1, "examples", surface);
-  const schemaPath = path.join(schemaDir, `${surface}.v1.schema.json`);
+  const schemaPath = path.join(schemaDir, schemaFileOf(surface));
   if (!existsSync(schemaPath)) {
     fail(`examples/${surface}/ has no ${path.basename(schemaPath)}`);
     continue;
@@ -364,7 +368,7 @@ for (const surface of surfaces) {
     for (const sibling of siblings) ajv.addSchema(readJSON(sibling));
     validate = ajv.compile(readJSON(schemaPath));
   } catch (error) {
-    console.error(`SCHEMA FAILED TO COMPILE: ${surface}.v1: ${error.message}`);
+    console.error(`SCHEMA FAILED TO COMPILE: ${path.basename(schemaPath)}: ${error.message}`);
     process.exit(2);
   }
 
@@ -627,7 +631,7 @@ for (const surface of surfaces) {
       }
     }
   }
-  console.log(`${surface}.v1: ${JSON.stringify(counts)}`);
+  console.log(`${path.basename(schemaPath, ".schema.json")}: ${JSON.stringify(counts)}`);
 }
 
 console.log(`\najv 2020-12 strict (v${JSON.parse(readFileSync(path.join(here, "node_modules", "ajv", "package.json"), "utf8")).version}): ${checked} fixtures, ${failures} failures`);

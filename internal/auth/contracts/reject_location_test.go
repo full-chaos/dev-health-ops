@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -207,7 +208,11 @@ func TestEveryRejectFixtureFailsAtItsDeclaredLocation(t *testing.T) {
 	checked := 0
 	for _, manifest := range manifests {
 		dir := manifest[:strings.LastIndex(manifest, "/")]
-		surface := dir[strings.LastIndex(dir, "/")+1:] + ".v1"
+		surface := dir[strings.LastIndex(dir, "/")+1:]
+		// A directory named "<name>.v<N>" holds the corpus of that later version.
+		if !regexp.MustCompile(`\.v[2-9][0-9]*$`).MatchString(surface) {
+			surface += ".v1"
+		}
 		raw, err := os.ReadFile(manifest)
 		if err != nil {
 			t.Fatal(err)

@@ -318,7 +318,8 @@
                     ]
                   },
                   "provider_access_token": {
-                    "type": "string"
+                    "type": "string",
+                    "description": "The provider's access token; verified with the provider before any link is made."
                   }
                 }
               }
@@ -379,6 +380,16 @@
               }
             }
           },
+          "404": {
+            "description": "go-api shaped refusal, {\"detail\": ...}; the reason is in the audit row and the log, never in the body.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
           "409": {
             "description": "go-api shaped refusal, {\"detail\": ...}; the reason is in the audit row and the log, never in the body.",
             "content": {
@@ -419,6 +430,16 @@
               }
             }
           },
+          "500": {
+            "description": "go-api shaped {\"detail\": \"Internal Server Error\"}: the provider or a store could not be reached; nothing is written.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
           "503": {
             "description": "error.v1: a store or key failure (retry_after_seconds)",
             "content": {
@@ -429,7 +450,8 @@
               }
             }
           }
-        }
+        },
+        "description": "The provider access token in the body is verified with the provider (issued to this service's OAuth client, email verified) and the link is bound to the bearer's principal. A sign-in older than the freshness window is refused (403); an identity bound to another principal is a conflict (409) and nothing is written."
       }
     },
     "/v1/identities/social/{id}": {
@@ -526,6 +548,16 @@
               }
             }
           },
+          "500": {
+            "description": "go-api shaped {\"detail\": \"Internal Server Error\"}: the provider or a store could not be reached; nothing is written.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
           "503": {
             "description": "error.v1: a store or key failure (retry_after_seconds)",
             "content": {
@@ -536,7 +568,8 @@
               }
             }
           }
-        }
+        },
+        "description": "Removes an identity of the bearer's own principal only (404 for any other id); the last sign-in method is never removed (409). A sign-in older than the freshness window is refused (403)."
       }
     }
   },

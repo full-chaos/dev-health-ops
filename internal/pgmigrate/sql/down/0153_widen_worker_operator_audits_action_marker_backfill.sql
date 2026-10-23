@@ -3,6 +3,9 @@
 -- Audit rows are never deleted: when a row carries the action this revision added, the downgrade stops with the
 -- count and leaves the schema as it was.
 
+-- The table is locked first, so no audit row can commit between the count and the swap of the check.
+LOCK TABLE worker_operator_audits IN ACCESS EXCLUSIVE MODE;
+
 DO $$
 DECLARE
     pending bigint;

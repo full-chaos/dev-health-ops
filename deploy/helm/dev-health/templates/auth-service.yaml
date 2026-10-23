@@ -21,15 +21,44 @@ stage-signing-key init container exists.
 {{- if .Values.authService.enabled }}
 {{- $a := .Values.authService }}
 {{- if not $a.database.secretName }}{{- fail "authService.database.secretName is required: the Secret holding the runtime login's DSN (key authService.database.secretKey)" }}{{- end }}
+{{- $ks := $a.keySet }}
+{{- $ksOn := and $ks $ks.enabled }}
+{{- $manifest := "" }}
+{{- if $ksOn }}
+{{- /* Mirrors internal/auth/keystore (KeyIDPattern, State.Valid, bareFileName, MaxManifestBytes); auth_keyset_test.go ties the limits to that source. */}}
+{{- if or $a.signingKey.secretName $a.signingKey.keyId }}{{- fail "authService.keySet replaces authService.signingKey: unset authService.signingKey.secretName and authService.signingKey.keyId while authService.keySet.enabled" }}{{- end }}
+{{- if not $ks.keys }}{{- fail "authService.keySet.keys must list at least one key" }}{{- end }}
+{{- $kids := dict }}
+{{- $files := dict }}
+{{- $entries := list }}
+{{- $activeCount := 0 }}
+{{- range $ks.keys }}
+{{- if not (regexMatch "^[A-Za-z0-9._-]{1,64}$" (toString .kid)) }}{{- fail "authService.keySet.keys[].kid must match ^[A-Za-z0-9._-]{1,64}$" }}{{- end }}
+{{- if not (has .state (list "pending" "active" "retiring" "retired" "compromised")) }}{{- fail "authService.keySet.keys[].state must be one of pending, active, retiring, retired, compromised" }}{{- end }}
+{{- if or (not .file) (has (toString .file) (list "." "..")) (not (regexMatch "^[A-Za-z0-9._-]{1,255}$" (toString .file))) }}{{- fail "authService.keySet.keys[].file must be a bare name in the manifest directory, letters, digits, '.', '_' and '-' only" }}{{- end }}
+{{- if eq .file "keyset.json" }}{{- fail "authService.keySet.keys[].file must not be keyset.json: that name is the manifest" }}{{- end }}
+{{- if or (not .secretName) (not .secretKey) }}{{- fail (printf "authService.keySet.keys[] %s needs secretName and secretKey: a kid with no key file cannot be staged" .kid) }}{{- end }}
+{{- if hasKey $kids .kid }}{{- fail "authService.keySet.keys[].kid must be unique" }}{{- end }}
+{{- if hasKey $files .file }}{{- fail "authService.keySet.keys[].file must be unique" }}{{- end }}
+{{- $_ := set $kids .kid true }}
+{{- $_ := set $files .file true }}
+{{- if eq .state "active" }}{{- $activeCount = add1 $activeCount }}{{- end }}
+{{- $entries = append $entries (dict "kid" .kid "state" .state "file" .file) }}
+{{- end }}
+{{- if ne (int $activeCount) 1 }}{{- fail "authService.keySet.keys: exactly one key must be active" }}{{- end }}
+{{- $manifest = dict "keys" $entries | toJson }}
+{{- if gt (len $manifest) 16384 }}{{- fail "authService.keySet manifest is larger than 16 KiB, the service limit" }}{{- end }}
+{{- else }}
 {{- if not $a.signingKey.secretName }}{{- fail "authService.signingKey.secretName is required: the Secret holding the Ed25519 PKCS#8 PEM signing key (key authService.signingKey.secretKey)" }}{{- end }}
 {{- if not $a.signingKey.keyId }}{{- fail "authService.signingKey.keyId is required: every signing key carries a kid and a JWKS entry from day one (ACP-ADR-02 §5)" }}{{- end }}
+{{- end }}
 {{- if eq (int $a.port) (int $a.operatorPort) }}{{- fail "authService.port and authService.operatorPort must differ: the operator surface is never exposed on the API port" }}{{- end }}
 {{- if not (regexMatch "^[0-9]+s$" (toString $a.shutdownTimeout)) }}{{- fail "authService.shutdownTimeout must be whole seconds such as 20s" }}{{- end }}
 {{- if ge (int (trimSuffix "s" (toString $a.shutdownTimeout))) (int $a.terminationGracePeriodSeconds) }}{{- fail "authService.shutdownTimeout must be below authService.terminationGracePeriodSeconds: the kubelet kills the pod at the grace period, so a longer shutdown bound is never reached" }}{{- end }}
 {{- range $a.extraEnv }}
 {{- if has .name (list "AUTH_JWT_SECRET_KEY" "AUTH_SESSION_SUCCESSOR_KEY") }}{{- fail (printf "authService.extraEnv must not set %s: use authService.sessionKeys, which reaches the container by secretKeyRef" .name) }}{{- end }}
 {{- if eq .name "AUTH_SIGNING_KEY" }}{{- fail "authService.extraEnv must not set AUTH_SIGNING_KEY: direct-value signing material is rejected by the service (ACP-ADR-02 §4); use authService.signingKey" }}{{- end }}
-{{- if eq (lower (trim .name)) "auth_signing_keyset_file" }}{{- fail "authService.extraEnv must not set AUTH_SIGNING_KEYSET_FILE: the chart stages one signing key (authService.signingKey) and renders its file and kid, which the service refuses beside a key-set manifest; key-set staging comes with the rotation leaf" }}{{- end }}
+{{- if eq (lower (trim .name)) "auth_signing_keyset_file" }}{{- fail "authService.extraEnv must not set AUTH_SIGNING_KEYSET_FILE: the chart renders it (authService.keySet) or stages one signing key (authService.signingKey); the service refuses a key-set manifest beside a single key" }}{{- end }}
 {{- end }}
 apiVersion: apps/v1
 kind: Deployment
@@ -48,9 +77,14 @@ spec:
       {{- include "dev-health.componentSelectorLabels" (dict "component" "auth-service" "context" $) | nindent 6 }}
   template:
     metadata:
-      {{- with $a.podAnnotations }}
+      {{- if or $a.podAnnotations $ksOn }}
       annotations:
+        {{- with $a.podAnnotations }}
         {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- if $ksOn }}
+        checksum/keyset: {{ $manifest | sha256sum }}
+        {{- end }}
       {{- end }}
       labels:
         {{- include "dev-health.componentSelectorLabels" (dict "component" "auth-service" "context" $) | nindent 8 }}
@@ -64,7 +98,18 @@ spec:
         - name: stage-signing-key
           image: {{ $a.signingKey.stagingImage.repository }}:{{ $a.signingKey.stagingImage.tag }}
           imagePullPolicy: {{ $a.signingKey.stagingImage.pullPolicy }}
+          {{- if $ksOn }}
+          command:
+            - sh
+            - -ec
+            - |
+              {{- range $ks.keys }}
+              install -m 0400 {{ printf "/in/%s" .file | quote }} {{ printf "/out/%s" .file | quote }}
+              {{- end }}
+              install -m 0400 /in/keyset.json /out/keyset.json
+          {{- else }}
           command: ["install", "-m", "0400", "/in/signing-key.pem", "/out/signing-key.pem"]
+          {{- end }}
           volumeMounts:
             - {name: signing-key-source, mountPath: /in, readOnly: true}
             - {name: signing-key, mountPath: /out}
@@ -81,8 +126,12 @@ spec:
             - {{ printf "--operator-http-addr=:%v" $a.operatorPort | quote }}
             - {{ printf "--shutdown-timeout=%s" $a.shutdownTimeout | quote }}
             - {{ printf "--database-schema=%s" (include "dev-health.authDatabaseSchema" .) | quote }}
+            {{- if $ksOn }}
+            - "--signing-keyset-file=/run/auth/signing/keyset.json"
+            {{- else }}
             - "--signing-key-file=/run/auth/signing/signing-key.pem"
             - {{ printf "--signing-key-id=%s" $a.signingKey.keyId | quote }}
+            {{- end }}
             {{- range $a.extraArgs }}
             - {{ . | quote }}
             {{- end }}
@@ -118,11 +167,27 @@ spec:
           securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, capabilities: {drop: [ALL]}, seccompProfile: {type: RuntimeDefault}}
       volumes:
         - name: signing-key-source
+        {{- if $ksOn }}
+          projected:
+            defaultMode: 0440
+            sources:
+              {{- range $ks.keys }}
+              - secret:
+                  name: {{ .secretName | quote }}
+                  items:
+                    - {key: {{ .secretKey | quote }}, path: {{ .file | quote }}}
+              {{- end }}
+              - configMap:
+                  name: {{ include "dev-health.fullname" . }}-auth-service-keyset
+                  items:
+                    - {key: keyset.json, path: keyset.json}
+        {{- else }}
           secret:
             secretName: {{ $a.signingKey.secretName | quote }}
             defaultMode: 0440
             items:
               - {key: {{ $a.signingKey.secretKey | quote }}, path: signing-key.pem}
+        {{- end }}
         - name: signing-key
           emptyDir: {medium: Memory, sizeLimit: 1Mi}
       {{- with $a.nodeSelector }}
@@ -162,6 +227,18 @@ spec:
       targetPort: operator
       protocol: TCP
     {{- end }}
+{{- if $ksOn }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "dev-health.fullname" . }}-auth-service-keyset
+  namespace: {{ include "dev-health.namespace" . }}
+  labels:
+    {{- include "dev-health.componentLabels" (dict "component" "auth-service" "context" $) | nindent 4 }}
+data:
+  keyset.json: {{ $manifest | quote }}
+{{- end }}
 {{- if $a.networkPolicy.enabled }}
 {{- if not $a.networkPolicy.egress.database.to }}{{- fail "authService.networkPolicy.egress.database.to is required while authService.networkPolicy.enabled (the default; set it false only when another layer enforces the boundary): the auth pods are excluded from the release-wide policy, so an empty list would cut the service off from its database" }}{{- end }}
 {{- range (concat $a.networkPolicy.allowedFrom $a.networkPolicy.metricsFrom) }}

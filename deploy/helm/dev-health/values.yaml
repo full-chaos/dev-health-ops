@@ -192,6 +192,16 @@ authService:
       repository: postgres
       tag: "18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15"
       pullPolicy: IfNotPresent
+  # -- A rotation key set in place of signingKey (mutually exclusive). The
+  #    chart renders a manifest of kid, state and file only into a ConfigMap and
+  #    never carries key material: each entry names the existing Secret and key
+  #    holding that key's PEM. The pod holds a static copy, so a change to the
+  #    set is a new rollout, not a live rename. Exactly one key is `active`.
+  keySet:
+    enabled: false
+    # -- [{kid, state, file, secretName, secretKey}]; state is pending, active,
+    #    retiring, retired or compromised; file is a bare name.
+    keys: []
   # -- The session routes' key material, by secretKeyRef (the chart creates no
   #    Secret). Both keys render together or not at all; goApi.authProxy.sessions
   #    fails the render while the successor key is unset.

@@ -74,7 +74,7 @@ func TestAuthKeySetRendersManifestAndStaging(t *testing.T) {
 		}
 	}
 	script := strings.Join(toStrings(at(pod, "initContainers", 0, "command")), " ")
-	for _, want := range []string{"install -m 0400 /in/auth-2026-10.pem /out/auth-2026-10.pem", "install -m 0400 /in/auth-2026-09.pem /out/auth-2026-09.pem", "install -m 0400 /in/keyset.json /out/keyset.json"} {
+	for _, want := range []string{`install -m 0400 "/in/auth-2026-10.pem" "/out/auth-2026-10.pem"`, `install -m 0400 "/in/auth-2026-09.pem" "/out/auth-2026-09.pem"`, "install -m 0400 /in/keyset.json /out/keyset.json"} {
 		if !strings.Contains(script, want) {
 			t.Errorf("init container does not run %q: %s", want, script)
 		}
@@ -174,7 +174,7 @@ func TestAuthKeySetStillRefusesHandSetEnv(t *testing.T) {
 func bigKeys() string {
 	var b strings.Builder
 	b.WriteString("[")
-	for i := 0; i < 200; i++ {
+	for i := 0; i < 300; i++ {
 		if i > 0 {
 			b.WriteString(",")
 		}

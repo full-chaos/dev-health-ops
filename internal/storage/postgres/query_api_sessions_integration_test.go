@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 	riverstore "github.com/full-chaos/dev-health-ops/internal/storage/river"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
@@ -83,17 +84,19 @@ func (h *queryAPISessionsHarness) applyLeg(ctx context.Context, sessions *QueryA
 	return err
 }
 
-// auth-migrate's session-reader grant, statement for statement
-// (authschema.sessionReaderStatements), applied as the other writer of the same grant.
+// auth-migrate's session-reader grant, built by the production builder and
+// applied as the other writer of the same grant.
 func (h *queryAPISessionsHarness) applyAuthMigrateGrant(t *testing.T, ctx context.Context) {
 	t.Helper()
-	for _, statement := range []string{
-		"REVOKE ALL ON ALL TABLES IN SCHEMA auth FROM " + h.role,
-		"REVOKE ALL ON ALL SEQUENCES IN SCHEMA auth FROM " + h.role,
-		"REVOKE ALL ON SCHEMA auth FROM " + h.role,
-		"GRANT USAGE ON SCHEMA auth TO " + h.role,
-		`GRANT SELECT ("id", "principal_id", "revoked_at") ON auth.sessions TO ` + h.role,
-	} {
+	statements, err := authschema.SessionReaderStatements(ctx, h.admin,
+		authschema.Options{Schema: "auth", SessionReaderRoles: []string{h.role}})
+	if err != nil {
+		t.Fatalf("auth-migrate session reader statements: %v", err)
+	}
+	if len(statements) == 0 {
+		t.Fatal("auth-migrate produced no session reader statements")
+	}
+	for _, statement := range statements {
 		if _, err := h.admin.Exec(ctx, statement); err != nil {
 			t.Fatalf("%s: %v", statement, err)
 		}

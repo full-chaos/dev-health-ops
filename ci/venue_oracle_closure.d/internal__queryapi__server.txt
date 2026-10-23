@@ -1,3 +1,4 @@
+contracts/auth/v1/vocabulary
 contracts/graphql/v1
 internal/aftercommit
 internal/api/externalurl
@@ -7,9 +8,25 @@ internal/api/pybody
 internal/api/pyheaders
 internal/api/pyjson
 internal/api/pytime
+internal/audit
+internal/auth/authapi
+internal/auth/clientaddr
+internal/auth/contracts
+internal/auth/contracts/provisioning
+internal/auth/contracts/tokencorpus
 internal/auth/edgetoken
 internal/auth/httpapi
+internal/auth/identity
+internal/auth/identity/local
+internal/auth/identity/oidc
+internal/auth/identity/saml
+internal/auth/identity/social
+internal/auth/keystore
 internal/auth/passwordhash
+internal/auth/passwordpolicy
+internal/auth/requestid
+internal/auth/servicecred
+internal/auth/session
 internal/auth/sessionid
 internal/backfillrun
 internal/cacheinvalidation
@@ -118,6 +135,7 @@ internal/queryapi/hotspots
 internal/queryapi/internalidentity
 internal/queryapi/investment
 internal/queryapi/investmentexplain
+internal/queryapi/linkeditems
 internal/queryapi/meta
 internal/queryapi/newestrow
 internal/queryapi/operatingreview
@@ -147,6 +165,8 @@ internal/storage/clickhouse
 internal/storage/clickhouse/latestrow
 internal/storage/clickhouse/liverow
 internal/storage/postgres
+internal/storage/postgres/aclguard
+internal/storage/postgres/authschema
 internal/storage/river
 internal/storage/roleacl
 internal/storage/valkey
@@ -177,8 +197,12 @@ internal/testsupport/pgschema
 internal/testsupport/pgseed
 internal/testsupport/programoracle
 internal/testsupport/pydanticecho
+internal/testsupport/usertokens
+internal/testsupport/usertokens/withissuer
 internal/testsupport/venueoracle
+internal/token
 internal/workitemcontract
+~internal/auth/passwordpolicy/data
 ~internal/chmigrate/baseline
 ~internal/chmigrate/sql
 ~internal/fixturescli/testdata/generate
@@ -187,4 +211,5 @@ internal/workitemcontract
 ~internal/pgmigrate/sql
 ~internal/pgmigrate/sql/down
 ~internal/queryapi/investmentexplain/prompts
+~internal/storage/postgres/authschema/migrations
 ~internal/testsupport/chschema/testdata

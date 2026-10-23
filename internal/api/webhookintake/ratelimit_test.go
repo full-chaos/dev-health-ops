@@ -28,7 +28,7 @@ func noBindings(t *testing.T) {
 	t.Cleanup(func() { loadBinding = previous })
 }
 
-func hitPagerDuty(handler http.HandlerFunc, binding, peer, forwarded string) *httptest.ResponseRecorder {
+func hitPagerDuty(handler http.Handler, binding, peer, forwarded string) *httptest.ResponseRecorder {
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/webhooks/pagerduty/"+binding, nil)
 	request.SetPathValue("binding_id", binding)
 	request.RemoteAddr = peer + ":4242"
@@ -36,7 +36,7 @@ func hitPagerDuty(handler http.HandlerFunc, binding, peer, forwarded string) *ht
 		request.Header.Set("X-Forwarded-For", forwarded)
 	}
 	recorder := httptest.NewRecorder()
-	handler(recorder, request)
+	handler.ServeHTTP(recorder, request)
 	return recorder
 }
 
@@ -48,8 +48,7 @@ func TestPagerDutyLimitIsPerIPAndBindingPath(t *testing.T) {
 	t.Setenv("TRUSTED_PROXIES", "")
 	now := time.Now()
 	deps := Deps{Counters: httpapi.NewMemoryCounters(func() time.Time { return now })}
-	deps.limiters = newRateLimiters(deps.Counters, deps.Now)
-	handler := deps.handlePagerDutyWebhook()
+	handler := gateHandler(newTestGate(deps), providerPagerDuty, deps.handlePagerDutyWebhook())
 	binding, other := uuid.NewString(), uuid.NewString()
 	for i := range pagerdutyLimitPerMinute {
 		if got := hitPagerDuty(handler, binding, "192.0.2.1", "").Code; got != http.StatusUnauthorized {
@@ -75,8 +74,7 @@ func TestPagerDutyForwardedForFromAnUntrustedPeerCannotMintABudget(t *testing.T)
 	noBindings(t)
 	t.Setenv("TRUSTED_PROXIES", "")
 	deps := Deps{}
-	deps.limiters = newRateLimiters(nil, nil)
-	handler := deps.handlePagerDutyWebhook()
+	handler := gateHandler(newTestGate(deps), providerPagerDuty, deps.handlePagerDutyWebhook())
 	binding := uuid.NewString()
 	for range pagerdutyLimitPerMinute {
 		hitPagerDuty(handler, binding, "192.0.2.1", "")
@@ -98,14 +96,14 @@ func TestPagerDutyLimitHoldsAcrossReplicasSharingAStore(t *testing.T) {
 	t.Setenv("TRUSTED_PROXIES", "")
 	store := httpapi.NewMemoryCounters(nil)
 	a, b := Deps{Counters: store}, Deps{Counters: store}
-	a.limiters, b.limiters = newRateLimiters(store, nil), newRateLimiters(store, nil)
-	handlerA, handlerB := a.handlePagerDutyWebhook(), b.handlePagerDutyWebhook()
+	handlerA := gateHandler(newTestGate(a), providerPagerDuty, a.handlePagerDutyWebhook())
+	handlerB := gateHandler(newTestGate(b), providerPagerDuty, b.handlePagerDutyWebhook())
 	binding := uuid.NewString()
 	for range pagerdutyLimitPerMinute / 2 {
 		hitPagerDuty(handlerA, binding, "192.0.2.1", "")
 		hitPagerDuty(handlerB, binding, "192.0.2.1", "")
 	}
-	for name, handler := range map[string]http.HandlerFunc{"replica a": handlerA, "replica b": handlerB} {
+	for name, handler := range map[string]http.Handler{"replica a": handlerA, "replica b": handlerB} {
 		if got := hitPagerDuty(handler, binding, "192.0.2.1", "").Code; got != http.StatusTooManyRequests {
 			t.Fatalf("%s: delivery past the shared budget = %d, want 429", name, got)
 		}
@@ -127,8 +125,7 @@ func (failingCounters) Backend() string { return "redis" }
 // body, counted on the operator series -- never a request let through.
 func TestPagerDutyStoreErrorIsTheUnhandled500(t *testing.T) {
 	deps := Deps{Counters: failingCounters{}}
-	deps.limiters = newRateLimiters(deps.Counters, nil)
-	handler := deps.handlePagerDutyWebhook()
+	handler := gateHandler(newTestGate(deps), providerPagerDuty, deps.handlePagerDutyWebhook())
 	recorder := hitPagerDuty(handler, uuid.NewString(), "192.0.2.1", "")
 	if recorder.Code != http.StatusInternalServerError || recorder.Body.String() != `{"detail":"Internal Server Error"}` {
 		t.Fatalf("store down = %d %s, want the generic 500", recorder.Code, recorder.Body.String())
@@ -140,7 +137,9 @@ func TestPagerDutyStoreErrorIsTheUnhandled500(t *testing.T) {
 	if err := httpapi.RateLimitStoreErrors.WritePrometheus(&scrape); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(scrape.String(), `dev_health_api_rate_limit_store_errors_total{limit="webhook_pagerduty"} 1`) {
+	counted := strings.Contains(scrape.String(), `dev_health_api_rate_limit_store_errors_total{limit="webhook_intake_client"}`) &&
+		!strings.Contains(scrape.String(), `dev_health_api_rate_limit_store_errors_total{limit="webhook_intake_client"} 0`)
+	if !counted {
 		t.Fatalf("the store error is not counted on the operator series:\n%s", scrape.String())
 	}
 }

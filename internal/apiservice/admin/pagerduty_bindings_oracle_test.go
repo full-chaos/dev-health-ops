@@ -24,6 +24,10 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
+// bindingsOrgScopeRuling retired the Python reference of two rotate answers
+// and unified one graph-failure detail (D6129: stricter than Python).
+const bindingsOrgScopeRuling = "D6129: binding lookups are scoped to the caller's organisation; a missing id and an id of another organisation get the same 404, and every graph failure the one 400 detail"
+
 const pagerDutyBindingsVenueEncryptionKey = "venue-pd-bindings-fernet-key-32-bytes!"
 
 // TestPagerDutyWebhookBindingsVenueOracle is the venue-oracle proof for the
@@ -291,8 +295,17 @@ VALUES ($1, $2, $3, $4, $5, 'v1:seed-not-decrypted', 'v1', $6, now(), now(), $7:
 	// timestamp (a malformed one -- "+00:00", a missing "Z" -- stays visible).
 	timestamp := regexp.MustCompile(`\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d{1,6})?Z`)
 	newID := regexp.MustCompile(`"id":"[0-9a-f-]{36}"`)
+	pin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/pagerduty/bindings.go-pin.json", SHA256: "9919c96e6408b00f033515ce05c55204b123ce5ea131d827b673e3a282626b70", Ruling: bindingsOrgScopeRuling})
 	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{
 		Golden: golden,
+		Retire: func(request venueoracle.Request) bool {
+			return request.Name == "rotate: another organisation's active binding" ||
+				request.Name == "rotate: active binding of another organisation on this source"
+		},
+		Pin: pin,
+		NormalizePython: func(_ venueoracle.Request, text string) string {
+			return strings.ReplaceAll(text, "PagerDuty binding graph is not active and same-org", "PagerDuty binding graph was not found")
+		},
 		Normalize: func(request venueoracle.Request, text string) string {
 			text = timestamp.ReplaceAllString(text, "<ts>")
 			if strings.HasPrefix(request.Name, "new:") {
@@ -301,6 +314,7 @@ VALUES ($1, $2, $3, $4, $5, 'v1:seed-not-decrypted', 'v1', $6, now(), now(), $7:
 			return text
 		},
 	})
+	pin.Finish(t)
 	t.Log(receipt)
 
 	compare := func(name, query string) {

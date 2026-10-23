@@ -15,6 +15,8 @@ import (
 	"testing"
 )
 
+const devKey = "dev-key"
+
 const commitsBody = `{"org_id":"org-1","repo_url":"https://example.test/r.git","items":[{"hash":"abc","message":"m","author_name":"a","author_email":"a@example.test","author_when":"2026-01-01T00:00:00Z"}]}`
 
 func env(values map[string]string) func(string) string {
@@ -32,6 +34,9 @@ func serve(t *testing.T, values map[string]string, body string, headers map[stri
 	}
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/ingest/commits", strings.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
+	if values["INGEST_API_KEYS"] == devKey {
+		request.Header.Set("X-API-Key", devKey)
+	}
 	for key, value := range headers {
 		request.Header.Set(key, value)
 	}
@@ -57,8 +62,9 @@ func TestAuthenticationMatrix(t *testing.T) {
 	}{
 		{"nothing configured, production default", nil, nil, commitsBody, 401, `{"detail":"Invalid API key"}`},
 		{"nothing configured, ENVIRONMENT=prod", map[string]string{"ENVIRONMENT": "prod"}, nil, commitsBody, 401, `{"detail":"Invalid API key"}`},
-		{"nothing configured, development", map[string]string{"ENVIRONMENT": " Development "}, nil, commitsBody, 202, ""},
-		{"nothing configured, APP_ENV=local", map[string]string{"APP_ENV": "local"}, nil, commitsBody, 202, ""},
+		{"nothing configured, development", map[string]string{"ENVIRONMENT": " Development "}, nil, commitsBody, 401, `{"detail":"Invalid API key"}`},
+		{"nothing configured, APP_ENV=local", map[string]string{"APP_ENV": "local"}, nil, commitsBody, 401, `{"detail":"Invalid API key"}`},
+		{"nothing configured, ENVIRONMENT=dev, signature header only", map[string]string{"ENVIRONMENT": "dev"}, map[string]string{"X-Signature-256": sign("s", commitsBody)}, commitsBody, 401, `{"detail":"Invalid API key"}`},
 		{"ENVIRONMENT wins over APP_ENV", map[string]string{"ENVIRONMENT": "prod", "APP_ENV": "dev"}, nil, commitsBody, 401, `{"detail":"Invalid API key"}`},
 		{"api key missing", map[string]string{"INGEST_API_KEYS": "k1,k2"}, nil, commitsBody, 401, `{"detail":"Invalid API key"}`},
 		{"api key wrong", map[string]string{"INGEST_API_KEYS": "k1,k2"}, map[string]string{"X-API-Key": "k3"}, commitsBody, 401, `{"detail":"Invalid API key"}`},
@@ -75,7 +81,7 @@ func TestAuthenticationMatrix(t *testing.T) {
 		// answered without a credential check; a validation error only after it.
 		{"bad json beats auth", nil, nil, `{`, 422, `"type":"json_invalid"`},
 		{"validation error after auth", nil, nil, `{}`, 401, `{"detail":"Invalid API key"}`},
-		{"validation error once authenticated", map[string]string{"ENVIRONMENT": "dev"}, nil, `{}`, 422, `"type":"missing"`},
+		{"validation error once authenticated", map[string]string{"INGEST_API_KEYS": devKey}, nil, `{}`, 422, `"type":"missing"`},
 	} {
 		t.Run(item.name, func(t *testing.T) {
 			got := serve(t, item.env, item.body, item.headers)
@@ -90,7 +96,7 @@ func TestAuthenticationMatrix(t *testing.T) {
 }
 
 func TestAcceptedResponse(t *testing.T) {
-	got := serve(t, map[string]string{"ENVIRONMENT": "dev"}, commitsBody, nil)
+	got := serve(t, map[string]string{"INGEST_API_KEYS": devKey}, commitsBody, nil)
 	body := got.Body.String()
 	if got.Code != 202 || !strings.HasPrefix(body, `{"ingestion_id":"`) || !strings.HasSuffix(body, `","status":"accepted","items_received":1,"stream":"ingest:org-1:commits"}`) {
 		t.Fatalf("%d %s", got.Code, body)
@@ -130,8 +136,9 @@ func (s *scriptedStore) Claim(_ context.Context, key string) (bool, error) {
 
 func post(t *testing.T, store Store, headers map[string]string) *httptest.ResponseRecorder {
 	t.Helper()
-	routes := Routes(Deps{Store: store, Getenv: env(map[string]string{"ENVIRONMENT": "dev"}), Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	routes := Routes(Deps{Store: store, Getenv: env(map[string]string{"INGEST_API_KEYS": devKey}), Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/ingest/commits", strings.NewReader(commitsBody))
+	request.Header.Set("X-API-Key", devKey)
 	for key, value := range headers {
 		request.Header.Set(key, value)
 	}
@@ -190,8 +197,9 @@ func TestInvalidRequestConsumesTheIdempotencyKey(t *testing.T) {
 	// FastAPI runs the dependencies before it reports the body's validation
 	// errors, so a request refused with 422 has already claimed its key.
 	store := &scriptedStore{claim: func(string) (bool, error) { return true, nil }}
-	routes := Routes(Deps{Store: store, Getenv: env(map[string]string{"ENVIRONMENT": "dev"}), Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	routes := Routes(Deps{Store: store, Getenv: env(map[string]string{"INGEST_API_KEYS": devKey}), Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/ingest/commits", strings.NewReader(`{}`))
+	request.Header.Set("X-API-Key", devKey)
 	request.Header.Set("X-Idempotency-Key", "k")
 	recorder := httptest.NewRecorder()
 	routes[0].Handler.ServeHTTP(recorder, request)
@@ -210,10 +218,11 @@ func (f failingClickHouse) PrepareBatch(context.Context, string, ...driver.Prepa
 
 func postTelemetry(t *testing.T, clickhouse ClickHouse) *httptest.ResponseRecorder {
 	t.Helper()
-	routes := Routes(Deps{ClickHouse: clickhouse, Getenv: env(map[string]string{"ENVIRONMENT": "dev"}), Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	routes := Routes(Deps{ClickHouse: clickhouse, Getenv: env(map[string]string{"INGEST_API_KEYS": devKey}), Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
 	for _, route := range routes {
 		if route.Pattern == "/api/v1/ingest/telemetry" {
 			request := httptest.NewRequest(http.MethodPost, "/api/v1/ingest/telemetry", strings.NewReader(telemetryBody))
+			request.Header.Set("X-API-Key", devKey)
 			recorder := httptest.NewRecorder()
 			route.Handler.ServeHTTP(recorder, request)
 			return recorder

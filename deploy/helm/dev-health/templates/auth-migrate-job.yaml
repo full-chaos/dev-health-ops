@@ -43,6 +43,9 @@ spec:
       containers:
         - name: auth-migrate
           image: {{ include "dev-health.authMigrateImage" . }}
+          {{- with include "dev-health.authAckGrantNarrowing" . }}
+          args: [{{ . | quote }}]
+          {{- end }}
           imagePullPolicy: {{ $m.image.pullPolicy }}
           env:
             - name: AUTH_MIGRATION_DATABASE_URI

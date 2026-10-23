@@ -14,6 +14,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
+	"github.com/full-chaos/dev-health-ops/internal/platform/dsnclass"
 )
 
 const maxManifestBytes = 512 * 1024
@@ -421,6 +422,9 @@ func validateMigrationJob(job MigrationJob, budget PostgresBudget) error {
 	if contains(job.SecretEnv, "WORKER_DATABASE_URI") || contains(job.SecretEnv, "POSTGRES_URI") {
 		return errors.New("migration job must not receive runtime database DSNs")
 	}
+	if len(dsnclass.Foreign(dsnclass.Migration, job.SecretEnv)) > 0 {
+		return errors.New("migration job carries a database DSN secret outside its class")
+	}
 	return nil
 }
 
@@ -589,6 +593,9 @@ func validateProcess(process Process, coverage map[string]queueCoverage, state D
 		}
 	default:
 		return errors.New("runtime is invalid")
+	}
+	if len(dsnclass.Foreign(process.Runtime, process.SecretEnv)) > 0 {
+		return errors.New("process carries a database DSN secret outside its class")
 	}
 	return nil
 }

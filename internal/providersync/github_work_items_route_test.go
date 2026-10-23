@@ -26,8 +26,8 @@ import (
 type githubProjectV2NoopSnapshotDiffReader struct{}
 
 func (githubProjectV2NoopSnapshotDiffReader) PriorActiveSubjects(
-	context.Context, string, string,
-) ([]githubProjectV2SnapshotSubject, error) {
+	context.Context, string, []string,
+) (map[string][]githubProjectV2SnapshotSubject, error) {
 	return nil, nil
 }
 

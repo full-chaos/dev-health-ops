@@ -302,6 +302,15 @@ var wgParamKeys = []string{"org_id", "limit", "source_type", "target_type", "edg
 // wgComparable keeps the named request parameters, with lists as sorted
 // strings and every number as a float64.
 func wgComparable(in map[string]any) map[string]any {
+	if v, ok := in["limit_n"]; ok {
+		renamed := map[string]any{"limit": v}
+		for k, other := range in {
+			if k != "limit_n" {
+				renamed[k] = other
+			}
+		}
+		in = renamed
+	}
 	out := map[string]any{}
 	for _, k := range wgParamKeys {
 		v, ok := in[k]

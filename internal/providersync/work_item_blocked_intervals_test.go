@@ -576,10 +576,10 @@ func TestAGitLabBlocksKeywordEndsOnlyWhenItsDescriptionIsSyncedWithoutIt(t *test
 		writerStored bool
 		want         workitemmetrics.BlockedInterval
 	}{
-		"blocks, writer stored":      {"this blocks #7", "blocks", true, open},
-		"blocks, no writer stored":   {"this blocks #7", "blocks", false, workitemmetrics.BlockedInterval{Start: firstSeen, End: &written}},
-		"blocking, writer stored":    {"this is blocking #7", "blocking", true, open},
-		"blocking, no writer stored": {"this is blocking #7", "blocking", false, open},
+		"blocks, writer stored":      {"this blocks #7", "explicit_text:blocks", true, open},
+		"blocks, no writer stored":   {"this blocks #7", "explicit_text:blocks", false, workitemmetrics.BlockedInterval{Start: firstSeen, End: &written}},
+		"blocking, writer stored":    {"this is blocking #7", "explicit_text:blocking", true, open},
+		"blocking, no writer stored": {"this is blocking #7", "explicit_text:blocking", false, open},
 	} {
 		t.Run(name, func(t *testing.T) {
 			rows := normalizeGitLabDependencies(claim, "gitlab:acme/api#5", "acme/api", tc.description, nil, written)

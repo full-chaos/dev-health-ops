@@ -1,6 +1,7 @@
 package pybody
 
 import (
+	"math"
 	"math/big"
 	"net/url"
 	"strings"
@@ -11,6 +12,14 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pytime"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 )
+
+// Int64Max is the upper bound of an offset or limit query parameter that is
+// bound as a bigint: a value past it is refused as a range error, where
+// Python's unhandled asyncpg error answered a 500.
+func Int64Max() *int64 {
+	bound := int64(math.MaxInt64)
+	return &bound
+}
 
 // maxIntDigits is pydantic-core's string length limit for an int parse
 // (4300, CPython's default int max str digits).

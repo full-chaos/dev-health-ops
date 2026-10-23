@@ -97,6 +97,7 @@ func TestWriteInvestmentsRoundTripsMapColumnsAndNullableFields(t *testing.T) {
 			CategorizationModelVersion: "v1",
 			CategorizationInputHash:    "abc123",
 			CategorizationRunID:        "run-1",
+			EffortBasis:                "partial_capped",
 			ComputedAt:                 computedAt,
 		},
 		{
@@ -140,6 +141,13 @@ func TestWriteInvestmentsRoundTripsMapColumnsAndNullableFields(t *testing.T) {
 		 WHERE org_id = ? AND work_unit_id = ?`, testOrgID, "wu-with-repo")
 	if themeValue != "0.8" {
 		t.Fatalf("theme_distribution_json['Feature Work'] = %q, want \"0.8\"", themeValue)
+	}
+
+	for id, want := range map[string]string{"wu-with-repo": "partial_capped", "wu-without-repo": ""} {
+		if got := scanString(t, ctx, conn,
+			`SELECT effort_basis FROM work_unit_investments WHERE org_id = ? AND work_unit_id = ?`, testOrgID, id); got != want {
+			t.Fatalf("effort_basis for %s = %q, want %q", id, got, want)
+		}
 	}
 
 	repoIsNull := scanUint64(t, ctx, conn,

@@ -220,7 +220,13 @@ var (
 	censusKeyColumn   = regexp.MustCompile(`^(?:\w+\()*` + "`?" + `(\w+)` + "`?")
 	censusColumnHead  = regexp.MustCompile("^`?(\\w+)`?\\s+(.*)$")
 	censusDropTable   = regexp.MustCompile(`(?im)^\s*DROP TABLE\s+(?:IF EXISTS\s+)?` + "`?" + `(\w+)` + "`?" + `\s*;`)
-	censusAddColumn   = regexp.MustCompile(`(?im)^\s*ALTER TABLE\s+(\w+)\s+ADD COLUMN\s+(?:IF NOT EXISTS\s+)?` + "`?" + `(\w+)` + "`?" + `\s+([^;\n]+);`)
+	// censusAlterBlock is one ALTER TABLE statement over several lines, as migration 141 has it: columns are added
+	// and the sorting key is rewritten in the same statement.
+	censusAlterBlock    = regexp.MustCompile(`(?is)\bALTER TABLE\s+(\w+)\s+([^;]*?MODIFY ORDER BY\s*\([^;]*);`)
+	censusBlockAddition = regexp.MustCompile(`(?is)ADD COLUMN\s+(?:IF NOT EXISTS\s+)?` + "`?" + `(\w+)` + "`?" + `\s+([^,;\n]+?)\s*,`)
+	censusModifyOrder   = regexp.MustCompile(`(?is)MODIFY ORDER BY\s*\(`)
+	censusCommentLine   = regexp.MustCompile(`(?m)^\s*--.*$`)
+	censusAddColumn     = regexp.MustCompile(`(?im)^\s*ALTER TABLE\s+(\w+)\s+ADD COLUMN\s+(?:IF NOT EXISTS\s+)?` + "`?" + `(\w+)` + "`?" + `\s+([^;\n]+);`)
 )
 
 // parseCensusTables reads every CREATE TABLE of a piece of SQL.
@@ -292,6 +298,7 @@ func loadCensusTables(t *testing.T) map[string]censusTable {
 		tables[object.Name] = parsed[0]
 	}
 	for _, file := range chain {
+		applyCensusSortingKeyAlters(t, tables, file)
 		for _, table := range parseCensusTables(t, file.SQL) {
 			tables[table.name] = table
 		}
@@ -331,6 +338,43 @@ func loadCensusTables(t *testing.T) map[string]censusTable {
 		}
 	}
 	return tables
+}
+
+// applyCensusSortingKeyAlters reads the ALTER TABLE statements of a migration that add a column and rewrite the
+// sorting key in one statement (ClickHouse allows a new column in the key only in the ALTER that adds it).
+func applyCensusSortingKeyAlters(t *testing.T, tables map[string]censusTable, file chmigrate.ChainFile) {
+	t.Helper()
+	sql := censusCommentLine.ReplaceAllString(file.SQL, "")
+	for _, match := range censusAlterBlock.FindAllStringSubmatch(sql, -1) {
+		table, known := tables[match[1]]
+		if !known {
+			t.Fatalf("migration %s alters the sorting key of table %s, which the schema read does not hold", file.Version, match[1])
+		}
+		body := match[2]
+		for _, added := range censusBlockAddition.FindAllStringSubmatch(body, -1) {
+			column := censusColumn{name: added[1], typ: strings.TrimSpace(added[2])}
+			present := false
+			for index := range table.columns {
+				if table.columns[index].name == column.name {
+					table.columns[index], present = column, true
+				}
+			}
+			if !present {
+				table.columns = append(table.columns, column)
+			}
+		}
+		at := censusModifyOrder.FindStringIndex(body)
+		expression := balanced(t, body, at[1]-1)
+		table.sortingKey = nil
+		for _, element := range splitTopLevel(expression) {
+			column := censusKeyColumn.FindStringSubmatch(strings.TrimSpace(element))
+			if column == nil {
+				t.Fatalf("table %s: cannot read the sorting-key element %q", table.name, element)
+			}
+			table.sortingKey = append(table.sortingKey, column[1])
+		}
+		tables[match[1]] = table
+	}
 }
 
 func (table censusTable) teamKeyed() bool {

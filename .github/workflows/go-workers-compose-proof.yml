@@ -1,0 +1,88 @@
+# Executed Compose proof for the Go worker services of compose.yml: the four River workers and the three stream
+# services are built from this tree, started in a private compose project in first-start order, and each is held to
+# the Postgres DSN names of its own process class (container env NAMES, never values), RestartCount 0, /healthz and
+# /readyz 200. The logic is ci/check_go_workers_compose.sh.
+#
+# A PROOF, deliberately NOT a required check: it takes minutes and needs docker. It runs on every push to main and
+# on every pull request, and decides RELEVANCE INSIDE for a pull request (like auth-k8s-proof.yml): the compose
+# files, the process manifest, the worker, stream, reconciler and scheduler services with the config and Postgres
+# packages they load, the Dockerfile, and this proof's own files. An irrelevant pull request reports a green job
+# that says so. Its name is distinct from every required context.
+name: Go workers compose proof
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  # Pull the mirrored test-dependency images from ghcr.io.
+  packages: read
+
+concurrency:
+  # The fleet-wide shape (go.yml, venue-oracles.yml): a pull request by number, a push to main by commit sha (never
+  # cancelled), any other ref by name.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || ((github.ref == 'refs/heads/main' || github.event_name == 'merge_group') && github.sha) || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref != 'refs/heads/main') }}
+
+jobs:
+  go-workers-compose-proof:
+    name: go-workers-compose-proof
+    if: (!(github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full')))
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      GO_WORKERS_COMPOSE_PROOF_PROJECT: gwproof${{ github.run_id }}x${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Does the change touch what this proof proves?
+        id: relevance
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if [ "${EVENT}" != "pull_request" ]; then
+            echo "relevant=true" >> "${GITHUB_OUTPUT}"
+            echo "proof runs: ${EVENT} is not a pull request"
+            exit 0
+          fi
+          mb="$(git merge-base "${BASE_SHA}" "${HEAD_SHA}")"
+          relevant=false
+          if git diff --name-only --no-renames "${mb}" "${HEAD_SHA}" \
+            | grep -E '^(compose\.yml$|ci/bigboy/|deploy/go-workers/|docker/go-worker\.Dockerfile$|ci/check_go_workers_compose\.sh$|ci/go_workers_compose_proof\.override\.yml$|\.github/workflows/go-workers-compose-proof\.yml$|internal/(deploymentcontract|platform/config|platform/shell|storage/postgres|workerservice|streamrunnerservice|reconcilerservice|schedulerservice|workersctl)/|cmd/dho/)'; then
+            relevant=true
+          fi
+          echo "relevant=${relevant}" >> "${GITHUB_OUTPUT}"
+          echo "relevant=${relevant}"
+
+      - name: Log in to GitHub Container Registry
+        if: steps.relevance.outputs.relevant == 'true'
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compose up the Go workers, probe them, tear down
+        if: steps.relevance.outputs.relevant == 'true'
+        run: bash ci/check_go_workers_compose.sh
+
+      - name: Remove anything of the proof project that is left
+        if: always() && steps.relevance.outputs.relevant == 'true'
+        run: |
+          set -u
+          for id in $(docker ps -aq --no-trunc --filter "label=com.docker.compose.project=${GO_WORKERS_COMPOSE_PROOF_PROJECT}"); do docker rm -f -v "${id}"; done
+          for id in $(docker volume ls -q --filter "label=com.docker.compose.project=${GO_WORKERS_COMPOSE_PROOF_PROJECT}"); do docker volume rm -f "${id}"; done
+          for id in $(docker network ls -q --filter "label=com.docker.compose.project=${GO_WORKERS_COMPOSE_PROOF_PROJECT}"); do docker network rm "${id}"; done
+
+      - name: Not relevant
+        if: steps.relevance.outputs.relevant != 'true'
+        run: echo "the change touches nothing this proof proves; it did not run"

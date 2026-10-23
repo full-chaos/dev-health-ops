@@ -436,7 +436,11 @@ func TestExternalIngestVenueOracle(t *testing.T) {
 	python := golden.Python(t, venue, requests)
 	listRequest := venueoracle.Request{Name: "list batches (createdAt check)", Method: "GET", Path: "/api/v1/external-ingest/batches", Headers: auth}
 	listPython := golden.Python(t, venue, []venueoracle.Request{listRequest})[0]
-	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{Golden: golden, Normalize: blankExternalIngestVolatileFields})
+	pin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/venue/external-ingest-venue-oracle.go-pin.json", SHA256: externalIngestOraclePinSHA256, Ruling: externalIngestOracleRuling})
+	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{Golden: golden, Normalize: blankExternalIngestVolatileFields,
+		Retire: func(request venueoracle.Request) bool {
+			return request.Name == "list batches offset past int64" || request.Name == "get batch errorOffset past int64"
+		}, Pin: pin})
 	t.Log(receipt)
 
 	// batchListItem's own createdAt formatting (handlers.go, separate from
@@ -458,8 +462,18 @@ func TestExternalIngestVenueOracle(t *testing.T) {
 			coalesce(error_summary::text, '<null>'), coalesce(recompute_scope::text, '<null>') FROM external_ingest_batches ORDER BY idempotency_key`
 	golden.CompareRows(t, "external_ingest_batches", venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), batchesQuery))
 	// venueoracle.Start already wrote this test's own proof file.
+	pin.Finish(t)
 	golden.Finish(t)
 }
+
+// externalIngestOracleRuling retired the Python reference of the two requests
+// that carry an offset past int64: Python answered an unhandled 500 after the
+// limiter charge, the Go api answers the pinned 422 range refusal of every
+// other bad offset, before the limiter.
+const externalIngestOracleRuling = "CHAOS-10656 (fcs lead decision 2026-10-22): an offset past int64 answers the pinned 422 range refusal, not the old Python 500"
+
+// externalIngestOraclePinSHA256 is the digest of testdata/venue/external-ingest-venue-oracle.go-pin.json.
+const externalIngestOraclePinSHA256 = "b87ae242d9d55eed64bc24c9b173fe9bd009c931d844aa36b03285dbbcba922f"
 
 // malformedEnvelope is a JSON POST of body to path with the ingest token.
 func malformedEnvelope(name, path string, auth map[string]string, body string) venueoracle.Request {

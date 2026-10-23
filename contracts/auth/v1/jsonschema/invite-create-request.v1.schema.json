@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fullchaos.dev/contracts/auth/v1/jsonschema/invite-create-request.v1.schema.json",
+  "title": "Auth Control Plane invite create request (v1 wire format)",
+  "description": "Body of an invite create call. The organization comes from the route. email is sent already normalized (lowercase; the server applies the login-key normalization and refuses a value that is not its own fixed point).",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "email",
+    "role"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "invite-create-request.v1",
+      "description": "Contract identifier. A reader MUST reject an unrecognised value (G-26: unknown denies)."
+    },
+    "email": {
+      "type": "string",
+      "maxLength": 254,
+      "pattern": "^[a-z0-9_%+-]+([.][a-z0-9_%+-]+)*@([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?[.])+[a-z]{2,63}$",
+      "description": "Invitee address: lowercase ASCII, a dot-atom local part, a dotted domain with a letter-only top label. A strict subset of the addresses the login-key normalizer keeps unchanged; the server still normalizes and refuses a value that is not its own fixed point."
+    },
+    "role": {
+      "enum": [
+        "viewer",
+        "member",
+        "admin",
+        "owner"
+      ],
+      "description": "An organization role key of the closed catalog (contracts/auth/v1/vocabulary/roles.v1.json). A platform role, superuser and every other value are refused."
+    },
+    "ttl_seconds": {
+      "type": "integer",
+      "minimum": 3600,
+      "maximum": 2592000,
+      "description": "Lifetime of the invite; the server default applies when absent."
+    }
+  }
+}

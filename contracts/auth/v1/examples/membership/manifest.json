@@ -1,0 +1,85 @@
+{
+  "description": "The golden corpus for the membership.v1 resource. No client-only rule: every rule is a schema rule.",
+  "accept": [
+    {
+      "file": "valid-active.json",
+      "why": "An active member with a role."
+    },
+    {
+      "file": "valid-invited-no-role.json",
+      "why": "An invited member holds no role and has not joined."
+    },
+    {
+      "file": "valid-removed.json",
+      "why": "A removed member keeps the row."
+    }
+  ],
+  "reject": [
+    {
+      "file": "invalid-role-platform-admin.json",
+      "expect_instance_location": "/role",
+      "expect_keyword": "enum",
+      "why": "A platform role is not a membership role."
+    },
+    {
+      "file": "invalid-role-superuser.json",
+      "expect_instance_location": "/role",
+      "expect_keyword": "enum",
+      "why": "superuser is not a role."
+    },
+    {
+      "file": "invalid-status-pending.json",
+      "expect_instance_location": "/status",
+      "expect_keyword": "enum",
+      "why": "pending is the event spelling, not the resource status."
+    },
+    {
+      "file": "invalid-principal-id-prefix.json",
+      "expect_instance_location": "/principal_id",
+      "expect_keyword": "pattern",
+      "why": "An organization id as the principal."
+    },
+    {
+      "file": "invalid-joined-at-absent.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "why": "joined_at is null, not omitted."
+    },
+    {
+      "file": "invalid-extra-member.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "why": "Inheritance is not representable."
+    },
+    {
+      "file": "invalid-active-without-role.json",
+      "expect_instance_location": "/role",
+      "expect_keyword": "type",
+      "why": "An active member always holds a role."
+    },
+    {
+      "file": "invalid-membership-id-long.json",
+      "expect_instance_location": "/membership_id",
+      "expect_keyword": "pattern",
+      "why": "The longest id the old range allowed."
+    },
+    {
+      "file": "invalid-invited-with-role.json",
+      "expect_instance_location": "/role",
+      "expect_keyword": "type",
+      "why": "An invited member has no role."
+    },
+    {
+      "file": "invalid-invited-with-joined-at.json",
+      "expect_instance_location": "/joined_at",
+      "expect_keyword": "type",
+      "why": "An invited member has not joined."
+    },
+    {
+      "file": "invalid-active-without-joined-at.json",
+      "expect_instance_location": "/joined_at",
+      "expect_keyword": "type",
+      "why": "An active member has joined."
+    }
+  ]
+}

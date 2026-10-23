@@ -490,20 +490,13 @@ func (d Deps) handleListBatches() http.HandlerFunc {
 		createdAfter, _ := problems.QueryDatetime("createdAfter", pybody.LastQuery(values, "createdAfter"))
 		createdBefore, _ := problems.QueryDatetime("createdBefore", pybody.LastQuery(values, "createdBefore"))
 		limit, _ := problems.QueryInt("limit", pybody.LastQuery(values, "limit"), 50, int64Pointer(1), int64Pointer(200))
-		offset, _ := problems.QueryInt("offset", pybody.LastQuery(values, "offset"), 0, int64Pointer(0), nil)
+		offset, _ := problems.QueryInt("offset", pybody.LastQuery(values, "offset"), 0, int64Pointer(0), pybody.Int64Max())
 		if len(problems) > 0 {
 			policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail(problems), nil)
 			return
 		}
 		if err := rateLimitedOrTooManyRequests(r.Context(), d.routeLimiters.listBatches, ingestTokenRateLimitKey(authCtx.TokenID), r.URL.Path); err != nil {
 			writeIngestError(w, err)
-			return
-		}
-		// pydantic's int is unbounded; asyncpg refuses an offset past int64
-		// when it binds the page query, Python's unhandled 500. That happens
-		// after the limiter has charged the request.
-		if !offset.IsInt64() {
-			writeIngestError(w, unhandledError())
 			return
 		}
 		batches, total, err := ListBatches(r.Context(), d.Pool, authCtx.OrgID, BatchQuery{
@@ -549,7 +542,7 @@ func (d Deps) handleGetBatch() http.HandlerFunc {
 		ingestionID, _ := problems.PathUUID("ingestion_id", rawID)
 		values := r.URL.Query()
 		errorLimit, _ := problems.QueryInt("errorLimit", httpapi.QueryLastPtr(values, "errorLimit"), 50, int64Pointer(1), int64Pointer(200))
-		errorOffset, _ := problems.QueryInt("errorOffset", httpapi.QueryLastPtr(values, "errorOffset"), 0, int64Pointer(0), nil)
+		errorOffset, _ := problems.QueryInt("errorOffset", httpapi.QueryLastPtr(values, "errorOffset"), 0, int64Pointer(0), pybody.Int64Max())
 		if len(problems) > 0 {
 			policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail(problems), nil)
 			return
@@ -569,13 +562,6 @@ func (d Deps) handleGetBatch() http.HandlerFunc {
 		}
 		if batch == nil {
 			writeIngestError(w, newIngestError(http.StatusNotFound, "not_found", "ingestion batch not found"))
-			return
-		}
-		// pydantic's int is unbounded; asyncpg refuses an offset past int64
-		// when it binds the rejection page query, Python's unhandled 500. That
-		// happens after the limiter charge and the batch lookup (404 first).
-		if !errorOffset.IsInt64() {
-			writeIngestError(w, unhandledError())
 			return
 		}
 		limit, offset := int(errorLimit.Int64()), int(errorOffset.Int64())

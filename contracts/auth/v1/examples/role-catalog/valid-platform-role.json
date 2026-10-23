@@ -1,0 +1,21 @@
+{
+  "schema_version": "roles.v1",
+  "catalog_version": 1,
+  "description": "example",
+  "roles": [
+    {
+      "role": "viewer",
+      "scope": "organization",
+      "actions": [
+        "members.read"
+      ]
+    },
+    {
+      "role": "platform_admin",
+      "scope": "platform",
+      "actions": [
+        "admin.users"
+      ]
+    }
+  ]
+}

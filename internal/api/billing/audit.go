@@ -109,7 +109,7 @@ func nonEmpty(value *string) *string {
 
 // queryPlainInt is a bare `name: int = fallback` query parameter.
 func queryPlainInt(errs *pybody.Errors, r *http.Request, name string, fallback int64) *big.Int {
-	value, _ := errs.QueryInt(name, pybody.LastQueryValue(r.URL.Query(), name), fallback, nil, nil)
+	value, _ := errs.QueryInt(name, pybody.LastQueryValue(r.URL.Query(), name), fallback, nil, pybody.Int64Max())
 	return value
 }
 
@@ -148,9 +148,6 @@ func (h handlers) listAudit(w http.ResponseWriter, r *http.Request) {
 		}
 		if queryOffset.Sign() < 0 {
 			queryOffset.SetInt64(0)
-		}
-		if !queryLimit.IsInt64() || !queryOffset.IsInt64() {
-			return reply{}, errOverflow
 		}
 		filters := []any{orgID, nonEmpty(resourceType), resourceID, nonEmpty(action), nonEmpty(status),
 			pybody.Instant(from), pybody.Instant(to)}

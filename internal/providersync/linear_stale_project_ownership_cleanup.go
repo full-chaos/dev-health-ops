@@ -71,7 +71,7 @@ import (
 // Codex review round 2 (2026-08-30, P2) flagged this as unsupported --
 // disproven by direct execution on both engines that could plausibly run
 // it: a real ALTER TABLE ... DELETE with this exact predicate
-// (mutations_sync=1) against a scratch org, on (1) the local dev stack's
+// (mutations_sync=2) against a scratch org, on (1) the local dev stack's
 // ClickHouse 26.7.5.10 (the version local + prod both run, per AGENTS.md's
 // data vocabulary) and (2) a throwaway container from the exact digest
 // internal/testsupport/containers/harness.go pins for Go integration tests
@@ -85,7 +85,7 @@ const linearStaleProjectOwnershipSelectQuery = `SELECT org_id, project_id, proje
 
 const linearStaleProjectOwnershipSelectQueryScoped = linearStaleProjectOwnershipSelectQuery + ` AND org_id = {org_id:String}`
 
-// mutations_sync=1, same synchronous-write discipline
+// mutations_sync=2, same synchronous-write discipline
 // RetireLinearPseudoProjectRows uses: the caller's reported row count must
 // describe rows ACTUALLY gone by the time this returns.
 const linearStaleProjectOwnershipDeleteMutation = `ALTER TABLE team_project_ownership DELETE WHERE ` + linearStaleProjectOwnershipPredicate
@@ -171,9 +171,7 @@ func RetireStaleLinearProjectOwnershipRows(ctx context.Context, conn driver.Conn
 	if dryRun || len(outcome.Rows) == 0 {
 		return outcome, nil
 	}
-	syncCtx := clickhouse.Context(ctx, clickhouse.WithSettings(clickhouse.Settings{
-		"mutations_sync": "1",
-	}))
+	syncCtx := clickhouse.Context(ctx, clickhouse.WithSettings(cleanupDeleteSettings()))
 	if err := conn.Exec(syncCtx, mutation, namedArgs...); err != nil {
 		return outcome, err
 	}

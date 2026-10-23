@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/changefailure"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/rowview"
 	"github.com/full-chaos/dev-health-ops/internal/teamkeytables"
 )
 
@@ -95,13 +96,13 @@ func TestDedupFromSourceEveryAppendOnlyTableAndEveryReplacingTable(t *testing.T)
 		// The tables below with a live-row rule: the newest row of each key
 		// is read first (LIMIT 1 BY) and the retraction rows are dropped
 		// after, by the row test of the table registry.
-		{"work_item_metrics_daily", "(SELECT * FROM (SELECT * FROM work_item_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, provider, day, work_scope_id, team_id) AS work_item_metrics_daily WHERE " + teamkeytables.WorkItemMetricsDaily.LiveRow("work_item_metrics_daily.") + ") AS work_item_metrics_daily"},
+		{"work_item_metrics_daily", "(SELECT * FROM (SELECT * FROM work_item_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, provider, day, work_scope_id, team_id, row_view) AS work_item_metrics_daily WHERE " + teamkeytables.WorkItemMetricsDaily.LiveRow("work_item_metrics_daily.") + " AND " + rowview.OrgPredicate("work_item_metrics_daily", "") + ") AS work_item_metrics_daily"},
 		{"cicd_metrics_daily", "(SELECT * FROM cicd_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day) AS cicd_metrics_daily"},
 		{"deploy_metrics_daily", "(SELECT * FROM deploy_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day) AS deploy_metrics_daily"},
 		{"incident_metrics_daily", "(SELECT * FROM incident_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day) AS incident_metrics_daily"},
 		{"repo_metrics_daily", "(SELECT * FROM repo_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day) AS repo_metrics_daily"},
 		{"team_metrics_daily", "(SELECT * FROM (SELECT * FROM team_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, team_id, repo_id, day) AS team_metrics_daily WHERE " + teamkeytables.TeamMetricsDaily.LiveRow("team_metrics_daily.") + ") AS team_metrics_daily"},
-		{"work_item_state_durations_daily", "(SELECT * FROM (SELECT * FROM work_item_state_durations_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, provider, work_scope_id, team_id, status, day) AS work_item_state_durations_daily WHERE " + teamkeytables.WorkItemStateDurationsDaily.LiveRow("work_item_state_durations_daily.") + ") AS work_item_state_durations_daily"},
+		{"work_item_state_durations_daily", "(SELECT * FROM (SELECT * FROM work_item_state_durations_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, provider, work_scope_id, team_id, status, day, row_view) AS work_item_state_durations_daily WHERE " + teamkeytables.WorkItemStateDurationsDaily.LiveRow("work_item_state_durations_daily.") + " AND " + rowview.OrgPredicate("work_item_state_durations_daily", "") + ") AS work_item_state_durations_daily"},
 		{"ic_landscape_rolling_30d", "(SELECT * FROM (SELECT * FROM ic_landscape_rolling_30d ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, team_id, map_name, as_of_day, identity_id) AS ic_landscape_rolling_30d WHERE " + teamkeytables.ICLandscapeRolling30d.LiveRow("ic_landscape_rolling_30d.") + ") AS ic_landscape_rolling_30d"},
 		// The two plain MergeTree tables with the rule in their own writers.
 		{"work_item_completion_daily", "(SELECT * FROM (SELECT * FROM work_item_completion_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day, team_id) AS work_item_completion_daily WHERE (work_item_completion_daily.delivery_units != 0 OR work_item_completion_daily.work_items_completed != 0 OR work_item_completion_daily.prs_merged != 0 OR work_item_completion_daily.churn_loc != 0)) AS work_item_completion_daily"},

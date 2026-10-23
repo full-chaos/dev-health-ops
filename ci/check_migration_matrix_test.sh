@@ -27,11 +27,11 @@ trap 'trapped_rc=$?; cleanup; exit "${trapped_rc}"' EXIT
 PASSED=0
 FAILED=0
 
-# fixture <name> <last-verified-cell> <commit-age-days> <render-age-days>
+# fixture <name> <last-verified-cell> <commit-age-days>
 # Builds a repo whose HEAD contains a matrix doc and a render snapshot, with
 # the "Last verified" commit backdated by <commit-age-days>. Echoes the path.
 fixture() {
-  local name="$1" cell="$2" commit_age="$3" render_age="$4"
+  local name="$1" cell="$2" commit_age="$3"
   local repo="${WORK}/${name}"
   mkdir -p "${repo}/docs" "${repo}/contracts/migration-status/v1"
   git -C "${repo}" init -q
@@ -54,13 +54,12 @@ fixture() {
   # the EMPTY string is testing the missing-ops_sha path, and the colon form
   # would silently substitute the default and test nothing. Caught by this
   # file's own render_sha_missing case reporting rc=0.
-  local rendered_at ops_sha="${FIXTURE_OPS_SHA-SENTINEL}"
-  rendered_at="$(date -u -d "@$(( $(date -u +%s) - render_age * 86400 ))" +%Y-%m-%dT%H:%M:%SZ)"
+  local ops_sha="${FIXTURE_OPS_SHA-SENTINEL}"
   if [ "${ops_sha}" = "SENTINEL" ]; then
     ops_sha="${verified_sha}"
   fi
-  printf '{\n  "rendered_at": "%s",\n  "ops_sha": "%s",\n  "render_commit": "%s"\n}\n' \
-    "${rendered_at}" "${ops_sha}" "${ops_sha}" \
+  printf '{\n  "ops_sha": "%s"\n}\n' \
+    "${ops_sha}" \
     > "${repo}/contracts/migration-status/v1/last-render.json"
 
   # The caller may want a literal cell (an abbreviation, a foreign sha, or
@@ -104,22 +103,21 @@ expect() {
   fi
 }
 
-expect fail no_stamp "a page with the stamp deleted is not a fresh page" NOLINE 1 0
-expect fail abbreviated "an abbreviated sha cannot be checked for ancestry" e3e2e77c 1 0
-expect fail not_hex "a non-hex stamp is not a commit" not-a-sha-at-all 1 0
-expect fail unknown_commit "a 40-hex sha this repo does not contain" "$(printf 'a%.0s' {1..40})" 1 0
-expect pass old_stamp "a stamp far older than the former 7-day budget no longer fails" SENTINEL 400 0
-expect pass old_render "a render far older than the former 7-day budget no longer fails" SENTINEL 1 400
-expect pass fresh "a real, recent, ancestor stamp with a recent render" SENTINEL 1 0
+expect fail no_stamp "a page with the stamp deleted is not a fresh page" NOLINE 1
+expect fail abbreviated "an abbreviated sha cannot be checked for ancestry" e3e2e77c 1
+expect fail not_hex "a non-hex stamp is not a commit" not-a-sha-at-all 1
+expect fail unknown_commit "a 40-hex sha this repo does not contain" "$(printf 'a%.0s' {1..40})" 1
+expect pass old_stamp "a stamp far older than the former 7-day budget no longer fails" SENTINEL 400
+expect pass fresh "a real, recent, ancestor stamp with a recent render" SENTINEL 1
 
 # The ops_sha half: the sha `-render` actually read from. A human cannot type
 # it, so these cases cover the ways it can be WRONG rather than forged.
 FIXTURE_OPS_SHA="$(printf 'b%.0s' {1..40})" \
-  expect fail render_from_unknown_commit "the render claims a commit this repo does not have" SENTINEL 1 0
+  expect fail render_from_unknown_commit "the render claims a commit this repo does not have" SENTINEL 1
 FIXTURE_OPS_SHA="deadbeef" \
-  expect fail render_sha_abbreviated "an abbreviated ops_sha cannot be checked for ancestry" SENTINEL 1 0
+  expect fail render_sha_abbreviated "an abbreviated ops_sha cannot be checked for ancestry" SENTINEL 1
 FIXTURE_OPS_SHA="" \
-  expect fail render_sha_missing "a render with no ops_sha cannot say what it read" SENTINEL 1 0
+  expect fail render_sha_missing "a render with no ops_sha cannot say what it read" SENTINEL 1
 
 # THE REGRESSION CASE. This is the one that was missing, and its absence took
 # main red for every PR the moment #2389 squash-merged.
@@ -156,20 +154,13 @@ check_survives_a_squash_merge() {
   # shellcheck disable=SC2016  # markdown backticks in a printf FORMAT string.
   printf '# matrix\n\n**Last verified:** `%s` (ops main, 2026-09-04) -- read against.\n' \
     "${fork_point}" > "${repo}/docs/go-migration-matrix.md"
-  printf '{\n  "rendered_at": "%s",\n  "ops_sha": "%s",\n  "render_commit": "%s"\n}\n' \
-    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${fork_point}" "BRANCHTIPPLACEHOLDER" \
+  printf '{\n  "ops_sha": "%s"\n}\n' \
+    "${fork_point}" \
     > "${repo}/contracts/migration-status/v1/last-render.json"
   git -C "${repo}" add -A
   git -C "${repo}" commit -qm 'feature: render'
   local branch_tip
   branch_tip="$(git -C "${repo}" rev-parse HEAD)"
-  # Record the real branch tip in render_commit, as a fixed -render would.
-  sed -i "s/BRANCHTIPPLACEHOLDER/${branch_tip}/" \
-    "${repo}/contracts/migration-status/v1/last-render.json"
-  git -C "${repo}" add -A
-  git -C "${repo}" commit -qm 'feature: record render_commit'
-  branch_tip="$(git -C "${repo}" rev-parse HEAD)"
-
   # SQUASH onto main. main gains ONE new commit carrying the tree; the
   # branch's own commits are not in main's history at all.
   git -C "${repo}" checkout -q main

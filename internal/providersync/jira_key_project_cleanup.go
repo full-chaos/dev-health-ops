@@ -57,7 +57,7 @@ const jiraKeyProjectCleanupCountQuery = `SELECT ` +
 
 const jiraKeyProjectCleanupCountQueryScoped = jiraKeyProjectCleanupCountQuery + ` AND org_id = {org_id:String}`
 
-// mutations_sync=1: the reported count must describe rows that are gone when
+// mutations_sync=2: the reported count must describe rows that are gone when
 // this returns, as for RetireLinearPseudoProjectRows.
 const jiraKeyProjectCleanupDeleteMutation = `ALTER TABLE projects DELETE WHERE ` + jiraKeyProjectDeletePredicate
 
@@ -111,10 +111,16 @@ func RetireJiraKeyProjectRows(ctx context.Context, conn driver.Conn, orgID strin
 	if dryRun || outcome.EligibleRows == 0 {
 		return outcome, nil
 	}
-	mutationCtx := clickhouse.Context(ctx, clickhouse.WithSettings(clickhouse.Settings{"mutations_sync": "1"}))
+	mutationCtx := clickhouse.Context(ctx, clickhouse.WithSettings(cleanupDeleteSettings()))
 	if err := conn.Exec(mutationCtx, mutation, namedArgs...); err != nil {
 		return JiraKeyProjectCleanupOutcome{}, err
 	}
 	outcome.DeletedRows = outcome.EligibleRows
 	return outcome, nil
+}
+
+// cleanupDeleteSettings: 2 waits for every replica, so the count a cleanup
+// reports describes rows that are gone for reads on any replica.
+func cleanupDeleteSettings() clickhouse.Settings {
+	return clickhouse.Settings{"mutations_sync": "2"}
 }

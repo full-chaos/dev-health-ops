@@ -100,6 +100,9 @@ func TestRelationWritersComeFromTheStoredRow(t *testing.T) {
 		"github: a pull request holds the text":    {"gh:acme/api#12", "ghpr:acme/api#7", "blocked by #12", false, true},
 		"gitlab keyword: blocked by":               {"gitlab:acme/api#5", "gitlab:acme/api#7", "blocked by", false, true},
 		"gitlab keyword: blocking":                 {"gitlab:acme/api#5", "gitlab:acme/api#7", "blocking", true, false},
+		"gitlab text keyword: blocked by":          {"gitlab:acme/api#5", "gitlab:acme/api#7", "explicit_text:blocked by", false, true},
+		"gitlab text keyword: blocking":            {"gitlab:acme/api#5", "gitlab:acme/api#7", "explicit_text:blocking", true, false},
+		"gitlab text keyword: blocks":              {"gitlab:acme/api#5", "gitlab:acme/api#7", "explicit_text:blocks", true, true},
 		// Not derivable: both items are taken as writers.
 		"gitlab: blocks is a link type and a keyword": {"gitlab:acme/api#5", "gitlab:acme/api#7", "blocks", true, true},
 		"gitlab: an unknown raw value":                {"gitlab:acme/api#5", "gitlab:acme/api#7", "description_reference", true, true},

@@ -7,6 +7,9 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
+
+	"github.com/full-chaos/dev-health-ops/contracts/auth/v1/vocabulary"
 )
 
 // ClassMarker is one way a credential class announces itself on the request
@@ -82,12 +85,21 @@ func CheckClassSelector(profile map[string]any, registry map[string]RegistryClas
 	}
 }
 
+// mediaType is a Content-Type value's media type: parameters (; charset=...) dropped, trimmed, lower-cased.
+func mediaType(value string) string {
+	base, _, _ := strings.Cut(value, ";")
+	return strings.ToLower(strings.TrimSpace(base))
+}
+
 // Header and scheme names are case-insensitive on the wire; a credential
 // prefix and a JWT header alg or typ are compared exactly against the one
 // spelling the contract files carry.
 func markerMatches(marker ClassMarker, kind, name string) bool {
 	if marker.Kind != kind {
 		return false
+	}
+	if kind == "content_type" {
+		return mediaType(marker.Name) == mediaType(name)
 	}
 	if kind == "credential_prefix" || kind == "jwt_header_alg" || kind == "jwt_header_typ" {
 		return marker.Name == name
@@ -153,5 +165,76 @@ func ValidateEndpointAuthProfile(root string, document any) error {
 	if err := CheckClassSelector(profile, registry); err != nil {
 		return err
 	}
-	return CheckTokenPins(profile, registry)
+	if err := CheckTokenPins(profile, registry); err != nil {
+		return err
+	}
+	return CheckActionCachePolicy(profile)
 }
+
+// CheckActionCachePolicy joins a profile's cache_class to the action catalog:
+// a profile that caches must name an action, and a high-risk catalog action is
+// never cached (CHAOS-10641). The error names the rule and the action id only.
+func CheckActionCachePolicy(profile map[string]any) error {
+	raw, present := profile["cache_class"]
+	if !present {
+		return nil
+	}
+	cache, ok := raw.(string)
+	if !ok {
+		return fmt.Errorf("action cache policy: cache_class is %T, not a string", raw)
+	}
+	if cache == "none" {
+		return nil
+	}
+	action, _ := profile["action"].(string)
+	if action == "" {
+		return fmt.Errorf("action cache policy: a cached profile must name an action")
+	}
+	entry, known := catalogActions()[action]
+	if !known {
+		if _, exempt := uncataloguedCachedActions[action]; !exempt {
+			return fmt.Errorf("action cache policy: a cached profile must name a catalog action, not %q", action)
+		}
+		return nil
+	}
+	if entry.high {
+		return fmt.Errorf("action cache policy: action %q is high risk and its profile cache_class must be none", action)
+	}
+	if cache != entry.cacheClass {
+		return fmt.Errorf("action cache policy: action %q profile cache_class must be none or the catalog class", action)
+	}
+	return nil
+}
+
+// uncataloguedCachedActions is the pinned exemption list: the actions today's
+// valid example profiles cache although actions.v1 does not hold them yet. A
+// census test pins the list exactly; it is deleted once these are catalogued.
+var uncataloguedCachedActions = map[string]string{
+	"acr.context.read": "acr namespace, not yet catalogued",
+}
+
+// catalogActions maps every catalog action to its risk and cache class. It reads the embedded actions.v1 catalog directly:
+// internal/auth/policycatalog's own tests import this package, so importing it
+// here would be a cycle.
+type catalogEntry struct {
+	high       bool
+	cacheClass string
+}
+
+var catalogActions = sync.OnceValue(func() map[string]catalogEntry {
+	var catalog struct {
+		Actions []struct {
+			Action     string `json:"action"`
+			RiskClass  string `json:"risk_class"`
+			CacheClass string `json:"cache_class"`
+		} `json:"actions"`
+	}
+	if err := json.Unmarshal(vocabulary.ActionsV1, &catalog); err != nil {
+		panic(fmt.Sprintf("embedded actions.v1 is not JSON: %v", err))
+	}
+	entries := map[string]catalogEntry{}
+	for _, a := range catalog.Actions {
+		entries[a.Action] = catalogEntry{high: a.RiskClass == "high", cacheClass: a.CacheClass}
+	}
+	return entries
+})

@@ -494,7 +494,7 @@ func (h *handlers) orgDeletionPurgeClickHouse(ctx context.Context, orgIDStr stri
 		return
 	}
 
-	// mutations_sync=1 makes each ALTER TABLE DELETE below block until
+	// mutations_sync=2 makes each ALTER TABLE DELETE below block until
 	// ClickHouse has actually applied it, rather than merely queuing an
 	// async mutation -- same synchronous-write discipline
 	// internal/providersync's own ClickHouse ALTER TABLE DELETE callers
@@ -504,9 +504,7 @@ func (h *handlers) orgDeletionPurgeClickHouse(ctx context.Context, orgIDStr stri
 	// gone: a codex-review round on this PR reproduced target rows
 	// surviving a "successful" delete by pausing merges on the seeded
 	// table and observing the response return before the mutation applied.
-	syncCtx := clickhouse.Context(ctx, clickhouse.WithSettings(clickhouse.Settings{
-		"mutations_sync": "1",
-	}))
+	syncCtx := clickhouse.Context(ctx, clickhouse.WithSettings(orgDeletionMutationSettings()))
 
 	for _, t := range tables {
 		condition := "org_id = ?"
@@ -530,6 +528,12 @@ func (h *handlers) orgDeletionPurgeClickHouse(ctx context.Context, orgIDStr stri
 			result.warnings = append(result.warnings, fmt.Sprintf("Unable to delete ClickHouse table %s.", t.Name))
 		}
 	}
+}
+
+// orgDeletionMutationSettings: 2 waits for every replica, so a 200 means the
+// rows are gone for reads on any replica.
+func orgDeletionMutationSettings() clickhouse.Settings {
+	return clickhouse.Settings{"mutations_sync": "2"}
 }
 
 // ChTable is one org_id-bearing ClickHouse table, as

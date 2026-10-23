@@ -84,3 +84,25 @@ func TestNarrowingErrorKeepsOneLinePerGrantWhateverTheIdentifier(t *testing.T) {
 		t.Fatalf("a control character reached the operator message: %q", err.Error())
 	}
 }
+
+// The acknowledgement the chart passes for migration 0019 (which drops DELETE on
+// memberships from the runtime role) is the digest of exactly that one lost
+// grant. The digest covers the lost records only, not the role or the schema, so
+// it is the same for every role and schema name. Changing the set changes it.
+func TestNarrowingDigestOfTheMembershipsDeleteLoss(t *testing.T) {
+	lost := []GrantRecord{{Kind: "relation", Object: "memberships", Privilege: "DELETE"}}
+	const want = "df0950bc72ed8889"
+	if got := narrowingDigest(lost); got != want {
+		t.Fatalf("digest of the memberships DELETE loss = %s, want %s (the chart value that acknowledges 0019)", got, want)
+	}
+	for name, other := range map[string][]GrantRecord{
+		"grantable":       {{Kind: "relation", Object: "memberships", Privilege: "DELETE", Grantable: true}},
+		"another table":   {{Kind: "relation", Object: "sessions", Privilege: "DELETE"}},
+		"another right":   {{Kind: "relation", Object: "memberships", Privilege: "UPDATE"}},
+		"plus a ops loss": {lost[0], {Kind: "relation", Object: "public.users", Privilege: "DELETE"}},
+	} {
+		if narrowingDigest(other) == want {
+			t.Errorf("%s: a different lost set has the same digest", name)
+		}
+	}
+}

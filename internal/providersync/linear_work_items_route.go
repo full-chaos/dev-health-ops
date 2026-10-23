@@ -1012,7 +1012,7 @@ func linearTrustedSCMHosts() map[string]struct{} {
 	return hosts
 }
 
-func linearTrustedSCMHostsAndRoots() (map[string]struct{}, map[string][]string) {
+func linearTrustedSCMHostsAndRoots() (map[string]struct{}, map[string][][]string) {
 	return parseTrustedSCMHostEntries(os.Getenv("LINEAR_TRUSTED_SCM_HOSTS"),
 		"github.com", "www.github.com", "gitlab.com", "www.gitlab.com")
 }
@@ -1040,9 +1040,10 @@ func linearAttachmentSource(attachment linearAttachmentPayload) (source string, 
 	if _, ok := hosts[strings.ToLower(parsed.Host)]; !ok {
 		return "", false
 	}
-	parts, ok := stripSCMURLRoot(roots, parsed.Host, strings.Split(strings.Trim(parsed.Path, "/"), "/"))
+	all := strings.Split(strings.Trim(parsed.Path, "/"), "/")
+	parts, ok := stripSCMURLRoot(roots, parsed.Host, all)
 	if !ok {
-		return "", false
+		return "", scmURLNamesChangeRequest(all)
 	}
 	if strings.Contains(sourceType, "github") && len(parts) >= 4 &&
 		parts[len(parts)-2] == "pull" {

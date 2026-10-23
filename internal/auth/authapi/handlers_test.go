@@ -186,6 +186,11 @@ func newFixture(t *testing.T) *fixture {
 	if err != nil {
 		t.Fatal(err)
 	}
+	return newFixtureWith(t, issuer)
+}
+
+func newFixtureWith(t *testing.T, issuer *Issuer) *fixture {
+	t.Helper()
 	principal, org := uuid.New(), uuid.New()
 	now := time.Now().UTC()
 	pin := int64(4)

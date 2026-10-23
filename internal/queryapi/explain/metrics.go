@@ -10,6 +10,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/changefailure"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/deltarule"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/rowview"
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
@@ -25,8 +26,8 @@ import (
 // extend this map too.
 var dedupNaturalKeys = map[string][]string{
 	"repo_metrics_daily":              {"day", "repo_id"},
-	"work_item_state_durations_daily": {"day", "provider", "work_scope_id", "team_id", "status"},
-	"work_item_metrics_daily":         {"day", "provider", "work_scope_id", "team_id"},
+	"work_item_state_durations_daily": {"day", "provider", "work_scope_id", "team_id", "status", "row_view"},
+	"work_item_metrics_daily":         {"day", "provider", "work_scope_id", "team_id", "row_view"},
 	"deploy_metrics_daily":            {"day", "repo_id"},
 	changefailure.Table:               {"day", "repo_id"},
 }
@@ -133,6 +134,11 @@ func metricValueProjection(column string) string {
 // end_param default-override parameters.
 func metricFromClause(table, column, scopeFilterSQL, startParam, endParam string) string {
 	keys := dedupNaturalKeys[table]
+	if rowview.Has(table) {
+		// Each item once in the organization (CHAOS-8863): legacy rows and the org view. row_view is in the natural
+		// key, so a legacy retraction row never merges with an org row under argMax.
+		scopeFilterSQL += "\n      AND " + rowview.OrgPredicate(table, "")
+	}
 	keyColumns := strings.Join(keys, ",\n        ")
 	projections := make([]string, 0, 2)
 	for _, source := range sourceColumns(table, column) {
@@ -310,7 +316,7 @@ FROM %s
 GROUP BY %s
 %s
 ORDER BY value DESC
-LIMIT {limit:UInt64}
+LIMIT {limit_n:UInt64}
 %s
 `, groupBy, valueSQL, fromClause, groupBy, "HAVING value IS NOT NULL", settingsMaxExecutionTime())
 
@@ -318,7 +324,7 @@ LIMIT {limit:UInt64}
 		{Name: "start_day", Value: dateBindingValue(startDay)},
 		{Name: "end_day", Value: dateBindingValue(endDay)},
 		{Name: "org_id", Value: orgID},
-		{Name: "limit", Value: limit},
+		{Name: "limit_n", Value: limit},
 	}, scopeBindings...)
 
 	rows, err := reader.client.Query(ctx, query, bindings)
@@ -412,7 +418,7 @@ FULL JOIN (
 ) AS previous ON current.id = previous.id
 WHERE %s OR %s
 ORDER BY delta_pct DESC NULLS LAST
-LIMIT {limit:UInt64}
+LIMIT {limit_n:UInt64}
 %s
 `, currentValue, currentStored, previousStored, deltarule.DriverPercentSQL(currentValue, "previous.value", "previous.present"),
 		groupBy, valueSQL, currentFrom, groupBy, groupBy, valueSQL, previousFrom, groupBy,
@@ -424,7 +430,7 @@ LIMIT {limit:UInt64}
 		{Name: "compare_start", Value: dateBindingValue(compareStart)},
 		{Name: "compare_end", Value: dateBindingValue(compareEnd)},
 		{Name: "org_id", Value: orgID},
-		{Name: "limit", Value: limit},
+		{Name: "limit_n", Value: limit},
 	}, scopeBindings...)
 
 	rows, err := reader.client.Query(ctx, query, bindings)

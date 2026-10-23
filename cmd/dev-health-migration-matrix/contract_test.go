@@ -520,3 +520,75 @@ func TestRenderSaysTheCatalogIsServedAndCheckAgrees(t *testing.T) {
 		t.Fatalf("-check refused what -render just wrote: %v", err)
 	}
 }
+
+func readCommittedRender(t *testing.T, root string) (string, string) {
+	t.Helper()
+	json, err := os.ReadFile(filepath.Join(root, renderRelative))
+	if err != nil {
+		t.Fatalf("read the snapshot: %v", err)
+	}
+	doc, err := os.ReadFile(filepath.Join(root, docRelative))
+	if err != nil {
+		t.Fatalf("read the doc: %v", err)
+	}
+	return string(json), string(doc)
+}
+
+// TestRenderOnAnotherCommitWithNoContentChangeIsByteIdentical is the RED half
+// of the stamp-conflict fix: two PRs that each re-render on a different main
+// commit must write the same committed bytes, or the second to merge goes
+// DIRTY with no content change.
+func TestRenderOnAnotherCommitWithNoContentChangeIsByteIdentical(t *testing.T) {
+	root := copyContractTree(t)
+	gitRunFor(t, root, "init", "-q", "-b", "main")
+	gitRunFor(t, root, "add", "-A")
+	gitRunFor(t, root, "commit", "-qm", "c1")
+
+	if err := runRender(root, "", "none", nil); err != nil {
+		t.Fatalf("first render: %v", err)
+	}
+	firstJSON, firstDoc := readCommittedRender(t, root)
+	gitRunFor(t, root, "add", "-A")
+	gitRunFor(t, root, "commit", "-qm", "c2")
+	gitRunFor(t, root, "commit", "-q", "--allow-empty", "-m", "c3")
+
+	if err := runRender(root, "", "none", nil); err != nil {
+		t.Fatalf("second render: %v", err)
+	}
+	secondJSON, secondDoc := readCommittedRender(t, root)
+	if firstJSON != secondJSON {
+		t.Fatalf("last-render.json differs between two renders with no content change:\n--- first\n%s\n--- second\n%s", firstJSON, secondJSON)
+	}
+	if firstDoc != secondDoc {
+		t.Fatal("docs/go-migration-matrix.md differs between two renders with no content change")
+	}
+	if err := runCheck(root); err != nil {
+		t.Fatalf("the re-rendered tree must pass -check: %v", err)
+	}
+}
+
+// TestRenderReplacesAnOpsShaHEADNoLongerContains keeps CHAOS-5863 whole: the
+// sticky ops_sha is kept only while it is an ancestor of HEAD.
+func TestRenderReplacesAnOpsShaHEADNoLongerContains(t *testing.T) {
+	root := copyContractTree(t)
+	gitRunFor(t, root, "init", "-q", "-b", "main")
+	gitRunFor(t, root, "add", "-A")
+	gitRunFor(t, root, "commit", "-qm", "c1")
+	gitRunFor(t, root, "checkout", "-q", "-b", "side")
+	gitRunFor(t, root, "commit", "-q", "--allow-empty", "-m", "side")
+	stale := gitRunFor(t, root, "rev-parse", "HEAD")
+	gitRunFor(t, root, "checkout", "-q", "main")
+	head := gitRunFor(t, root, "rev-parse", "HEAD")
+
+	writeOpsShaAndPage(t, root, stale)
+	if err := runRender(root, "", "none", nil); err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	snapshot, err := migrationmatrix.LoadRender(filepath.Join(root, renderRelative))
+	if err != nil {
+		t.Fatalf("load the snapshot: %v", err)
+	}
+	if snapshot.OpsSha != head {
+		t.Fatalf("ops_sha = %s, want the current merge-base %s (stale %s is not an ancestor)", snapshot.OpsSha, head, stale)
+	}
+}

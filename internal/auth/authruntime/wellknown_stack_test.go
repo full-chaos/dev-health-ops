@@ -10,20 +10,44 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/authconfig"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
+	"github.com/full-chaos/dev-health-ops/internal/auth/keyrotation"
+	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
+	"github.com/full-chaos/dev-health-ops/internal/token"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 const wellKnownTestIssuer = "https://auth.example.test"
 
+// staticKeyStates is a signing_keys table a test sets (no database).
+type staticKeyStates []token.KeyStateRow
+
+func (s staticKeyStates) KeyStates(context.Context) ([]token.KeyStateRow, error) { return s, nil }
+
+// useKeyStates makes configure read key states from source for this test.
+func useKeyStates(t *testing.T, source token.KeyStateSource) {
+	t.Helper()
+	previous := keyStateSource
+	keyStateSource = func(*pgxpool.Pool, authschema.ValidatedIdentifier) token.KeyStateSource { return source }
+	t.Cleanup(func() { keyStateSource = previous })
+}
+
 // wellKnownHandler builds the API handler through configure over a key-set
-// manifest (retired, retiring and active keys), with or without an issuer.
+// manifest (retired, retiring and active keys), with or without an issuer,
+// and an empty key state table (custody's states stand).
 func wellKnownHandler(t *testing.T, issuer string) http.Handler {
 	t.Helper()
-	dir := t.TempDir()
+	useKeyStates(t, staticKeyStates(nil))
+	return wellKnownStack(t, issuer, t.TempDir())
+}
+
+func wellKnownStack(t *testing.T, issuer, dir string) http.Handler {
+	t.Helper()
 	for _, name := range []string{"retired.pem", "retiring.pem", "active.pem"} {
 		writeSigningKey(t, dir, name)
 	}
@@ -127,4 +151,55 @@ func TestProductionStackServesNoDiscoveryWithoutAnIssuer(t *testing.T) {
 	if rec := wellKnownGet(handler, http.MethodGet, "/.well-known/jwks.json"); rec.Code != http.StatusOK {
 		t.Fatalf("JWKS without an issuer = %d, want 200", rec.Code)
 	}
+}
+
+// TestProductionStackPublishesTheDurableKeyStates: configure reads the key
+// states of the rotation state machine; a key its table marks compromised
+// leaves the JWKS at once and a key it does not hold is not published.
+func TestProductionStackPublishesTheDurableKeyStates(t *testing.T) {
+	schema, err := authschema.NewValidatedIdentifier("auth")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := keyStateSource(nil, schema).(*keyrotation.Reader); !ok {
+		t.Fatal("configure does not read key states from the signing_keys table")
+	}
+	dir := t.TempDir()
+	states := &mutableKeyStates{}
+	useKeyStates(t, states)
+	handler := wellKnownStack(t, wellKnownTestIssuer, dir)
+	custody, err := token.CustodyKeys(context.Background(), token.FileConfig{KeySetPath: filepath.Join(dir, "keyset.json")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	public := map[string]token.Key{}
+	for _, key := range custody {
+		public[key.KeyID] = key
+	}
+	states.set(staticKeyStates{
+		{KeyID: "auth-active", State: token.StateActive, PublicKey: public["auth-active"].PublicKey},
+		{KeyID: "auth-retiring", State: token.StateCompromised, PublicKey: public["auth-retiring"].PublicKey},
+	})
+	jwks := wellKnownGet(handler, http.MethodGet, "/.well-known/jwks.json")
+	body := jwks.Body.String()
+	if jwks.Code != http.StatusOK || !strings.Contains(body, "auth-active") || strings.Contains(body, "auth-retiring") || strings.Contains(body, "auth-retired") {
+		t.Fatalf("JWKS = %d %s; want only auth-active", jwks.Code, body)
+	}
+}
+
+type mutableKeyStates struct {
+	mu   sync.Mutex
+	rows staticKeyStates
+}
+
+func (m *mutableKeyStates) set(rows staticKeyStates) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.rows = rows
+}
+
+func (m *mutableKeyStates) KeyStates(context.Context) ([]token.KeyStateRow, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.rows, nil
 }

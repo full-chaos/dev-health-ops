@@ -6,6 +6,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/changefailure"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/prrework"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/rowview"
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
@@ -90,5 +91,11 @@ func dedupFromSource(table string) string {
 	if !liverow.Registered(table) {
 		return newest
 	}
-	return fmt.Sprintf("(SELECT * FROM %s WHERE %s) AS %s", newest, liverow.Predicate(table, ""), table)
+	conditions := liverow.Predicate(table, "")
+	if rowview.Has(table) {
+		// Each item once in the organization (CHAOS-8863): the legacy rows and the org view. row_view is in the key
+		// above, so a legacy retraction row never replaces an org row of the same (scope, team, day).
+		conditions += " AND " + rowview.OrgPredicate(table, "")
+	}
+	return fmt.Sprintf("(SELECT * FROM %s WHERE %s) AS %s", newest, conditions, table)
 }

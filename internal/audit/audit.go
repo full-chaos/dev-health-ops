@@ -175,7 +175,13 @@ const OffStreamSessionLifecycle = "session_lifecycle"
 // new password) is a provisioning event written by the identity store.
 const OffStreamLinkCredentialLifecycle = "link_credential_lifecycle"
 
-var offStreamReasons = map[string]bool{OffStreamSessionLifecycle: true, OffStreamLinkCredentialLifecycle: true}
+// OffStreamSigningKeyLifecycle marks a signing-key rotation verb: key states
+// are not a provisioning aggregate.
+const OffStreamSigningKeyLifecycle = "signing_key_lifecycle"
+
+var offStreamReasons = map[string]bool{
+	OffStreamSessionLifecycle: true, OffStreamLinkCredentialLifecycle: true, OffStreamSigningKeyLifecycle: true,
+}
 
 // TxOps is what a mutation may do inside the transaction.
 //

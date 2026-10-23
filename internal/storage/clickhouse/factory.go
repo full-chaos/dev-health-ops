@@ -27,16 +27,18 @@ type Config struct {
 	DialTimeout     time.Duration
 	ReadTimeout     time.Duration
 	ConnMaxLifetime time.Duration
+	// Settings are session settings sent with every query; they win over DSN parameters.
+	Settings map[string]any
 }
 
 func DefaultConfig(dsn string) Config {
 	return Config{
 		DSN:             dsn,
 		MaxOpenConns:    4,
-		MaxIdleConns:    2,
-		DialTimeout:     5 * time.Second,
+		MaxIdleConns:    4,
+		DialTimeout:     PoolDialTimeout(),
 		ReadTimeout:     30 * time.Second,
-		ConnMaxLifetime: 30 * time.Minute,
+		ConnMaxLifetime: PoolConnMaxLifetime(),
 	}
 }
 
@@ -74,6 +76,12 @@ func clickHouseOptions(config Config) (*clickhouse.Options, error) {
 	options.DialTimeout = config.DialTimeout
 	options.ReadTimeout = config.ReadTimeout
 	options.ConnMaxLifetime = config.ConnMaxLifetime
+	for name, value := range config.Settings {
+		if options.Settings == nil {
+			options.Settings = clickhouse.Settings{}
+		}
+		options.Settings[name] = value
+	}
 	options.Debug = false
 	options.Debugf = nil
 	options.Logger = nil
@@ -81,6 +89,7 @@ func clickHouseOptions(config Config) (*clickhouse.Options, error) {
 	options.HTTPProxyURL = nil
 	options.TransportFunc = func(t *http.Transport) (http.RoundTripper, error) {
 		t.Proxy = nil
+		KeepIdleConns(t, config.MaxIdleConns)
 		return t, nil
 	}
 	return options, nil
@@ -107,5 +116,8 @@ func Open(ctx context.Context, config Config) (driver.Conn, error) {
 		_ = connection.Close()
 		return nil, secrets.WithRedactedCauseAlso(ErrUnavailable, config.DSN, err, resolved...)
 	}
-	return newSpanConn(connection, dbspan.NewEmitter(dbspan.SystemClickHouse, "")), nil
+	if config.MaxIdleConns > 1 {
+		WarmPool(ctx, connection.Ping, config.MaxIdleConns)
+	}
+	return newSpanConn(retryConn{connection}, dbspan.NewEmitter(dbspan.SystemClickHouse, "")), nil
 }

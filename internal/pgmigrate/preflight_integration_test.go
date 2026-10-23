@@ -313,6 +313,7 @@ func sequence(steps ...func(*pgx.Conn)) func(*pgx.Conn) {
 // TestPreflightMatchesTheHookOverTheStateGrid is the mechanism oracle over states dho
 // builds itself.
 func TestPreflightMatchesTheHookOverTheStateGrid(t *testing.T) {
+	pgmigrate.UseFrozenChain(t) // the frozen goldens end at pgmigrate.FrozenHead
 	ctx := context.Background()
 	productionEnv(t)
 	t.Setenv(pgmigrate.AuthSchemaEnv, "auth")
@@ -639,6 +640,7 @@ const preflightStatesSHA256 = "4b768999dba8305dadb61883bc5b20315b934446e36c60b52
 // (frozen_states_integration_test.go), restored and asserted before use; the verdict is compared with
 // the real hook on a copy. No Python starts here (CHAOS-7797).
 func TestPreflightMatchesTheHookOverFrozenAlembicStates(t *testing.T) {
+	pgmigrate.UseFrozenChain(t) // the frozen goldens end at pgmigrate.FrozenHead
 	ctx := context.Background()
 	productionEnv(t)
 	t.Setenv("MIGRATION_DATABASE_URI", "")

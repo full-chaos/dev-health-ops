@@ -418,7 +418,7 @@ func TestEarlierAttemptOfAnUnknownErrorStillRetries(t *testing.T) {
 		BuildExecutor: githubRouteExecutor(now, collectErrorHandler{err: errors.New("boom")},
 			doerFunc(func(*http.Request) (*http.Response, error) { return nil, errors.New("unexpected") }), &builds),
 	}
-	execution := providerExecution(repository.unit, now, 2)
+	execution := providerExecution(repository.unit, now, 1)
 	execution.Definition.MaxAttempts = 5
 
 	if err := handler.Work(context.Background(), execution); err == nil {

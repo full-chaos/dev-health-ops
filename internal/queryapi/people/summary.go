@@ -21,6 +21,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pytime"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/deltarule"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/quadrant"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/rowview"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/timewindow"
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
@@ -600,7 +601,8 @@ func fetchPersonCollaboration(ctx context.Context, client QueryClient, identitie
           AND org_id = {org_id:String}
           AND %[3]s
         %[2]s
-    `, latestUserMetrics, settingsMaxExecutionTime(), liverow.Predicate("work_item_user_metrics_daily", ""))
+    `, latestUserMetrics, settingsMaxExecutionTime(),
+		rowview.OrgPredicate("work_item_user_metrics_daily", "")+" AND "+liverow.Predicate("work_item_user_metrics_daily", ""))
 	rows, err := client.Query(ctx, query, []dhclickhouse.Binding{
 		{Name: "start_day", Value: formatDay(startDay)},
 		{Name: "end_day", Value: formatDay(endDay)},

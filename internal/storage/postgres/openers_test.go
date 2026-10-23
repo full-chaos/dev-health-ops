@@ -53,6 +53,7 @@ var openers = map[string]struct {
 }{
 	"internal/admincli/admincli.go":                    {kindBoundary, "admin features seed"},
 	"internal/adminops/users.go":                       {kindBoundary, "admin users and orgs: the pool and the error redactor"},
+	"internal/auth/usersbackfill/command.go":           {kindBoundary, "auth users-backfill: the pool, with the pool-open error redacted"},
 	"internal/backfillrun/command.go":                  {kindBoundary, "backfill run"},
 	"internal/fixturescli/fixturescli.go":              {kindBoundary, "fixtures finalize-synthetic-sync"},
 	"internal/fixturescli/recommendations_backstop.go": {kindBoundary, "fixtures generate --backstop-database"},
@@ -73,6 +74,7 @@ var openers = map[string]struct {
 	"internal/rivermigrate/roles.go":                   {kindDiscarded, "migrate roles' Authenticate closure: the connect error is inspected for SQLSTATE 28P01 only (a wrong password) and its text is never printed or logged; the message names a role label"},
 	"internal/testsupport/containers/remote.go":        {kindTest, "test containers"},
 	"internal/testsupport/pgschema/pgschema.go":        {kindTest, "test schema helper"},
+	"internal/testsupport/usertokens/usertokens.go":    {kindTest, "user-token proof: a pool that refuses every connection and counts the attempts"},
 	"internal/testsupport/venueoracle/venueoracle.go":  {kindTest, "venue oracle harness"},
 	"internal/testsupport/venueoracle/gosubstrate.go":  {kindTest, "venue oracle harness: the Go-built schema of a frozen venue"},
 	"tests/compatibility/river/go/probe.go":            {kindTest, "compatibility probe"},

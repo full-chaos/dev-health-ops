@@ -231,12 +231,10 @@ func TestAcceptBatchAgainstFaultsAndEdgeCases(t *testing.T) {
 		}
 	})
 
-	// An offset past int64 is a valid pydantic int. Python's limiter charges
-	// the request first; the 500 comes later, when asyncpg binds the page
-	// query (after the batch lookup on GET /batches/{id}). So a burst of
-	// them exhausts the read limit (measured against the real FastAPI
-	// router: 120 answered, then 429), and an unknown batch answers 404.
-	t.Run("an offset past int64 is charged to the limiter before its 500", func(t *testing.T) {
+	// An offset past int64 is refused by the range check like any other bad
+	// offset, so the 422 comes before slowapi's wrapper and a burst of them is
+	// never charged to the limiter (an unknown batch is not looked up either).
+	t.Run("an offset past int64 answers 422 and is never charged to the limiter", func(t *testing.T) {
 		orgID := uuid.New().String()
 		const token = "fcpush_int64_offset_limiter_token"
 		seedIngestToken(t, ctx, pool, orgID, "github", "acme/repo", token)
@@ -260,18 +258,15 @@ func TestAcceptBatchAgainstFaultsAndEdgeCases(t *testing.T) {
 		for range 125 {
 			statuses[do(deps.handleGetBatch(), "/api/v1/external-ingest/batches/"+unknown+"?errorOffset="+huge, unknown)]++
 		}
-		// The limiter is slowapi's fixed window (per token and exact path): the
-		// first 120 pass as 404s and the rest are limited, however long the
-		// burst takes inside the window.
-		if statuses[http.StatusNotFound] != 120 || statuses[http.StatusTooManyRequests] != 5 {
-			t.Fatalf("GET /batches/{id} oversized errorOffset x125 answered %v, want 120x404 then 5x429", statuses)
+		if statuses[http.StatusUnprocessableEntity] != 125 {
+			t.Fatalf("GET /batches/{id} oversized errorOffset x125 answered %v, want 125x422", statuses)
 		}
 		statuses = map[int]int{}
 		for range 125 {
 			statuses[do(deps.handleListBatches(), "/api/v1/external-ingest/batches?offset="+huge, "")]++
 		}
-		if statuses[http.StatusInternalServerError] != 120 || statuses[http.StatusTooManyRequests] != 5 {
-			t.Fatalf("GET /batches oversized offset x125 answered %v, want 120x500 then 5x429", statuses)
+		if statuses[http.StatusUnprocessableEntity] != 125 {
+			t.Fatalf("GET /batches oversized offset x125 answered %v, want 125x422", statuses)
 		}
 	})
 

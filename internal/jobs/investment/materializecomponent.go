@@ -202,6 +202,8 @@ func MaterializeComponent(input MaterializeComponentInput) (MaterializeComponent
 		PRChurn: input.PRChurn, CommitChurn: input.CommitChurn, ActiveHours: input.ActiveHours,
 	})
 
+	effortBasis := units.ComputeEffortBasis(commitNodeIDs, input.CommitChurn, effort)
+
 	structuralEvidenceJSON, err := marshalStructuralEvidence(issueNodeIDs, prNodeIDs, commitNodeIDs, input.Component.Edges)
 	if err != nil {
 		return MaterializeComponentResult{}, err
@@ -234,6 +236,7 @@ func MaterializeComponent(input MaterializeComponentInput) (MaterializeComponent
 		Provider:                 provider,
 		EffortMetric:             effort.Metric,
 		EffortValue:              effort.Value,
+		EffortBasis:              effortBasis,
 		ThemeDistribution:        map[string]float64{},
 		SubcategoryDistribution:  map[string]float64{},
 		StructuralEvidenceJSON:   structuralEvidenceJSON,

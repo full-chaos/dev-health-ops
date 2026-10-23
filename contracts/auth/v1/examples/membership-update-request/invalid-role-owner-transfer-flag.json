@@ -1,0 +1,6 @@
+{
+  "schema_version": "membership-update-request.v1",
+  "expected_revision": 2,
+  "role": "admin",
+  "transfer_ownership": true
+}

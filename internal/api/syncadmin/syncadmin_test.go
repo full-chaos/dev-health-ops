@@ -4,7 +4,6 @@ import (
 	"context"
 	"io"
 	"log/slog"
-	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -400,9 +399,6 @@ func TestSelectionOwnerIsStrOfOwnerOrGroup(t *testing.T) {
 func TestPageLimitsAreTheQueryBounds(t *testing.T) {
 	if pageLimitMin != 1 || pageLimitMax != 200 || pageOffsetGe != 0 {
 		t.Fatal("limit ge=1 le=200, offset ge=0")
-	}
-	if _, ok := offsetValue(new(big.Int).Lsh(big.NewInt(1), 63)); ok {
-		t.Fatal("an offset past int8 cannot be bound")
 	}
 }
 

@@ -1,0 +1,6 @@
+{
+  "schema_version": "invite-create-request.v1",
+  "email": "new.member@example.com",
+  "role": "member",
+  "ttl_seconds": 31536000
+}

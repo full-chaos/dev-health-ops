@@ -114,10 +114,10 @@ func ResolveArtifacts(ctx context.Context, client QueryClient, orgID string, fil
         )
         GROUP BY node_type, node_id
         ORDER BY degree DESC, node_id ASC
-        LIMIT {limit:UInt64}
+        LIMIT {limit_n:UInt64}
     `, where.sql, where.sql)
 
-	bindings := append(where.bindings, clickhouse.Binding{Name: "limit", Value: limit})
+	bindings := append(where.bindings, clickhouse.Binding{Name: "limit_n", Value: limit})
 
 	rows, err := client.Query(ctx, query, bindings)
 	if err != nil {

@@ -532,17 +532,17 @@ FROM org_feature_overrides ORDER BY feature_id::text, org_id::text`)
 // governanceRuling retired the Python reference of the four feature-override
 // requests that name a malformed id: Python answered 500 for them, the Go api
 // answers a named 400 (the 500 was the bug).
-const governanceRuling = "CHAOS-10593 and CHAOS-10609 (fcs lead decisions 2026-10-22): a malformed id of the request's own input answers a named 400, not the old Python 500"
+const governanceRuling = "CHAOS-10593, CHAOS-10609 and CHAOS-10656 (fcs lead decisions 2026-10-22): a malformed id of the request's own input answers a named 400, and an offset past int64 answers the pinned 422 range refusal, not the old Python 500"
 
 // governancePinSHA256 is the digest of testdata/governance/governance.go-pin.json.
-const governancePinSHA256 = "b73ac661d2af03ed9f74e3c88023cb2be9d6a5fc207b254fc25b8b8a0463cc12"
+const governancePinSHA256 = "05baee806eebd63905cc42c22943b08b0f21a43a391d9ddfd8d4ea2a3108f20e"
 
 func retiredGovernanceRequest(request venueoracle.Request) bool {
 	switch request.Name {
 	case "overrides list malformed org", "W override create malformed org", "W override patch malformed id", "W override delete malformed",
 		"audit get malformed id", "audit user activity malformed", "audit list user malformed", "platform audit user malformed",
 		"ip get malformed", "ip get check path is a uuid error", "W ip delete malformed",
-		"W override create malformed flag id", "W flag patch malformed":
+		"W override create malformed flag id", "W flag patch malformed", "audit list huge offset":
 		return true
 	}
 	return false

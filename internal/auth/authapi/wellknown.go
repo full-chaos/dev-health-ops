@@ -30,8 +30,9 @@ const (
 // wellKnownMaxAge bounds how long a verifier or an intermediary may reuse a
 // key set or discovery document. It is far below the overlap a rotation
 // leaves a retiring key published for, so a verifier never holds a document
-// that omits a key still signing live tokens.
-const wellKnownMaxAge = 300
+// that omits a key still signing live tokens. The rotation floors are built
+// on the same constant.
+const wellKnownMaxAge = int(token.JWKSCacheTTL / time.Second)
 
 // KeySetSource reads the current signing key set (*token.Signer).
 type KeySetSource interface {

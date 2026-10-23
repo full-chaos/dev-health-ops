@@ -148,7 +148,7 @@ func (h *handlers) listRetentionPolicies(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	org, err := pythonparity.ParseUUID(orgID)
-	if err != nil || offset < 0 {
+	if err != nil {
 		policy.WriteInternal(w)
 		return
 	}

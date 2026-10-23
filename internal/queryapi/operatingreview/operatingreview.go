@@ -150,6 +150,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graphqldate"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/investmentexplain"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/rowview"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
@@ -456,7 +457,8 @@ func fetchWorkItems(ctx context.Context, client QueryClient, orgID string, teams
           WHERE org_id = {org_id:String}
             ` + teamFilter + `
             AND day >= {start:Date} AND day < {end:Date}
-          GROUP BY day, provider, work_scope_id` + teamGroup + liveRowHaving("work_item_metrics_daily") + `
+            AND ` + rowview.OrgPredicate("work_item_metrics_daily", "") + `
+          GROUP BY day, provider, work_scope_id, row_view` + teamGroup + liveRowHaving("work_item_metrics_daily") + `
         )
         GROUP BY day
         ORDER BY day`
@@ -519,7 +521,8 @@ func fetchStateDurations(ctx context.Context, client QueryClient, orgID string, 
           WHERE org_id = {org_id:String}
             ` + teamFilter + `
             AND day >= {start:Date} AND day < {end:Date}
-          GROUP BY day, provider, work_scope_id, status` + teamGroup + liveRowHaving("work_item_state_durations_daily") + `
+            AND ` + rowview.OrgPredicate("work_item_state_durations_daily", "") + `
+          GROUP BY day, provider, work_scope_id, status, row_view` + teamGroup + liveRowHaving("work_item_state_durations_daily") + `
         )
         GROUP BY status`
 

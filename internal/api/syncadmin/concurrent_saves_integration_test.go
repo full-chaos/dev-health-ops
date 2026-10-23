@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"testing"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/providersync"
 )
 
 // waitForSavesAtTheSelectionLock waits until `want` sessions wait for an
@@ -54,7 +56,7 @@ func TestTwoSavesAtOnceLoseNoTarget(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := selectionLock(ctx, holder, v.org, parent.integration); err != nil {
+		if err := providersync.LockIntegrationSelection(ctx, holder, v.org, parent.integration); err != nil {
 			t.Fatal(err)
 		}
 		path := "/api/v1/admin/sync-configs/" + parent.config.String()

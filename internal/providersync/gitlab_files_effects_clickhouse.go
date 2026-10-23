@@ -65,36 +65,86 @@ func (sink GitLabFilesClickHouseEffects) WriteEffect(ctx context.Context, claim 
 func (sink GitLabFilesClickHouseEffects) preserveExistingContents(
 	ctx context.Context, claim Claim, rows []gitFileRow,
 ) error {
+	pathsByRepo := map[string][]string{}
+	repoOrder := []string{}
+	seen := map[[2]string]struct{}{}
 	for index := range rows {
 		if rows[index].Contents != nil {
 			continue
 		}
-		result, err := sink.Conn.Query(ctx, `
-SELECT contents FROM git_files FINAL
-WHERE org_id = ? AND repo_id = ? AND path = ?`,
-			claim.OrgID, rows[index].RepoID, rows[index].Path)
-		if err != nil {
-			return err
+		key := [2]string{rows[index].RepoID, rows[index].Path}
+		if _, dup := seen[key]; dup {
+			continue
 		}
-		var existing *string
-		found := false
-		for result.Next() {
-			if err := result.Scan(&existing); err != nil {
-				result.Close()
+		seen[key] = struct{}{}
+		if _, ok := pathsByRepo[rows[index].RepoID]; !ok {
+			repoOrder = append(repoOrder, rows[index].RepoID)
+		}
+		pathsByRepo[rows[index].RepoID] = append(pathsByRepo[rows[index].RepoID], rows[index].Path)
+	}
+	existing := map[[2]string]*string{}
+	for _, repoID := range repoOrder {
+		for _, chunk := range chunkPathsByRenderedBytes(pathsByRepo[repoID], gitLabFilesPathsPerStatementBytes) {
+			if err := sink.readExistingContents(ctx, claim.OrgID, repoID, chunk, existing); err != nil {
 				return err
 			}
-			found = true
 		}
-		if err := result.Err(); err != nil {
-			result.Close()
-			return err
+	}
+	for index := range rows {
+		if rows[index].Contents != nil {
+			continue
 		}
-		result.Close()
-		if found && existing != nil {
-			rows[index].Contents = existing
+		if found := existing[[2]string{rows[index].RepoID, rows[index].Path}]; found != nil {
+			rows[index].Contents = found
 		}
 	}
 	return nil
+}
+
+// gitLabFilesPathsPerStatementBytes bounds the rendered path array of one
+// readback statement, well under ClickHouse's max_query_size.
+const gitLabFilesPathsPerStatementBytes = 128 * 1024
+
+func (sink GitLabFilesClickHouseEffects) readExistingContents(
+	ctx context.Context, orgID, repoID string, paths []string, existing map[[2]string]*string,
+) error {
+	result, err := sink.Conn.Query(ctx, `
+SELECT path, contents FROM git_files FINAL
+WHERE org_id = ? AND repo_id = ? AND path IN ?`,
+		orgID, repoID, paths)
+	if err != nil {
+		return err
+	}
+	defer result.Close()
+	for result.Next() {
+		var path string
+		var contents *string
+		if err := result.Scan(&path, &contents); err != nil {
+			return err
+		}
+		existing[[2]string{repoID, path}] = contents
+	}
+	return result.Err()
+}
+
+// chunkPathsByRenderedBytes splits paths into consecutive chunks whose
+// quoted array literal stays within maxBytes (each byte may render as two).
+// A path that alone exceeds maxBytes gets its own chunk.
+func chunkPathsByRenderedBytes(paths []string, maxBytes int) [][]string {
+	var chunks [][]string
+	start, size := 0, 2
+	for i, path := range paths {
+		add := 2*len(path) + 4
+		if i > start && size+add > maxBytes {
+			chunks = append(chunks, paths[start:i])
+			start, size = i, 2
+		}
+		size += add
+	}
+	if start < len(paths) {
+		chunks = append(chunks, paths[start:])
+	}
+	return chunks
 }
 
 func (sink GitLabFilesClickHouseEffects) InspectEffect(ctx context.Context, claim Claim, effect EffectBatch) (EffectInspection, error) {

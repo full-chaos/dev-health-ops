@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fullchaos.dev/contracts/auth/v1/jsonschema/organization-create-request.v1.schema.json",
+  "title": "Auth Control Plane organization create request (v1 wire format)",
+  "description": "Body of an organization create call. It carries no id, status or owner: the id is minted by the server and the caller becomes the first owner member.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "slug",
+    "name"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "organization-create-request.v1",
+      "description": "Contract identifier. A reader MUST reject an unrecognised value (G-26: unknown denies)."
+    },
+    "slug": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{1,62}$",
+      "description": "Requested handle."
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120,
+      "description": "Display label."
+    }
+  }
+}

@@ -83,6 +83,9 @@ type InvestmentRecord struct {
 	// recorded (a run that did not persist evidence snippets): the row is then
 	// treated as complete by the skip-existing completeness check.
 	EvidenceQuoteCount *uint32
+	// EffortBasis (migration 140) is measured, partial_capped or unmeasured. "" is not
+	// recorded (a row written before the column), never "measured".
+	EffortBasis string
 }
 
 // RepoEffortRecord is one work_unit_repo_effort row -- the Go counterpart of
@@ -176,7 +179,7 @@ func (w *Writer) WriteInvestments(ctx context.Context, orgID string, records []I
 		subcategory_distribution_json, structural_evidence_json, evidence_quality,
 		evidence_quality_band, categorization_status, categorization_errors_json,
 		categorization_model_version, categorization_input_hash,
-		categorization_run_id, computed_at, org_id, evidence_quote_count
+		categorization_run_id, computed_at, org_id, evidence_quote_count, effort_basis
 	)`)
 	if err != nil {
 		return 0, fmt.Errorf("prepare work_unit_investments batch: %w", err)
@@ -193,6 +196,7 @@ func (w *Writer) WriteInvestments(ctx context.Context, orgID string, records []I
 			record.CategorizationModelVersion, record.CategorizationInputHash,
 			record.CategorizationRunID, record.ComputedAt.UTC(), orgID,
 			record.EvidenceQuoteCount,
+			record.EffortBasis,
 		); err != nil {
 			return 0, fmt.Errorf("append work_unit_investments row: %w", err)
 		}

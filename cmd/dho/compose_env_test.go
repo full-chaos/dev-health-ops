@@ -368,7 +368,7 @@ func TestComposeEnvGuardSeesPartSetCoordinatorGroup(t *testing.T) {
 	if start < 0 {
 		t.Fatal("go-stream-ingest not found")
 	}
-	const merge = "<<: [*go-worker-no-coordinator, *go-worker-env-base]"
+	const merge = "<<: [*go-worker-no-coordinator, *go-worker-no-queue, *go-worker-env-base]"
 	at := strings.Index(text[start:], merge)
 	if at < 0 {
 		t.Fatal("the plant needs go-stream-ingest to blank its coordinator group through the merge: it has changed")

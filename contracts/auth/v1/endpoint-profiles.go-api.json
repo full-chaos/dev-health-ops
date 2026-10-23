@@ -1944,7 +1944,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/integrationsadmin/routes.go",
-        "line": 80
+        "line": 81
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -2176,7 +2176,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/integrationsadmin/routes.go",
-        "line": 82
+        "line": 83
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -2234,7 +2234,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/integrationsadmin/routes.go",
-        "line": 86
+        "line": 87
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -2292,7 +2292,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/integrationsadmin/routes.go",
-        "line": 84
+        "line": 85
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -5648,23 +5648,13 @@
       "tenant_requirement": "org_scoped"
     },
     {
-      "accepted_credential_classes": [
-        "external_push_ingest_token"
-      ],
-      "classification": "protected",
+      "accepted_credential_classes": [],
+      "classification": "public",
       "gaps": [],
       "graphql_field_name": null,
       "id": "GET /api/v1/external-ingest/schemas [dev-health-ops-api @api]",
       "method": "GET",
-      "primary_validator": {
-        "anchor": {
-          "line": 143,
-          "note": "Pattern:",
-          "path": "internal/api/externalingest/deps.go"
-        },
-        "description": "The external-ingest handlers authenticate the push token in the Authorization header before any read or write."
-      },
-      "public_rationale": null,
+      "public_rationale": "Public schema document: the contract pushers code against; no tenant data and the same bytes for every caller; the only control is the per-address rate limit. The request-wide org-scope middleware still applies when a bearer and an X-Org-Id are sent (a non-member organisation is refused 403, as on every route); the handler's answer is global.",
       "reachable_validators": [
         {
           "anchor": {
@@ -5694,26 +5684,16 @@
         "line": 143
       },
       "surface_kind": "rest",
-      "tenant_requirement": "org_scoped"
+      "tenant_requirement": "none"
     },
     {
-      "accepted_credential_classes": [
-        "external_push_ingest_token"
-      ],
-      "classification": "protected",
+      "accepted_credential_classes": [],
+      "classification": "public",
       "gaps": [],
       "graphql_field_name": null,
       "id": "GET /api/v1/external-ingest/schemas/{schema_version} [dev-health-ops-api @api]",
       "method": "GET",
-      "primary_validator": {
-        "anchor": {
-          "line": 144,
-          "note": "Pattern:",
-          "path": "internal/api/externalingest/deps.go"
-        },
-        "description": "The external-ingest handlers authenticate the push token in the Authorization header before any read or write."
-      },
-      "public_rationale": null,
+      "public_rationale": "Public schema document: the contract pushers code against; no tenant data and the same bytes for every caller; the only control is the per-address rate limit. The request-wide org-scope middleware still applies when a bearer and an X-Org-Id are sent (a non-member organisation is refused 403, as on every route); the handler's answer is global.",
       "reachable_validators": [
         {
           "anchor": {
@@ -5743,7 +5723,7 @@
         "line": 144
       },
       "surface_kind": "rest",
-      "tenant_requirement": "org_scoped"
+      "tenant_requirement": "none"
     },
     {
       "accepted_credential_classes": [
@@ -6136,7 +6116,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/billing/edge.go",
-        "line": 111
+        "line": 105
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
@@ -6153,7 +6133,7 @@
       "service": "dev-health-ops-billing-edge",
       "source": {
         "file": "internal/api/billing/edge.go",
-        "line": 111
+        "line": 105
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
@@ -6348,7 +6328,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/billing/edge.go",
-        "line": 112
+        "line": 106
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
@@ -6365,7 +6345,7 @@
       "service": "dev-health-ops-billing-edge",
       "source": {
         "file": "internal/api/billing/edge.go",
-        "line": 112
+        "line": 106
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
@@ -6708,7 +6688,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/integrationsadmin/routes.go",
-        "line": 83
+        "line": 84
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -6766,7 +6746,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/integrationsadmin/routes.go",
-        "line": 87
+        "line": 88
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -6824,7 +6804,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/integrationsadmin/routes.go",
-        "line": 85
+        "line": 86
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -8158,7 +8138,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/integrationsadmin/routes.go",
-        "line": 81
+        "line": 82
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -8912,7 +8892,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/integrationsadmin/routes.go",
-        "line": 90
+        "line": 91
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -8970,7 +8950,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/integrationsadmin/routes.go",
-        "line": 88
+        "line": 89
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -9028,7 +9008,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/integrationsadmin/routes.go",
-        "line": 89
+        "line": 90
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -12246,7 +12226,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 110,
+          "line": 104,
           "note": "Pattern:",
           "path": "internal/api/billing/edge.go"
         },
@@ -12257,7 +12237,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/billing/edge.go",
-        "line": 110
+        "line": 104
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
@@ -12273,7 +12253,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 110,
+          "line": 104,
           "note": "Pattern:",
           "path": "internal/api/billing/edge.go"
         },
@@ -12284,7 +12264,7 @@
       "service": "dev-health-ops-billing-edge",
       "source": {
         "file": "internal/api/billing/edge.go",
-        "line": 110
+        "line": 104
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
@@ -12957,28 +12937,6 @@
         "description": "The webhook handler verifies the provider signature over the raw body before it enqueues."
       },
       "public_rationale": null,
-      "reachable_validators": [
-        {
-          "anchor": {
-            "line": 128,
-            "note": "func (s *Scope) OrgScope",
-            "path": "internal/api/policy/scope.go"
-          },
-          "description": "OrgScope (OrgIdMiddleware, installed around every api-listener route in service.go configureWith): reads the first Bearer value, authenticates it as the ops access token and checks X-Org-Id against it, whatever the route accepts.",
-          "is_intended_validator": false,
-          "reachable_but_not_owner": true
-        },
-        {
-          "anchor": {
-            "line": 221,
-            "note": "func (s *Scope) Impersonation",
-            "path": "internal/api/policy/scope.go"
-          },
-          "description": "Impersonation (ImpersonationMiddleware, installed with OrgScope): authenticates the Bearer value for a superuser and may replace the effective organization on any api-listener route.",
-          "is_intended_validator": false,
-          "reachable_but_not_owner": true
-        }
-      ],
       "route": "/api/v1/webhooks/github",
       "service": "dev-health-ops-api",
       "source": {
@@ -13006,28 +12964,6 @@
         "description": "The webhook handler verifies the provider signature over the raw body before it enqueues."
       },
       "public_rationale": null,
-      "reachable_validators": [
-        {
-          "anchor": {
-            "line": 128,
-            "note": "func (s *Scope) OrgScope",
-            "path": "internal/api/policy/scope.go"
-          },
-          "description": "OrgScope (OrgIdMiddleware, installed around every api-listener route in service.go configureWith): reads the first Bearer value, authenticates it as the ops access token and checks X-Org-Id against it, whatever the route accepts.",
-          "is_intended_validator": false,
-          "reachable_but_not_owner": true
-        },
-        {
-          "anchor": {
-            "line": 221,
-            "note": "func (s *Scope) Impersonation",
-            "path": "internal/api/policy/scope.go"
-          },
-          "description": "Impersonation (ImpersonationMiddleware, installed with OrgScope): authenticates the Bearer value for a superuser and may replace the effective organization on any api-listener route.",
-          "is_intended_validator": false,
-          "reachable_but_not_owner": true
-        }
-      ],
       "route": "/api/v1/webhooks/gitlab",
       "service": "dev-health-ops-api",
       "source": {
@@ -13055,28 +12991,6 @@
         "description": "The webhook handler verifies the provider signature over the raw body before it enqueues."
       },
       "public_rationale": null,
-      "reachable_validators": [
-        {
-          "anchor": {
-            "line": 128,
-            "note": "func (s *Scope) OrgScope",
-            "path": "internal/api/policy/scope.go"
-          },
-          "description": "OrgScope (OrgIdMiddleware, installed around every api-listener route in service.go configureWith): reads the first Bearer value, authenticates it as the ops access token and checks X-Org-Id against it, whatever the route accepts.",
-          "is_intended_validator": false,
-          "reachable_but_not_owner": true
-        },
-        {
-          "anchor": {
-            "line": 221,
-            "note": "func (s *Scope) Impersonation",
-            "path": "internal/api/policy/scope.go"
-          },
-          "description": "Impersonation (ImpersonationMiddleware, installed with OrgScope): authenticates the Bearer value for a superuser and may replace the effective organization on any api-listener route.",
-          "is_intended_validator": false,
-          "reachable_but_not_owner": true
-        }
-      ],
       "route": "/api/v1/webhooks/jira",
       "service": "dev-health-ops-api",
       "source": {
@@ -13088,7 +13002,7 @@
     },
     {
       "accepted_credential_classes": [
-        "pagerduty_oauth_credential"
+        "pagerduty_webhook_signature"
       ],
       "classification": "protected",
       "gaps": [],
@@ -13104,28 +13018,6 @@
         "description": "The PagerDuty webhook handler resolves the binding and verifies its stored signing secret over the raw body."
       },
       "public_rationale": null,
-      "reachable_validators": [
-        {
-          "anchor": {
-            "line": 128,
-            "note": "func (s *Scope) OrgScope",
-            "path": "internal/api/policy/scope.go"
-          },
-          "description": "OrgScope (OrgIdMiddleware, installed around every api-listener route in service.go configureWith): reads the first Bearer value, authenticates it as the ops access token and checks X-Org-Id against it, whatever the route accepts.",
-          "is_intended_validator": false,
-          "reachable_but_not_owner": true
-        },
-        {
-          "anchor": {
-            "line": 221,
-            "note": "func (s *Scope) Impersonation",
-            "path": "internal/api/policy/scope.go"
-          },
-          "description": "Impersonation (ImpersonationMiddleware, installed with OrgScope): authenticates the Bearer value for a superuser and may replace the effective organization on any api-listener route.",
-          "is_intended_validator": false,
-          "reachable_but_not_owner": true
-        }
-      ],
       "route": "/api/v1/webhooks/pagerduty/{binding_id}",
       "service": "dev-health-ops-api",
       "source": {

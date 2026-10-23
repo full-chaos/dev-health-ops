@@ -315,6 +315,7 @@ func TestLoadRejectsAnUndeclaredOverride(t *testing.T) {
 // site reads is exactly the four-surface drift CHAOS-3942 was.
 func TestEveryDeclaredOptionResolves(t *testing.T) {
 	distinct := map[string]string{
+		EnvUsersOwned:             "true",
 		EnvLogLevel:               "debug",
 		EnvShutdownTimeout:        "42s",
 		EnvHealthCheckTimeout:     "1500ms",
@@ -333,12 +334,14 @@ func TestEveryDeclaredOptionResolves(t *testing.T) {
 		EnvTokenIssuerURL:         "https://other-issuer.example.test",
 		EnvAccessTokenIssuer:      "other-issuer",
 		EnvAccessTokenAudience:    "other-audience",
+		EnvSocialLinkRoutes:       "true",
 		EnvTrustedProxies:         "10.0.0.5,192.168.0.0/16",
 		"SOCIAL_GITHUB_CLIENT_ID": "gh-client",
 		"SOCIAL_GITLAB_CLIENT_ID": "gl-client",
 		"SOCIAL_GOOGLE_CLIENT_ID": "google-client",
 	}
 	read := map[string]func(Config) string{
+		EnvUsersOwned:             func(c Config) string { return strconv.FormatBool(c.UsersOwned) },
 		EnvLogLevel:               func(c Config) string { return c.LogLevel.String() },
 		EnvShutdownTimeout:        func(c Config) string { return c.ShutdownTimeout.String() },
 		EnvHealthCheckTimeout:     func(c Config) string { return c.HealthCheckTimeout.String() },
@@ -357,6 +360,7 @@ func TestEveryDeclaredOptionResolves(t *testing.T) {
 		EnvTokenIssuerURL:         func(c Config) string { return c.TokenIssuerURL },
 		EnvAccessTokenIssuer:      func(c Config) string { return c.Session.AccessIssuer },
 		EnvAccessTokenAudience:    func(c Config) string { return c.Session.AccessAudience },
+		EnvSocialLinkRoutes:       func(c Config) string { return strconv.FormatBool(c.Session.SocialLinkRoutes) },
 		EnvTrustedProxies:         func(c Config) string { return itoa(int64(c.TrustedProxies.Len())) },
 		"SOCIAL_GITHUB_CLIENT_ID": func(c Config) string { return c.Social["github"].ID },
 		"SOCIAL_GITLAB_CLIENT_ID": func(c Config) string { return c.Social["gitlab"].ID },
@@ -387,6 +391,9 @@ func TestEveryDeclaredOptionResolves(t *testing.T) {
 			if option.Env == EnvSigningKeySetFile {
 				delete(env, EnvSigningKeyFile)
 				delete(env, EnvSigningKeyID)
+			}
+			if option.Env == EnvSocialLinkRoutes {
+				env[EnvAccessTokenSecret], env[EnvSessionSuccessorKey] = testAccessSecret, testSuccessorKey
 			}
 			env[option.Env] = value
 			cfg, err := Load(Spec{LookupEnv: lookupFrom(env)})
@@ -481,5 +488,15 @@ func TestIssuerURLPatternIsTheDiscoverySchemaPattern(t *testing.T) {
 	}
 	if schema.Properties.Issuer.Pattern != issuerURLPattern.String() {
 		t.Fatalf("issuer pattern drifted from discovery.v1: %q vs %q", issuerURLPattern.String(), schema.Properties.Issuer.Pattern)
+	}
+}
+
+func TestUsersOwnedRefusesAnythingButTrueOrFalse(t *testing.T) {
+	for _, value := range []string{"yes", "1", "on"} {
+		env := baseEnv()
+		env[EnvUsersOwned] = value
+		if _, err := Load(Spec{LookupEnv: lookupFrom(env)}); err == nil {
+			t.Fatalf("%s=%s loaded; want a refusal", EnvUsersOwned, value)
+		}
 	}
 }

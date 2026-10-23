@@ -39,6 +39,7 @@ and are not repeated here.
 | `audit-event.v1` | `jsonschema/audit-event.v1.schema.json` | `contracts.go` | `authclient/provisioning_event.py` (`parse_audit_event`) |
 | `endpoint-auth-profile.v1` | `jsonschema/endpoint-auth-profile.v1.schema.json` | `endpoint_auth_profile.go` | `authclient/contracts.py` (schema validation) |
 | `access-token.v1` | `jsonschema/access-token.v1.schema.json` | `access_token.go` (`ParseAccessToken`) | none |
+| `workload-token.v1` | `jsonschema/workload-token.v1.schema.json` | `workload_token.go` (`ParseWorkloadToken`) | none |
 
 `openapi/auth-v1.openapi.json` references the schemas. The TypeScript half lives in
 `dev-health-web` and reads the same schema files and fixtures; it is not part of

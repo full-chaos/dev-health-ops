@@ -44,6 +44,7 @@ var draftGatedJobs = [][2]string{
 	{"docker-images.yml", "go-build"},
 	{"docker-images.yml", "go-build-dho-arm64"},
 	{"go-auth-service.yml", "auth-changes"},
+	{"go-workers-compose-proof.yml", "go-workers-compose-proof"},
 	{"go.yml", "dind-smoke-test"},
 	{"go.yml", "go-auth-compose-proof"},
 	{"go.yml", "go-auth-web-proxy-proof"},

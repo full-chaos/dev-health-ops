@@ -151,6 +151,25 @@ func (h *handlers) updateSyncConfigTx(ctx context.Context, tx pgx.Tx, org string
 	if err != nil {
 		return nil, err
 	}
+	// Every save of a config that has an integration takes the selection
+	// locks first, then reads the config again: the stored list and the
+	// stored options the save merges into are the ones it changes. Lock
+	// order of a save: the selection locks, the rows of the integration, the
+	// row of the configuration, then the rows of its children in id order
+	// (cascadeToChildren).
+	if config.IntegrationID != nil {
+		if err := lockConfigSelections(ctx, tx, org, config); err != nil {
+			return nil, err
+		}
+		config, err = scanSyncConfig(tx.QueryRow(ctx,
+			`SELECT `+syncConfigColumns+` FROM sync_configurations WHERE org_id = $1 AND id = $2`, org, id))
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, errConfigNotFound
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
 	storedTargetsValue, err := decodeStored(config.SyncTargets)
 	if err != nil {
 		return nil, err
@@ -165,8 +184,9 @@ func (h *handlers) updateSyncConfigTx(ctx context.Context, tx pgx.Tx, org string
 	// the save stores the submitted targets that were stored before or that
 	// it adds to the list the server shows now (change.stored): a gated
 	// target that is in the submitted list only because its row is on is not
-	// stored and does not refuse the save. The selection lock is taken here,
-	// before the rows are read, and held to the end of the transaction.
+	// stored and does not refuse the save. The selection locks were taken
+	// above, before the rows are read, and are held to the end of the
+	// transaction.
 	rowsOwn := rowsOwnSelection(config)
 	var change selectionChange
 	// newStored is the list this save stores; the child cascade writes the
@@ -175,36 +195,6 @@ func (h *handlers) updateSyncConfigTx(ctx context.Context, tx pgx.Tx, org string
 	var gateTargets []pyjson.Value
 	switch {
 	case rowsOwn && in.syncTargetsSet:
-		if err := selectionLock(ctx, tx, org, *config.IntegrationID); err != nil {
-			return nil, err
-		}
-		// The configuration was read before the lock, so another save of
-		// this integration may have stored a new list since. Read it again
-		// now: every save that computes a change takes the selection lock
-		// first, so the stored list, the rows and the shown list this save
-		// computes its change from are the ones it changes. The read takes
-		// no row lock: the row of the configuration is locked by its UPDATE,
-		// after the rows of the integration, as in a save with no list.
-		// Lock order of a save: the selection lock of the integration, the
-		// rows of the integration, the row of the configuration, then the
-		// rows of its children in id order (cascadeToChildren).
-		config, err = scanSyncConfig(tx.QueryRow(ctx,
-			`SELECT `+syncConfigColumns+` FROM sync_configurations WHERE org_id = $1 AND id = $2`, org, id))
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, errConfigNotFound
-		}
-		if err != nil {
-			return nil, err
-		}
-		if !rowsOwnSelection(config) {
-			return nil, fmt.Errorf("sync configuration %s stopped being a whole-integration configuration during the save", id)
-		}
-		if storedTargetsValue, err = decodeStored(config.SyncTargets); err != nil {
-			return nil, err
-		}
-		if storedOptionsValue, err = decodeStored(config.SyncOptions); err != nil {
-			return nil, err
-		}
 		enabled, err := enabledDatasetKeysByIntegration(ctx, tx, org, []uuid.UUID{*config.IntegrationID})
 		if err != nil {
 			return nil, err

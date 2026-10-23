@@ -286,7 +286,7 @@ func (s *Service) authorizeAdmitted(ctx context.Context, admitted StoredProvider
 		s.refused(ctx, routeAuthorize, admitted.ID, failure)
 		return AuthorizeResult{}, failure
 	}
-	s.succeeded(ctx, routeAuthorize, admitted.ID, nil)
+	s.succeeded(ctx, routeAuthorize, admitted.ID)
 	return result, nil
 }
 
@@ -380,7 +380,7 @@ func (s *Service) callbackAdmitted(ctx context.Context, admitted StoredProvider,
 		s.refused(ctx, routeCallback, admitted.ID, failure)
 		return Login{}, clear, failure
 	}
-	s.succeeded(ctx, routeCallback, admitted.ID, &login.PrincipalID)
+	s.succeeded(ctx, routeCallback, admitted.ID)
 	return login, clear, nil
 }
 
@@ -401,15 +401,12 @@ func (s *Service) record(ctx context.Context, route, outcome string, reason Reas
 		attribute.String("outcome", outcome), attribute.String("reason", string(reason))))
 }
 
-// succeeded counts a success and writes its one log line. principal is the
-// signed-in account of a callback; an authorize has none.
-func (s *Service) succeeded(ctx context.Context, route string, providerID uuid.UUID, principal *uuid.UUID) {
+// succeeded counts a success and writes its one log line, which names no
+// account.
+func (s *Service) succeeded(ctx context.Context, route string, providerID uuid.UUID) {
 	s.record(ctx, route, outcomeSuccess, ReasonAccepted)
 	attrs := []any{"route", route, "outcome", outcomeSuccess, "reason", string(ReasonAccepted),
 		"provider_id", providerID.String(), "request_id", requestid.Wire(ctx)}
-	if principal != nil {
-		attrs = append(attrs, "principal_id", principal.String())
-	}
 	s.cfg.Logger.InfoContext(ctx, "auth oidc: request succeeded", attrs...)
 }
 

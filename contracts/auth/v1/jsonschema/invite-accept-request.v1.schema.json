@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fullchaos.dev/contracts/auth/v1/jsonschema/invite-accept-request.v1.schema.json",
+  "title": "Auth Control Plane invite accept request (v1 wire format)",
+  "description": "Body of an invite accept call. The token is an org_invite_token credential (contracts/auth/v1/credential-classes.json): bound to one invitee and one organization, stored hashed, valid for this purpose only. The caller supplies no address.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "token"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "invite-accept-request.v1",
+      "description": "Contract identifier. A reader MUST reject an unrecognised value (G-26: unknown denies)."
+    },
+    "token": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{32}\\.[0-9a-f]{64}$",
+      "description": "The org_invite_token credential: 32 lowercase hex characters, a dot, 64 lowercase hex characters."
+    }
+  }
+}

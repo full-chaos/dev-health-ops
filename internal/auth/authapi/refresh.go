@@ -148,7 +148,7 @@ func (h handlers) refresh(w http.ResponseWriter, r *http.Request) {
 		}
 		role = roleText(value, member)
 	}
-	access, err := h.Issuer.Access(Grant{
+	access, err := h.Issuer.AccessContext(ctx, Grant{
 		PrincipalID: record.PrincipalID, OrganizationID: record.OrganizationID, Role: role,
 		SessionID: record.ID, User: user,
 	})

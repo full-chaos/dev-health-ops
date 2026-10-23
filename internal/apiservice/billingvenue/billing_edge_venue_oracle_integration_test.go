@@ -88,6 +88,7 @@ func TestVenueOracleBillingEdge(t *testing.T) {
 
 	receipt := ""
 	// The health grid: 3 secrets x postgres = 16 scenarios, GET and HEAD.
+	healthPin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/billing-edge-health.go-pin.json", SHA256: edgeHealthPinSHA256, Ruling: edgeHealthRuling})
 	scenarios := 0
 	for mask := 0; mask < 8; mask++ {
 		for _, postgresUp := range []bool{true, false} {
@@ -113,10 +114,13 @@ func TestVenueOracleBillingEdge(t *testing.T) {
 				{Name: name + " HEAD /health", Method: "HEAD", Path: "/health", Headers: map[string]string{}},
 			}
 			python := golden.Python(t, venue, requests)
-			receipt += venueoracle.Diff(t, edge(stripeKey, webhookSecret, licenseKey, pool), requests, python, venueoracle.DiffOptions{Golden: golden})
+			receipt += venueoracle.Diff(t, edge(stripeKey, webhookSecret, licenseKey, pool), requests, python, venueoracle.DiffOptions{
+				Golden: golden, Retire: func(venueoracle.Request) bool { return true }, Pin: healthPin,
+			})
 			scenarios++
 		}
 	}
+	healthPin.Finish(t)
 
 	// Fully configured: the webhook and the 404 grid. The stamp is an hour
 	// ahead of the edge's fixed clock: a signature timestamp is refused only
@@ -221,3 +225,11 @@ func TestVenueOracleBillingEdge(t *testing.T) {
 	golden.Finish(t)
 	t.Logf("health scenarios %d (x GET and HEAD), grid requests %d, SAME %d\n%s", scenarios, len(requests), strings.Count(receipt, "SAME"), receipt)
 }
+
+// edgeHealthRuling retired the Python reference of the health grid: the public
+// answer names no server-side secret or service state, so Python's services
+// object is removed (a stricter divergence, D6129); status and HEAD are kept.
+const edgeHealthRuling = "CHAOS-10732 (D6129): the public edge health answer carries no secret or service state; Python's services object is removed, Go's answer is pinned"
+
+// edgeHealthPinSHA256 is the digest of testdata/billing-edge-health.go-pin.json.
+const edgeHealthPinSHA256 = "a6ac7cb0aa4972a9213009cd2b3591237ae516f31e2763232d305d3328d89756"

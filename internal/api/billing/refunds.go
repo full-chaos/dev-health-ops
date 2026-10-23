@@ -561,7 +561,7 @@ func (h handlers) listRefunds(w http.ResponseWriter, r *http.Request) {
 	var errs pybody.Errors
 	query := r.URL.Query()
 	limit, _ := errs.QueryInt("limit", pybody.LastQueryValue(query, "limit"), 20, nil, nil)
-	offset, _ := errs.QueryInt("offset", pybody.LastQueryValue(query, "offset"), 0, nil, nil)
+	offset, _ := errs.QueryInt("offset", pybody.LastQueryValue(query, "offset"), 0, nil, pybody.Int64Max())
 	orgID, _ := errs.QueryUUID("org_id", pybody.LastQueryValue(query, "org_id"))
 	if len(errs) > 0 {
 		h.write(w, validation(errs))
@@ -571,7 +571,7 @@ func (h handlers) listRefunds(w http.ResponseWriter, r *http.Request) {
 		h.write(w, superuserRequired)
 		return
 	}
-	page := pageQuery{limit: 20, offset: -1}
+	page := pageQuery{limit: 20}
 	switch {
 	case limit.Cmp(one) < 0:
 		page.limit = 1
@@ -582,7 +582,7 @@ func (h handlers) listRefunds(w http.ResponseWriter, r *http.Request) {
 	}
 	if offset.Sign() < 0 {
 		page.offset = 0
-	} else if offset.IsInt64() {
+	} else {
 		page.offset = offset.Int64()
 	}
 	h.serve(w, r, "list refunds", func(tx pgx.Tx) (reply, error) {
@@ -592,9 +592,6 @@ func (h handlers) listRefunds(w http.ResponseWriter, r *http.Request) {
 
 // refundListReply is the page of refunds (all orgs, or one when orgID is set), each with its org name.
 func (h handlers) refundListReply(ctx context.Context, tx pgx.Tx, orgID *uuid.UUID, page pageQuery) (reply, error) {
-	if page.offset < 0 {
-		return reply{}, errOverflow
-	}
 	const where = `WHERE ($1::uuid IS NULL OR s.org_id = $1)`
 	rows, err := tx.Query(ctx, `SELECT `+refundColumns+` FROM refunds s `+where+` ORDER BY s.created_at DESC LIMIT $2 OFFSET $3`,
 		orgID, page.limit, page.offset)

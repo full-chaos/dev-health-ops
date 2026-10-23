@@ -99,7 +99,7 @@ Run the roll step `<chaos roll step: sessions-flip roll>` with these values (cha
 
 - `goApi.authProxy.sessions=true`
 - `authService.migrate.sessionReaders.goApi` and `authService.migrate.sessionReaders.queryApi`: the go-api login and the query-api registry login. The render fails while either is empty. They must be two distinct existing logins, and neither may be the auth-migrate login.
-- `authService.sessionKeys.successor.secretName`, with `secretKey` `AUTH_SESSION_SUCCESSOR_KEY` (32 bytes, base64url without padding): the Secret must exist first. Its create-only host script is not named in any leaf yet: `<create-only script for the successor key: to be named>`; it follows the B3 rules (one key per call, create only, no value in arguments).
+- `authService.sessionKeys.successor.secretName`, with `secretKey` `AUTH_SESSION_SUCCESSOR_KEY` (32 bytes, base64url without padding): the Secret must exist first. Its create-only host script is not named in any leaf yet: `<create-only script for the successor key: CHAOS-11031>`; it follows the B3 rules (one key per call, create only, no value in arguments).
 - From the open leaves (B1 to B3): `authService.valkey.secretName`, `valkey.acl.enabled`, `valkey.acl.secretName`, and the `authService.keySet.keys` entries.
 
 Other `goApi.authProxy.*` flags stay `false`. The access-token key is the Secret go-api already reads as `JWT_SECRET_KEY`; nothing sets it here.
@@ -117,7 +117,7 @@ If B1 to B3 are done and B4 is not, login is still unflipped.
 
 ### B6 What users see
 
-Nothing changes at sign-in: login stays with go-api. Sessions that go-api issued before the flip keep working until they expire.
+Nothing changes at sign-in: login stays with go-api. A refresh token that go-api issued before the flip is exchanged once, at the user's first refresh after the flip, for an auth-service session; the user stays signed in. A logout that presents a go-api refresh token answers 200 and revokes nothing; the user is signed out only when the token expires.
 
 E-mail verify and reset links change with the later `credentials` flip, not with this roll. After that flip, links that go-api issued before it no longer work, because auth-service accepts only the link credentials it issued itself; the user asks for a new link. State this in that flip's roll plan.
 

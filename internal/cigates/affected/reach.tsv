@@ -330,6 +330,7 @@ internal/localgit	git.go	internal/synccli
 internal/localgit	refs.go	cmd/dho
 internal/localgit	refs.go	internal/localgit
 internal/localgit	refs.go	internal/synccli
+internal/mail	sender.go	cmd/auth-service
 internal/mail	sender.go	cmd/dho
 internal/mail	sender.go	deploy/helm/dev-health
 internal/mail	sender.go	internal/api/githubapp
@@ -352,6 +353,7 @@ internal/mail	sender.go	internal/apiservice/externalingestvenue
 internal/mail	sender.go	internal/apiservice/metricsvenue
 internal/mail	sender.go	internal/apiservice/ownershipvenue
 internal/mail	sender.go	internal/apiservice/ssovenue
+internal/mail	sender.go	internal/auth/authruntime
 internal/mail	sender.go	internal/fixturescli
 internal/mail	sender.go	internal/mail
 internal/mail	sender.go	internal/platform/logging

@@ -114,6 +114,7 @@ internal/cigates/workflows	auth_corpus_external_behaviour_test.go	unexpressed
 internal/cigates/workflows	auth_corpus_external_test.go	unexpressed
 internal/cigates/workflows	chart_started_selector_test.go	unexpressed
 internal/cigates/workflows	ci_script_helpers_test.go	unexpressed
+internal/cigates/workflows	go_api_tools_build_inputs_test.go	unexpressed
 internal/cigates/workflows	go_workers_compose_proof_test.go	unexpressed
 internal/cigates/workflows	governance_context_test.go	unexpressed
 internal/cigates/workflows	race_pool_routing_test.go	unexpressed

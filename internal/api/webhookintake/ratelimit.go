@@ -127,8 +127,9 @@ func Provider(method, path string) (string, bool) {
 	return "", false
 }
 
-// Admit counts the request in the client bucket, the route-template bucket
-// and, for PagerDuty, the exact-path bucket, in that order. It returns nil
+// Admit counts the request in the client bucket and the route-template bucket
+// and, for PagerDuty, first in the exact-path bucket (alone, for an id that is
+// not one UUID). It returns nil
 // when the request may go on, else the refusal to write: one 429 for every id.
 // A store that cannot answer refuses a PagerDuty delivery with the
 // unhandled-error 500 (never a request let through) and lets a GitHub, GitLab
@@ -151,7 +152,15 @@ func (g *Gate) Admit(r *http.Request, provider string) func(http.ResponseWriter)
 		{template, routeTemplates[provider], throttleTemplate},
 	}
 	if failClosed {
-		steps = append(steps, step{g.limiters.pagerduty, exactBucketPath(r.URL.Path), throttleExact})
+		// The narrowest bucket is counted first, so a refusal there charges
+		// nothing broader; a delivery whose id is not one UUID is charged only to
+		// the shared malformed bucket and never spends the client or route budget.
+		exact := step{g.limiters.pagerduty, exactBucketPath(r.URL.Path), throttleExact}
+		if strings.HasSuffix(exact.path, "/"+malformedBucket) {
+			steps = []step{exact}
+		} else {
+			steps = append([]step{exact}, steps...)
+		}
 	}
 	for _, s := range steps {
 		var allowed bool

@@ -87,11 +87,14 @@ func TestPagerDutyRouteBucketBoundsIdsFromOneAddress(t *testing.T) {
 			t.Fatalf("delivery %d = %d, want 401", i+1, got)
 		}
 	}
-	for _, id := range []string{uuid.NewString(), "not-a-uuid"} {
+	for _, id := range []string{uuid.NewString(), uuid.NewString()} {
 		got := deliver(handler, routePrefix+"/pagerduty/"+id, "192.0.2.1", "")
 		if got.Code != http.StatusTooManyRequests || got.Body.String() != throttledBody {
 			t.Fatalf("id %s past the route bucket = %d %s", id, got.Code, got.Body.String())
 		}
+	}
+	if got := deliver(handler, routePrefix+"/pagerduty/not-a-uuid", "192.0.2.1", "").Code; got != http.StatusUnauthorized {
+		t.Fatalf("an id that is not a UUID spent the route budget: %d", got)
 	}
 	if got := deliver(handler, routePrefix+"/pagerduty/"+uuid.NewString(), "192.0.2.2", "").Code; got != http.StatusUnauthorized {
 		t.Fatalf("another address = %d, want its own budget", got)
@@ -162,7 +165,7 @@ func TestThrottledAnswerIsTheSameForKnownAndUnknownIdsAndReadsNothing(t *testing
 	}
 	loads := f.loads
 	var answers []string
-	for _, id := range []string{f.bindingID, uuid.NewString(), "not-a-uuid"} {
+	for _, id := range []string{f.bindingID, uuid.NewString(), uuid.NewString()} {
 		got := hitPagerDuty(handler, id, "192.0.2.1", "")
 		answers = append(answers, fmt.Sprintf("%d %s %v", got.Code, got.Body.String(), got.Header()))
 	}

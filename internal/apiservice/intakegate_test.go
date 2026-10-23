@@ -190,11 +190,16 @@ func TestConfigureInstallsTheIntakeGate(t *testing.T) {
 	}
 }
 
-type countingCounters struct{ clientHits int }
+type countingCounters struct{ clientHits, exactHits, routeHits int }
 
 func (c *countingCounters) Increment(_ context.Context, hit httpapi.Hit) (int64, error) {
-	if hit.Limit.ID == "webhook_intake_client" {
+	switch hit.Limit.ID {
+	case "webhook_intake_client":
 		c.clientHits++
+	case "webhook_pagerduty":
+		c.exactHits++
+	case "webhook_pagerduty_route", "webhook_intake_route":
+		c.routeHits++
 	}
 	return 1, nil
 }
@@ -236,7 +241,7 @@ func TestEveryRequestThatReachesAnIntakeHandlerIsCountedOnce(t *testing.T) {
 	reachedCount := 0
 	for _, target := range targets {
 		for _, method := range []string{http.MethodPost, http.MethodGet, http.MethodHead} {
-			reached, counters.clientHits = 0, 0
+			reached, counters.clientHits, counters.exactHits, counters.routeHits = 0, 0, 0, 0
 			request := httptest.NewRequest(method, target, nil)
 			request.RequestURI = target
 			request.URL.RawPath = ""
@@ -247,8 +252,12 @@ func TestEveryRequestThatReachesAnIntakeHandlerIsCountedOnce(t *testing.T) {
 			server.Handler().ServeHTTP(httptest.NewRecorder(), request)
 			if reached > 0 {
 				reachedCount++
-				if method == http.MethodPost && counters.clientHits != 1 {
-					t.Errorf("POST %s reached an intake handler counted %d times, want once", target, counters.clientHits)
+				// One pass through the gate: the narrow bucket alone (an id that is not
+				// one UUID), or the narrow, client and route buckets once each, or
+				// the client and route buckets once each (the other three routes).
+				c, e, r := counters.clientHits, counters.exactHits, counters.routeHits
+				if method == http.MethodPost && !((e == 1 && c == 0 && r == 0) || (e == 1 && c == 1 && r == 1) || (e == 0 && c == 1 && r == 1)) {
+					t.Errorf("POST %s reached an intake handler counted client=%d exact=%d route=%d, want one pass", target, c, e, r)
 				}
 			}
 		}
@@ -350,6 +359,7 @@ func TestGateAndHandlerAcceptTheSameIdSpellings(t *testing.T) {
 		request := httptest.NewRequest(http.MethodPost, "/", nil)
 		parsed, err := url.ParseRequestURI(prefix + tail)
 		if err != nil {
+			t.Errorf("tail %q does not parse as a request target: %v", tail, err)
 			continue
 		}
 		request.URL = parsed
@@ -357,10 +367,7 @@ func TestGateAndHandlerAcceptTheSameIdSpellings(t *testing.T) {
 		request.RemoteAddr = "203.0.113.77:4242"
 		server.Handler().ServeHTTP(httptest.NewRecorder(), request)
 		if len(recorder.keys) != 1 {
-			if len(recorder.keys) == 0 && len(reachedWith) == 0 {
-				continue
-			}
-			t.Errorf("tail %q: %d exact-bucket keys, want one", tail, len(recorder.keys))
+			t.Errorf("tail %q: %d exact-bucket keys, want one (reached the handler %d times)", tail, len(recorder.keys), len(reachedWith))
 			continue
 		}
 		key := recorder.keys[0]
@@ -383,5 +390,57 @@ func TestGateAndHandlerAcceptTheSameIdSpellings(t *testing.T) {
 	}
 	if reached < 8 {
 		t.Fatalf("only %d probes reached the handler: the check no longer sees the router", reached)
+	}
+}
+
+func intakeServerWithStubHandlers(t *testing.T) (*httpapi.Server, func(path, peer string) int) {
+	t.Helper()
+	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
+	routes := webhookintake.Routes(webhookintake.Deps{Logger: quiet})
+	for index := range routes {
+		routes[index].Handler = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
+	}
+	server, err := NewServerWithGate(apiTestConfig(), quiet, routes, webhookintake.NewGate(httpapi.NewMemoryCounters(nil), nil, quiet))
+	if err != nil {
+		t.Fatal(err)
+	}
+	send := func(path, peer string) int {
+		request := httptest.NewRequest(http.MethodPost, path, nil)
+		request.RemoteAddr = peer + ":4242"
+		recorder := httptest.NewRecorder()
+		server.Handler().ServeHTTP(recorder, request)
+		return recorder.Code
+	}
+	return server, send
+}
+
+func TestAMalformedBurstDoesNotSpendTheClientOrRouteBudget(t *testing.T) {
+	_, send := intakeServerWithStubHandlers(t)
+	const prefix = "/api/v1/webhooks/pagerduty/"
+	for i := 0; i < 700; i++ {
+		send(prefix+uuid.NewString()+"/extra", "198.51.100.10")
+	}
+	if got := send(prefix+uuid.NewString(), "198.51.100.10"); got != http.StatusNoContent {
+		t.Fatalf("a valid delivery from the address that sent 700 malformed ones answered %d, want 204", got)
+	}
+	if got := send(prefix+uuid.NewString()+"/extra", "198.51.100.10"); got != http.StatusTooManyRequests {
+		t.Fatalf("the malformed bucket did not refuse: %d", got)
+	}
+}
+
+func TestAFloodOfOneIdDoesNotSpendTheRouteBudgetOfOtherIds(t *testing.T) {
+	_, send := intakeServerWithStubHandlers(t)
+	const prefix = "/api/v1/webhooks/pagerduty/"
+	flooded := uuid.NewString()
+	for i := 0; i < 700; i++ {
+		send(prefix+flooded, "198.51.100.11")
+	}
+	if got := send(prefix+flooded, "198.51.100.11"); got != http.StatusTooManyRequests {
+		t.Fatalf("the flooded id was not refused: %d", got)
+	}
+	for i := 0; i < 500; i++ {
+		if got := send(prefix+uuid.NewString(), "198.51.100.11"); got != http.StatusNoContent {
+			t.Fatalf("other id %d from the same address answered %d, want 204", i+1, got)
+		}
 	}
 }

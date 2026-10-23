@@ -102,9 +102,9 @@ func Routes(deps Deps) []httpapi.Route {
 	}
 	const prefix = "/api/v1/webhooks"
 	return []httpapi.Route{
-		{Method: "POST", Pattern: prefix + "/github", Handler: deps.handleGitHubWebhook()},
-		{Method: "POST", Pattern: prefix + "/gitlab", Handler: deps.handleGitLabWebhook()},
-		{Method: "POST", Pattern: prefix + "/jira", Handler: deps.handleJiraWebhook()},
+		{Method: "POST", Pattern: prefix + "/github", Handler: deps.limited(providerGitHub, deps.handleGitHubWebhook())},
+		{Method: "POST", Pattern: prefix + "/gitlab", Handler: deps.limited(providerGitLab, deps.handleGitLabWebhook())},
+		{Method: "POST", Pattern: prefix + "/jira", Handler: deps.limited(providerJira, deps.handleJiraWebhook())},
 		{Method: "POST", Pattern: prefix + "/pagerduty/{binding_id}", Handler: deps.handlePagerDutyWebhook()},
 		{Method: "GET", Pattern: prefix + "/health", Handler: deps.handleHealth()},
 	}

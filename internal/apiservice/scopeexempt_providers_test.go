@@ -1,9 +1,12 @@
 package apiservice
 
 import (
+	"bytes"
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -16,6 +19,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/webhookintake"
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
+	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 )
 
 func providerSign(secret string, body []byte) string {
@@ -111,5 +115,27 @@ func TestProviderIntakeRoutesRunTheirCheckBeforeAnyCredentialDecode(t *testing.T
 	valid := map[string]string{"X-GitHub-Event": "ping", "X-GitHub-Delivery": "d2", "X-Hub-Signature-256": "sha256=" + providerSign(secrets.GitHub, good)}
 	if code, calls := send(http.MethodPost, "/api/v1/webhooks/github", valid, token(uuid.New(), false)); code == http.StatusUnauthorized || calls != 0 {
 		t.Errorf("github valid signature: status %d with %d auth calls; want past the check and 0 calls", code, calls)
+	}
+}
+
+func TestConfigureWarnsAboutWideTrustedProxyPrefixes(t *testing.T) {
+	for raw, wantWarning := range map[string]bool{"10.42.0.0/24": true, "10.42.0.6": false} {
+		t.Setenv("TRUSTED_PROXIES", raw)
+		var logs bytes.Buffer
+		logger := slog.New(slog.NewJSONHandler(&logs, nil))
+		components, err := configure(context.Background(), apiTestConfig(), health.NewRegistry(time.Second), logger)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for index := len(components) - 1; index >= 0; index-- {
+			_ = components[index].Shutdown(context.Background())
+		}
+		got := strings.Contains(logs.String(), "trusted proxy list holds prefixes wider than a /28")
+		if got != wantWarning {
+			t.Errorf("TRUSTED_PROXIES=%q: warning logged = %v, want %v", raw, got, wantWarning)
+		}
+		if strings.Contains(logs.String(), "10.42.0") {
+			t.Errorf("TRUSTED_PROXIES=%q: the log carries the address", raw)
+		}
 	}
 }

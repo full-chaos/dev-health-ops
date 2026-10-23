@@ -9,6 +9,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -137,25 +138,77 @@ func (h handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ingestionID := uuid.NewString()
-	stream, err := h.write(r.Context(), batch, ingestionID)
-	if err != nil {
-		h.logger.WarnContext(r.Context(), "Product telemetry stream unavailable", slog.String("error", err.Error()))
-		stream = "disabled"
+	h.logDropped(r.Context(), batch.dropped)
+	var stream string
+	if len(batch.events) == 0 {
+		// Every event broke a value rule: nothing is appended, not even an
+		// empty entry.
+		stream = streamOf(batch)
+	} else {
+		var err error
+		stream, err = h.write(r.Context(), batch, ingestionID)
+		if err != nil {
+			h.logger.WarnContext(r.Context(), "Product telemetry stream unavailable", slog.String("error", err.Error()))
+			stream = "disabled"
+		}
 	}
 	out := pyjson.NewObject()
 	out.Set("ingestion_id", ingestionID)
 	out.Set("status", "accepted")
 	out.Set("items_received", int64(len(batch.events)))
+	out.Set("items_dropped", int64(len(batch.dropped)))
 	out.Set("stream", stream)
 	policy.WriteModel(w, http.StatusAccepted, out, nil)
 }
 
-func (h handler) write(ctx context.Context, batch batch, ingestionID string) (string, error) {
+// logDropped writes one line per batch that lost events. It carries counts,
+// the event names and the keys that passed the key rule, and never a value.
+func (h handler) logDropped(ctx context.Context, dropped []droppedEvent) {
+	if len(dropped) == 0 {
+		return
+	}
+	reasons := map[string]int{}
+	names, keys := map[string]struct{}{}, map[string]struct{}{}
+	for _, event := range dropped {
+		reasons[event.refusal.reason]++
+		names[event.name] = struct{}{}
+		keys[event.refusal.key] = struct{}{}
+	}
+	h.logger.WarnContext(ctx, "product telemetry events dropped",
+		slog.Int("dropped", len(dropped)),
+		slog.String("reasons", joinCounts(reasons)),
+		slog.String("events", joinSorted(names)),
+		slog.String("keys", joinSorted(keys)))
+}
+
+func joinSorted(set map[string]struct{}) string {
+	list := make([]string, 0, len(set))
+	for item := range set {
+		list = append(list, item)
+	}
+	sort.Strings(list)
+	return strings.Join(list, ",")
+}
+
+func joinCounts(counts map[string]int) string {
+	list := make([]string, 0, len(counts))
+	for reason, count := range counts {
+		list = append(list, reason+"="+strconv.Itoa(count))
+	}
+	sort.Strings(list)
+	return strings.Join(list, ",")
+}
+
+func streamOf(batch batch) string {
 	key := "anonymous"
 	if batch.orgIDHash != nil && *batch.orgIDHash != "" {
 		key = *batch.orgIDHash
 	}
-	stream := strings.Replace(streamName, "%s", key, 1)
+	return strings.Replace(streamName, "%s", key, 1)
+}
+
+func (h handler) write(ctx context.Context, batch batch, ingestionID string) (string, error) {
+	stream := streamOf(batch)
 	events := make([]pyjson.Value, len(batch.events))
 	for index, event := range batch.events {
 		events[index] = event
@@ -193,6 +246,14 @@ type batch struct {
 	orgIDHash *string
 	source    string
 	events    []*pyjson.Object // each already in model_dump(mode="json", by_alias=True) form
+	dropped   []droppedEvent
+}
+
+// droppedEvent is an event the payload rules refused. It holds the event name
+// (one of the known names) and the refusal; never a value of the request.
+type droppedEvent struct {
+	name    string
+	refusal payloadRefusal
 }
 
 // field reads a populate_by_name field: the alias wins when both are
@@ -250,6 +311,22 @@ func optionalString(problems *[]pybody.Error, object *pyjson.Object, prefix []py
 	return nil, false
 }
 
+// boundedOrgIDHash is optionalString plus the shape of the hash the web client
+// sends (payload_rules.json). The value names a stream key, so a value that is
+// not that shape is an envelope error of the whole batch.
+func boundedOrgIDHash(problems *[]pybody.Error, object *pyjson.Object, prefix []pyjson.Value, alias, name string) (*string, bool) {
+	text, ok := optionalString(problems, object, prefix, alias, name)
+	if !ok || text == nil || ruleOrgIDHash.MatchString(*text) {
+		return text, ok
+	}
+	_, key, _ := field(object, alias, name)
+	ctx := pyjson.NewObject()
+	ctx.Set("pattern", ruleOrgIDHashPattern)
+	*problems = append(*problems, pybody.Error{Type: "string_pattern_mismatch", Loc: loc(prefix, key),
+		Msg: "String should match pattern '" + ruleOrgIDHashPattern + "'", Input: *text, Ctx: ctx})
+	return nil, false
+}
+
 func requiredString(problems *[]pybody.Error, object *pyjson.Object, prefix []pyjson.Value, alias, name string) (string, bool) {
 	value, key, ok := field(object, alias, name)
 	if !ok {
@@ -272,7 +349,7 @@ func validateBatch(body pybody.Body) (batch, []pybody.Error) {
 	}
 	root := []pyjson.Value{"body"}
 	out := batch{source: source}
-	out.orgIDHash, _ = optionalString(&problems, object, root, "orgIdHash", "org_id_hash")
+	out.orgIDHash, _ = boundedOrgIDHash(&problems, object, root, "orgIdHash", "org_id_hash")
 	if value, present := object.Get("source"); present {
 		if text, isString := value.(string); isString && text == source {
 			out.source = text
@@ -302,7 +379,8 @@ func validateBatch(body pybody.Body) (batch, []pybody.Error) {
 			Msg: "List should have at most 500 items after validation, not " + strconv.Itoa(len(list)), Input: list, Ctx: ctx})
 	default:
 		for index, item := range list {
-			if event, ok := validateEvent(&problems, item, loc(root, "events", int64(index))); ok {
+			event, ok := validateEvent(&problems, item, loc(root, "events", int64(index)), &out.dropped)
+			if ok {
 				out.events = append(out.events, event)
 			}
 		}
@@ -310,7 +388,7 @@ func validateBatch(body pybody.Body) (batch, []pybody.Error) {
 	return out, problems
 }
 
-func validateEvent(problems *[]pybody.Error, item pyjson.Value, prefix []pyjson.Value) (*pyjson.Object, bool) {
+func validateEvent(problems *[]pybody.Error, item pyjson.Value, prefix []pyjson.Value, dropped *[]droppedEvent) (*pyjson.Object, bool) {
 	object, isObject := item.(*pyjson.Object)
 	if !isObject {
 		// FastAPI validates the body with from_attributes, so a non-object
@@ -354,7 +432,11 @@ func validateEvent(problems *[]pybody.Error, item pyjson.Value, prefix []pyjson.
 		}
 	}
 	for _, pair := range [][3]string{{"orgIdHash", "org_id_hash", "orgIdHash"}, {"routePattern", "route_pattern", "routePattern"}} {
-		if text, ok := optionalString(problems, object, prefix, pair[0], pair[1]); ok {
+		read := optionalString
+		if pair[0] == "orgIdHash" {
+			read = boundedOrgIDHash
+		}
+		if text, ok := read(problems, object, prefix, pair[0], pair[1]); ok {
 			if text != nil {
 				out.Set(pair[2], *text)
 			} else {
@@ -367,7 +449,18 @@ func validateEvent(problems *[]pybody.Error, item pyjson.Value, prefix []pyjson.
 	} else if payload, ok := validatePayload(problems, value, loc(prefix, key)); ok {
 		out.Set("payload", payload)
 	}
-	return out, len(*problems) == before
+	if len(*problems) != before {
+		return out, false
+	}
+	// The value rules come last: an event with an envelope error is a 422 of
+	// the batch as before; an event that only breaks a value rule is dropped.
+	payload, _ := out.Get("payload")
+	if refusal := refusePayload(payload.(*pyjson.Object)); refusal != nil {
+		name, _ := out.Get("name")
+		*dropped = append(*dropped, droppedEvent{name: name.(string), refusal: *refusal})
+		return nil, false
+	}
+	return out, true
 }
 
 func timeInput(value pyjson.Value) any {

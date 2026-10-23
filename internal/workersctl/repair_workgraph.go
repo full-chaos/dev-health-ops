@@ -90,6 +90,9 @@ func dispatchWorkgraphListAmbiguous(ctx context.Context, runtime *operatorRuntim
 		}
 		orgFilter = org
 	}
+	if code, ok := authorizeRead(ctx, runtime, stderr, "workgraph_request", scopeOrAll(strings.TrimSpace(*org))); !ok {
+		return code
+	}
 	if runtime.pools == nil {
 		return writeError(stderr, "operator_backend_unavailable")
 	}

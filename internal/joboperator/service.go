@@ -84,6 +84,9 @@ const (
 	ActionMetricsRemainingStart           Action = "metrics.remaining_start"
 	ActionMetricsRemainingTriggerBackstop Action = "metrics.remaining_trigger_backstop"
 	ActionMetricsRemainingRedrive         Action = "metrics.remaining_redrive"
+	// ActionMetricsDailyMarkerBackfill: `metrics daily-marker-backfill`
+	// (ClickHouse marker rows appended from the Postgres run table).
+	ActionMetricsDailyMarkerBackfill Action = "metrics.daily_marker_backfill"
 	// ActionExternalRecomputeReplay: `external-recompute replay`.
 	ActionExternalRecomputeReplay Action = "external_recompute.replay"
 )

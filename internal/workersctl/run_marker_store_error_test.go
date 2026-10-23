@@ -50,10 +50,11 @@ func TestRunMarkerStoreFailureNamesTheSettingAndTheCause(t *testing.T) {
 	for envName, env := range envs {
 		for callerName, call := range callers {
 			t.Run(envName+"/"+callerName, func(t *testing.T) {
-				runtime := &operatorRuntime{lookup: func(key string) (string, bool) {
+				runtime := commandRuntimeWithAuditor(t, commandAuthorizer{}, &refusingAuditor{})
+				runtime.lookup = func(key string) (string, bool) {
 					value, ok := env[key]
 					return value, ok
-				}}
+				}
 				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 				defer cancel()
 				var stderr bytes.Buffer

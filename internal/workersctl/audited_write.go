@@ -121,6 +121,21 @@ func dryRunPreview(
 	return preview(ctx)
 }
 
+// authorizeRead authorizes a read-only verb that does not go through the job
+// operator service. It runs before the verb looks at its backend. ok is false
+// when the verb must stop with code.
+func authorizeRead(
+	ctx context.Context, runtime *operatorRuntime, stderr io.Writer, resourceType, resourceID string,
+) (code int, ok bool) {
+	if runtime == nil || runtime.service == nil {
+		return writeError(stderr, "operator_backend_unavailable"), false
+	}
+	if err := runtime.service.Authorize(ctx, runtime.principal, joboperator.ActionInspect, resourceType, resourceID); err != nil {
+		return writeServiceError(stderr, err), false
+	}
+	return 0, true
+}
+
 // scopeOrAll is an audit resource id: the given scope, or "*" when the write
 // is not scoped to one resource.
 func scopeOrAll(scope string) string {

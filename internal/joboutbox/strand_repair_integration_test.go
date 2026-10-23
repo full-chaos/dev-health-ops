@@ -986,13 +986,7 @@ func TestStrandRepairAgainstLivePostgres(t *testing.T) {
 			// a transaction that is rolled back: the control MUST walk the outbox, or the fixture could not tell the two
 			// apart.
 			t.Run("the retired-kind survey probes the job_kind index", func(t *testing.T) {
-				kinds := make([]string, len(retiredWorkgraphKinds))
-				for index, kind := range retiredWorkgraphKinds {
-					kinds[index] = "'" + kind + "'"
-				}
-				survey := strings.NewReplacer(
-					"$1::text[]", "ARRAY["+strings.Join(kinds, ",")+"]::text[]", "$2::int", "100",
-				).Replace(retiredKindsSQL)
+				survey := strings.NewReplacer("$1::int", "100").Replace(retiredKindsSQL)
 				plan := func(statements ...string) string {
 					t.Helper()
 					connection, err := admin.Acquire(ctx)
@@ -1026,6 +1020,14 @@ func TestStrandRepairAgainstLivePostgres(t *testing.T) {
 				if !strings.Contains(with, "ix_worker_job_outbox_job_kind") ||
 					strings.Contains(with, outboxScan) || strings.Contains(with, "worker_job_outbox_pkey") {
 					t.Fatalf("the retired-kind survey does not find its rows through the job_kind index:\n%s", with)
+				}
+				// A pgx-cached statement switches to the generic plan after a few runs; the kinds are literals so the
+				// partial index predicate is proven there too.
+				generic := plan("BEGIN", "SET LOCAL plan_cache_mode = force_generic_plan",
+					"PREPARE retired_kind_survey(int) AS "+retiredKindsSQL, "EXPLAIN EXECUTE retired_kind_survey(100)", "ROLLBACK")
+				if !strings.Contains(generic, "ix_worker_job_outbox_job_kind") || strings.Contains(generic, outboxScan) ||
+					strings.Contains(generic, "worker_job_outbox_pkey") {
+					t.Fatalf("the generic plan of the retired-kind survey does not use the job_kind index:\n%s", generic)
 				}
 				control := plan("BEGIN", "DROP INDEX public.ix_worker_job_outbox_job_kind", "EXPLAIN "+survey, "ROLLBACK")
 				if !strings.Contains(control, "worker_job_outbox_pkey") && !strings.Contains(control, outboxScan) {

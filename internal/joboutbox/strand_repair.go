@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -368,7 +369,7 @@ func (repair *StrandRepair) Step(
 func (repair *StrandRepair) observeRetiredKinds(
 	ctx context.Context,
 ) ([]RetiredKindObservation, error) {
-	rows, err := repair.queryQueue(ctx, retiredKindsSQL, retiredWorkgraphKinds, retiredKindsObservationCap)
+	rows, err := repair.queryQueue(ctx, retiredKindsSQL, retiredKindsObservationCap)
 	if err != nil || rows == nil {
 		return nil, classifyStrandError(err)
 	}
@@ -1182,10 +1183,21 @@ var retiredWorkgraphKinds = []string{
 // worker fleet no longer has a handler for at all. Unlike the strandShape
 // queries, this is not scoped to 'delivered' -- a retired-kind row is worth
 // surfacing in ANY state, since nothing downstream can ever resolve it.
-const retiredKindsSQL = `
+var retiredKindsSQL = `
 	SELECT outbox.id::text, outbox.job_kind, coalesce(outbox.args ->> 'organization_id', '')
 	FROM public.worker_job_outbox AS outbox
-	WHERE outbox.job_kind = ANY($1::text[])
+	WHERE outbox.job_kind IN (` + retiredKindsSQLList() + `)
 	ORDER BY outbox.id
-	LIMIT $2::int
+	LIMIT $1::int
 `
+
+// retiredKindsSQLList renders retiredWorkgraphKinds as SQL literals. They are literals, not a bound array, so the
+// planner can prove the partial index of revision 0153 (WHERE job_kind IN the same list) in a generic plan too.
+// The kinds are constants of this package, never input.
+func retiredKindsSQLList() string {
+	quoted := make([]string, len(retiredWorkgraphKinds))
+	for index, kind := range retiredWorkgraphKinds {
+		quoted[index] = "'" + strings.ReplaceAll(kind, "'", "''") + "'"
+	}
+	return strings.Join(quoted, ", ")
+}

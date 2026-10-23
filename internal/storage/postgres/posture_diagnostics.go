@@ -45,6 +45,9 @@ func (gap PostureGap) String() string {
 		// only)" unconditionally was true only for the first shape and would
 		// misdescribe the other two (codex r1 F-2): CHAOS-5296's own
 		// incident table was declared table-wide, not column-scoped.
+		if gap.ColumnName != "" {
+			return fmt.Sprintf("%s.%s: excess privileges %v beyond the declared posture", gap.TableName, gap.ColumnName, gap.Excess)
+		}
 		return fmt.Sprintf("%s: excess privileges %v beyond the declared posture", gap.TableName, gap.Excess)
 	}
 	if gap.ColumnName != "" {
@@ -91,15 +94,33 @@ SELECT
 	-- (TRUNCATE/REFERENCES/TRIGGER/MAINTAIN, unconditionally forbidden by
 	-- TablePrivilege's own doc comment), is exactly the CHAOS-5436 shape:
 	-- CheckRolePosture correctly refuses, and this used to read "0 gaps."
-	relation IS NOT NULL AND NOT allow_insert AND has_table_privilege($1, relation, 'INSERT') AS excess_insert,
-	relation IS NOT NULL AND NOT allow_update AND has_table_privilege($1, relation, 'UPDATE') AS excess_update,
+	-- rolePostureQuery also refuses an INSERT or UPDATE held on ANY column of a table that does not allow it
+	-- (has_any_column_privilege sees the table-level entry too). The UPDATE half has one exception, as there: a
+	-- table the posture also declares column-scoped with an UPDATE column ($6) legitimately holds column UPDATEs.
+	relation IS NOT NULL AND NOT allow_insert AND has_any_column_privilege($1, relation, 'INSERT') AS excess_insert,
+	relation IS NOT NULL AND NOT allow_update AND (
+		has_table_privilege($1, relation, 'UPDATE')
+		OR (has_any_column_privilege($1, relation, 'UPDATE') AND NOT table_name = ANY(COALESCE($6::text[], '{}'::text[])))
+	) AS excess_update,
 	relation IS NOT NULL AND NOT allow_delete AND has_table_privilege($1, relation, 'DELETE') AS excess_delete,
 	relation IS NOT NULL AND has_table_privilege($1, relation, 'TRUNCATE') AS excess_truncate,
 	relation IS NOT NULL AND has_table_privilege($1, relation, 'REFERENCES') AS excess_references,
 	relation IS NOT NULL AND has_table_privilege($1, relation, 'TRIGGER') AS excess_trigger,
 	relation IS NOT NULL
 		AND current_setting('server_version_num')::integer >= 170000
-		AND has_table_privilege($1, relation, 'MAINTAIN') AS excess_maintain
+		AND has_table_privilege($1, relation, 'MAINTAIN') AS excess_maintain,
+	-- CHAOS-9588: rolePostureQuery also refuses a role that holds a REQUIRED
+	-- privilege WITH GRANT OPTION (it could re-delegate it), at table level or
+	-- on any column (has_any_column_privilege sees both, and PUBLIC- or
+	-- membership-held options too). has_table_privilege without the option, as
+	-- asked above, passes such a role. Where a privilege is not allowed the
+	-- plain-form excess above already fires, so the option form is asked only
+	-- where the manifest requires the base privilege. DELETE is judged at table
+	-- level only, as rolePostureQuery does.
+	relation IS NOT NULL AND has_any_column_privilege($1, relation, 'SELECT WITH GRANT OPTION') AS excess_select_grant,
+	relation IS NOT NULL AND allow_insert AND has_any_column_privilege($1, relation, 'INSERT WITH GRANT OPTION') AS excess_insert_grant,
+	relation IS NOT NULL AND allow_update AND has_any_column_privilege($1, relation, 'UPDATE WITH GRANT OPTION') AS excess_update_grant,
+	relation IS NOT NULL AND allow_delete AND has_table_privilege($1, relation, 'DELETE WITH GRANT OPTION') AS excess_delete_grant
 FROM resolved
 ORDER BY table_name
 `
@@ -123,7 +144,11 @@ SELECT
 	column_name,
 	privilege,
 	relation IS NULL AS table_missing,
-	relation IS NOT NULL AND NOT has_column_privilege($1, relation, column_name, privilege) AS missing
+	relation IS NOT NULL AND NOT has_column_privilege($1, relation, column_name, privilege) AS missing,
+	-- CHAOS-9588: rolePostureQuery refuses a declared column privilege held
+	-- WITH GRANT OPTION.
+	relation IS NOT NULL
+		AND has_column_privilege($1, relation, column_name, privilege || ' WITH GRANT OPTION') AS excess_grant
 FROM resolved
 ORDER BY table_name, column_name, privilege
 `
@@ -147,7 +172,9 @@ WITH required(sequence_name) AS (
 SELECT
 	sequence_name,
 	relation IS NULL AS sequence_missing,
-	relation IS NOT NULL AND NOT has_sequence_privilege($1, relation, 'USAGE') AS missing
+	relation IS NOT NULL AND NOT has_sequence_privilege($1, relation, 'USAGE') AS missing,
+	-- CHAOS-9588: rolePostureQuery refuses USAGE held WITH GRANT OPTION.
+	relation IS NOT NULL AND has_sequence_privilege($1, relation, 'USAGE WITH GRANT OPTION') AS excess_grant
 FROM resolved
 ORDER BY sequence_name
 `
@@ -287,7 +314,7 @@ func DiagnoseRolePosture(
 	var gaps []PostureGap
 
 	if len(posture.RequiredTables) > 0 {
-		tableGaps, err := diagnoseTablePosture(ctx, pool, expectedRole, posture.RequiredTables)
+		tableGaps, err := diagnoseTablePosture(ctx, pool, expectedRole, posture.RequiredTables, posture.ColumnScoped)
 		if err != nil {
 			return nil, err
 		}
@@ -352,7 +379,14 @@ func diagnoseTablePosture(
 	pool *pgxpool.Pool,
 	expectedRole string,
 	tables []TablePrivilege,
+	columns []ColumnPrivilege,
 ) ([]PostureGap, error) {
+	var columnUpdateTables []string
+	for _, column := range columns {
+		if column.Privilege == "UPDATE" {
+			columnUpdateTables = append(columnUpdateTables, column.TableName)
+		}
+	}
 	tableNames := make([]string, len(tables))
 	allowInserts := make([]bool, len(tables))
 	allowUpdates := make([]bool, len(tables))
@@ -364,7 +398,7 @@ func diagnoseTablePosture(
 		allowDeletes[i] = table.AllowDelete
 	}
 	rows, err := pool.Query(
-		ctx, diagnoseTablePostureQuery, expectedRole, tableNames, allowInserts, allowUpdates, allowDeletes,
+		ctx, diagnoseTablePostureQuery, expectedRole, tableNames, allowInserts, allowUpdates, allowDeletes, columnUpdateTables,
 	)
 	if err != nil {
 		return nil, ErrUnavailable
@@ -378,11 +412,13 @@ func diagnoseTablePosture(
 			tableMissing, missingSelect, missingInsert, missingUpdate, missingDelete bool
 			excessInsert, excessUpdate, excessDelete                                 bool
 			excessTruncate, excessReferences, excessTrigger, excessMaintain          bool
+			grantSelect, grantInsert, grantUpdate, grantDelete                       bool
 		)
 		if err := rows.Scan(
 			&tableName, &tableMissing, &missingSelect, &missingInsert, &missingUpdate, &missingDelete,
 			&excessInsert, &excessUpdate, &excessDelete,
 			&excessTruncate, &excessReferences, &excessTrigger, &excessMaintain,
+			&grantSelect, &grantInsert, &grantUpdate, &grantDelete,
 		); err != nil {
 			return nil, ErrUnavailable
 		}
@@ -435,6 +471,18 @@ func diagnoseTablePosture(
 		if excessMaintain {
 			excess = append(excess, "MAINTAIN")
 		}
+		if grantSelect {
+			excess = append(excess, "SELECT WITH GRANT OPTION")
+		}
+		if grantInsert {
+			excess = append(excess, "INSERT WITH GRANT OPTION")
+		}
+		if grantUpdate {
+			excess = append(excess, "UPDATE WITH GRANT OPTION")
+		}
+		if grantDelete {
+			excess = append(excess, "DELETE WITH GRANT OPTION")
+		}
 		if len(excess) > 0 {
 			gaps = append(gaps, PostureGap{TableName: tableName, Excess: excess})
 		}
@@ -470,10 +518,10 @@ func diagnoseSequencePosture(
 	var gaps []PostureGap
 	for rows.Next() {
 		var (
-			sequenceName             string
-			sequenceMissing, missing bool
+			sequenceName                          string
+			sequenceMissing, missing, excessGrant bool
 		)
-		if err := rows.Scan(&sequenceName, &sequenceMissing, &missing); err != nil {
+		if err := rows.Scan(&sequenceName, &sequenceMissing, &missing, &excessGrant); err != nil {
 			return nil, ErrUnavailable
 		}
 		if sequenceMissing {
@@ -482,6 +530,9 @@ func diagnoseSequencePosture(
 		}
 		if missing {
 			gaps = append(gaps, PostureGap{TableName: sequenceName, Missing: []string{"USAGE"}})
+		}
+		if excessGrant {
+			gaps = append(gaps, PostureGap{TableName: sequenceName, Excess: []string{"USAGE WITH GRANT OPTION"}})
 		}
 	}
 	if err := rows.Err(); err != nil {
@@ -515,8 +566,9 @@ func diagnoseColumnPosture(
 		var (
 			tableName, columnName, privilege string
 			tableMissing, missing            bool
+			excessGrant                      bool
 		)
-		if err := rows.Scan(&tableName, &columnName, &privilege, &tableMissing, &missing); err != nil {
+		if err := rows.Scan(&tableName, &columnName, &privilege, &tableMissing, &missing, &excessGrant); err != nil {
 			return nil, ErrUnavailable
 		}
 		if tableMissing {
@@ -525,6 +577,9 @@ func diagnoseColumnPosture(
 		}
 		if missing {
 			gaps = append(gaps, PostureGap{TableName: tableName, ColumnName: columnName, Missing: []string{privilege}})
+		}
+		if excessGrant {
+			gaps = append(gaps, PostureGap{TableName: tableName, ColumnName: columnName, Excess: []string{privilege + " WITH GRANT OPTION"}})
 		}
 	}
 	if err := rows.Err(); err != nil {

@@ -104,3 +104,66 @@ func TestSlogKeyRedactionIsIdempotentAcrossStackedHandlers(t *testing.T) {
 		t.Errorf("stacked: want one placeholder, got %d: %q", n, buf.String())
 	}
 }
+
+type flipValuer struct{ calls *int }
+
+func (v flipValuer) LogValue() slog.Value {
+	*v.calls++
+	if *v.calls == 1 {
+		return slog.StringValue("plain")
+	}
+	secret, _ := syntheticKeys()
+	return slog.GroupValue(slog.String(secret, "value"))
+}
+
+func TestSlogChangingLogValuerCannotBypassKeyScrub(t *testing.T) {
+	for name := range keyedLoggers(&bytes.Buffer{}) {
+		t.Run(name, func(t *testing.T) {
+			var buf bytes.Buffer
+			calls := 0
+			keyedLoggers(&buf)[name].Info("event", "outer", flipValuer{calls: &calls})
+			assertNoKeyLeak(t, name, buf.String())
+		})
+	}
+}
+
+func TestSlogOnePlaceholderPerLevelAcrossWithAndRecord(t *testing.T) {
+	secret, _ := syntheticKeys()
+	for name, build := range map[string]func(*bytes.Buffer) *slog.Logger{
+		"json": func(b *bytes.Buffer) *slog.Logger { return NewJSON(b, slog.LevelInfo) },
+		"sync-cli": func(b *bytes.Buffer) *slog.Logger {
+			return slog.New(WithValueRedaction(slog.NewTextHandler(b, nil), func(s string) string { return s }))
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var buf bytes.Buffer
+			build(&buf).With(secret, "a").With(secret+"x", "b").Info("event", secret+"y", "c")
+			assertNoKeyLeak(t, name, buf.String())
+			if n := strings.Count(buf.String(), "redacted.key"); n != 1 {
+				t.Errorf("%s: want one placeholder across With and record, got %d: %q", name, n, buf.String())
+			}
+		})
+	}
+}
+
+func TestSlogWithGroupStartsANewPlaceholderLevel(t *testing.T) {
+	secret, _ := syntheticKeys()
+	var buf bytes.Buffer
+	NewJSON(&buf, slog.LevelInfo).With(secret, "a").WithGroup("grp").With(secret, "b").Info("event", secret, "c")
+	assertNoKeyLeak(t, "group-level", buf.String())
+	if n := strings.Count(buf.String(), "redacted.key"); n != 2 {
+		t.Errorf("want one placeholder per level (2: outer, inside grp), got %d: %q", n, buf.String())
+	}
+}
+
+func TestSlogDebugRecordsAreKeyScrubbedToo(t *testing.T) {
+	secret, _ := syntheticKeys()
+	var buf bytes.Buffer
+	logger := NewJSON(&buf, slog.LevelDebug)
+	logger.Debug("event", secret, "v")
+	logger.With(secret, "v").Debug("event2")
+	if buf.Len() == 0 {
+		t.Fatal("debug records were dropped")
+	}
+	assertNoKeyLeak(t, "debug", buf.String())
+}

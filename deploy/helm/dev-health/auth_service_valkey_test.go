@@ -1,55 +1,118 @@
 package devhealth_test
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
 
 var authValkey = []string{
-	"--set", "authService.valkey.secretName=auth-ratelimit",
+	"--set", "authService.valkey.secretName=" + storeSecret,
 	"--set-json", `authService.networkPolicy.egress.valkey.to=[{"podSelector":{"matchLabels":{"app":"valkey"}}}]`,
 }
 
-// The rate-limit store's login reaches the container by secretKeyRef only
-// while authService.valkey is set; otherwise the pod has no such variable and
-// no egress to the store.
-func TestAuthServiceRateLimitStoreLoginIsOptionalAndByReference(t *testing.T) {
-	docs, out, err := renderAuth(t, authBase...)
+const storeSecret = "auth-ratelimit"
+
+// secretRefs lists every Secret reference of a container, as "name/key" for a
+// secretKeyRef and "name/*" for an envFrom secretRef, with each reference's
+// `optional` value ("" when the key is absent).
+func secretRefs(container any) (refs []string, optional map[string]string) {
+	optional = map[string]string{}
+	for _, e := range aList(at(container, "env")) {
+		if name, ok := at(e, "valueFrom", "secretKeyRef", "name").(string); ok {
+			ref := name + "/" + aStr(at(e, "valueFrom", "secretKeyRef", "key"))
+			refs = append(refs, ref)
+			if v, present := aMap(at(e, "valueFrom", "secretKeyRef"))["optional"]; present {
+				optional[ref] = strings.ToLower(fmt.Sprint(v))
+			}
+		}
+	}
+	for _, e := range aList(at(container, "envFrom")) {
+		if name, ok := at(e, "secretRef", "name").(string); ok {
+			refs = append(refs, name+"/*")
+		}
+	}
+	return refs, optional
+}
+
+func authContainer(t *testing.T, args ...string) (container any, out string) {
+	t.Helper()
+	docs, out, err := renderAuth(t, args...)
 	if err != nil {
 		t.Fatalf("render failed: %v\n%.600s", err, out)
 	}
 	deployment := authDoc(docs, "Deployment", "a-dev-health-auth-service")
-	if envNames(at(deployment, "spec", "template", "spec", "containers", 0))["AUTH_VALKEY_URI"] {
+	if deployment == nil {
+		t.Fatal("no auth-service Deployment rendered")
+	}
+	return at(deployment, "spec", "template", "spec", "containers", 0), out
+}
+
+// The rate-limit store's login reaches the container by ONE secretKeyRef only
+// while authService.valkey is set. Roll 18 ships with the Secret absent: with
+// the name unset the auth-service container has no reference to the store
+// Secret (no secretKeyRef, no envFrom, no AUTH_VALKEY_URI variable), and with it
+// set the container gains exactly one reference, to its own key, without an
+// `optional` key (a named but missing Secret must fail loudly).
+func TestAuthServiceRateLimitStoreLoginIsOptionalAndByReference(t *testing.T) {
+	unset, unsetOut := authContainer(t, authBase...)
+	if envNames(unset)["AUTH_VALKEY_URI"] {
 		t.Error("AUTH_VALKEY_URI is set with no authService.valkey.secretName")
 	}
-	// Roll 18 ships with the Secret absent: with the name unset nothing in the render may refer to it.
-	if strings.Contains(out, "AUTH_VALKEY_URI") || strings.Contains(out, "auth-valkey") {
-		t.Error("the render refers to the store Secret although authService.valkey.secretName is unset")
+	baseRefs, _ := secretRefs(unset)
+	if len(baseRefs) == 0 {
+		t.Fatal("the base render has no Secret reference at all: the reference reader is not reading")
 	}
-	docs, out, err = renderAuth(t, append(append([]string{}, authBase...), authValkey...)...)
+	for _, ref := range baseRefs {
+		if strings.HasPrefix(ref, storeSecret+"/") {
+			t.Errorf("with the name unset the container refers to the store Secret: %s", ref)
+		}
+		if strings.HasSuffix(ref, "/*") {
+			t.Errorf("the container takes a whole Secret through envFrom: %s", ref)
+		}
+	}
+	if strings.Contains(unsetOut, "AUTH_VALKEY_URI") || strings.Contains(unsetOut, storeSecret) {
+		t.Error("the render mentions the store Secret or its variable although authService.valkey.secretName is unset")
+	}
+
+	set, _ := authContainer(t, append(append([]string{}, authBase...), authValkey...)...)
+	setRefs, optional := secretRefs(set)
+	var storeRefs int
+	for _, ref := range setRefs {
+		if strings.HasPrefix(ref, storeSecret+"/") {
+			storeRefs++
+			if ref != storeSecret+"/AUTH_VALKEY_URI" {
+				t.Errorf("the container refers to %s, want only the AUTH_VALKEY_URI key", ref)
+			}
+			if v := optional[ref]; v != "" && v != "false" {
+				t.Errorf("the store reference carries optional=%q: a missing Secret must fail the pod, not start it quietly", v)
+			}
+		}
+		if strings.HasSuffix(ref, "/*") {
+			t.Errorf("the container takes a whole Secret through envFrom: %s", ref)
+		}
+	}
+	if storeRefs != 1 {
+		t.Errorf("%d references to the store Secret, want exactly one", storeRefs)
+	}
+	if len(setRefs) != len(baseRefs)+1 {
+		t.Errorf("setting the name changed the container's Secret references from %d to %d, want exactly one more", len(baseRefs), len(setRefs))
+	}
+	var literal bool
+	for _, e := range aList(at(set, "env")) {
+		if at(e, "name") == "AUTH_VALKEY_URI" && at(e, "value") != nil {
+			literal = true
+		}
+	}
+	if literal {
+		t.Error("AUTH_VALKEY_URI carries a literal value")
+	}
+	docs, _, err := renderAuth(t, append(append([]string{}, authBase...), authValkey...)...)
 	if err != nil {
-		t.Fatalf("render failed: %v\n%.600s", err, out)
-	}
-	deployment = authDoc(docs, "Deployment", "a-dev-health-auth-service")
-	container := at(deployment, "spec", "template", "spec", "containers", 0)
-	var found bool
-	for _, e := range at(container, "env").([]any) {
-		if at(e, "name") != "AUTH_VALKEY_URI" {
-			continue
-		}
-		found = true
-		if at(e, "value") != nil {
-			t.Error("AUTH_VALKEY_URI carries a literal value")
-		}
-		if at(e, "valueFrom", "secretKeyRef", "name") != "auth-ratelimit" || at(e, "valueFrom", "secretKeyRef", "key") != "AUTH_VALKEY_URI" {
-			t.Errorf("AUTH_VALKEY_URI is not the secretKeyRef of the named Secret: %v", e)
-		}
-	}
-	if !found {
-		t.Error("AUTH_VALKEY_URI is not set although authService.valkey.secretName is")
+		t.Fatal(err)
 	}
 	for _, doc := range docs {
-		if doc["kind"] == "Secret" && at(doc, "metadata", "name") == "auth-ratelimit" {
+		if doc["kind"] == "Secret" && at(doc, "metadata", "name") == storeSecret {
 			t.Error("the chart creates the rate-limit Secret")
 		}
 	}
@@ -102,3 +165,9 @@ func TestAuthServiceRateLimitStoreRefusals(t *testing.T) {
 		})
 	}
 }
+
+func aList(v any) []any { l, _ := v.([]any); return l }
+
+func aMap(v any) map[string]any { m, _ := v.(map[string]any); return m }
+
+func aStr(v any) string { s, _ := v.(string); return s }

@@ -256,7 +256,12 @@ func TestWebhookIntakeVenueOracleGitHubGitLabJiraHealth(t *testing.T) {
 	)
 
 	python := golden.Python(t, venue, requests)
-	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{Golden: golden, Normalize: blankVenueEventID})
+	pin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/webhook-intake-health.go-pin.json", SHA256: webhookHealthPinSHA256, Ruling: webhookHealthRuling})
+	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{
+		Golden: golden, Normalize: blankVenueEventID,
+		Retire: func(request venueoracle.Request) bool { return request.Name == "webhooks health" }, Pin: pin,
+	})
+	pin.Finish(t)
 	t.Log(receipt)
 
 	deliveriesQuery := `SELECT provider, event_type, raw_event_type, org_ref, repo_name FROM webhook_deliveries ORDER BY provider, delivery_key`
@@ -673,3 +678,11 @@ func blankedJSONRows(joined string, known []string) []string {
 	}
 	return rows
 }
+
+// webhookHealthRuling retired the Python reference of the webhooks health
+// request: the public answer names no server-side secret state, so the Python
+// secrets_configured object is removed (a stricter divergence, D6129).
+const webhookHealthRuling = "CHAOS-10732 (D6129): the public webhooks health answer carries no secret state; Python's secrets_configured is removed, Go's answer is pinned"
+
+// webhookHealthPinSHA256 is the digest of testdata/webhook-intake-health.go-pin.json.
+const webhookHealthPinSHA256 = "ce524903b2f9d55fd286439bdc2b0bc58f4cd3166cbeff6623db32a1596a6383"

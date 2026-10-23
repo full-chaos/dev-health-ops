@@ -1,0 +1,3 @@
+{
+  "webhooks health": "200 {\"status\":\"ok\",\"celery_available\":false}"
+}

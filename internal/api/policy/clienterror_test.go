@@ -87,3 +87,17 @@ func TestPlanGateKeepsTheSentenceTheWebMatches(t *testing.T) {
 		t.Fatalf("MapError = %d %q %v", status, text, client)
 	}
 }
+
+func TestWriteErrorLogsTheRouteTemplateNotTheRawPath(t *testing.T) {
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /things/{id}", func(w http.ResponseWriter, r *http.Request) {
+		WriteError(w, r, logger, "load", errors.New("boom"))
+	})
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/things/an-unbounded-id", nil))
+	if !strings.Contains(logs.String(), "GET /things/{id}") || strings.Contains(logs.String(), "an-unbounded-id") {
+		t.Fatalf("log does not carry exactly the route template: %q", logs.String())
+	}
+}

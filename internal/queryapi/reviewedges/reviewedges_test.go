@@ -300,7 +300,7 @@ func TestResolve_LimitBindingIsClamped(t *testing.T) {
 		t.Fatalf("Resolve: %v", err)
 	}
 	for _, b := range client.bindings {
-		if b.Name == "limit" {
+		if b.Name == "limit_n" {
 			if b.Value != MaxRows {
 				t.Errorf("limit binding = %v, want clamped %d", b.Value, MaxRows)
 			}

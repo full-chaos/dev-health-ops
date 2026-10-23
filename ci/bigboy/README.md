@@ -85,6 +85,7 @@ docker compose -p dev-health --project-directory "$BIGBOY_ROOT" --env-file ops/.
 - Secrets are files under `/var/lib/oci-cache/mcp-venue/secrets/`, mounted by compose as `/run/secrets/<name>`; the file holds the paths
   (overridable by the `ACR_*_FILE` variables) and no value. Non-secret settings (`ACR_DB_NAME`, the role names, the projector org) default to
   what the old `.env` held.
+- FalkorDB on the host (CHAOS-10942): `acr-falkordb` publishes `127.0.0.1:16379` (loopback only, never every address). It requires a password: the default user (used by acr-api and acr-projector through `ACR_CONTEXT_FABRIC_FALKOR_PASSWORD_FILE`) and a read-only user `venue_ro` (`GRAPH.RO_QUERY`, `GRAPH.LIST`, `PING`, `HELLO`, `AUTH` only; key access read-only) come from an ACL file mounted as a secret. Host files in `/var/lib/oci-cache/mcp-venue/secrets/` (mode 0600, owner 1001, never committed; paths overridable by `ACR_FALKORDB_PASSWORD_FILE` and `ACR_FALKORDB_ACL_FILE`): `falkordb_password` (default user, mounted into acr-falkordb, acr-api, acr-projector), `falkordb_venue_ro_password` (the venue reader; mounted nowhere), `falkordb_acl` (sha256 hashes only). Every `redis-cli` against the graph needs `REDISCLI_AUTH` read from the secret file (the switch procedure below shows the form; the reader adds `--user venue_ro` and its own password file). The files share uid 1001 with every process of the stack's operators: the password stops accidental writes, it is not an OS boundary. A change of the port, the ACL or the password recreates `acr-falkordb`, `acr-api` and `acr-projector` (and nothing else): `... --profile acr up -d --no-deps --no-build acr-falkordb acr-api acr-projector`.
 - Images: all pinned by registry digest in the pins file (`BIGBOY_ACR_*_IMAGE`, each REQUIRED: with one missing every compose command fails and names it, so a host's `_records/images.env` must hold the acr lines before its checkout holds this file). acr-api (which also
   runs the projector and the migrations) and acr-mcp are the images of the acr release build, `ghcr.io/full-chaos/dev-health-acr/acr-api` and `.../acr-mcp`. A build
   on this host needs `--build-arg VERSION=0.1.0 --build-arg COMMIT=<full sha>`; without both args acr-api refuses the sidecar with a 426.
@@ -95,10 +96,10 @@ docker compose -p dev-health --project-directory "$BIGBOY_ROOT" --env-file ops/.
   executed in a scratch project). The steps, in this order:
   1. Before: render the acr services from the old `compose.yml` and from this file and diff them (names, images, environment, volumes, networks):
      only the image reference, the project-prefixed secret/volume/network names and the services' network name may differ.
-  2. Save the graph first (MCP): `docker exec dev-health-acr-mcp-falkordb-1 redis-cli BGSAVE`, wait until `redis-cli LASTSAVE` changes, then copy the dump to a dated backup
+  2. Save the graph first (MCP): `docker exec -e REDISCLI_AUTH="$(cat /var/lib/oci-cache/mcp-venue/secrets/falkordb_password)" dev-health-acr-mcp-falkordb-1 redis-cli BGSAVE`, wait until the same command with `LASTSAVE` changes, then copy the dump to a dated backup
      path, `cp /var/lib/oci-cache/mcp-venue/falkordb-data/dump.rdb /var/lib/oci-cache/mcp-venue/falkordb-data.backup-$(date -u +%Y%m%dT%H%MZ).rdb` (outside the bind-mounted directory).
-     Note the repository count for step 5: `docker exec dev-health-acr-mcp-falkordb-1 redis-cli GRAPH.QUERY <graph> "MATCH (r:Repository) RETURN count(r)"`, the `<graph>` being
-     the one `redis-cli GRAPH.LIST` shows besides `_acr_health` (34 on 2026-10-17).
+     Note the repository count for step 5: `docker exec -e REDISCLI_AUTH="$(cat /var/lib/oci-cache/mcp-venue/secrets/falkordb_password)" dev-health-acr-mcp-falkordb-1 redis-cli GRAPH.QUERY <graph> "MATCH (r:Repository) RETURN count(r)"`, the `<graph>` being
+     the one the same command with `GRAPH.LIST` shows besides `_acr_health` (34 on 2026-10-17).
   3. Remove the old project's containers and its own network, keeping the data: `cd /home/ubuntu/devhealth/dev-health-acr-mcp && docker compose -p dev-health-acr-mcp -f compose.yml down`
      (NEVER `-v`, and never `--rmi`). The bind mounts `/var/lib/oci-cache/mcp-venue/postgres-data` and `.../falkordb-data` are host paths and stay; the networks
      `dho-query-internal` and `dho-clickhouse-readers` are external and stay.
@@ -109,7 +110,7 @@ docker compose -p dev-health --project-directory "$BIGBOY_ROOT" --env-file ops/.
      (their `depends_on` stays inside the acr profiles, so a dry-run of exactly this command creates the nine acr containers and nothing else). Then `ps`, and confirm the images are the pinned digests: `docker inspect --format '{{.Image}}' dev-health-acr-mcp-acr-api-1 dev-health-acr-mcp-acr-mcp-1`
      must print the ids in `BIGBOY_ACR_API_IMAGE` and `BIGBOY_ACR_MCP_IMAGE` of the host's `_records/images.env` (fb4c745e: `01cab48f...` and `38aeb351...`).
   5. Readback: the venue answers, and the graph still holds the repository count noted in step 2 (34): run the same
-     `docker exec dev-health-acr-mcp-falkordb-1 redis-cli GRAPH.QUERY <graph> "MATCH (r:Repository) RETURN count(r)"` again and compare. Also check that the host's
+     `docker exec -e REDISCLI_AUTH="$(cat /var/lib/oci-cache/mcp-venue/secrets/falkordb_password)" dev-health-acr-mcp-falkordb-1 redis-cli GRAPH.QUERY <graph> "MATCH (r:Repository) RETURN count(r)"` again and compare. Also check that the host's
      `_records/images.env` carries `ACR_CONTEXT_FABRIC_PROJECTION_ENABLED=true` (the file defaults it to false; the projector writes nothing without it).
   6. After the readback, the old named volume `dev-health-acr-mcp_acr_entitlement_tmp` is left behind on purpose (it only held the stand-in's generated
      nginx.conf; the new file uses `dev-health-acr-entitlement-tmp`): remove it with `docker volume rm dev-health-acr-mcp_acr_entitlement_tmp` when the

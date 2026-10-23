@@ -39,7 +39,7 @@ func (g *Guard) BodyFirst(level Authz, next http.Handler) http.Handler {
 				WriteDetail(w, http.StatusRequestEntityTooLarge, "Request Entity Too Large", nil)
 				return
 			}
-			g.logger.ErrorContext(r.Context(), "api route failed", slog.String("path", r.URL.Path),
+			g.logger.ErrorContext(r.Context(), "api route failed", slog.String("path", r.Pattern),
 				slog.String("step", "read body"), slog.String("error", err.Error()))
 			WriteInternal(w)
 			return

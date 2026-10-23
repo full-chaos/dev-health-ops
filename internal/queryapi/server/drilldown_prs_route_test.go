@@ -184,7 +184,7 @@ func TestNewDrilldownPRsPostHandlerLimitFallback(t *testing.T) {
 	var sawLimit any
 	client := fakeQueryClientFunc(func(_ context.Context, query string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
 		for _, b := range bindings {
-			if b.Name == "limit" {
+			if b.Name == "limit_n" {
 				sawLimit = b.Value
 			}
 		}

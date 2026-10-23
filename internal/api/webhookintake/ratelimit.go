@@ -17,7 +17,7 @@ import (
 //
 //   - pagerdutyLimitPerMinute is rate_limit.py's "60/minute" on pagerduty_webhook
 //     (@limiter.limit), keyed by get_forwarded_ip: per (client IP, exact path),
-//     so per binding. GitHub/GitLab/Jira/health carry no limit in Python.
+//     so per binding. GitHub/health carry no limit in Python.
 //   - The three limits below are stricter than Python (D6129): a bound on
 //     requests from one client address across the intake routes, and a bound
 //     per (client address, route template) so ids in the path cannot mint new
@@ -39,8 +39,6 @@ var (
 
 const (
 	providerGitHub    = "github"
-	providerGitLab    = "gitlab"
-	providerJira      = "jira"
 	providerPagerDuty = "pagerduty"
 
 	intakeClientBucket = "webhooks-intake"
@@ -51,8 +49,6 @@ const (
 // fixed strings, never the request path.
 var routeTemplates = map[string]string{
 	providerGitHub:    routePrefix + "/github",
-	providerGitLab:    routePrefix + "/gitlab",
-	providerJira:      routePrefix + "/jira",
 	providerPagerDuty: routePrefix + "/pagerduty/{binding_id}",
 }
 
@@ -128,18 +124,18 @@ func Provider(method, path string) (string, bool) {
 }
 
 // Admit returns nil when the request may go on, else the refusal to write: one
-// 429 for every id. GitHub, GitLab and Jira deliveries count in the client
-// bucket and the route-template bucket. A PagerDuty delivery first PEEKS its
-// per-binding bucket without counting: over its limit, it is refused and
-// nothing is charged, so no refusal spends a broader budget and a fresh id
-// creates no counter before the route budget admits it. Under the limit it
-// counts in the client bucket, the route-template bucket and then the
-// per-binding bucket (whose final count still enforces the limit under races);
-// an id that is not one UUID is charged only to the shared bucket for such ids,
-// never to the client or route budget. A store that cannot answer refuses a
-// PagerDuty delivery with the unhandled-error 500 (never a request let
-// through) and lets a GitHub, GitLab or Jira delivery through with a warning:
-// those are verified by their own signature or token afterwards.
+// 429 for every id. GitHub deliveries count in the client bucket and the
+// route-template bucket. A PagerDuty delivery first PEEKS its per-binding
+// bucket without counting: over its limit, it is refused and nothing is
+// charged, so no refusal spends a broader budget and a fresh id creates no
+// counter before the route budget admits it. Under the limit it counts in the
+// client bucket, the route-template bucket and then the per-binding bucket
+// (whose final count still enforces the limit under races); an id that is not
+// one UUID is charged only to the shared bucket for such ids, never to the
+// client or route budget. A store that cannot answer refuses a PagerDuty
+// delivery with the unhandled-error 500 (never a request let through) and lets
+// a GitHub delivery through with a warning: it is verified by its own
+// signature afterwards.
 func (g *Gate) Admit(r *http.Request, provider string) func(http.ResponseWriter) {
 	client := ratelimit.ForwardedIP(r)
 	type step struct {

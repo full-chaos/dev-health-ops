@@ -2,13 +2,16 @@
 // the Go source of the emit paths (slog calls, OpenTelemetry attributes and
 // metric labels, River client construction) and reports a finding as a rule id
 // and a file:line only. The redaction rules themselves live in
-// internal/platform/logging; this package keeps no copy of them. It is a best-effort census. Named limit: a With call on any
-// receiver is read as a log call (fail closed), so a non-logger With that carries a raw request path is a false finding.
-// Named limits (not seen by the scan): the right-hand side of a declaration is resolved before the name is bound, so
-// a self-referencing initializer is not followed beyond one copy; ranging over a slice of constructors; constructors
-// held in a struct field, a map or behind parentheses; an alias declared in another file of the package; a
-// constructor taken as a method value; a receiver named like a watched package; With(args...) with a spread; and a
-// key that is a variable and not a constant. The runtime sentinel tests are the primary defence.
+// internal/platform/logging; this package keeps no copy of them. It is a best-effort census and it fails closed:
+// scopes and declaration order are not tracked. A name bound anywhere in the package (:=, var, =, a copy, a range, a
+// struct field) to a watched constructor, directly or through other names, makes every call through that name count
+// as that constructor; a name that holds several constructors counts as each of them. A With call on any receiver is
+// read as a log call, and every argument of it is checked. A same-named non-constructor or a non-logger With is a
+// false finding (noise accepted). Only conversions (string(x), a local string type, attribute.Key(x)) and
+// strconv.Itoa / fmt.Sprint of constants are folded into a key; any other call in key position is a dynamic key (R2 on
+// a metric label). Named limits (not seen by the scan): a constant key taken from another package (for example
+// tracing.StageAttribute); a constructor returned by a function call; and a key that is a variable and not a constant.
+// The runtime sentinel tests are the primary defence.
 package emitscan
 
 import (
@@ -103,9 +106,10 @@ var classLast = map[string]bool{"kind": true, "class": true, "category": true}
 var labelAllowedLast = map[string]bool{"kind": true, "class": true, "type": true, "category": true, "code": true, "count": true, "status": true}
 
 type parsedFile struct {
-	rel  string
-	fset *token.FileSet
-	file *ast.File
+	rel     string
+	fset    *token.FileSet
+	file    *ast.File
+	imports map[string]string
 }
 
 // Scan walks dirs under root (non-test .go files only) and returns every
@@ -149,7 +153,7 @@ func Scan(root string, dirs []string) ([]Finding, error) {
 				return nil
 			}
 			dirKey := filepath.ToSlash(filepath.Dir(rel))
-			byDir[dirKey] = append(byDir[dirKey], parsedFile{rel: rel, fset: fset, file: file})
+			byDir[dirKey] = append(byDir[dirKey], parsedFile{rel: rel, fset: fset, file: file, imports: importNames(file)})
 			return nil
 		})
 		if err != nil {
@@ -176,13 +180,26 @@ func Scan(root string, dirs []string) ([]Finding, error) {
 
 // pkgInfo is what one package directory knows across its files.
 type pkgInfo struct {
-	consts     map[string][]string // string constants, every value a name holds (function-local names can repeat)
-	rawFuncs   map[string]bool     // functions whose result carries a raw request path or query
-	constNames map[string]bool     // every constant name declared in the package
+	consts      map[string][]string    // string constants, every value a name holds (function-local names can repeat)
+	rawFuncs    map[string]bool        // functions whose result carries a raw request path or query
+	constNames  map[string]bool        // every constant name declared in the package
+	stringTypes map[string]bool        // package types whose underlying type is string (conversions of a constant keep its text)
+	aliases     map[string][][2]string // every watched constructor a name is ever bound to anywhere in the package, deduped
 }
 
 func packageInfo(group []parsedFile) *pkgInfo {
-	info := &pkgInfo{consts: map[string][]string{}, rawFuncs: map[string]bool{}, constNames: map[string]bool{}}
+	info := &pkgInfo{consts: map[string][]string{}, rawFuncs: map[string]bool{}, constNames: map[string]bool{},
+		stringTypes: map[string]bool{}, aliases: map[string][][2]string{}}
+	for _, parsed := range group {
+		ast.Inspect(parsed.file, func(node ast.Node) bool {
+			if spec, ok := node.(*ast.TypeSpec); ok {
+				if ident, isIdent := spec.Type.(*ast.Ident); isIdent && ident.Name == "string" {
+					info.stringTypes[spec.Name.Name] = true
+				}
+			}
+			return true
+		})
+	}
 	for changed := true; changed; {
 		changed = false
 		for _, parsed := range group {
@@ -205,7 +222,7 @@ func packageInfo(group []parsedFile) *pkgInfo {
 						if i >= len(values) {
 							continue
 						}
-						for _, folded := range foldString(values[i], info.consts, specIndex) {
+						for _, folded := range foldString(values[i], &foldCtx{consts: info.consts, imports: importsOf(parsed), stringTypes: info.stringTypes}, specIndex) {
 							if !contains(info.consts[name.Name], folded) {
 								info.consts[name.Name] = append(info.consts[name.Name], folded)
 								changed = true
@@ -217,6 +234,7 @@ func packageInfo(group []parsedFile) *pkgInfo {
 			})
 		}
 	}
+	info.collectAliases(group)
 	for changed := true; changed; {
 		changed = false
 		for _, parsed := range group {
@@ -254,27 +272,45 @@ func contains(list []string, want string) bool {
 	return false
 }
 
-// foldString evaluates a string constant expression: literals, constant names and +.
-func foldString(expr ast.Expr, consts map[string][]string, iota int) []string {
+// foldCtx is what folding a constant expression needs from its package and file.
+type foldCtx struct {
+	consts      map[string][]string
+	imports     map[string]string
+	stringTypes map[string]bool
+}
+
+func importsOf(parsed parsedFile) map[string]string { return parsed.imports }
+
+// foldString evaluates a string constant expression: literals, constant names, + and conversions (string(x), a local
+// string type, attribute.Key(x)) and strconv.Itoa / fmt.Sprint of a folded argument. Any other call is not folded.
+func foldString(expr ast.Expr, ctx *foldCtx, iota int) []string {
 	switch e := expr.(type) {
 	case *ast.BasicLit:
 		if e.Kind == token.STRING {
 			return []string{unquote(e.Value)}
 		}
 	case *ast.ParenExpr:
-		return foldString(e.X, consts, iota)
+		return foldString(e.X, ctx, iota)
 	case *ast.Ident:
 		if e.Name == "iota" {
 			return []string{strconv.Itoa(iota)}
 		}
-		return consts[e.Name]
+		return ctx.consts[e.Name]
 	case *ast.CallExpr:
-		// a conversion or decimal formatting of a folded argument keeps its text: string(x), K("x"), attribute.Key("x"),
-		// strconv.Itoa(x), fmt.Sprint(x)
-		if len(e.Args) == 1 {
-			switch e.Fun.(type) {
-			case *ast.Ident, *ast.SelectorExpr:
-				return foldString(e.Args[0], consts, iota)
+		if len(e.Args) != 1 {
+			return nil
+		}
+		switch fun := e.Fun.(type) {
+		case *ast.Ident:
+			if fun.Name == "string" || ctx.stringTypes[fun.Name] {
+				return foldString(e.Args[0], ctx, iota)
+			}
+		case *ast.SelectorExpr:
+			if x, ok := fun.X.(*ast.Ident); ok {
+				switch ctx.imports[x.Name] + "." + fun.Sel.Name {
+				case "attribute.Key", "strconv.Itoa", "fmt.Sprint":
+					return foldString(e.Args[0], ctx, iota)
+				}
 			}
 		}
 	case *ast.BinaryExpr:
@@ -282,8 +318,8 @@ func foldString(expr ast.Expr, consts map[string][]string, iota int) []string {
 			return nil
 		}
 		var out []string
-		for _, left := range foldString(e.X, consts, iota) {
-			for _, right := range foldString(e.Y, consts, iota) {
+		for _, left := range foldString(e.X, ctx, iota) {
+			for _, right := range foldString(e.Y, ctx, iota) {
 				if len(out) < 8 {
 					out = append(out, left+right)
 				}
@@ -294,11 +330,107 @@ func foldString(expr ast.Expr, consts map[string][]string, iota int) []string {
 	return nil
 }
 
+// aliasEdge is one binding of a name to an expression (:=, var, =, a range, a composite literal field).
+type aliasEdge struct {
+	name    string
+	rhs     ast.Expr
+	imports map[string]string
+}
+
+// collectAliases computes, over the whole package, every watched constructor each name is ever bound to, in any scope
+// and in any order, directly or through other names. It is a deliberate over-approximation (fail closed): scopes and
+// order are ignored, the sets are deduplicated and the loop runs until nothing is added.
+func (info *pkgInfo) collectAliases(group []parsedFile) {
+	var edges []aliasEdge
+	for _, parsed := range group {
+		imports := importsOf(parsed)
+		add := func(name ast.Expr, rhs ast.Expr) {
+			if ident, ok := name.(*ast.Ident); ok && ident.Name != "_" && rhs != nil {
+				edges = append(edges, aliasEdge{ident.Name, rhs, imports})
+			}
+		}
+		ast.Inspect(parsed.file, func(node ast.Node) bool {
+			switch n := node.(type) {
+			case *ast.AssignStmt:
+				if len(n.Lhs) == len(n.Rhs) {
+					for i, lhs := range n.Lhs {
+						add(lhs, n.Rhs[i])
+					}
+				}
+			case *ast.ValueSpec:
+				for i, name := range n.Names {
+					if i < len(n.Values) {
+						add(name, n.Values[i])
+					}
+				}
+			case *ast.RangeStmt:
+				add(n.Key, n.X)
+				add(n.Value, n.X)
+			case *ast.KeyValueExpr:
+				add(n.Key, n.Value)
+			}
+			return true
+		})
+	}
+	seen := map[string]map[[2]string]bool{}
+	for changed := true; changed; {
+		changed = false
+		for _, edge := range edges {
+			for _, alt := range info.altsOf(edge.rhs, edge.imports) {
+				if seen[edge.name] == nil {
+					seen[edge.name] = map[[2]string]bool{}
+				}
+				if !seen[edge.name][alt] {
+					seen[edge.name][alt] = true
+					info.aliases[edge.name] = append(info.aliases[edge.name], alt)
+					changed = true
+				}
+			}
+		}
+	}
+}
+
+// altsOf returns the watched constructors an expression holds: a selector of a watched package, a name already known to
+// hold some, a method value With, or the elements of a composite literal, a parenthesis or an index.
+func (info *pkgInfo) altsOf(expr ast.Expr, imports map[string]string) [][2]string {
+	switch e := expr.(type) {
+	case *ast.ParenExpr:
+		return info.altsOf(e.X, imports)
+	case *ast.StarExpr:
+		return info.altsOf(e.X, imports)
+	case *ast.UnaryExpr:
+		return info.altsOf(e.X, imports)
+	case *ast.IndexExpr:
+		return info.altsOf(e.X, imports)
+	case *ast.Ident:
+		return info.aliases[e.Name]
+	case *ast.SelectorExpr:
+		if x, ok := e.X.(*ast.Ident); ok {
+			if pkg, imported := imports[x.Name]; imported {
+				return [][2]string{{pkg, e.Sel.Name}}
+			}
+		}
+		if e.Sel.Name == "With" {
+			return [][2]string{{"", "With"}} // a method value
+		}
+		return info.aliases[e.Sel.Name] // a field holding a constructor
+	case *ast.CompositeLit:
+		var out [][2]string
+		for _, element := range e.Elts {
+			if kv, ok := element.(*ast.KeyValueExpr); ok {
+				element = kv.Value
+			}
+			out = append(out, info.altsOf(element, imports)...)
+		}
+		return out
+	}
+	return nil
+}
+
 func scanFile(parsed parsedFile, info *pkgInfo) []Finding {
 	file := parsed.file
-	s := &fileScan{fset: parsed.fset, rel: parsed.rel, metricAttrs: map[*ast.CallExpr]bool{}, pkg: info,
+	s := &fileScan{fset: parsed.fset, rel: parsed.rel, metricAttrs: map[*ast.CallExpr]bool{}, reported: map[string]bool{}, pkg: info,
 		imports: importNames(file)}
-	s.collectBindings(file)
 	for _, spec := range file.Imports {
 		if spec.Name != nil && spec.Name.Name == "." {
 			if path, err := strconv.Unquote(spec.Path.Value); err == nil && watchedImports[path] {
@@ -316,9 +448,9 @@ type fileScan struct {
 	rel         string
 	out         []Finding
 	metricAttrs map[*ast.CallExpr]bool
+	reported    map[string]bool
 	pkg         *pkgInfo
 	imports     map[string]string
-	bindings    []binding // every local name a file declares, with its scope
 	nodes       []ast.Node
 	taints      []map[string]bool
 	funcs       []string
@@ -483,155 +615,6 @@ func isMajorVersion(element string) bool {
 	return true
 }
 
-// binding is a name declared in a file with the source range it is visible in. alts holds every watched constructor
-// the name was ever bound to in that scope (var str = attribute.String; a later str = slog.String adds one, never
-// removes): the union fails closed. A binding with no alts hides an outer alias. block is true for a block scope,
-// where a use before the declaration does not see it; file and package scope are order-free.
-type binding struct {
-	name     string
-	alts     [][2]string
-	declared token.Pos
-	from, to token.Pos
-	block    bool
-}
-
-// collectBindings records every name the file declares (:=, var, parameters) with its scope, then folds in the plain
-// re-assignments of those names.
-func (s *fileScan) collectBindings(file *ast.File) {
-	for pass := 0; pass < 2; pass++ {
-		scopes := [][2]token.Pos{{file.Pos(), file.End()}}
-		var nodes []ast.Node
-		scopeNode := func(node ast.Node) bool {
-			switch node.(type) {
-			case *ast.BlockStmt, *ast.IfStmt, *ast.ForStmt, *ast.RangeStmt, *ast.SwitchStmt, *ast.TypeSwitchStmt,
-				*ast.CaseClause, *ast.CommClause, *ast.FuncLit:
-				return true
-			}
-			return false
-		}
-		bind := func(name ast.Expr, value ast.Expr, scope [2]token.Pos) {
-			ident, ok := name.(*ast.Ident)
-			if !ok || ident.Name == "_" {
-				return
-			}
-			s.bindings = append(s.bindings, binding{name: ident.Name, alts: s.altsOf(value), declared: ident.Pos(),
-				from: scope[0], to: scope[1], block: len(scopes) > 1})
-		}
-		params := func(list *ast.FieldList, scope [2]token.Pos) {
-			if list == nil {
-				return
-			}
-			for _, field := range list.List {
-				for _, name := range field.Names {
-					s.bindings = append(s.bindings, binding{name: name.Name, declared: name.Pos(), from: scope[0], to: scope[1], block: true})
-				}
-			}
-		}
-		ast.Inspect(file, func(node ast.Node) bool {
-			if node == nil {
-				top := nodes[len(nodes)-1]
-				nodes = nodes[:len(nodes)-1]
-				if scopeNode(top) {
-					scopes = scopes[:len(scopes)-1]
-				}
-				return false
-			}
-			nodes = append(nodes, node)
-			if scopeNode(node) {
-				scopes = append(scopes, [2]token.Pos{node.Pos(), node.End()})
-			}
-			scope := scopes[len(scopes)-1]
-			if pass == 0 {
-				switch n := node.(type) {
-				case *ast.FuncDecl:
-					if n.Body != nil {
-						bodyScope := [2]token.Pos{n.Body.Pos(), n.Body.End()}
-						params(n.Type.Params, bodyScope)
-						params(n.Recv, bodyScope)
-					}
-				case *ast.FuncLit:
-					params(n.Type.Params, scope)
-				case *ast.ValueSpec:
-					for i, name := range n.Names {
-						var value ast.Expr
-						if i < len(n.Values) {
-							value = n.Values[i]
-						}
-						bind(name, value, scope)
-					}
-				case *ast.AssignStmt:
-					if n.Tok == token.DEFINE {
-						for i, lhs := range n.Lhs {
-							var value ast.Expr
-							if i < len(n.Rhs) {
-								value = n.Rhs[i]
-							}
-							bind(lhs, value, scope)
-						}
-					}
-				}
-				return true
-			}
-			if assign, ok := node.(*ast.AssignStmt); ok && assign.Tok == token.ASSIGN {
-				for i, lhs := range assign.Lhs {
-					ident, ok := lhs.(*ast.Ident)
-					if !ok || i >= len(assign.Rhs) {
-						continue
-					}
-					if target := s.visibleBinding(ident); target != nil {
-						target.alts = append(target.alts, s.altsOf(assign.Rhs[i])...)
-					}
-				}
-			}
-			return true
-		})
-	}
-}
-
-// altsOf returns the watched constructors an expression holds: a selector of a watched package, or the alternatives of
-// the visible binding a plain identifier names (alias of an alias).
-func (s *fileScan) altsOf(value ast.Expr) [][2]string {
-	switch v := value.(type) {
-	case *ast.ParenExpr:
-		return s.altsOf(v.X)
-	case *ast.SelectorExpr:
-		if x, ok := v.X.(*ast.Ident); ok {
-			if pkg, imported := s.imports[x.Name]; imported {
-				return [][2]string{{pkg, v.Sel.Name}}
-			}
-		}
-	case *ast.Ident:
-		if b := s.visibleBinding(v); b != nil {
-			return append([][2]string(nil), b.alts...)
-		}
-	}
-	return nil
-}
-
-// visibleBinding returns the innermost binding of the identifier's name visible at its position, or nil.
-func (s *fileScan) visibleBinding(ident *ast.Ident) *binding {
-	var best *binding
-	for i := range s.bindings {
-		b := &s.bindings[i]
-		if b.name != ident.Name || (b.block && b.declared >= ident.Pos()) || ident.Pos() < b.from || ident.Pos() > b.to {
-			continue
-		}
-		if best == nil || b.to-b.from < best.to-best.from || (b.to-b.from == best.to-best.from && b.declared > best.declared) {
-			best = b
-		}
-	}
-	return best
-}
-
-// aliasAlts resolves a call target identifier to the watched constructors it holds at this position: the innermost
-// visible binding of the name decides, and a binding without constructors hides an outer alias.
-func (s *fileScan) aliasAlts(ident *ast.Ident) [][2]string {
-	if b := s.visibleBinding(ident); b != nil {
-		return b.alts
-	}
-	return nil
-}
-
 // markMetricFunctions marks every attribute constructor inside a function that builds metric options or an
 // attribute set: a label assembled in a slice or a set is a metric label too.
 func (s *fileScan) markMetricFunctions(file *ast.File) {
@@ -674,6 +657,11 @@ func (s *fileScan) buildsMetricLabels(body *ast.BlockStmt) bool {
 }
 
 func (s *fileScan) add(rule string, pos token.Pos, detail string) {
+	dedupe := fmt.Sprintf("%s|%d|%s", rule, s.fset.Position(pos).Line, detail)
+	if s.reported[dedupe] {
+		return
+	}
+	s.reported[dedupe] = true
 	fn := "-"
 	if len(s.funcs) > 0 {
 		fn = s.funcs[len(s.funcs)-1]
@@ -691,17 +679,14 @@ func unquote(literal string) string {
 // keysOf returns the key texts an attribute key expression can hold: a string literal, or a constant (folded across the
 // package, concatenations included). ok is false for any other expression.
 func (s *fileScan) keysOf(expr ast.Expr) ([]string, bool) {
-	values := foldString(expr, s.pkg.consts, 0)
+	values := foldString(expr, &foldCtx{consts: s.pkg.consts, imports: s.imports, stringTypes: s.pkg.stringTypes}, 0)
 	return values, len(values) > 0
 }
 
 // qualified names the package (by its import path's last element, whatever the local alias) and the function of a
 // selector call. pkg is the identifier itself when it is not an import (a variable receiver).
 func (s *fileScan) qualified(fun ast.Expr) (pkg, name string, ok bool) {
-	if ident, isIdent := fun.(*ast.Ident); isIdent {
-		if alts := s.aliasAlts(ident); len(alts) > 0 {
-			return alts[0][0], alts[0][1], true
-		}
+	if _, isIdent := fun.(*ast.Ident); isIdent {
 		return "", "", false
 	}
 	sel, isSel := fun.(*ast.SelectorExpr)
@@ -717,16 +702,26 @@ func (s *fileScan) qualified(fun ast.Expr) (pkg, name string, ok bool) {
 	return "", sel.Sel.Name, true
 }
 
-// targets lists every (package, function) a call target can be: one for a selector, every alternative of a
-// function variable.
+// targets lists every (package, function) a call target can be: one for a selector, every alternative of a function
+// variable, a field or an indexed holder (union over the package, fail closed).
 func (s *fileScan) targets(fun ast.Expr) [][2]string {
-	if ident, ok := fun.(*ast.Ident); ok {
-		return s.aliasAlts(ident)
+	var out [][2]string
+	switch f := fun.(type) {
+	case *ast.ParenExpr:
+		return s.targets(f.X)
+	case *ast.Ident:
+		return s.pkg.aliases[f.Name]
+	case *ast.IndexExpr:
+		return s.pkg.altsOf(f.X, s.imports)
+	case *ast.SelectorExpr:
+		if pkg, name, ok := s.qualified(f); ok {
+			out = append(out, [2]string{pkg, name})
+		}
+		if x, ok := f.X.(*ast.Ident); !ok || s.imports[x.Name] == "" {
+			out = append(out, s.pkg.aliases[f.Sel.Name]...)
+		}
 	}
-	if pkg, name, ok := s.qualified(fun); ok {
-		return [][2]string{{pkg, name}}
-	}
-	return nil
+	return out
 }
 
 // attrParts returns the key and value expressions of an OpenTelemetry attribute constructor call:
@@ -775,7 +770,7 @@ func (s *fileScan) callTarget(call *ast.CallExpr, pkg, name string) {
 		s.riverClient(call)
 	case logMethods[name] && len(call.Args) >= 3:
 		s.logCall(call, strings.HasSuffix(name, "Context"))
-	case name == "With" && len(call.Args) >= 2 && pkg != "attribute":
+	case name == "With":
 		s.logPairs(call.Args, 0)
 	}
 }
@@ -801,13 +796,11 @@ func (s *fileScan) logCall(call *ast.CallExpr, withContext bool) {
 	s.logPairs(call.Args, skip)
 }
 
-// logPairs checks the value of every key/value pair that starts with a string key.
+// logPairs checks every argument from the given index as an emitted value: a key is never a raw request path, and a
+// key held in a variable, a spread or a method value would otherwise hide its value (fail closed).
 func (s *fileScan) logPairs(args []ast.Expr, from int) {
 	for i := from; i < len(args); i++ {
-		if _, isKey := s.keysOf(args[i]); isKey && i+1 < len(args) {
-			s.emitValue(args[i+1], args[i+1].Pos())
-			i++
-		}
+		s.emitValue(args[i], args[i].Pos())
 	}
 }
 
@@ -918,8 +911,8 @@ func (s *fileScan) errorTextValue(expr ast.Expr) bool {
 
 func (s *fileScan) attribute(call *ast.CallExpr, keyExpr, value ast.Expr) {
 	keys, literal := s.keysOf(keyExpr)
-	if ident, isIdent := keyExpr.(*ast.Ident); isIdent && !literal && s.pkg.constNames[ident.Name] {
-		// a constant the scan cannot fold: fail closed rather than skip
+	if !literal && s.unfoldableConst(keyExpr) {
+		// a constant (or a conversion of one) the scan cannot fold: fail closed rather than skip
 		s.add(RuleProtectedKey, call.Pos(), "unfoldable const key")
 	}
 	label := "-"
@@ -936,6 +929,18 @@ func (s *fileScan) attribute(call *ast.CallExpr, keyExpr, value ast.Expr) {
 	if s.metricAttrs[call] {
 		s.metricLabel(call, keys, literal)
 	}
+}
+
+// unfoldableConst reports a key expression that names a package constant yet folds to no text.
+func (s *fileScan) unfoldableConst(expr ast.Expr) bool {
+	found := false
+	ast.Inspect(expr, func(node ast.Node) bool {
+		if ident, ok := node.(*ast.Ident); ok && s.pkg.constNames[ident.Name] {
+			found = true
+		}
+		return !found
+	})
+	return found
 }
 
 func (s *fileScan) metricAttributes(call *ast.CallExpr) {

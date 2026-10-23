@@ -1,0 +1,39 @@
+# Executed Kubernetes proof for the go-api request-port fence (goApi.networkPolicy): the chart's
+# go-api-internal NetworkPolicy, applied to a kind cluster in front of a stand-in pod, refuses an
+# unlisted pod on the request ports and admits the ingress controller pod, and the fence-off render
+# opens them again (rollback). The logic is ci/check_go_api_fence_k8s.sh. The cluster is created and
+# deleted inside the job; nothing here touches a deployed environment.
+#
+# A PROOF, deliberately NOT a required check, and NOT run on every pull request: it runs on
+# workflow_dispatch and on a pull request that changes the files below ONLY. Its name is distinct
+# from every required context.
+name: Go API fence proof
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - 'ci/check_go_api_fence_k8s.sh'
+      - '.github/workflows/go-api-fence-k8s-proof.yml'
+      - 'deploy/helm/dev-health/templates/go-api-deployment.yaml'
+      - 'deploy/helm/dev-health/templates/networkpolicy.yaml'
+      - 'deploy/helm/dev-health/values.yaml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  go-api-fence-k8s-proof:
+    name: go-api-fence-k8s-proof
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Prove the fence in a kind cluster
+        run: bash ci/check_go_api_fence_k8s.sh

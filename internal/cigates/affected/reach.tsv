@@ -58,6 +58,7 @@ internal/auth/contracts	contracts.go	cmd/auth-service
 internal/auth/contracts	contracts.go	cmd/dho
 internal/auth/contracts	contracts.go	internal/audit
 internal/auth/contracts	contracts.go	internal/auth/authapi
+internal/auth/contracts	contracts.go	internal/auth/authconfig
 internal/auth/contracts	contracts.go	internal/auth/authruntime
 internal/auth/contracts	contracts.go	internal/auth/contracts
 internal/auth/contracts	contracts.go	internal/auth/contracts/provisioning
@@ -72,6 +73,8 @@ internal/auth/contracts	contracts.go	internal/auth/identity/social
 internal/auth/contracts	contracts.go	internal/auth/linkmail
 internal/auth/contracts	contracts.go	internal/auth/policycatalog
 internal/auth/contracts	contracts.go	internal/auth/session
+internal/auth/contracts	contracts.go	internal/auth/usersbackfill
+internal/auth/contracts	contracts.go	internal/platform/logging
 internal/auth/contracts	endpoint_auth_profile_selector_gate.go	internal/auth/contracts
 internal/auth/contracts/tokencorpus	corpus.go	internal/auth/contracts/tokencorpus
 internal/auth/contracts/tokencorpus	corpus.go	internal/auth/contracts/tokencorpus/gen

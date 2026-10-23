@@ -316,6 +316,12 @@ var additiveExemptions = []additiveExemption{
 		regression: `constraint workloads.workloads_organization_id_fkey redefined "FOREIGN KEY (organization_id) REFERENCES auth.organizations(id) ON DELETE CASCADE" -> "FOREIGN KEY (organization_id) REFERENCES auth.organizations(id) ON DELETE RESTRICT"`,
 		reason:     "deleting an organization or a principal that still owns security state is refused instead of deleting it (CHAOS-10639)",
 	},
+	{
+		version:    21,
+		regression: `constraint signing_keys.signing_keys_status_check redefined "CHECK ((status = ANY (ARRAY['pending'::text, 'active'::text, 'retiring'::text, 'revoked'::text])))" -> "CHECK ((status = ANY (ARRAY['pending'::text, 'active'::text, 'retiring'::text, 'retired'::text, 'compromised'::text])))"`,
+		reason: "signing_keys.status takes the five rotation states; the migration refuses a table that holds a " +
+			"'revoked' row, and no writer of the table existed before it (signing-key rotation state machine)",
+	},
 }
 
 // TestEveryMigrationStepIsAdditive applies the lineage ONE MIGRATION AT A TIME

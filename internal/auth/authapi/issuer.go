@@ -23,12 +23,12 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 )
 
-// Issuer verifies the HS256 compatibility token and mints exactly one class:
-// signer (HS256) or eddsa (access-token.v1), never both.
+// Issuer verifies the HS256 compatibility token and mints exactly one class (HS256 or eddsa), never both.
 type Issuer struct {
 	signer   *edgetoken.Signer
 	eddsa    *eddsaMinter
 	verifier *edgetoken.Verifier
+	kids     KidRecorder
 	now      func() time.Time
 }
 
@@ -75,11 +75,19 @@ func (i *Issuer) AccessContext(ctx context.Context, grant Grant) (string, error)
 	case i.signer != nil && i.eddsa != nil:
 		return "", fmt.Errorf("%w: both access token classes are configured", errIssue)
 	case i.eddsa != nil:
-		return i.eddsa.mint(ctx, grant, i.now())
+		compact, kid, err := i.eddsa.mint(ctx, grant, i.now())
+		if err != nil {
+			return "", err
+		}
+		return i.recordKid(ctx, grant, compact, kid)
 	case i.signer == nil:
 		return "", fmt.Errorf("%w: no access token class is configured", errIssue)
 	}
-	return i.hs256Access(grant)
+	compact, err := i.hs256Access(grant)
+	if err != nil {
+		return "", err
+	}
+	return i.recordKid(ctx, grant, compact, "")
 }
 
 // hs256Access mints go-api's claims (create_access_token,

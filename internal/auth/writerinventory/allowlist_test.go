@@ -105,6 +105,7 @@ var Allowlist = []Entry{
 	{File: "internal/auth/session/legacy.go", Func: "Store.revokeLegacyFamily", Table: "public.refresh_tokens", Verb: "UPDATE"},
 	{File: "internal/auth/session/signin.go", Func: "Store.insertSession", Table: "auth.refresh_credentials", Verb: "INSERT"},
 	{File: "internal/auth/session/signin.go", Func: "Store.insertSession", Table: "auth.sessions", Verb: "INSERT"},
+	{File: "internal/auth/session/signingkids.go", Func: "Store.RecordSigningKid", Table: "auth.sessions", Verb: "UPDATE"},
 	{File: "internal/auth/session/store.go", Func: "Store.BumpRevision", Table: "auth.sessions", Verb: "UPDATE"},
 	{File: "internal/auth/session/store.go", Func: "Store.revokeSessions", Table: "auth.refresh_credentials", Verb: "UPDATE"},
 	{File: "internal/auth/session/store.go", Func: "Store.revokeSessions", Table: "auth.sessions", Verb: "UPDATE"},

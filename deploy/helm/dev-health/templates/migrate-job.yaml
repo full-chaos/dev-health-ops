@@ -34,12 +34,12 @@
 {{- fail "migrations.hook.clickhouseCloud.database must be a database name (letters, digits, '-', '_')" }}
 {{- end }}
 {{- range $entry := .Values.migrations.hook.extraEnv }}
-{{- if or (eq $entry.name "CLICKHOUSE_URI") (hasPrefix "DHO_CH_CLOUD_" $entry.name) }}
-{{- fail (printf "migrations.hook.clickhouseCloud.enabled=true composes CLICKHOUSE_URI and DHO_CH_CLOUD_*; migrations.hook.extraEnv must not also set %s" $entry.name) }}
+{{- if or (eq $entry.name "CLICKHOUSE_URI") (eq $entry.name "CLICKHOUSE_URI_FILE") (hasPrefix "DHO_CH_CLOUD_" $entry.name) }}
+{{- fail (printf "migrations.hook.clickhouseCloud.enabled=true composes CLICKHOUSE_URI and DHO_CH_CLOUD_*; migrations.hook.extraEnv must not also set %s (CLICKHOUSE_URI_FILE is refused too: dho rejects both forms together)" $entry.name) }}
 {{- end }}
 {{- end }}
-{{- if index .Values.migrations.hook.secretData "CLICKHOUSE_URI" }}
-{{- fail "migrations.hook.clickhouseCloud.enabled=true composes CLICKHOUSE_URI from the Secret it names; migrations.hook.secretData.CLICKHOUSE_URI must be empty" }}
+{{- if or (index .Values.migrations.hook.secretData "CLICKHOUSE_URI") (index .Values.migrations.hook.secretData "CLICKHOUSE_URI_FILE") }}
+{{- fail "migrations.hook.clickhouseCloud.enabled=true composes CLICKHOUSE_URI from the Secret it names; migrations.hook.secretData.CLICKHOUSE_URI and CLICKHOUSE_URI_FILE must be empty" }}
 {{- end }}
 {{- end }}
 {{- /*

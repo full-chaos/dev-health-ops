@@ -473,17 +473,19 @@ func TestMigrateJobClickHouseCloudDSN(t *testing.T) {
 	})
 
 	for name, sets := range map[string][]string{
-		"empty secretName":               {cloud + "enabled=true"},
-		"port zero":                      {cloud + "enabled=true", cloud + "secretName=s", cloud + "port=0"},
-		"port too large":                 {cloud + "enabled=true", cloud + "secretName=s", cloud + "port=65536"},
-		"port not a number":              {cloud + "enabled=true", cloud + "secretName=s", cloud + "port=abc"},
-		"database with a slash":          {cloud + "enabled=true", cloud + "secretName=s", cloud + "database=a/b"},
-		"database with a query":          {cloud + "enabled=true", cloud + "secretName=s", cloud + "database=a?x=1"},
-		"hostKey outside the key set":    {cloud + "enabled=true", cloud + "secretName=s", cloud + "hostKey=H K"},
-		"empty passwordKey":              {cloud + "enabled=true", cloud + "secretName=s", cloud + "passwordKey="},
-		"extraEnv CLICKHOUSE_URI":        {cloud + "enabled=true", cloud + "secretName=s", "migrations.hook.extraEnv[0].name=CLICKHOUSE_URI", "migrations.hook.extraEnv[0].value=x"},
-		"extraEnv DHO_CH_CLOUD_HOST":     {cloud + "enabled=true", cloud + "secretName=s", "migrations.hook.extraEnv[0].name=DHO_CH_CLOUD_HOST", "migrations.hook.extraEnv[0].value=x"},
-		"hook secretData CLICKHOUSE_URI": {cloud + "enabled=true", cloud + "secretName=s", "migrations.hook.secretData.CLICKHOUSE_URI=clickhouse://u:p@h:9000/db"},
+		"empty secretName":                    {cloud + "enabled=true"},
+		"port zero":                           {cloud + "enabled=true", cloud + "secretName=s", cloud + "port=0"},
+		"port too large":                      {cloud + "enabled=true", cloud + "secretName=s", cloud + "port=65536"},
+		"port not a number":                   {cloud + "enabled=true", cloud + "secretName=s", cloud + "port=abc"},
+		"database with a slash":               {cloud + "enabled=true", cloud + "secretName=s", cloud + "database=a/b"},
+		"database with a query":               {cloud + "enabled=true", cloud + "secretName=s", cloud + "database=a?x=1"},
+		"hostKey outside the key set":         {cloud + "enabled=true", cloud + "secretName=s", cloud + "hostKey=H K"},
+		"empty passwordKey":                   {cloud + "enabled=true", cloud + "secretName=s", cloud + "passwordKey="},
+		"extraEnv CLICKHOUSE_URI":             {cloud + "enabled=true", cloud + "secretName=s", "migrations.hook.extraEnv[0].name=CLICKHOUSE_URI", "migrations.hook.extraEnv[0].value=x"},
+		"extraEnv CLICKHOUSE_URI_FILE":        {cloud + "enabled=true", cloud + "secretName=s", "migrations.hook.extraEnv[0].name=CLICKHOUSE_URI_FILE", "migrations.hook.extraEnv[0].value=/tmp/dsn"},
+		"hook secretData CLICKHOUSE_URI_FILE": {cloud + "enabled=true", cloud + "secretName=s", "migrations.hook.secretData.CLICKHOUSE_URI_FILE=/tmp/dsn"},
+		"extraEnv DHO_CH_CLOUD_HOST":          {cloud + "enabled=true", cloud + "secretName=s", "migrations.hook.extraEnv[0].name=DHO_CH_CLOUD_HOST", "migrations.hook.extraEnv[0].value=x"},
+		"hook secretData CLICKHOUSE_URI":      {cloud + "enabled=true", cloud + "secretName=s", "migrations.hook.secretData.CLICKHOUSE_URI=clickhouse://u:p@h:9000/db"},
 	} {
 		t.Run("refused: "+name, func(t *testing.T) {
 			_, _, refusal := renderJobs(t, sets...)

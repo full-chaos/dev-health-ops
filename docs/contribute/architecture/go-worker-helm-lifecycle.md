@@ -171,7 +171,10 @@ Kubernetes expands it in the Pod, so the spec holds no value. No
 percent-encoding happens: the password and user must be URL-safe (none of
 `@ : / ? # %`). The chart refuses an empty `secretName`, a bad port, key or
 database name, and any `migrations.hook.extraEnv` or
-`migrations.hook.secretData` entry that also sets `CLICKHOUSE_URI`.
+`migrations.hook.secretData` entry that also sets `CLICKHOUSE_URI` or
+`CLICKHOUSE_URI_FILE`. An external migrate Secret may keep a `CLICKHOUSE_URI`
+key (the env entry wins) but must not carry `CLICKHOUSE_URI_FILE`, which the
+chart cannot see and `dho` refuses together with `CLICKHOUSE_URI`.
 
 ## Drain and rollout safety
 

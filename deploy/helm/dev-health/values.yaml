@@ -903,7 +903,11 @@ migrations:
     #    clickhouse://$(user):$(password)@$(host):<port>/<database>?secure=true,
     #    expanded by Kubernetes in the Pod; the Secret is operator-created and
     #    this chart never creates it. Requires migrations.hook.extraEnv and
-    #    migrations.hook.secretData to leave CLICKHOUSE_URI unset.
+    #    migrations.hook.secretData to leave CLICKHOUSE_URI and
+    #    CLICKHOUSE_URI_FILE unset. An external migrate Secret
+    #    (migrations.hook.externalSecretName) may keep a CLICKHOUSE_URI key
+    #    (the env entry wins) but must NOT carry CLICKHOUSE_URI_FILE: dho
+    #    refuses both forms together and the chart cannot see inside it.
     #    CHARSET REQUIREMENT: the expansion does no percent-encoding, so the
     #    password and user must not contain any of  @ : / ? # %  (URL-safe
     #    characters only; a hex password is safe). Check before enabling.

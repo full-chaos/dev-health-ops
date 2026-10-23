@@ -1,0 +1,129 @@
+instrument	labels	reason
+auth.api.session_route_outcomes	operation,reason_code,result	code: internal/auth/authapi/wire.go
+auth.identity.external_links	action,outcome	code: internal/auth/identity/store.go
+auth.identity.projections	kind,outcome	code: internal/auth/identity/store.go
+auth.identity.wire_slug_omitted		code: internal/auth/identity/store.go
+auth.oidc.outcomes	outcome,reason,route	code: internal/auth/identity/oidc/service.go
+auth.session.refresh_exchanges	reason_code	code: internal/auth/session/store.go
+auth.session.revocations	reason	code: internal/auth/session/store.go
+auth.social.outcomes	operation,provider,reason_code	code: internal/auth/identity/social/service.go
+credential_mapping_rejected_total	missing_field,provider	code: internal/providerfoundation/credential_mapping_metrics.go
+credential_origin_departures_total	action,site	code: internal/httpguard/origin.go
+daily_finalize_org_day_deferred_total		code: internal/jobs/metrics/daily/finalize_org_day_gate.go
+daily_finalize_org_day_defer_seconds	outcome	code: internal/jobs/metrics/daily/finalize_org_day_gate.go
+devhealth_acr_internal_requests_total	outcome,route	code: internal/apiservice/acr/internalauth.go
+devhealth_acr_llm_config_requests_total	outcome	code: internal/apiservice/acr/llmconfig.go
+devhealth_api_auth_proxy_requests_total	aggregate,outcome	code: internal/apiservice/authproxy.go
+devhealth_api_auth_proxy_upstream_duration_seconds	aggregate	code: internal/apiservice/authproxy.go
+dev_health_api_http_request_duration_seconds	listener,method,route,status_class	code: internal/auth/httpapi/accesslog.go
+dev_health_api_http_requests_total	listener,method,route,status_class	code: internal/auth/httpapi/tracehandler.go
+dev_health_api_stripe_refund_event_decisions_total	reason	code: internal/api/billing/refundowner.go
+dev_health_api_stripe_webhook_signature_failures_total	class	code: internal/api/billing/webhook.go
+dev_health_api_stripe_webhook_unhandled_events_total	event_type	code: internal/api/billing/webhook.go
+devhealth_auth_linkmail_sends_total	outcome,purpose	code: internal/auth/linkmail/linkmail.go
+devhealth_auth_outbox_delivered_total		code: internal/audit/publisher.go
+devhealth_auth_outbox_delivery_failures_total	reason	code: internal/audit/publisher.go
+devhealth_auth_outbox_oldest_pending_age_seconds		code: internal/audit/outboxloop.go
+devhealth_auth_outbox_publisher_enabled		code: internal/audit/outboxloop.go
+dev_health_generation_repair_failures_total	step	code: internal/jobs/metrics/daily/generation_repair_metrics.go
+dev_health_generation_repair_partial_total		code: internal/jobs/metrics/daily/generation_repair_metrics.go
+dev_health_ic_finalize_refused_empty_org_total		code: internal/jobs/metrics/daily/icfinalize/executor.go
+devhealth_integration_credential_decrypt_failed_total	provider	code: internal/api/credentials/metrics.go
+devhealth_llmorgsettings_decrypt_failure_total	org_id	code: internal/llmorgsettings/telemetry.go
+devhealth_llmorgsettings_key_validation_failed_total		code: internal/llmorgsettings/telemetry.go
+dev_health_metric_labels_dropped_total	instrument,label	the allowlist drop counter: instrument and label name only, never a value
+devhealth_operational_webhook_ignored_total	event_type,provider	code: internal/jobs/operational/telemetry.go
+dev_health_project_catalog_ensure_total	outcome,provider	code: internal/providersync/project_catalog_ensure_skip.go
+devhealth_query_api_analytics_calls_total		code: internal/queryapi/graph/telemetry.go
+devhealth_query_api_analytics_client_cancelled_total	phase	code: internal/queryapi/analytics/clientcancel.go
+devhealth_query_api_analytics_degraded_total	phase	code: internal/queryapi/analytics/telemetry.go
+devhealth_query_api_analytics_outcome_total	outcome	code: internal/queryapi/graph/telemetry.go
+devhealth_query_api_capacity_forecast_calls_total		code: internal/queryapi/graph/telemetry.go
+devhealth_query_api_capacity_forecast_outcome_total	outcome	code: internal/queryapi/graph/telemetry.go
+devhealth_query_api_capacity_forecasts_calls_total		code: internal/queryapi/graph/telemetry.go
+devhealth_query_api_capacity_forecasts_outcome_total	outcome	code: internal/queryapi/graph/telemetry.go
+devhealth_query_api_catalog_calls_total		code: internal/queryapi/graph/telemetry.go
+devhealth_query_api_catalog_outcome_total	outcome	code: internal/queryapi/graph/telemetry.go
+devhealth_query_api_cognitive_load_calls_total		code: internal/queryapi/graph/telemetry.go
+devhealth_query_api_cognitive_load_outcome_total	outcome	code: internal/queryapi/graph/telemetry.go
+devhealth_query_api_complexity_timeseries_calls_total		code: internal/queryapi/graph/telemetry.go
+devhealth_query_api_complexity_timeseries_outcome_total	outcome	code: internal/queryapi/graph/telemetry.go
+devhealth_query_api_data_health_calls_total	field	code: internal/queryapi/graph/telemetry.go
+devhealth_query_api_data_health_outcome_total	field,outcome	code: internal/queryapi/graph/telemetry.go
+dev_health_query_api_edge_rejected_total	reason	code: internal/queryapi/principal/edge_telemetry.go
+devhealth_query_api_edge_verify_total	outcome	code: internal/queryapi/principal/edge_telemetry.go
+dev_health_query_api_envelope_rejected_total	reason	code: internal/queryapi/principal/telemetry.go
+devhealth_query_api_envelope_verify_total	outcome	code: internal/queryapi/principal/telemetry.go
+devhealth_query_api_experiments_calls_total		code: internal/queryapi/graph/telemetry.go
+devhealth_query_api_experiments_outcome_total	outcome	code: internal/queryapi/graph/telemetry.go
+devhealth_query_api_feature_flag_events_calls_total		code: internal/queryapi/graph/telemetry.go
+devhealth_query_api_feature_flag_events_outcome_total	outcome	code: internal/queryapi/graph/telemetry.go
+devhealth_query_api_feature_flags_calls_total		code: internal/queryapi/graph/telemetry.go
+devhealth_query_api_feature_flags_outcome_total	outcome	code: internal/queryapi/graph/telemetry.go
+devhealth_query_api_hotspots_calls_total		code: internal/queryapi/graph/telemetry.go
+devhealth_query_api_hotspots_outcome_total	outcome	code: internal/queryapi/graph/telemetry.go
+devhealth_query_api_internal_headers_dropped_total	path_class	code: internal/queryapi/internalidentity/listener.go
+devhealth_query_api_internal_identity_total	carrier,outcome	code: internal/queryapi/internalidentity/telemetry.go
+devhealth_query_api_internal_peer_refused_total	listener	code: internal/queryapi/server/peerallowlist.go
+devhealth_query_api_investment_argmax_null_transition_fetch_failed_total		code: internal/queryapi/analytics/investmentargmaxtransitionguard.go
+devhealth_query_api_investment_argmax_null_transition_multi_generation_units		code: internal/queryapi/analytics/investmentargmaxtransitionguard.go
+devhealth_query_api_investment_argmax_null_transition_total	column	code: internal/queryapi/analytics/investmentargmaxtransitionguard.go
+devhealth_query_api_investment_coverage_query_failed_total	reason,resolver	code: internal/queryapi/analytics/sankeycoverage.go
+devhealth_query_api_investment_explain_write_failed_total	write	code: internal/queryapi/investmentexplain/writefailure.go
+devhealth_query_api_investment_membership_scope_lag_seconds	scope_mode	code: internal/queryapi/analytics/investmentmembershiptelemetry.go
+devhealth_query_api_investment_membership_scope_stale_total	scope_mode	code: internal/queryapi/analytics/investmentmembershiptelemetry.go
+devhealth_query_api_investment_repo_join_dedup_collision_check_failed_total		code: internal/queryapi/analytics/investmentrepojointelemetry.go
+devhealth_query_api_investment_repo_join_dedup_collisions_total	org_id	code: internal/queryapi/analytics/investmentrepojointelemetry.go
+devhealth_query_api_mcp_elevated_claims_total	claim	code: internal/queryapi/server/mcp_route.go
+devhealth_query_api_mcp_request_duration_seconds	caller_class,outcome,reason	code: internal/queryapi/server/mcp_route.go
+devhealth_query_api_mcp_requests_total	caller_class,outcome,reason	code: internal/queryapi/server/mcp_route.go
+devhealth_query_api_operating_review_calls_total		code: internal/queryapi/graph/telemetry.go
+devhealth_query_api_operating_review_fetch_swallowed_total	table	code: internal/queryapi/operatingreview/operatingreview.go
+devhealth_query_api_operating_review_known_count_guard_fired_total	field	code: internal/queryapi/operatingreview/operatingreview.go
+devhealth_query_api_operating_review_outcome_total	outcome	code: internal/queryapi/graph/telemetry.go
+devhealth_query_api_product_telemetry_calls_total	field	code: internal/queryapi/graph/telemetry.go
+devhealth_query_api_product_telemetry_outcome_total	field,outcome	code: internal/queryapi/graph/telemetry.go
+devhealth_query_api_readyz_total	check,outcome	code: internal/queryapi/server/readyz_telemetry.go
+devhealth_query_api_review_edges_calls_total		code: internal/queryapi/graph/telemetry.go
+devhealth_query_api_review_edges_outcome_total	outcome	code: internal/queryapi/graph/telemetry.go
+devhealth_query_api_throughput_forecast_calls_total		code: internal/queryapi/graph/telemetry.go
+devhealth_query_api_throughput_forecast_outcome_total	outcome	code: internal/queryapi/graph/telemetry.go
+devhealth_query_api_work_graph_artifacts_calls_total		code: internal/queryapi/graph/telemetry.go
+devhealth_query_api_work_graph_artifacts_outcome_total	outcome	code: internal/queryapi/graph/telemetry.go
+devhealth_query_api_work_graph_edges_calls_total		code: internal/queryapi/graph/telemetry.go
+devhealth_query_api_work_graph_edges_outcome_total	outcome	code: internal/queryapi/graph/telemetry.go
+devhealth_query_api_work_graph_flow_calls_total		code: internal/queryapi/graph/telemetry.go
+devhealth_query_api_work_graph_flow_outcome_total	outcome	code: internal/queryapi/graph/telemetry.go
+devhealth_query_api_workgraph_membership_rows_per_endpoint		code: internal/queryapi/workgraph/membership_telemetry.go
+devhealth_query_api_workgraph_truncation_total	family,op	code: internal/queryapi/workgraph/teamattribution.go
+dev_health_stream_product_telemetry_nonfinite_total		code: internal/streamhandlers/product_telemetry_metrics.go
+devhealth_sync_work_items_limit_open_total		code: internal/api/syncadmin/manual_trigger.go
+dev_health_team_id_carry_kept_teams_not_restated_total		code: internal/providersync/team_id_carry.go
+dev_health_teams_identity_page_walk_failed_total	cause,provider,walk	code: internal/api/teamsidentity/page_walk.go
+devhealth_telemetry_org_id_rejected_total	reason	code: internal/api/telemetry/telemetry.go
+dev_health_workgraph_build_permanent_cancels_total	error_class	code: internal/jobs/workgraph/handler.go
+dev_health_work_item_user_rows_spanning_teams_total	provider	code: internal/jobs/metrics/daily/work_item_user_rows_metrics.go
+jira_project_discovery_total	outcome	code: internal/providerfoundation/jira_discovery_metrics.go
+jira_team_catalog_ownership_snapshot_incomplete_total	reason	code: internal/providersync/jira_team_catalog_metrics.go
+linear_reference_catalog_ownership_snapshot_incomplete_total	reason	code: internal/providersync/linear_reference_catalog_metrics.go
+post_sync_error_chain_defect_total	defect	code: internal/syncdispatchruntime/post_sync_failure.go
+provider_sync_sprint_recovery_newer_row_total	provider,reason,verdict	code: internal/providersync/github_work_items_direct_effects_clickhouse.go
+river.insert_count	status,unique_skipped_as_duplicate	third-party: github.com/riverqueue/rivercontrib/otelriver v0.12.0 middleware instrument
+river.insert_many_count	status	third-party: github.com/riverqueue/rivercontrib/otelriver v0.12.0 middleware instrument
+river.insert_many_duration	status	third-party: github.com/riverqueue/rivercontrib/otelriver v0.12.0 middleware instrument
+river.insert_many_duration_histogram	status	third-party: github.com/riverqueue/rivercontrib/otelriver v0.12.0 middleware instrument
+river.job_get_available_count	queue	third-party: github.com/riverqueue/rivercontrib/otelriver v0.12.0 middleware instrument
+river.job_get_available_duration	queue	third-party: github.com/riverqueue/rivercontrib/otelriver v0.12.0 middleware instrument
+river.work_count	attempt,cancel,kind,priority,queue,snooze,status,tag	third-party: otelriver work instrument, 8 keys today (over the budget of 6; the cut is a follow-up, not part of this leaf)
+river.work_duration	attempt,cancel,kind,priority,queue,snooze,status,tag	third-party: otelriver work instrument, 8 keys today (over the budget of 6; the cut is a follow-up, not part of this leaf)
+river.work_duration_histogram	attempt,cancel,kind,priority,queue,snooze,status,tag	third-party: otelriver work instrument, 8 keys today (over the budget of 6; the cut is a follow-up, not part of this leaf)
+session_org_activity_fallback_total		code: internal/api/session/activity_metrics.go
+session_org_activity_read_failures_total	error_class,table	code: internal/api/session/activity_metrics.go
+sync_finalize_delivery_not_current_total	reason	code: internal/syncdispatchruntime/native_finalize_sync_run.go
+sync_route_generation_stranded_total	action,kind	code: internal/syncreconciler/generation_reconcile.go
+team_catalog_snapshot_close_abandoned_total	kind,provider,reason	code: internal/providersync/snapshot_close_report.go
+team_repo_ownership_retraction_held_total	kind,provider,reason	code: internal/providersync/team_repo_ownership_retraction_guard.go
+workgraph_issue_pr_fallback_beside_native_issue_rows	organization_id	code: internal/jobs/workgraph/issuepredges/invariant.go (named by a table row, created in a loop)
+workgraph_issue_pr_fallback_beside_native_pull_request_rows	organization_id	code: internal/jobs/workgraph/issuepredges/invariant.go (named by a table row, created in a loop)
+workgraph_issue_pr_fallback_beside_native_rows	organization_id	code: internal/jobs/workgraph/issuepredges/invariant.go (named by a table row, created in a loop)
+workgraph_issue_pr_fallback_pull_request_issue_side_rows	organization_id	code: internal/jobs/workgraph/issuepredges/invariant.go (named by a table row, created in a loop)

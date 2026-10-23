@@ -9,6 +9,9 @@ services:
   valkey:
     container_name: !reset null
     ports: !reset []
+    # auth-service counts the login's rate limits here (AUTH_VALKEY_URI below), so it reaches the store over
+    # auth_plane; nothing else of this proof changes on that network.
+    networks: !override [default, auth_plane]
   go-river-migrate:
     # The sessions flag is on for go-api below, so its grant posture drops the api role's refresh_tokens INSERT and
     # UPDATE (go-api's readiness check reads the same flag).
@@ -42,3 +45,9 @@ services:
       AUTH_SESSION_SUCCESSOR_KEY: ${AUTH_SESSION_SUCCESSOR_KEY}
       # Mounts go-api's login, refresh and logout wire on auth-service (#4602), only in this proof.
       AUTH_LOGIN_LOCKOUT_KEY: ${AUTH_LOGIN_LOCKOUT_KEY}
+      # The login mounted above is a rate-limited route, so the service needs the shared store. The proof's Valkey
+      # has no ACL users, so the URI carries none (the production login is an ACL user limited to its prefix).
+      AUTH_VALKEY_URI: redis://valkey:6379/1
+    depends_on:
+      valkey:
+        condition: service_healthy

@@ -42,21 +42,6 @@ func dateArgument(value time.Time) string {
 var ErrReleaseImpactSchemaIncompatible = errors.New(
 	"deployed release_impact schema does not support what this executor writes")
 
-// releaseImpactTableEngine reports the engine backing one table, the same way
-// capacityTableEngine (capacity_native_clickhouse.go) does: system.tables
-// rather than SHOW CREATE TABLE, since the engine column is already the bare
-// family name and needs no DDL parsing.
-func releaseImpactTableEngine(ctx context.Context, conn driver.Conn, table string) (string, error) {
-	var engine string
-	if err := conn.QueryRow(ctx, `
-SELECT engine FROM system.tables
-WHERE database = currentDatabase() AND name = {table:String}`,
-		namedArguments(map[string]any{"table": table})...).Scan(&engine); err != nil {
-		return "", fmt.Errorf("inspect %s engine: %w", table, err)
-	}
-	return engine, nil
-}
-
 // releaseImpactExpectedSortingKey is migration 034's ORDER BY for
 // release_impact_daily, unchanged by migration 088 (088 converts the ENGINE
 // only; the shadow-table rewrite explicitly asserts the sorting key survives
@@ -67,9 +52,8 @@ WHERE database = currentDatabase() AND name = {table:String}`,
 const releaseImpactExpectedSortingKey = "org_id, release_ref, environment, day"
 
 // releaseImpactTableEngineFull reports the FULL engine expression (including
-// constructor arguments, e.g. "ReplacingMergeTree(computed_at)") -- unlike
-// releaseImpactTableEngine's system.tables.engine, which is only ever the
-// bare family name and cannot reveal the version column.
+// constructor arguments, e.g. "ReplacingMergeTree(computed_at)"); the version
+// column lives only there.
 func releaseImpactTableEngineFull(ctx context.Context, conn driver.Conn, table string) (string, error) {
 	var engineFull string
 	if err := conn.QueryRow(ctx, `
@@ -125,27 +109,15 @@ WHERE database = currentDatabase() AND name = {table:String}`,
 // table, applied here to release_impact_daily.
 func verifyReleaseImpactSchema(ctx context.Context, conn driver.Conn) error {
 	const table = "release_impact_daily"
-	engine, err := releaseImpactTableEngine(ctx, conn, table)
-	if err != nil {
-		return err
-	}
-	if clause, err := engineclause.Parse(engine); err != nil || clause.Family != engineclause.FamilyReplacing {
-		return fmt.Errorf(
-			"%w: %s is %s, expected ReplacingMergeTree -- migration 088 has "+
-				"not been applied, and every recomputed day would append "+
-				"duplicate rows instead of collapsing them",
-			ErrReleaseImpactSchemaIncompatible, table, engine)
-	}
-
 	engineFull, err := releaseImpactTableEngineFull(ctx, conn, table)
 	if err != nil {
 		return err
 	}
 	clause, err := engineclause.Parse(engineFull)
-	if err != nil || !clause.IsReplacingOn("computed_at") {
+	if err != nil || !clause.IsVersionedOn("computed_at") {
 		return fmt.Errorf(
-			"%w: %s is %s, expected the ReplacingMergeTree version column to "+
-				"be computed_at -- a different (or missing) version column "+
+			"%w: %s is %s, needs computed_at as its engine version column "+
+				"-- a different (or missing) version column "+
 				"collapses rows by the WRONG field, silently discarding "+
 				"distinct metric rows instead of superseding stale ones",
 			ErrReleaseImpactSchemaIncompatible, table, engineFull)

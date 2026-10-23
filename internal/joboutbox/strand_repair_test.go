@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"regexp"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -14,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/riverqueue/river/rivertype"
 
+	"github.com/full-chaos/dev-health-ops/internal/pgmigrate"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 )
 
@@ -959,5 +962,42 @@ func TestStrandRepairFilterByClaimPreservesEarlierCountsOnLaterUnknownState(t *t
 			"stepShape() result = %+v, want candidate a's claim_live count preserved despite candidate b's unexpected claim state",
 			result,
 		)
+	}
+}
+
+// CHAOS-8431: the partial index of the job_kind migration and retiredKindsSQL must name the same kinds, or the
+// retired-kind survey stops proving the index predicate.
+func TestTheRetiredKindIndexPredicateNamesTheRetiredKinds(t *testing.T) {
+	chain, err := pgmigrate.LoadChain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body []byte
+	matches := 0
+	for _, file := range chain {
+		if strings.HasSuffix(file.Name, "_add_worker_job_outbox_job_kind_index.sql") {
+			body = []byte(file.SQL)
+			matches++
+		}
+	}
+	if matches != 1 {
+		t.Fatalf("want exactly one job_kind index migration in the chain, got %d", matches)
+	}
+	predicate := regexp.MustCompile(`(?s)WHERE\s+job_kind\s+IN\s*\(([^)]*)\)`).FindStringSubmatch(string(body))
+	if predicate == nil {
+		t.Fatalf("%s has no WHERE job_kind IN (...) predicate", "the job_kind index migration")
+	}
+	var inMigration []string
+	for _, kind := range regexp.MustCompile(`'([^']*)'`).FindAllStringSubmatch(predicate[1], -1) {
+		inMigration = append(inMigration, kind[1])
+	}
+	want := append([]string(nil), retiredWorkgraphKinds...)
+	sort.Strings(want)
+	sort.Strings(inMigration)
+	if strings.Join(inMigration, ",") != strings.Join(want, ",") {
+		t.Fatalf("migration predicate kinds %v differ from retiredWorkgraphKinds %v", inMigration, want)
+	}
+	if !strings.Contains(retiredKindsSQL, "job_kind IN ("+retiredKindsSQLList()+")") || strings.Contains(retiredKindsSQL, "$1::text[]") {
+		t.Fatalf("retiredKindsSQL must list the kinds as literals:\n%s", retiredKindsSQL)
 	}
 }

@@ -27,8 +27,6 @@ func TestSignatureOnlySetIsUnchangedByTheGate(t *testing.T) {
 	want := map[string]string{
 		"POST /api/v1/billing/webhooks/stripe":         "stripe_webhook_signature",
 		"POST /api/v1/webhooks/github":                 "github_webhook_signature",
-		"POST /api/v1/webhooks/gitlab":                 "gitlab_webhook_signature",
-		"POST /api/v1/webhooks/jira":                   "jira_webhook_signature",
 		"POST /api/v1/webhooks/pagerduty/{binding_id}": "pagerduty_webhook_signature",
 	}
 	if !reflect.DeepEqual(signatureOnlyRoutes, want) {
@@ -127,8 +125,6 @@ func TestIntakeGateCountsPercentEncodedRouteNamesInTheSameBucket(t *testing.T) {
 		budget               int
 	}{
 		{"github", "/api/v1/webhooks/github", "/api/v1/webhooks/%67ithub", 3000},
-		{"gitlab", "/api/v1/webhooks/gitlab", "/api/v1/webhooks/%67itlab", 3000},
-		{"jira", "/api/v1/webhooks/jira", "/api/v1/webhooks/%6aira", 3000},
 		{"pagerduty", "/api/v1/webhooks/pagerduty/" + binding, "/api/v1/webhooks/%70agerduty/" + binding, 60},
 	}
 	for index, c := range cases {

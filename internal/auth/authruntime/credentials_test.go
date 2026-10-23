@@ -43,12 +43,12 @@ func TestCredentialRoutesMountOnlyWithTheSessionSecretsAndUsersOwned(t *testing.
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	for name, owned := range map[string]string{"unset": "", "false": "false"} {
-		routes, components, err := credentialRoutes(credentialConfig(t, owned), logger, pool, schema)
+		routes, components, err := credentialRoutes(credentialConfig(t, owned), logger, pool, schema, mustLimits(t))
 		if err != nil || len(routes) != 0 || len(components) != 0 {
 			t.Fatalf("%s: routes %d components %d err %v; want nothing mounted", name, len(routes), len(components), err)
 		}
 	}
-	routes, components, err := credentialRoutes(credentialConfig(t, "true"), logger, pool, schema)
+	routes, components, err := credentialRoutes(credentialConfig(t, "true"), logger, pool, schema, mustLimits(t))
 	if err != nil {
 		t.Fatal(err)
 	}

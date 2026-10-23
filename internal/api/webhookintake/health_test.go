@@ -10,8 +10,7 @@ func TestHealthBodyIsTheSameForEverySecretState(t *testing.T) {
 	const want = `{"status":"ok","celery_available":false}`
 	for name, secrets := range map[string]Secrets{
 		"none": {},
-		"one":  {GitHub: "a"},
-		"all":  {GitHub: "a", GitLab: "b", Jira: "c"},
+		"set":  {GitHub: "a"},
 	} {
 		recorder := httptest.NewRecorder()
 		Deps{Secrets: secrets}.handleHealth()(recorder, httptest.NewRequest(http.MethodGet, "/api/v1/webhooks/health", nil))

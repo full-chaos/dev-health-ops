@@ -146,6 +146,7 @@ func schemaShape(t *testing.T, uri string) string {
 // up/down/up round trip returns to the head. A down file that left an object behind, or
 // dropped one too many, fails on the step that did it.
 func TestDowngradeReachesThePreviousRevisionsSchema(t *testing.T) {
+	pgmigrate.UseFrozenChain(t) // the frozen goldens end at pgmigrate.FrozenHead
 	d := newDownInstance(t)
 	chain, err := pgmigrate.LoadChain()
 	if err != nil {
@@ -216,6 +217,7 @@ func shapeDiff(want, got string) string {
 // On a single-head database at the head (0152), -14 reaches the floor revision and gives the same schema as
 // the explicit target 0138, and -15 is refused with the database left alone.
 func TestDowngradeFloorCasesOnARealSingleHeadDatabase(t *testing.T) {
+	pgmigrate.UseFrozenChain(t) // the frozen goldens end at pgmigrate.FrozenHead
 	d := newDownInstance(t)
 	chain, err := pgmigrate.LoadChain()
 	if err != nil {
@@ -257,6 +259,7 @@ func TestDowngradeFloorCasesOnARealSingleHeadDatabase(t *testing.T) {
 // an explicit target reverts only the application branch and leaves 0066; the refusal
 // cells leave the database byte-for-byte as it was. Enumerated by cell.
 func TestDowngradeRefusalsLeaveTheDatabaseAlone(t *testing.T) {
+	pgmigrate.UseFrozenChain(t) // the frozen goldens end at pgmigrate.FrozenHead
 	d := newDownInstance(t)
 	chain, err := pgmigrate.LoadChain()
 	if err != nil {
@@ -612,6 +615,7 @@ var downgradeTargets = []string{"0144", "0141", "0139", "0138", "0145"}
 // testdata/golden/downgrade.json (the recipe regenerates them by execution); the targets and the programs are
 // the golden's key.
 func TestDowngradeMatchesFrozenPythonDowngrade(t *testing.T) {
+	pgmigrate.UseFrozenChain(t) // the frozen goldens end at pgmigrate.FrozenHead
 	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
 		Path:        "testdata/golden/downgrade.json",
 		PythonBuild: downgradePythonBuild,

@@ -46,6 +46,7 @@ go.yaml.in/yaml/v2	Prometheus common
 github.com/golang-jwt/jwt/v5	internal/auth/edgetoken: the one Go copy of the HS256 ops access-token decision (go-api parity; HS256 stays until Wave 3), used by the session routes (CHAOS-10228)
 github.com/google/jsonschema-go	internal/auth/contracts (wire types and schema validation), linked once the session domain is mounted (CHAOS-10228)
 golang.org/x/crypto	bcrypt (and its blowfish) for the local login password check, go-api parity (internal/auth/identity/local, internal/auth/passwordhash); linked once login is mounted (CHAOS-10392)
+github.com/valkey-io/valkey-go	shared rate-limit store client (internal/auth/ratelimitvalkey, internal/storage/valkey) for the login, credential and social link limits; linked into the binary, dialled only once a limited route is mounted (CHAOS-10684)
 github.com/coreos/go-oidc/v3	OIDC sign-in routes (identity/oidc): ID token verification
 github.com/go-jose/go-jose/v4	go-oidc dependency: JWS and JWK
 golang.org/x/oauth2	go-oidc and OAuth sign-in dependency

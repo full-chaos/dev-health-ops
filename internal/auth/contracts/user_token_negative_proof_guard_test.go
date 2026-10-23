@@ -39,7 +39,6 @@ const (
 	buildInfoTest  = "TestBuildInfoRefusesUserTokens"
 	issueTest      = "TestIssueSessionRefusesUserTokens"
 	refreshTest    = "TestRefreshRowsRefuseUserTokens"
-	exemptPublic   = "pending the schema-route ruling: the handler performs no credential check (public schema discovery, rate limited by address only); a user token changes nothing, which TestExternalPushSchemaDiscoveryIgnoresUserTokens proves (answer byte-identical to the anonymous one, no lookup)"
 	exemptExchange = "the credential is the social provider's own token in the request body, sent to the provider; no bearer of ours is read; a user flow, outside this leaf"
 )
 
@@ -54,8 +53,6 @@ var negativeProofs = map[string]negativeProof{
 	"go-api|GET /api/v1/external-ingest/batches/{ingestion_id} [dev-health-ops-api @api]":     {file: proofPush, test: pushRoutes},
 	"go-api|POST /api/v1/external-ingest/batches [dev-health-ops-api @api]":                   {file: proofPush, test: pushRoutes},
 	"go-api|POST /api/v1/external-ingest/validate [dev-health-ops-api @api]":                  {file: proofPush, test: pushRoutes},
-	"go-api|GET /api/v1/external-ingest/schemas [dev-health-ops-api @api]":                    {exempt: exemptPublic},
-	"go-api|GET /api/v1/external-ingest/schemas/{schema_version} [dev-health-ops-api @api]":   {exempt: exemptPublic},
 	"go-api|GET /api/v1/internal/acr/entitlements/{org_id} [dev-health-ops-api @internal]":    {file: proofACR, test: acrTest},
 	"go-api|GET /api/v1/internal/acr/health [dev-health-ops-api @internal]":                   {file: proofACR, test: acrTest},
 	"go-api|GET /api/v1/internal/acr/orgs/{org_id}/llm-config [dev-health-ops-api @internal]": {file: proofACR, test: acrTest},
@@ -179,7 +176,7 @@ func TestEveryNegativeProofNamesARealTestThatSendsUserTokens(t *testing.T) {
 	}
 }
 
-// The census: 29 derived rows = 26 proven + 3 exempt. A change to either count is a decision, made here.
+// The census: 27 derived rows = 26 proven + 1 exempt. A change to either count is a decision, made here.
 func TestNegativeProofCensus(t *testing.T) {
 	proven, exempt := 0, 0
 	for _, proof := range negativeProofs {
@@ -189,7 +186,7 @@ func TestNegativeProofCensus(t *testing.T) {
 			proven++
 		}
 	}
-	if len(derivedRows(t)) != 29 || proven != 26 || exempt != 3 {
-		t.Fatalf("derived %d rows, %d proven, %d exempt; want 29, 26, 3", len(derivedRows(t)), proven, exempt)
+	if len(derivedRows(t)) != 27 || proven != 26 || exempt != 1 {
+		t.Fatalf("derived %d rows, %d proven, %d exempt; want 27, 26, 1", len(derivedRows(t)), proven, exempt)
 	}
 }

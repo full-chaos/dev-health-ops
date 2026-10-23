@@ -135,7 +135,7 @@ WHERE identity != ''
   AND lower(identity) LIKE {query:String}
 GROUP BY identity
 ORDER BY last_seen DESC
-LIMIT {limit:UInt64}
+LIMIT {limit_n:UInt64}
 %s
 `
 
@@ -167,7 +167,7 @@ func BuildSearchResponse(ctx context.Context, reader *Reader, orgID string, para
 	bindings := []dhclickhouse.Binding{
 		{Name: "org_id", Value: orgID},
 		{Name: "query", Value: "%" + strings.ToLower(trimmed) + "%"},
-		{Name: "limit", Value: limit},
+		{Name: "limit_n", Value: limit},
 	}
 
 	rows, err := reader.client.Query(ctx, query, bindings)

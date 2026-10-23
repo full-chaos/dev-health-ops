@@ -171,12 +171,15 @@ func TestFeatureFlagResolversMatchTheFrozenGolden(t *testing.T) {
 			for i, statement := range client.statements {
 				var lim any
 				norm := goldenPlaceholder.ReplaceAllString(strings.Join(strings.Fields(statement), " "), "%($1)s")
+				norm = strings.ReplaceAll(norm, "%(limit_n)s", "%(limit)s")
 				params := map[string]any{}
 				for _, b := range client.bindings[i] {
-					if b.Name == "limit" {
+					name := b.Name
+					if name == "limit_n" {
+						name = "limit"
 						lim = b.Value
 					}
-					params[b.Name] = b.Value
+					params[name] = b.Value
 				}
 				if lim != nil {
 					norm = strings.Replace(norm, "%(limit)s", fmt.Sprint(lim), 1)

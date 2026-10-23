@@ -248,8 +248,8 @@ func (source clickhouseComplexitySource) listGitFiles(
 	`
 	arguments := map[string]any{"repo_id": repoID.String(), "org_id": orgID}
 	if limit != nil {
-		query += " LIMIT {limit:UInt64}"
-		arguments["limit"] = uint64(*limit)
+		query += " LIMIT {limit_n:UInt64}"
+		arguments["limit_n"] = uint64(*limit)
 	}
 	return queryFileSizes(ctx, source.conn, query, arguments, "list git files")
 }
@@ -286,8 +286,8 @@ func (source clickhouseComplexitySource) listBlameFiles(
 	}
 	query += " GROUP BY path ORDER BY path"
 	if limit != nil {
-		query += " LIMIT {limit:UInt64}"
-		arguments["limit"] = uint64(*limit)
+		query += " LIMIT {limit_n:UInt64}"
+		arguments["limit_n"] = uint64(*limit)
 	}
 	return queryFileSizes(ctx, source.conn, query, arguments, "list blame files")
 }

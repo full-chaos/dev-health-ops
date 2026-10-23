@@ -10,7 +10,7 @@
 // false finding (noise accepted). Only conversions (string(x), a local string type, attribute.Key(x)) and
 // strconv.Itoa / fmt.Sprint of constants are folded into a key; any other call in key position is a dynamic key (R2 on
 // a metric label or a span attribute). Named limits (not seen by the scan): a constant key taken from another package (for example
-// tracing.StageAttribute); a constructor returned by a function call; a constant whose folding exceeds 8 values, 256 bytes, 64 passes or 4096 expression nodes, or that has a declaration the scan cannot read (it, and every constant built from it, is marked saturated and a key that uses it is an R1 finding); a package that exhausts the work budget (one R1 "census incomplete: work budget" finding at its package clause, and its scan stops); a constructor reached through a function parameter, an append, or a map or struct field read under another name; a constructor converted to a function type (T(attribute.String)); a constructor assigned to a map entry or struct field after its literal (m[k] = f, x.f = f); a call through a dereferenced pointer ((*p)(...)); and a key that is a variable and not a constant.
+// tracing.StageAttribute); a constructor returned by a function call; a constant whose folding exceeds 8 values, 256 bytes, 64 passes or 4096 expression nodes, or that has a declaration the scan cannot read (it, and every constant built from it, is marked saturated and a key that uses it is an R1 finding); a package that exhausts the work budget (1,000,000 steps plus 100 per syntax node; one R1 "census incomplete: work budget" finding at its package clause, and its scan stops); a constructor reached through a function parameter, an append, or a map or struct field read under another name; a constructor converted to a function type (T(attribute.String)); a constructor assigned to a map entry or struct field after its literal (m[k] = f, x.f = f); a call through a dereferenced pointer ((*p)(...)); and a key that is a variable and not a constant.
 // The runtime sentinel tests are the primary defence.
 package emitscan
 
@@ -41,11 +41,10 @@ const (
 	RuleDotImport     = "R8" // dot-import of a watched package: its calls cannot be matched
 	RuleUnparsable    = "R0" // a file the scan could not read or parse: always a failure
 	maxMetricLabels   = 6
-	maxConstValues    = 8       // folded values kept per constant name
-	maxConstBytes     = 256     // longest folded value kept
-	maxConstPasses    = 64      // passes of the constant fixpoint
-	maxFoldWork       = 4096    // expression nodes one fold may visit before it fails closed
-	maxPackageWork    = 4000000 // steps of one package scan (fold nodes, key bytes, alias and fixpoint steps) before the package is unscannable
+	maxConstValues    = 8    // folded values kept per constant name
+	maxConstBytes     = 256  // longest folded value kept
+	maxConstPasses    = 64   // passes of the constant fixpoint
+	maxFoldWork       = 4096 // expression nodes one fold may visit before it fails closed
 	rawHandlerAllowed = "internal/platform/logging/"
 )
 
@@ -195,18 +194,37 @@ func Scan(root string, dirs []string) ([]Finding, error) {
 }
 
 // pkgInfo is what one package directory knows across its files.
+// The work budget of a package scan is workBase plus workPerNode for every syntax node of the package: a scan costs a
+// small multiple of the package size, and an input that makes it cost more (a blowup in some loop) ends as unscannable.
+// A step is a fold node, a key byte, an alias or flow step, or an expression node a walk visits.
+var (
+	workBase    = 1000000
+	workPerNode = 100
+)
+
+// inspectCharged is ast.Inspect that charges one step per node and stops at the budget.
+func inspectCharged(b *budget, root ast.Node, visit func(ast.Node) bool) {
+	ast.Inspect(root, func(node ast.Node) bool {
+		if node != nil && !b.charge(1) {
+			return false
+		}
+		return visit(node)
+	})
+}
+
 // budget is the one counter of a package scan. Every fold step, key byte, alias step and fixpoint pass charges it; when
 // it runs out the package is unscannable: it reports one finding and its scan stops (fail closed).
 type budget struct {
-	used int
-	over bool
+	used  int
+	limit int
+	over  bool
 }
 
 func (b *budget) charge(n int) bool {
 	if b.over {
 		return false
 	}
-	if b.used += n; b.used > maxPackageWork {
+	if b.used += n; b.used > b.limit {
 		b.over = true
 		return false
 	}
@@ -224,8 +242,17 @@ type pkgInfo struct {
 }
 
 func packageInfo(group []parsedFile) *pkgInfo {
+	nodes := 0
+	for _, parsed := range group {
+		ast.Inspect(parsed.file, func(node ast.Node) bool {
+			if node != nil {
+				nodes++
+			}
+			return true
+		})
+	}
 	info := &pkgInfo{consts: map[string][]string{}, rawFuncs: map[string]bool{}, constNames: map[string]bool{},
-		stringTypes: map[string]bool{}, aliases: map[string][][2]string{}, saturated: map[string]bool{}, budget: &budget{}}
+		stringTypes: map[string]bool{}, aliases: map[string][][2]string{}, saturated: map[string]bool{}, budget: &budget{limit: workBase + workPerNode*nodes}}
 	for _, parsed := range group {
 		ast.Inspect(parsed.file, func(node ast.Node) bool {
 			if spec, ok := node.(*ast.TypeSpec); ok {
@@ -311,11 +338,11 @@ func packageInfo(group []parsedFile) *pkgInfo {
 				if !ok || fn.Body == nil || info.rawFuncs[fn.Name.Name] || !info.budget.charge(1) {
 					continue
 				}
-				taint := rawPathIdents(fn.Body, nil, info.rawFuncs, info.budget)
-				ast.Inspect(fn.Body, func(node ast.Node) bool {
+				taint := rawPathIdents(fn.Body, info.rawFuncs, info.budget)
+				inspectCharged(info.budget, fn.Body, func(node ast.Node) bool {
 					if ret, ok := node.(*ast.ReturnStmt); ok {
 						for _, result := range ret.Results {
-							if rawRequestPart(result, info.rawFuncs) || carriesTaint(result, taint) {
+							if rawRequestPart(result, info.rawFuncs, info.budget) || carriesTaint(result, taint, info.budget) {
 								info.rawFuncs[fn.Name.Name] = true
 							}
 						}
@@ -390,8 +417,8 @@ func (info *pkgInfo) saturateDependants(group []parsedFile) {
 					if i >= len(values) {
 						continue
 					}
-					ast.Inspect(values[i], func(inner ast.Node) bool {
-						if ident, ok := inner.(*ast.Ident); ok && info.budget.charge(1) {
+					inspectCharged(info.budget, values[i], func(inner ast.Node) bool {
+						if ident, ok := inner.(*ast.Ident); ok {
 							dependants[ident.Name] = append(dependants[ident.Name], name.Name)
 						}
 						return true
@@ -421,7 +448,7 @@ func (info *pkgInfo) saturateDependants(group []parsedFile) {
 // refsSaturated reports an expression that names a saturated constant: the constant built from it is saturated too.
 func (info *pkgInfo) refsSaturated(expr ast.Expr) bool {
 	found := false
-	ast.Inspect(expr, func(node ast.Node) bool {
+	inspectCharged(info.budget, expr, func(node ast.Node) bool {
 		if ident, ok := node.(*ast.Ident); ok && info.saturated[ident.Name] {
 			found = true
 		}
@@ -686,7 +713,11 @@ func (info *pkgInfo) altsOf(expr ast.Expr, imports map[string]string) [][2]strin
 			if kv, ok := element.(*ast.KeyValueExpr); ok {
 				element = kv.Value
 			}
-			out = append(out, info.altsOf(element, imports)...)
+			alts := info.altsOf(element, imports)
+			if !info.budget.charge(1 + 2*len(alts)) { // the copy below allocates: weigh it double
+				return out
+			}
+			out = append(out, alts...)
 		}
 		return out
 	}
@@ -724,6 +755,9 @@ type fileScan struct {
 
 // Visit keeps a stack of the open nodes and, per function, the identifiers that hold a raw request path.
 func (s *fileScan) Visit(node ast.Node) ast.Visitor {
+	if node != nil && s.pkg.budget.over {
+		return nil
+	}
 	if node == nil {
 		top := s.nodes[len(s.nodes)-1]
 		s.nodes = s.nodes[:len(s.nodes)-1]
@@ -740,13 +774,13 @@ func (s *fileScan) Visit(node ast.Node) ast.Visitor {
 	switch fn := node.(type) {
 	case *ast.FuncDecl:
 		s.funcs = append(s.funcs, fn.Name.Name)
-		s.taints = append(s.taints, rawPathIdents(fn.Body, nil, s.pkg.rawFuncs, s.pkg.budget))
+		s.taints = append(s.taints, rawPathIdents(fn.Body, s.pkg.rawFuncs, s.pkg.budget))
 	case *ast.FuncLit:
-		var parent map[string]bool
-		if len(s.taints) > 0 {
-			parent = s.taints[len(s.taints)-1]
+		if len(s.taints) > 0 { // the enclosing function's pass already walked this body
+			s.taints = append(s.taints, s.taints[len(s.taints)-1])
+		} else {
+			s.taints = append(s.taints, rawPathIdents(fn.Body, s.pkg.rawFuncs, s.pkg.budget))
 		}
-		s.taints = append(s.taints, rawPathIdents(fn.Body, parent, s.pkg.rawFuncs, s.pkg.budget))
 	case *ast.CallExpr:
 		s.call(fn)
 	}
@@ -757,74 +791,151 @@ func (s *fileScan) tainted(name string) bool {
 	return len(s.taints) > 0 && s.taints[len(s.taints)-1][name]
 }
 
-// rawPathIdents returns the identifiers a function (with the identifiers its enclosing function already holds) assigns
-// from a raw request path or query, directly or through other tainted identifiers, to a fixpoint.
-func rawPathIdents(body *ast.BlockStmt, seed map[string]bool, rawFuncs map[string]bool, b *budget) map[string]bool {
+// rawPathIdents returns the identifiers a function assigns from a raw request path or query, directly or through other
+// tainted identifiers. Each right side is read once (the raw part, and the identifiers whose taint it would carry); the
+// taint then spreads over those links with a worklist, so a long chain costs no repeated walk.
+func rawPathIdents(body *ast.BlockStmt, rawFuncs map[string]bool, b *budget) map[string]bool {
 	out := map[string]bool{}
-	for name := range seed {
-		out[name] = true
-	}
 	if body == nil {
 		return out
 	}
-	holds := func(expr ast.Expr) bool { return rawRequestPart(expr, rawFuncs) || carriesTaint(expr, out) }
-	for changed := true; changed && !b.over; {
-		changed = false
-		ast.Inspect(body, func(node ast.Node) bool {
-			switch n := node.(type) {
-			case *ast.AssignStmt:
-				if !b.charge(1 + len(n.Rhs)) {
-					return false
-				}
-				for i, rhs := range n.Rhs {
-					if i < len(n.Lhs) && holds(rhs) {
-						if ident, ok := n.Lhs[i].(*ast.Ident); ok && !out[ident.Name] {
-							out[ident.Name] = true
-							changed = true
-						}
-					}
-				}
-			case *ast.ValueSpec:
-				if !b.charge(1 + len(n.Values)) {
-					return false
-				}
-				for i, value := range n.Values {
-					if i < len(n.Names) && holds(value) && !out[n.Names[i].Name] {
-						out[n.Names[i].Name] = true
-						changed = true
-					}
+	type link struct {
+		lhs     string
+		carried []string
+	}
+	var links []link
+	var queue []string
+	add := func(lhs ast.Expr, rhs ast.Expr) {
+		ident, ok := lhs.(*ast.Ident)
+		if !ok {
+			return
+		}
+		if rawRequestPart(rhs, rawFuncs, b) {
+			if !out[ident.Name] {
+				out[ident.Name] = true
+				queue = append(queue, ident.Name)
+			}
+			return
+		}
+		links = append(links, link{ident.Name, carriedIdents(rhs, b, nil)})
+	}
+	ast.Inspect(body, func(node ast.Node) bool {
+		switch n := node.(type) {
+		case *ast.AssignStmt:
+			if !b.charge(1 + len(n.Rhs)) {
+				return false
+			}
+			for i, rhs := range n.Rhs {
+				if i < len(n.Lhs) {
+					add(n.Lhs[i], rhs)
 				}
 			}
-			return true
-		})
+		case *ast.ValueSpec:
+			if !b.charge(1 + len(n.Values)) {
+				return false
+			}
+			for i, value := range n.Values {
+				if i < len(n.Names) {
+					add(n.Names[i], value)
+				}
+			}
+		}
+		return true
+	})
+	dependents := map[string][]int{}
+	for index, l := range links {
+		for _, name := range l.carried {
+			dependents[name] = append(dependents[name], index)
+		}
+	}
+	for len(queue) > 0 && b.charge(1) {
+		name := queue[0]
+		queue = queue[1:]
+		for _, index := range dependents[name] {
+			if lhs := links[index].lhs; !out[lhs] {
+				out[lhs] = true
+				queue = append(queue, lhs)
+			}
+		}
 	}
 	return out
 }
 
-// carriesTaint reports an expression whose value keeps the text of a tainted identifier: a copy, a concatenation, a
-// conversion, a slice, a field of it, or the result of a string-shaping call. Any other call is a new value.
-func carriesTaint(expr ast.Expr, tainted map[string]bool) bool {
+// carriedIdents lists the identifiers whose taint an expression would carry: it mirrors carriesTaint.
+func carriedIdents(expr ast.Expr, b *budget, acc []string) []string {
+	if !b.charge(1) {
+		return acc
+	}
 	switch e := expr.(type) {
 	case *ast.Ident:
-		return tainted[e.Name]
+		return append(acc, e.Name)
 	case *ast.ParenExpr:
-		return carriesTaint(e.X, tainted)
+		return carriedIdents(e.X, b, acc)
 	case *ast.BinaryExpr:
-		return carriesTaint(e.X, tainted) || carriesTaint(e.Y, tainted)
+		return carriedIdents(e.Y, b, carriedIdents(e.X, b, acc))
 	case *ast.UnaryExpr:
-		return carriesTaint(e.X, tainted)
+		return carriedIdents(e.X, b, acc)
 	case *ast.SelectorExpr:
-		return carriesTaint(e.X, tainted)
+		return carriedIdents(e.X, b, acc)
 	case *ast.SliceExpr:
-		return carriesTaint(e.X, tainted)
+		return carriedIdents(e.X, b, acc)
 	case *ast.IndexExpr:
-		return carriesTaint(e.X, tainted)
+		return carriedIdents(e.X, b, acc)
 	case *ast.CompositeLit:
 		for _, element := range e.Elts {
 			if kv, ok := element.(*ast.KeyValueExpr); ok {
 				element = kv.Value
 			}
-			if carriesTaint(element, tainted) {
+			acc = carriedIdents(element, b, acc)
+		}
+	case *ast.CallExpr:
+		shaping := false
+		switch fun := e.Fun.(type) {
+		case *ast.Ident:
+			shaping = fun.Name == "string"
+		case *ast.SelectorExpr:
+			if ident, ok := fun.X.(*ast.Ident); ok && (ident.Name == "fmt" || ident.Name == "strings" || ident.Name == "path") {
+				shaping = true
+			} else if fun.Sel.Name == "String" || fun.Sel.Name == "Query" || fun.Sel.Name == "EscapedPath" {
+				acc = carriedIdents(fun.X, b, acc)
+			}
+		}
+		if shaping {
+			for _, arg := range e.Args {
+				acc = carriedIdents(arg, b, acc)
+			}
+		}
+	}
+	return acc
+}
+
+// carriesTaint reports an expression whose value keeps the text of a tainted identifier: a copy, a concatenation, a
+// conversion, a slice, a field of it, or the result of a string-shaping call. Any other call is a new value.
+func carriesTaint(expr ast.Expr, tainted map[string]bool, b *budget) bool {
+	if !b.charge(1) {
+		return false
+	}
+	switch e := expr.(type) {
+	case *ast.Ident:
+		return tainted[e.Name]
+	case *ast.ParenExpr:
+		return carriesTaint(e.X, tainted, b)
+	case *ast.BinaryExpr:
+		return carriesTaint(e.X, tainted, b) || carriesTaint(e.Y, tainted, b)
+	case *ast.UnaryExpr:
+		return carriesTaint(e.X, tainted, b)
+	case *ast.SelectorExpr:
+		return carriesTaint(e.X, tainted, b)
+	case *ast.SliceExpr:
+		return carriesTaint(e.X, tainted, b)
+	case *ast.IndexExpr:
+		return carriesTaint(e.X, tainted, b)
+	case *ast.CompositeLit:
+		for _, element := range e.Elts {
+			if kv, ok := element.(*ast.KeyValueExpr); ok {
+				element = kv.Value
+			}
+			if carriesTaint(element, tainted, b) {
 				return true
 			}
 		}
@@ -837,14 +948,14 @@ func carriesTaint(expr ast.Expr, tainted map[string]bool) bool {
 			if ident, ok := fun.X.(*ast.Ident); ok && (ident.Name == "fmt" || ident.Name == "strings" || ident.Name == "path") {
 				shaping = true
 			} else if fun.Sel.Name == "String" || fun.Sel.Name == "Query" || fun.Sel.Name == "EscapedPath" {
-				if carriesTaint(fun.X, tainted) {
+				if carriesTaint(fun.X, tainted, b) {
 					return true
 				}
 			}
 		}
 		if shaping {
 			for _, arg := range e.Args {
-				if carriesTaint(arg, tainted) {
+				if carriesTaint(arg, tainted, b) {
 					return true
 				}
 			}
@@ -890,42 +1001,68 @@ func isMajorVersion(element string) bool {
 // markMetricFunctions marks every attribute constructor inside a function that builds metric options or an
 // attribute set: a label assembled in a slice or a set is a metric label too.
 func (s *fileScan) markMetricFunctions(file *ast.File) {
-	ast.Inspect(file, func(node ast.Node) bool {
-		var body *ast.BlockStmt
+	flagged := map[ast.Node]bool{} // a function with a metric-options or attribute-set call anywhere in its body, nested closures included
+	var stack []ast.Node
+	isFunc := func(node ast.Node) bool {
 		switch fn := node.(type) {
 		case *ast.FuncDecl:
-			body = fn.Body
+			return fn.Body != nil
 		case *ast.FuncLit:
-			body = fn.Body
-		}
-		if body == nil || !s.buildsMetricLabels(body) {
 			return true
 		}
-		ast.Inspect(body, func(inner ast.Node) bool {
-			if call, ok := inner.(*ast.CallExpr); ok {
-				if _, _, ok := s.attrParts(call); ok {
-					s.metricAttrs[call] = true
+		return false
+	}
+	inspectCharged(s.pkg.budget, file, func(node ast.Node) bool {
+		if node == nil {
+			top := stack[len(stack)-1]
+			stack = stack[:len(stack)-1]
+			if isFunc(top) && flagged[top] {
+				for i := len(stack) - 1; i >= 0; i-- {
+					if isFunc(stack[i]) {
+						flagged[stack[i]] = true
+						break
+					}
 				}
 			}
 			return true
-		})
-		return true
-	})
-}
-
-func (s *fileScan) buildsMetricLabels(body *ast.BlockStmt) bool {
-	found := false
-	ast.Inspect(body, func(node ast.Node) bool {
+		}
+		stack = append(stack, node)
 		if call, ok := node.(*ast.CallExpr); ok {
 			pkg, name, ok := s.qualified(call.Fun)
 			if ok && ((pkg == "metric" && (name == "WithAttributes" || name == "WithAttributeSet")) ||
 				(pkg == "attribute" && name == "NewSet")) {
-				found = true
+				for i := len(stack) - 1; i >= 0; i-- {
+					if isFunc(stack[i]) {
+						flagged[stack[i]] = true
+						break
+					}
+				}
 			}
 		}
-		return !found
+		return true
 	})
-	return found
+	stack = stack[:0]
+	inFlagged := 0
+	inspectCharged(s.pkg.budget, file, func(node ast.Node) bool {
+		if node == nil {
+			top := stack[len(stack)-1]
+			stack = stack[:len(stack)-1]
+			if isFunc(top) && flagged[top] {
+				inFlagged--
+			}
+			return true
+		}
+		stack = append(stack, node)
+		if isFunc(node) && flagged[node] {
+			inFlagged++
+		}
+		if call, ok := node.(*ast.CallExpr); ok && inFlagged > 0 {
+			if _, _, ok := s.attrParts(call); ok {
+				s.metricAttrs[call] = true
+			}
+		}
+		return true
+	})
 }
 
 func (s *fileScan) add(rule string, pos token.Pos, detail string) {
@@ -986,14 +1123,24 @@ func (s *fileScan) targets(fun ast.Expr) [][2]string {
 	case *ast.ParenExpr:
 		return s.targets(f.X)
 	case *ast.Ident:
+		if !s.pkg.budget.charge(1 + len(s.pkg.aliases[f.Name])) {
+			return nil
+		}
 		return s.pkg.aliases[f.Name]
 	case *ast.IndexExpr:
-		return s.pkg.altsOf(f.X, s.imports)
+		alts := s.pkg.altsOf(f.X, s.imports)
+		if !s.pkg.budget.charge(1 + len(alts)) {
+			return nil
+		}
+		return alts
 	case *ast.SelectorExpr:
 		if pkg, name, ok := s.qualified(f); ok {
 			out = append(out, [2]string{pkg, name})
 		}
 		if x, ok := f.X.(*ast.Ident); !ok || s.imports[x.Name] == "" {
+			if !s.pkg.budget.charge(1 + len(s.pkg.aliases[f.Sel.Name])) {
+				return out
+			}
 			out = append(out, s.pkg.aliases[f.Sel.Name]...)
 		}
 	}
@@ -1026,6 +1173,9 @@ func (s *fileScan) call(call *ast.CallExpr) {
 		s.attribute(call, key, value)
 	}
 	for _, target := range s.targets(call.Fun) {
+		if !s.pkg.budget.charge(1) {
+			return
+		}
 		s.callTarget(call, target[0], target[1])
 	}
 }
@@ -1082,7 +1232,7 @@ func (s *fileScan) logPairs(args []ast.Expr, from int) {
 
 // emitValue applies the value rules shared by every emit path.
 func (s *fileScan) emitValue(value ast.Expr, pos token.Pos) {
-	if rawRequestPart(value, s.pkg.rawFuncs) || s.usesTaintedPath(value) {
+	if rawRequestPart(value, s.pkg.rawFuncs, s.pkg.budget) || s.usesTaintedPath(value) {
 		s.add(RuleRawPath, pos, "")
 	}
 	if s.containsDigest(value) {
@@ -1092,7 +1242,7 @@ func (s *fileScan) emitValue(value ast.Expr, pos token.Pos) {
 
 func (s *fileScan) usesTaintedPath(expr ast.Expr) bool {
 	found := false
-	ast.Inspect(expr, func(node ast.Node) bool {
+	inspectCharged(s.pkg.budget, expr, func(node ast.Node) bool {
 		if ident, ok := node.(*ast.Ident); ok && s.tainted(ident.Name) {
 			found = true
 		}
@@ -1101,9 +1251,9 @@ func (s *fileScan) usesTaintedPath(expr ast.Expr) bool {
 	return found
 }
 
-func rawRequestPart(expr ast.Expr, rawFuncs map[string]bool) bool {
+func rawRequestPart(expr ast.Expr, rawFuncs map[string]bool, b *budget) bool {
 	found := false
-	ast.Inspect(expr, func(node ast.Node) bool {
+	inspectCharged(b, expr, func(node ast.Node) bool {
 		if call, ok := node.(*ast.CallExpr); ok {
 			switch fun := call.Fun.(type) {
 			case *ast.Ident:
@@ -1150,7 +1300,7 @@ func rawRequestPart(expr ast.Expr, rawFuncs map[string]bool) bool {
 
 func (s *fileScan) containsDigest(expr ast.Expr) bool {
 	found := false
-	ast.Inspect(expr, func(node ast.Node) bool {
+	inspectCharged(s.pkg.budget, expr, func(node ast.Node) bool {
 		if call, ok := node.(*ast.CallExpr); ok {
 			if pkg, name, ok := s.qualified(call.Fun); ok && digestFuncs[pkg+"."+name] {
 				found = true
@@ -1165,7 +1315,7 @@ func (s *fileScan) containsDigest(expr ast.Expr) bool {
 // fmt formatting call.
 func (s *fileScan) errorTextValue(expr ast.Expr) bool {
 	found := false
-	ast.Inspect(expr, func(node ast.Node) bool {
+	inspectCharged(s.pkg.budget, expr, func(node ast.Node) bool {
 		call, ok := node.(*ast.CallExpr)
 		if !ok {
 			return true
@@ -1213,7 +1363,7 @@ func (s *fileScan) attribute(call *ast.CallExpr, keyExpr, value ast.Expr) {
 // fmt.Sprint of a variable): the key text is computed at run time.
 func (s *fileScan) dynamicCallInKey(expr ast.Expr) bool {
 	found := false
-	ast.Inspect(expr, func(node ast.Node) bool {
+	inspectCharged(s.pkg.budget, expr, func(node ast.Node) bool {
 		call, ok := node.(*ast.CallExpr)
 		if !ok || found {
 			return !found
@@ -1244,7 +1394,7 @@ func (s *fileScan) isConversion(call *ast.CallExpr) bool {
 // unfoldableConst reports a key expression that names a package constant yet folds to no text.
 func (s *fileScan) unfoldableConst(expr ast.Expr) bool {
 	found := false
-	ast.Inspect(expr, func(node ast.Node) bool {
+	inspectCharged(s.pkg.budget, expr, func(node ast.Node) bool {
 		if ident, ok := node.(*ast.Ident); ok && s.pkg.constNames[ident.Name] {
 			found = true
 		}

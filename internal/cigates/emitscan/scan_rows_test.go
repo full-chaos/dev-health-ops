@@ -123,7 +123,9 @@ func timed(t *testing.T, id string, limit time.Duration, run func() string) stri
 	t.Helper()
 	start := time.Now()
 	got := run()
-	if elapsed := time.Since(start); elapsed > limit*raceSlowdown {
+	elapsed := time.Since(start)
+	t.Logf("%s: %s", id, elapsed)
+	if elapsed > limit*raceSlowdown {
 		t.Errorf("%s: took %s, want < %s", id, elapsed, limit)
 	}
 	return got

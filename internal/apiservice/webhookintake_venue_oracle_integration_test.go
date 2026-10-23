@@ -685,4 +685,4 @@ func blankedJSONRows(joined string, known []string) []string {
 const webhookHealthRuling = "CHAOS-10732 (D6129): the public webhooks health answer carries no secret state; Python's secrets_configured is removed, Go's answer is pinned"
 
 // webhookHealthPinSHA256 is the digest of testdata/webhook-intake-health.go-pin.json.
-const webhookHealthPinSHA256 = "ce524903b2f9d55fd286439bdc2b0bc58f4cd3166cbeff6623db32a1596a6383"
+const webhookHealthPinSHA256 = "f33d1402271148e65299e0417acfaf70d994b858b9945fae1f2f81f97dd66f4c"

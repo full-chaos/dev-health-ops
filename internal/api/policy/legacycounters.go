@@ -39,7 +39,7 @@ func newLegacyAdder() legacyAdder {
 		return func(context.Context, string, string) {}
 	}
 	return func(ctx context.Context, path, kind string) {
-		counter.Add(ctx, 1, metric.WithAttributes(attribute.String("path", path), attribute.String("kind", kind)))
+		counter.Add(ctx, 1, metric.WithAttributes(attribute.String("surface", path), attribute.String("kind", kind)))
 	}
 }
 

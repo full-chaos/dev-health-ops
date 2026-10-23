@@ -54,6 +54,7 @@ A pod is therefore not ready until its first successful outbox step.
 | `dev_health_runtime_required_checks` | gauge | Number of required checks (3). |
 | `dev_health_runtime_uptime_seconds` | gauge | Process uptime. |
 | `dev_health_api_http_requests_total{listener,method,route,status_class}` | counter | Requests on the API listener. Unmatched paths share the label `unmatched`; a raw path is never a label. |
+| `dev_health_api_legacy_path_total{surface,kind}` | counter | Uses of legacy API auth paths. `surface=guard_level` (kind: public, optional, authenticated, admin, admin_org, superuser; one per request that passes the guard), `role_claim` (admin_by_role, admin_by_superuser, role_denied; Admin and AdminOrg checks), `direct_read` (users, memberships, impersonation_sessions; one per store read). Telemetry only. |
 | `dev_health_api_http_request_duration_seconds` | histogram | Request latency on the API listener. |
 | `devhealth_auth_outbox_publisher_enabled` | gauge | 0 in Wave 1 (no sink). |
 | `devhealth_auth_outbox_oldest_pending_age_seconds` | gauge | Outbox backlog age. |

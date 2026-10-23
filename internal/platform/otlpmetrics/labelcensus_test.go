@@ -576,6 +576,22 @@ func TestLabelsTableEqualsTheCensus(t *testing.T) {
 			t.Errorf("manual instrument %s: %s no longer holds %s", name, m.file, m.constant)
 		}
 	}
+	// the producer of the manual instruments: the label keys of its metric.WithAttributes sites are the union of their rows
+	manualKeys := map[string]map[string]bool{}
+	for _, m := range manualInstruments {
+		if manualKeys[m.file] == nil {
+			manualKeys[m.file] = map[string]bool{}
+		}
+		for _, k := range m.keys {
+			manualKeys[m.file][k] = true
+		}
+	}
+	for file, want := range manualKeys {
+		got := metricLabelKeys(files, file)
+		if strings.Join(got, ",") != strings.Join(sortedKeys(want), ",") {
+			t.Errorf("%s: its metric.WithAttributes sites carry %v, the manual instruments pin %v", file, got, sortedKeys(want))
+		}
+	}
 	for name, keys := range want {
 		row, ok := have[name]
 		if !ok {
@@ -661,4 +677,49 @@ func fieldOf(key ast.Expr) ast.Expr {
 		return &ast.SelectorExpr{X: ast.NewIdent("_"), Sel: id}
 	}
 	return key
+}
+
+// metricLabelKeys is the sorted set of literal label keys at the metric.WithAttributes sites of one file.
+func metricLabelKeys(files []sourceFile, rel string) []string {
+	set := map[string]bool{}
+	for _, f := range files {
+		if f.rel != rel {
+			continue
+		}
+		ast.Inspect(f.ast, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			sel, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok || sel.Sel.Name != "WithAttributes" || !isPackageIdent(sel.X, "metric") {
+				return true
+			}
+			for _, arg := range call.Args {
+				inner, ok := arg.(*ast.CallExpr)
+				if !ok || len(inner.Args) == 0 {
+					continue
+				}
+				if key, ok := stringLit(inner.Args[0]); ok {
+					set[key] = true
+				}
+			}
+			return true
+		})
+	}
+	return sortedKeys(set)
+}
+
+func isPackageIdent(e ast.Expr, name string) bool {
+	id, ok := e.(*ast.Ident)
+	return ok && id.Name == name
+}
+
+func sortedKeys(set map[string]bool) []string {
+	var out []string
+	for k := range set {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }

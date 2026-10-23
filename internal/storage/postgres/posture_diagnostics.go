@@ -94,8 +94,14 @@ SELECT
 	-- (TRUNCATE/REFERENCES/TRIGGER/MAINTAIN, unconditionally forbidden by
 	-- TablePrivilege's own doc comment), is exactly the CHAOS-5436 shape:
 	-- CheckRolePosture correctly refuses, and this used to read "0 gaps."
-	relation IS NOT NULL AND NOT allow_insert AND has_table_privilege($1, relation, 'INSERT') AS excess_insert,
-	relation IS NOT NULL AND NOT allow_update AND has_table_privilege($1, relation, 'UPDATE') AS excess_update,
+	-- rolePostureQuery also refuses an INSERT or UPDATE held on ANY column of a table that does not allow it
+	-- (has_any_column_privilege sees the table-level entry too). The UPDATE half has one exception, as there: a
+	-- table the posture also declares column-scoped with an UPDATE column ($6) legitimately holds column UPDATEs.
+	relation IS NOT NULL AND NOT allow_insert AND has_any_column_privilege($1, relation, 'INSERT') AS excess_insert,
+	relation IS NOT NULL AND NOT allow_update AND (
+		has_table_privilege($1, relation, 'UPDATE')
+		OR (has_any_column_privilege($1, relation, 'UPDATE') AND NOT table_name = ANY(COALESCE($6::text[], '{}'::text[])))
+	) AS excess_update,
 	relation IS NOT NULL AND NOT allow_delete AND has_table_privilege($1, relation, 'DELETE') AS excess_delete,
 	relation IS NOT NULL AND has_table_privilege($1, relation, 'TRUNCATE') AS excess_truncate,
 	relation IS NOT NULL AND has_table_privilege($1, relation, 'REFERENCES') AS excess_references,
@@ -308,7 +314,7 @@ func DiagnoseRolePosture(
 	var gaps []PostureGap
 
 	if len(posture.RequiredTables) > 0 {
-		tableGaps, err := diagnoseTablePosture(ctx, pool, expectedRole, posture.RequiredTables)
+		tableGaps, err := diagnoseTablePosture(ctx, pool, expectedRole, posture.RequiredTables, posture.ColumnScoped)
 		if err != nil {
 			return nil, err
 		}
@@ -373,7 +379,14 @@ func diagnoseTablePosture(
 	pool *pgxpool.Pool,
 	expectedRole string,
 	tables []TablePrivilege,
+	columns []ColumnPrivilege,
 ) ([]PostureGap, error) {
+	var columnUpdateTables []string
+	for _, column := range columns {
+		if column.Privilege == "UPDATE" {
+			columnUpdateTables = append(columnUpdateTables, column.TableName)
+		}
+	}
 	tableNames := make([]string, len(tables))
 	allowInserts := make([]bool, len(tables))
 	allowUpdates := make([]bool, len(tables))
@@ -385,7 +398,7 @@ func diagnoseTablePosture(
 		allowDeletes[i] = table.AllowDelete
 	}
 	rows, err := pool.Query(
-		ctx, diagnoseTablePostureQuery, expectedRole, tableNames, allowInserts, allowUpdates, allowDeletes,
+		ctx, diagnoseTablePostureQuery, expectedRole, tableNames, allowInserts, allowUpdates, allowDeletes, columnUpdateTables,
 	)
 	if err != nil {
 		return nil, ErrUnavailable

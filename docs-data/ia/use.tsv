@@ -37,3 +37,8 @@ use-scope-problems	use-troubleshooting	/use/troubleshooting/scope-and-filters/	U
 use-permissions	use-troubleshooting	/use/troubleshooting/permissions-and-availability/	Missing permission or unavailable view	troubleshooting	true	public	planned	false	
 use-stale	use-troubleshooting	/use/troubleshooting/stale-or-delayed-results/	Stale or delayed results	troubleshooting	true	public	planned	false	
 use-report-problems	use-troubleshooting	/use/troubleshooting/reports/	Report generation problems	troubleshooting	true	public	planned	false	
+use-sign-in-problems	use-troubleshooting	/use/troubleshooting/sign-in/	Sign-in problems	troubleshooting	true	public	planned	false	
+use-sign-in	use	/use/sign-in/	Sign in and recover access	landing	true	public	planned	false	
+use-sign-in-account	use-sign-in	/use/sign-in/create-account-and-sign-in/	Create an account and sign in	task-guide	true	public	planned	false	
+use-sign-in-recover	use-sign-in	/use/sign-in/recover-access/	Recover access	task-guide	true	public	planned	false	
+use-sign-in-methods	use-sign-in	/use/sign-in/social-login-and-sso/	Social sign-in and single sign-on	concept	true	public	planned	false	

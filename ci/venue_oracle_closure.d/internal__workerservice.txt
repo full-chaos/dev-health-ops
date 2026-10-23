@@ -119,6 +119,7 @@ internal/pythonparity/pyunicodedata
 internal/queryapi/rowview
 internal/scheduler/sync
 internal/storage/clickhouse
+internal/storage/clickhouse/engineclause
 internal/storage/clickhouse/latestrow
 internal/storage/clickhouse/liverow
 internal/storage/postgres

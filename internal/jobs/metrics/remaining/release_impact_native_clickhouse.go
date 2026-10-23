@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+
+	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/engineclause"
 )
 
 // ClickHouse readers for release_impact (CHAOS-4296), ported query-for-query
@@ -127,7 +129,7 @@ func verifyReleaseImpactSchema(ctx context.Context, conn driver.Conn) error {
 	if err != nil {
 		return err
 	}
-	if !strings.Contains(engine, "ReplacingMergeTree") {
+	if clause, err := engineclause.Parse(engine); err != nil || clause.Family != engineclause.FamilyReplacing {
 		return fmt.Errorf(
 			"%w: %s is %s, expected ReplacingMergeTree -- migration 088 has "+
 				"not been applied, and every recomputed day would append "+
@@ -139,8 +141,8 @@ func verifyReleaseImpactSchema(ctx context.Context, conn driver.Conn) error {
 	if err != nil {
 		return err
 	}
-	if !strings.Contains(engineFull, "ReplacingMergeTree(computed_at)") &&
-		!strings.Contains(engineFull, "ReplacingMergeTree(`computed_at`)") {
+	clause, err := engineclause.Parse(engineFull)
+	if err != nil || !clause.IsReplacingOn("computed_at") {
 		return fmt.Errorf(
 			"%w: %s is %s, expected the ReplacingMergeTree version column to "+
 				"be computed_at -- a different (or missing) version column "+

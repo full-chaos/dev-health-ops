@@ -1596,6 +1596,9 @@ scan_listed_go_tests() {
     case "${go_file}" in
       */*|..*) die "go list returned unsafe ${label} test filename '${go_file}'" ;;
     esac
+    case "${go_file}" in
+      *[[:cntrl:]]*) die "go list returned unsafe ${label} test filename with a control byte: $(printf '%q' "${go_file}")" ;;
+    esac
     [ -f "${dir}/${go_file}" ] || die "go list returned missing ${label} test file '${go_file}'"
     paths+=("${dir}/${go_file}")
   done <<<"${listed}"

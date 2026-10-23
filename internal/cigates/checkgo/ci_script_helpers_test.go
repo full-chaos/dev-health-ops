@@ -116,13 +116,12 @@ func pc(name, old, repl, wantFail, wantInText string) plant {
 // assertPlantsCaught copies the script once per plant and requires the named scenario to fail with the named message.
 func assertPlantsCaught(t *testing.T, script string, scenarios []scenario, plants []plant) {
 	t.Helper()
-	// One copy of the tracked tree serves every clone plant of this call: the plants take turns, each restores the
+	// One copy of the tracked tree serves every clone plant: the plants take turns, each restores the
 	// file by content digest before the next, and a restore that does not match fails the test.
 	var cloneDir string
-	var cloneMu sync.Mutex
 	for _, p := range plants {
 		if p.clone {
-			cloneDir = cloneRepo(t)
+			cloneDir = sharedTree(t)
 			break
 		}
 	}
@@ -136,8 +135,8 @@ func assertPlantsCaught(t *testing.T, script string, scenarios []scenario, plant
 			t.Parallel()
 			var planted string
 			if p.clone {
-				cloneMu.Lock()
-				defer cloneMu.Unlock()
+				sharedTreeMu.Lock()
+				defer sharedTreeMu.Unlock()
 				target := filepath.Join(cloneDir, rel)
 				original := readText(t, target)
 				before := sha256.Sum256([]byte(original))
@@ -246,16 +245,40 @@ func (r *gitRepo) commit(name, content string) string {
 	return r.git("rev-parse", "HEAD")
 }
 
-// cloneRepo copies every tracked file of the repository into a fresh git repository (index only, no commit) so a ci
-// script that derives its root from its own path and runs git against that root can execute a planted-defect copy.
-func cloneRepo(t *testing.T) string {
+var (
+	sharedTreeOnce sync.Once
+	sharedTreeDir  string
+	sharedTreeErr  error
+	// sharedTreeMu serializes everything that edits the shared tree: each user restores what it changed before the next.
+	sharedTreeMu sync.Mutex
+)
+
+// sharedTree is ONE copy of every tracked file as a fresh git repository (index only, no commit), built once per process
+// (copying ~20k files costs seconds, and every clone plant and discovery scenario needs one) and removed by TestMain with
+// the shim directory. A ci script that derives its root from its own path and runs git against that root executes in it.
+func ensureSharedTree() (string, error) {
+	sharedTreeOnce.Do(func() {
+		sharedTreeDir = filepath.Join(noPythonDir, "shared-tree")
+		sharedTreeErr = cloneTreeInto(repoRootNoT(), sharedTreeDir)
+	})
+	return sharedTreeDir, sharedTreeErr
+}
+
+func sharedTree(t *testing.T) string {
 	t.Helper()
-	root := rootOf(t)
+	dir, err := ensureSharedTree()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+// cloneTreeInto copies every tracked file of root into a fresh git repository at dst.
+func cloneTreeInto(root, dst string) error {
 	listed := cmdSpec{dir: root, env: gitEnv}.run("git", "ls-files", "-z", "--cached")
 	if listed.code != 0 {
-		t.Fatalf("git ls-files: %s", listed.stderr)
+		return fmt.Errorf("git ls-files: %s", listed.stderr)
 	}
-	dst := t.TempDir()
 	copied := 0
 	for _, rel := range strings.Split(listed.stdout, "\x00") {
 		if rel == "" {
@@ -267,26 +290,23 @@ func cloneRepo(t *testing.T) string {
 		}
 		raw, err := os.ReadFile(filepath.Join(root, rel))
 		if err != nil {
-			t.Fatal(err)
+			return err
 		}
 		out := filepath.Join(dst, rel)
 		if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
-			t.Fatal(err)
+			return err
 		}
 		if err := os.WriteFile(out, raw, info.Mode().Perm()); err != nil {
-			t.Fatal(err)
+			return err
 		}
 		copied++
 	}
 	if copied < 1000 {
-		t.Fatalf("cloned only %d files: the tracked-tree copy measured nothing", copied)
+		return fmt.Errorf("cloned only %d files: the tracked-tree copy measured nothing", copied)
 	}
 	r := newGitRepo(dst)
 	r.git("add", "-A")
-	if r.err != nil {
-		t.Fatal(r.err)
-	}
-	return dst
+	return r.err
 }
 
 // inheritedEnv is the test process environment without the named variables, plus the extra assignments.

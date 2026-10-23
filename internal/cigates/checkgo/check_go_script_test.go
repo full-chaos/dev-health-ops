@@ -843,3 +843,90 @@ func TestCheckGoIntegrationCoverage(t *testing.T) {
 		})
 	}
 }
+
+// ---- test-name discovery (executed against a scratch copy of the tracked tree) ---------------------------------
+
+const sentinelTestName = "TestZzSentinelDiscoveryRow"
+
+const sentinelTestSource = "//go:build integration\n\npackage providersync\n\nimport \"testing\"\n\nfunc " + sentinelTestName + "(t *testing.T) {}\n"
+
+// withDiscoveryTree runs fn on ONE scratch copy of the tracked tree (built once per process, removed by TestMain with the
+// shim directory) with the script under test at ci/check_go.sh and one integration test file named fileName in
+// internal/providersync, so the shard planner meets a name only the scenario knows. The scenarios take turns; each one
+// removes its file and restores the script before the next.
+func withDiscoveryTree(script, fileName string, fn func(tree string) error) error {
+	sharedTreeMu.Lock()
+	defer sharedTreeMu.Unlock()
+	tree, err := ensureSharedTree()
+	if err != nil {
+		return err
+	}
+	target := filepath.Join(tree, "ci", "check_go.sh")
+	original, err := os.ReadFile(target)
+	if err != nil {
+		return err
+	}
+	planted, err := os.ReadFile(script)
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(target, planted, 0o755); err != nil {
+		return err
+	}
+	defer func() {
+		if err := os.WriteFile(target, original, 0o755); err != nil {
+			panic(err)
+		}
+	}()
+	file := filepath.Join(tree, "internal", "providersync", fileName)
+	if err := os.WriteFile(file, []byte(sentinelTestSource), 0o644); err != nil {
+		return err
+	}
+	defer os.Remove(file)
+	return fn(tree)
+}
+
+func discoveryScenarios() []scenario {
+	return []scenario{
+		{"a_new_test_name_is_planned_exactly_once", func(script, work string) error {
+			return withDiscoveryTree(script, "zzsentinel_discovery_test.go", func(tree string) error {
+				res := cmdSpec{dir: tree, env: inheritedEnv(nil)}.run("bash", filepath.Join(tree, "ci", "check_go.sh"), "integration-shard-plan")
+				if res.code != 0 {
+					return fmt.Errorf("integration-shard-plan exited %d: %s", res.code, tail(res.stderr+res.stdout, 1500))
+				}
+				rows := 0
+				for _, l := range strings.Split(res.stdout, "\n") {
+					if strings.HasPrefix(strings.TrimSpace(l), "PROVIDER-SHARD ") && strings.Contains(l, " "+sentinelTestName+" ") {
+						rows++
+					}
+				}
+				if rows != 1 {
+					return fmt.Errorf("the planted test %s has %d PROVIDER-SHARD rows in the plan, want exactly 1", sentinelTestName, rows)
+				}
+				return nil
+			})
+		}},
+		{"a_control_byte_in_a_test_file_name_is_refused", func(script, work string) error {
+			return withDiscoveryTree(script, "zzsentinel\x1f_scan_test.go", func(tree string) error {
+				res := cmdSpec{dir: tree, env: inheritedEnv(nil)}.run("bash", filepath.Join(tree, "ci", "check_go.sh"), "integration-shard-plan")
+				if res.code != 2 || !strings.Contains(res.stderr, "zzsentinel") || !strings.Contains(res.stderr, "control byte") {
+					return fmt.Errorf("exit %d stderr %q, want exit 2 naming the zzsentinel file and 'control byte'", res.code, tail(res.stderr, 500))
+				}
+				return nil
+			})
+		}},
+	}
+}
+
+func TestCheckGoDiscoversEveryTestName(t *testing.T) {
+	t.Parallel()
+	script := scriptPath(t, "ci/check_go.sh")
+	scenarios := discoveryScenarios()
+	assertAllPass(t, script, scenarios)
+	assertPlantsCaught(t, script, scenarios, []plant{
+		p("the scan drops one test name", `printf "T\037%s\037%s\n", FILENAME, substr(s, 1, RLENGTH)`, `if (s !~ /^TestZz/) printf "T\037%s\037%s\n", FILENAME, substr(s, 1, RLENGTH)`,
+			"a_new_test_name_is_planned_exactly_once", "has 0 PROVIDER-SHARD rows"),
+		p("a control byte passes the name check", `*[[:cntrl:]]*) die "go list returned unsafe ${label} test filename with a control byte`, `*[[:cntrl:]][[:cntrl:]][[:cntrl:]]*) die "go list returned unsafe ${label} test filename with a control byte`,
+			"a_control_byte_in_a_test_file_name_is_refused", "want exit 2"),
+	})
+}

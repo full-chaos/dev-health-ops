@@ -189,7 +189,7 @@ func TestGoAPIFenceOffChangesNothing(t *testing.T) {
 			continue
 		}
 		const before = "  ingress:\n" // the port ranges render exactly as before the fence existed
-		if !strings.Contains(document, "    - ports:\n        - protocol: TCP\n          port: 1\n          endPort: 8090\n        - protocol: TCP\n          port: 8092\n          endPort: 65535\n") || !strings.Contains(document, before) {
+		if !strings.Contains(document, "    - ports:\n        - protocol: TCP\n          port: 1\n          endPort: 8090\n        - protocol: TCP\n          port: 8092\n          endPort: 65535") || !strings.Contains(document, before) {
 			t.Errorf("with the fence off the open ranges are not the two ranges around 8091:\n%s", document)
 		}
 		if got := closedPorts(t, []netpolDoc{parsed}, sourceStranger); !sameInts(got, []int{8091}) {

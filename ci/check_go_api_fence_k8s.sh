@@ -115,8 +115,10 @@ grep -q 'port: 8010' "${WORK}/fence-on.yaml" || die "the fenced render does not 
 
 printf 'step 2: the stand-in go-api pod listens on 8000, 8010, 8080 and 8091\n'
 GO_API_LABELS="app.kubernetes.io/name=dev-health,app.kubernetes.io/instance=${RELEASE},app.kubernetes.io/component=go-api"
+# Each listener restarts in a loop: one `nc -l` serves one connection, and a listener that ends turns a refusal into an instant
+# "connection refused" that no policy drew.
 K -n "${NS}" run go-api --image="${PROOF_IMAGE}" --image-pull-policy=IfNotPresent --restart=Never \
-  --labels="${GO_API_LABELS}" --command -- sh -c "for p in 8000 8010 8080 8091; do nc -lk -p \$p & done; wait" >/dev/null
+  --labels="${GO_API_LABELS}" --command -- sh -c "for p in 8000 8010 8080 8091; do (while true; do nc -l -p \$p </dev/null >/dev/null 2>&1; done) & done; wait" >/dev/null
 K -n "${NS}" wait --for=condition=Ready pod/go-api --timeout=180s >/dev/null
 POD_IP="$(K -n "${NS}" get pod go-api -o jsonpath='{.status.podIP}')"
 printf 'stand-in pod ip %s\n' "${POD_IP}"
@@ -125,12 +127,14 @@ reach() { # namespace labels port -> "open" or "closed" (one nc connect from a f
   local namespace="$1" labels="$2" port="$3" name out
   name="client-$(date +%s%N)"
   K -n "${namespace}" run "${name}" --image="${PROOF_IMAGE}" --image-pull-policy=IfNotPresent --restart=Never \
-    --labels="${labels}" --command -- sh -c "nc -z -w 3 ${POD_IP} ${port}; echo rc=\$?" >/dev/null
+    --labels="${labels}" --command -- sh -c "s=\$(date +%s); nc -z -w 3 ${POD_IP} ${port}; rc=\$?; echo rc=\$rc elapsed=\$((\$(date +%s) - s))" >/dev/null
   K -n "${namespace}" wait --for=jsonpath='{.status.phase}'=Succeeded pod/"${name}" --timeout=90s >/dev/null 2>&1 || true
   out="$(K -n "${namespace}" logs "${name}" 2>&1 || true)"
   K -n "${namespace}" delete pod "${name}" --wait=false >/dev/null 2>&1 || true
+  # A policy drop makes the 3 s connect time out. An instant failure is a refusal the listener drew, not the policy.
   case "${out}" in
     *rc=0*) printf 'open' ;;
+    *rc=*elapsed=0* | *rc=*elapsed=1*) printf 'refused' ;;
     *rc=*) printf 'closed' ;;
     *) die "the probe from ${namespace} (${labels}) to ${port} produced no result: ${out}" ;;
   esac
@@ -145,15 +149,18 @@ expect() { # description state namespace labels port
   local description="$1" want="$2" got
   shift 2
   got="$(reach "$@")"
-  # A policy is programmed a moment after the apply returns: an expected refusal may need a retry.
-  # An expected admission never does (nothing in the policy closes it), so it is read once.
-  if [ "${want}" = closed ]; then
-    for _ in 1 2 3 4 5 6; do
-      [ "${got}" = closed ] && break
+  # A policy is programmed a moment after the apply returns, so an expected refusal may need a retry. A listener that is
+  # between two connections answers an instant "refused": retry that too, for an admission as well. An admission that
+  # reads "closed" is never retried: nothing in the policy closes it later.
+  for _ in 1 2 3 4 5 6; do
+    [ "${got}" = "${want}" ] && break
+    if [ "${got}" = refused ] || [ "${want}" = closed ]; then
       sleep 5
       got="$(reach "$@")"
-    done
-  fi
+    else
+      break
+    fi
+  done
   printf '%-62s %s (want %s)\n' "${description}" "${got}" "${want}"
   [ "${got}" = "${want}" ] || die "${description}: ${got}, want ${want}"
 }
@@ -162,6 +169,8 @@ printf 'step 3: CONTROL, no policy yet: an unlisted pod reaches every port\n'
 for port in 8000 8010 8080 8091; do
   expect "control: stranger -> ${port}" open "${NS}" "${STRANGER_LABELS}" "${port}"
 done
+
+[ "$(K -n "${NS}" get pod go-api -o jsonpath='{.status.phase}')" = Running ] || die "the stand-in go-api pod is not running after the control probes"
 
 printf 'step 4: apply the fenced policy\n'
 K -n "${NS}" apply -f "${WORK}/fence-on.yaml"
@@ -184,6 +193,8 @@ expect "allowedFrom tools pod -> 8091 (internal, own rule)" closed "${NS}" "${TO
 for labels_ns in "${NS}|${STRANGER_LABELS}" "${CONTROLLER_NS}|${WEBHOOK_LABELS}" "${OTHER_NS}|${CONTROLLER_LABELS}"; do
   expect "operator port 8080 stays open: ${labels_ns}" open "${labels_ns%%|*}" "${labels_ns#*|}" 8080
 done
+
+[ "$(K -n "${NS}" get pod go-api -o jsonpath='{.status.phase}')" = Running ] || die "the stand-in go-api pod stopped during the proof"
 
 printf 'step 7: ROLLBACK, the fence off over the same policy opens the request ports again\n'
 K -n "${NS}" apply -f "${WORK}/fence-off.yaml"

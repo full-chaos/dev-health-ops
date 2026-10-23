@@ -218,11 +218,15 @@ func (f *FakeProvider) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "/github/user gh-not-json":
 		write(200, `not json`)
 	case "/gitlab/api/v4/user gl-frank":
-		write(200, `{"id": 42, "username": "frank-gl", "email": "frank@example.com"}`)
+		write(200, `{"id": 42, "username": "frank-gl", "email": "frank@example.com", "confirmed_at": "2026-01-01T00:00:00Z"}`)
+	case "/gitlab/api/v4/user gl-unverified-frank":
+		write(200, `{"id": 45, "username": "frank-gl2", "email": "frank@example.com"}`)
+	case "/gitlab/api/v4/user gl-unverified-new":
+		write(200, `{"id": 46, "username": "nobody-gl", "email": "unverified-new@example.com"}`)
 	case "/gitlab/api/v4/user gl-no-email":
 		write(200, `{"id": 43, "username": "noemail"}`)
 	case "/gitlab/api/v4/user gl-taken-username":
-		write(200, `{"id": 44, "username": "alice", "name": "Other Alice", "email": "other-alice@example.com"}`)
+		write(200, `{"id": 44, "username": "alice", "name": "Other Alice", "email": "other-alice@example.com", "confirmed_at": "2026-01-01T00:00:00Z"}`)
 	default:
 		write(401, `{"message": "Bad credentials"}`)
 	}

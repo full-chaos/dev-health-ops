@@ -16,9 +16,9 @@ func TestSocialLoginNeverLinksAnAccountByEmail(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	st := startStack(t, ctx)
-	post := func(token string) (int, string) {
+	post := func(provider, token string) (int, string) {
 		request, err := http.NewRequestWithContext(ctx, http.MethodPost, st.server.URL+"/api/v1/auth/social-login",
-			strings.NewReader(`{"provider": "github", "provider_access_token": "`+token+`"}`))
+			strings.NewReader(`{"provider": "`+provider+`", "provider_access_token": "`+token+`"}`))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -60,7 +60,7 @@ func TestSocialLoginNeverLinksAnAccountByEmail(t *testing.T) {
 		{"same provider, other subject", "gh-frank-new-id", "frank@example.com", "github", "100"},
 		{"same provider, no stored subject", "gh-olga", "olga@example.com", "github", ""},
 	} {
-		status, body := post(tc.token)
+		status, body := post("github", tc.token)
 		if status != http.StatusConflict {
 			t.Errorf("%s: status %d %s, want 409", tc.name, status, body)
 		}
@@ -78,8 +78,56 @@ func TestSocialLoginNeverLinksAnAccountByEmail(t *testing.T) {
 		t.Error("a refused social sign-in recorded a login")
 	}
 
-	status, body := post("gh-frank")
+	status, body := post("github", "gh-frank")
 	if status != http.StatusOK || !strings.Contains(body, `"is_new_user":false`) || !strings.Contains(body, "frank@example.com") {
 		t.Errorf("a linked identity no longer signs in: %d %s", status, body)
+	}
+}
+
+func TestSocialLoginRefusesAnUnverifiedProviderEmailAlike(t *testing.T) {
+	t.Setenv("TRUSTED_PROXIES", "127.0.0.1,::1")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	st := startStack(t, ctx)
+	post := func(token string) (int, string) {
+		request, err := http.NewRequestWithContext(ctx, http.MethodPost, st.server.URL+"/api/v1/auth/social-login",
+			strings.NewReader(`{"provider": "gitlab", "provider_access_token": "`+token+`"}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("X-Forwarded-For", "203.0.113.9")
+		response, err := http.DefaultClient.Do(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer response.Body.Close()
+		raw, _ := io.ReadAll(response.Body)
+		return response.StatusCode, string(raw)
+	}
+	var usersBefore int
+	if err := st.pool.QueryRow(ctx, `SELECT count(*) FROM users`).Scan(&usersBefore); err != nil {
+		t.Fatal(err)
+	}
+	existingStatus, existingBody := post("gl-unverified-frank")
+	newStatus, newBody := post("gl-unverified-new")
+	if existingStatus != http.StatusForbidden || newStatus != http.StatusForbidden {
+		t.Fatalf("unverified e-mail: existing account %d %s, no account %d %s, want 403 both", existingStatus, existingBody, newStatus, newBody)
+	}
+	if existingBody != newBody {
+		t.Errorf("the answer depends on whether the account exists:\n existing %s\n none     %s", existingBody, newBody)
+	}
+	if strings.Contains(existingBody, "github") || strings.Contains(existingBody, "existing_provider") {
+		t.Errorf("the refusal names the existing sign-in method: %s", existingBody)
+	}
+	var usersAfter, frankIDs int
+	if err := st.pool.QueryRow(ctx, `SELECT count(*) FROM users`).Scan(&usersAfter); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.pool.QueryRow(ctx, `SELECT count(*) FROM users WHERE email = 'frank@example.com' AND auth_provider = 'github' AND auth_provider_id = '100'`).Scan(&frankIDs); err != nil {
+		t.Fatal(err)
+	}
+	if usersAfter != usersBefore || frankIDs != 1 {
+		t.Errorf("a refused sign-in wrote: users %d -> %d, frank row intact %d", usersBefore, usersAfter, frankIDs)
 	}
 }

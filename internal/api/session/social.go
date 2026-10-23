@@ -95,6 +95,10 @@ func (h handlers) socialLogin(w http.ResponseWriter, r *http.Request) {
 	isNewUser := false
 	var email string
 	if user == nil {
+		if !info.EmailVerified {
+			refuse(w, http.StatusForbidden, "The provider has not verified this email address")
+			return
+		}
 		if email, ok = info.Email.(string); !ok {
 			h.fail(w, r, "provider email", errProviderValueType)
 			return

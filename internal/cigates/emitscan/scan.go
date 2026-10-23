@@ -28,6 +28,7 @@ const (
 	RuleRiverLogger   = "R5" // river client without a Logger
 	RuleRawPath       = "R6" // raw request path or query in a log attribute
 	RuleIdentityHash  = "R7" // bare digest of a value used as an emit attribute
+	RuleDotImport     = "R8" // dot-import of a watched package: its calls cannot be matched
 	RuleUnparsable    = "R0" // a file the scan could not read or parse: always a failure
 	maxMetricLabels   = 6
 	rawHandlerAllowed = "internal/platform/logging/"
@@ -50,6 +51,11 @@ func (f Finding) String() string {
 		return f.Rule + " " + f.Where()
 	}
 	return f.Rule + " " + f.Where() + " " + f.Detail
+}
+
+var watchedImports = map[string]bool{
+	"log/slog": true, "go.opentelemetry.io/otel/attribute": true, "go.opentelemetry.io/otel/metric": true,
+	"github.com/riverqueue/river": true,
 }
 
 var attrConstructors = map[string]bool{
@@ -143,6 +149,13 @@ func scanFile(path, rel string) []Finding {
 		return []Finding{{Rule: RuleUnparsable, File: rel, Line: 1}}
 	}
 	s := &fileScan{fset: fset, rel: rel, metricAttrs: map[*ast.CallExpr]bool{}, consts: stringConsts(file), imports: importNames(file)}
+	for _, spec := range file.Imports {
+		if spec.Name != nil && spec.Name.Name == "." {
+			if path, err := strconv.Unquote(spec.Path.Value); err == nil && watchedImports[path] {
+				s.add(RuleDotImport, spec.Pos(), path)
+			}
+		}
+	}
 	s.markMetricFunctions(file)
 	ast.Walk(s, file)
 	return s.out
@@ -173,9 +186,13 @@ func (s *fileScan) Visit(node ast.Node) ast.Visitor {
 	s.nodes = append(s.nodes, node)
 	switch fn := node.(type) {
 	case *ast.FuncDecl:
-		s.taints = append(s.taints, rawPathIdents(fn.Body))
+		s.taints = append(s.taints, rawPathIdents(fn.Body, nil))
 	case *ast.FuncLit:
-		s.taints = append(s.taints, rawPathIdents(fn.Body))
+		var parent map[string]bool
+		if len(s.taints) > 0 {
+			parent = s.taints[len(s.taints)-1]
+		}
+		s.taints = append(s.taints, rawPathIdents(fn.Body, parent))
 	case *ast.CallExpr:
 		s.call(fn)
 	}
@@ -186,32 +203,94 @@ func (s *fileScan) tainted(name string) bool {
 	return len(s.taints) > 0 && s.taints[len(s.taints)-1][name]
 }
 
-// rawPathIdents returns the identifiers a function assigns from a raw request path or query.
-func rawPathIdents(body *ast.BlockStmt) map[string]bool {
+// rawPathIdents returns the identifiers a function (with the identifiers its enclosing function already holds) assigns
+// from a raw request path or query, directly or through other tainted identifiers, to a fixpoint.
+func rawPathIdents(body *ast.BlockStmt, seed map[string]bool) map[string]bool {
 	out := map[string]bool{}
+	for name := range seed {
+		out[name] = true
+	}
 	if body == nil {
 		return out
 	}
-	ast.Inspect(body, func(node ast.Node) bool {
-		switch n := node.(type) {
-		case *ast.AssignStmt:
-			for i, rhs := range n.Rhs {
-				if i < len(n.Lhs) && rawRequestPart(rhs) {
-					if ident, ok := n.Lhs[i].(*ast.Ident); ok {
-						out[ident.Name] = true
+	holds := func(expr ast.Expr) bool { return rawRequestPart(expr) || carriesTaint(expr, out) }
+	for changed := true; changed; {
+		changed = false
+		ast.Inspect(body, func(node ast.Node) bool {
+			switch n := node.(type) {
+			case *ast.AssignStmt:
+				for i, rhs := range n.Rhs {
+					if i < len(n.Lhs) && holds(rhs) {
+						if ident, ok := n.Lhs[i].(*ast.Ident); ok && !out[ident.Name] {
+							out[ident.Name] = true
+							changed = true
+						}
+					}
+				}
+			case *ast.ValueSpec:
+				for i, value := range n.Values {
+					if i < len(n.Names) && holds(value) && !out[n.Names[i].Name] {
+						out[n.Names[i].Name] = true
+						changed = true
 					}
 				}
 			}
-		case *ast.ValueSpec:
-			for i, value := range n.Values {
-				if i < len(n.Names) && rawRequestPart(value) {
-					out[n.Names[i].Name] = true
+			return true
+		})
+	}
+	return out
+}
+
+// carriesTaint reports an expression whose value keeps the text of a tainted identifier: a copy, a concatenation, a
+// conversion, a slice, a field of it, or the result of a string-shaping call. Any other call is a new value.
+func carriesTaint(expr ast.Expr, tainted map[string]bool) bool {
+	switch e := expr.(type) {
+	case *ast.Ident:
+		return tainted[e.Name]
+	case *ast.ParenExpr:
+		return carriesTaint(e.X, tainted)
+	case *ast.BinaryExpr:
+		return carriesTaint(e.X, tainted) || carriesTaint(e.Y, tainted)
+	case *ast.UnaryExpr:
+		return carriesTaint(e.X, tainted)
+	case *ast.SelectorExpr:
+		return carriesTaint(e.X, tainted)
+	case *ast.SliceExpr:
+		return carriesTaint(e.X, tainted)
+	case *ast.IndexExpr:
+		return carriesTaint(e.X, tainted)
+	case *ast.CompositeLit:
+		for _, element := range e.Elts {
+			if kv, ok := element.(*ast.KeyValueExpr); ok {
+				element = kv.Value
+			}
+			if carriesTaint(element, tainted) {
+				return true
+			}
+		}
+	case *ast.CallExpr:
+		shaping := false
+		switch fun := e.Fun.(type) {
+		case *ast.Ident:
+			shaping = fun.Name == "string"
+		case *ast.SelectorExpr:
+			if ident, ok := fun.X.(*ast.Ident); ok && (ident.Name == "fmt" || ident.Name == "strings" || ident.Name == "path") {
+				shaping = true
+			} else if fun.Sel.Name == "String" || fun.Sel.Name == "Query" || fun.Sel.Name == "EscapedPath" {
+				if carriesTaint(fun.X, tainted) {
+					return true
 				}
 			}
 		}
-		return true
-	})
-	return out
+		if shaping {
+			for _, arg := range e.Args {
+				if carriesTaint(arg, tainted) {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 func importNames(file *ast.File) map[string]string {

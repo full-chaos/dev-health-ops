@@ -59,6 +59,9 @@ func TestRedProofs(t *testing.T) {
 		{"raw path through a local variable", "func f(r *http.Request, l *slog.Logger) { p := r.URL.Path; l.Error(\"x\", \"path\", p) }", "R6"},
 		{"raw path variable in an attribute", "func f(r *http.Request) { var p = r.URL.RawQuery; slog.Info(\"x\", slog.String(\"q\", p)) }", "R6"},
 		{"discard-named writer is not io.Discard", "type discard struct{}\nfunc (discard) Write(p []byte) (int, error) { return len(p), nil }\nfunc f() { _ = slog.NewJSONHandler(discard{}, nil) }", "R4"},
+		{"two-hop path variable", "func f(r *http.Request, l *slog.Logger) { p := r.URL.Path; q := p; l.Error(\"x\", \"path\", q) }", "R6"},
+		{"path variable used in a closure", "func f(r *http.Request, l *slog.Logger) { p := r.URL.Path; defer func() { l.Info(\"done\", \"path\", p) }() }", "R6"},
+		{"path variable derived in a closure", "func f(r *http.Request, l *slog.Logger) { p := r.URL.Path; func() { q := p + \"/x\"; l.Info(\"done\", \"path\", q) }() }", "R6"},
 		{"planted bare digest as attribute", "func f(v []byte) { _ = attribute.String(\"who\", string(sha256.Sum256(v)[:])) }", "R7"},
 	}
 	for _, tc := range cases {
@@ -68,6 +71,25 @@ func TestRedProofs(t *testing.T) {
 				t.Fatalf("rules = %q, want %s", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestDotImportOfAWatchedPackageIsAFinding(t *testing.T) {
+	for _, path := range []string{"log/slog", "go.opentelemetry.io/otel/attribute", "go.opentelemetry.io/otel/metric"} {
+		source := "package sample\n\nimport . \"" + path + "\"\n"
+		if got := rules(scanSource(t, source)); got != "R8" {
+			t.Fatalf("rules = %q for a dot-import, want R8", got)
+		}
+	}
+	if got := rules(scanSource(t, "package sample\n\nimport . \"strings\"\n")); got != "" {
+		t.Fatalf("rules = %q for an unwatched dot-import", got)
+	}
+}
+
+func TestPathTaintDoesNotFollowOrdinaryCalls(t *testing.T) {
+	body := "func f(r *http.Request, l *slog.Logger, do func(string) (int, error)) {\n\tp := r.URL.Path\n\tstatus, _ := do(p)\n\tl.Info(\"x\", \"status\", status)\n}\n"
+	if got := scanSource(t, header+body); len(got) != 0 {
+		t.Fatalf("findings: %v", got)
 	}
 }
 

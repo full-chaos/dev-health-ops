@@ -29,12 +29,7 @@ func verifyGitHubSignature(body []byte, signatureHeader, secret string) bool {
 // handleGitHubWebhook ports router.py's github_webhook.
 func (d Deps) handleGitHubWebhook() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		secret := d.secrets().GitHub
-		if secret == "" {
-			d.logger().Warn("GITHUB_WEBHOOK_SECRET not configured - rejecting webhook")
-			policy.WriteDetail(w, http.StatusInternalServerError, "Webhook secret not configured", nil)
-			return
-		}
+		secret := verifyingSecret(d.secrets().GitHub)
 		// Python declares X-GitHub-Event/X-GitHub-Delivery as required
 		// FastAPI Header() params, resolved (and 422'd) ahead of the
 		// signature-checking body dependency -- confirmed live: a request

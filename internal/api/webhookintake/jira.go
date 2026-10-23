@@ -28,12 +28,7 @@ func verifyJiraSignature(body []byte, signatureHeader, secret string) bool {
 // handleJiraWebhook ports router.py's jira_webhook.
 func (d Deps) handleJiraWebhook() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		secret := d.secrets().Jira
-		if secret == "" {
-			d.logger().Warn("JIRA_WEBHOOK_SECRET not configured - rejecting webhook")
-			policy.WriteDetail(w, http.StatusInternalServerError, "Webhook secret not configured", nil)
-			return
-		}
+		secret := verifyingSecret(d.secrets().Jira)
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
 			policy.WriteDetail(w, http.StatusBadRequest, "Invalid request body", nil)

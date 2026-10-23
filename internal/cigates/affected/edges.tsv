@@ -67,6 +67,7 @@ internal/cigates/chartgates	helpers_test.go	unexpressed
 internal/cigates/chartgates	overlay_test.go	unexpressed
 internal/cigates/checkgo	ci_script_helpers_test.go	unexpressed
 internal/cigates/checkgo	race_solo_test.go	unexpressed
+internal/cigates/chparams	chparams_test.go	unexpressed
 internal/cigates/docmaketargets	docmaketargets_test.go	unexpressed
 internal/cigates/docs	docs_helpers_test.go	unexpressed
 internal/cigates/docs	repo_paths_test.go	unexpressed

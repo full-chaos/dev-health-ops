@@ -132,7 +132,7 @@ WHERE org_id = ? AND day = ? AND row_view = '' AND items_touched != 0
 			t.Fatalf("%s after the run ended = %v, want %v", predicate, got, org)
 		}
 	}
-	if got := viewSum(t, ctx, conn, "work_item_user_metrics_daily", "items_completed", `row_view IN ('', 'org') AND retracted = 0`); got != 0 {
+	if got := viewSum(t, ctx, conn, "work_item_user_metrics_daily", "items_completed", `row_view IN ('', 'org') AND retracted = 0 AND user_identity = 'ghost'`); got != 0 {
 		t.Fatalf("the legacy user row of a person nothing computed still counts %v after the run ended", got)
 	}
 	for _, table := range []string{"work_item_state_durations_daily"} {

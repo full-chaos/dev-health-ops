@@ -23,7 +23,6 @@ var Allowlist = []Entry{
 	{File: "internal/api/session/register.go", Func: "handlers.register", Table: "public.users", Verb: "INSERT"},
 	{File: "internal/api/session/register.go", Func: "insertMembership", Table: "public.memberships", Verb: "INSERT"},
 	{File: "internal/api/session/social.go", Func: "handlers.createSocialUser", Table: "public.users", Verb: "INSERT"},
-	{File: "internal/api/session/social.go", Func: "handlers.socialLogin", Table: "public.users", Verb: "UPDATE"},
 	{File: "internal/api/session/store.go", Func: "insertRefresh", Table: "public.refresh_tokens", Verb: "INSERT"},
 	{File: "internal/api/session/store.go", Func: "markRotated", Table: "public.refresh_tokens", Verb: "UPDATE"},
 	{File: "internal/api/session/store.go", Func: "revokeFamily", Table: "public.refresh_tokens", Verb: "UPDATE"},

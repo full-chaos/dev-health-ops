@@ -106,6 +106,7 @@ internal/scheduler/sync
 internal/storage/clickhouse
 internal/storage/clickhouse/liverow
 internal/storage/postgres
+internal/storage/postgres/aclguard
 internal/storage/river
 internal/storage/roleacl
 internal/storage/valkey

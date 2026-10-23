@@ -261,6 +261,7 @@ internal/storage/postgres	posture_cache_cadence_test.go	internal/storage/postgre
 internal/storage/postgres	posture_identity_sites_test.go	internal	tree
 internal/storage/postgres	venue_posture_coverage_test.go	.	tree
 internal/storage/postgres	venue_posture_coverage_test.go	unexpressed	-
+internal/storage/postgres/aclguard	census_test.go	unexpressed	-
 internal/storage/postgres/authschema	sprintf_sql_guard_test.go	internal/storage/postgres/authschema	dir
 internal/storedversion	writers_test.go	unexpressed	-
 internal/streamhandlers	stored_version_invariant_test.go	unexpressed	-

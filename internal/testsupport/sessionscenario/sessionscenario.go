@@ -452,6 +452,9 @@ func (h *Harness) run(pairs []pair) map[string]answers {
 			}
 			want := h.golden.Answers[h.cursor]
 			h.cursor++
+			if refused, ok := socialLinkRefusals[p.name]; ok {
+				want = RecordedAnswer{Name: p.name, Status: http.StatusConflict, Body: refused}
+			}
 			goBody := Normalize(goResponse.Body)
 			// The Go api never writes input or ctx of a validation error.
 			same = want.Status == goResponse.Status && pydanticecho.Strip(want.Body) == goBody
@@ -490,7 +493,7 @@ func (h *Harness) compareRows(name, query string) {
 		if h.rowCursor >= len(h.golden.Rows) || h.golden.Rows[h.rowCursor].Name != name {
 			h.T.Fatalf("golden rows are out of step at %q", name)
 		}
-		pyRows = h.golden.Rows[h.rowCursor].Rows
+		pyRows = socialLinkRows(name, h.golden.Rows[h.rowCursor].Rows)
 		h.rowCursor++
 	} else {
 		h.recording.Rows = append(h.recording.Rows, RecordedRows{Name: name, Rows: pyRows})
@@ -923,4 +926,32 @@ func JTIOf(token string) string { return jtiOf(token) }
 func TableRows(t *testing.T, ctx context.Context, uri, query string) string {
 	t.Helper()
 	return venueoracle.TableRows(t, ctx, uri, query)
+}
+
+// socialLinkRefusals are the three golden steps where Python linked a social identity to an account by
+// e-mail alone and signed in. Go refuses them (CHAOS-10940), so the replay expects the refusal instead.
+var socialLinkRefusals = map[string]string{
+	"social: github email of a local user":                  `{"detail":{"message":"An account with this email already exists. Please sign in with local.","existing_provider":"local"}}`,
+	"social: github email of a github user with another id": `{"detail":{"message":"An account with this email already exists. Please sign in with github.","existing_provider":"github"}}`,
+	"social: github email of a github user without an id":   `{"detail":{"message":"An account with this email already exists. Please sign in with github.","existing_provider":"github"}}`,
+}
+
+// socialLinkRows rewrites the golden row sets for the three refused steps: no provider id is replaced or
+// set, no login is recorded, and no refresh token is stored for them.
+func socialLinkRows(name, rows string) string {
+	switch name {
+	case "users":
+		rows = strings.Replace(rows, "frank@example.comfrankFrankgithub101true", "frank@example.comfrankFrankgithub100true", 1)
+		rows = strings.Replace(rows, "olga@example.comolgaOlgagithub300true true false 0 true true true", "olga@example.comolgaOlgagithub<null>true true false 0 false true true", 1)
+	case "refresh_tokens":
+		parts := strings.Split(rows, " | ")
+		// The alice org-a row of the e-mail match with a local user, and the last frank org-b row.
+		const aliceMatch, frankMatch = 11, 25
+		if len(parts) == 26 {
+			parts = append(parts[:frankMatch], parts[frankMatch+1:]...)
+			parts = append(parts[:aliceMatch], parts[aliceMatch+1:]...)
+			rows = strings.Join(parts, " | ")
+		}
+	}
+	return rows
 }

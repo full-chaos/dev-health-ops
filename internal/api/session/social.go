@@ -108,24 +108,11 @@ func (h handlers) socialLogin(w http.ResponseWriter, r *http.Request) {
 			if user.AuthProvider != nil {
 				existing = *user.AuthProvider
 			}
-			switch {
-			case existing == "local":
-			case existing == provider:
-				if user.AuthProviderID == nil || *user.AuthProviderID != providerUserID {
-					if _, err := tx.Exec(ctx, `UPDATE users SET auth_provider_id = $2, updated_at = $3 WHERE id = $1::uuid`,
-						user.ID, providerUserID, h.Now().UTC()); err != nil {
-						h.fail(w, r, "update provider id", err)
-						return
-					}
-					user.AuthProviderID = &providerUserID
-				}
-			default:
-				detail := pyjson.NewObject()
-				detail.Set("message", "An account with this email already exists. Please sign in with "+existing+".")
-				detail.Set("existing_provider", existing)
-				policy.WriteDetail(w, http.StatusConflict, detail, nil)
-				return
-			}
+			detail := pyjson.NewObject()
+			detail.Set("message", "An account with this email already exists. Please sign in with "+existing+".")
+			detail.Set("existing_provider", existing)
+			policy.WriteDetail(w, http.StatusConflict, detail, nil)
+			return
 		}
 	}
 	if user == nil {

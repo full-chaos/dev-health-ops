@@ -231,7 +231,7 @@ func FuzzParseWorkloadToken(f *testing.F) {
 		if c.Iat > c.Nbf || c.Nbf >= c.Exp {
 			t.Fatalf("accepted iat %d nbf %d exp %d", c.Iat, c.Nbf, c.Exp)
 		}
-		if time.Duration(c.Exp-c.Iat)*time.Second > WorkloadTokenLifetimeCeiling {
+		if c.Exp-c.Iat > int64(WorkloadTokenLifetimeCeiling/time.Second) {
 			t.Fatalf("accepted a lifetime of %d s", c.Exp-c.Iat)
 		}
 		if token.Header.Typ != WorkloadTokenTyp || token.Header.Alg != "EdDSA" || c.PrincipalType != "workload" || c.Aud == "" {

@@ -11,8 +11,6 @@ import (
 	"testing"
 )
 
-const acceptedName = "devhealth_ingest_legacy_accepted_total"
-
 func acceptedPost(t *testing.T, metrics *Metrics, path string, values, headers map[string]string, body string) int {
 	t.Helper()
 	for _, route := range Routes(Deps{Metrics: metrics, Getenv: env(values), Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}) {

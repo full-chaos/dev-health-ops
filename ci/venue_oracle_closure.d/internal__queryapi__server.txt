@@ -1,3 +1,4 @@
+contracts/auth/v1/vocabulary
 contracts/graphql/v1
 internal/aftercommit
 internal/api/externalurl

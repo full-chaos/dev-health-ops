@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/full-chaos/dev-health-ops/internal/pgmigrate"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
@@ -22,7 +23,9 @@ func TestSchemaRevisionsMatchFrozenPythonAlembic(t *testing.T) {
 	var goRevisions []string
 	for revision, satisfies := range satisfyingRevisions {
 		// health.go reads the VALUE: an entry set to false is not a satisfying revision, so it is not listed.
-		if satisfies {
+		// The golden is frozen at pgmigrate.FrozenHead; a Go-only revision above it is covered by
+		// TestSchemaRevisionsCoverTheGoOnlyChainTail.
+		if satisfies && revision <= pgmigrate.FrozenHead {
 			goRevisions = append(goRevisions, revision)
 		}
 	}

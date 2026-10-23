@@ -1,6 +1,6 @@
-// Code generated from the Alembic script directory; DO NOT EDIT.
-// TestSchemaRevisionsMatchLivePythonAlembic regenerates the set and must
-// agree: a new migration descending from the minimum is added here.
+// The revisions up to pgmigrate.FrozenHead were generated from the Alembic script directory and
+// TestSchemaRevisionsMatchFrozenPythonAlembic holds them to the frozen golden: do not edit them. A Go-only
+// revision above FrozenHead is added here by hand, and TestSchemaRevisionsCoverTheGoOnlyChainTail fails until it is.
 
 package health
 

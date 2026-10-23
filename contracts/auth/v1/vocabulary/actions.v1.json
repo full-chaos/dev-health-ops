@@ -1,117 +1,161 @@
 {
   "schema_version": "actions.v1",
-  "catalog_version": 1,
-  "description": "The closed action vocabulary. An action absent from this list is refused everywhere (ACP-ADR-05 decision 1). Names are dotted and namespaced; a bare single segment is not an action. No action means 'all actions'.",
+  "catalog_version": 2,
+  "description": "The closed action vocabulary. An action absent from this list is refused everywhere (ACP-ADR-05 decision 1). Names are dotted and namespaced; a bare single segment is not an action. No action means 'all actions'. Each action carries a risk_class (low or high) and a cache_class (none, decision_bound, resource_revision_bound; the TRD section 14 allow-cache classes). A high-risk action is never cached: its cache_class is none.",
   "actions": [
     {
       "action": "analytics.read",
       "scope": "organization",
-      "resource_kind": "organization"
+      "resource_kind": "organization",
+      "risk_class": "low",
+      "cache_class": "decision_bound"
     },
     {
       "action": "analytics.export",
       "scope": "organization",
-      "resource_kind": "organization"
+      "resource_kind": "organization",
+      "risk_class": "high",
+      "cache_class": "none"
     },
     {
       "action": "metrics.read",
       "scope": "organization",
-      "resource_kind": "organization"
+      "resource_kind": "organization",
+      "risk_class": "low",
+      "cache_class": "decision_bound"
     },
     {
       "action": "metrics.compute",
       "scope": "organization",
-      "resource_kind": "organization"
+      "resource_kind": "organization",
+      "risk_class": "high",
+      "cache_class": "none"
     },
     {
       "action": "work_items.read",
       "scope": "organization",
-      "resource_kind": "organization"
+      "resource_kind": "organization",
+      "risk_class": "low",
+      "cache_class": "decision_bound"
     },
     {
       "action": "work_items.sync",
       "scope": "organization",
-      "resource_kind": "organization"
+      "resource_kind": "organization",
+      "risk_class": "high",
+      "cache_class": "none"
     },
     {
       "action": "git.read",
       "scope": "organization",
-      "resource_kind": "organization"
+      "resource_kind": "organization",
+      "risk_class": "low",
+      "cache_class": "resource_revision_bound"
     },
     {
       "action": "git.sync",
       "scope": "organization",
-      "resource_kind": "organization"
+      "resource_kind": "organization",
+      "risk_class": "high",
+      "cache_class": "none"
     },
     {
       "action": "teams.read",
       "scope": "organization",
-      "resource_kind": "organization"
+      "resource_kind": "organization",
+      "risk_class": "low",
+      "cache_class": "decision_bound"
     },
     {
       "action": "teams.write",
       "scope": "organization",
-      "resource_kind": "organization"
+      "resource_kind": "organization",
+      "risk_class": "high",
+      "cache_class": "none"
     },
     {
       "action": "settings.read",
       "scope": "organization",
-      "resource_kind": "organization"
+      "resource_kind": "organization",
+      "risk_class": "low",
+      "cache_class": "decision_bound"
     },
     {
       "action": "settings.write",
       "scope": "organization",
-      "resource_kind": "organization"
+      "resource_kind": "organization",
+      "risk_class": "high",
+      "cache_class": "none"
     },
     {
       "action": "integrations.read",
       "scope": "organization",
-      "resource_kind": "organization"
+      "resource_kind": "organization",
+      "risk_class": "low",
+      "cache_class": "decision_bound"
     },
     {
       "action": "integrations.write",
       "scope": "organization",
-      "resource_kind": "organization"
+      "resource_kind": "organization",
+      "risk_class": "high",
+      "cache_class": "none"
     },
     {
       "action": "members.read",
       "scope": "organization",
-      "resource_kind": "organization"
+      "resource_kind": "organization",
+      "risk_class": "low",
+      "cache_class": "decision_bound"
     },
     {
       "action": "members.invite",
       "scope": "organization",
-      "resource_kind": "organization"
+      "resource_kind": "organization",
+      "risk_class": "high",
+      "cache_class": "none"
     },
     {
       "action": "members.manage",
       "scope": "organization",
-      "resource_kind": "organization"
+      "resource_kind": "organization",
+      "risk_class": "high",
+      "cache_class": "none"
     },
     {
       "action": "org.read",
       "scope": "organization",
-      "resource_kind": "organization"
+      "resource_kind": "organization",
+      "risk_class": "low",
+      "cache_class": "decision_bound"
     },
     {
       "action": "org.write",
       "scope": "organization",
-      "resource_kind": "organization"
+      "resource_kind": "organization",
+      "risk_class": "high",
+      "cache_class": "none"
     },
     {
       "action": "org.delete",
       "scope": "organization",
-      "resource_kind": "organization"
+      "resource_kind": "organization",
+      "risk_class": "high",
+      "cache_class": "none"
     },
     {
       "action": "admin.users",
       "scope": "platform",
-      "resource_kind": "platform"
+      "resource_kind": "platform",
+      "risk_class": "high",
+      "cache_class": "none"
     },
     {
       "action": "admin.orgs",
       "scope": "platform",
-      "resource_kind": "platform"
+      "resource_kind": "platform",
+      "risk_class": "high",
+      "cache_class": "none"
     }
   ]
 }

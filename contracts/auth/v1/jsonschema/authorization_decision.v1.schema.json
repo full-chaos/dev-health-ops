@@ -30,8 +30,13 @@
       "description": "The decision. Required, no default, strict boolean. See the fail-closed rule above."
     },
     "reason_code": {
-      "$ref": "error.v1.schema.json#/properties/reason_code",
-      "description": "Stable, safe-for-audit machine token naming why (e.g. allowed_by_repository_grant). Shape from error.v1 by reference; each surface owns and closes its own vocabulary."
+      "enum": [
+        "allowed_by_repository_grant",
+        "grant_absent",
+        "repository_not_granted",
+        "platform_role_absent"
+      ],
+      "description": "Stable machine token naming why. CLOSED: a value outside contracts/auth/v1/vocabulary/reason-codes.json decision_reason_code is refused, so prose or a secret-shaped string cannot cross the boundary. A value is added only with the PR of the producer that emits it. error.v1 reason_code stays shape-only."
     },
     "principal_id": {
       "$ref": "principal.v1.schema.json#/properties/principal_id",

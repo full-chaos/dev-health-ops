@@ -50,7 +50,9 @@ func TestPagerDutyWebhookLimiterVenueOracle(t *testing.T) {
 	}
 	t.Cleanup(goValkey.Close)
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	server, err := apiservice.NewServer(config.Config{APIAddress: "127.0.0.1:0"}, logger, apiservice.Routes(apiservice.Deps{Pool: pool, Valkey: goValkey}, logger))
+	deps := apiservice.Deps{Pool: pool, Valkey: goValkey}
+	gate := apiservice.NewIntakeGate(&deps, logger)
+	server, err := apiservice.NewServerWithGate(config.Config{APIAddress: "127.0.0.1:0"}, logger, apiservice.Routes(deps, logger), gate)
 	if err != nil {
 		t.Fatal(err)
 	}

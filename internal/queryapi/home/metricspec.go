@@ -49,7 +49,7 @@ var dedupByComputedAt = map[string][]string{
 	"repo_metrics_daily":              {"day", "repo_id"},
 	"work_item_state_durations_daily": {"day", "provider", "work_scope_id", "team_id", "status", "row_view"},
 	"work_item_metrics_daily":         {"day", "provider", "work_scope_id", "team_id", "row_view"},
-	"work_item_user_metrics_daily":    {"day", "provider", "work_scope_id", "user_identity"},
+	"work_item_user_metrics_daily":    {"day", "provider", "work_scope_id", "user_identity", "row_view"},
 	"cicd_metrics_daily":              {"day", "repo_id"},
 	"deploy_metrics_daily":            {"day", "repo_id"},
 	"incident_metrics_daily":          {"day", "repo_id"},

@@ -21,8 +21,8 @@
     },
     "access_token": {
       "type": "string",
-      "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$",
-      "description": "Compact JWS of an access-token.v1 user access token. A schema cannot decode a segment, so the shape is all it states: three base64url segments. ParseRefreshResponse then decodes the header and the payload and runs them through ParseAccessToken (alg EdDSA, typ at+jwt, kid, closed header and claims, no duplicate member, lifetime ceiling), refuses a token whose sid is not session_id, and refuses an expires_in that is not exp - iat. The signature is not checked here: a reader that acts on the token verifies it against jwks.v1 first."
+      "pattern": "^(?:(?:[A-Za-z0-9_-]{4})+|(?:[A-Za-z0-9_-]{4})*[A-Za-z0-9_-]{2,3})\\.(?:(?:[A-Za-z0-9_-]{4})+|(?:[A-Za-z0-9_-]{4})*[A-Za-z0-9_-]{2,3})\\.(?:(?:[A-Za-z0-9_-]{4})+|(?:[A-Za-z0-9_-]{4})*[A-Za-z0-9_-]{2,3})$",
+      "description": "Compact JWS of an access-token.v1 user access token. A schema cannot decode a segment, so the shape is all it states: three non-empty base64url segments of a possible length (a segment of 4k+1 characters is no base64url). ParseRefreshResponse decodes every segment strictly (no padding, no non-zero trailing bits). ParseRefreshResponse then decodes the header and the payload and runs them through ParseAccessToken (alg EdDSA, typ at+jwt, kid, closed header and claims, no duplicate member, lifetime ceiling), refuses a token whose sid is not session_id, and refuses an expires_in that is not exp - iat. The signature is not checked here: a reader that acts on the token verifies it against jwks.v1 first."
     },
     "token_type": {
       "const": "bearer",

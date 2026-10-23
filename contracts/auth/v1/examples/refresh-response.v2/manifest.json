@@ -76,6 +76,36 @@
       "expect_instance_location": "/session_id",
       "expect_keyword": "pattern",
       "why": "Session ids are ses_-prefixed."
+    },
+    {
+      "file": "invalid-access-token-header-length-1-mod-4.json",
+      "expect_instance_location": "/access_token",
+      "expect_keyword": "pattern",
+      "why": "A header segment of nine characters: 4k+1 characters is no base64url."
+    },
+    {
+      "file": "invalid-access-token-signature-length-1-mod-4.json",
+      "expect_instance_location": "/access_token",
+      "expect_keyword": "pattern",
+      "why": "A signature segment of 17 characters."
+    },
+    {
+      "file": "invalid-access-token-padded-signature.json",
+      "expect_instance_location": "/access_token",
+      "expect_keyword": "pattern",
+      "why": "A padded signature segment: base64url here is unpadded."
+    },
+    {
+      "file": "invalid-access-token-standard-alphabet-signature.json",
+      "expect_instance_location": "/access_token",
+      "expect_keyword": "pattern",
+      "why": "The standard-alphabet character + is not in the URL alphabet."
+    },
+    {
+      "file": "invalid-access-token-newline-in-signature.json",
+      "expect_instance_location": "/access_token",
+      "expect_keyword": "pattern",
+      "why": "A line break inside a segment; a lenient decoder skips it."
     }
   ],
   "reject_by_client": [
@@ -120,10 +150,6 @@
       "why": "The token's sid names another session than session_id."
     },
     {
-      "file": "client-rejected-segment-not-base64url.json",
-      "why": "The header segment is not decodable base64url (nine characters)."
-    },
-    {
       "file": "client-rejected-segment-not-object.json",
       "why": "The header decodes to bytes that are not exactly one JSON object."
     },
@@ -135,6 +161,18 @@
       "file": "client-rejected-duplicate-access-token.json",
       "why": "Duplicate member.",
       "duplicate_member": true
+    },
+    {
+      "file": "client-rejected-header-trailing-bits.json",
+      "why": "The header segment's last character carries non-zero trailing bits: the same bytes under a second spelling."
+    },
+    {
+      "file": "client-rejected-payload-trailing-bits.json",
+      "why": "The payload segment's last character carries non-zero trailing bits."
+    },
+    {
+      "file": "client-rejected-signature-trailing-bits.json",
+      "why": "The signature segment's last character carries non-zero trailing bits."
     }
   ]
 }

@@ -68,6 +68,7 @@ internal/auth/contracts	producer_columns_test.go
 internal/auth/contracts	provisioning_event_goldens_test.go
 internal/auth/contracts	provisioning_resources_test.go
 internal/auth/contracts	reason_code_vocabulary_test.go
+internal/auth/contracts	refresh_response_v2_test.go
 internal/auth/contracts	reject_location_test.go
 internal/auth/contracts	schema_dialect_test.go
 internal/auth/contracts	session_goldens_test.go

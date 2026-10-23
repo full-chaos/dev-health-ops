@@ -46,9 +46,10 @@ func checkRefreshResponseV2Token(root string, r *RefreshResponse) error {
 	if len(segments) != 3 {
 		return refreshV2Rule("access_token_not_jws")
 	}
-	header, headerErr := base64.RawURLEncoding.DecodeString(segments[0])
-	claims, claimsErr := base64.RawURLEncoding.DecodeString(segments[1])
-	if headerErr != nil || claimsErr != nil {
+	header, headerErr := strictSegment(segments[0])
+	claims, claimsErr := strictSegment(segments[1])
+	_, signatureErr := strictSegment(segments[2])
+	if headerErr != nil || claimsErr != nil || signatureErr != nil {
 		return refreshV2Rule("access_token_segment_encoding")
 	}
 	if !isJSONObject(header) || !isJSONObject(claims) {
@@ -71,6 +72,13 @@ func checkRefreshResponseV2Token(root string, r *RefreshResponse) error {
 		return refreshV2Rule("expires_in_not_token_lifetime")
 	}
 	return nil
+}
+
+// strictSegment decodes one JWS segment as RFC 7515 base64url: the URL
+// alphabet only, no padding, no line breaks, and no non-zero trailing bits
+// (Strict), so one byte string has one spelling.
+func strictSegment(segment string) ([]byte, error) {
+	return base64.RawURLEncoding.Strict().DecodeString(segment)
 }
 
 // isJSONObject reports whether b is exactly one JSON object. Embedding a

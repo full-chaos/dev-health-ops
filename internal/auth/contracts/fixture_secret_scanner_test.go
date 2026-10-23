@@ -1,6 +1,7 @@
 package contracts
 
 import (
+	"encoding/base64"
 	"fmt"
 	"math"
 	"os"
@@ -142,10 +143,33 @@ func hasAllCharacterClasses(value string) bool {
 // fixture needs a decodable payload, so the payload segment may also be a JSON
 // object segment (eyJ...); the signature segment must still begin EXAMPLE, which
 // no real signature does.
-var syntheticJWS = regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{6,}\.(?:EXAMPLE[A-Za-z0-9_-]*|eyJ[A-Za-z0-9_-]+)?\.EXAMPLE[A-Za-z0-9_-]*\b`)
+var syntheticJWS = regexp.MustCompile(`\b(eyJ[A-Za-z0-9_-]{6,})\.(?:EXAMPLE[A-Za-z0-9_-]*|(eyJ[A-Za-z0-9_-]+))?\.EXAMPLE[A-Za-z0-9_-]*\b`)
+
+// syntheticJWSSegments decodes the header and the JSON payload segments of
+// every synthetic JWS in content, so the scanner reads what the replacement
+// below would otherwise hide.
+func syntheticJWSSegments(content string) string {
+	var decoded []string
+	for _, match := range syntheticJWS.FindAllStringSubmatch(content, -1) {
+		for _, segment := range match[1:] {
+			if segment == "" {
+				continue
+			}
+			if raw, err := base64.RawURLEncoding.DecodeString(segment); err == nil {
+				decoded = append(decoded, string(raw))
+			} else {
+				decoded = append(decoded, "UNDECODABLE-SEGMENT "+segment)
+			}
+		}
+	}
+	return strings.Join(decoded, "\n")
+}
 
 func scanFixtureContent(name, content string) []string {
 	var findings []string
+	if hidden := syntheticJWSSegments(content); hidden != "" {
+		content += "\n" + hidden
+	}
 	content = syntheticJWS.ReplaceAllString(content, "SYNTHETIC-JWS")
 	for _, prefix := range forbiddenFixturePrefixes {
 		if strings.Contains(content, prefix) {
@@ -316,5 +340,26 @@ func TestTheFixtureScannerAllowsOnlyTheSyntheticHS256Token(t *testing.T) {
 	halfSynthetic := `{"t": "` + seg("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9", ".", "EXAMPLEPAYLOAD", ".", "dBjftJeZ4CVPmB92K27uhbUJU1p1r") + `"}`
 	if findings := scanFixtureContent("half.json", halfSynthetic); len(findings) == 0 {
 		t.Fatal("a token with a real-looking signature segment passed the scanner")
+	}
+}
+
+// TestFixtureScannerReadsInsideASyntheticJWS: the EXAMPLE-signature allowance
+// hides nothing, because the header and payload segments are decoded and
+// scanned as text; a secret-shaped value in a payload is still a finding, and
+// a token whose signature does not begin EXAMPLE is not admitted at all.
+func TestFixtureScannerReadsInsideASyntheticJWS(t *testing.T) {
+	segment := func(text string) string { return base64.RawURLEncoding.EncodeToString([]byte(text)) }
+	header := segment(`{"alg":"EdDSA","typ":"at+jwt","kid":"auth-example-2026-10"}`)
+	clean := header + "." + segment(`{"sub":"prn_AAAAAAAAAAAAAAAAAAAAAA"}`) + ".EXAMPLESIGNATURE"
+	if findings := scanFixtureContent("clean", clean); len(findings) != 0 {
+		t.Fatalf("a synthetic token was refused: %v", findings)
+	}
+	hidden := header + "." + segment(`{"key":"AKIAABCDEFGHIJKLMNOP"}`) + ".EXAMPLESIGNATURE"
+	if findings := scanFixtureContent("hidden", hidden); len(findings) == 0 {
+		t.Error("a secret-shaped value inside a synthetic token's payload was not reported")
+	}
+	real := header + "." + segment(`{"sub":"prn_AAAAAAAAAAAAAAAAAAAAAA"}`) + ".Zm9vYmFyYmF6cXV4MTIzNDU2Nzg5MGFiY2RlZmdoaWprbG1ub3BxcnN0dXZ3eHl6QUJDREVGR0g"
+	if findings := scanFixtureContent("real", real); len(findings) == 0 {
+		t.Error("a token with a non-EXAMPLE signature was admitted")
 	}
 }

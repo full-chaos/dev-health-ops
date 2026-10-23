@@ -53,6 +53,55 @@ const REQUIRED_GROUPS = {
 };
 const DEFAULT_REQUIRED_GROUPS = ["accept", "reject", "reject_by_client"];
 
+// Exact fixture inventories by name (CHAOS-10680). A manifest edit alone cannot
+// drop a reject case: the names here are the second, deliberate edit. The Go
+// twin is refreshResponseV2Inventory in refresh_response_v2_test.go.
+const PINNED_INVENTORY = {
+  "refresh-response.v2": {
+    accept: [
+      "valid-full-lifetime.json",
+      "valid-short-lifetime.json"
+    ],
+    reject: [
+      "invalid-missing-access-token.json",
+      "invalid-schema-version-v1.json",
+      "invalid-expires-in-zero.json",
+      "invalid-expires-in-past-60-minutes.json",
+      "invalid-expires-in-string.json",
+      "invalid-access-token-not-jws.json",
+      "invalid-access-token-empty-segment.json",
+      "invalid-extra-field-user.json",
+      "invalid-refresh-credential-jwt-shaped.json",
+      "invalid-token-type-capitalised.json",
+      "invalid-session-id-wrong-prefix.json",
+      "invalid-access-token-header-length-1-mod-4.json",
+      "invalid-access-token-signature-length-1-mod-4.json",
+      "invalid-access-token-padded-signature.json",
+      "invalid-access-token-standard-alphabet-signature.json",
+      "invalid-access-token-newline-in-signature.json"
+    ],
+    reject_by_client: [
+      "client-rejected-header-alg-hs256.json",
+      "client-rejected-header-alg-none.json",
+      "client-rejected-header-typ-jwt.json",
+      "client-rejected-header-missing-kid.json",
+      "client-rejected-header-jku-member.json",
+      "client-rejected-header-duplicate-member.json",
+      "client-rejected-claims-lifetime-over-ceiling.json",
+      "client-rejected-claims-nbf-before-iat.json",
+      "client-rejected-expires-in-not-token-lifetime.json",
+      "client-rejected-session-id-not-token-sid.json",
+      "client-rejected-segment-not-object.json",
+      "client-rejected-expires-in-decimal.json",
+      "client-rejected-duplicate-access-token.json",
+      "client-rejected-header-trailing-bits.json",
+      "client-rejected-payload-trailing-bits.json",
+      "client-rejected-signature-trailing-bits.json"
+    ],
+  },
+};
+
+
 // Closed vocabularies (CHAOS-10194): contracts/auth/v1/vocabulary/reason-codes.json
 // is the single source for these three fields. Each entry builds a document
 // from a fixture that carries the field, then sets the field to a value.
@@ -373,6 +422,16 @@ for (const surface of surfaces) {
   }
 
   const manifest = readJSON(path.join(dir, "manifest.json"));
+  const pinned = PINNED_INVENTORY[surface];
+  if (pinned) {
+    for (const group of new Set([...Object.keys(pinned), ...Object.keys(manifest).filter((k) => Array.isArray(manifest[k]))])) {
+      const listed = (manifest[group] ?? []).map((e) => (typeof e === "string" ? e : e.file)).sort();
+      const want = [...(pinned[group] ?? [])].sort();
+      if (JSON.stringify(listed) !== JSON.stringify(want)) {
+        fail(`${surface}: manifest group "${group}" lists [${listed}], the pinned inventory is [${want}]`);
+      }
+    }
+  }
   const claimed = new Set();
   const counts = {};
   // An emptied category would make every loop below vacuous and exit 0.

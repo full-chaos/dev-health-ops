@@ -42,7 +42,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/billing"
 	"github.com/full-chaos/dev-health-ops/internal/api/billing/stripeclient"
 	"github.com/full-chaos/dev-health-ops/internal/api/buildinfo"
-	"github.com/full-chaos/dev-health-ops/internal/api/clientip"
 	"github.com/full-chaos/dev-health-ops/internal/api/credentials"
 	"github.com/full-chaos/dev-health-ops/internal/api/externalingest"
 	"github.com/full-chaos/dev-health-ops/internal/api/githubapp"
@@ -389,9 +388,7 @@ func configureWith(
 		deps.Verifier, deps.Signer = protected.verifier, protected.signer
 		scope = []func(http.Handler) http.Handler{protected.scope.OrgScope, protected.scope.Impersonation}
 	}
-	if wide := clientip.WidePrefixes(); wide > 0 {
-		logger.Warn("api: the trusted proxy list holds prefixes wider than a /28", "count", wide)
-	}
+	logWideTrust(logger)
 	if err := RegisterOperatorMetrics(registry, &deps); err != nil {
 		closeComponents(depComponents)
 		return nil, err

@@ -521,7 +521,8 @@ func fetchStateDurations(ctx context.Context, client QueryClient, orgID string, 
           WHERE org_id = {org_id:String}
             ` + teamFilter + `
             AND day >= {start:Date} AND day < {end:Date}
-          GROUP BY day, provider, work_scope_id, status` + teamGroup + liveRowHaving("work_item_state_durations_daily") + `
+            AND ` + rowview.OrgPredicate("work_item_state_durations_daily", "") + `
+          GROUP BY day, provider, work_scope_id, status, row_view` + teamGroup + liveRowHaving("work_item_state_durations_daily") + `
         )
         GROUP BY status`
 

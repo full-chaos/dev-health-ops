@@ -66,6 +66,17 @@ provisioning, which is the only ordering a fresh install survives.
 */}}
 {{- if .Values.migrations.hook.enabled }}
 {{- $hookEvents := .Values.migrations.hook.events }}
+{{- /*
+CHAOS-10719: the river-migrate Job (and the hook Secret it reads) also run on pre-rollback, so
+`helm rollback` re-applies the TARGET revision's grant posture: helm renders a rollback's hooks from
+the target revision's manifest, so the Job carries that revision's image and AUTH_PROXY_SESSIONS. A
+rollback to the flag-off baseline therefore re-GRANTs INSERT/UPDATE on refresh_tokens. Only this hook:
+provisioning, the weight-0 migrate Job (forward-only schema steps) and the auth hooks stay off
+rollbacks. Weight and delete policy are unchanged. With riverMigrate.enabled=false there is no
+river-migrate hook and a rollback re-grants nothing. The target revision must itself have been
+rendered with this change.
+*/}}
+{{- $riverHookEvents := append (deepCopy $hookEvents) "pre-rollback" }}
 {{- if .Values.migrations.hook.provisionRoles.enabled }}
 {{- $poolerSecret := .Values.goWorkers.pgbouncer.secret }}
 {{- /*
@@ -352,7 +363,7 @@ metadata:
   labels:
     {{- include "dev-health.componentLabels" (dict "component" "river-migrate" "context" $) | nindent 4 }}
   annotations:
-    helm.sh/hook: {{ join "," $hookEvents }}
+    helm.sh/hook: {{ join "," $riverHookEvents }}
     helm.sh/hook-weight: "-5"
     helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
 type: Opaque
@@ -369,7 +380,7 @@ metadata:
   labels:
     {{- include "dev-health.componentLabels" (dict "component" "river-migrate" "context" $) | nindent 4 }}
   annotations:
-    helm.sh/hook: {{ join "," $hookEvents }}
+    helm.sh/hook: {{ join "," $riverHookEvents }}
     helm.sh/hook-weight: "10"
     helm.sh/hook-delete-policy: before-hook-creation
 spec:

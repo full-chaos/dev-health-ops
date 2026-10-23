@@ -26,7 +26,7 @@ import (
 // extend this map too.
 var dedupNaturalKeys = map[string][]string{
 	"repo_metrics_daily":              {"day", "repo_id"},
-	"work_item_state_durations_daily": {"day", "provider", "work_scope_id", "team_id", "status"},
+	"work_item_state_durations_daily": {"day", "provider", "work_scope_id", "team_id", "status", "row_view"},
 	"work_item_metrics_daily":         {"day", "provider", "work_scope_id", "team_id", "row_view"},
 	"deploy_metrics_daily":            {"day", "repo_id"},
 	changefailure.Table:               {"day", "repo_id"},
@@ -134,7 +134,7 @@ func metricValueProjection(column string) string {
 // end_param default-override parameters.
 func metricFromClause(table, column, scopeFilterSQL, startParam, endParam string) string {
 	keys := dedupNaturalKeys[table]
-	if table == "work_item_metrics_daily" {
+	if rowview.Has(table) {
 		// Each item once in the organization (CHAOS-8863): legacy rows and the org view. row_view is in the natural
 		// key, so a legacy retraction row never merges with an org row under argMax.
 		scopeFilterSQL += "\n      AND " + rowview.OrgPredicate(table, "")

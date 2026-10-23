@@ -411,8 +411,8 @@ func TestNewQuadrantWorkHandlerServesTheSelectedFilterKeysLast(t *testing.T) {
 	if body := get(emptyRowsQuadrantClient{}, "/api/v1/quadrant?type=wip_throughput&scope_type=repo&repo_ids=acme/missing&repo_ids="); !strings.HasSuffix(body, `"repo_filter_applied":true,"filter_empty_reason":"repository_not_found"}`) {
 		t.Errorf("a missing repository: body = %s", body)
 	}
-	// At the team grain a repository cannot narrow: said, not applied.
-	if body := get(emptyRowsQuadrantClient{}, "/api/v1/quadrant?type=wip_throughput&scope_type=team&repo_ids=acme/missing"); !strings.HasSuffix(body, `"repo_filter_applied":false,"filter_empty_reason":null}`) {
+	// At the team grain a repository narrows too (its linked work): applied, not found.
+	if body := get(emptyRowsQuadrantClient{}, "/api/v1/quadrant?type=wip_throughput&scope_type=team&repo_ids=acme/missing"); !strings.HasSuffix(body, `"repo_filter_applied":true,"filter_empty_reason":"repository_not_found"}`) {
 		t.Errorf("team grain: body = %s", body)
 	}
 	recorder := &recordingQuadrantClient{}

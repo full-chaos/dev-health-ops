@@ -3523,6 +3523,7 @@ AUTH_FUZZ_TARGETS=(
   "./internal/auth/contracts FuzzRevisionUnmarshal"
   "./internal/auth/contracts FuzzTimestampUnmarshal"
   "./internal/auth/contracts FuzzParseAccessToken"
+  "./internal/auth/contracts FuzzParseWorkloadToken"
   "./internal/auth/edgetoken FuzzVerifyToken"
   "./internal/auth/signedtoken FuzzValidSignedToken"
   "./internal/auth/httpapi FuzzParseLimit"

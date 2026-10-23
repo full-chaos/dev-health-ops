@@ -177,3 +177,76 @@ func FuzzParseAccessToken(f *testing.F) {
 }
 
 func sameOrg(a, b *string) bool { return (a == nil) == (b == nil) && (a == nil || *a == *b) }
+
+const workloadFuzzCanary = "CANARY-5c1e9d"
+
+// FuzzParseWorkloadToken drives the workload-token.v1 client parser with
+// arbitrary bytes. Properties: it never panics; every refusal is a fixed
+// CredentialRefusal that carries no input byte; an accepted token holds the
+// rules the schema cannot (iat <= nbf < exp, lifetime within the ceiling) and
+// re-parses from its own encoding.
+func FuzzParseWorkloadToken(f *testing.F) {
+	wd, err := os.Getwd()
+	if err != nil {
+		f.Fatal(err)
+	}
+	root, err := RepoRoot(wd)
+	if err != nil {
+		f.Fatal(err)
+	}
+	for _, name := range []string{
+		"valid-auth-service.json",
+		"valid-delayed-nbf.json",
+		"valid-lifetime-at-the-ceiling.json",
+		"client-rejected-duplicate-claim-aud.json",
+		"client-rejected-duplicate-header-typ.json",
+		"client-rejected-exp-decimal-form.json",
+		"client-rejected-exp-equals-nbf.json",
+		"client-rejected-lifetime-one-hour.json",
+		"client-rejected-lifetime-over-the-ceiling.json",
+		"client-rejected-nbf-before-iat.json",
+	} {
+		raw, err := os.ReadFile(filepath.Join(root, "contracts/auth/v1/examples/workload-token", name))
+		if err != nil {
+			f.Fatal(err)
+		}
+		f.Add(raw)
+		f.Add([]byte(strings.Replace(string(raw), `"sub"`, `"`+workloadFuzzCanary+`":"`+workloadFuzzCanary+`","sub"`, 1)))
+	}
+	f.Add([]byte(`{}`))
+	f.Add([]byte(`[`))
+	f.Fuzz(func(t *testing.T, raw []byte) {
+		token, err := ParseWorkloadToken(root, raw)
+		if err != nil {
+			var refusal *CredentialRefusal
+			if !errors.As(err, &refusal) || refusal.Surface != WorkloadTokenSurface || !credentialRefusalStages[refusal.Stage] || err.Error() != refusal.Error() {
+				t.Fatalf("a refusal that is not a fixed CredentialRefusal: %q", err.Error())
+			}
+			if strings.Contains(string(raw), workloadFuzzCanary) && strings.Contains(err.Error(), workloadFuzzCanary) {
+				t.Fatal("a refusal echoes input")
+			}
+			return
+		}
+		c := token.Claims
+		if c.Iat > c.Nbf || c.Nbf >= c.Exp {
+			t.Fatalf("accepted iat %d nbf %d exp %d", c.Iat, c.Nbf, c.Exp)
+		}
+		if time.Duration(c.Exp-c.Iat)*time.Second > WorkloadTokenLifetimeCeiling {
+			t.Fatalf("accepted a lifetime of %d s", c.Exp-c.Iat)
+		}
+		if token.Header.Typ != WorkloadTokenTyp || token.Header.Alg != "EdDSA" || c.PrincipalType != "workload" || c.Aud == "" {
+			t.Fatalf("accepted a token that is not a workload token: %+v", token)
+		}
+		encoded, err := json.Marshal(token)
+		if err != nil {
+			t.Fatalf("marshal accepted token: %v", err)
+		}
+		again, err := ParseWorkloadToken(root, encoded)
+		if err != nil {
+			t.Fatalf("an accepted token does not re-parse from %s: %v", encoded, err)
+		}
+		if *again != *token {
+			t.Fatalf("round trip changed the token: %+v -> %+v", token, again)
+		}
+	})
+}

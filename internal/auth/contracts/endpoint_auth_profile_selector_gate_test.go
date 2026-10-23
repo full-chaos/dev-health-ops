@@ -454,7 +454,7 @@ func TestTokenPinGateHoldsEachPinToItsClassMarkers(t *testing.T) {
 		{"alg differs", "user_access_token", "HS256", "at+jwt", `pins algorithm "HS256"`},
 		{"class with no typ marker", "ops_access_token_hs256", "HS256", "jwt", ""},
 		{"class with no typ marker, alg differs", "ops_access_token_hs256", "EdDSA", "jwt", `pins algorithm "EdDSA"`},
-		{"class absent from the registry", "workload_token", "EdDSA", "at+jwt", ""},
+		{"class absent from the registry", "not_a_registered_class", "EdDSA", "at+jwt", ""},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

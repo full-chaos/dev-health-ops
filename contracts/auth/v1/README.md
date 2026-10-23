@@ -22,7 +22,7 @@ The closed action and role catalogs `actions.v1` and `roles.v1` (CHAOS-10637) li
 `internal/auth/policycatalog` embeds and validates them. Catalog version 2 gives every
 action a `risk_class` and a `cache_class` (a high-risk action is never cached), and
 `authorization_decision.v1` `reason_code` is a closed enum, `decision_reason_code` in
-`vocabulary/reason-codes.json` (CHAOS-10641); `error.v1` stays shape-only. The profile gate (`ValidateEndpointAuthProfile`) also refuses a cached profile that names no action and a profile that caches a high-risk catalog action; that join of two files runs in Go only, the ajv runner cannot see it.
+`vocabulary/reason-codes.json` (CHAOS-10641); `error.v1` stays shape-only. The profile gate (`ValidateEndpointAuthProfile`) also refuses a cached profile that names no catalog action (one pinned exemption, acr.context.read, until it is catalogued) and a profile that caches a high-risk catalog action; that join of two files runs in Go only, the ajv runner cannot see it.
 
 The provisioning resources and request bodies `organization.v1`,
 `organization-create-request.v1`, `membership.v1`, `membership-update-request.v1`,

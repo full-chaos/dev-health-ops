@@ -256,3 +256,58 @@ func TestActionCachePolicyRefusesACachedProfileWithoutAnAction(t *testing.T) {
 		t.Errorf("a profile without cache_class was refused: %v", err)
 	}
 }
+
+func TestActionCachePolicyRefusesACachedProfileForAnUncataloguedAction(t *testing.T) {
+	for _, cache := range []string{"decision_bound", "resource_revision_bound"} {
+		err := CheckActionCachePolicy(map[string]any{"action": "billing.refund", "cache_class": cache})
+		if err == nil || strings.Count(err.Error(), "billing.refund") != 1 {
+			t.Errorf("cache %s: err = %v, want a refusal naming the action once", cache, err)
+		}
+	}
+	if err := CheckActionCachePolicy(map[string]any{"action": "billing.refund", "cache_class": "none"}); err != nil {
+		t.Errorf("an unknown action with cache_class none was refused: %v", err)
+	}
+	if err := CheckActionCachePolicy(map[string]any{"action": "acr.context.read", "cache_class": "decision_bound"}); err != nil {
+		t.Errorf("a pinned exemption was refused: %v", err)
+	}
+}
+
+// The exemption list is pinned by hand: an added entry is red, and an entry
+// with no committed valid cached example left is red.
+func TestUncataloguedCachedActionExemptionsArePinnedExactly(t *testing.T) {
+	want := []string{"acr.context.read"}
+	var got []string
+	for action, reason := range uncataloguedCachedActions {
+		if reason == "" {
+			t.Errorf("exemption %s has no reason", action)
+		}
+		got = append(got, action)
+	}
+	sort.Strings(got)
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("exemptions %v, pinned %v", got, want)
+	}
+	catalog := map[string]bool{}
+	for _, raw := range readJSONFile(t, "contracts/auth/v1/vocabulary/actions.v1.json")["actions"].([]any) {
+		catalog[raw.(map[string]any)["action"].(string)] = true
+	}
+	users := map[string]bool{}
+	for _, entry := range loadEndpointAuthProfileManifest(t).Accept {
+		profile := loadEndpointAuthProfileFixture(t, entry.File).(map[string]any)
+		action, _ := profile["action"].(string)
+		if cache, _ := profile["cache_class"].(string); action != "" && cache != "" && cache != "none" && !catalog[action] {
+			users[action] = true
+			if _, ok := uncataloguedCachedActions[action]; !ok {
+				t.Errorf("valid example %s caches uncatalogued action %s, which is not exempted", entry.File, action)
+			}
+		}
+	}
+	for _, action := range want {
+		if catalog[action] {
+			t.Errorf("exemption %s is now in the catalog: delete it", action)
+		}
+		if !users[action] {
+			t.Errorf("exemption %s has no valid cached example left: delete it", action)
+		}
+	}
+}

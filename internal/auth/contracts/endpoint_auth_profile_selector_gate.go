@@ -183,16 +183,29 @@ func CheckActionCachePolicy(profile map[string]any) error {
 	if action == "" {
 		return fmt.Errorf("action cache policy: a cached profile must name an action")
 	}
-	if highRiskActions()[action] {
+	if _, known := catalogActions()[action]; !known {
+		if _, exempt := uncataloguedCachedActions[action]; !exempt {
+			return fmt.Errorf("action cache policy: a cached profile must name a catalog action, not %q", action)
+		}
+		return nil
+	}
+	if catalogActions()[action] {
 		return fmt.Errorf("action cache policy: action %q is high risk and its profile cache_class must be none", action)
 	}
 	return nil
 }
 
-// highRiskActions reads the embedded actions.v1 catalog directly:
+// uncataloguedCachedActions is the pinned exemption list: the actions today's
+// valid example profiles cache although actions.v1 does not hold them yet. A
+// census test pins the list exactly; it is deleted once these are catalogued.
+var uncataloguedCachedActions = map[string]string{
+	"acr.context.read": "acr namespace, not yet catalogued",
+}
+
+// catalogActions maps every catalog action to whether it is high risk. It reads the embedded actions.v1 catalog directly:
 // internal/auth/policycatalog's own tests import this package, so importing it
 // here would be a cycle.
-var highRiskActions = sync.OnceValue(func() map[string]bool {
+var catalogActions = sync.OnceValue(func() map[string]bool {
 	var catalog struct {
 		Actions []struct {
 			Action    string `json:"action"`
@@ -204,9 +217,7 @@ var highRiskActions = sync.OnceValue(func() map[string]bool {
 	}
 	high := map[string]bool{}
 	for _, a := range catalog.Actions {
-		if a.RiskClass == "high" {
-			high[a.Action] = true
-		}
+		high[a.Action] = a.RiskClass == "high"
 	}
 	return high
 })

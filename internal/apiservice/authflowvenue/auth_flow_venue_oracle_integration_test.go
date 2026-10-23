@@ -301,7 +301,7 @@ func (r *runner) batch(label string, steps []step) map[string][2]venueoracle.Res
 // validation.
 const signUpAnswer = `{"message":"Check your email to continue"}`
 
-// uniformSignUp is the declared divergence "uniform sign-up answer" (CHAOS-10946; stricter than Python is allowed,
+// uniformSignUp is the declared divergence "uniform sign-up answer" (stricter than Python is allowed,
 // D6129): where the frozen Python answer was 201 "Registration successful" or the 400 for a taken address, Go answers
 // 202 with signUpAnswer. Any other pair still compares.
 func uniformSignUp(python, goResponse venueoracle.Response) bool {

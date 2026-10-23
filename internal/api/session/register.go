@@ -2,12 +2,14 @@ package session
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/audit"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
@@ -147,6 +149,15 @@ func (h handlers) register(w http.ResponseWriter, r *http.Request) {
 	 is_active, is_verified, is_superuser, token_version, last_login_at, created_at, updated_at)
 VALUES ($1, $2, NULL, $3, $4, NULL, 'local', NULL, true, false, false, 0, NULL, $5, $5)`,
 		user.ID, user.Email, hash, user.FullName, now.UTC()); err != nil {
+		if isUniqueViolation(err) {
+			// A concurrent sign-up for the same address won the unique index:
+			// this one is a taken address, answered and mailed as one.
+			h.queueMail(ctx, mailAccountExists, func(ctx context.Context) error {
+				return h.sendAccountExists(ctx, &userRow{Email: email})
+			})
+			writeRegisterAccepted(w)
+			return
+		}
 		h.fail(w, r, "insert user", err)
 		return
 	}
@@ -187,6 +198,12 @@ VALUES ($1, $2, NULL, $3, $4, NULL, 'local', NULL, true, false, false, 0, NULL, 
 	}
 	h.queueMail(ctx, mailVerification, func(ctx context.Context) error { return h.sendRegisterVerification(ctx, user, token) })
 	writeRegisterAccepted(w)
+}
+
+// isUniqueViolation reports a Postgres unique_violation (SQLSTATE 23505).
+func isUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }
 
 // registerAcceptedMessage is the one answer to every sign-up that passed

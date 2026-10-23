@@ -536,7 +536,7 @@ func TestCorpusAuthFlowDecisionRows(t *testing.T) {
 	}
 
 	s, b := post("/register", `{"email":"TAKEN@example.com","password":"`+sessionscenario.Password+`xxxx"}`)
-	check("register: taken, other case", s, b, "a taken address is answered like a new one (CHAOS-10946)")
+	check("register: taken, other case", s, b, "a taken address is answered like a new one")
 	takenStatus, takenBody := s, b
 	s, b = post("/register", `{"email":"brand.new@example.com","password":"`+sessionscenario.Password+`xxxx"}`)
 	if s != takenStatus || b != takenBody {

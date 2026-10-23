@@ -114,7 +114,7 @@ func TestOperatorMetricsExposeTheManualTriggerAwaitFamilies(t *testing.T) {
 }
 
 // TestOperatorMetricsExposeTheSignUpMailFamily pins the registration of the
-// sign-up mail counter (CHAOS-10946): every series is on /metrics at 0.
+// sign-up mail counter: every series is on /metrics at 0.
 func TestOperatorMetricsExposeTheSignUpMailFamily(t *testing.T) {
 	registry := health.NewRegistry(time.Second)
 	var deps Deps

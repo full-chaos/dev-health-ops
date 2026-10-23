@@ -5,6 +5,7 @@ package session_test
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -60,7 +61,7 @@ func (c *captureMail) count(to string) int {
 	return n
 }
 
-func registerPost(t *testing.T, ctx context.Context, st stack, body string) (int, string) {
+func registerPost(t *testing.T, ctx context.Context, st stack, body string, from ...string) (int, string) {
 	t.Helper()
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, st.server.URL+"/api/v1/auth/register", bytes.NewBufferString(body))
 	if err != nil {
@@ -68,6 +69,9 @@ func registerPost(t *testing.T, ctx context.Context, st stack, body string) (int
 	}
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Origin", "http://localhost:3000")
+	if len(from) > 0 {
+		request.Header.Set("X-Forwarded-For", from[0])
+	}
 	response, err := http.DefaultClient.Do(request)
 	if err != nil {
 		t.Fatal(err)
@@ -113,4 +117,43 @@ func TestRegisterExistingEmailAnswersLikeNewEmail(t *testing.T) {
 	if capture.count("alice@example.com") != 1 {
 		t.Errorf("existing owner got %d mails, want 1", capture.count("alice@example.com"))
 	}
+}
+
+// Concurrent sign-ups for one new address: the unique index decides one
+// winner and every request, loser or not, gets the same 202 answer.
+func TestRegisterConcurrentSameAddressAnswersEveryRequestTheSame(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	capture := &captureMail{}
+	t.Setenv("TRUSTED_PROXIES", "127.0.0.1,::1")
+	st := startStackWithMail(t, ctx, authmail.Config{Mail: capture, AppBaseURL: "https://app.example.test", AppBaseURLSet: true})
+	const n = 8
+	type answer struct {
+		status int
+		body   string
+	}
+	answers := make([]answer, n)
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for i := range n {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			status, body := registerPost(t, ctx, st, `{"email": "race.person@example.com", "password": "Race-pass-2026"}`, fmt.Sprintf("203.0.113.%d", i+1))
+			answers[i] = answer{status, body}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	for i, got := range answers {
+		if got != answers[0] || got.status != http.StatusAccepted {
+			t.Errorf("request %d answered %d %s, request 0 answered %d %s: want one 202 answer", i, got.status, got.body, answers[0].status, answers[0].body)
+		}
+	}
+	var users int
+	if err := st.pool.QueryRow(ctx, `SELECT count(*) FROM users WHERE email = 'race.person@example.com'`).Scan(&users); err != nil || users != 1 {
+		t.Errorf("users with the address: %d (%v), want 1", users, err)
+	}
+	capture.waitFor(t, "race.person@example.com", "Verify your email address")
 }

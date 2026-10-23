@@ -161,7 +161,7 @@ func TestTheGitHalfSeesAPlantedEditAndFailsClosedWithoutABase(t *testing.T) {
 	m := mustLoad(t)
 	repo := t.TempDir()
 	golden := "internal/pgmigrate/testdata/golden/alias.json"
-	other := "README.md"
+	other := "other.txt"
 	for path, body := range map[string]string{golden: "{}", other: "x", ManifestPath: "m"} {
 		if err := os.MkdirAll(filepath.Dir(filepath.Join(repo, path)), 0o755); err != nil {
 			t.Fatal(err)

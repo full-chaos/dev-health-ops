@@ -147,6 +147,7 @@ internal/cigates/docstools	pyurl.go	cmd/cigate
 internal/cigates/docstools	pyurl.go	internal/cigates/docstools
 internal/cigates/docstools	validate_inventory_review.go	cmd/cigate
 internal/cigates/docstools	validate_inventory_review.go	internal/cigates/docstools
+internal/cigates/frozengoldens	frozengoldens.go	internal/cigates/frozengoldens
 internal/cigates/livee2e	cli.go	cmd/cigate
 internal/cigates/livee2e	cli.go	internal/cigates/livee2e
 internal/cigates/queuecreds	scan.go	internal/cigates/queuecreds

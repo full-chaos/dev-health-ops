@@ -115,10 +115,10 @@ func TestEveryCollapsedTableIsReadThroughTheNewestRowsSubquery(t *testing.T) {
 			t.Errorf("%s is read with FINAL; it must go through capacityNewestRows", table)
 		}
 		collapsed := strings.Contains(source, "SELECT * FROM "+table+" WHERE")
-		if collapsed && !requirement.readWithFINAL {
+		if collapsed && !requirement.collapsedOnRead {
 			t.Errorf("%s is collapsed on read but its requirement does not demand the version column and sorting key", table)
 		}
-		if !collapsed && requirement.readWithFINAL {
+		if !collapsed && requirement.collapsedOnRead {
 			t.Errorf("%s demands the version column and sorting key but nothing collapses it on read", table)
 		}
 	}

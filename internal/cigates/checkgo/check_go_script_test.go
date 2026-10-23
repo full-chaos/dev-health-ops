@@ -855,9 +855,9 @@ const sentinelTestSource = "//go:build integration\n\npackage providersync\n\nim
 // internal/providersync, so the shard planner meets a name only the scenario knows. The scenarios take turns; each one
 // removes its file and restores the script before the next.
 func withDiscoveryTree(script, fileName string, fn func(tree string) error) error {
-	sharedTreeMu.Lock()
-	defer sharedTreeMu.Unlock()
-	tree, err := ensureSharedTree()
+	discoveryTreeMu.Lock()
+	defer discoveryTreeMu.Unlock()
+	tree, err := ensureDiscoveryTree()
 	if err != nil {
 		return err
 	}

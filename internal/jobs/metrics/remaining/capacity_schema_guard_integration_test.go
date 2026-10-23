@@ -77,7 +77,7 @@ func TestCapacityRefusesAStaleSchema(t *testing.T) {
 		}
 	})
 
-	t.Run("a read table on the wrong engine is refused", func(t *testing.T) {
+	t.Run("a read table without the version column is refused", func(t *testing.T) {
 		// The column half of the probe passes here by construction: this table
 		// is rebuilt with EVERY required column present and only its ENGINE
 		// changed. That is the whole point -- a column-only probe accepted this
@@ -106,6 +106,7 @@ func TestCapacityRefusesAStaleSchema(t *testing.T) {
 			}
 		}
 
+		requirementVersion := capacityTableRequirements["work_item_metrics_daily"].versionColumn
 		_, err = NewCapacityExecutor(ctx, fresh, nil, nil)
 		if err == nil {
 			t.Fatal(
@@ -119,10 +120,10 @@ func TestCapacityRefusesAStaleSchema(t *testing.T) {
 		if !strings.Contains(err.Error(), "work_item_metrics_daily") {
 			t.Errorf("the refusal must name the offending table: %v", err)
 		}
-		// The engine actually found, not just the one required: an operator
-		// reading this needs to know what is deployed, not only what is wanted.
-		if !strings.Contains(err.Error(), "MergeTree") {
-			t.Errorf("the refusal must name the engine it found: %v", err)
+		// The refusal names the version column this code needs, so an operator
+		// knows what to deploy; the engine name is never part of the check.
+		if !strings.Contains(err.Error(), requirementVersion) {
+			t.Errorf("the refusal must name the needed version column %q: %v", requirementVersion, err)
 		}
 		// And it must not be mistaken for the column failure mode.
 		if strings.Contains(err.Error(), "is missing") {

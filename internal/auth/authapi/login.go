@@ -105,6 +105,11 @@ func (h compatHandlers) compatLogin(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if !admit(w, r, PatternCompatLogin,
+		charge{h.loginIP, clientKey(r)},
+		charge{h.loginAccount, h.Limits.accountKey(r, input.email)}) {
+		return
+	}
 	var requested *uuid.UUID
 	if input.orgID != nil {
 		if parsed, ok := policy.ParsePyUUID(*input.orgID); ok {

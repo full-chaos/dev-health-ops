@@ -12,8 +12,11 @@ const testAccessSecret = "session-config-test-key-0123456789abcdef"
 
 var testSuccessorKey = base64.RawURLEncoding.EncodeToString([]byte("session-config-successor-key-032"))
 
+const testValkeyURI = "redis://auth-ratelimit:test-only-password@valkey:6379/1"
+
 func sessionEnv(access, successor string) map[string]string {
 	env := baseEnv()
+	env[EnvValkeyURI] = testValkeyURI
 	if access != "" {
 		env[EnvAccessTokenSecret] = access
 	}

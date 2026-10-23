@@ -394,6 +394,7 @@ func TestEveryDeclaredOptionResolves(t *testing.T) {
 			}
 			if option.Env == EnvSocialLinkRoutes {
 				env[EnvAccessTokenSecret], env[EnvSessionSuccessorKey] = testAccessSecret, testSuccessorKey
+				env[EnvValkeyURI] = testValkeyURI
 			}
 			env[option.Env] = value
 			cfg, err := Load(Spec{LookupEnv: lookupFrom(env)})

@@ -45,7 +45,7 @@ func ssoPatterns(t *testing.T, mutate func(map[string]string)) map[string]bool {
 	if err != nil {
 		t.Fatal(err)
 	}
-	routes, err := sessionRoutes(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), pool, schema, nil)
+	routes, err := sessionRoutes(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), pool, schema, nil, mustLimits(t))
 	if err != nil {
 		t.Fatalf("sessionRoutes: %v", err)
 	}

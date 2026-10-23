@@ -240,6 +240,7 @@ type compatFixture struct {
 	creds      *fakeServiceCredentials
 	orgB       uuid.UUID
 	orgD       uuid.UUID
+	counters   httpapi.CounterStore
 }
 
 const (
@@ -250,7 +251,7 @@ const (
 func newCompatFixture(t *testing.T) *compatFixture {
 	t.Helper()
 	f := &compatFixture{fixture: newFixture(t), attempts: &fakeAttempts{}, orgB: uuid.New(), orgD: uuid.New(),
-		creds: &fakeServiceCredentials{id: uuid.NewString()}}
+		counters: httpapi.NewMemoryCounters(nil), creds: &fakeServiceCredentials{id: uuid.NewString()}}
 	hash := "hash:" + compatPassword
 	f.loginUsers = &fakeLoginUsers{byEmail: map[string]*local.User{
 		compatEmail: {ID: f.principal, IsActive: true, IsVerified: true, PasswordHash: &hash},
@@ -292,6 +293,7 @@ func (f *compatFixture) buildCompat() {
 			Compare: func(hash, password string) bool { return hash == "hash:"+password },
 		},
 		Social: f.social,
+		Limits: mustLimits(f.t, f.counters),
 	})
 	if err != nil {
 		f.t.Fatal(err)
@@ -1003,7 +1005,7 @@ func TestTheSignInRoutesAuditTheirTransportRefusals(t *testing.T) {
 			return nil
 		},
 		Login:  &LoginConfig{Users: f.loginUsers, Attempts: f.attempts, LockoutKey: contracts.NewSecretString(testLockoutKey)},
-		Social: f.social})
+		Social: f.social, Limits: mustLimits(f.t, f.counters)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1044,7 +1046,7 @@ func TestTheBucket429WritesNoRowAndTheLockout429WritesOne(t *testing.T) {
 			f.appended = append(f.appended, event)
 			return nil
 		},
-		Login: &LoginConfig{Users: f.loginUsers, Attempts: f.attempts, LockoutKey: contracts.NewSecretString(testLockoutKey)}})
+		Login: &LoginConfig{Users: f.loginUsers, Attempts: f.attempts, LockoutKey: contracts.NewSecretString(testLockoutKey)}, Limits: mustLimits(f.t, f.counters)})
 	if err != nil {
 		t.Fatal(err)
 	}

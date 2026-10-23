@@ -58,12 +58,22 @@ and `/readyz` fails closed, naming the check. See the
 | (none, secret) | `AUTH_SESSION_SUCCESSOR_KEY` or `AUTH_SESSION_SUCCESSOR_KEY_FILE` | unset | 32 bytes, base64url without padding. Derives the rotated refresh credential that a 30 s grace replay returns again. |
 | `--jwt-issuer` | `AUTH_JWT_ISSUER` | `dev-health-ops` | `iss` of the access token; must equal go-api's `JWT_ISSUER`. |
 | `--jwt-audience` | `AUTH_JWT_AUDIENCE` | `dev-health-api` | `aud` of the access token; must equal go-api's `JWT_AUDIENCE`. |
+| (none, secret) | `AUTH_VALKEY_URI` or `AUTH_VALKEY_URI_FILE` | unset | `redis://` or `rediss://` URI on database 1 (path `/1`) of the shared rate-limit store. Required, and refused at startup when absent, while the login, credential (`AUTH_USERS_OWNED`) or social link routes are mounted; with none of them mounted it is checked for shape only and never dialled. Nothing dials at startup: an unreachable store fails the `valkey` readiness check and answers the limited routes with a 500. |
 | `--social-link-routes` | `AUTH_SOCIAL_LINK_ROUTES` | `false` | `true` mounts the bearer-only social link and unlink routes (`POST /v1/identities/social`, `DELETE /v1/identities/social/{id}`); any other value than `true` or `false` fails startup, and `true` needs the session secrets. |
 | (none) | `AUTH_ACCESS_TOKEN_CLASS` | `hs256_compat` | The one class of access token this service mints: `hs256_compat` or `eddsa` (exact match; any other value fails startup). `eddsa` needs `AUTH_TOKEN_ISSUER_URL` (the `iss`, byte for byte), a signing key, and `AUTH_JWT_AUDIENCE` of `dev-health-api` or `auth-service`; tokens last 60 minutes and carry the access-token.v1 claims only. The session routes still verify HS256 tokens only. |
 | `--version` | | | Prints build metadata as JSON. |
 | `--healthcheck` | | | Probes this deployment's own operator `/readyz` over loopback; exit 0 only on HTTP 200. For container healthchecks. |
 
 Durations take Go syntax (`30s`, `5m`).
+
+### Rate limits
+
+The login, credential and social link routes count in a shared fixed-window store, so a limit holds across replicas. Every counter id starts with `auth_svc_`; go-api's counters are never read or written.
+
+- **Store login.** Give auth-service its own Valkey ACL login, limited to its prefix, and put its URI in the `AUTH_VALKEY_URI` Secret (the chart takes it by `secretKeyRef`, `authService.valkey`): `ACL SETUSER auth-service-ratelimit on >PASSWORD resetkeys ~dho:rl:auth_svc_* resetchannels -@all +hello +select +ping +get +eval +incr +pexpire +client|tracking`.
+- **Limits.** Login: 20 per 15 minutes per client address, 10 per 15 minutes per client address and account. Reset password: 20 per hour per client address, 5 per hour per client address and link secret. Verify 10, resend 3, forgot 3, change password 5 per hour (as go-api); resend and forgot also 20 per hour per client address across all e-mails (go-api has none). Social link and unlink: 10 per hour per client address and signed-in principal. A body that fails validation (or an unlink id that does not parse) costs nothing; verify counts per client address only, never by a value in its query.
+- **Keys.** The client address is the socket peer, or the one forwarded address a peer in `AUTH_SERVICE_TRUSTED_PROXIES` sent. An IPv6 client is keyed by its /64. Accounts, link secrets and principals enter a key as an HMAC-SHA256 digest (128 bits), never as written. The HMAC key is derived by HKDF-SHA256 from `AUTH_JWT_SECRET_KEY` (info `dev-health/auth-service/ratelimit-key/v1`), so there is no Secret of its own; it is used for nothing else and is never logged or exported. **Rotating `AUTH_JWT_SECRET_KEY` changes every digest and so resets every bucket** (a rotation window grants each caller a fresh budget).
+- **Refusal.** Past a limit the route answers `429` with the `rate_limited` envelope, which names no limit and no key. A store error answers `500` (closed) and counts in `dev_health_api_rate_limit_store_errors_total{limit}`; the series carries the limit id only.
 
 ### Session issue route
 

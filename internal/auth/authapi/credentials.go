@@ -5,7 +5,6 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
-	"time"
 
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel"
@@ -14,12 +13,10 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
-	"github.com/full-chaos/dev-health-ops/internal/auth/clientaddr"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity/local"
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
-	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
 // Credentials route patterns: go-api's own paths (internal/api/session/session.go).
@@ -53,14 +50,6 @@ const (
 	reasonChangeNotAllowed    = "not_allowed"
 )
 
-// The routes' rate limits (internal/api/session/limits.go).
-var (
-	verifyLimit         = httpapi.Limit{ID: "auth_verify", Count: 10, Window: time.Hour}
-	resendLimit         = httpapi.Limit{ID: "auth_resend_verification", Count: 3, Window: time.Hour}
-	forgotLimit         = httpapi.Limit{ID: "auth_forgot_password", Count: 3, Window: time.Hour}
-	changePasswordLimit = httpapi.Limit{ID: "auth_change_password", Count: 5, Window: time.Hour}
-)
-
 // CredentialFlows is the link and password domain (*local.Flows).
 type CredentialFlows interface {
 	Verify(ctx context.Context, secret string) (local.FlowOutcome, error)
@@ -78,9 +67,8 @@ type CredentialDeps struct {
 	Issuer   *Issuer
 	Logger   *slog.Logger
 	Meter    metric.Meter
-	// Counters holds the rate-limit windows; nil makes an in-process store
-	// (per replica).
-	Counters httpapi.CounterStore
+	// Limits holds the rate-limit windows and the digest key. Required.
+	Limits *Limits
 }
 
 type credentialHandlers struct {
@@ -88,6 +76,9 @@ type credentialHandlers struct {
 	compat compatHandlers
 	change http.Handler
 	flows  CredentialFlows
+
+	limits              *Limits
+	resetIP, resetToken *httpapi.KeyedLimiter
 }
 
 type (
@@ -124,25 +115,32 @@ func CredentialRoutes(deps CredentialDeps) ([]httpapi.Route, error) {
 	if err != nil {
 		return nil, err
 	}
-	store := deps.Counters
-	if store == nil {
-		store = httpapi.NewMemoryCounters(nil)
+	if deps.Limits == nil {
+		return nil, errNoLimits
 	}
 	h := credentialHandlers{
 		handlers: handlers{Deps: Deps{Sessions: deps.Sessions, Users: deps.Users, Issuer: deps.Issuer, Logger: deps.Logger}, rec: rec},
 		compat:   compatHandlers{CompatDeps: CompatDeps{Logger: deps.Logger}, rec: rec},
 		flows:    deps.Flows,
+		limits:   deps.Limits,
 	}
 	write := func(w http.ResponseWriter, r *http.Request, code httpapi.Code) { httpapi.WriteError(w, r, code) }
 	limited := func(validate httpapi.RequestValidator, limit httpapi.Limit, key httpapi.KeyFunc, next http.HandlerFunc) http.Handler {
-		return httpapi.ValidateThenLimit(validate, httpapi.NewKeyedLimiter(store, limit), key, write)(next)
+		return httpapi.ValidateThenLimit(validate, deps.Limits.limiter(limit), key, write)(next)
 	}
-	h.change = limited(h.validateChange, changePasswordLimit, changePasswordKey, h.changePassword)
+	// mailLimited is limited with a per-client-address cap in front of the
+	// per-account budget: validate, the address cap, the account budget.
+	mailLimited := func(validate httpapi.RequestValidator, ipLimit, accountLimit httpapi.Limit, next http.HandlerFunc) http.Handler {
+		account := httpapi.LimitWith(deps.Limits.limiter(accountLimit), h.credentialAuthKey, write)(next)
+		return httpapi.ValidateThenLimit(validate, deps.Limits.limiter(ipLimit), clientKey, write)(account)
+	}
+	h.resetIP, h.resetToken = deps.Limits.limiter(resetIPLimit), deps.Limits.limiter(resetTokenLimit)
+	h.change = limited(h.validateChange, changePasswordLimit, h.changePasswordKey, h.changePassword)
 	flows := deps.Flows
 	routes := []httpapi.Route{
-		{Method: http.MethodGet, Pattern: PatternVerifyEmail, Handler: limited(h.validateVerify, verifyLimit, credentialAuthKey, h.verifyEmail(flows))},
-		{Method: http.MethodPost, Pattern: PatternResendVerification, Handler: limited(h.validateEmail(opResendVerification), resendLimit, credentialAuthKey, h.mailLink(opResendVerification, textResendGeneric, flows.Resend))},
-		{Method: http.MethodPost, Pattern: PatternForgotPassword, Handler: limited(h.validateEmail(opForgotPassword), forgotLimit, credentialAuthKey, h.mailLink(opForgotPassword, textForgotGeneric, flows.Forgot))},
+		{Method: http.MethodGet, Pattern: PatternVerifyEmail, Handler: limited(h.validateVerify, verifyLimit, h.credentialAuthKey, h.verifyEmail(flows))},
+		{Method: http.MethodPost, Pattern: PatternResendVerification, Handler: mailLimited(h.validateEmail(opResendVerification), resendIPLimit, resendLimit, h.mailLink(opResendVerification, textResendGeneric, flows.Resend))},
+		{Method: http.MethodPost, Pattern: PatternForgotPassword, Handler: mailLimited(h.validateEmail(opForgotPassword), forgotIPLimit, forgotLimit, h.mailLink(opForgotPassword, textForgotGeneric, flows.Forgot))},
 		{Method: http.MethodPost, Pattern: PatternResetPassword, Handler: h.resetPassword(flows)},
 		{Method: http.MethodPost, Pattern: PatternChangePassword, Handler: h.authenticatedChange()},
 	}
@@ -154,24 +152,16 @@ func inputOf(r *http.Request) credentialInput {
 	return input
 }
 
-// credentialAuthKey is get_auth_key: the client address and the request's
-// normalized e-mail, "unknown" without one.
-func credentialAuthKey(r *http.Request) string {
-	host := "127.0.0.1"
-	if text := clientaddr.Text(r.Context()); text != nil && *text != "" {
-		host = *text
-	}
-	email := "unknown"
-	if normalized := pythonparity.Lower(pythonparity.Strip(inputOf(r).email)); normalized != "" {
-		email = normalized
-	}
-	return host + ":" + email
+// credentialAuthKey is get_auth_key with the e-mail digested: the client
+// address and the request's normalized e-mail.
+func (h credentialHandlers) credentialAuthKey(r *http.Request) string {
+	return h.limits.accountKey(r, inputOf(r).email)
 }
 
-// changePasswordKey limits per signed-in principal.
-func changePasswordKey(r *http.Request) string {
+// changePasswordKey limits per signed-in principal, by digest.
+func (h credentialHandlers) changePasswordKey(r *http.Request) string {
 	if caller, ok := r.Context().Value(changeAuthKey{}).(changeCaller); ok {
-		return "change-password:" + caller.bearer.PrincipalID.String()
+		return "change-password:" + h.limits.digest("principal", caller.bearer.PrincipalID.String())
 	}
 	return "change-password:unknown"
 }
@@ -193,11 +183,9 @@ func (h credentialHandlers) validateVerify(w http.ResponseWriter, r *http.Reques
 		writeValidation(w, errs)
 		return nil, false
 	}
-	input := credentialInput{token: token}
-	if value := pybody.LastQueryValue(r.URL.Query(), "email"); value != nil {
-		input.email = *value
-	}
-	return h.withInput(r, input), true
+	// The route reads the link secret only: an optional e-mail in the query is
+	// the caller's to vary, so it is never part of the limit's key.
+	return h.withInput(r, credentialInput{token: token}), true
 }
 
 // validateEmail is ResendVerificationRequest and ForgotPasswordRequest: one EmailStr.
@@ -272,8 +260,9 @@ func violationsDetail(message string, violations []string) *pyjson.Object {
 	return detail
 }
 
-// resetPassword is POST /api/v1/auth/reset-password: no rate limit, the
-// model's 8 to 128 characters, then the flow.
+// resetPassword is POST /api/v1/auth/reset-password: the model's 8 to 128
+// characters, then the limits (go-api has none; these are stricter, per
+// client address and per client address and link secret), then the flow.
 func (h credentialHandlers) resetPassword(flows CredentialFlows) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, ok := h.compat.readCompatBody(w, r, opResetPassword, nil)
@@ -289,6 +278,11 @@ func (h credentialHandlers) resetPassword(flows CredentialFlows) http.Handler {
 		if len(errs) > 0 {
 			h.compat.rec.record(r.Context(), opResetPassword, "denied", reasonMalformed, nil)
 			writeValidation(w, errs)
+			return
+		}
+		if !admit(w, r, PatternResetPassword,
+			charge{h.resetIP, clientKey(r)},
+			charge{h.resetToken, h.limits.secretKey(r, token)}) {
 			return
 		}
 		outcome, err := flows.Reset(r.Context(), token, password)

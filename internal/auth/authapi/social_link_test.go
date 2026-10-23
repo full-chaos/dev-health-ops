@@ -2,6 +2,7 @@ package authapi
 
 import (
 	"context"
+	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"log/slog"
 	"net/http"
 	"sync"
@@ -69,10 +70,15 @@ func (f *fakeLinkDomain) Unlink(_ context.Context, who social.SignedIn, id uuid.
 
 func linkFixture(t *testing.T) (*fixture, *fakeLinkDomain) {
 	t.Helper()
+	return linkFixtureWith(t, httpapi.NewMemoryCounters(nil))
+}
+
+func linkFixtureWith(t *testing.T, counters httpapi.CounterStore) (*fixture, *fakeLinkDomain) {
+	t.Helper()
 	f := newFixture(t)
 	domain := &fakeLinkDomain{proofs: map[string]uuid.UUID{}, owners: map[uuid.UUID]uuid.UUID{}, methods: map[uuid.UUID]int{f.principal: 1}}
 	routes, err := SocialLinkRoutes(SocialLinkDeps{Sessions: f.sessions, Users: f.users, Issuer: f.issuer,
-		Logger: slog.New(slog.NewJSONHandler(f.logs, nil)), Social: domain})
+		Logger: slog.New(slog.NewJSONHandler(f.logs, nil)), Social: domain, Limits: mustLimits(t, counters)})
 	if err != nil {
 		t.Fatal(err)
 	}

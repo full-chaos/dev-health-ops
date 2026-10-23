@@ -86,12 +86,17 @@ type CompatDeps struct {
 	// ServiceCredentials mounts POST /internal/v1/sessions, the session issue
 	// route go-api calls; nil leaves it unmounted.
 	ServiceCredentials ServiceCredentials
+	// Limits holds the login limits' windows and the digest key. Required
+	// while Login is set.
+	Limits *Limits
 }
 
 type compatHandlers struct {
 	CompatDeps
 	rec   recorder
 	login *local.Service
+
+	loginIP, loginAccount *httpapi.KeyedLimiter
 }
 
 // CompatRoutes returns go-api's refresh and logout, and login and
@@ -118,6 +123,10 @@ func CompatRoutes(deps CompatDeps) ([]httpapi.Route, error) {
 		{Method: http.MethodPost, Pattern: PatternCompatLogout, Handler: http.HandlerFunc(h.compatLogout)},
 	}
 	if deps.Login != nil {
+		if deps.Limits == nil {
+			return nil, errNoLimits
+		}
+		h.loginIP, h.loginAccount = deps.Limits.limiter(loginIPLimit), deps.Limits.limiter(loginAccountLimit)
 		login, err := local.New(local.Config{
 			Users: deps.Login.Users, Attempts: deps.Login.Attempts, LockoutKey: deps.Login.LockoutKey,
 			Compare: deps.Login.Compare, Sessions: loginSessions{h: h},

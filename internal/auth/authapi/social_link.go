@@ -33,6 +33,9 @@ type SocialLinkDeps struct {
 	Meter    metric.Meter
 	// Social serves the routes; nil leaves them unmounted.
 	Social social.Domain
+	// Limits holds the link limit's window and the digest key. Required
+	// while Social is set.
+	Limits *Limits
 }
 
 // SocialLinkRoutes returns the bearer-only link and unlink routes, or none
@@ -51,11 +54,15 @@ func SocialLinkRoutes(deps SocialLinkDeps) ([]httpapi.Route, error) {
 	if meter == nil {
 		meter = otel.Meter("github.com/full-chaos/dev-health-ops/internal/auth/authapi")
 	}
+	if deps.Limits == nil {
+		return nil, errNoLimits
+	}
 	rec, err := newRecorder(deps.Logger, meter)
 	if err != nil {
 		return nil, err
 	}
-	h := socialLinkHandlers{handlers: handlers{Deps: Deps{Sessions: deps.Sessions, Users: deps.Users, Issuer: deps.Issuer, Logger: deps.Logger, Meter: meter}, rec: rec}, social: deps.Social}
+	h := socialLinkHandlers{handlers: handlers{Deps: Deps{Sessions: deps.Sessions, Users: deps.Users, Issuer: deps.Issuer, Logger: deps.Logger, Meter: meter}, rec: rec}, social: deps.Social,
+		limits: deps.Limits, limiter: deps.Limits.limiter(socialLinkLimit)}
 	return []httpapi.Route{
 		{Method: http.MethodPost, Pattern: PatternSocialLink, Handler: http.HandlerFunc(h.link)},
 		{Method: http.MethodDelete, Pattern: PatternSocialUnlink, Handler: http.HandlerFunc(h.unlink)},
@@ -64,8 +71,14 @@ func SocialLinkRoutes(deps SocialLinkDeps) ([]httpapi.Route, error) {
 
 type socialLinkHandlers struct {
 	handlers
-	social social.Domain
+	social  social.Domain
+	limits  *Limits
+	limiter *httpapi.KeyedLimiter
 }
+
+// socialLinkRoute is the one counter scope of the link and unlink routes: a
+// fixed name, so the {id} of an unlink cannot multiply the budget.
+const socialLinkRoute = "social-link"
 
 // signedInBearer is the social domain's view of an authenticated request: the
 // bearer's session principal and the session's sign-in time.
@@ -81,7 +94,12 @@ func (h socialLinkHandlers) serve(w http.ResponseWriter, r *http.Request, operat
 		return
 	}
 	who := social.SignedIn{PrincipalID: bearer.PrincipalID, AuthTime: record.AuthTime}
-	run(social.Handlers{Service: h.social, Auth: signedInBearer{who: who}})
+	// The count comes after the body or the id validated: a refused request
+	// costs nothing, as on the login and credential routes.
+	admitted := func(w http.ResponseWriter, r *http.Request) bool {
+		return admit(w, r, socialLinkRoute, charge{h.limiter, h.limits.principalKey(r, bearer.PrincipalID.String())})
+	}
+	run(social.Handlers{Service: h.social, Auth: signedInBearer{who: who}, Admit: admitted})
 }
 
 func (h socialLinkHandlers) link(w http.ResponseWriter, r *http.Request) {

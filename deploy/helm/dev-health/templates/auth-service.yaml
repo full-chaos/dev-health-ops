@@ -27,6 +27,7 @@ stage-signing-key init container exists.
 {{- if not (regexMatch "^[0-9]+s$" (toString $a.shutdownTimeout)) }}{{- fail "authService.shutdownTimeout must be whole seconds such as 20s" }}{{- end }}
 {{- if ge (int (trimSuffix "s" (toString $a.shutdownTimeout))) (int $a.terminationGracePeriodSeconds) }}{{- fail "authService.shutdownTimeout must be below authService.terminationGracePeriodSeconds: the kubelet kills the pod at the grace period, so a longer shutdown bound is never reached" }}{{- end }}
 {{- range $a.extraEnv }}
+{{- if eq .name "AUTH_VALKEY_URI" }}{{- fail "authService.extraEnv must not set AUTH_VALKEY_URI: use authService.valkey, which reaches the container by secretKeyRef" }}{{- end }}
 {{- if has .name (list "AUTH_JWT_SECRET_KEY" "AUTH_SESSION_SUCCESSOR_KEY") }}{{- fail (printf "authService.extraEnv must not set %s: use authService.sessionKeys, which reaches the container by secretKeyRef" .name) }}{{- end }}
 {{- if eq .name "AUTH_SIGNING_KEY" }}{{- fail "authService.extraEnv must not set AUTH_SIGNING_KEY: direct-value signing material is rejected by the service (ACP-ADR-02 §4); use authService.signingKey" }}{{- end }}
 {{- if eq (lower (trim .name)) "auth_signing_keyset_file" }}{{- fail "authService.extraEnv must not set AUTH_SIGNING_KEYSET_FILE: the chart stages one signing key (authService.signingKey) and renders its file and kid, which the service refuses beside a key-set manifest; key-set staging comes with the rotation leaf" }}{{- end }}
@@ -102,6 +103,10 @@ spec:
             - name: AUTH_SESSION_SUCCESSOR_KEY
               valueFrom: {secretKeyRef: {name: {{ $a.sessionKeys.successor.secretName | quote }}, key: {{ $a.sessionKeys.successor.secretKey | quote }}}}
           {{- end }}
+          {{- if $a.valkey.secretName }}
+            - name: AUTH_VALKEY_URI
+              valueFrom: {secretKeyRef: {name: {{ $a.valkey.secretName | quote }}, key: {{ $a.valkey.secretKey | quote }}}}
+          {{- end }}
           {{- with $a.extraEnv }}
             {{- toYaml . | nindent 12 }}
           {{- end }}
@@ -164,6 +169,7 @@ spec:
     {{- end }}
 {{- if $a.networkPolicy.enabled }}
 {{- if not $a.networkPolicy.egress.database.to }}{{- fail "authService.networkPolicy.egress.database.to is required while authService.networkPolicy.enabled (the default; set it false only when another layer enforces the boundary): the auth pods are excluded from the release-wide policy, so an empty list would cut the service off from its database" }}{{- end }}
+{{- if and $a.valkey.secretName (not $a.networkPolicy.egress.valkey.to) }}{{- fail "authService.networkPolicy.egress.valkey.to is required while authService.valkey.secretName is set and authService.networkPolicy.enabled: the auth pods get no egress but DNS and the database, so an empty list would cut the service off from its rate-limit store" }}{{- end }}
 {{- range (concat $a.networkPolicy.allowedFrom $a.networkPolicy.metricsFrom) }}
 {{- if not (or (and .matchLabels (gt (len .matchLabels) 0)) (and .matchExpressions (gt (len .matchExpressions) 0))) }}
 {{- fail "authService.networkPolicy.allowedFrom and metricsFrom entries need a non-empty matchLabels or matchExpressions: an empty podSelector admits every pod in the namespace" }}
@@ -176,7 +182,7 @@ When the release-wide policy is on they are excluded from it (networkpolicy.yaml
 port and all HTTPS egress. Ingress: only the listed consumers on the API port
 and only the listed scrapers on the operator port; an empty list renders no rule
 for that port (a `from` that is empty or absent would admit every source).
-Egress: DNS, the database, and -- only when listed -- the key custody service.
+Egress: DNS, the database, the rate-limit store when authService.valkey is set, and -- only when listed -- the key custody service.
 */}}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -237,6 +243,14 @@ spec:
       ports:
         - protocol: TCP
           port: {{ $a.networkPolicy.egress.database.port }}
+    {{- if $a.valkey.secretName }}
+    # The shared rate-limit store, and nothing else
+    - to:
+        {{- toYaml $a.networkPolicy.egress.valkey.to | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: {{ $a.networkPolicy.egress.valkey.port }}
+    {{- end }}
     {{- with $a.networkPolicy.egress.keyCustody.to }}
     # Key custody service (KMS)
     - to:

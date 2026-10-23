@@ -206,7 +206,7 @@ func TestTheReconcileGateRefusesPlantedMismatches(t *testing.T) {
 			}
 		},
 		"the registry loses the issue route's service credential consumer": func(_ []map[string]any, registry registryAnchors) {
-			delete(registry.consumers["internal_svc_authsess_token"], anchorKey(authHTTPLayer+"compat.go", 133))
+			delete(registry.consumers["internal_svc_authsess_token"], anchorKey(authHTTPLayer+"compat.go", 142))
 		},
 	}
 	for name, plant := range cases {

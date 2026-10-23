@@ -31,6 +31,7 @@ import (
 	envsecrets "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"log/slog"
 	"net"
+	"net/url"
 	"regexp"
 	"sort"
 	"strconv"
@@ -104,6 +105,13 @@ const (
 	EnvTrustedProxies = clientaddr.Env
 )
 
+// EnvValkeyURI is the Valkey login that holds the rate-limit counters of the
+// login, credential and social link routes: a redis:// or rediss:// URI on
+// database 1, with its own ACL login limited to the auth_svc_ key prefix
+// (never go-api's). Secret: environment or _FILE. Required only while one of
+// those routes mounts; ignored (and never dialled) otherwise.
+const EnvValkeyURI = "AUTH_VALKEY_URI"
+
 // SocialProviders are the social sign-in providers, in go-api's
 // SOCIAL_<PROVIDER>_CLIENT_ID / _CLIENT_SECRET naming.
 var SocialProviders = []string{"github", "gitlab", "google"}
@@ -173,7 +181,9 @@ type Config struct {
 	MaxBodyBytes    int64
 	RateLimit       RateLimit
 
-	DatabaseURI            secrets.Value
+	DatabaseURI secrets.Value
+	// ValkeyURI is AUTH_VALKEY_URI: the shared rate-limit store.
+	ValkeyURI              secrets.Value
 	DatabaseSchema         string
 	DatabaseMaxConns       int32
 	DatabaseConnectTimeout time.Duration
@@ -266,6 +276,7 @@ func (c Config) SafeAttrs() []slog.Attr {
 		slog.Float64("rate_limit_per_second", c.RateLimit.PerSecond),
 		slog.Int("rate_limit_burst", c.RateLimit.Burst),
 		slog.Bool("database_configured", c.DatabaseURI.Configured()),
+		slog.Bool("valkey_configured", c.ValkeyURI.Configured()),
 		slog.String("database_schema", c.DatabaseSchema),
 		slog.Int64("database_max_conns", int64(c.DatabaseMaxConns)),
 		slog.String("database_connect_timeout", c.DatabaseConnectTimeout.String()),
@@ -431,7 +442,45 @@ func Load(spec Spec) (Config, error) {
 	if cfg.SSO, err = ssoSettings(lookup); err != nil {
 		return Config{}, err
 	}
+	if cfg.ValkeyURI, err = valkeySetting(lookup, cfg.LimitedRoutesMounted()); err != nil {
+		return Config{}, err
+	}
 	return cfg, nil
+}
+
+// LimitedRoutesMounted reports whether a route that counts in the shared
+// rate-limit store is mounted: login, the credential routes (session secrets
+// and AUTH_USERS_OWNED) or the social link routes. The JWKS, discovery,
+// session and SSO routes carry no such limit.
+func (c Config) LimitedRoutesMounted() bool {
+	if !c.Session.Enabled {
+		return false
+	}
+	return c.Session.LoginEnabled || c.UsersOwned || c.Session.SocialLinkRoutes
+}
+
+// valkeySetting resolves AUTH_VALKEY_URI. A syntactically bad value is
+// refused even when no limited route mounts (a typo must not wait for the
+// flip); an absent value is refused only while one mounts, because a
+// per-replica counter is no limit at all.
+func valkeySetting(lookup secrets.LookupEnv, required bool) (secrets.Value, error) {
+	uri, set, err := secrets.ResolveDSNSetting(EnvValkeyURI, lookup)
+	if err != nil {
+		return secrets.Value{}, err
+	}
+	if !set {
+		if required {
+			return secrets.Value{}, fmt.Errorf(
+				"%s or %s_FILE is required while the login, credential or social link routes are mounted: "+
+					"an in-process limiter is per replica and so no limit", EnvValkeyURI, EnvValkeyURI)
+		}
+		return secrets.Value{}, nil
+	}
+	parsed, parseErr := url.Parse(uri.Reveal())
+	if parseErr != nil || (parsed.Scheme != "redis" && parsed.Scheme != "rediss") || parsed.Host == "" || parsed.Path != "/1" {
+		return secrets.Value{}, fmt.Errorf("%s must be a redis:// or rediss:// URI on database 1 (path /1)", EnvValkeyURI)
+	}
+	return uri, nil
 }
 
 // socialClients resolves each provider's client id and secret.

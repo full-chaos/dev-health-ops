@@ -106,7 +106,8 @@ func TestPrefilterAgreesWithTheRegexpsAlone(t *testing.T) {
 	}
 	for _, probe := range probes {
 		values = append(values, probe, strings.ToUpper(probe), strings.ToLower(probe),
-			"x"+probe, probe+" tail", "head "+probe, probe[:len(probe)/2], "K"+probe, "ſ"+probe)
+			"x"+probe, probe+" tail", "head "+probe, probe[:len(probe)/2], "\u212a"+probe, "\u017f"+probe,
+			strings.ReplaceAll(probe, "s", "\u017f"), strings.ReplaceAll(probe, "k", "\u212a"))
 	}
 	for _, value := range values {
 		if got, want := scanner.Match(value), scanner.matchRegexpOnly(value); got != want {

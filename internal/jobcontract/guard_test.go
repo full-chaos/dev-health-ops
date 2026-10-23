@@ -123,6 +123,17 @@ func TestRefusalPathNeverCarriesAFreeTextKey(t *testing.T) {
 	wantRefusal(t, err, "payload.*", probe)
 }
 
+func TestRefusalPathPrintsAnUnsafeKeyAsAStar(t *testing.T) {
+	probe := guardProbes(t)[0]
+	for _, key := range []string{"Free Text Key", "UPPER", "with-dash", "9starts_with_digit", strings.Repeat("a", 65)} {
+		data := heartbeatDocument(func(d map[string]any) {
+			d["payload"].(map[string]any)[key] = map[string]any{"note": probe}
+		})
+		_, err := Decode(KindHeartbeat, data)
+		wantRefusal(t, err, "payload.*.note", key)
+	}
+}
+
 func TestMarshalCanonicalRefusesATypedFieldBeforeReturningBytes(t *testing.T) {
 	probe := guardProbes(t)[0]
 	data, err := MarshalCanonical(Envelope{

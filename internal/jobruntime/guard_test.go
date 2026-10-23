@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/platform/credshape"
 )
 
@@ -57,5 +58,39 @@ func TestAdapterCancelsAQueuedJobWhoseArgumentsCarryACredentialShape(t *testing.
 		if strings.Contains(text, sentinel) || strings.Contains(text, sentinel[len(sentinel)/2:]) {
 			t.Errorf("%s carries the value", name)
 		}
+	}
+}
+
+func TestRefusedJobIsCountedByReasonAndTheMetricsCarryNoValue(t *testing.T) {
+	t.Parallel()
+	scanner, err := credshape.Default()
+	if err != nil {
+		t.Fatal(err)
+	}
+	probes, err := scanner.Probes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sentinel := probes[0]
+	collector, err := NewMetricsCollector(MetricDimensions{
+		Jobs: []JobLabels{{Queue: "retention", Kind: jobcontract.KindRetentionCleanup}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter := newRetentionAdapter(t, HandlerFunc[RetentionCleanupArgs](func(context.Context, *Execution[RetentionCleanupArgs]) error {
+		return nil
+	}), collector, &recordingClaim{state: ClaimProceed}, &recordingLease{}, &bytes.Buffer{})
+	job := retentionJob(t, 1)
+	job.EncodedArgs = []byte(strings.Replace(string(job.EncodedArgs), "corr-test-1", sentinel, 1))
+	if err := adapter.Work(context.Background(), job); err == nil {
+		t.Fatal("a job carrying a credential-shaped value was worked")
+	}
+	text := collector.PrometheusText()
+	if !strings.Contains(text, ReasonCredentialShapedValue.String()) {
+		t.Fatalf("metrics do not count the refusal by reason:\n%s", text)
+	}
+	if strings.Contains(text, sentinel) || strings.Contains(text, sentinel[len(sentinel)/2:]) {
+		t.Fatal("metrics carry the value")
 	}
 }

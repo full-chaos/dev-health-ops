@@ -157,14 +157,80 @@ func TestIotaOffsetIsCarriedThroughAConstGroup(t *testing.T) {
 	}
 }
 
-func TestReassignedAliasFollowsTheLastAssignment(t *testing.T) {
-	body := "func f(v string) {\n\tstr := slog.String\n\tstr = attribute.String\n\t_ = str(\"api_token\", v)\n}\n"
-	if got := rules(scanSource(t, header+body)); got != "R1" {
-		t.Fatalf("rules = %q, want R1", got)
+// A function variable keeps every constructor it was ever bound to in its scope (fail closed): a later assignment adds to
+// the set and never removes from it.
+func TestReassignedAliasKeepsEveryValue(t *testing.T) {
+	cases := map[string]string{
+		"slog then attribute":  "func f(v string) {\n\tstr := slog.String\n\tstr = attribute.String\n\t_ = str(\"api_token\", v)\n}\n",
+		"attribute then other": "func f(v string) {\n\tstr := attribute.String\n\t_ = str\n\tstr = func(k, v string) string { return k + v }\n\t_ = str(\"api_token\", v)\n}\n",
+		"conditional":          "func f(c bool, v string) {\n\tvar str func(k, v string) attribute.KeyValue\n\tif c {\n\t\tstr = attribute.String\n\t}\n\t_ = str(\"api_token\", v)\n}\n",
+		"deferred closure":     "func f(v string) {\n\tstr := slog.String\n\tdefer func() { str = attribute.String }()\n\t_ = str(\"api_token\", v)\n}\n",
+		"package alias reassigned in another function": "var str = slog.String\nfunc g() { str = attribute.String }\nfunc f(v string) { _ = str(\"api_token\", v) }\n",
 	}
-	back := "func f(v string) {\n\tstr := attribute.String\n\t_ = str\n\tstr = func(k, v string) string { return k + v }\n\t_ = str(\"api_token\", v)\n}\n"
-	if got := scanSource(t, header+back); len(got) != 0 {
-		t.Fatalf("findings after the alias was re-assigned away: %v", got)
+	for name, body := range cases {
+		if got := rules(scanSource(t, header+body)); !strings.Contains(got, "R1") {
+			t.Fatalf("%s: rules = %q, want R1", name, got)
+		}
+	}
+}
+
+func TestPackageScopeAliasIsOrderFree(t *testing.T) {
+	cases := map[string]string{
+		"function above the declaration":            "func f(v string) { _ = str(\"api_token\", v) }\nvar str = attribute.String\n",
+		"package initializer above the declaration": "var _ = str(\"api_token\", \"x\")\nvar str = attribute.String\n",
+	}
+	for name, body := range cases {
+		if got := rules(scanSource(t, header+body)); !strings.Contains(got, "R1") {
+			t.Fatalf("%s: rules = %q, want R1", name, got)
+		}
+	}
+}
+
+func TestBlockScopeAliasIsNotVisibleBeforeItsDeclaration(t *testing.T) {
+	body := "func str(k, v string) string { return k }\nfunc f() {\n\t_ = str(\"api_token\", \"x\")\n\tstr := attribute.String\n\t_ = str\n}\n"
+	if got := scanSource(t, header+body); len(got) != 0 {
+		t.Fatalf("findings: %v", got)
+	}
+}
+
+func TestAliasCopiedFromAnAliasKeepsTheConstructor(t *testing.T) {
+	cases := map[string]string{
+		"alias of an alias":        "func f(v string) {\n\ta := attribute.String\n\tb := a\n\t_ = b(\"api_token\", v)\n}\n",
+		"shadow copy in a closure": "func f(v string) {\n\tstr := attribute.String\n\tfunc() {\n\t\tstr := str\n\t\t_ = str(\"api_token\", v)\n\t}()\n}\n",
+		"shadow copy in a block":   "func f(v string) {\n\tstr := attribute.String\n\t{\n\t\tstr, e2 := str, 1\n\t\t_ = e2\n\t\t_ = str(\"api_token\", v)\n\t}\n}\n",
+	}
+	for name, body := range cases {
+		if got := rules(scanSource(t, header+body)); !strings.Contains(got, "R1") {
+			t.Fatalf("%s: rules = %q, want R1", name, got)
+		}
+	}
+}
+
+func TestFunctionDeclarationParameterHidesAPackageAlias(t *testing.T) {
+	body := "var str = attribute.String\nfunc f(str func(k, v string) string) { _ = str(\"api_token\", \"x\") }\n"
+	if got := scanSource(t, header+body); len(got) != 0 {
+		t.Fatalf("findings: %v", got)
+	}
+}
+
+func TestConvertedConstantKeysAreFolded(t *testing.T) {
+	cases := map[string]string{
+		"typed conversion":       "type K string\nconst k = K(\"api_token\")\nfunc f(v string) { _ = attribute.String(string(k), v) }\n",
+		"conversion as key":      "type K string\nconst k = K(\"api_token\")\nfunc f(v string) { _ = attribute.Key(k).String(v) }\n",
+		"attribute.Key constant": "const k = attribute.Key(\"api_token\")\nfunc f(v string) { _ = k.String(v) }\n",
+	}
+	for name, body := range cases {
+		if got := rules(scanSource(t, header+body)); !strings.Contains(got, "R1") {
+			t.Fatalf("%s: rules = %q, want R1", name, got)
+		}
+	}
+}
+
+func TestUnfoldableConstantKeyIsAFinding(t *testing.T) {
+	body := "const k = http.MethodGet\nfunc f(v string) { _ = attribute.String(k, v) }\n"
+	got := scanSource(t, header+body)
+	if len(got) != 1 || got[0].Rule != "R1" || got[0].Detail != "unfoldable const key" {
+		t.Fatalf("findings = %v, want one R1 unfoldable const key", got)
 	}
 }
 

@@ -360,3 +360,11 @@ func TestSpanAndLogKeyVerdictsAgree(t *testing.T) {
 		}
 	}
 }
+
+func TestEverySafeKeyIsAlsoAKeyTheSharedRuleLeavesAlone(t *testing.T) {
+	for key := range safeKeys {
+		if !logging.KeyClean(key) {
+			t.Errorf("safe key %q is changed by the shared key rule", key)
+		}
+	}
+}

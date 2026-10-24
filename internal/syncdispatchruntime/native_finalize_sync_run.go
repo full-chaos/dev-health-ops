@@ -749,7 +749,7 @@ func writeFinalizeRun(
 	_, err = tx.Exec(ctx, `
 UPDATE public.sync_runs
 SET completed_units = $2, failed_units = $3, completed_at = $4, status = $5,
-    result = $6::json, error = $7
+    result = `+resultKeepingSkippedDatasets("$6")+`, error = $7
 WHERE id = $1::uuid`,
 		runID, completedUnits, failedUnits, completedAt, status, encoded, errorText)
 	if err != nil {

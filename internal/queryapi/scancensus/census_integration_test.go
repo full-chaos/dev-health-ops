@@ -525,8 +525,8 @@ internal/queryapi/analytics/breakdown.go|executeBreakdownRaw|*string,**float64|c
 internal/queryapi/analytics/catalog.go|executeCatalogValues|*string,*uint64|43d8cb6d09a6|statement-not-static
 internal/queryapi/analytics/flowmatrix.go|queryEdges|*string,*string,*string,*string,**float64|a19dc243308f|statement-not-static
 internal/queryapi/analytics/flowmatrix.go|queryNodes|*string,*string,**float64|86e5d5b721b7|statement-not-static
-internal/queryapi/analytics/investmentquality.go|executeEvidenceQualityByGroup|*string,*float64,*uint64,*uint64|441cf34157b6|statement-not-static
-internal/queryapi/analytics/investmentquality.go|executeInvestmentQualityStats|*uint64,*uint64,*float64,*float64,*uint64,*uint64,*uint64,*uint64,*uint64|3a00ba4c26b9|statement-not-static
+internal/queryapi/analytics/investmentquality.go|executeEvidenceQualityByGroup|*string,*float64,*uint64,*uint64|0511d077ced1|statement-not-static
+internal/queryapi/analytics/investmentquality.go|executeInvestmentQualityStats|*uint64,*uint64,*float64,*float64,*uint64,*uint64,*uint64,*uint64,*uint64,*uint64|a9c3f447bb08|statement-not-static
 internal/queryapi/analytics/sankeycoverage.go|runSankeyCoverageQuery|*float64,*float64,*float64,*float64,**float64,**float64,**float64,**float64,**float64|7474017a0a07|statement-not-static
 internal/queryapi/analytics/sankeygrouped.go|executeSankeyGrouped|[]any|02426fb74c03|variadic-destinations
 internal/queryapi/analytics/timeseries.go|ExecuteOrgTimeseries|*time.Time,**float64,**float64|30a7cdd2fa01|statement-not-static

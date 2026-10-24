@@ -509,7 +509,7 @@ func (materializer *NativeMaterializer) Materialize(
 			return PlanResult{}, err
 		}
 	}
-	if err := errIfOnlySkippedDatasetsHadWork(len(loaded.featureOffSkippedDatasetKeys), len(units)); err != nil {
+	if err := errIfOnlySkippedDatasetsHadWork(loaded.featureOffSkippedDatasets, len(units)); err != nil {
 		return PlanResult{}, err
 	}
 	if len(units) > loaded.totalUnitCap {
@@ -597,9 +597,9 @@ type loadedMaterializationPlan struct {
 	terminalReason         string
 	ensureSecurityDataset  bool
 	pagerDutyRepair        *pagerDutyDomainRepair
-	// featureOffSkippedDatasetKeys are the enabled datasets the plan left out
-	// because the canonical-incident feature is off.
-	featureOffSkippedDatasetKeys []string
+	// featureOffSkippedDatasets is the number of enabled datasets the plan
+	// left out because the canonical-incident feature is off.
+	featureOffSkippedDatasets int
 	// triggeredBy is CHAOS-4602's sync_runs.triggered_by stamp: "schedule"
 	// for an ordinary cron-minted occurrence (every pre-CHAOS-4602 caller
 	// keeps this value, unconditionally), or the sync_manual_triggers row's
@@ -802,7 +802,7 @@ WHERE config.id = $1::uuid AND config.org_id = $2 AND integration.is_active`, oc
 			return loadedMaterializationPlan{}, err
 		}
 	}
-	datasets, featureOffSkippedDatasetKeys, err := dropCanonicalIncidentDatasetsWhenFeatureOff(ctx, tx, orgID, integrationID, provider, datasets, occurrence.ScheduledFor)
+	datasets, featureOffSkippedDatasets, err := dropCanonicalIncidentDatasetsWhenFeatureOff(ctx, tx, orgID, integrationID, provider, datasets, occurrence.ScheduledFor)
 	if err != nil {
 		return loadedMaterializationPlan{}, err
 	}
@@ -858,7 +858,7 @@ WHERE config.id = $1::uuid AND config.org_id = $2 AND integration.is_active`, oc
 		pagerDutyRepair:        pagerDutyRepair,
 		triggeredBy:            triggeredBy,
 
-		featureOffSkippedDatasetKeys: featureOffSkippedDatasetKeys,
+		featureOffSkippedDatasets: featureOffSkippedDatasets,
 	}, nil
 }
 
@@ -2138,12 +2138,6 @@ func persistDomainGraph(ctx context.Context, tx pgx.Tx, ids materializationIDs, 
 		completedAt = pointerTime(createdAt)
 		runError = &loaded.terminalReason
 		resultJSON = []byte(`{"error_category":"pagerduty_sync_disabled"}`)
-	} else if skipped := skippedDatasetsResult(loaded.featureOffSkippedDatasetKeys); skipped != nil {
-		encoded, err := json.Marshal(map[string]any{"skipped_datasets": skipped})
-		if err != nil {
-			return fmt.Errorf("encode skipped datasets: %w", err)
-		}
-		resultJSON = encoded
 	}
 	triggeredByStamp := loaded.triggeredBy
 	if triggeredByStamp == "" {

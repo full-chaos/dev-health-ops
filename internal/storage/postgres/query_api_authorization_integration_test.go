@@ -271,9 +271,9 @@ func TestCheckQueryAPIAuthorizationRefusesEveryMissingDeclaredPrivilege(t *testi
 			}
 		}
 	}
-	// 15 tables: SELECT on each, plus 3+2+1+1+2 write flags.
-	if cases != 15+9 {
-		t.Fatalf("exercised %d (table, privilege) cases, want 24: the manifest changed without this test", cases)
+	// 16 tables: SELECT on each, plus 3+2+1+1+2 write flags.
+	if cases != 16+9 {
+		t.Fatalf("exercised %d (table, privilege) cases, want 25: the manifest changed without this test", cases)
 	}
 }
 

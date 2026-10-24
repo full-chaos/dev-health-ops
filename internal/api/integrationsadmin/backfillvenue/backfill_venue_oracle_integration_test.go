@@ -184,10 +184,14 @@ ORDER BY u.integration_id::text, u.source_id::text, u.dataset_key, u.since_at`, 
 		t.Fatalf("the untagged source: %v", err)
 	}
 	untaggedIntegration := v.get("untagged").id.String()
-	droppedEmptyWindowRows, droppedEmptyWindows := venueoracle.DropFrozenEmptyBackfillWindows(golden.InspectRows(t, "sync_run_units"))
+	pythonUnitRows := golden.InspectRows(t, "sync_run_units")
+	droppedEmptyWindowRows, droppedEmptyWindows := venueoracle.DropFrozenEmptyBackfillWindows(pythonUnitRows)
 	for _, table := range compare {
 		goRows := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), table.query)
-		pythonRows := golden.InspectRows(t, table.name)
+		pythonRows := pythonUnitRows
+		if table.name != "sync_run_units" {
+			pythonRows = golden.InspectRows(t, table.name)
+		}
 		// Declared divergences of the Go backfill planner: it ends each window where the next one starts (Python ends
 		// it 1 microsecond earlier), and it does not plan the empty last window Python plans when a request ends at
 		// UTC midnight (the run counts those units fewer). Only those differences are removed; every other column

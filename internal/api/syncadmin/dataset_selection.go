@@ -14,6 +14,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
+	schedsync "github.com/full-chaos/dev-health-ops/internal/scheduler/sync"
 )
 
 // The dataset row is the single owner of "which datasets of an integration
@@ -276,6 +277,7 @@ func deriveShownTargets(ctx context.Context, read func(context.Context, string, 
 		}
 		config.shownTargets = shownTargets(config.Provider, enabled[*config.IntegrationID], storedListItems(stored))
 		config.shownTargetsSet = true
+		config.enabledDatasetKeys = enabled[*config.IntegrationID]
 	}
 	return nil
 }
@@ -391,4 +393,52 @@ func recordSelectionChange(ctx context.Context, logger *slog.Logger, orgID strin
 		logger.InfoContext(ctx, "sync_config_dataset_rows_changed", "org_id", orgID, "integration_id", integrationID.String(),
 			"provider", provider, "enabled_dataset_keys", strings.Join(enabled, ","), "disabled_dataset_keys", strings.Join(disabled, ","))
 	}
+}
+
+// deriveSkippedDatasets sets, on every active config whose enabled dataset rows
+// include one that needs the canonical-incident feature, the datasets the
+// plan leaves out while the feature is off, in the entry shape a run's result
+// carries. It reads the feature decision once, and only when a config holds
+// such a dataset. It runs after deriveShownTargets (which sets the keys).
+// A run's own result is a separate answer on the run routes; this one is the
+// configuration's current state, so a configuration whose every dataset is
+// gated, which mints no run, still says why.
+func (h *handlers) deriveSkippedDatasets(ctx context.Context, org string, configs ...*syncConfig) error {
+	gated := map[*syncConfig][]string{}
+	for _, config := range configs {
+		if !config.IsActive {
+			continue
+		}
+		for _, key := range config.enabledDatasetKeys {
+			if schedsync.PlanDatasetRequiresCanonicalIncident(config.Provider, key) {
+				gated[config] = append(gated[config], key)
+			}
+		}
+	}
+	if len(gated) == 0 {
+		return nil
+	}
+	allowed, err := h.canonicalIncidentEnabled(ctx, org)
+	if err != nil {
+		return err
+	}
+	if allowed {
+		return nil
+	}
+	for config, keys := range gated {
+		config.skippedDatasets = schedsync.SkippedDatasetsResult(keys)
+	}
+	return nil
+}
+
+func skippedDatasetsValue(entries []map[string]string) []pyjson.Value {
+	out := make([]pyjson.Value, 0, len(entries))
+	for _, entry := range entries {
+		object := pyjson.NewObject()
+		for _, field := range []string{"dataset_key", "reason", "message"} {
+			object.Set(field, entry[field])
+		}
+		out = append(out, object)
+	}
+	return out
 }

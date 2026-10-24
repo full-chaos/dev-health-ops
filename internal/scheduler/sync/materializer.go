@@ -2138,7 +2138,7 @@ func persistDomainGraph(ctx context.Context, tx pgx.Tx, ids materializationIDs, 
 		completedAt = pointerTime(createdAt)
 		runError = &loaded.terminalReason
 		resultJSON = []byte(`{"error_category":"pagerduty_sync_disabled"}`)
-	} else if skipped := skippedDatasetsResult(loaded.featureOffSkippedDatasetKeys); skipped != nil {
+	} else if skipped := SkippedDatasetsResult(loaded.featureOffSkippedDatasetKeys); skipped != nil {
 		encoded, err := json.Marshal(map[string]any{"skipped_datasets": skipped})
 		if err != nil {
 			return fmt.Errorf("encode skipped datasets: %w", err)

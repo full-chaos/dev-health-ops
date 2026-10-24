@@ -32,6 +32,7 @@ internal/api/credentials	probes.go	internal/apiservice/externalingestvenue
 internal/api/credentials	probes.go	internal/apiservice/metricsvenue
 internal/api/credentials	probes.go	internal/apiservice/ownershipvenue
 internal/api/credentials	probes.go	internal/apiservice/ssovenue
+internal/api/credentials	probes.go	internal/auth/authapi
 internal/api/credentials	probes.go	internal/billingcli
 internal/apiservice	githubapp_config.go	cmd/dho
 internal/apiservice	githubapp_config.go	internal/api/githubapp
@@ -54,12 +55,14 @@ internal/apiservice	githubapp_config.go	internal/apiservice/externalingestvenue
 internal/apiservice	githubapp_config.go	internal/apiservice/metricsvenue
 internal/apiservice	githubapp_config.go	internal/apiservice/ownershipvenue
 internal/apiservice	githubapp_config.go	internal/apiservice/ssovenue
+internal/apiservice	githubapp_config.go	internal/auth/authapi
 internal/auth/contracts	contracts.go	cmd/auth-migrate
 internal/auth/contracts	contracts.go	cmd/auth-service
 internal/auth/contracts	contracts.go	cmd/dho
 internal/auth/contracts	contracts.go	internal/api/billing
 internal/auth/contracts	contracts.go	internal/api/externalingest
 internal/auth/contracts	contracts.go	internal/api/legacyingest
+internal/auth/contracts	contracts.go	internal/api/usersowned
 internal/auth/contracts	contracts.go	internal/api/webhookintake
 internal/auth/contracts	contracts.go	internal/apiservice
 internal/auth/contracts	contracts.go	internal/apiservice/acr
@@ -79,9 +82,11 @@ internal/auth/contracts	contracts.go	internal/auth/identity/saml
 internal/auth/contracts	contracts.go	internal/auth/identity/social
 internal/auth/contracts	contracts.go	internal/auth/keyrotation
 internal/auth/contracts	contracts.go	internal/auth/linkmail
+internal/auth/contracts	contracts.go	internal/auth/passwordpolicy
 internal/auth/contracts	contracts.go	internal/auth/policycatalog
 internal/auth/contracts	contracts.go	internal/auth/session
 internal/auth/contracts	contracts.go	internal/auth/usersbackfill
+internal/auth/contracts	contracts.go	internal/cigates/chartgates
 internal/auth/contracts	contracts.go	internal/platform/logging
 internal/auth/contracts	contracts.go	internal/queryapi/server
 internal/auth/contracts	contracts.go	internal/testsupport/usertokens
@@ -100,6 +105,7 @@ internal/auth/contracts/tokencorpus	corpus.go	internal/testsupport/usertokens
 internal/auth/keystore	open_unix.go	cmd/auth-migrate
 internal/auth/keystore	open_unix.go	cmd/auth-service
 internal/auth/keystore	open_unix.go	cmd/dho
+internal/auth/keystore	open_unix.go	deploy/helm/dev-health
 internal/auth/keystore	open_unix.go	internal/api/billing
 internal/auth/keystore	open_unix.go	internal/api/externalingest
 internal/auth/keystore	open_unix.go	internal/api/legacyingest
@@ -109,6 +115,7 @@ internal/auth/keystore	open_unix.go	internal/auth/authapi
 internal/auth/keystore	open_unix.go	internal/auth/authruntime
 internal/auth/keystore	open_unix.go	internal/auth/keyrotation
 internal/auth/keystore	open_unix.go	internal/auth/keystore
+internal/auth/keystore	open_unix.go	internal/cigates/chartgates
 internal/auth/keystore	open_unix.go	internal/queryapi/server
 internal/auth/keystore	open_unix.go	internal/token
 internal/cigates	governance.go	cmd/cigate
@@ -291,6 +298,7 @@ internal/jobcontract	registry.go	internal/apiservice/externalingestvenue
 internal/jobcontract	registry.go	internal/apiservice/metricsvenue
 internal/jobcontract	registry.go	internal/apiservice/ownershipvenue
 internal/jobcontract	registry.go	internal/apiservice/ssovenue
+internal/jobcontract	registry.go	internal/auth/authapi
 internal/jobcontract	registry.go	internal/cigates/queuecreds
 internal/jobcontract	registry.go	internal/clicredentials
 internal/jobcontract	registry.go	internal/contractcheck
@@ -360,6 +368,7 @@ internal/mail	sender.go	internal/apiservice/externalingestvenue
 internal/mail	sender.go	internal/apiservice/metricsvenue
 internal/mail	sender.go	internal/apiservice/ownershipvenue
 internal/mail	sender.go	internal/apiservice/ssovenue
+internal/mail	sender.go	internal/auth/authapi
 internal/mail	sender.go	internal/auth/authruntime
 internal/mail	sender.go	internal/fixturescli
 internal/mail	sender.go	internal/mail
@@ -403,6 +412,7 @@ internal/platform/secrets	source.go	internal/apiservice/externalingestvenue
 internal/platform/secrets	source.go	internal/apiservice/metricsvenue
 internal/platform/secrets	source.go	internal/apiservice/ownershipvenue
 internal/platform/secrets	source.go	internal/apiservice/ssovenue
+internal/platform/secrets	source.go	internal/auth/authapi
 internal/platform/secrets	source.go	internal/auth/authconfig
 internal/platform/secrets	source.go	internal/auth/authruntime
 internal/platform/secrets	source.go	internal/auth/usersbackfill
@@ -459,6 +469,7 @@ internal/providerfoundation	clients.go	internal/apiservice/externalingestvenue
 internal/providerfoundation	clients.go	internal/apiservice/metricsvenue
 internal/providerfoundation	clients.go	internal/apiservice/ownershipvenue
 internal/providerfoundation	clients.go	internal/apiservice/ssovenue
+internal/providerfoundation	clients.go	internal/auth/authapi
 internal/providerfoundation	clients.go	internal/billingcli
 internal/providerfoundation	clients.go	internal/fixturescli
 internal/providerfoundation	clients.go	internal/jobs/providerunit
@@ -709,6 +720,7 @@ internal/testsupport/venueoracle	golden_walk.go	internal/testsupport/venueoracle
 internal/testsupport/venueoracle	golden_walk.go	internal/testsupport/venueoracle/goldenhygiene
 internal/testsupport/venueoracle	golden_walk.go	internal/workerservice
 internal/testsupport/venueoracle	gopin.go	internal/adminops
+internal/testsupport/venueoracle	gopin.go	internal/api/githubapp
 internal/testsupport/venueoracle	gopin.go	internal/api/syncadmin
 internal/testsupport/venueoracle	gopin.go	internal/api/teamsidentity/adminstampvenue
 internal/testsupport/venueoracle	gopin.go	internal/apiservice

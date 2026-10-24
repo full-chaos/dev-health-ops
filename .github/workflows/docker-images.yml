@@ -2,7 +2,7 @@ name: Build Docker images
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
   merge_group:
   push:
     branches:
@@ -93,7 +93,7 @@ concurrency:
   # The CHAOS-4921 protection itself is unchanged: two different commits'
   # pushes to main, or two merge_group entries, still never share a group
   # and so can never cancel or displace each other's image build.
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event.inputs.ref || ((github.ref == 'refs/heads/main' || github.event_name == 'merge_group') && github.sha) || github.ref }}
+  group: ${{ github.workflow }}${{ github.event.action == 'labeled' && github.event.label.name != 'hotfix-image' && '-other-label' || '' }}-${{ github.event.pull_request.number || github.event.inputs.ref || ((github.ref == 'refs/heads/main' || github.event_name == 'merge_group') && github.sha) || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref != 'refs/heads/main') }}
 
 permissions:
@@ -103,6 +103,9 @@ permissions:
 
 jobs:
   changes:
+    # CHAOS-10923: the `labeled` trigger exists for `hotfix-image` only; any other label skips this whole workflow
+    # (every build job needs `changes`) and sits in its own concurrency group, so it never cancels a real PR run.
+    if: (github.event_name != 'pull_request' && github.event_name != 'merge_group') || github.event.action != 'labeled' || github.event.label.name == 'hotfix-image'
     runs-on: ubuntu-latest
     outputs:
       code: ${{ steps.filter.outputs.code }}
@@ -133,6 +136,53 @@ jobs:
               # reported success and the registry stayed empty.
               - '.github/workflows/docker-images.yml'
 
+  # CHAOS-10923 (hotfix images). Two decisions, both made by ci/image_promote.sh, both fail closed:
+  #  - pull_request: a PR labelled `hotfix-image` (same-repo head, write access for the actor and the pusher) pushes its
+  #    images as tree-<head tree> and attests their build provenance. No other tag, never latest.
+  #  - push to main: when every family has a tree-<merge tree> image whose provenance proves a pull_request run of THIS
+  #    workflow on the merged PR's head, and the tree equals the merge commit's tree, the digest is copied to
+  #    sha-<merge7> (no rebuild) and the build jobs skip. Any miss builds on main as today.
+  resolve:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      pull-requests: read
+      attestations: read
+    outputs:
+      hotfix: ${{ steps.decide.outputs.hotfix }}
+      promoted: ${{ steps.decide.outputs.promoted }}
+      tree: ${{ steps.decide.outputs.tree }}
+      sha: ${{ steps.decide.outputs.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Log in to GitHub Container Registry
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Decide hotfix push or promotion
+        id: decide
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT_NAME: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          SHA: ${{ github.sha }}
+          REPO: ${{ github.repository }}
+          OWNER: ${{ github.repository_owner }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          ACTORS: ${{ github.triggering_actor }} ${{ github.event.sender.login }} ${{ github.event.pull_request.user.login }}
+        run: |
+          if [[ "${EVENT_NAME}" == "pull_request" ]]; then
+            bash ci/image_promote.sh gate
+          else
+            bash ci/image_promote.sh promote
+          fi
+
   # ---------------------------------------------------------------------------
   # Go runtime images (CHAOS-3923)
   #
@@ -149,7 +199,7 @@ jobs:
   # ---------------------------------------------------------------------------
   go-build:
     name: Build Go Image
-    needs: [changes]
+    needs: [changes, resolve]
     # CHAOS-4921 M2: a push to MAIN always builds, whatever the paths filter says.
     #
     # The filter decides whether a change is RELEVANT. On a PR that is the right
@@ -169,8 +219,10 @@ jobs:
       (!(github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) &&
       (github.event_name == 'workflow_dispatch' ||
       github.event_name == 'release' ||
+      github.event_name == 'merge_group' ||
       (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
-      needs.changes.outputs.code == 'true')
+      needs.changes.outputs.code == 'true') &&
+      needs.resolve.outputs.promoted != 'true'
     runs-on: ${{ matrix.runner }}
     # Every matrix leg checks out the SAME ref, so they all resolve the
     # same commit -- reusing the existing `commit` output is safe here
@@ -198,7 +250,7 @@ jobs:
             # Falls back to ubuntu-latest (x64): docker/build-push-action's
             # `platforms:` cross-builds via buildx/QEMU on x64 same as any
             # other foreign-platform target in this workflow.
-            runner: ${{ (vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')) && fromJSON('["self-hosted","oci-arc-runners"]') || 'ubuntu-latest' }}
+            runner: ${{ ((vars.SELF_HOSTED_IMAGE_BUILDS == 'enabled' || vars.SELF_HOSTED_RUNNERS == 'enabled') && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')) && fromJSON('["self-hosted","oci-arc-runners"]') || 'ubuntu-latest' }}
         # CHAOS-4906 (runner contract v1.6): (dho, linux/arm64) is built
         # by the dedicated go-build-dho-arm64/-self-hosted pair below
         # instead -- the self-hosted-pool pilot for this workflow (re-added
@@ -293,20 +345,20 @@ jobs:
           # setting the same key (team-lead review) -- docker/Dockerfile
           # (the Python image) was the one actually missing this mechanism,
           # now fixed to match this file's own pattern instead.
-          outputs: type=image,push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true') }}
+          outputs: type=image,push-by-digest=true,name-canonical=true,push=${{ ((github.event_name != 'pull_request' && github.event_name != 'merge_group') && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true')) || needs.resolve.outputs.hotfix == 'true' }}
           cache-from: type=gha
           # A dispatch-supplied ref is untrusted code: it must not write the shared gha cache (cigates/cachepoison).
           cache-to: ${{ github.event.inputs.ref == '' && 'type=gha,mode=max' || '' }}
 
       - name: Export digest
-        if: github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true')
+        if: ((github.event_name != 'pull_request' && github.event_name != 'merge_group') && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true')) || needs.resolve.outputs.hotfix == 'true'
         run: |
           mkdir -p /tmp/digests
           digest="${{ steps.build.outputs.digest }}"
           touch "/tmp/digests/${digest#sha256:}"
 
       - name: Upload digest
-        if: github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true')
+        if: ((github.event_name != 'pull_request' && github.event_name != 'merge_group') && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true')) || needs.resolve.outputs.hotfix == 'true'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: digests-go-${{ matrix.target }}-${{ strategy.job-index }}
@@ -337,7 +389,7 @@ jobs:
   # a container, in isolation, before the real build leg risks a
   # registry write.
   dind-smoke-test:
-    if: (!(github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) && (vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule'))
+    if: (!(github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) && ((vars.SELF_HOSTED_IMAGE_BUILDS == 'enabled' || vars.SELF_HOSTED_RUNNERS == 'enabled') && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule'))
     runs-on: [self-hosted, oci-arc-runners]
     timeout-minutes: 5
     steps:
@@ -411,18 +463,21 @@ jobs:
   # confirmed broken.
   go-build-dho-arm64:
     name: go-build-dho-arm64
-    needs: [changes, dind-smoke-test]
+    needs: [changes, resolve, dind-smoke-test]
     if: >-
       (!(github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) &&
       (always() &&
       needs.changes.result == 'success' &&
+      needs.resolve.result == 'success' &&
+      needs.resolve.outputs.promoted != 'true' &&
       needs.dind-smoke-test.result != 'failure' &&
       needs.dind-smoke-test.result != 'cancelled' &&
       (github.event_name == 'workflow_dispatch' ||
       github.event_name == 'release' ||
+      github.event_name == 'merge_group' ||
       (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
       needs.changes.outputs.code == 'true'))
-    runs-on: ${{ (vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')) && fromJSON('["self-hosted","oci-arc-runners"]') || 'ubuntu-latest' }}
+    runs-on: ${{ ((vars.SELF_HOSTED_IMAGE_BUILDS == 'enabled' || vars.SELF_HOSTED_RUNNERS == 'enabled') && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')) && fromJSON('["self-hosted","oci-arc-runners"]') || 'ubuntu-latest' }}
     timeout-minutes: 25
     steps:
       - name: Checkout code
@@ -490,20 +545,20 @@ jobs:
             BUILD_TIME=${{ steps.versioning.outputs.build_time }}
             SOURCE_DATE_EPOCH=${{ steps.versioning.outputs.source_date_epoch }}
           tags: ghcr.io/${{ github.repository_owner }}/dev-health-go-dho
-          outputs: type=image,push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true') }}
+          outputs: type=image,push-by-digest=true,name-canonical=true,push=${{ ((github.event_name != 'pull_request' && github.event_name != 'merge_group') && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true')) || needs.resolve.outputs.hotfix == 'true' }}
           cache-from: type=gha
           # A dispatch-supplied ref is untrusted code: it must not write the shared gha cache (cigates/cachepoison).
           cache-to: ${{ github.event.inputs.ref == '' && 'type=gha,mode=max' || '' }}
 
       - name: Export digest
-        if: github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true')
+        if: ((github.event_name != 'pull_request' && github.event_name != 'merge_group') && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true')) || needs.resolve.outputs.hotfix == 'true'
         run: |
           mkdir -p /tmp/digests
           digest="${{ steps.build.outputs.digest }}"
           touch "/tmp/digests/${digest#sha256:}"
 
       - name: Upload digest
-        if: github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true')
+        if: ((github.event_name != 'pull_request' && github.event_name != 'merge_group') && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true')) || needs.resolve.outputs.hotfix == 'true'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: digests-go-dho-arm64-self-hosted
@@ -514,7 +569,12 @@ jobs:
   go-merge:
     name: Merge Go Digests
     runs-on: ubuntu-latest
-    needs: [go-build, go-build-dho-arm64]
+    needs: [go-build, go-build-dho-arm64, resolve]
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
     # go-build-dho-arm64's former hosted twin was dropped (chris
     # 2026-09-04 16:59: ubuntu-26.04-arm was never a real hosted label) --
     # one job id now, so there is no "both legs skipped" ambiguity to guard
@@ -535,7 +595,7 @@ jobs:
       needs.go-build.result == 'success' &&
       needs.go-build-dho-arm64.result != 'failure' &&
       needs.go-build-dho-arm64.result != 'cancelled' &&
-      github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true')
+      (((github.event_name != 'pull_request' && github.event_name != 'merge_group') && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true')) || needs.resolve.outputs.hotfix == 'true')
     # CHAOS-4947: passes the built commit through to the fan-in job.
     outputs:
       sha: ${{ needs.go-build.outputs.sha }}
@@ -573,9 +633,9 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository_owner }}/dev-health-go-${{ matrix.target }}
           tags: |
-            type=ref,event=pr
+            type=raw,value=tree-${{ needs.resolve.outputs.tree }},enable=${{ needs.resolve.outputs.hotfix == 'true' }}
             type=semver,pattern={{version}}
-            type=sha,format=short
+            type=sha,format=short,enable=${{ (github.event_name != 'pull_request' && github.event_name != 'merge_group') }}
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
@@ -594,6 +654,22 @@ jobs:
         run: |
           docker buildx imagetools inspect ghcr.io/${{ github.repository_owner }}/dev-health-go-${{ matrix.target }}:${{ steps.meta.outputs.version }}
 
+      - name: Resolve the tree image digest (hotfix provenance subject)
+        id: provenance_digest
+        if: needs.resolve.outputs.hotfix == 'true'
+        run: |
+          digest="$(docker buildx imagetools inspect ghcr.io/${{ github.repository_owner }}/dev-health-go-${{ matrix.target }}:tree-${{ needs.resolve.outputs.tree }} --format '{{json .}}' | jq -r '.manifest.digest // empty')"
+          [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::no digest for the tree image"; exit 1; }
+          echo "digest=${digest}" >> "$GITHUB_OUTPUT"
+
+      - name: Attest build provenance (hotfix image)
+        if: needs.resolve.outputs.hotfix == 'true'
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ghcr.io/${{ github.repository_owner }}/dev-health-go-${{ matrix.target }}
+          subject-digest: ${{ steps.provenance_digest.outputs.digest }}
+          push-to-registry: true
+
   # CHAOS-5666: go-api-routing and go-api-prove had no publish job at all --
   # only hand-built tags existed in the package (sha-44f758e8b,
   # sha-b36d2dad35f3), and every query-api image bump changes the posture
@@ -603,7 +679,7 @@ jobs:
   # target matrix needed; otherwise the go-build/go-merge shape.
   go-api-tools-build:
     name: Build go-api-tools Image
-    needs: [changes]
+    needs: [changes, resolve]
     # Same push-on-main-regardless-of-filter rule as go-build
     # above (CHAOS-4921 M2): the artefact for this commit must exist
     # whatever the paths filter says.
@@ -611,8 +687,10 @@ jobs:
       (!(github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) &&
       (github.event_name == 'workflow_dispatch' ||
       github.event_name == 'release' ||
+      github.event_name == 'merge_group' ||
       (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
-      needs.changes.outputs.code == 'true')
+      needs.changes.outputs.code == 'true') &&
+      needs.resolve.outputs.promoted != 'true'
     runs-on: ${{ matrix.runner }}
     outputs:
       sha: ${{ steps.versioning.outputs.commit }}
@@ -627,7 +705,7 @@ jobs:
             # Same ARC-pool-or-x64+QEMU-fallback routing as go-build's
             # arm64 leg above -- ubuntu-26.04-arm is not a real hosted label
             # (chris 2026-09-04 16:59).
-            runner: ${{ (vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')) && fromJSON('["self-hosted","oci-arc-runners"]') || 'ubuntu-latest' }}
+            runner: ${{ ((vars.SELF_HOSTED_IMAGE_BUILDS == 'enabled' || vars.SELF_HOSTED_RUNNERS == 'enabled') && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')) && fromJSON('["self-hosted","oci-arc-runners"]') || 'ubuntu-latest' }}
 
     steps:
       - name: Checkout code
@@ -686,7 +764,7 @@ jobs:
             BUILD_TIME=${{ steps.versioning.outputs.build_time }}
             SOURCE_DATE_EPOCH=${{ steps.versioning.outputs.source_date_epoch }}
           tags: ghcr.io/${{ github.repository_owner }}/dev-health-go-api-tools
-          outputs: type=image,push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true') }}
+          outputs: type=image,push-by-digest=true,name-canonical=true,push=${{ ((github.event_name != 'pull_request' && github.event_name != 'merge_group') && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true')) || needs.resolve.outputs.hotfix == 'true' }}
           cache-from: type=gha
           # A dispatch-supplied ref is untrusted code: it must not write the shared gha cache (cigates/cachepoison).
           cache-to: ${{ github.event.inputs.ref == '' && 'type=gha,mode=max' || '' }}
@@ -713,14 +791,14 @@ jobs:
         run: docker run --rm --entrypoint test ghcr.io/full-chaos/go-api-tools-ca-check:local -s /etc/ssl/certs/ca-certificates.crt
 
       - name: Export digest
-        if: github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true')
+        if: ((github.event_name != 'pull_request' && github.event_name != 'merge_group') && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true')) || needs.resolve.outputs.hotfix == 'true'
         run: |
           mkdir -p /tmp/digests
           digest="${{ steps.build.outputs.digest }}"
           touch "/tmp/digests/${digest#sha256:}"
 
       - name: Upload digest
-        if: github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true')
+        if: ((github.event_name != 'pull_request' && github.event_name != 'merge_group') && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true')) || needs.resolve.outputs.hotfix == 'true'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: digests-go-api-tools-${{ strategy.job-index }}
@@ -734,8 +812,13 @@ jobs:
   go-api-tools-merge:
     name: Merge go-api-tools Digests
     runs-on: ubuntu-latest
-    needs: go-api-tools-build
-    if: github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true')
+    needs: [go-api-tools-build, resolve]
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    if: ((github.event_name != 'pull_request' && github.event_name != 'merge_group') && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true')) || needs.resolve.outputs.hotfix == 'true'
     outputs:
       sha: ${{ needs.go-api-tools-build.outputs.sha }}
     steps:
@@ -759,9 +842,9 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository_owner }}/dev-health-go-api-tools
           tags: |
-            type=ref,event=pr
+            type=raw,value=tree-${{ needs.resolve.outputs.tree }},enable=${{ needs.resolve.outputs.hotfix == 'true' }}
             type=semver,pattern={{version}}
-            type=sha,format=short
+            type=sha,format=short,enable=${{ (github.event_name != 'pull_request' && github.event_name != 'merge_group') }}
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
@@ -779,6 +862,22 @@ jobs:
       - name: Inspect image
         run: |
           docker buildx imagetools inspect ghcr.io/${{ github.repository_owner }}/dev-health-go-api-tools:${{ steps.meta.outputs.version }}
+
+      - name: Resolve the tree image digest (hotfix provenance subject)
+        id: provenance_digest
+        if: needs.resolve.outputs.hotfix == 'true'
+        run: |
+          digest="$(docker buildx imagetools inspect ghcr.io/${{ github.repository_owner }}/dev-health-go-api-tools:tree-${{ needs.resolve.outputs.tree }} --format '{{json .}}' | jq -r '.manifest.digest // empty')"
+          [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::no digest for the tree image"; exit 1; }
+          echo "digest=${digest}" >> "$GITHUB_OUTPUT"
+
+      - name: Attest build provenance (hotfix image)
+        if: needs.resolve.outputs.hotfix == 'true'
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ghcr.io/${{ github.repository_owner }}/dev-health-go-api-tools
+          subject-digest: ${{ steps.provenance_digest.outputs.digest }}
+          push-to-registry: true
 
   # ---------------------------------------------------------------------------
   # CHAOS-4947: one moving-tag decision, made ONCE, for every family.
@@ -808,7 +907,7 @@ jobs:
   fan-in-latest:
     name: Apply moving tags (fan-in)
     runs-on: ubuntu-latest
-    needs: [go-merge, go-api-tools-merge]
+    needs: [go-merge, go-api-tools-merge, resolve]
     # go-merge and go-build-dho-arm64 already tolerate dind-smoke-test
     # being skipped (self-hosted runners unavailable, or a fork PR) via
     # their own always() + explicit needs.*.result gate. That is not
@@ -839,9 +938,11 @@ jobs:
     # latest/main over an incomplete image set.
     if: >-
       always() &&
-      needs.go-merge.result == 'success' &&
-      needs.go-api-tools-merge.result == 'success' &&
-      github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true')
+      needs.resolve.result == 'success' &&
+      (needs.resolve.outputs.promoted == 'true' ||
+      (needs.go-merge.result == 'success' &&
+      needs.go-api-tools-merge.result == 'success')) &&
+      (github.event_name != 'pull_request' && github.event_name != 'merge_group') && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true')
     # team-lead (CHAOS-4947 review): the re-read-immediately-before-tagging
     # inside the step below NARROWS the cross-run race, it doesn't close
     # it -- two fan-in runs at different commits can both pass their own
@@ -890,7 +991,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-          ref: ${{ needs.go-merge.outputs.sha }}
+          ref: ${{ needs.resolve.outputs.promoted == 'true' && needs.resolve.outputs.sha || needs.go-merge.outputs.sha }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@594f3bf4285d9ea8dc53c9a0c9c4092420091003 # v4.4.0
@@ -926,7 +1027,7 @@ jobs:
       - name: Apply latest/branch tags to every family whose ancestry allows it
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          BUILT_SHA: ${{ needs.go-merge.outputs.sha }}
+          BUILT_SHA: ${{ needs.resolve.outputs.promoted == 'true' && needs.resolve.outputs.sha || needs.go-merge.outputs.sha }}
           OWNER: ${{ github.repository_owner }}
           IS_RELEASE: ${{ github.event_name == 'release' && !github.event.release.prerelease }}
           # codex round 1 (P1, docker-images.yml:714 at bc1e9c30): github.ref
@@ -1321,6 +1422,14 @@ jobs:
                 continue
               fi
               base_sha="${amd64_rev}"
+            fi
+
+            # CHAOS-10923: a promoted hotfix image keeps the label of the PR head commit, which a squash merge never
+            # puts in main's history. An absent commit is not "not a descendant": use the digest walk below, where
+            # sha-<merge7> carries the same digest.
+            if [ -n "${base_sha}" ] && ! git cat-file -e "${base_sha}^{commit}" 2>/dev/null; then
+              echo "NOTE ${family}: :latest revision ${base_sha} is not in this clone (promoted PR head), resolving it by digest walk"
+              base_sha=""
             fi
 
             if [ -z "${base_sha}" ]; then

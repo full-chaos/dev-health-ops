@@ -50,6 +50,9 @@ func TestTableShapeGuardsReadEveryEngineSpelling(t *testing.T) {
 		{"cloud shared no version", func(string) string { return "SharedReplacingMergeTree(" + shapeCloudPath + ") ORDER BY x" }, false},
 		{"cloud shared MergeTree", func(string) string { return "SharedMergeTree(" + shapeCloudPath + ") ORDER BY x" }, false},
 		{"cloud shared without replication arguments", func(c string) string { return "SharedReplacingMergeTree(" + c + ") ORDER BY x" }, false},
+		{"collapsing sign column", func(string) string { return "CollapsingMergeTree(sign) ORDER BY x" }, false},
+		{"cloud shared collapsing sign column", func(string) string { return "SharedCollapsingMergeTree(" + shapeCloudPath + ", sign) ORDER BY x" }, false},
+		{"cloud shared summing column tuple", func(string) string { return "SharedSummingMergeTree(" + shapeCloudPath + ", (a, b)) ORDER BY x" }, false},
 		{"unparseable", func(c string) string { return "SharedReplacingMergeTree('/p', '{r}', " + c }, false},
 	}
 	for _, form := range forms {

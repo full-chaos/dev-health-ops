@@ -2,6 +2,7 @@ package logging
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"log/slog"
@@ -24,7 +25,7 @@ func WithValueRedaction(inner slog.Handler, redact func(string) string) slog.Han
 	if isSlogBuiltinDefault(inner) {
 		inner = slog.NewTextHandler(log.Writer(), nil)
 	}
-	return valueRedactor{inner: inner, redact: redact}
+	return valueRedactor{inner: keyScrubber{inner: inner}, redact: redact}
 }
 
 // isSlogBuiltinDefault reports whether handler is slog's own default handler
@@ -81,10 +82,35 @@ func (h valueRedactor) attr(attr slog.Attr) slog.Attr {
 	case slog.KindAny:
 		switch typed := value.Any().(type) {
 		case error:
-			return slog.String(attr.Key, h.redact(typed.Error()))
+			return slog.String(attr.Key, h.redactGuarded(typed.Error))
+		case json.RawMessage, []byte, json.Marshaler:
+			return slog.Attr{Key: attr.Key, Value: redactStructured(typed)}
 		case fmt.Stringer:
-			return slog.String(attr.Key, h.redact(typed.String()))
+			return slog.String(attr.Key, h.redactGuarded(typed.String))
 		}
+		return slog.Attr{Key: attr.Key, Value: redactStructured(value.Any())}
 	}
 	return slog.Attr{Key: attr.Key, Value: value}
+}
+
+// redactStructured is attrRedactor.redactAny with the same panic guard attrRedactor.replace has: a value whose marshaler
+// panics is logged as a redaction failure.
+func redactStructured(value any) (result slog.Value) {
+	defer func() {
+		if recover() != nil {
+			result = slog.StringValue(redactionFailed)
+		}
+	}()
+	return attrRedactor{}.redactAny(value)
+}
+
+// redactGuarded redacts the text produced by text, and logs a redaction failure when text or the redactor panics (a panicking
+// Error or String method, or a nil pointer receiver).
+func (h valueRedactor) redactGuarded(text func() string) (result string) {
+	defer func() {
+		if recover() != nil {
+			result = redactionFailed
+		}
+	}()
+	return h.redact(text())
 }

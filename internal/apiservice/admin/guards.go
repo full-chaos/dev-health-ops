@@ -155,7 +155,7 @@ func (h *handlers) superuserGuardedWrite(ctx context.Context, w http.ResponseWri
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	respond := write(&superuserTx{h: h, ctx: ctx, w: w, user: user, requested: requested, route: route,
-		tx: tx, store: pgStore{Pool: tx, Now: h.store.Now}})
+		tx: tx, store: pgStore{Pool: tx, Now: h.store.Now, UsersOwned: h.store.UsersOwned}})
 	if respond == nil {
 		return
 	}

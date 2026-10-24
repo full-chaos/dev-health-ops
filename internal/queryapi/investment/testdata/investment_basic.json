@@ -24,7 +24,8 @@
       "thin_component"
     ],
     "stddev": 0.3,
-    "total": 20
+    "total": 20,
+    "uncategorized_count": 0
   },
   "subcategory_distribution": {
     "engineering.backend": 12.5,

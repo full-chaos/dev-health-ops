@@ -70,6 +70,9 @@ func changePasswordKey(r *http.Request) string {
 
 // changePassword is POST /api/v1/auth/change-password.
 func (h handlers) changePassword(w http.ResponseWriter, r *http.Request) {
+	if h.refuseWhileUsersOwned(w) {
+		return
+	}
 	ctx := r.Context()
 	caller := policy.UserFrom(ctx)
 	input, _ := ctx.Value(changePasswordInputKey{}).(changePasswordInput)

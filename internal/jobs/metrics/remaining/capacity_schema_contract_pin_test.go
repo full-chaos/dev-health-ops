@@ -35,7 +35,7 @@ import (
 func TestCapacityPhysicalContractMatchesMigrationHead(t *testing.T) {
 	const table = "work_item_metrics_daily"
 	requirement, ok := capacityTableRequirements[table]
-	if !ok || !requirement.readWithFINAL {
+	if !ok || !requirement.collapsedOnRead {
 		t.Fatalf("%s is no longer a table this probe reads with FINAL; this "+
 			"pin test is stale and should be retargeted or removed", table)
 	}

@@ -40,6 +40,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/auth/authconfig"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/platform/version"
@@ -178,6 +179,12 @@ func execute(
 		return 1
 	}
 
+	usersOwned, err := authconfig.UsersOwnedFromLookup(lookup)
+	if err != nil {
+		fmt.Fprintf(stderr, "configuration error: %v\n", err)
+		return 1
+	}
+
 	logger := logging.NewJSON(stderr, slog.LevelInfo)
 	if grantsOnly {
 		result, err := authschema.Grants(ctx, pool, authschema.Options{
@@ -185,6 +192,7 @@ func execute(
 			RuntimeRole:          runtimeRole,
 			SessionReaderRoles:   readers,
 			Logger:               logger,
+			UsersOwned:           usersOwned,
 			AcknowledgeNarrowing: strings.TrimSpace(*ackNarrowing),
 		})
 		if err != nil {
@@ -200,6 +208,7 @@ func execute(
 		RuntimeRole:        runtimeRole,
 		SessionReaderRoles: readers,
 		Logger:             logger,
+		UsersOwned:         usersOwned,
 
 		AcknowledgeNarrowing: strings.TrimSpace(*ackNarrowing),
 	})

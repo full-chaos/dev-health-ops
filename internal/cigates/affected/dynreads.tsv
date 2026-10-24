@@ -87,6 +87,7 @@ internal/auth/keystore	keystore_test.go
 internal/auth/keystore	open_unix.go
 internal/auth/session	credential_test.go
 internal/auth/writerinventory	scan_test.go
+internal/auth/writerinventory	usersowned_census_test.go
 internal/bigboycompose	billing_edge_override_test.go
 internal/bigboycompose	dsn_class_test.go
 internal/bigboycompose	restart_policy_test.go
@@ -246,6 +247,7 @@ internal/cigates/workflows	race_pool_routing_test.go
 internal/cigates/workflows	ttl_registry_test.go
 internal/cigates/workflows	workflows_common_test.go
 internal/cigates/workflows	workflows_go_integration_pr_scope_test.go
+internal/cigates/workflows	workflows_go_queue_skip_test.go
 internal/cigates/workflows	workflows_go_resolver_test.go
 internal/cigates/workflows	workflows_path_filters_test.go
 internal/clicredentials	opensites_test.go
@@ -304,6 +306,7 @@ internal/httpguard	origin_census_test.go
 internal/httpguard	redirect_sites_test.go
 internal/identityalias	resolver.go
 internal/ingressplanes	checkedin_test.go
+internal/ingressplanes	compose_bigboy_system_logs_test.go
 internal/ingressplanes	compose_stack_test.go
 internal/ingressplanes	compose_system_logs_test.go
 internal/ingressplanes	contract.go
@@ -493,6 +496,7 @@ internal/queryapi/server	reports_write_proof_venue_oracle_integration_test.go
 internal/queryapi/server	rest_error_response_test.go
 internal/queryapi/server	rest_routes_test.go
 internal/queryapi/server	result_row_bound_census_test.go
+internal/queryapi/server	schema_gate_test.go
 internal/queryapi/server	unrestricted_read_options_test.go
 internal/queryapi/server	workunit_explain_route_test.go
 internal/queryapi/server	workunits_route_test.go
@@ -535,6 +539,7 @@ internal/teamattribution	is_primary_census_test.go
 internal/teamcreated	census_test.go
 internal/teamprovider	census_test.go
 internal/teamresolve	golden_test.go
+internal/testsupport/authrows	golden_test.go
 internal/testsupport/chschema	contract_test.go
 internal/testsupport/goldenscan	tree.go
 internal/testsupport/goldenscan	vectors_test.go
@@ -569,6 +574,7 @@ internal/workersctl	compact_ownership_intervals_integration_test.go
 internal/workersctl	main_test.go
 internal/workersctl	operator_authority_inventory_test.go
 internal/workersctl	run_marker_open_test.go
+internal/workerservice	clickhouse_schema_gate_test.go
 internal/workerservice	daily_native_family_registration_test.go
 internal/workerservice	daily_no_repository_partition_integration_test.go
 internal/workerservice	daily_test.go

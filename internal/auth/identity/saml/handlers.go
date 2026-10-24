@@ -222,6 +222,10 @@ func (h Handlers) providerID(w http.ResponseWriter, r *http.Request) (uuid.UUID,
 	return id, true
 }
 
+// AccountExistsMessage is the 409 for an e-mail another account holds; it names
+// no sign-in method.
+const AccountExistsMessage = "An account with this email already exists. Please sign in with your existing sign-in method."
+
 // writeError maps a domain error to the go-api status and detail. Every
 // verification failure has the same detail.
 func (h Handlers) writeError(w http.ResponseWriter, r *http.Request, err error) {
@@ -239,14 +243,7 @@ func (h Handlers) writeError(w http.ResponseWriter, r *http.Request, err error) 
 	case errors.Is(err, ErrProviderInactive):
 		writeDetail(w, http.StatusBadRequest, "SSO provider is not active")
 	case errors.As(err, &conflict):
-		method := conflict.Method
-		if method == "" {
-			method = "your existing method"
-		}
-		writeJSON(w, http.StatusConflict, map[string]any{"detail": map[string]string{
-			"message":           "An account with this email already exists. Please sign in with " + method + ".",
-			"existing_provider": conflict.Method,
-		}})
+		writeJSON(w, http.StatusConflict, map[string]any{"detail": map[string]string{"message": AccountExistsMessage}})
 	case errors.Is(err, ErrSignupNotAvailable):
 		writeDetail(w, http.StatusForbidden, "Sign-up through SSO is not available")
 	case errors.Is(err, ErrAutoProvisionDisabled), errors.Is(err, ErrInvalidEmailAddress):

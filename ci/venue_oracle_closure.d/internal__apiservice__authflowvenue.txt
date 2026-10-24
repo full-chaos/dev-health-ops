@@ -36,12 +36,14 @@ internal/api/standinkey
 internal/api/syncadmin
 internal/api/teamsidentity
 internal/api/telemetry
+internal/api/usersowned
 internal/api/webhookintake
 internal/apiservice
 internal/apiservice/acr
 internal/apiservice/admin
 internal/apiservice/customerpush
 internal/auth/edgetoken
+internal/auth/emaildomain
 internal/auth/httpapi
 internal/auth/passwordhash
 internal/auth/passwordpolicy
@@ -122,6 +124,7 @@ internal/teamcreated
 internal/teamid
 internal/teamkeytables
 internal/teamprovider
+internal/testsupport/authrows
 internal/testsupport/containers
 internal/testsupport/moduleroot
 internal/testsupport/pydanticecho

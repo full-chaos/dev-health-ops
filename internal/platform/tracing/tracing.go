@@ -167,10 +167,26 @@ func InitWithServiceName(logger *slog.Logger, defaultName string) Component {
 var buildProvider = newProvider
 
 func newProvider(serviceName, environment, endpoint string, sampleRate float64) (*sdktrace.TracerProvider, error) {
-	exporter, err := otlptracegrpc.New(context.Background(), dialOptions(endpoint)...)
+	exporter, err := exporterFor(context.Background(), endpoint)
 	if err != nil {
 		return nil, err
 	}
+	return providerWithExporter(exporter, serviceName, environment, sampleRate)
+}
+
+// exporterFor builds the collector exporter; scrubWrap puts the scrub in front of it. Both are func values only so a
+// test can read what the production construction exports and can remove the scrub to show its test notices.
+var (
+	exporterFor = func(ctx context.Context, endpoint string) (sdktrace.SpanExporter, error) {
+		return otlptracegrpc.New(ctx, dialOptions(endpoint)...)
+	}
+	scrubWrap = func(exporter sdktrace.SpanExporter) sdktrace.SpanExporter {
+		return scrubExporter{SpanExporter: exporter}
+	}
+)
+
+// providerWithExporter is the one place a provider is built: every span reaches exporter through scrubExporter.
+func providerWithExporter(exporter sdktrace.SpanExporter, serviceName, environment string, sampleRate float64) (*sdktrace.TracerProvider, error) {
 	res, err := resource.New(context.Background(), resource.WithAttributes(
 		attribute.String("service.name", serviceName),
 		attribute.String("deployment.environment", environment),
@@ -182,7 +198,7 @@ func newProvider(serviceName, environment, endpoint string, sampleRate float64) 
 		sdktrace.WithResource(res),
 		sdktrace.WithSampler(countingSampler{inner: sdktrace.ParentBased(sampler(sampleRate)), counters: spanOutcomes}),
 		sdktrace.WithSpanProcessor(endCounter{counters: spanOutcomes}),
-		sdktrace.WithBatcher(countingExporter{SpanExporter: exporter, counters: spanOutcomes}),
+		sdktrace.WithBatcher(countingExporter{SpanExporter: scrubWrap(exporter), counters: spanOutcomes}),
 	)
 	return provider, nil
 }

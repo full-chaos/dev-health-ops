@@ -9,6 +9,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+
+	"github.com/full-chaos/dev-health-ops/internal/api/usersowned"
 )
 
 // errMultipleRows is SQLAlchemy's MultipleResultsFound from
@@ -80,8 +82,13 @@ func userByProvider(ctx context.Context, tx pgx.Tx, providerUserID, provider str
 }
 
 // touchLastLogin is setattr(user, "last_login_at", now) flushed: users has
-// an onupdate on updated_at, so the UPDATE writes it too.
+// an onupdate on updated_at, so the UPDATE writes it too. While auth-service
+// owns users it writes nothing: the sign-in goes on and auth-service owns the
+// last sign-in.
 func touchLastLogin(ctx context.Context, tx pgx.Tx, id uuid.UUID, now time.Time) error {
+	if usersowned.RefuseWhileUsersOwned(usersowned.On()) != nil {
+		return nil
+	}
 	_, err := tx.Exec(ctx, `UPDATE users SET last_login_at = $2, updated_at = $2 WHERE id = $1::uuid`, id, now.UTC())
 	return err
 }

@@ -42,7 +42,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/billing"
 	"github.com/full-chaos/dev-health-ops/internal/api/billing/stripeclient"
 	"github.com/full-chaos/dev-health-ops/internal/api/buildinfo"
-	"github.com/full-chaos/dev-health-ops/internal/api/clientip"
 	"github.com/full-chaos/dev-health-ops/internal/api/credentials"
 	"github.com/full-chaos/dev-health-ops/internal/api/externalingest"
 	"github.com/full-chaos/dev-health-ops/internal/api/githubapp"
@@ -276,6 +275,7 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 			Write:         WriteError,
 			Limits:        limits,
 			Invites:       deps.Invites,
+			UsersOwned:    deps.UsersOwned,
 		})...)
 	}
 	webhookintake.LogUnconfiguredSecrets(logger)
@@ -346,6 +346,10 @@ func RegisterOperatorMetrics(registry *health.Registry, deps *Deps) error {
 	if err := registry.RegisterMetrics("sync_config_dataset_selection", syncadmin.SelectionMetricsSource()); err != nil {
 		return err
 	}
+	// the sign-up mails by purpose and outcome.
+	if err := registry.RegisterMetrics("session_link_mail", session.MailMetricsSource()); err != nil {
+		return err
+	}
 	// CHAOS-10104: the triggers synchandoff.Mint refuses before any write.
 	if err := registry.RegisterMetrics("sync_manual_trigger_refused", synchandoff.RefusalMetricsSource()); err != nil {
 		return err
@@ -373,6 +377,11 @@ func configureWith(
 	if err != nil {
 		return nil, err
 	}
+	deps.UsersOwned, err = ParseUsersOwned(envsecrets.ProcessLookup, authProxy)
+	if err != nil {
+		closeComponents(depComponents)
+		return nil, dependencyFailure(ctx, logger, "api_users_owned", "api_users_owned_config_invalid", err)
+	}
 	deps.SessionIssuer, err = sessionIssuer(authProxy, envsecrets.ProcessLookup)
 	if err != nil {
 		closeComponents(depComponents)
@@ -389,9 +398,7 @@ func configureWith(
 		deps.Verifier, deps.Signer = protected.verifier, protected.signer
 		scope = []func(http.Handler) http.Handler{protected.scope.OrgScope, protected.scope.Impersonation}
 	}
-	if wide := clientip.WidePrefixes(); wide > 0 {
-		logger.Warn("api: the trusted proxy list holds prefixes wider than a /28", "count", wide)
-	}
+	logWideTrust(logger)
 	if err := RegisterOperatorMetrics(registry, &deps); err != nil {
 		closeComponents(depComponents)
 		return nil, err

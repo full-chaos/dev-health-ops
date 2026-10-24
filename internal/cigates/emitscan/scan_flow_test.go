@@ -41,6 +41,15 @@ func TestLabelOriginFlowsThroughPackageLocalCalls(t *testing.T) {
 			"func f(c metric.Int64Counter) {\n\trecord(c, []attribute.KeyValue{attribute.String(\"user_id\", \"S3CRET\")}, 0)\n}\n",
 		"method of a generic type": "type rec[T any] struct{ c metric.Int64Counter }\nfunc (r rec[T]) add(attrs []attribute.KeyValue) {\n\tr.c.Add(context.Background(), 1, metric.WithAttributes(attrs...))\n}\n" +
 			"func f(r rec[int]) {\n\tr.add([]attribute.KeyValue{attribute.String(\"user_id\", \"S3CRET\")})\n}\n",
+		"method expression on a generic type": "type rec[T any] struct{ c metric.Int64Counter }\nfunc (r rec[T]) add(attrs []attribute.KeyValue) {\n\tr.c.Add(context.Background(), 1, metric.WithAttributes(attrs...))\n}\n" +
+			"func f(r rec[int]) {\n\trec[int].add(r, []attribute.KeyValue{attribute.String(\"user_id\", \"S3CRET\")})\n}\n",
+		"method expression on a type name": "type rec struct{ c metric.Int64Counter }\nfunc (r rec) add(attrs []attribute.KeyValue) {\n\tr.c.Add(context.Background(), 1, metric.WithAttributes(attrs...))\n}\n" +
+			"func f(r rec) {\n\trec.add(r, []attribute.KeyValue{attribute.String(\"user_id\", \"S3CRET\")})\n}\n",
+		"method expression through a pointer type": "type rec[T any] struct{ c metric.Int64Counter }\nfunc (r *rec[T]) add(attrs []attribute.KeyValue) {\n\tr.c.Add(context.Background(), 1, metric.WithAttributes(attrs...))\n}\n" +
+			"func f(r rec[int]) {\n\t(*rec[int]).add(&r, []attribute.KeyValue{attribute.String(\"user_id\", \"S3CRET\")})\n}\n",
+		"method expression forwarding a parameter": "type rec[T any] struct{ c metric.Int64Counter }\nfunc (r rec[T]) add(attrs []attribute.KeyValue) {\n\tr.c.Add(context.Background(), 1, metric.WithAttributes(attrs...))\n}\n" +
+			"func outer(r rec[int], attrs []attribute.KeyValue) { rec[int].add(r, attrs) }\n" +
+			"func f(r rec[int]) {\n\touter(r, []attribute.KeyValue{attribute.String(\"user_id\", \"S3CRET\")})\n}\n",
 		"parenthesised callee": flowSink + "func f(c metric.Int64Counter) {\n\t(record)(c, []attribute.KeyValue{attribute.String(\"user_id\", \"S3CRET\")})\n}\n",
 		"name copied through a local": "func record(c metric.Int64Counter, attrs []attribute.KeyValue) {\n\tcopyOf := attrs\n\tc.Add(context.Background(), 1, metric.WithAttributes(copyOf...))\n}\n" +
 			"func f(c metric.Int64Counter) {\n\trecord(c, []attribute.KeyValue{attribute.String(\"user_id\", \"S3CRET\")})\n}\n",
@@ -103,6 +112,10 @@ func TestLabelFlowNamedLimits(t *testing.T) {
 		"a slice read from a parameter field": "type holder struct{ attrs []attribute.KeyValue }\n" +
 			"func record2(c metric.Int64Counter, h holder) {\n\tc.Add(context.Background(), 1, metric.WithAttributes(h.attrs...))\n}\n" +
 			"func f(c metric.Int64Counter, v string) {\n\trecord2(c, holder{attrs: " + plant + "})\n}\n",
+		"a function value bound to a name, from a generic function": "func record[T any](c metric.Int64Counter, attrs []attribute.KeyValue, t T) {\n\tc.Add(context.Background(), 1, metric.WithAttributes(attrs...))\n}\n" +
+			"func f(c metric.Int64Counter, v string) {\n\tg := record[int]\n\tg(c, " + plant + ", 0)\n}\n",
+		"a method value bound to a name": "type rec struct{ c metric.Int64Counter }\nfunc (r rec) add(attrs []attribute.KeyValue) {\n\tr.c.Add(context.Background(), 1, metric.WithAttributes(attrs...))\n}\n" +
+			"func f(r rec, v string) {\n\tg := r.add\n\tg(" + plant + ")\n}\n",
 		"a function value parameter": "func apply(do func([]attribute.KeyValue), v string) { do(" + plant + ") }\n",
 	}
 	for id, body := range cases {
@@ -152,5 +165,15 @@ func TestLabelFlowStaysCheapOnLongChains(t *testing.T) {
 	timed(t, "2000-name origin chain", time.Second, func() string { got = scanSource(t, header+names.String()); return "" })
 	if !hasFinding(got, "R2", "user_id") && !tripped(got) {
 		t.Errorf("findings = %v, want R2 user_id or the census finding", got)
+	}
+}
+
+// A package function and an indexed function value of the same name are told apart by name only: the call through the
+// value is read as a call of the function (a known false positive, noise accepted).
+func TestLabelFlowKnownFalsePositives(t *testing.T) {
+	body := "func m(c metric.Int64Counter, attrs []attribute.KeyValue) {\n\tc.Add(context.Background(), 1, metric.WithAttributes(attrs...))\n}\n" +
+		"func f(c metric.Int64Counter, m map[string]func(metric.Int64Counter, []attribute.KeyValue)) {\n\tm[\"x\"](c, []attribute.KeyValue{attribute.String(\"user_id\", \"S3CRET\")})\n}\n"
+	if got := scanSource(t, header+body); !hasFinding(got, "R2", "user_id") {
+		t.Errorf("findings = %v, want the known false positive R2 user_id", got)
 	}
 }

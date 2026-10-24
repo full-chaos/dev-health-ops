@@ -69,6 +69,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/api/usersowned"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
@@ -589,6 +590,11 @@ func (h handlers) oauthCallback(w http.ResponseWriter, r *http.Request) {
 		if errors.Is(err, errMembershipRequired) {
 			h.recordSSOAuthenticatedDenial(ctx, w, r, row.OrgID, providerID, err.Error(), http.StatusForbidden,
 				membershipRequiredDetail(), "oauth", "provisioning")
+			return
+		}
+		if errors.Is(err, usersowned.ErrRefused) {
+			h.recordSSOAuthenticatedDenial(ctx, w, r, row.OrgID, providerID, err.Error(), http.StatusConflict,
+				usersowned.Detail(), "oauth", "provisioning")
 			return
 		}
 		h.fail(w, r, "oauth provisioning", err)

@@ -96,10 +96,6 @@ func TestSessionCorpusExternalTarget(t *testing.T) {
 
 // stack is the Go route set on Postgres, ClickHouse and Valkey
 // containers, seeded with the scenario.
-// stackUsersOwned starts the stack with the users-owned switch on (go-api
-// session.Deps.UsersOwned); a test sets it and restores it.
-var stackUsersOwned bool
-
 type stack struct {
 	pool *pgxpool.Pool
 	pg   *containers.Instance
@@ -206,7 +202,7 @@ func startStackWithMailAndIssuer(t *testing.T, ctx context.Context, mail authmai
 	oauth.Endpoints = sessionscenario.ProviderEndpoints(fake.URL)
 	routes := session.Routes(session.Deps{Pool: routesPool, Guard: policy.NewGuard(auth, logger), Auth: auth, Verifier: verifier,
 		Signer: signer, Mail: mail, ClickHouse: chConn, Limits: httpapi.NewMemoryCounters(limiterNow), Write: apiservice.WriteError, OAuth: oauth, Logger: logger,
-		Issuer: issuer, UsersOwned: stackUsersOwned})
+		Issuer: issuer})
 	mux := http.NewServeMux()
 	for _, route := range routes {
 		mux.Handle(route.Method+" "+route.Pattern, route.Handler)

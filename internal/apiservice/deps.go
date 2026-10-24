@@ -194,6 +194,9 @@ type Deps struct {
 	// auth-service when it owns sessions (AUTH_PROXY_SESSIONS); nil mints
 	// them in go-api.
 	SessionIssuer sessionissue.Issuer
+	// UsersOwned is AUTH_USERS_OWNED: auth-service owns users, so the go-api
+	// routes and verbs that write public.users refuse.
+	UsersOwned bool
 	// Limits is the rate-limit store every limited route counts through
 	// (see limitStore); nil means the Valkey-backed store when Valkey is
 	// configured, else an in-process one.

@@ -83,6 +83,9 @@ func validateResetPassword(w http.ResponseWriter, r *http.Request) (*http.Reques
 
 // verify is GET /api/v1/auth/verify (verify.py verify_email).
 func (h handlers) verify(w http.ResponseWriter, r *http.Request) {
+	if h.refuseWhileUsersOwned(w) {
+		return
+	}
 	token, _ := r.Context().Value(verifyInputKey{}).(string)
 	ctx := r.Context()
 	tx, err := h.Pool.Begin(ctx)
@@ -204,6 +207,9 @@ func (h handlers) forgotPassword(w http.ResponseWriter, r *http.Request) {
 // resetPassword is POST /api/v1/auth/reset-password. It has no rate limit
 // and no password-policy check beyond the model's 8 to 128 characters.
 func (h handlers) resetPassword(w http.ResponseWriter, r *http.Request) {
+	if h.refuseWhileUsersOwned(w) {
+		return
+	}
 	r, ok := validateResetPassword(w, r)
 	if !ok {
 		return

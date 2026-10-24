@@ -316,6 +316,9 @@ func (h *handlers) createUser(w http.ResponseWriter, r *http.Request) {
 		}
 		created, err := h.insertUserWithMembership(ctx, r, g.tx, g.store, in, orgID, role, caller.ID)
 		switch {
+		case err == ErrUsersOwned:
+			writeUsersOwned(w)
+			return nil
 		case err == errEmailExists:
 			policy.WriteDetail(w, http.StatusBadRequest, "User with email "+email+" already exists", nil)
 			return nil
@@ -455,6 +458,9 @@ func (h *handlers) updateUser(w http.ResponseWriter, r *http.Request) {
 		}
 		updated, err := g.store.updateUser(ctx, targetID, patch)
 		switch {
+		case err == ErrUsersOwned:
+			writeUsersOwned(w)
+			return nil
 		case err == errEmailExists:
 			policy.WriteDetail(w, http.StatusBadRequest, "Email "+deref(patch.Email)+" already in use", nil)
 			return nil
@@ -584,6 +590,10 @@ func (h *handlers) setUserPassword(w http.ResponseWriter, r *http.Request) {
 		}
 
 		success, err := h.store.setUserPassword(ctx, g.tx, targetID, newHash)
+		if err == ErrUsersOwned {
+			writeUsersOwned(w)
+			return nil
+		}
 		if err != nil {
 			h.logger.ErrorContext(ctx, "admin: set password failed", "error", err)
 			policy.WriteInternal(w)
@@ -683,6 +693,10 @@ func (h *handlers) deleteUser(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			softResult = soft
+		}
+		if err == ErrUsersOwned {
+			writeUsersOwned(w)
+			return nil
 		}
 		if err != nil {
 			h.logger.ErrorContext(ctx, "admin: delete user failed", "mode", string(mode), "error", err)

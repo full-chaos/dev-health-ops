@@ -1,6 +1,7 @@
 package session
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -13,7 +14,8 @@ import (
 // while auth-service owns users, before it opens a transaction or reads the
 // request: the handlers here have no Pool, so any write or read would panic.
 func TestUsersOwnedRefusesEverySessionWriterBeforeTouchingTheDatabase(t *testing.T) {
-	h := handlers{Deps: Deps{UsersOwned: true}}
+	t.Setenv("AUTH_USERS_OWNED", "true")
+	h := handlers{}
 	for name, serve := range map[string]http.HandlerFunc{
 		"change-password": h.changePassword,
 		"reset-password":  h.resetPassword,
@@ -31,8 +33,9 @@ func TestUsersOwnedRefusesEverySessionWriterBeforeTouchingTheDatabase(t *testing
 }
 
 func TestUsersOwnedRefusesTheSocialAccountCreate(t *testing.T) {
-	h := handlers{Deps: Deps{UsersOwned: true}}
-	if _, err := h.createSocialUser(nil, nil, nil, "a@example.test", "github", "1"); err != usersowned.ErrRefused {
+	t.Setenv("AUTH_USERS_OWNED", "true")
+	h := handlers{}
+	if _, err := h.createSocialUser(nil, nil, nil, "a@example.test", "github", "1"); !errors.Is(err, usersowned.ErrRefused) {
 		t.Fatalf("createSocialUser = %v, want usersowned.ErrRefused before any write", err)
 	}
 }

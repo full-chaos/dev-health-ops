@@ -13,6 +13,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/api/usersowned"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
@@ -129,6 +130,10 @@ func (h handlers) socialLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	if user == nil {
 		created, err := h.createSocialUser(ctx, tx, info, email, provider, providerUserID)
+		if errors.Is(err, usersowned.ErrRefused) {
+			usersowned.Write(w)
+			return
+		}
 		if err != nil {
 			h.fail(w, r, "create user", err)
 			return
@@ -186,6 +191,9 @@ func (h handlers) socialLogin(w http.ResponseWriter, r *http.Request) {
 // createSocialUser inserts the new user oauth.py builds: verified, no
 // password, every other column at the model default.
 func (h handlers) createSocialUser(ctx context.Context, tx pgx.Tx, info *oauthprovider.UserInfo, email, provider, providerUserID string) (*userRow, error) {
+	if err := h.refuseWhileUsersOwnedErr(); err != nil {
+		return nil, err
+	}
 	username, err := providerText(info.Username)
 	if err != nil {
 		return nil, err

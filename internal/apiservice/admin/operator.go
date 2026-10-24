@@ -34,6 +34,9 @@ type Operator struct {
 	Now func() time.Time
 	// Logger receives the user-delete telemetry (Info outcome, Debug per reference); nil discards it.
 	Logger *slog.Logger
+	// UsersOwned is AUTH_USERS_OWNED: auth-service owns users, so the verbs
+	// that write public.users refuse with ErrUsersOwned.
+	UsersOwned bool
 }
 
 func (o Operator) logger() *slog.Logger {
@@ -85,7 +88,9 @@ func orgView(org *organization) *Organization {
 	return &Organization{ID: org.ID, Slug: org.Slug, Name: org.Name, Tier: org.Tier, IsActive: org.IsActive}
 }
 
-func (o Operator) store(db pgDB) pgStore { return pgStore{Pool: db, Now: o.Now} }
+func (o Operator) store(db pgDB) pgStore {
+	return pgStore{Pool: db, Now: o.Now, UsersOwned: o.UsersOwned}
+}
 
 // inTransaction runs fn over one transaction: committed when it returns nil,
 // rolled back otherwise.

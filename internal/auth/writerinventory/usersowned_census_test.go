@@ -44,6 +44,8 @@ var usersOwnedCensus = map[string]usersOwnedClass{
 	"internal/api/sso/oauth.go|handlers.oauthProvisionUser":             exempt("avatar_url, full_name and last_login_at of an account already found by its key"),
 }
 
+var guardNames = map[string]bool{"refuseWhileUsersOwned": true, "RefuseWhileUsersOwned": true, "refuseWhileUsersOwnedErr": true}
+
 const guardName = "refuseWhileUsersOwned"
 
 var databaseCalls = map[string]bool{
@@ -92,7 +94,7 @@ func guardProblem(root, key string) string {
 				callee = f.Name
 			}
 			switch {
-			case callee == guardName && (guard == token.NoPos || call.Pos() < guard):
+			case guardNames[callee] && (guard == token.NoPos || call.Pos() < guard):
 				guard = call.Pos()
 			case databaseCalls[callee] && (firstDB == token.NoPos || call.Pos() < firstDB):
 				firstDB = call.Pos()

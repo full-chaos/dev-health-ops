@@ -217,6 +217,9 @@ func isUniqueViolation(err error) bool {
 // createAccountAndMembership writes the account, its identity and its
 // membership in the provider's organization in one transaction.
 func (h handlers) createAccountAndMembership(ctx context.Context, row *providerRow, account ssoNewAccount) (*provisionedUser, *provisionedMembership, error) {
+	if err := h.refuseWhileUsersOwned(); err != nil {
+		return nil, nil, err
+	}
 	orgID, err := pythonparity.ParseUUID(row.OrgID)
 	if err != nil {
 		return nil, nil, err

@@ -5,6 +5,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/auth/authconfig"
 )
 
 func lookupOf(values map[string]string) func(string) (string, bool) {
@@ -50,5 +52,19 @@ func TestWriteAnswers409WithTheMovedOperationReason(t *testing.T) {
 	}
 	if strings.Contains(strings.ToLower(body), "token_version") || strings.Contains(strings.ToLower(body), "password_hash") {
 		t.Fatalf("body %q names a column", body)
+	}
+}
+
+func TestFromLookupAgreesWithAuthConfig(t *testing.T) {
+	for _, value := range []string{"", " ", "true", "TRUE", " true ", "false", "False", "1", "0", "yes", "maybe", "t", "tru"} {
+		lookup := lookupOf(map[string]string{Env: value})
+		got, gotErr := FromLookup(lookup)
+		want, wantErr := authconfig.UsersOwnedFromLookup(lookup)
+		if got != want || (gotErr != nil) != (wantErr != nil) {
+			t.Errorf("%q: usersowned = %v, %v; authconfig = %v, %v", value, got, gotErr, want, wantErr)
+		}
+	}
+	if got, err := FromLookup(lookupOf(nil)); got || err != nil {
+		t.Errorf("unset: %v, %v", got, err)
 	}
 }

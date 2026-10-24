@@ -6,7 +6,8 @@ import (
 	"time"
 )
 
-// defaultUnitCap is SYNC_RUN_MAX_UNITS' default (NewNativeMaterializer).
+// defaultUnitCap is the old SYNC_RUN_MAX_UNITS default. The cap is opt-in now;
+// the value is kept as the yardstick these plan-size tests measure.
 const defaultUnitCap = 1000
 
 // TestBackfillPlanSizeIsSourcesTimesDatasetsTimesChunks pins the arithmetic

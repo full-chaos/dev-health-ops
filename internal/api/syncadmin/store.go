@@ -69,6 +69,12 @@ type syncConfig struct {
 	// it); else the response carries the stored list.
 	shownTargets    []string
 	shownTargetsSet bool
+	// enabledDatasetKeys are the enabled dataset rows of the integration
+	// (deriveShownTargets set them), for deriveSkippedDatasets.
+	enabledDatasetKeys []string
+	// skippedDatasets are the enabled datasets the canonical-incident feature
+	// leaves out (deriveSkippedDatasets); the response carries them when set.
+	skippedDatasets []map[string]string
 }
 
 const syncConfigColumns = `id, name, provider, sync_targets::text, sync_options::text, is_active,

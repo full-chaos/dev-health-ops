@@ -57,13 +57,13 @@ func TestIntakeAndConsumerAgreeWithPythonOnKeyOrderOverflowAndHugeIntegers(t *te
 	if got, err := storeEntry(t, entry); code != http.StatusAccepted || err != nil || got != `{"a":2,"m":3,"z":1}` {
 		t.Fatalf("key order: status %d, stored %q, err %v", code, got, err)
 	}
-	code, entry = intakeRawBody(t, batchWithPayload(`{"f":1e999}`))
-	if got, err := storeEntry(t, entry); code != http.StatusAccepted || err != nil || got != `{"f":null}` {
-		t.Fatalf("float overflow: status %d, stored %q, err %v (Python stored the word Infinity; CHAOS-6299 stores null)", code, got, err)
-	}
-	code, entry = intakeRawBody(t, batchWithPayload(`{"f":1E999}`))
-	if got, err := storeEntry(t, entry); code != http.StatusAccepted || err != nil || got != `{"f":null}` {
-		t.Fatalf("uppercase exponent overflow: status %d, stored %q, err %v (Python stored the word Infinity; CHAOS-6299 stores null)", code, got, err)
+	// A float that overflows to infinity is refused by the intake's value rules (finite numbers only): the
+	// event is dropped, 202 and nothing written. The CHAOS-6299 null path stays for entries of other
+	// writers (see TestConsumerKeepsTheLastDuplicatePayloadKeyLikePython and the non-finite tests).
+	for _, payload := range []string{`{"f":1e999}`, `{"f":1E999}`} {
+		if code, entry := intakeRawBody(t, batchWithPayload(payload)); code != http.StatusAccepted || entry.Fields != nil {
+			t.Fatalf("float overflow %s: status %d, entry %v, want 202 and no entry (Python stored the word Infinity; the intake is stricter)", payload, code, entry.Fields)
+		}
 	}
 	// A duplicate key: the last value wins (as json.loads), so an overflowing float it shadows is not an overflow.
 	for payload, want := range map[string]string{`{"f":1e999,"f":1}`: `{"f":1}`, `{"a":1,"a":2}`: `{"a":2}`} {

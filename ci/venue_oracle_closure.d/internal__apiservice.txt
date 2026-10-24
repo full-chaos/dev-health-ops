@@ -1,4 +1,5 @@
 contracts/auth/v1
+contracts/auth/v1/vocabulary
 internal/api/apimetrics
 internal/api/audit
 internal/api/authmail
@@ -36,15 +37,27 @@ internal/api/standinkey
 internal/api/syncadmin
 internal/api/teamsidentity
 internal/api/telemetry
+internal/api/usersowned
 internal/api/webhookintake
 internal/apiservice/acr
 internal/apiservice/admin
 internal/apiservice/customerpush
+internal/audit
+internal/auth/clientaddr
+internal/auth/contracts
+internal/auth/contracts/provisioning
+internal/auth/contracts/tokencorpus
 internal/auth/edgetoken
+internal/auth/emaildomain
 internal/auth/httpapi
+internal/auth/identity
+internal/auth/identity/local
+internal/auth/linkmail
 internal/auth/passwordhash
 internal/auth/passwordpolicy
 internal/auth/ratelimitvalkey
+internal/auth/requestid
+internal/auth/session
 internal/auth/sessionid
 internal/auth/signedtoken
 internal/chmigrate
@@ -83,6 +96,7 @@ internal/platform/config
 internal/platform/credshape
 internal/platform/dbphase
 internal/platform/dbspan
+internal/platform/dsnclass
 internal/platform/errortext
 internal/platform/errortext/hardened
 internal/platform/fernet
@@ -108,9 +122,11 @@ internal/pythonparity/pyidna
 internal/pythonparity/pyunicodedata
 internal/scheduler/sync
 internal/storage/clickhouse
+internal/storage/clickhouse/engineclause
 internal/storage/clickhouse/liverow
 internal/storage/postgres
 internal/storage/postgres/aclguard
+internal/storage/postgres/authschema
 internal/storage/river
 internal/storage/roleacl
 internal/storage/valkey
@@ -134,6 +150,7 @@ internal/testsupport/pgschema
 internal/testsupport/pgseed
 internal/testsupport/proxycapture
 internal/testsupport/pydanticecho
+internal/testsupport/usertokens
 internal/testsupport/venueoracle
 internal/workitemcontract
 ~internal/api/externalingest/testdata
@@ -146,3 +163,4 @@ internal/workitemcontract
 ~internal/pgmigrate/baseline
 ~internal/pgmigrate/sql
 ~internal/pgmigrate/sql/down
+~internal/storage/postgres/authschema/migrations

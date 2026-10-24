@@ -434,8 +434,11 @@ var schedulerEligibilityParity = []eligibilityPredicate{
 		Name:       "the tier max_sync_units cap",
 		Phase:      "B",
 		PythonSite: "sync/guard.py:488-506 _resolve_total_unit_cap, imported by planner.py:133",
-		GoSite:     "materializer.go:598 with rejection at :412-414",
-		Verdict:    verdictMatch,
+		GoSite:     "materializer.go UnitCapFromEnv (opt-in SYNC_RUN_MAX_UNITS, default off); the tier row is not read",
+		Verdict:    verdictByDesign,
+		Note: "CHAOS-10955 (chris D6275, 2026-10-23): the tier max_sync_units default " +
+			"quarantined valid sharded backfills (invalid_plan, 202 with no job row); the " +
+			"cap is an opt-in env value now, with no tier or override input.",
 	},
 	{
 		Name:       "the occurrence identity still matches its config and marker",

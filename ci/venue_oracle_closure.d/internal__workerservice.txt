@@ -15,6 +15,7 @@ internal/auth/passwordhash
 internal/auth/sessionid
 internal/cacheinvalidation
 internal/chmigrate
+internal/chmigrate/chgate
 internal/cli
 internal/deploymentcontract
 internal/egressguard
@@ -79,6 +80,7 @@ internal/jobs/workgraph/prcommit
 internal/jobs/workgraph/textrefs
 internal/jobs/workgraph/units
 internal/llmbudget
+internal/llmorgsettings
 internal/mail
 internal/netclass
 internal/operationalordering
@@ -90,6 +92,7 @@ internal/platform/config
 internal/platform/credshape
 internal/platform/dbphase
 internal/platform/dbspan
+internal/platform/dsnclass
 internal/platform/errortext
 internal/platform/errortext/hardened
 internal/platform/fernet
@@ -119,6 +122,7 @@ internal/pythonparity/pyunicodedata
 internal/queryapi/rowview
 internal/scheduler/sync
 internal/storage/clickhouse
+internal/storage/clickhouse/engineclause
 internal/storage/clickhouse/latestrow
 internal/storage/clickhouse/liverow
 internal/storage/postgres

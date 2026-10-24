@@ -155,6 +155,9 @@ type userCreateInput struct {
 // insertUser is UserService.create (password hashing is the caller's --
 // bcrypt.GenerateFromPassword before calling this).
 func (s pgStore) insertUser(ctx context.Context, in userCreateInput) (*fullUser, error) {
+	if err := s.refuseWhileUsersOwned(); err != nil {
+		return nil, err
+	}
 	if in.Email != nil {
 		// Look up the value the INSERT stores (lowered and stripped): a raw
 		// lookup misses " Dup@x " and the unique index then answers with a 500.
@@ -232,6 +235,9 @@ type userUpdate struct {
 
 // updateUser is UserService.update.
 func (s pgStore) updateUser(ctx context.Context, id uuid.UUID, patch userUpdate) (*fullUser, error) {
+	if err := s.refuseWhileUsersOwned(); err != nil {
+		return nil, err
+	}
 	existing, err := s.fullUserByID(ctx, id)
 	if err != nil || existing == nil {
 		return existing, err
@@ -302,6 +308,9 @@ WHERE id = $1`, id, email, username, fullName, avatarURL, isActive, isVerified, 
 // session and its one implicit commit, so all three of this route's writes
 // share one Go transaction too.
 func (s pgStore) setUserPassword(ctx context.Context, tx pgx.Tx, id uuid.UUID, passwordHash string) (bool, error) {
+	if err := s.refuseWhileUsersOwned(); err != nil {
+		return false, err
+	}
 	now := s.now().UTC()
 	tag, err := tx.Exec(ctx, `
 UPDATE users SET password_hash = $2, token_version = token_version + 1, updated_at = $3 WHERE id = $1`,

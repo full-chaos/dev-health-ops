@@ -49,7 +49,7 @@ func TestEmitClaimSnapshotDeferralIsSilentWhenNothingWasDeferred(t *testing.T) {
 // TestEmitClaimSnapshotDeferralReportsTheFullCountAndABoundedSample pins the
 // shape an operator reads: the COUNT is exact (it is the metric that says
 // how often the snapshot-to-claim window was observed), while the unit ids
-// are a bounded SAMPLE -- a run may hold up to SYNC_RUN_MAX_UNITS units and
+// are a bounded SAMPLE -- a run may hold thousands of units and
 // a log line must not carry a thousand uuids.
 func TestEmitClaimSnapshotDeferralReportsTheFullCountAndABoundedSample(t *testing.T) {
 	var logged bytes.Buffer

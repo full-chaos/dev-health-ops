@@ -53,8 +53,9 @@ type budgetEpisodeSnapshot struct {
 //
 // "No admission" is too broad and is narrowed here deliberately: Go owns no
 // unit-DISPATCH admission. It does own PLAN-TIME validation of the same
-// limits -- internal/scheduler/sync/materializer.go loads max_sync_units and
-// rejects a plan whose unit count exceeds the total cap. That is a different
+// limits -- internal/scheduler/sync/materializer.go loads backfill_days and
+// rejects a plan over the opt-in SYNC_RUN_MAX_UNITS cap, when one is set
+// (off by default). That is a different
 // decision at a different moment (before units exist, not before they are
 // queued), and it reads none of the columns this predicate reads, which is
 // why it changes nothing here. It is named so the narrower claim is the one

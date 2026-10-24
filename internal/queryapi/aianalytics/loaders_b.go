@@ -225,7 +225,7 @@ FROM (
       AND pr.org_id = {org_id:String}
 )
 ORDER BY merged_at DESC NULLS LAST, repo_id, number DESC
-LIMIT {limit:UInt32} OFFSET {offset:UInt32}`
+LIMIT {limit_n:UInt32} OFFSET {offset_n:UInt32}`
 
 // loadAttributedPRs reads one page of AI-attributed pull requests, first
 // occurrence of each (repository, number) kept.
@@ -238,8 +238,8 @@ func loadAttributedPRs(ctx context.Context, client QueryClient, orgID string, st
 	}
 	sf := scopeFilter(&bindings, repoID, repoIDs, useIDs)
 	bindings = append(bindings,
-		clickhouse.Binding{Name: "limit", Value: uint32(limit)},
-		clickhouse.Binding{Name: "offset", Value: uint32(offset)})
+		clickhouse.Binding{Name: "limit_n", Value: uint32(limit)},
+		clickhouse.Binding{Name: "offset_n", Value: uint32(offset)})
 	rs, err := client.Query(ctx, fmt.Sprintf(attributedPRsStatement, sf), bindings)
 	if err != nil {
 		return nil, fmt.Errorf("aianalytics: attributed pull requests query: %w", err)
@@ -351,8 +351,8 @@ func loadAttributionEvidence(ctx context.Context, client QueryClient, orgID stri
 	}
 	filters := attributionFilters(&bindings, repoID, repoIDs, useIDs, kinds)
 	bindings = append(bindings,
-		clickhouse.Binding{Name: "limit", Value: uint32(limit)},
-		clickhouse.Binding{Name: "offset", Value: uint32(offset)})
+		clickhouse.Binding{Name: "limit_n", Value: uint32(limit)},
+		clickhouse.Binding{Name: "offset_n", Value: uint32(offset)})
 	rs, err := client.Query(ctx, `SELECT
     subject_type,
     subject_id,
@@ -369,7 +369,7 @@ WHERE observed_at >= {start:DateTime64(3, 'UTC')}
   AND observed_at < {end:DateTime64(3, 'UTC')}`+filters+`
   AND toString(org_id) = {org_id:String}
 ORDER BY observed_at DESC, subject_id
-LIMIT {limit:UInt32} OFFSET {offset:UInt32}`, bindings)
+LIMIT {limit_n:UInt32} OFFSET {offset_n:UInt32}`, bindings)
 	if err != nil {
 		return nil, fmt.Errorf("aianalytics: attribution evidence query: %w", err)
 	}

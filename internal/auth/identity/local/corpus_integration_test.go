@@ -88,7 +88,7 @@ func TestCorpusLoginDecisionRows(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { containers.DropRole(admin, role, t.Logf) })
-	if _, err := authschema.Apply(ctx, admin, authschema.Options{Schema: "auth", RuntimeRole: role}); err != nil {
+	if _, err := authschema.Apply(ctx, admin, authschema.Options{Schema: "auth", RuntimeRole: role, UsersOwned: true}); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	cfg := admin.Config().Copy()

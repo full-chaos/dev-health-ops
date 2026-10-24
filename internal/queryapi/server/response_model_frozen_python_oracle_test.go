@@ -136,6 +136,26 @@ var investmentGoOnlyResponseFields = []struct{ name, goType, tag string }{
 	{"SizingNote", "string", `json:"sizing_note,omitempty"`},
 }
 
+func TestEvidenceQualityStatsIsThePythonStatsPlusTheDeclaredGoOnlyCount(t *testing.T) {
+	typ := reflect.TypeOf(investment.EvidenceQualityStats{})
+	var got []string
+	for index := range typ.NumField() {
+		f := typ.Field(index)
+		got = append(got, f.Name+" "+f.Type.String()+" "+string(f.Tag))
+	}
+	want := []string{
+		"Mean *float64 json:\"mean\"",
+		"Stddev *float64 json:\"stddev\"",
+		"Total int json:\"total\"",
+		"BandCounts pyjson.OrderedMap[int] json:\"band_counts\"",
+		"QualityDrivers []string json:\"quality_drivers\"",
+		"UncategorizedCount *int json:\"uncategorized_count,omitempty\"",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("investment.EvidenceQualityStats fields =\n %v\nwant the Python fields, then the declared Go-only uncategorized_count:\n %v", got, want)
+	}
+}
+
 func TestInvestmentResponseIsThePythonResponsePlusTheDeclaredGoOnlyFields(t *testing.T) {
 	type field struct{ name, goType, tag string }
 	fieldsOf := func(typ reflect.Type) []field {
@@ -1223,6 +1243,11 @@ func (f *schemaFiller) fill(t reflect.Type, schema map[string]any) reflect.Value
 				fieldSchema = schema
 			} else {
 				fieldSchema, _ = properties[name].(map[string]any)
+				// A declared Go-only omitempty field (the Python model never had it) stays unset, so the body the
+				// production writer writes carries only the keys the frozen answer has.
+				if fieldSchema == nil && properties != nil && strings.Contains(field.Tag.Get("json"), ",omitempty") {
+					continue
+				}
 			}
 			out.Field(index).Set(f.fill(field.Type, fieldSchema))
 		}

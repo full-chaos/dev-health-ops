@@ -146,22 +146,26 @@ jobs:
             args: test 2 3
           - name: test-3-of-3
             args: test 3 3
-          # CHAOS-8135: three race legs. Two legs held ~5k s of race CPU, two
+          # CHAOS-8135: race legs. Two legs held ~5k s of race CPU, two
           # 400-600 s packages per leg, and a leg's packages slow each other
           # (providersync 340-601 s, goapiproof 346-600 s): race-2 crossed the
-          # 600 s go test default. The legs are not required status contexts
-          # (the ruleset requires the `go-quality` aggregate), so the count can
-          # change without a ruleset edit.
-          - name: race-1-of-3
-            args: race 1 3
+          # 600 s go test default. CHAOS-10922: with three legs the slowest took 18-30 min of the 30 min job cap
+          # (one hit it the second its stage printed "race: OK"), so there are four. The legs are not required status
+          # contexts (the ruleset requires the `go-quality` aggregate), so the count can change without a ruleset edit.
+          - name: race-1-of-4
+            args: race 1 4
             heavy: true
             pool: true
-          - name: race-2-of-3
-            args: race 2 3
+          - name: race-2-of-4
+            args: race 2 4
             heavy: true
             pool: true
-          - name: race-3-of-3
-            args: race 3 3
+          - name: race-3-of-4
+            args: race 3 4
+            heavy: true
+            pool: true
+          - name: race-4-of-4
+            args: race 4 4
             heavy: true
             pool: true
     # Routed to the self-hosted ARC pool while GitHub-hosted dispatch is

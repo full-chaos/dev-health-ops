@@ -156,6 +156,103 @@ VALUES ($1, 'llmpurpose-admin@example.com', true, true, false, 0, now(), now())`
 		}
 	})
 
+	t.Run("categorize BYO opt-in: off by default, one audit row for each change, inert override when off", func(t *testing.T) {
+		const optInKey = "categorize_byo_enabled"
+		auditRows := func() (count int, actors map[string]bool, changes []string) {
+			t.Helper()
+			rows, err := pool.Query(ctx, `SELECT user_id::text, changes::text FROM audit_logs WHERE org_id = $1 AND resource_id = 'llm/categorize_byo_enabled' ORDER BY created_at`, org.String())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer rows.Close()
+			actors = map[string]bool{}
+			for rows.Next() {
+				var actor, changed string
+				if err := rows.Scan(&actor, &changed); err != nil {
+					t.Fatal(err)
+				}
+				count++
+				actors[actor] = true
+				changes = append(changes, changed)
+			}
+			return count, actors, changes
+		}
+		if _, def := call("GET", route, ""); def["categorize_byo"] != nil {
+			t.Fatalf("a fresh org reports categorize_byo: %v", def)
+		}
+		if status, _ := call("PUT", route, `{"purpose":"categorize","provider":"anthropic","model":"small-model","categorize_byo":false}`); status != 400 {
+			t.Fatalf("an opt-out body on an org that is not opted in: status=%d, want 400", status)
+		}
+		if status, _ := call("PUT", route, `{"purpose":"explain","provider":"anthropic","model":"small-model","categorize_byo":true}`); status != 400 {
+			t.Fatalf("categorize_byo on another purpose: status=%d, want 400", status)
+		}
+		if keys()[optInKey] {
+			t.Fatal("a refused write stored the opt-in")
+		}
+
+		status, body := call("PUT", route, `{"purpose":"categorize","provider":"anthropic","model":"cat-model","categorize_byo":true}`)
+		if status != 200 || body["purpose"] != "categorize" || body["model"] != "cat-model" {
+			t.Fatalf("PUT categorize with the opt-in: %d %v", status, body)
+		}
+		if _, def := call("GET", route, ""); def["categorize_byo"] != true {
+			t.Fatalf("GET default after opt-in: %v", def)
+		}
+		if status, _ := call("GET", route+"?purpose=categorize", ""); status != 200 {
+			t.Fatalf("GET categorize for an opted-in org: %d", status)
+		}
+		count, actors, changes := auditRows()
+		if count != 1 || !actors[adminUserID.String()] {
+			t.Fatalf("audit rows after the opt-in: %d actors=%v", count, actors)
+		}
+		for _, secret := range []string{"cat-model", "anthropic", defaultCred, "big-model"} {
+			if strings.Contains(changes[0], secret) {
+				t.Fatalf("the audit row carries %q: %s", secret, changes[0])
+			}
+		}
+		if status, _ := call("PUT", route, `{"purpose":"categorize","provider":"anthropic","model":"cat-model","categorize_byo":true}`); status != 200 {
+			t.Fatalf("PUT again: %d", status)
+		}
+		if again, _, _ := auditRows(); again != 1 {
+			t.Fatalf("an unchanged opt-in wrote %d audit rows, want 1", again)
+		}
+
+		if status, _ := call("PUT", route, `{"provider":"anthropic","model":"big-model","categorize_byo":false}`); status != 200 {
+			t.Fatalf("PUT default with the opt-out: %d", status)
+		}
+		var stored string
+		if err := pool.QueryRow(ctx, `SELECT value FROM settings WHERE org_id = $1 AND category = 'llm' AND key = $2`, org.String(), optInKey).Scan(&stored); err != nil || stored != "false" {
+			t.Fatalf("stored opt-in = %q, %v", stored, err)
+		}
+		if off, _, _ := auditRows(); off != 2 {
+			t.Fatalf("audit rows after the opt-out: %d, want 2", off)
+		}
+		if status, body := call("GET", route+"?purpose=categorize", ""); status != 400 {
+			t.Fatalf("GET categorize after the opt-out: %d %v, want 400", status, body)
+		}
+		if !keys()["purpose:categorize:provider"] {
+			t.Fatal("turning the opt-in off removed the stored override: it must stay stored, unread")
+		}
+
+		if status, _ := call("PUT", route, `{"provider":"anthropic","model":"big-model","categorize_byo":true}`); status != 200 {
+			t.Fatalf("PUT default with the opt-in: %d", status)
+		}
+		if status, _ := call("DELETE", route, ""); status != 200 {
+			t.Fatalf("DELETE default: %d", status)
+		}
+		if keys()[optInKey] {
+			t.Fatal("deleting the saved config left the opt-in behind")
+		}
+		if cleared, _, _ := auditRows(); cleared != 4 {
+			t.Fatalf("audit rows after the delete: %d, want 4", cleared)
+		}
+		if _, err := pool.Exec(ctx, `DELETE FROM settings WHERE org_id = $1 AND category = 'llm' AND key LIKE 'purpose:categorize:%'`, org.String()); err != nil {
+			t.Fatal(err)
+		}
+		if status, _ := call("PUT", route, fmt.Sprintf(`{"provider":"anthropic","model":"big-model","api_key":%q}`, defaultCred)); status != 200 {
+			t.Fatalf("restore the default: %d", status)
+		}
+	})
+
 	t.Run("an unknown purpose is refused", func(t *testing.T) {
 		if status, _ := call("PUT", route, `{"purpose":"summarize","provider":"openai","model":"m"}`); status != 400 {
 			t.Fatalf("PUT status=%d, want 400", status)

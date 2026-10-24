@@ -127,7 +127,7 @@ func webhookResponseBody(status, eventID, message string) *pyjson.Object {
 	return body
 }
 
-// respondForEvent is the shared tail of the GitHub/GitLab/Jira handlers:
+// respondForEvent is the shared tail of the GitHub handler:
 // an UNKNOWN event type is accepted without ever persisting or publishing
 // (router.py's own early return), matching each handler's per-provider
 // "Event type '...' not processed" message; a recognised event dispatches
@@ -150,7 +150,7 @@ func respondForEvent(w http.ResponseWriter, r *http.Request, d Deps, event webho
 	}
 	// router.py logs "Dispatched webhook event" at Info on every successful
 	// dispatch (_persist_and_route); this path had no equivalent, so a
-	// regression that stopped dispatching GitHub/GitLab/Jira events
+	// regression that stopped dispatching GitHub events
 	// successfully would be invisible without turning on debug logging.
 	d.logger().Info("Dispatched webhook event",
 		"provider", event.Provider, "event_type", string(event.EventType), "delivery_id", deliveryID.String())

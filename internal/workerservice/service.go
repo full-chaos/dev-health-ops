@@ -10,6 +10,7 @@ import (
 	"context"
 
 	"github.com/full-chaos/dev-health-ops/internal/cli"
+	"github.com/full-chaos/dev-health-ops/internal/platform/dsnclass"
 	"github.com/full-chaos/dev-health-ops/internal/platform/shell"
 )
 
@@ -17,6 +18,7 @@ import (
 // Queue selection is explicit and static for the process lifetime; deployment
 // topology is not encoded as an application profile.
 var workerSpec = shell.Spec{
+	DSNClass:                        dsnclass.River,
 	Service:                         "dev-health-worker",
 	RequireQueues:                   true,
 	ConfigureDependenciesWithLogger: configureWorkerDependenciesWithLogger,

@@ -14,6 +14,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/usersowned"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/admin"
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
@@ -176,7 +177,16 @@ func accountOperator(ctx context.Context, env cli.Env) (admin.Operator, func(), 
 	return operatorFor(ctx, env, accountDSN)
 }
 
+// usersOwnedFromEnv reads AUTH_USERS_OWNED the way go-api and auth-service do.
+func usersOwnedFromEnv(env cli.Env) (bool, error) {
+	return usersowned.FromLookup(env.Lookup)
+}
+
 func operatorFor(ctx context.Context, env cli.Env, resolve dsnResolver) (admin.Operator, func(), int) {
+	owned, err := usersOwnedFromEnv(env)
+	if err != nil {
+		return admin.Operator{}, func() {}, writeError(env.Stderr, "users_owned_invalid", err.Error())
+	}
 	dsn, ok := resolve(env.Lookup, env.Stderr)
 	if !ok {
 		return admin.Operator{}, func() {}, cli.ExitFailure
@@ -186,12 +196,16 @@ func operatorFor(ctx context.Context, env cli.Env, resolve dsnResolver) (admin.O
 	if err != nil {
 		return admin.Operator{}, func() {}, writeError(env.Stderr, "postgres_unavailable", boundary.Redact(err).Error())
 	}
-	return admin.Operator{Pool: pool, Now: time.Now}, pool.Close, 0
+	return admin.Operator{Pool: pool, Now: time.Now, UsersOwned: owned}, pool.Close, 0
 }
 
 // report prints an operator-facing refusal the way the Python verbs did
 // ("Error: ..." on stdout, exit 1); any other error is a failure on stderr.
 func report(env cli.Env, boundary func(error) error, err error) int {
+	if errors.Is(err, admin.ErrUsersOwned) {
+		fmt.Fprintf(env.Stderr, "refused: %s\n", usersowned.Message)
+		return cli.ExitRefused
+	}
 	var refusal *admin.OperatorError
 	if errors.As(err, &refusal) {
 		fmt.Fprintf(env.Stdout, "Error: %s\n", refusal.Message)

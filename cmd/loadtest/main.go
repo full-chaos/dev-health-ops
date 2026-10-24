@@ -8,11 +8,14 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/signal"
 	"strings"
 
 	"github.com/full-chaos/dev-health-ops/internal/loadharness"
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
 
 type listFlag []string
@@ -27,9 +30,10 @@ const (
 )
 
 func main() {
+	logging.InstallDefault(logging.NewJSON(os.Stderr, slog.LevelInfo))
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
-	os.Exit(run(ctx, os.Args[1:], os.Stdout, os.Stderr, os.Getenv))
+	os.Exit(run(ctx, os.Args[1:], os.Stdout, os.Stderr, secrets.GetenvNamed))
 }
 
 func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv func(string) string) int {

@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 )
 
 // Options configure a run.
@@ -46,14 +48,7 @@ func Run(ctx context.Context, cfg Config, opt Options) (Report, error) {
 	if getenv == nil {
 		getenv = func(string) string { return "" }
 	}
-	client := &http.Client{Timeout: 30 * time.Second}
-	if opt.Client != nil {
-		c := *opt.Client
-		client = &c
-	}
-	client.CheckRedirect = func(*http.Request, []*http.Request) error {
-		return http.ErrUseLastResponse
-	}
+	client := newClient(opt.Client)
 
 	var wheel []int
 	for i, t := range cfg.Targets {
@@ -160,4 +155,21 @@ func send(ctx context.Context, c *http.Client, base string, t Target, seq int, g
 		}
 	}
 	return true
+}
+
+// newClient copies a supplied client (or builds one), gives it a transport that
+// ignores the process proxy variables when it has none, and stops redirects.
+func newClient(supplied *http.Client) *http.Client {
+	client := &http.Client{Timeout: 30 * time.Second, Transport: httpguard.Transport()}
+	if supplied != nil {
+		c := *supplied
+		if c.Transport == nil {
+			c.Transport = httpguard.Transport()
+		}
+		client = &c
+	}
+	client.CheckRedirect = func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+	return client
 }

@@ -187,3 +187,17 @@ func TestRunSuppliedClientStillDoesNotFollowRedirects(t *testing.T) {
 		t.Fatalf("redirect followed: hits=%d %+v", otherHits.Load(), rep.Paths[0])
 	}
 }
+
+func TestNewClientNeverUsesTheEnvironmentProxy(t *testing.T) {
+	for name, supplied := range map[string]*http.Client{"none": nil, "bare": {}} {
+		c := newClient(supplied)
+		tr, ok := c.Transport.(*http.Transport)
+		if !ok || tr.Proxy != nil {
+			t.Fatalf("%s: transport %T keeps a proxy", name, c.Transport)
+		}
+	}
+	own := &http.Transport{}
+	if got := newClient(&http.Client{Transport: own}); got.Transport != http.RoundTripper(own) {
+		t.Fatal("a supplied transport must be kept")
+	}
+}

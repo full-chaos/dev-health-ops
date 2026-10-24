@@ -129,6 +129,13 @@ func decodeMail(t *testing.T, captured smtpcapture.Mail) sentMail {
 		body = string(decoded)
 	}
 	match := linkPattern.FindStringSubmatch(body)
+	if match == nil && tokenOptional(out.subject) {
+		if forbidden := noticeLinkOrToken(body); forbidden != "" {
+			t.Fatalf("the account-exists notice carries a token or a link (%q):\n%s", forbidden, body)
+		}
+		out.html = body
+		return out
+	}
 	if match == nil {
 		t.Fatalf("no link token in the captured HTML:\n%s", body)
 	}
@@ -239,6 +246,15 @@ type runner struct {
 	// mails are each plane's messages so far, by "recipient|subject", the
 	// latest last.
 	mails map[string]map[string][]sentMail
+	// notices counts, in the current batch, the sign-ups the Go plane answered
+	// for an existing address: it queues an account-exists mail the Python
+	// plane never sent.
+	notices int
+	// registers is set when the current batch carried a sign-up: the Go plane
+	// sends its mail off the request, so mails are compared in a fixed order.
+	registers bool
+	// signUpLength is the content-length of the first uniform sign-up answer of the run.
+	signUpLength string
 }
 
 // batch opens fresh rate-limit windows, answers steps on both planes, and
@@ -266,7 +282,26 @@ func (r *runner) batch(label string, steps []step) map[string][2]venueoracle.Res
 		// The golden holds the Python answer projected (tokens to their claims,
 		// generated ids and times blanked); the Go answer is compared the same way.
 		goProjected := r.golden.Project(r.t, goResponse)
-		same, compared, pyShown, goShown := venueoracle.Compare(s.python, pyResponses[index], goProjected,
+		pyCompared := pyResponses[index]
+		if s.python.Path == "/api/v1/auth/register" {
+			r.registers = true
+			if uniformSignUp(pyCompared, goProjected) {
+				if strings.Contains(pyCompared.Body, "Email already registered") {
+					r.notices++
+				}
+				pyCompared.Status, pyCompared.Body = goProjected.Status, goProjected.Body
+				// The frozen Python length belongs to another body. The property that matters is that every
+				// uniform answer has the same length; it is asserted below, not skipped.
+				headers := make(map[string]string, len(pyCompared.Headers))
+				for name, value := range pyCompared.Headers {
+					headers[name] = value
+				}
+				headers["content-length"] = goProjected.Headers["content-length"]
+				pyCompared.Headers = headers
+				r.checkUniformLength(s.name, goResponse)
+			}
+		}
+		same, compared, pyShown, goShown := venueoracle.Compare(s.python, pyCompared, goProjected,
 			venueoracle.DiffOptions{Normalize: func(_ venueoracle.Request, body string) string { return normalize(body) }})
 		fmt.Fprintf(&r.receipt, "%-70s python=%d go=%d %s\n", s.name, pyResponses[index].Status, goProjected.Status, venueoracle.Mark(same))
 		if !same {
@@ -276,8 +311,59 @@ func (r *runner) batch(label string, steps []step) map[string][2]venueoracle.Res
 		out[s.name] = [2]venueoracle.Response{pyResponses[index], goResponse}
 	}
 	r.compareMail(label)
+	r.notices, r.registers = 0, false
 	return out
 }
+
+// checkUniformLength asserts that the Go answers of the uniform sign-up steps (new address, taken address,
+// other case) all have the same body bytes (signUpAnswer) and one content-length, equal to that body's length.
+// The Python answers differed by length: that leak is the declared divergence "uniform sign-up answer" (D6129).
+func (r *runner) checkUniformLength(name string, goResponse venueoracle.Response) {
+	r.t.Helper()
+	got := goResponse.Headers["content-length"]
+	if want := strconv.Itoa(len(signUpAnswer)); got != want {
+		r.t.Errorf("%s: uniform sign-up answer has content-length %q, want %q", name, got, want)
+	}
+	if goResponse.Body != signUpAnswer {
+		r.t.Errorf("%s: uniform sign-up answer body %q, want %q", name, goResponse.Body, signUpAnswer)
+	}
+	if r.signUpLength == "" {
+		r.signUpLength = got
+	} else if got != r.signUpLength {
+		r.t.Errorf("%s: content-length %q differs from the first uniform sign-up answer %q", name, got, r.signUpLength)
+	}
+}
+
+// signUpAnswer is the one answer the Go plane gives every sign-up that passed
+// validation.
+const signUpAnswer = `{"message":"Check your email to continue"}`
+
+// uniformSignUp is the declared divergence "uniform sign-up answer" (stricter than Python is allowed,
+// D6129): where the frozen Python answer was 201 "Registration successful" or the 400 for a taken address, Go answers
+// 202 with signUpAnswer. Any other pair still compares.
+func uniformSignUp(python, goResponse venueoracle.Response) bool {
+	if goResponse.Status != http.StatusAccepted || goResponse.Body != signUpAnswer {
+		return false
+	}
+	return (python.Status == http.StatusCreated && strings.Contains(python.Body, "Registration successful")) ||
+		(python.Status == http.StatusBadRequest && strings.Contains(python.Body, "Email already registered"))
+}
+
+// noticeLinkOrToken names what the account-exists notice must not carry: a link token or a verify or reset link.
+func noticeLinkOrToken(body string) string {
+	for _, forbidden := range []string{"token=", "/auth/verify", "/auth/reset-password"} {
+		if strings.Contains(body, forbidden) {
+			return forbidden
+		}
+	}
+	return ""
+}
+
+// tokenOptional is true only for the mail that carries no link token by design.
+func tokenOptional(subject string) bool { return subject == accountExistsSubject }
+
+// accountExistsSubject is the subject of the notice mail to an existing owner.
+const accountExistsSubject = "You already have an account"
 
 func pick(headers map[string]string, names []string) map[string]string {
 	out := map[string]string{}
@@ -308,11 +394,35 @@ func (r *runner) compareMail(label string) {
 		key := decoded.rcptTo + "|" + decoded.subject
 		r.mails["python"][key] = append(r.mails["python"][key], decoded)
 	}
-	for _, captured := range r.goSink.Drain(r.t) {
-		decoded := decodeMail(r.t, captured)
-		planes["go"] = append(planes["go"], decoded)
+	// The Go plane sends sign-up mail off the request: drain until every mail it owes has landed.
+	owed := len(planes["python"]) + r.notices
+	var goMails []sentMail
+	for attempt := 0; attempt < 10; attempt++ {
+		for _, captured := range r.goSink.Drain(r.t) {
+			goMails = append(goMails, decodeMail(r.t, captured))
+		}
+		if len(goMails) >= owed {
+			break
+		}
+	}
+	for _, decoded := range goMails {
 		key := decoded.rcptTo + "|" + decoded.subject
 		r.mails["go"][key] = append(r.mails["go"][key], decoded)
+		if decoded.subject == accountExistsSubject {
+			continue
+		}
+		planes["go"] = append(planes["go"], decoded)
+	}
+	if r.registers {
+		for _, plane := range []string{"python", "go"} {
+			mails := planes[plane]
+			sort.SliceStable(mails, func(a, b int) bool {
+				return mails[a].rcptTo+"|"+mails[a].subject < mails[b].rcptTo+"|"+mails[b].subject
+			})
+		}
+	}
+	if got := countSubject(goMails, accountExistsSubject); got != r.notices {
+		r.t.Errorf("%s: %d account-exists mails, want %d", label, got, r.notices)
 	}
 	py, gv := planes["python"], planes["go"]
 	same := len(py) == len(gv)
@@ -325,6 +435,16 @@ func (r *runner) compareMail(label string) {
 	if !same {
 		r.t.Errorf("%s: the planes sent different e-mail:\n python %+v\n go     %+v", label, py, gv)
 	}
+}
+
+func countSubject(mails []sentMail, subject string) int {
+	n := 0
+	for _, mail := range mails {
+		if mail.subject == subject {
+			n++
+		}
+	}
+	return n
 }
 
 // token is the link token plane last mailed to recipient under subject.

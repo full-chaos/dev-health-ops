@@ -1,6 +1,7 @@
 package workflows_test
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,6 +20,7 @@ type faninOpts struct {
 	candidates       []string
 	matchShort       string
 	sourceTag        string
+	baseMissing      bool
 	overrideFamily   string
 	overrideScenario string
 }
@@ -86,7 +88,7 @@ func runFaninStep(t *testing.T, scenario string, o faninOpts) faninResult {
 		"GIT_LOG_CALLED_FILE="+gitLog, "GIT_MERGE_BASE_CALLED_FILE="+mergeBase, "LABELLED_REVISION="+faninLabelledRevision,
 		"MERGE_BASE_IS_ANCESTOR="+ancestor, "DIGEST_WALK_CANDIDATES="+strings.Join(o.candidates, "\n"),
 		"DIGEST_WALK_MATCH_SHORT="+o.matchShort, "SOURCE_TAG_SCENARIO="+o.sourceTag,
-		"SOURCE_TAG_OVERRIDE_FAMILY="+o.overrideFamily, "SOURCE_TAG_OVERRIDE_SCENARIO="+o.overrideScenario)
+		"SOURCE_TAG_OVERRIDE_FAMILY="+o.overrideFamily, "SOURCE_TAG_OVERRIDE_SCENARIO="+o.overrideScenario, "MISSING_BASE="+fmt.Sprint(o.baseMissing))
 	res := cmdSpec{dir: dir, env: env}.run("bash", script)
 	exists := func(p string) bool { _, err := os.Stat(p); return err == nil }
 	return faninResult{record: readFile(t, record), gitLog: exists(gitLog), mergeBase: exists(mergeBase), stdout: res.stdout, code: res.code}
@@ -177,4 +179,11 @@ func TestFanInNoOpRunsFailTheJob(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestFanInLatestResolvesAPromotedPRHeadLabelByDigestWalk(t *testing.T) {
+	r := runFaninStep(t, "labelled", faninOpts{baseMissing: true, ancestor: false,
+		candidates: []string{"1111111111111111111111111111111111111a", "2222222222222222222222222222222222222b"}, matchShort: "2222222"})
+	faninWant(t, r.code == 0 && r.gitLog && !r.mergeBase, "a :latest label commit absent from the clone must use the digest walk, never decline on ancestry (exit %d)\n%s", r.code, r.stdout)
+	faninWant(t, strings.Contains(r.stdout, "not in this clone") && strings.Contains(r.record, ":latest"), "the promoted-head fallback must tag latest: %q", r.record)
 }

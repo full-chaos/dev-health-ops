@@ -10,9 +10,10 @@ import (
 
 func skipTestConfig(provider string, active bool, keys ...string) *syncConfig {
 	targets, options := `[]`, `{}`
+	integration := uuid.New()
 	return &syncConfig{
 		ID: uuid.New(), Name: provider, Provider: provider, SyncTargets: &targets, SyncOptions: &options,
-		IsActive: active, enabledDatasetKeys: keys,
+		IsActive: active, IntegrationID: &integration, enabledDatasetKeys: keys,
 	}
 }
 
@@ -105,5 +106,62 @@ func TestConfigStatusServesNoReasonForAnInactiveConfig(t *testing.T) {
 	}
 	if len(config.skippedDatasets) != 0 {
 		t.Errorf("inactive config carries a skip: %v", config.skippedDatasets)
+	}
+}
+
+type keysReader struct {
+	faultReader
+	keys  []string
+	reads int
+}
+
+func (r *keysReader) enabledDatasetKeys(_ context.Context, _ string, ids []uuid.UUID) (map[uuid.UUID][]string, error) {
+	r.reads++
+	out := map[uuid.UUID][]string{}
+	for _, id := range ids {
+		out[id] = r.keys
+	}
+	return out, nil
+}
+
+func skipTestSourceConfig(provider, targets string, keys ...string) *syncConfig {
+	config := skipTestConfig(provider, true)
+	integration, source := uuid.New(), uuid.New()
+	config.IntegrationID, config.SourceID = &integration, &source
+	config.SyncTargets = &targets
+	return config
+}
+
+// A source-scoped config is not owned by dataset rows, yet the scheduler plans
+// the enabled rows its stored targets name and gates them: the config read
+// serves the same reason, from the same filter.
+func TestConfigStatusServesTheReasonForASourceScopedConfig(t *testing.T) {
+	reader := &keysReader{keys: []string{"incidents", "work-items"}}
+	h := &handlers{store: reader, features: fixedFeatures{allowed: false}, logger: quiet()}
+	incidents := skipTestSourceConfig("jira", `["incidents"]`)
+	workItems := skipTestSourceConfig("jira", `["work-items"]`)
+	if err := h.deriveSkippedDatasets(context.Background(), uuid.NewString(), incidents, workItems); err != nil {
+		t.Fatal(err)
+	}
+	text := skipTestBody(t, incidents)
+	if got := strings.Count(text, `"dataset_key"`); got != 1 || !strings.Contains(text, `"dataset_key":"incidents"`) {
+		t.Errorf("incidents-scoped config: want the incidents entry once, got %d: %s", got, text)
+	}
+	if len(workItems.skippedDatasets) != 0 {
+		t.Errorf("a work-items-scoped config carries a skip: %v", workItems.skippedDatasets)
+	}
+	if reader.reads != 1 {
+		t.Errorf("want one enabled-rows read for the request, got %d", reader.reads)
+	}
+}
+
+func TestConfigStatusServesNoReasonForASourceScopedConfigWhenTheFeatureIsOn(t *testing.T) {
+	h := &handlers{store: &keysReader{keys: []string{"incidents"}}, features: fixedFeatures{allowed: true}, logger: quiet()}
+	config := skipTestSourceConfig("jira", `["incidents"]`)
+	if err := h.deriveSkippedDatasets(context.Background(), uuid.NewString(), config); err != nil {
+		t.Fatal(err)
+	}
+	if len(config.skippedDatasets) != 0 {
+		t.Errorf("feature on, yet a skip: %v", config.skippedDatasets)
 	}
 }

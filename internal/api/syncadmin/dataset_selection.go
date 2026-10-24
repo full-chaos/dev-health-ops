@@ -395,21 +395,58 @@ func recordSelectionChange(ctx context.Context, logger *slog.Logger, orgID strin
 	}
 }
 
-// deriveSkippedDatasets sets, on every active config whose enabled dataset rows
-// include one that needs the canonical-incident feature, the datasets the
-// plan leaves out while the feature is off, in the entry shape a run's result
-// carries. It reads the feature decision once, and only when a config holds
-// such a dataset. It runs after deriveShownTargets (which sets the keys).
-// A run's own result is a separate answer on the run routes; this one is the
-// configuration's current state, so a configuration whose every dataset is
-// gated, which mints no run, still says why.
+// deriveSkippedDatasets sets, on every active config whose plan would read an
+// enabled dataset row that needs the canonical-incident feature, the datasets
+// the plan leaves out while the feature is off, in the entry shape a run's
+// result carries. A config whose rows own the selection plans every enabled
+// row (deriveShownTargets set the keys); a source-scoped config plans the
+// enabled rows its stored targets name, by the scheduler's own filter
+// (RequestedDatasetKeys). Any other config shape plans from no dataset row
+// and gets none. The feature decision is read once per request, and only when
+// a config holds a gated dataset. A run's own result is a separate answer on
+// the run routes; this one is the configuration's current state, so a
+// configuration whose every dataset is gated, which mints no run, still says
+// why.
 func (h *handlers) deriveSkippedDatasets(ctx context.Context, org string, configs ...*syncConfig) error {
+	var sourceScoped []uuid.UUID
+	seen := map[uuid.UUID]bool{}
+	for _, config := range configs {
+		if config.IsActive && !rowsOwnSelection(config) && config.SourceID != nil && config.IntegrationID != nil && !seen[*config.IntegrationID] {
+			seen[*config.IntegrationID] = true
+			sourceScoped = append(sourceScoped, *config.IntegrationID)
+		}
+	}
+	var enabledByIntegration map[uuid.UUID][]string
+	if len(sourceScoped) > 0 {
+		var err error
+		if enabledByIntegration, err = h.store.enabledDatasetKeys(ctx, org, sourceScoped); err != nil {
+			return err
+		}
+	}
 	gated := map[*syncConfig][]string{}
 	for _, config := range configs {
 		if !config.IsActive {
 			continue
 		}
-		for _, key := range config.enabledDatasetKeys {
+		keys := config.enabledDatasetKeys
+		if !rowsOwnSelection(config) {
+			if config.SourceID == nil || config.IntegrationID == nil {
+				continue
+			}
+			stored, err := decodeStored(config.SyncTargets)
+			if err != nil {
+				return err
+			}
+			sourceID := config.SourceID.String()
+			requested := schedsync.RequestedDatasetKeys(config.Provider, storedListItems(stored), &sourceID)
+			keys = nil
+			for _, key := range enabledByIntegration[*config.IntegrationID] {
+				if requested == nil || requested[key] {
+					keys = append(keys, key)
+				}
+			}
+		}
+		for _, key := range keys {
 			if schedsync.PlanDatasetRequiresCanonicalIncident(config.Provider, key) {
 				gated[config] = append(gated[config], key)
 			}

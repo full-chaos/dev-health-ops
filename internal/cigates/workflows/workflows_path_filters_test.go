@@ -291,6 +291,37 @@ func goPaths(t *testing.T, root, event string) []string {
 	return out
 }
 
+// goFilteredEvents: the go.yml events whose path filter the guards judge. push always (it must carry the list; a
+// missing one matches nothing and every check reports it), pull_request only when it carries one. On the real tree
+// pull_request has no filter, so go.yml runs on every pull request and its required go-queue-gate always reports
+// (TestGoYmlPullRequestHasNoPathFilter); a filter-less event runs on every change, so it has nothing to cover.
+func goFilteredEvents(t *testing.T, root string) []string {
+	t.Helper()
+	out := []string{"push"}
+	if _, ok := asMap(asMap(loadWf(t, root, "go.yml")["on"])["pull_request"])["paths"]; ok {
+		out = append(out, "pull_request")
+	}
+	return out
+}
+
+// A path-filtered workflow leaves its checks "Pending" and blocks the merge, so go.yml (whose go-queue-gate is a required
+// status check) must run on every pull request: no paths, no paths-ignore. push keeps its filter.
+func TestGoYmlPullRequestHasNoPathFilter(t *testing.T) {
+	on := asMap(loadWf(t, repoRoot(t), "go.yml")["on"])
+	pr, ok := on["pull_request"]
+	if !ok {
+		t.Fatal("go.yml lost its pull_request trigger")
+	}
+	for _, key := range []string{"paths", "paths-ignore"} {
+		if _, bad := asMap(pr)[key]; bad {
+			t.Errorf("go.yml pull_request carries %s: a docs-only or otherwise unlisted pull request would never report the required go-queue-gate", key)
+		}
+	}
+	if got := goFilteredEvents(t, repoRoot(t)); len(got) != 1 || got[0] != "push" {
+		t.Errorf("go.yml path-filtered events = %v, want [push]", got)
+	}
+}
+
 // pathFilterViolations runs every real-tree check of the Python file against one root.
 func pathFilterViolations(t *testing.T, root string, excused map[string]string) []string {
 	t.Helper()
@@ -346,7 +377,7 @@ func pathFilterViolations(t *testing.T, root string, excused map[string]string) 
 		add("no fixture-like files found anywhere in the tree: the walk has broken and the guard would pass vacuously")
 	}
 
-	for _, event := range []string{"push", "pull_request"} {
+	for _, event := range goFilteredEvents(t, root) {
 		paths := goPaths(t, root, event)
 		var unmatched []string
 		for p := range named {
@@ -402,16 +433,16 @@ func pathFilterViolations(t *testing.T, root string, excused map[string]string) 
 		add("Go test(s) reference fixture paths that do not exist on disk: %v", missingRefs)
 	}
 
-	prPaths := goPaths(t, root, "pull_request")
+	filterPaths := goPaths(t, root, "push")
 	for i, u := range unres {
 		var uncovered []string
 		for _, c := range u.candidates {
-			if _, ex := isExcused(excused, c); !matchesAny(t, c, prPaths) && !(u.call && ex) {
+			if _, ex := isExcused(excused, c); !matchesAny(t, c, filterPaths) && !(u.call && ex) {
 				uncovered = append(uncovered, c)
 			}
 		}
 		if len(uncovered) > 0 && u.call {
-			add("%s: %s names a directory with tracked files that match no pull_request path filter, so a change limited to one of them skips the Go tests that read the directory: %v", unresLoc[i], u.literal, uncovered)
+			add("%s: %s names a directory with tracked files that match no push path filter, so a change limited to one of them skips the Go tests that read the directory: %v", unresLoc[i], u.literal, uncovered)
 			continue
 		}
 		if len(uncovered) > 0 {
@@ -498,8 +529,8 @@ func TestGoWorkflowPathFiltersPlantedDefects(t *testing.T) {
 		{"a raw-string path to an uncovered file is neither resolved nor dropped silently", map[string]string{"a/data.json": "{}", "b/data.json": "{}", "internal/x/x_test.go": "package x\nvar _ = `data.json`"}, miniGoYml, map[string]string{"a": "x", "b": "x"}, []string{"could not locate", "data.json"}},
 		{"a raw-string path resolved to a real file that matches no filter", map[string]string{"cfg/data.yaml": "a: 1", "internal/y/y_test.go": "package y\nvar _ = `../../cfg/data.yaml`"}, miniGoYml, map[string]string{}, []string{"cfg/data.yaml", "match no"}},
 		{"a Join with a raw-string argument names an uncovered file", map[string]string{"cfg/data.yaml": "a: 1", "internal/y/y_test.go": "package y\nvar _ = filepath.Join(root, `cfg/data.yaml`)"}, miniGoYml, map[string]string{}, []string{"cfg/data.yaml", "match no"}},
-		{"a Join with a computed argument under an uncovered directory is reported, never skipped", map[string]string{"cfg/a.json": "{}", "cfg/b.json": "{}", "internal/y/y_test.go": "package y\nvar _ = filepath.Join(root, \"cfg\", name)"}, miniGoYml, map[string]string{}, []string{"names a directory with tracked files that match no pull_request path filter", "cfg/a.json"}},
-		{"a computed Join under a directory where only *.json is covered reports the uncovered .yaml", map[string]string{"cfg/a.json": "{}", "cfg/b.yaml": "x: 1", "internal/y/y_test.go": "package y\nvar _ = filepath.Join(root, \"cfg\", name)"}, strings.ReplaceAll(miniGoYml, "      - '**/*.go'\n", "      - '**/*.go'\n      - 'cfg/*.json'\n"), map[string]string{}, []string{"names a directory with tracked files that match no pull_request path filter", "cfg/b.yaml"}},
+		{"a Join with a computed argument under an uncovered directory is reported, never skipped", map[string]string{"cfg/a.json": "{}", "cfg/b.json": "{}", "internal/y/y_test.go": "package y\nvar _ = filepath.Join(root, \"cfg\", name)"}, miniGoYml, map[string]string{}, []string{"names a directory with tracked files that match no push path filter", "cfg/a.json"}},
+		{"a computed Join under a directory where only *.json is covered reports the uncovered .yaml", map[string]string{"cfg/a.json": "{}", "cfg/b.yaml": "x: 1", "internal/y/y_test.go": "package y\nvar _ = filepath.Join(root, \"cfg\", name)"}, strings.ReplaceAll(miniGoYml, "      - '**/*.go'\n", "      - '**/*.go'\n      - 'cfg/*.json'\n"), map[string]string{}, []string{"names a directory with tracked files that match no push path filter", "cfg/b.yaml"}},
 		{"the fixture filter becomes an enumeration", nil, strings.ReplaceAll(miniGoYml, "'tests/fixtures/**'", "'"+fxDir+"a.json'"), map[string]string{}, []string{"single glob 'tests/fixtures/**'"}},
 		{"a Go test names a fixture that is gone", map[string]string{"internal/x/x_test.go": "package x // \"" + fxDir + "ghost.json\"\nvar _ = \"" + fxDir + "ghost.json\""}, miniGoYml, map[string]string{}, []string{"reference fixture paths that do not exist", fxDir + "ghost.json"}},
 		{"a non-test Go file naming robots.txt while docs/robots.txt matches no filter is refused", map[string]string{"docs/robots.txt": "User-agent: *", "internal/y/y.go": "package y\nvar _ = filepath.Join(out, \"robots.txt\")"}, miniGoYml, map[string]string{}, []string{"robots.txt", "match no"}},
@@ -535,7 +566,7 @@ func TestEmptyTrackedListForTheRepoRootFailsLoudly(t *testing.T) {
 // A .py file at any depth under tests/ is scanned by the nopython guard, so go.yml must run on it in both events.
 func TestGoYmlTriggersOnNestedTestsPython(t *testing.T) {
 	root := repoRoot(t)
-	for _, event := range []string{"pull_request", "push"} {
+	for _, event := range goFilteredEvents(t, root) {
 		matched := false
 		for _, pat := range goPaths(t, root, event) {
 			re, err := githubGlobToRegexp(pat)
@@ -589,7 +620,7 @@ func TestGlobTranslatorMatchesGithubSemantics(t *testing.T) {
 // docs/README.md is the negative control.
 func TestRootLevelPathsMatchTheDoubleStarPrefix(t *testing.T) {
 	root := repoRoot(t)
-	for _, event := range []string{"push", "pull_request"} {
+	for _, event := range goFilteredEvents(t, root) {
 		paths := goPaths(t, root, event)
 		for _, c := range []struct {
 			path string
@@ -811,7 +842,7 @@ func TestGoYmlTriggersOnEveryTestsPythonGuardInput(t *testing.T) {
 		"ci/local_validate.sh",
 		"ci/run_live_backend_e2e.sh",
 	} {
-		for _, event := range []string{"push", "pull_request"} {
+		for _, event := range goFilteredEvents(t, root) {
 			t.Run(event+"/"+p, func(t *testing.T) {
 				if !matchesAny(t, p, goPaths(t, root, event)) {
 					t.Errorf("go.yml %s.paths does not match %s, so a change confined to it is judged non-Go and its guard is skipped", event, p)

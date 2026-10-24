@@ -203,6 +203,7 @@ func queueContext(event, ref string) queueCtx {
 		"github.event.pull_request.head.repo.full_name": "",
 		"github.event.pull_request.labels.*.name":       "",
 		"needs.changes.outputs.code":                    "",
+		"needs.changes.outputs.docs_only":               "false",
 		"needs.changes.result":                          "success",
 		"needs.resolve.result":                          "success",
 		"needs.resolve.outputs.promoted":                "false",
@@ -268,6 +269,12 @@ func TestDockerImagesBuildButNeverPublishOnMergeGroup(t *testing.T) {
 		}
 		if !got.truthy() {
 			t.Errorf("job %s does not run on a merge_group run, so the queue gets no image build", name)
+		}
+		// A docs-only queue entry (ci/codeql_docs_only.sh from the base commit) builds nothing.
+		docs := queueContext("merge_group", "refs/heads/gh-readonly-queue/main/pr-1-abc")
+		docs["needs.changes.outputs.docs_only"] = "true"
+		if skip, err := queueEval(strings.TrimSpace(condition), docs); err != nil || skip.truthy() {
+			t.Errorf("job %s runs for a docs-only merge_group entry (err %v)", name, err)
 		}
 	}
 }

@@ -194,6 +194,7 @@ type touchedDayStart struct {
 type touchedDaysTake struct {
 	organizationID string
 	recorded       uint64
+	window         TouchedWindowReport
 	takenAt        time.Time
 	starts         []touchedDayStart
 	// windowPending are the pending days that DailyPostSyncWriter.StartRunTx
@@ -243,7 +244,8 @@ func (service *NativePostSyncService) takeTouchedDays(
 		}
 		since := plan.RunStartedAt.Add(-postSyncTouchedClockMargin)
 		if plan.WorkItems {
-			recorded, err := service.touched.RecordTouched(ctx, plan.OrganizationID, since, plan.WorkItemWindowDays)
+			recorded, err := service.touched.RecordTouched(
+				WithTouchedWindowSink(ctx, &take.window), plan.OrganizationID, since, plan.WorkItemWindowDays)
 			if err != nil {
 				return nil, err
 			}
@@ -434,10 +436,26 @@ func (service *NativePostSyncService) finishTouchedDays(
 			synclog.Run(synclog.ParseID(args.SyncRunID())),
 		)
 	}
+	if take.window.OverBound() {
+		service.logger.Error(ctx, synclog.MsgPostSyncTouchedWindowOverBound,
+			synclog.Org(synclog.ParseID(args.OrganizationID())),
+			synclog.Run(synclog.ParseID(args.SyncRunID())),
+			synclog.Count(synclog.KeyTouchedWindowDays, take.window.Days),
+			synclog.Count(synclog.KeyTouchedWindowRepos, take.window.Repos),
+			synclog.Count(synclog.KeyTouchedWindowKeysAppended, take.window.Keys),
+			synclog.Count(synclog.KeyTouchedWindowKeysBound, TouchedWindowKeysBound),
+		)
+		if service.touchedObserver != nil {
+			_ = service.touchedObserver.ObservePostSyncTouchedDays(jobruntime.PostSyncTouchedDaysWindowOverBound, 1)
+		}
+	}
 	service.logger.Info(ctx, synclog.MsgPostSyncTouchedDays,
 		synclog.Org(synclog.ParseID(args.OrganizationID())),
 		synclog.Run(synclog.ParseID(args.SyncRunID())),
 		synclog.Count(synclog.KeyTouchedKeysRecorded, int64(take.recorded)),
+		synclog.Count(synclog.KeyTouchedWindowDays, take.window.Days),
+		synclog.Count(synclog.KeyTouchedWindowRepos, take.window.Repos),
+		synclog.Count(synclog.KeyTouchedWindowKeysAppended, take.window.Keys),
 		synclog.Count(synclog.KeyTouchedDaysDispatched, len(result.started)),
 		synclog.Count(synclog.KeyTouchedDaysCarriedOver, take.carriedOver),
 		synclog.Count(synclog.KeyTouchedDaysAlreadyStarted, result.alreadyStarted),

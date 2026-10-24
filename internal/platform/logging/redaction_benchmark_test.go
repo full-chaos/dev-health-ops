@@ -66,3 +66,13 @@ func BenchmarkStructuredAttributePlain(b *testing.B) {
 		structuredLine(logger)
 	}
 }
+
+// BenchmarkLifecycleLineWithRedactedKey is the lifecycle line plus one credential-shaped key (the placeholder path).
+func BenchmarkLifecycleLineWithRedactedKey(b *testing.B) {
+	logger := NewJSON(io.Discard, slog.LevelInfo)
+	key, _ := syntheticKeys()
+	b.ReportAllocs()
+	for b.Loop() {
+		lifecycleLine(logger.With(key, "v"))
+	}
+}

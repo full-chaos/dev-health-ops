@@ -69,6 +69,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/auth/emaildomain"
 	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	"net"
 	"net/http"
@@ -87,6 +88,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/api/usersowned"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
@@ -479,7 +481,7 @@ func (h handlers) oidcCallback(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		domain := email[at+1:]
-		if !containsFold(allowedDomains, domain) {
+		if !emaildomain.Allowed(allowedDomains, domain) {
 			policy.WriteDetail(w, http.StatusForbidden, fmt.Sprintf("Email domain '%s' is not allowed for this provider", domain), nil)
 			return
 		}
@@ -495,6 +497,11 @@ func (h handlers) oidcCallback(w http.ResponseWriter, r *http.Request) {
 		if errors.Is(err, errMembershipRequired) {
 			h.recordSSOAuthenticatedDenial(ctx, w, r, row.OrgID, providerID, err.Error(), http.StatusForbidden,
 				membershipRequiredDetail(), "oidc", "provisioning")
+			return
+		}
+		if errors.Is(err, usersowned.ErrRefused) {
+			h.recordSSOAuthenticatedDenial(ctx, w, r, row.OrgID, providerID, err.Error(), http.StatusConflict,
+				usersowned.Detail(), "oidc", "provisioning")
 			return
 		}
 		var processing ssoProcessing
@@ -769,15 +776,6 @@ func decodeAllowedDomains(raw *string) ([]string, error) {
 		}
 	}
 	return out, nil
-}
-
-func containsFold(list []string, value string) bool {
-	for _, item := range list {
-		if item == value {
-			return true
-		}
-	}
-	return false
 }
 
 func errorsIsNoRows(err error) bool { return err != nil && errors.Is(err, pgx.ErrNoRows) }

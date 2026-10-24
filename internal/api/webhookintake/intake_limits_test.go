@@ -87,11 +87,14 @@ func TestPagerDutyRouteBucketBoundsIdsFromOneAddress(t *testing.T) {
 			t.Fatalf("delivery %d = %d, want 401", i+1, got)
 		}
 	}
-	for _, id := range []string{uuid.NewString(), "not-a-uuid"} {
+	for _, id := range []string{uuid.NewString(), uuid.NewString()} {
 		got := deliver(handler, routePrefix+"/pagerduty/"+id, "192.0.2.1", "")
 		if got.Code != http.StatusTooManyRequests || got.Body.String() != throttledBody {
 			t.Fatalf("id %s past the route bucket = %d %s", id, got.Code, got.Body.String())
 		}
+	}
+	if got := deliver(handler, routePrefix+"/pagerduty/not-a-uuid", "192.0.2.1", "").Code; got != http.StatusUnauthorized {
+		t.Fatalf("an id that is not a UUID spent the route budget: %d", got)
 	}
 	if got := deliver(handler, routePrefix+"/pagerduty/"+uuid.NewString(), "192.0.2.2", "").Code; got != http.StatusUnauthorized {
 		t.Fatalf("another address = %d, want its own budget", got)
@@ -137,7 +140,7 @@ func TestProviderRouteBucketIsPerRoute(t *testing.T) {
 	}
 }
 
-func TestForgedForwardingHeaderFromAnUntrustedPeerMintsNoBucket(t *testing.T) {
+func TestForgedForwardingHeaderFromAnUntrustedPeerCreatesNoBucket(t *testing.T) {
 	withLimits(t, 100000, 100000, 2)
 	now := time.Now()
 	routes := intakeRoutes(t, Deps{Counters: httpapi.NewMemoryCounters(func() time.Time { return now })})
@@ -151,7 +154,7 @@ func TestForgedForwardingHeaderFromAnUntrustedPeerMintsNoBucket(t *testing.T) {
 	}
 }
 
-func TestThrottledAnswerIsTheSameForKnownAndUnknownIdsAndReadsNothing(t *testing.T) {
+func TestThrottledAnswerIsTheSameForKnownUnknownAndMalformedIdsAndReadsNothing(t *testing.T) {
 	f := newRefusalFixture(t, "active")
 	withLimits(t, 100000, 2, 100000)
 	now := time.Now()
@@ -160,14 +163,19 @@ func TestThrottledAnswerIsTheSameForKnownAndUnknownIdsAndReadsNothing(t *testing
 	for range 2 {
 		hitPagerDuty(handler, uuid.NewString(), "192.0.2.1", "")
 	}
+	for range pagerdutyLimitPerMinute {
+		hitPagerDuty(handler, "not-a-uuid", "192.0.2.1", "")
+	}
 	loads := f.loads
 	var answers []string
-	for _, id := range []string{f.bindingID, uuid.NewString(), "not-a-uuid"} {
+	for _, id := range []string{f.bindingID, uuid.NewString(), "not-a-uuid", "x/y"} {
 		got := hitPagerDuty(handler, id, "192.0.2.1", "")
 		answers = append(answers, fmt.Sprintf("%d %s %v", got.Code, got.Body.String(), got.Header()))
 	}
-	if answers[0] != answers[1] || answers[1] != answers[2] || !strings.HasPrefix(answers[0], "429 "+throttledBody) {
-		t.Fatalf("throttled answers differ: %q", answers)
+	for index := range answers {
+		if answers[index] != answers[0] || !strings.HasPrefix(answers[index], "429 "+throttledBody) {
+			t.Fatalf("throttled answers differ: %q", answers)
+		}
 	}
 	if f.loads != loads {
 		t.Fatalf("throttled deliveries read %d bindings", f.loads-loads)

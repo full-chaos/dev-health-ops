@@ -275,6 +275,7 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 			Write:         WriteError,
 			Limits:        limits,
 			Invites:       deps.Invites,
+			UsersOwned:    deps.UsersOwned,
 		})...)
 	}
 	webhookintake.LogUnconfiguredSecrets(logger)
@@ -345,6 +346,10 @@ func RegisterOperatorMetrics(registry *health.Registry, deps *Deps) error {
 	if err := registry.RegisterMetrics("sync_config_dataset_selection", syncadmin.SelectionMetricsSource()); err != nil {
 		return err
 	}
+	// the sign-up mails by purpose and outcome.
+	if err := registry.RegisterMetrics("session_link_mail", session.MailMetricsSource()); err != nil {
+		return err
+	}
 	// CHAOS-10104: the triggers synchandoff.Mint refuses before any write.
 	if err := registry.RegisterMetrics("sync_manual_trigger_refused", synchandoff.RefusalMetricsSource()); err != nil {
 		return err
@@ -371,6 +376,11 @@ func configureWith(
 	deps, depComponents, err := buildDeps(ctx, cfg, registry, logger, authProxy)
 	if err != nil {
 		return nil, err
+	}
+	deps.UsersOwned, err = ParseUsersOwned(envsecrets.ProcessLookup, authProxy)
+	if err != nil {
+		closeComponents(depComponents)
+		return nil, dependencyFailure(ctx, logger, "api_users_owned", "api_users_owned_config_invalid", err)
 	}
 	deps.SessionIssuer, err = sessionIssuer(authProxy, envsecrets.ProcessLookup)
 	if err != nil {

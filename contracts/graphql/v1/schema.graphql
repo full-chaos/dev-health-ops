@@ -895,6 +895,8 @@ type EvidenceQualityStats {
   stddev: Float
   total: Int!
   bandCounts: JSON!
+  """Units of the window under the evidence gate (too little text); the theme mix leaves them out and total still counts them. Null when the window has no unit."""
+  uncategorizedCount: Int
 }
 
 type EvidenceRef {

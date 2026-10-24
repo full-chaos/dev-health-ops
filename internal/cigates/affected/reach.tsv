@@ -62,6 +62,7 @@ internal/auth/contracts	contracts.go	cmd/dho
 internal/auth/contracts	contracts.go	internal/api/billing
 internal/auth/contracts	contracts.go	internal/api/externalingest
 internal/auth/contracts	contracts.go	internal/api/legacyingest
+internal/auth/contracts	contracts.go	internal/api/usersowned
 internal/auth/contracts	contracts.go	internal/api/webhookintake
 internal/auth/contracts	contracts.go	internal/apiservice
 internal/auth/contracts	contracts.go	internal/apiservice/acr
@@ -81,9 +82,11 @@ internal/auth/contracts	contracts.go	internal/auth/identity/saml
 internal/auth/contracts	contracts.go	internal/auth/identity/social
 internal/auth/contracts	contracts.go	internal/auth/keyrotation
 internal/auth/contracts	contracts.go	internal/auth/linkmail
+internal/auth/contracts	contracts.go	internal/auth/passwordpolicy
 internal/auth/contracts	contracts.go	internal/auth/policycatalog
 internal/auth/contracts	contracts.go	internal/auth/session
 internal/auth/contracts	contracts.go	internal/auth/usersbackfill
+internal/auth/contracts	contracts.go	internal/cigates/chartgates
 internal/auth/contracts	contracts.go	internal/platform/logging
 internal/auth/contracts	contracts.go	internal/queryapi/server
 internal/auth/contracts	contracts.go	internal/testsupport/usertokens
@@ -102,6 +105,7 @@ internal/auth/contracts/tokencorpus	corpus.go	internal/testsupport/usertokens
 internal/auth/keystore	open_unix.go	cmd/auth-migrate
 internal/auth/keystore	open_unix.go	cmd/auth-service
 internal/auth/keystore	open_unix.go	cmd/dho
+internal/auth/keystore	open_unix.go	deploy/helm/dev-health
 internal/auth/keystore	open_unix.go	internal/api/billing
 internal/auth/keystore	open_unix.go	internal/api/externalingest
 internal/auth/keystore	open_unix.go	internal/api/legacyingest
@@ -111,6 +115,7 @@ internal/auth/keystore	open_unix.go	internal/auth/authapi
 internal/auth/keystore	open_unix.go	internal/auth/authruntime
 internal/auth/keystore	open_unix.go	internal/auth/keyrotation
 internal/auth/keystore	open_unix.go	internal/auth/keystore
+internal/auth/keystore	open_unix.go	internal/cigates/chartgates
 internal/auth/keystore	open_unix.go	internal/queryapi/server
 internal/auth/keystore	open_unix.go	internal/token
 internal/cigates	governance.go	cmd/cigate
@@ -715,6 +720,7 @@ internal/testsupport/venueoracle	golden_walk.go	internal/testsupport/venueoracle
 internal/testsupport/venueoracle	golden_walk.go	internal/testsupport/venueoracle/goldenhygiene
 internal/testsupport/venueoracle	golden_walk.go	internal/workerservice
 internal/testsupport/venueoracle	gopin.go	internal/adminops
+internal/testsupport/venueoracle	gopin.go	internal/api/githubapp
 internal/testsupport/venueoracle	gopin.go	internal/api/syncadmin
 internal/testsupport/venueoracle	gopin.go	internal/api/teamsidentity/adminstampvenue
 internal/testsupport/venueoracle	gopin.go	internal/apiservice

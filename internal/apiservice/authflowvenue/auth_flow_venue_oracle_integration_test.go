@@ -40,6 +40,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/storage/valkey"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/authrows"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/providerstub"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/sessionscenario"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/smtpcapture"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
@@ -877,6 +878,10 @@ func TestAuthFlowVenueOracle(t *testing.T) {
 		FROM audit_logs a LEFT JOIN organizations o ON o.id = a.org_id LEFT JOIN users u ON u.id = a.user_id
 		ORDER BY a.created_at, a.action`)
 
+	if r.external {
+		r.socialRow()
+	}
+
 	if violations := policy.WriterViolations(); violations > 0 {
 		t.Errorf("%d body writes used the wrong writer for their route", violations)
 	}
@@ -1008,4 +1013,42 @@ func authScrub(text string) string {
 		text = strings.ReplaceAll(text, fmt.Sprintf("\x00%d\x00", index), id)
 	}
 	return text
+}
+
+// socialRow signs a new user in with a GitHub token the corpus provider stub answers, through the target, and requires
+// that the stub recorded the request. It runs after every row comparison: the user it creates is not in the golden's rows.
+func (r *runner) socialRow() {
+	r.t.Helper()
+	admin := os.Getenv("DEVHEALTH_AUTH_ORACLE_STUB_ADMIN")
+	if admin == "" {
+		r.t.Fatal("DEVHEALTH_AUTH_ORACLE_STUB_ADMIN is not set: an external run starts the corpus provider stub")
+	}
+	reset, err := http.Post(admin+"/reset", "application/json", nil)
+	if err != nil || reset.StatusCode != http.StatusNoContent {
+		r.t.Fatalf("provider stub reset: %v", err)
+	}
+	_ = reset.Body.Close()
+	body := `{"provider": "github", "provider_access_token": "gh-corpus"}`
+	answer := venueoracle.Do(r.t, r.goBase, request("social: github new user through the provider stub", http.MethodPost, "/api/v1/auth/social-login", "", body))
+	var decoded map[string]any
+	if answer.Status != http.StatusOK || json.Unmarshal([]byte(answer.Body), &decoded) != nil || decoded["access_token"] == nil {
+		r.t.Fatalf("social-login through the provider stub answered %d with %d body bytes, want 200 and a session", answer.Status, len(answer.Body))
+	}
+	user, _ := json.Marshal(decoded["user"])
+	if !strings.Contains(string(user), "corpus-social@example.com") {
+		r.t.Errorf("the session's user is not the stubbed account")
+	}
+	recorded, err := http.Get(admin + "/requests")
+	if err != nil {
+		r.t.Fatalf("provider stub requests: %v", err)
+	}
+	defer recorded.Body.Close()
+	var requests []providerstub.Recorded
+	if err := json.NewDecoder(recorded.Body).Decode(&requests); err != nil {
+		r.t.Fatalf("provider stub requests: %v", err)
+	}
+	if err := providerstub.CheckRecorded(requests, "github", 1); err != nil {
+		r.t.Error(err)
+	}
+	fmt.Fprintf(&r.receipt, "social: github new user through the provider stub: status %d, stub github requests %d %s\n", answer.Status, len(requests), venueoracle.Mark(r.t != nil && !r.t.Failed()))
 }

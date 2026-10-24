@@ -243,6 +243,7 @@ internal/cigates/workflows	ci_script_helpers_test.go
 internal/cigates/workflows	docker_images_fanin_behaviour_test.go
 internal/cigates/workflows	go_workers_compose_proof_test.go
 internal/cigates/workflows	live_e2e_no_python_test.go
+internal/cigates/workflows	providerstub_not_release_test.go
 internal/cigates/workflows	race_json_artifact_test.go
 internal/cigates/workflows	race_pool_routing_test.go
 internal/cigates/workflows	ttl_registry_test.go
@@ -548,6 +549,7 @@ internal/testsupport/goldenscan	tree.go
 internal/testsupport/goldenscan	vectors_test.go
 internal/testsupport/moduleroot	moduleroot_test.go
 internal/testsupport/oraclecompare	oraclecompare.go
+internal/testsupport/providerstub	corpus_social_test.go
 internal/testsupport/providerstub	stub.go
 internal/testsupport/providerstub/cmd/providerstub	main.go
 internal/testsupport/providerstub/cmd/providerstub	main_test.go

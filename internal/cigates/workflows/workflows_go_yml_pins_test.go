@@ -22,6 +22,7 @@ const selfHostedCondition = "vars.SELF_HOSTED_RUNNERS == 'enabled' && " +
 
 const eligibilityCondition = "github.event_name == 'workflow_dispatch' || " +
 	"github.event_name == 'release' || " +
+	"github.event_name == 'merge_group' || " +
 	"(github.event_name == 'push' && github.ref == 'refs/heads/main') || " +
 	"needs.changes.outputs.code == 'true'"
 

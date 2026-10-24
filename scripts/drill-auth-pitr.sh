@@ -117,7 +117,7 @@ prepare_restore() { # service, target-time-or-empty
 }
 
 log "compile driver"
-(cd "$repo_root" && "$capped" -t 900 -- go test -p 4 -c -tags=integration -o "$DRILL_DIR/drill.test" ./internal/audit/)
+(cd "$repo_root" && "$capped" -t 900 -- go test -p 4 -c -trimpath -tags=integration -o "$DRILL_DIR/drill.test" ./internal/audit/)
 
 log "S1 start source (WAL archive on)"
 load_gate

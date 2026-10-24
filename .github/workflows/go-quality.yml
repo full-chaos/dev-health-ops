@@ -21,11 +21,9 @@
 # oracle leg was deleted with the oracles, CHAOS-7308, and no step of this
 # workflow installs Python) and
 # a fan-in job that KEEPS the required context name `go-quality`, so no
-# branch-protection edit is needed. A leg that is skipped, cancelled or missing
-# from the result FAILS the gate (a measurement that did not happen must not read
-# green), except one named case: a docs-only change (ci/codeql_docs_only.sh from
-# the base commit) skips the whole matrix, and the fan-in passes that skip only
-# when the plan said docs_only=true. internal/cigates/workflows/workflows_quality_legs_test.go
+# branch-protection edit is needed. The fan-in is `unconditional`: a leg that is
+# skipped, cancelled or missing from the result FAILS the gate (a measurement
+# that did not happen must not read green). internal/cigates/workflows/workflows_quality_legs_test.go
 # pins that the legs together run exactly the steps of `ci`.
 #
 # ONE PLAN VERDICT (go-quality-plan). `cmd/cigate plan-verdict --go-files-full`, the
@@ -34,10 +32,10 @@
 # main, merge group, schedule or manual run, and any failure of the plan: every package
 # runs. A non-Go path in a declared class plans the packages that read it (AFFECTED) or
 # NONE when no package reads it; NONE skips the test and race legs, AFFECTED runs only its
-# packages. The static leg runs on every change that is not docs-only (DOCS skips every
-# leg); the fan-in always runs and reports. The race legs are heavy: on a pull request
-# without the ci:full label they report success without running (they run in the merge
-# queue and on the main push).
+# packages. The static leg and the fan-in always run and report. The plan verdict is exact,
+# so no docs-only rule overrides it: some docs files are Go test inputs. The race legs are
+# heavy: on a pull request without the ci:full label they report success without running
+# (they run in the merge queue and on the main push).
 name: Go quality
 
 on:
@@ -74,52 +72,11 @@ jobs:
     outputs:
       verdict: ${{ steps.plan.outputs.verdict }}
       selection: ${{ steps.plan.outputs.selection }}
-      docs_only: ${{ steps.docs.outputs.docs_only }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # The diff needs the base commit; the default depth-1 checkout cannot see it.
           fetch-depth: 0
-
-      # ONE docs-only definition (ci/codeql_docs_only.sh), run from the BASE commit so a change cannot rewrite its own
-      # judge. pull_request: the PR's base...head. merge_group: the target branch tip...the entry head, so the whole
-      # group ahead of this entry is judged, never this PR alone (merge_group.base_sha is the parent ENTRY). Any other
-      # event, and any fetch, merge-base or judge error, is docs_only=false. internal/cigates/workflows pins every copy identical.
-      - name: Docs-only change (judged by the base commit's ci/codeql_docs_only.sh)
-        id: docs
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          MG_BASE_REF: ${{ github.event.merge_group.base_ref }}
-          MG_HEAD_SHA: ${{ github.event.merge_group.head_sha }}
-        run: |
-          set -uo pipefail
-          docs_only=false
-          base=""
-          head=""
-          case "${EVENT_NAME}" in
-            pull_request)
-              base="${PR_BASE_SHA}"
-              head="${PR_HEAD_SHA}"
-              ;;
-            merge_group)
-              head="${MG_HEAD_SHA}"
-              if [[ "${MG_BASE_REF}" == refs/heads/* ]] \
-                && git fetch --no-tags --filter=blob:none origin "+${MG_BASE_REF}:refs/remotes/origin/docs-only-base"; then
-                base="$(git rev-parse --verify 'refs/remotes/origin/docs-only-base^{commit}')" || base=""
-              fi
-              ;;
-          esac
-          if [ -n "${base}" ] && [ -n "${head}" ] \
-            && git fetch --no-tags --filter=blob:none origin "${base}" "${head}" \
-            && git merge-base "${base}" "${head}" > /dev/null \
-            && git show "${base}:ci/codeql_docs_only.sh" > "${RUNNER_TEMP}/docs_only_judge.sh"; then
-            docs_only="$(bash "${RUNNER_TEMP}/docs_only_judge.sh" "${base}" "${head}")" || docs_only=false
-          fi
-          [ "${docs_only}" = "true" ] || docs_only=false
-          echo "docs_only=${docs_only}" >> "${GITHUB_OUTPUT}"
-          echo "docs-only: ${docs_only} (${EVENT_NAME} ${base:-<none>}...${head:-<none>})"
 
       - name: Configure self-hosted Go cache paths
         if: vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')
@@ -138,21 +95,16 @@ jobs:
       # non-ancestor BASE_SHA rather than guess), a failed go list or a failed plan program is FULL.
       # The cigate binary is built from the merge base, so a pull request cannot change that binary; this step's
       # text, ci/go_relevant_diff.sh and go list still run from the PR tree.
-      # DOCS (the docs step above said docs_only=true) skips every leg: go-quality-leg's job condition reads it.
-      - name: Plan the change set (DOCS / NONE / AFFECTED / FULL)
+      - name: Plan the change set (NONE / AFFECTED / FULL)
         id: plan
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
           EVENT_NAME: ${{ github.event_name }}
-          DOCS_ONLY: ${{ steps.docs.outputs.docs_only }}
         run: |
           set -uo pipefail
           out="${RUNNER_TEMP}/go-quality-plan.txt"
           full() { printf 'FULL %s\n' "$1" > "${out}"; echo "::warning title=GO-QUALITY PLAN FELL BACK TO EVERY PACKAGE::$1"; }
-          if [ "${DOCS_ONLY}" = "true" ]; then
-            printf 'DOCS docs-only change: no go-quality leg runs\n' > "${out}"
-            echo "::notice title=GO-QUALITY LEGS SKIPPED: DOCS-ONLY CHANGE::ci/codeql_docs_only.sh (from the base commit) classified this change docs-only"
-          elif ! bash ci/go_relevant_diff.sh > "${RUNNER_TEMP}/changed.txt"; then
+          if ! bash ci/go_relevant_diff.sh > "${RUNNER_TEMP}/changed.txt"; then
             full "could not compute the changed-file list"
           elif ! modpath="$(go list -m)" || ! go list -mod=readonly ./... > "${RUNNER_TEMP}/packages.txt"; then
             full "go list failed"
@@ -177,8 +129,6 @@ jobs:
   go-quality-leg:
     name: go-quality-leg (${{ matrix.name }})
     needs: [go-quality-plan]
-    # A docs-only change runs no leg: the whole matrix is one skipped check, judged `docs-skippable` by the fan-in.
-    if: needs.go-quality-plan.outputs.docs_only != 'true'
     strategy:
       # One red leg must not cancel the others: every leg reports its own signal.
       fail-fast: false
@@ -559,14 +509,12 @@ jobs:
         env:
           GATE_NAME: go-quality
           EVENT_NAME: ${{ github.event_name }}
-          # The plan is the selector: the legs decide relevance inside themselves, and the only legitimate skip
-          # of the whole matrix is a docs-only change (`docs-skippable`: CHANGES_CODE is 'false' only when the
-          # plan said docs_only=true, on pull_request or merge_group). needs.<job>.result of a matrix job is
-          # `success` only when EVERY leg succeeded.
-          GATE_HAS_SELECTOR: "true"
-          CHANGES_RESULT: ${{ needs.go-quality-plan.result }}
-          CHANGES_CODE: ${{ needs.go-quality-plan.outputs.docs_only == 'true' && 'false' || 'true' }}
-          GATED_JOB_1: go-quality-leg|docs-skippable|${{ needs.go-quality-leg.result }}
+          # The legs always run and decide relevance inside themselves (no
+          # `changes` job), so a skip is never legitimate here: the
+          # `unconditional` policy, as typecheck's own fan-in. needs.<job>.result
+          # of a matrix job is `success` only when EVERY leg succeeded.
+          GATE_HAS_SELECTOR: "false"
+          GATED_JOB_1: go-quality-leg|unconditional|${{ needs.go-quality-leg.result }}
           # The plan job must have run: a skipped or failed plan skips every leg.
           GATED_JOB_2: go-quality-plan|unconditional|${{ needs.go-quality-plan.result }}
         run: |

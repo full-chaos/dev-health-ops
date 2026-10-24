@@ -75,24 +75,24 @@ var heavyGatedJobs = map[[2]string]string{
 	{"go.yml", "go-container-reproducibility-self-hosted"}: heavyGate + " && " + goDocsSkip,
 	{"go.yml", "go-container-security"}:                    heavyGate + " && " + goDocsSkip,
 	{"go.yml", "go-container-smoke"}:                       heavyGate + " && " + goDocsSkip,
-	{"live-e2e.yml", "live-e2e"}:                           heavyGate + " && needs.changes.outputs.docs_only != 'true'",
-	{"live-e2e.yml", "metrics-executed-proof"}:             heavyGate + " && needs.changes.outputs.docs_only != 'true'",
+	{"live-e2e.yml", "live-e2e-run"}:                       heavyGate + " && needs.changes.outputs.docs_only != 'true'",
+	{"live-e2e.yml", "metrics-executed-proof-run"}:         heavyGate + " && needs.changes.outputs.docs_only != 'true'",
 }
 
 var requiredContextJobs = map[string][]string{
 	"go-quality.yml": {"go-quality-leg", "go-quality"},
 	"test.yml":       {"changes", "chart-started", "test"},
-	"live-e2e.yml":   {"changes", "metrics-executed-proof"},
+	"live-e2e.yml":   {"changes", "metrics-executed-proof-run", "metrics-executed-proof", "live-e2e"},
 }
 
-var cacheNegationJobs = map[string]string{"go-quality.yml": "go-quality-leg", "test.yml": "chart-started", "live-e2e.yml": "metrics-executed-proof"}
+var cacheNegationJobs = map[string]string{"go-quality.yml": "go-quality-leg", "test.yml": "chart-started", "live-e2e.yml": "metrics-executed-proof-run"}
 
 type cachePathSite struct{ job, step, ifWant string }
 
 var cachePathSites = map[string]cachePathSite{
 	"go-quality.yml": {"go-quality-leg", "Configure self-hosted Go cache paths", "steps.relevance.outputs.relevant == 'true' && ((" + allowlistCondition + ") || (" + racePoolTerm + "))"},
 	"test.yml":       {"chart-started", "Configure self-hosted Go cache paths", allowlistCondition},
-	"live-e2e.yml":   {"metrics-executed-proof", "Configure self-hosted Go cache paths", allowlistCondition},
+	"live-e2e.yml":   {"metrics-executed-proof-run", "Configure self-hosted Go cache paths", allowlistCondition},
 }
 
 func ungated(v string) string {

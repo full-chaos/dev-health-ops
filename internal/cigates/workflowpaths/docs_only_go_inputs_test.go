@@ -10,8 +10,7 @@ import (
 	"testing"
 )
 
-// ci/codeql_docs_only.sh is the one docs-only definition (CodeQL on pull requests, go-quality, go.yml, docker-images,
-// live-e2e). A docs path that a Go test reads is not docs-only: the base commit's go.yml on.push.paths lists the Go test
+// ci/codeql_docs_only.sh is the one docs-only definition (CodeQL on pull requests, go.yml, docker-images, live-e2e). A docs path that a Go test reads is not docs-only: the base commit's go.yml on.push.paths lists the Go test
 // inputs, and the script refuses any changed path matching one of them.
 
 func classifierScript(t *testing.T) string {

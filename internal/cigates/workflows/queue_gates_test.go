@@ -69,6 +69,36 @@ type queueGateSpec struct {
 
 var queueGates = []queueGateSpec{
 	{
+		file:      "live-e2e.yml",
+		job:       "live-e2e",
+		condition: "always() && (github.event_name == 'pull_request' || github.event_name == 'merge_group')",
+		needs:     []string{"changes", "live-e2e-run"},
+		env: map[string]string{
+			"GATE_NAME":         "live-e2e",
+			"EVENT_NAME":        "${{ github.event_name }}",
+			"GATE_HAS_SELECTOR": "true",
+			"CHANGES_RESULT":    "${{ needs.changes.result }}",
+			"CHANGES_CODE":      "${{ (needs.changes.outputs.docs_only == 'true' || (github.event_name == 'pull_request' && needs.changes.outputs.code == 'false')) && 'false' || 'true' }}",
+			"HEAVY_ON_PR":       "${{ contains(github.event.pull_request.labels.*.name, 'ci:full') && 'true' || 'false' }}",
+		},
+		rows: []string{"live-e2e-run|queue-heavy|${{ needs.live-e2e-run.result }}"},
+	},
+	{
+		file:      "live-e2e.yml",
+		job:       "metrics-executed-proof",
+		condition: "always() && (github.event_name == 'pull_request' || github.event_name == 'merge_group')",
+		needs:     []string{"changes", "metrics-executed-proof-run"},
+		env: map[string]string{
+			"GATE_NAME":         "metrics-executed-proof",
+			"EVENT_NAME":        "${{ github.event_name }}",
+			"GATE_HAS_SELECTOR": "true",
+			"CHANGES_RESULT":    "${{ needs.changes.result }}",
+			"CHANGES_CODE":      "${{ (needs.changes.outputs.docs_only == 'true' || (github.event_name == 'pull_request' && needs.changes.outputs.code == 'false')) && 'false' || 'true' }}",
+			"HEAVY_ON_PR":       "${{ contains(github.event.pull_request.labels.*.name, 'ci:full') && 'true' || 'false' }}",
+		},
+		rows: []string{"metrics-executed-proof-run|queue-heavy|${{ needs.metrics-executed-proof-run.result }}"},
+	},
+	{
 		file:      "go.yml",
 		job:       "go-queue-gate",
 		condition: "always() && (github.event_name == 'pull_request' || github.event_name == 'merge_group')",
@@ -119,6 +149,7 @@ func queueGateViolations(t *testing.T, root string) []string {
 	t.Helper()
 	var out []string
 	add := func(f string, a ...any) { out = append(out, fmt.Sprintf(f, a...)) }
+	judgedByFile := map[string]map[string]bool{}
 	for _, g := range queueGates {
 		j := asMap(jobsOf(loadWf(t, root, g.file))[g.job])
 		if j == nil {
@@ -160,24 +191,50 @@ func queueGateViolations(t *testing.T, root string) []string {
 		if !reflect.DeepEqual(rows, g.rows) {
 			add("%s:%s: GATED_JOB rows %q, want %q", g.file, g.job, rows, g.rows)
 		}
-		// Every heavy job of this workflow, except the self-hosted dind precondition, is judged by its gate.
-		judged := map[string]bool{}
+		if judgedByFile[g.file] == nil {
+			judgedByFile[g.file] = map[string]bool{}
+		}
 		for _, r := range rows {
-			judged[strings.SplitN(r, "|", 2)[0]] = true
+			judgedByFile[g.file][strings.SplitN(r, "|", 2)[0]] = true
+		}
+	}
+	// Every heavy job, except the self-hosted dind preconditions, is judged by a required gate of its workflow.
+	for _, file := range []string{"go.yml", "docker-images.yml", "live-e2e.yml"} {
+		judged := judgedByFile[file]
+		if judged == nil {
+			judged = map[string]bool{}
 		}
 		judged["go-container-reproducibility-self-hosted"] = judged["go-container-reproducibility"]
 		var unjudged []string
 		for _, p := range sortedPairs(heavyGatedJobs) {
-			if p[0] == g.file && p[1] != "dind-smoke-test" && !judged[p[1]] {
+			if p[0] == file && p[1] != "dind-smoke-test" && !judged[p[1]] {
 				unjudged = append(unjudged, p[1])
 			}
 		}
 		sort.Strings(unjudged)
 		if len(unjudged) > 0 {
-			add("%s:%s does not judge the heavy job(s) %v: a red one would merge through the queue", g.file, g.job, unjudged)
+			add("%s: no required gate judges the heavy job(s) %v: a red one would merge through the queue", file, unjudged)
 		}
 	}
 	return out
+}
+
+// acp P1: a failed `changes` skips both live-e2e work jobs, and a skipped required check passes. The required contexts
+// live-e2e and metrics-executed-proof are always() fan-ins whose selector is `changes`, so that run fails.
+func TestLiveE2EFanInsFailWhenChangesFails(t *testing.T) {
+	for _, gate := range []string{"live-e2e", "metrics-executed-proof"} {
+		for _, event := range []string{"pull_request", "merge_group"} {
+			for _, changes := range []string{"failure", "cancelled", "skipped"} {
+				v := runGate(t, map[string]string{
+					"GATE_NAME": gate, "EVENT_NAME": event, "GATE_HAS_SELECTOR": "true",
+					"CHANGES_RESULT": changes, "CHANGES_CODE": "true", "HEAVY_ON_PR": "false",
+					"GATED_JOB_1": gate + "-run|queue-heavy|skipped",
+				})
+				assertVerdict(t, gate, v, fail, gate+" "+event+" changes="+changes)
+			}
+		}
+	}
+	expectNoViolations(t, queueGateViolations(t, repoRoot(t)))
 }
 
 // live-e2e and metrics-executed-proof are required contexts, and a skipped job reports success. On merge_group the
@@ -185,7 +242,7 @@ func queueGateViolations(t *testing.T, root string) []string {
 // `code` there: every queue entry that is not docs-only runs them, even one whose own PR is docs-only behind a code entry.
 func TestLiveE2ERunsForEveryNonDocsQueueEntry(t *testing.T) {
 	doc := loadWf(t, repoRoot(t), "live-e2e.yml")
-	for _, name := range []string{"live-e2e", "metrics-executed-proof"} {
+	for _, name := range []string{"live-e2e-run", "metrics-executed-proof-run"} {
 		condition := strings.TrimSpace(asString(pinJob(doc, name)["if"]))
 		for _, c := range []struct {
 			event, code, docsOnly, labels string
@@ -221,8 +278,8 @@ func TestQueueGatesJudgeEveryHeavyJob(t *testing.T) {
 
 func TestQueueGatesPlantedDefects(t *testing.T) {
 	root := repoRoot(t)
-	const goYml, dock = ".github/workflows/go.yml", ".github/workflows/docker-images.yml"
-	files := []string{goYml, dock}
+	const goYml, dock, live = ".github/workflows/go.yml", ".github/workflows/docker-images.yml", ".github/workflows/live-e2e.yml"
+	files := []string{goYml, dock, live}
 	cases := []struct {
 		name string
 		muts []mutation
@@ -235,6 +292,8 @@ func TestQueueGatesPlantedDefects(t *testing.T) {
 		{"image-queue-gate stops needing go-build", []mutation{{dock, "needs: [changes, resolve, go-build, go-api-tools-build, go-build-dho-arm64]", "needs: [changes, resolve, go-api-tools-build, go-build-dho-arm64]"}}, []string{"image-queue-gate", "needs"}},
 		{"image-queue-gate treats a hotfix label as ci:full on a draft", []mutation{{dock, "(!github.event.pull_request.draft && contains(github.event.pull_request.labels.*.name, 'hotfix-image'))", "contains(github.event.pull_request.labels.*.name, 'hotfix-image')"}}, []string{"HEAVY_ON_PR"}},
 		{"image-queue-gate is renamed", []mutation{{dock, "    name: image-queue-gate\n", "    name: images\n"}}, []string{"required context"}},
+		{"live-e2e fan-in loses always()", []mutation{{live, "    name: live-e2e\n    if: always() && ", "    name: live-e2e\n    if: "}}, []string{"live-e2e.yml:live-e2e", "the if must be exactly"}},
+		{"metrics-executed-proof fan-in drops changes as its selector", []mutation{{live, "    needs: [changes, metrics-executed-proof-run]\n", "    needs: [metrics-executed-proof-run]\n"}}, []string{"live-e2e.yml:metrics-executed-proof", "needs"}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

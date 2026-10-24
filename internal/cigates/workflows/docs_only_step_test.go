@@ -12,14 +12,14 @@ import (
 )
 
 // The docs-only verdict has ONE definition (ci/codeql_docs_only.sh) and one workflow step that runs it from the base
-// commit. Every copy of that step is byte-identical to the canonical one in go-quality.yml, and the step judges the whole
+// commit. Every copy of that step is byte-identical to the canonical one in go.yml, and the step judges the whole
 // merge group (target branch tip...entry head), never the entry's own PR alone.
 
 const docsStepName = "Docs-only change (judged by the base commit's ci/codeql_docs_only.sh)"
 
-// docsStepSites: every job that runs the docs-only step; the first is the canonical copy.
+// docsStepSites: every job that runs the docs-only step; the first is the canonical copy. go-quality is not one: its
+// plan verdict is exact, and some docs files are Go test inputs (TestGoQualityLegsNeverSkipOnDocsOnly).
 var docsStepSites = [][2]string{
-	{"go-quality.yml", "go-quality-plan"},
 	{"go.yml", "go-storage-integration-plan"},
 	{"docker-images.yml", "changes"},
 	{"live-e2e.yml", "changes"},
@@ -67,7 +67,7 @@ func docsStepViolations(t *testing.T, root string) []string {
 		s := docsStep(t, root, site[0], site[1])
 		for _, key := range []string{"name", "env", "run", "if", "shell"} {
 			if !reflect.DeepEqual(s[key], canon[key]) {
-				add("%s:%s: the docs step's %s differs from the canonical copy in go-quality.yml:go-quality-plan", site[0], site[1], key)
+				add("%s:%s: the docs step's %s differs from the canonical copy in go.yml:go-storage-integration-plan", site[0], site[1], key)
 			}
 		}
 		if out := asMap(asMap(jobsOf(loadWf(t, root, site[0]))[site[1]])["outputs"]); asString(out["docs_only"]) != "${{ steps.docs.outputs.docs_only }}" {
@@ -112,8 +112,8 @@ func TestDocsOnlyStepPlantedDefects(t *testing.T) {
 		want []string
 	}{
 		{"a copy judges the head's classifier", []mutation{{".github/workflows/live-e2e.yml", `git show "${base}:ci/codeql_docs_only.sh" > "${RUNNER_TEMP}/docs_only_judge.sh"`, `cp ci/codeql_docs_only.sh "${RUNNER_TEMP}/docs_only_judge.sh"`}}, []string{"live-e2e.yml:changes", "run differs"}},
-		{"a copy judges one PR (merge_group.base_sha)", []mutation{{".github/workflows/go.yml", "          MG_BASE_REF: ${{ github.event.merge_group.base_ref }}\n          MG_HEAD_SHA: ${{ github.event.merge_group.head_sha }}\n        run: |\n          set -uo pipefail\n          docs_only=false", "          MG_BASE_REF: ${{ github.event.merge_group.base_sha }}\n          MG_HEAD_SHA: ${{ github.event.merge_group.head_sha }}\n        run: |\n          set -uo pipefail\n          docs_only=false"}}, []string{"go.yml:go-storage-integration-plan", "env differs"}},
-		{"the canonical copy trusts any output", []mutation{{".github/workflows/go-quality.yml", `[ "${docs_only}" = "true" ] || docs_only=false`, `true`}}, []string{"canonical docs step does not contain"}},
+		{"a copy judges one PR (merge_group.base_sha)", []mutation{{".github/workflows/docker-images.yml", "          MG_BASE_REF: ${{ github.event.merge_group.base_ref }}\n          MG_HEAD_SHA: ${{ github.event.merge_group.head_sha }}\n        run: |\n          set -uo pipefail\n          docs_only=false", "          MG_BASE_REF: ${{ github.event.merge_group.base_sha }}\n          MG_HEAD_SHA: ${{ github.event.merge_group.head_sha }}\n        run: |\n          set -uo pipefail\n          docs_only=false"}}, []string{"docker-images.yml:changes", "env differs"}},
+		{"the canonical copy trusts any output", []mutation{{".github/workflows/go.yml", `[ "${docs_only}" = "true" ] || docs_only=false`, `true`}}, []string{"canonical docs step does not contain"}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -272,5 +272,21 @@ func TestDocsOnlyStepBehaviour(t *testing.T) {
 		return string(out)
 	}()); got != "true" {
 		t.Errorf("control: entry 2 alone (entry 1...entry 2) = %q, want true", got)
+	}
+}
+
+// go-quality's plan verdict is exact (cmd/cigate plan-verdict): docs files such as docs/operate/runbooks/*.md are Go test
+// inputs (internal/goapicli/prove walks docs/), so no docs-only verdict may skip or override a go-quality leg.
+func TestGoQualityLegsNeverSkipOnDocsOnly(t *testing.T) {
+	root := repoRoot(t)
+	text := readFile(t, filepath.Join(root, ".github", "workflows", "go-quality.yml"))
+	for _, banned := range []string{"codeql_docs_only", "docs_only", "docs-skippable", "DOCS"} {
+		if strings.Contains(text, banned) {
+			t.Errorf("go-quality.yml contains %q: a docs-only verdict must not skip or override the exact go-quality plan", banned)
+		}
+	}
+	leg := asMap(jobsOf(loadWf(t, root, "go-quality.yml"))["go-quality-leg"])
+	if _, has := leg["if"]; has {
+		t.Errorf("go-quality-leg has a job-level if %q: the legs must always report", asString(leg["if"]))
 	}
 }

@@ -8,8 +8,8 @@
 # it is docs/**, docs-data/**, any *.md, .github/docs-legacy/**, or mkdocs.yml
 # at the repository root, and it is not Go source or a Go module file.
 #
-# This is the ONE docs-only definition: CodeQL (pull requests), go-quality, go.yml,
-# docker-images and live-e2e all call it. A docs path that a Go test reads is not
+# This is the ONE docs-only definition: CodeQL (pull requests), go.yml, docker-images
+# and live-e2e all call it (go-quality's own plan verdict is exact and does not use it). A docs path that a Go test reads is not
 # docs-only: the base commit's .github/workflows/go.yml on.push.paths lists every
 # Go test input, and a path matching one of those globs fails the verdict. A
 # go.yml this script cannot read or parse also fails it.

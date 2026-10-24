@@ -131,7 +131,7 @@ jobs:
               - 'contracts/auth/v1/**'
               - '.github/workflows/live-e2e.yml'
 
-  live-e2e:
+  live-e2e-run:
     needs: [changes]
     if: >-
       (!(github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) &&
@@ -268,7 +268,7 @@ jobs:
   # zero_rows_with_source_data for every family. It goes green once
   # CHAOS-4263 merges. Do not mark it a required check before that -- see the
   # PR's RISK-NOTES.
-  metrics-executed-proof:
+  metrics-executed-proof-run:
     needs: [changes]
     if: >-
       (!(github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) &&
@@ -401,3 +401,52 @@ jobs:
             metrics-executed-proof-reconciler.log
             metrics-executed-proof-family-summary.json
           if-no-files-found: ignore
+
+  # REQUIRED status checks (ruleset): live-e2e and metrics-executed-proof are fan-ins of the work jobs above. A skipped
+  # job reports success, so a failed `changes` (which skips both work jobs) must fail here, never pass: always(), and the
+  # aggregate fails unless `changes` succeeded. A work job's skip is legitimate only on a pull request without ci:full,
+  # or when there is nothing to run (docs-only, or a pull request whose live-e2e paths did not change) (`queue-heavy`).
+  # Pull requests and merge queue entries only: the ruleset judges those.
+  live-e2e:
+    name: live-e2e
+    if: always() && (github.event_name == 'pull_request' || github.event_name == 'merge_group')
+    needs: [changes, live-e2e-run]
+    runs-on: ${{ (vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')) && fromJSON('["self-hosted","oci-arc-runners"]') || 'ubuntu-latest' }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Aggregate the live-e2e result
+        env:
+          GATE_NAME: live-e2e
+          EVENT_NAME: ${{ github.event_name }}
+          GATE_HAS_SELECTOR: "true"
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          CHANGES_CODE: ${{ (needs.changes.outputs.docs_only == 'true' || (github.event_name == 'pull_request' && needs.changes.outputs.code == 'false')) && 'false' || 'true' }}
+          HEAVY_ON_PR: ${{ contains(github.event.pull_request.labels.*.name, 'ci:full') && 'true' || 'false' }}
+          GATED_JOB_1: live-e2e-run|queue-heavy|${{ needs.live-e2e-run.result }}
+        run: |
+          chmod +x ci/aggregate_gate_results.sh
+          ./ci/aggregate_gate_results.sh
+
+  metrics-executed-proof:
+    name: metrics-executed-proof
+    if: always() && (github.event_name == 'pull_request' || github.event_name == 'merge_group')
+    needs: [changes, metrics-executed-proof-run]
+    runs-on: ${{ (vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')) && fromJSON('["self-hosted","oci-arc-runners"]') || 'ubuntu-latest' }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Aggregate the metrics-executed-proof result
+        env:
+          GATE_NAME: metrics-executed-proof
+          EVENT_NAME: ${{ github.event_name }}
+          GATE_HAS_SELECTOR: "true"
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          CHANGES_CODE: ${{ (needs.changes.outputs.docs_only == 'true' || (github.event_name == 'pull_request' && needs.changes.outputs.code == 'false')) && 'false' || 'true' }}
+          HEAVY_ON_PR: ${{ contains(github.event.pull_request.labels.*.name, 'ci:full') && 'true' || 'false' }}
+          GATED_JOB_1: metrics-executed-proof-run|queue-heavy|${{ needs.metrics-executed-proof-run.result }}
+        run: |
+          chmod +x ci/aggregate_gate_results.sh
+          ./ci/aggregate_gate_results.sh

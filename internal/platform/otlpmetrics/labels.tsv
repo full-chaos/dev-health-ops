@@ -123,7 +123,8 @@ sync_finalize_delivery_not_current_total	reason	code: internal/syncdispatchrunti
 sync_route_generation_stranded_total	action,kind	code: internal/syncreconciler/generation_reconcile.go
 team_catalog_snapshot_close_abandoned_total	kind,provider,reason	code: internal/providersync/snapshot_close_report.go
 team_repo_ownership_retraction_held_total	kind,provider,reason	code: internal/providersync/team_repo_ownership_retraction_guard.go
-workgraph_issue_pr_fallback_beside_native_issue_rows	organization_id	code: internal/jobs/workgraph/issuepredges/invariant.go (named by a table row, created in a loop)
-workgraph_issue_pr_fallback_beside_native_pull_request_rows	organization_id	code: internal/jobs/workgraph/issuepredges/invariant.go (named by a table row, created in a loop)
-workgraph_issue_pr_fallback_beside_native_rows	organization_id	code: internal/jobs/workgraph/issuepredges/invariant.go (named by a table row, created in a loop)
-workgraph_issue_pr_fallback_pull_request_issue_side_rows	organization_id	code: internal/jobs/workgraph/issuepredges/invariant.go (named by a table row, created in a loop)
+workgraph_issue_pr_fallback_beside_native_issue_rows_total		code: internal/jobs/workgraph/issuepredges/invariant.go (named by a table row, created in a loop)
+workgraph_issue_pr_fallback_beside_native_pull_request_rows_total		code: internal/jobs/workgraph/issuepredges/invariant.go (named by a table row, created in a loop)
+workgraph_issue_pr_fallback_beside_native_rows_total		code: internal/jobs/workgraph/issuepredges/invariant.go (named by a table row, created in a loop)
+workgraph_issue_pr_fallback_invariant_checks_total		code: internal/jobs/workgraph/issuepredges/invariant.go (named by a table row, created in a loop)
+workgraph_issue_pr_fallback_pull_request_issue_side_rows_total		code: internal/jobs/workgraph/issuepredges/invariant.go (named by a table row, created in a loop)

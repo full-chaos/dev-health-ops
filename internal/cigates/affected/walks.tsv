@@ -5,6 +5,7 @@ deploy/helm/dev-health	auth_session_secret_script_test.go	unexpressed	-
 internal/adminops	users_password_fixtures_test.go	internal/adminops	dir
 internal/adminops	users_password_fixtures_test.go	internal/adminops/testdata	dir
 internal/adminops	users_password_fixtures_test.go	internal/adminops/testdata/golden	dir
+internal/adminops	usersowned_test.go	internal/adminops	dir
 internal/api/integrationsadmin/discoveryvenue	discover_venue_oracle_integration_test.go	internal/api/syncadmin/testdata/jira_recorded	dir
 internal/api/syncadmin	create_config_venue_oracle_integration_test.go	internal/api/syncadmin/testdata/jira_recorded	dir
 internal/api/syncadmin	dataset_writer_census_test.go	unexpressed	-

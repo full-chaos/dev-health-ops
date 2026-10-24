@@ -92,6 +92,7 @@ internal/auth/keystore	open_unix.go
 internal/auth/ratelimitvalkey	acl_test.go
 internal/auth/session	credential_test.go
 internal/auth/writerinventory	scan_test.go
+internal/auth/writerinventory	usersowned_census_shapes_test.go
 internal/auth/writerinventory	usersowned_census_test.go
 internal/bigboycompose	billing_edge_override_test.go
 internal/bigboycompose	dsn_class_test.go

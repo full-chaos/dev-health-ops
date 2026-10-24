@@ -191,7 +191,7 @@ WHERE day >= {start_day:Date} AND day < {end_day:Date}
   AND org_id = {org_id:String}
 GROUP BY %s
 ORDER BY value DESC
-LIMIT {limit:UInt64}
+LIMIT {limit_n:UInt64}
 %s
 `
 
@@ -214,7 +214,7 @@ func fetchPersonBreakdown(ctx context.Context, client QueryClient, cfg personBre
 		{Name: "start_day", Value: formatDay(startDay)},
 		{Name: "end_day", Value: formatDay(endDay)},
 		{Name: "identities", Value: identities},
-		{Name: "limit", Value: breakdownLimit},
+		{Name: "limit_n", Value: breakdownLimit},
 		{Name: "org_id", Value: orgID},
 	}
 	rows, err := client.Query(ctx, query, bindings)

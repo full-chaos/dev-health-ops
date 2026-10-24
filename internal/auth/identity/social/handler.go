@@ -43,6 +43,11 @@ type Handlers struct {
 	Service  Domain
 	Sessions SessionWriter
 	Auth     Authenticator
+	// Admit, when set, runs for a link or unlink once the request is known to
+	// be well formed (the body decoded, the id parsed) and before the domain
+	// is called. It answers a refusal itself and returns false to stop. A
+	// request that fails validation never reaches it, so it costs nothing.
+	Admit func(w http.ResponseWriter, r *http.Request) bool
 }
 
 type tokenRequest struct {
@@ -90,6 +95,9 @@ func (h Handlers) Link(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if h.Admit != nil && !h.Admit(w, r) {
+		return
+	}
 	who.RequestID = requestid.Audit(r.Context())
 	linked, err := h.Service.Link(r.Context(), who, provider, token)
 	if err != nil {
@@ -111,6 +119,9 @@ func (h Handlers) Unlink(w http.ResponseWriter, r *http.Request) {
 		writeDetail(w, http.StatusNotFound, "Identity not found")
 		return
 	}
+	if h.Admit != nil && !h.Admit(w, r) {
+		return
+	}
 	who.RequestID = requestid.Audit(r.Context())
 	if err := h.Service.Unlink(r.Context(), who, id); err != nil {
 		writeError(w, "", err)
@@ -119,18 +130,15 @@ func (h Handlers) Unlink(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// AccountExistsMessage is the 409 for an e-mail another account holds; it names
+// no sign-in method.
+const AccountExistsMessage = "An account with this email already exists. Please sign in with your existing sign-in method."
+
 func writeError(w http.ResponseWriter, provider Provider, err error) {
 	var conflict *ConflictError
 	switch {
 	case errors.As(err, &conflict):
-		method := conflict.ExistingMethod
-		if method == "" {
-			method = "your existing method"
-		}
-		writeJSON(w, http.StatusConflict, map[string]any{"detail": map[string]string{
-			"message":           "An account with this email already exists. Please sign in with " + method + ".",
-			"existing_provider": conflict.ExistingMethod,
-		}})
+		writeDetail(w, http.StatusConflict, AccountExistsMessage)
 	case errors.Is(err, ErrProviderUnavailable):
 		writeInternal(w)
 	case errors.Is(err, ErrProviderNotConfigured):

@@ -132,7 +132,7 @@ func ResolveScoped(ctx context.Context, client QueryClient, orgID string, sinceD
 		{Name: "org_id", Value: orgID},
 		{Name: "since_date", Value: sinceDate.String()},
 		{Name: "until_date", Value: untilDate.String()},
-		{Name: "limit", Value: clampLimit(limit)},
+		{Name: "limit_n", Value: clampLimit(limit)},
 	}
 
 	repoIDs := scope.RepoIDs
@@ -185,7 +185,7 @@ func ResolveScoped(ctx context.Context, client QueryClient, orgID string, sinceD
             ` + inner + `
         )
         ORDER BY reviews_count DESC, repo_id, reviewer, author, day
-        LIMIT {limit:UInt64}`
+        LIMIT {limit_n:UInt64}`
 
 	rows, err := client.Query(ctx, query, bindings)
 	if err != nil {
@@ -264,7 +264,7 @@ func countStatement(inner string) string {
 func countRows(ctx context.Context, client QueryClient, inner string, bindings []clickhouse.Binding) (int, error) {
 	countBindings := make([]clickhouse.Binding, 0, len(bindings))
 	for _, b := range bindings {
-		if b.Name != "limit" {
+		if b.Name != "limit_n" {
 			countBindings = append(countBindings, b)
 		}
 	}

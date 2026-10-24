@@ -1,0 +1,309 @@
+{
+  "description": "Golden corpus for workload-token.v1 (the decoded header and claims of the workload token): accept, schema rejects and client-enforced rejects. The signed vectors are in golden/workload-token.",
+  "accept": [
+    {
+      "file": "valid-auth-service.json",
+      "why": "The ordinary workload token: audience auth-service, typ workload+jwt, no organization, no session, five minutes."
+    },
+    {
+      "file": "valid-lifetime-at-the-ceiling.json",
+      "why": "exp - iat equals the 300 s ceiling: the longest lifetime a verifier accepts."
+    },
+    {
+      "file": "valid-delayed-nbf.json",
+      "why": "nbf later than iat, inside the lifetime: iat <= nbf < exp."
+    }
+  ],
+  "reject": [
+    {
+      "file": "invalid-header-alg-hs256.json",
+      "expect_instance_location": "/header/alg",
+      "expect_keyword": "const",
+      "why": "HS256: a symmetric algorithm is never this token's."
+    },
+    {
+      "file": "invalid-header-alg-none.json",
+      "expect_instance_location": "/header/alg",
+      "expect_keyword": "const",
+      "why": "alg none: an unsigned token."
+    },
+    {
+      "file": "invalid-header-alg-lowercase.json",
+      "expect_instance_location": "/header/alg",
+      "expect_keyword": "const",
+      "why": "alg is case-sensitive."
+    },
+    {
+      "file": "invalid-header-typ-access-token.json",
+      "expect_instance_location": "/header/typ",
+      "expect_keyword": "const",
+      "why": "typ at+jwt is the user access token's type, never a workload token's."
+    },
+    {
+      "file": "invalid-header-typ-jwt.json",
+      "expect_instance_location": "/header/typ",
+      "expect_keyword": "const",
+      "why": "typ JWT is the HS256 token's type."
+    },
+    {
+      "file": "invalid-header-typ-lowercase-jwt.json",
+      "expect_instance_location": "/header/typ",
+      "expect_keyword": "const",
+      "why": "typ jwt is the envelope's type."
+    },
+    {
+      "file": "invalid-header-typ-uppercase.json",
+      "expect_instance_location": "/header/typ",
+      "expect_keyword": "const",
+      "why": "typ is case-sensitive: exact bytes."
+    },
+    {
+      "file": "invalid-header-typ-mixed-case.json",
+      "expect_instance_location": "/header/typ",
+      "expect_keyword": "const",
+      "why": "typ is case-sensitive: no mixed-case form."
+    },
+    {
+      "file": "invalid-header-typ-application-prefix.json",
+      "expect_instance_location": "/header/typ",
+      "expect_keyword": "const",
+      "why": "An application/-prefixed media type is not the typ."
+    },
+    {
+      "file": "invalid-header-typ-empty.json",
+      "expect_instance_location": "/header/typ",
+      "expect_keyword": "const",
+      "why": "An empty typ."
+    },
+    {
+      "file": "invalid-header-typ-trailing-space.json",
+      "expect_instance_location": "/header/typ",
+      "expect_keyword": "const",
+      "why": "A trailing space is not the typ."
+    },
+    {
+      "file": "invalid-header-typ-absent.json",
+      "expect_instance_location": "/header",
+      "expect_keyword": "required",
+      "why": "No typ member: a missing typ is refused."
+    },
+    {
+      "file": "invalid-header-kid-absent.json",
+      "expect_instance_location": "/header",
+      "expect_keyword": "required",
+      "why": "No kid member."
+    },
+    {
+      "file": "invalid-header-kid-empty.json",
+      "expect_instance_location": "/header/kid",
+      "expect_keyword": "pattern",
+      "why": "An empty kid."
+    },
+    {
+      "file": "invalid-header-kid-trailing-newline.json",
+      "expect_instance_location": "/header/kid",
+      "expect_keyword": "pattern",
+      "why": "A kid with a trailing newline."
+    },
+    {
+      "file": "invalid-header-jku.json",
+      "expect_instance_location": "/header",
+      "expect_keyword": "additionalProperties",
+      "why": "A jku header member: a verifier never reads a key, key URL or certificate from the token."
+    },
+    {
+      "file": "invalid-header-jwk.json",
+      "expect_instance_location": "/header",
+      "expect_keyword": "additionalProperties",
+      "why": "A jwk header member: a verifier never reads a key, key URL or certificate from the token."
+    },
+    {
+      "file": "invalid-header-x5u.json",
+      "expect_instance_location": "/header",
+      "expect_keyword": "additionalProperties",
+      "why": "A x5u header member: a verifier never reads a key, key URL or certificate from the token."
+    },
+    {
+      "file": "invalid-header-crit.json",
+      "expect_instance_location": "/header",
+      "expect_keyword": "additionalProperties",
+      "why": "A crit header member: a verifier never reads a key, key URL or certificate from the token."
+    },
+    {
+      "file": "invalid-aud-user-api.json",
+      "expect_instance_location": "/claims/aud",
+      "expect_keyword": "enum",
+      "why": "The user-token audience dev-health-api: not a workload audience."
+    },
+    {
+      "file": "invalid-aud-unknown.json",
+      "expect_instance_location": "/claims/aud",
+      "expect_keyword": "enum",
+      "why": "An audience no workload token carries."
+    },
+    {
+      "file": "invalid-aud-array.json",
+      "expect_instance_location": "/claims/aud",
+      "expect_keyword": "type",
+      "why": "Two audiences: a workload token names exactly one service."
+    },
+    {
+      "file": "invalid-aud-absent.json",
+      "expect_instance_location": "/claims",
+      "expect_keyword": "required",
+      "why": "No aud member."
+    },
+    {
+      "file": "invalid-aud-trailing-space.json",
+      "expect_instance_location": "/claims/aud",
+      "expect_keyword": "enum",
+      "why": "A trailing space is another audience."
+    },
+    {
+      "file": "invalid-principal-type-human.json",
+      "expect_instance_location": "/claims/principal_type",
+      "expect_keyword": "const",
+      "why": "principal_type human: a workload token is workload only."
+    },
+    {
+      "file": "invalid-principal-type-absent.json",
+      "expect_instance_location": "/claims",
+      "expect_keyword": "required",
+      "why": "No principal_type member."
+    },
+    {
+      "file": "invalid-sub-user-prefix.json",
+      "expect_instance_location": "/claims/sub",
+      "expect_keyword": "pattern",
+      "why": "sub with the user-id prefix, not a principal id."
+    },
+    {
+      "file": "invalid-sub-integer.json",
+      "expect_instance_location": "/claims/sub",
+      "expect_keyword": "type",
+      "why": "sub as a JSON number."
+    },
+    {
+      "file": "invalid-sub-absent.json",
+      "expect_instance_location": "/claims",
+      "expect_keyword": "required",
+      "why": "No sub member."
+    },
+    {
+      "file": "invalid-iss-http.json",
+      "expect_instance_location": "/claims/iss",
+      "expect_keyword": "pattern",
+      "why": "An http issuer."
+    },
+    {
+      "file": "invalid-jti-short.json",
+      "expect_instance_location": "/claims/jti",
+      "expect_keyword": "pattern",
+      "why": "A jti shorter than 22 characters."
+    },
+    {
+      "file": "invalid-jti-absent.json",
+      "expect_instance_location": "/claims",
+      "expect_keyword": "required",
+      "why": "No jti member: a workload token is single-use identified."
+    },
+    {
+      "file": "invalid-iat-zero.json",
+      "expect_instance_location": "/claims/iat",
+      "expect_keyword": "minimum",
+      "why": "iat 0."
+    },
+    {
+      "file": "invalid-exp-string.json",
+      "expect_instance_location": "/claims/exp",
+      "expect_keyword": "type",
+      "why": "exp as a string."
+    },
+    {
+      "file": "invalid-exp-after-9999.json",
+      "expect_instance_location": "/claims/exp",
+      "expect_keyword": "maximum",
+      "why": "exp after 9999-12-31."
+    },
+    {
+      "file": "invalid-nbf-absent.json",
+      "expect_instance_location": "/claims",
+      "expect_keyword": "required",
+      "why": "No nbf member."
+    },
+    {
+      "file": "invalid-claim-org-id.json",
+      "expect_instance_location": "/claims",
+      "expect_keyword": "additionalProperties",
+      "why": "A org_id: a workload token acts for no organization."
+    },
+    {
+      "file": "invalid-claim-sid.json",
+      "expect_instance_location": "/claims",
+      "expect_keyword": "additionalProperties",
+      "why": "A sid: a workload token has no session."
+    },
+    {
+      "file": "invalid-claim-scope.json",
+      "expect_instance_location": "/claims",
+      "expect_keyword": "additionalProperties",
+      "why": "A scope: nothing in a workload token grants a permission."
+    },
+    {
+      "file": "invalid-claim-role.json",
+      "expect_instance_location": "/claims",
+      "expect_keyword": "additionalProperties",
+      "why": "A role: no claim grants a permission."
+    },
+    {
+      "file": "invalid-claim-email.json",
+      "expect_instance_location": "/claims",
+      "expect_keyword": "additionalProperties",
+      "why": "A email: no personal claim."
+    },
+    {
+      "file": "invalid-claim-tv.json",
+      "expect_instance_location": "/claims",
+      "expect_keyword": "additionalProperties",
+      "why": "A tv: no token version."
+    },
+    {
+      "file": "invalid-top-level-member.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "why": "An extra top-level member."
+    }
+  ],
+  "reject_by_client": [
+    {
+      "file": "client-rejected-lifetime-over-the-ceiling.json",
+      "why": "exp - iat is one second over the 300 s ceiling."
+    },
+    {
+      "file": "client-rejected-lifetime-one-hour.json",
+      "why": "exp - iat is the user token's 3600 s: a workload token never lives that long."
+    },
+    {
+      "file": "client-rejected-exp-equals-nbf.json",
+      "why": "exp equals nbf: an empty validity window."
+    },
+    {
+      "file": "client-rejected-nbf-before-iat.json",
+      "why": "nbf one second before iat."
+    },
+    {
+      "file": "client-rejected-duplicate-claim-aud.json",
+      "why": "aud appears twice (auth-service, then dev-health-api); a parser that keeps the last reads another audience.",
+      "duplicate_member": true
+    },
+    {
+      "file": "client-rejected-duplicate-header-typ.json",
+      "why": "typ appears twice (at+jwt, then workload+jwt); a parser that keeps the last reads a valid typ.",
+      "duplicate_member": true
+    },
+    {
+      "file": "client-rejected-exp-decimal-form.json",
+      "why": "exp in decimal form (1760000300.0): a NumericDate is an integer token."
+    }
+  ]
+}

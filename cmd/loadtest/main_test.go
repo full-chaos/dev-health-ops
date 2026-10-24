@@ -63,7 +63,7 @@ func TestUsageErrors(t *testing.T) {
 }
 
 func TestExampleConfigParses(t *testing.T) {
-	data, err := os.ReadFile("example.config.json")
+	data, err := os.ReadFile("../../internal/loadharness/testdata/example.config.json")
 	if err != nil {
 		t.Fatal(err)
 	}

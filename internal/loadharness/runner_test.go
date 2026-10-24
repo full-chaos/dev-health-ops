@@ -178,7 +178,7 @@ func TestRunSuppliedClientStillDoesNotFollowRedirects(t *testing.T) {
 	rep, err := Run(context.Background(), cfg, Options{
 		Profile: Profile{Rate: 20, Duration: 200 * time.Millisecond, Concurrency: 2},
 		Getenv:  func(string) string { return "" },
-		Client:  &http.Client{},
+		Client:  &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return nil }},
 	})
 	if err != nil {
 		t.Fatal(err)

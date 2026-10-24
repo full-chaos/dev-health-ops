@@ -1,4 +1,4 @@
-// Command auth-loadtest drives a fixed-rate load against a dev stack and
+// Command loadtest drives a fixed-rate load against a dev stack and
 // writes a JSON latency and error report. It refuses any host that is not
 // local, a compose service name, or named with --allow-host.
 package main
@@ -33,7 +33,7 @@ func main() {
 }
 
 func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv func(string) string) int {
-	fs := flag.NewFlagSet("auth-loadtest", flag.ContinueOnError)
+	fs := flag.NewFlagSet("loadtest", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	var (
 		cfgPath     = fs.String("config", "", "target config JSON file (required)")
@@ -52,13 +52,13 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 		return exitUsageErr
 	}
 	fail := func(format string, a ...any) int {
-		fmt.Fprintf(stderr, "auth-loadtest: "+format+"\n", a...)
+		fmt.Fprintf(stderr, "loadtest: "+format+"\n", a...)
 		return exitUsageErr
 	}
 	if *cfgPath == "" {
 		return fail("--config is required")
 	}
-	data, err := os.ReadFile(*cfgPath)
+	data, err := readConfig(*cfgPath)
 	if err != nil {
 		return fail("read config: %v", err)
 	}
@@ -116,4 +116,22 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 		return exitSLO
 	}
 	return exitOK
+}
+
+const maxConfigBytes = 1 << 20
+
+func readConfig(path string) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, maxConfigBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxConfigBytes {
+		return nil, fmt.Errorf("config is larger than %d bytes", maxConfigBytes)
+	}
+	return data, nil
 }

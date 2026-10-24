@@ -5,12 +5,12 @@
     {
       "name": "issue", "method": "POST", "path": "/internal/v1/sessions", "weight": 1,
       "headers": {"Content-Type": "application/json"},
-      "header_env": {"Authorization": {"env": "AUTH_LOADTEST_ISSUER_CREDENTIAL", "prefix": "Bearer "}},
-      "body": "{\"principal_id\":\"${ENV:AUTH_LOADTEST_PRINCIPAL_ID}\",\"organization_id\":null,\"amr\":[\"pwd\"]}"
+      "header_env": {"Authorization": {"env": "LOADTEST_ISSUER_CREDENTIAL", "prefix": "Bearer "}},
+      "body": "{\"principal_id\":\"${ENV:LOADTEST_PRINCIPAL_ID}\",\"organization_id\":null,\"amr\":[\"pwd\"]}"
     },
     {
       "name": "refresh", "method": "POST", "path": "/v1/token/refresh", "weight": 1,
-      "header_env": {"Authorization": {"env": "AUTH_LOADTEST_REFRESH_CREDENTIAL", "prefix": "Bearer "}}
+      "header_env": {"Authorization": {"env": "LOADTEST_REFRESH_CREDENTIAL", "prefix": "Bearer "}}
     }
   ]
 }

@@ -66,7 +66,7 @@ func observeRunPages(
 			unitsByID[unit.id] = unit
 		}
 		// Chunked at dispatchBudgetEstimateMaxUnitIDs (the old bridge's request-size ceiling, kept as the batch size) (codex
-		// round 2, CHAOS-4175). Deliberately stays fail-OPEN per chunk even for
+		// round 2). Deliberately stays fail-OPEN per chunk even for
 		// a contract rejection -- unlike enforceRun, this whole function is
 		// read-only shadow telemetry with zero effect on real admission (see
 		// this function's own doc comment); aborting the REAL dispatch pass

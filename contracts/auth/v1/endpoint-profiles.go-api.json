@@ -6361,7 +6361,8 @@
       "gaps": [
         "action: no catalog action covers the internal service entitlement and configuration reads (this leaf does not extend the vocabulary)",
         "impersonation_policy: the route has an organization context from the request path; the internal listener runs no organization-scope or impersonation middleware (internal/apiservice/service.go:390 names them on the main listener only); enum values seen in the schema: subject_to_impersonation_override, exempt_no_org_context, not_applicable_non_main_app, unknown; not_applicable_non_main_app recorded pending a ruling",
-        "disclosure_behavior: the by-id or unauthenticated answer of this route is not traced in this record"
+        "disclosure_behavior: the by-id or unauthenticated answer of this route is not traced in this record",
+        "credential_binding: the service credential is not bound to an organization; any holder may name any organization; it closes with the organization-bound workload claim and the acr-to-ops workload-token work (W8/W9), not in this leaf"
       ],
       "graphql_field_name": null,
       "id": "GET /api/v1/internal/acr/entitlements/{org_id} [dev-health-ops-api @internal]",
@@ -6376,7 +6377,7 @@
         "description": "routeAuth: the internal listener verifies the svc_acr_ service credential (hashed at rest) before any read, with a keyed attempt limiter."
       },
       "public_rationale": null,
-      "resource_resolver": "organization_from_path: the {org_id} path segment is the requested organization (internal/apiservice/acr/handlers.go:71); the internal service credential carries no organization binding that the handler compares with it",
+      "resource_resolver": "organization_from_path: the {org_id} path segment is the requested organization (internal/apiservice/acr/handlers.go:141); the service credential carries no organization binding that the handler compares with it",
       "route": "/api/v1/internal/acr/entitlements/{org_id}",
       "service": "dev-health-ops-api",
       "source": {
@@ -6432,7 +6433,8 @@
       "gaps": [
         "action: no catalog action covers the internal service entitlement and configuration reads (this leaf does not extend the vocabulary)",
         "impersonation_policy: the route has an organization context from the request path; the internal listener runs no organization-scope or impersonation middleware (internal/apiservice/service.go:390 names them on the main listener only); enum values seen in the schema: subject_to_impersonation_override, exempt_no_org_context, not_applicable_non_main_app, unknown; not_applicable_non_main_app recorded pending a ruling",
-        "disclosure_behavior: the by-id or unauthenticated answer of this route is not traced in this record"
+        "disclosure_behavior: the by-id or unauthenticated answer of this route is not traced in this record",
+        "credential_binding: the service credential is not bound to an organization; any holder may name any organization; it closes with the organization-bound workload claim and the acr-to-ops workload-token work (W8/W9), not in this leaf"
       ],
       "graphql_field_name": null,
       "id": "GET /api/v1/internal/acr/orgs/{org_id}/llm-config [dev-health-ops-api @internal]",
@@ -6447,7 +6449,7 @@
         "description": "routeAuth: the internal listener verifies the svc_acr_ service credential (hashed at rest) before any read, with a keyed attempt limiter."
       },
       "public_rationale": null,
-      "resource_resolver": "organization_from_path: the {org_id} path segment is the requested organization (internal/apiservice/acr/handlers.go:77); the internal service credential carries no organization binding that the handler compares with it",
+      "resource_resolver": "organization_from_path: the {org_id} path segment is the requested organization (internal/apiservice/acr/llmconfig.go:137); the service credential carries no organization binding that the handler compares with it",
       "route": "/api/v1/internal/acr/orgs/{org_id}/llm-config",
       "service": "dev-health-ops-api",
       "source": {

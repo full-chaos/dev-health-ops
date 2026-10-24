@@ -18,6 +18,8 @@ type Completer struct {
 	rubric    *Rubric
 	transport Transport
 	model     string
+	// provider overrides the provider part of the identity; empty is ProviderName.
+	provider string
 
 	// corrupt is a test hook. It can change the payload before the adapter's
 	// own check (stage "before_own_check": the own check must refuse it) or
@@ -45,11 +47,29 @@ func NewCompleter(transport Transport, model string) (*Completer, error) {
 	return &Completer{rubric: rubric, transport: transport, model: model}, nil
 }
 
+// NewCompleterForProvider is NewCompleter for a backend that is not jev: its
+// identity and stamp carry provider, so its rows never share a result-reuse key
+// with jev rows.
+func NewCompleterForProvider(transport Transport, model, provider string) (*Completer, error) {
+	completer, err := NewCompleter(transport, model)
+	if err != nil {
+		return nil, err
+	}
+	completer.provider = provider
+	return completer, nil
+}
+
 // Model is the requested (pinned) model id.
 func (c *Completer) Model() string { return c.model }
 
 // Identity is the identity of every classification of this completer.
-func (c *Completer) Identity() Identity { return IdentityFor(c.model) }
+func (c *Completer) Identity() Identity {
+	identity := IdentityFor(c.model)
+	if c.provider != "" {
+		identity.Provider = c.provider
+	}
+	return identity
+}
 
 // ModelAccepted is the model id rule: the returned id equals the requested id
 // or starts with the requested id + "-" (a dated suffix). Anything else is

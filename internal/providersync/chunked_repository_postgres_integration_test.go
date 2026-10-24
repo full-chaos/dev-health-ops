@@ -282,3 +282,72 @@ func TestChunkedPostgresCursorSurvivesEmptyContinuationAndFailReclaimsSidecars(t
 		t.Fatalf("Fail retained chunk state: checkpoints=%d sidecars=%d", checkpoints, sidecars)
 	}
 }
+
+// A NUL in file text reached the jsonb payload and failed every attempt with 22P05. The guarded row
+// is stored and read back; an unguarded row is refused by Postgres and classed as a data error.
+func TestChunkedPostgresStoresAFileRowWithoutNulAndClassesTheNulPayloadAsDataError(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		closeContext, closeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer closeCancel()
+		if closeErr := instance.Close(closeContext); closeErr != nil {
+			t.Errorf("terminate PostgreSQL: %v", closeErr)
+		}
+	}()
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	createProviderSyncFixture(t, ctx, pool)
+	seedProviderSyncFixture(t, ctx, pool)
+	repository, err := NewPostgresRepository(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 10, 23, 12, 0, 0, 0, time.UTC)
+	claim, err := repository.Claim(ctx, ClaimRequest{UnitID: firstUnitID, OrgID: "org-acme", Owner: uuid.NewString(), Now: now, LeaseDuration: time.Minute, AllowExpiredRecovery: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	repoID := strings.Repeat("a", 36)
+	guarded := newGitHubFileRow(claim, repoID, "src/a.go", "package a\x00\n", now)
+	guardedJSON, err := json.Marshal(guarded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	chunk := func(rowJSON []byte) PreparedProviderChunk {
+		return PreparedProviderChunk{
+			SchemaVersion: chunkPayloadSchemaVersion, RouteVersion: chunkRouteVersion, Ordinal: 0, TotalChunks: 0,
+			CursorAfter: "cursor-1", Effects: []EffectBatch{effectBatchFixture(t, "git_files", EffectReadbackRequired, string(rowJSON))},
+		}
+	}
+	if _, err := repository.PrepareChunk(ctx, claim, chunk(guardedJSON), now); err != nil {
+		t.Fatalf("PrepareChunk of the guarded row: %v", err)
+	}
+	loaded, err := repository.LoadPreparedChunk(ctx, claim, 0, now)
+	if err != nil || len(loaded.Effects) != 1 {
+		t.Fatalf("LoadPreparedChunk = %v, %v", loaded, err)
+	}
+	var back gitFileRow
+	if err := json.Unmarshal(loaded.Effects[0].Rows[0], &back); err != nil || back.Path != "src/a.go" || back.Contents != nil {
+		t.Fatalf("round trip = %+v, %v; want the path and no contents", back, err)
+	}
+
+	nul := "package a\x00\n"
+	raw, err := json.Marshal(gitFileRow{RepoID: repoID, Path: "src/b.go", Contents: &nul, LastSynced: now, OrgID: claim.OrgID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second := chunk(raw)
+	second.Ordinal = 1
+	_, err = repository.PrepareChunk(ctx, claim, second, now)
+	if err == nil || !IsChunkStoreDataError(err) {
+		t.Fatalf("PrepareChunk of a row with a NUL escape = %v; want a chunk store data error (22P05)", err)
+	}
+}

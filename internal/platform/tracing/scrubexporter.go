@@ -60,7 +60,9 @@ var exceptionTextKeys = map[string]bool{"exception.message": true, "exception.st
 
 // placeholderKey replaces an attribute key that holds a credential; its value is hidden. Any number of such keys on one
 // span collapse to one entry, so the exported key set stays bounded.
-const placeholderKey = logging.RedactedKeyName
+// It is a literal, not logging.RedactedKeyName: the emit-path scan cannot fold a constant from another package. A test pins
+// it equal to that name.
+const placeholderKey = "redacted.key"
 
 func keyIsClean(key string) bool { return safeKeys[key] || logging.KeyClean(key) }
 

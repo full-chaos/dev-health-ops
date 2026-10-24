@@ -368,3 +368,9 @@ func TestEverySafeKeyIsAlsoAKeyTheSharedRuleLeavesAlone(t *testing.T) {
 		}
 	}
 }
+
+func TestSpanPlaceholderKeyIsTheSharedPlaceholderName(t *testing.T) {
+	if placeholderKey != logging.RedactedKeyName {
+		t.Errorf("span placeholder key %q differs from the shared placeholder name %q", placeholderKey, logging.RedactedKeyName)
+	}
+}

@@ -54,17 +54,18 @@ func (a *Authenticator) RouteAccess(validator RoutedValidator, service string) e
 // Routed reports whether RouteAccess was applied.
 func (a *Authenticator) Routed() bool { return a.routed != nil }
 
-const routeProfileKey contextKey = 101
+// routeProfileKey is its own type, so no contextKey value can collide with it.
+type routeProfileKey struct{}
 
 // WithRouteProfile returns ctx carrying the request's route template
 // ("METHOD /pattern").
 func WithRouteProfile(ctx context.Context, profile string) context.Context {
-	return context.WithValue(ctx, routeProfileKey, profile)
+	return context.WithValue(ctx, routeProfileKey{}, profile)
 }
 
 // RouteProfileFrom is the route template the request carries, or "".
 func RouteProfileFrom(ctx context.Context) string {
-	profile, _ := ctx.Value(routeProfileKey).(string)
+	profile, _ := ctx.Value(routeProfileKey{}).(string)
 	return profile
 }
 

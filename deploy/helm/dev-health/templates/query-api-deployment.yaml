@@ -42,6 +42,13 @@ the release-wide policy admits every pod in the namespace).
 {{- fail "queryApi.extraEnv must not set QUERY_API_MCP_BOUNDARY: the chart sets the MCP boundary marker only beside the MCP NetworkPolicy (queryApi.mcp.enabled); a marker from extraEnv would defeat the process's refusal to start an MCP address that arrived without the boundary" }}
 {{- end }}
 {{- end }}
+{{- if .Values.queryApi.internal.enabled }}
+{{- range .Values.queryApi.internal.allowedFrom }}
+{{- if not (and (kindIs "map" .) (or .matchLabels .matchExpressions)) }}
+{{- fail "queryApi.internal.allowedFrom entries must select pods by non-empty matchLabels or matchExpressions: an empty selector admits every pod in the namespace to the internal listener" }}
+{{- end }}
+{{- end }}
+{{- end }}
 {{- if .Values.queryApi.mcp.enabled }}
 {{- $mcpPort := int .Values.queryApi.mcp.port }}
 {{- if eq $mcpPort (int .Values.queryApi.port) }}

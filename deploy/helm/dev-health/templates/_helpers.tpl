@@ -775,12 +775,46 @@ namespace, HTTPS, then networkPolicy.extraEgress. The auth pods never use these 
 {{- if and (empty $to) (empty $ports) }}
 {{- fail (printf "networkPolicy.extraEgress[%d] has neither a non-empty to nor non-empty ports: Kubernetes reads that rule as every destination on every port" $i) }}
 {{- end }}
-{{- if empty $ports }}
-{{- range $peer := $to }}
-{{- if and (kindIs "map" $peer) (hasKey $peer "ipBlock") (kindIs "map" $peer.ipBlock) }}
-{{- if and (has (toString $peer.ipBlock.cidr) (list "0.0.0.0/0" "::/0")) (empty $peer.ipBlock.except) }}
-{{- fail (printf "networkPolicy.extraEgress[%d] sends to ipBlock %s with no except and no ports: that is every destination on every port; name the ports" $i (toString $peer.ipBlock.cidr)) }}
+{{- range $j, $port := $ports }}
+{{- if not (kindIs "map" $port) }}
+{{- fail (printf "networkPolicy.extraEgress[%d].ports[%d] must be an object with port (and protocol, endPort)" $i $j) }}
 {{- end }}
+{{- range $key := keys $port | sortAlpha }}
+{{- if not (has $key (list "protocol" "port" "endPort")) }}
+{{- fail (printf "networkPolicy.extraEgress[%d].ports[%d] takes only protocol, port and endPort, not %q" $i $j $key) }}
+{{- end }}
+{{- end }}
+{{- $number := has (kindOf $port.port) (list "float64" "int64" "int") }}
+{{- if not (or (and $number (eq (float64 $port.port) (floor (float64 $port.port))) (ge (int $port.port) 1) (le (int $port.port) 65535)) (and (kindIs "string" $port.port) (ne $port.port ""))) }}
+{{- fail (printf "networkPolicy.extraEgress[%d].ports[%d] needs a port (1-65535 or a port name): Kubernetes reads an entry with no port as every port of its protocol" $i $j) }}
+{{- end }}
+{{- if and (hasKey $port "protocol") (not (has (toString $port.protocol) (list "TCP" "UDP" "SCTP"))) }}
+{{- fail (printf "networkPolicy.extraEgress[%d].ports[%d].protocol %v is not TCP, UDP or SCTP" $i $j $port.protocol) }}
+{{- end }}
+{{- if hasKey $port "endPort" }}
+{{- if not (and $number (has (kindOf $port.endPort) (list "float64" "int64" "int")) (eq (float64 $port.endPort) (floor (float64 $port.endPort))) (ge (int $port.endPort) (int $port.port)) (le (int $port.endPort) 65535)) }}
+{{- fail (printf "networkPolicy.extraEgress[%d].ports[%d].endPort needs a numeric port and must be a number from port to 65535" $i $j) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- range $j, $peer := $to }}
+{{- if not (kindIs "map" $peer) }}
+{{- fail (printf "networkPolicy.extraEgress[%d].to[%d] must be an object with podSelector, namespaceSelector or ipBlock" $i $j) }}
+{{- end }}
+{{- if empty (keys $peer) }}
+{{- fail (printf "networkPolicy.extraEgress[%d].to[%d] is empty: name a podSelector, namespaceSelector or ipBlock" $i $j) }}
+{{- end }}
+{{- range $key := keys $peer | sortAlpha }}
+{{- if not (has $key (list "podSelector" "namespaceSelector" "ipBlock")) }}
+{{- fail (printf "networkPolicy.extraEgress[%d].to[%d] takes only podSelector, namespaceSelector and ipBlock, not %q" $i $j $key) }}
+{{- end }}
+{{- end }}
+{{- if hasKey $peer "ipBlock" }}
+{{- if not (and (kindIs "map" $peer.ipBlock) (kindIs "string" $peer.ipBlock.cidr) (ne $peer.ipBlock.cidr "")) }}
+{{- fail (printf "networkPolicy.extraEgress[%d].to[%d].ipBlock needs a cidr" $i $j) }}
+{{- end }}
+{{- if and (empty $ports) (regexMatch "/0+$" $peer.ipBlock.cidr) (empty $peer.ipBlock.except) }}
+{{- fail (printf "networkPolicy.extraEgress[%d] sends to ipBlock %s with no except and no ports: that is every destination on every port; name the ports" $i $peer.ipBlock.cidr) }}
 {{- end }}
 {{- end }}
 {{- end }}

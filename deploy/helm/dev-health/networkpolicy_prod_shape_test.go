@@ -25,12 +25,25 @@ type egressPeer struct {
 	} `yaml:"ipBlock"`
 }
 
+// egressPort is a port number or a named port; a named port matches no numeric target here.
+type egressPort struct {
+	number int
+	name   string
+}
+
+func (p *egressPort) UnmarshalYAML(node *yaml.Node) error {
+	if err := node.Decode(&p.number); err == nil {
+		return nil
+	}
+	return node.Decode(&p.name)
+}
+
 type egressRule struct {
 	To    []egressPeer `yaml:"to"`
 	Ports []struct {
-		Protocol string `yaml:"protocol"`
-		Port     int    `yaml:"port"`
-		EndPort  int    `yaml:"endPort"`
+		Protocol string     `yaml:"protocol"`
+		Port     egressPort `yaml:"port"`
+		EndPort  int        `yaml:"endPort"`
 	} `yaml:"ports"`
 }
 
@@ -92,11 +105,16 @@ func (rule egressRule) allows(target egressTarget) bool {
 		if protocol == "" {
 			protocol = "TCP"
 		}
-		end := port.EndPort
-		if end == 0 {
-			end = port.Port
+		if port.Port.name != "" {
+			continue
 		}
-		portOK = portOK || (protocol == target.protocol && target.port >= port.Port && target.port <= end)
+		start, end := port.Port.number, port.EndPort
+		if start == 0 { // Kubernetes: an entry with no port matches every port of its protocol
+			start, end = 1, 65535
+		} else if end == 0 {
+			end = start
+		}
+		portOK = portOK || (protocol == target.protocol && target.port >= start && target.port <= end)
 	}
 	if !portOK {
 		return false
@@ -336,20 +354,38 @@ func TestExtraEgressRefusals(t *testing.T) {
 		value string
 		want  string
 	}{
-		"empty rule":                {`[{}]`, "neither a non-empty to nor non-empty ports"},
-		"empty to":                  {`[{"to":[]}]`, "neither a non-empty to nor non-empty ports"},
-		"empty ports":               {`[{"ports":[]}]`, "neither a non-empty to nor non-empty ports"},
-		"empty to and ports":        {`[{"to":[],"ports":[]}]`, "neither a non-empty to nor non-empty ports"},
-		"not an object":             {`["x"]`, "must be a NetworkPolicy egress rule"},
-		"unknown key":               {`[{"to":[{"ipBlock":{"cidr":"10.0.0.1/32"}}],"port":[{"port":4317}]}]`, `not "port"`},
-		"to not a list":             {`[{"to":{"ipBlock":{"cidr":"10.0.0.1/32"}}}]`, "extraEgress[0].to must be a list"},
-		"ports not a list":          {`[{"ports":{"port":4317}}]`, "extraEgress[0].ports must be a list"},
-		"IPv4 everything, no ports": {`[{"to":[{"ipBlock":{"cidr":"0.0.0.0/0"}}]}]`, "ipBlock 0.0.0.0/0 with no except and no ports"},
-		"IPv6 everything, no ports": {`[{"to":[{"ipBlock":{"cidr":"::/0"}}]}]`, "ipBlock ::/0 with no except and no ports"},
-		"everything among peers":    {`[{"to":[{"ipBlock":{"cidr":"10.0.0.1/32"}},{"ipBlock":{"cidr":"0.0.0.0/0"}}]}]`, "ipBlock 0.0.0.0/0"},
-		"second entry is refused":   {`[{"ports":[{"port":9440}]},{}]`, "extraEgress[1] has neither"},
-		"everything, empty except":  {`[{"to":[{"ipBlock":{"cidr":"0.0.0.0/0","except":[]}}]}]`, "ipBlock 0.0.0.0/0 with no except"},
-		"everything, ports empty":   {`[{"to":[{"ipBlock":{"cidr":"::/0"}}],"ports":[]}]`, "ipBlock ::/0 with no except and no ports"},
+		"empty rule":                 {`[{}]`, "neither a non-empty to nor non-empty ports"},
+		"empty to":                   {`[{"to":[]}]`, "neither a non-empty to nor non-empty ports"},
+		"empty ports":                {`[{"ports":[]}]`, "neither a non-empty to nor non-empty ports"},
+		"empty to and ports":         {`[{"to":[],"ports":[]}]`, "neither a non-empty to nor non-empty ports"},
+		"not an object":              {`["x"]`, "must be a NetworkPolicy egress rule"},
+		"unknown key":                {`[{"to":[{"ipBlock":{"cidr":"10.0.0.1/32"}}],"port":[{"port":4317}]}]`, `not "port"`},
+		"to not a list":              {`[{"to":{"ipBlock":{"cidr":"10.0.0.1/32"}}}]`, "extraEgress[0].to must be a list"},
+		"ports not a list":           {`[{"ports":{"port":4317}}]`, "extraEgress[0].ports must be a list"},
+		"IPv4 everything, no ports":  {`[{"to":[{"ipBlock":{"cidr":"0.0.0.0/0"}}]}]`, "ipBlock 0.0.0.0/0 with no except and no ports"},
+		"IPv6 everything, no ports":  {`[{"to":[{"ipBlock":{"cidr":"::/0"}}]}]`, "ipBlock ::/0 with no except and no ports"},
+		"everything among peers":     {`[{"to":[{"ipBlock":{"cidr":"10.0.0.1/32"}},{"ipBlock":{"cidr":"0.0.0.0/0"}}]}]`, "ipBlock 0.0.0.0/0"},
+		"second entry is refused":    {`[{"ports":[{"port":9440}]},{}]`, "extraEgress[1] has neither"},
+		"everything, empty except":   {`[{"to":[{"ipBlock":{"cidr":"0.0.0.0/0","except":[]}}]}]`, "ipBlock 0.0.0.0/0 with no except"},
+		"everything, ports empty":    {`[{"to":[{"ipBlock":{"cidr":"::/0"}}],"ports":[]}]`, "ipBlock ::/0 with no except and no ports"},
+		"port entry with no port":    {`[{"ports":[{}]}]`, "ports[0] needs a port"},
+		"UDP entry with no port":     {`[{"ports":[{"protocol":"UDP"}]}]`, "ports[0] needs a port"},
+		"SCTP entry with no port":    {`[{"ports":[{"protocol":"TCP","port":9440},{"protocol":"SCTP"}]}]`, "ports[1] needs a port"},
+		"port zero":                  {`[{"ports":[{"port":0}]}]`, "needs a port"},
+		"port too large":             {`[{"ports":[{"port":65536}]}]`, "needs a port"},
+		"port fractional":            {`[{"ports":[{"port":9440.5}]}]`, "needs a port"},
+		"port empty name":            {`[{"ports":[{"port":""}]}]`, "needs a port"},
+		"port entry not an object":   {`[{"ports":[9440]}]`, "ports[0] must be an object"},
+		"port entry unknown key":     {`[{"ports":[{"port":9440,"endport":9450}]}]`, `not "endport"`},
+		"protocol unknown":           {`[{"ports":[{"protocol":"ICMP","port":1}]}]`, "is not TCP, UDP or SCTP"},
+		"endPort below port":         {`[{"ports":[{"port":9440,"endPort":9000}]}]`, "endPort needs a numeric port"},
+		"endPort on a named port":    {`[{"ports":[{"port":"https","endPort":9000}]}]`, "endPort needs a numeric port"},
+		"peer empty":                 {`[{"to":[{}]}]`, "to[0] is empty"},
+		"peer not an object":         {`[{"to":["10.0.0.1/32"]}]`, "to[0] must be an object"},
+		"peer unknown key":           {`[{"to":[{"ipblock":{"cidr":"10.0.0.1/32"}}]}]`, `not "ipblock"`},
+		"peer ipBlock without cidr":  {`[{"to":[{"ipBlock":{}}],"ports":[{"port":9440}]}]`, "ipBlock needs a cidr"},
+		"IPv6 everything, long form": {`[{"to":[{"ipBlock":{"cidr":"0:0:0:0:0:0:0:0/0"}}]}]`, "with no except and no ports"},
+		"everything, /00":            {`[{"to":[{"ipBlock":{"cidr":"0.0.0.0/00"}}]}]`, "with no except and no ports"},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -365,6 +401,9 @@ func TestExtraEgressRefusals(t *testing.T) {
 		"everything with except": `[{"to":[{"ipBlock":{"cidr":"0.0.0.0/0","except":["10.0.0.0/8"]}}]}]`,
 		"ports only":             `[{"ports":[{"protocol":"TCP","port":9440}]}]`,
 		"to only":                `[{"to":[{"ipBlock":{"cidr":"10.0.0.151/32"}}]}]`,
+		"named port":             `[{"ports":[{"protocol":"TCP","port":"https"}]}]`,
+		"port range":             `[{"ports":[{"protocol":"TCP","port":9440,"endPort":9450}]}]`,
+		"selector peers":         `[{"to":[{"namespaceSelector":{"matchLabels":{"kubernetes.io/metadata.name":"ingress-nginx"}},"podSelector":{"matchLabels":{"app":"x"}}}],"ports":[{"port":80}]}]`,
 	} {
 		t.Run("renders: "+name, func(t *testing.T) {
 			_, egress, _ := renderPolicySet(t, "--set-json", "networkPolicy.extraEgress="+value)
@@ -384,5 +423,24 @@ func TestDNSEgressAllowsUDPAndTCP(t *testing.T) {
 				t.Errorf("%s: DNS over %s is not allowed (selected=%v)", component, protocol, selected)
 			}
 		}
+	}
+}
+
+// The internal listener trusts identity headers, so an empty selector in queryApi.internal.allowedFrom (every pod of the
+// namespace) is refused, as it is for the MCP listener, whether or not networkPolicy is enabled.
+func TestQueryAPIInternalAllowedFromRefusesEmptySelectors(t *testing.T) {
+	for _, np := range []string{"true", "false"} {
+		for _, value := range []string{`[{}]`, `[{"matchLabels":{}}]`, `[{"matchExpressions":[]}]`, `[{"matchLabels":{"app":"tools"}},{}]`, `["tools"]`} {
+			out, err := exec.Command("helm", "template", "np", ".", "--namespace", releaseNamespace, "--set", "networkPolicy.enabled="+np,
+				"--set", "goWorkers.pgbouncer.postgres.networkPolicyCIDR=10.0.0.0/24", "--set", "queryApi.enabled=true",
+				"--set", "queryApi.internal.enabled=true", "--set-json", "queryApi.internal.allowedFrom="+value).CombinedOutput()
+			if err == nil || !strings.Contains(string(out), "queryApi.internal.allowedFrom entries must select pods by non-empty matchLabels or matchExpressions") {
+				t.Errorf("networkPolicy.enabled=%s allowedFrom %s must fail the render: err=%v\n%.400s", np, value, err, out)
+			}
+		}
+	}
+	policies, _, _ := renderPolicySet(t, "--set", "queryApi.internal.enabled=true", "--set-json", "queryApi.internal.allowedFrom="+acrSelectorJSON)
+	if got, _ := admittedFrom(policies, npComponent("query-api"), []int{8091}, sourceACR); len(got) != 1 {
+		t.Errorf("a non-empty selector must still be admitted to the internal port, got %v", got)
 	}
 }

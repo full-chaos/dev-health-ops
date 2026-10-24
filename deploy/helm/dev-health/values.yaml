@@ -396,8 +396,8 @@ queryApi:
   #    queries only, the internal identity headers only, allowlisted root fields, its own
   #    ClickHouse read ceiling. When on, this chart adds the env var, a named `mcp`
   #    containerPort, a ClusterIP Service `<fullname>-query-api-mcp` and a NetworkPolicy
-  #    admitting `mcp.allowedFrom` ONLY (not the api pods). Refused together with
-  #    networkPolicy.enabled (that policy opens every port to every in-namespace pod).
+  #    admitting `mcp.allowedFrom` ONLY (not the api pods). With networkPolicy.enabled the
+  #    query-api pods leave the release-wide policy, so that policy does not open this port.
   #    Prod turns this on through the umbrella values (`ops.queryApi.mcp.*`): this chart
   #    renders the Service and the NetworkPolicy itself; the umbrella deploy chart has no
   #    template for the MCP listener (unlike the internal listener's query-api-internal).

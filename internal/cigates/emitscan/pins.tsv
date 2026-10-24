@@ -1,5 +1,4 @@
 rule	file	func	detail	count	reason
-R2	internal/queryapi/analytics/investmentrepojointelemetry.go	defaultRecordInvestmentRepoJoinDedupCollisions	org_id	1	org_id counter label; per-tenant series, follow-up leaf (not changed here: visible metric shape)
 R5	internal/workerservice/river_process.go	newRiverWorkerProcess	config not a literal	1	config built by riverConfig, which sets the redacting logger
 R2	internal/queryapi/analytics/sankeycoverage.go	defaultRecordInvestmentCoverageFailure	query_id	1	query_id is a span attribute; the function also records a metric whose labels are bounded
 R4	internal/auth/httpapi/server.go	NewServer	slog.NewJSONHandler	1	handler writes to a local type whose Write drops the output

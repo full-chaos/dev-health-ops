@@ -1148,6 +1148,12 @@ func dispatchMetricsDailyBlocked(
 	if _, err := uuid.Parse(*org); err != nil {
 		return writeError(stderr, "invalid_request")
 	}
+	if code, ok := authorizeRead(ctx, runtime, stderr, "daily_metrics_run", *org); !ok {
+		return code
+	}
+	if runtime.pools == nil {
+		return writeError(stderr, "operator_backend_unavailable")
+	}
 	store, err := daily.NewPostgresStore(runtime.pools.Domain)
 	if err != nil {
 		return writeError(stderr, "operator_backend_unavailable")
@@ -1249,7 +1255,9 @@ func openRunMarkerStore(
 // verb and not a migration because a ClickHouse migration cannot read
 // Postgres, and because the same pass repairs a day whose live append failed.
 // Idempotent: a second pass appends nothing. It writes ClickHouse marker rows
-// only and changes no Postgres state.
+// only and changes no Postgres state besides its audit row: a real pass
+// needs --reason and --correlation-id and runs as one audited operator
+// write; --dry-run needs the same authority and writes no row.
 func dispatchMetricsDailyMarkerBackfill(
 	ctx context.Context, runtime *operatorRuntime, args []string, stdout, stderr io.Writer,
 ) int {
@@ -1258,7 +1266,8 @@ func dispatchMetricsDailyMarkerBackfill(
 	from := flags.String("from", "", "first target_day, inclusive (YYYY-MM-DD, UTC)")
 	to := flags.String("to", "", "last target_day, inclusive (YYYY-MM-DD, UTC)")
 	dryRun := flags.Bool("dry-run", false, "report what a real pass would append without writing")
-	if flags.Parse(args) != nil || flags.NArg() != 0 {
+	mutation := addMutationFlags(flags)
+	if flags.Parse(args) != nil || flags.NArg() != 0 || !mutation.valid(*dryRun) {
 		return writeError(stderr, "invalid_request")
 	}
 	parsedOrg, err := uuid.Parse(*org)
@@ -1275,25 +1284,31 @@ func dispatchMetricsDailyMarkerBackfill(
 	if err != nil {
 		return writeError(stderr, "invalid_request")
 	}
-	if runtime.pools == nil {
-		return writeError(stderr, "operator_backend_unavailable")
+	perform := func(ctx context.Context) int {
+		if runtime.pools == nil {
+			return writeError(stderr, "operator_backend_unavailable")
+		}
+		store, err := daily.NewPostgresStore(runtime.pools.Domain)
+		if err != nil {
+			return writeError(stderr, "operator_backend_unavailable")
+		}
+		markerStore, closeConn, err := openRunMarkerStore(ctx, runtime, stderr)
+		if err != nil {
+			return writeRunMarkerStoreError(stderr, err)
+		}
+		defer closeConn()
+		store.SetRunMarkerWriter(markerStore)
+		store.SetRunMarkerReader(markerStore)
+		outcome, err := store.BackfillRunMarkers(ctx, canonicalOrg, fromDay, toDay, *dryRun)
+		if err != nil {
+			return writeServiceError(stderr, err)
+		}
+		return writeResult(stdout, stderr, map[string]any{"marker_backfill": outcome, "dry_run": *dryRun})
 	}
-	store, err := daily.NewPostgresStore(runtime.pools.Domain)
-	if err != nil {
-		return writeError(stderr, "operator_backend_unavailable")
+	if *dryRun {
+		return dryRunPreview(ctx, runtime, stderr, joboperator.ActionMetricsDailyMarkerBackfill, "organization", canonicalOrg, perform)
 	}
-	markerStore, closeConn, err := openRunMarkerStore(ctx, runtime, stderr)
-	if err != nil {
-		return writeRunMarkerStoreError(stderr, err)
-	}
-	defer closeConn()
-	store.SetRunMarkerWriter(markerStore)
-	store.SetRunMarkerReader(markerStore)
-	outcome, err := store.BackfillRunMarkers(ctx, canonicalOrg, fromDay, toDay, *dryRun)
-	if err != nil {
-		return writeServiceError(stderr, err)
-	}
-	return writeResult(stdout, stderr, map[string]any{"marker_backfill": outcome, "dry_run": *dryRun})
+	return auditedWrite(ctx, runtime, stderr, mutation, joboperator.ActionMetricsDailyMarkerBackfill, "organization", canonicalOrg, perform)
 }
 
 // dispatchMetricsDailyFinalize handles `metrics daily-finalize` (CHAOS-4389):

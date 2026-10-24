@@ -9,6 +9,7 @@ internal/api/syncadmin	gate_reader_census_test.go	unexpressed	-
 internal/api/teamsidentity	deleted_at_writer_census_test.go	unexpressed	-
 internal/api/teamsidentity	team_id_writer_census_test.go	unexpressed	-
 internal/api/webhookintake	pagerduty_refusal_test.go	internal/api/webhookintake	dir
+internal/api/webhookintake	removed_providers_test.go	.	tree
 internal/apiservice	endpoint_profile_scan_test.go	unexpressed	-
 internal/apiservice/admin	routeguard_test.go	internal/apiservice/admin	dir
 internal/apiservice/admin	routeguard_test.go	unexpressed	-
@@ -199,6 +200,7 @@ internal/platform/config	route_switch_absence_test.go	unexpressed	-
 internal/platform/credshape	census_test.go	unexpressed	-
 internal/platform/credshape	credshape_test.go	contracts/jobs/v1/examples	dir
 internal/platform/fernet	fernet_test.go	unexpressed	-
+internal/platform/otlpmetrics	labelcensus_test.go	.	tree
 internal/platform/secrets	declared_fields_test.go	internal	tree
 internal/platform/secrets	envreads_test.go	.	tree
 internal/processreadiness	readiness_timeout_test.go	internal/processreadiness	dir

@@ -1,8 +1,7 @@
 // Package webhookintake is the `dho api` route area for
-// /api/v1/webhooks/*: GitHub, GitLab, Jira, and PagerDuty webhook intake
-// (Python src/dev_health_ops/api/webhooks/). GitHub/GitLab/Jira authenticate
-// by a shared provider secret (HMAC signature or a static token) read from
-// the environment; PagerDuty authenticates per-binding, against an
+// /api/v1/webhooks/*: GitHub and PagerDuty webhook intake
+// (Python src/dev_health_ops/api/webhooks/). GitHub authenticates
+// by a shared provider secret (HMAC signature) read from the environment; PagerDuty authenticates per-binding, against an
 // encrypted secret stored on the addressed pagerduty_webhook_bindings row.
 // Every route here answers with the app-wide {"detail": ...} shape
 // (internal/api/policy) -- these are exactly the FastAPI-dependency-body,
@@ -24,21 +23,16 @@ import (
 )
 
 // Secrets are the provider-shared webhook secrets (Python's
-// _get_github_webhook_secret/_get_gitlab_webhook_token/_get_jira_webhook_secret,
-// GITHUB_WEBHOOK_SECRET/GITLAB_WEBHOOK_TOKEN/JIRA_WEBHOOK_SECRET), read live
+// _get_github_webhook_secret, GITHUB_WEBHOOK_SECRET), read live
 // when each handler is built (startup). An unset secret is checked against a key
 // no caller knows (secrets.go), so its refusal is the same as a wrong signature.
 type Secrets struct {
 	GitHub string
-	GitLab string
-	Jira   string
 }
 
 func envSecrets() Secrets {
 	return Secrets{
 		GitHub: envsecrets.GetenvSecret("GITHUB_WEBHOOK_SECRET"),
-		GitLab: envsecrets.GetenvSecret("GITLAB_WEBHOOK_TOKEN"),
-		Jira:   envsecrets.GetenvSecret("JIRA_WEBHOOK_SECRET"),
 	}
 }
 
@@ -46,7 +40,7 @@ func envSecrets() Secrets {
 type Deps struct {
 	Pool   *pgxpool.Pool
 	Valkey valkeygo.Client
-	// Producer publishes to the job outbox (GitHub/GitLab/Jira durable
+	// Producer publishes to the job outbox (GitHub durable
 	// deliveries -- KindWebhookDelivery). Nil is legal (env not configured
 	// yet); every route needing it answers 500 rather than dereferencing.
 	Producer *joboutbox.Producer
@@ -72,7 +66,7 @@ type Deps struct {
 }
 
 func (d Deps) secrets() Secrets {
-	if d.Secrets.GitHub != "" || d.Secrets.GitLab != "" || d.Secrets.Jira != "" {
+	if d.Secrets.GitHub != "" {
 		return d.Secrets
 	}
 	return envSecrets()
@@ -92,9 +86,9 @@ func (d Deps) logger() *slog.Logger {
 	return slog.Default()
 }
 
-// Routes builds the 5 /api/v1/webhooks/* routes (router.py + pagerduty.py).
+// Routes builds the 3 /api/v1/webhooks/* routes (router.py + pagerduty.py).
 // PagerDuty carries its own 60/minute-per-caller rate limit (rate_limit.py's
-// @limiter.limit("60/minute") on pagerduty_webhook); GitHub/GitLab/Jira/health
+// @limiter.limit("60/minute") on pagerduty_webhook); GitHub/health
 // carry none in Python either.
 func Routes(deps Deps) []httpapi.Route {
 	if deps.limiters == nil {
@@ -103,8 +97,6 @@ func Routes(deps Deps) []httpapi.Route {
 	const prefix = "/api/v1/webhooks"
 	return []httpapi.Route{
 		{Method: "POST", Pattern: prefix + "/github", Handler: deps.handleGitHubWebhook()},
-		{Method: "POST", Pattern: prefix + "/gitlab", Handler: deps.handleGitLabWebhook()},
-		{Method: "POST", Pattern: prefix + "/jira", Handler: deps.handleJiraWebhook()},
 		{Method: "POST", Pattern: prefix + "/pagerduty/{binding_id}", Handler: deps.handlePagerDutyWebhook()},
 		{Method: "GET", Pattern: prefix + "/health", Handler: deps.handleHealth()},
 	}

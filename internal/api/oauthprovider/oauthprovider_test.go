@@ -54,7 +54,9 @@ func TestGitHubProfile(t *testing.T) {
 		{name: "primary verified email", user: route{200, `{"id": 13, "email": null}`},
 			emails: &route{200, `[{"email": "b@x.com", "verified": true}, {"email": "c@x.com", "primary": true, "verified": true}]`}, wantEmail: "c@x.com", wantID: "13"},
 		{name: "first verified email", user: route{200, `{"id": 14, "email": ""}`},
-			emails: &route{200, `[{"email": "d@x.com", "primary": true}, {"email": "e@x.com", "verified": 1}]`}, wantEmail: "e@x.com", wantID: "14"},
+			emails: &route{200, `[{"email": "d@x.com", "primary": true}, {"email": "e@x.com", "verified": true}]`}, wantEmail: "e@x.com", wantID: "14"},
+		{name: "a verified flag that is not a JSON boolean", user: route{200, `{"id": 14, "email": ""}`},
+			emails: &route{200, `[{"email": "e@x.com", "verified": 1}, {"email": "f@x.com", "primary": true, "verified": "true"}]`}, wantErr: "userinfo"},
 		// D2745 P1-1: an email with no verified flag at all is no longer
 		// accepted -- this used to succeed with "f@x.com" (the unverified
 		// fallback githubPrimaryEmail's doc comment explains removing).
@@ -192,5 +194,48 @@ func TestNilHTTPClientUsesTheDefault(t *testing.T) {
 	info, err := client.FetchUserInfo(context.Background(), Google, "tok")
 	if err != nil || info.ProviderUserID != "g-1" {
 		t.Fatalf("%+v %v", info, err)
+	}
+}
+
+func TestEmailVerifiedIsTrueOnlyForTheDocumentedForm(t *testing.T) {
+	for _, tc := range []struct {
+		name, provider, body string
+		want                 bool
+	}{
+		{"google true", Google, `{"id": 9, "email": "g@x.com", "verified_email": true}`, true},
+		{"google false", Google, `{"id": 9, "email": "g@x.com", "verified_email": false}`, false},
+		{"google string false", Google, `{"id": 9, "email": "g@x.com", "verified_email": "false"}`, false},
+		{"google string true", Google, `{"id": 9, "email": "g@x.com", "verified_email": "true"}`, false},
+		{"google number", Google, `{"id": 9, "email": "g@x.com", "verified_email": 1}`, false},
+		{"google object", Google, `{"id": 9, "email": "g@x.com", "verified_email": {"a": 1}}`, false},
+		{"google absent", Google, `{"id": 9, "email": "g@x.com"}`, false},
+		{"gitlab timestamp", GitLab, `{"id": 7, "email": "m@x.com", "confirmed_at": "2026-01-01T00:00:00Z"}`, true},
+		{"gitlab null", GitLab, `{"id": 7, "email": "m@x.com", "confirmed_at": null}`, false},
+		{"gitlab empty", GitLab, `{"id": 7, "email": "m@x.com", "confirmed_at": ""}`, false},
+		{"gitlab true", GitLab, `{"id": 7, "email": "m@x.com", "confirmed_at": true}`, false},
+		{"gitlab number", GitLab, `{"id": 7, "email": "m@x.com", "confirmed_at": 5}`, false},
+		{"gitlab object", GitLab, `{"id": 7, "email": "m@x.com", "confirmed_at": {"a": 1}}`, false},
+	} {
+		client := fakeClient(t, map[string]route{"/gl/api/v4/user": {200, tc.body}, "/google": {200, tc.body}})
+		info, err := client.FetchUserInfo(context.Background(), tc.provider, "tok")
+		if err != nil {
+			t.Errorf("%s: %v", tc.name, err)
+			continue
+		}
+		if info.EmailVerified != tc.want {
+			t.Errorf("%s: EmailVerified = %v, want %v", tc.name, info.EmailVerified, tc.want)
+		}
+	}
+}
+
+func TestGitHubWithoutAVerifiedAddressNamesTheSharedReason(t *testing.T) {
+	client := fakeClient(t, map[string]route{
+		"/gh/user":   {200, `{"id": 1, "login": "u", "email": null}`},
+		"/gh/emails": {200, `[{"email": "a@x.com", "primary": true, "verified": false}]`},
+	})
+	_, err := client.FetchUserInfo(context.Background(), GitHub, "tok")
+	var userInfoErr *UserInfoError
+	if !errors.As(err, &userInfoErr) || userInfoErr.Reason != ReasonNoVerifiedEmail {
+		t.Fatalf("err = %v, want a UserInfoError with ReasonNoVerifiedEmail", err)
 	}
 }

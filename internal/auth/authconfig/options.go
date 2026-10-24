@@ -201,6 +201,11 @@ var optionRegistry = []Option{
 		Usage: "aud of the compatibility access token (go-api's JWT_AUDIENCE)",
 	},
 	{
+		Env: EnvValkeyURI, Kind: KindString, Secret: true, Group: GroupSession,
+		Usage: "Valkey URI (redis:// or rediss://, database 1) of the shared rate-limit store; " + EnvValkeyURI +
+			"_FILE reads it from a mounted file instead. Required while the login, credential or social link routes mount",
+	},
+	{
 		Env: EnvLoginLockoutKey, Kind: KindString, Secret: true, Group: GroupSession,
 		Usage: "32-byte login lockout key, base64url without padding; " + EnvLoginLockoutKey +
 			"_FILE reads it from a mounted file instead. With the session secrets it mounts POST /api/v1/auth/login",

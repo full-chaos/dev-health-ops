@@ -54,8 +54,6 @@ func LogUnconfiguredSecrets(logger *slog.Logger) {
 	secrets := envSecrets()
 	for _, provider := range []struct{ name, env, value string }{
 		{"github", "GITHUB_WEBHOOK_SECRET", secrets.GitHub},
-		{"gitlab", "GITLAB_WEBHOOK_TOKEN", secrets.GitLab},
-		{"jira", "JIRA_WEBHOOK_SECRET", secrets.Jira},
 	} {
 		if provider.value == "" {
 			logger.Warn("webhook intake has no verification credential; every delivery to it is refused", "provider", provider.name, "env", provider.env)

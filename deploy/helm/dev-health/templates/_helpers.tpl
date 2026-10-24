@@ -131,6 +131,20 @@ Secret name — either the one we create or an external one
 {{- end }}
 
 {{/*
+CHAOS-11217: the Secret that holds AUTH_SESSION_ISSUE_TOKEN, the credential go-api
+presents to auth-service's session issue route. goApi.sessionIssue.secretName names a
+dedicated, operator-created Secret; empty keeps the shared Secret. Only go-api reads it.
+*/}}
+{{- define "dev-health.sessionIssueSecretName" -}}
+{{- $issue := default dict .Values.goApi.sessionIssue }}
+{{- if $issue.secretName }}
+{{- $issue.secretName }}
+{{- else }}
+{{- include "dev-health.secretName" . }}
+{{- end }}
+{{- end }}
+
+{{/*
 CHAOS-10446: the Secret that holds JWT_SECRET_KEY, the HS256 access-token key. It is
 its own Secret so the shared Secret the worker groups envFrom never carries it.
 hs256Secret.externalSecretName names an operator-managed one; otherwise the chart

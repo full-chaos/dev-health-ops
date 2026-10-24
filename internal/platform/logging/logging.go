@@ -143,10 +143,10 @@ func protectedKeyCached(key string) bool {
 		return verdict.(bool)
 	}
 	verdict := ProtectedKey(key)
-	if keyVerdictsCount.Load() < maxCachedKeyVerdicts {
-		if _, loaded := keyVerdicts.LoadOrStore(key, verdict); !loaded {
-			keyVerdictsCount.Add(1)
-		}
+	if keyVerdictsCount.Add(1) > maxCachedKeyVerdicts {
+		keyVerdictsCount.Add(-1)
+	} else if _, loaded := keyVerdicts.LoadOrStore(key, verdict); loaded {
+		keyVerdictsCount.Add(-1)
 	}
 	return verdict
 }

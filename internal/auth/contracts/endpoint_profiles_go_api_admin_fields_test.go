@@ -23,6 +23,7 @@ const (
 	noIDPrefix     = "no path resource id, behaviour today:"
 	platformPrefix = "platform route, behaviour today:"
 	cachePrefix    = "none: per-request read ("
+	noReadPrefix   = "none: no authorization read ("
 )
 
 var (
@@ -38,9 +39,30 @@ var impersonationRoutes = map[string]string{
 	"GET /api/v1/admin/impersonate/status [dev-health-ops-api @api]": "exempt_no_org_context",
 }
 
-func isAdminRow(row map[string]any) bool {
+// coveredFamilies are the route prefixes whose protected rows carry the fields.
+var coveredFamilies = []string{
+	"/api/v1/admin", "/api/v1/auth", "/api/v1/billing", "/api/v1/licensing", "/api/v1/orgs", "/api/v1/internal",
+}
+
+// uncoveredFamilies are protected route prefixes that do not carry the fields yet; a protected row in no listed
+// family fails, so a new family cannot arrive without a decision.
+var uncoveredFamilies = []string{
+	"/api/v1/ingest", "/api/v1/external-ingest", "/api/v1/telemetry", "/api/v1/webhooks", "/buildinfo",
+}
+
+func hasFamilyPrefix(route string, families []string) bool {
+	for _, family := range families {
+		if route == family || strings.HasPrefix(route, family+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+func isCoveredRow(row map[string]any) bool {
 	route, _ := row["route"].(string)
-	return strings.HasPrefix(route, "/api/v1/admin")
+	class, _ := row["classification"].(string)
+	return class == "protected" && hasFamilyPrefix(route, coveredFamilies)
 }
 
 func gapNames(row map[string]any, field string) bool {
@@ -106,7 +128,7 @@ func adminFieldViolations(row map[string]any, scopes map[string]string, root str
 		bad("resource_resolver does not start with a resolver kind: %q", resolver)
 	}
 	cache, _ := row["current_state_cache_behavior"].(string)
-	if cache == "" || (!strings.HasPrefix(cache, cachePrefix) && !strings.HasPrefix(cache, "valkey:")) {
+	if cache == "" || (!strings.HasPrefix(cache, cachePrefix) && !strings.HasPrefix(cache, noReadPrefix) && !strings.HasPrefix(cache, "valkey:")) {
 		bad("current_state_cache_behavior is missing or does not name its cache rule: %q", cache)
 	}
 	policy, _ := row["impersonation_policy"].(string)
@@ -117,6 +139,10 @@ func adminFieldViolations(row map[string]any, scopes map[string]string, root str
 	case impersonationRoutes[id] != "" && policy != impersonationRoutes[id]:
 		bad("an impersonation route has impersonation_policy %q, want %q", policy, impersonationRoutes[id])
 	case impersonationRoutes[id] != "":
+	case tenancy == "org_scoped" && strings.HasSuffix(id, "@internal]") && policy == "not_applicable_non_main_app":
+		if !gapNames(row, "impersonation_policy") {
+			bad("an internal-listener org-scoped route is not_applicable_non_main_app without a gaps entry naming impersonation_policy")
+		}
 	case tenancy == "org_scoped" && policy != "subject_to_impersonation_override":
 		bad("an org-scoped route has impersonation_policy %q", policy)
 	case tenancy == "cross_org_superuser_only" && policy == "subject_to_impersonation_override":
@@ -237,12 +263,12 @@ func sprintf(format string, args ...any) string {
 	return strings.TrimSpace(fmt.Sprintf(format, args...))
 }
 
-func coveredAdminRows(t *testing.T) []map[string]any {
+func coveredRows(t *testing.T) []map[string]any {
 	t.Helper()
 	var rows []map[string]any
 	for _, item := range loadGoAPIDocument(t)["rows"].([]any) {
 		row := item.(map[string]any)
-		if !isAdminRow(row) {
+		if !isCoveredRow(row) {
 			continue
 		}
 		rows = append(rows, row)
@@ -251,9 +277,18 @@ func coveredAdminRows(t *testing.T) []map[string]any {
 }
 
 func TestEveryCoveredAdminRowCarriesTheFields(t *testing.T) {
-	rows := coveredAdminRows(t)
-	if len(rows) < 140 {
-		t.Fatalf("only %d covered admin rows: the set of files lost its rows", len(rows))
+	rows := coveredRows(t)
+	if len(rows) < 190 {
+		t.Fatalf("only %d covered rows: a covered family lost its rows", len(rows))
+	}
+	nonAdmin := 0
+	for _, row := range rows {
+		if route, _ := row["route"].(string); !strings.HasPrefix(route, "/api/v1/admin") {
+			nonAdmin++
+		}
+	}
+	if nonAdmin < 53 {
+		t.Fatalf("only %d covered rows outside the admin family", nonAdmin)
 	}
 	scopes := catalogScopes(t)
 	root := testRoot(t)
@@ -268,7 +303,7 @@ func TestAdminFieldChecksCatchPlantedDefects(t *testing.T) {
 	root := testRoot(t)
 	scopes := catalogScopes(t)
 	var base map[string]any
-	for _, row := range coveredAdminRows(t) {
+	for _, row := range coveredRows(t) {
 		if row["id"] == "GET /api/v1/admin/teams/{team_id} [dev-health-ops-api @api]" {
 			raw, _ := json.Marshal(row)
 			_ = json.Unmarshal(raw, &base)
@@ -323,7 +358,7 @@ func TestAdminFieldChecksCatchPlantedDefects(t *testing.T) {
 func TestBodyFirstRegistrationMustBeNamed(t *testing.T) {
 	root := testRoot(t)
 	scopes := catalogScopes(t)
-	for _, row := range coveredAdminRows(t) {
+	for _, row := range coveredRows(t) {
 		if row["id"] != "PUT /api/v1/admin/settings/{category}/{key} [dev-health-ops-api @api]" {
 			continue
 		}
@@ -340,4 +375,114 @@ func TestBodyFirstRegistrationMustBeNamed(t *testing.T) {
 		return
 	}
 	t.Fatal("the settings write row is missing")
+}
+
+func TestEveryProtectedRowIsInAListedFamily(t *testing.T) {
+	for _, item := range loadGoAPIDocument(t)["rows"].([]any) {
+		row := item.(map[string]any)
+		if class, _ := row["classification"].(string); class != "protected" {
+			continue
+		}
+		route, _ := row["route"].(string)
+		if !hasFamilyPrefix(route, coveredFamilies) && !hasFamilyPrefix(route, uncoveredFamilies) {
+			t.Errorf("%v is a protected row in a family that is neither covered nor listed as not yet covered", row["id"])
+		}
+	}
+}
+
+func TestCoveredFamilyPredicateSelectsByPrefixAndClass(t *testing.T) {
+	cases := []struct {
+		route, class string
+		want         bool
+	}{
+		{"/api/v1/billing/plans", "protected", true},
+		{"/api/v1/billing/plans", "public", false},
+		{"/api/v1/billingx/plans", "protected", false},
+		{"/api/v1/internal/acr/health", "protected", true},
+		{"/api/v1/ingest/commits", "protected", false},
+		{"/api/v1/auth/me", "protected", true},
+	}
+	for _, c := range cases {
+		if got := isCoveredRow(map[string]any{"route": c.route, "classification": c.class}); got != c.want {
+			t.Errorf("%s %s: covered = %v, want %v", c.class, c.route, got, c.want)
+		}
+	}
+}
+
+// Each family outside admin has one row that is mutated in every field way the admin controls do, so a gap in one
+// family's rows cannot hide behind the admin family's controls.
+func TestFieldChecksCatchPlantedDefectsOnEveryNewFamily(t *testing.T) {
+	root := testRoot(t)
+	scopes := catalogScopes(t)
+	ids := []string{
+		"GET /api/v1/billing/invoices [dev-health-ops-api @api]",
+		"POST /api/v1/billing/plans/pull-stripe [dev-health-ops-api @api]",
+		"GET /api/v1/auth/me [dev-health-ops-api @api]",
+		"GET /api/v1/orgs/me [dev-health-ops-api @api]",
+		"GET /api/v1/licensing/entitlements/{org_id} [dev-health-ops-api @api]",
+		"GET /api/v1/internal/acr/entitlements/{org_id} [dev-health-ops-api @internal]",
+	}
+	mutations := map[string]func(map[string]any){
+		"unknown action":            func(r map[string]any) { r["action"] = "billing.nope" },
+		"action absent":             func(r map[string]any) { delete(r, "action") },
+		"null action without a gap": func(r map[string]any) { r["action"] = nil; r["gaps"] = []any{} },
+		"absent resolver":           func(r map[string]any) { delete(r, "resource_resolver") },
+		"cache text without a rule": func(r map[string]any) { r["current_state_cache_behavior"] = "unknown" },
+		"absent cache text":         func(r map[string]any) { delete(r, "current_state_cache_behavior") },
+		"impersonation unknown":     func(r map[string]any) { r["impersonation_policy"] = "unknown" },
+		"impersonation absent":      func(r map[string]any) { delete(r, "impersonation_policy") },
+		"disclosure absent":         func(r map[string]any) { delete(r, "disclosure_behavior") },
+		"disclosure names no class": func(r map[string]any) { r["disclosure_behavior"] = "returns 404" },
+		"anchor names a missing file": func(r map[string]any) {
+			r["resource_resolver"] = "none: the route reads no organization (internal/api/nope/nope.go:5)"
+		},
+	}
+	seen := 0
+	for _, row := range coveredRows(t) {
+		id, _ := row["id"].(string)
+		wanted := false
+		for _, want := range ids {
+			wanted = wanted || want == id
+		}
+		if !wanted {
+			continue
+		}
+		seen++
+		raw, _ := json.Marshal(row)
+		var base map[string]any
+		_ = json.Unmarshal(raw, &base)
+		if got := adminFieldViolations(base, scopes, root); len(got) != 0 {
+			t.Fatalf("%s: the unmodified row has violations: %v", id, got)
+		}
+		for name, mutate := range mutations {
+			var row map[string]any
+			_ = json.Unmarshal(raw, &row)
+			mutate(row)
+			if got := adminFieldViolations(row, scopes, root); len(got) == 0 {
+				t.Errorf("%s: planted defect %q passed every check", id, name)
+			}
+		}
+	}
+	if seen != len(ids) {
+		t.Fatalf("found %d of the %d planted-control rows", seen, len(ids))
+	}
+}
+
+func TestInternalListenerOrgScopedRowNeedsItsImpersonationGap(t *testing.T) {
+	root := testRoot(t)
+	scopes := catalogScopes(t)
+	for _, row := range coveredRows(t) {
+		if row["id"] != "GET /api/v1/internal/acr/entitlements/{org_id} [dev-health-ops-api @internal]" {
+			continue
+		}
+		raw, _ := json.Marshal(row)
+		var mutated map[string]any
+		_ = json.Unmarshal(raw, &mutated)
+		mutated["gaps"] = []any{"action: no catalog action covers the internal service entitlement and configuration reads"}
+		if got := adminFieldViolations(mutated, scopes, root); len(got) == 0 {
+			t.Fatal("a not-applicable impersonation value without its gap passed every check")
+		}
+		return
+	}
+	t.Fatal("the internal entitlement row is missing")
 }

@@ -20,7 +20,8 @@ const (
 	authGroup = "auth_service"
 	// authStoreGroup is the rate-limit group of the same service; the critical store-error tier lives there.
 	authStoreGroup = "auth_service_rate_limit"
-	authStoreHigh  = "AuthRateLimitStoreErrorsHigh"
+	authStoreWarn  = "AuthServiceRateLimitStoreErrors"
+	authStoreHigh  = "AuthServiceRateLimitStoreErrorsHigh"
 )
 
 var authAlertNames = []string{
@@ -115,6 +116,27 @@ func authAlertSetIsExact(g *guard) {
 		}
 	}
 	g.expect(inStore == 1, "%s must be in the %s group exactly once, found %d", authStoreHigh, authStoreGroup, inStore)
+	warn, high := storeSelector(str(authGroupRule(g, authStoreGroup, authStoreWarn)["expr"])), storeSelector(str(authGroupRule(g, authStoreGroup, authStoreHigh)["expr"]))
+	g.expect(warn != "" && warn == high, "the %s selector %q differs from the warning tier's %q: both tiers must read the same series", authStoreHigh, high, warn)
+}
+
+var storeErrorSelector = regexp.MustCompile(`dev_health_api_rate_limit_store_errors_total(\{[^}]*\})`)
+
+func storeSelector(expr string) string {
+	if m := storeErrorSelector.FindStringSubmatch(expr); m != nil {
+		return m[1]
+	}
+	return ""
+}
+
+func authGroupRule(g *guard, group, name string) doc {
+	for _, a := range authGroupRules(g, group) {
+		if str(a["alert"]) == name {
+			return a
+		}
+	}
+	g.failf("alert %s not found in group %s", name, group)
+	return doc{}
 }
 
 func sortedCopy(in []string) []string {
@@ -145,7 +167,7 @@ func authAlertMetricsAreEmitted(g *guard) {
 }
 
 func authAlertsSelectTheAuthJob(g *guard) {
-	for _, a := range authRuleSet(g) {
+	for _, a := range authAlerts(g) {
 		g.expect(strings.Contains(str(a["expr"]), `job="auth-service"`), "%s does not select job=\"auth-service\": it would also read another service's series", str(a["alert"]))
 	}
 }
@@ -212,8 +234,9 @@ func TestAuthServiceAlertGuardsPlantedDefects(t *testing.T) {
 		{"job-selector-dropped", rules, mut(rulesRel, `sum by (job) (up{job="auth-service"}) == 0`, "sum by (job) (up) == 0"), authAlertsSelectTheAuthJob, "another service"},
 		{"path-label-added", rules, mut(rulesRel, "sum by (limit) (increase(dev_health_api_rate_limit_store_errors_total", "sum by (limit, path) (increase(dev_health_api_rate_limit_store_errors_total"), authAlertLabelsAreBounded, "closed limit id"},
 		{"team-invented", rules, mut(rulesRel, "          team: platform\n        annotations:\n          summary: \"Auth service target is down\"", "          team: identity\n        annotations:\n          summary: \"Auth service target is down\""), authAlertLabelsAreBounded, "want the existing groups"},
+		{"store-error-high-selector-differs-from-the-warning-tier", rules, mut(rulesRel, `store_errors_total{limit=~"auth_svc_.*"}[10m]`, `store_errors_total{job="auth-service"}[10m]`), authAlertSetIsExact, "differs from the warning tier"},
 		{"store-error-high-threshold-changed", rules, mut(rulesRel, "[10m])) > 20\n        for: 5m", "[10m])) > 200\n        for: 5m"), authAlertShapes, "high store-error tier"},
-		{"store-error-high-moved-back", rules, mut(rulesRel, "      # Critical tier of the rule above: more than 20 store errors in ten minutes on one limit.\n      - alert: AuthRateLimitStoreErrorsHigh", "      # Critical tier of the rule above: more than 20 store errors in ten minutes on one limit.\n      - alert: AuthRateLimitStoreErrorsHighX"), authAlertSetIsExact, "exactly once"},
+		{"store-error-high-renamed", rules, mut(rulesRel, "      - alert: AuthServiceRateLimitStoreErrorsHigh\n", "      - alert: AuthServiceRateLimitStoreErrorsHighX\n"), authAlertSetIsExact, "exactly once"},
 		{"traffic-floor-removed", rules, mut(rulesRel, " and sum(rate(dev_health_api_http_requests_total{job=\"auth-service\"}[5m])) > 0.1", ""), authAlertShapes, "traffic floor"},
 		{"absent-rule-removed", rules, mut(rulesRel, "absent(up{job=\"auth-service\"})", "up{job=\"auth-service\"}"), authAlertShapes, "absent"},
 		{"instance-label-kept", rules, mut(rulesRel, `sum by (job) (up{job="auth-service"}) == 0`, `up{job="auth-service"} == 0`), authAlertLabelsAreBounded, "bare selector"},

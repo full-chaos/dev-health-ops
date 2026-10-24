@@ -1008,9 +1008,9 @@ groups:
             docs/reference/auth/readiness-and-slo.md.
 
       # Critical tier of the rule above: more than 20 store errors in ten minutes on one limit.
-      - alert: AuthRateLimitStoreErrorsHigh
+      - alert: AuthServiceRateLimitStoreErrorsHigh
         expr: |
-          sum by (limit) (increase(dev_health_api_rate_limit_store_errors_total{job="auth-service"}[10m])) > 20
+          sum by (limit) (increase(dev_health_api_rate_limit_store_errors_total{limit=~"auth_svc_.*"}[10m])) > 20
         for: 5m
         labels:
           severity: critical

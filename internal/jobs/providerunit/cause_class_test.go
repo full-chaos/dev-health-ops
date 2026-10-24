@@ -665,3 +665,24 @@ func TestChunkStoreDataErrorIsTerminalButOtherStoreErrorsAreNot(t *testing.T) {
 		t.Fatalf("causeClass(40001) = %q, want %q", got, causeClassCheckpointStoreError)
 	}
 }
+
+// The work deadline can pass while a deterministic error is in flight: Work stores that error's own category, so
+// the cause class must be the same value, not time_limit.
+func TestCauseClassKeepsTheDeterministicCategoryWhenTheWorkDeadlinePassed(t *testing.T) {
+	for _, testCase := range []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"22P05 store error", providersync.NewChunkStoreError(&pgconn.PgError{Code: "22P05"}), CheckpointDataErrorCategory},
+		{"bare checkpoint conflict", providersync.ErrChunkCheckpointConflict, CheckpointConflictCategory},
+		{"deadline", context.DeadlineExceeded, TimeLimitCategory},
+		{"40001 store error", providersync.NewChunkStoreError(&pgconn.PgError{Code: "40001"}), TimeLimitCategory},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := causeClass(testCase.err, true); got != testCase.want {
+				t.Fatalf("causeClass(timedOut) = %q, want %q", got, testCase.want)
+			}
+		})
+	}
+}

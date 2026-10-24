@@ -203,6 +203,11 @@ var providerErrorClasses = map[providerfoundation.ErrorClass]struct{}{
 // timedOut is true when the job time limit ended the attempt.
 func causeClass(err error, timedOut bool) string {
 	if timedOut {
+		// Work stores the deterministic category when err has one; the class
+		// must name the same cause (CHAOS-11034).
+		if category, deterministic := deterministicTerminalCategory(err); deterministic {
+			return category
+		}
 		return TimeLimitCategory
 	}
 	if err == nil {

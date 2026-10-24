@@ -1,6 +1,7 @@
 package syncdispatchruntime
 
 import (
+	"container/heap"
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
@@ -238,203 +239,251 @@ func staleDispatchSeconds() time.Duration {
 // authorize->claim -- Python's own re-query cannot observe anything this
 // transaction hasn't, so skipping it changes no observable behavior, only
 // which frame issues the (redundant, in Python) lookup.
+//
+// The units are read in keyset pages of dispatchReadPageSize (never all at
+// once); decideDispatchGuard folds them.
 func authorizeRun(ctx context.Context, tx pgx.Tx, logger *synclog.Logger, orgID, runID string, now time.Time) (guardDecision, error) {
-	units, err := loadDispatchGuardUnits(ctx, tx, runID)
-	if err != nil {
-		return guardDecision{}, err
-	}
-
-	// CHAOS-4586 (codex round 6, P1): the bucket-lock acquisition below
-	// USED to sit after the total-unit-cap check, so a run over cap
-	// returned "denied" before ever reaching it -- denyRun's subsequent
-	// hasActive branch then bulk-updates this run's sync_run_units
-	// (failPlannedUnits/failStaleDispatchingUnits, both plain WHERE
-	// sync_run_id=$1 predicates matching potentially many rows, with NO
-	// explicit row-lock order of their own) with NO bucket lock held at
-	// all. UnreclaimableSweep.Step's own bucket lock (round 5) only
-	// protects against dispatch passes that reach THIS lock; it protects
-	// nothing against a hard-cap denial that returns before this. Moving
-	// bucket-lock acquisition here, before EVERY early return
-	// (including the hard-cap one below), makes it unconditional for the
-	// whole function: whichever guardDecision this returns, the caller's
-	// SAME transaction already holds every bucket this run's units belong
-	// to, for the rest of that transaction -- covering denyRun's bulk
-	// writes too, not just the allowed-path's own claimUnits.
-	//
-	// candidatesByBucket/deferredBuckets/allBuckets do not depend on
-	// totalCap or anything computed below this line -- only on units,
-	// orgID and now -- so this reordering changes no computed value, only
-	// when the (harmless, already-idempotent) lock acquisition happens.
 	staleCutoff := now.Add(-staleDispatchSeconds())
+	env := guardEnv{
+		lockBuckets: func(buckets []dispatchBucket) error { return acquireBucketAdvisoryLocks(ctx, tx, buckets) },
+		totalCap: func() int {
+			// Python: any resolution failure (missing org, missing tier_limits
+			// table, a malformed override) falls back to the env default
+			// unconditionally (CHAOS-2580) -- ResolveMaxSyncUnitsCap's own doc
+			// warns callers wanting that parity must substitute the default
+			// themselves; this is that substitution.
+			totalCap, err := scheduledsync.ResolveMaxSyncUnitsCap(ctx, tx, orgID, defaultSyncRunMaxUnits())
+			if err != nil {
+				return defaultSyncRunMaxUnits()
+			}
+			return totalCap
+		},
+		activeCount: func(bucket dispatchBucket) (int, error) {
+			return countActiveBucketUnits(ctx, tx, bucket, staleCutoff, now)
+		},
+		emit: func(bucket dispatchBucket, activeCount, reclaimedStale, cappedNew, cappedStale, headroom int) {
+			emitBucketDecision(ctx, logger, bucket, activeCount, reclaimedStale, cappedNew, cappedStale, headroom)
+		},
+	}
+	source := func(fold func(dispatchGuardUnit) error) error {
+		return forEachDispatchGuardUnit(ctx, tx, runID, fold)
+	}
+	return decideDispatchGuard(source, env, orgID, now)
+}
 
-	// CHAOS-4586 (codex round 7, P2; round 8, P2 narrowed this): the lock
-	// set must cover every bucket a MUTATING status could touch -- broader
-	// than candidatesByBucket/deferredBuckets below, which apply
-	// eligibility filters that exist for the CONCURRENCY-CAP decision loop
-	// further down, not for locking completeness. Round 7 fixed this by
-	// locking EVERY unit's bucket unconditionally; round 8 found that
-	// over-broad -- a run with terminal (success/failed) or live RUNNING
-	// units in one bucket and pending work in another held BOTH buckets
-	// for this whole transaction, needlessly blocking unrelated runs on
-	// the never-touched bucket, since neither denyRun's bulk writes nor
-	// claimUnits ever mutate a terminal or RUNNING row.
-	//
-	// lockBucketsByUnit is therefore built in the SAME loop as
-	// candidatesByBucket/deferredBuckets, adding a unit to it exactly when
-	// some later write in THIS transaction could touch that row:
-	//   - PLANNED: claimUnits' plain-claim UPDATE, and denyRun's
-	//     failPlannedUnits (`status IN (planned, retrying)`, no other
-	//     condition).
-	//   - DISPATCHING, stale: claimUnits' stale-reclaim UPDATE, and
-	//     denyRun's failStaleDispatchingUnits (`status = dispatching AND
-	//     updated_at <= staleCutoff`). Fresh DISPATCHING is a capacity
-	//     consumer ONLY -- neither write ever matches it -- so it does NOT
-	//     need a lock.
-	//   - RETRYING, ANY available_at (including nil): denyRun's
-	//     failPlannedUnits matches every retrying row with NO available_at
-	//     condition at all, so this must be locked regardless of whether
-	//     it is a concurrency-cap candidate, a not-yet-due deferral, or
-	//     the anomalous nil-available_at shape codex round 7 caught
-	//     candidatesByBucket/deferredBuckets silently dropping.
-	//   - RUNNING and terminal (SUCCESS/FAILED): never written by
-	//     anything in this transaction -- no lock needed.
-	lockBucketsByUnit := map[dispatchBucket][]dispatchGuardUnit{}
-	candidatesByBucket := map[dispatchBucket][]dispatchGuardUnit{}
-	deferredBuckets := map[dispatchBucket]bool{}
-	for _, unit := range units {
-		bucket := dispatchBucket{orgID: orgID, provider: unit.provider, costClass: unit.costClass}
+// guardEnv is everything decideDispatchGuard needs from the database, so the decision runs on a fake in tests.
+type guardEnv struct {
+	lockBuckets func([]dispatchBucket) error
+	totalCap    func() int
+	activeCount func(dispatchBucket) (int, error)
+	emit        func(bucket dispatchBucket, activeCount, reclaimedStale, cappedNew, cappedStale, headroom int)
+}
+
+// guardUnitSource folds every unit of the run in id order; each call is one full paged read.
+type guardUnitSource func(fold func(dispatchGuardUnit) error) error
+
+// guardBucketFold is the per-bucket state of the second pass. Its size is bounded by the bucket's free slots, not by
+// the number of units: the first allowedSlots units of `stale reclaims by (updated_at, id), then new work by id` are
+// claimable, every other candidate is capped and its id goes straight to the capped list.
+type guardBucketFold struct {
+	slots          int
+	reclaims       reclaimHeap
+	reclaimCount   int
+	newCount       int
+	newKept        []string
+	newOverflow    []string
+	cappedReclaims []dispatchGuardUnit
+}
+
+// reclaimHeap is a max-heap on reclaim priority: the worst-priority kept reclaim sits on top.
+type reclaimHeap []dispatchGuardUnit
+
+func reclaimBefore(a, b dispatchGuardUnit) bool {
+	if !a.updatedAt.Equal(b.updatedAt) {
+		return a.updatedAt.Before(b.updatedAt)
+	}
+	return a.id < b.id
+}
+
+func (heap reclaimHeap) Len() int           { return len(heap) }
+func (heap reclaimHeap) Less(i, j int) bool { return reclaimBefore(heap[j], heap[i]) }
+func (heap reclaimHeap) Swap(i, j int)      { heap[i], heap[j] = heap[j], heap[i] }
+func (heap *reclaimHeap) Push(value any)    { *heap = append(*heap, value.(dispatchGuardUnit)) }
+func (heap *reclaimHeap) Pop() any {
+	old := *heap
+	last := old[len(old)-1]
+	*heap = old[:len(old)-1]
+	return last
+}
+
+func (fold *guardBucketFold) addReclaim(unit dispatchGuardUnit) {
+	fold.reclaimCount++
+	if fold.slots == 0 {
+		fold.cappedReclaims = append(fold.cappedReclaims, unit)
+		return
+	}
+	heap.Push(&fold.reclaims, unit)
+	if fold.reclaims.Len() > fold.slots {
+		fold.cappedReclaims = append(fold.cappedReclaims, heap.Pop(&fold.reclaims).(dispatchGuardUnit))
+	}
+}
+
+func (fold *guardBucketFold) addNew(id string) {
+	fold.newCount++
+	if len(fold.newKept) < fold.slots {
+		fold.newKept = append(fold.newKept, id)
+		return
+	}
+	fold.newOverflow = append(fold.newOverflow, id)
+}
+
+// cappedIDs is the old prioritized[allowedSlots:] in the old order: the capped reclaims (sorted), then capped new work by id.
+func (fold *guardBucketFold) cappedIDs() []string {
+	sort.Slice(fold.cappedReclaims, func(i, j int) bool { return reclaimBefore(fold.cappedReclaims[i], fold.cappedReclaims[j]) })
+	ids := make([]string, 0, len(fold.cappedReclaims)+len(fold.newKept)+len(fold.newOverflow))
+	for _, unit := range fold.cappedReclaims {
+		ids = append(ids, unit.id)
+	}
+	claimableNew := fold.slots - fold.reclaimCount
+	if claimableNew < 0 {
+		claimableNew = 0
+	}
+	if claimableNew > len(fold.newKept) {
+		claimableNew = len(fold.newKept)
+	}
+	ids = append(ids, fold.newKept[claimableNew:]...)
+	return append(ids, fold.newOverflow...)
+}
+
+// decideDispatchGuard is the guard decision, folded over keyset pages in two passes: pass 1 learns the bucket sets and
+// the unit count; the buckets are locked; pass 2 (or, over the total cap, a suffix walk) computes the cap decision.
+// The two passes read the table twice, so a row that changed between them is judged on what pass 2 saw, but only
+// inside the buckets pass 1 locked: pass 2 never authorizes a unit of a bucket outside allBuckets.
+func decideDispatchGuard(source guardUnitSource, env guardEnv, orgID string, now time.Time) (guardDecision, error) {
+	staleCutoff := now.Add(-staleDispatchSeconds())
+	bucketOf := func(unit dispatchGuardUnit) dispatchBucket {
+		return dispatchBucket{orgID: orgID, provider: unit.provider, costClass: unit.costClass}
+	}
+	// classify mirrors the old per-unit switch. lock: a later write of this transaction could touch the row
+	// (PLANNED, stale DISPATCHING, any RETRYING; CHAOS-4586 rounds 7-8). candidate: a concurrency-cap candidate.
+	// deferred: a not-yet-due RETRYING row, which makes its bucket a cap-loop bucket without being a candidate.
+	classify := func(unit dispatchGuardUnit) (lock, candidate, deferred bool) {
 		switch unit.status {
 		case syncRunUnitStatusPlanned:
-			candidatesByBucket[bucket] = append(candidatesByBucket[bucket], unit)
-			lockBucketsByUnit[bucket] = append(lockBucketsByUnit[bucket], unit)
+			return true, true, false
 		case syncRunUnitStatusDispatching:
-			if !unit.updatedAt.After(staleCutoff) {
-				candidatesByBucket[bucket] = append(candidatesByBucket[bucket], unit)
-				lockBucketsByUnit[bucket] = append(lockBucketsByUnit[bucket], unit)
-			}
-			// Fresh DISPATCHING -> consumer only (counted in active-count
-			// below), never written by this pass -- no lock needed.
+			stale := !unit.updatedAt.After(staleCutoff)
+			return stale, stale, false
 		case syncRunUnitStatusRetrying:
-			lockBucketsByUnit[bucket] = append(lockBucketsByUnit[bucket], unit)
-			if unit.availableAt != nil {
-				if !unit.availableAt.After(now) {
-					candidatesByBucket[bucket] = append(candidatesByBucket[bucket], unit)
-				} else {
-					deferredBuckets[bucket] = true
-				}
+			if unit.availableAt == nil {
+				return true, false, false
 			}
-			// availableAt == nil: lock-worthy (above, codex round 7) but
-			// not a concurrency-cap candidate or deferred bucket -- an
-			// anomalous row shape denyRun could still write.
-			// RUNNING (any age) -> capacity consumer only, never a candidate (F2)
-			// and never written by anything in this transaction -- no lock needed.
-			// SUCCESS / FAILED -> terminal, ignored, never written again.
+			if !unit.availableAt.After(now) {
+				return true, true, false
+			}
+			return true, false, true
 		}
+		return false, false, false
 	}
 
-	if err := acquireBucketAdvisoryLocks(ctx, tx, sortedDispatchBuckets(lockBucketsByUnit, nil)); err != nil {
+	total := 0
+	lockBuckets := map[dispatchBucket]bool{}
+	loopBuckets := map[dispatchBucket]bool{}
+	if err := source(func(unit dispatchGuardUnit) error {
+		total++
+		lock, candidate, deferred := classify(unit)
+		bucket := bucketOf(unit)
+		if lock {
+			lockBuckets[bucket] = true
+		}
+		if candidate || deferred {
+			loopBuckets[bucket] = true
+		}
+		return nil
+	}); err != nil {
 		return guardDecision{}, err
 	}
 
-	// allBuckets stays scoped to candidatesByBucket/deferredBuckets on
-	// purpose: it drives the per-bucket CONCURRENCY-CAP decision loop
-	// below, which must only ever consider eligible buckets -- locking
-	// completeness (above) and concurrency-cap eligibility (here) are
-	// different concerns with different correct scopes; conflating them
-	// would either under-lock (the round-7 bug) or over-restrict slot
-	// accounting to buckets that were never real candidates.
-	allBuckets := sortedDispatchBuckets(candidatesByBucket, deferredBuckets)
-
-	// Python: any resolution failure (missing org, missing tier_limits
-	// table, a malformed override) falls back to the env default
-	// unconditionally (CHAOS-2580) -- ResolveMaxSyncUnitsCap's own doc
-	// warns callers wanting that parity must substitute the default
-	// themselves; this is that substitution.
-	totalCap, err := scheduledsync.ResolveMaxSyncUnitsCap(ctx, tx, orgID, defaultSyncRunMaxUnits())
-	if err != nil {
-		totalCap = defaultSyncRunMaxUnits()
+	// CHAOS-4586: the bucket locks are taken before EVERY early return, the hard-cap one included, so denyRun's bulk
+	// writes run under the same locks as claimUnits.
+	if err := env.lockBuckets(sortBucketList(lockBuckets)); err != nil {
+		return guardDecision{}, err
 	}
-	if len(units) > totalCap {
-		capped := make([]string, 0, len(units)-totalCap)
-		for _, unit := range units[totalCap:] {
-			capped = append(capped, unit.id)
+	allBuckets := sortBucketList(loopBuckets)
+
+	totalCap := env.totalCap()
+	if total > totalCap {
+		capped := make([]string, 0, total-totalCap)
+		index := 0
+		if err := source(func(unit dispatchGuardUnit) error {
+			if index >= totalCap && len(capped) < total-totalCap {
+				capped = append(capped, unit.id)
+			}
+			index++
+			return nil
+		}); err != nil {
+			return guardDecision{}, err
 		}
 		return guardDecision{
 			allowed:       false,
-			reason:        fmt.Sprintf("sync run unit cap exceeded: %d/%d", len(units), totalCap),
+			reason:        fmt.Sprintf("sync run unit cap exceeded: %d/%d", total, totalCap),
 			cappedUnitIDs: capped,
 		}, nil
 	}
 
-	// CHAOS-4605: the authorized set is derived from candidatesByBucket and
-	// nothing else -- exactly the units the per-bucket cap loop below
-	// accounts for, in exactly the buckets acquireBucketAdvisoryLocks
-	// already locked above (allBuckets is a subset of lockBucketsByUnit by
-	// construction: every candidate status and every deferred RETRYING row
-	// is added to the lock set in the same iteration). A unit outside this
-	// set has had no slot reserved for it by this pass and must not be
-	// claimed by it.
-	authorizedUnitIDs := make(map[string]bool)
-	for _, bucketUnits := range candidatesByBucket {
-		for _, unit := range bucketUnits {
-			authorizedUnitIDs[unit.id] = true
+	activeCounts := make(map[dispatchBucket]int, len(allBuckets))
+	folds := make(map[dispatchBucket]*guardBucketFold, len(allBuckets))
+	for _, bucket := range allBuckets {
+		activeCount, err := env.activeCount(bucket)
+		if err != nil {
+			return guardDecision{}, err
 		}
+		activeCounts[bucket] = activeCount
+		slots := concurrencyCapForCostClass(bucket.costClass) - activeCount
+		if slots < 0 {
+			slots = 0
+		}
+		folds[bucket] = &guardBucketFold{slots: slots}
+	}
+
+	// CHAOS-4605: the authorized set is every candidate of a locked, cap-checked bucket and nothing else.
+	authorizedUnitIDs := make(map[string]bool)
+	if err := source(func(unit dispatchGuardUnit) error {
+		_, candidate, _ := classify(unit)
+		if !candidate {
+			return nil
+		}
+		fold := folds[bucketOf(unit)]
+		if fold == nil {
+			return nil
+		}
+		authorizedUnitIDs[unit.id] = true
+		if unit.status == syncRunUnitStatusDispatching {
+			fold.addReclaim(unit)
+		} else {
+			fold.addNew(unit.id)
+		}
+		return nil
+	}); err != nil {
+		return guardDecision{}, err
 	}
 
 	var cappedUnitIDs []string
 	slotHeadroom := make(map[dispatchBucket]int, len(allBuckets))
 	for _, bucket := range allBuckets {
-		bucketCandidates := candidatesByBucket[bucket]
-		activeCount, err := countActiveBucketUnits(ctx, tx, bucket, staleCutoff, now)
-		if err != nil {
-			return guardDecision{}, err
-		}
-
-		var reclaims, newWork []dispatchGuardUnit
-		for _, unit := range bucketCandidates {
-			if unit.status == syncRunUnitStatusDispatching {
-				reclaims = append(reclaims, unit)
-			} else {
-				newWork = append(newWork, unit)
-			}
-		}
-		// CHAOS-3990: reclaims are ordered oldest-stale-first ahead of new
-		// work, never exempted from the cap -- see guard.py:262-286 for the
-		// full starvation-fix rationale this ordering exists to preserve.
-		sort.SliceStable(reclaims, func(i, j int) bool {
-			if !reclaims[i].updatedAt.Equal(reclaims[j].updatedAt) {
-				return reclaims[i].updatedAt.Before(reclaims[j].updatedAt)
-			}
-			return reclaims[i].id < reclaims[j].id
-		})
-
-		allowedSlots := concurrencyCapForCostClass(bucket.costClass) - activeCount
-		if allowedSlots < 0 {
-			allowedSlots = 0
-		}
-		prioritized := append(append([]dispatchGuardUnit{}, reclaims...), newWork...)
-		var cappedNew, cappedStale int
-		if len(prioritized) > allowedSlots {
-			for _, unit := range prioritized[allowedSlots:] {
-				cappedUnitIDs = append(cappedUnitIDs, unit.id)
-				if unit.status == syncRunUnitStatusDispatching {
-					cappedStale++
-				} else {
-					cappedNew++
-				}
-			}
-		}
-		headroom := allowedSlots - len(prioritized)
+		fold := folds[bucket]
+		capped := fold.cappedIDs()
+		cappedUnitIDs = append(cappedUnitIDs, capped...)
+		headroom := fold.slots - (fold.reclaimCount + fold.newCount)
 		if headroom < 0 {
 			headroom = 0
 		}
 		slotHeadroom[bucket] = headroom
-
-		reclaimedStale := len(reclaims)
-		if reclaimedStale > allowedSlots {
-			reclaimedStale = allowedSlots
+		reclaimedStale := fold.reclaimCount
+		if reclaimedStale > fold.slots {
+			reclaimedStale = fold.slots
 		}
-		emitBucketDecision(ctx, logger, bucket, activeCount, reclaimedStale, cappedNew, cappedStale, headroom)
+		env.emit(bucket, activeCounts[bucket], reclaimedStale, len(capped)-len(fold.cappedReclaims), len(fold.cappedReclaims), headroom)
 	}
 
 	if len(cappedUnitIDs) > 0 {
@@ -450,8 +499,8 @@ func authorizeRun(ctx context.Context, tx pgx.Tx, logger *synclog.Logger, orgID,
 	return guardDecision{allowed: true, slotHeadroom: slotHeadroom, authorizedUnitIDs: authorizedUnitIDs}, nil
 }
 
-// loadDispatchGuardUnits loads this run's units ordered by id (stable
-// ordering for the total-cap suffix, guard.py:147-153).
+// forEachDispatchGuardUnit folds this run's units in id order (stable ordering for the total-cap suffix,
+// guard.py:147-153), dispatchReadPageSize rows per query.
 //
 // Error classification: a query/scan failure here is a bare execution
 // failure indistinguishable from any other Postgres blip mid-dispatch --
@@ -459,28 +508,32 @@ func authorizeRun(ctx context.Context, tx pgx.Tx, logger *synclog.Logger, orgID,
 // (CHAOS-4175 round 3), reused here rather than minted again narrowly for
 // dispatch, since the retry/backoff state machine this family's Dispatch()
 // routes into is the identical one round 3 fixed for reference_discovery.
-func loadDispatchGuardUnits(ctx context.Context, tx pgx.Tx, runID string) ([]dispatchGuardUnit, error) {
-	rows, err := tx.Query(ctx, `
+func forEachDispatchGuardUnit(ctx context.Context, tx pgx.Tx, runID string, fold func(dispatchGuardUnit) error) error {
+	return forEachKeysetPage(dispatchReadPageSize, func(unit dispatchGuardUnit) string { return unit.id },
+		func(after *string, limit int) ([]dispatchGuardUnit, error) {
+			rows, err := tx.Query(ctx, `
 SELECT id::text, status, provider, cost_class, updated_at, available_at
 FROM public.sync_run_units
-WHERE sync_run_id = $1::uuid
-ORDER BY id`, runID)
-	if err != nil {
-		return nil, fmt.Errorf("%w: load dispatch guard units: %w", ErrDiscoveryTransientFailure, err)
-	}
-	defer rows.Close()
-	var units []dispatchGuardUnit
-	for rows.Next() {
-		var unit dispatchGuardUnit
-		if err := rows.Scan(&unit.id, &unit.status, &unit.provider, &unit.costClass, &unit.updatedAt, &unit.availableAt); err != nil {
-			return nil, fmt.Errorf("%w: scan dispatch guard unit: %w", ErrDiscoveryTransientFailure, err)
-		}
-		units = append(units, unit)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("%w: iterate dispatch guard units: %w", ErrDiscoveryTransientFailure, err)
-	}
-	return units, nil
+WHERE sync_run_id = $1::uuid AND ($2::uuid IS NULL OR id > $2::uuid)
+ORDER BY id
+LIMIT $3`, runID, after, limit)
+			if err != nil {
+				return nil, fmt.Errorf("%w: load dispatch guard units: %w", ErrDiscoveryTransientFailure, err)
+			}
+			defer rows.Close()
+			var units []dispatchGuardUnit
+			for rows.Next() {
+				var unit dispatchGuardUnit
+				if err := rows.Scan(&unit.id, &unit.status, &unit.provider, &unit.costClass, &unit.updatedAt, &unit.availableAt); err != nil {
+					return nil, fmt.Errorf("%w: scan dispatch guard unit: %w", ErrDiscoveryTransientFailure, err)
+				}
+				units = append(units, unit)
+			}
+			if err := rows.Err(); err != nil {
+				return nil, fmt.Errorf("%w: iterate dispatch guard units: %w", ErrDiscoveryTransientFailure, err)
+			}
+			return units, nil
+		}, fold)
 }
 
 // countActiveBucketUnits counts the capacity-CONSUMER set for one bucket
@@ -511,20 +564,11 @@ WHERE org_id = $1 AND provider = $2 AND cost_class = $3
 	return count, nil
 }
 
-// sortedDispatchBuckets ports guard.py's `sorted(set(candidates_by_bucket) |
-// deferred_buckets)` -- deterministic ordering is what makes the advisory
-// lock acquisition below deadlock-free when two dispatchers race on the
-// same bucket set.
-func sortedDispatchBuckets(candidatesByBucket map[dispatchBucket][]dispatchGuardUnit, deferredBuckets map[dispatchBucket]bool) []dispatchBucket {
-	seen := make(map[dispatchBucket]bool, len(candidatesByBucket)+len(deferredBuckets))
-	for bucket := range candidatesByBucket {
-		seen[bucket] = true
-	}
-	for bucket := range deferredBuckets {
-		seen[bucket] = true
-	}
-	buckets := make([]dispatchBucket, 0, len(seen))
-	for bucket := range seen {
+// sortBucketList ports guard.py's `sorted(set(...))` -- deterministic ordering is what makes the advisory
+// lock acquisition deadlock-free when two dispatchers race on the same bucket set.
+func sortBucketList(set map[dispatchBucket]bool) []dispatchBucket {
+	buckets := make([]dispatchBucket, 0, len(set))
+	for bucket := range set {
 		buckets = append(buckets, bucket)
 	}
 	sort.Slice(buckets, func(i, j int) bool {

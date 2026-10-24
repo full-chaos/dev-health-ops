@@ -40,6 +40,7 @@ internal/apiservice
 internal/apiservice/acr
 internal/apiservice/admin
 internal/apiservice/customerpush
+internal/auth/accessverify
 internal/auth/edgetoken
 internal/auth/httpapi
 internal/auth/passwordhash

@@ -388,6 +388,11 @@ func configureWith(
 		deps.Verifier, deps.Signer = protected.verifier, protected.signer
 		scope = []func(http.Handler) http.Handler{protected.scope.OrgScope, protected.scope.Impersonation}
 	}
+	deps.AccessVerify, err = buildAccessVerify(envsecrets.ProcessLookup, deps.Auth, logger)
+	if err != nil {
+		closeComponents(depComponents)
+		return nil, dependencyFailure(ctx, logger, "api_access_verify", "api_access_verify_config_invalid", err)
+	}
 	logWideTrust(logger)
 	if err := RegisterOperatorMetrics(registry, &deps); err != nil {
 		closeComponents(depComponents)

@@ -494,6 +494,7 @@ internal/queryapi/server	reports_write_proof_venue_oracle_integration_test.go
 internal/queryapi/server	rest_error_response_test.go
 internal/queryapi/server	rest_routes_test.go
 internal/queryapi/server	result_row_bound_census_test.go
+internal/queryapi/server	schema_gate_test.go
 internal/queryapi/server	unrestricted_read_options_test.go
 internal/queryapi/server	workunit_explain_route_test.go
 internal/queryapi/server	workunits_route_test.go

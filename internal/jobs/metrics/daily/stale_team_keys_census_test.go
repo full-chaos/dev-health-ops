@@ -111,7 +111,7 @@ var teamScopeKeyExempt = map[string]string{
 // Reasons why a file that writes a team-keyed table is not a writer that
 // needs the rule.
 const (
-	teamKeyWriterUndispatched = "provider sync holds an adapter for the table that no destination reaches: the daily job owns the table"
+	teamKeyWriterUndispatched = "provider sync keeps only the INSERT text of the table, for a prepared manifest an earlier binary stored: no sink writes it, the daily job owns the table"
 	teamKeyWriterFixture      = "a fixture of a test-support package"
 	teamKeyWriterOwnKeys      = "the ic_finalize family rewrites the keys of the repository partitions with the team of the person (the partition family retracts those) and keeps the stale-key rule of the keys only it makes (supersedeSynthesizedUserKeys)"
 )
@@ -122,22 +122,22 @@ const (
 // point where its author decides how it keeps the rule.
 var teamKeyTableWriters = map[string]map[string]string{
 	"work_item_metrics_daily": {
-		"internal/jobs/metrics/daily/work_item_native_clickhouse.go":                  "",
-		"internal/providersync/github_work_item_metric_triplet_effects_clickhouse.go": teamKeyWriterUndispatched,
-		"internal/testsupport/sessionscenario/sessionscenario.go":                     teamKeyWriterFixture,
+		"internal/jobs/metrics/daily/work_item_native_clickhouse.go":  "",
+		"internal/providersync/prepared_retired_work_item_inserts.go": teamKeyWriterUndispatched,
+		"internal/testsupport/sessionscenario/sessionscenario.go":     teamKeyWriterFixture,
 	},
 	"work_item_state_durations_daily": {
-		"internal/jobs/metrics/daily/work_item_state_native_clickhouse.go":     "",
-		"internal/providersync/github_work_item_derived_effects_clickhouse.go": teamKeyWriterUndispatched,
+		"internal/jobs/metrics/daily/work_item_state_native_clickhouse.go": "",
+		"internal/providersync/prepared_retired_work_item_inserts.go":      teamKeyWriterUndispatched,
 	},
 	"estimate_coverage_metrics_daily": {
-		"internal/jobs/metrics/daily/work_item_native_clickhouse.go":           "",
-		"internal/providersync/github_work_item_derived_effects_clickhouse.go": teamKeyWriterUndispatched,
+		"internal/jobs/metrics/daily/work_item_native_clickhouse.go":  "",
+		"internal/providersync/prepared_retired_work_item_inserts.go": teamKeyWriterUndispatched,
 	},
 	"work_item_user_metrics_daily": {
-		"internal/jobs/metrics/daily/work_item_native_clickhouse.go":                  "",
-		"internal/providersync/github_work_item_metric_triplet_effects_clickhouse.go": teamKeyWriterUndispatched,
-		"internal/testsupport/crossorg/retracted_people.go":                           teamKeyWriterFixture,
+		"internal/jobs/metrics/daily/work_item_native_clickhouse.go":  "",
+		"internal/providersync/prepared_retired_work_item_inserts.go": teamKeyWriterUndispatched,
+		"internal/testsupport/crossorg/retracted_people.go":           teamKeyWriterFixture,
 	},
 	"user_metrics_daily": {
 		"internal/jobs/metrics/daily/repouser/clickhouse.go":      "",

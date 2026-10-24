@@ -36,9 +36,8 @@ import (
 // "dir/" (every file under it), "file" (every declaration of it) or
 // "file:Declaration". A stale key fails the census.
 var unruledReads = map[string]string{
-	"internal/providersync/":       "sync writers of the daily tables and their read-back of the exact keys they wrote",
-	"internal/goapiproof/":         "proof routes: the SQL of the reference plane quoted in a Reason text, no query of this process",
-	"internal/jobs/metrics/daily/": "daily family writers and their own reads: the live-key reads of the rule, and the latest-generation read of the cognitive load family, which the writer keeps safe by the compute time of the row of zeros",
+	"internal/goapiproof/":                                             "proof routes: the SQL of the reference plane quoted in a Reason text, no query of this process",
+	"internal/jobs/metrics/daily/":                                     "daily family writers and their own reads: the live-key reads of the rule, and the latest-generation read of the cognitive load family, which the writer keeps safe by the compute time of the row of zeros",
 	"internal/api/syncadmin/backfill_detail.go:compoundingRiskQuery":   "reads scope 'repo' rows only; a team retraction row has scope 'team'",
 	"internal/queryapi/compoundingrisk/read.go:repoTrend":              "reads scope 'repo' rows only; a team retraction row has scope 'team'",
 	"internal/queryapi/home/queries_signals.go:compoundingRiskSQLBase": "statement text with a placeholder for the rule; its one user, fetchRiskSignals, passes the rule to it",

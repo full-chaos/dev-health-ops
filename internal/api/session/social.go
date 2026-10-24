@@ -41,6 +41,10 @@ func providerText(value pyjson.Value) (*string, error) {
 	return nil, errProviderValueType
 }
 
+// socialAccountExists is the 409 for an e-mail another account holds; it names
+// no sign-in method.
+const socialAccountExists = "An account with this email already exists. Please sign in with your existing sign-in method."
+
 // socialLogin is POST /api/v1/auth/social-login (oauth.py).
 func (h handlers) socialLogin(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
@@ -117,14 +121,7 @@ func (h handlers) socialLogin(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if user != nil {
-			existing := "None"
-			if user.AuthProvider != nil {
-				existing = *user.AuthProvider
-			}
-			detail := pyjson.NewObject()
-			detail.Set("message", "An account with this email already exists. Please sign in with "+existing+".")
-			detail.Set("existing_provider", existing)
-			policy.WriteDetail(w, http.StatusConflict, detail, nil)
+			refuse(w, http.StatusConflict, socialAccountExists)
 			return
 		}
 	}

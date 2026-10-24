@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -639,5 +640,78 @@ func TestKeyedLimiterTestReturnsAStoreError(t *testing.T) {
 	limiter := NewKeyedLimiter(failingStore{}, Limit{ID: "peek_err", Count: 2, Window: time.Minute})
 	if ok, err := limiter.Test(context.Background(), "k", ""); ok || err == nil {
 		t.Fatalf("Test on a failing store = %v, %v, want false with the error", ok, err)
+	}
+}
+
+func scrapeRejections(t *testing.T) string {
+	t.Helper()
+	var out strings.Builder
+	if err := RateLimitRejections.WritePrometheus(&out); err != nil {
+		t.Fatal(err)
+	}
+	return out.String()
+}
+
+// A refused hit is counted by limit id: the series exists at zero as soon as a
+// limit is wired, a 429 adds one, an allowed hit adds none, and a store error
+// is a store error, not a rejection.
+func TestRateLimitRejectionsAreCountedByLimitIDOnly(t *testing.T) {
+	limit := Limit{ID: "rejections_probe", Count: 2, Window: time.Hour}
+	store := NewMemoryCounters(nil)
+	handler := LimitWith(NewKeyedLimiter(store, limit), func(*http.Request) string { return "secret-caller-key" }, WriteError)(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	if got := scrapeRejections(t); !strings.Contains(got, `dev_health_api_rate_limit_rejections_total{limit="rejections_probe"} 0`) {
+		t.Fatalf("a wired limit has no zero rejections series:\n%s", got)
+	}
+	var last int
+	for range 4 {
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/orgs/secret-path/invites", nil))
+		last = recorder.Code
+	}
+	if last != http.StatusTooManyRequests {
+		t.Fatalf("fourth hit answered %d, want 429", last)
+	}
+	after := scrapeRejections(t)
+	if !strings.Contains(after, `dev_health_api_rate_limit_rejections_total{limit="rejections_probe"} 2`) {
+		t.Fatalf("two refused hits were not counted:\n%s", after)
+	}
+	if !strings.Contains(after, "# TYPE dev_health_api_rate_limit_rejections_total counter") {
+		t.Fatalf("the series has no TYPE line:\n%s", after)
+	}
+	if strings.Contains(after, "secret-caller-key") || strings.Contains(after, "secret-path") {
+		t.Fatalf("the metric carries a caller key or a path:\n%s", after)
+	}
+	for _, line := range strings.Split(after, "\n") {
+		if strings.HasPrefix(line, "dev_health_api_rate_limit_rejections_total{") && !regexp.MustCompile(`^dev_health_api_rate_limit_rejections_total\{limit="[^"]+"\} [0-9]+$`).MatchString(line) {
+			t.Fatalf("a series carries more than the limit label: %q", line)
+		}
+	}
+}
+
+func TestRateLimitStoreErrorsAreNotCountedAsRejections(t *testing.T) {
+	limit := Limit{ID: "store_error_probe", Count: 2, Window: time.Hour}
+	handler := LimitWith(NewKeyedLimiter(failingStore{}, limit), func(*http.Request) string { return "k" }, WriteError)(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/x", nil))
+	if got := scrapeRejections(t); !strings.Contains(got, `dev_health_api_rate_limit_rejections_total{limit="store_error_probe"} 0`) {
+		t.Fatalf("a store error was counted as a rejection:\n%s", got)
+	}
+	if got := scrapeStoreErrors(t); !strings.Contains(got, `dev_health_api_rate_limit_store_errors_total{limit="store_error_probe"} 1`) {
+		t.Fatalf("the store error was not counted:\n%s", got)
+	}
+}
+
+func TestRateLimitPathBoundRefusalIsARejection(t *testing.T) {
+	limit := Limit{ID: "path_bound_probe", Count: 5, Window: time.Hour}
+	handler := LimitWith(NewKeyedLimiter(boundStore{}, limit), func(*http.Request) string { return "k" }, WriteError)(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/x", nil))
+	if recorder.Code != http.StatusTooManyRequests {
+		t.Fatalf("path bound answered %d, want 429", recorder.Code)
+	}
+	if got := scrapeRejections(t); !strings.Contains(got, `dev_health_api_rate_limit_rejections_total{limit="path_bound_probe"} 1`) {
+		t.Fatalf("the path-bound refusal was not counted:\n%s", got)
 	}
 }

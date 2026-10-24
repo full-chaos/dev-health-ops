@@ -346,6 +346,10 @@ func RegisterOperatorMetrics(registry *health.Registry, deps *Deps) error {
 	if err := registry.RegisterMetrics("sync_config_dataset_selection", syncadmin.SelectionMetricsSource()); err != nil {
 		return err
 	}
+	// the sign-up mails by purpose and outcome.
+	if err := registry.RegisterMetrics("session_link_mail", session.MailMetricsSource()); err != nil {
+		return err
+	}
 	// CHAOS-10104: the triggers synchandoff.Mint refuses before any write.
 	if err := registry.RegisterMetrics("sync_manual_trigger_refused", synchandoff.RefusalMetricsSource()); err != nil {
 		return err

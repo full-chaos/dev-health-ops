@@ -388,7 +388,7 @@ func buildDailyWorker(
 				// validates every name in the map together against
 				// pythonRecognisedFinalizeFamilies in a single pass.
 				_, _, finalizeFamilies, _ := dailyNativeFamilyRegistrations(store, clickhouseConnection, workItemEngines, observer, logger)
-				handler.SetNativeFinalizeFamilies(finalizeFamilies)
+				registerNativeFinalizeFamilies(logger, handler, finalizeFamilies)
 				// Same fail-open discipline as the partition path: telemetry
 				// never gates, but a fail-open path with no counter cannot be
 				// distinguished from one that is working.
@@ -1760,4 +1760,15 @@ func newDrainingDailyFinalizeHandler(
 	handler.SetTouchedDaysDrainer(drain)
 	handler.SetStaleKeyRetractor(retractor)
 	return handler, nil
+}
+
+// registerNativeFinalizeFamilies keeps the worker up when the setter refuses
+// the map (ruling on CHAOS-10924: a start refusal only adds another way to
+// fail), but the refusal and the refused family name must reach the log.
+func registerNativeFinalizeFamilies(
+	logger *slog.Logger, handler *daily.FinalizeHandler, families map[string]daily.NativeFinalizeFamilyExecutor,
+) {
+	if err := handler.SetNativeFinalizeFamilies(families); err != nil {
+		logger.Error("native finalize families not registered", "error", err)
+	}
 }

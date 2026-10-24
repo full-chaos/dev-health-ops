@@ -56,6 +56,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/auth/emaildomain"
 	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	"io"
 	"net/http"
@@ -543,7 +544,7 @@ func (h handlers) oauthCallback(w http.ResponseWriter, r *http.Request) {
 		if at >= 0 {
 			domain = claims.email[at+1:]
 		}
-		if !containsFold(allowedDomains, domain) {
+		if !emaildomain.Allowed(allowedDomains, domain) {
 			// D2745 P2-6 (team-lead, D2742 strict): the client-visible
 			// detail is now a fixed message + reason code -- the actual
 			// domain never reaches the response (a probing surface:

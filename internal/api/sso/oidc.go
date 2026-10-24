@@ -69,6 +69,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/auth/emaildomain"
 	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	"net"
 	"net/http"
@@ -480,7 +481,7 @@ func (h handlers) oidcCallback(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		domain := email[at+1:]
-		if !containsFold(allowedDomains, domain) {
+		if !emaildomain.Allowed(allowedDomains, domain) {
 			policy.WriteDetail(w, http.StatusForbidden, fmt.Sprintf("Email domain '%s' is not allowed for this provider", domain), nil)
 			return
 		}
@@ -775,15 +776,6 @@ func decodeAllowedDomains(raw *string) ([]string, error) {
 		}
 	}
 	return out, nil
-}
-
-func containsFold(list []string, value string) bool {
-	for _, item := range list {
-		if item == value {
-			return true
-		}
-	}
-	return false
 }
 
 func errorsIsNoRows(err error) bool { return err != nil && errors.Is(err, pgx.ErrNoRows) }

@@ -26,10 +26,12 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
+	"github.com/full-chaos/dev-health-ops/internal/auth/ratelimitvalkey"
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
+	"github.com/full-chaos/dev-health-ops/internal/storage/valkey"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 )
@@ -106,17 +108,40 @@ func newRoutesEnv(t *testing.T, ctx context.Context) *routesEnv {
 		t.Fatal(err)
 	}
 	dsn.User = url.UserPassword(role, password)
+	store, err := containers.StartValkey(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		_ = store.Close(closeCtx)
+	})
 
-	cfg, err := authconfig.Load(authconfig.Spec{LookupEnv: lookupFrom(compatEnvironment(map[string]string{
+	env := compatEnvironment(map[string]string{
 		authconfig.EnvDatabaseURI:     dsn.String(),
 		authconfig.EnvDatabaseSchema:  "auth",
 		authconfig.EnvSigningKeyFile:  "/nonexistent",
 		authconfig.EnvSigningKeyID:    "routes-test",
 		authconfig.EnvAPIAddress:      "127.0.0.1:0",
 		authconfig.EnvOperatorAddress: "127.0.0.1:1",
-	}))})
+	})
+	env[authconfig.EnvValkeyURI] = store.URI
+	cfg, err := authconfig.Load(authconfig.Spec{LookupEnv: lookupFrom(env)})
 	if err != nil {
 		t.Fatalf("load config: %v", err)
+	}
+	probe, err := valkey.Open(ctx, valkey.DefaultConfig(cfg.ValkeyURI.Reveal()))
+	if err != nil {
+		t.Fatalf("the harness store does not open: %v", err)
+	}
+	t.Cleanup(probe.Close)
+	probeStore, err := ratelimitvalkey.New(probe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := probeStore.Increment(ctx, httpapi.Hit{Limit: httpapi.Limit{ID: "auth_svc_probe", Count: 1, Window: time.Minute}, Key: "k", Path: "s00"}); err != nil {
+		t.Fatalf("the harness store does not count: %v", err)
 	}
 	logs := &safeBuffer{}
 	logger := slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))

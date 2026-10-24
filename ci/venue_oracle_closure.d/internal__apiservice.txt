@@ -42,13 +42,22 @@ internal/api/webhookintake
 internal/apiservice/acr
 internal/apiservice/admin
 internal/apiservice/customerpush
+internal/audit
+internal/auth/clientaddr
 internal/auth/contracts
+internal/auth/contracts/provisioning
 internal/auth/contracts/tokencorpus
 internal/auth/edgetoken
+internal/auth/emaildomain
 internal/auth/httpapi
+internal/auth/identity
+internal/auth/identity/local
+internal/auth/linkmail
 internal/auth/passwordhash
 internal/auth/passwordpolicy
 internal/auth/ratelimitvalkey
+internal/auth/requestid
+internal/auth/session
 internal/auth/sessionid
 internal/auth/signedtoken
 internal/chmigrate
@@ -117,6 +126,7 @@ internal/storage/clickhouse/engineclause
 internal/storage/clickhouse/liverow
 internal/storage/postgres
 internal/storage/postgres/aclguard
+internal/storage/postgres/authschema
 internal/storage/river
 internal/storage/roleacl
 internal/storage/valkey
@@ -153,3 +163,4 @@ internal/workitemcontract
 ~internal/pgmigrate/baseline
 ~internal/pgmigrate/sql
 ~internal/pgmigrate/sql/down
+~internal/storage/postgres/authschema/migrations

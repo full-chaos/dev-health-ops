@@ -89,7 +89,7 @@ const maxInFlightRequests = 64
 // flags, all off; prod enablement is a separate decision (CHAOS-3275 D1).
 func sessionRoutes(
 	cfg authconfig.Config, logger *slog.Logger, pool *pgxpool.Pool, schema authschema.ValidatedIdentifier,
-	accessSigner authapi.AccessSigner,
+	accessSigner authapi.AccessSigner, limits *authapi.Limits,
 ) ([]httpapi.Route, error) {
 	if !cfg.Session.Enabled {
 		return nil, nil
@@ -111,7 +111,7 @@ func sessionRoutes(
 	if err != nil {
 		return nil, err
 	}
-	compat, err := compatRoutes(cfg, logger, pool, schema, sessions, issuer)
+	compat, err := compatRoutes(cfg, logger, pool, schema, sessions, issuer, limits)
 	if err != nil {
 		return nil, err
 	}
@@ -137,7 +137,7 @@ func newAccessIssuer(cfg authconfig.Config, signer authapi.AccessSigner) (*autha
 // the social provider client and the append-only audit writer.
 func compatRoutes(
 	cfg authconfig.Config, logger *slog.Logger, pool *pgxpool.Pool, schema authschema.ValidatedIdentifier,
-	sessions *session.Store, issuer *authapi.Issuer,
+	sessions *session.Store, issuer *authapi.Issuer, limits *authapi.Limits,
 ) ([]httpapi.Route, error) {
 	identities, err := identity.New(identity.Config{Pool: pool, Schema: schema, Logger: logger, UsersOwnedByAuth: cfg.UsersOwned})
 	if err != nil {
@@ -166,6 +166,7 @@ func compatRoutes(
 		AppendAudit: func(ctx context.Context, event audit.AuditEvent) error {
 			return audit.Append(ctx, pool, schema, event)
 		},
+		Limits: limits,
 	}
 	if cfg.Session.LoginEnabled {
 		deps.Login = &authapi.LoginConfig{
@@ -183,7 +184,7 @@ func compatRoutes(
 		link = socialService
 	}
 	links, err := authapi.SocialLinkRoutes(authapi.SocialLinkDeps{
-		Sessions: sessions, Users: authapi.PGUsers{Pool: pool}, Issuer: issuer, Logger: logger, Social: link,
+		Sessions: sessions, Users: authapi.PGUsers{Pool: pool}, Issuer: issuer, Logger: logger, Social: link, Limits: limits,
 	})
 	if err != nil {
 		return nil, err
@@ -420,6 +421,19 @@ func configureWithRoutes(
 		logger.Warn("register OTel instruments on the operator /metrics", "error", err)
 	}
 
+	// The rate-limit counters (store errors and refused hits, by limit id) are
+	// scraped from the operator /metrics: the process installs no OTel meter
+	// provider for them, so this is the one place they are observable.
+	for name, source := range map[string]health.MetricsSource{
+		"api_rate_limit_store":      httpapi.RateLimitStoreErrors,
+		"api_rate_limit_rejections": httpapi.RateLimitRejections,
+	} {
+		if err := registry.RegisterMetrics(name, source); err != nil {
+			closeStore()
+			return nil, err
+		}
+	}
+
 	operatorHTTP, err := health.NewServer(health.ServerOptions{
 		Address:  cfg.OperatorAddress,
 		Registry: registry,
@@ -431,7 +445,19 @@ func configureWithRoutes(
 		return nil, err
 	}
 
-	routes, err := sessionRoutes(cfg, logger, store.Pool(), schemaID, signer)
+	limits, limitComponents, err := limitStore(cfg, logger, registry)
+	if err != nil {
+		closeStore()
+		return nil, err
+	}
+	closeStoreOnly := closeStore
+	closeStore = func() {
+		for _, component := range limitComponents {
+			_ = component.Shutdown(context.WithoutCancel(ctx))
+		}
+		closeStoreOnly()
+	}
+	routes, err := sessionRoutes(cfg, logger, store.Pool(), schemaID, signer, limits)
 	if err != nil {
 		closeStore()
 		return nil, err
@@ -455,18 +481,18 @@ func configureWithRoutes(
 			return nil, err
 		}
 	}
-	credRoutes, credComponents, err := credentialRoutes(cfg, logger, store.Pool(), schemaID)
+	credRoutes, credComponents, err := credentialRoutes(cfg, logger, store.Pool(), schemaID, limits)
 	if err != nil {
 		closeStore()
 		return nil, err
 	}
 	routes = append(routes, credRoutes...)
-	closeStoreOnly := closeStore
+	closeLimited := closeStore
 	closeStore = func() {
 		for _, component := range credComponents {
 			_ = component.Shutdown(context.WithoutCancel(ctx))
 		}
-		closeStoreOnly()
+		closeLimited()
 	}
 	routes = append(routes, authapi.WellKnownRoutes(authapi.WellKnownDeps{
 		Keys: signer, IssuerURL: cfg.TokenIssuerURL, Logger: logger,
@@ -494,6 +520,7 @@ func configureWithRoutes(
 	}
 
 	components := []lifecycle.Component{store}
+	components = append(components, limitComponents...)
 	components = append(components, credComponents...)
 	return append(components,
 		outboxLoop,

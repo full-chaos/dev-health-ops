@@ -18,6 +18,12 @@ import (
 // requests in its evidence.
 func seedThemeUnit(t *testing.T, ctx context.Context, admin stdclickhouse.Conn, org, id, repo string, to time.Time, effort float64, distribution map[string]float64, status string, prs int) {
 	t.Helper()
+	seedThemeUnitFrom(t, ctx, admin, org, id, repo, to.Add(-48*time.Hour), to, effort, distribution, status, prs)
+}
+
+// seedThemeUnitFrom is seedThemeUnit for a unit that starts at `from` instead of two days before `to`.
+func seedThemeUnitFrom(t *testing.T, ctx context.Context, admin stdclickhouse.Conn, org, id, repo string, from, to time.Time, effort float64, distribution map[string]float64, status string, prs int) {
+	t.Helper()
 	themes := map[string]float64{}
 	for subcategory, share := range distribution {
 		for i := range subcategory {
@@ -35,7 +41,7 @@ func seedThemeUnit(t *testing.T, ctx context.Context, admin stdclickhouse.Conn, 
 	if err := admin.Exec(ctx, `INSERT INTO work_unit_investments
 (work_unit_id, from_ts, to_ts, repo_id, effort_metric, effort_value, theme_distribution_json, subcategory_distribution_json, structural_evidence_json, evidence_quality, evidence_quality_band, categorization_status, categorization_model_version, categorization_run_id, computed_at, org_id)
 VALUES (?, ?, ?, ?, 'churn_loc', ?, ?, ?, ?, 0.8, 'high', ?, 'jev-test', 'run-1', ?, ?)`,
-		id, to.Add(-48*time.Hour), to, repo, effort, themes, distribution, string(evidence), status, to.Add(time.Hour), org); err != nil {
+		id, from, to, repo, effort, themes, distribution, string(evidence), status, to.Add(time.Hour), org); err != nil {
 		t.Fatalf("seed unit %s: %v", id, err)
 	}
 }
@@ -43,7 +49,8 @@ VALUES (?, ?, ?, ?, 'churn_loc', ?, ?, ?, ?, 0.8, 'high', ?, 'jev-test', 'run-1'
 // The tile is the COUNT over the canonical themes of the units (CHAOS-9622, D5999: a unit's effort_value, its
 // changed lines, is not a weight), dated by their END day, a unit under the evidence gate left out as on the
 // Investment page (it carries a fixed uniform prior, not a measured split), the legacy table ignored. The units
-// carry 100, 50 and 1000 lines and count 1 each; the one under the gate counts for nothing here.
+// carry 100, 50 and 1000 lines and count 1 each; the one under the gate counts for nothing here. A unit that starts before the
+// window and ends inside it counts; one that starts inside it and ends after it does not (CHAOS-11133).
 func TestInvestmentByThemeIsTheCanonicalCountOfTheUnits(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
@@ -55,7 +62,7 @@ func TestInvestmentByThemeIsTheCanonicalCountOfTheUnits(t *testing.T) {
 	if err := admin.Exec(ctx, `INSERT INTO repos (id, repo, provider, org_id, created_at, last_synced) VALUES (?, 'acme/a', 'github', ?, ?, ?)`, repo, org, synced, synced); err != nil {
 		t.Fatal(err)
 	}
-	end := day.AddDate(0, 0, 3).Add(12 * time.Hour) // the window [07-27, 08-06)
+	end := day.AddDate(0, 0, 3).Add(12 * time.Hour) // the window [07-30, 08-06): RangeDays 7 back from the end date 08-06, the end day excluded
 	// ends in the window: 60% feature, 40% risk, effort 100, 2 PRs.
 	seedThemeUnit(t, ctx, admin, org, "wu-1", repo, day.Add(10*time.Hour), 100, map[string]float64{"feature_delivery.roadmap": 0.6, "risk.security": 0.4}, "ok", 2)
 	// ends in the window, insufficient evidence: left out of the mix as the Investment page leaves it out. Its theme
@@ -64,7 +71,13 @@ func TestInvestmentByThemeIsTheCanonicalCountOfTheUnits(t *testing.T) {
 	// ends in the window, categorized: 1 unit of only 50 lines, so it leads by COUNT (1 > 0.6) although feature_delivery
 	// leads by lines (60 > 50): a mix weighted by lines would order them the other way round.
 	seedThemeUnit(t, ctx, admin, org, "wu-5", repo, day.Add(12*time.Hour), 50, map[string]float64{"maintenance.debt": 1}, "ok", 1)
-	// overlaps the window but ENDS after it: dated by its end day, so not in this window.
+	// starts BEFORE the window and ENDS inside it: dated by its end day, so counted (an end-day rule and an overlap rule agree here).
+	// Half operational, half risk: it leads by neither, so the order below holds.
+	seedThemeUnitFrom(t, ctx, admin, org, "wu-6", repo, day.AddDate(0, 0, -9), day.AddDate(0, 0, -2), 10, map[string]float64{"operational.support": 0.5, "risk.vulnerability": 0.5}, "ok", 0)
+	// starts INSIDE the window and ENDS after it: an overlap rule would count it, the end day does not. This is the
+	// unit that tells the two dating rules apart: counted, feature_delivery would read 1.6 (1000 lines in its churn).
+	seedThemeUnitFrom(t, ctx, admin, org, "wu-7", repo, day.AddDate(0, 0, 1), day.AddDate(0, 0, 7), 1000, map[string]float64{"feature_delivery.roadmap": 1}, "ok", 0)
+	// wholly after the window (starts and ends after it): outside under either dating rule.
 	seedThemeUnit(t, ctx, admin, org, "wu-3", repo, day.AddDate(0, 0, 10), 1000, map[string]float64{"quality.bugfix": 1}, "ok", 0)
 	// ended before the window.
 	seedThemeUnit(t, ctx, admin, org, "wu-4", repo, day.AddDate(0, 0, -30), 1000, map[string]float64{"quality.bugfix": 1}, "ok", 0)
@@ -85,8 +98,9 @@ func TestInvestmentByThemeIsTheCanonicalCountOfTheUnits(t *testing.T) {
 		prs          int64
 	}{
 		"feature_delivery": {0.6, 60, 1}, // 1 unit x 0.6; 100 lines x 0.6 (the explicit churn_loc line); 2 PRs x 0.6 = 1.2 -> 1
-		"risk":             {0.4, 40, 1}, // 1 unit x 0.4; 100 lines x 0.4; 2 PRs x 0.4 = 0.8 -> 1
+		"risk":             {0.9, 45, 1}, // 0.4 of wu-1 + 0.5 of wu-6; 100 x 0.4 + 10 x 0.5 lines; 2 PRs x 0.4 = 0.8 -> 1
 		"maintenance":      {1, 50, 1},   // 1 unit; 50 lines
+		"operational":      {0.5, 5, 0},  // 0.5 of wu-6 (started before the window, ended inside it); 10 x 0.5 lines; no PR
 	}
 	if len(got) != len(want) {
 		t.Fatalf("themes = %v, want exactly %d canonical themes (no legacy key, no unit outside the window): %+v", order, len(want), resp.ReworkThemeAllocation)
@@ -105,7 +119,7 @@ func TestInvestmentByThemeIsTheCanonicalCountOfTheUnits(t *testing.T) {
 		t.Errorf("quality = %+v: the unit under the evidence gate must be left out of the tile", got["quality"])
 	}
 	if order[0] != "maintenance" {
-		t.Errorf("order = %v, want the largest count first (maintenance 1, feature_delivery 0.6, risk 0.4), not the largest effort (feature_delivery 100 lines)", order)
+		t.Errorf("order = %v, want the largest count first (maintenance 1, risk 0.9, feature_delivery 0.6, operational 0.5), not the largest effort (feature_delivery 100 lines)", order)
 	}
 	sum := 0.0
 	for _, row := range resp.ReworkThemeAllocation {

@@ -485,6 +485,10 @@ jobs:
         # stopped linting, which otherwise reports exactly what a clean tree does.
         run: bash ci/check_shellcheck_pin.sh
 
+      - name: Test the session-issue Secret create script
+        if: steps.relevance.outputs.relevant == 'true' && matrix.name == 'static'
+        run: bash scripts/create-session-issue-secret_test.sh
+
       - name: Validate River compatibility harness
         if: steps.relevance.outputs.relevant == 'true' && matrix.name == 'static'
         run: bash ci/check_river_compat_static.sh

@@ -286,7 +286,7 @@ spec:
             auth-service's session issue route. Not optional: sessions on
             without it would fail every sign-in. */}}
             - name: AUTH_SESSION_ISSUE_TOKEN
-              valueFrom: {secretKeyRef: {name: {{ include "dev-health.secretName" . }}, key: AUTH_SESSION_ISSUE_TOKEN}}
+              valueFrom: {secretKeyRef: {name: {{ include "dev-health.sessionIssueSecretName" . }}, key: {{ .Values.goApi.sessionIssue.secretKey }}}}
             {{- end }}
             {{- end }}
             {{- if .Values.authService.usersOwned }}

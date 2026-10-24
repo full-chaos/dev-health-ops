@@ -28,6 +28,12 @@ serviceAccount:
 goApi:
   enabled: false
   replicas: 1
+  # -- CHAOS-11217: where go-api reads AUTH_SESSION_ISSUE_TOKEN (sessions on only).
+  #    Empty secretName = the shared Secret. Set it to a dedicated operator-created
+  #    Secret that holds the key.
+  sessionIssue:
+    secretName: ""
+    secretKey: AUTH_SESSION_ISSUE_TOKEN
   # -- The api listener (requests). The Service targets this port.
   port: 8000
   # -- The operator listener: /healthz, /readyz and /metrics. Probes use it.

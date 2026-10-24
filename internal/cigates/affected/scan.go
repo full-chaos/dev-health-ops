@@ -230,8 +230,9 @@ func ScanReads(root string) ([]Read, error) {
 	programs := execProgramDirs(byDir, module)
 	for _, d := range dirs {
 		g := newDirGroup(d, module, byDir[d])
+		flow := newFlowGroup(byDir[d])
 		for _, s := range byDir[d] {
-			reads = append(reads, scanFile(s.fset, s.file, s.rel, top, g.chdir)...)
+			reads = append(reads, scanFile(s.fset, s.file, s.rel, top, g.chdir, flow)...)
 		}
 		g.underProgram = programs[d]
 		reads = append(reads, g.analyze()...)
@@ -293,7 +294,7 @@ func callName(e ast.Expr) string {
 	return ""
 }
 
-func scanFile(fset *token.FileSet, f *ast.File, rel string, top map[string]bool, chdir bool) []Read {
+func scanFile(fset *token.FileSet, f *ast.File, rel string, top map[string]bool, chdir bool, flow *flowGroup) []Read {
 	pkg := path.Dir(rel)
 	test := strings.HasSuffix(rel, "_test.go")
 	var out []Read
@@ -390,8 +391,11 @@ func scanFile(fset *token.FileSet, f *ast.File, rel string, top map[string]bool,
 			} else {
 				add(lit.Pos(), p, v)
 			}
-		case inReadCall[lit] || (strings.Contains(first, ".") && !strings.HasPrefix(first, ".")):
-			// a name handed on to a reader, or a root file name anywhere (a helper may join it to the root)
+		case inReadCall[lit]:
+			add(lit.Pos(), p, v) // a name handed on to a reader
+		case strings.Contains(first, ".") && !strings.HasPrefix(first, ".") && flow.reaches(lit):
+			// a root file name whose value can reach a read (a helper may join it to the root), or whose flow the scan
+			// cannot follow
 			add(lit.Pos(), p, v)
 		}
 		return true

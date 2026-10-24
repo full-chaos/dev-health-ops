@@ -191,7 +191,27 @@ func TestPlanReadsBareNamesAreNotRootReads(t *testing.T) {
 		{"join_under_another_directory", "var dir = os.Getenv(\"DIR\")\n\nfunc read() ([]byte, error) { return os.ReadFile(filepath.Join(dir, \"README.md\")) }\n", 1, "p\tp_test.go"},
 		{"join_under_the_root", "func repoRoot() string { return \"..\" }\n\nfunc read() ([]byte, error) { return os.ReadFile(filepath.Join(repoRoot(), \"README.md\")) }\n", 1, "p\ttest\tREADME.md"},
 		{"fs_read_stays_a_root_read", "func read(fsys fs.FS) ([]byte, error) { return fs.ReadFile(fsys, \"README.md\") }\n", 1, "p\ttest\tREADME.md"},
-		{"name_handed_to_a_helper_stays_a_read", "type guard struct{}\n\nfunc (guard) read(string) string { return \"\" }\n\nvar _ = guard{}.read(\"README.md\")\n", 1, "p\ttest\tREADME.md"},
+		// The value flow keeps every root name whose value reaches a read, or whose flow it cannot follow.
+		{"keep_method_helper", "type guard struct{ root string }\n\nfunc (g *guard) path(rel string) string { return filepath.Join(g.root, rel) }\n\n" +
+			"func (g *guard) read(rel string) string {\n\tb, _ := os.ReadFile(g.path(rel))\n\treturn string(b)\n}\n\nfunc use(g *guard) string { return g.read(\"README.md\") }\n", 1, "p\ttest\tREADME.md"},
+		{"keep_variadic_helper", "func readRepoFile(rel ...string) string {\n\tb, _ := os.ReadFile(filepath.Join(append([]string{\"/r\"}, rel...)...))\n\treturn string(b)\n}\n\n" +
+			"var text = readRepoFile(\"README.md\")\n", 1, "p\ttest\tREADME.md"},
+		{"keep_closure_helper", "func scan() {\n\tone := func(name, rel string) { _, _ = os.ReadFile(rel) }\n\tone(\"x\", \"README.md\")\n}\n", 1, "p\ttest\tREADME.md"},
+		{"keep_range_table", "func each() {\n\tfor _, file := range []string{\"README.md\"} {\n\t\t_, _ = os.ReadFile(filepath.Join(\"..\", file))\n\t}\n}\n", 1, "p\ttest\tREADME.md"},
+		{"keep_struct_field_read_later", "func TestX(t *testing.T) {\n\tcases := []struct{ name, file string }{{\"a\", \"README.md\"}}\n\tfor _, c := range cases {\n" +
+			"\t\tt.Run(c.name, func(t *testing.T) { _, _ = os.ReadFile(c.file) })\n\t}\n}\n", 1, "p\ttest\tREADME.md"},
+		{"keep_cross_package_helper", "var text = othermod.Read(\"README.md\")\n", 1, "p\ttest\tREADME.md"},
+		{"keep_method_with_no_declaration", "type guard struct{}\n\nvar _ = guard{}.read(\"README.md\")\n", 1, "p\ttest\tREADME.md"},
+		// The fixture shapes of the README.md rows the flow drops: a changed-path list written to a file, a struct field
+		// only compared, and a path list handed to a script by the name of the file that holds it.
+		{"drop_changed_list_written_to_a_file", "func TestX(t *testing.T) {\n\tsel := func(changed ...string) error {\n" +
+			"\t\tif err := os.WriteFile(\"/tmp/changed.txt\", []byte(strings.Join(changed, \"\\n\")), 0o644); err != nil {\n\t\t\treturn fmt.Errorf(\"write: %w\", err)\n\t\t}\n\t\treturn nil\n\t}\n" +
+			"\tfor _, path := range []string{\"guide.txt\", \"README.md\"} {\n\t\tif err := sel(path); err != nil {\n\t\t\tt.Fatalf(\"%s: %v\", path, err)\n\t\t}\n\t}\n}\n", 0, ""},
+		{"drop_struct_field_only_compared", "func TestX(t *testing.T) {\n\tcases := []struct {\n\t\tname    string\n\t\tchanged []string\n\t}{{\"x\", []string{\"README.md\"}}}\n" +
+			"\tfor _, c := range cases {\n\t\tt.Run(c.name, func(t *testing.T) {\n\t\t\tif strings.Join(c.changed, \",\") == \"\" {\n\t\t\t\tt.Fatal(\"empty\")\n\t\t\t}\n\t\t})\n\t}\n}\n", 0, ""},
+		{"drop_paths_handed_to_a_script_by_file", "func selected(paths ...string) error {\n\tfile := \"/tmp/changed.txt\"\n" +
+			"\tif err := os.WriteFile(file, []byte(strings.Join(paths, \"\\n\")), 0o644); err != nil {\n\t\treturn err\n\t}\n\treturn exec.Command(\"bash\", \"x.sh\", file).Run()\n}\n\n" +
+			"func use() error { return selected(\"README.md\") }\n", 1, "p\tp_test.go\tunexpressed"},
 	}
 	for _, c := range cases {
 		c := c
@@ -217,7 +237,7 @@ func TestPlanReadsBareNamesAreNotRootReads(t *testing.T) {
 func importsFor(src string) string {
 	var b strings.Builder
 	b.WriteString("import (\n")
-	for _, p := range []string{"io/fs", "os", "path/filepath", "strings"} {
+	for _, p := range []string{"fmt", "io/fs", "os", "os/exec", "path/filepath", "strings", "testing", "example.com/othermod"} {
 		if strings.Contains(src, filepath.Base(p)+".") {
 			b.WriteString("\t\"" + p + "\"\n")
 		}

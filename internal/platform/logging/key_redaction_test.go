@@ -167,3 +167,42 @@ func TestSlogDebugRecordsAreKeyScrubbedToo(t *testing.T) {
 	}
 	assertNoKeyLeak(t, "debug", buf.String())
 }
+
+func TestSlogStructuredValueKeysAreRedactedByTheSyncCLIWrapper(t *testing.T) {
+	secret, _ := syntheticKeys()
+	var buf bytes.Buffer
+	logger := slog.New(WithValueRedaction(slog.NewTextHandler(&buf, nil), func(s string) string { return s }))
+	logger.Info("event", "object", map[string]string{secret: "v", "ok": "1"}, "list", []any{map[string]any{secret + "x": 1}})
+	logger.With("bound", map[string]string{secret: "v"}).Info("bound")
+	assertNoKeyLeak(t, "sync-cli structured", buf.String())
+	if !strings.Contains(buf.String(), "ok") {
+		t.Errorf("benign nested key lost: %q", buf.String())
+	}
+}
+
+func TestSlogEmptyNameGroupsShareTheParentPlaceholderLevel(t *testing.T) {
+	secret, _ := syntheticKeys()
+	for name, build := range map[string]func(*bytes.Buffer) *slog.Logger{
+		"json": func(b *bytes.Buffer) *slog.Logger { return NewJSON(b, slog.LevelInfo) },
+		"sync-cli": func(b *bytes.Buffer) *slog.Logger {
+			return slog.New(WithValueRedaction(slog.NewTextHandler(b, nil), func(s string) string { return s }))
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var buf bytes.Buffer
+			build(&buf).Info("event", secret, "a", slog.Group("", secret+"x", "b", slog.Group("", secret+"y", "c")), "kept", 1)
+			assertNoKeyLeak(t, name, buf.String())
+			if n := strings.Count(buf.String(), "redacted.key"); n != 1 {
+				t.Errorf("%s: want one placeholder at the flattened level, got %d: %q", name, n, buf.String())
+			}
+			if !strings.Contains(buf.String(), "kept") {
+				t.Errorf("%s: benign key lost: %q", name, buf.String())
+			}
+		})
+	}
+	var buf bytes.Buffer
+	NewJSON(&buf, slog.LevelInfo).With(secret, "a").Info("event", slog.Group("", secret+"x", "b"))
+	if n := strings.Count(buf.String(), "redacted.key"); n != 1 {
+		t.Errorf("With-bound plus empty group: want one placeholder, got %d: %q", n, buf.String())
+	}
+}

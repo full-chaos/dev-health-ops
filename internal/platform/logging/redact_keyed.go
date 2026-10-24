@@ -47,10 +47,10 @@ func KeyClean(key string) bool {
 	if RedactText(key) != key {
 		return false
 	}
-	if cleanKeyCount.Load() < maxCleanKeys {
-		if _, loaded := cleanKeys.LoadOrStore(key, struct{}{}); !loaded {
-			cleanKeyCount.Add(1)
-		}
+	if cleanKeyCount.Add(1) > maxCleanKeys {
+		cleanKeyCount.Add(-1)
+	} else if _, loaded := cleanKeys.LoadOrStore(key, struct{}{}); loaded {
+		cleanKeyCount.Add(-1)
 	}
 	return true
 }

@@ -77,6 +77,7 @@ func attrNeedsKeyScrub(attr slog.Attr) bool {
 // every LogValuer resolved. A leaf under a replaced key has its value hidden. Placeholders at one level collapse to the
 // first; skipPlaceholder drops them all because the level already holds one.
 func scrubAttrKeys(attrs []slog.Attr, skipPlaceholder bool) []slog.Attr {
+	attrs = flattenInlineGroups(attrs)
 	out := make([]slog.Attr, 0, len(attrs))
 	placeholder := skipPlaceholder
 	for _, attr := range attrs {
@@ -107,4 +108,19 @@ func scrubAttrKey(attr slog.Attr) slog.Attr {
 		return slog.Attr{Key: attr.Key, Value: value}
 	}
 	return slog.String(RedactedKeyName, redacted)
+}
+
+// flattenInlineGroups replaces every empty-name group by its members, resolving LogValuers on the way: the handlers write
+// such a group into the enclosing level, so placeholder collapsing has to count it there.
+func flattenInlineGroups(attrs []slog.Attr) []slog.Attr {
+	out := make([]slog.Attr, 0, len(attrs))
+	for _, attr := range attrs {
+		value := attr.Value.Resolve()
+		if value.Kind() == slog.KindGroup && attr.Key == "" {
+			out = append(out, flattenInlineGroups(value.Group())...)
+			continue
+		}
+		out = append(out, slog.Attr{Key: attr.Key, Value: value})
+	}
+	return out
 }

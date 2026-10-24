@@ -301,10 +301,36 @@ func workerGroupExtraEnvRefusesDSNs(g *guard) {
 	ref := groupWithExtraEnv(g, map[string]any{"name": "ALIAS", "valueFrom": map[string]any{"secretKeyRef": map[string]any{"name": shared, "key": "DATABASE_URI"}}})
 	out = g.refusal("extraEnv reads a DSN key of the shared Secret", "worker-extra-env", join(poolGoValues, ref)...)
 	g.expect(strings.Contains(out, "extraEnv reads key DATABASE_URI of the shared Secret"), "the extraEnv shared-Secret refusal says %q", firstLines(out, 2))
-	okRef := groupWithExtraEnv(g, map[string]any{"name": "APP_BASE_URL", "valueFrom": map[string]any{"secretKeyRef": map[string]any{"name": shared, "key": "APP_BASE_URL"}}})
+	okRef := groupWithExtraEnv(g, map[string]any{"name": "ALIAS_BASE_URL", "valueFrom": map[string]any{"secretKeyRef": map[string]any{"name": shared, "key": "APP_BASE_URL"}}})
 	g.mustRender("extraEnv reads an allowed key of the shared Secret", "worker-extra-env", join(poolGoValues, okRef)...)
 	other := groupWithExtraEnv(g, map[string]any{"name": "ALIAS", "valueFrom": map[string]any{"secretKeyRef": map[string]any{"name": "operator-env", "key": "DATABASE_URI"}}})
 	g.mustRender("extraEnv reads an operator Secret", "worker-extra-env", join(poolGoValues, other)...)
+}
+
+// A group's extraEnv may not reuse any env name the chart already renders for the worker containers; it would win as the last entry.
+func workerGroupExtraEnvRefusesChartOwnedNames(g *guard) {
+	owned := map[string]bool{}
+	for _, c := range workerGroupContainers(g.docs("worker-extra-env-owned", poolGoValues...)) {
+		for _, e := range list(c["env"]) {
+			owned[str(at(e, "name"))] = true
+		}
+	}
+	for _, n := range []string{"POSTGRES_URI", "CLICKHOUSE_URI", "APP_BASE_URL", "OTEL_SERVICE_NAME", "OPERATIONAL_ORDERING_CONTRACT"} {
+		g.expect(owned[n], "the default render sets no %s, so the check measured nothing", n)
+	}
+	names := make([]string, 0, len(owned))
+	for n := range owned {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	for _, n := range names {
+		g.refusal("extraEnv reuses the chart-owned "+n, "worker-extra-env-owned", join(poolGoValues, groupWithExtraEnv(g, map[string]any{"name": n, "value": "x"}))...)
+	}
+	out := g.refusal("extraEnv replaces POSTGRES_URI", "worker-extra-env-owned", join(poolGoValues, groupWithExtraEnv(g, map[string]any{"name": "POSTGRES_URI", "valueFrom": map[string]any{"secretKeyRef": map[string]any{"name": "other-secret", "key": "POSTGRES_URI"}}}))...)
+	g.expect(strings.Contains(out, "extraEnv names POSTGRES_URI, which the chart already sets"), "the POSTGRES_URI refusal says %q", firstLines(out, 2))
+	for _, n := range []string{"TRIAL_SWITCH", "OTEL_SAMPLE_RATE", "TYPESAFE_API_KEY"} {
+		g.mustRender("extraEnv sets "+n, "worker-extra-env-free", join(poolGoValues, groupWithExtraEnv(g, map[string]any{"name": n, "value": "x"}))...)
+	}
 }
 
 // goWorkers.secretKeys naming a database DSN refuses the render: by the template (schema validation skipped) and by the schema.
@@ -364,6 +390,7 @@ func TestWorkerSecretKeysGuardsRealTree(t *testing.T) {
 		check{"chart-allow-list-is-the-census", chartAllowListIsTheCensus},
 		check{"worker-secret-keys-refuse-unlisted-names", workerSecretKeysRefuseUnlistedNames},
 		check{"worker-group-extra-env-refuses-dsns", workerGroupExtraEnvRefusesDSNs},
+		check{"worker-group-extra-env-refuses-chart-owned-names", workerGroupExtraEnvRefusesChartOwnedNames},
 		check{"worker-extra-envfrom-refuses-the-shared-secret", workerExtraEnvFromRefusesTheSharedSecret},
 		check{"worker-secret-keys-schema-lists-chart-dsn-names", workerSecretKeysSchemaListsChartDSNNames},
 		check{"worker-dsn-blanks-render-last", workerDSNBlanksRenderLast},
@@ -408,8 +435,12 @@ func TestWorkerSecretKeysGuardsPlantedDefects(t *testing.T) {
 			all(mut(chartFile(workers), "{{- fail (printf \"goWorkers.secretKeys lists %s, which is not", "{{- $_ := (printf \"goWorkers.secretKeys lists %s, which is not"),
 				mut(chartFile("values.schema.json"), `"enum": ["APP_BASE_URL"`, `"x-enum": ["APP_BASE_URL"`)),
 			workerSecretKeysRefuseUnlistedNames, "must be refused"},
+		{"extraenv-may-replace-a-chart-owned-name", reader,
+			mut(chartFile(workers), "{{- fail (printf \"goWorkers.groups[%s].extraEnv names %s, which the chart", "{{- $_ := (printf \"goWorkers.groups[%s].extraEnv names %s, which the chart"),
+			workerGroupExtraEnvRefusesChartOwnedNames, "must be refused"},
 		{"extraenv-may-name-a-dsn", reader,
-			mut(chartFile(workers), "{{- fail (printf \"goWorkers.groups[%s].extraEnv names", "{{- $_ := (printf \"goWorkers.groups[%s].extraEnv names"),
+			all(mut(chartFile(workers), "{{- fail (printf \"goWorkers.groups[%s].extraEnv names %s, a database", "{{- $_ := (printf \"goWorkers.groups[%s].extraEnv names %s, a database"),
+				mut(chartFile(workers), "{{- fail (printf \"goWorkers.groups[%s].extraEnv names %s, which the chart", "{{- $_ := (printf \"goWorkers.groups[%s].extraEnv names %s, which the chart")),
 			workerGroupExtraEnvRefusesDSNs, "must be refused"},
 		{"extraenv-may-read-a-dsn-key-of-the-shared-secret", reader,
 			mut(chartFile(workers), "{{- fail (printf \"goWorkers.groups[%s].extraEnv reads", "{{- $_ := (printf \"goWorkers.groups[%s].extraEnv reads"),

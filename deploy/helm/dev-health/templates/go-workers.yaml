@@ -336,11 +336,15 @@ spec:
               that must reach one group and no other (a credential or a trial
               switch) goes here; the shared ConfigMap/Secret reach all groups.
             */}}
+            {{- $chartOwned := concat (list "OPERATIONAL_ORDERING_CONTRACT" "OTEL_SERVICE_NAME" "CLICKHOUSE_URI" "POSTGRES_URI") $dsnNames ($.Values.goWorkers.secretKeys | default (list)) }}
             {{- with $group.extraEnv }}
             {{- range $entry := . }}
             {{- if kindIs "map" $entry }}
             {{- if has ($entry.name | default "") $dsnNames }}
             {{- fail (printf "goWorkers.groups[%s].extraEnv names %s, a database DSN name; a worker takes DSNs only from its own class secrets" $group.name $entry.name) }}
+            {{- end }}
+            {{- if has ($entry.name | default "") $chartOwned }}
+            {{- fail (printf "goWorkers.groups[%s].extraEnv names %s, which the chart already sets for this container; an extraEnv entry may not replace a chart-owned name" $group.name $entry.name) }}
             {{- end }}
             {{- $ref := (($entry.valueFrom | default dict).secretKeyRef | default dict) }}
             {{- if and (eq ($ref.name | default "") (include "dev-health.secretName" $)) (not (has ($ref.key | default "") $allowedKeys)) }}

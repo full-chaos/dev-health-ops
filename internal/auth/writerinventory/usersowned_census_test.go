@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -380,6 +381,9 @@ func constString(expr ast.Expr, consts map[string]string) (string, bool) {
 	switch e := expr.(type) {
 	case *ast.BasicLit:
 		if e.Kind == token.STRING {
+			if text, err := strconv.Unquote(e.Value); err == nil {
+				return text, true
+			}
 			return e.Value, true
 		}
 	case *ast.Ident:
@@ -398,7 +402,7 @@ func constString(expr ast.Expr, consts map[string]string) (string, bool) {
 }
 
 func sqlWritesUsers(text string) bool {
-	text = strings.ToUpper(strings.Join(strings.Fields(strings.NewReplacer(`"`, "", "\\", "", "`", "").Replace(text)), " "))
+	text = strings.ToUpper(strings.Join(strings.Fields(strings.NewReplacer(`"`, "").Replace(text)), " "))
 	return usersWriteSQL.MatchString(text)
 }
 

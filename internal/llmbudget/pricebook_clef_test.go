@@ -50,3 +50,20 @@ func TestAClefCallAnywhereElseIsUnpriced(t *testing.T) {
 		}
 	}
 }
+
+// A reservation records the version of the list that priced it. Rows were added
+// to the list for clef, so the version moved with them and the clef rows carry
+// it; an older reservation keeps the version it was priced under.
+func TestTheListVersionThatPricesClefIsPinned(t *testing.T) {
+	const want = "provider-list-2026-10-24.v1"
+	if ListPricingVersion != want {
+		t.Fatalf("ListPricingVersion = %q, want %q: the list changed with the clef rows", ListPricingVersion, want)
+	}
+	now := time.Date(2026, 10, 24, 12, 0, 0, 0, time.UTC)
+	for _, model := range []string{"clef", "clef-flash"} {
+		price, err := PriceAt("clef", model, clefTestURL(model), now)
+		if err != nil || price == nil || price.Version != want {
+			t.Fatalf("%s: price %+v err %v, want version %s", model, price, err, want)
+		}
+	}
+}

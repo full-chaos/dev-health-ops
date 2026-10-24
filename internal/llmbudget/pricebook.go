@@ -35,10 +35,12 @@ import (
 //     256K, Singapore over 256K). The page lists no qwen-plus cache price.
 //   - qwen on Cloudflare Workers AI: https://developers.cloudflare.com/workers-ai/platform/pricing/
 //     (last updated 2026-10-15). The daily free neurons are not deducted.
+//   - clef on Cloudflare Workers AI (rows added 2026-10-24, which is why the list
+//     version is that day's): same pricing page, last updated Oct 20, 2026.
 
 // ListPricingVersion is the version of this list, stored with each
 // reservation it prices. The OpenAI book keeps PricingVersion.
-const ListPricingVersion = "provider-list-2026-10-16.v1"
+const ListPricingVersion = "provider-list-2026-10-24.v1"
 
 type listPriceRow struct {
 	provider string

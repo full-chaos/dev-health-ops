@@ -32,12 +32,14 @@ import (
 // The scope filter sits INSIDE, before LIMIT 1 BY; every filter that tests a
 // key column is safe there. The live-row predicate tests measure columns and
 // must stay OUTSIDE: it has to see the newest row, not skip it for an older
-// live one. cityHash64(tuple(*)) breaks a computed_at tie by row content, so equal
-// versions never pick at random.
+// live one. The subquery is aliased as the table: the live-row and view
+// predicates name their columns table-qualified, and without the alias the
+// outer query has no such table. cityHash64(tuple(*)) breaks a computed_at tie
+// by row content, so equal versions never pick at random.
 func capacityNewestRows(where string) string {
 	return "(SELECT * FROM work_item_metrics_daily WHERE " + where +
 		" ORDER BY computed_at DESC, cityHash64(tuple(*)) DESC LIMIT 1 BY " +
-		strings.Join(capacityTableRequirements["work_item_metrics_daily"].sortingKey, ", ") + ")"
+		strings.Join(capacityTableRequirements["work_item_metrics_daily"].sortingKey, ", ") + ") AS work_item_metrics_daily"
 }
 
 // capacityScopeFilters builds the shared WHERE fragments.

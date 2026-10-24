@@ -56,23 +56,21 @@ func splitCanonicalIncidentDatasets(provider string, datasets []PlanDataset) (ke
 // ErrOccurrenceIneligible, with the same count and WARN: an accepted run that
 // plans zero units and reports success would read as coverage.
 //
-// The second result is the keys of the datasets left out, in plan order. The
-// caller needs the count after unit planning (see
-// errIfOnlySkippedDatasetsHadWork) and writes the keys onto the run
-// (skippedDatasetsResult).
+// The second result is the number of datasets left out. The caller needs it
+// after unit planning: see errIfOnlySkippedDatasetsHadWork.
 func dropCanonicalIncidentDatasetsWhenFeatureOff(
 	ctx context.Context, tx pgx.Tx, orgID, integrationID, provider string, datasets []PlanDataset, now time.Time,
-) ([]PlanDataset, []string, error) {
+) ([]PlanDataset, int, error) {
 	kept, gated := splitCanonicalIncidentDatasets(provider, datasets)
 	if len(gated) == 0 {
-		return datasets, nil, nil
+		return datasets, 0, nil
 	}
 	allowed, reason, err := canonicalIncidentDecision(ctx, tx, orgID, now, true)
 	if err != nil {
-		return nil, nil, err
+		return nil, 0, err
 	}
 	if allowed {
-		return datasets, nil, nil
+		return datasets, 0, nil
 	}
 	skippedKeys := make([]string, 0, len(gated))
 	for _, dataset := range gated {
@@ -90,35 +88,9 @@ func dropCanonicalIncidentDatasetsWhenFeatureOff(
 		slog.Int("planned_datasets", len(kept)),
 	)
 	if len(kept) == 0 {
-		return nil, skippedKeys, ErrOccurrenceIneligible
+		return nil, len(gated), ErrOccurrenceIneligible
 	}
-	return kept, skippedKeys, nil
-}
-
-// The skip reason and the sync-status text a run carries for a dataset left out
-// because the canonical-incident feature is off.
-const (
-	skippedDatasetReasonFeatureDisabled = planGateOutcomeFeatureDisabled
-	skippedDatasetMessageFeatureOff     = "skipped: feature off"
-)
-
-// skippedDatasetsResult is the entry the plan writes into sync_runs.result
-// under "skipped_datasets": one object per left-out dataset with its key and
-// reason. nil when nothing was left out, so a run without a skip keeps the
-// result it always had.
-func skippedDatasetsResult(keys []string) []map[string]string {
-	if len(keys) == 0 {
-		return nil
-	}
-	entries := make([]map[string]string, 0, len(keys))
-	for _, key := range keys {
-		entries = append(entries, map[string]string{
-			"dataset_key": key,
-			"reason":      skippedDatasetReasonFeatureDisabled,
-			"message":     skippedDatasetMessageFeatureOff,
-		})
-	}
-	return entries
+	return kept, len(gated), nil
 }
 
 // errIfOnlySkippedDatasetsHadWork keeps an occurrence ineligible when datasets

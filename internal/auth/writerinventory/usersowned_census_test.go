@@ -11,46 +11,250 @@ import (
 	"testing"
 )
 
-// While auth-service owns users (AUTH_USERS_OWNED), go-api must write
-// public.users nowhere that matters to the users reconciliation. This census
-// classifies every go-api (internal/api, internal/apiservice) writer of
-// public.users in the allowlist: Guarded sites call refuseWhileUsersOwned
-// before their first database call; Exempt sites say why they are not
-// identity-authority writes. A new writer, a stale row or a guard that moved
-// behind a database call fails here.
-type usersOwnedClass struct {
-	guarded bool
-	reason  string
-}
+// While auth-service owns users (AUTH_USERS_OWNED), go-api writes public.users
+// nowhere. This census classifies every go-api (internal/api,
+// internal/apiservice) writer of public.users in the allowlist, and the entry
+// points (admin routes, operator verbs) that reach them. There is no exempt
+// class: a writer either REFUSES (its first act is a top-level
+// `if <guard> ... { return }`) or SKIPS its write (every public.users write sits
+// inside, or behind a returning branch of, an `if <guard>` whose result is
+// used). A guard that is not the first act, whose result is dropped, or that
+// sits in a branch that may not run fails here.
+type usersOwnedClass int
 
-var guardedWriter = usersOwnedClass{guarded: true}
-
-func exempt(reason string) usersOwnedClass { return usersOwnedClass{reason: reason} }
+const (
+	// refuseFirst: the function refuses before any database work, reads included.
+	refuseFirst usersOwnedClass = iota + 1
+	// skipWrite: the sign-in keeps working; its public.users write is skipped.
+	skipWrite
+)
 
 var usersOwnedCensus = map[string]usersOwnedClass{
-	"internal/api/session/changepassword.go|handlers.changePassword":    guardedWriter,
-	"internal/api/session/verify.go|handlers.resetPassword":             guardedWriter,
-	"internal/api/session/verify.go|handlers.verify":                    guardedWriter,
-	"internal/api/session/register.go|handlers.register":                guardedWriter,
-	"internal/api/session/social.go|handlers.createSocialUser":          guardedWriter,
-	"internal/api/sso/provision.go|handlers.createAccountAndMembership": guardedWriter,
-	"internal/apiservice/admin/userstore.go|pgStore.insertUser":         guardedWriter,
-	"internal/apiservice/admin/userstore.go|pgStore.updateUser":         guardedWriter,
-	"internal/apiservice/admin/userstore.go|pgStore.setUserPassword":    guardedWriter,
-	"internal/apiservice/admin/userdelete.go|pgStore.softDeleteUser":    guardedWriter,
-	"internal/apiservice/admin/userdelete.go|pgStore.forceDeleteUser":   guardedWriter,
-	"internal/api/session/store.go|touchLastLogin":                      exempt("last_login_at only; its own ruling (the D1 last-sign-in gap), not an identity column"),
-	"internal/api/sso/provision.go|handlers.provisionOrGetUser":         exempt("full_name and last_login_at of an account already bound to its provider; display drift is informational in the reconciliation"),
-	"internal/api/sso/oauth.go|handlers.oauthProvisionUser":             exempt("avatar_url, full_name and last_login_at of an account already found by its key"),
+	"internal/api/session/changepassword.go|handlers.changePassword":    refuseFirst,
+	"internal/api/session/verify.go|handlers.resetPassword":             refuseFirst,
+	"internal/api/session/verify.go|handlers.verify":                    refuseFirst,
+	"internal/api/session/register.go|handlers.register":                refuseFirst,
+	"internal/api/session/social.go|handlers.createSocialUser":          refuseFirst,
+	"internal/api/sso/provision.go|handlers.createAccountAndMembership": refuseFirst,
+	"internal/apiservice/admin/userstore.go|pgStore.insertUser":         refuseFirst,
+	"internal/apiservice/admin/userstore.go|pgStore.updateUser":         refuseFirst,
+	"internal/apiservice/admin/userstore.go|pgStore.setUserPassword":    refuseFirst,
+	"internal/apiservice/admin/userdelete.go|pgStore.softDeleteUser":    refuseFirst,
+	"internal/apiservice/admin/userdelete.go|pgStore.forceDeleteUser":   refuseFirst,
+	"internal/api/session/store.go|touchLastLogin":                      skipWrite,
+	"internal/api/sso/provision.go|handlers.provisionOrGetUser":         skipWrite,
+	"internal/api/sso/oauth.go|handlers.oauthProvisionUser":             skipWrite,
+}
+
+// usersOwnedEntryPoints are the admin routes and operator verbs that reach the
+// guarded store writers. Each refuses before any database work, so a database
+// failure cannot replace the refusal.
+var usersOwnedEntryPoints = []string{
+	"internal/apiservice/admin/users.go|handlers.createUser",
+	"internal/apiservice/admin/users.go|handlers.updateUser",
+	"internal/apiservice/admin/users.go|handlers.setUserPassword",
+	"internal/apiservice/admin/users.go|handlers.deleteUser",
+	"internal/apiservice/admin/operator.go|Operator.CreateUser",
+	"internal/apiservice/admin/operator.go|Operator.DeleteUser",
+	"internal/apiservice/admin/operator.go|Operator.UpdateUser",
 }
 
 var guardNames = map[string]bool{"refuseWhileUsersOwned": true, "RefuseWhileUsersOwned": true, "refuseWhileUsersOwnedErr": true}
 
 const guardName = "refuseWhileUsersOwned"
 
-var databaseCalls = map[string]bool{
+// databaseNames are callees that do database work whatever their receiver.
+var databaseNames = map[string]bool{
 	"Exec": true, "Query": true, "QueryRow": true, "Begin": true, "BeginTx": true,
 	"inTx": true, "inTransaction": true, "redeemLinkToken": true, "userByEmail": true,
+	"findUser": true, "resolveOrg": true,
+}
+
+// databaseReceivers are receiver names whose methods do database work.
+var databaseReceivers = map[string]bool{"Pool": true, "pool": true, "tx": true, "store": true, "db": true}
+
+func calleeParts(call *ast.CallExpr) (name string, chain []string) {
+	expr := call.Fun
+	for {
+		switch f := expr.(type) {
+		case *ast.SelectorExpr:
+			if name == "" {
+				name = f.Sel.Name
+			} else {
+				chain = append(chain, f.Sel.Name)
+			}
+			expr = f.X
+			continue
+		case *ast.Ident:
+			if name == "" {
+				name = f.Name
+			} else {
+				chain = append(chain, f.Name)
+			}
+		}
+		return name, chain
+	}
+}
+
+func isGuardCall(call *ast.CallExpr) bool {
+	name, _ := calleeParts(call)
+	return guardNames[name]
+}
+
+func isDatabaseCall(call *ast.CallExpr) bool {
+	name, chain := calleeParts(call)
+	if guardNames[name] {
+		return false
+	}
+	if databaseNames[name] {
+		return true
+	}
+	for _, part := range chain {
+		if databaseReceivers[part] {
+			return true
+		}
+	}
+	return false
+}
+
+func containsCall(node ast.Node, match func(*ast.CallExpr) bool) bool {
+	found := false
+	if node == nil {
+		return false
+	}
+	ast.Inspect(node, func(n ast.Node) bool {
+		if call, ok := n.(*ast.CallExpr); ok && match(call) {
+			found = true
+		}
+		return !found
+	})
+	return found
+}
+
+// guardIf returns the top-level if statement whose init or condition calls
+// the guard, with its position among the body's statements.
+func guardIf(fn *ast.FuncDecl) (*ast.IfStmt, int) {
+	for index, stmt := range fn.Body.List {
+		ifStmt, ok := stmt.(*ast.IfStmt)
+		if !ok {
+			continue
+		}
+		if containsCall(ifStmt.Init, isGuardCall) || containsCall(ifStmt.Cond, isGuardCall) {
+			return ifStmt, index
+		}
+	}
+	return nil, -1
+}
+
+func hasReturn(block *ast.BlockStmt) bool {
+	found := false
+	ast.Inspect(block, func(n ast.Node) bool {
+		if _, ok := n.(*ast.ReturnStmt); ok {
+			found = true
+		}
+		return !found
+	})
+	return found
+}
+
+func findFunc(root, key string) (*ast.FuncDecl, string) {
+	file, name, _ := strings.Cut(key, "|")
+	parsed, err := parser.ParseFile(token.NewFileSet(), filepath.Join(root, file), nil, 0)
+	if err != nil {
+		return nil, "cannot parse " + file + ": " + err.Error()
+	}
+	for _, decl := range parsed.Decls {
+		if fn, ok := decl.(*ast.FuncDecl); ok && fn.Body != nil && funcName(fn) == name {
+			return fn, ""
+		}
+	}
+	return nil, "no function " + name + " in " + file
+}
+
+// refuseProblem answers why the function does not refuse first, or "".
+func refuseProblem(root, key string) string {
+	fn, problem := findFunc(root, key)
+	if fn == nil {
+		return problem
+	}
+	if containsCall(fn.Body, isGuardCall) {
+		if _, index := guardIf(fn); index < 0 {
+			return "calls " + guardName + " outside a top-level if (the result is dropped, or the call sits in a branch that may not run)"
+		}
+	} else {
+		return "does not call " + guardName
+	}
+	ifStmt, index := guardIf(fn)
+	if !hasReturn(ifStmt.Body) {
+		return "its " + guardName + " branch does not return"
+	}
+	for _, stmt := range fn.Body.List[:index] {
+		if containsCall(stmt, isDatabaseCall) {
+			return "does database work before " + guardName
+		}
+	}
+	if containsCall(ifStmt.Init, isDatabaseCall) {
+		return "does database work in the " + guardName + " statement"
+	}
+	return ""
+}
+
+func isUsersWrite(call *ast.CallExpr) bool {
+	for _, arg := range call.Args {
+		lit, ok := arg.(*ast.BasicLit)
+		if !ok || lit.Kind != token.STRING {
+			continue
+		}
+		text := strings.ToUpper(strings.Join(strings.Fields(lit.Value), " "))
+		for _, prefix := range []string{"UPDATE USERS", "INSERT INTO USERS", "DELETE FROM USERS"} {
+			if strings.Contains(text, prefix) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// skipProblem answers why a public.users write of the function can run while
+// the switch is on, or "".
+func skipProblem(root, key string) string {
+	fn, problem := findFunc(root, key)
+	if fn == nil {
+		return problem
+	}
+	var writes []*ast.CallExpr
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		if call, ok := n.(*ast.CallExpr); ok && isUsersWrite(call) {
+			writes = append(writes, call)
+		}
+		return true
+	})
+	if len(writes) == 0 {
+		return "has no public.users write: the census row is stale or the write moved"
+	}
+	var guards []*ast.IfStmt
+	for _, stmt := range fn.Body.List {
+		if ifStmt, ok := stmt.(*ast.IfStmt); ok && (containsCall(ifStmt.Init, isGuardCall) || containsCall(ifStmt.Cond, isGuardCall)) {
+			guards = append(guards, ifStmt)
+		}
+	}
+	if len(guards) == 0 {
+		return "has a public.users write and no top-level if on " + guardName
+	}
+	for _, write := range writes {
+		covered := false
+		for _, g := range guards {
+			inside := write.Pos() >= g.Body.Pos() && write.End() <= g.Body.End()
+			behind := g.End() <= write.Pos() && hasReturn(g.Body)
+			if inside || behind {
+				covered = true
+			}
+		}
+		if !covered {
+			return "a public.users write can run while the switch is on"
+		}
+	}
+	return ""
 }
 
 func goAPIUsersWriters() map[string]bool {
@@ -67,52 +271,7 @@ func goAPIUsersWriters() map[string]bool {
 	return rows
 }
 
-// guardProblem answers why the function does not call the guard before its
-// first database call, or "".
-func guardProblem(root, key string) string {
-	file, name, _ := strings.Cut(key, "|")
-	parsed, err := parser.ParseFile(token.NewFileSet(), filepath.Join(root, file), nil, 0)
-	if err != nil {
-		return "cannot parse " + file + ": " + err.Error()
-	}
-	for _, decl := range parsed.Decls {
-		fn, ok := decl.(*ast.FuncDecl)
-		if !ok || fn.Body == nil || funcName(fn) != name {
-			continue
-		}
-		guard, firstDB := token.NoPos, token.NoPos
-		ast.Inspect(fn.Body, func(node ast.Node) bool {
-			call, ok := node.(*ast.CallExpr)
-			if !ok {
-				return true
-			}
-			var callee string
-			switch f := call.Fun.(type) {
-			case *ast.SelectorExpr:
-				callee = f.Sel.Name
-			case *ast.Ident:
-				callee = f.Name
-			}
-			switch {
-			case guardNames[callee] && (guard == token.NoPos || call.Pos() < guard):
-				guard = call.Pos()
-			case databaseCalls[callee] && (firstDB == token.NoPos || call.Pos() < firstDB):
-				firstDB = call.Pos()
-			}
-			return true
-		})
-		switch {
-		case guard == token.NoPos:
-			return "does not call " + guardName
-		case firstDB != token.NoPos && guard > firstDB:
-			return "calls " + guardName + " after its first database call"
-		}
-		return ""
-	}
-	return "no function " + name + " in " + file
-}
-
-func TestEveryGoAPIUsersWriterIsGuardedOrExempt(t *testing.T) {
+func TestEveryGoAPIUsersWriterRefusesOrSkipsItsWrite(t *testing.T) {
 	root := repoRoot(t)
 	rows := goAPIUsersWriters()
 	if len(rows) == 0 {
@@ -123,18 +282,27 @@ func TestEveryGoAPIUsersWriterIsGuardedOrExempt(t *testing.T) {
 		class, ok := usersOwnedCensus[key]
 		switch {
 		case !ok:
-			problems = append(problems, "unclassified go-api public.users writer (guard it, or exempt it with a reason): "+key)
-		case class.guarded:
-			if why := guardProblem(root, key); why != "" {
+			problems = append(problems, "unclassified go-api public.users writer (it must refuse or skip its write): "+key)
+		case class == refuseFirst:
+			if why := refuseProblem(root, key); why != "" {
 				problems = append(problems, key+": "+why)
 			}
-		case strings.TrimSpace(class.reason) == "":
-			problems = append(problems, key+": exempt without a reason")
+		case class == skipWrite:
+			if why := skipProblem(root, key); why != "" {
+				problems = append(problems, key+": "+why)
+			}
+		default:
+			problems = append(problems, key+": unknown census class")
 		}
 	}
 	for key := range usersOwnedCensus {
 		if !rows[key] {
 			problems = append(problems, "stale census row (no such allowlist writer): "+key)
+		}
+	}
+	for _, key := range usersOwnedEntryPoints {
+		if why := refuseProblem(root, key); why != "" {
+			problems = append(problems, "entry point "+key+": "+why)
 		}
 	}
 	sort.Strings(problems)
@@ -143,7 +311,7 @@ func TestEveryGoAPIUsersWriterIsGuardedOrExempt(t *testing.T) {
 	}
 }
 
-func TestUsersOwnedCensusCatchesAGuardMovedBehindADatabaseCall(t *testing.T) {
+func TestUsersOwnedCensusCatchesAMisplacedGuard(t *testing.T) {
 	dir := t.TempDir()
 	write := func(name, src string) {
 		if err := writeFile(filepath.Join(dir, name), src); err != nil {
@@ -152,18 +320,46 @@ func TestUsersOwnedCensusCatchesAGuardMovedBehindADatabaseCall(t *testing.T) {
 	}
 	write("a.go", `package a
 type s struct{}
-func (x s) late() error { _, _ = x.p.Exec(); return x.refuseWhileUsersOwned() }
 func (x s) early() error { if err := x.refuseWhileUsersOwned(); err != nil { return err }; _, _ = x.p.Exec(); return nil }
+func (x s) late() error { _, _ = x.p.Exec(); if err := x.refuseWhileUsersOwned(); err != nil { return err }; return nil }
+func (x s) readFirst() error { u, _ := x.store.fullUserByID(); _ = u; if err := x.refuseWhileUsersOwned(); err != nil { return err }; return nil }
 func (x s) none() error { _, _ = x.p.Exec(); return nil }
+func (x s) dropped() error { _ = x.refuseWhileUsersOwned(); _, _ = x.p.Exec(); return nil }
+func (x s) bare() error { x.refuseWhileUsersOwned(); _, _ = x.p.Exec(); return nil }
+func (x s) dead() error { if false { if err := x.refuseWhileUsersOwned(); err != nil { return err } }; _, _ = x.p.Exec(); return nil }
+func (x s) noReturn() error { if err := x.refuseWhileUsersOwned(); err != nil { _ = err }; _, _ = x.p.Exec(); return nil }
+func (x s) skipOK() error { if x.refuseWhileUsersOwned() == nil { _, err := x.p.Exec("UPDATE users SET a = 1"); return err }; return nil }
+func (x s) skipEarlyReturn() error { if x.refuseWhileUsersOwned() != nil { return nil }; _, err := x.p.Exec("UPDATE users SET a = 1"); return err }
+func (x s) skipLeaks() error { _, err := x.p.Exec("UPDATE users SET a = 1"); if x.refuseWhileUsersOwned() != nil { return nil }; return err }
+func (x s) skipDropped() error { _ = x.refuseWhileUsersOwned(); _, err := x.p.Exec("UPDATE users SET a = 1"); return err }
 `)
-	if got := guardProblem(dir, "a.go|s.early"); got != "" {
-		t.Errorf("early guard flagged: %s", got)
+	for _, name := range []string{"early"} {
+		if got := refuseProblem(dir, "a.go|s."+name); got != "" {
+			t.Errorf("%s flagged: %s", name, got)
+		}
 	}
-	if got := guardProblem(dir, "a.go|s.late"); !strings.Contains(got, "after its first database call") {
-		t.Errorf("late guard not flagged: %q", got)
+	for name, want := range map[string]string{
+		"late":      "database work before",
+		"readFirst": "database work before",
+		"none":      "does not call",
+		"dropped":   "outside a top-level if",
+		"bare":      "outside a top-level if",
+		"dead":      "outside a top-level if",
+		"noReturn":  "does not return",
+	} {
+		if got := refuseProblem(dir, "a.go|s."+name); !strings.Contains(got, want) {
+			t.Errorf("%s: got %q, want it to contain %q", name, got, want)
+		}
 	}
-	if got := guardProblem(dir, "a.go|s.none"); !strings.Contains(got, "does not call") {
-		t.Errorf("missing guard not flagged: %q", got)
+	for _, name := range []string{"skipOK", "skipEarlyReturn"} {
+		if got := skipProblem(dir, "a.go|s."+name); got != "" {
+			t.Errorf("%s flagged: %s", name, got)
+		}
+	}
+	for _, name := range []string{"skipLeaks", "skipDropped"} {
+		if got := skipProblem(dir, "a.go|s."+name); got == "" {
+			t.Errorf("%s accepted: a public.users write can run while the switch is on", name)
+		}
 	}
 }
 

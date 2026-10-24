@@ -234,6 +234,10 @@ var createUserRoles = map[string]bool{"admin": true, "member": true, "viewer": t
 // transaction, because the org Users list reads users JOIN memberships. A
 // superuser with no org scope creates a platform user with no membership.
 func (h *handlers) createUser(w http.ResponseWriter, r *http.Request) {
+	if err := h.store.refuseWhileUsersOwned(); err != nil {
+		writeUsersOwned(w)
+		return
+	}
 	caller := policy.UserFrom(r.Context())
 	ctx := r.Context()
 	body := bodyFromContext(ctx)
@@ -392,6 +396,10 @@ func (h *handlers) insertUserWithMembership(ctx context.Context, r *http.Request
 
 // updateUser is users.py's update_user.
 func (h *handlers) updateUser(w http.ResponseWriter, r *http.Request) {
+	if err := h.store.refuseWhileUsersOwned(); err != nil {
+		writeUsersOwned(w)
+		return
+	}
 	user := policy.UserFrom(r.Context())
 	ctx := r.Context()
 	orgIDRaw, ok := orgIDForNonSuperuser(w, user)
@@ -484,6 +492,10 @@ func (h *handlers) updateUser(w http.ResponseWriter, r *http.Request) {
 // (ADMIN_PASSWORD_LIMIT), requires the ACTING admin's own password, and
 // audits the change.
 func (h *handlers) setUserPassword(w http.ResponseWriter, r *http.Request) {
+	if err := h.store.refuseWhileUsersOwned(); err != nil {
+		writeUsersOwned(w)
+		return
+	}
 	user := policy.UserFrom(r.Context())
 	ctx := r.Context()
 	orgIDRaw, ok := orgIDForNonSuperuser(w, user)
@@ -631,6 +643,10 @@ func (h *handlers) setUserPassword(w http.ResponseWriter, r *http.Request) {
 // stays, is_active false; a repeat answers 404 like a deleted user); ?force=true deletes the row for good and keeps the audit, billing-audit and refund rows with a null
 // user. The answer is {"deleted": true} in both modes.
 func (h *handlers) deleteUser(w http.ResponseWriter, r *http.Request) {
+	if err := h.store.refuseWhileUsersOwned(); err != nil {
+		writeUsersOwned(w)
+		return
+	}
 	user := policy.UserFrom(r.Context())
 	ctx := r.Context()
 	orgIDRaw, ok := orgIDForNonSuperuser(w, user)

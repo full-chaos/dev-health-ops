@@ -857,7 +857,7 @@ func decodeGitHubTestsChunkCursor(raw string) (githubTestsChunkCursor, error) {
 		(cursor.ArchivesUnreadable != nil && *cursor.ArchivesUnreadable < 0) ||
 		(cursor.ArchivesSeen != nil && cursor.ArchivesUnreadable != nil &&
 			*cursor.ArchivesUnreadable > *cursor.ArchivesSeen) {
-		return githubTestsChunkCursor{}, ErrChunkCheckpointConflict
+		return githubTestsChunkCursor{}, chunkConflict("decodeGitHubTestsChunkCursor.1", fmt.Sprintf("raw_bytes=%d phase_known=%t", len(raw), cursor.Phase != ""))
 	}
 	// A cursor already carrying aggregate overflow with no per-cause ledger
 	// at all predates SkippedArtifactCauseOverflow (CHAOS-4592 codex review
@@ -981,7 +981,7 @@ func normalizeLegacyGitHubTestsSkippedArtifacts(cursor githubTestsChunkCursor) g
 func encodeGitHubTestsChunkCursor(cursor githubTestsChunkCursor) (string, error) {
 	encoded, err := json.Marshal(cursor)
 	if err != nil || len(encoded) > maxChunkCursorBytes {
-		return "", ErrChunkCheckpointConflict
+		return "", chunkConflict("encodeGitHubTestsChunkCursor.1", fmt.Sprintf("marshal_err=%t bytes=%d max=%d", err != nil, len(encoded), maxChunkCursorBytes))
 	}
 	return string(encoded), nil
 }

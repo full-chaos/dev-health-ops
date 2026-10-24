@@ -100,3 +100,19 @@ func TestChunkConflictErrorCarriesNoPayloadAndKeepsTheSentinel(t *testing.T) {
 		t.Fatalf("Error() = %q, want %q", err.Error(), want)
 	}
 }
+
+func TestProviderCursorConflictsCarrySites(t *testing.T) {
+	huge := strings.Repeat("a", maxChunkCursorBytes+1)
+	_, githubDecode := decodeGitHubTestsChunkCursor("{not json")
+	requireConflict(t, githubDecode, "decodeGitHubTestsChunkCursor.1", "raw_bytes=9", "phase_known=false")
+	_, gitlabDecode := decodeGitLabTestsChunkCursor("{not json")
+	requireConflict(t, gitlabDecode, "decodeGitLabTestsChunkCursor.1", "raw_bytes=9", "phase_known=false")
+	_, gitlabDuplicate := decodeGitLabTestsChunkCursor(`{"phase":"pipelines","truncated":["pipelines","pipelines"]}`)
+	if ChunkConflictSite(gitlabDuplicate) == "" || !errors.Is(gitlabDuplicate, ErrChunkCheckpointConflict) {
+		t.Fatalf("a duplicate truncated component must carry a site: %v", gitlabDuplicate)
+	}
+	_, githubEncode := encodeGitHubTestsChunkCursor(githubTestsChunkCursor{Phase: "runs", NextURL: huge})
+	requireConflict(t, githubEncode, "encodeGitHubTestsChunkCursor.1", "marshal_err=false", "max=4096")
+	_, gitlabEncode := encodeGitLabTestsChunkCursor(gitLabTestsChunkCursor{Phase: huge})
+	requireConflict(t, gitlabEncode, "encodeGitLabTestsChunkCursor.1", "marshal_err=false", "max=4096")
+}

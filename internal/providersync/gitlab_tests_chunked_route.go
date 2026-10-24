@@ -231,12 +231,12 @@ func decodeGitLabTestsChunkCursor(raw string) (gitLabTestsChunkCursor, error) {
 		cursor.Page < 0 || cursor.Index < 0 ||
 		cursor.PipelinePages < 0 || cursor.ReportPages < 0 ||
 		len(cursor.Truncated) > len(gitLabTestsTruncationComponents) {
-		return gitLabTestsChunkCursor{}, ErrChunkCheckpointConflict
+		return gitLabTestsChunkCursor{}, chunkConflict("decodeGitLabTestsChunkCursor.1", fmt.Sprintf("raw_bytes=%d phase_known=%t truncated=%d", len(raw), cursor.Phase != "", len(cursor.Truncated)))
 	}
 	seen := map[string]bool{}
 	for _, component := range cursor.Truncated {
 		if !gitLabTestsTruncationKnown(component) || seen[component] {
-			return gitLabTestsChunkCursor{}, ErrChunkCheckpointConflict
+			return gitLabTestsChunkCursor{}, chunkConflict("decodeGitLabTestsChunkCursor.2", fmt.Sprintf("truncated=%d", len(cursor.Truncated)))
 		}
 		seen[component] = true
 	}
@@ -246,7 +246,7 @@ func decodeGitLabTestsChunkCursor(raw string) (gitLabTestsChunkCursor, error) {
 func encodeGitLabTestsChunkCursor(cursor gitLabTestsChunkCursor) (string, error) {
 	encoded, err := json.Marshal(cursor)
 	if err != nil || len(encoded) > maxChunkCursorBytes {
-		return "", ErrChunkCheckpointConflict
+		return "", chunkConflict("encodeGitLabTestsChunkCursor.1", fmt.Sprintf("marshal_err=%t bytes=%d max=%d", err != nil, len(encoded), maxChunkCursorBytes))
 	}
 	return string(encoded), nil
 }

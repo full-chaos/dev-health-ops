@@ -1042,6 +1042,8 @@ var metricUnitFailureReasonVocabulary = map[string]struct{}{
 	"checkpoint_conflict": {},
 	// A provider call the dial-time egress guard refused (a stored URL that is not public).
 	"egress_refused": {},
+	// A work-items unit whose window is malformed.
+	"unit_window_invalid": {},
 }
 
 // MetricUnitFailureReasonLabel bounds a unit failure category label.

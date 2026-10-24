@@ -201,9 +201,16 @@ func resolveBackfillWindows(since, before time.Time, provider, dataset string) (
 		}
 		windows = append(windows, DateWindow{Since: start, Before: end})
 	}
+	// DIVERGENCE FROM PYTHON, deliberate: Python ends an interior chunk at
+	// 23:59:59.999999 and starts the next at 00:00:00, which for a route that
+	// treats the end as exclusive leaves 1 microsecond uncovered at every
+	// boundary. The windows tile instead: each end is the next start. A route
+	// that treats the end as inclusive reads that one instant twice, which its
+	// idempotent writes absorb.
+	for index := 0; index+1 < len(windows); index++ {
+		windows[index].Before = windows[index+1].Since
+	}
 	if emptyLast && len(windows) > 0 {
-		// The previous window ends at 23:59:59.999999 of the day before; stretch it
-		// to the requested end so the dropped chunk leaves no microsecond gap.
 		windows[len(windows)-1].Before = before
 	}
 	return windows, nil

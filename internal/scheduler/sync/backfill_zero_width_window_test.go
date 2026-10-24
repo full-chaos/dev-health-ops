@@ -77,3 +77,42 @@ func TestBuildBackfillPlanNeverPlansAZeroWidthWindow(t *testing.T) {
 		})
 	}
 }
+
+// The planned windows tile the requested range: each end is the next start,
+// the first start is the requested start and the last end the requested end,
+// so no instant of [since, before) is left out by a route that treats the end
+// as exclusive.
+func TestBuildBackfillPlanWindowsTileTheRequestedRange(t *testing.T) {
+	t.Parallel()
+	since := time.Date(2026, 8, 20, 5, 0, 0, 0, time.UTC)
+	before := time.Date(2026, 10, 8, 0, 0, 0, 0, time.UTC)
+	for _, test := range []struct {
+		name     string
+		provider string
+		datasets []PlanDataset
+	}{
+		{"github family", "github", workItemFamilyDatasets},
+		{"github standalone", "github", []PlanDataset{{Key: "security"}}},
+		{"linear family", "linear", workItemFamilyDatasets},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			units := backfillUnitsFor(t, test.provider, test.datasets, since, before)
+			if len(units) < 2 {
+				t.Fatalf("len(units) = %d, want several windows to tile", len(units))
+			}
+			if !units[0].WindowStart.Equal(since) {
+				t.Errorf("first window starts %s, want the requested start %s", units[0].WindowStart, since)
+			}
+			for index := 0; index+1 < len(units); index++ {
+				if !units[index].WindowEnd.Equal(*units[index+1].WindowStart) {
+					t.Errorf("window %d ends %s but window %d starts %s: gap or overlap",
+						index, units[index].WindowEnd, index+1, units[index+1].WindowStart)
+				}
+			}
+			if last := units[len(units)-1]; !last.WindowEnd.Equal(before) {
+				t.Errorf("last window ends %s, want the requested end %s", last.WindowEnd, before)
+			}
+		})
+	}
+}

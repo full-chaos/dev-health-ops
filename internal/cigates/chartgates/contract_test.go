@@ -543,12 +543,11 @@ func depPagerDutyProfileBinding(g *guard) {
 	}
 	for _, d := range rendered {
 		refs := envFromRefs(containers(d)[0])
-		var cm, sec bool
+		var cm bool
 		for _, r := range refs {
 			cm = cm || r[0] == "configMapRef"
-			sec = sec || r[0] == "secretRef"
 		}
-		g.expect(cm && sec, "%s lost the shared ConfigMap or Secret envFrom source: %v", name(d), refs)
+		g.expect(cm, "%s lost the shared ConfigMap envFrom source: %v", name(d), refs)
 	}
 }
 

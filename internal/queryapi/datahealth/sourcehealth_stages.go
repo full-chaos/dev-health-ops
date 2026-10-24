@@ -54,6 +54,7 @@ var sourceHealthStages = map[string]bool{
 	"time_limit":                       true,
 	"timeout":                          true,
 	"tree_walk_limit":                  true,
+	"unit_window_invalid":              true,
 	"validation":                       true,
 	"worker_lost":                      true,
 	"worker_lost_retry_exhausted":      true,

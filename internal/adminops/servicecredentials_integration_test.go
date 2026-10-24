@@ -548,7 +548,7 @@ func compareCredentials(t *testing.T, got, want []stepResult, validity map[int]m
 	if wantName == "frozen Python" {
 		got = withoutIsValid(t, got, validity)
 	}
-	compare(t, got, want, wantName)
+	compare(t, got, want, wantName, nil, nil)
 	for index := range got {
 		if index < len(want) && got[index].Stderr != want[index].Stderr {
 			t.Errorf("step %d (%s): stderr %q, %s stderr %q", index, strings.Join(got[index].Args, " "), got[index].Stderr, wantName, want[index].Stderr)

@@ -514,7 +514,7 @@ dho admin users create \
 | Option | Description |
 |--------|-------------|
 | `--email` | User email (required) |
-| `--password` | Password, min 8 chars. It shows in the process list: prefer `--password-stdin` |
+| `--password` | Password, at least 12 chars with a letter and a digit, not a common password, at most 72 bytes. It shows in the process list: prefer `--password-stdin` |
 | `--password-stdin` | Read the password from the first line of standard input. One of `--password` and `--password-stdin` is required |
 | `--username` | Optional username |
 | `--full-name` | User's full name |
@@ -577,7 +577,7 @@ dho admin users update \
 | `--id` / `--email` / `--username` | Identify the user to update |
 | `--new-email` / `--new-username` | Change email/username (empty string clears username) |
 | `--full-name` | Set the user's full name |
-| `--password` / `--password-stdin` | Set a new password (min 8 chars; revokes existing sessions) |
+| `--password` / `--password-stdin` | Set a new password (at least 12 chars with a letter and a digit, not a common password, at most 72 bytes; revokes existing sessions) |
 | `--verified` / `--no-verified` | Set verified status |
 | `--superuser` / `--no-superuser` | Set superuser status |
 | `--active` / `--no-active` | Set active status |

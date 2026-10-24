@@ -114,9 +114,12 @@ internal/cigates/webproxyproof	test	compose.yml
 internal/cigates/webproxyproof	test	deploy
 internal/cigates/weightsfiles	test	ci
 internal/cigates/workflowpaths	test	.github
+internal/cigates/workflowpaths	test	README.md
+internal/cigates/workflowpaths	test	ci
 internal/cigates/workflowpaths	test	contracts
 internal/cigates/workflowpaths	test	deploy
 internal/cigates/workflowpaths	test	docs
+internal/cigates/workflowpaths	test	docs-data
 internal/cigates/workflowpaths	test	mkdocs.yml
 internal/cigates/workflows	test	.github
 internal/cigates/workflows	test	ci

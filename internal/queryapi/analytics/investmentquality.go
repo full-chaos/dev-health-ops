@@ -161,11 +161,19 @@ func resolveEvidenceQualityStats(ctx context.Context, client QueryClient, orgID 
 		mean, stddev = &meanValue, &stddevValue
 	}
 
+	// A window with no unit has no count to give: unknown, not zero. A window with units and none gated is 0.
+	var uncategorized *int
+	if row.Total > 0 {
+		count := row.UncategorizedCount
+		uncategorized = &count
+	}
+
 	return &model.EvidenceQualityStats{
-		Mean:       mean,
-		Stddev:     stddev,
-		Total:      row.Total,
-		BandCounts: bandCountsJSON,
+		Mean:               mean,
+		Stddev:             stddev,
+		Total:              row.Total,
+		BandCounts:         bandCountsJSON,
+		UncategorizedCount: uncategorized,
 	}, nil
 }
 
@@ -400,22 +408,14 @@ func compileInvestmentQualityStats(orgID string, startDate, endDate graphqldate.
 
 	sql := fmt.Sprintf(`
 SELECT
-    count() AS total,
-    countIf(evidence_quality IS NOT NULL) AS quality_known_count,
-    avgIf(evidence_quality, evidence_quality IS NOT NULL) AS quality_mean,
-    stddevPopIf(evidence_quality, evidence_quality IS NOT NULL) AS quality_stddev,
-    countIf(evidence_quality_band = 'high') AS high_count,
-    countIf(evidence_quality_band = 'moderate') AS moderate_count,
-    countIf(evidence_quality_band = 'low') AS low_count,
-    countIf(evidence_quality_band = 'very_low') AS very_low_count,
-    countIf(evidence_quality IS NULL OR evidence_quality_band = '') AS unknown_count
+%s
 FROM %s AS work_unit_investments%s
 WHERE work_unit_investments.to_ts >= {start_date:Date}
   AND work_unit_investments.to_ts < {end_date:Date}
   AND work_unit_investments.org_id = {org_id:String}
 %s%s%s
 %s
-`, LatestWorkUnitInvestmentsSource(), teamJoin, scopeFilter, teamFilter, categoryFilter, settingsMaxExecutionTime(queryTimeoutSecs))
+`, InvestmentQualityStatsColumns, LatestWorkUnitInvestmentsSource(), teamJoin, scopeFilter, teamFilter, categoryFilter, settingsMaxExecutionTime(queryTimeoutSecs))
 
 	bindings := []clickhouse.Binding{
 		{Name: "org_id", Value: orgID},
@@ -449,6 +449,9 @@ type investmentQualityStatsRow struct {
 	LowCount          int
 	VeryLowCount      int
 	UnknownCount      int
+	// UncategorizedCount is the units under the evidence gate (they carry a fixed uniform prior and are left out of
+	// the theme mix); Total still counts them.
+	UncategorizedCount int
 }
 
 // executeInvestmentQualityStats runs compileInvestmentQualityStats's
@@ -472,9 +475,9 @@ func executeInvestmentQualityStats(ctx context.Context, client QueryClient, q co
 		return investmentQualityStatsRow{}, false, nil
 	}
 
-	var total, known, high, moderate, low, veryLow, unknown uint64
+	var total, known, high, moderate, low, veryLow, unknown, uncategorized uint64
 	var mean, stddev float64
-	if scanErr := rows.Scan(&total, &known, &mean, &stddev, &high, &moderate, &low, &veryLow, &unknown); scanErr != nil {
+	if scanErr := rows.Scan(&total, &known, &mean, &stddev, &high, &moderate, &low, &veryLow, &unknown, &uncategorized); scanErr != nil {
 		return investmentQualityStatsRow{}, false, fmt.Errorf("scan: %w", scanErr)
 	}
 	if err := rows.Err(); err != nil {
@@ -491,6 +494,8 @@ func executeInvestmentQualityStats(ctx context.Context, client QueryClient, q co
 		LowCount:          int(low),
 		VeryLowCount:      int(veryLow),
 		UnknownCount:      int(unknown),
+
+		UncategorizedCount: int(uncategorized),
 	}, true, nil
 }
 
@@ -533,3 +538,16 @@ func unitRowsScope(orgID, repoFragment string, teamIDs []string) (string, []clic
 	}
 	return teamscope.UnitScope(combined, LatestWorkUnitRepoEffortSource()), bindings
 }
+
+// InvestmentQualityStatsColumns is the select list of the evidence-quality stats read; the GraphQL and REST readers
+// share it so their counts cannot drift apart. uncategorized_count is the evidence-gated units (CHAOS-10351).
+const InvestmentQualityStatsColumns = `    count() AS total,
+    countIf(evidence_quality IS NOT NULL) AS quality_known_count,
+    avgIf(evidence_quality, evidence_quality IS NOT NULL) AS quality_mean,
+    stddevPopIf(evidence_quality, evidence_quality IS NOT NULL) AS quality_stddev,
+    countIf(evidence_quality_band = 'high') AS high_count,
+    countIf(evidence_quality_band = 'moderate') AS moderate_count,
+    countIf(evidence_quality_band = 'low') AS low_count,
+    countIf(evidence_quality_band = 'very_low') AS very_low_count,
+    countIf(evidence_quality IS NULL OR evidence_quality_band = '') AS unknown_count,
+    countIf(work_unit_investments.categorization_status IN ('insufficient_evidence', 'no_text_sources')) AS uncategorized_count`

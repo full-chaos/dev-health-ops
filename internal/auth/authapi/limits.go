@@ -79,6 +79,21 @@ func NewLimits(store httpapi.CounterStore, secret string) (*Limits, error) {
 	return &Limits{store: store, key: key}, nil
 }
 
+// LimitIDs are the ids of every limiter the service counts, in the table's
+// order: the label values of dev_health_api_rate_limit_store_errors_total, which
+// the alert rules select by their auth_svc_ prefix.
+func LimitIDs() []string {
+	limits := []httpapi.Limit{
+		loginIPLimit, loginAccountLimit, verifyLimit, resendLimit, resendIPLimit, forgotLimit, forgotIPLimit,
+		resetIPLimit, resetTokenLimit, changePasswordLimit, socialLinkLimit,
+	}
+	ids := make([]string, len(limits))
+	for i, limit := range limits {
+		ids[i] = limit.ID
+	}
+	return ids
+}
+
 // errNoLimits refuses a limited route built without limits: an in-process
 // counter is per replica and so no limit at all.
 var errNoLimits = errors.New("authapi: a limited route needs the shared limits (a counter store and the session signing secret)")

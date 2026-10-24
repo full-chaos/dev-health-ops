@@ -7,6 +7,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pyheaders"
 	"github.com/full-chaos/dev-health-ops/internal/api/webhookintake"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 )
 
 // NewIntakeGate is the gate the api listener is built with: it counts in the
@@ -14,8 +15,16 @@ import (
 // has a client, else the in-process one), and records that store in deps so
 // Routes counts through the same instance.
 func NewIntakeGate(deps *Deps, logger *slog.Logger) *webhookintake.Gate {
-	limits, err := limitStore(*deps)
+	return newIntakeGate(deps, logger, limitStore)
+}
+
+// newIntakeGate builds the gate over the store build returns. A store that
+// cannot be built is logged once, by class only, and the gate counts in the
+// in-process store: the limits then hold per process, not across replicas.
+func newIntakeGate(deps *Deps, logger *slog.Logger, build func(Deps) (httpapi.CounterStore, error)) *webhookintake.Gate {
+	limits, err := build(*deps)
 	if err != nil {
+		logger.Error("api: the shared rate limiter is unavailable; intake deliveries count in the in-process limiter", logging.ErrorAttr(err))
 		limits = httpapi.NewMemoryCounters(deps.Now)
 	}
 	deps.Limits = limits

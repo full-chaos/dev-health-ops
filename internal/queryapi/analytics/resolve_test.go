@@ -149,7 +149,7 @@ func TestResolve_Investment_ResolvesEndToEnd(t *testing.T) {
 	// A minimal fixture keeps this test's own focus (the timeseries
 	// path) from being broken by the new, correct Phase 4 call.
 	client.on("quality_known_count", &fakeRowScanner{
-		rows: [][]any{{uint64(0), uint64(0), 0.0, 0.0, uint64(0), uint64(0), uint64(0), uint64(0), uint64(0)}},
+		rows: [][]any{{uint64(0), uint64(0), 0.0, 0.0, uint64(0), uint64(0), uint64(0), uint64(0), uint64(0), uint64(0)}},
 	})
 	batch := model.AnalyticsRequestInput{
 		Timeseries:    []model.TimeseriesRequestInput{tsInput(model.DimensionInputRepo, model.MeasureInputCount)},
@@ -899,7 +899,7 @@ func TestResolve_Investment_EvidenceQualityStats_PopulatedWhenUseInvestmentTrue(
 	// same, already-proven property).
 	client.on("quality_known_count", &fakeRowScanner{
 		rows: [][]any{
-			{uint64(416), uint64(416), 0.36605981413217176, 0.18077765180388625, uint64(0), uint64(82), uint64(27), uint64(307), uint64(0)},
+			{uint64(416), uint64(416), 0.36605981413217176, 0.18077765180388625, uint64(0), uint64(82), uint64(27), uint64(307), uint64(0), uint64(0)},
 		},
 	})
 
@@ -1041,7 +1041,7 @@ func TestResolve_SankeyCoverage_ThemeIsCanonicalOnly_EvenWithUseInvestmentFalse(
 func TestResolve_EvidenceQuality_OpensForCanonicalOnlyRequest_EvenWithUseInvestmentFalse(t *testing.T) {
 	client := &routingFakeClient{}
 	client.on("quality_known_count", &fakeRowScanner{
-		rows: [][]any{{uint64(10), uint64(10), 0.5, 0.1, uint64(0), uint64(5), uint64(5), uint64(0), uint64(0)}},
+		rows: [][]any{{uint64(10), uint64(10), 0.5, 0.1, uint64(0), uint64(5), uint64(5), uint64(0), uint64(0), uint64(0)}},
 	})
 	client.on("subcategory_kv", &fakeRowScanner{})
 	gb := model.DimensionInputTheme
@@ -1085,7 +1085,7 @@ func TestResolve_EvidenceQuality_OpensForFlowMatrixAndGroupByTheme_EvenWithUseIn
 	} {
 		client := &routingFakeClient{}
 		client.on("quality_known_count", &fakeRowScanner{
-			rows: [][]any{{uint64(10), uint64(10), 0.5, 0.1, uint64(0), uint64(5), uint64(5), uint64(0), uint64(0)}},
+			rows: [][]any{{uint64(10), uint64(10), 0.5, 0.1, uint64(0), uint64(5), uint64(5), uint64(0), uint64(0), uint64(0)}},
 		})
 		client.on("work_item_completion_daily", &fakeRowScanner{})
 		client.on("work_unit_investments", &fakeRowScanner{})

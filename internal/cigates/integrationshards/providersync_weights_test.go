@@ -114,6 +114,10 @@ func TestProvidersyncPlanStaysUnderTheBudgetAndFailsEachPlantedDefect(t *testing
 		{"a duplicate row", withWeights(write("dup.tsv", original+first+"\n")), "more than once"},
 		{"a non-numeric seconds value", withWeights(write("nan.tsv", original+"TestZZZ\tabc\n")), "must be a positive number"},
 		{"a row with three fields", withWeights(write("three.tsv", original+"TestZZZ\t6\textra\n")), "exactly two tab-separated fields"},
+		{"an empty middle field hiding the seconds", withWeights(write("emptymid.tsv", strings.Replace(original, first, firstName+"\t\t1", 1))), "exactly two tab-separated fields"},
+		{"an empty seconds field", withWeights(write("emptysec.tsv", original+"TestZZZ\t\n")), "must be a positive number"},
+		{"an empty name field", withWeights(write("emptyname.tsv", original+"\t6\n")), "not a top-level Test function"},
+		{"a row with no tab", withWeights(write("notab.tsv", original+"TestZZZ 6\n")), "exactly two tab-separated fields"},
 		{"a missing weights file", withWeights(filepath.Join(dir, "absent.tsv")), "weights file not found"},
 		{"a planned shard over the budget", withWeights(write("ok.tsv", original), "DEV_HEALTH_GO_PROVIDER_SHARD_BUDGET=90000"), "over the shard budget"},
 	}

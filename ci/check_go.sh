@@ -2101,15 +2101,24 @@ discover_providersync_tests() {
 # A listed test weighs its measured time in 10 ms units; an unlisted test keeps its class weight from the manifest.
 load_providersync_measured_weights() {
   local weights="${DEV_HEALTH_GO_PROVIDER_TEST_WEIGHTS}"
-  local line_number=0 name seconds extra centis
+  local line_number=0 line name seconds centis tab=$'\t'
   PROVIDER_MEASURED_WEIGHTS=()
   [ -f "${weights}" ] || die "provider test weights file not found: ${weights}"
-  while IFS=$'\t' read -r name seconds extra; do
+  while IFS= read -r line || [ -n "${line}" ]; do
     line_number=$((line_number + 1))
-    case "${name}" in
+    case "${line}" in
       ""|\#*) continue ;;
     esac
-    [ -z "${extra}" ] || die "provider test weights ${weights}:${line_number} must contain exactly two tab-separated fields"
+    # Split by hand: `read` with a tab IFS collapses consecutive tabs, so an empty field would pass as a missing one.
+    case "${line}" in
+      *"${tab}"*) ;;
+      *) die "provider test weights ${weights}:${line_number} must contain exactly two tab-separated fields" ;;
+    esac
+    name="${line%%"${tab}"*}"
+    seconds="${line#*"${tab}"}"
+    case "${seconds}" in
+      *"${tab}"*) die "provider test weights ${weights}:${line_number} must contain exactly two tab-separated fields" ;;
+    esac
     case "${name}" in
       Test*[![:alnum:]_]*) die "provider test weights ${weights}:${line_number} has unsupported test name '${name}'" ;;
       Test*) ;;

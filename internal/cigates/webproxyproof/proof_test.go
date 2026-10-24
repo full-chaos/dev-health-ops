@@ -113,6 +113,16 @@ func TestAuthWebProxyProofStackHasNoHostGlobalName(t *testing.T) {
 	if _, ok := cfg.Services["go-api"].Networks["auth_plane"]; !ok {
 		t.Error("go-api is not on auth_plane, so the proxy cannot reach auth-service")
 	}
+	// The proof mounts the login, a rate-limited route: without the shared store the service refuses to start.
+	if cfg.Services["auth-service"].Environment["AUTH_VALKEY_URI"] == nil {
+		t.Error("auth-service has no AUTH_VALKEY_URI, so it refuses to start with the login mounted")
+	}
+	if _, ok := cfg.Services["valkey"].Networks["auth_plane"]; !ok {
+		t.Error("valkey is not on auth_plane, so auth-service cannot reach its rate-limit store")
+	}
+	if _, ok := cfg.Services["auth-service"].DependsOn["valkey"]; !ok {
+		t.Error("auth-service does not wait for valkey")
+	}
 }
 
 // The proxy flags are ON only inside the proof's own override; the default stack and the chart

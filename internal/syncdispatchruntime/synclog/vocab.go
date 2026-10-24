@@ -61,6 +61,7 @@ var (
 	MsgPostSyncFanoutChainDefect                         = Msg{"post_sync_fanout.chain_defect"}
 	MsgPostSyncTouchedDays                               = Msg{"post_sync_fanout.touched_days"}
 	MsgPostSyncTouchedDaysFailed                         = Msg{"post_sync_fanout.touched_days_failed"}
+	MsgPostSyncTouchedWindowOverBound                    = Msg{"post_sync_fanout.touched_window_keys_over_bound"}
 	MsgTouchedDaysDrainPass                              = Msg{"touched_days_drain.pass"}
 	MsgTouchedDaysDrainFailed                            = Msg{"touched_days_drain.failed"}
 	MsgTouchedDaysDrainSplit                             = Msg{"touched_days_drain.day_split"}
@@ -146,6 +147,10 @@ var (
 	KeyPhase                        = Key{"phase"}
 	KeyRepoCount                    = Key{"repo_count"}
 	KeyTouchedKeysRecorded          = Key{"touched_keys_recorded"}
+	KeyTouchedWindowDays            = Key{"window_days"}
+	KeyTouchedWindowRepos           = Key{"window_repos"}
+	KeyTouchedWindowKeysAppended    = Key{"window_keys_appended"}
+	KeyTouchedWindowKeysBound       = Key{"window_keys_bound"}
 	KeyTouchedDaysDispatched        = Key{"touched_days_dispatched"}
 	KeyTouchedDaysCarriedOver       = Key{"touched_days_carried_over"}
 	KeyTouchedDaysAlreadyStarted    = Key{"touched_days_already_started"}

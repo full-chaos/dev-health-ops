@@ -204,7 +204,7 @@ var providerErrorClasses = map[providerfoundation.ErrorClass]struct{}{
 func causeClass(err error, timedOut bool) string {
 	if timedOut {
 		// Work stores the deterministic category when err has one; the class
-		// must name the same cause (CHAOS-11034).
+		// must name the same cause.
 		if category, deterministic := deterministicTerminalCategory(err); deterministic {
 			return category
 		}

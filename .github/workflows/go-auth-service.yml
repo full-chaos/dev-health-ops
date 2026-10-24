@@ -137,6 +137,7 @@ jobs:
           - FuzzRevisionUnmarshal
           - FuzzTimestampUnmarshal
           - FuzzParseAccessToken
+          - FuzzParseWorkloadToken
           - FuzzVerifyToken
           - FuzzValidSignedToken
           - FuzzParseLimit

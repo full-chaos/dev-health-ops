@@ -92,6 +92,7 @@ Design docs (read the guardrails at minimum):
 | `internal_svc_authsess_token` | active | service_account | |
 | `link_credential` | active | human | |
 | `pagerduty_webhook_signature` | active | external_source | |
+| `workload_token` | **unconsumed** | workload | |
 
 **30 classes at the Wave 0 freeze** (31 with `effective_principal_envelope`, added by CHAOS-4737 below). 6 were not in CHAOS-3273's minimum list and were discovered
 during this inventory (`new_vs_ticket: true` in the JSON):
@@ -154,6 +155,15 @@ iat, nbf, exp, optional org_id and scope. It carries no role, email, profile,
 superuser bit or token version: authorization is checked per request. Its
 lifetime is at most the 60 min HS256-compat ceiling. The class is
 `unconsumed`: nothing mints or verifies it yet.
+
+**`workload_token` (CHAOS-10648, registry row CHAOS-10782).** The EdDSA workload
+token of TRD section 11 for one internal service caller. Its wire contract is
+`workload-token.v1`: header {alg EdDSA, typ `workload+jwt`, kid}; claims iss,
+aud (exactly one service), sub, principal_type `workload`, jti, iat, nbf, exp;
+no `org_id`, no `sid`, no `scope`; lifetime at most 300 seconds. Its typ
+separates it from the user access token (`at+jwt`). Nothing mints or verifies
+it yet, so the row is `unconsumed` and names those gaps; the document parser
+`ParseWorkloadToken` is under `FuzzParseWorkloadToken`.
 
 ## The CHAOS-3271 class: credentials that reach a validator that is not their own
 

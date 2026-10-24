@@ -368,6 +368,7 @@ func TestEveryMigrationStepIsAdditive(t *testing.T) {
 		if err != nil {
 			t.Fatalf("snapshot after %04d: %v", migration.Version, err)
 		}
+		before.constraints = acceptValidation(migration.Version, before.constraints)
 		regressions := diffIsAdditive(before, after)
 		for _, exemption := range additiveExemptions {
 			if exemption.version != migration.Version {

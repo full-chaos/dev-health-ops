@@ -40,6 +40,7 @@ var dynamicEnvReads = map[string]string{
 var environScans = map[string]string{
 	"internal/localgit/git.go":                     "copies the environment into the child git process; nothing is logged",
 	"internal/gqlgenguard/guard.go":                "copies the environment into the child go tool; nothing is logged",
+	"internal/platform/shell/shell.go":             "hands the process environment to the start-up guard (internal/platform/dsnclass), which reads variable names and tests a value only for a PostgreSQL URL scheme; no value is stored or logged",
 	"internal/cigates/docstools/hostsmoke_dial.go": "picks out only the variables named <scheme>_proxy (proxy URL, no_proxy list) to choose a proxy as urllib does; the values are used to dial and never logged",
 }
 

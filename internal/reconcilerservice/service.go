@@ -18,6 +18,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
+	"github.com/full-chaos/dev-health-ops/internal/platform/dsnclass"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
@@ -30,6 +31,7 @@ import (
 // SYNC_UNRECLAIMABLE_SWEEP fallback, and flag > env precedence all follow from
 // one declaration instead of a per-binary opt-in bool.
 var reconcilerSpec = shell.Spec{
+	DSNClass:                        dsnclass.Control,
 	Service:                         "dev-health-reconciler",
 	ConfigureDependenciesWithLogger: configureReconcilerDependenciesWithLogger,
 }

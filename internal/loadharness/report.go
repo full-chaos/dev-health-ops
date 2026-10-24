@@ -170,7 +170,7 @@ func ApplySLOs(r Report, slos []SLO) Report {
 				case "err":
 					c.Actual = p.ErrorRate
 				}
-				c.OK = c.Actual <= c.Limit
+				c.OK = p.Count > 0 && c.Actual <= c.Limit
 			}
 			if !c.OK {
 				r.SLOOK = false

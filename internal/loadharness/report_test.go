@@ -88,3 +88,15 @@ func TestParseSLOsRejects(t *testing.T) {
 		}
 	}
 }
+
+func TestSLOOnAPathWithNoSamplesFails(t *testing.T) {
+	r := BuildReport(ReportInput{Profile: "x", StartedAt: time.Unix(0, 0), Paths: []PathResult{{Name: "empty"}}})
+	slos, err := ParseSLOs([]string{"empty:p95=1s,err=0.5"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r = ApplySLOs(r, slos)
+	if r.SLOOK {
+		t.Fatal("an SLO over zero samples must fail")
+	}
+}

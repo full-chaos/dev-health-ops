@@ -46,14 +46,13 @@ func Run(ctx context.Context, cfg Config, opt Options) (Report, error) {
 	if getenv == nil {
 		getenv = func(string) string { return "" }
 	}
-	client := opt.Client
-	if client == nil {
-		client = &http.Client{
-			Timeout: 30 * time.Second,
-			CheckRedirect: func(*http.Request, []*http.Request) error {
-				return http.ErrUseLastResponse
-			},
-		}
+	client := &http.Client{Timeout: 30 * time.Second}
+	if opt.Client != nil {
+		c := *opt.Client
+		client = &c
+	}
+	client.CheckRedirect = func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
 	}
 
 	var wheel []int
@@ -64,6 +63,9 @@ func Run(ctx context.Context, cfg Config, opt Options) (Report, error) {
 	}
 	base := strings.TrimRight(cfg.BaseURL, "/")
 	total := int(p.Rate * p.Duration.Seconds())
+	if total < 1 {
+		return Report{}, errors.New("rate x duration schedules no request")
+	}
 	interval := time.Duration(float64(time.Second) / p.Rate)
 	jobs := make(chan job, max(p.Concurrency*4, 64))
 	results := make([]acc, len(cfg.Targets))
@@ -149,7 +151,9 @@ func send(ctx context.Context, c *http.Client, base string, t Target, seq int, g
 		return true
 	}
 	defer resp.Body.Close()
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+	if _, err := io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20)); err != nil {
+		return true
+	}
 	for _, s := range t.ExpectStatus {
 		if resp.StatusCode == s {
 			return false

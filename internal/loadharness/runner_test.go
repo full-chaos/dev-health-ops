@@ -141,3 +141,49 @@ func TestRunDoesNotFollowRedirects(t *testing.T) {
 		t.Fatalf("redirect counted as success: %+v", rep.Paths[0])
 	}
 }
+
+func TestRunTruncatedBodyIsAFailure(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", "100")
+		_, _ = w.Write([]byte("short"))
+	}))
+	defer srv.Close()
+	cfg := Config{BaseURL: srv.URL, Targets: []Target{{Name: "t", Method: "GET", Path: "/", Weight: 1, ExpectStatus: []int{200}}}}
+	rep, err := Run(context.Background(), cfg, Options{Profile: Profile{Rate: 20, Duration: 200 * time.Millisecond, Concurrency: 2}, Getenv: func(string) string { return "" }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.Paths[0].ErrorRate != 1 {
+		t.Fatalf("truncated body counted as success: %+v", rep.Paths[0])
+	}
+}
+
+func TestRunRefusesAnEmptySchedule(t *testing.T) {
+	cfg := Config{BaseURL: "http://127.0.0.1:1", Targets: []Target{{Name: "t", Method: "GET", Path: "/", Weight: 1, ExpectStatus: []int{200}}}}
+	_, err := Run(context.Background(), cfg, Options{Profile: Profile{Rate: 5, Duration: 100 * time.Millisecond, Concurrency: 1}, Getenv: func(string) string { return "" }})
+	if err == nil {
+		t.Fatal("a run that schedules no request was accepted")
+	}
+}
+
+func TestRunSuppliedClientStillDoesNotFollowRedirects(t *testing.T) {
+	var otherHits atomic.Int64
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { otherHits.Add(1) }))
+	defer other.Close()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, other.URL, http.StatusFound)
+	}))
+	defer srv.Close()
+	cfg := Config{BaseURL: srv.URL, Targets: []Target{{Name: "r", Method: "GET", Path: "/", Weight: 1, ExpectStatus: []int{200}}}}
+	rep, err := Run(context.Background(), cfg, Options{
+		Profile: Profile{Rate: 20, Duration: 200 * time.Millisecond, Concurrency: 2},
+		Getenv:  func(string) string { return "" },
+		Client:  &http.Client{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if otherHits.Load() != 0 || rep.Paths[0].ErrorRate != 1 {
+		t.Fatalf("redirect followed: hits=%d %+v", otherHits.Load(), rep.Paths[0])
+	}
+}

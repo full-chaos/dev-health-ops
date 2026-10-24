@@ -27,6 +27,12 @@ var readCalls = map[string]bool{
 	"fs.WalkDir": true, "fs.Glob": true, "fs.ReadFile": true, "fs.ReadDir": true, "fs.Sub": true, "os.OpenFile": true,
 }
 
+// nameTests are the calls that test a name against a string argument and open nothing.
+var nameTests = map[string]bool{
+	"strings.HasSuffix": true, "strings.HasPrefix": true, "strings.EqualFold": true, "strings.Contains": true,
+	"strings.CutSuffix": true, "strings.CutPrefix": true, "strings.TrimSuffix": true, "strings.TrimPrefix": true,
+}
+
 // Kinds of Read: a path named or resolved (ReadPath), a read the tool cannot bound (ReadDyn), a walk of Root to Depth
 // (ReadWalk), a run or load of the Go packages of Target (ReadEdge). dynreads.go finds the last three.
 const (
@@ -49,8 +55,21 @@ type Read struct {
 	Path    string // ReadPath: the repository path named
 	Root    string // ReadWalk: the directory walked, or unexpressed
 	Depth   string // ReadWalk: tree or dir
+	Filter  string // ReadWalk: the base-name glob of the files the walk acts on ("" = every file)
 	Target  string // ReadEdge: the packages run or loaded (dir, dir/..., **/dir), or unexpressed
 	Literal string
+}
+
+// filter is the walks.tsv filter column: the base-name glob, `*` for a walk that acts on every file and `-` for an
+// unexpressed root.
+func (r Read) filter() string {
+	switch {
+	case r.Root == unexpressed:
+		return "-"
+	case r.Filter == "":
+		return "*"
+	}
+	return r.Filter
 }
 
 func (r Read) String() string {
@@ -59,7 +78,7 @@ func (r Read) String() string {
 	case ReadDyn:
 		what = fmt.Sprintf("reads a path the tool cannot bound (%s)", r.Literal)
 	case ReadWalk:
-		what = fmt.Sprintf("walks %s (%s; %s)", r.Root, r.Depth, r.Literal)
+		what = fmt.Sprintf("walks %s (%s, files %s; %s)", r.Root, r.Depth, r.filter(), r.Literal)
 	case ReadEdge:
 		what = fmt.Sprintf("runs or loads %s (%s)", r.Target, r.Literal)
 	}
@@ -200,7 +219,6 @@ func ScanReads(root string) ([]Read, error) {
 		if err != nil {
 			return nil, err
 		}
-		reads = append(reads, scanFile(fset, f, rel, top)...)
 		reads = append(reads, opaqueReads(fset, f, rel, src)...)
 		d := path.Dir(rel)
 		if byDir[d] == nil {
@@ -212,6 +230,9 @@ func ScanReads(root string) ([]Read, error) {
 	programs := execProgramDirs(byDir, module)
 	for _, d := range dirs {
 		g := newDirGroup(d, module, byDir[d])
+		for _, s := range byDir[d] {
+			reads = append(reads, scanFile(s.fset, s.file, s.rel, top, g.chdir)...)
+		}
 		g.underProgram = programs[d]
 		reads = append(reads, g.analyze()...)
 	}
@@ -272,7 +293,7 @@ func callName(e ast.Expr) string {
 	return ""
 }
 
-func scanFile(fset *token.FileSet, f *ast.File, rel string, top map[string]bool) []Read {
+func scanFile(fset *token.FileSet, f *ast.File, rel string, top map[string]bool, chdir bool) []Read {
 	pkg := path.Dir(rel)
 	test := strings.HasSuffix(rel, "_test.go")
 	var out []Read
@@ -280,15 +301,54 @@ func scanFile(fset *token.FileSet, f *ast.File, rel string, top map[string]bool)
 		out = append(out, Read{Package: pkg, File: rel, Line: fset.Position(pos).Line, Test: test, Path: p, Literal: lit})
 	}
 	inReadCall := map[*ast.BasicLit]bool{}
+	readArgLit := map[*ast.BasicLit]bool{} // a direct argument of a read call
+	joinArg := map[*ast.BasicLit]bool{}    // a direct argument of a Join: joinLiterals decides it
+	nameOnly := map[*ast.BasicLit]bool{}   // compared with a name, never opened: a case label, == / != or a strings test
 	consumed := map[*ast.BasicLit]bool{}
+	strLit := func(e ast.Expr) *ast.BasicLit {
+		if lit, ok := ast.Unparen(e).(*ast.BasicLit); ok && lit.Kind == token.STRING {
+			return lit
+		}
+		return nil
+	}
 	ast.Inspect(f, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.CaseClause:
+			for _, e := range x.List {
+				if lit := strLit(e); lit != nil {
+					nameOnly[lit] = true
+				}
+			}
+		case *ast.BinaryExpr:
+			if x.Op == token.EQL || x.Op == token.NEQ {
+				for _, e := range []ast.Expr{x.X, x.Y} {
+					if lit := strLit(e); lit != nil {
+						nameOnly[lit] = true
+					}
+				}
+			}
+		}
 		call, ok := n.(*ast.CallExpr)
 		if !ok {
 			return true
 		}
 		name := callName(call.Fun)
-		if name == "filepath.Join" || name == "path.Join" {
+		join := name == "filepath.Join" || name == "path.Join"
+		if join {
 			joinLiterals(call, top, consumed, add)
+		}
+		for _, a := range call.Args {
+			lit := strLit(a)
+			switch {
+			case lit == nil:
+			case join:
+				joinArg[lit] = true
+			case nameTests[name]:
+				nameOnly[lit] = true
+			case readCalls[name] && !strings.HasPrefix(name, "fs."):
+				// the os and filepath calls open a relative name in the working directory (fs calls: in their fs.FS)
+				readArgLit[lit] = true
+			}
 		}
 		if readCalls[name] {
 			for _, a := range call.Args {
@@ -319,7 +379,19 @@ func scanFile(fset *token.FileSet, f *ast.File, rel string, top map[string]bool)
 		if !top[first] {
 			return true
 		}
-		if strings.Contains(p, "/") || inReadCall[lit] || (strings.Contains(first, ".") && !strings.HasPrefix(first, ".")) {
+		switch {
+		case strings.Contains(p, "/"):
+			add(lit.Pos(), p, v)
+		case joinArg[lit] || nameOnly[lit]:
+		case readArgLit[lit] && test && !chdir:
+			// go test runs a package's tests in its directory: a relative name is read there
+			if r := path.Clean(pkg + "/" + v); r != ".." && !strings.HasPrefix(r, "../") {
+				add(lit.Pos(), r, v)
+			} else {
+				add(lit.Pos(), p, v)
+			}
+		case inReadCall[lit] || (strings.Contains(first, ".") && !strings.HasPrefix(first, ".")):
+			// a name handed on to a reader, or a root file name anywhere (a helper may join it to the root)
 			add(lit.Pos(), p, v)
 		}
 		return true
@@ -467,7 +539,7 @@ func generatedRows(reads []Read) map[string]map[string]string {
 		var file, row string
 		switch r.Kind {
 		case ReadWalk:
-			file, row = walksFile, r.Package+"\t"+site+"\t"+r.Root+"\t"+r.Depth
+			file, row = walksFile, r.Package+"\t"+site+"\t"+r.Root+"\t"+r.Depth+"\t"+r.filter()
 		case ReadDyn:
 			file, row = dynReadsFile, r.Package+"\t"+site
 		case ReadEdge:
@@ -648,10 +720,14 @@ func sortedKeys[V any](m map[string]V) []string {
 func joinLiterals(call *ast.CallExpr, top map[string]bool, consumed map[*ast.BasicLit]bool, add func(token.Pos, string, string)) {
 	var parts []string
 	var lits []*ast.BasicLit
+	var base ast.Expr // the argument before the literals, nil when they lead
 	flush := func() {
 		if len(parts) > 0 {
 			p := normalizeRepoPath(path.Join(parts...))
-			if p != "" && top[strings.SplitN(p, "/", 2)[0]] {
+			// One bare name joined to a base that names no root (filepath.Join(ContractsDir(root), "README.md")) is a
+			// file of that base, not of the repository root: dynreads.go places it, or records it unbounded.
+			bareUnderOther := base != nil && !strings.Contains(p, "/") && !namesRoot(base)
+			if p != "" && top[strings.SplitN(p, "/", 2)[0]] && !bareUnderOther {
 				for _, l := range lits {
 					consumed[l] = true
 				}
@@ -664,11 +740,13 @@ func joinLiterals(call *ast.CallExpr, top map[string]bool, consumed map[*ast.Bas
 		lit, ok := a.(*ast.BasicLit)
 		if !ok || lit.Kind != token.STRING {
 			flush()
+			base = a
 			continue
 		}
 		v, err := strconv.Unquote(lit.Value)
 		if err != nil || v == "" {
 			flush()
+			base = a
 			continue
 		}
 		if len(parts) == 0 && (v == ".." || v == ".") {
@@ -678,4 +756,17 @@ func joinLiterals(call *ast.CallExpr, top map[string]bool, consumed map[*ast.Bas
 		lits = append(lits, lit)
 	}
 	flush()
+}
+
+// namesRoot reports whether a Join base is named as a root: root, repoRoot(t), cfg.RepoRoot, testRoot(t).
+func namesRoot(e ast.Expr) bool {
+	switch x := ast.Unparen(e).(type) {
+	case *ast.CallExpr:
+		return namesRoot(x.Fun)
+	case *ast.SelectorExpr:
+		return strings.Contains(strings.ToLower(x.Sel.Name), "root")
+	case *ast.Ident:
+		return strings.Contains(strings.ToLower(x.Name), "root")
+	}
+	return false
 }

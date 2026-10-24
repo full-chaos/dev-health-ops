@@ -12,12 +12,12 @@ import (
 // datasets because the canonical-incident feature is off for the organization.
 const planIncidentDatasetsSkippedEvent = "sync.plan.incident_datasets_skipped_feature_disabled"
 
-// planDatasetRequiresCanonicalIncident reports whether one dataset of a
+// PlanDatasetRequiresCanonicalIncident reports whether one dataset of a
 // provider writes canonical incident data, by the same legacy-target rule the
 // stored-target gate uses (syncTargetsRequireCanonicalIncident). A dataset the
 // provider's catalogue does not hold is never gated: the planner plans no unit
 // for it anyway.
-func planDatasetRequiresCanonicalIncident(provider, dataset string) bool {
+func PlanDatasetRequiresCanonicalIncident(provider, dataset string) bool {
 	spec, ok := datasetSpecification(provider, dataset)
 	if !ok {
 		return false
@@ -30,7 +30,7 @@ func planDatasetRequiresCanonicalIncident(provider, dataset string) bool {
 // sides, so the planner sees the remaining datasets exactly as it would have.
 func splitCanonicalIncidentDatasets(provider string, datasets []PlanDataset) (kept, gated []PlanDataset) {
 	for _, dataset := range datasets {
-		if planDatasetRequiresCanonicalIncident(provider, dataset.Key) {
+		if PlanDatasetRequiresCanonicalIncident(provider, dataset.Key) {
 			gated = append(gated, dataset)
 			continue
 		}
@@ -59,7 +59,7 @@ func splitCanonicalIncidentDatasets(provider string, datasets []PlanDataset) (ke
 // The second result is the keys of the datasets left out, in plan order. The
 // caller needs the count after unit planning (see
 // errIfOnlySkippedDatasetsHadWork) and writes the keys onto the run
-// (skippedDatasetsResult).
+// (SkippedDatasetsResult).
 func dropCanonicalIncidentDatasetsWhenFeatureOff(
 	ctx context.Context, tx pgx.Tx, orgID, integrationID, provider string, datasets []PlanDataset, now time.Time,
 ) ([]PlanDataset, []string, error) {
@@ -102,11 +102,11 @@ const (
 	skippedDatasetMessageFeatureOff     = "skipped: feature off"
 )
 
-// skippedDatasetsResult is the entry the plan writes into sync_runs.result
+// SkippedDatasetsResult is the entry the plan writes into sync_runs.result
 // under "skipped_datasets": one object per left-out dataset with its key and
 // reason. nil when nothing was left out, so a run without a skip keeps the
 // result it always had.
-func skippedDatasetsResult(keys []string) []map[string]string {
+func SkippedDatasetsResult(keys []string) []map[string]string {
 	if len(keys) == 0 {
 		return nil
 	}

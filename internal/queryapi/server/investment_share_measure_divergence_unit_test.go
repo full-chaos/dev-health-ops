@@ -42,3 +42,15 @@ func TestInvestmentForOrderComparisonKeepsKeyOrderAndZeroesTheValues(t *testing.
 		t.Fatal("the zeroed comparison lost the key order")
 	}
 }
+
+func TestInvestmentForOrderComparisonRemovesTheGoOnlyUncategorizedCount(t *testing.T) {
+	goBody := `{"theme_distribution":{"quality":2.6},"subcategory_distribution":{"quality.bugfix":2.6},"evidence_quality_distribution":{"moderate":3.0},"evidence_quality_stats":{"mean":0.5,"stddev":0.1,"total":3,"band_counts":{"moderate":3},"quality_drivers":[],"uncategorized_count":0},"unit":null,"edges":[],"measure":"ISSUE_SIZE","denominator":3.0,"unsized_unit_count":0}`
+	pythonBody := `{"theme_distribution":{"quality":15.0},"subcategory_distribution":{"quality.bugfix":15.0},"evidence_quality_distribution":{"moderate":3.0},"evidence_quality_stats":{"mean":0.5,"stddev":0.1,"total":3,"band_counts":{"moderate":3},"quality_drivers":[]},"unit":null,"edges":[]}`
+	goOut, pythonOut, _, err := investmentForOrderComparison(goBody, pythonBody)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if goOut != pythonOut {
+		t.Fatalf("the Go-only count was not removed:\n go     %s\n python %s", goOut, pythonOut)
+	}
+}

@@ -38,6 +38,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	chclickhouse "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/full-chaos/dev-health-ops/internal/storage/valkey"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/authrows"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/sessionscenario"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/smtpcapture"
@@ -241,6 +242,8 @@ type runner struct {
 	venue          *venueoracle.Venue
 	goBase         string
 	external       bool
+	forwarded      authrows.Forwarded
+	ledger         *authrows.Ledger
 	pySink, goSink *smtpcapture.Server
 	receipt        strings.Builder
 	// mails are each plane's messages so far, by "recipient|subject", the
@@ -471,12 +474,32 @@ func keys(m map[string][]sentMail) []string {
 
 func (r *runner) rows(name, query string) {
 	r.t.Helper()
+	query, projected, err := authrows.Query(name, query, r.forwarded)
+	if err != nil {
+		r.t.Fatalf("%s rows: %v", name, err)
+	}
 	goRows := venueoracle.TableRows(r.t, r.ctx, r.venue.AdminURI(r.t, r.venue.GoDB), query)
+	if projected {
+		r.projectedRows(name, goRows)
+		return
+	}
 	pyRows := r.golden.CompareRows(r.t, name, goRows)
 	same := pyRows == goRows && pyRows != ""
 	fmt.Fprintf(&r.receipt, "%s rows after the scenario: %s\n", name, venueoracle.Mark(same))
 	if pyRows == "" {
 		r.t.Errorf("%s rows are empty", name)
+	}
+}
+
+// projectedRows compares the rows the target holds for an aggregate it forwarded to auth-service with the
+// golden's, every difference classified by a quirk of authrows.Quirks.
+func (r *runner) projectedRows(name, goRows string) {
+	r.t.Helper()
+	pyRows := r.golden.InspectRows(r.t, name)
+	problems := r.ledger.Compare(name, pyRows, r.golden.ProjectRows(r.t, name, goRows))
+	fmt.Fprintf(&r.receipt, "%s rows after the scenario, auth-service rows (forwarded %s): %s\n", name, r.forwarded, venueoracle.Mark(len(problems) == 0))
+	for _, problem := range problems {
+		r.t.Error(problem)
 	}
 }
 
@@ -617,6 +640,14 @@ func TestAuthFlowVenueOracle(t *testing.T) {
 	r := &runner{golden: golden, t: t, ctx: ctx, venue: venue, pySink: pySink, goSink: goSink,
 		mails:  map[string]map[string][]sentMail{"python": {}, "go": {}},
 		goBase: externalBase, external: external != nil}
+	if external != nil {
+		if r.forwarded, err = authrows.FromEnv(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if r.ledger, err = authrows.NewLedger(r.forwarded); err != nil {
+		t.Fatal(err)
+	}
 	if r.goBase == "" {
 		r.goBase = startGoAPI(t, ctx, venue, admin.InviteConfig{Mail: goSender, TokenSecret: sessionscenario.Key, AppBaseURL: appBaseURL, AppBaseURLSet: true})
 	}
@@ -848,6 +879,12 @@ func TestAuthFlowVenueOracle(t *testing.T) {
 
 	if violations := policy.WriterViolations(); violations > 0 {
 		t.Errorf("%d body writes used the wrong writer for their route", violations)
+	}
+	if r.forwarded.Any() {
+		for _, problem := range r.ledger.Dead() {
+			t.Error(problem)
+		}
+		fmt.Fprintf(&r.receipt, "row skips: 0; quirks covered: %s\n", r.ledger.Covered())
 	}
 	receipt := r.receipt.String()
 	if path := os.Getenv("DEV_HEALTH_VENUE_RECEIPT"); path != "" {

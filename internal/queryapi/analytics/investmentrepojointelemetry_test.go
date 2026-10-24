@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-go/clickhouse"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 )
@@ -406,5 +407,65 @@ func TestRecordInvestmentRepoJoinDedupCollisions_FetchFailureIsReported(t *testi
 	}
 	if !errors.Is(capturedErr, errInjectedFetchFailure) {
 		t.Errorf("captured err = %v, want it to wrap %v", capturedErr, errInjectedFetchFailure)
+	}
+}
+
+// The collision counter carries no per-tenant label: the org id lives in the
+// warn log only.
+func TestDefaultRecordInvestmentRepoJoinDedupCollisions_CounterHasNoAttributes(t *testing.T) {
+	ctx := context.Background()
+	const name = "devhealth_query_api_investment_repo_join_dedup_collisions_total"
+	collisionCounterValue := func() (value int64, points int) {
+		var rm metricdata.ResourceMetrics
+		if err := realMeterReader.Collect(ctx, &rm); err != nil {
+			t.Fatalf("reader.Collect error = %v", err)
+		}
+		for _, sm := range rm.ScopeMetrics {
+			for _, m := range sm.Metrics {
+				if m.Name != name {
+					continue
+				}
+				if data, ok := m.Data.(metricdata.Sum[int64]); ok {
+					for _, dp := range data.DataPoints {
+						value += dp.Value
+						points++
+					}
+				}
+			}
+		}
+		return value, points
+	}
+	before, _ := collisionCounterValue()
+	defaultRecordInvestmentRepoJoinDedupCollisions(ctx, "org-synthetic-a", 2)
+	defaultRecordInvestmentRepoJoinDedupCollisions(ctx, "org-synthetic-b", 3)
+	after, _ := collisionCounterValue()
+	if after-before != 2 {
+		t.Errorf("counter increment = %d, want 2 (one per report, whatever the excess count)", after-before)
+	}
+
+	var rm metricdata.ResourceMetrics
+	if err := realMeterReader.Collect(ctx, &rm); err != nil {
+		t.Fatalf("reader.Collect error = %v", err)
+	}
+	var points int
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			if m.Name != name {
+				continue
+			}
+			data, ok := m.Data.(metricdata.Sum[int64])
+			if !ok {
+				t.Fatalf("data shape = %T, want Sum[int64]", m.Data)
+			}
+			for _, dp := range data.DataPoints {
+				points++
+				if n := dp.Attributes.Len(); n != 0 {
+					t.Errorf("data point carries %d attributes %v, want none", n, dp.Attributes.ToSlice())
+				}
+			}
+		}
+	}
+	if points != 1 {
+		t.Errorf("data points = %d, want exactly 1 (one series for all orgs)", points)
 	}
 }

@@ -11,11 +11,13 @@ import (
 	"slices"
 
 	"github.com/full-chaos/dev-health-ops/internal/cli"
+	"github.com/full-chaos/dev-health-ops/internal/platform/dsnclass"
 	"github.com/full-chaos/dev-health-ops/internal/platform/shell"
 )
 
 var streamRunnerSpec = shell.Spec{
-	Service: "dev-health-stream-runner",
+	DSNClass: dsnclass.Stream,
+	Service:  "dev-health-stream-runner",
 	// PagerDuty webhooks are an independently routable stream family (TRD 10.5)
 	// with their own producer, DLQ, and receipt store, so they get a dedicated
 	// profile rather than a third loop inside the ingest process.

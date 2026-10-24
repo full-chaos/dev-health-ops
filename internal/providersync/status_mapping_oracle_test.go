@@ -49,8 +49,14 @@ func statusMappingRepoRoot(t *testing.T) string {
 func resolveStatusMappingConfig(t *testing.T, name string) string {
 	t.Helper()
 	root := statusMappingRepoRoot(t)
-	if name == "real" {
+	if name == "live" {
 		return filepath.Join(root, "src/dev_health_ops/config/status_mapping.yaml")
+	}
+	// "real" names the config as it stood when the frozen Python goldens were
+	// recorded (before the CHAOS-3512 quoting fix); the goldens key on the name.
+	if name == "real" {
+		return filepath.Join(
+			root, "internal/providersync/testdata/status_mapping_configs/real_frozen.yaml")
 	}
 	return filepath.Join(
 		root, "internal/providersync/testdata/status_mapping_configs", name+".yaml")
@@ -76,7 +82,7 @@ func loadStatusMappingForCase(t *testing.T, input map[string]any) (*StatusMappin
 	if name, ok := input["explicit_config"].(string); ok && name != "" {
 		explicit = resolveStatusMappingConfig(t, name)
 	}
-	return LoadStatusMapping(explicit)
+	return loadStatusMapping(explicit, false)
 }
 
 // loadOutcome renders a load error the way the Python pair renders an
@@ -402,12 +408,12 @@ func TestStatusMappingNormalizeMatchesFrozenPythonOracle(t *testing.T) {
 // read whatever the ambient environment pointed at.
 func TestStatusMappingEnvIsNotAmbient(t *testing.T) {
 	t.Setenv(statusMappingPathEnvVar, filepath.Join(t.TempDir(), "does-not-exist.yaml"))
-	if _, err := LoadStatusMapping(resolveStatusMappingConfig(t, "real")); err == nil {
+	if _, err := LoadStatusMapping(resolveStatusMappingConfig(t, "live")); err == nil {
 		t.Fatal("expected the environment variable to REPLACE the explicit path and " +
 			"fail on the missing file; it did not, so quirk 7 is no longer mirrored " +
 			"and every explicit-path oracle case may be reading an ambient file")
 	}
-	if _, err := os.Stat(resolveStatusMappingConfig(t, "real")); err != nil {
+	if _, err := os.Stat(resolveStatusMappingConfig(t, "live")); err != nil {
 		t.Fatalf("the real config must exist for the assertion above to mean "+
 			"anything: %v", err)
 	}

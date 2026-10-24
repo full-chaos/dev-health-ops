@@ -87,11 +87,14 @@ func TestPagerDutyRouteBucketBoundsIdsFromOneAddress(t *testing.T) {
 			t.Fatalf("delivery %d = %d, want 401", i+1, got)
 		}
 	}
-	for _, id := range []string{uuid.NewString(), "not-a-uuid"} {
+	for _, id := range []string{uuid.NewString(), uuid.NewString()} {
 		got := deliver(handler, routePrefix+"/pagerduty/"+id, "192.0.2.1", "")
 		if got.Code != http.StatusTooManyRequests || got.Body.String() != throttledBody {
 			t.Fatalf("id %s past the route bucket = %d %s", id, got.Code, got.Body.String())
 		}
+	}
+	if got := deliver(handler, routePrefix+"/pagerduty/not-a-uuid", "192.0.2.1", "").Code; got != http.StatusUnauthorized {
+		t.Fatalf("an id that is not a UUID spent the route budget: %d", got)
 	}
 	if got := deliver(handler, routePrefix+"/pagerduty/"+uuid.NewString(), "192.0.2.2", "").Code; got != http.StatusUnauthorized {
 		t.Fatalf("another address = %d, want its own budget", got)
@@ -103,10 +106,10 @@ func TestClientBucketCountsEveryIntakeRoute(t *testing.T) {
 	withLimits(t, 6, 100000, 100000)
 	now := time.Now()
 	routes := intakeRoutes(t, Deps{Counters: httpapi.NewMemoryCounters(func() time.Time { return now })})
-	targets := []string{routePrefix + "/github", routePrefix + "/gitlab", routePrefix + "/jira", routePrefix + "/pagerduty/" + uuid.NewString()}
-	patterns := []string{routePrefix + "/github", routePrefix + "/gitlab", routePrefix + "/jira", routePrefix + "/pagerduty/{binding_id}"}
+	targets := []string{routePrefix + "/github", routePrefix + "/pagerduty/" + uuid.NewString()}
+	patterns := []string{routePrefix + "/github", routePrefix + "/pagerduty/{binding_id}"}
 	for i := range 6 {
-		if got := deliver(routes[patterns[i%4]], targets[i%4], "192.0.2.1", "").Code; got == http.StatusTooManyRequests {
+		if got := deliver(routes[patterns[i%2]], targets[i%2], "192.0.2.1", "").Code; got == http.StatusTooManyRequests {
 			t.Fatalf("delivery %d throttled early", i+1)
 		}
 	}
@@ -125,7 +128,7 @@ func TestProviderRouteBucketIsPerRoute(t *testing.T) {
 	withLimits(t, 100000, 100000, 3)
 	now := time.Now()
 	routes := intakeRoutes(t, Deps{Counters: httpapi.NewMemoryCounters(func() time.Time { return now })})
-	for _, route := range []string{"/github", "/gitlab", "/jira"} {
+	for _, route := range []string{"/github"} {
 		for i := range 3 {
 			if got := deliver(routes[routePrefix+route], routePrefix+route, "192.0.2.1", "").Code; got == http.StatusTooManyRequests {
 				t.Fatalf("%s delivery %d throttled early", route, i+1)
@@ -137,7 +140,7 @@ func TestProviderRouteBucketIsPerRoute(t *testing.T) {
 	}
 }
 
-func TestForgedForwardingHeaderFromAnUntrustedPeerMintsNoBucket(t *testing.T) {
+func TestForgedForwardingHeaderFromAnUntrustedPeerCreatesNoBucket(t *testing.T) {
 	withLimits(t, 100000, 100000, 2)
 	now := time.Now()
 	routes := intakeRoutes(t, Deps{Counters: httpapi.NewMemoryCounters(func() time.Time { return now })})
@@ -151,7 +154,7 @@ func TestForgedForwardingHeaderFromAnUntrustedPeerMintsNoBucket(t *testing.T) {
 	}
 }
 
-func TestThrottledAnswerIsTheSameForKnownAndUnknownIdsAndReadsNothing(t *testing.T) {
+func TestThrottledAnswerIsTheSameForKnownUnknownAndMalformedIdsAndReadsNothing(t *testing.T) {
 	f := newRefusalFixture(t, "active")
 	withLimits(t, 100000, 2, 100000)
 	now := time.Now()
@@ -160,14 +163,19 @@ func TestThrottledAnswerIsTheSameForKnownAndUnknownIdsAndReadsNothing(t *testing
 	for range 2 {
 		hitPagerDuty(handler, uuid.NewString(), "192.0.2.1", "")
 	}
+	for range pagerdutyLimitPerMinute {
+		hitPagerDuty(handler, "not-a-uuid", "192.0.2.1", "")
+	}
 	loads := f.loads
 	var answers []string
-	for _, id := range []string{f.bindingID, uuid.NewString(), "not-a-uuid"} {
+	for _, id := range []string{f.bindingID, uuid.NewString(), "not-a-uuid", "x/y"} {
 		got := hitPagerDuty(handler, id, "192.0.2.1", "")
 		answers = append(answers, fmt.Sprintf("%d %s %v", got.Code, got.Body.String(), got.Header()))
 	}
-	if answers[0] != answers[1] || answers[1] != answers[2] || !strings.HasPrefix(answers[0], "429 "+throttledBody) {
-		t.Fatalf("throttled answers differ: %q", answers)
+	for index := range answers {
+		if answers[index] != answers[0] || !strings.HasPrefix(answers[index], "429 "+throttledBody) {
+			t.Fatalf("throttled answers differ: %q", answers)
+		}
 	}
 	if f.loads != loads {
 		t.Fatalf("throttled deliveries read %d bindings", f.loads-loads)
@@ -179,15 +187,15 @@ func TestThrottleLogsTheProviderAndReasonClassOnly(t *testing.T) {
 	var logs bytes.Buffer
 	now := time.Now()
 	routes := intakeRoutes(t, Deps{Counters: httpapi.NewMemoryCounters(func() time.Time { return now }), Logger: slog.New(slog.NewJSONHandler(&logs, nil))})
-	handler := routes[routePrefix+"/jira"]
-	deliver(handler, routePrefix+"/jira", "192.0.2.77", "")
+	handler := routes[routePrefix+"/github"]
+	deliver(handler, routePrefix+"/github", "192.0.2.77", "")
 	logs.Reset()
-	deliver(handler, routePrefix+"/jira", "192.0.2.77", "")
+	deliver(handler, routePrefix+"/github", "192.0.2.77", "")
 	var entry map[string]any
 	if err := json.Unmarshal(bytes.TrimSpace(logs.Bytes()), &entry); err != nil {
 		t.Fatalf("want one log line, got %q", logs.String())
 	}
-	if entry["level"] != "WARN" || entry["msg"] != "webhook_intake.throttled" || entry["provider"] != "jira" || entry["reason"] != "route_bucket" || len(entry) != 5 {
+	if entry["level"] != "WARN" || entry["msg"] != "webhook_intake.throttled" || entry["provider"] != "github" || entry["reason"] != "route_bucket" || len(entry) != 5 {
 		t.Fatalf("log entry %v", entry)
 	}
 	if strings.Contains(logs.String(), "192.0.2.77") {

@@ -3,6 +3,7 @@ package oidc
 import (
 	"context"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/auth/emaildomain"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -614,7 +615,7 @@ func (s *Service) checkNewAccount(ctx context.Context, row Provider, v validated
 	if !p.EmailVerified {
 		return deny(http.StatusForbidden, ReasonEmailUnverified, "No verified email address is available from this OIDC provider")
 	}
-	if len(row.AllowedDomains) > 0 && !contains(row.AllowedDomains, emailDomain(p.Email)) {
+	if len(row.AllowedDomains) > 0 && !emaildomain.Allowed(row.AllowedDomains, emailDomain(p.Email)) {
 		return deny(http.StatusForbidden, ReasonDomainNotAllowed, "Email domain is not allowed for this provider")
 	}
 	inUse, err := s.cfg.Identities.EmailInUse(ctx, p.Email)

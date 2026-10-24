@@ -235,8 +235,6 @@ var wantResponseModelRoutes = map[string]bool{
 	"POST /api/v1/telemetry/opt-out":                                                   true,
 	"POST /api/v1/telemetry/report":                                                    true,
 	"POST /api/v1/webhooks/github":                                                     true,
-	"POST /api/v1/webhooks/gitlab":                                                     true,
-	"POST /api/v1/webhooks/jira":                                                       true,
 	"POST /api/v1/webhooks/pagerduty/{binding_id}":                                     false,
 	"PUT /api/v1/admin/llm-settings":                                                   true,
 	"PUT /api/v1/admin/settings/{category}/{key}":                                      true,

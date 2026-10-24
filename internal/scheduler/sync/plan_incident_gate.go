@@ -12,12 +12,12 @@ import (
 // datasets because the canonical-incident feature is off for the organization.
 const planIncidentDatasetsSkippedEvent = "sync.plan.incident_datasets_skipped_feature_disabled"
 
-// planDatasetRequiresCanonicalIncident reports whether one dataset of a
+// PlanDatasetRequiresCanonicalIncident reports whether one dataset of a
 // provider writes canonical incident data, by the same legacy-target rule the
 // stored-target gate uses (syncTargetsRequireCanonicalIncident). A dataset the
 // provider's catalogue does not hold is never gated: the planner plans no unit
 // for it anyway.
-func planDatasetRequiresCanonicalIncident(provider, dataset string) bool {
+func PlanDatasetRequiresCanonicalIncident(provider, dataset string) bool {
 	spec, ok := datasetSpecification(provider, dataset)
 	if !ok {
 		return false
@@ -30,7 +30,7 @@ func planDatasetRequiresCanonicalIncident(provider, dataset string) bool {
 // sides, so the planner sees the remaining datasets exactly as it would have.
 func splitCanonicalIncidentDatasets(provider string, datasets []PlanDataset) (kept, gated []PlanDataset) {
 	for _, dataset := range datasets {
-		if planDatasetRequiresCanonicalIncident(provider, dataset.Key) {
+		if PlanDatasetRequiresCanonicalIncident(provider, dataset.Key) {
 			gated = append(gated, dataset)
 			continue
 		}
@@ -56,21 +56,23 @@ func splitCanonicalIncidentDatasets(provider string, datasets []PlanDataset) (ke
 // ErrOccurrenceIneligible, with the same count and WARN: an accepted run that
 // plans zero units and reports success would read as coverage.
 //
-// The second result is the number of datasets left out. The caller needs it
-// after unit planning: see errIfOnlySkippedDatasetsHadWork.
+// The second result is the keys of the datasets left out, in plan order. The
+// caller needs the count after unit planning (see
+// errIfOnlySkippedDatasetsHadWork) and writes the keys onto the run
+// (SkippedDatasetsResult).
 func dropCanonicalIncidentDatasetsWhenFeatureOff(
 	ctx context.Context, tx pgx.Tx, orgID, integrationID, provider string, datasets []PlanDataset, now time.Time,
-) ([]PlanDataset, int, error) {
+) ([]PlanDataset, []string, error) {
 	kept, gated := splitCanonicalIncidentDatasets(provider, datasets)
 	if len(gated) == 0 {
-		return datasets, 0, nil
+		return datasets, nil, nil
 	}
 	allowed, reason, err := canonicalIncidentDecision(ctx, tx, orgID, now, true)
 	if err != nil {
-		return nil, 0, err
+		return nil, nil, err
 	}
 	if allowed {
-		return datasets, 0, nil
+		return datasets, nil, nil
 	}
 	skippedKeys := make([]string, 0, len(gated))
 	for _, dataset := range gated {
@@ -88,9 +90,35 @@ func dropCanonicalIncidentDatasetsWhenFeatureOff(
 		slog.Int("planned_datasets", len(kept)),
 	)
 	if len(kept) == 0 {
-		return nil, len(gated), ErrOccurrenceIneligible
+		return nil, skippedKeys, ErrOccurrenceIneligible
 	}
-	return kept, len(gated), nil
+	return kept, skippedKeys, nil
+}
+
+// The skip reason and the sync-status text a run carries for a dataset left out
+// because the canonical-incident feature is off.
+const (
+	skippedDatasetReasonFeatureDisabled = planGateOutcomeFeatureDisabled
+	skippedDatasetMessageFeatureOff     = "skipped: feature off"
+)
+
+// SkippedDatasetsResult is the entry the plan writes into sync_runs.result
+// under "skipped_datasets": one object per left-out dataset with its key and
+// reason. nil when nothing was left out, so a run without a skip keeps the
+// result it always had.
+func SkippedDatasetsResult(keys []string) []map[string]string {
+	if len(keys) == 0 {
+		return nil
+	}
+	entries := make([]map[string]string, 0, len(keys))
+	for _, key := range keys {
+		entries = append(entries, map[string]string{
+			"dataset_key": key,
+			"reason":      skippedDatasetReasonFeatureDisabled,
+			"message":     skippedDatasetMessageFeatureOff,
+		})
+	}
+	return entries
 }
 
 // errIfOnlySkippedDatasetsHadWork keeps an occurrence ineligible when datasets

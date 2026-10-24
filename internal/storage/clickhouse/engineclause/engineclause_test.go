@@ -53,16 +53,20 @@ func TestParse(t *testing.T) {
 	}
 }
 
+func TestParseDoesNotCompareEngineNames(t *testing.T) {
+	t.Parallel()
+	for _, in := range []string{"View", "Memory", "SharedView", "Distributed('c', 'db', 't')"} {
+		if _, err := Parse(in); err != nil {
+			t.Errorf("Parse(%q) = %v, want no error", in, err)
+		}
+	}
+}
+
 func TestParseRefusesUnknownShapes(t *testing.T) {
 	t.Parallel()
 	for _, in := range []string{
 		"",
 		"   ",
-		"View",
-		"MaterializedView",
-		"Distributed('c', 'db', 't')",
-		"Memory",
-		"SharedView",
 		"ReplacingMergeTree(computed_at",
 		"ReplacingMergeTree('unterminated)",
 		"ReplacingMergeTree(computed_at,)",
@@ -99,8 +103,10 @@ func TestVersionColumn(t *testing.T) {
 		{"SharedReplacingMergeTree('/p', '{replica}') ORDER BY x", "", false},
 		{"ReplicatedReplacingMergeTree('/p', '{replica}', ver, is_deleted)", "", true},
 		{"ReplacingMergeTree(ver, is_deleted)", "", true},
-		{"SharedMergeTree('/p', '{replica}') ORDER BY x", "", true},
-		{"SharedAggregatingMergeTree('/p', '{replica}') ORDER BY x", "", true},
+		{"SharedMergeTree('/p', '{replica}') ORDER BY x", "", false},
+		{"SharedAggregatingMergeTree('/p', '{replica}') ORDER BY x", "", false},
+		{"CollapsingMergeTree(sign)", "sign", false},
+		{"SharedSummingMergeTree('/p', '{replica}', (a, b))", "", true},
 		{"ReplacingMergeTree(toDate(computed_at))", "", true},
 		{"ReplacingMergeTree(a b)", "", true},
 	}
@@ -116,7 +122,7 @@ func TestVersionColumn(t *testing.T) {
 	}
 }
 
-func TestIsReplacingOn(t *testing.T) {
+func TestIsVersionedOn(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
 		in     string
@@ -132,7 +138,9 @@ func TestIsReplacingOn(t *testing.T) {
 		{"SharedReplacingMergeTree('/p', '{replica}') ORDER BY x", "updated_at", false},
 		{"SharedReplacingMergeTree('/p', '{replica}', updated_at, is_deleted)", "updated_at", false},
 		{"SharedMergeTree('/p', '{replica}') ORDER BY x", "updated_at", false},
-		{"SharedAggregatingMergeTree('/p', '{replica}', updated_at)", "updated_at", false},
+		{"SharedAggregatingMergeTree('/p', '{replica}', updated_at)", "updated_at", true},
+		{"CollapsingMergeTree(sign)", "updated_at", false},
+		{"SharedSummingMergeTree('/p', '{replica}', (a, b))", "updated_at", false},
 		{"ReplacingMergeTree(toDate(updated_at))", "updated_at", false},
 	}
 	for _, tc := range cases {
@@ -140,8 +148,8 @@ func TestIsReplacingOn(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Parse(%q): %v", tc.in, err)
 		}
-		if got := clause.IsReplacingOn(tc.column); got != tc.want {
-			t.Errorf("IsReplacingOn(%q, %q) = %v, want %v", tc.in, tc.column, got, tc.want)
+		if got := clause.IsVersionedOn(tc.column); got != tc.want {
+			t.Errorf("IsVersionedOn(%q, %q) = %v, want %v", tc.in, tc.column, got, tc.want)
 		}
 	}
 }
@@ -194,7 +202,6 @@ func TestCanonicalizeDDLRefusesUnknownShared(t *testing.T) {
 	for _, in := range []string{
 		"CREATE TABLE t (a UInt8) ENGINE = SharedReplacingMergeTree(ingest_revision) ORDER BY x",
 		"CREATE TABLE t (a UInt8) ENGINE = SharedReplacingMergeTree('/p', '{replica}', ingest_revision ORDER BY x",
-		"CREATE TABLE t (a UInt8) ENGINE = Distributed('c', 'db', 't')",
 	} {
 		if _, err := CanonicalizeDDL(in); !errors.Is(err, ErrShape) {
 			t.Errorf("CanonicalizeDDL(%q) error = %v, want ErrShape", in, err)

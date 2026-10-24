@@ -62,6 +62,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/auth/emaildomain"
 	"net/http"
 	"net/url"
 	"strings"
@@ -73,6 +74,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/api/usersowned"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
@@ -841,7 +843,7 @@ func (h handlers) samlACSCallback(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		domain := email[at+1:]
-		if !containsFold(allowedDomains, domain) {
+		if !emaildomain.Allowed(allowedDomains, domain) {
 			policy.WriteDetail(w, http.StatusForbidden, fmt.Sprintf("Email domain '%s' is not allowed for this provider", domain), nil)
 			return
 		}
@@ -857,6 +859,11 @@ func (h handlers) samlACSCallback(w http.ResponseWriter, r *http.Request) {
 		if errors.Is(err, errMembershipRequired) {
 			h.recordSSOAuthenticatedDenial(ctx, w, r, row.OrgID, providerID, err.Error(), http.StatusForbidden,
 				membershipRequiredDetail(), "saml", "provisioning")
+			return
+		}
+		if errors.Is(err, usersowned.ErrRefused) {
+			h.recordSSOAuthenticatedDenial(ctx, w, r, row.OrgID, providerID, err.Error(), http.StatusConflict,
+				usersowned.Detail(), "saml", "provisioning")
 			return
 		}
 		var processing ssoProcessing

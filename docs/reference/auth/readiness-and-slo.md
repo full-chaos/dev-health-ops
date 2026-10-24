@@ -42,8 +42,20 @@ service log (`readiness check failed`, with `check` and `reason`).
 | `postgres` | The pool answers and the auth schema is visible to the runtime login. It does not check the migration version; use `auth-migrate --check` for that. | `postgres_unreachable`, `auth_schema_missing`, `postgres_config_invalid` |
 | `signing_key` | The key file meets the custody contract and parses as Ed25519 (see the [configuration reference](configuration.md)). | `key_file_unreadable`, `key_file_not_regular`, `key_file_mode_too_permissive`, `key_file_too_large`, `key_file_not_pem`, `key_file_ambiguous_pem`, `key_file_unparseable`, `key_file_wrong_algorithm`, `key_id_unconfigured`, `key_path_unconfigured` |
 | `outbox_loop` | The audit outbox loop has completed a successful step, and has not failed three steps in a row. See [audit and outbox operations](../../contribute/architecture/auth-control-plane-audit-outbox.md). | (the step error is logged as `outbox step failed`) |
+| `valkey` | Registered only while the login, credential or social link routes are mounted. The shared rate-limit store answers a `PING` (see [rate limits](configuration.md#rate-limits)). The store connects on first use, so an unreachable one starts the service not ready instead of stopping it. | `valkey_unavailable` |
 
 A pod is therefore not ready until its first successful outbox step.
+
+## Rate-limit store down
+
+Alerts: `AuthServiceRateLimitStoreErrors` (the counter below moves for five minutes) and `AuthServiceRateLimitStoreNotReady` (the `valkey` check fails for five minutes), both in `alerts/rules.yml`. The counter moves only when a limited request arrives; the check fails whether or not traffic does.
+
+While the shared rate-limit store fails, every request that reaches the limiter on a limited auth route (login, verify, resend-verification, forgot-password, reset-password, change-password, social link and unlink) answers a **closed 500**: a request is never let through uncounted. A malformed request, and on the social routes an unauthenticated one, is refused before the limiter and answers its usual 4xx. This is by design. Session, refresh, logout, the JWKS and the discovery document do not use the store and keep serving; `/readyz` answers 503 naming `valkey`.
+
+1. Confirm: `/readyz` names `valkey`, and `dev_health_runtime_check_failed{check="valkey"}` is 1 on the affected replicas. The service log has `readiness check failed` with the reason `valkey_unavailable`.
+2. Find the cause on the store side first: the store itself, its network path (the chart's NetworkPolicy egress to the store, `authService.networkPolicy.egress.valkey`), the `AUTH_VALKEY_URI` Secret, and the ACL login (key prefix `auth_svc_`, and `+client|tracking` among its commands; see the [configuration reference](configuration.md#rate-limits)).
+3. Restore the store or its path. Do not raise a limit, remove a limited route or turn the limits off to clear the alert: the 500 is the protection working.
+4. Done when the check series is 0 on every replica, `/readyz` is 200, and `dev_health_api_rate_limit_store_errors_total` has stopped rising.
 
 ## Metrics
 
@@ -51,8 +63,9 @@ A pod is therefore not ready until its first successful outbox step.
 | --- | --- | --- |
 | `dev_health_runtime_live`, `dev_health_runtime_ready` | gauge | 1 or 0. |
 | `dev_health_runtime_check_failed{check}` | gauge | 1 while a required check is failing, so an alert can name the dependency instead of reading one collapsed bit. |
-| `dev_health_runtime_required_checks` | gauge | Number of required checks (3). |
+| `dev_health_runtime_required_checks` | gauge | Number of required checks (3, and 4 while a rate-limited route is mounted). |
 | `dev_health_runtime_uptime_seconds` | gauge | Process uptime. |
+| `dev_health_api_rate_limit_store_errors_total{limit}` | counter | Rate-limit store errors per limiter id (`auth_svc_...`); each answered a closed 500. Present at zero once the limited routes are built; carries limit ids only. |
 | `dev_health_api_http_requests_total{listener,method,route,status_class}` | counter | Requests on the API listener. Unmatched paths share the label `unmatched`; a raw path is never a label. |
 | `dev_health_api_http_request_duration_seconds` | histogram | Request latency on the API listener. |
 | `devhealth_auth_outbox_publisher_enabled` | gauge | 0 in Wave 1 (no sink). |

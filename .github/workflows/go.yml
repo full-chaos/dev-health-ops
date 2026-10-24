@@ -666,6 +666,9 @@ jobs:
     if: (!(github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full')))
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
     outputs:
       matrix: ${{ steps.plan.outputs.matrix }}
       legs: ${{ steps.plan.outputs.legs }}
@@ -721,6 +724,20 @@ jobs:
           fi
           cat "${out}"
           echo "INTEGRATION_AFFECTED_FILE=${out}" >> "${GITHUB_ENV}"
+
+      - name: Skip the integration shards on a main push that the merge queue already tested
+        if: github.event_name == 'push' && vars.MERGE_QUEUE == 'enabled'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if bash ci/queue_tested_sha.sh "${GITHUB_REPOSITORY}" "${GITHUB_SHA}"; then
+            out="${RUNNER_TEMP}/affected.txt"
+            printf 'NONE\n' > "${out}"
+            echo "INTEGRATION_AFFECTED_FILE=${out}" >> "${GITHUB_ENV}"
+            echo "::notice title=INTEGRATION SHARDS SKIPPED ON THE MAIN PUSH::the merge queue ran go.yml green on this sha"
+          else
+            echo "::notice title=INTEGRATION SHARDS RUN ON THE MAIN PUSH::no green merge_group run of go.yml for this sha (a push that did not come through the queue)"
+          fi
 
       - name: Validate and emit deterministic integration shards
         id: plan

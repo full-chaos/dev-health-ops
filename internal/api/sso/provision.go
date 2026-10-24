@@ -104,9 +104,12 @@ FROM users WHERE id = $1::uuid`, userID).Scan(&id, &existingEmail, &username, &e
 	if name != "" && stringOrEmpty(existingFullName) == "" {
 		newFullName = &name
 	}
-	if _, err := h.Pool.Exec(ctx, `UPDATE users SET full_name = $2, last_login_at = $3, updated_at = $3 WHERE id = $1::uuid`,
-		id, newFullName, now); err != nil {
-		return nil, nil, err
+	// While auth-service owns users the sign-in goes on and writes no public.users row.
+	if h.refuseWhileUsersOwned() == nil {
+		if _, err := h.Pool.Exec(ctx, `UPDATE users SET full_name = $2, last_login_at = $3, updated_at = $3 WHERE id = $1::uuid`,
+			id, newFullName, now); err != nil {
+			return nil, nil, err
+		}
 	}
 
 	return &provisionedUser{id: id, email: existingEmail, username: username, fullName: newFullName,
@@ -237,6 +240,9 @@ func isUniqueViolation(err error) bool {
 // createAccountAndMembership writes the account, its identity and its
 // membership in the provider's organization in one transaction.
 func (h handlers) createAccountAndMembership(ctx context.Context, row *providerRow, account ssoNewAccount) (*provisionedUser, *provisionedMembership, error) {
+	if err := h.refuseWhileUsersOwned(); err != nil {
+		return nil, nil, err
+	}
 	orgID, err := pythonparity.ParseUUID(row.OrgID)
 	if err != nil {
 		return nil, nil, err

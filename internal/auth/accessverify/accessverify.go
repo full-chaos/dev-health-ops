@@ -120,35 +120,25 @@ func New(cfg Config) (*Validator, error) {
 		v.now = time.Now
 	}
 	ctx := context.Background()
-	refused.Add(ctx, 0, refusedAttrs(unknownLabel, unknownLabel, ReasonNoProfile))
+	refused.Add(ctx, 0, metric.WithAttributes(attribute.String("service", unknownLabel), attribute.String("profile", unknownLabel), attribute.String("reason", ReasonNoProfile)))
 	for _, row := range cfg.Rows {
 		if row.Service == "" || row.Profile == "" {
 			return nil, errors.New("accessverify: row needs a service and a profile")
 		}
 		v.rows[key{row.Service, row.Profile}] = row
 		if row.AcceptsUser {
-			accepted.Add(ctx, 0, acceptedAttrs(row.Service, row.Profile, ClassUser))
+			accepted.Add(ctx, 0, metric.WithAttributes(attribute.String("service", row.Service), attribute.String("profile", row.Profile), attribute.String("class", ClassUser)))
 		}
 		if row.LegacyHS256 {
-			accepted.Add(ctx, 0, acceptedAttrs(row.Service, row.Profile, ClassLegacy))
+			accepted.Add(ctx, 0, metric.WithAttributes(attribute.String("service", row.Service), attribute.String("profile", row.Profile), attribute.String("class", ClassLegacy)))
 		}
 		for _, reason := range Reasons {
-			refused.Add(ctx, 0, refusedAttrs(row.Service, row.Profile, reason))
+			refused.Add(ctx, 0, metric.WithAttributes(attribute.String("service", row.Service), attribute.String("profile", row.Profile), attribute.String("reason", reason)))
 		}
 	}
 	return v, nil
 }
 
-func acceptedAttrs(service, profile, class string) metric.MeasurementOption {
-	return metric.WithAttributes(attribute.String("service", service), attribute.String("profile", profile), attribute.String("class", class))
-}
-
-func refusedAttrs(service, profile, reason string) metric.MeasurementOption {
-	return metric.WithAttributes(attribute.String("service", service), attribute.String("profile", profile), attribute.String("reason", reason))
-}
-
-// Validate checks bearer against the row named by (service, profile). Every
-// refusal wraps ErrRefused and is counted once.
 func (v *Validator) Validate(ctx context.Context, service, profile, bearer string) (*Result, error) {
 	row, ok := v.rows[key{service, profile}]
 	if !ok {
@@ -171,7 +161,7 @@ func (v *Validator) Validate(ctx context.Context, service, profile, bearer strin
 		if err != nil {
 			return nil, v.refuse(ctx, row.Service, row.Profile, eddsaReason(err))
 		}
-		v.accepted.Add(ctx, 1, acceptedAttrs(row.Service, row.Profile, ClassUser))
+		v.accepted.Add(ctx, 1, metric.WithAttributes(attribute.String("service", row.Service), attribute.String("profile", row.Profile), attribute.String("class", ClassUser)))
 		return &Result{Class: ClassUser, Claims: claims}, nil
 	case "HS256":
 		if !row.LegacyHS256 {
@@ -182,7 +172,7 @@ func (v *Validator) Validate(ctx context.Context, service, profile, bearer strin
 		}
 		principal, err := v.legacy(ctx, bearer)
 		if errors.Is(err, ErrUnavailable) {
-			v.refused.Add(ctx, 1, refusedAttrs(row.Service, row.Profile, ReasonUnavailable))
+			v.refused.Add(ctx, 1, metric.WithAttributes(attribute.String("service", row.Service), attribute.String("profile", row.Profile), attribute.String("reason", ReasonUnavailable)))
 			v.logger.WarnContext(ctx, "access token validator unavailable",
 				slog.String("service", row.Service), slog.String("profile", row.Profile))
 			return nil, ErrUnavailable
@@ -190,7 +180,7 @@ func (v *Validator) Validate(ctx context.Context, service, profile, bearer strin
 		if err != nil {
 			return nil, v.refuse(ctx, row.Service, row.Profile, ReasonLegacy)
 		}
-		v.accepted.Add(ctx, 1, acceptedAttrs(row.Service, row.Profile, ClassLegacy))
+		v.accepted.Add(ctx, 1, metric.WithAttributes(attribute.String("service", row.Service), attribute.String("profile", row.Profile), attribute.String("class", ClassLegacy)))
 		return &Result{Class: ClassLegacy, Legacy: principal}, nil
 	default:
 		return nil, v.refuse(ctx, row.Service, row.Profile, ReasonAlgNotAllowed)
@@ -198,7 +188,7 @@ func (v *Validator) Validate(ctx context.Context, service, profile, bearer strin
 }
 
 func (v *Validator) refuse(ctx context.Context, service, profile, reason string) error {
-	v.refused.Add(ctx, 1, refusedAttrs(service, profile, reason))
+	v.refused.Add(ctx, 1, metric.WithAttributes(attribute.String("service", service), attribute.String("profile", profile), attribute.String("reason", reason)))
 	v.logger.DebugContext(ctx, "access token refused",
 		slog.String("service", service), slog.String("profile", profile), slog.String("reason", reason))
 	return ErrRefused

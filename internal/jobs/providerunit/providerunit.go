@@ -164,6 +164,10 @@ const (
 	// payload size). The same persisted state gives the same conflict on every
 	// attempt, and the scope's next run is a new unit with a new checkpoint.
 	CheckpointConflictCategory = "checkpoint_conflict"
+	// UnitWindowInvalidCategory covers a work-items unit whose window is
+	// malformed (since after before, a zero time, or over the day bound). The
+	// window is part of the unit, so every attempt refuses it the same way.
+	UnitWindowInvalidCategory = "unit_window_invalid"
 )
 
 // timeLimitReserve is how long before the job deadline the unit's
@@ -323,6 +327,9 @@ func deterministicTerminalCategory(err error) (string, bool) {
 	}
 	if errors.Is(err, providersync.ErrPreviousReleaseSnapshot) {
 		return PreviousReleaseSnapshotCategory, true
+	}
+	if errors.Is(err, providersync.ErrInvalidUnitWindow) {
+		return UnitWindowInvalidCategory, true
 	}
 	return "", false
 }

@@ -98,7 +98,7 @@ jq -r "$filter" "$file"
 // Runs the real ci/queue_tested_sha.sh against a stub gh that applies the real jq filters to canned replies.
 func TestQueueTestedShaAnswersOnlyForAGreenMergeGroupRunWithGreenShards(t *testing.T) {
 	if _, err := exec.LookPath("jq"); err != nil {
-		t.Skip("jq is not installed")
+		t.Fatalf("jq is required by this test and is not on PATH: %v", err)
 	}
 	root := rootOf(t)
 	script := filepath.Join(root, "ci", "queue_tested_sha.sh")

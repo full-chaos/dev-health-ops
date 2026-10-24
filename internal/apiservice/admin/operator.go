@@ -19,6 +19,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/auth/passwordhash"
+	"github.com/full-chaos/dev-health-ops/internal/auth/passwordpolicy"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
@@ -30,6 +31,8 @@ import (
 // one Python session as one transaction, so a refused step leaves nothing behind.
 type Operator struct {
 	Pool *pgxpool.Pool
+	// db replaces Pool in a unit test that runs without a database.
+	db pgDB
 	// Now is injectable for tests; nil means time.Now.
 	Now func() time.Time
 	// Logger receives the user-delete telemetry (Info outcome, Debug per reference); nil discards it.
@@ -53,8 +56,16 @@ func refuse(format string, args ...any) error {
 	return &OperatorError{Message: fmt.Sprintf(format, args...)}
 }
 
-// PasswordMinLength is PASSWORD_MIN_LENGTH.
-const PasswordMinLength = 8
+// operatorPasswordRefusal applies the shared password policy to a password the
+// operator verbs set. Python's verb only required eight characters; this is
+// stricter on purpose (CHAOS-10943), and the refusal never carries the password.
+func operatorPasswordRefusal(password string) error {
+	violations := passwordpolicy.ValidateForHash(password)
+	if len(violations) == 0 {
+		return nil
+	}
+	return refuse("Password validation failed: %s", strings.Join(violations, "; "))
+}
 
 // bcryptTooLong is the text Python's bcrypt raises for a password over 72 bytes.
 const bcryptTooLong = "password cannot be longer than 72 bytes, truncate manually if necessary (e.g. my_password[:72])"
@@ -90,7 +101,11 @@ func (o Operator) store(db pgDB) pgStore { return pgStore{Pool: db, Now: o.Now} 
 // inTransaction runs fn over one transaction: committed when it returns nil,
 // rolled back otherwise.
 func (o Operator) inTransaction(ctx context.Context, fn func(store pgStore) error) error {
-	tx, err := o.Pool.Begin(ctx)
+	var begin pgDB = o.Pool
+	if o.db != nil {
+		begin = o.db
+	}
+	tx, err := begin.Begin(ctx)
 	if err != nil {
 		return err
 	}
@@ -121,7 +136,7 @@ type CreateUserInput struct {
 }
 
 // CreateUser is UserService.create with is_verified=True: the email and the
-// username must be free, then the password is at least eight characters.
+// username must be free, then the password passes the shared policy.
 func (o Operator) CreateUser(ctx context.Context, in CreateUserInput) (*User, error) {
 	var created *fullUser
 	err := o.inTransaction(ctx, func(store pgStore) error {
@@ -137,8 +152,8 @@ func (o Operator) CreateUser(ctx context.Context, in CreateUserInput) (*User, er
 				return refuse("User with username %s already exists", *in.Username)
 			}
 		}
-		if utf8.RuneCountInString(in.Password) < PasswordMinLength {
-			return refuse("Password must be at least %d characters", PasswordMinLength)
+		if err := operatorPasswordRefusal(in.Password); err != nil {
+			return err
 		}
 		hash, err := hashPassword(in.Password)
 		if err != nil {
@@ -412,8 +427,8 @@ func (o Operator) UpdateUser(ctx context.Context, in UpdateUserInput) (*UpdateUs
 			}
 		}
 		if in.Password != nil {
-			if utf8.RuneCountInString(*in.Password) < PasswordMinLength {
-				return refuse("Password must be at least %d characters", PasswordMinLength)
+			if err := operatorPasswordRefusal(*in.Password); err != nil {
+				return err
 			}
 			hash, err := hashPassword(*in.Password)
 			if err != nil {

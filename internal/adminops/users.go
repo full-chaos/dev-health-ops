@@ -225,7 +225,7 @@ func runUsersCreate(ctx context.Context, env cli.Env) int {
 	flags := newAccountFlags(env, "dho admin users create")
 	var email, password, username, fullName optString
 	flags.Var(&email, "email", "user email address (required)")
-	flags.Var(&password, "password", "user password, at least 8 characters (one of --password, --password-stdin is required; --password shows in the process list)")
+	flags.Var(&password, "password", "user password, at least 12 characters, with a letter and a digit, not a common password, at most 72 bytes (one of --password, --password-stdin is required; --password shows in the process list)")
 	flags.Var(&username, "username", "optional username")
 	flags.Var(&fullName, "full-name", "the user's full name")
 	superuser := flags.Bool("superuser", false, "grant superuser privileges")
@@ -369,7 +369,7 @@ func runUsersUpdate(ctx context.Context, env cli.Env) int {
 	flags.Var(&newEmail, "new-email", "set a new email address")
 	flags.Var(&newUsername, "new-username", "set a new username (an empty value clears it)")
 	flags.Var(&fullName, "full-name", "set the user's full name")
-	flags.Var(&password, "password", "set a new password, at least 8 characters; revokes existing sessions")
+	flags.Var(&password, "password", "set a new password, at least 12 characters, with a letter and a digit, not a common password, at most 72 bytes; revokes existing sessions")
 	verified := optionalBool(flags, "verified", "set verified status (--verified / --no-verified)")
 	superuser := optionalBool(flags, "superuser", "set superuser status (--superuser / --no-superuser)")
 	active := optionalBool(flags, "active", "set active status (--active / --no-active)")

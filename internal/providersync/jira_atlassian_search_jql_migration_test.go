@@ -34,14 +34,14 @@ func (doer jiraSearchJQLMigrationDoer) Do(request *http.Request) (*http.Response
 			Body:       io.NopCloser(strings.NewReader(body)), Request: request,
 		}, nil
 	case request.URL.Path == "/rest/api/3/search/jql":
-		body := `{"issues":[{"id":"30001","key":"SUP-1","self":"https://acme.atlassian.net/rest/api/3/issue/SUP-1","fields":{"project":{"key":"SUP","id":"20001","name":"Support"},"summary":"Customer cannot log in","status":{"name":"Done","statusCategory":{"key":"done"}},"issuetype":{"name":"Bug"},"labels":[],"created":"2026-08-01T08:00:00Z","updated":"2026-08-02T09:00:00Z"}}],"isLast":true}`
+		body := `{"issues":[{"key":"SUP-1","self":"https://acme.atlassian.net/rest/api/3/issue/SUP-1","fields":{"project":{"key":"SUP","id":"20001","name":"Support"},"summary":"Customer cannot log in","status":{"name":"Done","statusCategory":{"key":"done"}},"issuetype":{"name":"Bug"},"labels":[],"created":"2026-08-01T08:00:00Z","updated":"2026-08-02T09:00:00Z"}}],"isLast":true}`
 		return &http.Response{
 			StatusCode: http.StatusOK,
 			Header:     http.Header{"Content-Type": []string{"application/json"}},
 			Body:       io.NopCloser(strings.NewReader(body)), Request: request,
 		}, nil
-	case request.URL.Path == "/rest/api/3/changelog/bulkfetch":
-		body := `{"issueChangeLogs":[],"nextPageToken":null}`
+	case strings.HasSuffix(request.URL.Path, "/changelog"):
+		body := `{"values":[],"total":0,"isLast":true}`
 		return &http.Response{
 			StatusCode: http.StatusOK,
 			Header:     http.Header{"Content-Type": []string{"application/json"}},

@@ -109,7 +109,7 @@ A GitHub PR closing Linear `CHAOS-2400` borrows that issue's `CHAOS` team.
 > `manual_fallback` (now 7) — this widens the `Enum8` (migration 078; CS1's
 > own migrate-before-emit rule) and adds a 9th precedence stage. See
 > `metrics/compute_work_items.py:405-642` and
-> `internal/providersync/github_work_items_derivation_context.go:605-754`.
+> `internal/teamattribution` (the Go owner; the sync-time loader was removed with the deriver).
 
 > **CHAOS-4321 (chris's ruling, 2026-08-26, final form 08:30 PT).** Plain
 > wording (chris-approved, quoted verbatim wherever this rule is described —

@@ -22,46 +22,23 @@ type pendingUnitCounts struct {
 
 func computePendingUnitCounts(ctx context.Context, tx pgx.Tx, syncRunID string, now time.Time) (pendingUnitCounts, error) {
 	staleCutoff := staleDispatchCutoff(now)
-	rows, err := tx.Query(ctx, `
-SELECT status, updated_at, available_at
+	// One aggregate row whatever the unit count: the classification below is the per-row switch this function used to
+	// run in Go. A RETRYING unit with no available_at is in neither class.
+	var counts pendingUnitCounts
+	err := tx.QueryRow(ctx, `
+SELECT
+  count(*) FILTER (WHERE status = $2
+       OR (status = $3 AND updated_at <= $6)
+       OR (status = $5 AND available_at IS NOT NULL AND available_at <= $7)),
+  count(*) FILTER (WHERE status = $4
+       OR (status = $3 AND updated_at > $6)),
+  min(available_at) FILTER (WHERE status = $5 AND available_at IS NOT NULL AND available_at > $7)
 FROM public.sync_run_units
 WHERE sync_run_id = $1::uuid AND status IN ($2, $3, $4, $5)`,
-		syncRunID, syncRunUnitStatusPlanned, syncRunUnitStatusDispatching, syncRunUnitStatusRunning, syncRunUnitStatusRetrying)
+		syncRunID, syncRunUnitStatusPlanned, syncRunUnitStatusDispatching, syncRunUnitStatusRunning,
+		syncRunUnitStatusRetrying, staleCutoff, now,
+	).Scan(&counts.dispatchable, &counts.inFlight, &counts.nextDeferredAt)
 	if err != nil {
-		return pendingUnitCounts{}, fmt.Errorf("load pending unit counts: %w", err)
-	}
-	defer rows.Close()
-
-	var counts pendingUnitCounts
-	for rows.Next() {
-		var status string
-		var updatedAt time.Time
-		var availableAt *time.Time
-		if err := rows.Scan(&status, &updatedAt, &availableAt); err != nil {
-			return pendingUnitCounts{}, fmt.Errorf("scan pending unit count row: %w", err)
-		}
-		switch status {
-		case syncRunUnitStatusPlanned:
-			counts.dispatchable++
-		case syncRunUnitStatusDispatching:
-			if !updatedAt.After(staleCutoff) {
-				counts.dispatchable++
-			} else {
-				counts.inFlight++
-			}
-		case syncRunUnitStatusRunning:
-			counts.inFlight++
-		default: // RETRYING
-			if availableAt != nil {
-				if !availableAt.After(now) {
-					counts.dispatchable++
-				} else {
-					counts.nextDeferredAt = earlierOf(counts.nextDeferredAt, *availableAt)
-				}
-			}
-		}
-	}
-	if err := rows.Err(); err != nil {
 		return pendingUnitCounts{}, fmt.Errorf("load pending unit counts: %w", err)
 	}
 	return counts, nil

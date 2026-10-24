@@ -63,7 +63,7 @@ var unruledReads = map[string]string{
 		"a retraction row must stay the newest row of its key, and it holds NULL",
 	"internal/jobs/metrics/remaining/recommendations_loader.go:loadCompoundingRiskPersisted": "the newest row of ONE team over the window, whole: a retraction row is that row, " +
 		"and it reads as the read answers for no row at all (no score, severity unknown)",
-	"internal/jobs/metrics/remaining/capacity_native_clickhouse.go:capacityNewestRows": "the newest-version subquery of the capacity reads; the throughput and scope reads apply the rule after it, and the backlog sums the WIP on the newest day of the scope: a retraction row adds 0 and must stay in the newest-day pick",
+	"internal/jobs/metrics/remaining/capacity_native_clickhouse.go:loadBacklog": "sum of the WIP on the newest day of the scope: a retraction row adds 0 and must stay in the newest-day pick",
 }
 
 // heldBy names, for an unruledReads entry whose reason is "the rule reaches

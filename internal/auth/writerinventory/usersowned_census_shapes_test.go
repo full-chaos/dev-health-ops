@@ -217,6 +217,8 @@ func TestUsersOwnedCensusReadsQuotedAndQualifiedUsersSQL(t *testing.T) {
 		"only":      `UPDATE ONLY users SET a = 1`,
 		"merge":     `MERGE INTO users USING t ON true WHEN MATCHED THEN DO NOTHING`,
 		"truncate":  `TRUNCATE TABLE users`,
+		"newline":   `UPDATE users\nSET a = 1`,
+		"tab":       `UPDATE\tusers SET a = 1`,
 	} {
 		src := `func (x s) f() error { if x.refuseWhileUsersOwned() == nil { _, _ = x.p.Exec("UPDATE users SET b = 2") }; _, err := x.p.Exec("` + sql + `"); return err }`
 		if got := censusFixture(t, src, "f", true); !strings.Contains(got, "can run while the switch is on") {
@@ -253,4 +255,9 @@ func TestUsersOwnedBehaviourLinkNeedsARealTest(t *testing.T) {
 			t.Errorf("%s: verdict %q, want problem=%v", ref, got, wantProblem)
 		}
 	}
+}
+
+func TestUsersOwnedCensusReadsARawStringSQLWithNewlines(t *testing.T) {
+	src := "func (x s) f() error { if x.refuseWhileUsersOwned() == nil { _, _ = x.p.Exec(\"UPDATE users SET b = 2\") }; _, err := x.p.Exec(`UPDATE users\nSET a = 1`); return err }"
+	requireSkipProblem(t, src, "f", "can run while the switch is on")
 }

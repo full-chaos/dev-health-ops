@@ -3,6 +3,7 @@ package workflowpaths_test
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -30,8 +31,6 @@ func repoRoot(t *testing.T) string {
 }
 
 const docsSiteConfig = "mkdocs.yml"
-
-var docsOnlyPatterns = []string{"docs/**", "docs-data/**", "**/*.md", ".github/docs-legacy/**", docsSiteConfig}
 
 func loadWorkflowMap(t *testing.T, name string) map[string]any {
 	t.Helper()
@@ -89,18 +88,107 @@ func requireNoPathFilter(t *testing.T, wf map[string]any, event string) {
 	}
 }
 
-func TestWorkflowPathFiltersCodeQLPullRequestIgnoresDocsOnly(t *testing.T) {
+func codeqlJob(t *testing.T, name string) map[string]any {
+	t.Helper()
+	jobs, _ := loadWorkflowMap(t, "codeql-analysis.yml")["jobs"].(map[string]any)
+	job, _ := jobs[name].(map[string]any)
+	if job == nil {
+		t.Fatalf("codeql-analysis.yml has no job %q", name)
+	}
+	return job
+}
+
+func TestWorkflowPathFiltersCodeQLPullRequestRunsEveryChange(t *testing.T) {
 	wf := loadWorkflowMap(t, "codeql-analysis.yml")
 	pr := triggerMap(t, wf, "pull_request")
 	if pr == nil {
 		t.Fatal("codeql-analysis.yml no longer runs on pull_request")
 	}
-	if _, bad := pr["paths"]; bad {
-		t.Error("pull_request must use paths-ignore, not paths: an allowlist silently skips new code directories")
+	for _, key := range []string{"paths", "paths-ignore"} {
+		if _, bad := pr[key]; bad {
+			t.Errorf("pull_request must not carry %s: a skipped workflow uploads no CodeQL result and the code_scanning rule then blocks a docs-only pull request", key)
+		}
 	}
-	got := stringList(t, pr["paths-ignore"])
-	if !reflect.DeepEqual(got, docsOnlyPatterns) {
-		t.Errorf("pull_request.paths-ignore = %v, want %v", got, docsOnlyPatterns)
+}
+
+func TestWorkflowPathFiltersCodeQLDocsOnlyTwinAndGate(t *testing.T) {
+	analyze := codeqlJob(t, "analyze")
+	cond, _ := analyze["if"].(string)
+	for _, want := range []string{"always()", "needs.changes.outputs.docs_only != 'true'"} {
+		if !strings.Contains(cond, want) {
+			t.Errorf("analyze.if lacks %q (fail closed: the real analysis runs unless docs_only is exactly true, even when `changes` failed): %s", want, cond)
+		}
+	}
+	if strings.Contains(cond, "docs_only == 'false'") {
+		t.Errorf("analyze.if must not require docs_only == 'false': an empty output must still analyze: %s", cond)
+	}
+	twin := codeqlJob(t, "analyze-docs-only")
+	twinCond, _ := twin["if"].(string)
+	for _, want := range []string{"needs.changes.result == 'success'", "needs.changes.outputs.docs_only == 'true'"} {
+		if !strings.Contains(twinCond, want) {
+			t.Errorf("analyze-docs-only.if lacks %q: %s", want, twinCond)
+		}
+	}
+	raw, err := os.ReadFile(filepath.Join(repoRoot(t), ".github", "workflows", "codeql-analysis.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(raw)
+	if !strings.Contains(text, `"name":"CodeQL"`) {
+		t.Error("the empty result must carry the CodeQL tool name the real Go leg uploads")
+	}
+	if strings.Count(text, `category: "/language:go"`) != 1 || !strings.Contains(text, `category: "/language:${{matrix.language}}"`) {
+		t.Error("the empty result must upload under the category /language:go, the real leg's category for the go matrix entry")
+	}
+	for _, step := range twin["steps"].([]any) {
+		name, _ := step.(map[string]any)["name"].(string)
+		if !strings.Contains(name, "no code changed") {
+			t.Errorf("analyze-docs-only step %q must say in its name that no code changed", name)
+		}
+	}
+	changes := codeqlJob(t, "changes")
+	for _, step := range changes["steps"].([]any) {
+		m := step.(map[string]any)
+		if with, ok := m["with"].(map[string]any); ok && strings.Contains(fmt.Sprint(with["ref"]), "base.sha") {
+			return
+		}
+	}
+	t.Error("changes must check the classifier script out from the pull request base commit, so a pull request cannot change the script that judges it")
+}
+
+func runDocsOnlyClassifier(t *testing.T, paths string) string {
+	t.Helper()
+	cmd := exec.Command("bash", filepath.Join(repoRoot(t), "ci", "codeql_docs_only.sh"))
+	cmd.Stdin = strings.NewReader(paths)
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("classifier failed: %v", err)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func TestCodeQLDocsOnlyClassifier(t *testing.T) {
+	cases := []struct {
+		name  string
+		paths string
+		want  string
+	}{
+		{"markdown at the root (the 10950 shape)", "ci/bigboy/README.md\n", "true"},
+		{"every docs pattern", "docs/a/b.png\ndocs-data/x.json\nREADME.md\n.github/docs-legacy/x.yml\nmkdocs.yml\n", "true"},
+		{"mixed docs and code runs the real scan", "docs/a.md\ninternal/x.go\n", "false"},
+		{"a workflow file is code", "docs/a.md\n.github/workflows/codeql-analysis.yml\n", "false"},
+		{"the classifier script is code", "ci/codeql_docs_only.sh\n", "false"},
+		{"nested mkdocs.yml is not the root file", "sub/mkdocs.yml\n", "false"},
+		{"a docs lookalike directory", "docsx/a.txt\n", "false"},
+		{"a rename from code into docs, source listed", "internal/x.go\ndocs/x.md\n", "false"},
+		{"empty list", "", "false"},
+		{"a blank line", "docs/a.md\n\n", "false"},
+		{"no trailing newline", "docs/a.md", "true"},
+	}
+	for _, c := range cases {
+		if got := runDocsOnlyClassifier(t, c.paths); got != c.want {
+			t.Errorf("%s: classifier = %q, want %q", c.name, got, c.want)
+		}
 	}
 }
 

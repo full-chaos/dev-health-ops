@@ -6,12 +6,6 @@ on:
   pull_request:
     branches: ["**"]
     types: [opened, synchronize, reopened, ready_for_review]
-    paths-ignore:
-      - "docs/**"
-      - "docs-data/**"
-      - "**/*.md"
-      - ".github/docs-legacy/**"
-      - "mkdocs.yml"
   merge_group:
   schedule:
     - cron: "30 1 * * 0"
@@ -37,9 +31,66 @@ permissions:
   contents: read
 
 jobs:
+  # The code_scanning ruleset needs a CodeQL result on every pull request, and a workflow skipped by a path filter
+  # uploads none. So the workflow always starts. `changes` decides docs-only FAIL CLOSED: true only when the files API
+  # answered and every changed path (and every rename source) is a docs path; any error, any other path, and every
+  # event except pull_request give anything but "true", and the real analysis runs.
+  changes:
+    name: changes
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      docs_only: ${{ steps.classify.outputs.docs_only }}
+    steps:
+      # The classifier comes from the base commit, so a pull request cannot change the script that judges it.
+      - name: Checkout the classifier from the base commit
+        if: github.event_name == 'pull_request'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          sparse-checkout: ci/codeql_docs_only.sh
+          sparse-checkout-cone-mode: false
+      - name: Classify changed paths
+        id: classify
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          docs_only=false
+          if files=$(gh api --paginate "repos/${REPO}/pulls/${PR_NUMBER}/files" --jq '.[] | .filename, (.previous_filename // empty)'); then
+            docs_only=$(printf '%s\n' "$files" | bash ci/codeql_docs_only.sh) || docs_only=false
+          fi
+          [ "$docs_only" = "true" ] || docs_only=false
+          echo "docs_only=${docs_only}" >> "$GITHUB_OUTPUT"
+
+  # Docs-only pull request: no analysis, but the same tool and category as the Go leg below get an empty result.
+  analyze-docs-only:
+    name: Analyze (docs only, no code changed)
+    needs: changes
+    if: (!(github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) && (needs.changes.result == 'success' && needs.changes.outputs.docs_only == 'true')
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    steps:
+      - name: Write an empty CodeQL result (no code changed)
+        run: |
+          printf '%s' '{"version":"2.1.0","$schema":"https://json.schemastore.org/sarif-2.1.0.json","runs":[{"tool":{"driver":{"name":"CodeQL","semanticVersion":"0.0.0","rules":[]}},"results":[]}]}' > empty.sarif
+      - name: Upload the empty CodeQL result (no code changed)
+        uses: github/codeql-action/upload-sarif@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
+        with:
+          sarif_file: empty.sarif
+          category: "/language:go"
+
   analyze:
     name: Analyze
-    if: (!(github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full')))
+    needs: changes
+    if: (!(github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) && (always() && needs.changes.outputs.docs_only != 'true')
     runs-on: ubuntu-latest
     # CodeQL needs SARIF upload and audit access for security results.
     permissions:

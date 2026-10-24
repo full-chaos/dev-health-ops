@@ -308,6 +308,9 @@ type Materializer struct {
 	// served is the optional served decision backend (serveddecision.go). Nil is
 	// the default and means the generative provider serves the run.
 	served *ServedDecision
+	// systemOne is the SystemOne backend of the run; every call goes through
+	// backend(), which falls back to served when this is unset.
+	systemOne SystemOne
 	// llmTelemetry receives the investment LLM signals of the generative path
 	// (CHAOS-8722). Nil records nothing.
 	llmTelemetry categorize.LLMTelemetry
@@ -636,7 +639,7 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 		}
 	}
 	stats.SkippedExisting = len(skippedExisting)
-	m.served.noteSkippedTerminal(skippedTerminal)
+	m.noteSkippedTerminal(skippedTerminal)
 
 	// CATEGORIZE.
 	var categorizeErr error
@@ -708,7 +711,7 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 		}
 
 		outcome, ok := outcomes[entry.index]
-		if m.served.keepsLastRow(entry.index) {
+		if m.keepsLastRow(entry.index) {
 			// The served decision request of this unit failed (CHAOS-8874): no
 			// investment row is written, so the unit's last row stays its latest
 			// row and the next run asks again. Its repo-effort rows are written,
@@ -757,7 +760,7 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 		}
 		// A served decision row with a mix and no validated quote (CHAOS-8874)
 		// gets the same cap, whatever its status.
-		if m.served.isLowQuality(entry.index) {
+		if m.isLowQuality(entry.index) {
 			if record.EvidenceQuality > servedLowQualityCap {
 				record.EvidenceQuality = servedLowQualityCap
 			}

@@ -50,6 +50,18 @@ var payloadNamedDivergences = map[string]struct{ goText, pythonText string }{
 // refuses them as well (it is below the range the driver encodes, see TestConsumerStoresTimestampsOnly...).
 var refusedBelowClickHouseMin = map[string]struct{}{"ts_year1": {}}
 
+// refusedByTheStricterIntake are corpus shapes the intake no longer accepts, so the entry the consumer
+// reads is built by hand (an older entry of the stream, or any writer other than this intake). The
+// intake answer is pinned; the consumer still stores them as Python stored them. The intake is
+// stricter than Python here, which D6129 allows.
+var refusedByTheStricterIntake = map[string]struct {
+	status int
+	reason string
+}{
+	"org_hash_and_route": {http.StatusUnprocessableEntity, "the org hash is bounded to the shape the web client sends; the value h1 is refused"},
+	"payload_unicode":    {http.StatusAccepted, "a payload string outside the value charset drops its event (202, nothing written)"},
+}
+
 type parityStreams struct{ fields map[string]string }
 
 func (p *parityStreams) Append(_ context.Context, _ string, fields [][2]string) error {
@@ -94,7 +106,20 @@ func TestConsumerStoresEveryIntakeAcceptedShapeAsPythonStoredIt(t *testing.T) {
 				}
 				return
 			}
-			message := intakeEntryFor(t, want.Raw)
+			var message streamrunner.Message
+			if refusal, listed := refusedByTheStricterIntake[name]; listed {
+				body, err := json.Marshal(map[string]any{"events": []any{want.Raw}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				code, refused := intakeRawBody(t, string(body))
+				if code != refusal.status || refused.Fields != nil {
+					t.Fatalf("intake: status %d, entry %v; want status %d and no entry (%s)", code, refused.Fields, refusal.status, refusal.reason)
+				}
+				message = handBuiltEntry(t, want.Raw)
+			} else {
+				message = intakeEntryFor(t, want.Raw)
+			}
 			sink := &productSink{batch: &productBatch{}}
 			handler, err := NewProductTelemetryHandler(sink)
 			if err != nil {
@@ -167,6 +192,51 @@ func TestConsumerStillRefusesAMissingOrNullRequiredField(t *testing.T) {
 				t.Fatalf("%s %s: err = %v, want a permanent refusal", field, mode, err)
 			}
 		}
+	}
+}
+
+// handBuiltEntry is the stream entry of a writer other than this intake: the entry of a valid empty
+// event from the intake with its events text replaced by the corpus event.
+func handBuiltEntry(t *testing.T, raw map[string]any) streamrunner.Message {
+	t.Helper()
+	code, base := intakeRawBody(t, batchWithPayload(`{}`))
+	if code != http.StatusAccepted || base.Fields == nil {
+		t.Fatalf("intake did not accept the base event: status %d", code)
+	}
+	events, err := json.Marshal([]any{raw})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fields := map[string]string{}
+	for key, value := range base.Fields {
+		fields[key] = value
+	}
+	fields["events"] = string(events)
+	return streamrunner.Message{Stream: base.Stream, ID: base.ID, Fields: fields}
+}
+
+// An org hash of the shape the web client sends and a route pattern stay stored exactly as Python stored
+// them: the corpus case with the old value h1 can no longer pass the intake.
+func TestConsumerStoresAnIntakeAcceptedOrgHashAndRoute(t *testing.T) {
+	const hash = "fnv1a-0123abcd"
+	entry := intakeEntryFor(t, map[string]any{
+		"anonymousUserId": "a", "eventId": "e1", "name": "page_viewed", "orgIdHash": hash, "payload": map[string]any{},
+		"routePattern": "/a/[id]", "schemaVersion": "1", "sessionId": "s", "ts": "2026-09-23T02:00:00Z",
+	})
+	sink := &productSink{batch: &productBatch{}}
+	handler, err := NewProductTelemetryHandler(sink)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := handler.Handle(context.Background(), entry); err != nil || len(sink.batch.rows) != 1 {
+		t.Fatalf("handler error %v, rows %d, want one stored row", err, len(sink.batch.rows))
+	}
+	row := sink.batch.rows[0]
+	if row[0] != hash {
+		t.Fatalf("org_id_hash %v, want %s", row[0], hash)
+	}
+	if route, _ := row[6].(*string); route == nil || *route != "/a/[id]" {
+		t.Fatalf("route_pattern %v, want /a/[id]", row[6])
 	}
 }
 

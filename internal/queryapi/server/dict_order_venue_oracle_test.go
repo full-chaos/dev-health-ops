@@ -390,6 +390,12 @@ func TestVenueOracleQueryAPIDictOrder(t *testing.T) {
 			// effort_value. The key order of the answer is compared; the values of the two distributions are
 			// zeroed on both sides, and Go's own are asserted against the COUNT of the seeded units: the stored
 			// distribution of the seeded unit (quality 0.6, feature_delivery 0.4) plus the two quality-only units.
+			// CHAOS-10351: the seeded units are all categorized, so the Go-only count is served as 0; the strip below
+			// removes it, and this checks the key is served.
+			if !strings.Contains(goWritten, `"uncategorized_count":0`) {
+				t.Errorf("%s: the evidence_quality_stats carries no uncategorized_count: %s", tc.Name, goWritten)
+				continue
+			}
 			goOut, pythonOut, values, err := investmentForOrderComparison(goWritten, answerBody)
 			if err != nil {
 				t.Errorf("%s: %v", tc.Name, err)

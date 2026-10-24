@@ -60,7 +60,7 @@ func readStateDurations(ctx context.Context, t *testing.T, conn driver.Conn, org
 	rows, err := conn.Query(ctx, `
 SELECT `+strings.Join(selected, ", ")+`
 FROM work_item_state_durations_daily
-WHERE org_id = ? AND day = toDate(?)
+WHERE org_id = ? AND day = toDate(?) AND row_view IN ('', 'org')
 ORDER BY provider, work_scope_id, team_id, status`, org, day.Format("2006-01-02"))
 	if err != nil {
 		t.Fatal(err)

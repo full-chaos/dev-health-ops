@@ -201,10 +201,10 @@ func (h handlers) forgotPassword(w http.ResponseWriter, r *http.Request) {
 	policy.WriteModel(w, http.StatusOK, generic, nil)
 }
 
-// resetPassword is POST /api/v1/auth/reset-password. It has no rate limit
-// and no password-policy check beyond the model's 8 to 128 characters.
+// resetPassword is POST /api/v1/auth/reset-password. It has no rate limit;
+// the password goes through the shared password policy before redemption.
 func (h handlers) resetPassword(w http.ResponseWriter, r *http.Request) {
-	r, ok := validateResetPassword(w, r)
+	r, ok := validateResetPasswordPolicy(w, r)
 	if !ok {
 		return
 	}

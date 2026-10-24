@@ -112,3 +112,26 @@ func TestOperatorMetricsExposeTheManualTriggerAwaitFamilies(t *testing.T) {
 		}
 	}
 }
+
+// TestOperatorMetricsExposeTheSignUpMailFamily pins the registration of the
+// sign-up mail counter: every series is on /metrics at 0.
+func TestOperatorMetricsExposeTheSignUpMailFamily(t *testing.T) {
+	registry := health.NewRegistry(time.Second)
+	var deps Deps
+	if err := RegisterOperatorMetrics(registry, &deps); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := registry.WriteMetrics(&out); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"# TYPE devhealth_api_session_mail_sends_total counter",
+		`devhealth_api_session_mail_sends_total{purpose="email_verification",outcome="dropped"} 0`,
+		`devhealth_api_session_mail_sends_total{purpose="account_exists",outcome="sent"} 0`,
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("scrape lacks %q:\n%s", want, out.String())
+		}
+	}
+}

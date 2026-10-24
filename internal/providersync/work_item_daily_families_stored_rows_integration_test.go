@@ -14,7 +14,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"sort"
 	"testing"
 	"time"
 
@@ -163,78 +162,6 @@ func dailyFamilyMatrixClaim(t *testing.T, testCase dailyFamilyMatrixCase) Claim 
 		t.Fatal(err)
 	}
 	return claim
-}
-
-// dailyFamilyMatrixTables are the derived tables both writers write and this
-// file compares, each with the columns that are NOT compared and why. Every
-// other column of every table is compared: the read is `SELECT *`.
-var dailyFamilyMatrixTables = []struct {
-	table    string
-	excluded map[string]string
-}{
-	{"issue_type_metrics_daily", map[string]string{"computed_at": "each writer stamps the time of its own run"}},
-	// investment_classifications_daily and investment_metrics_daily are no longer written by the daily family
-	// (CHAOS-9264): the daily family writes work_item_completion_daily, which the sync deriver does not write yet.
-	{"work_item_state_durations_daily", map[string]string{"computed_at": "each writer stamps the time of its own run"}},
-	{"work_item_metrics_daily", map[string]string{"computed_at": "each writer stamps the time of its own run"}},
-	{"work_item_user_metrics_daily", map[string]string{"computed_at": "each writer stamps the time of its own run"}},
-	{"work_item_cycle_times", map[string]string{"computed_at": "each writer stamps the time of its own run"}},
-	{"estimate_coverage_metrics_daily", map[string]string{"computed_at": "each writer stamps the time of its own run"}},
-}
-
-// readDailyFamilyMatrixRows returns the rows of one table and organization that
-// ONE writer wrote, selected by that writer's computed_at: the sync-time
-// deriver stamps the unit's normalizedAt, the daily families stamp the wall
-// clock of the test. Selecting by the stamp (and not truncating between the
-// writers) keeps both writers' rows in the store, as in production, and still
-// shows a key that only one of them wrote.
-func readDailyFamilyMatrixRows(
-	ctx context.Context, t *testing.T, conn driver.Conn, table, orgID string,
-	excluded map[string]string, stampCondition string, stampArgument time.Time,
-) []string {
-	t.Helper()
-	rows, err := conn.Query(ctx,
-		"SELECT formatRowNoNewline('JSONEachRow', *) FROM "+table+
-			" WHERE org_id = ? AND computed_at "+stampCondition+" ?", orgID, stampArgument)
-	if err != nil {
-		t.Fatalf("read %s: %v", table, err)
-	}
-	defer rows.Close()
-	result := []string{}
-	matched := map[string]bool{}
-	for rows.Next() {
-		var encoded string
-		if err := rows.Scan(&encoded); err != nil {
-			t.Fatal(err)
-		}
-		var row map[string]json.RawMessage
-		if err := json.Unmarshal([]byte(encoded), &row); err != nil {
-			t.Fatalf("%s row %s: %v", table, encoded, err)
-		}
-		for column := range excluded {
-			if _, exists := row[column]; exists {
-				matched[column] = true
-				delete(row, column)
-			}
-		}
-		canonical, err := json.Marshal(row)
-		if err != nil {
-			t.Fatal(err)
-		}
-		result = append(result, string(canonical))
-	}
-	if err := rows.Err(); err != nil {
-		t.Fatal(err)
-	}
-	if len(result) > 0 {
-		for column := range excluded {
-			if !matched[column] {
-				t.Fatalf("%s: the excluded column %q matched no column", table, column)
-			}
-		}
-	}
-	sort.Strings(result)
-	return result
 }
 
 // writeDailyFamilyMatrixEffect stores rows through one of the shared work-item

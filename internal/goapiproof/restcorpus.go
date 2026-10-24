@@ -347,9 +347,11 @@ var investmentIntegerLeaves = map[string]string{
 	"data.evidence_quality_distribution":      "Go's own float64(count) cast (investment/response.go BuildResponse) from an int band count -- not a ClickHouse float aggregate, wire-typed float64 only as a map-value convenience.",
 	"data.evidence_quality_stats.total":       "count() (investment/qualitystats.go) -- a bare row count.",
 	"data.evidence_quality_stats.band_counts": "countIf() per quality band (investment/qualitystats.go) -- bare row counts.",
+
+	"data.evidence_quality_stats.uncategorized_count": "countIf() of the units under the evidence gate (analytics.InvestmentQualityStatsColumns) -- a bare row count.",
 }
 
-// investmentGoOnlyKeys declares the two keys GET and POST /api/v1/investment serve and the recorded Python
+// investmentGoOnlyKeys declares the keys GET and POST /api/v1/investment serve and the recorded Python
 // answer never had (CHAOS-9622): the measure the distributions count, and the sum their shares are shares of.
 // The values of data.theme_distribution and data.subcategory_distribution are the numerators.
 //
@@ -360,6 +362,8 @@ var investmentIntegerLeaves = map[string]string{
 var investmentGoOnlyKeys = map[string]GoOnlyKey{
 	"data.measure":     {Ticket: "CHAOS-9622", Reason: "Go-only: the measure (COUNT) the distributions are read in; the Python reference never served it."},
 	"data.denominator": {Ticket: "CHAOS-9622", Reason: "Go-only: the sum of all themes, the denominator the distribution values are numerators of; the Python reference never served it."},
+
+	"data.evidence_quality_stats.uncategorized_count": {Ticket: "CHAOS-10351", Reason: "Go-only: the units of the window under the evidence gate (too little text), which the theme mix leaves out while total still counts them; the Python reference never served it."},
 }
 
 // investmentParity is GET and POST /api/v1/investment's own shared Parity.

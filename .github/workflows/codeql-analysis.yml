@@ -32,19 +32,20 @@ permissions:
 
 jobs:
   # The code_scanning ruleset needs a CodeQL result on every pull request, and a workflow skipped by a path filter
-  # uploads none. So the workflow always starts. `changes` decides docs-only FAIL CLOSED: true only when the files API
-  # answered and every changed path (and every rename source) is a docs path; any error, any other path, and every
+  # uploads none. So the workflow always starts. `changes` decides docs-only FAIL CLOSED: true only when git's diff of
+  # the event's own base and head commits is non-empty and every changed path (and every rename source) is a docs path; any error, any other path, and every
   # event except pull_request give anything but "true", and the real analysis runs.
   changes:
     name: changes
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      pull-requests: read
     outputs:
       docs_only: ${{ steps.classify.outputs.docs_only }}
     steps:
-      # The classifier comes from the base commit, so a pull request cannot change the script that judges it.
+      # The classifier comes from the base commit, so a pull request cannot change the script that judges it. Its
+      # input is git's own diff between the event's base and head commits (this run's commits, never the PR's
+      # current head), so a push after this run started cannot change the answer. No pull request code runs.
       - name: Checkout the classifier from the base commit
         if: github.event_name == 'pull_request'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -52,18 +53,18 @@ jobs:
           ref: ${{ github.event.pull_request.base.sha }}
           sparse-checkout: ci/codeql_docs_only.sh
           sparse-checkout-cone-mode: false
+          fetch-depth: 0
+          filter: blob:none
       - name: Classify changed paths
         id: classify
         if: github.event_name == 'pull_request'
         env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           docs_only=false
-          if count=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}" --jq '.changed_files') \
-            && rows=$(gh api --paginate "repos/${REPO}/pulls/${PR_NUMBER}/files?per_page=100" --jq '.[] | ([.filename] + (if .previous_filename then [.previous_filename] else [] end)) | @tsv'); then
-            docs_only=$(printf '%s\n%s\n' "$count" "$rows" | bash ci/codeql_docs_only.sh) || docs_only=false
+          if git fetch --no-tags --filter=blob:none origin "${HEAD_SHA}"; then
+            docs_only=$(bash ci/codeql_docs_only.sh "${BASE_SHA}" "${HEAD_SHA}") || docs_only=false
           fi
           [ "$docs_only" = "true" ] || docs_only=false
           echo "docs_only=${docs_only}" >> "$GITHUB_OUTPUT"
@@ -91,7 +92,7 @@ jobs:
   analyze:
     name: Analyze
     needs: changes
-    if: (!(github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) && (always() && needs.changes.outputs.docs_only != 'true')
+    if: (!(github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) && (!cancelled() && needs.changes.outputs.docs_only != 'true')
     runs-on: ubuntu-latest
     # CodeQL needs SARIF upload and audit access for security results.
     permissions:

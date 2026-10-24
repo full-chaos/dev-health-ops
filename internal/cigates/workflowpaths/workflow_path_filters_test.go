@@ -114,10 +114,13 @@ func TestWorkflowPathFiltersCodeQLPullRequestRunsEveryChange(t *testing.T) {
 func TestWorkflowPathFiltersCodeQLDocsOnlyTwinAndGate(t *testing.T) {
 	analyze := codeqlJob(t, "analyze")
 	cond, _ := analyze["if"].(string)
-	for _, want := range []string{"always()", "needs.changes.outputs.docs_only != 'true'"} {
+	for _, want := range []string{"!cancelled()", "needs.changes.outputs.docs_only != 'true'"} {
 		if !strings.Contains(cond, want) {
 			t.Errorf("analyze.if lacks %q (fail closed: the real analysis runs unless docs_only is exactly true, even when `changes` failed): %s", want, cond)
 		}
+	}
+	if strings.Contains(cond, "always()") {
+		t.Errorf("analyze.if must use !cancelled(), not always(), so a cancelled run does not start the analysis: %s", cond)
 	}
 	if strings.Contains(cond, "docs_only == 'false'") {
 		t.Errorf("analyze.if must not require docs_only == 'false': an empty output must still analyze: %s", cond)
@@ -140,6 +143,11 @@ func TestWorkflowPathFiltersCodeQLDocsOnlyTwinAndGate(t *testing.T) {
 	if strings.Count(text, `category: "/language:go"`) != 1 || !strings.Contains(text, `category: "/language:${{matrix.language}}"`) {
 		t.Error("the empty result must upload under the category /language:go, the real leg's category for the go matrix entry")
 	}
+	matrixJob := codeqlJob(t, "analyze")["strategy"].(map[string]any)["matrix"].(map[string]any)
+	languages := stringList(t, matrixJob["language"])
+	if len(languages) != 1 || !strings.Contains(text, `category: "/language:`+languages[0]+`"`) {
+		t.Errorf("the empty result must upload one category per matrix language, same list: matrix %v, text lacks the category of the only language", languages)
+	}
 	for _, step := range twin["steps"].([]any) {
 		name, _ := step.(map[string]any)["name"].(string)
 		if !strings.Contains(name, "no code changed") {
@@ -147,6 +155,15 @@ func TestWorkflowPathFiltersCodeQLDocsOnlyTwinAndGate(t *testing.T) {
 		}
 	}
 	changes := codeqlJob(t, "changes")
+	var classify map[string]any
+	for _, step := range changes["steps"].([]any) {
+		if m := step.(map[string]any); m["id"] == "classify" {
+			classify, _ = m["env"].(map[string]any)
+		}
+	}
+	if classify["BASE_SHA"] != "${{ github.event.pull_request.base.sha }}" || classify["HEAD_SHA"] != "${{ github.event.pull_request.head.sha }}" {
+		t.Errorf("the classifier must be given the event's own base and head commits, got %v", classify)
+	}
 	for _, step := range changes["steps"].([]any) {
 		m := step.(map[string]any)
 		if with, ok := m["with"].(map[string]any); ok && strings.Contains(fmt.Sprint(with["ref"]), "base.sha") {
@@ -156,50 +173,133 @@ func TestWorkflowPathFiltersCodeQLDocsOnlyTwinAndGate(t *testing.T) {
 	t.Error("changes must check the classifier script out from the pull request base commit, so a pull request cannot change the script that judges it")
 }
 
-func runDocsOnlyClassifier(t *testing.T, input string) string {
+type gitRepo struct {
+	t   *testing.T
+	dir string
+}
+
+func newGitRepo(t *testing.T) *gitRepo {
 	t.Helper()
-	cmd := exec.Command("bash", filepath.Join(repoRoot(t), "ci", "codeql_docs_only.sh"))
-	cmd.Stdin = strings.NewReader(input)
+	r := &gitRepo{t: t, dir: t.TempDir()}
+	r.git("init", "-q", "-b", "main")
+	return r
+}
+
+func (r *gitRepo) git(args ...string) string {
+	r.t.Helper()
+	cmd := exec.Command("git", append([]string{"-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false"}, args...)...)
+	cmd.Dir = r.dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		r.t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// commit writes the files (path -> content; "" deletes), commits and returns the sha.
+func (r *gitRepo) commit(files map[string]string) string {
+	r.t.Helper()
+	for p, content := range files {
+		full := filepath.Join(r.dir, p)
+		if content == "" {
+			_ = os.Remove(full)
+			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			r.t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
+			r.t.Fatal(err)
+		}
+	}
+	r.git("add", "-A")
+	r.git("commit", "-q", "-m", "c", "--allow-empty")
+	return r.git("rev-parse", "HEAD")
+}
+
+func (r *gitRepo) classify(base, head string) string {
+	r.t.Helper()
+	cmd := exec.Command("bash", filepath.Join(repoRoot(r.t), "ci", "codeql_docs_only.sh"), base, head)
+	cmd.Dir = r.dir
 	out, err := cmd.Output()
 	if err != nil {
-		t.Fatalf("classifier failed: %v", err)
+		r.t.Fatalf("classifier failed: %v", err)
 	}
 	return strings.TrimSpace(string(out))
 }
 
 func TestCodeQLDocsOnlyClassifier(t *testing.T) {
-	many := "3001\n" + strings.Repeat("docs/a.md\n", 3001)
 	cases := []struct {
 		name  string
-		input string
+		setup map[string]string
+		pr    map[string]string
 		want  string
 	}{
-		{"markdown at the root (the 10950 shape)", "1\nci/bigboy/README.md\n", "true"},
-		{"every docs pattern", "5\ndocs/a/b.png\ndocs-data/x.json\nREADME.md\n.github/docs-legacy/x.yml\nmkdocs.yml\n", "true"},
-		{"a docs rename inside docs", "1\ndocs/new.md\tdocs/old.md\n", "true"},
-		{"mixed docs and code runs the real scan", "2\ndocs/a.md\ninternal/x.go\n", "false"},
-		{"a rename from code into docs: the source is code", "1\ndocs/x.md\tinternal/x.go\n", "false"},
-		{"a rename from docs into code", "1\ninternal/x.go\tdocs/x.md\n", "false"},
-		{"a workflow file is code", "2\ndocs/a.md\n.github/workflows/codeql-analysis.yml\n", "false"},
-		{"the classifier script is code", "1\nci/codeql_docs_only.sh\n", "false"},
-		{"nested mkdocs.yml is not the root file", "1\nsub/mkdocs.yml\n", "false"},
-		{"a docs lookalike directory", "1\ndocsx/a.txt\n", "false"},
-		{"truncation: fewer rows than changed_files", "3\ndocs/a.md\ndocs/b.md\n", "false"},
-		{"truncation: more rows than changed_files", "1\ndocs/a.md\ndocs/b.md\n", "false"},
-		{"over the 3000 file API cap", many, "false"},
-		{"exactly at the cap needs matching rows", "3000\n" + strings.Repeat("docs/a.md\n", 3000), "true"},
-		{"no files", "0\n", "false"},
-		{"count missing", "docs/a.md\n", "false"},
-		{"count not a number", "x\ndocs/a.md\n", "false"},
-		{"count with leading sign", "+1\ndocs/a.md\n", "false"},
-		{"empty input", "", "false"},
-		{"a blank row", "2\ndocs/a.md\n\n", "false"},
-		{"no trailing newline", "1\ndocs/a.md", "true"},
+		{"markdown at the root (the 10950 shape)", map[string]string{"ci/bigboy/README.md": "a"}, map[string]string{"ci/bigboy/README.md": "b"}, "true"},
+		{"every docs pattern", nil, map[string]string{"docs/a/b.png": "x", "docs-data/x.json": "x", "README.md": "x", ".github/docs-legacy/x.yml": "x", "mkdocs.yml": "x"}, "true"},
+		{"mixed docs and code runs the real scan", nil, map[string]string{"docs/a.md": "x", "internal/x.go": "x"}, "false"},
+		{"a code file renamed into docs: the source is code", map[string]string{"internal/x.go": "package x\n// enough content to be detected as a rename\n"}, map[string]string{"internal/x.go": "", "docs/x.md": "package x\n// enough content to be detected as a rename\n"}, "false"},
+		{"a workflow file is code", nil, map[string]string{"docs/a.md": "x", ".github/workflows/codeql-analysis.yml": "x"}, "false"},
+		{"the classifier script is code", nil, map[string]string{"ci/codeql_docs_only.sh": "x"}, "false"},
+		{"nested mkdocs.yml is not the root file", nil, map[string]string{"sub/" + docsSiteConfig: "x"}, "false"},
+		{"a docs lookalike directory", nil, map[string]string{"docsx/a.txt": "x"}, "false"},
+		{"an empty diff", nil, map[string]string{}, "false"},
 	}
 	for _, c := range cases {
-		if got := runDocsOnlyClassifier(t, c.input); got != c.want {
+		r := newGitRepo(t)
+		base := r.commit(map[string]string{"seed.txt": "s"})
+		if c.setup != nil {
+			base = r.commit(c.setup)
+		}
+		head := r.commit(c.pr)
+		if got := r.classify(base, head); got != c.want {
 			t.Errorf("%s: classifier = %q, want %q", c.name, got, c.want)
 		}
+	}
+}
+
+// A push after a run started: head A is docs-only, head B adds code. The verdict is a function of the commit the
+// run was given, so the run for B can never read A's file list.
+func TestCodeQLDocsOnlyClassifierIsPinnedToTheEventHead(t *testing.T) {
+	r := newGitRepo(t)
+	base := r.commit(map[string]string{"seed.txt": "s"})
+	headA := r.commit(map[string]string{"docs/a.md": "a"})
+	headB := r.commit(map[string]string{"internal/x.go": "package x\n"})
+	if got := r.classify(base, headA); got != "true" {
+		t.Errorf("head A (docs only) = %q, want true", got)
+	}
+	if got := r.classify(base, headB); got != "false" {
+		t.Errorf("head B (docs then code) = %q, want false: the run for B must not inherit A's verdict", got)
+	}
+}
+
+func TestCodeQLDocsOnlyClassifierFailsClosedOnBadInput(t *testing.T) {
+	r := newGitRepo(t)
+	base := r.commit(map[string]string{"seed.txt": "s"})
+	head := r.commit(map[string]string{"docs/a.md": "a"})
+	for name, args := range map[string][]string{
+		"no arguments":        {},
+		"one argument":        {base},
+		"three arguments":     {base, head, head},
+		"a short sha":         {base[:12], head},
+		"a ref name":          {"main", head},
+		"an option":           {"--output=/tmp/x", head},
+		"an unknown commit":   {strings.Repeat("0", 40), head},
+		"upper case hex":      {strings.ToUpper(base), head},
+		"a sha plus a suffix": {base + "x", head},
+	} {
+		cmd := exec.Command("bash", append([]string{filepath.Join(repoRoot(t), "ci", "codeql_docs_only.sh")}, args...)...)
+		cmd.Dir = r.dir
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("%s: classifier failed: %v", name, err)
+		}
+		if got := strings.TrimSpace(string(out)); got != "false" {
+			t.Errorf("%s: classifier = %q, want false", name, got)
+		}
+	}
+	if got := r.classify(base, head); got != "true" {
+		t.Errorf("control: valid docs-only input = %q, want true", got)
 	}
 }
 

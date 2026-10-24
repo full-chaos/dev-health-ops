@@ -238,18 +238,15 @@ func envFromExtraFirst(g *guard) {
 	}
 	refs := envFromRefs(containers(deps[0])[0])
 	cm := [2]string{"configMapRef", "extra-envfrom-test-dev-health-config"}
-	sec := [2]string{"secretRef", "extra-envfrom-test-dev-health-secrets"}
 	g.expect(len(refs) > 0 && refs[0] == [2]string{"secretRef", "local-dotenv"}, "goWorkers.extraEnvFrom must render first (the last source wins a duplicate key); got %v", refs)
-	ci, si := -1, -1
+	ci := -1
 	for i, r := range refs {
 		if r == cm {
 			ci = i
 		}
-		if r == sec {
-			si = i
-		}
+		g.expect(!(r[0] == "secretRef" && r[1] != "local-dotenv"), "the shared Secret is no envFrom source of a worker pod: %v", refs)
 	}
-	g.expect(ci >= 0 && si >= 0 && ci < si, "the chart's own config then secret sources must follow, in that order: %v", refs)
+	g.expect(ci > 0, "the chart's own config source must follow the extra sources: %v", refs)
 }
 
 func envFromSharedAcrossGroups(g *guard) {
@@ -266,11 +263,10 @@ func envFromUnchangedWhenUnset(g *guard) {
 	g.expect(len(deps) >= 2, "expected more than one worker-group Deployment, got %d", len(deps))
 	want := []any{
 		doc{"configMapRef": doc{"name": "extra-envfrom-test-dev-health-config"}},
-		doc{"secretRef": doc{"name": "extra-envfrom-test-dev-health-secrets"}},
 	}
 	for _, d := range deps {
 		got := containers(d)[0]["envFrom"]
-		g.expect(equal(got, want), "%s: default envFrom must be exactly the chart's config + secret, in that order; got %v", name(d), got)
+		g.expect(equal(got, want), "%s: default envFrom must be exactly the chart's config; got %v", name(d), got)
 	}
 }
 
@@ -420,9 +416,7 @@ func TestWiringGuardsPlantedDefects(t *testing.T) {
 			kedaMinimumAboveOneRefused, "an autoscaled group with minReplicas above 1"},
 		{"envfrom-extra-renders-after-the-chart-sources", chartOnly,
 			all(mut(chartFile(workers), `{{- $groupEnvFrom := $.Values.goWorkers.extraEnvFrom | default (list) }}`, `{{- $groupEnvFrom := list }}`),
-				mut(chartFile(workers), `{{- $groupEnvFrom = append $groupEnvFrom (dict "secretRef" (dict "name" (include "dev-health.secretName" $))) }}`,
-					`{{- $groupEnvFrom = append $groupEnvFrom (dict "secretRef" (dict "name" (include "dev-health.secretName" $))) }}
-          {{- $groupEnvFrom = concat $groupEnvFrom ($.Values.goWorkers.extraEnvFrom | default (list)) }}`)),
+				mut(chartFile(workers), cmRef+" }}\n", cmRef+" }}\n          {{- $groupEnvFrom = concat $groupEnvFrom ($.Values.goWorkers.extraEnvFrom | default (list)) }}\n")),
 			envFromExtraFirst, "must render first"},
 		{"envfrom-extra-dropped-for-all-but-one-group", chartOnly,
 			mut(chartFile(workers), `{{- $groupEnvFrom := $.Values.goWorkers.extraEnvFrom | default (list) }}`, `{{- $groupEnvFrom := ternary ($.Values.goWorkers.extraEnvFrom | default (list)) (list) (eq $group.name "heavy") }}`),

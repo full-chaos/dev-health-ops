@@ -367,6 +367,8 @@ func buildDeps(
 			if err != nil {
 				return Deps{}, nil, dependencyFailure(ctx, logger, "webhook_secret_decryptor", "api_secret_decryptor_failed", fmt.Errorf("build webhook intake secret decryptor: %w", err))
 			}
+			// One round trip derives the settings key now, so no request does.
+			_, _ = decryptor.Encrypt([]byte("warm"))
 			deps.Decryptor = decryptor
 		}
 	}

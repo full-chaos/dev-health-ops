@@ -53,6 +53,7 @@ func quietProvider(provider mail.Sender) mail.Sender {
 // otherwise. The returned component closes the link-mail sender.
 func credentialRoutes(
 	cfg authconfig.Config, logger *slog.Logger, pool *pgxpool.Pool, schema authschema.ValidatedIdentifier,
+	limits *authapi.Limits,
 ) ([]httpapi.Route, []lifecycle.Component, error) {
 	if !cfg.Session.Enabled || !cfg.UsersOwned {
 		return nil, nil, nil
@@ -96,7 +97,7 @@ func credentialRoutes(
 		return nil, nil, err
 	}
 	routes, err := authapi.CredentialRoutes(authapi.CredentialDeps{
-		Flows: flows, Sessions: sessions, Users: authapi.PGUsers{Pool: pool}, Issuer: issuer, Logger: logger,
+		Flows: flows, Sessions: sessions, Users: authapi.PGUsers{Pool: pool}, Issuer: issuer, Logger: logger, Limits: limits,
 	})
 	if err != nil {
 		_ = sender.Close(context.Background())

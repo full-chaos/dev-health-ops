@@ -321,6 +321,10 @@ func (h *handlers) listSyncConfigs(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, "enabled_datasets", err)
 		return
 	}
+	if err := h.deriveSkippedDatasets(ctx, org, configs...); err != nil {
+		h.fail(w, r, "skipped_datasets", err)
+		return
+	}
 	list := make([]pyjson.Value, 0, len(configs))
 	for _, config := range configs {
 		var childrenCount pyjson.Value
@@ -398,6 +402,10 @@ func (h *handlers) getSyncConfig(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, "enabled_datasets", err)
 		return
 	}
+	if err := h.deriveSkippedDatasets(r.Context(), orgID(r), config); err != nil {
+		h.fail(w, r, "skipped_datasets", err)
+		return
+	}
 	body, err := syncConfigResponse(config, nil, credentialID)
 	if err != nil {
 		h.fail(w, r, "render_config", err)
@@ -447,6 +455,9 @@ func syncConfigResponse(config *syncConfig, childrenCount pyjson.Value, credenti
 	out.Set("last_sync_error", stringOrNone(config.LastSyncError))
 	out.Set("created_at", pyTime(config.CreatedAt))
 	out.Set("updated_at", pyTime(config.UpdatedAt))
+	if len(config.skippedDatasets) > 0 {
+		out.Set("skipped_datasets", skippedDatasetsValue(config.skippedDatasets))
+	}
 	return out, nil
 }
 

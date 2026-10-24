@@ -52,7 +52,7 @@ func TestAuthorizeRunAcquiresBucketLocksBeforeTheHardCapCheck(t *testing.T) {
 			"has the bucket-locking mechanism changed shape? update this test's marker", file)
 	}
 
-	capCheckMarker := "if len(units) > totalCap {"
+	capCheckMarker := "if totalCap > 0 && len(units) > totalCap {"
 	capCheckIndex := strings.Index(body, capCheckMarker)
 	if capCheckIndex < 0 {
 		t.Fatalf("%s: could not find %q -- has the total-unit-cap check changed shape? update this test's marker", file, capCheckMarker)

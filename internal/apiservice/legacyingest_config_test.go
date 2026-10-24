@@ -2,10 +2,13 @@ package apiservice
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/legacyingest"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 )
@@ -118,4 +121,30 @@ func TestLegacyIngestFlagInvalidValueRefused(t *testing.T) {
 			t.Fatalf("options=%+v err=%v", options, err)
 		}
 	})
+}
+
+func TestLegacyIngestEveryPathMethodRefusalCarriesTheDeprecationHeaders(t *testing.T) {
+	deps := Deps{LegacyIngestEnabled: true, LegacyIngestOptions: legacyingest.Options{Deprecation: true, Sunset: time.Date(2026, 12, 1, 0, 0, 0, 0, time.UTC)}}
+	server, err := newServerWithGate(config.Config{APIAddress: "127.0.0.1:0"}, quietLogger(), Routes(deps, quietLogger()), nil, legacyIngestLayers(deps))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"commits", "pull-requests", "work-items", "deployments", "incidents", "telemetry"} {
+		for _, method := range []string{http.MethodGet, http.MethodHead, http.MethodPut} {
+			request := httptest.NewRequest(method, "/api/v1/ingest/"+path, nil)
+			recorder := httptest.NewRecorder()
+			server.Handler().ServeHTTP(recorder, request)
+			if recorder.Code != http.StatusMethodNotAllowed {
+				t.Fatalf("%s %s: status %d, want 405", method, path, recorder.Code)
+			}
+			if recorder.Header().Get("Deprecation") != "true" || recorder.Header().Get("Sunset") != "Tue, 01 Dec 2026 00:00:00 GMT" {
+				t.Fatalf("%s %s: headers %v", method, path, recorder.Header())
+			}
+		}
+	}
+	other := httptest.NewRecorder()
+	server.Handler().ServeHTTP(other, httptest.NewRequest(http.MethodGet, "/health", nil))
+	if other.Header().Get("Deprecation") != "" {
+		t.Fatalf("a path outside the legacy routes carries Deprecation: %v", other.Header())
+	}
 }

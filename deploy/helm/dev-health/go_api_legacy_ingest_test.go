@@ -49,3 +49,16 @@ func TestLegacyIngestChartRefusesExtraEnvForTheFlag(t *testing.T) {
 		t.Fatal("the render accepted goApi.extraEnv for the legacy ingest flag")
 	}
 }
+
+func TestLegacyIngestChartRefusesANonBooleanFlag(t *testing.T) {
+	for _, value := range []string{"maybe", "yes", "1", "TRUE", "on"} {
+		if _, _, err := renderAuth(t, goAPIWithAuth("--set-string", "legacyIngest.enabled="+value)...); err == nil {
+			t.Errorf("legacyIngest.enabled=%q rendered; the flag must be a boolean", value)
+		}
+	}
+	for _, value := range []string{"true", "false"} {
+		if _, out, err := renderAuth(t, goAPIWithAuth("--set", "legacyIngest.enabled="+value)...); err != nil {
+			t.Errorf("legacyIngest.enabled=%s refused: %v %.200s", value, err, out)
+		}
+	}
+}

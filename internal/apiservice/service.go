@@ -440,7 +440,7 @@ func configureWith(
 		adjust(&deps)
 	}
 	gate := NewIntakeGate(&deps, logger)
-	server, err := NewServerWithGate(cfg, logger, Routes(deps, logger), gate, scope...)
+	server, err := newServerWithGate(cfg, logger, Routes(deps, logger), gate, legacyIngestLayers(deps), scope...)
 	if err != nil {
 		return nil, dependencyFailure(ctx, logger, "api_server", "api_server_config_failed", err)
 	}
@@ -630,8 +630,23 @@ func NewServerWithGate(
 	gate *webhookintake.Gate,
 	scope ...func(http.Handler) http.Handler,
 ) (*httpapi.Server, error) {
+	return newServerWithGate(cfg, logger, routes, gate, nil, scope...)
+}
+
+// newServerWithGate is NewServerWithGate with extra layers that run ahead of
+// the gate and the scope middlewares, so a response they mark is marked
+// whichever layer or router answers it.
+func newServerWithGate(
+	cfg config.Config,
+	logger *slog.Logger,
+	routes []httpapi.Route,
+	gate *webhookintake.Gate,
+	extra []func(http.Handler) http.Handler,
+	scope ...func(http.Handler) http.Handler,
+) (*httpapi.Server, error) {
 	noStore := httpapi.NewNoStoreRoutes(httpapi.AdminRoutes)
 	middleware := []func(http.Handler) http.Handler{buildinfo.Stamp(version.Current("api")), pyheaders.UnhandledErrorShape, CloseHTTP10, MarkSignatureOnly, DecodedPathRouting, noStore.Middleware}
+	middleware = append(middleware, extra...)
 	if gate != nil {
 		middleware = append(middleware, intakeGate(gate, cfg.CORSAllowedOrigins))
 	}

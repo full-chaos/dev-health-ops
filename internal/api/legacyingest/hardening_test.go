@@ -179,3 +179,19 @@ func TestAPIKeysDropsBlankEntries(t *testing.T) {
 		}
 	}
 }
+
+func TestLegacyIngestBothCredentialsAreRequired(t *testing.T) {
+	const secret = "both-secret"
+	configured := map[string]string{"INGEST_API_KEYS": devKey, "INGEST_SIGNING_SECRET": secret}
+	signed := map[string]string{SignatureTimestampHeader: at(0), "X-Signature-256": timestampedSignature(secret, at(0), commitsBody)}
+	if got := hardenedRequest(t, configured, timestampOptions(), commitsBody, signed); got.Code != 401 {
+		t.Fatalf("signature alone: status %d, want 401", got.Code)
+	}
+	signed["X-API-Key"] = devKey
+	if got := hardenedRequest(t, configured, timestampOptions(), commitsBody, signed); got.Code != 202 {
+		t.Fatalf("key and signature: status %d, want 202", got.Code)
+	}
+	if got := hardenedRequest(t, configured, timestampOptions(), commitsBody, map[string]string{"X-API-Key": devKey}); got.Code != 401 {
+		t.Fatalf("key alone: status %d, want 401", got.Code)
+	}
+}

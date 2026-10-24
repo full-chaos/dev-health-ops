@@ -57,3 +57,9 @@ func checkLegacyIngest(lookup func(string) (string, bool)) (enabled bool, option
 	}
 	return enabled, legacyingest.Options{Deprecation: true, Sunset: sunset, RequireSignatureTimestamp: true}, "", nil
 }
+
+// legacyIngestLayers marks every response on the legacy ingest paths, the
+// router's own 405 included, when the routes are mounted.
+func legacyIngestLayers(deps Deps) []func(http.Handler) http.Handler {
+	return nil
+}

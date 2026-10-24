@@ -388,6 +388,7 @@ internal/platform/credshape	credshape_test.go
 internal/platform/fernet	fernet_test.go
 internal/platform/logging	binaries_enumeration_test.go
 internal/platform/logging	provider_origin_sources_test.go
+internal/platform/otlpmetrics	labelfragment_census_test.go
 internal/platform/secrets	envreads_test.go
 internal/platform/secrets	source.go
 internal/providerfoundation	classify_call_sites_test.go

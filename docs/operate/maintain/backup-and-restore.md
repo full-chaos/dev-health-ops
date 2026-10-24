@@ -148,7 +148,7 @@ teardown is `compose down` with no volume removal). It never touches the
 standing stack and never runs against production. The driver is
 `TestDrillAuthPITR` (`internal/audit/drill_pitr_integration_test.go`,
 build tag `integration`, skipped unless `DRILL_PHASE` is set); every write
-goes through `audit.Commit` as the runtime role.
+goes through `audit.Commit` as the runtime role, except seeding one principal as the database owner.
 
 Flow: migrate, write A, `pg_basebackup`, write B, snapshot T (time and
 state), write C (includes revocations), snapshot F, archive the WAL. Then
@@ -168,7 +168,7 @@ Checks and result line (`DRILL RESULT: PASS|GAP|FAIL`):
 - PASS when all of those counts are zero.
 
 Result of the 2026-10-24 run on the dev stack: restore to the end of the WAL
-= PASS (state identical to the source, digests equal). PITR to T = GAP:
+= PASS (row counts and the compared digests equal to the source). PITR to T = GAP:
 revisions never went below T and no duplicate key appeared, new writes
 continued at exactly revision + 1, and every credential revoked before T
 stayed revoked, but PITR dropped 30 revisions published after T, 2

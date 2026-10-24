@@ -53,7 +53,7 @@ teardown() {
     dc --profile "$svc" run --rm --no-deps -T --user root --entrypoint sh "$svc" -c \
       "chown -R $(id -u):$(id -g) /var/lib/postgresql /wal /backup 2>/dev/null || true" >/dev/null 2>&1 || true
   done
-  log "teardown: compose down (containers only, no volume removal)"
+  printf "%s teardown: compose down (containers only, no volume removal)\n" "$(date -u +%FT%TZ)" >>"$evidence/drill.log"
   dc --profile src --profile pitr --profile latest down || true
 }
 trap teardown EXIT
@@ -61,10 +61,16 @@ trap teardown EXIT
 drill() {
   local port="$1" phase="$2"
   shift 2
-  env DRILL_PHASE="$phase" DRILL_EVIDENCE_DIR="$evidence" \
-    DRILL_DSN="postgres://postgres:${POSTGRES_PASSWORD}@127.0.0.1:${port}/postgres?sslmode=disable" \
-    "$@" "$capped" -t 600 -- "$DRILL_DIR/drill.test" -test.run '^TestDrillAuthPITR$' -test.count=1 -test.v \
-    >>"$evidence/driver-$phase.log" 2>&1
+  # exported in a subshell, never passed through `env`: the DSN holds a password
+  # and an argv is readable by every user of the host.
+  (
+    export DRILL_PHASE="$phase" DRILL_EVIDENCE_DIR="$evidence"
+    export DRILL_DSN="postgres://postgres:${POSTGRES_PASSWORD}@127.0.0.1:${port}/postgres?sslmode=disable"
+    # shellcheck disable=SC2163 # each argument is a NAME=value assignment
+    export "$@"
+    "$capped" -t 600 -- "$DRILL_DIR/drill.test" -test.run '^TestDrillAuthPITR$' -test.count=1 -test.v \
+      >>"$evidence/driver-$phase.log" 2>&1
+  )
 }
 
 load_gate() {

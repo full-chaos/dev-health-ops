@@ -9026,7 +9026,7 @@
       "action": "integrations.write",
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
-      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/apiservice/admin/pagerduty_bindings.go:378; internal/apiservice/admin/pagerduty_bindings.go:387); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/apiservice/admin/pagerduty_bindings.go:402; internal/apiservice/admin/pagerduty_bindings.go:411); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
       "gaps": [],
       "graphql_field_name": null,
       "id": "POST /api/v1/admin/integrations/pagerduty/webhook-bindings/{binding_id}/activate [dev-health-ops-api @api]",

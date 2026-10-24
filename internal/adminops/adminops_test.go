@@ -48,10 +48,10 @@ func TestUsersVerbsRefuseBadArgumentsBeforeConnecting(t *testing.T) {
 		run  func(context.Context, cli.Env) int
 		args []string
 	}{
-		{"create needs --email", runUsersCreate, []string{"--password", "password1"}},
+		{"create needs --email", runUsersCreate, []string{"--password", fixturePassword1}},
 		{"create needs --password", runUsersCreate, []string{"--email", "a@example.com"}},
-		{"create refuses a positional", runUsersCreate, []string{"--email", "a@example.com", "--password", "password1", "x"}},
-		{"create refuses --password with --password-stdin", runUsersCreate, []string{"--email", "a@example.com", "--password", "password1", "--password-stdin"}},
+		{"create refuses a positional", runUsersCreate, []string{"--email", "a@example.com", "--password", fixturePassword1, "x"}},
+		{"create refuses --password with --password-stdin", runUsersCreate, []string{"--email", "a@example.com", "--password", fixturePassword1, "--password-stdin"}},
 		{"create --password-stdin needs a password line", runUsersCreate, []string{"--email", "a@example.com", "--password-stdin"}},
 		{"orgs create needs --name", runOrgsCreate, nil},
 		{"update refuses an unknown role", runUsersUpdate, []string{"--email", "a@example.com", "--org", "x", "--role", "root"}},
@@ -105,7 +105,7 @@ func TestUsersVerbsRefuseBadArgumentsBeforeConnecting(t *testing.T) {
 // never an empty one; a good line reaches the database step (no database here,
 // so a failure, not a usage refusal).
 func TestUsersCreatePasswordStdin(t *testing.T) {
-	for in, want := range map[string]string{"pw12345678\n": "pw12345678", "pw12345678\r\nrest\n": "pw12345678", "pw12345678": "pw12345678", " sp ace \n": " sp ace ", "pw12345678\r": "pw12345678\r", "pw12345678\r\r\n": "pw12345678\r"} {
+	for in, want := range map[string]string{"pw12345678ab\n": "pw12345678ab", "pw12345678ab\r\nrest\n": "pw12345678ab", "pw12345678ab": "pw12345678ab", " sp ace \n": " sp ace ", "pw12345678ab\r": "pw12345678ab\r", "pw12345678ab\r\r\n": "pw12345678ab\r"} {
 		if got, err := readPasswordLine(strings.NewReader(in)); err != nil || got != want {
 			t.Errorf("readPasswordLine(%q) = %q, %v; want %q", in, got, err, want)
 		}
@@ -121,7 +121,7 @@ func TestUsersCreatePasswordStdin(t *testing.T) {
 	noDatabase := func(string) (string, bool) { return "", false }
 	var stdout, stderr bytes.Buffer
 	code := runUsersCreate(context.Background(), cli.Env{
-		Args: []string{"--email", "a@example.com", "--password-stdin"}, Stdin: strings.NewReader("pw12345678\n"),
+		Args: []string{"--email", "a@example.com", "--password-stdin"}, Stdin: strings.NewReader("pw12345678ab\n"),
 		Stdout: &stdout, Stderr: &stderr, Lookup: noDatabase,
 	})
 	if code != cli.ExitFailure {
@@ -130,13 +130,13 @@ func TestUsersCreatePasswordStdin(t *testing.T) {
 	// Both given, with a good stdin line: still a usage refusal, not a silent pick.
 	stderr.Reset()
 	code = runUsersCreate(context.Background(), cli.Env{
-		Args: []string{"--email", "a@example.com", "--password", "password1", "--password-stdin"}, Stdin: strings.NewReader("pw12345678\n"),
+		Args: []string{"--email", "a@example.com", "--password", fixturePassword1, "--password-stdin"}, Stdin: strings.NewReader("pw12345678ab\n"),
 		Stdout: &stdout, Stderr: &stderr, Lookup: noDatabase,
 	})
 	if code != cli.ExitUsage || !strings.Contains(stderr.String(), "mutually exclusive") {
 		t.Errorf("--password with --password-stdin gave exit %d (stderr %q), want a mutually-exclusive refusal", code, stderr.String())
 	}
-	if strings.Contains(stderr.String()+stdout.String(), "pw12345678") {
+	if strings.Contains(stderr.String()+stdout.String(), "pw12345678ab") {
 		t.Error("the password was echoed")
 	}
 }

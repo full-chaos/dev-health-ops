@@ -31,7 +31,7 @@ func (db *database) exec(t *testing.T, query string, args ...any) {
 
 func createUser(t *testing.T, db *database, email, username string) string {
 	t.Helper()
-	if code, out := goVerb(t, db, []string{"users", "create", "--email", email, "--password", "password1", "--username", username}); code != 0 {
+	if code, out := goVerb(t, db, []string{"users", "create", "--email", email, "--password", fixturePassword1, "--username", username}); code != 0 {
 		t.Fatalf("create %s: exit %d %s", email, code, out)
 	}
 	return db.userID(t, email)

@@ -12,6 +12,7 @@ cmd/gqlgen-guard	main_test.go
 cmd/registrydump	main.go
 cmd/strip-agent-attribution	main.go
 cmd/strip-agent-attribution	main_test.go
+internal/adminops	users_password_fixtures_test.go
 internal/api/credentials	probes.go
 internal/api/syncadmin	dataset_writer_census_test.go
 internal/api/syncadmin	dataset_writer_lock_census_test.go

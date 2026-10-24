@@ -350,7 +350,7 @@ func decideDispatchGuard(source guardUnitSource, env guardEnv, orgID string, now
 		return dispatchBucket{orgID: orgID, provider: unit.provider, costClass: unit.costClass}
 	}
 	// classify mirrors the old per-unit switch. lock: a later write of this transaction could touch the row
-	// (PLANNED, stale DISPATCHING, any RETRYING; CHAOS-4586 rounds 7-8). candidate: a concurrency-cap candidate.
+	// (PLANNED, stale DISPATCHING, any RETRYING). candidate: a concurrency-cap candidate.
 	// deferred: a not-yet-due RETRYING row, which makes its bucket a cap-loop bucket without being a candidate.
 	classify := func(unit dispatchGuardUnit) (lock, candidate, deferred bool) {
 		switch unit.status {
@@ -389,7 +389,7 @@ func decideDispatchGuard(source guardUnitSource, env guardEnv, orgID string, now
 		return guardDecision{}, err
 	}
 
-	// CHAOS-4586: the bucket locks are taken before EVERY early return, the hard-cap one included, so denyRun's bulk
+	// The bucket locks are taken before EVERY early return, the hard-cap one included, so denyRun's bulk
 	// writes run under the same locks as claimUnits.
 	if err := env.lockBuckets(sortBucketList(lockBuckets)); err != nil {
 		return guardDecision{}, err
@@ -431,7 +431,7 @@ func decideDispatchGuard(source guardUnitSource, env guardEnv, orgID string, now
 		folds[bucket] = &guardBucketFold{slots: slots}
 	}
 
-	// CHAOS-4605: the authorized set is every candidate of a locked, cap-checked bucket and nothing else.
+	// The authorized set is every candidate of a locked, cap-checked bucket and nothing else.
 	authorizedUnitIDs := make(map[string]bool)
 	if err := source(func(unit dispatchGuardUnit) error {
 		_, candidate, _ := classify(unit)

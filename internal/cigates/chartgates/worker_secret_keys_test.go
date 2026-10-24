@@ -225,7 +225,7 @@ func TestWorkerSecretKeysGuardsPlantedDefects(t *testing.T) {
 			},
 			"loader key A_NEW_SECRET_KEY is classified 0 times"},
 		{"a-listed-key-has-no-reader", reader,
-			mut("internal/mail/sender.go", `"EMAIL_PROVIDER"`, `"EMAIL_PROVIDER_RENAMED"`),
-			func(g *guard) { sharedSecretKeysAreClassified(g, loaderSecretKeys) }, "does not read EMAIL_PROVIDER"},
+			mut("internal/syncbudget/loader.go", `"LINEAR_API_KEY"`, `"LINEAR_API_KEY_RENAMED"`),
+			func(g *guard) { sharedSecretKeysAreClassified(g, loaderSecretKeys) }, "does not read LINEAR_API_KEY"},
 	})
 }

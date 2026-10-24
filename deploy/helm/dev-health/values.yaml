@@ -573,6 +573,33 @@ goWorkers:
   #    chart's own config/secret on any key both set. Shared by every
   #    worker group; there is no per-group override.
   extraEnvFrom: []
+  # -- Keys of the shared Secret (secrets.externalSecretName or the chart's own)
+  #    that worker groups read. Each renders as one optional secretKeyRef; the
+  #    Secret is no whole-Secret envFrom source of a worker pod, so a key not
+  #    listed here (every database DSN, the API and auth keys) never reaches
+  #    one. A key a worker needs that is not listed: add it here, or give the
+  #    pod its own source through extraEnvFrom. DSN names never belong here.
+  secretKeys:
+    - APP_BASE_URL
+    - CLICKHOUSE_URI
+    - EMAIL_API_KEY
+    - EMAIL_FROM_ADDRESS
+    - EMAIL_PROVIDER
+    - EXPECTED_WORKER_GROUPS
+    - INVESTMENT_LLM_BATCH_MODE
+    - INVESTMENT_LLM_BATCH_TIMEOUT_SECONDS
+    - LICENSE_PRIVATE_KEY
+    - LINEAR_API_KEY
+    - LLM_MODEL
+    - LLM_PROVIDER
+    - OPENAI_API_KEY
+    - PAGER_DUTY_CLIENT_ID
+    - PAGER_DUTY_REDIRECT_URI
+    - PAGER_DUTY_SECRET
+    - SETTINGS_ENCRYPTION_KEY
+    - STRIPE_SECRET_KEY
+    - STRIPE_WEBHOOK_SECRET
+    - WORKER_GITHUB_WORK_ITEMS_STATUS_MAPPING_PATH
   # The production Go topology has three distinct PostgreSQL endpoints.
   # Domain traffic uses a bounded transaction pool. River queue control and
   # coordinator locks use independent session pools: those connections cannot

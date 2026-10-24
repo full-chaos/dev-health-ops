@@ -291,6 +291,19 @@ spec:
             {{- if $group.runtimeProfile }}
             - {name: WORKER_DATABASE_URI, value: ""}
             {{- end }}
+            {{- /*
+              The non-DSN keys of the shared Secret a worker reads (goWorkers.secretKeys),
+              one optional secretKeyRef each, so the whole Secret is no envFrom source
+              of a worker pod. CLICKHOUSE_URI is skipped when an explicit entry above
+              already sets it. The blanks above stay as the closed net for operator
+              sources (goWorkers.extraEnvFrom).
+            */}}
+            {{- range $key := $.Values.goWorkers.secretKeys }}
+            {{- if not (and (eq $key "CLICKHOUSE_URI") (include "dev-health.goWorkerClickhouseURI" $)) }}
+            - name: {{ $key }}
+              valueFrom: {secretKeyRef: {name: {{ include "dev-health.secretName" $ }}, key: {{ $key }}, optional: true}}
+            {{- end }}
+            {{- end }}
             {{- if $.Values.goWorkers.pgbouncer.enabled }}
             # Every Go worker group uses the bounded domain transaction pool. River
             # worker and coordinator groups also use the River queue session pool;
@@ -318,17 +331,18 @@ spec:
             {{- toYaml . | nindent 12 }}
             {{- end }}
           {{- /*
-          CHAOS-4984: same extraEnvFrom-first, chart-config/secret-last
+          CHAOS-4984: same extraEnvFrom-first, chart-config-last
           ordering as the deleted Python api Deployment had, and for the same reason --
           Kubernetes resolves a duplicate envFrom key in favour of the LAST
           source, so an operator-supplied source (e.g. a local dotenv
-          Secret) belongs before these two chart-owned sources, not after.
+          Secret) belongs before the chart-owned ConfigMap, not after. The
+          shared Secret is no source here: its worker keys are the per-key
+          references of goWorkers.secretKeys above.
           Shared across every group in this range; there is no per-group
           extraEnvFrom.
           */}}
           {{- $groupEnvFrom := $.Values.goWorkers.extraEnvFrom | default (list) }}
           {{- $groupEnvFrom = append $groupEnvFrom (dict "configMapRef" (dict "name" (include "dev-health.configMapName" $))) }}
-          {{- $groupEnvFrom = append $groupEnvFrom (dict "secretRef" (dict "name" (include "dev-health.secretName" $))) }}
           envFrom:
             {{- toYaml $groupEnvFrom | nindent 12 }}
           ports: [{name: metrics, containerPort: 8080}]

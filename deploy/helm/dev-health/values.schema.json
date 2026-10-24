@@ -146,6 +146,7 @@
         "enabled": { "type": "boolean" },
         "image": { "type": "string", "minLength": 1 },
         "extraEnvFrom": { "$ref": "#/definitions/extraEnvFrom" },
+        "secretKeys": { "type": "array", "items": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$" }, "uniqueItems": true },
         "pgbouncer": {
           "type": "object",
           "properties": {

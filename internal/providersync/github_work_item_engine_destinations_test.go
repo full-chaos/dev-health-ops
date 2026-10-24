@@ -28,7 +28,7 @@ func TestNewGitHubWorkItemEngineDeriverRejectsAMissingStatusMapping(t *testing.T
 func TestNewGitHubWorkItemDeriverLoadsTheExplicitConfig(t *testing.T) {
 	conn := stubWorkItemConn{}
 	lease := githubWorkItemCompositionLease()
-	statusPath := resolveStatusMappingConfig(t, "real")
+	statusPath := resolveStatusMappingConfig(t, "live")
 
 	for _, testCase := range []struct {
 		name       string

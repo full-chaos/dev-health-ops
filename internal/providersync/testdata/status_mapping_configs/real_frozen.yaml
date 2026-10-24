@@ -1,0 +1,141 @@
+version: 1
+
+# Default cross-provider status categories.
+# Matching is case-insensitive and whitespace-normalized.
+status_categories:
+  backlog:
+    - Backlog
+    - Icebox
+    - Triage
+  todo:
+    - To Do
+    - Todo
+    - Ready
+    - Ready for Dev
+  in_progress:
+    - In Progress
+    - Doing
+    - WIP
+  in_review:
+    - In Review
+    - Review
+    - Code Review
+    - QA
+  blocked:
+    - Blocked
+    - On Hold
+  done:
+    - Done
+    - Closed
+    - Resolved
+  canceled:
+    - Canceled
+    - Cancelled
+    - Won't Do
+
+providers:
+  jira:
+    # Jira status names (issue.fields.status.name).
+    statuses:
+      todo:
+        - Selected for Development
+      in_review:
+        - In QA
+    # Jira issue type names (issue.fields.issuetype.name).
+    types:
+      epic:
+        - Epic
+      story:
+        - Story
+      task:
+        - Task
+        - Sub-task
+      bug:
+        - Bug
+      incident:
+        - Incident
+  github:
+    # Label-based status mapping for GitHub issues / project items.
+    status_labels:
+      in_progress:
+        - in progress
+        - doing
+        - wip
+      in_review:
+        - in review
+        - needs review
+      blocked:
+        - blocked
+      todo:
+        - todo
+        - to do
+        - ready
+      done:
+        - done
+      canceled:
+        - wontfix
+        - duplicate
+    # Label-based type mapping for GitHub issues.
+    type_labels:
+      bug:
+        - bug
+        - type: bug
+      incident:
+        - incident
+      chore:
+        - chore
+        - maintenance
+  gitlab:
+    # Label-based status mapping for GitLab issues.
+    status_labels:
+      in_progress:
+        - in progress
+        - doing
+        - wip
+      in_review:
+        - in review
+        - review
+      blocked:
+        - blocked
+      todo:
+        - todo
+        - to do
+        - ready
+      done:
+        - done
+      canceled:
+        - wontfix
+        - duplicate
+    # Label-based type mapping for GitLab issues.
+    type_labels:
+      bug:
+        - bug
+        - type::bug
+      incident:
+        - incident
+      chore:
+        - chore
+        - maintenance
+  linear:
+    # Linear uses state.type for status (backlog, unstarted, started, completed, canceled).
+    # These label-based overrides take precedence when present.
+    status_labels:
+      blocked:
+        - blocked
+        - on hold
+    # Label-based type mapping for Linear issues.
+    type_labels:
+      bug:
+        - bug
+        - type:bug
+      incident:
+        - incident
+      story:
+        - story
+        - feature
+      epic:
+        - epic
+      chore:
+        - chore
+        - maintenance
+

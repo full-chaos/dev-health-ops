@@ -214,7 +214,14 @@ func TestQueueFullRequestNeverWaitsOnALogWriter(t *testing.T) {
 	h := handlers{Deps: Deps{Logger: logger}}
 	q.startReporter(logger, 10*time.Millisecond)
 	release := fillQueue(t, q)
-	defer func() { close(writerRelease); release(); q.wait() }()
+	defer func() {
+		close(writerRelease)
+		release()
+		q.wait()
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		q.drain(ctx)
+	}()
 	request := httptest.NewRequest(http.MethodPost, "/forgot", nil)
 	for name, real := range map[string]bool{"real": true, "decoy": false} {
 		done := make(chan struct{})
@@ -279,18 +286,125 @@ func TestDrainStopsTheReporterAfterALastReport(t *testing.T) {
 	h := handlers{Deps: Deps{Logger: logger}}
 	release := fillQueue(t, q)
 	q.startReporter(logger, time.Hour)
-	h.queueLinkJob(context.Background(), httptest.NewRequest(http.MethodPost, "/x", nil), mailPasswordReset, true, func(context.Context, *http.Request) error { return nil })
+	drop := func() {
+		h.queueLinkJob(context.Background(), httptest.NewRequest(http.MethodPost, "/x", nil), mailPasswordReset, true, func(context.Context, *http.Request) error { return nil })
+	}
+	drop()
 	release()
 	q.wait()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
 	<-ctx.Done()
 	q.drain(ctx)
+	count := func() int { return strings.Count(logs.String(), "queue full") }
 	deadline := time.Now().Add(2 * time.Second)
-	for !strings.Contains(logs.String(), "count=1") && time.Now().Before(deadline) {
+	for count() == 0 && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	if !strings.Contains(logs.String(), "count=1") {
-		t.Errorf("the last report was not written at the stop:\n%s", logs.String())
+		t.Fatalf("the last report was not written at the stop:\n%s", logs.String())
+	}
+	// The reporter has stopped: a later drop is counted but never reported.
+	release2 := fillQueue(t, q)
+	drop()
+	time.Sleep(150 * time.Millisecond)
+	release2()
+	q.wait()
+	if got := count(); got != 1 {
+		t.Errorf("the reporter kept running after the drain: %d lines", got)
+	}
+}
+
+func withReportInterval(t *testing.T, every time.Duration) {
+	t.Helper()
+	saved := mailDropReportInterval
+	mailDropReportInterval = every
+	t.Cleanup(func() { mailDropReportInterval = saved })
+}
+
+func queueFullLines(logs *lockedBuffer) []string {
+	var out []string
+	for _, line := range strings.Split(logs.String(), "\n") {
+		if strings.Contains(line, "queue full") {
+			out = append(out, line)
+		}
+	}
+	return out
+}
+
+// The api starts the reporter through the component lifecycle: Start, a burst of drops, Shutdown.
+func TestMailDrainLifecycleReportsOnceWithTheCount(t *testing.T) {
+	q := withQueue(t, 1)
+	withReportInterval(t, 40*time.Millisecond)
+	logs := &lockedBuffer{}
+	logger := slog.New(slog.NewTextHandler(logs, nil))
+	h := handlers{Deps: Deps{Logger: logger}}
+	component := MailDrain{Logger: logger}
+	if err := component.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	release := fillQueue(t, q)
+	request := httptest.NewRequest(http.MethodPost, "/forgot", nil)
+	for range 4 {
+		h.queueLinkJob(context.Background(), request, mailPasswordReset, true, func(context.Context, *http.Request) error { return nil })
+	}
+	time.Sleep(300 * time.Millisecond)
+	if got := queueFullLines(logs); len(got) != 1 || !strings.Contains(got[0], "count=4") || !strings.Contains(got[0], "purpose=password_reset") {
+		t.Fatalf("after Start and a burst of 4 want one line with count=4, got %q", got)
+	}
+	release()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := component.Shutdown(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := queueFullLines(logs); len(got) != 1 {
+		t.Errorf("Shutdown wrote a report with nothing new: %q", got)
+	}
+}
+
+func TestMailDrainStartedTwiceRunsOneReporter(t *testing.T) {
+	q := withQueue(t, 1)
+	withReportInterval(t, 40*time.Millisecond)
+	logs := &lockedBuffer{}
+	logger := slog.New(slog.NewTextHandler(logs, nil))
+	h := handlers{Deps: Deps{Logger: logger}}
+	component := MailDrain{Logger: logger}
+	for range 2 {
+		if err := component.Start(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	release := fillQueue(t, q)
+	request := httptest.NewRequest(http.MethodPost, "/forgot", nil)
+	for range 3 {
+		h.queueLinkJob(context.Background(), request, mailPasswordReset, true, func(context.Context, *http.Request) error { return nil })
+	}
+	time.Sleep(300 * time.Millisecond)
+	release()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_ = component.Shutdown(ctx)
+	if got := queueFullLines(logs); len(got) != 1 || !strings.Contains(got[0], "count=3") {
+		t.Fatalf("a second Start must not add a reporter: want one line with count=3, got %q", got)
+	}
+}
+
+// The drain waits for the reporter's final report, bounded by its own context.
+func TestDrainWaitsForTheReportersFinalReport(t *testing.T) {
+	q := withQueue(t, 1)
+	logs := &lockedBuffer{}
+	logger := slog.New(slog.NewTextHandler(logs, nil))
+	h := handlers{Deps: Deps{Logger: logger}}
+	release := fillQueue(t, q)
+	q.startReporter(logger, time.Hour)
+	h.queueLinkJob(context.Background(), httptest.NewRequest(http.MethodPost, "/x", nil), mailPasswordReset, true, func(context.Context, *http.Request) error { return nil })
+	release()
+	q.wait()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	q.drain(ctx)
+	if got := queueFullLines(logs); len(got) != 1 || !strings.Contains(got[0], "count=1") {
+		t.Fatalf("drain returned before the final report: %q", got)
 	}
 }

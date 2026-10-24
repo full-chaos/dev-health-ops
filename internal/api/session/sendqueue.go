@@ -43,6 +43,9 @@ type sendQueue struct {
 	// fullDrops counts, by purpose, the real jobs a full queue refused; the one reporter reads it. A request
 	// only adds to it: it makes no log call and takes no lock.
 	fullDrops map[string]*atomic.Uint64
+	// reporterOnce makes a second Start a no-op; reporterDone ends with the reporter's final report.
+	reporterOnce sync.Once
+	reporterDone chan struct{}
 	// ctx ends when a drain gives up: every job bound to it is cancelled.
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -102,29 +105,50 @@ func (q *sendQueue) startReporter(logger *slog.Logger, every time.Duration) {
 	if logger == nil {
 		return
 	}
-	last := map[string]uint64{}
-	report := func() {
-		for _, purpose := range mailPurposes {
-			now := q.fullDrops[purpose].Load()
-			if n := now - last[purpose]; n > 0 {
-				last[purpose] = now
-				logger.Warn("api session mail dropped: queue full", "count", n, "purpose", purpose, "since", "last report")
+	q.reporterOnce.Do(func() {
+		done := make(chan struct{})
+		q.mu.Lock()
+		q.reporterDone = done
+		q.mu.Unlock()
+		last := map[string]uint64{}
+		report := func() {
+			for _, purpose := range mailPurposes {
+				now := q.fullDrops[purpose].Load()
+				if n := now - last[purpose]; n > 0 {
+					last[purpose] = now
+					logger.Warn("api session mail dropped: queue full", "count", n, "purpose", purpose, "since", "last report")
+				}
 			}
 		}
+		go func() {
+			defer close(done)
+			ticker := time.NewTicker(every)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ticker.C:
+					report()
+				case <-q.ctx.Done():
+					report()
+					return
+				}
+			}
+		}()
+	})
+}
+
+// waitReporter waits for the reporter to finish its final report, until ctx ends.
+func (q *sendQueue) waitReporter(ctx context.Context) {
+	q.mu.Lock()
+	done := q.reporterDone
+	q.mu.Unlock()
+	if done == nil {
+		return
 	}
-	go func() {
-		ticker := time.NewTicker(every)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ticker.C:
-				report()
-			case <-q.ctx.Done():
-				report()
-				return
-			}
-		}
-	}()
+	select {
+	case <-done:
+	case <-ctx.Done():
+	}
 }
 
 // bind returns ctx with a timeout that is also cancelled when a drain gives up.
@@ -198,13 +222,19 @@ func (q *sendQueue) submitDecoy(run func()) bool {
 func (q *sendQueue) drain(ctx context.Context) int {
 	done := make(chan struct{})
 	go func() { q.wg.Wait(); close(done) }()
-	defer q.cancel()
+	left := 0
 	select {
 	case <-done:
-		return 0
 	case <-ctx.Done():
+		left = q.settleLeft()
 	}
 	q.cancel()
+	q.waitReporter(ctx)
+	return left
+}
+
+// settleLeft counts every job still running as dropped, once.
+func (q *sendQueue) settleLeft() int {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	left := 0
@@ -223,8 +253,11 @@ func (q *sendQueue) drain(ctx context.Context) int {
 // finish, within the shutdown deadline, when the api stops.
 type MailDrain struct{ Logger *slog.Logger }
 
-func (MailDrain) Name() string                { return "session-mail-queue" }
-func (MailDrain) Start(context.Context) error { return nil }
+func (MailDrain) Name() string { return "session-mail-queue" }
+func (d MailDrain) Start(context.Context) error {
+	linkMailQueue.startReporter(d.Logger, mailDropReportInterval)
+	return nil
+}
 func (d MailDrain) Shutdown(ctx context.Context) error {
 	if left := linkMailQueue.drain(ctx); left > 0 && d.Logger != nil {
 		d.Logger.WarnContext(ctx, "api session mail queue stopped with jobs unfinished", "count", left)

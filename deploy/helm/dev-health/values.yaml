@@ -384,8 +384,8 @@ queryApi:
     port: 8091
     # -- Pod selectors (each `{matchLabels: {...}}`) allowed to reach the internal port (empty
     #    admits nobody through this policy; CHAOS-7520: there is no release-local peer. With
-    #    networkPolicy.enabled the release-wide policy's in-namespace rule still admits every pod of the
-    #    release on this port, NetworkPolicies being additive). The internal listener trusts X-DH-Internal-* identity
+    #    networkPolicy.enabled the query-api pods leave the release-wide policy, so this list is the only
+    #    way to this port). The internal listener trusts X-DH-Internal-* identity
     #    headers from any peer that can connect, so add only the pods that must call it, and
     #    only while they must. The tools pod that runs `dho goapi prove-write` is NOT admitted
     #    by default; to admit it for a proof run:
@@ -396,8 +396,8 @@ queryApi:
   #    queries only, the internal identity headers only, allowlisted root fields, its own
   #    ClickHouse read ceiling. When on, this chart adds the env var, a named `mcp`
   #    containerPort, a ClusterIP Service `<fullname>-query-api-mcp` and a NetworkPolicy
-  #    admitting `mcp.allowedFrom` ONLY (not the api pods). Refused together with
-  #    networkPolicy.enabled (that policy opens every port to every in-namespace pod).
+  #    admitting `mcp.allowedFrom` ONLY (not the api pods). With networkPolicy.enabled the
+  #    query-api pods leave the release-wide policy, so that policy does not open this port.
   #    Prod turns this on through the umbrella values (`ops.queryApi.mcp.*`): this chart
   #    renders the Service and the NetworkPolicy itself; the umbrella deploy chart has no
   #    template for the MCP listener (unlike the internal listener's query-api-internal).
@@ -1200,6 +1200,12 @@ networkPolicy:
   ingressControllerNamespace: ingress-nginx
   #    Must differ from the namespace the release is installed in: the render fails when networkPolicy.enabled
   #    and the two are equal (the in-namespace rule would admit the controller on every port).
+  # -- More egress rules (NetworkPolicy egress rule objects: `to` and/or `ports`) for the release-wide policy and the
+  #    go-api and query-api egress policies, after DNS (UDP and TCP 53), the release namespace and TCP 443. Never for
+  #    the auth pods. The render refuses an entry with neither a non-empty `to` nor non-empty `ports`, an ipBlock of
+  #    0.0.0.0/0 or ::/0 with no `except` and no `ports`, and any key other than `to` and `ports`. Example:
+  #    `[{to: [{ipBlock: {cidr: 10.0.0.151/32}}], ports: [{protocol: TCP, port: 4317}]}, {ports: [{protocol: TCP, port: 9440}]}]`
+  extraEgress: []
 
 # =============================================================================
 # Configuration (non-secret)

@@ -663,10 +663,11 @@ type ComplexityRoot struct {
 	}
 
 	EvidenceQualityStats struct {
-		BandCounts func(childComplexity int) int
-		Mean       func(childComplexity int) int
-		Stddev     func(childComplexity int) int
-		Total      func(childComplexity int) int
+		BandCounts         func(childComplexity int) int
+		Mean               func(childComplexity int) int
+		Stddev             func(childComplexity int) int
+		Total              func(childComplexity int) int
+		UncategorizedCount func(childComplexity int) int
 	}
 
 	EvidenceRef struct {
@@ -4638,6 +4639,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 		}
 
 		return e.complexity.EvidenceQualityStats.Total(childComplexity), true
+
+	case "EvidenceQualityStats.uncategorizedCount":
+		if e.complexity.EvidenceQualityStats.UncategorizedCount == nil {
+			break
+		}
+
+		return e.complexity.EvidenceQualityStats.UncategorizedCount(childComplexity), true
 
 	case "EvidenceRef.field":
 		if e.complexity.EvidenceRef.Field == nil {
@@ -10510,6 +10518,8 @@ type EvidenceQualityStats {
   stddev: Float
   total: Int!
   bandCounts: JSON!
+  """Units of the window under the evidence gate (too little text); the theme mix leaves them out and total still counts them. Null when the window has no unit."""
+  uncategorizedCount: Int
 }
 
 type EvidenceRef {
@@ -26820,6 +26830,8 @@ func (ec *executionContext) fieldContext_AnalyticsResult_evidenceQualityStats(_ 
 				return ec.fieldContext_EvidenceQualityStats_total(ctx, field)
 			case "bandCounts":
 				return ec.fieldContext_EvidenceQualityStats_bandCounts(ctx, field)
+			case "uncategorizedCount":
+				return ec.fieldContext_EvidenceQualityStats_uncategorizedCount(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type EvidenceQualityStats", field.Name)
 		},
@@ -34338,6 +34350,47 @@ func (ec *executionContext) fieldContext_EvidenceQualityStats_bandCounts(_ conte
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type JSON does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _EvidenceQualityStats_uncategorizedCount(ctx context.Context, field graphql.CollectedField, obj *model.EvidenceQualityStats) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_EvidenceQualityStats_uncategorizedCount(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.UncategorizedCount, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*int)
+	fc.Result = res
+	return ec.marshalOInt2ᚖint(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_EvidenceQualityStats_uncategorizedCount(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "EvidenceQualityStats",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
 		},
 	}
 	return fc, nil
@@ -73140,6 +73193,8 @@ func (ec *executionContext) _EvidenceQualityStats(ctx context.Context, sel ast.S
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "uncategorizedCount":
+			out.Values[i] = ec._EvidenceQualityStats_uncategorizedCount(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}

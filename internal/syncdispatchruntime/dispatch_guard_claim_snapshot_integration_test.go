@@ -69,10 +69,9 @@ func claimSnapshotBucket() dispatchBucket {
 
 // createClaimSnapshotTables builds the budget-candidates sync_run_units
 // projection (every column budgetUnitSelectColumns reads, plus the lease
-// columns countActiveBucketUnits needs) AND the three entitlement tables
-// ResolveMaxSyncUnitsCap queries -- without them a uuid org id makes
-// loadPlanLimits' SELECT fail, and a failed statement poisons the whole
-// dispatch transaction rather than falling back to the env default.
+// columns countActiveBucketUnits needs) AND the three entitlement tables the
+// guard once read for the tier cap. The cap no longer reads them; they stay so
+// the fixture keeps its shape.
 func createClaimSnapshotTables(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
 	pgschema.Apply(ctx, t, pool)

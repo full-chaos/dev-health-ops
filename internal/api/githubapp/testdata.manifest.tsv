@@ -2,3 +2,4 @@
 # python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
 # header-before-stamp set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
 -	header	golden/venue-oracle-git-hub-app-install.json
+55febfa8006a231224657d496fb99cbb3f75c911e0227564aca40f3ad22a5bf6	go-generated	venue/github-app-install.go-pin.json

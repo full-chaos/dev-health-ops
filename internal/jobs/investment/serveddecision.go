@@ -239,10 +239,16 @@ func NewServedDecision(client *categorize.TypeSafeClient, logger *slog.Logger) (
 }
 
 func newServedDecision(sender systemOneSender, logger *slog.Logger) (*ServedDecision, error) {
+	return newServedDecisionFor(sender, logger, "")
+}
+
+// newServedDecisionFor is newServedDecision for a backend with its own provider
+// name in the identity; "" is jev.
+func newServedDecisionFor(sender systemOneSender, logger *slog.Logger, provider string) (*ServedDecision, error) {
 	if sender == nil || logger == nil {
 		return nil, ErrUnavailable
 	}
-	completer, err := decision.NewCompleter(shadowTransport{sender: sender}, sender.Model())
+	completer, err := decision.NewCompleterForProvider(shadowTransport{sender: sender}, sender.Model(), provider)
 	if err != nil {
 		return nil, err
 	}

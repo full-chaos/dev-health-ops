@@ -130,7 +130,7 @@ func TestGoldenInvestmentBasic(t *testing.T) {
 			}}, nil
 		case strings.Contains(query, "quality_known_count"):
 			return &fixtureRowScanner{rows: [][]any{
-				{uint64(20), uint64(10), 0.3, 0.3, uint64(1), uint64(1), uint64(9), uint64(3), uint64(10)},
+				{uint64(20), uint64(10), 0.3, 0.3, uint64(1), uint64(1), uint64(9), uint64(3), uint64(10), uint64(0)},
 			}}, nil
 		case strings.Contains(query, "AS sized_units"):
 			// FetchSizingCoverage: no unit of the fixture carries a size row.

@@ -1,0 +1,288 @@
+{
+ "version": 1,
+ "keyPattern": "^[A-Za-z][A-Za-z0-9_]{0,63}$",
+ "stringPattern": "^[A-Za-z0-9_./:\\[\\]-]{1,128}$",
+ "uuidPattern": "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}",
+ "runPattern": "[A-Za-z0-9]{24,}",
+ "orgIdHashPattern": "^(?:[0-9a-f]{64}|fnv1a-[0-9a-f]{8})$",
+ "payloadVectors": [
+  {
+   "name": "route pattern with brackets",
+   "payloadJson": "{\"routePattern\":\"/people/[person_id]/metrics/[metric]\"}",
+   "drop": false,
+   "reason": ""
+  },
+  {
+   "name": "snake case id",
+   "payloadJson": "{\"feature\":\"work_graph\",\"surface\":\"quadrant_panel\"}",
+   "drop": false,
+   "reason": ""
+  },
+  {
+   "name": "error class",
+   "payloadJson": "{\"errorClass\":\"TypeError\"}",
+   "drop": false,
+   "reason": ""
+  },
+  {
+   "name": "128 chars",
+   "payloadJson": "{\"view\":\"aaaaaaa_aaaaaaa_aaaaaaa_aaaaaaa_aaaaaaa_aaaaaaa_aaaaaaa_aaaaaaa_aaaaaaa_aaaaaaa_aaaaaaa_aaaaaaa_aaaaaaa_aaaaaaa_aaaaaaa_aaaaaaa_\"}",
+   "drop": false,
+   "reason": ""
+  },
+  {
+   "name": "64 char key",
+   "payloadJson": "{\"kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk\":\"x\"}",
+   "drop": false,
+   "reason": ""
+  },
+  {
+   "name": "ints floats bools null",
+   "payloadJson": "{\"a\":1,\"b\":-2,\"c\":1.5,\"d\":true,\"e\":false,\"f\":null}",
+   "drop": false,
+   "reason": ""
+  },
+  {
+   "name": "23 char alnum run",
+   "payloadJson": "{\"view\":\"aaaaaaaaaaaaaaaaaaaaaaa\"}",
+   "drop": false,
+   "reason": ""
+  },
+  {
+   "name": "24 chars with separators",
+   "payloadJson": "{\"view\":\"aaaaaaaaaaaaaaaaaaaaaaa_bbbbbbbbbbbbbbbbbbbbbbb\"}",
+   "drop": false,
+   "reason": ""
+  },
+  {
+   "name": "dotted name and colon",
+   "payloadJson": "{\"view\":\"team.metrics:cycle-time\"}",
+   "drop": false,
+   "reason": ""
+  },
+  {
+   "name": "empty payload",
+   "payloadJson": "{}",
+   "drop": false,
+   "reason": ""
+  },
+  {
+   "name": "email",
+   "payloadJson": "{\"view\":\"person@example.com\"}",
+   "drop": true,
+   "reason": "string"
+  },
+  {
+   "name": "space",
+   "payloadJson": "{\"view\":\"two words\"}",
+   "drop": true,
+   "reason": "string"
+  },
+  {
+   "name": "url with a query",
+   "payloadJson": "{\"view\":\"https://example.com/a?b=c\"}",
+   "drop": true,
+   "reason": "string"
+  },
+  {
+   "name": "query string",
+   "payloadJson": "{\"view\":\"/a?b=c\"}",
+   "drop": true,
+   "reason": "string"
+  },
+  {
+   "name": "129 chars",
+   "payloadJson": "{\"view\":\"aaaaaaa_aaaaaaa_aaaaaaa_aaaaaaa_aaaaaaa_aaaaaaa_aaaaaaa_aaaaaaa_aaaaaaa_aaaaaaa_aaaaaaa_aaaaaaa_aaaaaaa_aaaaaaa_aaaaaaa_aaaaaaa_b\"}",
+   "drop": true,
+   "reason": "string"
+  },
+  {
+   "name": "empty string",
+   "payloadJson": "{\"view\":\"\"}",
+   "drop": true,
+   "reason": "string"
+  },
+  {
+   "name": "uuid alone",
+   "payloadJson": "{\"view\":\"123e4567-e89b-12d3-a456-426614174000\"}",
+   "drop": true,
+   "reason": "string"
+  },
+  {
+   "name": "uuid in path",
+   "payloadJson": "{\"view\":\"/people/123E4567-E89B-12D3-A456-426614174000/metrics\"}",
+   "drop": true,
+   "reason": "string"
+  },
+  {
+   "name": "32 hex",
+   "payloadJson": "{\"view\":\"abababababababababababababababab\"}",
+   "drop": true,
+   "reason": "string"
+  },
+  {
+   "name": "24 char token",
+   "payloadJson": "{\"view\":\"aaaaaaaaaaaaaaaaaaaaaaaa\"}",
+   "drop": true,
+   "reason": "string"
+  },
+  {
+   "name": "token in path",
+   "payloadJson": "{\"view\":\"/x/Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1/y\"}",
+   "drop": true,
+   "reason": "string"
+  },
+  {
+   "name": "unicode",
+   "payloadJson": "{\"view\":\"caf\\u00e9\"}",
+   "drop": true,
+   "reason": "string"
+  },
+  {
+   "name": "control char",
+   "payloadJson": "{\"view\":\"a\\u0001b\"}",
+   "drop": true,
+   "reason": "string"
+  },
+  {
+   "name": "trailing newline",
+   "payloadJson": "{\"view\":\"abc\\n\"}",
+   "drop": true,
+   "reason": "string"
+  },
+  {
+   "name": "percent",
+   "payloadJson": "{\"view\":\"a%20b\"}",
+   "drop": true,
+   "reason": "string"
+  },
+  {
+   "name": "key with space",
+   "payloadJson": "{\"a b\":\"x\"}",
+   "drop": true,
+   "reason": "key"
+  },
+  {
+   "name": "key leading digit",
+   "payloadJson": "{\"1a\":\"x\"}",
+   "drop": true,
+   "reason": "key"
+  },
+  {
+   "name": "key 65 chars",
+   "payloadJson": "{\"kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk\":\"x\"}",
+   "drop": true,
+   "reason": "key"
+  },
+  {
+   "name": "key unicode",
+   "payloadJson": "{\"k\\u00e9\":\"x\"}",
+   "drop": true,
+   "reason": "key"
+  },
+  {
+   "name": "empty key",
+   "payloadJson": "{\"\":\"x\"}",
+   "drop": true,
+   "reason": "key"
+  },
+  {
+   "name": "key trailing newline",
+   "payloadJson": "{\"abc\\n\":\"x\"}",
+   "drop": true,
+   "reason": "key"
+  },
+  {
+   "name": "key with dash",
+   "payloadJson": "{\"a-b\":\"x\"}",
+   "drop": true,
+   "reason": "key"
+  },
+  {
+   "name": "NaN",
+   "payloadJson": "{\"a\":NaN}",
+   "drop": true,
+   "reason": "number"
+  },
+  {
+   "name": "Infinity",
+   "payloadJson": "{\"a\":Infinity}",
+   "drop": true,
+   "reason": "number"
+  },
+  {
+   "name": "minus Infinity",
+   "payloadJson": "{\"a\":-Infinity}",
+   "drop": true,
+   "reason": "number"
+  },
+  {
+   "name": "plain url without query or credentials (inside the charset: a known limit of the rules)",
+   "payloadJson": "{\"view\":\"https://example.com/a\"}",
+   "drop": false,
+   "reason": ""
+  }
+ ],
+ "orgIdHashVectors": [
+  {
+   "name": "sha256 hex",
+   "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "ok": true
+  },
+  {
+   "name": "fnv fallback",
+   "value": "fnv1a-0123abcd",
+   "ok": true
+  },
+  {
+   "name": "uppercase hex",
+   "value": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+   "ok": false
+  },
+  {
+   "name": "63 hex",
+   "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "ok": false
+  },
+  {
+   "name": "65 hex",
+   "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "ok": false
+  },
+  {
+   "name": "fnv short",
+   "value": "fnv1a-0123abc",
+   "ok": false
+  },
+  {
+   "name": "fnv upper",
+   "value": "fnv1a-0123ABCD",
+   "ok": false
+  },
+  {
+   "name": "empty (the pattern refuses it; the intake maps it to the anonymous stream before the pattern)",
+   "value": "",
+   "ok": false
+  },
+  {
+   "name": "path-like",
+   "value": "../x",
+   "ok": false
+  },
+  {
+   "name": "colon",
+   "value": "a:b",
+   "ok": false
+  },
+  {
+   "name": "trailing newline",
+   "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+   "ok": false
+  },
+  {
+   "name": "unicode",
+   "value": "\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9",
+   "ok": false
+  }
+ ]
+}

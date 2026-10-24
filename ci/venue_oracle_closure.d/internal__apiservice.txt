@@ -47,6 +47,7 @@ internal/auth/contracts
 internal/auth/contracts/provisioning
 internal/auth/contracts/tokencorpus
 internal/auth/edgetoken
+internal/auth/emaildomain
 internal/auth/httpapi
 internal/auth/identity
 internal/auth/identity/local

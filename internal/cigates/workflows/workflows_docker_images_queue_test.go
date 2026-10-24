@@ -231,12 +231,12 @@ func TestDockerImagesBuildButNeverPublishOnMergeGroup(t *testing.T) {
 	merge := queueContext("merge_group", "refs/heads/gh-readonly-queue/main/pr-1-abc")
 	control := queueContext("push", "refs/heads/main")
 
-	var gates []string
+	var publishGates []string
 	for _, e := range all {
 		if !isPublishGate(e) {
 			continue
 		}
-		gates = append(gates, e.where)
+		publishGates = append(publishGates, e.where)
 		got, err := queueEval(e.text, merge)
 		if err != nil {
 			t.Errorf("%s: %v", e.where, err)
@@ -250,9 +250,9 @@ func TestDockerImagesBuildButNeverPublishOnMergeGroup(t *testing.T) {
 			t.Errorf("%s is not open on a main push (%v): the test would pass on a gate that never publishes", e.where, err)
 		}
 	}
-	sort.Strings(gates)
-	if len(gates) < 12 {
-		t.Errorf("found only %d publish gates: %v", len(gates), gates)
+	sort.Strings(publishGates)
+	if len(publishGates) < 12 {
+		t.Errorf("found only %d publish publishGates: %v", len(publishGates), publishGates)
 	}
 
 	for _, name := range []string{"go-build", "go-build-dho-arm64", "go-api-tools-build"} {

@@ -83,6 +83,9 @@ refuse() { # label, vf
   [ "$rc" -ne 0 ] || fail "$1: accepted"
   [ ! -s "$root/log" ] || fail "$1: kubectl ran"
   case "$out" in *"$tok"*) fail "$1: value printed" ;; esac
+  if [ -e "$2" ] || [ -L "$2" ]; then
+    case "$out" in *"value file kept for retry: $2"*) ;; *) fail "$1: kept-path line missing: $out" ;; esac
+  fi
   [ -e "$2" ] || [ -L "$2" ] || [ "$1" = missing ] || fail "$1: source removed"
 }
 vf="$(newfile "$disk" "$tok")";            refuse notmpfs "$vf"
@@ -119,7 +122,12 @@ set +e; KUBECTL="$fake" bash -x "$script" --context c --namespace n --name x --v
 # 5b name and key shape: refused by the script before kubectl runs.
 long254="$(printf 'a%.0s' $(seq 1 254))"
 vf="$(newfile "$root" "$tok")"
-for bad in "a..b" ".a" "a." "-a" "a-.b" "$long254"; do
+lab64="$(printf 'a%.0s' $(seq 1 64))"
+lab63="$(printf 'a%.0s' $(seq 1 63))"
+lab61="$(printf 'a%.0s' $(seq 1 61))"
+multi253="$lab63.$lab63.$lab63.$lab61"
+multi254="$lab63.$lab63.$lab63.${lab61}a"
+for bad in "a..b" ".a" "a." "-a" "a-.b" "$long254" "$lab64" "$multi254" "x.$lab64"; do
   : >"$root/log"
   set +e
   KUBECTL="$fake" FAKE_MODE=ok FAKE_LOG="$root/log" bash "$script" --context c --namespace n --name "$bad" --value-file "$vf" >/dev/null 2>&1
@@ -136,7 +144,6 @@ for badkey in "." ".." ".x"; do
   [ "$r" -ne 0 ] && [ ! -s "$root/log" ] || fail "bad key '$badkey' accepted"
 done
 : >"$root/log"
-long253="$(printf 'a%.0s' $(seq 1 253))"
 set +e
 KUBECTL="$fake" FAKE_MODE=ok FAKE_LOG="$root/log" FAKE_SEEN="$root/seen" SESSION_ISSUE_WORKDIR_BASE="$root" bash "$script" --context c --namespace n --name "a.b-c.d" --value-file "$vf" >/dev/null 2>&1
 r=$?
@@ -145,10 +152,53 @@ set -e
 vf="$(newfile "$root" "$tok")"
 : >"$root/log"
 set +e
-KUBECTL="$fake" FAKE_MODE=ok FAKE_LOG="$root/log" FAKE_SEEN="$root/seen" SESSION_ISSUE_WORKDIR_BASE="$root" bash "$script" --context c --namespace n --name "$long253" --value-file "$vf" >/dev/null 2>&1
+KUBECTL="$fake" FAKE_MODE=ok FAKE_LOG="$root/log" FAKE_SEEN="$root/seen" SESSION_ISSUE_WORKDIR_BASE="$root" bash "$script" --context c --namespace n --name "$multi253" --value-file "$vf" >/dev/null 2>&1
 r=$?
 set -e
-[ "$r" -eq 0 ] || fail "253-char name refused"
+[ "${#multi253}" -eq 253 ] && [ "$r" -eq 0 ] || fail "253-char multi-label name refused"
+vf="$(newfile "$root" "$tok")"
+: >"$root/log"
+set +e
+KUBECTL="$fake" FAKE_MODE=ok FAKE_LOG="$root/log" FAKE_SEEN="$root/seen" SESSION_ISSUE_WORKDIR_BASE="$root" bash "$script" --context c --namespace n --name "$lab63" --value-file "$vf" >/dev/null 2>&1
+r=$?
+set -e
+[ "$r" -eq 0 ] || fail "63-char label refused"
+
+# 5c bad name / key refusals also print the kept path.
+vf="$(newfile "$root" "$tok")"
+run ok "$vf" --key '.x'
+[ "$rc" -eq 2 ] || fail "bad key rc=$rc"
+case "$out" in *"value file kept for retry: $vf"*) ;; *) fail "bad key refusal: no kept path: $out" ;; esac
+rm -f "$vf"
+
+# 5d stdout closed (/dev/full): the create still succeeded, so the source is shredded and rc is 0.
+vf="$(newfile "$root" "$tok")"
+: >"$root/log"
+set +e
+FAKE_MODE=ok FAKE_LOG="$root/log" FAKE_SEEN="$root/seen" KUBECTL="$fake" SESSION_ISSUE_WORKDIR_BASE="$root" bash "$script" --context c --namespace n --name x --value-file "$vf" >/dev/full 2>/dev/null
+r=$?
+set -e
+[ "$(wc -l <"$root/log")" -eq 1 ] || fail "devfull: kubectl did not run once"
+[ ! -e "$vf" ] || fail "devfull: source left behind after a successful create"
+[ "$r" -eq 0 ] || fail "devfull: rc=$r"
+[ "$(leftovers)" -eq 0 ] || fail "devfull: workdir left behind"
+
+# 5e shred fails after a successful create: never silent, non-zero, path printed, no value.
+ro="$(mktemp -d "$shmbase/issue-secret-ro.XXXXXX")"
+vf="$(newfile "$ro" "$tok")"
+chmod 0500 "$ro"
+if rm -f "$ro/probe" 2>/dev/null && [ ! -e "$ro/probe" ] && ! ( : >"$ro/probe" ) 2>/dev/null; then
+  run ok "$vf"
+  [ "$rc" -ne 0 ] || fail "shred failure: rc 0"
+  case "$out" in *"secret created; value file NOT removed: $vf"*) ;; *) fail "shred failure output: $out" ;; esac
+  case "$out" in *"$tok"*) fail "shred failure: value printed" ;; esac
+  [ -f "$vf" ] || fail "shred failure: file gone?"
+  [ "$(leftovers)" -eq 0 ] || fail "shred failure: workdir left behind"
+else
+  echo "SKIP shred-failure case: directory is writable despite mode 0500 (root?)" >&2
+  fail "shred failure case cannot run"
+fi
+chmod 0700 "$ro"; rm -rf "$ro"
 
 # 6 signal during kubectl: the child is stopped, the workdir is gone at once, the source is kept.
 cat >"$root/slow" <<'SLOW'

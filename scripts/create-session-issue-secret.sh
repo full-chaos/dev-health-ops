@@ -25,22 +25,28 @@ while [ "$#" -gt 0 ]; do
     --name) name="${2:-}"; shift 2 ;;
     --value-file) valuefile="${2:-}"; shift 2 ;;
     --key) key="${2:-}"; shift 2 ;;
-    *) printf 'refused: unknown argument\n' >&2; exit 2 ;;
+    *) refuse "unknown argument" ;;
   esac
 done
 
-[ -n "$context" ] && [ -n "$namespace" ] && [ -n "$name" ] && [ -n "$valuefile" ] || {
-  printf 'refused: --context, --namespace, --name and --value-file are required\n' >&2
-  exit 2
-}
-dns1123='^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$'
-keyname='^[A-Za-z0-9_-][A-Za-z0-9._-]{0,252}$'
-[[ "$name" =~ $dns1123 ]] && [ "${#name}" -le 253 ] && [[ "$key" =~ $keyname ]] || {
-  printf 'refused: --name or --key is not a valid name\n' >&2
+kept() { printf 'value file kept for retry: %s\n' "$valuefile"; }
+# refuse REASON: names the reason on stderr and, when the source exists, its path.
+refuse() {
+  printf 'refused: %s\n' "$1" >&2
+  if [ -n "$valuefile" ] && { [ -e "$valuefile" ] || [ -L "$valuefile" ]; }; then kept >&2; fi
   exit 2
 }
 
-refuse_file() { printf 'refused: value file %s\n' "$1" >&2; exit 2; }
+[ -n "$context" ] && [ -n "$namespace" ] && [ -n "$name" ] && [ -n "$valuefile" ] || {
+  refuse "--context, --namespace, --name and --value-file are required"
+}
+dns1123='^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?(\.[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?)*$'
+keyname='^[A-Za-z0-9_-][A-Za-z0-9._-]{0,252}$'
+[[ "$name" =~ $dns1123 ]] && [ "${#name}" -le 253 ] && [[ "$key" =~ $keyname ]] || {
+  refuse "--name or --key is not a valid name"
+}
+
+refuse_file() { refuse "value file $1"; }
 [ -L "$valuefile" ] && refuse_file "is a symlink"
 [ -f "$valuefile" ] || refuse_file "is not a regular file"
 [ "$(stat -c %a "$valuefile")" = "600" ] || refuse_file "is not mode 0600"
@@ -70,7 +76,6 @@ cleanup() {
   done
   rmdir "$workdir" 2>/dev/null || true
 }
-kept() { printf 'value file kept for retry: %s\n' "$valuefile"; }
 on_signal() {
   if [ -n "$kpid" ]; then
     kill "$kpid" 2>/dev/null || true
@@ -98,10 +103,15 @@ rc=0
 wait "$kpid" || rc=$?
 kpid=""
 if [ "$rc" -eq 0 ]; then
-  printf '%s key=%s created\n' "$name" "$key"
+  # Remove the source BEFORE any output: a failed write must not leave it behind.
   if ! shred -u "$valuefile" 2>/dev/null; then
-    rm -f "$valuefile" 2>/dev/null || { printf 'WARN source value file not removed: %s\n' "$valuefile"; }
+    rm -f "$valuefile" 2>/dev/null || true
   fi
+  if [ -e "$valuefile" ] || [ -L "$valuefile" ]; then
+    { printf '%s key=%s created\n' "$name" "$key"; printf 'secret created; value file NOT removed: %s\n' "$valuefile"; } || true
+    exit 3
+  fi
+  printf '%s key=%s created\n' "$name" "$key" || true
 else
   if grep -q 'AlreadyExists' "$errfile"; then
     printf 'STOP %s exists\n' "$name"

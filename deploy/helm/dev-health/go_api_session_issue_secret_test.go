@@ -80,6 +80,9 @@ func TestSessionIssueSchemaRefusesBadValues(t *testing.T) {
 		"goApi.sessionIssue.secretName=a.",
 		"goApi.sessionIssue.secretName=-a",
 		"goApi.sessionIssue.secretName=" + strings.Repeat("a", 254),
+		"goApi.sessionIssue.secretName=" + strings.Repeat("a", 64),
+		"goApi.sessionIssue.secretName=x." + strings.Repeat("a", 64),
+		"goApi.sessionIssue.secretName=" + strings.Repeat(strings.Repeat("a", 63)+".", 3) + strings.Repeat("a", 62),
 		"goApi.sessionIssue.secretKey=.",
 		"goApi.sessionIssue.secretKey=..",
 		"goApi.sessionIssue.secretKey=.x",
@@ -99,7 +102,8 @@ func TestSessionIssueSchemaRefusesBadValues(t *testing.T) {
 	}
 	for _, ok := range []string{
 		"goApi.sessionIssue.secretName=a.b-c.d",
-		"goApi.sessionIssue.secretName=" + strings.Repeat("a", 253),
+		"goApi.sessionIssue.secretName=" + strings.Repeat("a", 63),
+		"goApi.sessionIssue.secretName=" + strings.Repeat(strings.Repeat("a", 63)+".", 3) + strings.Repeat("a", 61),
 		"goApi.sessionIssue.secretKey=_x.y-1",
 	} {
 		if _, out, err := renderAuth(t, goAPIWithAuth(append([]string{"--set", ok}, issueSessionsOn...)...)...); err != nil {

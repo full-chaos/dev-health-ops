@@ -169,28 +169,34 @@ func randomGuardUnits(random *rand.Rand, n int, now time.Time) []dispatchGuardUn
 
 func pagedGuardSource(units []dispatchGuardUnit, k int, maxRows *int) guardUnitSource {
 	return func(fold func(dispatchGuardUnit) error) error {
-		return forEachKeysetPage(k, func(unit dispatchGuardUnit) string { return unit.id },
-			func(after *string, limit int) ([]dispatchGuardUnit, error) {
-				var page []dispatchGuardUnit
-				for _, unit := range units {
-					if after != nil && unit.id <= *after {
-						continue
-					}
-					page = append(page, unit)
-					if len(page) == limit {
-						break
-					}
+		return forEachUnitPage(k, func(afterID string, limit int) ([]dispatchGuardUnit, error) {
+			var page []dispatchGuardUnit
+			for _, unit := range units {
+				if afterID != "" && unit.id <= afterID {
+					continue
 				}
-				if len(page) > *maxRows {
-					*maxRows = len(page)
+				page = append(page, unit)
+				if len(page) == limit {
+					break
 				}
-				return page, nil
-			}, fold)
+			}
+			if len(page) > *maxRows {
+				*maxRows = len(page)
+			}
+			return page, nil
+		}, func(unit dispatchGuardUnit) string { return unit.id }, func(page []dispatchGuardUnit) error {
+			for _, unit := range page {
+				if err := fold(unit); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
 	}
 }
 
 func TestPagedGuardDecisionEqualsTheUnpagedDecisionAndReadsAtMostKRowsPerCall(t *testing.T) {
-	const k = 500
+	const k = unitPageSize
 	now := time.Date(2026, 10, 24, 12, 0, 0, 0, time.UTC)
 	var denied, concurrencyCapped, allowedClean int
 	defer func() {

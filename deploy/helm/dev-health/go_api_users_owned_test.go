@@ -19,7 +19,7 @@ func TestGoAPIGetsTheUsersOwnedSwitchFromTheAuthServiceValue(t *testing.T) {
 	if value, set := containerEnvValue(t, authDoc(docs, "Deployment", "a-dev-health-go-api"), "AUTH_USERS_OWNED"); set {
 		t.Errorf("the default render sets go-api AUTH_USERS_OWNED=%q; want it unset", value)
 	}
-	args := append(append(goAPIWithAuth("--set", "authService.usersOwned=true"), goAPIProxyOn...))
+	args := append(goAPIWithAuth("--set", "authService.usersOwned=true"), goAPIProxyOn...)
 	docs, out, err = renderAuth(t, args...)
 	if err != nil {
 		t.Fatalf("render with the switch on: %v\n%.400s", err, out)

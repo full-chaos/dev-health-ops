@@ -62,6 +62,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/auth/emaildomain"
 	"net/http"
 	"net/url"
 	"strings"
@@ -841,7 +842,7 @@ func (h handlers) samlACSCallback(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		domain := email[at+1:]
-		if !containsFold(allowedDomains, domain) {
+		if !emaildomain.Allowed(allowedDomains, domain) {
 			policy.WriteDetail(w, http.StatusForbidden, fmt.Sprintf("Email domain '%s' is not allowed for this provider", domain), nil)
 			return
 		}

@@ -1,0 +1,4 @@
+# Every file under internal/jobs/investment/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
+# python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
+# header-before-stamp set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
+7df981dd7786e84de7bdcaab7ae04d2f219c0b5b22ba6604900c7cd4406e9fb9	go-generated	systemone_request.golden

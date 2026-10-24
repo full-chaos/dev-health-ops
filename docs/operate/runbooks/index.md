@@ -17,5 +17,6 @@ lifecycle: active
 - [Performance or rate-limit failure](performance-or-rate-limit.md)
 - [Backup or restore failure](backup-or-restore-failure.md)
 - [Disaster recovery](disaster-recovery.md)
+- [Auth sessions flip and rollback](auth-sessions-flip-and-rollback.md)
 
 Retain the affected organization or workspace identifier, source, scope, time, job or request identifiers, sanitized logs, last known good checkpoint, and changes made during recovery.

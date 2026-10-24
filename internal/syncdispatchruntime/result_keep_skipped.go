@@ -9,6 +9,6 @@ import "fmt"
 // dataset has no unit, so it must survive the run's last write.
 func resultKeepingSkippedDatasets(placeholder string) string {
 	return fmt.Sprintf(`(CASE WHEN (result::jsonb)->'skipped_datasets' IS NOT NULL
-  THEN %[1]s::jsonb || jsonb_build_object('skipped_datasets', (result::jsonb)->'skipped_datasets')
-  ELSE %[1]s::jsonb END)::json`, placeholder)
+  THEN ((%[1]s::json)::jsonb || jsonb_build_object('skipped_datasets', (result::jsonb)->'skipped_datasets'))::json
+  ELSE %[1]s::json END)`, placeholder)
 }

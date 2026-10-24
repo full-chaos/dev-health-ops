@@ -80,6 +80,13 @@ func TestFinalizeWithoutSkippedDatasetsWritesOnlyThePayload(t *testing.T) {
 		if err := tx.Commit(ctx); err != nil {
 			t.Fatal(err)
 		}
+		var text string
+		if err := pool.QueryRow(ctx, `SELECT result::text FROM public.sync_runs WHERE id=$1::uuid`, keepSkippedRunID).Scan(&text); err != nil {
+			t.Fatal(err)
+		}
+		if text != `{"completed_units":1,"failed_units":0}` {
+			t.Fatalf("result text = %s, want the written bytes unchanged (no jsonb re-serialisation)", text)
+		}
 		got := syncRunResultOf(t, ctx, pool, keepSkippedRunID)
 		if _, has := got["skipped_datasets"]; has || len(got) != 2 {
 			t.Fatalf("result = %v, want only completed_units and failed_units", got)

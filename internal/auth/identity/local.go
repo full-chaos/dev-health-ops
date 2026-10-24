@@ -59,18 +59,21 @@ func (s *Store) ProvisionLocal(ctx context.Context, req LocalProvisionRequest) (
 				principal, req.FullName); err != nil {
 				return err
 			}
-			_, err := tx.Exec(ctx, `INSERT INTO `+s.q+`.users
+			if _, err := tx.Exec(ctx, `INSERT INTO `+s.q+`.users
 	(principal_id, email, email_lower, password_hash, password_algorithm, password_updated_at)
 VALUES ($1, $2, $2, $3, $4, CASE WHEN $3::text IS NULL THEN NULL ELSE clock_timestamp() END)`,
-				principal, email, req.PasswordHash, algorithm)
-			return err
+				principal, email, req.PasswordHash, algorithm); err != nil {
+				return err
+			}
+			provider := "local"
+			return insertPublicUser(ctx, tx, publicUser{ID: principal, Email: email, PasswordHash: req.PasswordHash, FullName: req.FullName, AuthProvider: provider})
 		},
 		Audit:  localAudit("auth.principal.provisioned", "principal_provisioned", subject, req.Actor),
 		Events: []audit.OutboxEvent{principalEvent(subject, "principal.created", true), userEvent(subject, "user.created")},
 	})
 	switch {
 	case err == nil:
-	case isEmailCollision(err):
+	case isEmailCollision(err), isPublicEmailCollision(err):
 		return uuid.Nil, ErrEmailTaken
 	default:
 		return uuid.Nil, s.storeErr(ctx, "provision local user", err)
@@ -95,7 +98,10 @@ func (s *Store) SetEmailVerified(ctx context.Context, principal uuid.UUID, at ti
 			}
 			_, err := tx.Exec(ctx, `UPDATE `+s.q+`.users SET email_verified_at = $2, updated_at = clock_timestamp()
 WHERE principal_id = $1 AND email_verified_at IS DISTINCT FROM $2`, principal, at.UTC())
-			return err
+			if err != nil {
+				return err
+			}
+			return updatePublicVerified(ctx, tx, principal)
 		},
 		Audit:  withChangedFields(localAudit("auth.user.email_verified", "email_verified", subject, actor), "email_verified_at"),
 		Events: []audit.OutboxEvent{userEvent(subject, "user.email_verified")},
@@ -105,7 +111,9 @@ WHERE principal_id = $1 AND email_verified_at IS DISTINCT FROM $2`, principal, a
 
 // SetPasswordHash sets auth.users.password_hash (a guarded column) to a bcrypt
 // verifier, with password_algorithm bcrypt, in one audit.Commit (reason
-// password_changed). Available only after the users cutover.
+// password_changed) and adds 1 to legacy_token_version, as the public.users
+// token_version gets (a go-api token minted before it ends and the users
+// reconciliation stays at zero diff). Available only after the users cutover.
 func (s *Store) SetPasswordHash(ctx context.Context, principal uuid.UUID, hash string, actor Actor) (err error) {
 	defer func() { s.countLink(ctx, "set_password", err) }()
 	if !s.ownsUsers {
@@ -121,9 +129,13 @@ func (s *Store) SetPasswordHash(ctx context.Context, principal uuid.UUID, hash s
 				return err
 			}
 			_, err := tx.Exec(ctx, `UPDATE `+s.q+`.users
-SET password_hash = $2, password_algorithm = $3, password_updated_at = clock_timestamp(), updated_at = clock_timestamp()
+SET password_hash = $2, password_algorithm = $3, password_updated_at = clock_timestamp(),
+    legacy_token_version = legacy_token_version + 1, updated_at = clock_timestamp()
 WHERE principal_id = $1`, principal, hash, passwordAlgorithm)
-			return err
+			if err != nil {
+				return err
+			}
+			return updatePublicPassword(ctx, tx, principal, hash)
 		},
 		Audit:  localAudit("auth.user.password_changed", "password_changed", subject, actor),
 		Events: []audit.OutboxEvent{userEvent(subject, "user.credentials_changed")},

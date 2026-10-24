@@ -1,0 +1,3 @@
+{
+  "callback: installation owned by another org": "403 {\"detail\":\"installer does not have access to this GitHub App installation\"}"
+}

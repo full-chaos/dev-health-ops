@@ -106,6 +106,10 @@ This is a required values change; an existing values file that renders today sto
 - **Order:** create both Secrets first, then ship the values change together with the chart revision in one roll. A chart revision without the values change fails to render; a values change without the Secrets leaves the new web and go-api pods unable to start while the old pods keep serving.
 - **Existing Secret changes need a restart:** the chart cannot hash an external Secret, so after you change `secrets.externalSecretName` or `hs256Secret.externalSecretName` content, restart every Deployment that reads it. Removing `JWT_SECRET_KEY` from the shared Secret rolls nothing by itself.
 
+## Session successor key Secret (auth-service session routes)
+
+The session routes need a 32-byte successor key (`AUTH_SESSION_SUCCESSOR_KEY`, base64url without padding) next to the HS256 key above. Create its Secret once, before the values change that sets `authService.sessionKeys.successor.secretName`: `deploy/scripts/create-auth-session-secret.sh --plan` shows the names, and the script without `--plan` generates the key on the host and runs one `kubectl create secret`. It refuses when the Secret exists, reads no Secret, and puts the value in no argument or output.
+
 ## Verify the deployed revision
 
 Before enabling provider synchronization or directing user traffic, verify:

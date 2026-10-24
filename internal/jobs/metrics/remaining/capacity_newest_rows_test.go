@@ -22,7 +22,7 @@ var capacityRequiredCollapseKey = []string{
 func TestCapacityNewestRowsCollapsesByTheRequiredKeyAndVersion(t *testing.T) {
 	query := capacityNewestRows("org_id = {org_id:String}")
 
-	limitBy := regexp.MustCompile(`LIMIT 1 BY (.+)\)$`).FindStringSubmatch(query)
+	limitBy := regexp.MustCompile(`LIMIT 1 BY (.+)\) AS work_item_metrics_daily$`).FindStringSubmatch(query)
 	if limitBy == nil {
 		t.Fatalf("no trailing LIMIT 1 BY in %q", query)
 	}

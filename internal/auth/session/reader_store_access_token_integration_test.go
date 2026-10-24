@@ -161,7 +161,7 @@ func TestRoutedUserAccessTokenOnRealStores(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := auth.RouteAccess(validator, "dev-health-ops-api"); err != nil {
+	if err := auth.RouteAccess(routedValidator{validator}, "dev-health-ops-api"); err != nil {
 		t.Fatal(err)
 	}
 	now := time.Now().Unix()
@@ -208,4 +208,25 @@ func TestRoutedUserAccessTokenOnRealStores(t *testing.T) {
 	if user, err := auth.Authenticate(routed, legacy); err != nil || user.ID != principal {
 		t.Fatalf("a legacy token on a legacy row: user %+v err %v", user, err)
 	}
+}
+
+// routedValidator is go-api's adapter (internal/apiservice routedAccessVerify)
+// for this test: policy does not import accessverify.
+type routedValidator struct{ validator *accessverify.Validator }
+
+func (r routedValidator) Validate(ctx context.Context, service, profile, bearer string) (*policy.RoutedResult, error) {
+	result, err := r.validator.Validate(ctx, service, profile, bearer)
+	if errors.Is(err, accessverify.ErrUnavailable) {
+		return nil, fmt.Errorf("%w: %w", policy.ErrUnavailable, err)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if user, ok := result.Legacy.(*policy.User); ok {
+		return &policy.RoutedResult{Legacy: user}, nil
+	}
+	if claims := result.Claims; claims != nil {
+		return &policy.RoutedResult{Claims: &policy.AccessTokenClaims{Subject: claims.Subject, SessionID: claims.SessionID, OrgID: claims.OrgID}}, nil
+	}
+	return nil, errors.New("unexpected result")
 }

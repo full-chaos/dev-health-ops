@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -68,7 +69,7 @@ func newRoutedFixture(t *testing.T, store policy.Store, rows []accessverify.Row,
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := auth.RouteAccess(validator, goAPIAccessService); err != nil {
+		if err := auth.RouteAccess(routedAccessVerify{validator}, goAPIAccessService); err != nil {
 			t.Fatal(err)
 		}
 	})
@@ -582,5 +583,52 @@ func TestConfigure_RoutesTheAuthenticatorWhenIssuerIsSet(t *testing.T) {
 		if deps.Auth.Routed() != set || (deps.AccessVerify != nil) != set {
 			t.Errorf("issuer set %v: routed %v, validator %v", set, deps.Auth.Routed(), deps.AccessVerify != nil)
 		}
+	}
+}
+
+// TestRoutedAccessVerifyMapsTheValidatorForPolicy: unavailable is
+// policy.ErrUnavailable, a refusal is no pass, a legacy result must be a
+// policy user, and a user token's claims reach policy unchanged.
+func TestRoutedAccessVerifyMapsTheValidatorForPolicy(t *testing.T) {
+	minter := newEdDSAMinter(t)
+	verifier, err := authverify.NewVerifier(authverify.VerifierConfig{Issuer: probeIssuer, Audience: accessTokenAudienceAPI, Keys: minter.keys})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const profile = "GET /p"
+	var legacyAnswer any
+	var legacyErr error
+	validator, err := accessverify.New(accessverify.Config{
+		Rows:  []accessverify.Row{{Service: goAPIAccessService, Profile: profile, AcceptsUser: true, LegacyHS256: true}},
+		EdDSA: verifier, Meter: sdkmetric.NewMeterProvider().Meter("test"), Now: func() time.Time { return probeNow },
+		Legacy: func(context.Context, string) (any, error) { return legacyAnswer, legacyErr },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter := routedAccessVerify{validator}
+	ctx := context.Background()
+	hs256 := probeHS256(t, probeKey, map[string]any{"sub": probeUser.String()})
+
+	if _, err := adapter.Validate(ctx, goAPIAccessService, "GET /unknown", hs256); err == nil || errors.Is(err, policy.ErrUnavailable) {
+		t.Errorf("unknown profile: %v, want a refusal", err)
+	}
+	legacyAnswer, legacyErr = nil, fmt.Errorf("down: %w", accessverify.ErrUnavailable)
+	if _, err := adapter.Validate(ctx, goAPIAccessService, profile, hs256); !errors.Is(err, policy.ErrUnavailable) {
+		t.Errorf("unavailable legacy: %v", err)
+	}
+	legacyAnswer, legacyErr = "not a user", nil
+	if result, err := adapter.Validate(ctx, goAPIAccessService, profile, hs256); err == nil || result != nil {
+		t.Errorf("a legacy answer of another type: %v %v", result, err)
+	}
+	want := &policy.User{UserID: probeUser.String()}
+	legacyAnswer = want
+	if result, err := adapter.Validate(ctx, goAPIAccessService, profile, hs256); err != nil || result.Legacy != want || result.Claims != nil {
+		t.Errorf("legacy user: %+v %v", result, err)
+	}
+	result, err := adapter.Validate(ctx, goAPIAccessService, profile, minter.mint(probeUser, nil))
+	if err != nil || result.Legacy != nil || result.Claims == nil || result.Claims.Subject != wirePrincipal(probeUser) ||
+		result.Claims.SessionID != sessionid.Wire(probeLiveSID) || result.Claims.OrgID == nil || *result.Claims.OrgID != probeOrg.String() {
+		t.Errorf("user token: %+v %v", result, err)
 	}
 }

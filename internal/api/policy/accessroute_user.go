@@ -9,8 +9,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-
-	"github.com/full-chaos/dev-health-go/authverify"
 )
 
 // AccessUserRow is the users row a user access token is checked against:
@@ -47,7 +45,7 @@ func parsePrincipalID(wire string) (uuid.UUID, bool) {
 // the users row (found, active), the sid (a live session of the subject),
 // and the role from the membership in the org claim (Q4). Every failed read
 // is that error, never a pass.
-func (a *Authenticator) accessTokenUser(ctx context.Context, claims *authverify.AccessClaims) (*User, error) {
+func (a *Authenticator) accessTokenUser(ctx context.Context, claims *AccessTokenClaims) (*User, error) {
 	id, ok := parsePrincipalID(claims.Subject)
 	if !ok {
 		a.logger.WarnContext(ctx, "api user access token has an unusable subject")

@@ -1,12 +1,14 @@
 package apiservice
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
 
 	authv1 "github.com/full-chaos/dev-health-ops/contracts/auth/v1"
+	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/auth/accessverify"
 )
 
@@ -61,4 +63,31 @@ func parseAccessRows(raw []byte) ([]accessverify.Row, error) {
 		return nil, errors.New("go-api endpoint profiles: no row for the api service")
 	}
 	return rows, nil
+}
+
+// routedAccessVerify adapts the accessverify validator to policy's routed
+// validator: an unavailable validator is policy.ErrUnavailable (503), any
+// other error a refusal (401).
+type routedAccessVerify struct{ validator *accessverify.Validator }
+
+var errUnexpectedAccessResult = errors.New("access verify: result of an unexpected class")
+
+func (r routedAccessVerify) Validate(ctx context.Context, service, profile, bearer string) (*policy.RoutedResult, error) {
+	result, err := r.validator.Validate(ctx, service, profile, bearer)
+	switch {
+	case errors.Is(err, accessverify.ErrUnavailable):
+		return nil, fmt.Errorf("%w: %w", policy.ErrUnavailable, err)
+	case err != nil:
+		return nil, err
+	}
+	switch {
+	case result.Class == accessverify.ClassLegacy:
+		if user, ok := result.Legacy.(*policy.User); ok && user != nil {
+			return &policy.RoutedResult{Legacy: user}, nil
+		}
+	case result.Class == accessverify.ClassUser && result.Claims != nil:
+		claims := result.Claims
+		return &policy.RoutedResult{Claims: &policy.AccessTokenClaims{Subject: claims.Subject, SessionID: claims.SessionID, OrgID: claims.OrgID}}, nil
+	}
+	return nil, errUnexpectedAccessResult
 }

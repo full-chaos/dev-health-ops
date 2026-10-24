@@ -404,7 +404,7 @@ func configureWith(
 		return nil, dependencyFailure(ctx, logger, "api_access_verify", "api_access_verify_config_invalid", err)
 	}
 	if deps.AccessVerify != nil && deps.Auth != nil {
-		if err := deps.Auth.RouteAccess(deps.AccessVerify, goAPIAccessService); err != nil {
+		if err := deps.Auth.RouteAccess(routedAccessVerify{deps.AccessVerify}, goAPIAccessService); err != nil {
 			closeComponents(depComponents)
 			return nil, dependencyFailure(ctx, logger, "api_access_verify", "api_access_verify_config_invalid", err)
 		}

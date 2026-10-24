@@ -3,6 +3,7 @@ package policy
 import (
 	"context"
 	"errors"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -16,29 +17,28 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 
-	"github.com/full-chaos/dev-health-go/authverify"
-
-	"github.com/full-chaos/dev-health-ops/internal/auth/accessverify"
 	"github.com/full-chaos/dev-health-ops/internal/auth/sessionid"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 )
 
 // fakeValidator answers Validate with a fixed result and records the call.
 type fakeValidator struct {
-	result   *accessverify.Result
+	result   *RoutedResult
 	err      error
 	profiles []string
 	legacy   func(ctx context.Context, token string) (*User, error)
 }
 
-func (f *fakeValidator) Validate(ctx context.Context, service, profile, bearer string) (*accessverify.Result, error) {
+var errRefusedByValidator = errors.New("validator: refused")
+
+func (f *fakeValidator) Validate(ctx context.Context, service, profile, bearer string) (*RoutedResult, error) {
 	f.profiles = append(f.profiles, service+"|"+profile)
 	if f.legacy != nil {
 		user, err := f.legacy(ctx, bearer)
 		if err != nil {
-			return nil, accessverify.ErrRefused
+			return nil, errRefusedByValidator
 		}
-		return &accessverify.Result{Class: accessverify.ClassLegacy, Legacy: user}, nil
+		return &RoutedResult{Legacy: user}, nil
 	}
 	return f.result, f.err
 }
@@ -78,13 +78,13 @@ func newAccessStore() *accessStore {
 	}
 }
 
-func userClaims(mutate func(*authverify.AccessClaims)) *accessverify.Result {
+func userClaims(mutate func(*AccessTokenClaims)) *RoutedResult {
 	org := ownOrg
-	claims := &authverify.AccessClaims{Subject: wireOwner, SessionID: sessionid.Wire(liveSID), OrgID: &org, Audience: "dev-health-api"}
+	claims := &AccessTokenClaims{Subject: wireOwner, SessionID: sessionid.Wire(liveSID), OrgID: &org}
 	if mutate != nil {
 		mutate(claims)
 	}
-	return &accessverify.Result{Class: accessverify.ClassUser, Claims: claims}
+	return &RoutedResult{Claims: claims}
 }
 
 func routed(t *testing.T, store Store, validator RoutedValidator) *Authenticator {
@@ -111,8 +111,8 @@ func TestRoutedErrorMapping(t *testing.T) {
 		status int
 		body   string
 	}{
-		"refused":     {accessverify.ErrRefused, http.StatusUnauthorized, `{"detail":{"message":"Invalid or expired token"}}`},
-		"unavailable": {accessverify.ErrUnavailable, http.StatusServiceUnavailable, `{"detail":{"message":"Database temporarily unavailable"}}`},
+		"refused":     {errRefusedByValidator, http.StatusUnauthorized, `{"detail":{"message":"Invalid or expired token"}}`},
+		"unavailable": {fmt.Errorf("validator: %w", ErrUnavailable), http.StatusServiceUnavailable, `{"detail":{"message":"Database temporarily unavailable"}}`},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -132,7 +132,7 @@ func TestRoutedErrorMapping(t *testing.T) {
 // TestGuardPassesTheMuxPatternAsTheProfile: inside a route the profile is the
 // pattern the mux routed the request to, whatever the pre-route value says.
 func TestGuardPassesTheMuxPatternAsTheProfile(t *testing.T) {
-	validator := &fakeValidator{err: accessverify.ErrRefused}
+	validator := &fakeValidator{err: errRefusedByValidator}
 	auth := routed(t, newAccessStore(), validator)
 	mux := http.NewServeMux()
 	mux.Handle("GET /items/{id}", NewGuard(auth, quiet()).Wrap(Authenticated, echo))
@@ -160,24 +160,24 @@ func TestRoutedWithoutAProfilePassesAnEmptyProfile(t *testing.T) {
 func TestRoutedUserPath(t *testing.T) {
 	ctx := WithRouteProfile(context.Background(), "GET /p")
 	cases := map[string]struct {
-		result *accessverify.Result
+		result *RoutedResult
 		adjust func(*accessStore)
 		ok     bool
 		err    error
 	}{
-		"member of the org claim":     {result: userClaims(nil), ok: true},
-		"no sid":                      {result: userClaims(func(c *authverify.AccessClaims) { c.SessionID = "" })},
-		"bad sid":                     {result: userClaims(func(c *authverify.AccessClaims) { c.SessionID = "ses_bad" })},
-		"bad subject":                 {result: userClaims(func(c *authverify.AccessClaims) { c.Subject = "prn_!!" })},
-		"subject not a principal":     {result: userClaims(func(c *authverify.AccessClaims) { c.Subject = userID.String() })},
-		"not a member of the org":     {result: userClaims(func(c *authverify.AccessClaims) { org := "66666666-6666-4666-8666-666666666666"; c.OrgID = &org })},
-		"revoked session":             {result: userClaims(nil), adjust: func(s *accessStore) { s.rows[liveSID] = SessionRow{PrincipalID: userID, Revoked: true} }},
-		"inactive user":               {result: userClaims(nil), adjust: func(s *accessStore) { s.users[userID] = UserState{} }},
-		"users read unavailable":      {result: userClaims(nil), adjust: func(s *accessStore) { s.errUser = ErrUnavailable }, err: ErrUnavailable},
-		"membership read fails":       {result: userClaims(nil), adjust: func(s *accessStore) { s.errMember = ErrUnavailable }, err: ErrUnavailable},
-		"no claims":                   {result: &accessverify.Result{Class: accessverify.ClassUser}},
-		"unknown class":               {result: &accessverify.Result{Class: "other"}},
-		"legacy result of a bad type": {result: &accessverify.Result{Class: accessverify.ClassLegacy, Legacy: "user"}},
+		"member of the org claim": {result: userClaims(nil), ok: true},
+		"no sid":                  {result: userClaims(func(c *AccessTokenClaims) { c.SessionID = "" })},
+		"bad sid":                 {result: userClaims(func(c *AccessTokenClaims) { c.SessionID = "ses_bad" })},
+		"bad subject":             {result: userClaims(func(c *AccessTokenClaims) { c.Subject = "prn_!!" })},
+		"subject not a principal": {result: userClaims(func(c *AccessTokenClaims) { c.Subject = userID.String() })},
+		"not a member of the org": {result: userClaims(func(c *AccessTokenClaims) { org := "66666666-6666-4666-8666-666666666666"; c.OrgID = &org })},
+		"revoked session":         {result: userClaims(nil), adjust: func(s *accessStore) { s.rows[liveSID] = SessionRow{PrincipalID: userID, Revoked: true} }},
+		"inactive user":           {result: userClaims(nil), adjust: func(s *accessStore) { s.users[userID] = UserState{} }},
+		"users read unavailable":  {result: userClaims(nil), adjust: func(s *accessStore) { s.errUser = ErrUnavailable }, err: ErrUnavailable},
+		"membership read fails":   {result: userClaims(nil), adjust: func(s *accessStore) { s.errMember = ErrUnavailable }, err: ErrUnavailable},
+		"empty result":            {result: &RoutedResult{}},
+		"no result":               {result: nil},
+		"both set":                {result: &RoutedResult{Legacy: &User{}, Claims: &AccessTokenClaims{}}},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {

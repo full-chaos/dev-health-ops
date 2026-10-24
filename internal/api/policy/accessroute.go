@@ -5,16 +5,33 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"strings"
-
-	"github.com/full-chaos/dev-health-ops/internal/auth/accessverify"
 )
 
-// RoutedValidator is satisfied by *accessverify.Validator.
+// RoutedValidator validates a bearer token against the request's
+// endpoint-profile row (service, route template). An error wrapping
+// ErrUnavailable means it could not decide; any other error is a refusal.
+// go-api adapts *accessverify.Validator to it; this package does not import
+// the verifier, so the auth-service binaries that import policy do not link it.
 type RoutedValidator interface {
-	Validate(ctx context.Context, service, profile, bearer string) (*accessverify.Result, error)
+	Validate(ctx context.Context, service, profile, bearer string) (*RoutedResult, error)
+}
+
+// RoutedResult is an accepted token: Legacy for an HS256 ops access token
+// (AuthenticateLegacy's user), Claims for a user access token. Exactly one is
+// set.
+type RoutedResult struct {
+	Legacy *User
+	Claims *AccessTokenClaims
+}
+
+// AccessTokenClaims are the verified access-token.v1 claims the per-request
+// checks read.
+type AccessTokenClaims struct {
+	Subject   string
+	SessionID string
+	OrgID     *string
 }
 
 type routedAccess struct {
@@ -77,24 +94,13 @@ func (a *Authenticator) routeCtx(r *http.Request) context.Context {
 func (a *Authenticator) authenticateRouted(ctx context.Context, token string) (*User, error) {
 	result, err := a.routed.validator.Validate(ctx, a.routed.service, RouteProfileFrom(ctx), token)
 	switch {
-	case errors.Is(err, accessverify.ErrUnavailable):
-		return nil, fmt.Errorf("%w: %w", ErrUnavailable, err)
-	case err != nil:
+	case errors.Is(err, ErrUnavailable):
+		return nil, err
+	case err != nil, result == nil:
 		return nil, errRejected
-	case result == nil:
-		return nil, errRejected
-	}
-	switch result.Class {
-	case accessverify.ClassLegacy:
-		user, ok := result.Legacy.(*User)
-		if !ok || user == nil {
-			return nil, errRejected
-		}
-		return user, nil
-	case accessverify.ClassUser:
-		if result.Claims == nil {
-			return nil, errRejected
-		}
+	case result.Legacy != nil && result.Claims == nil:
+		return result.Legacy, nil
+	case result.Claims != nil && result.Legacy == nil:
 		return a.accessTokenUser(ctx, result.Claims)
 	default:
 		return nil, errRejected

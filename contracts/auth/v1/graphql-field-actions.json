@@ -4,7 +4,7 @@
   "rows": [
     {
       "action": "analytics.read",
-      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs, except that a verified non-impersonating superuser may name another organization and the operation then runs against it",
       "field": "catalog",
       "gaps": [],
       "resolver": "queryResolver.Catalog in internal/queryapi/graph/schema.resolvers.go",
@@ -13,7 +13,7 @@
     },
     {
       "action": "analytics.read",
-      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs, except that a verified non-impersonating superuser may name another organization and the operation then runs against it",
       "field": "analytics",
       "gaps": [],
       "resolver": "queryResolver.Analytics in internal/queryapi/graph/schema.resolvers.go",
@@ -22,7 +22,7 @@
     },
     {
       "action": "analytics.read",
-      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs, except that a verified non-impersonating superuser may name another organization and the operation then runs against it",
       "field": "productTelemetryDashboard",
       "gaps": [],
       "resolver": "queryResolver.ProductTelemetryDashboard in internal/queryapi/graph/schema.resolvers.go",
@@ -42,7 +42,7 @@
     },
     {
       "action": "analytics.read",
-      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs, except that a verified non-impersonating superuser may name another organization and the operation then runs against it",
       "field": "home",
       "gaps": [],
       "resolver": "queryResolver.Home in internal/queryapi/graph/schema.resolvers.go",
@@ -51,7 +51,7 @@
     },
     {
       "action": "work_items.read",
-      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs, except that a verified non-impersonating superuser may name another organization and the operation then runs against it",
       "field": "workGraphEdges",
       "gaps": [],
       "resolver": "queryResolver.WorkGraphEdges in internal/queryapi/graph/schema.resolvers.go",
@@ -60,7 +60,7 @@
     },
     {
       "action": "git.read",
-      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs, except that a verified non-impersonating superuser may name another organization and the operation then runs against it",
       "field": "pr",
       "gaps": [],
       "resolver": "queryResolver.Pr in internal/queryapi/graph/schema.resolvers.go",
@@ -69,7 +69,7 @@
     },
     {
       "action": "work_items.read",
-      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs, except that a verified non-impersonating superuser may name another organization and the operation then runs against it",
       "field": "workGraphFlow",
       "gaps": [],
       "resolver": "queryResolver.WorkGraphFlow in internal/queryapi/graph/schema.resolvers.go",
@@ -78,7 +78,7 @@
     },
     {
       "action": "work_items.read",
-      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs, except that a verified non-impersonating superuser may name another organization and the operation then runs against it",
       "field": "workGraphArtifacts",
       "gaps": [],
       "resolver": "queryResolver.WorkGraphArtifacts in internal/queryapi/graph/schema.resolvers.go",
@@ -87,7 +87,7 @@
     },
     {
       "action": "integrations.read",
-      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs, except that a verified non-impersonating superuser may name another organization and the operation then runs against it",
       "field": "featureFlags",
       "gaps": [],
       "resolver": "queryResolver.FeatureFlags in internal/queryapi/graph/schema.resolvers.go",
@@ -96,7 +96,7 @@
     },
     {
       "action": "integrations.read",
-      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs, except that a verified non-impersonating superuser may name another organization and the operation then runs against it",
       "field": "featureFlagEvents",
       "gaps": [],
       "resolver": "queryResolver.FeatureFlagEvents in internal/queryapi/graph/schema.resolvers.go",
@@ -105,7 +105,7 @@
     },
     {
       "action": "teams.read",
-      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs, except that a verified non-impersonating superuser may name another organization and the operation then runs against it",
       "field": "workItemTeamAttributions",
       "gaps": [],
       "resolver": "queryResolver.WorkItemTeamAttributions in internal/queryapi/graph/schema.resolvers.go",
@@ -114,7 +114,7 @@
     },
     {
       "action": "teams.read",
-      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs, except that a verified non-impersonating superuser may name another organization and the operation then runs against it",
       "field": "workUnitTeamAttributions",
       "gaps": [],
       "resolver": "queryResolver.WorkUnitTeamAttributions in internal/queryapi/graph/schema.resolvers.go",
@@ -123,7 +123,7 @@
     },
     {
       "action": "git.read",
-      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs, except that a verified non-impersonating superuser may name another organization and the operation then runs against it",
       "field": "securityAlerts",
       "gaps": [],
       "resolver": "queryResolver.SecurityAlerts in internal/queryapi/graph/schema.resolvers.go",
@@ -132,7 +132,7 @@
     },
     {
       "action": "git.read",
-      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs, except that a verified non-impersonating superuser may name another organization and the operation then runs against it",
       "field": "securityOverview",
       "gaps": [],
       "resolver": "queryResolver.SecurityOverview in internal/queryapi/graph/schema.resolvers.go",
@@ -141,7 +141,7 @@
     },
     {
       "action": "analytics.read",
-      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs, except that a verified non-impersonating superuser may name another organization and the operation then runs against it",
       "field": "savedReports",
       "gaps": [],
       "resolver": "queryResolver.SavedReports in internal/queryapi/graph/schema.resolvers.go",
@@ -150,7 +150,7 @@
     },
     {
       "action": "analytics.read",
-      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs, except that a verified non-impersonating superuser may name another organization and the operation then runs against it",
       "field": "savedReport",
       "gaps": [],
       "resolver": "queryResolver.SavedReport in internal/queryapi/graph/schema.resolvers.go",
@@ -159,7 +159,7 @@
     },
     {
       "action": "analytics.read",
-      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs, except that a verified non-impersonating superuser may name another organization and the operation then runs against it",
       "field": "reportRuns",
       "gaps": [],
       "resolver": "queryResolver.ReportRuns in internal/queryapi/graph/schema.resolvers.go",
@@ -168,7 +168,7 @@
     },
     {
       "action": "metrics.read",
-      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs, except that a verified non-impersonating superuser may name another organization and the operation then runs against it",
       "field": "capacityForecast",
       "gaps": [],
       "resolver": "queryResolver.CapacityForecast in internal/queryapi/graph/schema.resolvers.go",
@@ -177,7 +177,7 @@
     },
     {
       "action": "metrics.read",
-      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs, except that a verified non-impersonating superuser may name another organization and the operation then runs against it",
       "field": "capacityForecasts",
       "gaps": [],
       "resolver": "queryResolver.CapacityForecasts in internal/queryapi/graph/schema.resolvers.go",
@@ -186,7 +186,7 @@
     },
     {
       "action": "metrics.read",
-      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs, except that a verified non-impersonating superuser may name another organization and the operation then runs against it",
       "field": "throughputForecast",
       "gaps": [],
       "resolver": "queryResolver.ThroughputForecast in internal/queryapi/graph/schema.resolvers.go",
@@ -195,7 +195,7 @@
     },
     {
       "action": "metrics.read",
-      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs, except that a verified non-impersonating superuser may name another organization and the operation then runs against it",
       "field": "operatingReview",
       "gaps": [],
       "resolver": "queryResolver.OperatingReview in internal/queryapi/graph/schema.resolvers.go",
@@ -215,7 +215,7 @@
     },
     {
       "action": "integrations.read",
-      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs, except that a verified non-impersonating superuser may name another organization and the operation then runs against it",
       "field": "sourceHealth",
       "gaps": [],
       "resolver": "queryResolver.SourceHealth in internal/queryapi/graph/schema.resolvers.go",
@@ -224,7 +224,7 @@
     },
     {
       "action": "git.read",
-      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs, except that a verified non-impersonating superuser may name another organization and the operation then runs against it",
       "field": "busFactor",
       "gaps": [],
       "resolver": "queryResolver.BusFactor in internal/queryapi/graph/schema.resolvers.go",
@@ -233,7 +233,7 @@
     },
     {
       "action": "metrics.read",
-      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs, except that a verified non-impersonating superuser may name another organization and the operation then runs against it",
       "field": "compoundingRisk",
       "gaps": [],
       "resolver": "queryResolver.CompoundingRisk in internal/queryapi/graph/schema.resolvers.go",
@@ -242,7 +242,7 @@
     },
     {
       "action": "metrics.read",
-      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs, except that a verified non-impersonating superuser may name another organization and the operation then runs against it",
       "field": "testopsRisk",
       "gaps": [],
       "resolver": "queryResolver.TestopsRisk in internal/queryapi/graph/schema.resolvers.go",
@@ -251,7 +251,7 @@
     },
     {
       "action": "metrics.read",
-      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs, except that a verified non-impersonating superuser may name another organization and the operation then runs against it",
       "field": "testopsJobFailures",
       "gaps": [],
       "resolver": "queryResolver.TestopsJobFailures in internal/queryapi/graph/schema.resolvers.go",
@@ -260,7 +260,7 @@
     },
     {
       "action": "metrics.read",
-      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs, except that a verified non-impersonating superuser may name another organization and the operation then runs against it",
       "field": "coverageBaselines",
       "gaps": [],
       "resolver": "queryResolver.CoverageBaselines in internal/queryapi/graph/schema.resolvers.go",
@@ -269,7 +269,7 @@
     },
     {
       "action": "metrics.read",
-      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs, except that a verified non-impersonating superuser may name another organization and the operation then runs against it",
       "field": "coverageScopeBaseline",
       "gaps": [],
       "resolver": "queryResolver.CoverageScopeBaseline in internal/queryapi/graph/schema.resolvers.go",
@@ -278,7 +278,7 @@
     },
     {
       "action": "git.read",
-      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; the field takes no orgId argument and reads the credential's organization",
       "field": "complexityTimeseries",
       "gaps": [],
       "resolver": "queryResolver.ComplexityTimeseries in internal/queryapi/graph/schema.resolvers.go",
@@ -287,7 +287,7 @@
     },
     {
       "action": "git.read",
-      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; the field takes no orgId argument and reads the credential's organization",
       "field": "hotspots",
       "gaps": [],
       "resolver": "queryResolver.Hotspots in internal/queryapi/graph/schema.resolvers.go",
@@ -296,7 +296,7 @@
     },
     {
       "action": "metrics.read",
-      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; the field takes no orgId argument and reads the credential's organization",
       "field": "cognitiveLoad",
       "gaps": [],
       "resolver": "queryResolver.CognitiveLoad in internal/queryapi/graph/schema.resolvers.go",
@@ -305,7 +305,7 @@
     },
     {
       "action": "git.read",
-      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; the field takes no orgId argument and reads the credential's organization",
       "field": "reviewEdges",
       "gaps": [],
       "resolver": "queryResolver.ReviewEdges in internal/queryapi/graph/schema.resolvers.go",
@@ -314,7 +314,7 @@
     },
     {
       "action": "analytics.read",
-      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs, except that a verified non-impersonating superuser may name another organization and the operation then runs against it",
       "field": "recommendations",
       "gaps": [],
       "resolver": "queryResolver.Recommendations in internal/queryapi/graph/schema.resolvers.go",
@@ -323,7 +323,7 @@
     },
     {
       "action": "analytics.read",
-      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs, except that a verified non-impersonating superuser may name another organization and the operation then runs against it",
       "field": "experiments",
       "gaps": [],
       "resolver": "queryResolver.Experiments in internal/queryapi/graph/schema.resolvers.go",
@@ -332,7 +332,7 @@
     },
     {
       "action": "analytics.read",
-      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs, except that a verified non-impersonating superuser may name another organization and the operation then runs against it",
       "field": "aiImpactSummary",
       "gaps": [],
       "resolver": "queryResolver.AiImpactSummary in internal/queryapi/graph/schema.resolvers.go",
@@ -341,7 +341,7 @@
     },
     {
       "action": "analytics.read",
-      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs, except that a verified non-impersonating superuser may name another organization and the operation then runs against it",
       "field": "aiComparison",
       "gaps": [],
       "resolver": "queryResolver.AiComparison in internal/queryapi/graph/schema.resolvers.go",
@@ -350,7 +350,7 @@
     },
     {
       "action": "analytics.read",
-      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs, except that a verified non-impersonating superuser may name another organization and the operation then runs against it",
       "field": "aiReviewLoad",
       "gaps": [],
       "resolver": "queryResolver.AiReviewLoad in internal/queryapi/graph/schema.resolvers.go",
@@ -359,7 +359,7 @@
     },
     {
       "action": "analytics.read",
-      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs, except that a verified non-impersonating superuser may name another organization and the operation then runs against it",
       "field": "aiRiskBreakdown",
       "gaps": [],
       "resolver": "queryResolver.AiRiskBreakdown in internal/queryapi/graph/schema.resolvers.go",
@@ -368,7 +368,7 @@
     },
     {
       "action": "analytics.read",
-      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs, except that a verified non-impersonating superuser may name another organization and the operation then runs against it",
       "field": "aiOpportunities",
       "gaps": [],
       "resolver": "queryResolver.AiOpportunities in internal/queryapi/graph/schema.resolvers.go",
@@ -377,7 +377,7 @@
     },
     {
       "action": "analytics.read",
-      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; the field takes no orgId argument and reads the credential's organization",
       "field": "improveOpportunities",
       "gaps": [],
       "resolver": "queryResolver.ImproveOpportunities in internal/queryapi/graph/schema.resolvers.go",
@@ -386,7 +386,7 @@
     },
     {
       "action": "analytics.read",
-      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs, except that a verified non-impersonating superuser may name another organization and the operation then runs against it",
       "field": "aiGovernanceSummary",
       "gaps": [],
       "resolver": "queryResolver.AiGovernanceSummary in internal/queryapi/graph/schema.resolvers.go",
@@ -395,7 +395,7 @@
     },
     {
       "action": "analytics.read",
-      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs, except that a verified non-impersonating superuser may name another organization and the operation then runs against it",
       "field": "aiWorkflowDrilldown",
       "gaps": [],
       "resolver": "queryResolver.AiWorkflowDrilldown in internal/queryapi/graph/schema.resolvers.go",
@@ -404,7 +404,7 @@
     },
     {
       "action": "analytics.read",
-      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs, except that a verified non-impersonating superuser may name another organization and the operation then runs against it",
       "field": "aiAttributedPrs",
       "gaps": [],
       "resolver": "queryResolver.AiAttributedPrs in internal/queryapi/graph/schema.resolvers.go",
@@ -413,7 +413,7 @@
     },
     {
       "action": "analytics.read",
-      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs, except that a verified non-impersonating superuser may name another organization and the operation then runs against it",
       "field": "aiAttributionOverview",
       "gaps": [],
       "resolver": "queryResolver.AiAttributionOverview in internal/queryapi/graph/schema.resolvers.go",
@@ -422,7 +422,7 @@
     },
     {
       "action": null,
-      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs, except that a verified non-impersonating superuser may name another organization and the operation then runs against it",
       "field": "createSavedReport",
       "gaps": [
         "action: a saved-report write that no catalog action covers; the catalog is closed and gains no action in this change"
@@ -433,7 +433,7 @@
     },
     {
       "action": null,
-      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs, except that a verified non-impersonating superuser may name another organization and the operation then runs against it",
       "field": "updateSavedReport",
       "gaps": [
         "action: a saved-report write that no catalog action covers; the catalog is closed and gains no action in this change"
@@ -444,7 +444,7 @@
     },
     {
       "action": null,
-      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs, except that a verified non-impersonating superuser may name another organization and the operation then runs against it",
       "field": "deleteSavedReport",
       "gaps": [
         "action: a saved-report delete that no catalog action covers; the catalog is closed and gains no action in this change"
@@ -455,7 +455,7 @@
     },
     {
       "action": null,
-      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs, except that a verified non-impersonating superuser may name another organization and the operation then runs against it",
       "field": "cloneSavedReport",
       "gaps": [
         "action: a saved-report write that no catalog action covers; the catalog is closed and gains no action in this change"
@@ -466,7 +466,7 @@
     },
     {
       "action": null,
-      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs",
+      "disclosure_behavior": "behaviour today, no action check: a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs, except that a verified non-impersonating superuser may name another organization and the operation then runs against it",
       "field": "triggerReport",
       "gaps": [
         "action: a report-run trigger that no catalog action covers; the catalog is closed and gains no action in this change"

@@ -33,7 +33,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: no authorization decision is cached; the credential is verified on every request (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go)",
-      "disclosure_behavior": "behaviour today, no action check: any caller with a verified credential reads its own organization's rows; failed authentication answers 401 (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); no other organization's resource can be named",
+      "disclosure_behavior": "behaviour today, no action check: any caller with a verified credential reads its own organization's rows; failed authentication answers 401 (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); a valid edge token with no organization answers 403 Organization context required (authenticateRESTRequest); no other organization's resource can be named",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
         "impersonation_policy: this route reads the organization from the credential only (authenticateRESTRequest returns the organization id alone); whether an impersonation session changes it is not proven in this pass"
@@ -48,7 +48,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every credential failure answers the same 401; a valid edge token with no organization answers 403 Organization context required."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID, authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); no request parameter names the organization",
@@ -82,7 +82,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: no authorization decision is cached; the credential is verified on every request (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go)",
-      "disclosure_behavior": "behaviour today, no action check: any caller with a verified credential reads its own organization's rows; failed authentication answers 401 (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); no other organization's resource can be named",
+      "disclosure_behavior": "behaviour today, no action check: any caller with a verified credential reads its own organization's rows; failed authentication answers 401 (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); a valid edge token with no organization answers 403 Organization context required (authenticateRESTRequest); no other organization's resource can be named",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
         "impersonation_policy: this route reads the organization from the credential only (authenticateRESTRequest returns the organization id alone); whether an impersonation session changes it is not proven in this pass"
@@ -97,7 +97,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every credential failure answers the same 401; a valid edge token with no organization answers 403 Organization context required."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID, authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); no request parameter names the organization",
@@ -131,7 +131,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: no authorization decision is cached; the credential is verified on every request (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go)",
-      "disclosure_behavior": "behaviour today, no action check: any caller with a verified credential reads its own organization's rows; failed authentication answers 401 (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); no other organization's resource can be named",
+      "disclosure_behavior": "behaviour today, no action check: any caller with a verified credential reads its own organization's rows; failed authentication answers 401 (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); a valid edge token with no organization answers 403 Organization context required (authenticateRESTRequest); no other organization's resource can be named",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
         "impersonation_policy: this route reads the organization from the credential only (authenticateRESTRequest returns the organization id alone); whether an impersonation session changes it is not proven in this pass"
@@ -146,7 +146,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every credential failure answers the same 401; a valid edge token with no organization answers 403 Organization context required."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID, authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); no request parameter names the organization",
@@ -180,7 +180,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: no authorization decision is cached; the credential is verified on every request (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go)",
-      "disclosure_behavior": "behaviour today, no action check: any caller with a verified credential reads its own organization's rows; failed authentication answers 401 (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); no other organization's resource can be named",
+      "disclosure_behavior": "behaviour today, no action check: any caller with a verified credential reads its own organization's rows; failed authentication answers 401 (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); a valid edge token with no organization answers 403 Organization context required (authenticateRESTRequest); no other organization's resource can be named",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
         "impersonation_policy: this route reads the organization from the credential only (authenticateRESTRequest returns the organization id alone); whether an impersonation session changes it is not proven in this pass"
@@ -195,7 +195,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every credential failure answers the same 401; a valid edge token with no organization answers 403 Organization context required."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID, authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); no request parameter names the organization",
@@ -229,7 +229,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: no authorization decision is cached; the credential is verified on every request (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go)",
-      "disclosure_behavior": "behaviour today, no action check: any caller with a verified credential reads its own organization's rows; failed authentication answers 401 (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); no other organization's resource can be named",
+      "disclosure_behavior": "behaviour today, no action check: any caller with a verified credential reads its own organization's rows; failed authentication answers 401 (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); a valid edge token with no organization answers 403 Organization context required (authenticateRESTRequest); no other organization's resource can be named",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
         "impersonation_policy: this route reads the organization from the credential only (authenticateRESTRequest returns the organization id alone); whether an impersonation session changes it is not proven in this pass"
@@ -244,7 +244,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every credential failure answers the same 401; a valid edge token with no organization answers 403 Organization context required."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID, authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); no request parameter names the organization",
@@ -278,7 +278,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: no authorization decision is cached; the credential is verified on every request (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go)",
-      "disclosure_behavior": "behaviour today, no action check: any caller with a verified credential reads its own organization's rows; failed authentication answers 401 (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); no other organization's resource can be named",
+      "disclosure_behavior": "behaviour today, no action check: any caller with a verified credential reads its own organization's rows; failed authentication answers 401 (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); a valid edge token with no organization answers 403 Organization context required (authenticateRESTRequest); no other organization's resource can be named",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
         "impersonation_policy: this route reads the organization from the credential only (authenticateRESTRequest returns the organization id alone); whether an impersonation session changes it is not proven in this pass"
@@ -293,7 +293,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every credential failure answers the same 401; a valid edge token with no organization answers 403 Organization context required."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID, authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); no request parameter names the organization",
@@ -327,7 +327,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: no authorization decision is cached; the credential is verified on every request (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go)",
-      "disclosure_behavior": "behaviour today, no action check: any caller with a verified credential reads its own organization's rows; failed authentication answers 401 (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); no other organization's resource can be named",
+      "disclosure_behavior": "behaviour today, no action check: any caller with a verified credential reads its own organization's rows; failed authentication answers 401 (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); a valid edge token with no organization answers 403 Organization context required (authenticateRESTRequest); no other organization's resource can be named",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
         "impersonation_policy: this route reads the organization from the credential only (authenticateRESTRequest returns the organization id alone); whether an impersonation session changes it is not proven in this pass"
@@ -342,7 +342,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every credential failure answers the same 401; a valid edge token with no organization answers 403 Organization context required."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID, authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); no request parameter names the organization",
@@ -376,7 +376,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: no authorization decision is cached; the credential is verified on every request (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go)",
-      "disclosure_behavior": "behaviour today, no action check: any caller with a verified credential reads its own organization's rows; failed authentication answers 401 (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); no other organization's resource can be named",
+      "disclosure_behavior": "behaviour today, no action check: any caller with a verified credential reads its own organization's rows; failed authentication answers 401 (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); a valid edge token with no organization answers 403 Organization context required (authenticateRESTRequest); no other organization's resource can be named",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
         "impersonation_policy: this route reads the organization from the credential only (authenticateRESTRequest returns the organization id alone); whether an impersonation session changes it is not proven in this pass"
@@ -391,7 +391,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every credential failure answers the same 401; a valid edge token with no organization answers 403 Organization context required."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID, authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); no request parameter names the organization",
@@ -425,7 +425,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: no authorization decision is cached; the credential is verified on every request (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go)",
-      "disclosure_behavior": "behaviour today, no action check: any caller with a verified credential reads its own organization's rows; failed authentication answers 401 (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); no other organization's resource can be named",
+      "disclosure_behavior": "behaviour today, no action check: any caller with a verified credential reads its own organization's rows; failed authentication answers 401 (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); a valid edge token with no organization answers 403 Organization context required (authenticateRESTRequest); no other organization's resource can be named",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
         "impersonation_policy: this route reads the organization from the credential only (authenticateRESTRequest returns the organization id alone); whether an impersonation session changes it is not proven in this pass"
@@ -440,7 +440,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every credential failure answers the same 401; a valid edge token with no organization answers 403 Organization context required."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID, authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); no request parameter names the organization",
@@ -474,7 +474,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: no authorization decision is cached; the credential is verified on every request (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go)",
-      "disclosure_behavior": "behaviour today, no action check: any caller with a verified credential reads its own organization's rows; failed authentication answers 401 (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); no other organization's resource can be named",
+      "disclosure_behavior": "behaviour today, no action check: any caller with a verified credential reads its own organization's rows; failed authentication answers 401 (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); a valid edge token with no organization answers 403 Organization context required (authenticateRESTRequest); no other organization's resource can be named",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
         "impersonation_policy: this route reads the organization from the credential only (authenticateRESTRequest returns the organization id alone); whether an impersonation session changes it is not proven in this pass"
@@ -489,7 +489,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every credential failure answers the same 401; a valid edge token with no organization answers 403 Organization context required."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID, authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); no request parameter names the organization",
@@ -523,7 +523,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: no authorization decision is cached; the credential is verified on every request (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go)",
-      "disclosure_behavior": "behaviour today, no action check: any caller with a verified credential reads its own organization's rows; failed authentication answers 401 (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); no other organization's resource can be named",
+      "disclosure_behavior": "behaviour today, no action check: any caller with a verified credential reads its own organization's rows; failed authentication answers 401 (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); a valid edge token with no organization answers 403 Organization context required (authenticateRESTRequest); no other organization's resource can be named",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
         "impersonation_policy: this route reads the organization from the credential only (authenticateRESTRequest returns the organization id alone); whether an impersonation session changes it is not proven in this pass"
@@ -538,7 +538,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every credential failure answers the same 401; a valid edge token with no organization answers 403 Organization context required."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID, authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); no request parameter names the organization",
@@ -572,7 +572,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: no authorization decision is cached; the credential is verified on every request (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go)",
-      "disclosure_behavior": "behaviour today, no action check: any caller with a verified credential reads its own organization's rows; failed authentication answers 401 (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); no other organization's resource can be named",
+      "disclosure_behavior": "behaviour today, no action check: any caller with a verified credential reads its own organization's rows; failed authentication answers 401 (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); a valid edge token with no organization answers 403 Organization context required (authenticateRESTRequest); no other organization's resource can be named",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
         "impersonation_policy: this route reads the organization from the credential only (authenticateRESTRequest returns the organization id alone); whether an impersonation session changes it is not proven in this pass"
@@ -587,7 +587,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every credential failure answers the same 401; a valid edge token with no organization answers 403 Organization context required."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID, authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); no request parameter names the organization",
@@ -621,7 +621,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: no authorization decision is cached; the credential is verified on every request (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go)",
-      "disclosure_behavior": "behaviour today, no action check: any caller with a verified credential reads its own organization's rows; failed authentication answers 401 (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); no other organization's resource can be named",
+      "disclosure_behavior": "behaviour today, no action check: any caller with a verified credential reads its own organization's rows; failed authentication answers 401 (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); a valid edge token with no organization answers 403 Organization context required (authenticateRESTRequest); no other organization's resource can be named",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
         "impersonation_policy: this route reads the organization from the credential only (authenticateRESTRequest returns the organization id alone); whether an impersonation session changes it is not proven in this pass"
@@ -636,7 +636,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every credential failure answers the same 401; a valid edge token with no organization answers 403 Organization context required."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID, authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); no request parameter names the organization",
@@ -670,7 +670,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: no authorization decision is cached; the credential is verified on every request (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go)",
-      "disclosure_behavior": "behaviour today, no action check: any caller with a verified credential reads its own organization's rows; failed authentication answers 401 (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); no other organization's resource can be named",
+      "disclosure_behavior": "behaviour today, no action check: any caller with a verified credential reads its own organization's rows; failed authentication answers 401 (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); a valid edge token with no organization answers 403 Organization context required (authenticateRESTRequest); no other organization's resource can be named",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
         "impersonation_policy: this route reads the organization from the credential only (authenticateRESTRequest returns the organization id alone); whether an impersonation session changes it is not proven in this pass"
@@ -685,7 +685,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every credential failure answers the same 401; a valid edge token with no organization answers 403 Organization context required."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID, authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); no request parameter names the organization",
@@ -719,7 +719,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: no authorization decision is cached; the credential is verified on every request (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go)",
-      "disclosure_behavior": "behaviour today, no action check: any caller with a verified credential reads its own organization's rows; failed authentication answers 401 (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); no other organization's resource can be named",
+      "disclosure_behavior": "behaviour today, no action check: any caller with a verified credential reads its own organization's rows; failed authentication answers 401 (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); a valid edge token with no organization answers 403 Organization context required (authenticateRESTRequest); no other organization's resource can be named",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
         "impersonation_policy: this route reads the organization from the credential only (authenticateRESTRequest returns the organization id alone); whether an impersonation session changes it is not proven in this pass"
@@ -734,7 +734,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every credential failure answers the same 401; a valid edge token with no organization answers 403 Organization context required."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID, authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); no request parameter names the organization",
@@ -768,7 +768,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: no authorization decision is cached; the credential is verified on every request (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go)",
-      "disclosure_behavior": "behaviour today, no action check: any caller with a verified credential reads its own organization's rows; failed authentication answers 401 (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); no other organization's resource can be named",
+      "disclosure_behavior": "behaviour today, no action check: any caller with a verified credential reads its own organization's rows; failed authentication answers 401 (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); a valid edge token with no organization answers 403 Organization context required (authenticateRESTRequest); no other organization's resource can be named",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
         "impersonation_policy: this route reads the organization from the credential only (authenticateRESTRequest returns the organization id alone); whether an impersonation session changes it is not proven in this pass"
@@ -783,7 +783,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every credential failure answers the same 401; a valid edge token with no organization answers 403 Organization context required."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID, authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); no request parameter names the organization",
@@ -833,7 +833,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: no authorization decision is cached; the credential is verified on every request (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go)",
-      "disclosure_behavior": "behaviour today, no action check: any caller with a verified credential reads its own organization's rows; failed authentication answers 401 (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); no other organization's resource can be named",
+      "disclosure_behavior": "behaviour today, no action check: any caller with a verified credential reads its own organization's rows; failed authentication answers 401 (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); a valid edge token with no organization answers 403 Organization context required (authenticateRESTRequest); no other organization's resource can be named",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
         "impersonation_policy: this route reads the organization from the credential only (authenticateRESTRequest returns the organization id alone); whether an impersonation session changes it is not proven in this pass"
@@ -848,7 +848,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every credential failure answers the same 401; a valid edge token with no organization answers 403 Organization context required."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID, authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); no request parameter names the organization",
@@ -882,7 +882,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: no authorization decision is cached; the credential is verified on every request (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go)",
-      "disclosure_behavior": "behaviour today, no action check: any caller with a verified credential reads its own organization's rows; failed authentication answers 401 (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); no other organization's resource can be named",
+      "disclosure_behavior": "behaviour today, no action check: any caller with a verified credential reads its own organization's rows; failed authentication answers 401 (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); a valid edge token with no organization answers 403 Organization context required (authenticateRESTRequest); no other organization's resource can be named",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
         "impersonation_policy: this route reads the organization from the credential only (authenticateRESTRequest returns the organization id alone); whether an impersonation session changes it is not proven in this pass"
@@ -897,7 +897,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every credential failure answers the same 401; a valid edge token with no organization answers 403 Organization context required."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID, authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); no request parameter names the organization",
@@ -931,7 +931,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: no authorization decision is cached; the credential is verified on every request (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go)",
-      "disclosure_behavior": "behaviour today, no action check: any caller with a verified credential reads its own organization's rows; failed authentication answers 401 (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); no other organization's resource can be named",
+      "disclosure_behavior": "behaviour today, no action check: any caller with a verified credential reads its own organization's rows; failed authentication answers 401 (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); a valid edge token with no organization answers 403 Organization context required (authenticateRESTRequest); no other organization's resource can be named",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
         "impersonation_policy: this route reads the organization from the credential only (authenticateRESTRequest returns the organization id alone); whether an impersonation session changes it is not proven in this pass"
@@ -946,7 +946,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every credential failure answers the same 401; a valid edge token with no organization answers 403 Organization context required."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID, authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); no request parameter names the organization",
@@ -996,7 +996,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every credential failure answers the same 401; a valid edge token with no organization answers 403 Organization context required."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID, authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); the {person_id} path segment selects a record inside that organization",
@@ -1046,7 +1046,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every credential failure answers the same 401; a valid edge token with no organization answers 403 Organization context required."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID, authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); the {person_id} path segment selects a record inside that organization",
@@ -1096,7 +1096,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every credential failure answers the same 401; a valid edge token with no organization answers 403 Organization context required."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID, authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); the {person_id} path segment selects a record inside that organization",
@@ -1146,7 +1146,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every credential failure answers the same 401; a valid edge token with no organization answers 403 Organization context required."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID, authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); the {person_id} path segment selects a record inside that organization",
@@ -1180,7 +1180,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: no authorization decision is cached; the credential is verified on every request (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go)",
-      "disclosure_behavior": "behaviour today, no action check: any caller with a verified credential reads its own organization's rows; failed authentication answers 401 (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); no other organization's resource can be named",
+      "disclosure_behavior": "behaviour today, no action check: any caller with a verified credential reads its own organization's rows; failed authentication answers 401 (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); a valid edge token with no organization answers 403 Organization context required (authenticateRESTRequest); no other organization's resource can be named",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
         "impersonation_policy: this route reads the organization from the credential only (authenticateRESTRequest returns the organization id alone); whether an impersonation session changes it is not proven in this pass"
@@ -1195,7 +1195,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every credential failure answers the same 401; a valid edge token with no organization answers 403 Organization context required."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID, authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); no request parameter names the organization",
@@ -1229,7 +1229,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: no authorization decision is cached; the credential is verified on every request (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go)",
-      "disclosure_behavior": "behaviour today, no action check: any caller with a verified credential reads its own organization's rows; failed authentication answers 401 (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); no other organization's resource can be named",
+      "disclosure_behavior": "behaviour today, no action check: any caller with a verified credential reads its own organization's rows; failed authentication answers 401 (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); a valid edge token with no organization answers 403 Organization context required (authenticateRESTRequest); no other organization's resource can be named",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
         "impersonation_policy: this route reads the organization from the credential only (authenticateRESTRequest returns the organization id alone); whether an impersonation session changes it is not proven in this pass"
@@ -1244,7 +1244,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every credential failure answers the same 401; a valid edge token with no organization answers 403 Organization context required."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID, authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); no request parameter names the organization",
@@ -1278,7 +1278,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: no authorization decision is cached; the credential is verified on every request (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go)",
-      "disclosure_behavior": "behaviour today, no action check: any caller with a verified credential reads its own organization's rows; failed authentication answers 401 (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); no other organization's resource can be named",
+      "disclosure_behavior": "behaviour today, no action check: any caller with a verified credential reads its own organization's rows; failed authentication answers 401 (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); a valid edge token with no organization answers 403 Organization context required (authenticateRESTRequest); no other organization's resource can be named",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
         "impersonation_policy: this route reads the organization from the credential only (authenticateRESTRequest returns the organization id alone); whether an impersonation session changes it is not proven in this pass"
@@ -1293,7 +1293,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every credential failure answers the same 401; a valid edge token with no organization answers 403 Organization context required."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID, authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); no request parameter names the organization",
@@ -1327,7 +1327,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: no authorization decision is cached; the credential is verified on every request (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go)",
-      "disclosure_behavior": "behaviour today, no action check: any caller with a verified credential reads its own organization's rows; failed authentication answers 401 (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); no other organization's resource can be named",
+      "disclosure_behavior": "behaviour today, no action check: any caller with a verified credential reads its own organization's rows; failed authentication answers 401 (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); a valid edge token with no organization answers 403 Organization context required (authenticateRESTRequest); no other organization's resource can be named",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
         "impersonation_policy: this route reads the organization from the credential only (authenticateRESTRequest returns the organization id alone); whether an impersonation session changes it is not proven in this pass"
@@ -1342,7 +1342,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every credential failure answers the same 401; a valid edge token with no organization answers 403 Organization context required."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID, authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); no request parameter names the organization",
@@ -1376,7 +1376,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: no authorization decision is cached; the credential is verified on every request (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go)",
-      "disclosure_behavior": "behaviour today, no action check: any caller with a verified credential reads its own organization's rows; failed authentication answers 401 (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); no other organization's resource can be named",
+      "disclosure_behavior": "behaviour today, no action check: any caller with a verified credential reads its own organization's rows; failed authentication answers 401 (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); a valid edge token with no organization answers 403 Organization context required (authenticateRESTRequest); no other organization's resource can be named",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
         "impersonation_policy: this route reads the organization from the credential only (authenticateRESTRequest returns the organization id alone); whether an impersonation session changes it is not proven in this pass"
@@ -1391,7 +1391,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every credential failure answers the same 401; a valid edge token with no organization answers 403 Organization context required."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID, authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); no request parameter names the organization",
@@ -1441,7 +1441,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every credential failure answers the same 401; a valid edge token with no organization answers 403 Organization context required."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID, authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); the {work_unit_id} path segment selects a record inside that organization",
@@ -1511,7 +1511,7 @@
       "action": null,
       "classification": "protected",
       "current_state_cache_behavior": "none: no authorization decision is cached; the organization scope and the impersonation session are read per request (scope.OrgScope and scope.Impersonation, graphQLEdgeChain in internal/queryapi/server/graphql_edge_route.go)",
-      "disclosure_behavior": "behaviour today, no action check: failed authentication answers 401 (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); an orgId argument naming another organization answers a whole-operation error before any field runs (OperationOrgGuard); a verified non-impersonating superuser may name another organization",
+      "disclosure_behavior": "behaviour today, no action check: a missing or rejected credential answers 401 Authentication required (authenticateGraphQLEdge, internal/queryapi/server/graphql_edge_route.go); an X-Org-Id the caller may not use answers 403 before the route runs (scope.OrgScope); a browser GET answers 404; a failed store read answers 500; an orgId argument naming another organization answers a whole-operation error before any field runs, except for a verified non-impersonating superuser",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
         "action: per field, not per route; the GraphQL per-field action map is contracts/auth/v1/graphql-field-actions.json"
@@ -1529,7 +1529,7 @@
         "description": "authenticateGraphQLEdge: edge access token only (authenticateEdgeTokenOnly, live users row)."
       },
       "public_rationale": null,
-      "resource_resolver": "organization_from_credential_or_argument: the credential's organization (claims.OrgID); a field's orgId argument is refused unless it equals it (OperationOrgGuard, internal/queryapi/graph/operation_org_guard.go)",
+      "resource_resolver": "organization_from_header_or_credential: the X-Org-Id header when the caller may use it (a superuser, the caller's own organization, or an organization the caller is a member of), else the credential's organization (scope.OrgScope, internal/api/policy/scope.go); a field's orgId argument is refused unless it equals that organization, except that a verified non-impersonating superuser may name another (OperationOrgGuard, internal/queryapi/graph/operation_org_guard.go)",
       "route": "/graphql",
       "service": "dev-health-query-api",
       "source": {
@@ -1555,7 +1555,7 @@
       "action": null,
       "classification": "protected",
       "current_state_cache_behavior": "none: no authorization decision is cached; the organization scope and the impersonation session are read per request (scope.OrgScope and scope.Impersonation, graphQLEdgeChain in internal/queryapi/server/graphql_edge_route.go)",
-      "disclosure_behavior": "behaviour today, no action check: failed authentication answers 401 (authenticateRESTRequest, internal/queryapi/server/rest_error_response.go); an orgId argument naming another organization answers a whole-operation error before any field runs (OperationOrgGuard); a verified non-impersonating superuser may name another organization",
+      "disclosure_behavior": "behaviour today, no action check: a missing or rejected credential answers 401 Authentication required (authenticateGraphQLEdge, internal/queryapi/server/graphql_edge_route.go); an X-Org-Id the caller may not use answers 403 before the route runs (scope.OrgScope); a browser GET answers 404; a failed store read answers 500; an orgId argument naming another organization answers a whole-operation error before any field runs, except for a verified non-impersonating superuser",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
         "action: per field, not per route; the GraphQL per-field action map is contracts/auth/v1/graphql-field-actions.json"
@@ -1573,7 +1573,7 @@
         "description": "authenticateGraphQLEdge: edge access token only (authenticateEdgeTokenOnly, live users row)."
       },
       "public_rationale": null,
-      "resource_resolver": "organization_from_credential_or_argument: the credential's organization (claims.OrgID); a field's orgId argument is refused unless it equals it (OperationOrgGuard, internal/queryapi/graph/operation_org_guard.go)",
+      "resource_resolver": "organization_from_header_or_credential: the X-Org-Id header when the caller may use it (a superuser, the caller's own organization, or an organization the caller is a member of), else the credential's organization (scope.OrgScope, internal/api/policy/scope.go); a field's orgId argument is refused unless it equals that organization, except that a verified non-impersonating superuser may name another (OperationOrgGuard, internal/queryapi/graph/operation_org_guard.go)",
       "route": "/graphql",
       "service": "dev-health-query-api",
       "source": {
@@ -1645,7 +1645,7 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
-      "action": "analytics.read",
+      "action": null,
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "HS256"
@@ -1655,7 +1655,8 @@
       "disclosure_behavior": "behaviour today, no action check: failed authentication answers 401 (authenticateInternalRequest, internal/queryapi/server/internal_auth.go); the organization read is the credential's",
       "gaps": [
         "The in-cluster internal identity headers are a third carrier accepted only on the internal listener (internal/queryapi/internalidentity, authenticateInternalRequest in internal/queryapi/server/internal_auth.go); the closed credential vocabulary has no class for them, so they are named here, not classified.",
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
+        "action: the route serves registered GraphQL documents; the action is the one of each served root field in contracts/auth/v1/graphql-field-actions.json, not one per route"
       ],
       "graphql_field_name": null,
       "id": "POST /query [dev-health-query-api @query,internal]",
@@ -1688,13 +1689,14 @@
     },
     {
       "accepted_credential_classes": [],
-      "action": "analytics.read",
+      "action": null,
       "classification": "protected",
       "current_state_cache_behavior": "none: the identity headers are read on every request (mcpAuthenticate, internal/queryapi/server/mcp_route.go)",
-      "disclosure_behavior": "behaviour today, no action check: failed authentication answers 401; an identity carrying superuser, impersonation or an operator role is refused (mcpAuthenticate)",
+      "disclosure_behavior": "behaviour today, no action check: a missing or invalid identity answers 401; an identity carrying superuser, impersonation or an operator role answers 403 (mcpAuthenticate, internal/queryapi/server/mcp_route.go)",
       "gaps": [
         "The MCP caller-class listener accepts only the internal identity headers (no bearer of any class); the closed credential vocabulary has no class for them, so accepted_credential_classes is empty by declaration, not omission.",
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
+        "action: the route serves registered GraphQL documents; the action is the one of each served root field in contracts/auth/v1/graphql-field-actions.json, not one per route",
         "impersonation_policy: the MCP caller class refuses an impersonating identity (mcpAuthenticate); no schema value names a refusal"
       ],
       "graphql_field_name": null,
@@ -1728,7 +1730,7 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
-      "action": "analytics.read",
+      "action": null,
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "HS256"
@@ -1738,7 +1740,8 @@
       "disclosure_behavior": "behaviour today, no action check: failed authentication answers 401 (authenticateInternalRequest, internal/queryapi/server/internal_auth.go); the organization read is the credential's",
       "gaps": [
         "Same serving pipeline and carrier check as POST /query (query_route.go authenticateInternalRequest call). Mounted only when the deployment posture permits (mountProofRoute).",
-        "The in-cluster internal identity headers are a third carrier accepted only on the internal listener (internal/queryapi/internalidentity, authenticateInternalRequest in internal/queryapi/server/internal_auth.go); the closed credential vocabulary has no class for them, so they are named here, not classified."
+        "The in-cluster internal identity headers are a third carrier accepted only on the internal listener (internal/queryapi/internalidentity, authenticateInternalRequest in internal/queryapi/server/internal_auth.go); the closed credential vocabulary has no class for them, so they are named here, not classified.",
+        "action: the route serves registered GraphQL documents; the action is the one of each served root field in contracts/auth/v1/graphql-field-actions.json, not one per route"
       ],
       "graphql_field_name": null,
       "id": "POST /query/proof [dev-health-query-api @query,internal]",

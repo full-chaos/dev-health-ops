@@ -187,7 +187,7 @@ func checkActionFieldTruth(rows []map[string]any, read func(file string) string)
 				defects = append(defects, id+": cites authenticateInternalRequest but its handler calls authenticateRESTRequest")
 			}
 			if strings.Contains(read("rest_error_response.go"), "Organization context required") {
-				if strings.Contains(validator, "same 401") {
+				if strings.Contains(validator, "every failure answers the same 401") {
 					defects = append(defects, id+": primary_validator says every failure answers 401, authenticateRESTRequest also answers 403 Organization context required")
 				}
 				if row["disclosure_behavior"] != nil && !strings.Contains(disclosure, "403") {

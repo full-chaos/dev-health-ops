@@ -5,11 +5,9 @@ package sync
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
-	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -142,28 +140,6 @@ SELECT dataset_key, count(*) FROM sync_run_units WHERE integration_id=$1::uuid G
 		t.Fatal(err)
 	}
 	return units
-}
-
-// runResult is sync_runs.result of one run as JSON text, "" when NULL.
-func (config incidentGateConfig) runResult(t *testing.T, runID string) string {
-	t.Helper()
-	var raw *string
-	if err := config.fixture.pool.QueryRow(context.Background(),
-		`SELECT result::text FROM sync_runs WHERE id=$1::uuid`, runID).Scan(&raw); err != nil {
-		t.Fatal(err)
-	}
-	if raw == nil {
-		return ""
-	}
-	return *raw
-}
-
-func jsonEqual(left, right string) bool {
-	var l, r any
-	if json.Unmarshal([]byte(left), &l) != nil || json.Unmarshal([]byte(right), &r) != nil {
-		return false
-	}
-	return reflect.DeepEqual(l, r)
 }
 
 func (config incidentGateConfig) syncRuns(t *testing.T) int {
@@ -300,13 +276,6 @@ func TestNativeMaterializerSkipsOnlyTheIncidentDatasetWhenTheIncidentFeatureIsOf
 			}
 			if totalUnits != wantPlanned || status != "planned" {
 				t.Fatalf("feature OFF: sync run total_units=%d status=%q, want %d planned", totalUnits, status, wantPlanned)
-			}
-			wantResult := `{"skipped_datasets":[{"dataset_key":"incidents","reason":"feature_disabled","message":"skipped: feature off"}]}`
-			if got := off.runResult(t, offPlan.SyncRunID); !jsonEqual(got, wantResult) {
-				t.Fatalf("feature OFF: sync_runs.result = %s, want %s", got, wantResult)
-			}
-			if got := on.runResult(t, onPlan.SyncRunID); got != "" {
-				t.Fatalf("feature ON: sync_runs.result = %s, want none", got)
 			}
 			if got := globalPlanGateTelemetry.snapshotForTest(tc.provider, "incidents", planGateOutcomeFeatureDisabled); got != 1 {
 				t.Fatalf("feature OFF: feature_disabled count for incidents = %d, want 1", got)
@@ -581,8 +550,8 @@ func TestDropCanonicalIncidentDatasetsCountsEachDatasetAndLocksTheFeatureRows(t 
 	defer func() { _ = tx.Rollback(ctx) }()
 	kept, skipped, err := dropCanonicalIncidentDatasetsWhenFeatureOff(ctx, tx, config.occurrence.OrgID, config.integrationID,
 		"pagerduty", []PlanDataset{{Key: "incidents"}, {Key: "services"}, {Key: "users"}}, config.occurrence.ScheduledFor)
-	if !errors.Is(err, ErrOccurrenceIneligible) || len(kept) != 0 || len(skipped) != 3 {
-		t.Fatalf("kept=%v skipped=%v err=%v, want nothing kept, 3 skipped, ErrOccurrenceIneligible", kept, skipped, err)
+	if !errors.Is(err, ErrOccurrenceIneligible) || len(kept) != 0 || skipped != 3 {
+		t.Fatalf("kept=%v skipped=%d err=%v, want nothing kept, 3 skipped, ErrOccurrenceIneligible", kept, skipped, err)
 	}
 	for _, dataset := range []string{"incidents", "services", "users"} {
 		if got := globalPlanGateTelemetry.snapshotForTest("pagerduty", dataset, planGateOutcomeFeatureDisabled); got != 1 {

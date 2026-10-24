@@ -298,7 +298,7 @@ WHERE id = $1::uuid AND sync_run_id = $6::uuid AND status = 'running'
 		}
 		if _, err := tx.Exec(ctx, `
 UPDATE public.sync_runs
-SET failed_units = $2, completed_units = $3, error = $4, result = `+resultKeepingSkippedDatasets("$5")+`,
+SET failed_units = $2, completed_units = $3, error = $4, result = $5::json,
     status = $6, completed_at = $7
 WHERE id = $1::uuid`,
 			run.id, failedUnits, successUnits, errorText, resultJSON, syncRunStatusFailed, completedAt); err != nil {
@@ -309,7 +309,7 @@ WHERE id = $1::uuid`,
 	} else {
 		if _, err := tx.Exec(ctx, `
 UPDATE public.sync_runs
-SET failed_units = $2, completed_units = $3, error = $4, result = `+resultKeepingSkippedDatasets("$5")+`
+SET failed_units = $2, completed_units = $3, error = $4, result = $5::json
 WHERE id = $1::uuid`,
 			run.id, failedUnits, successUnits, errorText, resultJSON); err != nil {
 			return FeatureDisabledRunTransition{}, ErrReferenceDiscoveryUnavailable

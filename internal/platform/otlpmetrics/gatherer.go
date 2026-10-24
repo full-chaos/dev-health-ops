@@ -29,6 +29,8 @@ type Gatherer struct {
 	Skip   map[string]bool
 	Logger *slog.Logger
 	Stats  *Stats
+	// Policy is the label allowlist applied to the merged families (nil: every label passes).
+	Policy *LabelPolicy
 }
 
 // Gather implements prometheus.Gatherer.
@@ -58,6 +60,9 @@ func (g *Gatherer) Gather() ([]*dto.MetricFamily, error) {
 			existing.Metric = append(existing.Metric, family.Metric...)
 		}
 	})
+	if g.Policy != nil {
+		g.Policy.FilterFamilies(merged)
+	}
 	names := make([]string, 0, len(merged))
 	for name := range merged {
 		names = append(names, name)

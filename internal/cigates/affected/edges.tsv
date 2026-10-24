@@ -9,6 +9,7 @@ cmd/dho	service_migrate_guard_test.go	unexpressed
 cmd/gqlgen-guard	main_test.go	cmd/gqlgen-guard
 cmd/gqlgen-guard	main_test.go	unexpressed
 deploy/helm/dev-health	auth_service_test.go	unexpressed
+deploy/helm/dev-health	auth_session_secret_script_test.go	unexpressed
 deploy/helm/dev-health	clickhouse_configd_render_test.go	unexpressed
 deploy/helm/dev-health	clickhouse_replicas_test.go	unexpressed
 deploy/helm/dev-health	clickhouse_started_test.go	unexpressed
@@ -116,6 +117,7 @@ internal/cigates/testshard	weightscensus_test.go	unexpressed
 internal/cigates/webproxyproof	proof_test.go	unexpressed
 internal/cigates/weightsfiles	ci_script_helpers_test.go	unexpressed
 internal/cigates/weightsfiles	free_run_test.go	unexpressed
+internal/cigates/workflowpaths	workflow_path_filters_test.go	unexpressed
 internal/cigates/workflows	aggregate_gate_results_test.go	unexpressed
 internal/cigates/workflows	auth_compose_proof_test.go	unexpressed
 internal/cigates/workflows	auth_corpus_external_behaviour_test.go	unexpressed
@@ -129,6 +131,7 @@ internal/cigates/workflows	race_pool_routing_test.go	unexpressed
 internal/cigates/workflows	strip_hook_test.go	unexpressed
 internal/cigates/workflows	workflows_builder_images_test.go	unexpressed
 internal/cigates/workflows	workflows_go_integration_pr_scope_test.go	unexpressed
+internal/cigates/workflows	workflows_go_queue_skip_test.go	unexpressed
 internal/cigates/workflows	workflows_path_filters_test.go	unexpressed
 internal/cigates/workflows	workflows_wire_parity_test.go	unexpressed
 internal/fixturescli	provider_worlds_producer_integration_test.go	unexpressed
@@ -191,6 +194,7 @@ internal/synccli	local_oracle_integration_test.go	unexpressed
 internal/syncdispatchruntime	log_error_text_test.go	internal/syncdispatchruntime
 internal/syncdispatchruntime	post_sync_failure_test.go	unexpressed
 internal/syncdispatchruntime/synclog	synclog_test.go	internal/syncdispatchruntime/synclog
+internal/testsupport/authrows	golden_test.go	unexpressed
 internal/testsupport/goldenscan	vectors_test.go	unexpressed
 internal/testsupport/proxycapture	proxycapture_test.go	unexpressed
 internal/testsupport/ratchet	ratchet.go	unexpressed

@@ -37,6 +37,7 @@ import (
 	"errors"
 	"log/slog"
 	"math"
+	"strings"
 	"sync"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
@@ -45,6 +46,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/chquery"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/chwrite"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/units"
+	"github.com/full-chaos/dev-health-ops/internal/llmorgsettings"
 )
 
 const (
@@ -203,6 +205,8 @@ type servedClassifier interface {
 // ServedDecision is the served decision backend of one Execute: built once,
 // used by one Materializer.Run, then closed.
 type ServedDecision struct {
+	// byo marks the backend of an org's own model (newBYOSystemOne); jev is false.
+	byo        bool
 	classifier servedClassifier
 	// identity and stamp are fixed at construction from configured values only,
 	// never from a response field.
@@ -239,10 +243,16 @@ func NewServedDecision(client *categorize.TypeSafeClient, logger *slog.Logger) (
 }
 
 func newServedDecision(sender systemOneSender, logger *slog.Logger) (*ServedDecision, error) {
+	return newServedDecisionFor(sender, logger, "")
+}
+
+// newServedDecisionFor is newServedDecision for a backend with its own provider
+// name in the identity; "" is jev.
+func newServedDecisionFor(sender systemOneSender, logger *slog.Logger, provider string) (*ServedDecision, error) {
 	if sender == nil || logger == nil {
 		return nil, ErrUnavailable
 	}
-	completer, err := decision.NewCompleter(shadowTransport{sender: sender}, sender.Model())
+	completer, err := decision.NewCompleterForProvider(shadowTransport{sender: sender}, sender.Model(), provider)
 	if err != nil {
 		return nil, err
 	}
@@ -283,13 +293,32 @@ func (served *ServedDecision) Close() error {
 type servedFailure struct {
 	class         string
 	deterministic bool
-	calls         int
-	inputTokens   int
-	outputTokens  int
+	// code is a member of the closed refusal set (llmorgsettings), or empty.
+	code         string
+	calls        int
+	inputTokens  int
+	outputTokens int
 }
 
 func (failure *servedFailure) Error() string {
+	if failure.code != "" {
+		return "investment served decision: the request failed (" + failure.class + ": " + failure.code + ")"
+	}
 	return "investment served decision: the request failed (" + failure.class + ")"
+}
+
+// unreportedModel reports an answer of an org's own model that names no model.
+// The org's provider reports none on every request, so the run stops.
+func (served *ServedDecision) unreportedModel(classification decision.Classification) bool {
+	if !served.byo || classification.ModelReturned != "" {
+		return false
+	}
+	for _, code := range classification.Errors {
+		if strings.HasPrefix(code, "request_failed:model_mismatch") {
+			return true
+		}
+	}
+	return false
 }
 
 // llmFailureOf is the class of a categorization error and whether it recurs on
@@ -340,6 +369,9 @@ func (served *ServedDecision) categorize(ctx context.Context, cfg Config, entry 
 		failure := &servedFailure{
 			class: label, deterministic: classification.Stop,
 			calls: servedSentCalls(result.exchange), inputTokens: classification.InputTokens, outputTokens: classification.OutputTokens,
+		}
+		if served.unreportedModel(classification) {
+			failure.deterministic, failure.code = true, llmorgsettings.CodeCategorizeBYOModelUnreported
 		}
 		if !failure.deterministic {
 			served.mu.Lock()

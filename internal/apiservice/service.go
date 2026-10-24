@@ -275,6 +275,7 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 			Write:         WriteError,
 			Limits:        limits,
 			Invites:       deps.Invites,
+			UsersOwned:    deps.UsersOwned,
 		})...)
 	}
 	webhookintake.LogUnconfiguredSecrets(logger)
@@ -376,6 +377,11 @@ func configureWith(
 	if err != nil {
 		return nil, err
 	}
+	deps.UsersOwned, err = ParseUsersOwned(envsecrets.ProcessLookup, authProxy)
+	if err != nil {
+		closeComponents(depComponents)
+		return nil, dependencyFailure(ctx, logger, "api_users_owned", "api_users_owned_config_invalid", err)
+	}
 	deps.SessionIssuer, err = sessionIssuer(authProxy, envsecrets.ProcessLookup)
 	if err != nil {
 		closeComponents(depComponents)
@@ -391,6 +397,11 @@ func configureWith(
 		deps.Auth, deps.Guard = protected.auth, protected.guard
 		deps.Verifier, deps.Signer = protected.verifier, protected.signer
 		scope = []func(http.Handler) http.Handler{protected.scope.OrgScope, protected.scope.Impersonation}
+	}
+	deps.AccessVerify, err = buildAccessVerify(envsecrets.ProcessLookup, deps.Auth, logger)
+	if err != nil {
+		closeComponents(depComponents)
+		return nil, dependencyFailure(ctx, logger, "api_access_verify", "api_access_verify_config_invalid", err)
 	}
 	logWideTrust(logger)
 	if err := RegisterOperatorMetrics(registry, &deps); err != nil {
@@ -486,6 +497,8 @@ func configureWith(
 	}); err != nil {
 		return nil, dependencyFailure(ctx, logger, "api_server", "api_listener_check_register_failed", err)
 	}
+	// Queued sign-in mail jobs finish after the listener stops and before the pool closes.
+	depComponents = append(depComponents, session.MailDrain{Logger: logger})
 	return append(depComponents, server), nil
 }
 

@@ -611,8 +611,12 @@ func TestLabelsTableEqualsTheCensus(t *testing.T) {
 			t.Errorf("instrument %s: labels.tsv has %v, the code emits %v", name, row.Keys, keys)
 		}
 	}
+	fragmentBacked := buildFragmentCensus(t, root).rows()
 	for name, row := range have {
 		if _, ok := want[name]; ok || strings.HasPrefix(row.Reason, "third-party:") || name == DroppedMetricName {
+			continue
+		}
+		if _, ok := fragmentBacked[name]; ok {
 			continue
 		}
 		t.Errorf("labels.tsv row %s names no instrument in the source", name)

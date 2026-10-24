@@ -82,7 +82,15 @@ func TestEveryFamilyOfTheRealProducersArrivesOverOTLPUnchanged(t *testing.T) {
 	}
 	want := parseExposition(t, response.Body.String())
 
-	resources, stats := push(t, health.Scrape{Registry: registry, Service: "dev-health-worker", Version: "v-test"}, nil)
+	// The label table is installed: every family, type, label set and value must still arrive unchanged, and nothing is dropped.
+	policy, err := DefaultLabelPolicy(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resources, stats := pushWithPolicy(t, health.Scrape{Registry: registry, Service: "dev-health-worker", Version: "v-test"}, nil, policy)
+	if dropped := policy.Dropped(); len(dropped) != 0 {
+		t.Fatalf("the table drops labels the real producers emit today: %v", dropped)
+	}
 	families, seriesCount := compare(t, "producers", want, resources)
 	// The job runtime collector alone declares dozens of families; a pass over
 	// fewer means the registry was not what this test believes it is.

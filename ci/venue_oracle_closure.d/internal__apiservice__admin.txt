@@ -36,10 +36,12 @@ internal/api/standinkey
 internal/api/syncadmin
 internal/api/teamsidentity
 internal/api/telemetry
+internal/api/usersowned
 internal/api/webhookintake
 internal/apiservice
 internal/apiservice/acr
 internal/apiservice/customerpush
+internal/auth/accessverify
 internal/auth/edgetoken
 internal/auth/emaildomain
 internal/auth/httpapi

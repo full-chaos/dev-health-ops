@@ -39,7 +39,7 @@ func (c *censusClient) Query(_ context.Context, statement string, _ []clickhouse
 	c.statements = append(c.statements, statement)
 	c.mu.Unlock()
 	if strings.Contains(statement, "quality_known_count") && !strings.Contains(statement, "evidence_quality_group_key") {
-		return &fakeRowScanner{rows: [][]any{{uint64(10), uint64(10), 0.5, 0.1, uint64(0), uint64(5), uint64(5), uint64(0), uint64(0)}}}, nil
+		return &fakeRowScanner{rows: [][]any{{uint64(10), uint64(10), 0.5, 0.1, uint64(0), uint64(5), uint64(5), uint64(0), uint64(0), uint64(0)}}}, nil
 	}
 	return &fakeRowScanner{}, nil
 }

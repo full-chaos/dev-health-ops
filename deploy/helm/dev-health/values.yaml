@@ -156,6 +156,13 @@ goApi:
 authService:
   enabled: false
   replicas: 1
+  # -- The users-owned switch (D3c, AUTH_USERS_OWNED). true: auth-service owns
+  #    user creation, projects each user to public.users in the same transaction,
+  #    mounts the password and e-mail verification routes, and does not become
+  #    ready while auth.users is incomplete; the auth-migrate and grants Jobs then
+  #    grant its runtime role INSERT/UPDATE on the projection columns of
+  #    public.users (false revokes them). The flip is a production decision.
+  usersOwned: false
   # -- The auth API listener. It mounts no route in Wave 1.
   port: 8095
   # -- The operator listener: /healthz, /readyz, /metrics. Probes use it, never
@@ -583,6 +590,33 @@ goWorkers:
   #    chart's own config/secret on any key both set. Shared by every
   #    worker group; there is no per-group override.
   extraEnvFrom: []
+  # -- Keys of the shared Secret (secrets.externalSecretName or the chart's own)
+  #    that worker groups read. Each renders as one optional secretKeyRef; the
+  #    Secret is no whole-Secret envFrom source of a worker pod, so a key not
+  #    listed here (every database DSN, the API and auth keys) never reaches
+  #    one. A key a worker needs that is not listed: add it here, or give the
+  #    pod its own source through extraEnvFrom. DSN names never belong here.
+  secretKeys:
+    - APP_BASE_URL
+    - CLICKHOUSE_URI
+    - EMAIL_API_KEY
+    - EMAIL_FROM_ADDRESS
+    - EMAIL_PROVIDER
+    - EXPECTED_WORKER_GROUPS
+    - INVESTMENT_LLM_BATCH_MODE
+    - INVESTMENT_LLM_BATCH_TIMEOUT_SECONDS
+    - LICENSE_PRIVATE_KEY
+    - LINEAR_API_KEY
+    - LLM_MODEL
+    - LLM_PROVIDER
+    - OPENAI_API_KEY
+    - PAGER_DUTY_CLIENT_ID
+    - PAGER_DUTY_REDIRECT_URI
+    - PAGER_DUTY_SECRET
+    - SETTINGS_ENCRYPTION_KEY
+    - STRIPE_SECRET_KEY
+    - STRIPE_WEBHOOK_SECRET
+    - WORKER_GITHUB_WORK_ITEMS_STATUS_MAPPING_PATH
   # The production Go topology has three distinct PostgreSQL endpoints.
   # Domain traffic uses a bounded transaction pool. River queue control and
   # coordinator locks use independent session pools: those connections cannot
@@ -1228,7 +1262,6 @@ config:
   PROVIDER_SYNC_QUEUES_ENABLED: "true"
   SYNC_COST_CLASS_QUEUES: "true"
   HIDE_MIGRATED_CHILD_CONFIGS: "true"
-  SYNC_RUN_MAX_UNITS: "1000"
   SYNC_UNIT_CONCURRENCY_PER_BUCKET: "8"
   SYNC_UNIT_DISPATCH_STALE_SECONDS: "900"
   SYNC_UNIT_RUNNING_STALE_SECONDS: "3600"
@@ -1377,6 +1410,29 @@ valkey:
     size: 1Gi
     storageClass: ""
   maxmemory: "256mb"
+  # -- An ACL file for the in-chart Valkey, read from a Secret the chart does not
+  #    create. Off unless enabled=true: Valkey then starts as before, with only its
+  #    open default user, and nothing refers to the Secret. When enabled, Valkey
+  #    starts with --aclfile on that Secret key (the render REFUSES enabled with an
+  #    empty secretName or secretKey; Valkey does not start without the file it was
+  #    told to load), so a restart keeps the users. A file defines EVERY user: it
+  #    carries the default user line (the probes and the other in-chart clients use
+  #    it, exactly as today) and the auth-service rate-limit user with a HASHED
+  #    password:
+  #      user default on nopass ~* &* +@all
+  #      user auth-service-ratelimit on #<sha256 hex of the password> resetkeys ~dho:rl:auth_svc_* resetchannels -@all +hello +select +ping +get +eval +incr +pexpire +client|tracking
+  #    The rule after the hash is internal/auth/ratelimitvalkey ACLRules. LIMIT: the
+  #    default user keeps access to every key, the auth rate-limit counters
+  #    (dho:rl:auth_svc_*) included, so what bounds who can touch them is the
+  #    network policy, not the ACL: the render REFUSES enabled unless
+  #    networkPolicy.enabled=true (that policy admits the whole release namespace).
+  #    The file mode is 0444 (hashes only). Rotation: a changed Secret rolls nothing;
+  #    restart Valkey or run ACL LOAD, and restart auth-service for a new URI. Order: create the Secret
+  #    first, then set enabled=true; the Valkey Deployment restarts once.
+  acl:
+    enabled: false
+    secretName: ""
+    secretKey: users.acl
 
 # =============================================================================
 # In-cluster ClickHouse (optional — disable for managed ClickHouse)

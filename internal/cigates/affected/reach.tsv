@@ -62,6 +62,7 @@ internal/auth/contracts	contracts.go	cmd/dho
 internal/auth/contracts	contracts.go	internal/api/billing
 internal/auth/contracts	contracts.go	internal/api/externalingest
 internal/auth/contracts	contracts.go	internal/api/legacyingest
+internal/auth/contracts	contracts.go	internal/api/usersowned
 internal/auth/contracts	contracts.go	internal/api/webhookintake
 internal/auth/contracts	contracts.go	internal/apiservice
 internal/auth/contracts	contracts.go	internal/apiservice/acr
@@ -719,6 +720,7 @@ internal/testsupport/venueoracle	golden_walk.go	internal/testsupport/venueoracle
 internal/testsupport/venueoracle	golden_walk.go	internal/testsupport/venueoracle/goldenhygiene
 internal/testsupport/venueoracle	golden_walk.go	internal/workerservice
 internal/testsupport/venueoracle	gopin.go	internal/adminops
+internal/testsupport/venueoracle	gopin.go	internal/api/githubapp
 internal/testsupport/venueoracle	gopin.go	internal/api/syncadmin
 internal/testsupport/venueoracle	gopin.go	internal/api/teamsidentity/adminstampvenue
 internal/testsupport/venueoracle	gopin.go	internal/apiservice

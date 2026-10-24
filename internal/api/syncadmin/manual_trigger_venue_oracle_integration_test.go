@@ -547,7 +547,17 @@ WHERE c.name NOT LIKE '%legacy-unmanaged' ORDER BY c.name`, 30},
 	}
 	for _, table := range compare {
 		goRows := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), table.query)
-		pythonRows := golden.CompareRows(t, table.name, goRows)
+		var pythonRows string
+		if table.name == "sync_run_units" {
+			// Declared divergence: the Go backfill planner ends each window where the next one starts;
+			// Python ends it 1 microsecond earlier. Only that gap is closed; every other column must still match.
+			pythonRows = golden.InspectRows(t, table.name)
+			if want, got := venueoracle.TileFrozenBackfillWindows(pythonRows), golden.ProjectRows(t, table.name, goRows); got != want {
+				t.Errorf("%s differs after the requests (python with the windows tiled):\n python: %s\n go:     %s", table.name, want, got)
+			}
+		} else {
+			pythonRows = golden.CompareRows(t, table.name, goRows)
+		}
 		if strings.Count(pythonRows, " | ") < table.minSeparators {
 			t.Errorf("%s: too few rows compared:\n%s", table.name, pythonRows)
 		}

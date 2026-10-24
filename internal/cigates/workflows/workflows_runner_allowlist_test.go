@@ -47,6 +47,7 @@ var routedWorkflowFiles = []string{"go-quality.yml", "test.yml", "live-e2e.yml",
 
 var draftGatedJobs = [][2]string{
 	{"codeql-analysis.yml", "analyze"},
+	{"codeql-analysis.yml", "analyze-docs-only"},
 	{"docker-images.yml", "dind-smoke-test"},
 	{"docker-images.yml", "go-api-tools-build"},
 	{"docker-images.yml", "go-build"},

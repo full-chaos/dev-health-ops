@@ -38,7 +38,9 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	chclickhouse "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/full-chaos/dev-health-ops/internal/storage/valkey"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/authrows"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/providerstub"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/sessionscenario"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/smtpcapture"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
@@ -241,6 +243,8 @@ type runner struct {
 	venue          *venueoracle.Venue
 	goBase         string
 	external       bool
+	forwarded      authrows.Forwarded
+	ledger         *authrows.Ledger
 	pySink, goSink *smtpcapture.Server
 	receipt        strings.Builder
 	// mails are each plane's messages so far, by "recipient|subject", the
@@ -250,8 +254,8 @@ type runner struct {
 	// for an existing address: it queues an account-exists mail the Python
 	// plane never sent.
 	notices int
-	// registers is set when the current batch carried a sign-up: the Go plane
-	// sends its mail off the request, so mails are compared in a fixed order.
+	// registers is set when the current batch carried a sign-up, a resend or a forgot request: the Go plane
+	// sends their mail off the request, so mails are compared in a fixed order.
 	registers bool
 	// signUpLength is the content-length of the first uniform sign-up answer of the run.
 	signUpLength string
@@ -283,6 +287,9 @@ func (r *runner) batch(label string, steps []step) map[string][2]venueoracle.Res
 		// generated ids and times blanked); the Go answer is compared the same way.
 		goProjected := r.golden.Project(r.t, goResponse)
 		pyCompared := pyResponses[index]
+		if s.python.Path == "/api/v1/auth/resend-verification" || s.python.Path == "/api/v1/auth/forgot-password" {
+			r.registers = true
+		}
 		if s.python.Path == "/api/v1/auth/register" {
 			r.registers = true
 			if uniformSignUp(pyCompared, goProjected) {
@@ -471,12 +478,32 @@ func keys(m map[string][]sentMail) []string {
 
 func (r *runner) rows(name, query string) {
 	r.t.Helper()
+	query, projected, err := authrows.Query(name, query, r.forwarded)
+	if err != nil {
+		r.t.Fatalf("%s rows: %v", name, err)
+	}
 	goRows := venueoracle.TableRows(r.t, r.ctx, r.venue.AdminURI(r.t, r.venue.GoDB), query)
+	if projected {
+		r.projectedRows(name, goRows)
+		return
+	}
 	pyRows := r.golden.CompareRows(r.t, name, goRows)
 	same := pyRows == goRows && pyRows != ""
 	fmt.Fprintf(&r.receipt, "%s rows after the scenario: %s\n", name, venueoracle.Mark(same))
 	if pyRows == "" {
 		r.t.Errorf("%s rows are empty", name)
+	}
+}
+
+// projectedRows compares the rows the target holds for an aggregate it forwarded to auth-service with the
+// golden's, every difference classified by a quirk of authrows.Quirks.
+func (r *runner) projectedRows(name, goRows string) {
+	r.t.Helper()
+	pyRows := r.golden.InspectRows(r.t, name)
+	problems := r.ledger.Compare(name, pyRows, r.golden.ProjectRows(r.t, name, goRows))
+	fmt.Fprintf(&r.receipt, "%s rows after the scenario, auth-service rows (forwarded %s): %s\n", name, r.forwarded, venueoracle.Mark(len(problems) == 0))
+	for _, problem := range problems {
+		r.t.Error(problem)
 	}
 }
 
@@ -617,6 +644,14 @@ func TestAuthFlowVenueOracle(t *testing.T) {
 	r := &runner{golden: golden, t: t, ctx: ctx, venue: venue, pySink: pySink, goSink: goSink,
 		mails:  map[string]map[string][]sentMail{"python": {}, "go": {}},
 		goBase: externalBase, external: external != nil}
+	if external != nil {
+		if r.forwarded, err = authrows.FromEnv(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if r.ledger, err = authrows.NewLedger(r.forwarded); err != nil {
+		t.Fatal(err)
+	}
 	if r.goBase == "" {
 		r.goBase = startGoAPI(t, ctx, venue, admin.InviteConfig{Mail: goSender, TokenSecret: sessionscenario.Key, AppBaseURL: appBaseURL, AppBaseURLSet: true})
 	}
@@ -846,8 +881,18 @@ func TestAuthFlowVenueOracle(t *testing.T) {
 		FROM audit_logs a LEFT JOIN organizations o ON o.id = a.org_id LEFT JOIN users u ON u.id = a.user_id
 		ORDER BY a.created_at, a.action`)
 
+	if r.external {
+		r.socialRow()
+	}
+
 	if violations := policy.WriterViolations(); violations > 0 {
 		t.Errorf("%d body writes used the wrong writer for their route", violations)
+	}
+	if r.forwarded.Any() {
+		for _, problem := range r.ledger.Dead() {
+			t.Error(problem)
+		}
+		fmt.Fprintf(&r.receipt, "row skips: 0; quirks covered: %s\n", r.ledger.Covered())
 	}
 	receipt := r.receipt.String()
 	if path := os.Getenv("DEV_HEALTH_VENUE_RECEIPT"); path != "" {
@@ -971,4 +1016,42 @@ func authScrub(text string) string {
 		text = strings.ReplaceAll(text, fmt.Sprintf("\x00%d\x00", index), id)
 	}
 	return text
+}
+
+// socialRow signs a new user in with a GitHub token the corpus provider stub answers, through the target, and requires
+// that the stub recorded the request. It runs after every row comparison: the user it creates is not in the golden's rows.
+func (r *runner) socialRow() {
+	r.t.Helper()
+	admin := os.Getenv("DEVHEALTH_AUTH_ORACLE_STUB_ADMIN")
+	if admin == "" {
+		r.t.Fatal("DEVHEALTH_AUTH_ORACLE_STUB_ADMIN is not set: an external run starts the corpus provider stub")
+	}
+	reset, err := http.Post(admin+"/reset", "application/json", nil)
+	if err != nil || reset.StatusCode != http.StatusNoContent {
+		r.t.Fatalf("provider stub reset: %v", err)
+	}
+	_ = reset.Body.Close()
+	body := `{"provider": "github", "provider_access_token": "gh-corpus"}`
+	answer := venueoracle.Do(r.t, r.goBase, request("social: github new user through the provider stub", http.MethodPost, "/api/v1/auth/social-login", "", body))
+	var decoded map[string]any
+	if answer.Status != http.StatusOK || json.Unmarshal([]byte(answer.Body), &decoded) != nil || decoded["access_token"] == nil {
+		r.t.Fatalf("social-login through the provider stub answered %d with %d body bytes, want 200 and a session", answer.Status, len(answer.Body))
+	}
+	user, _ := json.Marshal(decoded["user"])
+	if !strings.Contains(string(user), "corpus-social@example.com") {
+		r.t.Errorf("the session's user is not the stubbed account")
+	}
+	recorded, err := http.Get(admin + "/requests")
+	if err != nil {
+		r.t.Fatalf("provider stub requests: %v", err)
+	}
+	defer recorded.Body.Close()
+	var requests []providerstub.Recorded
+	if err := json.NewDecoder(recorded.Body).Decode(&requests); err != nil {
+		r.t.Fatalf("provider stub requests: %v", err)
+	}
+	if err := providerstub.CheckRecorded(requests, "github", 1); err != nil {
+		r.t.Error(err)
+	}
+	fmt.Fprintf(&r.receipt, "social: github new user through the provider stub: status %d, stub github requests %d %s\n", answer.Status, len(requests), venueoracle.Mark(r.t != nil && !r.t.Failed()))
 }

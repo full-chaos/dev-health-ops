@@ -206,9 +206,9 @@ func TestDocsOnlyStepBehaviour(t *testing.T) {
 	classifier := readFile(t, filepath.Join(repoRoot(t), "ci", "codeql_docs_only.sh"))
 	const goYml = "on:\n  push:\n    paths:\n      - '**/*.go'\n"
 	g := newDocsGit(t)
-	main := g.commit("", map[string]string{"ci/codeql_docs_only.sh": classifier, ".github/workflows/go.yml": goYml, "README.md": "a"})
+	main := g.commit("", map[string]string{"ci/codeql_docs_only.sh": classifier, ".github/workflows/go.yml": goYml, "notes.md": "a"})
 	g.git(g.src, "push", "-q", "origin", main+":refs/heads/main")
-	docsPR := g.commit(main, map[string]string{"README.md": "b"})
+	docsPR := g.commit(main, map[string]string{"notes.md": "b"})
 	codePR := g.commit(main, map[string]string{"internal/x/x.go": "package x\n"})
 	// a merge group: entry 1 changes code, entry 2 (on top of entry 1) changes docs only
 	entry1 := g.commit(main, map[string]string{"internal/y/y.go": "package y\n"})
@@ -224,7 +224,7 @@ func TestDocsOnlyStepBehaviour(t *testing.T) {
 	g.git(g.src, "commit", "-q", "-m", "drop the judge")
 	noJudgeBase := g.git(g.src, "rev-parse", "HEAD")
 	g.git(g.src, "push", "-q", "origin", noJudgeBase+":refs/heads/scratch-nojudge")
-	docsOnNoJudge := g.commit(noJudgeBase, map[string]string{"README.md": "c"})
+	docsOnNoJudge := g.commit(noJudgeBase, map[string]string{"notes.md": "c"})
 
 	pr := func(base, head string) map[string]string {
 		return map[string]string{"EVENT_NAME": "pull_request", "PR_BASE_SHA": base, "PR_HEAD_SHA": head}

@@ -180,6 +180,41 @@ func queueGateViolations(t *testing.T, root string) []string {
 	return out
 }
 
+// live-e2e and metrics-executed-proof are required contexts, and a skipped job reports success. On merge_group the
+// changes job's path filter sees only the entry's own PR (the event base is the parent entry), so the jobs must not read
+// `code` there: every queue entry that is not docs-only runs them, even one whose own PR is docs-only behind a code entry.
+func TestLiveE2ERunsForEveryNonDocsQueueEntry(t *testing.T) {
+	doc := loadWf(t, repoRoot(t), "live-e2e.yml")
+	for _, name := range []string{"live-e2e", "metrics-executed-proof"} {
+		condition := strings.TrimSpace(asString(pinJob(doc, name)["if"]))
+		for _, c := range []struct {
+			event, code, docsOnly, labels string
+			want                          bool
+		}{
+			{"merge_group", "false", "false", "", true},
+			{"merge_group", "true", "false", "", true},
+			{"merge_group", "false", "true", "", false},
+			{"pull_request", "true", "false", "", false},
+			{"pull_request", "true", "false", "ci:full", true},
+			{"pull_request", "false", "false", "ci:full", false},
+			{"push", "true", "false", "", true},
+			{"push", "false", "false", "", false},
+		} {
+			ctx := queueContext(c.event, "refs/heads/main")
+			ctx["needs.changes.outputs.code"] = c.code
+			ctx["needs.changes.outputs.docs_only"] = c.docsOnly
+			ctx["github.event.pull_request.labels.*.name"] = c.labels
+			got, err := queueEval(condition, ctx)
+			if err != nil {
+				t.Fatalf("%s: %v", name, err)
+			}
+			if got.truthy() != c.want {
+				t.Errorf("%s on %s (code=%s docs_only=%s labels=%q) runs=%v, want %v", name, c.event, c.code, c.docsOnly, c.labels, got.truthy(), c.want)
+			}
+		}
+	}
+}
+
 func TestQueueGatesJudgeEveryHeavyJob(t *testing.T) {
 	expectNoViolations(t, queueGateViolations(t, repoRoot(t)))
 }

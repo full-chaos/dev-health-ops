@@ -158,14 +158,56 @@ FROM (
     WHERE org_id = ? AND last_synced >= fromUnixTimestamp64Milli(toInt64(?), 'UTC')
 )`
 
+// recordTouchedWindowReposSQL counts the repositories the window statement
+// multiplies the days by.
+const recordTouchedWindowReposSQL = `
+SELECT uniqExact(repo_id)
+FROM work_items
+WHERE org_id = ? AND last_synced >= fromUnixTimestamp64Milli(toInt64(?), 'UTC')`
+
 // recordTouchedWindowDaysPerStatement bounds the day list of one statement:
 // the driver writes the list into the statement text.
 const recordTouchedWindowDaysPerStatement = 1000
+
+// TouchedWindowKeysBound is the number of window marks (days x repositories)
+// that one record is expected to stay within: a 366-day backfill of 1000
+// repositories, 366,000 rows. Above it every mark is still recorded (a dropped
+// mark is a lost day) and the fan-out logs an error.
+const TouchedWindowKeysBound = 366 * 1000
+
+// TouchedWindowReport is the cost of the window marks of one RecordTouched.
+type TouchedWindowReport struct {
+	Days  int
+	Repos int
+	// Keys is days x repositories, the rows the window statement appends
+	// before any merge collapses repeats.
+	Keys int
+}
+
+// OverBound reports whether the window marks are above TouchedWindowKeysBound.
+func (report TouchedWindowReport) OverBound() bool { return report.Keys > TouchedWindowKeysBound }
+
+type touchedWindowSinkKey struct{}
+
+// WithTouchedWindowSink returns a context that makes RecordTouched store the
+// cost of its window marks in sink.
+func WithTouchedWindowSink(ctx context.Context, sink *TouchedWindowReport) context.Context {
+	return context.WithValue(ctx, touchedWindowSinkKey{}, sink)
+}
 
 // RecordTouched appends the 'touched' events of the raw rows whose last_synced
 // is at or after since, and one for each day of windowDays and each
 // repository of those work items. It returns the number of keys it appended.
 // A key that both parts name is one key.
+//
+// A retry of the same fan-out appends the window marks again with a newer
+// `at`, so keys already dispatched are pending once more: one extra daily
+// recompute, never a lost day. The write is not skipped for a key that is
+// pending already: a concurrent dispatch can take that key at a time older
+// than this run's rows, and the skipped mark would then be lost. Repeated rows
+// of a key collapse in the table (ReplacingMergeTree), so the row count does
+// not grow after a merge. The cost of one record is days x repositories rows,
+// reported through WithTouchedWindowSink.
 func (store *ClickHouseTouchedDaysStore) RecordTouched(
 	ctx context.Context, organizationID string, since time.Time, windowDays []time.Time,
 ) (uint64, error) {
@@ -193,6 +235,15 @@ func (store *ClickHouseTouchedDaysStore) RecordTouched(
 		organizationID, sinceMillis, sinceMillis,
 	); err != nil {
 		return 0, ErrTouchedDaysUnavailable
+	}
+	if len(windowDays) > 0 {
+		var repos uint64
+		if err := store.conn.QueryRow(ctx, recordTouchedWindowReposSQL, organizationID, sinceMillis).Scan(&repos); err != nil {
+			return 0, ErrTouchedDaysUnavailable
+		}
+		if sink, ok := ctx.Value(touchedWindowSinkKey{}).(*TouchedWindowReport); ok && sink != nil {
+			*sink = TouchedWindowReport{Days: len(windowDays), Repos: int(repos), Keys: len(windowDays) * int(repos)}
+		}
 	}
 	for start := 0; start < len(windowDays); start += recordTouchedWindowDaysPerStatement {
 		end := min(start+recordTouchedWindowDaysPerStatement, len(windowDays))

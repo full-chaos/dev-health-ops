@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	"github.com/full-chaos/dev-health-ops/internal/chmigrate/chgate"
 	"github.com/full-chaos/dev-health-ops/internal/externalrecompute"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/pagerduty"
@@ -233,6 +234,11 @@ func (storage *productionStreamStorage) ClickHouseReady(ctx context.Context) err
 // RecordedRevisions is the schema gate's read: the domain role's SELECT on alembic_version.
 func (storage *productionStreamStorage) RecordedRevisions(ctx context.Context) ([]string, error) {
 	return schemagate.PoolRecorded(ctx, storage.domainPool)
+}
+
+// AppliedVersions is the ClickHouse schema gate's read: schema_migrations on the stream runner's own connection.
+func (storage *productionStreamStorage) AppliedVersions(ctx context.Context) ([]string, error) {
+	return chgate.ConnApplied(ctx, storage.clickHouse)
 }
 
 func (storage *productionStreamStorage) DomainPostgresReady(ctx context.Context) error {

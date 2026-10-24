@@ -509,7 +509,7 @@ func (materializer *NativeMaterializer) Materialize(
 			return PlanResult{}, err
 		}
 	}
-	if err := errIfOnlySkippedDatasetsHadWork(loaded.featureOffSkippedDatasets, len(units)); err != nil {
+	if err := errIfOnlySkippedDatasetsHadWork(len(loaded.featureOffSkippedDatasetKeys), len(units)); err != nil {
 		return PlanResult{}, err
 	}
 	if len(units) > loaded.totalUnitCap {
@@ -597,9 +597,9 @@ type loadedMaterializationPlan struct {
 	terminalReason         string
 	ensureSecurityDataset  bool
 	pagerDutyRepair        *pagerDutyDomainRepair
-	// featureOffSkippedDatasets is the number of enabled datasets the plan
-	// left out because the canonical-incident feature is off.
-	featureOffSkippedDatasets int
+	// featureOffSkippedDatasetKeys are the enabled datasets the plan left out
+	// because the canonical-incident feature is off.
+	featureOffSkippedDatasetKeys []string
 	// triggeredBy is CHAOS-4602's sync_runs.triggered_by stamp: "schedule"
 	// for an ordinary cron-minted occurrence (every pre-CHAOS-4602 caller
 	// keeps this value, unconditionally), or the sync_manual_triggers row's
@@ -802,7 +802,7 @@ WHERE config.id = $1::uuid AND config.org_id = $2 AND integration.is_active`, oc
 			return loadedMaterializationPlan{}, err
 		}
 	}
-	datasets, featureOffSkippedDatasets, err := dropCanonicalIncidentDatasetsWhenFeatureOff(ctx, tx, orgID, integrationID, provider, datasets, occurrence.ScheduledFor)
+	datasets, featureOffSkippedDatasetKeys, err := dropCanonicalIncidentDatasetsWhenFeatureOff(ctx, tx, orgID, integrationID, provider, datasets, occurrence.ScheduledFor)
 	if err != nil {
 		return loadedMaterializationPlan{}, err
 	}
@@ -858,7 +858,7 @@ WHERE config.id = $1::uuid AND config.org_id = $2 AND integration.is_active`, oc
 		pagerDutyRepair:        pagerDutyRepair,
 		triggeredBy:            triggeredBy,
 
-		featureOffSkippedDatasets: featureOffSkippedDatasets,
+		featureOffSkippedDatasetKeys: featureOffSkippedDatasetKeys,
 	}, nil
 }
 
@@ -1700,7 +1700,7 @@ func firstTruthyString(options map[string]any, keys ...string) string {
 	return ""
 }
 
-func requestedDatasetKeys(provider string, targets []string, sourceID *string) map[string]bool {
+func RequestedDatasetKeys(provider string, targets []string, sourceID *string) map[string]bool {
 	// Python's plan_request_for_config leaves parent dataset scope unset. Child
 	// configs derive dataset keys only from the provider registry's legacy
 	// targets; an empty mapping deliberately falls back to all enabled datasets.
@@ -1801,7 +1801,7 @@ func loadWorkItemLastSuccessAt(ctx context.Context, tx pgx.Tx, provider, orgID, 
 // explicitDatasetKeys is CHAOS-4602's manual/backfill selector
 // (sync_manual_triggers.dataset_keys, mirroring Python's
 // SyncPlanRequest.dataset_keys/_load_enabled_datasets): nil falls back to
-// the legacy-target-derived scope requestedDatasetKeys already computed
+// the legacy-target-derived scope RequestedDatasetKeys already computed
 // (unchanged behavior for every ordinary scheduled occurrence); a non-nil
 // slice is a direct dataset_key allowlist with NO legacy-target mapping and
 // NO auto security-forcing, matching _load_enabled_datasets' plain
@@ -1830,7 +1830,7 @@ func loadPlanDatasets(ctx context.Context, tx pgx.Tx, orgID, integrationID, prov
 			return nil, false, nil, nil
 		}
 	} else {
-		requested = requestedDatasetKeys(provider, targets, sourceID)
+		requested = RequestedDatasetKeys(provider, targets, sourceID)
 		if provider == "github" || provider == "gitlab" {
 			securityRequested = true
 			if requested != nil {
@@ -2138,6 +2138,12 @@ func persistDomainGraph(ctx context.Context, tx pgx.Tx, ids materializationIDs, 
 		completedAt = pointerTime(createdAt)
 		runError = &loaded.terminalReason
 		resultJSON = []byte(`{"error_category":"pagerduty_sync_disabled"}`)
+	} else if skipped := SkippedDatasetsResult(loaded.featureOffSkippedDatasetKeys); skipped != nil {
+		encoded, err := json.Marshal(map[string]any{"skipped_datasets": skipped})
+		if err != nil {
+			return fmt.Errorf("encode skipped datasets: %w", err)
+		}
+		resultJSON = encoded
 	}
 	triggeredByStamp := loaded.triggeredBy
 	if triggeredByStamp == "" {

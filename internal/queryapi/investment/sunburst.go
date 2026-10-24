@@ -121,7 +121,7 @@ GROUP BY theme, subcategory, scope
 ORDER BY value DESC
 LIMIT {limit_n:Int64}
 %s
-`, valueSQL, source, analytics.InvestmentWindowClause(true), scopeSQL, categorySQL, settingsMaxExecutionTime())
+`, valueSQL, source, analytics.InvestmentMixWindowClause(true), scopeSQL, categorySQL, settingsMaxExecutionTime())
 
 	// filters.Limit is bound AS GIVEN -- no clamping, no zero/negative
 	// default-substitution here. Python's own investment_sunburst query

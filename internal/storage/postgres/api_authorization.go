@@ -197,7 +197,7 @@ func apiPosture() RolePosture {
 			// purge target: the org's whole audit trail is deleted along
 			// with everything else.
 			{"audit_logs", true, false, true},
-			// webhook intake (CHAOS-6247): GitHub/GitLab/Jira persist their
+			// webhook intake (CHAOS-6247): GitHub and PagerDuty persist their
 			// durable delivery row (INSERT; the (provider, delivery_key)
 			// conflict fallback is a SELECT, always implicit) then publish to
 			// the job outbox (joboutbox.Producer.Publish, same INSERT-only

@@ -26,6 +26,9 @@ type verdict struct {
 
 const authorizationNotVerified = "GitHub user authorization could not be verified"
 
+// installerAccessDenied is the one answer for an installation the installer cannot link.
+const installerAccessDenied = "installer does not have access to this GitHub App installation"
+
 // verifyInstallerAccess is _verify_installer_installation_access: exchange the
 // OAuth code for the installer's user token, then find the installation among
 // the installations that user can access.
@@ -104,7 +107,7 @@ func (h handlers) findAccessibleInstallation(ctx context.Context, accessToken st
 			break
 		}
 	}
-	return nil, verdict{status: http.StatusForbidden, detail: "installer does not have access to this GitHub App installation"}
+	return nil, verdict{status: http.StatusForbidden, detail: installerAccessDenied}
 }
 
 // fetchJSON performs request and decodes a 2xx-or-error body the way

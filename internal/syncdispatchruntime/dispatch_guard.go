@@ -340,8 +340,7 @@ func authorizeRun(ctx context.Context, tx pgx.Tx, logger *synclog.Logger, orgID,
 	allBuckets := sortedDispatchBuckets(candidatesByBucket, deferredBuckets)
 
 	// The total cap is opt-in (SYNC_RUN_MAX_UNITS; unset or 0 = none) and is the
-	// same value the materializer reads; the org's tier limit no longer sets it
-	// (CHAOS-10955).
+	// same value the materializer reads; the org's tier limit no longer sets it.
 	totalCap := scheduledsync.UnitCapFromEnv()
 	if totalCap > 0 && len(units) > totalCap {
 		capped := make([]string, 0, len(units)-totalCap)

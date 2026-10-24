@@ -486,7 +486,7 @@ func TestDeterministicUnitIDsUseRunAndOrdinal(t *testing.T) {
 	}
 }
 
-// TestUnitCapFromEnvIsOptInAndDefaultsOff pins CHAOS-10955: no unit cap unless
+// TestUnitCapFromEnvIsOptInAndDefaultsOff pins that there is no unit cap unless
 // SYNC_RUN_MAX_UNITS holds a positive integer.
 func TestUnitCapFromEnvIsOptInAndDefaultsOff(t *testing.T) {
 	for _, test := range []struct {

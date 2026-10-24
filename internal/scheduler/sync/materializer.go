@@ -1194,7 +1194,7 @@ WHERE organization.id=$1::uuid`, orgID).Scan(&orgTier, &licenseTier, &overridesJ
 // materializer and by DispatchGuard alike: SYNC_RUN_MAX_UNITS, opt-in. Unset,
 // empty, zero, negative or unparseable means NO cap (0); a positive value is
 // the cap. The org's tier limit and limits_override no longer set it
-// (CHAOS-10955: the tier default quarantined valid backfills).
+// (the tier default quarantined valid backfills).
 func UnitCapFromEnv() int {
 	return boundedEnvInt("SYNC_RUN_MAX_UNITS", 0, 0)
 }

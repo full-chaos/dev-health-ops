@@ -116,7 +116,7 @@ func TestAuthorizeRunHardDeniesOverTheTotalUnitCap(t *testing.T) {
 	})
 }
 
-// TestAuthorizeRunHasNoTotalUnitCapByDefault pins CHAOS-10955: with the opt-in
+// TestAuthorizeRunHasNoTotalUnitCapByDefault pins that, with the opt-in
 // SYNC_RUN_MAX_UNITS unset or 0, a run over a tier_limits max_sync_units row
 // (the old cap source) is authorized, with every unit in the authorized set.
 func TestAuthorizeRunHasNoTotalUnitCapByDefault(t *testing.T) {

@@ -66,8 +66,8 @@ FROM public.integration_sources WHERE id = $2::uuid`, index), fmt.Sprintf("00000
 	}
 }
 
-// TestNativeMaterializerPlansABackfillOverTheDefaultOffUnitCap is CHAOS-10955:
-// 400 sources of one dataset over three 7-day chunks are 1200 units. With the
+// TestNativeMaterializerPlansABackfillOverTheDefaultOffUnitCap plans 400
+// sources of one dataset over three 7-day chunks, 1200 units. With the
 // opt-in cap off (SYNC_RUN_MAX_UNITS unset or 0) the plan is not refused, even
 // when the org's tier carries a max_sync_units row of 1000 (that row no longer
 // sets the cap): every unit is committed.

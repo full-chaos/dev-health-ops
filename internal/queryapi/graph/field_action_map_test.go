@@ -11,12 +11,16 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/policycatalog"
 )
 
-const fieldActionMapPath = "../../../contracts/auth/v1/graphql-field-actions.json"
+const (
+	fieldActionMapPath = "../../../contracts/auth/v1/graphql-field-actions.json"
+	declaredGapTicket  = "CHAOS-11042"
+	unknownValue       = "unknown"
+)
 
 type fieldActionRow struct {
 	Type             string   `json:"type"`
 	Field            string   `json:"field"`
-	Action           *string  `json:"action"`
+	Action           string   `json:"action"`
 	ResourceResolver string   `json:"resource_resolver"`
 	Disclosure       string   `json:"disclosure_behavior"`
 	Resolver         string   `json:"resolver"`
@@ -29,14 +33,6 @@ type fieldActionDoc struct {
 	Rows           []fieldActionRow `json:"rows"`
 }
 
-func servedRootFields(t *testing.T) []string {
-	t.Helper()
-	served, _ := servedRootFieldsWithOrgArg(t)
-	return served
-}
-
-// servedRootFieldsWithOrgArg also reports which served fields declare an
-// orgId argument, read from the executable schema.
 func servedRootFieldsWithOrgArg(t *testing.T) ([]string, map[string]bool) {
 	t.Helper()
 	schema := NewExecutableSchema(Config{}).Schema()
@@ -63,32 +59,6 @@ func servedRootFieldsWithOrgArg(t *testing.T) ([]string, map[string]bool) {
 	return served, orgArg
 }
 
-func resolverPointer(row fieldActionRow) string {
-	return strings.ToLower(row.Type[:1]) + row.Type[1:] + "Resolver." + strings.ToUpper(row.Field[:1]) + row.Field[1:] + " in internal/queryapi/graph/schema.resolvers.go"
-}
-
-// checkFieldActionTruth holds the rows' statements to what the schema and the
-// resolver set say: a field with an orgId argument resolves its organization
-// from that argument, a field without one does not claim to; the resolver
-// pointer is the one the field's name derives.
-func checkFieldActionTruth(orgArg map[string]bool, doc fieldActionDoc) []string {
-	var defects []string
-	for _, row := range doc.Rows {
-		key := row.Type + "." + row.Field
-		if row.Resolver != resolverPointer(row) {
-			defects = append(defects, fmt.Sprintf("%s: resolver %q is not %q", key, row.Resolver, resolverPointer(row)))
-		}
-		byArgument := strings.HasPrefix(row.ResourceResolver, "organization_from_argument:")
-		if byArgument && !strings.Contains(row.Disclosure, "superuser") {
-			defects = append(defects, key+": a by-argument field's disclosure_behavior omits the verified non-impersonating superuser exception of OperationOrgGuard")
-		}
-		if orgArg[key] != byArgument {
-			defects = append(defects, fmt.Sprintf("%s: the schema field has an orgId argument = %t, the row's resource_resolver says by-argument = %t", key, orgArg[key], byArgument))
-		}
-	}
-	return defects
-}
-
 func loadFieldActionDoc(t *testing.T) fieldActionDoc {
 	t.Helper()
 	raw, err := os.ReadFile(fieldActionMapPath)
@@ -102,28 +72,42 @@ func loadFieldActionDoc(t *testing.T) fieldActionDoc {
 	return doc
 }
 
-// checkFieldActionMap returns every defect of doc against the served root
-// fields and the closed action catalog: a served field with no row or with
-// more than one, a row for a field nothing serves, an action the catalog does
-// not hold, a null action without an "action:" gap, and a row missing the
-// fields every row carries.
-func checkFieldActionMap(served []string, doc fieldActionDoc, cat *policycatalog.Catalog) []string {
+func resolverPointer(row fieldActionRow) string {
+	return strings.ToLower(row.Type[:1]) + row.Type[1:] + "Resolver." + strings.ToUpper(row.Field[:1]) + row.Field[1:] + " in internal/queryapi/graph/schema.resolvers.go"
+}
+
+func hasGap(row fieldActionRow, field string) bool {
+	for _, gap := range row.Gaps {
+		if strings.HasPrefix(gap, field+":") && strings.Contains(gap, declaredGapTicket) {
+			return true
+		}
+	}
+	return false
+}
+
+// checkFieldActionMap returns every defect of doc: a served field with no row
+// or with more than one, a row for a field nothing serves, a catalog version
+// that is not the catalog's, a row field that is empty or null, an action that
+// is neither a catalog action nor "unknown", an "unknown" without its named
+// gap, a statement no registered claim states, a claim whose source needle is
+// missing, an orgId-argument field that does not say it resolves by argument
+// with the superuser exception, and a resolver pointer the field name does not
+// derive.
+func checkFieldActionMap(served []string, orgArg map[string]bool, doc fieldActionDoc, cat *policycatalog.Catalog, claims []mapClaim, read func(file string) string) []string {
 	var defects []string
 	count := map[string]int{}
 	for _, row := range doc.Rows {
 		count[row.Type+"."+row.Field]++
 	}
+	servedSet := map[string]bool{}
 	for _, key := range served {
+		servedSet[key] = true
 		switch n := count[key]; {
 		case n == 0:
 			defects = append(defects, "served field with no action row: "+key)
 		case n > 1:
 			defects = append(defects, fmt.Sprintf("served field with %d action rows: %s", n, key))
 		}
-	}
-	servedSet := map[string]bool{}
-	for _, key := range served {
-		servedSet[key] = true
 	}
 	for key := range count {
 		if !servedSet[key] {
@@ -133,32 +117,69 @@ func checkFieldActionMap(served []string, doc fieldActionDoc, cat *policycatalog
 	if doc.CatalogVersion != cat.Version() {
 		defects = append(defects, fmt.Sprintf("map catalog_version %d, catalog %d", doc.CatalogVersion, cat.Version()))
 	}
-	for _, row := range doc.Rows {
-		key := row.Type + "." + row.Field
-		if row.Action != nil {
-			if _, err := cat.Action(*row.Action); err != nil {
-				defects = append(defects, fmt.Sprintf("%s: action %q is not in the catalog", key, *row.Action))
+	statement := func(key, field, value string) {
+		if value == "" {
+			defects = append(defects, fmt.Sprintf("%s: %s is empty or null", key, field))
+			return
+		}
+		for _, claim := range claims {
+			if claim.value != value {
+				continue
 			}
-		} else {
-			named := false
-			for _, gap := range row.Gaps {
-				if strings.HasPrefix(gap, "action:") {
-					named = true
+			for file, needles := range claim.proofs {
+				text := read(file)
+				for _, needle := range needles {
+					if !strings.Contains(text, needle) {
+						defects = append(defects, fmt.Sprintf("%s: the proof of %s names %q, %s does not contain it", key, field, needle, file))
+					}
 				}
 			}
-			if !named {
-				defects = append(defects, key+`: null action without an "action:" gap`)
+			return
+		}
+		defects = append(defects, fmt.Sprintf("%s: %s is a statement no registered claim states: %.80q", key, field, value))
+	}
+	for _, row := range doc.Rows {
+		key := row.Type + "." + row.Field
+		switch {
+		case row.Action == "":
+			defects = append(defects, key+": action is empty or null")
+		case row.Action == unknownValue:
+			if !hasGap(row, "action") {
+				defects = append(defects, fmt.Sprintf("%s: action unknown without an \"action:\" gap naming %s", key, declaredGapTicket))
+			}
+		default:
+			if _, err := cat.Action(row.Action); err != nil {
+				defects = append(defects, fmt.Sprintf("%s: action %q is not in the catalog", key, row.Action))
 			}
 		}
-		if row.ResourceResolver == "" || row.Disclosure == "" || row.Resolver == "" {
-			defects = append(defects, key+": a row without resource_resolver, disclosure_behavior or resolver")
+		statement(key, "resource_resolver", row.ResourceResolver)
+		statement(key, "disclosure_behavior", row.Disclosure)
+		if row.Resolver != resolverPointer(row) {
+			defects = append(defects, fmt.Sprintf("%s: resolver %q is not %q", key, row.Resolver, resolverPointer(row)))
+		}
+		byArgument := strings.HasPrefix(row.ResourceResolver, "organization_from_argument:")
+		if orgArg[key] != byArgument {
+			defects = append(defects, fmt.Sprintf("%s: the schema field has an orgId argument = %t, the row's resource_resolver says by-argument = %t", key, orgArg[key], byArgument))
+		}
+		if byArgument && !strings.Contains(row.Disclosure, "superuser") {
+			defects = append(defects, key+": a by-argument field's disclosure_behavior omits the verified non-impersonating superuser exception of OperationOrgGuard")
 		}
 	}
 	return defects
 }
 
-func TestEveryServedGraphQLFieldHasExactlyOneActionRowAndNoRowIsOrphaned(t *testing.T) {
-	served := servedRootFields(t)
+func readSource(t *testing.T) func(file string) string {
+	return func(file string) string {
+		raw, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(raw)
+	}
+}
+
+func TestEveryServedGraphQLFieldHasExactlyOneRowAndEveryStatementIsProvenOrAGap(t *testing.T) {
+	served, orgArg := servedRootFieldsWithOrgArg(t)
 	if len(served) < 40 {
 		t.Fatalf("only %d served root fields: the schema walk stopped seeing them", len(served))
 	}
@@ -166,110 +187,83 @@ func TestEveryServedGraphQLFieldHasExactlyOneActionRowAndNoRowIsOrphaned(t *test
 	if doc.SchemaVersion != "graphql-field-actions.v1" {
 		t.Fatalf("schema_version %q", doc.SchemaVersion)
 	}
-	for _, defect := range checkFieldActionMap(served, doc, policycatalog.Default()) {
-		t.Error(defect)
-	}
-	_, orgArg := servedRootFieldsWithOrgArg(t)
-	for _, defect := range checkFieldActionTruth(orgArg, doc) {
+	for _, defect := range checkFieldActionMap(served, orgArg, doc, policycatalog.Default(), mapClaims, readSource(t)) {
 		t.Error(defect)
 	}
 }
 
 func TestFieldActionRowsNameTheirResolverMethod(t *testing.T) {
-	raw, err := os.ReadFile("schema.resolvers.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	text := string(raw)
+	text := readSource(t)("schema.resolvers.go")
 	for _, row := range loadFieldActionDoc(t).Rows {
 		want := "func (r *" + strings.ToLower(row.Type[:1]) + row.Type[1:] + "Resolver) " + strings.ToUpper(row.Field[:1]) + row.Field[1:] + "("
-		if row.Resolver != resolverPointer(row) {
-			t.Errorf("%s.%s: row resolver %q is not %q", row.Type, row.Field, row.Resolver, resolverPointer(row))
-		}
 		if !strings.Contains(text, want) {
 			t.Errorf("%s.%s: schema.resolvers.go holds no %q", row.Type, row.Field, want)
 		}
 	}
 }
 
-func TestFieldActionMapChecksCatchPlantedDefects(t *testing.T) {
-	served := []string{"Mutation.write", "Query.read", "Query.readNull"}
-	action := "analytics.read"
-	good := func() fieldActionDoc {
-		return fieldActionDoc{
-			SchemaVersion:  "graphql-field-actions.v1",
-			CatalogVersion: policycatalog.Default().Version(),
-			Rows: []fieldActionRow{
-				{Type: "Mutation", Field: "write", Action: nil, ResourceResolver: "r", Disclosure: "d", Resolver: "m", Gaps: []string{"action: no catalog action"}},
-				{Type: "Query", Field: "read", Action: &action, ResourceResolver: "r", Disclosure: "d", Resolver: "q"},
-				{Type: "Query", Field: "readNull", Action: nil, ResourceResolver: "r", Disclosure: "d", Resolver: "q", Gaps: []string{"action: no catalog action"}},
-			},
-		}
+func TestFieldActionMapGuardCatchesPlantedDefects(t *testing.T) {
+	served := []string{"Mutation.write", "Query.byArg", "Query.noArg"}
+	orgArg := map[string]bool{"Query.byArg": true}
+	claims := []mapClaim{
+		{value: "organization_from_argument: x", proofs: map[string][]string{"a.go": {"needle-a"}}},
+		{value: "organization_from_credential: x", proofs: map[string][]string{"a.go": {"needle-a"}}},
+		{value: "disclosure superuser", proofs: map[string][]string{"a.go": {"needle-a"}}},
+		{value: "disclosure plain", proofs: map[string][]string{"a.go": {"needle-a"}}},
 	}
+	read := func(file string) string { return "needle-a" }
 	cat := policycatalog.Default()
-	if defects := checkFieldActionMap(served, good(), cat); len(defects) != 0 {
+	action := "analytics.read"
+	mk := func(typ, field, act, res, disc string, gaps ...string) fieldActionRow {
+		r := fieldActionRow{Type: typ, Field: field, Action: act, ResourceResolver: res, Disclosure: disc, Gaps: gaps}
+		r.Resolver = resolverPointer(r)
+		return r
+	}
+	good := func() fieldActionDoc {
+		return fieldActionDoc{SchemaVersion: "graphql-field-actions.v1", CatalogVersion: cat.Version(), Rows: []fieldActionRow{
+			mk("Mutation", "write", unknownValue, "organization_from_credential: x", "disclosure plain", "action: none; "+declaredGapTicket),
+			mk("Query", "byArg", action, "organization_from_argument: x", "disclosure superuser"),
+			mk("Query", "noArg", action, "organization_from_credential: x", "disclosure plain"),
+		}}
+	}
+	if defects := checkFieldActionMap(served, orgArg, good(), cat, claims, read); len(defects) != 0 {
 		t.Fatalf("the clean fixture is refused: %v", defects)
 	}
-	unknown := "analytics.everything"
 	cases := []struct {
 		name   string
 		mutate func(*fieldActionDoc)
+		read   func(string) string
 		want   string
 	}{
 		{"orphan row", func(d *fieldActionDoc) {
-			d.Rows = append(d.Rows, fieldActionRow{Type: "Query", Field: "gone", Action: &action, ResourceResolver: "r", Disclosure: "d", Resolver: "q"})
-		}, "nothing serves: Query.gone"},
-		{"missing row", func(d *fieldActionDoc) { d.Rows = d.Rows[1:] }, "no action row: Mutation.write"},
-		{"duplicate row", func(d *fieldActionDoc) { d.Rows = append(d.Rows, d.Rows[1]) }, "2 action rows: Query.read"},
-		{"unknown action", func(d *fieldActionDoc) { d.Rows[1].Action = &unknown }, "not in the catalog"},
-		{"null action without gap", func(d *fieldActionDoc) { d.Rows[2].Gaps = nil }, `null action without an "action:" gap`},
-		{"stale catalog version", func(d *fieldActionDoc) { d.CatalogVersion++ }, "catalog_version"},
-		{"empty resolver text", func(d *fieldActionDoc) { d.Rows[1].ResourceResolver = "" }, "a row without resource_resolver"},
+			d.Rows = append(d.Rows, mk("Query", "gone", action, "organization_from_credential: x", "disclosure plain"))
+		}, nil, "nothing serves: Query.gone"},
+		{"missing row", func(d *fieldActionDoc) { d.Rows = d.Rows[1:] }, nil, "no action row: Mutation.write"},
+		{"duplicate row", func(d *fieldActionDoc) { d.Rows = append(d.Rows, d.Rows[1]) }, nil, "2 action rows: Query.byArg"},
+		{"null action", func(d *fieldActionDoc) { d.Rows[2].Action = "" }, nil, "action is empty or null"},
+		{"action outside the catalog", func(d *fieldActionDoc) { d.Rows[2].Action = "analytics.everything" }, nil, "not in the catalog"},
+		{"unknown action without a gap", func(d *fieldActionDoc) { d.Rows[0].Gaps = nil }, nil, "unknown without an"},
+		{"unknown action whose gap omits the ticket", func(d *fieldActionDoc) { d.Rows[0].Gaps = []string{"action: none"} }, nil, "unknown without an"},
+		{"unproven resource statement", func(d *fieldActionDoc) { d.Rows[2].ResourceResolver = "organization_from_credential: something else" }, nil, "no registered claim states"},
+		{"unproven disclosure statement", func(d *fieldActionDoc) { d.Rows[2].Disclosure = "always allowed" }, nil, "no registered claim states"},
+		{"empty disclosure", func(d *fieldActionDoc) { d.Rows[2].Disclosure = "" }, nil, "disclosure_behavior is empty or null"},
+		{"proof needle missing from source", func(d *fieldActionDoc) {}, func(string) string { return "nothing" }, "does not contain it"},
+		{"argument field claimed as credential", func(d *fieldActionDoc) { d.Rows[1].ResourceResolver = "organization_from_credential: x" }, nil, "has an orgId argument = true"},
+		{"credential field claimed as argument", func(d *fieldActionDoc) { d.Rows[2].ResourceResolver = "organization_from_argument: x" }, nil, "has an orgId argument = false"},
+		{"argument disclosure omits the superuser exception", func(d *fieldActionDoc) { d.Rows[1].Disclosure = "disclosure plain" }, nil, "omits the verified non-impersonating superuser"},
+		{"wrong resolver pointer", func(d *fieldActionDoc) { d.Rows[2].Resolver = "queryResolver.Missing in x" }, nil, "is not"},
+		{"stale catalog version", func(d *fieldActionDoc) { d.CatalogVersion++ }, nil, "catalog_version"},
 	}
 	for _, c := range cases {
 		doc := good()
 		c.mutate(&doc)
-		joined := strings.Join(checkFieldActionMap(served, doc, cat), "\n")
-		if !strings.Contains(joined, c.want) {
-			t.Errorf("%s: the check did not report %q, it reported %q", c.name, c.want, joined)
+		reader := read
+		if c.read != nil {
+			reader = c.read
 		}
-	}
-}
-
-func TestFieldActionTruthChecksCatchPlantedDefects(t *testing.T) {
-	orgArg := map[string]bool{"Query.byArg": true}
-	row := func(field, resolver string) fieldActionRow {
-		r := fieldActionRow{Type: "Query", Field: field, ResourceResolver: resolver, Disclosure: "d superuser"}
-		r.Resolver = resolverPointer(r)
-		return r
-	}
-	good := fieldActionDoc{Rows: []fieldActionRow{
-		row("byArg", "organization_from_argument: x"),
-		row("noArg", "organization_from_credential: x"),
-	}}
-	if defects := checkFieldActionTruth(orgArg, good); len(defects) != 0 {
-		t.Fatalf("the clean fixture is refused: %v", defects)
-	}
-	wrongPointer := fieldActionDoc{Rows: []fieldActionRow{row("noArg", "organization_from_credential: x")}}
-	wrongPointer.Rows[0].Resolver = "queryResolver.Missing in internal/queryapi/graph/schema.resolvers.go"
-	cases := []struct {
-		name string
-		doc  fieldActionDoc
-		want string
-	}{
-		{"argument field claimed as credential", fieldActionDoc{Rows: []fieldActionRow{row("byArg", "organization_from_credential: x")}}, "has an orgId argument = true"},
-		{"credential field claimed as argument", fieldActionDoc{Rows: []fieldActionRow{row("noArg", "organization_from_argument: x")}}, "has an orgId argument = false"},
-		{"wrong resolver pointer", wrongPointer, "is not"},
-		{"by-argument disclosure omits the superuser exception", func() fieldActionDoc {
-			r := row("byArg", "organization_from_argument: x")
-			r.Disclosure = "a mismatched orgId always stops the operation"
-			return fieldActionDoc{Rows: []fieldActionRow{r}}
-		}(), "omits the verified non-impersonating superuser"},
-	}
-	for _, c := range cases {
-		joined := strings.Join(checkFieldActionTruth(orgArg, c.doc), "\n")
+		joined := strings.Join(checkFieldActionMap(served, orgArg, doc, cat, claims, reader), "\n")
 		if !strings.Contains(joined, c.want) {
-			t.Errorf("%s: the check did not report %q, it reported %q", c.name, c.want, joined)
+			t.Errorf("%s: the guard did not report %q, it reported %q", c.name, c.want, joined)
 		}
 	}
 }

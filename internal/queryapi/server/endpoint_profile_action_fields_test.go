@@ -190,8 +190,17 @@ func checkActionFieldTruth(rows []map[string]any, read func(file string) string)
 				if strings.Contains(validator, "every failure answers the same 401") {
 					defects = append(defects, id+": primary_validator says every failure answers 401, authenticateRESTRequest also answers 403 Organization context required")
 				}
-				if row["disclosure_behavior"] != nil && !strings.Contains(disclosure, "403") {
-					defects = append(defects, id+": disclosure_behavior omits the 403 Organization context required answer")
+				if row["disclosure_behavior"] == nil {
+					defects = append(defects, id+": a protected REST route's disclosure_behavior is null, the shared authentication outcomes are known")
+				} else {
+					for _, need := range []string{"403", "superuser", "503"} {
+						if !strings.Contains(disclosure, need) {
+							defects = append(defects, id+": disclosure_behavior omits "+need+" (orgless edge token 403 unless superuser, failed users-row read 503)")
+						}
+					}
+				}
+				if !strings.Contains(validator, "superuser") {
+					defects = append(defects, id+": primary_validator omits that an orgless superuser passes")
 				}
 			}
 			if policy != "unknown" {
@@ -204,6 +213,9 @@ func checkActionFieldTruth(rows []map[string]any, read func(file string) string)
 			want := "subject_to_impersonation_override"
 			if (route == "/query" || route == "/query/proof") && row["action"] != nil {
 				defects = append(defects, id+": the route serves registered GraphQL documents, its action is the served root field's (the per-field map): action must be null")
+			}
+			if (route == "/query" || route == "/query/proof") && !strings.Contains(disclosure, "404") {
+				defects = append(defects, id+": an authenticated unregistered document answers 404 (the shared dispatcher), disclosure_behavior omits it")
 			}
 			if route == "/buildinfo" {
 				want = "exempt_no_org_context"
@@ -221,7 +233,7 @@ func checkActionFieldTruth(rows []map[string]any, read func(file string) string)
 			if cites("authenticateRESTRequest") || !cites("authenticateGraphQLEdge") {
 				defects = append(defects, id+": /graphql authenticates with authenticateGraphQLEdge, the row must cite it and not authenticateRESTRequest")
 			}
-			for _, need := range []string{"401", "403", "404", "X-Org-Id"} {
+			for _, need := range []string{"401", "403", "404", "X-Org-Id", "UNREGISTERED_DOCUMENT"} {
 				if !strings.Contains(disclosure, need) {
 					defects = append(defects, id+": disclosure_behavior omits "+need)
 				}
@@ -235,6 +247,11 @@ func checkActionFieldTruth(rows []map[string]any, read func(file string) string)
 			}
 			if row["action"] != nil {
 				defects = append(defects, id+": the MCP route serves registered GraphQL documents, action must be null")
+			}
+			for _, need := range []string{"allowlist", "404"} {
+				if !strings.Contains(disclosure, need) {
+					defects = append(defects, id+": disclosure_behavior omits "+need+" (a root field outside the allowlist answers 403, a root field not enabled answers 404)")
+				}
 			}
 			if policy != "unknown" {
 				defects = append(defects, fmt.Sprintf("%s: impersonation_policy %q, the MCP class refuses an impersonating identity: want unknown with a named gap", id, policy))
@@ -273,8 +290,8 @@ func TestActionFieldTruthChecksCatchPlantedDefects(t *testing.T) {
 	read := func(file string) string { return src[file] }
 	rest := func() map[string]any {
 		return map[string]any{"id": "GET /api/v1/heatmap [x]", "route": "/api/v1/heatmap", "classification": "protected",
-			"resource_resolver": "authenticateRESTRequest", "current_state_cache_behavior": "authenticateRESTRequest", "disclosure_behavior": "401; 403 Organization context required", "impersonation_policy": "unknown",
-			"primary_validator": map[string]any{"description": "authenticateRESTRequest: failures answer 401 or 403"}}
+			"resource_resolver": "authenticateRESTRequest", "current_state_cache_behavior": "authenticateRESTRequest", "disclosure_behavior": "401; 403 Organization context required unless superuser; 503 users-row read", "impersonation_policy": "unknown",
+			"primary_validator": map[string]any{"description": "authenticateRESTRequest: failures answer 401 or 403; a superuser passes without an organization"}}
 	}
 	build := func() map[string]any {
 		return map[string]any{"id": "GET /buildinfo [x]", "route": "/buildinfo", "classification": "protected",
@@ -282,15 +299,15 @@ func TestActionFieldTruthChecksCatchPlantedDefects(t *testing.T) {
 	}
 	gql := func() map[string]any {
 		return map[string]any{"id": "GET /graphql [x]", "route": "/graphql", "classification": "protected",
-			"resource_resolver": "X-Org-Id selection", "current_state_cache_behavior": "c", "disclosure_behavior": "authenticateGraphQLEdge 401; 403 for X-Org-Id; 404 browser GET", "impersonation_policy": "subject_to_impersonation_override"}
+			"resource_resolver": "X-Org-Id selection", "current_state_cache_behavior": "c", "disclosure_behavior": "authenticateGraphQLEdge 401; 403 for X-Org-Id; 404 browser GET; 404 UNREGISTERED_DOCUMENT", "impersonation_policy": "subject_to_impersonation_override"}
 	}
 	mcp := func() map[string]any {
 		return map[string]any{"id": "POST /query [x @mcp]", "route": "/query", "classification": "protected", "action": nil,
-			"resource_resolver": "r", "current_state_cache_behavior": "c", "disclosure_behavior": "401; elevated identity 403", "impersonation_policy": "unknown"}
+			"resource_resolver": "r", "current_state_cache_behavior": "c", "disclosure_behavior": "401; elevated identity 403; allowlist 403; not enabled 404", "impersonation_policy": "unknown"}
 	}
 	query := func() map[string]any {
 		return map[string]any{"id": "POST /query [x @query]", "route": "/query", "classification": "protected", "action": nil,
-			"resource_resolver": "r", "current_state_cache_behavior": "authenticateInternalRequest", "disclosure_behavior": "d", "impersonation_policy": "subject_to_impersonation_override"}
+			"resource_resolver": "r", "current_state_cache_behavior": "authenticateInternalRequest", "disclosure_behavior": "unregistered document 404", "impersonation_policy": "subject_to_impersonation_override"}
 	}
 	proof := func() map[string]any {
 		return map[string]any{"id": "POST /query/proof-write [x]", "route": "/query/proof-write", "classification": "protected",
@@ -324,7 +341,22 @@ func TestActionFieldTruthChecksCatchPlantedDefects(t *testing.T) {
 			r["primary_validator"] = map[string]any{"description": "every failure answers the same 401"}
 			return r
 		}(), "also answers 403"},
-		{"rest disclosure omits the 403", func() map[string]any { r := rest(); r["disclosure_behavior"] = "401 only"; return r }(), "omits the 403"},
+		{"rest disclosure omits the superuser", func() map[string]any { r := rest(); r["disclosure_behavior"] = "401 403 503"; return r }(), "omits superuser"},
+		{"rest disclosure omits the 503", func() map[string]any { r := rest(); r["disclosure_behavior"] = "401 403 superuser"; return r }(), "omits 503"},
+		{"rest disclosure null", func() map[string]any { r := rest(); r["disclosure_behavior"] = nil; return r }(), "disclosure_behavior is null"},
+		{"rest validator omits the superuser", func() map[string]any {
+			r := rest()
+			r["primary_validator"] = map[string]any{"description": "401 or 403"}
+			return r
+		}(), "orgless superuser passes"},
+		{"query omits the 404", func() map[string]any { r := query(); r["disclosure_behavior"] = "401"; return r }(), "unregistered document answers 404"},
+		{"graphql omits the unregistered 404", func() map[string]any {
+			r := gql()
+			r["disclosure_behavior"] = "authenticateGraphQLEdge 401 403 404 X-Org-Id"
+			return r
+		}(), "omits UNREGISTERED_DOCUMENT"},
+		{"mcp omits the allowlist", func() map[string]any { r := mcp(); r["disclosure_behavior"] = "403 404"; return r }(), "omits allowlist"},
+		{"rest disclosure omits the 403", func() map[string]any { r := rest(); r["disclosure_behavior"] = "401 only"; return r }(), "omits 403"},
 		{"graphql cites the REST function", func() map[string]any {
 			r := gql()
 			r["disclosure_behavior"] = "authenticateRESTRequest 401 403 404 X-Org-Id"

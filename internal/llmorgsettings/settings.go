@@ -200,5 +200,6 @@ func withoutControlRows(settings orgSettings) (rest orgSettings, turnedOff bool)
 	turnedOff = ownModelTurnedOff(settings)
 	delete(settings, KeyOwnModelEnabled)
 	delete(settings, KeyPromptCache)
+	delete(settings, KeyCategorizeBYOEnabled)
 	return settings, turnedOff
 }

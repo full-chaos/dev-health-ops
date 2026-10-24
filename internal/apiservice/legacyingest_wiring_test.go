@@ -21,12 +21,19 @@ import (
 // body-only signature is refused, a timestamped one is accepted, and the
 // deprecation headers are on both answers.
 func TestLegacyIngestStartupWiresTheHardeningIntoTheMountedRoutes(t *testing.T) {
+	for _, environment := range []string{"development", "production"} {
+		t.Run(environment, func(t *testing.T) { legacyIngestWiring(t, environment) })
+	}
+}
+
+func legacyIngestWiring(t *testing.T, environment string) {
 	const secret = "wiring-secret"
-	t.Setenv("ENVIRONMENT", "development")
+	sunset := time.Now().Add(30 * 24 * time.Hour).UTC().Format(http.TimeFormat)
+	t.Setenv("ENVIRONMENT", environment)
 	t.Setenv("INGEST_API_KEYS", "")
 	t.Setenv("INGEST_SIGNING_SECRET", secret)
 	t.Setenv(legacyIngestEnabledEnv, "true")
-	t.Setenv(legacyIngestSunsetEnv, "Tue, 01 Dec 2026 00:00:00 GMT")
+	t.Setenv(legacyIngestSunsetEnv, sunset)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	components, err := configure(ctx, config.Config{APIAddress: "127.0.0.1:0"}, health.NewRegistry(time.Second), quietLogger())
@@ -48,6 +55,9 @@ func TestLegacyIngestStartupWiresTheHardeningIntoTheMountedRoutes(t *testing.T) 
 		if server, ok := component.(interface{ Address() string }); ok {
 			base = "http://" + server.Address()
 		}
+	}
+	if base == "" {
+		t.Fatal("configure started no HTTP server")
 	}
 	const body = `{"org_id":"org-1","repo_url":"https://example.test/r.git","items":[{"hash":"abc","message":"m","author_name":"a","author_email":"a@example.test","author_when":"2026-01-01T00:00:00Z"}]}`
 	sign := func(message string) string {
@@ -84,7 +94,7 @@ func TestLegacyIngestStartupWiresTheHardeningIntoTheMountedRoutes(t *testing.T) 
 		if response.StatusCode != item.status {
 			t.Errorf("%s: status %d, want %d", name, response.StatusCode, item.status)
 		}
-		if response.Header.Get("Deprecation") != "true" || response.Header.Get("Sunset") != "Tue, 01 Dec 2026 00:00:00 GMT" {
+		if response.Header.Get("Deprecation") != "true" || response.Header.Get("Sunset") != sunset {
 			t.Errorf("%s: headers %v", name, response.Header)
 		}
 	}

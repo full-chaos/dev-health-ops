@@ -262,6 +262,14 @@ func (served *ServedDecision) SetObserver(observer ServedObserver) {
 	}
 }
 
+// Stamp is the model-version stamp of the rows of this run.
+func (served *ServedDecision) Stamp() string { return served.stamp }
+
+// Identity is the provider and model of the run's llm_token_usage row.
+func (served *ServedDecision) Identity() (provider, model string) {
+	return served.identity.Provider, served.identity.Model
+}
+
 // Close releases the client of the backend.
 func (served *ServedDecision) Close() error {
 	if served == nil || served.closer == nil {
@@ -552,15 +560,48 @@ func (servedDecisionProvider) Model() string { return "" }
 // SetServed attaches the served decision backend of this run. Nil (the
 // default) means the generative provider serves the run.
 func (m *Materializer) SetServed(served *ServedDecision) {
-	if m != nil {
-		m.served = served
+	if m == nil {
+		return
+	}
+	m.served = served
+	m.systemOne = nil
+	if served != nil {
+		m.systemOne = served
+	}
+}
+
+// backend is the SystemOne backend of the run, or nil for the generative path.
+// A typed-nil served field is never returned as a non-nil interface.
+func (m *Materializer) backend() SystemOne {
+	if m.systemOne != nil {
+		return m.systemOne
+	}
+	if m.served != nil {
+		return m.served
+	}
+	return nil
+}
+
+// keepsLastRow, isLowQuality and noteSkippedTerminal are nil-tolerant: the
+// generative path has no SystemOne backend and no such unit.
+func (m *Materializer) keepsLastRow(index int) bool {
+	return m.backend() != nil && m.backend().keepsLastRow(index)
+}
+
+func (m *Materializer) isLowQuality(index int) bool {
+	return m.backend() != nil && m.backend().isLowQuality(index)
+}
+
+func (m *Materializer) noteSkippedTerminal(count int) {
+	if backend := m.backend(); backend != nil {
+		backend.noteSkippedTerminal(count)
 	}
 }
 
 // categorizeEntry is the one categorization call of the served path.
 func (m *Materializer) categorizeEntry(ctx context.Context, cfg Config, entry preprocessed) (categorize.CategorizationOutcome, error) {
-	if m.served != nil {
-		return m.served.categorize(ctx, cfg, entry)
+	if backend := m.backend(); backend != nil {
+		return backend.categorize(ctx, cfg, entry)
 	}
 	return categorize.CategorizeTextBundle(ctx, entry.result.Bundle, categorize.CategorizeOptions{
 		Provider: m.provider, ProviderName: cfg.ProviderName, Model: cfg.Model, Telemetry: m.llmTelemetry,
@@ -569,16 +610,16 @@ func (m *Materializer) categorizeEntry(ctx context.Context, cfg Config, entry pr
 
 // modelVersion is the stamp of the rows of this run, and its skip-existing key.
 func (m *Materializer) modelVersion(cfg Config) string {
-	if m.served != nil {
-		return m.served.stamp
+	if backend := m.backend(); backend != nil {
+		return backend.Stamp()
 	}
 	return categorize.EffectiveModelVersion(cfg.ProviderName, resolvedModelName(cfg))
 }
 
 // usageIdentity is the provider and model of the run's llm_token_usage row.
 func (m *Materializer) usageIdentity(cfg Config) (provider, model string) {
-	if m.served != nil {
-		return m.served.identity.Provider, m.served.identity.Model
+	if backend := m.backend(); backend != nil {
+		return backend.Identity()
 	}
 	return cfg.ProviderName, resolvedModelName(cfg)
 }
@@ -586,8 +627,8 @@ func (m *Materializer) usageIdentity(cfg Config) (provider, model string) {
 // finishServed writes the attempt rows and the run log line of a served
 // decision run. It does nothing for a generative run.
 func (m *Materializer) finishServed(ctx context.Context, cfg Config) {
-	if m.served != nil {
-		m.served.finish(ctx, m.writer, cfg)
+	if backend := m.backend(); backend != nil {
+		backend.finish(ctx, m.writer, cfg)
 	}
 }
 

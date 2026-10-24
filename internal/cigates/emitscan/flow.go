@@ -227,6 +227,9 @@ func (info *pkgInfo) readFlow(fn *ast.FuncDecl, scan *fileScan, imports map[stri
 					call.args = append(call.args, info.carriedNames(arg, scan))
 				}
 				flow.calls = append(flow.calls, call)
+				if info.methodExpression(n) && len(call.args) > 0 { // the first argument is the receiver: the rest line up with the parameters
+					flow.calls = append(flow.calls, fcall{callee: callee, args: call.args[1:]})
+				}
 				flow.callee[callee] = true
 			}
 		}
@@ -400,8 +403,9 @@ func (info *pkgInfo) markOrigins(group []parsedFile) {
 			if !ok || len(info.labelParams[callee]) == 0 {
 				return true
 			}
+			shifted := info.methodExpression(call)
 			for argIndex, arg := range call.Args {
-				if info.labelParams[callee][argIndex] || info.reachesVariadic(callee, argIndex) {
+				if info.slotReached(callee, argIndex) || (shifted && argIndex > 0 && info.slotReached(callee, argIndex-1)) {
 					info.carry(arg, scan, func(n string) {
 						for origin := range origins[n] {
 							if info.budget.charge(1) {
@@ -414,6 +418,49 @@ func (info *pkgInfo) markOrigins(group []parsedFile) {
 			return true
 		})
 	}
+}
+
+// slotReached reports an argument that lands on a marked parameter or past a marked variadic one.
+func (info *pkgInfo) slotReached(callee string, argIndex int) bool {
+	return info.labelParams[callee][argIndex] || info.reachesVariadic(callee, argIndex)
+}
+
+// methodExpression reports a call whose callee is a method expression: a selector whose operand, once parentheses, a
+// dereference and type arguments are peeled off, names a type declared in the package. Without type information a value
+// named like a type is taken for the type too; the call is then read both ways.
+func (info *pkgInfo) methodExpression(call *ast.CallExpr) bool {
+	callee := call.Fun
+	for {
+		if paren, ok := callee.(*ast.ParenExpr); ok {
+			callee = paren.X
+			continue
+		}
+		break
+	}
+	sel, ok := callee.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	operand := sel.X
+	for {
+		switch wrapped := operand.(type) {
+		case *ast.ParenExpr:
+			operand = wrapped.X
+			continue
+		case *ast.StarExpr:
+			operand = wrapped.X
+			continue
+		case *ast.IndexExpr:
+			operand = wrapped.X
+			continue
+		case *ast.IndexListExpr:
+			operand = wrapped.X
+			continue
+		}
+		break
+	}
+	ident, ok := operand.(*ast.Ident)
+	return ok && info.typeNames[ident.Name]
 }
 
 // reachesVariadic reports an argument past a marked variadic parameter.

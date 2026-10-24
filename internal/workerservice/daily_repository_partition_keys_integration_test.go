@@ -86,7 +86,13 @@ func insertPartitionKeyItems(t *testing.T, ctx context.Context, conn driver.Conn
 func partitionKeyRows(t *testing.T, ctx context.Context, conn driver.Conn, table, orgID string, day time.Time) uint64 {
 	t.Helper()
 	var rows uint64
-	if err := conn.QueryRow(ctx, `SELECT count() FROM `+table+` WHERE org_id = ? AND day = ?`, orgID, day).Scan(&rows); err != nil {
+	// The three work-item tables hold each row under the org and the scope view
+	// (the same numbers); the key count is read through the org view.
+	view := ""
+	if table != "estimate_coverage_metrics_daily" {
+		view = " AND row_view IN ('', 'org')"
+	}
+	if err := conn.QueryRow(ctx, `SELECT count() FROM `+table+` WHERE org_id = ? AND day = ?`+view, orgID, day).Scan(&rows); err != nil {
 		t.Fatalf("%s: %v", table, err)
 	}
 	return rows
@@ -112,13 +118,13 @@ func readWorkScopeRow(t *testing.T, ctx context.Context, conn driver.Conn, orgID
 		into  []any
 	}{
 		{`SELECT toUInt64(sum(items_completed)), toFloat64(sum(story_points_completed)) FROM work_item_metrics_daily FINAL
-			WHERE org_id = ? AND work_scope_id = ? AND day = ?`, []any{&row.itemsCompleted, &row.storyPoints}},
+			WHERE org_id = ? AND work_scope_id = ? AND day = ? AND row_view IN ('', 'org')`, []any{&row.itemsCompleted, &row.storyPoints}},
 		{`SELECT toUInt64(min(items_completed)) FROM work_item_metrics_daily
-			WHERE org_id = ? AND work_scope_id = ? AND day = ?`, []any{&row.itemsCompletedInAnyVersion}},
+			WHERE org_id = ? AND work_scope_id = ? AND day = ? AND row_view IN ('', 'org')`, []any{&row.itemsCompletedInAnyVersion}},
 		{`SELECT toUInt64(sum(items_completed)) FROM work_item_user_metrics_daily FINAL
-			WHERE org_id = ? AND work_scope_id = ? AND day = ?`, []any{&row.userItemsCompleted}},
+			WHERE org_id = ? AND work_scope_id = ? AND day = ? AND row_view IN ('', 'org')`, []any{&row.userItemsCompleted}},
 		{`SELECT toUInt64(max(items_touched)) FROM work_item_state_durations_daily FINAL
-			WHERE org_id = ? AND work_scope_id = ? AND day = ?`, []any{&row.stateItemsTouched}},
+			WHERE org_id = ? AND work_scope_id = ? AND day = ? AND row_view IN ('', 'org')`, []any{&row.stateItemsTouched}},
 		{`SELECT toUInt64(sum(estimated_count)) FROM estimate_coverage_metrics_daily FINAL
 			WHERE org_id = ? AND work_scope_id = ? AND day = ?`, []any{&row.estimatedItems}},
 	} {

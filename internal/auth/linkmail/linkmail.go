@@ -34,6 +34,13 @@ const (
 	defaultQueue   = 64
 )
 
+// Purposes and Outcomes are the closed label sets of MetricName; every series
+// is present at 0 from New.
+var (
+	Purposes = []local.Purpose{local.PurposeEmailVerification, local.PurposePasswordReset, local.PurposeAccountExists}
+	Outcomes = []string{OutcomeSent, OutcomeFailed, OutcomeDropped}
+)
+
 // ErrClosed is returned by Send after Close.
 var ErrClosed = errors.New("linkmail: closed")
 
@@ -90,6 +97,12 @@ func New(cfg Config) (*Sender, error) {
 	if err != nil {
 		return nil, err
 	}
+	for _, purpose := range Purposes {
+		for _, outcome := range Outcomes {
+			counter.Add(context.Background(), 0, metric.WithAttributes(
+				attribute.String("purpose", string(purpose)), attribute.String("outcome", outcome)))
+		}
+	}
 	s := &Sender{cfg: cfg, jobs: make(chan job, cfg.Queue), sends: counter}
 	for i := 0; i < cfg.Workers; i++ {
 		s.wg.Add(1)
@@ -114,6 +127,9 @@ func (s *Sender) Send(ctx context.Context, msg local.Message) error {
 	if s.closed {
 		return ErrClosed
 	}
+	if msg.Purpose == local.PurposeAccountExists {
+		return s.sendNotice(ctx, msg)
+	}
 	tpl, ok := templates[msg.Purpose]
 	if !ok {
 		return errors.New("linkmail: unsupported purpose")
@@ -133,6 +149,32 @@ func (s *Sender) Send(ctx context.Context, msg local.Message) error {
 	}
 	select {
 	case s.jobs <- job{purpose: msg.Purpose, message: mail.Message{To: msg.To, Subject: tpl.subject, HTML: html}}:
+	default:
+		s.count(ctx, msg.Purpose, OutcomeDropped)
+		s.dropped.Add(1)
+	}
+	return nil
+}
+
+// sendNotice queues the account-exists mail: no link token, the same pool.
+func (s *Sender) sendNotice(ctx context.Context, msg local.Message) error {
+	name := msg.To
+	if msg.FullName != nil && *msg.FullName != "" {
+		name = *msg.FullName
+	}
+	html, err := mail.RenderTemplate("account_exists", map[string]string{
+		"full_name":  name,
+		"signin_url": s.cfg.Links.BaseURL() + "/auth/signin",
+		"reset_url":  s.cfg.Links.BaseURL() + "/auth/forgot-password",
+	})
+	if err != nil {
+		return err
+	}
+	if !msg.Deliver {
+		return nil
+	}
+	select {
+	case s.jobs <- job{purpose: msg.Purpose, message: mail.Message{To: msg.To, Subject: "You already have an account", HTML: html}}:
 	default:
 		s.count(ctx, msg.Purpose, OutcomeDropped)
 		s.dropped.Add(1)

@@ -232,8 +232,8 @@ func TestRaceLegsTurnSetupGoCacheOffOnThePool(t *testing.T) {
 	t.Fatal("no setup-go step in go-quality-leg")
 }
 
-// Only the three race legs are budgeted for the pool (queue measured 7-10 min hosted vs under 1 min pool): static and test stay hosted.
-func TestOnlyTheThreeRaceLegsCarryThePoolFlag(t *testing.T) {
+// Only the four race legs are budgeted for the pool (queue measured 7-10 min hosted vs under 1 min pool): static and test stay hosted.
+func TestOnlyTheFourRaceLegsCarryThePoolFlag(t *testing.T) {
 	leg := goQualityLeg(t)
 	strategy, _ := leg["strategy"].(map[string]any)
 	matrix, _ := strategy["matrix"].(map[string]any)
@@ -246,9 +246,14 @@ func TestOnlyTheThreeRaceLegsCarryThePoolFlag(t *testing.T) {
 			got[name] = true
 		}
 	}
-	want := map[string]bool{"race-1-of-3": true, "race-2-of-3": true, "race-3-of-3": true}
-	if len(got) != len(want) || !got["race-1-of-3"] || !got["race-2-of-3"] || !got["race-3-of-3"] {
-		t.Fatalf("pool-flagged legs = %v, want exactly race-1-of-3, race-2-of-3 and race-3-of-3", got)
+	want := map[string]bool{"race-1-of-4": true, "race-2-of-4": true, "race-3-of-4": true, "race-4-of-4": true}
+	if len(got) != len(want) {
+		t.Fatalf("pool-flagged legs = %v, want exactly %v", got, want)
+	}
+	for name := range want {
+		if !got[name] {
+			t.Fatalf("pool-flagged legs = %v, want exactly %v", got, want)
+		}
 	}
 }
 

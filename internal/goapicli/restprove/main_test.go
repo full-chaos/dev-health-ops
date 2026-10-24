@@ -1699,7 +1699,8 @@ func TestProveOneRESTRequest_CandidateLegTimeoutIsRefusedPerCase(t *testing.T) {
 	})))
 	defer baseline.Close()
 
-	f := flags{queryAPIURL: candidate.URL, pythonAPIURL: baseline.URL, org: "org-1", recordedBy: "chris", reviewEvidence: "test", timeout: 30 * time.Millisecond}
+	// The baseline leg shares this timeout and is read first: it must answer before it under -race load, so only the candidate stalls.
+	f := flags{queryAPIURL: candidate.URL, pythonAPIURL: baseline.URL, org: "org-1", recordedBy: "chris", reviewEvidence: "test", timeout: time.Second}
 	spec := goapiproof.RESTEndpointSpec{Method: http.MethodGet, Path: "/api/v1/home"}
 	request := goapiproof.RESTRequest{Name: "home", WantCandidateStatus: 200, WantBaselineStatus: 200, BodyMode: goapiproof.RESTBodyModeJSON}
 	writer := &fakeReceiptWriter{}
@@ -1790,7 +1791,8 @@ func TestProveOneRESTRequest_LaterRequestStillRunsAfterALegFailure(t *testing.T)
 	request := goapiproof.RESTRequest{Name: "home", WantCandidateStatus: 200, WantBaselineStatus: 200, BodyMode: goapiproof.RESTBodyModeJSON}
 	writer := &fakeReceiptWriter{}
 
-	firstFlags := flags{queryAPIURL: stalledCandidate.URL, pythonAPIURL: firstBaseline.URL, org: "org-1", recordedBy: "chris", reviewEvidence: "test", timeout: 30 * time.Millisecond}
+	// The baseline leg shares this timeout and is read first: it must answer before it under -race load, so only the candidate stalls.
+	firstFlags := flags{queryAPIURL: stalledCandidate.URL, pythonAPIURL: firstBaseline.URL, org: "org-1", recordedBy: "chris", reviewEvidence: "test", timeout: time.Second}
 	first, err := proveOneRESTRequest(context.Background(), goapiproof.NewLegClient(0), firstFlags, "REST:GET:/api/v1/home", spec, request,
 		staticCredentialForTest(), staticCredentialForTest(), "build123", goapiproof.AuthContext{}, time.Now().UTC(), writer, nil, false, nil)
 	if err != nil {

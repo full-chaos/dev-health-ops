@@ -20,6 +20,7 @@ dev_health_api_http_requests_total	listener,method,route,status_class	code: inte
 dev_health_api_stripe_refund_event_decisions_total	reason	code: internal/api/billing/refundowner.go
 dev_health_api_stripe_webhook_signature_failures_total	class	code: internal/api/billing/webhook.go
 dev_health_api_stripe_webhook_unhandled_events_total	event_type	code: internal/api/billing/webhook.go
+devhealth_api_session_mail_sends_total	outcome,purpose	code: internal/api/session/sendqueue.go
 devhealth_auth_linkmail_sends_total	outcome,purpose	code: internal/auth/linkmail/linkmail.go
 devhealth_auth_outbox_delivered_total		code: internal/audit/publisher.go
 devhealth_auth_outbox_delivery_failures_total	reason	code: internal/audit/publisher.go
@@ -128,6 +129,7 @@ workgraph_issue_pr_fallback_beside_native_pull_request_rows	organization_id	code
 workgraph_issue_pr_fallback_beside_native_rows	organization_id	code: internal/jobs/workgraph/issuepredges/invariant.go (named by a table row, created in a loop)
 workgraph_issue_pr_fallback_pull_request_issue_side_rows	organization_id	code: internal/jobs/workgraph/issuepredges/invariant.go (named by a table row, created in a loop)
 dev_health_ai_impact_linkage_unavailable_total		code: internal/jobs/metrics/aiimpact/metrics.go
+dev_health_api_rate_limit_rejections_total	limit	code: internal/auth/httpapi/hitstore.go
 dev_health_api_rate_limit_store_errors_total	limit	code: internal/auth/httpapi/hitstore.go
 dev_health_benchmarking_nonfinite_percentile_inputs_total		code: internal/jobs/metrics/daily/benchmarking/nonfinite.go
 dev_health_benchmarking_rows_written_total	org_scoped	code: internal/jobs/metrics/daily/benchmarking/metrics.go

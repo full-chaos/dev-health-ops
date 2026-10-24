@@ -33,7 +33,7 @@ var (
 var allowedDynamicSites = map[string]int{
 	"internal/joboutbox/loop.go": 1, "internal/scheduler/sync/loop.go": 1, "internal/scheduler/fixed/loop.go": 1, "internal/streamrunner/runner.go": 1,
 	"internal/providerfoundation/budget.go": 6, "internal/platform/poolstat/poolstat.go": 3, "internal/jobruntime/telemetry.go": 1,
-	"internal/syncrunrollup/dispatch_wake.go": 1,
+	"internal/syncrunrollup/dispatch_wake.go": 1, "internal/auth/httpapi/hitstore.go": 1,
 }
 
 type fragmentSite struct {
@@ -251,6 +251,7 @@ var pinnedFragments = []struct {
 }{
 	{"internal/platform/poolstat/poolstat.go", "# TYPE %s gauge", nil, []string{"pool"}},
 	{"internal/syncrunrollup/dispatch_wake.go", "dispatchWakeMetricName", []string{"dev_health_sync_dispatch_woken_total"}, []string{"outcome", "path"}},
+	{"internal/auth/httpapi/hitstore.go", `# TYPE "+c.name+" counter`, []string{"dev_health_api_rate_limit_store_errors_total", "dev_health_api_rate_limit_rejections_total"}, []string{"limit"}},
 }
 
 // poolstatCallers name the metric passed to poolstat.New: each yields <metric>, <metric>_acquired_conns, <metric>_max_conns.

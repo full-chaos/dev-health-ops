@@ -38,6 +38,11 @@ type scriptRun struct {
 
 func runSessionSecretScript(t *testing.T, script, mode string, args ...string) scriptRun {
 	t.Helper()
+	return runSessionSecretScriptWith(t, script, mode, nil, args...)
+}
+
+func runSessionSecretScriptWith(t *testing.T, script, mode string, shims map[string]string, args ...string) scriptRun {
+	t.Helper()
 	for _, tool := range []string{"bash", "openssl"} {
 		if _, err := exec.LookPath(tool); err != nil {
 			t.Fatalf("%s is required: %v", tool, err)
@@ -46,6 +51,11 @@ func runSessionSecretScript(t *testing.T, script, mode string, args ...string) s
 	bin, rec, tmp := t.TempDir(), t.TempDir(), t.TempDir()
 	if err := os.WriteFile(filepath.Join(bin, "kubectl"), []byte(fakeKubectl), 0o755); err != nil {
 		t.Fatal(err)
+	}
+	for name, body := range shims {
+		if err := os.WriteFile(filepath.Join(bin, name), []byte(body), 0o755); err != nil {
+			t.Fatal(err)
+		}
 	}
 	cmd := exec.Command("bash", append([]string{script}, args...)...)
 	cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"), "FAKE_REC="+rec, "FAKE_MODE="+mode, "TMPDIR="+tmp)
@@ -59,15 +69,19 @@ func runSessionSecretScript(t *testing.T, script, mode string, args ...string) s
 
 func leaks(r scriptRun) []string {
 	var found []string
-	if r.value == "" {
-		return []string{"no value reached kubectl"}
-	}
 	for name, text := range map[string]string{"argv": r.argv, "stdout": r.stdout, "stderr": r.stderr} {
-		if strings.Contains(text, r.value) {
+		if r.value != "" && strings.Contains(text, r.value) {
 			found = append(found, name)
 		}
 	}
 	return found
+}
+
+func requireReachedKubectl(t *testing.T, r scriptRun) {
+	t.Helper()
+	if r.err != nil || r.value == "" || strings.Count(r.argv, "--call--") != 1 {
+		t.Fatalf("the run did not reach kubectl once: err=%v value-empty=%v\n%s%s", r.err, r.value == "", r.stdout, r.stderr)
+	}
 }
 
 func TestSessionSecretScriptPlanRunsNothing(t *testing.T) {
@@ -90,6 +104,7 @@ func TestSessionSecretScriptCreatesOnceAndLeaksNothing(t *testing.T) {
 	if r.err != nil {
 		t.Fatalf("run: %v\n%s%s", r.err, r.stdout, r.stderr)
 	}
+	requireReachedKubectl(t, r)
 	if got := leaks(r); len(got) != 0 {
 		t.Fatalf("value leaked into %v", got)
 	}
@@ -137,6 +152,9 @@ func TestSessionSecretScriptRefusesWhenSecretExists(t *testing.T) {
 	}
 	if !strings.Contains(r.stdout, "STOPPED: the Secret already exists; nothing was changed") {
 		t.Fatalf("no STOPPED line:\n%s", r.stdout)
+	}
+	if r.value == "" || strings.Count(r.argv, "--call--") != 1 {
+		t.Fatalf("the exists path did not reach kubectl once:\n%s", r.argv)
 	}
 	if got := leaks(r); len(got) != 0 {
 		t.Fatalf("value leaked on the exists path into %v", got)
@@ -193,14 +211,53 @@ func mutatedSessionSecretScript(t *testing.T, from, to string) string {
 
 func TestSessionSecretLeakCheckCatchesStdoutLeak(t *testing.T) {
 	path := mutatedSessionSecretScript(t, "# MUTATION-ANCHOR-STDOUT", `cat "${WORK}/key"; echo`)
-	if got := leaks(runSessionSecretScript(t, path, "ok")); len(got) == 0 {
+	r := runSessionSecretScript(t, path, "ok")
+	requireReachedKubectl(t, r)
+	if got := leaks(r); len(got) == 0 {
 		t.Fatal("a value printed to stdout was not caught")
 	}
 }
 
 func TestSessionSecretLeakCheckCatchesArgvLeak(t *testing.T) {
 	path := mutatedSessionSecretScript(t, `--from-file="${KEY_NAME}=${WORK}/key"`, `--from-file="${KEY_NAME}=${WORK}/key" --from-literal=x="$(cat "${WORK}/key")"`)
-	if got := leaks(runSessionSecretScript(t, path, "ok")); len(got) == 0 {
+	r := runSessionSecretScript(t, path, "ok")
+	requireReachedKubectl(t, r)
+	if got := leaks(r); len(got) == 0 {
 		t.Fatal("a value in argv was not caught")
+	}
+}
+
+func TestSessionSecretLeakCheckRejectsARunThatNeverReachedKubectl(t *testing.T) {
+	path := mutatedSessionSecretScript(t, "# MUTATION-ANCHOR-STDOUT", "exit 3")
+	r := runSessionSecretScript(t, path, "ok")
+	if r.err == nil || r.value != "" {
+		t.Fatalf("the broken script should fail before kubectl: err=%v", r.err)
+	}
+	if got := leaks(r); len(got) != 0 {
+		t.Fatalf("a run with no value reported leaks %v", got)
+	}
+}
+
+const bsdBase64 = `#!/usr/bin/env bash
+case "$1" in -d|--decode) echo "base64: invalid option -- d" >&2; exit 1 ;; esac
+exec /usr/bin/base64 "$@"
+`
+
+func TestSessionSecretScriptNeedsNoGNUBase64Decode(t *testing.T) {
+	r := runSessionSecretScriptWith(t, sessionSecretScript, "ok", map[string]string{"base64": bsdBase64})
+	requireReachedKubectl(t, r)
+	if got := leaks(r); len(got) != 0 {
+		t.Fatalf("value leaked into %v", got)
+	}
+}
+
+const shortKeyOpenssl = `#!/usr/bin/env bash
+printf 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\n'
+`
+
+func TestSessionSecretScriptRefusesAShortKeyBeforeKubectl(t *testing.T) {
+	r := runSessionSecretScriptWith(t, sessionSecretScript, "ok", map[string]string{"openssl": shortKeyOpenssl})
+	if r.err == nil || r.argv != "" || !strings.Contains(r.stdout, "FAILED: the generated key is not 32 bytes") {
+		t.Fatalf("a short key must stop before kubectl: err=%v argv=%q\n%s", r.err, r.argv, r.stdout)
 	}
 }

@@ -2,6 +2,7 @@ package logging
 
 import (
 	"bytes"
+	"encoding/json"
 	"log/slog"
 	"strings"
 	"testing"
@@ -265,6 +266,92 @@ func TestSlogReservedPlaceholderNameIsNeverAUserKey(t *testing.T) {
 				}
 				if n := strings.Count(out, "redacted.key"); n != 1 {
 					t.Errorf("want exactly one placeholder, got %d: %q", n, out)
+				}
+			})
+		}
+	}
+}
+
+const panicMark = "PANICMARK-zq9"
+
+type errPanicsOnText struct{}
+
+func (errPanicsOnText) Error() string { return panic0() }
+
+type stringerPanicsOnText struct{}
+
+func (stringerPanicsOnText) String() string { return panic0() }
+
+type nilStringer struct{ text *string }
+
+func (n *nilStringer) String() string { return *n.text }
+
+func panic0() string { panic(panicMark) }
+
+func TestSlogSyncCLIWrapperSurvivesPanickingErrorAndStringerValues(t *testing.T) {
+	values := map[string]any{"error": errPanicsOnText{}, "stringer": stringerPanicsOnText{}, "nil-stringer": (*nilStringer)(nil)}
+	for vname, value := range values {
+		for lname, build := range map[string]func(*bytes.Buffer) *slog.Logger{
+			"text-cli": func(b *bytes.Buffer) *slog.Logger {
+				return slog.New(WithValueRedaction(slog.NewTextHandler(b, nil), func(s string) string { return s }))
+			},
+			"json-cli": func(b *bytes.Buffer) *slog.Logger {
+				return slog.New(WithValueRedaction(NewJSON(b, slog.LevelInfo).Handler(), func(s string) string { return s }))
+			},
+		} {
+			for _, mode := range []string{"record", "with", "group", "withgroup"} {
+				t.Run(vname+"/"+lname+"/"+mode, func(t *testing.T) {
+					var buf bytes.Buffer
+					logger := build(&buf)
+					defer func() {
+						if r := recover(); r != nil {
+							t.Fatalf("logger panicked: %v", r)
+						}
+					}()
+					switch mode {
+					case "record":
+						logger.Info("event", "v", value)
+					case "with":
+						logger.With("v", value).Info("event")
+					case "group":
+						logger.Info("event", slog.Group("g", "v", value))
+					case "withgroup":
+						logger.WithGroup("g").Info("event", "v", value)
+					}
+					if !strings.Contains(buf.String(), "event") || strings.Contains(buf.String(), panicMark) {
+						t.Errorf("record missing or leaked the panic text: %q", buf.String())
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestSlogSyncCLIRoutesRawJSONAndBytesThroughTheStructuredPath(t *testing.T) {
+	secret, _ := syntheticKeys()
+	raw := `{"redacted.key":"BEN1","` + secret + `":"DV1","ok":"OKV"}`
+	values := map[string]any{"raw-message": json.RawMessage(raw), "bytes": []byte(raw)}
+	for vname, value := range values {
+		for lname, build := range map[string]func(*bytes.Buffer) *slog.Logger{
+			"text-cli": func(b *bytes.Buffer) *slog.Logger {
+				return slog.New(WithValueRedaction(slog.NewTextHandler(b, nil), func(s string) string { return s }))
+			},
+			"json-cli": func(b *bytes.Buffer) *slog.Logger {
+				return slog.New(WithValueRedaction(NewJSON(b, slog.LevelInfo).Handler(), func(s string) string { return s }))
+			},
+		} {
+			t.Run(vname+"/"+lname, func(t *testing.T) {
+				var buf bytes.Buffer
+				build(&buf).Info("event", "obj", value)
+				out := buf.String()
+				assertNoKeyLeak(t, vname, out)
+				for _, bad := range []string{"DV1", "BEN1"} {
+					if strings.Contains(out, bad) {
+						t.Errorf("%s: value %s written: %q", lname, bad, out)
+					}
+				}
+				if n := strings.Count(out, "redacted.key"); n != 1 {
+					t.Errorf("%s: want one placeholder, got %d: %q", lname, n, out)
 				}
 			})
 		}

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"slices"
 	"testing"
 	"time"
 
@@ -118,8 +119,9 @@ func TestInvestmentByThemeIsTheCanonicalCountOfTheUnits(t *testing.T) {
 	if _, leaked := got["quality"]; leaked {
 		t.Errorf("quality = %+v: the unit under the evidence gate must be left out of the tile", got["quality"])
 	}
-	if order[0] != "maintenance" {
-		t.Errorf("order = %v, want the largest count first (maintenance 1, risk 0.9, feature_delivery 0.6, operational 0.5), not the largest effort (feature_delivery 100 lines)", order)
+	wantOrder := []string{"maintenance", "risk", "feature_delivery", "operational"}
+	if !slices.Equal(order, wantOrder) {
+		t.Errorf("order = %v, want %v: the largest count first (maintenance 1, risk 0.9, feature_delivery 0.6, operational 0.5), not the largest effort (feature_delivery 100 lines)", order, wantOrder)
 	}
 	sum := 0.0
 	for _, row := range resp.ReworkThemeAllocation {

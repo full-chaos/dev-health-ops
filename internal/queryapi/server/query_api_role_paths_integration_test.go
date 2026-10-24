@@ -19,6 +19,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/llmbudget"
 	"github.com/full-chaos/dev-health-ops/internal/llmorgsettings"
 	"github.com/full-chaos/dev-health-ops/internal/mcpclass"
+	"github.com/full-chaos/dev-health-ops/internal/pgmigrate/schemagate"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/datahealth"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/home"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/producttelemetry"
@@ -172,6 +173,11 @@ func hasPermissionDenied(failures []error, table string) bool {
 			strings.Contains(failure.Error(), "worker outbox database unavailable") {
 			return true
 		}
+		// The schema gate reduces a driver error to a class, so its denied read surfaces as that class.
+		var read *schemagate.ReadError
+		if table == "alembic_version" && errors.As(failure, &read) && read.Class == "permission_denied" {
+			return true
+		}
 		var pgErr *pgconn.PgError
 		if errors.As(failure, &pgErr) && pgErr.Code == "42501" && strings.Contains(pgErr.Message, table) {
 			return true
@@ -322,6 +328,9 @@ func (f *queryAPIRoleFixture) driveEveryPathCollecting(t *testing.T, ctx context
 		}
 	}
 
+	// Schema gate: the start-up read of the recorded migration revisions (production reader, same pool).
+	_, gateErr := schemagate.PoolRecorded(ctx, pool)
+	fail("schemagate.PoolRecorded", gateErr)
 	// Class decisions: Enabled swallows a query error into "false", so assert the STATE it exists to reach.
 	// The class switch reads go_api_class_decision (CHAOS-8735): assert the state it exists to reach, not that it ran.
 	if !routeswitch.NewClassDecisionSwitch(pool, mcpRoutingDigests()).Enabled(mcpclass.Operation("hotspots")) {

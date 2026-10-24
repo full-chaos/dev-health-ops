@@ -136,8 +136,9 @@ presents to auth-service's session issue route. goApi.sessionIssue.secretName na
 dedicated, operator-created Secret; empty keeps the shared Secret. Only go-api reads it.
 */}}
 {{- define "dev-health.sessionIssueSecretName" -}}
-{{- if .Values.goApi.sessionIssue.secretName }}
-{{- .Values.goApi.sessionIssue.secretName }}
+{{- $issue := default dict .Values.goApi.sessionIssue }}
+{{- if $issue.secretName }}
+{{- $issue.secretName }}
 {{- else }}
 {{- include "dev-health.secretName" . }}
 {{- end }}

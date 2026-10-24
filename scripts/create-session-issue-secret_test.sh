@@ -116,21 +116,91 @@ set +e; KUBECTL="$fake" bash "$script" --bogus >/dev/null 2>&1; r=$?; set -e
 set +e; KUBECTL="$fake" bash -x "$script" --context c --namespace n --name x --value-file "$vf" >/dev/null 2>&1; r=$?; set -e
 [ "$r" -ne 0 ] || fail "xtrace accepted"
 
-# 6 signal during kubectl: workdir removed.
+# 5b name and key shape: refused by the script before kubectl runs.
+long254="$(printf 'a%.0s' $(seq 1 254))"
+vf="$(newfile "$root" "$tok")"
+for bad in "a..b" ".a" "a." "-a" "a-.b" "$long254"; do
+  : >"$root/log"
+  set +e
+  KUBECTL="$fake" FAKE_MODE=ok FAKE_LOG="$root/log" bash "$script" --context c --namespace n --name "$bad" --value-file "$vf" >/dev/null 2>&1
+  r=$?
+  set -e
+  [ "$r" -ne 0 ] && [ ! -s "$root/log" ] || fail "bad name '${bad:0:12}' accepted"
+done
+for badkey in "." ".." ".x"; do
+  : >"$root/log"
+  set +e
+  KUBECTL="$fake" FAKE_MODE=ok FAKE_LOG="$root/log" bash "$script" --context c --namespace n --name x --value-file "$vf" --key "$badkey" >/dev/null 2>&1
+  r=$?
+  set -e
+  [ "$r" -ne 0 ] && [ ! -s "$root/log" ] || fail "bad key '$badkey' accepted"
+done
+: >"$root/log"
+long253="$(printf 'a%.0s' $(seq 1 253))"
+set +e
+KUBECTL="$fake" FAKE_MODE=ok FAKE_LOG="$root/log" FAKE_SEEN="$root/seen" SESSION_ISSUE_WORKDIR_BASE="$root" bash "$script" --context c --namespace n --name "a.b-c.d" --value-file "$vf" >/dev/null 2>&1
+r=$?
+set -e
+[ "$r" -eq 0 ] || fail "valid dotted name refused"
+vf="$(newfile "$root" "$tok")"
+: >"$root/log"
+set +e
+KUBECTL="$fake" FAKE_MODE=ok FAKE_LOG="$root/log" FAKE_SEEN="$root/seen" SESSION_ISSUE_WORKDIR_BASE="$root" bash "$script" --context c --namespace n --name "$long253" --value-file "$vf" >/dev/null 2>&1
+r=$?
+set -e
+[ "$r" -eq 0 ] || fail "253-char name refused"
+
+# 6 signal during kubectl: the child is stopped, the workdir is gone at once, the source is kept.
 cat >"$root/slow" <<'SLOW'
 #!/usr/bin/env bash
-sleep 5
+echo $$ >"$SLOW_PID"
+sleep 30
 SLOW
 chmod 755 "$root/slow"
+for sig in TERM INT; do
+  vf="$(newfile "$root" "$tok")"
+  rm -f "$root/slowpid"
+  # a background job of a non-interactive shell starts with SIGINT ignored; a terminal run does not
+  SLOW_PID="$root/slowpid" KUBECTL="$root/slow" SESSION_ISSUE_WORKDIR_BASE="$root" perl -e '$SIG{INT}="DEFAULT"; exec @ARGV' bash "$script" --context c --namespace n --name x --value-file "$vf" >"$root/sigout" 2>&1 &
+  pid=$!
+  for _ in $(seq 1 50); do [ -s "$root/slowpid" ] && [ "$(leftovers)" -gt 0 ] && break; sleep 0.1; done
+  [ -s "$root/slowpid" ] || fail "$sig: slow kubectl never started"
+  kpid="$(cat "$root/slowpid" 2>/dev/null || echo 0)"
+  kill -"$sig" "$pid" 2>/dev/null || true
+  sleep 0.5
+  kill -0 "$pid" 2>/dev/null && fail "$sig: script still alive after 500 ms"
+  [ "$(leftovers)" -eq 0 ] || fail "$sig: workdir left behind 500 ms after the signal"
+  kill -0 "$kpid" 2>/dev/null && { fail "$sig: kubectl child still alive"; kill "$kpid" 2>/dev/null || true; }
+  wait "$pid" 2>/dev/null || true
+  [ -f "$vf" ] || fail "$sig: source removed after a signal"
+  grep -q "value file kept for retry: $vf" "$root/sigout" || fail "$sig: kept-path line missing"
+  case "$(cat "$root/sigout")" in *"$tok"*) fail "$sig: value printed" ;; esac
+done
+
+# 7 a mktemp failure leaves nothing; and the script makes exactly one mktemp call, so no later one can fail after a directory exists.
+mkdir "$root/bin"
+cat >"$root/bin/mktemp" <<'MK'
+#!/usr/bin/env bash
+n=$(cat "$MK_COUNT" 2>/dev/null || echo 0); n=$((n + 1)); echo "$n" >"$MK_COUNT"
+[ "$n" -ge "${MK_FAIL_FROM:-1}" ] && { echo "injected mktemp failure" >&2; exit 1; }
+exec /usr/bin/mktemp "$@"
+MK
+chmod 755 "$root/bin/mktemp"
 vf="$(newfile "$root" "$tok")"
-KUBECTL="$root/slow" SESSION_ISSUE_WORKDIR_BASE="$root" bash "$script" --context c --namespace n --name x --value-file "$vf" >/dev/null 2>&1 &
-pid=$!
-for _ in 1 2 3 4 5 6 7 8 9 10; do [ "$(leftovers)" -gt 0 ] && break; sleep 0.2; done
-kill -TERM "$pid" 2>/dev/null || true
-wait "$pid" 2>/dev/null || true
-sleep 0.3
-[ "$(leftovers)" -eq 0 ] || fail "workdir left behind after SIGTERM"
-[ -f "$vf" ] || fail "source removed after SIGTERM"
+rm -f "$root/mkcount"
+set +e
+MK_COUNT="$root/mkcount" PATH="$root/bin:$PATH" KUBECTL="$fake" FAKE_MODE=ok FAKE_LOG="$root/log" SESSION_ISSUE_WORKDIR_BASE="$root" bash "$script" --context c --namespace n --name x --value-file "$vf" >/dev/null 2>&1
+r=$?
+set -e
+[ "$r" -ne 0 ] || fail "mktemp failure accepted"
+[ "$(leftovers)" -eq 0 ] || fail "workdir left behind after a mktemp failure"
+[ -f "$vf" ] || fail "source removed after a mktemp failure"
+rm -f "$root/mkcount"
+set +e
+MK_FAIL_FROM=2 MK_COUNT="$root/mkcount" PATH="$root/bin:$PATH" KUBECTL="$fake" FAKE_MODE=ok FAKE_LOG="$root/log" FAKE_SEEN="$root/seen" SESSION_ISSUE_WORKDIR_BASE="$root" bash "$script" --context c --namespace n --name x --value-file "$vf" >/dev/null 2>&1
+r=$?
+set -e
+[ "$r" -eq 0 ] && [ "$(cat "$root/mkcount")" = "1" ] || fail "script makes more than one mktemp call (rc=$r)"
 
 [ "$fails" -eq 0 ] || { echo "$fails check(s) failed" >&2; exit 1; }
 echo "create-session-issue-secret_test: ok"

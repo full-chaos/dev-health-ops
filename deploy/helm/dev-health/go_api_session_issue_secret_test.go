@@ -75,9 +75,35 @@ func TestSessionIssueSchemaRefusesBadValues(t *testing.T) {
 		"goApi.sessionIssue.secretKey=a b",
 		"goApi.sessionIssue.secretKey=",
 		"goApi.sessionIssue.extra=x",
+		"goApi.sessionIssue.secretName=a..b",
+		"goApi.sessionIssue.secretName=.a",
+		"goApi.sessionIssue.secretName=a.",
+		"goApi.sessionIssue.secretName=-a",
+		"goApi.sessionIssue.secretName=" + strings.Repeat("a", 254),
+		"goApi.sessionIssue.secretKey=.",
+		"goApi.sessionIssue.secretKey=..",
+		"goApi.sessionIssue.secretKey=.x",
 	} {
 		if _, out, err := renderAuth(t, goAPIWithAuth(append([]string{"--set", set}, issueSessionsOn...)...)...); err == nil {
 			t.Errorf("%s was accepted\n%.200s", set, out)
+		}
+	}
+	for _, setJSON := range []string{
+		"goApi.sessionIssue.secretKey=null",
+		"goApi.sessionIssue.secretName=null",
+		"goApi.sessionIssue=null",
+	} {
+		if _, out, err := renderAuth(t, goAPIWithAuth(append([]string{"--set-json", setJSON}, issueSessionsOn...)...)...); err == nil {
+			t.Errorf("%s was accepted\n%.200s", setJSON, out)
+		}
+	}
+	for _, ok := range []string{
+		"goApi.sessionIssue.secretName=a.b-c.d",
+		"goApi.sessionIssue.secretName=" + strings.Repeat("a", 253),
+		"goApi.sessionIssue.secretKey=_x.y-1",
+	} {
+		if _, out, err := renderAuth(t, goAPIWithAuth(append([]string{"--set", ok}, issueSessionsOn...)...)...); err != nil {
+			t.Errorf("%s was refused: %.300s", ok, out)
 		}
 	}
 }

@@ -33,9 +33,9 @@ done
   printf 'refused: --context, --namespace, --name and --value-file are required\n' >&2
   exit 2
 }
-dns1123='^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$'
-keyname='^[A-Za-z0-9._-]{1,253}$'
-[[ "$name" =~ $dns1123 ]] && [ "${#name}" -le 253 ] && [[ "$key" =~ $keyname ]] && [ "$key" != "." ] && [ "$key" != ".." ] || {
+dns1123='^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$'
+keyname='^[A-Za-z0-9_-][A-Za-z0-9._-]{0,252}$'
+[[ "$name" =~ $dns1123 ]] && [ "${#name}" -le 253 ] && [[ "$key" =~ $keyname ]] || {
   printf 'refused: --name or --key is not a valid name\n' >&2
   exit 2
 }
@@ -57,32 +57,47 @@ IFS= read -r line <"$valuefile" || true
 base="${SESSION_ISSUE_WORKDIR_BASE:-${XDG_RUNTIME_DIR:-/dev/shm}}"
 [ -d "$base" ] || { printf 'refused: no private work directory\n' >&2; exit 2; }
 [ "$(stat -f -c %T "$base")" = "tmpfs" ] || { printf 'refused: work directory is not tmpfs\n' >&2; exit 2; }
-workdir="$(mktemp -d "${base%/}/session-issue.XXXXXX")"
-errfile="$(mktemp "${base%/}/session-issue-err.XXXXXX")"
+workdir=""
+kpid=""
 
 cleanup() {
   local f
+  [ -n "$workdir" ] || return 0
   shopt -s dotglob nullglob
   for f in "$workdir"/*; do
     [ -e "$f" ] || continue
     shred -u "$f" 2>/dev/null || rm -f "$f"
   done
-  rm -f "$errfile"
   rmdir "$workdir" 2>/dev/null || true
 }
+kept() { printf 'value file kept for retry: %s\n' "$valuefile"; }
+on_signal() {
+  if [ -n "$kpid" ]; then
+    kill "$kpid" 2>/dev/null || true
+    wait "$kpid" 2>/dev/null || true
+  fi
+  cleanup
+  kept
+  exit "$1"
+}
 trap cleanup EXIT
-trap 'exit 130' INT
-trap 'exit 143' TERM
+trap 'on_signal 130' INT
+trap 'on_signal 143' TERM
 
+workdir="$(mktemp -d "${base%/}/session-issue.XXXXXX")"
+errfile="$workdir/kubectl.err"
 copy="$workdir/$key"
 printf '%s' "$line" >"$copy"
 line=""
 
-kept() { printf 'value file kept for retry: %s\n' "$valuefile"; }
-
 kubectl_bin="${KUBECTL:-kubectl}"
-if "$kubectl_bin" --context "$context" --namespace "$namespace" create secret generic "$name" \
-  --from-file="${key}=${copy}" >/dev/null 2>"$errfile"; then
+"$kubectl_bin" --context "$context" --namespace "$namespace" create secret generic "$name" \
+  --from-file="${key}=${copy}" >/dev/null 2>"$errfile" &
+kpid=$!
+rc=0
+wait "$kpid" || rc=$?
+kpid=""
+if [ "$rc" -eq 0 ]; then
   printf '%s key=%s created\n' "$name" "$key"
   if ! shred -u "$valuefile" 2>/dev/null; then
     rm -f "$valuefile" 2>/dev/null || { printf 'WARN source value file not removed: %s\n' "$valuefile"; }

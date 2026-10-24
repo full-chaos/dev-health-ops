@@ -282,9 +282,10 @@ type guardEnv struct {
 // guardUnitSource folds every unit of the run in id order; each call is one full paged read.
 type guardUnitSource func(fold func(dispatchGuardUnit) error) error
 
-// guardBucketFold is the per-bucket state of the second pass. Its size is bounded by the bucket's free slots, not by
-// the number of units: the first allowedSlots units of `stale reclaims by (updated_at, id), then new work by id` are
-// claimable, every other candidate is capped and its id goes straight to the capped list.
+// guardBucketFold is the per-bucket state of the second pass. The first allowedSlots units of `stale reclaims by
+// (updated_at, id), then new work by id` are the claimable ones; every other candidate is capped. The capped ids and the
+// authorized ids are the decision's output and still grow with the number of units; only the page size of the reads is
+// bounded here.
 type guardBucketFold struct {
 	slots          int
 	reclaims       reclaimHeap
@@ -355,7 +356,8 @@ func (fold *guardBucketFold) cappedIDs() []string {
 	return append(ids, fold.newOverflow...)
 }
 
-// decideDispatchGuard is the guard decision, folded over keyset pages in two passes: pass 1 learns the bucket sets and
+// decideDispatchGuard is the guard decision, folded over keyset pages (each read returns at most unitPageSize rows;
+// the decision's capped and authorized id sets are not bounded by it) in two passes: pass 1 learns the bucket sets and
 // the unit count; the buckets are locked; pass 2 (or, over the total cap, a suffix walk) computes the cap decision.
 // The two passes read the table twice, so a row that changed between them is judged on what pass 2 saw, but only
 // inside the buckets pass 1 locked: pass 2 never authorizes a unit of a bucket outside allBuckets.

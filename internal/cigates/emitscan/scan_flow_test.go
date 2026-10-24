@@ -50,6 +50,12 @@ func TestLabelOriginFlowsThroughPackageLocalCalls(t *testing.T) {
 		"method expression forwarding a parameter": "type rec[T any] struct{ c metric.Int64Counter }\nfunc (r rec[T]) add(attrs []attribute.KeyValue) {\n\tr.c.Add(context.Background(), 1, metric.WithAttributes(attrs...))\n}\n" +
 			"func outer(r rec[int], attrs []attribute.KeyValue) { rec[int].add(r, attrs) }\n" +
 			"func f(r rec[int]) {\n\touter(r, []attribute.KeyValue{attribute.String(\"user_id\", \"S3CRET\")})\n}\n",
+		"method expression on a type with two type arguments": "type rec[T, U any] struct{ c metric.Int64Counter }\nfunc (r rec[T, U]) add(attrs []attribute.KeyValue) {\n\tr.c.Add(context.Background(), 1, metric.WithAttributes(attrs...))\n}\n" +
+			"func f(r rec[int, string]) {\n\trec[int, string].add(r, []attribute.KeyValue{attribute.String(\"user_id\", \"S3CRET\")})\n}\n",
+		"parenthesised method expression": "type rec struct{ c metric.Int64Counter }\nfunc (r rec) add(attrs []attribute.KeyValue) {\n\tr.c.Add(context.Background(), 1, metric.WithAttributes(attrs...))\n}\n" +
+			"func f(r rec) {\n\t(rec.add)(r, []attribute.KeyValue{attribute.String(\"user_id\", \"S3CRET\")})\n}\n",
+		"method expression on a parenthesised type": "type rec struct{ c metric.Int64Counter }\nfunc (r rec) add(attrs []attribute.KeyValue) {\n\tr.c.Add(context.Background(), 1, metric.WithAttributes(attrs...))\n}\n" +
+			"func f(r rec) {\n\t(rec).add(r, []attribute.KeyValue{attribute.String(\"user_id\", \"S3CRET\")})\n}\n",
 		"parenthesised callee": flowSink + "func f(c metric.Int64Counter) {\n\t(record)(c, []attribute.KeyValue{attribute.String(\"user_id\", \"S3CRET\")})\n}\n",
 		"name copied through a local": "func record(c metric.Int64Counter, attrs []attribute.KeyValue) {\n\tcopyOf := attrs\n\tc.Add(context.Background(), 1, metric.WithAttributes(copyOf...))\n}\n" +
 			"func f(c metric.Int64Counter) {\n\trecord(c, []attribute.KeyValue{attribute.String(\"user_id\", \"S3CRET\")})\n}\n",

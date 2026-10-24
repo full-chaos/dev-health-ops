@@ -47,9 +47,9 @@ func stringOrEmpty(value *string) string {
 // behavioral difference (the Python duplicate can never actually
 // disagree).
 //
-// Existing accounts are selected by (auth_provider, auth_provider_id) and only
-// full_name and last_login_at are written; the identity columns are never
-// rewritten (resolveSSOIdentity).
+// Existing accounts are selected by (auth_provider, sso provider, auth_provider_id)
+// and only full_name and last_login_at are written; the identity columns are never
+// rewritten (resolveProviderIdentity).
 func (h handlers) provisionOrGetUser(ctx context.Context, row *providerRow, email, name string, providerID uuid.UUID, externalID string) (*provisionedUser, *provisionedMembership, error) {
 	authProviderValue := "oidc"
 	if row.Protocol == "saml" {
@@ -63,7 +63,7 @@ func (h handlers) provisionOrGetUser(ctx context.Context, row *providerRow, emai
 		isSuperuser                bool
 		tokenVersion               int64
 	)
-	userID, found, err := h.resolveSSOIdentity(ctx, authProviderValue, externalID, email)
+	userID, found, err := h.resolveProviderIdentity(ctx, authProviderValue, providerID, externalID, email)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -88,6 +88,7 @@ FROM users WHERE id = $1::uuid`, userID).Scan(&id, &existingEmail, &username, &e
 		}
 		return h.createAccountAndMembership(ctx, row, ssoNewAccount{
 			email: email, authProvider: authProviderValue, externalID: externalIDPtr, fullName: fullNamePtr,
+			ssoProviderID: &providerID,
 		})
 	}
 	if err != nil {
@@ -116,13 +117,30 @@ FROM users WHERE id = $1::uuid`, userID).Scan(&id, &existingEmail, &username, &e
 // identity, or the identity key matches more than one account.
 var errIdentityConflict = errors.New("identity conflict")
 
-// resolveSSOIdentity selects the account by its (auth_provider,
-// auth_provider_id) key. Without a key hit, an existing account with the same
-// email is a conflict; it is never adopted or rewritten.
+// resolveProviderIdentity selects an OIDC or SAML account by its (auth_provider,
+// sso_provider_id, auth_provider_id) key: the subject is an identity of the provider
+// that issued it, so the same subject at another provider selects nothing. Without a
+// key hit, an existing account with the same email is a conflict; it is never
+// adopted or rewritten. An account that holds a subject but no provider is no
+// provider's identity.
+func (h handlers) resolveProviderIdentity(ctx context.Context, authProvider string, providerID uuid.UUID, externalID, email string) (uuid.UUID, bool, error) {
+	return h.resolveIdentityKey(ctx, `SELECT id FROM users WHERE auth_provider = $1::text AND sso_provider_id = $3::uuid AND auth_provider_id = $2::text LIMIT 2`,
+		[]any{authProvider, externalID, providerID}, externalID, email)
+}
+
+// resolveSSOIdentity selects an OAuth account by its (auth_provider,
+// auth_provider_id) key. OAuth providers are the public identity providers
+// (github, gitlab, google): their subject is global per type, so the key carries no
+// SSO provider. Without a key hit, an existing account with the same email is a
+// conflict; it is never adopted or rewritten.
 func (h handlers) resolveSSOIdentity(ctx context.Context, authProvider, externalID, email string) (uuid.UUID, bool, error) {
+	return h.resolveIdentityKey(ctx, `SELECT id FROM users WHERE auth_provider = $1::text AND auth_provider_id = $2::text LIMIT 2`,
+		[]any{authProvider, externalID}, externalID, email)
+}
+
+func (h handlers) resolveIdentityKey(ctx context.Context, keyQuery string, keyArgs []any, externalID, email string) (uuid.UUID, bool, error) {
 	if externalID != "" {
-		rows, err := h.Pool.Query(ctx, `SELECT id FROM users WHERE auth_provider = $1::text AND auth_provider_id = $2::text LIMIT 2`,
-			authProvider, externalID)
+		rows, err := h.Pool.Query(ctx, keyQuery, keyArgs...)
 		if err != nil {
 			return uuid.Nil, false, err
 		}
@@ -200,6 +218,8 @@ func membershipRequiredDetail() *pyjson.Object {
 type ssoNewAccount struct {
 	email, authProvider                       string
 	externalID, fullName, username, avatarURL *string
+	// ssoProviderID is the OIDC or SAML provider whose identity the account holds; nil for OAuth.
+	ssoProviderID *uuid.UUID
 }
 
 func jitRole(row *providerRow) string {
@@ -229,10 +249,10 @@ func (h handlers) createAccountAndMembership(ctx context.Context, row *providerR
 	}
 	defer func() { _ = tx.Rollback(context.Background()) }()
 	if _, err := tx.Exec(ctx, `INSERT INTO users
-	(id, email, username, full_name, avatar_url, auth_provider, auth_provider_id, is_active, is_verified, is_superuser,
+	(id, email, username, full_name, avatar_url, auth_provider, auth_provider_id, sso_provider_id, is_active, is_verified, is_superuser,
 	 token_version, last_login_at, created_at, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, true, true, false, 0, $8, $8, $8)`,
-		newID, account.email, account.username, account.fullName, account.avatarURL, account.authProvider, account.externalID, now); err != nil {
+VALUES ($1, $2, $3, $4, $5, $6, $7, $9, true, true, false, 0, $8, $8, $8)`,
+		newID, account.email, account.username, account.fullName, account.avatarURL, account.authProvider, account.externalID, now, account.ssoProviderID); err != nil {
 		if isUniqueViolation(err) {
 			return nil, nil, errIdentityConflict
 		}

@@ -59,7 +59,7 @@ and `/readyz` fails closed, naming the check. See the
 | `--jwt-issuer` | `AUTH_JWT_ISSUER` | `dev-health-ops` | `iss` of the access token; must equal go-api's `JWT_ISSUER`. |
 | `--jwt-audience` | `AUTH_JWT_AUDIENCE` | `dev-health-api` | `aud` of the access token; must equal go-api's `JWT_AUDIENCE`. |
 | (none, secret) | `AUTH_VALKEY_URI` or `AUTH_VALKEY_URI_FILE` | unset | `redis://` or `rediss://` URI on database 1 (path `/1`) of the shared rate-limit store. Required, and refused at startup when absent, while the login, credential (`AUTH_USERS_OWNED`) or social link routes are mounted; with none of them mounted it is checked for shape only and never dialled. Nothing dials at startup: an unreachable store fails the `valkey` readiness check and answers the limited routes with a 500. |
-| `--social-link-routes` | `AUTH_SOCIAL_LINK_ROUTES` | `false` | `true` mounts the bearer-only social link and unlink routes (`POST /v1/identities/social`, `DELETE /v1/identities/social/{id}`); any other value than `true` or `false` fails startup, and `true` needs the session secrets. |
+| `--social-link-routes` | `AUTH_SOCIAL_LINK_ROUTES` | `false` | `true` mounts the bearer-only social link and unlink routes (`POST /v1/identities/social`, `DELETE /v1/identities/social/{id}`; see [identity linking](identity-linking.md)); any other value than `true` or `false` fails startup, and `true` needs the session secrets. |
 | (none) | `AUTH_ACCESS_TOKEN_CLASS` | `hs256_compat` | The one class of access token this service mints: `hs256_compat` or `eddsa` (exact match; any other value fails startup). `eddsa` needs `AUTH_TOKEN_ISSUER_URL` (the `iss`, byte for byte), a signing key, and `AUTH_JWT_AUDIENCE` of `dev-health-api` or `auth-service`; tokens last 60 minutes and carry the access-token.v1 claims only. The session routes still verify HS256 tokens only. |
 | `--version` | | | Prints build metadata as JSON. |
 | `--healthcheck` | | | Probes this deployment's own operator `/readyz` over loopback; exit 0 only on HTTP 200. For container healthchecks. |
@@ -121,9 +121,13 @@ The run is bounded to five minutes. See
   by an atomic rename rotates the set with no restart; give a new key a new
   file. A kid the process has seen `compromised` never signs again in that
   process. The single key form is a one-key set whose key is `active`.
-  The Helm chart stages one key and renders the single key form; it refuses
-  `AUTH_SIGNING_KEYSET_FILE` in `authService.extraEnv`. Key-set staging in the
-  chart comes with the rotation state machine (CHAOS-10449).
+  The Helm chart renders the single key form by default. With
+  `authService.keySet.enabled` it renders this manifest (kid, state and file
+  only) into a ConfigMap, stages each named key from its own Secret at mode 0400,
+  and passes `--signing-keyset-file`; `authService.keySet` replaces
+  `authService.signingKey`, and `AUTH_SIGNING_KEYSET_FILE` stays refused in
+  `authService.extraEnv`. The pod holds a static copy, so a change to the set is
+  a new rollout, not a live rename.
 - **The key file contract**, checked live on every readiness request: a regular
   file opened with `O_NOFOLLOW` (a symlink is refused), at most 8 KiB, mode with
   **no group or world bit** (`0600` or tighter), exactly one `PRIVATE KEY` PEM

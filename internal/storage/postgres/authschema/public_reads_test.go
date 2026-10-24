@@ -70,3 +70,30 @@ func TestLegacyRefreshTokenGrantIsRevokeOnlyAndNamesItsRemoval(t *testing.T) {
 		}
 	}
 }
+
+// The switch-gated write access to public.users is the reviewed column list
+// and nothing wider: token_version (the password bump) but no email or is_active update.
+func TestUsersWriteGrantIsTheReviewedColumns(t *testing.T) {
+	insert, update := UsersWriteGrant()
+	wantInsert := []string{"id", "email", "username", "password_hash", "full_name", "auth_provider", "auth_provider_id",
+		"is_active", "is_verified", "is_superuser", "token_version", "created_at", "updated_at"}
+	wantUpdate := []string{"password_hash", "is_verified", "token_version", "updated_at"}
+	if !reflect.DeepEqual(insert, wantInsert) || !reflect.DeepEqual(update, wantUpdate) {
+		t.Fatalf("UsersWriteGrant = %v / %v, want %v / %v", insert, update, wantInsert, wantUpdate)
+	}
+	for _, name := range append(append([]string{}, insert...), update...) {
+		if err := ValidateIdentifier(name); err != nil {
+			t.Errorf("column %q is not a valid identifier: %v", name, err)
+		}
+	}
+	have := map[string]bool{}
+	for _, column := range update {
+		have[column] = true
+		if column == "email" || column == "is_active" {
+			t.Errorf("UPDATE must not include %s", column)
+		}
+	}
+	if !have["token_version"] {
+		t.Error("UPDATE must include token_version: a password change ends go-api's tokens")
+	}
+}

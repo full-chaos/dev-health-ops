@@ -93,6 +93,13 @@ func (c Config) Link(path, token string) string {
 // failure is logged with attrs (never the address) and swallowed. The send
 // outlives a cancelled request, as the Python await does, up to SendTimeout.
 func (c Config) Send(ctx context.Context, logger *slog.Logger, failure, to, subject, template string, values map[string]string, attrs ...any) {
+	if err := c.Try(ctx, to, subject, template, values); err != nil {
+		logger.ErrorContext(ctx, failure, append(attrs, "error", err)...)
+	}
+}
+
+// Try is Send without the logging: it returns the failure.
+func (c Config) Try(ctx context.Context, to, subject, template string, values map[string]string) error {
 	html, err := mail.RenderTemplate(template, values)
 	if err == nil {
 		if c.Mail == nil {
@@ -103,7 +110,5 @@ func (c Config) Send(ctx context.Context, logger *slog.Logger, failure, to, subj
 			err = c.Mail.Send(sendCtx, mail.Message{To: to, Subject: subject, HTML: html})
 		}
 	}
-	if err != nil {
-		logger.ErrorContext(ctx, failure, append(attrs, "error", err)...)
-	}
+	return err
 }

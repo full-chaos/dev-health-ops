@@ -60,7 +60,7 @@ func TestResolveEvidenceQualityStats_NoWindow_ReturnsNil(t *testing.T) {
 func TestResolveEvidenceQualityStats_WindowFallsBackToTimeseries(t *testing.T) {
 	client := &routingFakeClient{}
 	client.on("quality_known_count", &fakeRowScanner{
-		rows: [][]any{{uint64(1), uint64(1), 0.5, 0.0, uint64(0), uint64(1), uint64(0), uint64(0), uint64(0)}},
+		rows: [][]any{{uint64(1), uint64(1), 0.5, 0.0, uint64(0), uint64(1), uint64(0), uint64(0), uint64(0), uint64(0)}},
 	})
 	batch := model.AnalyticsRequestInput{
 		Timeseries:    []model.TimeseriesRequestInput{tsInput(model.DimensionInputRepo, model.MeasureInputCount)},
@@ -87,7 +87,7 @@ func TestResolveEvidenceQualityStats_WindowFallsBackToTimeseries(t *testing.T) {
 func TestResolveEvidenceQualityStats_ZeroKnownCount_MeanStddevNil(t *testing.T) {
 	client := &routingFakeClient{}
 	client.on("quality_known_count", &fakeRowScanner{
-		rows: [][]any{{uint64(5), uint64(0), math.NaN(), math.NaN(), uint64(0), uint64(0), uint64(0), uint64(0), uint64(5)}},
+		rows: [][]any{{uint64(5), uint64(0), math.NaN(), math.NaN(), uint64(0), uint64(0), uint64(0), uint64(0), uint64(5), uint64(0)}},
 	})
 	batch := model.AnalyticsRequestInput{
 		Breakdowns:    []model.BreakdownRequestInput{bdInput(model.DimensionInputTheme, model.MeasureInputCount)},
@@ -291,7 +291,7 @@ func TestResolveEvidenceQualityStats_Themes_AddsCategoryFilter(t *testing.T) {
 func TestResolveEvidenceQualityStats_RepoScope_FiltersOnRepoID(t *testing.T) {
 	client := &routingFakeClient{}
 	client.on("quality_known_count", &fakeRowScanner{
-		rows: [][]any{{uint64(2), uint64(2), 0.5, 0.1, uint64(0), uint64(2), uint64(0), uint64(0), uint64(0)}},
+		rows: [][]any{{uint64(2), uint64(2), 0.5, 0.1, uint64(0), uint64(2), uint64(0), uint64(0), uint64(0), uint64(0)}},
 	})
 	batch := model.AnalyticsRequestInput{
 		Breakdowns:    []model.BreakdownRequestInput{bdInput(model.DimensionInputTheme, model.MeasureInputCount)},
@@ -324,7 +324,7 @@ func TestResolveEvidenceQualityStats_RepoScope_FiltersOnRepoID(t *testing.T) {
 func TestResolveEvidenceQualityStats_DeveloperScope_SilentlyIgnored(t *testing.T) {
 	client := &routingFakeClient{}
 	client.on("quality_known_count", &fakeRowScanner{
-		rows: [][]any{{uint64(3), uint64(3), 0.5, 0.1, uint64(0), uint64(3), uint64(0), uint64(0), uint64(0)}},
+		rows: [][]any{{uint64(3), uint64(3), 0.5, 0.1, uint64(0), uint64(3), uint64(0), uint64(0), uint64(0), uint64(0)}},
 	})
 	batch := model.AnalyticsRequestInput{
 		Breakdowns:    []model.BreakdownRequestInput{bdInput(model.DimensionInputTheme, model.MeasureInputCount)},

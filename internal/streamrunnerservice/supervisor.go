@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/chmigrate/chgate"
 	"github.com/full-chaos/dev-health-ops/internal/pgmigrate/schemagate"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
@@ -239,6 +240,10 @@ func (supervisor *streamConsumerSupervisor) attempt(ctx context.Context) (stream
 		if schemagate.Enforce(ctx, supervisor.log(), "stream-runner", opened) != nil {
 			opened.Close()
 			return nil, dependencyUnavailable("stream_schema_behind")
+		}
+		if chgate.Enforce(ctx, supervisor.log(), "stream-runner", opened) != nil {
+			opened.Close()
+			return nil, dependencyUnavailable("stream_clickhouse_schema_behind")
 		}
 		// Published before the probes run so the readiness checks and the
 		// posture gauge reflect this storage's live state from now on;

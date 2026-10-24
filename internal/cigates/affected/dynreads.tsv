@@ -430,6 +430,7 @@ internal/queryapi/analytics	nan_class_live_test.go
 internal/queryapi/drilldown	golden_test.go
 internal/queryapi/explain	golden_test.go
 internal/queryapi/flame	golden_test.go
+internal/queryapi/graph	field_action_map_test.go
 internal/queryapi/graph/model	sdl_nullability_gate_test.go
 internal/queryapi/heatmap	identity.go
 internal/queryapi/home	golden_test.go
@@ -457,6 +458,7 @@ internal/queryapi/server	direct_env_reads_test.go
 internal/queryapi/server	drilldown_issues_422_test.go
 internal/queryapi/server	drilldown_prs_422_test.go
 internal/queryapi/server	edge_users_test.go
+internal/queryapi/server	endpoint_profile_action_fields_test.go
 internal/queryapi/server	endpoint_profile_rows_test.go
 internal/queryapi/server	endpoint_profile_same_line_test.go
 internal/queryapi/server	explain_422_test.go

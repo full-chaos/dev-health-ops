@@ -159,6 +159,20 @@ func TestTheLimitTableIsPinned(t *testing.T) {
 	}
 }
 
+func TestLimitIDsListEveryLimiter(t *testing.T) {
+	got := LimitIDs()
+	if len(got) != 11 {
+		t.Fatalf("%d ids, want the table's 11", len(got))
+	}
+	seen := map[string]bool{}
+	for _, id := range got {
+		if seen[id] || !strings.HasPrefix(id, "auth_svc_") {
+			t.Errorf("id %q is duplicated or outside the auth_svc_ prefix", id)
+		}
+		seen[id] = true
+	}
+}
+
 func TestLimitedRoutesRefuseToBuildWithoutACounterStore(t *testing.T) {
 	f := newCompatFixture(t)
 	deps := CompatDeps{Sessions: f.sessions, Users: f.users, Issuer: f.issuer, Projector: f.projector,

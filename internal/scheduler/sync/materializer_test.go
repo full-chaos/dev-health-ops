@@ -17,17 +17,17 @@ import (
 
 func TestRequestedDatasetKeysPreservesLiveConfigRoutingSemantics(t *testing.T) {
 	child := "00000000-0000-4000-8000-000000000001"
-	if got := requestedDatasetKeys("jira", []string{"work-items"}, nil); got != nil {
+	if got := RequestedDatasetKeys("jira", []string{"work-items"}, nil); got != nil {
 		t.Fatalf("parent dataset scope=%v, want all enabled (nil)", got)
 	}
 	wantChild := map[string]bool{
 		"work-items": true, "work-item-labels": true, "work-item-projects": true,
 		"work-item-history": true, "work-item-comments": true,
 	}
-	if got := requestedDatasetKeys("jira", []string{"work-items"}, &child); !reflect.DeepEqual(got, wantChild) {
+	if got := RequestedDatasetKeys("jira", []string{"work-items"}, &child); !reflect.DeepEqual(got, wantChild) {
 		t.Fatalf("recognized child dataset scope=%v, want %v", got, wantChild)
 	}
-	if got := requestedDatasetKeys("jira", []string{"not-a-provider-target"}, &child); got != nil {
+	if got := RequestedDatasetKeys("jira", []string{"not-a-provider-target"}, &child); got != nil {
 		t.Fatalf("unrecognized child dataset scope=%v, want all enabled (nil)", got)
 	}
 }
@@ -52,14 +52,14 @@ func TestRequestedDatasetKeysNarrowOnlyAChildConfigForEveryProvider(t *testing.T
 		{"jira", []string{"work-items"}, []string{"work-items", "work-item-labels", "work-item-projects", "work-item-history", "work-item-comments"}},
 		{"linear", []string{"work-items"}, []string{"work-items", "work-item-labels", "work-item-projects", "work-item-history", "work-item-comments"}},
 	} {
-		if got := requestedDatasetKeys(testCase.provider, testCase.targets, nil); got != nil {
+		if got := RequestedDatasetKeys(testCase.provider, testCase.targets, nil); got != nil {
 			t.Errorf("%s %v whole-integration: dataset scope %v, want nil (every enabled row)", testCase.provider, testCase.targets, got)
 		}
 		want := map[string]bool{}
 		for _, key := range testCase.want {
 			want[key] = true
 		}
-		if got := requestedDatasetKeys(testCase.provider, testCase.targets, &child); !reflect.DeepEqual(got, want) {
+		if got := RequestedDatasetKeys(testCase.provider, testCase.targets, &child); !reflect.DeepEqual(got, want) {
 			t.Errorf("%s %v child: dataset scope %v, want %v", testCase.provider, testCase.targets, got, want)
 		}
 	}

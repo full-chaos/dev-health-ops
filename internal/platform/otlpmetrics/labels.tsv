@@ -4,6 +4,7 @@ auth.identity.external_links	action,outcome	code: internal/auth/identity/store.g
 auth.identity.projections	kind,outcome	code: internal/auth/identity/store.go
 auth.identity.wire_slug_omitted		code: internal/auth/identity/store.go
 auth.oidc.outcomes	outcome,reason,route	code: internal/auth/identity/oidc/service.go
+auth.org.mutations	outcome,verb	code: internal/auth/org/store.go
 auth.session.refresh_exchanges	reason_code	code: internal/auth/session/store.go
 auth.session.revocations	reason	code: internal/auth/session/store.go
 auth.social.outcomes	operation,provider,reason_code	code: internal/auth/identity/social/service.go

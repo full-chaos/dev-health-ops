@@ -1,7 +1,10 @@
 {
- "version": 1,
+ "version": 2,
  "keyPattern": "^[A-Za-z][A-Za-z0-9_]{0,63}$",
- "stringPattern": "^[A-Za-z0-9_./:\\[\\]-]{1,128}$",
+ "stringPattern": "^[A-Za-z0-9_./\\[\\]-]{1,128}$",
+ "refusedSubstrings": [
+  "//"
+ ],
  "uuidPattern": "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}",
  "runPattern": "[A-Za-z0-9]{24,}",
  "orgIdHashPattern": "^(?:[0-9a-f]{64}|fnv1a-[0-9a-f]{8})$",
@@ -55,10 +58,10 @@
    "reason": ""
   },
   {
-   "name": "dotted name and colon",
+   "name": "colon in a dotted name",
    "payloadJson": "{\"view\":\"team.metrics:cycle-time\"}",
-   "drop": false,
-   "reason": ""
+   "drop": true,
+   "reason": "string"
   },
   {
    "name": "empty payload",
@@ -217,8 +220,50 @@
    "reason": "number"
   },
   {
-   "name": "plain url without query or credentials (inside the charset: a known limit of the rules)",
+   "name": "a URL without a query or credentials",
    "payloadJson": "{\"view\":\"https://example.com/a\"}",
+   "drop": true,
+   "reason": "string"
+  },
+  {
+   "name": "a URL with a scheme",
+   "payloadJson": "{\"view\":\"http://x\"}",
+   "drop": true,
+   "reason": "string"
+  },
+  {
+   "name": "host and port",
+   "payloadJson": "{\"view\":\"host:8080\"}",
+   "drop": true,
+   "reason": "string"
+  },
+  {
+   "name": "a colon alone",
+   "payloadJson": "{\"view\":\"a:b\"}",
+   "drop": true,
+   "reason": "string"
+  },
+  {
+   "name": "double slash alone",
+   "payloadJson": "{\"view\":\"a//b\"}",
+   "drop": true,
+   "reason": "string"
+  },
+  {
+   "name": "double slash after a leading slash",
+   "payloadJson": "{\"view\":\"/a//b\"}",
+   "drop": true,
+   "reason": "string"
+  },
+  {
+   "name": "dotted name with a dash",
+   "payloadJson": "{\"view\":\"team.metrics-cycle_time\"}",
+   "drop": false,
+   "reason": ""
+  },
+  {
+   "name": "slashes without a double slash",
+   "payloadJson": "{\"view\":\"a/b.c-d\"}",
    "drop": false,
    "reason": ""
   }

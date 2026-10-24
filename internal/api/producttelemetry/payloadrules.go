@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"regexp"
+	"strings"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 )
@@ -18,12 +19,14 @@ import (
 var payloadRulesJSON []byte
 
 type payloadRuleSet struct {
-	Version          int    `json:"version"`
-	KeyPattern       string `json:"keyPattern"`
-	StringPattern    string `json:"stringPattern"`
-	UUIDPattern      string `json:"uuidPattern"`
-	RunPattern       string `json:"runPattern"`
-	OrgIDHashPattern string `json:"orgIdHashPattern"`
+	Version       int    `json:"version"`
+	KeyPattern    string `json:"keyPattern"`
+	StringPattern string `json:"stringPattern"`
+	// RefusedSubstrings are text a string value may not contain, whatever the pattern says.
+	RefusedSubstrings []string `json:"refusedSubstrings"`
+	UUIDPattern       string   `json:"uuidPattern"`
+	RunPattern        string   `json:"runPattern"`
+	OrgIDHashPattern  string   `json:"orgIdHashPattern"`
 }
 
 var (
@@ -33,6 +36,7 @@ var (
 	ruleUUID             *regexp.Regexp
 	ruleRun              *regexp.Regexp
 	ruleOrgIDHash        *regexp.Regexp
+	ruleRefusedText      []string
 )
 
 func init() {
@@ -49,6 +53,16 @@ func init() {
 	ruleRun = compile(set.RunPattern)
 	ruleOrgIDHash = compile(set.OrgIDHashPattern)
 	ruleOrgIDHashPattern = set.OrgIDHashPattern
+	ruleRefusedText = set.RefusedSubstrings
+}
+
+func containsRefusedText(value string) bool {
+	for _, text := range ruleRefusedText {
+		if strings.Contains(value, text) {
+			return true
+		}
+	}
+	return false
 }
 
 // The reasons a payload is refused. A reason is a fixed label and never holds
@@ -80,7 +94,7 @@ func refusePayload(payload *pyjson.Object) *payloadRefusal {
 		value, _ := payload.Get(key)
 		switch typed := value.(type) {
 		case string:
-			if !ruleString.MatchString(typed) || ruleUUID.MatchString(typed) || ruleRun.MatchString(typed) {
+			if !ruleString.MatchString(typed) || containsRefusedText(typed) || ruleUUID.MatchString(typed) || ruleRun.MatchString(typed) {
 				return &payloadRefusal{reason: refusedString, key: key}
 			}
 		case pyjson.Float:

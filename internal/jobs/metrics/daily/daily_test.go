@@ -1220,7 +1220,11 @@ func TestFinalizerLeaseLossCancelsTheNativeFamilyAndCannotComplete(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	family := &blockingFinalizeFamily{waitForCancellation: true}
+	family := &blockingFinalizeFamily{waitForCancellation: true, started: make(chan struct{})}
+	// The lease is lost only once the family runs. Otherwise the renewal tick
+	// can cancel the work first and computeNativeFinalizeFamilies returns at
+	// its between-family check without ever calling the family.
+	store.finalizeRenewalGate = family.started
 	if err := handler.SetNativeFinalizeFamilies(map[string]NativeFinalizeFamilyExecutor{
 		"ic_finalize": family,
 	}); err != nil {
@@ -1238,6 +1242,31 @@ func TestFinalizerLeaseLossCancelsTheNativeFamilyAndCannotComplete(t *testing.T)
 	}
 }
 
+func TestCancelBeforeTheNativeFamilyStartsSkipsTheFamily(t *testing.T) {
+	defer restoreRecognisedFinalizeFamilies(pythonRecognisedFinalizeFamilies)
+	pythonRecognisedFinalizeFamilies = []string{"ic_finalize"}
+
+	handler, err := NewFinalizeHandler(&fakeStore{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	family := &blockingFinalizeFamily{waitForCancellation: true}
+	if err := handler.SetNativeFinalizeFamilies(map[string]NativeFinalizeFamilyExecutor{
+		"ic_finalize": family,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err = handler.computeNativeFinalizeFamilies(ctx, Run{ID: testRunID, OrganizationID: testOrgID})
+	if !errors.Is(err, ErrNativeFinalizeFamilyFailed) || !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancel before the family = %v, want ErrNativeFinalizeFamilyFailed wrapping context.Canceled", err)
+	}
+	if family.canceled() {
+		t.Fatal("the family ran after the work was canceled")
+	}
+}
+
 // blockingFinalizeFamily plays the same role for FinalizeHandler tests that
 // blockingCompatibility plays for PartitionHandler tests (CHAOS-3092 PR-A':
 // there is no compatibility bridge left on the finalize side to block
@@ -1249,9 +1278,14 @@ type blockingFinalizeFamily struct {
 	delay               time.Duration
 	waitForCancellation bool
 	wasCanceled         bool
+	started             chan struct{}
+	startOnce           sync.Once
 }
 
 func (family *blockingFinalizeFamily) ComputeFinalizeFamily(ctx context.Context, _ Run) (int, error) {
+	if family.started != nil {
+		family.startOnce.Do(func() { close(family.started) })
+	}
 	if family.waitForCancellation {
 		<-ctx.Done()
 		family.mu.Lock()
@@ -1505,10 +1539,13 @@ type fakeStore struct {
 	finalizeClaim              *FinalizeClaim
 	finalizeRenewals           int
 	finalizeRenewalFailureAt   int
-	finalizeCompletions        int
-	finalizeReleases           int
-	completionErr              error
-	materialized               int
+	// finalizeRenewalGate, when set, holds the failing renewal until it is
+	// closed, so a test controls what has run before the lease is lost.
+	finalizeRenewalGate <-chan struct{}
+	finalizeCompletions int
+	finalizeReleases    int
+	completionErr       error
+	materialized        int
 	// materializeErr fails the store of the discovered partitions.
 	materializeErr                error
 	dispatchListCalls             int
@@ -1600,6 +1637,13 @@ func (store *fakeStore) ClaimFinalize(context.Context, string) (*FinalizeClaim, 
 func (store *fakeStore) RenewFinalize(context.Context, FinalizeClaim) error {
 	store.finalizeRenewals++
 	if store.finalizeRenewalFailureAt == store.finalizeRenewals {
+		if store.finalizeRenewalGate != nil {
+			select {
+			case <-store.finalizeRenewalGate:
+			case <-time.After(10 * time.Second):
+				return errors.New("test gate: the finalize family never started")
+			}
+		}
 		return ErrLeaseLost
 	}
 	return nil

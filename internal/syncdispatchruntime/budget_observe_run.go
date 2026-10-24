@@ -32,17 +32,20 @@ import (
 // dashboards may already parse dispatch_sync_run.budget_guard_dry_run.
 func observeRun(
 	ctx context.Context, tx pgx.Tx, bridge budgetEstimator, logger *synclog.Logger,
-	orgID, syncRunID string, cappedUnitIDs map[string]bool, now time.Time,
-) ([]map[string]any, error) {
+	orgID, syncRunID string, cappedUnitIDs map[string]bool, now time.Time, emit func(map[string]any),
+) error {
+	return observeRunPages(ctx, tx, bridge, logger, orgID, syncRunID, func(visit func([]budgetUnit) error) error {
+		return forEachDispatchCandidatePage(ctx, tx, syncRunID, cappedUnitIDs, now, visit)
+	}, now, emit)
+}
 
-	units, err := dispatchCandidateUnits(ctx, tx, syncRunID, cappedUnitIDs, now)
-	if err != nil {
-		return nil, err
-	}
-	if len(units) == 0 {
-		return nil, nil
-	}
-
+// observeRunPages is observeRun over the candidates a page at a time: each page is estimated, observed and logged
+// before the next is read, and only the per-bucket running total carries over, so nothing grows with the number of
+// candidates. emit, when set, sees every observation as it is made.
+func observeRunPages(
+	ctx context.Context, tx pgx.Tx, bridge budgetEstimator, logger *synclog.Logger,
+	orgID, syncRunID string, forEachPage func(visit func([]budgetUnit) error) error, now time.Time, emit func(map[string]any),
+) error {
 	// The DRY-RUN limit source, resolved exactly as Python does: a
 	// SEPARATE env var from enforceRun's real limits (SYNC_BUDGET_
 	// DRY_RUN_BUCKET_LIMITS / SYNC_BUDGET_DRY_RUN_DEFAULT_LIMIT /
@@ -54,52 +57,55 @@ func observeRun(
 	defaultLimit := budgetEnvInt("SYNC_BUDGET_DRY_RUN_DEFAULT_LIMIT", 1_000_000)
 	deferralSeconds := budgetEnvInt("SYNC_BUDGET_DRY_RUN_DEFERRAL_SECONDS", 60)
 	consumedByBucket := map[string]int{}
-	var observations []map[string]any
 
-	unitsByID := make(map[string]budgetUnit, len(units))
-	unitIDs := make([]string, len(units))
-	for i, unit := range units {
-		unitIDs[i] = unit.id
-		unitsByID[unit.id] = unit
-	}
-	// Chunked at dispatchBudgetEstimateMaxUnitIDs (the old bridge's request-size ceiling, kept as the batch size) (codex
-	// round 2, CHAOS-4175). Deliberately stays fail-OPEN per chunk even for
-	// a contract rejection -- unlike enforceRun, this whole function is
-	// read-only shadow telemetry with zero effect on real admission (see
-	// this function's own doc comment); aborting the REAL dispatch pass
-	// because dry-run numbers couldn't be fetched would be a worse outcome
-	// than just missing them for this pass.
-	estimatesByUnit := map[string][]budgetEstimate{}
-	for _, chunk := range chunkUnitIDs(unitIDs) {
-		chunkEstimates, bridgeErr := estimateChunk(ctx, tx, bridge, orgID, syncRunID, chunk)
-		if bridgeErr != nil {
-			// Same choice as before chunking existed: Python's per-unit
-			// try/except has no precedent for a batched failure, so every
-			// unit in this chunk degrades to "no estimate" and is logged
-			// individually under Python's own per-unit failure message name.
-			for _, unitID := range chunk {
-				logger.Warn(ctx, synclog.MsgDispatchSyncRunBudgetGuardDryRunFailed, append(unitLogAttrs(syncRunID, unitsByID[unitID]), synclog.Failure(bridgeErr))...)
+	return forEachPage(func(units []budgetUnit) error {
+		unitsByID := make(map[string]budgetUnit, len(units))
+		unitIDs := make([]string, len(units))
+		for i, unit := range units {
+			unitIDs[i] = unit.id
+			unitsByID[unit.id] = unit
+		}
+		// Chunked at dispatchBudgetEstimateMaxUnitIDs (the old bridge's request-size ceiling, kept as the batch size) (codex
+		// round 2, CHAOS-4175). Deliberately stays fail-OPEN per chunk even for
+		// a contract rejection -- unlike enforceRun, this whole function is
+		// read-only shadow telemetry with zero effect on real admission (see
+		// this function's own doc comment); aborting the REAL dispatch pass
+		// because dry-run numbers couldn't be fetched would be a worse outcome
+		// than just missing them for this pass.
+		estimatesByUnit := map[string][]budgetEstimate{}
+		for _, chunk := range chunkUnitIDs(unitIDs) {
+			chunkEstimates, bridgeErr := estimateChunk(ctx, tx, bridge, orgID, syncRunID, chunk)
+			if bridgeErr != nil {
+				// Same choice as before chunking existed: Python's per-unit
+				// try/except has no precedent for a batched failure, so every
+				// unit in this chunk degrades to "no estimate" and is logged
+				// individually under Python's own per-unit failure message name.
+				for _, unitID := range chunk {
+					logger.Warn(ctx, synclog.MsgDispatchSyncRunBudgetGuardDryRunFailed, append(unitLogAttrs(syncRunID, unitsByID[unitID]), synclog.Failure(bridgeErr))...)
+				}
+				continue
 			}
-			continue
+			for _, unitID := range chunk {
+				estimatesByUnit[unitID] = chunkEstimates[unitID]
+			}
 		}
-		for _, unitID := range chunk {
-			estimatesByUnit[unitID] = chunkEstimates[unitID]
-		}
-	}
 
-	for _, unit := range units {
-		logFields := unitLogFields(syncRunID, unit)
-		for _, estimate := range estimatesByUnit[unit.id] {
-			// recordConsumption=true (Python's own default for this call
-			// site): unlike enforceRun's dry pre-check against the REAL
-			// consumedByBucket, this pass's running total is entirely its
-			// own simulation -- charge it as it goes, since there is no
-			// second, real admission decision downstream to keep this
-			// number pristine for.
-			observation := observeEstimate(estimate, logFields, consumedByBucket, limits, defaultLimit, now, deferralSeconds, true)
-			observations = append(observations, observation)
-			logger.Info(ctx, synclog.MsgDispatchSyncRunBudgetGuardDryRun, observationAttrs(readObservation(observation))...)
+		for _, unit := range units {
+			logFields := unitLogFields(syncRunID, unit)
+			for _, estimate := range estimatesByUnit[unit.id] {
+				// recordConsumption=true (Python's own default for this call
+				// site): unlike enforceRun's dry pre-check against the REAL
+				// consumedByBucket, this pass's running total is entirely its
+				// own simulation -- charge it as it goes, since there is no
+				// second, real admission decision downstream to keep this
+				// number pristine for.
+				observation := observeEstimate(estimate, logFields, consumedByBucket, limits, defaultLimit, now, deferralSeconds, true)
+				if emit != nil {
+					emit(observation)
+				}
+				logger.Info(ctx, synclog.MsgDispatchSyncRunBudgetGuardDryRun, observationAttrs(readObservation(observation))...)
+			}
 		}
-	}
-	return observations, nil
+		return nil
+	})
 }

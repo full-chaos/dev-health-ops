@@ -229,13 +229,18 @@ func invalidClaimReason(provider, dataset string, claimErr error) string {
 // capacity computation sees it, so it can never be capped in the first place
 // and always terminalizes on the very pass it becomes dispatch-eligible,
 // independent of concurrency/budget pressure.
-func invalidClaimsAmongDispatchCandidates(ctx context.Context, tx pgx.Tx, syncRunID string, now time.Time) ([]invalidClaimUnit, error) {
-	candidates, err := dispatchCandidateUnits(ctx, tx, syncRunID, nil, now)
-	if err != nil {
-		return nil, err
-	}
+func invalidClaimsAmongDispatchCandidates(
+	ctx context.Context, tx pgx.Tx, syncRunID string, now time.Time, visit func([]invalidClaimUnit) error,
+) error {
+	return forEachDispatchCandidatePage(ctx, tx, syncRunID, nil, now, func(page []budgetUnit) error {
+		return visitInvalidClaims(page, visit)
+	})
+}
+
+// visitInvalidClaims hands visit the units of one page whose claim fails ValidateClaim, when there is any.
+func visitInvalidClaims(page []budgetUnit, visit func([]invalidClaimUnit) error) error {
 	var invalid []invalidClaimUnit
-	for _, unit := range candidates {
+	for _, unit := range page {
 		if err := providerfamilycontract.ValidateClaim(unit.provider, unit.datasetKey, unit.processorFlags, true); err != nil {
 			invalid = append(invalid, invalidClaimUnit{
 				unit:   unit,
@@ -243,7 +248,27 @@ func invalidClaimsAmongDispatchCandidates(ctx context.Context, tx pgx.Tx, syncRu
 			})
 		}
 	}
-	return invalid, nil
+	if len(invalid) == 0 {
+		return nil
+	}
+	return visit(invalid)
+}
+
+// terminalizeInvalidClaimsAmongDispatchCandidates fails every invalid dispatch candidate, a page at a time: each page
+// is validated and its invalid units terminalized before the next page is read (a terminalized unit leaves the
+// candidate set, and the next page starts after the last id read, so none is skipped or read twice). It returns how
+// many invalid units it found and how many it terminalized (a unit that moved on concurrently is found, not
+// terminalized). terminalizeAt is read once per page.
+func terminalizeInvalidClaimsAmongDispatchCandidates(
+	ctx context.Context, tx pgx.Tx, syncRunID string, readAt time.Time, terminalizeAt func() time.Time,
+) (found, terminalized int, err error) {
+	err = invalidClaimsAmongDispatchCandidates(ctx, tx, syncRunID, readAt, func(invalid []invalidClaimUnit) error {
+		found += len(invalid)
+		done, terminalizeErr := terminalizeInvalidClaimUnits(ctx, tx, invalid, terminalizeAt())
+		terminalized += done
+		return terminalizeErr
+	})
+	return found, terminalized, err
 }
 
 // terminalizeInvalidClaimUnits fails units whose persisted

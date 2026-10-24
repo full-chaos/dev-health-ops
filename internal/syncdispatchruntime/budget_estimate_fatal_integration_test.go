@@ -153,7 +153,7 @@ FROM generate_series(1, $2) AS n`, activeRunID, fatalChunkCandidates); err != ni
 					}
 					defer func() { _ = tx.Rollback(ctx) }()
 					estimator := &scriptedEstimator{failAt: failAt, err: class.err}
-					observations, err := observeRun(ctx, tx, estimator, nil, "org-1", budgetCandidatesRunID, nil, pgNow())
+					observations, err := observeRunCollect(ctx, tx, estimator, nil, "org-1", budgetCandidatesRunID, nil, pgNow())
 					if err != nil {
 						t.Fatalf("error=%v, want nil: observeRun degrades a failed chunk for every class", err)
 					}

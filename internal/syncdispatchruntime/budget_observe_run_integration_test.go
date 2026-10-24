@@ -42,7 +42,7 @@ func TestObserveRunReturnsEmptyWithoutCallingTheBridgeWhenNoCandidates(t *testin
 			t.Fatal(err)
 		}
 		defer func() { _ = tx.Rollback(ctx) }()
-		observations, err := observeRun(ctx, tx, estimator, nil, "org-1", budgetCandidatesRunID, nil, pgNow())
+		observations, err := observeRunCollect(ctx, tx, estimator, nil, "org-1", budgetCandidatesRunID, nil, pgNow())
 		if err != nil {
 			t.Fatalf("observeRun: %v", err)
 		}
@@ -78,7 +78,7 @@ func TestObserveRunEmitsTheParityPinnedLogLine(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer func() { _ = tx.Rollback(ctx) }()
-		observations, err := observeRun(ctx, tx, estimator, synclog.New(logger), "org-1", budgetCandidatesRunID, nil, now)
+		observations, err := observeRunCollect(ctx, tx, estimator, synclog.New(logger), "org-1", budgetCandidatesRunID, nil, now)
 		if err != nil {
 			t.Fatalf("observeRun: %v", err)
 		}
@@ -126,7 +126,7 @@ func TestObserveRunUsesTheDryRunLimitSourceNotTheRealOne(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer func() { _ = tx.Rollback(ctx) }()
-		observations, err := observeRun(ctx, tx, estimator, nil, "org-1", budgetCandidatesRunID, nil, now)
+		observations, err := observeRunCollect(ctx, tx, estimator, nil, "org-1", budgetCandidatesRunID, nil, now)
 		if err != nil {
 			t.Fatalf("observeRun: %v", err)
 		}
@@ -166,7 +166,7 @@ func TestObserveRunNeverWritesToTheDatabase(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer func() { _ = tx.Rollback(ctx) }()
-		observations, err := observeRun(ctx, tx, estimator, nil, "org-1", budgetCandidatesRunID, nil, now)
+		observations, err := observeRunCollect(ctx, tx, estimator, nil, "org-1", budgetCandidatesRunID, nil, now)
 		if err != nil {
 			t.Fatalf("observeRun: %v", err)
 		}

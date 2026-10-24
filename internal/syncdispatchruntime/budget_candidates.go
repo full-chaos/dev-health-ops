@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime/synclog"
-	"sort"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -43,46 +42,94 @@ func scanBudgetUnit(rows pgx.Rows, syncRunID string) (budgetUnit, error) {
 	return unit, nil
 }
 
-// dispatchCandidateUnits ports _dispatch_candidate_units verbatim: every
-// unit in this run eligible for THIS pass -- PLANNED, due RETRYING, or
-// stale DISPATCHING (a claim that never completed and aged out) -- minus
-// whatever the caller has already decided on this pass (ignoredUnitIDs;
-// Python filters this in Python for the same reason the surplus query
-// does, see surplusRetryCandidates).
-func dispatchCandidateUnits(
-	ctx context.Context, tx pgx.Tx, syncRunID string, ignoredUnitIDs map[string]bool, now time.Time,
-) ([]budgetUnit, error) {
-	rows, err := tx.Query(ctx, `
-SELECT`+budgetUnitSelectColumns+`
+// loadDispatchCandidatePage reads one keyset page of the dispatch candidates of a run: PLANNED, due RETRYING, or
+// stale DISPATCHING (a claim that never completed and aged out), in id order, at most limit rows with id after afterID.
+func loadDispatchCandidatePage(
+	ctx context.Context, tx pgx.Tx, syncRunID string, now time.Time,
+) func(afterID string, limit int) ([]budgetUnit, error) {
+	return func(afterID string, limit int) ([]budgetUnit, error) {
+		const eligible = `
+SELECT` + budgetUnitSelectColumns + `
 FROM public.sync_run_units
 WHERE sync_run_id = $1::uuid
   AND (
         status = $2
      OR (status = $3 AND available_at IS NOT NULL AND available_at <= $4)
      OR (status = $5 AND updated_at <= $6)
-      )
-ORDER BY id`,
-		syncRunID, syncRunUnitStatusPlanned, syncRunUnitStatusRetrying, now, syncRunUnitStatusDispatching, staleDispatchCutoff(now))
-	if err != nil {
-		return nil, fmt.Errorf("load dispatch candidate units: %w", err)
-	}
-	defer rows.Close()
-
-	var units []budgetUnit
-	for rows.Next() {
-		unit, err := scanBudgetUnit(rows, syncRunID)
+      )`
+		args := []any{syncRunID, syncRunUnitStatusPlanned, syncRunUnitStatusRetrying, now, syncRunUnitStatusDispatching, staleDispatchCutoff(now)}
+		query := eligible + `
+ORDER BY id
+LIMIT $7`
+		if afterID == "" {
+			args = append(args, limit)
+		} else {
+			query = eligible + `
+  AND id > $8::uuid
+ORDER BY id
+LIMIT $7`
+			args = append(args, limit, afterID)
+		}
+		rows, err := tx.Query(ctx, query, args...)
 		if err != nil {
-			return nil, fmt.Errorf("scan dispatch candidate unit: %w", err)
+			return nil, fmt.Errorf("load dispatch candidate units: %w", err)
 		}
-		if ignoredUnitIDs[unit.id] {
-			continue
+		defer rows.Close()
+		var units []budgetUnit
+		for rows.Next() {
+			unit, err := scanBudgetUnit(rows, syncRunID)
+			if err != nil {
+				return nil, fmt.Errorf("scan dispatch candidate unit: %w", err)
+			}
+			units = append(units, unit)
 		}
-		units = append(units, unit)
+		if err := rows.Err(); err != nil {
+			return nil, fmt.Errorf("load dispatch candidate units: %w", err)
+		}
+		return units, nil
 	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("load dispatch candidate units: %w", err)
-	}
-	return units, nil
+}
+
+// pageDispatchCandidates walks the candidates a page at a time. ignoredUnitIDs is applied to a page after it is
+// read, so a page of ignored ids does not end the walk.
+func pageDispatchCandidates(
+	load func(afterID string, limit int) ([]budgetUnit, error), ignoredUnitIDs map[string]bool, visit func([]budgetUnit) error,
+) error {
+	return forEachUnitPage(unitPageSize, load, func(unit budgetUnit) string { return unit.id }, func(page []budgetUnit) error {
+		kept := make([]budgetUnit, 0, len(page))
+		for _, unit := range page {
+			if !ignoredUnitIDs[unit.id] {
+				kept = append(kept, unit)
+			}
+		}
+		if len(kept) == 0 {
+			return nil
+		}
+		return visit(kept)
+	})
+}
+
+// forEachDispatchCandidatePage ports _dispatch_candidate_units verbatim, a keyset page at a time: every unit in this
+// run eligible for THIS pass -- PLANNED, due RETRYING, or stale DISPATCHING (a claim that never completed and aged out)
+// -- minus whatever the caller has already decided on this pass (ignoredUnitIDs; Python filters this in Python for the
+// same reason the surplus query does, see surplusRetryCandidates). Each statement returns at most unitPageSize rows.
+func forEachDispatchCandidatePage(
+	ctx context.Context, tx pgx.Tx, syncRunID string, ignoredUnitIDs map[string]bool, now time.Time, visit func([]budgetUnit) error,
+) error {
+	return pageDispatchCandidates(loadDispatchCandidatePage(ctx, tx, syncRunID, now), ignoredUnitIDs, visit)
+}
+
+// dispatchCandidateUnits is every dispatch candidate as one slice, for the caller that needs the whole set at once
+// (enforceRun's admission). It reads through forEachDispatchCandidatePage, so no statement returns more than a page.
+func dispatchCandidateUnits(
+	ctx context.Context, tx pgx.Tx, syncRunID string, ignoredUnitIDs map[string]bool, now time.Time,
+) ([]budgetUnit, error) {
+	var units []budgetUnit
+	err := forEachDispatchCandidatePage(ctx, tx, syncRunID, ignoredUnitIDs, now, func(page []budgetUnit) error {
+		units = append(units, page...)
+		return nil
+	})
+	return units, err
 }
 
 // budgetSurplusMaxCandidatesDefault ports BUDGET_SURPLUS_MAX_CANDIDATES_DEFAULT
@@ -115,13 +162,99 @@ func surplusRetryOrder(unit budgetUnit) (time.Time, time.Time, string) {
 	return firstDeferred, firstBlocked, unit.id
 }
 
+// surplusBefore is surplusRetryOrder as a total order: longest-deferred first, first_blocked_at as the tiebreak, unit
+// id as the final one.
+func surplusBefore(left, right budgetUnit) bool {
+	firstDeferredLeft, firstBlockedLeft, idLeft := surplusRetryOrder(left)
+	firstDeferredRight, firstBlockedRight, idRight := surplusRetryOrder(right)
+	if !firstDeferredLeft.Equal(firstDeferredRight) {
+		return firstDeferredLeft.Before(firstDeferredRight)
+	}
+	if !firstBlockedLeft.Equal(firstBlockedRight) {
+		return firstBlockedLeft.Before(firstBlockedRight)
+	}
+	return idLeft < idRight
+}
+
+// surplusPick keeps the first limit units of the surplus order of everything it is offered, and counts the offers.
+// It never holds more than limit units.
+type surplusPick struct {
+	limit   int
+	offered int
+	best    []budgetUnit
+}
+
+func (pick *surplusPick) offer(unit budgetUnit) {
+	pick.offered++
+	if pick.limit <= 0 {
+		return
+	}
+	at := len(pick.best)
+	for at > 0 && surplusBefore(unit, pick.best[at-1]) {
+		at--
+	}
+	if at >= pick.limit {
+		return
+	}
+	pick.best = append(pick.best, budgetUnit{})
+	copy(pick.best[at+1:], pick.best[at:])
+	pick.best[at] = unit
+	if len(pick.best) > pick.limit {
+		pick.best = pick.best[:pick.limit]
+	}
+}
+
+// loadSurplusPage reads one keyset page of the run's future-RETRYING units, in id order.
+func loadSurplusPage(
+	ctx context.Context, tx pgx.Tx, syncRunID string, now time.Time,
+) func(afterID string, limit int) ([]budgetUnit, error) {
+	return func(afterID string, limit int) ([]budgetUnit, error) {
+		const future = `
+SELECT` + budgetUnitSelectColumns + `
+FROM public.sync_run_units
+WHERE sync_run_id = $1::uuid AND status = $2 AND available_at IS NOT NULL AND available_at > $3`
+		args := []any{syncRunID, syncRunUnitStatusRetrying, now}
+		query := future + `
+ORDER BY id
+LIMIT $4`
+		if afterID == "" {
+			args = append(args, limit)
+		} else {
+			query = future + `
+  AND id > $5::uuid
+ORDER BY id
+LIMIT $4`
+			args = append(args, limit, afterID)
+		}
+		rows, err := tx.Query(ctx, query, args...)
+		if err != nil {
+			return nil, fmt.Errorf("load surplus retry candidates: %w", err)
+		}
+		defer rows.Close()
+		var units []budgetUnit
+		for rows.Next() {
+			unit, err := scanBudgetUnit(rows, syncRunID)
+			if err != nil {
+				return nil, fmt.Errorf("scan surplus retry candidate: %w", err)
+			}
+			units = append(units, unit)
+		}
+		if err := rows.Err(); err != nil {
+			return nil, fmt.Errorf("load surplus retry candidates: %w", err)
+		}
+		return units, nil
+	}
+}
+
 // surplusRetryCandidates ports _surplus_retry_candidates verbatim: the
 // units a surplus may be spent on. See that function's docstring for the
 // three deliberate exclusions (empty slotHeadroom -> no candidates at all;
 // FAILED units are unreachable by construction -- this query only ever
 // selects RETRYING; a unit whose own last cause is not budget_deferred is
 // skipped, since a cooldown-deferred unit is waiting on the provider, not
-// the budget).
+// the budget). The future-RETRYING units are read a keyset page at a time and
+// only the first budgetSurplusMaxCandidates of the surplus order are kept, so
+// neither a statement nor a slice grows with the number of deferred units.
 func surplusRetryCandidates(
 	ctx context.Context, tx pgx.Tx, logger *synclog.Logger, syncRunID string, ignoredUnitIDs map[string]bool,
 	slotHeadroom map[dispatchBucket]int, now time.Time,
@@ -129,53 +262,34 @@ func surplusRetryCandidates(
 	if len(slotHeadroom) == 0 {
 		return nil, nil
 	}
-	rows, err := tx.Query(ctx, `
-SELECT`+budgetUnitSelectColumns+`
-FROM public.sync_run_units
-WHERE sync_run_id = $1::uuid AND status = $2 AND available_at IS NOT NULL AND available_at > $3
-ORDER BY id`,
-		syncRunID, syncRunUnitStatusRetrying, now)
-	if err != nil {
-		return nil, fmt.Errorf("load surplus retry candidates: %w", err)
-	}
-	defer rows.Close()
+	return pickSurplusCandidates(ctx, logger, syncRunID, loadSurplusPage(ctx, tx, syncRunID, now), ignoredUnitIDs)
+}
 
-	var deferred []budgetUnit
-	for rows.Next() {
-		unit, err := scanBudgetUnit(rows, syncRunID)
-		if err != nil {
-			return nil, fmt.Errorf("scan surplus retry candidate: %w", err)
-		}
-		if ignoredUnitIDs[unit.id] {
-			continue
-		}
-		if unit.lastErrorCategory() != budgetDeferredCategory {
-			continue
-		}
-		deferred = append(deferred, unit)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("load surplus retry candidates: %w", err)
-	}
-
-	sort.SliceStable(deferred, func(i, j int) bool {
-		firstDeferredI, firstBlockedI, idI := surplusRetryOrder(deferred[i])
-		firstDeferredJ, firstBlockedJ, idJ := surplusRetryOrder(deferred[j])
-		if !firstDeferredI.Equal(firstDeferredJ) {
-			return firstDeferredI.Before(firstDeferredJ)
-		}
-		if !firstBlockedI.Equal(firstBlockedJ) {
-			return firstBlockedI.Before(firstBlockedJ)
-		}
-		return idI < idJ
-	})
-
+func pickSurplusCandidates(
+	ctx context.Context, logger *synclog.Logger, syncRunID string,
+	load func(afterID string, limit int) ([]budgetUnit, error), ignoredUnitIDs map[string]bool,
+) ([]budgetUnit, error) {
 	considered := budgetSurplusMaxCandidates()
-	if len(deferred) > considered {
+	pick := &surplusPick{limit: considered}
+	err := forEachUnitPage(unitPageSize, load, func(unit budgetUnit) string { return unit.id }, func(page []budgetUnit) error {
+		for _, unit := range page {
+			if ignoredUnitIDs[unit.id] {
+				continue
+			}
+			if unit.lastErrorCategory() != budgetDeferredCategory {
+				continue
+			}
+			pick.offer(unit)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if pick.offered > considered {
 		// A silent cap reads as "surplus considered everything and nothing
 		// else fitted", which is a different fact entirely.
-		logger.Info(ctx, synclog.MsgDispatchSyncRunBudgetSurplusCandidatesTruncated, synclog.Run(synclog.ParseID(syncRunID)), synclog.Count(synclog.KeyDeferredUnits, len(deferred)), synclog.Count(synclog.KeyConsideredUnits, considered))
-		deferred = deferred[:considered]
+		logger.Info(ctx, synclog.MsgDispatchSyncRunBudgetSurplusCandidatesTruncated, synclog.Run(synclog.ParseID(syncRunID)), synclog.Count(synclog.KeyDeferredUnits, pick.offered), synclog.Count(synclog.KeyConsideredUnits, considered))
 	}
-	return deferred, nil
+	return pick.best, nil
 }

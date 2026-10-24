@@ -308,15 +308,11 @@ func (service *NativeDispatchSyncRunService) Dispatch(ctx context.Context, args 
 	// invalidClaimsAmongDispatchCandidates for why this must run over the
 	// full candidate set, not just claimUnits' return value.
 	preCapacityNow := service.nowUTC()
-	invalidBeforeCap, err := invalidClaimsAmongDispatchCandidates(ctx, tx, run.id, preCapacityNow)
+	foundBeforeCap, terminalizedBeforeCap, err := terminalizeInvalidClaimsAmongDispatchCandidates(ctx, tx, run.id, preCapacityNow, service.nowUTC)
 	if err != nil {
 		return err
 	}
-	if len(invalidBeforeCap) > 0 {
-		terminalizedBeforeCap, err := terminalizeInvalidClaimUnits(ctx, tx, invalidBeforeCap, service.nowUTC())
-		if err != nil {
-			return err
-		}
+	if foundBeforeCap > 0 {
 		service.logger.Warn(ctx, synclog.MsgDispatchSyncRunInvalidClaimUnitsTerminalized, synclog.Run(synclog.ParseID(run.id)), synclog.Count(synclog.KeyInvalidClaimUnits, terminalizedBeforeCap), synclog.Text(synclog.KeyErrorCategory, synclog.ParseLabel(invalidProviderFamilyClaimErrorCategory)), synclog.Text(synclog.KeyPhase, synclog.LabelPreCapacity))
 	}
 
@@ -352,7 +348,7 @@ func (service *NativeDispatchSyncRunService) Dispatch(ctx context.Context, args 
 	// receives an explicit now= from Dispatch() in Python, so each defaults
 	// to its own datetime.now(timezone.utc) at its own call time rather
 	// than sharing one value captured earlier in this function.
-	if _, err := observeRun(ctx, tx, service.bridge, service.logger, run.orgID, run.id, cappedIDs, service.nowUTC()); err != nil {
+	if err := observeRun(ctx, tx, service.bridge, service.logger, run.orgID, run.id, cappedIDs, service.nowUTC(), nil); err != nil {
 		return err
 	}
 

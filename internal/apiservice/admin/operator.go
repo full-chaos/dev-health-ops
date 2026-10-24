@@ -200,6 +200,17 @@ type UpdateUserInput struct {
 	MembershipOrg, Role, RemoveFromOrg *string
 }
 
+func (in UpdateUserInput) hasProfileChange() bool {
+	return in.NewEmail != nil || in.NewUsername != nil || in.FullName != nil ||
+		in.Active != nil || in.Verified != nil || in.Superuser != nil
+}
+
+// WritesUsers reports whether the update changes a public.users column: a
+// profile field or the password. A membership-only update writes none.
+func (in UpdateUserInput) WritesUsers() bool {
+	return in.hasProfileChange() || in.Password != nil
+}
+
 // UpdateUserResult is what an update did.
 type UpdateUserResult struct {
 	Email   string
@@ -373,11 +384,10 @@ func (o Operator) DeleteUser(ctx context.Context, in DeleteUserInput) (*DeleteUs
 // fields, the password and the memberships change in one transaction, and any
 // refusal rolls the whole update back.
 func (o Operator) UpdateUser(ctx context.Context, in UpdateUserInput) (*UpdateUserResult, error) {
-	hasProfileChange := in.NewEmail != nil || in.NewUsername != nil || in.FullName != nil ||
-		in.Active != nil || in.Verified != nil || in.Superuser != nil
-	if err := o.refuseWhileUsersOwned(hasProfileChange || in.Password != nil); err != nil {
+	if err := o.refuseWhileUsersOwned(in.WritesUsers()); err != nil {
 		return nil, err
 	}
+	hasProfileChange := in.hasProfileChange()
 	if !hasProfileChange && in.Password == nil && in.MembershipOrg == nil && in.RemoveFromOrg == nil {
 		return nil, refuse("No updates specified. Provide at least one field to update.")
 	}

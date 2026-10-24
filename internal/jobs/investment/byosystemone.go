@@ -11,7 +11,6 @@ import (
 	"strconv"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/categorize"
-	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/categorize/decision"
 )
 
 // byoProviderPrefix starts the provider part of the identity of a BYO run, so
@@ -110,8 +109,11 @@ func (sender byoSender) PostSystemOneDetailed(ctx context.Context, body []byte) 
 	if err != nil {
 		return categorize.SystemOneResult{}, err
 	}
+	// A returned model that differs from the configured one is passed on as it
+	// is: the completer refuses it (model_mismatch), so an answer from another
+	// model is never recorded as the org's model.
 	model := sender.provider.Model()
-	if completion.Model != "" && decision.ModelAccepted(model, completion.Model) {
+	if completion.Model != "" {
 		model = completion.Model
 	}
 	result := categorize.SystemOneResult{Model: model, StatusCode: http.StatusOK, Attempts: []categorize.SystemOneAttempt{{StatusCode: http.StatusOK}}}

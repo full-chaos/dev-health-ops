@@ -20,11 +20,13 @@ import (
 // stubOrgModel stands in for an org's own model. No test reaches a real BYO or
 // LLM-style model: this stub, or jev, is all a test sees.
 type stubOrgModel struct {
-	model   string
-	reply   func(request categorize.CompletionRequest) string
-	calls   []categorize.CompletionRequest
-	closed  int
-	failure error
+	model string
+	// returned is the model the stub reports back; empty is model.
+	returned string
+	reply    func(request categorize.CompletionRequest) string
+	calls    []categorize.CompletionRequest
+	closed   int
+	failure  error
 }
 
 func (stub *stubOrgModel) Complete(_ context.Context, request categorize.CompletionRequest) (categorize.CompletionResult, error) {
@@ -33,7 +35,13 @@ func (stub *stubOrgModel) Complete(_ context.Context, request categorize.Complet
 		return categorize.CompletionResult{}, stub.failure
 	}
 	in, out := 100, 20
-	return categorize.CompletionResult{Text: stub.reply(request), InputTokens: &in, OutputTokens: &out, Model: stub.model}, nil
+	return categorize.CompletionResult{Text: stub.reply(request), InputTokens: &in, OutputTokens: &out, Model: stub.returnedModel()}, nil
+}
+func (stub *stubOrgModel) returnedModel() string {
+	if stub.returned != "" {
+		return stub.returned
+	}
+	return stub.model
 }
 func (stub *stubOrgModel) Close() error  { stub.closed++; return nil }
 func (stub *stubOrgModel) Model() string { return stub.model }
@@ -403,5 +411,33 @@ func TestTheOrgModelSenderDoesNotChangeTheRequestItReads(t *testing.T) {
 	}
 	if result.StatusCode != http.StatusOK || !json.Valid(result.Body) || !result.Usage.Reported {
 		t.Fatalf("result = %+v", result)
+	}
+}
+
+// An answer from a model other than the configured one (a gateway that routes
+// to jev, say) is a failed request, never a row stamped with the org's model.
+func TestAnAnswerFromAnotherModelIsNeverRecordedAsTheOrgModel(t *testing.T) {
+	stub := &stubOrgModel{model: "org-model-1", returned: "jev-1.13.0", reply: answerAllQuestions}
+	served, err := newBYOSystemOne(stub, "openai", testLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := &Materializer{}
+	m.SetServed(served)
+	outcome, err := m.categorizeEntry(context.Background(), shadowTestConfig(), shadowEntry(0, "u1", shadowTestBundle(t, "u1", 6)))
+	if err == nil {
+		t.Fatalf("a mismatched model was accepted: %+v", outcome)
+	}
+	if outcome.LLMModel == "org-model-1" {
+		t.Fatalf("the outcome carries the org model: %+v", outcome)
+	}
+	dated := &stubOrgModel{model: "org-model-1", returned: "org-model-1-20261001", reply: answerAllQuestions}
+	servedDated, err := newBYOSystemOne(dated, "openai", testLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.SetServed(servedDated)
+	if _, err := m.categorizeEntry(context.Background(), shadowTestConfig(), shadowEntry(0, "u1", shadowTestBundle(t, "u1", 6))); err != nil {
+		t.Fatalf("a dated suffix of the configured model must stay accepted: %v", err)
 	}
 }

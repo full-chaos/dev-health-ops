@@ -58,6 +58,8 @@ type QualityStatsRow struct {
 	LowCount          int
 	VeryLowCount      int
 	UnknownCount      int
+	// UncategorizedCount is the units under the evidence gate; Total still counts them.
+	UncategorizedCount int
 }
 
 // FetchInvestmentQualityStats ports fetch_investment_quality_stats
@@ -81,22 +83,14 @@ func (r *Reader) FetchInvestmentQualityStats(ctx context.Context, filters Qualit
 
 	query := fmt.Sprintf(`
 SELECT
-    count() AS total,
-    countIf(evidence_quality IS NOT NULL) AS quality_known_count,
-    avgIf(evidence_quality, evidence_quality IS NOT NULL) AS quality_mean,
-    stddevPopIf(evidence_quality, evidence_quality IS NOT NULL) AS quality_stddev,
-    countIf(evidence_quality_band = 'high') AS high_count,
-    countIf(evidence_quality_band = 'moderate') AS moderate_count,
-    countIf(evidence_quality_band = 'low') AS low_count,
-    countIf(evidence_quality_band = 'very_low') AS very_low_count,
-    countIf(evidence_quality IS NULL OR evidence_quality_band = '') AS unknown_count
+%s
 FROM %s AS work_unit_investments
 WHERE %s
   AND work_unit_investments.org_id = {org_id:String}
 %s
 %s
 %s
-`, analytics.LatestWorkUnitInvestmentsSource(), analytics.InvestmentWindowClause(true), scopeSQL, categorySQL, settingsMaxExecutionTime())
+`, analytics.InvestmentQualityStatsColumns, analytics.LatestWorkUnitInvestmentsSource(), analytics.InvestmentWindowClause(true), scopeSQL, categorySQL, settingsMaxExecutionTime())
 
 	bindings := []dhclickhouse.Binding{
 		{Name: "start_date", Value: dateBindingValue(filters.StartTS)},
@@ -119,9 +113,9 @@ WHERE %s
 		return QualityStatsRow{}, false, nil
 	}
 
-	var total, known, high, moderate, low, veryLow, unknown uint64
+	var total, known, high, moderate, low, veryLow, unknown, uncategorized uint64
 	var mean, stddev float64
-	if err := rows.Scan(&total, &known, &mean, &stddev, &high, &moderate, &low, &veryLow, &unknown); err != nil {
+	if err := rows.Scan(&total, &known, &mean, &stddev, &high, &moderate, &low, &veryLow, &unknown, &uncategorized); err != nil {
 		return QualityStatsRow{}, false, fmt.Errorf("scan investment quality stats row: %w", err)
 	}
 	if err := rows.Err(); err != nil {
@@ -138,5 +132,7 @@ WHERE %s
 		LowCount:          int(low),
 		VeryLowCount:      int(veryLow),
 		UnknownCount:      int(unknown),
+
+		UncategorizedCount: int(uncategorized),
 	}, true, nil
 }

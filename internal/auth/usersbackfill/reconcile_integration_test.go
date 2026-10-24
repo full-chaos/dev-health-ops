@@ -185,6 +185,32 @@ func TestReconcileAfterBackfillIsZeroDiffAndSeesPlantedDrift(t *testing.T) {
 	}
 }
 
+// An external identity the public row does not name is a gated diff; unlinking
+// it restores zero-diff.
+func TestReconcileSeesAnAuthIdentityThePublicRowDoesNotName(t *testing.T) {
+	e := getReconEnv(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	id := e.seed(t, ctx, uniq("extraid"), true, true)
+	e.backfill(t, ctx)
+	if rep := e.reconcile(t, ctx); rep.GatedTotal() != 0 {
+		t.Fatalf("before linking: %+v", rep.Diffs)
+	}
+	key := identity.ExternalKey{Issuer: "https://github.com", Provider: identity.ProviderGitHub, Subject: "extra-" + uuid.NewString()}
+	if _, err := e.store.LinkIdentity(ctx, key, id, identity.Actor{}); err != nil {
+		t.Fatal(err)
+	}
+	if rep := e.reconcile(t, ctx); rep.Diffs[DiffExtraIdentity] != 1 || rep.GatedTotal() != 1 {
+		t.Fatalf("with an extra identity: %+v", rep.Diffs)
+	}
+	if err := e.store.UnlinkIdentity(ctx, key, id, identity.Actor{}); err != nil {
+		t.Fatal(err)
+	}
+	if rep := e.reconcile(t, ctx); rep.GatedTotal() != 0 {
+		t.Fatalf("after unlinking: %+v", rep.Diffs)
+	}
+}
+
 // The snapshot transaction refuses every write with SQLSTATE 25006.
 func TestSnapshotRefusesWritesWithReadOnlyTransaction(t *testing.T) {
 	e := getReconEnv(t)

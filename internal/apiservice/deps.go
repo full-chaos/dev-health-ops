@@ -130,8 +130,8 @@ type Deps struct {
 	Probes ProbeConfig
 	// Telemetry is the telemetry areas' configuration.
 	Telemetry TelemetryConfig
-	// Producer publishes to the job outbox (webhookintake's GitHub/GitLab/
-	// Jira durable deliveries -- jobcontract.KindWebhookDelivery). Nil under
+	// Producer publishes to the job outbox (webhookintake's GitHub and
+	// PagerDuty durable deliveries -- jobcontract.KindWebhookDelivery). Nil under
 	// the same "not configured yet" rule as Pool.
 	Producer *joboutbox.Producer
 	// Decryptor decrypts pagerduty_webhook_bindings.signing_secret_encrypted

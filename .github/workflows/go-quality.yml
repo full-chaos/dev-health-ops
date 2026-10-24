@@ -32,8 +32,10 @@
 # main, merge group, schedule or manual run, and any failure of the plan: every package
 # runs. A non-Go path in a declared class plans the packages that read it (AFFECTED) or
 # NONE when no package reads it; NONE skips the test and race legs, AFFECTED runs only its
-# packages. The static leg and the fan-in always run and report. The plan verdict is exact,
-# so no docs-only rule overrides it: some docs files are Go test inputs. The race legs are
+# packages. The static leg and the fan-in always run and report. On a pull request the plan
+# also gets --md-bounded: a change of Markdown files only (no testdata, no go:embed target)
+# plans their bounded readers; a merge group then runs the full plan before main. The plan
+# verdict is exact, so no docs-only rule overrides it: some docs files are Go test inputs. The race legs are
 # heavy: on a pull request without the ci:full label they report success without running
 # (they run in the merge queue and on the main push).
 name: Go quality
@@ -112,11 +114,16 @@ jobs:
             full "go list -test failed"
           else
             sed -e "s#^${modpath}/##" -e "s#^${modpath}\$#.#" "${RUNNER_TEMP}/packages.txt" > "${RUNNER_TEMP}/keys.txt"
+            # A pull request of Markdown files only plans their bounded readers; every other event keeps the full plan.
+            md=()
+            if [ "${EVENT_NAME}" = pull_request ]; then
+              md=(--md-bounded)
+            fi
             if ! mb="$(git merge-base "${BASE_SHA}" HEAD)" \
               || ! git worktree add --detach "${RUNNER_TEMP}/planbase" "${mb}" \
               || ! go -C "${RUNNER_TEMP}/planbase" build -trimpath -mod=readonly -o "${RUNNER_TEMP}/cigate-base" ./cmd/cigate; then
               full "could not build the planner at the merge base"
-            elif ! "${RUNNER_TEMP}/cigate-base" plan-verdict --event "${EVENT_NAME}" --go-files-full \
+            elif ! "${RUNNER_TEMP}/cigate-base" plan-verdict --event "${EVENT_NAME}" --go-files-full "${md[@]}" \
               --changed "${RUNNER_TEMP}/changed.txt" --golist "${RUNNER_TEMP}/golist.json" --keys "${RUNNER_TEMP}/keys.txt" \
               --root "${GITHUB_WORKSPACE}" --base "${BASE_SHA}" > "${out}"; then
               full "plan program failed"

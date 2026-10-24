@@ -101,6 +101,10 @@ type Deps struct {
 	// LegacyIngestMetrics counts the legacy ingest routes' credential
 	// refusals (registered on the operator metrics endpoint by configure).
 	LegacyIngestMetrics *legacyingest.Metrics
+	// LegacyIngestEnabled mounts the legacy ingest routes (default off);
+	// LegacyIngestOptions hardens them. buildDeps sets both.
+	LegacyIngestEnabled bool
+	LegacyIngestOptions legacyingest.Options
 	// Pool is nil when API_DATABASE_URI is not configured (the CHAOS-6269
 	// bootstrap has not run yet in this environment). A route needing it
 	// answers CodeInternal rather than dereferencing a nil pool; the
@@ -323,6 +327,12 @@ func buildDeps(
 	// development, else every limit is per replica. A process with no
 	// database configured (the pre-bootstrap shape) serves none of them and
 	// still starts.
+	legacyEnabled, legacyOptions, legacyReason, legacyErr := checkLegacyIngest(envsecrets.ProcessLookup)
+	if legacyErr != nil {
+		return Deps{}, nil, dependencyFailure(ctx, logger, "legacy_ingest", legacyReason, legacyErr)
+	}
+	deps.LegacyIngestEnabled, deps.LegacyIngestOptions = legacyEnabled, legacyOptions
+
 	if cfg.APIDatabaseURI.Configured() && !cfg.ValkeyURI.Configured() && !developmentEnvironment(envsecrets.ProcessLookup) {
 		return Deps{}, nil, dependencyFailure(ctx, logger, "api_rate_limiter", "api_rate_limiter_shared_store_required", errSharedLimiterRequired)
 	}

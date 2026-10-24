@@ -103,7 +103,7 @@ func TestLegacyIngestVenueOracle(t *testing.T) {
 	t.Cleanup(client.Close)
 	logger := quietLogger()
 	server, err := NewServer(config.Config{APIAddress: "127.0.0.1:0"}, logger,
-		Routes(Deps{Valkey: client}, logger))
+		Routes(Deps{Valkey: client, LegacyIngestEnabled: true}, logger))
 	if err != nil {
 		t.Fatalf("new server: %v", err)
 	}

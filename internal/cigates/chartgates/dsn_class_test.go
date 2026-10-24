@@ -194,7 +194,7 @@ func TestDSNClassGuardsPlantedDefects(t *testing.T) {
 	runPlanted(t, []planted{
 		{"one-group-env-carries-the-coordinator-dsn", chartAndManifest,
 			mut(chartFile(values), "    - name: heavy\n      subcommand: worker\n", "    - name: heavy\n      subcommand: worker\n      extraEnv: [{name: COORDINATOR_DATABASE_URI, value: \"postgresql://x@h/db\"}]\n"),
-			workerGroupsRenderOnlyTheirClassDSNSecrets, "heavy (class river) carries COORDINATOR_DATABASE_URI"},
+			workerGroupsRenderOnlyTheirClassDSNSecrets, "extraEnv names COORDINATOR_DATABASE_URI, a database DSN name"},
 		{"stream-groups-render-the-queue-dsn-again", chartAndManifest,
 			mut(chartFile(workers), "            {{- if not $group.runtimeProfile }}\n            - name: WORKER_DATABASE_URI", "            {{- if true }}\n            - name: WORKER_DATABASE_URI"),
 			workerGroupsRenderOnlyTheirClassDSNSecrets, "outside its class"},

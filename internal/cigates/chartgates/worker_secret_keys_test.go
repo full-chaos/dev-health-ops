@@ -1,6 +1,7 @@
 package chartgates_test
 
 import (
+	"encoding/json"
 	"regexp"
 	"slices"
 	"sort"
@@ -261,7 +262,8 @@ func workerSecretKeysRefuseUnlistedNames(g *guard) {
 		override := set("goWorkers.secretKeys={APP_BASE_URL," + name + "}")
 		out := g.refusal("template refusal of "+name, "worker-secret-keys-unlisted-tpl", join(poolGoValues, override, []string{"--skip-schema-validation"})...)
 		g.expect(strings.Contains(out, "goWorkers.secretKeys lists "+name+", which is not a worker secret key"), "the template refusal of %s says %q", name, firstLines(out, 2))
-		g.refusal("schema refusal of "+name, "worker-secret-keys-unlisted-schema", join(poolGoValues, override)...)
+		sch := g.refusal("schema refusal of "+name, "worker-secret-keys-unlisted-schema", join(poolGoValues, override)...)
+		g.expect(strings.Contains(sch, "values don't meet the specifications of the schema"), "the refusal of %s is not the schema error: %q", name, firstLines(sch, 2))
 	}
 }
 
@@ -272,13 +274,47 @@ func workerExtraEnvFromRefusesTheSharedSecret(g *guard) {
 	g.mustRender("an unrelated operator Secret in extraEnvFrom", "worker-extra-other", join(poolGoValues, set("goWorkers.extraEnvFrom[0].secretRef.name=operator-env"))...)
 }
 
+// groupWithExtraEnv is the chart's worker groups with one extraEnv entry on the first group.
+func groupWithExtraEnv(g *guard, entry map[string]any) []string {
+	groups := list(valuesGoWorkers(g)["groups"])
+	if len(groups) == 0 {
+		g.failf("the chart has no worker groups, so the check measured nothing")
+		return nil
+	}
+	first := mp(groups[0])
+	first["extraEnv"] = []any{map[string]any{"name": "TRIAL_SWITCH", "value": "1"}, entry}
+	groups[0] = map[string]any(first)
+	b, err := json.Marshal(groups)
+	if err != nil {
+		g.failf("cannot encode the groups: %v", err)
+		return nil
+	}
+	return setJSON("goWorkers.groups=" + string(b))
+}
+
+// A group's extraEnv cannot bring a database DSN back: not by name, and not as a key of the shared Secret the allow-list excludes.
+func workerGroupExtraEnvRefusesDSNs(g *guard) {
+	shared := "worker-extra-env-dev-health-secrets"
+	byName := groupWithExtraEnv(g, map[string]any{"name": "DATABASE_URI", "value": "postgresql://x@h/db"})
+	out := g.refusal("extraEnv names a DSN", "worker-extra-env", join(poolGoValues, byName)...)
+	g.expect(strings.Contains(out, "extraEnv names DATABASE_URI, a database DSN name"), "the extraEnv DSN-name refusal says %q", firstLines(out, 2))
+	ref := groupWithExtraEnv(g, map[string]any{"name": "ALIAS", "valueFrom": map[string]any{"secretKeyRef": map[string]any{"name": shared, "key": "DATABASE_URI"}}})
+	out = g.refusal("extraEnv reads a DSN key of the shared Secret", "worker-extra-env", join(poolGoValues, ref)...)
+	g.expect(strings.Contains(out, "extraEnv reads key DATABASE_URI of the shared Secret"), "the extraEnv shared-Secret refusal says %q", firstLines(out, 2))
+	okRef := groupWithExtraEnv(g, map[string]any{"name": "APP_BASE_URL", "valueFrom": map[string]any{"secretKeyRef": map[string]any{"name": shared, "key": "APP_BASE_URL"}}})
+	g.mustRender("extraEnv reads an allowed key of the shared Secret", "worker-extra-env", join(poolGoValues, okRef)...)
+	other := groupWithExtraEnv(g, map[string]any{"name": "ALIAS", "valueFrom": map[string]any{"secretKeyRef": map[string]any{"name": "operator-env", "key": "DATABASE_URI"}}})
+	g.mustRender("extraEnv reads an operator Secret", "worker-extra-env", join(poolGoValues, other)...)
+}
+
 // goWorkers.secretKeys naming a database DSN refuses the render: by the template (schema validation skipped) and by the schema.
 func workerSecretKeysRefuseDSNNames(g *guard) {
 	for _, name := range unquoted(chartDSNNames(g)) {
 		override := set("goWorkers.secretKeys={APP_BASE_URL," + name + "}")
 		out := g.refusal("template refusal of "+name, "worker-secret-keys-dsn-tpl", join(poolGoValues, override, []string{"--skip-schema-validation"})...)
 		g.expect(strings.Contains(out, "goWorkers.secretKeys lists "+name+", a database DSN name"), "the template refusal of %s says %q", name, firstLines(out, 2))
-		g.refusal("schema refusal of "+name, "worker-secret-keys-dsn-schema", join(poolGoValues, override)...)
+		sch := g.refusal("schema refusal of "+name, "worker-secret-keys-dsn-schema", join(poolGoValues, override)...)
+		g.expect(strings.Contains(sch, "values don't meet the specifications of the schema"), "the refusal of %s is not the schema error: %q", name, firstLines(sch, 2))
 	}
 }
 
@@ -327,6 +363,7 @@ func TestWorkerSecretKeysGuardsRealTree(t *testing.T) {
 		check{"worker-secret-keys-refuse-dsn-names", workerSecretKeysRefuseDSNNames},
 		check{"chart-allow-list-is-the-census", chartAllowListIsTheCensus},
 		check{"worker-secret-keys-refuse-unlisted-names", workerSecretKeysRefuseUnlistedNames},
+		check{"worker-group-extra-env-refuses-dsns", workerGroupExtraEnvRefusesDSNs},
 		check{"worker-extra-envfrom-refuses-the-shared-secret", workerExtraEnvFromRefusesTheSharedSecret},
 		check{"worker-secret-keys-schema-lists-chart-dsn-names", workerSecretKeysSchemaListsChartDSNNames},
 		check{"worker-dsn-blanks-render-last", workerDSNBlanksRenderLast},
@@ -371,6 +408,12 @@ func TestWorkerSecretKeysGuardsPlantedDefects(t *testing.T) {
 			all(mut(chartFile(workers), "{{- fail (printf \"goWorkers.secretKeys lists %s, which is not", "{{- $_ := (printf \"goWorkers.secretKeys lists %s, which is not"),
 				mut(chartFile("values.schema.json"), `"enum": ["APP_BASE_URL"`, `"x-enum": ["APP_BASE_URL"`)),
 			workerSecretKeysRefuseUnlistedNames, "must be refused"},
+		{"extraenv-may-name-a-dsn", reader,
+			mut(chartFile(workers), "{{- fail (printf \"goWorkers.groups[%s].extraEnv names", "{{- $_ := (printf \"goWorkers.groups[%s].extraEnv names"),
+			workerGroupExtraEnvRefusesDSNs, "must be refused"},
+		{"extraenv-may-read-a-dsn-key-of-the-shared-secret", reader,
+			mut(chartFile(workers), "{{- fail (printf \"goWorkers.groups[%s].extraEnv reads", "{{- $_ := (printf \"goWorkers.groups[%s].extraEnv reads"),
+			workerGroupExtraEnvRefusesDSNs, "must be refused"},
 		{"extraenvfrom-may-name-the-shared-secret", reader,
 			mut(chartFile(workers), "{{- fail (printf \"goWorkers.extraEnvFrom names", "{{- $_ := (printf \"goWorkers.extraEnvFrom names"),
 			workerExtraEnvFromRefusesTheSharedSecret, "must be refused"},

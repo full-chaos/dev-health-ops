@@ -224,7 +224,9 @@ func newGitRepo(t *testing.T) *gitRepo {
 
 func (r *gitRepo) git(args ...string) string {
 	r.t.Helper()
-	cmd := exec.Command("git", append([]string{"-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false"}, args...)...)
+	cmd := exec.Command("git")
+	cmd.Args = append(cmd.Args, "-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false")
+	cmd.Args = append(cmd.Args, args...)
 	cmd.Dir = r.dir
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -357,7 +359,9 @@ func TestCodeQLDocsOnlyClassifierFailsClosedOnBadInput(t *testing.T) {
 		"upper case hex":      {strings.ToUpper(base), head},
 		"a sha plus a suffix": {base + "x", head},
 	} {
-		cmd := exec.Command("bash", append([]string{filepath.Join(repoRoot(t), "ci", "codeql_docs_only.sh")}, args...)...)
+		cmd := exec.Command("bash")
+		cmd.Args = append(cmd.Args, filepath.Join(repoRoot(t), "ci", "codeql_docs_only.sh"))
+		cmd.Args = append(cmd.Args, args...)
 		cmd.Dir = r.dir
 		out, err := cmd.Output()
 		if err != nil {

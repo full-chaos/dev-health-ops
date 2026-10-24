@@ -992,8 +992,12 @@ func TestShellExportsOTelInstrumentsOnMetrics(t *testing.T) {
 	}
 	body, _ := io.ReadAll(response.Body)
 	_ = response.Body.Close()
-	if !strings.Contains(string(body), `shell_otel_probe_total{probe="shell"} 3`) {
-		t.Fatalf("/metrics does not carry the recorded OTel instrument:\n%s", body)
+	// An instrument with no row in labels.tsv keeps its total and loses every label.
+	if !strings.Contains(string(body), "shell_otel_probe_total 3") || strings.Contains(string(body), `probe="shell"`) {
+		t.Fatalf("/metrics does not carry the recorded OTel instrument without its labels:\n%s", body)
+	}
+	if !strings.Contains(string(body), `dev_health_metric_labels_dropped_total{instrument="shell_otel_probe_total",label="*"}`) {
+		t.Fatalf("/metrics does not count the dropped labels of the unlisted instrument:\n%s", body)
 	}
 
 	cancel()

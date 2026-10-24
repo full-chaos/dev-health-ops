@@ -112,7 +112,7 @@ func TestSAMLRoutesAnswerConflictAndGate(t *testing.T) {
 		} `json:"detail"`
 	}
 	if rec.Code != http.StatusConflict || len(issuer.got) != 0 || json.Unmarshal(rec.Body.Bytes(), &conflict) != nil ||
-		conflict.Detail.ExistingProvider != "local" || conflict.Detail.Message != "An account with this email already exists. Please sign in with local." {
+		conflict.Detail.ExistingProvider != "" || conflict.Detail.Message != saml.AccountExistsMessage {
 		t.Fatalf("collision %d %s", rec.Code, rec.Body)
 	}
 

@@ -315,6 +315,33 @@ func TestCodeQLDocsOnlyClassifierIsPinnedToTheEventHead(t *testing.T) {
 	}
 }
 
+// A git that prints a docs path and then fails must not read as docs-only.
+func TestCodeQLDocsOnlyClassifierFailsClosedWhenGitFailsAfterOutput(t *testing.T) {
+	r := newGitRepo(t)
+	base := r.commit(map[string]string{"seed.txt": "s"})
+	head := r.commit(map[string]string{"docs/a.md": "a"})
+	bin := t.TempDir()
+	fake := "#!/bin/sh\nprintf 'docs/a.md\\0'\nexit 1\n"
+	if err := os.WriteFile(filepath.Join(bin, "git"), []byte(fake), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("bash", filepath.Join(repoRoot(t), "ci", "codeql_docs_only.sh"), base, head)
+	cmd.Dir = r.dir
+	cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("classifier failed: %v", err)
+	}
+	if got := strings.TrimSpace(string(out)); got != "false" {
+		t.Errorf("git failing after printing a docs path = %q, want false", got)
+	}
+	cmd = exec.Command("bash", filepath.Join(repoRoot(t), "ci", "codeql_docs_only.sh"), base, head)
+	cmd.Dir = r.dir
+	if out, _ := cmd.Output(); strings.TrimSpace(string(out)) != "true" {
+		t.Errorf("control: the real git on the same input = %q, want true", out)
+	}
+}
+
 func TestCodeQLDocsOnlyClassifierFailsClosedOnBadInput(t *testing.T) {
 	r := newGitRepo(t)
 	base := r.commit(map[string]string{"seed.txt": "s"})

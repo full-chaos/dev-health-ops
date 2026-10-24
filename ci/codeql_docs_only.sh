@@ -16,8 +16,12 @@ fail() {
 base=$1
 head=$2
 [[ $base =~ ^[0-9a-f]{40}$ && $head =~ ^[0-9a-f]{40}$ ]] || fail
-# Paths are read NUL-delimited, so a path holding a newline stays one path. An
-# empty diff or a git error yields no path at all, which is not docs-only.
+# Paths are read NUL-delimited, so a path holding a newline stays one path. The
+# diff is written to a file first so a git failure (even after partial output)
+# is seen and fails closed; an empty diff yields no path, which is not docs-only.
+list=$(mktemp)
+trap 'rm -f "$list"' EXIT
+git diff --name-only --no-renames -z "$base...$head" >"$list" || fail
 count=0
 while IFS= read -r -d '' path; do
   count=$((count + 1))
@@ -27,6 +31,6 @@ while IFS= read -r -d '' path; do
     docs/* | docs-data/* | *.md | .github/docs-legacy/* | mkdocs.yml) ;;
     *) fail ;;
   esac
-done < <(git diff --name-only --no-renames -z "$base...$head")
+done <"$list"
 [ "$count" -ge 1 ] || fail
 echo true

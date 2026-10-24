@@ -486,6 +486,8 @@ func configureWith(
 	}); err != nil {
 		return nil, dependencyFailure(ctx, logger, "api_server", "api_listener_check_register_failed", err)
 	}
+	// Queued sign-in mail jobs finish after the listener stops and before the pool closes.
+	depComponents = append(depComponents, session.MailDrain{Logger: logger})
 	return append(depComponents, server), nil
 }
 

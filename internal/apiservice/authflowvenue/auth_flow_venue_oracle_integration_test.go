@@ -253,8 +253,8 @@ type runner struct {
 	// for an existing address: it queues an account-exists mail the Python
 	// plane never sent.
 	notices int
-	// registers is set when the current batch carried a sign-up: the Go plane
-	// sends its mail off the request, so mails are compared in a fixed order.
+	// registers is set when the current batch carried a sign-up, a resend or a forgot request: the Go plane
+	// sends their mail off the request, so mails are compared in a fixed order.
 	registers bool
 	// signUpLength is the content-length of the first uniform sign-up answer of the run.
 	signUpLength string
@@ -286,6 +286,9 @@ func (r *runner) batch(label string, steps []step) map[string][2]venueoracle.Res
 		// generated ids and times blanked); the Go answer is compared the same way.
 		goProjected := r.golden.Project(r.t, goResponse)
 		pyCompared := pyResponses[index]
+		if s.python.Path == "/api/v1/auth/resend-verification" || s.python.Path == "/api/v1/auth/forgot-password" {
+			r.registers = true
+		}
 		if s.python.Path == "/api/v1/auth/register" {
 			r.registers = true
 			if uniformSignUp(pyCompared, goProjected) {

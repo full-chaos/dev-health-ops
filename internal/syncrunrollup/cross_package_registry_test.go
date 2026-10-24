@@ -228,6 +228,15 @@ var crossPackageRollupSeamRegistry = []crossPackageWriteSite{
 		snippet:      `syncRunID, syncRunUnitStatusSuccess, syncRunUnitStatusFailed).Scan(&at)`,
 		exemptReason: "read-only progress SELECT (MAX(updated_at) of success/failed units of one run, for the dispatch re-arm idle back-off) -- writes nothing; matches the heuristic only because it passes the two terminal status constants as query arguments",
 	},
+	{
+		// The finalize checkpoint pass reads the run's successful units in keyset pages. It passes the
+		// success status constant as a query argument, so the heuristic flags it; it writes nothing (the checkpoint
+		// INSERTs it feeds touch sync_compute_checkpoints, not sync_run_units).
+		pkgDir:       "../syncdispatchruntime",
+		file:         "native_finalize_sync_run.go",
+		snippet:      `runID, syncRunUnitStatusSuccess, afterID, limit)`,
+		exemptReason: "read-only keyset page SELECT of one run's success units (id > $3 ORDER BY id LIMIT $4) for the compute-checkpoint pass -- writes nothing to sync_run_units; matches the heuristic only because it passes the success status constant as a query argument",
+	},
 	// --- syncreconciler (CHAOS-4586, chris: "the guard must be the thing
 	// that would have caught line 1144") ---
 	{

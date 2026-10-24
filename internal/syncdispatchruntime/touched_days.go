@@ -66,36 +66,60 @@ type workItemUnitWindow struct {
 // A window the route would refuse is an error: a successful unit passed the
 // same rule, so the stored window is not the one the unit ran with.
 func workItemUnitsWindowDays(units []workItemUnitWindow, runStartedAt, now time.Time) ([]time.Time, error) {
-	if len(units) == 0 {
+	accumulator := newWorkItemDayAccumulator(runStartedAt, now)
+	for _, unit := range units {
+		accumulator.add(unit.since, unit.before)
+	}
+	return accumulator.days()
+}
+
+// workItemDayAccumulator is workItemUnitsWindowDays one window at a time: it keeps the distinct days, never the windows,
+// so a run of any number of units holds only the days its windows cover. The first window the route would refuse is
+// kept and returned by days(), the same error the slice form returns for it.
+type workItemDayAccumulator struct {
+	runStartedAt, now time.Time
+	distinct          map[time.Time]struct{}
+	added             int
+	err               error
+}
+
+func newWorkItemDayAccumulator(runStartedAt, now time.Time) *workItemDayAccumulator {
+	return &workItemDayAccumulator{runStartedAt: runStartedAt, now: now, distinct: map[time.Time]struct{}{}}
+}
+
+func (accumulator *workItemDayAccumulator) add(since, before *time.Time) {
+	accumulator.added++
+	if accumulator.err != nil || accumulator.runStartedAt.IsZero() || accumulator.now.IsZero() {
+		return
+	}
+	days, err := providersync.WorkItemsUnitWindowDays(since, before, accumulator.runStartedAt)
+	if err != nil {
+		accumulator.err = unavailable(stageTouchedWindow, err)
+		return
+	}
+	for _, day := range days {
+		accumulator.distinct[day] = struct{}{}
+	}
+	if before != nil {
+		return
+	}
+	for day := utcDay(accumulator.runStartedAt); !day.After(utcDay(accumulator.now)); day = day.AddDate(0, 0, 1) {
+		accumulator.distinct[day] = struct{}{}
+	}
+}
+
+func (accumulator *workItemDayAccumulator) days() ([]time.Time, error) {
+	if accumulator.added == 0 {
 		return nil, nil
 	}
-	if runStartedAt.IsZero() || now.IsZero() {
+	if accumulator.runStartedAt.IsZero() || accumulator.now.IsZero() {
 		return nil, unavailable(stageTouchedWindow, nil)
 	}
-	distinct := make(map[time.Time]struct{})
-	add := func(since, before *time.Time, clock time.Time) error {
-		days, err := providersync.WorkItemsUnitWindowDays(since, before, clock)
-		if err != nil {
-			return unavailable(stageTouchedWindow, err)
-		}
-		for _, day := range days {
-			distinct[day] = struct{}{}
-		}
-		return nil
+	if accumulator.err != nil {
+		return nil, accumulator.err
 	}
-	for _, unit := range units {
-		if err := add(unit.since, unit.before, runStartedAt); err != nil {
-			return nil, err
-		}
-		if unit.before != nil {
-			continue
-		}
-		for day := utcDay(runStartedAt); !day.After(utcDay(now)); day = day.AddDate(0, 0, 1) {
-			distinct[day] = struct{}{}
-		}
-	}
-	days := make([]time.Time, 0, len(distinct))
-	for day := range distinct {
+	days := make([]time.Time, 0, len(accumulator.distinct))
+	for day := range accumulator.distinct {
 		days = append(days, day)
 	}
 	sort.Slice(days, func(left, right int) bool { return days[left].Before(days[right]) })

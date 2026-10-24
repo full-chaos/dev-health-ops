@@ -185,9 +185,33 @@ func resolveBackfillWindows(since, before time.Time, provider, dataset string) (
 		return nil, fmt.Errorf("%w: %w", ErrInvalidPlan, err)
 	}
 	windows := make([]DateWindow, 0, len(chunks))
+	emptyLast := false
 	for _, chunk := range chunks {
 		start, end := chunkToWindow(chunk.Since, chunk.Before, since, before)
+		// DIVERGENCE FROM PYTHON, deliberate: ChunkDateRange is date-inclusive, so a
+		// request whose exclusive end is exactly UTC midnight keeps a last chunk
+		// that starts at that midnight, and its window is [D, D). That window
+		// covers no instant. The work-items route refuses it as malformed on
+		// every attempt, so it is never planned. Only the last chunk can be empty
+		// (since < before). Every family member shares one chunk width, so all
+		// members drop the same window and stay index-aligned.
+		if !start.Before(end) {
+			emptyLast = true
+			continue
+		}
 		windows = append(windows, DateWindow{Since: start, Before: end})
+	}
+	// DIVERGENCE FROM PYTHON, deliberate: Python ends an interior chunk at
+	// 23:59:59.999999 and starts the next at 00:00:00, which for a route that
+	// treats the end as exclusive leaves 1 microsecond uncovered at every
+	// boundary. The windows tile instead: each end is the next start. A route
+	// that treats the end as inclusive reads that one instant twice, which its
+	// idempotent writes absorb.
+	for index := 0; index+1 < len(windows); index++ {
+		windows[index].Before = windows[index+1].Since
+	}
+	if emptyLast && len(windows) > 0 {
+		windows[len(windows)-1].Before = before
 	}
 	return windows, nil
 }

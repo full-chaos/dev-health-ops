@@ -5,33 +5,10 @@ package providersync
 // CHAOS-8810 on a real ClickHouse at the migration head (this file authors no
 // DDL: newWorkItemEffectsConn applies the production migration chain).
 //
-// The owner's design: a work-items sync writes raw rows, and the daily job
-// computes every derived table from STORED rows. This file is the differential
-// proof that the daily families compute, from stored rows, what the sync-time
-// deriver computes from the same full item set -- for a stored-row fixture of
-// each of the four providers.
-//
-// What each side is:
-//
-//   - THE SYNC-TIME DERIVER: GitHubWorkItemDeriver.deriveForProvider, built by
-//     its production constructor with the two real config artifacts and run
-//     under each provider's name. It is the day loop of the GitHub deriver;
-//     the Linear, GitLab and Jira derivers have their own copy of that loop
-//     around the SAME three per-provider builders
-//     (buildWorkItemMetricTripletForProvider,
-//     buildWorkItemDerivedSurfacesForProvider, the engine's
-//     deriveRowsForProvider), which is what this file runs for them. Its rows
-//     are stored through the derived effect adapters every provider's derived
-//     sink wraps.
-//   - THE DAILY FAMILIES: the six work-item executors of
-//     internal/jobs/metrics/daily, each built by its production constructor
-//     and run in the order families.json gives, over one partition.
-//
-// What this file is NOT: a run of each provider's fetch and normalize route.
-// The raw rows of all four cases are written through the shared raw work-item
-// adapters under each provider's identity. The end-to-end route harness
-// (provider answer -> route -> sinks -> families) exists for GitHub only:
-// github_work_items_window_equivalence_integration_test.go.
+// The harness that runs the six work-item executors of internal/jobs/metrics/daily over
+// stored rows, one fixture for each of the four providers: a work-items sync writes raw rows
+// and the daily job computes every derived table from them. The raw rows of the cases are
+// written through the shared raw work-item adapters under each provider identity.
 
 import (
 	"context"

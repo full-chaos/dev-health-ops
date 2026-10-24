@@ -274,34 +274,39 @@ spec:
             {{- end }}
             {{- end }}
             {{- /*
-              The shared ConfigMap and Secret below reach every group through
-              envFrom, and an operator may keep other database DSNs in them
-              (the API role's, the migration role's, a legacy alias). An explicit
-              env entry beats an envFrom key of the same name and an empty value
-              is absent to the process, so each worker group blanks the DSN
-              names it does not hold. The process also refuses to start with any
-              other DSN variable (internal/platform/dsnclass).
-            */}}
-            {{- range $blank := list "DATABASE_URI" "DATABASE_URL" "POSTGRES_URL" "API_DATABASE_URI" "GO_API_REGISTRY_POSTGRES_URI" "MIGRATION_DATABASE_URI" "AUTH_DATABASE_URI" "AUTH_MIGRATION_DATABASE_URI" }}
-            - {name: {{ $blank }}, value: ""}
-            {{- end }}
-            {{- if not $coordinator }}
-            - {name: COORDINATOR_DATABASE_URI, value: ""}
-            {{- end }}
-            {{- if $group.runtimeProfile }}
-            - {name: WORKER_DATABASE_URI, value: ""}
-            {{- end }}
-            {{- /*
               The non-DSN keys of the shared Secret a worker reads (goWorkers.secretKeys),
               one optional secretKeyRef each, so the whole Secret is no envFrom source
               of a worker pod. CLICKHOUSE_URI is skipped when an explicit entry above
-              already sets it. The blanks above stay as the closed net for operator
-              sources (goWorkers.extraEnvFrom).
+              already sets it. A database DSN name in the list refuses the render.
             */}}
+            {{- $dsnNames := include "dev-health.goWorkerDSNNames" $ | fromJsonArray }}
+            {{- range $listed := $.Values.goWorkers.secretKeys }}
+            {{- if has $listed $dsnNames }}
+            {{- fail (printf "goWorkers.secretKeys lists %s, a database DSN name; a worker takes DSNs only from its own class secrets" $listed) }}
+            {{- end }}
+            {{- end }}
             {{- range $key := $.Values.goWorkers.secretKeys }}
             {{- if not (and (eq $key "CLICKHOUSE_URI") (include "dev-health.goWorkerClickhouseURI" $)) }}
             - name: {{ $key }}
               valueFrom: {secretKeyRef: {name: {{ include "dev-health.secretName" $ }}, key: {{ $key }}, optional: true}}
+            {{- end }}
+            {{- end }}
+            {{- /*
+              The shared ConfigMap below (and any goWorkers.extraEnvFrom source)
+              reaches every group through envFrom, and an operator may keep
+              database DSNs in them (the API role's, the migration role's, a legacy
+              alias). An explicit env entry beats an envFrom key of the same name
+              and an empty value is absent to the process, so each worker group
+              blanks the DSN names it does not hold. The blanks render after the
+              secretKeyRef entries so a name missed above still ends blank. The
+              process also refuses to start with any other DSN variable
+              (internal/platform/dsnclass).
+            */}}
+            {{- range $blank := include "dev-health.goWorkerDSNNames" $ | fromJsonArray }}
+            {{- if and (eq $blank "COORDINATOR_DATABASE_URI") $coordinator }}
+            {{- else if and (eq $blank "WORKER_DATABASE_URI") (not $group.runtimeProfile) }}
+            {{- else }}
+            - {name: {{ $blank }}, value: ""}
             {{- end }}
             {{- end }}
             {{- if $.Values.goWorkers.pgbouncer.enabled }}

@@ -723,3 +723,12 @@ schema Job and the grants Job.
 {{- define "dev-health.authDatabaseSchema" -}}
 {{- default "auth" .Values.authService.database.schema -}}
 {{- end }}
+
+{{/*
+Database DSN names a Go worker group never takes from the shared Secret or the
+shared ConfigMap. goWorkers.secretKeys refuses them and each worker group blanks
+them, from this one list (internal/platform/dsnclass classifies the same names).
+*/}}
+{{- define "dev-health.goWorkerDSNNames" -}}
+{{- toJson (list "DATABASE_URI" "DATABASE_URL" "POSTGRES_URL" "API_DATABASE_URI" "GO_API_REGISTRY_POSTGRES_URI" "MIGRATION_DATABASE_URI" "AUTH_DATABASE_URI" "AUTH_MIGRATION_DATABASE_URI" "COORDINATOR_DATABASE_URI" "WORKER_DATABASE_URI") -}}
+{{- end }}

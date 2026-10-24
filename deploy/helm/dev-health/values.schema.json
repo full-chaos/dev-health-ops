@@ -146,7 +146,7 @@
         "enabled": { "type": "boolean" },
         "image": { "type": "string", "minLength": 1 },
         "extraEnvFrom": { "$ref": "#/definitions/extraEnvFrom" },
-        "secretKeys": { "type": "array", "items": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$" }, "uniqueItems": true },
+        "secretKeys": { "type": "array", "items": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$", "not": { "enum": ["DATABASE_URI", "DATABASE_URL", "POSTGRES_URL", "API_DATABASE_URI", "GO_API_REGISTRY_POSTGRES_URI", "MIGRATION_DATABASE_URI", "AUTH_DATABASE_URI", "AUTH_MIGRATION_DATABASE_URI", "COORDINATOR_DATABASE_URI", "WORKER_DATABASE_URI"] } }, "uniqueItems": true },
         "pgbouncer": {
           "type": "object",
           "properties": {

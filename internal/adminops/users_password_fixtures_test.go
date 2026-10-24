@@ -2,12 +2,14 @@ package adminops
 
 import (
 	"encoding/base64"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -33,59 +35,17 @@ func TestUsersPasswordFixturesAreAtLeastTwelve(t *testing.T) {
 	if err != nil || len(files) == 0 {
 		t.Fatalf("no test files: %v", err)
 	}
-	checked := 0
+	sources := map[string][]byte{}
 	for _, file := range files {
-		parsed, err := parser.ParseFile(token.NewFileSet(), file, nil, 0)
+		raw, err := os.ReadFile(file)
 		if err != nil {
 			t.Fatal(err)
 		}
-		literal := func(expr ast.Expr) (string, bool) {
-			lit, ok := expr.(*ast.BasicLit)
-			if !ok || lit.Kind != token.STRING {
-				return "", false
-			}
-			value, err := strconv.Unquote(lit.Value)
-			return value, err == nil
-		}
-		source, err := os.ReadFile(file)
-		if err != nil {
-			t.Fatal(err)
-		}
-		usesPasswordStdin := strings.Contains(string(source), "--password-stdin")
-		ast.Inspect(parsed, func(n ast.Node) bool {
-			var elems []ast.Expr
-			switch node := n.(type) {
-			case *ast.CallExpr:
-				elems = node.Args
-			case *ast.CompositeLit:
-				elems = node.Elts
-			case *ast.KeyValueExpr:
-				if key, ok := node.Key.(*ast.Ident); ok && key.Name == "Stdin" {
-					if call, ok := node.Value.(*ast.CallExpr); ok && len(call.Args) == 1 {
-						if value, ok := literal(call.Args[0]); ok && usesPasswordStdin {
-							checked++
-							if first := strings.SplitN(value, "\n", 2)[0]; first != "" && short(strings.TrimRight(first, "\r")) {
-								t.Errorf("%s: stdin password literal %q is shorter than %d characters", file, first, minFixtureRunes)
-							}
-						}
-					}
-				}
-				return true
-			default:
-				return true
-			}
-			for i := 0; i+1 < len(elems); i++ {
-				if flag, ok := literal(elems[i]); ok && flag == "--password" {
-					if value, ok := literal(elems[i+1]); ok {
-						checked++
-						if short(value) {
-							t.Errorf("%s: --password literal %q is shorter than %d characters", file, value, minFixtureRunes)
-						}
-					}
-				}
-			}
-			return true
-		})
+		sources[file] = raw
+	}
+	findings, checked := shortPasswordFindings(t, sources)
+	for _, finding := range findings {
+		t.Error(finding)
 	}
 	if checked < 2 {
 		t.Fatalf("the scan found %d password literals: it measures too little", checked)
@@ -170,5 +130,107 @@ func TestUsersLegacyPasswordTableReproducesTheGoldenKey(t *testing.T) {
 		if used[pair.fixture] == 0 {
 			t.Errorf("swapped fixture for %q is never used by the script", pair.legacy)
 		}
+	}
+}
+
+// shortPasswordFindings reports every --password / stdin password in sources
+// that is shorter than the policy's 12 characters, whether it is a string
+// literal or a package-level string const or var the call names.
+func shortPasswordFindings(t *testing.T, sources map[string][]byte) (findings []string, checked int) {
+	t.Helper()
+	short := func(value string) bool { return utf8.RuneCountInString(value) < minFixtureRunes }
+	fset := token.NewFileSet()
+	parsedFiles := map[string]*ast.File{}
+	named := map[string]string{}
+	for file, raw := range sources {
+		parsed, err := parser.ParseFile(fset, file, raw, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		parsedFiles[file] = parsed
+		for _, decl := range parsed.Decls {
+			gen, ok := decl.(*ast.GenDecl)
+			if !ok || (gen.Tok != token.CONST && gen.Tok != token.VAR) {
+				continue
+			}
+			for _, spec := range gen.Specs {
+				values, ok := spec.(*ast.ValueSpec)
+				if !ok || len(values.Names) != len(values.Values) {
+					continue
+				}
+				for i, name := range values.Names {
+					if lit, ok := values.Values[i].(*ast.BasicLit); ok && lit.Kind == token.STRING {
+						if value, err := strconv.Unquote(lit.Value); err == nil {
+							named[name.Name] = value
+						}
+					}
+				}
+			}
+		}
+	}
+	literal := func(expr ast.Expr) (string, bool) {
+		switch node := expr.(type) {
+		case *ast.BasicLit:
+			if node.Kind != token.STRING {
+				return "", false
+			}
+			value, err := strconv.Unquote(node.Value)
+			return value, err == nil
+		case *ast.Ident:
+			if node.Name == "refusedShortPassword" {
+				return "", false
+			}
+			value, ok := named[node.Name]
+			return value, ok
+		}
+		return "", false
+	}
+	for file, parsed := range parsedFiles {
+		usesPasswordStdin := strings.Contains(string(sources[file]), "--password-stdin")
+		ast.Inspect(parsed, func(n ast.Node) bool {
+			var elems []ast.Expr
+			switch node := n.(type) {
+			case *ast.CallExpr:
+				elems = node.Args
+			case *ast.CompositeLit:
+				elems = node.Elts
+			case *ast.KeyValueExpr:
+				if key, ok := node.Key.(*ast.Ident); ok && key.Name == "Stdin" {
+					if call, ok := node.Value.(*ast.CallExpr); ok && len(call.Args) == 1 {
+						if value, ok := literal(call.Args[0]); ok && usesPasswordStdin {
+							checked++
+							if first := strings.SplitN(value, "\n", 2)[0]; first != "" && short(strings.TrimRight(first, "\r")) {
+								findings = append(findings, fmt.Sprintf("%s: stdin password %q is shorter than %d characters", file, first, minFixtureRunes))
+							}
+						}
+					}
+				}
+				return true
+			default:
+				return true
+			}
+			for i := 0; i+1 < len(elems); i++ {
+				if flag, ok := literal(elems[i]); ok && flag == "--password" {
+					if value, ok := literal(elems[i+1]); ok {
+						checked++
+						if short(value) {
+							findings = append(findings, fmt.Sprintf("%s: --password value %q is shorter than %d characters", file, value, minFixtureRunes))
+						}
+					}
+				}
+			}
+			return true
+		})
+	}
+	sort.Strings(findings)
+	return findings, checked
+}
+
+// A short password held in a named const or var is found as a literal is.
+func TestUsersPasswordGuardResolvesNamedValues(t *testing.T) {
+	source := "package p\n\nconst shortPw = \"abc\"\nconst longPw = \"abcdefghijkl1\"\n\nfunc f() {\n\trun([]string{\"users\", \"create\", \"--password\", shortPw})\n\trun([]string{\"users\", \"create\", \"--password\", longPw})\n}\n"
+	findings, checked := shortPasswordFindings(t, map[string][]byte{"x_test.go": []byte(source)})
+	if checked != 2 || len(findings) != 1 || !strings.Contains(findings[0], `"abc"`) {
+		t.Fatalf("checked=%d findings=%v: a short named password must be the one finding", checked, findings)
 	}
 }

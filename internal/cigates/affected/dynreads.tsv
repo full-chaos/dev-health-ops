@@ -12,6 +12,7 @@ cmd/gqlgen-guard	main_test.go
 cmd/registrydump	main.go
 cmd/strip-agent-attribution	main.go
 cmd/strip-agent-attribution	main_test.go
+internal/adminops	users_password_fixtures_test.go
 internal/api/credentials	probes.go
 internal/api/syncadmin	dataset_writer_census_test.go
 internal/api/syncadmin	dataset_writer_lock_census_test.go
@@ -243,6 +244,7 @@ internal/cigates/workflows	ci_script_helpers_test.go
 internal/cigates/workflows	docker_images_fanin_behaviour_test.go
 internal/cigates/workflows	go_workers_compose_proof_test.go
 internal/cigates/workflows	live_e2e_no_python_test.go
+internal/cigates/workflows	providerstub_not_release_test.go
 internal/cigates/workflows	race_json_artifact_test.go
 internal/cigates/workflows	race_pool_routing_test.go
 internal/cigates/workflows	ttl_registry_test.go
@@ -433,6 +435,7 @@ internal/queryapi/analytics	nan_class_live_test.go
 internal/queryapi/drilldown	golden_test.go
 internal/queryapi/explain	golden_test.go
 internal/queryapi/flame	golden_test.go
+internal/queryapi/graph	field_action_map_test.go
 internal/queryapi/graph/model	sdl_nullability_gate_test.go
 internal/queryapi/heatmap	identity.go
 internal/queryapi/home	golden_test.go
@@ -460,6 +463,7 @@ internal/queryapi/server	direct_env_reads_test.go
 internal/queryapi/server	drilldown_issues_422_test.go
 internal/queryapi/server	drilldown_prs_422_test.go
 internal/queryapi/server	edge_users_test.go
+internal/queryapi/server	endpoint_profile_action_fields_test.go
 internal/queryapi/server	endpoint_profile_rows_test.go
 internal/queryapi/server	endpoint_profile_same_line_test.go
 internal/queryapi/server	explain_422_test.go
@@ -546,6 +550,7 @@ internal/testsupport/goldenscan	tree.go
 internal/testsupport/goldenscan	vectors_test.go
 internal/testsupport/moduleroot	moduleroot_test.go
 internal/testsupport/oraclecompare	oraclecompare.go
+internal/testsupport/providerstub	corpus_social_test.go
 internal/testsupport/providerstub	stub.go
 internal/testsupport/providerstub/cmd/providerstub	main.go
 internal/testsupport/providerstub/cmd/providerstub	main_test.go

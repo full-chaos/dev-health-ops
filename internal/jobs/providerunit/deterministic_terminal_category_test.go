@@ -114,6 +114,13 @@ func TestDeterministicTerminalCategoryContract(t *testing.T) {
 			err:      providersync.ErrPreviousReleaseSnapshot,
 			category: PreviousReleaseSnapshotCategory,
 		},
+		{
+			// A malformed unit window is part of the unit: every attempt refuses
+			// it the same way (a zero-width [D, D) window of a backfill's last chunk).
+			name:     "malformed unit window",
+			err:      providersync.ErrInvalidUnitWindow,
+			category: UnitWindowInvalidCategory,
+		},
 	}
 	for _, testCase := range deterministic {
 		t.Run(testCase.name, func(t *testing.T) {

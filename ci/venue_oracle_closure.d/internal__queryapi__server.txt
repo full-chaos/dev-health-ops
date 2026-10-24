@@ -26,6 +26,7 @@ internal/auth/identity/social
 internal/auth/keystore
 internal/auth/passwordhash
 internal/auth/passwordpolicy
+internal/auth/policycatalog
 internal/auth/requestid
 internal/auth/servicecred
 internal/auth/session

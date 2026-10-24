@@ -1,0 +1,10 @@
+[
+  {
+    "provider": "github",
+    "method": "GET",
+    "path": "/user",
+    "status": 200,
+    "request_headers": {"Authorization": "Bearer gh-corpus"},
+    "body": {"id": 910001, "login": "corpus-social", "name": "Corpus Social", "email": "corpus-social@example.com", "avatar_url": "https://avatars.example.test/u/910001"}
+  }
+]

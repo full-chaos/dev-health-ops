@@ -377,7 +377,7 @@ func TestUsersMatchTheFrozenPythonOutput(t *testing.T) {
 const usersPasswordRuling = "CHAOS-10943 D6129: operator users create/update apply the shared password policy (stricter than Python's 8 characters)"
 
 // usersGoPinDigest is the digest of testdata/golden/users.go-pin.json.
-const usersGoPinDigest = "RECORD-ME"
+const usersGoPinDigest = "10c2b527eb537d01c2fb22a295277332d6317a3816a8a5e77458a0ad62df2113"
 
 // A refused password prints the policy's violation and never the password, on
 // the argv form and the stdin form.

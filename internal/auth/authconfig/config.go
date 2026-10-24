@@ -97,6 +97,8 @@ const (
 
 	// EnvUsersOwned is the D3c users-owned switch (true or false, default false).
 	EnvUsersOwned = "AUTH_USERS_OWNED"
+	// EnvOrgsOwned is the organizations-owned switch (true or false, default false).
+	EnvOrgsOwned = "AUTH_ORGS_OWNED"
 	// EnvSocialLinkRoutes ("true" or "false", default false) mounts the
 	// bearer-only social link and unlink routes; it needs the session secrets.
 	EnvSocialLinkRoutes = "AUTH_SOCIAL_LINK_ROUTES"
@@ -212,6 +214,10 @@ type Config struct {
 	// UsersOwned is AUTH_USERS_OWNED: auth-service owns user creation and the
 	// local credential links.
 	UsersOwned bool
+
+	// OrgsOwned is AUTH_ORGS_OWNED: auth-service is the only writer of
+	// auth.organizations; the legacy login projection writes nothing.
+	OrgsOwned bool
 
 	// SSO holds the federated sign-in settings; a protocol without all of its
 	// values mounts no route.

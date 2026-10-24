@@ -65,6 +65,10 @@ type Config struct {
 	// public.users columns, and HasPassword reads public.users. On, auth.users
 	// is the authority and no public table is read.
 	UsersOwnedByAuth bool
+	// OrgsOwnedByAuth is the organizations switch. Off (the default), ProjectOrganization
+	// copies public.organizations onto auth.organizations. On, auth.organizations is
+	// the authority: the projection reads no public table and writes nothing.
+	OrgsOwnedByAuth bool
 	// Meter registers the projection and link counters; nil uses the process
 	// meter.
 	Meter metric.Meter

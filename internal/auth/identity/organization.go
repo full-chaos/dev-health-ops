@@ -194,3 +194,7 @@ func organizationAudit(eventType, reason, org string) audit.AuditEvent {
 		Attributes: map[string]any{"reason_code": reason, "target_kind": "organization", "target_id": org},
 	}
 }
+
+// ownedOrgExistsSQL and ownedOutcome are the organizations-owned branch (stub).
+const ownedOrgExistsSQL = ""
+const ownedOutcome = ""

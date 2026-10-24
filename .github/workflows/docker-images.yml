@@ -105,7 +105,7 @@ jobs:
   changes:
     # CHAOS-10923: the `labeled` trigger exists for `hotfix-image` only; any other label skips this whole workflow
     # (every build job needs `changes`) and sits in its own concurrency group, so it never cancels a real PR run.
-    if: github.event_name != 'pull_request' || github.event.action != 'labeled' || github.event.label.name == 'hotfix-image'
+    if: (github.event_name != 'pull_request' && github.event_name != 'merge_group') || github.event.action != 'labeled' || github.event.label.name == 'hotfix-image'
     runs-on: ubuntu-latest
     outputs:
       code: ${{ steps.filter.outputs.code }}
@@ -344,20 +344,20 @@ jobs:
           # setting the same key (team-lead review) -- docker/Dockerfile
           # (the Python image) was the one actually missing this mechanism,
           # now fixed to match this file's own pattern instead.
-          outputs: type=image,push-by-digest=true,name-canonical=true,push=${{ (github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true')) || needs.resolve.outputs.hotfix == 'true' }}
+          outputs: type=image,push-by-digest=true,name-canonical=true,push=${{ ((github.event_name != 'pull_request' && github.event_name != 'merge_group') && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true')) || needs.resolve.outputs.hotfix == 'true' }}
           cache-from: type=gha
           # A dispatch-supplied ref is untrusted code: it must not write the shared gha cache (cigates/cachepoison).
           cache-to: ${{ github.event.inputs.ref == '' && 'type=gha,mode=max' || '' }}
 
       - name: Export digest
-        if: (github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true')) || needs.resolve.outputs.hotfix == 'true'
+        if: ((github.event_name != 'pull_request' && github.event_name != 'merge_group') && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true')) || needs.resolve.outputs.hotfix == 'true'
         run: |
           mkdir -p /tmp/digests
           digest="${{ steps.build.outputs.digest }}"
           touch "/tmp/digests/${digest#sha256:}"
 
       - name: Upload digest
-        if: (github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true')) || needs.resolve.outputs.hotfix == 'true'
+        if: ((github.event_name != 'pull_request' && github.event_name != 'merge_group') && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true')) || needs.resolve.outputs.hotfix == 'true'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: digests-go-${{ matrix.target }}-${{ strategy.job-index }}
@@ -543,20 +543,20 @@ jobs:
             BUILD_TIME=${{ steps.versioning.outputs.build_time }}
             SOURCE_DATE_EPOCH=${{ steps.versioning.outputs.source_date_epoch }}
           tags: ghcr.io/${{ github.repository_owner }}/dev-health-go-dho
-          outputs: type=image,push-by-digest=true,name-canonical=true,push=${{ (github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true')) || needs.resolve.outputs.hotfix == 'true' }}
+          outputs: type=image,push-by-digest=true,name-canonical=true,push=${{ ((github.event_name != 'pull_request' && github.event_name != 'merge_group') && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true')) || needs.resolve.outputs.hotfix == 'true' }}
           cache-from: type=gha
           # A dispatch-supplied ref is untrusted code: it must not write the shared gha cache (cigates/cachepoison).
           cache-to: ${{ github.event.inputs.ref == '' && 'type=gha,mode=max' || '' }}
 
       - name: Export digest
-        if: (github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true')) || needs.resolve.outputs.hotfix == 'true'
+        if: ((github.event_name != 'pull_request' && github.event_name != 'merge_group') && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true')) || needs.resolve.outputs.hotfix == 'true'
         run: |
           mkdir -p /tmp/digests
           digest="${{ steps.build.outputs.digest }}"
           touch "/tmp/digests/${digest#sha256:}"
 
       - name: Upload digest
-        if: (github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true')) || needs.resolve.outputs.hotfix == 'true'
+        if: ((github.event_name != 'pull_request' && github.event_name != 'merge_group') && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true')) || needs.resolve.outputs.hotfix == 'true'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: digests-go-dho-arm64-self-hosted
@@ -593,7 +593,7 @@ jobs:
       needs.go-build.result == 'success' &&
       needs.go-build-dho-arm64.result != 'failure' &&
       needs.go-build-dho-arm64.result != 'cancelled' &&
-      ((github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true')) || needs.resolve.outputs.hotfix == 'true')
+      (((github.event_name != 'pull_request' && github.event_name != 'merge_group') && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true')) || needs.resolve.outputs.hotfix == 'true')
     # CHAOS-4947: passes the built commit through to the fan-in job.
     outputs:
       sha: ${{ needs.go-build.outputs.sha }}
@@ -633,7 +633,7 @@ jobs:
           tags: |
             type=raw,value=tree-${{ needs.resolve.outputs.tree }},enable=${{ needs.resolve.outputs.hotfix == 'true' }}
             type=semver,pattern={{version}}
-            type=sha,format=short,enable=${{ github.event_name != 'pull_request' }}
+            type=sha,format=short,enable=${{ (github.event_name != 'pull_request' && github.event_name != 'merge_group') }}
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
@@ -761,7 +761,7 @@ jobs:
             BUILD_TIME=${{ steps.versioning.outputs.build_time }}
             SOURCE_DATE_EPOCH=${{ steps.versioning.outputs.source_date_epoch }}
           tags: ghcr.io/${{ github.repository_owner }}/dev-health-go-api-tools
-          outputs: type=image,push-by-digest=true,name-canonical=true,push=${{ (github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true')) || needs.resolve.outputs.hotfix == 'true' }}
+          outputs: type=image,push-by-digest=true,name-canonical=true,push=${{ ((github.event_name != 'pull_request' && github.event_name != 'merge_group') && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true')) || needs.resolve.outputs.hotfix == 'true' }}
           cache-from: type=gha
           # A dispatch-supplied ref is untrusted code: it must not write the shared gha cache (cigates/cachepoison).
           cache-to: ${{ github.event.inputs.ref == '' && 'type=gha,mode=max' || '' }}
@@ -788,14 +788,14 @@ jobs:
         run: docker run --rm --entrypoint test ghcr.io/full-chaos/go-api-tools-ca-check:local -s /etc/ssl/certs/ca-certificates.crt
 
       - name: Export digest
-        if: (github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true')) || needs.resolve.outputs.hotfix == 'true'
+        if: ((github.event_name != 'pull_request' && github.event_name != 'merge_group') && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true')) || needs.resolve.outputs.hotfix == 'true'
         run: |
           mkdir -p /tmp/digests
           digest="${{ steps.build.outputs.digest }}"
           touch "/tmp/digests/${digest#sha256:}"
 
       - name: Upload digest
-        if: (github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true')) || needs.resolve.outputs.hotfix == 'true'
+        if: ((github.event_name != 'pull_request' && github.event_name != 'merge_group') && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true')) || needs.resolve.outputs.hotfix == 'true'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: digests-go-api-tools-${{ strategy.job-index }}
@@ -815,7 +815,7 @@ jobs:
       packages: write
       id-token: write
       attestations: write
-    if: (github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true')) || needs.resolve.outputs.hotfix == 'true'
+    if: ((github.event_name != 'pull_request' && github.event_name != 'merge_group') && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true')) || needs.resolve.outputs.hotfix == 'true'
     outputs:
       sha: ${{ needs.go-api-tools-build.outputs.sha }}
     steps:
@@ -841,7 +841,7 @@ jobs:
           tags: |
             type=raw,value=tree-${{ needs.resolve.outputs.tree }},enable=${{ needs.resolve.outputs.hotfix == 'true' }}
             type=semver,pattern={{version}}
-            type=sha,format=short,enable=${{ github.event_name != 'pull_request' }}
+            type=sha,format=short,enable=${{ (github.event_name != 'pull_request' && github.event_name != 'merge_group') }}
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
@@ -939,7 +939,7 @@ jobs:
       (needs.resolve.outputs.promoted == 'true' ||
       (needs.go-merge.result == 'success' &&
       needs.go-api-tools-merge.result == 'success')) &&
-      github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true')
+      (github.event_name != 'pull_request' && github.event_name != 'merge_group') && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true')
     # team-lead (CHAOS-4947 review): the re-read-immediately-before-tagging
     # inside the step below NARROWS the cross-run race, it doesn't close
     # it -- two fan-in runs at different commits can both pass their own

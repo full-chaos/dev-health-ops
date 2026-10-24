@@ -937,32 +937,6 @@ groups:
             scrape job is not configured or the target is not discovered. The
             target-down rule cannot see this case.
 
-      - alert: AuthRateLimitStoreErrors
-        expr: |
-          sum by (limit) (increase(dev_health_api_rate_limit_store_errors_total{job="auth-service"}[10m])) > 0
-        for: 5m
-        labels:
-          severity: warning
-          team: platform
-        annotations:
-          summary: "Auth rate-limit store is failing"
-          description: |
-            Limit {{ $labels.limit }}: an estimated {{ $value | humanize }} store errors in ten
-            minutes; each answered a 500 to a caller.
-
-      - alert: AuthRateLimitStoreErrorsHigh
-        expr: |
-          sum by (limit) (increase(dev_health_api_rate_limit_store_errors_total{job="auth-service"}[10m])) > 20
-        for: 5m
-        labels:
-          severity: critical
-          team: platform
-        annotations:
-          summary: "Auth rate-limit store is failing at volume"
-          description: |
-            Limit {{ $labels.limit }}: an estimated {{ $value | humanize }} store errors in ten
-            minutes; callers on that route are being refused.
-
       - alert: AuthRateLimitRejectionsHigh
         expr: |
           sum by (limit) (rate(dev_health_api_rate_limit_rejections_total{job="auth-service"}[5m])) > 1
@@ -1032,6 +1006,20 @@ groups:
             design, never a pass.
             Next: the "Rate-limit store down" section of
             docs/reference/auth/readiness-and-slo.md.
+
+      # Critical tier of the rule above: more than 20 store errors in ten minutes on one limit.
+      - alert: AuthRateLimitStoreErrorsHigh
+        expr: |
+          sum by (limit) (increase(dev_health_api_rate_limit_store_errors_total{job="auth-service"}[10m])) > 20
+        for: 5m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "Auth rate-limit store is failing at volume"
+          description: |
+            Limit {{ $labels.limit }}: an estimated {{ $value | humanize }} store errors in ten
+            minutes; callers on that route are being refused.
 
       - alert: AuthServiceRateLimitStoreNotReady
         expr: |

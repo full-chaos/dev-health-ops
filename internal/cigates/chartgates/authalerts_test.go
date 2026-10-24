@@ -16,20 +16,23 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 )
 
-const authGroup = "auth_service"
+const (
+	authGroup = "auth_service"
+	// authStoreGroup is the rate-limit group of the same service; the critical store-error tier lives there.
+	authStoreGroup = "auth_service_rate_limit"
+	authStoreHigh  = "AuthRateLimitStoreErrorsHigh"
+)
 
 var authAlertNames = []string{
 	"AuthServiceTargetDown",
-	"AuthRateLimitStoreErrors",
-	"AuthRateLimitStoreErrorsHigh",
 	"AuthRateLimitRejectionsHigh",
 	"AuthServiceHighServerErrorRate",
 	"AuthServiceMetricsAbsent",
 }
 
-func authAlerts(g *guard) []doc {
+func authGroupRules(g *guard, group string) []doc {
 	for _, grp := range ruleGroups(g) {
-		if str(grp["name"]) == authGroup {
+		if str(grp["name"]) == group {
 			var out []doc
 			for _, r := range list(grp["rules"]) {
 				out = append(out, mp(r))
@@ -37,17 +40,30 @@ func authAlerts(g *guard) []doc {
 			return out
 		}
 	}
-	g.failf("group %s not found in %s", authGroup, rulesRel)
+	g.failf("group %s not found in %s", group, rulesRel)
 	return nil
 }
 
+func authAlerts(g *guard) []doc { return authGroupRules(g, authGroup) }
+
+// authRuleSet is every rule this leaf pins: the auth_service group plus the critical store-error tier kept in the rate-limit group.
+func authRuleSet(g *guard) []doc {
+	out := authAlerts(g)
+	for _, a := range authGroupRules(g, authStoreGroup) {
+		if str(a["alert"]) == authStoreHigh {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
 func authAlertNamed(g *guard, name string) doc {
-	for _, a := range authAlerts(g) {
+	for _, a := range authRuleSet(g) {
 		if str(a["alert"]) == name {
 			return a
 		}
 	}
-	g.failf("alert %s not found in group %s", name, authGroup)
+	g.failf("alert %s not found in groups %s or %s", name, authGroup, authStoreGroup)
 	return doc{}
 }
 
@@ -92,6 +108,13 @@ func authAlertSetIsExact(g *guard) {
 		got = append(got, str(a["alert"]))
 	}
 	g.expect(equal(sortedCopy(got), sortedCopy(authAlertNames)), "the %s group holds %v, want exactly %v", authGroup, got, authAlertNames)
+	inStore := 0
+	for _, a := range authGroupRules(g, authStoreGroup) {
+		if str(a["alert"]) == authStoreHigh {
+			inStore++
+		}
+	}
+	g.expect(inStore == 1, "%s must be in the %s group exactly once, found %d", authStoreHigh, authStoreGroup, inStore)
 }
 
 func sortedCopy(in []string) []string {
@@ -109,7 +132,7 @@ func sortedCopy(in []string) []string {
 func authAlertMetricsAreEmitted(g *guard) {
 	scrape := scrapeAuthServiceSeries(g)
 	checked := 0
-	for _, a := range authAlerts(g) {
+	for _, a := range authRuleSet(g) {
 		for metric := range metricNames(str(a["expr"])) {
 			if !strings.HasPrefix(metric, "dev_health_api_") {
 				continue
@@ -118,11 +141,11 @@ func authAlertMetricsAreEmitted(g *guard) {
 			g.expect(hasSample(scrape, metric), "%s reads %q, which the auth service scrape does not carry as a sample: an alert on a metric nobody publishes never fires", str(a["alert"]), metric)
 		}
 	}
-	g.expect(checked == 4, "checked %d metric reads across the auth rules, want 4 (a parser that returns nothing must not pass)", checked)
+	g.expect(checked == 3, "checked %d metric reads across the auth rules, want 3 (a parser that returns nothing must not pass)", checked)
 }
 
 func authAlertsSelectTheAuthJob(g *guard) {
-	for _, a := range authAlerts(g) {
+	for _, a := range authRuleSet(g) {
 		g.expect(strings.Contains(str(a["expr"]), `job="auth-service"`), "%s does not select job=\"auth-service\": it would also read another service's series", str(a["alert"]))
 	}
 }
@@ -130,7 +153,7 @@ func authAlertsSelectTheAuthJob(g *guard) {
 var groupBy = regexp.MustCompile(`\bby\s*\(([^)]*)\)`)
 
 func authAlertLabelsAreBounded(g *guard) {
-	for _, a := range authAlerts(g) {
+	for _, a := range authRuleSet(g) {
 		for _, m := range groupBy.FindAllStringSubmatch(str(a["expr"]), -1) {
 			for _, label := range strings.Split(m[1], ",") {
 				label = strings.TrimSpace(label)
@@ -147,10 +170,8 @@ func authAlertLabelsAreBounded(g *guard) {
 }
 
 func authAlertShapes(g *guard) {
-	store := str(authAlertNamed(g, "AuthRateLimitStoreErrors")["expr"])
-	g.expect(regexp.MustCompile(`increase\([^)]*store_errors_total[^)]*\[10m\]\)\s*\)\s*>\s*0\s*$`).MatchString(strings.TrimSpace(store)), "the store-error rule must be any-nonzero over its window: %q", store)
-	high := str(authAlertNamed(g, "AuthRateLimitStoreErrorsHigh")["expr"])
-	g.expect(regexp.MustCompile(`>\s*20\s*$`).MatchString(strings.TrimSpace(high)), "the high store-error tier must compare > 20: %q", high)
+	high := str(authAlertNamed(g, authStoreHigh)["expr"])
+	g.expect(regexp.MustCompile(`increase\([^)]*store_errors_total[^)]*\[10m\]\)\s*\)\s*>\s*20\s*$`).MatchString(strings.TrimSpace(high)), "the high store-error tier must compare > 20 over ten minutes: %q", high)
 	rate := authAlertNamed(g, "AuthServiceHighServerErrorRate")
 	expr := str(rate["expr"])
 	g.expect(strings.Contains(expr, `status_class="5xx"`) && strings.Contains(expr, "/") && strings.Contains(expr, "> 0.05"), "the 5xx rule must be a 5xx-over-all ratio above 0.05: %q", expr)
@@ -165,8 +186,7 @@ func authAlertShapes(g *guard) {
 	for name, want := range map[string]string{
 		"AuthServiceTargetDown":          "5m",
 		"AuthServiceMetricsAbsent":       "10m",
-		"AuthRateLimitStoreErrors":       "5m",
-		"AuthRateLimitStoreErrorsHigh":   "5m",
+		authStoreHigh:                    "5m",
 		"AuthRateLimitRejectionsHigh":    "10m",
 		"AuthServiceHighServerErrorRate": "10m",
 	} {
@@ -192,12 +212,13 @@ func TestAuthServiceAlertGuardsPlantedDefects(t *testing.T) {
 		{"job-selector-dropped", rules, mut(rulesRel, `sum by (job) (up{job="auth-service"}) == 0`, "sum by (job) (up) == 0"), authAlertsSelectTheAuthJob, "another service"},
 		{"path-label-added", rules, mut(rulesRel, "sum by (limit) (increase(dev_health_api_rate_limit_store_errors_total", "sum by (limit, path) (increase(dev_health_api_rate_limit_store_errors_total"), authAlertLabelsAreBounded, "closed limit id"},
 		{"team-invented", rules, mut(rulesRel, "          team: platform\n        annotations:\n          summary: \"Auth service target is down\"", "          team: identity\n        annotations:\n          summary: \"Auth service target is down\""), authAlertLabelsAreBounded, "want the existing groups"},
-		{"store-error-threshold-raised", rules, mut(rulesRel, "[10m])) > 0\n        for: 5m", "[10m])) > 5\n        for: 5m"), authAlertShapes, "any-nonzero"},
+		{"store-error-high-threshold-changed", rules, mut(rulesRel, "[10m])) > 20\n        for: 5m", "[10m])) > 200\n        for: 5m"), authAlertShapes, "high store-error tier"},
+		{"store-error-high-moved-back", rules, mut(rulesRel, "      # Critical tier of the rule above: more than 20 store errors in ten minutes on one limit.\n      - alert: AuthRateLimitStoreErrorsHigh", "      # Critical tier of the rule above: more than 20 store errors in ten minutes on one limit.\n      - alert: AuthRateLimitStoreErrorsHighX"), authAlertSetIsExact, "exactly once"},
 		{"traffic-floor-removed", rules, mut(rulesRel, " and sum(rate(dev_health_api_http_requests_total{job=\"auth-service\"}[5m])) > 0.1", ""), authAlertShapes, "traffic floor"},
 		{"absent-rule-removed", rules, mut(rulesRel, "absent(up{job=\"auth-service\"})", "up{job=\"auth-service\"}"), authAlertShapes, "absent"},
 		{"instance-label-kept", rules, mut(rulesRel, `sum by (job) (up{job="auth-service"}) == 0`, `up{job="auth-service"} == 0`), authAlertLabelsAreBounded, "bare selector"},
 		{"rejection-threshold-changed", rules, mut(rulesRel, "[5m])) > 1\n        for: 10m", "[5m])) > 10\n        for: 10m"), authAlertShapes, "rejection rule"},
 		{"rejection-for-shortened", rules, mut(rulesRel, "[5m])) > 1\n        for: 10m", "[5m])) > 1\n        for: 1m"), authAlertShapes, "for:"},
-		{"store-error-for-shortened", rules, mut(rulesRel, "[10m])) > 0\n        for: 5m", "[10m])) > 0\n        for: 1m"), authAlertShapes, "for:"},
+		{"store-error-for-shortened", rules, mut(rulesRel, "[10m])) > 20\n        for: 5m", "[10m])) > 20\n        for: 1m"), authAlertShapes, "for:"},
 	})
 }

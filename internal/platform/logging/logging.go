@@ -238,14 +238,10 @@ func redactJSONValue(value any) any {
 		if len(typed) == 0 {
 			return typed
 		}
-		sawPlaceholder := false
+		var unclean []string
 		for key, nested := range typed {
 			if !KeyClean(key) {
-				delete(typed, key)
-				if !sawPlaceholder {
-					sawPlaceholder = true
-					typed[RedactedKeyName] = redacted
-				}
+				unclean = append(unclean, key)
 				continue
 			}
 			if ProtectedKey(key) {
@@ -253,6 +249,12 @@ func redactJSONValue(value any) any {
 				continue
 			}
 			typed[key] = redactJSONValue(nested)
+		}
+		for _, key := range unclean {
+			delete(typed, key)
+		}
+		if len(unclean) > 0 {
+			typed[RedactedKeyName] = redacted
 		}
 		return typed
 	case []any:

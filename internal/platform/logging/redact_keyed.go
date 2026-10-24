@@ -35,11 +35,15 @@ var (
 
 const maxCleanKeys = 4096
 
-// KeyClean reports whether the redactor leaves key text unchanged. A verdict is remembered per distinct clean key (bounded);
+// KeyClean reports whether the redactor leaves key text unchanged. The placeholder name itself is reserved and never clean,
+// so a user key with that name cannot be told apart from, or overwrite, a placeholder. A verdict is remembered per distinct clean key (bounded);
 // a key that changed is never stored, so a stream of credential keys cannot grow the cache.
 func KeyClean(key string) bool {
 	if key == "" {
 		return true
+	}
+	if key == RedactedKeyName {
+		return false
 	}
 	if _, ok := cleanKeys.Load(key); ok {
 		return true

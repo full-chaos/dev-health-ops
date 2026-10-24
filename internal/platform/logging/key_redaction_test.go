@@ -123,6 +123,9 @@ func TestSlogChangingLogValuerCannotBypassKeyScrub(t *testing.T) {
 			calls := 0
 			keyedLoggers(&buf)[name].Info("event", "outer", flipValuer{calls: &calls})
 			assertNoKeyLeak(t, name, buf.String())
+			if calls != 1 {
+				t.Errorf("%s: LogValue resolved %d times for one emission, want exactly 1", name, calls)
+			}
 		})
 	}
 }
@@ -204,5 +207,66 @@ func TestSlogEmptyNameGroupsShareTheParentPlaceholderLevel(t *testing.T) {
 	NewJSON(&buf, slog.LevelInfo).With(secret, "a").Info("event", slog.Group("", secret+"x", "b"))
 	if n := strings.Count(buf.String(), "redacted.key"); n != 1 {
 		t.Errorf("With-bound plus empty group: want one placeholder, got %d: %q", n, buf.String())
+	}
+}
+
+type panickingValue struct{}
+
+func (panickingValue) MarshalJSON() ([]byte, error) { panic("marshal panic") }
+
+func TestSlogSyncCLIWrapperSurvivesAPanickingStructuredValue(t *testing.T) {
+	var textBuf, jsonBuf bytes.Buffer
+	for name, logger := range map[string]*slog.Logger{
+		"text":     slog.New(WithValueRedaction(slog.NewTextHandler(&textBuf, nil), func(s string) string { return s })),
+		"json+cli": slog.New(WithValueRedaction(NewJSON(&jsonBuf, slog.LevelInfo).Handler(), func(s string) string { return s })),
+	} {
+		t.Run(name, func(t *testing.T) {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Fatalf("%s: logger panicked: %v", name, r)
+				}
+			}()
+			logger.Info("event", "obj", panickingValue{})
+			logger.With("bound", panickingValue{}).Info("bound")
+		})
+	}
+	if !strings.Contains(textBuf.String(), "event") || strings.Contains(textBuf.String(), "marshal panic") {
+		t.Errorf("record missing or leaked the panic text: %q", textBuf.String())
+	}
+}
+
+func TestSlogReservedPlaceholderNameIsNeverAUserKey(t *testing.T) {
+	secret, _ := syntheticKeys()
+	if KeyClean(RedactedKeyName) {
+		t.Fatal("the placeholder name must not be a clean user key")
+	}
+	cases := map[string]func(*slog.Logger){
+		"clean-first":  func(l *slog.Logger) { l.Info("event", "redacted.key", "KEEP-ME", secret, "x") },
+		"dirty-first":  func(l *slog.Logger) { l.Info("event", secret, "x", "redacted.key", "KEEP-ME") },
+		"bound":        func(l *slog.Logger) { l.With("redacted.key", "KEEP-ME").Info("event", secret, "x") },
+		"group":        func(l *slog.Logger) { l.Info("event", slog.Group("redacted.key", "k", "member-kept")) },
+		"nested-map":   func(l *slog.Logger) { l.Info("event", "obj", map[string]any{"redacted.key": "KEEP-ME", secret: "x"}) },
+		"nested-clean": func(l *slog.Logger) { l.Info("event", "obj", map[string]any{"redacted.key": "KEEP-ME"}) },
+	}
+	for name, emit := range cases {
+		for hname, build := range map[string]func(*bytes.Buffer) *slog.Logger{
+			"json": func(b *bytes.Buffer) *slog.Logger { return NewJSON(b, slog.LevelInfo) },
+			"sync-cli": func(b *bytes.Buffer) *slog.Logger {
+				return slog.New(WithValueRedaction(slog.NewTextHandler(b, nil), func(s string) string { return s }))
+			},
+		} {
+			t.Run(name+"/"+hname, func(t *testing.T) {
+				var buf bytes.Buffer
+				emit(build(&buf))
+				out := buf.String()
+				assertNoKeyLeak(t, name, out)
+				if strings.Contains(out, "KEEP-ME") {
+					t.Errorf("a value under the reserved name was written: %q", out)
+				}
+				if n := strings.Count(out, "redacted.key"); n != 1 {
+					t.Errorf("want exactly one placeholder, got %d: %q", n, out)
+				}
+			})
+		}
 	}
 }

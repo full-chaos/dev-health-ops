@@ -85,7 +85,18 @@ func (h valueRedactor) attr(attr slog.Attr) slog.Attr {
 		case fmt.Stringer:
 			return slog.String(attr.Key, h.redact(typed.String()))
 		}
-		return slog.Attr{Key: attr.Key, Value: attrRedactor{}.redactAny(value.Any())}
+		return slog.Attr{Key: attr.Key, Value: redactStructured(value.Any())}
 	}
 	return slog.Attr{Key: attr.Key, Value: value}
+}
+
+// redactStructured is attrRedactor.redactAny with the same panic guard attrRedactor.replace has: a value whose marshaler
+// panics is logged as a redaction failure.
+func redactStructured(value any) (result slog.Value) {
+	defer func() {
+		if recover() != nil {
+			result = slog.StringValue(redactionFailed)
+		}
+	}()
+	return attrRedactor{}.redactAny(value)
 }

@@ -119,14 +119,13 @@ func claimUnits(
 	cappedSlice := mapKeysToSlice(cappedUnitIDs)
 	authorizedSlice := mapKeysToSlice(authorizedUnitIDs)
 
-	plannedClaimed, err := execReturningIDs(ctx, tx, `
+	plannedClaimed, err := execClaimStatement(ctx, tx, func(ids string) string {
+		return `
 UPDATE public.sync_run_units
 SET status = $2, updated_at = $3, first_blocked_at = NULL
-WHERE sync_run_id = $1::uuid AND status = $4
-  AND id = ANY($6::uuid[])
-  AND NOT (id = ANY($5::uuid[]))
-RETURNING id::text`,
-		syncRunID, syncRunUnitStatusDispatching, now, syncRunUnitStatusPlanned, cappedSlice, authorizedSlice)
+WHERE sync_run_id = $1::uuid AND status = $4` + ids + `
+RETURNING id::text`
+	}, []any{syncRunID, syncRunUnitStatusDispatching, now, syncRunUnitStatusPlanned}, authorizedSlice, cappedSlice)
 	if err != nil {
 		return nil, nil, fmt.Errorf("claim planned units: %w", err)
 	}
@@ -136,15 +135,14 @@ RETURNING id::text`,
 		claimedIDs[id] = true
 	}
 
-	dueRetryingClaimed, err := execReturningIDs(ctx, tx, `
+	dueRetryingClaimed, err := execClaimStatement(ctx, tx, func(ids string) string {
+		return `
 UPDATE public.sync_run_units
 SET status = $2, updated_at = $3, available_at = NULL, first_blocked_at = NULL
 WHERE sync_run_id = $1::uuid AND status = $4
-  AND available_at IS NOT NULL AND available_at <= $3
-  AND id = ANY($6::uuid[])
-  AND NOT (id = ANY($5::uuid[]))
-RETURNING id::text`,
-		syncRunID, syncRunUnitStatusDispatching, now, syncRunUnitStatusRetrying, cappedSlice, authorizedSlice)
+  AND available_at IS NOT NULL AND available_at <= $3` + ids + `
+RETURNING id::text`
+	}, []any{syncRunID, syncRunUnitStatusDispatching, now, syncRunUnitStatusRetrying}, authorizedSlice, cappedSlice)
 	if err != nil {
 		return nil, nil, fmt.Errorf("claim due retrying units: %w", err)
 	}
@@ -153,14 +151,13 @@ RETURNING id::text`,
 	}
 
 	excludeFromStale := append(mapKeysToSlice(claimedIDs), cappedSlice...)
-	staleReclaimed, err := execReturningIDs(ctx, tx, `
+	staleReclaimed, err := execClaimStatement(ctx, tx, func(ids string) string {
+		return `
 UPDATE public.sync_run_units
 SET updated_at = $2
-WHERE sync_run_id = $1::uuid AND status = $3 AND updated_at <= $4
-  AND id = ANY($6::uuid[])
-  AND NOT (id = ANY($5::uuid[]))
-RETURNING id::text`,
-		syncRunID, now, syncRunUnitStatusDispatching, staleDispatchCutoff(now), excludeFromStale, authorizedSlice)
+WHERE sync_run_id = $1::uuid AND status = $3 AND updated_at <= $4` + ids + `
+RETURNING id::text`
+	}, []any{syncRunID, now, syncRunUnitStatusDispatching, staleDispatchCutoff(now)}, authorizedSlice, excludeFromStale)
 	if err != nil {
 		return nil, nil, fmt.Errorf("reclaim stale dispatching units: %w", err)
 	}
@@ -257,6 +254,7 @@ func claimableOutsideSnapshot(
 	ctx context.Context, tx pgx.Tx, syncRunID string, claimedIDs map[string]bool,
 	authorizedSlice, cappedSlice []string, now time.Time,
 ) ([]string, error) {
+	exclusion, exclusionArgs := notAnyClauses(7, authorizedSlice, cappedSlice, mapKeysToSlice(claimedIDs))
 	ids, err := execReturningIDs(ctx, tx, `
 SELECT id::text FROM public.sync_run_units
 WHERE sync_run_id = $1::uuid
@@ -264,14 +262,10 @@ WHERE sync_run_id = $1::uuid
         status = $2
      OR (status = $3 AND available_at IS NOT NULL AND available_at <= $4)
      OR (status = $5 AND updated_at <= $6)
-      )
-  AND NOT (id = ANY($7::uuid[]))
-  AND NOT (id = ANY($8::uuid[]))
-  AND NOT (id = ANY($9::uuid[]))
+      )`+exclusion+`
 ORDER BY id`,
-		syncRunID, syncRunUnitStatusPlanned, syncRunUnitStatusRetrying, now,
-		syncRunUnitStatusDispatching, staleDispatchCutoff(now), authorizedSlice, cappedSlice,
-		mapKeysToSlice(claimedIDs))
+		append([]any{syncRunID, syncRunUnitStatusPlanned, syncRunUnitStatusRetrying, now,
+			syncRunUnitStatusDispatching, staleDispatchCutoff(now)}, exclusionArgs...)...)
 	if err != nil {
 		return nil, fmt.Errorf("load claimable units outside the guard snapshot: %w", err)
 	}

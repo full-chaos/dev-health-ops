@@ -899,6 +899,43 @@ VALUES ($1,$2,$3,'github','commits','00000000-0000-4000-8000-0000000000ed','plan
 		`SELECT count(*) FROM worker_job_outbox WHERE job_kind=$1`,
 		jobcontract.KindSyncProviderUnit)
 
+	// Arm 3, same venue: more candidates than one page, then far more. The guard's id sets travel as uuid[] binds of at
+	// most claimIDChunkSize each; the runtime roles hold no TEMPORARY privilege (the harness revokes it from PUBLIC like
+	// the provisioning script), so a statement that needed a temp table would be a denial here.
+	t.Setenv("SYNC_RUN_MAX_UNITS", "20000")
+	seedMoreUnits := func(from, count int) {
+		t.Helper()
+		if _, err := admin.Exec(ctx, `
+INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,source_id,status,updated_at)
+SELECT ('00000000-0000-4000-9000-' || lpad(to_hex(g), 12, '0'))::uuid, $1, $2, 'github', 'commits',
+       '00000000-0000-4000-8000-0000000000ed', 'planned', now()
+FROM generate_series($3::int, $4::int) AS g`, discoveryTestOrg, discoveryTestRun, from, from+count-1); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, step := range []struct {
+		name                    string
+		from, count, candidates int
+	}{
+		{"501 candidates", 1, 501, 501},
+		{"5000 candidates", 502, 4499, 5000},
+	} {
+		seedMoreUnits(step.from, step.count)
+		stepErr := service.Dispatch(ctx, dispatchTestArgsLegacy())
+		denials.assertNone(t, "NativeDispatchSyncRunService with "+step.name+" (guard id sets)")
+		if stepErr != nil {
+			t.Fatalf("Dispatch (%s): %v", step.name, stepErr)
+		}
+		var planned int
+		if err := admin.QueryRow(ctx, `SELECT count(*) FROM sync_run_units WHERE sync_run_id=$1 AND status=$2`,
+			discoveryTestRun, syncRunUnitStatusPlanned).Scan(&planned); err != nil {
+			t.Fatal(err)
+		}
+		if planned == 0 || planned >= step.candidates {
+			t.Fatalf("%s: %d units still planned of %d candidates; the first pass should have claimed a few and left the rest", step.name, planned, step.candidates)
+		}
+	}
+
 	// Arm 2, same venue: a feature-gated unit, with the feature disabled by
 	// an org override -- Dispatch's own gate must deny it before any claim,
 	// reading feature_flags/org_feature_overrides (non-locking) and then

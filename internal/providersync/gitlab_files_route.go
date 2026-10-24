@@ -508,7 +508,7 @@ func gitLabFileContentEligible(filePath string) bool {
 
 func newGitLabFileRow(claim Claim, repoID, filePath string, contents map[string]string, normalizedAt time.Time) gitFileRow {
 	row := gitFileRow{RepoID: repoID, Path: filePath, LastSynced: normalizedAt.UTC().Truncate(time.Millisecond), OrgID: claim.OrgID}
-	if content, ok := contents[filePath]; ok {
+	if content, ok := contents[filePath]; ok && gitFileContentStorable(content) {
 		row.Contents = &content
 	}
 	return row

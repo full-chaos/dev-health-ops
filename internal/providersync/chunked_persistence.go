@@ -14,6 +14,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 const (
@@ -512,4 +514,16 @@ func chunkResultDigest(result map[string]any) string {
 	encoded = bytes.TrimSpace(encoded)
 	digest := sha256.Sum256(encoded)
 	return hex.EncodeToString(digest[:])
+}
+
+// IsChunkStoreDataError reports a chunk store failure that Postgres raised for
+// the payload itself (SQLSTATE 22P05, unsupported Unicode escape: a NUL in a
+// jsonb string). The same payload fails the same way on every attempt.
+func IsChunkStoreDataError(err error) bool {
+	var storeErr *ChunkStoreError
+	if !errors.As(err, &storeErr) {
+		return false
+	}
+	var pgErr *pgconn.PgError
+	return errors.As(storeErr.Cause, &pgErr) && pgErr.Code == "22P05"
 }

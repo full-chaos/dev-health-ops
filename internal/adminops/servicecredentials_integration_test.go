@@ -513,7 +513,8 @@ func (db *database) seedLegacyWorkerMint(t *testing.T, run *credentialRun, index
 			t.Fatalf("step %d: %v", index, err)
 		}
 	}
-	token := "svc_worker_" + fmt.Sprintf("%043d", index)
+	// The first 16 characters name the step: a listed token_prefix is matched to a printed token by them.
+	token := "svc_worker_" + fmt.Sprintf("%05d%038d", index, index)
 	sum := sha256.Sum256([]byte(token))
 	key := hex.EncodeToString(sum[:])
 	run.tokens[key] = fmt.Sprintf("token of step %d", index)

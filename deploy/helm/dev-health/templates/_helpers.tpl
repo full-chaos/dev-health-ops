@@ -732,3 +732,12 @@ them, from this one list (internal/platform/dsnclass classifies the same names).
 {{- define "dev-health.goWorkerDSNNames" -}}
 {{- toJson (list "DATABASE_URI" "DATABASE_URL" "POSTGRES_URL" "API_DATABASE_URI" "GO_API_REGISTRY_POSTGRES_URI" "MIGRATION_DATABASE_URI" "AUTH_DATABASE_URI" "AUTH_MIGRATION_DATABASE_URI" "COORDINATOR_DATABASE_URI" "WORKER_DATABASE_URI") -}}
 {{- end }}
+
+{{/*
+The closed list of keys of the shared Secret a Go worker group may take
+(goWorkers.secretKeys). A name outside it refuses the render, so an unlisted
+database DSN name cannot reach a worker pod either.
+*/}}
+{{- define "dev-health.goWorkerSecretKeyNames" -}}
+{{- toJson (list "APP_BASE_URL" "CLICKHOUSE_URI" "EMAIL_API_KEY" "EMAIL_FROM_ADDRESS" "EMAIL_PROVIDER" "EXPECTED_WORKER_GROUPS" "INVESTMENT_LLM_BATCH_MODE" "INVESTMENT_LLM_BATCH_TIMEOUT_SECONDS" "LICENSE_PRIVATE_KEY" "LINEAR_API_KEY" "LLM_MODEL" "LLM_PROVIDER" "OPENAI_API_KEY" "PAGER_DUTY_CLIENT_ID" "PAGER_DUTY_REDIRECT_URI" "PAGER_DUTY_SECRET" "SETTINGS_ENCRYPTION_KEY" "STRIPE_SECRET_KEY" "STRIPE_WEBHOOK_SECRET" "WORKER_GITHUB_WORK_ITEMS_STATUS_MAPPING_PATH") -}}
+{{- end }}

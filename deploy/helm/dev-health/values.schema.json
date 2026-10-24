@@ -146,7 +146,7 @@
         "enabled": { "type": "boolean" },
         "image": { "type": "string", "minLength": 1 },
         "extraEnvFrom": { "$ref": "#/definitions/extraEnvFrom" },
-        "secretKeys": { "type": "array", "items": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$", "not": { "enum": ["DATABASE_URI", "DATABASE_URL", "POSTGRES_URL", "API_DATABASE_URI", "GO_API_REGISTRY_POSTGRES_URI", "MIGRATION_DATABASE_URI", "AUTH_DATABASE_URI", "AUTH_MIGRATION_DATABASE_URI", "COORDINATOR_DATABASE_URI", "WORKER_DATABASE_URI"] } }, "uniqueItems": true },
+        "secretKeys": { "type": "array", "items": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$", "enum": ["APP_BASE_URL", "CLICKHOUSE_URI", "EMAIL_API_KEY", "EMAIL_FROM_ADDRESS", "EMAIL_PROVIDER", "EXPECTED_WORKER_GROUPS", "INVESTMENT_LLM_BATCH_MODE", "INVESTMENT_LLM_BATCH_TIMEOUT_SECONDS", "LICENSE_PRIVATE_KEY", "LINEAR_API_KEY", "LLM_MODEL", "LLM_PROVIDER", "OPENAI_API_KEY", "PAGER_DUTY_CLIENT_ID", "PAGER_DUTY_REDIRECT_URI", "PAGER_DUTY_SECRET", "SETTINGS_ENCRYPTION_KEY", "STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET", "WORKER_GITHUB_WORK_ITEMS_STATUS_MAPPING_PATH"] }, "uniqueItems": true },
         "pgbouncer": {
           "type": "object",
           "properties": {

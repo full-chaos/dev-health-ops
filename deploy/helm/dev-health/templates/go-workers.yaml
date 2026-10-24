@@ -280,9 +280,13 @@ spec:
               already sets it. A database DSN name in the list refuses the render.
             */}}
             {{- $dsnNames := include "dev-health.goWorkerDSNNames" $ | fromJsonArray }}
+            {{- $allowedKeys := include "dev-health.goWorkerSecretKeyNames" $ | fromJsonArray }}
             {{- range $listed := $.Values.goWorkers.secretKeys }}
             {{- if has $listed $dsnNames }}
             {{- fail (printf "goWorkers.secretKeys lists %s, a database DSN name; a worker takes DSNs only from its own class secrets" $listed) }}
+            {{- end }}
+            {{- if not (has $listed $allowedKeys) }}
+            {{- fail (printf "goWorkers.secretKeys lists %s, which is not a worker secret key the chart knows (dev-health.goWorkerSecretKeyNames)" $listed) }}
             {{- end }}
             {{- end }}
             {{- range $key := $.Values.goWorkers.secretKeys }}
@@ -346,6 +350,11 @@ spec:
           Shared across every group in this range; there is no per-group
           extraEnvFrom.
           */}}
+          {{- range $source := $.Values.goWorkers.extraEnvFrom }}
+          {{- if and (kindIs "map" $source) (kindIs "map" $source.secretRef) (eq ($source.secretRef.name | default "") (include "dev-health.secretName" $)) }}
+          {{- fail (printf "goWorkers.extraEnvFrom names the shared Secret %s; its worker keys come from goWorkers.secretKeys and the whole Secret is no envFrom source of a worker pod" (include "dev-health.secretName" $)) }}
+          {{- end }}
+          {{- end }}
           {{- $groupEnvFrom := $.Values.goWorkers.extraEnvFrom | default (list) }}
           {{- $groupEnvFrom = append $groupEnvFrom (dict "configMapRef" (dict "name" (include "dev-health.configMapName" $))) }}
           envFrom:

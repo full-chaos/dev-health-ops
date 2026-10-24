@@ -199,6 +199,15 @@ func chartDSNNames(g *guard) []string {
 	return regexp.MustCompile(`"([A-Z0-9_]+)"`).FindAllString(m[1], -1)
 }
 
+func chartAllowedKeys(g *guard) []string {
+	m := regexp.MustCompile(`(?s)define "dev-health\.goWorkerSecretKeyNames".*?toJson \(list (.*?)\)`).FindStringSubmatch(g.read(chartFile("templates/_helpers.tpl")))
+	if m == nil {
+		g.failf("the chart has no dev-health.goWorkerSecretKeyNames helper")
+		return nil
+	}
+	return unquoted(regexp.MustCompile(`"([A-Z0-9_]+)"`).FindAllString(m[1], -1))
+}
+
 func unquoted(in []string) []string {
 	out := make([]string, len(in))
 	for i, s := range in {
@@ -224,6 +233,45 @@ func chartDSNListMatchesDSNClass(g *guard) {
 	}
 }
 
+// The allow-list of worker secret keys is the census: the loader keys no worker-group reader skips, none a database DSN,
+// and it holds the chart defaults.
+func chartAllowListIsTheCensus(g *guard) {
+	allowed := chartAllowedKeys(g)
+	var census []string
+	for _, k := range loaderSecretKeys {
+		if _, skipped := notReadByWorkers[k]; !skipped && !isDSNSecret(k) {
+			census = append(census, k)
+		}
+	}
+	got := slices.Clone(allowed)
+	sort.Strings(got)
+	sort.Strings(census)
+	g.expect(len(census) > 0 && slices.Equal(got, census), "the chart allow-list %v differs from the census %v", got, census)
+	for _, k := range allowed {
+		g.expect(!isDSNSecret(k), "the chart allow-list names %s, a database DSN secret", k)
+	}
+	for _, k := range chartWorkerSecretKeys(g) {
+		g.expect(slices.Contains(allowed, k), "the default goWorkers.secretKeys lists %s, outside the chart allow-list", k)
+	}
+}
+
+// A name outside the allow-list, DSN-shaped or not, refuses the render by the template and by the schema.
+func workerSecretKeysRefuseUnlistedNames(g *guard) {
+	for _, name := range []string{"ANALYTICS_DATABASE_URI", "SOME_OTHER_KEY"} {
+		override := set("goWorkers.secretKeys={APP_BASE_URL," + name + "}")
+		out := g.refusal("template refusal of "+name, "worker-secret-keys-unlisted-tpl", join(poolGoValues, override, []string{"--skip-schema-validation"})...)
+		g.expect(strings.Contains(out, "goWorkers.secretKeys lists "+name+", which is not a worker secret key"), "the template refusal of %s says %q", name, firstLines(out, 2))
+		g.refusal("schema refusal of "+name, "worker-secret-keys-unlisted-schema", join(poolGoValues, override)...)
+	}
+}
+
+// goWorkers.extraEnvFrom may not name the shared Secret; an unrelated operator Secret still renders.
+func workerExtraEnvFromRefusesTheSharedSecret(g *guard) {
+	out := g.refusal("extraEnvFrom names the shared Secret", "worker-extra-shared", join(poolGoValues, set("goWorkers.extraEnvFrom[0].secretRef.name=worker-extra-shared-dev-health-secrets"))...)
+	g.expect(strings.Contains(out, "goWorkers.extraEnvFrom names the shared Secret worker-extra-shared-dev-health-secrets"), "the extraEnvFrom refusal says %q", firstLines(out, 2))
+	g.mustRender("an unrelated operator Secret in extraEnvFrom", "worker-extra-other", join(poolGoValues, set("goWorkers.extraEnvFrom[0].secretRef.name=operator-env"))...)
+}
+
 // goWorkers.secretKeys naming a database DSN refuses the render: by the template (schema validation skipped) and by the schema.
 func workerSecretKeysRefuseDSNNames(g *guard) {
 	for _, name := range unquoted(chartDSNNames(g)) {
@@ -236,12 +284,12 @@ func workerSecretKeysRefuseDSNNames(g *guard) {
 
 // The schema refuses the same names, so a values check that runs the schema fails early; the template stays the authority.
 func workerSecretKeysSchemaListsChartDSNNames(g *guard) {
-	items := at(g.yamlFile(chartFile("values.schema.json")), "properties", "goWorkers", "properties", "secretKeys", "items", "not", "enum")
+	items := at(g.yamlFile(chartFile("values.schema.json")), "properties", "goWorkers", "properties", "secretKeys", "items", "enum")
 	got := strs(items)
-	want := unquoted(chartDSNNames(g))
+	want := chartAllowedKeys(g)
 	sort.Strings(got)
 	sort.Strings(want)
-	g.expect(len(want) > 0 && slices.Equal(got, want), "values.schema.json refuses %v in goWorkers.secretKeys, the chart DSN list is %v", got, want)
+	g.expect(len(want) > 0 && slices.Equal(got, want), "values.schema.json allows %v in goWorkers.secretKeys, the chart allow-list is %v", got, want)
 }
 
 // The blanks render after the secretKeyRef entries, so a DSN name that reached the list still ends blank.
@@ -277,6 +325,9 @@ func TestWorkerSecretKeysGuardsRealTree(t *testing.T) {
 		check{"shared-secret-keys-are-classified", func(g *guard) { sharedSecretKeysAreClassified(g, loaderSecretKeys) }},
 		check{"chart-dsn-list-matches-dsnclass", chartDSNListMatchesDSNClass},
 		check{"worker-secret-keys-refuse-dsn-names", workerSecretKeysRefuseDSNNames},
+		check{"chart-allow-list-is-the-census", chartAllowListIsTheCensus},
+		check{"worker-secret-keys-refuse-unlisted-names", workerSecretKeysRefuseUnlistedNames},
+		check{"worker-extra-envfrom-refuses-the-shared-secret", workerExtraEnvFromRefusesTheSharedSecret},
 		check{"worker-secret-keys-schema-lists-chart-dsn-names", workerSecretKeysSchemaListsChartDSNNames},
 		check{"worker-dsn-blanks-render-last", workerDSNBlanksRenderLast},
 	)
@@ -309,12 +360,26 @@ func TestWorkerSecretKeysGuardsPlantedDefects(t *testing.T) {
 			},
 			"loader key A_NEW_SECRET_KEY is classified 0 times"},
 		{"the-template-stops-refusing-dsn-names", reader,
-			all(mut(chartFile(workers), "{{- fail (printf \"goWorkers.secretKeys lists", "{{- $_ := (printf \"goWorkers.secretKeys lists"),
-				mut(chartFile("values.schema.json"), `"not": { "enum": [`, `"x-not": { "enum": [`)),
+			all(mut(chartFile(workers), "{{- fail (printf \"goWorkers.secretKeys lists %s, a database", "{{- $_ := (printf \"goWorkers.secretKeys lists %s, a database"),
+				mut(chartFile(workers), "{{- fail (printf \"goWorkers.secretKeys lists %s, which is not", "{{- $_ := (printf \"goWorkers.secretKeys lists %s, which is not"),
+				mut(chartFile("values.schema.json"), `"enum": ["APP_BASE_URL"`, `"x-enum": ["APP_BASE_URL"`)),
 			workerSecretKeysRefuseDSNNames, "must be refused"},
 		{"the-schema-stops-refusing-dsn-names", reader,
-			mut(chartFile("values.schema.json"), `"not": { "enum": [`, `"x-not": { "enum": [`),
-			workerSecretKeysSchemaListsChartDSNNames, "values.schema.json refuses"},
+			mut(chartFile("values.schema.json"), `"enum": ["APP_BASE_URL"`, `"x-enum": ["APP_BASE_URL"`),
+			workerSecretKeysSchemaListsChartDSNNames, "values.schema.json allows"},
+		{"the-template-stops-refusing-unlisted-names", reader,
+			all(mut(chartFile(workers), "{{- fail (printf \"goWorkers.secretKeys lists %s, which is not", "{{- $_ := (printf \"goWorkers.secretKeys lists %s, which is not"),
+				mut(chartFile("values.schema.json"), `"enum": ["APP_BASE_URL"`, `"x-enum": ["APP_BASE_URL"`)),
+			workerSecretKeysRefuseUnlistedNames, "must be refused"},
+		{"extraenvfrom-may-name-the-shared-secret", reader,
+			mut(chartFile(workers), "{{- fail (printf \"goWorkers.extraEnvFrom names", "{{- $_ := (printf \"goWorkers.extraEnvFrom names"),
+			workerExtraEnvFromRefusesTheSharedSecret, "must be refused"},
+		{"the-allow-list-loses-a-worker-key", reader,
+			mut(chartFile("templates/_helpers.tpl"), `"EMAIL_API_KEY" `, ""),
+			chartAllowListIsTheCensus, "differs from the census"},
+		{"the-allow-list-gains-a-dsn-name", reader,
+			mut(chartFile("templates/_helpers.tpl"), `(list "APP_BASE_URL"`, `(list "API_DATABASE_URI" "APP_BASE_URL"`),
+			chartAllowListIsTheCensus, "a database DSN secret"},
 		{"the-blanks-are-gone", reader,
 			mut(chartFile(workers), "            {{- range $blank := include \"dev-health.goWorkerDSNNames\" $ | fromJsonArray }}", "            {{- range $blank := list }}"),
 			workerDSNBlanksRenderLast, "no optional secret reference or no blank"},

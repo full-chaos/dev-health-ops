@@ -2,10 +2,12 @@ package providersync
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 
@@ -64,6 +66,15 @@ type gitHubTreeWalkLimits struct {
 	// rootListed says the caller already asked for the recursive listing of the
 	// root and it failed, so the root is listed alone at once.
 	rootListed bool
+	// slice makes a ceiling stop a result instead of a failure: the walk keeps
+	// what it read and reports where it stopped, and a later run walks on. A
+	// subtree answer that does not fit the remaining ceilings is listed and
+	// descended instead of stopping the walk.
+	slice bool
+	// after is the lower bound of a slice walk: only paths >= after are kept and
+	// every directory wholly before it is skipped. until, when set, is the upper
+	// bound: the walk ends before the first path >= until, with no ceiling.
+	after, until string
 }
 
 func defaultGitHubTreeWalkLimits() gitHubTreeWalkLimits {
@@ -87,6 +98,31 @@ type gitHubTreeWalkStats struct {
 	dirs, entries, depth int
 }
 
+// gitHubWalkSlice is the result of a walk in slice mode: every blob path in
+// [after, Next) in tree order. Next is the lower bound of the part the walk did
+// not read; it is empty for a walk that read to its end.
+type gitHubWalkSlice struct {
+	Paths []string
+	Sizes map[string]*int
+	Stats gitHubTreeWalkStats
+	Next  string
+	// Stopped is the ceiling that ended the walk early, or nil for a whole walk.
+	Stopped *GitHubTreeWalkLimitError
+}
+
+// gitHubWalkFrontierMaxBytes bounds a frontier path, as the cursor encodes it,
+// so two of them fit the chunk cursor. A longer one is cut back to the nearest
+// ancestor directory: that is a smaller lower bound, so the slice only shrinks.
+const gitHubWalkFrontierMaxBytes = 1000
+
+func gitHubWalkFrontierEncodedLen(path string) int {
+	encoded, err := json.Marshal(path)
+	if err != nil {
+		return gitHubWalkFrontierMaxBytes + 1
+	}
+	return len(encoded)
+}
+
 type gitHubTreeWalker struct {
 	ctx       context.Context
 	root      string
@@ -102,6 +138,11 @@ type gitHubTreeWalker struct {
 	stats       gitHubTreeWalkStats
 	metrics     *providerfoundation.Metrics
 	nearWarn    map[string]bool
+	// frontier is the directory at which a ceiling stopped the walk; cut is set
+	// once the walk reached its until bound.
+	frontier    string
+	frontierSet bool
+	cut         bool
 }
 
 // gitHubWalkTree recovers a complete blob inventory when the recursive tree
@@ -126,6 +167,74 @@ func gitHubWalkTreeLimited(
 	root, sha, prefix string,
 	limits gitHubTreeWalkLimits,
 ) ([]string, map[string]*int, gitHubTreeWalkStats, error) {
+	walker := newGitHubTreeWalker(ctx, client, root, limits)
+	if err := walker.walk(client, sha, prefix, 0); err != nil {
+		return nil, nil, walker.stats, err
+	}
+	return walker.paths, walker.sizes, walker.stats, nil
+}
+
+// gitHubWalkTreeSlice walks like gitHubWalkTreeLimited with limits.slice set:
+// a dirs, entries or time ceiling ends the walk with what it read, up to the
+// directory it stopped at. A walk that stopped before it passed limits.after,
+// any other error, and a frontier too long for the cursor are errors.
+func gitHubWalkTreeSlice(
+	ctx context.Context,
+	client *providerfoundation.HTTPClient,
+	root, sha string,
+	limits gitHubTreeWalkLimits,
+) (gitHubWalkSlice, error) {
+	limits.slice = true
+	walker := newGitHubTreeWalker(ctx, client, root, limits)
+	err := walker.walk(client, sha, "", 0)
+	if err == nil {
+		return gitHubWalkSlice{Paths: walker.paths, Sizes: walker.sizes, Stats: walker.stats}, nil
+	}
+	var stopped *GitHubTreeWalkLimitError
+	if !errors.As(err, &stopped) || !gitHubWalkLimitResumable(stopped.Limit) || !walker.frontierSet {
+		return gitHubWalkSlice{Stats: walker.stats}, err
+	}
+	next := gitHubWalkFrontierKey(walker.frontier)
+	for next != "" && gitHubWalkFrontierEncodedLen(next) > gitHubWalkFrontierMaxBytes {
+		next = next[:strings.LastIndex(strings.TrimSuffix(next, "/"), "/")+1]
+	}
+	if next == "" || next <= limits.after {
+		return gitHubWalkSlice{Stats: walker.stats}, err
+	}
+	result := gitHubWalkSlice{Stats: walker.stats, Next: next, Stopped: stopped, Sizes: walker.sizes}
+	for _, path := range walker.paths {
+		if path < next {
+			result.Paths = append(result.Paths, path)
+		} else {
+			delete(result.Sizes, path)
+		}
+	}
+	return result, nil
+}
+
+func gitHubWalkLimitResumable(limit string) bool {
+	switch limit {
+	case GitHubTreeWalkLimitDirs, GitHubTreeWalkLimitEntries, GitHubTreeWalkLimitTime:
+		return true
+	}
+	return false
+}
+
+// gitHubWalkFrontierKey is the lower bound of everything inside directory dir
+// ("" is the root, which has none).
+func gitHubWalkFrontierKey(dir string) string {
+	if dir == "" {
+		return ""
+	}
+	return dir + "/"
+}
+
+func newGitHubTreeWalker(
+	ctx context.Context,
+	client *providerfoundation.HTTPClient,
+	root string,
+	limits gitHubTreeWalkLimits,
+) *gitHubTreeWalker {
 	walker := &gitHubTreeWalker{
 		ctx: ctx, root: root, limits: limits, startedAt: limits.now(), timeCeiling: limits.budget,
 		ancestors: map[string]bool{}, sizes: map[string]*int{},
@@ -136,10 +245,7 @@ func gitHubWalkTreeLimited(
 			walker.timeCeiling = usable
 		}
 	}
-	if err := walker.walk(client, sha, prefix, 0); err != nil {
-		return nil, nil, walker.stats, err
-	}
-	return walker.paths, walker.sizes, walker.stats, nil
+	return walker
 }
 
 // noteNearCeiling says, once per walk and ceiling, that a walk reached half of
@@ -177,7 +283,43 @@ func (walker *gitHubTreeWalker) stop(limit string, value int) error {
 	return &GitHubTreeWalkLimitError{Limit: limit, Value: value}
 }
 
-func (walker *gitHubTreeWalker) walk(client *providerfoundation.HTTPClient, sha, prefix string, depth int) error {
+// noteStop records the directory at which a resumable ceiling stopped the walk:
+// the deepest frame sees the error first, so the first call wins.
+func (walker *gitHubTreeWalker) noteStop(prefix string, err error) {
+	var stopped *GitHubTreeWalkLimitError
+	if walker.frontierSet || !errors.As(err, &stopped) || !gitHubWalkLimitResumable(stopped.Limit) {
+		return
+	}
+	walker.frontier, walker.frontierSet = prefix, true
+}
+
+// withinBound says bound lies inside directory dir (the root contains every
+// bound): such a directory is listed on its own, not read as one subtree.
+func withinBound(bound, dir string) bool {
+	return bound != "" && (dir == "" || strings.HasPrefix(bound, dir+"/"))
+}
+
+// beforeAfter says every path of directory dir is below the slice's lower bound.
+func (walker *gitHubTreeWalker) beforeAfter(dir string) bool {
+	after := walker.limits.after
+	return after != "" && after > dir+"/" && !strings.HasPrefix(after, dir+"/")
+}
+
+// reachedUntil says key (a blob path, or a directory path plus "/") is at or
+// above the slice's upper bound; the walk then ends.
+func (walker *gitHubTreeWalker) reachedUntil(key string) bool {
+	if walker.limits.until != "" && key >= walker.limits.until {
+		walker.cut = true
+	}
+	return walker.cut
+}
+
+func (walker *gitHubTreeWalker) walk(client *providerfoundation.HTTPClient, sha, prefix string, depth int) (err error) {
+	defer func() {
+		if err != nil {
+			walker.noteStop(prefix, err)
+		}
+	}()
 	now := walker.limits.now()
 	// The half-way signal comes BEFORE any stop: a walk that is stopped by the
 	// very value it first observes (elapsed past the budget at the next
@@ -222,28 +364,66 @@ func (walker *gitHubTreeWalker) walk(client *providerfoundation.HTTPClient, sha,
 	}
 	walker.ancestors[sha] = true
 	defer delete(walker.ancestors, sha)
-	for _, entry := range tree.Tree {
+	entries := tree.Tree
+	if walker.limits.slice {
+		entries = sortedGitHubTreeEntries(entries)
+	}
+	for _, entry := range entries {
 		if entry.Path == "" {
 			continue
 		}
-		fullPath := entry.Path
-		if prefix != "" {
-			fullPath = prefix + "/" + entry.Path
-		}
+		fullPath := joinGitHubWalkPath(prefix, entry.Path)
 		switch entry.Type {
 		case "blob":
+			if walker.reachedUntil(fullPath) {
+				return nil
+			}
+			if fullPath < walker.limits.after {
+				continue
+			}
 			walker.paths = append(walker.paths, fullPath)
 			walker.sizes[fullPath] = entry.Size
 		case "tree":
 			if entry.SHA == "" {
 				return fmt.Errorf("path=%q: %w", fullPath, providerfoundation.ErrNormalizationInvalid)
 			}
+			if walker.reachedUntil(fullPath + "/") {
+				return nil
+			}
+			if walker.beforeAfter(fullPath) {
+				continue
+			}
 			if err := walker.walk(client, entry.SHA, fullPath, depth+1); err != nil {
 				return err
+			}
+			if walker.cut {
+				return nil
 			}
 		}
 	}
 	return nil
+}
+
+// sortedGitHubTreeEntries orders one directory listing as full paths sort: a
+// directory sorts as its name plus "/". GitHub lists in that order; a slice
+// cut is only valid if the walk reads in it, so the walk does not rely on it.
+func sortedGitHubTreeEntries(entries []gitHubTreeEntry) []gitHubTreeEntry {
+	key := func(entry gitHubTreeEntry) string {
+		if entry.Type == "tree" {
+			return entry.Path + "/"
+		}
+		return entry.Path
+	}
+	sorted := append([]gitHubTreeEntry(nil), entries...)
+	sort.SliceStable(sorted, func(left, right int) bool { return key(sorted[left]) < key(sorted[right]) })
+	return sorted
+}
+
+func joinGitHubWalkPath(prefix, path string) string {
+	if prefix == "" {
+		return path
+	}
+	return prefix + "/" + path
 }
 
 // walkSubtree reads the whole subtree of sha in one recursive request. It
@@ -252,6 +432,9 @@ func (walker *gitHubTreeWalker) walk(client *providerfoundation.HTTPClient, sha,
 // descends. The same ceilings apply as to a per-directory walk: every directory
 // of the answer counts as one, so a walk stops at the same repository size.
 func (walker *gitHubTreeWalker) walkSubtree(client *providerfoundation.HTTPClient, sha, prefix string, depth int) (bool, error) {
+	if withinBound(walker.limits.after, prefix) || withinBound(walker.limits.until, prefix) {
+		return false, nil
+	}
 	var tree gitHubTreePayload
 	err := fetchObjectRoute(walker.ctx, client, githubTreeRoute, walker.root+"/git/trees/"+url.PathEscape(sha)+"?recursive=true", &tree)
 	var tooLarge *providerfoundation.ObjectTooLargeError
@@ -273,6 +456,10 @@ func (walker *gitHubTreeWalker) walkSubtree(client *providerfoundation.HTTPClien
 	walker.noteNearCeiling(GitHubTreeWalkLimitDepth, deepest, walker.limits.maxDepth)
 	if deepest > walker.limits.maxDepth {
 		return false, walker.stop(GitHubTreeWalkLimitDepth, walker.limits.maxDepth)
+	}
+	if walker.limits.slice && (walker.stats.dirs+dirs > walker.limits.maxDirs ||
+		walker.stats.entries+len(tree.Tree) > walker.limits.maxEntries) {
+		return false, nil
 	}
 	walker.stats.dirs += dirs
 	walker.noteNearCeiling(GitHubTreeWalkLimitDirs, walker.stats.dirs, walker.limits.maxDirs)

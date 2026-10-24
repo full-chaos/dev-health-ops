@@ -115,14 +115,54 @@ func composeACRPorts(g *guard) {
 			published = append(published, n)
 		}
 	}
-	g.expect(equal(published, []string{"acr-mcp"}), "acr services publishing a port: %v, want only acr-mcp", published)
-	ports := list(r.services["acr-mcp"]["ports"])
-	if len(ports) != 1 {
-		g.failf("acr-mcp publishes %d ports, want 1", len(ports))
-		return
+	g.expect(equal(published, []string{"acr-falkordb", "acr-mcp"}), "acr services publishing a port: %v, want only acr-falkordb and acr-mcp", published)
+	for _, c := range []struct {
+		svc       string
+		published string
+		target    int
+	}{{"acr-mcp", "8081", 8081}, {"acr-falkordb", "16379", 6379}} {
+		ports := list(r.services[c.svc]["ports"])
+		if len(ports) != 1 {
+			g.failf("%s publishes %d ports, want 1", c.svc, len(ports))
+			continue
+		}
+		got := []any{at(ports[0], "host_ip"), at(ports[0], "published"), at(ports[0], "target")}
+		g.expect(equal(got, []any{"127.0.0.1", c.published, c.target}), "%s publishes %v, want [127.0.0.1 %s %d] (loopback only)", c.svc, got, c.published, c.target)
 	}
-	got := []any{at(ports[0], "host_ip"), at(ports[0], "published"), at(ports[0], "target")}
-	g.expect(equal(got, []any{"127.0.0.1", "8081", 8081}), "acr-mcp publishes %v, want [127.0.0.1 8081 8081] (loopback only)", got)
+}
+
+func composeSecretNames(s doc) map[string]bool {
+	out := map[string]bool{}
+	for _, v := range list(s["secrets"]) {
+		out[str(at(v, "source"))] = true
+	}
+	return out
+}
+
+func composeACRFalkorAuth(g *guard) {
+	r := composeACR(g)
+	fk := r.services["acr-falkordb"]
+	args := str(mp(fk["environment"])["REDIS_ARGS"])
+	g.expect(args == "--aclfile /run/secrets/acr_falkordb_acl", "acr-falkordb REDIS_ARGS=%q, want --aclfile /run/secrets/acr_falkordb_acl", args)
+	for _, sec := range []string{"acr_falkordb_acl", "acr_falkordb_password"} {
+		g.expect(composeSecretNames(fk)[sec], "acr-falkordb does not mount the secret %s", sec)
+	}
+	test := strings.Join(strs(at(fk, "healthcheck", "test")), " ")
+	g.expect(strings.Contains(test, "REDISCLI_AUTH=") && strings.Contains(test, "/run/secrets/acr_falkordb_password"), "the acr-falkordb healthcheck does not read the password from the secret file: %q", test)
+	for _, n := range []string{"acr-api", "acr-projector"} {
+		got := str(mp(r.services[n]["environment"])["ACR_CONTEXT_FABRIC_FALKOR_PASSWORD_FILE"])
+		g.expect(got == "/run/secrets/acr_falkordb_password", "%s ACR_CONTEXT_FABRIC_FALKOR_PASSWORD_FILE=%q, want /run/secrets/acr_falkordb_password", n, got)
+		g.expect(composeSecretNames(r.services[n])["acr_falkordb_password"], "%s does not mount the secret acr_falkordb_password", n)
+	}
+	for _, n := range composeACRAll {
+		if mp(r.services[n]["environment"])["ACR_CONTEXT_FABRIC_FALKOR_ADDR"] != nil && n != "acr-api" && n != "acr-projector" {
+			g.failf("%s reaches falkordb but has no password wiring in this guard", n)
+		}
+	}
+	for _, sec := range []string{"acr_falkordb_acl", "acr_falkordb_password"} {
+		file := str(at(r.top, "secrets", sec, "file"))
+		g.expect(strings.HasPrefix(file, composeSecretsDir), "secret %s reads %q, outside %s", sec, file, composeSecretsDir)
+	}
 }
 
 var (
@@ -320,7 +360,8 @@ var composeACRChecks = []check{
 	{"the_data_stays_on_the_host_paths_of_the_old_project", composeACRDataHostPaths},
 	{"container_names_and_aliases_keep_every_acr_hostname", composeACRContainerNames},
 	{"the_acr_services_reach_the_networks_they_always_did", composeACRNetworks},
-	{"only_the_mcp_server_publishes_a_port_and_only_on_loopback", composeACRPorts},
+	{"only_the_mcp_server_and_the_graph_publish_a_port_and_only_on_loopback", composeACRPorts},
+	{"falkordb_requires_a_password_and_every_client_reads_it_from_a_secret_file", composeACRFalkorAuth},
 	{"no_secret_value_is_in_the_file_only_paths_of_secret_files", composeACRSecretsAreFiles},
 	{"the_acr_images_are_pinned_by_registry_digest_and_a_missing_pin_fails_the_render", composeACRImagesPinned},
 	{"the_start_order_of_the_acr_stack_is_kept", composeACRStartOrder},
@@ -335,9 +376,9 @@ func TestComposeACRVenueReal(t *testing.T) { runReal(t, composeACRChecks...) }
 func TestComposeACRVenuePlanted(t *testing.T) {
 	readme := []string{"ci/bigboy/README.md"}
 	cases := []planted{
-		{name: "acr-mcp in the default stack", mutate: mut(composeFile, "      protocol: tcp\n    profiles: [acr]\n", "      protocol: tcp\n"),
+		{name: "acr-mcp in the default stack", mutate: mut(composeFile, "      published: '8081'\n      protocol: tcp\n    profiles: [acr]\n", "      published: '8081'\n      protocol: tcp\n"),
 			check: composeACRDefaultStack, want: "acr-mcp"},
-		{name: "falkordb joins acr-venue", mutate: mut(composeFile, "        aliases: [falkordb]\n    profiles: [acr]\n", "        aliases: [falkordb]\n    profiles: [acr, acr-venue]\n"),
+		{name: "falkordb joins acr-venue", mutate: mut(composeFile, "      protocol: tcp\n    profiles: [acr]\n    restart: unless-stopped\n    secrets: [acr_falkordb_acl", "      protocol: tcp\n    profiles: [acr, acr-venue]\n    restart: unless-stopped\n    secrets: [acr_falkordb_acl"),
 			check: composeACRProfilesAddOnlyACR, want: "profiles [acr-venue] add"},
 		{name: "falkordb data moves", mutate: mut(composeFile, "source: /var/lib/oci-cache/mcp-venue/falkordb-data", "source: /var/lib/oci-cache/falkordb-new"),
 			check: composeACRDataHostPaths, want: "acr-falkordb /var/lib/falkordb/data"},
@@ -355,6 +396,22 @@ func TestComposeACRVenuePlanted(t *testing.T) {
 			check: composeACRNetworks, want: "ACR_DATA_QUERY_URL"},
 		{name: "mcp port on every address", mutate: mut(composeFile, "      host_ip: 127.0.0.1\n      target: 8081", "      host_ip: 0.0.0.0\n      target: 8081"),
 			check: composeACRPorts, want: "loopback only"},
+		{name: "falkordb port on every address", mutate: mut(composeFile, "      host_ip: 127.0.0.1\n      target: 6379", "      host_ip: 0.0.0.0\n      target: 6379"),
+			check: composeACRPorts, want: "acr-falkordb publishes"},
+		{name: "falkordb port moves", mutate: mut(composeFile, "published: '16379'", "published: '16380'"),
+			check: composeACRPorts, want: "acr-falkordb publishes"},
+		{name: "falkordb publishes a second port", mutate: mut(composeFile, "      published: '16379'\n      protocol: tcp\n", "      published: '16379'\n      protocol: tcp\n    - mode: ingress\n      host_ip: 127.0.0.1\n      target: 3000\n      published: '13000'\n      protocol: tcp\n"),
+			check: composeACRPorts, want: "acr-falkordb publishes 2 ports"},
+		{name: "falkordb loses the aclfile", mutate: mut(composeFile, "      REDIS_ARGS: --aclfile /run/secrets/acr_falkordb_acl\n", "      REDIS_ARGS: --save 60\n"),
+			check: composeACRFalkorAuth, want: "REDIS_ARGS"},
+		{name: "projector loses the falkordb password", mutate: mut(composeFile, "      ACR_CONTEXT_FABRIC_FALKOR_PASSWORD_FILE: /run/secrets/acr_falkordb_password\n      ACR_CONTEXT_FABRIC_FALKOR_TLS: 'false'\n      ACR_CONTEXT_FABRIC_PROJECT_TEAMS", "      ACR_CONTEXT_FABRIC_FALKOR_TLS: 'false'\n      ACR_CONTEXT_FABRIC_PROJECT_TEAMS"),
+			check: composeACRFalkorAuth, want: "acr-projector ACR_CONTEXT_FABRIC_FALKOR_PASSWORD_FILE"},
+		{name: "api does not mount the falkordb password", mutate: mut(composeFile, "    - acr_openai_api_key\n    - acr_falkordb_password\n", "    - acr_openai_api_key\n"),
+			check: composeACRFalkorAuth, want: "acr-api does not mount the secret acr_falkordb_password"},
+		{name: "falkordb healthcheck unauthenticated", mutate: mut(composeFile, "[CMD-SHELL, 'REDISCLI_AUTH=\"$$(cat /run/secrets/acr_falkordb_password)\" redis-cli GRAPH.QUERY _acr_health \"RETURN 1\" | grep -q \"^1$$\"']", "[CMD, redis-cli, GRAPH.QUERY, _acr_health, RETURN 1]"),
+			check: composeACRFalkorAuth, want: "healthcheck"},
+		{name: "falkordb password file outside the secrets dir", mutate: mut(composeFile, "${ACR_FALKORDB_PASSWORD_FILE:-/var/lib/oci-cache/mcp-venue/secrets/falkordb_password}", "${ACR_FALKORDB_PASSWORD_FILE:-/home/ubuntu/falkordb_password}"),
+			check: composeACRFalkorAuth, want: "secret acr_falkordb_password reads"},
 		{name: "secret file outside the secrets dir", mutate: mut(composeFile, "${ACR_RUNTIME_DSN_FILE:-/var/lib/oci-cache/mcp-venue/secrets/runtime_dsn}", "${ACR_RUNTIME_DSN_FILE:-/home/ubuntu/runtime_dsn}"),
 			check: composeACRSecretsAreFiles, want: "secret acr_runtime_dsn"},
 		{name: "dsn value inline", mutate: mut(composeFile, "ACR_POSTGRES_MIGRATION_DSN_FILE: /run/secrets/acr_migration_dsn", "ACR_POSTGRES_MIGRATION_DSN: postgres://acr:pw@postgres/acr"),

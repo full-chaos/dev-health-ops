@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"log/slog"
 	"regexp"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
@@ -37,6 +38,8 @@ func NewRiverInserter(pool *pgxpool.Pool, schema string, registry PolicyRegistry
 	}
 	client, err := river.NewClient(riverpgxv5.New(pool), &river.Config{
 		Schema: schema,
+		// River's own default logger bypasses the redacting process handler.
+		Logger: slog.Default(),
 		// otelriver picks up the global tracer/meter provider tracing.Init
 		// installs at process start (or no-ops when tracing is disabled), so the
 		// outbox->River insert boundary gets a river.insert_many span without

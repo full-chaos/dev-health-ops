@@ -152,6 +152,7 @@ internal/gqlgenguard	test	.github
 internal/gqlgenguard	test	ci
 internal/gqlgenguard	test	docs
 internal/ingressplanes	code	contracts
+internal/ingressplanes	test	ci
 internal/ingressplanes	test	compose.yml
 internal/ingressplanes	test	docker
 internal/jobcontract	test	contracts
@@ -172,6 +173,7 @@ internal/jobs/report	test	contracts
 internal/jobs/workgraph	test	contracts
 internal/migrationmatrix	code	contracts
 internal/migrationmatrix	test	ci
+internal/platform/credshape	test	contracts
 internal/providersync	test	README.md
 internal/providersync	test	contracts
 internal/providersync	test	docs

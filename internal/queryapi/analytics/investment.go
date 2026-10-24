@@ -671,18 +671,23 @@ func unitRepoExpr(effortAlias, unitAlias string) string {
 	return fmt.Sprintf("if(%[1]s.work_unit_id != '', %[1]s.repo_id, %[2]s.repo_id)", effortAlias, unitAlias)
 }
 
-// categorisedOnlySQL keeps the units that reached the model. A unit under the evidence gate (too little text, or no
-// text source) carries a fixed uniform prior, not a measured split.
-const categorisedOnlySQL = "work_unit_investments.categorization_status NOT IN ('insufficient_evidence', 'no_text_sources')"
+// CategorizedOnlySQL keeps the units that reached the model. A unit under the evidence gate (too little text, or no
+// text source) carries a fixed uniform prior, not a measured split, so a read of the theme or subcategory MIX leaves it
+// out; the evidence-quality stats count it (uncategorized_count).
+const CategorizedOnlySQL = "work_unit_investments.categorization_status NOT IN ('insufficient_evidence', 'no_text_sources')"
+
+// InvestmentMixWindowClause is InvestmentWindowClause for a read that shows the theme or subcategory mix.
+func InvestmentMixWindowClause(datedByEnd bool) string {
+	return InvestmentWindowClause(datedByEnd) + "\n  AND " + CategorizedOnlySQL
+}
 
 // investmentDateFilter is the window of an investment read. A read that shows the theme or subcategory MIX leaves out
-// the gated units, so the shares describe the categorised units only; every other dimension counts work units and keeps them.
+// the gated units; every other dimension counts work units and keeps them.
 func investmentDateFilter(dimensions []Dimension) string {
-	filter := InvestmentWindowClause(true)
 	for _, d := range dimensions {
 		if d == DimensionTheme || d == DimensionSubcategory {
-			return filter + "\n  AND " + categorisedOnlySQL
+			return InvestmentMixWindowClause(true)
 		}
 	}
-	return filter
+	return InvestmentWindowClause(true)
 }

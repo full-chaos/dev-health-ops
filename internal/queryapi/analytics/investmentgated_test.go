@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-const categorisedOnlyPredicate = "work_unit_investments.categorization_status NOT IN ('insufficient_evidence', 'no_text_sources')"
+const categorisedOnlyPredicate = CategorizedOnlySQL
 
 func TestInvestmentContext_MixDimensionsExcludeGatedUnits(t *testing.T) {
 	for _, dim := range []Dimension{DimensionTheme, DimensionSubcategory} {

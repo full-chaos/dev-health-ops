@@ -262,7 +262,7 @@ guards `internal/queryapi/graph/field_action_map_test.go` and
 `internal/queryapi/server/endpoint_profile_action_fields_test.go` fail on a
 served field with no row or with two, a row for a field nothing serves, an
 action outside the catalog, a `null`, an `unknown` without its gap, a statement
-no registered claim states, and a claim whose source needle is missing.
+no registered claim states, an action with no registered proof, and a claim whose proof is missing from the body of the declaration it names (comments are not read).
 
 ## What a surface ISSUES: the `issued_credential` field
 

@@ -33,7 +33,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "unknown",
-      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 or 500 when the users-row read fails (policy.WriteAuthFailure)",
+      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
         "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
@@ -50,7 +50,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every credential failure answers the same 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read answers 503 or 500."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
@@ -84,7 +84,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "unknown",
-      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 or 500 when the users-row read fails (policy.WriteAuthFailure)",
+      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
         "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
@@ -101,7 +101,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every credential failure answers the same 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read answers 503 or 500."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
@@ -135,7 +135,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "unknown",
-      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 or 500 when the users-row read fails (policy.WriteAuthFailure)",
+      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
         "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
@@ -152,7 +152,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every credential failure answers the same 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read answers 503 or 500."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
@@ -186,7 +186,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "unknown",
-      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 or 500 when the users-row read fails (policy.WriteAuthFailure)",
+      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
         "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
@@ -203,7 +203,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every credential failure answers the same 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read answers 503 or 500."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
@@ -237,7 +237,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "unknown",
-      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 or 500 when the users-row read fails (policy.WriteAuthFailure)",
+      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
         "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
@@ -254,7 +254,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every credential failure answers the same 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read answers 503 or 500."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
@@ -288,7 +288,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "unknown",
-      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 or 500 when the users-row read fails (policy.WriteAuthFailure)",
+      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
         "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
@@ -305,7 +305,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every credential failure answers the same 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read answers 503 or 500."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
@@ -339,7 +339,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "unknown",
-      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 or 500 when the users-row read fails (policy.WriteAuthFailure)",
+      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
         "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
@@ -356,7 +356,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every credential failure answers the same 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read answers 503 or 500."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
@@ -390,7 +390,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "unknown",
-      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 or 500 when the users-row read fails (policy.WriteAuthFailure)",
+      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
         "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
@@ -407,7 +407,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every credential failure answers the same 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read answers 503 or 500."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
@@ -441,7 +441,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "unknown",
-      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 or 500 when the users-row read fails (policy.WriteAuthFailure)",
+      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
         "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
@@ -458,7 +458,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every credential failure answers the same 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read answers 503 or 500."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
@@ -492,7 +492,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "unknown",
-      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 or 500 when the users-row read fails (policy.WriteAuthFailure)",
+      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
         "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
@@ -509,7 +509,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every credential failure answers the same 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read answers 503 or 500."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
@@ -543,7 +543,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "unknown",
-      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 or 500 when the users-row read fails (policy.WriteAuthFailure)",
+      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
         "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
@@ -560,7 +560,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every credential failure answers the same 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read answers 503 or 500."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
@@ -594,7 +594,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "unknown",
-      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 or 500 when the users-row read fails (policy.WriteAuthFailure)",
+      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
         "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
@@ -611,7 +611,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every credential failure answers the same 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read answers 503 or 500."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
@@ -645,7 +645,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "unknown",
-      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 or 500 when the users-row read fails (policy.WriteAuthFailure)",
+      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
         "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
@@ -662,7 +662,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every credential failure answers the same 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read answers 503 or 500."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
@@ -696,7 +696,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "unknown",
-      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 or 500 when the users-row read fails (policy.WriteAuthFailure)",
+      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
         "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
@@ -713,7 +713,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every credential failure answers the same 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read answers 503 or 500."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
@@ -747,7 +747,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "unknown",
-      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 or 500 when the users-row read fails (policy.WriteAuthFailure)",
+      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
         "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
@@ -764,7 +764,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every credential failure answers the same 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read answers 503 or 500."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
@@ -798,7 +798,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "unknown",
-      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 or 500 when the users-row read fails (policy.WriteAuthFailure)",
+      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
         "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
@@ -815,7 +815,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every credential failure answers the same 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read answers 503 or 500."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
@@ -865,7 +865,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "unknown",
-      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 or 500 when the users-row read fails (policy.WriteAuthFailure)",
+      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
         "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
@@ -882,7 +882,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every credential failure answers the same 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read answers 503 or 500."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
@@ -916,7 +916,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "unknown",
-      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 or 500 when the users-row read fails (policy.WriteAuthFailure)",
+      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
         "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
@@ -933,7 +933,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every credential failure answers the same 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read answers 503 or 500."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
@@ -967,7 +967,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "unknown",
-      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 or 500 when the users-row read fails (policy.WriteAuthFailure)",
+      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
         "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
@@ -984,7 +984,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every credential failure answers the same 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read answers 503 or 500."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
@@ -1036,7 +1036,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every credential failure answers the same 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read answers 503 or 500."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
@@ -1088,7 +1088,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every credential failure answers the same 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read answers 503 or 500."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
@@ -1140,7 +1140,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every credential failure answers the same 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read answers 503 or 500."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
@@ -1192,7 +1192,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every credential failure answers the same 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read answers 503 or 500."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
@@ -1226,7 +1226,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "unknown",
-      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 or 500 when the users-row read fails (policy.WriteAuthFailure)",
+      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
         "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
@@ -1243,7 +1243,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every credential failure answers the same 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read answers 503 or 500."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
@@ -1277,7 +1277,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "unknown",
-      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 or 500 when the users-row read fails (policy.WriteAuthFailure)",
+      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
         "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
@@ -1294,7 +1294,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every credential failure answers the same 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read answers 503 or 500."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
@@ -1328,7 +1328,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "unknown",
-      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 or 500 when the users-row read fails (policy.WriteAuthFailure)",
+      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
         "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
@@ -1345,7 +1345,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every credential failure answers the same 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read answers 503 or 500."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
@@ -1379,7 +1379,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "unknown",
-      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 or 500 when the users-row read fails (policy.WriteAuthFailure)",
+      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
         "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
@@ -1396,7 +1396,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every credential failure answers the same 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read answers 503 or 500."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
@@ -1430,7 +1430,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "unknown",
-      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 or 500 when the users-row read fails (policy.WriteAuthFailure)",
+      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
         "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
@@ -1447,7 +1447,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every credential failure answers the same 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read answers 503 or 500."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
@@ -1499,7 +1499,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every credential failure answers the same 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read answers 503 or 500."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
@@ -1570,7 +1570,7 @@
       "action": "unknown",
       "classification": "protected",
       "current_state_cache_behavior": "unknown",
-      "disclosure_behavior": "401 Authentication required (authenticateGraphQLEdge); 403 for an X-Org-Id the caller may not use (scope.OrgScope); 404 for a browser GET; 404 UNREGISTERED_DOCUMENT for an authenticated unregistered document; whole-operation error for an orgId argument naming another organization, except a verified non-impersonating superuser (OperationOrgGuard)",
+      "disclosure_behavior": "401 Authentication required (authenticateGraphQLEdge); 403 for an X-Org-Id the caller may not use (scope.OrgScope); 404 for a browser GET; 404 UNREGISTERED_DOCUMENT for an authenticated unregistered document",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
         "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
@@ -1589,7 +1589,7 @@
         "description": "authenticateGraphQLEdge: edge access token only (authenticateEdgeTokenOnly, live users row)."
       },
       "public_rationale": null,
-      "resource_resolver": "organization_from_header_or_credential: the X-Org-Id header when the caller may use it (a superuser, the caller's own organization, or an organization the caller is a member of), else the credential's organization (scope.OrgScope); a field's orgId argument is refused unless it equals that organization, except that a verified non-impersonating superuser may name another (OperationOrgGuard)",
+      "resource_resolver": "organization_from_header_or_credential: the X-Org-Id header when the caller may use it (a superuser, the caller's own organization, or a member of that organization), else the credential's organization (scope.OrgScope)",
       "route": "/graphql",
       "service": "dev-health-query-api",
       "source": {
@@ -1615,7 +1615,7 @@
       "action": "unknown",
       "classification": "protected",
       "current_state_cache_behavior": "unknown",
-      "disclosure_behavior": "401 Authentication required (authenticateGraphQLEdge); 403 for an X-Org-Id the caller may not use (scope.OrgScope); 404 for a browser GET; 404 UNREGISTERED_DOCUMENT for an authenticated unregistered document; whole-operation error for an orgId argument naming another organization, except a verified non-impersonating superuser (OperationOrgGuard)",
+      "disclosure_behavior": "401 Authentication required (authenticateGraphQLEdge); 403 for an X-Org-Id the caller may not use (scope.OrgScope); 404 for a browser GET; 404 UNREGISTERED_DOCUMENT for an authenticated unregistered document",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
         "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
@@ -1634,7 +1634,7 @@
         "description": "authenticateGraphQLEdge: edge access token only (authenticateEdgeTokenOnly, live users row)."
       },
       "public_rationale": null,
-      "resource_resolver": "organization_from_header_or_credential: the X-Org-Id header when the caller may use it (a superuser, the caller's own organization, or an organization the caller is a member of), else the credential's organization (scope.OrgScope); a field's orgId argument is refused unless it equals that organization, except that a verified non-impersonating superuser may name another (OperationOrgGuard)",
+      "resource_resolver": "organization_from_header_or_credential: the X-Org-Id header when the caller may use it (a superuser, the caller's own organization, or a member of that organization), else the credential's organization (scope.OrgScope)",
       "route": "/graphql",
       "service": "dev-health-query-api",
       "source": {

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"strings"
 	"time"
 
 	clickhousego "github.com/ClickHouse/clickhouse-go/v2"
@@ -274,12 +275,33 @@ func pingClickHouseOnce(ctx context.Context, uri string) error {
 }
 
 func StartValkey(ctx context.Context) (*Instance, error) {
+	return startValkey(ctx, "")
+}
+
+// StartValkeyWithACLFile starts Valkey the way the chart does when
+// valkey.acl.secretName is set: --aclfile on a file holding aclFile, which then
+// defines every user.
+func StartValkeyWithACLFile(ctx context.Context, aclFile string) (*Instance, error) {
+	return startValkey(ctx, aclFile)
+}
+
+func startValkey(ctx context.Context, aclFile string) (*Instance, error) {
 	const port = "6379/tcp"
-	container, host, mappedPort, err := start(ctx, testcontainers.ContainerRequest{
+	request := testcontainers.ContainerRequest{
 		Image:        ValkeyImage,
 		ExposedPorts: []string{port},
 		WaitingFor:   wait.ForListeningPort(port).WithStartupTimeout(60 * time.Second),
-	}, port)
+	}
+	if aclFile != "" {
+		const aclPath = "/etc/valkey-acl/users.acl"
+		request.Cmd = []string{"--aclfile", aclPath}
+		request.Files = []testcontainers.ContainerFile{{
+			Reader:            strings.NewReader(aclFile),
+			ContainerFilePath: aclPath,
+			FileMode:          0o444,
+		}}
+	}
+	container, host, mappedPort, err := start(ctx, request, port)
 	if err != nil {
 		return nil, fmt.Errorf("start Valkey test dependency: %w", err)
 	}

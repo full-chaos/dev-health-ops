@@ -457,7 +457,7 @@ func (h *Harness) run(pairs []pair) map[string]answers {
 			want := h.golden.Answers[h.cursor]
 			h.cursor++
 			if refused, ok := socialLinkRefusals[p.name]; ok {
-				want = RecordedAnswer{Name: p.name, Status: http.StatusConflict, Body: refused}
+				want = RecordedAnswer{Name: p.name, Status: http.StatusConflict, Body: refused.body}
 			}
 			goBody := Normalize(goResponse.Body)
 			// The Go api never writes input or ctx of a validation error.
@@ -932,13 +932,20 @@ func TableRows(t *testing.T, ctx context.Context, uri, query string) string {
 	return venueoracle.TableRows(t, ctx, uri, query)
 }
 
-// socialLinkRefusals are the three golden steps where Python linked a social identity to an account by
+// socialLinkRefusals are the golden steps where Python linked a social identity to an account by
 // e-mail alone and signed in. Go refuses them (CHAOS-10940), so the replay expects the refusal instead.
-var socialLinkRefusals = map[string]string{
-	"social: github email of a local user":                  `{"detail":{"message":"An account with this email already exists. Please sign in with local.","existing_provider":"local"}}`,
-	"social: github email of a github user with another id": `{"detail":{"message":"An account with this email already exists. Please sign in with github.","existing_provider":"github"}}`,
-	"social: github email of a github user without an id":   `{"detail":{"message":"An account with this email already exists. Please sign in with github.","existing_provider":"github"}}`,
+type socialRefusal struct{ body, reason string }
+
+var socialLinkRefusals = map[string]socialRefusal{
+	"social: github email of a local user":                  {socialAccountExistsBody, "Python linked the identity by e-mail and signed in (CHAOS-10940); Go refuses with the provider-free 409"},
+	"social: github email of a github user with another id": {socialAccountExistsBody, "Python replaced the stored provider id and signed in (CHAOS-10940); Go refuses with the provider-free 409"},
+	"social: github email of a github user without an id":   {socialAccountExistsBody, "Python set the missing provider id and signed in (CHAOS-10940); Go refuses with the provider-free 409"},
+	"social: gitlab email of a github user":                 {socialAccountExistsBody, "Python's 409 named the existing sign-in method; Go's names none"},
 }
+
+// socialAccountExistsBody is the 409 Go answers for an e-mail another account holds: Python named the existing
+// sign-in method; Go names none (the replay expects the provider-free answer).
+const socialAccountExistsBody = `{"detail":{"message":"An account with this email already exists. Please sign in with your existing sign-in method."}}`
 
 // socialLinkRows rewrites the golden row sets for the three refused steps: no provider id is replaced or
 // set, no login is recorded, and no refresh token is stored for them.

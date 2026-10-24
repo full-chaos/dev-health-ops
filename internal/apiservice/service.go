@@ -191,7 +191,9 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 	if deps.ClickHouse != nil {
 		legacyClickHouse = deps.ClickHouse
 	}
-	routes = append(routes, legacyingest.Routes(legacyingest.Deps{Store: legacyStore, Metrics: deps.LegacyIngestMetrics, ClickHouse: legacyClickHouse, Logger: logger})...)
+	if deps.LegacyIngestEnabled {
+		routes = append(routes, legacyingest.Harden(legacyingest.Routes(legacyingest.Deps{Store: legacyStore, Metrics: deps.LegacyIngestMetrics, ClickHouse: legacyClickHouse, Logger: logger}), deps.LegacyIngestOptions)...)
+	}
 	routes = append(routes, healthroutes.Routes(healthroutes.Deps{
 		// deps.ClickHouse is the api's own dedicated ClickHouse login
 		// (CHAOS-6310), the SAME connection internal/api/teamsidentity's

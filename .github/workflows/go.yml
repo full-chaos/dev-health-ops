@@ -722,6 +722,14 @@ jobs:
           cat "${out}"
           echo "INTEGRATION_AFFECTED_FILE=${out}" >> "${GITHUB_ENV}"
 
+      - name: Skip the integration shards on a main push that the merge queue already tested
+        if: github.event_name == 'push' && vars.MERGE_QUEUE == 'enabled'
+        run: |
+          out="${RUNNER_TEMP}/affected.txt"
+          printf 'NONE\n' > "${out}"
+          echo "INTEGRATION_AFFECTED_FILE=${out}" >> "${GITHUB_ENV}"
+          echo "::notice title=INTEGRATION SHARDS SKIPPED ON THE MAIN PUSH::the merge queue ran them on this tree (repository variable MERGE_QUEUE=enabled)"
+
       - name: Validate and emit deterministic integration shards
         id: plan
         run: bash ci/check_go.sh integration-shard-plan

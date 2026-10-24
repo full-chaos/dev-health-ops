@@ -43,7 +43,7 @@ VALUES (?, ?, ?, ?, 'churn_loc', ?, ?, ?, ?, 0.8, 'high', ?, 'jev-test', 'run-1'
 // The tile is the COUNT over the canonical themes of the units (CHAOS-9622, D5999: a unit's effort_value, its
 // changed lines, is not a weight), dated by their END day, a unit under the evidence gate left out as on the
 // Investment page (it carries a fixed uniform prior, not a measured split), the legacy table ignored. The units
-// carry 100, 50 and 1000 lines and count 1 each; the one in the window under the gate counts for nothing here.
+// carry 100, 50 and 1000 lines and count 1 each; the one under the gate counts for nothing here.
 func TestInvestmentByThemeIsTheCanonicalCountOfTheUnits(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
@@ -58,8 +58,12 @@ func TestInvestmentByThemeIsTheCanonicalCountOfTheUnits(t *testing.T) {
 	end := day.AddDate(0, 0, 3).Add(12 * time.Hour) // the window [07-27, 08-06)
 	// ends in the window: 60% feature, 40% risk, effort 100, 2 PRs.
 	seedThemeUnit(t, ctx, admin, org, "wu-1", repo, day.Add(10*time.Hour), 100, map[string]float64{"feature_delivery.roadmap": 0.6, "risk.security": 0.4}, "ok", 2)
-	// ends in the window, insufficient evidence: left out of the mix, as the Investment page leaves it out.
-	seedThemeUnit(t, ctx, admin, org, "wu-2", repo, day.Add(11*time.Hour), 50, map[string]float64{"maintenance.debt": 1}, "insufficient_evidence", 1)
+	// ends in the window, insufficient evidence: left out of the mix as the Investment page leaves it out. Its theme
+	// (quality) is carried by no other unit of the window, so the theme showing up would prove the unit was counted.
+	seedThemeUnit(t, ctx, admin, org, "wu-2", repo, day.Add(11*time.Hour), 50, map[string]float64{"quality.bugfix": 1}, "insufficient_evidence", 1)
+	// ends in the window, categorized: 1 unit of only 50 lines, so it leads by COUNT (1 > 0.6) although feature_delivery
+	// leads by lines (60 > 50): a mix weighted by lines would order them the other way round.
+	seedThemeUnit(t, ctx, admin, org, "wu-5", repo, day.Add(12*time.Hour), 50, map[string]float64{"maintenance.debt": 1}, "ok", 1)
 	// overlaps the window but ENDS after it: dated by its end day, so not in this window.
 	seedThemeUnit(t, ctx, admin, org, "wu-3", repo, day.AddDate(0, 0, 10), 1000, map[string]float64{"quality.bugfix": 1}, "ok", 0)
 	// ended before the window.
@@ -82,6 +86,7 @@ func TestInvestmentByThemeIsTheCanonicalCountOfTheUnits(t *testing.T) {
 	}{
 		"feature_delivery": {0.6, 60, 1}, // 1 unit x 0.6; 100 lines x 0.6 (the explicit churn_loc line); 2 PRs x 0.6 = 1.2 -> 1
 		"risk":             {0.4, 40, 1}, // 1 unit x 0.4; 100 lines x 0.4; 2 PRs x 0.4 = 0.8 -> 1
+		"maintenance":      {1, 50, 1},   // 1 unit; 50 lines
 	}
 	if len(got) != len(want) {
 		t.Fatalf("themes = %v, want exactly %d canonical themes (no legacy key, no unit outside the window): %+v", order, len(want), resp.ReworkThemeAllocation)
@@ -96,11 +101,11 @@ func TestInvestmentByThemeIsTheCanonicalCountOfTheUnits(t *testing.T) {
 			t.Errorf("%s has no label", theme)
 		}
 	}
-	if _, leaked := got["maintenance"]; leaked {
-		t.Errorf("maintenance = %+v: the unit under the evidence gate must be left out of the tile", got["maintenance"])
+	if _, leaked := got["quality"]; leaked {
+		t.Errorf("quality = %+v: the unit under the evidence gate must be left out of the tile", got["quality"])
 	}
-	if len(order) != 2 || order[0] != "feature_delivery" || order[1] != "risk" {
-		t.Errorf("order = %v, want the largest count first (feature_delivery 0.6, risk 0.4)", order)
+	if order[0] != "maintenance" {
+		t.Errorf("order = %v, want the largest count first (maintenance 1, feature_delivery 0.6, risk 0.4), not the largest effort (feature_delivery 100 lines)", order)
 	}
 	sum := 0.0
 	for _, row := range resp.ReworkThemeAllocation {

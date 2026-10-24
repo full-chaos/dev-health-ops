@@ -20,6 +20,8 @@ import (
 // APIKey stays a Hidden so no formatter, logger or JSON encoder of this
 // struct can print it; the one caller that must serve it calls Reveal.
 type OrgConfig struct {
+	// Purpose is the purpose of the Store that read this config ("" for the default row).
+	Purpose  Purpose
 	Provider string
 	Model    string
 	BaseURL  string
@@ -176,6 +178,7 @@ WHERE org_id = $1 AND category = $2 AND key = ANY($3) ORDER BY key`,
 		return s.notResolved(ctx, orgID)
 	}
 	return OrgConfig{
+		Purpose:     s.purpose,
 		Provider:    provider,
 		Model:       settings[keyModel],
 		BaseURL:     settings[keyBaseURL],

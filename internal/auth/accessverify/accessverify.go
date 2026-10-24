@@ -22,6 +22,8 @@ const (
 	AcceptedMetric = "devhealth_auth_access_token_accepted_total"
 	RefusedMetric  = "devhealth_auth_access_token_refused_total"
 
+	unknownLabel = "unknown"
+
 	ClassUser   = "user_access_token"
 	ClassLegacy = "ops_access_token_hs256"
 
@@ -34,10 +36,15 @@ const (
 	ReasonClaims        = "claims"
 	ReasonLegacy        = "legacy_rejected"
 	ReasonNotConfigured = "not_configured"
+	ReasonUnavailable   = "unavailable"
 )
 
 // Reasons is the closed refusal label set.
-var Reasons = []string{ReasonNoProfile, ReasonAlgNotAllowed, ReasonKidUnknown, ReasonSignature, ReasonExpired, ReasonMalformed, ReasonClaims, ReasonLegacy, ReasonNotConfigured}
+var Reasons = []string{ReasonNoProfile, ReasonAlgNotAllowed, ReasonKidUnknown, ReasonSignature, ReasonExpired, ReasonMalformed, ReasonClaims, ReasonLegacy, ReasonNotConfigured, ReasonUnavailable}
+
+// ErrUnavailable is returned when a validator could not decide because a
+// dependency failed; callers answer 503, not 401. A LegacyVerifier wraps it.
+var ErrUnavailable = errors.New("accessverify: validator unavailable")
 
 // ErrRefused is returned for every refusal; callers answer 401 with a generic body.
 var ErrRefused = errors.New("accessverify: access token refused")
@@ -113,6 +120,7 @@ func New(cfg Config) (*Validator, error) {
 		v.now = time.Now
 	}
 	ctx := context.Background()
+	refused.Add(ctx, 0, refusedAttrs(unknownLabel, unknownLabel, ReasonNoProfile))
 	for _, row := range cfg.Rows {
 		if row.Service == "" || row.Profile == "" {
 			return nil, errors.New("accessverify: row needs a service and a profile")
@@ -145,7 +153,7 @@ func (v *Validator) Validate(ctx context.Context, service, profile, bearer strin
 	row, ok := v.rows[key{service, profile}]
 	if !ok {
 		// Unknown input never becomes a label value.
-		return nil, v.refuse(ctx, "unknown", "unknown", ReasonNoProfile)
+		return nil, v.refuse(ctx, unknownLabel, unknownLabel, ReasonNoProfile)
 	}
 	alg, ok := headerAlg(bearer)
 	if !ok {
@@ -173,6 +181,12 @@ func (v *Validator) Validate(ctx context.Context, service, profile, bearer strin
 			return nil, v.refuse(ctx, row.Service, row.Profile, ReasonNotConfigured)
 		}
 		principal, err := v.legacy(ctx, bearer)
+		if errors.Is(err, ErrUnavailable) {
+			v.refused.Add(ctx, 1, refusedAttrs(row.Service, row.Profile, ReasonUnavailable))
+			v.logger.WarnContext(ctx, "access token validator unavailable",
+				slog.String("service", row.Service), slog.String("profile", row.Profile))
+			return nil, ErrUnavailable
+		}
 		if err != nil {
 			return nil, v.refuse(ctx, row.Service, row.Profile, ReasonLegacy)
 		}

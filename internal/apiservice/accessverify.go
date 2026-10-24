@@ -2,6 +2,8 @@ package apiservice
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 
@@ -41,7 +43,17 @@ func buildAccessVerify(lookup func(string) (string, bool), auth *policy.Authenti
 		Logger: logger,
 	}
 	if auth != nil {
-		cfg.Legacy = func(ctx context.Context, token string) (any, error) { return auth.Authenticate(ctx, token) }
+		cfg.Legacy = legacyVerifier(auth.Authenticate)
 	}
 	return accessverify.New(cfg)
+}
+
+func legacyVerifier(authenticate func(context.Context, string) (*policy.User, error)) accessverify.LegacyVerifier {
+	return func(ctx context.Context, token string) (any, error) {
+		user, err := authenticate(ctx, token)
+		if errors.Is(err, policy.ErrUnavailable) {
+			return nil, fmt.Errorf("%w: %w", accessverify.ErrUnavailable, err)
+		}
+		return user, err
+	}
 }

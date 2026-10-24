@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"testing"
@@ -149,7 +150,6 @@ func accKey(profile, class string) string {
 func refKey(profile, reason string) string {
 	return RefusedMetric + "|profile=" + profile + ",reason=" + reason + ",service=" + svc
 }
-
 
 func TestValidate_EdDSAOnUserRow_Accepts(t *testing.T) {
 	f := newFixture(t, true, true)
@@ -341,6 +341,7 @@ func TestCounter_PreRegisteredAtZero(t *testing.T) {
 	if _, ok := c[accKey(userRoute, ClassLegacy)]; ok {
 		t.Fatal("a class the row does not accept was pre-registered")
 	}
+	want = append(want, RefusedMetric+"|profile=unknown,reason="+ReasonNoProfile+",service=unknown")
 	if len(c) != len(want) {
 		t.Fatalf("%d series, want %d", len(c), len(want))
 	}
@@ -380,6 +381,27 @@ func TestLogs_NeverContainToken(t *testing.T) {
 	}
 	if !strings.Contains(out, "reason="+ReasonSignature) {
 		t.Fatalf("log lacks the reason: %s", out)
+	}
+}
+
+func TestValidate_LegacyUnavailableIsNotARefusal(t *testing.T) {
+	f := newFixture(t, true, true)
+	f.legacy.err = fmt.Errorf("%w: store down", ErrUnavailable)
+	_, err := f.v.Validate(context.Background(), svc, legacyRte, hs256Token())
+	if !errors.Is(err, ErrUnavailable) || errors.Is(err, ErrRefused) {
+		t.Fatalf("err=%v", err)
+	}
+	c := f.counters()
+	if c[refKey(legacyRte, ReasonUnavailable)] != 1 || c[refKey(legacyRte, ReasonLegacy)] != 0 {
+		t.Fatalf("counters %v", c)
+	}
+}
+
+func TestCounter_NoProfileSeriesPreRegisteredAtZero(t *testing.T) {
+	f := newFixture(t, true, true)
+	key := RefusedMetric + "|profile=unknown,reason=" + ReasonNoProfile + ",service=unknown"
+	if v, ok := f.counters()[key]; !ok || v != 0 {
+		t.Fatalf("series missing or non-zero: %d %v", v, ok)
 	}
 }
 

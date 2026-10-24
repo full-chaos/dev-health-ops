@@ -60,6 +60,7 @@ func servedAuthRoutesWithIssuer(t *testing.T, issuer string) map[string]bool {
 		authconfig.EnvAPIAddress:         "127.0.0.1:0",
 		authconfig.EnvOperatorAddress:    "127.0.0.1:1",
 		authconfig.EnvSocialLinkRoutes:   "true",
+		authconfig.EnvUsersOwned:         "true",
 	}
 	if issuer != "" {
 		env[authconfig.EnvTokenIssuerURL] = issuer
@@ -108,7 +109,11 @@ func servedAuthRoutesWithIssuer(t *testing.T, issuer string) map[string]bool {
 	if err != nil {
 		t.Fatalf("sessionRoutes: %v", err)
 	}
-	for _, route := range routes {
+	credentials, _, err := credentialRoutes(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), pool, schema, mustLimits(t))
+	if err != nil {
+		t.Fatalf("credentialRoutes: %v", err)
+	}
+	for _, route := range append(routes, credentials...) {
 		registered["api"] = append(registered["api"], route.Pattern)
 	}
 	seenWellKnown := map[string]bool{}
@@ -199,9 +204,9 @@ func TestEveryServedAuthRouteHasAnEndpointProfileRowAndNoRowIsStale(t *testing.T
 }
 
 // servedAuthRouteCount is every route the probe serves: four session routes, two social link routes,
-// four compatibility routes, the session issue route, the eight federated sign-in routes and the three operator
+// four compatibility routes, the session issue route, the eight federated sign-in routes, the five credentials routes and the three operator
 // paths on GET and HEAD, and GET and HEAD of the JWKS and the discovery document.
-const servedAuthRouteCount = 29
+const servedAuthRouteCount = 34
 
 // compareServedToRows returns the served routes with no row and the rows for
 // routes nothing serves, per method and listener.
@@ -301,6 +306,9 @@ func TestAuthEndpointProfileAnchorsStillPointAtTheirSymbols(t *testing.T) {
 		"/internal/v1/sessions":  "PatternIssueSession",
 		"/.well-known/jwks.json": "PatternJWKS", "/.well-known/openid-configuration": "PatternDiscovery",
 		"/v1/identities/social": "PatternSocialLink", "/v1/identities/social/{id}": "PatternSocialUnlink",
+		"/api/v1/auth/verify": "PatternVerifyEmail", "/api/v1/auth/resend-verification": "PatternResendVerification",
+		"/api/v1/auth/forgot-password": "PatternForgotPassword", "/api/v1/auth/reset-password": "PatternResetPassword",
+		"/api/v1/auth/change-password": "PatternChangePassword",
 	}
 	checked := 0
 	var walk func(node any, where string)

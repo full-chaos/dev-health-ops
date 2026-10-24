@@ -30,7 +30,12 @@ func newBYOSystemOne(provider categorize.Provider, kind string, logger *slog.Log
 	if provider == nil || logger == nil {
 		return nil, ErrUnavailable
 	}
-	return newServedDecisionFor(byoSender{provider: provider}, logger, byoProviderPrefix+kind)
+	served, err := newServedDecisionFor(byoSender{provider: provider}, logger, byoProviderPrefix+kind)
+	if err != nil {
+		return nil, err
+	}
+	served.byo = true
+	return served, nil
 }
 
 // byoSender maps the SystemOne request onto a chat completion of the org's
@@ -109,13 +114,10 @@ func (sender byoSender) PostSystemOneDetailed(ctx context.Context, body []byte) 
 	if err != nil {
 		return categorize.SystemOneResult{}, err
 	}
-	// A returned model that differs from the configured one is passed on as it
-	// is: the completer refuses it (model_mismatch), so an answer from another
-	// model is never recorded as the org's model.
-	model := sender.provider.Model()
-	if completion.Model != "" {
-		model = completion.Model
-	}
+	// The returned model is passed on as it is, empty included: the completer
+	// refuses an answer from another model or from none (model_mismatch), so an
+	// answer is never recorded as the org's model on trust.
+	model := completion.Model
 	result := categorize.SystemOneResult{Model: model, StatusCode: http.StatusOK, Attempts: []categorize.SystemOneAttempt{{StatusCode: http.StatusOK}}}
 	usage := map[string]any{}
 	if completion.InputTokens != nil {

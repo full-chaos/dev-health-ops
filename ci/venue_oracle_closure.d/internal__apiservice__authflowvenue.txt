@@ -127,6 +127,7 @@ internal/teamprovider
 internal/testsupport/authrows
 internal/testsupport/containers
 internal/testsupport/moduleroot
+internal/testsupport/providerstub
 internal/testsupport/pydanticecho
 internal/testsupport/sessionscenario
 internal/testsupport/smtpcapture

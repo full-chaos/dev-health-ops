@@ -571,8 +571,9 @@ func TestIntegrationShardPlanIsExhaustiveNonemptyAndMachineReadable(t *testing.T
 		}
 		return hi - lo
 	}
-	if len(weights) != facts.providerShards || spread(weights) > 1 || spread(ints) > 1 {
-		t.Fatalf("provider shard weights %v / integration counts %v are not balanced to within one", weights, ints)
+	// Balanced by measured time, not test count (CHAOS-11105): the spread is bounded by the heaviest unlisted test (the 200 class weight).
+	if len(weights) != facts.providerShards || spread(weights) > 200 {
+		t.Fatalf("provider shard weights %v / integration counts %v are not balanced to within the heaviest unlisted test", weights, ints)
 	}
 }
 

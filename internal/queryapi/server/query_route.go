@@ -6138,11 +6138,40 @@ func queryAPIPostureCheckWith(
 		return nil
 	}
 	options.Logger = slog.Default()
-	cached := postgresstore.NewCachedQueryAPIPostureCheck(
-		pgPool, role, queryAPIRiverSchema(getenv), options,
+	sessions, err := queryAPISessionRead(getenv)
+	if err != nil {
+		// An unreadable flag or schema must never weaken the proof: not ready.
+		return func(context.Context) error { return err }
+	}
+	cached := postgresstore.NewCachedQueryAPIPostureCheckWithSessions(
+		pgPool, role, queryAPIRiverSchema(getenv), sessions, options,
 	)
 	cached.Warm()
 	return func(context.Context) error { return cached.CheckNoWait() }
+}
+
+// queryAPISessionRead is the auth session read the role must hold while
+// auth-service owns sessions (AUTH_PROXY_SESSIONS, read as go-api reads it), or
+// nil when the flag is off. The schema is AUTH_DATABASE_SCHEMA, the one the
+// session check reads.
+func queryAPISessionRead(getenv getenvFunc) (*postgresstore.QueryAPISessionRead, error) {
+	raw := strings.TrimSpace(getenv("AUTH_PROXY_SESSIONS"))
+	if raw == "" {
+		return nil, nil
+	}
+	on, err := strconv.ParseBool(raw)
+	if err != nil {
+		return nil, fmt.Errorf("AUTH_PROXY_SESSIONS must be true or false")
+	}
+	if !on {
+		return nil, nil
+	}
+	schema, err := policy.AuthSchemaFromEnv(getenv)
+	if err != nil {
+		return nil, err
+	}
+	read := postgresstore.QueryAPISessionReadFor(schema)
+	return &read, nil
 }
 
 // queryAPIRiverSchema is the River schema the posture check asserts the role

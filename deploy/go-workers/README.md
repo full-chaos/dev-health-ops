@@ -1209,7 +1209,10 @@ auth-migrate (weights 10 and 0). If the sessions table is absent at that moment
 the read is skipped with a `auth_sessions_absent` warning, the migration still
 succeeds, and query-api stays not ready until a later run grants it. The chart
 requires `authService.migrate.sessionReaders.queryApi` to equal the
-`QUERY_API_DATABASE_ROLE` set in `queryApi.extraEnv`.
+`QUERY_API_DATABASE_ROLE` set in `queryApi.extraEnv`, and refuses that reader
+while `goApi.authProxy.sessions` is off: the reader and the flag are set (and
+removed) in one values change, so auth-migrate and river-migrate never undo each
+other's grant.
 
 Leaving `QUERY_API_DATABASE_ROLE` unset changes nothing. The completeness proof
 for the manifest is `TestQueryAPIRoleServesEveryPostgresPathItReaches`

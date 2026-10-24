@@ -33,11 +33,23 @@ func TestQueryAPIReaderMustBeTheRoleQueryAPILogsInAs(t *testing.T) {
 	if _, out, err := renderAuth(t, queryAPIRoleArgs(reader, roleEnv("other_role"))...); err == nil || !strings.Contains(out, "QUERY_API_DATABASE_ROLE") {
 		t.Errorf("a mismatched role rendered: err=%v\n%.500s", err, out)
 	}
-	if _, out, err := renderAuth(t, queryAPIRoleArgs(reader, roleEnv("devhealth_query_api"))...); err != nil {
+	flip := []string{"--set", "goApi.authProxy.sessions=true", "--set", "authService.sessionKeys.successor.secretName=auth-session"}
+	if _, out, err := renderAuth(t, queryAPIRoleArgs(reader, flip, roleEnv("devhealth_query_api"))...); err != nil {
 		t.Errorf("matching role refused: %v\n%.500s", err, out)
 	}
 	if _, out, err := renderAuth(t, queryAPIRoleArgs(roleEnv("devhealth_query_api"))...); err != nil {
 		t.Errorf("a role with no reader must render (posture without the sessions flip): %v\n%.500s", err, out)
+	}
+}
+
+// The query-api reader is granted only together with the sessions flag: with the
+// flag off river-migrate's manifest holds no auth read, so a reader then would be
+// granted by auth-migrate and revoked by river-migrate on every roll.
+func TestQueryAPIReaderIsSetOnlyWithTheSessionsFlag(t *testing.T) {
+	reader := []string{"--set", "authService.migrate.sessionReaders.queryApi=devhealth_query_api"}
+	_, out, err := renderAuth(t, queryAPIRoleArgs(reader, roleEnv("devhealth_query_api"))...)
+	if err == nil || !strings.Contains(out, "goApi.authProxy.sessions") {
+		t.Errorf("a query-api reader with the sessions flag off rendered or named the wrong key: err=%v\n%.500s", err, out)
 	}
 }
 

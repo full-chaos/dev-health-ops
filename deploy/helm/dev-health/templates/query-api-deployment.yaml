@@ -34,6 +34,10 @@ other pair leaves the pod not ready or the sessions unread.
 {{- if and $queryReader (ne $queryRole $queryReader) }}
 {{- fail (printf "authService.migrate.sessionReaders.queryApi (%q) must equal the QUERY_API_DATABASE_ROLE in queryApi.extraEnv (%q): query-api reads sessions as the role it logs in as" $queryReader $queryRole) }}
 {{- end }}
+{{- /* With the flag off river-migrate revokes the auth read auth-migrate would grant: set the reader in the same change as the flag. */}}
+{{- if and $queryReader (not .Values.goApi.authProxy.sessions) }}
+{{- fail "authService.migrate.sessionReaders.queryApi is set while goApi.authProxy.sessions is off: set the query-api reader in the same change that turns the sessions flag on" }}
+{{- end }}
 {{- /*
 CHAOS-7085: the MCP caller-class listener (QUERY_API_MCP_ADDR). It trusts the
 X-DH-Internal-* identity headers from whoever can connect, so the NetworkPolicy

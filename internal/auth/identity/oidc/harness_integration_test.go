@@ -102,7 +102,7 @@ func buildEnv(t *testing.T) (*itEnv, error) {
 		return nil, err
 	}
 	envRole = role
-	if _, err := authschema.Apply(ctx, admin, authschema.Options{Schema: "auth", RuntimeRole: role}); err != nil {
+	if _, err := authschema.Apply(ctx, admin, authschema.Options{Schema: "auth", RuntimeRole: role, UsersOwned: true}); err != nil {
 		return nil, err
 	}
 	for _, grant := range testGrants {

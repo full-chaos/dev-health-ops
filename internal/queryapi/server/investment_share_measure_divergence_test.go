@@ -12,12 +12,14 @@ import (
 // different measures by ruling, so the VALUES of the two distributions cannot agree, and the dict-order oracle
 // compares what it exists to compare: the key order of the answer, with the values of the two distributions zeroed
 // on both sides. Go's own values are returned for the caller to assert against the seeded COUNT, and the Go-only
-// keys (measure, denominator, and the sizing coverage of D6027: sizing_coverage, unsized_unit_count, sizing_note)
+// keys (measure, denominator, uncategorized_count of CHAOS-10351, and the sizing coverage of D6027: sizing_coverage, unsized_unit_count, sizing_note)
 // are checked and removed.
 var (
-	investmentGoOnlyTail    = regexp.MustCompile(`,"measure":"ISSUE_SIZE","denominator":([0-9eE.+-]+)(?:,"sizing_coverage":[0-9eE.+-]+)?,"unsized_unit_count":[0-9]+(?:,"sizing_note":"[^"\\]*")?\}$`)
-	investmentDistributions = regexp.MustCompile(`"(theme_distribution|subcategory_distribution)"\s*:\s*\{([^{}]*)\}`)
-	investmentNumberAfter   = regexp.MustCompile(`"([^"]+)"\s*:\s*(-?[0-9][0-9eE.+-]*)`)
+	investmentGoOnlyTail = regexp.MustCompile(`,"measure":"ISSUE_SIZE","denominator":([0-9eE.+-]+)(?:,"sizing_coverage":[0-9eE.+-]+)?,"unsized_unit_count":[0-9]+(?:,"sizing_note":"[^"\\]*")?\}$`)
+	// investmentGoOnlyUncategorized is the Go-only count of the units under the evidence gate, last key of evidence_quality_stats.
+	investmentGoOnlyUncategorized = regexp.MustCompile(`,"uncategorized_count":[0-9]+`)
+	investmentDistributions       = regexp.MustCompile(`"(theme_distribution|subcategory_distribution)"\s*:\s*\{([^{}]*)\}`)
+	investmentNumberAfter         = regexp.MustCompile(`"([^"]+)"\s*:\s*(-?[0-9][0-9eE.+-]*)`)
 )
 
 type investmentGoValues struct {
@@ -33,7 +35,7 @@ func investmentForOrderComparison(goBody, pythonBody string) (goOut, pythonOut s
 	if values.Denominator, err = strconv.ParseFloat(match[1], 64); err != nil {
 		return "", "", values, fmt.Errorf("investment denominator %q: %w", match[1], err)
 	}
-	goOut = strings.TrimSuffix(goBody, match[0]) + "}"
+	goOut = investmentGoOnlyUncategorized.ReplaceAllString(strings.TrimSuffix(goBody, match[0])+"}", "")
 	values.Distribution = map[string]map[string]float64{}
 	for _, found := range investmentDistributions.FindAllStringSubmatch(goOut, -1) {
 		keyed := map[string]float64{}

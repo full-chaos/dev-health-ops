@@ -164,7 +164,7 @@ func (reader *Reader) FetchWorkUnitInvestments(ctx context.Context, filter WorkU
 		{Name: "start_date", Value: dateBindingValue(filter.StartTS)},
 		{Name: "end_date", Value: dateBindingValue(filter.EndTS)},
 		{Name: "org_id", Value: filter.OrgID},
-		{Name: "limit", Value: uint64(limit)},
+		{Name: "limit_n", Value: uint64(limit)},
 	}
 	bindings = append(bindings, scopeBindings...)
 
@@ -198,7 +198,7 @@ WHERE work_unit_investments.to_ts >= {start_date:Date}
 %s
 %s
 ORDER BY work_unit_count DESC, to_ts DESC, work_unit_id ASC
-LIMIT {limit:UInt64}
+LIMIT {limit_n:UInt64}
 %s
 `, countSQL, source, aliasIfPlain(source), scopeSQL, workUnitSQL, settingsMaxExecutionTime())
 

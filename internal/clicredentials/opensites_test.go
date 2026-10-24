@@ -40,6 +40,7 @@ var classifiedOpenSites = map[string]struct {
 	"queryapi/server/investment_explain_route.go": {1, "daemon (query-api): logged at runtime; the open redacts its own error"},
 	"queryapi/server/workunit_explain_route.go":   {1, "daemon (query-api): logged at runtime; the open redacts its own error"},
 	"streamrunnerservice/dependencies.go":         {1, "daemon (stream runner): logged at startup; the open redacts its own error"},
+	"workerservice/dependencies.go":               {1, "daemon (worker): the ClickHouse schema gate logs only a fixed class on an open failure, never the error text"},
 	"workerservice/daily.go":                      {8, "daemon (worker): logged at startup; the open redacts its own error"},
 	"workerservice/provider_sync.go":              {2, "daemon (worker): logged at startup; the open redacts its own error"},
 	"workerservice/reports.go":                    {1, "daemon (worker): logged at startup; the open redacts its own error"},

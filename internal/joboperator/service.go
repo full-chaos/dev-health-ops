@@ -84,6 +84,9 @@ const (
 	ActionMetricsRemainingStart           Action = "metrics.remaining_start"
 	ActionMetricsRemainingTriggerBackstop Action = "metrics.remaining_trigger_backstop"
 	ActionMetricsRemainingRedrive         Action = "metrics.remaining_redrive"
+	// ActionMetricsDailyMarkerBackfill: `metrics daily-marker-backfill`
+	// (ClickHouse marker rows appended from the Postgres run table).
+	ActionMetricsDailyMarkerBackfill Action = "metrics.daily_marker_backfill"
 	// ActionExternalRecomputeReplay: `external-recompute replay`.
 	ActionExternalRecomputeReplay Action = "external_recompute.replay"
 )
@@ -105,6 +108,9 @@ type JobSummary struct {
 	CorrelationID  string                 `json:"correlation_id"`
 	OrganizationID *string                `json:"organization_id,omitempty"`
 	Domain         jobcontract.DomainLink `json:"domain"`
+	// ArgumentsRefused marks a job whose stored arguments carry a
+	// credential-shaped value: the argument-derived fields above are empty.
+	ArgumentsRefused bool `json:"arguments_refused,omitempty"`
 }
 
 type ListFilter struct {
@@ -944,6 +950,12 @@ func (service *Service) validateSummary(job JobSummary) error {
 	}
 	if !knownState(job.State) {
 		return errors.New("job summary has invalid state")
+	}
+	if job.ArgumentsRefused {
+		if job.CorrelationID != "" || job.OrganizationID != nil || job.Domain != (jobcontract.DomainLink{}) {
+			return errors.New("refused job summary carries argument fields")
+		}
+		return nil
 	}
 	if !safeIdentifier.MatchString(job.CorrelationID) || len(job.CorrelationID) > 128 {
 		return errors.New("job summary correlation is invalid")

@@ -91,6 +91,9 @@ type softDeleteResult struct {
 // refresh and one-time tokens are revoked or removed. It does all of this on every call, for an inactive user too (a user
 // an operator deactivated first must not keep credentials that work again on reactivation), so it is idempotent.
 func (s pgStore) softDeleteUser(ctx context.Context, logger *slog.Logger, id uuid.UUID) (softDeleteResult, error) {
+	if err := s.refuseWhileUsersOwned(); err != nil {
+		return softDeleteResult{}, err
+	}
 	now := s.now().UTC()
 	var wasActive bool
 	err := s.Pool.QueryRow(ctx, `SELECT COALESCE(is_active, false) FROM users WHERE id = $1 FOR UPDATE`, id).Scan(&wasActive)
@@ -129,6 +132,9 @@ func (s pgStore) softDeleteUser(ctx context.Context, logger *slog.Logger, id uui
 // column set to null so the record stays. A key that cannot be nulled fails the whole delete (the caller's transaction rolls
 // back and the user stays). found is false when no user has the id.
 func (s pgStore) forceDeleteUser(ctx context.Context, logger *slog.Logger, id uuid.UUID) (found bool, decisions []userRefDecision, err error) {
+	if err := s.refuseWhileUsersOwned(); err != nil {
+		return false, nil, err
+	}
 	refs, err := s.userRefs(ctx)
 	if err != nil {
 		logger.ErrorContext(ctx, "admin: user delete (force) refused", "user_id", id.String(), "mode", string(DeleteForce), "error", err)

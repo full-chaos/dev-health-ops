@@ -156,6 +156,13 @@ goApi:
 authService:
   enabled: false
   replicas: 1
+  # -- The users-owned switch (D3c, AUTH_USERS_OWNED). true: auth-service owns
+  #    user creation, projects each user to public.users in the same transaction,
+  #    mounts the password and e-mail verification routes, and does not become
+  #    ready while auth.users is incomplete; the auth-migrate and grants Jobs then
+  #    grant its runtime role INSERT/UPDATE on the projection columns of
+  #    public.users (false revokes them). The flip is a production decision.
+  usersOwned: false
   # -- The auth API listener. It mounts no route in Wave 1.
   port: 8095
   # -- The operator listener: /healthz, /readyz, /metrics. Probes use it, never
@@ -173,6 +180,14 @@ authService:
     secretName: ""
     secretKey: AUTH_DATABASE_URI
     schema: auth
+  # -- The shared rate-limit store's login (AUTH_VALKEY_URI, database 1): an
+  #    ACL user of its own, limited to the auth_svc_ key prefix, never go-api's.
+  #    Leave secretName empty while no limited route (login, credentials,
+  #    social link) is mounted; the service refuses to start if one is mounted
+  #    without it. The chart creates no Secret.
+  valkey:
+    secretName: ""
+    secretKey: AUTH_VALKEY_URI
   signingKey:
     secretName: ""
     secretKey: signing-key.pem
@@ -192,6 +207,16 @@ authService:
       repository: postgres
       tag: "18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15"
       pullPolicy: IfNotPresent
+  # -- A rotation key set in place of signingKey (mutually exclusive). The
+  #    chart renders a manifest of kid, state and file only into a ConfigMap and
+  #    never carries key material: each entry names the existing Secret and key
+  #    holding that key's PEM. The pod holds a static copy, so a change to the
+  #    set is a new rollout, not a live rename. Exactly one key is `active`.
+  keySet:
+    enabled: false
+    # -- [{kid, state, file, secretName, secretKey}]; state is pending, active,
+    #    retiring, retired or compromised; file is a bare name.
+    keys: []
   # -- The session routes' key material, by secretKeyRef (the chart creates no
   #    Secret). Both keys render together or not at all; goApi.authProxy.sessions
   #    fails the render while the successor key is unset.
@@ -304,6 +329,11 @@ authService:
       database:
         to: []
         port: 5432
+      # -- Peers of the rate-limit store, `to` entries plus port. Required while
+      #    authService.valkey.secretName is set and the policy is on.
+      valkey:
+        to: []
+        port: 6379
       # -- Peers of the key custody service (KMS), `to` entries plus port. File
       #    custody (Wave 1) needs none, so the default grants no egress for it.
       keyCustody:
@@ -560,6 +590,33 @@ goWorkers:
   #    chart's own config/secret on any key both set. Shared by every
   #    worker group; there is no per-group override.
   extraEnvFrom: []
+  # -- Keys of the shared Secret (secrets.externalSecretName or the chart's own)
+  #    that worker groups read. Each renders as one optional secretKeyRef; the
+  #    Secret is no whole-Secret envFrom source of a worker pod, so a key not
+  #    listed here (every database DSN, the API and auth keys) never reaches
+  #    one. A key a worker needs that is not listed: add it here, or give the
+  #    pod its own source through extraEnvFrom. DSN names never belong here.
+  secretKeys:
+    - APP_BASE_URL
+    - CLICKHOUSE_URI
+    - EMAIL_API_KEY
+    - EMAIL_FROM_ADDRESS
+    - EMAIL_PROVIDER
+    - EXPECTED_WORKER_GROUPS
+    - INVESTMENT_LLM_BATCH_MODE
+    - INVESTMENT_LLM_BATCH_TIMEOUT_SECONDS
+    - LICENSE_PRIVATE_KEY
+    - LINEAR_API_KEY
+    - LLM_MODEL
+    - LLM_PROVIDER
+    - OPENAI_API_KEY
+    - PAGER_DUTY_CLIENT_ID
+    - PAGER_DUTY_REDIRECT_URI
+    - PAGER_DUTY_SECRET
+    - SETTINGS_ENCRYPTION_KEY
+    - STRIPE_SECRET_KEY
+    - STRIPE_WEBHOOK_SECRET
+    - WORKER_GITHUB_WORK_ITEMS_STATUS_MAPPING_PATH
   # The production Go topology has three distinct PostgreSQL endpoints.
   # Domain traffic uses a bounded transaction pool. River queue control and
   # coordinator locks use independent session pools: those connections cannot
@@ -912,6 +969,30 @@ migrations:
     #    class rows present and this empty, 0146 refuses and its transaction
     #    rolls back (nothing changes). Format sha256:<64 hex>; not a secret.
     classDecisionLiveSchemaDigest: ""
+    # -- CHAOS-10754: run the migrate Job's ClickHouse step as the Cloud
+    #    `default` login from its own Secret, not as the runtime login in the
+    #    shared Secret's CLICKHOUSE_NATIVE_URI (which cannot run migration
+    #    DDL on ClickHouse Cloud). OFF = today's render, unchanged. ON adds
+    #    three secretKeyRef env entries and sets CLICKHOUSE_URI to
+    #    clickhouse://$(user):$(password)@$(host):<port>/<database>?secure=true,
+    #    expanded by Kubernetes in the Pod; the Secret is operator-created and
+    #    this chart never creates it. Requires migrations.hook.extraEnv and
+    #    migrations.hook.secretData to leave CLICKHOUSE_URI and
+    #    CLICKHOUSE_URI_FILE unset. An external migrate Secret
+    #    (migrations.hook.externalSecretName) may keep a CLICKHOUSE_URI key
+    #    (the env entry wins) but must NOT carry CLICKHOUSE_URI_FILE: dho
+    #    refuses both forms together and the chart cannot see inside it.
+    #    CHARSET REQUIREMENT: the expansion does no percent-encoding, so the
+    #    password and user must not contain any of  @ : / ? # %  (URL-safe
+    #    characters only; a hex password is safe). Check before enabling.
+    clickhouseCloud:
+      enabled: false
+      secretName: ""
+      hostKey: CH_CLOUD_HOST
+      userKey: CH_CLOUD_USER
+      passwordKey: CH_CLOUD_PASSWORD
+      port: 9440
+      database: default
     # -- CHAOS-4428: the two migration steps that were previously run by hand.
     #    Ordered by hook weight behind the migrate Job (0): provisionRoles (5)
     #    creates the three runtime logins, riverMigrate (10) applies the River
@@ -1181,7 +1262,6 @@ config:
   PROVIDER_SYNC_QUEUES_ENABLED: "true"
   SYNC_COST_CLASS_QUEUES: "true"
   HIDE_MIGRATED_CHILD_CONFIGS: "true"
-  SYNC_RUN_MAX_UNITS: "1000"
   SYNC_UNIT_CONCURRENCY_PER_BUCKET: "8"
   SYNC_UNIT_DISPATCH_STALE_SECONDS: "900"
   SYNC_UNIT_RUNNING_STALE_SECONDS: "3600"
@@ -1336,6 +1416,8 @@ valkey:
 # =============================================================================
 clickhouse:
   enabled: true
+  # StatefulSet replica count. 0 keeps the claim and the data volume and runs no pod.
+  replicas: 1
   image:
     repository: clickhouse/clickhouse-server
     tag: "latest@sha256:d7556a3841027651307b5aa08d72b5c467d0241d3db5b67d9e158ef3975626f5"

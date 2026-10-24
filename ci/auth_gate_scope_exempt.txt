@@ -4,3 +4,4 @@ github.com/full-chaos/dev-health-ops/internal/api/authmail	signed-link e-mail of
 github.com/full-chaos/dev-health-ops/internal/apiservice/authflowvenue	venue oracle of the existing registration and login flows (integration-tagged)
 github.com/full-chaos/dev-health-ops/internal/queryapi/authctx	carries the query plane's verified effective-principal envelope through a request context; owned by the query plane
 github.com/full-chaos/dev-health-ops/internal/storage/postgres/aclguard	the shared transaction lock of every table-privilege writer (auth-migrate, river-migrate, provision-roles); a storage utility imported by the auth schema adapter, not part of the Auth Control Plane tree
+github.com/full-chaos/dev-health-ops/internal/testsupport/authrows	test-only row projections of the auth-flow venue oracle on the ACP target (reads auth.* tables in test queries, no production code)

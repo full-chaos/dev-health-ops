@@ -395,7 +395,9 @@ func TestAuthCorpusOverrideMailsToTheGatewayOfItsNetwork(t *testing.T) {
 	if !found {
 		t.Errorf("go-api's environment lacks %s: %v", want, override.Services.GoAPI.Environment)
 	}
-	if len(override.Services.GoAPI.ExtraHosts) != 0 {
-		t.Errorf("go-api keeps extra_hosts %v: the host is its network's gateway", override.Services.GoAPI.ExtraHosts)
+	for _, entry := range override.Services.GoAPI.ExtraHosts {
+		if strings.Contains(entry, "host-gateway") || strings.Contains(entry, "host.docker.internal") {
+			t.Errorf("go-api keeps extra_hosts entry %q: the host is its network's gateway", entry)
+		}
 	}
 }

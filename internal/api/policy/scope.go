@@ -138,7 +138,7 @@ func (s *Scope) OrgScope(next http.Handler) http.Handler {
 		user, err := s.headerAuthenticate(r)
 		if err != nil {
 			s.logger.ErrorContext(r.Context(), "api org scope: caller lookup failed",
-				slog.String("path", r.URL.Path), slog.Bool("unavailable", isUnavailable(err)),
+				slog.String("path", r.Pattern), slog.Bool("unavailable", isUnavailable(err)),
 				slog.String("missing_grant", MissingGrant(err)))
 			WriteInternal(w)
 			return
@@ -245,7 +245,7 @@ func (s *Scope) Impersonation(next http.Handler) http.Handler {
 			// lift the impersonation restriction). Same refusal as the
 			// caller and membership lookups above.
 			s.logger.ErrorContext(r.Context(), "api impersonation: session lookup failed; refusing the request",
-				slog.String("path", r.URL.Path), slog.String("admin_user_id", user.UserID),
+				slog.String("path", r.Pattern), slog.String("admin_user_id", user.UserID),
 				slog.Bool("unavailable", isUnavailable(err)), slog.String("missing_grant", MissingGrant(err)), slog.Any("error", err))
 			WriteInternal(w)
 			return

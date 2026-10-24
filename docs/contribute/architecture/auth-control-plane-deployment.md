@@ -141,7 +141,7 @@ port) or scrapers (`metricsFrom`, operator port). Egress is DNS plus
 the service off); `egress.keyCustody.to` is empty because Wave 1 custody is a
 file. When the release-wide policy is on, the auth pods are excluded from it.
 
-Rollback is `authService.enabled=false`; nothing depends on the service.
+Rollback is `authService.enabled=false`; nothing depends on the service. After the sessions flip, use the [flip and rollback runbook](../../operate/runbooks/auth-sessions-flip-and-rollback.md).
 
 ## Verified against
 

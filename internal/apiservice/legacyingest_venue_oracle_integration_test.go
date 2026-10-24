@@ -17,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	valkeygo "github.com/valkey-io/valkey-go"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/legacyingest"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/storage/valkey"
@@ -233,7 +234,7 @@ func TestLegacyIngestTelemetryVenueOracle(t *testing.T) {
 		CORSAllowedOrigins: []string{"http://localhost:3000"},
 		ValkeyURI:          secrets.NewValue(venue.ValkeyURI),
 	}
-	base := startVenueAPIWith(t, ctx, cfg, venue, func(deps *Deps) { deps.LegacyIngestEnabled = true })
+	base := startVenueAPIWith(t, ctx, cfg, venue, func(deps *Deps) { deps.LegacyIngestEnabled, deps.LegacyIngestOptions = true, legacyingest.Options{} })
 
 	// The table's TTL drops a bucket 90 days after its start, so every
 	// timestamp is recent (fixed strings in the requests, so both planes

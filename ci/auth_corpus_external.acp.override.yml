@@ -32,3 +32,19 @@ services:
   # proxied routes it serves (OPTIONS: 405 served, 404 not) before it turns an aggregate's flag on.
   auth-service:
     ports: !override ["127.0.0.1::8096", "127.0.0.1::8095"]
+    # auth-service reaches the provider hostnames at the stub on its own network and trusts the stub's CA; the social
+    # settings it needs to serve social-login come with the change that forwards that aggregate.
+    depends_on:
+      providerstub:
+        condition: service_started
+    extra_hosts:
+      - "api.github.com:10.199.91.10"
+      - "github.com:10.199.91.10"
+    environment:
+      - SSL_CERT_FILE=/run/corpus-stub/ca.pem
+    volumes:
+      - ${AUTH_CORPUS_STUB_DIR}:/run/corpus-stub:ro
+  providerstub:
+    networks:
+      auth_plane:
+        ipv4_address: 10.199.91.10

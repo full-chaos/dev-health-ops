@@ -47,6 +47,9 @@ DEV_HEALTH_GO_BUILD_OUTPUT=""
 DEV_HEALTH_GO_BUILD_TEMP_ROOT=""
 DEV_HEALTH_GO_INTEGRATION_SHARD_MANIFEST="${DEV_HEALTH_GO_INTEGRATION_SHARD_MANIFEST:-${ROOT}/ci/go_integration_shards.d}"
 DEV_HEALTH_GO_PROVIDER_TEST_SHARD_MANIFEST="${DEV_HEALTH_GO_PROVIDER_TEST_SHARD_MANIFEST:-${ROOT}/ci/go_providersync_test_shards.tsv}"
+DEV_HEALTH_GO_PROVIDER_TEST_WEIGHTS="${DEV_HEALTH_GO_PROVIDER_TEST_WEIGHTS:-${ROOT}/ci/go_providersync_test_weights.tsv}"
+# 75% of the 22 min go test -timeout of a providersync shard, in 10 ms units (1320 s * 0.75 = 990 s).
+DEV_HEALTH_GO_PROVIDER_SHARD_BUDGET="${DEV_HEALTH_GO_PROVIDER_SHARD_BUDGET:-99000}"
 DEV_HEALTH_GO_DAILY_TEST_SHARD_MANIFEST="${DEV_HEALTH_GO_DAILY_TEST_SHARD_MANIFEST:-${ROOT}/ci/go_daily_test_shards.tsv}"
 DEV_HEALTH_GO_WORKERSERVICE_TEST_SHARD_MANIFEST="${DEV_HEALTH_GO_WORKERSERVICE_TEST_SHARD_MANIFEST:-${ROOT}/ci/go_workerservice_test_shards.tsv}"
 DEV_HEALTH_GO_QAPISERVER_TEST_SHARD_MANIFEST="${DEV_HEALTH_GO_QAPISERVER_TEST_SHARD_MANIFEST:-${ROOT}/ci/go_queryapi_server_test_shards.tsv}"
@@ -1574,6 +1577,7 @@ declare -a REMAINING_TEST_SHARD_COUNTS=()
 declare -A PROVIDER_INTEGRATION_TEST_NAMES=()
 declare -A PROVIDER_TEST_WEIGHTS=()
 declare -A PROVIDER_TEST_CLASS=()
+declare -A PROVIDER_MEASURED_WEIGHTS=()
 declare -A PROVIDER_TEST_SHARD_BY_NAME=()
 declare -a PROVIDER_TEST_NAMES=()
 declare -a PROVIDER_TEST_SHARD_TOTALS=()
@@ -2072,6 +2076,7 @@ discover_providersync_tests() {
   [ "${#PROVIDER_INTEGRATION_TEST_NAMES[@]}" -gt 0 ] \
     || die "providersync source discovery returned zero integration-tagged top-level tests"
 
+  load_providersync_measured_weights
   PROVIDER_TEST_WEIGHTS=()
   PROVIDER_TEST_CLASS=()
   for test_name in "${PROVIDER_TEST_NAMES[@]}"; do
@@ -2082,7 +2087,54 @@ discover_providersync_tests() {
       PROVIDER_TEST_WEIGHTS["${test_name}"]="${PROVIDER_ORDINARY_TEST_WEIGHT}"
       PROVIDER_TEST_CLASS["${test_name}"]="ordinary"
     fi
+    if [ -n "${PROVIDER_MEASURED_WEIGHTS[${test_name}]+set}" ]; then
+      PROVIDER_TEST_WEIGHTS["${test_name}"]="${PROVIDER_MEASURED_WEIGHTS[${test_name}]}"
+    fi
   done
+  for test_name in "${!PROVIDER_MEASURED_WEIGHTS[@]}"; do
+    [ -n "${PROVIDER_TEST_CLASS[${test_name}]+set}" ] \
+      || die "providersync test weights name '${test_name}', which is not a discovered top-level test: remove or rename the row in ${DEV_HEALTH_GO_PROVIDER_TEST_WEIGHTS}"
+  done
+}
+
+# ci/go_providersync_test_weights.tsv: `TestName<TAB>seconds` measured per-test wall time of the slow tests (CHAOS-11105).
+# A listed test weighs its measured time in 10 ms units; an unlisted test keeps its class weight from the manifest.
+load_providersync_measured_weights() {
+  local weights="${DEV_HEALTH_GO_PROVIDER_TEST_WEIGHTS}"
+  local line_number=0 line name seconds centis tab=$'\t'
+  PROVIDER_MEASURED_WEIGHTS=()
+  [ -f "${weights}" ] || die "provider test weights file not found: ${weights}"
+  while IFS= read -r line || [ -n "${line}" ]; do
+    line_number=$((line_number + 1))
+    case "${line}" in
+      ""|\#*) continue ;;
+    esac
+    # Split by hand: `read` with a tab IFS collapses consecutive tabs, so an empty field would pass as a missing one.
+    case "${line}" in
+      *"${tab}"*) ;;
+      *) die "provider test weights ${weights}:${line_number} must contain exactly two tab-separated fields" ;;
+    esac
+    name="${line%%"${tab}"*}"
+    seconds="${line#*"${tab}"}"
+    case "${seconds}" in
+      *"${tab}"*) die "provider test weights ${weights}:${line_number} must contain exactly two tab-separated fields" ;;
+    esac
+    case "${name}" in
+      Test*[![:alnum:]_]*) die "provider test weights ${weights}:${line_number} has unsupported test name '${name}'" ;;
+      Test*) ;;
+      *) die "provider test weights ${weights}:${line_number} name '${name}' is not a top-level Test function" ;;
+    esac
+    [[ "${seconds}" =~ ^[0-9]+(\.[0-9]{1,2})?$ ]] \
+      || die "provider test weights ${weights}:${line_number} seconds '${seconds}' must be a positive number with at most two decimals"
+    centis="$(awk -v s="${seconds}" 'BEGIN { printf "%d", s * 100 + 0.5 }')"
+    [ "${centis}" -gt 0 ] || die "provider test weights ${weights}:${line_number} seconds must be positive"
+    [ -z "${PROVIDER_MEASURED_WEIGHTS[${name}]+set}" ] \
+      || die "provider test weights ${weights}:${line_number} lists '${name}' more than once"
+    PROVIDER_MEASURED_WEIGHTS["${name}"]="${centis}"
+    if [ "${centis}" -gt "${DEV_HEALTH_GO_PROVIDER_SHARD_BUDGET}" ]; then
+      die "providersync test '${name}' measures ${seconds} s, over the shard budget of $((DEV_HEALTH_GO_PROVIDER_SHARD_BUDGET / 100)) s (75% of the go test timeout); one test cannot be split, so speed it up"
+    fi
+  done < "${weights}"
 }
 
 # Deterministic longest-processing-time-first assignment balances the costly
@@ -2130,6 +2182,12 @@ plan_providersync_test_shards() {
       printf '%s\t%s\n' "${PROVIDER_TEST_WEIGHTS[${test_name}]}" "${test_name}"
     done | LC_ALL=C sort -t $'\t' -k1,1nr -k2,2
   )
+
+  for ((shard = 1; shard <= PROVIDER_TEST_SHARD_COUNT; shard++)); do
+    if [ "${PROVIDER_TEST_SHARD_TOTALS[${shard}]}" -gt "${DEV_HEALTH_GO_PROVIDER_SHARD_BUDGET}" ]; then
+      die "providersync test shard ${shard} plans $((PROVIDER_TEST_SHARD_TOTALS[shard] / 100)) s, over the shard budget of $((DEV_HEALTH_GO_PROVIDER_SHARD_BUDGET / 100)) s (75% of the 22 min go test timeout): raise the shard count in ${DEV_HEALTH_GO_PROVIDER_TEST_SHARD_MANIFEST} or refresh ${DEV_HEALTH_GO_PROVIDER_TEST_WEIGHTS}"
+    fi
+  done
 
   printf 'providersync test plan: %d shard(s), %d top-level test(s), %d integration-tagged\n' \
     "${PROVIDER_TEST_SHARD_COUNT}" \

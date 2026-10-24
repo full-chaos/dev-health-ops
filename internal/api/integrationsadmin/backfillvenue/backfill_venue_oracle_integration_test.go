@@ -144,9 +144,15 @@ func TestIntegrationBackfillVenueOracle(t *testing.T) {
 		if request.Name == untaggedRequest && !strings.Contains(python[index].Body, `"total_units":6`) {
 			t.Errorf("%s: python %s (the divergence assumes Python planned 6 units)", request.Name, python[index].Body)
 		}
+		if emptyLastWindowRequests[request.Name] && !strings.Contains(python[index].Body, `"total_units":12`) {
+			t.Errorf("%s: python %s (the divergence assumes Python planned 12 units, 3 windows of 2 sources and 2 datasets)", request.Name, python[index].Body)
+		}
 	}
 	receipt := venueoracle.Diff(t, base, same, python, venueoracle.DiffOptions{Golden: golden, Normalize: normalizeRuled,
 		Inspect: func(request venueoracle.Request, goResponse venueoracle.Response) {
+			if emptyLastWindowRequests[request.Name] && !strings.Contains(goResponse.Body, `"total_units":8`) {
+				t.Errorf("%s: go %d %s, want 8 units (the empty last window is not planned)", request.Name, goResponse.Status, goResponse.Body)
+			}
 			if request.Name == untaggedRequest && !strings.Contains(goResponse.Body, `"total_units":4`) {
 				t.Errorf("%s: go %d %s, want 4 units (the two tagged enabled sources, two datasets each)", request.Name, goResponse.Status, goResponse.Body)
 			}
@@ -178,9 +184,24 @@ ORDER BY u.integration_id::text, u.source_id::text, u.dataset_key, u.since_at`, 
 		t.Fatalf("the untagged source: %v", err)
 	}
 	untaggedIntegration := v.get("untagged").id.String()
+	pythonUnitRows := golden.InspectRows(t, "sync_run_units")
+	droppedEmptyWindowRows, droppedEmptyWindows := venueoracle.DropFrozenEmptyBackfillWindows(pythonUnitRows)
 	for _, table := range compare {
 		goRows := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), table.query)
-		pythonRows := golden.InspectRows(t, table.name)
+		pythonRows := pythonUnitRows
+		if table.name != "sync_run_units" {
+			pythonRows = golden.InspectRows(t, table.name)
+		}
+		// Declared divergences of the Go backfill planner: it ends each window where the next one starts (Python ends
+		// it 1 microsecond earlier), and it does not plan the empty last window Python plans when a request ends at
+		// UTC midnight (the run counts those units fewer). Only those differences are removed; every other column
+		// must still match.
+		switch table.name {
+		case "sync_run_units":
+			pythonRows = venueoracle.TileFrozenBackfillWindows(droppedEmptyWindowRows)
+		case "sync_runs":
+			pythonRows = venueoracle.LowerFrozenRunTotals(pythonRows, droppedEmptyWindows)
+		}
 		if want := withoutUntaggedSource(t, table.name, pythonRows, untaggedIntegration, untaggedSource); goRows != want {
 			t.Errorf("%s differs after the requests (python minus the untagged source):\n python: %s\n go:     %s", table.name, want, goRows)
 		}
@@ -326,6 +347,13 @@ func repoRoot(t *testing.T) string {
 // untaggedRequest is the request whose answer is the CHAOS-10064 divergence.
 const untaggedRequest = "clock: an enabled source no configuration tagged"
 
+// emptyLastWindowRequests end exactly at UTC midnight: Python plans an empty last window for them, Go does not
+// (Python 12 units, Go 8; Inspect and the Python check pin both values).
+var emptyLastWindowRequests = map[string]bool{
+	"clock: date-only strings":         true,
+	"clock: chunk edges (exact weeks)": true,
+}
+
 var totalUnits = regexp.MustCompile(`"total_units":\d+`)
 
 // normalizeRuled is normalize, with the untagged request's total_units left
@@ -334,6 +362,9 @@ func normalizeRuled(request venueoracle.Request, body string) string {
 	body = normalize(request, body)
 	if request.Name == untaggedRequest {
 		body = totalUnits.ReplaceAllString(body, `"total_units":"<ruled CHAOS-10064>"`)
+	}
+	if emptyLastWindowRequests[request.Name] {
+		body = totalUnits.ReplaceAllString(body, `"total_units":"<ruled empty last window>"`)
 	}
 	return body
 }

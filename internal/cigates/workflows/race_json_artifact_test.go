@@ -75,7 +75,7 @@ func raceJSONArtifactViolations(t *testing.T, root string) []string {
 		add("go-quality.yml: the go test -json upload path %q is not %s/", asString(with["path"]), dir)
 	}
 	if !strings.Contains(asString(with["name"]), "${{ matrix.name }}") {
-		add("go-quality.yml: the go test -json artifact name %q does not name the leg (three race legs would collide)", asString(with["name"]))
+		add("go-quality.yml: the go test -json artifact name %q does not name the leg (the race legs would collide)", asString(with["name"]))
 	}
 	if r, ok := with["retention-days"].(int); !ok || r != 7 {
 		add("go-quality.yml: the go test -json artifact retention is %v, want 7 days", with["retention-days"])

@@ -240,7 +240,7 @@ func staleDispatchSeconds() time.Duration {
 // transaction hasn't, so skipping it changes no observable behavior, only
 // which frame issues the (redundant, in Python) lookup.
 //
-// The units are read in keyset pages of dispatchReadPageSize (never all at
+// The units are read in keyset pages of unitPageSize (never all at
 // once); decideDispatchGuard folds them.
 func authorizeRun(ctx context.Context, tx pgx.Tx, logger *synclog.Logger, orgID, runID string, now time.Time) (guardDecision, error) {
 	staleCutoff := now.Add(-staleDispatchSeconds())
@@ -500,7 +500,7 @@ func decideDispatchGuard(source guardUnitSource, env guardEnv, orgID string, now
 }
 
 // forEachDispatchGuardUnit folds this run's units in id order (stable ordering for the total-cap suffix,
-// guard.py:147-153), dispatchReadPageSize rows per query.
+// guard.py:147-153), unitPageSize rows per query.
 //
 // Error classification: a query/scan failure here is a bare execution
 // failure indistinguishable from any other Postgres blip mid-dispatch --
@@ -509,31 +509,40 @@ func decideDispatchGuard(source guardUnitSource, env guardEnv, orgID string, now
 // dispatch, since the retry/backoff state machine this family's Dispatch()
 // routes into is the identical one round 3 fixed for reference_discovery.
 func forEachDispatchGuardUnit(ctx context.Context, tx pgx.Tx, runID string, fold func(dispatchGuardUnit) error) error {
-	return forEachKeysetPage(dispatchReadPageSize, func(unit dispatchGuardUnit) string { return unit.id },
-		func(after *string, limit int) ([]dispatchGuardUnit, error) {
-			rows, err := tx.Query(ctx, `
-SELECT id::text, status, provider, cost_class, updated_at, available_at
-FROM public.sync_run_units
-WHERE sync_run_id = $1::uuid AND ($2::uuid IS NULL OR id > $2::uuid)
-ORDER BY id
-LIMIT $3`, runID, after, limit)
-			if err != nil {
-				return nil, fmt.Errorf("%w: load dispatch guard units: %w", ErrDiscoveryTransientFailure, err)
+	load := func(afterID string, limit int) ([]dispatchGuardUnit, error) {
+		const columns = `SELECT id::text, status, provider, cost_class, updated_at, available_at FROM public.sync_run_units`
+		var rows pgx.Rows
+		var err error
+		if afterID == "" {
+			rows, err = tx.Query(ctx, columns+` WHERE sync_run_id = $1::uuid ORDER BY id LIMIT $2`, runID, limit)
+		} else {
+			rows, err = tx.Query(ctx, columns+` WHERE sync_run_id = $1::uuid AND id > $3::uuid ORDER BY id LIMIT $2`, runID, limit, afterID)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("%w: load dispatch guard units: %w", ErrDiscoveryTransientFailure, err)
+		}
+		defer rows.Close()
+		var units []dispatchGuardUnit
+		for rows.Next() {
+			var unit dispatchGuardUnit
+			if err := rows.Scan(&unit.id, &unit.status, &unit.provider, &unit.costClass, &unit.updatedAt, &unit.availableAt); err != nil {
+				return nil, fmt.Errorf("%w: scan dispatch guard unit: %w", ErrDiscoveryTransientFailure, err)
 			}
-			defer rows.Close()
-			var units []dispatchGuardUnit
-			for rows.Next() {
-				var unit dispatchGuardUnit
-				if err := rows.Scan(&unit.id, &unit.status, &unit.provider, &unit.costClass, &unit.updatedAt, &unit.availableAt); err != nil {
-					return nil, fmt.Errorf("%w: scan dispatch guard unit: %w", ErrDiscoveryTransientFailure, err)
-				}
-				units = append(units, unit)
+			units = append(units, unit)
+		}
+		if err := rows.Err(); err != nil {
+			return nil, fmt.Errorf("%w: iterate dispatch guard units: %w", ErrDiscoveryTransientFailure, err)
+		}
+		return units, nil
+	}
+	return forEachUnitPage(unitPageSize, load, func(unit dispatchGuardUnit) string { return unit.id }, func(page []dispatchGuardUnit) error {
+		for _, unit := range page {
+			if err := fold(unit); err != nil {
+				return err
 			}
-			if err := rows.Err(); err != nil {
-				return nil, fmt.Errorf("%w: iterate dispatch guard units: %w", ErrDiscoveryTransientFailure, err)
-			}
-			return units, nil
-		}, fold)
+		}
+		return nil
+	})
 }
 
 // countActiveBucketUnits counts the capacity-CONSUMER set for one bucket

@@ -2152,9 +2152,8 @@ ON CONFLICT (id) DO NOTHING`, ids.SyncRunID, loaded.input.OrgID, loaded.input.In
 }
 
 // unitChunkSize is the most sync_run_units a statement batch, an executed-proof
-// array or a verify read holds. It is the same value as the dispatch runtime's
-// unitPageSize (internal/syncdispatchruntime/unit_pages.go), which this package
-// cannot import: that package imports this one.
+// array or a verify read holds. It matches the dispatch runtime's page size,
+// which this package cannot import: that package imports this one.
 const unitChunkSize = 500
 
 // unitStatementTx is the statement surface persistPlannedUnits uses; a pgx.Tx

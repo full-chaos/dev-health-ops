@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"testing"
@@ -127,7 +128,7 @@ func TestARunOfTheWholeOrganizationSupersedesEveryKeyOfTheDayItDidNotWrite(t *te
 			{"work_item_state_durations_daily", "duration_hours + items_touched + avg_wip", "team_id"},
 		} {
 			scan("read "+read.table, "SELECT toFloat64(sum("+read.sum+")) FROM "+read.table+
-				" FINAL WHERE org_id = ? AND day = ? AND provider = ? AND work_scope_id = ? AND "+read.teamColumn+" = ?",
+				" FINAL WHERE org_id = ? AND day = ? AND provider = ? AND work_scope_id = ? AND "+read.teamColumn+" = ?"+writerOrgView(read.table),
 				[]any{org, day, provider, scope, team}, &out[index])
 		}
 		return out
@@ -138,7 +139,7 @@ func TestARunOfTheWholeOrganizationSupersedesEveryKeyOfTheDayItDidNotWrite(t *te
 		t.Helper()
 		var value float64
 		scan("read the scope", `SELECT toFloat64(sum(items_started + items_completed + wip_count_end_of_day)) FROM work_item_metrics_daily
-FINAL WHERE org_id = ? AND day = ? AND provider = ? AND work_scope_id = ?`, []any{org, day, provider, scope}, &value)
+FINAL WHERE org_id = ? AND day = ? AND provider = ? AND work_scope_id = ? AND row_view IN ('', 'org')`, []any{org, day, provider, scope}, &value)
 		return value
 	}
 	repoHeld := func(org, table, sum, repo string) float64 {
@@ -193,17 +194,20 @@ FINAL WHERE org_id = ? AND day = ? AND provider = ? AND work_scope_id = ?`, []an
 				line = entry
 			}
 		}
-		// In each work-item table: 4 providers x 2 teams of the scopes with no
-		// item, and one key of board-1 that the first partition wrote before
-		// the second partition attributed its items (the end of a run settles
-		// that key too). One key of a repository in no partition in ai_impact,
+		// In work_item_metrics_daily and work_item_state_durations_daily: 4
+		// providers x 2 teams of the scopes with no item (stored with no view),
+		// and the one key of board-1 that the first partition wrote before the
+		// second partition attributed its items. The partition stored that key
+		// under two views (org and scope), and the end of the run settles each
+		// of them, so it is 2 rows of zeros: 8 + 2. estimate_coverage_metrics_daily
+		// has no view: 8 + 1. One key of a repository in no partition in ai_impact,
 		// and two in team_metrics (that repository, and the row with no
 		// repository).
 		for field, want := range map[string]any{
 			"retraction_scope":                          StaleKeyRetractionOrganizationDay,
-			"work_item_metrics_daily_zero_rows":         float64(9),
+			"work_item_metrics_daily_zero_rows":         float64(10),
 			"estimate_coverage_metrics_daily_zero_rows": float64(9),
-			"work_item_state_durations_daily_zero_rows": float64(9),
+			"work_item_state_durations_daily_zero_rows": float64(10),
 			"ai_governance_coverage_daily_zero_rows":    float64(0),
 			"team_metrics_daily_zero_rows":              float64(2),
 			"ai_impact_metrics_daily_zero_rows":         float64(1),
@@ -233,7 +237,7 @@ FINAL WHERE org_id = ? AND day = ? AND provider = ? AND work_scope_id = ?`, []an
 		// items, and superseded at the end of the run.
 		var transient uint64
 		if err := conn.QueryRow(ctx, `SELECT count() FROM work_item_metrics_daily
-WHERE org_id = ? AND day = ? AND provider = 'linear' AND work_scope_id = 'board-1' AND team_id = 'unassigned'`, org, day).Scan(&transient); err != nil {
+WHERE org_id = ? AND day = ? AND provider = 'linear' AND work_scope_id = 'board-1' AND team_id = 'unassigned' AND row_view IN ('', 'org')`, org, day).Scan(&transient); err != nil {
 			t.Fatal(err)
 		}
 		if transient == 0 || held(org, "linear", "board-1", "unassigned") != zero {
@@ -299,24 +303,25 @@ WHERE org_id = ? AND day = ? AND provider = 'linear' AND work_scope_id = 'board-
 		// A second end of the same run writes nothing: a superseded key is
 		// not live.
 		run := Run{ID: uuid.NewString(), OrganizationID: org, TargetDay: day, FullOrg: true, DiscoveredRepoIDs: listed}
-		var before, after uint64
-		count := func(target *uint64) {
+		// The rows a reader sees (FINAL) are compared with a hash of each row: a
+		// background merge never changes them, and a row of zeros written over a
+		// live key, or a new key, does.
+		readable := func() string {
 			t.Helper()
-			total := uint64(0)
+			var state []string
 			for _, table := range []string{"team_metrics_daily", "ai_impact_metrics_daily"} {
-				var rows uint64
-				if err := conn.QueryRow(ctx, "SELECT count() FROM "+table+" WHERE org_id = ? AND day = ?", org, day).Scan(&rows); err != nil {
+				var rows, hash uint64
+				if err := conn.QueryRow(ctx, "SELECT count(), sum(cityHash64(toString(tuple(*)))) FROM "+table+" FINAL WHERE org_id = ? AND day = ?", org, day).Scan(&rows, &hash); err != nil {
 					t.Fatal(err)
 				}
-				total += rows
+				state = append(state, fmt.Sprintf("%s=%d/%d", table, rows, hash))
 			}
-			*target = total
+			return strings.Join(state, " ")
 		}
-		count(&before)
+		before := readable()
 		endStaleKeyRun(t, ctx, conn, run, clock.Add(time.Hour))
-		count(&after)
-		if after != before {
-			t.Errorf("a second end of the run wrote %d more row(s) in the repository-scoped tables, want none", after-before)
+		if after := readable(); after != before {
+			t.Errorf("a second end of the run changed the rows of the repository-scoped tables, want none:\n before %s\n after  %s", before, after)
 		}
 	})
 

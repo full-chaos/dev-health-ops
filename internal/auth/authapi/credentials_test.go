@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -133,6 +134,11 @@ type credFixture struct {
 
 func newCredFixture(t *testing.T) *credFixture {
 	t.Helper()
+	return newCredFixtureWith(t, httpapi.NewMemoryCounters(nil))
+}
+
+func newCredFixtureWith(t *testing.T, counters httpapi.CounterStore) *credFixture {
+	t.Helper()
 	f := newFixture(t)
 	hash := "stored-hash"
 	provider := "local"
@@ -152,6 +158,7 @@ func newCredFixture(t *testing.T) *credFixture {
 	routes, err := CredentialRoutes(CredentialDeps{
 		Flows: flows, Sessions: f.sessions, Users: f.users, Issuer: f.issuer,
 		Logger: slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
+		Limits: mustLimits(t, counters),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -252,6 +259,10 @@ func TestResetLinkIsSingleUseRevokesSessionsAndIsBoundToItsPurpose(t *testing.T)
 	long := c.call(http.MethodPost, PatternResetPassword, `{"token":"`+secret+`","new_password":"`+strings.Repeat("é", 40)+`"}`, nil)
 	if long.Code != http.StatusUnprocessableEntity || c.fakes.pwdSet != 0 {
 		t.Fatalf("over-long password = %d", long.Code)
+	}
+	eleven := c.call(http.MethodPost, PatternResetPassword, `{"token":"`+secret+`","new_password":"Aa1-xyzabcd"}`, nil)
+	if eleven.Code != http.StatusUnprocessableEntity || c.fakes.pwdSet != 0 || !strings.Contains(eleven.Body.String(), "at least 12 characters") {
+		t.Fatalf("eleven-character password = %d %s, writes %d; want 422 with the policy violation and the link kept", eleven.Code, eleven.Body, c.fakes.pwdSet)
 	}
 	ok1 := c.call(http.MethodPost, PatternResetPassword, `{"token":"`+secret+`","new_password":"another-password-1"}`, nil)
 	if ok1.Code != http.StatusOK || c.fakes.pwdSet != 1 || c.fakes.revoked != 1 {
@@ -391,7 +402,7 @@ func TestCredentialRoutesRequireTheirCollaborators(t *testing.T) {
 func TestCredentialRoutePatternsAreGoAPIs(t *testing.T) {
 	c := newCredFixture(t)
 	_ = c
-	routes, err := CredentialRoutes(CredentialDeps{Flows: &local.Flows{}, Sessions: c.sessions, Users: c.users, Issuer: c.issuer})
+	routes, err := CredentialRoutes(CredentialDeps{Flows: &local.Flows{}, Sessions: c.sessions, Users: c.users, Issuer: c.issuer, Limits: mustLimits(t, httpapi.NewMemoryCounters(nil))})
 	if err != nil {
 		t.Fatal(err)
 	}

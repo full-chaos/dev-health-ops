@@ -92,7 +92,12 @@ func buildProvider(push PushOptions) (*sdkmetric.MeterProvider, *Source, error) 
 	if err != nil {
 		return nil, nil, err
 	}
-	providerOptions := []sdkmetric.Option{sdkmetric.WithReader(exporter)}
+	policy, err := otlpmetrics.DefaultLabelPolicy(push.Logger)
+	if err != nil {
+		return nil, nil, err
+	}
+	// One View for every instrument and both readers (pull and push): only the labels pinned in labels.tsv leave the process.
+	providerOptions := []sdkmetric.Option{sdkmetric.WithReader(exporter), sdkmetric.WithView(policy.View())}
 	source := &Source{gatherer: registry}
 	if push.Options.Enabled && push.Registry != nil {
 		pipeline, err := otlpmetrics.NewPipeline(context.Background(), push.Options, health.Scrape{Registry: push.Registry, Service: push.Service, Version: push.Version}, pushSkip(), push.Logger)
@@ -107,7 +112,11 @@ func buildProvider(push PushOptions) (*sdkmetric.MeterProvider, *Source, error) 
 			source.pushReader = pipeline.Reader
 		}
 	}
-	return sdkmetric.NewMeterProvider(providerOptions...), source, nil
+	provider := sdkmetric.NewMeterProvider(providerOptions...)
+	if err := policy.Register(provider.Meter(SourceName)); err != nil {
+		return nil, nil, err
+	}
+	return provider, source, nil
 }
 
 // pushSkip is the registry sources the bridge must not read: the instruments'

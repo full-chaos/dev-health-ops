@@ -92,7 +92,7 @@ func (m *Materializer) categorizeBatch(
 		return false
 	}
 	batch, supported := categorize.AsBatchProvider(m.provider)
-	if !supported || m.served != nil {
+	if !supported || m.backend() != nil {
 		m.logger.InfoContext(ctx, "llm batch mode uses the synchronous path: the provider has no batch api",
 			"run_id", cfg.RunID, "mode", cfg.LLMBatchMode, "provider", cfg.ProviderName)
 		return false

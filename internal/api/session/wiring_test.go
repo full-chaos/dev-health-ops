@@ -11,6 +11,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/oauthprovider"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 )
@@ -126,5 +127,39 @@ func TestSocialLoginNeedsBothClientSettings(t *testing.T) {
 		if want := `{"detail":{"message":"Social login not configured for google"}}`; w.Code != http.StatusServiceUnavailable || w.Body.String() != want {
 			t.Errorf("%s: %d %s", name, w.Code, w.Body.String())
 		}
+	}
+}
+
+// A GitHub account with no verified address is the same unverified-e-mail refusal as any other provider
+// profile without one: it never reads as a bad token, and it is answered before the database is used.
+func TestSocialLoginAnswersAnUnverifiedGitHubAccountWithTheFixedRefusal(t *testing.T) {
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/user":
+			_, _ = w.Write([]byte(`{"id": 1, "login": "u", "email": null}`))
+		case "/emails":
+			_, _ = w.Write([]byte(`[{"email": "a@example.com", "primary": true, "verified": false}]`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(provider.Close)
+	deps := completeDeps(t)
+	deps.Getenv = func(key string) string { return "set" }
+	deps.OAuth = &oauthprovider.Client{HTTP: provider.Client(),
+		Endpoints: oauthprovider.Endpoints{GitHubUser: provider.URL + "/user", GitHubEmails: provider.URL + "/emails"}}
+	var handler http.Handler
+	for _, route := range Routes(deps) {
+		if route.Pattern == "/api/v1/auth/social-login" {
+			handler = route.Handler
+		}
+	}
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/auth/social-login",
+		strings.NewReader(`{"provider": "github", "provider_access_token": "x"}`))
+	r.Header.Set("Content-Type", "application/json")
+	handler.ServeHTTP(w, r)
+	if want := `{"detail":{"message":"The provider has not verified this email address"}}`; w.Code != http.StatusForbidden || w.Body.String() != want {
+		t.Errorf("%d %s", w.Code, w.Body.String())
 	}
 }

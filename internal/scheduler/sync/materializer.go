@@ -2225,7 +2225,7 @@ ON CONFLICT (id) DO NOTHING`, unitID, unit.OrgID, ids.SyncRunID, unit.Integratio
 		if err := results.Close(); err != nil {
 			return fmt.Errorf("finish scheduled sync unit batch: %w", err)
 		}
-		// CHAOS-4114: every pair this plan just minted a row for is ATTEMPTED
+		// Every pair this plan just minted a row for is ATTEMPTED
 		// from this instant, and the durable ledger has to say so in the SAME
 		// transaction the rows commit in. "Attempted" is a statement about row
 		// existence, not about terminalization -- the evidence query it replaces

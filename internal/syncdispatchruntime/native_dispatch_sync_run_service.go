@@ -807,7 +807,7 @@ func (service *NativeDispatchSyncRunService) denyRun(
 	}
 	if _, err := tx.Exec(ctx, `
 UPDATE public.sync_runs
-SET status = $2, completed_at = $3, error = $4, failed_units = $5, result = $6::json
+SET status = $2, completed_at = $3, error = $4, failed_units = $5, result = `+resultKeepingSkippedDatasets("$6")+`
 WHERE id = $1::uuid`,
 		run.id, syncRunStatusFailed, now, errorText, totalFailedUnits, cappedResultJSON); err != nil {
 		return ErrDispatchSyncRunUnavailable

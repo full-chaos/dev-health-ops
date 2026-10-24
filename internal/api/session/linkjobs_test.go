@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -171,5 +172,125 @@ func TestMailDrainWaitsForAJobWithinTheShutdownDeadline(t *testing.T) {
 	case <-finished:
 	default:
 		t.Error("shutdown returned before the job finished")
+	}
+}
+
+type blockingWriter struct{ release chan struct{} }
+
+func (w blockingWriter) Write(p []byte) (int, error) { <-w.release; return len(p), nil }
+
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+func (b *lockedBuffer) String() string { b.mu.Lock(); defer b.mu.Unlock(); return b.buf.String() }
+
+// fillQueue takes every slot with a job that holds until the returned release is closed.
+func fillQueue(t *testing.T, q *sendQueue) (release func()) {
+	t.Helper()
+	hold := make(chan struct{})
+	started := make(chan struct{}, cap(q.slots))
+	for range cap(q.slots) {
+		q.submit(mailPasswordReset, func() error { started <- struct{}{}; <-hold; return nil })
+	}
+	for range cap(q.slots) {
+		<-started
+	}
+	return func() { close(hold) }
+}
+
+// On a full queue a real request and a decoy request return within a bound while the logger blocks: neither
+// waits on a log write, a lock, or a goroutine.
+func TestQueueFullRequestNeverWaitsOnALogWriter(t *testing.T) {
+	q := withQueue(t, sendQueueSlots)
+	writerRelease := make(chan struct{})
+	logger := slog.New(slog.NewTextHandler(blockingWriter{writerRelease}, nil))
+	h := handlers{Deps: Deps{Logger: logger}}
+	q.startReporter(logger, 10*time.Millisecond)
+	release := fillQueue(t, q)
+	defer func() { close(writerRelease); release(); q.wait() }()
+	request := httptest.NewRequest(http.MethodPost, "/forgot", nil)
+	for name, real := range map[string]bool{"real": true, "decoy": false} {
+		done := make(chan struct{})
+		go func() {
+			h.queueLinkJob(context.Background(), request, mailPasswordReset, real, func(context.Context, *http.Request) error { return nil })
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-time.After(200 * time.Millisecond):
+			t.Fatalf("the %s request waited on the blocked log writer", name)
+		}
+	}
+	if text := scrape(t, q); !strings.Contains(text, `purpose="password_reset",outcome="dropped"} 1`) {
+		t.Errorf("the real drop was not counted:\n%s", text)
+	}
+}
+
+func TestDropReporterLogsOnceWithTheCountAfterABurst(t *testing.T) {
+	q := withQueue(t, 1)
+	logs := &lockedBuffer{}
+	logger := slog.New(slog.NewTextHandler(logs, nil))
+	h := handlers{Deps: Deps{Logger: logger}}
+	release := fillQueue(t, q)
+	defer func() { release(); q.wait() }()
+	q.startReporter(logger, 40*time.Millisecond)
+	request := httptest.NewRequest(http.MethodPost, "/forgot", nil)
+	burst := func(n int) {
+		for range n {
+			h.queueLinkJob(context.Background(), request, mailPasswordReset, true, func(context.Context, *http.Request) error { return nil })
+		}
+	}
+	lines := func() []string {
+		var out []string
+		for _, line := range strings.Split(logs.String(), "\n") {
+			if strings.Contains(line, "queue full") {
+				out = append(out, line)
+			}
+		}
+		return out
+	}
+	burst(5)
+	time.Sleep(300 * time.Millisecond)
+	if got := lines(); len(got) != 1 || !strings.Contains(got[0], "count=5") || !strings.Contains(got[0], "purpose=password_reset") || strings.Contains(got[0], "@") {
+		t.Fatalf("after a burst of 5 want one line with count=5 and the purpose only, got %q", got)
+	}
+	time.Sleep(200 * time.Millisecond)
+	if got := lines(); len(got) != 1 {
+		t.Fatalf("a quiet interval logged again: %q", got)
+	}
+	burst(2)
+	time.Sleep(300 * time.Millisecond)
+	if got := lines(); len(got) != 2 || !strings.Contains(got[1], "count=2") {
+		t.Fatalf("a second burst of 2 want a second line with count=2, got %q", got)
+	}
+}
+
+func TestDrainStopsTheReporterAfterALastReport(t *testing.T) {
+	q := withQueue(t, 1)
+	logs := &lockedBuffer{}
+	logger := slog.New(slog.NewTextHandler(logs, nil))
+	h := handlers{Deps: Deps{Logger: logger}}
+	release := fillQueue(t, q)
+	q.startReporter(logger, time.Hour)
+	h.queueLinkJob(context.Background(), httptest.NewRequest(http.MethodPost, "/x", nil), mailPasswordReset, true, func(context.Context, *http.Request) error { return nil })
+	release()
+	q.wait()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	<-ctx.Done()
+	q.drain(ctx)
+	deadline := time.Now().Add(2 * time.Second)
+	for !strings.Contains(logs.String(), "count=1") && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !strings.Contains(logs.String(), "count=1") {
+		t.Errorf("the last report was not written at the stop:\n%s", logs.String())
 	}
 }

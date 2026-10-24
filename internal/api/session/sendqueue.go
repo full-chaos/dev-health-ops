@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -37,8 +38,11 @@ type sendQueue struct {
 	slots    chan struct{}
 	wg       sync.WaitGroup
 	mu       sync.Mutex
-	counts   map[[2]string]uint64
+	counts   map[[2]string]*atomic.Uint64
 	inflight map[*queuedJob]struct{}
+	// fullDrops counts, by purpose, the real jobs a full queue refused; the one reporter reads it. A request
+	// only adds to it: it makes no log call and takes no lock.
+	fullDrops map[string]*atomic.Uint64
 	// ctx ends when a drain gives up: every job bound to it is cancelled.
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -52,14 +56,18 @@ type queuedJob struct {
 }
 
 func newSendQueue(slots int) *sendQueue {
-	counts := make(map[[2]string]uint64, len(mailPurposes)*len(mailOutcomes))
+	counts := make(map[[2]string]*atomic.Uint64, len(mailPurposes)*len(mailOutcomes))
 	for _, purpose := range mailPurposes {
 		for _, outcome := range mailOutcomes {
-			counts[[2]string{purpose, outcome}] = 0
+			counts[[2]string{purpose, outcome}] = new(atomic.Uint64)
 		}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	return &sendQueue{slots: make(chan struct{}, slots), counts: counts, inflight: map[*queuedJob]struct{}{}, ctx: ctx, cancel: cancel}
+	fullDrops := make(map[string]*atomic.Uint64, len(mailPurposes))
+	for _, purpose := range mailPurposes {
+		fullDrops[purpose] = new(atomic.Uint64)
+	}
+	return &sendQueue{slots: make(chan struct{}, slots), counts: counts, inflight: map[*queuedJob]struct{}{}, ctx: ctx, cancel: cancel, fullDrops: fullDrops}
 }
 
 // linkMailQueue carries the register route's mail; register it on the api's
@@ -69,18 +77,54 @@ var linkMailQueue = newSendQueue(sendQueueSlots)
 // MailMetricsSource is the process-wide mail counters (health.MetricsSource).
 func MailMetricsSource() *sendQueue { return linkMailQueue }
 
+// count counts one outcome without a lock. A label outside the closed sets counts nothing.
 func (q *sendQueue) count(purpose, outcome string) {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	q.bump(purpose, outcome)
+	if counter, known := q.counts[[2]string{purpose, outcome}]; known {
+		counter.Add(1)
+	}
 }
 
-// bump counts one outcome; q.mu is held. A label outside the closed sets counts nothing.
-func (q *sendQueue) bump(purpose, outcome string) {
-	key := [2]string{purpose, outcome}
-	if _, known := q.counts[key]; known {
-		q.counts[key]++
+// refuse counts a real job a full queue turned away. Nothing else happens on the request path.
+func (q *sendQueue) refuse(purpose string) {
+	q.count(purpose, outcomeDropped)
+	if counter, known := q.fullDrops[purpose]; known {
+		counter.Add(1)
 	}
+}
+
+// mailDropReportInterval is how often the one reporter writes the queue-full warning.
+var mailDropReportInterval = 30 * time.Second
+
+// startReporter runs the one background reporter: at most once per interval it logs, per purpose, how many real
+// jobs the full queue refused since its last report, and only when that number is above zero. It stops with the
+// queue (the drain cancels the queue context) after a last report. It logs the purpose and a count, never an address.
+func (q *sendQueue) startReporter(logger *slog.Logger, every time.Duration) {
+	if logger == nil {
+		return
+	}
+	last := map[string]uint64{}
+	report := func() {
+		for _, purpose := range mailPurposes {
+			now := q.fullDrops[purpose].Load()
+			if n := now - last[purpose]; n > 0 {
+				last[purpose] = now
+				logger.Warn("api session mail dropped: queue full", "count", n, "purpose", purpose, "since", "last report")
+			}
+		}
+	}
+	go func() {
+		ticker := time.NewTicker(every)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				report()
+			case <-q.ctx.Done():
+				report()
+				return
+			}
+		}
+	}()
 }
 
 // bind returns ctx with a timeout that is also cancelled when a drain gives up.
@@ -103,7 +147,7 @@ func (q *sendQueue) settle(job *queuedJob, err error) {
 	if err != nil {
 		outcome = outcomeFailed
 	}
-	q.bump(job.purpose, outcome)
+	q.count(job.purpose, outcome)
 }
 
 // submit runs send in the background and reports whether it was accepted; the
@@ -112,7 +156,7 @@ func (q *sendQueue) submit(purpose string, send func() error) bool {
 	select {
 	case q.slots <- struct{}{}:
 	default:
-		q.count(purpose, outcomeDropped)
+		q.refuse(purpose)
 		return false
 	}
 	job := &queuedJob{purpose: purpose}
@@ -154,6 +198,7 @@ func (q *sendQueue) submitDecoy(run func()) bool {
 func (q *sendQueue) drain(ctx context.Context) int {
 	done := make(chan struct{})
 	go func() { q.wg.Wait(); close(done) }()
+	defer q.cancel()
 	select {
 	case <-done:
 		return 0
@@ -168,11 +213,7 @@ func (q *sendQueue) drain(ctx context.Context) int {
 			continue
 		}
 		job.settled = true
-		if key := [2]string{job.purpose, outcomeDropped}; true {
-			if _, known := q.counts[key]; known {
-				q.counts[key]++
-			}
-		}
+		q.count(job.purpose, outcomeDropped)
 		left++
 	}
 	return left
@@ -196,12 +237,10 @@ func (q *sendQueue) wait() { q.wg.Wait() }
 
 // WritePrometheus writes the family, every series present at 0 from the start.
 func (q *sendQueue) WritePrometheus(w io.Writer) error {
-	q.mu.Lock()
 	counts := make(map[[2]string]uint64, len(q.counts))
-	for key, value := range q.counts {
-		counts[key] = value
+	for key, counter := range q.counts {
+		counts[key] = counter.Load()
 	}
-	q.mu.Unlock()
 	if _, err := io.WriteString(w, "# HELP "+mailSendsMetric+" Sign-up mails by purpose and outcome (sent, failed, dropped).\n"+
 		"# TYPE "+mailSendsMetric+" counter\n"); err != nil {
 		return err

@@ -229,9 +229,7 @@ func (h handlers) queueMail(ctx context.Context, purpose string, send func(conte
 		}
 		return err
 	}
-	if !linkMailQueue.submit(purpose, run) {
-		h.Logger.WarnContext(ctx, "api session mail dropped: queue full", "purpose", purpose)
-	}
+	linkMailQueue.submit(purpose, run)
 }
 
 // sendRegisterVerification is sendVerification with the failure returned.

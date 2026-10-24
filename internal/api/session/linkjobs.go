@@ -29,9 +29,7 @@ func (h handlers) queueLinkJob(ctx context.Context, r *http.Request, purpose str
 		}
 		return err
 	}
-	if !linkMailQueue.submit(purpose, run) {
-		h.Logger.WarnContext(ctx, "api session mail dropped: queue full", "purpose", purpose)
-	}
+	linkMailQueue.submit(purpose, run)
 }
 
 // runDecoy renders the mail of the purpose and stops there.

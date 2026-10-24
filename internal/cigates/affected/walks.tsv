@@ -201,6 +201,7 @@ internal/platform/config	route_switch_absence_test.go	unexpressed	-
 internal/platform/credshape	census_test.go	unexpressed	-
 internal/platform/credshape	credshape_test.go	contracts/jobs/v1/examples	dir
 internal/platform/fernet	fernet_test.go	unexpressed	-
+internal/platform/otlpmetrics	labelcensus_test.go	.	tree
 internal/platform/secrets	declared_fields_test.go	internal	tree
 internal/platform/secrets	envreads_test.go	.	tree
 internal/processreadiness	readiness_timeout_test.go	internal/processreadiness	dir

@@ -266,7 +266,7 @@ func (db *database) state(t *testing.T) string {
 		}
 		return out
 	}
-	users := query(`SELECT to_jsonb(u) - 'id' - 'created_at' - 'updated_at' FROM users u ORDER BY email`)
+	users := query(`SELECT to_jsonb(u) - 'id' - 'created_at' - 'updated_at' - 'sso_provider_id' FROM users u ORDER BY email`)
 	for _, row := range users {
 		hash, _ := row["password_hash"].(string)
 		matched := "none"

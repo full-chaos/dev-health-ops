@@ -137,8 +137,8 @@ func TestPagerDutyStoreErrorIsTheUnhandled500(t *testing.T) {
 	if err := httpapi.RateLimitStoreErrors.WritePrometheus(&scrape); err != nil {
 		t.Fatal(err)
 	}
-	counted := strings.Contains(scrape.String(), `dev_health_api_rate_limit_store_errors_total{limit="webhook_intake_client"}`) &&
-		!strings.Contains(scrape.String(), `dev_health_api_rate_limit_store_errors_total{limit="webhook_intake_client"} 0`)
+	counted := strings.Contains(scrape.String(), `dev_health_api_rate_limit_store_errors_total{limit="webhook_pagerduty"}`) &&
+		!strings.Contains(scrape.String(), `dev_health_api_rate_limit_store_errors_total{limit="webhook_pagerduty"} 0`)
 	if !counted {
 		t.Fatalf("the store error is not counted on the operator series:\n%s", scrape.String())
 	}

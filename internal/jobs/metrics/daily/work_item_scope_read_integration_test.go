@@ -207,7 +207,7 @@ func scopeReadCompleted(t *testing.T, ctx context.Context, conn driver.Conn, org
 	if err := conn.QueryRow(ctx, `
 SELECT toUInt64(sum(items_completed)), toFloat64(sum(story_points_completed))
 FROM work_item_metrics_daily FINAL
-WHERE org_id = ? AND day = ? AND work_scope_id = ?`, org, scopeReadDay, scope,
+WHERE org_id = ? AND day = ? AND work_scope_id = ? AND row_view IN ('', 'org')`, org, scopeReadDay, scope,
 	).Scan(&items, &storyPoints); err != nil {
 		t.Fatalf("read work_item_metrics_daily: %v", err)
 	}

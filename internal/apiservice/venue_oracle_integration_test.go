@@ -125,6 +125,8 @@ func TestVenueOracleProtectedRoutes(t *testing.T) {
 	pythonResponses := golden.Python(t, venue, requests)
 	golden.RetireRows(t, "python provider requests", teamsRuling)
 	var orglessRefused []string
+	var goStreamDeltas []requestEntries
+	var streamBefore []string
 	receipt.WriteString(venueoracle.Diff(t, base, requests, pythonResponses, venueoracle.DiffOptions{
 		Golden: golden,
 		// D6145: the org-less caller's refusals (me, patch) answer 403 where Python answered another status.
@@ -144,6 +146,11 @@ func TestVenueOracleProtectedRoutes(t *testing.T) {
 		Inspect: func(request venueoracle.Request, goResponse venueoracle.Response) {
 			if strings.HasPrefix(request.Name, "report: ") && goResponse.Status == http.StatusOK {
 				assertPerTableCounts(t, ctx, venue.AdminURI(t, venue.GoDB), goResponse.Body)
+			}
+			if request.Path == productTelemetryEventsPath {
+				after := parseStreamEntries(venueoracle.StreamEntries(t, ctx, venue.ValkeyURI, "product-telemetry:*", "ingestion_id"))
+				goStreamDeltas = append(goStreamDeltas, requestEntries{request: request.Name, entries: newStreamEntries(streamBefore, after)})
+				streamBefore = after
 			}
 		},
 		Retire: retiredProtectedRequest,
@@ -175,11 +182,27 @@ func TestVenueOracleProtectedRoutes(t *testing.T) {
 		regexp_replace(changes::text, '"collected_at": "[^"]*"', '"collected_at": "<t>"'), request_metadata::text, status
 		FROM audit_logs ORDER BY org_id`)
 	goStream := venueoracle.StreamEntries(t, ctx, venue.ValkeyURI, "product-telemetry:*", "ingestion_id")
-	pyStream := golden.CompareRows(t, "product-telemetry stream entries", goStream)
+	// The intake drops an event that breaks a value rule and refuses an org hash that is not the web
+	// shape, so Go stores fewer entries than the frozen Python plane for the requests the ruling
+	// retired. Only the entries of those requests are set aside (Go's are pinned); every other
+	// entry of every stream is still compared with the frozen Python rows.
+	pyStream := golden.InspectRows(t, "product-telemetry stream entries")
 	if pyStream == "" {
 		t.Errorf("product-telemetry stream entries are empty")
 	}
-	fmt.Fprintf(&receipt, "product-telemetry stream entries: %s\n", venueoracle.Mark(pyStream == goStream && pyStream != ""))
+	writes, err := acceptedStreamWrites(requests, pythonResponses)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pyOther, goOther, goRetired, err := splitProductTelemetryStreams(pyStream, writes, goStreamDeltas, goStream, retiredProductTelemetryRequests)
+	if err != nil {
+		t.Errorf("product-telemetry stream entries: %v", err)
+	} else if pyOther != goOther {
+		t.Errorf("product-telemetry stream entries of the requests the ruling did not retire differ after the requests:\n python: %s\n go:     %s", pyOther, goOther)
+	}
+	fmt.Fprintf(&receipt, "product-telemetry stream entries (not retired): %s\n", venueoracle.Mark(err == nil && pyOther == goOther))
+	fmt.Fprintf(&receipt, "product-telemetry stream entries (retired requests): %s\n",
+		pinMark(pin.Check(t, "product-telemetry stream entries (retired requests)", goRetired)))
 	goSent := sent.bodies("/go")
 	pySent := golden.CompareRows(t, "telemetry reports sent", goSent)
 	if pySent == "" {
@@ -423,7 +446,7 @@ func compareCHRows(t *testing.T, ctx context.Context, golden *venueoracle.Golden
 // the pin shows any change in Go's answers.
 const teamsRuling = "chris D5685/D5711/D5712/D5714/D5717 (team id carry, CHAOS-8939/CHAOS-8940)"
 
-// productTelemetryRuling retired the Python reference of eight product-telemetry
+// productTelemetryRuling retired the Python reference of nine product-telemetry
 // intake requests: the intake now bounds payload keys and string values, drops
 // only the event that breaks a rule, and bounds the org hash that names the
 // stream key (CHAOS-10945; stricter than Python, D6129). The rule tests in
@@ -438,6 +461,7 @@ const protectedRoutesPinRuling = teamsRuling + "; " + productTelemetryRuling
 var retiredProductTelemetryRequests = map[string]bool{
 	"pt: valid anonymous":               true,
 	"pt: valid org hash + names":        true,
+	"pt: empty org hash":                true,
 	"pt: ts forms":                      true,
 	"pt: nan payload":                   true,
 	"pt: lone surrogate payload":        true,

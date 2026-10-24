@@ -21,7 +21,7 @@ func (h handlers) queueLinkJob(ctx context.Context, r *http.Request, purpose str
 		return
 	}
 	run := func() error {
-		jobCtx, cancel := context.WithTimeout(detached, authmail.SendTimeout)
+		jobCtx, cancel := linkMailQueue.bind(detached, authmail.SendTimeout)
 		defer cancel()
 		err := job(jobCtx, jobRequest)
 		if err != nil {

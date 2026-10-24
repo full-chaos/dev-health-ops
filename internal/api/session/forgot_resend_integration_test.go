@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,6 +17,14 @@ import (
 )
 
 func postFrom(t *testing.T, ctx context.Context, st stack, path, body, from string) (int, string) {
+	t.Helper()
+	status, text, _ := postFromWithHeaders(t, ctx, st, path, body, from)
+	return status, text
+}
+
+// postFromWithHeaders also returns the response headers a caller can compare:
+// the per-request ones (date, request id) are left out.
+func postFromWithHeaders(t *testing.T, ctx context.Context, st stack, path, body, from string) (int, string, map[string]string) {
 	t.Helper()
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, st.server.URL+path, bytes.NewBufferString(body))
 	if err != nil {
@@ -29,7 +39,15 @@ func postFrom(t *testing.T, ctx context.Context, st stack, path, body, from stri
 	}
 	defer response.Body.Close()
 	raw, _ := io.ReadAll(response.Body)
-	return response.StatusCode, string(raw)
+	headers := map[string]string{}
+	for name, values := range response.Header {
+		switch strings.ToLower(name) {
+		case "date", "x-request-id":
+			continue
+		}
+		headers[strings.ToLower(name)] = strings.Join(values, ",")
+	}
+	return response.StatusCode, string(raw), headers
 }
 
 func TestForgotAndResendAnswerKnownAndUnknownAlike(t *testing.T) {
@@ -45,24 +63,25 @@ func TestForgotAndResendAnswerKnownAndUnknownAlike(t *testing.T) {
 	capture.waitFor(t, "pending.person@example.com", "Verify your email address")
 
 	ip := 0
-	answer := func(path, email string) (int, string) {
+	answer := func(path, email string) (int, string, map[string]string) {
 		ip++
-		return postFrom(t, ctx, st, path, fmt.Sprintf(`{"email": %q}`, email), fmt.Sprintf("203.0.113.%d", 100+ip))
+		return postFromWithHeaders(t, ctx, st, path, fmt.Sprintf(`{"email": %q}`, email), fmt.Sprintf("203.0.113.%d", 100+ip))
 	}
 	for _, path := range []string{"/api/v1/auth/resend-verification", "/api/v1/auth/forgot-password"} {
 		var first struct {
-			status int
-			body   string
+			status  int
+			body    string
+			headers map[string]string
 		}
 		for index, email := range []string{"pending.person@example.com", "nobody.here@example.com", "alice@example.com"} {
-			status, body := answer(path, email)
+			status, body, headers := answer(path, email)
 			if status != http.StatusOK {
 				t.Fatalf("%s %s: %d %s, want 200", path, email, status, body)
 			}
 			if index == 0 {
-				first.status, first.body = status, body
-			} else if status != first.status || body != first.body {
-				t.Errorf("%s %s answers %d %s, the first address %d %s: want one answer", path, email, status, body, first.status, first.body)
+				first.status, first.body, first.headers = status, body, headers
+			} else if status != first.status || body != first.body || !reflect.DeepEqual(headers, first.headers) {
+				t.Errorf("%s %s answers %d %s %v, the first address %d %s %v: want one answer, headers included", path, email, status, body, headers, first.status, first.body, first.headers)
 			}
 		}
 	}

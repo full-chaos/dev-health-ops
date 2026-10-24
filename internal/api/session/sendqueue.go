@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"strconv"
 	"sync"
+	"time"
 )
 
 // sendQueueSlots bounds the link e-mails in flight at once.
@@ -37,7 +38,17 @@ type sendQueue struct {
 	wg       sync.WaitGroup
 	mu       sync.Mutex
 	counts   map[[2]string]uint64
-	inflight map[string]int
+	inflight map[*queuedJob]struct{}
+	// ctx ends when a drain gives up: every job bound to it is cancelled.
+	ctx    context.Context
+	cancel context.CancelFunc
+}
+
+// queuedJob is one accepted real job; drained is set once, by whichever side
+// settles it first (the worker's own outcome or the drain's dropped count).
+type queuedJob struct {
+	purpose string
+	settled bool
 }
 
 func newSendQueue(slots int) *sendQueue {
@@ -47,7 +58,8 @@ func newSendQueue(slots int) *sendQueue {
 			counts[[2]string{purpose, outcome}] = 0
 		}
 	}
-	return &sendQueue{slots: make(chan struct{}, slots), counts: counts, inflight: map[string]int{}}
+	ctx, cancel := context.WithCancel(context.Background())
+	return &sendQueue{slots: make(chan struct{}, slots), counts: counts, inflight: map[*queuedJob]struct{}{}, ctx: ctx, cancel: cancel}
 }
 
 // linkMailQueue carries the register route's mail; register it on the api's
@@ -60,16 +72,38 @@ func MailMetricsSource() *sendQueue { return linkMailQueue }
 func (q *sendQueue) count(purpose, outcome string) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
+	q.bump(purpose, outcome)
+}
+
+// bump counts one outcome; q.mu is held. A label outside the closed sets counts nothing.
+func (q *sendQueue) bump(purpose, outcome string) {
 	key := [2]string{purpose, outcome}
 	if _, known := q.counts[key]; known {
 		q.counts[key]++
 	}
 }
 
-func (q *sendQueue) track(purpose string, delta int) {
+// bind returns ctx with a timeout that is also cancelled when a drain gives up.
+func (q *sendQueue) bind(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	bound, cancel := context.WithTimeout(ctx, timeout)
+	stop := context.AfterFunc(q.ctx, cancel)
+	return bound, func() { stop(); cancel() }
+}
+
+// settle records the outcome of job unless the drain already counted it dropped.
+func (q *sendQueue) settle(job *queuedJob, err error) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	q.inflight[purpose] += delta
+	delete(q.inflight, job)
+	if job.settled {
+		return
+	}
+	job.settled = true
+	outcome := outcomeSent
+	if err != nil {
+		outcome = outcomeFailed
+	}
+	q.bump(job.purpose, outcome)
 }
 
 // submit runs send in the background and reports whether it was accepted; the
@@ -81,19 +115,17 @@ func (q *sendQueue) submit(purpose string, send func() error) bool {
 		q.count(purpose, outcomeDropped)
 		return false
 	}
-	q.track(purpose, 1)
+	job := &queuedJob{purpose: purpose}
+	q.mu.Lock()
+	q.inflight[job] = struct{}{}
+	q.mu.Unlock()
 	q.wg.Add(1)
 	go func() {
 		defer func() {
-			q.track(purpose, -1)
 			<-q.slots
 			q.wg.Done()
 		}()
-		if err := send(); err != nil {
-			q.count(purpose, outcomeFailed)
-			return
-		}
-		q.count(purpose, outcomeSent)
+		q.settle(job, send())
 	}()
 	return true
 }
@@ -118,7 +150,7 @@ func (q *sendQueue) submitDecoy(run func()) bool {
 }
 
 // drain waits for the accepted jobs until ctx ends. Jobs still running then are
-// counted as dropped by purpose; it returns how many.
+// cancelled and counted as dropped by purpose, once; it returns how many.
 func (q *sendQueue) drain(ctx context.Context) int {
 	done := make(chan struct{})
 	go func() { q.wg.Wait(); close(done) }()
@@ -127,17 +159,21 @@ func (q *sendQueue) drain(ctx context.Context) int {
 		return 0
 	case <-ctx.Done():
 	}
+	q.cancel()
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	left := 0
-	for purpose, n := range q.inflight {
-		for range n {
-			if _, known := q.counts[[2]string{purpose, outcomeDropped}]; known {
-				q.counts[[2]string{purpose, outcomeDropped}]++
-			}
-			left++
+	for job := range q.inflight {
+		if job.settled {
+			continue
 		}
-		q.inflight[purpose] = 0
+		job.settled = true
+		if key := [2]string{job.purpose, outcomeDropped}; true {
+			if _, known := q.counts[key]; known {
+				q.counts[key]++
+			}
+		}
+		left++
 	}
 	return left
 }

@@ -136,7 +136,7 @@ func seedNilPartitionOrg(t *testing.T, ctx context.Context, conn driver.Conn, or
 
 func completedByProvider(t *testing.T, ctx context.Context, conn driver.Conn, orgID string, day time.Time) map[string]uint64 {
 	t.Helper()
-	rows, err := conn.Query(ctx, `SELECT provider, sum(items_completed) FROM work_item_metrics_daily FINAL WHERE org_id = ? AND day = ? GROUP BY provider`, orgID, day)
+	rows, err := conn.Query(ctx, `SELECT provider, sum(items_completed) FROM work_item_metrics_daily FINAL WHERE org_id = ? AND day = ? AND row_view IN ('', 'org') GROUP BY provider`, orgID, day)
 	if err != nil {
 		t.Fatal(err)
 	}

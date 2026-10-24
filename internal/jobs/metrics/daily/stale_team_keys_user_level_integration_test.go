@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily/icfinalize"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/rowview"
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
@@ -28,9 +29,15 @@ import (
 // row of each key, then the marker.
 func livePeople(t *testing.T, ctx context.Context, conn driver.Conn, table, personColumn, org string, day time.Time) []string {
 	t.Helper()
+	// The real writers store each row of a work-item table in the org and the
+	// scope view: a person counts once, in the org view.
+	predicate := liverow.Predicate(table, "")
+	if rowview.Has(table) {
+		predicate += " AND " + rowview.OrgPredicate(table, "")
+	}
 	rows, err := conn.Query(ctx, fmt.Sprintf(
 		"SELECT %[2]s FROM %[1]s FINAL WHERE org_id = ? AND day = ? AND %[3]s ORDER BY %[2]s",
-		table, personColumn, liverow.Predicate(table, "")), org, day)
+		table, personColumn, predicate), org, day)
 	if err != nil {
 		t.Fatalf("read the live people of %s: %v", table, err)
 	}
@@ -246,14 +253,14 @@ func TestAPersonTheWorkItemComputeNoLongerProducesIsRetractedAndAMeasuredZeroSta
 	}
 	var daveMeasures uint64
 	if err := conn.QueryRow(ctx, `SELECT toUInt64(items_started + items_completed + wip_count_end_of_day) FROM work_item_user_metrics_daily FINAL
- WHERE org_id = ? AND day = ? AND user_identity = 'dave'`, staleKeyAcceptanceOrg, day).Scan(&daveMeasures); err != nil {
+ WHERE org_id = ? AND day = ? AND user_identity = 'dave' AND row_view IN ('', 'org')`, staleKeyAcceptanceOrg, day).Scan(&daveMeasures); err != nil {
 		t.Fatal(err)
 	}
 	if daveMeasures != 0 {
 		t.Fatalf("the row of dave holds measures %d, want a measured row of zeros: the case is not set", daveMeasures)
 	}
 	aliceBefore := newestUserRow(t, ctx, conn, `SELECT argMax(retracted, computed_at), argMax(team_id, computed_at), argMax(team_name, computed_at), count()
- FROM work_item_user_metrics_daily WHERE org_id = ? AND day = ? AND user_identity = 'alice'`, staleKeyAcceptanceOrg, day)
+ FROM work_item_user_metrics_daily WHERE org_id = ? AND day = ? AND user_identity = 'alice' AND row_view IN ('', 'org')`, staleKeyAcceptanceOrg, day)
 
 	// The item of alice goes to carol: alice has no row on the day any more.
 	storeItem("ENG-1", "carol", "done", &started, &done, day.Add(-48*time.Hour), stored.Add(time.Hour))
@@ -263,19 +270,19 @@ func TestAPersonTheWorkItemComputeNoLongerProducesIsRetractedAndAMeasuredZeroSta
 		t.Errorf("live people after the recompute = %s, want %s: alice is retracted, carol takes the item, dave (a measured row of zeros) and bob stay", got, want)
 	}
 	alice := newestUserRow(t, ctx, conn, `SELECT argMax(retracted, computed_at), argMax(team_id, computed_at), argMax(team_name, computed_at), count()
- FROM work_item_user_metrics_daily WHERE org_id = ? AND day = ? AND user_identity = 'alice'`, staleKeyAcceptanceOrg, day)
+ FROM work_item_user_metrics_daily WHERE org_id = ? AND day = ? AND user_identity = 'alice' AND row_view IN ('', 'org')`, staleKeyAcceptanceOrg, day)
 	if alice.retracted != 1 || alice.team != aliceBefore.team || alice.teamName != aliceBefore.teamName || alice.team == "" {
 		t.Errorf("the newest row of alice = %+v (before %+v), want the marker set and the team of the row it retracts carried", alice, aliceBefore)
 	}
 	if daveAfter := newestUserRow(t, ctx, conn, `SELECT argMax(retracted, computed_at), argMax(team_id, computed_at), argMax(team_name, computed_at), count()
- FROM work_item_user_metrics_daily WHERE org_id = ? AND day = ? AND user_identity = 'dave'`, staleKeyAcceptanceOrg, day); daveAfter.retracted != 0 {
+ FROM work_item_user_metrics_daily WHERE org_id = ? AND day = ? AND user_identity = 'dave' AND row_view IN ('', 'org')`, staleKeyAcceptanceOrg, day); daveAfter.retracted != 0 {
 		t.Errorf("the measured row of zeros of dave = %+v, want no marker", daveAfter)
 	}
 	// A further compute writes no further row for alice.
 	third := second.Add(10 * time.Hour)
 	runStaleKeyAcceptanceFamilies(t, ctx, conn, third)
 	var written uint64
-	if err := conn.QueryRow(ctx, `SELECT count() FROM work_item_user_metrics_daily WHERE org_id = ? AND day = ? AND user_identity = 'alice' AND computed_at >= ?`,
+	if err := conn.QueryRow(ctx, `SELECT count() FROM work_item_user_metrics_daily WHERE org_id = ? AND day = ? AND user_identity = 'alice' AND computed_at >= ? AND row_view IN ('', 'org')`,
 		staleKeyAcceptanceOrg, day, third).Scan(&written); err != nil {
 		t.Fatal(err)
 	}

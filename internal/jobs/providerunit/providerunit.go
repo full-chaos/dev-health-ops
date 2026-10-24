@@ -164,6 +164,10 @@ const (
 	// payload size). The same persisted state gives the same conflict on every
 	// attempt, and the scope's next run is a new unit with a new checkpoint.
 	CheckpointConflictCategory = "checkpoint_conflict"
+	// CheckpointDataErrorCategory covers a chunk payload Postgres refuses
+	// (SQLSTATE 22P05, a NUL in a jsonb string). The payload is the same on
+	// every attempt, so the unit ends on the first one (CHAOS-11034).
+	CheckpointDataErrorCategory = "checkpoint_data_error"
 )
 
 // timeLimitReserve is how long before the job deadline the unit's
@@ -270,6 +274,9 @@ func deterministicTerminalCategory(err error) (string, bool) {
 			return TimeLimitCategory, true
 		}
 		return TreeWalkLimitCategory, true
+	}
+	if providersync.IsChunkStoreDataError(err) {
+		return CheckpointDataErrorCategory, true
 	}
 	var storeErr *providersync.ChunkStoreError
 	if errors.Is(err, providersync.ErrChunkCheckpointConflict) && !errors.As(err, &storeErr) {

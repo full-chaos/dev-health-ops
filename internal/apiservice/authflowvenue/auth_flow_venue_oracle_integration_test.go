@@ -129,6 +129,13 @@ func decodeMail(t *testing.T, captured smtpcapture.Mail) sentMail {
 		body = string(decoded)
 	}
 	match := linkPattern.FindStringSubmatch(body)
+	if match == nil && tokenOptional(out.subject) {
+		if forbidden := noticeLinkOrToken(body); forbidden != "" {
+			t.Fatalf("the account-exists notice carries a token or a link (%q):\n%s", forbidden, body)
+		}
+		out.html = body
+		return out
+	}
 	if match == nil {
 		t.Fatalf("no link token in the captured HTML:\n%s", body)
 	}
@@ -246,6 +253,8 @@ type runner struct {
 	// registers is set when the current batch carried a sign-up: the Go plane
 	// sends its mail off the request, so mails are compared in a fixed order.
 	registers bool
+	// signUpLength is the content-length of the first uniform sign-up answer of the run.
+	signUpLength string
 }
 
 // batch opens fresh rate-limit windows, answers steps on both planes, and
@@ -281,6 +290,15 @@ func (r *runner) batch(label string, steps []step) map[string][2]venueoracle.Res
 					r.notices++
 				}
 				pyCompared.Status, pyCompared.Body = goProjected.Status, goProjected.Body
+				// The frozen Python length belongs to another body. The property that matters is that every
+				// uniform answer has the same length; it is asserted below, not skipped.
+				headers := make(map[string]string, len(pyCompared.Headers))
+				for name, value := range pyCompared.Headers {
+					headers[name] = value
+				}
+				headers["content-length"] = goProjected.Headers["content-length"]
+				pyCompared.Headers = headers
+				r.checkUniformLength(s.name, goResponse)
 			}
 		}
 		same, compared, pyShown, goShown := venueoracle.Compare(s.python, pyCompared, goProjected,
@@ -297,6 +315,25 @@ func (r *runner) batch(label string, steps []step) map[string][2]venueoracle.Res
 	return out
 }
 
+// checkUniformLength asserts that the Go answers of the uniform sign-up steps (new address, taken address,
+// other case) all have the same body bytes (signUpAnswer) and one content-length, equal to that body's length.
+// The Python answers differed by length: that leak is the declared divergence "uniform sign-up answer" (D6129).
+func (r *runner) checkUniformLength(name string, goResponse venueoracle.Response) {
+	r.t.Helper()
+	got := goResponse.Headers["content-length"]
+	if want := strconv.Itoa(len(signUpAnswer)); got != want {
+		r.t.Errorf("%s: uniform sign-up answer has content-length %q, want %q", name, got, want)
+	}
+	if goResponse.Body != signUpAnswer {
+		r.t.Errorf("%s: uniform sign-up answer body %q, want %q", name, goResponse.Body, signUpAnswer)
+	}
+	if r.signUpLength == "" {
+		r.signUpLength = got
+	} else if got != r.signUpLength {
+		r.t.Errorf("%s: content-length %q differs from the first uniform sign-up answer %q", name, got, r.signUpLength)
+	}
+}
+
 // signUpAnswer is the one answer the Go plane gives every sign-up that passed
 // validation.
 const signUpAnswer = `{"message":"Check your email to continue"}`
@@ -311,6 +348,19 @@ func uniformSignUp(python, goResponse venueoracle.Response) bool {
 	return (python.Status == http.StatusCreated && strings.Contains(python.Body, "Registration successful")) ||
 		(python.Status == http.StatusBadRequest && strings.Contains(python.Body, "Email already registered"))
 }
+
+// noticeLinkOrToken names what the account-exists notice must not carry: a link token or a verify or reset link.
+func noticeLinkOrToken(body string) string {
+	for _, forbidden := range []string{"token=", "/auth/verify", "/auth/reset-password"} {
+		if strings.Contains(body, forbidden) {
+			return forbidden
+		}
+	}
+	return ""
+}
+
+// tokenOptional is true only for the mail that carries no link token by design.
+func tokenOptional(subject string) bool { return subject == accountExistsSubject }
 
 // accountExistsSubject is the subject of the notice mail to an existing owner.
 const accountExistsSubject = "You already have an account"

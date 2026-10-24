@@ -292,3 +292,45 @@ func TestAnEmptyOrgHashStaysTheAnonymousStream(t *testing.T) {
 		t.Fatalf("status = %d, body %s", recorder.Code, recorder.Body.String())
 	}
 }
+
+// The shared event of the venue oracle (every pt: request of its protected-routes corpus)
+// carries these payload values. Its non-ASCII string is the only thing the value rules
+// refuse: remove it and the event is stored, so the drop of "pt: empty org hash" is the
+// non-ASCII rule and no other refusal.
+const venueSharedEvent = `{"name":"page_viewed","schemaVersion":"1","eventId":"e1","ts":"2026-09-23T02:00:00.123Z","sessionId":"s","anonymousUserId":"a","payload":%s}`
+
+func TestTheEmptyOrgHashVenueRequestIsDroppedForTheNonASCIIStringOnly(t *testing.T) {
+	withString := fmt.Sprintf(venueSharedEvent, `{"f":1.5,"i":7,"b":true,"n":null,"s":"é x","big":123456789012345678901234567890}`)
+	streams, logs := &recordingStreams{}, &bytes.Buffer{}
+	recorder := post(t, streams, logs, `{"orgIdHash":"","events":[`+withString+`]}`)
+	body := recorder.Body.String()
+	if recorder.Code != http.StatusAccepted || !strings.Contains(body, `"items_received":0`) || !strings.Contains(body, `"items_dropped":1`) {
+		t.Fatalf("status = %d, body %s, want 202 with items_received 0 and items_dropped 1", recorder.Code, body)
+	}
+	if len(streams.appended) != 0 {
+		t.Fatalf("appends = %v, want none", streams.appended)
+	}
+	// The cause is the string rule on the key "s", not the key, number or org hash rules.
+	line := logs.String()
+	for _, want := range []string{`reasons="string=1"`, "keys=s", "events=page_viewed"} {
+		if !strings.Contains(line, want) {
+			t.Errorf("the log %q lacks %q", line, want)
+		}
+	}
+	for _, other := range []string{"key=", "number=", invalidKeyToken} {
+		if strings.Contains(line, `reasons="`+other) || strings.Contains(line, "keys="+other) {
+			t.Errorf("the log %q names another cause %q", line, other)
+		}
+	}
+	// Control: the same request with an ASCII value in place of the non-ASCII string is stored.
+	ascii := fmt.Sprintf(venueSharedEvent, `{"f":1.5,"i":7,"b":true,"n":null,"s":"ex","big":123456789012345678901234567890}`)
+	streams, logs = &recordingStreams{}, &bytes.Buffer{}
+	recorder = post(t, streams, logs, `{"orgIdHash":"","events":[`+ascii+`]}`)
+	if recorder.Code != http.StatusAccepted || !strings.Contains(recorder.Body.String(), `"items_received":1`) || !strings.Contains(recorder.Body.String(), `"items_dropped":0`) {
+		t.Fatalf("control: status = %d, body %s, want the event stored", recorder.Code, recorder.Body.String())
+	}
+	// Control: every other payload value alone is allowed, and the empty org hash is the anonymous stream.
+	if len(streams.appended) != 1 || streams.appended[0] != "product-telemetry:anonymous:events" {
+		t.Fatalf("control: appends = %v, want the anonymous stream once", streams.appended)
+	}
+}

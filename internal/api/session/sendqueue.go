@@ -1,7 +1,9 @@
 package session
 
 import (
+	"context"
 	"io"
+	"log/slog"
 	"strconv"
 	"sync"
 )
@@ -31,10 +33,11 @@ var (
 // sendQueue runs best-effort mail sends off the request. It never blocks the
 // caller: when every slot is busy the send is dropped and counted.
 type sendQueue struct {
-	slots  chan struct{}
-	wg     sync.WaitGroup
-	mu     sync.Mutex
-	counts map[[2]string]uint64
+	slots    chan struct{}
+	wg       sync.WaitGroup
+	mu       sync.Mutex
+	counts   map[[2]string]uint64
+	inflight map[string]int
 }
 
 func newSendQueue(slots int) *sendQueue {
@@ -44,7 +47,7 @@ func newSendQueue(slots int) *sendQueue {
 			counts[[2]string{purpose, outcome}] = 0
 		}
 	}
-	return &sendQueue{slots: make(chan struct{}, slots), counts: counts}
+	return &sendQueue{slots: make(chan struct{}, slots), counts: counts, inflight: map[string]int{}}
 }
 
 // linkMailQueue carries the register route's mail; register it on the api's
@@ -63,6 +66,12 @@ func (q *sendQueue) count(purpose, outcome string) {
 	}
 }
 
+func (q *sendQueue) track(purpose string, delta int) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.inflight[purpose] += delta
+}
+
 // submit runs send in the background and reports whether it was accepted; the
 // send's error counts it as failed.
 func (q *sendQueue) submit(purpose string, send func() error) bool {
@@ -72,9 +81,11 @@ func (q *sendQueue) submit(purpose string, send func() error) bool {
 		q.count(purpose, outcomeDropped)
 		return false
 	}
+	q.track(purpose, 1)
 	q.wg.Add(1)
 	go func() {
 		defer func() {
+			q.track(purpose, -1)
 			<-q.slots
 			q.wg.Done()
 		}()
@@ -85,6 +96,63 @@ func (q *sendQueue) submit(purpose string, send func() error) bool {
 		q.count(purpose, outcomeSent)
 	}()
 	return true
+}
+
+// submitDecoy runs the same work shape for an address that has no account:
+// it takes a slot like a real job and counts nothing, whatever happens.
+func (q *sendQueue) submitDecoy(run func()) bool {
+	select {
+	case q.slots <- struct{}{}:
+	default:
+		return false
+	}
+	q.wg.Add(1)
+	go func() {
+		defer func() {
+			<-q.slots
+			q.wg.Done()
+		}()
+		run()
+	}()
+	return true
+}
+
+// drain waits for the accepted jobs until ctx ends. Jobs still running then are
+// counted as dropped by purpose; it returns how many.
+func (q *sendQueue) drain(ctx context.Context) int {
+	done := make(chan struct{})
+	go func() { q.wg.Wait(); close(done) }()
+	select {
+	case <-done:
+		return 0
+	case <-ctx.Done():
+	}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	left := 0
+	for purpose, n := range q.inflight {
+		for range n {
+			if _, known := q.counts[[2]string{purpose, outcomeDropped}]; known {
+				q.counts[[2]string{purpose, outcomeDropped}]++
+			}
+			left++
+		}
+		q.inflight[purpose] = 0
+	}
+	return left
+}
+
+// MailDrain is the runtime component that lets the queued sign-in mail jobs
+// finish, within the shutdown deadline, when the api stops.
+type MailDrain struct{ Logger *slog.Logger }
+
+func (MailDrain) Name() string                { return "session-mail-queue" }
+func (MailDrain) Start(context.Context) error { return nil }
+func (d MailDrain) Shutdown(ctx context.Context) error {
+	if left := linkMailQueue.drain(ctx); left > 0 && d.Logger != nil {
+		d.Logger.WarnContext(ctx, "api session mail queue stopped with jobs unfinished", "count", left)
+	}
+	return nil
 }
 
 // wait returns when every accepted send has finished.

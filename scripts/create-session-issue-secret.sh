@@ -33,16 +33,16 @@ cleanup() {
   local f
   [ -n "$workdir" ] || return 0
   shopt -s dotglob nullglob
-  for f in "$workdir"/*; do
-    [ -e "$f" ] || continue
-    shred -u "$f" 2>/dev/null || rm -f "$f"
+  for f in "$workdir"/* "$workdir"/*/*; do
+    [ -f "$f" ] || continue
+    shred -u "$f" 3<&- 2>/dev/null || rm -f "$f" 3<&-
   done
-  rmdir "$workdir" 2>/dev/null || true
+  rm -rf "$workdir" 3<&-
 }
 
 final() {
   local rc=$?
-  trap '' INT TERM
+  trap '' HUP INT TERM PIPE
   [ "$finished" -eq 0 ] || exit "$rc"
   finished=1
   if [ -n "$kpid" ]; then
@@ -75,6 +75,7 @@ on_signal() {
     exit "$1"
   fi
 }
+trap 'on_signal 129' HUP
 trap 'on_signal 130' INT
 trap 'on_signal 143' TERM
 
@@ -107,18 +108,24 @@ keyname='^[A-Za-z0-9_-][A-Za-z0-9._-]{0,252}$'
 [[ "$name" =~ $dns1123 ]] && [ "${#name}" -le 253 ] && [[ "$key" =~ $keyname ]] ||
   refuse "--name or --key is not a valid name"
 
+# key names the copy; refuse the names this script uses itself
+[ "$key" != "kubectl.err" ] || refuse "--key is a reserved name"
+
 refuse_file() { refuse "value file $1"; }
 [ -L "$valuefile" ] && refuse_file "is a symlink"
 [ -f "$valuefile" ] || refuse_file "is not a regular file"
 # Pin the file: every later check and the read use the open descriptor.
+# Children get fd 3 closed (3<&-); the checks name the descriptor as /proc/$$/fd/3.
 exec 3<"$valuefile" || refuse_file "cannot be opened"
-same_file() { [ "$(stat -L -c %d:%i /proc/self/fd/3)" = "$(stat -c %d:%i "$valuefile" 2>/dev/null)" ]; }
+fd3="/proc/$$/fd/3"
+same_file() { [ "$(stat -L -c %d:%i "$fd3" 3<&-)" = "$(stat -c %d:%i "$valuefile" 3<&- 2>/dev/null)" ]; }
+[ -f "$fd3" ] || refuse_file "is not a regular file"
 same_file || refuse_file "changed while being opened"
-[ "$(stat -L -c %a /proc/self/fd/3)" = "600" ] || refuse_file "is not mode 0600"
-[ "$(stat -L -c %u /proc/self/fd/3)" = "$(id -u)" ] || refuse_file "is not owned by the caller"
-[ "$(stat -L -f -c %T /proc/self/fd/3)" = "tmpfs" ] || refuse_file "is not on tmpfs"
+[ "$(stat -L -c %a "$fd3" 3<&-)" = "600" ] || refuse_file "is not mode 0600"
+[ "$(stat -L -c %u "$fd3" 3<&-)" = "$(id -u 3<&-)" ] || refuse_file "is not owned by the caller"
+[ "$(stat -L -f -c %T "$fd3" 3<&-)" = "tmpfs" ] || refuse_file "is not on tmpfs"
 
-size="$(stat -L -c %s /proc/self/fd/3)"
+size="$(stat -L -c %s "$fd3" 3<&-)"
 IFS= read -r line <&3 || true
 # one line: the file is the line, plus at most one trailing newline
 [ "$size" -eq "${#line}" ] || [ "$size" -eq $((${#line} + 1)) ] || refuse_file "is not one line"
@@ -126,30 +133,38 @@ IFS= read -r line <&3 || true
 
 base="${SESSION_ISSUE_WORKDIR_BASE:-${XDG_RUNTIME_DIR:-/dev/shm}}"
 [ -d "$base" ] || refuse "no private work directory"
-[ "$(stat -f -c %T "$base")" = "tmpfs" ] || refuse "work directory is not tmpfs"
+[ "$(stat -f -c %T "$base" 3<&-)" = "tmpfs" ] || refuse "work directory is not tmpfs"
 
-workdir="$(mktemp -d "${base%/}/session-issue.XXXXXX")"
+workdir="$(mktemp -d "${base%/}/session-issue.XXXXXX" 3<&-)"
+mkdir "$workdir/copy" 3<&-
 errfile="$workdir/kubectl.err"
-copy="$workdir/$key"
+copy="$workdir/copy/$key"
 printf '%s' "$line" >"$copy"
 line=""
 
 kubectl_bin="${KUBECTL:-kubectl}"
 "$kubectl_bin" --context "$context" --namespace "$namespace" create secret generic "$name" \
-  --from-file="${key}=${copy}" >/dev/null 2>"$errfile" &
+  --from-file="${key}=${copy}" >/dev/null 2>"$errfile" 3<&- &
 kpid=$!
 rc=0
 wait "$kpid" || rc=$?
 if [ "$rc" -ne 0 ] && [ "$sigrc" -ne 0 ]; then
+  # interrupted: stop the child, and keep ITS real status (it may have finished the create first)
   kill "$kpid" 2>/dev/null || true
-  wait "$kpid" 2>/dev/null || true
-  kpid=""
+  rc=0
+  wait "$kpid" 2>/dev/null || rc=$?
+fi
+if [ "$rc" -eq 0 ]; then
+  created=1
+  trap '' HUP INT TERM PIPE
+fi
+kpid=""
+if [ "$created" -eq 0 ] && [ "$sigrc" -ne 0 ]; then
   printf 'STOP %s interrupted\n' "$name"
   exit "$sigrc"
 fi
-kpid=""
-if [ "$rc" -ne 0 ]; then
-  if grep -q 'AlreadyExists' "$errfile"; then
+if [ "$created" -eq 0 ]; then
+  if grep -q 'AlreadyExists' "$errfile" 3<&-; then
     printf 'STOP %s exists\n' "$name"
   else
     printf 'STOP %s create failed\n' "$name"
@@ -157,14 +172,12 @@ if [ "$rc" -ne 0 ]; then
   exit 1
 fi
 
-created=1
-# No signal may cut the shred short: TERM and INT are ignored (and so inherited
-# by shred) until it is done. A path that no longer names the pinned file is
+# No signal may cut the shred short: HUP, INT, TERM and PIPE are ignored (and so
+# inherited by shred) until it is done. A path that no longer names the pinned file is
 # left alone and reported as not removed.
-trap '' INT TERM
 if same_file && [ ! -L "$valuefile" ]; then
   exec 3<&-
-  shred -u "$valuefile" 2>/dev/null || rm -f "$valuefile" 2>/dev/null || true
+  shred -u "$valuefile" 3<&- 2>/dev/null || rm -f "$valuefile" 3<&- 2>/dev/null || true
 fi
 if [ ! -e "$valuefile" ] && [ ! -L "$valuefile" ]; then
   removed=1

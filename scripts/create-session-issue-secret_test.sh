@@ -3,7 +3,7 @@
 # no docker. The sentinel value below is a test value, not a credential.
 set -euo pipefail
 cd "$(dirname "$0")"
-script="$PWD/create-session-issue-secret.sh"
+script="${SCRIPT_UNDER_TEST:-$PWD/create-session-issue-secret.sh}"
 
 shmbase=/dev/shm
 [ -d "$shmbase" ] && [ -w "$shmbase" ] || { echo "SKIP: no writable /dev/shm" >&2; exit 0; }
@@ -260,7 +260,7 @@ sleep 1
 exec $real_shred "\$@"
 SLOWSH
 chmod 755 "$root/slowshred/shred"
-for sig in TERM INT; do
+for sig in TERM INT HUP; do
   vf="$(newfile "$root" "$tok")"
   rm -f "$root/shredstarted"
   : >"$root/log"
@@ -269,13 +269,85 @@ for sig in TERM INT; do
   pid=$!
   for _ in $(seq 1 100); do [ -e "$root/shredstarted" ] && break; sleep 0.05; done
   [ -e "$root/shredstarted" ] || fail "$sig: shred never started"
-  if [ "$sig" = INT ]; then kill -INT -- "-$pid" 2>/dev/null || true; else kill -TERM "$pid" 2>/dev/null || true; fi
+  if [ "$sig" = INT ]; then kill -INT -- "-$pid" 2>/dev/null || true; else kill -"$sig" "$pid" 2>/dev/null || true; fi
   r=0; wait "$pid" || r=$?
   [ "$r" -eq 0 ] || fail "$sig during shred: rc=$r"
   [ ! -e "$vf" ] || fail "$sig during shred: source left behind"
   case "$(cat "$root/shout")" in *"secret created; value file removed"*) ;; *) fail "$sig during shred: output: $(cat "$root/shout")" ;; esac
   [ "$(leftovers)" -eq 0 ] || fail "$sig during shred: workdir left behind"
 done
+
+# 5i a key equal to an internal file name is refused before anything runs.
+vf="$(newfile "$root" "$tok")"
+run ok "$vf" --key kubectl.err
+[ "$rc" -eq 2 ] || fail "reserved key rc=$rc"
+[ ! -s "$root/log" ] || fail "reserved key: kubectl ran"
+[ -f "$vf" ] || fail "reserved key: source removed"
+case "$out" in *"value file kept for retry: $vf"*) ;; *) fail "reserved key: kept path missing: $out" ;; esac
+rm -f "$vf"
+
+# 5j no child holds the pinned descriptor: kubectl lists its open files.
+cat >"$root/fdfake" <<'FDF'
+#!/usr/bin/env bash
+for l in /proc/self/fd/*; do readlink "$l"; done >>"$FD_DUMP" 2>/dev/null
+for a in "$@"; do case "$a" in --from-file=*) f="${a#--from-file=}"; f="${f#*=}"; cat "$f" >"$FAKE_SEEN" ;; esac; done
+FDF
+chmod 755 "$root/fdfake"
+vf="$(newfile "$root" "$tok")"
+: >"$root/fddump"
+env FD_DUMP="$root/fddump" FAKE_SEEN="$root/seen" KUBECTL="$root/fdfake" SESSION_ISSUE_WORKDIR_BASE="$root" bash "$script" --context c --namespace n --name x --value-file "$vf" >/dev/null 2>&1 || fail "fd test: run failed"
+[ -s "$root/fddump" ] || fail "fd test: kubectl listed nothing"
+grep -qF "$vf" "$root/fddump" && fail "kubectl holds the value file open (fd 3 leaked to a child)"
+
+# 5k a TERM that lands while kubectl is finishing the create: its real status wins.
+cat >"$root/finishing" <<'FIN'
+#!/usr/bin/env bash
+trap '' TERM
+: >"$FIN_STARTED"
+sleep 1
+for a in "$@"; do case "$a" in --from-file=*) f="${a#--from-file=}"; f="${f#*=}"; cat "$f" >"$FAKE_SEEN" ;; esac; done
+FIN
+chmod 755 "$root/finishing"
+vf="$(newfile "$root" "$tok")"
+rm -f "$root/finstarted"
+env FIN_STARTED="$root/finstarted" FAKE_SEEN="$root/seen" KUBECTL="$root/finishing" SESSION_ISSUE_WORKDIR_BASE="$root" bash "$script" --context c --namespace n --name x --value-file "$vf" >"$root/finout" 2>&1 &
+pid=$!
+for _ in $(seq 1 100); do [ -e "$root/finstarted" ] && break; sleep 0.05; done
+kill -TERM "$pid" 2>/dev/null || true
+r=0; wait "$pid" || r=$?
+[ "$r" -eq 0 ] || fail "TERM while kubectl finishes: rc=$r, want 0 (the Secret was created)"
+[ ! -e "$vf" ] || fail "TERM while kubectl finishes: source kept after a created Secret"
+grep -q "secret created; value file removed" "$root/finout" || fail "TERM while kubectl finishes: output: $(cat "$root/finout")"
+
+# 5l the pin: a path swapped after the open does not change what is read, and the replacement is never shredded.
+mkdir -p "$root/swapbin"
+real_stat="$(command -v stat)"
+cat >"$root/swapbin/stat" <<SWAP
+#!/usr/bin/env bash
+case "\$*" in
+  *%a*) if [ ! -e "\$SWAP_DONE" ]; then
+          : >"\$SWAP_DONE"
+          printf '%s\n' "\$SWAP_CONTENT" >"\$SWAP_NEW"; chmod 0600 "\$SWAP_NEW"
+          mv -f "\$SWAP_NEW" "\$SWAP_PATH"
+        fi ;;
+esac
+exec $real_stat "\$@"
+SWAP
+chmod 755 "$root/swapbin/stat"
+tok2="svc_authsess_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
+vf="$(newfile "$root" "$tok")"
+rm -f "$root/swapdone" "$root/seen"
+set +e
+out="$(env SWAP_DONE="$root/swapdone" SWAP_CONTENT="$tok2" SWAP_NEW="$root/swapnew" SWAP_PATH="$vf" FAKE_MODE=ok FAKE_LOG="$root/log" FAKE_SEEN="$root/seen" \
+  PATH="$root/swapbin:$PATH" KUBECTL="$fake" SESSION_ISSUE_WORKDIR_BASE="$root" bash "$script" --context c --namespace n --name x --value-file "$vf" 2>&1)"
+r=$?
+set -e
+[ -e "$root/swapdone" ] || fail "swap test: the swap never ran"
+[ "$(cat "$root/seen" 2>/dev/null)" = "$tok" ] || fail "swap test: the Secret did not get the pinned file's value"
+[ "$r" -eq 3 ] || fail "swap test: rc=$r, want 3"
+case "$out" in *"secret created; value file NOT removed: $vf"*) ;; *) fail "swap test output: $out" ;; esac
+[ "$(cat "$vf")" = "$tok2" ] || fail "swap test: the replacement file was touched"
+rm -f "$vf"
 
 # 6 signal during kubectl: the child is stopped, the workdir is gone at once, the source is kept.
 cat >"$root/slow" <<'SLOW'
@@ -284,7 +356,7 @@ echo $$ >"$SLOW_PID"
 sleep 30
 SLOW
 chmod 755 "$root/slow"
-for sig in TERM INT; do
+for sig in TERM INT HUP; do
   vf="$(newfile "$root" "$tok")"
   rm -f "$root/slowpid"
   # a background job of a non-interactive shell starts with SIGINT ignored; a terminal run does not

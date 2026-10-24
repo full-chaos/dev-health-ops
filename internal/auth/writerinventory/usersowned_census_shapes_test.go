@@ -4,6 +4,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"go/types"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -131,16 +132,42 @@ var behaviourTests = map[string]string{
 	"internal/apiservice/admin/operator.go|Operator.UpdateUser":   "internal/apiservice/admin/usersowned_test.go|TestUsersOwnedOperatorVerbsRefuseBeforeAnyDatabaseWork",
 }
 
+// testFuncExists answers why ref (file|TestName) is not a test that runs: a
+// _test.go file, a func(*testing.T) with a body that calls the test handle.
 func testFuncExists(root, ref string) string {
 	file, name, _ := strings.Cut(ref, "|")
+	if !strings.HasSuffix(file, "_test.go") {
+		return file + " is not a _test.go file"
+	}
 	parsed, err := parser.ParseFile(token.NewFileSet(), filepath.Join(root, file), nil, 0)
 	if err != nil {
 		return "cannot parse " + file + ": " + err.Error()
 	}
 	for _, decl := range parsed.Decls {
-		if fn, ok := decl.(*ast.FuncDecl); ok && fn.Recv == nil && fn.Name.Name == name {
-			return ""
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Recv != nil || fn.Name.Name != name {
+			continue
 		}
+		params := fn.Type.Params.List
+		if len(params) != 1 || len(params[0].Names) != 1 || types.ExprString(params[0].Type) != "*testing.T" {
+			return name + " in " + file + " is not func(*testing.T)"
+		}
+		handle := params[0].Names[0].Name
+		used := false
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			if call, ok := n.(*ast.CallExpr); ok {
+				if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
+					if id, ok := sel.X.(*ast.Ident); ok && id.Name == handle {
+						used = true
+					}
+				}
+			}
+			return !used
+		})
+		if !used {
+			return name + " in " + file + " never calls its testing handle"
+		}
+		return ""
 	}
 	return "no test " + name + " in " + file
 }

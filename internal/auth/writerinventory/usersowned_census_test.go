@@ -4,8 +4,10 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"go/types"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -338,10 +340,7 @@ func refuseProblem(root, key string) string {
 	return ""
 }
 
-var usersWritePrefixes = []string{
-	"UPDATE USERS", "INSERT INTO USERS", "DELETE FROM USERS",
-	"UPDATE PUBLIC.USERS", "INSERT INTO PUBLIC.USERS", "DELETE FROM PUBLIC.USERS",
-}
+var usersWriteSQL = regexp.MustCompile(`(UPDATE|INSERT INTO|DELETE FROM|MERGE INTO|TRUNCATE( TABLE)?)( ONLY)? (PUBLIC\.)?USERS\b`)
 
 // stringConsts collects the string constants of the file and of the function.
 func stringConsts(file *ast.File, fn *ast.FuncDecl) map[string]string {
@@ -368,7 +367,11 @@ func stringConsts(file *ast.File, fn *ast.FuncDecl) map[string]string {
 			return true
 		})
 	}
-	collect(file)
+	for _, decl := range file.Decls {
+		if gen, ok := decl.(*ast.GenDecl); ok && gen.Tok == token.CONST {
+			collect(gen)
+		}
+	}
 	collect(fn)
 	return consts
 }
@@ -395,29 +398,75 @@ func constString(expr ast.Expr, consts map[string]string) (string, bool) {
 }
 
 func sqlWritesUsers(text string) bool {
-	text = strings.ToUpper(strings.Join(strings.Fields(text), " "))
-	for _, prefix := range usersWritePrefixes {
-		if strings.Contains(text, prefix) {
+	text = strings.ToUpper(strings.Join(strings.Fields(strings.NewReplacer(`"`, "", "\\", "", "`", "").Replace(text)), " "))
+	return usersWriteSQL.MatchString(text)
+}
+
+// databaseHandles are the names that hold a database handle in fn: the fixed
+// receiver names, every parameter typed as a pool, transaction, connection or
+// store, and every base name a statement call (Exec, Query, QueryRow, Begin) is
+// made on, so an alias such as p is still a handle.
+func databaseHandles(fn *ast.FuncDecl) map[string]bool {
+	handles := map[string]bool{}
+	for name := range databaseReceivers {
+		handles[name] = true
+	}
+	if fn.Type.Params != nil {
+		for _, field := range fn.Type.Params.List {
+			typeText := types.ExprString(field.Type)
+			if strings.HasSuffix(typeText, "Tx") || strings.HasSuffix(typeText, "Pool") || strings.HasSuffix(typeText, "DB") ||
+				strings.HasSuffix(typeText, "Conn") || strings.HasSuffix(typeText, "Querier") || strings.HasSuffix(typeText, "Executor") {
+				for _, name := range field.Names {
+					handles[name.Name] = true
+				}
+			}
+		}
+	}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
 			return true
+		}
+		if name, chain := calleeParts(call); statementCalls[name] {
+			if len(chain) > 0 {
+				handles[chain[0]] = true
+			}
+		}
+		return true
+	})
+	return handles
+}
+
+var statementCalls = map[string]bool{"Exec": true, "Query": true, "QueryRow": true, "Begin": true, "BeginTx": true}
+
+// receivesDatabase: an argument is a database handle, so the callee can write
+// through it whatever its name.
+func receivesDatabase(call *ast.CallExpr, handles map[string]bool) bool {
+	for _, arg := range call.Args {
+		switch a := arg.(type) {
+		case *ast.Ident:
+			if handles[a.Name] {
+				return true
+			}
+		case *ast.SelectorExpr:
+			if handles[a.Sel.Name] {
+				return true
+			}
 		}
 	}
 	return false
 }
 
-// receivesDatabase: an argument is a pool, transaction or store, so the callee
-// can write through it whatever its name.
-func receivesDatabase(call *ast.CallExpr) bool {
-	for _, arg := range call.Args {
-		switch a := arg.(type) {
-		case *ast.Ident:
-			if databaseReceivers[a.Name] {
-				return true
-			}
-		case *ast.SelectorExpr:
-			if databaseReceivers[a.Sel.Name] {
-				return true
-			}
-		}
+// isContextArg: the argument is a context, so the SQL text is the next one.
+func isContextArg(expr ast.Expr) bool {
+	switch e := expr.(type) {
+	case *ast.Ident:
+		return e.Name == "ctx" || strings.HasPrefix(e.Name, "ctx") || e.Name == "context"
+	case *ast.SelectorExpr:
+		return strings.Contains(strings.ToLower(e.Sel.Name), "ctx") || strings.Contains(strings.ToLower(e.Sel.Name), "context")
+	case *ast.CallExpr:
+		name, chain := calleeParts(e)
+		return strings.Contains(strings.ToLower(name), "context") || (len(chain) > 0 && strings.Contains(strings.ToLower(chain[len(chain)-1]), "context"))
 	}
 	return false
 }
@@ -425,7 +474,7 @@ func receivesDatabase(call *ast.CallExpr) bool {
 // mayWriteUsers: the call carries SQL that writes public.users, SQL the census
 // cannot read (a variable, a call result), or a database handle to a callee the
 // census cannot see into.
-func mayWriteUsers(call *ast.CallExpr, consts map[string]string) bool {
+func mayWriteUsers(call *ast.CallExpr, consts map[string]string, handles map[string]bool) bool {
 	if isGuardCall(call) {
 		return false
 	}
@@ -435,13 +484,13 @@ func mayWriteUsers(call *ast.CallExpr, consts map[string]string) bool {
 			return false
 		}
 		sqlArg := call.Args[0]
-		if _, ok := constString(sqlArg, consts); !ok && len(call.Args) > 1 {
+		if isContextArg(sqlArg) && len(call.Args) > 1 {
 			sqlArg = call.Args[1]
 		}
 		text, ok := constString(sqlArg, consts)
 		return !ok || sqlWritesUsers(text)
 	}
-	return receivesDatabase(call) && !databaseNames[name]
+	return receivesDatabase(call, handles) && !databaseNames[name]
 }
 
 // skipProblem answers why a public.users write of the function can run while
@@ -455,9 +504,10 @@ func skipProblem(root, key string) string {
 		return "uses goto or a label, so the guard may be jumped over"
 	}
 	consts := stringConsts(file, fn)
+	handles := databaseHandles(fn)
 	var writes []*ast.CallExpr
 	ast.Inspect(fn.Body, func(n ast.Node) bool {
-		if call, ok := n.(*ast.CallExpr); ok && mayWriteUsers(call, consts) {
+		if call, ok := n.(*ast.CallExpr); ok && mayWriteUsers(call, consts, handles) {
 			writes = append(writes, call)
 		}
 		return true

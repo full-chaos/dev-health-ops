@@ -76,7 +76,22 @@ func (info *pkgInfo) carriedNames(expr ast.Expr, scan *fileScan) []string {
 
 // calleeName is the package-local function a call names: an identifier, or a selector that is not an import.
 func calleeName(call *ast.CallExpr, imports map[string]string) (string, bool) {
-	switch fun := call.Fun.(type) {
+	callee := call.Fun
+	for { // an explicit instantiation (f[T], f[T, U]) or a parenthesis wraps the callee
+		switch wrapped := callee.(type) {
+		case *ast.IndexExpr:
+			callee = wrapped.X
+			continue
+		case *ast.IndexListExpr:
+			callee = wrapped.X
+			continue
+		case *ast.ParenExpr:
+			callee = wrapped.X
+			continue
+		}
+		break
+	}
+	switch fun := callee.(type) {
 	case *ast.Ident:
 		return fun.Name, true
 	case *ast.SelectorExpr:

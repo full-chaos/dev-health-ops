@@ -103,6 +103,7 @@ internal/cigates/releasetag	parity_test.go	internal/cigates/releasetag/testdata/
 internal/cigates/releasetag	parity_test.go	unexpressed	-
 internal/cigates/releasetag	refusals_test.go	internal/cigates/releasetag	dir
 internal/cigates/routing	chart_test.go	unexpressed	-
+internal/cigates/scripts	auth_queue_relevance_test.go	ci/lib	dir
 internal/cigates/scripts	chmigrate_history_frozen_test.go	internal/chmigrate/history	dir
 internal/cigates/scripts	helper_copies_drift_test.go	internal/cigates	tree
 internal/cigates/scripts	merge_tree_vet_script_test.go	unexpressed	-

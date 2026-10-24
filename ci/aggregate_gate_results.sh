@@ -46,6 +46,16 @@
 #                    merge time and on main, not in the iterative PR loop) and
 #                    from workflow_dispatch (no filter runs there, so its
 #                    condition can never select it). Used by coverage.
+#   docs-skippable   Selected unless the docs-only verdict (ci/codeql_docs_only.sh,
+#                    judged from the base commit) deselected it. The caller hands
+#                    CHANGES_CODE='false' only for a docs-only change; a skip is
+#                    legitimate then on pull_request and merge_group alone (the
+#                    two events the verdict is computed for).
+#   queue-heavy      A heavy job: it runs in the merge queue, not on a pull
+#                    request. A skip is legitimate on a pull_request unless
+#                    HEAVY_ON_PR is 'true' (the ci:full label), and on
+#                    pull_request or merge_group when CHANGES_CODE is 'false'.
+#                    HEAVY_ON_PR must be literally 'true' or 'false'.
 #   unconditional    The job carries no `if:` that can deselect it, so NO skip
 #                    is ever legitimate. Used by CHAOS-3219 Phase 5's
 #                    ask-dev-acceptance.yml, which fires only on `schedule` and
@@ -69,6 +79,7 @@
 #   GATE_HAS_SELECTOR  "true" (default) if a `changes` job gates this workflow
 #   CHANGES_RESULT     needs.changes.result       (selector gates only)
 #   CHANGES_CODE       needs.changes.outputs.code (selector gates only)
+#   HEAVY_ON_PR        "true" or "false": the PR carries ci:full (queue-heavy only)
 #   GATED_JOB_1..N     "<job name>|<policy>|<needs.<job>.result>", consecutive
 #
 # internal/cigates/workflows/aggregate_gate_results_test.go pins both halves: it drives this
@@ -149,7 +160,7 @@ validate_policy() {
   local job_name="$1" policy="$2"
 
   case "${policy}" in
-    unconditional | merge-time-only | path-filtered) ;;
+    unconditional | merge-time-only | path-filtered | docs-skippable | queue-heavy) ;;
     *)
       add_failure "${job_name}'s policy '${policy}' is not recognized -- this script cannot say whether a skip would be legitimate, so it refuses to pass the gate"
       gate_failed
@@ -161,6 +172,10 @@ validate_policy() {
   # than let an unset variable stand in for one.
   if [[ "${GATE_HAS_SELECTOR}" != "true" && "${policy}" != "unconditional" ]]; then
     add_failure "${job_name}'s policy '${policy}' is decided by the path filter, but this gate declared GATE_HAS_SELECTOR=false -- there is no filter result to decide it with"
+    gate_failed
+  fi
+  if [[ "${policy}" == "queue-heavy" && "${HEAVY_ON_PR-}" != "true" && "${HEAVY_ON_PR-}" != "false" ]]; then
+    add_failure "${job_name}'s policy 'queue-heavy' needs HEAVY_ON_PR to be 'true' or 'false', got '${HEAVY_ON_PR-<unset>}' -- whether the PR opted into its heavy jobs is undecided"
     gate_failed
   fi
 }
@@ -181,6 +196,23 @@ is_selected() {
         return 0
       fi
       return 1
+      ;;
+    docs-skippable)
+      if [[ "${EVENT_NAME}" == "pull_request" || "${EVENT_NAME}" == "merge_group" ]] &&
+        [[ "${CHANGES_CODE}" == "false" ]]; then
+        return 1
+      fi
+      return 0
+      ;;
+    queue-heavy)
+      if [[ "${EVENT_NAME}" == "pull_request" && "${HEAVY_ON_PR}" == "false" ]]; then
+        return 1
+      fi
+      if [[ "${EVENT_NAME}" == "pull_request" || "${EVENT_NAME}" == "merge_group" ]] &&
+        [[ "${CHANGES_CODE}" == "false" ]]; then
+        return 1
+      fi
+      return 0
       ;;
     path-filtered)
       if [[ "${EVENT_NAME}" != "merge_group" ]] &&

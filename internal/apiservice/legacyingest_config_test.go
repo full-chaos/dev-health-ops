@@ -125,7 +125,7 @@ func TestLegacyIngestFlagInvalidValueRefused(t *testing.T) {
 
 func TestLegacyIngestEveryPathMethodRefusalCarriesTheDeprecationHeaders(t *testing.T) {
 	deps := Deps{LegacyIngestEnabled: true, LegacyIngestOptions: legacyingest.Options{Deprecation: true, Sunset: time.Date(2026, 12, 1, 0, 0, 0, 0, time.UTC)}}
-	server, err := newServerWithGate(config.Config{APIAddress: "127.0.0.1:0"}, quietLogger(), Routes(deps, quietLogger()), nil, legacyIngestLayers(deps))
+	server, err := NewServer(config.Config{APIAddress: "127.0.0.1:0"}, quietLogger(), Routes(deps, quietLogger()))
 	if err != nil {
 		t.Fatal(err)
 	}

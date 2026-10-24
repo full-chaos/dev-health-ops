@@ -298,6 +298,7 @@ spec:
             - name: TRUSTED_PROXIES_NETWORK_FENCED
               value: {{ ternary "true" "false" (and $fence true) | quote }}
             {{- /* The legacy ingest routes: always rendered ("false" by default), so an env entry beats a same-named variable from goApi.envFrom. The sunset date is an RFC 8594 HTTP-date; go-api refuses to start on a value that does not parse. */}}
+            {{- if not (has (toString .Values.legacyIngest.enabled) (list "true" "false")) }}{{- fail "legacyIngest.enabled must be true or false: any other value would leave the routes off without saying so" }}{{- end }}
             - name: DEV_HEALTH_LEGACY_INGEST_ENABLED
               value: {{ ternary "true" "false" (eq (toString .Values.legacyIngest.enabled) "true") | quote }}
             {{- with .Values.legacyIngest.sunset }}

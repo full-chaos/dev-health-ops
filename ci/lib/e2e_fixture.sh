@@ -30,7 +30,8 @@ generate_auth_token() {
   # A rerun against the same database reuses the user (a read), the way the fixed-id seed did.
   user_id="$(e2e_psql -c "SELECT id FROM users WHERE email = 'e2e@test.local'" | head -n 1)"
   if [ -z "${user_id}" ]; then
-    password="$(od -An -N12 -tx1 /dev/urandom | tr -d ' \n')"
+    # "Aa1-" keeps a letter and a digit in the password whatever the random hex is (shared password policy, 12+ chars).
+    password="Aa1-$(od -An -N12 -tx1 /dev/urandom | tr -d ' \n')"
     created="$(printf '%s\n' "${password}" | e2e_dho_admin users create --email e2e@test.local --password-stdin)" || {
       echo "ERROR: dho admin users create failed: ${created}" >&2
       return 1

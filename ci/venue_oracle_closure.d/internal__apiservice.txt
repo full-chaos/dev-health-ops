@@ -44,6 +44,7 @@ internal/apiservice/customerpush
 internal/auth/contracts
 internal/auth/contracts/tokencorpus
 internal/auth/edgetoken
+internal/auth/emaildomain
 internal/auth/httpapi
 internal/auth/passwordhash
 internal/auth/passwordpolicy

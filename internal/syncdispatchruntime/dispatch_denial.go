@@ -254,21 +254,46 @@ func visitInvalidClaims(page []budgetUnit, visit func([]invalidClaimUnit) error)
 	return visit(invalid)
 }
 
-// terminalizeInvalidClaimsAmongDispatchCandidates fails every invalid dispatch candidate, a page at a time: each page
-// is validated and its invalid units terminalized before the next page is read (a terminalized unit leaves the
-// candidate set, and the next page starts after the last id read, so none is skipped or read twice). It returns how
-// many invalid units it found and how many it terminalized (a unit that moved on concurrently is found, not
-// terminalized). terminalizeAt is read once per page.
+// terminalizeInvalidClaimsAmongDispatchCandidates fails every invalid dispatch candidate. The candidates are VALIDATED a
+// page at a time, but only the invalid units are kept (a slim copy: the set is bounded by the invalid count, not by
+// the run's units), and they are terminalized ONCE after the walk: one global bucket-lock order and one run rollup
+// bump, as when the whole set was read at once, so no page holds the run row's lock while the next takes bucket and
+// unit locks. It returns how many invalid units it found and how many it terminalized (a unit that moved on
+// concurrently is found, not terminalized).
 func terminalizeInvalidClaimsAmongDispatchCandidates(
 	ctx context.Context, tx pgx.Tx, syncRunID string, readAt time.Time, terminalizeAt func() time.Time,
 ) (found, terminalized int, err error) {
-	err = invalidClaimsAmongDispatchCandidates(ctx, tx, syncRunID, readAt, func(invalid []invalidClaimUnit) error {
-		found += len(invalid)
-		done, terminalizeErr := terminalizeInvalidClaimUnits(ctx, tx, invalid, terminalizeAt())
-		terminalized += done
-		return terminalizeErr
-	})
-	return found, terminalized, err
+	return terminalizeInvalidClaims(
+		func(visit func([]invalidClaimUnit) error) error {
+			return invalidClaimsAmongDispatchCandidates(ctx, tx, syncRunID, readAt, visit)
+		},
+		func(invalid []invalidClaimUnit) (int, error) {
+			return terminalizeInvalidClaimUnits(ctx, tx, invalid, terminalizeAt())
+		},
+	)
+}
+
+func terminalizeInvalidClaims(
+	walk func(visit func([]invalidClaimUnit) error) error, terminalize func([]invalidClaimUnit) (int, error),
+) (found, terminalized int, err error) {
+	var invalid []invalidClaimUnit
+	if err := walk(func(page []invalidClaimUnit) error {
+		for _, entry := range page {
+			slim := budgetUnit{
+				id: entry.unit.id, syncRunID: entry.unit.syncRunID, orgID: entry.unit.orgID, provider: entry.unit.provider,
+				costClass: entry.unit.costClass, status: entry.unit.status,
+			}
+			invalid = append(invalid, invalidClaimUnit{unit: slim, reason: entry.reason})
+		}
+		return nil
+	}); err != nil {
+		return 0, 0, err
+	}
+	if len(invalid) == 0 {
+		return 0, 0, nil
+	}
+	terminalized, err = terminalize(invalid)
+	return len(invalid), terminalized, err
 }
 
 // terminalizeInvalidClaimUnits fails units whose persisted

@@ -309,3 +309,54 @@ func TestObserveRunPagesMatchesTheUnpagedPass(t *testing.T) {
 		})
 	}
 }
+
+// Invalid units spread over three pages are terminalized in ONE call after the walk (one global bucket-lock order and
+// one run rollup bump), never a call per page; no invalid unit means no call at all.
+func TestInvalidClaimsAreTerminalizedOnceAfterTheWalk(t *testing.T) {
+	units := syntheticUnits(10*unitPageSize + 7)
+	invalidAt := []int{10, unitPageSize + 100, 2*unitPageSize + 250}
+	var wantIDs []string
+	for _, index := range invalidAt {
+		units[index].datasetKey = "work-item-labels"
+		wantIDs = append(wantIDs, units[index].id)
+	}
+	walk := func(units []budgetUnit, pages *int) func(visit func([]invalidClaimUnit) error) error {
+		return func(visit func([]invalidClaimUnit) error) error {
+			return pageDispatchCandidates(tableLoader(units, &pageStats{}), nil, func(page []budgetUnit) error {
+				*pages++
+				return visitInvalidClaims(page, visit)
+			})
+		}
+	}
+
+	pages, calls := 0, 0
+	var gotIDs []string
+	found, terminalized, err := terminalizeInvalidClaims(walk(units, &pages), func(invalid []invalidClaimUnit) (int, error) {
+		calls++
+		for _, entry := range invalid {
+			gotIDs = append(gotIDs, entry.unit.id)
+		}
+		return len(invalid) - 1, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pages < 3 {
+		t.Fatalf("walk read %d pages, want the invalid units spread over at least 3", pages)
+	}
+	if calls != 1 {
+		t.Fatalf("terminalize called %d times, want once after the walk", calls)
+	}
+	if !reflect.DeepEqual(gotIDs, wantIDs) || found != len(wantIDs) || terminalized != len(wantIDs)-1 {
+		t.Fatalf("ids=%v found=%d terminalized=%d, want %v, %d and %d", gotIDs, found, terminalized, wantIDs, len(wantIDs), len(wantIDs)-1)
+	}
+
+	pages, calls = 0, 0
+	found, terminalized, err = terminalizeInvalidClaims(walk(syntheticUnits(3*unitPageSize), &pages), func([]invalidClaimUnit) (int, error) {
+		calls++
+		return 0, nil
+	})
+	if err != nil || calls != 0 || found != 0 || terminalized != 0 {
+		t.Fatalf("no invalid unit: calls=%d found=%d terminalized=%d err=%v, want no call", calls, found, terminalized, err)
+	}
+}

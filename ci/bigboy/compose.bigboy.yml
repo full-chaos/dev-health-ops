@@ -207,6 +207,12 @@ services:
       type: bind
       bind:
         create_host_path: true
+    - read_only: true
+      source: ./ops/docker/clickhouse-config.d/system-logs.xml
+      target: /etc/clickhouse-server/config.d/system-logs.xml
+      type: bind
+      bind:
+        create_host_path: false
   go-api:
     command:
     - api

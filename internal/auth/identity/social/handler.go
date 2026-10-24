@@ -43,6 +43,11 @@ type Handlers struct {
 	Service  Domain
 	Sessions SessionWriter
 	Auth     Authenticator
+	// Admit, when set, runs for a link or unlink once the request is known to
+	// be well formed (the body decoded, the id parsed) and before the domain
+	// is called. It answers a refusal itself and returns false to stop. A
+	// request that fails validation never reaches it, so it costs nothing.
+	Admit func(w http.ResponseWriter, r *http.Request) bool
 }
 
 type tokenRequest struct {
@@ -90,6 +95,9 @@ func (h Handlers) Link(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if h.Admit != nil && !h.Admit(w, r) {
+		return
+	}
 	who.RequestID = requestid.Audit(r.Context())
 	linked, err := h.Service.Link(r.Context(), who, provider, token)
 	if err != nil {
@@ -109,6 +117,9 @@ func (h Handlers) Unlink(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(r.PathValue("id"))
 	if err != nil {
 		writeDetail(w, http.StatusNotFound, "Identity not found")
+		return
+	}
+	if h.Admit != nil && !h.Admit(w, r) {
 		return
 	}
 	who.RequestID = requestid.Audit(r.Context())

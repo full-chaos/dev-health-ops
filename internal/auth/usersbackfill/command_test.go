@@ -85,3 +85,26 @@ func TestReconcileVerbWithoutADatabaseFailsWithoutRunning(t *testing.T) {
 		t.Fatalf("exit %d, stderr %q, stdout %q", code, stderr.String(), stdout.String())
 	}
 }
+
+func TestVerbRefusesWhileTheUsersOwnedSwitchIsOn(t *testing.T) {
+	var stderr bytes.Buffer
+	lookup := func(k string) (string, bool) {
+		if k == "AUTH_USERS_OWNED" {
+			return "true", true
+		}
+		return "", false
+	}
+	code := Command().Children[0].Run(context.Background(), cli.Env{Args: []string{"-dry-run"}, Lookup: lookup, Stdout: &bytes.Buffer{}, Stderr: &stderr})
+	if code != cli.ExitRefused || !bytes.Contains(stderr.Bytes(), []byte("refused")) {
+		t.Fatalf("exit %d, stderr %q", code, stderr.String())
+	}
+	lookup = func(k string) (string, bool) {
+		if k == "AUTH_USERS_OWNED" {
+			return "maybe", true
+		}
+		return "", false
+	}
+	if code := Command().Children[0].Run(context.Background(), cli.Env{Args: []string{"-dry-run"}, Lookup: lookup, Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}}); code != cli.ExitFailure {
+		t.Fatalf("a malformed switch must fail, exit %d", code)
+	}
+}

@@ -266,6 +266,9 @@ func (h *handlers) createUser(w http.ResponseWriter, r *http.Request) {
 		policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail(errs), nil)
 		return
 	}
+	if password != "" && refusePasswordPolicy(w, password) {
+		return
+	}
 
 	orgID, scoped := h.createUserOrg(ctx, w, r, caller)
 	if !scoped {

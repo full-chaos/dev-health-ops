@@ -210,7 +210,7 @@ func runDailyWorkItemFamilies(
 	repoIDs []daily.RepositoryID,
 ) map[string]int {
 	t.Helper()
-	statusMapping, err := LoadStatusMapping(resolveStatusMappingConfig(t, "real"))
+	statusMapping, err := LoadStatusMapping(resolveStatusMappingConfig(t, "live"))
 	if err != nil {
 		t.Fatal(err)
 	}

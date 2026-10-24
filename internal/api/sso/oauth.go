@@ -70,6 +70,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/api/usersowned"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
@@ -592,6 +593,11 @@ func (h handlers) oauthCallback(w http.ResponseWriter, r *http.Request) {
 				membershipRequiredDetail(), "oauth", "provisioning")
 			return
 		}
+		if errors.Is(err, usersowned.ErrRefused) {
+			h.recordSSOAuthenticatedDenial(ctx, w, r, row.OrgID, providerID, err.Error(), http.StatusConflict,
+				usersowned.Detail(), "oauth", "provisioning")
+			return
+		}
 		h.fail(w, r, "oauth provisioning", err)
 		return
 	}
@@ -765,10 +771,13 @@ FROM users WHERE id = $1::uuid`, userID).Scan(&id, &existingEmail, &username, &e
 	if claims.fullName != "" && stringOrEmpty(existingFullName) == "" {
 		newFullName = &claims.fullName
 	}
-	if _, err := h.Pool.Exec(ctx, `UPDATE users SET avatar_url = $2, full_name = $3,
+	// While auth-service owns users the sign-in goes on and writes no public.users row.
+	if h.refuseWhileUsersOwned() == nil {
+		if _, err := h.Pool.Exec(ctx, `UPDATE users SET avatar_url = $2, full_name = $3,
 	last_login_at = $4, updated_at = $4 WHERE id = $1::uuid`,
-		id, newAvatarURL, newFullName, now); err != nil {
-		return nil, nil, err
+			id, newAvatarURL, newFullName, now); err != nil {
+			return nil, nil, err
+		}
 	}
 
 	return &provisionedUser{id: id, email: existingEmail, username: username, fullName: newFullName,

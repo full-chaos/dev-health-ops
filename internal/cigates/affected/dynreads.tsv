@@ -87,6 +87,7 @@ internal/auth/keystore	keystore_test.go
 internal/auth/keystore	open_unix.go
 internal/auth/session	credential_test.go
 internal/auth/writerinventory	scan_test.go
+internal/auth/writerinventory	usersowned_census_test.go
 internal/bigboycompose	billing_edge_override_test.go
 internal/bigboycompose	dsn_class_test.go
 internal/bigboycompose	restart_policy_test.go
@@ -246,6 +247,7 @@ internal/cigates/workflows	race_pool_routing_test.go
 internal/cigates/workflows	ttl_registry_test.go
 internal/cigates/workflows	workflows_common_test.go
 internal/cigates/workflows	workflows_go_integration_pr_scope_test.go
+internal/cigates/workflows	workflows_go_queue_skip_test.go
 internal/cigates/workflows	workflows_go_resolver_test.go
 internal/cigates/workflows	workflows_path_filters_test.go
 internal/clicredentials	opensites_test.go

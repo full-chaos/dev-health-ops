@@ -8,7 +8,8 @@ import (
 
 // templateFiles holds the HTML templates this package can render. Each is a
 // byte-for-byte copy of src/dev_health_ops/templates/email/<name>.html --
-// because `//go:embed` cannot reach outside the package directory.
+// because `//go:embed` cannot reach outside the package directory. account_exists
+// has no Python source.
 //
 //go:embed templates/*.html
 var templateFiles embed.FS

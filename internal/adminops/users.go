@@ -14,6 +14,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/usersowned"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/admin"
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
@@ -176,7 +177,16 @@ func accountOperator(ctx context.Context, env cli.Env) (admin.Operator, func(), 
 	return operatorFor(ctx, env, accountDSN)
 }
 
+// usersOwnedFromEnv reads AUTH_USERS_OWNED the way go-api and auth-service do.
+func usersOwnedFromEnv(env cli.Env) (bool, error) {
+	return usersowned.FromLookup(env.Lookup)
+}
+
 func operatorFor(ctx context.Context, env cli.Env, resolve dsnResolver) (admin.Operator, func(), int) {
+	owned, err := usersOwnedFromEnv(env)
+	if err != nil {
+		return admin.Operator{}, func() {}, writeError(env.Stderr, "users_owned_invalid", err.Error())
+	}
 	dsn, ok := resolve(env.Lookup, env.Stderr)
 	if !ok {
 		return admin.Operator{}, func() {}, cli.ExitFailure
@@ -186,12 +196,16 @@ func operatorFor(ctx context.Context, env cli.Env, resolve dsnResolver) (admin.O
 	if err != nil {
 		return admin.Operator{}, func() {}, writeError(env.Stderr, "postgres_unavailable", boundary.Redact(err).Error())
 	}
-	return admin.Operator{Pool: pool, Now: time.Now}, pool.Close, 0
+	return admin.Operator{Pool: pool, Now: time.Now, UsersOwned: owned}, pool.Close, 0
 }
 
 // report prints an operator-facing refusal the way the Python verbs did
 // ("Error: ..." on stdout, exit 1); any other error is a failure on stderr.
 func report(env cli.Env, boundary func(error) error, err error) int {
+	if errors.Is(err, admin.ErrUsersOwned) {
+		fmt.Fprintf(env.Stderr, "refused: %s\n", usersowned.Message)
+		return cli.ExitRefused
+	}
 	var refusal *admin.OperatorError
 	if errors.As(err, &refusal) {
 		fmt.Fprintf(env.Stdout, "Error: %s\n", refusal.Message)
@@ -225,7 +239,7 @@ func runUsersCreate(ctx context.Context, env cli.Env) int {
 	flags := newAccountFlags(env, "dho admin users create")
 	var email, password, username, fullName optString
 	flags.Var(&email, "email", "user email address (required)")
-	flags.Var(&password, "password", "user password, at least 8 characters (one of --password, --password-stdin is required; --password shows in the process list)")
+	flags.Var(&password, "password", "user password, at least 12 characters, with a letter and a digit, not a common password, at most 72 bytes (one of --password, --password-stdin is required; --password shows in the process list)")
 	flags.Var(&username, "username", "optional username")
 	flags.Var(&fullName, "full-name", "the user's full name")
 	superuser := flags.Bool("superuser", false, "grant superuser privileges")
@@ -369,7 +383,7 @@ func runUsersUpdate(ctx context.Context, env cli.Env) int {
 	flags.Var(&newEmail, "new-email", "set a new email address")
 	flags.Var(&newUsername, "new-username", "set a new username (an empty value clears it)")
 	flags.Var(&fullName, "full-name", "set the user's full name")
-	flags.Var(&password, "password", "set a new password, at least 8 characters; revokes existing sessions")
+	flags.Var(&password, "password", "set a new password, at least 12 characters, with a letter and a digit, not a common password, at most 72 bytes; revokes existing sessions")
 	verified := optionalBool(flags, "verified", "set verified status (--verified / --no-verified)")
 	superuser := optionalBool(flags, "superuser", "set superuser status (--superuser / --no-superuser)")
 	active := optionalBool(flags, "active", "set active status (--active / --no-active)")

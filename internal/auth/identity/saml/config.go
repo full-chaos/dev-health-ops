@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/auth/emaildomain"
 	"net/url"
 	"strings"
 
@@ -170,7 +171,7 @@ func (p Provider) ACSURL(base string) string {
 }
 
 // DomainAllowed reports whether email's domain is in the provider's allowed
-// list, compared through normalizeDomain. An empty list allows every domain.
+// list, compared by emaildomain.Allowed. An empty list allows every domain.
 func (p Provider) DomainAllowed(email string) bool {
 	if len(p.AllowedDomains) == 0 {
 		return true
@@ -179,18 +180,8 @@ func (p Provider) DomainAllowed(email string) bool {
 	if at < 0 {
 		return false
 	}
-	domain := normalizeDomain(email[at+1:])
-	for _, allowed := range p.AllowedDomains {
-		if normalizeDomain(allowed) == domain {
-			return true
-		}
-	}
-	return false
+	return emaildomain.Allowed(p.AllowedDomains, email[at+1:])
 }
-
-// normalizeDomain is the one form every email domain compare in this package
-// uses: trimmed and lower case.
-func normalizeDomain(d string) string { return strings.ToLower(strings.TrimSpace(d)) }
 
 // ValidateACSOverride refuses an sp_acs_url override that is not this row's ACS
 // URL: its path must be exactly /api/v1/auth/saml/{row id}/acs, the served

@@ -14,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
+
 	"github.com/full-chaos/dev-health-ops/internal/egressguard"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
@@ -639,5 +641,48 @@ func TestCheckpointConflictIsTerminalButStoreErrorIsNot(t *testing.T) {
 	}
 	if !errors.Is(storeErr, providersync.ErrChunkCheckpointConflict) || !errors.Is(storeErr, context.DeadlineExceeded) {
 		t.Fatal("store error must match both the conflict and its cause")
+	}
+}
+
+// A chunk payload Postgres refuses (22P05) is the same on every
+// attempt, so it ends the unit on the first one under its own category; any
+// other database error keeps the retry policy.
+func TestChunkStoreDataErrorIsTerminalButOtherStoreErrorsAreNot(t *testing.T) {
+	dataErr := providersync.NewChunkStoreError(&pgconn.PgError{Code: "22P05"})
+	for _, err := range []error{dataErr, fmt.Errorf("unit: %w", dataErr)} {
+		if category, deterministic := deterministicTerminalCategory(err); !deterministic || category != CheckpointDataErrorCategory {
+			t.Fatalf("22P05 store error = %q, %v; want %q, true", category, deterministic, CheckpointDataErrorCategory)
+		}
+		if got := causeClass(err, false); got != CheckpointDataErrorCategory {
+			t.Fatalf("causeClass(22P05) = %q, want %q", got, CheckpointDataErrorCategory)
+		}
+	}
+	other := providersync.NewChunkStoreError(&pgconn.PgError{Code: "40001"})
+	if category, deterministic := deterministicTerminalCategory(other); deterministic {
+		t.Fatalf("40001 store error = %q, true; want not terminal", category)
+	}
+	if got := causeClass(other, false); got != causeClassCheckpointStoreError {
+		t.Fatalf("causeClass(40001) = %q, want %q", got, causeClassCheckpointStoreError)
+	}
+}
+
+// The work deadline can pass while a deterministic error is in flight: Work stores that error's own category, so
+// the cause class must be the same value, not time_limit.
+func TestCauseClassKeepsTheDeterministicCategoryWhenTheWorkDeadlinePassed(t *testing.T) {
+	for _, testCase := range []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"22P05 store error", providersync.NewChunkStoreError(&pgconn.PgError{Code: "22P05"}), CheckpointDataErrorCategory},
+		{"bare checkpoint conflict", providersync.ErrChunkCheckpointConflict, CheckpointConflictCategory},
+		{"deadline", context.DeadlineExceeded, TimeLimitCategory},
+		{"40001 store error", providersync.NewChunkStoreError(&pgconn.PgError{Code: "40001"}), TimeLimitCategory},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := causeClass(testCase.err, true); got != testCase.want {
+				t.Fatalf("causeClass(timedOut) = %q, want %q", got, testCase.want)
+			}
+		})
 	}
 }

@@ -5,6 +5,7 @@ package syncdispatchruntime
 import (
 	"context"
 	"fmt"
+	"os"
 	"testing"
 	"time"
 
@@ -86,11 +87,10 @@ func TestAuthorizeRunAllowsWhenUnderEveryCap(t *testing.T) {
 // TestAuthorizeRunHardDeniesOverTheTotalUnitCap pins the total-cap
 // hard-deny shape: a run with more units than the org's resolved cap is
 // denied outright, capped_unit_ids is the STABLE id-ordered suffix past the
-// cap, and NO bucket is ever visited (mismatched-value fixture: the org's
-// tier_limits row is deliberately set below the unit count).
+// cap, and NO bucket is ever visited (the opt-in SYNC_RUN_MAX_UNITS is set below the unit count).
 func TestAuthorizeRunHardDeniesOverTheTotalUnitCap(t *testing.T) {
 	withGuardPool(t, func(ctx context.Context, pool *pgxpool.Pool) {
-		pgseed.TierLimit(ctx, t, pool, "community", "max_sync_units", "1")
+		t.Setenv("SYNC_RUN_MAX_UNITS", "1")
 		now := pgNow()
 		insertGuardUnit(t, ctx, pool, "00000000-0000-4000-8000-0000000000f1", "github", "standard", syncRunUnitStatusPlanned, now, nil, nil, nil)
 		insertGuardUnit(t, ctx, pool, "00000000-0000-4000-8000-0000000000f2", "github", "standard", syncRunUnitStatusPlanned, now, nil, nil, nil)
@@ -114,6 +114,47 @@ func TestAuthorizeRunHardDeniesOverTheTotalUnitCap(t *testing.T) {
 			t.Fatalf("slotHeadroom=%v, want empty -- hard-deny returns before any bucket is visited", decision.slotHeadroom)
 		}
 	})
+}
+
+// TestAuthorizeRunHasNoTotalUnitCapByDefault pins that, with the opt-in
+// SYNC_RUN_MAX_UNITS unset or 0, a run over a tier_limits max_sync_units row
+// (the old cap source) is authorized, with every unit in the authorized set.
+func TestAuthorizeRunHasNoTotalUnitCapByDefault(t *testing.T) {
+	for _, test := range []struct {
+		name, env string
+		set       bool
+	}{
+		{name: "env unset"},
+		{name: "env zero", set: true, env: "0"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			withGuardPool(t, func(ctx context.Context, pool *pgxpool.Pool) {
+				t.Setenv("SYNC_RUN_MAX_UNITS", test.env)
+				if !test.set {
+					if err := os.Unsetenv("SYNC_RUN_MAX_UNITS"); err != nil {
+						t.Fatal(err)
+					}
+				}
+				pgseed.TierLimit(ctx, t, pool, "community", "max_sync_units", "1")
+				now := pgNow()
+				insertGuardUnit(t, ctx, pool, "00000000-0000-4000-8000-0000000000f1", "github", "standard", syncRunUnitStatusPlanned, now, nil, nil, nil)
+				insertGuardUnit(t, ctx, pool, "00000000-0000-4000-8000-0000000000f2", "github", "standard", syncRunUnitStatusPlanned, now, nil, nil, nil)
+
+				tx, err := pool.Begin(ctx)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer func() { _ = tx.Rollback(ctx) }()
+				decision, err := authorizeRun(ctx, tx, nil, guardTestOrg, guardTestRun, now)
+				if err != nil {
+					t.Fatalf("authorizeRun: %v", err)
+				}
+				if !decision.allowed || decision.concurrencyCapped || len(decision.cappedUnitIDs) != 0 || len(decision.authorizedUnitIDs) != 2 {
+					t.Fatalf("decision=%+v, want full allow with both units authorized", decision)
+				}
+			})
+		})
+	}
 }
 
 // TestAuthorizeRunFallsBackToTheDefaultCapOnAnOrgResolutionFailure pins the

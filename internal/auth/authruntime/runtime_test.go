@@ -852,3 +852,33 @@ func TestHealthcheckMirrorsReadiness(t *testing.T) {
 		t.Fatalf("Execute exited %d after a clean shutdown, want 0; logs:\n%s", code, logs.String())
 	}
 }
+
+// TestTheAuthServiceScrapeRegistersTheRateLimitCounters: the operator /metrics
+// carries both rate-limit families, so a limiter wired later has a series to
+// move and an alert never reads a name nobody emits.
+func TestTheAuthServiceScrapeRegistersTheRateLimitCounters(t *testing.T) {
+	ports := reservePorts(t, 2)
+	apiAddress, operatorAddress := ports[0], ports[1]
+	env := brokenEnvironment(t, apiAddress, operatorAddress)
+	_, stop := runService(t, env)
+	client := &http.Client{Timeout: 10 * time.Second}
+	defer client.CloseIdleConnections()
+
+	scrape := awaitResponse(t, client, "http://"+operatorAddress+"/metrics")
+	body, err := io.ReadAll(scrape.Body)
+	_ = scrape.Body.Close()
+	if err != nil {
+		t.Fatalf("read /metrics: %v", err)
+	}
+	for _, line := range []string{
+		"# TYPE dev_health_api_rate_limit_store_errors_total counter",
+		"# TYPE dev_health_api_rate_limit_rejections_total counter",
+	} {
+		if !bytes.Contains(body, []byte(line)) {
+			t.Errorf("operator /metrics lacks %q\n%s", line, body)
+		}
+	}
+	if code := stop(); code != 0 {
+		t.Fatalf("Execute exited %d, want 0", code)
+	}
+}

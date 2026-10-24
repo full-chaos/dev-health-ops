@@ -274,22 +274,44 @@ spec:
             {{- end }}
             {{- end }}
             {{- /*
-              The shared ConfigMap and Secret below reach every group through
-              envFrom, and an operator may keep other database DSNs in them
-              (the API role's, the migration role's, a legacy alias). An explicit
-              env entry beats an envFrom key of the same name and an empty value
-              is absent to the process, so each worker group blanks the DSN
-              names it does not hold. The process also refuses to start with any
-              other DSN variable (internal/platform/dsnclass).
+              The non-DSN keys of the shared Secret a worker reads (goWorkers.secretKeys),
+              one optional secretKeyRef each, so the whole Secret is no envFrom source
+              of a worker pod. CLICKHOUSE_URI is skipped when an explicit entry above
+              already sets it. A database DSN name in the list refuses the render.
             */}}
-            {{- range $blank := list "DATABASE_URI" "DATABASE_URL" "POSTGRES_URL" "API_DATABASE_URI" "GO_API_REGISTRY_POSTGRES_URI" "MIGRATION_DATABASE_URI" "AUTH_DATABASE_URI" "AUTH_MIGRATION_DATABASE_URI" }}
+            {{- $dsnNames := include "dev-health.goWorkerDSNNames" $ | fromJsonArray }}
+            {{- $allowedKeys := include "dev-health.goWorkerSecretKeyNames" $ | fromJsonArray }}
+            {{- range $listed := $.Values.goWorkers.secretKeys }}
+            {{- if has $listed $dsnNames }}
+            {{- fail (printf "goWorkers.secretKeys lists %s, a database DSN name; a worker takes DSNs only from its own class secrets" $listed) }}
+            {{- end }}
+            {{- if not (has $listed $allowedKeys) }}
+            {{- fail (printf "goWorkers.secretKeys lists %s, which is not a worker secret key the chart knows (dev-health.goWorkerSecretKeyNames)" $listed) }}
+            {{- end }}
+            {{- end }}
+            {{- range $key := $.Values.goWorkers.secretKeys }}
+            {{- if not (and (eq $key "CLICKHOUSE_URI") (include "dev-health.goWorkerClickhouseURI" $)) }}
+            - name: {{ $key }}
+              valueFrom: {secretKeyRef: {name: {{ include "dev-health.secretName" $ }}, key: {{ $key }}, optional: true}}
+            {{- end }}
+            {{- end }}
+            {{- /*
+              The shared ConfigMap below (and any goWorkers.extraEnvFrom source)
+              reaches every group through envFrom, and an operator may keep
+              database DSNs in them (the API role's, the migration role's, a legacy
+              alias). An explicit env entry beats an envFrom key of the same name
+              and an empty value is absent to the process, so each worker group
+              blanks the DSN names it does not hold. The blanks render after the
+              secretKeyRef entries so a name missed above still ends blank. The
+              process also refuses to start with any other DSN variable
+              (internal/platform/dsnclass).
+            */}}
+            {{- range $blank := include "dev-health.goWorkerDSNNames" $ | fromJsonArray }}
+            {{- if and (eq $blank "COORDINATOR_DATABASE_URI") $coordinator }}
+            {{- else if and (eq $blank "WORKER_DATABASE_URI") (not $group.runtimeProfile) }}
+            {{- else }}
             - {name: {{ $blank }}, value: ""}
             {{- end }}
-            {{- if not $coordinator }}
-            - {name: COORDINATOR_DATABASE_URI, value: ""}
-            {{- end }}
-            {{- if $group.runtimeProfile }}
-            - {name: WORKER_DATABASE_URI, value: ""}
             {{- end }}
             {{- if $.Values.goWorkers.pgbouncer.enabled }}
             # Every Go worker group uses the bounded domain transaction pool. River
@@ -314,21 +336,42 @@ spec:
               that must reach one group and no other (a credential or a trial
               switch) goes here; the shared ConfigMap/Secret reach all groups.
             */}}
+            {{- $chartOwned := concat (list "OPERATIONAL_ORDERING_CONTRACT" "OTEL_SERVICE_NAME" "CLICKHOUSE_URI" "POSTGRES_URI") $dsnNames ($.Values.goWorkers.secretKeys | default (list)) }}
             {{- with $group.extraEnv }}
+            {{- range $entry := . }}
+            {{- if kindIs "map" $entry }}
+            {{- if has ($entry.name | default "") $dsnNames }}
+            {{- fail (printf "goWorkers.groups[%s].extraEnv names %s, a database DSN name; a worker takes DSNs only from its own class secrets" $group.name $entry.name) }}
+            {{- end }}
+            {{- if has ($entry.name | default "") $chartOwned }}
+            {{- fail (printf "goWorkers.groups[%s].extraEnv names %s, which the chart already sets for this container; an extraEnv entry may not replace a chart-owned name" $group.name $entry.name) }}
+            {{- end }}
+            {{- $ref := (($entry.valueFrom | default dict).secretKeyRef | default dict) }}
+            {{- if and (eq ($ref.name | default "") (include "dev-health.secretName" $)) (not (has ($ref.key | default "") $allowedKeys)) }}
+            {{- fail (printf "goWorkers.groups[%s].extraEnv reads key %s of the shared Secret, which is not a worker secret key the chart knows (dev-health.goWorkerSecretKeyNames)" $group.name ($ref.key | default "")) }}
+            {{- end }}
+            {{- end }}
+            {{- end }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
           {{- /*
-          CHAOS-4984: same extraEnvFrom-first, chart-config/secret-last
+          CHAOS-4984: same extraEnvFrom-first, chart-config-last
           ordering as the deleted Python api Deployment had, and for the same reason --
           Kubernetes resolves a duplicate envFrom key in favour of the LAST
           source, so an operator-supplied source (e.g. a local dotenv
-          Secret) belongs before these two chart-owned sources, not after.
+          Secret) belongs before the chart-owned ConfigMap, not after. The
+          shared Secret is no source here: its worker keys are the per-key
+          references of goWorkers.secretKeys above.
           Shared across every group in this range; there is no per-group
           extraEnvFrom.
           */}}
+          {{- range $source := $.Values.goWorkers.extraEnvFrom }}
+          {{- if and (kindIs "map" $source) (kindIs "map" $source.secretRef) (eq ($source.secretRef.name | default "") (include "dev-health.secretName" $)) }}
+          {{- fail (printf "goWorkers.extraEnvFrom names the shared Secret %s; its worker keys come from goWorkers.secretKeys and the whole Secret is no envFrom source of a worker pod" (include "dev-health.secretName" $)) }}
+          {{- end }}
+          {{- end }}
           {{- $groupEnvFrom := $.Values.goWorkers.extraEnvFrom | default (list) }}
           {{- $groupEnvFrom = append $groupEnvFrom (dict "configMapRef" (dict "name" (include "dev-health.configMapName" $))) }}
-          {{- $groupEnvFrom = append $groupEnvFrom (dict "secretRef" (dict "name" (include "dev-health.secretName" $))) }}
           envFrom:
             {{- toYaml $groupEnvFrom | nindent 12 }}
           ports: [{name: metrics, containerPort: 8080}]

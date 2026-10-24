@@ -26,16 +26,23 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": "unknown",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "HS256"
       },
       "classification": "protected",
+      "current_state_cache_behavior": "unknown",
+      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
+        "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
       ],
       "graphql_field_name": null,
       "id": "GET /api/v1/drilldown/issues [dev-health-query-api @query,internal]",
+      "impersonation_policy": "unknown",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -43,9 +50,10 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
+      "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
       "route": "/api/v1/drilldown/issues",
       "service": "dev-health-query-api",
       "source": {
@@ -69,16 +77,23 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": "unknown",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "HS256"
       },
       "classification": "protected",
+      "current_state_cache_behavior": "unknown",
+      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
+        "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
       ],
       "graphql_field_name": null,
       "id": "POST /api/v1/drilldown/issues [dev-health-query-api @query,internal]",
+      "impersonation_policy": "unknown",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -86,9 +101,10 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
+      "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
       "route": "/api/v1/drilldown/issues",
       "service": "dev-health-query-api",
       "source": {
@@ -112,16 +128,23 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": "unknown",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "HS256"
       },
       "classification": "protected",
+      "current_state_cache_behavior": "unknown",
+      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
+        "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
       ],
       "graphql_field_name": null,
       "id": "GET /api/v1/drilldown/prs [dev-health-query-api @query,internal]",
+      "impersonation_policy": "unknown",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -129,9 +152,10 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
+      "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
       "route": "/api/v1/drilldown/prs",
       "service": "dev-health-query-api",
       "source": {
@@ -155,16 +179,23 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": "unknown",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "HS256"
       },
       "classification": "protected",
+      "current_state_cache_behavior": "unknown",
+      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
+        "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
       ],
       "graphql_field_name": null,
       "id": "POST /api/v1/drilldown/prs [dev-health-query-api @query,internal]",
+      "impersonation_policy": "unknown",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -172,9 +203,10 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
+      "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
       "route": "/api/v1/drilldown/prs",
       "service": "dev-health-query-api",
       "source": {
@@ -198,16 +230,23 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": "unknown",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "HS256"
       },
       "classification": "protected",
+      "current_state_cache_behavior": "unknown",
+      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
+        "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
       ],
       "graphql_field_name": null,
       "id": "GET /api/v1/explain [dev-health-query-api @query,internal]",
+      "impersonation_policy": "unknown",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -215,9 +254,10 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
+      "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
       "route": "/api/v1/explain",
       "service": "dev-health-query-api",
       "source": {
@@ -241,16 +281,23 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": "unknown",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "HS256"
       },
       "classification": "protected",
+      "current_state_cache_behavior": "unknown",
+      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
+        "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
       ],
       "graphql_field_name": null,
       "id": "POST /api/v1/explain [dev-health-query-api @query,internal]",
+      "impersonation_policy": "unknown",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -258,9 +305,10 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
+      "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
       "route": "/api/v1/explain",
       "service": "dev-health-query-api",
       "source": {
@@ -284,16 +332,23 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": "unknown",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "HS256"
       },
       "classification": "protected",
+      "current_state_cache_behavior": "unknown",
+      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
+        "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
       ],
       "graphql_field_name": null,
       "id": "GET /api/v1/filters/options [dev-health-query-api @query,internal]",
+      "impersonation_policy": "unknown",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -301,9 +356,10 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
+      "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
       "route": "/api/v1/filters/options",
       "service": "dev-health-query-api",
       "source": {
@@ -327,16 +383,23 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": "unknown",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "HS256"
       },
       "classification": "protected",
+      "current_state_cache_behavior": "unknown",
+      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
+        "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
       ],
       "graphql_field_name": null,
       "id": "GET /api/v1/flame [dev-health-query-api @query,internal]",
+      "impersonation_policy": "unknown",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -344,9 +407,10 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
+      "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
       "route": "/api/v1/flame",
       "service": "dev-health-query-api",
       "source": {
@@ -370,16 +434,23 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": "unknown",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "HS256"
       },
       "classification": "protected",
+      "current_state_cache_behavior": "unknown",
+      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
+        "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
       ],
       "graphql_field_name": null,
       "id": "GET /api/v1/flame/aggregated [dev-health-query-api @query,internal]",
+      "impersonation_policy": "unknown",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -387,9 +458,10 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
+      "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
       "route": "/api/v1/flame/aggregated",
       "service": "dev-health-query-api",
       "source": {
@@ -413,16 +485,23 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": "unknown",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "HS256"
       },
       "classification": "protected",
+      "current_state_cache_behavior": "unknown",
+      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
+        "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
       ],
       "graphql_field_name": null,
       "id": "GET /api/v1/heatmap [dev-health-query-api @query,internal]",
+      "impersonation_policy": "unknown",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -430,9 +509,10 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
+      "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
       "route": "/api/v1/heatmap",
       "service": "dev-health-query-api",
       "source": {
@@ -456,16 +536,23 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": "unknown",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "HS256"
       },
       "classification": "protected",
+      "current_state_cache_behavior": "unknown",
+      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
+        "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
       ],
       "graphql_field_name": null,
       "id": "GET /api/v1/home [dev-health-query-api @query,internal]",
+      "impersonation_policy": "unknown",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -473,9 +560,10 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
+      "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
       "route": "/api/v1/home",
       "service": "dev-health-query-api",
       "source": {
@@ -499,16 +587,23 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": "unknown",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "HS256"
       },
       "classification": "protected",
+      "current_state_cache_behavior": "unknown",
+      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
+        "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
       ],
       "graphql_field_name": null,
       "id": "POST /api/v1/home [dev-health-query-api @query,internal]",
+      "impersonation_policy": "unknown",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -516,9 +611,10 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
+      "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
       "route": "/api/v1/home",
       "service": "dev-health-query-api",
       "source": {
@@ -542,16 +638,23 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": "unknown",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "HS256"
       },
       "classification": "protected",
+      "current_state_cache_behavior": "unknown",
+      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
+        "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
       ],
       "graphql_field_name": null,
       "id": "GET /api/v1/investment [dev-health-query-api @query,internal]",
+      "impersonation_policy": "unknown",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -559,9 +662,10 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
+      "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
       "route": "/api/v1/investment",
       "service": "dev-health-query-api",
       "source": {
@@ -585,16 +689,23 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": "unknown",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "HS256"
       },
       "classification": "protected",
+      "current_state_cache_behavior": "unknown",
+      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
+        "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
       ],
       "graphql_field_name": null,
       "id": "POST /api/v1/investment [dev-health-query-api @query,internal]",
+      "impersonation_policy": "unknown",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -602,9 +713,10 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
+      "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
       "route": "/api/v1/investment",
       "service": "dev-health-query-api",
       "source": {
@@ -628,16 +740,23 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": "unknown",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "HS256"
       },
       "classification": "protected",
+      "current_state_cache_behavior": "unknown",
+      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
+        "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
       ],
       "graphql_field_name": null,
       "id": "POST /api/v1/investment/explain [dev-health-query-api @query,internal]",
+      "impersonation_policy": "unknown",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -645,9 +764,10 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
+      "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
       "route": "/api/v1/investment/explain",
       "service": "dev-health-query-api",
       "source": {
@@ -671,16 +791,23 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": "unknown",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "HS256"
       },
       "classification": "protected",
+      "current_state_cache_behavior": "unknown",
+      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
+        "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
       ],
       "graphql_field_name": null,
       "id": "GET /api/v1/investment/sunburst [dev-health-query-api @query,internal]",
+      "impersonation_policy": "unknown",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -688,9 +815,10 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
+      "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
       "route": "/api/v1/investment/sunburst",
       "service": "dev-health-query-api",
       "source": {
@@ -730,16 +858,23 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": "unknown",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "HS256"
       },
       "classification": "protected",
+      "current_state_cache_behavior": "unknown",
+      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
+        "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
       ],
       "graphql_field_name": null,
       "id": "GET /api/v1/opportunities [dev-health-query-api @query,internal]",
+      "impersonation_policy": "unknown",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -747,9 +882,10 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
+      "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
       "route": "/api/v1/opportunities",
       "service": "dev-health-query-api",
       "source": {
@@ -773,16 +909,23 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": "unknown",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "HS256"
       },
       "classification": "protected",
+      "current_state_cache_behavior": "unknown",
+      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
+        "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
       ],
       "graphql_field_name": null,
       "id": "POST /api/v1/opportunities [dev-health-query-api @query,internal]",
+      "impersonation_policy": "unknown",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -790,9 +933,10 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
+      "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
       "route": "/api/v1/opportunities",
       "service": "dev-health-query-api",
       "source": {
@@ -816,16 +960,23 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": "unknown",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "HS256"
       },
       "classification": "protected",
+      "current_state_cache_behavior": "unknown",
+      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
+        "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
       ],
       "graphql_field_name": null,
       "id": "GET /api/v1/people [dev-health-query-api @query,internal]",
+      "impersonation_policy": "unknown",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -833,9 +984,10 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
+      "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
       "route": "/api/v1/people",
       "service": "dev-health-query-api",
       "source": {
@@ -859,16 +1011,24 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": "unknown",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "HS256"
       },
       "classification": "protected",
+      "current_state_cache_behavior": "unknown",
+      "disclosure_behavior": "unknown",
       "gaps": [
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
+        "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "disclosure_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
       ],
       "graphql_field_name": null,
       "id": "GET /api/v1/people/{person_id}/drilldown/issues [dev-health-query-api @query,internal]",
+      "impersonation_policy": "unknown",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -876,9 +1036,10 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
+      "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
       "route": "/api/v1/people/{person_id}/drilldown/issues",
       "service": "dev-health-query-api",
       "source": {
@@ -902,16 +1063,24 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": "unknown",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "HS256"
       },
       "classification": "protected",
+      "current_state_cache_behavior": "unknown",
+      "disclosure_behavior": "unknown",
       "gaps": [
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
+        "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "disclosure_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
       ],
       "graphql_field_name": null,
       "id": "GET /api/v1/people/{person_id}/drilldown/prs [dev-health-query-api @query,internal]",
+      "impersonation_policy": "unknown",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -919,9 +1088,10 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
+      "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
       "route": "/api/v1/people/{person_id}/drilldown/prs",
       "service": "dev-health-query-api",
       "source": {
@@ -945,16 +1115,24 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": "unknown",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "HS256"
       },
       "classification": "protected",
+      "current_state_cache_behavior": "unknown",
+      "disclosure_behavior": "unknown",
       "gaps": [
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
+        "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "disclosure_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
       ],
       "graphql_field_name": null,
       "id": "GET /api/v1/people/{person_id}/metric [dev-health-query-api @query,internal]",
+      "impersonation_policy": "unknown",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -962,9 +1140,10 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
+      "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
       "route": "/api/v1/people/{person_id}/metric",
       "service": "dev-health-query-api",
       "source": {
@@ -988,16 +1167,24 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": "unknown",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "HS256"
       },
       "classification": "protected",
+      "current_state_cache_behavior": "unknown",
+      "disclosure_behavior": "unknown",
       "gaps": [
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
+        "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "disclosure_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
       ],
       "graphql_field_name": null,
       "id": "GET /api/v1/people/{person_id}/summary [dev-health-query-api @query,internal]",
+      "impersonation_policy": "unknown",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -1005,9 +1192,10 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
+      "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
       "route": "/api/v1/people/{person_id}/summary",
       "service": "dev-health-query-api",
       "source": {
@@ -1031,16 +1219,23 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": "unknown",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "HS256"
       },
       "classification": "protected",
+      "current_state_cache_behavior": "unknown",
+      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
+        "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
       ],
       "graphql_field_name": null,
       "id": "GET /api/v1/quadrant [dev-health-query-api @query,internal]",
+      "impersonation_policy": "unknown",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -1048,9 +1243,10 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
+      "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
       "route": "/api/v1/quadrant",
       "service": "dev-health-query-api",
       "source": {
@@ -1074,16 +1270,23 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": "unknown",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "HS256"
       },
       "classification": "protected",
+      "current_state_cache_behavior": "unknown",
+      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
+        "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
       ],
       "graphql_field_name": null,
       "id": "GET /api/v1/sankey [dev-health-query-api @query,internal]",
+      "impersonation_policy": "unknown",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -1091,9 +1294,10 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
+      "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
       "route": "/api/v1/sankey",
       "service": "dev-health-query-api",
       "source": {
@@ -1117,16 +1321,23 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": "unknown",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "HS256"
       },
       "classification": "protected",
+      "current_state_cache_behavior": "unknown",
+      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
+        "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
       ],
       "graphql_field_name": null,
       "id": "POST /api/v1/sankey [dev-health-query-api @query,internal]",
+      "impersonation_policy": "unknown",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -1134,9 +1345,10 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
+      "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
       "route": "/api/v1/sankey",
       "service": "dev-health-query-api",
       "source": {
@@ -1160,16 +1372,23 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": "unknown",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "HS256"
       },
       "classification": "protected",
+      "current_state_cache_behavior": "unknown",
+      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
+        "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
       ],
       "graphql_field_name": null,
       "id": "GET /api/v1/work-units [dev-health-query-api @query,internal]",
+      "impersonation_policy": "unknown",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -1177,9 +1396,10 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
+      "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
       "route": "/api/v1/work-units",
       "service": "dev-health-query-api",
       "source": {
@@ -1203,16 +1423,23 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": "unknown",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "HS256"
       },
       "classification": "protected",
+      "current_state_cache_behavior": "unknown",
+      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
+        "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
       ],
       "graphql_field_name": null,
       "id": "POST /api/v1/work-units [dev-health-query-api @query,internal]",
+      "impersonation_policy": "unknown",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -1220,9 +1447,10 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
+      "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
       "route": "/api/v1/work-units",
       "service": "dev-health-query-api",
       "source": {
@@ -1246,16 +1474,24 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": "unknown",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "HS256"
       },
       "classification": "protected",
+      "current_state_cache_behavior": "unknown",
+      "disclosure_behavior": "unknown",
       "gaps": [
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
+        "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "disclosure_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
       ],
       "graphql_field_name": null,
       "id": "POST /api/v1/work-units/{work_unit_id}/explain [dev-health-query-api @query,internal]",
+      "impersonation_policy": "unknown",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -1263,9 +1499,10 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
+      "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
       "route": "/api/v1/work-units/{work_unit_id}/explain",
       "service": "dev-health-query-api",
       "source": {
@@ -1285,12 +1522,18 @@
       "accepted_credential_classes": [
         "effective_principal_envelope"
       ],
+      "action": "unknown",
       "classification": "protected",
+      "current_state_cache_behavior": "unknown",
+      "disclosure_behavior": "401 for a missing or failing credential (authenticateInternalRequest); any verified credential receives the same process build identity",
       "gaps": [
-        "The in-cluster internal identity headers are a third carrier accepted only on the internal listener (internal/queryapi/internalidentity, authenticateInternalRequest in internal/queryapi/server/internal_auth.go); the closed credential vocabulary has no class for them, so they are named here, not classified. /buildinfo does not accept the edge access token."
+        "The in-cluster internal identity headers are a third carrier accepted only on the internal listener (internal/queryapi/internalidentity, authenticateInternalRequest in internal/queryapi/server/internal_auth.go); the closed credential vocabulary has no class for them, so they are named here, not classified. /buildinfo does not accept the edge access token.",
+        "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
       ],
       "graphql_field_name": null,
       "id": "GET /buildinfo [dev-health-query-api @query,internal]",
+      "impersonation_policy": "exempt_no_org_context",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -1301,6 +1544,7 @@
         "description": "authenticateInternalRequest picks the carrier and refuses ambiguity; the envelope is verified by principal.Verifier.Verify, the edge access token by the live users-row check."
       },
       "public_rationale": null,
+      "resource_resolver": "none: the response is the process's build identity; the credential's organization is not read",
       "route": "/buildinfo",
       "service": "dev-health-query-api",
       "source": {
@@ -1323,12 +1567,18 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": "unknown",
       "classification": "protected",
+      "current_state_cache_behavior": "unknown",
+      "disclosure_behavior": "401 Authentication required (authenticateGraphQLEdge); 403 for an X-Org-Id the caller may not use (scope.OrgScope); 404 for a browser GET; 404 UNREGISTERED_DOCUMENT for an authenticated unregistered document",
       "gaps": [
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
+        "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
       ],
       "graphql_field_name": null,
       "id": "GET /graphql [dev-health-query-api @query,internal]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -1339,6 +1589,7 @@
         "description": "authenticateGraphQLEdge: edge access token only (authenticateEdgeTokenOnly, live users row)."
       },
       "public_rationale": null,
+      "resource_resolver": "organization_from_header_or_credential: the X-Org-Id header when the caller may use it (a superuser, the caller's own organization, or a member of that organization), else the credential's organization (scope.OrgScope)",
       "route": "/graphql",
       "service": "dev-health-query-api",
       "source": {
@@ -1361,12 +1612,18 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": "unknown",
       "classification": "protected",
+      "current_state_cache_behavior": "unknown",
+      "disclosure_behavior": "401 Authentication required (authenticateGraphQLEdge); 403 for an X-Org-Id the caller may not use (scope.OrgScope); 404 for a browser GET; 404 UNREGISTERED_DOCUMENT for an authenticated unregistered document",
       "gaps": [
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
+        "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
       ],
       "graphql_field_name": null,
       "id": "POST /graphql [dev-health-query-api @query,internal]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -1377,6 +1634,7 @@
         "description": "authenticateGraphQLEdge: edge access token only (authenticateEdgeTokenOnly, live users row)."
       },
       "public_rationale": null,
+      "resource_resolver": "organization_from_header_or_credential: the X-Org-Id header when the caller may use it (a superuser, the caller's own organization, or a member of that organization), else the credential's organization (scope.OrgScope)",
       "route": "/graphql",
       "service": "dev-health-query-api",
       "source": {
@@ -1448,17 +1706,23 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": "unknown",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "HS256"
       },
       "classification": "protected",
+      "current_state_cache_behavior": "unknown",
+      "disclosure_behavior": "401 for a missing or failing credential (authenticateInternalRequest); 404 for an authenticated unregistered document (shared dispatcher)",
       "gaps": [
         "The in-cluster internal identity headers are a third carrier accepted only on the internal listener (internal/queryapi/internalidentity, authenticateInternalRequest in internal/queryapi/server/internal_auth.go); the closed credential vocabulary has no class for them, so they are named here, not classified.",
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
+        "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
       ],
       "graphql_field_name": null,
       "id": "POST /query [dev-health-query-api @query,internal]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -1469,6 +1733,7 @@
         "description": "authenticateInternalRequest picks the carrier and refuses ambiguity; the envelope is verified by principal.Verifier.Verify, the edge access token by the live users-row check."
       },
       "public_rationale": null,
+      "resource_resolver": "organization_from_credential: claims.OrgID returned by authenticateInternalRequest",
       "route": "/query",
       "service": "dev-health-query-api",
       "source": {
@@ -1486,13 +1751,20 @@
     },
     {
       "accepted_credential_classes": [],
+      "action": "unknown",
       "classification": "protected",
+      "current_state_cache_behavior": "unknown",
+      "disclosure_behavior": "401 for a missing or invalid identity; 403 for an identity carrying superuser, impersonation or an operator role; 403 for a root field outside the allowlist or an orgId argument that does not name the caller's organization; 404 for a root field not enabled for the MCP caller class",
       "gaps": [
         "The MCP caller-class listener accepts only the internal identity headers (no bearer of any class); the closed credential vocabulary has no class for them, so accepted_credential_classes is empty by declaration, not omission.",
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
+        "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
       ],
       "graphql_field_name": null,
       "id": "POST /query [dev-health-query-api @mcp]",
+      "impersonation_policy": "unknown",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -1503,6 +1775,7 @@
         "description": "mcpAuthenticate: internal identity headers only; any Authorization header is refused with 401."
       },
       "public_rationale": null,
+      "resource_resolver": "organization_from_credential: the organization of the internal identity headers (mcpAuthenticate); a bearer token is refused",
       "route": "/query",
       "service": "dev-health-query-api",
       "source": {
@@ -1520,17 +1793,23 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": "unknown",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "HS256"
       },
       "classification": "protected",
+      "current_state_cache_behavior": "unknown",
+      "disclosure_behavior": "401 for a missing or failing credential (authenticateInternalRequest); 404 for an authenticated unregistered document (shared dispatcher)",
       "gaps": [
         "Same serving pipeline and carrier check as POST /query (query_route.go authenticateInternalRequest call). Mounted only when the deployment posture permits (mountProofRoute).",
-        "The in-cluster internal identity headers are a third carrier accepted only on the internal listener (internal/queryapi/internalidentity, authenticateInternalRequest in internal/queryapi/server/internal_auth.go); the closed credential vocabulary has no class for them, so they are named here, not classified."
+        "The in-cluster internal identity headers are a third carrier accepted only on the internal listener (internal/queryapi/internalidentity, authenticateInternalRequest in internal/queryapi/server/internal_auth.go); the closed credential vocabulary has no class for them, so they are named here, not classified.",
+        "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
       ],
       "graphql_field_name": null,
       "id": "POST /query/proof [dev-health-query-api @query,internal]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -1541,6 +1820,7 @@
         "description": "authenticateInternalRequest picks the carrier and refuses ambiguity; the envelope is verified by principal.Verifier.Verify, the edge access token by the live users-row check."
       },
       "public_rationale": null,
+      "resource_resolver": "organization_from_credential: claims.OrgID returned by authenticateInternalRequest",
       "route": "/query/proof",
       "service": "dev-health-query-api",
       "source": {
@@ -1564,17 +1844,23 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": "unknown",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "HS256"
       },
       "classification": "protected",
+      "current_state_cache_behavior": "unknown",
+      "disclosure_behavior": "401 for a missing or failing credential (authenticateInternalRequest); 403 for an organization not on the go_api_proof_orgs allowlist",
       "gaps": [
         "Same serving pipeline and carrier check as POST /query (query_route.go authenticateInternalRequest call). Mounted on the internal listener only.",
-        "The in-cluster internal identity headers are a third carrier accepted only on the internal listener (internal/queryapi/internalidentity, authenticateInternalRequest in internal/queryapi/server/internal_auth.go); the closed credential vocabulary has no class for them, so they are named here, not classified."
+        "The in-cluster internal identity headers are a third carrier accepted only on the internal listener (internal/queryapi/internalidentity, authenticateInternalRequest in internal/queryapi/server/internal_auth.go); the closed credential vocabulary has no class for them, so they are named here, not classified.",
+        "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
       ],
       "graphql_field_name": null,
       "id": "POST /query/proof-write [dev-health-query-api @internal]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -1585,6 +1871,7 @@
         "description": "authenticateInternalRequest picks the carrier and refuses ambiguity; the envelope is verified by principal.Verifier.Verify, the edge access token by the live users-row check."
       },
       "public_rationale": null,
+      "resource_resolver": "organization_from_credential: claims.OrgID returned by authenticateInternalRequest; the organization must be on the go_api_proof_orgs allowlist",
       "route": "/query/proof-write",
       "service": "dev-health-query-api",
       "source": {
@@ -1608,17 +1895,23 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": "unknown",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "HS256"
       },
       "classification": "protected",
+      "current_state_cache_behavior": "unknown",
+      "disclosure_behavior": "401 for a missing or failing credential (authenticateInternalRequest); 404 for an authenticated unregistered document (shared dispatcher)",
       "gaps": [
         "Same serving pipeline and carrier check as POST /query (query_route.go authenticateInternalRequest call). Mounted on the internal listener only.",
-        "The in-cluster internal identity headers are a third carrier accepted only on the internal listener (internal/queryapi/internalidentity, authenticateInternalRequest in internal/queryapi/server/internal_auth.go); the closed credential vocabulary has no class for them, so they are named here, not classified."
+        "The in-cluster internal identity headers are a third carrier accepted only on the internal listener (internal/queryapi/internalidentity, authenticateInternalRequest in internal/queryapi/server/internal_auth.go); the closed credential vocabulary has no class for them, so they are named here, not classified.",
+        "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
       ],
       "graphql_field_name": null,
       "id": "POST /query/run-operation [dev-health-query-api @internal]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -1629,6 +1922,7 @@
         "description": "authenticateInternalRequest picks the carrier and refuses ambiguity; the envelope is verified by principal.Verifier.Verify, the edge access token by the live users-row check."
       },
       "public_rationale": null,
+      "resource_resolver": "organization_from_credential: claims.OrgID returned by authenticateInternalRequest",
       "route": "/query/run-operation",
       "service": "dev-health-query-api",
       "source": {

@@ -16,6 +16,8 @@ type Purpose string
 const (
 	PurposeEmailVerification Purpose = "email_verification"
 	PurposePasswordReset     Purpose = "password_reset"
+	// PurposeAccountExists is a notice mail with no stored credential.
+	PurposeAccountExists Purpose = "account_exists"
 )
 
 // Link credential lifetimes are go-api's: create_email_verification_token

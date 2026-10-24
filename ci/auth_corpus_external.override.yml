@@ -47,5 +47,42 @@ services:
       # variable stays unset (an empty value is not the same as unset for these readers).
       - AUTH_AUTO_CREATE_ORG_ON_REGISTER
       - AUTH_REGISTER_LIMIT
+      # The social-login row's provider: go-api reaches api.github.com at the corpus provider stub (below) and trusts
+      # the stub's run-time CA. The client id and secret are the corpus's throwaway values.
+      - SOCIAL_GITHUB_CLIENT_ID=gh-client
+      - SOCIAL_GITHUB_CLIENT_SECRET=gh-secret
+      - SSL_CERT_FILE=/run/corpus-stub/ca.pem
+    depends_on:
+      providerstub:
+        condition: service_started
+    extra_hosts:
+      - "api.github.com:10.199.90.10"
+      - "github.com:10.199.90.10"
+    volumes:
+      - ${AUTH_CORPUS_STUB_DIR}:/run/corpus-stub:ro
   auth-service:
     ports: !override ["127.0.0.1::8096"]
+  # The corpus provider stub (docker/providerstub.Dockerfile; corpus only, never a release image): answers the provider
+  # requests of the social-login row from ci/auth_corpus_stub and records every request on its recorder port. Its
+  # certificate and CA are made at run time by ci/auth_corpus_external.sh.
+  providerstub:
+    image: authcorpus-providerstub:local
+    build:
+      context: .
+      dockerfile: docker/providerstub.Dockerfile
+      target: providerstub
+    command: ["serve", "-fixtures", "/fixtures", "-cert", "/run/corpus-stub/server.pem", "-key", "/run/corpus-stub/server.key", "-listen", ":443", "-admin", ":9090"]
+    restart: "no"
+    read_only: true
+    user: "65532:65532"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    sysctls:
+      net.ipv4.ip_unprivileged_port_start: "0"
+    volumes:
+      - ./ci/auth_corpus_stub:/fixtures:ro
+      - ${AUTH_CORPUS_STUB_DIR}:/run/corpus-stub:ro
+    ports: ["127.0.0.1::9090"]
+    networks:
+      default:
+        ipv4_address: 10.199.90.10

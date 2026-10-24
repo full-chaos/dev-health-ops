@@ -122,8 +122,8 @@ func workerGroupsRenderOnlyTheirClassDSNSecrets(g *guard) {
 	}
 }
 
-// DSN-shaped keys an operator puts in the shared Secret or ConfigMap reach every
-// group through envFrom. The names the chart knows are blanked by explicit empty
+// DSN-shaped keys an operator puts in the shared ConfigMap reach every group through
+// envFrom (the shared Secret is no envFrom source of a worker pod). The names the chart knows are blanked by explicit empty
 // env entries (which beat envFrom and are absent to the process), so none of them
 // is visible to a worker; a name the chart does not know still is, and the
 // start-up guard refuses it.
@@ -131,15 +131,14 @@ func workerGroupsBlankSharedDSNNames(g *guard) {
 	known := []string{"DATABASE_URI", "DATABASE_URL", "POSTGRES_URL", "API_DATABASE_URI", "GO_API_REGISTRY_POSTGRES_URI", "COORDINATOR_DATABASE_URI", "WORKER_DATABASE_URI"}
 	var sets []string
 	for _, k := range known {
-		sets = append(sets, "secrets.data."+k+"=postgresql://x@h/db")
+		sets = append(sets, "config."+k+"=postgresql://x@h/db")
 	}
-	sets = append(sets, "config.WORKER_DATABASE_URI=postgresql://x@h/db", "config.COORDINATOR_DATABASE_URI=postgresql://x@h/db")
 	docs := g.docs("dsn-class-shared", join(poolGoValues, setString(sets...), set("postgresql.enabled=true"))...)
 	for _, v := range dsnClassViolations(g, docs) {
 		g.failf("%s", v)
 	}
 	g.expect(len(dsnNamesByGroup(g, docs)) == len(processes(g)), "not every worker group rendered, so the check measured nothing")
-	unknown := g.docs("dsn-class-unknown", join(poolGoValues, setString("secrets.data.ANALYTICS_DATABASE_URI=postgresql://x@h/db"))...)
+	unknown := g.docs("dsn-class-unknown", join(poolGoValues, setString("config.ANALYTICS_DATABASE_URI=postgresql://x@h/db"))...)
 	violations := strings.Join(dsnClassViolations(g, unknown), "\n")
 	for _, p := range processes(g) {
 		g.expect(strings.Contains(violations, "worker group "+str(p["name"])+" (class "+str(p["runtime"])+") carries ANALYTICS_DATABASE_URI"),
@@ -195,21 +194,21 @@ func TestDSNClassGuardsPlantedDefects(t *testing.T) {
 	runPlanted(t, []planted{
 		{"one-group-env-carries-the-coordinator-dsn", chartAndManifest,
 			mut(chartFile(values), "    - name: heavy\n      subcommand: worker\n", "    - name: heavy\n      subcommand: worker\n      extraEnv: [{name: COORDINATOR_DATABASE_URI, value: \"postgresql://x@h/db\"}]\n"),
-			workerGroupsRenderOnlyTheirClassDSNSecrets, "heavy (class river) carries COORDINATOR_DATABASE_URI"},
+			workerGroupsRenderOnlyTheirClassDSNSecrets, "extraEnv names COORDINATOR_DATABASE_URI, a database DSN name"},
 		{"stream-groups-render-the-queue-dsn-again", chartAndManifest,
 			mut(chartFile(workers), "            {{- if not $group.runtimeProfile }}\n            - name: WORKER_DATABASE_URI", "            {{- if true }}\n            - name: WORKER_DATABASE_URI"),
 			workerGroupsRenderOnlyTheirClassDSNSecrets, "outside its class"},
 		{"blank-and-secret-ref-on-one-name", chartAndManifest,
-			mut(chartFile(workers), "{{- if not $coordinator }}\n            - {name: COORDINATOR_DATABASE_URI, value: \"\"}\n            {{- end }}", "{{- if true }}\n            - {name: COORDINATOR_DATABASE_URI, value: \"\"}\n            {{- end }}"),
+			mut(chartFile(workers), `{{- if and (eq $blank "COORDINATOR_DATABASE_URI") $coordinator }}`, `{{- if and (eq $blank "COORDINATOR_DATABASE_URI") false }}`),
 			workerContainersRenderNoDuplicateEnvNames, "names env COORDINATOR_DATABASE_URI 2 times"},
 		{"workers-stop-blanking-the-other-roles-dsn-names", chartAndManifest,
-			mut(chartFile(workers), `list "DATABASE_URI" "DATABASE_URL" "POSTGRES_URL" "API_DATABASE_URI" "GO_API_REGISTRY_POSTGRES_URI" "MIGRATION_DATABASE_URI" "AUTH_DATABASE_URI" "AUTH_MIGRATION_DATABASE_URI"`, `list`),
+			mut(chartFile("templates/_helpers.tpl"), `"DATABASE_URI" "DATABASE_URL" "POSTGRES_URL" "API_DATABASE_URI" "GO_API_REGISTRY_POSTGRES_URI" "MIGRATION_DATABASE_URI" "AUTH_DATABASE_URI" "AUTH_MIGRATION_DATABASE_URI" `, ``),
 			workerGroupsBlankSharedDSNNames, "carries API_DATABASE_URI"},
 		{"non-coordinator-groups-stop-blanking-the-coordinator-dsn", chartAndManifest,
-			mut(chartFile(workers), "{{- if not $coordinator }}\n            - {name: COORDINATOR_DATABASE_URI, value: \"\"}", "{{- if false }}\n            - {name: COORDINATOR_DATABASE_URI, value: \"\"}"),
+			mut(chartFile(workers), `{{- if and (eq $blank "COORDINATOR_DATABASE_URI") $coordinator }}`, `{{- if eq $blank "COORDINATOR_DATABASE_URI" }}`),
 			workerGroupsBlankSharedDSNNames, "carries COORDINATOR_DATABASE_URI outside its class"},
 		{"stream-groups-stop-blanking-the-queue-dsn", chartAndManifest,
-			mut(chartFile(workers), "{{- if $group.runtimeProfile }}\n            - {name: WORKER_DATABASE_URI, value: \"\"}", "{{- if false }}\n            - {name: WORKER_DATABASE_URI, value: \"\"}"),
+			mut(chartFile(workers), `{{- else if and (eq $blank "WORKER_DATABASE_URI") (not $group.runtimeProfile) }}`, `{{- else if eq $blank "WORKER_DATABASE_URI" }}`),
 			workerGroupsBlankSharedDSNNames, "(class stream) carries WORKER_DATABASE_URI"},
 		{"river-groups-render-the-coordinator-dsn", chartAndManifest,
 			mut(chartFile(workers), "            {{- if $coordinator }}\n            - name: COORDINATOR_DATABASE_URI", "            {{- if true }}\n            - name: COORDINATOR_DATABASE_URI"),

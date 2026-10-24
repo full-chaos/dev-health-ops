@@ -1,6 +1,7 @@
 package workflowpaths_test
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -154,6 +155,42 @@ func TestWorkflowPathFiltersCodeQLDocsOnlyTwinAndGate(t *testing.T) {
 			t.Errorf("analyze-docs-only step %q must say in its name that no code changed", name)
 		}
 	}
+	if perms, _ := twin["permissions"].(map[string]any); perms["security-events"] != "write" {
+		t.Errorf("analyze-docs-only needs security-events: write to upload, got %v", twin["permissions"])
+	}
+	var upload map[string]any
+	var sarifRun string
+	for _, step := range twin["steps"].([]any) {
+		m := step.(map[string]any)
+		if uses, _ := m["uses"].(string); strings.HasPrefix(uses, "github/codeql-action/upload-sarif@") {
+			upload, _ = m["with"].(map[string]any)
+		}
+		if run, _ := m["run"].(string); strings.Contains(run, "empty.sarif") {
+			sarifRun = run
+		}
+	}
+	if upload == nil || upload["sarif_file"] != "empty.sarif" {
+		t.Errorf("analyze-docs-only must upload empty.sarif with github/codeql-action/upload-sarif, got %v", upload)
+	}
+	start, end := strings.Index(sarifRun, "'{"), strings.LastIndex(sarifRun, "}'")
+	if start < 0 || end < start {
+		t.Fatalf("no SARIF literal in the write step: %q", sarifRun)
+	}
+	var sarif struct {
+		Version string `json:"version"`
+		Runs    []struct {
+			Tool struct {
+				Driver struct{ Name string } `json:"driver"`
+			} `json:"tool"`
+			Results []any `json:"results"`
+		} `json:"runs"`
+	}
+	if err := json.Unmarshal([]byte(sarifRun[start+1:end+1]), &sarif); err != nil {
+		t.Fatalf("the empty SARIF is not valid JSON: %v", err)
+	}
+	if sarif.Version != "2.1.0" || len(sarif.Runs) != 1 || sarif.Runs[0].Tool.Driver.Name != "CodeQL" || len(sarif.Runs[0].Results) != 0 {
+		t.Errorf("the empty SARIF must be version 2.1.0 with one CodeQL run and no results: %+v", sarif)
+	}
 	changes := codeqlJob(t, "changes")
 	var classify map[string]any
 	for _, step := range changes["steps"].([]any) {
@@ -244,6 +281,11 @@ func TestCodeQLDocsOnlyClassifier(t *testing.T) {
 		{"nested mkdocs.yml is not the root file", nil, map[string]string{"sub/" + docsSiteConfig: "x"}, "false"},
 		{"a docs lookalike directory", nil, map[string]string{"docsx/a.txt": "x"}, "false"},
 		{"an empty diff", nil, map[string]string{}, "false"},
+		{"Go source under docs/ is still Go", nil, map[string]string{"docs/pwn.go": "package pwn\n"}, "false"},
+		{"a Go module file under docs/", nil, map[string]string{"docs/go.mod": "module x\n"}, "false"},
+		{"a nested Go work file", nil, map[string]string{"docs/sub/go.work": "go 1.22\n"}, "false"},
+		{"one path holding a newline is one path", nil, map[string]string{docsSiteConfig + "\ndocs/x.txt": "x"}, "false"},
+		{"a Go test file named like markdown", nil, map[string]string{"docs/a.md.go": "x"}, "false"},
 	}
 	for _, c := range cases {
 		r := newGitRepo(t)

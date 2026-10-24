@@ -250,9 +250,8 @@ says so explicitly) — that is a follow-up, not a guess filled in here.
 The served query-api GraphQL root fields (Query and Mutation of
 `contracts/graphql/v1/schema.graphql`) each have exactly one row in
 [`graphql-field-actions.json`](https://github.com/full-chaos/dev-health-ops/blob/main/contracts/auth/v1/graphql-field-actions.json):
-the one action of the closed catalog (`vocabulary/actions.v1.json`) the field
-performs, or `unknown` with an `action:` gap where the catalog has none. The map
-names an action; query-api checks no action today. The query-api REST rows carry
+its `action`, which is `unknown` with an `action:` gap: query-api enforces no
+action of the closed catalog (`vocabulary/actions.v1.json`) on a field today. The query-api REST rows carry
 the same `action`, `resource_resolver`, `current_state_cache_behavior`,
 `impersonation_policy` and `disclosure_behavior` fields.
 

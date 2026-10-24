@@ -1,30 +1,36 @@
 {
   "catalog_version": 2,
-  "description": "Maps every served GraphQL root field to the one catalog action it performs (actions.v1.json), or to unknown with a named gap where the closed catalog has none. A declared mapping, not an enforcement: query-api checks no action today. Every other statement is held to a source proof by the Go guard.",
+  "description": "Lists every served GraphQL root field. query-api enforces no catalog action (actions.v1.json) on a field today, so every action is unknown with a declared gap. Every other statement is held to a source proof by the Go guard.",
   "rows": [
     {
-      "action": "analytics.read",
+      "action": "unknown",
       "disclosure_behavior": "a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs, except that a verified non-impersonating superuser may name another organization and the operation then runs against it",
       "field": "catalog",
-      "gaps": [],
+      "gaps": [
+        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+      ],
       "resolver": "queryResolver.Catalog in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_argument: the orgId argument, refused by OperationOrgGuard unless it equals the credential's organization; a verified non-impersonating superuser may name another organization",
       "type": "Query"
     },
     {
-      "action": "analytics.read",
+      "action": "unknown",
       "disclosure_behavior": "a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs, except that a verified non-impersonating superuser may name another organization and the operation then runs against it",
       "field": "analytics",
-      "gaps": [],
+      "gaps": [
+        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+      ],
       "resolver": "queryResolver.Analytics in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_argument: the orgId argument, refused by OperationOrgGuard unless it equals the credential's organization; a verified non-impersonating superuser may name another organization",
       "type": "Query"
     },
     {
-      "action": "analytics.read",
+      "action": "unknown",
       "disclosure_behavior": "a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs, except that a verified non-impersonating superuser may name another organization and the operation then runs against it",
       "field": "productTelemetryDashboard",
-      "gaps": [],
+      "gaps": [
+        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+      ],
       "resolver": "queryResolver.ProductTelemetryDashboard in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_argument: the orgId argument, refused by OperationOrgGuard unless it equals the credential's organization; a verified non-impersonating superuser may name another organization",
       "type": "Query"
@@ -41,163 +47,199 @@
       "type": "Query"
     },
     {
-      "action": "analytics.read",
+      "action": "unknown",
       "disclosure_behavior": "a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs, except that a verified non-impersonating superuser may name another organization and the operation then runs against it",
       "field": "home",
-      "gaps": [],
+      "gaps": [
+        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+      ],
       "resolver": "queryResolver.Home in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_argument: the orgId argument, refused by OperationOrgGuard unless it equals the credential's organization; a verified non-impersonating superuser may name another organization",
       "type": "Query"
     },
     {
-      "action": "work_items.read",
+      "action": "unknown",
       "disclosure_behavior": "a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs, except that a verified non-impersonating superuser may name another organization and the operation then runs against it",
       "field": "workGraphEdges",
-      "gaps": [],
+      "gaps": [
+        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+      ],
       "resolver": "queryResolver.WorkGraphEdges in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_argument: the orgId argument, refused by OperationOrgGuard unless it equals the credential's organization; a verified non-impersonating superuser may name another organization",
       "type": "Query"
     },
     {
-      "action": "git.read",
+      "action": "unknown",
       "disclosure_behavior": "a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs, except that a verified non-impersonating superuser may name another organization and the operation then runs against it",
       "field": "pr",
-      "gaps": [],
+      "gaps": [
+        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+      ],
       "resolver": "queryResolver.Pr in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_argument: the orgId argument, refused by OperationOrgGuard unless it equals the credential's organization; a verified non-impersonating superuser may name another organization",
       "type": "Query"
     },
     {
-      "action": "work_items.read",
+      "action": "unknown",
       "disclosure_behavior": "a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs, except that a verified non-impersonating superuser may name another organization and the operation then runs against it",
       "field": "workGraphFlow",
-      "gaps": [],
+      "gaps": [
+        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+      ],
       "resolver": "queryResolver.WorkGraphFlow in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_argument: the orgId argument, refused by OperationOrgGuard unless it equals the credential's organization; a verified non-impersonating superuser may name another organization",
       "type": "Query"
     },
     {
-      "action": "work_items.read",
+      "action": "unknown",
       "disclosure_behavior": "a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs, except that a verified non-impersonating superuser may name another organization and the operation then runs against it",
       "field": "workGraphArtifacts",
-      "gaps": [],
+      "gaps": [
+        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+      ],
       "resolver": "queryResolver.WorkGraphArtifacts in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_argument: the orgId argument, refused by OperationOrgGuard unless it equals the credential's organization; a verified non-impersonating superuser may name another organization",
       "type": "Query"
     },
     {
-      "action": "integrations.read",
+      "action": "unknown",
       "disclosure_behavior": "a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs, except that a verified non-impersonating superuser may name another organization and the operation then runs against it",
       "field": "featureFlags",
-      "gaps": [],
+      "gaps": [
+        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+      ],
       "resolver": "queryResolver.FeatureFlags in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_argument: the orgId argument, refused by OperationOrgGuard unless it equals the credential's organization; a verified non-impersonating superuser may name another organization",
       "type": "Query"
     },
     {
-      "action": "integrations.read",
+      "action": "unknown",
       "disclosure_behavior": "a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs, except that a verified non-impersonating superuser may name another organization and the operation then runs against it",
       "field": "featureFlagEvents",
-      "gaps": [],
+      "gaps": [
+        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+      ],
       "resolver": "queryResolver.FeatureFlagEvents in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_argument: the orgId argument, refused by OperationOrgGuard unless it equals the credential's organization; a verified non-impersonating superuser may name another organization",
       "type": "Query"
     },
     {
-      "action": "teams.read",
+      "action": "unknown",
       "disclosure_behavior": "a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs, except that a verified non-impersonating superuser may name another organization and the operation then runs against it",
       "field": "workItemTeamAttributions",
-      "gaps": [],
+      "gaps": [
+        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+      ],
       "resolver": "queryResolver.WorkItemTeamAttributions in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_argument: the orgId argument, refused by OperationOrgGuard unless it equals the credential's organization; a verified non-impersonating superuser may name another organization",
       "type": "Query"
     },
     {
-      "action": "teams.read",
+      "action": "unknown",
       "disclosure_behavior": "a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs, except that a verified non-impersonating superuser may name another organization and the operation then runs against it",
       "field": "workUnitTeamAttributions",
-      "gaps": [],
+      "gaps": [
+        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+      ],
       "resolver": "queryResolver.WorkUnitTeamAttributions in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_argument: the orgId argument, refused by OperationOrgGuard unless it equals the credential's organization; a verified non-impersonating superuser may name another organization",
       "type": "Query"
     },
     {
-      "action": "git.read",
+      "action": "unknown",
       "disclosure_behavior": "a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs, except that a verified non-impersonating superuser may name another organization and the operation then runs against it",
       "field": "securityAlerts",
-      "gaps": [],
+      "gaps": [
+        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+      ],
       "resolver": "queryResolver.SecurityAlerts in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_argument: the orgId argument, refused by OperationOrgGuard unless it equals the credential's organization; a verified non-impersonating superuser may name another organization",
       "type": "Query"
     },
     {
-      "action": "git.read",
+      "action": "unknown",
       "disclosure_behavior": "a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs, except that a verified non-impersonating superuser may name another organization and the operation then runs against it",
       "field": "securityOverview",
-      "gaps": [],
+      "gaps": [
+        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+      ],
       "resolver": "queryResolver.SecurityOverview in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_argument: the orgId argument, refused by OperationOrgGuard unless it equals the credential's organization; a verified non-impersonating superuser may name another organization",
       "type": "Query"
     },
     {
-      "action": "analytics.read",
+      "action": "unknown",
       "disclosure_behavior": "a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs, except that a verified non-impersonating superuser may name another organization and the operation then runs against it",
       "field": "savedReports",
-      "gaps": [],
+      "gaps": [
+        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+      ],
       "resolver": "queryResolver.SavedReports in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_argument: the orgId argument, refused by OperationOrgGuard unless it equals the credential's organization; a verified non-impersonating superuser may name another organization",
       "type": "Query"
     },
     {
-      "action": "analytics.read",
+      "action": "unknown",
       "disclosure_behavior": "a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs, except that a verified non-impersonating superuser may name another organization and the operation then runs against it",
       "field": "savedReport",
-      "gaps": [],
+      "gaps": [
+        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+      ],
       "resolver": "queryResolver.SavedReport in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_argument: the orgId argument, refused by OperationOrgGuard unless it equals the credential's organization; a verified non-impersonating superuser may name another organization",
       "type": "Query"
     },
     {
-      "action": "analytics.read",
+      "action": "unknown",
       "disclosure_behavior": "a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs, except that a verified non-impersonating superuser may name another organization and the operation then runs against it",
       "field": "reportRuns",
-      "gaps": [],
+      "gaps": [
+        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+      ],
       "resolver": "queryResolver.ReportRuns in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_argument: the orgId argument, refused by OperationOrgGuard unless it equals the credential's organization; a verified non-impersonating superuser may name another organization",
       "type": "Query"
     },
     {
-      "action": "metrics.read",
+      "action": "unknown",
       "disclosure_behavior": "a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs, except that a verified non-impersonating superuser may name another organization and the operation then runs against it",
       "field": "capacityForecast",
-      "gaps": [],
+      "gaps": [
+        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+      ],
       "resolver": "queryResolver.CapacityForecast in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_argument: the orgId argument, refused by OperationOrgGuard unless it equals the credential's organization; a verified non-impersonating superuser may name another organization",
       "type": "Query"
     },
     {
-      "action": "metrics.read",
+      "action": "unknown",
       "disclosure_behavior": "a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs, except that a verified non-impersonating superuser may name another organization and the operation then runs against it",
       "field": "capacityForecasts",
-      "gaps": [],
+      "gaps": [
+        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+      ],
       "resolver": "queryResolver.CapacityForecasts in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_argument: the orgId argument, refused by OperationOrgGuard unless it equals the credential's organization; a verified non-impersonating superuser may name another organization",
       "type": "Query"
     },
     {
-      "action": "metrics.read",
+      "action": "unknown",
       "disclosure_behavior": "a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs, except that a verified non-impersonating superuser may name another organization and the operation then runs against it",
       "field": "throughputForecast",
-      "gaps": [],
+      "gaps": [
+        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+      ],
       "resolver": "queryResolver.ThroughputForecast in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_argument: the orgId argument, refused by OperationOrgGuard unless it equals the credential's organization; a verified non-impersonating superuser may name another organization",
       "type": "Query"
     },
     {
-      "action": "metrics.read",
+      "action": "unknown",
       "disclosure_behavior": "a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs, except that a verified non-impersonating superuser may name another organization and the operation then runs against it",
       "field": "operatingReview",
-      "gaps": [],
+      "gaps": [
+        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+      ],
       "resolver": "queryResolver.OperatingReview in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_argument: the orgId argument, refused by OperationOrgGuard unless it equals the credential's organization; a verified non-impersonating superuser may name another organization",
       "type": "Query"
@@ -214,208 +256,254 @@
       "type": "Query"
     },
     {
-      "action": "integrations.read",
+      "action": "unknown",
       "disclosure_behavior": "a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs, except that a verified non-impersonating superuser may name another organization and the operation then runs against it",
       "field": "sourceHealth",
-      "gaps": [],
+      "gaps": [
+        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+      ],
       "resolver": "queryResolver.SourceHealth in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_argument: the orgId argument, refused by OperationOrgGuard unless it equals the credential's organization; a verified non-impersonating superuser may name another organization",
       "type": "Query"
     },
     {
-      "action": "git.read",
+      "action": "unknown",
       "disclosure_behavior": "a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs, except that a verified non-impersonating superuser may name another organization and the operation then runs against it",
       "field": "busFactor",
-      "gaps": [],
+      "gaps": [
+        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+      ],
       "resolver": "queryResolver.BusFactor in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_argument: the orgId argument, refused by OperationOrgGuard unless it equals the credential's organization; a verified non-impersonating superuser may name another organization",
       "type": "Query"
     },
     {
-      "action": "metrics.read",
+      "action": "unknown",
       "disclosure_behavior": "a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs, except that a verified non-impersonating superuser may name another organization and the operation then runs against it",
       "field": "compoundingRisk",
-      "gaps": [],
+      "gaps": [
+        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+      ],
       "resolver": "queryResolver.CompoundingRisk in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_argument: the orgId argument, refused by OperationOrgGuard unless it equals the credential's organization; a verified non-impersonating superuser may name another organization",
       "type": "Query"
     },
     {
-      "action": "metrics.read",
+      "action": "unknown",
       "disclosure_behavior": "a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs, except that a verified non-impersonating superuser may name another organization and the operation then runs against it",
       "field": "testopsRisk",
-      "gaps": [],
+      "gaps": [
+        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+      ],
       "resolver": "queryResolver.TestopsRisk in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_argument: the orgId argument, refused by OperationOrgGuard unless it equals the credential's organization; a verified non-impersonating superuser may name another organization",
       "type": "Query"
     },
     {
-      "action": "metrics.read",
+      "action": "unknown",
       "disclosure_behavior": "a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs, except that a verified non-impersonating superuser may name another organization and the operation then runs against it",
       "field": "testopsJobFailures",
-      "gaps": [],
+      "gaps": [
+        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+      ],
       "resolver": "queryResolver.TestopsJobFailures in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_argument: the orgId argument, refused by OperationOrgGuard unless it equals the credential's organization; a verified non-impersonating superuser may name another organization",
       "type": "Query"
     },
     {
-      "action": "metrics.read",
+      "action": "unknown",
       "disclosure_behavior": "a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs, except that a verified non-impersonating superuser may name another organization and the operation then runs against it",
       "field": "coverageBaselines",
-      "gaps": [],
+      "gaps": [
+        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+      ],
       "resolver": "queryResolver.CoverageBaselines in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_argument: the orgId argument, refused by OperationOrgGuard unless it equals the credential's organization; a verified non-impersonating superuser may name another organization",
       "type": "Query"
     },
     {
-      "action": "metrics.read",
+      "action": "unknown",
       "disclosure_behavior": "a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs, except that a verified non-impersonating superuser may name another organization and the operation then runs against it",
       "field": "coverageScopeBaseline",
-      "gaps": [],
+      "gaps": [
+        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+      ],
       "resolver": "queryResolver.CoverageScopeBaseline in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_argument: the orgId argument, refused by OperationOrgGuard unless it equals the credential's organization; a verified non-impersonating superuser may name another organization",
       "type": "Query"
     },
     {
-      "action": "git.read",
+      "action": "unknown",
       "disclosure_behavior": "a request with no organization answers AUTHORIZATION_ERROR; the field takes no orgId argument and reads the credential's organization",
       "field": "complexityTimeseries",
-      "gaps": [],
+      "gaps": [
+        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+      ],
       "resolver": "queryResolver.ComplexityTimeseries in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_credential: the credential's organization (claims.OrgID); the field takes no orgId argument",
       "type": "Query"
     },
     {
-      "action": "git.read",
+      "action": "unknown",
       "disclosure_behavior": "a request with no organization answers AUTHORIZATION_ERROR; the field takes no orgId argument and reads the credential's organization",
       "field": "hotspots",
-      "gaps": [],
+      "gaps": [
+        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+      ],
       "resolver": "queryResolver.Hotspots in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_credential: the credential's organization (claims.OrgID); the field takes no orgId argument",
       "type": "Query"
     },
     {
-      "action": "metrics.read",
+      "action": "unknown",
       "disclosure_behavior": "a request with no organization answers AUTHORIZATION_ERROR; the field takes no orgId argument and reads the credential's organization",
       "field": "cognitiveLoad",
-      "gaps": [],
+      "gaps": [
+        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+      ],
       "resolver": "queryResolver.CognitiveLoad in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_credential: the credential's organization (claims.OrgID); the field takes no orgId argument",
       "type": "Query"
     },
     {
-      "action": "git.read",
+      "action": "unknown",
       "disclosure_behavior": "a request with no organization answers AUTHORIZATION_ERROR; the field takes no orgId argument and reads the credential's organization",
       "field": "reviewEdges",
-      "gaps": [],
+      "gaps": [
+        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+      ],
       "resolver": "queryResolver.ReviewEdges in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_credential: the credential's organization (claims.OrgID); the field takes no orgId argument",
       "type": "Query"
     },
     {
-      "action": "analytics.read",
+      "action": "unknown",
       "disclosure_behavior": "a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs, except that a verified non-impersonating superuser may name another organization and the operation then runs against it",
       "field": "recommendations",
-      "gaps": [],
+      "gaps": [
+        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+      ],
       "resolver": "queryResolver.Recommendations in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_argument: the orgId argument, refused by OperationOrgGuard unless it equals the credential's organization; a verified non-impersonating superuser may name another organization",
       "type": "Query"
     },
     {
-      "action": "analytics.read",
+      "action": "unknown",
       "disclosure_behavior": "a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs, except that a verified non-impersonating superuser may name another organization and the operation then runs against it",
       "field": "experiments",
-      "gaps": [],
+      "gaps": [
+        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+      ],
       "resolver": "queryResolver.Experiments in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_argument: the orgId argument, refused by OperationOrgGuard unless it equals the credential's organization; a verified non-impersonating superuser may name another organization",
       "type": "Query"
     },
     {
-      "action": "analytics.read",
+      "action": "unknown",
       "disclosure_behavior": "a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs, except that a verified non-impersonating superuser may name another organization and the operation then runs against it",
       "field": "aiImpactSummary",
-      "gaps": [],
+      "gaps": [
+        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+      ],
       "resolver": "queryResolver.AiImpactSummary in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_argument: the orgId argument, refused by OperationOrgGuard unless it equals the credential's organization; a verified non-impersonating superuser may name another organization",
       "type": "Query"
     },
     {
-      "action": "analytics.read",
+      "action": "unknown",
       "disclosure_behavior": "a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs, except that a verified non-impersonating superuser may name another organization and the operation then runs against it",
       "field": "aiComparison",
-      "gaps": [],
+      "gaps": [
+        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+      ],
       "resolver": "queryResolver.AiComparison in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_argument: the orgId argument, refused by OperationOrgGuard unless it equals the credential's organization; a verified non-impersonating superuser may name another organization",
       "type": "Query"
     },
     {
-      "action": "analytics.read",
+      "action": "unknown",
       "disclosure_behavior": "a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs, except that a verified non-impersonating superuser may name another organization and the operation then runs against it",
       "field": "aiReviewLoad",
-      "gaps": [],
+      "gaps": [
+        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+      ],
       "resolver": "queryResolver.AiReviewLoad in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_argument: the orgId argument, refused by OperationOrgGuard unless it equals the credential's organization; a verified non-impersonating superuser may name another organization",
       "type": "Query"
     },
     {
-      "action": "analytics.read",
+      "action": "unknown",
       "disclosure_behavior": "a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs, except that a verified non-impersonating superuser may name another organization and the operation then runs against it",
       "field": "aiRiskBreakdown",
-      "gaps": [],
+      "gaps": [
+        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+      ],
       "resolver": "queryResolver.AiRiskBreakdown in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_argument: the orgId argument, refused by OperationOrgGuard unless it equals the credential's organization; a verified non-impersonating superuser may name another organization",
       "type": "Query"
     },
     {
-      "action": "analytics.read",
+      "action": "unknown",
       "disclosure_behavior": "a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs, except that a verified non-impersonating superuser may name another organization and the operation then runs against it",
       "field": "aiOpportunities",
-      "gaps": [],
+      "gaps": [
+        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+      ],
       "resolver": "queryResolver.AiOpportunities in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_argument: the orgId argument, refused by OperationOrgGuard unless it equals the credential's organization; a verified non-impersonating superuser may name another organization",
       "type": "Query"
     },
     {
-      "action": "analytics.read",
+      "action": "unknown",
       "disclosure_behavior": "a request with no organization answers AUTHORIZATION_ERROR; the field takes no orgId argument and reads the credential's organization",
       "field": "improveOpportunities",
-      "gaps": [],
+      "gaps": [
+        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+      ],
       "resolver": "queryResolver.ImproveOpportunities in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_credential: the credential's organization (claims.OrgID); the field takes no orgId argument",
       "type": "Query"
     },
     {
-      "action": "analytics.read",
+      "action": "unknown",
       "disclosure_behavior": "a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs, except that a verified non-impersonating superuser may name another organization and the operation then runs against it",
       "field": "aiGovernanceSummary",
-      "gaps": [],
+      "gaps": [
+        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+      ],
       "resolver": "queryResolver.AiGovernanceSummary in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_argument: the orgId argument, refused by OperationOrgGuard unless it equals the credential's organization; a verified non-impersonating superuser may name another organization",
       "type": "Query"
     },
     {
-      "action": "analytics.read",
+      "action": "unknown",
       "disclosure_behavior": "a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs, except that a verified non-impersonating superuser may name another organization and the operation then runs against it",
       "field": "aiWorkflowDrilldown",
-      "gaps": [],
+      "gaps": [
+        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+      ],
       "resolver": "queryResolver.AiWorkflowDrilldown in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_argument: the orgId argument, refused by OperationOrgGuard unless it equals the credential's organization; a verified non-impersonating superuser may name another organization",
       "type": "Query"
     },
     {
-      "action": "analytics.read",
+      "action": "unknown",
       "disclosure_behavior": "a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs, except that a verified non-impersonating superuser may name another organization and the operation then runs against it",
       "field": "aiAttributedPrs",
-      "gaps": [],
+      "gaps": [
+        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+      ],
       "resolver": "queryResolver.AiAttributedPrs in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_argument: the orgId argument, refused by OperationOrgGuard unless it equals the credential's organization; a verified non-impersonating superuser may name another organization",
       "type": "Query"
     },
     {
-      "action": "analytics.read",
+      "action": "unknown",
       "disclosure_behavior": "a request with no organization answers AUTHORIZATION_ERROR; an orgId naming another organization answers a whole-operation error before any field runs, except that a verified non-impersonating superuser may name another organization and the operation then runs against it",
       "field": "aiAttributionOverview",
-      "gaps": [],
+      "gaps": [
+        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+      ],
       "resolver": "queryResolver.AiAttributionOverview in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_argument: the orgId argument, refused by OperationOrgGuard unless it equals the credential's organization; a verified non-impersonating superuser may name another organization",
       "type": "Query"

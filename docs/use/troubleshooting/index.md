@@ -58,6 +58,14 @@ A report cannot be created, run, scheduled, or read, or its run history and outp
 
 </article>
 
+<article class="fc-topic-card" markdown>
+
+### [Sign-in problems](sign-in.md)
+
+You cannot sign up, sign in, verify your email address, or reset your password, or a sign-in message is unclear.
+
+</article>
+
 </div>
 
 ## Preserve the failing context

@@ -17,6 +17,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/auth/sessionid"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 )
@@ -282,5 +283,23 @@ func TestOnlyGoAPIRoutesAnAuthenticator(t *testing.T) {
 	}
 	if len(sites) != 1 || sites[0] != "internal/apiservice/service.go" {
 		t.Fatalf("RouteAccess is called from %v; only internal/apiservice/service.go may route an Authenticator", sites)
+	}
+}
+
+// TestRouteProfileAndBodyCoexistInTheContext: the route profile and the
+// decoded body (BodyFirst) are two different context values; setting one in
+// either order never hides the other.
+func TestRouteProfileAndBodyCoexistInTheContext(t *testing.T) {
+	body := pybody.Body{}
+	for name, ctx := range map[string]context.Context{
+		"profile then body": WithBody(WithRouteProfile(context.Background(), "POST /p"), body),
+		"body then profile": WithRouteProfile(WithBody(context.Background(), body), "POST /p"),
+	} {
+		if got := RouteProfileFrom(ctx); got != "POST /p" {
+			t.Errorf("%s: profile %q", name, got)
+		}
+		if _, ok := BodyFrom(ctx); !ok {
+			t.Errorf("%s: body lost", name)
+		}
 	}
 }

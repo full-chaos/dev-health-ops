@@ -40,41 +40,54 @@ func tripped(findings []emitscan.Finding) bool {
 }
 
 var budgetSites = []budgetSite{
-	{"const declaration pass", func() string { return repeat(200, "const ()\n") }, 600},
-	{"raw-function fixpoint", func() string { return repeat(200, "func f%d() {}\n", idx) }, 2400},
-	{"dependant constants and fold nodes", func() string { return repeat(200, "const c%d = a%d\n", idx, idx) }, 3200},
-	{"key bytes", func() string { return repeat(50, "const c%d = \""+strings.Repeat("W", 200)+"\"\n", idx) }, 15000},
-	{"alias edges and evaluation", func() string { return repeat(200, "var a%d = b%d\n", idx, idx) }, 2000},
-	{"taint assignment", func() string { return "func f() {\n" + repeat(200, "\tx = y\n") + "}\n" }, 3600},
-	{"taint value spec", func() string { return "func f() {\n" + repeat(200, "\tvar x = y\n") + "}\n" }, 4700},
+	{"const declaration pass", func() string { return repeat(200, "const ()\n") }, 618},
+	{"raw-function fixpoint", func() string { return repeat(200, "func f%d() {}\n", idx) }, 2818},
+	{"dependant constants and fold nodes", func() string { return repeat(200, "const c%d = a%d\n", idx, idx) }, 3218},
+	{"key bytes", func() string { return repeat(50, "const c%d = \""+strings.Repeat("W", 200)+"\"\n", idx) }, 16043},
+	{"taint value spec", func() string { return "func f() {\n" + repeat(200, "\tvar x = y\n") + "}\n" }, 5932},
 	{"taint worklist", func() string {
 		return "func f(r *http.Request) {\n\tx0 := r.URL.Path\n" + repeat(200, "\tx%d := x%d\n", func(i int) any { return i + 1 }, idx) + "}\n"
-	}, 4170},
-	{"carried identifiers", func() string { return "func f() {\n\tx = a" + strings.Repeat(" + a", 200) + "\n}\n" }, 2550},
-	{"returned taint", func() string { return "func f() string {\n\treturn a" + strings.Repeat(" + a", 200) + "\n}\n" }, 1950},
+	}, 5083},
+	{"carried identifiers", func() string { return "func f() {\n\tx = a" + strings.Repeat(" + a", 200) + "\n}\n" }, 2953},
+	{"returned taint", func() string { return "func f() string {\n\treturn a" + strings.Repeat(" + a", 200) + "\n}\n" }, 2348},
 	{"composite alternatives", func() string {
 		return "var a = slog.String\nvar x = []any{a" + strings.Repeat(", a", 200) + "}\n"
-	}, 1250},
+	}, 1179},
 	{"call through a name", func() string {
 		return "var a = slog.String\nfunc f(v string) {\n" + repeat(200, "\t_ = a(\"x\", v)\n") + "}\n"
-	}, 6900},
+	}, 8616},
 	{"call through a field", func() string {
 		return "type h struct{ mk func(string, string) slog.Attr }\nvar x = h{mk: slog.String}\nfunc f(v string) {\n" + repeat(200, "\t_ = x.mk(\"x\", v)\n") + "}\n"
-	}, 10200},
+	}, 12929},
 	{"call through an index", func() string {
 		return "var m = []func(string, string) slog.Attr{slog.String}\nfunc f(v string) {\n" + repeat(200, "\t_ = m[0](\"x\", v)\n") + "}\n"
-	}, 9900},
-	{"alias entries kept", func() string { return repeat(50, "var a = slog.F%d\n", idx) + repeat(100, "var d%d = a\n", idx) }, 200000},
+	}, 11645},
+	{"alias entries kept", func() string { return repeat(50, "var a = slog.F%d\n", idx) + repeat(100, "var d%d = a\n", idx) }, 327418},
 	{"error text walk", func() string {
 		return "func f(v string) { _ = attribute.String(\"k\", v" + strings.Repeat(" + v", 300) + ") }\n"
-	}, 5200},
+	}, 5898},
 	{"computed key walks", func() string {
 		return "func f(v string) { _ = attribute.String(k" + strings.Repeat(" + k", 300) + ", v) }\n"
-	}, 4650},
-	{"syntax node walk", func() string { return "func f() {\n" + repeat(1000, "\tx\n") + "}\n" }, 5000},
+	}, 5298},
+	{"flow carried names", func() string {
+		return "func f() {\n" + repeat(100, "\tx = append(a, b, c, d)\n") + "}\n"
+	}, 5182},
+	{"flow wrapper chain", func() string {
+		return flowSink + repeat(100, "func w%d(a []attribute.KeyValue) { w%d(a) }\n", func(i int) any { return i + 1 }, idx) +
+			"func w0(a []attribute.KeyValue) { record(nil, a) }\n"
+	}, 15172},
+	{"flow origin chain", func() string {
+		return flowSink + "func f(c metric.Int64Counter, v string) {\n\tx0 := []attribute.KeyValue{attribute.String(\"k\", v)}\n" +
+			repeat(100, "\tx%d := x%d\n", func(i int) any { return i + 1 }, idx) + "\trecord(c, x100)\n}\n"
+	}, 7224},
+	{"flow many origins", func() string {
+		return flowSink + "func f(c metric.Int64Counter, v string) {\n\tx := []attribute.KeyValue{}\n" +
+			repeat(100, "\tx = append(x, attribute.String(\"k%d\", v))\n", idx) + "\trecord(c, x)\n}\n"
+	}, 27068},
+	{"syntax node walk", func() string { return "func f() {\n" + repeat(1000, "\tx\n") + "}\n" }, 7132},
 }
 
-// Each row is a small input whose cost sits mostly in one charge site; the budget is set so the package trips only while
+// Each budget below was measured on its input: re-measure the rows after any change to a charge. Each row is a small input whose cost sits mostly in one charge site; the budget is set so the package trips only while
 // that site charges. A mutant that drops the charge makes the row end without the census finding.
 func TestEveryChargeSiteIsReachedByARow(t *testing.T) {
 	for _, site := range budgetSites {

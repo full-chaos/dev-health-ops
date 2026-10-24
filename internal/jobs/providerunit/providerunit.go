@@ -168,6 +168,10 @@ const (
 	// (SQLSTATE 22P05, a NUL in a jsonb string). The payload is the same on
 	// every attempt, so the unit ends on the first one.
 	CheckpointDataErrorCategory = "checkpoint_data_error"
+	// UnitWindowInvalidCategory covers a work-items unit whose window is
+	// malformed (since after before, a zero time, or over the day bound). The
+	// window is part of the unit, so every attempt refuses it the same way.
+	UnitWindowInvalidCategory = "unit_window_invalid"
 )
 
 // timeLimitReserve is how long before the job deadline the unit's
@@ -335,6 +339,9 @@ func deterministicTerminalCategory(err error) (string, bool) {
 	}
 	if errors.Is(err, providersync.ErrPreviousReleaseSnapshot) {
 		return PreviousReleaseSnapshotCategory, true
+	}
+	if errors.Is(err, providersync.ErrInvalidUnitWindow) {
+		return UnitWindowInvalidCategory, true
 	}
 	return "", false
 }

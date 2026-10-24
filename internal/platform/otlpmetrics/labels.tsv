@@ -4,6 +4,7 @@ auth.identity.external_links	action,outcome	code: internal/auth/identity/store.g
 auth.identity.projections	kind,outcome	code: internal/auth/identity/store.go
 auth.identity.wire_slug_omitted		code: internal/auth/identity/store.go
 auth.oidc.outcomes	outcome,reason,route	code: internal/auth/identity/oidc/service.go
+auth.org.mutations	outcome,verb	code: internal/auth/org/store.go
 auth.session.refresh_exchanges	reason_code	code: internal/auth/session/store.go
 auth.session.revocations	reason	code: internal/auth/session/store.go
 auth.social.outcomes	operation,provider,reason_code	code: internal/auth/identity/social/service.go
@@ -15,6 +16,8 @@ devhealth_acr_internal_requests_total	outcome,route	code: internal/apiservice/ac
 devhealth_acr_llm_config_requests_total	outcome	code: internal/apiservice/acr/llmconfig.go
 devhealth_api_auth_proxy_requests_total	aggregate,outcome	code: internal/apiservice/authproxy.go
 devhealth_api_auth_proxy_upstream_duration_seconds	aggregate	code: internal/apiservice/authproxy.go
+devhealth_auth_access_token_accepted_total	class,profile,service	code: internal/auth/accessverify/accessverify.go
+devhealth_auth_access_token_refused_total	profile,reason,service	code: internal/auth/accessverify/accessverify.go
 dev_health_api_http_request_duration_seconds	listener,method,route,status_class	code: internal/auth/httpapi/accesslog.go
 dev_health_api_http_requests_total	listener,method,route,status_class	code: internal/auth/httpapi/tracehandler.go
 dev_health_api_stripe_refund_event_decisions_total	reason	code: internal/api/billing/refundowner.go

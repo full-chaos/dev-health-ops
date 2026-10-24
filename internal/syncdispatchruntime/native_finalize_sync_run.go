@@ -269,18 +269,15 @@ func (service *NativeFinalizeSyncRunService) finalize(
 		return tx.Commit(ctx)
 	}
 
-	units, err := loadFinalizeUnits(ctx, tx, run.id)
+	summary, err := summarizeFinalizeUnits(ctx, tx, run.id)
 	if err != nil {
 		return err
 	}
-	for _, unit := range units {
-		if unit.status != syncRunUnitStatusSuccess && unit.status != syncRunUnitStatusFailed {
-			// Python: `return {"status": "pending", ...}`.
-			return tx.Commit(ctx)
-		}
+	if summary.pending {
+		// Python: `return {"status": "pending", ...}`.
+		return tx.Commit(ctx)
 	}
-
-	aggregate := aggregateFinalizeUnits(units)
+	aggregate := summary.aggregate
 
 	// --- CHAOS-4159 zero-unit branch: read the PRE-image before it's
 	// overwritten below. run.result/run.errorText are exactly what the
@@ -315,7 +312,7 @@ func (service *NativeFinalizeSyncRunService) finalize(
 		newError = aggregate.firstFailedUnitError
 	}
 	var zeroUnitReason string
-	isZeroUnit := len(units) == 0
+	isZeroUnit := summary.total == 0
 	if isZeroUnit {
 		plannerResult := run.result
 		// Python: `if isinstance(planner_category, str) and planner_category:`
@@ -342,7 +339,7 @@ func (service *NativeFinalizeSyncRunService) finalize(
 		resultPayload["reason"] = zeroUnitReason
 	}
 
-	newStatus := aggregateRunStatus(len(units), aggregate.successCount, aggregate.failedCount)
+	newStatus := aggregateRunStatus(summary.total, aggregate.successCount, aggregate.failedCount)
 	completedAt := run.completedAt
 	if completedAt == nil {
 		now := service.nowUTC()
@@ -375,7 +372,7 @@ func (service *NativeFinalizeSyncRunService) finalize(
 	if err := observeTerminalSyncRun(ctx, tx, run, *completedAt, newStatus, aggregate.successCount, aggregate.failedCount, resultPayload, stampError); err != nil {
 		return err
 	}
-	if err := service.checkpointSuccessfulComputeInputs(ctx, tx, run, units, *completedAt); err != nil {
+	if err := service.checkpointSuccessfulComputeInputsPaged(ctx, tx, run, *completedAt); err != nil {
 		// A FATAL checkpoint failure (failed ROLLBACK TO SAVEPOINT or failed
 		// RELEASE SAVEPOINT, not an ordinary recovered insert error) --
 		// abort the whole Finalize rather than risk committing against a
@@ -602,47 +599,101 @@ type finalizeSyncRunUnit struct {
 	processorFlags map[string]any
 }
 
-func loadFinalizeUnits(ctx context.Context, tx pgx.Tx, runID string) ([]finalizeSyncRunUnit, error) {
+const finalizeUnitColumns = `id::text, org_id, status, provider, dataset_key, source_id::text, since_at, before_at,
+       cost_class, mode, error, result, processor_flags`
+
+func scanFinalizeUnit(rows pgx.Rows) (finalizeSyncRunUnit, error) {
+	var (
+		unit         finalizeSyncRunUnit
+		errorText    *string
+		resultRaw    []byte
+		processorRaw []byte
+	)
+	if err := rows.Scan(&unit.id, &unit.orgID, &unit.status, &unit.provider, &unit.datasetKey, &unit.sourceID,
+		&unit.sinceAt, &unit.beforeAt, &unit.costClass, &unit.mode,
+		&errorText, &resultRaw, &processorRaw); err != nil {
+		return unit, err
+	}
+	unit.errorText = errorText
+	if len(resultRaw) > 0 {
+		var decoded map[string]any
+		if json.Unmarshal(resultRaw, &decoded) == nil {
+			if category, ok := stringField(decoded, "error_category"); ok {
+				unit.errorCategory = category
+			}
+			if reason, ok := stringField(decoded, "reason"); ok {
+				unit.reason = reason
+			}
+		}
+	}
+	if len(processorRaw) > 0 {
+		var decoded map[string]any
+		if json.Unmarshal(processorRaw, &decoded) == nil {
+			unit.processorFlags = decoded
+		}
+	}
+	return unit, nil
+}
+
+// finalizeUnitSummary is everything Finalize reads of a run's units before it writes: how many there are, whether any
+// is still not terminal, and the aggregate. The rows are folded one at a time; none is kept.
+type finalizeUnitSummary struct {
+	total     int
+	pending   bool
+	aggregate finalizeAggregate
+}
+
+func summarizeFinalizeUnits(ctx context.Context, tx pgx.Tx, runID string) (finalizeUnitSummary, error) {
 	rows, err := tx.Query(ctx, `
-SELECT id::text, org_id, status, provider, dataset_key, source_id::text, since_at, before_at,
-       cost_class, mode, error, result, processor_flags
+SELECT `+finalizeUnitColumns+`
 FROM public.sync_run_units
 WHERE sync_run_id = $1::uuid
 ORDER BY id`, runID)
+	if err != nil {
+		return finalizeUnitSummary{}, ErrFinalizeSyncRunUnavailable
+	}
+	defer rows.Close()
+	var summary finalizeUnitSummary
+	fold := finalizeFold{}
+	for rows.Next() {
+		unit, err := scanFinalizeUnit(rows)
+		if err != nil {
+			return finalizeUnitSummary{}, ErrFinalizeSyncRunUnavailable
+		}
+		if unit.status != syncRunUnitStatusSuccess && unit.status != syncRunUnitStatusFailed {
+			summary.pending = true
+			return summary, nil
+		}
+		summary.total++
+		fold.add(unit)
+	}
+	if rows.Err() != nil {
+		return finalizeUnitSummary{}, ErrFinalizeSyncRunUnavailable
+	}
+	summary.aggregate = fold.aggregate
+	return summary, nil
+}
+
+// loadFinalizeUnitPage reads the next page of this run's successful units after afterID, in id order.
+func loadFinalizeUnitPage(ctx context.Context, tx pgx.Tx, runID, afterID string, limit int) ([]finalizeSyncRunUnit, error) {
+	if afterID == "" {
+		afterID = "00000000-0000-0000-0000-000000000000"
+	}
+	rows, err := tx.Query(ctx, `
+SELECT `+finalizeUnitColumns+`
+FROM public.sync_run_units
+WHERE sync_run_id = $1::uuid AND status = $2 AND id > $3::uuid
+ORDER BY id
+LIMIT $4`, runID, syncRunUnitStatusSuccess, afterID, limit)
 	if err != nil {
 		return nil, ErrFinalizeSyncRunUnavailable
 	}
 	defer rows.Close()
 	var units []finalizeSyncRunUnit
 	for rows.Next() {
-		var (
-			unit         finalizeSyncRunUnit
-			errorText    *string
-			resultRaw    []byte
-			processorRaw []byte
-		)
-		if err := rows.Scan(&unit.id, &unit.orgID, &unit.status, &unit.provider, &unit.datasetKey, &unit.sourceID,
-			&unit.sinceAt, &unit.beforeAt, &unit.costClass, &unit.mode,
-			&errorText, &resultRaw, &processorRaw); err != nil {
+		unit, err := scanFinalizeUnit(rows)
+		if err != nil {
 			return nil, ErrFinalizeSyncRunUnavailable
-		}
-		unit.errorText = errorText
-		if len(resultRaw) > 0 {
-			var decoded map[string]any
-			if json.Unmarshal(resultRaw, &decoded) == nil {
-				if category, ok := stringField(decoded, "error_category"); ok {
-					unit.errorCategory = category
-				}
-				if reason, ok := stringField(decoded, "reason"); ok {
-					unit.reason = reason
-				}
-			}
-		}
-		if len(processorRaw) > 0 {
-			var decoded map[string]any
-			if json.Unmarshal(processorRaw, &decoded) == nil {
-				unit.processorFlags = decoded
-			}
 		}
 		units = append(units, unit)
 	}
@@ -650,6 +701,19 @@ ORDER BY id`, runID)
 		return nil, ErrFinalizeSyncRunUnavailable
 	}
 	return units, nil
+}
+
+func (service *NativeFinalizeSyncRunService) checkpointSuccessfulComputeInputsPaged(
+	ctx context.Context, tx pgx.Tx, run *finalizeSyncRun, checkpointedAt time.Time,
+) error {
+	return forEachUnitPage(unitPageSize,
+		func(afterID string, limit int) ([]finalizeSyncRunUnit, error) {
+			return loadFinalizeUnitPage(ctx, tx, run.id, afterID, limit)
+		},
+		func(unit finalizeSyncRunUnit) string { return unit.id },
+		func(page []finalizeSyncRunUnit) error {
+			return service.checkpointSuccessfulComputeInputs(ctx, tx, run, page, checkpointedAt)
+		})
 }
 
 type finalizeAggregate struct {
@@ -666,26 +730,36 @@ type finalizeAggregate struct {
 // Python's `next(... for unit in units if ...)` walks units in the same
 // ORDER BY id sequence loadFinalizeUnits already produced.
 func aggregateFinalizeUnits(units []finalizeSyncRunUnit) finalizeAggregate {
-	var aggregate finalizeAggregate
+	var fold finalizeFold
 	for _, unit := range units {
-		switch unit.status {
-		case syncRunUnitStatusSuccess:
-			aggregate.successCount++
-		case syncRunUnitStatusFailed:
-			aggregate.failedCount++
-			if aggregate.errorCategory == "" && unit.errorCategory != "" {
-				aggregate.errorCategory = unit.errorCategory
-			}
-			if aggregate.reason == "" && unit.reason != "" {
-				aggregate.reason = unit.reason
-			}
-			if aggregate.firstFailedUnitError == nil && unit.errorText != nil && *unit.errorText != "" {
-				text := *unit.errorText
-				aggregate.firstFailedUnitError = &text
-			}
+		fold.add(unit)
+	}
+	return fold.aggregate
+}
+
+// finalizeFold is aggregateFinalizeUnits one unit at a time, in the same id order.
+type finalizeFold struct {
+	aggregate finalizeAggregate
+}
+
+func (fold *finalizeFold) add(unit finalizeSyncRunUnit) {
+	aggregate := &fold.aggregate
+	switch unit.status {
+	case syncRunUnitStatusSuccess:
+		aggregate.successCount++
+	case syncRunUnitStatusFailed:
+		aggregate.failedCount++
+		if aggregate.errorCategory == "" && unit.errorCategory != "" {
+			aggregate.errorCategory = unit.errorCategory
+		}
+		if aggregate.reason == "" && unit.reason != "" {
+			aggregate.reason = unit.reason
+		}
+		if aggregate.firstFailedUnitError == nil && unit.errorText != nil && *unit.errorText != "" {
+			text := *unit.errorText
+			aggregate.firstFailedUnitError = &text
 		}
 	}
-	return aggregate
 }
 
 // aggregateRunStatus ports sync_units.py:_aggregate_run_status verbatim,

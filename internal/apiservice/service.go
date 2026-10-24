@@ -398,6 +398,11 @@ func configureWith(
 		deps.Verifier, deps.Signer = protected.verifier, protected.signer
 		scope = []func(http.Handler) http.Handler{protected.scope.OrgScope, protected.scope.Impersonation}
 	}
+	deps.AccessVerify, err = buildAccessVerify(envsecrets.ProcessLookup, deps.Auth, logger)
+	if err != nil {
+		closeComponents(depComponents)
+		return nil, dependencyFailure(ctx, logger, "api_access_verify", "api_access_verify_config_invalid", err)
+	}
 	logWideTrust(logger)
 	if err := RegisterOperatorMetrics(registry, &deps); err != nil {
 		closeComponents(depComponents)
@@ -492,6 +497,8 @@ func configureWith(
 	}); err != nil {
 		return nil, dependencyFailure(ctx, logger, "api_server", "api_listener_check_register_failed", err)
 	}
+	// Queued sign-in mail jobs finish after the listener stops and before the pool closes.
+	depComponents = append(depComponents, session.MailDrain{Logger: logger})
 	return append(depComponents, server), nil
 }
 

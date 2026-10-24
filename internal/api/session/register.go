@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/audit"
+	"github.com/full-chaos/dev-health-ops/internal/api/authmail"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
@@ -223,15 +224,15 @@ func writeRegisterAccepted(w http.ResponseWriter) {
 func (h handlers) queueMail(ctx context.Context, purpose string, send func(context.Context) error) {
 	detached := context.WithoutCancel(ctx)
 	run := func() error {
-		err := send(detached)
+		jobCtx, cancel := linkMailQueue.bind(detached, authmail.SendTimeout)
+		defer cancel()
+		err := send(jobCtx)
 		if err != nil {
 			h.Logger.ErrorContext(detached, "api: failed to send sign-up email", "purpose", purpose, "error", err)
 		}
 		return err
 	}
-	if !linkMailQueue.submit(purpose, run) {
-		h.Logger.WarnContext(ctx, "api session mail dropped: queue full", "purpose", purpose)
-	}
+	linkMailQueue.submit(purpose, run)
 }
 
 // sendRegisterVerification is sendVerification with the failure returned.

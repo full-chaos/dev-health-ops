@@ -50,6 +50,7 @@ internal/auth/contracts	endpoint_profile_access_token_validation_test.go
 internal/auth/contracts	endpoint_profile_source_commit_history_test.go
 internal/auth/contracts	endpoint_profile_source_commit_test.go
 internal/auth/contracts	endpoint_profiles_auth_service_test.go
+internal/auth/contracts	endpoint_profiles_go_api_admin_fields_test.go
 internal/auth/contracts	endpoint_profiles_go_api_test.go
 internal/auth/contracts	endpoint_profiles_query_api_test.go
 internal/auth/contracts	endpoint_profiles_registry_reconcile_test.go
@@ -86,6 +87,7 @@ internal/auth/identity/local	corpus_helpers_integration_test.go
 internal/auth/keyrotation	rotation_integration_test.go
 internal/auth/keystore	keystore_test.go
 internal/auth/keystore	open_unix.go
+internal/auth/ratelimitvalkey	acl_test.go
 internal/auth/session	credential_test.go
 internal/auth/writerinventory	scan_test.go
 internal/auth/writerinventory	usersowned_census_test.go
@@ -243,6 +245,7 @@ internal/cigates/workflows	ci_script_helpers_test.go
 internal/cigates/workflows	docker_images_fanin_behaviour_test.go
 internal/cigates/workflows	go_workers_compose_proof_test.go
 internal/cigates/workflows	live_e2e_no_python_test.go
+internal/cigates/workflows	providerstub_not_release_test.go
 internal/cigates/workflows	race_json_artifact_test.go
 internal/cigates/workflows	race_pool_routing_test.go
 internal/cigates/workflows	ttl_registry_test.go
@@ -386,6 +389,7 @@ internal/platform/credshape	credshape_test.go
 internal/platform/fernet	fernet_test.go
 internal/platform/logging	binaries_enumeration_test.go
 internal/platform/logging	provider_origin_sources_test.go
+internal/platform/otlpmetrics	labelfragment_census_test.go
 internal/platform/secrets	envreads_test.go
 internal/platform/secrets	source.go
 internal/providerfoundation	classify_call_sites_test.go
@@ -548,6 +552,7 @@ internal/testsupport/goldenscan	tree.go
 internal/testsupport/goldenscan	vectors_test.go
 internal/testsupport/moduleroot	moduleroot_test.go
 internal/testsupport/oraclecompare	oraclecompare.go
+internal/testsupport/providerstub	corpus_social_test.go
 internal/testsupport/providerstub	stub.go
 internal/testsupport/providerstub/cmd/providerstub	main.go
 internal/testsupport/providerstub/cmd/providerstub	main_test.go

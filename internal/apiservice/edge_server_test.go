@@ -65,15 +65,18 @@ func TestConfigureServesTheBillingEdgeOnItsOwnListenerOnlyWhenSet(t *testing.T) 
 	if err != nil {
 		t.Fatalf("configure: %v", err)
 	}
-	if len(components) != 2 {
-		t.Fatalf("%d components, want the api and the billing edge", len(components))
+	if len(components) != 3 {
+		t.Fatalf("%d components, want the api, the mail queue drain and the billing edge", len(components))
 	}
 	if registry.RequiredCount() != 2 {
 		t.Fatalf("%d required checks, want the api listener and the edge listener", registry.RequiredCount())
 	}
 	servers := map[string]*httpapi.Server{}
 	for _, component := range components {
-		server := component.(*httpapi.Server)
+		server, ok := component.(*httpapi.Server)
+		if !ok {
+			continue
+		}
 		servers[server.Name()] = server
 	}
 	edge, main := servers["billing-edge-http"], servers["api-http"]

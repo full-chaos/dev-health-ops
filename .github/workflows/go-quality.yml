@@ -489,6 +489,12 @@ jobs:
         if: steps.relevance.outputs.relevant == 'true' && matrix.name == 'static'
         run: bash scripts/create-session-issue-secret_test.sh
 
+      - name: Test the auth key-set Secret script
+        if: steps.relevance.outputs.relevant == 'true' && matrix.name == 'static'
+        # A fake kubectl and no cluster: proves the script creates only, leaves no value
+        # file or output, and refuses names that are not one keySet entry of the values file.
+        run: bash scripts/create-auth-keyset-secrets_test.sh
+
       - name: Validate River compatibility harness
         if: steps.relevance.outputs.relevant == 'true' && matrix.name == 'static'
         run: bash ci/check_river_compat_static.sh

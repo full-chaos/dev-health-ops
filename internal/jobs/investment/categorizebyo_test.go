@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/categorize"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/categorize/decision"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph"
 	"github.com/full-chaos/dev-health-ops/internal/llmorgsettings"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
@@ -23,10 +24,12 @@ type stubOrgModel struct {
 	model string
 	// returned is the model the stub reports back; empty is model.
 	returned string
-	reply    func(request categorize.CompletionRequest) string
-	calls    []categorize.CompletionRequest
-	closed   int
-	failure  error
+	// returnedEmpty makes the stub report no model at all.
+	returnedEmpty bool
+	reply         func(request categorize.CompletionRequest) string
+	calls         []categorize.CompletionRequest
+	closed        int
+	failure       error
 }
 
 func (stub *stubOrgModel) Complete(_ context.Context, request categorize.CompletionRequest) (categorize.CompletionResult, error) {
@@ -38,6 +41,9 @@ func (stub *stubOrgModel) Complete(_ context.Context, request categorize.Complet
 	return categorize.CompletionResult{Text: stub.reply(request), InputTokens: &in, OutputTokens: &out, Model: stub.returnedModel()}, nil
 }
 func (stub *stubOrgModel) returnedModel() string {
+	if stub.returnedEmpty {
+		return ""
+	}
 	if stub.returned != "" {
 		return stub.returned
 	}
@@ -262,7 +268,7 @@ func TestAnOptedInOrgWithAUsableOwnModelGetsItsOwnBackend(t *testing.T) {
 // The closed set of refusal codes is pinned: a new code is a new decision.
 func TestTheCategorizeRefusalCodeSetIsClosed(t *testing.T) {
 	want := []string{
-		"ai_features_turned_off", "categorize_byo_unavailable", "invalid_base_url", "missing_credentials", "model_required",
+		"ai_features_turned_off", "categorize_byo_model_unreported", "categorize_byo_unavailable", "invalid_base_url", "missing_credentials", "model_required",
 		"not_configured", "own_model_gate_closed", "own_model_turned_off", "service_model_not_entitled",
 		"unknown_provider", "unreadable_row",
 	}
@@ -439,5 +445,62 @@ func TestAnAnswerFromAnotherModelIsNeverRecordedAsTheOrgModel(t *testing.T) {
 	m.SetServed(servedDated)
 	if _, err := m.categorizeEntry(context.Background(), shadowTestConfig(), shadowEntry(0, "u1", shadowTestBundle(t, "u1", 6))); err != nil {
 		t.Fatalf("a dated suffix of the configured model must stay accepted: %v", err)
+	}
+}
+
+// An answer that names no model cannot be tied to the configured model. It
+// fails closed: the first unit is refused with the closed code, the failure is
+// deterministic, and the run stops after that one billed request. A jev
+// backend never takes this path.
+func TestAnEmptyReturnedModelRefusesAndStopsTheRun(t *testing.T) {
+	stub := &stubOrgModel{model: "org-model-1", returnedEmpty: true, reply: answerAllQuestions}
+	served, err := newBYOSystemOne(stub, "openai", testLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := &Materializer{logger: testLogger()}
+	m.SetServed(served)
+	outcomes := map[int]categorize.CategorizationOutcome{}
+	stats := Stats{LLMFailureCounts: map[string]int{}}
+	cfg := shadowTestConfig()
+	cfg.LLMConcurrency = 1
+	err = m.categorizePending(context.Background(), cfg, shadowTestEntries(t, "u1", "u2", "u3"), outcomes, &stats)
+	if deterministicClass(err) != workgraph.ClassLLMDeterministic {
+		t.Fatalf("categorizePending = %v, want the llm_deterministic class", err)
+	}
+	if !strings.Contains(err.Error(), llmorgsettings.CodeCategorizeBYOModelUnreported) {
+		t.Fatalf("the refusal does not carry the closed code: %v", err)
+	}
+	for _, leak := range []string{"org-model-1", "example.invalid", "sk-"} {
+		if strings.Contains(err.Error(), leak) {
+			t.Fatalf("the refusal carries %q: %v", leak, err)
+		}
+	}
+	if len(stub.calls) != 1 || len(outcomes) != 0 {
+		t.Fatalf("the org model was asked %d times and %d units have an outcome; the run must stop after one request", len(stub.calls), len(outcomes))
+	}
+}
+
+func TestOnlyAnOrgModelBackendRefusesAnEmptyModelWithTheCode(t *testing.T) {
+	jev, err := newServedDecision(&recordingSender{}, testLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if jev.byo {
+		t.Fatal("a jev backend is marked as an org model backend")
+	}
+	own, err := newBYOSystemOne(&stubOrgModel{model: "m", reply: answerAllQuestions}, "openai", testLogger())
+	if err != nil || !own.byo {
+		t.Fatalf("an org model backend is not marked: %v", err)
+	}
+	empty := decision.Classification{Errors: []string{"request_failed:model_mismatch:"}}
+	if jev.unreportedModel(empty) || !own.unreportedModel(empty) {
+		t.Fatal("only the org model backend may take the empty-model refusal")
+	}
+	if own.unreportedModel(decision.Classification{Errors: []string{"request_failed:llm_error"}}) {
+		t.Fatal("a failed request with no answer is not an unreported model")
+	}
+	if own.unreportedModel(decision.Classification{ModelReturned: "other", Errors: []string{"request_failed:model_mismatch:other"}}) {
+		t.Fatal("another model's answer is a mismatch, not an unreported model")
 	}
 }

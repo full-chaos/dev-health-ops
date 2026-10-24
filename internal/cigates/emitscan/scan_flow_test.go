@@ -33,6 +33,15 @@ func TestLabelOriginFlowsThroughPackageLocalCalls(t *testing.T) {
 			"func f(r rec) {\n\tr.add([]attribute.KeyValue{attribute.String(\"user_id\", \"S3CRET\")})\n}\n",
 		"attribute set": "func record(c metric.Int64Counter, attrs []attribute.KeyValue) {\n\tc.Add(context.Background(), 1, metric.WithAttributeSet(attribute.NewSet(attrs...)))\n}\n" +
 			"func f(c metric.Int64Counter) {\n\trecord(c, []attribute.KeyValue{attribute.String(\"user_id\", \"S3CRET\")})\n}\n",
+		"generic wrapper, one type argument": "func record[T any](c metric.Int64Counter, attrs []attribute.KeyValue, t T) {\n\tc.Add(context.Background(), 1, metric.WithAttributes(attrs...))\n}\n" +
+			"func f(c metric.Int64Counter) {\n\trecord[int](c, []attribute.KeyValue{attribute.String(\"user_id\", \"S3CRET\")}, 0)\n}\n",
+		"generic wrapper, two type arguments": "func record[T, U any](c metric.Int64Counter, attrs []attribute.KeyValue, t T, u U) {\n\tc.Add(context.Background(), 1, metric.WithAttributes(attrs...))\n}\n" +
+			"func f(c metric.Int64Counter) {\n\trecord[int, string](c, []attribute.KeyValue{attribute.String(\"user_id\", \"S3CRET\")}, 0, \"\")\n}\n",
+		"generic wrapper called without type arguments": "func record[T any](c metric.Int64Counter, attrs []attribute.KeyValue, t T) {\n\tc.Add(context.Background(), 1, metric.WithAttributes(attrs...))\n}\n" +
+			"func f(c metric.Int64Counter) {\n\trecord(c, []attribute.KeyValue{attribute.String(\"user_id\", \"S3CRET\")}, 0)\n}\n",
+		"method of a generic type": "type rec[T any] struct{ c metric.Int64Counter }\nfunc (r rec[T]) add(attrs []attribute.KeyValue) {\n\tr.c.Add(context.Background(), 1, metric.WithAttributes(attrs...))\n}\n" +
+			"func f(r rec[int]) {\n\tr.add([]attribute.KeyValue{attribute.String(\"user_id\", \"S3CRET\")})\n}\n",
+		"parenthesised callee": flowSink + "func f(c metric.Int64Counter) {\n\t(record)(c, []attribute.KeyValue{attribute.String(\"user_id\", \"S3CRET\")})\n}\n",
 		"name copied through a local": "func record(c metric.Int64Counter, attrs []attribute.KeyValue) {\n\tcopyOf := attrs\n\tc.Add(context.Background(), 1, metric.WithAttributes(copyOf...))\n}\n" +
 			"func f(c metric.Int64Counter) {\n\trecord(c, []attribute.KeyValue{attribute.String(\"user_id\", \"S3CRET\")})\n}\n",
 	}

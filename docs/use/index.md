@@ -141,4 +141,4 @@ Metrics and visualizations describe patterns in a selected context. They do not 
 
 ## Recover from a problem
 
-Start from the symptom in [Troubleshoot product use](troubleshooting/index.md). User guidance explains checks available inside the product; workspace configuration belongs under [Administer Dev Health](../admin/index.md), and ingestion or runtime failures belong under [Install and operate](../operate/index.md).
+To get into the product or back into your account, see [Sign in and recover access](sign-in/index.md). Start from the symptom in [Troubleshoot product use](troubleshooting/index.md). User guidance explains checks available inside the product; workspace configuration belongs under [Administer Dev Health](../admin/index.md), and ingestion or runtime failures belong under [Install and operate](../operate/index.md).

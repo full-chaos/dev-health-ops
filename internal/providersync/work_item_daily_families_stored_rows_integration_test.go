@@ -214,9 +214,9 @@ var dailyFamilyMatrixTables = []struct {
 	{"issue_type_metrics_daily", map[string]string{"computed_at": "each writer stamps the time of its own run"}},
 	// investment_classifications_daily and investment_metrics_daily are no longer written by the daily family
 	// (CHAOS-9264): the daily family writes work_item_completion_daily, which the sync deriver does not write yet.
-	{"work_item_state_durations_daily", map[string]string{"computed_at": "each writer stamps the time of its own run"}},
-	{"work_item_metrics_daily", map[string]string{"computed_at": "each writer stamps the time of its own run"}},
-	{"work_item_user_metrics_daily", map[string]string{"computed_at": "each writer stamps the time of its own run"}},
+	{"work_item_state_durations_daily", map[string]string{"computed_at": "each writer stamps the time of its own run", "row_view": "the sync deriver stores the legacy view (empty), the daily family the org view"}},
+	{"work_item_metrics_daily", map[string]string{"computed_at": "each writer stamps the time of its own run", "row_view": "the sync deriver stores the legacy view (empty), the daily family the org view"}},
+	{"work_item_user_metrics_daily", map[string]string{"computed_at": "each writer stamps the time of its own run", "row_view": "the sync deriver stores the legacy view (empty), the daily family the org view"}},
 	{"work_item_cycle_times", map[string]string{"computed_at": "each writer stamps the time of its own run"}},
 	{"estimate_coverage_metrics_daily", map[string]string{"computed_at": "each writer stamps the time of its own run"}},
 }
@@ -232,9 +232,17 @@ func readDailyFamilyMatrixRows(
 	excluded map[string]string, stampCondition string, stampArgument time.Time,
 ) []string {
 	t.Helper()
+	// The daily family also stores the scope view and a row of zeros over the
+	// legacy key; the sync deriver stores the legacy view. The org view is the
+	// daily family's counterpart of the sync deriver's row.
+	_, hasRowView := excluded["row_view"]
+	viewCondition := ""
+	if hasRowView && stampCondition == ">" {
+		viewCondition = " AND row_view = 'org'"
+	}
 	rows, err := conn.Query(ctx,
 		"SELECT formatRowNoNewline('JSONEachRow', *) FROM "+table+
-			" WHERE org_id = ? AND computed_at "+stampCondition+" ?", orgID, stampArgument)
+			" WHERE org_id = ? AND computed_at "+stampCondition+" ?"+viewCondition, orgID, stampArgument)
 	if err != nil {
 		t.Fatalf("read %s: %v", table, err)
 	}
@@ -506,7 +514,7 @@ FROM work_item_transitions WHERE org_id = ?`, testCase.orgID).Scan(&transitions,
 			var cycleP50 float64
 			if err := conn.QueryRow(ctx, `
 SELECT sum(items_started), sum(items_completed), max(cycle_time_p50_hours)
-FROM work_item_metrics_daily FINAL WHERE org_id = ? AND day = ?`, testCase.orgID, day,
+FROM work_item_metrics_daily FINAL WHERE org_id = ? AND day = ? AND row_view IN ('', 'org')`, testCase.orgID, day,
 			).Scan(&started, &completed, &cycleP50); err != nil {
 				t.Fatal(err)
 			}
@@ -536,7 +544,7 @@ FROM work_item_cycle_times FINAL WHERE org_id = ? AND day = ?`, testCase.orgID, 
 			var stateHours float64
 			if err := conn.QueryRow(ctx, `
 SELECT count(), sum(duration_hours)
-FROM work_item_state_durations_daily FINAL WHERE org_id = ? AND day = ?`, testCase.orgID, day,
+FROM work_item_state_durations_daily FINAL WHERE org_id = ? AND day = ? AND row_view IN ('', 'org')`, testCase.orgID, day,
 			).Scan(&stateRows, &stateHours); err != nil {
 				t.Fatal(err)
 			}

@@ -16,6 +16,7 @@ var sourceHealthStages = map[string]bool{
 	"budget_deferred":                  true,
 	"cancelled":                        true,
 	"checkpoint_conflict":              true,
+	"checkpoint_data_error":            true,
 	"deferral_exhausted":               true,
 	"dispatch_denied":                  true,
 	"duplicate_natural_key":            true,

@@ -207,21 +207,21 @@ func readStaleKeyAcceptance(t *testing.T, ctx context.Context, conn driver.Conn,
 	scan("sankey expense counts", `
 SELECT CAST(sum(new_items_count) AS Float64), CAST(sum(items_completed) AS Float64)
 FROM work_item_metrics_daily FINAL
-WHERE day >= ? AND day < ? AND org_id = ?`, []any{day, next, org}, &reads.expenseNewItems, &reads.expenseCompleted)
+WHERE day >= ? AND day < ? AND org_id = ? AND row_view IN ('', 'org')`, []any{day, next, org}, &reads.expenseNewItems, &reads.expenseCompleted)
 	scan("sankey state status counts", `
 SELECT CAST(sum(items_touched) AS Float64)
 FROM work_item_state_durations_daily FINAL
-WHERE day >= ? AND day < ? AND org_id = ?`, []any{day, next, org}, &reads.stateItemsTouched)
+WHERE day >= ? AND day < ? AND org_id = ? AND row_view IN ('', 'org')`, []any{day, next, org}, &reads.stateItemsTouched)
 	const blocked = `
 SELECT sum(duration_hours) FROM (
     SELECT day, provider, work_scope_id, team_id, status, argMax(duration_hours, computed_at) AS duration_hours
     FROM work_item_state_durations_daily
-    WHERE day >= ? AND day < ? AND status = 'blocked' %s AND org_id = ?
-    GROUP BY day, provider, work_scope_id, team_id, status)`
+    WHERE day >= ? AND day < ? AND status = 'blocked' %s AND org_id = ? AND row_view IN ('', 'org')
+    GROUP BY day, provider, work_scope_id, team_id, status, row_view)`
 	scan("home blocked hours", fmt.Sprintf(blocked, ""), []any{day, next, org}, &reads.blockedHours)
 	scan("capacity throughput", `
 SELECT toUInt64(sum(items_completed)) FROM work_item_metrics_daily FINAL
-WHERE day >= ? AND org_id = ?`, []any{day, org}, &reads.throughputCompleted)
+WHERE day >= ? AND org_id = ? AND row_view IN ('', 'org')`, []any{day, org}, &reads.throughputCompleted)
 	scan("estimate coverage backlog", `
 SELECT toUInt64(sum(backlog_size)) FROM estimate_coverage_metrics_daily FINAL
 WHERE day = ? AND org_id = ?`, []any{day, org}, &reads.estimateBacklog)
@@ -230,7 +230,7 @@ WHERE day = ? AND org_id = ?`, []any{day, org}, &reads.estimateBacklog)
 		var hours float64
 		scan("team throughput of "+team, `
 SELECT toUInt64(sum(items_completed)) FROM work_item_metrics_daily FINAL
-WHERE day >= ? AND org_id = ? AND team_id IN ?`, []any{day, org, []string{team}}, &completed)
+WHERE day >= ? AND org_id = ? AND team_id IN ? AND row_view IN ('', 'org')`, []any{day, org, []string{team}}, &completed)
 		scan("team blocked hours of "+team, fmt.Sprintf(blocked, "AND team_id IN ?"), []any{day, next, []string{team}, org}, &hours)
 		reads.teamCompleted[team], reads.teamBlocked[team] = completed, hours
 	}
@@ -247,9 +247,9 @@ func staleKeyAcceptanceHeld(t *testing.T, ctx context.Context, conn driver.Conn,
 		query  string
 	}{
 		{&metrics, `SELECT toFloat64(sum(items_started + items_completed + wip_count_end_of_day + new_items_count + story_points_completed))
-FROM work_item_metrics_daily FINAL WHERE org_id = ? AND day = ? AND team_id = ?`},
+FROM work_item_metrics_daily FINAL WHERE org_id = ? AND day = ? AND team_id = ? AND row_view IN ('', 'org')`},
 		{&state, `SELECT toFloat64(sum(duration_hours + items_touched + avg_wip))
-FROM work_item_state_durations_daily FINAL WHERE org_id = ? AND day = ? AND team_id = ?`},
+FROM work_item_state_durations_daily FINAL WHERE org_id = ? AND day = ? AND team_id = ? AND row_view IN ('', 'org')`},
 		{&estimate, `SELECT toFloat64(sum(estimated_count + unestimated_count + backlog_size))
 FROM estimate_coverage_metrics_daily FINAL WHERE org_id = ? AND day = ? AND ifNull(team_id, '') = ?`},
 	} {
@@ -258,6 +258,16 @@ FROM estimate_coverage_metrics_daily FINAL WHERE org_id = ? AND day = ? AND ifNu
 		}
 	}
 	return metrics + state + estimate
+}
+
+// writerOrgView limits a read of a work-item table to the org view of its
+// rows: the real writers store every row twice, as the org and the scope view.
+func writerOrgView(table string) string {
+	switch table {
+	case "work_item_metrics_daily", "work_item_state_durations_daily", "work_item_user_metrics_daily":
+		return " AND row_view IN ('', 'org')"
+	}
+	return ""
 }
 
 // staleKeyAcceptanceRowsSince is the number of stored row versions of a team
@@ -270,7 +280,7 @@ func staleKeyAcceptanceRowsSince(t *testing.T, ctx context.Context, conn driver.
 	} {
 		var count uint64
 		if err := conn.QueryRow(ctx,
-			`SELECT count() FROM `+table+` WHERE org_id = ? AND day = ? AND ifNull(team_id, '') = ? AND computed_at >= ?`,
+			`SELECT count() FROM `+table+` WHERE org_id = ? AND day = ? AND ifNull(team_id, '') = ? AND computed_at >= ?`+writerOrgView(table),
 			staleKeyAcceptanceOrg, staleKeyAcceptanceDay, team, since,
 		).Scan(&count); err != nil {
 			t.Fatalf("count the rows of team %s in %s: %v", team, table, err)

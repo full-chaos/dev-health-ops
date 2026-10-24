@@ -40,6 +40,8 @@ import (
 //   - org_licenses, feature_flags, org_feature_overrides: the BYO-LLM feature
 //     gate.
 //   - settings: the org's BYO-LLM settings rows.
+//   - alembic_version: the schema gate (internal/pgmigrate/schemagate) reads the recorded
+//     revisions once at start, SELECT only.
 //   - users, memberships, impersonation_sessions (CHAOS-6263 PR (a), D2910):
 //     /query's edge-access-token carrier reuses internal/api/policy.
 //     Authenticator (and its PGStore) to resolve is_active/is_superuser/
@@ -107,6 +109,8 @@ func queryAPIPosture() RolePosture {
 			{"feature_flags", false, false, false},
 			{"org_feature_overrides", false, false, false},
 			{"settings", false, false, false},
+			// The schema gate reads the recorded migration revisions at start (revision ids only). Last: the grant-matrix oracle takes the first rows and grants on their id column.
+			{"alembic_version", false, false, false},
 		},
 		ColumnScoped: []ColumnPrivilege{
 			{"users", "id", "SELECT"},

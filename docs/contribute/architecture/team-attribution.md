@@ -2751,8 +2751,7 @@ One path: `run_team_autoimport` → `team_autoimport_<provider>.populate()` → 
   too, and prunes them on the same
   `(source_work_item_id, relationship_type_raw)` provenance key Python uses.
   That key shape is pinned by test on BOTH sides
-  (`work_item_cross_provider_donor_test.go`,
-  `tests/metrics/test_cross_provider_donor_edges.py` (removed with the Python api)): both runtimes write
+  (the sync-time loader test is removed with the loader; `tests/metrics/test_cross_provider_donor_edges.py` is removed with the Python api): both runtimes write
   `work_item_team_attributions` for the same items, so a divergence in it
   would undo CHAOS-4112 from whichever side drifted.
   **Failure policy differs from Python deliberately:** the Go read retries once
@@ -2925,14 +2924,13 @@ written (2026-08-19); that has since changed for GitHub/GitLab/Jira/Linear work 
 `write_work_item_team_attributions` remain the ORACLE — Python is still authoritative for the
 precedence ladder's *correctness* (the Go port below is verified against it, not the other way
 around) — but a full independent Go REIMPLEMENTATION now exists:
-`internal/providersync/github_work_items_derivation_context.go`'s `resolve()`, shared across
-GitHub/GitLab/Jira/Linear via `loadWorkItemDerivationContextForProvider`, with its own
-`work_item_team_attributions` writer (`github_work_item_derived_effects_clickhouse.go`) and a
+`internal/teamattribution`'s `NewGitHubWorkItemDerivationContext`, shared across
+GitHub/GitLab/Jira/Linear (the sync-time loader and writer in providersync were deleted; the daily job is the one writer), with a
 row-vs-row compute-parity oracle (`internal/testsupport/oraclecompare`,
 `github_work_items_derivation_context_oracle_test.go`, run via `ci/check_go.sh live-python-oracles`
 or `fast`/`ci`/`all` — see `ops/.claude/skills/go-checks/SKILL.md`). Any change to the precedence
 ladder or its source tables — CHAOS-4321 included — must land in BOTH `compute_work_items.py` and
-`github_work_items_derivation_context.go` in the same PR, or the oracle gate fails: confirmed
+`internal/teamattribution` in the same PR, or the oracle gate fails: confirmed
 directly during CHAOS-4321, where an interim Go-only change (a telemetry evidence string, then a
 `team_memberships`-vs-`identities`/`teams` query mismatch) failed dozens of oracle cases under
 `ci/check_go.sh fast` while plain `go test` stayed green — see AGENTS.md "Anything

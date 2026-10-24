@@ -358,15 +358,6 @@ func (doer *glAttributionDoer) Do(request *http.Request) (*http.Response, error)
 	}, nil
 }
 
-type capturingGitLabDeriver struct{ rows gitlabWorkItemRows }
-
-func (deriver *capturingGitLabDeriver) Derive(
-	_ context.Context, claim Claim, rows gitlabWorkItemRows, _ time.Time,
-) (GitLabWorkItemDerivedRows, error) {
-	deriver.rows = rows
-	return GitLabWorkItemDerivedRows{Watermark: claim.BeforeAt}, nil
-}
-
 func glAttributionClient(t *testing.T, doer providerfoundation.HTTPDoer) *providerfoundation.HTTPClient {
 	t.Helper()
 	return gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.example")
@@ -388,17 +379,17 @@ func glAttributionPRsBatch(t *testing.T) (CompleteRouteBatch, *glAttributionDoer
 func glAttributionWorkItemsRows(t *testing.T) []githubAIAttributionRow {
 	t.Helper()
 	claim := prAttributionClaim("gitlab", "work-items")
-	deriver := &capturingGitLabDeriver{}
-	if _, err := (GitLabWorkItemsRouteHandler{
+	batch, err := (GitLabWorkItemsRouteHandler{
 		StatusMapping: loadRealStatusMapping(t), PerPage: 100, MaxPages: 10, NestedMaxPages: 10,
 	}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "gitlab", ID: claim.CredentialID},
 		glAttributionClient(t, &glAttributionDoer{}), prAttributionNormalizedAt(),
-	); err != nil {
+	)
+	if err != nil {
 		t.Fatal(err)
 	}
-	return deriver.rows.AIAttributions
+	return attributionEffectRows(t, batch)
 }
 
 // TestGitLabPRsRouteAttributionCostsNoExtraRequest pins that the merge request

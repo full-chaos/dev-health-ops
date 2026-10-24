@@ -130,18 +130,15 @@ func (h Handlers) Unlink(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// AccountExistsMessage is the 409 for an e-mail another account holds; it names
+// no sign-in method.
+const AccountExistsMessage = "An account with this email already exists. Please sign in with your existing sign-in method."
+
 func writeError(w http.ResponseWriter, provider Provider, err error) {
 	var conflict *ConflictError
 	switch {
 	case errors.As(err, &conflict):
-		method := conflict.ExistingMethod
-		if method == "" {
-			method = "your existing method"
-		}
-		writeJSON(w, http.StatusConflict, map[string]any{"detail": map[string]string{
-			"message":           "An account with this email already exists. Please sign in with " + method + ".",
-			"existing_provider": conflict.ExistingMethod,
-		}})
+		writeDetail(w, http.StatusConflict, AccountExistsMessage)
 	case errors.Is(err, ErrProviderUnavailable):
 		writeInternal(w)
 	case errors.Is(err, ErrProviderNotConfigured):

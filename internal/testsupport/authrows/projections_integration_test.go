@@ -12,25 +12,20 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 )
 
-// a schema holding only the columns the projections name, filled with two plain sessions
+// the public tables are the migrated schema (pgschema); the auth tables hold only the columns the projections name
 const fixtureSchema = `
-CREATE TABLE organizations (id uuid PRIMARY KEY, slug text, name text);
-CREATE TABLE users (id uuid PRIMARY KEY, email text, auth_provider text, last_login_at timestamptz);
-CREATE TABLE memberships (id uuid PRIMARY KEY, user_id uuid, org_id uuid);
-CREATE TABLE refresh_tokens (id uuid PRIMARY KEY, user_id uuid, org_id uuid, revoked_at timestamptz);
-CREATE TABLE audit_logs (id uuid PRIMARY KEY, org_id uuid, user_id uuid, action text, resource_type text, resource_id text,
-	description text, changes jsonb, request_metadata jsonb, status text, error_message text, created_at timestamptz);
 CREATE SCHEMA auth;
 CREATE TABLE auth.users (principal_id uuid PRIMARY KEY, last_login_at timestamptz);
 CREATE TABLE auth.sessions (id uuid PRIMARY KEY, principal_id uuid, organization_id uuid, revoked_at timestamptz);
 CREATE TABLE auth.refresh_credentials (id uuid PRIMARY KEY, session_id uuid, consumed_at timestamptz, revoked_at timestamptz);
 CREATE TABLE auth.security_audit_events (id uuid PRIMARY KEY, event_type text, organization_id uuid, subject_principal_id uuid,
 	actor_principal_id uuid, client_ip inet, user_agent text, attributes jsonb, occurred_at timestamptz);
-INSERT INTO organizations VALUES ('00000000-0000-4000-8000-0000000000a1', 'acme', 'Acme');
-INSERT INTO users VALUES ('00000000-0000-4000-8000-0000000000b1', 'a@example.com', 'local', NULL),
-	('00000000-0000-4000-8000-0000000000b2', 'b@example.com', 'local', NULL);
+INSERT INTO organizations (id, slug, name) VALUES ('00000000-0000-4000-8000-0000000000a1', 'acme', 'Acme');
+INSERT INTO users (id, email, auth_provider) VALUES ('00000000-0000-4000-8000-0000000000b1', 'a@example.com', 'local'),
+	('00000000-0000-4000-8000-0000000000b2', 'b@example.com', 'local');
 `
 
 func fixture(t *testing.T, statements ...string) *pgx.Conn {
@@ -42,6 +37,7 @@ func fixture(t *testing.T, statements ...string) *pgx.Conn {
 		t.Fatalf("postgres: %v", err)
 	}
 	t.Cleanup(func() { _ = instance.Close(context.Background()) })
+	pgschema.ApplyURI(ctx, t, instance.URI)
 	conn, err := pgx.Connect(ctx, instance.URI)
 	if err != nil {
 		t.Fatal(err)
@@ -102,7 +98,7 @@ func sprint(v any) string {
 
 func TestAuthRowsRefreshProjectionUnionsPublicAndAuthIntegration(t *testing.T) {
 	conn := fixture(t, `
-INSERT INTO refresh_tokens VALUES ('00000000-0000-4000-8000-0000000000c1', '00000000-0000-4000-8000-0000000000b1', '00000000-0000-4000-8000-0000000000a1', NULL);
+INSERT INTO refresh_tokens (id, user_id, org_id, token_hash, family_id, expires_at) VALUES ('00000000-0000-4000-8000-0000000000c1', '00000000-0000-4000-8000-0000000000b1', '00000000-0000-4000-8000-0000000000a1', 'h1', '00000000-0000-4000-8000-0000000000c2', now() + interval '1 day');
 INSERT INTO auth.sessions VALUES ('00000000-0000-4000-8000-0000000000d1', '00000000-0000-4000-8000-0000000000b1', '00000000-0000-4000-8000-0000000000a1', NULL),
 	('00000000-0000-4000-8000-0000000000d2', '00000000-0000-4000-8000-0000000000b2', NULL, now());
 INSERT INTO auth.refresh_credentials VALUES ('00000000-0000-4000-8000-0000000000e1', '00000000-0000-4000-8000-0000000000d1', NULL, NULL),

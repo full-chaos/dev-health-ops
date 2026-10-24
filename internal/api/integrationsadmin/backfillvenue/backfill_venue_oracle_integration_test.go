@@ -181,6 +181,11 @@ ORDER BY u.integration_id::text, u.source_id::text, u.dataset_key, u.since_at`, 
 	for _, table := range compare {
 		goRows := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), table.query)
 		pythonRows := golden.InspectRows(t, table.name)
+		if table.name == "sync_run_units" {
+			// Declared divergence: the Go backfill planner ends each window where the next one starts;
+			// Python ends it 1 microsecond earlier. Only that gap is closed; every other column must still match.
+			pythonRows = venueoracle.TileFrozenBackfillWindows(pythonRows)
+		}
 		if want := withoutUntaggedSource(t, table.name, pythonRows, untaggedIntegration, untaggedSource); goRows != want {
 			t.Errorf("%s differs after the requests (python minus the untagged source):\n python: %s\n go:     %s", table.name, want, goRows)
 		}

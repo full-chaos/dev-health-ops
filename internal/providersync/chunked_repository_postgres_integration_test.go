@@ -283,7 +283,7 @@ func TestChunkedPostgresCursorSurvivesEmptyContinuationAndFailReclaimsSidecars(t
 	}
 }
 
-// CHAOS-11034: a NUL in file text reached the jsonb payload and failed every attempt with 22P05. The guarded row
+// A NUL in file text reached the jsonb payload and failed every attempt with 22P05. The guarded row
 // is stored and read back; an unguarded row is refused by Postgres and classed as a data error.
 func TestChunkedPostgresStoresAFileRowWithoutNulAndClassesTheNulPayloadAsDataError(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)

@@ -644,7 +644,7 @@ func TestCheckpointConflictIsTerminalButStoreErrorIsNot(t *testing.T) {
 	}
 }
 
-// CHAOS-11034: a chunk payload Postgres refuses (22P05) is the same on every
+// A chunk payload Postgres refuses (22P05) is the same on every
 // attempt, so it ends the unit on the first one under its own category; any
 // other database error keeps the retry policy.
 func TestChunkStoreDataErrorIsTerminalButOtherStoreErrorsAreNot(t *testing.T) {

@@ -166,7 +166,7 @@ const (
 	CheckpointConflictCategory = "checkpoint_conflict"
 	// CheckpointDataErrorCategory covers a chunk payload Postgres refuses
 	// (SQLSTATE 22P05, a NUL in a jsonb string). The payload is the same on
-	// every attempt, so the unit ends on the first one (CHAOS-11034).
+	// every attempt, so the unit ends on the first one.
 	CheckpointDataErrorCategory = "checkpoint_data_error"
 )
 

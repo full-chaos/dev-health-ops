@@ -222,3 +222,46 @@ func TestJiraAtlassianRouteFetchesAllChangelogsInOneBulkRequest(t *testing.T) {
 		t.Fatalf("evidence=%+v", batch.Evidence)
 	}
 }
+
+func oversizedBulkBody() string {
+	return `{"issueChangeLogs":[{"issueId":"10001","changeHistories":[{"id":"big","pad":"` + strings.Repeat("x", 2*1024*1024+1) + `"}]}],"nextPageToken":null}`
+}
+
+func TestCollectJiraAtlassianChangelogsHalvesAPageTheObjectCapRefuses(t *testing.T) {
+	t.Parallel()
+	server := &bulkChangelogServer{t: t, reply: func(index int, request bulkChangelogRequest) (int, string) {
+		if request.MaxResults > 25 {
+			return http.StatusOK, oversizedBulkBody()
+		}
+		if request.NextPageToken == "" {
+			return http.StatusOK, `{"issueChangeLogs":[{"issueId":"10001","changeHistories":[` + bulkHistory("h1") + `]}],"nextPageToken":"t1"}`
+		}
+		return http.StatusOK, `{"issueChangeLogs":[{"issueId":"10001","changeHistories":[` + bulkHistory("h2") + `]}],"nextPageToken":null}`
+	}}
+	result, _, err := collectJiraAtlassianChangelogs(context.Background(), jiraDevStatusTestClient(t, server), bulkIssues(1), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sizes := make([]int, 0)
+	for _, request := range server.requests {
+		sizes = append(sizes, request.MaxResults)
+	}
+	if !reflect.DeepEqual(sizes, []int{100, 50, 25, 25}) {
+		t.Fatalf("maxResults sequence %v, want [100 50 25 25]", sizes)
+	}
+	if got := historyIDs(t, result["10001"]); !reflect.DeepEqual(got, []string{"h1", "h2"}) {
+		t.Fatalf("histories %v, want only the restarted chunk's histories, once each", got)
+	}
+}
+
+func TestCollectJiraAtlassianChangelogsRefusesAPageTooLargeAtOneEntry(t *testing.T) {
+	t.Parallel()
+	server := &bulkChangelogServer{t: t, reply: func(int, bulkChangelogRequest) (int, string) { return http.StatusOK, oversizedBulkBody() }}
+	result, _, err := collectJiraAtlassianChangelogs(context.Background(), jiraDevStatusTestClient(t, server), bulkIssues(1), 10)
+	if err == nil || result != nil {
+		t.Fatalf("result=%v err=%v, want a refusal", result, err)
+	}
+	if last := server.requests[len(server.requests)-1].MaxResults; last != 1 {
+		t.Fatalf("last maxResults %d, want the restarts to end at 1", last)
+	}
+}

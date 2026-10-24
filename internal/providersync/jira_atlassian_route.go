@@ -35,10 +35,10 @@ const (
 	jiraAtlassianDefaultCommentsLimit = 500
 	jiraAtlassianWorklogPerPage       = 100
 	// POST /rest/api/3/changelog/bulkfetch: issueIdsOrKeys is 1..1000;
-	// maxResults is 1..10000 (default 1000). 200 keeps one response well
-	// under the 2 MiB object cap of jiraFetchObject.
+	// maxResults is 1..10000 (default 1000) and counts history entries; 100
+	// is the page size of the per-issue route this replaced.
 	jiraAtlassianBulkChangelogIssues  = 1000
-	jiraAtlassianBulkChangelogPerPage = 200
+	jiraAtlassianBulkChangelogPerPage = 100
 	// jiraAtlassianDefaultCommentsRowBudget is the most interaction rows one
 	// unit collects (CHAOS-8806). It must stay well under the 100,000 rows
 	// per table the effect ledger accepts: past that bound the whole unit
@@ -750,6 +750,8 @@ func collectJiraAtlassianIssues(ctx context.Context, client *providerfoundation.
 // (oldest first, the order of the per-issue endpoint). An issue with no entry
 // after the last page has an empty history; a missing page, a repeated token
 // or an unknown issueId is an error. The result is keyed by issue id.
+// maxResults bounds history entries, not bytes: a page the object cap refuses
+// restarts that chunk at half the page size, down to one entry.
 func collectJiraAtlassianChangelogs(ctx context.Context, client *providerfoundation.HTTPClient, issues []map[string]any, maxPages int) (map[string][]any, int, error) {
 	result := make(map[string][]any, len(issues))
 	ids := make([]string, 0, len(issues))
@@ -766,63 +768,81 @@ func collectJiraAtlassianChangelogs(ctx context.Context, client *providerfoundat
 	}
 	totalPages := 0
 	for start := 0; start < len(ids); start += jiraAtlassianBulkChangelogIssues {
-		end := min(start+jiraAtlassianBulkChangelogIssues, len(ids))
-		chunk := ids[start:end]
-		inChunk := make(map[string]struct{}, len(chunk))
-		for _, id := range chunk {
-			inChunk[id] = struct{}{}
-		}
-		token := ""
-		seenTokens := make(map[string]struct{})
-		for pages := 0; ; pages++ {
-			if pages >= maxPages {
-				return nil, totalPages + pages, ErrPaginationCapExceeded
+		chunk := ids[start:min(start+jiraAtlassianBulkChangelogIssues, len(ids))]
+		perPage := jiraAtlassianBulkChangelogPerPage
+		for {
+			histories, pages, err := collectJiraAtlassianChangelogChunk(ctx, client, chunk, maxPages, perPage)
+			totalPages += pages
+			var providerErr *providerfoundation.ProviderError
+			if err != nil && perPage > 1 && errors.As(err, &providerErr) && providerErr.Reason == providerfoundation.ReasonBodyTooLarge {
+				perPage /= 2
+				continue
 			}
-			request := map[string]any{"issueIdsOrKeys": chunk, "maxResults": jiraAtlassianBulkChangelogPerPage}
-			if token != "" {
-				request["nextPageToken"] = token
-			}
-			body, err := json.Marshal(request)
 			if err != nil {
-				return nil, totalPages + pages, providerfoundation.ErrNormalizationInvalid
+				return nil, totalPages, err
 			}
-			var page struct {
-				IssueChangeLogs []struct {
-					IssueID         string            `json:"issueId"`
-					ChangeHistories []json.RawMessage `json:"changeHistories"`
-				} `json:"issueChangeLogs"`
-				NextPageToken *string `json:"nextPageToken"`
+			for id, values := range histories {
+				result[id] = values
 			}
-			if err := jiraFetchObject(ctx, client, http.MethodPost, "/rest/api/3/changelog/bulkfetch", "/rest/api/3/changelog/bulkfetch", bytes.NewReader(body), &page); err != nil {
-				return nil, totalPages + pages + 1, err
-			}
-			if page.IssueChangeLogs == nil {
-				return nil, totalPages + pages + 1, providerfoundation.ErrNormalizationInvalid
-			}
-			for _, entry := range page.IssueChangeLogs {
-				if _, ok := inChunk[entry.IssueID]; !ok || entry.ChangeHistories == nil {
-					return nil, totalPages + pages + 1, providerfoundation.ErrNormalizationInvalid
-				}
-				for _, raw := range entry.ChangeHistories {
-					var value any
-					if err := decodeJiraJSON(raw, &value); err != nil {
-						return nil, totalPages + pages + 1, err
-					}
-					result[entry.IssueID] = append(result[entry.IssueID], value)
-				}
-			}
-			if page.NextPageToken == nil || *page.NextPageToken == "" {
-				totalPages += pages + 1
-				break
-			}
-			if _, dup := seenTokens[*page.NextPageToken]; dup {
-				return nil, totalPages + pages + 1, ErrPaginationCapExceeded
-			}
-			seenTokens[*page.NextPageToken] = struct{}{}
-			token = *page.NextPageToken
+			break
 		}
 	}
 	return result, totalPages, nil
+}
+
+func collectJiraAtlassianChangelogChunk(ctx context.Context, client *providerfoundation.HTTPClient, chunk []string, maxPages, perPage int) (map[string][]any, int, error) {
+	histories := make(map[string][]any, len(chunk))
+	for _, id := range chunk {
+		histories[id] = []any{}
+	}
+	token := ""
+	seenTokens := make(map[string]struct{})
+	for pages := 0; ; pages++ {
+		if pages >= maxPages {
+			return nil, pages, ErrPaginationCapExceeded
+		}
+		request := map[string]any{"issueIdsOrKeys": chunk, "maxResults": perPage}
+		if token != "" {
+			request["nextPageToken"] = token
+		}
+		body, err := json.Marshal(request)
+		if err != nil {
+			return nil, pages, providerfoundation.ErrNormalizationInvalid
+		}
+		var page struct {
+			IssueChangeLogs []struct {
+				IssueID         string            `json:"issueId"`
+				ChangeHistories []json.RawMessage `json:"changeHistories"`
+			} `json:"issueChangeLogs"`
+			NextPageToken *string `json:"nextPageToken"`
+		}
+		if err := jiraFetchObject(ctx, client, http.MethodPost, "/rest/api/3/changelog/bulkfetch", "/rest/api/3/changelog/bulkfetch", bytes.NewReader(body), &page); err != nil {
+			return nil, pages + 1, err
+		}
+		if page.IssueChangeLogs == nil {
+			return nil, pages + 1, providerfoundation.ErrNormalizationInvalid
+		}
+		for _, entry := range page.IssueChangeLogs {
+			if _, ok := histories[entry.IssueID]; !ok || entry.ChangeHistories == nil {
+				return nil, pages + 1, providerfoundation.ErrNormalizationInvalid
+			}
+			for _, raw := range entry.ChangeHistories {
+				var value any
+				if err := decodeJiraJSON(raw, &value); err != nil {
+					return nil, pages + 1, err
+				}
+				histories[entry.IssueID] = append(histories[entry.IssueID], value)
+			}
+		}
+		if page.NextPageToken == nil || *page.NextPageToken == "" {
+			return histories, pages + 1, nil
+		}
+		if _, dup := seenTokens[*page.NextPageToken]; dup {
+			return nil, pages + 1, ErrPaginationCapExceeded
+		}
+		seenTokens[*page.NextPageToken] = struct{}{}
+		token = *page.NextPageToken
+	}
 }
 
 func normalizeJiraWorklog(claim Claim, workItemID string, raw map[string]any, resolveIdentity jiraIdentityResolver, normalizedAt time.Time) (jiraWorklogRow, error) {

@@ -219,6 +219,7 @@ jobs:
       (!(github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) &&
       (github.event_name == 'workflow_dispatch' ||
       github.event_name == 'release' ||
+      github.event_name == 'merge_group' ||
       (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
       needs.changes.outputs.code == 'true') &&
       needs.resolve.outputs.promoted != 'true'
@@ -473,6 +474,7 @@ jobs:
       needs.dind-smoke-test.result != 'cancelled' &&
       (github.event_name == 'workflow_dispatch' ||
       github.event_name == 'release' ||
+      github.event_name == 'merge_group' ||
       (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
       needs.changes.outputs.code == 'true'))
     runs-on: ${{ ((vars.SELF_HOSTED_IMAGE_BUILDS == 'enabled' || vars.SELF_HOSTED_RUNNERS == 'enabled') && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')) && fromJSON('["self-hosted","oci-arc-runners"]') || 'ubuntu-latest' }}
@@ -685,6 +687,7 @@ jobs:
       (!(github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) &&
       (github.event_name == 'workflow_dispatch' ||
       github.event_name == 'release' ||
+      github.event_name == 'merge_group' ||
       (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
       needs.changes.outputs.code == 'true') &&
       needs.resolve.outputs.promoted != 'true'

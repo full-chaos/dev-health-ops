@@ -809,9 +809,36 @@ namespace, HTTPS, then networkPolicy.extraEgress. The auth pods never use these 
 {{- fail (printf "networkPolicy.extraEgress[%d].to[%d] takes only podSelector, namespaceSelector and ipBlock, not %q" $i $j $key) }}
 {{- end }}
 {{- end }}
+{{- range $selector := list "podSelector" "namespaceSelector" }}
+{{- if hasKey $peer $selector }}
+{{- if not (kindIs "map" (index $peer $selector)) }}
+{{- fail (printf "networkPolicy.extraEgress[%d].to[%d].%s must be an object with matchLabels and/or matchExpressions" $i $j $selector) }}
+{{- end }}
+{{- range $key := keys (index $peer $selector) | sortAlpha }}
+{{- if not (has $key (list "matchLabels" "matchExpressions")) }}
+{{- fail (printf "networkPolicy.extraEgress[%d].to[%d].%s takes only matchLabels and matchExpressions, not %q: Kubernetes drops an unknown key, so the selector would be wider than written" $i $j $selector $key) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
 {{- if hasKey $peer "ipBlock" }}
 {{- if not (and (kindIs "map" $peer.ipBlock) (kindIs "string" $peer.ipBlock.cidr) (ne $peer.ipBlock.cidr "")) }}
 {{- fail (printf "networkPolicy.extraEgress[%d].to[%d].ipBlock needs a cidr" $i $j) }}
+{{- end }}
+{{- range $key := keys $peer.ipBlock | sortAlpha }}
+{{- if not (has $key (list "cidr" "except")) }}
+{{- fail (printf "networkPolicy.extraEgress[%d].to[%d].ipBlock takes only cidr and except, not %q: Kubernetes drops an unknown key, so the block would be wider than written" $i $j $key) }}
+{{- end }}
+{{- end }}
+{{- if hasKey $peer.ipBlock "except" }}
+{{- if not (kindIs "slice" $peer.ipBlock.except) }}
+{{- fail (printf "networkPolicy.extraEgress[%d].to[%d].ipBlock.except must be a list of CIDR strings" $i $j) }}
+{{- end }}
+{{- range $peer.ipBlock.except }}
+{{- if not (and (kindIs "string" .) (ne . "")) }}
+{{- fail (printf "networkPolicy.extraEgress[%d].to[%d].ipBlock.except must be a list of CIDR strings" $i $j) }}
+{{- end }}
+{{- end }}
 {{- end }}
 {{- if and (empty $ports) (regexMatch "/0+$" $peer.ipBlock.cidr) (empty $peer.ipBlock.except) }}
 {{- fail (printf "networkPolicy.extraEgress[%d] sends to ipBlock %s with no except and no ports: that is every destination on every port; name the ports" $i $peer.ipBlock.cidr) }}

@@ -251,14 +251,19 @@ The served query-api GraphQL root fields (Query and Mutation of
 `contracts/graphql/v1/schema.graphql`) each have exactly one row in
 [`graphql-field-actions.json`](https://github.com/full-chaos/dev-health-ops/blob/main/contracts/auth/v1/graphql-field-actions.json):
 the one action of the closed catalog (`vocabulary/actions.v1.json`) the field
-performs, or `null` with an `action:` gap where the catalog has none. The map
+performs, or `unknown` with an `action:` gap where the catalog has none. The map
 names an action; query-api checks no action today. The query-api REST rows carry
 the same `action`, `resource_resolver`, `current_state_cache_behavior`,
-`impersonation_policy` and `disclosure_behavior` fields. The Go tests
-`internal/queryapi/graph/field_action_map_test.go` and
+`impersonation_policy` and `disclosure_behavior` fields.
+
+A row asserts only what a source proof in the Go guards states. Every other
+value is `unknown` with a gap that names CHAOS-11042 and says it is a declared
+gap; no consumer may treat `unknown` as allow, and no field is `null`. The
+guards `internal/queryapi/graph/field_action_map_test.go` and
 `internal/queryapi/server/endpoint_profile_action_fields_test.go` fail on a
 served field with no row or with two, a row for a field nothing serves, an
-action outside the catalog, and a `null` without its gap.
+action outside the catalog, a `null`, an `unknown` without its gap, a statement
+no registered claim states, and a claim whose source needle is missing.
 
 ## What a surface ISSUES: the `issued_credential` field
 

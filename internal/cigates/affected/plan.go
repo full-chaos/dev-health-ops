@@ -29,7 +29,7 @@ var (
 	sharedFiles    = map[string]bool{"go.mod": true, "go.sum": true, "go.work": true, "go.work.sum": true}
 	// Pure distribution tables: they move packages between CI shards and change no test, so a change to one is not a shared
 	// change. The set is exact (a new ci/ file is FULL) and is matched against the path as written, never a cleaned one.
-	bookkeepingFiles = map[string]bool{"ci/go_test_weights.tsv": true, "ci/go_providersync_race_weights.tsv": true}
+	bookkeepingFiles = map[string]bool{"ci/go_test_weights.tsv": true, "ci/go_providersync_race_weights.tsv": true, "ci/go_providersync_test_weights.tsv": true}
 	bookkeepingDirs  = []string{"ci/go_race_weights.d/", "ci/venue_oracle_weights.d/"}
 	// The planner's code and data, and the workflow steps that build and run it: a change here can steer the verdict of
 	// this very change set, so it is FULL. Test files (outside testdata) are not inputs.

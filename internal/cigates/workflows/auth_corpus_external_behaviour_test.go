@@ -36,7 +36,14 @@ case "$*" in
 esac
 exit 0
 `
-	goShim := "#!/bin/sh\nexit 0\n"
+	goShim := `#!/bin/sh
+case "$*" in
+  *" certs -out "*)
+    for arg in "$@"; do last="$arg"; done
+    mkdir -p "$last" && : > "$last/ca.pem" && : > "$last/server.pem" && : > "$last/server.key" ;;
+esac
+exit 0
+`
 	for name, body := range map[string]string{"docker": docker, "go": goShim} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o755); err != nil {
 			t.Fatal(err)

@@ -271,7 +271,12 @@
   },
   {
     "operation": "investmentBreakdown",
-    "digest": "964b2e867a1e37c09382552eb0af394758fa10d68081a560ebc0f36c28cc3501"
+    "digest": "91d44e116c4830e0c296cc55dc5294ce0741e411f2d9a9269ea44812fcabc211"
+  },
+  {
+    "operation": "investmentBreakdown",
+    "digest": "964b2e867a1e37c09382552eb0af394758fa10d68081a560ebc0f36c28cc3501",
+    "legacy": true
   },
   {
     "operation": "investmentEvidenceQuality",

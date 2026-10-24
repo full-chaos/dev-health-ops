@@ -2,6 +2,7 @@ package sync
 
 import (
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"slices"
 	"strings"
@@ -583,6 +584,7 @@ func TestBuildBackfillPlanMatchesFrozenPythonPlanner(t *testing.T) {
 		}
 		var normalized []map[string]any
 		decodeKeepingNumbers(t, gotJSON, &normalized)
+		tileFrozenPythonWindows(t, want[test.ID])
 		if !reflect.DeepEqual(normalized, want[test.ID]) {
 			prettyGot, _ := json.MarshalIndent(normalized, "", "  ")
 			prettyWant, _ := json.MarshalIndent(want[test.ID], "", "  ")
@@ -613,4 +615,35 @@ func frozenPlannerOracle(t *testing.T, golden string, cases []plannerOracleCase)
 		t.Fatalf("Python planner oracle returned %d cases for %d inputs", len(result), len(cases))
 	}
 	return result
+}
+
+// tileFrozenPythonWindows applies the one deliberate divergence of the Go
+// backfill planner to the frozen Python plan: Python ends an interior chunk at
+// 23:59:59.999999 and starts the next at 00:00:00, leaving 1 microsecond
+// uncovered; Go ends each window where the next starts. Only a gap of exactly
+// 1 microsecond between consecutive units of one source and dataset is closed.
+func tileFrozenPythonWindows(t *testing.T, units []map[string]any) {
+	t.Helper()
+	parse := func(value any) time.Time {
+		text, ok := value.(string)
+		if !ok {
+			t.Fatalf("window bound %v is not a string", value)
+		}
+		parsed, err := time.Parse(time.RFC3339Nano, text)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return parsed
+	}
+	previous := map[string]map[string]any{}
+	for _, unit := range units {
+		key := fmt.Sprint(unit["source_id"], "/", unit["dataset"])
+		if prior, ok := previous[key]; ok {
+			end, start := parse(prior["window_end"]), parse(unit["window_start"])
+			if start.Sub(end) == time.Microsecond {
+				prior["window_end"] = unit["window_start"]
+			}
+		}
+		previous[key] = unit
+	}
 }

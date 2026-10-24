@@ -57,6 +57,39 @@ func (err *ChunkStoreError) Unwrap() []error {
 	return []error{ErrChunkCheckpointConflict, err.Cause}
 }
 
+// ChunkConflictError is a real state mismatch (not a database error) that names
+// the check that fired. Site is a stable "Function.n" name and Detail holds
+// counters and booleans only, never payload data. It matches
+// ErrChunkCheckpointConflict with errors.Is and is not a ChunkStoreError.
+type ChunkConflictError struct {
+	Site   string
+	Detail string
+}
+
+func chunkConflict(site, detail string) error {
+	return &ChunkConflictError{Site: site, Detail: detail}
+}
+
+func (err *ChunkConflictError) Error() string {
+	text := ErrChunkCheckpointConflict.Error() + ": " + err.Site
+	if err.Detail != "" {
+		text += " (" + err.Detail + ")"
+	}
+	return text
+}
+
+func (err *ChunkConflictError) Unwrap() error { return ErrChunkCheckpointConflict }
+
+// ChunkConflictSite returns the check that raised a checkpoint conflict, or an
+// empty string when err holds none.
+func ChunkConflictSite(err error) string {
+	var conflict *ChunkConflictError
+	if errors.As(err, &conflict) {
+		return conflict.Site
+	}
+	return ""
+}
+
 // ChunkPolicy is checked-in route policy. It is deliberately not loaded from
 // a process-global environment switch: changing a limit changes persistence
 // and recovery semantics and must go through a reviewed route change.
@@ -148,22 +181,22 @@ func (checkpoint ChunkCheckpoint) Validate(claim Claim) error {
 		(checkpoint.TotalChunks > 0 && checkpoint.FinalOrdinal >= checkpoint.TotalChunks) ||
 		checkpoint.LeaseExpiresAt.IsZero() ||
 		checkpoint.CreatedAt.IsZero() || checkpoint.UpdatedAt.IsZero() {
-		return ErrChunkCheckpointConflict
+		return chunkConflict("Validate.1", "")
 	}
 	if len(checkpoint.NextCursor) > maxChunkCursorBytes ||
 		len(checkpoint.AggregateDigest) > maxChunkAggregateDigestBytes {
-		return ErrChunkCheckpointConflict
+		return chunkConflict("Validate.2", "")
 	}
 	if checkpoint.AggregateResult != nil {
 		encoded, err := json.Marshal(checkpoint.AggregateResult)
 		if err != nil || len(encoded) > maxChunkResultBytes {
-			return ErrChunkCheckpointConflict
+			return chunkConflict("Validate.3", "")
 		}
 	}
 	if checkpoint.InventoryComplete &&
 		(checkpoint.TotalChunks == 0 || checkpoint.NextOrdinal != checkpoint.TotalChunks ||
 			checkpoint.PreparedChunks != checkpoint.TotalChunks) {
-		return ErrChunkCheckpointConflict
+		return chunkConflict("Validate.4", "")
 	}
 	return nil
 }
@@ -201,11 +234,11 @@ func (chunk PreparedProviderChunk) Validate(claim Claim, policy ChunkPolicy) err
 		!validDigest(chunk.ManifestDigest) || chunk.Ledger.validate() != nil ||
 		chunk.Ledger.Generation != claim.GenerationKey() ||
 		chunk.Ledger.Provider != claim.Provider || chunk.Ledger.Dataset != claim.Dataset {
-		return ErrChunkCheckpointConflict
+		return chunkConflict("Validate.5", "")
 	}
 	encoded, err := json.Marshal(chunk)
 	if err != nil || len(encoded) > policy.MaxPreparedBytes {
-		return ErrChunkCheckpointConflict
+		return chunkConflict("Validate.6", "")
 	}
 	return nil
 }
@@ -263,7 +296,7 @@ func (adapter chunkEffectLedgerAdapter) LoadEffects(
 	ctx context.Context, claim Claim, now time.Time,
 ) (EffectLedgerState, error) {
 	if claim.ID != adapter.claim.ID || claim.GenerationKey() != adapter.claim.GenerationKey() {
-		return EffectLedgerState{}, ErrChunkCheckpointConflict
+		return EffectLedgerState{}, chunkConflict("LoadEffects.1", "")
 	}
 	chunk, err := adapter.store.LoadPreparedChunk(ctx, claim, adapter.ordinal, now)
 	if err != nil {

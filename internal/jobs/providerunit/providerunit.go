@@ -383,6 +383,15 @@ func safeCause(
 			cause += fmt.Sprintf(" provider_status=%d", providerErr.StatusCode)
 		}
 	}
+	// A checkpoint conflict names the check that fired. The site is a fixed
+	// label and the detail holds counters and booleans only.
+	var conflict *providersync.ChunkConflictError
+	if errors.As(err, &conflict) {
+		cause += fmt.Sprintf(" conflict_site=%s", conflict.Site)
+		if conflict.Detail != "" {
+			cause += fmt.Sprintf(" conflict_detail=%q", conflict.Detail)
+		}
+	}
 	return cause
 }
 

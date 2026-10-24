@@ -3,6 +3,7 @@ package providersync
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
@@ -53,7 +54,7 @@ func (executor CompleteRouteExecutor) executeChunked(
 			// WITHOUT the streaming handler must first make this branch
 			// re-collect and re-prepare from checkpoint.PreparedChunks.
 			if checkpoint.TotalChunks < 1 || checkpoint.PreparedChunks != checkpoint.TotalChunks {
-				return ErrChunkCheckpointConflict
+				return chunkConflict("executeChunked.1", fmt.Sprintf("total=%d prepared=%d", checkpoint.TotalChunks, checkpoint.PreparedChunks))
 			}
 			totalChunks = checkpoint.TotalChunks
 		} else if !errors.Is(checkpointErr, ErrChunkCheckpointNotFound) {
@@ -140,11 +141,11 @@ func (executor CompleteRouteExecutor) executeChunked(
 		}
 
 		if totalChunks == 0 {
-			return ErrChunkCheckpointConflict
+			return chunkConflict("executeChunked.2", "")
 		}
 		startOrdinal := checkpoint.NextOrdinal
 		if startOrdinal < 0 || startOrdinal > totalChunks {
-			return ErrChunkCheckpointConflict
+			return chunkConflict("executeChunked.3", fmt.Sprintf("next=%d total=%d", startOrdinal, totalChunks))
 		}
 		committedThisAttempt := 0
 		for ordinal := startOrdinal; ordinal < totalChunks; ordinal++ {
@@ -187,7 +188,7 @@ func (executor CompleteRouteExecutor) executeChunked(
 			if loadErr != nil {
 				return loadErr
 			}
-			return ErrChunkCheckpointConflict
+			return chunkConflict("executeChunked.4", fmt.Sprintf("ordinal=%d want_ordinal=%d total=%d want_total=%d complete=%t", final.Ordinal, totalChunks-1, final.TotalChunks, totalChunks, final.InventoryComplete))
 		}
 		result.Fetch, result.Result, result.Watermark = final.Evidence, final.Result, final.Watermark
 		result.Comparison = final.Comparison

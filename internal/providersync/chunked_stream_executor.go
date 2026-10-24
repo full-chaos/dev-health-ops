@@ -3,6 +3,7 @@ package providersync
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
@@ -84,7 +85,7 @@ func (executor CompleteRouteExecutor) executeChunkedStreaming(
 		result.CommittedRows = checkpoint.CommittedRows
 		if checkpoint.InventoryComplete {
 			if checkpoint.TotalChunks < 1 || checkpoint.NextOrdinal != checkpoint.TotalChunks || checkpoint.PreparedChunks != checkpoint.TotalChunks {
-				return ErrChunkCheckpointConflict
+				return chunkConflict("executeChunkedStreaming.1", fmt.Sprintf("total=%d next=%d prepared=%d", checkpoint.TotalChunks, checkpoint.NextOrdinal, checkpoint.PreparedChunks))
 			}
 			return loadChunkedFinalResult(workContext, session.Claim, store, checkpoint.TotalChunks, &result, executor.now())
 		}
@@ -108,7 +109,7 @@ func (executor CompleteRouteExecutor) executeChunkedStreaming(
 					if checkpointErr != nil {
 						return checkpointErr
 					}
-					return ErrChunkCheckpointConflict
+					return chunkConflict("executeChunkedStreaming.2", fmt.Sprintf("complete=%t total=%d", checkpoint.InventoryComplete, checkpoint.TotalChunks))
 				}
 				return loadChunkedFinalResult(
 					workContext, session.Claim, store, checkpoint.TotalChunks, &result, executor.now())
@@ -256,7 +257,7 @@ func (executor CompleteRouteExecutor) executeChunkedStreaming(
 			return streamErr
 		}
 		if !finalSeen {
-			return ErrChunkCheckpointConflict
+			return chunkConflict("executeChunkedStreaming.3", "")
 		}
 		if err := store.MarkInventoryComplete(workContext, session.Claim, executor.now()); err != nil {
 			return err
@@ -266,7 +267,7 @@ func (executor CompleteRouteExecutor) executeChunkedStreaming(
 			if checkpointErr != nil {
 				return checkpointErr
 			}
-			return ErrChunkCheckpointConflict
+			return chunkConflict("executeChunkedStreaming.4", fmt.Sprintf("complete=%t total=%d", checkpoint.InventoryComplete, checkpoint.TotalChunks))
 		}
 		result.Comparison = finalComparison
 		return loadChunkedFinalResult(workContext, session.Claim, store, checkpoint.TotalChunks, &result, executor.now())
@@ -295,7 +296,7 @@ func loadChunkedFinalResult(
 	now time.Time,
 ) error {
 	if total < 1 || result == nil {
-		return ErrChunkCheckpointConflict
+		return chunkConflict("loadChunkedFinalResult.1", fmt.Sprintf("total=%d", total))
 	}
 	checkpoint, checkpointErr := store.LoadChunkCheckpoint(ctx, claim, now)
 	if checkpointErr != nil {
@@ -306,7 +307,7 @@ func loadChunkedFinalResult(
 		if err != nil {
 			return err
 		}
-		return ErrChunkCheckpointConflict
+		return chunkConflict("loadChunkedFinalResult.2", fmt.Sprintf("ordinal=%d want_ordinal=%d total=%d want_total=%d complete=%t", final.Ordinal, total-1, final.TotalChunks, total, final.InventoryComplete))
 	}
 	result.Fetch, result.Result, result.Watermark = final.Evidence, final.Result, final.Watermark
 	result.Comparison = final.Comparison

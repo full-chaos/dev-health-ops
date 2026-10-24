@@ -3,6 +3,7 @@ package providersync
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"sync"
 	"time"
 )
@@ -80,10 +81,10 @@ func copyCheckpoint(source *ChunkCheckpoint) (ChunkCheckpoint, error) {
 	if source.AggregateResult != nil {
 		encoded, err := json.Marshal(source.AggregateResult)
 		if err != nil {
-			return ChunkCheckpoint{}, ErrChunkCheckpointConflict
+			return ChunkCheckpoint{}, chunkConflict("copyCheckpoint.1", "")
 		}
 		if decodeResultObjectExact(encoded, &checkpoint.AggregateResult) != nil {
-			return ChunkCheckpoint{}, ErrChunkCheckpointConflict
+			return ChunkCheckpoint{}, chunkConflict("copyCheckpoint.2", "")
 		}
 	}
 	return checkpoint, nil
@@ -128,7 +129,7 @@ func (store *InProcessChunkLedger) PrepareChunk(
 		return PreparedProviderChunk{}, err
 	}
 	if len(group) != 1 {
-		return PreparedProviderChunk{}, ErrChunkCheckpointConflict
+		return PreparedProviderChunk{}, chunkConflict("PrepareChunk.1", "")
 	}
 	return group[0], nil
 }
@@ -229,13 +230,13 @@ func (state *inProcessChunkState) prepareChunk(
 		(checkpoint.TotalChunks > 0 && checkpoint.TotalChunks != chunk.TotalChunks) ||
 		(checkpoint.TotalChunks == 0 && chunk.TotalChunks > 0 && !chunk.InventoryComplete) ||
 		chunk.Ordinal > checkpoint.PreparedChunks {
-		return PreparedProviderChunk{}, ErrChunkCheckpointConflict
+		return PreparedProviderChunk{}, chunkConflict("prepareChunk.1", fmt.Sprintf("route_match=%t checkpoint_total=%d chunk_total=%d chunk_complete=%t ordinal=%d prepared=%d", checkpoint.RouteVersion == chunk.RouteVersion, checkpoint.TotalChunks, chunk.TotalChunks, chunk.InventoryComplete, chunk.Ordinal, checkpoint.PreparedChunks))
 	}
 	existing, present := state.chunks[chunk.Ordinal]
 	switch {
 	case !present:
 		if chunk.Ordinal != checkpoint.PreparedChunks {
-			return PreparedProviderChunk{}, ErrChunkCheckpointConflict
+			return PreparedProviderChunk{}, chunkConflict("prepareChunk.2", fmt.Sprintf("ordinal=%d prepared=%d", chunk.Ordinal, checkpoint.PreparedChunks))
 		}
 		state.chunks[chunk.Ordinal] = &inProcessChunkRow{
 			schemaVersion: chunk.SchemaVersion, routeVersion: chunk.RouteVersion,
@@ -245,7 +246,7 @@ func (state *inProcessChunkState) prepareChunk(
 			payloadBytes: chunk.PayloadBytes, manifestDigest: chunk.ManifestDigest, status: "pending",
 		}
 	case existing.manifestDigest != chunk.ManifestDigest:
-		return PreparedProviderChunk{}, ErrChunkCheckpointConflict
+		return PreparedProviderChunk{}, chunkConflict("prepareChunk.3", fmt.Sprintf("ordinal=%d prepared=%d digest_match=false", chunk.Ordinal, checkpoint.PreparedChunks))
 	case chunk.Ordinal < checkpoint.PreparedChunks:
 		// Replayable only when the digest matches: return the durable ledger state
 		// instead of rebuilding a pending one.
@@ -283,13 +284,13 @@ func (state *inProcessChunkState) loadRow(claim Claim, ordinal int) (PreparedPro
 		chunk.Ordinal != row.ordinal || chunk.CursorBefore != row.cursorBefore ||
 		chunk.CursorAfter != row.cursorAfter || chunk.InventoryComplete != row.inventoryComplete ||
 		chunk.PayloadBytes != row.payloadBytes || chunk.ManifestDigest != row.manifestDigest {
-		return PreparedProviderChunk{}, ErrChunkCheckpointConflict
+		return PreparedProviderChunk{}, chunkConflict("loadRow.1", fmt.Sprintf("status=%s ordinal=%d stored_ordinal=%d route_match=%t cursor_match=%t complete_match=%t bytes_match=%t digest_match=%t", row.status, chunk.Ordinal, row.ordinal, chunk.RouteVersion == row.routeVersion, chunk.CursorBefore == row.cursorBefore && chunk.CursorAfter == row.cursorAfter, chunk.InventoryComplete == row.inventoryComplete, chunk.PayloadBytes == row.payloadBytes, chunk.ManifestDigest == row.manifestDigest))
 	}
 	// The relational column is the canonical count (see loadPreparedChunkRow).
 	chunk.TotalChunks = row.totalChunks
 	if chunk.TotalChunks < 0 || (chunk.TotalChunks > 0 && chunk.Ordinal >= chunk.TotalChunks) ||
 		chunk.ManifestDigest == "" || chunk.Ledger.validate() != nil {
-		return PreparedProviderChunk{}, ErrChunkCheckpointConflict
+		return PreparedProviderChunk{}, chunkConflict("loadRow.2", "")
 	}
 	_ = claim
 	return chunk, nil
@@ -348,7 +349,7 @@ func (store *InProcessChunkLedger) ResolveChunkEffect(
 		return err
 	}
 	if index >= len(chunk.Ledger.Effects) || chunk.Ledger.Effects[index].ContentDigest != digest {
-		return ErrChunkCheckpointConflict
+		return chunkConflict("ResolveChunkEffect.1", "")
 	}
 	effect := &chunk.Ledger.Effects[index]
 	current := now.UTC()
@@ -358,7 +359,7 @@ func (store *InProcessChunkLedger) ResolveChunkEffect(
 			return nil
 		}
 		if effect.Status != GenerationBlockWriting {
-			return ErrChunkCheckpointConflict
+			return chunkConflict("ResolveChunkEffect.2", "")
 		}
 		effect.Status, effect.CommittedAt = GenerationBlockCommitted, &current
 	case GenerationBlockRetryPending:
@@ -366,14 +367,14 @@ func (store *InProcessChunkLedger) ResolveChunkEffect(
 			return nil
 		}
 		if effect.Status != GenerationBlockWriting {
-			return ErrChunkCheckpointConflict
+			return chunkConflict("ResolveChunkEffect.3", "")
 		}
 		effect.Status, effect.StartedAt, effect.CommittedAt = GenerationBlockPending, nil, nil
 	}
 	chunk.Ledger.UpdatedAt = current
 	encoded := encodeEffectLedgerState(chunk.Ledger)
 	if len(encoded) == 0 {
-		return ErrChunkCheckpointConflict
+		return chunkConflict("ResolveChunkEffect.4", "")
 	}
 	store.chunks[ordinal].ledgerRaw = encoded
 	return nil
@@ -400,7 +401,7 @@ func (store *InProcessChunkLedger) mutateEffect(
 		return err
 	}
 	if index >= len(chunk.Ledger.Effects) || chunk.Ledger.Effects[index].ContentDigest != digest {
-		return ErrChunkCheckpointConflict
+		return chunkConflict("mutateEffect.1", "")
 	}
 	effect := &chunk.Ledger.Effects[index]
 	if effect.Status == GenerationBlockWriting && from == GenerationBlockPending {
@@ -410,10 +411,10 @@ func (store *InProcessChunkLedger) mutateEffect(
 		if to == GenerationBlockCommitted {
 			return nil
 		}
-		return ErrChunkCheckpointConflict
+		return chunkConflict("mutateEffect.2", "")
 	}
 	if effect.Status != from {
-		return ErrChunkCheckpointConflict
+		return chunkConflict("mutateEffect.3", "")
 	}
 	current := now.UTC()
 	if to == GenerationBlockWriting {
@@ -427,7 +428,7 @@ func (store *InProcessChunkLedger) mutateEffect(
 	chunk.Ledger.UpdatedAt = current
 	encoded := encodeEffectLedgerState(chunk.Ledger)
 	if len(encoded) == 0 {
-		return ErrChunkCheckpointConflict
+		return chunkConflict("mutateEffect.4", "")
 	}
 	store.chunks[ordinal].ledgerRaw = encoded
 	return nil
@@ -453,11 +454,11 @@ func (store *InProcessChunkLedger) MarkChunkCommitted(
 		return err
 	}
 	if chunk.ManifestDigest != digest {
-		return ErrChunkCheckpointConflict
+		return chunkConflict("MarkChunkCommitted.1", "")
 	}
 	for _, effect := range chunk.Ledger.Effects {
 		if effect.Status != GenerationBlockCommitted {
-			return ErrChunkCheckpointConflict
+			return chunkConflict("MarkChunkCommitted.2", "")
 		}
 	}
 	// markChunkCommittedSQL matches only a pending sidecar: a real transition adds
@@ -470,12 +471,12 @@ func (store *InProcessChunkLedger) MarkChunkCommitted(
 			rows += int64(len(effect.Rows))
 		}
 	} else if row.status != "committed" {
-		return ErrChunkCheckpointConflict
+		return chunkConflict("MarkChunkCommitted.3", "")
 	}
 	// advanceChunkCheckpointSQL.
 	checkpoint := store.checkpoint
 	if checkpoint == nil {
-		return ErrChunkCheckpointConflict
+		return chunkConflict("MarkChunkCommitted.4", "")
 	}
 	if ordinal+1 > checkpoint.NextOrdinal {
 		checkpoint.NextOrdinal = ordinal + 1
@@ -507,7 +508,7 @@ func (store *InProcessChunkLedger) MarkInventoryComplete(
 		return err
 	}
 	if checkpoint.InventoryComplete || checkpoint.PreparedChunks < 1 || checkpoint.NextOrdinal != checkpoint.PreparedChunks {
-		return ErrChunkCheckpointConflict
+		return chunkConflict("MarkInventoryComplete.1", "")
 	}
 	total := checkpoint.PreparedChunks
 	// finalizePreparedChunksSQL, then finalizeChunkCheckpointSQL.
@@ -518,7 +519,7 @@ func (store *InProcessChunkLedger) MarkInventoryComplete(
 	}
 	held := store.checkpoint
 	if held.NextOrdinal != total || held.PreparedChunks != total || (held.TotalChunks != 0 && held.TotalChunks != total) {
-		return ErrChunkCheckpointConflict
+		return chunkConflict("MarkInventoryComplete.2", "")
 	}
 	held.TotalChunks, held.FinalOrdinal, held.InventoryComplete = total, total-1, true
 	held.UpdatedAt = now.UTC()

@@ -641,3 +641,16 @@ func TestCheckpointConflictIsTerminalButStoreErrorIsNot(t *testing.T) {
 		t.Fatal("store error must match both the conflict and its cause")
 	}
 }
+
+func TestSafeCauseNamesTheCheckpointConflictSite(t *testing.T) {
+	claim := providersync.Claim{Provider: "github", Dataset: "cicd"}
+	err := fmt.Errorf("unit: %w", &providersync.ChunkConflictError{Site: "prepareChunkInTx.1", Detail: "checkpoint_total=2 chunk_total=3"})
+	got := safeCause(CheckpointConflictCategory, claim, nil, err)
+	want := `category=checkpoint_conflict provider=github dataset=cicd conflict_site=prepareChunkInTx.1 conflict_detail="checkpoint_total=2 chunk_total=3"`
+	if got != want {
+		t.Fatalf("safeCause = %q, want %q", got, want)
+	}
+	if plain := safeCause(CheckpointConflictCategory, claim, nil, providersync.ErrChunkCheckpointConflict); strings.Contains(plain, "conflict_site") {
+		t.Fatalf("a bare conflict has no site: %q", plain)
+	}
+}

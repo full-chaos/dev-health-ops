@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -83,7 +84,7 @@ func (repository *PostgresRepository) LoadChunkCheckpoint(
 	}
 	if len(aggregateRaw) > 0 {
 		if decodeResultObjectExact(aggregateRaw, &checkpoint.AggregateResult) != nil {
-			return ChunkCheckpoint{}, ErrChunkCheckpointConflict
+			return ChunkCheckpoint{}, chunkConflict("LoadChunkCheckpoint.1", "")
 		}
 	}
 	if err := checkpoint.Validate(claim); err != nil {
@@ -103,7 +104,7 @@ func (repository *PostgresRepository) PrepareChunk(
 		return PreparedProviderChunk{}, err
 	}
 	if len(group) != 1 {
-		return PreparedProviderChunk{}, ErrChunkCheckpointConflict
+		return PreparedProviderChunk{}, chunkConflict("PrepareChunk.1", "")
 	}
 	return group[0], nil
 }
@@ -192,7 +193,7 @@ func buildPreparedChunkMaterial(
 	}
 	if chunk.Validate(claim, DefaultChunkPolicy()) != nil ||
 		len(payloadRaw)+len(ledgerRaw) > maxChunkPayloadBytes {
-		return preparedChunkMaterial{}, ErrChunkCheckpointConflict
+		return preparedChunkMaterial{}, chunkConflict("buildPreparedChunkMaterial.1", "")
 	}
 	// A chunk with no aggregate must store SQL NULL, not the JSONB scalar
 	// `null`. Only the final chunk of a route carries a Result, so marshalling
@@ -204,7 +205,7 @@ func buildPreparedChunkMaterial(
 	if chunk.Result != nil {
 		var marshalErr error
 		if aggregateRaw, marshalErr = json.Marshal(chunk.Result); marshalErr != nil {
-			return preparedChunkMaterial{}, ErrChunkCheckpointConflict
+			return preparedChunkMaterial{}, chunkConflict("buildPreparedChunkMaterial.2", "")
 		}
 	}
 	return preparedChunkMaterial{
@@ -252,14 +253,14 @@ func prepareChunkInTx(
 		(checkpoint.TotalChunks > 0 && checkpoint.TotalChunks != chunk.TotalChunks) ||
 		(checkpoint.TotalChunks == 0 && chunk.TotalChunks > 0 && !chunk.InventoryComplete) ||
 		chunk.Ordinal > checkpoint.PreparedChunks {
-		return PreparedProviderChunk{}, ErrChunkCheckpointConflict
+		return PreparedProviderChunk{}, chunkConflict("prepareChunkInTx.1", fmt.Sprintf("route_match=%t checkpoint_total=%d chunk_total=%d chunk_complete=%t ordinal=%d prepared=%d", checkpoint.RouteVersion == chunk.RouteVersion, checkpoint.TotalChunks, chunk.TotalChunks, chunk.InventoryComplete, chunk.Ordinal, checkpoint.PreparedChunks))
 	}
 	var existingDigest string
 	err = tx.QueryRow(ctx, `SELECT manifest_digest FROM public.sync_run_unit_effect_chunks WHERE org_id=$1 AND sync_run_unit_id=$2::uuid AND generation=$3 AND ordinal=$4 FOR UPDATE`, claim.OrgID, claim.ID, claim.GenerationKey(), chunk.Ordinal).Scan(&existingDigest)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
 		if chunk.Ordinal != checkpoint.PreparedChunks {
-			return PreparedProviderChunk{}, ErrChunkCheckpointConflict
+			return PreparedProviderChunk{}, chunkConflict("prepareChunkInTx.2", fmt.Sprintf("ordinal=%d prepared=%d", chunk.Ordinal, checkpoint.PreparedChunks))
 		}
 		if _, err := tx.Exec(ctx, insertPreparedChunkSQL,
 			claim.OrgID, claim.ID, chunk.SchemaVersion, claim.GenerationKey(), chunk.RouteVersion,
@@ -272,7 +273,7 @@ func prepareChunkInTx(
 	case err != nil:
 		return PreparedProviderChunk{}, NewChunkStoreError(err)
 	case existingDigest != chunk.ManifestDigest:
-		return PreparedProviderChunk{}, ErrChunkCheckpointConflict
+		return PreparedProviderChunk{}, chunkConflict("prepareChunkInTx.3", fmt.Sprintf("ordinal=%d prepared=%d digest_match=false", chunk.Ordinal, checkpoint.PreparedChunks))
 	case chunk.Ordinal < checkpoint.PreparedChunks:
 		// The insert and checkpoint advance are one transaction, so an already
 		// prepared ordinal is safe to replay only when its digest matches. Return
@@ -337,7 +338,7 @@ func loadPreparedChunkRow(
 		chunk.Ordinal != storedOrdinal || chunk.CursorBefore != storedCursorBefore ||
 		chunk.CursorAfter != storedCursorAfter || chunk.InventoryComplete != storedInventoryComplete ||
 		chunk.PayloadBytes != storedPayloadBytes || chunk.ManifestDigest != storedManifestDigest {
-		return PreparedProviderChunk{}, ErrChunkCheckpointConflict
+		return PreparedProviderChunk{}, chunkConflict("loadPreparedChunkRow.1", fmt.Sprintf("status=%s ordinal=%d stored_ordinal=%d route_match=%t cursor_match=%t complete_match=%t bytes_match=%t digest_match=%t", status, chunk.Ordinal, storedOrdinal, chunk.RouteVersion == storedRouteVersion, chunk.CursorBefore == storedCursorBefore && chunk.CursorAfter == storedCursorAfter, chunk.InventoryComplete == storedInventoryComplete, chunk.PayloadBytes == storedPayloadBytes, chunk.ManifestDigest == storedManifestDigest))
 	}
 	// The sidecar payload is prepared before the final inventory count is
 	// known. The relational column is finalized transactionally and is the
@@ -345,12 +346,12 @@ func loadPreparedChunkRow(
 	// overwrite it during decode.
 	chunk.TotalChunks = storedTotal
 	if chunk.TotalChunks < 0 || (chunk.TotalChunks > 0 && chunk.Ordinal >= chunk.TotalChunks) {
-		return PreparedProviderChunk{}, ErrChunkCheckpointConflict
+		return PreparedProviderChunk{}, chunkConflict("loadPreparedChunkRow.2", fmt.Sprintf("total=%d ordinal=%d", chunk.TotalChunks, chunk.Ordinal))
 	}
 	if chunk.ManifestDigest == "" || chunk.TotalChunks < 0 ||
 		(chunk.TotalChunks > 0 && chunk.Ordinal >= chunk.TotalChunks) ||
 		chunk.Ledger.validate() != nil {
-		return PreparedProviderChunk{}, ErrChunkCheckpointConflict
+		return PreparedProviderChunk{}, chunkConflict("loadPreparedChunkRow.3", fmt.Sprintf("total=%d ordinal=%d digest_empty=%t", chunk.TotalChunks, chunk.Ordinal, chunk.ManifestDigest == ""))
 	}
 	return chunk, nil
 }
@@ -390,7 +391,7 @@ func (repository *PostgresRepository) ResolveChunkEffect(
 		return err
 	}
 	if index >= len(chunk.Ledger.Effects) || chunk.Ledger.Effects[index].ContentDigest != digest {
-		return ErrChunkCheckpointConflict
+		return chunkConflict("ResolveChunkEffect.1", "")
 	}
 	effect := &chunk.Ledger.Effects[index]
 	current := now.UTC()
@@ -400,7 +401,7 @@ func (repository *PostgresRepository) ResolveChunkEffect(
 			return tx.Commit(ctx)
 		}
 		if effect.Status != GenerationBlockWriting {
-			return ErrChunkCheckpointConflict
+			return chunkConflict("ResolveChunkEffect.2", "")
 		}
 		effect.Status, effect.CommittedAt = GenerationBlockCommitted, &current
 	case GenerationBlockRetryPending:
@@ -408,14 +409,14 @@ func (repository *PostgresRepository) ResolveChunkEffect(
 			return tx.Commit(ctx)
 		}
 		if effect.Status != GenerationBlockWriting {
-			return ErrChunkCheckpointConflict
+			return chunkConflict("ResolveChunkEffect.3", "")
 		}
 		effect.Status, effect.StartedAt, effect.CommittedAt = GenerationBlockPending, nil, nil
 	}
 	chunk.Ledger.UpdatedAt = current
 	encoded := encodeEffectLedgerState(chunk.Ledger)
 	if len(encoded) == 0 {
-		return ErrChunkCheckpointConflict
+		return chunkConflict("ResolveChunkEffect.4", "")
 	}
 	if _, err := tx.Exec(ctx, updateChunkLedgerSQL, claim.OrgID, claim.ID, claim.GenerationKey(), ordinal, encoded, current); err != nil {
 		return NewChunkStoreError(err)
@@ -446,7 +447,7 @@ func (repository *PostgresRepository) mutateChunkEffect(
 		return err
 	}
 	if index >= len(chunk.Ledger.Effects) || chunk.Ledger.Effects[index].ContentDigest != digest {
-		return ErrChunkCheckpointConflict
+		return chunkConflict("mutateChunkEffect.1", "")
 	}
 	effect := &chunk.Ledger.Effects[index]
 	if effect.Status == GenerationBlockWriting && from == GenerationBlockPending {
@@ -456,10 +457,10 @@ func (repository *PostgresRepository) mutateChunkEffect(
 		if to == GenerationBlockCommitted {
 			return tx.Commit(ctx)
 		}
-		return ErrChunkCheckpointConflict
+		return chunkConflict("mutateChunkEffect.2", "")
 	}
 	if effect.Status != from {
-		return ErrChunkCheckpointConflict
+		return chunkConflict("mutateChunkEffect.3", "")
 	}
 	current := now.UTC()
 	if to == GenerationBlockWriting {
@@ -473,7 +474,7 @@ func (repository *PostgresRepository) mutateChunkEffect(
 	chunk.Ledger.UpdatedAt = current
 	encoded := encodeEffectLedgerState(chunk.Ledger)
 	if len(encoded) == 0 {
-		return ErrChunkCheckpointConflict
+		return chunkConflict("mutateChunkEffect.4", "")
 	}
 	if _, err := tx.Exec(ctx, updateChunkLedgerSQL, claim.OrgID, claim.ID, claim.GenerationKey(), ordinal, encoded, current); err != nil {
 		return NewChunkStoreError(err)
@@ -503,11 +504,11 @@ func (repository *PostgresRepository) MarkChunkCommitted(
 		return err
 	}
 	if chunk.ManifestDigest != digest {
-		return ErrChunkCheckpointConflict
+		return chunkConflict("MarkChunkCommitted.1", "digest_match=false")
 	}
 	for _, effect := range chunk.Ledger.Effects {
 		if effect.Status != GenerationBlockCommitted {
-			return ErrChunkCheckpointConflict
+			return chunkConflict("MarkChunkCommitted.2", "")
 		}
 	}
 	// The statement matches only a PENDING sidecar, so RowsAffected separates a
@@ -530,7 +531,7 @@ func (repository *PostgresRepository) MarkChunkCommitted(
 			return NewChunkStoreError(scanErr)
 		}
 		if status != "committed" {
-			return ErrChunkCheckpointConflict
+			return chunkConflict("MarkChunkCommitted.3", fmt.Sprintf("status=%s", status))
 		}
 	}
 	command, err = tx.Exec(ctx, advanceChunkCheckpointSQL, claim.OrgID, claim.ID, claim.GenerationKey(), ordinal+1, chunk.CursorAfter, now.UTC(), rows)
@@ -538,7 +539,7 @@ func (repository *PostgresRepository) MarkChunkCommitted(
 		return NewChunkStoreError(err)
 	}
 	if command.RowsAffected() != 1 {
-		return ErrChunkCheckpointConflict
+		return chunkConflict("MarkChunkCommitted.4", fmt.Sprintf("rows_affected=%d", command.RowsAffected()))
 	}
 	return tx.Commit(ctx)
 }
@@ -563,7 +564,7 @@ func (repository *PostgresRepository) MarkInventoryComplete(
 		if err != nil {
 			return err
 		}
-		return ErrChunkCheckpointConflict
+		return chunkConflict("MarkInventoryComplete.1", "")
 	}
 	total := checkpoint.PreparedChunks
 	if _, err := tx.Exec(ctx, finalizePreparedChunksSQL,
@@ -576,7 +577,7 @@ func (repository *PostgresRepository) MarkInventoryComplete(
 		return NewChunkStoreError(err)
 	}
 	if command.RowsAffected() != 1 {
-		return ErrChunkCheckpointConflict
+		return chunkConflict("MarkInventoryComplete.2", fmt.Sprintf("rows_affected=%d", command.RowsAffected()))
 	}
 	return tx.Commit(ctx)
 }
@@ -625,7 +626,7 @@ func loadChunkCheckpointTx(ctx context.Context, tx pgx.Tx, claim Claim, now time
 		return ChunkCheckpoint{}, NewChunkStoreError(err)
 	}
 	if len(aggregateRaw) > 0 && decodeResultObjectExact(aggregateRaw, &checkpoint.AggregateResult) != nil {
-		return ChunkCheckpoint{}, ErrChunkCheckpointConflict
+		return ChunkCheckpoint{}, chunkConflict("loadChunkCheckpointTx.1", "")
 	}
 	if err := checkpoint.Validate(claim); err != nil {
 		return ChunkCheckpoint{}, err

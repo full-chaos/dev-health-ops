@@ -54,8 +54,10 @@ func (doer *jiraAtlassianDoer) Do(request *http.Request) (*http.Response, error)
 		body = doer.searchBody
 	case request.URL.Path == "/rest/api/3/search/jql":
 		body = `{"issues":[{"id":"10060","key":"OPS-201","self":"https://acme.atlassian.net/rest/api/3/issue/OPS-201","fields":{"project":{"key":"OPS","id":"10001","name":"Operations"},"summary":"Atlassian path","status":{"name":"Done","statusCategory":{"key":"done"}},"issuetype":{"name":"Task"},"labels":["support"],"priority":{"name":"Highest"},"assignee":{"accountId":"assignee-201","displayName":"Assignee"},"reporter":{"emailAddress":"reporter@example.com","accountId":"reporter-201","displayName":"Reporter"},"created":"2026-08-01T08:00:00Z","updated":"2026-08-02T09:00:00Z","resolutiondate":"2026-08-02T08:30:00Z","customfield_10020":[{"id":9001,"name":"August"}],"issuelinks":[{"type":{"outward":"blocks","inward":"is blocked by"},"outwardIssue":{"key":"OPS-202"}}]}}],"isLast":true}`
-	case strings.HasPrefix(request.URL.Path, "/rest/api/3/issue/OPS-201/changelog"):
-		body = `{"values":[{"created":"2026-08-01T09:00:00Z","author":{"accountId":"account-1"},"items":[{"field":"status","fromString":"To Do","toString":"Done"}]}],"total":1,"isLast":true}`
+	case request.URL.Path == "/rest/api/3/changelog/bulkfetch" && !jiraBulkAsksFor(request, "10060"):
+		body = `{"issueChangeLogs":[],"nextPageToken":null}`
+	case request.URL.Path == "/rest/api/3/changelog/bulkfetch":
+		body = `{"issueChangeLogs":[{"issueId":"10060","changeHistories":[{"created":"2026-08-01T09:00:00Z","author":{"accountId":"account-1"},"items":[{"field":"status","fromString":"To Do","toString":"Done"}]}]}],"nextPageToken":null}`
 	case strings.HasPrefix(request.URL.Path, "/rest/api/3/issue/OPS-201/comment"):
 		body = `{"comments":[{"id":"10002","created":"2026-08-02T10:00:00Z","author":{"accountId":"commenter"},"body":"verified"}],"isLast":true}`
 	case strings.HasPrefix(request.URL.Path, "/rest/api/3/issue/OPS-201/worklog"):
@@ -188,7 +190,7 @@ func TestJiraAtlassianRouteCollectsWorklogsBoardsAndCanonicalEdges(t *testing.T)
 		}
 		if parsed.Path == "/rest/api/3/search/jql" && parsed.Query().Get("expand") != "" {
 			// CHAOS-4585 review: this route fetches each issue's changelog
-			// separately (collectJiraAtlassianChangelog) and overwrites
+			// in bulk (collectJiraAtlassianChangelogs) and overwrites
 			// issue["changelog"] with it, so an inlined search-response
 			// changelog is unread bytes that can trip the 2MiB per-object cap.
 			t.Fatalf("Atlassian route's search requested expand=%s -- changelog is fetched separately, not from the search response", parsed.Query().Get("expand"))
@@ -217,12 +219,12 @@ func TestJiraAtlassianRouteCountsFailedAndRetriedAttemptsAcrossPaths(t *testing.
 		case request.URL.Path == "/rest/api/3/search/jql":
 			body := `{"issues":[{"id":"10060","key":"OPS-201","self":"https://acme.atlassian.net/rest/api/3/issue/OPS-201","fields":{"project":{"key":"OPS"},"summary":"Atlassian path","status":{"name":"Done","statusCategory":{"key":"done"}},"issuetype":{"name":"Task"},"labels":[],"created":"2026-08-01T08:00:00Z","updated":"2026-08-02T09:00:00Z"}}],"isLast":true}`
 			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
-		case strings.HasPrefix(request.URL.Path, "/rest/api/3/issue/OPS-201/changelog"):
+		case request.URL.Path == "/rest/api/3/changelog/bulkfetch":
 			changelogAttempts++
 			if changelogAttempts == 1 {
 				return nil, errors.New("simulated transient transport failure")
 			}
-			body := `{"values":[],"total":0,"isLast":true}`
+			body := `{"issueChangeLogs":[],"nextPageToken":null}`
 			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
 		case strings.HasPrefix(request.URL.Path, "/rest/api/3/issue/OPS-201/comment"):
 			body := `{"comments":[],"isLast":true}`
@@ -280,8 +282,8 @@ func TestJiraAtlassianRouteCountsFailedAndRetriedWorklogAndSprintAttempts(t *tes
 		case request.URL.Path == "/rest/api/3/search/jql":
 			body := `{"issues":[{"id":"10060","key":"OPS-201","self":"https://acme.atlassian.net/rest/api/3/issue/OPS-201","fields":{"project":{"key":"OPS"},"summary":"Atlassian path","status":{"name":"Done","statusCategory":{"key":"done"}},"issuetype":{"name":"Task"},"labels":[],"created":"2026-08-01T08:00:00Z","updated":"2026-08-02T09:00:00Z"}}],"isLast":true}`
 			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
-		case strings.HasPrefix(request.URL.Path, "/rest/api/3/issue/OPS-201/changelog"):
-			body := `{"values":[],"total":0,"isLast":true}`
+		case request.URL.Path == "/rest/api/3/changelog/bulkfetch":
+			body := `{"issueChangeLogs":[],"nextPageToken":null}`
 			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
 		case strings.HasPrefix(request.URL.Path, "/rest/api/3/issue/OPS-201/comment"):
 			body := `{"comments":[],"isLast":true}`
@@ -493,8 +495,8 @@ func TestJiraAtlassianRouteDevStatusBudgetIsSharedAcrossIssues(t *testing.T) {
 				`{"id":"20002","key":"OPS-302","self":"https://acme.atlassian.net/rest/api/3/issue/OPS-302","fields":{"project":{"key":"OPS"},"summary":"Second","status":{"name":"Open","statusCategory":{"key":"new"}},"issuetype":{"name":"Task"},"labels":[],"created":"2026-08-01T00:00:00Z","updated":"2026-08-01T00:00:00Z"},"changelog":{"histories":[]}}` +
 				`],"isLast":true}`
 			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
-		case strings.HasPrefix(request.URL.Path, "/rest/api/3/issue/") && strings.HasSuffix(request.URL.Path, "/changelog"):
-			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{"values":[],"total":0,"isLast":true}`)), Request: request}, nil
+		case request.URL.Path == "/rest/api/3/changelog/bulkfetch":
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{"issueChangeLogs":[],"nextPageToken":null}`)), Request: request}, nil
 		case request.URL.Path == "/rest/dev-status/1.0/issue/detail":
 			devStatusCalls++
 			// Every wire attempt is a transient 503: with a budget of 2 and a
@@ -554,8 +556,8 @@ func TestJiraAtlassianRouteDevStatusCleanNoOpStillDebitsSharedBudget(t *testing.
 				`{"id":"20002","key":"OPS-402","self":"https://acme.atlassian.net/rest/api/3/issue/OPS-402","fields":{"project":{"key":"OPS"},"summary":"Second","status":{"name":"Open","statusCategory":{"key":"new"}},"issuetype":{"name":"Task"},"labels":[],"created":"2026-08-01T00:00:00Z","updated":"2026-08-01T00:00:00Z"},"changelog":{"histories":[]}}` +
 				`],"isLast":true}`
 			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
-		case strings.HasPrefix(request.URL.Path, "/rest/api/3/issue/") && strings.HasSuffix(request.URL.Path, "/changelog"):
-			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{"values":[],"total":0,"isLast":true}`)), Request: request}, nil
+		case request.URL.Path == "/rest/api/3/changelog/bulkfetch":
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{"issueChangeLogs":[],"nextPageToken":null}`)), Request: request}, nil
 		case request.URL.Path == "/rest/dev-status/1.0/issue/detail":
 			issueID := request.URL.Query().Get("issueId")
 			devStatusIssueIDs = append(devStatusIssueIDs, issueID)
@@ -789,8 +791,8 @@ func TestJiraAtlassianRouteDevStatusOneApplicationTypeDown(t *testing.T) {
 				switch {
 				case request.URL.Path == "/rest/api/3/search/jql":
 					return respond(http.StatusOK, `{"issues":[{"id":"20001","key":"OPS-501","self":"https://acme.atlassian.net/rest/api/3/issue/OPS-501","fields":{"project":{"key":"OPS"},"summary":"First","status":{"name":"Open","statusCategory":{"key":"new"}},"issuetype":{"name":"Task"},"labels":[],"created":"2026-08-01T00:00:00Z","updated":"2026-08-01T00:00:00Z"},"changelog":{"histories":[]}}],"isLast":true}`)
-				case strings.HasSuffix(request.URL.Path, "/changelog"):
-					return respond(http.StatusOK, `{"values":[],"total":0,"isLast":true}`)
+				case request.URL.Path == "/rest/api/3/changelog/bulkfetch":
+					return respond(http.StatusOK, `{"issueChangeLogs":[],"nextPageToken":null}`)
 				case request.URL.Path == "/rest/dev-status/1.0/issue/detail":
 					if request.URL.Query().Get("applicationType") == "GitLab" {
 						return respond(c.gitlabStatus, c.gitlabBody)
@@ -950,4 +952,12 @@ func TestJiraAtlassianRouteCountsTheGraphQLClientsRequestsInTheUnitLedger(t *tes
 	if counted != restHits+graphqlHits || dropped != 0 {
 		t.Fatalf("ledger counted %d (dropped %d), want %d REST + %d GraphQL wire requests: %v", counted, dropped, restHits, graphqlHits, entries)
 	}
+}
+
+func jiraBulkAsksFor(request *http.Request, id string) bool {
+	raw, err := io.ReadAll(request.Body)
+	if err != nil {
+		return false
+	}
+	return strings.Contains(string(raw), `"`+id+`"`)
 }

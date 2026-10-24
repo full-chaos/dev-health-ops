@@ -114,19 +114,22 @@ func execReturningIDs(ctx context.Context, tx pgx.Tx, sql string, args ...any) (
 // claimed this call is not also a stale-reclaim candidate.
 func claimUnits(
 	ctx context.Context, tx pgx.Tx, syncRunID string,
-	authorizedUnitIDs, cappedUnitIDs map[string]bool, now time.Time,
+	authorizedUnitIDs, cappedUnitIDs *idSet, now time.Time,
 ) ([]budgetUnit, []string, error) {
-	cappedSlice := mapKeysToSlice(cappedUnitIDs)
-	authorizedSlice := mapKeysToSlice(authorizedUnitIDs)
-
+	relations, relationArgs, err := idSetRelations(4, authorizedUnitIDs, cappedUnitIDs)
+	if err != nil {
+		return nil, nil, err
+	}
+	authorizedRelation, cappedRelation := relations[0], relations[1]
+	// $1 run, $2 dispatching, $3 now, $4 the status under claim; the id relations bind from $5.
 	plannedClaimed, err := execReturningIDs(ctx, tx, `
 UPDATE public.sync_run_units
 SET status = $2, updated_at = $3, first_blocked_at = NULL
 WHERE sync_run_id = $1::uuid AND status = $4
-  AND id = ANY($6::uuid[])
-  AND NOT (id = ANY($5::uuid[]))
+  AND id IN `+authorizedRelation+`
+  AND id NOT IN `+cappedRelation+`
 RETURNING id::text`,
-		syncRunID, syncRunUnitStatusDispatching, now, syncRunUnitStatusPlanned, cappedSlice, authorizedSlice)
+		append([]any{syncRunID, syncRunUnitStatusDispatching, now, syncRunUnitStatusPlanned}, relationArgs...)...)
 	if err != nil {
 		return nil, nil, fmt.Errorf("claim planned units: %w", err)
 	}
@@ -141,10 +144,10 @@ UPDATE public.sync_run_units
 SET status = $2, updated_at = $3, available_at = NULL, first_blocked_at = NULL
 WHERE sync_run_id = $1::uuid AND status = $4
   AND available_at IS NOT NULL AND available_at <= $3
-  AND id = ANY($6::uuid[])
-  AND NOT (id = ANY($5::uuid[]))
+  AND id IN `+authorizedRelation+`
+  AND id NOT IN `+cappedRelation+`
 RETURNING id::text`,
-		syncRunID, syncRunUnitStatusDispatching, now, syncRunUnitStatusRetrying, cappedSlice, authorizedSlice)
+		append([]any{syncRunID, syncRunUnitStatusDispatching, now, syncRunUnitStatusRetrying}, relationArgs...)...)
 	if err != nil {
 		return nil, nil, fmt.Errorf("claim due retrying units: %w", err)
 	}
@@ -152,15 +155,15 @@ RETURNING id::text`,
 		claimedIDs[id] = true
 	}
 
-	excludeFromStale := append(mapKeysToSlice(claimedIDs), cappedSlice...)
 	staleReclaimed, err := execReturningIDs(ctx, tx, `
 UPDATE public.sync_run_units
 SET updated_at = $2
 WHERE sync_run_id = $1::uuid AND status = $3 AND updated_at <= $4
-  AND id = ANY($6::uuid[])
-  AND NOT (id = ANY($5::uuid[]))
+  AND id IN `+authorizedRelation+`
+  AND id NOT IN `+cappedRelation+`
+  AND NOT (id = ANY($`+fmt.Sprint(4+len(relationArgs)+1)+`::uuid[]))
 RETURNING id::text`,
-		syncRunID, now, syncRunUnitStatusDispatching, staleDispatchCutoff(now), excludeFromStale, authorizedSlice)
+		append([]any{syncRunID, now, syncRunUnitStatusDispatching, staleDispatchCutoff(now)}, append(relationArgs, mapKeysToSlice(claimedIDs))...)...)
 	if err != nil {
 		return nil, nil, fmt.Errorf("reclaim stale dispatching units: %w", err)
 	}
@@ -190,7 +193,7 @@ RETURNING id::text`,
 	// due-RETRYING units and re-arms dispatch (internal/syncreconciler/
 	// materializer.go), so a row this probe misses is still picked up. The arm
 	// here exists to make the common case prompt, not to be the only backstop.
-	deferredOutsideSnapshot, err := claimableOutsideSnapshot(ctx, tx, syncRunID, claimedIDs, authorizedSlice, cappedSlice, now)
+	deferredOutsideSnapshot, err := claimableOutsideSnapshot(ctx, tx, syncRunID, claimedIDs, authorizedUnitIDs, cappedUnitIDs, now)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -255,8 +258,14 @@ ORDER BY id`,
 // contract directly instead of through a proxy, and gets the enforcement free.
 func claimableOutsideSnapshot(
 	ctx context.Context, tx pgx.Tx, syncRunID string, claimedIDs map[string]bool,
-	authorizedSlice, cappedSlice []string, now time.Time,
+	authorized, capped *idSet, now time.Time,
 ) ([]string, error) {
+	relations, relationArgs, err := idSetRelations(6, authorized, capped)
+	if err != nil {
+		return nil, err
+	}
+	// $1 run, $2 planned, $3 retrying, $4 now, $5 dispatching, $6 stale cutoff; the relations bind from $7, the
+	// claimed ids after them.
 	ids, err := execReturningIDs(ctx, tx, `
 SELECT id::text FROM public.sync_run_units
 WHERE sync_run_id = $1::uuid
@@ -265,13 +274,12 @@ WHERE sync_run_id = $1::uuid
      OR (status = $3 AND available_at IS NOT NULL AND available_at <= $4)
      OR (status = $5 AND updated_at <= $6)
       )
-  AND NOT (id = ANY($7::uuid[]))
-  AND NOT (id = ANY($8::uuid[]))
-  AND NOT (id = ANY($9::uuid[]))
+  AND id NOT IN `+relations[0]+`
+  AND id NOT IN `+relations[1]+`
+  AND NOT (id = ANY($`+fmt.Sprint(6+len(relationArgs)+1)+`::uuid[]))
 ORDER BY id`,
-		syncRunID, syncRunUnitStatusPlanned, syncRunUnitStatusRetrying, now,
-		syncRunUnitStatusDispatching, staleDispatchCutoff(now), authorizedSlice, cappedSlice,
-		mapKeysToSlice(claimedIDs))
+		append([]any{syncRunID, syncRunUnitStatusPlanned, syncRunUnitStatusRetrying, now,
+			syncRunUnitStatusDispatching, staleDispatchCutoff(now)}, append(relationArgs, mapKeysToSlice(claimedIDs))...)...)
 	if err != nil {
 		return nil, fmt.Errorf("load claimable units outside the guard snapshot: %w", err)
 	}

@@ -107,8 +107,12 @@ func TestAuthorizeRunPagesAPastPageSizeRunAndKeepsTheDecision(t *testing.T) {
 			}
 			slots := concurrencyCapForCostClass("standard")
 			var claimable []string
+			authorized := map[string]bool{}
+			for _, id := range idSetContents(t, decision.authorized) {
+				authorized[id] = true
+			}
 			for _, id := range ids {
-				if decision.authorizedUnitIDs[id] && !containsID(decision.cappedUnitIDs, id) {
+				if authorized[id] && !containsID(cappedIDsOf(t, decision), id) {
 					claimable = append(claimable, id)
 				}
 			}
@@ -116,8 +120,8 @@ func TestAuthorizeRunPagesAPastPageSizeRunAndKeepsTheDecision(t *testing.T) {
 			if strings.Join(claimable, ",") != strings.Join(ids[:slots], ",") {
 				t.Fatalf("claimable = %v, want the first %d ids by id", claimable, slots)
 			}
-			if len(decision.authorizedUnitIDs) != units || len(decision.cappedUnitIDs) != units-slots {
-				t.Fatalf("authorized=%d capped=%d, want %d and %d", len(decision.authorizedUnitIDs), len(decision.cappedUnitIDs), units, units-slots)
+			if len(authorized) != units || len(cappedIDsOf(t, decision)) != units-slots {
+				t.Fatalf("authorized=%d capped=%d, want %d and %d", len(authorized), len(cappedIDsOf(t, decision)), units, units-slots)
 			}
 		})
 
@@ -129,8 +133,8 @@ func TestAuthorizeRunPagesAPastPageSizeRunAndKeepsTheDecision(t *testing.T) {
 			if got, want := sum(pages), 3*units; got != want {
 				t.Fatalf("rows read = %d over pages %v, want %d (two passes and the suffix walk)", got, pages, want)
 			}
-			if strings.Join(decision.cappedUnitIDs, ",") != strings.Join(ids[1000:], ",") {
-				t.Fatalf("cappedUnitIDs = %v, want the id-ordered suffix past 1000", decision.cappedUnitIDs)
+			if strings.Join(cappedIDsOf(t, decision), ",") != strings.Join(ids[1000:], ",") {
+				t.Fatalf("cappedUnitIDs = %v, want the id-ordered suffix past 1000", cappedIDsOf(t, decision))
 			}
 		})
 	})

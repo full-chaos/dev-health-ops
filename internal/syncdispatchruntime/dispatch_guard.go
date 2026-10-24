@@ -57,7 +57,7 @@ type dispatchGuardUnit struct {
 //     cappedUnitIDs lists every unit past the org's absolute cap. The
 //     caller MUST mark the run FAILED.
 //   - Concurrency partial-cap: allowed=true, concurrencyCapped=true,
-//     cappedUnitIDs lists units held back by a saturated bucket. The
+//     capped holds the units held back by a saturated bucket. The
 //     caller MUST leave them PLANNED and schedule a delayed redispatch,
 //     MUST NOT mark the run FAILED.
 //   - Full allow: allowed=true, concurrencyCapped=false.
@@ -67,12 +67,15 @@ type dispatchGuardUnit struct {
 // visited) -- the only sanctioned channel BudgetGuard's surplus retry uses
 // to admit extra work without stepping around this cap (CHAOS-3465).
 type guardDecision struct {
-	allowed           bool
-	reason            string
+	allowed bool
+	reason  string
+	// cappedUnitIDs is the hard-deny suffix only (the run-result JSON still carries it as a list).
 	cappedUnitIDs     []string
 	concurrencyCapped bool
 	slotHeadroom      map[dispatchBucket]int
-	// authorizedUnitIDs is the EXACT set of units this pass's capacity
+	// capped is the concurrency partial-cap set (nil on any other decision).
+	capped *idSet
+	// authorized is the EXACT set of units this pass's capacity
 	// decision was computed over: every unit the snapshot classified as a
 	// candidate, in a bucket this transaction locked and cap-checked.
 	//
@@ -97,7 +100,7 @@ type guardDecision struct {
 	// Populated on every ALLOW decision and never on the hard-deny return,
 	// matching slotHeadroom's own convention (the hard-deny branch returns
 	// before any bucket is visited and its caller never reaches claimUnits).
-	authorizedUnitIDs map[string]bool
+	authorized *idSet
 }
 
 // defaultSyncRunMaxUnits mirrors guard.py's _resolve_total_unit_cap default
@@ -264,6 +267,7 @@ func authorizeRun(ctx context.Context, tx pgx.Tx, logger *synclog.Logger, orgID,
 		emit: func(bucket dispatchBucket, activeCount, reclaimedStale, cappedNew, cappedStale, headroom int) {
 			emitBucketDecision(ctx, logger, bucket, activeCount, reclaimedStale, cappedNew, cappedStale, headroom)
 		},
+		newIDSet: func(table string) *idSet { return newIDSet(ctx, tx, table) },
 	}
 	source := func(fold func(dispatchGuardUnit) error) error {
 		return forEachDispatchGuardUnit(ctx, tx, runID, fold)
@@ -277,23 +281,24 @@ type guardEnv struct {
 	totalCap    func() int
 	activeCount func(dispatchBucket) (int, error)
 	emit        func(bucket dispatchBucket, activeCount, reclaimedStale, cappedNew, cappedStale, headroom int)
+	newIDSet    func(table string) *idSet
 }
 
 // guardUnitSource folds every unit of the run in id order; each call is one full paged read.
 type guardUnitSource func(fold func(dispatchGuardUnit) error) error
 
 // guardBucketFold is the per-bucket state of the second pass. The first allowedSlots units of `stale reclaims by
-// (updated_at, id), then new work by id` are the claimable ones; every other candidate is capped. The capped ids and the
-// authorized ids are the decision's output and still grow with the number of units; only the page size of the reads is
-// bounded here.
+// (updated_at, id), then new work by id` are the claimable ones; every other candidate is written to the capped set the
+// moment it is known to be capped, so the fold holds at most allowedSlots ids.
 type guardBucketFold struct {
-	slots          int
-	reclaims       reclaimHeap
-	reclaimCount   int
-	newCount       int
-	newKept        []string
-	newOverflow    []string
-	cappedReclaims []dispatchGuardUnit
+	slots              int
+	capped             *idSet
+	reclaims           reclaimHeap
+	reclaimCount       int
+	newCount           int
+	cappedReclaimCount int
+	cappedNewCount     int
+	newKept            []string
 }
 
 // reclaimHeap is a max-heap on reclaim priority: the worst-priority kept reclaim sits on top.
@@ -317,34 +322,33 @@ func (heap *reclaimHeap) Pop() any {
 	return last
 }
 
-func (fold *guardBucketFold) addReclaim(unit dispatchGuardUnit) {
+func (fold *guardBucketFold) addReclaim(unit dispatchGuardUnit) error {
 	fold.reclaimCount++
 	if fold.slots == 0 {
-		fold.cappedReclaims = append(fold.cappedReclaims, unit)
-		return
+		fold.cappedReclaimCount++
+		return fold.capped.add(unit.id)
 	}
 	heap.Push(&fold.reclaims, unit)
 	if fold.reclaims.Len() > fold.slots {
-		fold.cappedReclaims = append(fold.cappedReclaims, heap.Pop(&fold.reclaims).(dispatchGuardUnit))
+		fold.cappedReclaimCount++
+		return fold.capped.add(heap.Pop(&fold.reclaims).(dispatchGuardUnit).id)
 	}
+	return nil
 }
 
-func (fold *guardBucketFold) addNew(id string) {
+func (fold *guardBucketFold) addNew(id string) error {
 	fold.newCount++
 	if len(fold.newKept) < fold.slots {
 		fold.newKept = append(fold.newKept, id)
-		return
+		return nil
 	}
-	fold.newOverflow = append(fold.newOverflow, id)
+	fold.cappedNewCount++
+	return fold.capped.add(id)
 }
 
-// cappedIDs is the old prioritized[allowedSlots:] in the old order: the capped reclaims (sorted), then capped new work by id.
-func (fold *guardBucketFold) cappedIDs() []string {
-	sort.Slice(fold.cappedReclaims, func(i, j int) bool { return reclaimBefore(fold.cappedReclaims[i], fold.cappedReclaims[j]) })
-	ids := make([]string, 0, len(fold.cappedReclaims)+len(fold.newKept)+len(fold.newOverflow))
-	for _, unit := range fold.cappedReclaims {
-		ids = append(ids, unit.id)
-	}
+// finish caps the new work that did not fit behind the reclaims: with R reclaims the first slots-R new ids are
+// claimable, the rest of the kept ones are capped.
+func (fold *guardBucketFold) finish() error {
 	claimableNew := fold.slots - fold.reclaimCount
 	if claimableNew < 0 {
 		claimableNew = 0
@@ -352,8 +356,13 @@ func (fold *guardBucketFold) cappedIDs() []string {
 	if claimableNew > len(fold.newKept) {
 		claimableNew = len(fold.newKept)
 	}
-	ids = append(ids, fold.newKept[claimableNew:]...)
-	return append(ids, fold.newOverflow...)
+	for _, id := range fold.newKept[claimableNew:] {
+		fold.cappedNewCount++
+		if err := fold.capped.add(id); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // decideDispatchGuard is the guard decision, folded over keyset pages (each read returns at most unitPageSize rows;
@@ -435,6 +444,7 @@ func decideDispatchGuard(source guardUnitSource, env guardEnv, orgID string, now
 
 	activeCounts := make(map[dispatchBucket]int, len(allBuckets))
 	folds := make(map[dispatchBucket]*guardBucketFold, len(allBuckets))
+	capped := env.newIDSet("dispatch_guard_capped")
 	for _, bucket := range allBuckets {
 		activeCount, err := env.activeCount(bucket)
 		if err != nil {
@@ -445,11 +455,11 @@ func decideDispatchGuard(source guardUnitSource, env guardEnv, orgID string, now
 		if slots < 0 {
 			slots = 0
 		}
-		folds[bucket] = &guardBucketFold{slots: slots}
+		folds[bucket] = &guardBucketFold{slots: slots, capped: capped}
 	}
 
 	// The authorized set is every candidate of a locked, cap-checked bucket and nothing else.
-	authorizedUnitIDs := make(map[string]bool)
+	authorized := env.newIDSet("dispatch_guard_authorized")
 	if err := source(func(unit dispatchGuardUnit) error {
 		_, candidate, _ := classify(unit)
 		if !candidate {
@@ -459,23 +469,25 @@ func decideDispatchGuard(source guardUnitSource, env guardEnv, orgID string, now
 		if fold == nil {
 			return nil
 		}
-		authorizedUnitIDs[unit.id] = true
-		if unit.status == syncRunUnitStatusDispatching {
-			fold.addReclaim(unit)
-		} else {
-			fold.addNew(unit.id)
+		if err := authorized.add(unit.id); err != nil {
+			return err
 		}
-		return nil
+		if unit.status == syncRunUnitStatusDispatching {
+			return fold.addReclaim(unit)
+		}
+		return fold.addNew(unit.id)
 	}); err != nil {
 		return guardDecision{}, err
 	}
 
-	var cappedUnitIDs []string
+	cappedTotal := 0
 	slotHeadroom := make(map[dispatchBucket]int, len(allBuckets))
 	for _, bucket := range allBuckets {
 		fold := folds[bucket]
-		capped := fold.cappedIDs()
-		cappedUnitIDs = append(cappedUnitIDs, capped...)
+		if err := fold.finish(); err != nil {
+			return guardDecision{}, err
+		}
+		cappedTotal += fold.cappedReclaimCount + fold.cappedNewCount
 		headroom := fold.slots - (fold.reclaimCount + fold.newCount)
 		if headroom < 0 {
 			headroom = 0
@@ -485,20 +497,20 @@ func decideDispatchGuard(source guardUnitSource, env guardEnv, orgID string, now
 		if reclaimedStale > fold.slots {
 			reclaimedStale = fold.slots
 		}
-		env.emit(bucket, activeCounts[bucket], reclaimedStale, len(capped)-len(fold.cappedReclaims), len(fold.cappedReclaims), headroom)
+		env.emit(bucket, activeCounts[bucket], reclaimedStale, fold.cappedNewCount, fold.cappedReclaimCount, headroom)
 	}
 
-	if len(cappedUnitIDs) > 0 {
+	if cappedTotal > 0 {
 		return guardDecision{
 			allowed:           true,
-			reason:            fmt.Sprintf("sync unit concurrency cap exceeded: %d capped", len(cappedUnitIDs)),
-			cappedUnitIDs:     cappedUnitIDs,
+			reason:            fmt.Sprintf("sync unit concurrency cap exceeded: %d capped", cappedTotal),
+			capped:            capped,
 			concurrencyCapped: true,
 			slotHeadroom:      slotHeadroom,
-			authorizedUnitIDs: authorizedUnitIDs,
+			authorized:        authorized,
 		}, nil
 	}
-	return guardDecision{allowed: true, slotHeadroom: slotHeadroom, authorizedUnitIDs: authorizedUnitIDs}, nil
+	return guardDecision{allowed: true, slotHeadroom: slotHeadroom, authorized: authorized}, nil
 }
 
 // forEachDispatchGuardUnit folds this run's units in id order (stable ordering for the total-cap suffix,

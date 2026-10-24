@@ -337,10 +337,19 @@ func (service *NativeDispatchSyncRunService) Dispatch(ctx context.Context, args 
 	// way, only a Go-side accumulation of dead code Python already has.
 
 	// --- Concurrency partial-cap: defer overflow units, proceed with rest ---
+	// cappedIDs is the Go-side set the budget reads still filter by; cappedSet is the same set as the claim's SQL
+	// relation. Both hold the guard's capped units plus everything the budget phase defers or excludes below.
 	cappedIDs := map[string]bool{}
-	if decision.concurrencyCapped && len(decision.cappedUnitIDs) > 0 {
-		for _, id := range decision.cappedUnitIDs {
+	cappedSet := decision.capped
+	if cappedSet == nil {
+		cappedSet = newIDSet(ctx, tx, "dispatch_guard_capped")
+	}
+	if decision.concurrencyCapped && decision.capped != nil {
+		if err := decision.capped.forEach(func(id string) error {
 			cappedIDs[id] = true
+			return nil
+		}); err != nil {
+			return err
 		}
 		service.logger.Info(ctx, synclog.MsgDispatchSyncRunConcurrencyCapped, synclog.Run(synclog.ParseID(run.id)), synclog.Count(synclog.KeyCappedCount, len(cappedIDs)), synclog.Text(synclog.KeyReason, synclog.ParseLabel(decision.reason)))
 	}
@@ -363,6 +372,9 @@ func (service *NativeDispatchSyncRunService) Dispatch(ctx context.Context, args 
 	}
 	for id := range budgetResult.deferredUnitIDs {
 		cappedIDs[id] = true
+		if err := cappedSet.add(id); err != nil {
+			return err
+		}
 	}
 
 	// CHAOS-2760 TOCTOU closure: reconfirm_cooldowns' surplusPromotedAt MUST
@@ -376,6 +388,9 @@ func (service *NativeDispatchSyncRunService) Dispatch(ctx context.Context, args 
 	}
 	for id := range reconfirmResult.excludedUnitIDs {
 		cappedIDs[id] = true
+		if err := cappedSet.add(id); err != nil {
+			return err
+		}
 	}
 
 	nextDeferredAt := budgetResult.nextDeferredAt
@@ -404,14 +419,13 @@ func (service *NativeDispatchSyncRunService) Dispatch(ctx context.Context, args 
 	// against a bucket authorizeRun DID lock and DID cap-check -- so they
 	// are covered by this pass's capacity decision even though they were
 	// deferrals, not candidates, at snapshot time.
-	authorizedIDs := make(map[string]bool, len(decision.authorizedUnitIDs)+len(budgetResult.surplusAdmittedUnitIDs))
-	for id := range decision.authorizedUnitIDs {
-		authorizedIDs[id] = true
-	}
+	authorizedSet := decision.authorized
 	for id := range budgetResult.surplusAdmittedUnitIDs {
-		authorizedIDs[id] = true
+		if err := authorizedSet.add(id); err != nil {
+			return err
+		}
 	}
-	claimedUnits, deferredOutsideSnapshot, err := claimUnits(ctx, tx, run.id, authorizedIDs, cappedIDs, service.nowUTC())
+	claimedUnits, deferredOutsideSnapshot, err := claimUnits(ctx, tx, run.id, authorizedSet, cappedSet, service.nowUTC())
 	if err != nil {
 		return err
 	}

@@ -73,7 +73,7 @@ func TestAuthorizeRunAllowsWhenUnderEveryCap(t *testing.T) {
 		if err != nil {
 			t.Fatalf("authorizeRun: %v", err)
 		}
-		if !decision.allowed || decision.concurrencyCapped || len(decision.cappedUnitIDs) != 0 {
+		if !decision.allowed || decision.concurrencyCapped || len(cappedIDsOf(t, decision)) != 0 {
 			t.Fatalf("decision=%+v, want full allow", decision)
 		}
 		bucket := dispatchBucket{orgID: guardTestOrg, provider: "github", costClass: "standard"}
@@ -107,8 +107,8 @@ func TestAuthorizeRunHardDeniesOverTheTotalUnitCap(t *testing.T) {
 		if decision.allowed || decision.concurrencyCapped {
 			t.Fatalf("decision=%+v, want total-cap hard-deny (allowed=false, concurrencyCapped=false)", decision)
 		}
-		if len(decision.cappedUnitIDs) != 1 || decision.cappedUnitIDs[0] != "00000000-0000-4000-8000-0000000000f2" {
-			t.Fatalf("cappedUnitIDs=%v, want the id-ordered suffix past cap 1", decision.cappedUnitIDs)
+		if len(cappedIDsOf(t, decision)) != 1 || cappedIDsOf(t, decision)[0] != "00000000-0000-4000-8000-0000000000f2" {
+			t.Fatalf("cappedUnitIDs=%v, want the id-ordered suffix past cap 1", cappedIDsOf(t, decision))
 		}
 		if len(decision.slotHeadroom) != 0 {
 			t.Fatalf("slotHeadroom=%v, want empty -- hard-deny returns before any bucket is visited", decision.slotHeadroom)
@@ -189,8 +189,8 @@ func TestAuthorizeRunConcurrencyCapsOverflowAndOrdersReclaimsFirst(t *testing.T)
 		if !decision.allowed || !decision.concurrencyCapped {
 			t.Fatalf("decision=%+v, want concurrency partial-cap", decision)
 		}
-		if len(decision.cappedUnitIDs) != 1 || decision.cappedUnitIDs[0] != plannedID {
-			t.Fatalf("cappedUnitIDs=%v, want [%s] (the PLANNED unit, not the reclaim)", decision.cappedUnitIDs, plannedID)
+		if len(cappedIDsOf(t, decision)) != 1 || cappedIDsOf(t, decision)[0] != plannedID {
+			t.Fatalf("cappedUnitIDs=%v, want [%s] (the PLANNED unit, not the reclaim)", cappedIDsOf(t, decision), plannedID)
 		}
 	})
 }
@@ -478,7 +478,7 @@ func authorizeCappedCount(t *testing.T, ctx context.Context, pool *pgxpool.Pool,
 	if !decision.allowed {
 		t.Fatalf("decision=%+v, want allowed", decision)
 	}
-	return len(decision.cappedUnitIDs), decision.concurrencyCapped
+	return len(cappedIDsOf(t, decision)), decision.concurrencyCapped
 }
 
 func guardUnitID(prefix string, i int) string {

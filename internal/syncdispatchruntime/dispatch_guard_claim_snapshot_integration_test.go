@@ -210,11 +210,11 @@ func TestClaimUnitsClaimsARetryingUnitThatBecameDueAfterTheGuardSnapshot(t *test
 		if headroom, ok := decision.slotHeadroom[claimSnapshotBucket()]; !ok || headroom != 0 {
 			t.Fatalf("slotHeadroom[bucket]=%d ok=%v want 0/true (bucket already at cap)", headroom, ok)
 		}
-		if len(decision.cappedUnitIDs) != 0 {
-			t.Fatalf("cappedUnitIDs=%v want empty (the late unit was never a candidate)", decision.cappedUnitIDs)
+		if len(cappedIDsOf(t, decision)) != 0 {
+			t.Fatalf("cappedUnitIDs=%v want empty (the late unit was never a candidate)", cappedIDsOf(t, decision))
 		}
 
-		claimed, deferred, err := claimUnits(ctx, tx, claimSnapshotRun, decision.authorizedUnitIDs, nil, claimNow)
+		claimed, deferred, err := claimUnits(ctx, tx, claimSnapshotRun, decision.authorized, nil, claimNow)
 		if err != nil {
 			t.Fatalf("claimUnits: %v", err)
 		}
@@ -322,7 +322,7 @@ func TestClaimUnitsClaimsAUnitLeaseRepairMadeClaimableInAnUnlockedBucket(t *test
 		// Uncontested: authorizeRun asked for no lock on this bucket.
 		leaseRepairFlipToRetrying(t, ctx, pool, lostUnit, guardNow.Add(200*time.Millisecond), guardNow)
 
-		claimed, deferred, err := claimUnits(ctx, tx, claimSnapshotRun, decision.authorizedUnitIDs, nil, claimNow)
+		claimed, deferred, err := claimUnits(ctx, tx, claimSnapshotRun, decision.authorized, nil, claimNow)
 		if err != nil {
 			t.Fatalf("claimUnits: %v", err)
 		}
@@ -402,11 +402,7 @@ func TestGuardBucketLockDoesNotProtectTheClaimBecauseTheSnapshotPrecedesIt(t *te
 			if guardErr != nil {
 				return
 			}
-			capped := map[string]bool{}
-			for _, id := range decision.cappedUnitIDs {
-				capped[id] = true
-			}
-			claimed, deferred, claimErr = claimUnits(ctx, tx, claimSnapshotRun, decision.authorizedUnitIDs, capped, claimNow)
+			claimed, deferred, claimErr = claimUnits(ctx, tx, claimSnapshotRun, decision.authorized, decision.capped, claimNow)
 			if claimErr != nil {
 				return
 			}
@@ -441,8 +437,8 @@ WHERE id = $1::uuid AND status = 'running'`,
 		}
 		// The guard held the bucket lock and cap-checked the bucket: one
 		// free slot, one PLANNED candidate, nothing capped.
-		if len(decision.cappedUnitIDs) != 0 {
-			t.Fatalf("cappedUnitIDs=%v want empty (one candidate, one free slot)", decision.cappedUnitIDs)
+		if len(cappedIDsOf(t, decision)) != 0 {
+			t.Fatalf("cappedUnitIDs=%v want empty (one candidate, one free slot)", cappedIDsOf(t, decision))
 		}
 		got := idsOf(claimed)
 		if len(got) != 1 || !got[plannedUnit] {
@@ -506,11 +502,10 @@ func TestClaimableOutsideSnapshotMustBeProbedAfterTheClaimsNotBefore(t *testing.
 		if err != nil {
 			t.Fatalf("authorizeRun: %v", err)
 		}
-		authorizedSlice := mapKeysToSlice(decision.authorizedUnitIDs)
 
 		// The OLD ordering: probe at the head of claimUnits, before any claim
 		// statement has run and before the concurrent writer commits.
-		probedFirst, err := claimableOutsideSnapshot(ctx, tx, claimSnapshotRun, nil, authorizedSlice, nil, claimNow)
+		probedFirst, err := claimableOutsideSnapshot(ctx, tx, claimSnapshotRun, nil, decision.authorized, nil, claimNow)
 		if err != nil {
 			t.Fatalf("claimableOutsideSnapshot (old position): %v", err)
 		}
@@ -518,7 +513,7 @@ func TestClaimableOutsideSnapshotMustBeProbedAfterTheClaimsNotBefore(t *testing.
 		// The commit the two orderings disagree about.
 		leaseRepairFlipToRetrying(t, ctx, pool, lostUnit, guardNow.Add(200*time.Millisecond), guardNow)
 
-		claimed, probedLast, err := claimUnits(ctx, tx, claimSnapshotRun, decision.authorizedUnitIDs, nil, claimNow)
+		claimed, probedLast, err := claimUnits(ctx, tx, claimSnapshotRun, decision.authorized, nil, claimNow)
 		if err != nil {
 			t.Fatalf("claimUnits: %v", err)
 		}

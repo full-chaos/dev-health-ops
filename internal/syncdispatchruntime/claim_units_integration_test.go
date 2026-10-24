@@ -34,13 +34,7 @@ func claimedUnitRow(t *testing.T, ctx context.Context, pool *pgxpool.Pool, id st
 // claimUnits' own status/timing predicates and the capped exclusion --
 // unchanged by the allow-list. The allow-list's own behavior is pinned
 // separately in dispatch_guard_claim_snapshot_integration_test.go.
-func authorized(ids ...string) map[string]bool {
-	set := make(map[string]bool, len(ids))
-	for _, id := range ids {
-		set[id] = true
-	}
-	return set
-}
+func authorized(ids ...string) *idSet { return memoryIDSet(ids...) }
 
 // TestClaimUnitsClaimsFreshPlannedUnits pins the PLANNED claim path: status
 // moves to DISPATCHING and first_blocked_at is cleared (CHAOS-3412: a
@@ -212,7 +206,7 @@ func TestClaimUnitsExcludesCappedUnitIDsFromEveryClaimPath(t *testing.T) {
 		insertCandidateUnit(t, ctx, pool, candidateUnitFixture{id: cappedStale, status: syncRunUnitStatusDispatching, updatedAt: staleCutoff.Add(-time.Minute)})
 		insertCandidateUnit(t, ctx, pool, candidateUnitFixture{id: uncappedPlanned, status: syncRunUnitStatusPlanned, updatedAt: now})
 
-		capped := map[string]bool{cappedPlanned: true, cappedRetrying: true, cappedStale: true}
+		capped := memoryIDSet(cappedPlanned, cappedRetrying, cappedStale)
 
 		tx, err := pool.Begin(ctx)
 		if err != nil {

@@ -1,6 +1,7 @@
 package syncdispatchruntime
 
 import (
+	"context"
 	"fmt"
 	"math/rand"
 	"reflect"
@@ -8,6 +9,32 @@ import (
 	"testing"
 	"time"
 )
+
+// plainDecision is the decision with every id set as a plain Go value, for comparison with the oracle.
+type plainDecision struct {
+	allowed           bool
+	reason            string
+	cappedUnitIDs     []string
+	concurrencyCapped bool
+	slotHeadroom      map[dispatchBucket]int
+	authorizedUnitIDs map[string]bool
+}
+
+func plainOf(t *testing.T, decision guardDecision) plainDecision {
+	t.Helper()
+	plain := plainDecision{allowed: decision.allowed, reason: decision.reason, cappedUnitIDs: decision.cappedUnitIDs,
+		concurrencyCapped: decision.concurrencyCapped, slotHeadroom: decision.slotHeadroom}
+	if decision.capped != nil {
+		plain.cappedUnitIDs = idSetContents(t, decision.capped)
+	}
+	if decision.authorized != nil {
+		plain.authorizedUnitIDs = map[string]bool{}
+		for _, id := range idSetContents(t, decision.authorized) {
+			plain.authorizedUnitIDs[id] = true
+		}
+	}
+	return plain
+}
 
 // guardEnvRecord is what a decision wrote to its environment: the bucket locks, the per-bucket log inputs.
 type guardEnvRecord struct {
@@ -22,6 +49,7 @@ func recordingGuardEnv(totalCap int, active map[dispatchBucket]int) (guardEnv, *
 			record.locked = append([]dispatchBucket(nil), buckets...)
 			return nil
 		},
+		newIDSet:    func(table string) *idSet { return newIDSet(context.Background(), newFakeIDSetDB(), table) },
 		totalCap:    func() int { return totalCap },
 		activeCount: func(bucket dispatchBucket) (int, error) { return active[bucket], nil },
 		emit: func(bucket dispatchBucket, activeCount, reclaimedStale, cappedNew, cappedStale, headroom int) {
@@ -31,7 +59,7 @@ func recordingGuardEnv(totalCap int, active map[dispatchBucket]int) (guardEnv, *
 }
 
 // referenceGuardDecision is the unpaged authorizeRun decision (every unit in memory), kept as the oracle.
-func referenceGuardDecision(units []dispatchGuardUnit, env guardEnv, orgID string, now time.Time) (guardDecision, error) {
+func referenceGuardDecision(units []dispatchGuardUnit, env guardEnv, orgID string, now time.Time) (plainDecision, error) {
 	staleCutoff := now.Add(-staleDispatchSeconds())
 	lockBucketsByUnit := map[dispatchBucket][]dispatchGuardUnit{}
 	candidatesByBucket := map[dispatchBucket][]dispatchGuardUnit{}
@@ -69,7 +97,7 @@ func referenceGuardDecision(units []dispatchGuardUnit, env guardEnv, orgID strin
 		return sortBucketList(seen)
 	}
 	if err := env.lockBuckets(keys(lockBucketsByUnit, nil)); err != nil {
-		return guardDecision{}, err
+		return plainDecision{}, err
 	}
 	allBuckets := keys(candidatesByBucket, deferredBuckets)
 	totalCap := env.totalCap()
@@ -78,7 +106,7 @@ func referenceGuardDecision(units []dispatchGuardUnit, env guardEnv, orgID strin
 		for _, unit := range units[totalCap:] {
 			capped = append(capped, unit.id)
 		}
-		return guardDecision{allowed: false, reason: fmt.Sprintf("sync run unit cap exceeded: %d/%d", len(units), totalCap), cappedUnitIDs: capped}, nil
+		return plainDecision{allowed: false, reason: fmt.Sprintf("sync run unit cap exceeded: %d/%d", len(units), totalCap), cappedUnitIDs: capped}, nil
 	}
 	authorizedUnitIDs := make(map[string]bool)
 	for _, bucketUnits := range candidatesByBucket {
@@ -91,7 +119,7 @@ func referenceGuardDecision(units []dispatchGuardUnit, env guardEnv, orgID strin
 	for _, bucket := range allBuckets {
 		activeCount, err := env.activeCount(bucket)
 		if err != nil {
-			return guardDecision{}, err
+			return plainDecision{}, err
 		}
 		var reclaims, newWork []dispatchGuardUnit
 		for _, unit := range candidatesByBucket[bucket] {
@@ -135,9 +163,9 @@ func referenceGuardDecision(units []dispatchGuardUnit, env guardEnv, orgID strin
 		env.emit(bucket, activeCount, reclaimedStale, cappedNew, cappedStale, headroom)
 	}
 	if len(cappedUnitIDs) > 0 {
-		return guardDecision{allowed: true, reason: fmt.Sprintf("sync unit concurrency cap exceeded: %d capped", len(cappedUnitIDs)), cappedUnitIDs: cappedUnitIDs, concurrencyCapped: true, slotHeadroom: slotHeadroom, authorizedUnitIDs: authorizedUnitIDs}, nil
+		return plainDecision{allowed: true, reason: fmt.Sprintf("sync unit concurrency cap exceeded: %d capped", len(cappedUnitIDs)), cappedUnitIDs: cappedUnitIDs, concurrencyCapped: true, slotHeadroom: slotHeadroom, authorizedUnitIDs: authorizedUnitIDs}, nil
 	}
-	return guardDecision{allowed: true, slotHeadroom: slotHeadroom, authorizedUnitIDs: authorizedUnitIDs}, nil
+	return plainDecision{allowed: true, slotHeadroom: slotHeadroom, authorizedUnitIDs: authorizedUnitIDs}, nil
 }
 
 func randomGuardUnits(random *rand.Rand, n int, now time.Time) []dispatchGuardUnit {
@@ -243,8 +271,13 @@ func TestPagedGuardDecisionEqualsTheUnpagedDecisionAndReadsAtMostKRowsPerCall(t 
 					if maxRows > k {
 						t.Fatalf("a call returned %d rows, want at most %d", maxRows, k)
 					}
-					if !reflect.DeepEqual(got, want) {
-						t.Fatalf("decision differs\n got: %+v\nwant: %+v", summarizeDecision(got), summarizeDecision(want))
+					gotPlain := plainOf(t, got)
+					if want.concurrencyCapped {
+						// The concurrency-path capped order is not consumed; the set is.
+						sort.Strings(want.cappedUnitIDs)
+					}
+					if !reflect.DeepEqual(gotPlain, want) {
+						t.Fatalf("decision differs\n got: %+v\nwant: %+v", summarizeDecision(gotPlain), summarizeDecision(want))
 					}
 					if !reflect.DeepEqual(gotRecord.locked, refRecord.locked) {
 						t.Fatalf("locked buckets = %v, want %v", gotRecord.locked, refRecord.locked)
@@ -258,7 +291,7 @@ func TestPagedGuardDecisionEqualsTheUnpagedDecisionAndReadsAtMostKRowsPerCall(t 
 	}
 }
 
-func summarizeDecision(decision guardDecision) string {
+func summarizeDecision(decision plainDecision) string {
 	return fmt.Sprintf("allowed=%v reason=%q capped=%d concurrencyCapped=%v headroom=%v authorized=%d",
 		decision.allowed, decision.reason, len(decision.cappedUnitIDs), decision.concurrencyCapped, decision.slotHeadroom, len(decision.authorizedUnitIDs))
 }
@@ -288,8 +321,9 @@ func TestPagedGuardIgnoresAUnitInAnUnlockedBucketSeenOnlyByTheSecondPass(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if decision.authorizedUnitIDs["00000002"] || !decision.authorizedUnitIDs["00000001"] {
-		t.Fatalf("authorized = %v, want only the unit of the locked bucket", decision.authorizedUnitIDs)
+	authorized := plainOf(t, decision).authorizedUnitIDs
+	if authorized["00000002"] || !authorized["00000001"] {
+		t.Fatalf("authorized = %v, want only the unit of the locked bucket", authorized)
 	}
 	if len(record.locked) != 1 {
 		t.Fatalf("locked = %v, want the one bucket of the first pass", record.locked)

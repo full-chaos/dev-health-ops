@@ -445,6 +445,9 @@ func Load(spec Spec) (Config, error) {
 	if cfg.UsersOwned, err = usersOwned(lookup); err != nil {
 		return Config{}, err
 	}
+	if cfg.OrgsOwned, err = orgsOwned(lookup); err != nil {
+		return Config{}, err
+	}
 	if cfg.SSO, err = ssoSettings(lookup); err != nil {
 		return Config{}, err
 	}
@@ -872,12 +875,17 @@ func tokenIssuerURL(lookup secrets.LookupEnv) (string, error) {
 
 // usersOwned reads AUTH_USERS_OWNED: unset or empty is false; anything but
 // true or false is refused.
-func usersOwned(lookup secrets.LookupEnv) (bool, error) {
-	switch strings.ToLower(strings.TrimSpace(valueOf(lookup, EnvUsersOwned))) {
+func usersOwned(lookup secrets.LookupEnv) (bool, error) { return ownedSwitch(lookup, EnvUsersOwned) }
+
+// orgsOwned reads AUTH_ORGS_OWNED with the same rule as AUTH_USERS_OWNED.
+func orgsOwned(lookup secrets.LookupEnv) (bool, error) { return ownedSwitch(lookup, EnvOrgsOwned) }
+
+func ownedSwitch(lookup secrets.LookupEnv, name string) (bool, error) {
+	switch strings.ToLower(strings.TrimSpace(valueOf(lookup, name))) {
 	case "", "false":
 		return false, nil
 	case "true":
 		return true, nil
 	}
-	return false, fmt.Errorf("%s must be true or false", EnvUsersOwned)
+	return false, fmt.Errorf("%s must be true or false", name)
 }

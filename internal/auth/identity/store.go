@@ -80,6 +80,7 @@ type Store struct {
 	schema      authschema.ValidatedIdentifier
 	q           string
 	ownsUsers   bool
+	ownsOrgs    bool
 	logger      *slog.Logger
 	projections metric.Int64Counter
 	links       metric.Int64Counter
@@ -94,7 +95,7 @@ func New(cfg Config) (*Store, error) {
 	if cfg.Schema.String() == "" {
 		return nil, errors.New("identity: no auth schema")
 	}
-	s := &Store{pool: cfg.Pool, schema: cfg.Schema, q: authschema.Quote(cfg.Schema), ownsUsers: cfg.UsersOwnedByAuth, logger: cfg.Logger}
+	s := &Store{pool: cfg.Pool, schema: cfg.Schema, q: authschema.Quote(cfg.Schema), ownsUsers: cfg.UsersOwnedByAuth, ownsOrgs: cfg.OrgsOwnedByAuth, logger: cfg.Logger}
 	if s.logger == nil {
 		s.logger = slog.Default()
 	}

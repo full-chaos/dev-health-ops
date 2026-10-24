@@ -56,6 +56,14 @@ func TestSAMLDomainAllowedIgnoresCase(t *testing.T) {
 		{[]string{"example.com"}, "a@sub.example.com", false},
 		{nil, "a@any.example", true},
 		{[]string{"example.com"}, "no-at-sign", false},
+		{[]string{" example.com "}, "a@example.com", true},
+		{[]string{"example.com"}, "a@ example.com", false},
+		{[]string{"example.com"}, "a@example.com ", false},
+		{[]string{"example.com"}, "a@", false},
+		{[]string{""}, "a@", false},
+		{[]string{"example.com"}, "a@evil-example.com", false},
+		{[]string{"example.com"}, "a@exámple.com", false},
+		{[]string{"exámple.com"}, "a@exÁmple.com", false},
 	} {
 		if got := (Provider{AllowedDomains: tc.allowed}).DomainAllowed(tc.email); got != tc.want {
 			t.Errorf("DomainAllowed(%v, %q) = %v, want %v", tc.allowed, tc.email, got, tc.want)

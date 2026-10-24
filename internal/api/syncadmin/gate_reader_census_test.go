@@ -60,9 +60,10 @@ var storedTargetRead = regexp.MustCompile(`(?is)\bselect\b.*\bsync_targets\b|\bs
 // incidentGateEntryPoints is the functions that decide "do these legacy
 // targets need the canonical-incident feature".
 var incidentGateEntryPoints = map[string]bool{
-	"requireCanonicalIncident":            true,
-	"syncTargetsRequireCanonicalIncident": true,
-	"SyncTargetsRequireCanonicalIncident": true,
+	"requireCanonicalIncident":             true,
+	"syncTargetsRequireCanonicalIncident":  true,
+	"SyncTargetsRequireCanonicalIncident":  true,
+	"PlanDatasetRequiresCanonicalIncident": true,
 }
 
 // incidentGateCallers is every Go function of the production tree that calls
@@ -77,8 +78,10 @@ var incidentGateCallers = map[string]string{
 	"internal/api/syncadmin.batchCreateSyncConfigs":   "the batch create: the submitted list",
 	"internal/scheduler/sync.coordinatorEligibility":  "the scheduler's pre-mint gate: the stored list",
 	"internal/scheduler/sync.loadMaterializationPlan": "the scheduler's plan: the stored list",
-	"internal/scheduler/sync.planDatasetRequiresCanonicalIncident": "the scheduler's plan: the legacy targets of one enabled dataset row, from the registry " +
+	"internal/scheduler/sync.PlanDatasetRequiresCanonicalIncident": "the scheduler's plan: the legacy targets of one enabled dataset row, from the registry " +
 		"(never the stored list): with the feature off the plan leaves that dataset out and plans the rest",
+	"internal/scheduler/sync.splitCanonicalIncidentDatasets":             "the scheduler's plan: the enabled dataset rows, one dataset key at a time",
+	"internal/api/syncadmin.deriveSkippedDatasets":                       "the configuration status read: the enabled dataset keys of a config, one at a time, never the stored list",
 	"internal/scheduler/sync.SyncTargetsRequireCanonicalIncident":        "the exported entry point itself",
 	"internal/syncdispatchruntime.datasetScopeRequiresCanonicalIncident": "dispatch: the legacy targets of one dataset key of a run unit or an enabled row, from the registry",
 }

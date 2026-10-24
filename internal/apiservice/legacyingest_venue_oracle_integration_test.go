@@ -233,7 +233,7 @@ func TestLegacyIngestTelemetryVenueOracle(t *testing.T) {
 		CORSAllowedOrigins: []string{"http://localhost:3000"},
 		ValkeyURI:          secrets.NewValue(venue.ValkeyURI),
 	}
-	base := startVenueAPI(t, ctx, cfg, venue)
+	base := startVenueAPIWith(t, ctx, cfg, venue, func(deps *Deps) { deps.LegacyIngestEnabled = true })
 
 	// The table's TTL drops a bucket 90 days after its start, so every
 	// timestamp is recent (fixed strings in the requests, so both planes

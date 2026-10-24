@@ -79,6 +79,9 @@ func checkFieldActionTruth(orgArg map[string]bool, doc fieldActionDoc) []string 
 			defects = append(defects, fmt.Sprintf("%s: resolver %q is not %q", key, row.Resolver, resolverPointer(row)))
 		}
 		byArgument := strings.HasPrefix(row.ResourceResolver, "organization_from_argument:")
+		if byArgument && !strings.Contains(row.Disclosure, "superuser") {
+			defects = append(defects, key+": a by-argument field's disclosure_behavior omits the verified non-impersonating superuser exception of OperationOrgGuard")
+		}
 		if orgArg[key] != byArgument {
 			defects = append(defects, fmt.Sprintf("%s: the schema field has an orgId argument = %t, the row's resource_resolver says by-argument = %t", key, orgArg[key], byArgument))
 		}
@@ -236,7 +239,7 @@ func TestFieldActionMapChecksCatchPlantedDefects(t *testing.T) {
 func TestFieldActionTruthChecksCatchPlantedDefects(t *testing.T) {
 	orgArg := map[string]bool{"Query.byArg": true}
 	row := func(field, resolver string) fieldActionRow {
-		r := fieldActionRow{Type: "Query", Field: field, ResourceResolver: resolver, Disclosure: "d"}
+		r := fieldActionRow{Type: "Query", Field: field, ResourceResolver: resolver, Disclosure: "d superuser"}
 		r.Resolver = resolverPointer(r)
 		return r
 	}
@@ -257,6 +260,11 @@ func TestFieldActionTruthChecksCatchPlantedDefects(t *testing.T) {
 		{"argument field claimed as credential", fieldActionDoc{Rows: []fieldActionRow{row("byArg", "organization_from_credential: x")}}, "has an orgId argument = true"},
 		{"credential field claimed as argument", fieldActionDoc{Rows: []fieldActionRow{row("noArg", "organization_from_argument: x")}}, "has an orgId argument = false"},
 		{"wrong resolver pointer", wrongPointer, "is not"},
+		{"by-argument disclosure omits the superuser exception", func() fieldActionDoc {
+			r := row("byArg", "organization_from_argument: x")
+			r.Disclosure = "a mismatched orgId always stops the operation"
+			return fieldActionDoc{Rows: []fieldActionRow{r}}
+		}(), "omits the verified non-impersonating superuser"},
 	}
 	for _, c := range cases {
 		joined := strings.Join(checkFieldActionTruth(orgArg, c.doc), "\n")

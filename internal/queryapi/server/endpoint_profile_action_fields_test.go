@@ -175,11 +175,24 @@ func checkActionFieldTruth(rows []map[string]any, read func(file string) string)
 		}
 		text := fmt.Sprint(row["resource_resolver"], " ", row["current_state_cache_behavior"], " ", row["disclosure_behavior"])
 		policy, _ := row["impersonation_policy"].(string)
+		disclosure := fmt.Sprint(row["disclosure_behavior"])
+		validator := ""
+		if pv, ok := row["primary_validator"].(map[string]any); ok {
+			validator, _ = pv["description"].(string)
+		}
 		cites := func(name string) bool { return strings.Contains(text, name) }
 		switch call {
 		case "authenticateRESTRequest(":
 			if cites("authenticateInternalRequest") {
 				defects = append(defects, id+": cites authenticateInternalRequest but its handler calls authenticateRESTRequest")
+			}
+			if strings.Contains(read("rest_error_response.go"), "Organization context required") {
+				if strings.Contains(validator, "same 401") {
+					defects = append(defects, id+": primary_validator says every failure answers 401, authenticateRESTRequest also answers 403 Organization context required")
+				}
+				if row["disclosure_behavior"] != nil && !strings.Contains(disclosure, "403") {
+					defects = append(defects, id+": disclosure_behavior omits the 403 Organization context required answer")
+				}
 			}
 			if policy != "unknown" {
 				defects = append(defects, fmt.Sprintf("%s: impersonation_policy %q, a REST data route is not proven beyond unknown", id, policy))
@@ -189,6 +202,9 @@ func checkActionFieldTruth(rows []map[string]any, read func(file string) string)
 				defects = append(defects, id+": cites authenticateRESTRequest but its handler calls authenticateInternalRequest")
 			}
 			want := "subject_to_impersonation_override"
+			if (route == "/query" || route == "/query/proof") && row["action"] != nil {
+				defects = append(defects, id+": the route serves registered GraphQL documents, its action is the served root field's (the per-field map): action must be null")
+			}
 			if route == "/buildinfo" {
 				want = "exempt_no_org_context"
 				if !strings.HasPrefix(fmt.Sprint(row["resource_resolver"]), "none:") || cites("organization's rows") {
@@ -202,7 +218,24 @@ func checkActionFieldTruth(rows []map[string]any, read func(file string) string)
 			if policy != "subject_to_impersonation_override" {
 				defects = append(defects, fmt.Sprintf("%s: the /graphql chain applies scope.Impersonation, impersonation_policy is %q", id, policy))
 			}
+			if cites("authenticateRESTRequest") || !cites("authenticateGraphQLEdge") {
+				defects = append(defects, id+": /graphql authenticates with authenticateGraphQLEdge, the row must cite it and not authenticateRESTRequest")
+			}
+			for _, need := range []string{"401", "403", "404", "X-Org-Id"} {
+				if !strings.Contains(disclosure, need) {
+					defects = append(defects, id+": disclosure_behavior omits "+need)
+				}
+			}
+			if !strings.Contains(fmt.Sprint(row["resource_resolver"]), "X-Org-Id") {
+				defects = append(defects, id+": resource_resolver omits the X-Org-Id selection (scope.OrgScope)")
+			}
 		case "mcpAuthenticate(":
+			if strings.Contains(read("mcp_route.go"), "http.StatusForbidden") && !strings.Contains(disclosure, "403") {
+				defects = append(defects, id+": mcpAuthenticate refuses an elevated identity with 403, disclosure_behavior omits it")
+			}
+			if row["action"] != nil {
+				defects = append(defects, id+": the MCP route serves registered GraphQL documents, action must be null")
+			}
 			if policy != "unknown" {
 				defects = append(defects, fmt.Sprintf("%s: impersonation_policy %q, the MCP class refuses an impersonating identity: want unknown with a named gap", id, policy))
 			}
@@ -229,17 +262,19 @@ func TestQueryAPIRowStatementsMatchTheHandlerSource(t *testing.T) {
 
 func TestActionFieldTruthChecksCatchPlantedDefects(t *testing.T) {
 	src := map[string]string{
-		"buildinfo_route.go":    "authenticateInternalRequest(",
-		"query_route.go":        "authenticateInternalRequest(",
-		"graphql_edge_route.go": "scope.Impersonation(",
-		"mcp_route.go":          "mcpAuthenticate(",
-		"heatmap_route.go":      "authenticateRESTRequest(",
-		"rest_routes.go":        "",
+		"buildinfo_route.go":     "authenticateInternalRequest(",
+		"query_route.go":         "authenticateInternalRequest(",
+		"graphql_edge_route.go":  "scope.Impersonation(",
+		"mcp_route.go":           "mcpAuthenticate( http.StatusForbidden",
+		"heatmap_route.go":       "authenticateRESTRequest(",
+		"rest_error_response.go": "Organization context required",
+		"rest_routes.go":         "",
 	}
 	read := func(file string) string { return src[file] }
 	rest := func() map[string]any {
 		return map[string]any{"id": "GET /api/v1/heatmap [x]", "route": "/api/v1/heatmap", "classification": "protected",
-			"resource_resolver": "authenticateRESTRequest", "current_state_cache_behavior": "authenticateRESTRequest", "disclosure_behavior": "d", "impersonation_policy": "unknown"}
+			"resource_resolver": "authenticateRESTRequest", "current_state_cache_behavior": "authenticateRESTRequest", "disclosure_behavior": "401; 403 Organization context required", "impersonation_policy": "unknown",
+			"primary_validator": map[string]any{"description": "authenticateRESTRequest: failures answer 401 or 403"}}
 	}
 	build := func() map[string]any {
 		return map[string]any{"id": "GET /buildinfo [x]", "route": "/buildinfo", "classification": "protected",
@@ -247,13 +282,21 @@ func TestActionFieldTruthChecksCatchPlantedDefects(t *testing.T) {
 	}
 	gql := func() map[string]any {
 		return map[string]any{"id": "GET /graphql [x]", "route": "/graphql", "classification": "protected",
-			"resource_resolver": "r", "current_state_cache_behavior": "c", "disclosure_behavior": "d", "impersonation_policy": "subject_to_impersonation_override"}
+			"resource_resolver": "X-Org-Id selection", "current_state_cache_behavior": "c", "disclosure_behavior": "authenticateGraphQLEdge 401; 403 for X-Org-Id; 404 browser GET", "impersonation_policy": "subject_to_impersonation_override"}
+	}
+	mcp := func() map[string]any {
+		return map[string]any{"id": "POST /query [x @mcp]", "route": "/query", "classification": "protected", "action": nil,
+			"resource_resolver": "r", "current_state_cache_behavior": "c", "disclosure_behavior": "401; elevated identity 403", "impersonation_policy": "unknown"}
+	}
+	query := func() map[string]any {
+		return map[string]any{"id": "POST /query [x @query]", "route": "/query", "classification": "protected", "action": nil,
+			"resource_resolver": "r", "current_state_cache_behavior": "authenticateInternalRequest", "disclosure_behavior": "d", "impersonation_policy": "subject_to_impersonation_override"}
 	}
 	proof := func() map[string]any {
 		return map[string]any{"id": "POST /query/proof-write [x]", "route": "/query/proof-write", "classification": "protected",
 			"resource_resolver": "r", "current_state_cache_behavior": "authenticateInternalRequest", "disclosure_behavior": "org allowlist", "impersonation_policy": "subject_to_impersonation_override"}
 	}
-	for _, row := range []map[string]any{rest(), build(), gql(), proof()} {
+	for _, row := range []map[string]any{rest(), build(), gql(), proof(), mcp(), query()} {
 		if defects := checkActionFieldTruth([]map[string]any{row}, read); len(defects) != 0 {
 			t.Fatalf("the clean fixture %v is refused: %v", row["id"], defects)
 		}
@@ -276,6 +319,26 @@ func TestActionFieldTruthChecksCatchPlantedDefects(t *testing.T) {
 		}(), "org-allowlist gated"},
 		{"rest row cites the internal function", func() map[string]any { r := rest(); r["resource_resolver"] = "authenticateInternalRequest"; return r }(), "calls authenticateRESTRequest"},
 		{"internal row cites the rest function", func() map[string]any { r := proof(); r["resource_resolver"] = "authenticateRESTRequest"; return r }(), "calls authenticateInternalRequest"},
+		{"rest validator says every failure is 401", func() map[string]any {
+			r := rest()
+			r["primary_validator"] = map[string]any{"description": "every failure answers the same 401"}
+			return r
+		}(), "also answers 403"},
+		{"rest disclosure omits the 403", func() map[string]any { r := rest(); r["disclosure_behavior"] = "401 only"; return r }(), "omits the 403"},
+		{"graphql cites the REST function", func() map[string]any {
+			r := gql()
+			r["disclosure_behavior"] = "authenticateRESTRequest 401 403 404 X-Org-Id"
+			return r
+		}(), "must cite it and not authenticateRESTRequest"},
+		{"graphql omits the 404", func() map[string]any {
+			r := gql()
+			r["disclosure_behavior"] = "authenticateGraphQLEdge 401 403 X-Org-Id"
+			return r
+		}(), "omits 404"},
+		{"graphql resolver omits X-Org-Id", func() map[string]any { r := gql(); r["resource_resolver"] = "credential only"; return r }(), "omits the X-Org-Id selection"},
+		{"mcp action not null", func() map[string]any { r := mcp(); r["action"] = "analytics.read"; return r }(), "action must be null"},
+		{"mcp omits the 403", func() map[string]any { r := mcp(); r["disclosure_behavior"] = "refused"; return r }(), "omits it"},
+		{"query action not null", func() map[string]any { r := query(); r["action"] = "analytics.read"; return r }(), "action must be null"},
 		{"rest row over-claims impersonation", func() map[string]any {
 			r := rest()
 			r["impersonation_policy"] = "not_applicable_non_main_app"

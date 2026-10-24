@@ -55,7 +55,7 @@ tree still reports its old path.
 
 | Job | Runs | Content |
 | --- | --- | --- |
-| `auth-changes` | always | Computes `relevant`. Non-pull-request events are always relevant. |
+| `auth-changes` | always | Computes `relevant`. A docs-only pull request or merge queue entry (`ci/codeql_docs_only.sh`, run from the base commit) is not relevant. A merge queue entry is judged by `ci/auth_queue_relevance.sh` over the whole group (merge base with the target branch tip to the entry head), and any error makes it relevant. A push to main and every other event is always relevant. |
 | `auth-go-quality` | when relevant | `paths-selftest`, `scope-selftest`, `fmt`, `vet`, `fuzz-registry`, `vuln`. |
 | `auth-test` | when relevant | `test`, `race`, `race-integration`, `middleware`. |
 | `auth-fuzz (<target>)` | when relevant | One matrix job per fuzz target, so each parser has its own CI-visible name. |

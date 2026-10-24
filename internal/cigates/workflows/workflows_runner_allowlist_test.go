@@ -41,6 +41,11 @@ const (
 	goQualityCacheNegation = "${{ !((" + allowlistCondition + ") || (" + racePoolTerm + ")) }}"
 	denyFragment           = "github.event_name != 'pull_request'"
 	draftGate              = "(!(github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full')))"
+	// heavyGate: a heavy job runs in the merge queue, on the main push and on a pull request only with ci:full (drafts
+	// included). imageHeavyGate adds the non-draft hotfix-image pull request, which publishes tree-<tree> images.
+	heavyGate      = "(!(github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'ci:full')))"
+	imageHeavyGate = "(!(github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'ci:full') && (github.event.pull_request.draft || !contains(github.event.pull_request.labels.*.name, 'hotfix-image'))))"
+	goDocsSkip     = "needs.go-storage-integration-plan.outputs.docs_only != 'true'"
 )
 
 var routedWorkflowFiles = []string{"go-quality.yml", "test.yml", "live-e2e.yml", "go.yml", "docker-images.yml"}
@@ -48,26 +53,30 @@ var routedWorkflowFiles = []string{"go-quality.yml", "test.yml", "live-e2e.yml",
 var draftGatedJobs = [][2]string{
 	{"codeql-analysis.yml", "analyze"},
 	{"codeql-analysis.yml", "analyze-docs-only"},
-	{"docker-images.yml", "dind-smoke-test"},
-	{"docker-images.yml", "go-api-tools-build"},
-	{"docker-images.yml", "go-build"},
-	{"docker-images.yml", "go-build-dho-arm64"},
 	{"go-auth-service.yml", "auth-changes"},
 	{"go-workers-compose-proof.yml", "go-workers-compose-proof"},
-	{"go.yml", "dind-smoke-test"},
-	{"go.yml", "go-auth-compose-proof"},
-	{"go.yml", "go-auth-web-proxy-proof"},
 	{"go.yml", "go-arm64-numeric-parity"},
-	{"go.yml", "go-container-reproducibility"},
-	{"go.yml", "go-container-reproducibility-self-hosted"},
-	{"go.yml", "go-container-security"},
-	{"go.yml", "go-container-smoke"},
-	{"go.yml", "go-storage-integration-plan"},
 	{"go.yml", "graphql-wire-parity"},
-	{"live-e2e.yml", "live-e2e"},
-	{"live-e2e.yml", "metrics-executed-proof"},
 	{"security-scan.yml", "semgrep"},
 	{"venue-oracles-changed.yml", "venue-oracles-changed"},
+}
+
+// heavyGatedJobs: the heavy jobs, which run in the merge queue and never on a pull request without ci:full, each with the
+// gate its `if:` must start with.
+var heavyGatedJobs = map[[2]string]string{
+	{"docker-images.yml", "dind-smoke-test"}:               imageHeavyGate,
+	{"docker-images.yml", "go-api-tools-build"}:            imageHeavyGate,
+	{"docker-images.yml", "go-build"}:                      imageHeavyGate,
+	{"docker-images.yml", "go-build-dho-arm64"}:            imageHeavyGate,
+	{"go.yml", "dind-smoke-test"}:                          heavyGate,
+	{"go.yml", "go-auth-compose-proof"}:                    heavyGate + " && " + goDocsSkip,
+	{"go.yml", "go-auth-web-proxy-proof"}:                  heavyGate + " && " + goDocsSkip,
+	{"go.yml", "go-container-reproducibility"}:             heavyGate + " && " + goDocsSkip,
+	{"go.yml", "go-container-reproducibility-self-hosted"}: heavyGate + " && " + goDocsSkip,
+	{"go.yml", "go-container-security"}:                    heavyGate + " && " + goDocsSkip,
+	{"go.yml", "go-container-smoke"}:                       heavyGate + " && " + goDocsSkip,
+	{"live-e2e.yml", "live-e2e"}:                           heavyGate + " && needs.changes.outputs.docs_only != 'true'",
+	{"live-e2e.yml", "metrics-executed-proof"}:             heavyGate + " && needs.changes.outputs.docs_only != 'true'",
 }
 
 var requiredContextJobs = map[string][]string{
@@ -87,9 +96,11 @@ var cachePathSites = map[string]cachePathSite{
 }
 
 func ungated(v string) string {
-	prefix := draftGate + " && ("
-	if strings.HasPrefix(v, prefix) && strings.HasSuffix(v, ")") {
-		return v[len(prefix) : len(v)-1]
+	for _, gate := range []string{heavyGate + " && " + goDocsSkip, imageHeavyGate, heavyGate, draftGate} {
+		prefix := gate + " && ("
+		if strings.HasPrefix(v, prefix) && strings.HasSuffix(v, ")") {
+			return v[len(prefix) : len(v)-1]
+		}
 	}
 	return v
 }
@@ -136,7 +147,7 @@ func runnerAllowlistViolations(t *testing.T, root string) []string {
 		return j, j != nil
 	}
 
-	// draft gate on each pinned job, and the pinned set equals the found set
+	// draft gate or heavy gate on each pinned job, and the pinned set equals the found set
 	pinned := map[[2]string]bool{}
 	for _, p := range draftGatedJobs {
 		pinned[p] = true
@@ -144,6 +155,15 @@ func runnerAllowlistViolations(t *testing.T, root string) []string {
 			v := str(j["if"])
 			if !(v == draftGate || strings.HasPrefix(v, draftGate+" && (")) {
 				add("%s:%s lost the draft gate: got %q", p[0], p[1], v)
+			}
+		}
+	}
+	for _, p := range sortedPairs(heavyGatedJobs) {
+		pinned[p] = true
+		if j, ok := job(p[0], p[1]); ok {
+			v, gate := str(j["if"]), heavyGatedJobs[p]
+			if !(v == gate || strings.HasPrefix(v, gate+" && (")) {
+				add("%s:%s lost the heavy gate (merge queue, main push, ci:full pull request): got %q, want it to start with %q", p[0], p[1], v, gate)
 			}
 		}
 	}
@@ -170,7 +190,7 @@ func runnerAllowlistViolations(t *testing.T, root string) []string {
 	sort.Strings(unpinned)
 	sort.Strings(notGated)
 	if len(unpinned) > 0 || len(notGated) > 0 {
-		add("draft-gated job set drifted: unpinned %v; pinned but not gated %v", unpinned, notGated)
+		add("ci:full-gated job set drifted: unpinned %v; pinned but not gated %v", unpinned, notGated)
 	}
 
 	// no deny-list fragment next to SELF_HOSTED_RUNNERS in a routed workflow
@@ -280,6 +300,15 @@ func runnerAllowlistViolations(t *testing.T, root string) []string {
 	return out
 }
 
+func sortedPairs(m map[[2]string]string) [][2]string {
+	out := make([][2]string, 0, len(m))
+	for p := range m {
+		out = append(out, p)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i][0]+":"+out[i][1] < out[j][0]+":"+out[j][1] })
+	return out
+}
+
 func toAnyMap(m map[string][]string) yamlMap {
 	o := yamlMap{}
 	for k := range m {
@@ -340,8 +369,10 @@ func TestSelfHostedRunnerAllowlistPlantedDefects(t *testing.T) {
 	}{
 		{"routing ternary gains a merge_group term (test.yml)", []mutation{{test_, "github.event_name == 'schedule')", merge}}, []string{"test.yml", "does not EXACTLY match the routing ternary"}},
 		{"deny-list fragment returns beside SELF_HOSTED_RUNNERS", []mutation{{live, "(vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request'", "(vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name != 'pull_request'"}}, []string{"EXACTLY", "SELF_HOSTED_RUNNERS"}},
-		{"a go.yml job loses its draft gate", []mutation{{goYml, "if: " + draftGate + " && (vars.SELF_HOSTED_RUNNERS", "if: (vars.SELF_HOSTED_RUNNERS"}}, []string{"go.yml", "lost the draft gate"}},
-		{"a job gains ci:full without being pinned", []mutation{{test_, "|| needs.changes.outputs.code == 'true'\n    # Same ARC", "|| needs.changes.outputs.code == 'true' || contains(github.event.pull_request.labels.*.name, 'ci:full')\n    # Same ARC"}}, []string{"draft-gated job set drifted", "test.yml:chart-started"}},
+		{"a go.yml job loses its heavy gate", []mutation{{goYml, "if: " + heavyGate + " && (vars.SELF_HOSTED_RUNNERS", "if: (vars.SELF_HOSTED_RUNNERS"}}, []string{"go.yml", "lost the heavy gate"}},
+		{"a heavy job falls back to the draft gate", []mutation{{goYml, "if: " + heavyGate + " && " + goDocsSkip + "\n    runs-on: ubuntu-latest\n    timeout-minutes: 25", "if: " + draftGate + " && (" + goDocsSkip + ")\n    runs-on: ubuntu-latest\n    timeout-minutes: 25"}}, []string{"go-container-security", "lost the heavy gate"}},
+		{"a docker build loses the hotfix-image arm", []mutation{{dock, " && (github.event.pull_request.draft || !contains(github.event.pull_request.labels.*.name, 'hotfix-image')))) && ((vars.SELF_HOSTED_IMAGE_BUILDS", "))) && ((vars.SELF_HOSTED_IMAGE_BUILDS"}}, []string{"docker-images.yml:dind-smoke-test", "lost the heavy gate"}},
+		{"a job gains ci:full without being pinned", []mutation{{test_, "|| needs.changes.outputs.code == 'true'\n    # Same ARC", "|| needs.changes.outputs.code == 'true' || contains(github.event.pull_request.labels.*.name, 'ci:full')\n    # Same ARC"}}, []string{"ci:full-gated job set drifted", "test.yml:chart-started"}},
 		{"hosted twin stops being the literal negation", []mutation{{goYml, "go-container-reproducibility:\n", "go-container-reproducibility:\n    # planted\n"}, {goYml, "!(vars.SELF_HOSTED_RUNNERS == 'enabled'", "(vars.SELF_HOSTED_RUNNERS != 'enabled'"}}, []string{"literal negation"}},
 		{"setup-go cache negation loses its negation", []mutation{{test_, "cache: ${{ !(vars.SELF_HOSTED_RUNNERS", "cache: ${{ (vars.SELF_HOSTED_RUNNERS"}}, []string{"cache negation does not EXACTLY match"}},
 		{"cache-path step gets a prepended disjunct", []mutation{{test_, "if: vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request'", "if: github.event_name == 'merge_group' || vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request'"}}, []string{"Configure self-hosted Go cache paths", "does not EXACTLY match the expected condition"}},

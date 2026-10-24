@@ -235,234 +235,13 @@ on:
       - '.dockerignore'
       - 'Makefile'
       - '.github/workflows/go.yml'
+  # No path filter on pull_request: a path-filtered workflow leaves its checks "Pending" and blocks the merge, so the
+  # required go-queue-gate must report on EVERY pull request, docs-only included. Relevance is decided inside the
+  # jobs: the heavy jobs run in the merge queue (not on a PR without ci:full), and a docs-only change
+  # (ci/codeql_docs_only.sh from the base commit) skips them in the queue too.
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
     branches: ['**']
-    paths:
-      - '**/*.go'
-      - '**/go.mod'
-      - '**/go.sum'
-      - 'go.work'
-      - 'go.work.sum'
-      - 'contracts/jobs/v1/**'
-      - 'deploy/go-workers/**'
-      # internal/cigates/chartgates reads these: alert rules, the Grafana dashboard, the deploy tree
-      # (no alternate may return), the Go worker Dockerfile, the env example and the bootstrap runbook.
-      - 'alerts/**'
-      - 'deploy/**'
-      - 'docker/go-worker.Dockerfile'
-      - '.env.example'
-      - 'docs/operate/runbooks/query-api-bootstrap.md'
-      - 'docs/contribute/architecture/go-api-wave-0-proof-infrastructure.md'
-      # the bare-verb scans of internal/goapicli/routing read every .md, .sh and .py under these roots (and docs/, which stays
-      # limited to the files Go tests name, as before)
-      - 'ci/**/*.md'
-      - 'ci/**/*.sh'
-      - 'ci/**/*.py'
-      - 'cmd/**/*.md'
-      - 'cmd/**/*.sh'
-      - 'cmd/**/*.py'
-      - 'internal/**/*.md'
-      - 'internal/**/*.sh'
-      - 'internal/**/*.py'
-      - 'src/**/*.md'
-      - 'src/**/*.sh'
-      - 'src/**/*.py'
-      # The chart's own Go tests (images_test.go, stream_subcommand_test.go)
-      # render deploy/helm/dev-health, so a chart-only change is a Go input.
-      - 'deploy/helm/dev-health/**'
-      # the image publishing guard (internal/cigates, CHAOS-10177) scans every renderer YAML under deploy/ for the Go images it names
-      - 'deploy/go-api/**'
-      # The migrate service's Go pins (internal/rivermigrate/deploy_wiring_test.go) read the
-      # compose manifest that runs `dho migrate upgrade`.
-      - 'compose.yml'
-      # the docs checks' refusal and workflow tests read .gitlab-ci.yml; internal/cigates/docstools/pytables holds the Python 3.14.7 tables its helpers embed
-      - '.gitlab-ci.yml'
-      - 'internal/cigates/docstools/pytables/**'
-      - 'scripts/**'
-      - 'src/dev_health_ops/config/**'
-      - 'internal/chmigrate/history/**'
-      # The auth lineage's SQL is //go:embed-ed into
-      # internal/storage/postgres/authschema, so a change to it changes the
-      # compiled binary and is covered by that package's tests -- but it is
-      # a .sql file, which no other pattern here matches (CHAOS-4882).
-      - 'internal/storage/postgres/authschema/migrations/**'
-      # internal/pgmigrate //go:embed-s its sql/ chain directory, so a file
-      # there is an input of the Go build and its tests.
-      - 'internal/pgmigrate/sql/**'
-      # internal/chmigrate //go:embed-s its sql/ chain directory, so a file
-      # there is an input of the Go build and its tests.
-      - 'internal/chmigrate/sql/**'
-      # The by-hand downgrades of those migrations; a hosted test rehearses them.
-      - 'internal/chmigrate/rollback/**'
-      # Same shape (CHAOS-5353): the seven billing email bodies are
-      # //go:embed-ed into internal/jobs/operational, so editing one changes
-      # what the worker actually sends, and the golden fixtures in that
-      # package's tests are what catch a drift. They are .html files, which no
-      # other pattern here matches -- without this, a PR touching only a
-      # template is classified non-Go and go-quality passes vacuously.
-      - 'internal/jobs/operational/templates/**'
-      # And the shared mail package embeds the invite email body the same way
-      # (internal/mail/template.go); its drift guard against the Python
-      # template lives in that package's tests.
-      - 'internal/mail/templates/**'
-      # Same shape again: the password denylist is //go:embed-ed into
-      # internal/auth/passwordpolicy (the policy the admin password routes
-      # and registration apply), so editing it changes what the compiled
-      # binary actually rejects. It
-      # is a .txt file, which no other pattern here matches -- without this
-      # a PR touching only the denylist is classified non-Go and go-quality
-      # passes vacuously.
-      - 'internal/auth/passwordpolicy/data/**'
-      - 'tests/fixtures/**'
-      # the CHAOS-10376 guards read every tracked .py and ci/requirements-*.txt (the provider-limits page and mkdocs.yml: docs-drift.yml)
-      - '**/*.py'
-      - 'ci/requirements-*.txt'
-      - 'tests/scripts/**'
-      - '**/testdata/**'
-      # The manifests of the recordedfiles guard sit BESIDE their directory
-      # (internal/x/testdata.manifest.tsv, tests/fixtures.manifest.tsv), and
-      # the guard's day-one list is a .txt file of its package: a change to
-      # one of them alone must run the guard (internal/testsupport/recordedfiles).
-      - '**/*.manifest.tsv'
-      - 'internal/testsupport/recordedfiles/unclassified_day_one.txt'
-      # The closed lists of the recording guards are .txt files of their packages
-      # (pyoracle/unconverted_own_launch.txt, recordedfiles/header_before_stamp_ceiling.txt):
-      # a change to one of them alone must run the guard that reads it.
-      - 'internal/testsupport/**/*.txt'
-      # the golden secret scan reads its allowlist, stopwords and vectors (CHAOS-7890): a change to any data file of it alone must run the scan
-      - 'internal/testsupport/goldenscan/**'
-      # Go tests read these directly (contracts/*.json via os.ReadFile,
-      # internal/**/families.json via filepath.Join). Not under testdata/
-      # or fixtures/, so the shared glob above does not reach them.
-      - 'contracts/**'
-      - 'internal/**/*.json'
-      - 'tests/workers/job_contracts/**'
-      # CHAOS-4977: investmentexplain's LLM prompt template is
-      # //go:embed-ed and read directly by prompt_golden_test.go -- not
-      # under testdata/ or fixtures/, so the shared glob above does not
-      # reach it.
-      - 'internal/queryapi/investmentexplain/prompts/**'
-      # gqlgen.yml is the generator's configuration -- the schema it
-      # reads and every path it writes. Editing it changes the generated Go
-      # layer as surely as editing the SDL does, and go-quality now runs a drift
-      # check that regenerates from it. Without this line a gqlgen.yml-only
-      # change is classified non-Go and that check passes vacuously.
-      - 'internal/queryapi/gqlgen.yml'
-      - 'docker/go-worker.Dockerfile'
-      - 'tests/compatibility/river/**'
-      - 'ci/check_go.sh'
-      - 'ci/bigboy/compose.bigboy.*.yml'
-      - 'ci/bigboy/compose.bigboy.yml'
-      - 'ci/bigboy/images.env'
-      - 'ci/bigboy/**'
-      - 'docker/init-extra-dbs.sh'
-      # CHAOS-6584: the venue-oracles registry and what validates it. The
-      # venue-oracles job decides relevance from this list, so a registry-only
-      # change must count as Go-relevant or it is never validated on main.
-      # ci tables, awk scripts and per-package row directories (ci/go_race_weights.d, ci/go_integration_shards.d, the venue
-      # oracle registries): globs, so a new one never edits this list (CHAOS-10300)
-      - 'ci/*.tsv'
-      - 'ci/*.awk'
-      - 'ci/*.d/**'
-      # CHAOS-6926: the per-package venue weights the legs are balanced by.
-      # CHAOS-6690: the go-quality race shards read these; a change to either
-      # alone must run go-quality.
-      - 'internal/httpguard/*.tsv'
-      - 'internal/cigates/affected/*.tsv'
-      - 'internal/cigates/chpin/*.tsv'
-      - 'internal/cigates/chparams/testdata/*.txt'
-      - 'internal/cigates/frozengoldens/*.tsv'
-      - 'internal/cigates/emitscan/*.tsv'
-      - 'internal/cigates/outboundtransport/*.tsv'
-      - 'internal/platform/otlpmetrics/*.tsv'
-      - 'internal/cigates/chconstructor/*.tsv'
-      - 'ci/check_venue_oracle_registry.sh'
-      - 'ci/lib/venue_oracle_registry.sh'
-      - 'ci/check_go_containers.sh'
-      - 'ci/check_auth_compose.sh'
-      - 'ci/auth_compose_proof.override.yml'
-      - 'ci/go_workers_compose_proof.override.yml'
-      - 'ci/check_auth_web_proxy_compose.sh'
-      - 'ci/auth_webproof_compose.override.yml'
-      - 'ci/auth_webproof_smtp_sink.mjs'
-      # CHAOS-10160: the external auth corpus job (venue-oracles.yml) and the files it runs.
-      - 'ci/auth_corpus_external.sh'
-      - 'ci/auth_corpus_set_env.sh'
-      - 'ci/auth_corpus_external.override.yml'
-      - 'ci/auth_corpus_external.acp.override.yml'
-      - '.github/workflows/venue-oracles.yml'
-      - 'ci/auth_k8s/**'
-      # The migration matrix's evidence columns are validated by a Go
-      # binary (cmd/dev-health-migration-matrix) against two committed
-      # contracts, so editing the page or either contract must run the gate
-      # that reads them. Its FRESHNESS half deliberately does NOT rely on
-      # this list -- see go-quality.yml, where it runs unconditionally,
-      # because a document rots when nothing touches it and no path filter
-      # can fire on an absence.
-      - 'docs/go-migration-matrix.md'
-      # internal/cigates/docsprepare writes a file named robots.txt; the path guard cannot tell that output name from
-      # the tracked docs/robots.txt, so it is covered here (a change to that docs file runs the Go tests too)
-      - 'docs/robots.txt'
-      # read by internal/cigates/docsprepare: the real redirect manifest must keep fitting the tool's narrow contract
-      - 'docs-data/redirects.tsv'
-      - 'docs-data/freshness-inventory.yml'
-      - 'docs-data/external-link-allowlist.yml'
-      # file names internal/cigates/docstools (validate-inventory-review) names; no Go test reads these files
-      - 'docs-data/inventory/**'
-      - 'ci/check_migration_matrix.sh'
-      - 'ci/check_migration_matrix_test.sh'
-      - 'ci/go_worker_fixture_test.sh'
-      - 'ci/lib/go_worker_fixture.sh'
-      - 'ci/run_metrics_executed_proof.sh'
-      - 'scripts/worker/provision_river_roles.sql'
-      - 'ci/check_river_compat_static.sh'
-      # CHAOS-4915: the pinned linter, its self-test and its negative-control
-      # fixture must trigger the job that validates them. A file that cannot
-      # trigger its own check can be broken by a commit that never runs it.
-      - 'ci/shellcheck_pinned.sh'
-      - 'ci/check_shellcheck_pin.sh'
-      - 'ci/fixtures/shellcheck_unclean_fixture.sh'
-      # go-quality.yml HOSTS those steps, and a review found it was not itself
-      # Go-relevant: the relevance decider of that time returned relevant=false for it,
-      # so a commit editing ONLY that workflow -- including one that removes the
-      # pin's install or check step -- would green-skip the very enforcement it
-      # was editing. Verified before and after this line was added.
-      - '.github/workflows/go-quality.yml'
-      # read by internal/testsupport/venuechanged (CHAOS-7653): a Go test reads this workflow file
-      - '.github/workflows/venue-oracles-changed.yml'
-      # read and executed by internal/cigates (CHAOS-10176): the test.yml contract, the pip-install manifest the
-      # gated jobs name, and the gate script itself
-      - '.github/workflows/test.yml'
-      # read by internal/cigates/workflowpaths: the path-filter contract of these four workflows
-      - '.github/workflows/codeql-analysis.yml'
-      - '.github/workflows/docs-cloudflare.yml'
-      - '.github/workflows/docs-guards.yml'
-      - '.github/workflows/security-scan.yml'
-      - 'requirements-docs.txt'
-      - 'ci/aggregate_gate_results.sh'
-      # executed or read by internal/cigates (CHAOS-10178): the diff producer, the affected-package selector, the venue
-      # run reader and the venue workflow whose step names that reader filters on
-      - 'ci/go_relevant_diff.sh'
-      - 'ci/integration_pr_scope.sh'
-      - 'ci/last-venue-run.sh'
-      - '.github/workflows/venue-oracles.yml'
-      # the workflow-shape guards (CHAOS-10177) read EVERY workflow file, the builder-image pin reader and its table,
-      # and the auth closure allow-list
-      - '.github/workflows/*.yml'
-      - '.github/workflows/*.yaml'
-      - 'ci/builder_images.sh'
-      # lefthook.yml holds the LOCAL half of the same pin. codex round 2 (P2):
-      # a lefthook-only change is relevant=false, so removing the pre-push hook
-      # would land with the pin's own CI job never running. The hook's presence
-      # is additionally asserted by ci/check_shellcheck_pin.sh, so deleting it
-      # now fails a check rather than silently un-wiring local enforcement.
-      - 'lefthook.yml'
-      - 'ci/evidence/go-worker-migration/**'
-      # - 'ci/local_validate.sh'
-      - '.dockerignore'
-      - 'Makefile'
-      - '.github/workflows/go.yml'
   merge_group:
   workflow_dispatch:
   # CHAOS-3948 turned `push` off (see the concurrency block below for why)
@@ -662,8 +441,9 @@ jobs:
             exit 1
           fi
 
+  # Runs on every event, drafts included (no draft gate): go-queue-gate's selector is this job, and its docs_only
+  # output decides the docs-only skips of every heavy job below.
   go-storage-integration-plan:
-    if: (!(github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full')))
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -672,10 +452,58 @@ jobs:
     outputs:
       matrix: ${{ steps.plan.outputs.matrix }}
       legs: ${{ steps.plan.outputs.legs }}
+      docs_only: ${{ steps.docs.outputs.docs_only }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+
+      # ONE docs-only definition (ci/codeql_docs_only.sh), run from the BASE commit so a change cannot rewrite its own
+      # judge. pull_request: the PR's base...head. merge_group: the target branch tip...the entry head, so the whole
+      # group ahead of this entry is judged, never this PR alone (merge_group.base_sha is the parent ENTRY). Any other
+      # event, and any error, is docs_only=false. internal/cigates/workflows pins every copy of this step identical.
+      - name: Docs-only change (judged by the base commit's ci/codeql_docs_only.sh)
+        id: docs
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          MG_BASE_REF: ${{ github.event.merge_group.base_ref }}
+          MG_HEAD_SHA: ${{ github.event.merge_group.head_sha }}
+        run: |
+          set -uo pipefail
+          docs_only=false
+          base=""
+          head=""
+          case "${EVENT_NAME}" in
+            pull_request)
+              base="${PR_BASE_SHA}"
+              head="${PR_HEAD_SHA}"
+              ;;
+            merge_group)
+              head="${MG_HEAD_SHA}"
+              if [[ "${MG_BASE_REF}" == refs/heads/* ]] \
+                && git fetch --no-tags --filter=blob:none origin "+${MG_BASE_REF}:refs/remotes/origin/docs-only-base"; then
+                base="$(git rev-parse --verify 'refs/remotes/origin/docs-only-base^{commit}')" || base=""
+              fi
+              ;;
+          esac
+          if [ -n "${base}" ] && [ -n "${head}" ] \
+            && git fetch --no-tags --filter=blob:none origin "${base}" "${head}" \
+            && git show "${base}:ci/codeql_docs_only.sh" > "${RUNNER_TEMP}/docs_only_judge.sh"; then
+            docs_only="$(bash "${RUNNER_TEMP}/docs_only_judge.sh" "${base}" "${head}")" || docs_only=false
+          fi
+          [ "${docs_only}" = "true" ] || docs_only=false
+          echo "docs_only=${docs_only}" >> "${GITHUB_OUTPUT}"
+          echo "docs-only: ${docs_only} (${EVENT_NAME} ${base:-<none>}...${head:-<none>})"
+
+      - name: Skip the integration shards for a docs-only change
+        if: steps.docs.outputs.docs_only == 'true'
+        run: |
+          out="${RUNNER_TEMP}/affected.txt"
+          printf 'NONE\n' > "${out}"
+          echo "INTEGRATION_AFFECTED_FILE=${out}" >> "${GITHUB_ENV}"
+          echo "::notice title=INTEGRATION SHARDS SKIPPED: DOCS-ONLY CHANGE::ci/codeql_docs_only.sh (from the base commit) classified this change docs-only"
 
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -692,7 +520,7 @@ jobs:
       # from the merge base, so a pull request cannot change that binary; this step's text,
       # ci/go_relevant_diff.sh, ci/check_go.sh and go list still run from the PR tree.
       - name: Select the integration packages the change can affect
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' && steps.docs.outputs.docs_only != 'true'
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           EVENT_NAME: ${{ github.event_name }}
@@ -703,11 +531,12 @@ jobs:
           full() { printf 'FULL %s\n' "$1" > "${out}"; echo "::warning title=INTEGRATION SELECTION FELL BACK TO THE FULL SUITE::$1"; }
           if ! bash ci/go_relevant_diff.sh > "${RUNNER_TEMP}/changed.txt"; then
             full "could not compute the changed-file list"
-          # CHAOS-10700: a pull request runs shards only for a trigger path or the ci:integration label; main push runs all.
-          # A label change starts no run (no `labeled` trigger): it applies at the next push. Any script failure (bad labels JSON, malformed list) falls through to the planner.
+          # A pull request runs shards only with the ci:integration or ci:full label; the merge queue runs them for every
+          # entry that is not docs-only. A label change starts no run (no `labeled` trigger): it applies at the next push.
+          # Any script failure (bad labels JSON, malformed list) falls through to the planner.
           elif scope="$(PR_LABELS_JSON="${PR_LABELS_JSON}" bash ci/integration_pr_scope.sh "${RUNNER_TEMP}/changed.txt")" && [ "${scope%% *}" = skip ]; then
             printf "NONE\n" > "${out}"
-            echo "::notice title=INTEGRATION SHARDS SKIPPED ON THIS PULL REQUEST::${scope#skip } (they run on the main push; label ci:integration runs them here)"
+            echo "::notice title=INTEGRATION SHARDS SKIPPED ON THIS PULL REQUEST::${scope#skip } (label ci:integration or ci:full, with the reason in the PR body, runs them here)"
           elif ! bash ci/check_go.sh integration-coverage | sed -n 's/^  RUN  //p' > "${RUNNER_TEMP}/keys.txt" \
             || [ ! -s "${RUNNER_TEMP}/keys.txt" ]; then
             full "could not list the integration packages"
@@ -772,7 +601,7 @@ jobs:
   # (16m44s, well under its own 25m cap) and are not matrix/concurrency-
   # sensitive the way six simultaneous shard legs are.
   dind-smoke-test:
-    if: (!(github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) && (vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule'))
+    if: (!(github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) && (vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule'))
     runs-on: [self-hosted, oci-arc-runners]
     # CHAOS-4906 (09-04): job-level `concurrency:` serialization was tried
     # here and on go-container-reproducibility-self-hosted, then REVERTED
@@ -885,6 +714,8 @@ jobs:
   # aggregate result only after every shard has reached a terminal state.
   go-storage-integration:
     name: go-storage-integration
+    # always(): a skipped shard matrix (the plan's explicit legs=0) must still be judged here, never skip this job.
+    if: always()
     needs:
       - go-storage-integration-plan
       - go-storage-integration-shard
@@ -915,7 +746,9 @@ jobs:
           echo "all deterministic Go integration shards passed"
 
   go-container-smoke:
-    if: (!(github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full')))
+    # Heavy: runs in the merge queue, on the main push, and on a pull request only with ci:full; a docs-only change skips it.
+    needs: go-storage-integration-plan
+    if: (!(github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) && needs.go-storage-integration-plan.outputs.docs_only != 'true'
     # Every Go image is smoked on both architectures it ships for. The arm64
     # leg runs on the same x64 host: the Dockerfile's build stage is
     # `--platform=$BUILDPLATFORM` (Go cross-compiles natively), and only the
@@ -947,7 +780,9 @@ jobs:
         run: bash ci/check_go_containers.sh smoke
 
   go-container-security:
-    if: (!(github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full')))
+    # Heavy: runs in the merge queue, on the main push, and on a pull request only with ci:full; a docs-only change skips it.
+    needs: go-storage-integration-plan
+    if: (!(github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) && needs.go-storage-integration-plan.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     strategy:
@@ -1034,8 +869,11 @@ jobs:
   # that name regardless of which leg actually ran.
   go-container-reproducibility:
     name: go-container-reproducibility
+    # Heavy (merge queue, main push, ci:full PR); a docs-only change skips it. go-queue-gate judges the pair as one.
+    needs: go-storage-integration-plan
     if: >-
-      (!(github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) &&
+      (!(github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) &&
+      needs.go-storage-integration-plan.outputs.docs_only != 'true' &&
       (!(vars.SELF_HOSTED_RUNNERS == 'enabled' &&
       ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) ||
       (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
@@ -1052,9 +890,10 @@ jobs:
 
   go-container-reproducibility-self-hosted:
     name: go-container-reproducibility
-    needs: dind-smoke-test
+    needs: [dind-smoke-test, go-storage-integration-plan]
     if: >-
-      (!(github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) &&
+      (!(github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) &&
+      needs.go-storage-integration-plan.outputs.docs_only != 'true' &&
       (vars.SELF_HOSTED_RUNNERS == 'enabled' &&
       ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) ||
       (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
@@ -1127,7 +966,9 @@ jobs:
   # SBOM) and rebuilt for reproducibility by the matrix jobs above; this job
   # is the part that RUNS them together.
   go-auth-compose-proof:
-    if: (!(github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full')))
+    # Heavy: runs in the merge queue, on the main push, and on a pull request only with ci:full; a docs-only change skips it.
+    needs: go-storage-integration-plan
+    if: (!(github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) && needs.go-storage-integration-plan.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -1161,7 +1002,9 @@ jobs:
   # wrote the session and go-api's own handlers wrote none. Web ref: a paired branch of the same
   # name on dev-health-web, else main.
   go-auth-web-proxy-proof:
-    if: (!(github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full')))
+    # Heavy: runs in the merge queue, on the main push, and on a pull request only with ci:full; a docs-only change skips it.
+    needs: go-storage-integration-plan
+    if: (!(github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) && needs.go-storage-integration-plan.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
@@ -1233,7 +1076,9 @@ jobs:
           [ "$(docker inspect --format '{{.Id}} {{.State.StartedAt}}' postgres)" = "$(cat "${RUNNER_TEMP}/decoy.id")" ]
 
   graphql-wire-parity:
-    if: (!(github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full')))
+    # Fast (runs on a pull request); a docs-only change skips it, here and in the merge queue.
+    needs: go-storage-integration-plan
+    if: (!(github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) && (needs.go-storage-integration-plan.outputs.docs_only != 'true')
     # CHAOS-4696: query-api's registered-document consts must digest-match
     # what a real client actually sends. The wire form can ONLY be
     # computed correctly by the web repo's own pinned @urql/core/graphql
@@ -1337,3 +1182,48 @@ jobs:
       - name: Run graphql-wire-parity check against this repo's HEAD
         working-directory: dev-health-web-main
         run: pnpm graphql:wire-parity:check --ops-root "${{ github.workspace }}"
+
+  # REQUIRED status check (ruleset): the merge queue's verdict on this workflow's heavy jobs. It reports on every
+  # pull request (this workflow has no pull_request path filter) and on every merge_group entry. A heavy job's skip is
+  # legitimate only on a pull request without ci:full, or for a docs-only change (`queue-heavy`); in the merge queue
+  # every heavy job must succeed unless the entry is docs-only. Not on push/schedule/dispatch: the ruleset judges
+  # pull requests and queue entries, and a main push may skip the shards (the queue-tested-sha skip).
+  go-queue-gate:
+    name: go-queue-gate
+    if: always() && (github.event_name == 'pull_request' || github.event_name == 'merge_group')
+    needs:
+      - go-storage-integration-plan
+      - go-storage-integration
+      - go-container-smoke
+      - go-container-security
+      - go-container-reproducibility
+      - go-container-reproducibility-self-hosted
+      - go-auth-compose-proof
+      - go-auth-web-proxy-proof
+      - graphql-wire-parity
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Aggregate the heavy Go results
+        env:
+          GATE_NAME: go-queue-gate
+          EVENT_NAME: ${{ github.event_name }}
+          GATE_HAS_SELECTOR: "true"
+          CHANGES_RESULT: ${{ needs.go-storage-integration-plan.result }}
+          CHANGES_CODE: ${{ needs.go-storage-integration-plan.outputs.docs_only == 'true' && 'false' || 'true' }}
+          HEAVY_ON_PR: ${{ contains(github.event.pull_request.labels.*.name, 'ci:full') && 'true' || 'false' }}
+          # always(): judges the plan's legs=0 itself, so a skip of it is never legitimate.
+          GATED_JOB_1: go-storage-integration|unconditional|${{ needs.go-storage-integration.result }}
+          GATED_JOB_2: go-container-smoke|queue-heavy|${{ needs.go-container-smoke.result }}
+          GATED_JOB_3: go-container-security|queue-heavy|${{ needs.go-container-security.result }}
+          # The hosted and self-hosted twins: exactly one is routed per event, so the pair is one result (the
+          # self-hosted twin's when the hosted one skipped).
+          GATED_JOB_4: go-container-reproducibility|queue-heavy|${{ needs.go-container-reproducibility.result == 'skipped' && needs.go-container-reproducibility-self-hosted.result || needs.go-container-reproducibility.result }}
+          GATED_JOB_5: go-auth-compose-proof|queue-heavy|${{ needs.go-auth-compose-proof.result }}
+          GATED_JOB_6: go-auth-web-proxy-proof|queue-heavy|${{ needs.go-auth-web-proxy-proof.result }}
+          GATED_JOB_7: graphql-wire-parity|queue-heavy|${{ needs.graphql-wire-parity.result }}
+        run: |
+          chmod +x ci/aggregate_gate_results.sh
+          ./ci/aggregate_gate_results.sh

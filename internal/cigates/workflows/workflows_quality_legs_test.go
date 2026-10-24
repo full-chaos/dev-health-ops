@@ -13,7 +13,8 @@ import (
 // CHAOS-10177: Go port of the YAML/text-shape tests of tests/tooling/test_go_quality_legs.py (CHAOS-6690, 8135):
 // go-quality runs as parallel legs whose union is exactly `check_go.sh ci` (race in its sharded form), the matrix
 // carries exactly the legs the script knows, the fan-in keeps the required context `go-quality` and judges the legs
-// `unconditional`, and the static-only steps run only on the static leg. The tests that EXECUTE check_go.sh against a
+// `docs-skippable` (a skip only for a docs-only change, decided by the plan), and the static-only steps run only on the
+// static leg. The tests that EXECUTE check_go.sh against a
 // stand-in go, the weights table versus `go list`, the race-excluded test census and the -trimpath derivation live in
 // internal/cigates/testshard.
 
@@ -131,8 +132,10 @@ func qualityLegViolations(t *testing.T, root string) []string {
 	if b, ok := asMap(leg["strategy"])["fail-fast"].(bool); !ok || b {
 		add("go-quality-leg strategy.fail-fast must be false")
 	}
-	if _, has := leg["if"]; has {
-		add("a job-level `if` on the go-quality legs would let GitHub report them skipped; relevance is decided by a STEP inside each leg")
+	// The one job-level condition: a docs-only change (the plan's docs_only output) runs no leg. Any other relevance is
+	// decided by a STEP inside each leg, so the leg still reports.
+	if got := str(leg["if"]); got != "needs.go-quality-plan.outputs.docs_only != 'true'" {
+		add("the go-quality legs' job-level `if` must be exactly the docs-only skip (needs.go-quality-plan.outputs.docs_only != 'true'); any other job condition would let GitHub report them skipped, got %q", got)
 	}
 	ran := false
 	for _, s := range stepsOf(leg) {
@@ -171,11 +174,12 @@ func qualityLegViolations(t *testing.T, root string) []string {
 		if str(env["GATE_NAME"]) != "go-quality" {
 			add("fan-in GATE_NAME must be go-quality, got %q", str(env["GATE_NAME"]))
 		}
-		if str(env["GATE_HAS_SELECTOR"]) != "false" {
-			add("fan-in GATE_HAS_SELECTOR must be false, got %q", str(env["GATE_HAS_SELECTOR"]))
+		if str(env["GATE_HAS_SELECTOR"]) != "true" || str(env["CHANGES_RESULT"]) != "${{ needs.go-quality-plan.result }}" ||
+			str(env["CHANGES_CODE"]) != "${{ needs.go-quality-plan.outputs.docs_only == 'true' && 'false' || 'true' }}" {
+			add("the fan-in's selector must be the plan (GATE_HAS_SELECTOR true, CHANGES_RESULT the plan result, CHANGES_CODE 'false' only for docs_only), got %q / %q / %q", str(env["GATE_HAS_SELECTOR"]), str(env["CHANGES_RESULT"]), str(env["CHANGES_CODE"]))
 		}
-		if got := str(env["GATED_JOB_1"]); got != "go-quality-leg|unconditional|${{ needs.go-quality-leg.result }}" {
-			add("the fan-in must judge the legs `unconditional` so a skipped, cancelled or missing leg fails the gate; got %q", got)
+		if got := str(env["GATED_JOB_1"]); got != "go-quality-leg|docs-skippable|${{ needs.go-quality-leg.result }}" {
+			add("the fan-in must judge the legs `docs-skippable` so only a docs-only skip passes and a skipped, cancelled or missing leg otherwise fails the gate; got %q", got)
 		}
 		if got := str(env["GATED_JOB_2"]); got != "go-quality-plan|unconditional|${{ needs.go-quality-plan.result }}" {
 			add("the fan-in must judge the plan job `unconditional`: a skipped or failed plan skips every leg; got %q", got)
@@ -229,7 +233,9 @@ func TestGoQualityLegsPlantedDefects(t *testing.T) {
 		{"fail-fast comes back on", []mutation{{wf, "fail-fast: false", "fail-fast: true"}}, []string{"fail-fast must be false"}},
 		{"the fan-in can skip", []mutation{{wf, "\n    if: always()\n", "\n    if: success()\n"}}, []string{"fan-in must be always()"}},
 		{"the pool timeout grows past 45", []mutation{{wf, "&& 45 || 30 }}", "&& 90 || 30 }}"}}, []string{"timeout-minutes must be <= 30"}},
-		{"the fan-in stops judging the legs unconditional", []mutation{{wf, "go-quality-leg|unconditional|", "go-quality-leg|path-filtered|"}}, []string{"unconditional"}},
+		{"the fan-in judges the legs path-filtered", []mutation{{wf, "go-quality-leg|docs-skippable|", "go-quality-leg|path-filtered|"}}, []string{"docs-skippable"}},
+		{"the legs skip on a wider job condition", []mutation{{wf, "    if: needs.go-quality-plan.outputs.docs_only != 'true'\n", "    if: needs.go-quality-plan.outputs.docs_only != 'true' && github.event_name != 'pull_request'\n"}}, []string{"exactly the docs-only skip"}},
+		{"the fan-in's docs selector inverts", []mutation{{wf, "docs_only == 'true' && 'false' || 'true' }}", "docs_only == 'true' && 'true' || 'false' }}"}}, []string{"selector must be the plan"}},
 		{"the fan-in stops judging the plan job unconditional", []mutation{{wf, "go-quality-plan|unconditional|", "go-quality-plan|path-filtered|"}}, []string{"judge the plan job"}},
 		{"the fan-in stops needing the plan job", []mutation{{wf, "needs: [go-quality-plan, go-quality-leg]", "needs: [go-quality-leg]"}}, []string{"must need exactly go-quality-plan and go-quality-leg"}},
 		{"the leg step echoes the command instead of running it", []mutation{{wf, "run: bash ci/check_go.sh ci-leg ${{ matrix.args }}", `run: echo "ci-leg ${{ matrix.args }}"`}}, []string{"no go-quality-leg step runs"}},

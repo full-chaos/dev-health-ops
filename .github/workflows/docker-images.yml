@@ -109,8 +109,53 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       code: ${{ steps.filter.outputs.code }}
+      docs_only: ${{ steps.docs.outputs.docs_only }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The docs-only verdict diffs the base commit against the head: history is needed, blobs are fetched lazily.
+          fetch-depth: 0
+          filter: blob:none
+
+      # ONE docs-only definition (ci/codeql_docs_only.sh), run from the BASE commit so a change cannot rewrite its own
+      # judge. pull_request: the PR's base...head. merge_group: the target branch tip...the entry head, so the whole
+      # group ahead of this entry is judged, never this PR alone (merge_group.base_sha is the parent ENTRY). Any other
+      # event, and any error, is docs_only=false. internal/cigates/workflows pins every copy of this step identical.
+      - name: Docs-only change (judged by the base commit's ci/codeql_docs_only.sh)
+        id: docs
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          MG_BASE_REF: ${{ github.event.merge_group.base_ref }}
+          MG_HEAD_SHA: ${{ github.event.merge_group.head_sha }}
+        run: |
+          set -uo pipefail
+          docs_only=false
+          base=""
+          head=""
+          case "${EVENT_NAME}" in
+            pull_request)
+              base="${PR_BASE_SHA}"
+              head="${PR_HEAD_SHA}"
+              ;;
+            merge_group)
+              head="${MG_HEAD_SHA}"
+              if [[ "${MG_BASE_REF}" == refs/heads/* ]] \
+                && git fetch --no-tags --filter=blob:none origin "+${MG_BASE_REF}:refs/remotes/origin/docs-only-base"; then
+                base="$(git rev-parse --verify 'refs/remotes/origin/docs-only-base^{commit}')" || base=""
+              fi
+              ;;
+          esac
+          if [ -n "${base}" ] && [ -n "${head}" ] \
+            && git fetch --no-tags --filter=blob:none origin "${base}" "${head}" \
+            && git show "${base}:ci/codeql_docs_only.sh" > "${RUNNER_TEMP}/docs_only_judge.sh"; then
+            docs_only="$(bash "${RUNNER_TEMP}/docs_only_judge.sh" "${base}" "${head}")" || docs_only=false
+          fi
+          [ "${docs_only}" = "true" ] || docs_only=false
+          echo "docs_only=${docs_only}" >> "${GITHUB_OUTPUT}"
+          echo "docs-only: ${docs_only} (${EVENT_NAME} ${base:-<none>}...${head:-<none>})"
+
       - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         id: filter
         # Always run on workflow_dispatch and release events
@@ -216,10 +261,10 @@ jobs:
     #
     # PRs keep the filter. Nothing here changes what a PR builds.
     if: >-
-      (!(github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) &&
+      (!(github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'ci:full') && (github.event.pull_request.draft || !contains(github.event.pull_request.labels.*.name, 'hotfix-image')))) &&
       (github.event_name == 'workflow_dispatch' ||
       github.event_name == 'release' ||
-      github.event_name == 'merge_group' ||
+      (github.event_name == 'merge_group' && needs.changes.outputs.docs_only != 'true') ||
       (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
       needs.changes.outputs.code == 'true') &&
       needs.resolve.outputs.promoted != 'true'
@@ -389,7 +434,7 @@ jobs:
   # a container, in isolation, before the real build leg risks a
   # registry write.
   dind-smoke-test:
-    if: (!(github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) && ((vars.SELF_HOSTED_IMAGE_BUILDS == 'enabled' || vars.SELF_HOSTED_RUNNERS == 'enabled') && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule'))
+    if: (!(github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'ci:full') && (github.event.pull_request.draft || !contains(github.event.pull_request.labels.*.name, 'hotfix-image')))) && ((vars.SELF_HOSTED_IMAGE_BUILDS == 'enabled' || vars.SELF_HOSTED_RUNNERS == 'enabled') && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule'))
     runs-on: [self-hosted, oci-arc-runners]
     timeout-minutes: 5
     steps:
@@ -465,7 +510,7 @@ jobs:
     name: go-build-dho-arm64
     needs: [changes, resolve, dind-smoke-test]
     if: >-
-      (!(github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) &&
+      (!(github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'ci:full') && (github.event.pull_request.draft || !contains(github.event.pull_request.labels.*.name, 'hotfix-image')))) &&
       (always() &&
       needs.changes.result == 'success' &&
       needs.resolve.result == 'success' &&
@@ -474,7 +519,7 @@ jobs:
       needs.dind-smoke-test.result != 'cancelled' &&
       (github.event_name == 'workflow_dispatch' ||
       github.event_name == 'release' ||
-      github.event_name == 'merge_group' ||
+      (github.event_name == 'merge_group' && needs.changes.outputs.docs_only != 'true') ||
       (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
       needs.changes.outputs.code == 'true'))
     runs-on: ${{ ((vars.SELF_HOSTED_IMAGE_BUILDS == 'enabled' || vars.SELF_HOSTED_RUNNERS == 'enabled') && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')) && fromJSON('["self-hosted","oci-arc-runners"]') || 'ubuntu-latest' }}
@@ -684,10 +729,10 @@ jobs:
     # above (CHAOS-4921 M2): the artefact for this commit must exist
     # whatever the paths filter says.
     if: >-
-      (!(github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) &&
+      (!(github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'ci:full') && (github.event.pull_request.draft || !contains(github.event.pull_request.labels.*.name, 'hotfix-image')))) &&
       (github.event_name == 'workflow_dispatch' ||
       github.event_name == 'release' ||
-      github.event_name == 'merge_group' ||
+      (github.event_name == 'merge_group' && needs.changes.outputs.docs_only != 'true') ||
       (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
       needs.changes.outputs.code == 'true') &&
       needs.resolve.outputs.promoted != 'true'
@@ -1554,3 +1599,35 @@ jobs:
             echo "::error::0 of ${family_total} families had a moving tag applied this run, and ${any_unknown_count} decline(s) somewhere in the loop were for reasons that could repeat identically on every future run (ambiguous registry reads, conflicting platform labels, or an exhausted digest walk) -- not unrelated per-family gaps. Failing so this doesn't read as a successful, tag-less no-op."
             exit 1
           fi
+
+  # REQUIRED status check (ruleset): the merge queue's verdict on the image builds. The builds are heavy: they run in
+  # the merge queue, on the main push, and on a pull request only with ci:full (or a non-draft hotfix-image PR). In
+  # the merge queue every build must succeed unless the entry is docs-only. A run started by any other label skips
+  # `changes` and this gate with it (the run of the push it follows carries the verdict).
+  image-queue-gate:
+    name: image-queue-gate
+    if: always() && (github.event_name == 'pull_request' || github.event_name == 'merge_group') && (github.event.action != 'labeled' || github.event.label.name == 'hotfix-image')
+    needs: [changes, resolve, go-build, go-api-tools-build, go-build-dho-arm64]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Aggregate the image build results
+        env:
+          GATE_NAME: image-queue-gate
+          EVENT_NAME: ${{ github.event_name }}
+          GATE_HAS_SELECTOR: "true"
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          # 'false' (nothing to build) for a docs-only change, or a pull request whose image paths did not change.
+          CHANGES_CODE: ${{ (needs.changes.outputs.docs_only == 'true' || (github.event_name == 'pull_request' && needs.changes.outputs.code == 'false')) && 'false' || 'true' }}
+          HEAVY_ON_PR: ${{ (contains(github.event.pull_request.labels.*.name, 'ci:full') || (!github.event.pull_request.draft && contains(github.event.pull_request.labels.*.name, 'hotfix-image'))) && 'true' || 'false' }}
+          GATED_JOB_1: resolve|unconditional|${{ needs.resolve.result }}
+          GATED_JOB_2: go-build|queue-heavy|${{ needs.go-build.result }}
+          GATED_JOB_3: go-api-tools-build|queue-heavy|${{ needs.go-api-tools-build.result }}
+          GATED_JOB_4: go-build-dho-arm64|queue-heavy|${{ needs.go-build-dho-arm64.result }}
+        run: |
+          chmod +x ci/aggregate_gate_results.sh
+          ./ci/aggregate_gate_results.sh

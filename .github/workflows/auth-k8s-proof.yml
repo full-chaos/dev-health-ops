@@ -35,6 +35,45 @@ jobs:
         with:
           fetch-depth: 0
 
+      # ONE docs-only definition (ci/codeql_docs_only.sh), run from the BASE commit so a change cannot rewrite its own
+      # judge. pull_request: the PR's base...head. merge_group: the target branch tip...the entry head, so the whole
+      # group ahead of this entry is judged, never this PR alone (merge_group.base_sha is the parent ENTRY). Any other
+      # event, and any error, is docs_only=false. internal/cigates/workflows pins every copy of this step identical.
+      - name: Docs-only change (judged by the base commit's ci/codeql_docs_only.sh)
+        id: docs
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          MG_BASE_REF: ${{ github.event.merge_group.base_ref }}
+          MG_HEAD_SHA: ${{ github.event.merge_group.head_sha }}
+        run: |
+          set -uo pipefail
+          docs_only=false
+          base=""
+          head=""
+          case "${EVENT_NAME}" in
+            pull_request)
+              base="${PR_BASE_SHA}"
+              head="${PR_HEAD_SHA}"
+              ;;
+            merge_group)
+              head="${MG_HEAD_SHA}"
+              if [[ "${MG_BASE_REF}" == refs/heads/* ]] \
+                && git fetch --no-tags --filter=blob:none origin "+${MG_BASE_REF}:refs/remotes/origin/docs-only-base"; then
+                base="$(git rev-parse --verify 'refs/remotes/origin/docs-only-base^{commit}')" || base=""
+              fi
+              ;;
+          esac
+          if [ -n "${base}" ] && [ -n "${head}" ] \
+            && git fetch --no-tags --filter=blob:none origin "${base}" "${head}" \
+            && git show "${base}:ci/codeql_docs_only.sh" > "${RUNNER_TEMP}/docs_only_judge.sh"; then
+            docs_only="$(bash "${RUNNER_TEMP}/docs_only_judge.sh" "${base}" "${head}")" || docs_only=false
+          fi
+          [ "${docs_only}" = "true" ] || docs_only=false
+          echo "docs_only=${docs_only}" >> "${GITHUB_OUTPUT}"
+          echo "docs-only: ${docs_only} (${EVENT_NAME} ${base:-<none>}...${head:-<none>})"
+
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
@@ -49,8 +88,14 @@ jobs:
           EVENT: ${{ github.event_name }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          DOCS_ONLY: ${{ steps.docs.outputs.docs_only }}
         run: |
           set -euo pipefail
+          if [ "${DOCS_ONLY}" = "true" ] && [ "${EVENT}" = "pull_request" ]; then
+            echo "relevant=false" >> "${GITHUB_OUTPUT}"
+            echo "relevant=false (docs-only change, ci/codeql_docs_only.sh from the base commit)"
+            exit 0
+          fi
           if [ "${EVENT}" != "pull_request" ]; then
             echo "relevant=true" >> "${GITHUB_OUTPUT}"
             echo "proof runs: ${EVENT} is not a pull request"

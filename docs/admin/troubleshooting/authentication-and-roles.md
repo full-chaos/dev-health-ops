@@ -12,6 +12,7 @@ lifecycle: active
 1. Confirm the user is signing into the intended workspace and identity provider.
 2. Check workspace membership and the current role.
 3. For SSO, verify issuer, audience, callback, and group or role mapping.
+   For a refused sign-in, match its reason code against the [identity linking reference](../../reference/auth/identity-linking.md).
 4. Reproduce with a second account that has the expected role.
 5. Distinguish authentication failure from authorization failure.
 6. Retain the route, time, correlation or request identifier, and sanitized message.

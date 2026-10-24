@@ -197,6 +197,9 @@ const (
 	// started no run for because the day has more pending repositories than
 	// one run accepts. The day stays pending.
 	PostSyncTouchedDaysOverRepositoryLimit PostSyncTouchedDaysEvent = "over_repository_limit"
+	// PostSyncTouchedDaysWindowOverBound counts the fan-outs whose window marks
+	// (days x repositories) were above the bound. Every mark is still recorded.
+	PostSyncTouchedDaysWindowOverBound PostSyncTouchedDaysEvent = "window_over_bound"
 	// PostSyncTouchedDaysTakeTimeUnwritten counts the fan-outs whose runs were
 	// committed without a take time because the column is absent (a build that
 	// runs before its migration). The drain cannot check the mark of such runs.
@@ -284,7 +287,7 @@ func postSyncTouchedDaysEvents() []PostSyncTouchedDaysEvent {
 		PostSyncTouchedDaysCarriedOver, PostSyncTouchedDaysAlreadyStarted,
 		PostSyncTouchedDaysReadTruncated, PostSyncTouchedDaysRecordFailed,
 		PostSyncTouchedDaysMarkFailed, PostSyncTouchedDaysOverRepositoryLimit,
-		PostSyncTouchedDaysTakeTimeUnwritten,
+		PostSyncTouchedDaysTakeTimeUnwritten, PostSyncTouchedDaysWindowOverBound,
 	}
 }
 

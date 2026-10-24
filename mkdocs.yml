@@ -80,6 +80,11 @@ nav:
           - Create or clone: use/reports/create-or-clone.md
           - Run and schedule: use/reports/run-and-schedule.md
           - Output and provenance: use/reports/read-output-and-provenance.md
+      - Sign in and recover access:
+          - use/sign-in/index.md
+          - Create an account and sign in: use/sign-in/create-account-and-sign-in.md
+          - Recover access: use/sign-in/recover-access.md
+          - Social sign-in and SSO: use/sign-in/social-login-and-sso.md
       - Troubleshooting:
           - use/troubleshooting/index.md
           - No or incomplete data: use/troubleshooting/no-or-incomplete-data.md
@@ -87,6 +92,7 @@ nav:
           - Permissions and availability: use/troubleshooting/permissions-and-availability.md
           - Stale or delayed results: use/troubleshooting/stale-or-delayed-results.md
           - Report problems: use/troubleshooting/reports.md
+          - Sign-in problems: use/troubleshooting/sign-in.md
   - Administer Dev Health:
       - admin/index.md
       - Workspace:
@@ -210,6 +216,7 @@ nav:
       - Auth: reference/auth/credential-classes.md
       - Auth endpoint profiles: reference/auth/endpoint-profiles.md
       - Auth service configuration: reference/auth/configuration.md
+      - Auth identity linking: reference/auth/identity-linking.md
       - Auth service readiness and SLO: reference/auth/readiness-and-slo.md
       - GraphQL:
           - reference/graphql/index.md

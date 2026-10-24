@@ -632,3 +632,29 @@ func TestRoutedAccessVerifyMapsTheValidatorForPolicy(t *testing.T) {
 		t.Errorf("user token: %+v %v", result, err)
 	}
 }
+
+// TestIssuerSetCallerLookupOutageIsTheListener500: a store outage behind the
+// validator answers through the api listener exactly as with the issuer
+// unset: OrgScope runs first and answers the generic 500 (OrgIdMiddleware
+// parity); the 503 of the guard is not reached on this listener.
+func TestIssuerSetCallerLookupOutageIsTheListener500(t *testing.T) {
+	minter := newEdDSAMinter(t)
+	store := newProbeStore()
+	downSID := uuid.MustParse("00000000-0000-4000-8000-0000000000c7")
+	store.sessions[downSID] = policy.SessionRow{PrincipalID: probeDown}
+	legacy := probeHS256(t, probeKey, map[string]any{"sub": probeDown.String(), "org_id": probeOrg.String()})
+	user := minter.mint(probeDown, map[string]any{"sid": sessionid.Wire(downSID)})
+	unset := probeDo(probeServer(t, store, nil), probeRequest{"unset", http.MethodGet, probeAuthenticated, bearer(legacy)})
+	if unset.Status != http.StatusInternalServerError {
+		t.Fatalf("issuer unset: %d %s", unset.Status, unset.Body)
+	}
+	f := newRoutedFixture(t, store, userRows(t), probeIssuer, minter.keys, nil, probeNow)
+	for name, token := range map[string]string{"legacy": legacy, "user": user} {
+		got := probeDo(f.handler, probeRequest{name, http.MethodGet, probeAuthenticated, bearer(token)})
+		a, _ := json.Marshal(probeAnswer{Status: got.Status, Headers: got.Headers, Body: got.Body})
+		b, _ := json.Marshal(probeAnswer{Status: unset.Status, Headers: unset.Headers, Body: unset.Body})
+		if !bytes.Equal(a, b) {
+			t.Errorf("%s: issuer set answers %s, issuer unset %s", name, a, b)
+		}
+	}
+}

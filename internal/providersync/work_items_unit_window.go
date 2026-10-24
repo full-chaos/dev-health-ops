@@ -1,6 +1,15 @@
 package providersync
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
+
+// ErrInvalidUnitWindow is the refusal of a work-items unit whose window is
+// malformed: since after before, a zero time, or too many days. It is also an
+// ErrInvalidConfiguration. The window is part of the unit, so every attempt
+// refuses it the same way.
+var ErrInvalidUnitWindow = fmt.Errorf("%w: work-items unit window is malformed", ErrInvalidConfiguration)
 
 // workItemsUnitWindowDays validates the window of a work-items sync unit and
 // returns the UTC days it covers, ascending.
@@ -43,25 +52,25 @@ func WorkItemsUnitWindowDays(since, before *time.Time, normalizedAt time.Time) (
 	endDay := githubWorkItemDerivedUTCDate(normalizedAt)
 	if before != nil {
 		if before.IsZero() {
-			return nil, ErrInvalidConfiguration
+			return nil, ErrInvalidUnitWindow
 		}
 		endDay = githubWorkItemDerivedUTCDate(before.Add(-time.Nanosecond))
 	}
 	startDay := endDay
 	if since != nil {
 		if since.IsZero() {
-			return nil, ErrInvalidConfiguration
+			return nil, ErrInvalidUnitWindow
 		}
 		startDay = githubWorkItemDerivedUTCDate(*since)
 	}
 	if startDay.After(endDay) {
 		// A unit whose window is inverted is malformed, not an empty range.
-		return nil, ErrInvalidConfiguration
+		return nil, ErrInvalidUnitWindow
 	}
 	days := make([]time.Time, 0, githubWorkItemDerivedMaxBackfillDays)
 	for day := startDay; !day.After(endDay); day = day.AddDate(0, 0, 1) {
 		if len(days) == githubWorkItemDerivedMaxBackfillDays {
-			return nil, ErrInvalidConfiguration
+			return nil, ErrInvalidUnitWindow
 		}
 		days = append(days, day)
 	}

@@ -9,6 +9,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/rowview"
+	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
 // A recompute of a written day must not leave the old "blocked" row beside the
@@ -76,8 +79,9 @@ func TestRecomputeOfAWrittenDayRetractsTheDroppedBlockedStatus(t *testing.T) {
 SELECT status, sum(hours) FROM (
   SELECT provider, work_scope_id, team_id, status, argMax(duration_hours, computed_at) AS hours
   FROM work_item_state_durations_daily
-  WHERE org_id = ? AND day = ?
+  WHERE org_id = ? AND day = ? AND `+rowview.OrgPredicate("work_item_state_durations_daily", "")+`
   GROUP BY provider, work_scope_id, team_id, status, row_view
+  HAVING `+liverow.NewestPredicate("work_item_state_durations_daily", "")+`
 ) GROUP BY status`, org, day)
 		if err != nil {
 			t.Fatal(err)

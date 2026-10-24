@@ -182,3 +182,5 @@ revisions above the restored value will be re-issued. The fix that makes
 this safe (a restore fence that moves revision counters forward and keeps
 revocations) is tracked in CHAOS-11271; until it lands, prefer restore to
 the end of the WAL, and never PITR past a revocation you cannot redo.
+
+Interim rule (D6323, CHAOS-11271), verbatim: "until 11271 rolls, no PITR of the auth/identity DB to any point before end of WAL without acp attest + chris's word; end-of-WAL restore is safe."

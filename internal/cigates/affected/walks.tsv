@@ -154,6 +154,7 @@ internal/httpguard	origin_census_test.go	internal	tree
 internal/httpguard	redirect_sites_test.go	unexpressed	-
 internal/jobcontract	registry_test.go	unexpressed	-
 internal/jobs/investment	categorization_platform_only_test.go	internal/jobs/investment	dir
+internal/jobs/investment	categorizebyo_test.go	internal/jobs/investment	dir
 internal/jobs/investment	providerselection_census_test.go	unexpressed	-
 internal/jobs/investment	shadowexecutor_test.go	unexpressed	-
 internal/jobs/investment/categorize	org_egress_guard_test.go	internal/jobs/investment/categorize	dir

@@ -123,6 +123,7 @@ internal/teamcreated
 internal/teamid
 internal/teamkeytables
 internal/teamprovider
+internal/testsupport/authrows
 internal/testsupport/containers
 internal/testsupport/moduleroot
 internal/testsupport/pydanticecho

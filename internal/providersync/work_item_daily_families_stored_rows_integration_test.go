@@ -330,7 +330,7 @@ func runDailyWorkItemFamilies(
 	repoIDs []daily.RepositoryID,
 ) map[string]int {
 	t.Helper()
-	statusMapping, err := LoadStatusMapping(resolveStatusMappingConfig(t, "real"))
+	statusMapping, err := LoadStatusMapping(resolveStatusMappingConfig(t, "live"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -417,7 +417,7 @@ func TestDailyWorkItemFamiliesEqualTheSyncDeriverOnStoredRows(t *testing.T) {
 
 			// --- WRITER 1: the sync-time deriver, on the full item set ----
 			deriver, err := NewGitHubWorkItemDeriver(
-				conn, lease, resolveStatusMappingConfig(t, "real"),
+				conn, lease, resolveStatusMappingConfig(t, "live"),
 			)
 			if err != nil {
 				t.Fatal(err)
@@ -577,7 +577,7 @@ SELECT sum(completed), sum(created), sum(active) FROM (
 			// Item 7 is not active on the day. Its normalized type comes from
 			// the real status mapping; where no other item has that type, the
 			// family must still write the key, as a row of zeros.
-			statusMapping, err := LoadStatusMapping(resolveStatusMappingConfig(t, "real"))
+			statusMapping, err := LoadStatusMapping(resolveStatusMappingConfig(t, "live"))
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -100,11 +100,9 @@ func normKey(value string) string {
 // formatting would render that node as `map[type:bug]` and diverge on the single
 // most user-visible entry in the file.
 //
-// That misparse is CHAOS-3512: GitHub items carrying the conventional
-// `type:bug` label classify as "issue" instead of "bug". It is fixed
-// PYTHON-FIRST and then re-mirrored here -- this port reproduces the CURRENT
-// behaviour, and the tripwire in status_mapping_reachability_test.go fails the
-// moment either side changes, so the re-mirror cannot drift silently.
+// That misparse was CHAOS-3512; the yaml is now quoted and LoadStatusMapping
+// refuses such entries (see refuseCollectionEntries). This repr path stays for
+// the frozen-oracle loader, which still indexes them as Python did.
 func pythonStr(node *yaml.Node) (string, error) {
 	node = resolveAlias(node)
 	if node == nil {
@@ -394,6 +392,13 @@ func indexValues(into map[string]string, values *yaml.Node, category string) err
 // default. A Go-side default guessing at a repo layout would be a second source
 // of truth for where the config lives.
 func LoadStatusMapping(path string) (*StatusMapping, error) {
+	return loadStatusMapping(path, true)
+}
+
+// loadStatusMapping is LoadStatusMapping with the collection-entry refusal
+// switchable. Only the frozen-Python oracle harness passes strict=false: its
+// pinned goldens record Python indexing dict/list entries under their repr.
+func loadStatusMapping(path string, strict bool) (*StatusMapping, error) {
 	if envPath := os.Getenv("STATUS_MAPPING_PATH"); envPath != "" {
 		path = envPath
 	}
@@ -481,6 +486,11 @@ func LoadStatusMapping(path string) (*StatusMapping, error) {
 		mapping.LabelTypeByProvider[provider] = labelTypeIndex
 	}
 
+	if strict {
+		if err := refuseAllCollectionEntries(baseStatus, providers); err != nil {
+			return nil, err
+		}
+	}
 	return mapping, nil
 }
 
@@ -639,4 +649,67 @@ func (m *StatusMapping) NormalizeStatus(
 	}
 
 	return "unknown"
+}
+
+// refuseCollectionEntries refuses a YAML mapping or sequence INSIDE a category
+// list. Such an entry is almost always an unquoted `key: value` label (CHAOS-3512:
+// `- type: bug` parsed as a mapping) that would otherwise be indexed under a
+// Python-repr key no real label can match. DECLARED DIVERGENCE: Python accepted
+// these silently; the frozen oracle harness loads with strict=false.
+func refuseCollectionEntries(values *yaml.Node, category string) error {
+	values = resolveAlias(values)
+	if values == nil || values.Kind != yaml.SequenceNode {
+		return nil
+	}
+	for _, entry := range values.Content {
+		resolved := resolveAlias(entry)
+		if resolved == nil {
+			continue
+		}
+		if resolved.Kind == yaml.MappingNode || resolved.Kind == yaml.SequenceNode {
+			return fmt.Errorf(
+				"status mapping: entry at line %d under %q is a YAML %s, not a string; "+
+					"quote values that contain \": \" (for example \"type:bug\")",
+				entry.Line, category, nodeKindName(resolved))
+		}
+	}
+	return nil
+}
+
+// refuseAllCollectionEntries applies refuseCollectionEntries to every category
+// list in the document, including categories the indexes ignore and providers
+// the loader does not build (linear), so an ignored section cannot hide a
+// misparsed label.
+func refuseAllCollectionEntries(baseStatus, providers *yaml.Node) error {
+	sweep := func(section *yaml.Node) error {
+		entries, err := mappingNodeEntries(resolveAlias(section))
+		if err != nil {
+			return nil
+		}
+		for _, entry := range entries {
+			if err := refuseCollectionEntries(entry.Value, entry.Key); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if err := sweep(baseStatus); err != nil {
+		return err
+	}
+	provEntries, err := mappingNodeEntries(resolveAlias(providers))
+	if err != nil {
+		return nil
+	}
+	for _, prov := range provEntries {
+		for _, name := range []string{"statuses", "status_labels", "types", "type_labels"} {
+			section, err := mappingValue(prov.Value, name)
+			if err != nil {
+				continue
+			}
+			if err := sweep(section); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }

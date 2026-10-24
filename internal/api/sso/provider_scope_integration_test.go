@@ -93,6 +93,15 @@ SELECT $1, org_id, $2, 'member', now(), now(), now() FROM sso_providers WHERE id
 	return id
 }
 
+// reactivate puts a provider back to active: a refused sign-in marks its provider as errored, and
+// an errored provider refuses the next authorize.
+func reactivate(t *testing.T, ctx context.Context, st stack, providerID uuid.UUID) {
+	t.Helper()
+	if _, err := st.pool.Exec(ctx, `UPDATE sso_providers SET status = 'active', last_error = NULL WHERE id = $1`, providerID); err != nil {
+		t.Fatalf("reactivate provider: %v", err)
+	}
+}
+
 func untouched(t *testing.T, ctx context.Context, st stack, id uuid.UUID) {
 	t.Helper()
 	var touched int
@@ -121,6 +130,7 @@ func TestSSOIdentityIsScopedToItsProvider(t *testing.T) {
 			untouched(t, ctx, st, ownerID)
 			assertNoRowsWritten(t, ctx, st, before)
 
+			reactivate(t, ctx, st, providerB)
 			status, body = rig.signIn(t, st, providerB, owner, subject)
 			if status != http.StatusConflict {
 				t.Fatalf("subject and email of an account of another provider: status=%d body=%v, want 409", status, body)
@@ -241,6 +251,9 @@ func TestSSOUnboundLegacyRowIsRefused(t *testing.T) {
 			seedMember(t, ctx, st.pool, orgOf(t, ctx, st.pool, providerA), email, rig.protocol, "subject-legacy")
 			var id uuid.UUID
 			if err := st.pool.QueryRow(ctx, `SELECT id FROM users WHERE email = $1`, email).Scan(&id); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := st.pool.Exec(ctx, `UPDATE users SET sso_provider_id = NULL WHERE id = $1`, id); err != nil {
 				t.Fatal(err)
 			}
 			before := snapshotRows(t, ctx, st)

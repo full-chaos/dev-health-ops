@@ -10,5 +10,5 @@ import "fmt"
 func resultKeepingSkippedDatasets(placeholder string) string {
 	return fmt.Sprintf(`(CASE WHEN (result::jsonb)->'skipped_datasets' IS NOT NULL
   THEN %[1]s::jsonb || jsonb_build_object('skipped_datasets', (result::jsonb)->'skipped_datasets')
-  ELSE %[1]s::jsonb END)::json`, placeholder)
+  ELSE %[1]s::json END)::json`, placeholder)
 }

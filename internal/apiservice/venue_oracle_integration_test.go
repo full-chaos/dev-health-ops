@@ -63,7 +63,7 @@ func TestVenueOracleProtectedRoutes(t *testing.T) {
 	// are placeholders in the golden on both planes.
 	spec.Scrub = scrubCustomerPushTokens
 	golden := venueoracle.OpenGolden(t, spec)
-	pin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/venue/protected-routes.go-pin.json", SHA256: "d285f6d961834243ec7cc19f854763be4e276d455e368302f373403408c5fd59", Ruling: protectedRoutesPinRuling})
+	pin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/venue/protected-routes.go-pin.json", SHA256: "b1dc4f7ff6f2456c9fd6df675cec53ea8aa7fb1da7af3c7f66c3f66cf07003e0", Ruling: protectedRoutesPinRuling})
 	sent := &sentReports{}
 	endpoint := httptest.NewServer(sent)
 	t.Cleanup(endpoint.Close)

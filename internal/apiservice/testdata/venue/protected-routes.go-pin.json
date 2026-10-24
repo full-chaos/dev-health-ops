@@ -156,6 +156,8 @@
   "members: infer window_days too large": "422 {\"detail\":[{\"type\":\"less_than_equal\",\"loc\":[\"query\",\"window_days\"],\"msg\":\"Input should be less than or equal to 365\"}]}",
   "members: infer window_days validated before the team": "422 {\"detail\":[{\"type\":\"greater_than_equal\",\"loc\":[\"query\",\"window_days\"],\"msg\":\"Input should be greater than or equal to 1\"}]}",
   "members: infer window_days zero": "422 {\"detail\":[{\"type\":\"greater_than_equal\",\"loc\":[\"query\",\"window_days\"],\"msg\":\"Input should be greater than or equal to 1\"}]}",
+  "product-telemetry stream entries (retired requests)": "",
+  "pt: empty org hash": "202 {\"ingestion_id\":\"<ruled>\",\"status\":\"accepted\",\"items_received\":0,\"items_dropped\":1,\"stream\":\"product-telemetry:anonymous:events\"}",
   "pt: lone surrogate org hash": "422 {\"detail\":[{\"type\":\"string_pattern_mismatch\",\"loc\":[\"body\",\"orgIdHash\"],\"msg\":\"String should match pattern '^(?:[0-9a-f]{64}|fnv1a-[0-9a-f]{8})$'\"}]}",
   "pt: lone surrogate org hash snake": "422 {\"detail\":[{\"type\":\"string_pattern_mismatch\",\"loc\":[\"body\",\"org_id_hash\"],\"msg\":\"String should match pattern '^(?:[0-9a-f]{64}|fnv1a-[0-9a-f]{8})$'\"}]}",
   "pt: lone surrogate payload": "202 {\"ingestion_id\":\"<ruled>\",\"status\":\"accepted\",\"items_received\":0,\"items_dropped\":1,\"stream\":\"product-telemetry:anonymous:events\"}",

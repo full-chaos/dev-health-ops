@@ -33,9 +33,10 @@ fi
 
 need kubectl
 need openssl
-need base64
 need tr
 need wc
+need tail
+need grep
 
 WORK="$(mktemp -d)"
 cleanup() { rm -rf "$WORK"; }
@@ -45,9 +46,17 @@ chmod 700 "$WORK"
 # 1. The key, in a 0600 file only: 32 random bytes, base64url, no padding, no newline.
 openssl rand -base64 32 | tr '+/' '-_' | tr -d '=\n' > "$WORK/key"
 
-# 2. Self-check: the same rule auth-service applies at startup. Prints only pass or fail.
-check_len="$(tr '_-' '/+' < "$WORK/key" | base64 -d 2>/dev/null | wc -c | tr -d ' ')" || true
-[ "${check_len:-0}" = "32" ] || die "FAILED: the generated key is not 32 bytes"
+# 2. Self-check without decoding (no GNU-only base64 flags): 43 base64url characters, and the last one carries only
+# zero low bits (the 32-byte shape that auth-service accepts at startup). Prints only pass or fail.
+key_len="$(wc -c < "$WORK/key" | tr -d ' ')"
+last_char="$(tail -c 1 "$WORK/key")"
+case "$last_char" in
+  A|E|I|M|Q|U|Y|c|g|k|o|s|w|0|4|8) ;;
+  *) die "FAILED: the generated key is not 32 bytes" ;;
+esac
+if [ "$key_len" != "43" ] || ! grep -Eq '^[A-Za-z0-9_-]{43}$' "$WORK/key"; then
+  die "FAILED: the generated key is not 32 bytes"
+fi
 # MUTATION-ANCHOR-STDOUT
 
 # 3. Create the Secret: create, never apply. The value is passed by file, never as an argument.

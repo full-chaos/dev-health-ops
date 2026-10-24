@@ -19,11 +19,11 @@ const (
 	// FallbackInvariantHeldLog is the Info line of a build that left none.
 	FallbackInvariantHeldLog = "issue-pr fallback invariant held"
 	// FallbackBesideNativeCounter adds the rows of every check, 0 included. It
-	// carries no attribute: the organization is named by the log line only, so
-	// an alert watches for an increase above 0.
+	// carries no attribute: the organization is named by the log line only. A
+	// value that increases above 0 is a breach; no alert rule reads it yet.
 	FallbackBesideNativeCounter = "workgraph_issue_pr_fallback_beside_native_rows_total"
-	// The same check, one counter per side, so an alert from metrics alone names
-	// which side breached. A row can be on more than one side, so the sides do
+	// The same check, one counter per side, so the metrics alone name which side
+	// breached. A row can be on more than one side, so the sides do
 	// not add up to the total.
 	FallbackBesideNativePullRequestCounter = "workgraph_issue_pr_fallback_beside_native_pull_request_rows_total"
 	FallbackBesideNativeIssueCounter       = "workgraph_issue_pr_fallback_beside_native_issue_rows_total"

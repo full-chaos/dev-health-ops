@@ -131,7 +131,7 @@ func TestCheckFallbackInvariantRefusesWithoutAConnectionOrAnOrg(t *testing.T) {
 	}
 }
 
-// Each side has its own counter, so an alert from metrics alone names the side
+// Each side has its own counter, so the metrics alone name the side
 // (CHAOS-10070); the total keeps its own series. No instrument carries any
 // attribute: the organization is named by the log line only.
 func TestReportFallbackInvariantCountsOnePerSideWithNoAttribute(t *testing.T) {

@@ -130,8 +130,8 @@ type Deps struct {
 	Probes ProbeConfig
 	// Telemetry is the telemetry areas' configuration.
 	Telemetry TelemetryConfig
-	// Producer publishes to the job outbox (webhookintake's GitHub/GitLab/
-	// Jira durable deliveries -- jobcontract.KindWebhookDelivery). Nil under
+	// Producer publishes to the job outbox (webhookintake's GitHub and
+	// PagerDuty durable deliveries -- jobcontract.KindWebhookDelivery). Nil under
 	// the same "not configured yet" rule as Pool.
 	Producer *joboutbox.Producer
 	// Decryptor decrypts pagerduty_webhook_bindings.signing_secret_encrypted
@@ -367,6 +367,8 @@ func buildDeps(
 			if err != nil {
 				return Deps{}, nil, dependencyFailure(ctx, logger, "webhook_secret_decryptor", "api_secret_decryptor_failed", fmt.Errorf("build webhook intake secret decryptor: %w", err))
 			}
+			// One round trip derives the settings key now, so no request does.
+			_, _ = decryptor.Encrypt([]byte("warm"))
 			deps.Decryptor = decryptor
 		}
 	}

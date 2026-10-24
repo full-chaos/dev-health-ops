@@ -63,7 +63,7 @@ func TestVenueOracleProtectedRoutes(t *testing.T) {
 	// are placeholders in the golden on both planes.
 	spec.Scrub = scrubCustomerPushTokens
 	golden := venueoracle.OpenGolden(t, spec)
-	pin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/venue/protected-routes.go-pin.json", SHA256: "e29bf80b7e90865dd1288e6bad1efed4df94a63fa4b83504c7524b23d4861225", Ruling: teamsRuling})
+	pin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/venue/protected-routes.go-pin.json", SHA256: "b1dc4f7ff6f2456c9fd6df675cec53ea8aa7fb1da7af3c7f66c3f66cf07003e0", Ruling: protectedRoutesPinRuling})
 	sent := &sentReports{}
 	endpoint := httptest.NewServer(sent)
 	t.Cleanup(endpoint.Close)
@@ -125,6 +125,8 @@ func TestVenueOracleProtectedRoutes(t *testing.T) {
 	pythonResponses := golden.Python(t, venue, requests)
 	golden.RetireRows(t, "python provider requests", teamsRuling)
 	var orglessRefused []string
+	var goStreamDeltas []requestEntries
+	var streamBefore []string
 	receipt.WriteString(venueoracle.Diff(t, base, requests, pythonResponses, venueoracle.DiffOptions{
 		Golden: golden,
 		// D6145: the org-less caller's refusals (me, patch) answer 403 where Python answered another status.
@@ -145,8 +147,13 @@ func TestVenueOracleProtectedRoutes(t *testing.T) {
 			if strings.HasPrefix(request.Name, "report: ") && goResponse.Status == http.StatusOK {
 				assertPerTableCounts(t, ctx, venue.AdminURI(t, venue.GoDB), goResponse.Body)
 			}
+			if request.Path == productTelemetryEventsPath {
+				after := parseStreamEntries(venueoracle.StreamEntries(t, ctx, venue.ValkeyURI, "product-telemetry:*", "ingestion_id"))
+				goStreamDeltas = append(goStreamDeltas, requestEntries{request: request.Name, entries: newStreamEntries(streamBefore, after)})
+				streamBefore = after
+			}
 		},
-		Retire: retiredTeamsRequest,
+		Retire: retiredProtectedRequest,
 		Pin:    pin,
 		// A HEAD probe has no body to normalize, but its content-length is the
 		// length of the ruled GET body.
@@ -175,11 +182,27 @@ func TestVenueOracleProtectedRoutes(t *testing.T) {
 		regexp_replace(changes::text, '"collected_at": "[^"]*"', '"collected_at": "<t>"'), request_metadata::text, status
 		FROM audit_logs ORDER BY org_id`)
 	goStream := venueoracle.StreamEntries(t, ctx, venue.ValkeyURI, "product-telemetry:*", "ingestion_id")
-	pyStream := golden.CompareRows(t, "product-telemetry stream entries", goStream)
+	// The intake drops an event that breaks a value rule and refuses an org hash that is not the web
+	// shape, so Go stores fewer entries than the frozen Python plane for the requests the ruling
+	// retired. Only the entries of those requests are set aside (Go's are pinned); every other
+	// entry of every stream is still compared with the frozen Python rows.
+	pyStream := golden.InspectRows(t, "product-telemetry stream entries")
 	if pyStream == "" {
 		t.Errorf("product-telemetry stream entries are empty")
 	}
-	fmt.Fprintf(&receipt, "product-telemetry stream entries: %s\n", venueoracle.Mark(pyStream == goStream && pyStream != ""))
+	writes, err := acceptedStreamWrites(requests, pythonResponses)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pyOther, goOther, goRetired, err := splitProductTelemetryStreams(pyStream, writes, goStreamDeltas, goStream, retiredProductTelemetryRequests)
+	if err != nil {
+		t.Errorf("product-telemetry stream entries: %v", err)
+	} else if pyOther != goOther {
+		t.Errorf("product-telemetry stream entries of the requests the ruling did not retire differ after the requests:\n python: %s\n go:     %s", pyOther, goOther)
+	}
+	fmt.Fprintf(&receipt, "product-telemetry stream entries (not retired): %s\n", venueoracle.Mark(err == nil && pyOther == goOther))
+	fmt.Fprintf(&receipt, "product-telemetry stream entries (retired requests): %s\n",
+		pinMark(pin.Check(t, "product-telemetry stream entries (retired requests)", goRetired)))
 	goSent := sent.bodies("/go")
 	pySent := golden.CompareRows(t, "telemetry reports sent", goSent)
 	if pySent == "" {
@@ -422,6 +445,37 @@ func compareCHRows(t *testing.T, ctx context.Context, golden *venueoracle.Golden
 // internal/api/teamsidentity and internal/providersync own that contract;
 // the pin shows any change in Go's answers.
 const teamsRuling = "chris D5685/D5711/D5712/D5714/D5717 (team id carry, CHAOS-8939/CHAOS-8940)"
+
+// productTelemetryRuling retired the Python reference of nine product-telemetry
+// intake requests: the intake now bounds payload keys and string values, drops
+// only the event that breaks a rule, and bounds the org hash that names the
+// stream key (CHAOS-10945; stricter than Python, D6129). The rule tests in
+// internal/api/producttelemetry own that contract.
+const productTelemetryRuling = "CHAOS-10945 intake value rules, stricter than Python (D6129)"
+
+// protectedRoutesPinRuling is the one line the pin file states: both rulings.
+const protectedRoutesPinRuling = teamsRuling + "; " + productTelemetryRuling
+
+// retiredProductTelemetryRequests are the requests the intake's value rules
+// answer differently from the frozen Python plane.
+var retiredProductTelemetryRequests = map[string]bool{
+	"pt: valid anonymous":               true,
+	"pt: valid org hash + names":        true,
+	"pt: empty org hash":                true,
+	"pt: ts forms":                      true,
+	"pt: nan payload":                   true,
+	"pt: lone surrogate payload":        true,
+	"pt: lone surrogate org hash":       true,
+	"pt: lone surrogate org hash snake": true,
+	"pt: paired surrogate org hash":     true,
+}
+
+// retiredProtectedRequest reports a request whose Python reference a ruling
+// retired: the teams and identities admin groups and the product-telemetry
+// intake requests above.
+func retiredProtectedRequest(request venueoracle.Request) bool {
+	return retiredTeamsRequest(request) || retiredProductTelemetryRequests[request.Name]
+}
 
 // retiredTeamsRequest reports a request of the teams and identities admin
 // groups.

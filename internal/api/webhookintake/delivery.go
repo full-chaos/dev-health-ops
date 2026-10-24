@@ -18,7 +18,7 @@ import (
 // webhookEvent is router.py's WebhookEvent, the normalized shape every
 // provider handler builds before persisting.
 type webhookEvent struct {
-	Provider      string // "github" | "gitlab" | "jira"
+	Provider      string // "github"
 	EventType     eventType
 	RawEventType  string
 	DeliveryID    string // provider's own delivery id, "" if none

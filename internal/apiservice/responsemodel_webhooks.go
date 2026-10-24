@@ -7,8 +7,6 @@ func init() {
 	registerResponseModelRoutes(map[string]bool{
 		"GET /api/v1/webhooks/health":                  true,
 		"POST /api/v1/webhooks/github":                 true,
-		"POST /api/v1/webhooks/gitlab":                 true,
-		"POST /api/v1/webhooks/jira":                   true,
 		"POST /api/v1/webhooks/pagerduty/{binding_id}": false,
 	})
 }

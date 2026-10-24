@@ -41,6 +41,7 @@ internal/apiservice
 internal/apiservice/acr
 internal/apiservice/customerpush
 internal/auth/edgetoken
+internal/auth/emaildomain
 internal/auth/httpapi
 internal/auth/passwordhash
 internal/auth/passwordpolicy
@@ -75,6 +76,7 @@ internal/platform/config
 internal/platform/credshape
 internal/platform/dbphase
 internal/platform/dbspan
+internal/platform/dsnclass
 internal/platform/errortext
 internal/platform/errortext/hardened
 internal/platform/fernet
@@ -100,6 +102,7 @@ internal/pythonparity/pyidna
 internal/pythonparity/pyunicodedata
 internal/scheduler/sync
 internal/storage/clickhouse
+internal/storage/clickhouse/engineclause
 internal/storage/clickhouse/liverow
 internal/storage/postgres
 internal/storage/postgres/aclguard

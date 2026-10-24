@@ -256,6 +256,11 @@ func (h *handlers) llmSettingsResponse(ctx context.Context, db pgExecer, orgID s
 	if purposes != nil {
 		out.Set("purposes", purposes)
 	}
+	if row, err := settingByKeyOn(ctx, db, orgID, llmCategory, llmorgsettings.KeyCategorizeBYOEnabled); err != nil {
+		return nil, err
+	} else if row != nil && row.Value != nil {
+		out.Set("categorize_byo", *row.Value == "true")
+	}
 	return out, nil
 }
 
@@ -268,7 +273,7 @@ func (h *handlers) getLLMSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	rawPurpose, hasPurpose := r.URL.Query()["purpose"]
 	if hasPurpose {
-		purpose, _, valid := purposeParam(w, rawPurpose[len(rawPurpose)-1], true)
+		purpose, valid := h.purposeParamFor(ctx, w, orgID, rawPurpose[len(rawPurpose)-1], nil)
 		if !valid {
 			return
 		}
@@ -308,6 +313,7 @@ func (h *handlers) putLLMSettings(w http.ResponseWriter, r *http.Request) {
 		concurrency, budgetLimitMu *big.Int
 		purposeRaw                 *string
 		purposeModel               string
+		categorizeBYO              *bool
 	)
 	if ok {
 		if v, present := errs.RequiredString(object, "provider", 1, 0); present {
@@ -330,6 +336,9 @@ func (h *handlers) putLLMSettings(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
+		if v, present := errs.OptionalBool(object, "categorize_byo"); present {
+			categorizeBYO = &v
+		}
 		if v, present := errs.OptionalBoundedInt(object, "concurrency", 1, 32); present {
 			concurrency = big.NewInt(v)
 		}
@@ -350,8 +359,14 @@ func (h *handlers) putLLMSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if purposeRaw != nil {
-		purpose, _, valid := purposeParam(w, *purposeRaw, true)
+		purpose, valid := h.purposeParamFor(ctx, w, orgID, *purposeRaw, categorizeBYO)
 		if !valid {
+			return
+		}
+		if categorizeBYO != nil && purpose != llmorgsettings.PurposeCategorize {
+			llmDetail(http.StatusBadRequest, w,
+				"error", "purpose_override_unsupported_field",
+				"message", "categorize_byo applies to the default config or the categorize override only")
 			return
 		}
 		if concurrency != nil || budgetLimitMu != nil {
@@ -374,6 +389,7 @@ func (h *handlers) putLLMSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		out, refusal, err := h.applyLLMPurpose(ctx, orgID, llmPurposeUpsert{
 			purpose: purpose, provider: *provider, model: purposeModel, apiKey: apiKey, baseURL: baseURL,
+			inTx: h.categorizeOptInStep(r, orgID, categorizeBYO),
 		})
 		if err != nil {
 			var step *llmStepError
@@ -400,6 +416,7 @@ func (h *handlers) putLLMSettings(w http.ResponseWriter, r *http.Request) {
 	out, refusal, err := h.applyLLMSettings(ctx, orgID, llmUpsert{
 		provider: *provider, model: model, apiKey: apiKey, baseURL: baseURL,
 		concurrency: concurrency, budgetLimitMu: budgetLimitMu, requireModel: true,
+		inTx: h.categorizeOptInStep(r, orgID, categorizeBYO),
 	})
 	if err != nil {
 		var step *llmStepError
@@ -424,6 +441,8 @@ type llmUpsert struct {
 	concurrency, budgetLimitMu *big.Int
 	// requireModel is the PUT route's rule: a BYO provider needs a model.
 	requireModel bool
+	// inTx runs inside the write transaction before it commits; nil is none.
+	inTx func(ctx context.Context, tx pgx.Tx) error
 }
 
 // byoProviderNeedsModel is whether a default-row save names a BYO provider
@@ -537,6 +556,11 @@ func (h *handlers) applyLLMSettings(ctx context.Context, orgID string, in llmUps
 			return nil, nil, &llmStepError{"write budget limit", err}
 		}
 	}
+	if in.inTx != nil {
+		if err := in.inTx(ctx, tx); err != nil {
+			return nil, nil, &llmStepError{"write categorize opt-in", err}
+		}
+	}
 	out, err := h.llmSettingsResponse(ctx, tx, orgID)
 	if err != nil {
 		return nil, nil, &llmStepError{"build llm settings response", err}
@@ -558,7 +582,7 @@ func (h *handlers) deleteLLMSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if rawPurpose, hasPurpose := r.URL.Query()["purpose"]; hasPurpose {
-		purpose, _, valid := purposeParam(w, rawPurpose[len(rawPurpose)-1], true)
+		purpose, valid := h.purposeParamFor(ctx, w, orgID, rawPurpose[len(rawPurpose)-1], nil)
 		if !valid {
 			return
 		}
@@ -566,6 +590,10 @@ func (h *handlers) deleteLLMSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !h.requireBYOLLMAccess(ctx, w, orgID, true) {
+		return
+	}
+	if err := h.clearCategorizeOptIn(ctx, r, orgID); err != nil {
+		h.internalError(ctx, w, "clear categorize opt-in", err)
 		return
 	}
 	credentialsDeleted, err := h.deleteLLMSettingsRows(ctx, orgID)
@@ -594,8 +622,9 @@ func (h *handlers) deleteLLMSettings(w http.ResponseWriter, r *http.Request) {
 func (h *handlers) deleteLLMSettingsRows(ctx context.Context, orgID string) (int, error) {
 	rows, err := h.store.Pool.Query(ctx,
 		`DELETE FROM settings WHERE org_id = $1 AND category = $2
-		   AND (key = ANY($3) OR key = $4 OR starts_with(key, $5) OR key = $6) RETURNING key`,
-		orgID, llmCategory, llmSettingKeys, askDevAgentReadinessKey, llmRoleCertificationPrefix, llmorgsettings.KeyPromptCache)
+		   AND (key = ANY($3) OR key = $4 OR starts_with(key, $5) OR key = $6 OR key = $7) RETURNING key`,
+		orgID, llmCategory, llmSettingKeys, askDevAgentReadinessKey, llmRoleCertificationPrefix, llmorgsettings.KeyPromptCache,
+		llmorgsettings.KeyCategorizeBYOEnabled)
 	if err != nil {
 		return 0, err
 	}

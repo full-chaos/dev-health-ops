@@ -32,7 +32,7 @@ const (
 	gateArgument
 	gateService
 	gateDirect
-	gateNone
+	gateRead
 )
 
 type verbGate struct {
@@ -48,6 +48,7 @@ func viaService(argv ...string) verbGate {
 	return verbGate{kind: gateService, argv: argv}
 }
 func viaDirect(keys ...string) verbGate { return verbGate{kind: gateDirect, direct: keys} }
+func viaRead(argv ...string) verbGate   { return verbGate{kind: gateRead, argv: argv} }
 
 var verbGates = map[string]verbGate{
 	"dispatch:status":               viaService("status"),
@@ -84,9 +85,9 @@ var verbGates = map[string]verbGate{
 	"dispatchMetrics:generation-repair":                       viaDirect("metrics generation-repair"),
 	"dispatchMetrics:partition-recompute":                     viaDirect("metrics partition-recompute"),
 	"dispatchMetrics:execution-repair":                        viaDirect("metrics exec-repair"),
-	"dispatchMetrics:daily-blocked":                           {kind: gateNone},
-	"dispatchMetrics:daily-marker-backfill":                   {kind: gateNone},
-	"dispatchMetrics:list-ambiguous-executions":               {kind: gateNone},
+	"dispatchMetrics:daily-blocked":                           viaRead("metrics", "daily-blocked", "--org", auditTestOrg),
+	"dispatchMetrics:daily-marker-backfill":                   viaDirect("metrics daily-marker-backfill"),
+	"dispatchMetrics:list-ambiguous-executions":               viaRead("metrics", "list-ambiguous-executions"),
 	"dispatchMetricsRemaining:start":                          viaDirect("metrics remaining start", "metrics remaining start --recompute"),
 	"dispatchMetricsRemaining:trigger-backstop":               viaDirect("metrics remaining trigger-backstop"),
 	"dispatchMetricsRemaining:redrive":                        viaDirect("metrics remaining redrive"),
@@ -115,8 +116,8 @@ var verbGates = map[string]verbGate{
 
 	"dispatchSyncDispatchOutbox:close-backlog": viaDirect("sync-dispatch-outbox close-backlog"),
 
-	"dispatchWorkgraph:list-ambiguous":   {kind: gateNone},
-	"dispatchWorkgraph:list-undelivered": {kind: gateNone},
+	"dispatchWorkgraph:list-ambiguous":   viaRead("workgraph", "list-ambiguous"),
+	"dispatchWorkgraph:list-undelivered": viaRead("workgraph", "list-undelivered"),
 	"dispatchWorkgraph:repair":           viaDirect("workgraph repair"),
 	"dispatchWorkgraph:trigger":          viaDirect("workgraph trigger"),
 }
@@ -317,6 +318,38 @@ func TestDirectWriteVerbsRefuseEveryPrincipalButTheOperator(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// Through the production authorizer, a principal other than the operator is
+// refused by every read-only verb that does not go through the job operator
+// service, before the verb looks at its backend: with no pools the answer is
+// still unauthorized, not operator_backend_unavailable. The operator is not
+// refused by the authorizer.
+func TestReadVerbsRefuseEveryPrincipalButTheOperator(t *testing.T) {
+	ran := 0
+	for verb, gate := range verbGates {
+		if gate.kind != gateRead {
+			continue
+		}
+		for _, principal := range foreignPrincipals() {
+			runtime, _ := inventoryRuntime(t, principal)
+			var stdout, stderr bytes.Buffer
+			code := dispatch(context.Background(), runtime, gate.argv, &stdout, &stderr)
+			if code != 1 || stderr.String() != unauthorizedJSON || stdout.Len() != 0 {
+				t.Errorf("%s as %+v: code=%d stdout=%q stderr=%q, want unauthorized", verb, principal, code, stdout.String(), stderr.String())
+			}
+			ran++
+		}
+		runtime, _ := inventoryRuntime(t, joboperator.OperatorPrincipal)
+		var stdout, stderr bytes.Buffer
+		dispatch(context.Background(), runtime, gate.argv, &stdout, &stderr)
+		if stderr.String() == unauthorizedJSON {
+			t.Errorf("%s as the operator was refused; the refusal above does not come from the principal", verb)
+		}
+	}
+	if ran != 4*len(foreignPrincipals()) {
+		t.Fatalf("%d refusals were exercised, want %d: the read-verb inventory changed", ran, 4*len(foreignPrincipals()))
 	}
 }
 

@@ -994,3 +994,60 @@ groups:
             More than 5% of auth service requests answered 5xx for ten
             minutes, with real traffic (above 0.1 requests per second): one
             error on an idle service does not fire this.
+
+
+  # ---------------------------------------------------------------------------
+  # auth-service rate-limit store
+  # ---------------------------------------------------------------------------
+  # The login, credential and social link routes of auth-service count their
+  # rate limits in a shared store and answer a closed 500 to a request that
+  # reaches the limiter while it fails. Two rules, on purpose: the counter
+  # moves only when such a request arrives, so an idle service never moves it;
+  # the readiness check fails the same minute, idle or not. The counter's
+  # limit label carries the limiter id and nothing else, and every id of this
+  # service starts with auth_svc_ (go-api's ids never do), so rule 1 needs no
+  # job label. The check name is not unique to this service (the stream runner
+  # registers a "valkey" check too), so rule 2 keeps only series whose target
+  # also reports this service's own runtime info series. Both series come from
+  # the service's own operator /metrics; a deployment that does not scrape it
+  # is blind to both.
+  - name: auth_service_rate_limit
+    interval: 30s
+    rules:
+      - alert: AuthServiceRateLimitStoreErrors
+        expr: |
+          sum by (limit) (rate(dev_health_api_rate_limit_store_errors_total{limit=~"auth_svc_.*"}[5m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "auth-service rate-limit store errors on {{ $labels.limit }}"
+          description: |
+            The shared rate-limit store failed for limiter {{ $labels.limit }}.
+            Every request that reaches the limiter on a limited auth route
+            (login, verify, resend, forgot, reset, change password, social link
+            and unlink; a malformed or unauthenticated request is refused
+            before it) is answered with a 500 while the store fails: closed by
+            design, never a pass.
+            Next: the "Rate-limit store down" section of
+            docs/reference/auth/readiness-and-slo.md.
+
+      - alert: AuthServiceRateLimitStoreNotReady
+        expr: |
+          max by (instance) (dev_health_runtime_check_failed{check="valkey"} and on (instance) dev_health_runtime_info{service="auth-service"}) == 1
+        for: 5m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "auth-service cannot reach its rate-limit store ({{ $labels.instance }})"
+          description: |
+            The required readiness check "valkey" has failed for five minutes on
+            {{ $labels.instance }}: /readyz answers 503 and every request that
+            reaches the limiter on a limited auth route answers a closed 500.
+            Only an auth-service that mounts a limited route carries the check;
+            the rule joins the check to that service's own runtime info series
+            because other services register a check of the same name.
+            Next: the "Rate-limit store down" section of
+            docs/reference/auth/readiness-and-slo.md.

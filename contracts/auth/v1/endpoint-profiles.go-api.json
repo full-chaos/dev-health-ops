@@ -5648,23 +5648,13 @@
       "tenant_requirement": "org_scoped"
     },
     {
-      "accepted_credential_classes": [
-        "external_push_ingest_token"
-      ],
-      "classification": "protected",
+      "accepted_credential_classes": [],
+      "classification": "public",
       "gaps": [],
       "graphql_field_name": null,
       "id": "GET /api/v1/external-ingest/schemas [dev-health-ops-api @api]",
       "method": "GET",
-      "primary_validator": {
-        "anchor": {
-          "line": 143,
-          "note": "Pattern:",
-          "path": "internal/api/externalingest/deps.go"
-        },
-        "description": "The external-ingest handlers authenticate the push token in the Authorization header before any read or write."
-      },
-      "public_rationale": null,
+      "public_rationale": "Public schema document: the contract pushers code against; no tenant data and the same bytes for every caller; the only control is the per-address rate limit. The request-wide org-scope middleware still applies when a bearer and an X-Org-Id are sent (a non-member organisation is refused 403, as on every route); the handler's answer is global.",
       "reachable_validators": [
         {
           "anchor": {
@@ -5694,26 +5684,16 @@
         "line": 143
       },
       "surface_kind": "rest",
-      "tenant_requirement": "org_scoped"
+      "tenant_requirement": "none"
     },
     {
-      "accepted_credential_classes": [
-        "external_push_ingest_token"
-      ],
-      "classification": "protected",
+      "accepted_credential_classes": [],
+      "classification": "public",
       "gaps": [],
       "graphql_field_name": null,
       "id": "GET /api/v1/external-ingest/schemas/{schema_version} [dev-health-ops-api @api]",
       "method": "GET",
-      "primary_validator": {
-        "anchor": {
-          "line": 144,
-          "note": "Pattern:",
-          "path": "internal/api/externalingest/deps.go"
-        },
-        "description": "The external-ingest handlers authenticate the push token in the Authorization header before any read or write."
-      },
-      "public_rationale": null,
+      "public_rationale": "Public schema document: the contract pushers code against; no tenant data and the same bytes for every caller; the only control is the per-address rate limit. The request-wide org-scope middleware still applies when a bearer and an X-Org-Id are sent (a non-member organisation is refused 403, as on every route); the handler's answer is global.",
       "reachable_validators": [
         {
           "anchor": {
@@ -5743,7 +5723,7 @@
         "line": 144
       },
       "surface_kind": "rest",
-      "tenant_requirement": "org_scoped"
+      "tenant_requirement": "none"
     },
     {
       "accepted_credential_classes": [
@@ -6039,7 +6019,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/webhookintake/deps.go",
-        "line": 109
+        "line": 101
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
@@ -12745,7 +12725,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/producttelemetry/producttelemetry.go",
-        "line": 106
+        "line": 107
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
@@ -12950,7 +12930,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 105,
+          "line": 99,
           "note": "Pattern:",
           "path": "internal/api/webhookintake/deps.go"
         },
@@ -12961,61 +12941,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/webhookintake/deps.go",
-        "line": 105
-      },
-      "surface_kind": "rest",
-      "tenant_requirement": "org_scoped"
-    },
-    {
-      "accepted_credential_classes": [
-        "gitlab_webhook_signature"
-      ],
-      "classification": "protected",
-      "gaps": [],
-      "graphql_field_name": null,
-      "id": "POST /api/v1/webhooks/gitlab [dev-health-ops-api @api]",
-      "method": "POST",
-      "primary_validator": {
-        "anchor": {
-          "line": 106,
-          "note": "Pattern:",
-          "path": "internal/api/webhookintake/deps.go"
-        },
-        "description": "The webhook handler verifies the provider signature over the raw body before it enqueues."
-      },
-      "public_rationale": null,
-      "route": "/api/v1/webhooks/gitlab",
-      "service": "dev-health-ops-api",
-      "source": {
-        "file": "internal/api/webhookintake/deps.go",
-        "line": 106
-      },
-      "surface_kind": "rest",
-      "tenant_requirement": "org_scoped"
-    },
-    {
-      "accepted_credential_classes": [
-        "jira_webhook_signature"
-      ],
-      "classification": "protected",
-      "gaps": [],
-      "graphql_field_name": null,
-      "id": "POST /api/v1/webhooks/jira [dev-health-ops-api @api]",
-      "method": "POST",
-      "primary_validator": {
-        "anchor": {
-          "line": 107,
-          "note": "Pattern:",
-          "path": "internal/api/webhookintake/deps.go"
-        },
-        "description": "The webhook handler verifies the provider signature over the raw body before it enqueues."
-      },
-      "public_rationale": null,
-      "route": "/api/v1/webhooks/jira",
-      "service": "dev-health-ops-api",
-      "source": {
-        "file": "internal/api/webhookintake/deps.go",
-        "line": 107
+        "line": 99
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped"
@@ -13031,7 +12957,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 108,
+          "line": 100,
           "note": "Pattern:",
           "path": "internal/api/webhookintake/deps.go"
         },
@@ -13042,7 +12968,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/webhookintake/deps.go",
-        "line": 108
+        "line": 100
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped"

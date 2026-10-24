@@ -34,8 +34,6 @@
     {"path": "/api/v1/external-ingest/validate$", "path_type": "ImplementationSpecific", "plane": "go-api"},
     {"path": "/api/v1/webhooks/health$", "path_type": "ImplementationSpecific", "plane": "go-api"},
     {"path": "/api/v1/webhooks/github$", "path_type": "ImplementationSpecific", "plane": "go-api"},
-    {"path": "/api/v1/webhooks/gitlab$", "path_type": "ImplementationSpecific", "plane": "go-api"},
-    {"path": "/api/v1/webhooks/jira$", "path_type": "ImplementationSpecific", "plane": "go-api"},
     {"path": "/api/v1/webhooks/pagerduty/[^/]+$", "path_type": "ImplementationSpecific", "plane": "go-api"},
     {"path": "/api/v1/billing/plans$", "path_type": "ImplementationSpecific", "plane": "go-api"},
     {"path": "/api/v1/billing/plans/[^/]+$", "path_type": "ImplementationSpecific", "plane": "go-api"},

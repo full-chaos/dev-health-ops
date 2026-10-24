@@ -245,7 +245,7 @@ WHERE wct.day >= {start_day:Date} AND wct.day < {end_day:Date}
   AND wct.org_id = {org_id:String}
 %s
 ORDER BY wct.completed_at DESC, wct.work_item_id ASC
-LIMIT {limit:UInt64}
+LIMIT {limit_n:UInt64}
 %s
 `
 
@@ -325,7 +325,7 @@ SELECT
     count() OVER () AS total_count
 FROM %s AS b
 ORDER BY b.work_item_id ASC, b.provider ASC
-LIMIT {limit:UInt64}
+LIMIT {limit_n:UInt64}
 %s
 `
 
@@ -355,7 +355,7 @@ func BuildIssuesResponse(ctx context.Context, reader *Reader, orgID string, para
 		{Name: "start_day", Value: formatDay(params.StartDay)},
 		{Name: "end_day", Value: formatDay(params.EndDay)},
 		{Name: "org_id", Value: orgID},
-		{Name: "limit", Value: params.Limit},
+		{Name: "limit_n", Value: params.Limit},
 	}, scopeBindings...)
 
 	rows, err := reader.client.Query(ctx, query, bindings)
@@ -390,7 +390,7 @@ func buildBlockedIssuesResponse(ctx context.Context, reader *Reader, orgID strin
 		{Name: "start_day", Value: formatDay(params.StartDay)},
 		{Name: "end_day", Value: formatDay(params.EndDay)},
 		{Name: "org_id", Value: orgID},
-		{Name: "limit", Value: params.Limit},
+		{Name: "limit_n", Value: params.Limit},
 	}, scopeBindings...)
 
 	rows, err := reader.client.Query(ctx, query, bindings)

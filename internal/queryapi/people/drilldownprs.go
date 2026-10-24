@@ -138,7 +138,7 @@ WHERE pr.created_at >= {start_ts:DateTime64(3, 'UTC')}
   )
   %s
 ORDER BY pr.created_at DESC
-LIMIT {limit:UInt64}
+LIMIT {limit_n:UInt64}
 %s
 `
 
@@ -151,7 +151,7 @@ func fetchPersonPullRequests(ctx context.Context, client QueryClient, identities
 		{Name: "end_ts", Value: endDay},
 		{Name: "identities", Value: identities},
 		{Name: "org_id", Value: orgID},
-		{Name: "limit", Value: limit},
+		{Name: "limit_n", Value: limit},
 	}
 	if cursor != nil {
 		cursorFilter = "AND pr.created_at < {cursor:DateTime64(3, 'UTC')}"

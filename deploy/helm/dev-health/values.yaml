@@ -173,6 +173,14 @@ authService:
     secretName: ""
     secretKey: AUTH_DATABASE_URI
     schema: auth
+  # -- The shared rate-limit store's login (AUTH_VALKEY_URI, database 1): an
+  #    ACL user of its own, limited to the auth_svc_ key prefix, never go-api's.
+  #    Leave secretName empty while no limited route (login, credentials,
+  #    social link) is mounted; the service refuses to start if one is mounted
+  #    without it. The chart creates no Secret.
+  valkey:
+    secretName: ""
+    secretKey: AUTH_VALKEY_URI
   signingKey:
     secretName: ""
     secretKey: signing-key.pem
@@ -314,6 +322,11 @@ authService:
       database:
         to: []
         port: 5432
+      # -- Peers of the rate-limit store, `to` entries plus port. Required while
+      #    authService.valkey.secretName is set and the policy is on.
+      valkey:
+        to: []
+        port: 6379
       # -- Peers of the key custody service (KMS), `to` entries plus port. File
       #    custody (Wave 1) needs none, so the default grants no egress for it.
       keyCustody:
@@ -1370,6 +1383,8 @@ valkey:
 # =============================================================================
 clickhouse:
   enabled: true
+  # StatefulSet replica count. 0 keeps the claim and the data volume and runs no pod.
+  replicas: 1
   image:
     repository: clickhouse/clickhouse-server
     tag: "latest@sha256:d7556a3841027651307b5aa08d72b5c467d0241d3db5b67d9e158ef3975626f5"

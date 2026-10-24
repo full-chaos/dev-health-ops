@@ -13,6 +13,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/operationalordering"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
+	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/engineclause"
 )
 
 // Contract is the operational ordering contract of a deployment
@@ -65,6 +66,11 @@ var (
 
 // TableContract is operational_table_contract: which contract a table's DDL is.
 func TableContract(ddl, table string) (Contract, error) {
+	canonical, err := engineclause.CanonicalizeDDL(ddl)
+	if err != nil {
+		return 0, staleState(table, 0, nil)
+	}
+	ddl = canonical
 	normalized := whitespace.ReplaceAllString(strings.ReplaceAll(ddl, "`", " "), " ")
 	normalized = commaSpace.ReplaceAllString(strings.TrimSpace(normalized), ", ")
 	present := 0

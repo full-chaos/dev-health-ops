@@ -3,6 +3,7 @@ package joboutbox
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"time"
 
@@ -51,7 +52,7 @@ func NewTerminalDeliveryRepair(
 	}
 	jobTable := pgx.Identifier{riverSchema, "river_job"}.Sanitize()
 	stateInMask := pgx.Identifier{riverSchema, "river_job_state_in_bitmask"}.Sanitize()
-	client, err := river.NewClient(riverpgxv5.New(queueControlPool), &river.Config{Schema: riverSchema})
+	client, err := river.NewClient(riverpgxv5.New(queueControlPool), &river.Config{Schema: riverSchema, Logger: slog.Default()})
 	if err != nil {
 		return nil, ErrInvalidConfiguration
 	}

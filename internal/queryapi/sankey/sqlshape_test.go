@@ -10,6 +10,7 @@ import (
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/analytics"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/sqlshape"
 )
 
@@ -151,5 +152,14 @@ func allIndexes(s, substr string) []int {
 		}
 		out = append(out, offset+idx)
 		offset += idx + len(substr)
+	}
+}
+
+func TestInvestmentFlowItemsLeaveOutEvidenceGatedUnits(t *testing.T) {
+	c := &capturingClient{}
+	now := time.Now()
+	_, _ = fetchInvestmentFlowItems(context.Background(), c, now, now, "", nil, "", 60, "org-1")
+	if !strings.Contains(c.queries[0], analytics.CategorizedOnlySQL) {
+		t.Fatalf("the investment flow does not exclude gated units:\n%s", c.queries[0])
 	}
 }

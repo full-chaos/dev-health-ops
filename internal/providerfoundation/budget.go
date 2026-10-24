@@ -1040,6 +1040,8 @@ var metricUnitFailureReasonVocabulary = map[string]struct{}{
 	"tree_walk_limit": {},
 	// A chunk checkpoint that disagrees with the persisted chunks.
 	"checkpoint_conflict": {},
+	// A chunk payload Postgres refuses (22P05).
+	"checkpoint_data_error": {},
 	// A provider call the dial-time egress guard refused (a stored URL that is not public).
 	"egress_refused": {},
 }

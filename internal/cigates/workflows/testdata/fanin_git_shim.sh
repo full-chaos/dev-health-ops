@@ -13,4 +13,7 @@ if [ "$1" = "merge-base" ] && [ "$2" = "--is-ancestor" ]; then
     exit 1
   fi
 fi
+if [ "$1" = "cat-file" ] && [ "${MISSING_BASE:-}" = "true" ]; then
+  exit 1
+fi
 exit 0

@@ -9,7 +9,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -71,7 +70,7 @@ func TestAuthorizeRunPagesAPastPageSizeRunAndKeepsTheDecision(t *testing.T) {
 		}
 		run := func(t *testing.T, limit string) (guardDecision, []int) {
 			t.Helper()
-			pgseed.TierLimit(ctx, t, pool, "community", "max_sync_units", limit)
+			t.Setenv("SYNC_RUN_MAX_UNITS", limit)
 			tx, err := pool.Begin(ctx)
 			if err != nil {
 				t.Fatal(err)

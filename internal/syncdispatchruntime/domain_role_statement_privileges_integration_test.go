@@ -902,7 +902,13 @@ VALUES ($1,$2,$3,'github','commits','00000000-0000-4000-8000-0000000000ed','plan
 	// Arm 3, same venue: more candidates than one page, then far more. The guard's id sets travel as uuid[] binds of at
 	// most claimIDChunkSize each; the runtime roles hold no TEMPORARY privilege (the harness revokes it from PUBLIC like
 	// the provisioning script), so a statement that needed a temp table would be a denial here.
-	t.Setenv("SYNC_RUN_MAX_UNITS", "20000")
+	markOutboxDispatched := func() {
+		t.Helper()
+		if _, err := admin.Exec(ctx, `UPDATE sync_dispatch_outbox SET status='dispatched', dispatched_transport='river',
+dispatched_route_generation=1 WHERE id=$1`, dispatchServiceTestOutbox); err != nil {
+			t.Fatal(err)
+		}
+	}
 	seedMoreUnits := func(from, count int) {
 		t.Helper()
 		if _, err := admin.Exec(ctx, `
@@ -921,6 +927,12 @@ FROM generate_series($3::int, $4::int) AS g`, discoveryTestOrg, discoveryTestRun
 		{"5000 candidates", 502, 4499, 5000},
 	} {
 		seedMoreUnits(step.from, step.count)
+		markOutboxDispatched()
+		var plannedBefore int
+		if err := admin.QueryRow(ctx, `SELECT count(*) FROM sync_run_units WHERE sync_run_id=$1 AND status=$2`,
+			discoveryTestRun, syncRunUnitStatusPlanned).Scan(&plannedBefore); err != nil {
+			t.Fatal(err)
+		}
 		stepErr := service.Dispatch(ctx, dispatchTestArgsLegacy())
 		denials.assertNone(t, "NativeDispatchSyncRunService with "+step.name+" (guard id sets)")
 		if stepErr != nil {
@@ -930,6 +942,9 @@ FROM generate_series($3::int, $4::int) AS g`, discoveryTestOrg, discoveryTestRun
 		if err := admin.QueryRow(ctx, `SELECT count(*) FROM sync_run_units WHERE sync_run_id=$1 AND status=$2`,
 			discoveryTestRun, syncRunUnitStatusPlanned).Scan(&planned); err != nil {
 			t.Fatal(err)
+		}
+		if planned >= plannedBefore {
+			t.Fatalf("%s: planned units %d -> %d; the pass claimed nothing, so the guard was not measured", step.name, plannedBefore, planned)
 		}
 		if planned == 0 || planned >= step.candidates {
 			t.Fatalf("%s: %d units still planned of %d candidates; the first pass should have claimed a few and left the rest", step.name, planned, step.candidates)
@@ -970,6 +985,7 @@ VALUES ($1,$2,$3,'pagerduty','incidents','00000000-0000-4000-8000-0000000000ed',
 		}
 	}
 
+	markOutboxDispatched()
 	gateErr := service.Dispatch(ctx, dispatchTestArgsLegacy())
 	denials.assertNone(t, "NativeDispatchSyncRunService feature-disabled path (CHAOS-4175 family 3)")
 	if gateErr != nil {

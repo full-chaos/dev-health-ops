@@ -617,6 +617,11 @@ ORDER BY id`, args.SyncRunID())
 		return nil, unavailable(stagePlanUnits, err)
 	}
 	defer rows.Close()
+	var startedAt time.Time
+	if runStartedAt != nil {
+		startedAt = runStartedAt.UTC()
+	}
+	workItemWindows := newWorkItemDayAccumulator(startedAt, now)
 	var (
 		targets        = map[string]struct{}{}
 		from           *time.Time
@@ -624,7 +629,6 @@ ORDER BY id`, args.SyncRunID())
 		unboundedFrom  bool
 		unboundedTo    bool
 		successfulUnit bool
-		workItemUnits  []workItemUnitWindow
 	)
 	for rows.Next() {
 		var provider, dataset string
@@ -640,7 +644,7 @@ ORDER BY id`, args.SyncRunID())
 		for _, target := range capability.LegacyTargets {
 			targets[target] = struct{}{}
 			if target == "work-items" {
-				workItemUnits = append(workItemUnits, workItemUnitWindow{since: since, before: before})
+				workItemWindows.add(since, before)
 			}
 		}
 		if since == nil {
@@ -712,13 +716,9 @@ LIMIT 1`, orgID, integrationID).Scan(&autoImport); err != nil && !errors.Is(err,
 	}
 	currentSingleDay := (from == nil && to == nil) ||
 		(from != nil && to != nil && sameUTCDate(*from, *to) && sameUTCDate(*to, now))
-	var startedAt time.Time
-	if runStartedAt != nil {
-		startedAt = runStartedAt.UTC()
-	}
 	var workItemWindowDays []time.Time
 	if hasWorkItems && dailyRelevant {
-		workItemWindowDays, err = workItemUnitsWindowDays(workItemUnits, startedAt, now)
+		workItemWindowDays, err = workItemWindows.days()
 		if err != nil {
 			return nil, err
 		}

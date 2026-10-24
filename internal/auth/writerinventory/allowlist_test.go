@@ -101,7 +101,9 @@ var Allowlist = []Entry{
 	{File: "internal/auth/keyrotation/store.go", Func: "Operator.write", Table: "auth.signing_keys", Verb: "UPDATE"},
 	// TEMPORARY: the one-time legacy refresh exchange revokes go-api's refresh tokens (authschema.LegacyRefreshTokenGrant). CHAOS-10408 removes both rows with the grant.
 	{File: "internal/auth/session/legacy.go", Func: "Store.ExchangeLegacy", Table: "public.refresh_tokens", Verb: "UPDATE"},
+	{File: "internal/auth/session/legacy.go", Func: "Store.revokeFamilyTx", Table: "public.refresh_tokens", Verb: "UPDATE"},
 	{File: "internal/auth/session/legacy.go", Func: "Store.revokeLegacyFamily", Table: "public.refresh_tokens", Verb: "UPDATE"},
+	{File: "internal/auth/session/legacy_revoke.go", Func: "Store.RevokeLegacy", Table: "public.refresh_tokens", Verb: "UPDATE"},
 	{File: "internal/auth/session/signin.go", Func: "Store.insertSession", Table: "auth.refresh_credentials", Verb: "INSERT"},
 	{File: "internal/auth/session/signin.go", Func: "Store.insertSession", Table: "auth.sessions", Verb: "INSERT"},
 	{File: "internal/auth/session/store.go", Func: "Store.BumpRevision", Table: "auth.sessions", Verb: "UPDATE"},

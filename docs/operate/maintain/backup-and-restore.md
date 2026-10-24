@@ -138,3 +138,47 @@ before restarting the Go worker/reconciler/scheduler fleet — this is
 cheap (a statistics-only pass, no table rewrite or lock beyond a normal
 `ANALYZE`) and is not optional when the restored table has a
 nontrivial backlog.
+
+## Auth schema backup, restore and PITR drill (CHAOS-11232)
+
+`scripts/drill-auth-pitr.sh` rehearses backup, restore and point-in-time
+recovery of the `auth` schema on a throwaway compose project
+(`drill-11232`, one Postgres 18 container at a time, bind mounts only,
+teardown is `compose down` with no volume removal). It never touches the
+standing stack and never runs against production. The driver is
+`TestDrillAuthPITR` (`internal/audit/drill_pitr_integration_test.go`,
+build tag `integration`, skipped unless `DRILL_PHASE` is set); every write
+goes through `audit.Commit` as the runtime role.
+
+Flow: migrate, write A, `pg_basebackup`, write B, snapshot T (time and
+state), write C (includes revocations), snapshot F, archive the WAL. Then
+two copies: PITR to T (`recovery_target_time`) and restore to the end of the
+WAL. Run with `DRILL_DIR=<new dir> scripts/drill-auth-pitr.sh`; evidence
+(snapshots, verify and post JSON, `summary.txt`) lands in `$DRILL_DIR/evidence`.
+
+Checks and result line (`DRILL RESULT: PASS|GAP|FAIL`):
+
+- FAIL when a credential revoked at or before T is not revoked on the copy,
+  when any revision is below its value at T, or when a duplicate
+  (aggregate type, aggregate id, revision) key exists after new writes.
+- GAP when the copy is correct as of T but later work is gone: revocations
+  made after T that are no longer revoked, or outbox keys that the restored
+  timeline re-issues with different content than the pre-restore timeline
+  published.
+- PASS when all of those counts are zero.
+
+Result of the 2026-10-24 run on the dev stack: restore to the end of the WAL
+= PASS (state identical to the source, digests equal). PITR to T = GAP:
+revisions never went below T and no duplicate key appeared, new writes
+continued at exactly revision + 1, and every credential revoked before T
+stayed revoked, but PITR dropped 30 revisions published after T, 2
+revocations made after T came back (credentials usable again), and 6
+(type, id, revision) keys were re-issued with different content.
+
+What this means for an operator: a PITR to an earlier time is a rollback of
+the auth plane. Treat every credential revoked after the target time as
+live again and revoke it again, and tell downstream consumers that
+revisions above the restored value will be re-issued. The fix that makes
+this safe (a restore fence that moves revision counters forward and keeps
+revocations) is tracked in CHAOS-11271; until it lands, prefer restore to
+the end of the WAL, and never PITR past a revocation you cannot redo.

@@ -278,13 +278,6 @@ func TestIngressControllerReachesOnlyGoAPIAndWebOnTheirOwnPorts(t *testing.T) {
 				if component == "go-api" && c.goAll {
 					continue
 				}
-				if component == "query-api" && strings.Contains(strings.Join(c.args, " "), "queryApi.internal.enabled=true") {
-					// The query-api-internal policy opens the public port to every source, exactly as before it existed.
-					if fmt.Sprint(fromOther) != "[8090]" {
-						t.Errorf("query-api pods: a pod of another namespace is admitted to %v, want only the public port [8090]", fromOther)
-					}
-					continue
-				}
 				if len(fromOther) != 0 {
 					t.Errorf("%s pods: a pod of another namespace is admitted to %v, want nothing", component, fromOther)
 				}
@@ -319,9 +312,9 @@ func TestIngressControllerNamespaceIsConfigurable(t *testing.T) {
 	}
 }
 
-// The go-api internal port stays closed to the ingress controller and to any in-namespace pod no rule names, on the
-// union of every policy (CHAOS-7181); the query-api internal port is checked from the ingress controller only (the shared
-// in-namespace rule admits release pods on it by design, see the query-api-internal template comment).
+// The go-api and query-api internal ports stay closed to the ingress controller and to any in-namespace pod no rule
+// names, on the union of every policy (CHAOS-7181; the query-api pods leave the release-wide policy while the internal
+// listener is on).
 func TestInternalPortsAreClosedOnTheUnion(t *testing.T) {
 	policies := renderNetpols(t, "--set", "goApi.internal.enabled=true", "--set", "queryApi.enabled=true",
 		"--set", "queryApi.internal.enabled=true", "--set", "queryApi.internal.allowedFrom[0].matchLabels.app=tools")
@@ -339,8 +332,10 @@ func TestInternalPortsAreClosedOnTheUnion(t *testing.T) {
 		}
 	}
 	queryAPI := map[string]string{"app.kubernetes.io/name": "dev-health", "app.kubernetes.io/instance": "np", "app.kubernetes.io/component": "query-api"}
-	if admitted, _ := admittedFrom(policies, queryAPI, []int{8091}, sourceController); len(admitted) != 0 {
-		t.Errorf("the ingress controller is admitted to the query-api internal port: %v", admitted)
+	for _, source := range []netpolSource{sourceController, sourceStranger} {
+		if admitted, _ := admittedFrom(policies, queryAPI, []int{8091}, source); len(admitted) != 0 {
+			t.Errorf("%s is admitted to the query-api internal port: %v", source.name, admitted)
+		}
 	}
 }
 
@@ -361,15 +356,12 @@ func TestQueryAPIInternalPolicyAdmitsOnlyAllowedFrom(t *testing.T) {
 					}
 				}
 			}
-			// The public port stays open to every source.
-			public := false
+			// With networkPolicy.enabled the public port is not opened here: the -ingress-query-api policy admits it from
+			// the release namespace and the ingress controller only.
 			for _, rule := range policy.Spec.Ingress {
-				if len(rule.From) == 0 && len(rule.Ports) == 1 && rule.Ports[0].Port == 8090 {
-					public = true
+				if len(rule.From) == 0 {
+					t.Errorf("the query-api-internal policy has a rule with no sources: %+v", rule)
 				}
-			}
-			if !public {
-				t.Errorf("the public query-api port 8090 is no longer open to every source: %+v", policy.Spec.Ingress)
 			}
 		}
 		return rules, found

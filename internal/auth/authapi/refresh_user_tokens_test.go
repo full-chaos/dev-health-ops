@@ -143,6 +143,8 @@ type refreshRow struct {
 	body          func(token string) string
 	// control is the kind that is this row's genuine credential shape, not a refused one.
 	control string
+	// noProjection is a row whose genuine credential reaches the store without projecting a principal.
+	noProjection bool
 	// refusedStatus is the status every refused input gets.
 	refusedStatus int
 	garbage       string
@@ -157,7 +159,8 @@ func refreshRows() []refreshRow {
 		{name: "POST /v1/token/refresh", pattern: PatternRefresh, body: native, refusedStatus: http.StatusUnauthorized, garbage: "not-a-credential"},
 		// A go-api refresh JWT is this row's genuine credential (exchanged once): "legacy-refresh" is its control.
 		{name: "POST /api/v1/auth/refresh", pattern: PatternCompatRefresh, body: compat, control: "legacy-refresh", refusedStatus: http.StatusUnauthorized, garbage: "aaaa.bbbb.cccc"},
-		{name: "POST /api/v1/auth/logout", pattern: PatternCompatLogout, body: compat, refusedStatus: http.StatusOK, garbage: "not-a-credential"},
+		// Logout also ends a go-api refresh JWT's lineage, so "legacy-refresh" is its control too.
+		{name: "POST /api/v1/auth/logout", pattern: PatternCompatLogout, body: compat, control: "legacy-refresh", noProjection: true, refusedStatus: http.StatusOK, garbage: "not-a-credential"},
 	}
 }
 
@@ -236,7 +239,7 @@ func TestRefreshRowsControlAGenuineCredentialReachesTheStore(t *testing.T) {
 			if r.lookups() == 0 {
 				t.Fatal("a genuine credential never reached the store: the counting pool detects nothing")
 			}
-			if row.control != "" && r.projector.users.Load() == 0 {
+			if row.control != "" && !row.noProjection && r.projector.users.Load() == 0 {
 				t.Fatal("a genuine go-api refresh token was not projected: the projector counter detects nothing")
 			}
 		})

@@ -205,6 +205,10 @@ export DEVHEALTH_AUTH_ORACLE_POSTGRES_URI="postgres://${POSTGRES_USER:-postgres}
 export DEVHEALTH_AUTH_ORACLE_CLICKHOUSE_URI="clickhouse://${CLICKHOUSE_USER:-ch}:${CLICKHOUSE_PASSWORD:-ch}@127.0.0.1:${CH_PORT}/${CLICKHOUSE_DB:-default}"
 export DEVHEALTH_AUTH_ORACLE_VALKEY_URI="redis://127.0.0.1:${VALKEY_PORT}/1"
 export DEVHEALTH_AUTH_ORACLE_SMTP_LISTEN="0.0.0.0:2525"
+# The aggregates go-api forwarded, comma separated (empty on leg go-api): the corpus reads auth-service's rows for them
+# (internal/testsupport/authrows).
+DEVHEALTH_AUTH_ORACLE_FORWARDED="$(IFS=,; printf '%s' "${FORWARDED[*]:-}")"
+export DEVHEALTH_AUTH_ORACLE_FORWARDED
 (cd "${ROOT}" && go test -trimpath -tags integration -count=1 -v -run '^TestAuthFlowVenueOracle$' ./internal/apiservice/authflowvenue)
 
 if [ "${LEG}" = "acp" ]; then

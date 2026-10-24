@@ -655,9 +655,14 @@ func continueGitHubFilesTraversal(err error, repository string) error {
 	return fmt.Errorf("%w: %w", ErrGitHubFilesTraversalFailed, err)
 }
 
+// gitFileContentStorable is false for text with a NUL byte. The prepared chunk
+// payload is jsonb, and Postgres refuses the \u0000 escape (22P05) on every
+// attempt, so such a file is kept without contents, as a binary blob is.
+func gitFileContentStorable(content string) bool { return !strings.Contains(content, "\x00") }
+
 func newGitHubFileRow(claim Claim, repoID, filePath, content string, normalizedAt time.Time) gitFileRow {
 	row := gitFileRow{RepoID: repoID, Path: filePath, LastSynced: normalizedAt, OrgID: claim.OrgID}
-	if content != "" {
+	if content != "" && gitFileContentStorable(content) {
 		row.Contents = &content
 	}
 	return row
@@ -792,7 +797,7 @@ func fetchGitHubFileContents(
 		}
 		for index, filePath := range chunk {
 			blob, ok := envelope.Data.Repository["f"+strconv.Itoa(index)]
-			if !ok || blob.IsBinary || blob.IsTruncated || blob.Text == nil {
+			if !ok || blob.IsBinary || blob.IsTruncated || blob.Text == nil || !gitFileContentStorable(*blob.Text) {
 				continue
 			}
 			contents[filePath] = *blob.Text

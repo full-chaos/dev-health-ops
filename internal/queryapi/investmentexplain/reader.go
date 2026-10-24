@@ -134,7 +134,7 @@ type BreakdownFilters struct {
 	Subcategories []string
 	// DatedByEnd dates a unit by its END day (to_ts in [start, end)) instead of by the overlap
 	// of its [from_ts, to_ts] with the window: the Home tile "Investment by theme" (CHAOS-9195,
-	// D5933). Every other rule of the read (latest row of a unit, every categorization status,
+	// D5933). Every other rule of the read (latest row of a unit, the categorized units only,
 	// the scope, the category filters) is the Investment page's own.
 	DatedByEnd bool
 	// Measure says what a row's value counts, and every read of this package REQUIRES one (ErrMeasureRequired):
@@ -163,8 +163,10 @@ func NormalizeMeasure(name string) (measure string, ok bool) {
 	return "", false
 }
 
+// dateWindowClause is the window of a mix read: the units that reached the model (analytics.CategorizedOnlySQL), the
+// same population the analytics theme and subcategory reads show.
 func (f BreakdownFilters) dateWindowClause() string {
-	return analytics.InvestmentWindowClause(f.DatedByEnd)
+	return analytics.InvestmentMixWindowClause(f.DatedByEnd)
 }
 
 func (f BreakdownFilters) categoryClause() (filterSQL string, bindings []dhclickhouse.Binding) {
@@ -385,7 +387,7 @@ WHERE %s
 %s
 %s
 %s
-`, analytics.LatestWorkUnitInvestmentsSource(), filters.dateWindowClause(), scopeSQL, categorySQL, settingsMaxExecutionTime())
+`, analytics.LatestWorkUnitInvestmentsSource(), analytics.InvestmentWindowClause(filters.DatedByEnd), scopeSQL, categorySQL, settingsMaxExecutionTime())
 
 	rows, err := reader.client.Query(ctx, query, bindings)
 	if err != nil {

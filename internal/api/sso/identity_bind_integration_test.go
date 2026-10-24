@@ -110,9 +110,24 @@ func assertMembershipRequired(t *testing.T, ctx context.Context, st stack, provi
 	}
 }
 
+// seedBoundAccount is an OIDC or SAML account that holds the identity of one provider and no membership.
+func seedBoundAccount(t *testing.T, ctx context.Context, pool *pgxpool.Pool, providerID uuid.UUID, email, authProvider, subject string) {
+	t.Helper()
+	seedAccount(t, ctx, pool, email, authProvider, subject)
+	if _, err := pool.Exec(ctx, `UPDATE users SET sso_provider_id = $2 WHERE email = $1`, email, providerID); err != nil {
+		t.Fatalf("bind account: %v", err)
+	}
+}
+
+// seedMember is a member of the organization; an OIDC or SAML account holds the identity of the
+// organization's provider of that protocol.
 func seedMember(t *testing.T, ctx context.Context, pool *pgxpool.Pool, orgID uuid.UUID, email, authProvider, subject string) {
 	t.Helper()
 	seedAccount(t, ctx, pool, email, authProvider, subject)
+	if _, err := pool.Exec(ctx, `UPDATE users SET sso_provider_id = (SELECT id FROM sso_providers WHERE org_id = $2 AND protocol = $3 ORDER BY id LIMIT 1) WHERE email = $1`,
+		email, orgID, authProvider); err != nil {
+		t.Fatalf("bind member: %v", err)
+	}
 	var userID uuid.UUID
 	if err := pool.QueryRow(ctx, `SELECT id FROM users WHERE email = $1`, email).Scan(&userID); err != nil {
 		t.Fatal(err)
@@ -280,12 +295,12 @@ func TestSAMLSignInWithoutMembershipAnswers403(t *testing.T) {
 	providerID := seedSAMLOrgProviderAuto(t, ctx, st, idp, sp, false)
 
 	const known = "known.person@allowed.example"
-	seedAccount(t, ctx, st.pool, known, "saml", known)
+	seedBoundAccount(t, ctx, st.pool, providerID, known, "saml", known)
 	status, body := samlSignIn(t, st, idp, providerID, sp, known, known)
 	assertMembershipRequired(t, ctx, st, providerID, status, body)
 }
 
-func TestSAMLSignInThroughAnotherOrganizationsIdPAnswers403(t *testing.T) {
+func TestSAMLSignInThroughAnotherOrganizationsIdPAnswers409(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	st := startStack(t, ctx)
@@ -297,7 +312,10 @@ func TestSAMLSignInThroughAnotherOrganizationsIdPAnswers403(t *testing.T) {
 	seedMember(t, ctx, st.pool, orgOf(t, ctx, st.pool, providerA), email, "saml", "shared-subject")
 
 	status, body := samlSignIn(t, st, idpB, providerB, sp, email, "shared-subject")
-	assertMembershipRequired(t, ctx, st, providerB, status, body)
+	if status != http.StatusConflict {
+		t.Fatalf("status=%d body=%v, want 409", status, body)
+	}
+	assertIdentityConflict(t, ctx, st, providerB, body)
 	if status, body := samlSignIn(t, st, idpA, providerA, sp, email, "shared-subject"); status != http.StatusOK {
 		t.Fatalf("member through its own organization: %d %v", status, body)
 	}
@@ -316,7 +334,7 @@ func TestOIDCSignInWithoutMembershipAnswers403(t *testing.T) {
 		clientSecretEncryptedFallback: "test-client-secret",
 	})
 	const email = "oidc.nonmember@allowed.example"
-	seedAccount(t, ctx, st.pool, email, "oidc", "idp-subject-nm")
+	seedBoundAccount(t, ctx, st.pool, providerID, email, "oidc", "idp-subject-nm")
 
 	client := newCookieClient(t)
 	status, authResp := postJSONWithClient(t, client, st.server, "/api/v1/auth/oidc/"+providerID.String()+"/authorize", map[string]any{})
@@ -464,7 +482,7 @@ func TestSAMLAutoProvisionJoinsAnAccountWithNoMembership(t *testing.T) {
 	const sp = "https://sp.test/saml/metadata"
 	providerID := seedSAMLOrgProvider(t, ctx, st, idp, sp)
 	const email = "orphan.person@allowed.example"
-	seedAccount(t, ctx, st.pool, email, "saml", "orphan-subject")
+	seedBoundAccount(t, ctx, st.pool, providerID, email, "saml", "orphan-subject")
 
 	status, body := samlSignIn(t, st, idp, providerID, sp, email, "orphan-subject")
 	assertProvisionedMember(t, ctx, st, orgOf(t, ctx, st.pool, providerID), email, "saml", "orphan-subject", status, body)
@@ -485,7 +503,10 @@ func TestSAMLAutoProvisionDoesNotJoinAMemberOfAnotherOrganization(t *testing.T) 
 	seedMember(t, ctx, st.pool, orgOf(t, ctx, st.pool, providerA), email, "saml", "elsewhere-subject")
 
 	status, body := samlSignIn(t, st, idpB, providerB, sp, email, "elsewhere-subject")
-	assertMembershipRequired(t, ctx, st, providerB, status, body)
+	if status != http.StatusConflict {
+		t.Fatalf("status=%d body=%v, want 409", status, body)
+	}
+	assertIdentityConflict(t, ctx, st, providerB, body)
 	if n := countRows(t, ctx, st, `SELECT count(*) FROM memberships`); n != 1 {
 		t.Fatalf("memberships rows = %d, want 1", n)
 	}

@@ -12,8 +12,13 @@ lifecycle: active
 1. Confirm the user is signing into the intended workspace and identity provider.
 2. Check workspace membership and the current role.
 3. For SSO, verify issuer, audience, callback, and group or role mapping.
+   For a refused sign-in, match its reason code against the [identity linking reference](../../reference/auth/identity-linking.md).
 4. Reproduce with a second account that has the expected role.
 5. Distinguish authentication failure from authorization failure.
 6. Retain the route, time, correlation or request identifier, and sanitized message.
 
 Do not solve an authorization defect by granting owner access permanently.
+
+## Failed logins or 5xx after a roll
+
+A NetworkPolicy roll and the sessions flip are separate rolls. Check which one is live with `helm history`, then follow [Auth sessions flip and rollback](../../operate/runbooks/auth-sessions-flip-and-rollback.md). Users who report a verify or reset link that fails after the later e-mail link flip need a new link; links sent before that flip are not accepted.

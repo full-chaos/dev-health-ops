@@ -146,7 +146,7 @@ status="$(curl --silent --show-error --max-time 20 --output /dev/stderr --write-
   --data "$(printf '{"email":"%s","password":"%s","full_name":"Web Proof","org_name":"Web Proof Org"}' "${EMAIL}" "${PASSWORD}")" \
   "${BASE}/api/v1/auth/register")"
 printf '\nPOST /api/v1/auth/register -> %s\n' "${status}"
-[ "${status}" = "200" ] || [ "${status}" = "201" ] || die "register answered ${status}"
+[ "${status}" = "200" ] || [ "${status}" = "201" ] || [ "${status}" = "202" ] || die "register answered ${status}"
 token=""
 for _ in $(seq 1 30); do
   if [ -s "${SINK_DIR}/mail.token" ]; then

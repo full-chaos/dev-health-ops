@@ -2,6 +2,7 @@ package sync
 
 import (
 	"errors"
+	"reflect"
 	"slices"
 	"sort"
 	"testing"
@@ -23,6 +24,20 @@ var canonicalIncidentDatasetsByProvider = map[string][]string{
 	},
 }
 
+func TestSkippedDatasetsResultNamesEachDatasetWithItsReason(t *testing.T) {
+	if got := SkippedDatasetsResult(nil); got != nil {
+		t.Fatalf("no skip = %v, want nil so the run keeps its result", got)
+	}
+	got := SkippedDatasetsResult([]string{"incidents", "services"})
+	want := []map[string]string{
+		{"dataset_key": "incidents", "reason": "feature_disabled", "message": "skipped: feature off"},
+		{"dataset_key": "services", "reason": "feature_disabled", "message": "skipped: feature off"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("SkippedDatasetsResult = %v, want %v", got, want)
+	}
+}
+
 // Every provider of the catalogue is classified, dataset by dataset. A new
 // provider or a new dataset must be given an answer here before it ships.
 func TestPlanDatasetRequiresCanonicalIncidentForEveryCatalogueDataset(t *testing.T) {
@@ -39,7 +54,7 @@ func TestPlanDatasetRequiresCanonicalIncidentForEveryCatalogueDataset(t *testing
 		}
 		got := []string{}
 		for dataset := range catalogue {
-			if planDatasetRequiresCanonicalIncident(provider, dataset) {
+			if PlanDatasetRequiresCanonicalIncident(provider, dataset) {
 				got = append(got, dataset)
 			}
 		}
@@ -51,7 +66,7 @@ func TestPlanDatasetRequiresCanonicalIncidentForEveryCatalogueDataset(t *testing
 	for _, tc := range []struct{ provider, dataset string }{
 		{"github", "incidents"}, {"linear", "incidents"}, {"jira", "not-a-dataset"}, {"not-a-provider", "incidents"},
 	} {
-		if planDatasetRequiresCanonicalIncident(tc.provider, tc.dataset) {
+		if PlanDatasetRequiresCanonicalIncident(tc.provider, tc.dataset) {
 			t.Errorf("%s/%s is not a catalogue dataset and must not be gated", tc.provider, tc.dataset)
 		}
 	}

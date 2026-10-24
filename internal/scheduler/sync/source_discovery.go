@@ -1694,7 +1694,7 @@ func intPtr(value int) *int { return &value }
 // exact precedence: org_licenses.limits_override (highest) -> tier_limits DB
 // table -> hardcoded jiraMaxReposTierDefaults. Reuses the same
 // organizations/org_licenses join loadPlanLimits already uses for
-// backfill_days/max_sync_units, so a tier resolution divergence between the
+// backfill_days, so a tier resolution divergence between the
 // two would need a change in only one of these two spots to fix.
 func resolveMaxReposLimit(ctx context.Context, tx pgx.Tx, orgID string) (*int, error) {
 	var orgTier, licenseTier *string

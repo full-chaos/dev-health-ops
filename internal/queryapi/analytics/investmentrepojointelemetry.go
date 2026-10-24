@@ -38,9 +38,6 @@ import (
 	"log/slog"
 	"sync"
 	"time"
-
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/metric"
 )
 
 // repoJoinDedupCollisionCooldown bounds this telemetry to one extra
@@ -110,8 +107,9 @@ func repoJoinDedupCollisionShorten(orgID string) {
 // least one repos id with more than one live physical version for the
 // queried org -- not the raw excess-row count itself (that varies with
 // merge timing far more than with anything actionable), so the counter
-// answers "how often does this org's investment traffic run into an
-// unmerged repos duplicate," a rate an alert can threshold on.
+// answers "how often does investment traffic run into an unmerged repos
+// duplicate," a rate an alert can threshold on. It has no org label (one
+// series per tenant is unbounded); the org id is in the warn log only.
 var repoJoinDedupCollisionsCounter = mustAnalyticsCounter(
 	"devhealth_query_api_investment_repo_join_dedup_collisions_total",
 	"investment-path queries where the org's repos table currently holds an unmerged (pre-FINAL) duplicate physical row for at least one repo id -- CHAOS-4773; the join itself is deduped so this is an early-warning signal, not a defect indicator",
@@ -148,7 +146,7 @@ SETTINGS max_execution_time = 5
 var recordInvestmentRepoJoinDedupCollisions = defaultRecordInvestmentRepoJoinDedupCollisions
 
 func defaultRecordInvestmentRepoJoinDedupCollisions(ctx context.Context, orgID string, excessRepoIDs int64) {
-	repoJoinDedupCollisionsCounter.Add(ctx, 1, metric.WithAttributes(attribute.String("org_id", orgID)))
+	repoJoinDedupCollisionsCounter.Add(ctx, 1)
 	slog.WarnContext(ctx, "investment repo join: org currently has an unmerged repos duplicate; the join is FINAL-deduped so results are still correct, but this names the window CHAOS-4773's fan-out class depended on",
 		"org_id", orgID, "excess_repo_ids", excessRepoIDs)
 }

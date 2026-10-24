@@ -2,7 +2,9 @@ package providersync
 
 import (
 	"os"
+	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -31,7 +33,7 @@ func loadRealStatusMapping(t *testing.T) *StatusMapping {
 	// explicit argument and silently point every assertion below at another
 	// file.
 	t.Setenv(statusMappingPathEnvVar, "")
-	mapping, err := LoadStatusMapping(resolveStatusMappingConfig(t, "real"))
+	mapping, err := LoadStatusMapping(resolveStatusMappingConfig(t, "live"))
 	if err != nil {
 		t.Fatalf("loading the real config: %v", err)
 	}
@@ -52,7 +54,7 @@ func mustMappingValue(t *testing.T, node *yaml.Node, key string) *yaml.Node {
 
 func realConfigProviderSection(t *testing.T, provider string) *yaml.Node {
 	t.Helper()
-	contents, err := os.ReadFile(resolveStatusMappingConfig(t, "real"))
+	contents, err := os.ReadFile(resolveStatusMappingConfig(t, "live"))
 	if err != nil {
 		t.Fatalf("reading the real config: %v", err)
 	}
@@ -168,62 +170,56 @@ func TestTypePriorityOmitsExactlyPrAndMergeRequest(t *testing.T) {
 	}
 }
 
-// TestRealConfigGithubTypeBugLabelIsAMisparsedMapping pins CHAOS-3512, the
-// highest-impact quirk here: status_mapping.yaml's github `bug` list contains
-// `- type: bug` WITH A SPACE, which YAML reads as a mapping. Python indexes it
-// under str(dict), so the conventional GitHub label `type:bug` matches nothing.
-//
-// CHAOS-3512 is fixed PYTHON-FIRST and then re-mirrored into this port. This
-// test is what makes that sequencing safe: it fails on the Python/config fix
-// AND on a Go-side change, so the two halves cannot land out of step.
-func TestRealConfigGithubTypeBugLabelIsAMisparsedMapping(t *testing.T) {
-	github := realConfigProviderSection(t, "github")
-	bugNode := mustMappingValue(t, mustMappingValue(t, github, "type_labels"), "bug")
-	bugValues := []*yaml.Node(nil)
-	if resolved := resolveAlias(bugNode); resolved != nil && resolved.Kind == yaml.SequenceNode {
-		bugValues = resolved.Content
-	}
-	if len(bugValues) == 0 {
-		t.Fatal("the real config's github type_labels.bug list is gone; this pin " +
-			"depends on it")
-	}
-	sawMapping := false
-	for _, item := range bugValues {
-		if resolveAlias(item).Kind == yaml.MappingNode {
-			sawMapping = true
-		}
-	}
-	if !sawMapping {
-		t.Fatal("github's type_labels.bug list no longer contains a YAML MAPPING. " +
-			"If the `- type: bug` typo was corrected to `- type:bug`, that is a " +
-			"REAL BEHAVIOUR CHANGE: GitHub items labelled type:bug start classifying " +
-			"as bug instead of issue. Fix the port, the oracle cases and the ticket " +
-			"together -- do not just delete this test.")
-	}
-
+// TestRealConfigGithubTypeBugLabelMapsToBug pins the CHAOS-3512 fix: the real
+// config's github `type:bug` entry is a quoted string, so the conventional
+// GitHub label classifies as bug. The checked-in yaml must also load under the
+// strict loader, so the collection-entry refusal can never fire on it.
+func TestRealConfigGithubTypeBugLabelMapsToBug(t *testing.T) {
 	mapping := loadRealStatusMapping(t)
-	githubTypeLabels := mapping.LabelTypeByProvider["github"]
-	if got := githubTypeLabels[pythonDictReprBugKey]; got != "bug" {
-		t.Errorf("github type-label index has no %q entry (got %q); reproducing "+
-			"Python's dict repr byte-for-byte is what keeps this port faithful",
-			pythonDictReprBugKey, got)
+	if got := mapping.LabelTypeByProvider["github"]["type:bug"]; got != "bug" {
+		t.Errorf("github type-label index maps \"type:bug\" to %q, want \"bug\"", got)
 	}
-	if _, present := githubTypeLabels["type:bug"]; present {
-		t.Error("github now maps the conventional label \"type:bug\"; that is the " +
-			"upstream FIX, and this port must be updated deliberately rather than " +
-			"drifting into it")
+	if got := mapping.NormalizeType("github", "", []string{"type:bug"}); got != "bug" {
+		t.Errorf("NormalizeType(github, label type:bug) = %q, want \"bug\"", got)
 	}
-
-	// COUNTERPART: GitLab wrote the same intent as `type::bug`, which YAML keeps
-	// as a string -- proving the label arm works fine when the config is
-	// well-formed, so github's miss is the FILE's defect, not the engine's.
+	if _, present := mapping.LabelTypeByProvider["github"][pythonDictReprBugKey]; present {
+		t.Errorf("github index still holds the misparsed key %q", pythonDictReprBugKey)
+	}
 	if got := mapping.LabelTypeByProvider["gitlab"]["type::bug"]; got != "bug" {
-		t.Errorf("gitlab's type::bug label maps to %q, want \"bug\" -- the counterpart "+
-			"that proves the github miss above is a config defect is gone", got)
+		t.Errorf("gitlab's type::bug label maps to %q, want \"bug\"", got)
 	}
 }
 
 const pythonDictReprBugKey = "{'type': 'bug'}"
+
+// TestLoaderRefusesCollectionEntries is the declared divergence from Python:
+// a mapping or sequence inside a category list is an error under
+// LoadStatusMapping, while the frozen-oracle loader (strict=false) still
+// indexes it under its Python repr.
+func TestLoaderRefusesCollectionEntries(t *testing.T) {
+	t.Setenv(statusMappingPathEnvVar, "")
+	for _, name := range []string{"real", "pyyaml_scalars"} {
+		path := resolveStatusMappingConfig(t, name)
+		_, err := LoadStatusMapping(path)
+		if err == nil {
+			t.Fatalf("%s: LoadStatusMapping accepted a mapping/sequence list entry", name)
+		}
+		if !strings.Contains(err.Error(), "quote values") {
+			t.Errorf("%s: refusal lacks the quoting hint: %v", name, err)
+		}
+		if kind := pythonFailureKind(err); kind != "" {
+			t.Errorf("%s: refusal must be a plain Go error, got mirrored %s", name, kind)
+		}
+		if _, err := loadStatusMapping(path, false); err != nil {
+			t.Errorf("%s: non-strict loader must still accept it: %v", name, err)
+		}
+	}
+	for _, name := range []string{"live", "iteration_mapping_value", "iteration_string_value"} {
+		if _, err := LoadStatusMapping(resolveStatusMappingConfig(t, name)); err != nil {
+			t.Errorf("%s: scalar entries and mapping VALUES must still load: %v", name, err)
+		}
+	}
+}
 
 // TestRealConfigTypeSectionsThatDoNotExist pins the two structural dead arms:
 // github/gitlab declare no `types`, and jira declares no `type_labels`.
@@ -258,5 +254,31 @@ func TestRealConfigTypeSectionsThatDoNotExist(t *testing.T) {
 	if len(mapping.LabelStatusByProvider["github"]) == 0 {
 		t.Error("github's status_labels index is empty -- the label-status builder is " +
 			"broken and the jira type_labels assertion above proves nothing")
+	}
+}
+
+func TestLoaderRefusalCoversIgnoredSectionsAndReportsEntryLine(t *testing.T) {
+	t.Setenv(statusMappingPathEnvVar, "")
+	cases := []struct {
+		name, yaml, wantLine string
+	}{
+		{"unknown_status_category", "status_categories:\n  mystery:\n    - a: b\nproviders: {}\n", "line 3"},
+		{"unknown_provider_category", "providers:\n  github:\n    type_labels:\n      mystery:\n        - a: b\n", "line 5"},
+		{"ignored_linear_provider", "providers:\n  linear:\n    type_labels:\n      bug:\n        - ok\n        - type: bug\n", "line 6"},
+		{"sequence_entry", "providers:\n  github:\n    status_labels:\n      todo:\n        - [a, b]\n", "line 5"},
+		{"alias_entry_reports_use_line", "x: &m {a: b}\nproviders:\n  github:\n    type_labels:\n      bug:\n        - *m\n", "line 6"},
+	}
+	for _, c := range cases {
+		path := filepath.Join(t.TempDir(), "cfg.yaml")
+		if err := os.WriteFile(path, []byte(c.yaml), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		_, err := LoadStatusMapping(path)
+		if err == nil || !strings.Contains(err.Error(), c.wantLine) {
+			t.Errorf("%s: want a refusal naming %s, got %v", c.name, c.wantLine, err)
+		}
+		if _, err := loadStatusMapping(path, false); err != nil {
+			t.Errorf("%s: non-strict loader must accept: %v", c.name, err)
+		}
 	}
 }

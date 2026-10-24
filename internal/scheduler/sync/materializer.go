@@ -128,7 +128,7 @@ func NewNativeMaterializer(domainPool *pgxpool.Pool) (*NativeMaterializer, error
 		return nil, ErrInvalidMaterializer
 	}
 	overlap := boundedEnvInt("SYNC_WATERMARK_OVERLAP", 0, 0)
-	cap := boundedEnvInt("SYNC_RUN_MAX_UNITS", 1000, 1)
+	cap := UnitCapFromEnv()
 	refreshSeconds := boundedEnvInt("SYNC_EXECUTED_PROOF_REFRESH_SECONDS", 300, 30)
 	// boundedEnvInt only lower-bounds. Without an upper bound here too, a
 	// value shaped like a typo (or a deliberately huge one) multiplied by
@@ -509,10 +509,10 @@ func (materializer *NativeMaterializer) Materialize(
 			return PlanResult{}, err
 		}
 	}
-	if err := errIfOnlySkippedDatasetsHadWork(loaded.featureOffSkippedDatasets, len(units)); err != nil {
+	if err := errIfOnlySkippedDatasetsHadWork(len(loaded.featureOffSkippedDatasetKeys), len(units)); err != nil {
 		return PlanResult{}, err
 	}
-	if len(units) > loaded.totalUnitCap {
+	if loaded.totalUnitCap > 0 && len(units) > loaded.totalUnitCap {
 		return PlanResult{}, fmt.Errorf("%w: plan has %d units over cap %d", ErrInvalidPlan, len(units), loaded.totalUnitCap)
 	}
 	if (len(units) > 0 || zeroUnitPlanNeedsCredentialStamp(loaded.provider)) && loaded.terminalReason == "" {
@@ -597,9 +597,9 @@ type loadedMaterializationPlan struct {
 	terminalReason         string
 	ensureSecurityDataset  bool
 	pagerDutyRepair        *pagerDutyDomainRepair
-	// featureOffSkippedDatasets is the number of enabled datasets the plan
-	// left out because the canonical-incident feature is off.
-	featureOffSkippedDatasets int
+	// featureOffSkippedDatasetKeys are the enabled datasets the plan left out
+	// because the canonical-incident feature is off.
+	featureOffSkippedDatasetKeys []string
 	// triggeredBy is CHAOS-4602's sync_runs.triggered_by stamp: "schedule"
 	// for an ordinary cron-minted occurrence (every pre-CHAOS-4602 caller
 	// keeps this value, unconditionally), or the sync_manual_triggers row's
@@ -802,7 +802,7 @@ WHERE config.id = $1::uuid AND config.org_id = $2 AND integration.is_active`, oc
 			return loadedMaterializationPlan{}, err
 		}
 	}
-	datasets, featureOffSkippedDatasets, err := dropCanonicalIncidentDatasetsWhenFeatureOff(ctx, tx, orgID, integrationID, provider, datasets, occurrence.ScheduledFor)
+	datasets, featureOffSkippedDatasetKeys, err := dropCanonicalIncidentDatasetsWhenFeatureOff(ctx, tx, orgID, integrationID, provider, datasets, occurrence.ScheduledFor)
 	if err != nil {
 		return loadedMaterializationPlan{}, err
 	}
@@ -858,7 +858,7 @@ WHERE config.id = $1::uuid AND config.org_id = $2 AND integration.is_active`, oc
 		pagerDutyRepair:        pagerDutyRepair,
 		triggeredBy:            triggeredBy,
 
-		featureOffSkippedDatasets: featureOffSkippedDatasets,
+		featureOffSkippedDatasetKeys: featureOffSkippedDatasetKeys,
 	}, nil
 }
 
@@ -1159,8 +1159,7 @@ WHERE organization.id=$1::uuid`, orgID).Scan(&orgTier, &licenseTier, &overridesJ
 		return &value, true
 	}
 	backfill, backfillSet := resolveOverride("backfill_days")
-	unitCap, unitCapSet := resolveOverride("max_sync_units")
-	rows, err := tx.Query(ctx, `SELECT limit_key,limit_value FROM public.tier_limits WHERE tier=$1 AND limit_key IN ('backfill_days','max_sync_units')`, resolvedTier)
+	rows, err := tx.Query(ctx, `SELECT limit_key,limit_value FROM public.tier_limits WHERE tier=$1 AND limit_key='backfill_days'`, resolvedTier)
 	if err != nil {
 		return nil, 0, fmt.Errorf("load scheduled sync tier limits: %w", err)
 	}
@@ -1173,9 +1172,6 @@ WHERE organization.id=$1::uuid`, orgID).Scan(&orgTier, &licenseTier, &overridesJ
 		}
 		if key == "backfill_days" && !backfillSet {
 			backfill, backfillSet = parseOptionalPositiveInt(value)
-		}
-		if key == "max_sync_units" && !unitCapSet {
-			unitCap, unitCapSet = parseOptionalPositiveInt(value)
 		}
 	}
 	if err := rows.Err(); err != nil {
@@ -1191,34 +1187,16 @@ WHERE organization.id=$1::uuid`, orgID).Scan(&orgTier, &licenseTier, &overridesJ
 			backfill = &value
 		}
 	}
-	totalCap := defaultUnitCap
-	if unitCap != nil {
-		totalCap = *unitCap
-	}
-	return backfill, totalCap, nil
+	return backfill, defaultUnitCap, nil
 }
 
-// ResolveMaxSyncUnitsCap resolves the org's tier-based max_sync_units cap --
-// the same organizations/org_licenses/tier_limits resolution loadPlanLimits
-// already performs for scheduling, shared (not duplicated) for
-// DispatchGuard's total-cap check (CHAOS-4175 family 3, port of
-// guard.py's DispatchGuard.authorize_run / TierLimitService.get_limit).
-//
-// Callers porting Python's _resolve_total_unit_cap must NOT propagate a
-// non-nil error as a hard failure: Python's version catches every exception
-// (missing org, missing tier_limits table, a malformed override) and falls
-// back to defaultCap unconditionally, by design (CHAOS-2580's savepoint
-// discussion). loadPlanLimits, in contrast, treats a genuinely missing
-// organizations row as ErrOccurrenceIneligible -- a meaningful signal for
-// the SCHEDULER's own caller, but not one DispatchGuard's fallback-on-any-
-// error semantics should adopt. A caller wanting Python parity should catch
-// any error from this function and substitute defaultCap itself.
-func ResolveMaxSyncUnitsCap(ctx context.Context, tx pgx.Tx, orgID string, defaultCap int) (int, error) {
-	_, totalCap, err := loadPlanLimits(ctx, tx, orgID, defaultCap)
-	if err != nil {
-		return 0, err
-	}
-	return totalCap, nil
+// UnitCapFromEnv is the total unit cap of one planned sync run, read by the
+// materializer and by DispatchGuard alike: SYNC_RUN_MAX_UNITS, opt-in. Unset,
+// empty, zero, negative or unparseable means NO cap (0); a positive value is
+// the cap. The org's tier limit and limits_override no longer set it
+// (the tier default quarantined valid backfills).
+func UnitCapFromEnv() int {
+	return boundedEnvInt("SYNC_RUN_MAX_UNITS", 0, 0)
 }
 
 func parseOptionalPositiveInt(value *string) (*int, bool) {
@@ -1700,7 +1678,7 @@ func firstTruthyString(options map[string]any, keys ...string) string {
 	return ""
 }
 
-func requestedDatasetKeys(provider string, targets []string, sourceID *string) map[string]bool {
+func RequestedDatasetKeys(provider string, targets []string, sourceID *string) map[string]bool {
 	// Python's plan_request_for_config leaves parent dataset scope unset. Child
 	// configs derive dataset keys only from the provider registry's legacy
 	// targets; an empty mapping deliberately falls back to all enabled datasets.
@@ -1801,7 +1779,7 @@ func loadWorkItemLastSuccessAt(ctx context.Context, tx pgx.Tx, provider, orgID, 
 // explicitDatasetKeys is CHAOS-4602's manual/backfill selector
 // (sync_manual_triggers.dataset_keys, mirroring Python's
 // SyncPlanRequest.dataset_keys/_load_enabled_datasets): nil falls back to
-// the legacy-target-derived scope requestedDatasetKeys already computed
+// the legacy-target-derived scope RequestedDatasetKeys already computed
 // (unchanged behavior for every ordinary scheduled occurrence); a non-nil
 // slice is a direct dataset_key allowlist with NO legacy-target mapping and
 // NO auto security-forcing, matching _load_enabled_datasets' plain
@@ -1830,7 +1808,7 @@ func loadPlanDatasets(ctx context.Context, tx pgx.Tx, orgID, integrationID, prov
 			return nil, false, nil, nil
 		}
 	} else {
-		requested = requestedDatasetKeys(provider, targets, sourceID)
+		requested = RequestedDatasetKeys(provider, targets, sourceID)
 		if provider == "github" || provider == "gitlab" {
 			securityRequested = true
 			if requested != nil {
@@ -2138,6 +2116,12 @@ func persistDomainGraph(ctx context.Context, tx pgx.Tx, ids materializationIDs, 
 		completedAt = pointerTime(createdAt)
 		runError = &loaded.terminalReason
 		resultJSON = []byte(`{"error_category":"pagerduty_sync_disabled"}`)
+	} else if skipped := SkippedDatasetsResult(loaded.featureOffSkippedDatasetKeys); skipped != nil {
+		encoded, err := json.Marshal(map[string]any{"skipped_datasets": skipped})
+		if err != nil {
+			return fmt.Errorf("encode skipped datasets: %w", err)
+		}
+		resultJSON = encoded
 	}
 	triggeredByStamp := loaded.triggeredBy
 	if triggeredByStamp == "" {

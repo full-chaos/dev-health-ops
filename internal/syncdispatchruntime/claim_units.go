@@ -296,8 +296,8 @@ func emitClaimSnapshotDeferral(ctx context.Context, logger *synclog.Logger, sync
 	if len(deferredUnitIDs) == 0 {
 		return
 	}
-	// The COUNT is the metric; the ids are a sample. A run may hold up to
-	// SYNC_RUN_MAX_UNITS (default 1000) units, and neither a log line nor a
+	// The COUNT is the metric; the ids are a sample. A run may hold
+	// thousands of units, and neither a log line nor a
 	// span attribute is the right place for a thousand uuids.
 	sample := deferredUnitIDs
 	if len(sample) > claimDeferralSampleSize {

@@ -423,21 +423,7 @@ func authFlowHandler(f *Flows, mail *liveMail) http.Handler {
 		generic(w, http.StatusUnprocessableEntity, `{"detail":{"message":"Password validation failed","errors":`+string(list)+`}}`)
 	}
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /register", func(w http.ResponseWriter, r *http.Request) {
-		var in struct{ Email, Password string }
-		_ = json.NewDecoder(r.Body).Decode(&in)
-		out, err := f.Register(r.Context(), RegisterRequest{Email: in.Email, Password: in.Password})
-		switch {
-		case err != nil:
-			generic(w, 500, `{"detail":"Internal Server Error"}`)
-		case out.Kind == FlowEmailTaken:
-			generic(w, 400, `{"detail":{"message":"Email already registered"}}`)
-		case out.Kind == FlowPolicy:
-			violations(w, out.Violations)
-		default:
-			generic(w, 201, `{}`)
-		}
-	})
+	mux.Handle("POST /register", registerHandler(f, violations))
 	mux.HandleFunc("GET /verify", func(w http.ResponseWriter, r *http.Request) {
 		out, err := f.Verify(r.Context(), r.URL.Query().Get("token"))
 		switch {
@@ -550,7 +536,12 @@ func TestCorpusAuthFlowDecisionRows(t *testing.T) {
 	}
 
 	s, b := post("/register", `{"email":"TAKEN@example.com","password":"`+sessionscenario.Password+`xxxx"}`)
-	check("register: taken, other case", s, b, "")
+	check("register: taken, other case", s, b, "a taken address is answered like a new one")
+	takenStatus, takenBody := s, b
+	s, b = post("/register", `{"email":"brand.new@example.com","password":"`+sessionscenario.Password+`xxxx"}`)
+	if s != takenStatus || b != takenBody {
+		t.Errorf("a new address answers %d %s, a taken one %d %s: want the same bytes", s, b, takenStatus, takenBody)
+	}
 	s, b = post("/register", `{"email":"new@example.com","password":"Short-pass1"}`)
 	check("register: policy, too short", s, b, "")
 	s, b = post("/register", `{"email":"new@example.com","password":"password1234"}`)

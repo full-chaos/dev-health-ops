@@ -24,6 +24,8 @@ func eventContext(event, ref, headRef, refName, prNumber, sha string) ctxMap {
 		"github.workflow": "W", "github.event_name": event, "github.sha": sha, "github.run_id": "1",
 		// `inputs.*` only exists in a workflow_dispatch payload; no modelled event carries one.
 		"github.event.inputs.ref": "",
+		// no modelled event is a `labeled` pull_request action
+		"github.event.action": "", "github.event.label.name": "",
 	}
 }
 

@@ -15,6 +15,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/issueprlinks"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/prcommit"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
+	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/riverqueue/river"
 )
@@ -73,6 +74,13 @@ func buildWorkgraphWorker(cfg config.Config, database workerDatabase, registry *
 	nativeInvestment, nativeErr := buildNativeInvestmentExecutor(cfg, specs, observer, logger)
 	if nativeErr != nil {
 		return workerFamily{}, nativeErr
+	}
+	// Categorization on an org's own model (D6279): off for every org until its
+	// admin opts in. A worker without the settings key still reads the opt-in;
+	// the org's encrypted rows are then unreadable and the run is refused.
+	if executor, isNative := nativeInvestment.(*investment.NativeExecutor); isNative {
+		cipher, _ := providerfoundation.NewFernetDecryptor(cfg.SettingsEncryptionKey, cfg.SettingsEncryptionSalt.Reveal())
+		executor.SetCategorizeBYO(investment.NewOrgCategorizeBYO(postgresDatabase.pools.Domain, cipher, logger))
 	}
 
 	idempotency, err := newOperationalIdempotency(postgresDatabase.pools.Domain, observer)

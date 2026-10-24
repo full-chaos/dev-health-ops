@@ -170,3 +170,60 @@ func TestEveryUsersOwnedWriterHasABehaviourTest(t *testing.T) {
 		}
 	}
 }
+
+func TestUsersOwnedCensusRejectsPoolPassedToHelperUnderAnyName(t *testing.T) {
+	requireSkipProblem(t, `func (x s) f() error { if x.refuseWhileUsersOwned() == nil { _, _ = x.p.Exec("UPDATE users SET b = 2") }; return writeUser(x.p) }`, "f", "can run while the switch is on")
+	requireSkipProblem(t, `func (x s) g(conn C) error { if x.refuseWhileUsersOwned() == nil { _, _ = conn.Exec("UPDATE users SET b = 2") }; return writeUser(conn) }`, "g", "can run while the switch is on")
+}
+
+func TestUsersOwnedCensusKeepsAPackageSQLConstantOutOfReachOfOtherFunctionLocals(t *testing.T) {
+	src := `const q = "UPDATE users SET a = 1"
+func (x s) other() { const q = "SELECT 1"; _ = q }
+func (x s) f() error { if x.refuseWhileUsersOwned() == nil { _, _ = x.p.Exec("UPDATE users SET b = 2") }; _, err := x.p.Exec(q); return err }`
+	requireSkipProblem(t, src, "f", "can run while the switch is on")
+}
+
+func TestUsersOwnedCensusReadsQuotedAndQualifiedUsersSQL(t *testing.T) {
+	for name, sql := range map[string]string{
+		"quoted":    `UPDATE \"public\".\"users\" SET a = 1`,
+		"qualified": `UPDATE public.users SET a = 1`,
+		"only":      `UPDATE ONLY users SET a = 1`,
+		"merge":     `MERGE INTO users USING t ON true WHEN MATCHED THEN DO NOTHING`,
+		"truncate":  `TRUNCATE TABLE users`,
+	} {
+		src := `func (x s) f() error { if x.refuseWhileUsersOwned() == nil { _, _ = x.p.Exec("UPDATE users SET b = 2") }; _, err := x.p.Exec("` + sql + `"); return err }`
+		if got := censusFixture(t, src, "f", true); !strings.Contains(got, "can run while the switch is on") {
+			t.Errorf("%s: verdict %q, want an unguarded users write", name, got)
+		}
+	}
+}
+
+func TestUsersOwnedCensusDoesNotReadABindValueAsTheSQL(t *testing.T) {
+	requireSkipProblem(t, `func (x s) f() error { if x.refuseWhileUsersOwned() == nil { _, _ = x.p.Exec("UPDATE users SET b = 2") }; _, err := x.p.Exec(q, "bind-value"); return err }`, "f", "can run while the switch is on")
+	requireSkipProblem(t, `func (x s) g(ctx C) error { if x.refuseWhileUsersOwned() == nil { _, _ = x.p.Exec(ctx, "UPDATE users SET b = 2") }; _, err := x.p.Exec(ctx, q, "bind-value"); return err }`, "g", "can run while the switch is on")
+}
+
+func TestUsersOwnedBehaviourLinkNeedsARealTest(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, src string) {
+		if err := writeFile(filepath.Join(dir, name), src); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("empty_test.go", "package a\nimport \"testing\"\nfunc TestEmpty(t *testing.T) {}\n")
+	write("nottest.go", "package a\nimport \"testing\"\nfunc TestInPlainFile(t *testing.T) { t.Fatal(1) }\n")
+	write("badsig_test.go", "package a\nfunc TestNoArgs() {}\n")
+	write("real_test.go", "package a\nimport \"testing\"\nfunc TestReal(t *testing.T) { t.Setenv(\"A\", \"b\"); t.Run(\"x\", func(t *testing.T) {}) }\n")
+	for ref, wantProblem := range map[string]bool{
+		"empty_test.go|TestEmpty":     true,
+		"nottest.go|TestInPlainFile":  true,
+		"badsig_test.go|TestNoArgs":   true,
+		"real_test.go|TestReal":       false,
+		"real_test.go|TestMissing":    true,
+		"missing_test.go|TestMissing": true,
+	} {
+		if got := testFuncExists(dir, ref); (got != "") != wantProblem {
+			t.Errorf("%s: verdict %q, want problem=%v", ref, got, wantProblem)
+		}
+	}
+}

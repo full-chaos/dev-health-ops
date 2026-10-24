@@ -46,6 +46,17 @@ service log (`readiness check failed`, with `check` and `reason`).
 
 A pod is therefore not ready until its first successful outbox step.
 
+## Rate-limit store down
+
+Alerts: `AuthServiceRateLimitStoreErrors` (the counter below moves for five minutes) and `AuthServiceRateLimitStoreNotReady` (the `valkey` check fails for five minutes), both in `alerts/rules.yml`. The counter moves only when a limited request arrives; the check fails whether or not traffic does.
+
+While the shared rate-limit store fails, every request that reaches the limiter on a limited auth route (login, verify, resend-verification, forgot-password, reset-password, change-password, social link and unlink) answers a **closed 500**: a request is never let through uncounted. A malformed request, and on the social routes an unauthenticated one, is refused before the limiter and answers its usual 4xx. This is by design. Session, refresh, logout, the JWKS and the discovery document do not use the store and keep serving; `/readyz` answers 503 naming `valkey`.
+
+1. Confirm: `/readyz` names `valkey`, and `dev_health_runtime_check_failed{check="valkey"}` is 1 on the affected replicas. The service log has `readiness check failed` with the reason `valkey_unavailable`.
+2. Find the cause on the store side first: the store itself, its network path (the chart's NetworkPolicy egress to the store, `authService.networkPolicy.egress.valkey`), the `AUTH_VALKEY_URI` Secret, and the ACL login (key prefix `auth_svc_`, and `+client|tracking` among its commands; see the [configuration reference](configuration.md#rate-limits)).
+3. Restore the store or its path. Do not raise a limit, remove a limited route or turn the limits off to clear the alert: the 500 is the protection working.
+4. Done when the check series is 0 on every replica, `/readyz` is 200, and `dev_health_api_rate_limit_store_errors_total` has stopped rising.
+
 ## Metrics
 
 | Series | Type | Use |

@@ -777,7 +777,7 @@ func TestCompatSocialRefusalsAreAuditedLikeEveryOtherSignInRefusal(t *testing.T)
 		reason   string
 	}{
 		{"provider refused", fmt.Errorf("fetch: %w", social.ErrProviderRefused), "github", 401, "social: github refused token", "invalid_credentials"},
-		{"email of another provider", &social.ConflictError{ExistingMethod: "github"}, "gitlab", 409, "social: gitlab email of a github user", "email_collision"},
+		{"email of another provider", &social.ConflictError{ExistingMethod: "github"}, "gitlab", 409, "", "email_collision"},
 		{"email unverified", social.ErrEmailUnverified, "github", 403, "", "email_unverified"},
 		{"principal disabled", social.ErrPrincipalDisabled, "github", 403, "", "principal_deactivated"},
 		{"sign-up not available", identity.ErrSignupNotAvailable, "google", 403, "", "signup_unavailable"},
@@ -794,6 +794,11 @@ func TestCompatSocialRefusalsAreAuditedLikeEveryOtherSignInRefusal(t *testing.T)
 				expectGolden(t, response, response.Body.Bytes(), c.golden)
 			} else if response.Code != c.status {
 				t.Fatalf("status %d, want %d: %s", response.Code, c.status, response.Body)
+			}
+			if c.name == "email of another provider" {
+				if want := `{"detail":{"message":"` + social.AccountExistsMessage + `"}}`; strings.TrimSpace(response.Body.String()) != want {
+					t.Fatalf("body %s, want %s", response.Body, want)
+				}
 			}
 			if len(f.sessions.created) != 0 {
 				t.Fatal("a refused social sign-in created a session")

@@ -2,6 +2,7 @@ package sync
 
 import (
 	"errors"
+	"reflect"
 	"slices"
 	"sort"
 	"testing"
@@ -21,6 +22,20 @@ var canonicalIncidentDatasetsByProvider = map[string][]string{
 		"business-services", "escalation-policies", "incident-alerts", "incident-log-entries",
 		"incident-notes", "incidents", "on-calls", "schedules", "services", "teams", "users",
 	},
+}
+
+func TestSkippedDatasetsResultNamesEachDatasetWithItsReason(t *testing.T) {
+	if got := skippedDatasetsResult(nil); got != nil {
+		t.Fatalf("no skip = %v, want nil so the run keeps its result", got)
+	}
+	got := skippedDatasetsResult([]string{"incidents", "services"})
+	want := []map[string]string{
+		{"dataset_key": "incidents", "reason": "feature_disabled", "message": "skipped: feature off"},
+		{"dataset_key": "services", "reason": "feature_disabled", "message": "skipped: feature off"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("skippedDatasetsResult = %v, want %v", got, want)
+	}
 }
 
 // Every provider of the catalogue is classified, dataset by dataset. A new

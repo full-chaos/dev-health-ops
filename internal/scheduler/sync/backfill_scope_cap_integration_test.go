@@ -94,8 +94,8 @@ func TestNativeMaterializerPlansABackfillOverTheDefaultOffUnitCap(t *testing.T) 
 			if _, err := fixture.pool.Exec(ctx, `DELETE FROM public.tier_limits WHERE limit_key = 'max_sync_units'`); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := fixture.pool.Exec(ctx, `INSERT INTO public.tier_limits (tier, limit_key, limit_value)
-SELECT t, 'max_sync_units', '1000' FROM unnest(ARRAY['community','team','enterprise']) AS t`); err != nil {
+			if _, err := fixture.pool.Exec(ctx, `INSERT INTO public.tier_limits (id, tier, limit_key, limit_value, created_at, updated_at)
+SELECT gen_random_uuid(), t, 'max_sync_units', '1000', now(), now() FROM unnest(ARRAY['community','team','enterprise']) AS t`); err != nil {
 				t.Fatal(err)
 			}
 			const jiraSourceID = "00000000-0000-4000-8000-000000002003"

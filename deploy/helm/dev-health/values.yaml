@@ -173,6 +173,14 @@ authService:
     secretName: ""
     secretKey: AUTH_DATABASE_URI
     schema: auth
+  # -- The shared rate-limit store's login (AUTH_VALKEY_URI, database 1): an
+  #    ACL user of its own, limited to the auth_svc_ key prefix, never go-api's.
+  #    Leave secretName empty while no limited route (login, credentials,
+  #    social link) is mounted; the service refuses to start if one is mounted
+  #    without it. The chart creates no Secret.
+  valkey:
+    secretName: ""
+    secretKey: AUTH_VALKEY_URI
   signingKey:
     secretName: ""
     secretKey: signing-key.pem
@@ -192,6 +200,16 @@ authService:
       repository: postgres
       tag: "18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15"
       pullPolicy: IfNotPresent
+  # -- A rotation key set in place of signingKey (mutually exclusive). The
+  #    chart renders a manifest of kid, state and file only into a ConfigMap and
+  #    never carries key material: each entry names the existing Secret and key
+  #    holding that key's PEM. The pod holds a static copy, so a change to the
+  #    set is a new rollout, not a live rename. Exactly one key is `active`.
+  keySet:
+    enabled: false
+    # -- [{kid, state, file, secretName, secretKey}]; state is pending, active,
+    #    retiring, retired or compromised; file is a bare name.
+    keys: []
   # -- The session routes' key material, by secretKeyRef (the chart creates no
   #    Secret). Both keys render together or not at all; goApi.authProxy.sessions
   #    fails the render while the successor key is unset.
@@ -304,6 +322,11 @@ authService:
       database:
         to: []
         port: 5432
+      # -- Peers of the rate-limit store, `to` entries plus port. Required while
+      #    authService.valkey.secretName is set and the policy is on.
+      valkey:
+        to: []
+        port: 6379
       # -- Peers of the key custody service (KMS), `to` entries plus port. File
       #    custody (Wave 1) needs none, so the default grants no egress for it.
       keyCustody:

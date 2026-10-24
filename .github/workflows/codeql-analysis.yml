@@ -61,8 +61,9 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           docs_only=false
-          if files=$(gh api --paginate "repos/${REPO}/pulls/${PR_NUMBER}/files" --jq '.[] | .filename, (.previous_filename // empty)'); then
-            docs_only=$(printf '%s\n' "$files" | bash ci/codeql_docs_only.sh) || docs_only=false
+          if count=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}" --jq '.changed_files') \
+            && rows=$(gh api --paginate "repos/${REPO}/pulls/${PR_NUMBER}/files?per_page=100" --jq '.[] | ([.filename] + (if .previous_filename then [.previous_filename] else [] end)) | @tsv'); then
+            docs_only=$(printf '%s\n%s\n' "$count" "$rows" | bash ci/codeql_docs_only.sh) || docs_only=false
           fi
           [ "$docs_only" = "true" ] || docs_only=false
           echo "docs_only=${docs_only}" >> "$GITHUB_OUTPUT"
@@ -71,7 +72,7 @@ jobs:
   analyze-docs-only:
     name: Analyze (docs only, no code changed)
     needs: changes
-    if: (!(github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) && (needs.changes.result == 'success' && needs.changes.outputs.docs_only == 'true')
+    if: (!(github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) && (github.event_name == 'pull_request' && needs.changes.result == 'success' && needs.changes.outputs.docs_only == 'true')
     runs-on: ubuntu-latest
     permissions:
       actions: read

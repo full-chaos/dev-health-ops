@@ -124,7 +124,7 @@ func TestWorkflowPathFiltersCodeQLDocsOnlyTwinAndGate(t *testing.T) {
 	}
 	twin := codeqlJob(t, "analyze-docs-only")
 	twinCond, _ := twin["if"].(string)
-	for _, want := range []string{"needs.changes.result == 'success'", "needs.changes.outputs.docs_only == 'true'"} {
+	for _, want := range []string{"github.event_name == 'pull_request' && needs.changes.result == 'success'", "needs.changes.outputs.docs_only == 'true'"} {
 		if !strings.Contains(twinCond, want) {
 			t.Errorf("analyze-docs-only.if lacks %q: %s", want, twinCond)
 		}
@@ -156,10 +156,10 @@ func TestWorkflowPathFiltersCodeQLDocsOnlyTwinAndGate(t *testing.T) {
 	t.Error("changes must check the classifier script out from the pull request base commit, so a pull request cannot change the script that judges it")
 }
 
-func runDocsOnlyClassifier(t *testing.T, paths string) string {
+func runDocsOnlyClassifier(t *testing.T, input string) string {
 	t.Helper()
 	cmd := exec.Command("bash", filepath.Join(repoRoot(t), "ci", "codeql_docs_only.sh"))
-	cmd.Stdin = strings.NewReader(paths)
+	cmd.Stdin = strings.NewReader(input)
 	out, err := cmd.Output()
 	if err != nil {
 		t.Fatalf("classifier failed: %v", err)
@@ -168,25 +168,36 @@ func runDocsOnlyClassifier(t *testing.T, paths string) string {
 }
 
 func TestCodeQLDocsOnlyClassifier(t *testing.T) {
+	many := "3001\n" + strings.Repeat("docs/a.md\n", 3001)
 	cases := []struct {
 		name  string
-		paths string
+		input string
 		want  string
 	}{
-		{"markdown at the root (the 10950 shape)", "ci/bigboy/README.md\n", "true"},
-		{"every docs pattern", "docs/a/b.png\ndocs-data/x.json\nREADME.md\n.github/docs-legacy/x.yml\nmkdocs.yml\n", "true"},
-		{"mixed docs and code runs the real scan", "docs/a.md\ninternal/x.go\n", "false"},
-		{"a workflow file is code", "docs/a.md\n.github/workflows/codeql-analysis.yml\n", "false"},
-		{"the classifier script is code", "ci/codeql_docs_only.sh\n", "false"},
-		{"nested mkdocs.yml is not the root file", "sub/mkdocs.yml\n", "false"},
-		{"a docs lookalike directory", "docsx/a.txt\n", "false"},
-		{"a rename from code into docs, source listed", "internal/x.go\ndocs/x.md\n", "false"},
-		{"empty list", "", "false"},
-		{"a blank line", "docs/a.md\n\n", "false"},
-		{"no trailing newline", "docs/a.md", "true"},
+		{"markdown at the root (the 10950 shape)", "1\nci/bigboy/README.md\n", "true"},
+		{"every docs pattern", "5\ndocs/a/b.png\ndocs-data/x.json\nREADME.md\n.github/docs-legacy/x.yml\nmkdocs.yml\n", "true"},
+		{"a docs rename inside docs", "1\ndocs/new.md\tdocs/old.md\n", "true"},
+		{"mixed docs and code runs the real scan", "2\ndocs/a.md\ninternal/x.go\n", "false"},
+		{"a rename from code into docs: the source is code", "1\ndocs/x.md\tinternal/x.go\n", "false"},
+		{"a rename from docs into code", "1\ninternal/x.go\tdocs/x.md\n", "false"},
+		{"a workflow file is code", "2\ndocs/a.md\n.github/workflows/codeql-analysis.yml\n", "false"},
+		{"the classifier script is code", "1\nci/codeql_docs_only.sh\n", "false"},
+		{"nested mkdocs.yml is not the root file", "1\nsub/mkdocs.yml\n", "false"},
+		{"a docs lookalike directory", "1\ndocsx/a.txt\n", "false"},
+		{"truncation: fewer rows than changed_files", "3\ndocs/a.md\ndocs/b.md\n", "false"},
+		{"truncation: more rows than changed_files", "1\ndocs/a.md\ndocs/b.md\n", "false"},
+		{"over the 3000 file API cap", many, "false"},
+		{"exactly at the cap needs matching rows", "3000\n" + strings.Repeat("docs/a.md\n", 3000), "true"},
+		{"no files", "0\n", "false"},
+		{"count missing", "docs/a.md\n", "false"},
+		{"count not a number", "x\ndocs/a.md\n", "false"},
+		{"count with leading sign", "+1\ndocs/a.md\n", "false"},
+		{"empty input", "", "false"},
+		{"a blank row", "2\ndocs/a.md\n\n", "false"},
+		{"no trailing newline", "1\ndocs/a.md", "true"},
 	}
 	for _, c := range cases {
-		if got := runDocsOnlyClassifier(t, c.paths); got != c.want {
+		if got := runDocsOnlyClassifier(t, c.input); got != c.want {
 			t.Errorf("%s: classifier = %q, want %q", c.name, got, c.want)
 		}
 	}

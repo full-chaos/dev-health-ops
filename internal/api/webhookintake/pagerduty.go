@@ -18,7 +18,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/licensing"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
-	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -26,8 +25,11 @@ import (
 )
 
 const (
-	maxWebhookBodyBytes          = 1_048_576
-	maxSignatureCandidates       = 8
+	maxWebhookBodyBytes    = 1_048_576
+	maxSignatureCandidates = 8
+	// maxStoredSecretBytes bounds the stored ciphertext a delivery decrypts: a
+	// signing secret is a few hundred bytes, so a larger value is not usable.
+	maxStoredSecretBytes         = 1024
 	replayRetentionSeconds       = 30 * 24 * 60 * 60
 	pendingReplayClaimTTLSeconds = 5 * 60
 	canonicalIncidentFeatureKey  = "canonical_incident_ingestion"
@@ -487,6 +489,8 @@ func (d Deps) handlePagerDutyWebhook() http.HandlerFunc {
 				d.logger().Error("pagerduty_webhook load binding failed", "binding_id", canonicalBindingID, "error", err)
 				policy.WriteDetail(w, http.StatusInternalServerError, "webhook store is unavailable", nil)
 				return
+			case len(found.SigningSecretEncrypted) > maxStoredSecretBytes:
+				refusal = refusalBindingUnavailable
 			case subscriptionHeader == "":
 				refusal = refusalSubscriptionMissing
 			case found.ID != canonicalBindingID || subscriptionHeader != found.ProviderSubscriptionID:
@@ -501,11 +505,12 @@ func (d Deps) handlePagerDutyWebhook() http.HandlerFunc {
 			return
 		}
 		if refusal != "" {
+			d.mirrorDecrypt()
 			mirrorSignatureWork(body, r.Header.Get("X-PagerDuty-Signature"))
 			refusePagerDuty(w, r, d.logger(), refusal)
 			return
 		}
-		secretBytes, err := d.Decryptor.Decrypt(secrets.NewValue(binding.SigningSecretEncrypted))
+		secretBytes, err := d.decryptStored(binding.SigningSecretEncrypted)
 		if err != nil {
 			d.logger().Error("pagerduty_webhook decrypt binding secret failed", "binding_id", canonicalBindingID, "error", err)
 			policy.WriteDetail(w, http.StatusInternalServerError, "webhook store is unavailable", nil)

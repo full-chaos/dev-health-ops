@@ -60,6 +60,7 @@ func TestEveryStatusTheStackAnswersIsAnOpenAPIResponse(t *testing.T) {
 		authconfig.EnvAPIAddress:             "127.0.0.1:0",
 		authconfig.EnvOperatorAddress:        "127.0.0.1:1",
 		authconfig.EnvSocialLinkRoutes:       "true",
+		authconfig.EnvTokenIssuerURL:         wellKnownIssuer,
 	}))})
 	if err != nil {
 		t.Fatalf("load config: %v", err)
@@ -166,6 +167,69 @@ func TestEveryStatusTheStackAnswersIsAnOpenAPIResponse(t *testing.T) {
 				t.Errorf("%s %s: the probes reached only %v: they did not exercise the stack", method, path, statuses)
 			}
 			t.Logf("%s %s answered %v", method, path, statuses)
+		}
+	}
+}
+
+// TestTheWellKnownRoutesAnswerTheirDeclaredSuccessStatuses drives the JWKS and
+// the discovery document through the API handler configure builds over a real
+// key set: 200 without a validator, 304 with the ETag it returned, on GET and
+// HEAD. Both must be responses the operation declares, and removing either from
+// the declared responses must be reported (a gate that observes only the
+// failure paths cannot see an undeclared success).
+func TestTheWellKnownRoutesAnswerTheirDeclaredSuccessStatuses(t *testing.T) {
+	api := wellKnownHandler(t, wellKnownTestIssuer)
+	raw, err := os.ReadFile("../../../contracts/auth/v1/openapi/auth-v1.openapi.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document struct {
+		Paths map[string]map[string]struct {
+			Responses map[string]any `json:"responses"`
+		} `json:"paths"`
+	}
+	if err := json.Unmarshal(raw, &document); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"/.well-known/jwks.json", "/.well-known/openid-configuration"} {
+		for _, method := range []string{http.MethodGet, http.MethodHead} {
+			operation, ok := document.Paths[path][strings.ToLower(method)]
+			if !ok {
+				t.Fatalf("the OpenAPI document has no %s %s", method, path)
+			}
+			observed := map[int]bool{}
+			first := httptest.NewRecorder()
+			api.ServeHTTP(first, httptest.NewRequest(method, path, nil))
+			observed[first.Code] = true
+			etag := first.Header().Get("ETag")
+			if first.Code != http.StatusOK || etag == "" {
+				t.Fatalf("%s %s answered %d with ETag %q: the probe is not serving a real key set", method, path, first.Code, etag)
+			}
+			if method == http.MethodHead && first.Body.Len() != 0 {
+				t.Errorf("HEAD %s carried %d body bytes", path, first.Body.Len())
+			}
+			conditional := httptest.NewRequest(method, path, nil)
+			conditional.Header.Set("If-None-Match", etag)
+			second := httptest.NewRecorder()
+			api.ServeHTTP(second, conditional)
+			observed[second.Code] = true
+			if second.Code != http.StatusNotModified {
+				t.Fatalf("%s %s with a matching If-None-Match answered %d, want 304", method, path, second.Code)
+			}
+			for _, problem := range undeclaredStatuses(method+" "+path, observed, operation.Responses) {
+				t.Error(problem)
+			}
+			for _, status := range []string{"200", "304"} {
+				planted := map[string]any{}
+				for declared, response := range operation.Responses {
+					if declared != status {
+						planted[declared] = response
+					}
+				}
+				if len(undeclaredStatuses(method+" "+path, observed, planted)) == 0 {
+					t.Errorf("%s %s: with %s removed from the declared responses the gate reported nothing", method, path, status)
+				}
+			}
 		}
 	}
 }

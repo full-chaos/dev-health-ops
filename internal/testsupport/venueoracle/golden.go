@@ -553,6 +553,17 @@ func (g *Golden) InspectRows(t *testing.T, name string) string {
 	return value
 }
 
+// ProjectRows is goRows projected as CompareRows projects them, for a test that
+// classifies the differences from InspectRows itself.
+func (g *Golden) ProjectRows(t *testing.T, name string, goRows string) string {
+	t.Helper()
+	projected, err := g.project("", "rows "+name, goRows)
+	if err != nil {
+		t.Fatalf("golden %s: row projection %q: %v", g.spec.Path, name, err)
+	}
+	return projected
+}
+
 func (g *Golden) snapshot(t *testing.T, call, name string) string {
 	t.Helper()
 	g.step(t, call, statePython, stateDiffed)

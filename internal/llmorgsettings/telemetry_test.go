@@ -7,7 +7,29 @@ import (
 	"testing"
 
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
+
+func orgLabelOnCounter(t *testing.T, name string) bool {
+	t.Helper()
+	var rm metricdata.ResourceMetrics
+	if err := realMeterReader.Collect(context.Background(), &rm); err != nil {
+		t.Fatalf("reader.Collect error = %v", err)
+	}
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			if data, ok := m.Data.(metricdata.Sum[int64]); ok && m.Name == name {
+				for _, dp := range data.DataPoints {
+					if _, has := dp.Attributes.Value("org_id"); has {
+						return true
+					}
+				}
+			}
+		}
+	}
+	return false
+}
 
 // capturingLogHandler captures slog records whole rather than as rendered
 // text -- asserting on formatted output would pin the handler, not the
@@ -86,11 +108,31 @@ func counterValue(t *testing.T, name, orgAttr string) (int64, bool) {
 // slog handler are the sinks here.
 func TestDefaultRecordDecryptFailure_RecordsToRealMeterAndLog(t *testing.T) {
 	logs := captureLogs(t)
-	before, _ := counterValue(t, "devhealth_llmorgsettings_decrypt_failure_total", "org-record-test")
+	before, _ := counterValue(t, "devhealth_llmorgsettings_decrypt_failure_total", "")
+	spans := tracetest.NewInMemoryExporter()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSyncer(spans))
+	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
+	ctx, span := provider.Tracer("llmorgsettings-test").Start(context.Background(), "decrypt")
 
-	defaultRecordDecryptFailure(context.Background(), "org-record-test")
+	defaultRecordDecryptFailure(ctx, "org-record-test")
+	span.End()
 
-	after, ok := counterValue(t, "devhealth_llmorgsettings_decrypt_failure_total", "org-record-test")
+	if orgLabelOnCounter(t, "devhealth_llmorgsettings_decrypt_failure_total") {
+		t.Error("the decrypt failure counter carries an org_id label: one series per tenant")
+	}
+	spanHasOrg := false
+	for _, exported := range spans.GetSpans() {
+		for _, kv := range exported.Attributes {
+			if string(kv.Key) == "org_id" && kv.Value.AsString() == "org-record-test" {
+				spanHasOrg = true
+			}
+		}
+	}
+	if !spanHasOrg {
+		t.Error("the span lacks the org_id attribute that replaced the metric label")
+	}
+
+	after, ok := counterValue(t, "devhealth_llmorgsettings_decrypt_failure_total", "")
 	if !ok {
 		t.Fatal("devhealth_llmorgsettings_decrypt_failure_total was never emitted to the real meter")
 	}

@@ -29,6 +29,7 @@ const (
 	proofWebhooks  = "internal/api/webhookintake/user_tokens_refused_test.go"
 	proofMCP       = "internal/queryapi/server/user_tokens_refused_test.go"
 	proofIssue     = "internal/auth/authapi/issue_user_tokens_test.go"
+	proofRefresh   = "internal/auth/authapi/refresh_user_tokens_test.go"
 	pushRoutes     = "TestExternalPushAuthenticatedRoutesRefuseUserTokens"
 	legacyTest     = "TestLegacyIngestRefusesUserTokens"
 	acrTest        = "TestInternalACRRoutesRefuseUserTokens"
@@ -37,8 +38,7 @@ const (
 	mcpTest        = "TestMCPRefusesUserTokensAsAuthorization"
 	buildInfoTest  = "TestBuildInfoRefusesUserTokens"
 	issueTest      = "TestIssueSessionRefusesUserTokens"
-	exemptRefresh  = "the route's credential IS the user's own refresh credential, presented by design; it is a user flow, outside this leaf (workload, External Push, webhook paths)"
-	exemptPublic   = "pending the schema-route ruling: the handler performs no credential check (public schema discovery, rate limited by address only); a user token changes nothing, which TestExternalPushSchemaDiscoveryIgnoresUserTokens proves (answer byte-identical to the anonymous one, no lookup)"
+	refreshTest    = "TestRefreshRowsRefuseUserTokens"
 	exemptExchange = "the credential is the social provider's own token in the request body, sent to the provider; no bearer of ours is read; a user flow, outside this leaf"
 )
 
@@ -53,8 +53,6 @@ var negativeProofs = map[string]negativeProof{
 	"go-api|GET /api/v1/external-ingest/batches/{ingestion_id} [dev-health-ops-api @api]":     {file: proofPush, test: pushRoutes},
 	"go-api|POST /api/v1/external-ingest/batches [dev-health-ops-api @api]":                   {file: proofPush, test: pushRoutes},
 	"go-api|POST /api/v1/external-ingest/validate [dev-health-ops-api @api]":                  {file: proofPush, test: pushRoutes},
-	"go-api|GET /api/v1/external-ingest/schemas [dev-health-ops-api @api]":                    {exempt: exemptPublic},
-	"go-api|GET /api/v1/external-ingest/schemas/{schema_version} [dev-health-ops-api @api]":   {exempt: exemptPublic},
 	"go-api|GET /api/v1/internal/acr/entitlements/{org_id} [dev-health-ops-api @internal]":    {file: proofACR, test: acrTest},
 	"go-api|GET /api/v1/internal/acr/health [dev-health-ops-api @internal]":                   {file: proofACR, test: acrTest},
 	"go-api|GET /api/v1/internal/acr/orgs/{org_id}/llm-config [dev-health-ops-api @internal]": {file: proofACR, test: acrTest},
@@ -67,15 +65,13 @@ var negativeProofs = map[string]negativeProof{
 	"go-api|POST /api/v1/ingest/telemetry [dev-health-ops-api @api]":                          {file: proofLegacy, test: legacyTest},
 	"go-api|POST /api/v1/ingest/work-items [dev-health-ops-api @api]":                         {file: proofLegacy, test: legacyTest},
 	"go-api|POST /api/v1/webhooks/github [dev-health-ops-api @api]":                           {file: proofWebhooks, test: webhookTest},
-	"go-api|POST /api/v1/webhooks/gitlab [dev-health-ops-api @api]":                           {file: proofWebhooks, test: webhookTest},
-	"go-api|POST /api/v1/webhooks/jira [dev-health-ops-api @api]":                             {file: proofWebhooks, test: webhookTest},
 	"go-api|POST /api/v1/webhooks/pagerduty/{binding_id} [dev-health-ops-api @api]":           {file: proofWebhooks, test: webhookTest},
 	"query-api|GET /buildinfo [dev-health-query-api @query,internal]":                         {file: proofMCP, test: buildInfoTest},
 	"query-api|POST /query [dev-health-query-api @mcp]":                                       {file: proofMCP, test: mcpTest},
 	"auth-service|POST /internal/v1/sessions [dev-health-auth-service @api]":                  {file: proofIssue, test: issueTest},
-	"auth-service|POST /v1/token/refresh [dev-health-auth-service @api]":                      {exempt: exemptRefresh},
-	"auth-service|POST /api/v1/auth/refresh [dev-health-auth-service @api]":                   {exempt: exemptRefresh},
-	"auth-service|POST /api/v1/auth/logout [dev-health-auth-service @api]":                    {exempt: exemptRefresh},
+	"auth-service|POST /v1/token/refresh [dev-health-auth-service @api]":                      {file: proofRefresh, test: refreshTest},
+	"auth-service|POST /api/v1/auth/refresh [dev-health-auth-service @api]":                   {file: proofRefresh, test: refreshTest},
+	"auth-service|POST /api/v1/auth/logout [dev-health-auth-service @api]":                    {file: proofRefresh, test: refreshTest},
 	"auth-service|POST /api/v1/auth/social-login [dev-health-auth-service @api]":              {exempt: exemptExchange},
 }
 
@@ -178,7 +174,7 @@ func TestEveryNegativeProofNamesARealTestThatSendsUserTokens(t *testing.T) {
 	}
 }
 
-// The census: 29 derived rows = 23 proven + 6 exempt. A change to either count is a decision, made here.
+// The census: 25 derived rows = 24 proven + 1 exempt. A change to either count is a decision, made here.
 func TestNegativeProofCensus(t *testing.T) {
 	proven, exempt := 0, 0
 	for _, proof := range negativeProofs {
@@ -188,7 +184,7 @@ func TestNegativeProofCensus(t *testing.T) {
 			proven++
 		}
 	}
-	if len(derivedRows(t)) != 29 || proven != 23 || exempt != 6 {
-		t.Fatalf("derived %d rows, %d proven, %d exempt; want 29, 23, 6", len(derivedRows(t)), proven, exempt)
+	if len(derivedRows(t)) != 25 || proven != 24 || exempt != 1 {
+		t.Fatalf("derived %d rows, %d proven, %d exempt; want 25, 24, 1", len(derivedRows(t)), proven, exempt)
 	}
 }

@@ -13,6 +13,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/api/usersowned"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
@@ -23,6 +24,10 @@ const socialProviderPattern = "^(github|gitlab|google)$"
 // where the route uses it (a non-str email, id, username or name reaching
 // .lower() or a text column): an unhandled exception, the bare 500.
 var errProviderValueType = errors.New("session: provider profile value has an unusable type")
+
+// providerEmailUnverified is the one answer to a profile without a verified e-mail, whether or not an
+// account holds that e-mail.
+const providerEmailUnverified = "The provider has not verified this email address"
 
 // providerText is a provider value used as text: nil stays nil, a str is
 // itself, anything else is errProviderValueType.
@@ -35,6 +40,10 @@ func providerText(value pyjson.Value) (*string, error) {
 	}
 	return nil, errProviderValueType
 }
+
+// socialAccountExists is the 409 for an e-mail another account holds; it names
+// no sign-in method.
+const socialAccountExists = "An account with this email already exists. Please sign in with your existing sign-in method."
 
 // socialLogin is POST /api/v1/auth/social-login (oauth.py).
 func (h handlers) socialLogin(w http.ResponseWriter, r *http.Request) {
@@ -69,6 +78,10 @@ func (h handlers) socialLogin(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case errors.As(err, &userInfoErr):
 		h.Logger.WarnContext(ctx, "social login user info fetch failed", "provider", provider, "reason", userInfoErr.Reason)
+		if userInfoErr.Reason == oauthprovider.ReasonNoVerifiedEmail {
+			refuse(w, http.StatusForbidden, providerEmailUnverified)
+			return
+		}
 		refuse(w, http.StatusUnauthorized, "Invalid or expired provider token")
 		return
 	case err != nil:
@@ -95,6 +108,10 @@ func (h handlers) socialLogin(w http.ResponseWriter, r *http.Request) {
 	isNewUser := false
 	var email string
 	if user == nil {
+		if !info.EmailVerified {
+			refuse(w, http.StatusForbidden, providerEmailUnverified)
+			return
+		}
 		if email, ok = info.Email.(string); !ok {
 			h.fail(w, r, "provider email", errProviderValueType)
 			return
@@ -104,32 +121,16 @@ func (h handlers) socialLogin(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if user != nil {
-			existing := "None"
-			if user.AuthProvider != nil {
-				existing = *user.AuthProvider
-			}
-			switch {
-			case existing == "local":
-			case existing == provider:
-				if user.AuthProviderID == nil || *user.AuthProviderID != providerUserID {
-					if _, err := tx.Exec(ctx, `UPDATE users SET auth_provider_id = $2, updated_at = $3 WHERE id = $1::uuid`,
-						user.ID, providerUserID, h.Now().UTC()); err != nil {
-						h.fail(w, r, "update provider id", err)
-						return
-					}
-					user.AuthProviderID = &providerUserID
-				}
-			default:
-				detail := pyjson.NewObject()
-				detail.Set("message", "An account with this email already exists. Please sign in with "+existing+".")
-				detail.Set("existing_provider", existing)
-				policy.WriteDetail(w, http.StatusConflict, detail, nil)
-				return
-			}
+			refuse(w, http.StatusConflict, socialAccountExists)
+			return
 		}
 	}
 	if user == nil {
 		created, err := h.createSocialUser(ctx, tx, info, email, provider, providerUserID)
+		if errors.Is(err, usersowned.ErrRefused) {
+			usersowned.Write(w)
+			return
+		}
 		if err != nil {
 			h.fail(w, r, "create user", err)
 			return
@@ -187,6 +188,9 @@ func (h handlers) socialLogin(w http.ResponseWriter, r *http.Request) {
 // createSocialUser inserts the new user oauth.py builds: verified, no
 // password, every other column at the model default.
 func (h handlers) createSocialUser(ctx context.Context, tx pgx.Tx, info *oauthprovider.UserInfo, email, provider, providerUserID string) (*userRow, error) {
+	if err := h.refuseWhileUsersOwnedErr(); err != nil {
+		return nil, err
+	}
 	username, err := providerText(info.Username)
 	if err != nil {
 		return nil, err

@@ -34,6 +34,9 @@ type filesChunkFake struct {
 	// treeStatus answers a tree read of that sha with a bare status instead.
 	treeStatus map[string]int
 
+	// walk, when set, serves every tree read (a directory hierarchy).
+	walk *walkTreeFake
+
 	graphql  []filesChunkRequest
 	treeGets []string
 }
@@ -56,6 +59,10 @@ func (fake *filesChunkFake) Do(request *http.Request) (*http.Response, error) {
 		body = `[{"sha":"` + fake.head + `"}]`
 	case strings.HasPrefix(request.URL.Path, "/repos/acme/api/git/trees/"):
 		sha := strings.TrimPrefix(request.URL.Path, "/repos/acme/api/git/trees/")
+		if fake.walk != nil {
+			fake.treeGets = append(fake.treeGets, sha+"?"+request.URL.RawQuery)
+			return fake.walk.Do(request)
+		}
 		if status, forced := fake.treeStatus[sha]; forced {
 			return &http.Response{StatusCode: status, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"message":"forced"}`)), Request: request}, nil
 		}

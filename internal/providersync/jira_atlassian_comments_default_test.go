@@ -203,11 +203,11 @@ func (doer *jiraBudgetDoer) Do(request *http.Request) (*http.Response, error) {
 			items = append(items, fmt.Sprintf(`{"id":"%d","key":"OPS-%d","self":"https://acme.atlassian.net/rest/api/3/issue/OPS-%d","fields":{"project":{"key":"OPS","id":"10001","name":"Operations"},"summary":"Issue %d","status":{"name":"Done","statusCategory":{"key":"done"}},"issuetype":{"name":"Task"},"labels":[],"created":"2026-08-01T08:00:00Z","updated":"2026-08-02T09:00:00Z","resolutiondate":"2026-08-02T08:30:00Z"}}`, 20000+index, index, index, index))
 		}
 		return respond(`{"issues":[` + strings.Join(items, ",") + `],"isLast":true}`)
-	case strings.HasSuffix(path, "/changelog"):
+	case path == "/rest/api/3/changelog/bulkfetch":
 		if err := jiraSleep(request.Context(), doer.changelogDelay); err != nil {
 			return nil, err
 		}
-		return respond(`{"values":[],"total":0,"isLast":true}`)
+		return respond(`{"issueChangeLogs":[],"nextPageToken":null}`)
 	case strings.HasSuffix(path, "/worklog"):
 		doer.worklogs++
 		if strings.Contains(path, "/"+doer.slowWorklog+"/") {

@@ -3,6 +3,7 @@ package queuecreds_test
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -363,6 +364,53 @@ func TestDomainTypeRefusesCredentialShapedValues(t *testing.T) {
 		}
 		if _, err := jobcontract.Decode(jobcontract.KindHeartbeat, envelope); err == nil {
 			t.Errorf("Decode accepted domain.type %q", domainType)
+		}
+	}
+}
+
+// Every envelope string the schema leaves free-form is bound at decode time by
+// the runtime value guard: Decode refuses each known credential shape in each of
+// them, so no string is pinned as free text any more.
+func TestEveryRuntimeBoundStringRefusesCredentialShapedValues(t *testing.T) {
+	root := repoRoot(t)
+	data, err := os.ReadFile(filepath.Join(root, "contracts", "auth", "v1", "credential-classes.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	probes, err := queuecreds.CredentialProbes(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(queuecreds.FreeTextIdentifiers) != 0 {
+		t.Fatalf("free-text envelope strings remain: %q", queuecreds.FreeTextIdentifiers)
+	}
+	places := map[string]func(document map[string]any, value string){
+		"envelope.schema.json $.properties.correlation_id":         func(d map[string]any, v string) { d["correlation_id"] = v },
+		"envelope.schema.json $.properties.idempotency_key":        func(d map[string]any, v string) { d["idempotency_key"] = v },
+		"envelope.schema.json $.properties.domain.properties.type": func(d map[string]any, v string) { d["domain"].(map[string]any)["type"] = v },
+	}
+	if len(places) != len(queuecreds.RuntimeBoundStrings) {
+		t.Fatalf("%d strings exercised, %d pinned", len(places), len(queuecreds.RuntimeBoundStrings))
+	}
+	for _, pinned := range queuecreds.RuntimeBoundStrings {
+		place, ok := places[pinned]
+		if !ok {
+			t.Fatalf("pinned string %q has no refusal check", pinned)
+		}
+		for _, probe := range probes {
+			document := map[string]any{
+				"contract_version": 1, "correlation_id": "job-heartbeat-0001", "idempotency_key": "heartbeat:2026-07-21T12:00:00Z",
+				"domain":  map[string]any{"type": "schedule_occurrence", "id": "00000000-0000-4000-8000-000000000001"},
+				"payload": map[string]any{"scheduled_for": "2026-07-21T12:00:00Z"},
+			}
+			place(document, probe)
+			encoded, err := json.Marshal(document)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := jobcontract.Decode(jobcontract.KindHeartbeat, encoded); !errors.Is(err, jobcontract.ErrCredentialShapedValue) {
+				t.Errorf("%s: Decode error = %v, want the value refusal", pinned, err)
+			}
 		}
 	}
 }

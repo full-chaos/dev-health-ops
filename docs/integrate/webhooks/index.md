@@ -17,4 +17,4 @@ Provider webhooks notify the managed synchronization path. They are not Customer
 - [Verify signatures](verify-signatures.md)
 - [Handle retries and replay](retries-and-replay.md)
 
-Current provider routes include `/api/v1/webhooks/github`, `/api/v1/webhooks/gitlab`, and `/api/v1/webhooks/jira`. SaaS billing webhooks are an operator/billing concern and are not part of this integration guide.
+Current provider routes are `/api/v1/webhooks/github` and `/api/v1/webhooks/pagerduty/{binding_id}`. GitLab and Jira have no webhook route; use the Customer Push API or the supported provider connection for them. SaaS billing webhooks are an operator/billing concern and are not part of this integration guide.

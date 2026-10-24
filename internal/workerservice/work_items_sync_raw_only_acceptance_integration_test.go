@@ -236,6 +236,34 @@ func rawOnlyStoredVersions(ctx context.Context, t *testing.T, conn driver.Conn, 
 	return counts
 }
 
+// rawOnlyReadableState is, for each of the derived tables, the number of FINAL
+// rows of the organization and the sum of a hash of every such row.
+func rawOnlyReadableState(ctx context.Context, t *testing.T, conn driver.Conn, orgID string) map[string]string {
+	t.Helper()
+	state := map[string]string{}
+	for _, table := range rawOnlyDerivedTables {
+		if rawOnlyDroppedTables[table] {
+			continue
+		}
+		// FINAL is read only for a table that collapses versions; a plain MergeTree
+		// refuses it and a merge never removes one of its rows.
+		var engine string
+		if err := conn.QueryRow(ctx, `SELECT engine FROM system.tables WHERE database = currentDatabase() AND name = ?`, table).Scan(&engine); err != nil {
+			t.Fatalf("read the engine of %s: %v", table, err)
+		}
+		final := ""
+		if strings.Contains(engine, "Replacing") {
+			final = " FINAL"
+		}
+		var count, hash uint64
+		if err := conn.QueryRow(ctx, `SELECT count(), sum(cityHash64(toString(tuple(*)))) FROM `+table+final+` WHERE org_id = ?`, orgID).Scan(&count, &hash); err != nil {
+			t.Fatalf("read the state of %s: %v", table, err)
+		}
+		state[table] = fmt.Sprintf("%d/%d", count, hash)
+	}
+	return state
+}
+
 func rawOnlyTotal(counts map[string]uint64) uint64 {
 	var total uint64
 	for _, count := range counts {
@@ -256,13 +284,13 @@ func rawOnlyDayValues(
 	statements := map[string]string{
 		"work_item_metrics_daily": `
 SELECT toUInt64(sum(v)) FROM (SELECT argMax(items_completed, computed_at) AS v FROM work_item_metrics_daily
-WHERE org_id = ? AND provider = ? AND day = toDate(?) GROUP BY work_scope_id, team_id)`,
+WHERE org_id = ? AND provider = ? AND day = toDate(?) AND row_view IN ('', 'org') GROUP BY work_scope_id, team_id, row_view)`,
 		"work_item_user_metrics_daily": `
 SELECT toUInt64(sum(v)) FROM (SELECT argMax(items_completed, computed_at) AS v FROM work_item_user_metrics_daily
-WHERE org_id = ? AND provider = ? AND day = toDate(?) GROUP BY work_scope_id, user_identity)`,
+WHERE org_id = ? AND provider = ? AND day = toDate(?) AND row_view IN ('', 'org') GROUP BY work_scope_id, user_identity, row_view)`,
 		"work_item_state_durations_daily": `
 SELECT toUInt64(max(v)) FROM (SELECT argMax(items_touched, computed_at) AS v FROM work_item_state_durations_daily
-WHERE org_id = ? AND provider = ? AND day = toDate(?) GROUP BY work_scope_id, team_id, status)`,
+WHERE org_id = ? AND provider = ? AND day = toDate(?) AND row_view IN ('', 'org') GROUP BY work_scope_id, team_id, status, row_view)`,
 		"work_item_cycle_times": `
 SELECT toUInt64(count()) FROM (SELECT work_item_id FROM work_item_cycle_times
 WHERE org_id = ? AND provider = ? AND day = toDate(?) GROUP BY work_item_id)`,
@@ -448,12 +476,15 @@ func TestWorkItemsSyncWritesRawRowsOnlyAndTheDailyJobGivesTheWholeDay(t *testing
 		check(provider, "after unit 1 and the daily run of the day", rawOnlyDayValues(ctx, t, rig.conn, orgID, provider, day), whole)
 
 		// Unit 2: only the item of repository A, twenty days later.
-		before := rawOnlyStoredVersions(ctx, t, rig.conn, orgID)
+		before := rawOnlyReadableState(ctx, t, rig.conn, orgID)
 		secondClaim := rawOnlyClaim(t, provider, orgID, uuid.NewString(), laterDay.Add(5*time.Hour), laterDay.Add(6*time.Hour))
 		writeRawOnlyUnit(ctx, t, sink, secondClaim, []rawOnlyItem{inA}, laterDay.Add(6*time.Hour+time.Minute))
 		assertRawOnlySinkRefusesDerivedTables(ctx, t, sink, secondClaim)
-		if after := rawOnlyStoredVersions(ctx, t, rig.conn, orgID); fmt.Sprint(after) != fmt.Sprint(before) {
-			t.Fatalf("%s: stored derived row versions changed with unit 2 and no daily run\n before %v\n after  %v", provider, before, after)
+		// The state a reader sees (the FINAL rows) is compared, with a hash of each
+		// row: a background merge never changes it, and any write of a derived
+		// row that a reader could see does.
+		if after := rawOnlyReadableState(ctx, t, rig.conn, orgID); fmt.Sprint(after) != fmt.Sprint(before) {
+			t.Fatalf("%s: the derived rows a reader sees changed with unit 2 and no daily run\n before %v\n after  %v", provider, before, after)
 		}
 		check(provider, "after unit 2 (only the item of repository A), before the daily run",
 			rawOnlyDayValues(ctx, t, rig.conn, orgID, provider, day), whole)
@@ -542,14 +573,14 @@ func TestFirstSyncMarksEveryWindowDayAndTheDailyJobFillsAQuietDayAndAnOldItem(t 
 		if err := rig.conn.QueryRow(ctx, `
 SELECT toUInt64(count()), sum(hours) FROM (SELECT argMax(duration_hours, computed_at) AS hours
 FROM work_item_state_durations_daily
-WHERE org_id = ? AND provider = ? AND day = toDate(?) AND status = 'in_progress' GROUP BY work_scope_id, team_id, status)`,
+WHERE org_id = ? AND provider = ? AND day = toDate(?) AND status = 'in_progress' AND row_view IN ('', 'org') GROUP BY work_scope_id, team_id, status, row_view)`,
 			orgID, provider, quiet.Format("2006-01-02")).Scan(&stateRows, &stateHours); err != nil {
 			t.Fatal(err)
 		}
 		var wip uint64
 		if err := rig.conn.QueryRow(ctx, `
 SELECT toUInt64(sum(v)) FROM (SELECT argMax(wip_count_end_of_day, computed_at) AS v FROM work_item_metrics_daily
-WHERE org_id = ? AND provider = ? AND day = toDate(?) GROUP BY work_scope_id, team_id)`,
+WHERE org_id = ? AND provider = ? AND day = toDate(?) AND row_view IN ('', 'org') GROUP BY work_scope_id, team_id, row_view)`,
 			orgID, provider, quiet.Format("2006-01-02")).Scan(&wip); err != nil {
 			t.Fatal(err)
 		}

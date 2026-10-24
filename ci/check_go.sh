@@ -47,6 +47,9 @@ DEV_HEALTH_GO_BUILD_OUTPUT=""
 DEV_HEALTH_GO_BUILD_TEMP_ROOT=""
 DEV_HEALTH_GO_INTEGRATION_SHARD_MANIFEST="${DEV_HEALTH_GO_INTEGRATION_SHARD_MANIFEST:-${ROOT}/ci/go_integration_shards.d}"
 DEV_HEALTH_GO_PROVIDER_TEST_SHARD_MANIFEST="${DEV_HEALTH_GO_PROVIDER_TEST_SHARD_MANIFEST:-${ROOT}/ci/go_providersync_test_shards.tsv}"
+DEV_HEALTH_GO_PROVIDER_TEST_WEIGHTS="${DEV_HEALTH_GO_PROVIDER_TEST_WEIGHTS:-${ROOT}/ci/go_providersync_test_weights.tsv}"
+# 75% of the 22 min go test -timeout of a providersync shard, in 10 ms units (1320 s * 0.75 = 990 s).
+DEV_HEALTH_GO_PROVIDER_SHARD_BUDGET="${DEV_HEALTH_GO_PROVIDER_SHARD_BUDGET:-99000}"
 DEV_HEALTH_GO_DAILY_TEST_SHARD_MANIFEST="${DEV_HEALTH_GO_DAILY_TEST_SHARD_MANIFEST:-${ROOT}/ci/go_daily_test_shards.tsv}"
 DEV_HEALTH_GO_WORKERSERVICE_TEST_SHARD_MANIFEST="${DEV_HEALTH_GO_WORKERSERVICE_TEST_SHARD_MANIFEST:-${ROOT}/ci/go_workerservice_test_shards.tsv}"
 DEV_HEALTH_GO_QAPISERVER_TEST_SHARD_MANIFEST="${DEV_HEALTH_GO_QAPISERVER_TEST_SHARD_MANIFEST:-${ROOT}/ci/go_queryapi_server_test_shards.tsv}"
@@ -654,15 +657,18 @@ race_weights_file_name() {
   fi
 }
 race_weights_rows() {
-  local f found=0
+  local f
+  local -a files=()
   shopt -s dotglob
   [ -d "${GO_RACE_WEIGHTS_DIR}" ] || die "race weights directory missing: ${GO_RACE_WEIGHTS_DIR}"
   for f in "${GO_RACE_WEIGHTS_DIR}"/*.tsv; do
     [ -f "${f}" ] || continue
-    found=1
-    grep -v '^\(#\|[[:space:]]*$\)' "${f}" || true
+    files+=("${f}")
   done
-  [ "${found}" -eq 1 ] || die "race weights directory holds no .tsv file: ${GO_RACE_WEIGHTS_DIR}"
+  [ "${#files[@]}" -gt 0 ] || die "race weights directory holds no .tsv file: ${GO_RACE_WEIGHTS_DIR}"
+  # One awk over every file (a grep per file launched one process per weights row file, ~870 per call).
+  # shellcheck disable=SC2016
+  printf '%s\0' "${files[@]}" | xargs -0 awk '!/^(#|[[:space:]]*$)/' || true
 }
 # CHAOS-10289: packages that run alone (ci/go_race_solo.tsv): left out of the weight-balanced split, run in their own
 # `go test -race` invocation after the shard's other packages, so no heavy co-tenant can starve them.
@@ -1571,6 +1577,7 @@ declare -a REMAINING_TEST_SHARD_COUNTS=()
 declare -A PROVIDER_INTEGRATION_TEST_NAMES=()
 declare -A PROVIDER_TEST_WEIGHTS=()
 declare -A PROVIDER_TEST_CLASS=()
+declare -A PROVIDER_MEASURED_WEIGHTS=()
 declare -A PROVIDER_TEST_SHARD_BY_NAME=()
 declare -a PROVIDER_TEST_NAMES=()
 declare -a PROVIDER_TEST_SHARD_TOTALS=()
@@ -1579,6 +1586,43 @@ declare -a PROVIDER_TEST_SHARD_INTEGRATION_COUNTS=()
 PROVIDER_TEST_SHARD_COUNT=0
 PROVIDER_INTEGRATION_TEST_WEIGHT=0
 PROVIDER_ORDINARY_TEST_WEIGHT=0
+
+# scan_listed_go_tests validates the test file names `go list` returned for one package directory, then reads every file
+# in ONE awk pass (a per-file grep + sed launched ~2300 processes per plan). It fills two globals keyed by source path:
+# SCAN_TAGGED (file carries an integration build constraint) and SCAN_TESTS (newline-separated top-level Test names,
+# file order). The names are validated before any file is read; the list goes through NUL-delimited xargs, not argv.
+scan_listed_go_tests() {
+  local label="$1" dir="$2" listed="$3" go_file kind path name
+  local -a paths=()
+  declare -gA SCAN_TAGGED=() SCAN_TESTS=()
+  while IFS= read -r go_file; do
+    [ -n "${go_file}" ] || continue
+    case "${go_file}" in
+      */*|..*) die "go list returned unsafe ${label} test filename '${go_file}'" ;;
+    esac
+    case "${go_file}" in
+      *[[:cntrl:]]*) die "go list returned unsafe ${label} test filename with a control byte: $(printf '%q' "${go_file}")" ;;
+    esac
+    [ -f "${dir}/${go_file}" ] || die "go list returned missing ${label} test file '${go_file}'"
+    paths+=("${dir}/${go_file}")
+  done <<<"${listed}"
+  [ "${#paths[@]}" -gt 0 ] || return 0
+  while IFS=$'\037' read -r kind path name; do
+    case "${kind}" in
+      I) SCAN_TAGGED["${path}"]=1 ;;
+      T) SCAN_TESTS["${path}"]+="${name}"$'\n' ;;
+    esac
+  done < <(
+    # shellcheck disable=SC2016 # the awk program is single-quoted on purpose
+    printf '%s\0' "${paths[@]}" | xargs -0 awk '
+      FNR == 1 { tagged = 0 }
+      !tagged && /^\/\/go:build.*(^|[^[:alnum:]_])integration([^[:alnum:]_]|$)/ { tagged = 1; printf "I\037%s\n", FILENAME }
+      /^func[[:space:]]+Test[A-Za-z0-9_]+[[:space:]]*\(/ {
+        s = $0; sub(/^func[[:space:]]+/, "", s); match(s, /^Test[A-Za-z0-9_]+/)
+        printf "T\037%s\037%s\n", FILENAME, substr(s, 1, RLENGTH)
+      }'
+  )
+}
 
 # discover_integration_packages populates parallel module/package arrays with
 # every module-relative "./pkg/dir" entry that has at least one tracked or
@@ -1607,7 +1651,7 @@ discover_integration_packages() {
       case "${go_file}" in
         vendor/*|*/vendor/*) continue ;;
       esac
-      dir="$(dirname -- "${go_file}")"
+      case "${go_file}" in */*) dir="${go_file%/*}" ;; *) dir="." ;; esac
       found+=("./${dir}")
     done < <(printf '%s\n' "${tracked_output}")
     while IFS= read -r -d '' go_file; do
@@ -1617,7 +1661,7 @@ discover_integration_packages() {
       esac
       if grep -qE '^//go:build.*(^|[^[:alnum:]_])integration([^[:alnum:]_]|$)' \
         "${ROOT}/${module_dir}/${go_file}"; then
-        dir="$(dirname -- "${go_file}")"
+        case "${go_file}" in */*) dir="${go_file%/*}" ;; *) dir="." ;; esac
         found+=("./${dir}")
       fi
     done < <(
@@ -1724,7 +1768,7 @@ load_integration_shard_manifest() {
   fi
 
   for file in "${files[@]}"; do
-    base="$(basename "${file}")"
+    base="${file##*/}"
     load_integration_shard_manifest_file "${file}" "${as_dir}" "${base}"
   done
 
@@ -1997,17 +2041,12 @@ discover_providersync_tests() {
 
   PROVIDER_TEST_NAMES=()
   PROVIDER_INTEGRATION_TEST_NAMES=()
+  scan_listed_go_tests 'providersync' "${ROOT}/${PROVIDER_INTEGRATION_PACKAGE_KEY}" "${files_output}"
   while IFS= read -r go_file; do
     [ -n "${go_file}" ] || continue
-    case "${go_file}" in
-      */*|..*) die "go list returned unsafe providersync test filename '${go_file}'" ;;
-    esac
     source_file="${ROOT}/${PROVIDER_INTEGRATION_PACKAGE_KEY}/${go_file}"
-    [ -f "${source_file}" ] \
-      || die "go list returned missing providersync test file '${go_file}'"
     integration_file=0
-    if grep -qE '^//go:build.*(^|[^[:alnum:]_])integration([^[:alnum:]_]|$)' \
-      "${source_file}"; then
+    if [ -n "${SCAN_TAGGED[${source_file}]+set}" ]; then
       integration_file=1
     fi
     while IFS= read -r test_name; do
@@ -2026,10 +2065,7 @@ discover_providersync_tests() {
       if [ "${integration_file}" -eq 1 ]; then
         PROVIDER_INTEGRATION_TEST_NAMES["${test_name}"]=1
       fi
-    done < <(
-      sed -nE 's/^func[[:space:]]+(Test[A-Za-z0-9_]+)[[:space:]]*\(.*/\1/p' \
-        "${source_file}"
-    )
+    done <<<"${SCAN_TESTS[${source_file}]-}"
   done < <(printf '%s\n' "${files_output}")
 
   mapfile -t PROVIDER_TEST_NAMES < <(printf '%s\n' "${PROVIDER_TEST_NAMES[@]}" | LC_ALL=C sort)
@@ -2040,6 +2076,7 @@ discover_providersync_tests() {
   [ "${#PROVIDER_INTEGRATION_TEST_NAMES[@]}" -gt 0 ] \
     || die "providersync source discovery returned zero integration-tagged top-level tests"
 
+  load_providersync_measured_weights
   PROVIDER_TEST_WEIGHTS=()
   PROVIDER_TEST_CLASS=()
   for test_name in "${PROVIDER_TEST_NAMES[@]}"; do
@@ -2050,7 +2087,54 @@ discover_providersync_tests() {
       PROVIDER_TEST_WEIGHTS["${test_name}"]="${PROVIDER_ORDINARY_TEST_WEIGHT}"
       PROVIDER_TEST_CLASS["${test_name}"]="ordinary"
     fi
+    if [ -n "${PROVIDER_MEASURED_WEIGHTS[${test_name}]+set}" ]; then
+      PROVIDER_TEST_WEIGHTS["${test_name}"]="${PROVIDER_MEASURED_WEIGHTS[${test_name}]}"
+    fi
   done
+  for test_name in "${!PROVIDER_MEASURED_WEIGHTS[@]}"; do
+    [ -n "${PROVIDER_TEST_CLASS[${test_name}]+set}" ] \
+      || die "providersync test weights name '${test_name}', which is not a discovered top-level test: remove or rename the row in ${DEV_HEALTH_GO_PROVIDER_TEST_WEIGHTS}"
+  done
+}
+
+# ci/go_providersync_test_weights.tsv: `TestName<TAB>seconds` measured per-test wall time of the slow tests (CHAOS-11105).
+# A listed test weighs its measured time in 10 ms units; an unlisted test keeps its class weight from the manifest.
+load_providersync_measured_weights() {
+  local weights="${DEV_HEALTH_GO_PROVIDER_TEST_WEIGHTS}"
+  local line_number=0 line name seconds centis tab=$'\t'
+  PROVIDER_MEASURED_WEIGHTS=()
+  [ -f "${weights}" ] || die "provider test weights file not found: ${weights}"
+  while IFS= read -r line || [ -n "${line}" ]; do
+    line_number=$((line_number + 1))
+    case "${line}" in
+      ""|\#*) continue ;;
+    esac
+    # Split by hand: `read` with a tab IFS collapses consecutive tabs, so an empty field would pass as a missing one.
+    case "${line}" in
+      *"${tab}"*) ;;
+      *) die "provider test weights ${weights}:${line_number} must contain exactly two tab-separated fields" ;;
+    esac
+    name="${line%%"${tab}"*}"
+    seconds="${line#*"${tab}"}"
+    case "${seconds}" in
+      *"${tab}"*) die "provider test weights ${weights}:${line_number} must contain exactly two tab-separated fields" ;;
+    esac
+    case "${name}" in
+      Test*[![:alnum:]_]*) die "provider test weights ${weights}:${line_number} has unsupported test name '${name}'" ;;
+      Test*) ;;
+      *) die "provider test weights ${weights}:${line_number} name '${name}' is not a top-level Test function" ;;
+    esac
+    [[ "${seconds}" =~ ^[0-9]+(\.[0-9]{1,2})?$ ]] \
+      || die "provider test weights ${weights}:${line_number} seconds '${seconds}' must be a positive number with at most two decimals"
+    centis="$(awk -v s="${seconds}" 'BEGIN { printf "%d", s * 100 + 0.5 }')"
+    [ "${centis}" -gt 0 ] || die "provider test weights ${weights}:${line_number} seconds must be positive"
+    [ -z "${PROVIDER_MEASURED_WEIGHTS[${name}]+set}" ] \
+      || die "provider test weights ${weights}:${line_number} lists '${name}' more than once"
+    PROVIDER_MEASURED_WEIGHTS["${name}"]="${centis}"
+    if [ "${centis}" -gt "${DEV_HEALTH_GO_PROVIDER_SHARD_BUDGET}" ]; then
+      die "providersync test '${name}' measures ${seconds} s, over the shard budget of $((DEV_HEALTH_GO_PROVIDER_SHARD_BUDGET / 100)) s (75% of the go test timeout); one test cannot be split, so speed it up"
+    fi
+  done < "${weights}"
 }
 
 # Deterministic longest-processing-time-first assignment balances the costly
@@ -2098,6 +2182,12 @@ plan_providersync_test_shards() {
       printf '%s\t%s\n' "${PROVIDER_TEST_WEIGHTS[${test_name}]}" "${test_name}"
     done | LC_ALL=C sort -t $'\t' -k1,1nr -k2,2
   )
+
+  for ((shard = 1; shard <= PROVIDER_TEST_SHARD_COUNT; shard++)); do
+    if [ "${PROVIDER_TEST_SHARD_TOTALS[${shard}]}" -gt "${DEV_HEALTH_GO_PROVIDER_SHARD_BUDGET}" ]; then
+      die "providersync test shard ${shard} plans $((PROVIDER_TEST_SHARD_TOTALS[shard] / 100)) s, over the shard budget of $((DEV_HEALTH_GO_PROVIDER_SHARD_BUDGET / 100)) s (75% of the 22 min go test timeout): raise the shard count in ${DEV_HEALTH_GO_PROVIDER_TEST_SHARD_MANIFEST} or refresh ${DEV_HEALTH_GO_PROVIDER_TEST_WEIGHTS}"
+    fi
+  done
 
   printf 'providersync test plan: %d shard(s), %d top-level test(s), %d integration-tagged\n' \
     "${PROVIDER_TEST_SHARD_COUNT}" \
@@ -2199,15 +2289,12 @@ discover_daily_tests() {
 
   DAILY_TEST_NAMES=()
   DAILY_INTEGRATION_TEST_NAMES=()
+  scan_listed_go_tests 'daily' "${ROOT}/${DAILY_INTEGRATION_PACKAGE_KEY}" "${files_output}"
   while IFS= read -r go_file; do
     [ -n "${go_file}" ] || continue
-    case "${go_file}" in
-      */*|..*) die "go list returned unsafe daily test filename '${go_file}'" ;;
-    esac
     source_file="${ROOT}/${DAILY_INTEGRATION_PACKAGE_KEY}/${go_file}"
-    [ -f "${source_file}" ] || die "go list returned missing daily test file '${go_file}'"
     integration_file=0
-    if grep -qE '^//go:build.*(^|[^[:alnum:]_])integration([^[:alnum:]_]|$)' "${source_file}"; then
+    if [ -n "${SCAN_TAGGED[${source_file}]+set}" ]; then
       integration_file=1
     fi
     while IFS= read -r test_name; do
@@ -2228,9 +2315,7 @@ discover_daily_tests() {
       if [ "${integration_file}" -eq 1 ]; then
         DAILY_INTEGRATION_TEST_NAMES["${test_name}"]=1
       fi
-    done < <(
-      sed -nE 's/^func[[:space:]]+(Test[A-Za-z0-9_]+)[[:space:]]*\(.*/\1/p' "${source_file}"
-    )
+    done <<<"${SCAN_TESTS[${source_file}]-}"
   done < <(printf '%s\n' "${files_output}")
 
   mapfile -t DAILY_TEST_NAMES < <(printf '%s\n' "${DAILY_TEST_NAMES[@]}" | LC_ALL=C sort)
@@ -2413,15 +2498,12 @@ discover_workerservice_tests() {
 
   WORKERSERVICE_TEST_NAMES=()
   WORKERSERVICE_INTEGRATION_TEST_NAMES=()
+  scan_listed_go_tests 'workerservice' "${ROOT}/${WORKERSERVICE_INTEGRATION_PACKAGE_KEY}" "${files_output}"
   while IFS= read -r go_file; do
     [ -n "${go_file}" ] || continue
-    case "${go_file}" in
-      */*|..*) die "go list returned unsafe workerservice test filename '${go_file}'" ;;
-    esac
     source_file="${ROOT}/${WORKERSERVICE_INTEGRATION_PACKAGE_KEY}/${go_file}"
-    [ -f "${source_file}" ] || die "go list returned missing workerservice test file '${go_file}'"
     integration_file=0
-    if grep -qE '^//go:build.*(^|[^[:alnum:]_])integration([^[:alnum:]_]|$)' "${source_file}"; then
+    if [ -n "${SCAN_TAGGED[${source_file}]+set}" ]; then
       integration_file=1
     fi
     while IFS= read -r test_name; do
@@ -2442,9 +2524,7 @@ discover_workerservice_tests() {
       if [ "${integration_file}" -eq 1 ]; then
         WORKERSERVICE_INTEGRATION_TEST_NAMES["${test_name}"]=1
       fi
-    done < <(
-      sed -nE 's/^func[[:space:]]+(Test[A-Za-z0-9_]+)[[:space:]]*\(.*/\1/p' "${source_file}"
-    )
+    done <<<"${SCAN_TESTS[${source_file}]-}"
   done < <(printf '%s\n' "${files_output}")
 
   mapfile -t WORKERSERVICE_TEST_NAMES < <(printf '%s\n' "${WORKERSERVICE_TEST_NAMES[@]}" | LC_ALL=C sort)
@@ -2627,15 +2707,12 @@ discover_queryapiserver_tests() {
 
   QAPISERVER_TEST_NAMES=()
   QAPISERVER_INTEGRATION_TEST_NAMES=()
+  scan_listed_go_tests 'queryapiserver' "${ROOT}/${QAPISERVER_INTEGRATION_PACKAGE_KEY}" "${files_output}"
   while IFS= read -r go_file; do
     [ -n "${go_file}" ] || continue
-    case "${go_file}" in
-      */*|..*) die "go list returned unsafe queryapiserver test filename '${go_file}'" ;;
-    esac
     source_file="${ROOT}/${QAPISERVER_INTEGRATION_PACKAGE_KEY}/${go_file}"
-    [ -f "${source_file}" ] || die "go list returned missing queryapiserver test file '${go_file}'"
     integration_file=0
-    if grep -qE '^//go:build.*(^|[^[:alnum:]_])integration([^[:alnum:]_]|$)' "${source_file}"; then
+    if [ -n "${SCAN_TAGGED[${source_file}]+set}" ]; then
       integration_file=1
     fi
     while IFS= read -r test_name; do
@@ -2656,9 +2733,7 @@ discover_queryapiserver_tests() {
       if [ "${integration_file}" -eq 1 ]; then
         QAPISERVER_INTEGRATION_TEST_NAMES["${test_name}"]=1
       fi
-    done < <(
-      sed -nE 's/^func[[:space:]]+(Test[A-Za-z0-9_]+)[[:space:]]*\(.*/\1/p' "${source_file}"
-    )
+    done <<<"${SCAN_TESTS[${source_file}]-}"
   done < <(printf '%s\n' "${files_output}")
 
   mapfile -t QAPISERVER_TEST_NAMES < <(printf '%s\n' "${QAPISERVER_TEST_NAMES[@]}" | LC_ALL=C sort)
@@ -2841,15 +2916,12 @@ discover_remaining_tests() {
 
   REMAINING_TEST_NAMES=()
   REMAINING_INTEGRATION_TEST_NAMES=()
+  scan_listed_go_tests 'remaining' "${ROOT}/${REMAINING_INTEGRATION_PACKAGE_KEY}" "${files_output}"
   while IFS= read -r go_file; do
     [ -n "${go_file}" ] || continue
-    case "${go_file}" in
-      */*|..*) die "go list returned unsafe remaining test filename '${go_file}'" ;;
-    esac
     source_file="${ROOT}/${REMAINING_INTEGRATION_PACKAGE_KEY}/${go_file}"
-    [ -f "${source_file}" ] || die "go list returned missing remaining test file '${go_file}'"
     integration_file=0
-    if grep -qE '^//go:build.*(^|[^[:alnum:]_])integration([^[:alnum:]_]|$)' "${source_file}"; then
+    if [ -n "${SCAN_TAGGED[${source_file}]+set}" ]; then
       integration_file=1
     fi
     while IFS= read -r test_name; do
@@ -2870,9 +2942,7 @@ discover_remaining_tests() {
       if [ "${integration_file}" -eq 1 ]; then
         REMAINING_INTEGRATION_TEST_NAMES["${test_name}"]=1
       fi
-    done < <(
-      sed -nE 's/^func[[:space:]]+(Test[A-Za-z0-9_]+)[[:space:]]*\(.*/\1/p' "${source_file}"
-    )
+    done <<<"${SCAN_TESTS[${source_file}]-}"
   done < <(printf '%s\n' "${files_output}")
 
   mapfile -t REMAINING_TEST_NAMES < <(printf '%s\n' "${REMAINING_TEST_NAMES[@]}" | LC_ALL=C sort)
@@ -3508,7 +3578,7 @@ AUTH_PACKAGES=(
   ./cmd/auth-service/...
   ./cmd/auth-migrate/...
   ./internal/auth/...
-  ./contracts/auth/v1/vocabulary/...
+  ./contracts/auth/v1/...
   ./internal/audit/...
   ./internal/storage/postgres/authschema/...
   ./internal/token/...

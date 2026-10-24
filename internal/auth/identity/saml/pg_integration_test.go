@@ -100,7 +100,7 @@ func newFixture(t *testing.T) (*fixture, error) {
 		return nil, err
 	}
 	dbClosers = append(dbClosers, func() { containers.DropRole(admin, role, func(string, ...any) {}) })
-	if _, err := authschema.Apply(ctx, admin, authschema.Options{Schema: "auth", RuntimeRole: role}); err != nil {
+	if _, err := authschema.Apply(ctx, admin, authschema.Options{Schema: "auth", RuntimeRole: role, UsersOwned: true}); err != nil {
 		return nil, fmt.Errorf("authschema.Apply: %w", err)
 	}
 	for _, stmt := range []string{fmt.Sprintf(runtimeGrants, authschema.Quote(ident))} {

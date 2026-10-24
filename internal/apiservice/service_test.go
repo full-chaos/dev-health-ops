@@ -111,8 +111,8 @@ func TestConfigureRegistersTheListenerReadinessCheck(t *testing.T) {
 	if err != nil {
 		t.Fatalf("configure: %v", err)
 	}
-	if len(components) != 1 {
-		t.Fatalf("%d components", len(components))
+	if len(components) != 2 {
+		t.Fatalf("%d components, want the mail queue drain + the server", len(components))
 	}
 	if registry.RequiredCount() != 1 {
 		t.Fatalf("%d required checks, want only the listener (no database/valkey configured)", registry.RequiredCount())
@@ -120,7 +120,7 @@ func TestConfigureRegistersTheListenerReadinessCheck(t *testing.T) {
 	if ready := registry.CheckRequired(context.Background()); ready.Ready {
 		t.Fatal("ready before the listener is bound")
 	}
-	server := components[0].(*httpapi.Server)
+	server := components[len(components)-1].(*httpapi.Server)
 	if err := server.Start(context.Background()); err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -191,8 +191,8 @@ func TestConfigureRegistersTheDatabaseCheckOnlyWhenConfigured(t *testing.T) {
 	if registry.RequiredCount() != 2 {
 		t.Fatalf("%d required checks, want listener + api_database", registry.RequiredCount())
 	}
-	if len(components) != 2 {
-		t.Fatalf("%d components, want the pgx pool component + the server", len(components))
+	if len(components) != 3 {
+		t.Fatalf("%d components, want the pgx pool component + the mail queue drain + the server", len(components))
 	}
 	server := components[len(components)-1].(*httpapi.Server)
 	if err := server.Start(context.Background()); err != nil {
@@ -237,8 +237,6 @@ func TestRoutesMountsEveryArea(t *testing.T) {
 		"HEAD /health/workers":                                 false,
 		"POST /api/v1/product-telemetry/events":                false,
 		"POST /api/v1/webhooks/github":                         false,
-		"POST /api/v1/webhooks/gitlab":                         false,
-		"POST /api/v1/webhooks/jira":                           false,
 		"POST /api/v1/webhooks/pagerduty/{binding_id}":         false,
 		"GET /api/v1/webhooks/health":                          false,
 	}

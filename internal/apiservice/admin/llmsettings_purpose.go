@@ -4,6 +4,8 @@ import (
 	"context"
 	"net/http"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/llmorgsettings"
@@ -113,6 +115,8 @@ type llmPurposeUpsert struct {
 	purpose         llmorgsettings.Purpose
 	provider, model string
 	apiKey, baseURL *string
+	// inTx runs inside the write transaction before it commits; nil is none.
+	inTx func(ctx context.Context, tx pgx.Tx) error
 }
 
 func (h *handlers) applyLLMPurpose(ctx context.Context, orgID string, in llmPurposeUpsert) (*pyjson.Object, *llmRefusal, error) {
@@ -179,6 +183,11 @@ func (h *handlers) applyLLMPurpose(ctx context.Context, orgID string, in llmPurp
 	for _, step := range steps {
 		if err := step(); err != nil {
 			return nil, nil, &llmStepError{"write llm purpose override", err}
+		}
+	}
+	if in.inTx != nil {
+		if err := in.inTx(ctx, tx); err != nil {
+			return nil, nil, &llmStepError{"write categorize opt-in", err}
 		}
 	}
 	out, err := h.llmPurposeObject(ctx, tx, orgID, in.purpose)

@@ -93,6 +93,10 @@ type UserInfo struct {
 	AvatarURL      pyjson.Value
 }
 
+// ReasonNoVerifiedEmail is the UserInfoError reason of a GitHub account with no public and no verified
+// address: the profile has no verified e-mail, which is not a refused token.
+const ReasonNoVerifiedEmail = "no verified email found in github account"
+
 // UserInfoError is OAuthUserInfoError. Reason names the failure class for
 // logs; it never carries a token or a response body.
 type UserInfoError struct{ Reason string }
@@ -246,17 +250,17 @@ func (c *Client) githubPrimaryEmail(ctx context.Context, headers map[string]stri
 		if !ok {
 			return nil, ErrUnexpected
 		}
-		if Truthy(field(object, "primary")) && Truthy(field(object, "verified")) {
+		if Truthy(field(object, "primary")) && jsonTrue(field(object, "verified")) {
 			return email(object)
 		}
 		objects = append(objects, object)
 	}
 	for _, object := range objects {
-		if Truthy(field(object, "verified")) {
+		if jsonTrue(field(object, "verified")) {
 			return email(object)
 		}
 	}
-	return nil, &UserInfoError{Reason: "no verified email found in github account"}
+	return nil, &UserInfoError{Reason: ReasonNoVerifiedEmail}
 }
 
 // iterate is Python's `for x in value` over a decoded JSON value: a list
@@ -298,7 +302,7 @@ func (c *Client) gitlab(ctx context.Context, token string) (*UserInfo, error) {
 	name, _ := user.Get("name")
 	avatarURL, _ := user.Get("avatar_url")
 	confirmedAt, _ := user.Get("confirmed_at")
-	return &UserInfo{ProviderUserID: PyStr(id), Email: email, EmailVerified: Truthy(confirmedAt),
+	return &UserInfo{ProviderUserID: PyStr(id), Email: email, EmailVerified: nonEmptyString(confirmedAt),
 		Username: username, FullName: name, AvatarURL: avatarURL}, nil
 }
 
@@ -314,7 +318,7 @@ func (c *Client) google(ctx context.Context, token string) (*UserInfo, error) {
 	name, _ := user.Get("name")
 	picture, _ := user.Get("picture")
 	verifiedEmail, _ := user.Get("verified_email")
-	return &UserInfo{ProviderUserID: id, Email: email, EmailVerified: Truthy(verifiedEmail), FullName: name, AvatarURL: picture}, nil
+	return &UserInfo{ProviderUserID: id, Email: email, EmailVerified: jsonTrue(verifiedEmail), FullName: name, AvatarURL: picture}, nil
 }
 
 // requiredFields is the GitLab/Google try block: user_data["id"] and
@@ -352,6 +356,18 @@ func Truthy(value pyjson.Value) bool {
 		return typed.Len() > 0
 	}
 	return true
+}
+
+// jsonTrue is true only for the JSON boolean true: a verification flag in any other form is not one.
+func jsonTrue(value pyjson.Value) bool {
+	flag, ok := value.(bool)
+	return ok && flag
+}
+
+// nonEmptyString is true only for a non-empty JSON string, the form of GitLab's confirmed_at timestamp.
+func nonEmptyString(value pyjson.Value) bool {
+	text, ok := value.(string)
+	return ok && text != ""
 }
 
 // PyStr is str(value) for a decoded JSON value.

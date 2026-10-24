@@ -1,3 +1,4 @@
+contracts/auth/v1
 internal/admincli
 internal/api/audit
 internal/api/authmail
@@ -16,6 +17,7 @@ internal/api/pyjson
 internal/api/pytime
 internal/api/restcore
 internal/api/standinkey
+internal/api/usersowned
 internal/apiservice/admin
 internal/auth/edgetoken
 internal/auth/httpapi
@@ -39,8 +41,10 @@ internal/netclass
 internal/operationalordering
 internal/pgmigrate
 internal/platform/config
+internal/platform/credshape
 internal/platform/dbphase
 internal/platform/dbspan
+internal/platform/dsnclass
 internal/platform/errortext
 internal/platform/errortext/hardened
 internal/platform/fernet

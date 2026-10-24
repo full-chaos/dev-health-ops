@@ -37,6 +37,7 @@ import (
 	"errors"
 	"log/slog"
 	"math"
+	"strings"
 	"sync"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
@@ -45,6 +46,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/chquery"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/chwrite"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/units"
+	"github.com/full-chaos/dev-health-ops/internal/llmorgsettings"
 )
 
 const (
@@ -203,6 +205,8 @@ type servedClassifier interface {
 // ServedDecision is the served decision backend of one Execute: built once,
 // used by one Materializer.Run, then closed.
 type ServedDecision struct {
+	// byo marks the backend of an org's own model (newBYOSystemOne); jev is false.
+	byo        bool
 	classifier servedClassifier
 	// identity and stamp are fixed at construction from configured values only,
 	// never from a response field.
@@ -239,10 +243,16 @@ func NewServedDecision(client *categorize.TypeSafeClient, logger *slog.Logger) (
 }
 
 func newServedDecision(sender systemOneSender, logger *slog.Logger) (*ServedDecision, error) {
+	return newServedDecisionFor(sender, logger, "")
+}
+
+// newServedDecisionFor is newServedDecision for a backend with its own provider
+// name in the identity; "" is jev.
+func newServedDecisionFor(sender systemOneSender, logger *slog.Logger, provider string) (*ServedDecision, error) {
 	if sender == nil || logger == nil {
 		return nil, ErrUnavailable
 	}
-	completer, err := decision.NewCompleter(shadowTransport{sender: sender}, sender.Model())
+	completer, err := decision.NewCompleterForProvider(shadowTransport{sender: sender}, sender.Model(), provider)
 	if err != nil {
 		return nil, err
 	}
@@ -262,6 +272,14 @@ func (served *ServedDecision) SetObserver(observer ServedObserver) {
 	}
 }
 
+// Stamp is the model-version stamp of the rows of this run.
+func (served *ServedDecision) Stamp() string { return served.stamp }
+
+// Identity is the provider and model of the run's llm_token_usage row.
+func (served *ServedDecision) Identity() (provider, model string) {
+	return served.identity.Provider, served.identity.Model
+}
+
 // Close releases the client of the backend.
 func (served *ServedDecision) Close() error {
 	if served == nil || served.closer == nil {
@@ -275,13 +293,32 @@ func (served *ServedDecision) Close() error {
 type servedFailure struct {
 	class         string
 	deterministic bool
-	calls         int
-	inputTokens   int
-	outputTokens  int
+	// code is a member of the closed refusal set (llmorgsettings), or empty.
+	code         string
+	calls        int
+	inputTokens  int
+	outputTokens int
 }
 
 func (failure *servedFailure) Error() string {
+	if failure.code != "" {
+		return "investment served decision: the request failed (" + failure.class + ": " + failure.code + ")"
+	}
 	return "investment served decision: the request failed (" + failure.class + ")"
+}
+
+// unreportedModel reports an answer of an org's own model that names no model.
+// The org's provider reports none on every request, so the run stops.
+func (served *ServedDecision) unreportedModel(classification decision.Classification) bool {
+	if !served.byo || classification.ModelReturned != "" {
+		return false
+	}
+	for _, code := range classification.Errors {
+		if strings.HasPrefix(code, "request_failed:model_mismatch") {
+			return true
+		}
+	}
+	return false
 }
 
 // llmFailureOf is the class of a categorization error and whether it recurs on
@@ -332,6 +369,9 @@ func (served *ServedDecision) categorize(ctx context.Context, cfg Config, entry 
 		failure := &servedFailure{
 			class: label, deterministic: classification.Stop,
 			calls: servedSentCalls(result.exchange), inputTokens: classification.InputTokens, outputTokens: classification.OutputTokens,
+		}
+		if served.unreportedModel(classification) {
+			failure.deterministic, failure.code = true, llmorgsettings.CodeCategorizeBYOModelUnreported
 		}
 		if !failure.deterministic {
 			served.mu.Lock()
@@ -552,15 +592,48 @@ func (servedDecisionProvider) Model() string { return "" }
 // SetServed attaches the served decision backend of this run. Nil (the
 // default) means the generative provider serves the run.
 func (m *Materializer) SetServed(served *ServedDecision) {
-	if m != nil {
-		m.served = served
+	if m == nil {
+		return
+	}
+	m.served = served
+	m.systemOne = nil
+	if served != nil {
+		m.systemOne = served
+	}
+}
+
+// backend is the SystemOne backend of the run, or nil for the generative path.
+// A typed-nil served field is never returned as a non-nil interface.
+func (m *Materializer) backend() SystemOne {
+	if m.systemOne != nil {
+		return m.systemOne
+	}
+	if m.served != nil {
+		return m.served
+	}
+	return nil
+}
+
+// keepsLastRow, isLowQuality and noteSkippedTerminal are nil-tolerant: the
+// generative path has no SystemOne backend and no such unit.
+func (m *Materializer) keepsLastRow(index int) bool {
+	return m.backend() != nil && m.backend().keepsLastRow(index)
+}
+
+func (m *Materializer) isLowQuality(index int) bool {
+	return m.backend() != nil && m.backend().isLowQuality(index)
+}
+
+func (m *Materializer) noteSkippedTerminal(count int) {
+	if backend := m.backend(); backend != nil {
+		backend.noteSkippedTerminal(count)
 	}
 }
 
 // categorizeEntry is the one categorization call of the served path.
 func (m *Materializer) categorizeEntry(ctx context.Context, cfg Config, entry preprocessed) (categorize.CategorizationOutcome, error) {
-	if m.served != nil {
-		return m.served.categorize(ctx, cfg, entry)
+	if backend := m.backend(); backend != nil {
+		return backend.categorize(ctx, cfg, entry)
 	}
 	return categorize.CategorizeTextBundle(ctx, entry.result.Bundle, categorize.CategorizeOptions{
 		Provider: m.provider, ProviderName: cfg.ProviderName, Model: cfg.Model, Telemetry: m.llmTelemetry,
@@ -569,16 +642,16 @@ func (m *Materializer) categorizeEntry(ctx context.Context, cfg Config, entry pr
 
 // modelVersion is the stamp of the rows of this run, and its skip-existing key.
 func (m *Materializer) modelVersion(cfg Config) string {
-	if m.served != nil {
-		return m.served.stamp
+	if backend := m.backend(); backend != nil {
+		return backend.Stamp()
 	}
 	return categorize.EffectiveModelVersion(cfg.ProviderName, resolvedModelName(cfg))
 }
 
 // usageIdentity is the provider and model of the run's llm_token_usage row.
 func (m *Materializer) usageIdentity(cfg Config) (provider, model string) {
-	if m.served != nil {
-		return m.served.identity.Provider, m.served.identity.Model
+	if backend := m.backend(); backend != nil {
+		return backend.Identity()
 	}
 	return cfg.ProviderName, resolvedModelName(cfg)
 }
@@ -586,8 +659,8 @@ func (m *Materializer) usageIdentity(cfg Config) (provider, model string) {
 // finishServed writes the attempt rows and the run log line of a served
 // decision run. It does nothing for a generative run.
 func (m *Materializer) finishServed(ctx context.Context, cfg Config) {
-	if m.served != nil {
-		m.served.finish(ctx, m.writer, cfg)
+	if backend := m.backend(); backend != nil {
+		backend.finish(ctx, m.writer, cfg)
 	}
 }
 

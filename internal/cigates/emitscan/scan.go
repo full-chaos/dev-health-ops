@@ -10,7 +10,7 @@
 // false finding (noise accepted). Only conversions (string(x), a local string type, attribute.Key(x)) and
 // strconv.Itoa / fmt.Sprint of constants are folded into a key; any other call in key position is a dynamic key (R2 on
 // a metric label). Named limits (not seen by the scan): a constant key taken from another package (for example
-// tracing.StageAttribute); a constructor returned by a function call; and a key that is a variable and not a constant.
+// tracing.StageAttribute); a constructor returned by a function call; a constant whose folding exceeds 8 values, 256 bytes or 64 passes (it is marked saturated and a key that uses it is an R1 finding); and a key that is a variable and not a constant.
 // The runtime sentinel tests are the primary defence.
 package emitscan
 
@@ -41,6 +41,9 @@ const (
 	RuleDotImport     = "R8" // dot-import of a watched package: its calls cannot be matched
 	RuleUnparsable    = "R0" // a file the scan could not read or parse: always a failure
 	maxMetricLabels   = 6
+	maxConstValues    = 8   // folded values kept per constant name
+	maxConstBytes     = 256 // longest folded value kept
+	maxConstPasses    = 64  // passes of the constant fixpoint
 	rawHandlerAllowed = "internal/platform/logging/"
 )
 
@@ -185,11 +188,12 @@ type pkgInfo struct {
 	constNames  map[string]bool        // every constant name declared in the package
 	stringTypes map[string]bool        // package types whose underlying type is string (conversions of a constant keep its text)
 	aliases     map[string][][2]string // every watched constructor a name is ever bound to anywhere in the package, deduped
+	saturated   map[string]bool        // constants whose folding hit a bound: no value is kept, a use is an unfoldable const key
 }
 
 func packageInfo(group []parsedFile) *pkgInfo {
 	info := &pkgInfo{consts: map[string][]string{}, rawFuncs: map[string]bool{}, constNames: map[string]bool{},
-		stringTypes: map[string]bool{}, aliases: map[string][][2]string{}}
+		stringTypes: map[string]bool{}, aliases: map[string][][2]string{}, saturated: map[string]bool{}}
 	for _, parsed := range group {
 		ast.Inspect(parsed.file, func(node ast.Node) bool {
 			if spec, ok := node.(*ast.TypeSpec); ok {
@@ -200,8 +204,13 @@ func packageInfo(group []parsedFile) *pkgInfo {
 			return true
 		})
 	}
-	for changed := true; changed; {
+	saturate := func(name string) {
+		info.saturated[name] = true
+		delete(info.consts, name)
+	}
+	for pass, changed := 0, true; changed; pass++ {
 		changed = false
+		growing := map[string]bool{}
 		for _, parsed := range group {
 			ast.Inspect(parsed.file, func(node ast.Node) bool {
 				gen, ok := node.(*ast.GenDecl)
@@ -219,19 +228,37 @@ func packageInfo(group []parsedFile) *pkgInfo {
 					}
 					for i, name := range value.Names {
 						info.constNames[name.Name] = true
-						if i >= len(values) {
+						if i >= len(values) || info.saturated[name.Name] {
+							continue
+						}
+						if info.refsSaturated(values[i]) {
+							saturate(name.Name)
+							changed = true
 							continue
 						}
 						for _, folded := range foldString(values[i], &foldCtx{consts: info.consts, imports: importsOf(parsed), stringTypes: info.stringTypes}, specIndex) {
-							if !contains(info.consts[name.Name], folded) {
-								info.consts[name.Name] = append(info.consts[name.Name], folded)
-								changed = true
+							if contains(info.consts[name.Name], folded) {
+								continue
 							}
+							if len(folded) > maxConstBytes || len(info.consts[name.Name]) >= maxConstValues {
+								saturate(name.Name)
+								changed = true
+								break
+							}
+							info.consts[name.Name] = append(info.consts[name.Name], folded)
+							growing[name.Name] = true
+							changed = true
 						}
 					}
 				}
 				return true
 			})
+		}
+		if changed && pass >= maxConstPasses {
+			for name := range growing {
+				saturate(name)
+			}
+			break
 		}
 	}
 	info.collectAliases(group)
@@ -261,6 +288,18 @@ func packageInfo(group []parsedFile) *pkgInfo {
 		}
 	}
 	return info
+}
+
+// refsSaturated reports an expression that names a saturated constant: the constant built from it is saturated too.
+func (info *pkgInfo) refsSaturated(expr ast.Expr) bool {
+	found := false
+	ast.Inspect(expr, func(node ast.Node) bool {
+		if ident, ok := node.(*ast.Ident); ok && info.saturated[ident.Name] {
+			found = true
+		}
+		return !found
+	})
+	return found
 }
 
 func contains(list []string, want string) bool {

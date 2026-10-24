@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/cigates/emitscan"
 )
@@ -117,15 +118,6 @@ func TestNestedConstructorAliasDoesNotHideTheOuterOne(t *testing.T) {
 	}
 }
 
-func TestInnerRebindingHidesAnOuterAlias(t *testing.T) {
-	body := "func f(v string) {\n\tstr := attribute.String\n\t_ = str\n\tfunc() {\n\t\tstr := func(k, v string) string { return k + v }\n\t\t_ = str(\"api_token\", v)\n\t}()\n}\n"
-	if got := scanSource(t, header+body); len(got) != 0 {
-		t.Fatalf("findings: %v", got)
-	}
-}
-
-// A With call on any receiver is read as a log call (fail closed): the scan does not trace receivers. A non-logger With
-// that carries a raw request path is a false finding, a named limit of the scan; the repository census has none.
 func TestWithOnAnyReceiverIsReadAsALogCall(t *testing.T) {
 	body := "type builder struct{}\nfunc (builder) With(k string, v string) builder { return builder{} }\nfunc f(r *http.Request) { var b builder; _ = b.With(\"path\", r.URL.Path) }\n"
 	if got := rules(scanSource(t, header+body)); got != "R6" {
@@ -186,13 +178,6 @@ func TestPackageScopeAliasIsOrderFree(t *testing.T) {
 	}
 }
 
-func TestBlockScopeAliasIsNotVisibleBeforeItsDeclaration(t *testing.T) {
-	body := "func str(k, v string) string { return k }\nfunc f() {\n\t_ = str(\"api_token\", \"x\")\n\tstr := attribute.String\n\t_ = str\n}\n"
-	if got := scanSource(t, header+body); len(got) != 0 {
-		t.Fatalf("findings: %v", got)
-	}
-}
-
 func TestAliasCopiedFromAnAliasKeepsTheConstructor(t *testing.T) {
 	cases := map[string]string{
 		"alias of an alias":        "func f(v string) {\n\ta := attribute.String\n\tb := a\n\t_ = b(\"api_token\", v)\n}\n",
@@ -203,13 +188,6 @@ func TestAliasCopiedFromAnAliasKeepsTheConstructor(t *testing.T) {
 		if got := rules(scanSource(t, header+body)); !strings.Contains(got, "R1") {
 			t.Fatalf("%s: rules = %q, want R1", name, got)
 		}
-	}
-}
-
-func TestFunctionDeclarationParameterHidesAPackageAlias(t *testing.T) {
-	body := "var str = attribute.String\nfunc f(str func(k, v string) string) { _ = str(\"api_token\", \"x\") }\n"
-	if got := scanSource(t, header+body); len(got) != 0 {
-		t.Fatalf("findings: %v", got)
 	}
 }
 
@@ -231,22 +209,6 @@ func TestUnfoldableConstantKeyIsAFinding(t *testing.T) {
 	got := scanSource(t, header+body)
 	if len(got) != 1 || got[0].Rule != "R1" || got[0].Detail != "unfoldable const key" {
 		t.Fatalf("findings = %v, want one R1 unfoldable const key", got)
-	}
-}
-
-func TestFunctionLiteralScopeOfAnAlias(t *testing.T) {
-	body := "func f(v string) {\n\tg := func() {\n\t\tstr := attribute.String\n\t\t_ = str(\"api_token\", v)\n\t}\n\tg()\n\tstr := func(k, v string) string { return k }\n\t_ = str(\"api_token\", v)\n}\n"
-	got := scanSource(t, header+body)
-	if len(got) != 1 || got[0].Rule != "R1" {
-		t.Fatalf("findings = %v, want exactly the one inside the literal", got)
-	}
-}
-
-func TestFunctionLiteralParameterHidesTheOuterAliasOnlyInsideTheLiteral(t *testing.T) {
-	body := "func f(v string) {\n\tstr := attribute.String\n\tfunc(str func(k, v string) string) {\n\t\t_ = str(\"api_token\", v)\n\t}(nil)\n\t_ = str(\"api_token\", v)\n}\n"
-	got := scanSource(t, header+body)
-	if len(got) != 1 || got[0].Rule != "R1" {
-		t.Fatalf("findings = %v, want exactly the call after the literal", got)
 	}
 }
 
@@ -373,4 +335,128 @@ func scanFiles(t *testing.T, files map[string]string) string {
 		t.Fatal(err)
 	}
 	return rules(got)
+}
+
+// Scope and order are not tracked (fail closed): a name bound to a constructor anywhere in the package makes every call
+// through that name count as the constructor, so a same-named non-constructor is noise, a named limit.
+func TestAliasIsReadWhereverTheNameIsBound(t *testing.T) {
+	cases := map[string]string{
+		"inner non-constructor binding": "func f(v string) {\n\tstr := attribute.String\n\t_ = str\n\tfunc() {\n\t\tstr := func(k, v string) string { return k }\n\t\t_ = str(\"api_token\", v)\n\t}()\n}\n",
+		"parameter of the same name":    "var str = attribute.String\nfunc f(str func(k, v string) string) { _ = str(\"api_token\", \"x\") }\n",
+		"use before the declaration":    "func f() {\n\t_ = str(\"api_token\", \"x\")\n\tstr := attribute.String\n\t_ = str\n}\n",
+	}
+	for name, body := range cases {
+		if got := rules(scanSource(t, header+body)); !strings.Contains(got, "R1") {
+			t.Fatalf("%s: rules = %q, want R1", name, got)
+		}
+	}
+}
+
+func TestEveryAlternativeOfAnAliasIsChecked(t *testing.T) {
+	body := "func f(c bool, r *http.Request) {\n\tstr := attribute.String\n\tif c {\n\t\tstr = slog.String\n\t}\n\t_ = str(\"path\", r.URL.Path)\n}\n"
+	got := rules(scanSource(t, header+body))
+	if !strings.Contains(got, "R6") {
+		t.Fatalf("rules = %q, want R6 through the slog alternative", got)
+	}
+	both := "func f(c bool, r *http.Request) {\n\tstr := attribute.String\n\tif c {\n\t\tstr = slog.String\n\t}\n\t_ = str(\"api_token\", r.URL.Path)\n}\n"
+	if got := rules(scanSource(t, header+both)); !strings.Contains(got, "R1") || !strings.Contains(got, "R6") {
+		t.Fatalf("rules = %q, want R1 (attribute alternative) and R6 (slog alternative)", got)
+	}
+}
+
+func TestAliasSetsAreDeduplicatedAndReportedOncePerSite(t *testing.T) {
+	body := "func f(r *http.Request) {\n\tstr := slog.String\n\tstr = slog.String\n\t_ = str(\"path\", r.URL.Path)\n}\n"
+	got := scanSource(t, header+body)
+	if len(got) != 1 || got[0].Rule != "R6" {
+		t.Fatalf("findings = %v, want one R6", got)
+	}
+}
+
+func TestSelfReferencingAliasChainsAreFast(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("func f() {\n\ta := attribute.String\n\tc := a\n")
+	for i := 0; i < 40; i++ {
+		b.WriteString("\ta = a\n\ta = c\n\tc = a\n")
+	}
+	b.WriteString("\t_ = c(\"api_token\", \"x\")\n}\n")
+	start := time.Now()
+	got := rules(scanSource(t, header+b.String()))
+	if elapsed := time.Since(start); elapsed > 100*time.Millisecond {
+		t.Fatalf("scan took %s on a self-referencing alias chain", elapsed)
+	}
+	if !strings.Contains(got, "R1") {
+		t.Fatalf("rules = %q, want R1", got)
+	}
+}
+
+func TestACallInKeyPositionIsADynamicMetricKey(t *testing.T) {
+	body := "func labelKey(s string) string { return s }\nfunc f(c metric.Int64Counter) { c.Add(context.Background(), 1, metric.WithAttributes(attribute.String(labelKey(\"status\"), \"ok\"))) }\n"
+	got := scanSource(t, header+body)
+	if len(got) != 1 || got[0].Rule != "R2" || got[0].Detail != "dynamic key" {
+		t.Fatalf("findings = %v, want one R2 dynamic key", got)
+	}
+}
+
+func TestConversionOfAnUnfoldableConstantIsAFinding(t *testing.T) {
+	body := "type K string\nconst k = K(http.MethodGet)\nfunc f(v string) { _ = attribute.String(string(k), v) }\n"
+	got := scanSource(t, header+body)
+	if len(got) != 1 || got[0].Detail != "unfoldable const key" {
+		t.Fatalf("findings = %v, want one unfoldable const key", got)
+	}
+}
+
+func TestWithChecksEveryArgumentIncludingASpread(t *testing.T) {
+	cases := map[string]string{
+		"spread":                   "func f(r *http.Request, l *slog.Logger) { args := []any{\"path\", r.URL.Path}; _ = l.With(args...) }\n",
+		"variable key":             "func f(r *http.Request, l *slog.Logger) { k := \"path\"; _ = l.With(k, r.URL.Path) }\n",
+		"package With":             "func f(r *http.Request) { _ = slog.With(\"path\", r.URL.Path) }\n",
+		"method value":             "func f(r *http.Request, l *slog.Logger) { w := l.With; _ = w(\"path\", r.URL.Path) }\n",
+		"receiver named attribute": "type b struct{}\nfunc (b) With(k, v string) b { return b{} }\nfunc f(r *http.Request) { var attribute b; _ = attribute.With(\"path\", r.URL.Path) }\n",
+	}
+	for name, body := range cases {
+		if got := rules(scanSource(t, header+body)); !strings.Contains(got, "R6") {
+			t.Fatalf("%s: rules = %q, want R6", name, got)
+		}
+	}
+}
+
+// The alias sets are a fixpoint over the whole package: the order of the declarations does not matter.
+func TestAliasCopiesAreResolvedWhateverTheDeclarationOrder(t *testing.T) {
+	cases := map[string]string{
+		"copy above the source": "func f(v string) {\n\tstr := str\n\t_ = str(\"api_token\", v)\n}\nvar str = attribute.String\n",
+		"package copy above":    "var b = a\nvar a = attribute.String\nfunc f(v string) { _ = b(\"api_token\", v) }\n",
+		"assigned then copied":  "func f(v string) {\n\tvar a func(k, v string) attribute.KeyValue\n\tb := a\n\ta = attribute.String\n\t_ = b(\"api_token\", v)\n}\n",
+	}
+	for name, body := range cases {
+		if got := rules(scanSource(t, header+body)); !strings.Contains(got, "R1") {
+			t.Fatalf("%s: rules = %q, want R1", name, got)
+		}
+	}
+}
+
+func TestOneFindingPerCallSitePerRule(t *testing.T) {
+	body := "func f(r *http.Request) { slog.Info(\"x\", slog.String(\"path\", r.URL.Path), \"k\", \"v\") }\n"
+	got := scanSource(t, header+body)
+	if len(got) != 1 || got[0].Rule != "R6" {
+		t.Fatalf("findings = %v, want exactly one R6", got)
+	}
+}
+
+func TestEveryAlternativeSetsItsOwnRule(t *testing.T) {
+	first := "func f() {\n\tmk := attribute.String\n\tmk = slog.NewJSONHandler\n\t_ = mk(nil, nil)\n}\n"
+	if got := rules(scanSource(t, header+first)); !strings.Contains(got, "R4") {
+		t.Fatalf("rules = %q, want R4 through the second alternative", got)
+	}
+	last := "func f(v string) {\n\tmk := slog.NewJSONHandler\n\tmk = attribute.String\n\t_ = mk(\"api_token\", v)\n}\n"
+	if got := rules(scanSource(t, header+last)); !strings.Contains(got, "R1") || !strings.Contains(got, "R4") {
+		t.Fatalf("rules = %q, want R1 and R4", got)
+	}
+}
+
+func TestOnlyConversionsAndConstantFormattersFoldIntoAKey(t *testing.T) {
+	body := "func f(c metric.Int64Counter) { c.Add(context.Background(), 1, metric.WithAttributes(attribute.String(strings.ToLower(\"status\"), \"ok\"))) }\n"
+	got := scanSource(t, strings.Replace(header, "\"net/http\"", "\"net/http\"\n\t\"strings\"", 1)+body)
+	if len(got) != 1 || got[0].Rule != "R2" || got[0].Detail != "dynamic key" {
+		t.Fatalf("findings = %v, want one R2 dynamic key", got)
+	}
 }

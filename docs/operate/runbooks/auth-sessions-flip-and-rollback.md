@@ -84,7 +84,7 @@ Known limit: the default Valkey user can still reach the rate-limit keys; the ne
 
 ### B3 Key Secrets
 
-Create the new key-set Secrets with `scripts/create-auth-keyset-secrets.sh`, approved by pm for this roll only (script sha256 `befa4a8d077e890490e63b0c4022334210fd067c77ac0b52351d7991330a6e03`).
+Create the new key-set Secrets with the create-only host script `create-auth-keyset-secrets.sh` (it lands in the repo with CHAOS-10907; until then use only the copy whose sha256 is `befa4a8d077e890490e63b0c4022334210fd067c77ac0b52351d7991330a6e03`), approved by pm for this roll only.
 
 - Run one `--key` per call. A multi-key run that fails on the second key leaves the first created, and a rerun then stops on it.
 - The script creates only. An existing Secret stops the run.

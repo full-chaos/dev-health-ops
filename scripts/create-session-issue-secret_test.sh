@@ -36,7 +36,7 @@ run() {
   : >"$root/log"; rm -f "$root/seen"
   set +e
   out="$(FAKE_MODE="$mode" FAKE_LOG="$root/log" FAKE_SEEN="$root/seen" KUBECTL="$fake" \
-    SESSION_ISSUE_WORKDIR_BASE="$root" bash "$script" --context ctx --namespace ns \
+    SESSION_ISSUE_WORKDIR_BASE="${WB:-$root}" bash "$script" --context ctx --namespace ns \
     --name dev-health-auth-session-issue --value-file "$vf" "$@" 2>&1)"
   rc=$?
   set -e
@@ -51,7 +51,8 @@ leftovers() { find "$root" -mindepth 1 -maxdepth 1 -name 'session-issue*' | wc -
 vf="$(newfile "$root" "$tok")"
 run ok "$vf"
 [ "$rc" -eq 0 ] || fail "success rc=$rc"
-[ "$out" = "dev-health-auth-session-issue key=AUTH_SESSION_ISSUE_TOKEN created" ] || fail "success output: $out"
+[ "$out" = "dev-health-auth-session-issue key=AUTH_SESSION_ISSUE_TOKEN created
+secret created; value file removed" ] || fail "success output: $out"
 case "$out" in *"$tok"*|*svc_authsess_A*) fail "value printed" ;; esac
 grep -q "$tok" "$root/log" && fail "value in kubectl argv"
 [ "$(cat "$root/seen")" = "$tok" ] || fail "secret file content wrong"
@@ -187,18 +188,94 @@ set -e
 ro="$(mktemp -d "$shmbase/issue-secret-ro.XXXXXX")"
 vf="$(newfile "$ro" "$tok")"
 chmod 0500 "$ro"
-if rm -f "$ro/probe" 2>/dev/null && [ ! -e "$ro/probe" ] && ! ( : >"$ro/probe" ) 2>/dev/null; then
+if [ "$(id -u)" -eq 0 ]; then
+  echo "!!!! SKIPPED: shred-failure case (5e) needs a non-root runner; euid=0 ignores directory modes. It is NOT proven on this run. !!!!" >&2
+else
   run ok "$vf"
-  [ "$rc" -ne 0 ] || fail "shred failure: rc 0"
+  [ "$rc" -eq 3 ] || fail "shred failure: rc=$rc, want 3"
   case "$out" in *"secret created; value file NOT removed: $vf"*) ;; *) fail "shred failure output: $out" ;; esac
   case "$out" in *"$tok"*) fail "shred failure: value printed" ;; esac
   [ -f "$vf" ] || fail "shred failure: file gone?"
   [ "$(leftovers)" -eq 0 ] || fail "shred failure: workdir left behind"
-else
-  echo "SKIP shred-failure case: directory is writable despite mode 0500 (root?)" >&2
-  fail "shred failure case cannot run"
 fi
 chmod 0700 "$ro"; rm -rf "$ro"
+
+# 5f new refusals: reason + kept path, no command-not-found, no silent exit.
+vf="$(newfile "$root" "$tok")"
+run ok "$vf" --bogus
+[ "$rc" -eq 2 ] || fail "unknown argument rc=$rc"
+case "$out" in *"refused: unknown argument"*) ;; *) fail "unknown argument output: $out" ;; esac
+case "$out" in *"command not found"*) fail "unknown argument: command not found" ;; esac
+case "$out" in *"value file kept for retry: $vf"*) ;; *) fail "unknown argument: kept path missing: $out" ;; esac
+[ ! -s "$root/log" ] || fail "unknown argument: kubectl ran"
+run ok "$vf" --key
+[ "$rc" -eq 2 ] || fail "dangling flag rc=$rc"
+case "$out" in *"--key needs a value"*) ;; *) fail "dangling flag output: $out" ;; esac
+case "$out" in *"value file kept for retry: $vf"*) ;; *) fail "dangling flag: kept path missing: $out" ;; esac
+WB="$root/no-such-dir" run ok "$vf"
+[ "$rc" -eq 2 ] || fail "missing workdir base rc=$rc"
+case "$out" in *"no private work directory"*"value file kept for retry: $vf"*) ;; *) fail "missing workdir base output: $out" ;; esac
+WB="$disk" run ok "$vf"
+[ "$rc" -eq 2 ] || fail "disk workdir base rc=$rc"
+case "$out" in *"work directory is not tmpfs"*"value file kept for retry: $vf"*) ;; *) fail "disk workdir base output: $out" ;; esac
+[ ! -s "$root/log" ] || fail "workdir refusals: kubectl ran"
+rm -f "$vf"
+
+# 5g the token never reaches a child: stat, mktemp and kubectl run with an exported `line` and allexport.
+mkdir -p "$root/envbin"
+for tool in stat mktemp shred; do
+  real="$(command -v "$tool")"
+  cat >"$root/envbin/$tool" <<ENVW
+#!/usr/bin/env bash
+env >>"\$ENV_DUMP"
+exec $real "\$@"
+ENVW
+  chmod 755 "$root/envbin/$tool"
+done
+cat >"$root/envfake" <<'ENVF'
+#!/usr/bin/env bash
+env >>"$ENV_DUMP"
+for a in "$@"; do case "$a" in --from-file=*) f="${a#--from-file=}"; f="${f#*=}"; cat "$f" >"$FAKE_SEEN" ;; esac; done
+ENVF
+chmod 755 "$root/envfake"
+vf="$(newfile "$root" "$tok")"
+: >"$root/envdump"
+set +e
+env ENV_DUMP="$root/envdump" FAKE_SEEN="$root/seen" line=SENTINEL SHELLOPTS=allexport PATH="$root/envbin:$PATH" KUBECTL="$root/envfake" \
+  SESSION_ISSUE_WORKDIR_BASE="$root" bash "$script" --context c --namespace n --name x --value-file "$vf" >/dev/null 2>&1
+r=$?
+set -e
+[ "$r" -eq 0 ] || fail "env-leak run rc=$r"
+[ -s "$root/envdump" ] || fail "env-leak: the wrappers never ran"
+grep -q "$tok" "$root/envdump" && fail "token leaked into a child environment"
+grep -q '^line=svc_authsess' "$root/envdump" && fail "variable line exported with the token"
+
+# 5h TERM during the shred is ignored until the shred ends: created, removed, rc 0.
+mkdir -p "$root/slowshred"
+real_shred="$(command -v shred)"
+cat >"$root/slowshred/shred" <<SLOWSH
+#!/usr/bin/env bash
+: >"\$SHRED_STARTED"
+sleep 1
+exec $real_shred "\$@"
+SLOWSH
+chmod 755 "$root/slowshred/shred"
+for sig in TERM INT; do
+  vf="$(newfile "$root" "$tok")"
+  rm -f "$root/shredstarted"
+  : >"$root/log"
+  SHRED_STARTED="$root/shredstarted" FAKE_MODE=ok FAKE_LOG="$root/log" FAKE_SEEN="$root/seen" PATH="$root/slowshred:$PATH" KUBECTL="$fake" SESSION_ISSUE_WORKDIR_BASE="$root" \
+    perl -MPOSIX -e 'POSIX::setsid(); $SIG{INT}="DEFAULT"; exec @ARGV' bash "$script" --context c --namespace n --name x --value-file "$vf" >"$root/shout" 2>&1 &
+  pid=$!
+  for _ in $(seq 1 100); do [ -e "$root/shredstarted" ] && break; sleep 0.05; done
+  [ -e "$root/shredstarted" ] || fail "$sig: shred never started"
+  if [ "$sig" = INT ]; then kill -INT -- "-$pid" 2>/dev/null || true; else kill -TERM "$pid" 2>/dev/null || true; fi
+  r=0; wait "$pid" || r=$?
+  [ "$r" -eq 0 ] || fail "$sig during shred: rc=$r"
+  [ ! -e "$vf" ] || fail "$sig during shred: source left behind"
+  case "$(cat "$root/shout")" in *"secret created; value file removed"*) ;; *) fail "$sig during shred: output: $(cat "$root/shout")" ;; esac
+  [ "$(leftovers)" -eq 0 ] || fail "$sig during shred: workdir left behind"
+done
 
 # 6 signal during kubectl: the child is stopped, the workdir is gone at once, the source is kept.
 cat >"$root/slow" <<'SLOW'
@@ -224,6 +301,7 @@ for sig in TERM INT; do
   wait "$pid" 2>/dev/null || true
   [ -f "$vf" ] || fail "$sig: source removed after a signal"
   grep -q "value file kept for retry: $vf" "$root/sigout" || fail "$sig: kept-path line missing"
+  grep -q "STOP x interrupted" "$root/sigout" || fail "$sig: interrupted line missing"
   case "$(cat "$root/sigout")" in *"$tok"*) fail "$sig: value printed" ;; esac
 done
 
@@ -243,6 +321,9 @@ MK_COUNT="$root/mkcount" PATH="$root/bin:$PATH" KUBECTL="$fake" FAKE_MODE=ok FAK
 r=$?
 set -e
 [ "$r" -ne 0 ] || fail "mktemp failure accepted"
+out="$(MK_COUNT="$root/mkcount2" PATH="$root/bin:$PATH" KUBECTL="$fake" FAKE_MODE=ok FAKE_LOG="$root/log" SESSION_ISSUE_WORKDIR_BASE="$root" bash "$script" --context c --namespace n --name x --value-file "$vf" 2>&1 || true)"
+rm -f "$root/mkcount2"
+case "$out" in *"value file kept for retry: $vf"*) ;; *) fail "mktemp failure: kept path missing: $out" ;; esac
 [ "$(leftovers)" -eq 0 ] || fail "workdir left behind after a mktemp failure"
 [ -f "$vf" ] || fail "source removed after a mktemp failure"
 rm -f "$root/mkcount"

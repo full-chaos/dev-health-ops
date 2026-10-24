@@ -4,6 +4,7 @@ internal/api/policy
 internal/api/pybody
 internal/api/pyjson
 internal/api/pytime
+internal/auth/accessverify
 internal/auth/edgetoken
 internal/auth/httpapi
 internal/auth/passwordhash

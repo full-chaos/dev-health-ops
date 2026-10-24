@@ -19,6 +19,7 @@ internal/api/restcore
 internal/api/standinkey
 internal/api/usersowned
 internal/apiservice/admin
+internal/auth/accessverify
 internal/auth/edgetoken
 internal/auth/httpapi
 internal/auth/passwordhash

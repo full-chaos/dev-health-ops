@@ -339,7 +339,7 @@ func TestBuildScheduledPlanMatchesFrozenPythonPlanner(t *testing.T) {
 		}
 		requested := map[string]bool(nil)
 		if test.Route != nil {
-			requested = requestedDatasetKeys(test.Provider, test.Route.SyncTargets, test.Route.SourceID)
+			requested = RequestedDatasetKeys(test.Provider, test.Route.SyncTargets, test.Route.SourceID)
 		}
 		for _, source := range test.Sources {
 			if test.Route != nil && test.Route.SourceID != nil && source.ID != *test.Route.SourceID {

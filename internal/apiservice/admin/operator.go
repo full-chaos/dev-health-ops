@@ -18,6 +18,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/api/usersowned"
 	"github.com/full-chaos/dev-health-ops/internal/auth/passwordhash"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
@@ -34,6 +35,9 @@ type Operator struct {
 	Now func() time.Time
 	// Logger receives the user-delete telemetry (Info outcome, Debug per reference); nil discards it.
 	Logger *slog.Logger
+	// UsersOwned is AUTH_USERS_OWNED: auth-service owns users, so the verbs
+	// that write public.users refuse with ErrUsersOwned.
+	UsersOwned bool
 }
 
 func (o Operator) logger() *slog.Logger {
@@ -85,7 +89,15 @@ func orgView(org *organization) *Organization {
 	return &Organization{ID: org.ID, Slug: org.Slug, Name: org.Name, Tier: org.Tier, IsActive: org.IsActive}
 }
 
-func (o Operator) store(db pgDB) pgStore { return pgStore{Pool: db, Now: o.Now} }
+// refuseWhileUsersOwned is the verbs' guard: with auth-service owning users,
+// a verb that writes public.users refuses before it opens a transaction.
+func (o Operator) refuseWhileUsersOwned(writes bool) error {
+	return usersowned.RefuseWhileUsersOwned(o.UsersOwned && writes)
+}
+
+func (o Operator) store(db pgDB) pgStore {
+	return pgStore{Pool: db, Now: o.Now, UsersOwned: o.UsersOwned}
+}
 
 // inTransaction runs fn over one transaction: committed when it returns nil,
 // rolled back otherwise.
@@ -123,6 +135,9 @@ type CreateUserInput struct {
 // CreateUser is UserService.create with is_verified=True: the email and the
 // username must be free, then the password is at least eight characters.
 func (o Operator) CreateUser(ctx context.Context, in CreateUserInput) (*User, error) {
+	if err := o.refuseWhileUsersOwned(true); err != nil {
+		return nil, err
+	}
 	var created *fullUser
 	err := o.inTransaction(ctx, func(store pgStore) error {
 		if existing, err := store.userByEmail(ctx, in.Email); err != nil {
@@ -285,6 +300,9 @@ type DeleteUserResult struct {
 // The user row is locked first, as the API's superuser-guarded write locks it, and the work runs in one transaction.
 // Without Confirm the user and the memberships are reported and nothing is written.
 func (o Operator) DeleteUser(ctx context.Context, in DeleteUserInput) (*DeleteUserResult, error) {
+	if err := o.refuseWhileUsersOwned(true); err != nil {
+		return nil, err
+	}
 	mode := DeleteSoft
 	if in.Force {
 		mode = DeleteForce
@@ -357,6 +375,9 @@ func (o Operator) DeleteUser(ctx context.Context, in DeleteUserInput) (*DeleteUs
 func (o Operator) UpdateUser(ctx context.Context, in UpdateUserInput) (*UpdateUserResult, error) {
 	hasProfileChange := in.NewEmail != nil || in.NewUsername != nil || in.FullName != nil ||
 		in.Active != nil || in.Verified != nil || in.Superuser != nil
+	if err := o.refuseWhileUsersOwned(hasProfileChange || in.Password != nil); err != nil {
+		return nil, err
+	}
 	if !hasProfileChange && in.Password == nil && in.MembershipOrg == nil && in.RemoveFromOrg == nil {
 		return nil, refuse("No updates specified. Provide at least one field to update.")
 	}

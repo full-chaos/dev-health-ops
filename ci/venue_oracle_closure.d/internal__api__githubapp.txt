@@ -35,6 +35,7 @@ internal/api/standinkey
 internal/api/syncadmin
 internal/api/teamsidentity
 internal/api/telemetry
+internal/api/usersowned
 internal/api/webhookintake
 internal/apiservice
 internal/apiservice/acr

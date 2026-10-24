@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/usersowned"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -24,6 +25,9 @@ type pgDB interface {
 
 type pgStore struct {
 	Pool pgDB
+	// UsersOwned is AUTH_USERS_OWNED: auth-service owns users, so every
+	// public.users writer of the store refuses before it writes.
+	UsersOwned bool
 	// Now is injectable for tests; nil means time.Now.
 	Now func() time.Time
 }
@@ -193,3 +197,9 @@ LIMIT 1`, admin, s.now().UTC(),
 func parseUUID(value string) (uuid.UUID, error) {
 	return uuid.Parse(value)
 }
+
+// ErrUsersOwned is the refusal of a public.users write while auth-service owns
+// users; the routes answer the moved operation and the operator verbs exit refused.
+var ErrUsersOwned = usersowned.ErrRefused
+
+func (s pgStore) refuseWhileUsersOwned() error { return usersowned.RefuseWhileUsersOwned(s.UsersOwned) }

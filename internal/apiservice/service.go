@@ -275,6 +275,7 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 			Write:         WriteError,
 			Limits:        limits,
 			Invites:       deps.Invites,
+			UsersOwned:    deps.UsersOwned,
 		})...)
 	}
 	webhookintake.LogUnconfiguredSecrets(logger)
@@ -375,6 +376,11 @@ func configureWith(
 	deps, depComponents, err := buildDeps(ctx, cfg, registry, logger, authProxy)
 	if err != nil {
 		return nil, err
+	}
+	deps.UsersOwned, err = ParseUsersOwned(envsecrets.ProcessLookup, authProxy)
+	if err != nil {
+		closeComponents(depComponents)
+		return nil, dependencyFailure(ctx, logger, "api_users_owned", "api_users_owned_config_invalid", err)
 	}
 	deps.SessionIssuer, err = sessionIssuer(authProxy, envsecrets.ProcessLookup)
 	if err != nil {

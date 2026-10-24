@@ -10,7 +10,7 @@
 // false finding (noise accepted). Only conversions (string(x), a local string type, attribute.Key(x)) and
 // strconv.Itoa / fmt.Sprint of constants are folded into a key; any other call in key position is a dynamic key (R2 on
 // a metric label or a span attribute). Named limits (not seen by the scan): a constant key taken from another package (for example
-// tracing.StageAttribute); a constructor returned by a function call; a constant whose folding exceeds 8 values, 256 bytes, 64 passes or 4096 expression nodes, or that has a declaration the scan cannot read (it, and every constant built from it, is marked saturated and a key that uses it is an R1 finding); a package that exhausts the work budget (1,000,000 steps plus 100 per syntax node; one R1 "census incomplete: work budget" finding at its package clause, and its scan stops); a constructor reached through a function parameter, an append, or a map or struct field read under another name; a constructor converted to a function type (T(attribute.String)); a constructor assigned to a map entry or struct field after its literal (m[k] = f, x.f = f); a call through a dereferenced pointer ((*p)(...)); and a key that is a variable and not a constant.
+// tracing.StageAttribute); a constructor returned by a function call; a constant whose folding exceeds 8 values, 256 bytes, 64 passes or 4096 expression nodes, or that has a declaration the scan cannot read (it, and every constant built from it, is marked saturated and a key that uses it is an R1 finding); a package that exhausts the work budget (1,000,000 steps plus 100 per syntax node, and 64 steps per alias entry kept; one R1 "census incomplete: work budget" finding at its package clause, and its scan stops); a constructor reached through a function parameter, an append, or a map or struct field read under another name; a constructor converted to a function type (T(attribute.String)); a constructor assigned to a map entry or struct field after its literal (m[k] = f, x.f = f); a call through a dereferenced pointer ((*p)(...)); and a key that is a variable and not a constant.
 // The runtime sentinel tests are the primary defence.
 package emitscan
 
@@ -197,6 +197,10 @@ func Scan(root string, dirs []string) ([]Finding, error) {
 // The work budget of a package scan is workBase plus workPerNode for every syntax node of the package: a scan costs a
 // small multiple of the package size, and an input that makes it cost more (a blowup in some loop) ends as unscannable.
 // A step is a fold node, a key byte, an alias or flow step, or an expression node a walk visits.
+// aliasEntryCost is charged for every alias entry kept (a set slot and a list slot, about 125 bytes): memory is bounded as
+// well as steps.
+const aliasEntryCost = 64
+
 var (
 	workBase    = 1000000
 	workPerNode = 100
@@ -631,6 +635,9 @@ func (info *pkgInfo) collectAliases(group []parsedFile) {
 				seen[edge.name] = map[[2]string]bool{}
 			}
 			if !seen[edge.name][alt] {
+				if !info.budget.charge(aliasEntryCost) {
+					return
+				}
 				seen[edge.name][alt] = true
 				info.aliases[edge.name] = append(info.aliases[edge.name], alt)
 				grew = true
@@ -709,15 +716,21 @@ func (info *pkgInfo) altsOf(expr ast.Expr, imports map[string]string) [][2]strin
 		return info.aliases[e.Sel.Name] // a field holding a constructor
 	case *ast.CompositeLit:
 		var out [][2]string
+		kept := map[[2]string]bool{}
 		for _, element := range e.Elts {
 			if kv, ok := element.(*ast.KeyValueExpr); ok {
 				element = kv.Value
 			}
 			alts := info.altsOf(element, imports)
-			if !info.budget.charge(1 + 2*len(alts)) { // the copy below allocates: weigh it double
+			if !info.budget.charge(1 + 2*len(alts)) { // the set and list below allocate: weigh it double
 				return out
 			}
-			out = append(out, alts...)
+			for _, alt := range alts {
+				if !kept[alt] {
+					kept[alt] = true
+					out = append(out, alt)
+				}
+			}
 		}
 		return out
 	}

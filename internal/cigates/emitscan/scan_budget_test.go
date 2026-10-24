@@ -2,6 +2,7 @@ package emitscan_test
 
 import (
 	"fmt"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -44,7 +45,7 @@ var budgetSites = []budgetSite{
 	{"dependant constants and fold nodes", func() string { return repeat(200, "const c%d = a%d\n", idx, idx) }, 3200},
 	{"key bytes", func() string { return repeat(50, "const c%d = \""+strings.Repeat("W", 200)+"\"\n", idx) }, 15000},
 	{"alias edges and evaluation", func() string { return repeat(200, "var a%d = b%d\n", idx, idx) }, 2000},
-	{"taint assignment", func() string { return "func f() {\n" + repeat(200, "\tx = y\n") + "}\n" }, 3500},
+	{"taint assignment", func() string { return "func f() {\n" + repeat(200, "\tx = y\n") + "}\n" }, 3600},
 	{"taint value spec", func() string { return "func f() {\n" + repeat(200, "\tvar x = y\n") + "}\n" }, 4700},
 	{"taint worklist", func() string {
 		return "func f(r *http.Request) {\n\tx0 := r.URL.Path\n" + repeat(200, "\tx%d := x%d\n", func(i int) any { return i + 1 }, idx) + "}\n"
@@ -53,17 +54,24 @@ var budgetSites = []budgetSite{
 	{"returned taint", func() string { return "func f() string {\n\treturn a" + strings.Repeat(" + a", 200) + "\n}\n" }, 1950},
 	{"composite alternatives", func() string {
 		return "var a = slog.String\nvar x = []any{a" + strings.Repeat(", a", 200) + "}\n"
-	}, 1150},
+	}, 1250},
 	{"call through a name", func() string {
 		return "var a = slog.String\nfunc f(v string) {\n" + repeat(200, "\t_ = a(\"x\", v)\n") + "}\n"
-	}, 6850},
+	}, 6900},
 	{"call through a field", func() string {
 		return "type h struct{ mk func(string, string) slog.Attr }\nvar x = h{mk: slog.String}\nfunc f(v string) {\n" + repeat(200, "\t_ = x.mk(\"x\", v)\n") + "}\n"
-	}, 10000},
+	}, 10200},
 	{"call through an index", func() string {
 		return "var m = []func(string, string) slog.Attr{slog.String}\nfunc f(v string) {\n" + repeat(200, "\t_ = m[0](\"x\", v)\n") + "}\n"
-	}, 9800},
-	{"syntax node walk", func() string { return "func f() {\n" + repeat(1000, "\tx\n") + "}\n" }, 3000},
+	}, 9900},
+	{"alias entries kept", func() string { return repeat(50, "var a = slog.F%d\n", idx) + repeat(100, "var d%d = a\n", idx) }, 200000},
+	{"error text walk", func() string {
+		return "func f(v string) { _ = attribute.String(\"k\", v" + strings.Repeat(" + v", 300) + ") }\n"
+	}, 5200},
+	{"computed key walks", func() string {
+		return "func f(v string) { _ = attribute.String(k" + strings.Repeat(" + k", 300) + ", v) }\n"
+	}, 4650},
+	{"syntax node walk", func() string { return "func f() {\n" + repeat(1000, "\tx\n") + "}\n" }, 5000},
 }
 
 // Each row is a small input whose cost sits mostly in one charge site; the budget is set so the package trips only while
@@ -92,4 +100,23 @@ func TestCostPlantsEndFast(t *testing.T) {
 	for id, body := range plants {
 		timed(t, id, time.Second, func() string { scanSource(t, header+body); return "" })
 	}
+}
+
+// Alias entries are kept in memory: a name copied many times from an alias with many constructors must trip the budget
+// early and small, not after gigabytes.
+func TestAliasEntryMemoryIsBounded(t *testing.T) {
+	body := "func f() {\n" + repeat(2000, "\ta = slog.F%d\n", idx) + repeat(5000, "\td%d = a\n", idx) + "}\n"
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	var got []emitscan.Finding
+	timed(t, "alias entries 85 KB", time.Second, func() string { got = scanSource(t, header+body); return "" })
+	runtime.ReadMemStats(&after)
+	if !tripped(got) {
+		t.Errorf("findings = %v, want the census finding", got)
+	}
+	if grown := (after.TotalAlloc - before.TotalAlloc) >> 20; grown > 200 {
+		t.Errorf("the scan allocated %d MiB, want < 200", grown)
+	}
+	t.Logf("%d byte plant allocated %d MiB", len(body), (after.TotalAlloc-before.TotalAlloc)>>20)
 }

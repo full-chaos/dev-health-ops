@@ -3,6 +3,7 @@ package emitscan_test
 import (
 	"fmt"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -119,14 +120,24 @@ func TestConstFixpointBounded(t *testing.T) {
 	}
 }
 
+// cpuTime is the CPU time this process has used: a busy host stretches wall time, not the work a scan does.
+func cpuTime(t *testing.T) time.Duration {
+	t.Helper()
+	var usage syscall.Rusage
+	if err := syscall.Getrusage(syscall.RUSAGE_SELF, &usage); err != nil {
+		t.Fatal(err)
+	}
+	return time.Duration(usage.Utime.Nano() + usage.Stime.Nano())
+}
+
 func timed(t *testing.T, id string, limit time.Duration, run func() string) string {
 	t.Helper()
-	start := time.Now()
+	start := cpuTime(t)
 	got := run()
-	elapsed := time.Since(start)
-	t.Logf("%s: %s", id, elapsed)
+	elapsed := cpuTime(t) - start
+	t.Logf("%s: %s cpu", id, elapsed)
 	if elapsed > limit*raceSlowdown {
-		t.Errorf("%s: took %s, want < %s", id, elapsed, limit)
+		t.Errorf("%s: used %s cpu, want < %s", id, elapsed, limit)
 	}
 	return got
 }

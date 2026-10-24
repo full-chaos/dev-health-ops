@@ -928,6 +928,19 @@ FROM generate_series($3::int, $4::int) AS g`, discoveryTestOrg, discoveryTestRun
 	} {
 		seedMoreUnits(step.from, step.count)
 		markOutboxDispatched()
+		// Earlier passes filled the bucket's admission slots; finish those units so this pass has free slots.
+		if _, err := admin.Exec(ctx, `UPDATE sync_run_units SET status=$2, updated_at=now() WHERE sync_run_id=$1 AND status<>$3`,
+			discoveryTestRun, syncRunUnitStatusSuccess, syncRunUnitStatusPlanned); err != nil {
+			t.Fatal(err)
+		}
+		var activeBefore int
+		if err := admin.QueryRow(ctx, `SELECT count(*) FROM sync_run_units WHERE sync_run_id=$1 AND status IN ($2,$3)`,
+			discoveryTestRun, syncRunUnitStatusDispatching, syncRunUnitStatusRunning).Scan(&activeBefore); err != nil {
+			t.Fatal(err)
+		}
+		if activeBefore != 0 {
+			t.Fatalf("%s: %d active units before the pass, want 0 so the bucket has free slots", step.name, activeBefore)
+		}
 		var plannedBefore int
 		if err := admin.QueryRow(ctx, `SELECT count(*) FROM sync_run_units WHERE sync_run_id=$1 AND status=$2`,
 			discoveryTestRun, syncRunUnitStatusPlanned).Scan(&plannedBefore); err != nil {

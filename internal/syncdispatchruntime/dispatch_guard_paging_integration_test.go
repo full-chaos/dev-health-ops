@@ -125,8 +125,8 @@ func TestAuthorizeRunPagesAPastPageSizeRunAndKeepsTheDecision(t *testing.T) {
 			if decision.allowed {
 				t.Fatalf("decision = %+v, want a total-cap hard-deny", decision)
 			}
-			if got, want := sum(pages), 3*units; got != want {
-				t.Fatalf("rows read = %d over pages %v, want %d (two passes and the suffix walk)", got, pages, want)
+			if got, want := sum(pages), 2*units; got != want {
+				t.Fatalf("rows read = %d over pages %v, want %d (the cap decides after pass 1 and the suffix walk, so pass 2 never runs)", got, pages, want)
 			}
 			if strings.Join(decision.cappedUnitIDs, ",") != strings.Join(ids[1000:], ",") {
 				t.Fatalf("cappedUnitIDs = %v, want the id-ordered suffix past 1000", decision.cappedUnitIDs)

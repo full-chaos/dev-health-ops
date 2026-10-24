@@ -49,7 +49,7 @@ jobs:
       # ONE docs-only definition (ci/codeql_docs_only.sh), run from the BASE commit so a change cannot rewrite its own
       # judge. pull_request: the PR's base...head. merge_group: the target branch tip...the entry head, so the whole
       # group ahead of this entry is judged, never this PR alone (merge_group.base_sha is the parent ENTRY). Any other
-      # event, and any error, is docs_only=false. internal/cigates/workflows pins every copy of this step identical.
+      # event, and any fetch, merge-base or judge error, is docs_only=false. internal/cigates/workflows pins every copy identical.
       - name: Docs-only change (judged by the base commit's ci/codeql_docs_only.sh)
         id: docs
         env:
@@ -78,6 +78,7 @@ jobs:
           esac
           if [ -n "${base}" ] && [ -n "${head}" ] \
             && git fetch --no-tags --filter=blob:none origin "${base}" "${head}" \
+            && git merge-base "${base}" "${head}" > /dev/null \
             && git show "${base}:ci/codeql_docs_only.sh" > "${RUNNER_TEMP}/docs_only_judge.sh"; then
             docs_only="$(bash "${RUNNER_TEMP}/docs_only_judge.sh" "${base}" "${head}")" || docs_only=false
           fi

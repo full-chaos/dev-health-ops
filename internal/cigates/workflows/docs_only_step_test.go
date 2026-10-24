@@ -23,8 +23,6 @@ var docsStepSites = [][2]string{
 	{"go.yml", "go-storage-integration-plan"},
 	{"docker-images.yml", "changes"},
 	{"live-e2e.yml", "changes"},
-	{"go-auth-service.yml", "auth-changes"},
-	{"auth-k8s-proof.yml", "auth-k8s-proof"},
 }
 
 func docsStep(t *testing.T, root, file, job string) yamlMap {
@@ -55,6 +53,7 @@ func docsStepViolations(t *testing.T, root string) []string {
 		`git show "${base}:ci/codeql_docs_only.sh" > "${RUNNER_TEMP}/docs_only_judge.sh"`,
 		`bash "${RUNNER_TEMP}/docs_only_judge.sh" "${base}" "${head}"`,
 		`[ "${docs_only}" = "true" ] || docs_only=false`,
+		`&& git merge-base "${base}" "${head}" > /dev/null \`,
 		`"+${MG_BASE_REF}:refs/remotes/origin/docs-only-base"`,
 	} {
 		if !strings.Contains(run, want) {
@@ -71,7 +70,7 @@ func docsStepViolations(t *testing.T, root string) []string {
 				add("%s:%s: the docs step's %s differs from the canonical copy in go-quality.yml:go-quality-plan", site[0], site[1], key)
 			}
 		}
-		if out := asMap(asMap(jobsOf(loadWf(t, root, site[0]))[site[1]])["outputs"]); site[1] != "auth-changes" && site[1] != "auth-k8s-proof" && asString(out["docs_only"]) != "${{ steps.docs.outputs.docs_only }}" {
+		if out := asMap(asMap(jobsOf(loadWf(t, root, site[0]))[site[1]])["outputs"]); asString(out["docs_only"]) != "${{ steps.docs.outputs.docs_only }}" {
 			add("%s:%s does not publish docs_only from the docs step", site[0], site[1])
 		}
 	}
@@ -225,6 +224,14 @@ func TestDocsOnlyStepBehaviour(t *testing.T) {
 	noJudgeBase := g.git(g.src, "rev-parse", "HEAD")
 	g.git(g.src, "push", "-q", "origin", noJudgeBase+":refs/heads/scratch-nojudge")
 	docsOnNoJudge := g.commit(noJudgeBase, map[string]string{"notes.md": "c"})
+	// a planted merge-base failure: a target branch whose history is unrelated to the entry, carrying a judge that
+	// would say docs-only, so only the failed merge base can make the verdict false
+	g.git(g.src, "checkout", "-q", "--orphan", "unrelated")
+	unrelated := g.commit("", map[string]string{"ci/codeql_docs_only.sh": "echo true\n", ".github/workflows/go.yml": goYml})
+	g.git(g.src, "push", "-q", "origin", unrelated+":refs/heads/unrelated-main")
+	if out, err := exec.Command("git", "-C", g.src, "merge-base", unrelated, docsEntry2).CombinedOutput(); err == nil {
+		t.Fatalf("control: git merge-base found %q for unrelated histories; the plant did not land", out)
+	}
 
 	pr := func(base, head string) map[string]string {
 		return map[string]string{"EVENT_NAME": "pull_request", "PR_BASE_SHA": base, "PR_HEAD_SHA": head}
@@ -243,6 +250,7 @@ func TestDocsOnlyStepBehaviour(t *testing.T) {
 		{"a docs-only group", mg("refs/heads/main", docsEntry2), "true"},
 		{"a merge group with a base ref that is not a branch", mg("main", docsEntry2), "false"},
 		{"a merge group with a missing target branch", mg("refs/heads/nope", docsEntry2), "false"},
+		{"a merge group whose target branch shares no merge base with the entry fails closed", mg("refs/heads/unrelated-main", docsEntry2), "false"},
 		{"a push is never docs-only", map[string]string{"EVENT_NAME": "push"}, "false"},
 		{"the judge comes from the base commit", pr(lenientBase, codeOnLenient), "true"},
 		{"a head that rewrites the judge is judged by the base", pr(main, rewritesJudge), "false"},

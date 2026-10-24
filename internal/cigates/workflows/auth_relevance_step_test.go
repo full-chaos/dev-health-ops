@@ -9,8 +9,8 @@ import (
 	"testing"
 )
 
-// auth-changes' relevance step (acp 5a): a docs-only pull request or merge queue entry is not relevant; a merge queue
-// entry otherwise goes through ci/auth_queue_relevance.sh (whole group, fail closed); a push to main is relevant, forced.
+// auth-changes' relevance step (acp 5a): a merge queue entry goes through ci/auth_queue_relevance.sh (the pull request
+// rule over the whole group, fail closed); a push to main is relevant, forced. The docs-only rule is not used here.
 
 func authRelevanceStep(t *testing.T, root string) yamlMap {
 	t.Helper()
@@ -29,7 +29,6 @@ func TestAuthRelevanceStepWiring(t *testing.T) {
 		"EVENT":       "${{ github.event_name }}",
 		"MG_BASE_REF": "${{ github.event.merge_group.base_ref }}",
 		"MG_HEAD_SHA": "${{ github.event.merge_group.head_sha }}",
-		"DOCS_ONLY":   "${{ steps.docs.outputs.docs_only }}",
 	} {
 		if got := asString(env[k]); got != want {
 			t.Errorf("relevance step env %s = %q, want %q", k, got, want)
@@ -47,6 +46,9 @@ func TestAuthRelevanceStepWiring(t *testing.T) {
 	if strings.Contains(run, "merge_group.base_sha") || strings.Contains(fmt.Sprint(env), "base_sha") {
 		t.Error("the relevance step must not judge from merge_group.base_sha (the parent entry): that is one PR, not the group")
 	}
+	if strings.Contains(run, "docs_only") || strings.Contains(fmt.Sprint(env), "docs_only") || strings.Contains(run, "codeql_docs_only") {
+		t.Error("the auth relevance must not use the docs-only rule (acp 5a): only check_go.sh auth relevant decides")
+	}
 }
 
 // runAuthRelevanceStep executes the step text in a repo with no origin, so every merge_group fetch fails.
@@ -60,7 +62,7 @@ func runAuthRelevanceStep(t *testing.T, env map[string]string) string {
 	cmd := exec.Command("bash", "-e", "-c", asString(authRelevanceStep(t, repoRoot(t))["run"]))
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), "GITHUB_OUTPUT="+output)
-	for _, k := range []string{"EVENT", "BASE_SHA", "HEAD_SHA", "MG_BASE_REF", "MG_HEAD_SHA", "DOCS_ONLY"} {
+	for _, k := range []string{"EVENT", "BASE_SHA", "HEAD_SHA", "MG_BASE_REF", "MG_HEAD_SHA"} {
 		cmd.Env = append(cmd.Env, k+"="+env[k])
 	}
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -80,13 +82,10 @@ func TestAuthRelevanceStepBehaviour(t *testing.T) {
 		env  map[string]string
 		want string
 	}{
-		{"a push to main is relevant, forced", map[string]string{"EVENT": "push", "DOCS_ONLY": "false"}, "relevant=true"},
-		{"a push ignores a docs-only verdict", map[string]string{"EVENT": "push", "DOCS_ONLY": "true"}, "relevant=true"},
-		{"a docs-only pull request is not relevant", map[string]string{"EVENT": "pull_request", "DOCS_ONLY": "true"}, "relevant=false"},
-		{"a docs-only merge queue entry is not relevant", map[string]string{"EVENT": "merge_group", "DOCS_ONLY": "true", "MG_BASE_REF": "refs/heads/main", "MG_HEAD_SHA": head}, "relevant=false"},
-		{"a merge queue entry whose target branch cannot be fetched runs the gates", map[string]string{"EVENT": "merge_group", "DOCS_ONLY": "false", "MG_BASE_REF": "refs/heads/main", "MG_HEAD_SHA": head}, "relevant=true"},
-		{"a merge queue entry with a non-branch base ref runs the gates", map[string]string{"EVENT": "merge_group", "DOCS_ONLY": "false", "MG_BASE_REF": "main", "MG_HEAD_SHA": head}, "relevant=true"},
-		{"a manual run is relevant", map[string]string{"EVENT": "workflow_dispatch", "DOCS_ONLY": "false"}, "relevant=true"},
+		{"a push to main is relevant, forced", map[string]string{"EVENT": "push"}, "relevant=true"},
+		{"a merge queue entry whose target branch cannot be fetched runs the gates", map[string]string{"EVENT": "merge_group", "MG_BASE_REF": "refs/heads/main", "MG_HEAD_SHA": head}, "relevant=true"},
+		{"a merge queue entry with a non-branch base ref runs the gates", map[string]string{"EVENT": "merge_group", "MG_BASE_REF": "main", "MG_HEAD_SHA": head}, "relevant=true"},
+		{"a manual run is relevant", map[string]string{"EVENT": "workflow_dispatch"}, "relevant=true"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			if got := runAuthRelevanceStep(t, c.env); got != c.want {

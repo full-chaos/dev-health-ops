@@ -192,3 +192,26 @@ func TestAuthQueueRelevanceFailsClosedOnBadInput(t *testing.T) {
 		t.Errorf("control: valid input printed %q, want relevant=false", got)
 	}
 }
+
+// A planted merge-base failure: the target branch tip is a real commit of an unrelated history, so git merge-base exits
+// non-zero. The script must print relevant=true and never call the rule.
+func TestAuthQueueRelevanceFailsClosedOnAMergeBaseFailure(t *testing.T) {
+	r := newAuthRelevanceRepo(t, recordingCheckGo+"echo relevant=false\n")
+	r.commit("seed.txt")
+	head := r.commit("docs/a.md")
+	r.git("checkout", "-q", "--orphan", "unrelated")
+	unrelated := r.commit("other.txt")
+	if out, err := exec.Command("git", "-C", r.dir, "merge-base", unrelated, head).CombinedOutput(); err == nil {
+		t.Fatalf("control: git merge-base found %q for unrelated histories; the plant did not land", out)
+	}
+	res := runAuthRelevance(t, r, "", unrelated, head)
+	if got := strings.TrimSpace(res.stdout); got != "relevant=true" {
+		t.Errorf("a merge-base failure printed %q, want relevant=true", got)
+	}
+	if !strings.Contains(res.stderr, "no merge base") {
+		t.Errorf("stderr does not name the merge-base failure: %s", res.stderr)
+	}
+	if _, err := os.Stat(filepath.Join(r.dir, "args")); err == nil {
+		t.Error("the rule was called although no merge base exists")
+	}
+}

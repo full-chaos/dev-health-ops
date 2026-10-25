@@ -269,6 +269,7 @@ SQL
     # now: probe every aggregate again, forward what it serves now, and turn the credentials flag on BEFORE the owned flag.
     printf 'step 1f: the aggregates auth-service serves with users owned\n'
     BEFORE_OWNED=("${FORWARDED[@]}")
+    AUTH_API_PORT="$(hostport auth-service 8095)" # the recreate took a new ephemeral host port
     classify
     [[ " ${SERVED[*]} " == *" credentials "* ]] || die "credentials is not served by auth-service after step 1e (users owned)"
     printf 'leg acp forwards (users owned): %s\n' "${FORWARDED[*]}"

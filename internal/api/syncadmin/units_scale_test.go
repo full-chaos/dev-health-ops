@@ -27,7 +27,7 @@ func (s slimRollupReader) runUnitRollupRows(context.Context, string, uuid.UUID) 
 // TestRunUnitsLargeRunScale drives the real getRunUnits handler over a run with
 // 20k and 100k units. The paged read (offset, limit) of a 100k-unit run must
 // answer in under 1 s with under 1 MiB, and report the filtered total; the
-// whole-run read is logged for comparison only.
+// whole-run read is not timed here (its path is unchanged).
 func TestRunUnitsLargeRunScale(t *testing.T) {
 	unsetForTest(t, "SYNC_INCREMENTAL_HEAVY_MAX_WINDOW_DAYS")
 	unsetForTest(t, "SYNC_WATERMARK_OVERLAP")
@@ -50,7 +50,7 @@ func TestRunUnitsLargeRunScale(t *testing.T) {
 				Status: statuses[i%len(statuses)], CreatedAt: now, UpdatedAt: now, HasSource: true,
 				SourceName: &name, SourceFullName: &full, SourceExternalID: &full, Result: &res}
 		}
-		for _, query := range []string{"", "?offset=0&limit=500", "?status=failed,retrying&offset=500&limit=500&dataset_key=commits"} {
+		for _, query := range []string{"?offset=0&limit=500", "?status=failed,retrying&offset=500&limit=500&dataset_key=commits"} {
 			reader := slimRollupReader{&unitsReader{faultReader: &faultReader{}, units: units}}
 			started := time.Now()
 			_, status, body := serveUnits(t, reader, query, now)
@@ -59,11 +59,12 @@ func TestRunUnitsLargeRunScale(t *testing.T) {
 			if status != http.StatusOK {
 				t.Fatalf("units=%d query=%q: status %d", count, query, status)
 			}
-			if query == "" {
-				continue
+			budget := time.Second
+			if scaleRaceEnabled {
+				budget = 15 * time.Second
 			}
-			if count == 100000 && elapsed > time.Second {
-				t.Errorf("units=%d query=%q: paged read took %s, over 1 s", count, query, elapsed)
+			if count == 100000 && elapsed > budget {
+				t.Errorf("units=%d query=%q: paged read took %s, over %s", count, query, elapsed, budget)
 			}
 			if len(body) > 1<<20 {
 				t.Errorf("units=%d query=%q: paged body %d bytes, over 1 MiB", count, query, len(body))

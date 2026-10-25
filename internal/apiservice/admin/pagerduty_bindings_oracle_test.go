@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -295,6 +296,7 @@ VALUES ($1, $2, $3, $4, $5, 'v1:seed-not-decrypted', 'v1', $6, now(), now(), $7:
 	// timestamp (a malformed one -- "+00:00", a missing "Z" -- stays visible).
 	timestamp := regexp.MustCompile(`\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d{1,6})?Z`)
 	newID := regexp.MustCompile(`"id":"[0-9a-f-]{36}"`)
+	contentLength := regexp.MustCompile(`content-length:\d+`)
 	pin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/pagerduty/bindings.go-pin.json", SHA256: "9919c96e6408b00f033515ce05c55204b123ce5ea131d827b673e3a282626b70", Ruling: bindingsOrgScopeRuling})
 	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{
 		Golden: golden,
@@ -304,7 +306,18 @@ VALUES ($1, $2, $3, $4, $5, 'v1:seed-not-decrypted', 'v1', $6, now(), now(), $7:
 		},
 		Pin: pin,
 		NormalizePython: func(_ venueoracle.Request, text string) string {
-			return strings.ReplaceAll(text, "PagerDuty binding graph is not active and same-org", "PagerDuty binding graph was not found")
+			const pythonDetail, goDetail = "PagerDuty binding graph is not active and same-org", "PagerDuty binding graph was not found"
+			if !strings.Contains(text, pythonDetail) {
+				return text
+			}
+			text = strings.ReplaceAll(text, pythonDetail, goDetail)
+			return contentLength.ReplaceAllStringFunc(text, func(header string) string {
+				n, err := strconv.Atoi(strings.TrimPrefix(header, "content-length:"))
+				if err != nil {
+					return header
+				}
+				return "content-length:" + strconv.Itoa(n-(len(pythonDetail)-len(goDetail)))
+			})
 		},
 		Normalize: func(request venueoracle.Request, text string) string {
 			text = timestamp.ReplaceAllString(text, "<ts>")

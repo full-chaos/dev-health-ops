@@ -7,6 +7,7 @@ internal/adminops	users_password_fixtures_test.go	internal/adminops/testdata	dir
 internal/adminops	users_password_fixtures_test.go	internal/adminops/testdata/golden	dir	*
 internal/adminops	usersowned_test.go	internal/adminops	dir	*
 internal/api/integrationsadmin/discoveryvenue	discover_venue_oracle_integration_test.go	internal/api/syncadmin/testdata/jira_recorded	dir	*
+internal/api/policy	accessroute_test.go	.	tree	*
 internal/api/syncadmin	create_config_venue_oracle_integration_test.go	internal/api/syncadmin/testdata/jira_recorded	dir	*
 internal/api/syncadmin	dataset_writer_census_test.go	unexpressed	-	*.go
 internal/api/syncadmin	dataset_writer_lock_census_test.go	unexpressed	-	-
@@ -29,6 +30,7 @@ internal/auth/authruntime	audit_request_id_scan_test.go	unexpressed	-	-
 internal/auth/authruntime	keystate_source_test.go	internal/auth/authruntime	dir	*
 internal/auth/authruntime	kidwiring_callers_test.go	internal/auth/authruntime	dir	*
 internal/auth/contracts	access_token_goldens_test.go	unexpressed	-	-
+internal/auth/contracts	anchor_ranges_test.go	unexpressed	-	-
 internal/auth/contracts	authorization_goldens_test.go	unexpressed	-	-
 internal/auth/contracts	credential_goldens_test.go	unexpressed	-	-
 internal/auth/contracts	discovery_goldens_test.go	unexpressed	-	-
@@ -205,6 +207,7 @@ internal/jobs/workgraph	error_attr_census_test.go	internal/jobs/workgraph	tree	*
 internal/jobs/workgraph/units	pr_link_protection_test.go	internal	tree	*.go
 internal/jobs/workgraph/writercontract	writercontract_test.go	internal	tree	*
 internal/llmorgsettings	baseurl_reader_guard_test.go	unexpressed	-	-
+internal/loadharness	profiles_test.go	internal/loadharness/testdata/abuse	dir	*
 internal/localgit	blame.go	unexpressed	-	-
 internal/localgit	refs.go	unexpressed	-	-
 internal/migrationmatrix	restendpoints.go	unexpressed	-	-

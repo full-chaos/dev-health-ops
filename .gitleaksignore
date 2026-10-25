@@ -12,3 +12,5 @@ internal/auth/authruntime/access_class_test.go:generic-api-key:30
 # CHAOS-10450: the same two enum-value lines after main added lines above them in the merge commit.
 internal/auth/authconfig/config.go:generic-api-key:208
 docs/reference/auth/configuration.md:generic-api-key:62
+# CHAOS-10453: test fixture (an HS256 signing key for the probe tokens) in an earlier branch commit; the test now builds it at runtime. Not a credential.
+internal/apiservice/accessroute_probe_test.go:generic-api-key:119

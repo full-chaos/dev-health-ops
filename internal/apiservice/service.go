@@ -413,6 +413,12 @@ func configureWith(
 		closeComponents(depComponents)
 		return nil, dependencyFailure(ctx, logger, "api_acr_workload", "api_acr_workload_config_invalid", err)
 	}
+	if deps.AccessVerify != nil && deps.Auth != nil {
+		if err := deps.Auth.RouteAccess(routedAccessVerify{deps.AccessVerify}, goAPIAccessService); err != nil {
+			closeComponents(depComponents)
+			return nil, dependencyFailure(ctx, logger, "api_access_verify", "api_access_verify_config_invalid", err)
+		}
+	}
 	logWideTrust(logger)
 	if err := RegisterOperatorMetrics(registry, &deps); err != nil {
 		closeComponents(depComponents)
@@ -651,6 +657,13 @@ func NewServerWithGate(
 	middleware = append(middleware, legacyingest.HeaderLayers(routes)...)
 	if gate != nil {
 		middleware = append(middleware, intakeGate(gate, cfg.CORSAllowedOrigins))
+	}
+	if len(scope) > 0 {
+		templates, err := httpapi.NewRouteTemplates(routes)
+		if err != nil {
+			return nil, err
+		}
+		middleware = append(middleware, policy.RouteProfiles(templates.Match))
 	}
 	for _, layer := range scope {
 		middleware = append(middleware, skipScope(layer))

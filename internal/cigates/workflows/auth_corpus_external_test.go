@@ -44,8 +44,8 @@ func TestAuthCorpusExternalJobIsInTheVenueWorkflow(t *testing.T) {
 	if !ok {
 		t.Fatal("venue-oracles.yml has no auth-corpus-external job")
 	}
-	if got := strings.Join(job.Strategy.Matrix.Leg, ","); got != "go-api,acp" {
-		t.Errorf("matrix legs = %q, want go-api,acp", got)
+	if got := strings.Join(job.Strategy.Matrix.Leg, ","); got != "go-api,acp,acp-nokeys" {
+		t.Errorf("matrix legs = %q, want go-api,acp,acp-nokeys", got)
 	}
 	if failFast, ok := job.Strategy.FailFast.(bool); !ok || failFast {
 		t.Error("strategy.fail-fast must be false: leg acp failing must not cancel leg go-api")
@@ -64,6 +64,15 @@ func TestAuthCorpusExternalJobIsInTheVenueWorkflow(t *testing.T) {
 	body := text[start+1:]
 	if !strings.Contains(body, `bash ci/auth_corpus_external.sh "${{ matrix.leg }}"`) {
 		t.Error("the job does not run ci/auth_corpus_external.sh with its leg")
+	}
+	for _, want := range []string{
+		"matrix.leg == 'acp-nokeys'",
+		"AUTH_CORPUS_OMIT_AUTH_KEYS=1 bash ci/auth_corpus_external.sh acp",
+		"required aggregate sessions is not served by auth-service",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the job's non-vacuity step lacks %q", want)
+		}
 	}
 }
 
@@ -399,5 +408,61 @@ func TestAuthCorpusOverrideMailsToTheGatewayOfItsNetwork(t *testing.T) {
 		if strings.Contains(entry, "host-gateway") || strings.Contains(entry, "host.docker.internal") {
 			t.Errorf("go-api keeps extra_hosts entry %q: the host is its network's gateway", entry)
 		}
+	}
+}
+
+// auth-service trusts X-Forwarded-For from go-api's one pinned address on auth_plane, not from the network: the
+// override's trusted-proxy value is that address as a /32, and no other service on the network holds it.
+func TestAuthCorpusAcpOverrideTrustsOnlyGoAPIsPinnedAddress(t *testing.T) {
+	type override struct {
+		Services map[string]struct {
+			Networks    any      `yaml:"networks"`
+			Environment []string `yaml:"environment"`
+		} `yaml:"services"`
+	}
+	pinned := func(networks any) string {
+		if m, ok := networks.(map[string]any); ok {
+			if plane, ok := m["auth_plane"].(map[string]any); ok {
+				address, _ := plane["ipv4_address"].(string)
+				return address
+			}
+		}
+		return ""
+	}
+	holders := map[string][]string{}
+	var acp override
+	for _, file := range []string{"auth_corpus_external.override.yml", "auth_corpus_external.acp.override.yml"} {
+		var parsed override
+		if err := yaml.Unmarshal([]byte(readRepoFile(t, "ci", file)), &parsed); err != nil {
+			t.Fatal(err)
+		}
+		if file == "auth_corpus_external.acp.override.yml" {
+			acp = parsed
+		}
+		for name, service := range parsed.Services {
+			if address := pinned(service.Networks); address != "" {
+				holders[address] = append(holders[address], name)
+			}
+		}
+	}
+	address := pinned(acp.Services["go-api"].Networks)
+	if address == "" || !strings.HasPrefix(address, "10.199.91.") || address == "10.199.91.1" || address == "10.199.91.10" {
+		t.Fatalf("go-api's auth_plane address is %q, want a pinned address in 10.199.91.0/24 that is neither the gateway nor the stub", address)
+	}
+	if got := holders[address]; len(got) != 1 || got[0] != "go-api" {
+		t.Errorf("services holding %s on auth_plane: %v, want go-api only", address, got)
+	}
+	want := "AUTH_SERVICE_TRUSTED_PROXIES=" + address + "/32"
+	count := 0
+	for _, entry := range acp.Services["auth-service"].Environment {
+		if strings.HasPrefix(entry, "AUTH_SERVICE_TRUSTED_PROXIES=") {
+			count++
+			if entry != want {
+				t.Errorf("auth-service trusts %q, want %q", entry, want)
+			}
+		}
+	}
+	if count != 1 {
+		t.Errorf("auth-service sets AUTH_SERVICE_TRUSTED_PROXIES %d times, want once", count)
 	}
 }

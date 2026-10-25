@@ -2,7 +2,6 @@ package apiservice
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -25,9 +24,9 @@ const (
 	envACRWorkloadSubject = "AUTH_ACR_WORKLOAD_SUBJECT"
 )
 
-// buildAccessVerify constructs the profile-routed access-token validator.
-// AUTH_ACCESS_TOKEN_ISSUER unset: no capability (nil). The row table is empty
-// until a route adopts the validator, so every Validate call is refused.
+// buildAccessVerify constructs the profile-routed access-token validator over
+// the FULL go-api endpoint-profile row table. AUTH_ACCESS_TOKEN_ISSUER unset:
+// no capability (nil), and go-api's access-token path is unchanged.
 //
 // It also returns the JWKS client it built, so the workload verifier of the
 // internal acr routes reads the same keys (nil when the issuer is unset).
@@ -45,13 +44,18 @@ func buildAccessVerify(lookup func(string) (string, bool), auth *policy.Authenti
 	if err != nil {
 		return nil, nil, err
 	}
+	rows, err := goAPIAccessRows()
+	if err != nil {
+		return nil, nil, err
+	}
 	cfg := accessverify.Config{
+		Rows:   rows,
 		EdDSA:  verifier,
 		Meter:  otel.Meter("github.com/full-chaos/dev-health-ops/internal/auth/accessverify"),
 		Logger: logger,
 	}
 	if auth != nil {
-		cfg.Legacy = legacyVerifier(auth.Authenticate)
+		cfg.Legacy = legacyVerifier(auth.AuthenticateLegacy)
 	}
 	validator, err := accessverify.New(cfg)
 	return validator, keys, err
@@ -80,12 +84,19 @@ func buildACRWorkload(lookup func(string) (string, bool), keys authverify.KeySou
 	return &acr.WorkloadAuth{Verifier: verifier, Subject: subject}, nil
 }
 
+// legacyVerifier maps the HS256 path's errors (acp D3): a refusal and a claim
+// of the wrong type are refusals (401); any other store failure is
+// unavailable (503), never a pass and never a refusal.
 func legacyVerifier(authenticate func(context.Context, string) (*policy.User, error)) accessverify.LegacyVerifier {
 	return func(ctx context.Context, token string) (any, error) {
 		user, err := authenticate(ctx, token)
-		if errors.Is(err, policy.ErrUnavailable) {
+		switch {
+		case err == nil:
+			return user, nil
+		case policy.IsRefusal(err), policy.IsClaimTypeError(err):
+			return nil, err
+		default:
 			return nil, fmt.Errorf("%w: %w", accessverify.ErrUnavailable, err)
 		}
-		return user, err
 	}
 }

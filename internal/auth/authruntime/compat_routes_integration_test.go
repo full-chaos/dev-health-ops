@@ -169,3 +169,28 @@ func TestCompatRoutesThroughConfigure(t *testing.T) {
 	}
 	t.Logf("%s login=200 wrong=401 refresh=200 logout=200 after_logout=401 audit_client_ip=forwarded chain=peer", compatRoutesMarker)
 }
+
+// The refresh route counts in the live shared store through configure: ten refusals of an unknown credential from one
+// forwarded client are 401, the 11th is go-api's 429, and another client is not affected.
+func TestCompatRefreshLimitThroughConfigure(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	e := newRoutesEnv(t, ctx)
+	refresh := func(forwarded string) answer {
+		header := map[string]string{"X-Forwarded-For": forwarded, "Content-Type": "application/json"}
+		return e.doWith(t, "/api/v1/auth/refresh", `{"refresh_token":"not-a-live-credential"}`, header)
+	}
+	for i := 1; i <= 10; i++ {
+		if got := refresh("198.51.100.21"); got.status != http.StatusUnauthorized {
+			t.Fatalf("refresh %d = %d %s, want 401", i, got.status, got.body)
+		}
+	}
+	got := refresh("198.51.100.21")
+	if got.status != http.StatusTooManyRequests || strings.TrimSpace(string(got.body)) != `{"detail":{"message":"Rate limit exceeded. Please try again later."}}` ||
+		got.header.Get("Retry-After") != "" {
+		t.Fatalf("11th refresh = %d %s, want go-api's 429 without Retry-After", got.status, got.body)
+	}
+	if other := refresh("198.51.100.22"); other.status != http.StatusUnauthorized {
+		t.Fatalf("another client = %d %s, want 401: one bucket per client address", other.status, other.body)
+	}
+}

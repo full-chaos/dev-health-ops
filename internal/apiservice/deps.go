@@ -130,7 +130,7 @@ type Deps struct {
 	Verifier *edgetoken.Verifier
 	Signer   *edgetoken.Signer
 	// AccessVerify is the profile-routed access-token validator; nil when
-	// AUTH_ACCESS_TOKEN_ISSUER is unset. No route calls it yet.
+	// AUTH_ACCESS_TOKEN_ISSUER is unset. When set, Auth routes through it.
 	AccessVerify *accessverify.Validator
 	// ACRWorkload lets the internal acr routes accept the acr-api workload
 	// token; nil refuses every workload token (AUTH_ACR_WORKLOAD_SUBJECT or

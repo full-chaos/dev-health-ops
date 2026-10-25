@@ -233,7 +233,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        leg: [go-api, acp]
+        leg: [go-api, acp, acp-nokeys]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -244,4 +244,23 @@ jobs:
           cache-dependency-path: '**/go.sum'
 
       - name: Run the auth-flow corpus against the external go-api
+        if: matrix.leg != 'acp-nokeys'
         run: bash ci/auth_corpus_external.sh "${{ matrix.leg }}"
+
+      # Non-vacuity: leg acp without the auth-service keys must fail, and by name (not pass as "unserved").
+      - name: Leg acp without the auth-service keys fails by name
+        if: matrix.leg == 'acp-nokeys'
+        env:
+          NOKEYS_LOG: ${{ runner.temp }}/acp-nokeys.log
+        run: |
+          status=0
+          AUTH_CORPUS_OMIT_AUTH_KEYS=1 bash ci/auth_corpus_external.sh acp >"${NOKEYS_LOG}" 2>&1 || status=$?
+          tail -n 60 "${NOKEYS_LOG}"
+          if [ "${status}" -eq 0 ]; then
+            echo "ERROR: leg acp passed without the auth-service keys"
+            exit 1
+          fi
+          grep -a 'required aggregate sessions is not served by auth-service' "${NOKEYS_LOG}" || {
+            echo "ERROR: leg acp failed, but not on the required aggregate sessions"
+            exit 1
+          }

@@ -347,6 +347,7 @@ func divergingRequests(venue *venueoracle.Venue, v manualIDs) []venueoracle.Requ
 const backfillSubmitRuling = "CHAOS-11378: the backfill submit answers 202 accepted without waiting for the plan"
 
 var retiredBackfillNames = map[string]bool{
+	"clock: backfill, gated target (feature on for this org)":        true,
 	"clock: backfill, 31 days (enterprise has no limit)":             true,
 	"clock: backfill, legacy dates":                                  true,
 	"clock: backfill, structured selector":                           true,

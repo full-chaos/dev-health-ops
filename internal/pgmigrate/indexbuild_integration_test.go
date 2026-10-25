@@ -238,3 +238,18 @@ func TestBuildIndexFinalFailureUnderHeldLockLeavesIndexForNextRun(t *testing.T) 
 		t.Fatalf("next run: exit %d result %v stderr %s", code, result, stderr)
 	}
 }
+
+// A VALID index is never dropped by the cleanup that follows a final failed build.
+func TestDropInvalidFailureStreakIndexKeepsAValidIndex(t *testing.T) {
+	_, length := chainPosition(t, "0159")
+	d := newDownInstance(t)
+	conn := connect(t, d.at(t, length))
+	if _, valid := streakIndexDefinition(t, conn); !valid {
+		t.Fatal("the head database has no valid streak index")
+	}
+	pgmigrate.DropInvalidFailureStreakIndex(context.Background(), conn,
+		pgmigrate.IndexBuildOptions{LockTimeout: time.Second}, slog.New(slog.NewJSONHandler(io.Discard, nil)))
+	if _, valid := streakIndexDefinition(t, conn); !valid {
+		t.Fatal("the valid index did not survive the cleanup")
+	}
+}

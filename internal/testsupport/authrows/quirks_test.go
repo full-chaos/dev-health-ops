@@ -1,6 +1,7 @@
 package authrows
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -47,7 +48,7 @@ func testTable() []Quirk {
 
 func ledger(t *testing.T, f string) *Ledger {
 	t.Helper()
-	l, err := newLedger(forwarded(t, f), testTable())
+	l, err := newLedger(forwarded(t, f), false, testTable())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +144,7 @@ func TestMissingQuirkCountsAGoldenOnlyRowAndFailsOverAndUnderMax(t *testing.T) {
 		golden string
 		want   bool
 	}{{"keep | gone1 | gone2", true}, {"keep | gone1", false}, {"keep | gone1 | gone2 | gone3", false}} {
-		l, err := newLedger(forwarded(t, "credentials"), table)
+		l, err := newLedger(forwarded(t, "credentials"), false, table)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -156,13 +157,70 @@ func TestMissingQuirkCountsAGoldenOnlyRowAndFailsOverAndUnderMax(t *testing.T) {
 		{ID: "m1", Kind: Deliberate, Reason: "r", Table: TableAuditLogs, Needs: []Aggregate{Credentials}, Missing: func(string) bool { return true }},
 		{ID: "m2", Kind: Deliberate, Reason: "r", Table: TableAuditLogs, Needs: []Aggregate{Credentials}, Max: 1, Missing: func(string) bool { return true },
 			Extra: func(string) bool { return true }},
-		{ID: "m3", Kind: Deliberate, Reason: "r", Table: TableAuditLogs, Needs: []Aggregate{Credentials}, Max: 1, Exact: true,
+		{ID: "m3", Kind: Deliberate, Reason: "r", Table: TableAuditLogs, Needs: []Aggregate{Credentials}, Exact: true,
 			Rewrite: func(l string) (string, bool) { return l, true }},
 	}
 	got := strings.Join(CheckTable(bad), "\n")
-	for _, want := range []string{"m1: a missing-row quirk sets Max", "m2: exactly one", "m3: only an extra-row or missing-row quirk sets Exact"} {
+	for _, want := range []string{"m1: a missing-row quirk sets Max", "m2: exactly one", "m3: an exact quirk sets Max"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("no problem containing %q in:\n%s", want, got)
 		}
+	}
+}
+
+func rewriteGone(max int, exact bool) []Quirk {
+	return []Quirk{{ID: "swap", Kind: Deliberate, Reason: "r", Table: TableUsers, Needs: []Aggregate{LocalLogin}, Max: max, Exact: exact,
+		Rewrite: func(line string) (string, bool) { return strings.Replace(line, "old", "new", 1), strings.Contains(line, "old") }}}
+}
+
+func TestRewriteQuirkHonoursMaxAndExact(t *testing.T) {
+	if problems := CheckTable(rewriteGone(2, true)); len(problems) > 0 {
+		t.Fatalf("a bounded Rewrite quirk is well formed: %v", problems)
+	}
+	for _, c := range []struct {
+		n    int
+		want bool
+	}{{2, true}, {1, false}, {3, false}} {
+		l, err := newLedger(forwarded(t, "local_login"), false, rewriteGone(2, true))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var golden, acp []string
+		for i := 0; i < c.n; i++ {
+			golden = append(golden, fmt.Sprintf("r%d old", i))
+			acp = append(acp, fmt.Sprintf("r%d new", i))
+		}
+		problems := append(l.Compare(TableUsers, strings.Join(golden, rowSeparator), strings.Join(acp, rowSeparator)), l.Dead()...)
+		if (len(problems) == 0) != c.want {
+			t.Errorf("%d rewritten rows: problems %v, want clean=%v", c.n, problems, c.want)
+		}
+	}
+	l, _ := newLedger(forwarded(t, "local_login"), false, rewriteGone(0, false))
+	if problems := l.Compare(TableUsers, "a old | b old | c old", "a new | b new | c new"); len(problems) != 0 {
+		t.Fatalf("an unbounded Rewrite quirk covers every row: %v", problems)
+	}
+}
+
+func TestOwnershipDecidesWhichLegsAQuirkIsLiveOn(t *testing.T) {
+	for _, c := range []struct {
+		owned Ownership
+		leg   bool
+		live  bool
+	}{{"", false, true}, {"", true, true}, {NotOwned, false, true}, {NotOwned, true, false}, {OwnedOnly, false, false}, {OwnedOnly, true, true}} {
+		table := rewriteGone(0, false)
+		table[0].Owned = c.owned
+		l, err := newLedger(forwarded(t, "local_login"), c.leg, table)
+		if err != nil {
+			t.Fatal(err)
+		}
+		l.Compare(TableUsers, "a old", "a new")
+		if got := len(l.Dead()) == 0; got != c.live || (strings.Contains(l.Covered(), "swap") != c.live) {
+			t.Errorf("owned %q on owned leg %v: live %v, want %v (covered %q)", c.owned, c.leg, got, c.live, l.Covered())
+		}
+	}
+	bad := rewriteGone(0, false)
+	bad[0].Owned = "sometimes"
+	if problems := CheckTable(bad); len(problems) != 1 || !strings.Contains(problems[0], "owned") {
+		t.Errorf("an unknown ownership is one problem: %v", problems)
 	}
 }

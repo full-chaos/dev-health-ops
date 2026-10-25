@@ -156,7 +156,7 @@ const (
 )
 
 func TestCredentialQuirksCoverTheScenarioRowsExactly(t *testing.T) {
-	l, err := NewLedger(forwarded(t, "credentials"))
+	l, err := NewLedger(forwarded(t, "credentials"), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,7 +181,7 @@ func TestCredentialQuirksCoverTheScenarioRowsExactly(t *testing.T) {
 func TestCredentialQuirkMaxIsExactBelowAndAbove(t *testing.T) {
 	verified := `<nil>nina.new@example.comemail_verifieduseruser:nina.new@example.comEmail verified{}` + nl + `success<null>`
 	for _, n := range []int{3, 5} {
-		l, err := NewLedger(forwarded(t, "credentials"))
+		l, err := NewLedger(forwarded(t, "credentials"), false)
 		if err != nil {
 			t.Fatal(err)
 		}

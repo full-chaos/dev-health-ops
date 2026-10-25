@@ -63,6 +63,7 @@ stage-signing-key init container exists.
 {{- if eq .name "AUTH_VALKEY_URI" }}{{- fail "authService.extraEnv must not set AUTH_VALKEY_URI: use authService.valkey, which reaches the container by secretKeyRef" }}{{- end }}
 {{- if has .name (list "AUTH_JWT_SECRET_KEY" "AUTH_SESSION_SUCCESSOR_KEY") }}{{- fail (printf "authService.extraEnv must not set %s: use authService.sessionKeys, which reaches the container by secretKeyRef" .name) }}{{- end }}
 {{- if eq (upper (trim .name)) "AUTH_USERS_OWNED" }}{{- fail "authService.extraEnv must not set AUTH_USERS_OWNED: use authService.usersOwned, which the auth-migrate and grants Jobs read too so the write grant on public.users follows the switch" }}{{- end }}
+{{- if eq (upper (trim .name)) "AUTH_ORGS_OWNED" }}{{- fail "authService.extraEnv must not set AUTH_ORGS_OWNED: use authService.orgsOwned, which the backfill Job reads too" }}{{- end }}
 {{- if eq .name "AUTH_SIGNING_KEY" }}{{- fail "authService.extraEnv must not set AUTH_SIGNING_KEY: direct-value signing material is rejected by the service (ACP-ADR-02 §4); use authService.signingKey" }}{{- end }}
 {{- if eq (lower (trim .name)) "auth_signing_keyset_file" }}{{- fail "authService.extraEnv must not set AUTH_SIGNING_KEYSET_FILE: the chart renders it (authService.keySet) or stages one signing key (authService.signingKey); the service refuses a key-set manifest beside a single key" }}{{- end }}
 {{- end }}
@@ -159,6 +160,10 @@ spec:
           {{- end }}
           {{- if $a.usersOwned }}
             - name: AUTH_USERS_OWNED
+              value: "true"
+          {{- end }}
+          {{- if $a.orgsOwned }}
+            - name: AUTH_ORGS_OWNED
               value: "true"
           {{- end }}
           {{- if $a.valkey.secretName }}

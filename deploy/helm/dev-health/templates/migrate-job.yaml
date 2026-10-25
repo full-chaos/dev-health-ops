@@ -260,4 +260,71 @@ spec:
             {{- end }}
           resources:
             {{- toYaml .Values.migrations.hook.resources | nindent 12 }}
+{{- /*
+The failure-streak index Job (CHAOS-11392): `dho migrate postgres build-index failure-streak` builds
+ix_sync_run_units_failure_streak CONCURRENTLY, outside the upgrade transaction, so a large sync_run_units keeps taking
+unit writes while the index builds. Revision 0159 (CREATE INDEX IF NOT EXISTS) then finds it and does nothing. OFF by
+default: a render with the flag off has no such Job. A failed or partial build (the verb exits non-zero unless the
+index is present and valid) fails the hook, which stops the release before the weight-0 migrate Job runs. Weight -2:
+after the weight -5 ConfigMap and Secret this Job reads, before the migrate Job. Size migrations.hook.streakIndex.
+activeDeadlineSeconds for the prod table and pass a helm --timeout above it.
+*/}}
+{{- if .Values.migrations.hook.streakIndex.enabled }}
+{{- if $localBundledPostgres }}
+{{- fail "migrations.hook.streakIndex.enabled is for an existing database: it cannot run with migrations.hook.localBundledPostgres=true" }}
+{{- end }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "dev-health.fullname" . }}-streak-index
+  namespace: {{ include "dev-health.namespace" . }}
+  labels:
+    {{- include "dev-health.componentLabels" (dict "component" "migrate" "context" $) | nindent 4 }}
+  annotations:
+    helm.sh/hook: {{ join "," $hookEvents }}
+    helm.sh/hook-weight: "-2"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: {{ .Values.migrations.hook.streakIndex.activeDeadlineSeconds }}
+  template:
+    metadata:
+      labels:
+        {{- include "dev-health.componentSelectorLabels" (dict "component" "migrate" "context" $) | nindent 8 }}
+    spec:
+      {{- include "dev-health.imagePullSecrets" . | nindent 6 }}
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+      containers:
+        - name: streak-index
+          image: {{ $migrateImage | quote }}
+          imagePullPolicy: {{ $migratePullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+          args:
+            - migrate
+            - postgres
+            - build-index
+            - failure-streak
+            - --lock-timeout={{ .Values.migrations.hook.streakIndex.lockTimeoutSeconds }}s
+            - --attempts={{ .Values.migrations.hook.streakIndex.attempts }}
+            - --retry-delay={{ .Values.migrations.hook.streakIndex.retryDelaySeconds }}s
+          envFrom:
+            - configMapRef:
+                name: {{ include "dev-health.fullname" . }}-migrate-config
+            - secretRef:
+                {{- if .Values.secrets.create }}
+                name: {{ include "dev-health.fullname" . }}-migrate-secrets
+              {{- else }}
+                name: {{ default (include "dev-health.secretName" .) .Values.migrations.hook.externalSecretName }}
+              {{- end }}
+          {{- with .Values.migrations.hook.extraEnv }}
+          env:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.migrations.hook.resources | nindent 12 }}
+{{- end }}
 {{- end }}

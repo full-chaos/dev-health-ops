@@ -1,0 +1,59 @@
+name: drill-11232
+
+x-pg: &pg
+  image: postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
+  environment:
+    POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set by scripts/drill-auth-pitr.sh}
+    PGDATA: /var/lib/postgresql/pgdata
+  mem_limit: 1g
+  healthcheck:
+    test: ["CMD-SHELL", "pg_isready -U postgres"]
+    interval: 2s
+    timeout: 3s
+    retries: 30
+
+services:
+  src:
+    <<: *pg
+    profiles: [src]
+    container_name: drill-11232-src
+    command:
+      - postgres
+      - -c
+      - wal_level=replica
+      - -c
+      - archive_mode=on
+      - -c
+      - archive_command=test ! -f /wal/%f && cp %p /wal/%f
+      - -c
+      - max_wal_senders=4
+    ports:
+      - "127.0.0.1:${DRILL_PORT_SRC:-55432}:5432"
+    volumes:
+      - ${DRILL_DIR:?}/src-data:/var/lib/postgresql
+      - ${DRILL_DIR:?}/wal:/wal
+      - ${DRILL_DIR:?}/backup:/backup
+
+  pitr:
+    <<: *pg
+    profiles: [pitr]
+    container_name: drill-11232-pitr
+    command: [postgres, -c, archive_mode=off]
+    ports:
+      - "127.0.0.1:${DRILL_PORT_PITR:-55433}:5432"
+    volumes:
+      - ${DRILL_DIR:?}/pitr-data:/var/lib/postgresql
+      - ${DRILL_DIR:?}/wal:/wal:ro
+      - ${DRILL_DIR:?}/backup:/backup:ro
+
+  latest:
+    <<: *pg
+    profiles: [latest]
+    container_name: drill-11232-latest
+    command: [postgres, -c, archive_mode=off]
+    ports:
+      - "127.0.0.1:${DRILL_PORT_LATEST:-55434}:5432"
+    volumes:
+      - ${DRILL_DIR:?}/latest-data:/var/lib/postgresql
+      - ${DRILL_DIR:?}/wal:/wal:ro
+      - ${DRILL_DIR:?}/backup:/backup:ro

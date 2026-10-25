@@ -219,6 +219,13 @@ func Execute(
 	}
 	apiTableGrants, apiColumnGrants, apiSequences := postureGrants(postgresstore.APIPosture(sessionsOwnedByAuth))
 	queryAPIRole, queryAPIGrants, queryAPIColumnGrants := queryAPILeg(lookup)
+	var queryAPISessionRead *riverstore.SessionReadGrant
+	if queryAPIRole != "" {
+		if queryAPISessionRead, err = queryAPISessionReadFor(lookup, sessionsOwnedByAuth); err != nil {
+			config.WriteConfigError(stderr, err)
+			return 1
+		}
+	}
 	// CHAOS-5437: postureManifestDigest is the SAME value every go-* runtime
 	// binary recomputes at startup (postgres.PostureManifestDigest()) --
 	// stamping it here is what lets each of them prove, without a live
@@ -259,6 +266,7 @@ func Execute(
 		QueryAPIRole:            queryAPIRole,
 		QueryAPIGrants:          queryAPIGrants,
 		QueryAPIColumnGrants:    queryAPIColumnGrants,
+		QueryAPISessionRead:     queryAPISessionRead,
 		PostureManifestDigest:   postureManifestDigest,
 		PostureManifestBuildID:  migrateBuildID,
 		NativeRiverRoutes:       nativeRoutes,
@@ -505,6 +513,25 @@ func queryAPILeg(lookup func(string) (string, bool)) (string, []riverstore.Table
 	}
 	grants, columns, _ := postureGrants(postgresstore.QueryAPIPosture())
 	return value, grants, columns
+}
+
+// queryAPISessionReadFor is the auth session read the query-api role holds while
+// auth-service owns sessions (AUTH_PROXY_SESSIONS): nil when the flag is off. The
+// schema is AUTH_DATABASE_SCHEMA (default "auth"), the same value go-api and
+// query-api read sessions in.
+func queryAPISessionReadFor(lookup func(string) (string, bool), sessionsOwnedByAuth bool) (*riverstore.SessionReadGrant, error) {
+	if !sessionsOwnedByAuth {
+		return nil, nil
+	}
+	schema := "auth"
+	if value, _ := lookup("AUTH_DATABASE_SCHEMA"); strings.TrimSpace(value) != "" {
+		schema = strings.TrimSpace(value)
+	}
+	if !riverstore.ValidIdentifier(schema) {
+		return nil, fmt.Errorf("AUTH_DATABASE_SCHEMA holds an unusable schema name")
+	}
+	read := postgresstore.QueryAPISessionReadFor(schema)
+	return &riverstore.SessionReadGrant{Schema: read.Schema, Table: read.Table, Columns: read.Columns}, nil
 }
 
 // postureGrants converts one role's declared posture into the migration's

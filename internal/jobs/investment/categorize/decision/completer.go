@@ -18,6 +18,8 @@ type Completer struct {
 	rubric    *Rubric
 	transport Transport
 	model     string
+	// provider overrides the provider part of the identity; empty is ProviderName.
+	provider string
 
 	// corrupt is a test hook. It can change the payload before the adapter's
 	// own check (stage "before_own_check": the own check must refuse it) or
@@ -45,11 +47,29 @@ func NewCompleter(transport Transport, model string) (*Completer, error) {
 	return &Completer{rubric: rubric, transport: transport, model: model}, nil
 }
 
+// NewCompleterForProvider is NewCompleter for a backend that is not jev: its
+// identity and stamp carry provider, so its rows never share a result-reuse key
+// with jev rows.
+func NewCompleterForProvider(transport Transport, model, provider string) (*Completer, error) {
+	completer, err := NewCompleter(transport, model)
+	if err != nil {
+		return nil, err
+	}
+	completer.provider = provider
+	return completer, nil
+}
+
 // Model is the requested (pinned) model id.
 func (c *Completer) Model() string { return c.model }
 
 // Identity is the identity of every classification of this completer.
-func (c *Completer) Identity() Identity { return IdentityFor(c.model) }
+func (c *Completer) Identity() Identity {
+	identity := IdentityFor(c.model)
+	if c.provider != "" {
+		identity.Provider = c.provider
+	}
+	return identity
+}
 
 // ModelAccepted is the model id rule: the returned id equals the requested id
 // or starts with the requested id + "-" (a dated suffix). Anything else is
@@ -58,6 +78,21 @@ func (c *Completer) Identity() Identity { return IdentityFor(c.model) }
 // and has no prefix).
 func ModelAccepted(requested, returned string) bool {
 	return requested != "" && (returned == requested || strings.HasPrefix(returned, requested+"-"))
+}
+
+// ModelAcceptedStrict is ModelAccepted for a backend that is not jev, whose model
+// ids share a prefix with a sibling (clef and clef-flash): the part after the
+// requested id must be "-" and then a digit (a date or a version), so a sibling
+// model's answer is never taken for the requested one.
+func ModelAcceptedStrict(requested, returned string) bool {
+	if requested == "" {
+		return false
+	}
+	if returned == requested {
+		return true
+	}
+	suffix, found := strings.CutPrefix(returned, requested+"-")
+	return found && suffix != "" && suffix[0] >= '0' && suffix[0] <= '9'
 }
 
 // Terminal is the typed error that ends a classification with no valid mix. It
@@ -152,7 +187,11 @@ func (k *call) CompleteBundle(ctx context.Context, bundle units.TextBundle) (cat
 	}
 	in, out := int(typed.Usage.InputTokens), int(typed.Usage.OutputTokens)
 	categorize.LogCompletion(ctx, categorize.CompletionResult{Model: boundToken(typed.ReturnedModel), InputTokens: &in, OutputTokens: &out})
-	if !ModelAccepted(c.model, typed.ReturnedModel) {
+	accepted := ModelAccepted
+	if c.provider != "" {
+		accepted = ModelAcceptedStrict
+	}
+	if !accepted(c.model, typed.ReturnedModel) {
 		return categorize.CompletionResult{}, ended(&Terminal{State: StateRequestFailed, Details: []string{"request_failed:model_mismatch:" + boundToken(typed.ReturnedModel)},
 			InputTokens: in, OutputTokens: out, ModelReturned: typed.ReturnedModel})
 	}

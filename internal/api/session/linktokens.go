@@ -117,25 +117,13 @@ func authKey(r *http.Request, body pyjson.Value) string {
 	return host + ":" + email
 }
 
-// sendLink sends one link e-mail for user, best effort.
-func (h handlers) sendLink(ctx context.Context, user *userRow, failure, subject, template, urlField, path, token string) {
+// sendResetMail is send_password_reset_email with the failure returned.
+func (h handlers) sendResetMail(ctx context.Context, user *userRow, token string) error {
 	name := user.Email
 	if user.FullName != nil && *user.FullName != "" {
 		name = *user.FullName
 	}
-	h.Mail.Send(ctx, h.Logger, failure, user.Email, subject, template, map[string]string{
-		"full_name": name, urlField: h.Mail.Link(path, token),
-	}, "user_id", user.ID.String())
-}
-
-// sendVerification is send_verification_email.
-func (h handlers) sendVerification(ctx context.Context, user *userRow, token string) {
-	h.sendLink(ctx, user, "api: failed to send verification email", "Verify your email address",
-		"verification", "verification_url", "/auth/verify", token)
-}
-
-// sendPasswordReset is send_password_reset_email.
-func (h handlers) sendPasswordReset(ctx context.Context, user *userRow, token string) {
-	h.sendLink(ctx, user, "api: failed to send password reset email", "Reset your password",
-		"password_reset", "reset_url", "/auth/reset-password", token)
+	return h.Mail.Try(ctx, user.Email, "Reset your password", "password_reset", map[string]string{
+		"full_name": name, "reset_url": h.Mail.Link("/auth/reset-password", token),
+	})
 }

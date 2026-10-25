@@ -800,6 +800,8 @@ type EvidenceQualityStats struct {
 	Stddev     *float64         `json:"stddev,omitempty"`
 	Total      int              `json:"total"`
 	BandCounts graphqljson.JSON `json:"bandCounts"`
+	// Units of the window under the evidence gate (too little text); the theme mix leaves them out and total still counts them. Null when the window has no unit.
+	UncategorizedCount *int `json:"uncategorizedCount,omitempty"`
 }
 
 type EvidenceRef struct {

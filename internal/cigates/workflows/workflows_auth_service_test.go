@@ -18,7 +18,8 @@ import (
 
 var authFiles = []string{".github/workflows/go-auth-service.yml", "ci/check_go.sh", "ci/auth_closure_allow.tsv", "docker/go-worker.Dockerfile"}
 
-var requiredContexts = map[string]bool{"test": true, "lint": true, "go-quality": true, "metrics-executed-proof": true}
+var requiredContexts = map[string]bool{"test": true, "lint": true, "go-quality": true, "metrics-executed-proof": true,
+	"live-e2e": true, "go-queue-gate": true, "image-queue-gate": true}
 
 // the pair check must be a command that ends in `|| ...`, not text inside an echo or a comment
 var gatePairRe = regexp.MustCompile(`(?m)^\s*\[ "\$\{pair#\*=\}" = "success" \] \|\|`)

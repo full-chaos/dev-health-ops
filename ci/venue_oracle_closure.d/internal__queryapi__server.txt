@@ -16,6 +16,7 @@ internal/auth/contracts
 internal/auth/contracts/provisioning
 internal/auth/contracts/tokencorpus
 internal/auth/edgetoken
+internal/auth/emaildomain
 internal/auth/httpapi
 internal/auth/identity
 internal/auth/identity/local
@@ -25,6 +26,7 @@ internal/auth/identity/social
 internal/auth/keystore
 internal/auth/passwordhash
 internal/auth/passwordpolicy
+internal/auth/policycatalog
 internal/auth/requestid
 internal/auth/servicecred
 internal/auth/session

@@ -500,6 +500,40 @@ func TestOIDCAuthorizeRefusesAnInsecureHTTPRedirectURI(t *testing.T) {
 	}
 }
 
+// TestOIDCCallbackAcceptsADomainOnTheAllowlistInAnyCase: an asserted domain
+// that differs from the configured entry only in ASCII case is on the list.
+func TestOIDCCallbackAcceptsADomainOnTheAllowlistInAnyCase(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	st := startStack(t, ctx)
+	idp := startFakeIdP(t)
+	orgID := seedOrg(t, ctx, st.pool, "enterprise")
+	config := fmt.Sprintf(`{"client_id":"test-client","issuer":%q,"token_endpoint":%q,"jwks_uri":%q,"userinfo_endpoint":%q,"scopes":["openid","email"]}`,
+		idp.server.URL, idp.server.URL+"/token", idp.server.URL+"/jwks", idp.server.URL+"/userinfo")
+	domains := `["Allowed.Example"]`
+	providerID := seedProvider(t, ctx, st.pool, orgID, providerOpts{
+		protocol: "oidc", status: "active", config: config, autoProvision: true, allowedDomains: &domains,
+		clientSecretEncryptedFallback: "test-client-secret",
+	})
+
+	client := newCookieClient(t)
+	status, authResp := postJSONWithClient(t, client, st.server, "/api/v1/auth/oidc/"+providerID.String()+"/authorize", map[string]any{})
+	if status != http.StatusOK {
+		t.Fatalf("authorize: %d %v", status, authResp)
+	}
+	parsed, _ := url.Parse(authResp["authorization_url"].(string))
+	nonce := parsed.Query().Get("nonce")
+	const testEmail = "case.user@ALLOWED.example"
+	idp.set(nonce, testEmail, "Case User", "idp-subject-case")
+	seedMember(t, ctx, st.pool, orgID, testEmail, "oidc", "idp-subject-case")
+
+	status, body := postJSONWithClient(t, client, st.server, "/api/v1/auth/oidc/"+providerID.String()+"/callback",
+		map[string]any{"code": "test-auth-code", "state": authResp["state"]})
+	if status != http.StatusOK {
+		t.Fatalf("callback: status=%d body=%v, want 200", status, body)
+	}
+}
+
 // TestOIDCCallbackRefusesADomainNotOnTheAllowlist pins the 403 branch.
 // Unlike the exchange and provisioning failures, Python's router raises
 // this HTTPException as a bare, unwrapped 403 -- outside the

@@ -66,6 +66,13 @@ free_port() {
 }
 API_PORT="$(free_port)"
 OPERATOR_PORT="$(free_port)"
+# The corpus provider stub's CA and certificate, made now and mounted read-only into the stub, go-api and auth-service
+# (docker/providerstub.Dockerfile; nothing key-shaped is checked in). The directory and files are readable by the
+# containers' non-root user: the directory is inside this run's private temporary directory.
+STUB_DIR="${WORK}/stub"
+(cd "${ROOT}" && go run -trimpath ./internal/testsupport/providerstub/cmd/providerstub certs -out "${STUB_DIR}") >/dev/null
+chmod 0755 "${STUB_DIR}"
+chmod 0644 "${STUB_DIR}"/ca.pem "${STUB_DIR}"/server.pem "${STUB_DIR}"/server.key
 JWT_KEY="$(sed -n 's/^const Key = "\(.*\)"$/\1/p' "${ROOT}/internal/testsupport/sessionscenario/sessionscenario.go")"
 [ -n "${JWT_KEY}" ] || die "could not read sessionscenario.Key"
 {
@@ -73,6 +80,7 @@ JWT_KEY="$(sed -n 's/^const Key = "\(.*\)"$/\1/p' "${ROOT}/internal/testsupport/
   printf 'export COMMIT=%q\n' "${COMMIT:-0000000000000000000000000000000000000000}"
   printf 'export AUTH_CORPUS_API_PORT=%s\n' "${API_PORT}"
   printf 'export AUTH_CORPUS_OPERATOR_PORT=%s\n' "${OPERATOR_PORT}"
+  printf 'export AUTH_CORPUS_STUB_DIR=%q\n' "${STUB_DIR}"
   printf 'export JWT_SECRET_KEY=%q\n' "${JWT_KEY}"
   printf 'export EMAIL_PROVIDER=%q\n' "smtp"
   printf 'export EMAIL_FROM_ADDRESS=%q\n' "Dev Health <auth@example.test>"
@@ -123,6 +131,9 @@ hostport() {
   [[ "${port}" =~ ^[0-9]+$ ]] || die "could not read the published port of $1 $2 (${port})"
   printf '%s' "${port}"
 }
+STUB_ADMIN_PORT="$(hostport providerstub 9090)"
+STUB_ADMIN="http://127.0.0.1:${STUB_ADMIN_PORT}"
+curl --silent --show-error --fail --max-time 10 "${STUB_ADMIN}/requests" >/dev/null || die "the corpus provider stub's recorder does not answer at ${STUB_ADMIN}"
 PG_PORT="$(hostport postgres 5432)"
 CH_PORT="$(hostport clickhouse 9000)"
 VALKEY_PORT="$(hostport valkey 6379)"
@@ -205,6 +216,11 @@ export DEVHEALTH_AUTH_ORACLE_POSTGRES_URI="postgres://${POSTGRES_USER:-postgres}
 export DEVHEALTH_AUTH_ORACLE_CLICKHOUSE_URI="clickhouse://${CLICKHOUSE_USER:-ch}:${CLICKHOUSE_PASSWORD:-ch}@127.0.0.1:${CH_PORT}/${CLICKHOUSE_DB:-default}"
 export DEVHEALTH_AUTH_ORACLE_VALKEY_URI="redis://127.0.0.1:${VALKEY_PORT}/1"
 export DEVHEALTH_AUTH_ORACLE_SMTP_LISTEN="0.0.0.0:2525"
+export DEVHEALTH_AUTH_ORACLE_STUB_ADMIN="${STUB_ADMIN}"
+# The aggregates go-api forwarded, comma separated (empty on leg go-api): the corpus reads auth-service's rows for them
+# (internal/testsupport/authrows).
+DEVHEALTH_AUTH_ORACLE_FORWARDED="$(IFS=,; printf '%s' "${FORWARDED[*]:-}")"
+export DEVHEALTH_AUTH_ORACLE_FORWARDED
 (cd "${ROOT}" && go test -trimpath -tags integration -count=1 -v -run '^TestAuthFlowVenueOracle$' ./internal/apiservice/authflowvenue)
 
 if [ "${LEG}" = "acp" ]; then

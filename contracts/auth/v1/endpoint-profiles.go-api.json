@@ -9,10 +9,16 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/apiservice/admin/credentialdelete.go:59; internal/apiservice/admin/credentialdelete.go:72); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "gaps": [
+        "action: no catalog action covers credential (this leaf does not extend the vocabulary)"
+      ],
       "graphql_field_name": null,
       "id": "DELETE /api/v1/admin/credentials/{provider}/{name} [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "DELETE",
       "primary_validator": {
         "anchor": {
@@ -45,6 +51,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's effective organization (policy.EffectiveOrgID, internal/api/policy/guard.go:123); provider,name (path) supplied by the caller",
       "route": "/api/v1/admin/credentials/{provider}/{name}",
       "service": "dev-health-ops-api",
       "source": {
@@ -67,10 +74,16 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/apiservice/admin/ipallowlist.go:275; internal/apiservice/admin/ipallowlist.go:269); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "gaps": [
+        "action: no catalog action covers IP allowlist entry (this leaf does not extend the vocabulary)"
+      ],
       "graphql_field_name": null,
       "id": "DELETE /api/v1/admin/ip-allowlist/{entry_id} [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "DELETE",
       "primary_validator": {
         "anchor": {
@@ -103,6 +116,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's effective organization (policy.EffectiveOrgID, internal/api/policy/guard.go:123); entry_id supplied by the caller",
       "route": "/api/v1/admin/ip-allowlist/{entry_id}",
       "service": "dev-health-ops-api",
       "source": {
@@ -357,10 +371,16 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/apiservice/admin/retention.go:288; internal/apiservice/admin/retention.go:296); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "gaps": [
+        "action: no catalog action covers retention policy (this leaf does not extend the vocabulary)"
+      ],
       "graphql_field_name": null,
       "id": "DELETE /api/v1/admin/retention-policies/{policy_id} [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "DELETE",
       "primary_validator": {
         "anchor": {
@@ -393,6 +413,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's effective organization (policy.EffectiveOrgID, internal/api/policy/guard.go:123); policy_id supplied by the caller",
       "route": "/api/v1/admin/retention-policies/{policy_id}",
       "service": "dev-health-ops-api",
       "source": {
@@ -473,10 +494,16 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/syncadmin/syncadmin.go:368 (missing; malformed uuid 404s at :359; body via writeConfigNotFound :188); internal/api/syncadmin/store.go:114 (configByID: WHERE org_id=$1 AND id=$2, called with orgID(r) at syncadmin.go:362)); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "gaps": [
+        "action: no catalog action covers sync configuration (this leaf does not extend the vocabulary)"
+      ],
       "graphql_field_name": null,
       "id": "DELETE /api/v1/admin/sync-configs/{config_id} [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "DELETE",
       "primary_validator": {
         "anchor": {
@@ -509,6 +536,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's effective organization (policy.EffectiveOrgID, internal/api/policy/guard.go:123); config_id supplied by the caller",
       "route": "/api/v1/admin/sync-configs/{config_id}",
       "service": "dev-health-ops-api",
       "source": {
@@ -531,10 +559,14 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": "teams.write",
       "classification": "protected",
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/teamsidentity/teamsidentity.go:337; internal/api/teamsidentity/store.go:125); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
       "gaps": [],
       "graphql_field_name": null,
       "id": "DELETE /api/v1/admin/teams/{team_id} [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "DELETE",
       "primary_validator": {
         "anchor": {
@@ -567,6 +599,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's effective organization (policy.EffectiveOrgID, internal/api/policy/guard.go:123); team_id supplied by the caller",
       "route": "/api/v1/admin/teams/{team_id}",
       "service": "dev-health-ops-api",
       "source": {
@@ -1034,10 +1067,16 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "gaps": [
+        "action: no catalog action covers backfill job (this leaf does not extend the vocabulary)"
+      ],
       "graphql_field_name": null,
       "id": "GET /api/v1/admin/backfill-jobs [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -1070,6 +1109,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's effective organization (policy.EffectiveOrgID, internal/api/policy/guard.go:123); no resource id",
       "route": "/api/v1/admin/backfill-jobs",
       "service": "dev-health-ops-api",
       "source": {
@@ -1092,10 +1132,16 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/syncadmin/backfill_detail.go:36; internal/api/syncadmin/store.go:461 (backfillJobByID WHERE id=$1 AND org_id=$2, called at backfill_detail.go:30)); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "gaps": [
+        "action: no catalog action covers backfill job (this leaf does not extend the vocabulary)"
+      ],
       "graphql_field_name": null,
       "id": "GET /api/v1/admin/backfill-jobs/{job_id} [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -1128,6 +1174,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's effective organization (policy.EffectiveOrgID, internal/api/policy/guard.go:123); job_id supplied by the caller",
       "route": "/api/v1/admin/backfill-jobs/{job_id}",
       "service": "dev-health-ops-api",
       "source": {
@@ -1150,10 +1197,16 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "gaps": [
+        "action: no catalog action covers credential (this leaf does not extend the vocabulary)"
+      ],
       "graphql_field_name": null,
       "id": "GET /api/v1/admin/credentials [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -1186,6 +1239,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's effective organization (policy.EffectiveOrgID, internal/api/policy/guard.go:123); no resource id",
       "route": "/api/v1/admin/credentials",
       "service": "dev-health-ops-api",
       "source": {
@@ -1208,10 +1262,16 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/credentials/credentials.go:247; internal/api/credentials/credentials.go:221); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "gaps": [
+        "action: no catalog action covers credential (this leaf does not extend the vocabulary)"
+      ],
       "graphql_field_name": null,
       "id": "GET /api/v1/admin/credentials/{provider}/{name} [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -1244,6 +1304,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's effective organization (policy.EffectiveOrgID, internal/api/policy/guard.go:123); provider,name (path) supplied by the caller",
       "route": "/api/v1/admin/credentials/{provider}/{name}",
       "service": "dev-health-ops-api",
       "source": {
@@ -1788,10 +1849,16 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "gaps": [
+        "action: no catalog action covers identity (this leaf does not extend the vocabulary)"
+      ],
       "graphql_field_name": null,
       "id": "GET /api/v1/admin/identities [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -1824,6 +1891,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's effective organization (policy.EffectiveOrgID, internal/api/policy/guard.go:123); no resource id",
       "route": "/api/v1/admin/identities",
       "service": "dev-health-ops-api",
       "source": {
@@ -1904,10 +1972,14 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": "integrations.read",
       "classification": "protected",
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
       "gaps": [],
       "graphql_field_name": null,
       "id": "GET /api/v1/admin/integrations [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -1940,6 +2012,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's effective organization (policy.EffectiveOrgID, internal/api/policy/guard.go:123); no resource id",
       "route": "/api/v1/admin/integrations",
       "service": "dev-health-ops-api",
       "source": {
@@ -1962,10 +2035,14 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": "integrations.read",
       "classification": "protected",
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
       "gaps": [],
       "graphql_field_name": null,
       "id": "GET /api/v1/admin/integrations/pagerduty/services [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -1998,6 +2075,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's effective organization (policy.EffectiveOrgID, internal/api/policy/guard.go:123); no resource id",
       "route": "/api/v1/admin/integrations/pagerduty/services",
       "service": "dev-health-ops-api",
       "source": {
@@ -2020,10 +2098,14 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": "integrations.read",
       "classification": "protected",
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
       "gaps": [],
       "graphql_field_name": null,
       "id": "GET /api/v1/admin/integrations/pagerduty/status [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -2056,6 +2138,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's effective organization (policy.EffectiveOrgID, internal/api/policy/guard.go:123); no resource id",
       "route": "/api/v1/admin/integrations/pagerduty/status",
       "service": "dev-health-ops-api",
       "source": {
@@ -2078,10 +2161,14 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": "integrations.read",
       "classification": "protected",
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/apiservice/admin/pagerduty_bindings.go:499; internal/apiservice/admin/pagerduty_bindings.go:497); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
       "gaps": [],
       "graphql_field_name": null,
       "id": "GET /api/v1/admin/integrations/pagerduty/webhook-bindings/{binding_id} [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -2114,6 +2201,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's effective organization (policy.EffectiveOrgID, internal/api/policy/guard.go:123); binding_id (path) supplied by the caller",
       "route": "/api/v1/admin/integrations/pagerduty/webhook-bindings/{binding_id}",
       "service": "dev-health-ops-api",
       "source": {
@@ -2136,10 +2224,14 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": "integrations.read",
       "classification": "protected",
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/integrationsadmin/routes.go:154 and internal/api/integrationsadmin/routes.go:161; internal/api/integrationsadmin/store.go:64); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
       "gaps": [],
       "graphql_field_name": null,
       "id": "GET /api/v1/admin/integrations/{integration_id} [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -2172,6 +2264,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's effective organization (policy.EffectiveOrgID, internal/api/policy/guard.go:123); integration_id (path) supplied by the caller",
       "route": "/api/v1/admin/integrations/{integration_id}",
       "service": "dev-health-ops-api",
       "source": {
@@ -2194,10 +2287,14 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": "integrations.read",
       "classification": "protected",
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/integrationsadmin/routes.go:154 and internal/api/integrationsadmin/routes.go:161; internal/api/integrationsadmin/store.go:64); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
       "gaps": [],
       "graphql_field_name": null,
       "id": "GET /api/v1/admin/integrations/{integration_id}/datasets [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -2230,6 +2327,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's effective organization (policy.EffectiveOrgID, internal/api/policy/guard.go:123); integration_id (path) supplied by the caller",
       "route": "/api/v1/admin/integrations/{integration_id}/datasets",
       "service": "dev-health-ops-api",
       "source": {
@@ -2252,10 +2350,14 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": "integrations.read",
       "classification": "protected",
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/integrationsadmin/routes.go:154 and internal/api/integrationsadmin/routes.go:161; internal/api/integrationsadmin/store.go:64); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
       "gaps": [],
       "graphql_field_name": null,
       "id": "GET /api/v1/admin/integrations/{integration_id}/sources [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -2288,6 +2390,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's effective organization (policy.EffectiveOrgID, internal/api/policy/guard.go:123); integration_id (path) supplied by the caller",
       "route": "/api/v1/admin/integrations/{integration_id}/sources",
       "service": "dev-health-ops-api",
       "source": {
@@ -2310,10 +2413,16 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "gaps": [
+        "action: no catalog action covers IP allowlist entry (this leaf does not extend the vocabulary)"
+      ],
       "graphql_field_name": null,
       "id": "GET /api/v1/admin/ip-allowlist [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -2346,6 +2455,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's effective organization (policy.EffectiveOrgID, internal/api/policy/guard.go:123); no resource id",
       "route": "/api/v1/admin/ip-allowlist",
       "service": "dev-health-ops-api",
       "source": {
@@ -2368,10 +2478,16 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/apiservice/admin/ipallowlist.go:275; internal/apiservice/admin/ipallowlist.go:269); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "gaps": [
+        "action: no catalog action covers IP allowlist entry (this leaf does not extend the vocabulary)"
+      ],
       "graphql_field_name": null,
       "id": "GET /api/v1/admin/ip-allowlist/{entry_id} [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -2404,6 +2520,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's effective organization (policy.EffectiveOrgID, internal/api/policy/guard.go:123); entry_id supplied by the caller",
       "route": "/api/v1/admin/ip-allowlist/{entry_id}",
       "service": "dev-health-ops-api",
       "source": {
@@ -3238,10 +3355,16 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "gaps": [
+        "action: no catalog action covers retention policy (this leaf does not extend the vocabulary)"
+      ],
       "graphql_field_name": null,
       "id": "GET /api/v1/admin/retention-policies [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -3274,6 +3397,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's effective organization (policy.EffectiveOrgID, internal/api/policy/guard.go:123); no resource id",
       "route": "/api/v1/admin/retention-policies",
       "service": "dev-health-ops-api",
       "source": {
@@ -3296,10 +3420,16 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/apiservice/admin/retention.go:288; internal/apiservice/admin/retention.go:296); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "gaps": [
+        "action: no catalog action covers retention policy (this leaf does not extend the vocabulary)"
+      ],
       "graphql_field_name": null,
       "id": "GET /api/v1/admin/retention-policies/{policy_id} [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -3332,6 +3462,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's effective organization (policy.EffectiveOrgID, internal/api/policy/guard.go:123); policy_id supplied by the caller",
       "route": "/api/v1/admin/retention-policies/{policy_id}",
       "service": "dev-health-ops-api",
       "source": {
@@ -3528,10 +3659,16 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "gaps": [
+        "action: no catalog action covers the sync configuration domain (this leaf does not extend the vocabulary)"
+      ],
       "graphql_field_name": null,
       "id": "GET /api/v1/admin/sync-configs [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -3564,6 +3701,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's effective organization (policy.EffectiveOrgID, internal/api/policy/guard.go:123); no resource id",
       "route": "/api/v1/admin/sync-configs",
       "service": "dev-health-ops-api",
       "source": {
@@ -3586,10 +3724,16 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "gaps": [
+        "action: no catalog action covers auto-import capability table (this leaf does not extend the vocabulary)"
+      ],
       "graphql_field_name": null,
       "id": "GET /api/v1/admin/sync-configs/auto-import-capabilities [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -3622,6 +3766,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's effective organization (policy.EffectiveOrgID, internal/api/policy/guard.go:123); no resource id",
       "route": "/api/v1/admin/sync-configs/auto-import-capabilities",
       "service": "dev-health-ops-api",
       "source": {
@@ -3644,10 +3789,16 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/syncadmin/syncadmin.go:368 (missing; malformed uuid 404s at :359; body via writeConfigNotFound :188); internal/api/syncadmin/store.go:114 (configByID: WHERE org_id=$1 AND id=$2, called with orgID(r) at syncadmin.go:362)); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "gaps": [
+        "action: no catalog action covers sync configuration (this leaf does not extend the vocabulary)"
+      ],
       "graphql_field_name": null,
       "id": "GET /api/v1/admin/sync-configs/{config_id} [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -3680,6 +3831,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's effective organization (policy.EffectiveOrgID, internal/api/policy/guard.go:123); config_id supplied by the caller",
       "route": "/api/v1/admin/sync-configs/{config_id}",
       "service": "dev-health-ops-api",
       "source": {
@@ -3702,10 +3854,16 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/syncadmin/syncadmin.go:368 (missing; malformed uuid 404s at :359; body via writeConfigNotFound :188); internal/api/syncadmin/store.go:114 (configByID: WHERE org_id=$1 AND id=$2, called with orgID(r) at syncadmin.go:362)); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "gaps": [
+        "action: no catalog action covers sync configuration (this leaf does not extend the vocabulary)"
+      ],
       "graphql_field_name": null,
       "id": "GET /api/v1/admin/sync-configs/{config_id}/coverage [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -3738,6 +3896,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's effective organization (policy.EffectiveOrgID, internal/api/policy/guard.go:123); config_id supplied by the caller",
       "route": "/api/v1/admin/sync-configs/{config_id}/coverage",
       "service": "dev-health-ops-api",
       "source": {
@@ -3760,10 +3919,16 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/syncadmin/syncadmin.go:368 (missing; malformed uuid 404s at :359; body via writeConfigNotFound :188); internal/api/syncadmin/store.go:114 (configByID: WHERE org_id=$1 AND id=$2, called with orgID(r) at syncadmin.go:362)); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "gaps": [
+        "action: no catalog action covers sync configuration (this leaf does not extend the vocabulary)"
+      ],
       "graphql_field_name": null,
       "id": "GET /api/v1/admin/sync-configs/{config_id}/jobs [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -3796,6 +3961,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's effective organization (policy.EffectiveOrgID, internal/api/policy/guard.go:123); config_id supplied by the caller",
       "route": "/api/v1/admin/sync-configs/{config_id}/jobs",
       "service": "dev-health-ops-api",
       "source": {
@@ -3818,10 +3984,16 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/syncadmin/syncadmin.go:368 (missing; malformed uuid 404s at :359; body via writeConfigNotFound :188); internal/api/syncadmin/store.go:114 (configByID: WHERE org_id=$1 AND id=$2, called with orgID(r) at syncadmin.go:362)); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "gaps": [
+        "action: no catalog action covers sync configuration (this leaf does not extend the vocabulary)"
+      ],
       "graphql_field_name": null,
       "id": "GET /api/v1/admin/sync-configs/{config_id}/repositories [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -3854,6 +4026,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's effective organization (policy.EffectiveOrgID, internal/api/policy/guard.go:123); config_id supplied by the caller",
       "route": "/api/v1/admin/sync-configs/{config_id}/repositories",
       "service": "dev-health-ops-api",
       "source": {
@@ -3876,10 +4049,16 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/syncadmin/runs.go:560 (malformed uuid 404 at :551); internal/api/syncadmin/store.go:312 (syncRunByID WHERE id=$1 AND org_id=$2, called at runs.go:554)); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "gaps": [
+        "action: no catalog action covers sync run (this leaf does not extend the vocabulary)"
+      ],
       "graphql_field_name": null,
       "id": "GET /api/v1/admin/sync-runs/{run_id} [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -3912,6 +4091,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's effective organization (policy.EffectiveOrgID, internal/api/policy/guard.go:123); run_id supplied by the caller",
       "route": "/api/v1/admin/sync-runs/{run_id}",
       "service": "dev-health-ops-api",
       "source": {
@@ -3934,10 +4114,16 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/syncadmin/units.go:65 (malformed uuid 404 at :54); internal/api/syncadmin/store.go:312 (syncRunByID WHERE id=$1 AND org_id=$2, called at units.go:59); units read store runUnits org=$2 (units.go:68)); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "gaps": [
+        "action: no catalog action covers sync run units (this leaf does not extend the vocabulary)"
+      ],
       "graphql_field_name": null,
       "id": "GET /api/v1/admin/sync-runs/{run_id}/units [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -3970,6 +4156,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's effective organization (policy.EffectiveOrgID, internal/api/policy/guard.go:123); run_id supplied by the caller",
       "route": "/api/v1/admin/sync-runs/{run_id}/units",
       "service": "dev-health-ops-api",
       "source": {
@@ -3992,10 +4179,16 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "gaps": [
+        "action: no catalog action covers sync targets (this leaf does not extend the vocabulary)"
+      ],
       "graphql_field_name": null,
       "id": "GET /api/v1/admin/sync-targets [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -4028,6 +4221,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's effective organization (policy.EffectiveOrgID, internal/api/policy/guard.go:123); no resource id",
       "route": "/api/v1/admin/sync-targets",
       "service": "dev-health-ops-api",
       "source": {
@@ -4050,10 +4244,14 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": "teams.read",
       "classification": "protected",
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
       "gaps": [],
       "graphql_field_name": null,
       "id": "GET /api/v1/admin/teams [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -4086,6 +4284,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's effective organization (policy.EffectiveOrgID, internal/api/policy/guard.go:123); no resource id",
       "route": "/api/v1/admin/teams",
       "service": "dev-health-ops-api",
       "source": {
@@ -4108,10 +4307,14 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": "teams.read",
       "classification": "protected",
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/teamsidentity/teamsidentity.go:529; internal/api/teamsidentity/store.go:125); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
       "gaps": [],
       "graphql_field_name": null,
       "id": "GET /api/v1/admin/teams/{team_id} [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -4144,6 +4347,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's effective organization (policy.EffectiveOrgID, internal/api/policy/guard.go:123); team_id supplied by the caller",
       "route": "/api/v1/admin/teams/{team_id}",
       "service": "dev-health-ops-api",
       "source": {
@@ -4166,10 +4370,16 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/teamsidentity/members_discover.go:726; internal/api/teamsidentity/members_discover.go:720 (GetTeam -> store.go:125)); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "gaps": [
+        "action: no catalog action covers team member discovery (provider call) (this leaf does not extend the vocabulary)"
+      ],
       "graphql_field_name": null,
       "id": "GET /api/v1/admin/teams/{team_id}/discover-members [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -4202,6 +4412,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's effective organization (policy.EffectiveOrgID, internal/api/policy/guard.go:123); team_id supplied by the caller",
       "route": "/api/v1/admin/teams/{team_id}/discover-members",
       "service": "dev-health-ops-api",
       "source": {
@@ -4224,10 +4435,16 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/teamsidentity/members_infer.go:392; internal/api/teamsidentity/members_infer.go:386 (GetTeam -> store.go:125)); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "gaps": [
+        "action: no catalog action covers team member inference (provider call) (this leaf does not extend the vocabulary)"
+      ],
       "graphql_field_name": null,
       "id": "GET /api/v1/admin/teams/{team_id}/infer-members [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -4260,6 +4477,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's effective organization (policy.EffectiveOrgID, internal/api/policy/guard.go:123); team_id supplied by the caller",
       "route": "/api/v1/admin/teams/{team_id}/infer-members",
       "service": "dev-health-ops-api",
       "source": {
@@ -6474,10 +6692,16 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/credentials/credentials.go:518; internal/api/credentials/credentials.go:221); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "gaps": [
+        "action: no catalog action covers credential (this leaf does not extend the vocabulary)"
+      ],
       "graphql_field_name": null,
       "id": "PATCH /api/v1/admin/credentials/{provider}/{name} [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "PATCH",
       "primary_validator": {
         "anchor": {
@@ -6510,6 +6734,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's effective organization (policy.EffectiveOrgID, internal/api/policy/guard.go:123); provider,name (path) supplied by the caller",
       "route": "/api/v1/admin/credentials/{provider}/{name}",
       "service": "dev-health-ops-api",
       "source": {
@@ -6648,10 +6873,14 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": "integrations.write",
       "classification": "protected",
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/integrationsadmin/routes.go:154 and internal/api/integrationsadmin/routes.go:161; internal/api/integrationsadmin/store.go:64); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
       "gaps": [],
       "graphql_field_name": null,
       "id": "PATCH /api/v1/admin/integrations/{integration_id} [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "PATCH",
       "primary_validator": {
         "anchor": {
@@ -6684,6 +6913,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's effective organization (policy.EffectiveOrgID, internal/api/policy/guard.go:123); integration_id (path) supplied by the caller",
       "route": "/api/v1/admin/integrations/{integration_id}",
       "service": "dev-health-ops-api",
       "source": {
@@ -6706,10 +6936,14 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": "integrations.write",
       "classification": "protected",
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/integrationsadmin/routes.go:154 and internal/api/integrationsadmin/routes.go:161; internal/api/integrationsadmin/store.go:64); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
       "gaps": [],
       "graphql_field_name": null,
       "id": "PATCH /api/v1/admin/integrations/{integration_id}/datasets [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "PATCH",
       "primary_validator": {
         "anchor": {
@@ -6742,6 +6976,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's effective organization (policy.EffectiveOrgID, internal/api/policy/guard.go:123); integration_id (path) supplied by the caller",
       "route": "/api/v1/admin/integrations/{integration_id}/datasets",
       "service": "dev-health-ops-api",
       "source": {
@@ -6764,10 +6999,14 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": "integrations.write",
       "classification": "protected",
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/integrationsadmin/routes.go:154 and internal/api/integrationsadmin/routes.go:161; source: internal/api/integrationsadmin/routes.go:479 and internal/api/integrationsadmin/routes.go:486; internal/api/integrationsadmin/store.go:64; source: internal/api/integrationsadmin/store.go:143); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
       "gaps": [],
       "graphql_field_name": null,
       "id": "PATCH /api/v1/admin/integrations/{integration_id}/sources/{source_id} [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "PATCH",
       "primary_validator": {
         "anchor": {
@@ -6800,6 +7039,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's effective organization (policy.EffectiveOrgID, internal/api/policy/guard.go:123); integration_id,source_id (path) supplied by the caller",
       "route": "/api/v1/admin/integrations/{integration_id}/sources/{source_id}",
       "service": "dev-health-ops-api",
       "source": {
@@ -6822,10 +7062,16 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/apiservice/admin/ipallowlist.go:275; internal/apiservice/admin/ipallowlist.go:269); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "gaps": [
+        "action: no catalog action covers IP allowlist entry (this leaf does not extend the vocabulary)"
+      ],
       "graphql_field_name": null,
       "id": "PATCH /api/v1/admin/ip-allowlist/{entry_id} [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "PATCH",
       "primary_validator": {
         "anchor": {
@@ -6858,6 +7104,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's effective organization (policy.EffectiveOrgID, internal/api/policy/guard.go:123); entry_id supplied by the caller",
       "route": "/api/v1/admin/ip-allowlist/{entry_id}",
       "service": "dev-health-ops-api",
       "source": {
@@ -7054,10 +7301,16 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/apiservice/admin/retention.go:288; internal/apiservice/admin/retention.go:296); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "gaps": [
+        "action: no catalog action covers retention policy (this leaf does not extend the vocabulary)"
+      ],
       "graphql_field_name": null,
       "id": "PATCH /api/v1/admin/retention-policies/{policy_id} [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "PATCH",
       "primary_validator": {
         "anchor": {
@@ -7090,6 +7343,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's effective organization (policy.EffectiveOrgID, internal/api/policy/guard.go:123); policy_id supplied by the caller",
       "route": "/api/v1/admin/retention-policies/{policy_id}",
       "service": "dev-health-ops-api",
       "source": {
@@ -7112,10 +7366,16 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13); the route also uses in-process sync.Map operatorControlledKeySets dataset_selection.go:176 (static provider registry, not org data) (not an authorization-decision cache)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/syncadmin/update_config.go:106 (missing, errConfigNotFound; malformed uuid :96; body writeConfigNotFound syncadmin.go:188); internal/api/syncadmin/update_config.go:147 (SELECT ... WHERE org_id=$1 AND id=$2, re-read :165)); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "gaps": [
+        "action: no catalog action covers sync configuration (this leaf does not extend the vocabulary)"
+      ],
       "graphql_field_name": null,
       "id": "PATCH /api/v1/admin/sync-configs/{config_id} [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "PATCH",
       "primary_validator": {
         "anchor": {
@@ -7148,6 +7408,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's effective organization (policy.EffectiveOrgID, internal/api/policy/guard.go:123); config_id supplied by the caller",
       "route": "/api/v1/admin/sync-configs/{config_id}",
       "service": "dev-health-ops-api",
       "source": {
@@ -7170,10 +7431,14 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": "teams.write",
       "classification": "protected",
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/teamsidentity/teamsidentity.go:591; internal/api/teamsidentity/teamsidentity.go:585 (GetTeam -> store.go:125)); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
       "gaps": [],
       "graphql_field_name": null,
       "id": "PATCH /api/v1/admin/teams/{team_id} [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "PATCH",
       "primary_validator": {
         "anchor": {
@@ -7206,6 +7471,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's effective organization (policy.EffectiveOrgID, internal/api/policy/guard.go:123); team_id supplied by the caller",
       "route": "/api/v1/admin/teams/{team_id}",
       "service": "dev-health-ops-api",
       "source": {
@@ -7460,10 +7726,16 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "gaps": [
+        "action: no catalog action covers credential (this leaf does not extend the vocabulary)"
+      ],
       "graphql_field_name": null,
       "id": "POST /api/v1/admin/credentials [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -7496,6 +7768,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's effective organization (policy.EffectiveOrgID, internal/api/policy/guard.go:123); no resource id",
       "route": "/api/v1/admin/credentials",
       "service": "dev-health-ops-api",
       "source": {
@@ -7518,10 +7791,16 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/credentials/connection.go:180 (by id) and :202 (by name); internal/api/credentials/connection.go:92 (by id) and :120 (by name)); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "gaps": [
+        "action: no catalog action covers credential (this leaf does not extend the vocabulary)"
+      ],
       "graphql_field_name": null,
       "id": "POST /api/v1/admin/credentials/test [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -7554,6 +7833,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's effective organization (policy.EffectiveOrgID, internal/api/policy/guard.go:123); credential_id (body, optional); also provider+name (body) supplied by the caller",
       "route": "/api/v1/admin/credentials/test",
       "service": "dev-health-ops-api",
       "source": {
@@ -7924,10 +8204,16 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/teamsidentity/teamsidentity.go:718; internal/api/teamsidentity/teamsidentity.go:708 (GetTeam -> store.go:125)); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "gaps": [
+        "action: no catalog action covers identity (this leaf does not extend the vocabulary)"
+      ],
       "graphql_field_name": null,
       "id": "POST /api/v1/admin/identities [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -7960,6 +8246,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's effective organization (policy.EffectiveOrgID, internal/api/policy/guard.go:123); team_ids (body; canonical_id is upsert key, no 404) supplied by the caller",
       "route": "/api/v1/admin/identities",
       "service": "dev-health-ops-api",
       "source": {
@@ -8098,10 +8385,14 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": "integrations.write",
       "classification": "protected",
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
       "gaps": [],
       "graphql_field_name": null,
       "id": "POST /api/v1/admin/integrations [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -8134,6 +8425,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's effective organization (policy.EffectiveOrgID, internal/api/policy/guard.go:123); no resource id",
       "route": "/api/v1/admin/integrations",
       "service": "dev-health-ops-api",
       "source": {
@@ -8156,10 +8448,16 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": "integrations.write",
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13); the route also uses Valkey key github_app_install_state:<jti> GET internal/api/githubapp/routes.go:261, SET :269 (replay guard; unavailable cache is logged and request proceeds) (not an authorization-decision cache)",
+      "disclosure_behavior": null,
+      "gaps": [
+        "disclosure_behavior: the answers for a missing id and for another organization's id are not shown to be equal on this route; no claim is recorded"
+      ],
       "graphql_field_name": null,
       "id": "POST /api/v1/admin/integrations/github/install-callback [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -8192,6 +8490,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's effective organization (policy.EffectiveOrgID, internal/api/policy/guard.go:123); installation_id (body) supplied by the caller",
       "route": "/api/v1/admin/integrations/github/install-callback",
       "service": "dev-health-ops-api",
       "source": {
@@ -8214,10 +8513,16 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "gaps": [
+        "action: no catalog action covers GitHub App install state (this leaf does not extend the vocabulary)"
+      ],
       "graphql_field_name": null,
       "id": "POST /api/v1/admin/integrations/github/install-url [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -8250,6 +8555,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's effective organization (policy.EffectiveOrgID, internal/api/policy/guard.go:123); no resource id",
       "route": "/api/v1/admin/integrations/github/install-url",
       "service": "dev-health-ops-api",
       "source": {
@@ -8272,10 +8578,14 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": "integrations.write",
       "classification": "protected",
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
       "gaps": [],
       "graphql_field_name": null,
       "id": "POST /api/v1/admin/integrations/pagerduty/api-token [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -8308,6 +8618,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's effective organization (policy.EffectiveOrgID, internal/api/policy/guard.go:123); no resource id",
       "route": "/api/v1/admin/integrations/pagerduty/api-token",
       "service": "dev-health-ops-api",
       "source": {
@@ -8330,10 +8641,14 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": "integrations.write",
       "classification": "protected",
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
       "gaps": [],
       "graphql_field_name": null,
       "id": "POST /api/v1/admin/integrations/pagerduty/authorize [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -8366,6 +8681,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's effective organization (policy.EffectiveOrgID, internal/api/policy/guard.go:123); no resource id",
       "route": "/api/v1/admin/integrations/pagerduty/authorize",
       "service": "dev-health-ops-api",
       "source": {
@@ -8388,10 +8704,14 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": "integrations.write",
       "classification": "protected",
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
       "gaps": [],
       "graphql_field_name": null,
       "id": "POST /api/v1/admin/integrations/pagerduty/callback [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -8424,6 +8744,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's effective organization (policy.EffectiveOrgID, internal/api/policy/guard.go:123); no resource id",
       "route": "/api/v1/admin/integrations/pagerduty/callback",
       "service": "dev-health-ops-api",
       "source": {
@@ -8446,10 +8767,14 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": "integrations.write",
       "classification": "protected",
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
       "gaps": [],
       "graphql_field_name": null,
       "id": "POST /api/v1/admin/integrations/pagerduty/client-credentials [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -8482,6 +8807,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's effective organization (policy.EffectiveOrgID, internal/api/policy/guard.go:123); no resource id",
       "route": "/api/v1/admin/integrations/pagerduty/client-credentials",
       "service": "dev-health-ops-api",
       "source": {
@@ -8504,10 +8830,14 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": "integrations.write",
       "classification": "protected",
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
       "gaps": [],
       "graphql_field_name": null,
       "id": "POST /api/v1/admin/integrations/pagerduty/disconnect [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -8540,6 +8870,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's effective organization (policy.EffectiveOrgID, internal/api/policy/guard.go:123); no resource id",
       "route": "/api/v1/admin/integrations/pagerduty/disconnect",
       "service": "dev-health-ops-api",
       "source": {
@@ -8562,10 +8893,16 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "gaps": [
+        "action: no catalog action covers PagerDuty dataset scope preflight (this leaf does not extend the vocabulary)"
+      ],
       "graphql_field_name": null,
       "id": "POST /api/v1/admin/integrations/pagerduty/preflight [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -8598,6 +8935,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's effective organization (policy.EffectiveOrgID, internal/api/policy/guard.go:123); no resource id",
       "route": "/api/v1/admin/integrations/pagerduty/preflight",
       "service": "dev-health-ops-api",
       "source": {
@@ -8620,10 +8958,16 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": "integrations.write",
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": null,
+      "gaps": [
+        "disclosure_behavior: the answers for a missing id and for another organization's id are not shown to be equal on this route; no claim is recorded"
+      ],
       "graphql_field_name": null,
       "id": "POST /api/v1/admin/integrations/pagerduty/webhook-bindings [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -8656,6 +9000,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's effective organization (policy.EffectiveOrgID, internal/api/policy/guard.go:123); integration_source_id,credential_id (body) supplied by the caller",
       "route": "/api/v1/admin/integrations/pagerduty/webhook-bindings",
       "service": "dev-health-ops-api",
       "source": {
@@ -8678,10 +9023,14 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": "integrations.write",
       "classification": "protected",
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/apiservice/admin/pagerduty_bindings.go:402; internal/apiservice/admin/pagerduty_bindings.go:411); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
       "gaps": [],
       "graphql_field_name": null,
       "id": "POST /api/v1/admin/integrations/pagerduty/webhook-bindings/{binding_id}/activate [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -8714,6 +9063,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's effective organization (policy.EffectiveOrgID, internal/api/policy/guard.go:123); binding_id (path) supplied by the caller",
       "route": "/api/v1/admin/integrations/pagerduty/webhook-bindings/{binding_id}/activate",
       "service": "dev-health-ops-api",
       "source": {
@@ -8736,10 +9086,16 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": "integrations.write",
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": null,
+      "gaps": [
+        "disclosure_behavior: the answers for a missing id and for another organization's id are not shown to be equal on this route; no claim is recorded"
+      ],
       "graphql_field_name": null,
       "id": "POST /api/v1/admin/integrations/pagerduty/webhook-bindings/{binding_id}/revoke [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -8772,6 +9128,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's effective organization (policy.EffectiveOrgID, internal/api/policy/guard.go:123); binding_id (path) supplied by the caller",
       "route": "/api/v1/admin/integrations/pagerduty/webhook-bindings/{binding_id}/revoke",
       "service": "dev-health-ops-api",
       "source": {
@@ -8794,10 +9151,16 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": "integrations.write",
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": null,
+      "gaps": [
+        "disclosure_behavior: the answers for a missing id and for another organization's id are not shown to be equal on this route; no claim is recorded"
+      ],
       "graphql_field_name": null,
       "id": "POST /api/v1/admin/integrations/pagerduty/webhook-bindings/{binding_id}/rotate [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -8830,6 +9193,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's effective organization (policy.EffectiveOrgID, internal/api/policy/guard.go:123); binding_id (path) plus body integration_source_id,credential_id supplied by the caller",
       "route": "/api/v1/admin/integrations/pagerduty/webhook-bindings/{binding_id}/rotate",
       "service": "dev-health-ops-api",
       "source": {
@@ -8852,10 +9216,16 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/integrationsadmin/routes.go:154 and internal/api/integrationsadmin/routes.go:161 (via handoff.go:150); internal/api/integrationsadmin/store.go:64 (via handoff.go:150)); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "gaps": [
+        "action: no catalog action covers integration backfill trigger (this leaf does not extend the vocabulary)"
+      ],
       "graphql_field_name": null,
       "id": "POST /api/v1/admin/integrations/{integration_id}/backfill [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -8888,6 +9258,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's effective organization (policy.EffectiveOrgID, internal/api/policy/guard.go:123); integration_id (path) supplied by the caller",
       "route": "/api/v1/admin/integrations/{integration_id}/backfill",
       "service": "dev-health-ops-api",
       "source": {
@@ -8910,10 +9281,16 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/integrationsadmin/routes.go:154 and 161 (via discover.go:67); internal/api/integrationsadmin/store.go:64 (via discover.go:67)); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "gaps": [
+        "action: no catalog action covers integration source (this leaf does not extend the vocabulary)"
+      ],
       "graphql_field_name": null,
       "id": "POST /api/v1/admin/integrations/{integration_id}/discover [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -8946,6 +9323,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's effective organization (policy.EffectiveOrgID, internal/api/policy/guard.go:123); integration_id (path) supplied by the caller",
       "route": "/api/v1/admin/integrations/{integration_id}/discover",
       "service": "dev-health-ops-api",
       "source": {
@@ -8968,10 +9346,16 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/integrationsadmin/routes.go:154 and internal/api/integrationsadmin/routes.go:161 (via handoff.go:150); internal/api/integrationsadmin/store.go:64 (via handoff.go:150)); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "gaps": [
+        "action: no catalog action covers integration sync trigger (this leaf does not extend the vocabulary)"
+      ],
       "graphql_field_name": null,
       "id": "POST /api/v1/admin/integrations/{integration_id}/sync [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -9004,6 +9388,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's effective organization (policy.EffectiveOrgID, internal/api/policy/guard.go:123); integration_id (path) supplied by the caller",
       "route": "/api/v1/admin/integrations/{integration_id}/sync",
       "service": "dev-health-ops-api",
       "source": {
@@ -9026,10 +9411,16 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "gaps": [
+        "action: no catalog action covers IP allowlist entry (this leaf does not extend the vocabulary)"
+      ],
       "graphql_field_name": null,
       "id": "POST /api/v1/admin/ip-allowlist [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -9062,6 +9453,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's effective organization (policy.EffectiveOrgID, internal/api/policy/guard.go:123); no resource id",
       "route": "/api/v1/admin/ip-allowlist",
       "service": "dev-health-ops-api",
       "source": {
@@ -9084,10 +9476,16 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "no path resource id, behaviour today: the path segment is a fixed mode, not a resource id; the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "gaps": [
+        "action: no catalog action covers IP allowlist check (this leaf does not extend the vocabulary)"
+      ],
       "graphql_field_name": null,
       "id": "POST /api/v1/admin/ip-allowlist/{entry_id} [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -9120,6 +9518,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's effective organization (policy.EffectiveOrgID, internal/api/policy/guard.go:123); no resource id",
       "route": "/api/v1/admin/ip-allowlist/{entry_id}",
       "service": "dev-health-ops-api",
       "source": {
@@ -9490,10 +9889,16 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "gaps": [
+        "action: no catalog action covers retention policy (this leaf does not extend the vocabulary)"
+      ],
       "graphql_field_name": null,
       "id": "POST /api/v1/admin/retention-policies [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -9526,6 +9931,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's effective organization (policy.EffectiveOrgID, internal/api/policy/guard.go:123); no resource id",
       "route": "/api/v1/admin/retention-policies",
       "service": "dev-health-ops-api",
       "source": {
@@ -9548,10 +9954,17 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": null,
+      "gaps": [
+        "action: no catalog action covers retention policy (this leaf does not extend the vocabulary)",
+        "disclosure_behavior: the answers for a missing id and for another organization's id are not shown to be equal on this route; no claim is recorded"
+      ],
       "graphql_field_name": null,
       "id": "POST /api/v1/admin/retention-policies/{policy_id}/execute [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -9584,6 +9997,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's effective organization (policy.EffectiveOrgID, internal/api/policy/guard.go:123); policy_id supplied by the caller",
       "route": "/api/v1/admin/retention-policies/{policy_id}/execute",
       "service": "dev-health-ops-api",
       "source": {
@@ -9664,10 +10078,16 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "gaps": [
+        "action: no catalog action covers sync configuration (this leaf does not extend the vocabulary)"
+      ],
       "graphql_field_name": null,
       "id": "POST /api/v1/admin/sync-configs [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -9700,6 +10120,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's effective organization (policy.EffectiveOrgID, internal/api/policy/guard.go:123); no resource id",
       "route": "/api/v1/admin/sync-configs",
       "service": "dev-health-ops-api",
       "source": {
@@ -9722,10 +10143,16 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "gaps": [
+        "action: no catalog action covers sync configuration (this leaf does not extend the vocabulary)"
+      ],
       "graphql_field_name": null,
       "id": "POST /api/v1/admin/sync-configs/batch [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -9758,6 +10185,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's effective organization (policy.EffectiveOrgID, internal/api/policy/guard.go:123); no resource id",
       "route": "/api/v1/admin/sync-configs/batch",
       "service": "dev-health-ops-api",
       "source": {
@@ -9780,10 +10208,16 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/syncadmin/syncadmin.go:368 (missing; malformed uuid 404s at :359; body via writeConfigNotFound :188); internal/api/syncadmin/store.go:114 (configByID: WHERE org_id=$1 AND id=$2, called with orgID(r) at syncadmin.go:362)); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "gaps": [
+        "action: no catalog action covers sync configuration (this leaf does not extend the vocabulary)"
+      ],
       "graphql_field_name": null,
       "id": "POST /api/v1/admin/sync-configs/{config_id}/backfill [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -9816,6 +10250,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's effective organization (policy.EffectiveOrgID, internal/api/policy/guard.go:123); config_id supplied by the caller",
       "route": "/api/v1/admin/sync-configs/{config_id}/backfill",
       "service": "dev-health-ops-api",
       "source": {
@@ -9838,10 +10273,16 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/syncadmin/syncadmin.go:368 (missing; malformed uuid 404s at :359; body via writeConfigNotFound :188); internal/api/syncadmin/store.go:114 (configByID: WHERE org_id=$1 AND id=$2, called with orgID(r) at syncadmin.go:362)); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "gaps": [
+        "action: no catalog action covers sync configuration (this leaf does not extend the vocabulary)"
+      ],
       "graphql_field_name": null,
       "id": "POST /api/v1/admin/sync-configs/{config_id}/trigger [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -9874,6 +10315,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's effective organization (policy.EffectiveOrgID, internal/api/policy/guard.go:123); config_id supplied by the caller",
       "route": "/api/v1/admin/sync-configs/{config_id}/trigger",
       "service": "dev-health-ops-api",
       "source": {
@@ -9896,10 +10338,14 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": "teams.write",
       "classification": "protected",
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
       "gaps": [],
       "graphql_field_name": null,
       "id": "POST /api/v1/admin/teams [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -9932,6 +10378,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's effective organization (policy.EffectiveOrgID, internal/api/policy/guard.go:123); no resource id",
       "route": "/api/v1/admin/teams",
       "service": "dev-health-ops-api",
       "source": {
@@ -9954,10 +10401,16 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "no path resource id, behaviour today: the path segment is a fixed mode, not a resource id; the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "gaps": [
+        "action: no catalog action covers team import (this leaf does not extend the vocabulary)"
+      ],
       "graphql_field_name": null,
       "id": "POST /api/v1/admin/teams/{team_id} [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -9990,6 +10443,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's effective organization (policy.EffectiveOrgID, internal/api/policy/guard.go:123); no resource id",
       "route": "/api/v1/admin/teams/{team_id}",
       "service": "dev-health-ops-api",
       "source": {
@@ -10012,10 +10466,17 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": null,
+      "gaps": [
+        "action: no catalog action covers team drift change (this leaf does not extend the vocabulary)",
+        "disclosure_behavior: the answers for a missing id and for another organization's id are not shown to be equal on this route; no claim is recorded"
+      ],
       "graphql_field_name": null,
       "id": "POST /api/v1/admin/teams/{team_id}/approve-changes [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -10048,6 +10509,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's effective organization (policy.EffectiveOrgID, internal/api/policy/guard.go:123); team_id supplied by the caller",
       "route": "/api/v1/admin/teams/{team_id}/approve-changes",
       "service": "dev-health-ops-api",
       "source": {
@@ -10070,10 +10532,16 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/teamsidentity/member_confirm.go:377; internal/api/teamsidentity/member_confirm.go:371 (GetTeam -> store.go:125)); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "gaps": [
+        "action: no catalog action covers team members (inferred) (this leaf does not extend the vocabulary)"
+      ],
       "graphql_field_name": null,
       "id": "POST /api/v1/admin/teams/{team_id}/confirm-inferred-members [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -10106,6 +10574,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's effective organization (policy.EffectiveOrgID, internal/api/policy/guard.go:123); team_id (path and body must match) supplied by the caller",
       "route": "/api/v1/admin/teams/{team_id}/confirm-inferred-members",
       "service": "dev-health-ops-api",
       "source": {
@@ -10128,10 +10597,16 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/teamsidentity/member_confirm.go:272; internal/api/teamsidentity/member_confirm.go:266 (GetTeam -> store.go:125)); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "gaps": [
+        "action: no catalog action covers team members (this leaf does not extend the vocabulary)"
+      ],
       "graphql_field_name": null,
       "id": "POST /api/v1/admin/teams/{team_id}/confirm-members [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -10164,6 +10639,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's effective organization (policy.EffectiveOrgID, internal/api/policy/guard.go:123); team_id (path and body must match) supplied by the caller",
       "route": "/api/v1/admin/teams/{team_id}/confirm-members",
       "service": "dev-health-ops-api",
       "source": {
@@ -10186,10 +10662,17 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": null,
+      "gaps": [
+        "action: no catalog action covers team drift change (this leaf does not extend the vocabulary)",
+        "disclosure_behavior: the answers for a missing id and for another organization's id are not shown to be equal on this route; no claim is recorded"
+      ],
       "graphql_field_name": null,
       "id": "POST /api/v1/admin/teams/{team_id}/dismiss-changes [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -10222,6 +10705,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's effective organization (policy.EffectiveOrgID, internal/api/policy/guard.go:123); team_id supplied by the caller",
       "route": "/api/v1/admin/teams/{team_id}/dismiss-changes",
       "service": "dev-health-ops-api",
       "source": {
@@ -12725,7 +13209,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/producttelemetry/producttelemetry.go",
-        "line": 106
+        "line": 107
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
@@ -13270,10 +13754,16 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/syncadmin/syncadmin.go:368 (missing; malformed uuid 404s at :359; body via writeConfigNotFound :188); internal/api/syncadmin/store.go:114 (configByID: WHERE org_id=$1 AND id=$2, called with orgID(r) at syncadmin.go:362)); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "gaps": [
+        "action: no catalog action covers sync configuration (this leaf does not extend the vocabulary)"
+      ],
       "graphql_field_name": null,
       "id": "PUT /api/v1/admin/sync-configs/{config_id}/repositories [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "PUT",
       "primary_validator": {
         "anchor": {
@@ -13306,6 +13796,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's effective organization (policy.EffectiveOrgID, internal/api/policy/guard.go:123); config_id supplied by the caller",
       "route": "/api/v1/admin/sync-configs/{config_id}/repositories",
       "service": "dev-health-ops-api",
       "source": {

@@ -26,6 +26,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/apimetrics"
@@ -138,7 +139,7 @@ func compatRoutes(
 	cfg authconfig.Config, logger *slog.Logger, pool *pgxpool.Pool, schema authschema.ValidatedIdentifier,
 	sessions *session.Store, issuer *authapi.Issuer, limits *authapi.Limits,
 ) ([]httpapi.Route, error) {
-	identities, err := identity.New(identity.Config{Pool: pool, Schema: schema, Logger: logger})
+	identities, err := identity.New(identity.Config{Pool: pool, Schema: schema, Logger: logger, UsersOwnedByAuth: cfg.UsersOwned})
 	if err != nil {
 		return nil, err
 	}
@@ -420,6 +421,19 @@ func configureWithRoutes(
 		logger.Warn("register OTel instruments on the operator /metrics", "error", err)
 	}
 
+	// The rate-limit counters (store errors and refused hits, by limit id) are
+	// scraped from the operator /metrics: the process installs no OTel meter
+	// provider for them, so this is the one place they are observable.
+	for name, source := range map[string]health.MetricsSource{
+		"api_rate_limit_store":      httpapi.RateLimitStoreErrors,
+		"api_rate_limit_rejections": httpapi.RateLimitRejections,
+	} {
+		if err := registry.RegisterMetrics(name, source); err != nil {
+			closeStore()
+			return nil, err
+		}
+	}
+
 	operatorHTTP, err := health.NewServer(health.ServerOptions{
 		Address:  cfg.OperatorAddress,
 		Registry: registry,
@@ -447,6 +461,25 @@ func configureWithRoutes(
 	if err != nil {
 		closeStore()
 		return nil, err
+	}
+	if cfg.UsersOwned {
+		pool := store.Pool()
+		var usersReady atomic.Bool
+		if err := registry.RegisterRequired(CheckUsersOwned, func(ctx context.Context) error {
+			if usersReady.Load() {
+				return nil
+			}
+			guardErr := checkUsersOwned(ctx, pool, schemaID)
+			if guardErr != nil {
+				logger.ErrorContext(ctx, "readiness check failed", "check", CheckUsersOwned, "reason", guardErr.Error())
+				return guardErr
+			}
+			usersReady.Store(true)
+			return nil
+		}); err != nil {
+			closeStore()
+			return nil, err
+		}
 	}
 	credRoutes, credComponents, err := credentialRoutes(cfg, logger, store.Pool(), schemaID, limits)
 	if err != nil {

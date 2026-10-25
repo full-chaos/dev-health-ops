@@ -1197,6 +1197,23 @@ sides:
   (the old ReplicaSet keeps serving) until an operator revokes it; the refusal names
   the first one.
 
+**Auth session read.** While auth-service owns sessions (`goApi.authProxy.sessions`,
+`AUTH_PROXY_SESSIONS`), the manifest also holds USAGE on the auth schema
+(`AUTH_DATABASE_SCHEMA`, default `auth`) and column SELECT on
+`sessions(id, principal_id, revoked_at)`: the same list auth-migrate grants a
+session reader (`authschema.SessionReaderColumns`), declared once in
+`postgres.QueryAPISessionReadFor`. `dho migrate river` emits it after the role's
+REVOKE, so the role ends with exactly the manifest plus that read; auth-migrate's
+identical grant converges on the same state. The river-migrate hook runs after
+auth-migrate (weights 10 and 0). If the sessions table is absent at that moment
+the read is skipped with a `auth_sessions_absent` warning, the migration still
+succeeds, and query-api stays not ready until a later run grants it. The chart
+requires `authService.migrate.sessionReaders.queryApi` to equal the
+`QUERY_API_DATABASE_ROLE` set in `queryApi.extraEnv`, and refuses that reader
+while `goApi.authProxy.sessions` is off: the reader and the flag are set (and
+removed) in one values change, so auth-migrate and river-migrate never undo each
+other's grant.
+
 Leaving `QUERY_API_DATABASE_ROLE` unset changes nothing. The completeness proof
 for the manifest is `TestQueryAPIRoleServesEveryPostgresPathItReaches`
 (`internal/queryapi/server`): it drives every Postgres path query-api reaches

@@ -79,7 +79,7 @@ providers:
     type_labels:
       bug:
         - bug
-        - type: bug
+        - "type:bug"
       incident:
         - incident
       chore:

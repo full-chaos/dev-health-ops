@@ -274,40 +274,9 @@ func (s *Store) revokeLegacyFamily(ctx context.Context, principalID uuid.UUID, f
 	principal := principalID.String()
 	var revoked []string
 	err := audit.Commit(ctx, s.pool, s.schema, audit.Mutation{
-		Apply: func(ctx context.Context, tx audit.TxOps) error {
-			if _, err := tx.Exec(ctx, revokeLegacyFamilyRows, familyID); err != nil {
-				return err
-			}
-			rows, err := tx.Query(ctx, fmt.Sprintf(legacyFamilySessions, s.q), familyID)
-			if err != nil {
-				return err
-			}
-			var ids []string
-			for rows.Next() {
-				var id string
-				if err := rows.Scan(&id); err != nil {
-					rows.Close()
-					return err
-				}
-				ids = append(ids, id)
-			}
-			rows.Close()
-			if err := rows.Err(); err != nil {
-				return err
-			}
-			for _, id := range ids {
-				locked, err := s.lockSession(ctx, tx, id)
-				if err != nil {
-					return err
-				}
-				if locked.RevokedAt == nil {
-					revoked = append(revoked, id)
-				}
-			}
-			if len(revoked) == 0 {
-				return nil
-			}
-			return s.revokeSessions(ctx, tx, revoked, revokedByReuse)
+		Apply: func(ctx context.Context, tx audit.TxOps) (err error) {
+			revoked, err = s.revokeFamilyTx(ctx, tx, familyID, revokedByReuse)
+			return err
 		},
 		Audit: audit.AuditEvent{
 			EventType:          "auth.session.refresh_reuse_revoked",
@@ -340,4 +309,44 @@ func (s *Store) revokeLegacyFamily(ctx context.Context, principalID uuid.UUID, f
 	default:
 		return Result{Reason: ReasonStoreUnavailable}, fmt.Errorf("%w: revoking a reused go-api family: %w", ErrStore, err)
 	}
+}
+
+// revokeFamilyTx revokes the live rows of go-api family familyID and the live
+// sessions exchanged from it, in the caller's transaction, and returns the
+// session ids it revoked. reason is the session revocation reason.
+func (s *Store) revokeFamilyTx(ctx context.Context, tx audit.TxOps, familyID uuid.UUID, reason string) ([]string, error) {
+	if _, err := tx.Exec(ctx, revokeLegacyFamilyRows, familyID); err != nil {
+		return nil, err
+	}
+	rows, err := tx.Query(ctx, fmt.Sprintf(legacyFamilySessions, s.q), familyID)
+	if err != nil {
+		return nil, err
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	var revoked []string
+	for _, id := range ids {
+		locked, err := s.lockSession(ctx, tx, id)
+		if err != nil {
+			return nil, err
+		}
+		if locked.RevokedAt == nil {
+			revoked = append(revoked, id)
+		}
+	}
+	if len(revoked) == 0 {
+		return nil, nil
+	}
+	return revoked, s.revokeSessions(ctx, tx, revoked, reason)
 }

@@ -24,6 +24,8 @@ internal/auth/contracts	code	contracts
 internal/auth/contracts	test	README.md
 internal/auth/contracts/tokencorpus	code	contracts
 internal/auth/contracts/tokencorpus	test	README.md
+internal/auth/ratelimitvalkey	test	deploy
+internal/auth/ratelimitvalkey	test	docs
 internal/bigboycompose	test	.env.example
 internal/bigboycompose	test	ci
 internal/bigboycompose	test	compose.yml
@@ -113,9 +115,12 @@ internal/cigates/webproxyproof	test	compose.yml
 internal/cigates/webproxyproof	test	deploy
 internal/cigates/weightsfiles	test	ci
 internal/cigates/workflowpaths	test	.github
+internal/cigates/workflowpaths	test	README.md
+internal/cigates/workflowpaths	test	ci
 internal/cigates/workflowpaths	test	contracts
 internal/cigates/workflowpaths	test	deploy
 internal/cigates/workflowpaths	test	docs
+internal/cigates/workflowpaths	test	docs-data
 internal/cigates/workflowpaths	test	mkdocs.yml
 internal/cigates/workflows	test	.github
 internal/cigates/workflows	test	ci
@@ -197,6 +202,8 @@ internal/storage/postgres/authschema	test	contracts
 internal/storage/river	test	contracts
 internal/syncdispatchcontract	test	contracts
 internal/syncroute	test	contracts
+internal/testsupport/authrows	test	ci
+internal/testsupport/providerstub	test	ci
 internal/testsupport/ratchet	code	ci
 internal/testsupport/ratchet/cmd/ratchets	test	ci
 internal/testsupport/venuechanged	test	.github

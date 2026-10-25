@@ -8,8 +8,9 @@ import (
 	"testing"
 )
 
-// CHAOS-10700: the integration shards run on the main push; a pull request runs them only for a trigger path or the
-// ci:integration label. These pins keep the skip wired into the plan job without renaming a pinned job.
+// The integration shards run in the merge queue and on the main push; a pull request runs them only with the
+// ci:integration or ci:full label (no path is a trigger), and a docs-only change skips them everywhere. These pins keep
+// the skip wired into the plan job without renaming a pinned job.
 func TestIntegrationShardsSkipOnPullRequestWiring(t *testing.T) {
 	root := rootOf(t)
 	raw, err := os.ReadFile(filepath.Join(root, ".github", "workflows", "go.yml"))
@@ -38,12 +39,16 @@ func TestIntegrationShardsSkipOnPullRequestWiring(t *testing.T) {
 	if !strings.Contains(asString(env["PR_LABELS_JSON"]), "pull_request.labels") {
 		t.Error("the selection step does not pass the pull request labels")
 	}
-	if step["if"] != "github.event_name == 'pull_request'" {
-		t.Errorf("selection step if %v: the main push must never be judged", step["if"])
+	if step["if"] != "github.event_name == 'pull_request' && steps.docs.outputs.docs_only != 'true'" {
+		t.Errorf("selection step if %v: the main push must never be judged, and a docs-only change keeps the docs step's NONE", step["if"])
+	}
+	docs, count := stepNamed(pinJob(doc, "go-storage-integration-plan"), "Skip the integration shards for a docs-only change")
+	if count != 1 || docs["if"] != "steps.docs.outputs.docs_only == 'true'" || !strings.Contains(asString(docs["run"]), "printf 'NONE\\n'") {
+		t.Errorf("the plan job must turn a docs-only verdict into a NONE selection, got %v", docs)
 	}
 	text := string(raw)
-	if strings.Count(text, "- 'ci/integration_pr_scope.sh'") != 2 {
-		t.Error("ci/integration_pr_scope.sh must be in both the push and pull_request path filters")
+	if strings.Count(text, "- 'ci/integration_pr_scope.sh'") != 1 {
+		t.Error("ci/integration_pr_scope.sh must be in the push path filter (pull_request has none)")
 	}
 	if strings.Contains(text, "types: [opened, synchronize, reopened, ready_for_review, labeled") {
 		t.Error("a labeled trigger reruns the whole workflow on every label change; the label applies at the next push")
@@ -68,7 +73,8 @@ func TestIntegrationShardsSelectionStepBehaviour(t *testing.T) {
 	}
 	rows := []struct{ name, list, labelsJSON, want string }{
 		{"leaf go file is NONE", "internal/foo/bar.go\\0", "[]", "NONE"},
-		{"migration reaches the planner", "internal/pgmigrate/sql/1.sql\\0", "[]", "FULL"},
+		{"a former trigger path is NONE", "internal/pgmigrate/sql/1.sql\\0", "[]", "NONE"},
+		{"ci:full reaches the planner", "internal/foo/bar.go\\0", `["ci:full"]`, "FULL"},
 		{"label reaches the planner", "internal/foo/bar.go\\0", `["ci:integration"]`, "FULL"},
 		{"malformed labels fall through", "internal/foo/bar.go\\0", "{bad", "FULL"},
 		{"unterminated list falls through", "docs/a.md\\0internal/chmigrate/x.go", "[]", "FULL"},

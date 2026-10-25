@@ -1,4 +1,6 @@
 {{- if .Values.valkey.enabled }}
+{{- if and .Values.valkey.acl.enabled (or (not .Values.valkey.acl.secretName) (not .Values.valkey.acl.secretKey)) }}{{- fail "valkey.acl.enabled needs valkey.acl.secretName and valkey.acl.secretKey: the ACL file is read from that Secret key, and Valkey does not start without the file it was told to load" }}{{- end }}
+{{- if and .Values.valkey.acl.enabled (not .Values.networkPolicy.enabled) }}{{- fail "valkey.acl.enabled needs networkPolicy.enabled=true: the ACL file keeps the default user open to every key, so the network policy is what bounds who can reach the auth rate-limit counters" }}{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -26,6 +28,10 @@ spec:
             - {{ .Values.valkey.maxmemory | quote }}
             - --maxmemory-policy
             - allkeys-lru
+            {{- if .Values.valkey.acl.enabled }}
+            - --aclfile
+            - /etc/valkey-acl/{{ .Values.valkey.acl.secretKey }}
+            {{- end }}
           ports:
             - name: valkey
               containerPort: 6379
@@ -41,16 +47,34 @@ spec:
               command: ["valkey-cli", "ping"]
             initialDelaySeconds: 5
             periodSeconds: 3
-          {{- if .Values.valkey.persistence.enabled }}
+          {{- if or .Values.valkey.persistence.enabled .Values.valkey.acl.enabled }}
           volumeMounts:
+            {{- if .Values.valkey.persistence.enabled }}
             - name: valkey-data
               mountPath: /data
+            {{- end }}
+            {{- if .Values.valkey.acl.enabled }}
+            - name: valkey-acl
+              mountPath: /etc/valkey-acl
+              readOnly: true
+            {{- end }}
           {{- end }}
-      {{- if .Values.valkey.persistence.enabled }}
+      {{- if or .Values.valkey.persistence.enabled .Values.valkey.acl.enabled }}
       volumes:
+        {{- if .Values.valkey.persistence.enabled }}
         - name: valkey-data
           persistentVolumeClaim:
             claimName: {{ include "dev-health.fullname" . }}-valkey
+        {{- end }}
+        {{- if .Values.valkey.acl.enabled }}
+        - name: valkey-acl
+          secret:
+            secretName: {{ .Values.valkey.acl.secretName | quote }}
+            defaultMode: 0444
+            items:
+              - key: {{ .Values.valkey.acl.secretKey | quote }}
+                path: {{ .Values.valkey.acl.secretKey | quote }}
+        {{- end }}
       {{- end }}
 ---
 apiVersion: v1

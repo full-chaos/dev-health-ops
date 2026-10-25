@@ -72,10 +72,10 @@ func TestGoAPIAndQueryAPIReadSessionsInTheAuthSchema(t *testing.T) {
 	}
 }
 
-var sessionsOn = []string{
+var sessionsOn = append([]string{
 	"--set", "goApi.enabled=true",
 	"--set", "goApi.authProxy.sessions=true",
-}
+}, authTrusted...)
 
 var sessionReaders = []string{
 	"--set", "authService.migrate.sessionReaders.goApi=devhealth_api",

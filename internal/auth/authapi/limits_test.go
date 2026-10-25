@@ -783,3 +783,71 @@ func TestCompatRefreshSpoofedForwardedValuesFromADirectClientShareOneBucket(t *t
 	}
 	assertRateLimited(t, "a spoofed chain", refreshAttempt(h, clientPeer, "192.0.2.99, 192.0.2.98"))
 }
+
+func TestLoginTwoClientsThroughTheTrustedProxyKeepSeparateBuckets(t *testing.T) {
+	h := trustedProxy(t, newCompatFixture(t).server)
+	login := func(forwarded string, i int) *httptest.ResponseRecorder {
+		email := "user" + string(rune('a'+i%26)) + string(rune('a'+i/26)) + "@example.com"
+		return send(h, proxyPeer, forwarded, http.MethodPost, PatternCompatLogin, loginBody(email, "wrong password", ""), nil)
+	}
+	for i := 0; i < 20; i++ {
+		if r := login("198.51.100.10", i); r.Code != http.StatusUnauthorized {
+			t.Fatalf("client A attempt %d = %d, want 401", i+1, r.Code)
+		}
+	}
+	assertRateLimited(t, "client A 21st", login("198.51.100.10", 30))
+	for i := 0; i < 20; i++ {
+		if r := login("198.51.100.11", i+40); r.Code != http.StatusUnauthorized {
+			t.Fatalf("client B attempt %d = %d, want 401 (the proxy peer is not the key)", i+1, r.Code)
+		}
+	}
+	assertRateLimited(t, "client B 21st", login("198.51.100.11", 90))
+}
+
+func TestLoginSpoofedForwardedValuesFromADirectClientShareOneBucket(t *testing.T) {
+	h := trustedProxy(t, newCompatFixture(t).server)
+	login := func(forwarded string, i int) *httptest.ResponseRecorder {
+		email := "user" + string(rune('a'+i%26)) + string(rune('a'+i/26)) + "@example.com"
+		return send(h, clientPeer, forwarded, http.MethodPost, PatternCompatLogin, loginBody(email, "wrong password", ""), nil)
+	}
+	for i := 0; i < 20; i++ {
+		if r := login("192.0.2."+strconv.Itoa(i+1), i); r.Code != http.StatusUnauthorized {
+			t.Fatalf("attempt %d = %d, want 401", i+1, r.Code)
+		}
+	}
+	for i := 20; i < 50; i++ {
+		assertRateLimited(t, "spoofed value "+strconv.Itoa(i), login("192.0.2."+strconv.Itoa(i+1), i))
+	}
+}
+
+// A trusted peer's forwarded value is believed only when it is exactly one address: a chain or a second header line
+// falls back to the socket address, so a client-controlled value cannot split the bucket.
+func TestATrustedPeerWithMoreThanOneForwardedValueIsKeyedByItsSocketAddress(t *testing.T) {
+	h := trustedProxy(t, newCompatFixture(t).server)
+	body := `{"refresh_token":"` + credential() + `"}`
+	post := func(lines ...string) *httptest.ResponseRecorder {
+		request := httptest.NewRequest(http.MethodPost, PatternCompatRefresh, strings.NewReader(body))
+		request.RemoteAddr = proxyPeer
+		for _, line := range lines {
+			request.Header.Add("X-Forwarded-For", line)
+		}
+		response := httptest.NewRecorder()
+		h.ServeHTTP(response, request)
+		return response
+	}
+	for i := 0; i < 5; i++ {
+		if r := post("203.0.113." + strconv.Itoa(i+1) + ", 198.51.100.1"); r.Code != http.StatusUnauthorized {
+			t.Fatalf("chain %d = %d, want 401", i+1, r.Code)
+		}
+	}
+	for i := 0; i < 5; i++ {
+		if r := post("203.0.113."+strconv.Itoa(i+50), "198.51.100.2"); r.Code != http.StatusUnauthorized {
+			t.Fatalf("two lines %d = %d, want 401", i+1, r.Code)
+		}
+	}
+	assertRateLimited(t, "the 11th request of the socket address", post("203.0.113.200, 198.51.100.3"))
+	assertRateLimited(t, "another chain", post("203.0.113.201, 198.51.100.4"))
+	if r := post("203.0.113.77"); r.Code != http.StatusUnauthorized {
+		t.Fatalf("one clean forwarded address = %d, want its own bucket (401)", r.Code)
+	}
+}

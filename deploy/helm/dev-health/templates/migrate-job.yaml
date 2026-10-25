@@ -359,4 +359,93 @@ spec:
           resources:
             {{- toYaml .Values.migrations.hook.resources | nindent 12 }}
 {{- end }}
+{{- /*
+The open-units index Job: `dho migrate postgres build-index open-units` builds
+ix_sync_run_units_open_run CONCURRENTLY, outside the upgrade transaction, so a large sync_run_units keeps taking
+unit writes while the index builds. Revision 0160 (CREATE INDEX IF NOT EXISTS) then finds it and does nothing. OFF by
+default: a render with the flag off has no such Job. A failed or partial build (the verb exits non-zero unless the
+index is present and valid) fails the hook, which stops the release before the weight-0 migrate Job runs. Weight -2:
+after the weight -5 ConfigMap and Secret this Job reads, before the migrate Job. Size migrations.hook.openUnitsIndex.
+activeDeadlineSeconds for the prod table and pass a helm --timeout above it.
+*/}}
+{{- if .Values.migrations.hook.openUnitsIndex.enabled }}
+{{- /*
+With localBundledPostgres the Job runs on pre-upgrade only: the bundled database exists on an upgrade, and a fresh
+install builds the index in revision 0160 on an empty table.
+*/}}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "dev-health.fullname" . }}-open-units-index
+  namespace: {{ include "dev-health.namespace" . }}
+  labels:
+    {{- include "dev-health.componentLabels" (dict "component" "migrate" "context" $) | nindent 4 }}
+  annotations:
+    helm.sh/hook: {{ if $localBundledPostgres }}pre-upgrade{{ else }}{{ join "," $hookEvents }}{{ end }}
+    helm.sh/hook-weight: "-2"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: {{ .Values.migrations.hook.openUnitsIndex.activeDeadlineSeconds }}
+  template:
+    metadata:
+      labels:
+        {{- include "dev-health.componentSelectorLabels" (dict "component" "migrate" "context" $) | nindent 8 }}
+    spec:
+      {{- include "dev-health.imagePullSecrets" . | nindent 6 }}
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+      {{- if $localBundledPostgres }}
+      initContainers:
+        - name: wait-for-postgresql
+          image: {{ .Values.postgresql.image.repository }}:{{ .Values.postgresql.image.tag }}
+          # The PostgreSQL image's own policy, never image.pullPolicy: this
+          # container runs a registry image, not the application image a local
+          # profile side-loads and marks Never.
+          imagePullPolicy: {{ .Values.postgresql.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsUser: 70
+            runAsGroup: 70
+          command:
+            - sh
+            - -ec
+            - >-
+              until pg_isready --host {{ include "dev-health.fullname" . }}-postgresql
+              --port 5432 --username {{ .Values.postgresql.credentials.user | quote }}
+              --dbname {{ .Values.postgresql.credentials.database | quote }};
+              do sleep 2; done
+      {{- end }}
+      containers:
+        - name: open-units-index
+          image: {{ $migrateImage | quote }}
+          imagePullPolicy: {{ $migratePullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+          args:
+            - migrate
+            - postgres
+            - build-index
+            - --lock-timeout={{ .Values.migrations.hook.openUnitsIndex.lockTimeoutSeconds }}s
+            - --attempts={{ .Values.migrations.hook.openUnitsIndex.attempts }}
+            - --retry-delay={{ .Values.migrations.hook.openUnitsIndex.retryDelaySeconds }}s
+            - open-units
+          envFrom:
+            - configMapRef:
+                name: {{ include "dev-health.fullname" . }}-migrate-config
+            - secretRef:
+                {{- if .Values.secrets.create }}
+                name: {{ include "dev-health.fullname" . }}-migrate-secrets
+              {{- else }}
+                name: {{ default (include "dev-health.secretName" .) .Values.migrations.hook.externalSecretName }}
+              {{- end }}
+          {{- with .Values.migrations.hook.extraEnv }}
+          env:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.migrations.hook.resources | nindent 12 }}
+{{- end }}
 {{- end }}

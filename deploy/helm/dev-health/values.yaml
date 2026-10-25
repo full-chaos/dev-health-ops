@@ -1293,6 +1293,22 @@ migrations:
       deadlineSeconds: 1800
       attempts: 3
       retryDelaySeconds: 15
+    # -- Build ix_sync_run_units_open_run CONCURRENTLY in a
+    #    weight -2 pre-hook Job (`dho migrate postgres build-index
+    #    open-units`), BEFORE the migrate Job runs revision 0160 (which
+    #    then finds the index and does nothing; its plain build would hold a
+    #    SHARE lock on sync_run_units). OFF = no such Job in the render; turn it
+    #    on for the roll that carries revision 0160 on a database with a large
+    #    sync_run_units. The Job fails, and so does the release before the
+    #    migrate Job, unless the index ends present and valid. With
+    #    localBundledPostgres the Job runs on pre-upgrade only. Pass a helm --timeout above activeDeadlineSeconds.
+    openUnitsIndex:
+      enabled: false
+      activeDeadlineSeconds: 3600
+      # -- lock_timeout of each build attempt, in seconds (1 to 60).
+      lockTimeoutSeconds: 5
+      attempts: 20
+      retryDelaySeconds: 15
     backoffLimit: 2
     activeDeadlineSeconds: 1800
     resources:

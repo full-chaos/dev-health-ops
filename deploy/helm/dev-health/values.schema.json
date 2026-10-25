@@ -110,6 +110,18 @@
               "required": ["enabled"],
               "description": "The weight -2 pre-hook Job that builds ix_sync_run_units_failure_streak CONCURRENTLY before revision 0159."
             },
+            "openUnitsIndex": {
+              "type": "object",
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "activeDeadlineSeconds": { "type": "integer", "minimum": 60 },
+                "lockTimeoutSeconds": { "type": "integer", "minimum": 1, "maximum": 60 },
+                "attempts": { "type": "integer", "minimum": 1 },
+                "retryDelaySeconds": { "type": "integer", "minimum": 0 }
+              },
+              "required": ["enabled"],
+              "description": "The weight -2 pre-hook Job that builds ix_sync_run_units_open_run CONCURRENTLY before revision 0160."
+            },
             "classDecisionLiveSchemaDigest": {
               "type": "string",
               "pattern": "^(sha256:[0-9a-f]{64})?$",

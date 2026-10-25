@@ -22,6 +22,11 @@ import (
 
 func buildIndexVerb(t *testing.T, uri string, args ...string) (int, map[string]any, string) {
 	t.Helper()
+	return buildIndexVerbFor(t, uri, "failure-streak", args...)
+}
+
+func buildIndexVerbFor(t *testing.T, uri, index string, args ...string) (int, map[string]any, string) {
+	t.Helper()
 	resolve := pgmigrate.ResolveDSN(func(secrets.LookupEnv, io.Writer) (secrets.Value, string, bool) {
 		return secrets.NewValue(uri), "test", true
 	})
@@ -33,7 +38,7 @@ func buildIndexVerb(t *testing.T, uri string, args ...string) (int, map[string]a
 	}
 	var out, errs bytes.Buffer
 	code := run(context.Background(), cli.Env{
-		Args:   append(append([]string{}, args...), "failure-streak"),
+		Args:   append(append([]string{}, args...), index),
 		Lookup: func(string) (string, bool) { return "", false },
 		Stdout: &out, Stderr: &errs,
 	})
@@ -48,10 +53,15 @@ func buildIndexVerb(t *testing.T, uri string, args ...string) (int, map[string]a
 
 func streakIndexDefinition(t *testing.T, conn *pgx.Conn) (definition string, valid bool) {
 	t.Helper()
+	return indexDefinition(t, conn, pgmigrate.FailureStreakIndexName)
+}
+
+func indexDefinition(t *testing.T, conn *pgx.Conn, name string) (definition string, valid bool) {
+	t.Helper()
 	err := conn.QueryRow(context.Background(), `
 SELECT pg_get_indexdef(i.indexrelid), i.indisvalid AND i.indisready
 FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
-WHERE c.relname = $1 AND c.relnamespace = 'public'::regnamespace`, pgmigrate.FailureStreakIndexName).Scan(&definition, &valid)
+WHERE c.relname = $1 AND c.relnamespace = 'public'::regnamespace`, name).Scan(&definition, &valid)
 	if err != nil {
 		t.Fatalf("read the index: %v", err)
 	}
@@ -163,8 +173,13 @@ func (b *syncBuffer) String() string {
 
 func indexRowCount(t *testing.T, conn *pgx.Conn) int {
 	t.Helper()
+	return indexRowCountFor(t, conn, pgmigrate.FailureStreakIndexName)
+}
+
+func indexRowCountFor(t *testing.T, conn *pgx.Conn, name string) int {
+	t.Helper()
 	var n int
-	if err := conn.QueryRow(context.Background(), "SELECT count(*) FROM pg_class WHERE relname = $1 AND relnamespace = 'public'::regnamespace", pgmigrate.FailureStreakIndexName).Scan(&n); err != nil {
+	if err := conn.QueryRow(context.Background(), "SELECT count(*) FROM pg_class WHERE relname = $1 AND relnamespace = 'public'::regnamespace", name).Scan(&n); err != nil {
 		t.Fatal(err)
 	}
 	return n
@@ -253,9 +268,143 @@ func TestDropInvalidFailureStreakIndexKeepsAValidIndex(t *testing.T) {
 	if _, valid := streakIndexDefinition(t, conn); !valid {
 		t.Fatal("the head database has no valid streak index")
 	}
-	pgmigrate.DropInvalidFailureStreakIndex(context.Background(), conn,
+	pgmigrate.DropInvalidUnitsIndex(context.Background(), conn, "failure-streak",
 		pgmigrate.IndexBuildOptions{LockTimeout: time.Second}, slog.New(slog.NewJSONHandler(io.Discard, nil)))
 	if _, valid := streakIndexDefinition(t, conn); !valid {
 		t.Fatal("the valid index did not survive the cleanup")
+	}
+}
+
+// Mirrors of the failure-streak cleanup tests for the open-units index (revision 0160), on the migrated schema.
+// When the build fails for good and the blocker clears before the cleanup, the INVALID index the failed build left is dropped.
+func TestBuildOpenUnitsIndexFinalFailureDropsTheInvalidIndex(t *testing.T) {
+	position, _ := chainPosition(t, "0160")
+	d := newDownInstance(t)
+	uri := d.at(t, position)
+	release := holdWriter(t, uri)
+
+	conn := connect(t, uri)
+	logs := &syncBuffer{}
+	go func() {
+		for !strings.Contains(logs.String(), "attempt failed") {
+			time.Sleep(10 * time.Millisecond)
+		}
+		release()
+	}()
+	_, err := pgmigrate.BuildOpenUnitsIndex(context.Background(), conn,
+		pgmigrate.IndexBuildOptions{LockTimeout: 2 * time.Second, Attempts: 1, Deadline: 4 * time.Second, CleanupBudget: 30 * time.Second}, slog.New(slog.NewJSONHandler(logs, nil)))
+	if err == nil {
+		t.Fatal("the build succeeded under a held writer lock")
+	}
+	if n := indexRowCountFor(t, conn, pgmigrate.OpenUnitsIndexName); n != 0 {
+		t.Fatalf("%d index rows left after the final failure; log %s", n, logs.String())
+	}
+}
+
+// When the blocker outlives the cleanup too, the INVALID index stays, the verb exits non-zero and logs the distinct line;
+// the next run drops it and builds a valid one.
+func TestBuildOpenUnitsIndexFinalFailureUnderHeldLockLeavesIndexForNextRun(t *testing.T) {
+	position, _ := chainPosition(t, "0160")
+	d := newDownInstance(t)
+	uri := d.at(t, position)
+	release := holdWriter(t, uri)
+
+	conn := connect(t, uri)
+	logs := &syncBuffer{}
+	_, err := pgmigrate.BuildOpenUnitsIndex(context.Background(), conn,
+		pgmigrate.IndexBuildOptions{LockTimeout: time.Second, Attempts: 1, Deadline: 3 * time.Second, CleanupBudget: 3 * time.Second}, slog.New(slog.NewJSONHandler(logs, nil)))
+	if err == nil {
+		t.Fatal("the build succeeded under a held writer lock")
+	}
+	stderr := logs.String()
+	if !strings.Contains(stderr, "build-index: invalid index left; the next run drops it") {
+		t.Fatalf("stderr lacks the leftover line: %s", stderr)
+	}
+	if _, valid := indexDefinition(t, conn, pgmigrate.OpenUnitsIndexName); valid {
+		t.Fatal("the leftover index is valid")
+	}
+	release()
+	code, result, stderr := buildIndexVerbFor(t, uri, "open-units")
+	if code != cli.ExitOK || result["action"] != "rebuilt" || result["valid"] != true {
+		t.Fatalf("next run: exit %d result %v stderr %s", code, result, stderr)
+	}
+}
+
+// A VALID index is never dropped by the cleanup that follows a final failed build.
+func TestDropInvalidOpenUnitsIndexKeepsAValidIndex(t *testing.T) {
+	_, length := chainPosition(t, "0160")
+	d := newDownInstance(t)
+	conn := connect(t, d.at(t, length))
+	if _, valid := indexDefinition(t, conn, pgmigrate.OpenUnitsIndexName); !valid {
+		t.Fatal("the head database has no valid open-units index")
+	}
+	pgmigrate.DropInvalidUnitsIndex(context.Background(), conn, "open-units",
+		pgmigrate.IndexBuildOptions{LockTimeout: time.Second}, slog.New(slog.NewJSONHandler(io.Discard, nil)))
+	if _, valid := indexDefinition(t, conn, pgmigrate.OpenUnitsIndexName); !valid {
+		t.Fatal("the valid index did not survive the cleanup")
+	}
+}
+
+// The open-units verb builds the index before revision 0160, finds it valid on a second run, repairs an INVALID leftover,
+// and revision 0160 then does nothing for it: the database holds the definition a plain walk to the head builds.
+func TestBuildOpenUnitsIndexBeforeRevision0160(t *testing.T) {
+	position, length := chainPosition(t, "0160")
+	d := newDownInstance(t)
+	headConn := connect(t, d.at(t, length))
+	definitionOf := func(conn *pgx.Conn) (definition string, valid bool) {
+		err := conn.QueryRow(context.Background(), `
+SELECT pg_get_indexdef(i.indexrelid), i.indisvalid AND i.indisready
+FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
+WHERE c.relname = $1 AND c.relnamespace = 'public'::regnamespace`, pgmigrate.OpenUnitsIndexName).Scan(&definition, &valid)
+		if err != nil {
+			t.Fatalf("read the index: %v", err)
+		}
+		return definition, valid
+	}
+	wantDefinition, valid := definitionOf(headConn)
+	if !valid || !strings.Contains(wantDefinition, "(sync_run_id) WHERE") {
+		t.Fatalf("the walk's index is %q valid=%v", wantDefinition, valid)
+	}
+	uri := d.at(t, position)
+	conn := connect(t, uri)
+	var present bool
+	if err := conn.QueryRow(context.Background(), "SELECT to_regclass('public.ix_sync_run_units_open_run') IS NOT NULL").Scan(&present); err != nil || present {
+		t.Fatalf("the index exists before revision 0160 (err %v)", err)
+	}
+	for _, step := range []struct{ name, damage, action string }{
+		{"first build", "", "built"},
+		{"second run", "", "present"},
+		{"invalid leftover", "UPDATE pg_index SET indisvalid = false WHERE indexrelid = 'public.ix_sync_run_units_open_run'::regclass", "rebuilt"},
+	} {
+		if step.damage != "" {
+			if _, err := conn.Exec(context.Background(), step.damage); err != nil {
+				t.Fatal(err)
+			}
+		}
+		code, result, stderr := buildIndexVerbFor(t, uri, "open-units")
+		if code != cli.ExitOK || result["action"] != step.action || result["valid"] != true {
+			t.Fatalf("%s: exit %d result %v stderr %s, want action %s", step.name, code, result, stderr, step.action)
+		}
+		if got, valid := definitionOf(conn); !valid || got != wantDefinition {
+			t.Fatalf("%s: index %q valid=%v, want %q", step.name, got, valid, wantDefinition)
+		}
+	}
+	baseline, err := pgmigrate.LoadBaseline()
+	if err != nil {
+		t.Fatal(err)
+	}
+	chain, err := pgmigrate.LoadChain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	applied, err := pgmigrate.Upgrade(context.Background(), conn, baseline, chain)
+	if err != nil {
+		t.Fatalf("upgrade to the head: %v", err)
+	}
+	if len(applied.Applied) == 0 || applied.Applied[0] != "0160" {
+		t.Fatalf("applied %v, want it to start at 0160", applied.Applied)
+	}
+	if got, valid := definitionOf(conn); !valid || got != wantDefinition {
+		t.Fatalf("after revision 0160: index %q valid=%v, want %q", got, valid, wantDefinition)
 	}
 }

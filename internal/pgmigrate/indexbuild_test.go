@@ -47,6 +47,14 @@ func TestFailureStreakIndexDefinitionMatchesRevision0159(t *testing.T) {
 	}
 }
 
+// The Job's open-units definition is contained in revision 0160's statements.
+func TestOpenUnitsIndexDefinitionMatchesRevision0160(t *testing.T) {
+	want := squash("CREATE INDEX IF NOT EXISTS " + pgmigrate.OpenUnitsIndexBody + ";")
+	if got := squash(chainFile(t, "0160").SQL); !strings.Contains(got, want) {
+		t.Fatalf("revision 0160 =\n%s\nwant it to contain\n%s", got, want)
+	}
+}
+
 // The index serves providersync.RecentTerminalUnitsSQL: its status predicate is the query's, its equality columns lead
 // and its ORDER BY follows, so the planner can read each source's newest rows from the index with no sort.
 func TestFailureStreakIndexServesTheStreakQuery(t *testing.T) {
@@ -104,7 +112,7 @@ func TestBuildIndexRefusesAnyOtherIndexName(t *testing.T) {
 	if run == nil {
 		t.Fatal("no build-index verb")
 	}
-	for _, args := range [][]string{nil, {"other"}, {"failure-streak", "extra"}, {"--lock-timeout=1ms", "failure-streak"}, {"--attempts=0", "failure-streak"}} {
+	for _, args := range [][]string{nil, {"other"}, {"failure-streak", "extra"}, {"open-units", "failure-streak"}, {"--lock-timeout=1ms", "failure-streak"}, {"--attempts=0", "failure-streak"}} {
 		var stderr bytes.Buffer
 		if code := run(context.Background(), cli.Env{Args: args, Stdout: io.Discard, Stderr: &stderr}); code != cli.ExitUsage {
 			t.Errorf("args %v: exit %d, want %d (%s)", args, code, cli.ExitUsage, stderr.String())

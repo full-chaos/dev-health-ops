@@ -223,7 +223,7 @@ func (s *Scope) Impersonation(next http.Handler) http.Handler {
 		// Every path below that calls next has decided; the refusals return
 		// without calling it.
 		r = r.WithContext(context.WithValue(r.Context(), impersonationDecidedKey, true))
-		if !maybeSuperuser(r) {
+		if !s.mayImpersonate(r) {
 			next.ServeHTTP(w, r)
 			return
 		}

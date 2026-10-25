@@ -155,7 +155,7 @@ func (g *Guard) currentUser(w http.ResponseWriter, r *http.Request) (*User, bool
 		authFailure(w, "Invalid authorization header", nil)
 		return nil, false
 	}
-	user, err := g.auth.Authenticate(r.Context(), token)
+	user, err := g.auth.Authenticate(g.auth.routeCtx(r), token)
 	if err != nil {
 		if !isRefusal(err) {
 			g.logger.ErrorContext(r.Context(), "api authentication: user lookup failed",
@@ -174,7 +174,7 @@ func (g *Guard) optionalUser(w http.ResponseWriter, r *http.Request) (*User, boo
 	if !ok {
 		return nil, true
 	}
-	user, err := g.auth.Authenticate(r.Context(), token)
+	user, err := g.auth.Authenticate(g.auth.routeCtx(r), token)
 	switch {
 	case err == nil:
 		return user, true

@@ -46,10 +46,10 @@ func censusRows(t *testing.T) [][2]string {
 			continue
 		}
 		f := strings.Split(line, "\t")
-		if len(f) != 2 || strings.TrimSpace(f[0]) == "" || strings.TrimSpace(f[1]) == "" {
+		if len(f) != 2 || strings.Trim(f[0], " \t\r") == "" || strings.Trim(f[1], " \t\r") == "" {
 			t.Fatalf("census line %d is not <package><TAB><test>: %q", i+1, line)
 		}
-		rows = append(rows, [2]string{strings.TrimSpace(f[0]), strings.TrimSpace(f[1])})
+		rows = append(rows, [2]string{strings.Trim(f[0], " \t\r"), strings.Trim(f[1], " \t\r")})
 	}
 	if len(rows) == 0 {
 		t.Fatal("the census holds no row")

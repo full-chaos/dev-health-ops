@@ -405,10 +405,10 @@ func parseCensusExcluded(text string) (map[censusExcludedRow]bool, error) {
 			continue
 		}
 		f := strings.Split(line, "\t")
-		if len(f) != 2 || strings.TrimSpace(f[0]) == "" || strings.TrimSpace(f[1]) == "" {
+		if len(f) != 2 || strings.Trim(f[0], " \t\r") == "" || strings.Trim(f[1], " \t\r") == "" {
 			return nil, fmt.Errorf("census line %d is not <package><TAB><test>: %q", i+1, line)
 		}
-		row := censusExcludedRow{strings.TrimSpace(f[0]), strings.TrimSpace(f[1])}
+		row := censusExcludedRow{strings.Trim(f[0], " \t\r"), strings.Trim(f[1], " \t\r")}
 		if first, dup := firstLine[row]; dup {
 			return nil, fmt.Errorf("duplicate race_excluded_tests.tsv row %s %s: lines %d and %d", row.pkg, row.name, first, i+1)
 		}

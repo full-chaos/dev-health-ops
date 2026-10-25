@@ -111,7 +111,7 @@ func decodeMail(t *testing.T, captured smtpcapture.Mail) sentMail {
 	captured = smtpcapture.Normalize(captured)
 	message, err := mail.ReadMessage(strings.NewReader(captured.Data))
 	if err != nil {
-		t.Fatalf("captured message does not parse: %v\n%s", err, captured.Data)
+		t.Fatalf("captured message does not parse: %v\n%s", err, redactLinkTokens(captured.Data))
 	}
 	out := sentMail{mailFrom: captured.MailFrom, rcptTo: strings.Join(captured.RcptTo, ","),
 		from: message.Header.Get("From"), to: message.Header.Get("To"), subject: message.Header.Get("Subject")}
@@ -146,13 +146,13 @@ func decodeMail(t *testing.T, captured smtpcapture.Mail) sentMail {
 	match := linkPattern.FindStringSubmatch(body)
 	if match == nil && tokenOptional(out.subject) {
 		if forbidden := noticeLinkOrToken(body); forbidden != "" {
-			t.Fatalf("the account-exists notice carries a token or a link (%q):\n%s", forbidden, body)
+			t.Fatalf("the account-exists notice carries a token or a link (%q):\n%s", redactLinkTokens(forbidden), redactLinkTokens(body))
 		}
 		out.html = body
 		return out
 	}
 	if match == nil {
-		t.Fatalf("no link token in the captured HTML:\n%s", body)
+		t.Fatalf("no link token in the captured HTML:\n%s", redactLinkTokens(body))
 	}
 	out.token = match[1]
 	out.html = strings.ReplaceAll(body, out.token, "TOKEN")

@@ -168,6 +168,16 @@ hostport() {
 STUB_ADMIN_PORT="$(hostport providerstub 9090)"
 STUB_ADMIN="http://127.0.0.1:${STUB_ADMIN_PORT}"
 curl --silent --show-error --fail --max-time 10 "${STUB_ADMIN}/requests" >/dev/null || die "the corpus provider stub's recorder does not answer at ${STUB_ADMIN}"
+# The corpus mail sink (the smtpsink service of this project) publishes its read API on loopback only; the test reads the
+# captured mail through it. A recorder that does not answer fails the leg before any step runs.
+SMTP_ADMIN_PORT="$(hostport smtpsink 9090)"
+SMTP_ADMIN="http://127.0.0.1:${SMTP_ADMIN_PORT}"
+sink_up=""
+for _ in $(seq 1 "${AUTH_CORPUS_SINK_TRIES:-30}"); do
+  if curl --silent --fail --max-time 5 "${SMTP_ADMIN}/accepts" >/dev/null; then sink_up=1; break; fi
+  sleep 1
+done
+[ -n "${sink_up}" ] || die "the corpus mail sink's read API does not answer at ${SMTP_ADMIN}"
 PG_PORT="$(hostport postgres 5432)"
 CH_PORT="$(hostport clickhouse 9000)"
 VALKEY_PORT="$(hostport valkey 6379)"
@@ -292,7 +302,7 @@ export DEVHEALTH_AUTH_ORACLE_BASE_URL="http://127.0.0.1:${API_PORT}"
 export DEVHEALTH_AUTH_ORACLE_POSTGRES_URI="postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@127.0.0.1:${PG_PORT}/${POSTGRES_DB:-postgres}?sslmode=disable"
 export DEVHEALTH_AUTH_ORACLE_CLICKHOUSE_URI="clickhouse://${CLICKHOUSE_USER:-ch}:${CLICKHOUSE_PASSWORD:-ch}@127.0.0.1:${CH_PORT}/${CLICKHOUSE_DB:-default}"
 export DEVHEALTH_AUTH_ORACLE_VALKEY_URI="redis://127.0.0.1:${VALKEY_PORT}/1"
-export DEVHEALTH_AUTH_ORACLE_SMTP_LISTEN="0.0.0.0:2525"
+export DEVHEALTH_AUTH_ORACLE_SMTP_ADMIN="${SMTP_ADMIN}"
 export DEVHEALTH_AUTH_ORACLE_STUB_ADMIN="${STUB_ADMIN}"
 # The aggregates go-api forwarded, comma separated (empty on leg go-api): the corpus reads auth-service's rows for them
 # (internal/testsupport/authrows).

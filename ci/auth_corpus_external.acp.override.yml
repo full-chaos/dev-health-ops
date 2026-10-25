@@ -38,6 +38,8 @@ services:
     depends_on:
       providerstub:
         condition: service_started
+      smtpsink:
+        condition: service_started
       valkey:
         condition: service_healthy
     extra_hosts:
@@ -57,12 +59,12 @@ services:
       - AUTH_SERVICE_TRUSTED_PROXIES=10.199.91.20/32
       - SOCIAL_GITHUB_CLIENT_ID=gh-client
       - SOCIAL_GITHUB_CLIENT_SECRET=gh-secret
-      # The credentials flows of auth-service mail through the corpus's sink (listening on the runner, 0.0.0.0:2525), which
-      # it reaches through the gateway of its own network, as go-api does through its default network's gateway.
+      # The credentials flows of auth-service mail through the corpus's sink, the smtpsink service of this project,
+      # which joins auth_plane below and is reached by its service name.
       # EMAIL_FROM_ADDRESS comes from the project state file, the value go-api's mail carries.
       - EMAIL_PROVIDER=smtp
       - EMAIL_FROM_ADDRESS
-      - SMTP_HOST=10.199.91.1
+      - SMTP_HOST=smtpsink
       - SMTP_PORT=2525
       - APP_BASE_URL=https://app.example.test/
     volumes:
@@ -81,3 +83,8 @@ services:
     networks:
       auth_plane:
         ipv4_address: 10.199.91.10
+  # The sink is on both networks: go-api reaches it on the project's default network, auth-service on auth_plane.
+  smtpsink:
+    networks:
+      default:
+      auth_plane:

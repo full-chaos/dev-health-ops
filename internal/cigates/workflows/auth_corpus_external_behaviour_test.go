@@ -59,12 +59,17 @@ esac
 case "$1" in
   test)
     case "$*" in
+      *" -c "*) ;;
+      *) printf 'SMTPADMIN %s\n' "$DEVHEALTH_AUTH_ORACLE_SMTP_ADMIN" >> "` + record + `" ;;
+    esac
+    case "$*" in
       *" -c "*)
         # go test -c ... -o BIN: BIN is the fake test binary, its pid is recorded where the test can read it.
         for arg in "$@"; do if [ "$prev" = "-o" ]; then out="$arg"; fi; prev="$arg"; done
         printf '%s\n' "$*" >> "` + record + `.compile"
         cat > "$out" <<'BIN'
 #!/bin/sh
+printf 'SMTPADMIN %s\n' "$DEVHEALTH_AUTH_ORACLE_SMTP_ADMIN" >> "$FAKE_RECORD"
 if [ -n "$FAKE_GO_TEST_EXITS" ]; then exit 0; fi
 printf '%s\n' "$$" > "$FAKE_TEST_PID_FILE"
 printf 'SEEDED\n' >> "$FAKE_RECORD"
@@ -275,6 +280,7 @@ func (f fakeDocker) withCurl(t *testing.T) {
 	t.Helper()
 	curl := `#!/bin/bash
 for arg in "$@"; do last="$arg"; done
+if [[ " $* " == *"/accepts"* ]] && [ -n "${FAKE_SINK_DOWN:-}" ]; then exit 22; fi
 if [[ " $* " == *" -X OPTIONS "* ]]; then
   path="/${last#http://*/}"
   served="${FAKE_SERVED}"
@@ -706,35 +712,105 @@ func TestAuthCorpusAcpOwnedLegFailsWhenTheTestEndsBeforeSeeding(t *testing.T) {
 	}
 }
 
-// auth-service sends its mail to the corpus's sink through its own network's gateway, with the mail env of go-api.
-func TestAuthCorpusAcpOverrideGivesAuthServiceTheMailEnvToTheSink(t *testing.T) {
-	raw, err := os.ReadFile(filepath.Join(authProofRoot(t), "ci", "auth_corpus_external.acp.override.yml"))
-	if err != nil {
+type overrideDoc struct {
+	Networks map[string]any
+	Services map[string]struct {
+		Environment []string
+		Ports       []string
+		DependsOn   map[string]any `yaml:"depends_on"`
+		Networks    any
+	}
+}
+
+func parseOverride(t *testing.T, text string) overrideDoc {
+	t.Helper()
+	var doc overrideDoc
+	if err := yaml.Unmarshal([]byte(text), &doc); err != nil {
 		t.Fatal(err)
 	}
-	var doc struct {
-		Networks map[string]struct {
-			IPAM struct {
-				Config []struct{ Subnet, Gateway string }
+	return doc
+}
+
+func containsKey(m map[string]any, key string) bool { _, ok := m[key]; return ok }
+
+func hasEnv(env []string, want string) bool {
+	for _, entry := range env {
+		if entry == want {
+			return true
+		}
+	}
+	return false
+}
+
+// go-api and auth-service both send their mail to the corpus mail sink by its service name, and the sink is a service of
+// the leg's own project on the networks both reach: no address, no host gateway.
+func TestAuthCorpusPlanesSendMailToTheSinkServiceByName(t *testing.T) {
+	mainText, acpText := readRepoFile(t, "ci", "auth_corpus_external.override.yml"), readRepoFile(t, "ci", "auth_corpus_external.acp.override.yml")
+	main, acp := parseOverride(t, mainText), parseOverride(t, acpText)
+	if !hasEnv(main.Services["go-api"].Environment, "SMTP_HOST=smtpsink") || !hasEnv(main.Services["go-api"].Environment, "SMTP_PORT=2525") {
+		t.Errorf("go-api must send mail to smtpsink:2525: %v", main.Services["go-api"].Environment)
+	}
+	for _, want := range []string{"EMAIL_PROVIDER=smtp", "EMAIL_FROM_ADDRESS", "SMTP_HOST=smtpsink", "SMTP_PORT=2525", "APP_BASE_URL=https://app.example.test/"} {
+		if !hasEnv(acp.Services["auth-service"].Environment, want) {
+			t.Errorf("auth-service environment lacks %q: %v", want, acp.Services["auth-service"].Environment)
+		}
+	}
+	if _, ok := main.Services["smtpsink"]; !ok {
+		t.Fatal("the main override has no smtpsink service")
+	}
+	for _, name := range []string{"default", "auth_plane"} {
+		if networks, _ := acp.Services["smtpsink"].Networks.(map[string]any); networks == nil || !containsKey(networks, name) {
+			t.Errorf("smtpsink is not on the %s network in leg acp: %v", name, acp.Services["smtpsink"].Networks)
+		}
+	}
+	for _, service := range []struct {
+		doc  overrideDoc
+		name string
+	}{{main, "go-api"}, {acp, "auth-service"}} {
+		if _, ok := service.doc.Services[service.name].DependsOn["smtpsink"]; !ok {
+			t.Errorf("%s does not wait for smtpsink", service.name)
+		}
+	}
+	for name, text := range map[string]string{"auth_corpus_external.override.yml": mainText, "auth_corpus_external.acp.override.yml": acpText} {
+		for _, line := range strings.Split(text, "\n") {
+			if strings.Contains(line, "SMTP_HOST=") && !strings.HasSuffix(strings.TrimSpace(line), "SMTP_HOST=smtpsink") {
+				t.Errorf("%s: SMTP_HOST must be the sink's service name: %q", name, line)
 			}
 		}
-		Services map[string]struct{ Environment []string }
 	}
-	if err := yaml.Unmarshal(raw, &doc); err != nil {
-		t.Fatal(err)
+}
+
+// The sink's read API is published on loopback only, on an ephemeral host port.
+func TestAuthCorpusSinkReadAPIIsPublishedOnLoopbackOnly(t *testing.T) {
+	ports := parseOverride(t, readRepoFile(t, "ci", "auth_corpus_external.override.yml")).Services["smtpsink"].Ports
+	if len(ports) != 1 || ports[0] != "127.0.0.1::9090" {
+		t.Fatalf("smtpsink ports = %q, want exactly [127.0.0.1::9090]", ports)
 	}
-	gateway := ""
-	if cfg := doc.Networks["auth_plane"].IPAM.Config; len(cfg) == 1 {
-		gateway = cfg[0].Gateway
+}
+
+// The script reads the sink's published port, fails the leg when the read API does not answer, and hands the test its URL
+// on every leg.
+func TestAuthCorpusScriptHandsTheTestTheSinkReadAPI(t *testing.T) {
+	metrics := metric("sessions") + "\n" + metric("local_login") + "\n" + metric("credentials")
+	fake, out, err := runAcpOwnedLeg(t, "FAKE_SERVED="+requiredServed, "FAKE_SERVED_OWNED="+requiredServed+","+credentialsRoutes, "FAKE_METRICS="+metrics)
+	if err != nil || !strings.Contains(out, "AUTH CORPUS EXTERNAL (acp) PASSED") {
+		t.Fatalf("want a pass, got err=%v:\n%s", err, out)
 	}
-	env := map[string]bool{}
-	for _, entry := range doc.Services["auth-service"].Environment {
-		env[entry] = true
+	calls := fake.calls(t)
+	if !strings.Contains(calls, " port smtpsink 9090") || !strings.Contains(calls, "SMTPADMIN http://127.0.0.1:12345\n") {
+		t.Errorf("want the sink's port read and exported to the test:\n%s", calls)
 	}
-	for _, want := range []string{"EMAIL_PROVIDER=smtp", "EMAIL_FROM_ADDRESS", "SMTP_HOST=" + gateway, "SMTP_PORT=2525", "APP_BASE_URL=https://app.example.test/"} {
-		if gateway == "" || !env[want] {
-			t.Errorf("auth-service environment lacks %q (auth_plane gateway %q): %v", want, gateway, doc.Services["auth-service"].Environment)
-		}
+	fake, out, err = runAcpLeg(t, "FAKE_SERVED="+requiredServed, "FAKE_METRICS="+metric("sessions")+"\n"+metric("local_login"))
+	if err != nil {
+		t.Fatalf("unowned leg: %v\n%s", err, out)
+	}
+	if calls := fake.calls(t); !strings.Contains(calls, "SMTPADMIN http://127.0.0.1:12345\n") {
+		t.Errorf("the unowned leg must read the sink too:\n%s", calls)
+	}
+	_, out, err = runAcpOwnedLeg(t, "FAKE_SERVED="+requiredServed, "FAKE_SERVED_OWNED="+requiredServed+","+credentialsRoutes, "FAKE_METRICS="+metrics,
+		"FAKE_SINK_DOWN=1", "AUTH_CORPUS_SINK_TRIES=2")
+	if err == nil || !strings.Contains(out, "the corpus mail sink's read API does not answer") {
+		t.Fatalf("want the leg to fail closed on a silent sink, got err=%v:\n%s", err, out)
 	}
 }
 

@@ -37,9 +37,9 @@ services:
     # this container, and an ephemeral port would change with it.
     ports: !override ["127.0.0.1:${AUTH_CORPUS_API_PORT}:8000", "127.0.0.1:${AUTH_CORPUS_OPERATOR_PORT}:8080"]
     environment:
-      # The corpus's mail sink listens on the runner (DEVHEALTH_AUTH_ORACLE_SMTP_LISTEN=0.0.0.0:2525); the invite and
-      # verification mail of go-api goes there, through the gateway of its own network (the host as its container sees it). The links it mails use this base.
-      - SMTP_HOST=10.199.90.1
+      # The corpus's mail sink is the smtpsink service of this project (below), reached by its service name on the
+      # project network; the invite and verification mail of go-api goes there. The links it mails use this base.
+      - SMTP_HOST=smtpsink
       - SMTP_PORT=2525
       - APP_BASE_URL=https://app.example.test/
       - TRUSTED_PROXIES=10.199.90.1
@@ -54,6 +54,8 @@ services:
       - SSL_CERT_FILE=/run/corpus-stub/ca.pem
     depends_on:
       providerstub:
+        condition: service_started
+      smtpsink:
         condition: service_started
     extra_hosts:
       - "api.github.com:10.199.90.10"
@@ -86,3 +88,18 @@ services:
     networks:
       default:
         ipv4_address: 10.199.90.10
+  # The corpus mail sink (docker/smtpsink.Dockerfile; corpus only, never a release image): records every message the
+  # planes send on :2525, byte for byte, and serves the capture to the test on :9090, published on loopback only.
+  smtpsink:
+    image: authcorpus-smtpsink:local
+    build:
+      context: .
+      dockerfile: docker/smtpsink.Dockerfile
+      target: smtpsink
+    command: ["-listen", ":2525", "-admin", ":9090"]
+    restart: "no"
+    read_only: true
+    user: "65532:65532"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    ports: ["127.0.0.1::9090"]

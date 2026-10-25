@@ -93,6 +93,19 @@ type sentMail struct {
 	token                                         string
 }
 
+// envSMTPAdmin is the read API of the corpus mail sink (ci/auth_corpus_external.sh).
+const envSMTPAdmin = "DEVHEALTH_AUTH_ORACLE_SMTP_ADMIN"
+
+// mailSink is what the runner reads the Go plane's mail from: the in-process server of a self-contained run, or the
+// corpus mail sink container of an external one.
+type mailSink interface {
+	Drain(t *testing.T) []smtpcapture.Mail
+}
+
+type remoteSink struct{ *smtpcapture.Remote }
+
+func (r remoteSink) Drain(t *testing.T) []smtpcapture.Mail { return r.Remote.Drain(t) }
+
 func decodeMail(t *testing.T, captured smtpcapture.Mail) sentMail {
 	t.Helper()
 	captured = smtpcapture.Normalize(captured)
@@ -237,17 +250,18 @@ func (m recordedMail) sent() sentMail {
 }
 
 type runner struct {
-	golden         *venueoracle.Golden
-	t              *testing.T
-	ctx            context.Context
-	venue          *venueoracle.Venue
-	goBase         string
-	external       bool
-	forwarded      authrows.Forwarded
-	usersOwned     bool
-	ledger         *authrows.Ledger
-	pySink, goSink *smtpcapture.Server
-	receipt        strings.Builder
+	golden     *venueoracle.Golden
+	t          *testing.T
+	ctx        context.Context
+	venue      *venueoracle.Venue
+	goBase     string
+	external   bool
+	forwarded  authrows.Forwarded
+	usersOwned bool
+	ledger     *authrows.Ledger
+	pySink     *smtpcapture.Server
+	goSink     mailSink
+	receipt    strings.Builder
 	// mails are each plane's messages so far, by "recipient|subject", the
 	// latest last.
 	mails map[string]map[string][]sentMail
@@ -643,13 +657,23 @@ func TestAuthFlowVenueOracle(t *testing.T) {
 		t.Fatalf("%s: %v", sessionscenario.EnvBaseURL, err)
 	}
 	var external *venueoracle.ExternalStores
+	var goSink mailSink
 	if isExternal {
 		external = &stores
-		if err := smtpcapture.ValidateExternalListen(smtpcapture.ListenAddr()); err != nil {
-			t.Fatalf("%s: %v", smtpcapture.EnvListen, err)
+		smtpAdmin := os.Getenv(envSMTPAdmin)
+		if smtpAdmin == "" {
+			t.Fatalf("%s is not set: an external run reads the mail through the corpus mail sink", envSMTPAdmin)
 		}
+		remote := smtpcapture.NewRemote(smtpAdmin)
+		if err := remote.Reachable(); err != nil {
+			t.Fatalf("the corpus mail sink at %s does not answer: %v", smtpAdmin, err)
+		}
+		goSink = remoteSink{remote}
 	}
-	pySink, goSink := smtpcapture.Start(t), smtpcapture.StartAt(t, smtpcapture.ListenAddr())
+	pySink := smtpcapture.Start(t)
+	if goSink == nil {
+		goSink = smtpcapture.StartAt(t, smtpcapture.DefaultListen)
+	}
 	pyHost, pyPort := pySink.HostPort(t)
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{External: external,
 		Golden: golden, Root: venueRoot(), JWTKey: sessionscenario.Key, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -680,7 +704,10 @@ func TestAuthFlowVenueOracle(t *testing.T) {
 		}
 		_ = conn.Close()
 	}
-	goHost, goPort := goSink.HostPort(t)
+	goHost, goPort := pyHost, pyPort // the in-process Go sender is built and never used when go-api is external
+	if server, ok := goSink.(*smtpcapture.Server); ok {
+		goHost, goPort = server.HostPort(t)
+	}
 	t.Setenv("EMAIL_PROVIDER", "smtp")
 	t.Setenv("EMAIL_FROM_ADDRESS", fromAddress)
 	t.Setenv("SMTP_HOST", goHost)

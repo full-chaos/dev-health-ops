@@ -67,7 +67,7 @@ func acpRows(t *testing.T, golden map[string]string) map[string]string {
 		case "alice@example.comorg-bfalse 1":
 			line = "alice@example.comorg-afalse 1"
 		case "alice@example.comorg-btrue 1":
-			line = "alice@example.comorg-atrue 2"
+			line = "alice@example.comorg-atrue 1"
 		}
 		refresh = append(refresh, line)
 	}
@@ -256,6 +256,18 @@ func TestOrganizationChoiceQuirksRewriteOnlyAlicesSignInRows(t *testing.T) {
 	}
 	acp := acpRows(t, golden)
 	l, err := NewLedger(forwarded(t, "sessions,local_login,social"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// One more revoked credential than the golden's is not an organization choice: it stays a difference.
+	moreRevoked := strings.Replace(acp[TableRefreshTokens], "alice@example.comorg-atrue 1", "alice@example.comorg-atrue 2", 1)
+	if moreRevoked == acp[TableRefreshTokens] {
+		t.Fatal("the expected organization-A revoked row changed")
+	}
+	if problems := l.Compare(TableRefreshTokens, golden[TableRefreshTokens], moreRevoked); len(problems) != 2 {
+		t.Errorf("a changed revoked count was classified: %v", problems)
+	}
+	l, err = NewLedger(forwarded(t, "sessions,local_login,social"))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -14,10 +14,10 @@ var (
 )
 
 // aliceRefreshRowsInOrgA maps each of alice's refresh_tokens rows in the golden (grouped by organization and
-// revocation) to the row auth-service holds: organization A, and one more revoked credential.
+// revocation) to the same row in organization A: the organization changes, the count never does.
 var aliceRefreshRowsInOrgA = map[string]string{
 	"alice@example.comorg-bfalse 1": "alice@example.comorg-afalse 1",
-	"alice@example.comorg-btrue 1":  "alice@example.comorg-atrue 2",
+	"alice@example.comorg-btrue 1":  "alice@example.comorg-atrue 1",
 }
 
 // Quirks is the table every ACP-target row difference is classified in. Each entry covers exact lines of the

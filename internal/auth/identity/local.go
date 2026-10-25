@@ -130,17 +130,19 @@ func (s *Store) SetPasswordHashWith(ctx context.Context, principal uuid.UUID, ha
 // password is unchanged, and the store reports it without logging a failure.
 var ErrLinkUnusable = errors.New("identity: the one-time link is unusable")
 
-// PasswordCause names why a password was written; it picks the audit reason.
-type PasswordCause struct{ reason string }
+// PasswordCause names why a password was written; it picks the audit event
+// type and reason.
+type PasswordCause struct{ eventType, reason string }
 
 var (
 	// PasswordChanged is a signed-in user's own change.
-	PasswordChanged = PasswordCause{"password_changed"}
+	PasswordChanged = PasswordCause{"auth.user.password_changed", "password_changed"}
 	// PasswordReset is a reset by a one-time link.
-	PasswordReset = PasswordCause{"password_reset"}
+	PasswordReset = PasswordCause{"auth.password.reset", "password_reset"}
 )
 
-// SetPasswordHashFor is SetPasswordHashWith with the audit reason of cause.
+// SetPasswordHashFor is SetPasswordHashWith with the audit event type and
+// reason of cause.
 func (s *Store) SetPasswordHashFor(ctx context.Context, principal uuid.UUID, hash string, actor Actor, cause PasswordCause, end func(context.Context, audit.TxOps) error) (err error) {
 	defer func() { s.countLink(ctx, "set_password", err) }()
 	if !s.ownsUsers {
@@ -169,7 +171,7 @@ WHERE principal_id = $1`, principal, hash, passwordAlgorithm); err != nil {
 			}
 			return nil
 		},
-		Audit:  localAudit("auth.user.password_changed", cause.reason, subject, actor),
+		Audit:  localAudit(cause.eventType, cause.reason, subject, actor),
 		Events: []audit.OutboxEvent{userEvent(subject, "user.credentials_changed")},
 	})
 	return s.localErr(ctx, "set password hash", err)

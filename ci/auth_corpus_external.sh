@@ -308,7 +308,10 @@ TEST_CMD=(go test -trimpath -tags integration -count=1 -v -run '^TestAuthFlowVen
 if [ "${LEG}" = "acp" ] && [ -z "${AUTH_CORPUS_USERS_UNOWNED:-}" ]; then
   # The owned leg: the test seeds, signals, and waits; the flip (step 1e and 1f) runs once the users exist.
   export DEVHEALTH_AUTH_ORACLE_SEEDED_FILE="${SEEDED_FILE}" DEVHEALTH_AUTH_ORACLE_FLIPPED_FILE="${FLIPPED_FILE}"
-  (cd "${ROOT}" && exec "${TEST_CMD[@]}") &
+  # The test runs as its own compiled binary, so the pid kept here is the test itself and cleanup kills that pid and nothing else.
+  TEST_BIN="${WORK}/authflowvenue.test"
+  (cd "${ROOT}" && go test -c -trimpath -tags integration -o "${TEST_BIN}" ./internal/apiservice/authflowvenue)
+  (cd "${ROOT}/internal/apiservice/authflowvenue" && exec "${TEST_BIN}" -test.v -test.count=1 -test.run '^TestAuthFlowVenueOracle$') &
   TEST_PID=$!
   while [ ! -e "${SEEDED_FILE}" ] && kill -0 "${TEST_PID}" 2>/dev/null; do sleep 1; done
   if [ ! -e "${SEEDED_FILE}" ]; then

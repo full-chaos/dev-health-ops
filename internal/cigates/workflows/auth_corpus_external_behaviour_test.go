@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -27,6 +28,8 @@ func newFakeDocker(t *testing.T) fakeDocker {
 	docker := `#!/bin/sh
 printf '%s\n' "$*" >> "` + record + `"
 case "$*" in
+  *users-backfill*)
+    if [ -n "$FAKE_FAIL_BACKFILL" ]; then exit 1; fi ;;
   *" down "*)
     if [ -n "$FAKE_BLOCK_DOWN" ]; then exec sleep "$FAKE_BLOCK_DOWN"; fi ;;
   *" up "*)
@@ -55,15 +58,24 @@ case "$*" in
 esac
 case "$1" in
   test)
-    if [ -n "$FAKE_GO_TEST_EXITS" ]; then exit 0; fi
-    if [ -n "$DEVHEALTH_AUTH_ORACLE_SEEDED_FILE" ]; then
-      printf 'SEEDED\n' >> "` + record + `"
-      : > "$DEVHEALTH_AUTH_ORACLE_SEEDED_FILE"
-      i=0
-      while [ ! -e "$DEVHEALTH_AUTH_ORACLE_FLIPPED_FILE" ] && [ "$i" -lt 300 ]; do sleep 0.1; i=$((i+1)); done
-      [ -e "$DEVHEALTH_AUTH_ORACLE_FLIPPED_FILE" ] || exit 1
-      printf 'FLIPPED %s\n' "$(cat "$DEVHEALTH_AUTH_ORACLE_FLIPPED_FILE")" >> "` + record + `"
-    fi ;;
+    case "$*" in
+      *" -c "*)
+        # go test -c ... -o BIN: BIN is the fake test binary, its pid is recorded where the test can read it.
+        for arg in "$@"; do if [ "$prev" = "-o" ]; then out="$arg"; fi; prev="$arg"; done
+        printf '%s\n' "$*" >> "` + record + `.compile"
+        cat > "$out" <<'BIN'
+#!/bin/sh
+if [ -n "$FAKE_GO_TEST_EXITS" ]; then exit 0; fi
+printf '%s\n' "$$" > "$FAKE_TEST_PID_FILE"
+printf 'SEEDED\n' >> "$FAKE_RECORD"
+: > "$DEVHEALTH_AUTH_ORACLE_SEEDED_FILE"
+i=0
+while [ ! -e "$DEVHEALTH_AUTH_ORACLE_FLIPPED_FILE" ] && [ "$i" -lt 300 ]; do sleep 0.1; i=$((i+1)); done
+[ -e "$DEVHEALTH_AUTH_ORACLE_FLIPPED_FILE" ] || exit 1
+printf 'FLIPPED %s\n' "$(cat "$DEVHEALTH_AUTH_ORACLE_FLIPPED_FILE")" >> "$FAKE_RECORD"
+BIN
+        chmod 0755 "$out" ;;
+    esac ;;
 esac
 exit 0
 `
@@ -89,7 +101,8 @@ func (f fakeDocker) calls(t *testing.T) string {
 }
 
 func (f fakeDocker) env(extra ...string) []string {
-	return append([]string{"PATH=" + f.dir + ":" + os.Getenv("PATH"), "HOME=" + f.dir}, extra...)
+	return append([]string{"PATH=" + f.dir + ":" + os.Getenv("PATH"), "HOME=" + f.dir,
+		"FAKE_RECORD=" + f.record, "FAKE_TEST_PID_FILE=" + f.record + ".testpid"}, extra...)
 }
 
 func TestAuthCorpusExternalCleansUpWhenTerminated(t *testing.T) {
@@ -722,5 +735,35 @@ func TestAuthCorpusAcpOverrideGivesAuthServiceTheMailEnvToTheSink(t *testing.T) 
 		if gateway == "" || !env[want] {
 			t.Errorf("auth-service environment lacks %q (auth_plane gateway %q): %v", want, gateway, doc.Services["auth-service"].Environment)
 		}
+	}
+}
+
+// The owned leg runs the test as a compiled binary and, when the script fails while the test waits, cleanup kills
+// that pid: no test process outlives the script (it would hold the mail sink's port).
+func TestAuthCorpusAcpOwnedLegKillsTheTestItself(t *testing.T) {
+	fake, out, err := runAcpOwnedLeg(t, "FAKE_SERVED="+requiredServed, "FAKE_SERVED_OWNED="+requiredServed+","+credentialsRoutes,
+		"FAKE_METRICS="+metric("sessions")+"\n"+metric("local_login")+"\n"+metric("credentials"), "FAKE_FAIL_BACKFILL=1")
+	if err == nil || !strings.Contains(out, "users-backfill failed") {
+		t.Fatalf("want the backfill failure, got err=%v:\n%s", err, out)
+	}
+	compile, readErr := os.ReadFile(fake.record + ".compile")
+	if readErr != nil || !strings.Contains(string(compile), "-o ") {
+		t.Fatalf("want the test compiled to a binary, got %q (%v)", compile, readErr)
+	}
+	raw, readErr := os.ReadFile(fake.record + ".testpid")
+	if readErr != nil {
+		t.Fatalf("the test binary never ran: %v\n%s", readErr, out)
+	}
+	pid, convErr := strconv.Atoi(strings.TrimSpace(string(raw)))
+	if convErr != nil {
+		t.Fatal(convErr)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for syscall.Kill(pid, 0) == nil {
+		if time.Now().After(deadline) {
+			_ = syscall.Kill(pid, syscall.SIGKILL)
+			t.Fatalf("the test process %d outlived the script", pid)
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 }

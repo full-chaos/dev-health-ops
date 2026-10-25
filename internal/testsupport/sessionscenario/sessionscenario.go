@@ -39,6 +39,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -88,13 +89,27 @@ var SocialEnv = []string{"SOCIAL_GITHUB_CLIENT_ID=gh-client", "SOCIAL_GITHUB_CLI
 
 func strPtr(s string) *string { return &s }
 
+// SeedOption narrows what Seed writes.
+type SeedOption int
+
+const (
+	// WithoutOlga writes everything but olga's user row.
+	WithoutOlga SeedOption = iota + 1
+	// OnlyOlga writes olga's user row and nothing else.
+	OnlyOlga
+)
+
 // Seed writes the organizations, users and memberships on admin, the
 // passwords hashed as passwordHash, every timestamp anchored at a fixed
 // instant so answers that carry one (joined_at) are the same on every run,
 // and returns the seed access tokens to
 // mint: name -> create_access_token keyword arguments.
-func Seed(t *testing.T, ctx context.Context, admin *pgxpool.Pool, passwordHash string) map[string]map[string]any {
+//
+// WithoutOlga leaves out the one user a switch to auth-service owning users cannot copy (a github user with no
+// provider id); the run that owns users writes her with OnlyOlga once the switch is done, with the values Seed gives her.
+func Seed(t *testing.T, ctx context.Context, admin *pgxpool.Pool, passwordHash string, options ...SeedOption) map[string]map[string]any {
 	t.Helper()
+	only, without := slices.Contains(options, OnlyOlga), slices.Contains(options, WithoutOlga)
 	hash := passwordHash
 	exec := func(sql string, args ...any) {
 		t.Helper()
@@ -108,6 +123,9 @@ func Seed(t *testing.T, ctx context.Context, admin *pgxpool.Pool, passwordHash s
 		active         bool
 	}{{orgA, "org-a", "Org A", nil, true}, {orgB, "org-b", "Org B", strPtr("enterprise"), true},
 		{orgC, "org-c", "Org C", nil, false}, {orgD, "org-d", "Org D", nil, true}} {
+		if only {
+			continue
+		}
 		exec(`INSERT INTO organizations (id, slug, name, tier, is_active, settings, managed_by, created_at, updated_at)
 VALUES ($1, $2, $3, coalesce($4, 'community'), $5, '{}', 'self', '2026-08-01 00:00:00+00'::timestamptz, '2026-08-01 00:00:00+00'::timestamptz)`, org.id, org.slug, org.name, org.tier, org.active)
 	}
@@ -130,6 +148,9 @@ VALUES ($1, $2, $3, coalesce($4, 'community'), $5, '{}', 'self', '2026-08-01 00:
 		{lena, "lena@example.com", "lena", "Lena", "local", "", true, true, true, false},
 		{olga, "olga@example.com", "olga", "Olga", "github", "", false, true, true, false},
 	} {
+		if (only && u.id != olga) || (without && u.id == olga) {
+			continue
+		}
 		var passwordHash, provider, providerID, fullName *string
 		if u.hash {
 			passwordHash = &hash
@@ -154,9 +175,15 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 0, '2026-08-01 00:00:00+00'::ti
 	}{{alice, orgA, "owner", 30}, {alice, orgB, "member", 20}, {alice, orgC, "admin", 10},
 		{carol, orgA, "viewer", 5}, {dave, orgA, "member", 5}, {erin, orgA, "member", 5},
 		{frank, orgB, "admin", 5}, {grace, orgD, "member", 5}, {judy, orgA, "member", 5}, {lena, orgC, "member", 5}} {
+		if only {
+			continue
+		}
 		exec(`INSERT INTO memberships (id, user_id, org_id, role, joined_at, created_at)
 VALUES (gen_random_uuid(), $1, $2, $3, '2026-08-01 00:00:00+00'::timestamptz - make_interval(days => $4), '2026-08-01 00:00:00+00'::timestamptz - make_interval(days => $4))`,
 			m.user, m.org, m.role, m.joinedDaysAgo)
+	}
+	if only {
+		return nil
 	}
 	return map[string]map[string]any{
 		"alice": {"user_id": alice, "email": "alice@example.com", "org_id": orgA, "role": "owner", "username": "alice", "full_name": "Alice Ä"},
@@ -965,4 +992,16 @@ func socialLinkRows(name, rows string) string {
 		}
 	}
 	return rows
+}
+
+// SeedDeferringOlga is Seed without olga.
+func SeedDeferringOlga(t *testing.T, ctx context.Context, admin *pgxpool.Pool, passwordHash string) map[string]map[string]any {
+	t.Helper()
+	return Seed(t, ctx, admin, passwordHash, WithoutOlga)
+}
+
+// SeedOlga writes the row SeedDeferringOlga left out.
+func SeedOlga(t *testing.T, ctx context.Context, admin *pgxpool.Pool, passwordHash string) {
+	t.Helper()
+	Seed(t, ctx, admin, passwordHash, OnlyOlga)
 }

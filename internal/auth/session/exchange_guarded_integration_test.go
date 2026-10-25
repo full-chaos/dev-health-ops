@@ -116,3 +116,17 @@ func TestExchangeGuardedCompletesOnAOneConnectionPool(t *testing.T) {
 		t.Fatal("the guarded exchange deadlocked on a one-connection pool")
 	}
 }
+
+func TestUnguardedExchangeRunsNoGuardAfterAGuardedCall(t *testing.T) {
+	ctx := testContext(t)
+	e := newEnv(t, ctx)
+	issued := e.create(t, ctx, e.goUser(t, ctx, 1))
+	calls := 0
+	counting := func(context.Context, Queryer, Record) error { calls++; return ErrGuardRefused }
+	if _, err := e.store.ExchangeGuarded(ctx, issued.Credential, counting); !errors.Is(err, ErrGuardRefused) || calls != 1 {
+		t.Fatalf("guarded call: err %v, guard calls %d; want the refusal and 1", err, calls)
+	}
+	if result, err := e.store.Exchange(ctx, issued.Credential); err != nil || result.Reason != ReasonAccepted || calls != 1 {
+		t.Fatalf("Exchange = %s, %v with %d guard calls; want accepted and no further guard call", result.Reason, err, calls)
+	}
+}

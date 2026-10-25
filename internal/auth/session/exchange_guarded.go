@@ -24,8 +24,6 @@ type Guard func(ctx context.Context, q Queryer, record Record) error
 // ErrGuardRefused is a Guard's refusal: nothing was written.
 var ErrGuardRefused = errors.New("session: exchange refused by its guard")
 
-type guardKey struct{}
-
 type guardRefusal struct{ record Record }
 
 func (guardRefusal) Error() string { return ErrGuardRefused.Error() }
@@ -34,8 +32,7 @@ func (guardRefusal) Is(target error) bool { return target == ErrGuardRefused }
 
 // runGuard is called by rotate under the session lock, before the successor
 // is inserted.
-func runGuard(ctx context.Context, tx pgx.Tx, record Record) error {
-	guard, _ := ctx.Value(guardKey{}).(Guard)
+func runGuard(ctx context.Context, tx pgx.Tx, record Record, guard Guard) error {
 	if guard == nil {
 		return nil
 	}
@@ -52,7 +49,7 @@ func runGuard(ctx context.Context, tx pgx.Tx, record Record) error {
 // with the locked session in Result.Session and an empty Reason; no exchange
 // is counted for it. A grace replay and every other refusal are unguarded.
 func (s *Store) ExchangeGuarded(ctx context.Context, credential contracts.SecretString, guard Guard) (Result, error) {
-	result, err := s.Exchange(context.WithValue(ctx, guardKey{}, guard), credential)
+	result, err := s.exchange(ctx, credential, guard)
 	var refusal guardRefusal
 	if errors.As(err, &refusal) {
 		return Result{Issued: Issued{Session: refusal.record}}, ErrGuardRefused

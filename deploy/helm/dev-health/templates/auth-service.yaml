@@ -25,7 +25,7 @@ stage-signing-key init container exists.
 {{- if and (eq (include "dev-health.authProxyOn" .) "true") (not $a.trustedProxies) }}{{- fail "authService.trustedProxies is required while a goApi.authProxy flag is on: without it every proxied caller is keyed by go-api's pod address, one rate-limit bucket for all users" }}{{- end }}
 {{- range $a.trustedProxies }}
 {{- $entry := toString . }}
-{{- if or (not (regexMatch "^[0-9A-Fa-f:.]+(/[0-9]{1,3})?$" $entry)) (regexMatch "/0$" $entry) (regexMatch "^(?i)::ffff:" $entry) }}{{- fail "authService.trustedProxies entries must each be one IP address or CIDR network, never a /0 network or an IPv4-mapped form: a trusted peer picks the client address of every request" }}{{- end }}
+{{- if or (not (include "dev-health.trustedProxyEntry" $entry)) (regexMatch "/0$" $entry) (regexMatch "^(?i)::ffff:" $entry) }}{{- fail "authService.trustedProxies entries must each be one IP address or CIDR network, never a /0 network or an IPv4-mapped form: a trusted peer picks the client address of every request" }}{{- end }}
 {{- end }}
 {{- $ks := $a.keySet }}
 {{- $ksOn := and $ks $ks.enabled }}

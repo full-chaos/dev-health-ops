@@ -62,7 +62,7 @@ func NewEdDSAIssuer(secret, legacyIssuer, audience string, signer AccessSigner, 
 	}, nil
 }
 
-func (m *eddsaMinter) mint(ctx context.Context, grant Grant, now time.Time) (string, error) {
+func (m *eddsaMinter) mint(ctx context.Context, grant Grant, now time.Time) (string, string, error) {
 	claims := contracts.AccessTokenClaims{
 		Iss:           m.issuer,
 		Aud:           m.audience,
@@ -80,17 +80,17 @@ func (m *eddsaMinter) mint(ctx context.Context, grant Grant, now time.Time) (str
 		claims.OrgID = &org
 	}
 	if err := checkAccessClaims(claims); err != nil {
-		return "", fmt.Errorf("%w: %w", errIssue, err)
+		return "", "", fmt.Errorf("%w: %w", errIssue, err)
 	}
 	payload, err := json.Marshal(claims)
 	if err != nil {
-		return "", fmt.Errorf("%w: %w", errIssue, err)
+		return "", "", fmt.Errorf("%w: %w", errIssue, err)
 	}
-	token, _, err := m.signer.Sign(ctx, accessTokenTyp, payload)
+	token, kid, err := m.signer.Sign(ctx, accessTokenTyp, payload)
 	if err != nil {
-		return "", fmt.Errorf("%w: %w", errIssue, err)
+		return "", "", fmt.Errorf("%w: %w", errIssue, err)
 	}
-	return token, nil
+	return token, kid, nil
 }
 
 // checkAccessClaims refuses claims access-token.v1 refuses and a verifier

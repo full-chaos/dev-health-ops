@@ -182,6 +182,16 @@ func usersOwnedFromEnv(env cli.Env) (bool, error) {
 	return usersowned.FromLookup(env.Lookup)
 }
 
+// usersWriteOperator is accountOperator for a verb that may write public.users:
+// with the switch on and a users write ahead, the refusal answers before a DSN
+// is resolved or a pool is built.
+func usersWriteOperator(ctx context.Context, env cli.Env, writesUsers bool) (admin.Operator, func(), int) {
+	if owned, err := usersOwnedFromEnv(env); err == nil && owned && writesUsers {
+		return admin.Operator{}, func() {}, report(env, nil, admin.ErrUsersOwned)
+	}
+	return accountOperator(ctx, env)
+}
+
 func operatorFor(ctx context.Context, env cli.Env, resolve dsnResolver) (admin.Operator, func(), int) {
 	owned, err := usersOwnedFromEnv(env)
 	if err != nil {
@@ -254,7 +264,7 @@ func runUsersCreate(ctx context.Context, env cli.Env) int {
 		fmt.Fprintln(env.Stderr, "argument error: --email and --password (or --password-stdin) are required")
 		return cli.ExitUsage
 	}
-	op, closePool, code := accountOperator(ctx, env)
+	op, closePool, code := usersWriteOperator(ctx, env, true)
 	defer closePool()
 	if code != 0 {
 		return code
@@ -405,17 +415,18 @@ func runUsersUpdate(ctx context.Context, env cli.Env) int {
 			return cli.ExitUsage
 		}
 	}
-	op, closePool, code := accountOperator(ctx, env)
-	defer closePool()
-	if code != 0 {
-		return code
-	}
-	result, err := op.UpdateUser(ctx, admin.UpdateUserInput{
+	update := admin.UpdateUserInput{
 		ID: id.ptr(), Email: email.ptr(), Username: username.ptr(),
 		NewEmail: newEmail.ptr(), NewUsername: newUsername.ptr(), FullName: fullName.ptr(), Password: password.ptr(),
 		Active: active.ptr(), Verified: verified.ptr(), Superuser: superuser.ptr(),
 		MembershipOrg: org.ptr(), Role: role.ptr(), RemoveFromOrg: removeFromOrg.ptr(),
-	})
+	}
+	op, closePool, code := usersWriteOperator(ctx, env, update.WritesUsers())
+	defer closePool()
+	if code != 0 {
+		return code
+	}
+	result, err := op.UpdateUser(ctx, update)
 	if err != nil {
 		return report(env, accountRedactor(env), err)
 	}
@@ -441,7 +452,7 @@ func runUsersDelete(ctx context.Context, env cli.Env) int {
 	if code, ok := parseArgs(flags, env); !ok {
 		return code
 	}
-	op, closePool, code := accountOperator(ctx, env)
+	op, closePool, code := usersWriteOperator(ctx, env, true)
 	defer closePool()
 	if code != 0 {
 		return code

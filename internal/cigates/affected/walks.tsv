@@ -5,6 +5,7 @@ deploy/helm/dev-health	auth_session_secret_script_test.go	unexpressed	-	-
 internal/adminops	users_password_fixtures_test.go	internal/adminops	dir	*
 internal/adminops	users_password_fixtures_test.go	internal/adminops/testdata	dir	*
 internal/adminops	users_password_fixtures_test.go	internal/adminops/testdata/golden	dir	*
+internal/adminops	usersowned_test.go	internal/adminops	dir	*
 internal/api/integrationsadmin/discoveryvenue	discover_venue_oracle_integration_test.go	internal/api/syncadmin/testdata/jira_recorded	dir	*
 internal/api/syncadmin	create_config_venue_oracle_integration_test.go	internal/api/syncadmin/testdata/jira_recorded	dir	*
 internal/api/syncadmin	dataset_writer_census_test.go	unexpressed	-	*.go
@@ -26,6 +27,7 @@ internal/atlassianteams	vendored_patch_chain_test.go	unexpressed	-	-
 internal/audit	writer_guard_test.go	.	tree	*.go
 internal/auth/authruntime	audit_request_id_scan_test.go	unexpressed	-	-
 internal/auth/authruntime	keystate_source_test.go	internal/auth/authruntime	dir	*
+internal/auth/authruntime	kidwiring_callers_test.go	internal/auth/authruntime	dir	*
 internal/auth/contracts	access_token_goldens_test.go	unexpressed	-	-
 internal/auth/contracts	authorization_goldens_test.go	unexpressed	-	-
 internal/auth/contracts	credential_goldens_test.go	unexpressed	-	-
@@ -167,6 +169,7 @@ internal/httpguard	redirect_sites_test.go	unexpressed	-	-
 internal/jobcontract	registry_test.go	unexpressed	-	-
 internal/jobs/investment	categorization_platform_only_test.go	internal/jobs/investment	dir	*
 internal/jobs/investment	categorizebyo_test.go	internal/jobs/investment	dir	*
+internal/jobs/investment	clefbyo_test.go	internal/jobs/investment	dir	*
 internal/jobs/investment	providerselection_census_test.go	unexpressed	-	-
 internal/jobs/investment	shadowexecutor_test.go	unexpressed	-	-
 internal/jobs/investment/categorize	org_egress_guard_test.go	internal/jobs/investment/categorize	dir	*
@@ -300,6 +303,7 @@ internal/storedversion	writers_test.go	unexpressed	-	*.go
 internal/streamhandlers	stored_version_invariant_test.go	unexpressed	-	-
 internal/streamrunnerservice	readiness_timeout_test.go	internal/streamrunnerservice	dir	*
 internal/synccli	print_sites_test.go	internal/synccli	dir	*
+internal/syncdispatchruntime	claim_id_chunks_test.go	internal/syncdispatchruntime	dir	*
 internal/syncdispatchruntime	log_error_text_test.go	internal/syncdispatchruntime	dir	*
 internal/syncdispatchruntime	log_error_text_test.go	internal/syncdispatchruntime/synclog	dir	*
 internal/syncdispatchruntime	post_sync_failure_test.go	internal/syncdispatchruntime	dir	*

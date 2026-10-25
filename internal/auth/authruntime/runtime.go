@@ -101,7 +101,7 @@ func sessionRoutes(
 	if err != nil {
 		return nil, err
 	}
-	issuer, err := newAccessIssuer(cfg, accessSigner)
+	issuer, err := newRecordingIssuer(cfg, accessSigner, sessions)
 	if err != nil {
 		return nil, err
 	}

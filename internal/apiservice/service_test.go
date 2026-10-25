@@ -214,7 +214,7 @@ func TestConfigureRegistersTheDatabaseCheckOnlyWhenConfigured(t *testing.T) {
 // and webhookintake's routes both register unconditionally too (a handler
 // that needs a live dependency answers an error at request time instead).
 func TestRoutesMountsEveryArea(t *testing.T) {
-	routes := Routes(Deps{}, nil)
+	routes := Routes(Deps{LegacyIngestEnabled: true}, nil)
 	want := map[string]bool{
 		"GET /api/v1/external-ingest/schemas":                  false,
 		"GET /api/v1/external-ingest/schemas/{schema_version}": false,

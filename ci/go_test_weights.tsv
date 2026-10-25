@@ -41,6 +41,7 @@ internal/jobs/metrics/daily	31
 internal/jobs/metrics/remaining	8
 internal/jobs/workgraph/units	44
 internal/platform/logging	16
+internal/platform/otlpmetrics	31
 internal/platform/tracing	4
 internal/providerfoundation	14
 internal/providersync	260

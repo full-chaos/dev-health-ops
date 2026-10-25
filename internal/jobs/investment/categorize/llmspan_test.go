@@ -3,10 +3,13 @@ package categorize
 import (
 	"context"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"sort"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -18,6 +21,10 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 func recordSpans(t *testing.T) *tracetest.SpanRecorder {
 	t.Helper()
@@ -165,10 +172,12 @@ func TestLLMSpanTimeoutRefusedCanceledAndInvalidAnswer(t *testing.T) {
 	})
 	t.Run("refused", func(t *testing.T) {
 		recorder := recordSpans(t)
-		dead := httptest.NewServer(http.NotFoundHandler())
-		url := dead.URL
-		dead.Close()
-		h := newTS(t, okHandler(t, "r"), func(c *TypeSafeClientConfig) { c.BaseURL = url })
+		refuse := roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return nil, &net.OpError{Op: "dial", Net: "tcp", Err: os.NewSyscallError("connect", syscall.ECONNREFUSED)}
+		})
+		h := newTS(t, okHandler(t, "r"), func(c *TypeSafeClientConfig) {
+			c.HTTPClient = &http.Client{Transport: refuse}
+		})
 		_, _ = h.client.SendBody(context.Background(), tsBody)
 		spans := llmSpans(recorder)
 		assertAllClass(t, spans, 2, "refused")

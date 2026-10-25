@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
@@ -311,6 +312,14 @@ func (h handler) checkCredentials(w http.ResponseWriter, r *http.Request, raw []
 		}
 	}
 	if secret != "" {
+		options := optionsFrom(r.Context())
+		if options.RequireSignatureTimestamp {
+			if !h.timestampedSignatureValid(r, raw, secret, options) {
+				h.reject(w, "invalid_signature", "Invalid signature")
+				return false
+			}
+			return true
+		}
 		signature := r.Header.Get("X-Signature-256")
 		valid := false
 		if strings.HasPrefix(signature, "sha256=") {
@@ -332,4 +341,29 @@ func (h handler) checkCredentials(w http.ResponseWriter, r *http.Request, raw []
 		}
 	}
 	return true
+}
+
+// timestampedSignatureValid checks X-Signature-256 as the HMAC-SHA256 of
+// timestamp + "." + body, with the timestamp inside the window.
+func (h handler) timestampedSignatureValid(r *http.Request, raw []byte, secret string, options Options) bool {
+	now := time.Now
+	if options.Now != nil {
+		now = options.Now
+	}
+	timestamp := r.Header.Get(SignatureTimestampHeader)
+	if !signedTimestamp(timestamp, now()) {
+		return false
+	}
+	signature := r.Header.Get("X-Signature-256")
+	if !strings.HasPrefix(signature, "sha256=") {
+		return false
+	}
+	presented, err := hex.DecodeString(signature[len("sha256="):])
+	if err != nil {
+		return false
+	}
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte(timestamp + "."))
+	mac.Write(raw)
+	return hmac.Equal(mac.Sum(nil), presented)
 }

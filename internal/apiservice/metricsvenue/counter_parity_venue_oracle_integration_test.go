@@ -412,7 +412,7 @@ func startGoAPI(t *testing.T, ctx context.Context, venue *venueoracle.Venue, key
 	if err != nil {
 		t.Fatal(err)
 	}
-	deps := apiservice.Deps{Pool: pool, Auth: auth, Guard: policy.NewGuard(auth, logger), Verifier: verifier, Decryptor: decryptor}
+	deps := apiservice.Deps{Pool: pool, Auth: auth, Guard: policy.NewGuard(auth, logger), Verifier: verifier, Decryptor: decryptor, LegacyIngestEnabled: true}
 	// The operator endpoint as dho api's configure builds it, before the
 	// routes (it sets the legacy-ingest counter on deps).
 	registry := health.NewRegistry(0)

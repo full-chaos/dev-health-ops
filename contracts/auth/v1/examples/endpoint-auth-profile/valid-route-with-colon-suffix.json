@@ -17,6 +17,6 @@
     "algorithm": "EdDSA",
     "audience": "dev-health-auth",
     "issuer": "https://auth.fullchaos.dev",
-    "token_type": "at+jwt"
+    "token_type": "workload+jwt"
   }
 }

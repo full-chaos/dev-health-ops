@@ -547,3 +547,40 @@ func TestWorkloadCorpusFailsAReaderThatSkipsTheClientRules(t *testing.T) {
 		}
 	}
 }
+
+func TestWorkloadCorpusHasOneAcceptedRowPerWorkloadAudienceAndBothCrossRefusals(t *testing.T) {
+	c, err := Load(filepath.Join(testRoot(t), WorkloadDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	audienceOf := func(e Entry) string {
+		var claims struct {
+			Aud any `json:"aud"`
+		}
+		if err := json.Unmarshal([]byte(c.Vectors[e.File].PayloadJSON), &claims); err != nil {
+			return ""
+		}
+		s, _ := claims.Aud.(string)
+		return s
+	}
+	accepted := map[string]string{}
+	crossRefused := map[string]bool{}
+	for _, e := range c.Manifest.Vectors {
+		aud := audienceOf(e)
+		if e.Expect == Accept && strings.HasPrefix(e.File, "valid-") && e.VerifyAs == aud {
+			accepted[aud] = e.VerifyAs
+		}
+		if e.Expect == Reject && e.Reason == ReasonAudience && (aud == AudienceAuth || aud == AudienceAPI) && e.VerifyAs != aud {
+			crossRefused[aud+"@"+e.VerifyAs] = true
+		}
+	}
+	if accepted[AudienceAPI] != AudienceAPI {
+		t.Errorf("no accepted vector for aud %s verified as %s: %v", AudienceAPI, AudienceAPI, accepted)
+	}
+	if !crossRefused[AudienceAuth+"@"+AudienceAPI] {
+		t.Error("no audience refusal for an auth-service token at a dev-health-api verifier")
+	}
+	if !crossRefused[AudienceAPI+"@"+AudienceAuth] {
+		t.Error("no audience refusal for a dev-health-api token at an auth-service verifier")
+	}
+}

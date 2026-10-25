@@ -764,9 +764,13 @@ func TestAuthPhaseSessionSecretKeysAreValidKeys(t *testing.T) {
 // The phase 2 preconditions hold whatever each enable flag says: every service flag off in turn, the render still
 // refuses phase 2 without the reader grants or without the successor key.
 func TestAuthPhase2PreconditionsHoldWithEachServiceFlagOff(t *testing.T) {
+	// authService.enabled is not a flag any more: a hand-set value is refused (TestAuthPhaseRefusesHandSetFlags).
 	for _, flag := range []string{"goApi.enabled", "queryApi.enabled", "web.enabled", "migrations.hook.enabled",
-		"migrations.hook.riverMigrate.enabled", "authService.migrate.enabled"} {
-		full := phaseArgs(2, "--set", flag+"=false")
+		"migrations.hook.riverMigrate.enabled", "authService.migrate.enabled", "goApi.enabled,queryApi.enabled"} {
+		full := phaseArgs(2)
+		for _, f := range strings.Split(flag, ",") {
+			full = append(full, "--set", f+"=false")
+		}
 		for name, drop := range map[string][]string{
 			"no readers":       {"authService.migrate.sessionReaders.goApi=", "authService.migrate.sessionReaders.queryApi="},
 			"no successor key": {"authService.sessionKeys.successor.secretName="},

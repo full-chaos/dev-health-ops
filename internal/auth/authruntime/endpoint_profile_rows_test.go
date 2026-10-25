@@ -193,11 +193,8 @@ func TestEveryServedAuthRouteHasAnEndpointProfileRowAndNoRowIsStale(t *testing.T
 	served := servedAuthRoutes(t)
 	rows := loadAuthServiceRows(t)
 	missing, stale := compareServedToRows(t, served, rows)
-	if problems := pendingRowProblems(pendingRows, served, missing); len(problems) > 0 {
-		t.Errorf("the pending row list is wrong: %v", problems)
-	}
-	if unexplained := withoutPending(missing); len(unexplained) > 0 {
-		t.Errorf("served with no endpoint-profile row (contracts/auth/v1/endpoint-profiles.auth-service.json): %v", unexplained)
+	if len(missing) > 0 {
+		t.Errorf("served with no endpoint-profile row (contracts/auth/v1/endpoint-profiles.auth-service.json): %v", missing)
 	}
 	if len(stale) > 0 {
 		t.Errorf("endpoint-profile rows for routes nothing serves: %v", stale)
@@ -207,83 +204,15 @@ func TestEveryServedAuthRouteHasAnEndpointProfileRowAndNoRowIsStale(t *testing.T
 	}
 }
 
-// pendingRows is the one route served before its row exists (CHAOS-11401 adds
-// the row, moves source_commit and empties this list). Nothing else may be
-// listed.
-var pendingRows = []string{"POST /api/v1/auth/register@api"}
-
-// withoutPending drops the pending route from a missing-row list; every other
-// route stays, so a planted missing row for any other route still fails.
-func withoutPending(missing []string) []string {
-	var rest []string
-	for _, key := range missing {
-		if !isPending(key) {
-			rest = append(rest, key)
-		}
-	}
-	return rest
-}
-
-func isPending(key string) bool {
-	for _, pending := range pendingRows {
-		if pending == key {
-			return true
-		}
-	}
-	return false
-}
-
-// pendingRowProblems refuses a pending list that holds anything but register,
-// a route nothing serves, or a route that already has a row.
-func pendingRowProblems(pending []string, served map[string]bool, missing []string) []string {
-	var problems []string
-	hasNoRow := map[string]bool{}
-	for _, key := range missing {
-		hasNoRow[key] = true
-	}
-	for _, key := range pending {
-		switch {
-		case key != "POST /api/v1/auth/register@api":
-			problems = append(problems, key+" is not the one route that may be pending")
-		case !served[key]:
-			problems = append(problems, key+" is pending but nothing serves it")
-		case !hasNoRow[key]:
-			problems = append(problems, key+" is pending but already has a row: empty the list")
-		}
-	}
-	if len(pending) > 1 {
-		problems = append(problems, "the pending list holds more than one route")
-	}
-	return problems
-}
-
-func TestThePendingRowListRefusesAnyOtherRoute(t *testing.T) {
-	served := map[string]bool{"POST /api/v1/auth/register@api": true, "POST /api/v1/auth/login@api": true}
-	missing := []string{"POST /api/v1/auth/login@api", "POST /api/v1/auth/register@api"}
-	if p := pendingRowProblems([]string{"POST /api/v1/auth/register@api", "POST /api/v1/auth/login@api"}, served, missing); len(p) == 0 {
-		t.Fatal("a second pending route was accepted")
-	}
-	if p := pendingRowProblems([]string{"POST /api/v1/auth/login@api"}, served, missing); len(p) == 0 {
-		t.Fatal("a pending route other than register was accepted")
-	}
-	if p := pendingRowProblems([]string{"POST /api/v1/auth/register@api"}, served, missing); len(p) != 0 {
-		t.Fatalf("register alone was refused: %v", p)
-	}
-}
-
-func TestThePendingRowListRefusesARouteThatNowHasARow(t *testing.T) {
-	served := map[string]bool{"POST /api/v1/auth/register@api": true}
-	if p := pendingRowProblems([]string{"POST /api/v1/auth/register@api"}, served, nil); len(p) == 0 {
-		t.Fatal("a pending route that has a row was accepted")
-	}
-	if p := pendingRowProblems([]string{"POST /api/v1/auth/register@api"}, map[string]bool{}, nil); len(p) == 0 {
-		t.Fatal("a pending route nothing serves was accepted")
-	}
-}
-
-func TestAPlantedMissingRowForAnotherRouteIsNotExcusedByThePendingList(t *testing.T) {
+func TestAPlantedMissingRowForARegisteredRouteIsNamedAlone(t *testing.T) {
 	served := servedAuthRoutes(t)
-	const other = "POST /api/v1/auth/login@api"
+	for _, other := range []string{"POST /api/v1/auth/login@api", "POST /api/v1/auth/register@api"} {
+		plantedMissingRow(t, served, other)
+	}
+}
+
+func plantedMissingRow(t *testing.T, served map[string]bool, other string) {
+	t.Helper()
 	var kept []map[string]any
 	for _, row := range loadAuthServiceRows(t) {
 		id, _ := row["id"].(string)
@@ -293,14 +222,8 @@ func TestAPlantedMissingRowForAnotherRouteIsNotExcusedByThePendingList(t *testin
 		kept = append(kept, row)
 	}
 	missing, _ := compareServedToRows(t, served, kept)
-	if got := withoutPending(missing); len(got) != 1 || got[0] != other {
-		t.Fatalf("after the pending list, missing = %v, want exactly %s", got, other)
-	}
-}
-
-func TestThePendingRowListIsExactlyRegisterUntilItsRowLands(t *testing.T) {
-	if len(pendingRows) != 1 || pendingRows[0] != "POST /api/v1/auth/register@api" {
-		t.Fatalf("pendingRows = %v, want exactly register", pendingRows)
+	if len(missing) != 1 || missing[0] != other {
+		t.Fatalf("missing = %v, want exactly %s", missing, other)
 	}
 }
 
@@ -366,7 +289,6 @@ func TestTheRowGateRefusesAPlantedMissingRowForEachCompatibilityRoute(t *testing
 			kept = append(kept, row)
 		}
 		missing, stale := compareServedToRows(t, served, kept)
-		missing = withoutPending(missing)
 		if len(missing) != 1 || missing[0] != key || len(stale) != 0 {
 			t.Errorf("rows without %s: missing %v stale %v, want exactly it missing", key, missing, stale)
 		}
@@ -410,7 +332,7 @@ func TestAuthEndpointProfileAnchorsStillPointAtTheirSymbols(t *testing.T) {
 		"/v1/identities/social": "PatternSocialLink", "/v1/identities/social/{id}": "PatternSocialUnlink",
 		"/api/v1/auth/verify": "PatternVerifyEmail", "/api/v1/auth/resend-verification": "PatternResendVerification",
 		"/api/v1/auth/forgot-password": "PatternForgotPassword", "/api/v1/auth/reset-password": "PatternResetPassword",
-		"/api/v1/auth/change-password": "PatternChangePassword",
+		"/api/v1/auth/change-password": "PatternChangePassword", "/api/v1/auth/register": "PatternRegister",
 	}
 	checked := 0
 	var walk func(node any, where string)
@@ -546,7 +468,6 @@ func TestTheRowGateRefusesAPlantedMissingRowForEachWellKnownRoute(t *testing.T) 
 			kept = append(kept, row)
 		}
 		missing, stale := compareServedToRows(t, served, kept)
-		missing = withoutPending(missing)
 		if len(missing) != 1 || missing[0] != key || len(stale) != 0 {
 			t.Errorf("rows without %s: missing %v stale %v, want exactly it missing", key, missing, stale)
 		}
@@ -559,7 +480,6 @@ func TestTheRowGateRefusesAPlantedMissingRowForEachWellKnownRoute(t *testing.T) 
 func TestWithoutAnIssuerTheDiscoveryRowsAreStale(t *testing.T) {
 	served := servedAuthRoutesWithIssuer(t, "")
 	missing, stale := compareServedToRows(t, served, loadAuthServiceRows(t))
-	missing = withoutPending(missing)
 	wantStale := []string{"GET /.well-known/openid-configuration@api", "HEAD /.well-known/openid-configuration@api"}
 	if len(missing) != 0 || strings.Join(stale, ",") != strings.Join(wantStale, ",") {
 		t.Errorf("without an issuer: missing %v stale %v, want stale %v", missing, stale, wantStale)

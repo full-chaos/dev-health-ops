@@ -1,0 +1,22 @@
+{
+  "Deployment/a-dev-health-auth-service/auth-service/AUTH_DATABASE_URI": "secret:auth-db/AUTH_DATABASE_URI",
+  "Deployment/a-dev-health-go-api/go-api/AUTH_DATABASE_SCHEMA": "value:auth",
+  "Deployment/a-dev-health-query-api/query-api/AUTH_DATABASE_SCHEMA": "value:auth",
+  "Job/a-dev-health-auth-grants/auth-grants/AUTH_DATABASE_SCHEMA": "value:auth",
+  "Job/a-dev-health-auth-grants/auth-grants/AUTH_MIGRATION_DATABASE_URI": "secret:auth-migrate-db/MIGRATION_URI",
+  "Job/a-dev-health-auth-grants/auth-grants/AUTH_RUNTIME_DATABASE_ROLE": "value:devhealth_auth",
+  "Job/a-dev-health-auth-migrate/auth-migrate/AUTH_DATABASE_SCHEMA": "value:auth",
+  "Job/a-dev-health-auth-migrate/auth-migrate/AUTH_MIGRATION_DATABASE_URI": "secret:auth-migrate-db/MIGRATION_URI",
+  "Job/a-dev-health-auth-migrate/auth-migrate/AUTH_RUNTIME_DATABASE_ROLE": "value:devhealth_auth",
+  "Job/a-dev-health-auth-migrate/auth-migrate/AUTH_SESSION_READER_ROLES": "value:devhealth_api",
+  "Job/a-dev-health-migrate/migrate/AUTH_DATABASE_SCHEMA": "value:auth",
+  "Job/a-dev-health-river-migrate/river-migrate/AUTH_DATABASE_SCHEMA": "value:auth",
+  "NetworkPolicy/a-dev-health-auth-service/api-port-from": "",
+  "doc/Deployment/a-dev-health-auth-service": "rendered",
+  "doc/Job/a-dev-health-auth-grants": "rendered",
+  "doc/Job/a-dev-health-auth-migrate": "rendered",
+  "doc/NetworkPolicy/a-dev-health-auth-migrate": "rendered",
+  "doc/NetworkPolicy/a-dev-health-auth-service": "rendered",
+  "doc/PodDisruptionBudget/a-dev-health-auth-service": "rendered",
+  "doc/Service/a-dev-health-auth-service": "rendered"
+}

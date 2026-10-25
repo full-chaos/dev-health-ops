@@ -60,9 +60,29 @@ func (h *handlers) getRunUnits(w http.ResponseWriter, r *http.Request) {
 		policy.WriteDetail(w, http.StatusNotFound, "Sync run not found", nil)
 		return
 	}
-	rows, err := h.store.runUnitRollupRows(ctx, org, id)
+	var rows, pageRows []runUnit
+	var filteredTotal, stop int64
+	step := "list_units"
+	err = h.store.unitsSnapshot(ctx, func(reads unitsSnapshotReads) error {
+		var err error
+		if rows, err = reads.runUnitRollupRows(ctx, org, id); err != nil {
+			return err
+		}
+		if query.paged {
+			step = "count_units"
+			if filteredTotal, err = reads.countRunUnits(ctx, org, id, query.filter); err != nil {
+				return err
+			}
+			stop = query.limit.Int64()
+		} else {
+			stop = int64(pySliceEnd(query.limit, len(rows)))
+		}
+		step = "list_unit_page"
+		pageRows, err = reads.runUnitsPage(ctx, org, id, query.filter, query.offset, &stop)
+		return err
+	})
 	if err != nil {
-		h.fail(w, r, "list_units", err)
+		h.fail(w, r, step, err)
 		return
 	}
 	units := make([]decodedUnit, len(rows))
@@ -107,22 +127,6 @@ func (h *handlers) getRunUnits(w http.ResponseWriter, r *http.Request) {
 	summary.Set("catching_up_dataset_count", pyjson.IntOf(catchingUp))
 	summary.Set("dataset_freshness_scope", "run")
 
-	var stop int64
-	var filteredTotal int64
-	if query.paged {
-		if filteredTotal, err = h.store.countRunUnits(ctx, org, id, query.filter); err != nil {
-			h.fail(w, r, "count_units", err)
-			return
-		}
-		stop = query.limit.Int64()
-	} else {
-		stop = int64(pySliceEnd(query.limit, len(units)))
-	}
-	pageRows, err := h.store.runUnitsPage(ctx, org, id, query.filter, query.offset, &stop)
-	if err != nil {
-		h.fail(w, r, "list_unit_page", err)
-		return
-	}
 	listed := make([]pyjson.Value, 0, len(pageRows))
 	for _, row := range pageRows {
 		unit := decodedUnit{runUnit: row}
@@ -142,6 +146,10 @@ func (h *handlers) getRunUnits(w http.ResponseWriter, r *http.Request) {
 	out := summarizeInModelOrder(summary)
 	if query.paged {
 		out.Set("filtered_unit_count", pyjson.IntOf(filteredTotal))
+		names, requested, covered := runUnitExtras(units)
+		out.Set("source_names", names)
+		out.Set("requested_window", requested)
+		out.Set("covered_window", covered)
 	}
 	policy.WriteModel(w, http.StatusOK, out, nil)
 }
@@ -577,4 +585,49 @@ func summarizeInModelOrder(values *pyjson.Object) *pyjson.Object {
 		out.Set(key, value)
 	}
 	return out
+}
+
+// runUnitExtras are the whole-run views the page cannot rebuild from one page
+// of units: the label of every source (full name, else name; none when the
+// source row is gone) and the extent (min since_at, max before_at) of all
+// units and of the successful ones.
+func runUnitExtras(units []decodedUnit) (names, requested, covered *pyjson.Object) {
+	names = pyjson.NewObject()
+	var allSince, allBefore, okSince, okBefore *time.Time
+	earlier := func(current, candidate *time.Time) *time.Time {
+		if candidate != nil && (current == nil || candidate.Before(*current)) {
+			return candidate
+		}
+		return current
+	}
+	later := func(current, candidate *time.Time) *time.Time {
+		if candidate != nil && (current == nil || candidate.After(*current)) {
+			return candidate
+		}
+		return current
+	}
+	seen := map[string]bool{}
+	for _, unit := range units {
+		if id := unit.SourceID.String(); !seen[id] {
+			seen[id] = true
+			switch {
+			case !unit.HasSource:
+			case unit.SourceFullName != nil:
+				names.Set(id, *unit.SourceFullName)
+			case unit.SourceName != nil:
+				names.Set(id, *unit.SourceName)
+			}
+		}
+		allSince, allBefore = earlier(allSince, unit.SinceAt), later(allBefore, unit.BeforeAt)
+		if unit.Status == "success" {
+			okSince, okBefore = earlier(okSince, unit.SinceAt), later(okBefore, unit.BeforeAt)
+		}
+	}
+	window := func(since, before *time.Time) *pyjson.Object {
+		out := pyjson.NewObject()
+		out.Set("since_at", pyTimeOrNone(since))
+		out.Set("before_at", pyTimeOrNone(before))
+		return out
+	}
+	return names, window(allSince, allBefore), window(okSince, okBefore)
 }

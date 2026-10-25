@@ -30,7 +30,10 @@ var unitsStatusAllowlist = map[string]bool{
 	"success": true, "failed": true, "cancelled": true, "canceled": true, "skipped": true,
 }
 
-var unitsPagedParams = []string{"offset", "status", "dataset_key", "source_id", "since", "before"}
+var unitsPagedParams = []string{"offset", "status", "dataset_key", "source_id", "since", "before", "error_category"}
+
+// unitsErrorCategoryAllowlist is every error_category the filter accepts.
+var unitsErrorCategoryAllowlist = map[string]bool{"provider_budget_contention": true}
 
 type unitsQuery struct {
 	paged  bool
@@ -89,6 +92,13 @@ func parseUnitsQuery(values url.Values, errs *pybody.Errors) unitsQuery {
 			*errs = append(*errs, unitsQueryError("source_id", "uuid_parsing", "Input should be a valid UUID", *raw))
 		} else {
 			query.filter.SourceID = &parsed
+		}
+	}
+	if raw := pybody.LastQuery(values, "error_category"); raw != nil {
+		if !unitsErrorCategoryAllowlist[*raw] {
+			*errs = append(*errs, unitsQueryError("error_category", "value_error", "error_category must be provider_budget_contention", *raw))
+		} else {
+			query.filter.ErrorCategory = raw
 		}
 	}
 	query.filter.Since = parseUnitsInstant(values, "since", errs)

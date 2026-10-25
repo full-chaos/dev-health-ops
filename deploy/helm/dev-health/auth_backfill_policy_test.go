@@ -240,8 +240,6 @@ func TestAuthBackfillJobNameFollowsEveryPodTemplateInput(t *testing.T) {
 		{"--set", "authService.database.secretName=auth-db-next"},
 		{"--set", "authService.database.secretKey=OTHER_KEY"},
 		{"--set", "authService.database.schema=authx"},
-		{"--set", "authService.orgsOwned=true"},
-		{"--set", "authService.usersOwned=true"},
 		{"--set-json", `authService.backfill.extraEnv=[{"name":"GOGC","value":"50"}]`},
 		{"--set", "authService.backfill.resources.limits.memory=512Mi"},
 		{"--set", "goApi.image.pullPolicy=Always"},

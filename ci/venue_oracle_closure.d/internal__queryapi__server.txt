@@ -9,6 +9,7 @@ internal/api/pybody
 internal/api/pyheaders
 internal/api/pyjson
 internal/api/pytime
+internal/api/registerorg
 internal/audit
 internal/auth/authapi
 internal/auth/clientaddr

@@ -120,7 +120,7 @@ func TestGoAPIShutdownTimeoutHasOneOwner(t *testing.T) {
 
 // Only the go-api pod drains: no other workload of the chart gets a preStop hook from this value.
 func TestGoAPIDrainDoesNotTouchOtherWorkloads(t *testing.T) {
-	out, err := exec.Command("helm", "template", "drain-others", ".", "--set", "goApi.enabled=true", "--set", "authService.enabled=false").CombinedOutput()
+	out, err := exec.Command("helm", "template", "drain-others", ".", "--set", "goApi.enabled=true", "--set", "authService.phase=0").CombinedOutput()
 	if err != nil {
 		t.Fatalf("render: %v\n%s", err, out)
 	}

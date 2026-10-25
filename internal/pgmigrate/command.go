@@ -77,6 +77,14 @@ func Command(resolve ResolveDSN) cli.Command {
 				Run:     history,
 			},
 			{
+				Name:    "build-index",
+				Summary: "build the failure-streak index CONCURRENTLY, outside the upgrade transaction (exit 0 only when it is present and valid)",
+				Kind:    cli.Verb,
+				Run: func(ctx context.Context, env cli.Env) int {
+					return buildIndex(ctx, resolve, env)
+				},
+			},
+			{
 				Name:    "downgrade",
 				Summary: "revert the PostgreSQL revisions above a target (revision id 0138-0145, or -N), as `alembic downgrade` does; refuses, before it connects, a target whose steps are not ported",
 				Kind:    cli.Verb,

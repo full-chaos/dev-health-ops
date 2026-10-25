@@ -533,3 +533,16 @@ func TestTheCensusParserRefusesMalformedLinesNamingTheLine(t *testing.T) {
 		t.Errorf("a CRLF row and an empty line: got %v, %v", got, err)
 	}
 }
+
+// The loader of ci/check_go.sh trims exactly space, tab and carriage return, so a column that holds only a vertical tab is a
+// non-empty name to it. The Go parser trims the same set; strings.TrimSpace would refuse the row the loader accepts.
+func TestTheCensusParserTrimsExactlyWhatTheLoaderTrims(t *testing.T) {
+	t.Parallel()
+	got, err := parseCensusExcluded("a/b\tTestOne\na/b\t\v\n")
+	if err != nil || len(got) != 2 || !got[censusExcludedRow{"a/b", "\v"}] {
+		t.Errorf("a vertical-tab test column: got %v, %v", got, err)
+	}
+	if _, err := parseCensusExcluded("a/b\tTestOne\na/b\t \t\r\n"); err == nil || !strings.Contains(err.Error(), "census line 2 ") {
+		t.Errorf("a space, tab and CR test column: want an error naming census line 2, got %v", err)
+	}
+}

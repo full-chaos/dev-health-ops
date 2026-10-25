@@ -468,3 +468,17 @@ func malformedCensusSubtests(t *testing.T) {
 		}
 	})
 }
+
+// The loader trims exactly space, tab and carriage return. A test column that holds only a vertical tab is therefore a name, not
+// an empty column; the Go census parsers trim the same set, so the three agree.
+func TestTheLoaderTrimsExactlySpaceTabAndCarriageReturn(t *testing.T) {
+	t.Parallel()
+	events := append(append([]goTestEvent{}, cleanEvents()...), pass(pkgA, "\v"))
+	res := receiptsVerb(t, fixtureCensus+pkgA+"\t\v\n", eventLines(t, events))
+	if res.code != 0 {
+		t.Fatalf("a vertical-tab test column was refused: %s", tail(res.stderr, 500))
+	}
+	if got := strings.Count(res.stdout, "race-excluded-ran:"); got != 5 {
+		t.Errorf("want 4 receipt lines and 1 count line, got %d:\n%s", got, res.stdout)
+	}
+}

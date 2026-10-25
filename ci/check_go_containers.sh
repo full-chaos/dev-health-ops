@@ -26,20 +26,16 @@ readonly CONTAINER_SECURITY_ARGS=(
 ACTIVE_CONTAINER=""
 
 usage() {
-  cat <<'EOF'
-Usage: ci/check_go_containers.sh [smoke|reproducible|all|build-shared DIR|verify-images [TARGET...]]
-
-  smoke         Build every worker target and verify non-root runtime behavior.
-  reproducible  Build every target twice from scratch and compare image IDs.
-  all           Run smoke and reproducibility checks (default).
-  build-shared  Build every target once with the fixed metadata and write receipt.tsv,
-                ids.txt and images.tar (docker save) into DIR.
-  verify-images Check each loaded <prefix>-<target>:ci image id (default: every target)
-                against GO_IMAGES_EXPECTED ("target=sha256:id,target=sha256:id").
-
-With GO_IMAGES_PREBUILT=1, smoke does not build: it uses the loaded <prefix>-<target>:ci
-images and fails unless each id equals the one in GO_IMAGES_EXPECTED.
-EOF
+  printf '%s\n' \
+    'Usage: ci/check_go_containers.sh [smoke|reproducible|all|build-shared DIR|verify-images [TARGET...]]' \
+    '' \
+    '  smoke         Build every worker target and verify non-root runtime behavior.' \
+    '  reproducible  Build every target twice from scratch and compare image IDs.' \
+    '  all           Run smoke and reproducibility checks (default).' \
+    '  build-shared  Build every target once; write receipt.tsv, ids.txt and images.tar into DIR.' \
+    '  verify-images Check loaded <prefix>-<target>:ci ids against GO_IMAGES_EXPECTED (target=id,...).' \
+    '' \
+    'GO_IMAGES_PREBUILT=1: smoke uses the loaded images and fails unless each id is the expected one.'
 }
 
 die() {

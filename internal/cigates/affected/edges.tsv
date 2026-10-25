@@ -134,6 +134,7 @@ internal/cigates/workflows	docs_only_step_test.go	unexpressed
 internal/cigates/workflows	go_api_tools_build_inputs_test.go	unexpressed
 internal/cigates/workflows	go_workers_compose_proof_test.go	unexpressed
 internal/cigates/workflows	governance_context_test.go	unexpressed
+internal/cigates/workflows	image_reuse_exec_norace_test.go	unexpressed
 internal/cigates/workflows	race_pool_routing_test.go	unexpressed
 internal/cigates/workflows	strip_hook_test.go	unexpressed
 internal/cigates/workflows	workflows_builder_images_test.go	unexpressed

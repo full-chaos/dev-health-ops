@@ -2,6 +2,7 @@ package affected_test
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -85,6 +86,9 @@ func TestIntegrationPlanJobRunsThePlanVerdict(t *testing.T) {
 	if strings.Contains(s.Run, "--go-files-full") {
 		t.Error("the integration plan must not pass --go-files-full: a Go change selects its reverse closure")
 	}
+	if strings.Contains(s.Run, "--md-bounded") {
+		t.Error("the integration plan must not pass --md-bounded: only the go-quality legs plan Markdown-only pull requests by bounded readers")
+	}
 	if _, old := stepRunning(plan, "affected-integration"); old {
 		t.Error("go.yml still runs `cigate affected-integration`")
 	}
@@ -107,6 +111,15 @@ func TestGoQualityLegsRunThePlanVerdict(t *testing.T) {
 	}
 	if s.Env["EVENT_NAME"] != eventExpr {
 		t.Errorf("the go-quality plan step's EVENT_NAME is %q, want %q: a push to main, a merge group or a schedule must read FULL", s.Env["EVENT_NAME"], eventExpr)
+	}
+	// --md-bounded only on pull_request: the flag is set in a branch on EVENT_NAME, never passed bare.
+	var trimmed []string
+	for _, l := range strings.Split(s.Run, "\n") {
+		trimmed = append(trimmed, strings.TrimSpace(l))
+	}
+	gate := "if [ \"${EVENT_NAME}\" = pull_request ]; then\nmd=(--md-bounded)\nfi"
+	if !strings.Contains(strings.Join(trimmed, "\n"), gate) || strings.Count(s.Run, "--md-bounded") != 1 || !strings.Contains(s.Run, `--go-files-full "${md[@]}"`) {
+		t.Errorf("the go-quality plan step must pass --md-bounded through md only when EVENT_NAME is pull_request:\n%s", s.Run)
 	}
 	if plan.Outputs["verdict"] == "" || plan.Outputs["selection"] == "" {
 		t.Errorf("go-quality-plan must output verdict and selection, got %v", plan.Outputs)
@@ -278,5 +291,43 @@ func TestPlanStepsBuildThePlannerFromTheMergeBase(t *testing.T) {
 				t.Errorf("the %s plan step runs the planner from the PR's own tree", c.job)
 			}
 		})
+	}
+}
+
+// The go-quality plan step's --md-bounded branch, run in bash: the planner gets the flag on pull_request only.
+func TestGoQualityPlanPassesMdBoundedOnPullRequestOnly(t *testing.T) {
+	jobs := loadJobs(t, ".github/workflows/go-quality.yml")
+	s, ok := stepRunning(jobs["go-quality-plan"], "plan-verdict")
+	if !ok {
+		t.Fatal("go-quality-plan runs no `cigate plan-verdict`")
+	}
+	var block []string
+	in := false
+	for _, l := range strings.Split(s.Run, "\n") {
+		trimmed := strings.TrimSpace(l)
+		if trimmed == "md=()" {
+			in = true
+		}
+		if in {
+			block = append(block, trimmed)
+			if trimmed == "fi" {
+				break
+			}
+		}
+	}
+	if len(block) == 0 || block[len(block)-1] != "fi" {
+		t.Fatalf("the plan step has no md=() ... fi block:\n%s", s.Run)
+	}
+	script := "set -euo pipefail\n" + strings.Join(block, "\n") + "\nprintf '%s' \"${md[*]:-}\"\n"
+	for event, want := range map[string]string{"pull_request": "--md-bounded", "merge_group": "", "push": ""} {
+		cmd := exec.Command("bash", "-c", script)
+		cmd.Env = append(os.Environ(), "EVENT_NAME="+event)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("%s: the block failed: %v\n%s", event, err, out)
+		}
+		if string(out) != want {
+			t.Errorf("%s: the planner flags are %q, want %q", event, out, want)
+		}
 	}
 }

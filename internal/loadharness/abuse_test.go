@@ -2,8 +2,10 @@ package loadharness
 
 import (
 	"context"
+	"math"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -159,7 +161,7 @@ func bk(errs ...int) []Bucket {
 func TestAnalyzeFault(t *testing.T) {
 	// fault on at 3s, off at 8s; errors from 4s to 10s inclusive; clean from 11s
 	b := bk(0, 0, 0, 0, 10, 10, 10, 10, 10, 10, 10, 0, 0, 0, 0)
-	f := AnalyzeFault(b, 3*time.Second, 8*time.Second, 0.05, 3)
+	f := analyze(t, b, 3*time.Second, 8*time.Second, 0.05, 3)
 	if f.TimeToDegradeMs == nil || *f.TimeToDegradeMs != 1000 {
 		t.Fatalf("degrade %+v", f)
 	}
@@ -169,14 +171,14 @@ func TestAnalyzeFault(t *testing.T) {
 }
 
 func TestAnalyzeFaultNeverRecovers(t *testing.T) {
-	f := AnalyzeFault(bk(0, 0, 10, 10, 10, 10, 10), 1*time.Second, 3*time.Second, 0.05, 2)
+	f := analyze(t, bk(0, 0, 10, 10, 10, 10, 10), 1*time.Second, 3*time.Second, 0.05, 2)
 	if f.Recovered || f.TimeToRecoverMs != nil {
 		t.Fatalf("%+v", f)
 	}
 }
 
 func TestAnalyzeFaultNoDegrade(t *testing.T) {
-	f := AnalyzeFault(bk(0, 0, 0, 0, 0, 0), 1*time.Second, 3*time.Second, 0.05, 2)
+	f := analyze(t, bk(0, 0, 0, 0, 0, 0), 1*time.Second, 3*time.Second, 0.05, 2)
 	if f.TimeToDegradeMs != nil || !f.Recovered || *f.TimeToRecoverMs != 0 {
 		t.Fatalf("%+v", f)
 	}
@@ -200,3 +202,95 @@ func TestRecoveryBoundAssertion(t *testing.T) {
 }
 
 func ptr[T any](v T) *T { return &v }
+
+func TestAnalyzeFaultFractionalOffWaitsForWholeBucket(t *testing.T) {
+	// off at 1.5s: the bucket 1..2 straddles it and may not count as recovered
+	b := bk(0, 0, 0, 0, 0, 0)
+	f := analyze(t, b, 500*time.Millisecond, 1500*time.Millisecond, 0.05, 2)
+	if !f.Recovered || *f.TimeToRecoverMs != 500 {
+		t.Fatalf("recovered at %v, want 500ms (bucket 2)", f.TimeToRecoverMs)
+	}
+	r := Report{AssertOK: true, Fault: &f}
+	if ApplyRecoveryBound(r, 100*time.Millisecond).AssertOK {
+		t.Fatal("a 500ms recovery passed a 100ms bound")
+	}
+}
+
+func TestDroppedRequestsCountInTheTimeline(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(100 * time.Millisecond)
+	}))
+	defer srv.Close()
+	cfg := Config{BaseURL: srv.URL, Targets: []Target{{Name: "p", Method: "GET", Path: "/", Weight: 1, ExpectStatus: []int{200}}}}
+	rep, err := Run(context.Background(), cfg, Options{
+		Profile: Profile{Name: "t", Rate: 200, Duration: 2 * time.Second, Concurrency: 1},
+		Getenv:  noEnv,
+		Fault:   &FaultWindow{On: 0, Off: time.Second, MaxErr: 0.05, Sustain: 1},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := rep.Paths[0]
+	if p.Dropped == 0 {
+		t.Fatal("test needs drops")
+	}
+	var count, errs int
+	for _, b := range rep.Timeline {
+		count += b.Count
+		errs += b.Errors
+	}
+	if count != 400 || errs < p.Dropped {
+		t.Fatalf("timeline count=%d errors=%d, scheduled 400, dropped %d", count, errs, p.Dropped)
+	}
+	if rep.Fault.Recovered {
+		t.Fatalf("a run that dropped load recovered: %+v", rep.Fault)
+	}
+}
+
+func TestExpandCapsTheTotalBody(t *testing.T) {
+	tok := "${PAD:8388608}"
+	if _, err := expand(strings.Repeat(tok, 8), 0, noEnv); err == nil {
+		t.Fatal("8 tokens of 8 MiB accepted")
+	}
+	if _, err := expand(tok+"x", 0, noEnv); err == nil {
+		t.Fatal("one byte over the cap accepted")
+	}
+	s, err := expand("x${PAD:8388607}", 0, noEnv)
+	if err != nil || len(s) != 8<<20 {
+		t.Fatalf("a body at the cap was refused: %v %d", err, len(s))
+	}
+	if _, err := ParseConfig([]byte(`{"targets":[{"name":"a","path":"/","body":"`+strings.Repeat(tok, 3)+`"}]}`), noEnv); err == nil {
+		t.Fatal("config with an over-cap body accepted")
+	}
+}
+
+func analyze(t *testing.T, b []Bucket, on, off time.Duration, maxErr float64, sustain int) FaultResult {
+	t.Helper()
+	f, err := AnalyzeFault(b, on, off, maxErr, sustain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return f
+}
+
+func TestFaultThresholdMustBeARatio(t *testing.T) {
+	for _, v := range []float64{math.NaN(), math.Inf(1), math.Inf(-1), -0.1, 1.1} {
+		f, err := AnalyzeFault(bk(10, 10, 10), 0, time.Second, v, 1)
+		if err == nil || f.Recovered {
+			t.Fatalf("max_err=%v accepted (recovered=%v)", v, f.Recovered)
+		}
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(500) }))
+		cfg := Config{BaseURL: srv.URL, Targets: []Target{{Name: "p", Method: "GET", Path: "/", Weight: 1, ExpectStatus: []int{200}}}}
+		_, err = Run(context.Background(), cfg, Options{
+			Profile: Profile{Name: "t", Rate: 20, Duration: 200 * time.Millisecond, Concurrency: 1}, Getenv: noEnv,
+			Fault: &FaultWindow{On: 0, Off: time.Second, MaxErr: v, Sustain: 1},
+		})
+		srv.Close()
+		if err == nil {
+			t.Fatalf("Run accepted max_err=%v", v)
+		}
+	}
+	if _, err := AnalyzeFault(bk(0), time.Second, time.Second, 0.05, 1); err == nil {
+		t.Fatal("off == on accepted")
+	}
+}

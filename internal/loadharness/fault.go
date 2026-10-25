@@ -1,7 +1,9 @@
 package loadharness
 
 import (
+	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 	"time"
@@ -36,8 +38,9 @@ type AssertionCheck struct {
 }
 
 type bucketAcc struct {
-	lat    []time.Duration
-	errors int
+	lat     []time.Duration
+	errors  int
+	dropped int
 }
 
 func buildTimeline(acc map[int]*bucketAcc) []Bucket {
@@ -53,7 +56,7 @@ func buildTimeline(acc map[int]*bucketAcc) []Bucket {
 		out[s].Second = s
 		if a := acc[s]; a != nil {
 			sum := Summarize(a.lat, a.errors, 0)
-			out[s].Count, out[s].Errors, out[s].P95Ms = sum.Count, a.errors, toMs(sum.P95)
+			out[s].Count, out[s].Errors, out[s].P95Ms = sum.Count+a.dropped, a.errors+a.dropped, toMs(sum.P95)
 		}
 	}
 	return out
@@ -63,11 +66,27 @@ func (b Bucket) bad(maxErr float64) bool {
 	return b.Count > 0 && float64(b.Errors)/float64(b.Count) > maxErr
 }
 
+// validateFaultWindow refuses a window that could never be judged: a threshold
+// that is not a ratio in [0,1] (NaN would make every bucket look clean) or an
+// off that is not after on.
+func validateFaultWindow(on, off time.Duration, maxErr float64) error {
+	if math.IsNaN(maxErr) || math.IsInf(maxErr, 0) || maxErr < 0 || maxErr > 1 {
+		return errors.New("fault max error must be a ratio in [0,1]")
+	}
+	if on < 0 || off <= on {
+		return errors.New("fault off must be after fault on")
+	}
+	return nil
+}
+
 // AnalyzeFault finds when the error ratio first exceeds maxErr after on, and
 // when it is back at or under maxErr for sustain whole buckets in a row after
 // off. Empty buckets neither degrade nor recover. Times are bucket starts.
-func AnalyzeFault(b []Bucket, on, off time.Duration, maxErr float64, sustain int) FaultResult {
+func AnalyzeFault(b []Bucket, on, off time.Duration, maxErr float64, sustain int) (FaultResult, error) {
 	f := FaultResult{OnMs: on.Milliseconds(), OffMs: off.Milliseconds()}
+	if err := validateFaultWindow(on, off, maxErr); err != nil {
+		return f, err
+	}
 	sustain = max(sustain, 1)
 	for _, k := range b {
 		if start := time.Duration(k.Second) * time.Second; start+time.Second > on && k.bad(maxErr) {
@@ -78,7 +97,7 @@ func AnalyzeFault(b []Bucket, on, off time.Duration, maxErr float64, sustain int
 	}
 	for i := range b {
 		start := time.Duration(b[i].Second) * time.Second
-		if start+time.Second <= off || i+sustain > len(b) {
+		if start < off || i+sustain > len(b) {
 			continue
 		}
 		ok := true
@@ -94,7 +113,7 @@ func AnalyzeFault(b []Bucket, on, off time.Duration, maxErr float64, sustain int
 			break
 		}
 	}
-	return f
+	return f, nil
 }
 
 // ApplyRecoveryBound fails the report when the fault did not recover within

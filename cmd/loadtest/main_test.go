@@ -111,3 +111,13 @@ func TestFaultWindowFlagsAndRecoveryBound(t *testing.T) {
 		t.Fatal("off before on must exit 2")
 	}
 }
+
+func TestFaultMaxErrMustBeARatio(t *testing.T) {
+	cfg := writeAbuseCfg(t, "http://127.0.0.1:1")
+	for _, v := range []string{"NaN", "+Inf", "-0.1", "1.1"} {
+		code, _, errOut := runCLI(t, "--config", cfg, "--fault-on", "0s", "--fault-off", "1s", "--fault-max-err", v)
+		if code != 2 || !strings.Contains(errOut, "--fault-max-err") {
+			t.Fatalf("%s: code=%d err=%s", v, code, errOut)
+		}
+	}
+}

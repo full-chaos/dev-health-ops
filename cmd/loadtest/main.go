@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"os"
 	"os/signal"
 	"strings"
@@ -100,6 +101,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 	if *faultOff > 0 || *faultOn > 0 || *faultName != "" {
 		if *faultOff <= *faultOn {
 			return fail("--fault-off must be after --fault-on")
+		}
+		if math.IsNaN(*faultMaxErr) || math.IsInf(*faultMaxErr, 0) || *faultMaxErr < 0 || *faultMaxErr > 1 {
+			return fail("--fault-max-err must be a ratio in [0,1]")
 		}
 		opts.Fault = &loadharness.FaultWindow{Name: *faultName, On: *faultOn, Off: *faultOff, MaxErr: *faultMaxErr, Sustain: *faultSustain}
 	}

@@ -60,6 +60,11 @@ func Run(ctx context.Context, cfg Config, opt Options) (Report, error) {
 	if err := CheckHost(cfg.BaseURL, opt.AllowHosts); err != nil {
 		return Report{}, err
 	}
+	if f := opt.Fault; f != nil {
+		if err := validateFaultWindow(f.On, f.Off, f.MaxErr); err != nil {
+			return Report{}, err
+		}
+	}
 	p := opt.Profile
 	if p.Rate <= 0 || p.Duration <= 0 || p.Concurrency <= 0 {
 		return Report{}, errors.New("rate, duration and concurrency must be positive")
@@ -133,6 +138,13 @@ func Run(ctx context.Context, cfg Config, opt Options) (Report, error) {
 		default:
 			mu.Lock()
 			results[j.target].dropped++
+			sec := int(at.Sub(start) / time.Second)
+			b := timeline[sec]
+			if b == nil {
+				b = &bucketAcc{}
+				timeline[sec] = b
+			}
+			b.dropped++
 			mu.Unlock()
 		}
 	}
@@ -150,7 +162,10 @@ func Run(ctx context.Context, cfg Config, opt Options) (Report, error) {
 	}
 	rep := ApplyAssertions(BuildReport(in), cfg.Targets)
 	if f := opt.Fault; f != nil {
-		res := AnalyzeFault(rep.Timeline, f.On, f.Off, f.MaxErr, f.Sustain)
+		res, err := AnalyzeFault(rep.Timeline, f.On, f.Off, f.MaxErr, f.Sustain)
+		if err != nil {
+			return Report{}, err
+		}
 		res.Name = f.Name
 		rep.Fault = &res
 	}

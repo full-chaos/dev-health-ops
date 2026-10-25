@@ -111,6 +111,9 @@ func ParseConfig(data []byte, getenv func(string) string) (Config, error) {
 // MaxPad is the largest ${PAD:N} body padding in bytes.
 const MaxPad = 8 << 20
 
+// MaxExpanded is the largest body or path an expansion may produce.
+const MaxExpanded = 8 << 20
+
 // expand fills ${SEQ}, ${ENV:NAME}, ${PAD:N} (N filler bytes) and ${POOL:NAME}
 // (comma list, round robin by seq).
 func expand(s string, seq int, getenv func(string) string) (string, error) {
@@ -118,6 +121,9 @@ func expand(s string, seq int, getenv func(string) string) (string, error) {
 	for {
 		i := strings.Index(s, "${")
 		if i < 0 {
+			if b.Len()+len(s) > MaxExpanded {
+				return "", fmt.Errorf("expansion is larger than %d bytes", MaxExpanded)
+			}
 			b.WriteString(s)
 			return b.String(), nil
 		}
@@ -141,6 +147,9 @@ func expand(s string, seq int, getenv func(string) string) (string, error) {
 			n, err := strconv.Atoi(tok[4:])
 			if err != nil || n < 0 || n > MaxPad {
 				return "", fmt.Errorf("pad must be 0..%d bytes", MaxPad)
+			}
+			if b.Len()+n > MaxExpanded {
+				return "", fmt.Errorf("expansion is larger than %d bytes", MaxExpanded)
 			}
 			b.WriteString(strings.Repeat("a", n))
 		case strings.HasPrefix(tok, "POOL:"):

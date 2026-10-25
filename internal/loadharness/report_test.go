@@ -29,7 +29,7 @@ func TestReportGolden(t *testing.T) {
 	}
 	got := buf.String()
 	for _, want := range []string{
-		`"schema_version": 1`,
+		`"schema_version": 2`,
 		`"profile": "normal"`,
 		`"started_at": "2026-10-24T12:00:00Z"`,
 		`"duration_ms": 2000`,

@@ -143,6 +143,7 @@ var aggRows = []aggRow{
 	{"failure-then-skipped-and-cancelled", "success", "4", []string{"failure", "cancelled", "skipped", "skipped"}, false, "failure"},
 	{"all-cancelled", "success", "3", []string{"cancelled", "cancelled", "cancelled"}, false, "cancelled"},
 	{"success-and-cancelled", "success", "3", []string{"success", "cancelled", "success"}, false, "cancelled"},
+	{"one-skipped-where-required", "success", "3", []string{"success", "skipped", "success"}, false, "skipped"},
 	{"all-skipped-where-legs-required", "success", "3", []string{"skipped", "skipped", "skipped"}, false, "skipped"},
 	{"plan-selected-zero-legs-skipped", "success", "0", []string{}, true, ""},
 	{"plan-cancelled", "cancelled", "3", []string{"success", "success", "success"}, false, "success"},

@@ -11,11 +11,20 @@ import (
 	"github.com/google/uuid"
 )
 
-// slimRollupReader serves the rollup read the way the SQL does: only the
-// error_category and retry_exhausted keys of each stored result.
-type slimRollupReader struct{ *unitsReader }
+// slimRollupReader serves the rollup read the way the SQL does (only the
+// error_category and retry_exhausted keys of each stored result) and counts
+// what the handler asks for.
+type slimRollupReader struct {
+	*unitsReader
+	rollupReads  int
+	pageReads    int
+	pageRows     int
+	unboundedGet bool
+	largestLimit int64
+}
 
-func (s slimRollupReader) runUnitRollupRows(context.Context, string, uuid.UUID) ([]runUnit, error) {
+func (s *slimRollupReader) runUnitRollupRows(context.Context, string, uuid.UUID) ([]runUnit, error) {
+	s.rollupReads++
 	slim := make([]runUnit, len(s.units))
 	for i, unit := range s.units {
 		unit.Result, unit.Error = nil, nil
@@ -24,10 +33,22 @@ func (s slimRollupReader) runUnitRollupRows(context.Context, string, uuid.UUID) 
 	return slim, nil
 }
 
+func (s *slimRollupReader) runUnitsPage(ctx context.Context, org string, run uuid.UUID, filter unitFilter, offset int64, limit *int64) ([]runUnit, error) {
+	s.pageReads++
+	if limit == nil {
+		s.unboundedGet = true
+	} else if *limit > s.largestLimit {
+		s.largestLimit = *limit
+	}
+	rows, err := s.unitsReader.runUnitsPage(ctx, org, run, filter, offset, limit)
+	s.pageRows += len(rows)
+	return rows, err
+}
+
 // TestRunUnitsLargeRunScale drives the real getRunUnits handler over a run with
-// 20k and 100k units. The paged read (offset, limit) of a 100k-unit run must
-// answer in under 1 s with under 1 MiB, and report the filtered total; the
-// whole-run read is not timed here (its path is unchanged).
+// 20k and 100k units and pins the cost of a paged read by what it fetches, not
+// by wall time: one slim rollup scan, one page read bounded by the limit, no
+// read of every full row, and a body under 1 MiB. Elapsed time is logged only.
 func TestRunUnitsLargeRunScale(t *testing.T) {
 	unsetForTest(t, "SYNC_INCREMENTAL_HEAVY_MAX_WINDOW_DAYS")
 	unsetForTest(t, "SYNC_WATERMARK_OVERLAP")
@@ -51,23 +72,25 @@ func TestRunUnitsLargeRunScale(t *testing.T) {
 				SourceName: &name, SourceFullName: &full, SourceExternalID: &full, Result: &res}
 		}
 		for _, query := range []string{"?offset=0&limit=500", "?status=failed,retrying&offset=500&limit=500&dataset_key=commits"} {
-			reader := slimRollupReader{&unitsReader{faultReader: &faultReader{}, units: units}}
+			reader := &slimRollupReader{unitsReader: &unitsReader{faultReader: &faultReader{}, units: units}}
 			started := time.Now()
 			_, status, body := serveUnits(t, reader, query, now)
-			elapsed := time.Since(started)
-			t.Logf("units=%d query=%q status=%d body_bytes=%d elapsed=%s", count, query, status, len(body), elapsed)
+			t.Logf("units=%d query=%q status=%d body_bytes=%d elapsed=%s", count, query, status, len(body), time.Since(started))
 			if status != http.StatusOK {
 				t.Fatalf("units=%d query=%q: status %d", count, query, status)
 			}
-			budget := time.Second
-			if scaleRaceEnabled {
-				budget = 15 * time.Second
-			}
-			if count == 100000 && elapsed > budget {
-				t.Errorf("units=%d query=%q: paged read took %s, over %s", count, query, elapsed, budget)
-			}
 			if len(body) > 1<<20 {
 				t.Errorf("units=%d query=%q: paged body %d bytes, over 1 MiB", count, query, len(body))
+			}
+			if reader.rollupReads != 1 || reader.pageReads != 1 || reader.unboundedGet || reader.largestLimit != 500 {
+				t.Errorf("units=%d query=%q: %d rollup scans, %d page reads, unbounded=%v, largest limit %d; want 1, 1, false, 500",
+					count, query, reader.rollupReads, reader.pageReads, reader.unboundedGet, reader.largestLimit)
+			}
+			if listed := strings.Count(body, `"sync_run_id"`); listed != reader.pageRows || listed > 500 {
+				t.Errorf("units=%d query=%q: %d units in the body, %d full rows fetched, want equal and at most 500", count, query, listed, reader.pageRows)
+			}
+			if query == "?offset=0&limit=500" && reader.pageRows != 500 {
+				t.Errorf("units=%d: %d full rows fetched for a limit of 500", count, reader.pageRows)
 			}
 			if !strings.Contains(body, `"filtered_unit_count":`) {
 				t.Errorf("units=%d query=%q: no filtered_unit_count in the paged body", count, query)

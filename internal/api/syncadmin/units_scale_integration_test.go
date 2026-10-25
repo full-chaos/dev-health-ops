@@ -163,7 +163,7 @@ SELECT $1, $2, $3, integration_id, $4, 'github', 'window', 'medium', 'incrementa
 
 // TestRunUnitsPagedReadAt100kUnits seeds one run with 100,000 units in
 // Postgres and times the paged route (rollups included) through the real
-// handler. The page must stay far inside the web's 20 s read deadline.
+// handler and pins the page by rows and body size; elapsed time is logged only.
 func TestRunUnitsPagedReadAt100kUnits(t *testing.T) {
 	v := startCascadeVenue(t, false)
 	run, sources := seedUnitsRun(t, v, 200)
@@ -179,16 +179,23 @@ FROM sync_runs AS r, generate_series(1, 100000) AS g WHERE r.id = $2`, v.org, ru
 	for _, query := range []string{"?offset=0&limit=500", "?offset=500&limit=500&status=failed,retrying&dataset_key=commits"} {
 		started := time.Now()
 		code, body := v.call("GET", "/api/v1/admin/sync-runs/"+run.String()+"/units"+query, "")
-		elapsed := time.Since(started)
-		t.Logf("100k units %s: status=%d body_bytes=%d elapsed=%s", query, code, len(body), elapsed)
+		t.Logf("100k units %s: status=%d body_bytes=%d elapsed=%s", query, code, len(body), time.Since(started))
 		if code != http.StatusOK {
 			t.Fatalf("%s: %d %.200s", query, code, body)
 		}
-		if elapsed > 5*time.Second {
-			t.Errorf("%s: %s, over the 5 s budget (web read deadline is 20 s)", query, elapsed)
+		var parsed struct {
+			Total    int               `json:"unit_count"`
+			Filtered int               `json:"filtered_unit_count"`
+			Units    []json.RawMessage `json:"units"`
 		}
-		if len(body) > 2<<20 {
-			t.Errorf("%s: body %d bytes, over 2 MiB", query, len(body))
+		if err := json.Unmarshal([]byte(body), &parsed); err != nil {
+			t.Fatal(err)
+		}
+		if parsed.Total != 100000 || len(parsed.Units) != 500 || parsed.Filtered < 500 {
+			t.Errorf("%s: unit_count %d, %d units, filtered %d; want 100000, 500 and at least 500", query, parsed.Total, len(parsed.Units), parsed.Filtered)
+		}
+		if len(body) > 1<<20 {
+			t.Errorf("%s: body %d bytes, over 1 MiB", query, len(body))
 		}
 	}
 }

@@ -11,12 +11,16 @@
 #   default paths: git diff --no-renames --name-only -z origin/main...HEAD (cwd repo); BASE <sha> is printed; an unresolvable
 #   origin/main exits non-zero with no package line. --paths FILE: NUL-terminated change list (no BASE resolved).
 # stdout (list): "BASE <sha|paths-file>" then either "POSTURE <package>" lines or "NONE no posture path changed".
-# --run: "RECEIPT-HEAD <sha> clean=yes runner=<capped.sh path> sha256=<its hash>", then one "RECEIPT <pkg> PASS|FAIL <secs>s rc=<n>" per package and
-#   "RECEIPT-SUMMARY <sha> pass=<n> fail=<n>". A dirty tree or an error exits non-zero. Runs testcontainers: follow the
-#   D6363 caps (capped.sh below) and remove your own containers afterwards. The runner is fixed (no env override).
-#   --test-runner FILE is for tests only: every line starts SIMULATED (SIMULATED-HEAD, SIMULATED <pkg>, SIMULATED-SUMMARY), no line says RECEIPT, exit is 5.
+# --run: "RECEIPT-HEAD <sha> clean=yes runner=<capped.sh> sha256=<hash> go=<path> go_sha256=<hash> go_version=<text>",
+#   then one "RECEIPT <pkg> PASS|FAIL <secs>s rc=<n> tests=<n>" per package and "RECEIPT-SUMMARY <sha> pass=<n> fail=<n>".
+#   A package is PASS only when `go test -json` exits 0, shows at least one passed test and no failed event; a package
+#   with no test run is FAIL. go test runs with GOENV=off, GOFLAGS empty, GOTOOLCHAIN=local and no GIT_DIR, so the
+#   caller's environment cannot make it pass without running tests. A dirty tree or an error exits non-zero. Runs
+#   testcontainers: follow the D6363 caps (capped.sh) and remove your own containers afterwards. The runner is fixed.
+#   --test-runner FILE is for tests only: EVERY stdout line starts SIMULATED, no line says RECEIPT, exit is 5.
 set -euo pipefail
 
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 list_file="${here}/posture_integration_packages.tsv"
 # The runner is fixed: no environment variable replaces it, so a receipt cannot be forged by an override.
@@ -30,9 +34,15 @@ while [ $# -gt 0 ]; do
     --run) run=1; shift ;;
     --test-runner) [ $# -ge 2 ] || { echo "--test-runner needs a file" >&2; exit 2; }; stub="$2"; shift 2 ;;
     --paths) [ $# -ge 2 ] || { echo "--paths needs a file" >&2; exit 2; }; paths="$2"; shift 2 ;;
-    *) echo "usage: posture_integration.sh [--run] [--paths FILE]" >&2; exit 2 ;;
+    *) echo "usage: posture_integration.sh [--run] [--paths FILE] [--test-runner FILE]" >&2; exit 2 ;;
   esac
 done
+pfx=""
+[ -z "${stub}" ] || pfx="SIMULATED "
+
+changed_tmp=""
+json_tmp=""
+trap 'rm -f "${changed_tmp}" "${json_tmp}"' EXIT
 
 packages=()
 while IFS= read -r line; do
@@ -48,7 +58,6 @@ if [ -n "${paths}" ]; then
 else
   base="$(git rev-parse --verify --quiet 'origin/main^{commit}')" || { echo "origin/main does not resolve; fetch it first" >&2; exit 3; }
   changed_tmp="$(mktemp)"
-  trap 'rm -f "${changed_tmp}"' EXIT
   git diff --no-renames --name-only -z "${base}...HEAD" > "${changed_tmp}" || { echo "git diff against ${base} failed" >&2; exit 3; }
   changed_src="${changed_tmp}"
 fi
@@ -74,17 +83,21 @@ while IFS= read -r -d '' path; do
   done
 done < "${changed_src}"
 
-printf 'BASE %s\n' "${base}"
+printf '%sBASE %s\n' "${pfx}" "${base}"
 if [ -z "${hit}" ]; then
-  echo "NONE no posture path changed"
+  printf '%sNONE no posture path changed\n' "${pfx}"
   exit 0
 fi
-for pkg in "${packages[@]}"; do printf 'POSTURE %s\n' "${pkg}"; done
+for pkg in "${packages[@]}"; do printf '%sPOSTURE %s\n' "${pfx}" "${pkg}"; done
 [ "${run}" -eq 1 ] || exit 0
 
 sha="$(git rev-parse HEAD)"
 status="$(git status --porcelain)" || { echo "git status failed; the tree is not known to be clean" >&2; exit 4; }
 [ -z "${status}" ] || { echo "RECEIPT-HEAD ${sha} clean=no" >&2; echo "dirty tree: commit or stash first" >&2; exit 4; }
+
+# go test runs with a fixed environment: no GOENV file, no GOFLAGS (-exec, -run, ...), no toolchain download, no GIT_DIR.
+goenv=(env GOENV=off GOFLAGS= GOTOOLCHAIN=local)
+go_path="$(command -v go)" || { echo "go not found on PATH" >&2; exit 3; }
 if [ -n "${stub}" ]; then
   [ -x "${stub}" ] || { echo "test runner is not executable: ${stub}" >&2; exit 3; }
   capped="${stub}"
@@ -93,23 +106,30 @@ if [ -n "${stub}" ]; then
 else
   [ -f "${capped}" ] && [ -x "${capped}" ] || { echo "runner not found: ${capped}" >&2; exit 3; }
   runner_sha="$(sha256sum "${capped}")" || { echo "cannot hash the runner ${capped}" >&2; exit 3; }
-  printf 'RECEIPT-HEAD %s clean=yes runner=%s sha256=%s\n' "${sha}" "${capped}" "${runner_sha%% *}"
+  go_sha="$(sha256sum "${go_path}")" || { echo "cannot hash ${go_path}" >&2; exit 3; }
+  go_version="$("${goenv[@]}" "${go_path}" version)" || { echo "go version failed" >&2; exit 3; }
+  printf 'RECEIPT-HEAD %s clean=yes runner=%s sha256=%s go=%s go_sha256=%s go_version="%s"\n' \
+    "${sha}" "${capped}" "${runner_sha%% *}" "${go_path}" "${go_sha%% *}" "${go_version}"
   rec="RECEIPT"; sum="RECEIPT-SUMMARY"
 fi
 export GOMODCACHE="${GOMODCACHE:-/var/lib/oci-cache/go-mod}" GOCACHE="${GOCACHE:-/var/lib/oci-cache/go-build}" GOTMPDIR="${GOTMPDIR:-/var/lib/oci-cache/go-tmp}"
+json_tmp="$(mktemp)"
 pass=0
 fail=0
 for pkg in "${packages[@]}"; do
   start="${SECONDS}"
   rc=0
-  "${capped}" -t 900 -m 16 -- go test -tags=integration -count=1 -p 1 "./${pkg}" > /dev/null 2>&1 || rc=$?
+  "${goenv[@]}" "${capped}" -t 900 -m 16 -- "${go_path}" test -json -tags=integration -count=1 -p 1 "./${pkg}" > "${json_tmp}" 2>/dev/null || rc=$?
   secs=$((SECONDS - start))
-  if [ "${rc}" -eq 0 ]; then
+  counts="$(jq -s -r '[([.[] | select(.Action == "pass" and .Test != null)] | length), ([.[] | select(.Action == "fail")] | length)] | @tsv' "${json_tmp}" 2>/dev/null)" || counts="0	1"
+  tests="${counts%%$'\t'*}"
+  failed="${counts##*$'\t'}"
+  if [ "${rc}" -eq 0 ] && [ "${tests}" -ge 1 ] && [ "${failed}" -eq 0 ]; then
     pass=$((pass + 1))
-    printf '%s %s PASS %ss rc=0\n' "${rec}" "${pkg}" "${secs}"
+    printf '%s %s PASS %ss rc=0 tests=%s\n' "${rec}" "${pkg}" "${secs}" "${tests}"
   else
     fail=$((fail + 1))
-    printf '%s %s FAIL %ss rc=%s\n' "${rec}" "${pkg}" "${secs}" "${rc}"
+    printf '%s %s FAIL %ss rc=%s tests=%s failed_events=%s\n' "${rec}" "${pkg}" "${secs}" "${rc}" "${tests}" "${failed}"
   fi
 done
 printf '%s %s pass=%s fail=%s\n' "${sum}" "${sha}" "${pass}" "${fail}"

@@ -256,10 +256,10 @@ func TestPostureIntegrationRunRefusesADirtyTree(t *testing.T) {
 		t.Fatal(err)
 	}
 	sha := git("rev-parse", "HEAD")
-	res = cmdSpec{dir: repo, env: []string{shimBasePath()}}.run("bash", script, "--run", "--test-runner", stub)
+	res = cmdSpec{dir: repo, env: []string{"PATH=" + filepath.Dir(goBinary(t)) + string(os.PathListSeparator) + "/usr/bin:/bin"}}.run("bash", script, "--run", "--test-runner", stub)
 	// A simulated run is a test aid: every line starts SIMULATED, no line contains RECEIPT, and the exit is non-zero.
 	if res.code == 0 || !strings.Contains(res.stdout, "SIMULATED-HEAD "+sha+" clean=yes") ||
-		!strings.Contains(res.stdout, "SIMULATED-SUMMARY "+sha+" pass=14 fail=0") || strings.Count(res.stdout, "SIMULATED internal/") != 14 ||
+		!strings.Contains(res.stdout, "SIMULATED-SUMMARY "+sha+" pass=0 fail=14") || strings.Count(res.stdout, "SIMULATED internal/") != 14 ||
 		strings.Contains(res.stdout, "RECEIPT") {
 		t.Fatalf("clean tree with a simulated runner: exit %d stdout=%q stderr=%q", res.code, res.stdout, res.stderr)
 	}
@@ -462,7 +462,7 @@ func TestPostureIntegrationPassNeedsExecutedTests(t *testing.T) {
 			if strings.Contains(okRow, " PASS ") && (markerErr != nil || !strings.Contains(okRow, "tests=1")) {
 				t.Fatalf("PASS row without an executed test: %q marker=%v", okRow, markerErr)
 			}
-			if !strings.Contains(okRow, " PASS ") && !strings.Contains(okRow, " FAIL ") {
+			if !strings.Contains(okRow, " PASS ") { // the fixed environment makes go test really run, so every case passes honestly
 				t.Fatalf("no row for internal/ok: stdout=%q stderr=%q", res.stdout, res.stderr)
 			}
 		})

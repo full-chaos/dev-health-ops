@@ -14,6 +14,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/llmorgsettings"
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
+	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	postgresstore "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	riverstore "github.com/full-chaos/dev-health-ops/internal/storage/river"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
@@ -130,44 +132,63 @@ func TestTheDomainRoleReadsTheCategorizeOptInThroughTheDefinerFunctionOnly(t *te
 		t.Fatalf("domain readiness under the migrated grants: %v (gaps: %v)", err, gaps)
 	}
 
-	insert := func(orgID, category, key string, value *string) {
+	insert := func(orgID, category, key string, value *string, encrypted bool) {
 		t.Helper()
 		if _, err := admin.Exec(ctx, `
 INSERT INTO settings (id, org_id, category, key, value, is_encrypted, created_at, updated_at)
-VALUES (gen_random_uuid(), $1, $2, $3, $4, false, now(), now())`, orgID, category, key, value); err != nil {
+VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, now(), now())`, orgID, category, key, value, encrypted); err != nil {
 			t.Fatal(err)
 		}
 	}
+	cipher, err := providerfoundation.NewFernetDecryptor(secrets.NewValue("test-master-key"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sealedTrue, err := cipher.Encrypt([]byte("true"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// goOptInRule is the Go rule the definer function replaced (the read before
+	// CHAOS-11335): on only for a stored value that is exactly "true". The SQL
+	// answer must equal it for every row shape.
+	goOptInRule := func(value *string) bool { return value != nil && *value == "true" }
 	text := func(s string) *string { return &s }
 	cases := []struct {
-		org      string
-		category string
-		value    *string
-		want     bool
+		org       string
+		category  string
+		value     *string
+		encrypted bool
+		want      bool
 	}{
-		{"org-true", "llm", text("true"), true},
-		{"org-false", "llm", text("false"), false},
-		{"org-null", "llm", nil, false},
-		{"org-empty", "llm", text(""), false},
-		{"org-upper", "llm", text("TRUE"), false},
-		{"org-one", "llm", text("1"), false},
-		{"org-padded", "llm", text(" true"), false},
-		{"org-yes", "llm", text("yes"), false},
-		{"org-other-category", "general", text("true"), false},
-		{"org-no-row", "", nil, false},
+		{"org-true", "llm", text("true"), false, true},
+		{"org-false", "llm", text("false"), false, false},
+		{"org-null", "llm", nil, false, false},
+		{"org-empty", "llm", text(""), false, false},
+		{"org-title", "llm", text("True"), false, false},
+		{"org-upper", "llm", text("TRUE"), false, false},
+		{"org-one", "llm", text("1"), false, false},
+		{"org-padded", "llm", text(" true"), false, false},
+		{"org-yes", "llm", text("yes"), false, false},
+		{"org-encrypted", "llm", text(sealedTrue.Reveal()), true, false},
+		{"org-other-category", "general", text("true"), false, false},
+		{"org-no-row", "", nil, false, false},
 	}
 	for _, tc := range cases {
 		if tc.category != "" {
-			insert(tc.org, tc.category, llmorgsettings.KeyCategorizeBYOEnabled, tc.value)
+			insert(tc.org, tc.category, llmorgsettings.KeyCategorizeBYOEnabled, tc.value, tc.encrypted)
 		}
 	}
-	// Another org's opt-in and another key of the same org never leak in.
-	insert("org-no-row", "llm", "own_model_enabled", text("true"))
+	// Another key of the same org never counts.
+	insert("org-no-row", "llm", "own_model_enabled", text("true"), false)
 
 	for _, tc := range cases {
+		goWant := tc.category == "llm" && goOptInRule(tc.value)
+		if goWant != tc.want {
+			t.Fatalf("%s: the table disagrees with the Go rule (%v vs %v)", tc.org, tc.want, goWant)
+		}
 		got, err := llmorgsettings.CategorizeBYOEnabled(ctx, domain, tc.org)
-		if err != nil || got != tc.want {
-			t.Fatalf("%s: CategorizeBYOEnabled on the domain role = %v, %v; want %v", tc.org, got, err, tc.want)
+		if err != nil || got != goWant {
+			t.Fatalf("%s: SQL opt-in on the domain role = %v, %v; Go rule says %v", tc.org, got, err, goWant)
 		}
 	}
 	if denied := denials.all(); len(denied) != 0 {
@@ -177,9 +198,75 @@ VALUES (gen_random_uuid(), $1, $2, $3, $4, false, now(), now())`, orgID, categor
 	// The role holds nothing on settings itself: the encrypted provider keys
 	// stay out of its reach.
 	var count int
-	err := domain.QueryRow(ctx, `SELECT count(*) FROM settings`).Scan(&count)
+	err = domain.QueryRow(ctx, `SELECT count(*) FROM settings`).Scan(&count)
 	var pgErr *pgconn.PgError
 	if !errors.As(err, &pgErr) || pgErr.Code != "42501" {
 		t.Fatalf("SELECT on settings as the domain role = %v (count %d), want SQLSTATE 42501", err, count)
+	}
+}
+
+// Only the declared definer function is executable: EXECUTE on any other public
+// function, a SECURITY DEFINER one included, fails the domain role's readiness.
+func TestTheDomainPostureRefusesEXECUTEOnAnUndeclaredFunction(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	admin, domain, _, domainRole := startDomainRoleDatabase(t, ctx)
+	for _, statement := range []string{
+		"CREATE FUNCTION public.undeclared_probe() RETURNS integer LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS 'SELECT 1'",
+		"REVOKE ALL ON FUNCTION public.undeclared_probe() FROM PUBLIC",
+	} {
+		if _, err := admin.Exec(ctx, statement); err != nil {
+			t.Fatalf("%s: %v", statement, err)
+		}
+	}
+	if err := postgresstore.CheckDomainAuthorization(ctx, domain, domainRole, "river"); err != nil {
+		t.Fatalf("readiness before the undeclared grant: %v", err)
+	}
+	if _, err := admin.Exec(ctx, "GRANT EXECUTE ON FUNCTION public.undeclared_probe() TO "+domainRole); err != nil {
+		t.Fatal(err)
+	}
+	if err := postgresstore.CheckDomainAuthorization(ctx, domain, domainRole, "river"); !errors.Is(err, postgresstore.ErrUnavailable) {
+		t.Fatalf("readiness with EXECUTE on an undeclared function = %v, want ErrUnavailable", err)
+	}
+	if _, err := admin.Exec(ctx, "REVOKE EXECUTE ON FUNCTION public.undeclared_probe() FROM "+domainRole); err != nil {
+		t.Fatal(err)
+	}
+	if err := postgresstore.CheckDomainAuthorization(ctx, domain, domainRole, "river"); err != nil {
+		t.Fatalf("readiness after the revoke: %v", err)
+	}
+}
+
+// Roll order is pgmigrate 0156, then the go-river-migrate grants, then the
+// workers. A new worker that comes up before the function exists is not ready
+// (its posture names the function), and if it read the opt-in anyway the read
+// fails with SQLSTATE 42883, which the executor refuses deterministically
+// (internal/jobs/investment: reason function_missing), never in a retry loop.
+func TestAWorkerAheadOfTheFunctionIsNotReadyAndItsOptInReadFailsClosed(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	admin, domain, _, domainRole := startDomainRoleDatabase(t, ctx)
+	if _, err := admin.Exec(ctx, "DROP FUNCTION public.categorize_byo_opted_in(text)"); err != nil {
+		t.Fatal(err)
+	}
+	if err := postgresstore.CheckDomainAuthorization(ctx, domain, domainRole, "river"); !errors.Is(err, postgresstore.ErrUnavailable) {
+		t.Fatalf("readiness without the function = %v, want ErrUnavailable", err)
+	}
+	gaps, err := postgresstore.DiagnoseRolePosture(ctx, admin, domainRole, postgresstore.DomainPosture())
+	if err != nil {
+		t.Fatal(err)
+	}
+	named := false
+	for _, gap := range gaps {
+		if gap.TableName == "categorize_byo_opted_in(text)" && gap.TableMissing {
+			named = true
+		}
+	}
+	if !named {
+		t.Fatalf("the migrate-time diagnostic does not name the missing function: %v", gaps)
+	}
+	optedIn, err := llmorgsettings.CategorizeBYOEnabled(ctx, domain, "org-any")
+	var pgErr *pgconn.PgError
+	if optedIn || !errors.As(err, &pgErr) || pgErr.Code != "42883" {
+		t.Fatalf("opt-in read without the function = %v, %v; want an error with SQLSTATE 42883", optedIn, err)
 	}
 }

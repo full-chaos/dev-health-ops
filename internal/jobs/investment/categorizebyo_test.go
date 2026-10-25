@@ -378,13 +378,16 @@ func TestAnOptedInOrgThatIsRefusedIsNeverServedByTheCannedPlatformPath(t *testin
 	for cause, want := range map[error]string{
 		errors.New("postgres: connection refused at 10.0.0.1"):                               "unavailable",
 		fmt.Errorf("read: %w", &pgconn.PgError{Code: "42501", Message: "permission denied"}): "permission_denied",
+		// A worker up before pgmigrate 0156 created the function: refused once,
+		// deterministically, never retried (roll order: 0156, then the grants).
+		fmt.Errorf("read: %w", &pgconn.PgError{Code: "42883", Message: "function does not exist"}): "function_missing",
 	} {
 		reasons = nil
 		unreadable := &stubByo{optedInErr: cause}
 		executor.byo = unreadable
 		_, err = executor.Execute(context.Background(), materializeClaim(t, `{}`))
 		if deterministicClass(err) != workgraph.ClassLLMProviderInvalid || !strings.Contains(err.Error(), llmorgsettings.CodeCategorizeBYOOptInUnreadable) ||
-			reached != 0 || unreadable.built != 0 || strings.Contains(err.Error(), "10.0.0.1") || strings.Contains(err.Error(), "permission") {
+			reached != 0 || unreadable.built != 0 || strings.Contains(err.Error(), "10.0.0.1") || strings.Contains(err.Error(), "permission") || strings.Contains(err.Error(), "does not exist") {
 			t.Fatalf("an unreadable opt-in must refuse the run (no retry, no jev, no text): %v reached=%d", err, reached)
 		}
 		if len(reasons) != 1 || reasons[0] != want {

@@ -42,7 +42,8 @@ func (refusal *BYORefusal) Error() string {
 
 // optInUnreadableCounter counts runs refused because the org's opt-in could not
 // be read, by reason: permission_denied (SQLSTATE 42501: the worker role lacks
-// the grant) or unavailable (any other fault).
+// the grant), function_missing (42883: the worker runs before pgmigrate 0156)
+// or unavailable (any other fault).
 var optInUnreadableCounter = func() metric.Int64Counter {
 	const name = "dev_health_categorize_byo_optin_unreadable_total"
 	counter, err := otel.Meter("github.com/full-chaos/dev-health-ops/internal/jobs/investment").
@@ -62,8 +63,13 @@ func defaultRecordOptInUnreadable(ctx context.Context, reason string) {
 
 func optInUnreadableReason(err error) string {
 	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) && pgErr.Code == "42501" {
-		return "permission_denied"
+	if errors.As(err, &pgErr) {
+		switch pgErr.Code {
+		case "42501":
+			return "permission_denied"
+		case "42883":
+			return "function_missing"
+		}
 	}
 	return "unavailable"
 }

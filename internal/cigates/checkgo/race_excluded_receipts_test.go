@@ -163,6 +163,7 @@ func TestRaceExcludedReceiptsFailOnEachPlantedFault(t *testing.T) {
 	t.Run("a census row that go list omits", censusRowThatGoListOmitsSubtests)
 	t.Run("a duplicated census row", duplicateCensusSubtests)
 	t.Run("a malformed census line", malformedCensusSubtests)
+	t.Run("a vertical-tab census column", vtabCensusColumnSubtest)
 }
 
 const shardFakeGo = `#!/usr/bin/env bash
@@ -471,8 +472,7 @@ func malformedCensusSubtests(t *testing.T) {
 
 // The loader trims exactly space, tab and carriage return. A test column that holds only a vertical tab is therefore a name, not
 // an empty column; the Go census parsers trim the same set, so the three agree.
-func TestTheLoaderTrimsExactlySpaceTabAndCarriageReturn(t *testing.T) {
-	t.Parallel()
+func vtabCensusColumnSubtest(t *testing.T) {
 	events := append(append([]goTestEvent{}, cleanEvents()...), pass(pkgA, "\v"))
 	res := receiptsVerb(t, fixtureCensus+pkgA+"\t\v\n", eventLines(t, events))
 	if res.code != 0 {

@@ -515,6 +515,39 @@ func (r *runner) projectedRows(name, goRows string) {
 	}
 }
 
+// waitForUsersOwnedFlip is the owned leg's hand-off: the seed has put the users into public.users, so the run script may
+// now copy them (users-backfill), restart auth-service and go-api with AUTH_USERS_OWNED, and tell this test which
+// aggregates go-api forwards after that. Without the two files in the environment the run does not hand off.
+func waitForUsersOwnedFlip(t *testing.T, ctx context.Context) {
+	t.Helper()
+	seeded, flipped := os.Getenv("DEVHEALTH_AUTH_ORACLE_SEEDED_FILE"), os.Getenv("DEVHEALTH_AUTH_ORACLE_FLIPPED_FILE")
+	if seeded == "" && flipped == "" {
+		return
+	}
+	if seeded == "" || flipped == "" {
+		t.Fatal("DEVHEALTH_AUTH_ORACLE_SEEDED_FILE and DEVHEALTH_AUTH_ORACLE_FLIPPED_FILE are set together or not at all")
+	}
+	if err := os.WriteFile(seeded, nil, 0o600); err != nil {
+		t.Fatalf("signal the seed: %v", err)
+	}
+	deadline := time.Now().Add(20 * time.Minute)
+	for {
+		if file, err := os.Open(flipped); err == nil {
+			raw, readErr := io.ReadAll(io.LimitReader(file, 4096))
+			_ = file.Close()
+			if readErr != nil {
+				t.Fatalf("read the forwarded set: %v", readErr)
+			}
+			t.Setenv(authrows.EnvForwarded, strings.TrimSpace(string(raw)))
+			return
+		}
+		if time.Now().After(deadline) || ctx.Err() != nil {
+			t.Fatal("the run script did not finish the users-owned switch")
+		}
+		time.Sleep(time.Second)
+	}
+}
+
 func seed(t *testing.T, ctx context.Context, admin *pgxpool.Pool, venue *venueoracle.Venue) map[string]map[string]any {
 	t.Helper()
 	raw := venue.CallPython(t, venueoracle.PythonCall{Target: "dev_health_ops.api.services.users:_hash_password",
@@ -617,7 +650,11 @@ func TestAuthFlowVenueOracle(t *testing.T) {
 		Golden: golden, Root: venueRoot(), JWTKey: sessionscenario.Key, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		PythonEnv: []string{"EMAIL_PROVIDER=smtp", "EMAIL_FROM_ADDRESS=" + fromAddress,
 			"SMTP_HOST=" + pyHost, "SMTP_PORT=" + strconv.Itoa(pyPort), "APP_BASE_URL=" + appBaseURL},
-		Seed: seed,
+		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, venue *venueoracle.Venue) map[string]map[string]any {
+			tokens := seed(t, ctx, admin, venue)
+			waitForUsersOwnedFlip(t, ctx)
+			return tokens
+		},
 	})
 	metricsDatabases := []string{venue.PythonClickHouseDB, venue.GoClickHouseDB}
 	if external != nil {

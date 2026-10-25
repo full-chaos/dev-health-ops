@@ -31,6 +31,9 @@ ROOT="$(cd -- "${SCRIPT_DIR}/.." >/dev/null 2>&1 && pwd -P)"
 PROJECT="authcorpus$(od -An -N6 -tx1 /dev/urandom | tr -d ' \n')"
 WORK="$(mktemp -d)"
 STATE="${WORK}/state.env"
+SEEDED_FILE="${WORK}/seeded"
+FLIPPED_FILE="${WORK}/flipped"
+TEST_PID=""
 
 die() {
   printf 'ERROR: %s\n' "$1" >&2
@@ -133,6 +136,7 @@ cleanup() {
   fi
   # Bounded: a hung docker daemon must not hold the step until the job timeout.
   timeout --kill-after=10 "${AUTH_CORPUS_DOWN_SECONDS:-180}" docker compose -p "${PROJECT}" "${COMPOSE_FILES[@]}" --profile auth down --volumes --remove-orphans >/dev/null 2>&1 || true
+  [ -z "${TEST_PID}" ] || kill "${TEST_PID}" 2>/dev/null || true
   rm -rf -- "${WORK}"
   exit "${status}"
 }
@@ -253,7 +257,9 @@ SQL
   # users-backfill refuses once the flag is true and auth-service is not ready while public.users and auth.users
   # have gaps, so the copy runs first, with the flag still off; then grants and auth-service, then go-api.
   # AUTH_CORPUS_USERS_UNOWNED=1 skips it: the non-vacuity run, which must still pass the golden through the not-owned quirks.
-  if [ -z "${AUTH_CORPUS_USERS_UNOWNED:-}" ]; then
+  # The corpus test seeds its users first (it signals ${SEEDED_FILE}), so this runs once they exist, as a real switch has users
+  # first; the test is then handed the forwarded set (${FLIPPED_FILE}) and goes on. Step 1e needs auth-service and go-api up, not the test.
+  owned_flip() {
     printf 'step 1e: users-backfill, then AUTH_USERS_OWNED=true\n'
     (
       export "AUTH_DATABASE_URI=host=postgres port=5432 user=${AUTH_RUNTIME_DATABASE_ROLE:-devhealth_auth} password='${AUTH_RUNTIME_DATABASE_PASSWORD:-devhealth_auth}' dbname=${POSTGRES_DB:-postgres} sslmode=disable"
@@ -277,7 +283,7 @@ SQL
       [[ " ${BEFORE_OWNED[*]} " == *" ${aggregate} "* ]] || bash "${SCRIPT_DIR}/auth_corpus_set_env.sh" "AUTH_PROXY_$(tr '[:lower:]' '[:upper:]' <<<"${aggregate}")" true
     done
     bash "${SCRIPT_DIR}/auth_corpus_set_env.sh" AUTH_USERS_OWNED true
-  fi
+  }
 fi
 
 printf 'step 2: TestAuthFlowVenueOracle through the base-URL runner\n'
@@ -298,7 +304,28 @@ if [ "${LEG}" = "acp" ] && [ -z "${AUTH_CORPUS_USERS_UNOWNED:-}" ]; then
 else
   export DEVHEALTH_AUTH_ORACLE_USERS_OWNED=false
 fi
-(cd "${ROOT}" && go test -trimpath -tags integration -count=1 -v -run '^TestAuthFlowVenueOracle$' ./internal/apiservice/authflowvenue)
+TEST_CMD=(go test -trimpath -tags integration -count=1 -v -run '^TestAuthFlowVenueOracle$' ./internal/apiservice/authflowvenue)
+if [ "${LEG}" = "acp" ] && [ -z "${AUTH_CORPUS_USERS_UNOWNED:-}" ]; then
+  # The owned leg: the test seeds, signals, and waits; the flip (step 1e and 1f) runs once the users exist.
+  export DEVHEALTH_AUTH_ORACLE_SEEDED_FILE="${SEEDED_FILE}" DEVHEALTH_AUTH_ORACLE_FLIPPED_FILE="${FLIPPED_FILE}"
+  (cd "${ROOT}" && exec "${TEST_CMD[@]}") &
+  TEST_PID=$!
+  while [ ! -e "${SEEDED_FILE}" ] && kill -0 "${TEST_PID}" 2>/dev/null; do sleep 1; done
+  if [ ! -e "${SEEDED_FILE}" ]; then
+    wait "${TEST_PID}" || true
+    TEST_PID=""
+    die "the corpus test ended before it seeded"
+  fi
+  owned_flip
+  (IFS=,; printf '%s' "${FORWARDED[*]}") >"${FLIPPED_FILE}.tmp"
+  mv "${FLIPPED_FILE}.tmp" "${FLIPPED_FILE}"
+  status=0
+  wait "${TEST_PID}" || status=$?
+  TEST_PID=""
+  [ "${status}" -eq 0 ] || exit "${status}"
+else
+  (cd "${ROOT}" && "${TEST_CMD[@]}")
+fi
 
 if [ "${LEG}" = "acp" ]; then
   printf 'step 3: go-api forwarded exactly the served aggregates to auth-service\n'

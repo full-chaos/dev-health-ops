@@ -9,6 +9,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 // Behaviour of ci/auth_corpus_external.sh and ci/auth_corpus_set_env.sh against a fake docker: it records every
@@ -50,6 +52,18 @@ case "$*" in
   *" certs -out "*)
     for arg in "$@"; do last="$arg"; done
     mkdir -p "$last" && : > "$last/ca.pem" && : > "$last/server.pem" && : > "$last/server.key" ;;
+esac
+case "$1" in
+  test)
+    if [ -n "$FAKE_GO_TEST_EXITS" ]; then exit 0; fi
+    if [ -n "$DEVHEALTH_AUTH_ORACLE_SEEDED_FILE" ]; then
+      printf 'SEEDED\n' >> "` + record + `"
+      : > "$DEVHEALTH_AUTH_ORACLE_SEEDED_FILE"
+      i=0
+      while [ ! -e "$DEVHEALTH_AUTH_ORACLE_FLIPPED_FILE" ] && [ "$i" -lt 300 ]; do sleep 0.1; i=$((i+1)); done
+      [ -e "$DEVHEALTH_AUTH_ORACLE_FLIPPED_FILE" ] || exit 1
+      printf 'FLIPPED %s\n' "$(cat "$DEVHEALTH_AUTH_ORACLE_FLIPPED_FILE")" >> "` + record + `"
+    fi ;;
 esac
 exit 0
 `
@@ -635,5 +649,78 @@ func TestAuthCorpusAcpOwnedAndUnownedForwardedSetsDifferByCredentialsOnly(t *tes
 	o, u := forwardedLine(t, owned, "leg acp forwards (users owned): "), forwardedLine(t, unowned, "leg acp forwards: ")
 	if strings.Join(u, ",") != "sessions,local_login" || strings.Join(o, ",") != "sessions,local_login,credentials" {
 		t.Fatalf("owned %v, unowned %v: they must differ by credentials only", o, u)
+	}
+}
+
+// The corpus seeds its users before the backfill, as a real switch has users first: the owned leg runs the test in the
+// background, which seeds, signals, and waits for the script to finish step 1e and 1f before it drives go-api.
+func TestAuthCorpusAcpOwnedLegSeedsBeforeTheBackfillAndHandsTheForwardedSetToTheTest(t *testing.T) {
+	metrics := metric("sessions") + "\n" + metric("local_login") + "\n" + metric("credentials")
+	fake, out, err := runAcpOwnedLeg(t, "FAKE_SERVED="+requiredServed, "FAKE_SERVED_OWNED="+requiredServed+","+credentialsRoutes, "FAKE_METRICS="+metrics)
+	if err != nil || !strings.Contains(out, "AUTH CORPUS EXTERNAL (acp) PASSED") {
+		t.Fatalf("want a pass, got err=%v:\n%s", err, out)
+	}
+	calls := fake.calls(t)
+	seeded, backfill := strings.Index(calls, "SEEDED\n"), strings.Index(calls, "users-backfill")
+	if seeded < 0 || backfill < seeded {
+		t.Fatalf("want the test's seed before users-backfill, got positions %d %d:\n%s", seeded, backfill, calls)
+	}
+	if !strings.Contains(calls, "FLIPPED sessions,local_login,credentials\n") {
+		t.Errorf("want the test to be handed the forwarded set after step 1f:\n%s", calls)
+	}
+	if strings.Index(calls, "FLIPPED") < backfill {
+		t.Errorf("the test must be released only after the backfill:\n%s", calls)
+	}
+}
+
+// The unowned legs keep their order: the test runs in the foreground, with no seed hand-off.
+func TestAuthCorpusUnownedLegHasNoSeedHandOff(t *testing.T) {
+	fake, out, err := runAcpLeg(t, "FAKE_SERVED="+requiredServed, "FAKE_METRICS="+metric("sessions")+"\n"+metric("local_login"))
+	if err != nil || !strings.Contains(out, "AUTH CORPUS EXTERNAL (acp) PASSED") {
+		t.Fatalf("want a pass, got err=%v:\n%s", err, out)
+	}
+	if calls := fake.calls(t); strings.Contains(calls, "SEEDED") || strings.Contains(calls, "FLIPPED") {
+		t.Errorf("an unowned leg must not hand off:\n%s", calls)
+	}
+}
+
+// The test fails the leg when it ends before it seeds.
+func TestAuthCorpusAcpOwnedLegFailsWhenTheTestEndsBeforeSeeding(t *testing.T) {
+	_, out, err := runAcpOwnedLeg(t, "FAKE_SERVED="+requiredServed, "FAKE_SERVED_OWNED="+requiredServed+","+credentialsRoutes,
+		"FAKE_METRICS="+metric("sessions")+"\n"+metric("local_login")+"\n"+metric("credentials"), "FAKE_GO_TEST_EXITS=1")
+	if err == nil || !strings.Contains(out, "the corpus test ended before it seeded") {
+		t.Fatalf("want a failure naming the early end, got err=%v:\n%s", err, out)
+	}
+}
+
+// auth-service sends its mail to the corpus's sink through its own network's gateway, with the mail env of go-api.
+func TestAuthCorpusAcpOverrideGivesAuthServiceTheMailEnvToTheSink(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join(authProofRoot(t), "ci", "auth_corpus_external.acp.override.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Networks map[string]struct {
+			IPAM struct {
+				Config []struct{ Subnet, Gateway string }
+			}
+		}
+		Services map[string]struct{ Environment []string }
+	}
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+	gateway := ""
+	if cfg := doc.Networks["auth_plane"].IPAM.Config; len(cfg) == 1 {
+		gateway = cfg[0].Gateway
+	}
+	env := map[string]bool{}
+	for _, entry := range doc.Services["auth-service"].Environment {
+		env[entry] = true
+	}
+	for _, want := range []string{"EMAIL_PROVIDER=smtp", "EMAIL_FROM_ADDRESS", "SMTP_HOST=" + gateway, "SMTP_PORT=2525", "APP_BASE_URL=https://app.example.test/"} {
+		if gateway == "" || !env[want] {
+			t.Errorf("auth-service environment lacks %q (auth_plane gateway %q): %v", want, gateway, doc.Services["auth-service"].Environment)
+		}
 	}
 }

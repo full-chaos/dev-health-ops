@@ -122,7 +122,8 @@ func (s *Store) SetPasswordHash(ctx context.Context, principal uuid.UUID, hash s
 // same transaction after the password is written: an error from end rolls the
 // password back with everything else.
 func (s *Store) SetPasswordHashWith(ctx context.Context, principal uuid.UUID, hash string, actor Actor, end func(context.Context, audit.TxOps) error) error {
-	return s.SetPasswordHashFor(ctx, principal, hash, actor, PasswordChanged, end)
+	_, err := s.SetPasswordHashFor(ctx, principal, hash, actor, PasswordChanged, end)
+	return err
 }
 
 // ErrLinkUnusable is what an end callback returns when the one-time link it
@@ -142,14 +143,14 @@ var (
 )
 
 // SetPasswordHashFor is SetPasswordHashWith with the audit event type and
-// reason of cause.
-func (s *Store) SetPasswordHashFor(ctx context.Context, principal uuid.UUID, hash string, actor Actor, cause PasswordCause, end func(context.Context, audit.TxOps) error) (err error) {
+// reason of cause. It returns the new public.users.token_version.
+func (s *Store) SetPasswordHashFor(ctx context.Context, principal uuid.UUID, hash string, actor Actor, cause PasswordCause, end func(context.Context, audit.TxOps) error) (version int64, err error) {
 	defer func() { s.countLink(ctx, "set_password", err) }()
 	if !s.ownsUsers {
-		return ErrSignupNotAvailable
+		return 0, ErrSignupNotAvailable
 	}
 	if !validBcrypt(hash) {
-		return ErrInvalidPasswordHash
+		return 0, ErrInvalidPasswordHash
 	}
 	subject := principal.String()
 	err = audit.Commit(ctx, s.pool, s.schema, audit.Mutation{
@@ -163,7 +164,8 @@ SET password_hash = $2, password_algorithm = $3, password_updated_at = clock_tim
 WHERE principal_id = $1`, principal, hash, passwordAlgorithm); err != nil {
 				return err
 			}
-			if err := updatePublicPassword(ctx, tx, principal, hash); err != nil {
+			var err error
+			if version, err = updatePublicPassword(ctx, tx, principal, hash); err != nil {
 				return err
 			}
 			if end != nil {
@@ -174,7 +176,7 @@ WHERE principal_id = $1`, principal, hash, passwordAlgorithm); err != nil {
 		Audit:  localAudit(cause.eventType, cause.reason, subject, actor),
 		Events: []audit.OutboxEvent{userEvent(subject, "user.credentials_changed")},
 	})
-	return s.localErr(ctx, "set password hash", err)
+	return version, s.localErr(ctx, "set password hash", err)
 }
 
 func (s *Store) lockUser(ctx context.Context, tx audit.TxOps, principal uuid.UUID) error {

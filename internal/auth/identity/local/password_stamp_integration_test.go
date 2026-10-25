@@ -16,6 +16,8 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
@@ -31,6 +33,7 @@ func cheapHash(password string) (string, error) {
 }
 
 type endRig struct {
+	reader   *sdkmetric.ManualReader
 	env      *pgEnv
 	links    *PGLinks
 	sessions *session.Store
@@ -49,12 +52,14 @@ func newEndRig(t *testing.T, ctx context.Context) *endRig {
 	if err != nil {
 		t.Fatal(err)
 	}
+	reader := sdkmetric.NewManualReader()
 	sessions, err := session.New(session.Config{Pool: env.runtime, Schema: schema,
+		Meter:        sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)).Meter("test"),
 		SuccessorKey: contracts.NewSecretString("AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8")})
 	if err != nil {
 		t.Fatal(err)
 	}
-	rig := &endRig{env: env, links: links, sessions: sessions, accounts: IdentityAccounts{Store: store, Sessions: sessions, Links: links}}
+	rig := &endRig{reader: reader, env: env, links: links, sessions: sessions, accounts: IdentityAccounts{Store: store, Sessions: sessions, Links: links}}
 	rig.flows, err = NewFlows(FlowsConfig{Accounts: rig.accounts, Links: links, Sessions: sessions, Mail: &liveMail{},
 		Locker: links, UsersOwnedByAuth: true, Hash: cheapHash})
 	if err != nil {
@@ -94,6 +99,26 @@ func (r *endRig) goAPIRows(t *testing.T, ctx context.Context, id uuid.UUID) {
 		VALUES (gen_random_uuid(), $1, NULL, $2, gen_random_uuid(), now() + interval '1 day', now())`, id, hex.EncodeToString(digest[:])); err != nil {
 		t.Fatalf("seed go-api refresh token: %v", err)
 	}
+}
+
+// revocations is the sum of auth.session.revocations so far.
+func (r *endRig) revocations(t *testing.T, ctx context.Context) int64 {
+	t.Helper()
+	var rm metricdata.ResourceMetrics
+	if err := r.reader.Collect(ctx, &rm); err != nil {
+		t.Fatal(err)
+	}
+	var sum int64
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			if data, ok := m.Data.(metricdata.Sum[int64]); ok && m.Name == "auth.session.revocations" {
+				for _, p := range data.DataPoints {
+					sum += p.Value
+				}
+			}
+		}
+	}
+	return sum
 }
 
 func (r *endRig) live(t *testing.T, ctx context.Context, issued session.Issued) bool {
@@ -139,9 +164,13 @@ func TestResetEndsEveryCredentialClass(t *testing.T) {
 	if err := rig.links.Issue(ctx, IssueRequest{PrincipalID: id, Purpose: PurposePasswordReset, TokenHash: linkHash("reset-secret"), TTL: ResetTTL}); err != nil {
 		t.Fatal(err)
 	}
+	before := rig.revocations(t, ctx)
 	out, err := rig.flows.Reset(ctx, "reset-secret", "A-new-pass-77")
 	if err != nil || out.Kind != FlowOK {
 		t.Fatalf("Reset = %+v, %v", out, err)
+	}
+	if got := rig.revocations(t, ctx); got != before+1 {
+		t.Errorf("auth.session.revocations = %d after the reset, want %d", got, before+1)
 	}
 	if rig.live(t, ctx, old) {
 		t.Error("the pre-reset session is live")
@@ -182,9 +211,13 @@ func TestChangeEndsEveryCredentialClassAndKeepsTheCallersNewSession(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
+	before := rig.revocations(t, ctx)
 	out, err := rig.flows.Change(ctx, ChangeRequest{PrincipalID: id, Current: "Old-pass-12345", New: "Brand-new-pass-42"})
 	if err != nil || out.Kind != FlowOK || out.Issued == nil {
 		t.Fatalf("Change = %+v, %v", out, err)
+	}
+	if got := rig.revocations(t, ctx); got != before+1 {
+		t.Errorf("auth.session.revocations = %d after the change, want %d", got, before+1)
 	}
 	if rig.live(t, ctx, older) {
 		t.Error("the older device's session is live after the change")
@@ -216,6 +249,7 @@ func TestAFailedStepRollsTheWholePasswordChangeBack(t *testing.T) {
 				t.Fatal(err)
 			}
 			before := rig.passwordHash(t, ctx, id)
+			revBefore := rig.revocations(t, ctx)
 			var role string
 			if err := rig.env.runtime.QueryRow(ctx, `SELECT current_user`).Scan(&role); err != nil {
 				t.Fatal(err)
@@ -234,6 +268,9 @@ func TestAFailedStepRollsTheWholePasswordChangeBack(t *testing.T) {
 			}
 			if got := rig.passwordHash(t, ctx, id); got != before {
 				t.Error("the password changed although the transaction failed")
+			}
+			if got := rig.revocations(t, ctx); got != revBefore {
+				t.Errorf("auth.session.revocations moved %d -> %d although the transaction failed", revBefore, got)
 			}
 			if !rig.live(t, ctx, old) {
 				t.Error("the session was revoked although the transaction failed")

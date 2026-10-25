@@ -24,11 +24,15 @@ type recordingStore struct {
 }
 
 type recordingEnder struct {
-	consumed, created int
+	consumed, created, recorded int
+}
+
+func (r *recordingEnder) RecordEnded(_ context.Context, ended session.Ended) {
+	r.recorded += ended.Sessions
 }
 
 func (r *recordingEnder) EndAllInTx(context.Context, audit.TxOps, uuid.UUID) (session.Ended, error) {
-	return session.Ended{}, nil
+	return session.Ended{Sessions: 2}, nil
 }
 
 func (r *recordingEnder) CreateInTx(context.Context, audit.TxOps, uuid.UUID, *uuid.UUID, []string) (session.Issued, error) {
@@ -65,17 +69,19 @@ func (s *recordingStore) SetEmailVerified(_ context.Context, _ uuid.UUID, at tim
 	s.actors = append(s.actors, a)
 	return nil
 }
-func (s *recordingStore) SetPasswordHashFor(ctx context.Context, _ uuid.UUID, _ string, a identity.Actor, cause identity.PasswordCause, end func(context.Context, audit.TxOps) error) error {
+func (s *recordingStore) SetPasswordHashFor(ctx context.Context, _ uuid.UUID, _ string, a identity.Actor, cause identity.PasswordCause, end func(context.Context, audit.TxOps) error) (int64, error) {
 	s.actors = append(s.actors, a)
 	s.ended = end != nil
 	s.cause = cause
-	if s.endErr != nil {
-		return s.endErr
-	}
 	if end != nil {
-		return end(ctx, audit.TxOps{})
+		if err := end(ctx, audit.TxOps{}); err != nil {
+			return 0, err
+		}
 	}
-	return nil
+	if s.endErr != nil {
+		return 0, s.endErr
+	}
+	return 7, nil
 }
 
 func TestIdentityAccountsPassesTheHashNotThePasswordAndOneRequestID(t *testing.T) {
@@ -103,9 +109,15 @@ func TestIdentityAccountsPassesTheHashNotThePasswordAndOneRequestID(t *testing.T
 	if err != nil || store.cause != identity.PasswordReset || ender.consumed != 1 || ender.created != 1 || res.Issued == nil {
 		t.Fatalf("reset write: err %v, cause %v, consumed %d, created %d, issued %v", err, store.cause, ender.consumed, ender.created, res.Issued)
 	}
+	if ender.recorded != 4 {
+		t.Fatalf("revocations recorded = %d after two committed writes of 2 sessions, want 4", ender.recorded)
+	}
 	store.endErr = identity.ErrLinkUnusable
 	if _, err := acc.SetPasswordEndingSessions(ctx, PasswordEnd{ID: uuid.New(), Hash: "$2b$12$h", ResetLink: &link}); !errors.Is(err, ErrResetLinkUnusable) {
 		t.Fatalf("an unusable link = %v, want ErrResetLinkUnusable", err)
+	}
+	if ender.recorded != 4 {
+		t.Fatalf("revocations recorded = %d after a failed write, want unchanged 4", ender.recorded)
 	}
 	store.endErr = nil
 	for i, a := range store.actors {

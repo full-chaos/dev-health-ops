@@ -5,6 +5,8 @@ import (
 	"fmt"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
@@ -79,6 +81,15 @@ func (s *Store) EndAllInTx(ctx context.Context, tx audit.TxOps, principalID uuid
 		return Ended{}, fmt.Errorf("%w: revoking the go-api refresh tokens: %w", ErrStore, err)
 	}
 	return Ended{Sessions: revoked, RefreshTokens: tag.RowsAffected()}, nil
+}
+
+// RecordEnded counts the sessions an EndAllInTx revoked in
+// auth.session.revocations. The caller calls it only after the transaction
+// committed, so a rolled-back write counts nothing.
+func (s *Store) RecordEnded(ctx context.Context, ended Ended) {
+	if ended.Sessions > 0 {
+		s.revocations.Add(ctx, int64(ended.Sessions), metric.WithAttributes(attribute.String("reason", revokedByCaller)))
+	}
 }
 
 // CreateInTx is Create inside the caller's transaction: the session and its

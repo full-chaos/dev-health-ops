@@ -20,7 +20,7 @@ type IdentityStore interface {
 	ByID(ctx context.Context, id uuid.UUID) (*identity.Principal, error)
 	ProvisionLocal(ctx context.Context, req identity.LocalProvisionRequest) (uuid.UUID, error)
 	SetEmailVerified(ctx context.Context, principal uuid.UUID, at time.Time, actor identity.Actor) error
-	SetPasswordHashFor(ctx context.Context, principal uuid.UUID, hash string, actor identity.Actor, cause identity.PasswordCause, end func(context.Context, audit.TxOps) error) error
+	SetPasswordHashFor(ctx context.Context, principal uuid.UUID, hash string, actor identity.Actor, cause identity.PasswordCause, end func(context.Context, audit.TxOps) error) (int64, error)
 }
 
 // SessionEnder ends every credential class of a principal and creates a
@@ -28,6 +28,7 @@ type IdentityStore interface {
 type SessionEnder interface {
 	EndAllInTx(ctx context.Context, tx audit.TxOps, principalID uuid.UUID) (session.Ended, error)
 	CreateInTx(ctx context.Context, tx audit.TxOps, principalID uuid.UUID, organizationID *uuid.UUID, amr []string) (session.Issued, error)
+	RecordEnded(ctx context.Context, ended session.Ended)
 }
 
 // ResetLinks is the reset-link store as the password transaction uses it
@@ -133,15 +134,16 @@ func (a IdentityAccounts) SetPasswordEndingSessions(ctx context.Context, req Pas
 	if req.ResetLink != nil {
 		cause = identity.PasswordReset
 	}
-	err := a.Store.SetPasswordHashFor(ctx, req.ID, req.Hash, a.actor(ctx), cause, endFunc)
+	version, err := a.Store.SetPasswordHashFor(ctx, req.ID, req.Hash, a.actor(ctx), cause, endFunc)
 	switch {
 	case errors.Is(err, identity.ErrLinkUnusable):
 		return PasswordEndResult{}, ErrResetLinkUnusable
 	case err != nil:
 		return PasswordEndResult{}, err
 	}
+	a.Sessions.RecordEnded(ctx, ended)
 	slog.InfoContext(ctx, "password changed; credentials ended", "principal_id", req.ID.String(),
-		"sessions", ended.Sessions, "refresh_tokens", ended.RefreshTokens, "reset_links", links)
+		"sessions", ended.Sessions, "refresh_tokens", ended.RefreshTokens, "reset_links", links, "token_version", version)
 	return result, nil
 }
 

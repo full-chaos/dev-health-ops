@@ -327,7 +327,7 @@ func (r *endRig) accepts(t *testing.T, ctx context.Context, id uuid.UUID, tv int
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = auth.CheckClaims(ctx, jwt.MapClaims{"sub": id.String(), "type": "access", "tv": tv})
+	_, err = auth.CheckClaims(ctx, jwt.MapClaims{"sub": id.String(), "type": "access", "tv": float64(tv)})
 	return err == nil
 }
 

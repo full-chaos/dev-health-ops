@@ -97,6 +97,8 @@ const (
 
 	// EnvUsersOwned is the D3c users-owned switch (true or false, default false).
 	EnvUsersOwned = "AUTH_USERS_OWNED"
+	// EnvOrgsOwned is the organizations-owned switch (true or false, default false).
+	EnvOrgsOwned = "AUTH_ORGS_OWNED"
 	// EnvSocialLinkRoutes ("true" or "false", default false) mounts the
 	// bearer-only social link and unlink routes; it needs the session secrets.
 	EnvSocialLinkRoutes = "AUTH_SOCIAL_LINK_ROUTES"
@@ -212,6 +214,10 @@ type Config struct {
 	// UsersOwned is AUTH_USERS_OWNED: auth-service owns user creation and the
 	// local credential links.
 	UsersOwned bool
+
+	// OrgsOwned is AUTH_ORGS_OWNED: auth-service is the only writer of
+	// auth.organizations; the legacy login projection writes nothing.
+	OrgsOwned bool
 
 	// SSO holds the federated sign-in settings; a protocol without all of its
 	// values mounts no route.
@@ -437,6 +443,9 @@ func Load(spec Spec) (Config, error) {
 		return Config{}, err
 	}
 	if cfg.UsersOwned, err = usersOwned(lookup); err != nil {
+		return Config{}, err
+	}
+	if cfg.OrgsOwned, err = orgsOwned(lookup); err != nil {
 		return Config{}, err
 	}
 	if cfg.SSO, err = ssoSettings(lookup); err != nil {
@@ -866,12 +875,17 @@ func tokenIssuerURL(lookup secrets.LookupEnv) (string, error) {
 
 // usersOwned reads AUTH_USERS_OWNED: unset or empty is false; anything but
 // true or false is refused.
-func usersOwned(lookup secrets.LookupEnv) (bool, error) {
-	switch strings.ToLower(strings.TrimSpace(valueOf(lookup, EnvUsersOwned))) {
+func usersOwned(lookup secrets.LookupEnv) (bool, error) { return ownedSwitch(lookup, EnvUsersOwned) }
+
+// orgsOwned reads AUTH_ORGS_OWNED with the same rule as AUTH_USERS_OWNED.
+func orgsOwned(lookup secrets.LookupEnv) (bool, error) { return ownedSwitch(lookup, EnvOrgsOwned) }
+
+func ownedSwitch(lookup secrets.LookupEnv, name string) (bool, error) {
+	switch strings.ToLower(strings.TrimSpace(valueOf(lookup, name))) {
 	case "", "false":
 		return false, nil
 	case "true":
 		return true, nil
 	}
-	return false, fmt.Errorf("%s must be true or false", EnvUsersOwned)
+	return false, fmt.Errorf("%s must be true or false", name)
 }

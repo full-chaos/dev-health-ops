@@ -3,6 +3,7 @@ package identity
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -54,6 +55,19 @@ func (s *Store) ProjectOrganization(ctx context.Context, orgID uuid.UUID) (err e
 		}
 		s.projections.Add(ctx, 1, metric.WithAttributes(attribute.String("kind", "organization"), attribute.String("outcome", outcome)))
 	}()
+	if s.ownsOrgs {
+		outcome = ownedOutcome
+		var exists bool
+		err = s.pool.QueryRow(ctx, fmt.Sprintf(ownedOrgExistsSQL, s.q), orgID).Scan(&exists)
+		if errors.Is(err, pgx.ErrNoRows) {
+			outcome = "not_found"
+			return ErrOrganizationNotFound
+		}
+		if err != nil {
+			return s.storeErr(ctx, "read auth.organizations", err)
+		}
+		return nil
+	}
 	var src orgState
 	err = s.pool.QueryRow(ctx, `SELECT slug, name, is_active FROM public.organizations WHERE id = $1`, orgID).
 		Scan(&src.slug, &src.name, &src.active)
@@ -194,3 +208,9 @@ func organizationAudit(eventType, reason, org string) audit.AuditEvent {
 		Attributes: map[string]any{"reason_code": reason, "target_kind": "organization", "target_id": org},
 	}
 }
+
+// ownedOrgExistsSQL is the whole organizations-owned projection: auth.organizations is the authority,
+// so it only proves the row is there.
+const ownedOrgExistsSQL = `SELECT true FROM %s.organizations WHERE id = $1`
+
+const ownedOutcome = "owned"

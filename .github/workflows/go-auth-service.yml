@@ -186,12 +186,15 @@ jobs:
           TARGETS: ${{ matrix.targets }}
         run: |
           set -euo pipefail
-          # Every target runs and prints its own proof line; one red target fails the job at the end, it does not hide the rest.
-          failed=0
+          # Every target runs and prints its own proof line; each red target is named at the end and fails the job.
+          red=""
           for target in ${TARGETS}; do
-            bash ci/check_go.sh auth fuzz "${target}" || failed=1
+            bash ci/check_go.sh auth fuzz "${target}" || red="${red} ${target}"
           done
-          exit "${failed}"
+          if [ -n "${red}" ]; then
+            echo "auth-fuzz: red target(s):${red}" >&2
+            exit 1
+          fi
 
   auth-gate:
     if: always()

@@ -1,0 +1,35 @@
+# Packages the -race legs of ci/check_go.sh do not run (CHAOS-11413). The test legs still run each one once, without -race.
+# Row: package<TAB>class<TAB>witness<TAB>reason. Key = path relative to the module root. Sorted (LC_ALL=C), no duplicates.
+#   class none: no go statement, channel, select, sync, atomic, errgroup, os/exec, net, database/sql, signal, timer goroutine or
+#     t.Parallel in the package's own files, and none in any in-module package it links; witness is -. Proven by
+#     internal/cigates/racescope, which fails when a listed package (or anything it imports from this module) gains one.
+#   class covered-by:<package>: the same proof, except that <package> (itself still in -race, never listed here) may hold the
+#     concurrency, and witness names a Test function of <package> that drives it and is not compiled out of -race.
+# A package leaves this file as soon as it needs a -race run. internal/providersync and internal/cigates/testshard stay in -race.
+cmd/strip-agent-attribution	none	-	synchronous code only: no concurrency in its files or its in-module imports
+internal/auth/emaildomain	none	-	synchronous code only: no concurrency in its files or its in-module imports
+internal/auth/writerinventory	none	-	synchronous code only: no concurrency in its files or its in-module imports
+internal/cigates/chconstructor	none	-	synchronous code only: no concurrency in its files or its in-module imports
+internal/clicredentials	none	-	synchronous code only: no concurrency in its files or its in-module imports
+internal/jobs/metrics/checkedcast	none	-	synchronous code only: no concurrency in its files or its in-module imports
+internal/jobs/metrics/complexity/lizardcc	none	-	synchronous code only: no concurrency in its files or its in-module imports
+internal/jobs/metrics/complexity/pycc	none	-	synchronous code only: no concurrency in its files or its in-module imports
+internal/jobs/metrics/deploymentstatus	none	-	synchronous code only: no concurrency in its files or its in-module imports
+internal/jobs/metrics/prrework	none	-	synchronous code only: no concurrency in its files or its in-module imports
+internal/jobs/metrics/querybound	none	-	synchronous code only: no concurrency in its files or its in-module imports
+internal/netclass	none	-	synchronous code only: no concurrency in its files or its in-module imports
+internal/platform/dsnclass	none	-	synchronous code only: no concurrency in its files or its in-module imports
+internal/platform/errortext	none	-	synchronous code only: no concurrency in its files or its in-module imports
+internal/platform/pgident	none	-	synchronous code only: no concurrency in its files or its in-module imports
+internal/pyargparse	none	-	synchronous code only: no concurrency in its files or its in-module imports
+internal/pythonparity/scopeparity	none	-	synchronous code only: no concurrency in its files or its in-module imports
+internal/queryapi/activeteams	none	-	synchronous code only: no concurrency in its files or its in-module imports
+internal/queryapi/chpairliteral	none	-	synchronous code only: no concurrency in its files or its in-module imports
+internal/queryapi/deltarule	none	-	synchronous code only: no concurrency in its files or its in-module imports
+internal/queryapi/graphqldate	none	-	synchronous code only: no concurrency in its files or its in-module imports
+internal/queryapi/graphqljson	none	-	synchronous code only: no concurrency in its files or its in-module imports
+internal/queryapi/meta	none	-	synchronous code only: no concurrency in its files or its in-module imports
+internal/teamid	none	-	synchronous code only: no concurrency in its files or its in-module imports
+internal/testsupport/goldenscan/treegate	covered-by:internal/testsupport/goldenscan	TestCheckTreeReadsGoldensConcurrently	one regexp scan of the tree; its only concurrency is the goldenscan.CheckTree worker pool, which goldenscan race-tests with 2+ workers and 20 paths (cost_test.go)
+internal/testsupport/recordedpaths	none	-	synchronous code only: no concurrency in its files or its in-module imports
+internal/testsupport/sqlshape	none	-	synchronous code only: no concurrency in its files or its in-module imports

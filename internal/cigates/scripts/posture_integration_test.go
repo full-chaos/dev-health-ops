@@ -259,12 +259,11 @@ func TestPostureIntegrationRunRefusesADirtyTree(t *testing.T) {
 	}
 	sha := git("rev-parse", "HEAD")
 	res = cmdSpec{dir: repo, env: []string{"PATH=" + filepath.Dir(goBinary(t)) + string(os.PathListSeparator) + "/usr/bin:/bin"}}.run("bash", script, "--run", "--test-runner", stub)
-	// A simulated run is a test aid: every line starts SIMULATED, no line contains RECEIPT, and the exit is non-zero.
-	if res.code == 0 || !strings.Contains(res.stdout, "SIMULATED-HEAD "+sha+" clean=yes") ||
-		!strings.Contains(res.stdout, "SIMULATED-SUMMARY "+sha+" pass=0 fail=14") || strings.Count(res.stdout, "SIMULATED internal/") != 14 ||
-		strings.Contains(res.stdout, "RECEIPT") {
-		t.Fatalf("clean tree with a simulated runner: exit %d stdout=%q stderr=%q", res.code, res.stdout, res.stderr)
+	// The script that runs must be the one committed at HEAD: this repo does not carry it, so the run is refused.
+	if res.code != 3 || !strings.Contains(res.stderr, "not the one committed at HEAD") || strings.Contains(res.stdout, "RECEIPT") || strings.Contains(res.stdout, "SIMULATED-HEAD") {
+		t.Fatalf("a script that is not committed at HEAD: exit %d stdout=%q stderr=%q, want 3 and a refusal", res.code, res.stdout, res.stderr)
 	}
+	_ = sha
 }
 
 // The runner is not replaceable by the environment: POSTURE_CAPPED_SH=/bin/true must not yield a PASS receipt.
@@ -282,7 +281,7 @@ func TestPostureIntegrationRunIgnoresARunnerOverrideInTheEnvironment(t *testing.
 	git("add", ".")
 	git("commit", "-q", "-m", "change")
 	res := cmdSpec{dir: repo, env: []string{shimBasePath(), "POSTURE_CAPPED_SH=/bin/true"}}.run("bash", filepath.Join(repoRoot(t), "ci", "posture_integration.sh"), "--run")
-	missing := res.code == 3 && (strings.Contains(res.stderr, "runner not found") || strings.Contains(res.stderr, "go not found"))
+	missing := res.code == 3 && (strings.Contains(res.stderr, "runner not found") || strings.Contains(res.stderr, "go not found") || strings.Contains(res.stderr, "not the one committed at HEAD"))
 	named := strings.Contains(res.stdout, "runner=/home/ubuntu/devhealth/scripts/capped.sh sha256=")
 	if res.code == 0 || strings.Contains(res.stdout, " PASS ") || strings.Contains(res.stdout, "pass=14") || !(missing || named) {
 		t.Fatalf("env runner override: exit %d stdout=%q stderr=%q, want non-zero, no PASS, and either the missing-runner exit 3 or the real capped.sh named with its sha256", res.code, res.stdout, res.stderr)
@@ -341,13 +340,7 @@ func TestPostureIntegrationRunFailsClosedWhenGitStatusFails(t *testing.T) {
 	}
 	git("add", ".")
 	git("commit", "-q", "-m", "change")
-	realGit, err := exec.LookPath("git")
-	if err != nil {
-		t.Fatal(err)
-	}
-	shim := t.TempDir()
-	body := "#!/bin/sh\nif [ \"$1\" = status ]; then exit 1; fi\nexec " + realGit + " \"$@\"\n"
-	if err := os.WriteFile(filepath.Join(shim, "git"), []byte(body), 0o700); err != nil {
+	if err := os.WriteFile(filepath.Join(repo, ".git", "index"), []byte("not an index"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	calls := filepath.Join(t.TempDir(), "calls")
@@ -355,8 +348,7 @@ func TestPostureIntegrationRunFailsClosedWhenGitStatusFails(t *testing.T) {
 	if err := os.WriteFile(stub, []byte("#!/bin/sh\necho x >> "+calls+"\nexit 0\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	env := []string{"PATH=" + shim + ":" + withShims("/usr/bin:/bin:/usr/local/bin")}
-	res := cmdSpec{dir: repo, env: env}.run("bash", filepath.Join(repoRoot(t), "ci", "posture_integration.sh"), "--run", "--test-runner", stub)
+	res := cmdSpec{dir: repo, env: []string{"PATH=" + filepath.Dir(goBinary(t)) + string(os.PathListSeparator) + "/usr/bin:/bin"}}.run("bash", filepath.Join(repoRoot(t), "ci", "posture_integration.sh"), "--run", "--test-runner", stub)
 	if res.code == 0 || strings.Contains(res.stdout, "clean=yes") || strings.Contains(res.stdout, "RECEIPT ") {
 		t.Fatalf("failed git status: exit %d stdout=%q, want non-zero, no clean=yes, no receipt", res.code, res.stdout)
 	}

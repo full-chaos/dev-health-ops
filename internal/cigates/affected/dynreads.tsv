@@ -9,6 +9,7 @@ cmd/dho	compose_dsn_class_test.go
 cmd/dho	service_migrate_guard_test.go
 cmd/gqlgen-guard	main.go
 cmd/gqlgen-guard	main_test.go
+cmd/loadtest	main.go
 cmd/registrydump	main.go
 cmd/strip-agent-attribution	main.go
 cmd/strip-agent-attribution	main_test.go
@@ -29,6 +30,7 @@ internal/apiservice/billingvenue	billing_webhook_venue_oracle_integration_test.g
 internal/atlassianteams	absence_test.go
 internal/atlassianteams	vendored_documents_test.go
 internal/atlassianteams	vendored_patch_chain_test.go
+internal/audit	drill_pitr_integration_test.go
 internal/auth/authapi	issuer_eddsa_test.go
 internal/auth/authconfig	config_test.go
 internal/auth/authruntime	audit_request_id_scan_test.go
@@ -90,6 +92,7 @@ internal/auth/keystore	open_unix.go
 internal/auth/ratelimitvalkey	acl_test.go
 internal/auth/session	credential_test.go
 internal/auth/writerinventory	scan_test.go
+internal/auth/writerinventory	usersowned_census_shapes_test.go
 internal/auth/writerinventory	usersowned_census_test.go
 internal/bigboycompose	billing_edge_override_test.go
 internal/bigboycompose	dsn_class_test.go
@@ -215,6 +218,7 @@ internal/cigates/routing	deps.go
 internal/cigates/routing	parity_test.go
 internal/cigates/routing	planes_test.go
 internal/cigates/routing	tools_test.go
+internal/cigates/scripts	auth_queue_relevance_test.go
 internal/cigates/scripts	chmigrate_history_frozen_test.go
 internal/cigates/scripts	ci_script_helpers_test.go
 internal/cigates/scripts	e2e_fixture_lib_test.go

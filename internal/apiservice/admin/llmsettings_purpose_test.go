@@ -253,6 +253,41 @@ VALUES ($1, 'llmpurpose-admin@example.com', true, true, false, 0, now(), now())`
 		}
 	})
 
+	t.Run("clef is savable only as the categorize override of an opted-in org", func(t *testing.T) {
+		const clefBase = "https://api.cloudflare.com/client/v4/accounts/0123456789abcdef0123456789abcdef/ai"
+		const clefToken = "placeholder-clef-token-0123456789"
+		body := func(extra string) string {
+			return fmt.Sprintf(`{"provider":"clef","model":"clef","api_key":%q,"base_url":%q%s}`, clefToken, clefBase, extra)
+		}
+		for _, c := range []struct{ name, payload string }{
+			{"default row", body("")},
+			{"explain override", strings.Replace(body(""), `{"provider"`, `{"purpose":"explain","provider"`, 1)},
+			{"categorize without the opt-in", strings.Replace(body(""), `{"provider"`, `{"purpose":"categorize","provider"`, 1)},
+		} {
+			status, resp := call("PUT", route, c.payload)
+			detail, _ := resp["detail"].(map[string]any)
+			if status != 400 || detail["error"] == nil {
+				t.Fatalf("%s: status=%d body=%v, want a 400", c.name, status, resp)
+			}
+		}
+		if keys()["purpose:categorize:provider"] {
+			t.Fatal("a refused clef write left rows behind")
+		}
+		if status, resp := call("PUT", route, strings.Replace(body(`,"categorize_byo":true`), `{"provider"`, `{"purpose":"categorize","provider"`, 1)); status != 200 || resp["provider"] != "clef" {
+			t.Fatalf("categorize clef with the opt-in: %d %v", status, resp)
+		}
+		if status, resp := call("PUT", route, strings.Replace(strings.Replace(body(""), `"model":"clef"`, `"model":"clef-pro"`, 1), `{"provider"`, `{"purpose":"categorize","provider"`, 1)); status != 400 {
+			t.Fatalf("an unsupported model: %d %v, want 400", status, resp)
+		}
+		var secret string
+		if err := pool.QueryRow(ctx, `SELECT value FROM settings WHERE org_id = $1 AND category = 'llm' AND key = 'purpose:categorize:api_key'`, org.String()).Scan(&secret); err != nil || strings.Contains(secret, "placeholder-clef-token") {
+			t.Fatalf("the clef token is stored in the clear or missing: %v", err)
+		}
+		if _, err := pool.Exec(ctx, `DELETE FROM settings WHERE org_id = $1 AND category = 'llm' AND (key LIKE 'purpose:categorize:%' OR key = 'categorize_byo_enabled')`, org.String()); err != nil {
+			t.Fatal(err)
+		}
+	})
+
 	t.Run("an unknown purpose is refused", func(t *testing.T) {
 		if status, _ := call("PUT", route, `{"purpose":"summarize","provider":"openai","model":"m"}`); status != 400 {
 			t.Fatalf("PUT status=%d, want 400", status)

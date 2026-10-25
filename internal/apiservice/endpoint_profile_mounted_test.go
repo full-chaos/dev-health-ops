@@ -55,7 +55,7 @@ func mountedRoutes(t *testing.T) []mountedRoute {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = clickHouse.Close() })
-	deps := Deps{Pool: pool, ClickHouse: clickHouse, Auth: auth, Guard: policy.NewGuard(auth, quietLogger()), Verifier: verifier, Signer: signer}
+	deps := Deps{Pool: pool, ClickHouse: clickHouse, Auth: auth, Guard: policy.NewGuard(auth, quietLogger()), Verifier: verifier, Signer: signer, LegacyIngestEnabled: true}
 	var out []mountedRoute
 	for _, route := range Routes(deps, quietLogger()) {
 		out = append(out, mountedRoute{"api", route.Method, route.Pattern, route.Handler})

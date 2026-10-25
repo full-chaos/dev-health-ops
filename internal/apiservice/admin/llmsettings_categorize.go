@@ -159,3 +159,29 @@ func (h *handlers) categorizeOptInStep(r *http.Request, orgID string, enabled *b
 		return h.writeCategorizeOptIn(ctx, tx, r, orgID, value)
 	}
 }
+
+// clefRefusal is the PUT rule of the clef provider. clef is a SystemOne decision
+// model: it writes no text, so only the categorize override may name it, never
+// the default row or the investigate and explain overrides (which would read it
+// as a text provider). For the categorize override the model must be one clef
+// serves and the base_url the org's exact Cloudflare account URL.
+func clefRefusal(provider string, purpose llmorgsettings.Purpose, hasPurpose bool, model string, baseURL *string) *llmRefusal {
+	if llmorgsettings.NormalizeProvider(provider) != llmorgsettings.ProviderClef {
+		return nil
+	}
+	if !hasPurpose || purpose != llmorgsettings.PurposeCategorize {
+		return newLLMRefusal(http.StatusBadRequest, "error", "provider_not_for_purpose", "feature", byoLLMFeature,
+			"message", "this provider serves the categorize purpose only")
+	}
+	if _, ok := llmorgsettings.ClefModelSegment(model); !ok {
+		return newLLMRefusal(http.StatusBadRequest, "error", llmorgsettings.CodeCategorizeBYOModelUnsupported, "feature", byoLLMFeature,
+			"message", "model must be clef or clef-flash")
+	}
+	if baseURL == nil {
+		return newLLMRefusal(http.StatusBadRequest, "error", "invalid_base_url", "feature", byoLLMFeature, "message", "Invalid LLM base_url")
+	}
+	if _, ok := llmorgsettings.ParseClefBaseURL(*baseURL); !ok {
+		return newLLMRefusal(http.StatusBadRequest, "error", "invalid_base_url", "feature", byoLLMFeature, "message", "Invalid LLM base_url")
+	}
+	return nil
+}

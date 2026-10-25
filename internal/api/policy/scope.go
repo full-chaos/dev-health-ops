@@ -82,8 +82,10 @@ func ImpersonationDecided(ctx context.Context) bool {
 // on the api listener, public routes and unknown paths included, exactly as
 // the Python middlewares do.
 type Scope struct {
-	auth   *Authenticator
-	logger *slog.Logger
+	auth         *Authenticator
+	logger       *slog.Logger
+	rows         func(profile string) (BearerRow, bool)
+	authenticate func(ctx context.Context, token string) (*User, error)
 }
 
 // NewScope builds the middlewares over auth.
@@ -109,7 +111,7 @@ func (s *Scope) headerAuthenticate(r *http.Request) (*User, error) {
 	if !ok {
 		return nil, nil
 	}
-	user, err := s.auth.Authenticate(r.Context(), token)
+	user, err := s.authenticateToken(r.Context(), token)
 	if err == nil {
 		return user, nil
 	}

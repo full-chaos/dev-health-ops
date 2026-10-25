@@ -10,7 +10,6 @@ import (
 	"io"
 	"net/http"
 	"regexp"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -28,6 +27,22 @@ import (
 // bindingsOrgScopeRuling retired the Python reference of two rotate answers
 // and unified one graph-failure detail (D6129: stricter than Python).
 const bindingsOrgScopeRuling = "D6129: binding lookups are scoped to the caller's organisation; a missing id and an id of another organisation get the same 404, and every graph failure the one 400 detail"
+
+// bindingsGraphFailureRequests are the requests whose Python answer carries the
+// longer graph-failure detail that bindingsOrgScopeRuling unified: their body
+// is compared after NormalizePython, their content-length (63 against 50) is
+// not.
+var bindingsGraphFailureRequests = map[string]bool{
+	"create credential not linked to the integration": true,
+	"create credential inactive":                      true,
+	"create source disabled":                          true,
+	"create integration inactive":                     true,
+	"create integration without a credential":         true,
+	"create source of another provider":               true,
+	"create integration of another provider":          true,
+	"create source of another org":                    true,
+	"rotate: graph failure precedes the lookup":       true,
+}
 
 const pagerDutyBindingsVenueEncryptionKey = "venue-pd-bindings-fernet-key-32-bytes!"
 
@@ -296,7 +311,6 @@ VALUES ($1, $2, $3, $4, $5, 'v1:seed-not-decrypted', 'v1', $6, now(), now(), $7:
 	// timestamp (a malformed one -- "+00:00", a missing "Z" -- stays visible).
 	timestamp := regexp.MustCompile(`\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d{1,6})?Z`)
 	newID := regexp.MustCompile(`"id":"[0-9a-f-]{36}"`)
-	contentLength := regexp.MustCompile(`content-length:\d+`)
 	pin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/pagerduty/bindings.go-pin.json", SHA256: "9919c96e6408b00f033515ce05c55204b123ce5ea131d827b673e3a282626b70", Ruling: bindingsOrgScopeRuling})
 	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{
 		Golden: golden,
@@ -306,18 +320,10 @@ VALUES ($1, $2, $3, $4, $5, 'v1:seed-not-decrypted', 'v1', $6, now(), now(), $7:
 		},
 		Pin: pin,
 		NormalizePython: func(_ venueoracle.Request, text string) string {
-			const pythonDetail, goDetail = "PagerDuty binding graph is not active and same-org", "PagerDuty binding graph was not found"
-			if !strings.Contains(text, pythonDetail) {
-				return text
-			}
-			text = strings.ReplaceAll(text, pythonDetail, goDetail)
-			return contentLength.ReplaceAllStringFunc(text, func(header string) string {
-				n, err := strconv.Atoi(strings.TrimPrefix(header, "content-length:"))
-				if err != nil {
-					return header
-				}
-				return "content-length:" + strconv.Itoa(n-(len(pythonDetail)-len(goDetail)))
-			})
+			return strings.ReplaceAll(text, "PagerDuty binding graph is not active and same-org", "PagerDuty binding graph was not found")
+		},
+		SkipContentLength: func(request venueoracle.Request) bool {
+			return bindingsGraphFailureRequests[request.Name]
 		},
 		Normalize: func(request venueoracle.Request, text string) string {
 			text = timestamp.ReplaceAllString(text, "<ts>")

@@ -125,8 +125,12 @@ func scanFile(path string) []string {
 		}
 	}
 	for _, imp := range f.Imports {
-		if v := strings.Trim(imp.Path.Value, `"`); bannedImports[v] {
+		v := strings.Trim(imp.Path.Value, `"`)
+		if bannedImports[v] {
 			at(imp.Pos(), "imports "+v)
+		}
+		if imp.Name != nil && imp.Name.Name == "." {
+			at(imp.Pos(), "dot import of "+v+" (its calls lose their package qualifier, so the scan cannot see them)")
 		}
 	}
 	ast.Inspect(f, func(n ast.Node) bool {
@@ -299,25 +303,95 @@ func witnessProblems(r Row, covered *goPackage) []string {
 // covered-by row is sound only while the callback writes nothing shared: the race detector would have to see two workers write it.
 var callbackCallees = map[string]int{"CheckTree": 1}
 
-// callbackProblems: every call of a callbackCallees function in the file passes a package-level function, or a function literal
-// that assigns to no variable it did not declare itself (no assignment, op-assignment, ++/--, append, map or field write to a
-// captured variable).
+// callbackStdlib are the only packages a callback may call into: they hold no state the callback's caller shares.
+var callbackStdlib = map[string]bool{"os": true, "filepath": true, "path": true, "strings": true, "bytes": true, "fmt": true, "errors": true, "strconv": true}
+
+// callbackProblems: in the file, a callbackCallees function is only ever called directly (never aliased through a variable or
+// passed on), and its callback is a function literal or a package-level function of the same file that (1) assigns to no variable
+// it did not declare itself (assignment, op-assignment, ++/--, range-assign, index, field or pointer write) and (2) calls only
+// builtins and the callbackStdlib packages, so no helper, method or function value can write a captured variable for it.
 func callbackProblems(path string) []string {
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, path, nil, 0)
 	if err != nil {
 		return nil
 	}
-	top := map[string]bool{}
+	top := map[string]*ast.FuncDecl{}
 	for _, d := range f.Decls {
 		if fn, ok := d.(*ast.FuncDecl); ok && fn.Recv == nil {
-			top[fn.Name.Name] = true
+			top[fn.Name.Name] = fn
 		}
 	}
 	var out []string
 	at := func(p token.Pos, what string) {
 		out = append(out, fmt.Sprintf("%s:%d: %s", filepath.Base(path), fset.Position(p).Line, what))
 	}
+	direct := map[ast.Expr]bool{}
+	ast.Inspect(f, func(n ast.Node) bool {
+		if call, ok := n.(*ast.CallExpr); ok {
+			direct[call.Fun] = true
+		}
+		return true
+	})
+	std := map[string]bool{}
+	for _, imp := range f.Imports {
+		v := strings.Trim(imp.Path.Value, `"`)
+		name := v[strings.LastIndex(v, "/")+1:]
+		if imp.Name != nil {
+			name = imp.Name.Name
+		}
+		if callbackStdlib[v[strings.LastIndex(v, "/")+1:]] && !strings.Contains(v, ".") {
+			std[name] = true
+		}
+	}
+	checkBody := func(callee string, ft *ast.FuncType, body *ast.BlockStmt, pos token.Pos) {
+		for _, w := range capturedWrites(ft, body) {
+			at(w.pos, callee+" callback writes captured variable "+w.name)
+		}
+		ast.Inspect(body, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			switch fn := call.Fun.(type) {
+			case *ast.Ident:
+				if !builtinFuncs[fn.Name] {
+					at(call.Pos(), callee+" callback calls "+fn.Name+", which is neither a builtin nor a standard-library function")
+				}
+			case *ast.SelectorExpr:
+				if pkg, ok := fn.X.(*ast.Ident); !ok || !std[pkg.Name] {
+					at(call.Pos(), callee+" callback calls ."+fn.Sel.Name+", which is not a function of the allowed standard-library packages")
+				}
+			case *ast.ArrayType, *ast.MapType, *ast.InterfaceType:
+			default:
+				at(call.Pos(), callee+" callback calls a function value")
+			}
+			return true
+		})
+	}
+	notUse := map[*ast.Ident]bool{}
+	ast.Inspect(f, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.SelectorExpr:
+			notUse[x.Sel] = true
+		case *ast.FuncDecl:
+			notUse[x.Name] = true
+		}
+		return true
+	})
+	ast.Inspect(f, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.Ident:
+			if _, watched := callbackCallees[x.Name]; watched && !notUse[x] && !direct[x] {
+				at(x.Pos(), x.Name+" is used other than as a direct call")
+			}
+		case *ast.SelectorExpr:
+			if _, watched := callbackCallees[x.Sel.Name]; watched && !direct[x] {
+				at(x.Sel.Pos(), x.Sel.Name+" is used other than as a direct call")
+			}
+		}
+		return true
+	})
 	ast.Inspect(f, func(n ast.Node) bool {
 		call, ok := n.(*ast.CallExpr)
 		if !ok {
@@ -331,17 +405,21 @@ func callbackProblems(path string) []string {
 			name = fn.Sel.Name
 		}
 		idx, watched := callbackCallees[name]
-		if !watched || len(call.Args) <= idx {
+		if !watched {
+			return true
+		}
+		if len(call.Args) <= idx {
+			at(call.Pos(), name+" is called without its callback argument")
 			return true
 		}
 		switch cb := call.Args[idx].(type) {
 		case *ast.FuncLit:
-			for _, w := range capturedWrites(cb) {
-				at(w.pos, name+" callback writes captured variable "+w.name)
-			}
+			checkBody(name, cb.Type, cb.Body, cb.Pos())
 		case *ast.Ident:
-			if !top[cb.Name] {
-				at(cb.Pos(), name+" callback "+cb.Name+" is not a package-level function")
+			if fn := top[cb.Name]; fn != nil && fn.Body != nil {
+				checkBody(name, fn.Type, fn.Body, cb.Pos())
+			} else {
+				at(cb.Pos(), name+" callback "+cb.Name+" is not a package-level function of this file")
 			}
 		default:
 			at(call.Args[idx].Pos(), name+" callback is neither a package-level function nor a function literal")
@@ -351,13 +429,15 @@ func callbackProblems(path string) []string {
 	return out
 }
 
+var builtinFuncs = map[string]bool{"len": true, "cap": true, "append": true, "make": true, "new": true, "string": true, "int": true, "byte": true, "rune": true, "min": true, "max": true, "copy": true, "delete": true, "clear": true, "panic": true, "error": true, "bool": true, "float64": true, "int64": true, "uint64": true, "uint8": true}
+
 type write struct {
 	pos  token.Pos
 	name string
 }
 
-// capturedWrites: assignments inside lit to a root variable that lit did not declare (parameter, result, :=, var, range).
-func capturedWrites(lit *ast.FuncLit) []write {
+// capturedWrites: assignments in body to a root variable that the function did not declare (parameter, result, :=, var, range).
+func capturedWrites(ft *ast.FuncType, body *ast.BlockStmt) []write {
 	local := map[string]bool{"_": true}
 	declare := func(fl *ast.FieldList) {
 		if fl == nil {
@@ -369,9 +449,9 @@ func capturedWrites(lit *ast.FuncLit) []write {
 			}
 		}
 	}
-	declare(lit.Type.Params)
-	declare(lit.Type.Results)
-	ast.Inspect(lit.Body, func(n ast.Node) bool {
+	declare(ft.Params)
+	declare(ft.Results)
+	ast.Inspect(body, func(n ast.Node) bool {
 		switch x := n.(type) {
 		case *ast.AssignStmt:
 			if x.Tok == token.DEFINE {
@@ -418,32 +498,32 @@ func capturedWrites(lit *ast.FuncLit) []write {
 		}
 	}
 	var out []write
-	check := func(e ast.Expr, pos token.Pos, define bool) {
-		if define {
+	check := func(e ast.Expr, pos token.Pos) {
+		if e == nil {
 			return
 		}
 		if n := root(e); n != "" && !local[n] {
 			out = append(out, write{pos, n})
 		}
 	}
-	ast.Inspect(lit.Body, func(n ast.Node) bool {
+	ast.Inspect(body, func(n ast.Node) bool {
 		switch x := n.(type) {
 		case *ast.AssignStmt:
-			for _, l := range x.Lhs {
-				check(l, x.Pos(), x.Tok == token.DEFINE)
+			if x.Tok != token.DEFINE {
+				for _, l := range x.Lhs {
+					check(l, x.Pos())
+				}
 			}
 		case *ast.IncDecStmt:
-			check(x.X, x.Pos(), false)
+			check(x.X, x.Pos())
 		case *ast.RangeStmt:
 			if x.Tok == token.ASSIGN {
-				check(x.Key, x.Pos(), false)
-				check(x.Value, x.Pos(), false)
+				check(x.Key, x.Pos())
+				check(x.Value, x.Pos())
 			}
-		case *ast.CallExpr:
-			if id, ok := x.Fun.(*ast.Ident); ok && (id.Name == "append" || id.Name == "copy" || id.Name == "delete" || id.Name == "clear") && len(x.Args) > 0 {
-				if id.Name != "append" {
-					check(x.Args[0], x.Pos(), false)
-				}
+		case *ast.UnaryExpr:
+			if x.Op == token.AND {
+				check(x.X, x.Pos())
 			}
 		}
 		return true

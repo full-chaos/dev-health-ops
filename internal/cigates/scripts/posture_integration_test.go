@@ -365,11 +365,30 @@ func TestPostureIntegrationRunFailsClosedWhenGitStatusFails(t *testing.T) {
 	}
 }
 
-// postureDemo builds a throwaway module with a copy of the helper, a list of the two demo packages, a package whose test
-// writes a marker file when it really runs, and a package with no test files. Everything is committed (clean tree).
-func postureDemo(t *testing.T) (dir string) {
+// postureFixture is a throwaway repository (base/repo) with a copy of the helper, a two-package list, a package whose test
+// writes a marker file (outside the repo, its path baked into the committed test) when it really runs, a package with no
+// test files, and a nested dependency module. Everything is committed.
+type postureFixture struct {
+	base, dir, marker string
+	git               func(args ...string) string
+}
+
+func postureDemo(t *testing.T) postureFixture {
 	t.Helper()
-	dir, git := postureRepo(t)
+	base := t.TempDir()
+	dir := filepath.Join(base, "repo")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	git := func(args ...string) string {
+		a := append([]string{"-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false"}, args...)
+		res := cmdSpec{dir: dir, env: []string{shimBasePath()}}.run("git", a...)
+		if res.code != 0 {
+			t.Fatalf("git %v: %q", args, res.stderr)
+		}
+		return strings.TrimSpace(res.stdout)
+	}
+	marker := filepath.Join(t.TempDir(), "ran.marker")
 	write := func(rel, body string, mode os.FileMode) {
 		p := filepath.Join(dir, rel)
 		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
@@ -385,18 +404,32 @@ func postureDemo(t *testing.T) (dir string) {
 	}
 	write("ci/posture_integration.sh", string(script), 0o755)
 	write("ci/posture_integration_packages.tsv", "internal/empty\ninternal/ok\n", 0o644)
-	write("go.mod", "module demo\n\ngo 1.21\n", 0o644)
-	write("internal/ok/ok_test.go", "package ok\n\nimport (\n\t\"os\"\n\t\"testing\"\n)\n\nfunc TestRan(t *testing.T) {\n\tif err := os.WriteFile(\"ran.marker\", []byte(\"x\"), 0o600); err != nil {\n\t\tt.Fatal(err)\n\t}\n}\n", 0o644)
+	write("go.mod", "module demo\n\ngo 1.21\n\nrequire example.com/dep v0.0.0\n\nreplace example.com/dep => ./dep\n", 0o644)
+	write("dep/go.mod", "module example.com/dep\n\ngo 1.21\n", 0o644)
+	write("dep/dep.go", "package dep\n\nfunc Val() int { return 1 }\n", 0o644)
+	write("internal/ok/ok_test.go", okTest(marker), 0o644)
 	write("internal/empty/empty.go", "package empty\n", 0o644)
-	write(".gitignore", "ran.marker\n", 0o644)
-	write("trigger.txt", "x\n", 0o644)
 	git("init", "-q", "-b", "main")
 	git("add", ".")
 	git("commit", "-q", "-m", "demo")
-	return dir
+	return postureFixture{base: base, dir: dir, marker: marker, git: git}
 }
 
-func postureDemoRun(t *testing.T, dir string, extraEnv ...string) cmdResult {
+func okTest(marker string) string {
+	return "package ok\n\nimport (\n\t\"os\"\n\t\"testing\"\n\n\t\"example.com/dep\"\n)\n\nfunc TestRan(t *testing.T) {\n\tif dep.Val() != 1 {\n\t\tt.Fatal(\"dep\")\n\t}\n\tif err := os.WriteFile(" + "\"" + marker + "\"" + ", []byte(\"x\"), 0o600); err != nil {\n\t\tt.Fatal(err)\n\t}\n}\n"
+}
+
+func goBinary(t *testing.T) string {
+	t.Helper()
+	p, err := exec.LookPath("go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// postureDemoRun runs the helper copy committed in the fixture with a pass-through test runner, from cwd.
+func postureDemoRun(t *testing.T, f postureFixture, cwd string, extraEnv ...string) cmdResult {
 	t.Helper()
 	pass := filepath.Join(t.TempDir(), "runner.sh")
 	if err := os.WriteFile(pass, []byte("#!/bin/sh\nshift 5\nexec \"$@\"\n"), 0o700); err != nil {
@@ -414,22 +447,31 @@ func postureDemoRun(t *testing.T, dir string, extraEnv ...string) cmdResult {
 	if !hasPath {
 		env = append(env, "PATH="+filepath.Dir(goBinary(t))+string(os.PathListSeparator)+"/usr/bin:/bin")
 	}
-	return cmdSpec{dir: dir, env: env}.run("bash", filepath.Join(dir, "ci", "posture_integration.sh"), "--run", "--paths", paths, "--test-runner", pass)
+	return cmdSpec{dir: cwd, env: env}.run("bash", filepath.Join(f.dir, "ci", "posture_integration.sh"), "--run", "--paths", paths, "--test-runner", pass)
 }
 
-func goBinary(t *testing.T) string {
-	t.Helper()
-	p, err := exec.LookPath("go")
-	if err != nil {
-		t.Fatal(err)
+func postureRow(res cmdResult, prefix string) string {
+	for _, l := range strings.Split(res.stdout, "\n") {
+		if strings.HasPrefix(l, prefix) {
+			return l
+		}
 	}
-	return p
+	return ""
+}
+
+// requireHonestPass: the committed test really ran (its marker exists outside the repo) and the row says PASS.
+func requireHonestPass(t *testing.T, f postureFixture, res cmdResult, what string) {
+	t.Helper()
+	row := postureRow(res, "SIMULATED internal/ok ")
+	_, err := os.Stat(f.marker)
+	if !strings.Contains(row, " PASS ") || !strings.Contains(row, "tests=1") || err != nil {
+		t.Fatalf("%s: want the committed test to run natively and PASS; row=%q marker=%v stdout=%q stderr=%q", what, row, err, res.stdout, res.stderr)
+	}
 }
 
 // A package is PASS only when go test ran at least one test and none failed: a package with no test files, or a
 // forged environment that makes go test exit 0 without running tests, must never print a PASS row.
 func TestPostureIntegrationPassNeedsExecutedTests(t *testing.T) {
-	marker := func(dir string) string { return filepath.Join(dir, "internal", "ok", "ran.marker") }
 	cases := []struct {
 		name string
 		env  []string
@@ -441,87 +483,72 @@ func TestPostureIntegrationPassNeedsExecutedTests(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			dir := postureDemo(t)
+			f := postureDemo(t)
 			env := c.env
 			if c.name == "GOENV file carries GOFLAGS" {
-				f := filepath.Join(t.TempDir(), "goenv")
-				if err := os.WriteFile(f, []byte("GOFLAGS=-exec=/bin/true\n"), 0o600); err != nil {
+				p := filepath.Join(t.TempDir(), "goenv")
+				if err := os.WriteFile(p, []byte("GOFLAGS=-exec=/bin/true\n"), 0o600); err != nil {
 					t.Fatal(err)
 				}
-				env = []string{"GOENV=" + f}
+				env = []string{"GOENV=" + p}
 			}
-			res := postureDemoRun(t, dir, env...)
+			res := postureDemoRun(t, f, f.dir, env...)
 			if res.code == 0 {
 				t.Fatalf("a simulated run exits non-zero, got 0: %q", res.stdout)
 			}
-			okRow, emptyRow := "", ""
-			for _, l := range strings.Split(res.stdout, "\n") {
-				switch {
-				case strings.HasPrefix(l, "SIMULATED internal/ok "):
-					okRow = l
-				case strings.HasPrefix(l, "SIMULATED internal/empty "):
-					emptyRow = l
-				}
+			if row := postureRow(res, "SIMULATED internal/empty "); !strings.Contains(row, " FAIL ") {
+				t.Fatalf("a package with no tests must be FAIL, got %q (stdout=%q stderr=%q)", row, res.stdout, res.stderr)
 			}
-			if !strings.Contains(emptyRow, " FAIL ") {
-				t.Fatalf("a package with no tests must be FAIL, got %q (stdout=%q stderr=%q)", emptyRow, res.stdout, res.stderr)
-			}
-			_, markerErr := os.Stat(marker(dir))
-			if strings.Contains(okRow, " PASS ") && (markerErr != nil || !strings.Contains(okRow, "tests=1")) {
-				t.Fatalf("PASS row without an executed test: %q marker=%v", okRow, markerErr)
-			}
-			if !strings.Contains(okRow, " PASS ") { // the fixed environment makes go test really run, so every case passes honestly
-				t.Fatalf("no row for internal/ok: stdout=%q stderr=%q", res.stdout, res.stderr)
-			}
+			requireHonestPass(t, f, res, c.name)
 		})
 	}
 }
 
 // In test-runner mode every stdout line starts SIMULATED (the list lines included) and the usage names the flag.
 func TestPostureIntegrationSimulatedModeMarksEveryLine(t *testing.T) {
-	dir := postureDemo(t)
-	res := postureDemoRun(t, dir)
+	f := postureDemo(t)
+	res := postureDemoRun(t, f, f.dir)
 	for _, l := range strings.Split(strings.TrimSpace(res.stdout), "\n") {
 		if !strings.HasPrefix(l, "SIMULATED") || strings.Contains(l, "RECEIPT") {
 			t.Fatalf("line %q must start SIMULATED and not say RECEIPT; stdout=%q", l, res.stdout)
 		}
 	}
-	bad := cmdSpec{dir: dir, env: []string{shimBasePath()}}.run("bash", filepath.Join(dir, "ci", "posture_integration.sh"), "--nope")
+	bad := cmdSpec{dir: f.dir, env: []string{shimBasePath()}}.run("bash", filepath.Join(f.dir, "ci", "posture_integration.sh"), "--nope")
 	if bad.code != 2 || !strings.Contains(bad.stderr, "--test-runner") {
 		t.Fatalf("usage: exit %d stderr=%q, want 2 naming --test-runner", bad.code, bad.stderr)
 	}
 }
 
-// The real runner path: RECEIPT-HEAD names the runner and the go toolchain with their hashes, or the run fails closed
-// with exit 3 and a missing-runner message (hosted runners have no capped.sh). Never a PASS without the head fields.
+// The real runner path: RECEIPT-HEAD names the runner, the go toolchain, the worktree sha and the hashes, or the run fails
+// closed with exit 3 and a missing-runner message (hosted runners have no capped.sh). Never a PASS without the head fields.
 func TestPostureIntegrationRealRunHeadNamesTheToolchain(t *testing.T) {
-	dir := postureDemo(t)
+	f := postureDemo(t)
 	paths := filepath.Join(t.TempDir(), "changed.txt")
 	if err := os.WriteFile(paths, []byte("internal/ok/ok_test.go\x00"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	env := append(goListEnv(), "PATH="+filepath.Dir(goBinary(t))+string(os.PathListSeparator)+"/usr/bin:/bin")
-	res := cmdSpec{dir: dir, env: env}.run("bash", filepath.Join(dir, "ci", "posture_integration.sh"), "--run", "--paths", paths)
+	res := cmdSpec{dir: f.dir, env: env}.run("bash", filepath.Join(f.dir, "ci", "posture_integration.sh"), "--run", "--paths", paths)
 	if res.code == 3 && strings.Contains(res.stderr, "runner not found") {
 		return
 	}
-	head := ""
-	for _, l := range strings.Split(res.stdout, "\n") {
-		if strings.HasPrefix(l, "RECEIPT-HEAD ") {
-			head = l
-		}
-	}
-	for _, want := range []string{" clean=yes ", " runner=/home/ubuntu/devhealth/scripts/capped.sh sha256=", " go=", " go_sha256=", " go_version=", " go_env=GOOS=", " GOARCH=", " GOROOT=", " GOTOOLDIR=", " script_sha256=", " packages=2 packages_sha256="} {
+	head := postureRow(res, "RECEIPT-HEAD ")
+	sha := f.git("rev-parse", "HEAD")
+	for _, want := range []string{" clean=yes ", " runner=/home/ubuntu/devhealth/scripts/capped.sh sha256=", " go=", " go_sha256=", " go_version=", " go_env=GOOS=", " GOARCH=", " GOROOT=", " GOTOOLDIR=", " script_sha256=", " packages=2 packages_sha256=", " worktree_sha=" + sha} {
 		if !strings.Contains(head, want) {
 			t.Fatalf("RECEIPT-HEAD %q lacks %q (exit %d stdout=%q stderr=%q)", head, want, res.code, res.stdout, res.stderr)
 		}
 	}
+	out, err := exec.Command("git", "-C", f.dir, "worktree", "list", "--porcelain").Output()
+	if err != nil || strings.Count(string(out), "worktree ") != 1 {
+		t.Fatalf("a run must leave no worktree behind: %q err=%v", out, err)
+	}
 }
 
-// GOARCH=amd64 on an arm64 host runs test binaries through go_linux_amd64_exec on PATH; a fake helper that prints a
-// passing test must not produce a PASS: the toolchain runs under env -i, so neither GOARCH nor the helper reaches it.
+// GOARCH=<other arch> makes go test run binaries through go_<os>_<arch>_exec on PATH; a fake helper that prints a passing
+// test must not produce a PASS: the toolchain runs under env -i, so neither GOARCH nor the helper reaches it.
 func TestPostureIntegrationForeignArchExecHelperCannotForgeAPass(t *testing.T) {
-	dir := postureDemo(t)
+	f := postureDemo(t)
 	fake := t.TempDir()
 	helper := "#!/bin/sh\nprintf '=== RUN   TestRan\\n--- PASS: TestRan (0.00s)\\nPASS\\n'\nexit 0\n"
 	for _, n := range []string{"go_linux_amd64_exec", "go_linux_arm64_exec"} {
@@ -534,30 +561,89 @@ func TestPostureIntegrationForeignArchExecHelperCannotForgeAPass(t *testing.T) {
 		other = "arm64"
 	}
 	path := "PATH=" + fake + string(os.PathListSeparator) + filepath.Dir(goBinary(t)) + string(os.PathListSeparator) + "/usr/bin:/bin"
-	res := postureDemoRun(t, dir, "GOARCH="+other, path)
-	okRow := ""
-	for _, l := range strings.Split(res.stdout, "\n") {
-		if strings.HasPrefix(l, "SIMULATED internal/ok ") {
-			okRow = l
-		}
-	}
-	if _, err := os.Stat(filepath.Join(dir, "internal", "ok", "ran.marker")); !strings.Contains(okRow, " PASS ") || err != nil {
-		t.Fatalf("the real test must run natively (marker written) and pass; row=%q marker=%v stdout=%q stderr=%q", okRow, err, res.stdout, res.stderr)
-	}
+	requireHonestPass(t, f, postureDemoRun(t, f, f.dir, "GOARCH="+other, path), "foreign arch helper")
 }
 
 // A caller GOROOT must not reach the toolchain: with GOROOT pointing at an empty directory the run still resolves the
 // real toolchain and runs the tests.
 func TestPostureIntegrationCallerGorootDoesNotReachTheToolchain(t *testing.T) {
-	dir := postureDemo(t)
-	res := postureDemoRun(t, dir, "GOROOT="+t.TempDir())
-	okRow := ""
-	for _, l := range strings.Split(res.stdout, "\n") {
-		if strings.HasPrefix(l, "SIMULATED internal/ok ") {
-			okRow = l
-		}
+	f := postureDemo(t)
+	requireHonestPass(t, f, postureDemoRun(t, f, f.dir, "GOROOT="+t.TempDir()), "caller GOROOT")
+}
+
+// Forge 1: a fake env on the caller PATH that prints a passing go test -json stream and exits 0.
+func TestPostureIntegrationFakeEnvOnPathCannotForgeAPass(t *testing.T) {
+	f := postureDemo(t)
+	fake := t.TempDir()
+	body := "#!/bin/sh\nprintf '{\"Action\":\"pass\",\"Test\":\"TestRan\"}\\n{\"Action\":\"pass\"}\\n'\nexit 0\n"
+	if err := os.WriteFile(filepath.Join(fake, "env"), []byte(body), 0o700); err != nil {
+		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "internal", "ok", "ran.marker")); !strings.Contains(okRow, " PASS ") || err != nil {
-		t.Fatalf("a caller GOROOT must be ignored; row=%q marker=%v stdout=%q stderr=%q", okRow, err, res.stdout, res.stderr)
+	path := "PATH=" + fake + string(os.PathListSeparator) + filepath.Dir(goBinary(t)) + string(os.PathListSeparator) + "/usr/bin:/bin"
+	requireHonestPass(t, f, postureDemoRun(t, f, f.dir, path), "fake env on PATH")
+}
+
+// Forge 2: an edited test hidden from git status with skip-worktree. The run tests the committed HEAD, not the edit.
+func TestPostureIntegrationSkipWorktreeEditCannotForgeAPass(t *testing.T) {
+	f := postureDemo(t)
+	if err := os.WriteFile(filepath.Join(f.dir, "internal", "ok", "ok_test.go"), []byte("package ok\n\nimport \"testing\"\n\nfunc TestRan(t *testing.T) {}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f.git("update-index", "--skip-worktree", "internal/ok/ok_test.go")
+	requireHonestPass(t, f, postureDemoRun(t, f, f.dir), "skip-worktree edit")
+}
+
+// Forge 3: a go.work in a parent directory whose replace swaps the dependency for code that writes a forged marker.
+func TestPostureIntegrationParentGoWorkCannotForgeAPass(t *testing.T) {
+	f := postureDemo(t)
+	forged := filepath.Join(t.TempDir(), "forged.marker")
+	fakedep := filepath.Join(f.base, "fakedep")
+	if err := os.MkdirAll(fakedep, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(fakedep, "go.mod"), []byte("module example.com/dep\n\ngo 1.21\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	src := "package dep\n\nimport \"os\"\n\nfunc init() { _ = os.WriteFile(\"" + forged + "\", []byte(\"x\"), 0o600) }\n\nfunc Val() int { return 1 }\n"
+	if err := os.WriteFile(filepath.Join(fakedep, "dep.go"), []byte(src), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(f.base, "go.work"), []byte("go 1.21\n\nuse ./repo\n\nreplace example.com/dep => ./fakedep\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	res := postureDemoRun(t, f, f.dir)
+	if _, err := os.Stat(forged); err == nil {
+		t.Fatalf("the parent go.work replace reached the test run: %q", res.stdout)
+	}
+	requireHonestPass(t, f, res, "parent go.work")
+}
+
+// Forge 4: the helper is run from a git-excluded fake module directory inside the repo; ./internal/ok must not resolve
+// there. The tests run in a fresh worktree of HEAD, whatever the cwd.
+func TestPostureIntegrationExcludedCwdModuleCannotForgeAPass(t *testing.T) {
+	f := postureDemo(t)
+	fakeDir := filepath.Join(f.dir, "fake")
+	if err := os.MkdirAll(filepath.Join(fakeDir, "internal", "ok"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(fakeDir, "go.mod"), []byte("module fake\n\ngo 1.21\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(fakeDir, "internal", "ok", "ok_test.go"), []byte("package ok\n\nimport \"testing\"\n\nfunc TestRan(t *testing.T) {}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(f.dir, ".git", "info", "exclude"), []byte("fake/\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	requireHonestPass(t, f, postureDemoRun(t, f, fakeDir), "excluded cwd module")
+}
+
+// A run that stops early (a failing runner, a dirty tree) leaves no worktree behind.
+func TestPostureIntegrationLeavesNoWorktreeBehind(t *testing.T) {
+	f := postureDemo(t)
+	postureDemoRun(t, f, f.dir)
+	out, err := exec.Command("git", "-C", f.dir, "worktree", "list", "--porcelain").Output()
+	if err != nil || strings.Count(string(out), "worktree ") != 1 {
+		t.Fatalf("worktrees after a run: %q err=%v", out, err)
 	}
 }

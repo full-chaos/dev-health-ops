@@ -163,8 +163,12 @@ func TestCredentialQuirksCoverTheScenarioRowsExactly(t *testing.T) {
 	solo := strings.Replace(acpN, "nina.new", "solo", 2)
 	pia := strings.Replace(acpR, "alice", "pia", 2)
 	verified := `<nil>nina.new@example.comemail_verifieduseruser:nina.new@example.comEmail verified{}` + nl + `success<null>`
-	golden := strings.Join([]string{goldenN, goldenR, goldenRQ}, rowSeparator)
-	acp := strings.Join([]string{acpN, acpR, solo, pia, verified, verified, verified, verified}, rowSeparator)
+	goldenRows, acpRows := []string{goldenN, goldenR, goldenRQ}, []string{acpN, acpR, solo, pia, verified, verified, verified, verified}
+	for _, name := range []string{"emma", "ned", "maya"} {
+		goldenRows = append(goldenRows, strings.Replace(strings.Replace(goldenN, "nina.new", name, 2), "Nina's Team  Ünï", "My Organization", 1))
+		acpRows = append(acpRows, strings.Replace(acpN, "nina.new", name, 2))
+	}
+	golden, acp := strings.Join(goldenRows, rowSeparator), strings.Join(acpRows, rowSeparator)
 	if problems := l.Compare(TableAuditLogs, golden, acp); len(problems) != 0 {
 		t.Fatalf("unclassified: %v", problems)
 	}

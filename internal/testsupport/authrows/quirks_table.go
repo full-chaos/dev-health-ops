@@ -90,8 +90,8 @@ var Quirks = []Quirk{
 	},
 	{
 		ID: "audit-register-organization-and-changes-not-recorded", Kind: Deliberate, Table: TableAuditLogs, Needs: []Aggregate{Credentials},
-		Reason:  "auth-service audits a registration as a principal event with no organization, no changes object and no description column; go-api's row names the new organization and holds the address and organization id in its changes",
-		Tracked: "",
+		Reason: "auth-service audits a registration as a principal event with no organization, no changes object and no description column; go-api's row names the new organization and holds the address and organization id in its changes. Max is the golden's four registrations with an organization",
+		Max:    4, Exact: true,
 		Rewrite: registeredWithoutOrgOrChanges,
 	},
 	{
@@ -109,6 +109,7 @@ var Quirks = []Quirk{
 	{
 		ID: "audit-password-reset-organization-not-recorded", Kind: Deliberate, Table: TableAuditLogs, Needs: []Aggregate{Credentials},
 		Reason: "alice's password reset: go-api audits it in her first membership's organization, auth-service's event holds none",
+		Max:    1, Exact: true,
 		Rewrite: func(line string) (string, bool) {
 			return replaceOnce(aliceResetOrgA, line, "<nil>${1}")
 		},

@@ -17,6 +17,16 @@ const (
 	Gap Kind = "gap"
 )
 
+// Ownership says on which legs a quirk is live: a leg where auth-service owns users (AUTH_USERS_OWNED=true) or not.
+type Ownership string
+
+const (
+	// NotOwned is live only on a leg where public.users stays the authority.
+	NotOwned Ownership = "not_owned"
+	// OwnedOnly is live only on a leg where auth-service owns users.
+	OwnedOnly Ownership = "owned"
+)
+
 // rowSeparator joins the rows of venueoracle.TableRows.
 const rowSeparator = " | "
 
@@ -37,10 +47,14 @@ type Quirk struct {
 	Extra func(line string) bool
 	// Missing is true for a golden line the ACP target holds no row for: the row is counted, never silent.
 	Missing func(line string) bool
-	// Max is how many rows an Extra or Missing quirk may cover in one run; a row beyond it is unclassified.
+	// Max is how many rows the quirk may cover in one run, whatever its form; a row beyond it is unclassified. An
+	// Extra or Missing quirk sets it; a Rewrite quirk may, and unset covers every row it matches.
 	Max int
 	// Exact makes the run cover exactly Max rows: fewer is a failure too.
 	Exact bool
+	// Owned limits the quirk to legs where users are not owned by auth-service (NotOwned) or are (OwnedOnly); empty
+	// is every leg.
+	Owned Ownership
 }
 
 // CheckTable is every way table is malformed, in the order of the table.
@@ -82,11 +96,14 @@ func CheckTable(table []Quirk) []string {
 		if q.Missing != nil && q.Max < 1 {
 			problems = append(problems, q.ID+": a missing-row quirk sets Max, the rows it may cover")
 		}
-		if q.Extra == nil && q.Missing == nil && q.Max != 0 {
-			problems = append(problems, q.ID+": only an extra-row or missing-row quirk sets Max")
+		if q.Max < 0 {
+			problems = append(problems, q.ID+": Max is negative")
 		}
-		if q.Extra == nil && q.Missing == nil && q.Exact {
-			problems = append(problems, q.ID+": only an extra-row or missing-row quirk sets Exact")
+		if q.Exact && q.Max < 1 {
+			problems = append(problems, q.ID+": an exact quirk sets Max, the rows it must cover")
+		}
+		if q.Owned != "" && q.Owned != NotOwned && q.Owned != OwnedOnly {
+			problems = append(problems, fmt.Sprintf("%s: owned %q is not empty, not_owned or owned", q.ID, q.Owned))
 		}
 		set := 0
 		for _, present := range []bool{q.Rewrite != nil, q.Extra != nil, q.Missing != nil} {
@@ -110,7 +127,10 @@ func isAggregate(a Aggregate) bool {
 	return false
 }
 
-func (q Quirk) live(f Forwarded) bool {
+func (q Quirk) live(f Forwarded, owned bool) bool {
+	if (q.Owned == NotOwned && owned) || (q.Owned == OwnedOnly && !owned) {
+		return false
+	}
 	for _, a := range q.Needs {
 		if !f.Has(a) {
 			return false
@@ -122,19 +142,21 @@ func (q Quirk) live(f Forwarded) bool {
 // Ledger compares rows against the golden's under a quirk table and counts what each quirk covered.
 type Ledger struct {
 	forwarded Forwarded
+	owned     bool
 	table     []Quirk
 	covered   map[string]int
 	compared  int
 }
 
-// NewLedger is a Ledger over Quirks for a run that forwarded f. A malformed table is an error.
-func NewLedger(f Forwarded) (*Ledger, error) { return newLedger(f, Quirks) }
+// NewLedger is a Ledger over Quirks for a run that forwarded f, with users owned by auth-service or not. A
+// malformed table is an error.
+func NewLedger(f Forwarded, owned bool) (*Ledger, error) { return newLedger(f, owned, Quirks) }
 
-func newLedger(f Forwarded, table []Quirk) (*Ledger, error) {
+func newLedger(f Forwarded, owned bool, table []Quirk) (*Ledger, error) {
 	if problems := CheckTable(table); len(problems) > 0 {
 		return nil, fmt.Errorf("authrows: the quirk table is malformed: %s", strings.Join(problems, "; "))
 	}
-	return &Ledger{forwarded: f, table: table, covered: map[string]int{}}, nil
+	return &Ledger{forwarded: f, owned: owned, table: table, covered: map[string]int{}}, nil
 }
 
 // Compare returns every way the ACP target's rows differ from the golden's for table, beyond the live quirks'. A
@@ -159,7 +181,7 @@ func (l *Ledger) Compare(table, golden, acp string) []string {
 			}
 			if !covered {
 				for _, q := range l.table {
-					if q.Table == table && q.live(l.forwarded) && q.Missing != nil && l.covered[q.ID] < q.Max && q.Missing(line) {
+					if q.Table == table && q.live(l.forwarded, l.owned) && q.Missing != nil && l.covered[q.ID] < q.Max && q.Missing(line) {
 						goldenOnly[line]--
 						l.covered[q.ID]++
 						covered = true
@@ -177,7 +199,7 @@ func (l *Ledger) Compare(table, golden, acp string) []string {
 		for acpOnly[line] > 0 {
 			covered := false
 			for _, q := range l.table {
-				if q.Table == table && q.live(l.forwarded) && q.Extra != nil && l.covered[q.ID] < q.Max && q.Extra(line) {
+				if q.Table == table && q.live(l.forwarded, l.owned) && q.Extra != nil && l.covered[q.ID] < q.Max && q.Extra(line) {
 					acpOnly[line]--
 					l.covered[q.ID]++
 					covered = true
@@ -207,7 +229,7 @@ func (l *Ledger) rewriteChain(table, line string, acpOnly map[string]int) (final
 		}
 	next:
 		for _, q := range l.table {
-			if q.Table != table || !q.live(l.forwarded) || q.Rewrite == nil {
+			if q.Table != table || !q.live(l.forwarded, l.owned) || q.Rewrite == nil || (q.Max > 0 && l.covered[q.ID] >= q.Max) {
 				continue
 			}
 			for _, id := range taken {
@@ -240,7 +262,7 @@ func (l *Ledger) Dead() []string {
 	}
 	for _, q := range l.table {
 		switch {
-		case !q.live(l.forwarded):
+		case !q.live(l.forwarded, l.owned):
 		case l.covered[q.ID] == 0:
 			problems = append(problems, fmt.Sprintf("%s: a live quirk covered no row (%s)", q.ID, q.Reason))
 		case q.Exact && l.covered[q.ID] != q.Max:
@@ -254,7 +276,7 @@ func (l *Ledger) Dead() []string {
 func (l *Ledger) Covered() string {
 	var parts []string
 	for _, q := range l.table {
-		if q.live(l.forwarded) {
+		if q.live(l.forwarded, l.owned) {
 			parts = append(parts, fmt.Sprintf("%s=%d", q.ID, l.covered[q.ID]))
 		}
 	}

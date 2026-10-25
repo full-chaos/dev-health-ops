@@ -170,7 +170,9 @@ func TestMissingQuirkCountsAGoldenOnlyRowAndFailsOverAndUnderMax(t *testing.T) {
 
 func rewriteGone(max int, exact bool) []Quirk {
 	return []Quirk{{ID: "swap", Kind: Deliberate, Reason: "r", Table: TableUsers, Needs: []Aggregate{LocalLogin}, Max: max, Exact: exact,
-		Rewrite: func(line string) (string, bool) { return strings.Replace(line, "old", "new", 1), strings.Contains(line, "old") }}}
+		Rewrite: func(line string) (string, bool) {
+			return strings.Replace(line, "old", "new", 1), strings.Contains(line, "old")
+		}}}
 }
 
 func TestRewriteQuirkHonoursMaxAndExact(t *testing.T) {
@@ -213,8 +215,8 @@ func TestOwnershipDecidesWhichLegsAQuirkIsLiveOn(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		l.Compare(TableUsers, "a old", "a new")
-		if got := len(l.Dead()) == 0; got != c.live || (strings.Contains(l.Covered(), "swap") != c.live) {
+		problems := l.Compare(TableUsers, "a old", "a new")
+		if got := len(problems) == 0; got != c.live || (strings.Contains(l.Covered(), "swap=1") != c.live) {
 			t.Errorf("owned %q on owned leg %v: live %v, want %v (covered %q)", c.owned, c.leg, got, c.live, l.Covered())
 		}
 	}

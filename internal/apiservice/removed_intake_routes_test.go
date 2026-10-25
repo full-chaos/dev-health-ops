@@ -28,7 +28,7 @@ func TestRemovedSharedSecretIntakeRoutesAnswerNotFound(t *testing.T) {
 	}
 	scope := policy.NewScope(auth, quietLogger())
 	routes := webhookintake.Routes(webhookintake.Deps{Secrets: webhookintake.Secrets{GitHub: "gh-" + uuid.NewString()}, Logger: quietLogger()})
-	server, err := NewServer(apiTestConfig(), quietLogger(), routes, scope.OrgScope, scope.Impersonation)
+	server, err := NewServer(apiTestConfig(), quietLogger(), routes, scope.Layers()...)
 	if err != nil {
 		t.Fatal(err)
 	}

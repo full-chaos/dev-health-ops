@@ -400,7 +400,7 @@ func configureWith(
 		}
 		deps.Auth, deps.Guard = protected.auth, protected.guard
 		deps.Verifier, deps.Signer = protected.verifier, protected.signer
-		scope = []func(http.Handler) http.Handler{protected.scope.OrgScope, protected.scope.Impersonation}
+		scope = []func(http.Handler) http.Handler{protected.scope.Principal, protected.scope.OrgScope, protected.scope.Impersonation}
 	}
 	var accessKeys authverify.KeySource
 	deps.AccessVerify, accessKeys, err = buildAccessVerify(envsecrets.ProcessLookup, deps.Auth, logger)
@@ -612,7 +612,13 @@ func newProtection(cfg config.Config, pool *pgxpool.Pool, logger *slog.Logger) (
 	if err != nil {
 		return protection{}, err
 	}
-	return protection{auth: auth, scope: policy.NewScope(auth, logger), guard: policy.NewGuard(auth, logger),
+	rows, err := goAPIScopeRows()
+	if err != nil {
+		return protection{}, err
+	}
+	scope := policy.NewScope(auth, logger)
+	scope.DeclaredRows(rows)
+	return protection{auth: auth, scope: scope, guard: policy.NewGuard(auth, logger),
 		verifier: verifier, signer: signer}, nil
 }
 

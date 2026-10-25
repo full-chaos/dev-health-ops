@@ -3,6 +3,7 @@ package identity
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
@@ -17,20 +18,23 @@ import (
 type recordingOrgDB struct {
 	mu       sync.Mutex
 	statemts []string
+	args     [][]any
 	rowErr   error
 }
 
-func (r *recordingOrgDB) QueryRow(_ context.Context, sql string, _ ...any) pgx.Row {
+func (r *recordingOrgDB) QueryRow(_ context.Context, sql string, args ...any) pgx.Row {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.statemts = append(r.statemts, sql)
+	r.args = append(r.args, args)
 	return recordedRow{err: r.rowErr}
 }
 
-func (r *recordingOrgDB) Exec(_ context.Context, sql string, _ ...any) (pgconn.CommandTag, error) {
+func (r *recordingOrgDB) Exec(_ context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.statemts = append(r.statemts, sql)
+	r.args = append(r.args, args)
 	return pgconn.CommandTag{}, nil
 }
 
@@ -49,14 +53,27 @@ func ownedTestStore(db *recordingOrgDB) *Store {
 	return &Store{ownsOrgs: true, orgDB: db, q: `"auth"`, logger: slog.Default(), projections: counter}
 }
 
+func assertExactOwnedRead(t *testing.T, db *recordingOrgDB, id uuid.UUID) {
+	t.Helper()
+	if len(db.statemts) != 1 {
+		t.Fatalf("the owned branch ran %d statements, want exactly 1: %q", len(db.statemts), db.statemts)
+	}
+	const want = `SELECT true FROM "auth".organizations WHERE id = $1`
+	if got := fmt.Sprintf(ownedOrgExistsSQL, `"auth"`); db.statemts[0] != got || got != want {
+		t.Fatalf("the owned branch ran %q (constant renders %q), want exactly %q", db.statemts[0], fmt.Sprintf(ownedOrgExistsSQL, `"auth"`), want)
+	}
+	if len(db.args[0]) != 1 || db.args[0][0] != any(id) {
+		t.Fatalf("the owned branch args = %v, want exactly [%v]", db.args[0], id)
+	}
+}
+
 func TestProjectOrganizationOwnedTouchesNoPublicTableAndWritesNothing(t *testing.T) {
 	db := &recordingOrgDB{}
-	if err := ownedTestStore(db).ProjectOrganization(context.Background(), uuid.New()); err != nil {
+	id := uuid.New()
+	if err := ownedTestStore(db).ProjectOrganization(context.Background(), id); err != nil {
 		t.Fatalf("ProjectOrganization = %v", err)
 	}
-	if len(db.statemts) != 1 {
-		t.Fatalf("the owned branch ran %d statements, want exactly 1 read: %q", len(db.statemts), db.statemts)
-	}
+	assertExactOwnedRead(t, db, id)
 	for _, sql := range db.statemts {
 		low := strings.ToLower(sql)
 		if strings.Contains(low, "public.") {
@@ -75,13 +92,12 @@ func TestProjectOrganizationOwnedTouchesNoPublicTableAndWritesNothing(t *testing
 
 func TestProjectOrganizationOwnedAnswersNotFoundForAMissingAuthRowAndWritesNothing(t *testing.T) {
 	db := &recordingOrgDB{rowErr: pgx.ErrNoRows}
-	err := ownedTestStore(db).ProjectOrganization(context.Background(), uuid.New())
+	id := uuid.New()
+	err := ownedTestStore(db).ProjectOrganization(context.Background(), id)
 	if !errors.Is(err, ErrOrganizationNotFound) {
 		t.Fatalf("missing auth row = %v, want ErrOrganizationNotFound", err)
 	}
-	if len(db.statemts) != 1 || !strings.HasPrefix(strings.ToLower(db.statemts[0]), "select ") {
-		t.Fatalf("statements = %q, want one read", db.statemts)
-	}
+	assertExactOwnedRead(t, db, id)
 }
 
 func TestOwnedProjectionOutcomeLabelIsInTheClosedSet(t *testing.T) {

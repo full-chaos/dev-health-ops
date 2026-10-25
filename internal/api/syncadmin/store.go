@@ -34,6 +34,7 @@ type reader interface {
 	runUnits(ctx context.Context, orgID string, runID uuid.UUID) ([]runUnit, error)
 	watermarkRows(ctx context.Context, orgID string, sourceKeys, lookupValues []string) ([]schedsync.WatermarkRow, error)
 	backfillJobByID(ctx context.Context, orgID string, id uuid.UUID) (*backfillJob, error)
+	occurrenceSyncRunID(ctx context.Context, orgID, occurrenceID string) (*uuid.UUID, error)
 	coverageProjection(ctx context.Context, orgID string, configID uuid.UUID, lookbackDays, version int) (*coverageProjection, error)
 }
 
@@ -458,6 +459,27 @@ func scanBackfillJob(row pgx.Row) (*backfillJob, error) {
 		return nil, err
 	}
 	return &job, nil
+}
+
+// occurrenceSyncRunID is the run the scheduler planned for one occurrence of the
+// org: nil while it is unplanned, and nil for another org's occurrence (the one
+// query filters on both the occurrence id and org_id).
+func (s store) occurrenceSyncRunID(ctx context.Context, orgID, occurrenceID string) (*uuid.UUID, error) {
+	var runID *string
+	err := s.pool.QueryRow(ctx,
+		`SELECT sync_run_id::text FROM scheduled_sync_occurrences WHERE occurrence_id = $1 AND org_id = $2`,
+		occurrenceID, orgID).Scan(&runID)
+	if errors.Is(err, pgx.ErrNoRows) || (err == nil && runID == nil) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	parsed, err := uuid.Parse(*runID)
+	if err != nil {
+		return nil, err
+	}
+	return &parsed, nil
 }
 
 // backfillJobByID is BackfillJobService.get_job after the id parsed: the

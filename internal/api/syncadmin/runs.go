@@ -461,11 +461,19 @@ func backfillSyncRunID(job *backfillJob) string {
 // backfillRunCounts is _backfill_job_run_counts: nil when the job names no
 // sync run, a non-UUID one, or one not in the job's org.
 func (h *handlers) backfillRunCounts(r *http.Request, job *backfillJob) (*backfillCounts, error) {
-	runID, err := pythonparity.ParseUUID(backfillSyncRunID(job))
+	ctx := r.Context()
+	runText := backfillSyncRunID(job)
+	if occurrence := backfillOccurrenceID(job); runText == "" && occurrence != "" {
+		planned, err := h.store.occurrenceSyncRunID(ctx, job.OrgID, occurrence)
+		if err != nil || planned == nil {
+			return nil, err
+		}
+		runText = planned.String()
+	}
+	runID, err := pythonparity.ParseUUID(runText)
 	if err != nil {
 		return nil, nil
 	}
-	ctx := r.Context()
 	run, err := h.store.syncRunByID(ctx, job.OrgID, runID)
 	if err != nil || run == nil {
 		return nil, err

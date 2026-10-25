@@ -137,6 +137,9 @@ func (f *faultReader) backfillJobByID(context.Context, string, uuid.UUID) (*back
 		SinceDate:  time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 		BeforeDate: time.Date(2026, 1, 3, 0, 0, 0, 0, time.UTC)}, f.hit("backfillJobByID")
 }
+func (f *faultReader) occurrenceSyncRunID(context.Context, string, string) (*uuid.UUID, error) {
+	return nil, f.hit("occurrenceSyncRunID")
+}
 func (f *faultReader) coverageProjection(context.Context, string, uuid.UUID, int, int) (*coverageProjection, error) {
 	return &coverageProjection{Payload: "{}"}, f.hit("coverageProjection")
 }

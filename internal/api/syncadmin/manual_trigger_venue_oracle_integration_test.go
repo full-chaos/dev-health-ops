@@ -288,7 +288,6 @@ func manualRequests(venue *venueoracle.Venue, v manualIDs) []venueoracle.Request
 		manualPost(venue, "trigger: work items over the tier limit", id("t-work-items-over-limit"), "/trigger", "adminB", nil),
 		trigger("trigger: work items under the limit", "t-work-items-under-limit", a),
 		manualPost(venue, "backfill: over the community backfill_days limit", id("b-limit-org-b"), "/backfill", "adminB", json(`{"since": "2026-01-01", "before": "2026-09-30"}`)),
-		backfill("clock: backfill, 31 days (enterprise has no limit)", "b-days-31", a, `{"since": "2026-08-01", "before": "2026-09-01"}`),
 		// The 422s.
 		backfill("backfill 422: selector mixed with flat fields", "b-days-30", a, `{"selector": {"since": "2026-09-01T00:00:00Z", "before": "2026-09-02T00:00:00Z"}, "since": "2026-09-01"}`),
 		backfill("backfill 422: naive selector datetime", "b-days-30", a, `{"selector": {"since": "2026-09-01T00:00:00", "before": "2026-09-02T00:00:00Z"}}`),
@@ -301,6 +300,23 @@ func manualRequests(venue *venueoracle.Venue, v manualIDs) []venueoracle.Request
 		trigger("clock: trigger, falsy full resync option", "t-full-resync-falsy", a),
 		trigger("clock: trigger, child pinned to one source", "t-child-pinned", a),
 		trigger("clock: trigger, child pinned, no targets", "t-child-pinned-untargeted", a),
+	}
+	return out
+}
+
+// retiredBackfillRequests are the backfill submits that plan: the route answers
+// 202 "accepted" with the job and the occurrence at once, where Python (frozen)
+// waited for the plan and answered with the run (CHAOS-11378). Their Python
+// answers are retired; the Go answers are asserted by assertAcceptedBackfill.
+func retiredBackfillRequests(venue *venueoracle.Venue, v manualIDs) []venueoracle.Request {
+	json := venueoracle.B64
+	id := func(name string) string { return v.cfg[name].id.String() }
+	a := "adminA"
+	backfill := func(label, name, token string, body string) venueoracle.Request {
+		return manualPost(venue, label, id(name), "/backfill", token, json(body))
+	}
+	return []venueoracle.Request{
+		backfill("clock: backfill, 31 days (enterprise has no limit)", "b-days-31", a, `{"since": "2026-08-01", "before": "2026-09-01"}`),
 		backfill("clock: backfill, legacy dates", "b-legacy-dates", a, `{"since": "2026-09-01", "before": "2026-09-30"}`),
 		backfill("clock: backfill, structured selector", "b-selector", a, `{"selector": {"since": "2026-09-01T00:00:00Z", "before": "2026-09-30T00:00:00Z"}}`),
 		backfill("clock: backfill, selector with an offset", "b-selector-offset", a, `{"selector": {"since": "2026-09-01T23:00:00-05:00", "before": "2026-09-30T01:30:00+05:30"}}`),
@@ -311,28 +327,47 @@ func manualRequests(venue *venueoracle.Venue, v manualIDs) []venueoracle.Request
 		backfill("clock: backfill, dataset scope only", "b-mixed-scope", a,
 			`{"selector": {"since": "2026-09-01T00:00:00Z", "before": "2026-09-05T00:00:00Z", "dataset_keys": ["prs"]}}`),
 		backfill("clock: backfill, one day", "b-days-30", a, `{"since": "2026-09-01", "before": "2026-09-01"}`),
-		// Python does not validate a source id: the scheduler quarantines the occurrence,
-		// and both routes answer 202 "failed" with its error code.
 		backfill("clock: backfill, a source id that is not a uuid is quarantined", "b-invalid-source", a,
 			`{"selector": {"since": "2026-09-01T00:00:00Z", "before": "2026-09-05T00:00:00Z", "source_ids": ["not-a-uuid"]}}`),
 	}
-	return out
 }
 
-// pendingRequests are answered while the scheduler is stopped: both routes wait
-// their bound and answer 202 "pending" with the occurrence's id, the same on
-// both planes.
+const backfillSubmitRuling = "CHAOS-11378: the backfill submit answers 202 accepted without waiting for the plan"
+
+// pendingRequests are answered while the scheduler is stopped: the trigger waits
+// its bound and answers 202 "pending" with the occurrence's id, the same on both
+// planes. The backfill no longer waits (retiredBackfillRequests).
 func pendingRequests(venue *venueoracle.Venue, v manualIDs) []venueoracle.Request {
 	return []venueoracle.Request{
 		manualPost(venue, "pending: trigger, the scheduler is stopped", v.cfg["t-pending"].id.String(), "/trigger", "adminA", nil),
-		manualPost(venue, "pending: backfill, the scheduler is stopped", v.cfg["b-pending"].id.String(), "/backfill", "adminA",
-			venueoracle.B64(`{"since": "2026-09-01", "before": "2026-09-30"}`)),
 	}
 }
 
 // divergingRequests are answered differently on purpose: Python plans a
 // configuration that is neither planner-managed nor pinned in process; the
 // hand-off refuses it, with nothing written.
+// assertAcceptedBackfill checks one retired backfill answer: 202 "accepted" with
+// a job and an occurrence, no run, and a job row that names the occurrence.
+func assertAcceptedBackfill(t *testing.T, ctx context.Context, pool *pgxpool.Pool, name string, response venueoracle.Response) {
+	t.Helper()
+	if response.Status != 202 || !strings.Contains(response.Body, `"status":"accepted"`) || strings.Contains(response.Body, "sync_run_id") {
+		t.Errorf("%s: %d %s, want 202 accepted without a run", name, response.Status, response.Body)
+		return
+	}
+	var body struct {
+		JobID        string `json:"backfill_job_id"`
+		OccurrenceID string `json:"occurrence_id"`
+	}
+	if err := json.Unmarshal([]byte(response.Body), &body); err != nil || body.JobID == "" || body.OccurrenceID == "" {
+		t.Errorf("%s: %s (%v) names no job or occurrence", name, response.Body, err)
+		return
+	}
+	var task string
+	if err := pool.QueryRow(ctx, `SELECT celery_task_id FROM backfill_jobs WHERE id = $1::uuid`, body.JobID).Scan(&task); err != nil || task != "occurrence:"+body.OccurrenceID {
+		t.Errorf("%s: job %s task %q (%v), want occurrence:%s", name, body.JobID, task, err, body.OccurrenceID)
+	}
+}
+
 func divergingRequests(venue *venueoracle.Venue, v manualIDs) []venueoracle.Request {
 	return []venueoracle.Request{
 		manualPost(venue, "diverging: trigger, legacy configuration", v.cfg["t-legacy-unmanaged"].id.String(), "/trigger", "adminA", nil),
@@ -472,11 +507,22 @@ func runManualTriggerOracle(t *testing.T, golden *venueoracle.Golden) {
 	})
 	t.Logf("receipt (%d requests):\n%s", len(requests), receipt)
 
+	// The backfill submits that plan answer 202 accepted at once; Python's frozen answers wait for the plan.
+	retired := retiredBackfillRequests(venue, v)
+	golden.Retired(t, backfillSubmitRuling, servePython(venue, retired)...)
+	for _, request := range retired {
+		assertAcceptedBackfill(t, ctx, goScheduler, request.Name, venueoracle.Do(t, base, request))
+	}
+
 	// The scheduler stopped: the wait ends with 202 "pending" and the occurrence id.
 	paused.Store(true)
 	pending := pendingRequests(venue, v)
 	pendingReceipt := venueoracle.Diff(t, base, pending, servePython(venue, pending), venueoracle.DiffOptions{Golden: golden})
 	t.Logf("pending receipt:\n%s", pendingReceipt)
+	pendingBackfill := manualPost(venue, "pending: backfill, the scheduler is stopped", v.cfg["b-pending"].id.String(), "/backfill", "adminA",
+		venueoracle.B64(`{"since": "2026-09-01", "before": "2026-09-30"}`))
+	golden.Retired(t, backfillSubmitRuling, servePython(venue, []venueoracle.Request{pendingBackfill})...)
+	assertAcceptedBackfill(t, ctx, goScheduler, pendingBackfill.Name, venueoracle.Do(t, base, pendingBackfill))
 	paused.Store(false)
 
 	// Ruled divergences, both planes asked: Python plans the legacy configuration
@@ -548,6 +594,11 @@ WHERE c.name NOT LIKE '%legacy-unmanaged' ORDER BY c.name`, 30},
 	for _, table := range compare {
 		goRows := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), table.query)
 		var pythonRows string
+		if table.name == "backfill_jobs" {
+			// The job's celery_task_id names the occurrence until the run exists, where Python's names the run.
+			golden.RetireRows(t, table.name, backfillSubmitRuling)
+			continue
+		}
 		if table.name == "sync_run_units" {
 			// Declared divergence: the Go backfill planner ends each window where the next one starts;
 			// Python ends it 1 microsecond earlier. Only that gap is closed; every other column must still match.

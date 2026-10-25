@@ -602,3 +602,86 @@ func TestAuthPhaseEmptyTokenClassIsTheDefault(t *testing.T) {
 		}
 	}
 }
+
+// go-api: every env name the chart renders for go-api is refused in goApi.extraEnv, in any case (a later entry would
+// shadow the rendered one, a Secret reference included).
+func TestGoAPIExtraEnvRefusesEveryRenderedName(t *testing.T) {
+	configs := map[string][]string{
+		"phase 3 with legacy ingest": phaseArgs(3, "--set", "legacyIngest.enabled=true", "--set-string", "legacyIngest.sunset=Tue\\, 01 Dec 2026 00:00:00 GMT"),
+		"phase 2 with eddsa tokens":  phaseArgs(2, "--set", "authService.accessToken.class=eddsa", "--set", "authService.accessToken.issuerURL=https://auth.example"),
+	}
+	names := map[string][]string{}
+	for label, args := range configs {
+		docs, out, err := renderAuth(t, args...)
+		if err != nil {
+			t.Fatalf("%s: render failed: %v\n%.400s", label, err, out)
+		}
+		for _, container := range podContainers(authDoc(docs, "Deployment", "a-dev-health-go-api")) {
+			env, _ := at(container, "env").([]any)
+			for _, entry := range env {
+				name, _ := at(entry, "name").(string)
+				names[name] = args
+			}
+		}
+	}
+	// AUTH_USERS_OWNED renders only from phase 4 (refused at render).
+	names["AUTH_USERS_OWNED"] = configs["phase 3 with legacy ingest"]
+	if len(names) < 19 {
+		t.Fatalf("only %d go-api env names rendered: %v", len(names), names)
+	}
+	for name, args := range names {
+		for _, spelling := range []string{name, strings.ToLower(name)} {
+			_, out, err := renderAuth(t, append(append([]string{}, args...),
+				"--set-json", fmt.Sprintf(`goApi.extraEnv=[{"name":%q,"value":"literal"}]`, spelling))...)
+			if err == nil {
+				t.Errorf("goApi.extraEnv %s rendered: a literal would shadow the chart's %s", spelling, name)
+				continue
+			}
+			if !strings.Contains(out, "goApi.extraEnv must not set") {
+				t.Errorf("goApi.extraEnv %s: the refusal does not name extraEnv: %.300s", spelling, out)
+			}
+		}
+	}
+}
+
+// go-api: a literal value under any secret-like name is refused in goApi.extraEnv, in any case; valueFrom stays allowed.
+func TestGoAPIExtraEnvRefusesSecretLikeLiterals(t *testing.T) {
+	refused := map[string]string{
+		"collision JWT_SECRET_KEY":           `[{"name":"JWT_SECRET_KEY","value":"literal"}]`,
+		"collision API_DATABASE_URI":         `[{"name":"API_DATABASE_URI","value":"literal"}]`,
+		"collision AUTH_SESSION_ISSUE_TOKEN": `[{"name":"AUTH_SESSION_ISSUE_TOKEN","value":"literal"}]`,
+		"unknown social client secret":       `[{"name":"SOCIAL_X_CLIENT_SECRET","value":"literal"}]`,
+		"mixed case":                         `[{"name":"Partner_Api_Token","value":"literal"}]`,
+		"password":                           `[{"name":"SMTP_PASSWORD","value":"literal"}]`,
+		"dsn":                                `[{"name":"REPORTING_DSN","value":"literal"}]`,
+		"credentials":                        `[{"name":"partner_credentials","value":"literal"}]`,
+	}
+	for name, env := range refused {
+		t.Run(name, func(t *testing.T) {
+			_, out, err := renderAuth(t, phaseArgs(2, "--set-json", "goApi.extraEnv="+env)...)
+			if err == nil {
+				t.Fatalf("%s rendered a literal under a secret-like or rendered name", env)
+			}
+			if !strings.Contains(out, "goApi.extraEnv must not set") {
+				t.Fatalf("the refusal does not name extraEnv: %.300s", out)
+			}
+		})
+	}
+	control := `[{"name":"PARTNER_API_TOKEN","valueFrom":{"secretKeyRef":{"name":"partner","key":"token"}}},{"name":"LOG_FORMAT","value":"json"}]`
+	docs, out, err := renderAuth(t, phaseArgs(2, "--set-json", "goApi.extraEnv="+control)...)
+	if err != nil {
+		t.Fatalf("a secretKeyRef under a secret-like name and a plain literal were refused: %v\n%.400s", err, out)
+	}
+	found := false
+	for _, container := range podContainers(authDoc(docs, "Deployment", "a-dev-health-go-api")) {
+		env, _ := at(container, "env").([]any)
+		for _, entry := range env {
+			if at(entry, "name") == "PARTNER_API_TOKEN" {
+				found = envEntryValue(entry) == "secret:partner/token"
+			}
+		}
+	}
+	if !found {
+		t.Error("PARTNER_API_TOKEN did not render as the Secret reference")
+	}
+}

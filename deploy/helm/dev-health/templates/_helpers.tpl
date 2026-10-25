@@ -736,6 +736,24 @@ names and proves each is refused.
 {{- end -}}
 
 {{/*
+Every env name the chart renders for the go-api container, as a JSON list. goApi.extraEnv refuses each of them in
+any case, for the same reason as dev-health.authServiceEnvNames. auth_phase_test.go walks the rendered names.
+*/}}
+{{- define "dev-health.goApiEnvNames" -}}
+{{- $names := list "API_DATABASE_URI" "JWT_SECRET_KEY" "AUTH_DATABASE_SCHEMA" "HIDE_MIGRATED_CHILD_CONFIGS" "SYNC_WATERMARK_OVERLAP" "SYNC_INCREMENTAL_HEAVY_MAX_WINDOW_DAYS" "AUTH_PROXY_URL" "AUTH_PROXY_SESSIONS" "AUTH_PROXY_LOCAL_LOGIN" "AUTH_PROXY_CREDENTIALS" "AUTH_PROXY_SOCIAL" "AUTH_PROXY_OIDC" "AUTH_PROXY_SAML" "AUTH_SESSION_ISSUE_TOKEN" "AUTH_USERS_OWNED" "AUTH_ACCESS_TOKEN_ISSUER" "TRUSTED_PROXIES_NETWORK_FENCED" "DEV_HEALTH_LEGACY_INGEST_ENABLED" "DEV_HEALTH_LEGACY_INGEST_SUNSET" -}}
+{{- toJson $names -}}
+{{- end -}}
+
+{{/*
+"true" when an extraEnv entry carries a literal value under a secret-like name: the name ends, in any case, in
+_SECRET, _PASSWORD, _TOKEN, _KEY, _DSN or _CREDENTIALS. Such a name may come only by valueFrom.secretKeyRef.
+Call with the extraEnv entry.
+*/}}
+{{- define "dev-health.secretLikeLiteralEnv" -}}
+{{- if and (kindIs "map" .) (hasKey . "value") (regexMatch "(?i)_(SECRET|PASSWORD|TOKEN|KEY|DSN|CREDENTIALS)$" (trim (toString .name))) -}}true{{- end -}}
+{{- end -}}
+
+{{/*
 "true" when authService.phase turns the ladder flag on, else "". Call with (dict "flag" <name> "context" $).
 The ladder (each flag is on from its phase up): service 1, sessions 2, localLogin 3, social 3, credentials 4,
 usersOwned 4, orgsOwned 5. credentials moves with usersOwned: auth-service mounts the credential routes only with

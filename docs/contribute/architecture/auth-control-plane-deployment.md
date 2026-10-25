@@ -132,7 +132,8 @@ chart renders for auth-service and for go-api's verifier),
 auth-service, in any case, so no entry can shadow a Secret reference, and it
 refuses a literal `value` under any secret-like name (`*_SECRET`, `*_PASSWORD`,
 `*_TOKEN`, `*_KEY`, `*_DSN`, `*_CREDENTIALS`); such a name comes only by
-`valueFrom.secretKeyRef`.
+`valueFrom.secretKeyRef`. `goApi.extraEnv` follows the same two rules for the
+names the chart renders for go-api.
 
 The chart creates **no Secret** for it. Create these in the release namespace
 first and reference them by name:

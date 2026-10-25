@@ -134,7 +134,10 @@ goApi:
   #    nothing from the platform Secret/ConfigMap unless listed here.
   envFrom: []
   # -- Extra environment variables (list of name/value pairs), for example
-  #    OTEL_ENABLED / OTEL_EXPORTER_OTLP_ENDPOINT.
+  #    OTEL_ENABLED / OTEL_EXPORTER_OTLP_ENDPOINT. Refused: any name the chart
+  #    renders for go-api (any case), and a literal `value` under a secret-like
+  #    name (*_SECRET, *_PASSWORD, *_TOKEN, *_KEY, *_DSN, *_CREDENTIALS, any
+  #    case); such a name may come only by valueFrom.secretKeyRef.
   extraEnv: []
   nodeSelector: {}
   tolerations: []

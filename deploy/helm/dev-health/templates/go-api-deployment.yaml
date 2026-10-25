@@ -155,6 +155,8 @@ shell, no sleep binary): the native sleep action, a Kubernetes >= 1.30 feature (
 {{- if hasPrefix "AUTH_PROXY_" (upper (trim .name)) }}{{- fail "goApi.extraEnv must not set AUTH_PROXY_*: authService.phase renders them, and the chart checks the phase" }}{{- end }}
 {{- if eq (upper (trim .name)) "AUTH_USERS_OWNED" }}{{- fail "goApi.extraEnv must not set AUTH_USERS_OWNED: authService.phase renders it, for auth-service and the auth-migrate and auth-grants Jobs too" }}{{- end }}
 {{- if eq (upper (trim .name)) "AUTH_ACCESS_TOKEN_ISSUER" }}{{- fail "goApi.extraEnv must not set AUTH_ACCESS_TOKEN_ISSUER: authService.accessToken.issuerURL renders it, for auth-service too" }}{{- end }}
+{{- if has (upper (trim (toString .name))) (include "dev-health.goApiEnvNames" $ | fromJsonArray) }}{{- fail (printf "goApi.extraEnv must not set %s: the chart renders it for go-api, and a later entry would shadow the rendered value (a Secret reference included)" .name) }}{{- end }}
+{{- if include "dev-health.secretLikeLiteralEnv" . }}{{- fail (printf "goApi.extraEnv must not set %s as a literal value: the name looks like a secret, and a literal would put it in the manifest; reference it with valueFrom.secretKeyRef" .name) }}{{- end }}
 {{- end }}
 apiVersion: apps/v1
 kind: Deployment

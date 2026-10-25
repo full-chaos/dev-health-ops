@@ -16,7 +16,7 @@ import (
 // that stops failing on a skipped relevant job. The exec test test_closure_check_executes_and_fails_on_a_forbidden_or_stale_module
 // runs `go list` over four build configurations and is not a pure file read: it moves to PR C (script contracts).
 
-var authFiles = []string{".github/workflows/go-auth-service.yml", "ci/check_go.sh", "ci/auth_closure_allow.tsv", "docker/go-worker.Dockerfile"}
+var authFiles = []string{".github/workflows/go-auth-service.yml", ".github/workflows/go-quality.yml", "ci/check_go.sh", "ci/auth_closure_allow.tsv", "docker/go-worker.Dockerfile"}
 
 var requiredContexts = map[string]bool{"test": true, "lint": true, "go-quality": true, "metrics-executed-proof": true,
 	"live-e2e": true, "go-queue-gate": true, "image-queue-gate": true}
@@ -26,11 +26,15 @@ var gatePairRe = regexp.MustCompile(`(?m)^\s*\[ "\$\{pair#\*=\}" = "success" \] 
 
 var (
 	authFuzzBlock  = regexp.MustCompile(`(?s)AUTH_FUZZ_TARGETS=\((.*?)\n\)`)
-	authFuzzRow    = regexp.MustCompile(`"\S+ (Fuzz\w+)"`)
-	authStageCall  = regexp.MustCompile(`^\s*bash ci/check_go\.sh auth ([a-z-]+)`)
+	authFuzzRow    = regexp.MustCompile(`"(\S+) (Fuzz\w+)"`)
+	authStageCall  = regexp.MustCompile(`(?m)^\s*bash ci/check_go\.sh auth ([a-z-]+)`)
 	authClosureFn  = regexp.MustCompile(`(?s)check_auth_closure\(\) \{(.*?)\n\}`)
-	authStagesWant = []string{"fmt", "vet", "test", "race", "race-integration", "fuzz", "history", "vuln", "middleware", "fuzz-registry", "paths-selftest", "scope-selftest"}
+	authStagesWant = []string{"test", "race", "race-integration", "fuzz", "history", "vuln", "middleware", "fuzz-registry", "paths-selftest", "scope-selftest"}
 )
+
+func testSteps0(jobs map[string]any) []map[string]any {
+	return stepsOf(jobs["auth-test"])
+}
 
 func authViolations(t *testing.T, root string) []string {
 	t.Helper()
@@ -64,23 +68,37 @@ func authViolations(t *testing.T, root string) []string {
 		}
 	}
 
+	// The fuzz jobs are grouped by package (CHAOS-11417): a matrix row is {package, targets}, one job runs its targets one
+	// `auth fuzz TARGET` call at a time. Every registered target must sit in exactly one group of its own package.
 	var matrix []string
-	for _, x := range asList(asMap(asMap(asMap(jobs["auth-fuzz"])["strategy"])["matrix"])["target"]) {
-		matrix = append(matrix, asString(x))
+	fuzzJob := asMap(jobs["auth-fuzz"])
+	groupOf := map[string]string{}
+	for _, x := range asList(asMap(asMap(fuzzJob["strategy"])["matrix"])["include"]) {
+		row := asMap(x)
+		pkg := asString(row["package"])
+		if pkg == "" {
+			out = append(out, "an auth-fuzz matrix row has no package")
+		}
+		for _, target := range strings.Fields(asString(row["targets"])) {
+			matrix = append(matrix, target)
+			groupOf[target] = pkg
+		}
 	}
 	var registry []string
+	registryPkg := map[string]string{}
 	if blk := authFuzzBlock.FindStringSubmatch(checkGo); blk == nil {
 		out = append(out, "AUTH_FUZZ_TARGETS is no longer one literal array in ci/check_go.sh")
 	} else {
 		for _, m := range authFuzzRow.FindAllStringSubmatch(blk[1], -1) {
-			registry = append(registry, m[1])
+			registry = append(registry, m[2])
+			registryPkg[m[2]] = strings.TrimPrefix(m[1], "./")
 		}
 	}
 	sm, sr := append([]string{}, matrix...), append([]string{}, registry...)
 	sort.Strings(sm)
 	sort.Strings(sr)
 	if !reflect.DeepEqual(sm, sr) {
-		out = append(out, fmt.Sprintf("the auth-fuzz matrix %v differs from the AUTH_FUZZ_TARGETS registry %v: every registered parser needs its own CI-visible fuzz job, and no job may name a missing target", sm, sr))
+		out = append(out, fmt.Sprintf("the auth-fuzz matrix %v differs from the AUTH_FUZZ_TARGETS registry %v: every registered parser needs a CI-visible fuzz job, exactly once, and no job may name a missing target", sm, sr))
 	}
 	uniq := map[string]bool{}
 	for _, m := range matrix {
@@ -88,6 +106,48 @@ func authViolations(t *testing.T, root string) []string {
 	}
 	if len(uniq) != len(matrix) {
 		out = append(out, "the auth-fuzz matrix repeats a target")
+	}
+	for target, pkg := range groupOf {
+		if want, ok := registryPkg[target]; ok && want != pkg {
+			out = append(out, fmt.Sprintf("fuzz target %s is grouped under package %q but the registry says %q", target, pkg, want))
+		}
+	}
+	fuzzCalls := 0
+	for _, st := range stepsOf(fuzzJob) {
+		run := str(st["run"])
+		if strings.Contains(run, `bash ci/check_go.sh auth fuzz "${target}"`) && strings.Contains(run, "for target in ${TARGETS}") {
+			fuzzCalls++
+		}
+	}
+	if fuzzCalls != 1 {
+		out = append(out, "auth-fuzz must have exactly one step looping `auth fuzz \"${target}\"` over ${TARGETS}")
+	}
+	// one fuzz budget for every target: AUTH_FUZZTIME has one default in ci/check_go.sh and no job may override it
+	if strings.Contains(wfText, "AUTH_FUZZTIME") {
+		out = append(out, "the workflow sets AUTH_FUZZTIME: every target runs the one default budget of ci/check_go.sh")
+	}
+
+	// gofmt and vet are owned by go-quality's static leg on every event (CHAOS-11417): same packages, same flags, pure
+	// functions of the source. The auth workflow must not run them again, and the owner must stay unskippable.
+	for _, jn := range sortedKeys(jobs) {
+		for _, st := range stepsOf(jobs[jn]) {
+			if m := authStageCall.FindStringSubmatch(str(st["run"])); m != nil && (m[1] == "fmt" || m[1] == "vet") {
+				out = append(out, fmt.Sprintf("job %s runs auth %s, which go-quality static owns", jn, m[1]))
+			}
+		}
+	}
+	quality := readFile(t, filepath.Join(root, ".github/workflows/go-quality.yml"))
+	if !strings.Contains(quality, `if [ "${LEG}" = "static" ]; then`) || !strings.Contains(quality, "the static leg runs on every change set") {
+		out = append(out, "go-quality's static leg no longer runs on every change set: auth fmt/vet have no owner")
+	}
+	if !regexp.MustCompile(`(?s)\n    static\)\n(\s*ci_leg_stage \S+ \S+\n)*?\s*ci_leg_stage format check_format\n(\s*ci_leg_stage \S+ \S+\n)*?\s*ci_leg_stage vet check_vet\n`).MatchString(checkGo) {
+		out = append(out, "the static ci-leg no longer runs check_format and check_vet")
+	}
+	// the auth test and race legs are not duplicates of go-quality (no -count=1 there, race skips on pull requests): they stay, unconditional
+	for _, st := range testSteps0(jobs) {
+		if r := asString(st["run"]); (r == "bash ci/check_go.sh auth test" || r == "bash ci/check_go.sh auth race") && st["if"] != nil {
+			out = append(out, fmt.Sprintf("`%s` must run on every event: go-quality is not a superset of it", r))
+		}
 	}
 
 	for _, key := range []string{"auth-go-quality", "auth-test", "auth-fuzz"} {
@@ -200,7 +260,7 @@ func TestAuthServiceWorkflow(t *testing.T) {
 
 func TestAuthServiceWorkflowPlantedDefects(t *testing.T) {
 	root := repoRoot(t)
-	const wf, cg, tsv, dockerfile = ".github/workflows/go-auth-service.yml", "ci/check_go.sh", "ci/auth_closure_allow.tsv", "docker/go-worker.Dockerfile"
+	const wf, quality, cg, tsv, dockerfile = ".github/workflows/go-auth-service.yml", ".github/workflows/go-quality.yml", "ci/check_go.sh", "ci/auth_closure_allow.tsv", "docker/go-worker.Dockerfile"
 	cases := []struct {
 		name string
 		muts []mutation
@@ -218,6 +278,16 @@ func TestAuthServiceWorkflowPlantedDefects(t *testing.T) {
 		{"CGO_ENABLED=0 survives only in a comment", []mutation{{dockerfile, "CGO_ENABLED=0", allMarker + "# CGO_ENABLED=0"}}, []string{"no longer builds with CGO_ENABLED=0"}},
 		{"closure allow row loses its reason", []mutation{{tsv, "github.com/jackc/pgx/v5\tACP-ADR-01 item 5: PostgreSQL driver", "github.com/jackc/pgx/v5\t "}}, []string{"needs <module><TAB><reason>"}},
 		{"closure allow list admits clickhouse", []mutation{{tsv, "github.com/jackc/pgx/v5\t", "github.com/ClickHouse/clickhouse-go/v2\tplanted\ngithub.com/jackc/pgx/v5\t"}}, []string{"ClickHouse must never"}},
+		{"a fuzz group loses a target", []mutation{{wf, "targets: FuzzParseSAMLResponse FuzzSAMLSubject", "targets: FuzzParseSAMLResponse"}}, []string{"differs from the AUTH_FUZZ_TARGETS registry", "FuzzSAMLSubject"}},
+		{"a fuzz target is listed twice", []mutation{{wf, "targets: FuzzParseSAMLResponse FuzzSAMLSubject", "targets: FuzzParseSAMLResponse FuzzSAMLSubject FuzzSAMLSubject"}}, []string{"repeats a target"}},
+		{"a fuzz target is grouped under the wrong package", []mutation{{wf, "package: internal/auth/identity/saml\n            targets: FuzzParseSAMLResponse FuzzSAMLSubject", "package: internal/auth/identity/saml\n            targets: FuzzParseSAMLResponse FuzzSAMLSubject FuzzNormalizeEmail"}}, []string{"repeats a target", "grouped under package"}},
+		{"a fuzz job sets its own budget", []mutation{{wf, "          TARGETS: ${{ matrix.targets }}\n", "          TARGETS: ${{ matrix.targets }}\n          AUTH_FUZZTIME: 5s\n"}}, []string{"sets AUTH_FUZZTIME"}},
+		{"the fuzz loop stops calling the stage", []mutation{{wf, `bash ci/check_go.sh auth fuzz "${target}"`, `echo "${target}"`}}, []string{"exactly one step looping"}},
+		{"the auth workflow runs vet again", []mutation{{wf, "      - name: Fuzz registry matches the tree\n", "      - name: go vet\n        run: bash ci/check_go.sh auth vet\n      - name: Fuzz registry matches the tree\n"}}, []string{"runs auth vet"}},
+		{"the auth workflow runs gofmt again", []mutation{{wf, "      - name: Fuzz registry matches the tree\n", "      - name: gofmt\n        run: bash ci/check_go.sh auth fmt\n      - name: Fuzz registry matches the tree\n"}}, []string{"runs auth fmt"}},
+		{"go-quality static may be skipped", []mutation{{quality, "the static leg runs on every change set", "the static leg may be skipped"}}, []string{"static leg no longer runs on every change set"}},
+		{"go-quality static drops vet", []mutation{{cg, "      ci_leg_stage vet check_vet\n", ""}}, []string{"static ci-leg no longer runs"}},
+		{"the auth race step gains a pull request guard", []mutation{{wf, "      - name: go test -race (auth packages)\n", "      - name: go test -race (auth packages)\n        if: github.event_name == 'pull_request'\n"}}, []string{"must run on every event"}},
 		{"closure check stops covering arm64", []mutation{{cg, "for arch in amd64 arm64", "for arch in amd64"}}, []string{"no longer covers cgo"}},
 	}
 	for _, c := range cases {

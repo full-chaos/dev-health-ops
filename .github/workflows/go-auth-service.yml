@@ -1,7 +1,7 @@
 # Quality and release gates for the Auth Control Plane tree (CHAOS-4887, Wave 1
 # of CHAOS-3274): go test and -race scoped to the auth packages, the
-# production-middleware stack test (G-69), one fuzz run per parser, vet, gofmt,
-# and a strict govulncheck (any reachable finding fails; no ignore list). The gate logic lives in `ci/check_go.sh auth`;
+# production-middleware stack test (G-69), one fuzz run per parser (grouped by package) and
+# a strict govulncheck (any reachable finding fails; no ignore list). The gate logic lives in `ci/check_go.sh auth`;
 # this file only schedules it.
 #
 # RELEVANCE IS DECIDED INSIDE, not in the trigger (the go-quality.yml design,
@@ -107,10 +107,8 @@ jobs:
         run: bash ci/check_go.sh auth paths-selftest
       - name: Gate scope covers every auth-looking package
         run: bash ci/check_go.sh auth scope-selftest
-      - name: gofmt
-        run: bash ci/check_go.sh auth fmt
-      - name: go vet
-        run: bash ci/check_go.sh auth vet
+      # gofmt and go vet are owned by go-quality's static leg on every event (same packages, same flags, CHAOS-11417);
+      # internal/cigates/workflows pins that this workflow does not run them again and that the owner cannot be skipped.
       - name: Fuzz registry matches the tree
         run: bash ci/check_go.sh auth fuzz-registry
       - name: govulncheck (auth packages, pinned, strict)
@@ -142,7 +140,11 @@ jobs:
       - name: Production middleware stack is mounted and driven (G-69)
         run: bash ci/check_go.sh auth middleware
 
+  # One job per package (CHAOS-11417): checkout, setup-go and the compile are paid once per package, not once per target.
+  # Each target keeps its own `auth fuzz TARGET` call, so its corpus, its proof marker and the one default fuzz budget
+  # of ci/check_go.sh are unchanged. A new target in a listed package needs only its registry row.
   auth-fuzz:
+    name: auth-fuzz (${{ matrix.package }})
     needs: [auth-changes]
     if: needs.auth-changes.outputs.relevant == 'true'
     runs-on: ubuntu-latest
@@ -150,36 +152,43 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target:
-          - FuzzParseErrorEnvelope
-          - FuzzRevisionUnmarshal
-          - FuzzTimestampUnmarshal
-          - FuzzParseAccessToken
-          - FuzzVerifyToken
-          - FuzzValidSignedToken
-          - FuzzParseLimit
-          - FuzzParseForwardedTrust
-          - FuzzParseTrust
-          - FuzzParseEd25519Key
-          - FuzzParseKeySetManifest
-          - FuzzConfigLoad
-          - FuzzNormalizeEmail
-          - FuzzExternalKeyValidate
-          - FuzzParseRefreshRequest
-          - FuzzOpenState
-          - FuzzParseJOSEHeader
-          - FuzzValidateIDTokenClaims
-          - FuzzParseCallbackBody
-          - FuzzParseSAMLResponse
-          - FuzzSAMLSubject
+        include:
+          - package: internal/auth/authapi
+            targets: FuzzParseRefreshRequest
+          - package: internal/auth/contracts
+            targets: FuzzParseErrorEnvelope FuzzRevisionUnmarshal FuzzTimestampUnmarshal FuzzParseAccessToken
+          - package: internal/auth/edgetoken
+            targets: FuzzVerifyToken
+          - package: internal/auth/signedtoken
+            targets: FuzzValidSignedToken
+          - package: internal/auth/httpapi
+            targets: FuzzParseLimit FuzzParseForwardedTrust
+          - package: internal/auth/clientaddr
+            targets: FuzzParseTrust
+          - package: internal/auth/keystore
+            targets: FuzzParseEd25519Key FuzzParseKeySetManifest
+          - package: internal/auth/authconfig
+            targets: FuzzConfigLoad
+          - package: internal/auth/identity
+            targets: FuzzNormalizeEmail FuzzExternalKeyValidate
+          - package: internal/auth/identity/oidc
+            targets: FuzzOpenState FuzzParseJOSEHeader FuzzValidateIDTokenClaims FuzzParseCallbackBody
+          - package: internal/auth/identity/saml
+            targets: FuzzParseSAMLResponse FuzzSAMLSubject
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache-dependency-path: '**/go.sum'
-      - name: Fuzz ${{ matrix.target }} (its own corpus, its own proof marker)
-        run: bash ci/check_go.sh auth fuzz "${{ matrix.target }}"
+      - name: Fuzz ${{ matrix.package }} (each target its own corpus, its own proof marker)
+        env:
+          TARGETS: ${{ matrix.targets }}
+        run: |
+          set -euo pipefail
+          for target in ${TARGETS}; do
+            bash ci/check_go.sh auth fuzz "${target}"
+          done
 
   auth-gate:
     if: always()

@@ -33,9 +33,9 @@
 # runs. A non-Go path in a declared class plans the packages that read it (AFFECTED) or
 # NONE when no package reads it; NONE skips the test and race legs, AFFECTED runs only its
 # packages. The static leg and the fan-in always run and report. On a pull request the plan
-# also gets --md-bounded: for a change of Markdown files only (no testdata, no go:embed target)
-# a reads.tsv reader is selected only by the exact paths its code names; a merge group then
-# runs the full plan before main. The plan
+# also gets --md-bounded: a change of Markdown files only (no testdata, no go:embed target)
+# plans their bounded readers and the unbounded sites with Markdown evidence; a merge group
+# then runs the full plan before main. The plan
 # verdict is exact, so no docs-only rule overrides it: some docs files are Go test inputs. The race legs are
 # heavy: on a pull request without the ci:full label they report success without running
 # (they run in the merge queue and on the main push).
@@ -115,7 +115,7 @@ jobs:
             full "go list -test failed"
           else
             sed -e "s#^${modpath}/##" -e "s#^${modpath}\$#.#" "${RUNNER_TEMP}/packages.txt" > "${RUNNER_TEMP}/keys.txt"
-            # A pull request of Markdown files only narrows reads.tsv readers to exact paths; every other event keeps the full plan.
+            # A pull request of Markdown files only plans their bounded readers; every other event keeps the full plan.
             md=()
             if [ "${EVENT_NAME}" = pull_request ]; then
               md=(--md-bounded)

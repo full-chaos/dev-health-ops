@@ -42,6 +42,9 @@ const (
 	// ReadOpaque: a file the call graph of reach.tsv cannot see through (go:linkname, cgo, plugin); its tables are
 	// defective, so every plan is FULL.
 	ReadOpaque = "opaque"
+	// ReadPattern: a read whose path the tool cannot bound but whose code names a pattern a Markdown file can match
+	// (Path: the pattern): an exec argument such as `*.md`, or a constant `.md` tail joined to an unbounded directory.
+	ReadPattern = "pattern"
 )
 
 // Read is one place a package names a repository path, or reads, walks, runs or loads one.
@@ -59,16 +62,16 @@ type Read struct {
 	Literal string
 }
 
-// filter is the walks.tsv filter column: the base-name glob, `*` for a walk that acts on every file and `-` for an
-// unexpressed root.
+// filter is the walks.tsv filter column: the base-name suffixes its gate passes (`*.go`, `*.go|*.md`), else `*` for a
+// walk that acts on every file and `-` for an unexpressed root.
 func (r Read) filter() string {
 	switch {
+	case r.Filter != "":
+		return r.Filter
 	case r.Root == unexpressed:
 		return "-"
-	case r.Filter == "":
-		return "*"
 	}
-	return r.Filter
+	return "*"
 }
 
 func (r Read) String() string {
@@ -80,6 +83,8 @@ func (r Read) String() string {
 		what = fmt.Sprintf("walks %s (%s, files %s; %s)", r.Root, r.Depth, r.filter(), r.Literal)
 	case ReadEdge:
 		what = fmt.Sprintf("runs or loads %s (%s)", r.Target, r.Literal)
+	case ReadPattern:
+		what = fmt.Sprintf("reads paths matching %s (%s)", r.Path, r.Literal)
 	}
 	return fmt.Sprintf("%s:%d %s", r.File, r.Line, what)
 }
@@ -532,11 +537,12 @@ func checkReach(root string, t *tables, reads []Read) ([]string, reachStats, err
 	return defects, st, nil
 }
 
-var tableWhat = map[string]string{walksFile: "walk", dynReadsFile: "unbounded read", edgesFile: "run or load of Go packages"}
+var tableWhat = map[string]string{walksFile: "walk", dynReadsFile: "unbounded read", edgesFile: "run or load of Go packages",
+	patternsFile: "pattern read"}
 
 // generatedRows is the walks.tsv, dynreads.tsv and edges.tsv rows the reads call for, each with one sample read.
 func generatedRows(reads []Read) map[string]map[string]string {
-	out := map[string]map[string]string{walksFile: {}, dynReadsFile: {}, edgesFile: {}}
+	out := map[string]map[string]string{walksFile: {}, dynReadsFile: {}, edgesFile: {}, patternsFile: {}}
 	for _, r := range reads {
 		site := path.Base(r.File)
 		var file, row string
@@ -550,6 +556,8 @@ func generatedRows(reads []Read) map[string]map[string]string {
 				continue
 			}
 			file, row = edgesFile, r.Package+"\t"+site+"\t"+r.Target
+		case ReadPattern:
+			file, row = patternsFile, r.Package+"\t"+site+"\t"+r.Path
 		default:
 			continue
 		}

@@ -7,6 +7,7 @@ import (
 	"go/token"
 	"path"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -1158,7 +1159,7 @@ func (c *fileCtx) record(body ast.Node, sc *scope, at func(ast.Node) int, add fu
 						root := c.walkRoot(x.Args[0], sc, false)
 						filter, gate := c.walkFilter(lit)
 						c.call(x, name, sc, at, func(r Read) {
-							if r.Kind == ReadWalk && r.Root != unexpressed {
+							if r.Kind == ReadWalk {
 								r.Filter = filter
 							}
 							add(r)
@@ -1278,6 +1279,35 @@ func (c *fileCtx) walkFilter(lit *ast.FuncLit) (string, int) {
 		}
 		return s
 	}
+	// The extension gate: `ext := filepath.Ext(path)` then `if !exts[ext] { return nil }`, exts a package map literal of
+	// constant extensions that nothing writes: the walk acts on those extensions only.
+	extAliases := map[string]int{}
+	isExtOf := func(e ast.Expr) bool {
+		x, ok := ast.Unparen(e).(*ast.CallExpr)
+		if !ok || len(x.Args) != 1 {
+			return false
+		}
+		n := c.s.callName(x.Fun)
+		return (n == "path/filepath.Ext" || n == "path.Ext") && subject(x.Args[0])
+	}
+	extSet := func(e ast.Expr) []string {
+		idx, ok := ast.Unparen(e).(*ast.IndexExpr)
+		if !ok {
+			return nil
+		}
+		if id, ok := ast.Unparen(idx.Index).(*ast.Ident); ok {
+			if n, ok := extAliases[id.Name]; !ok || before(id.Name) != n {
+				return nil
+			}
+		} else if !isExtOf(idx.Index) {
+			return nil
+		}
+		m, ok := idx.X.(*ast.Ident)
+		if !ok || countAssigns(body, m.Name) > 0 {
+			return nil
+		}
+		return c.constExtSet(m.Name)
+	}
 	for i, st := range body.List {
 		upto = i
 		if ifs, ok := st.(*ast.IfStmt); ok && ifs.Init == nil && ifs.Else == nil {
@@ -1288,6 +1318,9 @@ func (c *fileCtx) walkFilter(lit *ast.FuncLit) (string, int) {
 					if u, ok := ast.Unparen(d).(*ast.UnaryExpr); ok && u.Op == token.NOT {
 						if s := suffix(u.X); s != "" && c.allPure(ds[:j], trusted()) {
 							return "*" + s, i
+						}
+						if exts := extSet(u.X); len(exts) > 0 && c.allPure(ds[:j], trusted()) {
+							return "*" + strings.Join(exts, "|*"), i
 						}
 					}
 				}
@@ -1326,6 +1359,11 @@ func (c *fileCtx) walkFilter(lit *ast.FuncLit) (string, int) {
 					aliases[id.Name]++
 				} else if id.Name != names[0] {
 					delete(aliases, id.Name)
+				}
+				if len(a.Lhs) == len(a.Rhs) && isExtOf(a.Rhs[j]) {
+					extAliases[id.Name]++
+				} else {
+					delete(extAliases, id.Name)
 				}
 			}
 		}
@@ -1580,6 +1618,7 @@ func (c *fileCtx) call(x *ast.CallExpr, name string, sc *scope, at func(ast.Node
 				// a temp file, a module file, or a path below the directory of the test binary that runs this code
 			default:
 				dyn(what)
+				c.tailPattern(arg, sc, line, what, add)
 			}
 		}
 	}
@@ -1594,7 +1633,11 @@ func (c *fileCtx) call(x *ast.CallExpr, name string, sc *scope, at func(ast.Node
 		return
 	}
 	if w, ok := walkArg[name]; ok && w.arg < len(x.Args) {
-		walk(c.walkRoot(x.Args[w.arg], sc, name == "path/filepath.Glob"), w.depth, name)
+		root := c.walkRoot(x.Args[w.arg], sc, name == "path/filepath.Glob")
+		walk(root, w.depth, name)
+		if root.kind != kRepo && root.kind != kWalk && root.kind != kTemp {
+			c.tailPattern(x.Args[w.arg], sc, line, name, add)
+		}
 		return
 	}
 	if strings.HasSuffix(name, ".ParseFiles") || strings.HasSuffix(name, ".ParseGlob") {
@@ -1666,6 +1709,22 @@ func (c *fileCtx) execEdges(x *ast.CallExpr, name string, sc *scope, line int, a
 			return
 		}
 		args = args[1:]
+	}
+	// A literal argument that names Markdown files (`*.md`, `README.md`) is a read of them whatever the program.
+	for _, a := range args {
+		ast.Inspect(a, func(n ast.Node) bool {
+			if lit, ok := n.(*ast.BasicLit); ok && lit.Kind == token.STRING {
+				if v, err := strconv.Unquote(lit.Value); err == nil {
+					if i := strings.LastIndexByte(v, ':'); i >= 0 {
+						v = v[i+1:] // git rev:path and pathspec magic name the path after the colon
+					}
+					if mdEvidence(v) {
+						add(Read{Kind: ReadPattern, Line: line, Path: v, Literal: name})
+					}
+				}
+			}
+			return true
+		})
 	}
 	if x.Ellipsis.IsValid() || len(args) == 0 {
 		edge(unexpressed, name+" with spread arguments")
@@ -2341,4 +2400,140 @@ func escapes(holder ast.Node, v string) bool {
 	}
 	visit(holder, false)
 	return found
+}
+
+// mdEvidence reports whether a constant names Markdown files: it ends in .md, or it is a glob whose last segment can
+// end in .md (no extension, or a wildcard in it). A path-like constant only (a valid patterns.tsv field).
+func mdEvidence(v string) bool {
+	if v == "" || strings.ContainsAny(v, " \t\n\r\"'=;(){}<>|&$`\\,:") {
+		return false // not a path or a pattern: a message, a flag value, a shell line
+	}
+	base := path.Base(v)
+	ext := path.Ext(base)
+	if _, err := path.Match(base, ""); err != nil {
+		return false
+	}
+	return ext == ".md" || strings.ContainsAny(base, "*?[") && (ext == "" || strings.ContainsAny(ext, "*?["))
+}
+
+// tailPattern records a patterns.tsv row for an unbounded path that ends in a constant naming Markdown files:
+// filepath.Join(dir, "docs", "index.md") or dir+"/README.md" reads **/docs/index.md, **/README.md.
+func (c *fileCtx) tailPattern(arg ast.Expr, sc *scope, line int, what string, add func(Read)) {
+	var tail []string
+	switch x := ast.Unparen(arg).(type) {
+	case *ast.CallExpr:
+		if n := c.s.callName(x.Fun); (n == "path/filepath.Join" || n == "path.Join") && !x.Ellipsis.IsValid() {
+			for i := len(x.Args) - 1; i >= 1; i-- {
+				v, ok := c.foldString(x.Args[i], sc)
+				if !ok {
+					break
+				}
+				tail = append([]string{v}, tail...)
+			}
+		}
+	case *ast.BinaryExpr:
+		if v, ok := c.foldString(x.Y, sc); ok && x.Op == token.ADD {
+			tail = []string{v}
+		}
+	}
+	if len(tail) == 0 {
+		return
+	}
+	s := strings.TrimLeft(path.Clean(strings.Join(tail, "/")), "/")
+	for strings.HasPrefix(s, "../") {
+		s = strings.TrimPrefix(s, "../")
+	}
+	if s != "" && s != "." && s != ".." && mdEvidence(s) {
+		add(Read{Kind: ReadPattern, Line: line, Path: "**/" + s, Literal: what})
+	}
+}
+
+// constExtSet is the keys of the package map variable name when it is a literal of constant extensions (".go": true)
+// and no code of the directory writes it, passes it on or takes its address; nil otherwise.
+func (c *fileCtx) constExtSet(name string) []string {
+	lit := compositeOf(c.g.vars[c.pkg][name])
+	if lit == nil {
+		return nil
+	}
+	if _, ok := lit.Type.(*ast.MapType); !ok {
+		return nil
+	}
+	var exts []string
+	for _, el := range lit.Elts {
+		kv, ok := el.(*ast.KeyValueExpr)
+		if !ok {
+			return nil
+		}
+		k, ok := kv.Key.(*ast.BasicLit)
+		v, vok := kv.Value.(*ast.Ident)
+		if !ok || k.Kind != token.STRING || !vok || v.Name != "true" {
+			return nil
+		}
+		s, err := strconv.Unquote(k.Value)
+		if err != nil || !strings.HasPrefix(s, ".") || strings.ContainsAny(s, "/*?[\\| \t\n") {
+			return nil
+		}
+		exts = append(exts, s)
+	}
+	for _, s := range c.g.files {
+		written := false
+		var stack []ast.Node
+		ast.Inspect(s.file, func(n ast.Node) bool {
+			if n == nil {
+				stack = stack[:len(stack)-1]
+				return true
+			}
+			parent := ast.Node(nil)
+			if len(stack) > 0 {
+				parent = stack[len(stack)-1]
+			}
+			stack = append(stack, n)
+			id, ok := n.(*ast.Ident)
+			if !ok || id.Name != name {
+				return true
+			}
+			switch p := parent.(type) {
+			case *ast.ValueSpec:
+				return true // the declaration
+			case *ast.RangeStmt:
+				if p.X == id {
+					return true
+				}
+			case *ast.IndexExpr:
+				if p.X == id && len(stack) >= 3 {
+					switch gp := stack[len(stack)-3].(type) {
+					case *ast.AssignStmt:
+						for _, l := range gp.Lhs {
+							if l == p {
+								written = true
+							}
+						}
+						return true
+					case *ast.IncDecStmt:
+						written = true
+						return true
+					case *ast.UnaryExpr:
+						written = written || gp.Op == token.AND
+						return true
+					}
+					return true
+				}
+			case *ast.SelectorExpr:
+				if p.Sel == id {
+					return true // a field or method of another value
+				}
+			case *ast.KeyValueExpr:
+				if p.Key == id {
+					return true // a struct field name
+				}
+			}
+			written = true
+			return true
+		})
+		if written {
+			return nil
+		}
+	}
+	sort.Strings(exts)
+	return exts
 }

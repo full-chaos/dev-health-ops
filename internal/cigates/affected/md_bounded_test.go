@@ -83,6 +83,37 @@ func walk() error {
 	mdReads = "# package\tscope\tclass\nb\tcode\tcontracts\nx\ttest\tgithub\nx\ttest\tci\nb\tcode\tdeploy\nx\ttest\tagents\nx\ttest\tdocs\na\ttest\tcontracts\n"
 )
 
+func mdExecPattern(pattern string) string {
+	return "package x\n\nimport \"os/exec\"\n\nfunc tracked() ([]byte, error) {\n\treturn exec.Command(\"git\", \"ls-files\", \"-z\", \"--\", \"" + pattern + "\").Output()\n}\n"
+}
+
+const mdTailRead = "package x\n\nimport (\n\t\"os\"\n\t\"path/filepath\"\n)\n\nfunc readme() ([]byte, error) {\n\treturn os.ReadFile(filepath.Join(os.Getenv(\"DOC_DIR\"), \"README.md\"))\n}\n"
+
+const mdExtWalk = `package d
+
+import (
+	"io/fs"
+	"os"
+	"path/filepath"
+)
+
+var scanExtensions = map[string]bool{".go": true, ".md": true}
+
+func scan() error {
+	return filepath.WalkDir(os.Getenv("SCAN_ROOT"), func(path string, entry fs.DirEntry, err error) error {
+		if err != nil || entry.IsDir() {
+			return nil
+		}
+		ext := filepath.Ext(path)
+		if !scanExtensions[ext] {
+			return nil
+		}
+		_, err = os.ReadFile(path)
+		return err
+	})
+}
+`
+
 func mdHead(extra map[string]string) map[string]string {
 	h := map[string]string{
 		"x/x_names_test.go":     mdNameOnly,
@@ -108,8 +139,26 @@ func TestPlanVerdictMarkdownOnlyPlansTheBoundedReaders(t *testing.T) {
 		// The fixture names, case labels and filters of README.md read nothing and the *.go walk skips it: no reader.
 		{name: "root_readme_pr_is_none", head: h, extra: md, changed: []string{"README.md"}, want: "NONE"},
 		{name: "unnamed_docs_file_is_none", head: h, extra: md, changed: []string{"docs/zz.md"}, want: "NONE"},
-		{name: "unbounded_reader_selects_on_a_markdown_pr", head: hd, extra: md, changed: []string{"README.md"},
-			want: "AFFECTED 2", keys: []string{"b", "c"}},
+		// An unbounded reader with no Markdown evidence is dropped on a Markdown-only pull request; the merge group runs it.
+		{name: "plain_dynamic_reader_is_dropped_on_a_markdown_pr", head: hd, extra: md, changed: []string{"README.md"}, want: "NONE"},
+		// An exec whose literal pattern names Markdown files reads them: git ls-files -- '*.md'.
+		{name: "exec_md_pattern_selects_on_a_markdown_pr", head: mdHead(map[string]string{"x/x_md_test.go": mdExecPattern("*.md"),
+			tablesDir + "edges.tsv": "x\tx_md_test.go\tunexpressed\n", tablesDir + "patterns.tsv": "x\tx_md_test.go\t*.md\n"}),
+			extra: md, changed: []string{"README.md"}, want: "AFFECTED 1", keys: []string{"x"}},
+		{name: "exec_go_pattern_is_dropped_on_a_markdown_pr", head: mdHead(map[string]string{"x/x_md_test.go": mdExecPattern("*.go"),
+			tablesDir + "edges.tsv": "x\tx_md_test.go\tunexpressed\n"}),
+			extra: md, changed: []string{"README.md"}, want: "NONE"},
+		// An unbounded directory joined to a constant .md name reads files of that name.
+		{name: "unbounded_join_to_an_md_name_selects_that_name", head: mdHead(map[string]string{"x/x_tail_test.go": mdTailRead,
+			tablesDir + "dynreads.tsv": "x\tx_tail_test.go\n", tablesDir + "patterns.tsv": "x\tx_tail_test.go\t**/README.md\n"}),
+			extra: md, changed: []string{"README.md"}, want: "AFFECTED 1", keys: []string{"x"}},
+		{name: "unbounded_join_to_an_md_name_skips_another_name", head: mdHead(map[string]string{"x/x_tail_test.go": mdTailRead,
+			tablesDir + "dynreads.tsv": "x\tx_tail_test.go\n", tablesDir + "patterns.tsv": "x\tx_tail_test.go\t**/README.md\n"}),
+			extra: md, changed: []string{"docs/zz.md"}, want: "NONE"},
+		// A walk of an unbounded root whose gate passes .md files reads them: an extension map with ".md".
+		{name: "unbounded_walk_with_an_md_gate_selects_on_a_markdown_pr", head: mdHead(map[string]string{"d/d_ext_test.go": mdExtWalk,
+			tablesDir + "walks.tsv": "d\td_walk_test.go\t.\ttree\t*.go\nd\td_ext_test.go\tunexpressed\t-\t*.go|*.md\n", tablesDir + "dynreads.tsv": "d\td_ext_test.go\n"}),
+			extra: md, changed: []string{"docs/zz.md"}, want: "AFFECTED 1", keys: []string{"d"}},
 		{name: "same_readme_without_the_flag", head: hd, extra: q, changed: []string{"README.md"},
 			want: "AFFECTED 2", keys: []string{"b", "c"}},
 		{name: "same_readme_on_merge_group_is_full", head: hd, event: "merge_group", extra: md, changed: []string{"README.md"},
@@ -346,5 +395,24 @@ func TestPlanReadsWalkFilterComesFromTheGate(t *testing.T) {
 				t.Fatalf("walks.tsv filters %q, want %q:\n%s", got, c.want, out)
 			}
 		})
+	}
+}
+
+// A gate on a package map of constant extensions (`if !exts[filepath.Ext(path)] { return nil }`) records every
+// extension of the map; a map some code writes records none.
+func TestPlanReadsWalkFilterExtensionSet(t *testing.T) {
+	for name, c := range map[string]struct{ extra, want string }{
+		"constant_map":   {"", "w\tw_walk_test.go\t.\ttree\t*.go|*.md\n"},
+		"map_written_to": {"func init() { exts[\".txt\"] = true }\n", "w\tw_walk_test.go\t.\ttree\t*\n"},
+	} {
+		src := "package w\n\nimport (\n\t\"io/fs\"\n\t\"os\"\n\t\"path/filepath\"\n)\n\n" +
+			"var exts = map[string]bool{\".md\": true, \".go\": true}\n\n" + c.extra +
+			"func repoRoot() string { return \"..\" }\n\nfunc walk() error {\n\treturn filepath.WalkDir(repoRoot(), func(path string, d fs.DirEntry, err error) error {\n" +
+			"\t\tif err != nil || d.IsDir() {\n\t\t\treturn nil\n\t\t}\n\t\text := filepath.Ext(path)\n\t\tif !exts[ext] {\n\t\t\treturn nil\n\t\t}\n" +
+			"\t\t_, rerr := os.ReadFile(path)\n\t\treturn rerr\n\t})\n}\n"
+		res := planReads(t, readsFixture(t, map[string]string{"w/w_walk_test.go": src}))
+		if out := res.stdout + res.stderr; !strings.Contains(out, c.want) {
+			t.Errorf("%s: want the row %q:\n%s", name, c.want, out)
+		}
 	}
 }

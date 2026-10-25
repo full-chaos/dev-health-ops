@@ -98,6 +98,8 @@ internal/cigates/scripts	test	contracts
 internal/cigates/scripts	test	deploy
 internal/cigates/scripts	test	docs
 internal/cigates/splitshards	test	ci
+internal/cigates/suitecatalog	test	.github
+internal/cigates/suitecatalog	test	ci
 internal/cigates/testshard	test	.github
 internal/cigates/testshard	test	ci
 internal/cigates/webproxyproof	test	.github

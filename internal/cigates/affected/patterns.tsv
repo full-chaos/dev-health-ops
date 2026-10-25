@@ -7,5 +7,6 @@ internal/cigates/docmaketargets	docmaketargets_test.go	*.md
 internal/cigates/docstools	candidatefacts_root_test.go	**/docs/reference/taxonomies/investment.md
 internal/cigates/docstools	provider_limits.go	**/docs/reference/limits-and-compatibility/provider-limits.md
 internal/cigates/scripts	merge_tree_vet_script_test.go	**/merge-tree-vet.*
+internal/cigates/suitecatalog	suitecatalog_test.go	**/.github/workflows/*.y*ml
 internal/jobs/report	report_test.go	**/weekly_health.golden.md
 internal/jobs/report	runtime_integration_test.go	**/weekly_health.golden.md

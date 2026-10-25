@@ -2,8 +2,10 @@ package saml
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"mime"
@@ -20,9 +22,12 @@ import (
 const maxBodyBytes = 1 << 20
 
 // SessionIssuer starts the session for a completed sign-in and writes the
-// response (the session domain owns it).
+// response (the session domain owns it). Preflight reports whether tokens can
+// be minted now; ACS calls it before the response is consumed and answers 503
+// with nothing written when it fails.
 type SessionIssuer interface {
 	IssueFederatedSession(w http.ResponseWriter, r *http.Request, signIn SignIn)
+	Preflight(ctx context.Context) error
 }
 
 // Handlers are the SAML routes. The router mounts them at
@@ -108,6 +113,10 @@ func (h Handlers) ACS(w http.ResponseWriter, r *http.Request) {
 	}
 	posted, ok := readSAMLResponse(w, r)
 	if !ok {
+		return
+	}
+	if err := h.Sessions.Preflight(r.Context()); err != nil {
+		h.writeError(w, r, h.Service.refuse(r.Context(), p, fmt.Errorf("%w: %w", ErrSessionUnavailable, err)))
 		return
 	}
 	cookiePath := ACSPath(p, h.Service.BaseURL())
@@ -260,6 +269,8 @@ func (h Handlers) writeError(w http.ResponseWriter, r *http.Request, err error) 
 		writeDetail(w, http.StatusForbidden, "This account is not a member of the provider's organization.")
 	case errors.Is(err, ErrIdentityAmbiguous):
 		writeDetail(w, http.StatusConflict, "More than one account carries this sign-in. Contact your organization administrator.")
+	case errors.Is(err, ErrSessionUnavailable):
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"detail": map[string]string{"message": UnavailableText}})
 	case errors.Is(err, ErrUnsolicited), errors.Is(err, ErrFlowNotFound), errors.Is(err, ErrFlowConsumed), errors.Is(err, ErrAssertionReplayed):
 		writeDetail(w, http.StatusBadRequest, "SAML authentication failed")
 	default:

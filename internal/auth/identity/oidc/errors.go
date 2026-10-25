@@ -85,6 +85,18 @@ func authFailed(reason Reason, cause error) *Error {
 	return &Error{Status: http.StatusBadRequest, Detail: detailAuthFailed, Reason: reason, err: cause}
 }
 
+// ErrSessionUnavailable marks a SessionIssuer error that means tokens cannot
+// be minted now; the callback answers 503.
+var ErrSessionUnavailable = errors.New("oidc: the session cannot be issued now")
+
+// UnavailableText is go-api's 503 detail when it cannot issue a session.
+const UnavailableText = "Authentication service unavailable"
+
+func unavailable(cause error) *Error {
+	return &Error{Status: http.StatusServiceUnavailable, Detail: map[string]any{"message": UnavailableText},
+		Reason: ReasonDependency, err: cause}
+}
+
 func internal(reason Reason, cause error) *Error {
 	return &Error{Status: http.StatusInternalServerError, Detail: "Internal Server Error", Reason: reason, err: cause}
 }

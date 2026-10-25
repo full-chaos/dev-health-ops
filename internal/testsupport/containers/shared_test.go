@@ -178,6 +178,15 @@ func TestCloseDropsWithACancelledContext(t *testing.T) {
 	}
 }
 
+// TestClickHouseScratchDropIsSync: without SYNC an Atomic drop leaves the
+// tables' data on the shared server for minutes after Close.
+func TestClickHouseScratchDropIsSync(t *testing.T) {
+	_, drop := clickHouseScratchDDL("dh_t_0123456789abcdef")
+	if drop != "DROP DATABASE IF EXISTS `dh_t_0123456789abcdef` SYNC" {
+		t.Errorf("drop statement = %q, want a SYNC drop", drop)
+	}
+}
+
 func TestRequiredPostgresConnectionsCoversEveryParallelPool(t *testing.T) {
 	for _, tc := range []struct{ parallel, pool int }{{1, 4}, {4, 4}, {4, 64}, {8, 16}} {
 		got := requiredPostgresConnections(tc.parallel, tc.pool)

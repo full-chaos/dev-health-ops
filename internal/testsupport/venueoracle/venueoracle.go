@@ -227,7 +227,7 @@ func Start(t *testing.T, ctx context.Context, options Options) *Venue {
 		}
 		// On a shared server (containers.RunWithSharedServers) a database left
 		// behind is a leak; on a private container this is a no-op before Terminate.
-		t.Cleanup(func() { _ = chAdmin.Exec(context.Background(), "DROP DATABASE IF EXISTS "+database) })
+		t.Cleanup(func() { _ = chAdmin.Exec(context.Background(), "DROP DATABASE IF EXISTS "+database+" SYNC") })
 	}
 	for _, database := range []string{v.PythonClickHouseDB, v.GoClickHouseDB} {
 		v.migrateClickHouseGo(t, ctx, database)

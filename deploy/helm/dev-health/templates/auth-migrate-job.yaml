@@ -54,7 +54,7 @@ spec:
               value: {{ include "dev-health.authDatabaseSchema" . | quote }}
             - name: AUTH_RUNTIME_DATABASE_ROLE
               value: {{ $m.runtimeRole | quote }}
-            {{- if .Values.authService.usersOwned }}
+            {{- if eq (include "dev-health.authBool" (dict "value" .Values.authService.usersOwned "key" "authService.usersOwned")) "true" }}
             - name: AUTH_USERS_OWNED
               value: "true"
             {{- end }}

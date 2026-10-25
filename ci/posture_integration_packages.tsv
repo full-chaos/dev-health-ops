@@ -6,6 +6,7 @@
 internal/api/policy
 internal/joboperator
 internal/jobs/investment
+internal/jobs/operational
 internal/llmorgsettings
 internal/pgmigrate
 internal/rivermigrate
@@ -15,3 +16,4 @@ internal/storage/postgres/aclguard
 internal/storage/postgres/authschema
 internal/storage/river
 internal/storage/roleprovision
+internal/syncdispatchruntime

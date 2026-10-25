@@ -53,11 +53,11 @@ func postureLines(out string) (base string, pkgs []string) {
 	return base, pkgs
 }
 
-func TestPostureIntegrationListsTheTwelvePackagesOnATrigger(t *testing.T) {
+func TestPostureIntegrationListsTheFourteenPackagesOnATrigger(t *testing.T) {
 	root := repoRoot(t)
 	keys := postureKeys(t, root)
-	if len(keys) != 12 {
-		t.Fatalf("the posture list has %d packages, want 12", len(keys))
+	if len(keys) != 14 {
+		t.Fatalf("the posture list has %d packages, want 14", len(keys))
 	}
 	triggers := []string{
 		"internal/pgmigrate/sql/0158_x.sql", "internal/pgmigrate/baseline/head.json", "internal/rivermigrate/x.go",
@@ -80,7 +80,7 @@ func TestPostureIntegrationListsTheTwelvePackagesOnATrigger(t *testing.T) {
 		}
 		sort.Strings(got)
 		if strings.Join(got, ",") != strings.Join(keys, ",") {
-			t.Fatalf("%s: listed %v, want all 12 %v", p, got, keys)
+			t.Fatalf("%s: listed %v, want all 14 %v", p, got, keys)
 		}
 	}
 }
@@ -141,8 +141,8 @@ func TestPostureIntegrationDefaultModePrintsTheBaseSha(t *testing.T) {
 		t.Fatalf("exit %d stderr=%q", res.code, res.stderr)
 	}
 	gotBase, pkgs := postureLines(res.stdout)
-	if gotBase != base || len(pkgs) != 12 {
-		t.Fatalf("BASE %q (want %q), %d packages (want 12)", gotBase, base, len(pkgs))
+	if gotBase != base || len(pkgs) != 14 {
+		t.Fatalf("BASE %q (want %q), %d packages (want 14)", gotBase, base, len(pkgs))
 	}
 }
 
@@ -166,7 +166,7 @@ func postureDefects(keys []string, goList string) []string {
 		files := strings.Split(f[2]+","+f[3], ",")
 		posture := strings.Contains(imports, "internal/testsupport/domainroledb")
 		for _, n := range files {
-			if strings.HasSuffix(n, "_integration_test.go") && strings.Contains(n, "role_posture") {
+			if strings.HasSuffix(n, "_integration_test.go") && (strings.Contains(n, "role_posture") || strings.Contains(n, "domain_role")) {
 				posture = true
 			}
 		}
@@ -257,7 +257,7 @@ func TestPostureIntegrationRunRefusesADirtyTree(t *testing.T) {
 	sha := git("rev-parse", "HEAD")
 	res = cmdSpec{dir: repo, env: []string{shimBasePath(), "POSTURE_CAPPED_SH=" + stub}}.run("bash", script, "--run")
 	if res.code != 0 || !strings.Contains(res.stdout, "RECEIPT-HEAD "+sha+" clean=yes") ||
-		!strings.Contains(res.stdout, "RECEIPT-SUMMARY "+sha+" pass=12 fail=0") || strings.Count(res.stdout, "RECEIPT internal/") != 12 {
+		!strings.Contains(res.stdout, "RECEIPT-SUMMARY "+sha+" pass=14 fail=0") || strings.Count(res.stdout, "RECEIPT internal/") != 14 {
 		t.Fatalf("clean tree with a stub runner: exit %d stdout=%q stderr=%q", res.code, res.stdout, res.stderr)
 	}
 }

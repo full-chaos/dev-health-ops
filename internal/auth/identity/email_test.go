@@ -93,8 +93,8 @@ func TestNormalizeEmailCases(t *testing.T) {
 
 func TestNormalizeEmailMatchesGoAPIOnTheFrozenCorpus(t *testing.T) {
 	inputs := goldenInputs(t)
-	if len(inputs) != frozenEmailRows {
-		t.Fatalf("frozen email corpus has %d usable rows, want %d", len(inputs), frozenEmailRows)
+	if want := countUsableEmailRows(t); len(inputs) != want {
+		t.Fatalf("goldenInputs returned %d rows; the corpus file holds %d usable rows", len(inputs), want)
 	}
 	accepted := 0
 	for _, in := range inputs {
@@ -140,13 +140,46 @@ func checkNormalizeEmail(t *testing.T, in string) {
 }
 
 // fuzzSeedBudget bounds the f.Add seeds: the engine runs every seed once before
-// it mutates, and the full frozen corpus (2722 rows) does not fit the 5 s fuzz
+// it mutates, and the full frozen corpus (about 2700 rows) does not fit the 5 s fuzz
 // floor, so the run would report zero executions. The whole corpus is still
 // checked by TestNormalizeEmailMatchesGoAPIOnTheFrozenCorpus.
-const (
-	fuzzSeedBudget  = 256
-	frozenEmailRows = 2722
-)
+const fuzzSeedBudget = 256
+
+// countUsableEmailRows counts, on its own pass over the corpus file, the rows
+// whose code points are all valid and not U+FFFD: the rows goldenInputs keeps.
+func countUsableEmailRows(t *testing.T) int {
+	t.Helper()
+	f, err := os.Open(emailGolden)
+	if err != nil {
+		t.Fatalf("open the email corpus: %v", err)
+	}
+	defer f.Close()
+	n := 0
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 1<<20), 1<<24)
+	for scanner.Scan() {
+		var row struct {
+			Input []int64 `json:"input"`
+		}
+		if err := json.Unmarshal(scanner.Bytes(), &row); err != nil {
+			t.Fatalf("corpus row: %v", err)
+		}
+		usable := true
+		for _, cp := range row.Input {
+			if cp < 0 || cp > utf8.MaxRune || !utf8.ValidRune(rune(cp)) || cp == int64(utf8.RuneError) {
+				usable = false
+				break
+			}
+		}
+		if usable {
+			n++
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatalf("read the email corpus: %v", err)
+	}
+	return n
+}
 
 // fuzzSeeds picks rows i*len/budget for i in [0, budget), then the last row
 // when it is not already picked. The corpus marks no row as an edge case.

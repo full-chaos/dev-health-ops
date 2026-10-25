@@ -1,0 +1,20 @@
+{{- /*
+PodDisruptionBudget for auth-service, rendered only while the Deployment runs
+two or more replicas: with one replica minAvailable 1 would block every node
+drain. Dormant with authService.enabled=false.
+*/ -}}
+{{- if and .Values.authService.enabled (ge (int .Values.authService.replicas) 2) }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "dev-health.fullname" . }}-auth-service
+  namespace: {{ include "dev-health.namespace" . }}
+  labels:
+    {{- include "dev-health.componentLabels" (dict "component" "auth-service" "context" $) | nindent 4 }}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      {{- include "dev-health.componentSelectorLabels" (dict "component" "auth-service" "context" $) | nindent 6 }}
+{{- end }}

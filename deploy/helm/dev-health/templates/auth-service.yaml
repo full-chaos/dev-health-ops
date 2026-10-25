@@ -64,7 +64,7 @@ stage-signing-key init container exists.
 {{- if not (regexMatch "^[0-9]+s$" (toString $a.shutdownTimeout)) }}{{- fail "authService.shutdownTimeout must be whole seconds such as 20s" }}{{- end }}
 {{- if ge (int (trimSuffix "s" (toString $a.shutdownTimeout))) (int $a.terminationGracePeriodSeconds) }}{{- fail "authService.shutdownTimeout must be below authService.terminationGracePeriodSeconds: the kubelet kills the pod at the grace period, so a longer shutdown bound is never reached" }}{{- end }}
 {{- range $a.extraArgs }}
-{{- if has (trimAll "-" (lower (trim (toString .))) | splitList "=" | first) (list "signing-key-file" "signing-key-id" "signing-keyset-file") }}{{- fail (printf "authService.extraArgs must not set %s: the chart renders the signing key flags (authService.signingKey or authService.keySet)" .) }}{{- end }}
+{{- if has (regexSplit "[=[:space:]]" (trimAll "-" (lower (trim (toString .)))) -1 | first) (list "signing-key-file" "signing-key-id" "signing-keyset-file" "database-max-conns") }}{{- fail (printf "authService.extraArgs must not set %s: the chart renders the signing key flags (authService.signingKey or authService.keySet) and the pool bound (authService.database.maxConns)" .) }}{{- end }}
 {{- end }}
 {{- if and $ksOn $a.podAnnotations (hasKey $a.podAnnotations "checksum/keyset") }}{{- fail "authService.podAnnotations must not set checksum/keyset: the chart sets it from the key-set manifest" }}{{- end }}
 {{- range $a.extraEnv }}
@@ -72,6 +72,7 @@ stage-signing-key init container exists.
 {{- if eq .name "AUTH_VALKEY_URI" }}{{- fail "authService.extraEnv must not set AUTH_VALKEY_URI: use authService.valkey, which reaches the container by secretKeyRef" }}{{- end }}
 {{- if has .name (list "AUTH_JWT_SECRET_KEY" "AUTH_SESSION_SUCCESSOR_KEY") }}{{- fail (printf "authService.extraEnv must not set %s: use authService.sessionKeys, which reaches the container by secretKeyRef" .name) }}{{- end }}
 {{- if eq (upper (trim .name)) "AUTH_USERS_OWNED" }}{{- fail "authService.extraEnv must not set AUTH_USERS_OWNED: use authService.usersOwned, which the auth-migrate and grants Jobs read too so the write grant on public.users follows the switch" }}{{- end }}
+{{- if eq (upper (trim .name)) "AUTH_DATABASE_MAX_CONNS" }}{{- fail "authService.extraEnv must not set AUTH_DATABASE_MAX_CONNS: use authService.database.maxConns, which the render checks" }}{{- end }}
 {{- if eq (upper (trim .name)) "AUTH_ORGS_OWNED" }}{{- fail "authService.extraEnv must not set AUTH_ORGS_OWNED: use authService.orgsOwned, which the backfill Job reads too" }}{{- end }}
 {{- if eq .name "AUTH_SIGNING_KEY" }}{{- fail "authService.extraEnv must not set AUTH_SIGNING_KEY: direct-value signing material is rejected by the service (ACP-ADR-02 §4); use authService.signingKey" }}{{- end }}
 {{- if eq (lower (trim .name)) "auth_signing_keyset_file" }}{{- fail "authService.extraEnv must not set AUTH_SIGNING_KEYSET_FILE: the chart renders it (authService.keySet) or stages one signing key (authService.signingKey); the service refuses a key-set manifest beside a single key" }}{{- end }}
@@ -142,6 +143,7 @@ spec:
             - {{ printf "--operator-http-addr=:%v" $a.operatorPort | quote }}
             - {{ printf "--shutdown-timeout=%s" $a.shutdownTimeout | quote }}
             - {{ printf "--database-schema=%s" (include "dev-health.authDatabaseSchema" .) | quote }}
+            - {{ printf "--database-max-conns=%s" (include "dev-health.authMaxConns" .) | quote }}
             {{- if $ksOn }}
             - "--signing-keyset-file=/run/auth/signing/keyset.json"
             {{- else }}

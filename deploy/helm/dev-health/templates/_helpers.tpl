@@ -969,3 +969,21 @@ the entry is valid, nothing otherwise. The chart refuses /0 and IPv4-mapped form
 {{- end -}}
 {{- if $ok }}true{{ end -}}
 {{- end -}}
+
+{{/*
+authService.database.maxConns -> AUTH_DATABASE_MAX_CONNS. A whole number from
+1 to 32; anything else fails the render. A values file and --set-json decode
+numbers as float64, --set as int64, so both are accepted when whole; a string,
+a bool, null or a fraction is not.
+*/}}
+{{- define "dev-health.authMaxConns" -}}
+{{- $v := .Values.authService.database.maxConns -}}
+{{- $ok := false -}}
+{{- if has (kindOf $v) (list "int" "int64" "float64") -}}
+{{- if eq (toString (int64 $v)) (toString $v) -}}
+{{- if and (ge (int64 $v) 1) (le (int64 $v) 32) -}}{{- $ok = true -}}{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- if not $ok -}}{{- fail "authService.database.maxConns must be a whole number from 1 to 32: it is the connection pool of each auth-service replica, replicas x maxConns (plus one surge pod while rolling) is what the auth database must hold" -}}{{- end -}}
+{{- int64 $v -}}
+{{- end -}}

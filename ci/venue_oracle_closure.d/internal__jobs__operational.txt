@@ -55,7 +55,6 @@ internal/pythonparity/pyunicodedata
 internal/scheduler/sync
 internal/storage/clickhouse
 internal/storage/clickhouse/engineclause
-internal/storage/clickhouse/liverow
 internal/storage/postgres
 internal/storage/postgres/aclguard
 internal/storage/river
@@ -70,7 +69,6 @@ internal/teamactive
 internal/teamattribution
 internal/teamcreated
 internal/teamid
-internal/teamkeytables
 internal/teamprovider
 internal/testsupport/containers
 internal/testsupport/moduleroot

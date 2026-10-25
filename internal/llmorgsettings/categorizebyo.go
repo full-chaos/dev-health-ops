@@ -41,6 +41,10 @@ const CodeCategorizeBYOUnavailable = "categorize_byo_unavailable"
 // the org's provider reported none, so the answer cannot be tied to the configured model.
 const CodeCategorizeBYOModelUnreported = "categorize_byo_model_unreported"
 
+// CodeCategorizeBYOModelUnsupported is the refusal of a saved model the clef
+// backend does not serve (it serves clef and clef-flash).
+const CodeCategorizeBYOModelUnsupported = "categorize_byo_model_unsupported"
+
 // CodeCategorizeBYONotConfigured is the refusal of an opted-in org whose saved
 // configuration is not its own model (the gate answered platform or none).
 const CodeCategorizeBYONotConfigured = string(ConfigNotConfigured)
@@ -49,18 +53,19 @@ const CodeCategorizeBYONotConfigured = string(ConfigNotConfigured)
 // may carry: the model gate's codes and the config reasons. Nothing else leaves
 // this package.
 var categorizeRefusalCodes = map[string]struct{}{
-	CodeOwnModelGateClosed:           {},
-	CodeServiceModelNotEntitled:      {},
-	CodeAIFeaturesTurnedOff:          {},
-	CodeOwnModelTurnedOff:            {},
-	string(ConfigNotConfigured):      {},
-	string(ConfigUnknownProvider):    {},
-	string(ConfigMissingCredentials): {},
-	string(ConfigInvalidBaseURL):     {},
-	string(ConfigUnreadableRow):      {},
-	CodeCategorizeBYOUnavailable:     {},
-	CodeCategorizeBYOModelUnreported: {},
-	"model_required":                 {},
+	CodeOwnModelGateClosed:            {},
+	CodeServiceModelNotEntitled:       {},
+	CodeAIFeaturesTurnedOff:           {},
+	CodeOwnModelTurnedOff:             {},
+	string(ConfigNotConfigured):       {},
+	string(ConfigUnknownProvider):     {},
+	string(ConfigMissingCredentials):  {},
+	string(ConfigInvalidBaseURL):      {},
+	string(ConfigUnreadableRow):       {},
+	CodeCategorizeBYOUnavailable:      {},
+	CodeCategorizeBYOModelUnreported:  {},
+	CodeCategorizeBYOModelUnsupported: {},
+	"model_required":                  {},
 }
 
 // CategorizeRefusalCodes returns the closed set, for a test that pins it.

@@ -11,13 +11,13 @@ import (
 	"testing"
 )
 
-// The Live Backend E2E workflow (both jobs: live-e2e and metrics-executed-proof) runs on the Go binaries alone: no
+// The Live Backend E2E workflow (both work jobs: live-e2e-run and metrics-executed-proof-run) runs on the Go binaries alone: no
 // Python toolchain is installed, no script it reaches starts a Python interpreter, and its path filter does not
 // trigger on Python-only files.
 
 const e2eWorkflow = "live-e2e.yml"
 
-var e2eJobs = []string{"live-e2e", "metrics-executed-proof"}
+var e2eJobs = []string{"live-e2e-run", "metrics-executed-proof-run"}
 
 var (
 	pythonUseRe      = regexp.MustCompile(`\bpython3?\b|\brun_python\b|PY_PROG|py_program|\.py\b|\buv\b|\bpipx?3?\b|\.venv|PYTHONPATH|UV_`)

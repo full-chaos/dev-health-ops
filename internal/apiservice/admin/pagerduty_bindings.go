@@ -150,27 +150,37 @@ func lockBindingSource(ctx context.Context, tx pgx.Tx, sourceID uuid.UUID) error
 
 func (h *handlers) bindingNow() time.Time { return h.store.now().UTC().Truncate(time.Microsecond) }
 
+// bindingGraphUnavailable is the one answer for a graph that is missing, not
+// in the caller's organisation, or not active.
+const bindingGraphUnavailable = "PagerDuty binding graph was not found"
+
+const bindingGraphSQL = `
+SELECT COALESCE(s.provider = 'pagerduty' AND i.provider = 'pagerduty' AND c.provider = 'pagerduty'
+        AND i.credential_id = c.id AND s.is_enabled AND i.is_active AND c.is_active, false)
+FROM integration_sources s
+JOIN integrations i ON s.integration_id = i.id AND i.org_id = $3
+JOIN integration_credentials c ON c.id = $2 AND c.org_id = $3
+WHERE s.id = $1 AND s.org_id = $3`
+
+const (
+	bindingActiveByIDSQL = `SELECT ` + bindingColumns + ` FROM pagerduty_webhook_bindings WHERE id = $1 AND org_id = $2 AND status = 'active'`
+	bindingRotateRowsSQL = `SELECT ` + bindingColumns + ` FROM pagerduty_webhook_bindings
+WHERE integration_source_id = $1 AND org_id = $2 AND status IN ('active', 'candidate', 'ready') ORDER BY id FOR UPDATE`
+	bindingRevokeLockSQL = `SELECT ` + bindingColumns + ` FROM pagerduty_webhook_bindings
+WHERE id = $1 AND org_id = $2 AND status IN ('active', 'candidate', 'ready') FOR UPDATE`
+)
+
 // requireBindingGraph is _require_active_pagerduty_graph: the source, its
 // integration and the credential must all exist, be PagerDuty's, belong to
 // the caller's organisation, be linked to each other and be enabled.
 func requireBindingGraph(ctx context.Context, tx pgx.Tx, orgID uuid.UUID, req bindingRequest) (string, error) {
-	var ok *bool
-	err := tx.QueryRow(ctx, `
-SELECT (s.org_id = $3 AND i.org_id = $3 AND c.org_id = $3
-        AND s.provider = 'pagerduty' AND i.provider = 'pagerduty' AND c.provider = 'pagerduty'
-        AND i.credential_id = c.id AND s.is_enabled AND i.is_active AND c.is_active)
-FROM integration_sources s
-JOIN integrations i ON s.integration_id = i.id
-JOIN integration_credentials c ON c.id = $2
-WHERE s.id = $1`, req.SourceID, req.CredentialID, orgID.String()).Scan(&ok)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return "PagerDuty binding graph was not found", nil
+	var ok bool
+	err := tx.QueryRow(ctx, bindingGraphSQL, req.SourceID, req.CredentialID, orgID.String()).Scan(&ok)
+	if errors.Is(err, pgx.ErrNoRows) || (err == nil && !ok) {
+		return bindingGraphUnavailable, nil
 	}
 	if err != nil {
 		return "", err
-	}
-	if ok == nil || !*ok {
-		return "PagerDuty binding graph is not active and same-org", nil
 	}
 	return "", nil
 }
@@ -308,8 +318,7 @@ func (h *handlers) rotatePagerDutyBinding(w http.ResponseWriter, r *http.Request
 	notFound := func() {
 		policy.WriteDetail(w, http.StatusNotFound, "Active webhook binding not found", nil)
 	}
-	// active_by_id: the id alone, any organisation.
-	existing, err := scanBinding(tx.QueryRow(ctx, `SELECT `+bindingColumns+` FROM pagerduty_webhook_bindings WHERE id = $1 AND status = 'active'`, bindingID))
+	existing, err := scanBinding(tx.QueryRow(ctx, bindingActiveByIDSQL, bindingID, orgUUID))
 	if errors.Is(err, pgx.ErrNoRows) {
 		notFound()
 		return
@@ -323,8 +332,7 @@ func (h *handlers) rotatePagerDutyBinding(w http.ResponseWriter, r *http.Request
 		return
 	}
 	// The source's lifecycle rows, locked in id order.
-	rows, err := tx.Query(ctx, `SELECT `+bindingColumns+` FROM pagerduty_webhook_bindings
-WHERE integration_source_id = $1 AND status IN ('active', 'candidate', 'ready') ORDER BY id FOR UPDATE`, existing.SourceID)
+	rows, err := tx.Query(ctx, bindingRotateRowsSQL, existing.SourceID, orgUUID)
 	if err != nil {
 		h.internalError(ctx, w, "lock pagerduty source bindings", err)
 		return
@@ -345,7 +353,7 @@ WHERE integration_source_id = $1 AND status IN ('active', 'candidate', 'ready') 
 		notFound()
 		return
 	}
-	if active.OrgID != orgUUID || active.SourceID != req.SourceID {
+	if active.SourceID != req.SourceID {
 		policy.WriteDetail(w, http.StatusBadRequest, "rotation candidate must belong to the active binding source", nil)
 		return
 	}
@@ -484,10 +492,8 @@ func (h *handlers) revokePagerDutyBinding(w http.ResponseWriter, r *http.Request
 		return
 	}
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
-	// receivable_by_id_for_update, then the organisation check.
-	binding, err := scanBinding(tx.QueryRow(ctx, `SELECT `+bindingColumns+` FROM pagerduty_webhook_bindings
-WHERE id = $1 AND status IN ('active', 'candidate', 'ready') FOR UPDATE`, bindingID))
-	if errors.Is(err, pgx.ErrNoRows) || (err == nil && binding.OrgID != orgUUID) {
+	_, err = scanBinding(tx.QueryRow(ctx, bindingRevokeLockSQL, bindingID, orgUUID))
+	if errors.Is(err, pgx.ErrNoRows) {
 		policy.WriteDetail(w, http.StatusNotFound, "Active webhook binding not found", nil)
 		return
 	}

@@ -7,6 +7,7 @@ import (
 	"go/token"
 	"path"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -55,6 +56,8 @@ type pathInfo struct {
 	kind  string
 	value string // const: the value; repo: the repository path; walkpath/dirlist/direntry/entryname: the root
 	depth string // walkpath: tree or dir
+	// walkpath: the base-name glob every path the walk hands on past its callback's gate matches ("" = any)
+	filter string
 }
 
 var dynInfo = pathInfo{kind: kDyn}
@@ -681,6 +684,9 @@ func (c *fileCtx) under(base pathInfo, rest string) pathInfo {
 		if !safeRel(rest) {
 			return dynInfo
 		}
+		if path.Clean(rest) != "." {
+			base.filter = "" // another path below the walked one: the gate's filter says nothing of it
+		}
 		return base
 	case kSet:
 		var out []string
@@ -1151,9 +1157,14 @@ func (c *fileCtx) record(body ast.Node, sc *scope, at func(ast.Node) int, add fu
 				if (name == "path/filepath.WalkDir" || name == "path/filepath.Walk") && len(x.Args) == 2 {
 					if lit, ok := x.Args[1].(*ast.FuncLit); ok {
 						root := c.walkRoot(x.Args[0], sc, false)
-						c.call(x, name, sc, at, add)
+						filter, gate := c.walkFilter(lit)
+						c.call(x, name, sc, at, func(r Read) {
+							if r.Kind == ReadWalk {
+								r.Filter = filter
+							}
+							add(r)
+						})
 						visit(x.Args[0], sc)
-						inner := newScope(sc)
 						param := dynInfo
 						switch root.kind {
 						case kRepo:
@@ -1161,13 +1172,24 @@ func (c *fileCtx) record(body ast.Node, sc *scope, at func(ast.Node) int, add fu
 						case kWalk, kTemp:
 							param = pathInfo{kind: root.kind, value: root.value, depth: depthTree}
 						}
+						// The statements before the gate see every entry; from the gate on, only the files it passes.
+						inner, gated := newScope(sc), newScope(sc)
 						if ps := lit.Type.Params.List; len(ps) > 0 && len(ps[0].Names) > 0 {
 							name := ps[0].Names[0].Name
-							inner.vals[name] = param
-							inner.fixed[name] = true
-							assignedIn(lit.Body, name, func() { inner.vals[name] = dynInfo })
+							inner.vals[name], gated.vals[name] = param, param
+							if param.kind == kWalk {
+								gated.vals[name] = pathInfo{kind: kWalk, value: param.value, depth: param.depth, filter: filter}
+							}
+							inner.fixed[name], gated.fixed[name] = true, true
+							assignedIn(lit.Body, name, func() { inner.vals[name], gated.vals[name] = dynInfo, dynInfo })
 						}
-						visit(lit.Body, inner)
+						for i, st := range lit.Body.List {
+							if filter != "" && i >= gate {
+								visit(st, gated)
+							} else {
+								visit(st, inner)
+							}
+						}
 						return false
 					}
 				}
@@ -1177,6 +1199,358 @@ func (c *fileCtx) record(body ast.Node, sc *scope, at func(ast.Node) int, add fu
 		})
 	}
 	visit(body, sc)
+}
+
+// walkFilter finds the gate of a filepath.Walk/WalkDir callback: a statement that returns nil for every file whose
+// name lacks a suffix (`if ... || !strings.HasSuffix(path, ".go") || ... { return nil }`, or `if strings.HasSuffix(path,
+// ".go") && ... { ... }` followed only by `return nil`), with nothing before it that reads, writes, keeps a name or
+// skips a directory for a file. The walk then acts on no other file: it returns the filter "*<suffix>" and the index of
+// the gate statement, or "" when the callback has no such gate.
+func (c *fileCtx) walkFilter(lit *ast.FuncLit) (string, int) {
+	var names []string
+	for _, f := range lit.Type.Params.List {
+		for _, n := range f.Names {
+			names = append(names, n.Name)
+		}
+	}
+	if len(names) == 0 || names[0] == "_" {
+		return "", 0
+	}
+	entry, errName := "", ""
+	if len(names) > 1 {
+		entry = names[1]
+	}
+	if len(names) > 2 {
+		errName = names[2]
+	}
+	body := lit.Body
+	// a name for the walked path -> its assignments so far, each a top-level statement that keeps the path's suffix
+	aliases := map[string]int{names[0]: 0}
+	locals := map[string]bool{}
+	upto := 0 // the statements before the one being read
+	// The entry methods are trusted only on the parameter itself: once the statements so far (the one being read
+	// included) declare or assign its name again (`d := probe{}`, `var d probe`, a closure parameter), it may hold
+	// another value, whose methods may read.
+	trusted := func() string {
+		for _, st := range body.List[:upto+1] {
+			if countAssigns(st, entry) > 0 {
+				return ""
+			}
+		}
+		return entry
+	}
+	before := func(name string) int {
+		n := 0
+		for _, st := range body.List[:upto] {
+			n += countAssigns(st, name)
+		}
+		return n
+	}
+	var subject func(e ast.Expr) bool
+	subject = func(e ast.Expr) bool {
+		switch x := ast.Unparen(e).(type) {
+		case *ast.Ident:
+			n, ok := aliases[x.Name]
+			return ok && before(x.Name) == n
+		case *ast.CallExpr:
+			if sel, ok := x.Fun.(*ast.SelectorExpr); ok && len(x.Args) == 0 && sel.Sel.Name == "Name" {
+				id, ok := sel.X.(*ast.Ident)
+				return ok && trusted() != "" && trusted() != "_" && id.Name == trusted()
+			}
+			switch c.pkgCallName(x.Fun) {
+			case "path/filepath.ToSlash", "path/filepath.FromSlash", "path/filepath.Base", "path/filepath.Clean", "path.Base", "path.Clean":
+				return len(x.Args) == 1 && subject(x.Args[0])
+			}
+		}
+		return false
+	}
+	suffix := func(e ast.Expr) string {
+		x, ok := ast.Unparen(e).(*ast.CallExpr)
+		if !ok || len(x.Args) != 2 || c.pkgCallName(x.Fun) != "strings.HasSuffix" || !subject(x.Args[0]) {
+			return ""
+		}
+		lit, ok := ast.Unparen(x.Args[1]).(*ast.BasicLit)
+		if !ok || lit.Kind != token.STRING {
+			return ""
+		}
+		s, err := strconv.Unquote(lit.Value)
+		if err != nil || s == "" || strings.ContainsAny(s, "/*?[\\") {
+			return ""
+		}
+		return s
+	}
+	// The extension gate: `ext := filepath.Ext(path)` then `if !exts[ext] { return nil }`, exts a package map literal of
+	// constant extensions that nothing writes: the walk acts on those extensions only.
+	extAliases := map[string]int{}
+	isExtOf := func(e ast.Expr) bool {
+		x, ok := ast.Unparen(e).(*ast.CallExpr)
+		if !ok || len(x.Args) != 1 {
+			return false
+		}
+		n := c.pkgCallName(x.Fun)
+		return (n == "path/filepath.Ext" || n == "path.Ext") && subject(x.Args[0])
+	}
+	extSet := func(e ast.Expr) []string {
+		idx, ok := ast.Unparen(e).(*ast.IndexExpr)
+		if !ok {
+			return nil
+		}
+		if id, ok := ast.Unparen(idx.Index).(*ast.Ident); ok {
+			if n, ok := extAliases[id.Name]; !ok || before(id.Name) != n {
+				return nil
+			}
+		} else if !isExtOf(idx.Index) {
+			return nil
+		}
+		m, ok := idx.X.(*ast.Ident)
+		if !ok || countAssigns(body, m.Name) > 0 {
+			return nil
+		}
+		return c.constExtSet(m.Name)
+	}
+	for i, st := range body.List {
+		upto = i
+		if ifs, ok := st.(*ast.IfStmt); ok && ifs.Init == nil && ifs.Else == nil {
+			// if A || !strings.HasSuffix(p, S) || B { return nil }
+			if len(ifs.Body.List) == 1 && returnsNil(ifs.Body.List[0]) {
+				ds := chain(ifs.Cond, token.LOR)
+				for j, d := range ds {
+					if u, ok := ast.Unparen(d).(*ast.UnaryExpr); ok && u.Op == token.NOT {
+						if s := suffix(u.X); s != "" && c.allPure(ds[:j], trusted()) {
+							return "*" + s, i
+						}
+						if exts := extSet(u.X); len(exts) > 0 && c.allPure(ds[:j], trusted()) {
+							return "*" + strings.Join(exts, "|*"), i
+						}
+					}
+				}
+			}
+			// if A && strings.HasSuffix(p, S) && B { ... } return nil
+			rest := true
+			for _, r := range body.List[i+1:] {
+				rest = rest && returnsNil(r)
+			}
+			if cs := chain(ifs.Cond, token.LAND); rest && len(body.List) > i+1 {
+				for j, d := range cs {
+					if s := suffix(d); s != "" && c.allPure(cs[:j], trusted()) {
+						return "*" + s, i
+					}
+				}
+			}
+		}
+		if !c.preGate(st, false, errName, trusted(), locals) {
+			return "", 0
+		}
+		if a, ok := st.(*ast.AssignStmt); ok {
+			for j, l := range a.Lhs {
+				id, ok := l.(*ast.Ident)
+				if !ok {
+					continue
+				}
+				if a.Tok == token.DEFINE {
+					locals[id.Name] = true
+				}
+				keeps := len(a.Lhs) == len(a.Rhs) && subject(a.Rhs[j])
+				if call, ok := a.Rhs[0].(*ast.CallExpr); ok && len(a.Rhs) == 1 && j == 0 && len(call.Args) == 2 &&
+					c.pkgCallName(call.Fun) == "path/filepath.Rel" && subject(call.Args[1]) {
+					keeps = true
+				}
+				if keeps {
+					aliases[id.Name]++
+				} else if id.Name != names[0] {
+					delete(aliases, id.Name)
+				}
+				if len(a.Lhs) == len(a.Rhs) && isExtOf(a.Rhs[j]) {
+					extAliases[id.Name]++
+				} else {
+					delete(extAliases, id.Name)
+				}
+			}
+		}
+	}
+	return "", 0
+}
+
+// preGate reports whether a statement before a walk callback's gate does nothing but return early for some entries:
+// pure conditions and values, locals of the callback, `return nil`, the walk's own error, or filepath.SkipDir under an
+// IsDir test (a file that returned SkipDir would skip the rest of its directory).
+func (c *fileCtx) preGate(st ast.Stmt, dir bool, errName, entry string, locals map[string]bool) bool {
+	switch s := st.(type) {
+	case *ast.EmptyStmt:
+		return true
+	case *ast.AssignStmt:
+		if s.Tok != token.DEFINE && s.Tok != token.ASSIGN {
+			return false
+		}
+		for _, l := range s.Lhs {
+			id, ok := l.(*ast.Ident)
+			if !ok || (s.Tok == token.ASSIGN && id.Name != "_" && !locals[id.Name]) {
+				return false
+			}
+		}
+		return c.allPure(s.Rhs, entry)
+	case *ast.BlockStmt:
+		for _, x := range s.List {
+			if !c.preGate(x, dir, errName, entry, locals) {
+				return false
+			}
+		}
+		return true
+	case *ast.IfStmt:
+		if s.Init != nil || !c.allPure([]ast.Expr{s.Cond}, entry) {
+			return false
+		}
+		inDir := dir
+		for _, cj := range chain(s.Cond, token.LAND) {
+			if call, ok := ast.Unparen(cj).(*ast.CallExpr); ok && entryMethod(call, entry) {
+				if sel := call.Fun.(*ast.SelectorExpr); sel.Sel.Name == "IsDir" {
+					inDir = true
+				}
+			}
+		}
+		if !c.preGate(s.Body, inDir, errName, entry, locals) {
+			return false
+		}
+		return s.Else == nil || c.preGate(s.Else, dir, errName, entry, locals)
+	case *ast.SwitchStmt:
+		if s.Init != nil || (s.Tag != nil && !c.allPure([]ast.Expr{s.Tag}, entry)) {
+			return false
+		}
+		for _, cl := range s.Body.List {
+			cc, ok := cl.(*ast.CaseClause)
+			if !ok || !c.allPure(cc.List, entry) {
+				return false
+			}
+			for _, x := range cc.Body {
+				if !c.preGate(x, dir, errName, entry, locals) {
+					return false
+				}
+			}
+		}
+		return true
+	case *ast.ReturnStmt:
+		if len(s.Results) != 1 {
+			return false
+		}
+		if returnsNil(s) {
+			return true
+		}
+		switch r := ast.Unparen(s.Results[0]).(type) {
+		case *ast.Ident:
+			return errName != "" && errName != "_" && r.Name == errName
+		case *ast.SelectorExpr:
+			n := c.pkgCallName(r)
+			return dir && (n == "path/filepath.SkipDir" || n == "io/fs.SkipDir")
+		}
+	}
+	return false
+}
+
+// allPure reports whether the expressions call nothing but string and path functions and the Name/IsDir/Type/Mode
+// methods of an entry: they read, write and keep nothing.
+func (c *fileCtx) allPure(es []ast.Expr, entry string) bool {
+	pure := true
+	for _, e := range es {
+		ast.Inspect(e, func(n ast.Node) bool {
+			switch x := n.(type) {
+			case *ast.FuncLit:
+				pure = false
+			case *ast.CallExpr:
+				name := c.pkgCallName(x.Fun)
+				switch {
+				case strings.HasPrefix(name, "strings.") || strings.HasPrefix(name, "path."):
+				case name == "path/filepath.Rel" || name == "path/filepath.ToSlash" || name == "path/filepath.FromSlash" ||
+					name == "path/filepath.Base" || name == "path/filepath.Ext" || name == "path/filepath.Clean" ||
+					name == "path/filepath.Dir" || name == "path/filepath.Join":
+				default:
+					if !entryMethod(x, entry) {
+						pure = false
+					}
+				}
+			}
+			return pure
+		})
+	}
+	return pure
+}
+
+var pureMethods = map[string]bool{"Name": true, "IsDir": true, "Type": true, "Mode": true, "IsRegular": true}
+
+// entryMethod reports whether a call is a Name/IsDir/Type/Mode/IsRegular method of the walk callback's own entry
+// parameter (fs.DirEntry or os.FileInfo), or of such a call's result (entry.Mode().IsRegular()): a method of any other
+// value may read or write.
+func entryMethod(call *ast.CallExpr, entry string) bool {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok || len(call.Args) != 0 || !pureMethods[sel.Sel.Name] || entry == "" || entry == "_" {
+		return false
+	}
+	switch x := ast.Unparen(sel.X).(type) {
+	case *ast.Ident:
+		return x.Name == entry
+	case *ast.CallExpr:
+		return entryMethod(x, entry)
+	}
+	return false
+}
+
+func returnsNil(st ast.Stmt) bool {
+	r, ok := st.(*ast.ReturnStmt)
+	if !ok || len(r.Results) != 1 {
+		return false
+	}
+	id, ok := r.Results[0].(*ast.Ident)
+	return ok && id.Name == "nil"
+}
+
+// chain flattens a || b || c (op LOR) or a && b && c (op LAND) into its operands, in order.
+func chain(e ast.Expr, op token.Token) []ast.Expr {
+	if b, ok := ast.Unparen(e).(*ast.BinaryExpr); ok && b.Op == op {
+		return append(chain(b.X, op), chain(b.Y, op)...)
+	}
+	return []ast.Expr{e}
+}
+
+// countAssigns is the number of assignments to name in body (any assignment, increment or range variable).
+func countAssigns(body ast.Node, name string) int {
+	n := 0
+	ast.Inspect(body, func(m ast.Node) bool {
+		switch x := m.(type) {
+		case *ast.AssignStmt:
+			for _, l := range x.Lhs {
+				if id, ok := l.(*ast.Ident); ok && id.Name == name {
+					n++
+				}
+			}
+		case *ast.ValueSpec:
+			for _, id := range x.Names {
+				if id.Name == name {
+					n++
+				}
+			}
+		case *ast.Field:
+			for _, id := range x.Names {
+				if id.Name == name {
+					n++
+				}
+			}
+		case *ast.IncDecStmt:
+			if id, ok := x.X.(*ast.Ident); ok && id.Name == name {
+				n++
+			}
+		case *ast.RangeStmt:
+			for _, e := range []ast.Expr{x.Key, x.Value} {
+				if id, ok := e.(*ast.Ident); ok && id.Name == name {
+					n++
+				}
+			}
+		case *ast.UnaryExpr:
+			if id, ok := x.X.(*ast.Ident); ok && x.Op == token.AND && id.Name == name {
+				n += 1000 // its address escapes: never an alias
+			}
+		}
+		return true
+	})
+	return n
 }
 
 // assignedIn calls fn when name is assigned anywhere in body.
@@ -1239,11 +1613,12 @@ func (c *fileCtx) call(x *ast.CallExpr, name string, sc *scope, at func(ast.Node
 			case kRepo:
 				add(Read{Kind: ReadPath, Line: line, Path: p.value, Literal: what})
 			case kWalk:
-				add(Read{Kind: ReadWalk, Line: line, Root: p.value, Depth: p.depth, Literal: what})
+				add(Read{Kind: ReadWalk, Line: line, Root: p.value, Depth: p.depth, Filter: p.filter, Literal: what})
 			case kTemp, kConst, kGoMod:
 				// a temp file, a module file, or a path below the directory of the test binary that runs this code
 			default:
 				dyn(what)
+				c.tailPattern(arg, sc, line, what, add)
 			}
 		}
 	}
@@ -1258,7 +1633,11 @@ func (c *fileCtx) call(x *ast.CallExpr, name string, sc *scope, at func(ast.Node
 		return
 	}
 	if w, ok := walkArg[name]; ok && w.arg < len(x.Args) {
-		walk(c.walkRoot(x.Args[w.arg], sc, name == "path/filepath.Glob"), w.depth, name)
+		root := c.walkRoot(x.Args[w.arg], sc, name == "path/filepath.Glob")
+		walk(root, w.depth, name)
+		if root.kind != kRepo && root.kind != kWalk && root.kind != kTemp {
+			c.tailPattern(x.Args[w.arg], sc, line, name, add)
+		}
 		return
 	}
 	if strings.HasSuffix(name, ".ParseFiles") || strings.HasSuffix(name, ".ParseGlob") {
@@ -1330,6 +1709,26 @@ func (c *fileCtx) execEdges(x *ast.CallExpr, name string, sc *scope, line int, a
 			return
 		}
 		args = args[1:]
+	}
+	// A constant argument that names Markdown files (`*.md`, `README.md`; a named constant, a + chain or fmt.Sprintf of
+	// constants) is a read of them whatever the program.
+	for _, a := range args {
+		ast.Inspect(a, func(n ast.Node) bool {
+			switch n.(type) {
+			case *ast.BasicLit, *ast.Ident, *ast.SelectorExpr, *ast.BinaryExpr, *ast.ParenExpr, *ast.CallExpr:
+			default:
+				return true
+			}
+			if v, ok := c.foldString(n.(ast.Expr), sc); ok {
+				if i := strings.LastIndexByte(v, ':'); i >= 0 {
+					v = v[i+1:] // git rev:path and pathspec magic name the path after the colon
+				}
+				if mdEvidence(v) {
+					add(Read{Kind: ReadPattern, Line: line, Path: v, Literal: name})
+				}
+			}
+			return true
+		})
 	}
 	if x.Ellipsis.IsValid() || len(args) == 0 {
 		edge(unexpressed, name+" with spread arguments")
@@ -2004,5 +2403,195 @@ func escapes(holder ast.Node, v string) bool {
 		})
 	}
 	visit(holder, false)
+	return found
+}
+
+// mdEvidence reports whether a constant names Markdown files: it ends in .md, or it is a glob whose last segment can
+// end in .md (no extension, or a wildcard in it). A path-like constant only (a valid patterns.tsv field).
+func mdEvidence(v string) bool {
+	if v == "" || strings.ContainsAny(v, " \t\n\r\"'=;(){}<>|&$`\\,:") {
+		return false // not a path or a pattern: a message, a flag value, a shell line
+	}
+	base := path.Base(v)
+	ext := path.Ext(base)
+	if _, err := path.Match(base, ""); err != nil {
+		return false
+	}
+	return ext == ".md" || strings.ContainsAny(base, "*?[") && (ext == "" || strings.ContainsAny(ext, "*?["))
+}
+
+// tailPattern records a patterns.tsv row for an unbounded path that ends in a constant naming Markdown files:
+// filepath.Join(dir, "docs", "index.md") or dir+"/README.md" reads **/docs/index.md, **/README.md.
+func (c *fileCtx) tailPattern(arg ast.Expr, sc *scope, line int, what string, add func(Read)) {
+	var tail []string
+	switch x := ast.Unparen(arg).(type) {
+	case *ast.CallExpr:
+		if n := c.s.callName(x.Fun); (n == "path/filepath.Join" || n == "path.Join") && !x.Ellipsis.IsValid() {
+			for i := len(x.Args) - 1; i >= 1; i-- {
+				v, ok := c.foldString(x.Args[i], sc)
+				if !ok {
+					break
+				}
+				tail = append([]string{v}, tail...)
+			}
+		}
+	case *ast.BinaryExpr:
+		if v, ok := c.foldString(x.Y, sc); ok && x.Op == token.ADD {
+			tail = []string{v}
+		}
+	}
+	if len(tail) == 0 {
+		return
+	}
+	s := strings.TrimLeft(path.Clean(strings.Join(tail, "/")), "/")
+	for strings.HasPrefix(s, "../") {
+		s = strings.TrimPrefix(s, "../")
+	}
+	if s != "" && s != "." && s != ".." && mdEvidence(s) {
+		add(Read{Kind: ReadPattern, Line: line, Path: "**/" + s, Literal: what})
+	}
+}
+
+// constExtSet is the keys of the package map variable name when it is a literal of constant extensions (".go": true)
+// and no code of the directory writes it, passes it on or takes its address; nil otherwise.
+func (c *fileCtx) constExtSet(name string) []string {
+	lit := compositeOf(c.g.vars[c.pkg][name])
+	if lit == nil {
+		return nil
+	}
+	if _, ok := lit.Type.(*ast.MapType); !ok {
+		return nil
+	}
+	var exts []string
+	for _, el := range lit.Elts {
+		kv, ok := el.(*ast.KeyValueExpr)
+		if !ok {
+			return nil
+		}
+		k, ok := kv.Key.(*ast.BasicLit)
+		v, vok := kv.Value.(*ast.Ident)
+		if !ok || k.Kind != token.STRING || !vok || v.Name != "true" {
+			return nil
+		}
+		s, err := strconv.Unquote(k.Value)
+		if err != nil || !strings.HasPrefix(s, ".") || strings.ContainsAny(s, "/*?[\\| \t\n") {
+			return nil
+		}
+		exts = append(exts, s)
+	}
+	for _, s := range c.g.files {
+		written := false
+		var stack []ast.Node
+		ast.Inspect(s.file, func(n ast.Node) bool {
+			if n == nil {
+				stack = stack[:len(stack)-1]
+				return true
+			}
+			parent := ast.Node(nil)
+			if len(stack) > 0 {
+				parent = stack[len(stack)-1]
+			}
+			stack = append(stack, n)
+			id, ok := n.(*ast.Ident)
+			if !ok || id.Name != name {
+				return true
+			}
+			switch p := parent.(type) {
+			case *ast.ValueSpec:
+				return true // the declaration
+			case *ast.RangeStmt:
+				if p.X == id {
+					return true
+				}
+			case *ast.IndexExpr:
+				if p.X == id && len(stack) >= 3 {
+					switch gp := stack[len(stack)-3].(type) {
+					case *ast.AssignStmt:
+						for _, l := range gp.Lhs {
+							if l == p {
+								written = true
+							}
+						}
+						return true
+					case *ast.IncDecStmt:
+						written = true
+						return true
+					case *ast.UnaryExpr:
+						written = written || gp.Op == token.AND
+						return true
+					}
+					return true
+				}
+			case *ast.SelectorExpr:
+				if p.Sel == id {
+					return true // a field or method of another value
+				}
+			case *ast.KeyValueExpr:
+				if p.Key == id {
+					return true // a struct field name
+				}
+			}
+			written = true
+			return true
+		})
+		if written {
+			return nil
+		}
+	}
+	sort.Strings(exts)
+	return exts
+}
+
+// pkgCallName is callName for a package function whose qualifier the file never declares again (a parameter, :=, var,
+// range variable, function or type named like the import): "" when the qualifier may name a local value instead.
+func (c *fileCtx) pkgCallName(fun ast.Expr) string {
+	sel, ok := ast.Unparen(fun).(*ast.SelectorExpr)
+	if !ok {
+		return ""
+	}
+	x, ok := sel.X.(*ast.Ident)
+	if !ok {
+		return ""
+	}
+	if _, imp := c.s.imports[x.Name]; !imp || c.declaresName(x.Name) {
+		return ""
+	}
+	return c.s.callName(fun)
+}
+
+// declaresName reports whether the file declares name anywhere, at any depth.
+func (c *fileCtx) declaresName(name string) bool {
+	found := false
+	ast.Inspect(c.s.file, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.Field:
+			for _, id := range x.Names {
+				found = found || id.Name == name
+			}
+		case *ast.AssignStmt:
+			if x.Tok == token.DEFINE {
+				for _, l := range x.Lhs {
+					if id, ok := l.(*ast.Ident); ok && id.Name == name {
+						found = true
+					}
+				}
+			}
+		case *ast.ValueSpec:
+			for _, id := range x.Names {
+				found = found || id.Name == name
+			}
+		case *ast.RangeStmt:
+			for _, e := range []ast.Expr{x.Key, x.Value} {
+				if id, ok := e.(*ast.Ident); ok && id.Name == name && x.Tok == token.DEFINE {
+					found = true
+				}
+			}
+		case *ast.FuncDecl:
+			found = found || x.Recv == nil && x.Name.Name == name
+		case *ast.TypeSpec:
+			found = found || x.Name.Name == name
+		}
+		return !found
+	})
 	return found
 }

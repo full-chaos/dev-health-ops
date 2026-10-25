@@ -82,6 +82,7 @@ type replayRequest struct {
 	Query     url.Values
 	Document  string // a GraphQL request's query document
 	Variables json.RawMessage
+	Payload   json.RawMessage // the request body as sent
 }
 
 // replayDoer answers every request from its answers and records each one. A request no answer names is
@@ -170,7 +171,7 @@ func (doer *replayDoer) Do(request *http.Request) (*http.Response, error) {
 		}
 		responseBody := answer.Body
 		if answer.Respond != nil {
-			built, ok := answer.Respond(replayRequest{Query: request.URL.Query(), Document: graphQL.Query, Variables: graphQL.Variables})
+			built, ok := answer.Respond(replayRequest{Query: request.URL.Query(), Document: graphQL.Query, Variables: graphQL.Variables, Payload: body})
 			if !ok {
 				continue
 			}

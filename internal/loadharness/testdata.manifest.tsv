@@ -1,0 +1,4 @@
+# Every file under internal/loadharness/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
+# python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
+# header-before-stamp set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
+acb35a28247d833f7892636d7c2814e944ca072605c89fb80f35a26548f12136	hand-written	example.config.json

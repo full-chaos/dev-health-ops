@@ -119,6 +119,14 @@ func TestQueueTestedShaAnswersOnlyForAGreenMergeGroupRunWithGreenShards(t *testi
 			map[string]string{"11": queueJobsJSON("success", "cancelled")}, false, false},
 		{"green run, one shard unfinished", queueRunsJSON(sha, [2]string{"11", "success"}),
 			map[string]string{"11": queueJobsJSON("success", "null")}, false, false},
+		{"green run, a shard with an empty conclusion", queueRunsJSON(sha, [2]string{"11", "success"}),
+			map[string]string{"11": queueJobsJSON("success", "")}, false, false},
+		{"green run, a shard conclusion with a NUL after success", queueRunsJSON(sha, [2]string{"11", "success"}),
+			map[string]string{"11": queueJobsJSON("success", `success\u0000`)}, false, false},
+		{"green run, one shard conclusion holding two success lines", queueRunsJSON(sha, [2]string{"11", "success"}),
+			map[string]string{"11": queueJobsJSON(`success\nsuccess`)}, false, false},
+		{"green run, a shard with a JSON null conclusion", queueRunsJSON(sha, [2]string{"11", "success"}),
+			map[string]string{"11": strings.Replace(queueJobsJSON("success", "x"), `"x"`, "null", 1)}, false, false},
 		{"green run, one shard failed", queueRunsJSON(sha, [2]string{"11", "success"}),
 			map[string]string{"11": queueJobsJSON("failure", "success")}, false, false},
 		{"green run, no shard job at all", queueRunsJSON(sha, [2]string{"11", "success"}),
@@ -163,16 +171,53 @@ func TestQueueTestedShaAnswersOnlyForAGreenMergeGroupRunWithGreenShards(t *testi
 	}
 }
 
+// A failing shard first, then more output than a pipe holds: a script that feeds a pipeline into grep -q dies of
+// SIGPIPE, and under pipefail with a leading "!" that read as a green answer.
+func TestQueueTestedShaStaysRedWhenAFailedShardComesFirstInALongAnswer(t *testing.T) {
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Fatalf("jq is required by this test and is not on PATH: %v", err)
+	}
+	root := rootOf(t)
+	script := filepath.Join(root, "ci", "queue_tested_sha.sh")
+	const sha = "0123456789abcdef0123456789abcdef01234567"
+	conclusions := make([]string, 200000)
+	for index := range conclusions {
+		conclusions[index] = "success"
+	}
+	conclusions[0] = "failure"
+	dir := t.TempDir()
+	for name, content := range map[string]string{
+		"gh":           queueGhStub,
+		"runs.json":    queueRunsJSON(sha, [2]string{"11", "success"}),
+		"jobs-11.json": queueJobsJSON(conclusions...),
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const attempts = 10
+	for attempt := 1; attempt <= attempts; attempt++ {
+		command := exec.Command("bash", script, "full-chaos/dev-health-ops", sha)
+		command.Env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"), "STUB_DIR="+dir)
+		if err := command.Run(); err == nil {
+			t.Fatalf("attempt %d of %d: exit 0 (a green answer) although the first shard failed", attempt, attempts)
+		}
+	}
+}
+
 // A green merge_group run proves the main-push shards only if the merge_group run planned the same shard set. The plan
-// reads nothing but INTEGRATION_AFFECTED_FILE, and only a pull request (selection) or a queue-tested push (skip) sets it.
+// reads nothing but INTEGRATION_AFFECTED_FILE, and only a pull request (selection), a queue-tested push (skip) or a
+// docs-only change sets it. The docs-only case cannot fake a proof: its merge_group run has no shard job, and
+// ci/queue_tested_sha.sh accepts only a run in which at least one shard ran and all succeeded (a docs-only push, for
+// its part, matches no go.yml push path: ci/codeql_docs_only.sh refuses every Go input).
 func TestMergeGroupPlansTheSameIntegrationShardsAsAMainPush(t *testing.T) {
 	root := rootOf(t)
 	raw, err := os.ReadFile(filepath.Join(root, ".github", "workflows", "go.yml"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Count(string(raw), `echo "INTEGRATION_AFFECTED_FILE=${out}" >> "${GITHUB_ENV}"`); got != 2 {
-		t.Errorf("INTEGRATION_AFFECTED_FILE is set in %d places, want 2 (pull request selection, queue-tested push skip)", got)
+	if got := strings.Count(string(raw), `echo "INTEGRATION_AFFECTED_FILE=${out}" >> "${GITHUB_ENV}"`); got != 3 {
+		t.Errorf("INTEGRATION_AFFECTED_FILE is set in %d places, want 3 (pull request selection, queue-tested push skip, docs-only skip)", got)
 	}
 	job := pinJob(loadWf(t, root, "go.yml"), "go-storage-integration-plan")
 	for _, step := range stepsOf(job) {
@@ -183,8 +228,12 @@ func TestMergeGroupPlansTheSameIntegrationShardsAsAMainPush(t *testing.T) {
 		condition := asString(step["if"])
 		switch name {
 		case "Select the integration packages the change can affect":
-			if condition != "github.event_name == 'pull_request'" {
+			if condition != "github.event_name == 'pull_request' && steps.docs.outputs.docs_only != 'true'" {
 				t.Errorf("selection step if %q: a merge_group run must plan the full set", condition)
+			}
+		case "Skip the integration shards for a docs-only change":
+			if condition != "steps.docs.outputs.docs_only == 'true'" {
+				t.Errorf("docs-only skip step if %q: only the docs-only verdict may skip", condition)
 			}
 		case queueSkipStep:
 			if !strings.Contains(condition, "github.event_name == 'push'") {

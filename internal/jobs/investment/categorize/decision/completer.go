@@ -80,6 +80,21 @@ func ModelAccepted(requested, returned string) bool {
 	return requested != "" && (returned == requested || strings.HasPrefix(returned, requested+"-"))
 }
 
+// ModelAcceptedStrict is ModelAccepted for a backend that is not jev, whose model
+// ids share a prefix with a sibling (clef and clef-flash): the part after the
+// requested id must be "-" and then a digit (a date or a version), so a sibling
+// model's answer is never taken for the requested one.
+func ModelAcceptedStrict(requested, returned string) bool {
+	if requested == "" {
+		return false
+	}
+	if returned == requested {
+		return true
+	}
+	suffix, found := strings.CutPrefix(returned, requested+"-")
+	return found && suffix != "" && suffix[0] >= '0' && suffix[0] <= '9'
+}
+
 // Terminal is the typed error that ends a classification with no valid mix. It
 // leaves CompleteBundle in place of text, so no refusal, missing answer,
 // invalid value or failed request can reach the validator as a payload.
@@ -172,7 +187,11 @@ func (k *call) CompleteBundle(ctx context.Context, bundle units.TextBundle) (cat
 	}
 	in, out := int(typed.Usage.InputTokens), int(typed.Usage.OutputTokens)
 	categorize.LogCompletion(ctx, categorize.CompletionResult{Model: boundToken(typed.ReturnedModel), InputTokens: &in, OutputTokens: &out})
-	if !ModelAccepted(c.model, typed.ReturnedModel) {
+	accepted := ModelAccepted
+	if c.provider != "" {
+		accepted = ModelAcceptedStrict
+	}
+	if !accepted(c.model, typed.ReturnedModel) {
 		return categorize.CompletionResult{}, ended(&Terminal{State: StateRequestFailed, Details: []string{"request_failed:model_mismatch:" + boundToken(typed.ReturnedModel)},
 			InputTokens: in, OutputTokens: out, ModelReturned: typed.ReturnedModel})
 	}

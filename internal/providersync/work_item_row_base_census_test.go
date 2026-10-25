@@ -17,9 +17,8 @@ import (
 // that may build a work item row field by field, each with its reason
 // (CHAOS-9852). The rest of their file is scanned like any other.
 var workItemRowCensusAllowed = map[string]string{
-	"work_item_row_base.go:buildWorkItemRow":                  "the base constructor",
-	"work_item_row_base.go:linearWorkItemRowFromBase":         "the one conversion of a base row into the Linear effect row",
-	"linear_work_items_derived.go:linearWorkItemRowsAsGitHub": "copies a Linear row that buildWorkItemRow built, field for field, into the derivation row; it reads no payload",
+	"work_item_row_base.go:buildWorkItemRow":          "the base constructor",
+	"work_item_row_base.go:linearWorkItemRowFromBase": "the one conversion of a base row into the Linear effect row",
 }
 
 // workItemRowCensusFieldWrites are the row fields that code outside the base may

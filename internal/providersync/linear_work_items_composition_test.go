@@ -4,15 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/workitemmetrics"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
+
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
-	"github.com/full-chaos/dev-health-ops/internal/teamattribution"
 )
 
 // linearFamilyDestinations is the effect set of one Linear work-items unit:
@@ -28,49 +27,6 @@ var linearFamilyDestinations = []string{
 	"work_item_reopen_events",
 	"work_item_transitions",
 	"work_items",
-}
-
-type linearFamilyDerivationSource struct {
-	err error
-}
-
-func (source linearFamilyDerivationSource) Load(
-	context.Context,
-	Claim,
-	teamattribution.GithubWorkItemDerivationLoadRequest,
-) (teamattribution.GithubWorkItemDerivationFacts, error) {
-	return teamattribution.GithubWorkItemDerivationFacts{}, source.err
-}
-
-// Succeeds on purpose: the fail-closed case this double serves is about Load,
-// and a stored-edge read that failed too would let the test pass for the wrong
-// reason (CHAOS-3978 has its own fail-closed case).
-// AnchorGitLabSubjects is a no-op: this fake carries no GitLab repos rows.
-func (source linearFamilyDerivationSource) AnchorGitLabSubjects(context.Context, map[string]teamattribution.GithubWorkItemDerivationSubject) error {
-	return nil
-}
-
-func (source linearFamilyDerivationSource) LoadStoredInheritableEdges(
-	context.Context, Claim, []string,
-) ([]githubWorkItemDependencyRow, error) {
-	return nil, nil
-}
-
-type linearFamilyEngine struct{}
-
-func (linearFamilyEngine) Derive(
-	context.Context,
-	Claim,
-	githubWorkItemRows,
-	time.Time,
-	time.Time,
-	teamattribution.GithubWorkItemDerivationContext,
-) (map[string][]json.RawMessage, error) {
-	return map[string][]json.RawMessage{
-		"investment_classifications_daily": {},
-		"investment_metrics_daily":         {},
-		"issue_type_metrics_daily":         {},
-	}, nil
 }
 
 func linearFamilyClaim() Claim {
@@ -104,13 +60,6 @@ func linearFamilyEmptyCyclesResponse() string {
 	return `{"data":{"cycles":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}`
 }
 
-func linearFamilyDeriver(source linearFamilyDerivationSource) *LinearWorkItemDeriver {
-	return &LinearWorkItemDeriver{
-		Source: source,
-		engine: linearFamilyEngine{},
-	}
-}
-
 func TestLinearWorkItemFamilyConstructionExposesOneCompleteBoundary(t *testing.T) {
 	var _ CompleteRouteHandler = LinearWorkItemFamilyRouteHandler{}
 	var _ EffectSink = LinearWorkItemFamilyClickHouseEffects{}
@@ -139,10 +88,7 @@ func TestLinearWorkItemFamilyConstructionExposesOneCompleteBoundary(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	derived, err := BuildLinearWorkItemDerivedEffects(LinearWorkItemDerivedEffectRows{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	derived := emptyEffectsFor(t, derivedTestDestinations)
 	claim := linearFamilyClaim()
 	// The sink accepts the unit's own effect set and refuses each table of
 	// the daily job: a refused effect never reaches a store.
@@ -347,10 +293,7 @@ func TestLinearWorkItemFamilyEffectsFailClosedWhenEitherHalfIsIncomplete(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	derived, err := BuildLinearWorkItemDerivedEffects(LinearWorkItemDerivedEffectRows{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	derived := emptyEffectsFor(t, derivedTestDestinations)
 	raw, err := BuildLinearWorkItemEffects(LinearWorkItemEffectRows{})
 	if err != nil {
 		t.Fatal(err)
@@ -431,7 +374,7 @@ func linearFamilyEffectsFixture(
 	lease providerfoundation.LeaseGuard,
 ) LinearWorkItemFamilyClickHouseEffects {
 	derived := LinearWorkItemDerivedClickHouseEffects{Lease: lease}
-	for _, destination := range linearWorkItemDerivedEffectDestinations {
+	for _, destination := range derivedTestDestinations {
 		adapter := linearDestinationCheckingAdapter{
 			destination: destination,
 			delegate:    backend,
@@ -439,20 +382,6 @@ func linearFamilyEffectsFixture(
 		switch destination {
 		case "ai_attribution":
 			derived.AIAttribution = adapter
-		case "estimate_coverage_metrics_daily":
-			derived.EstimateCoverageMetricsDaily = adapter
-		case "issue_type_metrics_daily":
-			derived.IssueTypeMetricsDaily = adapter
-		case "work_item_cycle_times":
-			derived.WorkItemCycleTimes = adapter
-		case "work_item_metrics_daily":
-			derived.WorkItemMetricsDaily = adapter
-		case "work_item_state_durations_daily":
-			derived.WorkItemStateDurationsDaily = adapter
-		case "work_item_team_attributions":
-			derived.WorkItemTeamAttributions = adapter
-		case "work_item_user_metrics_daily":
-			derived.WorkItemUserMetricsDaily = adapter
 		}
 	}
 	return LinearWorkItemFamilyClickHouseEffects{
@@ -467,14 +396,6 @@ func linearFamilyEffectsByDestination(effects []EffectBatch) map[string]EffectBa
 		result[effect.Destination] = effect
 	}
 	return result
-}
-
-// LoadStoredBlockingFacts: this double holds no stored blocking relation
-// (CHAOS-8493), so no item of its units has an open blocker.
-func (source linearFamilyDerivationSource) LoadStoredBlockingFacts(
-	context.Context, Claim, []string, []workitemmetrics.BlockingRelation,
-) ([]workitemmetrics.BlockingRelation, []workitemmetrics.RelationEnd, error) {
-	return nil, nil, nil
 }
 
 // ai_attribution is a raw fact of the fetched items: the Linear work-items

@@ -54,7 +54,8 @@
         "aud": {
           "type": "string",
           "enum": [
-            "auth-service"
+            "auth-service",
+            "dev-health-api"
           ],
           "description": "Exactly one audience: one service. contracts/auth/v1/vocabulary/audiences.json lists every audience and the classes that may carry it; an audience whose classes lack workload_token is refused."
         },

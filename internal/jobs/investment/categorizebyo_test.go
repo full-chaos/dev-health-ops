@@ -32,7 +32,12 @@ type stubOrgModel struct {
 	failure       error
 }
 
-func (stub *stubOrgModel) Complete(_ context.Context, request categorize.CompletionRequest) (categorize.CompletionResult, error) {
+func (stub *stubOrgModel) Complete(ctx context.Context, request categorize.CompletionRequest) (categorize.CompletionResult, error) {
+	// A real client sends nothing on a cancelled context (net/http refuses it
+	// before the dial), so such a call is not counted.
+	if err := ctx.Err(); err != nil {
+		return categorize.CompletionResult{}, err
+	}
 	stub.calls = append(stub.calls, request)
 	if stub.failure != nil {
 		return categorize.CompletionResult{}, stub.failure
@@ -268,7 +273,7 @@ func TestAnOptedInOrgWithAUsableOwnModelGetsItsOwnBackend(t *testing.T) {
 // The closed set of refusal codes is pinned: a new code is a new decision.
 func TestTheCategorizeRefusalCodeSetIsClosed(t *testing.T) {
 	want := []string{
-		"ai_features_turned_off", "categorize_byo_model_unreported", "categorize_byo_unavailable", "invalid_base_url", "missing_credentials", "model_required",
+		"ai_features_turned_off", "categorize_byo_model_unreported", "categorize_byo_model_unsupported", "categorize_byo_unavailable", "invalid_base_url", "missing_credentials", "model_required",
 		"not_configured", "own_model_gate_closed", "own_model_turned_off", "service_model_not_entitled",
 		"unknown_provider", "unreadable_row",
 	}
@@ -478,6 +483,43 @@ func TestAnEmptyReturnedModelRefusesAndStopsTheRun(t *testing.T) {
 	}
 	if len(stub.calls) != 1 || len(outcomes) != 0 {
 		t.Fatalf("the org model was asked %d times and %d units have an outcome; the run must stop after one request", len(stub.calls), len(outcomes))
+	}
+}
+
+// dispatchCountingModel counts every unit that reaches the org model, also one
+// that arrives with a cancelled context.
+type dispatchCountingModel struct {
+	*stubOrgModel
+	dispatched int
+}
+
+func (model *dispatchCountingModel) Complete(ctx context.Context, request categorize.CompletionRequest) (categorize.CompletionResult, error) {
+	model.dispatched++
+	return model.stubOrgModel.Complete(ctx, request)
+}
+
+// After the refusal stops the run, no further unit is handed to the model.
+// The race is in the scheduler, so one run seldom shows it; the loop makes a
+// run that dispatches after the stop near certain to fail under -race.
+func TestNoUnitIsDispatchedAfterTheRefusalStopsTheRun(t *testing.T) {
+	for run := 0; run < 25; run++ {
+		model := &dispatchCountingModel{stubOrgModel: &stubOrgModel{model: "org-model-1", returnedEmpty: true, reply: answerAllQuestions}}
+		served, err := newBYOSystemOne(model, "openai", testLogger())
+		if err != nil {
+			t.Fatal(err)
+		}
+		m := &Materializer{logger: testLogger()}
+		m.SetServed(served)
+		cfg := shadowTestConfig()
+		cfg.LLMConcurrency = 1
+		stats := Stats{LLMFailureCounts: map[string]int{}}
+		err = m.categorizePending(context.Background(), cfg, shadowTestEntries(t, "u1", "u2", "u3"), map[int]categorize.CategorizationOutcome{}, &stats)
+		if deterministicClass(err) != workgraph.ClassLLMDeterministic {
+			t.Fatalf("run %d: categorizePending = %v, want the llm_deterministic class", run, err)
+		}
+		if model.dispatched != 1 {
+			t.Fatalf("run %d: %d units reached the org model; the run must stop after the first", run, model.dispatched)
+		}
 	}
 }
 

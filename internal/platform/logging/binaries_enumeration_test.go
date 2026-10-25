@@ -43,6 +43,8 @@ var binaryLogging = map[string]string{
 	"dev-health-worker-migrate":              "silent",
 	"dho":                                    "cli",
 	"gqlgen-guard":                           "silent",
+	"faultproxy":                             "installs",
+	"loadtest":                               "installs",
 	"registrydump":                           "silent",
 	"strip-agent-attribution":                "silent",
 }

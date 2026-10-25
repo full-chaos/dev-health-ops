@@ -367,7 +367,7 @@ func TestPlanVerdictReviewedWrongWayCasesPlanTheReader(t *testing.T) {
 			changed: []string{"docs/a.md"}, want: "FULL the read tables differ*"},
 		// 0b4d992e9b: AFFECTED 2 [b c]; x, walking the repository root under a row declaring docs/, was skipped.
 		{name: "root_walk_with_a_docs_row", head: map[string]string{"x/x_walk_test.go": plantedRepoWalk,
-			"internal/cigates/affected/walks.tsv": "x\tx_walk_test.go\tdocs\ttree\n"},
+			"internal/cigates/affected/walks.tsv": "x\tx_walk_test.go\tdocs\ttree\t*\n"},
 			changed: []string{"contracts/auth/v1/x.json"}, want: "FULL the read tables differ*"},
 	})
 }

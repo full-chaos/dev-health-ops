@@ -113,7 +113,7 @@ func imagePublishingViolations(t *testing.T, root string) []string {
 		}
 	}
 	// a renderer the guard reads must itself trigger the Go workflow: a change limited to it would otherwise skip the guard
-	for _, event := range []string{"push", "pull_request"} {
+	for _, event := range goFilteredEvents(t, root) {
 		paths := goPaths(t, root, event)
 		for _, rel := range scanned {
 			if !matchesAny(t, rel, paths) {
@@ -133,9 +133,11 @@ func imagePublishingViolations(t *testing.T, root string) []string {
 	}
 
 	var filters yamlMap
-	steps := stepsOf(jobsOf(doc)["changes"])
-	if len(steps) > 1 {
-		filters = parseYAML(t, asString(asMap(steps[1]["with"])["filters"]), "docker-images.yml changes filters")
+	for _, step := range stepsOf(jobsOf(doc)["changes"]) {
+		if strings.HasPrefix(asString(step["uses"]), "dorny/paths-filter@") {
+			filters = parseYAML(t, asString(asMap(step["with"])["filters"]), "docker-images.yml changes filters")
+			break
+		}
 	}
 	found := false
 	for _, p := range asList(filters["code"]) {

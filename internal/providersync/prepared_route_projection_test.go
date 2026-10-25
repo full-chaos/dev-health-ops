@@ -25,36 +25,29 @@ import (
 // preparedRouteRowTypes are the Go types each enrolled destination's sinks
 // decode their rows into, one per sink when providers' sinks differ.
 var preparedRouteRowTypes = map[string][]any{
-	"deployments":                             {deploymentRow{}},
-	"git_pull_requests":                       {pullRequestRow{}},
-	"git_pull_request_reviews":                {pullRequestReviewRow{}},
-	"ai_attribution":                          {githubAIAttributionRow{}},
-	"work_graph_pr_commit":                    {prCommitLinkRow{}},
-	"estimate_coverage_metrics_daily":         {githubEstimateCoverageMetricsDailyRow{}},
-	"issue_type_metrics_daily":                {githubIssueTypeMetricsDailyRow{}},
-	"sprints":                                 {githubSprintRow{}},
-	"work_item_cycle_times":                   {githubWorkItemCycleTimePersistenceRow{}},
-	"work_item_dependencies":                  {githubWorkItemDependencyRow{}},
-	"work_item_interactions":                  {githubWorkItemInteractionRow{}},
-	"work_item_metrics_daily":                 {githubWorkItemMetricsDailyRow{}},
-	"work_item_reopen_events":                 {githubWorkItemReopenRow{}},
-	"work_item_state_durations_daily":         {githubWorkItemStateDurationDailyRow{}},
-	"work_item_team_attributions":             {githubWorkItemTeamAttributionRow{}},
-	"work_item_transitions":                   {githubWorkItemTransitionRow{}},
-	"work_item_user_metrics_daily":            {githubWorkItemUserMetricsDailyRow{}},
-	"project_membership_transitions":          {projectmembership.Row{}},
-	"projects":                                {projectmembership.CatalogRow{}},
-	"work_items":                              {githubWorkItemRow{}},
-	"git_commit_stats":                        {commitStatsRow{}},
-	"git_commits":                             {gitCommitRow{}},
-	"git_files":                               {gitFileRow{}},
-	"repos":                                   {repositoryRow{}},
-	"security_alerts":                         {securityAlertRow{}, gitLabSecurityAlertRow{}},
-	"feature_flag":                            {launchDarklyFlagRow{}},
-	"feature_flag_event":                      {launchDarklyEventRow{}},
-	"feature_flag_link":                       {launchDarklyLinkRow{}},
-	"work_graph_edges":                        {launchDarklyEdgeRow{}},
-	"operational_services":                    {gitLabOperationalServiceRow{}},
+	"deployments":                    {deploymentRow{}},
+	"git_pull_requests":              {pullRequestRow{}},
+	"git_pull_request_reviews":       {pullRequestReviewRow{}},
+	"ai_attribution":                 {githubAIAttributionRow{}},
+	"work_graph_pr_commit":           {prCommitLinkRow{}},
+	"sprints":                        {githubSprintRow{}},
+	"work_item_dependencies":         {githubWorkItemDependencyRow{}},
+	"work_item_interactions":         {githubWorkItemInteractionRow{}},
+	"work_item_reopen_events":        {githubWorkItemReopenRow{}},
+	"work_item_transitions":          {githubWorkItemTransitionRow{}},
+	"project_membership_transitions": {projectmembership.Row{}},
+	"projects":                       {projectmembership.CatalogRow{}},
+	"work_items":                     {githubWorkItemRow{}},
+	"git_commit_stats":               {commitStatsRow{}},
+	"git_commits":                    {gitCommitRow{}},
+	"git_files":                      {gitFileRow{}},
+	"repos":                          {repositoryRow{}},
+	"security_alerts":                {securityAlertRow{}, gitLabSecurityAlertRow{}},
+	"feature_flag":                   {launchDarklyFlagRow{}},
+	"feature_flag_event":             {launchDarklyEventRow{}},
+	"feature_flag_link":              {launchDarklyLinkRow{}},
+	"work_graph_edges":               {launchDarklyEdgeRow{}},
+	"operational_services":           {gitLabOperationalServiceRow{}},
 	"operational_service_repository_mappings": {gitLabServiceRepositoryMappingRow{}},
 	"operational_incidents":                   {jiraIncidentRow{}},
 	"worklogs":                                {jiraWorklogRow{}},
@@ -184,6 +177,9 @@ func TestSinkReadKeysAreRouteSignalsNotText(t *testing.T) {
 		t.Fatal("no sink-read keys")
 	}
 	for destination, keys := range preparedRouteSinkReadKeys {
+		if _, retired := retiredWorkItemSyncDestinations[destination]; retired {
+			continue
+		}
 		rowTypes := slices.Clone(preparedRouteRowTypes[destination])
 		for provider := range preparedRouteProviderRowTypes {
 			rowTypes = append(rowTypes, preparedRouteProviderRowTypes[provider][destination]...)
@@ -287,6 +283,9 @@ func TestProjectionStatementsAreTheSinksOwnInserts(t *testing.T) {
 	}
 	var owned []ownedStatement
 	for destination, statement := range preparedRouteInsertStatements {
+		if _, retired := retiredWorkItemSyncDestinations[destination]; retired {
+			continue // the daily job writes it; a stored manifest replays it without a sink
+		}
 		owned = append(owned, ownedStatement{destination, statement, preparedRouteRowTypes[destination]})
 	}
 	for provider, statements := range preparedRouteProviderInsertStatements {

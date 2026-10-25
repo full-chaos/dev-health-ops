@@ -28,10 +28,7 @@ func TestGitLabWorkItemFamilyEffectsComposeRawAndAIAttributionOnly(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	derived, err := BuildGitLabWorkItemDerivedEffects(GitLabWorkItemDerivedEffectRows{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	derived := emptyEffectsFor(t, derivedTestDestinations)
 	canonical := workItemRouteDestinations()
 	if len(canonical) != 7 {
 		t.Fatalf("canonical=%v want the six raw tables and ai_attribution", canonical)
@@ -125,13 +122,14 @@ func TestGitLabWorkItemFamilyEffectsRejectForeignAIProviderAndTenant(t *testing.
 	}
 	assertRejected := func(t *testing.T, row gitlabAIAttributionRow) {
 		t.Helper()
-		effects, err := BuildGitLabWorkItemDerivedEffects(GitLabWorkItemDerivedEffectRows{
-			AIAttributions: []gitlabAIAttributionRow{row},
-		})
+		aiRows, err := effectRowsFromValues([]gitlabAIAttributionRow{row})
 		if err != nil {
 			t.Fatal(err)
 		}
-		aiEffect := effects[0]
+		aiEffect, err := BuildEffectBatch("ai_attribution", EffectReadbackRequired, aiRows)
+		if err != nil {
+			t.Fatal(err)
+		}
 		identity, err := newGitLabWorkItemDerivedEffectIdentity(claim, aiEffect)
 		if err != nil {
 			t.Fatal(err)

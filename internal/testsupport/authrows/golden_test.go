@@ -334,3 +334,32 @@ func TestStaleTokenQuirkRewritesOnlyAlicesRevokedRow(t *testing.T) {
 		t.Errorf("a revoked-count style change on another user's row was classified: %v", problems)
 	}
 }
+
+// A chain of quirks covers one target row per golden row, and every quirk it used is counted: a row the golden holds
+// twice and the target once leaves one difference, and so does a target row beyond the golden's. (A rewrite quirk is
+// bounded by the golden's own rows, so it has no Max; an extra-row quirk keeps its Max, see
+// TestQuirkExtraRowsAreLimitedToTheirCount.)
+func TestChainedRewritesCoverOneTargetRowPerGoldenRow(t *testing.T) {
+	golden := goldenRows(t)
+	acp := acpRows(t, golden)
+	run := func(goldenRefresh, acpRefresh string) (problems []string, covered string) {
+		l, err := NewLedger(forwarded(t, "sessions,local_login,social"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return l.Compare(TableRefreshTokens, goldenRefresh, acpRefresh), l.Covered()
+	}
+	if problems, covered := run(golden[TableRefreshTokens], acp[TableRefreshTokens]); len(problems) != 0 ||
+		!strings.Contains(covered, "login-organization-chosen-without-activity=2") ||
+		!strings.Contains(covered, "refresh-stale-token-rotated-before-the-pin-check=1") {
+		t.Fatalf("the expected rows were not covered by the chain: %v %q", problems, covered)
+	}
+	twice := golden[TableRefreshTokens] + rowSeparator + "alice@example.comorg-btrue 1"
+	if problems, _ := run(twice, acp[TableRefreshTokens]); len(problems) != 1 || !strings.Contains(problems[0], "golden only") {
+		t.Errorf("a golden row held twice and covered once left %v, want one golden-only difference", problems)
+	}
+	more := acp[TableRefreshTokens] + rowSeparator + "alice@example.comorg-atrue 2"
+	if problems, _ := run(golden[TableRefreshTokens], more); len(problems) != 1 || !strings.Contains(problems[0], "target only") {
+		t.Errorf("a target row beyond the golden's left %v, want one target-only difference", problems)
+	}
+}

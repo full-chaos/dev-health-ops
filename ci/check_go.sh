@@ -105,6 +105,31 @@ if [ "${CI:-}" = "true" ] && [ -z "${TESTCONTAINERS_RYUK_DISABLED+x}" ]; then
   INTEGRATION_TEST_ENV=(TESTCONTAINERS_RYUK_DISABLED=true)
 fi
 
+# run_integration_go_test (CHAOS-10036): one testcontainers session id per
+# `go test -tags=integration` call, so ONE label names every container the call
+# starts, with the reaper on or off. After the call (pass, fail, INT, TERM) the
+# containers of that session are removed by id (ci/reap-testcontainers-session.sh:
+# label filter only, never a prune). A caller-set TESTCONTAINERS_SESSION_ID wins.
+# A SIGKILL of this script skips the trap; the reaper (when on) or a host sweep
+# by session id covers that case.
+run_integration_go_test() {
+  local module_dir="$1" sid pid rc=0
+  shift
+  sid="${TESTCONTAINERS_SESSION_ID:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')}"
+  (
+    cd "${ROOT}/${module_dir}"
+    exec "${GO_ENV_OFF[@]}" GOWORK=off TESTCONTAINERS_SESSION_ID="${sid}" ${INTEGRATION_TEST_ENV[@]+"${INTEGRATION_TEST_ENV[@]}"} \
+      go test -mod=readonly -trimpath -tags=integration -count=1 -timeout=30m "$@"
+  ) &
+  pid=$!
+  # shellcheck disable=SC2064
+  trap "kill -TERM ${pid} 2>/dev/null || true; wait ${pid} 2>/dev/null || true; bash \"${SCRIPT_DIR}/reap-testcontainers-session.sh\" ${sid} || true; exit 143" INT TERM
+  wait "${pid}" || rc=$?
+  trap - INT TERM
+  bash "${SCRIPT_DIR}/reap-testcontainers-session.sh" "${sid}" || rc=$?
+  return "${rc}"
+}
+
 usage() {
   # Backticks in the literal help text document commands; they are not substitutions.
   # shellcheck disable=SC2016
@@ -3395,10 +3420,7 @@ check_integration_package_shard() {
     if [ "${mode}" = "--dry-run" ]; then
       continue
     fi
-    (
-      cd "${ROOT}/${module_dir}"
-      "${GO_ENV_OFF[@]}" GOWORK=off ${INTEGRATION_TEST_ENV[@]+"${INTEGRATION_TEST_ENV[@]}"} go test -mod=readonly -trimpath -tags=integration -count=1 -timeout=30m "${run_pkgs[@]}"
-    )
+    run_integration_go_test "${module_dir}" "${run_pkgs[@]}"
   done
 
   [ "${selected_count}" -gt 0 ] \
@@ -3509,10 +3531,7 @@ check_integration() {
     [ "${#run_pkgs[@]}" -gt 0 ] || continue
 
     printf 'go test integration: %s -> %s\n' "${module_dir}" "${run_pkgs[*]}"
-    (
-      cd "${ROOT}/${module_dir}"
-      "${GO_ENV_OFF[@]}" GOWORK=off ${INTEGRATION_TEST_ENV[@]+"${INTEGRATION_TEST_ENV[@]}"} go test -mod=readonly -trimpath -tags=integration -count=1 -timeout=30m "${run_pkgs[@]}"
-    )
+    run_integration_go_test "${module_dir}" "${run_pkgs[@]}"
   done
 }
 

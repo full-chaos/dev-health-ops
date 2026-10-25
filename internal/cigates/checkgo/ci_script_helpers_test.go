@@ -75,6 +75,11 @@ func mutatedCopy(t *testing.T, src, old, repl string) string {
 	if err := os.WriteFile(dst, []byte(strings.Replace(string(raw), old, repl, 1)), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	if reap, err := os.ReadFile(filepath.Join(filepath.Dir(src), "reap-testcontainers-session.sh")); err == nil {
+		if err := os.WriteFile(filepath.Join(filepath.Dir(dst), "reap-testcontainers-session.sh"), reap, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
 	return dst
 }
 

@@ -161,6 +161,7 @@ func TestRaceExcludedReceiptsFailOnEachPlantedFault(t *testing.T) {
 		})
 	}
 	t.Run("a census row that go list omits", censusRowThatGoListOmitsSubtests)
+	t.Run("a duplicated census row", duplicateCensusSubtests)
 }
 
 const shardFakeGo = `#!/usr/bin/env bash
@@ -371,4 +372,43 @@ func censusRowThatGoListOmitsSubtests(t *testing.T) {
 			t.Fatalf("the real census under the same selection exited %d: %s", res.code, tail(res.stderr+res.stdout, 1500))
 		}
 	})
+}
+
+// A duplicated (package, test) row would print one receipt twice from a single pass event. The loader every verb shares refuses
+// it, after the same trim and tab split the receipt match uses, naming the key and both line numbers.
+func duplicateCensusSubtests(t *testing.T) {
+	script := scriptPath(t, "ci/check_go.sh")
+	repo := filepath.Dir(filepath.Dir(script))
+	real := readText(t, filepath.Join(repo, "ci", "race_excluded_tests.tsv"))
+	first := strings.Split(strings.TrimSpace(strings.Split(strings.TrimPrefix(fixtureCensus, "\n"), "\n")[0]), "\t")
+	dup := first[0] + "\t" + first[1]
+	plants := []struct{ name, census, verb string }{
+		{"exact duplicate, receipts verb", fixtureCensus + dup + "\n", "receipts"},
+		{"exact duplicate in the real census, shard plan", real + dup + "\n" + dup + "\n", "plan"},
+		{"same key with a trailing space", fixtureCensus + dup + " \n", "receipts"},
+	}
+	for _, p := range plants {
+		p := p
+		t.Run(p.name, func(t *testing.T) {
+			var res cmdResult
+			if p.verb == "receipts" {
+				res = receiptsVerb(t, p.census, eventLines(t, cleanEvents()))
+			} else {
+				list := filepath.Join(t.TempDir(), "census.tsv")
+				if err := os.WriteFile(list, []byte(p.census), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				res = cmdSpec{dir: repo, env: inheritedEnv([]string{"GO_RACE_EXCLUDED_TESTS", "GO_QUALITY_SELECTION_FILE"}, "GO_RACE_EXCLUDED_TESTS="+list)}.
+					run("bash", script, "race-excluded-shard-plan", "1", "3")
+			}
+			if res.code == 0 {
+				t.Fatalf("a census with a duplicated row was accepted: %s", res.stdout)
+			}
+			for _, w := range []string{first[0], first[1], "duplicate", "lines"} {
+				if !strings.Contains(res.stderr, w) {
+					t.Errorf("the failure does not say %q: %s", w, tail(res.stderr, 500))
+				}
+			}
+		})
+	}
 }

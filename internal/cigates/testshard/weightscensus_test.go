@@ -478,3 +478,19 @@ func TestEveryRaceExcludedTestIsListedPlanted(t *testing.T) {
 		t.Errorf("planted race-excluded file not derived: %v %v", got, err)
 	}
 }
+
+func TestTheCensusParserRefusesADuplicateRowBeforeItEntersTheMap(t *testing.T) {
+	t.Parallel()
+	for name, text := range map[string]string{
+		"exact":          "a/b\tTestOne\nc/d\tTestTwo\na/b\tTestOne\n",
+		"trailing space": "a/b\tTestOne\na/b\tTestOne \n",
+	} {
+		_, err := parseCensusExcluded(text)
+		if err == nil || !strings.Contains(err.Error(), "duplicate") || !strings.Contains(err.Error(), "a/b") {
+			t.Errorf("%s: want a duplicate-row error naming a/b, got %v", name, err)
+		}
+	}
+	if got, err := parseCensusExcluded("# c\na/b\tTestOne\nc/d\tTestTwo\n"); err != nil || len(got) != 2 {
+		t.Errorf("a clean census: got %v, %v", got, err)
+	}
+}

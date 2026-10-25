@@ -217,7 +217,7 @@ func scriptVerbDefects(text string) []string {
 // ---- selection behaviour against a fixture run list (gh is a stub that applies the real --jq filter with jq) ----
 
 const (
-	shaRed = "1111111111111111111111111111111111111111" // the red entry's head_sha
+	shaRed = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" // the red entry's head_sha
 	shaB   = "2222222222222222222222222222222222222222" // child stacked on red
 	shaC   = "3333333333333333333333333333333333333333" // grandchild stacked on B
 	shaD   = "4444444444444444444444444444444444444444" // unrelated entry

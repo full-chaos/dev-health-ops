@@ -786,6 +786,33 @@ jobs:
           } | tee -a "${summary}" || true
           exit 0
 
+  # Merge queue only. GitHub rebuilds the entries stacked on a red entry but leaves their old runs running; this job
+  # cancels those stale runs (strict gh-readonly-queue branch chain from this entry's head_sha, POST .../cancel only).
+  # It is the only job with actions: write, runs no repository code, and is not a required context.
+  cancel-stacked-queue-children:
+    name: cancel-stacked-queue-children
+    needs: [go-storage-integration]
+    if: failure() && github.event_name == 'merge_group'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    continue-on-error: true
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: ci/cancel_stacked_queue_runs.sh
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+      - name: Cancel the runs stacked on this red entry
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.sha }}
+          RUN_ID: ${{ github.run_id }}
+        run: bash ci/cancel_stacked_queue_runs.sh
+
   go-container-smoke:
     # Heavy: runs in the merge queue, on the main push, and on a pull request only with ci:full; a docs-only change skips it.
     needs: go-storage-integration-plan

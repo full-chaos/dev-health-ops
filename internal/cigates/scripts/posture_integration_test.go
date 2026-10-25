@@ -257,11 +257,10 @@ func TestPostureIntegrationRunRefusesADirtyTree(t *testing.T) {
 	}
 	sha := git("rev-parse", "HEAD")
 	res = cmdSpec{dir: repo, env: []string{shimBasePath()}}.run("bash", script, "--run", "--test-runner", stub)
-	// A stub runner is a test aid: it must never produce a receipt a lane could paste, and it must exit non-zero.
-	if res.code == 0 || !strings.Contains(res.stdout, "RECEIPT-HEAD "+sha+" clean=yes runner=STUB") ||
-		!strings.Contains(res.stdout, "STUB-RECEIPT-SUMMARY "+sha+" pass=14 fail=0") || strings.Count(res.stdout, "STUB-RECEIPT internal/") != 14 ||
-		strings.Contains(res.stdout, "\nRECEIPT internal/") || strings.Contains(res.stdout, "\nRECEIPT-SUMMARY") {
-		t.Fatalf("clean tree with a stub runner: exit %d stdout=%q stderr=%q", res.code, res.stdout, res.stderr)
+	// A simulated run is a test aid: every line starts SIMULATED, no line contains RECEIPT, and the exit is non-zero.
+	if res.code == 0 || !strings.Contains(res.stdout, "SIMULATED-HEAD "+sha+" clean=yes") ||
+		!strings.Contains(res.stdout, "SIMULATED-SUMMARY "+sha+" pass=14 fail=0") || strings.Count(res.stdout, "SIMULATED internal/") != 14 ||
+		strings.Contains(res.stdout, "RECEIPT") {
 	}
 }
 

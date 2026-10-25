@@ -53,4 +53,20 @@ func TestReadsPathsAreTrackedRepositoryPaths(t *testing.T) {
 	if len(bad) > 0 {
 		t.Fatalf("%d read(s) behind a reads.tsv row name no tracked repository path:\n%s", len(bad), strings.Join(bad, "\n"))
 	}
+	// Root names that reach a read only through a helper of their own package stay reads (the value flow, flow.go).
+	for _, want := range []struct{ file, path string }{
+		{"internal/cigates/bigboy/compose_schema_test.go", "compose.yml"},          // g.read("compose.yml")
+		{"internal/cigates/docs/content_test.go", "mkdocs.yml"},                    // d.read("mkdocs.yml")
+		{"internal/cigates/workflows/auth_corpus_external_test.go", "compose.yml"}, // readRepoFile(t, "compose.yml")
+		{"internal/cigates/chpin/chpin_test.go", "compose.yml"},                    // one("compose", "compose.yml", ...)
+		{"internal/rivermigrate/deploy_wiring_test.go", "compose.yml"},             // range []string{"compose.yml"}
+	} {
+		found := false
+		for _, r := range reads {
+			found = found || (r.Kind == ReadPath && r.File == want.file && r.Path == want.path)
+		}
+		if !found {
+			t.Errorf("%s no longer reads %s: a helper read was dropped", want.file, want.path)
+		}
+	}
 }

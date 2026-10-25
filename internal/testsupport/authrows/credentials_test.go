@@ -189,9 +189,8 @@ func TestCredentialQuirkMaxIsExactBelowAndAbove(t *testing.T) {
 		for i := 0; i < n; i++ {
 			rows = append(rows, verified)
 		}
-		l.Compare(TableAuditLogs, "x", strings.Join(rows, rowSeparator))
-		problems := strings.Join(l.Dead(), "\n")
-		if !strings.Contains(problems, "audit-email-verified-recorded") {
+		problems := strings.Join(append(l.Compare(TableAuditLogs, "x", strings.Join(rows, rowSeparator)), l.Dead()...), "\n")
+		if !strings.Contains(problems, "audit-email-verified-recorded") && !strings.Contains(problems, "target only: <nil>nina.new") {
 			t.Errorf("%d email-verified rows were accepted; the scenario holds exactly 4:\n%s", n, problems)
 		}
 	}

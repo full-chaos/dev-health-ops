@@ -35,8 +35,12 @@ type Quirk struct {
 	Rewrite func(line string) (rewritten string, ok bool)
 	// Extra is true for a line only the ACP target holds.
 	Extra func(line string) bool
-	// Max is how many rows an Extra quirk may cover in one run; a row beyond it is unclassified.
+	// Missing is true for a golden line the ACP target holds no row for: the row is counted, never silent.
+	Missing func(line string) bool
+	// Max is how many rows an Extra or Missing quirk may cover in one run; a row beyond it is unclassified.
 	Max int
+	// Exact makes the run cover exactly Max rows: fewer is a failure too.
+	Exact bool
 }
 
 // CheckTable is every way table is malformed, in the order of the table.
@@ -75,11 +79,23 @@ func CheckTable(table []Quirk) []string {
 		if q.Extra != nil && q.Max < 1 {
 			problems = append(problems, q.ID+": an extra-row quirk sets Max, the rows it may cover")
 		}
-		if q.Extra == nil && q.Max != 0 {
-			problems = append(problems, q.ID+": only an extra-row quirk sets Max")
+		if q.Missing != nil && q.Max < 1 {
+			problems = append(problems, q.ID+": a missing-row quirk sets Max, the rows it may cover")
 		}
-		if (q.Rewrite == nil) == (q.Extra == nil) {
-			problems = append(problems, q.ID+": exactly one of Rewrite and Extra is set")
+		if q.Extra == nil && q.Missing == nil && q.Max != 0 {
+			problems = append(problems, q.ID+": only an extra-row or missing-row quirk sets Max")
+		}
+		if q.Extra == nil && q.Missing == nil && q.Exact {
+			problems = append(problems, q.ID+": only an extra-row or missing-row quirk sets Exact")
+		}
+		set := 0
+		for _, present := range []bool{q.Rewrite != nil, q.Extra != nil, q.Missing != nil} {
+			if present {
+				set++
+			}
+		}
+		if set != 1 {
+			problems = append(problems, q.ID+": exactly one of Rewrite, Extra and Missing is set")
 		}
 	}
 	return problems
@@ -140,6 +156,16 @@ func (l *Ledger) Compare(table, golden, acp string) []string {
 					l.covered[id]++
 				}
 				covered = true
+			}
+			if !covered {
+				for _, q := range l.table {
+					if q.Table == table && q.live(l.forwarded) && q.Missing != nil && l.covered[q.ID] < q.Max && q.Missing(line) {
+						goldenOnly[line]--
+						l.covered[q.ID]++
+						covered = true
+						break
+					}
+				}
 			}
 			if !covered {
 				problems = append(problems, fmt.Sprintf("%s: unclassified difference, golden only: %s", table, line))
@@ -213,8 +239,12 @@ func (l *Ledger) Dead() []string {
 		problems = append(problems, "no row comparison went through the ledger")
 	}
 	for _, q := range l.table {
-		if q.live(l.forwarded) && l.covered[q.ID] == 0 {
+		switch {
+		case !q.live(l.forwarded):
+		case l.covered[q.ID] == 0:
 			problems = append(problems, fmt.Sprintf("%s: a live quirk covered no row (%s)", q.ID, q.Reason))
+		case q.Exact && l.covered[q.ID] != q.Max:
+			problems = append(problems, fmt.Sprintf("%s: covered %d rows, the scenario holds exactly %d (%s)", q.ID, l.covered[q.ID], q.Max, q.Reason))
 		}
 	}
 	return problems

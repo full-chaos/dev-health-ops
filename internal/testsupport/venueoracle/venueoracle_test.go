@@ -145,6 +145,61 @@ func TestAdminNoStoreIsAnIntendedDivergenceOnlyWhenTheGoldenLacksIt(t *testing.T
 	}
 }
 
+// The ACP target answers a sign-in with Cache-Control: no-store and Pragma: no-cache, which the go-api goldens never
+// carried (acp decision log 2026-10-25 08:1xZ "10410 login no-store"). It is the one declared divergence of
+// intendedNoStore that is not an admin route: only when the run says so (DiffOptions.LoginNoStore), only for POST
+// /api/v1/auth/login, only when the golden has neither header, and only for exactly these two values; any other
+// header, value, method or route still compares.
+func TestLoginNoStoreIsAnIntendedDivergenceOnlyOnTheACPTargetsLogin(t *testing.T) {
+	login := Request{Method: "POST", Path: "/api/v1/auth/login"}
+	both := map[string]string{"a": "1", "cache-control": "no-store", "pragma": "no-cache"}
+	with := func(base map[string]string, pairs ...string) map[string]string {
+		out := map[string]string{}
+		for key, value := range base {
+			out[key] = value
+		}
+		for i := 0; i < len(pairs); i += 2 {
+			out[pairs[i]] = pairs[i+1]
+		}
+		return out
+	}
+	cases := []struct {
+		name    string
+		request Request
+		option  bool
+		py      map[string]string
+		gr      map[string]string
+		same    bool
+	}{
+		{"the two headers on the ACP target's login", login, true, map[string]string{"a": "1"}, both, true},
+		{"the same answer without the option (go-api leg, other venues)", login, false, map[string]string{"a": "1"}, both, false},
+		{"a third extra header", login, true, map[string]string{"a": "1"}, with(both, "x-extra", "1"), false},
+		{"a changed cache-control value", login, true, map[string]string{"a": "1"}, with(both, "cache-control", "no-cache"), false},
+		{"a cache-control value with a suffix", login, true, map[string]string{"a": "1"}, with(both, "cache-control", "no-store, private"), false},
+		{"a changed pragma value", login, true, map[string]string{"a": "1"}, with(both, "pragma", "no-store"), false},
+		{"only cache-control", login, true, map[string]string{"a": "1"}, map[string]string{"a": "1", "cache-control": "no-store"}, false},
+		{"only pragma", login, true, map[string]string{"a": "1"}, map[string]string{"a": "1", "pragma": "no-cache"}, false},
+		{"the golden has cache-control", login, true, with(map[string]string{"a": "1"}, "cache-control", "no-store"), both, false},
+		{"the golden has pragma", login, true, with(map[string]string{"a": "1"}, "pragma", "no-cache"), both, false},
+		{"the same two headers on refresh", Request{Method: "POST", Path: "/api/v1/auth/refresh"}, true, map[string]string{"a": "1"}, both, false},
+		{"the same two headers on logout", Request{Method: "POST", Path: "/api/v1/auth/logout"}, true, map[string]string{"a": "1"}, both, false},
+		{"the same two headers on social login", Request{Method: "POST", Path: "/api/v1/auth/social-login"}, true, map[string]string{"a": "1"}, both, false},
+		{"the same two headers on login with a trailing slash", Request{Method: "POST", Path: "/api/v1/auth/login/"}, true, map[string]string{"a": "1"}, both, false},
+		{"the same two headers on login with a query", Request{Method: "POST", Path: "/api/v1/auth/login?x=1"}, true, map[string]string{"a": "1"}, both, false},
+		{"the same two headers on a GET of login", Request{Method: "GET", Path: "/api/v1/auth/login"}, true, map[string]string{"a": "1"}, both, false},
+		{"the same two headers on an admin route that wants only no-store", Request{Method: "GET", Path: "/api/v1/admin/credentials"}, true, map[string]string{"a": "1"}, both, false},
+		{"admin no-store alone still holds with the option on", Request{Method: "GET", Path: "/api/v1/admin/credentials"}, true, map[string]string{"a": "1"}, map[string]string{"a": "1", "cache-control": "no-store"}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			same, _, _, _ := Compare(tc.request, Response{Status: 200, Headers: tc.py, Body: "{}"}, Response{Status: 200, Headers: tc.gr, Body: "{}"}, DiffOptions{LoginNoStore: tc.option})
+			if same != tc.same {
+				t.Fatalf("same = %v, want %v", same, tc.same)
+			}
+		})
+	}
+}
+
 func TestDiffDeclaresOrglessRefusalsInOrderAndShiftsPythonAfterThem(t *testing.T) {
 	goPlane := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

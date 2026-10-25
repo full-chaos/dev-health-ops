@@ -134,9 +134,18 @@ in Python's order: the config (404), the canonical-incident gate (403), paused
 backfill's `backfill_days`), and the credential preflight (409, or 400 for a
 credential row that is missing); then the hand-off. The wait is
 `SYNC_MANUAL_TRIGGER_AWAIT_SECONDS` (default 10s) and answers `failed` (a
-quarantined occurrence), `pending`, `disabled` or `triggered`/`accepted`. The
-backfill also records its `backfill_jobs` history row, so the api role holds
-INSERT on that table, and the trigger's work items count needs SELECT on
+quarantined occurrence), `pending`, `disabled` or `triggered` for the trigger.
+The backfill does not wait for the plan: it writes the occurrence, its manual
+trigger and its `backfill_jobs` history row in one transaction and answers 202
+`accepted` with `backfill_job_id` and `occurrence_id` at once, however wide the
+window. The job's `celery_task_id` is `occurrence:<id>` until the scheduler
+plans the occurrence; the job reads resolve it to the run (one query on the
+occurrence id and the caller's org), so progress shows once the plan exists. An
+optional `Idempotency-Key` header (1 to 128 characters of letters, digits and
+`.-_:`) makes a repeat return the same job and write nothing. With
+`SYNC_RUN_MAX_UNITS` set, a window and scope whose unit floor (sources times
+14-day windows) is over it is refused 422 at submit. The api role holds INSERT
+on `backfill_jobs`, and the trigger's work items count needs SELECT on
 ClickHouse `work_items` for the api login. ClickHouse unreachable allows the
 sync with a warning log and the `devhealth_sync_work_items_limit_open_total`
 counter (the tier cap is not enforced for that request); an ACCESS_DENIED or

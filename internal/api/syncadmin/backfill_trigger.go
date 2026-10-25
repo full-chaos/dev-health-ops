@@ -2,10 +2,13 @@ package syncadmin
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"math/big"
 	"net/http"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -31,13 +34,18 @@ func taskQueueUnavailable(err error) error {
 // backfillSyncConfig is sync.py's trigger_sync_config_backfill, in its order:
 // the body (422, before the guard), the config (404), the canonical incident
 // gate (403), paused (409), the tier's backfill_days limit (403), the credential
-// preflight, then the hand-off to the scheduler, the bounded wait for its plan,
-// and the backfill_jobs history row.
+// preflight, then the hand-off to the scheduler and the backfill_jobs history
+// row in one transaction. It does not wait for the plan: 202 at once.
 func (h *handlers) backfillSyncConfig(w http.ResponseWriter, r *http.Request) {
 	body, _ := policy.BodyFrom(r.Context())
 	window, problems := parseBackfillRequest(body)
 	if len(problems) > 0 {
 		writeQueryErrors(w, problems)
+		return
+	}
+	key, keyOK := parseIdempotencyKey(r.Header.Get("Idempotency-Key"))
+	if !keyOK {
+		policy.WriteDetail(w, http.StatusUnprocessableEntity, "Invalid Idempotency-Key header", nil)
 		return
 	}
 	config, ok := h.configFromPath(w, r)
@@ -66,34 +74,12 @@ func (h *handlers) backfillSyncConfig(w http.ResponseWriter, r *http.Request) {
 		h.answerOrFail(w, r, "preflight_credential", err)
 		return
 	}
-	trigger, err := h.handOffManual(ctx, org, config.ID, manualSpec{mode: "backfill", triggeredBy: "backfill", window: &window})
+	submission, err := h.submitBackfill(ctx, org, config.ID, window, key)
 	if err != nil {
 		h.answerBackfillFailure(w, r, "hand_off_backfill", err)
 		return
 	}
-	outcome, answered, err := h.manualOutcome(w, r, config.ID.String(), trigger)
-	if err != nil {
-		h.answerBackfillFailure(w, r, "wait for the scheduler", err)
-		return
-	}
-	if answered {
-		return
-	}
-	jobID, err := h.recordBackfillJob(ctx, org, config.ID, window, outcome.SyncRunID)
-	if err != nil {
-		h.answerBackfillFailure(w, r, "backfill_job", err)
-		return
-	}
-	out := pyjson.NewObject()
-	out.Set("status", "accepted")
-	out.Set("config_id", config.ID.String())
-	out.Set("task_id", "sync_run:"+outcome.SyncRunID)
-	out.Set("backfill_job_id", jobID.String())
-	out.Set("sync_run_id", outcome.SyncRunID)
-	out.Set("mode", "fanout")
-	out.Set("since", window.sinceISO())
-	out.Set("before", window.beforeISO())
-	policy.WriteModel(w, http.StatusAccepted, out, nil)
+	policy.WriteModel(w, http.StatusAccepted, acceptedBackfillBody(config.ID, submission.JobID, submission.OccurrenceID, window), nil)
 }
 
 // answerBackfillFailure is the route's `except Exception` around the hand-off:
@@ -132,19 +118,151 @@ func (h *handlers) checkBackfillLimit(ctx context.Context, org string, requested
 	return nil
 }
 
-// recordBackfillJob is the route's BackfillJob row: pending, the inclusive
-// calendar-date history anchor, and the run it fans out as (celery_task_id
-// "sync_run:<id>"). Every NOT NULL column the model fills from Python-side
-// defaults is written as the ORM writes it.
-func (h *handlers) recordBackfillJob(ctx context.Context, org string, configID uuid.UUID, window backfillWindow, syncRunID string) (uuid.UUID, error) {
-	id := uuid.New()
+// backfillSubmission is what one accepted submit names: the occurrence the
+// scheduler plans and the history row the UI reads progress from.
+type backfillSubmission struct {
+	OccurrenceID string
+	JobID        uuid.UUID
+}
+
+// backfillMaxIdempotencyKey bounds the Idempotency-Key header.
+const backfillMaxIdempotencyKey = 128
+
+// parseIdempotencyKey is the optional Idempotency-Key header: empty, or 1 to
+// 128 characters of letters, digits and ".-_:".
+func parseIdempotencyKey(raw string) (string, bool) {
+	if len(raw) > backfillMaxIdempotencyKey {
+		return "", false
+	}
+	for _, character := range raw {
+		switch {
+		case character >= 'a' && character <= 'z', character >= 'A' && character <= 'Z', character >= '0' && character <= '9',
+			character == '.', character == '-', character == '_', character == ':':
+		default:
+			return "", false
+		}
+	}
+	return raw, true
+}
+
+// idempotencyHash scopes a caller's key to its org and configuration: 32 hex
+// characters, so a key never matches another org's or configuration's job.
+func idempotencyHash(org string, configID uuid.UUID, key string) string {
+	sum := sha256.Sum256([]byte(org + "\x00" + configID.String() + "\x00" + key))
+	return hex.EncodeToString(sum[:16])
+}
+
+// backfillTaskMarker is the job's celery_task_id until the scheduler plans the
+// occurrence: the read path resolves "occurrence:" to the run (backfillRunCounts).
+// A keyed submit also carries its key hash, which is how a repeat finds the job.
+func backfillTaskMarker(occurrenceID, keyHash string) string {
+	if keyHash == "" {
+		return backfillOccurrenceMarker + occurrenceID
+	}
+	return "idem:" + keyHash + ";" + backfillOccurrenceMarker + occurrenceID
+}
+
+// backfillOccurrenceID is the text after the "occurrence:" marker in
+// celery_task_id up to ";", "" when none.
+func backfillOccurrenceID(job *backfillJob) string {
+	if job.CeleryTaskID == nil {
+		return ""
+	}
+	index := strings.LastIndex(*job.CeleryTaskID, backfillOccurrenceMarker)
+	if index < 0 {
+		return ""
+	}
+	rest := (*job.CeleryTaskID)[index+len(backfillOccurrenceMarker):]
+	if end := strings.IndexByte(rest, ';'); end >= 0 {
+		rest = rest[:end]
+	}
+	return rest
+}
+
+const backfillOccurrenceMarker = "occurrence:"
+
+// checkBackfillScale refuses a window and scope the scheduler would refuse over
+// SYNC_RUN_MAX_UNITS (schedsync.UnitCapFromEnv; materializer.go: a plan over the
+// cap is quarantined). It is a floor, never an estimate above the truth: every
+// source plans at least one unit per window of the widest planner chunk (14
+// days), so only a run over that floor is refused. No cap (0) or no known
+// sources refuses nothing. The text names only the caller's own numbers.
+func checkBackfillScale(days, sources, unitCap int64) error {
+	if unitCap <= 0 || sources <= 0 {
+		return nil
+	}
+	const widestChunkDays = 14
+	chunks := (days + widestChunkDays - 1) / widestChunkDays
+	if chunks < 1 {
+		chunks = 1
+	}
+	if floor := sources * chunks; floor > unitCap {
+		return refuse(http.StatusUnprocessableEntity, fmt.Sprintf(
+			"Backfill is too large: at least %d work units for this window and scope, over the limit of %d. Narrow the window or the scope.", floor, unitCap))
+	}
+	return nil
+}
+
+// acceptedBackfillBody is the 202 body: the job and the occurrence, and no run
+// (the submit does not wait for the plan).
+func acceptedBackfillBody(configID, jobID uuid.UUID, occurrenceID string, window backfillWindow) *pyjson.Object {
+	out := pyjson.NewObject()
+	out.Set("status", "accepted")
+	out.Set("config_id", configID.String())
+	out.Set("task_id", backfillOccurrenceMarker+occurrenceID)
+	out.Set("backfill_job_id", jobID.String())
+	out.Set("occurrence_id", occurrenceID)
+	out.Set("mode", "fanout")
+	out.Set("since", window.sinceISO())
+	out.Set("before", window.beforeISO())
+	return out
+}
+
+// submitBackfill writes the occurrence, its manual trigger and the
+// backfill_jobs row in ONE transaction and waits for nothing: every accepted
+// submit has a job row. A keyed repeat of a submit that already committed
+// returns that job and writes nothing; the key's advisory lock serialises
+// concurrent repeats.
+func (h *handlers) submitBackfill(ctx context.Context, org string, configID uuid.UUID, window backfillWindow, key string) (backfillSubmission, error) {
+	var out backfillSubmission
+	keyHash := ""
+	if key != "" {
+		keyHash = idempotencyHash(org, configID, key)
+	}
 	err := pgx.BeginFunc(ctx, h.pool, func(tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, `
+		if keyHash != "" {
+			if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, "backfill-idempotency:"+keyHash); err != nil {
+				return fmt.Errorf("idempotency lock: %w", err)
+			}
+			prefix := "idem:" + keyHash + ";" + backfillOccurrenceMarker
+			var existing uuid.UUID
+			var task string
+			err := tx.QueryRow(ctx, `
+SELECT id, celery_task_id FROM public.backfill_jobs
+WHERE org_id = $1 AND sync_config_id = $2 AND celery_task_id LIKE $3
+ORDER BY created_at, id LIMIT 1`, org, configID, prefix+"%").Scan(&existing, &task)
+			if err == nil {
+				out = backfillSubmission{OccurrenceID: strings.TrimPrefix(task, prefix), JobID: existing}
+				return nil
+			}
+			if !errors.Is(err, pgx.ErrNoRows) {
+				return fmt.Errorf("idempotency lookup: %w", err)
+			}
+		}
+		trigger, err := h.handOffManualTx(ctx, tx, org, configID, manualSpec{mode: "backfill", triggeredBy: "backfill", window: &window, checkScale: true})
+		if err != nil {
+			return err
+		}
+		id := uuid.New()
+		if _, err := tx.Exec(ctx, `
 INSERT INTO public.backfill_jobs
 	(id, org_id, sync_config_id, celery_task_id, status, since_date, before_date, total_chunks, completed_chunks, failed_chunks)
 VALUES ($1, $2, $3, $4, 'pending', $5, $6, 0, 0, 0)`,
-			id, org, configID, "sync_run:"+syncRunID, window.historySince(), window.historyBefore())
-		return err
+			id, org, configID, backfillTaskMarker(trigger.OccurrenceID, keyHash), window.historySince(), window.historyBefore()); err != nil {
+			return fmt.Errorf("backfill job: %w", err)
+		}
+		out = backfillSubmission{OccurrenceID: trigger.OccurrenceID, JobID: id}
+		return nil
 	})
-	return id, err
+	return out, err
 }

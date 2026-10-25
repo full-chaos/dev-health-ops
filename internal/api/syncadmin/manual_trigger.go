@@ -23,6 +23,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
+	schedsync "github.com/full-chaos/dev-health-ops/internal/scheduler/sync"
 	"github.com/full-chaos/dev-health-ops/internal/synccoverage"
 	"github.com/full-chaos/dev-health-ops/internal/synchandoff"
 )
@@ -267,6 +268,9 @@ type manualSpec struct {
 	mode, triggeredBy string
 	// window is the backfill's window and scope (nil for a plain trigger).
 	window *backfillWindow
+	// checkScale refuses, before any write, a window and scope the scheduler's
+	// unit cap would refuse (the backfill submit).
+	checkScale bool
 }
 
 // handOffManual is create_sync_execution_trigger's Go hand-off: build the
@@ -275,58 +279,78 @@ type manualSpec struct {
 func (h *handlers) handOffManual(ctx context.Context, org string, configID uuid.UUID, spec manualSpec) (synchandoff.Trigger, error) {
 	var trigger synchandoff.Trigger
 	err := pgx.BeginFunc(ctx, h.pool, func(tx pgx.Tx) error {
-		config, err := synchandoff.LoadConfig(ctx, tx, configID.String())
-		if err != nil {
-			return err
-		}
-		if config == nil || config.OrgID != org {
-			return refuse(http.StatusNotFound, "Sync configuration not found")
-		}
-		// planner_request_for_config_if_routed is None without a linked
-		// integration; the route answers 400.
-		if config.IntegrationID == nil {
-			return refuse(http.StatusBadRequest, "Sync configuration has no linked integration")
-		}
-		if !config.PlannerManaged && config.SourceID == nil {
-			return errConfigNotRunnable
-		}
-		input := synchandoff.MintInput{Mode: spec.mode, TriggeredBy: spec.triggeredBy, Caller: "syncadmin." + spec.triggeredBy}
-		sourceIDs, datasetKeys, err := h.plannerScope(ctx, tx, config)
-		if err != nil {
-			return err
-		}
-		input.SourceIDs, input.DatasetKeys = sourceIDs, datasetKeys
-		if input.Mode == "incremental" && synchandoff.Truthy(config.SyncOptions["full_resync"]) {
-			input.Mode = "full_resync"
-		}
-		if window := spec.window; window != nil {
-			since, before := window.Since, window.Before
-			input.Since, input.Before = &since, &before
-			if window.Structured {
-				// A structured selector replaces the request's own scope.
-				input.SourceIDs, input.DatasetKeys = nil, nil
-				if window.SourceIDsSet {
-					input.SourceIDs = append([]string{}, window.SourceIDs...)
-				}
-				if window.DatasetKeysSet {
-					input.DatasetKeys = append([]string{}, window.DatasetKeys...)
-				}
-			}
-		}
-		trigger, err = synchandoff.Mint(ctx, tx, config, input, h.now())
-		var unselected synchandoff.UnselectedSourcesError
-		if errors.As(err, &unselected) {
-			return refuse(http.StatusBadRequest, "source_id "+strings.Join(unselected.SourceIDs, ", ")+" is not selected for this sync configuration")
-		}
-		if err != nil {
-			return err
-		}
-		if trigger.Existing {
-			return fmt.Errorf("occurrence %s already exists", trigger.OccurrenceID)
-		}
-		return synccoverage.InvalidateForConfig(ctx, tx, org, config.ID)
+		var err error
+		trigger, err = h.handOffManualTx(ctx, tx, org, configID, spec)
+		return err
 	})
 	return trigger, err
+}
+
+// handOffManualTx is handOffManual's body in the caller's transaction.
+func (h *handlers) handOffManualTx(ctx context.Context, tx pgx.Tx, org string, configID uuid.UUID, spec manualSpec) (synchandoff.Trigger, error) {
+	config, err := synchandoff.LoadConfig(ctx, tx, configID.String())
+	if err != nil {
+		return synchandoff.Trigger{}, err
+	}
+	if config == nil || config.OrgID != org {
+		return synchandoff.Trigger{}, refuse(http.StatusNotFound, "Sync configuration not found")
+	}
+	// planner_request_for_config_if_routed is None without a linked
+	// integration; the route answers 400.
+	if config.IntegrationID == nil {
+		return synchandoff.Trigger{}, refuse(http.StatusBadRequest, "Sync configuration has no linked integration")
+	}
+	if !config.PlannerManaged && config.SourceID == nil {
+		return synchandoff.Trigger{}, errConfigNotRunnable
+	}
+	input := synchandoff.MintInput{Mode: spec.mode, TriggeredBy: spec.triggeredBy, Caller: "syncadmin." + spec.triggeredBy}
+	sourceIDs, datasetKeys, err := h.plannerScope(ctx, tx, config)
+	if err != nil {
+		return synchandoff.Trigger{}, err
+	}
+	input.SourceIDs, input.DatasetKeys = sourceIDs, datasetKeys
+	if input.Mode == "incremental" && synchandoff.Truthy(config.SyncOptions["full_resync"]) {
+		input.Mode = "full_resync"
+	}
+	if window := spec.window; window != nil {
+		since, before := window.Since, window.Before
+		input.Since, input.Before = &since, &before
+		scopedSources := len(sourceIDs)
+		if window.Structured {
+			// A structured selector replaces the request's own scope.
+			input.SourceIDs, input.DatasetKeys = nil, nil
+			if window.SourceIDsSet {
+				input.SourceIDs = append([]string{}, window.SourceIDs...)
+				scopedSources = len(input.SourceIDs)
+			}
+			if window.DatasetKeysSet {
+				input.DatasetKeys = append([]string{}, window.DatasetKeys...)
+			}
+		}
+		if spec.checkScale && scaleCheckApplies(window) {
+			if err := checkBackfillScale(window.days(), int64(scopedSources), int64(schedsync.UnitCapFromEnv())); err != nil {
+				return synchandoff.Trigger{}, err
+			}
+		}
+	}
+	trigger, err := synchandoff.Mint(ctx, tx, config, input, h.now())
+	var unselected synchandoff.UnselectedSourcesError
+	if errors.As(err, &unselected) {
+		return trigger, refuse(http.StatusBadRequest, "source_id "+strings.Join(unselected.SourceIDs, ", ")+" is not selected for this sync configuration")
+	}
+	if err != nil {
+		return trigger, err
+	}
+	if trigger.Existing {
+		return trigger, fmt.Errorf("occurrence %s already exists", trigger.OccurrenceID)
+	}
+	return trigger, synccoverage.InvalidateForConfig(ctx, tx, org, config.ID)
+}
+
+// scaleCheckApplies is false for a selector that explicitly names no dataset or
+// no source: the scheduler plans no unit for it, so no floor holds.
+func scaleCheckApplies(window *backfillWindow) bool {
+	return !(window.Structured && (window.DatasetKeysSet && len(window.DatasetKeys) == 0 || window.SourceIDsSet && len(window.SourceIDs) == 0))
 }
 
 // plannerScope is plan_request_for_config's source and dataset scope, plus

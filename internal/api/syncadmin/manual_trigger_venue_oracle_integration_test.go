@@ -341,6 +341,60 @@ func divergingRequests(venue *venueoracle.Venue, v manualIDs) []venueoracle.Requ
 	}
 }
 
+// backfillSubmitRuling names the ruling that retires the Python answers of the backfill submits that plan: the Go
+// route answers 202 "accepted" with the job and the occurrence at once (CHAOS-11378), Python's frozen answers waited
+// for the plan.
+const backfillSubmitRuling = "CHAOS-11378: the backfill submit answers 202 accepted without waiting for the plan"
+
+var retiredBackfillNames = map[string]bool{
+	"clock: backfill, gated target (feature on for this org)":        true,
+	"clock: backfill, 31 days (enterprise has no limit)":             true,
+	"clock: backfill, legacy dates":                                  true,
+	"clock: backfill, structured selector":                           true,
+	"clock: backfill, selector with an offset":                       true,
+	"clock: backfill, scoped selector":                               true,
+	"clock: backfill, explicit empty scope":                          true,
+	"clock: backfill, dataset scope only":                            true,
+	"clock: backfill, one day":                                       true,
+	"clock: backfill, a source id that is not a uuid is quarantined": true,
+	"pending: backfill, the scheduler is stopped":                    true,
+}
+
+// splitRetiredBackfills separates the requests (and their frozen Python answers) of the retired backfill submits
+// from the ones still compared, each in its original order.
+func splitRetiredBackfills(requests []venueoracle.Request, python []venueoracle.Response) (kept []venueoracle.Request, keptPython []venueoracle.Response, retired []venueoracle.Request, retiredPython []venueoracle.Response) {
+	for index, request := range requests {
+		if retiredBackfillNames[request.Name] {
+			retired, retiredPython = append(retired, request), append(retiredPython, python[index])
+			continue
+		}
+		kept, keptPython = append(kept, request), append(keptPython, python[index])
+	}
+	return kept, keptPython, retired, retiredPython
+}
+
+// assertAcceptedBackfill checks one retired backfill answer: 202 "accepted" with a job and an occurrence, no run,
+// and a job row that names the occurrence.
+func assertAcceptedBackfill(t *testing.T, ctx context.Context, pool *pgxpool.Pool, name string, response venueoracle.Response) {
+	t.Helper()
+	if response.Status != 202 || !strings.Contains(response.Body, `"status":"accepted"`) || strings.Contains(response.Body, "sync_run_id") {
+		t.Errorf("%s: %d %s, want 202 accepted without a run", name, response.Status, response.Body)
+		return
+	}
+	var body struct {
+		JobID        string `json:"backfill_job_id"`
+		OccurrenceID string `json:"occurrence_id"`
+	}
+	if err := json.Unmarshal([]byte(response.Body), &body); err != nil || body.JobID == "" || body.OccurrenceID == "" {
+		t.Errorf("%s: %s (%v) names no job or occurrence", name, response.Body, err)
+		return
+	}
+	var task string
+	if err := pool.QueryRow(ctx, `SELECT celery_task_id FROM backfill_jobs WHERE id = $1::uuid`, body.JobID).Scan(&task); err != nil || task != "occurrence:"+body.OccurrenceID {
+		t.Errorf("%s: job %s task %q (%v), want occurrence:%s", name, body.JobID, task, err, body.OccurrenceID)
+	}
+}
+
 var manualUUID = regexp.MustCompile(`[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`)
 
 // manualGoldenBuild is the last Python-bearing build the frozen answers were
@@ -453,8 +507,11 @@ func runManualTriggerOracle(t *testing.T, golden *venueoracle.Golden) {
 		t.Cleanup(func() { stop(); <-done })
 	}
 
-	requests := manualRequests(venue, v)
-	python := servePython(venue, requests)
+	// The frozen golden answers requests in the order they were recorded: every request is asked of it in that
+	// order, and the backfill submits that plan are then split off (retired) before the comparison.
+	allRequests := manualRequests(venue, v)
+	allPython := servePython(venue, allRequests)
+	requests, python, retired, retiredPython := splitRetiredBackfills(allRequests, allPython)
 	receipt := venueoracle.Diff(t, base, requests, python, venueoracle.DiffOptions{
 		Golden: golden,
 		Normalize: func(request venueoracle.Request, body string) string {
@@ -471,12 +528,21 @@ func runManualTriggerOracle(t *testing.T, golden *venueoracle.Golden) {
 		},
 	})
 	t.Logf("receipt (%d requests):\n%s", len(requests), receipt)
+	golden.Retired(t, backfillSubmitRuling, retiredPython...)
+	for _, request := range retired {
+		assertAcceptedBackfill(t, ctx, goScheduler, request.Name, venueoracle.Do(t, base, request))
+	}
 
 	// The scheduler stopped: the wait ends with 202 "pending" and the occurrence id.
 	paused.Store(true)
-	pending := pendingRequests(venue, v)
-	pendingReceipt := venueoracle.Diff(t, base, pending, servePython(venue, pending), venueoracle.DiffOptions{Golden: golden})
+	allPending := pendingRequests(venue, v)
+	pending, pendingPython, pendingRetired, pendingRetiredPython := splitRetiredBackfills(allPending, servePython(venue, allPending))
+	pendingReceipt := venueoracle.Diff(t, base, pending, pendingPython, venueoracle.DiffOptions{Golden: golden})
 	t.Logf("pending receipt:\n%s", pendingReceipt)
+	golden.Retired(t, backfillSubmitRuling, pendingRetiredPython...)
+	for _, request := range pendingRetired {
+		assertAcceptedBackfill(t, ctx, goScheduler, request.Name, venueoracle.Do(t, base, request))
+	}
 	paused.Store(false)
 
 	// Ruled divergences, both planes asked: Python plans the legacy configuration
@@ -548,6 +614,11 @@ WHERE c.name NOT LIKE '%legacy-unmanaged' ORDER BY c.name`, 30},
 	for _, table := range compare {
 		goRows := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), table.query)
 		var pythonRows string
+		if table.name == "backfill_jobs" {
+			// The job's celery_task_id names the occurrence until the run exists, where Python's names the run.
+			golden.RetireRows(t, table.name, backfillSubmitRuling)
+			continue
+		}
 		if table.name == "sync_run_units" {
 			// Declared divergence: the Go backfill planner ends each window where the next one starts;
 			// Python ends it 1 microsecond earlier. Only that gap is closed; every other column must still match.

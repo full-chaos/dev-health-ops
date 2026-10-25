@@ -30,7 +30,7 @@
         {
           "algorithm": null,
           "anchor": {
-            "line": 465,
+            "line": 468,
             "note": "func (s *Store) rotate",
             "path": "internal/auth/session/store.go"
           },
@@ -45,8 +45,8 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 371,
-          "note": "func (s *Store) exchange",
+          "line": 367,
+          "note": "func (s *Store) Exchange",
           "path": "internal/auth/session/store.go"
         },
         "description": "session.Store.Exchange: the presented credential's SHA-256 is looked up under the session row lock; consumed, expired, revoked and reused credentials are refused, reuse revokes the session."
@@ -327,7 +327,7 @@
         {
           "algorithm": null,
           "anchor": {
-            "line": 465,
+            "line": 468,
             "note": "func (s *Store) rotate",
             "path": "internal/auth/session/store.go"
           },
@@ -342,8 +342,8 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 371,
-          "note": "func (s *Store) exchange",
+          "line": 367,
+          "note": "func (s *Store) Exchange",
           "path": "internal/auth/session/store.go"
         },
         "description": "session.Store.Exchange: the presented credential's SHA-256 is looked up under the session row lock; consumed, expired, revoked and reused credentials are refused, reuse revokes the session."

@@ -364,7 +364,7 @@ func (s *Store) lockSession(ctx context.Context, db queryRower, sessionID string
 // A refusal is a Result with a non-success Reason and a nil error. The error
 // is set only when the store failed or the grace successor could not be
 // recomputed; Result.Reason then says which.
-func (s *Store) Exchange(ctx context.Context, credential contracts.SecretString) (Result, error) {
+func (s *Store) Exchange(ctx context.Context, credential contracts.SecretString) (result Result, err error) {
 	return s.exchange(ctx, credential, nil)
 }
 
@@ -416,7 +416,10 @@ func (s *Store) exchange(ctx context.Context, credential contracts.SecretString,
 		case !p.consumed && p.expired:
 			result.Reason = ReasonRefreshExpired
 		case !p.consumed:
-			issued, err := s.rotate(ctx, tx, locked.Record, p, credential, guard)
+			if err := runGuard(ctx, tx, locked.Record, guard); err != nil {
+				return err
+			}
+			issued, err := s.rotate(ctx, tx, locked.Record, p, credential)
 			if err != nil {
 				return err
 			}
@@ -462,10 +465,7 @@ type Issued struct {
 
 // rotate inserts the successor and consumes the parent. The caller holds the
 // session lock.
-func (s *Store) rotate(ctx context.Context, tx pgx.Tx, session Record, p presented, parent contracts.SecretString, guard Guard) (Issued, error) {
-	if err := runGuard(ctx, tx, session, guard); err != nil {
-		return Issued{}, err
-	}
+func (s *Store) rotate(ctx context.Context, tx pgx.Tx, session Record, p presented, parent contracts.SecretString) (Issued, error) {
 	childID, err := uuid.NewRandom()
 	if err != nil {
 		return Issued{}, err

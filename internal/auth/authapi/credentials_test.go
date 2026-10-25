@@ -164,7 +164,7 @@ func newCredFixtureWith(t *testing.T, counters httpapi.CounterStore) *credFixtur
 		t.Fatal(err)
 	}
 	mux := http.NewServeMux()
-	for _, route := range routes {
+	for _, route := range MarkResponseModels(routes) {
 		mux.Handle(route.Method+" "+route.Pattern, requestid.Middleware(flaggedHandler(route)))
 	}
 	return &credFixture{fixture: f, fakes: fakes, routes: mux, logs: logs}

@@ -5,11 +5,13 @@ import (
 	"io"
 	"log/slog"
 	"sort"
+	"strconv"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/apiservice"
+	"github.com/full-chaos/dev-health-ops/internal/auth/authapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/authconfig"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
@@ -29,14 +31,18 @@ var goOnlyRoutes = map[string]struct {
 	model  bool
 	reason string
 }{
-	"DELETE /v1/identities/social/{id}": {false, "auth-service native route; no go-api twin; writes no policy body"},
-	"GET /v1/sessions/current":          {false, "auth-service native route; no go-api twin; writes no policy body"},
-	"POST /internal/v1/sessions":        {false, "internal session issue route; no go-api twin; writes no policy body"},
-	"POST /v1/identities/social":        {false, "auth-service native route; no go-api twin; writes no policy body"},
-	"POST /v1/sessions/revoke-all":      {false, "auth-service native route; no go-api twin; writes no policy body"},
-	"POST /v1/sessions/revoke":          {false, "auth-service native route; no go-api twin; writes no policy body"},
-	"POST /v1/token/refresh":            {false, "auth-service native route; no go-api twin; writes no policy body"},
-	"POST /api/v1/auth/change-password": {true, "Go-only self-service route; answers through writeCompatModel (policy.WriteModel)"},
+	"DELETE /v1/identities/social/{id}":      {false, "auth-service native route; no go-api twin; writes no policy body"},
+	"GET /v1/sessions/current":               {false, "auth-service native route; no go-api twin; writes no policy body"},
+	"POST /internal/v1/sessions":             {false, "internal session issue route; no go-api twin; writes no policy body"},
+	"POST /v1/identities/social":             {false, "auth-service native route; no go-api twin; writes no policy body"},
+	"POST /v1/sessions/revoke-all":           {false, "auth-service native route; no go-api twin; writes no policy body"},
+	"POST /v1/sessions/revoke":               {false, "auth-service native route; no go-api twin; writes no policy body"},
+	"POST /v1/token/refresh":                 {false, "auth-service native route; no go-api twin; writes no policy body"},
+	"GET /.well-known/jwks.json":             {false, "well-known document; no go-api twin; written without a policy body"},
+	"HEAD /.well-known/jwks.json":            {false, "well-known document; no go-api twin; written without a policy body"},
+	"GET /.well-known/openid-configuration":  {false, "well-known document; no go-api twin; written without a policy body"},
+	"HEAD /.well-known/openid-configuration": {false, "well-known document; no go-api twin; written without a policy body"},
+	"POST /api/v1/auth/change-password":      {true, "Go-only self-service route; answers through writeCompatModel (policy.WriteModel)"},
 }
 
 func parityRoutes(t *testing.T) []httpapi.Route {
@@ -76,48 +82,76 @@ func parityRoutes(t *testing.T) []httpapi.Route {
 	return append(routes, credentials...)
 }
 
-func TestAuthServiceRouteResponseModelFlagsMatchGoAPI(t *testing.T) {
-	routes := parityRoutes(t)
-	seen := map[string]bool{}
+func TestAuthServiceResponseModelTableMatchesGoAPI(t *testing.T) {
 	var problems []string
-	for _, route := range routes {
-		key := route.Method + " " + route.Pattern
-		seen[key] = true
+	for key, model := range authapi.ResponseModelRoutes() {
 		twin := key
 		if alias, ok := goAPITwinAliases[key]; ok {
 			twin = alias
 		}
 		if want, named := apiservice.GoAPIResponseModel(twin); named {
-			if route.ResponseModel != want {
-				problems = append(problems, key+": ResponseModel "+boolText(route.ResponseModel)+", go-api "+twin+" is "+boolText(want))
+			if model != want {
+				problems = append(problems, key+": table "+boolText(model)+", go-api "+twin+" is "+boolText(want))
 			}
 			continue
 		}
 		row, goOnly := goOnlyRoutes[key]
 		switch {
 		case !goOnly:
-			problems = append(problems, key+": no go-api twin and no goOnlyRoutes row (its flag is "+boolText(route.ResponseModel)+")")
-		case route.ResponseModel != row.model:
-			problems = append(problems, key+": ResponseModel "+boolText(route.ResponseModel)+", goOnlyRoutes says "+boolText(row.model)+" ("+row.reason+")")
+			problems = append(problems, key+": no go-api twin and no goOnlyRoutes row (table "+boolText(model)+")")
+		case model != row.model:
+			problems = append(problems, key+": table "+boolText(model)+", goOnlyRoutes says "+boolText(row.model)+" ("+row.reason+")")
 		}
 	}
 	for key := range goOnlyRoutes {
-		if !seen[key] {
-			problems = append(problems, key+": a goOnlyRoutes row for a route the walk did not find")
-		}
-	}
-	for _, anchor := range []string{
-		"POST /api/v1/auth/login", "POST /api/v1/auth/social-login", "POST /api/v1/auth/refresh", "POST /api/v1/auth/logout",
-		"GET /api/v1/auth/verify", "POST /api/v1/auth/reset-password", "POST /api/v1/auth/change-password",
-		"POST /api/v1/auth/oidc/{provider_id}/callback", "POST /api/v1/auth/saml/{provider_id}/acs",
-	} {
-		if !seen[anchor] {
-			problems = append(problems, anchor+": not among the walked routes")
+		if _, named := authapi.ResponseModelRoutes()[key]; !named {
+			problems = append(problems, key+": a goOnlyRoutes row without a table entry")
 		}
 	}
 	sort.Strings(problems)
 	for _, problem := range problems {
 		t.Error(problem)
+	}
+}
+
+func TestEveryMountedAuthServiceRouteHasExactlyOneFlagEntry(t *testing.T) {
+	table := authapi.ResponseModelRoutes()
+	mounted := map[string]int{}
+	for _, route := range append(parityRoutes(t), authapi.WellKnownRoutes(authapi.WellKnownDeps{IssuerURL: "https://issuer.example.test"})...) {
+		mounted[route.Method+" "+route.Pattern]++
+	}
+	var problems []string
+	for key, count := range mounted {
+		if count != 1 {
+			problems = append(problems, key+": mounted "+strconv.Itoa(count)+" times")
+		}
+		if _, named := table[key]; !named {
+			problems = append(problems, key+": mounted without a table entry")
+		}
+	}
+	for key := range table {
+		if mounted[key] == 0 {
+			problems = append(problems, key+": a table entry for a route that is not mounted")
+		}
+	}
+	sort.Strings(problems)
+	for _, problem := range problems {
+		t.Error(problem)
+	}
+}
+
+func TestAuthServerOptionsMarkEveryRouteFromTheTable(t *testing.T) {
+	cfg := authconfig.Config{}
+	opts := apiServerOptions(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), parityRoutes(t))
+	table := authapi.ResponseModelRoutes()
+	for _, route := range opts.Routes {
+		key := route.Method + " " + route.Pattern
+		if route.ResponseModel != table[key] {
+			t.Errorf("%s: server route flag %s, table %s", key, boolText(route.ResponseModel), boolText(table[key]))
+		}
+	}
+	if len(opts.Routes) == 0 {
+		t.Fatal("no routes")
 	}
 }
 

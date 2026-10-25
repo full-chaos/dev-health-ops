@@ -138,11 +138,11 @@ func CredentialRoutes(deps CredentialDeps) ([]httpapi.Route, error) {
 	h.change = limited(h.validateChange, changePasswordLimit, h.changePasswordKey, h.changePassword)
 	flows := deps.Flows
 	routes := []httpapi.Route{
-		{Method: http.MethodGet, Pattern: PatternVerifyEmail, Handler: limited(h.validateVerify, verifyLimit, h.credentialAuthKey, h.verifyEmail(flows)), ResponseModel: true},
-		{Method: http.MethodPost, Pattern: PatternResendVerification, Handler: mailLimited(h.validateEmail(opResendVerification), resendIPLimit, resendLimit, h.mailLink(opResendVerification, textResendGeneric, flows.Resend)), ResponseModel: true},
-		{Method: http.MethodPost, Pattern: PatternForgotPassword, Handler: mailLimited(h.validateEmail(opForgotPassword), forgotIPLimit, forgotLimit, h.mailLink(opForgotPassword, textForgotGeneric, flows.Forgot)), ResponseModel: true},
-		{Method: http.MethodPost, Pattern: PatternResetPassword, Handler: h.resetPassword(flows), ResponseModel: true},
-		{Method: http.MethodPost, Pattern: PatternChangePassword, Handler: h.authenticatedChange(), ResponseModel: true},
+		{Method: http.MethodGet, Pattern: PatternVerifyEmail, Handler: limited(h.validateVerify, verifyLimit, h.credentialAuthKey, h.verifyEmail(flows))},
+		{Method: http.MethodPost, Pattern: PatternResendVerification, Handler: mailLimited(h.validateEmail(opResendVerification), resendIPLimit, resendLimit, h.mailLink(opResendVerification, textResendGeneric, flows.Resend))},
+		{Method: http.MethodPost, Pattern: PatternForgotPassword, Handler: mailLimited(h.validateEmail(opForgotPassword), forgotIPLimit, forgotLimit, h.mailLink(opForgotPassword, textForgotGeneric, flows.Forgot))},
+		{Method: http.MethodPost, Pattern: PatternResetPassword, Handler: h.resetPassword(flows)},
+		{Method: http.MethodPost, Pattern: PatternChangePassword, Handler: h.authenticatedChange()},
 	}
 	return routes, nil
 }

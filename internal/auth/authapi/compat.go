@@ -123,8 +123,8 @@ func CompatRoutes(deps CompatDeps) ([]httpapi.Route, error) {
 	}
 	h := compatHandlers{CompatDeps: deps, rec: rec, refresh: deps.Limits.limiter(refreshLimit)}
 	routes := []httpapi.Route{
-		{Method: http.MethodPost, Pattern: PatternCompatRefresh, Handler: http.HandlerFunc(h.compatRefresh), ResponseModel: true},
-		{Method: http.MethodPost, Pattern: PatternCompatLogout, Handler: http.HandlerFunc(h.compatLogout), ResponseModel: true},
+		{Method: http.MethodPost, Pattern: PatternCompatRefresh, Handler: http.HandlerFunc(h.compatRefresh)},
+		{Method: http.MethodPost, Pattern: PatternCompatLogout, Handler: http.HandlerFunc(h.compatLogout)},
 	}
 	if deps.Login != nil {
 		h.loginIP, h.loginAccount = deps.Limits.limiter(loginIPLimit), deps.Limits.limiter(loginAccountLimit)
@@ -136,14 +136,14 @@ func CompatRoutes(deps CompatDeps) ([]httpapi.Route, error) {
 			return nil, err
 		}
 		h.login = login
-		routes = append(routes, httpapi.Route{Method: http.MethodPost, Pattern: PatternCompatLogin, Handler: http.HandlerFunc(h.compatLogin), ResponseModel: true,
+		routes = append(routes, httpapi.Route{Method: http.MethodPost, Pattern: PatternCompatLogin, Handler: http.HandlerFunc(h.compatLogin),
 			ErrorWriter: h.signInTransportRefusal(providerLocal)})
 	}
 	if deps.ServiceCredentials != nil {
 		routes = append(routes, httpapi.Route{Method: http.MethodPost, Pattern: PatternIssueSession, Handler: http.HandlerFunc(h.issueSession)})
 	}
 	if deps.Social != nil {
-		routes = append(routes, httpapi.Route{Method: http.MethodPost, Pattern: PatternCompatSocialLogin, Handler: http.HandlerFunc(h.compatSocialLogin), ResponseModel: true,
+		routes = append(routes, httpapi.Route{Method: http.MethodPost, Pattern: PatternCompatSocialLogin, Handler: http.HandlerFunc(h.compatSocialLogin),
 			ErrorWriter: h.signInTransportRefusal("")})
 	}
 	return routes, nil

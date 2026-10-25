@@ -274,6 +274,7 @@ func proxyFlagRecreates(calls string) []string {
 // with go-api's answer.
 func TestAuthCorpusAcpLegForwardsOnlyWhatAuthServiceServes(t *testing.T) {
 	sessions := "/api/v1/auth/refresh,/api/v1/auth/logout"
+	required := sessions + ",/api/v1/auth/login,/api/v1/auth/social-login"
 	forwarded := func(aggregate string) string {
 		return `devhealth_api_auth_proxy_requests_total{aggregate="` + aggregate + `",outcome="forwarded"} 3`
 	}
@@ -284,13 +285,15 @@ func TestAuthCorpusAcpLegForwardsOnlyWhatAuthServiceServes(t *testing.T) {
 		wantProbes      []string
 		wantError       string
 	}{
-		"nothing served": {wantForwards: "leg acp forwards: none (", wantProbes: []string{
+		"nothing served": {wantError: "required aggregate sessions is not served by auth-service", wantProbes: []string{
 			"probe sessions: not served (2 routes)", "probe local_login: not served (1 routes)", "probe credentials: not served (6 routes)",
 			"probe social: not served (1 routes)", "probe oidc: not served (2 routes)", "probe saml: not served (3 routes)"}},
-		"login without sessions": {served: "/api/v1/auth/login", wantForwards: "leg acp forwards: none (",
+		"login without sessions": {served: "/api/v1/auth/login", wantError: "required aggregate sessions is not served by auth-service",
 			wantProbes: []string{"probe sessions: not served (2 routes)", "probe local_login: served (1 routes)"}},
-		"sessions":           {served: sessions, metrics: forwarded("sessions"), wantRecreates: 1, wantForwards: "leg acp forwards: sessions\n"},
-		"sessions and login": {served: sessions + ",/api/v1/auth/login", metrics: forwarded("sessions") + "\n" + forwarded("local_login"), wantRecreates: 2, wantForwards: "leg acp forwards: sessions local_login\n"},
+		"sessions only":           {served: sessions, wantError: "required aggregate local_login is not served by auth-service"},
+		"sessions and login only": {served: sessions + ",/api/v1/auth/login", wantError: "required aggregate social is not served by auth-service"},
+		"the required three": {served: required, metrics: forwarded("sessions") + "\n" + forwarded("local_login") + "\n" + forwarded("social"),
+			wantRecreates: 3, wantForwards: "leg acp forwards: sessions local_login social\n"},
 		"half an aggregate": {served: "/api/v1/auth/refresh", wantError: "auth-service serves 1 of the 2 routes of aggregate sessions",
 			wantProbes: []string{"probe sessions: partial (1 of 2 routes served)"}},
 		"half a non-session aggregate": {served: sessions + ",/api/v1/auth/oidc/p-probe/authorize",
@@ -298,8 +301,8 @@ func TestAuthCorpusAcpLegForwardsOnlyWhatAuthServiceServes(t *testing.T) {
 			wantProbes: []string{"probe sessions: served (2 routes)", "probe oidc: partial (1 of 2 routes served)"}},
 		"half a non-session aggregate without sessions": {served: "/api/v1/auth/saml/p-probe/metadata",
 			wantError: "auth-service serves 1 of the 3 routes of aggregate saml"},
-		"served but not forwarded": {served: sessions, wantRecreates: 1, wantError: "no forwarded request for aggregate sessions"},
-		"forwarded while off":      {metrics: forwarded("saml"), wantError: "go-api forwarded aggregate saml, whose flag is off"},
+		"served but not forwarded": {served: required, wantRecreates: 3, wantError: "no forwarded request for aggregate sessions"},
+		"forwarded while off":      {served: required, wantRecreates: 3, metrics: forwarded("sessions") + "\n" + forwarded("local_login") + "\n" + forwarded("social") + "\n" + forwarded("saml"), wantError: "go-api forwarded aggregate saml, whose flag is off"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			fake, out, err := runAcpLeg(t, "FAKE_SERVED="+tc.served, "FAKE_METRICS="+tc.metrics)
@@ -328,8 +331,8 @@ func TestAuthCorpusAcpLegForwardsOnlyWhatAuthServiceServes(t *testing.T) {
 // Leg acp stores go-api's session issue credential and applies the sessions-owned grants before go-api first
 // restarts with the sessions flag, and no call line carries the token.
 func TestAuthCorpusAcpLegStoresTheIssueCredentialAndGrantsBeforeTheSessionsFlag(t *testing.T) {
-	fake, out, err := runAcpLeg(t, "FAKE_SERVED=/api/v1/auth/refresh,/api/v1/auth/logout",
-		"FAKE_METRICS=devhealth_api_auth_proxy_requests_total{aggregate=\"sessions\",outcome=\"forwarded\"} 3")
+	fake, out, err := runAcpLeg(t, "FAKE_SERVED=/api/v1/auth/refresh,/api/v1/auth/logout,/api/v1/auth/login,/api/v1/auth/social-login",
+		"FAKE_METRICS="+metric("sessions")+"\n"+metric("local_login")+"\n"+metric("social"))
 	if err != nil {
 		t.Fatalf("leg acp failed: %v\n%s", err, out)
 	}
@@ -350,4 +353,8 @@ func TestAuthCorpusAcpLegStoresTheIssueCredentialAndGrantsBeforeTheSessionsFlag(
 	if store < 0 || grants < 0 || flag < 0 || !(store < flag && grants < flag) {
 		t.Fatalf("want the credential store (%d) and the grants (%d) before the first go-api recreate (%d):\n%s", store, grants, flag, calls)
 	}
+}
+
+func metric(aggregate string) string {
+	return `devhealth_api_auth_proxy_requests_total{aggregate="` + aggregate + `",outcome="forwarded"} 3`
 }

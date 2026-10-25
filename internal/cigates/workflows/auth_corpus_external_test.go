@@ -44,8 +44,8 @@ func TestAuthCorpusExternalJobIsInTheVenueWorkflow(t *testing.T) {
 	if !ok {
 		t.Fatal("venue-oracles.yml has no auth-corpus-external job")
 	}
-	if got := strings.Join(job.Strategy.Matrix.Leg, ","); got != "go-api,acp" {
-		t.Errorf("matrix legs = %q, want go-api,acp", got)
+	if got := strings.Join(job.Strategy.Matrix.Leg, ","); got != "go-api,acp,acp-nokeys" {
+		t.Errorf("matrix legs = %q, want go-api,acp,acp-nokeys", got)
 	}
 	if failFast, ok := job.Strategy.FailFast.(bool); !ok || failFast {
 		t.Error("strategy.fail-fast must be false: leg acp failing must not cancel leg go-api")
@@ -64,6 +64,15 @@ func TestAuthCorpusExternalJobIsInTheVenueWorkflow(t *testing.T) {
 	body := text[start+1:]
 	if !strings.Contains(body, `bash ci/auth_corpus_external.sh "${{ matrix.leg }}"`) {
 		t.Error("the job does not run ci/auth_corpus_external.sh with its leg")
+	}
+	for _, want := range []string{
+		"matrix.leg == 'acp-nokeys'",
+		"AUTH_CORPUS_OMIT_AUTH_KEYS=1 bash ci/auth_corpus_external.sh acp",
+		"required aggregate sessions is not served by auth-service",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the job's non-vacuity step lacks %q", want)
+		}
 	}
 }
 

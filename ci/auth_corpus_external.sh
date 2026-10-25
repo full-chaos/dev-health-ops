@@ -14,7 +14,7 @@
 # Leg acp turns on the AUTH_PROXY_* flag of an aggregate only when the running auth-service serves every route of it
 # (ci/auth_corpus_acp_routes.tsv): a route auth-service mounts answers OPTIONS with 405, one it does not with 404.
 # An aggregate's flag therefore turns on in the change that lands its mount, and sessions gates the others, as go-api's
-# own start-up check does.
+# own start-up check does. Leg acp also requires sessions, local_login and social to be served (REQUIRED).
 # The project is private to this run and is removed with its volumes on exit. CI only (docker, the Go toolchain).
 set -euo pipefail
 
@@ -123,6 +123,8 @@ if [ "${LEG}" = "acp" ]; then
 fi
 
 AGGREGATES=(sessions local_login credentials social oidc saml)
+# Leg acp serves these through auth-service (CHAOS-10410); one that is not served fails the leg by name.
+REQUIRED=(sessions local_login social)
 ROUTES="${SCRIPT_DIR}/auth_corpus_acp_routes.tsv"
 
 hostport() {
@@ -174,6 +176,9 @@ if [ "${LEG}" = "acp" ]; then
     if [ "${PROBED}" = served ]; then
       SERVED+=("${aggregate}")
     fi
+  done
+  for aggregate in "${REQUIRED[@]}"; do
+    [[ " ${SERVED[*]:-} " == *" ${aggregate} "* ]] || die "required aggregate ${aggregate} is not served by auth-service"
   done
   # The sessions aggregate gates the others, as go-api's own start-up check does.
   if [[ " ${SERVED[*]} " == *" sessions "* ]]; then

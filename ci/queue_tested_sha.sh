@@ -5,11 +5,13 @@
 # go-storage-integration-shard-) ran in the latest attempt and every one of them concluded success (none skipped, cancelled
 # or unfinished). With <required-step>, each of those jobs must also hold a step of exactly that name that concluded success
 # (a leg skipped by its plan has the job green and that step skipped). Any other answer, including a failed API call, exits 1:
-# the caller then keeps running its jobs.
+# the caller then keeps running its jobs. A failed jobs lookup for any matching run ends the helper with 1 too, even
+# when another run for the same sha would be green (a run with no matching job is skipped). Fewer than two or more than six arguments exit 1.
 # QUEUE_TESTED_RUN_ID_FILE, when set, receives the matched run id on exit 0.
 set -uo pipefail
 
 usage="usage: queue_tested_sha.sh <owner/repo> <sha> [workflow-file [job-prefix [required-step [min-jobs]]]]"
+[ "$#" -ge 2 ] && [ "$#" -le 6 ] || { echo "${usage}" >&2; exit 1; }
 repo=${1:?${usage}}
 sha=${2:?${usage}}
 workflow=${3:-go.yml}
@@ -45,7 +47,7 @@ ids=$(gh api "repos/${repo}/actions/workflows/${workflow}/runs?event=merge_group
 
 for id in ${ids}; do
   shards=$(gh api --paginate "repos/${repo}/actions/runs/${id}/jobs?per_page=100&filter=latest" \
-    --jq "${jobs_filter}" 2>/dev/null) || continue
+    --jq "${jobs_filter}" 2>/dev/null) || exit 1
   [ -n "${shards}" ] || continue
   all_green=1
   count=0

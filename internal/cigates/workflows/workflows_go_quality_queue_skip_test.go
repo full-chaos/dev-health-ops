@@ -411,3 +411,77 @@ func TestGoQualityFanInReportsWhichLegsRan(t *testing.T) {
 		t.Error("the report is a push report")
 	}
 }
+
+func runQualityHelperMulti(t *testing.T, runs string, jobsByID map[string]string, extra ...string) (bool, string) {
+	t.Helper()
+	dir := t.TempDir()
+	write := func(name, content string) {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("gh", queueGhStub)
+	write("runs.json", runs)
+	for id, jobs := range jobsByID {
+		write("jobs-"+id+".json", jobs)
+	}
+	idFile := filepath.Join(dir, "run-id")
+	args := append([]string{filepath.Join(rootOf(t), "ci", "queue_tested_sha.sh"), qualityRepo, qualitySha, "go-quality.yml", qualityLegPrefix, qualityLegStep, "8"}, extra...)
+	command := exec.Command("bash", args...)
+	command.Env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"), "STUB_DIR="+dir, "QUEUE_TESTED_RUN_ID_FILE="+idFile)
+	err := command.Run()
+	if _, statErr := os.Stat(idFile); err != nil && statErr == nil {
+		t.Errorf("run id file written on a refusal")
+	}
+	return err == nil, idFile
+}
+
+// A failed jobs lookup ends the helper with exit 1, even when another run for the same sha is green.
+func TestQueueTestedShaForGoQualityFailsClosedOnAJobsLookupError(t *testing.T) {
+	green := qualityJobsJSON(qualityLegs(nil))
+	twoRuns := `{"workflow_runs":[` +
+		fmt.Sprintf(`{"id":21,"head_sha":"%[1]s","conclusion":"success","event":"merge_group","head_repository":{"full_name":"%[2]s"}},`, qualitySha, qualityRepo) +
+		fmt.Sprintf(`{"id":22,"head_sha":"%[1]s","conclusion":"success","event":"merge_group","head_repository":{"full_name":"%[2]s"}}`, qualitySha, qualityRepo) +
+		`]}`
+	cases := []struct {
+		name string
+		jobs map[string]string
+		want bool
+	}{
+		{"the first run's jobs call fails, the second is green", map[string]string{"22": green}, false},
+		{"the first run has no leg jobs at all (not an error), the second is green", map[string]string{"21": qualityJobsJSON(nil), "22": green}, true},
+		{"the first run has a failed leg, the second is green", map[string]string{"21": qualityJobsJSON(qualityLegs(func(i int, l *qualityLeg) {
+			if i == 3 {
+				l.step = "failure"
+			}
+		})), "22": green}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, _ := runQualityHelperMulti(t, twoRuns, tc.jobs)
+			if got != tc.want {
+				t.Fatalf("exit ok = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestQueueTestedShaRefusesExtraArguments(t *testing.T) {
+	runs := qualityRunsJSON(qualitySha, "merge_group", qualityRepo, "success")
+	green := map[string]string{"21": qualityJobsJSON(qualityLegs(nil))}
+	if got, _ := runQualityHelperMulti(t, runs, green); !got {
+		t.Fatal("the documented six arguments must pass")
+	}
+	if got, _ := runQualityHelperMulti(t, runs, green, "unexpected-extra-argument"); got {
+		t.Fatal("a seventh argument must be refused")
+	}
+}
+
+func TestQueueTestedShaRefusesTooFewArguments(t *testing.T) {
+	script := filepath.Join(rootOf(t), "ci", "queue_tested_sha.sh")
+	for _, args := range [][]string{{}, {qualityRepo}} {
+		if err := exec.Command("bash", append([]string{script}, args...)...).Run(); err == nil {
+			t.Errorf("%d argument(s) must be refused", len(args))
+		}
+	}
+}

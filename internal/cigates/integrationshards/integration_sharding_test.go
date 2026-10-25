@@ -609,6 +609,49 @@ func sameSet(a, b map[string]bool) bool {
 	return true
 }
 
+// runIntegrationPackagesDefects checks the body of run_integration_packages: after the dry-run return, exactly two
+// go test lines run, the filtered packages with -run of the printed SHARD-REGEX and the hook packages whole.
+func runIntegrationPackagesDefects(body string) []string {
+	var d []string
+	lines := strings.Split(body, "\n")
+	dryReturn, goTests := -1, 0
+	for i, l := range lines {
+		l = strings.TrimSpace(l)
+		if l == `[ "${mode}" != "--dry-run" ] || return 0` {
+			dryReturn = i
+		}
+		if !strings.Contains(l, "go test -mod=readonly -trimpath -tags=integration -count=1") {
+			continue
+		}
+		goTests++
+		prev := ""
+		if i > 0 {
+			prev = strings.TrimSpace(lines[i-1])
+		}
+		switch {
+		case dryReturn < 0 || i < dryReturn:
+			d = append(d, "a go test runs before the dry-run return")
+		case strings.HasSuffix(l, `-run "${test_regex}" "${run_pkgs[@]}"`):
+			if prev != `run_pkgs=("${filtered[@]}")` {
+				d = append(d, "the -run go test does not run the filtered packages")
+			}
+		case strings.HasSuffix(l, `-timeout=30m "${run_pkgs[@]}"`) && !strings.Contains(l, "-run"):
+			if prev != `run_pkgs=("${unfiltered[@]}")` {
+				d = append(d, "the go test without -run runs packages other than the hook packages")
+			}
+		default:
+			d = append(d, "unexpected go test line: "+l)
+		}
+	}
+	if goTests != 2 {
+		d = append(d, fmt.Sprintf("%d go test lines, want 2 (filtered with -run, hook packages whole)", goTests))
+	}
+	if !strings.Contains(body, `printf '  SHARD-REGEX %s %s\n' "${module_dir}" "${test_regex}"`) {
+		d = append(d, "the SHARD-REGEX receipt does not print the regex go test receives")
+	}
+	return d
+}
+
 func TestIntegrationShardScriptShape(t *testing.T) {
 	t.Parallel()
 	src := readText(t, filepath.Join(rootOf(t), "ci", "check_go.sh"))
@@ -633,6 +676,29 @@ func TestIntegrationShardScriptShape(t *testing.T) {
 		body := m[1]
 		if !strings.Contains(body, `git -C "${ROOT}/${module_dir}" grep -l -E`) || strings.Contains(body, "ls-files --cached --others") || !strings.Contains(body, "ls-files --others --exclude-standard") {
 			t.Errorf("package discovery spawns per-file greps:\n%s", body)
+		}
+	})
+	t.Run("the packages go test runs the selection the receipts print", func(t *testing.T) {
+		t.Parallel()
+		m := regexp.MustCompile(`(?ms)^run_integration_packages\(\) \{\n(.*?)^\}`).FindStringSubmatch(src)
+		if m == nil {
+			t.Fatal("run_integration_packages moved")
+		}
+		if d := runIntegrationPackagesDefects(m[1]); len(d) > 0 {
+			t.Fatalf("run_integration_packages: %v", d)
+		}
+		for name, plant := range map[string][2]string{
+			"the filtered go test drops -run":         {`-run "${test_regex}" "${run_pkgs[@]}"`, `"${run_pkgs[@]}"`},
+			"the filtered go test runs the hook list": {`run_pkgs=("${filtered[@]}")`, `run_pkgs=("${unfiltered[@]}")`},
+			"the receipt prints another regex":        {`printf '  SHARD-REGEX %s %s\n' "${module_dir}" "${test_regex}"`, `printf '  SHARD-REGEX %s %s\n' "${module_dir}" '^(.*)$'`},
+			"a dry run executes tests":                {`[ "${mode}" != "--dry-run" ] || return 0`, `:`},
+		} {
+			if !strings.Contains(m[1], plant[0]) {
+				t.Fatalf("plant %q: anchor %q is absent", name, plant[0])
+			}
+			if len(runIntegrationPackagesDefects(strings.Replace(m[1], plant[0], plant[1], 1))) == 0 {
+				t.Errorf("planted defect not caught: %s", name)
+			}
 		}
 	})
 	t.Run("the shard arity guard uses an explicit conditional", func(t *testing.T) {
@@ -1257,14 +1323,14 @@ func TestEachIntegrationShardDryRunExecutesOnlyItsManifestAssignment(t *testing.
 		t.Errorf("the packages shards run %d packages (%d distinct), want %d", len(selected), len(got), len(want))
 	}
 	tf := integrationTaggedFacts(t)
-	plantShard := 0
+	plantShard, plantKey := 0, ""
 	for _, shard := range shards {
 		if err := checkTaggedSelection(pkgResults[shard].stdout, wants[shard], tf); err != nil {
 			t.Errorf("packages shard %d: %v", shard, err)
 		}
-		for k := range wants[shard] {
+		for _, k := range sortedKeys(wants[shard]) {
 			if plantShard == 0 && tf.hook[k] == "" && len(tf.untagged[k]) > 0 && len(tf.tagged[k]) > 1 {
-				plantShard = shard
+				plantShard, plantKey = shard, k
 			}
 		}
 	}
@@ -1275,7 +1341,7 @@ func TestEachIntegrationShardDryRunExecutesOnlyItsManifestAssignment(t *testing.
 	dry := pkgResults[plantShard].stdout
 	var firstTest, firstKey, untaggedName, unfilteredLine, filteredKey string
 	for _, l := range strings.Split(dry, "\n") {
-		if v, ok := strings.CutPrefix(l, "  SHARD-TEST "); ok && firstTest == "" {
+		if v, ok := strings.CutPrefix(l, "  SHARD-TEST "); ok && firstTest == "" && strings.Fields(v)[0] == plantKey {
 			firstTest, firstKey = l, strings.Fields(v)[0]
 		}
 		if strings.HasPrefix(l, "  SHARD-UNFILTERED ") && unfilteredLine == "" {

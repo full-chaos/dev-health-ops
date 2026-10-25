@@ -256,10 +256,14 @@ usage() {
          test shard of internal/jobs/metrics/remaining. `--dry-run` prints the
          exact selection without starting Docker-backed tests; CI never passes
          that option.
+         Every target runs only the integration-tagged top-level tests (the
+         untagged ones run in the go-quality test and race legs); a package
+         whose tag-only test file declares func init or func TestMain runs whole.
   integration
          Discover and run EVERY integration-tagged package'\''s suite against
          real containers, except the (small, justified) INTEGRATION_DENYLIST.
          Inclusion is the default; exclusion is the explicit, loud exception.
+         Same test selection as integration-shard.
   fast   Run fmt, vet, test, build, contract,
          integration-vet, and the integration shard-plan checks (PLAN only --
          does not execute the integration suite; see `ci`, `all`, and
@@ -1588,40 +1592,238 @@ PROVIDER_INTEGRATION_TEST_WEIGHT=0
 PROVIDER_ORDINARY_TEST_WEIGHT=0
 
 # scan_listed_go_tests validates the test file names `go list` returned for one package directory, then reads every file
-# in ONE awk pass (a per-file grep + sed launched ~2300 processes per plan). It fills two globals keyed by source path:
-# SCAN_TAGGED (file carries an integration build constraint) and SCAN_TESTS (newline-separated top-level Test names,
-# file order). The names are validated before any file is read; the list goes through NUL-delimited xargs, not argv.
+# in ONE awk pass (a per-file grep + sed launched ~2300 processes per plan). It fills three globals keyed by source path:
+# SCAN_TAGGED (file carries an integration build constraint), SCAN_TESTS (newline-separated top-level Test names,
+# file order) and SCAN_HOOK (the first `func init` or `func TestMain` of the file). The names are validated before any
+# file is read; the list goes through NUL-delimited xargs, not argv.
 scan_listed_go_tests() {
-  local label="$1" dir="$2" listed="$3" go_file kind path name
+  local label="$1" dir="$2" listed="$3" go_file
   local -a paths=()
-  declare -gA SCAN_TAGGED=() SCAN_TESTS=()
   while IFS= read -r go_file; do
     [ -n "${go_file}" ] || continue
-    case "${go_file}" in
-      */*|..*) die "go list returned unsafe ${label} test filename '${go_file}'" ;;
-    esac
-    case "${go_file}" in
-      *[[:cntrl:]]*) die "go list returned unsafe ${label} test filename with a control byte: $(printf '%q' "${go_file}")" ;;
-    esac
-    [ -f "${dir}/${go_file}" ] || die "go list returned missing ${label} test file '${go_file}'"
+    check_listed_test_file "${label}" "${dir}" "${go_file}"
     paths+=("${dir}/${go_file}")
   done <<<"${listed}"
-  [ "${#paths[@]}" -gt 0 ] || return 0
+  scan_go_test_paths ${paths[@]+"${paths[@]}"}
+}
+
+check_listed_test_file() {
+  local label="$1" dir="$2" go_file="$3"
+  case "${go_file}" in
+    */*|..*) die "go list returned unsafe ${label} test filename '${go_file}'" ;;
+  esac
+  case "${go_file}" in
+    *[[:cntrl:]]*) die "go list returned unsafe ${label} test filename with a control byte: $(printf '%q' "${go_file}")" ;;
+  esac
+  [ -f "${dir}/${go_file}" ] || die "go list returned missing ${label} test file '${go_file}'"
+}
+
+# scan_go_test_paths PATH...: the one awk pass of scan_listed_go_tests over validated paths.
+scan_go_test_paths() {
+  local kind path name
+  declare -gA SCAN_TAGGED=() SCAN_TESTS=() SCAN_HOOK=()
+  [ "$#" -gt 0 ] || return 0
   while IFS=$'\037' read -r kind path name; do
     case "${kind}" in
       I) SCAN_TAGGED["${path}"]=1 ;;
       T) SCAN_TESTS["${path}"]+="${name}"$'\n' ;;
+      H) SCAN_HOOK["${path}"]="${name}" ;;
     esac
   done < <(
     # shellcheck disable=SC2016 # the awk program is single-quoted on purpose
-    printf '%s\0' "${paths[@]}" | xargs -0 awk '
-      FNR == 1 { tagged = 0 }
+    printf '%s\0' "$@" | xargs -0 awk '
+      FNR == 1 { tagged = 0; hooked = 0 }
       !tagged && /^\/\/go:build.*(^|[^[:alnum:]_])integration([^[:alnum:]_]|$)/ { tagged = 1; printf "I\037%s\n", FILENAME }
+      !hooked && /^func[[:space:]]+(init|TestMain)[[:space:]]*\(/ {
+        s = $0; sub(/^func[[:space:]]+/, "", s); match(s, /^[A-Za-z]+/)
+        hooked = 1; printf "H\037%s\037%s\n", FILENAME, substr(s, 1, RLENGTH)
+      }
       /^func[[:space:]]+Test[A-Za-z0-9_]+[[:space:]]*\(/ {
         s = $0; sub(/^func[[:space:]]+/, "", s); match(s, /^Test[A-Za-z0-9_]+/)
         printf "T\037%s\037%s\n", FILENAME, substr(s, 1, RLENGTH)
       }'
   )
+}
+
+# split_package_hook KEY LISTED: "<key>/<file> <func>" of the first integration-tagged test file of a split package that
+# declares `func init` or `func TestMain` (from the SCAN_* globals of its scan), or nothing. Such a package keeps every
+# test in its shards, as run_integration_packages keeps such a package whole.
+split_package_hook() {
+  local key="$1" listed="$2" go_file source_file
+  while IFS= read -r go_file; do
+    [ -n "${go_file}" ] || continue
+    source_file="${ROOT}/${key}/${go_file}"
+    if [ -n "${SCAN_TAGGED[${source_file}]+set}" ] && [ -n "${SCAN_HOOK[${source_file}]+set}" ]; then
+      printf '%s/%s %s\n' "${key}" "${go_file}" "${SCAN_HOOK[${source_file}]}"
+      return 0
+    fi
+  done <<<"${listed}"
+}
+
+# split_test_runs_here CLASS UNFILTERED: true for a test a split shard runs (CHAOS-11407): an integration-tagged test,
+# or any test of a package with a tag-only hook. Untagged tests run in the go-quality test and race legs.
+split_test_runs_here() {
+  [ "$1" = "integration" ] || [ -n "$2" ]
+}
+
+# split_plan_scope LABEL UNFILTERED ALL TAGGED SHARDS COUNTS: prints which tests the split shards leave to the test and
+# race legs, and fails when a shard plans no test (more shards than the tests that run here).
+split_plan_scope() {
+  local label="$1" unfiltered="$2" all="$3" tagged="$4" shards="$5" shard
+  local -n planned_counts="$6"
+  if [ -n "${unfiltered}" ]; then
+    printf '%s test plan: UNFILTERED %s: a tag-only hook changes the process of the untagged tests, so all %d test(s) run here\n' \
+      "${label}" "${unfiltered}" "${all}"
+  else
+    printf '%s test plan: %d untagged test(s) run in the go-quality test and race legs, not here\n' "${label}" "$((all - tagged))"
+  fi
+  for ((shard = 1; shard <= shards; shard++)); do
+    [ "${planned_counts[${shard}]:-0}" -gt 0 ] \
+      || die "${label} test shard ${shard} plans zero tests: the manifest declares more shards than there are ${label} tests that run in a shard"
+  done
+}
+
+# discover_integration_tagged_tests MODULE_DIR PKG...: for module-relative packages ("./dir") of one module, the tests a
+# shard runs. A test file belongs to the integration run when `go list -tags=integration` lists it and plain `go list`
+# does not (the tag only adds files: no non-test file and no `!integration` file carries it). Fills, keyed by PKG:
+# INTEGRATION_TAGGED_TESTS (newline list of the top-level Test names of those files, TestMain aside),
+# INTEGRATION_UNTAGGED_TESTS (the same for every other test file) and INTEGRATION_HOOK ("<key>/<file> <func>" of the
+# first `func init` or `func TestMain` in such a file: that hook changes the process the untagged tests run in under
+# the tag, so the package runs whole, as before).
+discover_integration_tagged_tests() {
+  local module_dir="$1" modpath pkg import key dir go_file path name rel
+  shift
+  declare -gA INTEGRATION_TAGGED_TESTS=() INTEGRATION_UNTAGGED_TESTS=() INTEGRATION_HOOK=()
+  local -A pkg_by_import=() in_plain=() tag_only=() path_pkg=()
+  local -a fields=() paths=()
+  local template='{{.ImportPath}}{{range .TestGoFiles}}{{"\t"}}{{.}}{{end}}{{range .XTestGoFiles}}{{"\t"}}{{.}}{{end}}'
+  local plain_out tagged_out
+
+  [ "$#" -gt 0 ] || return 0
+  modpath="$(cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -mod=readonly -m)" \
+    || die "go list -m failed in ${module_dir}"
+  for pkg in "$@"; do
+    case "${pkg}" in
+      .|./) import="${modpath}" ;;
+      *) import="${modpath}/${pkg#./}" ;;
+    esac
+    pkg_by_import["${import}"]="${pkg}"
+  done
+  # -e: a package whose every test file is tagged has no plain build; it still prints its (empty) plain file list.
+  plain_out="$(cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -e -mod=readonly -f "${template}" "$@")" \
+    || die "go list failed while listing the plain test files in ${module_dir}"
+  tagged_out="$(cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -mod=readonly -tags=integration -f "${template}" "$@")" \
+    || die "go list -tags=integration failed while listing the test files in ${module_dir}"
+  while IFS=$'\t' read -r -a fields; do
+    [ "${#fields[@]}" -gt 0 ] || continue
+    pkg="${pkg_by_import[${fields[0]}]-}"
+    [ -n "${pkg}" ] || die "go list returned the unrequested package '${fields[0]}' in ${module_dir}"
+    for go_file in "${fields[@]:1}"; do
+      in_plain["${pkg}/${go_file}"]=1
+    done
+  done <<<"${plain_out}"
+  while IFS=$'\t' read -r -a fields; do
+    [ "${#fields[@]}" -gt 0 ] || continue
+    pkg="${pkg_by_import[${fields[0]}]-}"
+    [ -n "${pkg}" ] || die "go list -tags=integration returned the unrequested package '${fields[0]}' in ${module_dir}"
+    dir="${ROOT}/${module_dir}/${pkg#./}"
+    for go_file in "${fields[@]:1}"; do
+      check_listed_test_file "integration" "${dir}" "${go_file}"
+      path="${dir}/${go_file}"
+      path_pkg["${path}"]="${pkg}"
+      [ -n "${in_plain[${pkg}/${go_file}]+set}" ] || tag_only["${path}"]=1
+      paths+=("${path}")
+    done
+  done <<<"${tagged_out}"
+  scan_go_test_paths ${paths[@]+"${paths[@]}"}
+  for path in ${paths[@]+"${paths[@]}"}; do
+    pkg="${path_pkg[${path}]}"
+    if [ -n "${tag_only[${path}]+set}" ] && [ -n "${SCAN_HOOK[${path}]+set}" ] && [ -z "${INTEGRATION_HOOK[${pkg}]+set}" ]; then
+      key="${module_dir}/${pkg#./}"
+      key="${key#./}"
+      rel="${key}/${path##*/}"
+      INTEGRATION_HOOK["${pkg}"]="${rel} ${SCAN_HOOK[${path}]}"
+    fi
+    while IFS= read -r name; do
+      [ -n "${name}" ] || continue
+      [ "${name}" != "TestMain" ] || continue
+      case "${name}" in
+        Test*[![:alnum:]_]*) die "integration test discovery returned unsupported top-level test name '${name}' in ${path}" ;;
+      esac
+      if [ -n "${tag_only[${path}]+set}" ]; then
+        INTEGRATION_TAGGED_TESTS["${pkg}"]+="${name}"$'\n'
+      else
+        INTEGRATION_UNTAGGED_TESTS["${pkg}"]+="${name}"$'\n'
+      fi
+    done <<<"${SCAN_TESTS[${path}]-}"
+  done
+}
+
+# run_integration_packages MODE MODULE_DIR LABEL PKG...: runs the PKGs of one module under the integration tag
+# (CHAOS-11407). The untagged tests of these packages already run in the go-quality test legs (plain) and race legs
+# (-race), which run every package on every merge_group (plan-verdict FULL); here they ran a third time. So one go test
+# runs every package with `-run` of its integration-tagged top-level tests (one regex for all, so -p keeps the
+# packages parallel; a tagged name equal to an untagged name of another package also runs that test, printed as
+# SHARD-COLLISION), and a package with a tag-only hook (INTEGRATION_HOOK) runs whole in a second go test.
+# Receipts: SHARD-TEST <key> <Test> per selected test, SHARD-UNFILTERED <key> <file> <func>, SHARD-REGEX <module> <regex>.
+run_integration_packages() {
+  local mode="$1" module_dir="$2" label="$3" pkg key name separator="" test_regex='^(' tests=0 result=0 status
+  local -a filtered=() unfiltered=() run_pkgs=()
+  local -A union=()
+  shift 3
+  discover_integration_tagged_tests "${module_dir}" "$@"
+  for pkg in "$@"; do
+    key="${module_dir}/${pkg#./}"
+    key="${key#./}"
+    if [ -n "${INTEGRATION_HOOK[${pkg}]+set}" ]; then
+      printf '  SHARD-UNFILTERED %s %s\n' "${key}" "${INTEGRATION_HOOK[${pkg}]}"
+      unfiltered+=("${pkg}")
+      continue
+    fi
+    [ -n "${INTEGRATION_TAGGED_TESTS[${pkg}]-}" ] \
+      || die "${label}: ${key} runs in an integration shard, but no test file that only the integration build lists declares a top-level Test"
+    filtered+=("${pkg}")
+    while IFS= read -r name; do
+      [ -n "${name}" ] || continue
+      printf '  SHARD-TEST %s %s\n' "${key}" "${name}"
+      tests=$((tests + 1))
+      if [ -z "${union[${name}]+set}" ]; then
+        union["${name}"]=1
+        test_regex+="${separator}${name}"
+        separator="|"
+      fi
+    done <<<"${INTEGRATION_TAGGED_TESTS[${pkg}]}"
+  done
+  test_regex+=')$'
+  for pkg in ${filtered[@]+"${filtered[@]}"}; do
+    key="${module_dir}/${pkg#./}"
+    key="${key#./}"
+    while IFS= read -r name; do
+      [ -n "${name}" ] || continue
+      [ -z "${union[${name}]+set}" ] || printf '  SHARD-COLLISION %s %s\n' "${key}" "${name}"
+    done <<<"${INTEGRATION_UNTAGGED_TESTS[${pkg}]-}"
+  done
+  printf '%s: %d package(s), %d integration-tagged test(s), %d unfiltered package(s)\n' \
+    "${label}" "$#" "${tests}" "${#unfiltered[@]}"
+  if [ "${#filtered[@]}" -gt 0 ]; then
+    printf '  SHARD-REGEX %s %s\n' "${module_dir}" "${test_regex}"
+  fi
+  [ "${mode}" != "--dry-run" ] || return 0
+  if [ "${#filtered[@]}" -gt 0 ]; then
+    (
+      cd "${ROOT}/${module_dir}"
+      run_pkgs=("${filtered[@]}")
+      "${GO_ENV_OFF[@]}" GOWORK=off ${INTEGRATION_TEST_ENV[@]+"${INTEGRATION_TEST_ENV[@]}"} go test -mod=readonly -trimpath -tags=integration -count=1 -timeout=30m -run "${test_regex}" "${run_pkgs[@]}"
+    ) || result=$?
+  fi
+  if [ "${#unfiltered[@]}" -gt 0 ]; then
+    (
+      cd "${ROOT}/${module_dir}"
+      run_pkgs=("${unfiltered[@]}")
+      "${GO_ENV_OFF[@]}" GOWORK=off ${INTEGRATION_TEST_ENV[@]+"${INTEGRATION_TEST_ENV[@]}"} go test -mod=readonly -trimpath -tags=integration -count=1 -timeout=30m "${run_pkgs[@]}"
+    ) || { status=$?; [ "${result}" -ne 0 ] || result="${status}"; }
+  fi
+  return "${result}"
 }
 
 # discover_integration_packages populates parallel module/package arrays with
@@ -2042,6 +2244,7 @@ discover_providersync_tests() {
   PROVIDER_TEST_NAMES=()
   PROVIDER_INTEGRATION_TEST_NAMES=()
   scan_listed_go_tests 'providersync' "${ROOT}/${PROVIDER_INTEGRATION_PACKAGE_KEY}" "${files_output}"
+  PROVIDER_UNFILTERED="$(split_package_hook "${PROVIDER_INTEGRATION_PACKAGE_KEY}" "${files_output}")"
   while IFS= read -r go_file; do
     [ -n "${go_file}" ] || continue
     source_file="${ROOT}/${PROVIDER_INTEGRATION_PACKAGE_KEY}/${go_file}"
@@ -2094,6 +2297,8 @@ discover_providersync_tests() {
   for test_name in "${!PROVIDER_MEASURED_WEIGHTS[@]}"; do
     [ -n "${PROVIDER_TEST_CLASS[${test_name}]+set}" ] \
       || die "providersync test weights name '${test_name}', which is not a discovered top-level test: remove or rename the row in ${DEV_HEALTH_GO_PROVIDER_TEST_WEIGHTS}"
+    split_test_runs_here "${PROVIDER_TEST_CLASS[${test_name}]}" "${PROVIDER_UNFILTERED}" \
+      || die "providersync test weights name '${test_name}', an untagged test: ordinary tests do not run in shards (the go-quality test and race legs run them), so remove the row in ${DEV_HEALTH_GO_PROVIDER_TEST_WEIGHTS}"
   done
 }
 
@@ -2179,6 +2384,7 @@ plan_providersync_test_shards() {
     fi
   done < <(
     for test_name in "${PROVIDER_TEST_NAMES[@]}"; do
+      split_test_runs_here "${PROVIDER_TEST_CLASS[${test_name}]}" "${PROVIDER_UNFILTERED}" || continue
       printf '%s\t%s\n' "${PROVIDER_TEST_WEIGHTS[${test_name}]}" "${test_name}"
     done | LC_ALL=C sort -t $'\t' -k1,1nr -k2,2
   )
@@ -2189,6 +2395,7 @@ plan_providersync_test_shards() {
     fi
   done
 
+  split_plan_scope "providersync" "${PROVIDER_UNFILTERED}" "${#PROVIDER_TEST_NAMES[@]}" "${#PROVIDER_INTEGRATION_TEST_NAMES[@]}" "${PROVIDER_TEST_SHARD_COUNT}" PROVIDER_TEST_SHARD_COUNTS
   printf 'providersync test plan: %d shard(s), %d top-level test(s), %d integration-tagged\n' \
     "${PROVIDER_TEST_SHARD_COUNT}" \
     "${#PROVIDER_TEST_NAMES[@]}" \
@@ -2290,6 +2497,7 @@ discover_daily_tests() {
   DAILY_TEST_NAMES=()
   DAILY_INTEGRATION_TEST_NAMES=()
   scan_listed_go_tests 'daily' "${ROOT}/${DAILY_INTEGRATION_PACKAGE_KEY}" "${files_output}"
+  DAILY_UNFILTERED="$(split_package_hook "${DAILY_INTEGRATION_PACKAGE_KEY}" "${files_output}")"
   while IFS= read -r go_file; do
     [ -n "${go_file}" ] || continue
     source_file="${ROOT}/${DAILY_INTEGRATION_PACKAGE_KEY}/${go_file}"
@@ -2363,6 +2571,7 @@ plan_daily_test_shards() {
     DAILY_TEST_SHARD_COUNTS[selected_shard]=$((DAILY_TEST_SHARD_COUNTS[selected_shard] + 1))
   done < <(
     for test_name in "${DAILY_TEST_NAMES[@]}"; do
+      split_test_runs_here "${DAILY_TEST_CLASS[${test_name}]}" "${DAILY_UNFILTERED}" || continue
       if [ "${DAILY_TEST_CLASS[${test_name}]}" = "integration" ]; then
         weight="${DAILY_INTEGRATION_TEST_WEIGHT}"
       else
@@ -2372,6 +2581,7 @@ plan_daily_test_shards() {
     done | LC_ALL=C sort -t $'\t' -k1,1nr -k2,2
   )
 
+  split_plan_scope "daily" "${DAILY_UNFILTERED}" "${#DAILY_TEST_NAMES[@]}" "${#DAILY_INTEGRATION_TEST_NAMES[@]}" "${DAILY_TEST_SHARD_COUNT}" DAILY_TEST_SHARD_COUNTS
   printf 'daily test plan: %d shard(s), %d top-level test(s), %d integration-tagged\n' \
     "${DAILY_TEST_SHARD_COUNT}" "${#DAILY_TEST_NAMES[@]}" "${#DAILY_INTEGRATION_TEST_NAMES[@]}"
   for ((shard = 1; shard <= DAILY_TEST_SHARD_COUNT; shard++)); do
@@ -2499,6 +2709,7 @@ discover_workerservice_tests() {
   WORKERSERVICE_TEST_NAMES=()
   WORKERSERVICE_INTEGRATION_TEST_NAMES=()
   scan_listed_go_tests 'workerservice' "${ROOT}/${WORKERSERVICE_INTEGRATION_PACKAGE_KEY}" "${files_output}"
+  WORKERSERVICE_UNFILTERED="$(split_package_hook "${WORKERSERVICE_INTEGRATION_PACKAGE_KEY}" "${files_output}")"
   while IFS= read -r go_file; do
     [ -n "${go_file}" ] || continue
     source_file="${ROOT}/${WORKERSERVICE_INTEGRATION_PACKAGE_KEY}/${go_file}"
@@ -2572,6 +2783,7 @@ plan_workerservice_test_shards() {
     WORKERSERVICE_TEST_SHARD_COUNTS[selected_shard]=$((WORKERSERVICE_TEST_SHARD_COUNTS[selected_shard] + 1))
   done < <(
     for test_name in "${WORKERSERVICE_TEST_NAMES[@]}"; do
+      split_test_runs_here "${WORKERSERVICE_TEST_CLASS[${test_name}]}" "${WORKERSERVICE_UNFILTERED}" || continue
       if [ "${WORKERSERVICE_TEST_CLASS[${test_name}]}" = "integration" ]; then
         weight="${WORKERSERVICE_INTEGRATION_TEST_WEIGHT}"
       else
@@ -2581,6 +2793,7 @@ plan_workerservice_test_shards() {
     done | LC_ALL=C sort -t $'\t' -k1,1nr -k2,2
   )
 
+  split_plan_scope "workerservice" "${WORKERSERVICE_UNFILTERED}" "${#WORKERSERVICE_TEST_NAMES[@]}" "${#WORKERSERVICE_INTEGRATION_TEST_NAMES[@]}" "${WORKERSERVICE_TEST_SHARD_COUNT}" WORKERSERVICE_TEST_SHARD_COUNTS
   printf 'workerservice test plan: %d shard(s), %d top-level test(s), %d integration-tagged\n' \
     "${WORKERSERVICE_TEST_SHARD_COUNT}" "${#WORKERSERVICE_TEST_NAMES[@]}" "${#WORKERSERVICE_INTEGRATION_TEST_NAMES[@]}"
   for ((shard = 1; shard <= WORKERSERVICE_TEST_SHARD_COUNT; shard++)); do
@@ -2708,6 +2921,7 @@ discover_queryapiserver_tests() {
   QAPISERVER_TEST_NAMES=()
   QAPISERVER_INTEGRATION_TEST_NAMES=()
   scan_listed_go_tests 'queryapiserver' "${ROOT}/${QAPISERVER_INTEGRATION_PACKAGE_KEY}" "${files_output}"
+  QAPISERVER_UNFILTERED="$(split_package_hook "${QAPISERVER_INTEGRATION_PACKAGE_KEY}" "${files_output}")"
   while IFS= read -r go_file; do
     [ -n "${go_file}" ] || continue
     source_file="${ROOT}/${QAPISERVER_INTEGRATION_PACKAGE_KEY}/${go_file}"
@@ -2781,6 +2995,7 @@ plan_queryapiserver_test_shards() {
     QAPISERVER_TEST_SHARD_COUNTS[selected_shard]=$((QAPISERVER_TEST_SHARD_COUNTS[selected_shard] + 1))
   done < <(
     for test_name in "${QAPISERVER_TEST_NAMES[@]}"; do
+      split_test_runs_here "${QAPISERVER_TEST_CLASS[${test_name}]}" "${QAPISERVER_UNFILTERED}" || continue
       if [ "${QAPISERVER_TEST_CLASS[${test_name}]}" = "integration" ]; then
         weight="${QAPISERVER_INTEGRATION_TEST_WEIGHT}"
       else
@@ -2790,6 +3005,7 @@ plan_queryapiserver_test_shards() {
     done | LC_ALL=C sort -t $'\t' -k1,1nr -k2,2
   )
 
+  split_plan_scope "queryapiserver" "${QAPISERVER_UNFILTERED}" "${#QAPISERVER_TEST_NAMES[@]}" "${#QAPISERVER_INTEGRATION_TEST_NAMES[@]}" "${QAPISERVER_TEST_SHARD_COUNT}" QAPISERVER_TEST_SHARD_COUNTS
   printf 'queryapiserver test plan: %d shard(s), %d top-level test(s), %d integration-tagged\n' \
     "${QAPISERVER_TEST_SHARD_COUNT}" "${#QAPISERVER_TEST_NAMES[@]}" "${#QAPISERVER_INTEGRATION_TEST_NAMES[@]}"
   for ((shard = 1; shard <= QAPISERVER_TEST_SHARD_COUNT; shard++)); do
@@ -2917,6 +3133,7 @@ discover_remaining_tests() {
   REMAINING_TEST_NAMES=()
   REMAINING_INTEGRATION_TEST_NAMES=()
   scan_listed_go_tests 'remaining' "${ROOT}/${REMAINING_INTEGRATION_PACKAGE_KEY}" "${files_output}"
+  REMAINING_UNFILTERED="$(split_package_hook "${REMAINING_INTEGRATION_PACKAGE_KEY}" "${files_output}")"
   while IFS= read -r go_file; do
     [ -n "${go_file}" ] || continue
     source_file="${ROOT}/${REMAINING_INTEGRATION_PACKAGE_KEY}/${go_file}"
@@ -2990,6 +3207,7 @@ plan_remaining_test_shards() {
     REMAINING_TEST_SHARD_COUNTS[selected_shard]=$((REMAINING_TEST_SHARD_COUNTS[selected_shard] + 1))
   done < <(
     for test_name in "${REMAINING_TEST_NAMES[@]}"; do
+      split_test_runs_here "${REMAINING_TEST_CLASS[${test_name}]}" "${REMAINING_UNFILTERED}" || continue
       if [ "${REMAINING_TEST_CLASS[${test_name}]}" = "integration" ]; then
         weight="${REMAINING_INTEGRATION_TEST_WEIGHT}"
       else
@@ -2999,6 +3217,7 @@ plan_remaining_test_shards() {
     done | LC_ALL=C sort -t $'\t' -k1,1nr -k2,2
   )
 
+  split_plan_scope "remaining" "${REMAINING_UNFILTERED}" "${#REMAINING_TEST_NAMES[@]}" "${#REMAINING_INTEGRATION_TEST_NAMES[@]}" "${REMAINING_TEST_SHARD_COUNT}" REMAINING_TEST_SHARD_COUNTS
   printf 'remaining test plan: %d shard(s), %d top-level test(s), %d integration-tagged\n' \
     "${REMAINING_TEST_SHARD_COUNT}" "${#REMAINING_TEST_NAMES[@]}" "${#REMAINING_INTEGRATION_TEST_NAMES[@]}"
   for ((shard = 1; shard <= REMAINING_TEST_SHARD_COUNT; shard++)); do
@@ -3392,13 +3611,7 @@ check_integration_package_shard() {
     for key in "${run_keys[@]}"; do
       printf '  SHARD-RUN %s\n' "${key}"
     done
-    if [ "${mode}" = "--dry-run" ]; then
-      continue
-    fi
-    (
-      cd "${ROOT}/${module_dir}"
-      "${GO_ENV_OFF[@]}" GOWORK=off ${INTEGRATION_TEST_ENV[@]+"${INTEGRATION_TEST_ENV[@]}"} go test -mod=readonly -trimpath -tags=integration -count=1 -timeout=30m "${run_pkgs[@]}"
-    )
+    run_integration_packages "${mode}" "${module_dir}" "integration package shard ${shard} (${module_dir})" "${run_pkgs[@]}"
   done
 
   [ "${selected_count}" -gt 0 ] \
@@ -3509,10 +3722,7 @@ check_integration() {
     [ "${#run_pkgs[@]}" -gt 0 ] || continue
 
     printf 'go test integration: %s -> %s\n' "${module_dir}" "${run_pkgs[*]}"
-    (
-      cd "${ROOT}/${module_dir}"
-      "${GO_ENV_OFF[@]}" GOWORK=off ${INTEGRATION_TEST_ENV[@]+"${INTEGRATION_TEST_ENV[@]}"} go test -mod=readonly -trimpath -tags=integration -count=1 -timeout=30m "${run_pkgs[@]}"
-    )
+    run_integration_packages "" "${module_dir}" "integration (${module_dir})" "${run_pkgs[@]}"
   done
 }
 

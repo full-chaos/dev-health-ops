@@ -52,12 +52,42 @@ def _validate_asset_tree() -> None:
         raise RuntimeError(f"prepared Cloudflare asset tree is incomplete: {joined}")
 
 
+# Checks of the built site, in run order. validate-publication runs before the build, the rest after it. Docs Guards runs
+# the same verbs; a parity test (internal/cigates/docs/parity_test.go) fails when either side drifts.
+SITE_CHECK_VERBS = (
+    "validate-publication",
+    "check-built-site-links",
+    "check-docs-search",
+    "check-docs-accessibility",
+)
+PREVIEW_ONLY_VERBS = ("check-candidate-facts",)
+VERB_ARGS = {
+    "check-built-site-links": ["--site-dir", str(SITE_DIR.relative_to(ROOT))],
+    "check-docs-search": [
+        "--site-dir",
+        str(SITE_DIR.relative_to(ROOT)),
+        "--queries",
+        str(SEARCH_ACCEPTANCE.relative_to(ROOT)),
+    ],
+    "check-docs-accessibility": [
+        "--site-dir",
+        str(SITE_DIR.relative_to(ROOT)),
+        "--css",
+        "docs/stylesheets/extra.css",
+    ],
+}
+
+
+def _check(verb: str) -> None:
+    _run([*CIGATE_DOCS, verb, *VERB_ARGS.get(verb, [])])
+
+
 def build(*, mode: str, full_check: bool) -> None:
     """Build MkDocs, run the requested checks, and prepare Wrangler assets."""
     (ROOT / ".build").mkdir(parents=True, exist_ok=True)
 
     if full_check:
-        _run([*CIGATE_DOCS, "validate-publication"])
+        _check(SITE_CHECK_VERBS[0])
 
     _run(
         [
@@ -72,45 +102,8 @@ def build(*, mode: str, full_check: bool) -> None:
     )
 
     if full_check:
-        _run(
-            [
-                *CIGATE_DOCS,
-                "check-built-site-links",
-                "--site-dir",
-                str(SITE_DIR.relative_to(ROOT)),
-            ]
-        )
-        _run(
-            [
-                *CIGATE_DOCS,
-                "check-docs-search",
-                "--site-dir",
-                str(SITE_DIR.relative_to(ROOT)),
-                "--queries",
-                str(SEARCH_ACCEPTANCE.relative_to(ROOT)),
-            ]
-        )
-        _run(
-            [
-                *CIGATE_DOCS,
-                "check-docs-accessibility",
-                "--site-dir",
-                str(SITE_DIR.relative_to(ROOT)),
-                "--css",
-                "docs/stylesheets/extra.css",
-            ]
-        )
-        _run(
-            [
-                "go",
-                "run",
-                "-trimpath",
-                "-mod=readonly",
-                "./cmd/cigate",
-                "docs",
-                "check-candidate-facts",
-            ]
-        )
+        for verb in (*SITE_CHECK_VERBS[1:], *PREVIEW_ONLY_VERBS):
+            _check(verb)
 
     _run(
         [

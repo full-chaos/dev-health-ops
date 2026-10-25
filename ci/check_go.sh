@@ -410,6 +410,8 @@ check_vet() {
 # shard plans; the plans partition `go list ./...`, so every row is checked in exactly one shard (`race-excluded-shard-plan SHARD
 # COUNT` lists a shard's rows).
 # race_excluded_rows [SHARD COUNT]: the rows of ci/race_excluded_tests.tsv (the shard's rows with SHARD COUNT), one per line.
+# A line must be exactly <package><TAB><test> (CHAOS-11436): an empty line and a # comment are skipped; a whitespace-only line, one
+# column, more than two columns or an empty column dies naming the line; a CRLF ending is trimmed.
 race_excluded_rows() {
   local list="${GO_RACE_EXCLUDED_TESTS:-${ROOT}/ci/race_excluded_tests.tsv}" row shard="${1:-}" shard_count="${2:-}" plan="" plan_keys="" normalised
   local -a rows=()
@@ -417,9 +419,10 @@ race_excluded_rows() {
   normalised="$(awk -F'\t' '
     function trim(s) { gsub(/^[ \t\r]+|[ \t\r]+$/, "", s); return s }
     /^#/ || /^$/ { next }
+    NF != 2 || trim($1) == "" || trim($2) == "" { printf "ERROR: census line %d of %s is not <package><TAB><test> (whitespace-only, 1 column, more than 2 columns, or an empty column): %s\n", NR, FILENAME, $0 > "/dev/stderr"; exit 1 }
     { key = trim($1) "\t" trim($2)
       if (key in seen) { printf "ERROR: duplicate census row (package<TAB>test) %s: lines %d and %d of %s\n", trim($1) " " trim($2), seen[key], NR, FILENAME > "/dev/stderr"; exit 1 }
-      seen[key] = NR; print key }' "${list}")" || die "the race-excluded census holds a duplicated row"
+      seen[key] = NR; print key }' "${list}")" || die "the race-excluded census holds a malformed or duplicated row"
   while IFS= read -r row; do [ -z "${row}" ] || rows+=("${row}"); done <<<"${normalised}"
   [ "${#rows[@]}" -gt 0 ] || die "ci/race_excluded_tests.tsv lists no test: nothing would be measured"
   if [ -n "${shard}" ]; then

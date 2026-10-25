@@ -41,15 +41,15 @@ func eventLines(t *testing.T, events []goTestEvent) string {
 func censusRows(t *testing.T) [][2]string {
 	t.Helper()
 	var rows [][2]string
-	for _, line := range strings.Split(readText(t, scriptPath(t, "ci/race_excluded_tests.tsv")), "\n") {
-		if strings.TrimSpace(line) == "" || strings.HasPrefix(line, "#") {
+	for i, line := range strings.Split(readText(t, scriptPath(t, "ci/race_excluded_tests.tsv")), "\n") {
+		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
 		f := strings.Split(line, "\t")
-		if len(f) != 2 {
-			t.Fatalf("bad census row %q", line)
+		if len(f) != 2 || strings.TrimSpace(f[0]) == "" || strings.TrimSpace(f[1]) == "" {
+			t.Fatalf("census line %d is not <package><TAB><test>: %q", i+1, line)
 		}
-		rows = append(rows, [2]string{f[0], f[1]})
+		rows = append(rows, [2]string{strings.TrimSpace(f[0]), strings.TrimSpace(f[1])})
 	}
 	if len(rows) == 0 {
 		t.Fatal("the census holds no row")

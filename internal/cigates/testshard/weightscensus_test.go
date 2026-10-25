@@ -401,12 +401,12 @@ func parseCensusExcluded(text string) (map[censusExcludedRow]bool, error) {
 	listed := map[censusExcludedRow]bool{}
 	firstLine := map[censusExcludedRow]int{}
 	for i, line := range strings.Split(text, "\n") {
-		if strings.TrimSpace(line) == "" || strings.HasPrefix(line, "#") {
+		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
 		f := strings.Split(line, "\t")
-		if len(f) != 2 {
-			return nil, fmt.Errorf("bad race_excluded_tests.tsv row %q", line)
+		if len(f) != 2 || strings.TrimSpace(f[0]) == "" || strings.TrimSpace(f[1]) == "" {
+			return nil, fmt.Errorf("census line %d is not <package><TAB><test>: %q", i+1, line)
 		}
 		row := censusExcludedRow{strings.TrimSpace(f[0]), strings.TrimSpace(f[1])}
 		if first, dup := firstLine[row]; dup {

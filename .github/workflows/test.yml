@@ -52,31 +52,16 @@ jobs:
         with:
           filters: |
             code:
-              # This workflow decides whether the proof gate runs at all.
-              # Without this pattern a PR that changed ONLY this file set
-              # code=false, skipped both test jobs, and the required `test`
-              # aggregator counted the skip as a pass -- the gate could be
-              # disabled through a green required check.
-              - '.github/workflows/**'
-              - 'src/**'
-              - 'tests/**'
-              - 'ci/**'
-              - '.gitignore'
-              - 'lefthook.yml'
-              - 'Makefile'
-              - 'scripts/**'
-              - 'alerts/**'
-              - 'compose.yml'
-              - 'docker/**'
-              - 'deploy/**'
-              # Go paths: a Go-only change selects the gated jobs.
-              - '**/*.go'
+              # CHAOS-11418: the input closure of the one gated job, chart-started. This workflow decides whether the proof
+              # gate runs at all: without it a PR that changed ONLY this file would skip the job and the required `test`
+              # aggregator would count the skip as a pass (the gate could be disabled through a green required check).
+              # deploy/helm/** is the chart (templates, values with the ClickHouse image pin) and every test file compiled
+              # with the started test; go.mod and go.sum fix the toolchain and yaml.v3. The started test file imports only
+              # the standard library and yaml.v3 (internal/cigates/workflows/chart_started_filter_test.go pins it).
+              - '.github/workflows/test.yml'
+              - 'deploy/helm/**'
               - 'go.mod'
               - 'go.sum'
-              - 'internal/**'
-              - 'cmd/**'
-              - 'contracts/**'
-              - 'tools/**'
 
   # CHAOS-9202: the one tooling guard that STARTS something: the chart's rendered ClickHouse config.d mounts are
   # mounted into the real image and /ping is probed from another container. This job replaces the old tooling-tests job and

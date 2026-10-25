@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# The go-quality-leg matrix (ci/go_quality_legs.json), judged for one event (CHAOS-11418). A heavy (race) leg is left out
+# only on a pull_request without the ci:full label; every other event, and an event this script does not know, keeps all legs.
+# Usage: go_quality_legs.sh <event_name> <ci_full: true|false> [legs.json]
+# stdout line 1: the matrix JSON array. stdout line 2: the race policy line (empty when every leg is kept).
+set -euo pipefail
+event="${1:?event name}"
+ci_full="${2:?ci:full flag (true|false)}"
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+legs="${3:-${here}/go_quality_legs.json}"
+case "${ci_full}" in true | false) ;; *) echo "go_quality_legs.sh: ci:full flag must be true or false, got '${ci_full}'" >&2; exit 2 ;; esac
+if [ "${event}" = pull_request ] && [ "${ci_full}" = false ]; then
+  matrix="$(jq -ce '[.[] | select((.heavy // false) | not)]' "${legs}")"
+  policy="race: not run on PR by policy (runs in merge_group, on the main push and with the ci:full label)"
+else
+  matrix="$(jq -ce '.' "${legs}")"
+  policy=""
+fi
+# An empty list is a wiring error, never "nothing to run": the fan-in must see a red plan job.
+if ! jq -e 'type == "array" and length > 0 and any(.[]; .name == "static")' <<<"${matrix}" >/dev/null; then
+  echo "go_quality_legs.sh: the leg list is empty or has no static leg" >&2
+  exit 3
+fi
+printf '%s\n%s\n' "${matrix}" "${policy}"

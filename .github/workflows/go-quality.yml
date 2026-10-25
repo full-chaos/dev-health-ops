@@ -37,8 +37,8 @@
 # plans their bounded readers and the unbounded sites with Markdown evidence; a merge group
 # then runs the full plan before main. The plan
 # verdict is exact, so no docs-only rule overrides it: some docs files are Go test inputs. The race legs are
-# heavy: on a pull request without the ci:full label they report success without running
-# (they run in the merge queue and on the main push).
+# heavy: on a pull request without the ci:full label they are not started
+# (CHAOS-11418; they run in the merge queue and on the main push).
 name: Go quality
 
 on:
@@ -80,11 +80,26 @@ jobs:
       verdict: ${{ steps.plan.outputs.verdict }}
       selection: ${{ steps.plan.outputs.selection }}
       queue_run: ${{ steps.queue.outputs.queue_run }}
+      legs: ${{ steps.legs.outputs.legs }}
+      race_policy: ${{ steps.legs.outputs.race_policy }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # The diff needs the base commit; the default depth-1 checkout cannot see it.
           fetch-depth: 0
+
+      # CHAOS-11418: the leg list for this event. First, and with bash + jq only, so no Go failure below can hide it.
+      - name: Select the legs for this event
+        id: legs
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          CI_FULL: ${{ contains(github.event.pull_request.labels.*.name, 'ci:full') && 'true' || 'false' }}
+        run: |
+          set -euo pipefail
+          out="${RUNNER_TEMP}/go-quality-legs.txt"
+          bash ci/go_quality_legs.sh "${EVENT_NAME}" "${CI_FULL}" > "${out}"
+          { printf 'legs=%s\n' "$(sed -n 1p "${out}")"; printf 'race_policy=%s\n' "$(sed -n 2p "${out}")"; } >> "${GITHUB_OUTPUT}"
+          cat "${out}"
 
       # CHAOS-11408: a main push whose sha the merge queue already ran green through this workflow (the helper checks the
       # same sha, this repository, the latest attempt, and that every leg ran its gate) skips its test and race legs. Any
@@ -171,45 +186,14 @@ jobs:
     strategy:
       # One red leg must not cancel the others: every leg reports its own signal.
       fail-fast: false
+      # CHAOS-11418: the legs live in ci/go_quality_legs.json (static, test-N-of-3, race-N-of-4; the tooling tests pin the
+      # race and test counts there). go-quality-plan filters them with ci/go_quality_legs.sh: a pull request without the ci:full
+      # label starts no race leg (a job cannot read its own matrix in an `if`, so the leg is left out, not started to report a
+      # skip). The legs are not required status contexts (the ruleset requires the `go-quality` aggregate), so the count can
+      # change without a ruleset edit. An empty or missing output fails this expression, the job does not run, and the
+      # `unconditional` fan-in below turns go-quality red.
       matrix:
-        include:
-          # static = format, vet, build, contract, integration-vet, shard plans
-          # + the migration matrix contract, gqlgen drift, shellcheck pin and
-          # River harness checks. race COUNT below MUST equal the number of race
-          # entries (the tooling test pins it).
-          - name: static
-            args: static
-          # CHAOS-10355: three weighted test shards (ci/go_test_weights.tsv). The single test leg took 19.6-28.5 min of the 30 min
-          # cap. test COUNT below MUST equal the number of test entries (internal/cigates/testshard pins it). The legs are
-          # not required status contexts (the ruleset requires the `go-quality` aggregate).
-          - name: test-1-of-3
-            args: test 1 3
-          - name: test-2-of-3
-            args: test 2 3
-          - name: test-3-of-3
-            args: test 3 3
-          # CHAOS-8135: race legs. Two legs held ~5k s of race CPU, two
-          # 400-600 s packages per leg, and a leg's packages slow each other
-          # (providersync 340-601 s, goapiproof 346-600 s): race-2 crossed the
-          # 600 s go test default. CHAOS-10922: with three legs the slowest took 18-30 min of the 30 min job cap
-          # (one hit it the second its stage printed "race: OK"), so there are four. The legs are not required status
-          # contexts (the ruleset requires the `go-quality` aggregate), so the count can change without a ruleset edit.
-          - name: race-1-of-4
-            args: race 1 4
-            heavy: true
-            pool: true
-          - name: race-2-of-4
-            args: race 2 4
-            heavy: true
-            pool: true
-          - name: race-3-of-4
-            args: race 3 4
-            heavy: true
-            pool: true
-          - name: race-4-of-4
-            args: race 4 4
-            heavy: true
-            pool: true
+        include: ${{ fromJSON(needs.go-quality-plan.outputs.legs) }}
     # Routed to the self-hosted ARC pool while GitHub-hosted dispatch is
     # stalled (org plan change, 2026-09-04; chris ruling 16:54 PDT: route the
     # ruleset-required contexts to oci-arc-runners so merges can continue).
@@ -259,20 +243,19 @@ jobs:
       - name: Decide whether this leg runs, and on which packages
         id: relevance
         env:
-          # A heavy (race) leg runs in the merge queue, on a main push and on a pull request that carries ci:full; on any
-          # other pull request (drafts included, CHAOS-9949) it reports success without running, through the same
-          # relevant=false path as a NONE plan.
-          HEAVY_SKIP: ${{ matrix.heavy && github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'ci:full') && 'true' || 'false' }}
+          # A heavy (race) leg is in the matrix in the merge queue, on a main push and on a pull request that carries ci:full
+          # (go-quality-plan, ci/go_quality_legs.sh). One that starts anywhere else is a wiring error and FAILS: a race leg must
+          # never report green without running (CHAOS-11418).
+          HEAVY_ON_PR_WITHOUT_LABEL: ${{ matrix.heavy && github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'ci:full') && 'true' || 'false' }}
           LEG: ${{ matrix.name }}
           PLAN_VERDICT: ${{ needs.go-quality-plan.outputs.verdict }}
           PLAN_SELECTION: ${{ needs.go-quality-plan.outputs.selection }}
           QUEUE_RUN: ${{ needs.go-quality-plan.outputs.queue_run }}
         run: |
           set -euo pipefail
-          if [ "${HEAVY_SKIP}" = "true" ]; then
-            echo "pull request without the ci:full label: this heavy leg runs in the merge queue, not here"
-            printf 'relevant=false\n' >> "${GITHUB_OUTPUT}"
-            exit 0
+          if [ "${HEAVY_ON_PR_WITHOUT_LABEL}" = "true" ]; then
+            echo "::error title=RACE LEG STARTED ON A PULL REQUEST WITHOUT ci:full::${LEG} must not be in this matrix (ci/go_quality_legs.sh)"
+            exit 1
           fi
           printf 'plan verdict: %s\n' "${PLAN_SELECTION}"
           if [ "${LEG}" = "static" ]; then
@@ -310,7 +293,7 @@ jobs:
             echo "skipped: queue-tested sha ${QUEUE_RUN}: the merge queue ran this leg green on this sha."
             exit 0
           fi
-          echo "skipped: the go-quality-plan verdict is NONE (or this heavy leg runs in the merge queue, not on this pull request)."
+          echo "skipped: the go-quality-plan verdict is NONE."
           echo "The verdict comes from cmd/cigate plan-verdict. This job still REPORTS, so the"
           echo "required check is satisfied honestly rather than by a second workflow."
 
@@ -636,6 +619,15 @@ jobs:
           fi
           echo "${summary}"
           echo "${summary}" >> "${GITHUB_STEP_SUMMARY}"
+
+      # CHAOS-11418: a race leg that was left out of the matrix is named here, never counted as a green race result.
+      - name: Report the race policy
+        if: always() && needs.go-quality-plan.outputs.race_policy != ''
+        env:
+          RACE_POLICY: ${{ needs.go-quality-plan.outputs.race_policy }}
+        run: |
+          echo "${RACE_POLICY}"
+          echo "${RACE_POLICY}" >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Aggregate go-quality result
         env:

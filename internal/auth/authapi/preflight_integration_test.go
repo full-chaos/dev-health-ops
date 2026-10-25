@@ -188,3 +188,45 @@ func TestIssueSignerUnavailableWritesNoSessionRow(t *testing.T) {
 		t.Fatalf("%d %s audit rows written before the token could be signed", n, EventSessionIssued)
 	}
 }
+
+// Outage behaviour (acp, class level), on the live store: an unknown
+// credential and a revoked session's credential, presented while the eddsa
+// signer cannot sign, answer 503 and change no row.
+func TestRefreshOfARefusedCredentialChangesNoRowWhileTheSignerIsUnavailable(t *testing.T) {
+	ctx := context.Background()
+	p := newPreflightStore(t, ctx)
+	principal := p.principal(t, ctx)
+	revoked, err := p.store.Create(ctx, principal, nil, []string{"pwd"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if ok, err := p.store.Revoke(ctx, revoked.Session.ID, session.Actor{}); err != nil || !ok {
+		t.Fatalf("Revoke: %v %v", ok, err)
+	}
+	users := fakeUsers{users: map[uuid.UUID]UserState{principal: {Email: "ada@example.com", IsActive: true}}}
+	routes, err := Routes(Deps{Sessions: p.store, Users: users, Issuer: newEdDSAIssuer(t, unreadableKeySigner(t), testAudience),
+		Logger: slog.New(slog.DiscardHandler)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := serveRoutes(routes)
+	snapshot := func() [4]int {
+		return [4]int{
+			p.count(t, ctx, `SELECT count(*) FROM auth.refresh_credentials`),
+			p.count(t, ctx, `SELECT count(*) FROM auth.refresh_credentials WHERE consumed_at IS NOT NULL OR revoked_at IS NOT NULL`),
+			p.count(t, ctx, `SELECT count(*) FROM auth.sessions WHERE revoked_at IS NOT NULL`),
+			p.count(t, ctx, `SELECT count(*) FROM auth.security_audit_events`),
+		}
+	}
+	for name, presented := range map[string]string{
+		"unknown credential": credential(),
+		"revoked session":    revoked.Credential.Reveal(),
+	} {
+		before := snapshot()
+		response := post(server, PatternRefresh, refreshBody(presented), nil)
+		expectError(t, response, http.StatusServiceUnavailable, reasonDependency)
+		if after := snapshot(); after != before {
+			t.Fatalf("%s: rows (credentials, ended credentials, revoked sessions, audit) %v -> %v while the signer is unavailable", name, before, after)
+		}
+	}
+}

@@ -414,3 +414,127 @@ func TestRefreshAndIssueUnderEdDSACheckThenWriteThenSign(t *testing.T) {
 			issued.Code, len(c.sessions.created), issueSigner.checks.Load(), issueSigner.signs.Load(), issued.Body)
 	}
 }
+
+// Outage behaviour (acp, class level): while the eddsa signer cannot sign,
+// a refresh that a healthy signer would refuse with 401 answers 503 with
+// nothing written, because Exchange, the step that finds the refusal, writes.
+func TestRefreshOfARefusedCredentialAnswers503WhileTheSignerIsUnavailable(t *testing.T) {
+	for _, reason := range []session.Reason{session.ReasonRefreshUnknown, session.ReasonSessionRevoked} {
+		t.Run(string(reason), func(t *testing.T) {
+			signer := unreadableKeySigner(t)
+			f, counter := newEdDSARefreshFixture(t, signer)
+			f.sessions.result = session.Result{Reason: reason}
+			expectError(t, f.do(http.MethodPost, PatternRefresh, refreshBody(credential()), nil), http.StatusServiceUnavailable, reasonDependency)
+			if counter.exchanges.Load() != 0 || len(f.sessions.revoked) != 0 || signer.signs.Load() != 0 {
+				t.Fatalf("exchanges %d, revoked %v, signs %d", counter.exchanges.Load(), f.sessions.revoked, signer.signs.Load())
+			}
+			healthy, _ := newEdDSARefreshFixture(t, readableKeySigner(t))
+			healthy.sessions.result = session.Result{Reason: reason}
+			if code := healthy.do(http.MethodPost, PatternRefresh, refreshBody(credential()), nil).Code; code != http.StatusUnauthorized {
+				t.Fatalf("control with a healthy signer: %d, want 401", code)
+			}
+		})
+	}
+}
+
+// The issue twin: a user or organization the projector would find gone (403
+// with a healthy signer) answers 503 with nothing projected or created.
+func TestIssueForAGoneUserOrOrganizationAnswers503WhileTheSignerIsUnavailable(t *testing.T) {
+	for name, mutate := range map[string]func(*compatFixture){
+		"user gone":         func(f *compatFixture) { f.projector.gone[f.principal] = true },
+		"organization gone": func(f *compatFixture) { delete(f.projector.orgs, f.org) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			signer := unreadableKeySigner(t)
+			f := newCompatFixture(t)
+			mutate(f)
+			f.issuer = newEdDSAIssuer(t, signer, testAudience)
+			f.buildCompat()
+			response := f.do(http.MethodPost, PatternIssueSession, issueBody(f.principal, f.org.String(), "pwd"), issuerBearer)
+			expectError(t, response, http.StatusServiceUnavailable, reasonDependency)
+			if len(f.sessions.created) != 0 || len(f.projector.userCalls) != 0 || len(f.projector.orgCalls) != 0 || signer.signs.Load() != 0 {
+				t.Fatalf("created %d, projected %v %v, signs %d", len(f.sessions.created), f.projector.userCalls, f.projector.orgCalls, signer.signs.Load())
+			}
+			healthy := newCompatFixture(t)
+			mutate(healthy)
+			healthy.issuer = newEdDSAIssuer(t, readableKeySigner(t), testAudience)
+			healthy.buildCompat()
+			if code := healthy.do(http.MethodPost, PatternIssueSession, issueBody(healthy.principal, healthy.org.String(), "pwd"), issuerBearer).Code; code != http.StatusForbidden {
+				t.Fatalf("control with a healthy signer: %d, want 403", code)
+			}
+		})
+	}
+}
+
+// blockedSigner's Check blocks until release is closed, like a key read the
+// request deadline cannot interrupt.
+type blockedSigner struct {
+	entered chan struct{}
+	release chan struct{}
+	checks  atomic.Int64
+}
+
+func (s *blockedSigner) Sign(context.Context, string, []byte) (string, string, error) {
+	return "", "", errors.New("unused")
+}
+
+func (s *blockedSigner) Check(context.Context) error {
+	if s.checks.Add(1) == 1 {
+		close(s.entered)
+	}
+	<-s.release
+	return nil
+}
+
+// While one caller's check is blocked: (i) a waiter whose context ends returns
+// before the release, with errIssue and its context error, and memoizes
+// nothing; (ii) the holder's result is memoized; (iii) a waiter that gets the
+// slot after that uses the memo, with no second check.
+func TestSignerCheckWaitersHonourTheirContext(t *testing.T) {
+	signer := &blockedSigner{entered: make(chan struct{}), release: make(chan struct{})}
+	issuer := newEdDSAIssuer(t, signer, testAudience)
+	withClock(t, issuer)
+
+	holder := make(chan error, 1)
+	go func() { holder <- issuer.Preflight(context.Background()) }()
+	select {
+	case <-signer.entered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the holder never reached the check")
+	}
+
+	patient := make(chan error, 1)
+	go func() { patient <- issuer.Preflight(context.Background()) }()
+
+	waiterCtx, cancel := context.WithCancel(context.Background())
+	waiter := make(chan error, 1)
+	go func() { waiter <- issuer.Preflight(waiterCtx) }()
+	cancel()
+	select {
+	case err := <-waiter:
+		if !errors.Is(err, errIssue) || !errors.Is(err, context.Canceled) {
+			t.Fatalf("cancelled waiter: %v, want errIssue and context.Canceled", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("(i) the cancelled waiter did not return while the check was blocked")
+	}
+	select {
+	case err := <-holder:
+		t.Fatalf("the holder returned %v before the release", err)
+	default:
+	}
+
+	close(signer.release)
+	if err := <-holder; err != nil {
+		t.Fatalf("holder: %v", err)
+	}
+	if err := <-patient; err != nil {
+		t.Fatalf("(iii) waiter after the holder: %v", err)
+	}
+	if err := issuer.Preflight(context.Background()); err != nil {
+		t.Fatalf("(ii) after the release: %v", err)
+	}
+	if n := signer.checks.Load(); n != 1 {
+		t.Fatalf("%d checks, want 1: the holder's answer is the memo for every later caller", n)
+	}
+}

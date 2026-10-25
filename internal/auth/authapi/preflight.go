@@ -16,7 +16,10 @@ const signerCheckTTL = time.Second
 // signerCheck memoizes one Issuer's signer check. It is per Issuer: no state
 // is shared between issuers and nothing is carried on a context.
 type signerCheck struct {
-	mu sync.Mutex
+	// slot is a one-place semaphore: its holder runs the check, and a waiter
+	// gives up when its own context ends (a key read cannot be interrupted).
+	init sync.Once
+	slot chan struct{}
 	// clock is time.Now outside tests: its monotonic reading makes the
 	// window immune to wall-clock steps.
 	clock   func() time.Time
@@ -26,12 +29,22 @@ type signerCheck struct {
 }
 
 // run returns the memoized answer while it is younger than signerCheckTTL and
-// otherwise runs check. Callers wait on the lock, so a burst runs one check.
-// A failure caused by the caller's own cancelled context is not memoized: it
-// says nothing about the signer.
+// otherwise runs check. One caller at a time holds the slot, so a burst runs
+// one check; a caller whose context ends while it waits returns that error.
+// A failure caused by the caller's own context is not memoized: it says
+// nothing about the signer.
 func (c *signerCheck) run(ctx context.Context, check func(context.Context) error) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.init.Do(func() { c.slot = make(chan struct{}, 1) })
+	select {
+	case c.slot <- struct{}{}:
+	default:
+		select {
+		case c.slot <- struct{}{}:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	defer func() { <-c.slot }()
 	clock := c.clock
 	if clock == nil {
 		clock = time.Now

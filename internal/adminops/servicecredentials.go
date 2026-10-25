@@ -177,6 +177,7 @@ const credentialUsage = `usage: dho service-credentials <create|list|rotate|revo
           [--created-by-user-id UUID] [--overlap-seconds 0..3600]
   revoke  <credential_id>
 
+worker-operator is retired: create and rotate refuse it; list and revoke work on stored rows.
 The token of create and rotate is printed once, on stdout. Every option takes the same forms as in dev-hops
 (unique prefixes, "--" ends the options); --db names the database. The root options --log-level LEVEL,
 --llm-provider NAME (-l) and --model NAME (-m) are accepted and unused.
@@ -210,6 +211,9 @@ func prepareCredentialArgs(env cli.Env, verb string) (credentialArgs, cli.Env, i
 
 // credentialSpec validates the shared options in Python's order: scopes, creator, expiry.
 func credentialSpec(args credentialArgs, now time.Time) (admin.ServiceCredentialSpec, error) {
+	if admin.ServiceMintRetired(args.service) {
+		return admin.ServiceCredentialSpec{}, admin.RetiredServiceRefusal(args.service)
+	}
 	scopes, err := admin.ServiceCredentialScopes(args.service, args.scopes)
 	if err != nil {
 		return admin.ServiceCredentialSpec{}, err

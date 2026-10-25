@@ -403,20 +403,24 @@ func (o *Operator) write(ctx context.Context, tx audit.TxOps, move Move, now tim
 // sessionsToRevoke returns the live sessions that minted an access token
 // while kid was active and that token can still be accepted: a session row or
 // a refresh credential issued inside [activated_at, deactivated_at or now] and
-// after now - RevokeWindow. A key that never signed revokes nothing.
+// after now - RevokeWindow. A session whose signing_kids are recorded is
+// revoked iff kid is in the set, whatever its age; a NULL set keeps the window
+// rule. A key that never signed revokes nothing.
 func (o *Operator) sessionsToRevoke(ctx context.Context, db querier, kid string, now time.Time, lock bool) ([]string, error) {
 	sql := `
 		SELECT s.id::text
 		FROM ` + o.q() + `.sessions s
 		JOIN ` + o.q() + `.signing_keys k ON k.kid = $1::text AND k.activated_at IS NOT NULL
 		WHERE s.revoked_at IS NULL AND (
+		    (s.signing_kids IS NOT NULL AND $1::text = ANY(s.signing_kids))
+		    OR (s.signing_kids IS NULL AND (
 		    (s.issued_at >= k.activated_at AND s.issued_at <= COALESCE(k.deactivated_at, $2::timestamptz)
 		     AND s.issued_at > $3::timestamptz)
 		    OR EXISTS (
 		        SELECT 1 FROM ` + o.q() + `.refresh_credentials r
 		        WHERE r.session_id = s.id
 		          AND r.issued_at >= k.activated_at AND r.issued_at <= COALESCE(k.deactivated_at, $2::timestamptz)
-		          AND r.issued_at > $3::timestamptz))
+		          AND r.issued_at > $3::timestamptz))))
 		ORDER BY s.id`
 	if lock {
 		sql += ` FOR UPDATE OF s`

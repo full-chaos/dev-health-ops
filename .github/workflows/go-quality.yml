@@ -489,6 +489,10 @@ jobs:
         # stopped linting, which otherwise reports exactly what a clean tree does.
         run: bash ci/check_shellcheck_pin.sh
 
+      - name: Test the session-issue Secret create script
+        if: steps.relevance.outputs.relevant == 'true' && matrix.name == 'static'
+        run: bash scripts/create-session-issue-secret_test.sh
+
       - name: Test the auth key-set Secret script
         if: steps.relevance.outputs.relevant == 'true' && matrix.name == 'static'
         # A fake kubectl and no cluster: proves the script creates only, leaves no value

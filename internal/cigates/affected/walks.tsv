@@ -139,6 +139,7 @@ internal/clicredentials	opensites_test.go	unexpressed	-
 internal/egressguard	egressguard_test.go	unexpressed	-
 internal/envelopemint	keygen.go	unexpressed	-
 internal/envelopemint	keygen_state_test.go	unexpressed	-
+internal/faultproxy	noship_test.go	.	tree
 internal/fixturescli	dropped_columns_census_test.go	internal/chmigrate/sql	dir
 internal/fixturescli	generate_test.go	internal/fixturescli/testdata/generate	dir
 internal/fixturescli	synthetic_test.go	internal/fixturescli/testdata/synthetic	dir

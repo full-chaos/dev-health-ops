@@ -28,7 +28,7 @@ var knownProviders = map[string]struct{}{
 // four can be "incomplete" for lacking an api_key -- every local/
 // self-hosted provider is usable without one.
 var apiKeyRequiredProviders = map[string]struct{}{
-	"openai": {}, "anthropic": {}, "gemini": {}, "qwen": {},
+	"openai": {}, "anthropic": {}, "gemini": {}, "qwen": {}, ProviderClef: {},
 }
 
 // normalizeProvider ports both providers/__init__.py's

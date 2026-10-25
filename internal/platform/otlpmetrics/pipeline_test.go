@@ -79,7 +79,7 @@ func TestAFailedExportIsLoggedAndCountedNotSwallowed(t *testing.T) {
 	// Nothing listens on this port: the export must fail, and say so.
 	pipeline, err := NewPipeline(context.Background(), Options{
 		Enabled: true, Endpoint: "127.0.0.1:1", Interval: time.Hour, ServiceName: "svc",
-	}, textSource{"s": "# TYPE a_total counter\na_total 1\n"}, nil, logger)
+	}, textSource{"s": "# TYPE a_total counter\na_total 1\n"}, nil, nil, logger)
 	if err != nil {
 		t.Fatalf("NewPipeline must not dial: %v", err)
 	}

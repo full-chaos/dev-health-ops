@@ -3098,12 +3098,41 @@ const registeredFlowMatrixDocument = `query FlowMatrix($orgId: String!, $batch: 
   }
 }`
 
+// registeredInvestmentBreakdownV1Document is the InvestmentBreakdown text the web sent before it asked for
+// `uncategorizedCount` on `evidenceQualityStats`: the text CHAOS-4538 registered. It stays a legacy text (see
+// legacyDigestsByOperation), so a web build still sending it, and a client that holds its digest, keep working
+// while the new web rolls out; the operation's ONE current document is registeredInvestmentBreakdownDocument below.
+const registeredInvestmentBreakdownV1Document = `query InvestmentBreakdown($orgId: String!, $batch: AnalyticsRequestInput!) {
+  analytics(orgId: $orgId, batch: $batch) {
+    breakdowns {
+      dimension
+      measure
+      items {
+        key
+        value
+        __typename
+      }
+      __typename
+    }
+    evidenceQualityDistribution
+    evidenceQualityStats {
+      mean
+      stddev
+      total
+      bandCounts
+      __typename
+    }
+    __typename
+  }
+}`
+
 // registeredInvestmentBreakdownDocument is CHAOS-4538's registered
 // document for the investment-path `analytics` breakdown query -- same
 // "registered documents only" contract, same "sourced from the real
 // client file, not reconstructed" discipline as every document above.
-// Copied byte-for-byte from web/src/lib/graphql/queries.ts:10-28's
-// INVESTMENT_BREAKDOWN_QUERY, operation name "InvestmentBreakdown".
+// Copied byte-for-byte from web/src/lib/graphql/queries.ts's INVESTMENT_BREAKDOWN_QUERY, operation name
+// "InvestmentBreakdown". V2 (CHAOS-10351) adds `uncategorizedCount` to `evidenceQualityStats`: how many work units the
+// theme mix leaves out for too little text. The previous text is registeredInvestmentBreakdownV1Document.
 //
 // REGISTRATION SERVES THE DOCUMENT (CHAOS-8702; it was "not enablement" under the per-row switch, chris's ruling in
 // CHAOS-4538's brief): the catalog switch serves every registered document and reads no routing row.
@@ -3132,6 +3161,7 @@ const registeredInvestmentBreakdownDocument = `query InvestmentBreakdown($orgId:
       stddev
       total
       bandCounts
+      uncategorizedCount
       __typename
     }
     __typename
@@ -5921,6 +5951,12 @@ func buildQueryRoute(getenv getenvFunc, cfg queryRouteConfig) (queryRouteHandler
 	if err != nil {
 		return queryRouteHandlers{}, nil, nil, err
 	}
+	// A database behind this build is refused before anything else is built; the gate logs its own line. One read at start,
+	// the pool stays lazy for requests.
+	if err := enforceQueryAPISchemaGate(context.Background(), slog.Default(), pgPool); err != nil {
+		pgPool.Close()
+		return queryRouteHandlers{}, nil, nil, err
+	}
 
 	verifier, err := principal.NewVerifier(cfg.EnvelopeJWKSPath, cfg.EnvelopeIssuer, cfg.EnvelopeAudience)
 	if err != nil {
@@ -6102,11 +6138,40 @@ func queryAPIPostureCheckWith(
 		return nil
 	}
 	options.Logger = slog.Default()
-	cached := postgresstore.NewCachedQueryAPIPostureCheck(
-		pgPool, role, queryAPIRiverSchema(getenv), options,
+	sessions, err := queryAPISessionRead(getenv)
+	if err != nil {
+		// An unreadable flag or schema must never weaken the proof: not ready.
+		return func(context.Context) error { return err }
+	}
+	cached := postgresstore.NewCachedQueryAPIPostureCheckWithSessions(
+		pgPool, role, queryAPIRiverSchema(getenv), sessions, options,
 	)
 	cached.Warm()
 	return func(context.Context) error { return cached.CheckNoWait() }
+}
+
+// queryAPISessionRead is the auth session read the role must hold while
+// auth-service owns sessions (AUTH_PROXY_SESSIONS, read as go-api reads it), or
+// nil when the flag is off. The schema is AUTH_DATABASE_SCHEMA, the one the
+// session check reads.
+func queryAPISessionRead(getenv getenvFunc) (*postgresstore.QueryAPISessionRead, error) {
+	raw := strings.TrimSpace(getenv("AUTH_PROXY_SESSIONS"))
+	if raw == "" {
+		return nil, nil
+	}
+	on, err := strconv.ParseBool(raw)
+	if err != nil {
+		return nil, fmt.Errorf("AUTH_PROXY_SESSIONS must be true or false")
+	}
+	if !on {
+		return nil, nil
+	}
+	schema, err := policy.AuthSchemaFromEnv(getenv)
+	if err != nil {
+		return nil, err
+	}
+	read := postgresstore.QueryAPISessionReadFor(schema)
+	return &read, nil
 }
 
 // queryAPIRiverSchema is the River schema the posture check asserts the role
@@ -6817,6 +6882,7 @@ var legacyDigestsByOperation = map[string][]string{
 	"operatingReview":       {digestHex(registeredOperatingReviewV1Document), digestHex(registeredOperatingReviewV2Document), digestHex(registeredOperatingReviewV3Document), digestHex(registeredOperatingReviewV4Document), digestHex(registeredOperatingReviewV5Document)},
 	"reviewEdges":           {digestHex(registeredReviewEdgesV1Document)},
 	"investmentFull":        {digestHex(registeredInvestmentFullV1Document)},
+	"investmentBreakdown":   {digestHex(registeredInvestmentBreakdownV1Document)},
 }
 
 // buildOperationByDigest is the reverse index digest -> operation over every accepted text: each operation's

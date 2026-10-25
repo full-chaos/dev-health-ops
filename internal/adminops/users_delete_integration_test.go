@@ -52,10 +52,10 @@ func TestUsersDeleteGuardsThenDeletesAUserAndWhatBelongsToIt(t *testing.T) {
 	orgs := func() int { return db.count(t, `SELECT count(*) FROM organizations`) }
 	seedUsers, seedMemberships, seedTokens, seedOrgs := users(), memberships(), tokens(), orgs()
 	for _, args := range [][]string{
-		{"users", "create", "--email", "keep@example.com", "--password", "password1", "--username", "keep"},
-		{"users", "create", "--email", "throwaway@example.com", "--password", "password1", "--username", "throwaway", "--superuser"},
-		{"users", "create", "--email", "second@example.com", "--password", "password1", "--username", "second"},
-		{"users", "create", "--email", "third@example.com", "--password", "password1", "--username", "third"},
+		{"users", "create", "--email", "keep@example.com", "--password", fixturePassword1, "--username", "keep"},
+		{"users", "create", "--email", "throwaway@example.com", "--password", fixturePassword1, "--username", "throwaway", "--superuser"},
+		{"users", "create", "--email", "second@example.com", "--password", fixturePassword1, "--username", "second"},
+		{"users", "create", "--email", "third@example.com", "--password", fixturePassword1, "--username", "third"},
 		{"orgs", "create", "--name", "Acme", "--owner-email", "throwaway@example.com"},
 		{"users", "update", "--email", "keep@example.com", "--org", "acme", "--role", "member"},
 		{"users", "update", "--email", "throwaway@example.com", "--no-superuser", "--no-active"},
@@ -152,7 +152,7 @@ func TestUsersDeleteGuardsThenDeletesAUserAndWhatBelongsToIt(t *testing.T) {
 	if err := db.conn.QueryRow(context.Background(), `SELECT id::text FROM users WHERE email = 'keep@example.com'`).Scan(&keepID); err != nil {
 		t.Fatal(err)
 	}
-	if code, out := goVerb(t, db, []string{"users", "create", "--email", "pinned@example.com", "--password", "password1", "--username", "pinned"}); code != 0 {
+	if code, out := goVerb(t, db, []string{"users", "create", "--email", "pinned@example.com", "--password", fixturePassword1, "--username", "pinned"}); code != 0 {
 		t.Fatalf("setup pinned: exit %d %s", code, out)
 	}
 	var pinnedID, orgID string

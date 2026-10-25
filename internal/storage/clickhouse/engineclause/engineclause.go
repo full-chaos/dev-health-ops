@@ -17,16 +17,12 @@ import (
 	"strings"
 )
 
-// ErrShape means the text is not a MergeTree engine clause this package knows.
-var ErrShape = errors.New("engineclause: not a recognised MergeTree engine clause")
+// ErrShape means the text is not an engine clause this package can read.
+var ErrShape = errors.New("engineclause: not a recognised engine clause")
 
 const (
 	prefixShared     = "Shared"
 	prefixReplicated = "Replicated"
-	suffixMergeTree  = "MergeTree"
-
-	// FamilyReplacing is the family whose rows collapse under FINAL.
-	FamilyReplacing = "ReplacingMergeTree"
 )
 
 // Clause is one parsed engine clause.
@@ -50,14 +46,11 @@ func Parse(s string) (Clause, error) {
 	return clause, err
 }
 
-// VersionColumn returns the ReplacingMergeTree version column, or "" when the
-// clause names none. It refuses a clause of another family, a version argument
-// that is not a plain column name, and any argument after the version (the
-// is_deleted form changes what FINAL returns).
+// VersionColumn returns the first engine argument as a column name, or "" when
+// the clause names none. The engine name is not compared: a caller checks the
+// column it needs. It refuses a first argument that is not a plain column name
+// and any argument after it (the is_deleted form changes what FINAL returns).
 func (c Clause) VersionColumn() (string, error) {
-	if c.Family != FamilyReplacing {
-		return "", fmt.Errorf("%w: %s is not %s", ErrShape, c.Name, FamilyReplacing)
-	}
 	if len(c.Args) == 0 {
 		return "", nil
 	}
@@ -71,10 +64,10 @@ func (c Clause) VersionColumn() (string, error) {
 	return column, nil
 }
 
-// IsReplacingOn reports whether the clause is ReplacingMergeTree(<column>) with
-// that one argument and nothing else.
-func (c Clause) IsReplacingOn(column string) bool {
-	if c.Family != FamilyReplacing || len(c.Args) != 1 {
+// IsVersionedOn reports whether the clause has exactly one argument after the
+// replication arguments and it is <column>. The engine name is not compared.
+func (c Clause) IsVersionedOn(column string) bool {
+	if len(c.Args) != 1 {
 		return false
 	}
 	got, ok := Identifier(c.Args[0])
@@ -142,10 +135,6 @@ func parsePrefix(s string) (Clause, int, error) {
 	case strings.HasPrefix(name, prefixReplicated) && len(name) > len(prefixReplicated):
 		clause.Prefix, clause.Family = prefixReplicated, name[len(prefixReplicated):]
 	}
-	if !strings.HasSuffix(clause.Family, suffixMergeTree) {
-		return Clause{}, 0, fmt.Errorf("%w: engine %q", ErrShape, name)
-	}
-
 	open := i
 	for open < len(s) && isSpace(s[open]) {
 		open++

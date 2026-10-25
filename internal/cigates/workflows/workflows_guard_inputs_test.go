@@ -34,7 +34,7 @@ func filterMisses(t *testing.T, files, patterns []string) []string {
 
 func TestRoutingGuardInputsAreInGoYmlPathFilters(t *testing.T) {
 	root := repoRoot(t)
-	for _, event := range []string{"push", "pull_request"} {
+	for _, event := range goFilteredEvents(t, root) {
 		patterns := goPaths(t, root, event)
 		if len(patterns) == 0 {
 			t.Fatalf("go.yml declares no %s paths", event)
@@ -120,7 +120,7 @@ func TestBareVerbScanInputsAreInGoYmlPathFilters(t *testing.T) {
 	if !strings.Contains(strings.Join(roots, ","), "ci") || !strings.Contains(strings.Join(exts, ","), ".sh") {
 		t.Fatalf("the derived scan inputs look wrong: roots %v, extensions %v", roots, exts)
 	}
-	for _, event := range []string{"push", "pull_request"} {
+	for _, event := range goFilteredEvents(t, root) {
 		if missed := scanFilterMisses(t, roots, exts, goPaths(t, root, event)); len(missed) != 0 {
 			t.Errorf("go.yml's %s path filter does not select files the bare-verb scans read: %v", event, missed)
 		}

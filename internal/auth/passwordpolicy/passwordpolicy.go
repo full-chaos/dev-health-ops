@@ -45,6 +45,25 @@ func loadCommonPasswords() map[string]struct{} {
 	return commonPasswords
 }
 
+// MaxBytes is bcrypt's input limit; ViolationTooLong is the violation of a
+// password over it.
+const (
+	MaxBytes         = 72
+	ViolationTooLong = "Password must be no more than 72 bytes long"
+)
+
+// ValidateForHash is Validate plus bcrypt's byte limit: the check of every
+// path that hashes the password it was given.
+func ValidateForHash(password string) []string {
+	if v := Validate(password); len(v) > 0 {
+		return v
+	}
+	if len(password) > MaxBytes {
+		return []string{ViolationTooLong}
+	}
+	return nil
+}
+
 // Validate is password_policy.py's validate_password, same
 // violation strings and same order (length checks, then letter, then
 // digit, then common-password lookup).

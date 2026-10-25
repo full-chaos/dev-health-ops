@@ -42,7 +42,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/billing"
 	"github.com/full-chaos/dev-health-ops/internal/api/billing/stripeclient"
 	"github.com/full-chaos/dev-health-ops/internal/api/buildinfo"
-	"github.com/full-chaos/dev-health-ops/internal/api/clientip"
 	"github.com/full-chaos/dev-health-ops/internal/api/credentials"
 	"github.com/full-chaos/dev-health-ops/internal/api/externalingest"
 	"github.com/full-chaos/dev-health-ops/internal/api/githubapp"
@@ -192,7 +191,9 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 	if deps.ClickHouse != nil {
 		legacyClickHouse = deps.ClickHouse
 	}
-	routes = append(routes, legacyingest.Routes(legacyingest.Deps{Store: legacyStore, Metrics: deps.LegacyIngestMetrics, ClickHouse: legacyClickHouse, Logger: logger})...)
+	if deps.LegacyIngestEnabled {
+		routes = append(routes, legacyingest.Harden(legacyingest.Routes(legacyingest.Deps{Store: legacyStore, Metrics: deps.LegacyIngestMetrics, ClickHouse: legacyClickHouse, Logger: logger}), deps.LegacyIngestOptions)...)
+	}
 	routes = append(routes, healthroutes.Routes(healthroutes.Deps{
 		// deps.ClickHouse is the api's own dedicated ClickHouse login
 		// (CHAOS-6310), the SAME connection internal/api/teamsidentity's
@@ -276,6 +277,7 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 			Write:         WriteError,
 			Limits:        limits,
 			Invites:       deps.Invites,
+			UsersOwned:    deps.UsersOwned,
 		})...)
 	}
 	webhookintake.LogUnconfiguredSecrets(logger)
@@ -346,6 +348,10 @@ func RegisterOperatorMetrics(registry *health.Registry, deps *Deps) error {
 	if err := registry.RegisterMetrics("sync_config_dataset_selection", syncadmin.SelectionMetricsSource()); err != nil {
 		return err
 	}
+	// the sign-up mails by purpose and outcome.
+	if err := registry.RegisterMetrics("session_link_mail", session.MailMetricsSource()); err != nil {
+		return err
+	}
 	// CHAOS-10104: the triggers synchandoff.Mint refuses before any write.
 	if err := registry.RegisterMetrics("sync_manual_trigger_refused", synchandoff.RefusalMetricsSource()); err != nil {
 		return err
@@ -373,6 +379,11 @@ func configureWith(
 	if err != nil {
 		return nil, err
 	}
+	deps.UsersOwned, err = ParseUsersOwned(envsecrets.ProcessLookup, authProxy)
+	if err != nil {
+		closeComponents(depComponents)
+		return nil, dependencyFailure(ctx, logger, "api_users_owned", "api_users_owned_config_invalid", err)
+	}
 	deps.SessionIssuer, err = sessionIssuer(authProxy, envsecrets.ProcessLookup)
 	if err != nil {
 		closeComponents(depComponents)
@@ -389,9 +400,12 @@ func configureWith(
 		deps.Verifier, deps.Signer = protected.verifier, protected.signer
 		scope = []func(http.Handler) http.Handler{protected.scope.OrgScope, protected.scope.Impersonation}
 	}
-	if wide := clientip.WidePrefixes(); wide > 0 {
-		logger.Warn("api: the trusted proxy list holds prefixes wider than a /28", "count", wide)
+	deps.AccessVerify, err = buildAccessVerify(envsecrets.ProcessLookup, deps.Auth, logger)
+	if err != nil {
+		closeComponents(depComponents)
+		return nil, dependencyFailure(ctx, logger, "api_access_verify", "api_access_verify_config_invalid", err)
 	}
+	logWideTrust(logger)
 	if err := RegisterOperatorMetrics(registry, &deps); err != nil {
 		closeComponents(depComponents)
 		return nil, err
@@ -485,6 +499,8 @@ func configureWith(
 	}); err != nil {
 		return nil, dependencyFailure(ctx, logger, "api_server", "api_listener_check_register_failed", err)
 	}
+	// Queued sign-in mail jobs finish after the listener stops and before the pool closes.
+	depComponents = append(depComponents, session.MailDrain{Logger: logger})
 	return append(depComponents, server), nil
 }
 
@@ -623,6 +639,7 @@ func NewServerWithGate(
 ) (*httpapi.Server, error) {
 	noStore := httpapi.NewNoStoreRoutes(httpapi.AdminRoutes)
 	middleware := []func(http.Handler) http.Handler{buildinfo.Stamp(version.Current("api")), pyheaders.UnhandledErrorShape, CloseHTTP10, MarkSignatureOnly, DecodedPathRouting, noStore.Middleware}
+	middleware = append(middleware, legacyingest.HeaderLayers(routes)...)
 	if gate != nil {
 		middleware = append(middleware, intakeGate(gate, cfg.CORSAllowedOrigins))
 	}

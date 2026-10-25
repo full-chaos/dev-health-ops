@@ -35,6 +35,8 @@ func TestComputePendingUnitCountsClassifiesEveryNonTerminalStatus(t *testing.T) 
 		insertCandidateUnit(t, ctx, pool, candidateUnitFixture{id: "00000000-0000-4000-8000-000000000809", status: syncRunUnitStatusDispatching, updatedAt: staleCutoff})
 		insertCandidateUnit(t, ctx, pool, candidateUnitFixture{id: "00000000-0000-4000-8000-000000000805", status: syncRunUnitStatusRunning, updatedAt: now})
 		insertCandidateUnit(t, ctx, pool, candidateUnitFixture{id: "00000000-0000-4000-8000-000000000806", status: syncRunUnitStatusRetrying, availableAt: &future, updatedAt: now})
+		// A RETRYING unit with no available_at is in neither class and sets no deferral.
+		insertCandidateUnit(t, ctx, pool, candidateUnitFixture{id: "00000000-0000-4000-8000-000000000810", status: syncRunUnitStatusRetrying, updatedAt: now})
 		insertCandidateUnit(t, ctx, pool, candidateUnitFixture{id: "00000000-0000-4000-8000-000000000807", status: syncRunUnitStatusSuccess, updatedAt: now})
 		insertCandidateUnit(t, ctx, pool, candidateUnitFixture{id: "00000000-0000-4000-8000-000000000808", status: syncRunUnitStatusFailed, updatedAt: now})
 

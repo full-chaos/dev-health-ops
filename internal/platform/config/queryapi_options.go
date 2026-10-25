@@ -52,6 +52,16 @@ var queryAPIOptions = func() []Option {
 			Usage: "PostgreSQL role the readiness write-grant check expects the registry pool to hold",
 		},
 		{
+			Flag: "auth-proxy-sessions", Env: "AUTH_PROXY_SESSIONS", Kind: KindString,
+			Services: q, Group: GroupDatabase,
+			Usage: "true while auth-service owns sessions (go-api's flag): the role posture then also requires the read of the auth schema's sessions; unset or false = off, any other value refuses readiness",
+		},
+		{
+			Flag: "auth-database-schema", Env: "AUTH_DATABASE_SCHEMA", Kind: KindString,
+			Services: q, Group: GroupDatabase,
+			Usage: "schema of the auth tables (default auth) that session checks and the role posture read",
+		},
+		{
 			Flag: "graphql-max-query-bytes", Env: "GRAPHQL_MAX_QUERY_BYTES", Kind: KindString,
 			Services: q, Group: GroupRuntime,
 			Usage: "largest accepted GraphQL query document, in bytes (the service default applies when unset)",

@@ -18,7 +18,9 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/api/usersowned"
 	"github.com/full-chaos/dev-health-ops/internal/auth/passwordhash"
+	"github.com/full-chaos/dev-health-ops/internal/auth/passwordpolicy"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
@@ -30,10 +32,15 @@ import (
 // one Python session as one transaction, so a refused step leaves nothing behind.
 type Operator struct {
 	Pool *pgxpool.Pool
+	// db replaces Pool in a unit test that runs without a database.
+	db pgDB
 	// Now is injectable for tests; nil means time.Now.
 	Now func() time.Time
 	// Logger receives the user-delete telemetry (Info outcome, Debug per reference); nil discards it.
 	Logger *slog.Logger
+	// UsersOwned is AUTH_USERS_OWNED: auth-service owns users, so the verbs
+	// that write public.users refuse with ErrUsersOwned.
+	UsersOwned bool
 }
 
 func (o Operator) logger() *slog.Logger {
@@ -53,8 +60,16 @@ func refuse(format string, args ...any) error {
 	return &OperatorError{Message: fmt.Sprintf(format, args...)}
 }
 
-// PasswordMinLength is PASSWORD_MIN_LENGTH.
-const PasswordMinLength = 8
+// operatorPasswordRefusal applies the shared password policy to a password the
+// operator verbs set. Python's verb only required eight characters; this is
+// stricter on purpose (CHAOS-10943), and the refusal never carries the password.
+func operatorPasswordRefusal(password string) error {
+	violations := passwordpolicy.ValidateForHash(password)
+	if len(violations) == 0 {
+		return nil
+	}
+	return refuse("Password validation failed: %s", strings.Join(violations, "; "))
+}
 
 // bcryptTooLong is the text Python's bcrypt raises for a password over 72 bytes.
 const bcryptTooLong = "password cannot be longer than 72 bytes, truncate manually if necessary (e.g. my_password[:72])"
@@ -85,12 +100,24 @@ func orgView(org *organization) *Organization {
 	return &Organization{ID: org.ID, Slug: org.Slug, Name: org.Name, Tier: org.Tier, IsActive: org.IsActive}
 }
 
-func (o Operator) store(db pgDB) pgStore { return pgStore{Pool: db, Now: o.Now} }
+// refuseWhileUsersOwned is the verbs' guard: with auth-service owning users,
+// a verb that writes public.users refuses before it opens a transaction.
+func (o Operator) refuseWhileUsersOwned(writes bool) error {
+	return usersowned.RefuseWhileUsersOwned(o.UsersOwned && writes)
+}
+
+func (o Operator) store(db pgDB) pgStore {
+	return pgStore{Pool: db, Now: o.Now, UsersOwned: o.UsersOwned}
+}
 
 // inTransaction runs fn over one transaction: committed when it returns nil,
 // rolled back otherwise.
 func (o Operator) inTransaction(ctx context.Context, fn func(store pgStore) error) error {
-	tx, err := o.Pool.Begin(ctx)
+	var begin pgDB = o.Pool
+	if o.db != nil {
+		begin = o.db
+	}
+	tx, err := begin.Begin(ctx)
 	if err != nil {
 		return err
 	}
@@ -121,8 +148,11 @@ type CreateUserInput struct {
 }
 
 // CreateUser is UserService.create with is_verified=True: the email and the
-// username must be free, then the password is at least eight characters.
+// username must be free, then the password passes the shared policy.
 func (o Operator) CreateUser(ctx context.Context, in CreateUserInput) (*User, error) {
+	if err := o.refuseWhileUsersOwned(true); err != nil {
+		return nil, err
+	}
 	var created *fullUser
 	err := o.inTransaction(ctx, func(store pgStore) error {
 		if existing, err := store.userByEmail(ctx, in.Email); err != nil {
@@ -137,8 +167,8 @@ func (o Operator) CreateUser(ctx context.Context, in CreateUserInput) (*User, er
 				return refuse("User with username %s already exists", *in.Username)
 			}
 		}
-		if utf8.RuneCountInString(in.Password) < PasswordMinLength {
-			return refuse("Password must be at least %d characters", PasswordMinLength)
+		if err := operatorPasswordRefusal(in.Password); err != nil {
+			return err
 		}
 		hash, err := hashPassword(in.Password)
 		if err != nil {
@@ -183,6 +213,17 @@ type UpdateUserInput struct {
 	Password                           *string
 	Active, Verified, Superuser        *bool
 	MembershipOrg, Role, RemoveFromOrg *string
+}
+
+func (in UpdateUserInput) hasProfileChange() bool {
+	return in.NewEmail != nil || in.NewUsername != nil || in.FullName != nil ||
+		in.Active != nil || in.Verified != nil || in.Superuser != nil
+}
+
+// WritesUsers reports whether the update changes a public.users column: a
+// profile field or the password. A membership-only update writes none.
+func (in UpdateUserInput) WritesUsers() bool {
+	return in.hasProfileChange() || in.Password != nil
 }
 
 // UpdateUserResult is what an update did.
@@ -285,6 +326,9 @@ type DeleteUserResult struct {
 // The user row is locked first, as the API's superuser-guarded write locks it, and the work runs in one transaction.
 // Without Confirm the user and the memberships are reported and nothing is written.
 func (o Operator) DeleteUser(ctx context.Context, in DeleteUserInput) (*DeleteUserResult, error) {
+	if err := o.refuseWhileUsersOwned(true); err != nil {
+		return nil, err
+	}
 	mode := DeleteSoft
 	if in.Force {
 		mode = DeleteForce
@@ -355,8 +399,10 @@ func (o Operator) DeleteUser(ctx context.Context, in DeleteUserInput) (*DeleteUs
 // fields, the password and the memberships change in one transaction, and any
 // refusal rolls the whole update back.
 func (o Operator) UpdateUser(ctx context.Context, in UpdateUserInput) (*UpdateUserResult, error) {
-	hasProfileChange := in.NewEmail != nil || in.NewUsername != nil || in.FullName != nil ||
-		in.Active != nil || in.Verified != nil || in.Superuser != nil
+	if err := o.refuseWhileUsersOwned(in.WritesUsers()); err != nil {
+		return nil, err
+	}
+	hasProfileChange := in.hasProfileChange()
 	if !hasProfileChange && in.Password == nil && in.MembershipOrg == nil && in.RemoveFromOrg == nil {
 		return nil, refuse("No updates specified. Provide at least one field to update.")
 	}
@@ -412,8 +458,8 @@ func (o Operator) UpdateUser(ctx context.Context, in UpdateUserInput) (*UpdateUs
 			}
 		}
 		if in.Password != nil {
-			if utf8.RuneCountInString(*in.Password) < PasswordMinLength {
-				return refuse("Password must be at least %d characters", PasswordMinLength)
+			if err := operatorPasswordRefusal(*in.Password); err != nil {
+				return err
 			}
 			hash, err := hashPassword(*in.Password)
 			if err != nil {

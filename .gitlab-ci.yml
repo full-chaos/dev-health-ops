@@ -467,7 +467,7 @@ go:quality:
   timeout: 45m
   parallel:
     matrix:
-      - LEG: ["static", "test", "race 1 3", "race 2 3", "race 3 3"]
+      - LEG: ["static", "test", "race 1 4", "race 2 4", "race 3 4", "race 4 4"]
   before_script:
     - !reference [.go_job, before_script]
     - |

@@ -58,12 +58,23 @@ and `/readyz` fails closed, naming the check. See the
 | (none, secret) | `AUTH_SESSION_SUCCESSOR_KEY` or `AUTH_SESSION_SUCCESSOR_KEY_FILE` | unset | 32 bytes, base64url without padding. Derives the rotated refresh credential that a 30 s grace replay returns again. |
 | `--jwt-issuer` | `AUTH_JWT_ISSUER` | `dev-health-ops` | `iss` of the access token; must equal go-api's `JWT_ISSUER`. |
 | `--jwt-audience` | `AUTH_JWT_AUDIENCE` | `dev-health-api` | `aud` of the access token; must equal go-api's `JWT_AUDIENCE`. |
-| `--social-link-routes` | `AUTH_SOCIAL_LINK_ROUTES` | `false` | `true` mounts the bearer-only social link and unlink routes (`POST /v1/identities/social`, `DELETE /v1/identities/social/{id}`); any other value than `true` or `false` fails startup, and `true` needs the session secrets. |
+| (none, secret) | `AUTH_VALKEY_URI` or `AUTH_VALKEY_URI_FILE` | unset | `redis://` or `rediss://` URI on database 1 (path `/1`) of the shared rate-limit store. Required, and refused at startup when absent, while the login, credential (`AUTH_USERS_OWNED`) or social link routes are mounted; with none of them mounted it is checked for shape only and never dialled. Nothing dials at startup: an unreachable store fails the `valkey` readiness check and answers the limited routes with a 500. |
+| `--social-link-routes` | `AUTH_SOCIAL_LINK_ROUTES` | `false` | `true` mounts the bearer-only social link and unlink routes (`POST /v1/identities/social`, `DELETE /v1/identities/social/{id}`; see [identity linking](identity-linking.md)); any other value than `true` or `false` fails startup, and `true` needs the session secrets. |
 | (none) | `AUTH_ACCESS_TOKEN_CLASS` | `hs256_compat` | The one class of access token this service mints: `hs256_compat` or `eddsa` (exact match; any other value fails startup). `eddsa` needs `AUTH_TOKEN_ISSUER_URL` (the `iss`, byte for byte), a signing key, and `AUTH_JWT_AUDIENCE` of `dev-health-api` or `auth-service`; tokens last 60 minutes and carry the access-token.v1 claims only. The session routes still verify HS256 tokens only. |
 | `--version` | | | Prints build metadata as JSON. |
 | `--healthcheck` | | | Probes this deployment's own operator `/readyz` over loopback; exit 0 only on HTTP 200. For container healthchecks. |
 
 Durations take Go syntax (`30s`, `5m`).
+
+### Rate limits
+
+The login, credential and social link routes count in a shared fixed-window store, so a limit holds across replicas. Every counter id starts with `auth_svc_`; go-api's counters are never read or written.
+
+- **Store login.** Give auth-service its own Valkey ACL login, limited to its prefix, and put its URI in the `AUTH_VALKEY_URI` Secret (the chart takes it by `secretKeyRef`, `authService.valkey`): `ACL SETUSER auth-service-ratelimit on >PASSWORD resetkeys ~dho:rl:auth_svc_* resetchannels -@all +hello +select +ping +get +eval +incr +pexpire +client|tracking`.
+- **In-chart Valkey.** `ACL SETUSER` on a running Valkey is lost at the next restart. With the chart's own Valkey, set `valkey.acl.enabled=true` with `valkey.acl.secretName` (and `valkey.acl.secretKey`, default `users.acl`): the chart then starts Valkey with `--aclfile` on that Secret key, so the users survive a restart. The render refuses `enabled` with an empty name or key, and nothing refers to the Secret while `enabled` is false. The file defines every user: the `default` user line (`user default on nopass ~* &* +@all`, unchanged from today, which the probes and the other planes use) and `user auth-service-ratelimit on #<sha256 hex of the password> <the rule above>`, with a hashed password, never the plain one. The Secret is created outside the chart first, holds the service's `AUTH_VALKEY_URI` under its own key, and each pod reads only its own key. Limit: the default user keeps every key, so it can still read and write the `auth_svc_` counters; what bounds who can do that is the network policy, not the ACL, so the render refuses `valkey.acl.enabled` unless `networkPolicy.enabled` is true. That policy admits every pod of the release namespace, so it does not isolate other clients in the same namespace. The Secret file is mounted with mode 0444 (it holds hashes only). Enabling restarts the Valkey Deployment once. Rotation: a changed Secret does not roll any Deployment and Valkey keeps its loaded users; after you change the Secret, either restart the Valkey Deployment or run `ACL LOAD` on it once the mounted file shows the new content (the kubelet refreshes it within about a minute). A changed `AUTH_VALKEY_URI` needs a new auth-service pod, because it is an environment variable.
+- **Limits.** Login: 20 per 15 minutes per client address, 10 per 15 minutes per client address and account. Reset password: 20 per hour per client address, 5 per hour per client address and link secret. Verify 10, resend 3, forgot 3, change password 5 per hour (as go-api); resend and forgot also 20 per hour per client address across all e-mails (go-api has none). Social link and unlink: 10 per hour per client address and signed-in principal. A body that fails validation (or an unlink id that does not parse) costs nothing; verify counts per client address only, never by a value in its query.
+- **Keys.** The client address is the socket peer, or the one forwarded address a peer in `AUTH_SERVICE_TRUSTED_PROXIES` sent. An IPv6 client is keyed by its /64. Accounts, link secrets and principals enter a key as an HMAC-SHA256 digest (128 bits), never as written. The HMAC key is derived by HKDF-SHA256 from `AUTH_JWT_SECRET_KEY` (info `dev-health/auth-service/ratelimit-key/v1`), so there is no Secret of its own; it is used for nothing else and is never logged or exported. **Rotating `AUTH_JWT_SECRET_KEY` changes every digest and so resets every bucket** (a rotation window grants each caller a fresh budget).
+- **Refusal.** Past a limit the route answers `429` with the `rate_limited` envelope, which names no limit and no key. A store error answers `500` (closed) and counts in `dev_health_api_rate_limit_store_errors_total{limit}`; the series carries the limit id only.
 
 ### Session issue route
 
@@ -111,9 +122,13 @@ The run is bounded to five minutes. See
   by an atomic rename rotates the set with no restart; give a new key a new
   file. A kid the process has seen `compromised` never signs again in that
   process. The single key form is a one-key set whose key is `active`.
-  The Helm chart stages one key and renders the single key form; it refuses
-  `AUTH_SIGNING_KEYSET_FILE` in `authService.extraEnv`. Key-set staging in the
-  chart comes with the rotation state machine (CHAOS-10449).
+  The Helm chart renders the single key form by default. With
+  `authService.keySet.enabled` it renders this manifest (kid, state and file
+  only) into a ConfigMap, stages each named key from its own Secret at mode 0400,
+  and passes `--signing-keyset-file`; `authService.keySet` replaces
+  `authService.signingKey`, and `AUTH_SIGNING_KEYSET_FILE` stays refused in
+  `authService.extraEnv`. The pod holds a static copy, so a change to the set is
+  a new rollout, not a live rename.
 - **The key file contract**, checked live on every readiness request: a regular
   file opened with `O_NOFOLLOW` (a symlink is refused), at most 8 KiB, mode with
   **no group or world bit** (`0600` or tighter), exactly one `PRIVATE KEY` PEM

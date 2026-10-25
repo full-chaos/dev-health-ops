@@ -9,9 +9,11 @@ cmd/dho	compose_dsn_class_test.go
 cmd/dho	service_migrate_guard_test.go
 cmd/gqlgen-guard	main.go
 cmd/gqlgen-guard	main_test.go
+cmd/loadtest	main.go
 cmd/registrydump	main.go
 cmd/strip-agent-attribution	main.go
 cmd/strip-agent-attribution	main_test.go
+internal/adminops	users_password_fixtures_test.go
 internal/api/credentials	probes.go
 internal/api/syncadmin	dataset_writer_census_test.go
 internal/api/syncadmin	dataset_writer_lock_census_test.go
@@ -28,6 +30,7 @@ internal/apiservice/billingvenue	billing_webhook_venue_oracle_integration_test.g
 internal/atlassianteams	absence_test.go
 internal/atlassianteams	vendored_documents_test.go
 internal/atlassianteams	vendored_patch_chain_test.go
+internal/audit	drill_pitr_integration_test.go
 internal/auth/authapi	issuer_eddsa_test.go
 internal/auth/authconfig	config_test.go
 internal/auth/authruntime	audit_request_id_scan_test.go
@@ -49,6 +52,7 @@ internal/auth/contracts	endpoint_profile_access_token_validation_test.go
 internal/auth/contracts	endpoint_profile_source_commit_history_test.go
 internal/auth/contracts	endpoint_profile_source_commit_test.go
 internal/auth/contracts	endpoint_profiles_auth_service_test.go
+internal/auth/contracts	endpoint_profiles_go_api_admin_fields_test.go
 internal/auth/contracts	endpoint_profiles_go_api_test.go
 internal/auth/contracts	endpoint_profiles_query_api_test.go
 internal/auth/contracts	endpoint_profiles_registry_reconcile_test.go
@@ -85,8 +89,11 @@ internal/auth/identity/local	corpus_helpers_integration_test.go
 internal/auth/keyrotation	rotation_integration_test.go
 internal/auth/keystore	keystore_test.go
 internal/auth/keystore	open_unix.go
+internal/auth/ratelimitvalkey	acl_test.go
 internal/auth/session	credential_test.go
 internal/auth/writerinventory	scan_test.go
+internal/auth/writerinventory	usersowned_census_shapes_test.go
+internal/auth/writerinventory	usersowned_census_test.go
 internal/bigboycompose	billing_edge_override_test.go
 internal/bigboycompose	dsn_class_test.go
 internal/bigboycompose	restart_policy_test.go
@@ -211,6 +218,7 @@ internal/cigates/routing	deps.go
 internal/cigates/routing	parity_test.go
 internal/cigates/routing	planes_test.go
 internal/cigates/routing	tools_test.go
+internal/cigates/scripts	auth_queue_relevance_test.go
 internal/cigates/scripts	chmigrate_history_frozen_test.go
 internal/cigates/scripts	ci_script_helpers_test.go
 internal/cigates/scripts	e2e_fixture_lib_test.go
@@ -241,11 +249,13 @@ internal/cigates/workflows	ci_script_helpers_test.go
 internal/cigates/workflows	docker_images_fanin_behaviour_test.go
 internal/cigates/workflows	go_workers_compose_proof_test.go
 internal/cigates/workflows	live_e2e_no_python_test.go
+internal/cigates/workflows	providerstub_not_release_test.go
 internal/cigates/workflows	race_json_artifact_test.go
 internal/cigates/workflows	race_pool_routing_test.go
 internal/cigates/workflows	ttl_registry_test.go
 internal/cigates/workflows	workflows_common_test.go
 internal/cigates/workflows	workflows_go_integration_pr_scope_test.go
+internal/cigates/workflows	workflows_go_queue_skip_test.go
 internal/cigates/workflows	workflows_go_resolver_test.go
 internal/cigates/workflows	workflows_path_filters_test.go
 internal/clicredentials	opensites_test.go
@@ -304,6 +314,7 @@ internal/httpguard	origin_census_test.go
 internal/httpguard	redirect_sites_test.go
 internal/identityalias	resolver.go
 internal/ingressplanes	checkedin_test.go
+internal/ingressplanes	compose_bigboy_system_logs_test.go
 internal/ingressplanes	compose_stack_test.go
 internal/ingressplanes	compose_system_logs_test.go
 internal/ingressplanes	contract.go
@@ -382,6 +393,7 @@ internal/platform/credshape	credshape_test.go
 internal/platform/fernet	fernet_test.go
 internal/platform/logging	binaries_enumeration_test.go
 internal/platform/logging	provider_origin_sources_test.go
+internal/platform/otlpmetrics	labelfragment_census_test.go
 internal/platform/secrets	envreads_test.go
 internal/platform/secrets	source.go
 internal/providerfoundation	classify_call_sites_test.go
@@ -429,6 +441,7 @@ internal/queryapi/analytics	nan_class_live_test.go
 internal/queryapi/drilldown	golden_test.go
 internal/queryapi/explain	golden_test.go
 internal/queryapi/flame	golden_test.go
+internal/queryapi/graph	field_action_map_test.go
 internal/queryapi/graph/model	sdl_nullability_gate_test.go
 internal/queryapi/heatmap	identity.go
 internal/queryapi/home	golden_test.go
@@ -456,6 +469,7 @@ internal/queryapi/server	direct_env_reads_test.go
 internal/queryapi/server	drilldown_issues_422_test.go
 internal/queryapi/server	drilldown_prs_422_test.go
 internal/queryapi/server	edge_users_test.go
+internal/queryapi/server	endpoint_profile_action_fields_test.go
 internal/queryapi/server	endpoint_profile_rows_test.go
 internal/queryapi/server	endpoint_profile_same_line_test.go
 internal/queryapi/server	explain_422_test.go
@@ -493,6 +507,7 @@ internal/queryapi/server	reports_write_proof_venue_oracle_integration_test.go
 internal/queryapi/server	rest_error_response_test.go
 internal/queryapi/server	rest_routes_test.go
 internal/queryapi/server	result_row_bound_census_test.go
+internal/queryapi/server	schema_gate_test.go
 internal/queryapi/server	unrestricted_read_options_test.go
 internal/queryapi/server	workunit_explain_route_test.go
 internal/queryapi/server	workunits_route_test.go
@@ -535,11 +550,13 @@ internal/teamattribution	is_primary_census_test.go
 internal/teamcreated	census_test.go
 internal/teamprovider	census_test.go
 internal/teamresolve	golden_test.go
+internal/testsupport/authrows	golden_test.go
 internal/testsupport/chschema	contract_test.go
 internal/testsupport/goldenscan	tree.go
 internal/testsupport/goldenscan	vectors_test.go
 internal/testsupport/moduleroot	moduleroot_test.go
 internal/testsupport/oraclecompare	oraclecompare.go
+internal/testsupport/providerstub	corpus_social_test.go
 internal/testsupport/providerstub	stub.go
 internal/testsupport/providerstub/cmd/providerstub	main.go
 internal/testsupport/providerstub/cmd/providerstub	main_test.go
@@ -569,6 +586,7 @@ internal/workersctl	compact_ownership_intervals_integration_test.go
 internal/workersctl	main_test.go
 internal/workersctl	operator_authority_inventory_test.go
 internal/workersctl	run_marker_open_test.go
+internal/workerservice	clickhouse_schema_gate_test.go
 internal/workerservice	daily_native_family_registration_test.go
 internal/workerservice	daily_no_repository_partition_integration_test.go
 internal/workerservice	daily_test.go

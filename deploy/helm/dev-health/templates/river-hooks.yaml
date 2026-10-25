@@ -425,6 +425,18 @@ spec:
               value: {{ .Values.config.RIVER_QUEUE_DATABASE_ROLE | quote }}
             - name: RIVER_COORDINATOR_DATABASE_ROLE
               value: {{ .Values.config.RIVER_COORDINATOR_DATABASE_ROLE | quote }}
+            {{- /* The query-api login (queryApi.extraEnv), so this step provisions its grants. */}}
+            {{- range .Values.queryApi.extraEnv }}
+            {{- if eq .name "QUERY_API_DATABASE_ROLE" }}
+            - name: QUERY_API_DATABASE_ROLE
+              value: {{ .value | quote }}
+            {{- end }}
+            {{- end }}
+            {{- if .Values.authService.enabled }}
+            {{- /* The auth schema of the query-api session read (AUTH_PROXY_SESSIONS). */}}
+            - name: AUTH_DATABASE_SCHEMA
+              value: {{ include "dev-health.authDatabaseSchema" . | quote }}
+            {{- end }}
             {{- if .Values.goApi.authProxy.sessions }}
             {{- /* go-api's AUTH_PROXY_SESSIONS: the api role's
             refresh_tokens grants follow it (postgres.APIPosture). */}}

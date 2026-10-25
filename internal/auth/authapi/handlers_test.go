@@ -62,9 +62,11 @@ type fakeSessions struct {
 	created         []createdSession
 	createErr       error
 	// ExchangeLegacy.
-	legacy       []session.LegacyRefresh
-	legacyResult session.Result
-	legacyErr    error
+	legacy          []session.LegacyRefresh
+	revokedLegacy   []session.LegacyRefresh
+	revokeLegacyErr error
+	legacyResult    session.Result
+	legacyErr       error
 }
 
 // createdSession is one CreateAudited call.
@@ -104,6 +106,13 @@ func (f *fakeSessions) ExchangeLegacy(_ context.Context, legacy session.LegacyRe
 	defer f.mu.Unlock()
 	f.legacy = append(f.legacy, legacy)
 	return f.legacyResult, f.legacyErr
+}
+
+func (f *fakeSessions) RevokeLegacy(_ context.Context, legacy session.LegacyRefresh, actor session.Actor) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.revokedLegacy, f.actors = append(f.revokedLegacy, legacy), append(f.actors, actor)
+	return f.revokeLegacyErr == nil, f.revokeLegacyErr
 }
 
 func (f *fakeSessions) Exchange(context.Context, contracts.SecretString) (session.Result, error) {

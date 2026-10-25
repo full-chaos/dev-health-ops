@@ -73,11 +73,16 @@ func (s textSource) EachMetricsFragment(skip map[string]bool, fn func(string, []
 // returns what the collector received.
 func push(t *testing.T, source FragmentSource, skip map[string]bool) ([]*metricpb.ResourceMetrics, *Stats) {
 	t.Helper()
+	return pushWithPolicy(t, source, skip, nil)
+}
+
+func pushWithPolicy(t *testing.T, source FragmentSource, skip map[string]bool, policy *LabelPolicy) ([]*metricpb.ResourceMetrics, *Stats) {
+	t.Helper()
 	collector, addr := startCollector(t)
 	pipeline, err := NewPipeline(context.Background(), Options{
 		Enabled: true, Endpoint: addr, Interval: time.Hour,
 		ServiceName: "dev-health-go-test", Environment: "test", InstanceID: "pod-1",
-	}, source, skip, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	}, source, skip, policy, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("NewPipeline: %v", err)
 	}

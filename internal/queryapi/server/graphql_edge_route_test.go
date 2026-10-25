@@ -729,23 +729,29 @@ func TestGraphQLEdgeAnswersAStoreItCannotReadAsTheUnhandled500(t *testing.T) {
 // reads it (TestGraphQLEdgeReadsTheImpersonationSessionOnce).
 func TestGraphQLEdgeAuthenticatorReportsAStoreItCannotReadAsUnavailable(t *testing.T) {
 	member := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), role: "admin", tokenVersion: 5})
-	for name, store := range map[string]*fakeEdgeStore{
-		"user state": {errUserState: policy.ErrUnavailable},
-		"membership": {states: map[uuid.UUID]policy.UserState{ecUser: {IsActive: true, TokenVersion: 5}}, found: map[uuid.UUID]bool{ecUser: true}, errIsMember: errors.New("down")},
+	for name, tc := range map[string]struct {
+		store *fakeEdgeStore
+		// want is the pipeline's outcome; -1 when the scope's Principal step
+		// already read the failing row and Impersonation refused (fail closed).
+		want edgeOutcome
+	}{
+		"user state": {store: &fakeEdgeStore{errUserState: policy.ErrUnavailable}, want: -1},
+		"membership": {store: &fakeEdgeStore{states: map[uuid.UUID]policy.UserState{ecUser: {IsActive: true, TokenVersion: 5}}, found: map[uuid.UUID]bool{ecUser: true}, errIsMember: errors.New("down")}, want: edgeUnavailable},
 	} {
-		auth := ecEdgeAuth(t, store)
+		auth := ecEdgeAuth(t, tc.store)
 		var outcome edgeOutcome = -1
 		recorder := httptest.NewRecorder()
 		answered := false
-		decided := auth.ReadOnce(policy.NewScope(auth, nil).Impersonation(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		scope := policy.NewScope(auth, nil)
+		decided := auth.ReadOnce(scope.Principal(scope.Impersonation(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			_, outcome = authenticateEdgeTokenOnly(r, auth)
 			_, answered = authenticateGraphQLEdge(w, r)
-		})))
+		}))))
 		request := httptest.NewRequest(http.MethodPost, "/graphql", nil)
 		request.Header.Set("Authorization", "Bearer "+member)
 		decided.ServeHTTP(recorder, request)
-		if outcome != edgeUnavailable {
-			t.Errorf("%s: outcome %d, want unavailable", name, outcome)
+		if outcome != tc.want {
+			t.Errorf("%s: outcome %d, want %d", name, outcome, tc.want)
 		}
 		if answered || recorder.Code != http.StatusInternalServerError {
 			t.Errorf("%s: answered %d, want 500", name, recorder.Code)
@@ -870,8 +876,8 @@ func TestGraphQLEdgeRefusesARequestNoMiddlewareDecided(t *testing.T) {
 		handler http.Handler
 		reason  string
 	}{
-		"no org scope":              {auth.ReadOnce(scope.Impersonation(pipeline)), "reason=edge_org_undecided"},
-		"no impersonation decision": {auth.ReadOnce(scope.OrgScope(pipeline)), "reason=edge_impersonation_undecided"},
+		"no org scope":              {auth.ReadOnce(scope.Principal(scope.Impersonation(pipeline))), "reason=edge_org_undecided"},
+		"no impersonation decision": {auth.ReadOnce(scope.Principal(scope.OrgScope(pipeline))), "reason=edge_impersonation_undecided"},
 	} {
 		logged.Reset()
 		ran = 0

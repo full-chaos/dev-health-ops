@@ -33,7 +33,7 @@ func TestQueryAPIReaderMustBeTheRoleQueryAPILogsInAs(t *testing.T) {
 	if _, out, err := renderAuth(t, queryAPIRoleArgs(reader, roleEnv("other_role"))...); err == nil || !strings.Contains(out, "QUERY_API_DATABASE_ROLE") {
 		t.Errorf("a mismatched role rendered: err=%v\n%.500s", err, out)
 	}
-	flip := []string{"--set", "authService.phase=2", "--set", "authService.sessionKeys.successor.secretName=auth-session"}
+	flip := append([]string{"--set", "authService.phase=2", "--set", "authService.sessionKeys.successor.secretName=auth-session"}, append(authValkey, authTrusted...)...)
 	if _, out, err := renderAuth(t, queryAPIRoleArgs(reader, flip, roleEnv("devhealth_query_api"))...); err != nil {
 		t.Errorf("matching role refused: %v\n%.500s", err, out)
 	}
@@ -55,8 +55,8 @@ func TestQueryAPIReaderIsSetOnlyWithTheSessionsFlag(t *testing.T) {
 
 func TestQueryAPIReadsTheSessionsFlagForItsPostureCheck(t *testing.T) {
 	on := queryAPIRoleArgs(
-		[]string{"--set", "authService.migrate.sessionReaders.queryApi=devhealth_query_api", "--set", "authService.phase=2",
-			"--set", "authService.sessionKeys.successor.secretName=auth-session"},
+		append([]string{"--set", "authService.migrate.sessionReaders.queryApi=devhealth_query_api", "--set", "authService.phase=2",
+			"--set", "authService.sessionKeys.successor.secretName=auth-session"}, append(append([]string{}, authValkey...), authTrusted...)...),
 		roleEnv("devhealth_query_api"))
 	docs, out, err := renderAuth(t, on...)
 	if err != nil {

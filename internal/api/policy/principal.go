@@ -32,6 +32,10 @@ type User struct {
 	FullName       *string
 	ImpersonatedBy *string
 	TokenVersion   int
+	// superuserClaim is the verified legacy token's is_superuser claim, by
+	// Python truthiness; accessToken marks a user access token.
+	superuserClaim bool
+	accessToken    bool
 }
 
 // IsAdmin is AuthenticatedUser.is_admin.
@@ -211,6 +215,7 @@ func userFromClaims(claims jwt.MapClaims) (*User, error) {
 	user.Username = optionalString(claims, "username")
 	user.FullName = optionalString(claims, "full_name")
 	user.ImpersonatedBy = optionalString(claims, "impersonating_user_id")
+	user.superuserClaim = pyTruthy(claims["is_superuser"])
 	return user, nil
 }
 

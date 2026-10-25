@@ -2,11 +2,8 @@ package policy
 
 import (
 	"context"
-	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"net/http"
-	"strings"
 )
 
 // RoutedValidator validates a bearer token against the request's
@@ -112,37 +109,14 @@ func (a *Authenticator) authenticateRouted(ctx context.Context, token string) (*
 // api raised on (a 500 there).
 func IsClaimTypeError(err error) bool { return errors.Is(err, errClaimType) }
 
-// mayImpersonate decides whether Impersonation runs its full check. A user
-// access token carries no is_superuser claim, so on a routed Authenticator an
-// EdDSA bearer always runs it.
+// mayImpersonate decides whether Impersonation runs its full check, from the
+// Principal decision alone: a user access token (it carries no is_superuser
+// claim), or a legacy token whose verified is_superuser claim is truthy. With
+// no decision, or a failed lookup, the check runs and refuses (fail closed).
 func (s *Scope) mayImpersonate(r *http.Request) bool {
-	if maybeSuperuser(r) {
+	decision, ok := decisionFrom(r.Context())
+	if !ok || decision.err != nil {
 		return true
 	}
-	return s.auth != nil && s.auth.routed != nil && bearerAlg(r) == "EdDSA"
-}
-
-// bearerAlg is the alg of the first Authorization header's bearer token,
-// unverified; it only decides whether a check runs.
-func bearerAlg(r *http.Request) string {
-	values := r.Header.Values("Authorization")
-	if len(values) == 0 {
-		return ""
-	}
-	token, ok := BearerToken(values[0])
-	if !ok {
-		return ""
-	}
-	head, _, _ := strings.Cut(token, ".")
-	raw, err := base64.RawURLEncoding.DecodeString(head)
-	if err != nil {
-		return ""
-	}
-	var header struct {
-		Alg string `json:"alg"`
-	}
-	if json.Unmarshal(raw, &header) != nil {
-		return ""
-	}
-	return header.Alg
+	return decision.user != nil && (decision.user.accessToken || decision.user.superuserClaim)
 }

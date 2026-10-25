@@ -72,19 +72,20 @@ func TestGoAPIAndQueryAPIReadSessionsInTheAuthSchema(t *testing.T) {
 	}
 }
 
-var sessionsOn = []string{
+var sessionsOn = append([]string{
 	"--set", "goApi.enabled=true",
 	"--set", "authService.phase=2",
-}
+}, authTrusted...)
 
 var sessionReaders = []string{
 	"--set", "authService.migrate.sessionReaders.goApi=devhealth_api",
 	"--set", "authService.migrate.sessionReaders.queryApi=devhealth_query",
 }
 
-var sessionSuccessor = []string{
+// The session routes count the compatibility refresh in the shared store, so the successor key comes with the store login.
+var sessionSuccessor = append([]string{
 	"--set", "authService.sessionKeys.successor.secretName=auth-session",
-}
+}, authValkey...)
 
 func sessionsArgs(parts ...[]string) []string {
 	out := append([]string{}, authBase...)

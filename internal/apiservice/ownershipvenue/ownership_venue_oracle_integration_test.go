@@ -514,7 +514,7 @@ func startGoServer(t *testing.T, ctx context.Context, venue *venueoracle.Venue, 
 	}
 	routes := apiservice.Routes(deps, logger)
 	scope := policy.NewScope(auth, logger)
-	server, err := apiservice.NewServer(cfg, logger, routes, scope.OrgScope, scope.Impersonation)
+	server, err := apiservice.NewServer(cfg, logger, routes, scope.Layers()...)
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
 	}

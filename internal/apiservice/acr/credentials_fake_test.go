@@ -24,6 +24,7 @@ type fakeCredentials struct {
 	markErr     error
 	auditErr    error
 	audits      []auditRow
+	principals  []string
 	used        []string
 	findCalls   int
 	lastUsedAts []time.Time
@@ -57,13 +58,14 @@ func (f *fakeCredentials) MarkUsed(_ context.Context, id string, at time.Time) e
 	return nil
 }
 
-func (f *fakeCredentials) Audit(_ context.Context, id, orgID, outcome string) error {
+func (f *fakeCredentials) Audit(_ context.Context, id, principalID, orgID, outcome string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.auditErr != nil {
 		return f.auditErr
 	}
 	f.audits = append(f.audits, auditRow{id, orgID, outcome})
+	f.principals = append(f.principals, principalID)
 	return nil
 }
 

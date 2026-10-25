@@ -8,6 +8,7 @@ cmd/loadtest	main.go	cmd/loadtest
 cmd/registrydump	main.go	cmd/registrydump
 cmd/strip-agent-attribution	main.go	cmd/strip-agent-attribution
 internal/api/credentials	probes.go	cmd/dho
+internal/api/credentials	probes.go	deploy/helm/dev-health
 internal/api/credentials	probes.go	internal/adminops
 internal/api/credentials	probes.go	internal/api/credentials
 internal/api/credentials	probes.go	internal/api/externalingest
@@ -35,8 +36,10 @@ internal/api/credentials	probes.go	internal/apiservice/metricsvenue
 internal/api/credentials	probes.go	internal/apiservice/ownershipvenue
 internal/api/credentials	probes.go	internal/apiservice/ssovenue
 internal/api/credentials	probes.go	internal/auth/authapi
+internal/api/credentials	probes.go	internal/auth/authruntime
 internal/api/credentials	probes.go	internal/billingcli
 internal/apiservice	githubapp_config.go	cmd/dho
+internal/apiservice	githubapp_config.go	deploy/helm/dev-health
 internal/apiservice	githubapp_config.go	internal/api/githubapp
 internal/apiservice	githubapp_config.go	internal/api/integrationsadmin/backfillvenue
 internal/apiservice	githubapp_config.go	internal/api/integrationsadmin/discoveryvenue
@@ -58,9 +61,11 @@ internal/apiservice	githubapp_config.go	internal/apiservice/metricsvenue
 internal/apiservice	githubapp_config.go	internal/apiservice/ownershipvenue
 internal/apiservice	githubapp_config.go	internal/apiservice/ssovenue
 internal/apiservice	githubapp_config.go	internal/auth/authapi
+internal/apiservice	githubapp_config.go	internal/auth/authruntime
 internal/auth/contracts	contracts.go	cmd/auth-migrate
 internal/auth/contracts	contracts.go	cmd/auth-service
 internal/auth/contracts	contracts.go	cmd/dho
+internal/auth/contracts	contracts.go	deploy/helm/dev-health
 internal/auth/contracts	contracts.go	internal/api/billing
 internal/auth/contracts	contracts.go	internal/api/externalingest
 internal/auth/contracts	contracts.go	internal/api/legacyingest
@@ -301,6 +306,7 @@ internal/jobcontract	registry.go	internal/apiservice/metricsvenue
 internal/jobcontract	registry.go	internal/apiservice/ownershipvenue
 internal/jobcontract	registry.go	internal/apiservice/ssovenue
 internal/jobcontract	registry.go	internal/auth/authapi
+internal/jobcontract	registry.go	internal/auth/authruntime
 internal/jobcontract	registry.go	internal/cigates/queuecreds
 internal/jobcontract	registry.go	internal/clicredentials
 internal/jobcontract	registry.go	internal/contractcheck
@@ -472,6 +478,7 @@ internal/providerfoundation	clients.go	internal/apiservice/metricsvenue
 internal/providerfoundation	clients.go	internal/apiservice/ownershipvenue
 internal/providerfoundation	clients.go	internal/apiservice/ssovenue
 internal/providerfoundation	clients.go	internal/auth/authapi
+internal/providerfoundation	clients.go	internal/auth/authruntime
 internal/providerfoundation	clients.go	internal/billingcli
 internal/providerfoundation	clients.go	internal/fixturescli
 internal/providerfoundation	clients.go	internal/jobs/providerunit

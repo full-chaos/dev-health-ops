@@ -35,6 +35,7 @@ func phaseArgs(phase int, extra ...string) []string {
 	if phase >= 2 {
 		out = append(out, "--set", "authService.migrate.sessionReaders.queryApi=devhealth_query")
 		out = append(out, sessionSuccessor...)
+		out = append(out, authTrusted...)
 		out = append(out, "--set", "authService.valkey.secretName=auth-valkey",
 			"--set-json", `authService.networkPolicy.egress.valkey.to=[{"podSelector":{"matchLabels":{"app":"auth-valkey"}}}]`)
 	}

@@ -458,14 +458,11 @@ func Load(spec Spec) (Config, error) {
 }
 
 // LimitedRoutesMounted reports whether a route that counts in the shared
-// rate-limit store is mounted: login, the credential routes (session secrets
-// and AUTH_USERS_OWNED) or the social link routes. The JWKS, discovery,
-// session and SSO routes carry no such limit.
+// rate-limit store is mounted: every session route set (it carries the
+// compatibility refresh), and with it login, the credential routes and the
+// social link routes. The JWKS and discovery routes carry no such limit.
 func (c Config) LimitedRoutesMounted() bool {
-	if !c.Session.Enabled {
-		return false
-	}
-	return c.Session.LoginEnabled || c.UsersOwned || c.Session.SocialLinkRoutes
+	return c.Session.Enabled
 }
 
 // valkeySetting resolves AUTH_VALKEY_URI. A syntactically bad value is
@@ -480,7 +477,7 @@ func valkeySetting(lookup secrets.LookupEnv, required bool) (secrets.Value, erro
 	if !set {
 		if required {
 			return secrets.Value{}, fmt.Errorf(
-				"%s or %s_FILE is required while the login, credential or social link routes are mounted: "+
+				"%s or %s_FILE is required while the session routes are mounted: "+
 					"an in-process limiter is per replica and so no limit", EnvValkeyURI, EnvValkeyURI)
 		}
 		return secrets.Value{}, nil

@@ -47,19 +47,7 @@ type FlowOutcome struct {
 	PrincipalID uuid.UUID
 	Violations  []string
 	Issued      *session.Issued
-	// RevokeErr is set when the password changed but ending the older
-	// sessions failed after retries (errors.Is ErrSessionsNotRevoked). The
-	// answer is still success: the stamp on the password keeps older sessions
-	// from verifying.
-	RevokeErr error
 }
-
-// ErrSessionsNotRevoked reports that RevokeAll failed every attempt after a
-// password change.
-var ErrSessionsNotRevoked = errors.New("local: sessions were not revoked")
-
-// revokeAttempts is how often RevokeAll runs before it is given up.
-const revokeAttempts = 3
 
 // RegisterRequest is one registration. Email is not yet normalized.
 type RegisterRequest struct {
@@ -283,7 +271,14 @@ func (f *Flows) reissue(ctx context.Context, email string, purpose Purpose, ttl 
 	return f.issueAndSend(ctx, principal, purpose, ttl, normalized, nil)
 }
 
-// Reset consumes a reset link, sets the password and revokes every session.
+// linkDigest is the stored form of a one-time link secret: the SHA-256 of 32
+// random bytes, not of a password.
+func linkDigest(secret string) [32]byte { return sha256.Sum256([]byte(secret)) }
+
+// Reset consumes a reset link, sets the password and ends every credential.
+// The link is consumed in the password transaction, after the user lock: link,
+// password and ends commit together, a failed write leaves the link usable,
+// and a reset whose link another write used first changes nothing.
 func (f *Flows) Reset(ctx context.Context, secret, newPassword string) (FlowOutcome, error) {
 	if err := f.gate(); err != nil {
 		return FlowOutcome{}, err
@@ -293,9 +288,10 @@ func (f *Flows) Reset(ctx context.Context, secret, newPassword string) (FlowOutc
 	if v := passwordRefusal(newPassword); v != nil {
 		return FlowOutcome{Kind: FlowPolicy, Violations: v}, nil
 	}
-	id, ok, err := f.links.Redeem(ctx, RedeemRequest{Purpose: PurposePasswordReset, TokenHash: sha256.Sum256([]byte(secret))})
+	link := RedeemRequest{Purpose: PurposePasswordReset, TokenHash: linkDigest(secret)}
+	id, ok, err := f.accounts.PeekResetLink(ctx, link.TokenHash)
 	if err != nil {
-		return FlowOutcome{}, fmt.Errorf("local: redeeming a reset link: %w", err)
+		return FlowOutcome{}, fmt.Errorf("local: reading a reset link: %w", err)
 	}
 	if !ok {
 		return FlowOutcome{Kind: FlowInvalidToken}, nil
@@ -306,10 +302,13 @@ func (f *Flows) Reset(ctx context.Context, secret, newPassword string) (FlowOutc
 		if err != nil {
 			return fmt.Errorf("local: hashing the password: %w", err)
 		}
-		if err := f.accounts.SetPasswordHash(ctx, id, hash); err != nil {
+		if _, err := f.accounts.SetPasswordEndingSessions(ctx, PasswordEnd{ID: id, Hash: hash, ResetLink: &link.TokenHash}); err != nil {
+			if errors.Is(err, ErrResetLinkUnusable) {
+				out = FlowOutcome{Kind: FlowInvalidToken}
+				return nil
+			}
 			return fmt.Errorf("local: setting the password: %w", err)
 		}
-		out.RevokeErr = f.revokeAll(ctx, id, session.Actor{PrincipalID: &id})
 		return nil
 	})
 	if err != nil {
@@ -318,23 +317,8 @@ func (f *Flows) Reset(ctx context.Context, secret, newPassword string) (FlowOutc
 	return out, nil
 }
 
-// revokeAll ends every session of the principal after a password change. It
-// is cleanup: the password stamp already voids older sessions, so a failure
-// is retried, logged by class, and returned as ErrSessionsNotRevoked for the
-// caller to carry, never as a failed flow.
-func (f *Flows) revokeAll(ctx context.Context, id uuid.UUID, actor session.Actor) error {
-	var err error
-	for attempt := 0; attempt < revokeAttempts; attempt++ {
-		if _, err = f.sessions.RevokeAll(ctx, id, actor); err == nil {
-			return nil
-		}
-	}
-	slog.WarnContext(ctx, "local: sessions not revoked after a password change", logging.ErrorAttr(err))
-	return fmt.Errorf("%w: %w", ErrSessionsNotRevoked, err)
-}
-
-// Change sets a signed-in user's password, revokes every session and issues
-// the caller a new one.
+// Change sets a signed-in user's password, ends every credential and issues
+// the caller a new session, all in one transaction.
 func (f *Flows) Change(ctx context.Context, req ChangeRequest) (FlowOutcome, error) {
 	if err := f.gate(); err != nil {
 		return FlowOutcome{}, err
@@ -379,18 +363,10 @@ func (f *Flows) changeLocked(ctx context.Context, req ChangeRequest) (FlowOutcom
 	if err != nil {
 		return FlowOutcome{}, fmt.Errorf("local: hashing the password: %w", err)
 	}
-	if err := f.accounts.SetPasswordHash(ctx, user.ID, hash); err != nil {
+	res, err := f.accounts.SetPasswordEndingSessions(ctx, PasswordEnd{ID: user.ID, Hash: hash,
+		NewSession: &NewSession{OrganizationID: req.OrganizationID, AMR: []string{"pwd"}}})
+	if err != nil {
 		return FlowOutcome{}, fmt.Errorf("local: setting the password: %w", err)
 	}
-	actor := req.Actor
-	if actor.PrincipalID == nil {
-		id := user.ID
-		actor.PrincipalID = &id
-	}
-	revokeErr := f.revokeAll(ctx, user.ID, actor)
-	issued, err := f.sessions.Create(ctx, user.ID, req.OrganizationID, []string{"pwd"})
-	if err != nil {
-		return FlowOutcome{}, fmt.Errorf("local: creating the session: %w", err)
-	}
-	return FlowOutcome{Kind: FlowOK, PrincipalID: user.ID, Issued: &issued, RevokeErr: revokeErr}, nil
+	return FlowOutcome{Kind: FlowOK, PrincipalID: user.ID, Issued: res.Issued}, nil
 }

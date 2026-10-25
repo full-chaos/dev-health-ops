@@ -316,6 +316,13 @@ func (c *countingSigner) Sign(ctx context.Context, typ string, payload []byte) (
 	return c.inner.Sign(ctx, typ, payload)
 }
 
+func (c *countingSigner) Check(ctx context.Context) error {
+	if c.err != nil {
+		return c.err
+	}
+	return c.inner.Check(ctx)
+}
+
 // NEVER BOTH: one issuer builds one class. The EdDSA issuer holds no HS256
 // signer and signs through its key set only; the HS256 issuer holds no
 // EdDSA minter and never calls a key-set signer.

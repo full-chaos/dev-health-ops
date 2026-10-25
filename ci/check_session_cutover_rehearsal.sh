@@ -150,7 +150,10 @@ if [ -n "${PRESTOP}" ]; then
   case "${PRESTOP}" in *[!0-9]*) die "REHEARSAL_PRESTOP must be whole seconds, got ${PRESTOP}" ;; esac
   HELM_BASE+=(--set "goApi.drain.preStopSeconds=${PRESTOP}")
 fi
-HELM_SESSION=(-f "${WORK}/secrets-session.yaml" -f "${WORK}/successor.yaml")
+# The session routes count in the shared store and the proxied flip trusts the forwarded address from the go-api pods,
+# so the layer names the store Secret, the pod network (kind's default pod subnet) and the auth-service policy peers.
+printf 'authService:\n  valkey:\n    secretName: auth-ratelimit\n  trustedProxies: ["10.244.0.0/16"]\n  networkPolicy:\n    enabled: true\n    egress:\n      database:\n        to: [{podSelector: {matchLabels: {app.kubernetes.io/name: dev-health, app.kubernetes.io/instance: %s, app.kubernetes.io/component: postgresql}}}]\n      valkey:\n        to: [{podSelector: {matchLabels: {app.kubernetes.io/name: dev-health, app.kubernetes.io/instance: %s, app.kubernetes.io/component: valkey}}}]\n' "${RELEASE}" "${RELEASE}" >"${WORK}/authprereq.yaml"
+HELM_SESSION=(-f "${WORK}/secrets-session.yaml" -f "${WORK}/successor.yaml" -f "${WORK}/authprereq.yaml")
 
 # --- rev 1: objects only, no hooks, so PostgreSQL exists before the hooks need it -------------------
 printf 'step 2: helm install --no-hooks (the databases), then the roles and Secrets the chart only references\n'
@@ -169,6 +172,7 @@ printf 'host=%s-postgresql port=5432 user=devhealth password=devhealth dbname=de
 printf 'devhealth' | K create secret generic pg-probe --from-file=password=/dev/stdin
 openssl genpkey -algorithm ed25519 -out "${WORK}/signing-key.pem"
 K create secret generic auth-key --from-file=signing-key.pem="${WORK}/signing-key.pem"
+printf 'redis://%s-valkey:6379/1' "${FULL}" | K create secret generic auth-ratelimit --from-file=AUTH_VALKEY_URI=/dev/stdin
 
 # --- helpers: measurement ---------------------------------------------------------------------------
 priv() { # insert|update -> t or f for the api role on refresh_tokens
@@ -355,7 +359,7 @@ printf 'step 5: guards: phase 2 (sessions) is refused while a setting is unset\n
 guard() { # <must-name> <helm --set...>
   local must="$1" out
   shift
-  if out="$(helm template "${RELEASE}" "${CHART}" --namespace "${NS}" -f "${SCRIPT_DIR}/session_rehearsal/rehearsal-release.yaml" -f "${WORK}/secrets-base.yaml" "$@" 2>&1)"; then
+  if out="$(helm template "${RELEASE}" "${CHART}" --namespace "${NS}" -f "${SCRIPT_DIR}/session_rehearsal/rehearsal-release.yaml" -f "${WORK}/secrets-base.yaml" -f "${WORK}/authprereq.yaml" "$@" 2>&1)"; then
     die "guard: the render passed; it must name ${must}"
   fi
   grep -q "${must}" <<<"${out}" || die "guard: the refusal does not name ${must}: ${out:0:400}"

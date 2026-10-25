@@ -104,6 +104,10 @@ func (h handlers) refresh(w http.ResponseWriter, r *http.Request) {
 		h.rec.refuse(w, r, opRefresh, unauthorized(reasonMalformed), nil)
 		return
 	}
+	if err := h.Issuer.Preflight(ctx); err != nil {
+		h.rec.refuse(w, r, opRefresh, unavailable(reasonDependency), err)
+		return
+	}
 	result, err := h.Sessions.Exchange(ctx, credential)
 	if err != nil || !result.Reason.Success() {
 		h.rec.refuse(w, r, opRefresh, exchangeRefusal(result.Reason), err)

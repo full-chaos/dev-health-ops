@@ -232,9 +232,12 @@ func (p *Proxy) serve(client net.Conn, mode Mode) {
 	defer p.wg.Done()
 	defer p.untrack(client, true)
 	defer client.Close()
+	var first []byte
 	if mode == Blackhole {
-		p.discard(client)
-		return
+		var ok bool
+		if first, ok = p.discard(client); !ok {
+			return
+		}
 	}
 	up, err := net.DialTimeout("tcp", p.cfg.Upstream, dialTimeout)
 	if err != nil {
@@ -246,6 +249,12 @@ func (p *Proxy) serve(client net.Conn, mode Mode) {
 	}
 	defer p.untrack(up, false)
 	defer up.Close()
+	if len(first) > 0 {
+		if !p.forward(up, first, p.Current()) {
+			return
+		}
+		p.bytesUp.Add(int64(len(first)))
+	}
 	done := make(chan struct{}, 2)
 	go func() { p.pipe(up, client, &p.bytesUp); done <- struct{}{} }()
 	go func() { p.pipe(client, up, &p.bytesDown); done <- struct{}{} }()
@@ -255,11 +264,24 @@ func (p *Proxy) serve(client net.Conn, mode Mode) {
 	<-done
 }
 
-func (p *Proxy) discard(c net.Conn) {
+// discard reads and drops what a blackholed connection sends. When the mode
+// leaves blackhole it returns the first chunk read after that, to be forwarded;
+// it returns false when the connection ends or the mode is cut or drop.
+func (p *Proxy) discard(c net.Conn) ([]byte, bool) {
 	buf := make([]byte, chunkSize)
 	for {
-		if _, err := c.Read(buf); err != nil {
-			return
+		n, err := c.Read(buf)
+		if n > 0 {
+			switch p.Current().Mode {
+			case Blackhole:
+			case Cut, Drop:
+				return nil, false
+			default:
+				return append([]byte(nil), buf[:n]...), true
+			}
+		}
+		if err != nil {
+			return nil, false
 		}
 	}
 }

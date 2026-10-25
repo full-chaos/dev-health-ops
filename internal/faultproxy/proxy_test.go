@@ -116,10 +116,14 @@ func TestDelayAddsLatency(t *testing.T) {
 func TestDropResetsNewConns(t *testing.T) {
 	p := startProxy(t, Config{MaxConns: 8})
 	p.Set(Setting{Mode: Drop})
-	c := dial(t, p)
-	_ = c.SetReadDeadline(time.Now().Add(time.Second))
-	if _, err := c.Read(make([]byte, 1)); err == nil || isTimeout(err) {
-		t.Fatalf("read after drop: %v", err)
+	c, err := net.Dial("tcp", p.Addr().String())
+	if err == nil {
+		defer c.Close()
+		_ = c.SetReadDeadline(time.Now().Add(time.Second))
+		_, err = c.Read(make([]byte, 1))
+	}
+	if err == nil || isTimeout(err) {
+		t.Fatalf("a dropped conn was not reset: %v", err)
 	}
 	if p.Stats().Refused < 1 {
 		t.Fatalf("%+v", p.Stats())
@@ -369,6 +373,10 @@ func TestStatsHaveNoPayload(t *testing.T) {
 	if strings.Contains(string(st)+ev.String(), secret) {
 		t.Fatal("payload in stats or events")
 	}
+	deadline := time.Now().Add(2 * time.Second)
+	for (p.Stats().BytesUp != int64(len(secret)) || p.Stats().BytesDown != int64(len(secret))) && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
 	if p.Stats().BytesUp != int64(len(secret)) || p.Stats().BytesDown != int64(len(secret)) {
 		t.Fatalf("%+v", p.Stats())
 	}
@@ -407,5 +415,34 @@ func TestStopEndsEveryGoroutine(t *testing.T) {
 	if n := runtime.NumGoroutine(); n > base {
 		buf := make([]byte, 1<<16)
 		t.Fatalf("goroutines %d > baseline %d\n%s", n, base, buf[:runtime.Stack(buf, true)])
+	}
+}
+
+func TestBlackholedConnForwardsAgainAfterPass(t *testing.T) {
+	p := startProxy(t, Config{MaxConns: 8})
+	p.Set(Setting{Mode: Blackhole})
+	c := dial(t, p)
+	if _, err := roundTrip(c, "lost", 300*time.Millisecond); !isTimeout(err) {
+		t.Fatalf("blackholed conn answered: %v", err)
+	}
+	p.Set(Setting{Mode: Pass})
+	got, err := roundTrip(c, "back", 2*time.Second)
+	if err != nil || got != "back" {
+		t.Fatalf("conn accepted during the blackhole never recovered: %q %v", got, err)
+	}
+	if upstreamBytes.Load() != 4 {
+		t.Fatalf("upstream saw %d bytes, want only the post-recovery 4", upstreamBytes.Load())
+	}
+}
+
+func TestBlackholedConnClosesOnCutWithoutData(t *testing.T) {
+	p := startProxy(t, Config{MaxConns: 8})
+	p.Set(Setting{Mode: Blackhole})
+	c := dial(t, p)
+	time.Sleep(50 * time.Millisecond)
+	p.Set(Setting{Mode: Cut})
+	_ = c.SetReadDeadline(time.Now().Add(time.Second))
+	if _, err := c.Read(make([]byte, 1)); err == nil || isTimeout(err) {
+		t.Fatalf("blackholed conn survived a cut: %v", err)
 	}
 }

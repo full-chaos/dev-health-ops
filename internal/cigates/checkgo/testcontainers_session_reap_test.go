@@ -4,7 +4,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -73,7 +75,7 @@ func TestReapTestcontainersSessionRemovesOnlyThatSessionByID(t *testing.T) {
 
 // helperHarness extracts tc_trap and run_integration_go_test from ci/check_go.sh and runs them against a stand-in
 // `go` that records its start and a stand-in reaper that records the session id it is given.
-func helperHarness(t *testing.T, sid string, signal bool) (exit int, marker, goStarted bool, reaped string) {
+func helperHarness(t *testing.T, sid string, signal bool) (exit int, marker, goStarted, childAlive bool, reaped string) {
 	t.Helper()
 	text, err := os.ReadFile(scriptPath(t, "ci/check_go.sh"))
 	if err != nil {
@@ -94,7 +96,8 @@ func helperHarness(t *testing.T, sid string, signal bool) (exit int, marker, goS
 	started := filepath.Join(dir, "go-started")
 	reapLog := filepath.Join(dir, "reaped")
 	markerPath := filepath.Join(dir, "marker")
-	fakeGo := "#!/bin/sh\ntouch " + started + "\nexec sleep 30\n"
+	childPID := filepath.Join(dir, "child-pid")
+	fakeGo := "#!/bin/sh\ntouch " + started + "\nsleep 30 &\necho $! > " + childPID + "\nwait\n"
 	if err := os.WriteFile(filepath.Join(bin, "go"), []byte(fakeGo), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +129,15 @@ func helperHarness(t *testing.T, sid string, signal bool) (exit int, marker, goS
 	_, e1 := os.Stat(markerPath)
 	_, e2 := os.Stat(started)
 	raw, _ := os.ReadFile(reapLog)
-	return exit, e1 == nil, e2 == nil, strings.TrimSpace(string(raw))
+	if cp, err := os.ReadFile(childPID); err == nil {
+		if pid, err := strconv.Atoi(strings.TrimSpace(string(cp))); err == nil {
+			childAlive = syscall.Kill(pid, 0) == nil
+			if childAlive {
+				_ = syscall.Kill(pid, syscall.SIGKILL)
+			}
+		}
+	}
+	return exit, e1 == nil, e2 == nil, childAlive, strings.TrimSpace(string(raw))
 }
 
 func TestIntegrationHelperRefusesAnUnsafeSessionIDBeforeGoTestStarts(t *testing.T) {
@@ -137,7 +148,7 @@ func TestIntegrationHelperRefusesAnUnsafeSessionIDBeforeGoTestStarts(t *testing.
 		"short",
 		strings.Repeat("a", 65),
 	} {
-		exit, marker, goStarted, _ := helperHarness(t, sid, true)
+		exit, marker, goStarted, _, _ := helperHarness(t, sid, true)
 		if exit == 0 || marker || goStarted {
 			t.Errorf("sid %q: exit=%d marker=%v goStarted=%v; want a refusal before go test, no marker", sid, exit, marker, goStarted)
 		}
@@ -145,8 +156,8 @@ func TestIntegrationHelperRefusesAnUnsafeSessionIDBeforeGoTestStarts(t *testing.
 }
 
 func TestIntegrationHelperTrapReapsTheSessionOnTERM(t *testing.T) {
-	exit, marker, goStarted, reaped := helperHarness(t, "sess-abcdef12", true)
-	if exit != 143 || marker || !goStarted || reaped != "sess-abcdef12" {
-		t.Errorf("exit=%d marker=%v goStarted=%v reaped=%q; want 143, no marker, go started, reaped sess-abcdef12", exit, marker, goStarted, reaped)
+	exit, marker, goStarted, childAlive, reaped := helperHarness(t, "sess-abcdef12", true)
+	if exit != 143 || marker || !goStarted || childAlive || reaped != "sess-abcdef12" {
+		t.Errorf("exit=%d marker=%v goStarted=%v childAlive=%v reaped=%q; want 143, no marker, go started, the go test's child gone, reaped sess-abcdef12", exit, marker, goStarted, childAlive, reaped)
 	}
 }

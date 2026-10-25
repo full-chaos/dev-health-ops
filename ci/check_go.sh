@@ -110,11 +110,18 @@ fi
 # starts, with the reaper on or off. After the call (pass, fail, INT, TERM) the
 # containers of that session are removed by id (ci/reap-testcontainers-session.sh:
 # label filter only, never a prune). A caller-set TESTCONTAINERS_SESSION_ID wins.
-# A SIGKILL of this script skips the trap; the reaper (when on) or a host sweep
+# The go test runs in its own session (setsid), so its pid is its process-group id and the trap
+# stops the whole group (TERM, then KILL after 10 s) before the reap. A SIGKILL of this script skips the trap; the reaper (when on) or a host sweep
 # by session id covers that case.
 TC_TRAP_PID="" TC_TRAP_SID=""
 tc_trap() {
-  kill -TERM "${TC_TRAP_PID}" 2>/dev/null || true
+  local i
+  kill -TERM -- "-${TC_TRAP_PID}" 2>/dev/null || true
+  for i in $(seq 1 100); do
+    kill -0 -- "-${TC_TRAP_PID}" 2>/dev/null || break
+    sleep 0.1
+  done
+  kill -KILL -- "-${TC_TRAP_PID}" 2>/dev/null || true
   wait "${TC_TRAP_PID}" 2>/dev/null || true
   bash "${SCRIPT_DIR}/reap-testcontainers-session.sh" "${TC_TRAP_SID}" || true
   exit 143
@@ -128,7 +135,7 @@ run_integration_go_test() {
     || die "TESTCONTAINERS_SESSION_ID must match ^[A-Za-z0-9._-]{8,64}\$"
   (
     cd "${ROOT}/${module_dir}"
-    exec "${GO_ENV_OFF[@]}" GOWORK=off TESTCONTAINERS_SESSION_ID="${sid}" ${INTEGRATION_TEST_ENV[@]+"${INTEGRATION_TEST_ENV[@]}"} \
+    exec setsid "${GO_ENV_OFF[@]}" GOWORK=off TESTCONTAINERS_SESSION_ID="${sid}" ${INTEGRATION_TEST_ENV[@]+"${INTEGRATION_TEST_ENV[@]}"} \
       go test -mod=readonly -trimpath -tags=integration -count=1 -timeout=30m "$@"
   ) &
   pid=$!

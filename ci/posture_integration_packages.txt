@@ -1,0 +1,17 @@
+# CHAOS-11439: the integration packages a lane runs locally when a change touches Postgres role, grant, posture or
+# migration inputs (ci/posture_integration.sh). Source: CHAOS-11410 evidence, PR #4966 and #4980 reached the merge queue
+# untested and failed in these packages. One module-relative package per line, sorted. The drift guard is
+# internal/cigates/scripts/posture_integration_test.go.
+# RETIRE this list and the helper when the posture / role migration work settles; review by 2026-12-01.
+internal/api/policy
+internal/joboperator
+internal/jobs/investment
+internal/llmorgsettings
+internal/pgmigrate
+internal/rivermigrate
+internal/rivermigrate/rolese2e
+internal/storage/postgres
+internal/storage/postgres/aclguard
+internal/storage/postgres/authschema
+internal/storage/river
+internal/storage/roleprovision

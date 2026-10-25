@@ -86,7 +86,7 @@ func TestPostureIntegrationListsTheTwelvePackagesOnATrigger(t *testing.T) {
 }
 
 func TestPostureIntegrationListsNothingForUnrelatedPaths(t *testing.T) {
-	for _, p := range []string{"internal/foo/bar.go", "docs/a.md", "internal/pgmigrate2/x.go", "internal/storage/postgresx/a.go", "internal/storage/postgres/store.go"} {
+	for _, p := range []string{"internal/foo/bar.go", "docs/a.md", "internal/pgmigrate2/x.go", "internal/storage/postgresx/a.go", "internal/storage/clickhouse/store.go"} {
 		res := postureList(t, posturePaths(t, p))
 		if res.code != 0 || !strings.Contains(res.stdout, "NONE ") || strings.Contains(res.stdout, "POSTURE ") {
 			t.Fatalf("%s: exit %d stdout=%q, want NONE and no package", p, res.code, res.stdout)
@@ -166,7 +166,7 @@ func postureDefects(keys []string, goList string) []string {
 		files := strings.Split(f[2]+","+f[3], ",")
 		posture := strings.Contains(imports, "internal/testsupport/domainroledb")
 		for _, n := range files {
-			if strings.HasSuffix(n, "_integration_test.go") && (strings.Contains(n, "role_posture") || strings.Contains(n, "domain_role")) {
+			if strings.HasSuffix(n, "_integration_test.go") && strings.Contains(n, "role_posture") {
 				posture = true
 			}
 		}
@@ -185,7 +185,7 @@ func postureDefects(keys []string, goList string) []string {
 func TestPostureIntegrationListMatchesThePostureTestPackages(t *testing.T) {
 	root := repoRoot(t)
 	keys := postureKeys(t, root)
-	res := cmdSpec{dir: root, env: []string{shimBasePath(), "GOFLAGS=-mod=readonly"}}.run("go", "list", "-tags=integration", "-e", "-f",
+	res := cmdSpec{dir: root, env: goListEnv()}.run("go", "list", "-tags=integration", "-e", "-f",
 		"{{.ImportPath}}|{{join .TestImports \",\"}},{{join .XTestImports \",\"}}|{{join .TestGoFiles \",\"}}|{{join .XTestGoFiles \",\"}}", "./...")
 	if res.code != 0 {
 		t.Fatalf("go list: exit %d stderr=%q", res.code, res.stderr)
@@ -205,5 +205,59 @@ func TestPostureIntegrationListMatchesThePostureTestPackages(t *testing.T) {
 	}
 	if d := postureDefects(append([]string{"internal/nosuchpkg"}, keys...), res.stdout); len(d) == 0 {
 		t.Fatal("a bogus key must be red")
+	}
+}
+
+func goListEnv() []string {
+	env := []string{shimBasePath(), "GOFLAGS=-mod=readonly"}
+	for _, name := range []string{"HOME", "GOMODCACHE", "GOCACHE", "GOPATH", "GOTMPDIR", "GOROOT"} {
+		if v, ok := os.LookupEnv(name); ok {
+			env = append(env, name+"="+v)
+		}
+	}
+	return env
+}
+
+func TestPostureIntegrationRunRefusesADirtyTree(t *testing.T) {
+	repo := t.TempDir()
+	git := func(args ...string) string {
+		a := append([]string{"-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false"}, args...)
+		res := cmdSpec{dir: repo, env: []string{shimBasePath()}}.run("git", a...)
+		if res.code != 0 {
+			t.Fatalf("git %v: %q", args, res.stderr)
+		}
+		return strings.TrimSpace(res.stdout)
+	}
+	git("init", "-q", "-b", "main")
+	git("commit", "-q", "--allow-empty", "-m", "base")
+	git("update-ref", "refs/remotes/origin/main", git("rev-parse", "HEAD"))
+	if err := os.MkdirAll(filepath.Join(repo, "internal", "pgmigrate", "sql"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "internal", "pgmigrate", "sql", "0001_x.sql"), []byte("select 1;\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	git("add", ".")
+	git("commit", "-q", "-m", "change")
+	if err := os.WriteFile(filepath.Join(repo, "untracked.txt"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stub := filepath.Join(t.TempDir(), "capped.sh")
+	if err := os.WriteFile(stub, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	script := filepath.Join(repoRoot(t), "ci", "posture_integration.sh")
+	res := cmdSpec{dir: repo, env: []string{shimBasePath(), "POSTURE_CAPPED_SH=" + stub}}.run("bash", script, "--run")
+	if res.code == 0 || strings.Contains(res.stdout, "RECEIPT ") || !strings.Contains(res.stderr, "clean=no") {
+		t.Fatalf("dirty tree: exit %d stdout=%q stderr=%q, want non-zero, clean=no, no receipt", res.code, res.stdout, res.stderr)
+	}
+	if err := os.Remove(filepath.Join(repo, "untracked.txt")); err != nil {
+		t.Fatal(err)
+	}
+	sha := git("rev-parse", "HEAD")
+	res = cmdSpec{dir: repo, env: []string{shimBasePath(), "POSTURE_CAPPED_SH=" + stub}}.run("bash", script, "--run")
+	if res.code != 0 || !strings.Contains(res.stdout, "RECEIPT-HEAD "+sha+" clean=yes") ||
+		!strings.Contains(res.stdout, "RECEIPT-SUMMARY "+sha+" pass=12 fail=0") || strings.Count(res.stdout, "RECEIPT internal/") != 12 {
+		t.Fatalf("clean tree with a stub runner: exit %d stdout=%q stderr=%q", res.code, res.stdout, res.stderr)
 	}
 }

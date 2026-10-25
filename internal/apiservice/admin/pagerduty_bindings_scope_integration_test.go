@@ -146,4 +146,5 @@ VALUES ($1, $2, $3, 'pagerduty', 'service', 'src-no-credential', 'src-no-credent
 			t.Errorf("revoke with a other-org id: %d %s", resp.status, resp.body)
 		}
 	})
+	venueoracle.WriteGoOnlyProof(t, "Go-only rule test: every binding lookup is filtered by the caller's organization and a foreign id takes no lock; there is no Python answer to compare, the answers and locks are asserted directly")
 }

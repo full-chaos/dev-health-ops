@@ -284,8 +284,8 @@ func (f *Flows) Reset(ctx context.Context, secret, newPassword string) (FlowOutc
 	if v := passwordRefusal(newPassword); v != nil {
 		return FlowOutcome{Kind: FlowPolicy, Violations: v}, nil
 	}
-	digest := sha256.Sum256([]byte(secret))
-	id, ok, err := f.accounts.PeekResetLink(ctx, digest)
+	link := RedeemRequest{Purpose: PurposePasswordReset, TokenHash: sha256.Sum256([]byte(secret))}
+	id, ok, err := f.accounts.PeekResetLink(ctx, link.TokenHash)
 	if err != nil {
 		return FlowOutcome{}, fmt.Errorf("local: reading a reset link: %w", err)
 	}
@@ -298,7 +298,7 @@ func (f *Flows) Reset(ctx context.Context, secret, newPassword string) (FlowOutc
 		if err != nil {
 			return fmt.Errorf("local: hashing the password: %w", err)
 		}
-		if _, err := f.accounts.SetPasswordEndingSessions(ctx, PasswordEnd{ID: id, Hash: hash, ResetLink: &digest}); err != nil {
+		if _, err := f.accounts.SetPasswordEndingSessions(ctx, PasswordEnd{ID: id, Hash: hash, ResetLink: &link.TokenHash}); err != nil {
 			if errors.Is(err, ErrResetLinkUnusable) {
 				out = FlowOutcome{Kind: FlowInvalidToken}
 				return nil

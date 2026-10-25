@@ -96,3 +96,38 @@ func (provider failingProvider) Complete(context.Context, categorize.CompletionR
 }
 func (failingProvider) Close() error  { return nil }
 func (failingProvider) Model() string { return "failing" }
+
+// lateCallCounter counts the provider calls that arrive after the run stopped.
+type lateCallCounter struct {
+	failingProvider
+	late int
+}
+
+func (provider *lateCallCounter) Complete(ctx context.Context, request categorize.CompletionRequest) (categorize.CompletionResult, error) {
+	if ctx.Err() != nil {
+		provider.late++
+	}
+	return provider.failingProvider.Complete(ctx, request)
+}
+
+// After the deterministic stop no unit reaches the provider. The race is in
+// the scheduler, so the loop makes a late call near certain to show under -race.
+func TestNoProviderCallFollowsTheDeterministicLLMStop(t *testing.T) {
+	for run := 0; run < 25; run++ {
+		provider := &lateCallCounter{failingProvider: failingProvider{err: errors.New("model not found: gpt-x")}}
+		materializer, err := NewMaterializer(unusedReader(t), unusedWriter(t), provider, testLogger())
+		if err != nil {
+			t.Fatal(err)
+		}
+		stats := Stats{LLMFailureCounts: map[string]int{}}
+		err = materializer.categorizePending(context.Background(), Config{LLMConcurrency: 1, ProviderName: "mock"},
+			[]preprocessed{{index: 0}, {index: 1}, {index: 2}}, map[int]categorize.CategorizationOutcome{}, &stats)
+		var deterministic *workgraph.DeterministicError
+		if !errors.As(err, &deterministic) {
+			t.Fatalf("run %d: categorizePending error = %v, want a DeterministicError", run, err)
+		}
+		if provider.late != 0 {
+			t.Fatalf("run %d: %d provider calls came after the deterministic stop", run, provider.late)
+		}
+	}
+}

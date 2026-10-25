@@ -93,6 +93,9 @@ func TestNormalizeEmailCases(t *testing.T) {
 
 func TestNormalizeEmailMatchesGoAPIOnTheFrozenCorpus(t *testing.T) {
 	inputs := goldenInputs(t)
+	if len(inputs) != frozenEmailRows {
+		t.Fatalf("frozen email corpus has %d usable rows, want %d", len(inputs), frozenEmailRows)
+	}
 	accepted := 0
 	for _, in := range inputs {
 		checkNormalizeEmail(t, in)
@@ -136,8 +139,41 @@ func checkNormalizeEmail(t *testing.T, in string) {
 	}
 }
 
+// fuzzSeedBudget bounds the f.Add seeds: the engine runs every seed once before
+// it mutates, and the full frozen corpus (2722 rows) does not fit the 5 s fuzz
+// floor, so the run would report zero executions. The whole corpus is still
+// checked by TestNormalizeEmailMatchesGoAPIOnTheFrozenCorpus.
+const (
+	fuzzSeedBudget  = 256
+	frozenEmailRows = 2722
+)
+
+// fuzzSeeds picks rows i*len/budget for i in [0, budget), then the last row
+// when it is not already picked. The corpus marks no row as an edge case.
+func fuzzSeeds(inputs []string) []string {
+	var out []string
+	for i := 0; i < fuzzSeedBudget; i++ {
+		out = append(out, inputs[i*len(inputs)/fuzzSeedBudget])
+	}
+	if last := len(inputs) - 1; (fuzzSeedBudget-1)*len(inputs)/fuzzSeedBudget != last {
+		out = append(out, inputs[last])
+	}
+	return out
+}
+
+func TestFuzzSeedsAreBoundedAndKeepTheEnds(t *testing.T) {
+	inputs := goldenInputs(t)
+	seeds := fuzzSeeds(inputs)
+	if len(seeds) != fuzzSeedBudget+1 {
+		t.Fatalf("fuzz seed count = %d, want %d", len(seeds), fuzzSeedBudget+1)
+	}
+	if seeds[0] != inputs[0] || seeds[len(seeds)-1] != inputs[len(inputs)-1] {
+		t.Fatal("fuzz seeds must keep the first and last corpus rows")
+	}
+}
+
 func FuzzNormalizeEmail(f *testing.F) {
-	for _, in := range goldenInputs(f) {
+	for _, in := range fuzzSeeds(goldenInputs(f)) {
 		f.Add(in)
 	}
 	f.Fuzz(func(t *testing.T, in string) {

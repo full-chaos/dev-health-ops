@@ -754,6 +754,64 @@ Call with the extraEnv entry.
 {{- end -}}
 
 {{/*
+"true" when the value is a valid Kubernetes Secret key: ^[-._a-zA-Z0-9]+$, at most 253 characters, and not ".",
+".." or a name that starts with "..". Call with the value.
+*/}}
+{{- define "dev-health.validSecretKey" -}}
+{{- $k := toString . -}}
+{{- if and (kindIs "string" .) (regexMatch "^[-._a-zA-Z0-9]+$" $k) (le (len $k) 253) (not (has $k (list "." ".."))) (not (hasPrefix ".." $k)) -}}true{{- end -}}
+{{- end -}}
+
+{{/*
+Every auth check that must hold in every render, whatever the phase and whatever goApi.enabled, queryApi.enabled
+and the other enable flags say. templates/auth-service.yaml includes it once, outside every gate.
+- Class rule: every Secret key the auth values read is a valid Kubernetes Secret key (dev-health.validSecretKey):
+  authService.database.secretKey, authService.migrate.secretKey, authService.signingKey.secretKey,
+  authService.valkey.secretKey, authService.sessionKeys.successor.secretKey,
+  authService.sessionKeys.loginLockout.secretKey, goApi.sessionIssue.secretKey and each set
+  authService.keySet.keys[].secretKey.
+- Phase 2 preconditions (both session readers, the successor key): query-api, the migrate Job and the River hooks
+  carry AUTH_PROXY_SESSIONS from phase 2 even when go-api is off.
+- Phase 3: the login lockout key is named.
+- The access-token class, SSO and social link route keys.
+*/}}
+{{- define "dev-health.authValidate" -}}
+{{- $a := .Values.authService -}}
+{{- $session := default dict $a.sessionKeys -}}
+{{- $keys := list (list "authService.database.secretKey" (default dict $a.database).secretKey) (list "authService.migrate.secretKey" (default dict $a.migrate).secretKey) (list "authService.signingKey.secretKey" (default dict $a.signingKey).secretKey) (list "authService.valkey.secretKey" (default dict $a.valkey).secretKey) (list "authService.sessionKeys.successor.secretKey" (default dict $session.successor).secretKey) (list "authService.sessionKeys.loginLockout.secretKey" (default dict $session.loginLockout).secretKey) (list "goApi.sessionIssue.secretKey" (default dict .Values.goApi.sessionIssue).secretKey) -}}
+{{- range $keys }}
+{{- if not (include "dev-health.validSecretKey" (index . 1)) }}{{- fail (printf "%s must be a Secret key: letters, digits, '-', '_' and '.', at most 253 characters, not '.', '..' or a name that starts with '..'" (index . 0)) }}{{- end }}
+{{- end }}
+{{- range $i, $k := ((default dict $a.keySet).keys | default list) }}
+{{- if and (kindIs "map" $k) $k.secretKey (not (include "dev-health.validSecretKey" $k.secretKey)) }}{{- fail (printf "authService.keySet.keys[%d].secretKey must be a Secret key: letters, digits, '-', '_' and '.', at most 253 characters, not '.', '..' or a name that starts with '..'" $i) }}{{- end }}
+{{- end }}
+{{- if eq (include "dev-health.authOn" (dict "flag" "sessions" "context" .)) "true" }}
+{{- /* Phase 2 preconditions: query-api, the migrate Job and the River hooks carry AUTH_PROXY_SESSIONS from phase 2 even when go-api is off, so they are checked here, once. */}}
+{{- $rd := .Values.authService.migrate.sessionReaders }}
+{{- $missing := list }}
+{{- if not (trim (toString $rd.goApi)) }}{{- $missing = append $missing "authService.migrate.sessionReaders.goApi (go-api's API_DATABASE_ROLE)" }}{{- end }}
+{{- if not (trim (toString $rd.queryApi)) }}{{- $missing = append $missing "authService.migrate.sessionReaders.queryApi (query-api's registry login)" }}{{- end }}
+{{- if $missing }}
+{{- fail (printf "authService.phase >= 2 (sessions) needs the session-reader roles of both services: unset %s" (join ", " $missing)) }}
+{{- end }}
+{{- $miss := list }}
+{{- if not (trim (toString .Values.authService.sessionKeys.successor.secretName)) }}{{- $miss = append $miss "authService.sessionKeys.successor.secretName" }}{{- end }}
+{{- if not (include "dev-health.validSecretKey" .Values.authService.sessionKeys.successor.secretKey) }}{{- $miss = append $miss "authService.sessionKeys.successor.secretKey (a Secret key: letters, digits, '-', '_', '.')" }}{{- end }}
+{{- if $miss }}
+{{- fail (printf "authService.phase >= 2 (sessions) needs the auth-service session keys: unset %s (the access-token key is go-api's JWT_SECRET_KEY Secret)" (join ", " $miss)) }}
+{{- end }}
+{{- end }}
+{{- if eq (include "dev-health.authOn" (dict "flag" "localLogin" "context" .)) "true" }}
+{{- if not (include "dev-health.validSecretKey" .Values.authService.sessionKeys.loginLockout.secretKey) }}{{- fail "authService.phase >= 3 (login) needs authService.sessionKeys.loginLockout.secretKey to be a Secret key: letters, digits, '-', '_', '.'" }}{{- end }}
+{{- end }}
+{{- $_ := include "dev-health.authEdDSAIssuer" . }}
+{{- $_ := include "dev-health.authSSOOn" (dict "flag" "oidc" "context" .) }}
+{{- $_ := include "dev-health.authSSOOn" (dict "flag" "saml" "context" .) }}
+{{- $linkRoutes := eq (include "dev-health.authBool" (dict "value" .Values.authService.socialLinkRoutes "key" "authService.socialLinkRoutes")) "true" }}
+{{- if and $linkRoutes (not (include "dev-health.authOn" (dict "flag" "sessions" "context" .))) }}{{- fail "authService.socialLinkRoutes needs authService.phase >= 2: the link routes need the session secrets" }}{{- end }}
+{{- end -}}
+
+{{/*
 "true" when authService.phase turns the ladder flag on, else "". Call with (dict "flag" <name> "context" $).
 The ladder (each flag is on from its phase up): service 1, sessions 2, localLogin 3, social 3, credentials 4,
 usersOwned 4, orgsOwned 5. credentials moves with usersOwned: auth-service mounts the credential routes only with

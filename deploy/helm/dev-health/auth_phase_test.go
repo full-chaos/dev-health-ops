@@ -685,3 +685,148 @@ func TestGoAPIExtraEnvRefusesSecretLikeLiterals(t *testing.T) {
 		t.Error("PARTNER_API_TOKEN did not render as the Secret reference")
 	}
 }
+
+// The phase 2 preconditions (both session readers, the successor key) hold whether or not go-api renders: query-api
+// and the River hooks carry AUTH_PROXY_SESSIONS from phase 2 even with go-api off.
+func TestAuthPhase2PreconditionsHoldWithoutGoAPI(t *testing.T) {
+	base := append(append([]string{}, authBase...),
+		"--set", "goApi.enabled=false", "--set", "queryApi.enabled=true", "--set", "authService.phase=2",
+		"--set", "authService.valkey.secretName=auth-valkey",
+		"--set-json", `authService.networkPolicy.egress.valkey.to=[{"podSelector":{"matchLabels":{"app":"auth-valkey"}}}]`)
+	base = append(base, roleEnv("devhealth_query")...)
+	readers := []string{"--set", "authService.migrate.sessionReaders.goApi=devhealth_api", "--set", "authService.migrate.sessionReaders.queryApi=devhealth_query"}
+	cases := map[string]struct {
+		args []string
+		want string
+	}{
+		"no readers":       {append(append([]string{}, base...), sessionSuccessor...), "authService.migrate.sessionReaders.goApi"},
+		"no query reader":  {append(append(append([]string{}, base...), sessionSuccessor...), "--set", "authService.migrate.sessionReaders.goApi=devhealth_api"), "authService.migrate.sessionReaders.queryApi"},
+		"no successor key": {append(append([]string{}, base...), readers...), "authService.sessionKeys.successor.secretName"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, out, err := renderAuth(t, tc.args...)
+			if err == nil {
+				t.Fatal("phase 2 rendered without its preconditions while go-api is off")
+			}
+			if !strings.Contains(out, "authService.phase >= 2 (sessions) needs") || !strings.Contains(out, tc.want) {
+				t.Fatalf("the refusal does not name %s: %.400s", tc.want, out)
+			}
+		})
+	}
+	docs, out, err := renderAuth(t, append(append(append([]string{}, base...), readers...), sessionSuccessor...)...)
+	if err != nil {
+		t.Fatalf("phase 2 with every precondition and go-api off was refused: %v\n%.400s", err, out)
+	}
+	if v, _ := containerEnvValue(t, authDoc(docs, "Deployment", "a-dev-health-query-api"), "AUTH_PROXY_SESSIONS"); v != "true" {
+		t.Errorf("query-api AUTH_PROXY_SESSIONS = %q, want true", v)
+	}
+}
+
+// The session Secret keys must be valid Kubernetes Secret keys wherever the phase needs them: the successor key from
+// phase 2, the login lockout key from phase 3.
+func TestAuthPhaseSessionSecretKeysAreValidKeys(t *testing.T) {
+	for _, tc := range []struct {
+		phase int
+		key   string
+	}{{2, "authService.sessionKeys.successor.secretKey"}, {3, "authService.sessionKeys.loginLockout.secretKey"}} {
+		for _, bad := range []string{"", "a/b", "a b"} {
+			t.Run(fmt.Sprintf("%s=%q", tc.key, bad), func(t *testing.T) {
+				_, out, err := renderAuth(t, phaseArgs(tc.phase, "--set-string", tc.key+"="+bad)...)
+				if err == nil {
+					t.Fatalf("%s=%q rendered", tc.key, bad)
+				}
+				if !strings.Contains(out, tc.key) {
+					t.Fatalf("the refusal does not name %s: %.400s", tc.key, out)
+				}
+			})
+		}
+		docs := renderPhase(t, tc.phase, "--set-string", tc.key+"=Key-1.x_y")
+		env := "AUTH_SESSION_SUCCESSOR_KEY"
+		if tc.phase == 3 {
+			env = "AUTH_LOGIN_LOCKOUT_KEY"
+		}
+		var ref string
+		for _, container := range podContainers(authDoc(docs, "Deployment", "a-dev-health-auth-service")) {
+			entries, _ := at(container, "env").([]any)
+			for _, entry := range entries {
+				if at(entry, "name") == env {
+					ref = envEntryValue(entry)
+				}
+			}
+		}
+		if !strings.HasSuffix(ref, "/Key-1.x_y") {
+			t.Errorf("%s with a valid key renders %q", env, ref)
+		}
+	}
+}
+
+// The phase 2 preconditions hold whatever each enable flag says: every service flag off in turn, the render still
+// refuses phase 2 without the reader grants or without the successor key.
+func TestAuthPhase2PreconditionsHoldWithEachServiceFlagOff(t *testing.T) {
+	for _, flag := range []string{"goApi.enabled", "queryApi.enabled", "web.enabled", "migrations.hook.enabled",
+		"migrations.hook.riverMigrate.enabled", "authService.migrate.enabled"} {
+		full := phaseArgs(2, "--set", flag+"=false")
+		for name, drop := range map[string][]string{
+			"no readers":       {"authService.migrate.sessionReaders.goApi=", "authService.migrate.sessionReaders.queryApi="},
+			"no successor key": {"authService.sessionKeys.successor.secretName="},
+		} {
+			t.Run(flag+"=false/"+name, func(t *testing.T) {
+				args := append([]string{}, full...)
+				for _, d := range drop {
+					args = append(args, "--set", d)
+				}
+				if strings.Contains(name, "readers") {
+					args = append(args, "--set-json", `queryApi.extraEnv=[]`)
+				}
+				_, out, err := renderAuth(t, args...)
+				if err == nil {
+					t.Fatalf("phase 2 with %s=false rendered without its preconditions (%s)", flag, name)
+				}
+				if !strings.Contains(out, "authService.phase >= 2 (sessions) needs") {
+					t.Fatalf("the refusal is not the phase 2 precondition: %.400s", out)
+				}
+			})
+		}
+		t.Run(flag+"=false/all set", func(t *testing.T) {
+			if _, out, err := renderAuth(t, full...); err != nil {
+				t.Fatalf("phase 2 with %s=false and every precondition was refused: %v\n%.400s", flag, err, out)
+			}
+		})
+	}
+}
+
+// Class rule: every Secret key the auth values read is a valid Kubernetes Secret key, in every render.
+func TestAuthSecretKeysAreValidSecretKeys(t *testing.T) {
+	keys := []string{"authService.database.secretKey", "authService.migrate.secretKey", "authService.signingKey.secretKey",
+		"authService.valkey.secretKey", "authService.sessionKeys.successor.secretKey",
+		"authService.sessionKeys.loginLockout.secretKey", "goApi.sessionIssue.secretKey"}
+	for _, key := range keys {
+		for _, bad := range []string{"", "a b", "a/b"} {
+			t.Run(fmt.Sprintf("%s=%q", key, bad), func(t *testing.T) {
+				_, out, err := renderAuth(t, phaseArgs(3, "--set-string", key+"="+bad)...)
+				if err == nil {
+					t.Fatalf("%s=%q rendered", key, bad)
+				}
+				// goApi.sessionIssue is also bounded by values.schema.json, whose refusal names the JSON path.
+				if !strings.Contains(out, key) && !strings.Contains(out, "/"+strings.ReplaceAll(key, ".", "/")) {
+					t.Fatalf("the refusal does not name %s: %.400s", key, out)
+				}
+			})
+		}
+		t.Run(key+" valid", func(t *testing.T) {
+			if _, out, err := renderAuth(t, phaseArgs(3, "--set-string", key+"=Key-1.x_y")...); err != nil {
+				t.Fatalf("%s=Key-1.x_y refused: %v\n%.400s", key, err, out)
+			}
+		})
+	}
+	for _, bad := range []string{"a b", "a/b"} {
+		keys := strings.Replace(twoKeys, `"secretName":"key-b","secretKey":"signing-key.pem"`, `"secretName":"key-b","secretKey":"`+bad+`"`, 1)
+		if _, out, err := renderAuth(t, keySetArgs(keys)...); err == nil || !strings.Contains(out, "authService.keySet.keys[1].secretKey") {
+			t.Errorf("keySet secretKey %q: err=%v out=%.300s", bad, err, out)
+		}
+	}
+	if _, out, err := renderAuth(t, keySetArgs(twoKeys)...); err != nil {
+		t.Errorf("a valid keySet was refused: %v\n%.300s", err, out)
+	}
+}

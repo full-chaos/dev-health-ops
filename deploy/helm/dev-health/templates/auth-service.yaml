@@ -18,12 +18,10 @@ group/world mode bit) cannot be met by mounting the Secret straight into the
 container -- see authService.signingKey.stagingImage in values.yaml for why the
 stage-signing-key init container exists.
 */ -}}
-{{- /* The auth keys are checked in every render, whatever the phase and whether go-api renders. */}}
+{{- /* Every auth check that must hold whatever the phase and whatever goApi.enabled, queryApi.enabled and the other enable flags say: one helper, included here once. This file always renders (only its documents are gated), so the include always runs. */}}
+{{- include "dev-health.authValidate" . }}
 {{- $eddsaIssuer := include "dev-health.authEdDSAIssuer" . }}
-{{- $_ := include "dev-health.authSSOOn" (dict "flag" "oidc" "context" .) }}
-{{- $_ := include "dev-health.authSSOOn" (dict "flag" "saml" "context" .) }}
 {{- $linkRoutes := eq (include "dev-health.authBool" (dict "value" .Values.authService.socialLinkRoutes "key" "authService.socialLinkRoutes")) "true" }}
-{{- if and $linkRoutes (not (include "dev-health.authOn" (dict "flag" "sessions" "context" .))) }}{{- fail "authService.socialLinkRoutes needs authService.phase >= 2: the link routes need the session secrets" }}{{- end }}
 {{- if eq (include "dev-health.authOn" (dict "flag" "service" "context" .)) "true" }}
 {{- $a := .Values.authService }}
 {{- $loginOn := eq (include "dev-health.authOn" (dict "flag" "localLogin" "context" .)) "true" }}

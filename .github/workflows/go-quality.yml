@@ -405,6 +405,7 @@ jobs:
         run: bash ci/check_go.sh ci-leg ${{ matrix.args }}
 
       - name: Upload the providersync race slice's go test -json (race legs)
+        continue-on-error: true
         # CHAOS-10498: check_go.sh writes the race leg's providersync slice as go test -json (go-test-json/providersync-race-<shard>.json);
         # uploaded after a failed leg too, so a timeout or a slow test can be read after the run.
         if: always() && steps.relevance.outputs.relevant == 'true' && startsWith(matrix.name, 'race-')
@@ -488,6 +489,10 @@ jobs:
         # rejected -- the second is what catches a linter that has silently
         # stopped linting, which otherwise reports exactly what a clean tree does.
         run: bash ci/check_shellcheck_pin.sh
+
+      - name: Test the session-issue Secret create script
+        if: steps.relevance.outputs.relevant == 'true' && matrix.name == 'static'
+        run: bash scripts/create-session-issue-secret_test.sh
 
       - name: Test the auth key-set Secret script
         if: steps.relevance.outputs.relevant == 'true' && matrix.name == 'static'

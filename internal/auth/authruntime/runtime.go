@@ -139,7 +139,7 @@ func compatRoutes(
 	cfg authconfig.Config, logger *slog.Logger, pool *pgxpool.Pool, schema authschema.ValidatedIdentifier,
 	sessions *session.Store, issuer *authapi.Issuer, limits *authapi.Limits,
 ) ([]httpapi.Route, error) {
-	identities, err := identity.New(identity.Config{Pool: pool, Schema: schema, Logger: logger, UsersOwnedByAuth: cfg.UsersOwned})
+	identities, err := identity.New(identityConfig(cfg, logger, pool, schema))
 	if err != nil {
 		return nil, err
 	}

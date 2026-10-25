@@ -15,6 +15,7 @@ deploy/helm/dev-health	test	docs
 internal/api/webhookintake	test	contracts
 internal/apiservice	code	contracts
 internal/apiservice	test	ci
+internal/apiservice/admin	test	contracts
 internal/apiservice/billingvenue	test	contracts
 internal/audit	test	contracts
 internal/auth/authapi	test	contracts

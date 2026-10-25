@@ -65,7 +65,7 @@ Design docs (read the guardrails at minimum):
 | `org_context_header` | active | human | |
 | `impersonation_session` | active | human | |
 | `internal_svc_acr_token` | active | service_account | |
-| `internal_svc_worker_token` | **unconsumed** | service_account | |
+| `internal_svc_worker_token` | **unconsumed** | service_account | mint retired (CHAOS-10044); stored rows list/revoke only |
 | `worker_operational_bridge_token` | **unconsumed** | infrastructure | |
 | `acr_client_credential` | active | client_credential | |
 | `acr_device_flow_code` | active | human | |
@@ -226,12 +226,16 @@ unset single credential skips its own check, so it stays a gap to review.
 
 ## Unconsumed credential: `svc_worker_*`
 
-`WORKER_OPERATOR_TOKEN_PREFIX = "svc_worker_"` is defined and minted through
-the exact same code path as `svc_acr_*`
+**Mint retired (CHAOS-10044).** `dho service-credentials create` and `rotate` refuse
+`--service worker-operator` before a database is opened (exit 1, one JSON error line on
+stderr); no `svc_worker_*` token is issued any more. `list` and `revoke` keep working on
+the rows already stored, active and revoked. No row was migrated or deleted.
+
+`WORKER_OPERATOR_TOKEN_PREFIX = "svc_worker_"` was minted through
+the same code path as `svc_acr_*`
 (`internal/apiservice/admin/servicecredentials.go`), with
 its own scope set (`workers:read`, `workers:operate`,
-`internal/apiservice/admin/servicecredentials.go:36-44`) and a full CLI lifecycle
-(create/list/rotate/revoke). No HTTP route in ops, web, or acr was found
+`internal/apiservice/admin/servicecredentials.go:36-44`). No HTTP route in ops, web, or acr was found
 that validates a `svc_worker_`-prefixed bearer token — `internal/apiservice/acr/internalauth.go:57-71`
 `extractToken` only accepts the `svc_acr_` prefix. Either this is
 scaffolding for a not-yet-wired consumer, or a consumer exists in the Go

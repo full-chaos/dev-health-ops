@@ -75,7 +75,7 @@ func jiraAtlassianOracleCases() []oracleCase {
 }
 
 func jiraAtlassianOracleIssue(key string) map[string]any {
-	return map[string]any{"key": key, "self": "https://acme.atlassian.net/rest/api/3/issue/" + key, "fields": map[string]any{
+	return map[string]any{"id": "id-" + key, "key": key, "self": "https://acme.atlassian.net/rest/api/3/issue/" + key, "fields": map[string]any{
 		"project": map[string]any{"key": "OPS", "id": "10001", "name": "Operations"},
 		"summary": "Atlassian canonical issue", "status": map[string]any{"name": "In Progress", "statusCategory": map[string]any{"key": "indeterminate"}},
 		"issuetype": map[string]any{"name": "Task"}, "labels": []any{"support"},
@@ -171,8 +171,8 @@ func (doer *jiraAtlassianOracleDoer) Do(request *http.Request) (*http.Response, 
 		return &http.Response{StatusCode: http.StatusBadGateway, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"errors":[{"message":"temporary"}]}`)), Request: request}, nil
 	case request.URL.Path == "/rest/api/3/search/jql":
 		value = map[string]any{"issues": []any{doer.issue}, "isLast": true}
-	case strings.HasSuffix(request.URL.Path, "/changelog"):
-		value = map[string]any{"values": []any{}, "total": 0, "isLast": true}
+	case request.URL.Path == "/rest/api/3/changelog/bulkfetch":
+		value = map[string]any{"issueChangeLogs": []any{}, "nextPageToken": nil}
 	case strings.HasSuffix(request.URL.Path, "/worklog"):
 		value = map[string]any{"worklogs": doer.worklogs, "total": len(doer.worklogs)}
 	case request.URL.Path == "/rest/agile/1.0/board":

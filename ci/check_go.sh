@@ -112,18 +112,29 @@ fi
 # label filter only, never a prune). A caller-set TESTCONTAINERS_SESSION_ID wins.
 # A SIGKILL of this script skips the trap; the reaper (when on) or a host sweep
 # by session id covers that case.
+TC_TRAP_PID="" TC_TRAP_SID=""
+tc_trap() {
+  kill -TERM "${TC_TRAP_PID}" 2>/dev/null || true
+  wait "${TC_TRAP_PID}" 2>/dev/null || true
+  bash "${SCRIPT_DIR}/reap-testcontainers-session.sh" "${TC_TRAP_SID}" || true
+  exit 143
+}
+
 run_integration_go_test() {
   local module_dir="$1" sid pid rc=0
   shift
   sid="${TESTCONTAINERS_SESSION_ID:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')}"
+  [[ "${sid}" =~ ^[A-Za-z0-9._-]{8,64}$ ]] \
+    || die "TESTCONTAINERS_SESSION_ID must match ^[A-Za-z0-9._-]{8,64}\$"
   (
     cd "${ROOT}/${module_dir}"
     exec "${GO_ENV_OFF[@]}" GOWORK=off TESTCONTAINERS_SESSION_ID="${sid}" ${INTEGRATION_TEST_ENV[@]+"${INTEGRATION_TEST_ENV[@]}"} \
       go test -mod=readonly -trimpath -tags=integration -count=1 -timeout=30m "$@"
   ) &
   pid=$!
-  # shellcheck disable=SC2064
-  trap "kill -TERM ${pid} 2>/dev/null || true; wait ${pid} 2>/dev/null || true; bash \"${SCRIPT_DIR}/reap-testcontainers-session.sh\" ${sid} || true; exit 143" INT TERM
+  TC_TRAP_PID="${pid}"
+  TC_TRAP_SID="${sid}"
+  trap tc_trap INT TERM
   wait "${pid}" || rc=$?
   trap - INT TERM
   bash "${SCRIPT_DIR}/reap-testcontainers-session.sh" "${sid}" || rc=$?

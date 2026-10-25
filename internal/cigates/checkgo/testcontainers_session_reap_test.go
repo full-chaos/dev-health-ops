@@ -70,3 +70,83 @@ func TestReapTestcontainersSessionRemovesOnlyThatSessionByID(t *testing.T) {
 		t.Error("an unsafe session id must be refused")
 	}
 }
+
+// helperHarness extracts tc_trap and run_integration_go_test from ci/check_go.sh and runs them against a stand-in
+// `go` that records its start and a stand-in reaper that records the session id it is given.
+func helperHarness(t *testing.T, sid string, signal bool) (exit int, marker, goStarted bool, reaped string) {
+	t.Helper()
+	text, err := os.ReadFile(scriptPath(t, "ci/check_go.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(text)
+	end := strings.Index(s, "run_integration_go_test() {")
+	start := strings.Index(s, "tc_trap() {")
+	if start < 0 {
+		start = end
+	}
+	end += strings.Index(s[end:], "\n}\n") + 3
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	started := filepath.Join(dir, "go-started")
+	reapLog := filepath.Join(dir, "reaped")
+	markerPath := filepath.Join(dir, "marker")
+	fakeGo := "#!/bin/sh\ntouch " + started + "\nexec sleep 30\n"
+	if err := os.WriteFile(filepath.Join(bin, "go"), []byte(fakeGo), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fakeReap := "#!/bin/sh\necho \"$1\" >> " + reapLog + "\n"
+	if err := os.WriteFile(filepath.Join(dir, "reap-testcontainers-session.sh"), []byte(fakeReap), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	script := "set -uo pipefail\n" +
+		"SCRIPT_DIR=" + dir + "\nROOT=" + dir + "\nGO_ENV_OFF=(env)\nINTEGRATION_TEST_ENV=()\n" +
+		"die() { echo \"$*\" >&2; exit 2; }\n" + s[start:end] +
+		"run_integration_go_test . ./x &\nHP=$!\n" +
+		"if [ \"" + map[bool]string{true: "1", false: "0"}[signal] + "\" = 1 ]; then sleep 1; kill -TERM $HP; fi\n" +
+		"wait $HP\n"
+	// The helper must run in the foreground shell to own its trap: call it directly when no signal is sent.
+	if !signal {
+		script = "set -uo pipefail\nSCRIPT_DIR=" + dir + "\nROOT=" + dir + "\nGO_ENV_OFF=(env)\nINTEGRATION_TEST_ENV=()\n" +
+			"die() { echo \"$*\" >&2; exit 2; }\n" + s[start:end] + "run_integration_go_test . ./x\n"
+	}
+	cmd := exec.Command("bash", "-c", script)
+	cmd.Env = append(os.Environ(), "PATH="+bin+":"+os.Getenv("PATH"),
+		"TESTCONTAINERS_SESSION_ID="+sid, "PROOF_MARKER="+markerPath)
+	err = cmd.Run()
+	exit = 0
+	if ee, ok := err.(*exec.ExitError); ok {
+		exit = ee.ExitCode()
+	} else if err != nil {
+		t.Fatal(err)
+	}
+	_, e1 := os.Stat(markerPath)
+	_, e2 := os.Stat(started)
+	raw, _ := os.ReadFile(reapLog)
+	return exit, e1 == nil, e2 == nil, strings.TrimSpace(string(raw))
+}
+
+func TestIntegrationHelperRefusesAnUnsafeSessionIDBeforeGoTestStarts(t *testing.T) {
+	for _, sid := range []string{
+		`$(touch "$PROOF_MARKER")`,
+		"has space1234",
+		"line\nbreak12345",
+		"short",
+		strings.Repeat("a", 65),
+	} {
+		exit, marker, goStarted, _ := helperHarness(t, sid, true)
+		if exit == 0 || marker || goStarted {
+			t.Errorf("sid %q: exit=%d marker=%v goStarted=%v; want a refusal before go test, no marker", sid, exit, marker, goStarted)
+		}
+	}
+}
+
+func TestIntegrationHelperTrapReapsTheSessionOnTERM(t *testing.T) {
+	exit, marker, goStarted, reaped := helperHarness(t, "sess-abcdef12", true)
+	if exit != 143 || marker || !goStarted || reaped != "sess-abcdef12" {
+		t.Errorf("exit=%d marker=%v goStarted=%v reaped=%q; want 143, no marker, go started, reaped sess-abcdef12", exit, marker, goStarted, reaped)
+	}
+}

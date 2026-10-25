@@ -21,9 +21,11 @@ var (
 	quotedKey                  = regexp.MustCompile(`'([^']*)'`)
 )
 
-// migrationPinnedKeys is the llm key list of the chain file that creates
-// public.categorize_byo_settings, found by its content (not its number).
-func migrationPinnedKeys(t *testing.T) []string {
+// migrationKeyArrays is the three key arrays of the chain file that creates
+// public.categorize_byo_settings (found by its content, not its number), in
+// body order: the pinned llm keys, the base_url-check keys, and the served
+// base_url keys their EXISTS tests.
+func migrationKeyArrays(t *testing.T) [][]string {
 	t.Helper()
 	chain, err := pgmigrate.LoadChain()
 	if err != nil {
@@ -39,23 +41,22 @@ func migrationPinnedKeys(t *testing.T) []string {
 		t.Fatalf("%d chain files create public.categorize_byo_settings, want exactly 1", len(bodies))
 	}
 	arrays := pinnedKeyArray.FindAllStringSubmatch(bodies[0], -1)
-	if len(arrays) != 1 {
-		t.Fatalf("the function body holds %d pinned key arrays, want exactly 1", len(arrays))
+	if len(arrays) != 3 {
+		t.Fatalf("the function body holds %d key arrays, want exactly 3", len(arrays))
 	}
-	var keys []string
-	for _, match := range quotedKey.FindAllStringSubmatch(arrays[0][1], -1) {
-		keys = append(keys, match[1])
+	out := make([][]string, 0, len(arrays))
+	for _, array := range arrays {
+		var keys []string
+		for _, match := range quotedKey.FindAllStringSubmatch(array[1], -1) {
+			keys = append(keys, match[1])
+		}
+		out = append(out, keys)
 	}
-	return keys
+	return out
 }
 
-// The definer function and the Go readers name the same llm keys: a key the
-// readers need and the function does not return reads as "not stored" on the
-// worker, and a key the function returns that no reader needs widens what the
-// domain role can read for nothing.
-func TestTheCategorizeSettingsFunctionReturnsExactlyTheKeysTheReadersRead(t *testing.T) {
-	sqlKeys := migrationPinnedKeys(t)
-	goKeys := CategorizeBYODefinerKeys()
+func compareKeySets(t *testing.T, what string, sqlKeys, goKeys []string) {
+	t.Helper()
 	var missingInSQL, extraInSQL []string
 	for _, key := range goKeys {
 		if !slices.Contains(sqlKeys, key) {
@@ -68,14 +69,25 @@ func TestTheCategorizeSettingsFunctionReturnsExactlyTheKeysTheReadersRead(t *tes
 		}
 	}
 	if len(missingInSQL) > 0 {
-		t.Errorf("keys the Go readers read that the function does not return: %v", missingInSQL)
+		t.Errorf("%s: keys the Go readers read that the function does not name: %v", what, missingInSQL)
 	}
 	if len(extraInSQL) > 0 {
-		t.Errorf("keys the function returns that no Go reader reads: %v", extraInSQL)
+		t.Errorf("%s: keys the function names that no Go reader reads: %v", what, extraInSQL)
 	}
 	if len(sqlKeys) != len(goKeys) {
-		t.Errorf("the function lists %d keys (duplicates?), the Go set %d", len(sqlKeys), len(goKeys))
+		t.Errorf("%s: the function lists %d keys (duplicates?), the Go set %d", what, len(sqlKeys), len(goKeys))
 	}
+}
+
+// The definer function and the Go readers name the same llm keys: a key the
+// readers need and the function does not return reads as "not stored" on the
+// worker, and a key the function returns that no reader needs widens what the
+// domain role can read for nothing.
+func TestTheCategorizeSettingsFunctionReturnsExactlyTheKeysTheReadersRead(t *testing.T) {
+	arrays := migrationKeyArrays(t)
+	compareKeySets(t, "pinned llm keys", arrays[0], CategorizeBYODefinerKeys())
+	compareKeySets(t, "base_url-check keys", arrays[1], CategorizeBYOBaseURLCheckKeys())
+	compareKeySets(t, "served base_url keys", arrays[2], CategorizeBYOServedBaseURLKeys())
 }
 
 // The Go key set is the one the readers use; it is built from their constants,
@@ -100,6 +112,12 @@ func TestTheDefinerKeySetHoldsTheBuildReadsAndNoOtherPurposeSecret(t *testing.T)
 		if slices.Contains(got, key) {
 			t.Errorf("the definer key set holds %q", key)
 		}
+	}
+	if got := strings.Join(CategorizeBYOBaseURLCheckKeys(), ","); got != "purpose:investigate:api_key,purpose:explain:api_key" {
+		t.Errorf("CategorizeBYOBaseURLCheckKeys = %s", got)
+	}
+	if got := strings.Join(CategorizeBYOServedBaseURLKeys(), ","); got != "base_url,purpose:categorize:base_url" {
+		t.Errorf("CategorizeBYOServedBaseURLKeys = %s", got)
 	}
 	for _, key := range append(append(append([]string{KeyPromptCache}, byoKeys...), PurposeKeys(PurposeCategorize)...), savedProviderKeys()...) {
 		if !slices.Contains(got, key) {

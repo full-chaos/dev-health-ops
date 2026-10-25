@@ -3,8 +3,12 @@
 package investment
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -51,6 +55,18 @@ func (stub *ledgerStub) Model() string { return stub.model }
 // ever built and no request leaves (D6279).
 func stubbedBYO(pool *pgxpool.Pool, cipher providerfoundation.FernetDecryptor, network *clefBYO, newProvider func(categorize.ProviderKind, string, string, string) (categorize.Provider, error)) *orgCategorizeBYO {
 	return newOrgCategorizeBYO(pool, cipher, testLogger(), newProvider, network.build().newClef)
+}
+
+// otherPurposeKeyRows counts the other purposes' api_key rows the domain role
+// reads through the definer function for org.
+func otherPurposeKeyRows(ctx context.Context, t *testing.T, domain *pgxpool.Pool, org string) int {
+	t.Helper()
+	var n int
+	if err := domain.QueryRow(ctx, `SELECT count(*) FROM public.categorize_byo_settings($1) WHERE key = ANY($2)`,
+		org, llmorgsettings.CategorizeBYOBaseURLCheckKeys()).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
 }
 
 type ledgerRow struct {
@@ -109,6 +125,9 @@ func TestTheDomainRoleBuildsAnOptedInOrgsBackendAndKeepsItsBudgetLedger(t *testi
 	defer cancel()
 	venue := domainroledb.Start(t, ctx, "byobuild")
 	venue.RequireReady(t, ctx)
+	// acr_service_model on for every plan: a clef-only org saves no provider the
+	// saved-config read counts, and production orgs hold the grant.
+	pgseed.FeatureFlag(ctx, t, venue.Admin, uuid.NewString(), llmorgsettings.ACRServiceModelFeatureKey, "community", true)
 	cipher, err := providerfoundation.NewFernetDecryptor(secrets.NewValue("test-master-key"), "")
 	if err != nil {
 		t.Fatal(err)
@@ -190,6 +209,79 @@ func TestTheDomainRoleBuildsAnOptedInOrgsBackendAndKeepsItsBudgetLedger(t *testi
 		}
 		if sent := network.network.count(); sent != 0 {
 			t.Fatalf("the clef path sent %d request(s)", sent)
+		}
+	})
+
+	// The other purposes' keys reach the worker only to refuse a base_url that
+	// carries one: no provider builder, log line or error ever holds them.
+	const investigateKey, explainKey = "sk-investigate-only-0123456789", "sk-explain-only-9876543210"
+	t.Run("other purposes' keys reach only the base_url check", func(t *testing.T) {
+		org := uuid.NewString()
+		pgseed.Org(ctx, t, venue.Admin, org, "enterprise")
+		const baseURL = "https://api.cloudflare.com/client/v4/accounts/0123456789abcdef0123456789abcdef/ai"
+		const token = "cf-org-token-0123456789abcdef0123456789"
+		seedOrgSettings(ctx, t, venue.Admin, cipher, org, map[string]string{
+			llmorgsettings.KeyCategorizeBYOEnabled: "true", "purpose:categorize:provider": "clef", "purpose:categorize:model": "clef",
+			"purpose:categorize:base_url": baseURL, "purpose:investigate:provider": "openai", "purpose:explain:provider": "openai",
+		}, map[string]string{"purpose:categorize:api_key": token, "purpose:investigate:api_key": investigateKey, "purpose:explain:api_key": explainKey})
+		if n := otherPurposeKeyRows(ctx, t, venue.Domain, org); n != 2 {
+			t.Fatalf("the function returned %d of the other purposes' key rows for an org with a base_url, want 2", n)
+		}
+		logs := &bytes.Buffer{}
+		logger := slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+		network := newClefBYO(clefAnswers("clef"))
+		var received []string
+		recordClef := network.build().newClef
+		byo := newOrgCategorizeBYO(venue.Domain, cipher, logger,
+			func(kind categorize.ProviderKind, apiKey, baseURL, model string) (categorize.Provider, error) {
+				received = append(received, apiKey, baseURL, model)
+				return nil, errors.New("the clef path builds no text provider")
+			},
+			func(cfg categorize.ClefClientConfig) (*categorize.TypeSafeClient, error) {
+				received = append(received, cfg.Token.Reveal(), cfg.BaseURL, cfg.Model, fmt.Sprintf("%+v", cfg))
+				return recordClef(cfg)
+			})
+		served, err := byo.Build(ctx, org)
+		if err != nil || served == nil {
+			t.Fatalf("clef Build = %v, %v", served, err)
+		}
+		defer served.Close()
+		if len(received) == 0 || received[0] != token {
+			t.Fatalf("the clef client was built from %q, want the categorize token", received)
+		}
+		for _, value := range append(received, logs.String()) {
+			for _, secret := range []string{investigateKey, explainKey} {
+				if strings.Contains(value, secret) {
+					t.Fatalf("another purpose's key reached the provider builder or a log line: %q", value)
+				}
+			}
+		}
+	})
+
+	t.Run("a base_url holding another purpose's key is refused on the worker path", func(t *testing.T) {
+		org := uuid.NewString()
+		pgseed.Org(ctx, t, venue.Admin, org, "enterprise")
+		seedOrgSettings(ctx, t, venue.Admin, cipher, org, map[string]string{
+			llmorgsettings.KeyCategorizeBYOEnabled: "true", "provider": "openai", "model": "gpt-5-mini",
+			"base_url": "https://llm.example.invalid/v1?k=" + investigateKey, "purpose:investigate:provider": "openai",
+		}, map[string]string{"api_key": "sk-org-own-key", "purpose:investigate:api_key": investigateKey})
+		logs := &bytes.Buffer{}
+		logger := slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+		built := 0
+		byo := newOrgCategorizeBYO(venue.Domain, cipher, logger,
+			func(categorize.ProviderKind, string, string, string) (categorize.Provider, error) {
+				built++
+				return &ledgerStub{model: "gpt-5-mini"}, nil
+			}, newClefBYO(clefAnswers("clef")).build().newClef)
+		served, err := byo.Build(ctx, org)
+		var refusal *BYORefusal
+		if served != nil || !errors.As(err, &refusal) || built != 0 {
+			t.Fatalf("Build = %v, %v (built %d); want a refusal before any provider is built", served, err, built)
+		}
+		for _, text := range []string{err.Error(), logs.String()} {
+			if strings.Contains(text, investigateKey) || strings.Contains(text, "sk-org-own-key") {
+				t.Fatalf("a key reached the refusal or a log line: %q", text)
+			}
 		}
 	})
 

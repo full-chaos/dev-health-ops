@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -75,14 +76,6 @@ func functionRows(ctx context.Context, t *testing.T, domain *pgxpool.Pool, orgID
 	return got
 }
 
-func llmRows(keys []string, value string, encrypted map[string]bool) []settingRow {
-	rows := make([]settingRow, 0, len(keys))
-	for _, key := range keys {
-		rows = append(rows, settingRow{category: "llm", key: key, value: value + "-" + key, encrypted: encrypted[key]})
-	}
-	return rows
-}
-
 // The definer function returns, for one org, the pinned llm rows while the org
 // is opted in and the budget limit row always: no other key, category or org,
 // whatever org id the caller passes.
@@ -95,45 +88,86 @@ func TestTheCategorizeSettingsFunctionReturnsOnlyThePinnedRowsOfOneOrg(t *testin
 		t.Fatal(err)
 	}
 	pinned := llmorgsettings.CategorizeBYODefinerKeys()
+	checkKeys := llmorgsettings.CategorizeBYOBaseURLCheckKeys()
+	servedURLs := llmorgsettings.CategorizeBYOServedBaseURLKeys()
 	decoys := []settingRow{
-		{category: "llm", key: "purpose:investigate:api_key", value: "decoy", encrypted: true},
-		{category: "llm", key: "purpose:investigate:model", value: "decoy", encrypted: false},
-		{category: "llm", key: "purpose:investigate:base_url", value: "decoy", encrypted: false},
-		{category: "llm", key: "purpose:explain:api_key", value: "decoy", encrypted: true},
-		{category: "llm", key: "purpose:explain:model", value: "decoy", encrypted: false},
-		{category: "llm", key: "purpose:explain:base_url", value: "decoy", encrypted: false},
-		{category: "llm", key: "concurrency", value: "4", encrypted: false},
-		{category: "llm", key: "certification_profile", value: "decoy", encrypted: false},
-		{category: "llm_budget", key: "other_key", value: "1", encrypted: false},
+		{category: "llm", key: "purpose:investigate:model", value: "decoy"},
+		{category: "llm", key: "purpose:investigate:base_url", value: "decoy"},
+		{category: "llm", key: "purpose:explain:model", value: "decoy"},
+		{category: "llm", key: "purpose:explain:base_url", value: "decoy"},
+		{category: "llm", key: "concurrency", value: "4"},
+		{category: "llm", key: "certification_profile", value: "decoy"},
+		{category: "llm_budget", key: "other_key", value: "1"},
 		{category: "general", key: "api_key", value: "decoy", encrypted: true},
-		{category: "integrations", key: "provider", value: "decoy", encrypted: false},
+		{category: "integrations", key: "provider", value: "decoy"},
 	}
-	everything := func(optIn string) []settingRow {
-		rows := append(llmRows(pinned, "v", map[string]bool{"api_key": true, "purpose:categorize:api_key": true}), decoys...)
-		rows = append(rows, settingRow{category: "llm_budget", key: "limit_micro_usd", value: "1000000", encrypted: false})
+	// rowsWith seeds every pinned key except the left-out ones, every
+	// base_url-check key, the decoys, the budget limit and the opt-in.
+	rowsWith := func(optIn string, leaveOut ...string) []settingRow {
+		var rows []settingRow
+		for _, key := range append(append([]string{}, pinned...), checkKeys...) {
+			if slices.Contains(leaveOut, key) {
+				continue
+			}
+			rows = append(rows, settingRow{category: "llm", key: key, value: "v-" + key, encrypted: strings.HasSuffix(key, "api_key")})
+		}
+		rows = append(rows, decoys...)
+		rows = append(rows, settingRow{category: "llm_budget", key: "limit_micro_usd", value: "1000000"})
 		if optIn != "" {
-			rows = append(rows, settingRow{category: "llm", key: llmorgsettings.KeyCategorizeBYOEnabled, value: optIn, encrypted: false})
+			rows = append(rows, settingRow{category: "llm", key: llmorgsettings.KeyCategorizeBYOEnabled, value: optIn})
 		}
 		return rows
 	}
+	expect := func(keys ...[]string) []string {
+		var want []string
+		for _, list := range keys {
+			for _, key := range list {
+				want = append(want, "llm/"+key)
+			}
+		}
+		want = append(want, "llm_budget/limit_micro_usd")
+		sort.Strings(want)
+		return want
+	}
+	without := func(list []string, drop ...string) []string {
+		var out []string
+		for _, key := range list {
+			if !slices.Contains(drop, key) {
+				out = append(out, key)
+			}
+		}
+		return out
+	}
 	optedIn, neighbour, notOptedIn, titleCase := uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString()
-	seedSettings(ctx, t, admin, cipher, optedIn, everything("true"))
-	seedSettings(ctx, t, admin, cipher, neighbour, everything("true"))
-	seedSettings(ctx, t, admin, cipher, notOptedIn, everything(""))
-	seedSettings(ctx, t, admin, cipher, titleCase, everything("True"))
+	noURL, emptyURL, overrideURLOnly := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	seedSettings(ctx, t, admin, cipher, optedIn, rowsWith("true"))
+	seedSettings(ctx, t, admin, cipher, neighbour, rowsWith("true"))
+	seedSettings(ctx, t, admin, cipher, notOptedIn, rowsWith(""))
+	seedSettings(ctx, t, admin, cipher, titleCase, rowsWith("True"))
+	seedSettings(ctx, t, admin, cipher, noURL, rowsWith("true", servedURLs...))
+	seedSettings(ctx, t, admin, cipher, emptyURL, rowsWith("true", servedURLs...))
+	if _, err := admin.Exec(ctx, `
+INSERT INTO settings (id, org_id, category, key, value, is_encrypted, created_at, updated_at)
+VALUES (gen_random_uuid(), $1, 'llm', $2, '', false, now(), now()), (gen_random_uuid(), $1, 'llm', $3, NULL, false, now(), now())`,
+		emptyURL, servedURLs[0], servedURLs[1]); err != nil {
+		t.Fatal(err)
+	}
+	seedSettings(ctx, t, admin, cipher, overrideURLOnly, rowsWith("true", servedURLs[0]))
 
-	var want []string
-	for _, key := range pinned {
-		want = append(want, "llm/"+key)
+	cases := []struct {
+		name, org string
+		want      []string
+	}{
+		{"opted in with a base_url", optedIn, expect(pinned, checkKeys)},
+		{"opted in, no base_url row: the base_url-check keys stay out", noURL, expect(without(pinned, servedURLs...))},
+		{"opted in, empty and NULL base_url: the base_url-check keys stay out", emptyURL, expect(pinned)},
+		{"opted in, only the categorize override base_url", overrideURLOnly, expect(without(pinned, servedURLs[0]), checkKeys)},
+		{"not opted in", notOptedIn, expect()},
+		{"opt-in value True", titleCase, expect()},
 	}
-	want = append(want, "llm_budget/limit_micro_usd")
-	sort.Strings(want)
-	if got := functionRows(ctx, t, domain, optedIn, optedIn); !slices.Equal(got, want) {
-		t.Fatalf("opted-in org: rows %v, want exactly %v", got, want)
-	}
-	for _, org := range []string{notOptedIn, titleCase} {
-		if got := functionRows(ctx, t, domain, org, org); !slices.Equal(got, []string{"llm_budget/limit_micro_usd"}) {
-			t.Fatalf("org not opted in (%s): rows %v, want the budget limit row only", org, got)
+	for _, tc := range cases {
+		if got := functionRows(ctx, t, domain, tc.org, tc.org); !slices.Equal(got, tc.want) {
+			t.Fatalf("%s: rows %v, want exactly %v", tc.name, got, tc.want)
 		}
 	}
 	// The argument is the only org filter: no value widens the result.
@@ -172,14 +206,18 @@ func configView(cfg llmorgsettings.OrgConfig, found bool, err error) string {
 
 // The worker's readers on the definer function (domain role) give the same
 // categorize config and the same model-gate inputs as the api's readers on the
-// settings table, for every opted-in org shape. The named delta rows are the
-// two places they differ by design: an org that did not opt in reads as no
-// config on the worker, and the worker cannot test the base_url against the
-// investigate and explain overrides' keys (the function does not return them).
+// settings table, for every opted-in org shape, including a base_url that
+// carries another purpose's stored key (invalid_base_url on both paths). The
+// one named row that differs is the opt-in gate itself: an org that did not
+// opt in reads as no config on the worker, by design (the worker builds only
+// for an opted-in org).
 func TestTheDefinerReadersMatchTheTableReadersForAnOptedInOrg(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	admin, domain, denials, _ := startDomainRoleDatabase(t, ctx)
+	// acr_service_model on for every plan, so the gate reaches the config check
+	// for every shape (a clef-only org saves no provider HasSavedBYO counts).
+	pgseed.FeatureFlag(ctx, t, admin, uuid.NewString(), llmorgsettings.ACRServiceModelFeatureKey, "community", true)
 	cipher, err := providerfoundation.NewFernetDecryptor(secrets.NewValue("test-master-key"), "")
 	if err != nil {
 		t.Fatal(err)
@@ -193,9 +231,13 @@ func TestTheDefinerReadersMatchTheTableReadersForAnOptedInOrg(t *testing.T) {
 	}
 	const clefURL = "https://api.cloudflare.com/client/v4/accounts/0123456789abcdef0123456789abcdef/ai"
 	cases := []struct {
-		name  string
-		rows  []settingRow
-		delta bool
+		name string
+		rows []settingRow
+		// wantInvalidBaseURL: both paths flag the base_url and the gate refuses it.
+		wantInvalidBaseURL bool
+		// configOnly compares the configs only: the gate would resolve the base_url host.
+		configOnly bool
+		notOptedIn bool
 	}{
 		{name: "default config", rows: []settingRow{optIn, plain("provider", "openai"), plain("model", "gpt-5-mini"), enc("api_key", "sk-default")}},
 		{name: "categorize override with its own key", rows: []settingRow{optIn, plain("provider", "openai"), plain("model", "gpt-5-mini"), enc("api_key", "sk-default"),
@@ -209,11 +251,16 @@ func TestTheDefinerReadersMatchTheTableReadersForAnOptedInOrg(t *testing.T) {
 		{name: "only an investigate config", rows: []settingRow{optIn, plain("purpose:investigate:provider", "openai"), plain("purpose:investigate:model", "gpt-5"), enc("purpose:investigate:api_key", "sk-inv")}},
 		{name: "unreadable default key", rows: []settingRow{optIn, plain("provider", "openai"), plain("model", "gpt-5-mini"), {category: "llm", key: "api_key", value: "not-a-token", sealed: true}}},
 		{name: "no config at all", rows: []settingRow{optIn}},
-		{name: "DELTA: not opted in", delta: true, rows: []settingRow{plain("provider", "openai"), plain("model", "gpt-5-mini"), enc("api_key", "sk-default")}},
-		{name: "DELTA: base_url carries the investigate key", delta: true, rows: []settingRow{optIn, plain("provider", "openai"), plain("model", "gpt-5-mini"), enc("api_key", "sk-default"),
+		{name: "base_url holds the stored investigate key", wantInvalidBaseURL: true, rows: []settingRow{optIn, plain("provider", "openai"), plain("model", "gpt-5-mini"), enc("api_key", "sk-default"),
 			plain("base_url", "https://llm.example.invalid/v1?key=sk-investigate-secret"), plain("purpose:investigate:provider", "openai"), enc("purpose:investigate:api_key", "sk-investigate-secret")}},
-		{name: "DELTA: base_url carries the explain key", delta: true, rows: []settingRow{optIn, plain("provider", "openai"), plain("model", "gpt-5-mini"), enc("api_key", "sk-default"),
+		{name: "base_url holds the stored explain key", wantInvalidBaseURL: true, rows: []settingRow{optIn, plain("provider", "openai"), plain("model", "gpt-5-mini"), enc("api_key", "sk-default"),
 			plain("base_url", "https://llm.example.invalid/sk-explain-secret/v1"), plain("purpose:explain:provider", "openai"), enc("purpose:explain:api_key", "sk-explain-secret")}},
+		{name: "categorize override base_url holds the stored investigate key", wantInvalidBaseURL: true, rows: []settingRow{optIn,
+			plain("purpose:categorize:provider", "openai"), plain("purpose:categorize:model", "gpt-5"), enc("purpose:categorize:api_key", "sk-cat"),
+			plain("purpose:categorize:base_url", "https://llm.example.invalid/v1#sk-investigate-other"), plain("purpose:investigate:provider", "openai"), enc("purpose:investigate:api_key", "sk-investigate-other")}},
+		{name: "base_url set and other keys stored but not in it", configOnly: true, rows: []settingRow{optIn, plain("provider", "openai"), plain("model", "gpt-5-mini"), enc("api_key", "sk-default"),
+			plain("base_url", "https://llm.example.invalid/v1"), enc("purpose:investigate:api_key", "sk-inv-x"), enc("purpose:explain:api_key", "sk-exp-x")}},
+		{name: "BY DESIGN: not opted in", notOptedIn: true, rows: []settingRow{plain("provider", "openai"), plain("model", "gpt-5-mini"), enc("api_key", "sk-default")}},
 	}
 	tableStore := llmorgsettings.Store{Pool: admin, Decryptor: cipher}.ForPurpose(llmorgsettings.PurposeCategorize)
 	definerStore := llmorgsettings.Store{Pool: domain, Decryptor: cipher, Relation: llmorgsettings.CategorizeBYODefiner}.ForPurpose(llmorgsettings.PurposeCategorize)
@@ -224,35 +271,33 @@ func TestTheDefinerReadersMatchTheTableReadersForAnOptedInOrg(t *testing.T) {
 			seedSettings(ctx, t, admin, cipher, org, tc.rows)
 			tableView := configView(tableStore.OrgConfig(ctx, org))
 			definerView := configView(definerStore.OrgConfig(ctx, org))
-			if !tc.delta {
-				if tableView != definerView {
-					t.Fatalf("OrgConfig differs:\n table   %s\n definer %s", tableView, definerView)
-				}
-				tableInputs, tableErr := llmorgsettings.PgSource{Licensing: licensing.PostgresStore{Pool: admin}, Queryer: admin, Config: tableStore}.Inputs(ctx, org)
-				definerInputs, definerErr := llmorgsettings.PgSource{Licensing: licensing.PostgresStore{Pool: domain}, Queryer: domain, Config: definerStore, Relation: llmorgsettings.CategorizeBYODefiner}.Inputs(ctx, org)
-				if fmt.Sprintf("%+v %v", tableInputs, tableErr != nil) != fmt.Sprintf("%+v %v", definerInputs, definerErr != nil) {
-					t.Fatalf("model-gate inputs differ:\n table   %+v (%v)\n definer %+v (%v)", tableInputs, tableErr, definerInputs, definerErr)
-				}
-				return
-			}
-			switch tc.name {
-			case "DELTA: not opted in":
+			if tc.notOptedIn {
 				tableCfg, tableFound, _ := tableStore.OrgConfig(ctx, org)
 				_, definerFound, definerErr := definerStore.OrgConfig(ctx, org)
 				if !tableFound || tableCfg.Provider != "openai" || definerFound || definerErr != nil {
 					t.Fatalf("not opted in: table found=%v, definer found=%v err=%v; want the worker to see no config", tableFound, definerFound, definerErr)
 				}
-			default:
-				tableCfg, _, _ := tableStore.OrgConfig(ctx, org)
-				definerCfg, definerFound, definerErr := definerStore.OrgConfig(ctx, org)
-				if !tableCfg.KeyInBaseURL || !definerFound || definerErr != nil || definerCfg.KeyInBaseURL {
-					t.Fatalf("%s: table KeyInBaseURL=%v, definer found=%v KeyInBaseURL=%v err=%v; want the documented delta (table true, definer false)",
-						tc.name, tableCfg.KeyInBaseURL, definerFound, definerCfg.KeyInBaseURL, definerErr)
+				return
+			}
+			if tableView != definerView {
+				t.Fatalf("OrgConfig differs:\n table   %s\n definer %s", tableView, definerView)
+			}
+			if tc.wantInvalidBaseURL {
+				cfg, found, err := definerStore.OrgConfig(ctx, org)
+				if !found || err != nil || !cfg.KeyInBaseURL {
+					t.Fatalf("the worker path does not flag the base_url: found=%v err=%v KeyInBaseURL=%v", found, err, cfg.KeyInBaseURL)
 				}
-				tableCfg.KeyInBaseURL = false
-				if configView(tableCfg, true, nil) != configView(definerCfg, definerFound, definerErr) {
-					t.Fatalf("%s: beyond KeyInBaseURL the configs differ:\n table   %s\n definer %s", tc.name, configView(tableCfg, true, nil), configView(definerCfg, definerFound, definerErr))
-				}
+			}
+			if tc.configOnly {
+				return
+			}
+			tableInputs, tableErr := llmorgsettings.PgSource{Licensing: licensing.PostgresStore{Pool: admin}, Queryer: admin, Config: tableStore}.Inputs(ctx, org)
+			definerInputs, definerErr := llmorgsettings.PgSource{Licensing: licensing.PostgresStore{Pool: domain}, Queryer: domain, Config: definerStore, Relation: llmorgsettings.CategorizeBYODefiner}.Inputs(ctx, org)
+			if fmt.Sprintf("%+v %v", tableInputs, tableErr != nil) != fmt.Sprintf("%+v %v", definerInputs, definerErr != nil) {
+				t.Fatalf("model-gate inputs differ:\n table   %+v (%v)\n definer %+v (%v)", tableInputs, tableErr, definerInputs, definerErr)
+			}
+			if tc.wantInvalidBaseURL && (definerInputs.ConfigUsable || definerInputs.ConfigReason != llmorgsettings.ConfigInvalidBaseURL) {
+				t.Fatalf("the gate inputs on the worker path = %+v, want invalid_base_url", definerInputs)
 			}
 		})
 	}

@@ -41,3 +41,25 @@ func CategorizeBYODefinerKeys() []string {
 	}
 	return append(keys, KeyOwnModelEnabled, KeyPromptCache)
 }
+
+// CategorizeBYOBaseURLCheckKeys are the other purposes' api_key rows. On the
+// categorize Build path they are read only to refuse a base_url that carries
+// one of them (storedKeyInBaseURL), so the definer function returns them only
+// while the org stores a base_url the worker can serve
+// (CategorizeBYOServedBaseURLKeys) and the readers' refusal matches the table's.
+func CategorizeBYOBaseURLCheckKeys() []string { return otherPurposeAPIKeys() }
+
+// CategorizeBYOServedBaseURLKeys are the base_url rows the categorize Build path
+// can serve: the default row's and the categorize override's.
+func CategorizeBYOServedBaseURLKeys() []string {
+	return []string{keyBaseURL, PurposeKey(PurposeCategorize, keyBaseURL)}
+}
+
+// otherPurposeAPIKeys are the api_key rows of every purpose override in Purposes.
+func otherPurposeAPIKeys() []string {
+	keys := make([]string, 0, len(Purposes))
+	for _, purpose := range Purposes {
+		keys = append(keys, PurposeKey(purpose, keyAPIKey))
+	}
+	return keys
+}

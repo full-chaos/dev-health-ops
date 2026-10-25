@@ -199,11 +199,7 @@ func storedKeyInBaseURL(raw orgSettings, baseURL string) bool {
 	if baseURL == "" {
 		return false
 	}
-	keys := []string{keyAPIKey}
-	for _, purpose := range Purposes {
-		keys = append(keys, PurposeKey(purpose, keyAPIKey))
-	}
-	for _, key := range keys {
+	for _, key := range append([]string{keyAPIKey}, otherPurposeAPIKeys()...) {
 		if BaseURLCarriesKey(baseURL, raw[key]) {
 			return true
 		}

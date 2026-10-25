@@ -4,8 +4,11 @@
 -- function only. It runs with its owner's privileges and returns rows of one org: the llm rows of a pinned key
 -- list (the default and the categorize override configuration, the provider row of each purpose, the own-model
 -- toggle and the prompt-cache opt-in) only while the org is opted in to categorization on its own model (its
--- categorize_byo_enabled row is exactly "true"), and the llm_budget limit row always. No other key, category or
--- org is returned. llmorgsettings.CategorizeBYODefinerKeys pins the same key list.
+-- categorize_byo_enabled row is exactly "true"); the other purposes' api_key rows on the same condition and only
+-- while the org stores a non-empty base_url the worker can serve (the default or the categorize override one),
+-- because the worker refuses a base_url that carries any key the org stores; and the llm_budget limit row always.
+-- No other key, category or org is returned. llmorgsettings.CategorizeBYODefinerKeys,
+-- CategorizeBYOBaseURLCheckKeys and CategorizeBYOServedBaseURLKeys pin the same lists.
 -- go-river-migrate grants EXECUTE to the domain role (domainPosture RequiredFunctions).
 
 CREATE FUNCTION public.categorize_byo_settings(p_org_id text)
@@ -21,20 +24,39 @@ AS $$
         AND (
             (
                 setting.category OPERATOR(pg_catalog.=) 'llm'
-                AND setting.key OPERATOR(pg_catalog.=) ANY (ARRAY[
-                    'provider',
-                    'model',
-                    'api_key',
-                    'base_url',
-                    'purpose:categorize:provider',
-                    'purpose:categorize:model',
-                    'purpose:categorize:api_key',
-                    'purpose:categorize:base_url',
-                    'purpose:investigate:provider',
-                    'purpose:explain:provider',
-                    'own_model_enabled',
-                    'prompt_cache'
-                ]::pg_catalog.text[])
+                AND (
+                    setting.key OPERATOR(pg_catalog.=) ANY (ARRAY[
+                        'provider',
+                        'model',
+                        'api_key',
+                        'base_url',
+                        'purpose:categorize:provider',
+                        'purpose:categorize:model',
+                        'purpose:categorize:api_key',
+                        'purpose:categorize:base_url',
+                        'purpose:investigate:provider',
+                        'purpose:explain:provider',
+                        'own_model_enabled',
+                        'prompt_cache'
+                    ]::pg_catalog.text[])
+                    OR (
+                        setting.key OPERATOR(pg_catalog.=) ANY (ARRAY[
+                            'purpose:investigate:api_key',
+                            'purpose:explain:api_key'
+                        ]::pg_catalog.text[])
+                        AND EXISTS (
+                            SELECT 1
+                            FROM public.settings AS served_url
+                            WHERE served_url.org_id OPERATOR(pg_catalog.=) p_org_id
+                                AND served_url.category OPERATOR(pg_catalog.=) 'llm'
+                                AND served_url.key OPERATOR(pg_catalog.=) ANY (ARRAY[
+                                    'base_url',
+                                    'purpose:categorize:base_url'
+                                ]::pg_catalog.text[])
+                                AND COALESCE(served_url.value, '') OPERATOR(pg_catalog.<>) ''
+                        )
+                    )
+                )
                 AND EXISTS (
                     SELECT 1
                     FROM public.settings AS opt_in

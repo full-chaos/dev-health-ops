@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -240,6 +241,12 @@ func TestAFailedStepRollsTheWholePasswordChangeBack(t *testing.T) {
 			if v := rig.tokenVersion(t, ctx, id); v != 3 {
 				t.Errorf("go-api token_version = %d, want 3 (unchanged)", v)
 			}
+			if _, ok, err := rig.accounts.PeekResetLink(ctx, linkHash("reset-secret")); err != nil || !ok {
+				t.Errorf("the failed write burned the reset link: ok %v, err %v", ok, err)
+			}
+			if n := rig.env.count(t, ctx, `SELECT count(*) FROM auth.sessions WHERE principal_id = $1`, id); n != 1 {
+				t.Errorf("%d sessions exist, want only the 1 seeded (a failed change must not leave its new session)", n)
+			}
 			if n := rig.liveLegacyRows(t, ctx, id); n != 1 {
 				t.Errorf("%d go-api refresh rows are live, want the 1 seeded", n)
 			}
@@ -323,5 +330,58 @@ func TestANoSidGoAPIAccessTokenIsRefusedAfterResetAndChange(t *testing.T) {
 	}
 	if !rig.accepts(t, ctx, change, 4) {
 		t.Error("a token at the new version is refused after the change")
+	}
+}
+
+// A reset that read its link, then lost the race to a change of the same
+// account, cannot overwrite the change: the link is consumed inside the
+// password transaction, after the user lock, and the change deleted it.
+func TestAnOlderResetCannotOverwriteAChangeMadeBetweenItsReadAndItsWrite(t *testing.T) {
+	ctx := context.Background()
+	rig := newEndRig(t, ctx)
+	id := rig.account(t, ctx, "Old-pass-12345")
+	digest := linkHash("reset-secret")
+	if err := rig.links.Issue(ctx, IssueRequest{PrincipalID: id, Purpose: PurposePasswordReset, TokenHash: digest, TTL: ResetTTL}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := rig.accounts.PeekResetLink(ctx, digest); err != nil || !ok {
+		t.Fatalf("PeekResetLink = %v, %v", ok, err)
+	}
+	if out, err := rig.flows.Change(ctx, ChangeRequest{PrincipalID: id, Current: "Old-pass-12345", New: "Brand-new-pass-42"}); err != nil || out.Kind != FlowOK {
+		t.Fatalf("Change = %+v, %v", out, err)
+	}
+	afterChange := rig.passwordHash(t, ctx, id)
+	hash, err := cheapHash("Older-reset-pass-77")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rig.accounts.SetPasswordEndingSessions(ctx, PasswordEnd{ID: id, Hash: hash, ResetLink: &digest}); !errors.Is(err, ErrResetLinkUnusable) {
+		t.Fatalf("the older reset's write = %v, want ErrResetLinkUnusable", err)
+	}
+	if got := rig.passwordHash(t, ctx, id); got != afterChange {
+		t.Error("the older reset overwrote the change")
+	}
+	if v := rig.tokenVersion(t, ctx, id); v != 4 {
+		t.Errorf("go-api token_version = %d, want 4 (only the change raised it)", v)
+	}
+}
+
+// A reset whose link was used leaves it consumed with the new password, and a
+// second use is the invalid-token answer.
+func TestAResetConsumesItsLinkInTheSameWriteAsThePassword(t *testing.T) {
+	ctx := context.Background()
+	rig := newEndRig(t, ctx)
+	id := rig.account(t, ctx, "Old-pass-12345")
+	if err := rig.links.Issue(ctx, IssueRequest{PrincipalID: id, Purpose: PurposePasswordReset, TokenHash: linkHash("reset-secret"), TTL: ResetTTL}); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := rig.flows.Reset(ctx, "reset-secret", "A-new-pass-77"); err != nil || out.Kind != FlowOK {
+		t.Fatalf("Reset = %+v, %v", out, err)
+	}
+	if n := rig.env.count(t, ctx, `SELECT count(*) FROM auth.link_credentials WHERE principal_id = $1 AND purpose = 'password_reset' AND consumed_at IS NOT NULL`, id); n != 1 {
+		t.Errorf("%d consumed reset links, want 1", n)
+	}
+	if out, err := rig.flows.Reset(ctx, "reset-secret", "Another-pass-88"); err != nil || out.Kind != FlowInvalidToken {
+		t.Errorf("replay = %+v, %v; want the invalid-token answer", out, err)
 	}
 }

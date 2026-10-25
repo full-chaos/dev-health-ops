@@ -278,6 +278,7 @@ type liveAccounts struct {
 	users  map[string]*User
 	byID   map[uuid.UUID]*User
 	hashes int
+	links  *PGLinks
 }
 
 func (a *liveAccounts) ByEmail(_ context.Context, e string) (*User, error) {
@@ -294,11 +295,25 @@ func (a *liveAccounts) ProvisionLocal(context.Context, ProvisionLocalRequest) (u
 	return uuid.Nil, identity.ErrEmailTaken
 }
 func (a *liveAccounts) SetEmailVerified(context.Context, uuid.UUID) error { return nil }
-func (a *liveAccounts) SetPasswordEndingSessions(context.Context, uuid.UUID, string) error {
+func (a *liveAccounts) PeekResetLink(ctx context.Context, hash [32]byte) (uuid.UUID, bool, error) {
+	return a.links.PeekResetLink(ctx, hash)
+}
+func (a *liveAccounts) SetPasswordEndingSessions(ctx context.Context, req PasswordEnd) (PasswordEndResult, error) {
+	if req.ResetLink != nil {
+		if _, ok, err := a.links.Redeem(ctx, RedeemRequest{Purpose: PurposePasswordReset, TokenHash: *req.ResetLink}); err != nil {
+			return PasswordEndResult{}, err
+		} else if !ok {
+			return PasswordEndResult{}, ErrResetLinkUnusable
+		}
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.hashes++
-	return nil
+	var res PasswordEndResult
+	if req.NewSession != nil {
+		res.Issued = &session.Issued{}
+	}
+	return res, nil
 }
 
 type liveMail struct {
@@ -340,7 +355,7 @@ func TestRaceResetReplay(t *testing.T) {
 	ctx := context.Background()
 	env, links := linkEnv(t, ctx)
 	p := env.principal(t, ctx)
-	accounts := &liveAccounts{users: map[string]*User{}, byID: map[uuid.UUID]*User{}}
+	accounts := &liveAccounts{users: map[string]*User{}, byID: map[uuid.UUID]*User{}, links: links}
 	rec := &flowRecorder{}
 	sessions := &flowSessions{rec: rec}
 	f, err := NewFlows(FlowsConfig{Accounts: accounts, Links: links, Sessions: sessions, Mail: &liveMail{}, Locker: links, UsersOwnedByAuth: true})
@@ -377,7 +392,7 @@ func TestForgotAndResendAnswerAlikeForKnownAndUnknownAddresses(t *testing.T) {
 	ctx := context.Background()
 	env, links := linkEnv(t, ctx)
 	known := env.principal(t, ctx)
-	accounts := &liveAccounts{users: map[string]*User{}, byID: map[uuid.UUID]*User{}}
+	accounts := &liveAccounts{users: map[string]*User{}, byID: map[uuid.UUID]*User{}, links: links}
 	pw, provider := "x", "local"
 	u := &User{ID: known, IsActive: true, PasswordHash: &pw, AuthProvider: &provider}
 	accounts.users["known@example.com"] = u
@@ -480,7 +495,7 @@ func authFlowHandler(f *Flows, mail *liveMail) http.Handler {
 func TestCorpusAuthFlowDecisionRows(t *testing.T) {
 	ctx := context.Background()
 	env, links := linkEnv(t, ctx)
-	accounts := &liveAccounts{users: map[string]*User{}, byID: map[uuid.UUID]*User{}}
+	accounts := &liveAccounts{users: map[string]*User{}, byID: map[uuid.UUID]*User{}, links: links}
 	pw, provider := "x", "local"
 	mk := func(email string, verified bool) uuid.UUID {
 		id := env.principal(t, ctx)
@@ -682,12 +697,23 @@ func (a *statefulAccounts) ProvisionLocal(context.Context, ProvisionLocalRequest
 	return uuid.Nil, identity.ErrEmailTaken
 }
 func (a *statefulAccounts) SetEmailVerified(context.Context, uuid.UUID) error { return nil }
-func (a *statefulAccounts) SetPasswordEndingSessions(_ context.Context, _ uuid.UUID, hash string) error {
+func (a *statefulAccounts) PeekResetLink(context.Context, [32]byte) (uuid.UUID, bool, error) {
+	return uuid.Nil, false, nil
+}
+func (a *statefulAccounts) SetPasswordEndingSessions(ctx context.Context, req PasswordEnd) (PasswordEndResult, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.user.PasswordHash = &hash
+	a.user.PasswordHash = &req.Hash
 	a.sessions.endAll()
-	return nil
+	var res PasswordEndResult
+	if req.NewSession != nil {
+		issued, err := a.sessions.Create(ctx, req.ID, req.NewSession.OrganizationID, req.NewSession.AMR)
+		if err != nil {
+			return PasswordEndResult{}, err
+		}
+		res.Issued = &issued
+	}
+	return res, nil
 }
 
 // TestRaceConcurrentChangeKeepsTheReturnedSession: concurrent changes made

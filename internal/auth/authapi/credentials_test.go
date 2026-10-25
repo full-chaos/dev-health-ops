@@ -71,16 +71,34 @@ func (c *credFakes) SetEmailVerified(_ context.Context, id uuid.UUID) error {
 	c.user.IsVerified = true
 	return nil
 }
-func (c *credFakes) SetPasswordEndingSessions(_ context.Context, _ uuid.UUID, hash string) error {
+func (c *credFakes) PeekResetLink(_ context.Context, hash [32]byte) (uuid.UUID, bool, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	id, ok := c.links[credLinkKey{local.PurposePasswordReset, hash}]
+	return id, ok, nil
+}
+func (c *credFakes) SetPasswordEndingSessions(_ context.Context, req local.PasswordEnd) (local.PasswordEndResult, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.endErr != nil {
-		return c.endErr
+		return local.PasswordEndResult{}, c.endErr
+	}
+	if req.ResetLink != nil {
+		key := credLinkKey{local.PurposePasswordReset, *req.ResetLink}
+		if _, ok := c.links[key]; !ok {
+			return local.PasswordEndResult{}, local.ErrResetLinkUnusable
+		}
+		delete(c.links, key)
 	}
 	c.revoked++
 	c.pwdSet++
-	c.user.PasswordHash = &hash
-	return nil
+	c.user.PasswordHash = &req.Hash
+	var res local.PasswordEndResult
+	if req.NewSession != nil {
+		c.created++
+		res.Issued = &session.Issued{Session: session.Record{ID: uuid.New(), PrincipalID: req.ID, OrganizationID: req.NewSession.OrganizationID}}
+	}
+	return res, nil
 }
 func (c *credFakes) Issue(_ context.Context, req local.IssueRequest) error {
 	c.mu.Lock()
@@ -465,5 +483,23 @@ func TestAFailedPasswordWriteFailsClosedOnResetAndChange(t *testing.T) {
 	}
 	if strings.Contains(c.logs.String(), "sessions store down") || c.fakes.pwdSet != 0 || c.fakes.created != 0 {
 		t.Fatal("a failed write must change nothing, issue no session and log no error text")
+	}
+}
+
+func TestAFailedResetWriteLeavesTheLinkUsableAtTheRoute(t *testing.T) {
+	c := newCredFixture(t)
+	c.call(http.MethodPost, PatternForgotPassword, `{"email":"`+credKnownEmail+`"}`, nil)
+	secret, _ := c.linkFor(local.PurposePasswordReset)
+	body := `{"token":"` + secret + `","new_password":"another-password-1"}`
+	c.fakes.endErr = errors.New("sessions store down")
+	if r := c.call(http.MethodPost, PatternResetPassword, body, nil); r.Code != http.StatusInternalServerError {
+		t.Fatalf("reset with a failed write = %d, want 500", r.Code)
+	}
+	c.fakes.endErr = nil
+	if r := c.call(http.MethodPost, PatternResetPassword, body, nil); r.Code != http.StatusOK {
+		t.Fatalf("the same link after the failed write = %d, want 200", r.Code)
+	}
+	if r := c.call(http.MethodPost, PatternResetPassword, body, nil); r.Code != http.StatusBadRequest {
+		t.Fatalf("the link used twice = %d, want go-api's 400", r.Code)
 	}
 }

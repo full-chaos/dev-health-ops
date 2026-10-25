@@ -121,7 +121,27 @@ func (s *Store) SetPasswordHash(ctx context.Context, principal uuid.UUID, hash s
 // SetPasswordHashWith is SetPasswordHash with end, when not nil, run in the
 // same transaction after the password is written: an error from end rolls the
 // password back with everything else.
-func (s *Store) SetPasswordHashWith(ctx context.Context, principal uuid.UUID, hash string, actor Actor, end func(context.Context, audit.TxOps) error) (err error) {
+func (s *Store) SetPasswordHashWith(ctx context.Context, principal uuid.UUID, hash string, actor Actor, end func(context.Context, audit.TxOps) error) error {
+	return s.SetPasswordHashFor(ctx, principal, hash, actor, PasswordChanged, end)
+}
+
+// ErrLinkUnusable is what an end callback returns when the one-time link it
+// meant to consume is no longer usable: the transaction rolls back, the
+// password is unchanged, and the store reports it without logging a failure.
+var ErrLinkUnusable = errors.New("identity: the one-time link is unusable")
+
+// PasswordCause names why a password was written; it picks the audit reason.
+type PasswordCause struct{ reason string }
+
+var (
+	// PasswordChanged is a signed-in user's own change.
+	PasswordChanged = PasswordCause{"password_changed"}
+	// PasswordReset is a reset by a one-time link.
+	PasswordReset = PasswordCause{"password_reset"}
+)
+
+// SetPasswordHashFor is SetPasswordHashWith with the audit reason of cause.
+func (s *Store) SetPasswordHashFor(ctx context.Context, principal uuid.UUID, hash string, actor Actor, cause PasswordCause, end func(context.Context, audit.TxOps) error) (err error) {
 	defer func() { s.countLink(ctx, "set_password", err) }()
 	if !s.ownsUsers {
 		return ErrSignupNotAvailable
@@ -149,7 +169,7 @@ WHERE principal_id = $1`, principal, hash, passwordAlgorithm); err != nil {
 			}
 			return nil
 		},
-		Audit:  localAudit("auth.user.password_changed", "password_changed", subject, actor),
+		Audit:  localAudit("auth.user.password_changed", cause.reason, subject, actor),
 		Events: []audit.OutboxEvent{userEvent(subject, "user.credentials_changed")},
 	})
 	return s.localErr(ctx, "set password hash", err)
@@ -170,6 +190,8 @@ func (s *Store) localErr(ctx context.Context, op string, err error) error {
 		return nil
 	case errors.Is(err, ErrUserNotFound):
 		return ErrUserNotFound
+	case errors.Is(err, ErrLinkUnusable):
+		return ErrLinkUnusable
 	}
 	return s.storeErr(ctx, op, err)
 }

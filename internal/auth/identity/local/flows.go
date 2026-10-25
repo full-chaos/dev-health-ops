@@ -271,7 +271,10 @@ func (f *Flows) reissue(ctx context.Context, email string, purpose Purpose, ttl 
 	return f.issueAndSend(ctx, principal, purpose, ttl, normalized, nil)
 }
 
-// Reset consumes a reset link, sets the password and revokes every session.
+// Reset consumes a reset link, sets the password and ends every credential.
+// The link is consumed in the password transaction, after the user lock: link,
+// password and ends commit together, a failed write leaves the link usable,
+// and a reset whose link another write used first changes nothing.
 func (f *Flows) Reset(ctx context.Context, secret, newPassword string) (FlowOutcome, error) {
 	if err := f.gate(); err != nil {
 		return FlowOutcome{}, err
@@ -281,9 +284,10 @@ func (f *Flows) Reset(ctx context.Context, secret, newPassword string) (FlowOutc
 	if v := passwordRefusal(newPassword); v != nil {
 		return FlowOutcome{Kind: FlowPolicy, Violations: v}, nil
 	}
-	id, ok, err := f.links.Redeem(ctx, RedeemRequest{Purpose: PurposePasswordReset, TokenHash: sha256.Sum256([]byte(secret))})
+	digest := sha256.Sum256([]byte(secret))
+	id, ok, err := f.accounts.PeekResetLink(ctx, digest)
 	if err != nil {
-		return FlowOutcome{}, fmt.Errorf("local: redeeming a reset link: %w", err)
+		return FlowOutcome{}, fmt.Errorf("local: reading a reset link: %w", err)
 	}
 	if !ok {
 		return FlowOutcome{Kind: FlowInvalidToken}, nil
@@ -294,7 +298,11 @@ func (f *Flows) Reset(ctx context.Context, secret, newPassword string) (FlowOutc
 		if err != nil {
 			return fmt.Errorf("local: hashing the password: %w", err)
 		}
-		if err := f.accounts.SetPasswordEndingSessions(ctx, id, hash); err != nil {
+		if _, err := f.accounts.SetPasswordEndingSessions(ctx, PasswordEnd{ID: id, Hash: hash, ResetLink: &digest}); err != nil {
+			if errors.Is(err, ErrResetLinkUnusable) {
+				out = FlowOutcome{Kind: FlowInvalidToken}
+				return nil
+			}
 			return fmt.Errorf("local: setting the password: %w", err)
 		}
 		return nil
@@ -305,8 +313,8 @@ func (f *Flows) Reset(ctx context.Context, secret, newPassword string) (FlowOutc
 	return out, nil
 }
 
-// Change sets a signed-in user's password, revokes every session and issues
-// the caller a new one.
+// Change sets a signed-in user's password, ends every credential and issues
+// the caller a new session, all in one transaction.
 func (f *Flows) Change(ctx context.Context, req ChangeRequest) (FlowOutcome, error) {
 	if err := f.gate(); err != nil {
 		return FlowOutcome{}, err
@@ -351,12 +359,10 @@ func (f *Flows) changeLocked(ctx context.Context, req ChangeRequest) (FlowOutcom
 	if err != nil {
 		return FlowOutcome{}, fmt.Errorf("local: hashing the password: %w", err)
 	}
-	if err := f.accounts.SetPasswordEndingSessions(ctx, user.ID, hash); err != nil {
+	res, err := f.accounts.SetPasswordEndingSessions(ctx, PasswordEnd{ID: user.ID, Hash: hash,
+		NewSession: &NewSession{OrganizationID: req.OrganizationID, AMR: []string{"pwd"}}})
+	if err != nil {
 		return FlowOutcome{}, fmt.Errorf("local: setting the password: %w", err)
 	}
-	issued, err := f.sessions.Create(ctx, user.ID, req.OrganizationID, []string{"pwd"})
-	if err != nil {
-		return FlowOutcome{}, fmt.Errorf("local: creating the session: %w", err)
-	}
-	return FlowOutcome{Kind: FlowOK, PrincipalID: user.ID, Issued: &issued}, nil
+	return FlowOutcome{Kind: FlowOK, PrincipalID: user.ID, Issued: res.Issued}, nil
 }

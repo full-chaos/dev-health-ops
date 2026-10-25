@@ -2,11 +2,13 @@ package local
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
+	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 )
 
 // Purpose is a link credential purpose (link_credentials.purpose, 0010).
@@ -44,11 +46,17 @@ type Accounts interface {
 	// ProvisionLocal returns identity.ErrEmailTaken for a taken email.
 	ProvisionLocal(ctx context.Context, req ProvisionLocalRequest) (uuid.UUID, error)
 	SetEmailVerified(ctx context.Context, id uuid.UUID) error
-	// SetPasswordEndingSessions sets the password and ends every other
-	// credential of the principal (auth sessions, go-api token version and
-	// refresh tokens) in one transaction: an error leaves the password as it
-	// was.
-	SetPasswordEndingSessions(ctx context.Context, id uuid.UUID, hash string) error
+	// PeekResetLink reads the principal of a live reset link and consumes
+	// nothing.
+	PeekResetLink(ctx context.Context, tokenHash [32]byte) (principalID uuid.UUID, ok bool, err error)
+	// SetPasswordEndingSessions writes the password and, in the same
+	// transaction after the user lock: consumes the reset link (when
+	// req.ResetLink is set), ends every other credential of the principal
+	// (auth sessions, go-api token version and refresh tokens), deletes the
+	// other reset links and creates the caller's new session (when
+	// req.NewSession is set). An error leaves everything as it was;
+	// ErrResetLinkUnusable means the link was no longer usable at that moment.
+	SetPasswordEndingSessions(ctx context.Context, req PasswordEnd) (PasswordEndResult, error)
 }
 
 // SessionAdmin is the B1 session store as the flows use it.
@@ -101,4 +109,31 @@ type Mailer interface {
 // the lock is released.
 type Locker interface {
 	WithPrincipalLock(ctx context.Context, principalID uuid.UUID, fn func(ctx context.Context) error) error
+}
+
+// ErrResetLinkUnusable is SetPasswordEndingSessions' refusal of a reset link
+// that was replayed, expired or replaced before the write: nothing changed.
+var ErrResetLinkUnusable = errors.New("local: the reset link is no longer usable")
+
+// PasswordEnd is one password write and what ends with it.
+type PasswordEnd struct {
+	ID   uuid.UUID
+	Hash string
+	// ResetLink, when set, is the digest of the reset link consumed in the
+	// same transaction.
+	ResetLink *[32]byte
+	// NewSession, when set, is the session created in the same transaction
+	// for the caller of a change.
+	NewSession *NewSession
+}
+
+// NewSession asks for the caller's new session.
+type NewSession struct {
+	OrganizationID *uuid.UUID
+	AMR            []string
+}
+
+// PasswordEndResult is what the write returned.
+type PasswordEndResult struct {
+	Issued *session.Issued
 }

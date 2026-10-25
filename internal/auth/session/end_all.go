@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
+	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 )
 
 // revokeAllLive revokes every effectively live session of the principal inside
@@ -47,6 +48,13 @@ func (s *Store) revokeAllLive(ctx context.Context, tx audit.TxOps, principal str
 	return len(ids), s.revokeSessions(ctx, tx, ids, revokedByCaller)
 }
 
+// Ended is what EndAllInTx ended: the auth sessions it revoked and the go-api
+// refresh_tokens rows it revoked (counts only).
+type Ended struct {
+	Sessions      int
+	RefreshTokens int64
+}
+
 // EndAllInTx ends every credential class of the principal inside the caller's
 // transaction, so a password change and the end of the older credentials
 // commit together or not at all:
@@ -58,17 +66,27 @@ func (s *Store) revokeAllLive(ctx context.Context, tx audit.TxOps, principal str
 //   - the principal's go-api refresh_tokens rows (revoke_all_for_user), which
 //     ends the legacy refresh exchange.
 //
-// It returns how many sessions it revoked. Any error is returned for the
-// caller to roll the transaction back.
-func (s *Store) EndAllInTx(ctx context.Context, tx audit.TxOps, principalID uuid.UUID) (int, error) {
+// Any error is returned for the caller to roll the transaction back.
+func (s *Store) EndAllInTx(ctx context.Context, tx audit.TxOps, principalID uuid.UUID) (Ended, error) {
 	principal := principalID.String()
 	revoked, err := s.revokeAllLive(ctx, tx, principal)
 	if err != nil {
-		return 0, fmt.Errorf("%w: revoking the sessions: %w", ErrStore, err)
+		return Ended{}, fmt.Errorf("%w: revoking the sessions: %w", ErrStore, err)
 	}
-	if _, err := tx.Exec(ctx, `UPDATE public.refresh_tokens SET revoked_at = clock_timestamp()
-		WHERE user_id = $1::uuid AND revoked_at IS NULL`, principal); err != nil {
-		return 0, fmt.Errorf("%w: revoking the go-api refresh tokens: %w", ErrStore, err)
+	tag, err := tx.Exec(ctx, `UPDATE public.refresh_tokens SET revoked_at = clock_timestamp()
+		WHERE user_id = $1::uuid AND revoked_at IS NULL`, principal)
+	if err != nil {
+		return Ended{}, fmt.Errorf("%w: revoking the go-api refresh tokens: %w", ErrStore, err)
 	}
-	return revoked, nil
+	return Ended{Sessions: revoked, RefreshTokens: tag.RowsAffected()}, nil
+}
+
+// CreateInTx is Create inside the caller's transaction: the session and its
+// first refresh credential commit or roll back with the caller's writes. A
+// principal that is disabled or unknown is ErrPrincipalUnavailable.
+func (s *Store) CreateInTx(ctx context.Context, tx audit.TxOps, principalID uuid.UUID, organizationID *uuid.UUID, amr []string) (Issued, error) {
+	if !validAMR(amr) {
+		return Issued{}, ErrInvalidAMR
+	}
+	return s.insertSession(ctx, tx, principalID, organizationID, amr, contracts.SecretString{})
 }

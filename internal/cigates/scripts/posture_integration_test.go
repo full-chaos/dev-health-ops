@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -249,7 +250,8 @@ func TestPostureIntegrationRunRefusesADirtyTree(t *testing.T) {
 	}
 	script := filepath.Join(repoRoot(t), "ci", "posture_integration.sh")
 	res := cmdSpec{dir: repo, env: []string{shimBasePath()}}.run("bash", script, "--run", "--test-runner", stub)
-	if res.code == 0 || strings.Contains(res.stdout, "RECEIPT ") || !strings.Contains(res.stderr, "clean=no") {
+	if res.code == 0 || strings.Contains(res.stdout, "RECEIPT ") || !strings.Contains(res.stderr, "clean=no") ||
+		strings.Contains(res.stderr, "RECEIPT-HEAD") || !strings.Contains(res.stderr, "SIMULATED-HEAD") {
 		t.Fatalf("dirty tree: exit %d stdout=%q stderr=%q, want non-zero, clean=no, no receipt", res.code, res.stdout, res.stderr)
 	}
 	if err := os.Remove(filepath.Join(repo, "untracked.txt")); err != nil {
@@ -405,7 +407,13 @@ func postureDemoRun(t *testing.T, dir string, extraEnv ...string) cmdResult {
 		t.Fatal(err)
 	}
 	env := append(goListEnv(), extraEnv...)
-	env = append(env, "PATH="+filepath.Dir(goBinary(t))+string(os.PathListSeparator)+"/usr/bin:/bin")
+	hasPath := false
+	for _, e := range extraEnv {
+		hasPath = hasPath || strings.HasPrefix(e, "PATH=")
+	}
+	if !hasPath {
+		env = append(env, "PATH="+filepath.Dir(goBinary(t))+string(os.PathListSeparator)+"/usr/bin:/bin")
+	}
 	return cmdSpec{dir: dir, env: env}.run("bash", filepath.Join(dir, "ci", "posture_integration.sh"), "--run", "--paths", paths, "--test-runner", pass)
 }
 
@@ -503,9 +511,53 @@ func TestPostureIntegrationRealRunHeadNamesTheToolchain(t *testing.T) {
 			head = l
 		}
 	}
-	for _, want := range []string{" clean=yes ", " runner=/home/ubuntu/devhealth/scripts/capped.sh sha256=", " go=", " go_sha256=", " go_version="} {
+	for _, want := range []string{" clean=yes ", " runner=/home/ubuntu/devhealth/scripts/capped.sh sha256=", " go=", " go_sha256=", " go_version=", " go_env=GOOS=", " GOARCH=", " GOROOT=", " GOTOOLDIR=", " script_sha256=", " packages=2 packages_sha256="} {
 		if !strings.Contains(head, want) {
 			t.Fatalf("RECEIPT-HEAD %q lacks %q (exit %d stdout=%q stderr=%q)", head, want, res.code, res.stdout, res.stderr)
 		}
+	}
+}
+
+// GOARCH=amd64 on an arm64 host runs test binaries through go_linux_amd64_exec on PATH; a fake helper that prints a
+// passing test must not produce a PASS: the toolchain runs under env -i, so neither GOARCH nor the helper reaches it.
+func TestPostureIntegrationForeignArchExecHelperCannotForgeAPass(t *testing.T) {
+	dir := postureDemo(t)
+	fake := t.TempDir()
+	helper := "#!/bin/sh\nprintf '=== RUN   TestRan\\n--- PASS: TestRan (0.00s)\\nPASS\\n'\nexit 0\n"
+	for _, n := range []string{"go_linux_amd64_exec", "go_linux_arm64_exec"} {
+		if err := os.WriteFile(filepath.Join(fake, n), []byte(helper), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	other := "amd64"
+	if runtime.GOARCH == "amd64" {
+		other = "arm64"
+	}
+	path := "PATH=" + fake + string(os.PathListSeparator) + filepath.Dir(goBinary(t)) + string(os.PathListSeparator) + "/usr/bin:/bin"
+	res := postureDemoRun(t, dir, "GOARCH="+other, path)
+	okRow := ""
+	for _, l := range strings.Split(res.stdout, "\n") {
+		if strings.HasPrefix(l, "SIMULATED internal/ok ") {
+			okRow = l
+		}
+	}
+	if _, err := os.Stat(filepath.Join(dir, "internal", "ok", "ran.marker")); !strings.Contains(okRow, " PASS ") || err != nil {
+		t.Fatalf("the real test must run natively (marker written) and pass; row=%q marker=%v stdout=%q stderr=%q", okRow, err, res.stdout, res.stderr)
+	}
+}
+
+// A caller GOROOT must not reach the toolchain: with GOROOT pointing at an empty directory the run still resolves the
+// real toolchain and runs the tests.
+func TestPostureIntegrationCallerGorootDoesNotReachTheToolchain(t *testing.T) {
+	dir := postureDemo(t)
+	res := postureDemoRun(t, dir, "GOROOT="+t.TempDir())
+	okRow := ""
+	for _, l := range strings.Split(res.stdout, "\n") {
+		if strings.HasPrefix(l, "SIMULATED internal/ok ") {
+			okRow = l
+		}
+	}
+	if _, err := os.Stat(filepath.Join(dir, "internal", "ok", "ran.marker")); !strings.Contains(okRow, " PASS ") || err != nil {
+		t.Fatalf("a caller GOROOT must be ignored; row=%q marker=%v stdout=%q stderr=%q", okRow, err, res.stdout, res.stderr)
 	}
 }

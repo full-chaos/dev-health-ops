@@ -2,6 +2,7 @@ package authrows
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -301,7 +302,6 @@ func TestRealTableLastLoginQuirkIsNotOwnedOnly(t *testing.T) {
 	}
 }
 
-
 func linkMailLines(format string, subjects ...string) string {
 	lines := make([]string, 0, len(subjects))
 	for _, subject := range subjects {
@@ -363,8 +363,39 @@ func TestLinkTokenFormatQuirkIsBounded(t *testing.T) {
 	if problems := l3.Compare(TableLinkMails, golden, golden); len(problems) != 0 {
 		t.Fatalf("equal formats: %v", problems)
 	}
-	if dead := l3.Dead(); len(dead) == 0 {
-		t.Fatal("on the owned leg a go-api format token leaves the quirk covering nothing: it must be reported dead")
+	if dead := strings.Join(l3.Dead(), "\n"); !strings.Contains(dead, "link-token-format-auth-service") {
+		t.Fatalf("on the owned leg a go-api format token leaves the quirk covering nothing: Dead() must name it, got:\n%s", dead)
+	}
+}
+
+// The control of the dead check: opaque mails on the owned leg are covered, so the quirk is not listed dead.
+func TestLinkTokenFormatQuirkIsNotDeadWhenTheOwnedLegMailsOpaqueTokens(t *testing.T) {
+	l, _ := NewLedger(forwarded(t, "sessions,local_login,credentials"), true)
+	if problems := l.Compare(TableLinkMails, linkMailLines(LinkTokenGoAPI, linkMailSubjects...), linkMailLines(LinkTokenOpaque, linkMailSubjects...)); len(problems) != 0 {
+		t.Fatal(problems)
+	}
+	if dead := strings.Join(l.Dead(), "\n"); strings.Contains(dead, "link-token-format-auth-service") {
+		t.Fatalf("the quirk covered mails and is listed dead:\n%s", dead)
+	}
+}
+
+// The quirk covers exactly the golden's link mails: all of them pass, one more is unclassified.
+func TestLinkTokenFormatQuirkCoversExactlyTheGoldensLinkMails(t *testing.T) {
+	n := len(lines(goldenRows(t)[TableLinkMails]))
+	subjects := make([]string, 0, n+1)
+	for i := 0; i < n+1; i++ {
+		subjects = append(subjects, "Verify your email address")
+	}
+	l, _ := NewLedger(forwarded(t, "sessions,local_login,credentials"), true)
+	if problems := l.Compare(TableLinkMails, linkMailLines(LinkTokenGoAPI, subjects[:n]...), linkMailLines(LinkTokenOpaque, subjects[:n]...)); len(problems) != 0 {
+		t.Fatalf("%d golden mails and %d opaque mails must pass: %v", n, n, problems)
+	}
+	if got := l.Covered(); !strings.Contains(got, "link-token-format-auth-service="+strconv.Itoa(n)) {
+		t.Fatalf("Covered = %q, want the quirk covering %d", got, n)
+	}
+	l2, _ := NewLedger(forwarded(t, "sessions,local_login,credentials"), true)
+	if problems := l2.Compare(TableLinkMails, linkMailLines(LinkTokenGoAPI, subjects...), linkMailLines(LinkTokenOpaque, subjects...)); len(problems) == 0 {
+		t.Fatalf("mail %d is beyond the quirk's Max and must be unclassified", n+1)
 	}
 }
 

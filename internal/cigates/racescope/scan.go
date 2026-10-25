@@ -27,7 +27,7 @@ type Row struct {
 // bannedImports start work the race detector would watch (goroutines, processes, signal handlers, sockets) or hold shared state.
 var bannedImports = map[string]bool{
 	"sync": true, "sync/atomic": true, "golang.org/x/sync/errgroup": true,
-	"os/exec": true, "os/signal": true, "net": true, "net/http": true, "database/sql": true,
+	"os/exec": true, "os/signal": true, "C": true, "net": true, "net/http": true, "database/sql": true,
 }
 
 // bannedSelectors are calls that start a goroutine or a timer goroutine without a `go` statement.
@@ -37,6 +37,7 @@ type goPackage struct {
 	ImportPath     string
 	Dir            string
 	GoFiles        []string
+	CgoFiles       []string
 	TestGoFiles    []string
 	XTestGoFiles   []string
 	IgnoredGoFiles []string
@@ -82,7 +83,7 @@ func goList(root string) (modpath string, pkgs map[string]*goPackage, err error)
 	run := func(args ...string) ([]byte, error) {
 		cmd := exec.Command("go", args...)
 		cmd.Dir = root
-		cmd.Env = append(os.Environ(), "GOWORK=off", "GOFLAGS=-mod=readonly")
+		cmd.Env = append(os.Environ(), "GOWORK=off", "GOFLAGS=-mod=readonly", "CGO_ENABLED=1")
 		return cmd.Output()
 	}
 	out, err := run("list", "-m")
@@ -107,7 +108,7 @@ func goList(root string) (modpath string, pkgs map[string]*goPackage, err error)
 }
 
 // scanFile names every construct of one file that starts or watches concurrent work.
-func scanFile(path string) []string {
+func scanFile(path string, names declNames) []string {
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, path, nil, parser.ParseComments)
 	if err != nil {
@@ -122,12 +123,21 @@ func scanFile(path string) []string {
 			if strings.HasPrefix(c.Text, "//go:build") && strings.Contains(c.Text, "race") {
 				at(c.Pos(), "build constraint names race")
 			}
+			if strings.HasPrefix(c.Text, "//export ") {
+				at(c.Pos(), "//export directive: the function is callable from C threads")
+			}
 		}
 	}
 	for _, imp := range f.Imports {
 		v := strings.Trim(imp.Path.Value, `"`)
 		if bannedImports[v] {
 			at(imp.Pos(), "imports "+v)
+		}
+		if v == "C" {
+			at(imp.Pos(), "cgo file: Go and C code the scan cannot model")
+		}
+		if v == "reflect" && strings.HasSuffix(path, "_test.go") {
+			at(imp.Pos(), "imports reflect in a test file (a method called by name, such as Parallel, is invisible to the scan)")
 		}
 		if imp.Name != nil && imp.Name.Name == "." {
 			at(imp.Pos(), "dot import of "+v+" (its calls lose their package qualifier, so the scan cannot see them)")
@@ -145,14 +155,90 @@ func scanFile(path string) []string {
 			if bannedSelectors[x.Sel.Name] {
 				at(x.Pos(), "use of ."+x.Sel.Name)
 			}
+		case *ast.CallExpr:
+			for _, a := range x.Args {
+				if funcValue(a, names) && !pureCallees[calleeName(x)] && !isCallbackCallee(x) {
+					at(a.Pos(), "function value passed as an argument: the callee may run it on another goroutine")
+				}
+			}
 		}
 		return true
 	})
 	return out
 }
 
+// declNames are the package-level function and method names of one package: an identifier or selector that matches one, passed as
+// an argument, is a function value.
+type declNames struct{ funcs, methods map[string]bool }
+
+// pureCallees lists the callees that run a function-valued argument synchronously, on the calling goroutine only, by their documented
+// contract. It starts empty (acp threat-model ruling, CHAOS-11413); an entry needs its reason on its line. The callback check of a
+// covered-by row never consults it: a callback that is shared by several workers may pass no function value at all.
+var pureCallees = map[string]bool{
+	"filepath.WalkDir":      true, // walks in lexical order and calls fn on the calling goroutine
+	"filepath.Walk":         true, // same contract as WalkDir
+	"sort.Slice":            true, // sorts on the calling goroutine and calls less there
+	"sort.SliceStable":      true, // same contract as sort.Slice
+	"slices.SortFunc":       true, // sorts on the calling goroutine
+	"slices.SortStableFunc": true,
+	"t.Run":                 true, // testing: runs the subtest on a new goroutine but waits for it, and only a t.Parallel (refused here) lets it overlap
+}
+
+// isCallbackCallee: the registration call of a callbackCallees function (CheckTree) hands over its callback on purpose; callbackProblems
+// judges that callback instead.
+func isCallbackCallee(c *ast.CallExpr) bool {
+	name := calleeName(c)
+	_, watched := callbackCallees[name[strings.LastIndex(name, ".")+1:]]
+	return watched
+}
+
+func calleeName(c *ast.CallExpr) string {
+	switch fn := c.Fun.(type) {
+	case *ast.Ident:
+		return fn.Name
+	case *ast.SelectorExpr:
+		if pkg, ok := fn.X.(*ast.Ident); ok {
+			return pkg.Name + "." + fn.Sel.Name
+		}
+		return fn.Sel.Name
+	}
+	return ""
+}
+
+func funcValue(a ast.Expr, names declNames) bool {
+	switch x := a.(type) {
+	case *ast.FuncLit:
+		return true
+	case *ast.Ident:
+		return names.funcs[x.Name]
+	case *ast.SelectorExpr:
+		return names.methods[x.Sel.Name]
+	}
+	return false
+}
+
+func declNamesOf(p *goPackage, tests bool) declNames {
+	names := declNames{funcs: map[string]bool{}, methods: map[string]bool{}}
+	for _, f := range goFilesOf(p, tests) {
+		file, err := parser.ParseFile(token.NewFileSet(), filepath.Join(p.Dir, f), nil, 0)
+		if err != nil {
+			continue
+		}
+		for _, d := range file.Decls {
+			if fn, ok := d.(*ast.FuncDecl); ok {
+				if fn.Recv == nil {
+					names.funcs[fn.Name.Name] = true
+				} else {
+					names.methods[fn.Name.Name] = true
+				}
+			}
+		}
+	}
+	return names
+}
+
 func goFilesOf(p *goPackage, tests bool) []string {
-	files := append([]string{}, p.GoFiles...)
+	files := append(append([]string{}, p.GoFiles...), p.CgoFiles...)
 	if tests {
 		files = append(files, p.TestGoFiles...)
 		files = append(files, p.XTestGoFiles...)
@@ -163,8 +249,9 @@ func goFilesOf(p *goPackage, tests bool) []string {
 
 func scanPackage(p *goPackage, tests bool) []string {
 	var out []string
+	names := declNamesOf(p, tests)
 	for _, f := range goFilesOf(p, tests) {
-		out = append(out, scanFile(filepath.Join(p.Dir, f))...)
+		out = append(out, scanFile(filepath.Join(p.Dir, f), names)...)
 	}
 	return out
 }
@@ -285,6 +372,20 @@ func witnessProblems(r Row, covered *goPackage) []string {
 		}
 		for _, d := range file.Decls {
 			if fn, ok := d.(*ast.FuncDecl); ok && fn.Recv == nil && fn.Name.Name == r.Witness {
+				drives := false
+				ast.Inspect(fn.Body, func(n ast.Node) bool {
+					if call, ok := n.(*ast.CallExpr); ok {
+						name := calleeName(call)
+						name = name[strings.LastIndex(name, ".")+1:]
+						if _, watched := callbackCallees[name]; watched {
+							drives = true
+						}
+					}
+					return true
+				})
+				if !drives {
+					return []string{r.Package + ": witness " + r.Witness + " does not call CheckTree, so it no longer drives the worker pool"}
+				}
 				for _, cg := range file.Comments {
 					for _, c := range cg.List {
 						if strings.HasPrefix(c.Text, "//go:build") && strings.Contains(c.Text, "!race") {
@@ -344,6 +445,15 @@ func callbackProblems(path string) []string {
 			std[name] = true
 		}
 	}
+	fileNames := declNames{funcs: map[string]bool{}, methods: map[string]bool{}}
+	for n := range top {
+		fileNames.funcs[n] = true
+	}
+	for _, d := range f.Decls {
+		if fn, ok := d.(*ast.FuncDecl); ok && fn.Recv != nil {
+			fileNames.methods[fn.Name.Name] = true
+		}
+	}
 	checkBody := func(callee string, ft *ast.FuncType, body *ast.BlockStmt, pos token.Pos) {
 		for _, w := range capturedWrites(ft, body) {
 			at(w.pos, callee+" callback writes captured variable "+w.name)
@@ -352,6 +462,11 @@ func callbackProblems(path string) []string {
 			call, ok := n.(*ast.CallExpr)
 			if !ok {
 				return true
+			}
+			for _, a := range call.Args {
+				if funcValue(a, fileNames) {
+					at(a.Pos(), callee+" callback passes a function value to "+calleeName(call)+", which may run it from several workers or write shared state")
+				}
 			}
 			switch fn := call.Fun.(type) {
 			case *ast.Ident:

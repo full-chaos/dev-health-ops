@@ -51,6 +51,9 @@ type Deps struct {
 	// rate limit.
 	Auth    CredentialStore
 	Limiter *httpapi.KeyedLimiter
+	// Workload, when set, lets all three routes also accept the acr-api
+	// workload token. Nil refuses every workload token as not_configured.
+	Workload *WorkloadAuth
 }
 
 // Routes is the acr area's route set. Every path is internal and checks its
@@ -62,20 +65,21 @@ func Routes(deps Deps) []httpapi.Route {
 		logger = slog.Default()
 	}
 	deps.Limiter.Declare()
+	declareWorkloadSeries()
 	return []httpapi.Route{
 		{
 			Method: http.MethodGet, Pattern: "/api/v1/internal/acr/health",
-			Handler: healthHandler(deps.Store, routeAuth{store: deps.Auth, limiter: deps.Limiter, logger: logger, route: routeHealth}, logger),
+			Handler: healthHandler(deps.Store, routeAuth{store: deps.Auth, limiter: deps.Limiter, logger: logger, route: routeHealth, workload: deps.Workload}, logger),
 		},
 		{
 			Method: http.MethodGet, Pattern: "/api/v1/internal/acr/entitlements/{org_id}",
 			Handler: entitlementHandler(deps.Store, routeAuth{
-				store: deps.Auth, limiter: deps.Limiter, logger: logger, route: routeEntitlement, audited: true,
+				store: deps.Auth, limiter: deps.Limiter, logger: logger, route: routeEntitlement, audited: true, workload: deps.Workload,
 			}, logger),
 		},
 		{
 			Method: http.MethodGet, Pattern: "/api/v1/internal/acr/orgs/{org_id}/llm-config",
-			Handler: llmConfigHandler(deps.Credentials, deps.LLMConfig, logger),
+			Handler: llmConfigHandler(deps.Credentials, deps.LLMConfig, logger, deps.Workload),
 		},
 	}
 }
@@ -147,7 +151,7 @@ func entitlementHandler(store EntitlementStore, auth routeAuth, logger *slog.Log
 		// Python commits it before returning; an audit that cannot be
 		// written is 503, never an unaudited answer.
 		finish := func(outcome string, write func()) {
-			if !auth.audit(ctx, cred.ID, orgID, outcome) {
+			if !auth.audit(ctx, cred.ID, cred.PrincipalID, orgID, outcome) {
 				auth.unavailable(w, r, "audit_failed")
 				return
 			}

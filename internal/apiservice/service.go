@@ -39,6 +39,8 @@ import (
 	"os"
 	"time"
 
+	"github.com/full-chaos/dev-health-go/authverify"
+
 	"github.com/full-chaos/dev-health-ops/internal/api/billing"
 	"github.com/full-chaos/dev-health-ops/internal/api/billing/stripeclient"
 	"github.com/full-chaos/dev-health-ops/internal/api/buildinfo"
@@ -400,10 +402,16 @@ func configureWith(
 		deps.Verifier, deps.Signer = protected.verifier, protected.signer
 		scope = []func(http.Handler) http.Handler{protected.scope.Principal, protected.scope.OrgScope, protected.scope.Impersonation}
 	}
-	deps.AccessVerify, err = buildAccessVerify(envsecrets.ProcessLookup, deps.Auth, logger)
+	var accessKeys authverify.KeySource
+	deps.AccessVerify, accessKeys, err = buildAccessVerify(envsecrets.ProcessLookup, deps.Auth, logger)
 	if err != nil {
 		closeComponents(depComponents)
 		return nil, dependencyFailure(ctx, logger, "api_access_verify", "api_access_verify_config_invalid", err)
+	}
+	deps.ACRWorkload, err = buildACRWorkload(envsecrets.ProcessLookup, accessKeys)
+	if err != nil {
+		closeComponents(depComponents)
+		return nil, dependencyFailure(ctx, logger, "api_acr_workload", "api_acr_workload_config_invalid", err)
 	}
 	if deps.AccessVerify != nil && deps.Auth != nil {
 		if err := deps.Auth.RouteAccess(routedAccessVerify{deps.AccessVerify}, goAPIAccessService); err != nil {
@@ -535,6 +543,7 @@ func InternalRoutes(deps Deps, logger *slog.Logger) []httpapi.Route {
 	return internalRoutesWith(acr.Deps{
 		Store: store, Logger: logger, LLMConfig: llmConfig, Credentials: credentials,
 		Auth: auth, Limiter: httpapi.NewKeyedLimiter(counters, acr.AuthAttemptLimit),
+		Workload: deps.ACRWorkload,
 	})
 }
 

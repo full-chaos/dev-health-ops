@@ -821,7 +821,10 @@ WHERE config.id = $1::uuid AND config.org_id = $2 AND integration.is_active`, oc
 	if err != nil {
 		return loadedMaterializationPlan{}, err
 	}
-	failureStreaks := loadFailureStreaks(ctx, tx, orgID, integrationID, provider, datasets)
+	failureStreaks, err := loadFailureStreaks(ctx, tx, orgID, integrationID, provider, datasets)
+	if err != nil {
+		return loadedMaterializationPlan{}, err
+	}
 	tierCap, totalUnitCap, err := loadPlanLimits(ctx, tx, orgID, defaultUnitCap)
 	if err != nil {
 		return loadedMaterializationPlan{}, err
@@ -1903,13 +1906,36 @@ func noteExplicitDatasetsWithoutRow(provider, orgID, integrationID string, witho
 		slog.String("integration_id", integrationID), slog.Int("datasets", planned))
 }
 
+// failureStreakReadBound is the server-side time the failure-history read may
+// take. It must end before the scheduler step context (15 s): a client-side
+// cancel kills the connection and, with it, the whole materialize
+// transaction (CHAOS-11391).
+const failureStreakReadBound = 3 * time.Second
+
+// failureStreakRollbackTimeout bounds the savepoint rollback, which runs on a
+// context that outlives the step so a spent step budget cannot strand the
+// transaction in the aborted state.
+const failureStreakRollbackTimeout = 5 * time.Second
+
 // loadFailureStreaks reads, per source, how many work-items units in a row
 // failed with one cause class (CHAOS-8802). It runs only for a plan that has a
-// work-item family dataset, in a savepoint so a failed read never fails the
-// plan: an unknown streak plans exactly as before.
+// work-item family dataset.
+//
+// A failed read is NOT fatal: the plan proceeds with no streaks and one
+// bounded WARN is logged (CHAOS-11391). While the streaks are unknown, the
+// streak gate is skipped: a source that failed three or more times in a row is
+// planned again instead of waiting out its retry interval, and a window that
+// is too large or too slow is not halved. Nothing is written; the gate works
+// again on the next occurrence whose read succeeds.
+//
+// The read runs in a savepoint with a server-side statement_timeout set LOCAL.
+// The savepoint is ALWAYS rolled back (the read writes nothing), on success
+// too: RELEASE would keep the SET LOCAL for the rest of the transaction. The
+// only error is a failed rollback: the transaction is then unusable, and the
+// caller cannot go on.
 func loadFailureStreaks(
 	ctx context.Context, tx pgx.Tx, orgID, integrationID, provider string, datasets []PlanDataset,
-) map[string]providersync.FailureStreak {
+) (map[string]providersync.FailureStreak, error) {
 	hasFamily := false
 	for _, dataset := range datasets {
 		if workitemcontract.IsFamilyDataset(dataset.Key) {
@@ -1918,24 +1944,58 @@ func loadFailureStreaks(
 		}
 	}
 	if !hasFamily {
-		return nil
+		return nil, nil
 	}
-	unavailable := func(failure string) map[string]providersync.FailureStreak {
-		slog.Default().Warn("sync.materializer.failure_streaks_unavailable",
+	started := time.Now()
+	unavailable := func(failure string, cause error) (map[string]providersync.FailureStreak, error) {
+		attrs := []any{
 			slog.String("provider", provider), slog.String("org_id", orgID),
 			slog.String("integration_id", integrationID),
-			slog.String("failure", failure))
-		return nil
+			slog.String("failure", failure),
+			slog.Int64("duration_ms", time.Since(started).Milliseconds()),
+		}
+		var pgErr *pgconn.PgError
+		if errors.As(cause, &pgErr) && len(pgErr.Code) == 5 {
+			attrs = append(attrs, slog.String("sqlstate", pgErr.Code))
+		}
+		slog.Default().Warn("sync.materializer.failure_streaks_unavailable", attrs...)
+		return nil, nil
 	}
 	savepoint, err := tx.Begin(ctx)
 	if err != nil {
-		return unavailable("savepoint_begin_failed")
+		return unavailable("savepoint_begin_failed", err)
+	}
+	rollback := func() error {
+		rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), failureStreakRollbackTimeout)
+		defer cancel()
+		return savepoint.Rollback(rollbackCtx)
+	}
+	fail := func(failure string, cause error) (map[string]providersync.FailureStreak, error) {
+		if rollbackErr := rollback(); rollbackErr != nil {
+			slog.Default().Error("sync.materializer.failure_streaks_rollback_failed",
+				slog.String("provider", provider), slog.String("org_id", orgID),
+				slog.String("integration_id", integrationID), slog.String("failure", failure))
+			return nil, fmt.Errorf("roll back the failure-streak savepoint: %w", rollbackErr)
+		}
+		return unavailable(failure, cause)
+	}
+	bound := failureStreakReadBound
+	if deadline, ok := ctx.Deadline(); ok {
+		if half := time.Until(deadline) / 2; half < bound {
+			bound = half
+		}
+	}
+	if bound < 10*time.Millisecond {
+		bound = 10 * time.Millisecond
+	}
+	if _, err := savepoint.Exec(ctx, "SELECT set_config('statement_timeout', $1, true)",
+		strconv.FormatInt(bound.Milliseconds(), 10)); err != nil {
+		return fail("timeout_set_failed", err)
 	}
 	rows, err := savepoint.Query(ctx, providersync.RecentTerminalUnitsSQL,
 		orgID, integrationID, canonicalWorkItemsDataset, providersync.RecentTerminalUnitsLimit)
 	if err != nil {
-		_ = savepoint.Rollback(ctx)
-		return unavailable("streak_query_failed")
+		return fail("streak_query_failed", err)
 	}
 	bySource := make(map[string][]providersync.UnitOutcome)
 	for rows.Next() {
@@ -1943,19 +2003,20 @@ func loadFailureStreaks(
 		var outcome providersync.UnitOutcome
 		if scanErr := rows.Scan(&sourceID, &outcome.Failed, &outcome.CauseClass, &outcome.At); scanErr != nil {
 			rows.Close()
-			_ = savepoint.Rollback(ctx)
-			return unavailable("row_scan_failed")
+			return fail("row_scan_failed", scanErr)
 		}
 		outcome.At = outcome.At.UTC()
 		bySource[sourceID] = append(bySource[sourceID], outcome)
 	}
 	rows.Close()
-	if rows.Err() != nil {
-		_ = savepoint.Rollback(ctx)
-		return unavailable("row_iteration_failed")
+	if iterErr := rows.Err(); iterErr != nil {
+		return fail("row_iteration_failed", iterErr)
 	}
-	if err := savepoint.Commit(ctx); err != nil {
-		return unavailable("savepoint_commit_failed")
+	if rollbackErr := rollback(); rollbackErr != nil {
+		slog.Default().Error("sync.materializer.failure_streaks_rollback_failed",
+			slog.String("provider", provider), slog.String("org_id", orgID),
+			slog.String("integration_id", integrationID), slog.String("failure", "savepoint_rollback_failed"))
+		return nil, fmt.Errorf("roll back the failure-streak savepoint: %w", rollbackErr)
 	}
 	streaks := make(map[string]providersync.FailureStreak)
 	for sourceID, outcomes := range bySource {
@@ -1963,7 +2024,7 @@ func loadFailureStreaks(
 			streaks[sourceID] = streak
 		}
 	}
-	return streaks
+	return streaks, nil
 }
 
 // datasetFetchIsUnbounded reads the options of the canonical work-items dataset row (the options the route

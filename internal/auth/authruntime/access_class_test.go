@@ -19,6 +19,8 @@ func (s *stubSigner) Sign(context.Context, string, []byte) (string, string, erro
 	return "", "", errors.New("stub")
 }
 
+func (s *stubSigner) Check(context.Context) error { return errors.New("stub") }
+
 func classConfig(t *testing.T, class string) authconfig.Config {
 	t.Helper()
 	cfg, err := authconfig.Load(authconfig.Spec{LookupEnv: lookupFrom(map[string]string{

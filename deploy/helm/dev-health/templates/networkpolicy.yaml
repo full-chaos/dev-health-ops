@@ -27,6 +27,7 @@ spec:
     {{- if .Values.authService.enabled }}
     {{- $excluded = concat $excluded (list "auth-service") }}
     {{- if .Values.authService.migrate.enabled }}{{- $excluded = concat $excluded (list "auth-migrate") }}{{- end }}
+    {{- if eq (include "dev-health.authBool" (dict "value" .Values.authService.backfill.enabled "key" "authService.backfill.enabled")) "true" }}{{- $excluded = concat $excluded (list "auth-backfill") }}{{- end }}
     {{- end }}
     {{- if $excluded }}
     {{- /*

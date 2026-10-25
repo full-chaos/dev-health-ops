@@ -21,6 +21,9 @@ type Credential struct {
 	Scopes      []string
 	ExpiresAt   *time.Time
 	RevokedAt   *time.Time
+	// PrincipalID is the verified workload token subject; set only on the
+	// Credential an accepted workload token returns, never by a store.
+	PrincipalID string
 }
 
 // Valid is InternalServiceCredential.is_valid: not revoked, and not past its
@@ -52,8 +55,10 @@ type CredentialStore interface {
 	// MarkUsed stamps last_used_at.
 	MarkUsed(ctx context.Context, credentialID string, at time.Time) error
 	// Audit inserts one internal_service_credential_audits row; an empty
-	// credentialID is a NULL credential_id (the token matched no credential).
-	Audit(ctx context.Context, credentialID, requestedOrgID, outcome string) error
+	// credentialID is a NULL credential_id (the token matched no credential),
+	// an empty principalID a NULL principal_id (only a verified workload token
+	// sets it, and then credentialID is empty).
+	Audit(ctx context.Context, credentialID, principalID, requestedOrgID, outcome string) error
 }
 
 // auditAction is the action every audit row carries
@@ -102,14 +107,17 @@ func (s PostgresCredentialStore) MarkUsed(ctx context.Context, credentialID stri
 	return err
 }
 
-func (s PostgresCredentialStore) Audit(ctx context.Context, credentialID, requestedOrgID, outcome string) error {
-	var credential any
+func (s PostgresCredentialStore) Audit(ctx context.Context, credentialID, principalID, requestedOrgID, outcome string) error {
+	var credential, principal any
 	if credentialID != "" {
 		credential = credentialID
 	}
+	if principalID != "" {
+		principal = principalID
+	}
 	_, err := s.Pool.Exec(ctx, `INSERT INTO internal_service_credential_audits
-		(id, credential_id, requested_org_id, action, outcome, created_at)
-		VALUES ($1, $2::uuid, $3, $4, $5, $6)`,
-		uuid.NewString(), credential, requestedOrgID, auditAction, outcome, s.now())
+		(id, credential_id, principal_id, requested_org_id, action, outcome, created_at)
+		VALUES ($1, $2::uuid, $3, $4, $5, $6, $7)`,
+		uuid.NewString(), credential, principal, requestedOrgID, auditAction, outcome, s.now())
 	return err
 }

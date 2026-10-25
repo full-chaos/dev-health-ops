@@ -34,6 +34,7 @@ type reader interface {
 	runUnits(ctx context.Context, orgID string, runID uuid.UUID) ([]runUnit, error)
 	watermarkRows(ctx context.Context, orgID string, sourceKeys, lookupValues []string) ([]schedsync.WatermarkRow, error)
 	backfillJobByID(ctx context.Context, orgID string, id uuid.UUID) (*backfillJob, error)
+	occurrencePlanOf(ctx context.Context, orgID, occurrenceID string) (occurrencePlan, error)
 	coverageProjection(ctx context.Context, orgID string, configID uuid.UUID, lookbackDays, version int) (*coverageProjection, error)
 }
 
@@ -458,6 +459,45 @@ func scanBackfillJob(row pgx.Row) (*backfillJob, error) {
 		return nil, err
 	}
 	return &job, nil
+}
+
+// occurrencePlan is what the scheduler did with one occurrence: the run it
+// planned, or the error code of a quarantine (no run, never retried). Both
+// empty: not planned yet.
+type occurrencePlan struct {
+	RunID     *uuid.UUID
+	ErrorCode string
+}
+
+// occurrencePlanOf reads one occurrence of the org: another org's occurrence
+// is no occurrence (the one query filters on both the occurrence id and org_id).
+func (s store) occurrencePlanOf(ctx context.Context, orgID, occurrenceID string) (occurrencePlan, error) {
+	var runID, errorCode *string
+	var status string
+	err := s.pool.QueryRow(ctx,
+		`SELECT sync_run_id::text, reconcile_status, reconcile_error_code FROM scheduled_sync_occurrences WHERE occurrence_id = $1 AND org_id = $2`,
+		occurrenceID, orgID).Scan(&runID, &status, &errorCode)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return occurrencePlan{}, nil
+	}
+	if err != nil {
+		return occurrencePlan{}, err
+	}
+	if status == "quarantined" {
+		code := "unknown"
+		if errorCode != nil && *errorCode != "" {
+			code = *errorCode
+		}
+		return occurrencePlan{ErrorCode: code}, nil
+	}
+	if runID == nil {
+		return occurrencePlan{}, nil
+	}
+	parsed, err := uuid.Parse(*runID)
+	if err != nil {
+		return occurrencePlan{}, err
+	}
+	return occurrencePlan{RunID: &parsed}, nil
 }
 
 // backfillJobByID is BackfillJobService.get_job after the id parsed: the

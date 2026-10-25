@@ -734,6 +734,17 @@ schema Job and the grants Job.
 {{- end -}}
 {{- end }}
 
+{{/*
+A strict boolean switch of authService: renders "true" or "false", and FAILS the render for anything that is
+not a YAML boolean (a string such as "false" is non-empty and would read as true; null is no value). Every read
+of authService.usersOwned, authService.orgsOwned, authService.backfill.enabled and authService.backfill.dryRun
+goes through it. Call with (dict "value" <value> "key" "<dotted key>").
+*/}}
+{{- define "dev-health.authBool" -}}
+{{- if not (kindIs "bool" .value) }}{{- fail (printf "%s must be the boolean true or false, got %s %v" .key (kindOf .value) .value) }}{{- end }}
+{{- .value }}
+{{- end }}
+
 {{- define "dev-health.authDatabaseSchema" -}}
 {{- default "auth" .Values.authService.database.schema -}}
 {{- end }}

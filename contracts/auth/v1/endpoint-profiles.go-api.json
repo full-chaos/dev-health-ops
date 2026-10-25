@@ -6352,11 +6352,16 @@
     },
     {
       "accepted_credential_classes": [
-        "internal_svc_acr_token"
+        "internal_svc_acr_token",
+        "workload_token"
       ],
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_typ",
+        "name": "workload+jwt"
+      },
       "classification": "protected",
-      "current_state_cache_behavior": "none: no authorization read (internal/apiservice/acr/internalauth.go:105)",
+      "current_state_cache_behavior": "none: no authorization read (internal/apiservice/acr/internalauth.go:107)",
       "disclosure_behavior": null,
       "gaps": [
         "action: no catalog action covers the internal service entitlement and configuration reads (this leaf does not extend the vocabulary)",
@@ -6370,30 +6375,41 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 71,
+          "line": 75,
           "note": "Pattern:",
           "path": "internal/apiservice/acr/handlers.go"
         },
-        "description": "routeAuth: the internal listener verifies the svc_acr_ service credential (hashed at rest) before any read, with a keyed attempt limiter."
+        "description": "routeAuth: the internal listener verifies, before any read, either the svc_acr_ service credential (hashed at rest; migration compat) or the acr-api workload token (workload-token.v1: EdDSA, typ workload+jwt, aud dev-health-api, issuer pin AUTH_ACCESS_TOKEN_ISSUER, sub equal to AUTH_ACR_WORKLOAD_SUBJECT; no scope claim), with a keyed attempt limiter."
       },
       "public_rationale": null,
-      "resource_resolver": "organization_from_path: the {org_id} path segment is the requested organization (internal/apiservice/acr/handlers.go:141); the service credential carries no organization binding that the handler compares with it",
+      "resource_resolver": "organization_from_path: the {org_id} path segment is the requested organization (internal/apiservice/acr/handlers.go:145); the service credential carries no organization binding that the handler compares with it",
       "route": "/api/v1/internal/acr/entitlements/{org_id}",
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/apiservice/acr/handlers.go",
-        "line": 71
+        "line": 75
       },
       "surface_kind": "rest",
-      "tenant_requirement": "org_scoped"
+      "tenant_requirement": "org_scoped",
+      "token_shape": {
+        "algorithm": "EdDSA",
+        "audience": "dev-health-api",
+        "issuer": "AUTH_ACCESS_TOKEN_ISSUER (the auth-service issuer pin)",
+        "token_type": "workload+jwt (workload token; svc_acr_ is opaque)"
+      }
     },
     {
       "accepted_credential_classes": [
-        "internal_svc_acr_token"
+        "internal_svc_acr_token",
+        "workload_token"
       ],
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_typ",
+        "name": "workload+jwt"
+      },
       "classification": "protected",
-      "current_state_cache_behavior": "none: no authorization read (internal/apiservice/acr/internalauth.go:105)",
+      "current_state_cache_behavior": "none: no authorization read (internal/apiservice/acr/internalauth.go:107)",
       "disclosure_behavior": null,
       "gaps": [
         "action: no catalog action covers the internal service entitlement and configuration reads (this leaf does not extend the vocabulary)",
@@ -6405,30 +6421,41 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 67,
+          "line": 71,
           "note": "Pattern:",
           "path": "internal/apiservice/acr/handlers.go"
         },
-        "description": "routeAuth: the internal listener verifies the svc_acr_ service credential (hashed at rest) before any read, with a keyed attempt limiter."
+        "description": "routeAuth: the internal listener verifies, before any read, either the svc_acr_ service credential (hashed at rest; migration compat) or the acr-api workload token (workload-token.v1: EdDSA, typ workload+jwt, aud dev-health-api, issuer pin AUTH_ACCESS_TOKEN_ISSUER, sub equal to AUTH_ACR_WORKLOAD_SUBJECT; no scope claim), with a keyed attempt limiter."
       },
       "public_rationale": null,
-      "resource_resolver": "none: the route reads no organization (internal/apiservice/acr/handlers.go:67)",
+      "resource_resolver": "none: the route reads no organization (internal/apiservice/acr/handlers.go:71)",
       "route": "/api/v1/internal/acr/health",
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/apiservice/acr/handlers.go",
-        "line": 67
+        "line": 71
       },
       "surface_kind": "rest",
-      "tenant_requirement": "none"
+      "tenant_requirement": "none",
+      "token_shape": {
+        "algorithm": "EdDSA",
+        "audience": "dev-health-api",
+        "issuer": "AUTH_ACCESS_TOKEN_ISSUER (the auth-service issuer pin)",
+        "token_type": "workload+jwt (workload token; svc_acr_ is opaque)"
+      }
     },
     {
       "accepted_credential_classes": [
-        "internal_svc_acr_token"
+        "internal_svc_acr_token",
+        "workload_token"
       ],
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_typ",
+        "name": "workload+jwt"
+      },
       "classification": "protected",
-      "current_state_cache_behavior": "none: no authorization read (internal/apiservice/acr/internalauth.go:105)",
+      "current_state_cache_behavior": "none: no authorization read (internal/apiservice/acr/internalauth.go:107)",
       "disclosure_behavior": null,
       "gaps": [
         "action: no catalog action covers the internal service entitlement and configuration reads (this leaf does not extend the vocabulary)",
@@ -6442,22 +6469,28 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 77,
+          "line": 81,
           "note": "Pattern:",
           "path": "internal/apiservice/acr/handlers.go"
         },
-        "description": "routeAuth: the internal listener verifies the svc_acr_ service credential (hashed at rest) before any read, with a keyed attempt limiter."
+        "description": "routeAuth: the internal listener verifies, before any read, either the svc_acr_ service credential (hashed at rest; migration compat) or the acr-api workload token (workload-token.v1: EdDSA, typ workload+jwt, aud dev-health-api, issuer pin AUTH_ACCESS_TOKEN_ISSUER, sub equal to AUTH_ACR_WORKLOAD_SUBJECT; no scope claim), with a keyed attempt limiter."
       },
       "public_rationale": null,
-      "resource_resolver": "organization_from_path: the {org_id} path segment is the requested organization (internal/apiservice/acr/llmconfig.go:137); the service credential carries no organization binding that the handler compares with it",
+      "resource_resolver": "organization_from_path: the {org_id} path segment is the requested organization (internal/apiservice/acr/llmconfig.go:152); the service credential carries no organization binding that the handler compares with it",
       "route": "/api/v1/internal/acr/orgs/{org_id}/llm-config",
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/apiservice/acr/handlers.go",
-        "line": 77
+        "line": 81
       },
       "surface_kind": "rest",
-      "tenant_requirement": "org_scoped"
+      "tenant_requirement": "org_scoped",
+      "token_shape": {
+        "algorithm": "EdDSA",
+        "audience": "dev-health-api",
+        "issuer": "AUTH_ACCESS_TOKEN_ISSUER (the auth-service issuer pin)",
+        "token_type": "workload+jwt (workload token; svc_acr_ is opaque)"
+      }
     },
     {
       "accepted_credential_classes": [

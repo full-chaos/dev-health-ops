@@ -24,9 +24,12 @@ const EdDSAAccessLifetime = contracts.AccessTokenLifetimeCeiling
 // accessTokenTyp is the JWS typ of an access-token.v1 token.
 const accessTokenTyp = "at+jwt"
 
-// AccessSigner signs a compact JWS with the active key of the key set.
+// AccessSigner signs a compact JWS with the active key of the key set. Check
+// proves it can sign now (token.Signer.Check: the key set loads and the
+// active key signs a probe that verifies).
 type AccessSigner interface {
 	Sign(ctx context.Context, typ string, payload []byte) (token, kid string, err error)
+	Check(ctx context.Context) error
 }
 
 type eddsaMinter struct {
@@ -34,6 +37,7 @@ type eddsaMinter struct {
 	issuer   string
 	audience string
 	scope    string
+	check    signerCheck
 }
 
 // NewEdDSAIssuer builds an Issuer whose access tokens are access-token.v1

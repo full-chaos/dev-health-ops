@@ -41,21 +41,22 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 	fs := flag.NewFlagSet("loadtest", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	var (
-		cfgPath      = fs.String("config", "", "target config JSON file (required)")
-		profileName  = fs.String("profile", "normal", "load profile: normal or peak")
-		rate         = fs.Float64("rate", 0, "requests per second (overrides the profile)")
-		duration     = fs.Duration("duration", 0, "run length (overrides the profile)")
-		concurrency  = fs.Int("concurrency", 0, "workers (overrides the profile)")
-		baseURL      = fs.String("base-url", "", "base URL (overrides the config)")
-		faultName    = fs.String("fault-name", "", "label of the fault the operator toggles outside the harness")
-		faultOn      = fs.Duration("fault-on", 0, "offset into the run when the fault is turned on")
-		faultOff     = fs.Duration("fault-off", 0, "offset into the run when the fault is turned off")
-		faultMaxErr  = fs.Float64("fault-max-err", 0.05, "error ratio per second counted as degraded")
-		faultSustain = fs.Int("fault-sustain", 3, "clean seconds in a row that count as recovered")
-		recoverIn    = fs.Duration("recover-within", 0, "fail when recovery takes longer than this (needs a fault window)")
-		out          = fs.String("out", "", "report file (default: stdout)")
-		allow        listFlag
-		slos         listFlag
+		cfgPath        = fs.String("config", "", "target config JSON file (required)")
+		profileName    = fs.String("profile", "normal", "load profile: normal or peak")
+		rate           = fs.Float64("rate", 0, "requests per second (overrides the profile)")
+		duration       = fs.Duration("duration", 0, "run length (overrides the profile)")
+		concurrency    = fs.Int("concurrency", 0, "workers (overrides the profile)")
+		baseURL        = fs.String("base-url", "", "base URL (overrides the config)")
+		faultName      = fs.String("fault-name", "", "label of the fault the operator toggles outside the harness")
+		faultOn        = fs.Duration("fault-on", 0, "offset into the run when the fault is turned on")
+		faultOff       = fs.Duration("fault-off", 0, "offset into the run when the fault is turned off")
+		faultMaxErr    = fs.Float64("fault-max-err", 0.05, "error ratio per second counted as degraded")
+		faultSustain   = fs.Int("fault-sustain", 3, "clean seconds in a row that count as recovered")
+		recoverIn      = fs.Duration("recover-within", 0, "fail when recovery takes longer than this (needs a fault window)")
+		requireDegrade = fs.Bool("require-degrade", false, "fail when the fault window never degrades the run (needs --fault-on and --fault-off)")
+		out            = fs.String("out", "", "report file (default: stdout)")
+		allow          listFlag
+		slos           listFlag
 	)
 	fs.Var(&allow, "allow-host", "extra allowed host name, exact match (repeatable)")
 	fs.Var(&slos, "slo", "objective path:p95=25ms,p99=75ms,err=0.01 (repeatable)")
@@ -97,6 +98,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 	if err != nil {
 		return fail("%v", err)
 	}
+	if *requireDegrade && (*faultOn <= 0 && *faultOff <= 0) {
+		return fail("--require-degrade needs --fault-on and --fault-off")
+	}
 	opts := loadharness.Options{Profile: prof, AllowHosts: allow, Getenv: getenv}
 	if *faultOff > 0 || *faultOn > 0 || *faultName != "" {
 		if *faultOff <= *faultOn {
@@ -114,6 +118,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 	rep = loadharness.ApplySLOs(rep, parsed)
 	if *recoverIn > 0 {
 		rep = loadharness.ApplyRecoveryBound(rep, *recoverIn)
+	}
+	if *requireDegrade {
+		rep = loadharness.ApplyRequireDegrade(rep)
 	}
 
 	w := stdout

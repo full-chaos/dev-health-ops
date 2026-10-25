@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/url"
 	"strconv"
 	"strings"
@@ -39,17 +40,19 @@ type HeaderEnv struct {
 
 // Target is one measured path.
 type Target struct {
-	Name          string               `json:"name"`
-	Method        string               `json:"method"`
-	Path          string               `json:"path"`
-	Headers       map[string]string    `json:"headers"`
-	HeaderEnv     map[string]HeaderEnv `json:"header_env"`
-	Body          string               `json:"body"`
-	ExpectStatus  []int                `json:"expect_status"`
-	ForbidStatus  []int                `json:"forbid_status"`
-	RequireStatus []int                `json:"require_status"`
-	Forbid5xx     bool                 `json:"forbid_5xx"`
-	Weight        int                  `json:"weight"`
+	Name           string               `json:"name"`
+	Method         string               `json:"method"`
+	Path           string               `json:"path"`
+	Headers        map[string]string    `json:"headers"`
+	HeaderEnv      map[string]HeaderEnv `json:"header_env"`
+	Body           string               `json:"body"`
+	ExpectStatus   []int                `json:"expect_status"`
+	ForbidStatus   []int                `json:"forbid_status"`
+	RequireStatus  []int                `json:"require_status"`
+	Forbid5xx      bool                 `json:"forbid_5xx"`
+	MaxErrorRate   *float64             `json:"max_error_rate"`
+	MaxStatusCount map[string]int       `json:"max_status_count"`
+	Weight         int                  `json:"weight"`
 }
 
 // Config is the target list. The same shape serves any path, so a PDP path
@@ -86,6 +89,9 @@ func ParseConfig(data []byte, getenv func(string) string) (Config, error) {
 		}
 		if strings.Contains(t.Path, "${ENV:") || strings.Contains(t.Path, "${POOL:") || strings.Contains(t.Path, "${PAD:") {
 			return Config{}, fmt.Errorf("config: target %q path may use ${SEQ} only", t.Name)
+		}
+		if err := t.validateRules(); err != nil {
+			return Config{}, fmt.Errorf("config: target %q: %w", t.Name, err)
 		}
 		if t.Weight < 0 {
 			return Config{}, fmt.Errorf("config: target %q weight is negative", t.Name)
@@ -181,4 +187,21 @@ func ProfileByName(name string) (Profile, error) {
 		return Profile{Name: "peak", Rate: 200, Duration: 120 * time.Second, Concurrency: 64}, nil
 	}
 	return Profile{}, fmt.Errorf("unknown profile %q (normal, peak)", name)
+}
+
+// validateRules refuses a max_error_rate that is not a ratio in [0,1] and a
+// max_status_count with a key that is not an HTTP status or a negative count.
+func (t Target) validateRules() error {
+	if m := t.MaxErrorRate; m != nil && (math.IsNaN(*m) || math.IsInf(*m, 0) || *m < 0 || *m > 1) {
+		return errors.New("max_error_rate must be a ratio in [0,1]")
+	}
+	for k, n := range t.MaxStatusCount {
+		if s, err := strconv.Atoi(k); err != nil || s < 100 || s > 599 {
+			return fmt.Errorf("max_status_count key %q is not an HTTP status (100-599)", k)
+		}
+		if n < 0 {
+			return fmt.Errorf("max_status_count for %s is negative", k)
+		}
+	}
+	return nil
 }

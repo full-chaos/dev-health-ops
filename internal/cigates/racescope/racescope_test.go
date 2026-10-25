@@ -151,6 +151,8 @@ func module(t *testing.T, files map[string]string) string {
 	return dir
 }
 
+const witnessTest = "package c\n\nimport \"testing\"\n\nfunc TestH(t *testing.T) { _ = CheckTree([]string{\"x\"}, func(string) int { return 0 }) }\n"
+
 const cleanPkg = "package a\n\nfunc F() int { return 1 }\n"
 const cleanTest = "package a\n\nimport \"testing\"\n\nfunc TestF(t *testing.T) { _ = F() }\n"
 
@@ -222,7 +224,7 @@ func coveredModule(witnessFile string) map[string]string {
 	return map[string]string{
 		"a/a.go": "package a\n\nimport \"example.test/m/c\"\n\nfunc F() int { return c.H() }\n", "a/a_test.go": cleanTest,
 		"c/c.go":           "package c\n\nimport \"sync\"\n\nvar mu sync.Mutex\n\nfunc H() int { return 1 }\n",
-		"c/" + witnessFile: "package c\n\nimport \"testing\"\n\nfunc TestH(t *testing.T) { _ = H() }\n",
+		"c/" + witnessFile: witnessTest,
 	}
 }
 
@@ -277,7 +279,7 @@ func callbackModule(callback string) map[string]string {
 		"a/a.go":      "package a\n\nimport \"example.test/m/c\"\n\nfunc F() int {\n\tvar out []string\n\t_ = out\n\treturn c.CheckTree([]string{\"x\"}, " + callback + ")\n}\n",
 		"a/a_test.go": cleanTest,
 		"c/c.go":      "package c\n\nimport \"sync\"\n\nvar mu sync.Mutex\n\nfunc CheckTree(p []string, read func(string) int) int { return read(p[0]) }\n",
-		"c/c_test.go": "package c\n\nimport \"testing\"\n\nfunc TestH(t *testing.T) {}\n",
+		"c/c_test.go": witnessTest,
 	}
 }
 
@@ -361,5 +363,49 @@ func TestACoveredByCallbackThatCallsAHelperOrAliasesTheCalleeIsRefused(t *testin
 	pure["a/a.go"] = strings.Replace(pure["a/a.go"], "import \"example.test/m/c\"", "import (\n\t\"strings\"\n\n\t\"example.test/m/c\"\n)", 1)
 	if got := problemsOf(t, pure, covered); got != "" {
 		t.Errorf("a callback that calls only the standard library was refused:\n%s", got)
+	}
+}
+
+// Threat-model ruling (acp, r2b): a package is excludable only if the scan can model all of it. Each case below is an ordinary-code
+// escape the reviewer reproduced with a real data race.
+func TestWhatTheScanCannotModelIsNotExcludable(t *testing.T) {
+	cgo := "package a\n\n/*\nvoid f(void) {}\n*/\nimport \"C\"\n\nfunc F() int { go func() { C.f() }(); return 1 }\n"
+	for name, tc := range map[string]struct {
+		files map[string]string
+		want  string
+	}{
+		"cgo file in the package":                            {map[string]string{"a/a.go": cgo, "a/a_test.go": cleanTest}, "cgo"},
+		"cgo file in a dependency":                           {map[string]string{"a/a.go": "package a\n\nimport \"example.test/m/b\"\n\nfunc F() int { return b.G() }\n", "a/a_test.go": cleanTest, "b/b.go": strings.Replace(cgo, "package a", "package b", 1)}, "cgo"},
+		"export directive":                                   {map[string]string{"a/a.go": "package a\n\n//export F\nfunc F() int { return 1 }\n", "a/a_test.go": cleanTest}, "//export"},
+		"reflect in a test file":                             {map[string]string{"a/a.go": cleanPkg, "a/a_test.go": "package a\n\nimport (\n\t\"reflect\"\n\t\"testing\"\n)\n\nfunc TestF(t *testing.T) { reflect.ValueOf(t).MethodByName(\"Parallel\").Call(nil) }\n"}, "imports reflect"},
+		"reflect in an external test":                        {map[string]string{"a/a.go": cleanPkg, "a/a_test.go": cleanTest, "a/x_test.go": "package a_test\n\nimport (\n\t\"reflect\"\n\t\"testing\"\n)\n\nfunc TestX(t *testing.T) { _ = reflect.TypeOf(t) }\n"}, "imports reflect"},
+		"closure passed to strings.Map":                      {map[string]string{"a/a.go": "package a\n\nimport \"strings\"\n\nvar shared int\n\nfunc F() int { return len(strings.Map(func(r rune) rune { shared++; return r }, \"x\")) }\n", "a/a_test.go": cleanTest}, "function value"},
+		"func name passed to a call":                         {map[string]string{"a/a.go": "package a\n\nimport \"sort\"\n\nfunc less(i, j int) bool { return i < j }\n\nfunc F() int { sort.Slice([]int{1}, less); return 1 }\n", "a/a_test.go": cleanTest}, "function value"},
+		"method value passed to a call":                      {map[string]string{"a/a.go": "package a\n\nimport \"sort\"\n\ntype T struct{}\n\nfunc (T) less(i, j int) bool { return i < j }\n\nfunc F() int { var x T; sort.Slice([]int{1}, x.less); return 1 }\n", "a/a_test.go": cleanTest}, "function value"},
+		"external test package imports a concurrent package": {map[string]string{"a/a.go": cleanPkg, "a/a_test.go": cleanTest, "a/x_test.go": "package a_test\n\nimport (\n\t\"testing\"\n\n\t\"example.test/m/b\"\n)\n\nfunc TestX(t *testing.T) { _ = b.G() }\n", "b/b.go": "package b\n\nfunc G() int { go func() {}(); return 1 }\n"}, "a: imports b"},
+	} {
+		if got := problemsOf(t, tc.files, rowA); !strings.Contains(got, tc.want) {
+			t.Errorf("%s: want a problem naming %q, got:\n%s", name, tc.want, got)
+		}
+	}
+}
+
+// A callback may not pass a function value to a standard-library call either (strings.Map with a closure wrote shared state).
+func TestACoveredByCallbackThatPassesAFunctionValueIsRefused(t *testing.T) {
+	covered := Row{"a", "covered-by:c", "TestH", "pool in c"}
+	files := callbackModule(`func(path string) int { return len(strings.Map(transform, path)) }`)
+	files["a/a.go"] = strings.Replace(files["a/a.go"], "import \"example.test/m/c\"", "import (\n\t\"strings\"\n\n\t\"example.test/m/c\"\n)", 1) + "\nfunc transform(r rune) rune { return r }\n"
+	if got := problemsOf(t, files, covered); !strings.Contains(got, "function value") {
+		t.Errorf("a function value passed to strings.Map was accepted:\n%s", got)
+	}
+}
+
+// The witness must still call CheckTree: a no-op body keeps its name and proves nothing.
+func TestAWitnessThatNoLongerDrivesCheckTreeIsRefused(t *testing.T) {
+	covered := Row{"a", "covered-by:c", "TestH", "pool in c"}
+	files := coveredModule("c_test.go")
+	files["c/c_test.go"] = "package c\n\nimport \"testing\"\n\nfunc TestH(t *testing.T) {}\n"
+	if got := problemsOf(t, files, covered); !strings.Contains(got, "does not call CheckTree") {
+		t.Errorf("a no-op witness was accepted:\n%s", got)
 	}
 }

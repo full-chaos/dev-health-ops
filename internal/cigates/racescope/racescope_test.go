@@ -424,3 +424,94 @@ func TestAFunctionValueInACallbackInsideTheCoveredPackageIsRefused(t *testing.T)
 		t.Errorf("a function literal passed inside the callback was accepted:\n%s", got)
 	}
 }
+
+// acp ruling (CHAOS-11413): the exact set of callees that may take a function value, pinned. A new entry stays red until this list
+// names it, and until its line in scan.go carries a comment naming the stdlib contract that makes it synchronous.
+func TestThePureCalleeAllowlistIsPinnedAndEachEntryHasItsReason(t *testing.T) {
+	want := []string{"filepath.Walk", "filepath.WalkDir", "slices.SortFunc", "slices.SortStableFunc", "sort.Slice", "sort.SliceStable", "t.Run"}
+	var got []string
+	for k := range pureCallees {
+		got = append(got, k)
+	}
+	sort.Strings(got)
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("pureCallees is %v, the pinned set is %v: pin the new entry here and give its line a comment naming the contract", got, want)
+	}
+	src, err := os.ReadFile("scan.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range want {
+		found := false
+		for _, line := range strings.Split(string(src), "\n") {
+			if strings.Contains(line, `"`+k+`":`) {
+				found = true
+				if i := strings.Index(line, "//"); i < 0 || len(strings.TrimSpace(line[i+2:])) < 20 {
+					t.Errorf("pureCallees entry %s has no reason comment: %q", k, line)
+				}
+			}
+		}
+		if !found {
+			t.Errorf("pureCallees entry %s is not on a line of its own in scan.go", k)
+		}
+	}
+}
+
+// What a pure callee runs is scanned as package source: a goroutine inside a WalkDir callback, or t.Parallel inside a t.Run body.
+func TestPlantedConcurrencyInsideAPureCalleesFunctionIsRefused(t *testing.T) {
+	for name, tc := range map[string]struct{ src, want string }{
+		"goroutine inside a WalkDir callback": {"package a\n\nimport \"path/filepath\"\n\nfunc F() int {\n\t_ = filepath.WalkDir(\".\", func(p string, d int, err error) error { go func() {}(); return nil })\n\treturn 1\n}\n", "go statement"},
+		"t.Parallel inside a t.Run body":      {"package a\n\nimport \"testing\"\n\nfunc F(t *testing.T) { t.Run(\"x\", func(t *testing.T) { t.Parallel() }) }\n", "use of .Parallel"},
+	} {
+		if got := problemsOf(t, map[string]string{"a/a.go": tc.src, "a/a_test.go": cleanTest}, rowA); !strings.Contains(got, tc.want) {
+			t.Errorf("%s: want %q, got:\n%s", name, tc.want, got)
+		}
+	}
+}
+
+// A pure callee may take only a function literal or a same-package function: its body is scanned. A value from another package, a
+// field, a variable or an interface method is a body the scan never sees.
+func TestAPureCalleeGivenAFunctionTheScanCannotSeeIsRefused(t *testing.T) {
+	head := "package a\n\nimport \"sort\"\n\nfunc local(i, j int) bool { return i < j }\n\ntype S struct{ less func(i, j int) bool }\n\n"
+	for name, call := range map[string]string{
+		"field of a struct":        `var s S; sort.Slice([]int{1}, s.less)`,
+		"local variable":           `f := local; sort.Slice([]int{1}, f)`,
+		"value of another package": `sort.Slice([]int{1}, other.Less)`,
+		"result of a call":         `sort.Slice([]int{1}, pick())`,
+		"interface method":         `var i interface{ Less(a, b int) bool }; sort.Slice([]int{1}, i.Less)`,
+	} {
+		files := map[string]string{"a/a.go": head + "func pick() func(i, j int) bool { return local }\n\nfunc F() int { " + call + "; return 1 }\n", "a/a_test.go": cleanTest}
+		if got := problemsOf(t, files, rowA); !strings.Contains(got, "body the scan cannot see") {
+			t.Errorf("%s: want a refusal, got:\n%s", name, got)
+		}
+	}
+	for name, call := range map[string]string{
+		"function literal":      `sort.Slice([]int{1}, func(i, j int) bool { return i < j })`,
+		"same-package function": `sort.Slice([]int{1}, local)`,
+	} {
+		files := map[string]string{"a/a.go": head + "func F() int { " + call + "; return 1 }\n", "a/a_test.go": cleanTest}
+		if got := problemsOf(t, files, rowA); got != "" {
+			t.Errorf("%s was refused:\n%s", name, got)
+		}
+	}
+}
+
+// Fail closed on what the scan cannot read: linkname, non-Go sources, plugins.
+func TestLinknameNonGoSourcesAndPluginsAreRefused(t *testing.T) {
+	for name, tc := range map[string]struct {
+		files map[string]string
+		want  string
+	}{
+		"go:linkname":          {map[string]string{"a/a.go": "package a\n\nimport _ \"unsafe\"\n\n//go:linkname f runtime.f\nfunc f()\n\nfunc F() int { return 1 }\n", "a/a_test.go": cleanTest}, "go:linkname"},
+		"assembly file":        {map[string]string{"a/a.go": cleanPkg, "a/a_test.go": cleanTest, "a/a_amd64.s": "TEXT ·f(SB),0,$0-0\n\tRET\n", "a/a_arm64.s": "TEXT ·f(SB),0,$0-0\n\tRET\n"}, "non-Go source"},
+		"C source file":        {map[string]string{"a/a.go": cleanPkg, "a/a_test.go": cleanTest, "a/c.c": "void f(void) {}\n"}, "non-Go source"},
+		"header file":          {map[string]string{"a/a.go": cleanPkg, "a/a_test.go": cleanTest, "a/c.h": "void f(void);\n"}, "non-Go source"},
+		"syso object":          {map[string]string{"a/a.go": cleanPkg, "a/a_test.go": cleanTest, "a/o.syso": "x"}, "non-Go source"},
+		"plugin import":        {map[string]string{"a/a.go": "package a\n\nimport \"plugin\"\n\nvar _ = plugin.Open\n\nfunc F() int { return 1 }\n", "a/a_test.go": cleanTest}, "imports plugin"},
+		"non-Go in dependency": {map[string]string{"a/a.go": "package a\n\nimport \"example.test/m/b\"\n\nfunc F() int { return b.G() }\n", "a/a_test.go": cleanTest, "b/b.go": "package b\n\nfunc G() int { return 1 }\n", "b/b.s": "// asm\n"}, "non-Go source"},
+	} {
+		if got := problemsOf(t, tc.files, rowA); !strings.Contains(got, tc.want) {
+			t.Errorf("%s: want %q, got:\n%s", name, tc.want, got)
+		}
+	}
+}

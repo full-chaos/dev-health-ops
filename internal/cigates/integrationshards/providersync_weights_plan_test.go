@@ -54,6 +54,7 @@ func TestProvidersyncPlanStaysUnderTheBudgetAndFailsEachPlantedDefect(t *testing
 		want string
 	}{
 		{"a row naming a test that does not exist", withWeights(write("unknown.tsv", original+"TestZZZNoSuchProvidersyncTest\t6\n")), "which is not a discovered top-level test"},
+		{"a row naming an untagged test", withWeights(write("untagged.tsv", original+"TestEveryLogSiteLogsOnlyScalars\t47.43\n")), "ordinary tests do not run in shards"},
 		{"one test over 75% of the timeout", withWeights(write("huge.tsv", strings.Replace(original, first, firstName+"\t991", 1))), "over the shard budget"},
 		{"a duplicate row", withWeights(write("dup.tsv", original+first+"\n")), "more than once"},
 		{"a non-numeric seconds value", withWeights(write("nan.tsv", original+"TestZZZ\tabc\n")), "must be a positive number"},

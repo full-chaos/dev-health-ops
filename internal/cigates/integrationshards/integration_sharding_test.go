@@ -421,6 +421,173 @@ func providerTests(t *testing.T) (map[string]bool, map[string]bool) {
 	return providerTopLevel, providerIntegrationT
 }
 
+// taggedFacts is the oracle for the tag filter, built apart from check_go.sh: per package key, the top-level tests of
+// the test files that only the integration build lists (go list -tags=integration minus plain go list), the top-level
+// tests of every other test file, and the first `func init`/`func TestMain` of a tag-only file ("<file> <func>"; such a
+// package runs unfiltered, because that hook changes the process its untagged tests run in).
+type taggedFacts struct {
+	tagged, untagged map[string]map[string]bool
+	hook             map[string]string
+}
+
+var (
+	taggedOnce sync.Once
+	taggedVal  taggedFacts
+	taggedErr  string
+)
+
+func integrationTaggedFacts(t *testing.T) taggedFacts {
+	t.Helper()
+	keys := sortedKeys(expectedPackages(t))
+	taggedOnce.Do(func() {
+		root := rootOf(t)
+		env := inheritedEnv(nil, "GOTOOLCHAIN="+pinnedGoToolchain(t), "GOWORK=off")
+		mod := freeSpec{dir: root, env: env}.run("go", "list", "-mod=readonly", "-m")
+		if mod.code != 0 {
+			taggedErr = "go list -m: " + mod.stdout + mod.stderr
+			return
+		}
+		modpath := strings.TrimSpace(mod.stdout)
+		list := func(tags ...string) map[string][]string {
+			args := append([]string{"list", "-e", "-mod=readonly"}, tags...)
+			args = append(args, "-f={{.ImportPath}}{{range .TestGoFiles}}\t{{.}}{{end}}{{range .XTestGoFiles}}\t{{.}}{{end}}")
+			for _, k := range keys {
+				args = append(args, "./"+k)
+			}
+			res := freeSpec{dir: root, env: env}.run("go", args...)
+			if res.code != 0 {
+				taggedErr += "go list " + strings.Join(tags, " ") + ": " + res.stdout + res.stderr
+				return nil
+			}
+			out := map[string][]string{}
+			for _, l := range strings.Split(strings.TrimSpace(res.stdout), "\n") {
+				f := strings.Split(l, "\t")
+				out[strings.TrimPrefix(f[0], modpath+"/")] = f[1:]
+			}
+			return out
+		}
+		withTag, plain := list("-tags=integration"), list()
+		if withTag == nil || plain == nil {
+			return
+		}
+		fn := regexp.MustCompile(`(?m)^func (Test[A-Za-z0-9_]+)` + pyS + `*\(`)
+		hookFn := regexp.MustCompile(`(?m)^func (init|TestMain)` + pyS + `*\(`)
+		taggedVal = taggedFacts{tagged: map[string]map[string]bool{}, untagged: map[string]map[string]bool{}, hook: map[string]string{}}
+		for _, k := range keys {
+			inPlain := map[string]bool{}
+			for _, f := range plain[k] {
+				inPlain[f] = true
+			}
+			taggedVal.tagged[k], taggedVal.untagged[k] = map[string]bool{}, map[string]bool{}
+			for _, f := range withTag[k] {
+				src := readText(t, filepath.Join(root, k, f))
+				into := taggedVal.untagged[k]
+				if !inPlain[f] {
+					into = taggedVal.tagged[k]
+					if m := hookFn.FindStringSubmatch(src); m != nil && taggedVal.hook[k] == "" {
+						taggedVal.hook[k] = k + "/" + f + " " + m[1]
+					}
+				}
+				for _, m := range fn.FindAllStringSubmatch(src, -1) {
+					if m[1] != "TestMain" {
+						into[m[1]] = true
+					}
+				}
+			}
+		}
+	})
+	if taggedErr != "" || taggedVal.tagged == nil {
+		t.Fatalf("tagged-test discovery failed: %s", taggedErr)
+	}
+	return taggedVal
+}
+
+// checkTaggedSelection checks one packages shard's dry run against the oracle: every package of the shard either runs
+// exactly its integration-tagged tests (one `SHARD-TEST <key> <Test>` line each, and the same names in the
+// `SHARD-REGEX <module> ^(...)$` that go test receives) or, when a tag-only file declares a hook, is named by one
+// `SHARD-UNFILTERED <key> <file> <func>` line and runs whole. An untagged test, a missing tagged test, a duplicate,
+// a package of another shard or an unjustified unfiltered package is an error.
+func checkTaggedSelection(stdout string, shardKeys map[string]bool, f taggedFacts) error {
+	selected := map[string]map[string]bool{}
+	union := map[string]bool{}
+	for _, v := range lineValues(stdout, "  SHARD-TEST ") {
+		fs := strings.Fields(v)
+		if len(fs) != 2 {
+			return fmt.Errorf("malformed SHARD-TEST line %q", v)
+		}
+		k, n := fs[0], fs[1]
+		switch {
+		case !shardKeys[k]:
+			return fmt.Errorf("SHARD-TEST names %s, a package this shard does not run", k)
+		case f.hook[k] != "":
+			return fmt.Errorf("SHARD-TEST names %s %s, but %s runs unfiltered (%s)", k, n, k, f.hook[k])
+		case f.untagged[k][n] && !f.tagged[k][n]:
+			return fmt.Errorf("SHARD-TEST selects the untagged test %s %s: untagged tests run in the test and race legs, not in a shard", k, n)
+		case !f.tagged[k][n]:
+			return fmt.Errorf("SHARD-TEST names %s %s, which is no integration-tagged top-level test", k, n)
+		case selected[k][n]:
+			return fmt.Errorf("SHARD-TEST selects %s %s twice", k, n)
+		}
+		if selected[k] == nil {
+			selected[k] = map[string]bool{}
+		}
+		selected[k][n] = true
+		union[n] = true
+	}
+	unfiltered := map[string]bool{}
+	for _, v := range lineValues(stdout, "  SHARD-UNFILTERED ") {
+		fs := strings.Fields(v)
+		if len(fs) != 3 {
+			return fmt.Errorf("malformed SHARD-UNFILTERED line %q", v)
+		}
+		k := fs[0]
+		if !shardKeys[k] || f.hook[k] != fs[1]+" "+fs[2] || unfiltered[k] {
+			return fmt.Errorf("SHARD-UNFILTERED %q has no matching tag-only hook in this shard (oracle: %q)", v, f.hook[k])
+		}
+		unfiltered[k] = true
+	}
+	for k := range shardKeys {
+		if f.hook[k] != "" {
+			if !unfiltered[k] {
+				return fmt.Errorf("%s has a tag-only hook (%s) but no SHARD-UNFILTERED line", k, f.hook[k])
+			}
+			continue
+		}
+		if len(f.tagged[k]) == 0 {
+			return fmt.Errorf("%s runs in a shard but has no integration-tagged top-level test", k)
+		}
+		if !sameSet(selected[k], f.tagged[k]) {
+			var missing []string
+			for n := range f.tagged[k] {
+				if !selected[k][n] {
+					missing = append(missing, n)
+				}
+			}
+			sort.Strings(missing)
+			return fmt.Errorf("%s: %d integration-tagged test(s) in no SHARD-TEST line, e.g. %v", k, len(missing), missing[:min(3, len(missing))])
+		}
+	}
+	regexNames := map[string]bool{}
+	regexes := 0
+	for _, v := range lineValues(stdout, "  SHARD-REGEX ") {
+		fs := strings.Fields(v)
+		if len(fs) != 2 || !strings.HasPrefix(fs[1], "^(") || !strings.HasSuffix(fs[1], ")$") {
+			return fmt.Errorf("malformed SHARD-REGEX line %q", v)
+		}
+		regexes++
+		for _, n := range strings.Split(strings.TrimSuffix(strings.TrimPrefix(fs[1], "^("), ")$"), "|") {
+			regexNames[n] = true
+		}
+	}
+	if len(union) > 0 && regexes == 0 {
+		return fmt.Errorf("the shard selects tagged tests but prints no SHARD-REGEX line")
+	}
+	if !sameSet(regexNames, union) {
+		return fmt.Errorf("the -run regex selects %d name(s), the SHARD-TEST lines %d", len(regexNames), len(union))
+	}
+	return nil
+}
+
 func sortedKeys(m map[string]bool) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {
@@ -537,18 +704,16 @@ func TestIntegrationShardPlanIsExhaustiveNonemptyAndMachineReadable(t *testing.T
 		}
 		seen[n] = true
 	}
-	if !sameSet(seen, all) {
-		t.Fatalf("the provider shards do not hold exactly the top-level tests: %d vs %d", len(seen), len(all))
+	// Untagged tests run in the go-quality test and race legs (merge_group plans FULL there), not a third time here.
+	if !sameSet(seen, integration) {
+		t.Fatalf("the provider shards do not hold exactly the integration-tagged tests: %d vs %d", len(seen), len(integration))
 	}
-	gotInt, kinds := map[string]bool{}, map[string]bool{}
-	for n, c := range class {
+	kinds := map[string]bool{}
+	for _, c := range class {
 		kinds[c] = true
-		if c == "integration" {
-			gotInt[n] = true
-		}
 	}
-	if !sameSet(gotInt, integration) || len(kinds) != 2 || !kinds["integration"] || !kinds["ordinary"] {
-		t.Fatalf("provider test classification is wrong: %v", kinds)
+	if len(kinds) != 1 || !kinds["integration"] {
+		t.Fatalf("the provider shards hold a class other than integration: %v", kinds)
 	}
 	weights, ints := map[int]int{}, map[int]int{}
 	re := regexp.MustCompile(`^providersync test shard (\d+): relative weight (\d+), (\d+) test\(s\), (\d+) integration-tagged$`)
@@ -1091,6 +1256,70 @@ func TestEachIntegrationShardDryRunExecutesOnlyItsManifestAssignment(t *testing.
 	if len(selected) != len(got) || !sameSet(got, want) {
 		t.Errorf("the packages shards run %d packages (%d distinct), want %d", len(selected), len(got), len(want))
 	}
+	tf := integrationTaggedFacts(t)
+	plantShard := 0
+	for _, shard := range shards {
+		if err := checkTaggedSelection(pkgResults[shard].stdout, wants[shard], tf); err != nil {
+			t.Errorf("packages shard %d: %v", shard, err)
+		}
+		for k := range wants[shard] {
+			if plantShard == 0 && tf.hook[k] == "" && len(tf.untagged[k]) > 0 && len(tf.tagged[k]) > 1 {
+				plantShard = shard
+			}
+		}
+	}
+	// Planted defects in one real dry run: each must be refused by the checker.
+	if plantShard == 0 {
+		t.Fatal("no packages shard holds a filtered package with untagged tests: the planted defects below measure nothing")
+	}
+	dry := pkgResults[plantShard].stdout
+	var firstTest, firstKey, untaggedName, unfilteredLine, filteredKey string
+	for _, l := range strings.Split(dry, "\n") {
+		if v, ok := strings.CutPrefix(l, "  SHARD-TEST "); ok && firstTest == "" {
+			firstTest, firstKey = l, strings.Fields(v)[0]
+		}
+		if strings.HasPrefix(l, "  SHARD-UNFILTERED ") && unfilteredLine == "" {
+			unfilteredLine = l
+		}
+	}
+	for k := range wants[plantShard] {
+		if tf.hook[k] == "" && filteredKey == "" {
+			filteredKey = k
+		}
+	}
+	for n := range tf.untagged[firstKey] {
+		if !tf.tagged[firstKey][n] && (untaggedName == "" || n < untaggedName) {
+			untaggedName = n
+		}
+	}
+	if firstTest == "" || untaggedName == "" || filteredKey == "" {
+		t.Fatalf("shard %d dry run has no SHARD-TEST line or no untagged test to plant: %s", plantShard, dry)
+	}
+	dropLine := func(line string) string { return strings.Replace(dry, line+"\n", "", 1) }
+	regexLine := ""
+	for _, l := range strings.Split(dry, "\n") {
+		if strings.HasPrefix(l, "  SHARD-REGEX ") {
+			regexLine = l
+			break
+		}
+	}
+	firstName := strings.Fields(firstTest)[2]
+	for name, bad := range map[string]string{
+		"an integration-tagged test removed from the shard": dropLine(firstTest),
+		"an untagged test added to the shard":               dry + "\n  SHARD-TEST " + firstKey + " " + untaggedName,
+		"a tagged test selected twice":                      dry + "\n" + firstTest,
+		"a filtered package marked unfiltered":              dry + "\n  SHARD-UNFILTERED " + filteredKey + " " + filteredKey + "/x_integration_test.go init",
+		"the -run regex missing a selected name":            strings.Replace(dry, regexLine, strings.NewReplacer("("+firstName+")", "()", "("+firstName+"|", "(", "|"+firstName+"|", "|", "|"+firstName+")", ")").Replace(regexLine), 1),
+	} {
+		if err := checkTaggedSelection(bad, wants[plantShard], tf); err == nil {
+			t.Errorf("planted defect not caught: %s", name)
+		}
+	}
+	if unfilteredLine != "" {
+		if err := checkTaggedSelection(dropLine(unfilteredLine), wants[plantShard], tf); err == nil {
+			t.Error("planted defect not caught: an unfiltered package without its SHARD-UNFILTERED line")
+		}
+	}
 	var tests []string
 	for _, shard := range provider {
 		r := providerResults[shard]
@@ -1099,12 +1328,12 @@ func TestEachIntegrationShardDryRunExecutesOnlyItsManifestAssignment(t *testing.
 		}
 		tests = append(tests, lineValues(r.stdout, "  PROVIDER-TEST-RUN ")...)
 	}
-	all, _ := providerTests(t)
+	_, integration := providerTests(t)
 	gotT := map[string]bool{}
 	for _, s := range tests {
 		gotT[s] = true
 	}
-	if len(tests) != len(gotT) || !sameSet(gotT, all) {
-		t.Errorf("the providersync shards run %d tests (%d distinct), want %d", len(tests), len(gotT), len(all))
+	if len(tests) != len(gotT) || !sameSet(gotT, integration) {
+		t.Errorf("the providersync shards run %d tests (%d distinct), want the %d integration-tagged ones", len(tests), len(gotT), len(integration))
 	}
 }

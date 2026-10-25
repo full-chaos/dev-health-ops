@@ -414,9 +414,32 @@ func raceshardVerbDefects(mod string, pkgs []string, legs [][]string) []string {
 	return defects
 }
 
+// raceshardRacePackages: the go list minus the packages ci/race_excluded_packages.tsv takes out of the race legs (CHAOS-11413).
+func raceshardRacePackages(t *testing.T, mod string, pkgs []string) []string {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(repoRoot(t), "ci", "race_excluded_packages.tsv"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	skip := map[string]bool{}
+	for _, line := range strings.Split(string(raw), "\n") {
+		if line != "" && !strings.HasPrefix(line, "#") {
+			skip[mod+"/"+strings.Split(line, "\t")[0]] = true
+		}
+	}
+	var out []string
+	for _, p := range pkgs {
+		if !skip[p] {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
 func TestRaceVerbSlicesPartitionTheRealPackages(t *testing.T) {
 	t.Parallel()
 	mod, pkgs := raceshardGoList(t)
+	pkgs = raceshardRacePackages(t, mod, pkgs)
 	var legs [][]string
 	for k := 1; k <= 2; k++ {
 		r := raceshardLeg(t, k)
@@ -440,6 +463,7 @@ func tail(s string) string {
 func TestRaceVerbSlicesPlantedDefectsAreCaught(t *testing.T) {
 	t.Parallel()
 	mod, pkgs := raceshardGoList(t)
+	pkgs = raceshardRacePackages(t, mod, pkgs)
 	var legs [][]string
 	for k := 1; k <= 2; k++ {
 		r := raceshardLeg(t, k)

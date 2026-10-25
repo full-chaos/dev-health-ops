@@ -734,6 +734,21 @@ check_race_shard_args() {
   { [ "${shard}" -ge 1 ] && [ "${count}" -ge 1 ] && [ "${shard}" -le "${count}" ]; } \
     || die "race shard ${shard} is outside 1..${count}"
   [ -d "${GO_RACE_WEIGHTS_DIR}" ] || die "race shards need ${GO_RACE_WEIGHTS_DIR}"
+  [ -f "${GO_RACE_EXCLUDED_PACKAGES}" ] || die "race shards need ${GO_RACE_EXCLUDED_PACKAGES}"
+}
+
+# CHAOS-11413: packages the race legs do not run (ci/race_excluded_packages.tsv, proven by internal/cigates/racescope). The test legs
+# still run them once. race_shard_packages drops them before the weight split, so no race leg plans them, solo or not.
+GO_RACE_EXCLUDED_PACKAGES="${GO_RACE_EXCLUDED_PACKAGES:-${ROOT}/ci/race_excluded_packages.tsv}"
+race_excluded_filter() {
+  local module_dir="$1" modpath="$2"
+  if [ "${module_dir}" != "." ]; then
+    cat
+    return
+  fi
+  awk -F'\t' -v mod="${modpath}" -v list="${GO_RACE_EXCLUDED_PACKAGES}" '
+    BEGIN { while ((getline line < list) > 0) { if (line ~ /^[[:space:]]*(#|$)/) continue; split(line, f, "\t"); skip[mod "/" f[1]] = 1 } close(list) }
+    !($0 in skip)'
 }
 
 # race_shard_packages SHARD COUNT MODULE_DIR MODPATH [solo]: the import paths of the race slice (or, with solo, of its solo
@@ -743,6 +758,7 @@ race_shard_packages() {
   (cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -mod=readonly ./...) \
     | { if [ "${module_dir}" = "." ]; then grep -vx "${modpath}/internal/providersync"; else cat; fi; } \
     | quality_filter "${module_dir}" "${modpath}" \
+    | race_excluded_filter "${module_dir}" "${modpath}" \
     | awk -v mod="${modpath}" -v shard="${shard}" -v count="${count}" -v weights=<(race_weights_rows) -v solo="${GO_RACE_SOLO}" -v part="${part}" -f "${ROOT}/ci/go_race_shard.awk"
 }
 

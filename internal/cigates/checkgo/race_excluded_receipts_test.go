@@ -263,7 +263,7 @@ func TestAShardRunsEachCensusPackageOnceFreshAndKeepsItsOkLines(t *testing.T) {
 				t.Errorf("shard %d made a per-test go test process (the second execution is back): %s", shard, l)
 			}
 			for p := range rowPackages {
-				if !strings.Contains(l, " "+fullPkg(p)) && !strings.Contains(l, " ./"+p) {
+				if !hasField(l, fullPkg(p)) && !hasField(l, "./"+p) {
 					continue
 				}
 				if strings.Contains(l, "-json") && strings.Contains(l, "-count=1") && strings.Contains(l, "-timeout") {
@@ -300,4 +300,13 @@ func TestAShardRunsEachCensusPackageOnceFreshAndKeepsItsOkLines(t *testing.T) {
 	if named != 1 {
 		t.Errorf("%d shard(s) failed naming the slow unweighted census package %s, want 1: its ok line no longer reaches the shard log", named, slow)
 	}
+}
+
+func hasField(line, want string) bool {
+	for _, f := range strings.Fields(line) {
+		if f == want {
+			return true
+		}
+	}
+	return false
 }

@@ -45,7 +45,11 @@ case "$*" in
 esac
 exit 0
 `
-	for name, body := range map[string]string{"docker": docker, "go": goShim} {
+	chmodShim := `#!/bin/sh
+if [ "$1" = 0600 ]; then stat -c %a "$2" >> "` + record + `.premode"; fi
+exec /bin/chmod "$@"
+`
+	for name, body := range map[string]string{"docker": docker, "go": goShim, "chmod": chmodShim} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -430,5 +434,24 @@ func TestAuthCorpusAcpLegOmitsEveryKeyWhenAsked(t *testing.T) {
 		if row != ([3]string{}) {
 			t.Fatalf("a compose up got a key although they were omitted: %v", row)
 		}
+	}
+}
+
+// The state file holds the session keys: it is created under umask 077, so it is 0600 from its first write, even
+// when the caller's umask would make it world-readable.
+func TestAuthCorpusStateFileIsPrivateFromItsFirstWrite(t *testing.T) {
+	fake := newFakeDocker(t)
+	fake.withCurl(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "bash", "-c", `umask 000; exec bash "$1" acp`, "bash", filepath.Join(authProofRoot(t), "ci", "auth_corpus_external.sh"))
+	cmd.Env = fake.env("FAKE_SERVED=")
+	_, _ = cmd.CombinedOutput()
+	raw, err := os.ReadFile(fake.record + ".premode")
+	if err != nil {
+		t.Fatalf("the script never made the state file private: %v", err)
+	}
+	if got := strings.TrimSpace(string(raw)); got != "600" {
+		t.Errorf("the state file mode before its chmod is %q, want 600", got)
 	}
 }

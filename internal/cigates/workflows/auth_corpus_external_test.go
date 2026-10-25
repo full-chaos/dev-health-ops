@@ -410,3 +410,59 @@ func TestAuthCorpusOverrideMailsToTheGatewayOfItsNetwork(t *testing.T) {
 		}
 	}
 }
+
+// auth-service trusts X-Forwarded-For from go-api's one pinned address on auth_plane, not from the network: the
+// override's trusted-proxy value is that address as a /32, and no other service on the network holds it.
+func TestAuthCorpusAcpOverrideTrustsOnlyGoAPIsPinnedAddress(t *testing.T) {
+	type override struct {
+		Services map[string]struct {
+			Networks    any      `yaml:"networks"`
+			Environment []string `yaml:"environment"`
+		} `yaml:"services"`
+	}
+	pinned := func(networks any) string {
+		if m, ok := networks.(map[string]any); ok {
+			if plane, ok := m["auth_plane"].(map[string]any); ok {
+				address, _ := plane["ipv4_address"].(string)
+				return address
+			}
+		}
+		return ""
+	}
+	holders := map[string][]string{}
+	var acp override
+	for _, file := range []string{"auth_corpus_external.override.yml", "auth_corpus_external.acp.override.yml"} {
+		var parsed override
+		if err := yaml.Unmarshal([]byte(readRepoFile(t, "ci", file)), &parsed); err != nil {
+			t.Fatal(err)
+		}
+		if file == "auth_corpus_external.acp.override.yml" {
+			acp = parsed
+		}
+		for name, service := range parsed.Services {
+			if address := pinned(service.Networks); address != "" {
+				holders[address] = append(holders[address], name)
+			}
+		}
+	}
+	address := pinned(acp.Services["go-api"].Networks)
+	if address == "" || !strings.HasPrefix(address, "10.199.91.") || address == "10.199.91.1" || address == "10.199.91.10" {
+		t.Fatalf("go-api's auth_plane address is %q, want a pinned address in 10.199.91.0/24 that is neither the gateway nor the stub", address)
+	}
+	if got := holders[address]; len(got) != 1 || got[0] != "go-api" {
+		t.Errorf("services holding %s on auth_plane: %v, want go-api only", address, got)
+	}
+	want := "AUTH_SERVICE_TRUSTED_PROXIES=" + address + "/32"
+	count := 0
+	for _, entry := range acp.Services["auth-service"].Environment {
+		if strings.HasPrefix(entry, "AUTH_SERVICE_TRUSTED_PROXIES=") {
+			count++
+			if entry != want {
+				t.Errorf("auth-service trusts %q, want %q", entry, want)
+			}
+		}
+	}
+	if count != 1 {
+		t.Errorf("auth-service sets AUTH_SERVICE_TRUSTED_PROXIES %d times, want once", count)
+	}
+}

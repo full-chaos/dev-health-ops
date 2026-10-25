@@ -139,6 +139,8 @@ internal/contractcheck	code	deploy
 internal/deploymentcontract	code	contracts
 internal/deploymentcontract	test	deploy
 internal/envelopemint	test	contracts
+internal/faultproxy	test	deploy
+internal/faultproxy	test	docker
 internal/fixturescli	code	contracts
 internal/fixturescli	test	README.md
 internal/fixturescli	test	ci

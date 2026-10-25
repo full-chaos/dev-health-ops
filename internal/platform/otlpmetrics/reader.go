@@ -28,7 +28,7 @@ type Pipeline struct {
 // client connects lazily, so an unreachable collector fails exports (logged
 // and counted), not startup. skip names the registry sources the bridge must
 // not read (the OTel instruments' own fragment).
-func NewPipeline(ctx context.Context, options Options, source FragmentSource, skip map[string]bool, logger *slog.Logger) (*Pipeline, error) {
+func NewPipeline(ctx context.Context, options Options, source FragmentSource, skip map[string]bool, policy *LabelPolicy, logger *slog.Logger) (*Pipeline, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -37,7 +37,7 @@ func NewPipeline(ctx context.Context, options Options, source FragmentSource, sk
 		return nil, err
 	}
 	stats := &Stats{}
-	gatherer := &Gatherer{Source: source, Skip: skip, Logger: logger, Stats: stats}
+	gatherer := &Gatherer{Source: source, Skip: skip, Logger: logger, Stats: stats, Policy: policy}
 	reader := sdkmetric.NewPeriodicReader(
 		&countingExporter{Exporter: exporter, stats: stats, logger: logger, endpoint: options.Endpoint},
 		sdkmetric.WithInterval(options.Interval),

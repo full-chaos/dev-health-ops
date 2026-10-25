@@ -50,6 +50,7 @@ internal/auth/contracts	endpoint_profile_access_token_validation_test.go
 internal/auth/contracts	endpoint_profile_source_commit_history_test.go
 internal/auth/contracts	endpoint_profile_source_commit_test.go
 internal/auth/contracts	endpoint_profiles_auth_service_test.go
+internal/auth/contracts	endpoint_profiles_go_api_admin_fields_test.go
 internal/auth/contracts	endpoint_profiles_go_api_test.go
 internal/auth/contracts	endpoint_profiles_query_api_test.go
 internal/auth/contracts	endpoint_profiles_registry_reconcile_test.go
@@ -86,6 +87,7 @@ internal/auth/identity/local	corpus_helpers_integration_test.go
 internal/auth/keyrotation	rotation_integration_test.go
 internal/auth/keystore	keystore_test.go
 internal/auth/keystore	open_unix.go
+internal/auth/ratelimitvalkey	acl_test.go
 internal/auth/session	credential_test.go
 internal/auth/writerinventory	scan_test.go
 internal/auth/writerinventory	usersowned_census_test.go
@@ -213,6 +215,7 @@ internal/cigates/routing	deps.go
 internal/cigates/routing	parity_test.go
 internal/cigates/routing	planes_test.go
 internal/cigates/routing	tools_test.go
+internal/cigates/scripts	auth_queue_relevance_test.go
 internal/cigates/scripts	chmigrate_history_frozen_test.go
 internal/cigates/scripts	ci_script_helpers_test.go
 internal/cigates/scripts	e2e_fixture_lib_test.go
@@ -387,6 +390,7 @@ internal/platform/credshape	credshape_test.go
 internal/platform/fernet	fernet_test.go
 internal/platform/logging	binaries_enumeration_test.go
 internal/platform/logging	provider_origin_sources_test.go
+internal/platform/otlpmetrics	labelfragment_census_test.go
 internal/platform/secrets	envreads_test.go
 internal/platform/secrets	source.go
 internal/providerfoundation	classify_call_sites_test.go

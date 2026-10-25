@@ -100,7 +100,7 @@ func buildProvider(push PushOptions) (*sdkmetric.MeterProvider, *Source, error) 
 	providerOptions := []sdkmetric.Option{sdkmetric.WithReader(exporter), sdkmetric.WithView(policy.View())}
 	source := &Source{gatherer: registry}
 	if push.Options.Enabled && push.Registry != nil {
-		pipeline, err := otlpmetrics.NewPipeline(context.Background(), push.Options, health.Scrape{Registry: push.Registry, Service: push.Service, Version: push.Version}, pushSkip(), push.Logger)
+		pipeline, err := otlpmetrics.NewPipeline(context.Background(), push.Options, health.Scrape{Registry: push.Registry, Service: push.Service, Version: push.Version}, pushSkip(), policy, push.Logger)
 		if err != nil {
 			// Fails soft like tracing: the pull endpoint still works.
 			if push.Logger != nil {

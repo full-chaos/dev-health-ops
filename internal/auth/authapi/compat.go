@@ -42,6 +42,7 @@ type CompatSessions interface {
 	Sessions
 	RevokeByCredential(ctx context.Context, credential contracts.SecretString, actor session.Actor) (bool, error)
 	ExchangeLegacy(ctx context.Context, legacy session.LegacyRefresh) (session.Result, error)
+	RevokeLegacy(ctx context.Context, legacy session.LegacyRefresh, actor session.Actor) (bool, error)
 	CreateAudited(ctx context.Context, principalID uuid.UUID, organizationID *uuid.UUID, amr []string, event audit.AuditEvent) (session.Issued, error)
 }
 
@@ -422,14 +423,23 @@ func refreshUserInfo(id uuid.UUID, user UserState, orgID, role string) *pyjson.O
 // (internal/api/session/routes.go logout): {"refresh_token"} in, and the same
 // 200 whether or not the credential revoked a session, so the answer says
 // nothing about the credential. The session's revocation is audited by the
-// session store.
+// session store. A go-api refresh JWT ends its whole go-api lineage (the live
+// refresh rows of its family and the sessions exchanged from it), which is
+// stricter than go-api's logout, so a refresh after sign-out is refused.
 func (h compatHandlers) compatLogout(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	token, ok := h.readRefreshToken(w, r, opCompatLogout)
 	if !ok {
 		return
 	}
-	revoked, err := h.Sessions.RevokeByCredential(ctx, contracts.NewSecretString(token), session.Actor{RequestID: requestid.Audit(ctx)})
+	actor := session.Actor{RequestID: requestid.Audit(ctx)}
+	var revoked bool
+	var err error
+	if isJWT(token) {
+		revoked, err = h.revokeLegacy(r, token, actor)
+	} else {
+		revoked, err = h.Sessions.RevokeByCredential(ctx, contracts.NewSecretString(token), actor)
+	}
 	if err != nil {
 		h.fail(w, r, opCompatLogout, err)
 		return
@@ -442,6 +452,19 @@ func (h compatHandlers) compatLogout(w http.ResponseWriter, r *http.Request) {
 	out := pyjson.NewObject()
 	out.Set("message", textLogoutDone)
 	writeCompatModel(w, out)
+}
+
+// revokeLegacy verifies a go-api refresh JWT and ends its lineage. A token that
+// does not verify revokes nothing, as an unknown opaque credential does; no
+// principal is projected, since the go-api rows exist without it.
+func (h compatHandlers) revokeLegacy(r *http.Request, token string, actor session.Actor) (bool, error) {
+	ctx := r.Context()
+	legacy, err := h.Issuer.VerifyLegacyRefresh(token)
+	if err != nil {
+		h.rec.logger.DebugContext(ctx, "legacy refresh token refused at logout", "reason", edgetoken.ReasonOf(err))
+		return false, nil
+	}
+	return h.Sessions.RevokeLegacy(ctx, legacy, actor)
 }
 
 // writeCompatModel writes a 200 response_model body as go-api does, marked

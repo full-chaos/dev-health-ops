@@ -553,3 +553,88 @@ func TestExchangeLegacyRefusalsForADisabledPrincipalRevokeNothing(t *testing.T) 
 		}
 	}
 }
+
+func TestRevokeLegacyEndsTheWholeLineageSoNoFamilyMemberRefreshes(t *testing.T) {
+	ctx := testContext(t)
+	e := newEnv(t, ctx)
+	user := e.goUser(t, ctx, 0)
+	family := uuid.New()
+	e.goRefresh(t, ctx, user, family, "jti-old", time.Hour)
+	e.goRefresh(t, ctx, user, family, "jti-newest", time.Hour)
+	other := uuid.New()
+	e.goRefresh(t, ctx, user, other, "jti-other-family", time.Hour)
+	first, err := e.store.ExchangeLegacy(ctx, legacy(user, "jti-old"))
+	if err != nil || first.Reason != ReasonAccepted {
+		t.Fatalf("exchange = %s, %v", first.Reason, err)
+	}
+	revoked, err := e.store.RevokeLegacy(ctx, legacy(user, "jti-newest"), Actor{})
+	if err != nil || !revoked {
+		t.Fatalf("revoke = %v, %v", revoked, err)
+	}
+	current, err := e.store.Current(ctx, first.Session.ID)
+	if err != nil || current.RevokedAt == nil {
+		t.Fatalf("the session exchanged from the family is live (%v)", err)
+	}
+	for _, jti := range []string{"jti-old", "jti-newest"} {
+		if e.goRevokedAt(t, ctx, jti) == nil {
+			t.Fatalf("%s is still live", jti)
+		}
+		again, err := e.store.ExchangeLegacy(ctx, legacy(user, jti))
+		if err != nil || again.Reason.Success() {
+			t.Fatalf("refresh with %s after logout = %s, %v; want refused", jti, again.Reason, err)
+		}
+	}
+	if e.goRevokedAt(t, ctx, "jti-other-family") != nil {
+		t.Fatal("another go-api family was revoked")
+	}
+	if n := e.count(t, ctx, `SELECT count(*) FROM auth.security_audit_events
+		WHERE event_type = 'auth.session.revoked' AND subject_principal_id = $1`, user.String()); n != 1 {
+		t.Fatalf("%d revoke audit rows, want 1", n)
+	}
+}
+
+func TestRevokeLegacyWithoutAnExchangedSessionRevokesTheRowsAndRefreshIsRefused(t *testing.T) {
+	ctx := testContext(t)
+	e := newEnv(t, ctx)
+	user := e.goUser(t, ctx, 0)
+	e.goRefresh(t, ctx, user, uuid.New(), "jti-pre-flip", time.Hour)
+	revoked, err := e.store.RevokeLegacy(ctx, legacy(user, "jti-pre-flip"), Actor{})
+	if err != nil || !revoked {
+		t.Fatalf("revoke = %v, %v", revoked, err)
+	}
+	if e.goRevokedAt(t, ctx, "jti-pre-flip") == nil {
+		t.Fatal("the go-api row is still live")
+	}
+	result, err := e.store.ExchangeLegacy(ctx, legacy(user, "jti-pre-flip"))
+	if err != nil || result.Reason.Success() {
+		t.Fatalf("refresh after logout = %s, %v; want refused", result.Reason, err)
+	}
+}
+
+func TestRevokeLegacyChangesNothingForATokenThatIsNotLive(t *testing.T) {
+	ctx := testContext(t)
+	e := newEnv(t, ctx)
+	user := e.goUser(t, ctx, 0)
+	stranger := e.goUser(t, ctx, 0)
+	e.goRefresh(t, ctx, user, uuid.New(), "jti-live", time.Hour)
+	e.goRefresh(t, ctx, user, uuid.New(), "jti-expired", -time.Minute)
+	for name, token := range map[string]LegacyRefresh{
+		"unknown":           legacy(user, "jti-unknown"),
+		"another principal": legacy(stranger, "jti-live"),
+		"expired":           legacy(user, "jti-expired"),
+	} {
+		revoked, err := e.store.RevokeLegacy(ctx, token, Actor{})
+		if err != nil || revoked {
+			t.Fatalf("%s: revoke = %v, %v; want false", name, revoked, err)
+		}
+	}
+	if e.goRevokedAt(t, ctx, "jti-live") != nil {
+		t.Fatal("a refused revoke changed a live row")
+	}
+	if revoked, err := e.store.RevokeLegacy(ctx, legacy(user, "jti-live"), Actor{}); err != nil || !revoked {
+		t.Fatalf("revoke = %v, %v", revoked, err)
+	}
+	if revoked, err := e.store.RevokeLegacy(ctx, legacy(user, "jti-live"), Actor{}); err != nil || revoked {
+		t.Fatalf("second revoke = %v, %v; want false", revoked, err)
+	}
+}

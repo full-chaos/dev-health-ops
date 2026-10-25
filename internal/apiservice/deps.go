@@ -5,6 +5,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/oauthprovider"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
+	"github.com/full-chaos/dev-health-ops/internal/auth/accessverify"
 	envsecrets "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"net/http"
 
@@ -123,6 +124,9 @@ type Deps struct {
 	// and verify with them.
 	Verifier *edgetoken.Verifier
 	Signer   *edgetoken.Signer
+	// AccessVerify is the profile-routed access-token validator; nil when
+	// AUTH_ACCESS_TOKEN_ISSUER is unset. No route calls it yet.
+	AccessVerify *accessverify.Validator
 	// SessionOAuth is the social-login profile client; nil means the
 	// providers' real endpoints. A venue test points it at a fake provider.
 	SessionOAuth *oauthprovider.Client

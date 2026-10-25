@@ -37,6 +37,10 @@ func CategorizeBYOEnabled(ctx context.Context, queryer SavedQueryer, orgID strin
 // CodeCategorizeBYOUnavailable is the one code for every refusal reason outside the closed set.
 const CodeCategorizeBYOUnavailable = "categorize_byo_unavailable"
 
+// CodeCategorizeBYOModelUnreported is the refusal of an answer that names no model:
+// the org's provider reported none, so the answer cannot be tied to the configured model.
+const CodeCategorizeBYOModelUnreported = "categorize_byo_model_unreported"
+
 // CodeCategorizeBYONotConfigured is the refusal of an opted-in org whose saved
 // configuration is not its own model (the gate answered platform or none).
 const CodeCategorizeBYONotConfigured = string(ConfigNotConfigured)
@@ -55,6 +59,7 @@ var categorizeRefusalCodes = map[string]struct{}{
 	string(ConfigInvalidBaseURL):     {},
 	string(ConfigUnreadableRow):      {},
 	CodeCategorizeBYOUnavailable:     {},
+	CodeCategorizeBYOModelUnreported: {},
 	"model_required":                 {},
 }
 

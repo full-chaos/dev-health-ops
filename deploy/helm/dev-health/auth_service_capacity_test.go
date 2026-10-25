@@ -185,9 +185,18 @@ func maxConnsArg(t *testing.T, deployment map[string]any) string {
 }
 
 func TestAuthServiceMaxConnsCannotBeSetThroughExtraArgs(t *testing.T) {
-	for _, arg := range []string{"--database-max-conns=4", "database-max-conns=4", "-database-max-conns=4", "--database-max-conns =4", " --database-max-conns\\t=4"} {
+	for _, arg := range []string{"--database-max-conns=4", "database-max-conns=4", "-database-max-conns=4", "--database-max-conns =4", " --database-max-conns\\t=4", "--database-max-conns 4", "--database-max-conns\\t4"} {
 		_, out, err := renderAuth(t, authWith("--set-json", `authService.extraArgs=["`+arg+`"]`)...)
 		if err == nil || !strings.Contains(out, "authService.extraArgs must not set") || !strings.Contains(out, "authService.database.maxConns") {
+			t.Errorf("extraArgs %q rendered: err=%v out=%.300s", arg, err, out)
+		}
+	}
+}
+
+func TestAuthServiceSigningKeyFlagsCannotBeSetAsOneSpaceSeparatedArg(t *testing.T) {
+	for _, arg := range []string{"--signing-key-file /x", "--signing-key-id\\tx", "--signing-keyset-file /x"} {
+		_, out, err := renderAuth(t, authWith("--set-json", `authService.extraArgs=["`+arg+`"]`)...)
+		if err == nil || !strings.Contains(out, "authService.extraArgs must not set") {
 			t.Errorf("extraArgs %q rendered: err=%v out=%.300s", arg, err, out)
 		}
 	}

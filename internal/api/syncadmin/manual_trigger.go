@@ -327,7 +327,7 @@ func (h *handlers) handOffManualTx(ctx context.Context, tx pgx.Tx, org string, c
 				input.DatasetKeys = append([]string{}, window.DatasetKeys...)
 			}
 		}
-		if spec.checkScale {
+		if spec.checkScale && scaleCheckApplies(window) {
 			if err := checkBackfillScale(window.days(), int64(scopedSources), int64(schedsync.UnitCapFromEnv())); err != nil {
 				return synchandoff.Trigger{}, err
 			}
@@ -345,6 +345,12 @@ func (h *handlers) handOffManualTx(ctx context.Context, tx pgx.Tx, org string, c
 		return trigger, fmt.Errorf("occurrence %s already exists", trigger.OccurrenceID)
 	}
 	return trigger, synccoverage.InvalidateForConfig(ctx, tx, org, config.ID)
+}
+
+// scaleCheckApplies is false for a selector that explicitly names no dataset or
+// no source: the scheduler plans no unit for it, so no floor holds.
+func scaleCheckApplies(window *backfillWindow) bool {
+	return !(window.Structured && (window.DatasetKeysSet && len(window.DatasetKeys) == 0 || window.SourceIDsSet && len(window.SourceIDs) == 0))
 }
 
 // plannerScope is plan_request_for_config's source and dataset scope, plus

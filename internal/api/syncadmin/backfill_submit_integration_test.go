@@ -258,18 +258,32 @@ func TestOccurrenceSyncRunIDIsOrgScoped(t *testing.T) {
 	submitted := accepted(t, status, text)
 	reader := store{pool: v.pool}
 	ctx := context.Background()
-	planned, err := reader.occurrenceSyncRunID(ctx, v.org, submitted.OccurrenceID)
-	if err != nil || planned != nil {
-		t.Fatalf("unplanned occurrence: %v %v, want nil", planned, err)
+	planned, err := reader.occurrencePlanOf(ctx, v.org, submitted.OccurrenceID)
+	if err != nil || planned.RunID != nil || planned.ErrorCode != "" {
+		t.Fatalf("unplanned occurrence: %v %v, want empty", planned, err)
 	}
 	run := uuid.New()
 	v.exec(`UPDATE scheduled_sync_occurrences SET sync_run_id = $2, job_run_id = $3, reconcile_status = 'completed' WHERE occurrence_id = $1`,
 		submitted.OccurrenceID, run, uuid.New())
-	if got, err := reader.occurrenceSyncRunID(ctx, v.org, submitted.OccurrenceID); err != nil || got == nil || *got != run {
+	if got, err := reader.occurrencePlanOf(ctx, v.org, submitted.OccurrenceID); err != nil || got.RunID == nil || *got.RunID != run {
 		t.Fatalf("owner read: %v %v, want %s", got, err, run)
 	}
-	if got, err := reader.occurrenceSyncRunID(ctx, uuid.NewString(), submitted.OccurrenceID); err != nil || got != nil {
+	if got, err := reader.occurrencePlanOf(ctx, uuid.NewString(), submitted.OccurrenceID); err != nil || got.RunID != nil || got.ErrorCode != "" {
 		t.Fatalf("another org's read of the same occurrence: %v %v, want not found", got, err)
 	}
-	_ = one
+	other := submitVenueSecond(t, v, one)
+	v.exec(`UPDATE scheduled_sync_occurrences SET sync_run_id = NULL, job_run_id = NULL, reconcile_status = 'quarantined', reconcile_error_code = 'invalid_plan', reconcile_error_at = now() WHERE occurrence_id = $1`, other)
+	if got, err := reader.occurrencePlanOf(ctx, v.org, other); err != nil || got.ErrorCode != "invalid_plan" || got.RunID != nil {
+		t.Fatalf("quarantined occurrence: %v %v, want code invalid_plan", got, err)
+	}
+	if got, err := reader.occurrencePlanOf(ctx, uuid.NewString(), other); err != nil || got.ErrorCode != "" {
+		t.Fatalf("another org's read of a quarantined occurrence: %v %v, want not found", got, err)
+	}
+}
+
+// submitVenueSecond submits a second window and returns its occurrence id.
+func submitVenueSecond(t *testing.T, v *cascadeVenue, one cascadeSeeded) string {
+	t.Helper()
+	status, text := v.call("POST", "/api/v1/admin/sync-configs/"+one.config.String()+"/backfill", `{"selector":{"since":"2026-08-01T00:00:00Z","before":"2026-08-02T00:00:00Z"}}`)
+	return accepted(t, status, text).OccurrenceID
 }

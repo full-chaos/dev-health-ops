@@ -100,7 +100,7 @@ type occReader struct {
 	task          string
 	jobOrg        string
 	org, occ      string
-	resolveTo     *uuid.UUID
+	plan          occurrencePlan
 	occurrenceHit int
 }
 
@@ -108,10 +108,10 @@ func (o *occReader) backfillJobByID(context.Context, string, uuid.UUID) (*backfi
 	return &backfillJob{ID: uuid.New(), OrgID: o.jobOrg, CeleryTaskID: &o.task}, nil
 }
 
-func (o *occReader) occurrenceSyncRunID(_ context.Context, org, occurrence string) (*uuid.UUID, error) {
+func (o *occReader) occurrencePlanOf(_ context.Context, org, occurrence string) (occurrencePlan, error) {
 	o.occurrenceHit++
 	o.org, o.occ = org, occurrence
-	return o.resolveTo, nil
+	return o.plan, nil
 }
 
 func TestPendingOccurrenceJobReadsOneOrgScopedOccurrence(t *testing.T) {
@@ -132,7 +132,7 @@ func TestPendingOccurrenceJobReadsOneOrgScopedOccurrence(t *testing.T) {
 	}
 
 	planned := faultRunID
-	reader = &occReader{task: "occurrence:occ-2", jobOrg: org, resolveTo: &planned}
+	reader = &occReader{task: "occurrence:occ-2", jobOrg: org, plan: occurrencePlan{RunID: &planned}}
 	h = &handlers{store: reader, logger: quiet()}
 	recorder = record(h.getBackfillJob, request)
 	if recorder.Code != http.StatusOK || reader.calls["syncRunByID"] != 1 {
@@ -163,5 +163,43 @@ func TestAcceptedBackfillBodyNamesTheJobAndTheOccurrenceNotARun(t *testing.T) {
 	}
 	if strings.Contains(body, "sync_run_id") {
 		t.Errorf("%s names a run the submit did not wait for", body)
+	}
+}
+
+func TestQuarantinedOccurrenceJobReadsFailedWithItsCode(t *testing.T) {
+	org := uuid.NewString()
+	reader := &occReader{task: "occurrence:occ-q", jobOrg: org, plan: occurrencePlan{ErrorCode: "invalid_plan"}}
+	h := &handlers{store: reader, logger: quiet()}
+	request := newRequest(t, "/x", org)
+	request.SetPathValue("job_id", uuid.NewString())
+	recorder := record(h.getBackfillJob, request)
+	body := recorder.Body.String()
+	if recorder.Code != http.StatusOK || !strings.Contains(body, `"status":"failed"`) ||
+		!strings.Contains(body, "scheduled sync occurrence quarantined: invalid_plan") {
+		t.Fatalf("%d %s, want a failed job naming the quarantine code", recorder.Code, body)
+	}
+	if reader.calls["syncRunByID"] != 0 || reader.org != org {
+		t.Errorf("a quarantined occurrence read a run (%d) or the wrong org %q", reader.calls["syncRunByID"], reader.org)
+	}
+}
+
+func TestExplicitlyEmptyScopeIsNotScaleChecked(t *testing.T) {
+	// Two sources, 28 days, cap 3 is over the floor (2 x 2 = 4) ...
+	if checkBackfillScale(28, 2, 3) == nil {
+		t.Fatal("the floor case must be refused")
+	}
+	// ... but an explicitly empty dataset or source selector plans no unit.
+	for name, window := range map[string]backfillWindow{
+		"empty datasets": {Structured: true, DatasetKeysSet: true},
+		"empty sources":  {Structured: true, SourceIDsSet: true},
+	} {
+		if !scaleCheckApplies(&window) {
+			continue
+		}
+		t.Errorf("%s: the scale check applies", name)
+	}
+	if !scaleCheckApplies(&backfillWindow{Structured: true, DatasetKeysSet: true, DatasetKeys: []string{"commits"}}) ||
+		!scaleCheckApplies(&backfillWindow{}) {
+		t.Error("a named or legacy scope is checked")
 	}
 }

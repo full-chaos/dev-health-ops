@@ -464,11 +464,18 @@ func (h *handlers) backfillRunCounts(r *http.Request, job *backfillJob) (*backfi
 	ctx := r.Context()
 	runText := backfillSyncRunID(job)
 	if occurrence := backfillOccurrenceID(job); runText == "" && occurrence != "" {
-		planned, err := h.store.occurrenceSyncRunID(ctx, job.OrgID, occurrence)
-		if err != nil || planned == nil {
+		planned, err := h.store.occurrencePlanOf(ctx, job.OrgID, occurrence)
+		if err != nil {
 			return nil, err
 		}
-		runText = planned.String()
+		if planned.ErrorCode != "" {
+			reason := "scheduled sync occurrence quarantined: " + planned.ErrorCode
+			return &backfillCounts{Status: "failed", ErrorMessage: &reason}, nil
+		}
+		if planned.RunID == nil {
+			return nil, nil
+		}
+		runText = planned.RunID.String()
 	}
 	runID, err := pythonparity.ParseUUID(runText)
 	if err != nil {

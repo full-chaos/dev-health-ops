@@ -45,6 +45,7 @@ const (
 	SkipMembershipOrgMissing   = "membership_org_missing"
 	SkipMembershipNoPrincipal  = "membership_principal_missing"
 	SkipMembershipDuplicateSrc = "membership_duplicate_source"
+	SkipMembershipNoTimestamp  = "membership_no_timestamp"
 	SkipMembershipStoreError   = "membership_store_error"
 )
 
@@ -145,7 +146,8 @@ func MapOrg(row OrgRow) (identity.OrgBackfillTarget, string) {
 
 // MapMembership turns a row into a write target; class is a skip class, empty
 // when the row is writable. An unknown or missing role is refused, never
-// coerced.
+// coerced, and so is a row with neither joined_at nor created_at (an active
+// membership needs a join time).
 func MapMembership(row MemberRow) (identity.MembershipBackfillTarget, string) {
 	t := identity.MembershipBackfillTarget{OrgID: row.OrgID, UserID: row.UserID, JoinedAt: row.JoinedAt}
 	if t.JoinedAt == nil {
@@ -158,6 +160,9 @@ func MapMembership(row MemberRow) (identity.MembershipBackfillTarget, string) {
 		return t, SkipMembershipUnknownRole
 	}
 	t.Role = *row.Role
+	if t.JoinedAt == nil {
+		return t, SkipMembershipNoTimestamp
+	}
 	return t, ""
 }
 

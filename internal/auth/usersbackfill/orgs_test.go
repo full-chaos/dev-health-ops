@@ -52,7 +52,7 @@ func TestMapMembership(t *testing.T) {
 		{"viewer", MemberRow{Role: str("viewer"), JoinedAt: &joined, Copies: 1}, "", &joined},
 		{"owner", MemberRow{Role: str("owner"), JoinedAt: &joined, Copies: 1}, "", &joined},
 		{"joined_at falls back to created_at", MemberRow{Role: str("admin"), CreatedAt: &created, Copies: 1}, "", &created},
-		{"no timestamps maps with nil", MemberRow{Role: str("member"), Copies: 1}, "", nil},
+		{"no timestamps is refused", MemberRow{Role: str("member"), Copies: 1}, SkipMembershipNoTimestamp, nil},
 		{"nil role is refused", MemberRow{Copies: 1}, SkipMembershipUnknownRole, nil},
 		{"unknown role is refused", MemberRow{Role: str("superadmin"), Copies: 1}, SkipMembershipUnknownRole, nil},
 		{"upper case role is refused", MemberRow{Role: str("Admin"), Copies: 1}, SkipMembershipUnknownRole, nil},
@@ -91,10 +91,13 @@ func (f *fakeOrgSource) PageOrgs(_ context.Context, after *uuid.UUID, limit int)
 	}
 	f.pages++
 	var out []OrgRow
+	skipping := after != nil
 	for _, o := range f.orgs {
-		if after == nil || strings.Compare(o.ID.String(), after.String()) > 0 {
-			out = append(out, o)
+		if skipping {
+			skipping = o.ID != *after
+			continue
 		}
+		out = append(out, o)
 		if len(out) == limit {
 			break
 		}
@@ -161,12 +164,12 @@ func orgRows(n int) []OrgRow {
 func TestRunOrgsCountsEveryOutcome(t *testing.T) {
 	orgs := orgRows(4)
 	src := &fakeOrgSource{orgs: orgs, members: []MemberRow{
-		{OrgID: orgs[0].ID, UserID: uuid.New(), Role: str("owner"), Copies: 1},
-		{OrgID: orgs[0].ID, UserID: uuid.New(), Role: str("owner"), Copies: 1},
-		{OrgID: orgs[0].ID, UserID: uuid.New(), Role: str("owner"), Copies: 1},
-		{OrgID: orgs[0].ID, UserID: uuid.New(), Role: str("owner"), Copies: 1},
-		{OrgID: orgs[0].ID, UserID: uuid.New(), Role: str("owner"), Copies: 1},
-		{OrgID: orgs[0].ID, UserID: uuid.New(), Role: str("bogus"), Copies: 1},
+		{OrgID: orgs[0].ID, UserID: uuid.New(), Role: str("owner"), Copies: 1, CreatedAt: &testTime},
+		{OrgID: orgs[0].ID, UserID: uuid.New(), Role: str("owner"), Copies: 1, CreatedAt: &testTime},
+		{OrgID: orgs[0].ID, UserID: uuid.New(), Role: str("owner"), Copies: 1, CreatedAt: &testTime},
+		{OrgID: orgs[0].ID, UserID: uuid.New(), Role: str("owner"), Copies: 1, CreatedAt: &testTime},
+		{OrgID: orgs[0].ID, UserID: uuid.New(), Role: str("owner"), Copies: 1, CreatedAt: &testTime},
+		{OrgID: orgs[0].ID, UserID: uuid.New(), Role: str("bogus"), Copies: 1, CreatedAt: &testTime},
 	}}
 	orgN, memN := 0, 0
 	sink := &fakeOrgSink{
@@ -225,7 +228,7 @@ func TestRunOrgsCountsEveryOutcome(t *testing.T) {
 
 func TestRunOrgsDryRunTreatsPendingOrgAsPresent(t *testing.T) {
 	orgs := orgRows(1)
-	src := &fakeOrgSource{orgs: orgs, members: []MemberRow{{OrgID: orgs[0].ID, UserID: uuid.New(), Role: str("admin"), Copies: 1}}}
+	src := &fakeOrgSource{orgs: orgs, members: []MemberRow{{OrgID: orgs[0].ID, UserID: uuid.New(), Role: str("admin"), Copies: 1, CreatedAt: &testTime}}}
 	sink := &fakeOrgSink{
 		org: func(identity.OrgBackfillTarget) (identity.OrgBackfillResult, error) {
 			return identity.OrgBackfillResult{Inserted: true}, nil
@@ -259,16 +262,81 @@ func TestRunOrgsErrorsCarryNoSourceDetail(t *testing.T) {
 	}
 }
 
-func TestOrgReportLinesNoRowData(t *testing.T) {
-	id := uuid.New()
-	rep := OrgReport{Skipped: map[string]int{SkipOrgInvalid: 1}}
-	for _, l := range rep.Lines() {
-		if strings.Contains(l, id.String()) {
-			t.Fatal("row data in the report")
+func TestRunOrgsReportAndErrorsCarryNoRowData(t *testing.T) {
+	org := OrgRow{ID: uuid.New(), Slug: "slug-marker-7f3a", Name: "name-marker-7f3a", Active: true}
+	bad := OrgRow{ID: uuid.New(), Slug: "", Name: "name-marker-9c1d"}
+	user := uuid.New()
+	src := &fakeOrgSource{orgs: []OrgRow{bad, org}, members: []MemberRow{
+		{OrgID: org.ID, UserID: user, Role: str("role-marker-4b2e"), Copies: 1, CreatedAt: &testTime},
+		{OrgID: org.ID, UserID: uuid.New(), Role: str("owner"), Copies: 1, CreatedAt: &testTime},
+		{OrgID: org.ID, UserID: uuid.New(), Role: str("owner"), Copies: 1, CreatedAt: &testTime},
+	}}
+	secret := errors.New("detail-marker-5d8f " + org.ID.String() + " " + user.String())
+	sink := &fakeOrgSink{
+		org: func(identity.OrgBackfillTarget) (identity.OrgBackfillResult, error) {
+			return identity.OrgBackfillResult{}, secret
+		},
+		member: func(identity.MembershipBackfillTarget) (identity.MembershipBackfillResult, error) {
+			return identity.MembershipBackfillResult{}, secret
+		},
+	}
+	rep, err := RunOrgs(context.Background(), src, sink, fakeAuthOnly{only: AuthOnly{Orgs: 1}}, Options{})
+	if err != nil || rep.SkippedTotal() != 5 {
+		t.Fatalf("run: %+v %v", rep, err)
+	}
+	_, notes := orgsVerdict(rep, errors.New("stopped"))
+	text := strings.Join(rep.Lines(), "\n") + "\n" + strings.Join(notes, "\n")
+	for _, marker := range []string{"slug-marker-7f3a", "name-marker-7f3a", "name-marker-9c1d", "role-marker-4b2e", "detail-marker-5d8f", org.ID.String(), user.String(), bad.ID.String()} {
+		if strings.Contains(text, marker) {
+			t.Fatalf("row data %q reached the report", marker)
 		}
 	}
-	if !strings.Contains(strings.Join(rep.Lines(), "\n"), "auth_only_memberships=0") {
-		t.Fatal("auth_only_memberships line missing")
+	for _, failing := range []*fakeOrgSource{{failOrg: true}} {
+		_, err := RunOrgs(context.Background(), failing, sink, nil, Options{})
+		if err == nil || strings.Contains(err.Error(), "4f1e") || strings.Contains(err.Error(), org.ID.String()) {
+			t.Fatalf("source error text: %v", err)
+		}
+	}
+	_, err = RunOrgs(context.Background(), &fakeOrgSource{}, sink, fakeAuthOnly{err: secret}, Options{})
+	if err == nil || strings.Contains(err.Error(), "detail-marker-5d8f") || strings.Contains(err.Error(), org.ID.String()) {
+		t.Fatalf("auth-only error text: %v", err)
+	}
+}
+
+func TestOrgsVerdictExitDecision(t *testing.T) {
+	for _, c := range []struct {
+		name         string
+		orgs, mems   int
+		skipped, err bool
+		code         int
+		notes        int
+	}{
+		{"neither auth-only", 0, 0, false, false, cli.ExitOK, 0},
+		{"auth-only orgs only: STOP note, exit unchanged", 1, 0, false, false, cli.ExitOK, 1},
+		{"auth-only memberships only: STOP note, exit unchanged", 0, 1, false, false, cli.ExitOK, 1},
+		{"both: two STOP notes, exit unchanged", 2, 3, false, false, cli.ExitOK, 2},
+		{"a skipped row fails the run", 0, 0, true, false, cli.ExitFailure, 0},
+		{"auth-only orgs and a skipped row", 1, 0, true, false, cli.ExitFailure, 1},
+		{"a stopped run fails with its note", 0, 1, false, true, cli.ExitFailure, 2},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			rep := OrgReport{AuthOnlyOrgs: c.orgs, AuthOnlyMemberships: c.mems, Skipped: map[string]int{}}
+			if c.skipped {
+				rep.Skipped[SkipOrgInvalid] = 1
+			}
+			var err error
+			if c.err {
+				err = errors.New("x")
+			}
+			code, notes := orgsVerdict(rep, err)
+			if code != c.code || len(notes) != c.notes {
+				t.Fatalf("code %d notes %v, want %d and %d notes", code, notes, c.code, c.notes)
+			}
+			joined := strings.Join(notes, "\n")
+			if (c.orgs > 0) != strings.Contains(joined, "auth_only_orgs") || (c.mems > 0) != strings.Contains(joined, "auth_only_memberships") {
+				t.Fatalf("notes = %q", joined)
+			}
+		})
 	}
 }
 
@@ -323,3 +391,5 @@ func TestOrgsVerbRefusesWhileTheUsersOwnedSwitchIsOn(t *testing.T) {
 		t.Fatalf("positional argument: exit %d", code)
 	}
 }
+
+var testTime = time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)

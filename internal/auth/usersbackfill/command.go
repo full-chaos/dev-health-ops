@@ -196,15 +196,30 @@ func runOrgs(ctx context.Context, env cli.Env) int {
 	for _, line := range rep.Lines() {
 		fmt.Fprintln(env.Stdout, line)
 	}
+	code, notes := orgsVerdict(rep, err)
+	for _, note := range notes {
+		fmt.Fprintln(env.Stderr, note)
+	}
+	return code
+}
+
+// orgsVerdict is the exit code and the stderr lines of a finished run. One rule
+// for both auth-only counts: above zero is a STOP note and never changes the
+// exit code (report only); a stopped run or a skipped row exits non-zero.
+func orgsVerdict(rep OrgReport, err error) (int, []string) {
+	var notes []string
+	if rep.AuthOnlyOrgs > 0 {
+		notes = append(notes, "orgs-backfill: auth_only_orgs is above zero: STOP for the cutover until it is explained")
+	}
 	if rep.AuthOnlyMemberships > 0 {
-		fmt.Fprintln(env.Stderr, "orgs-backfill: auth_only_memberships is above zero: STOP for the cutover until it is explained")
+		notes = append(notes, "orgs-backfill: auth_only_memberships is above zero: STOP for the cutover until it is explained")
 	}
 	switch {
 	case err != nil:
-		fmt.Fprintln(env.Stderr, "orgs-backfill: stopped before the end")
-		return cli.ExitFailure
+		notes = append(notes, "orgs-backfill: stopped before the end")
+		return cli.ExitFailure, notes
 	case rep.SkippedTotal() > 0:
-		return cli.ExitFailure
+		return cli.ExitFailure, notes
 	}
-	return cli.ExitOK
+	return cli.ExitOK, notes
 }

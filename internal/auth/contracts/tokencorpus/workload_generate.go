@@ -18,7 +18,6 @@ const (
 	WorkloadCeiling = 300
 	WorkloadLife    = 300
 	WorkloadSub     = "prn_AAAAAAAAAAAAAAAAAAAAAA"
-	AudienceOther   = "dev-health-api"
 	WorkloadNow     = FixedIat + 100
 )
 
@@ -101,6 +100,9 @@ func GenerateWorkload(random io.Reader) (*Corpus, error) {
 	}
 
 	ok("valid-auth-service", good, w, active, now, AudienceAuth, "The ordinary workload token for auth-service, typ workload+jwt, signed by the active key.")
+	apiToken := w
+	apiToken.aud = AudienceAPI
+	ok("valid-dev-health-api", good, apiToken, active, now, AudienceAPI, "The workload token for dev-health-api, typ workload+jwt, signed by the active key: a verifier that is dev-health-api accepts it.")
 	ok("valid-signed-by-overlap-key", headerText("EdDSA", TypWorkload, KidOverlap), w, edSigner(overlapKey), now, AudienceAuth, "Signed by the key published for the rotation overlap: both keys of the set verify.")
 	ok("valid-at-nbf", good, w, active, w.nbf, AudienceAuth, "The clock equals nbf: valid from nbf inclusive.")
 	ok("valid-last-second-before-exp", good, w, active, w.exp-1, AudienceAuth, "One second before exp: the last valid instant.")
@@ -138,9 +140,9 @@ func GenerateWorkload(random io.Reader) (*Corpus, error) {
 	refuse("invalid-duplicate-claim-aud", good, strings.Replace(w.text(), `"aud":"auth-service"`, `"aud":"dev-health-api","aud":"auth-service"`, 1), active, workloadContractRefusal("duplicate_member", "aud appears twice; the last is the verifier's audience and the signature is valid over those bytes."))
 	refuse("invalid-duplicate-claim-exp", good, strings.Replace(w.text(), fmt.Sprintf(`"exp":%d`, w.exp), fmt.Sprintf(`"exp":%d,"exp":%d`, w.exp, w.exp+3600), 1), active, workloadContractRefusal("duplicate_member", "exp appears twice."))
 
-	userAud := w
-	userAud.aud = AudienceOther
-	refuse("invalid-aud-user-api", good, userAud.text(), active, workloadContractRefusal("schema", "the user-token audience dev-health-api: not a workload audience."))
+	queryAud := w
+	queryAud.aud = "query-api"
+	refuse("invalid-aud-query-api", good, queryAud.text(), active, workloadContractRefusal("schema", "query-api is carried only by the effective principal envelope: not a workload audience."))
 	unknownAud := w
 	unknownAud.aud = "billing-edge"
 	refuse("invalid-aud-unknown", good, unknownAud.text(), active, workloadContractRefusal("schema", "an audience no workload token carries."))
@@ -190,7 +192,8 @@ func GenerateWorkload(random io.Reader) (*Corpus, error) {
 	otherIss := w
 	otherIss.iss = "https://other.example.test"
 	refuse("invalid-iss-other-issuer", good, otherIss.text(), active, reject(now, AudienceAuth, ReasonIssuer, "A well-formed issuer that is not the one the verifier pins, signed by a published key."))
-	refuse("invalid-aud-wrong-service", good, w.text(), active, reject(now, AudienceOther, ReasonAudience, "A valid auth-service workload token presented to dev-health-api: the audience is exactly one service."))
+	refuse("invalid-aud-wrong-service", good, w.text(), active, reject(now, AudienceAPI, ReasonAudience, "A valid auth-service workload token presented to dev-health-api: the audience is exactly one service."))
+	refuse("invalid-aud-wrong-service-api", good, apiToken.text(), active, reject(now, AudienceAuth, ReasonAudience, "A valid dev-health-api workload token presented to auth-service: the audience is exactly one service."))
 	refuse("invalid-exp-equals-now", good, w.text(), active, reject(w.exp, AudienceAuth, ReasonExpired, "The clock equals exp: expired from exp inclusive."))
 	refuse("invalid-exp-one-second-ago", good, w.text(), active, reject(w.exp+1, AudienceAuth, ReasonExpired, "One second past exp."))
 	refuse("invalid-nbf-one-second-ahead", good, w.text(), active, reject(w.nbf-1, AudienceAuth, ReasonNotYetValid, "One second before nbf."))
@@ -220,9 +223,9 @@ func GenerateWorkload(random io.Reader) (*Corpus, error) {
 
 	refuse("invalid-order-contract-over-unknown-kid", headerText("EdDSA", "at+jwt", KidUnknown), w.text(), edSigner(strangerKey), workloadContractRefusal("schema", "Two failures: typ at+jwt and a kid never published. The contract refusal comes first."))
 	refuse("invalid-order-signature-over-issuer", good, otherIss.text(), edSigner(strangerKey), reject(now, AudienceAuth, ReasonSignature, "Two failures: another issuer and a signature by a key outside the set. The signature refusal comes first."))
-	refuse("invalid-order-issuer-over-audience", good, otherIss.text(), active, reject(now, AudienceOther, ReasonIssuer, "Two failures: another issuer and the wrong service. The issuer refusal comes first."))
-	refuse("invalid-order-audience-over-not-yet-valid", good, w.text(), active, reject(w.nbf-1, AudienceOther, ReasonAudience, "Two failures: the wrong service and a clock before nbf. The audience refusal comes first."))
-	refuse("invalid-order-audience-over-expiry", good, w.text(), active, reject(w.exp, AudienceOther, ReasonAudience, "Two failures: the wrong service and an expired token. The audience refusal comes first."))
+	refuse("invalid-order-issuer-over-audience", good, otherIss.text(), active, reject(now, AudienceAPI, ReasonIssuer, "Two failures: another issuer and the wrong service. The issuer refusal comes first."))
+	refuse("invalid-order-audience-over-not-yet-valid", good, w.text(), active, reject(w.nbf-1, AudienceAPI, ReasonAudience, "Two failures: the wrong service and a clock before nbf. The audience refusal comes first."))
+	refuse("invalid-order-audience-over-expiry", good, w.text(), active, reject(w.exp, AudienceAPI, ReasonAudience, "Two failures: the wrong service and an expired token. The audience refusal comes first."))
 
 	sort.Slice(b.entries, func(i, j int) bool { return b.entries[i].File < b.entries[j].File })
 	x := func(p ed25519.PublicKey) string { return base64.RawURLEncoding.EncodeToString(p) }

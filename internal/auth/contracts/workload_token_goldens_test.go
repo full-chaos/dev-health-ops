@@ -352,3 +352,36 @@ func TestAWorkloadTokenRefusalCarriesNoMemberValue(t *testing.T) {
 		})
 	}
 }
+
+func TestEveryWorkloadAudienceOfTheVocabularyValidatesAndAnArrayStillDoesNot(t *testing.T) {
+	root := testRoot(t)
+	raw, err := os.ReadFile(filepath.Join(ContractsDir(root), "vocabulary", "audiences.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var vocabulary workloadTokenAudiences
+	if err := json.Unmarshal(raw, &vocabulary); err != nil {
+		t.Fatal(err)
+	}
+	base := decodeWorkloadTokenFixture(t, "valid-auth-service.json").(map[string]any)
+	seen := map[string]bool{}
+	for _, row := range vocabulary.Audiences {
+		for _, class := range row.Classes {
+			if class != WorkloadTokenClass {
+				continue
+			}
+			seen[row.Audience] = true
+			document := map[string]any{"header": base["header"], "claims": withMember(base["claims"].(map[string]any), "aud", row.Audience)}
+			if err := Validate(root, WorkloadTokenSurface, document); err != nil {
+				t.Errorf("workload audience %q was refused: %v", row.Audience, err)
+			}
+			array := map[string]any{"header": base["header"], "claims": withMember(base["claims"].(map[string]any), "aud", []any{row.Audience})}
+			if err := Validate(root, WorkloadTokenSurface, array); err == nil {
+				t.Errorf("an array holding %q validated", row.Audience)
+			}
+		}
+	}
+	if !seen["auth-service"] || !seen["dev-health-api"] {
+		t.Fatalf("workload audiences in the vocabulary: %v", seen)
+	}
+}

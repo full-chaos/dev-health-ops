@@ -489,3 +489,61 @@ func TestPlanReadsRecordsMarkdownEvidence(t *testing.T) {
 		t.Errorf("an exec of '*.go' asks for a patterns.tsv row:\n%s", out)
 	}
 }
+
+// A gate call whose qualifier the file declares as its own value (`var strings stringsT`) is that value's method, which
+// may read anything: no filter. A Markdown glob held by a constant and passed to an exec is a pattern read.
+const (
+	mdShadowedGate = `package d
+
+import (
+	"io/fs"
+	"os"
+	"path/filepath"
+)
+
+type stringsT struct{}
+
+func (stringsT) HasSuffix(p, s string) bool {
+	_, err := os.ReadFile(p)
+	return err == nil
+}
+
+var strings stringsT
+
+func repoRoot() string { return ".." }
+
+func scan() error {
+	return filepath.WalkDir(repoRoot(), func(path string, entry fs.DirEntry, err error) error {
+		if !strings.HasSuffix(path, ".go") {
+			return nil
+		}
+		_, err = os.ReadFile(path)
+		return err
+	})
+}
+`
+	mdConstGlobExec = "package x\n\nimport \"os/exec\"\n\nconst markdownGlob = \"*.md\"\n\nfunc tracked() ([]byte, error) {\n\treturn exec.Command(\"git\", \"ls-files\", \"--\", markdownGlob).Output()\n}\n"
+)
+
+func TestPlanReadsShadowedGateAndConstantGlob(t *testing.T) {
+	res := planReads(t, readsFixture(t, map[string]string{"d/d_shadow_test.go": mdShadowedGate}))
+	if out := res.stdout + res.stderr; !strings.Contains(out, "d\td_shadow_test.go\t.\ttree\t*\n") || strings.Contains(out, "d\td_shadow_test.go\t.\ttree\t*.go") {
+		t.Errorf("a shadowed strings.HasSuffix gate: want the walk row with filter *, none with *.go:\n%s", out)
+	}
+	res = planReads(t, readsFixture(t, map[string]string{"x/x_const_test.go": mdConstGlobExec}))
+	if out := res.stdout + res.stderr; !strings.Contains(out, "x\tx_const_test.go\t*.md\n") {
+		t.Errorf("a constant glob passed to exec: want the patterns.tsv row *.md:\n%s", out)
+	}
+}
+
+func TestPlanVerdictMarkdownShadowedGateAndConstantGlob(t *testing.T) {
+	md := []string{"--go-files-full", "--md-bounded"}
+	runRows(t, []verdictRow{
+		{name: "shadowed_gate_walk_selects_on_a_markdown_pr", head: mdHead(map[string]string{"d/d_shadow_test.go": mdShadowedGate,
+			tablesDir + "walks.tsv": "d\td_walk_test.go\t.\ttree\t*.go\nd\td_shadow_test.go\t.\ttree\t*\n", tablesDir + "dynreads.tsv": "d\td_shadow_test.go\n"}),
+			extra: md, changed: []string{"docs/zz.md"}, want: "AFFECTED 1", keys: []string{"d"}},
+		{name: "constant_glob_exec_selects_on_a_markdown_pr", head: mdEvidenceHead("x/x_const_test.go", mdConstGlobExec,
+			"", "x\tx_const_test.go\tunexpressed\n", "x\tx_const_test.go\t*.md\n", ""),
+			extra: md, changed: []string{"README.md"}, want: "AFFECTED 1", keys: []string{"x"}},
+	})
+}

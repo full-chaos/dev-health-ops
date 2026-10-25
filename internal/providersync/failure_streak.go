@@ -96,18 +96,24 @@ func (streak FailureStreak) NeedsAttentionReason() string {
 
 // RecentTerminalUnitsSQL lists the newest terminal units of one dataset per
 // source of an integration, newest first, at most $4 per source. Arguments:
-// org id, integration id, dataset key, per-source limit.
+// org id, integration id, dataset key, per-source limit. Each source reads
+// only its own newest rows (a LATERAL top-N), so the cost no longer grows
+// with the whole integration history, and the wide result column is read for
+// the kept rows only.
 const RecentTerminalUnitsSQL = `
-SELECT source_id::text, status = 'failed', COALESCE(result::jsonb ->> 'cause_class', ''), updated_at
-FROM (
-  SELECT source_id, status, result, updated_at,
-         row_number() OVER (PARTITION BY source_id ORDER BY updated_at DESC, id DESC) AS position
-  FROM public.sync_run_units
-  WHERE org_id = $1 AND integration_id = $2::uuid AND dataset_key = $3
-    AND status IN ('success', 'failed')
+SELECT s.id::text, recent.failed, recent.cause_class, recent.updated_at
+FROM public.integration_sources AS s
+CROSS JOIN LATERAL (
+  SELECT u.id, u.status = 'failed' AS failed,
+         COALESCE(u.result::jsonb ->> 'cause_class', '') AS cause_class, u.updated_at
+  FROM public.sync_run_units AS u
+  WHERE u.org_id = $1 AND u.integration_id = $2::uuid AND u.source_id = s.id
+    AND u.dataset_key = $3 AND u.status IN ('success', 'failed')
+  ORDER BY u.updated_at DESC, u.id DESC
+  LIMIT $4
 ) AS recent
-WHERE position <= $4
-ORDER BY source_id, position`
+WHERE s.org_id = $1 AND s.integration_id = $2::uuid
+ORDER BY s.id, recent.updated_at DESC, recent.id DESC`
 
 // RecentTerminalUnitsLimit bounds how far back RecentTerminalUnitsSQL looks;
 // it is above the threshold so a longer streak still reads as one.

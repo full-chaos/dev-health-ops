@@ -7,8 +7,11 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -138,5 +141,100 @@ func TestBuildIndexFailsWithoutTheTable(t *testing.T) {
 	code, _, stderr := buildIndexVerb(t, uri)
 	if code == cli.ExitOK || !strings.Contains(stderr, "sync_run_units") {
 		t.Fatalf("exit %d stderr %s, want a failure naming sync_run_units", code, stderr)
+	}
+}
+
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+func indexRowCount(t *testing.T, conn *pgx.Conn) int {
+	t.Helper()
+	var n int
+	if err := conn.QueryRow(context.Background(), "SELECT count(*) FROM pg_class WHERE relname = $1 AND relnamespace = 'public'::regnamespace", pgmigrate.FailureStreakIndexName).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+// holdWriter opens a transaction that holds a ROW EXCLUSIVE lock on sync_run_units, as an in-flight writer does: it blocks
+// both CREATE INDEX CONCURRENTLY and DROP INDEX CONCURRENTLY until released.
+func holdWriter(t *testing.T, uri string) (release func()) {
+	t.Helper()
+	conn := connect(t, uri)
+	tx, err := conn.Begin(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(context.Background(), "LOCK TABLE public.sync_run_units IN ROW EXCLUSIVE MODE"); err != nil {
+		t.Fatal(err)
+	}
+	var once sync.Once
+	release = func() { once.Do(func() { _ = tx.Rollback(context.Background()) }) }
+	t.Cleanup(release)
+	return release
+}
+
+// When the build fails for good and the blocker clears before the cleanup, the INVALID index the failed build left is dropped.
+func TestBuildIndexFinalFailureDropsTheInvalidIndex(t *testing.T) {
+	position, _ := chainPosition(t, "0159")
+	d := newDownInstance(t)
+	uri := d.at(t, position)
+	release := holdWriter(t, uri)
+
+	conn := connect(t, uri)
+	logs := &syncBuffer{}
+	go func() {
+		for !strings.Contains(logs.String(), "attempt failed") {
+			time.Sleep(10 * time.Millisecond)
+		}
+		release()
+	}()
+	_, err := pgmigrate.BuildFailureStreakIndex(context.Background(), conn,
+		pgmigrate.IndexBuildOptions{LockTimeout: 2 * time.Second, Attempts: 1}, slog.New(slog.NewJSONHandler(logs, nil)))
+	if err == nil {
+		t.Fatal("the build succeeded under a held writer lock")
+	}
+	if n := indexRowCount(t, conn); n != 0 {
+		t.Fatalf("%d index rows left after the final failure; log %s", n, logs.String())
+	}
+}
+
+// When the blocker outlives the cleanup too, the INVALID index stays, the verb exits non-zero and logs the distinct line;
+// the next run drops it and builds a valid one.
+func TestBuildIndexFinalFailureUnderHeldLockLeavesIndexForNextRun(t *testing.T) {
+	position, _ := chainPosition(t, "0159")
+	d := newDownInstance(t)
+	uri := d.at(t, position)
+	release := holdWriter(t, uri)
+
+	conn := connect(t, uri)
+	code, _, stderr := buildIndexVerb(t, uri, "--attempts=1", "--lock-timeout=1s", "--retry-delay=0s")
+	if code == cli.ExitOK {
+		t.Fatalf("exit 0 under a held writer lock; stderr %s", stderr)
+	}
+	if !strings.Contains(stderr, "build-index: invalid index left; the next run drops it") {
+		t.Fatalf("stderr lacks the leftover line: %s", stderr)
+	}
+	if _, valid := streakIndexDefinition(t, conn); valid {
+		t.Fatal("the leftover index is valid")
+	}
+	release()
+	code, result, stderr := buildIndexVerb(t, uri)
+	if code != cli.ExitOK || result["action"] != "rebuilt" || result["valid"] != true {
+		t.Fatalf("next run: exit %d result %v stderr %s", code, result, stderr)
 	}
 }

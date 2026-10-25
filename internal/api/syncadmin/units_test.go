@@ -322,8 +322,9 @@ func TestRunUnitsPagedQuery(t *testing.T) {
 	reader := func() *unitsReader { return &unitsReader{faultReader: &faultReader{}, units: units} }
 
 	for _, query := range []string{"?limit=1001&offset=0", "?offset=-1", "?offset=x", "?source_id=x", "?since=yesterday",
-		"?before=2026-13-01&offset=0", "?status=", "?status=a,,b", "?dataset_key=&offset=0", "?limit=-1&offset=0",
-		"?status=" + strings.Repeat("a", 129), "?status=a,b,c,d,e,f,g,h,i,j,k,l,m"} {
+		"?before=2026-13-01&offset=0", "?status=", "?status=failed,,failed", "?dataset_key=&offset=0", "?limit=-1&offset=0",
+		"?status=" + strings.Repeat("a", 129), "?status=failed%3BDROP", "?status=bogus&offset=0", "?offset=1000001", "?offset=99999999999999999999",
+		"?status=failed,failed,failed,failed,failed,failed,failed,failed,failed,failed,failed,failed,failed"} {
 		r := reader()
 		if _, status, body := serveUnits(t, r, query, now); status != http.StatusUnprocessableEntity || r.calls["runUnits"] != 0 {
 			t.Errorf("%s: %d %s, %d unit reads, want 422 and none", query, status, body, r.calls["runUnits"])
@@ -356,5 +357,28 @@ func TestRunUnitsPagedQuery(t *testing.T) {
 		if status != http.StatusInternalServerError || body != `{"detail":"Internal Server Error"}` {
 			t.Errorf("failing %s: %d %s", step, status, body)
 		}
+	}
+}
+
+// TestRunUnitsFilterBindsEveryValue pins that every filter value travels as a
+// bound SQL parameter: the clause holds only placeholders, the org scope
+// terms come first and always, and a hostile value never reaches the text.
+func TestRunUnitsFilterBindsEveryValue(t *testing.T) {
+	hostile := "x'; DROP TABLE sync_run_units; --"
+	source := uuid.New()
+	since, before := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)
+	clause, args := unitFilter{Statuses: []string{"failed", "retrying"}, DatasetKey: &hostile, SourceID: &source,
+		Since: &since, Before: &before}.where("org", faultRunID)
+	if !strings.HasPrefix(clause, "u.sync_run_id = $1 AND u.org_id = $2") {
+		t.Errorf("the org scope is not the first terms: %s", clause)
+	}
+	if strings.Contains(clause, hostile) || strings.Contains(clause, "DROP") || strings.Contains(clause, "failed") || strings.Contains(clause, source.String()) {
+		t.Errorf("a value reached the SQL text: %s", clause)
+	}
+	if len(args) != 7 || args[0] != faultRunID || args[1] != "org" {
+		t.Errorf("args %v, want run, org and 5 filter values", args)
+	}
+	if bare, bareArgs := (unitFilter{}).where("org", faultRunID); bare != "u.sync_run_id = $1 AND u.org_id = $2" || len(bareArgs) != 2 {
+		t.Errorf("an empty filter changed the old scope: %s %v", bare, bareArgs)
 	}
 }

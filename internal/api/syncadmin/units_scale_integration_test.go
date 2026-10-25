@@ -109,7 +109,7 @@ SELECT $1, $2, $3, integration_id, $4, 'github', $5, 'medium', 'incremental', $6
 	if !strings.Contains(string(pagedBody["partial_failure_summary"]), `"unknown"`) || !strings.Contains(string(pagedBody["partial_failure_summary"]), `"auth"`) {
 		t.Errorf("failed categories lost: %s", pagedBody["partial_failure_summary"])
 	}
-	for _, query := range []string{"?limit=1001&offset=0", "?offset=-1", "?source_id=x", "?since=yesterday", "?status=", "?limit=-1&offset=0"} {
+	for _, query := range []string{"?limit=1001&offset=0", "?offset=-1", "?source_id=x", "?since=yesterday", "?status=", "?status=bogus", "?offset=1000001", "?limit=-1&offset=0"} {
 		if code, body := v.call("GET", "/api/v1/admin/sync-runs/"+run.String()+"/units"+query, ""); code != http.StatusUnprocessableEntity {
 			t.Errorf("%s: %d %s, want 422", query, code, body)
 		}

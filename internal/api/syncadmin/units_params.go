@@ -20,7 +20,15 @@ const (
 	unitsPageMaxLimit     = 1000
 	unitsStatusMaxValues  = 12
 	unitsValueMaxLength   = 128
+	unitsPageMaxOffset    = 1_000_000
 )
+
+// unitsStatusAllowlist is every unit status the filter accepts; any other
+// value is a 422, so the filter never carries free text.
+var unitsStatusAllowlist = map[string]bool{
+	"planned": true, "pending": true, "dispatching": true, "dispatched": true, "running": true, "retrying": true,
+	"success": true, "failed": true, "cancelled": true, "canceled": true, "skipped": true,
+}
 
 var unitsPagedParams = []string{"offset", "status", "dataset_key", "source_id", "since", "before"}
 
@@ -55,17 +63,14 @@ func parseUnitsQuery(values url.Values, errs *pybody.Errors) unitsQuery {
 	if value, ok := errs.QueryInt("limit", rawLimit, unitsPageDefaultLimit, &zero, &maxLimit); ok {
 		query.limit = value
 	}
-	if value, ok := errs.QueryInt("offset", pybody.LastQuery(values, "offset"), 0, &zero, nil); ok {
-		if value.IsInt64() {
-			query.offset = value.Int64()
-		} else {
-			*errs = append(*errs, unitsQueryError("offset", "less_than_equal", "Input should be less than or equal to 9223372036854775807", value.String()))
-		}
+	maxOffset := int64(unitsPageMaxOffset)
+	if value, ok := errs.QueryInt("offset", pybody.LastQuery(values, "offset"), 0, &zero, &maxOffset); ok {
+		query.offset = value.Int64()
 	}
 	for _, raw := range values["status"] {
 		for _, status := range strings.Split(raw, ",") {
 			status = strings.TrimSpace(status)
-			if status == "" || len(status) > unitsValueMaxLength || len(query.filter.Statuses) >= unitsStatusMaxValues {
+			if !unitsStatusAllowlist[status] || len(query.filter.Statuses) >= unitsStatusMaxValues {
 				*errs = append(*errs, unitsQueryError("status", "value_error", "status must be 1 to 12 comma-separated unit statuses", raw))
 				break
 			}

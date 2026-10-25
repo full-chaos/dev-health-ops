@@ -110,6 +110,7 @@ internal/cigates/scripts	heredoc_budget_test.go	unexpressed
 internal/cigates/scripts	local_validate_clickhouse_test.go	unexpressed
 internal/cigates/scripts	local_validate_stage_manifest_test.go	unexpressed
 internal/cigates/scripts	oracle_triggers_script_test.go	unexpressed
+internal/cigates/scripts	posture_integration_test.go	unexpressed
 internal/cigates/splitshards	ci_script_helpers_test.go	unexpressed
 internal/cigates/splitshards	free_run_test.go	unexpressed
 internal/cigates/testshard	listcall_test.go	unexpressed

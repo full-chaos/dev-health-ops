@@ -82,9 +82,10 @@ var sessionReaders = []string{
 	"--set", "authService.migrate.sessionReaders.queryApi=devhealth_query",
 }
 
-var sessionSuccessor = []string{
+// The session routes count the compatibility refresh in the shared store, so the successor key comes with the store login.
+var sessionSuccessor = append([]string{
 	"--set", "authService.sessionKeys.successor.secretName=auth-session",
-}
+}, authValkey...)
 
 func sessionsArgs(parts ...[]string) []string {
 	out := append([]string{}, authBase...)

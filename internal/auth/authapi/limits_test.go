@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -143,11 +144,12 @@ func TestTheLimitTableIsPinned(t *testing.T) {
 		"reset token":   {ID: "auth_svc_reset_ip_token", Count: 5, Window: time.Hour},
 		"change":        {ID: "auth_svc_change_password", Count: 5, Window: time.Hour},
 		"social link":   {ID: "auth_svc_social_link_ip_principal", Count: 10, Window: time.Hour},
+		"refresh":       {ID: "auth_svc_refresh", Count: 10, Window: 15 * time.Minute},
 	}
 	got := map[string]httpapi.Limit{
 		"login ip": loginIPLimit, "login account": loginAccountLimit, "verify": verifyLimit, "resend": resendLimit,
 		"forgot": forgotLimit, "resend ip": resendIPLimit, "forgot ip": forgotIPLimit, "reset ip": resetIPLimit, "reset token": resetTokenLimit,
-		"change": changePasswordLimit, "social link": socialLinkLimit,
+		"change": changePasswordLimit, "social link": socialLinkLimit, "refresh": refreshLimit,
 	}
 	for name, limit := range want {
 		if got[name] != limit {
@@ -161,8 +163,8 @@ func TestTheLimitTableIsPinned(t *testing.T) {
 
 func TestLimitIDsListEveryLimiter(t *testing.T) {
 	got := LimitIDs()
-	if len(got) != 11 {
-		t.Fatalf("%d ids, want the table's 11", len(got))
+	if len(got) != 12 {
+		t.Fatalf("%d ids, want the table's 12", len(got))
 	}
 	seen := map[string]bool{}
 	for _, id := range got {
@@ -182,8 +184,8 @@ func TestLimitedRoutesRefuseToBuildWithoutACounterStore(t *testing.T) {
 		t.Fatalf("login without counters: %v", err)
 	}
 	deps.Login = nil
-	if _, err := CompatRoutes(deps); err != nil {
-		t.Fatalf("no login, no limit, no store needed: %v", err)
+	if _, err := CompatRoutes(deps); !errors.Is(err, errNoLimits) {
+		t.Fatalf("refresh without counters: %v", err)
 	}
 	if _, err := CredentialRoutes(CredentialDeps{Flows: &local.Flows{}, Sessions: f.sessions, Users: f.users, Issuer: f.issuer}); !errors.Is(err, errNoLimits) {
 		t.Fatalf("credentials without counters: %v", err)
@@ -325,13 +327,14 @@ func TestAStoreErrorRefusesEveryLimitedRouteAndCountsItWithoutValues(t *testing.
 	cred := newCredFixtureWith(t, failingStore{})
 	link, _ := linkFixtureWith(t, failingStore{})
 	calls := map[string]*httptest.ResponseRecorder{
-		"login":  compat.do(http.MethodPost, PatternCompatLogin, loginBody(compatEmail, "wrong password", ""), nil),
-		"verify": cred.call(http.MethodGet, PatternVerifyEmail+"?token=sentinel-token", "", nil),
-		"resend": cred.call(http.MethodPost, PatternResendVerification, `{"email":"sentinel-person@example.com"}`, nil),
-		"forgot": cred.call(http.MethodPost, PatternForgotPassword, `{"email":"sentinel-person@example.com"}`, nil),
-		"reset":  cred.call(http.MethodPost, PatternResetPassword, `{"token":"sentinel-token","new_password":"another-password-1"}`, nil),
-		"change": cred.call(http.MethodPost, PatternChangePassword, `{"current_password":"a-password-1","new_password":"Brand-new-pass-77!"}`, cred.bearer(cred.grant())),
-		"link":   link.do(http.MethodPost, PatternSocialLink, linkBody, link.bearer(link.grant())),
+		"login":   compat.do(http.MethodPost, PatternCompatLogin, loginBody(compatEmail, "wrong password", ""), nil),
+		"refresh": compat.do(http.MethodPost, PatternCompatRefresh, `{"refresh_token":"`+credential()+`"}`, nil),
+		"verify":  cred.call(http.MethodGet, PatternVerifyEmail+"?token=sentinel-token", "", nil),
+		"resend":  cred.call(http.MethodPost, PatternResendVerification, `{"email":"sentinel-person@example.com"}`, nil),
+		"forgot":  cred.call(http.MethodPost, PatternForgotPassword, `{"email":"sentinel-person@example.com"}`, nil),
+		"reset":   cred.call(http.MethodPost, PatternResetPassword, `{"token":"sentinel-token","new_password":"another-password-1"}`, nil),
+		"change":  cred.call(http.MethodPost, PatternChangePassword, `{"current_password":"a-password-1","new_password":"Brand-new-pass-77!"}`, cred.bearer(cred.grant())),
+		"link":    link.do(http.MethodPost, PatternSocialLink, linkBody, link.bearer(link.grant())),
 	}
 	for name, response := range calls {
 		if response.Code != http.StatusInternalServerError {
@@ -591,7 +594,7 @@ func TestEverySharedRouteRefusesInGoAPIShape(t *testing.T) {
 // names or abbreviates its route, and a route outside the set is refused with
 // the generic 500 and counts nothing.
 func TestCounterScopesAreAClosedSetOfNeutralCodes(t *testing.T) {
-	want := map[string]string{PatternCompatLogin: "s01", PatternResetPassword: "s02", socialLinkRoute: "s03"}
+	want := map[string]string{PatternCompatLogin: "s01", PatternResetPassword: "s02", socialLinkRoute: "s03", PatternCompatRefresh: "s04"}
 	if !reflect.DeepEqual(scopeCodes, want) {
 		t.Fatalf("scope codes %v, pinned %v", scopeCodes, want)
 	}
@@ -641,4 +644,142 @@ func TestGoAPIRefusalBodiesAndContentType(t *testing.T) {
 			t.Errorf("%s: %d %q %v", code, rec.Code, rec.Body, rec.Header())
 		}
 	}
+}
+
+func refreshAttempt(h http.Handler, peer, forwarded string) *httptest.ResponseRecorder {
+	return send(h, peer, forwarded, http.MethodPost, PatternCompatRefresh, `{"refresh_token":"`+credential()+`"}`, nil)
+}
+
+func TestCompatRefreshLimitsPerClientAddress(t *testing.T) {
+	f := newCompatFixture(t)
+	h := trustedProxy(t, f.server)
+	for i := 0; i < 10; i++ {
+		if r := refreshAttempt(h, clientPeer, ""); r.Code != http.StatusUnauthorized {
+			t.Fatalf("attempt %d = %d, want 401", i+1, r.Code)
+		}
+	}
+	assertRateLimited(t, "11th refresh from one address", refreshAttempt(h, clientPeer, ""))
+	if r := refreshAttempt(h, "198.51.100.7:5000", ""); r.Code != http.StatusUnauthorized {
+		t.Fatalf("another address = %d, want 401", r.Code)
+	}
+	// An untrusted peer cannot pick its bucket; behind the trusted proxy the forwarded client is the key.
+	assertRateLimited(t, "spoofed forwarded address from an untrusted peer", refreshAttempt(h, clientPeer, "192.0.2.200"))
+	for i := 0; i < 10; i++ {
+		refreshAttempt(h, proxyPeer, "198.51.100.50")
+	}
+	assertRateLimited(t, "11th refresh of one forwarded client", refreshAttempt(h, proxyPeer, "198.51.100.50"))
+	if r := refreshAttempt(h, proxyPeer, "198.51.100.51"); r.Code != http.StatusUnauthorized {
+		t.Fatalf("another client behind the proxy = %d, want 401", r.Code)
+	}
+}
+
+func TestCompatRefreshKeysAnIPv6ClientByItsSlash64(t *testing.T) {
+	f := newCompatFixture(t)
+	h := trustedProxy(t, f.server)
+	for i := 0; i < 10; i++ {
+		refreshAttempt(h, "[2001:db8:1:2::"+string("123456789a"[i])+"]:5000", "")
+	}
+	assertRateLimited(t, "another address inside the same /64", refreshAttempt(h, "[2001:db8:1:2:ffff::9]:5000", ""))
+	if r := refreshAttempt(h, "[2001:db8:1:3::1]:5000", ""); r.Code != http.StatusUnauthorized {
+		t.Fatalf("a different /64 = %d, want 401", r.Code)
+	}
+}
+
+func TestMalformedRefreshBodiesCostNoAllowance(t *testing.T) {
+	f := newCompatFixture(t)
+	for i := 0; i < 30; i++ {
+		if r := f.do(http.MethodPost, PatternCompatRefresh, `{}`, nil); r.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("malformed refresh = %d", r.Code)
+		}
+	}
+	if r := f.do(http.MethodPost, PatternCompatRefresh, `{"refresh_token":"`+credential()+`"}`, nil); r.Code != http.StatusUnauthorized {
+		t.Fatalf("valid body after refused ones = %d, want 401", r.Code)
+	}
+}
+
+func TestTwoReplicasShareOneRefreshBudget(t *testing.T) {
+	first := newCompatFixture(t)
+	second := newCompatFixture(t)
+	second.counters = first.counters
+	second.buildCompat()
+	replicas := []*compatFixture{first, second}
+	for i := 0; i < 10; i++ {
+		if r := replicas[i%2].do(http.MethodPost, PatternCompatRefresh, `{"refresh_token":"`+credential()+`"}`, nil); r.Code != http.StatusUnauthorized {
+			t.Fatalf("attempt %d = %d, want 401", i+1, r.Code)
+		}
+	}
+	for i, replica := range replicas {
+		assertRateLimited(t, "replica "+string(rune('1'+i)), replica.do(http.MethodPost, PatternCompatRefresh, `{"refresh_token":"`+credential()+`"}`, nil))
+	}
+}
+
+func TestCompatRefreshCountsUnderItsOwnAuthSvcIDWithoutTheAddressInTheID(t *testing.T) {
+	f := newCompatFixture(t)
+	store := newRecording()
+	f.counters = store
+	f.buildCompat()
+	refreshAttempt(trustedProxy(t, f.server), clientPeer, "")
+	if len(store.hits) != 1 {
+		t.Fatalf("%d hits, want 1", len(store.hits))
+	}
+	hit := store.hits[0]
+	if hit.Limit.ID != "auth_svc_refresh" || hit.Limit.Count != 10 || hit.Limit.Window != 15*time.Minute {
+		t.Fatalf("limit = %+v, want auth_svc_refresh 10 per 15 min", hit.Limit)
+	}
+	if hit.Path != "s04" {
+		t.Fatalf("scope = %q, want the neutral code s04", hit.Path)
+	}
+}
+
+func TestCompatRefreshFailsClosedWhenTheStoreFails(t *testing.T) {
+	f := newCompatFixture(t)
+	f.counters = failingStore{}
+	f.buildCompat()
+	r := f.do(http.MethodPost, PatternCompatRefresh, `{"refresh_token":"`+credential()+`"}`, nil)
+	if r.Code != http.StatusInternalServerError || r.Body.String() != `{"detail":"Internal Server Error"}` {
+		t.Fatalf("refresh with the store down = %d %s, want go-api's closed 500", r.Code, r.Body)
+	}
+	if strings.Contains(r.Body.String(), "sentinel") {
+		t.Fatalf("500 names the request: %s", r.Body)
+	}
+}
+
+func TestCompatRoutesRefuseToBuildWithoutLimitsEvenWithoutLogin(t *testing.T) {
+	f := newCompatFixture(t)
+	_, err := CompatRoutes(CompatDeps{
+		Sessions: f.sessions, Users: f.users, Issuer: f.issuer, Projector: f.projector,
+		AppendAudit: func(context.Context, audit.AuditEvent) error { return nil },
+	})
+	if err == nil {
+		t.Fatal("the refresh route built without the shared limits")
+	}
+}
+
+func TestCompatRefreshTwoClientsThroughTheTrustedProxyKeepSeparateBuckets(t *testing.T) {
+	h := trustedProxy(t, newCompatFixture(t).server)
+	for i := 0; i < 10; i++ {
+		if r := refreshAttempt(h, proxyPeer, "198.51.100.10"); r.Code != http.StatusUnauthorized {
+			t.Fatalf("client A attempt %d = %d, want 401", i+1, r.Code)
+		}
+	}
+	assertRateLimited(t, "client A 11th", refreshAttempt(h, proxyPeer, "198.51.100.10"))
+	for i := 0; i < 10; i++ {
+		if r := refreshAttempt(h, proxyPeer, "198.51.100.11"); r.Code != http.StatusUnauthorized {
+			t.Fatalf("client B attempt %d = %d, want 401 (the proxy peer is not the key)", i+1, r.Code)
+		}
+	}
+	assertRateLimited(t, "client B 11th", refreshAttempt(h, proxyPeer, "198.51.100.11"))
+}
+
+func TestCompatRefreshSpoofedForwardedValuesFromADirectClientShareOneBucket(t *testing.T) {
+	h := trustedProxy(t, newCompatFixture(t).server)
+	for i := 0; i < 10; i++ {
+		if r := refreshAttempt(h, clientPeer, "192.0.2."+strconv.Itoa(i+1)); r.Code != http.StatusUnauthorized {
+			t.Fatalf("attempt %d = %d, want 401", i+1, r.Code)
+		}
+	}
+	for i := 10; i < 40; i++ {
+		assertRateLimited(t, "spoofed value "+strconv.Itoa(i), refreshAttempt(h, clientPeer, "192.0.2."+strconv.Itoa(i+1)))
+	}
+	assertRateLimited(t, "a spoofed chain", refreshAttempt(h, clientPeer, "192.0.2.99, 192.0.2.98"))
 }

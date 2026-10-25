@@ -27,6 +27,7 @@ func classConfig(t *testing.T, class string) authconfig.Config {
 		authconfig.EnvSigningKeyID:        "class-test",
 		authconfig.EnvAccessTokenClass:    class,
 		authconfig.EnvTokenIssuerURL:      "https://auth.example.test",
+		authconfig.EnvValkeyURI:           testValkeyURI,
 		authconfig.EnvAccessTokenSecret:   "class-test-access-secret-0123456789abcdef",
 		authconfig.EnvSessionSuccessorKey: base64.RawURLEncoding.EncodeToString([]byte("class-test-successor-key-0032-ab")),
 	})})

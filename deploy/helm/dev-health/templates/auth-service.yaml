@@ -21,6 +21,7 @@ stage-signing-key init container exists.
 {{- if .Values.authService.enabled }}
 {{- $a := .Values.authService }}
 {{- if not $a.database.secretName }}{{- fail "authService.database.secretName is required: the Secret holding the runtime login's DSN (key authService.database.secretKey)" }}{{- end }}
+{{- if and $a.sessionKeys.successor.secretName (not $a.valkey.secretName) }}{{- fail "authService.valkey.secretName is required while authService.sessionKeys.successor.secretName is set: the session routes count the compatibility refresh in the shared rate-limit store, and an in-process limiter is per replica and so no limit" }}{{- end }}
 {{- $ks := $a.keySet }}
 {{- $ksOn := and $ks $ks.enabled }}
 {{- $manifest := "" }}

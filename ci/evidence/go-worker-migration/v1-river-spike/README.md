@@ -77,7 +77,7 @@ N-1 0.39.0, a 250 ms fetch interval, and 20 execution samples per mode.
   the exact fixture was also decoded by the Python and River 0.39 tests when
   the spike ran. Those tests are gone from this repository: this README and
   the result file are frozen evidence, and `ci/check_river_compat_static.sh`
-  checks only that they are intact.
+  checks the result file only (it does not read this README).
 
 Exact measurements live only in the raw generated result to prevent derived
 documentation from drifting after a rerun. They are local compatibility

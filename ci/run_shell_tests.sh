@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Entry point for the dedicated shell test suites (CHAOS-11422). The list is ci/suites.tsv (kind=shell).
 #   bash ci/run_shell_tests.sh --list            every shell suite with its status
-#   bash ci/run_shell_tests.sh <suite>           run one suite
+#   bash ci/run_shell_tests.sh <suite> [args]    run one suite; extra arguments go to it (a manual suite may need some)
 #   bash ci/run_shell_tests.sh                   run every suite that needs no argument and no network
 # A mode=manual suite is listed with its reason and is never run by the no-argument form.
 set -euo pipefail
@@ -39,7 +39,8 @@ case "${1:-}" in
   *)
     while IFS=$'\t' read -r suite command _ _ _; do
       if [ "${suite}" = "$1" ]; then
-                exec bash "${ROOT}/${command}"
+        shift
+        exec bash "${ROOT}/${command}" "$@"
       fi
     done < <(rows)
     printf 'unknown shell suite: %s (see --list)\n' "$1" >&2

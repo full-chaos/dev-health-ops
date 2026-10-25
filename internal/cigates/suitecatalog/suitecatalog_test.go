@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -26,6 +27,8 @@ var (
 	commandStart = regexp.MustCompile(`(?:^|[\s(!;&|])(?:bash\s+|\./)?((?:ci/(?:check|run)_[A-Za-z0-9_]+\.sh|scripts/[A-Za-z0-9_.-]+_test\.sh|ci/[A-Za-z0-9_.-]+_test\.sh)\b.*|go test\b.*)$`)
 	commandCut   = regexp.MustCompile(`\s+(?:\|\||\||&&|;|\d?>|<|\))|;\s.*$|\s\\$`)
 	goTestFlags  = regexp.MustCompile(`\s-(?:mod=\S+|trimpath|count=\S+|timeout[= ]\S+|v|json|race)\b`)
+	segmentSplit = regexp.MustCompile(`\s+(?:&&|\|\||\|)\s+|;\s+|;$`)
+	yamlToken    = regexp.MustCompile(`[A-Za-z0-9*_./-]+\.ya?ml`)
 	shellSuite   = regexp.MustCompile(`(?:_test|^test-[A-Za-z0-9_-]+)\.sh$`)
 )
 
@@ -70,11 +73,39 @@ func normalize(line string) string {
 	return strings.Join(strings.Fields(cmd), " ")
 }
 
+func normalizeAll(line string) []string {
+	var out []string
+	for _, seg := range segmentSplit.Split(line, -1) {
+		if c := normalize(seg); c != "" {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+type runDoc struct {
+	Jobs map[string]struct {
+		Steps []struct {
+			Run string `yaml:"run"`
+		} `yaml:"steps"`
+	} `yaml:"jobs"`
+	Runs struct {
+		Steps []struct {
+			Run string `yaml:"run"`
+		} `yaml:"steps"`
+	} `yaml:"runs"`
+}
+
+// workflowSites reads every run step of the workflows and of the composite actions under .github/actions.
 func workflowSites(t *testing.T, root string) []site {
 	t.Helper()
-	paths, err := filepath.Glob(filepath.Join(root, ".github", "workflows", "*.y*ml"))
-	if err != nil {
-		t.Fatal(err)
+	var paths []string
+	for _, g := range []string{"workflows/*.y*ml", "actions/*/action.y*ml"} {
+		m, err := filepath.Glob(filepath.Join(root, ".github", g))
+		if err != nil {
+			t.Fatal(err)
+		}
+		paths = append(paths, m...)
 	}
 	var out []site
 	for _, p := range paths {
@@ -82,23 +113,27 @@ func workflowSites(t *testing.T, root string) []site {
 		if err != nil {
 			t.Fatal(err)
 		}
-		var doc struct {
-			Jobs map[string]struct {
-				Steps []struct {
-					Run string `yaml:"run"`
-				} `yaml:"steps"`
-			} `yaml:"jobs"`
-		}
+		var doc runDoc
 		if err := yaml.Unmarshal(raw, &doc); err != nil {
 			t.Fatalf("%s: %v", p, err)
 		}
+		name := filepath.Base(p)
+		if strings.Contains(filepath.ToSlash(p), "/.github/actions/") {
+			name = filepath.Base(filepath.Dir(p)) + "/" + name
+		}
+		var runs []string
 		for _, job := range doc.Jobs {
 			for _, step := range job.Steps {
-				joined := strings.ReplaceAll(step.Run, "\\\n", " ")
-				for _, line := range strings.Split(joined, "\n") {
-					if c := normalize(line); c != "" {
-						out = append(out, site{filepath.Base(p), c})
-					}
+				runs = append(runs, step.Run)
+			}
+		}
+		for _, step := range doc.Runs.Steps {
+			runs = append(runs, step.Run)
+		}
+		for _, run := range runs {
+			for _, line := range strings.Split(strings.ReplaceAll(run, "\\\n", " "), "\n") {
+				for _, c := range normalizeAll(line) {
+					out = append(out, site{name, c})
 				}
 			}
 		}
@@ -166,8 +201,13 @@ func violations(t *testing.T, root string) []string {
 	rows, bad := readCatalog(root)
 	sites := workflowSites(t, root)
 	ran := map[string]string{}
+	ranIn := map[string]map[string]bool{}
 	for _, s := range sites {
 		ran[s.command] = s.workflow
+		if ranIn[s.command] == nil {
+			ranIn[s.command] = map[string]bool{}
+		}
+		ranIn[s.command][s.workflow] = true
 	}
 	seenSuite := map[string]bool{}
 	seenCommand := map[string]bool{}
@@ -192,6 +232,7 @@ func violations(t *testing.T, root string) []string {
 			if _, ok := ran[r["command"]]; !ok {
 				bad = append(bad, fmt.Sprintf("catalog row without caller: suite %q command %q is run by no workflow", id, r["command"]))
 			}
+			bad = append(bad, triggerViolations(id, r["trigger"], r["command"], ranIn[r["command"]])...)
 		case "manual":
 			if _, ok := ran[r["command"]]; ok {
 				bad = append(bad, fmt.Sprintf("suite %q is mode=manual but %s runs %q", id, ran[r["command"]], r["command"]))
@@ -423,7 +464,7 @@ func TestPlantedFaults(t *testing.T) {
 	t.Run("a command moved to another workflow than the row names", func(t *testing.T) {
 		root := plantTree(t)
 		edit(t, filepath.Join(root, catalogPath), func(s string) string {
-			return strings.Replace(s, "go-quality.yml static leg\tnone\tthe frozen CHAOS-3034", "go.yml static leg\tnone\tthe frozen CHAOS-3034", 1)
+			return strings.Replace(s, "go-quality.yml static leg (every relevant run)\tnone\tthe frozen CHAOS-3034", "go.yml static leg (every relevant run)\tnone\tthe frozen CHAOS-3034", 1)
 		})
 		wantViolation(t, root, "go-quality.yml runs")
 		wantViolation(t, root, "names go.yml")
@@ -476,4 +517,34 @@ func TestRunShellTestsForwardsArgumentsToANamedSuite(t *testing.T) {
 	if !strings.Contains(string(out), "args=wrapper-path second") {
 		t.Fatalf("arguments were not forwarded:\n%s", out)
 	}
+}
+
+// triggerViolations holds a row's trigger text to the workflows that really run its command: every workflow that runs it
+// must be named (a glob token such as venue-oracles*.yml counts), and every named workflow must run it.
+func triggerViolations(id, trigger, command string, actual map[string]bool) []string {
+	var bad []string
+	tokens := yamlToken.FindAllString(trigger, -1)
+	for wf := range actual {
+		named := false
+		for _, tok := range tokens {
+			if ok, _ := path.Match(tok, wf); ok {
+				named = true
+			}
+		}
+		if !named {
+			bad = append(bad, fmt.Sprintf("suite %q: %s runs %q but its trigger names %v", id, wf, command, tokens))
+		}
+	}
+	for _, tok := range tokens {
+		hit := false
+		for wf := range actual {
+			if ok, _ := path.Match(tok, wf); ok {
+				hit = true
+			}
+		}
+		if !hit {
+			bad = append(bad, fmt.Sprintf("suite %q: its trigger names %s but no such workflow runs %q", id, tok, command))
+		}
+	}
+	return bad
 }

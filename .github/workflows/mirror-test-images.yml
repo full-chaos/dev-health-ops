@@ -68,11 +68,6 @@ on:
       # declared before it exists and the required check fails at pull time.
       - .github/workflows/test.yml
       - .github/workflows/live-e2e.yml
-      # The precheck library and its hermetic suite (CHAOS-11422): a change to either runs the suite.
-      - ci/mirror_precheck_lib.sh
-      - ci/mirror_precheck_lib_test.sh
-      - ci/run_shell_tests.sh
-      - ci/suites.tsv
       - .github/workflows/mirror-test-images.yml
   pull_request:
     paths:
@@ -91,7 +86,8 @@ on:
       # declared before it exists and the required check fails at pull time.
       - .github/workflows/test.yml
       - .github/workflows/live-e2e.yml
-      # The precheck library and its hermetic suite (CHAOS-11422): a change to either runs the suite.
+      # The precheck library and its hermetic suite (CHAOS-11422): a change to either runs the suite on a PR.
+      # Not on push: the filter is workflow-wide, so a suite-only push to main would start the mirror publisher.
       - ci/mirror_precheck_lib.sh
       - ci/mirror_precheck_lib_test.sh
       - ci/run_shell_tests.sh

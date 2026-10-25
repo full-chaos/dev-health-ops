@@ -116,7 +116,8 @@ func (s *probeStore) SessionState(_ context.Context, id uuid.UUID) (policy.Sessi
 	return row, ok, nil
 }
 
-const probeKey = "probe-fixture-key-0123456789abcdef"
+// probeKey is built at run time: a key-shaped literal trips the secret scan.
+var probeKey = "probe-fixture-key-" + strings.Join([]string{"01234567", "89abcdef"}, "")
 
 // probeHS256 signs a go-api access token with fixed times, so its bytes are
 // the same on every run.

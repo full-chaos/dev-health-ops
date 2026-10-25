@@ -15,6 +15,8 @@ func (recordingSigner) Sign(context.Context, string, []byte) (string, string, er
 	return "compact", "kid-1", nil
 }
 
+func (recordingSigner) Check(context.Context) error { return nil }
+
 type kidSpy struct {
 	sessions []uuid.UUID
 	kids     []string

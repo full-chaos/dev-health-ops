@@ -178,6 +178,10 @@ func (h compatHandlers) issueSession(w http.ResponseWriter, r *http.Request) {
 		}
 		role = roleText(value, member)
 	}
+	if err := h.Issuer.Preflight(ctx); err != nil {
+		h.rec.refuse(w, r, opSessionIssue, unavailable(reasonDependency), err)
+		return
+	}
 	err = h.Projector.Project(ctx, req.principal)
 	if err == nil && req.organization != nil {
 		err = h.Projector.ProjectOrganization(ctx, *req.organization)

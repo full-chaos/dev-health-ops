@@ -253,10 +253,10 @@ func TestRefusalPrefixesNeverVerify(t *testing.T) {
 
 // TestImpersonationGateReadsTheVerifiedClaimOnly: the impersonation check runs
 // for a legacy token only when its VERIFIED is_superuser claim is truthy. A
-// forged superuser claim (a token that does not verify) gets no impersonation
+// unverifiable superuser claim (a token that does not verify) gets no impersonation
 // path: no session read, and one authenticate for the whole scope.
 func TestImpersonationGateReadsTheVerifiedClaimOnly(t *testing.T) {
-	forged, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims(func(c jwt.MapClaims) { c["is_superuser"] = true })).SignedString([]byte(strings.Repeat("other-key-", 4)))
+	unverifiable, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims(func(c jwt.MapClaims) { c["is_superuser"] = true })).SignedString([]byte(strings.Repeat("other-key-", 4)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -266,7 +266,7 @@ func TestImpersonationGateReadsTheVerifiedClaimOnly(t *testing.T) {
 		impersonated bool
 		sessionReads int
 	}{
-		{name: "forged superuser claim", token: func(*testing.T) string { return forged }},
+		{name: "unverifiable superuser claim", token: func(*testing.T) string { return unverifiable }},
 		{name: "verified claim false, superuser row", token: func(t *testing.T) string { return sign(t, claims(nil)) }},
 		{name: "verified claim true", token: superuserToken, impersonated: true, sessionReads: 1},
 	}

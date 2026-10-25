@@ -75,9 +75,9 @@ const plantedRoute = "/api/v1/planted"
 
 // TestGlobalScopeNeverReadsAuthorizationOnAPlantedRoute runs the api
 // listener's global chain on a planted route with a trap between Principal
-// and OrgScope: the trap swaps the Authorization header for a poison value (a
+// and OrgScope: the trap replaces the Authorization header with another value (a
 // valid superuser token with a live impersonation session). OrgScope and
-// Impersonation must decide with the caller Principal read, never the poison.
+// Impersonation must decide with the caller Principal read, never the replaced value.
 func TestGlobalScopeNeverReadsAuthorizationOnAPlantedRoute(t *testing.T) {
 	key := strings.Repeat("fixture-key-", 3)
 	for _, mode := range []string{"legacy", "routed"} {
@@ -86,8 +86,8 @@ func TestGlobalScopeNeverReadsAuthorizationOnAPlantedRoute(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			caller, poisonUser := uuid.New(), uuid.New()
-			store := &plantedStore{superuser: poisonUser, target: uuid.New()}
+			caller, swapUser := uuid.New(), uuid.New()
+			store := &plantedStore{superuser: swapUser, target: uuid.New()}
 			auth, err := policy.NewAuthenticator(verifier, store, quietLogger())
 			if err != nil {
 				t.Fatal(err)
@@ -112,13 +112,13 @@ func TestGlobalScopeNeverReadsAuthorizationOnAPlantedRoute(t *testing.T) {
 				}
 				return token
 			}
-			original, poison := sign(caller, false), sign(poisonUser, true)
+			original, swapped := sign(caller, false), sign(swapUser, true)
 			trapped := 0
 			trap := func(next http.Handler) http.Handler {
 				return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					trapped++
 					r = r.Clone(r.Context())
-					r.Header.Set("Authorization", "Bearer "+poison)
+					r.Header.Set("Authorization", "Bearer "+swapped)
 					next.ServeHTTP(w, r)
 				})
 			}
@@ -141,11 +141,11 @@ func TestGlobalScopeNeverReadsAuthorizationOnAPlantedRoute(t *testing.T) {
 			if recorder.Code != http.StatusForbidden || recorder.Header().Get("X-Impersonating") != "" {
 				t.Fatalf("%d %s %v: the scope did not decide with the caller", recorder.Code, recorder.Body.String(), recorder.Header())
 			}
-			if slices.Contains(store.userReads, poisonUser) || !slices.Equal(store.userReads, []uuid.UUID{caller}) {
-				t.Fatalf("users reads %v: want exactly one, for the caller %s (poison %s)", store.userReads, caller, poisonUser)
+			if slices.Contains(store.userReads, swapUser) || !slices.Equal(store.userReads, []uuid.UUID{caller}) {
+				t.Fatalf("users reads %v: want exactly one, for the caller %s (swapped %s)", store.userReads, caller, swapUser)
 			}
-			if slices.Contains(validator.bearers, poison) || (mode == "routed" && !slices.Equal(validator.bearers, []string{original})) {
-				t.Fatalf("validated %d bearers, poison included=%v", len(validator.bearers), slices.Contains(validator.bearers, poison))
+			if slices.Contains(validator.bearers, swapped) || (mode == "routed" && !slices.Equal(validator.bearers, []string{original})) {
+				t.Fatalf("validated %d bearers, swapped included=%v", len(validator.bearers), slices.Contains(validator.bearers, swapped))
 			}
 		})
 	}

@@ -25,7 +25,7 @@ func TestImpersonationSessionLookupErrorIsRefused(t *testing.T) {
 	scope := NewScope(authenticator(t, store), slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelInfo})))
 	token := sign(t, claims(func(c jwt.MapClaims) { c["is_superuser"] = true }))
 	mux := http.NewServeMux()
-	mux.Handle("GET /x/{id}", scope.Impersonation(echo))
+	mux.Handle("GET /x/{id}", scope.Principal(scope.Impersonation(echo)))
 	got := serve(mux, http.MethodGet, "/x/an-unbounded-id", map[string]string{"Authorization": "Bearer " + token})
 	if got.status != http.StatusInternalServerError {
 		t.Fatalf("status %d body %q, want 500: the active-session lookup failed", got.status, got.body)

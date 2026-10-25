@@ -137,7 +137,7 @@ func graphQLEdgeChain(query http.HandlerFunc, deps graphQLEdgeDeps) http.Handler
 	handler = pyheaders.SecurityHeaders(handler)
 	handler = graphQLEdgeLimits(deps.maxBytes, handler)
 	handler = scope.Impersonation(handler)
-	handler = scope.OrgScope(handler)
+	handler = scope.Principal(scope.OrgScope(handler))
 	// Outside every consumer of the caller's identity, so the org scope, the
 	// impersonation middleware and the pipeline read each fact of it once and
 	// see one answer.

@@ -420,7 +420,7 @@ func startGoAPI(t *testing.T, ctx context.Context, venue *venueoracle.Venue, key
 		t.Fatal(err)
 	}
 	scope := policy.NewScope(auth, logger)
-	server, err := apiservice.NewServer(cfg, logger, apiservice.Routes(deps, logger), scope.OrgScope, scope.Impersonation)
+	server, err := apiservice.NewServer(cfg, logger, apiservice.Routes(deps, logger), scope.Layers()...)
 	if err != nil {
 		t.Fatal(err)
 	}

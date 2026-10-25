@@ -1668,7 +1668,9 @@ REMAINING_INTEGRATION_PACKAGE_KEY="internal/jobs/metrics/remaining"
 # sorts last starts minutes late and sets the shard's wall time, not its weight.
 # internal/jobs/metrics/remaining (CHAOS-9631) runs 1,053-1,164 s on its own and
 # sat in a shard with 20 other packages whose job took 22-25 of the 25 minutes.
-INTEGRATION_ISOLATED_PACKAGE_KEYS=" ${DEV_HEALTH_GO_INTEGRATION_ISOLATED_KEYS:-internal/workerservice internal/queryapi/server internal/jobs/metrics/remaining} "
+# internal/fixturescli (CHAOS-11411) runs 1,145-1,168 s of the 1,263 s test phase of its shard, next to three other
+# packages that run at the same time: it sets the Go workflow wall, so it gets a shard of its own as well.
+INTEGRATION_ISOLATED_PACKAGE_KEYS=" ${DEV_HEALTH_GO_INTEGRATION_ISOLATED_KEYS:-internal/workerservice internal/queryapi/server internal/jobs/metrics/remaining internal/fixturescli} "
 DAILY_TEST_SHARD_COUNT=0
 DAILY_INTEGRATION_TEST_WEIGHT=0
 DAILY_ORDINARY_TEST_WEIGHT=0
@@ -3517,6 +3519,25 @@ check_integration_package_shard() {
       selected_count=$((selected_count + 1))
     done
     [ "${#run_pkgs[@]}" -gt 0 ] || continue
+
+    # Longest package first (weight descending, then key ascending): one go test starts its packages in argument order,
+    # four at a time, so a long package that starts last sets the shard wall (CHAOS-8935).
+    local i j tmp_pkg tmp_key LC_ALL=C
+    for ((i = 1; i < ${#run_keys[@]}; i++)); do
+      tmp_pkg="${run_pkgs[${i}]}"
+      tmp_key="${run_keys[${i}]}"
+      for ((j = i - 1; j >= 0; j--)); do
+        if [ "${INTEGRATION_SHARD_WEIGHTS[${run_keys[${j}]}]}" -gt "${INTEGRATION_SHARD_WEIGHTS[${tmp_key}]}" ] \
+          || { [ "${INTEGRATION_SHARD_WEIGHTS[${run_keys[${j}]}]}" -eq "${INTEGRATION_SHARD_WEIGHTS[${tmp_key}]}" ] \
+            && [[ ! "${run_keys[${j}]}" > "${tmp_key}" ]]; }; then
+          break
+        fi
+        run_pkgs[j + 1]="${run_pkgs[${j}]}"
+        run_keys[j + 1]="${run_keys[${j}]}"
+      done
+      run_pkgs[j + 1]="${tmp_pkg}"
+      run_keys[j + 1]="${tmp_key}"
+    done
 
     printf 'go test integration package shard %s: %s -> %s\n' \
       "${shard}" "${module_dir}" "${run_pkgs[*]}"

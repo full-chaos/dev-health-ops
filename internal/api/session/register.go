@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -16,6 +15,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/api/registerorg"
 	"github.com/full-chaos/dev-health-ops/internal/auth/passwordhash"
 	"github.com/full-chaos/dev-health-ops/internal/auth/passwordpolicy"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
@@ -23,9 +23,6 @@ import (
 
 // verificationTTL is create_email_verification_token's ttl_hours=24.
 const verificationTTL = 24 * time.Hour
-
-// autoCreateOrgEnv is api/auth/config.py's AUTH_AUTO_CREATE_ORG_ENV.
-const autoCreateOrgEnv = "AUTH_AUTO_CREATE_ORG_ON_REGISTER"
 
 type registerInputKey struct{}
 
@@ -61,12 +58,7 @@ func validateRegister(w http.ResponseWriter, r *http.Request) (*http.Request, bo
 // autoCreateOrg is auth_auto_create_org_on_register(): unset or an
 // unrecognized value keeps the default (true).
 func (h handlers) autoCreateOrg() bool {
-	switch pythonparity.Lower(pythonparity.Strip(h.Getenv(autoCreateOrgEnv))) {
-	case "0", "false", "no", "off":
-		return false
-	default:
-		return true
-	}
+	return registerorg.Enabled(h.Getenv(registerorg.EnvName))
 }
 
 // refuseViolations writes error_detail(message, errors=violations).
@@ -78,15 +70,6 @@ func refuseViolations(w http.ResponseWriter, status int, message string, violati
 	}
 	detail.Set("errors", list)
 	policy.WriteDetail(w, status, detail, nil)
-}
-
-// firstRunes is text[:n] on a Python str: the first n code points.
-func firstRunes(text string, n int) string {
-	runes := pyjson.Runes(text)
-	if len(runes) > n {
-		runes = runes[:n]
-	}
-	return pyjson.FromRunes(runes)
 }
 
 // insertOrganization adds an organizations row with the model's defaults.
@@ -167,11 +150,8 @@ VALUES ($1, $2, NULL, $3, $4, NULL, 'local', NULL, true, false, false, 0, NULL, 
 	}
 
 	if h.autoCreateOrg() {
-		name := "My Organization"
-		if input.orgName != nil && *input.orgName != "" {
-			name = *input.orgName
-		}
-		slug := firstRunes(strings.ReplaceAll(pythonparity.Lower(name), " ", "-"), 50) + "-" + user.ID.String()[:8]
+		name := registerorg.Name(input.orgName)
+		slug := registerorg.Slug(name, user.ID)
 		id := h.NewUUID()
 		if err := insertOrganization(ctx, tx, id, slug, name, now); err != nil {
 			h.fail(w, r, "insert organization", err)

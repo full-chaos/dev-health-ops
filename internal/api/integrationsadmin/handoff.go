@@ -21,8 +21,8 @@ import (
 
 // The sync and backfill triggers do not plan a run. Python's routes ran
 // plan_sync_run in the request; the Go scheduler is the one planner, so these
-// routes write the hand-off rows the scheduler reads (synchandoff) and wait a
-// bounded time for the plan.
+// routes write the hand-off rows the scheduler reads (synchandoff). The sync
+// trigger waits a bounded time for the plan; the backfill answers 202 at once.
 const (
 	defaultHandoffWait = 30 * time.Second
 	defaultHandoffPoll = 250 * time.Millisecond
@@ -139,11 +139,22 @@ type triggerScope struct {
 	sourceIDsSet, datasetKeysSet bool
 }
 
-// handOff is the body of a sync or backfill trigger once its request is
-// validated: resolve the integration and its configuration, write the
-// occurrence and manual trigger in one transaction, and answer with the
+// handOff is the body of a sync trigger once its request is validated: write
+// the occurrence and manual trigger in one transaction, and answer with the
 // scheduler's plan.
 func (h handlers) handOff(w http.ResponseWriter, r *http.Request, scope triggerScope, mode, triggeredBy string, since, before *time.Time) {
+	trigger, err := h.mintHandOff(r, scope, mode, triggeredBy, since, before, nil)
+	if err != nil {
+		h.fail(w, r, "hand off the "+mode, err)
+		return
+	}
+	h.handoffResponse(w, r, r.PathValue("integration_id"), trigger)
+}
+
+// mintHandOff resolves the integration and its configuration and writes the
+// occurrence and manual trigger in one transaction. check, when set, runs after
+// the target resolves and before anything is written; its error rolls back.
+func (h handlers) mintHandOff(r *http.Request, scope triggerScope, mode, triggeredBy string, since, before *time.Time, check func(target handoffScope) error) (synchandoff.Trigger, error) {
 	orgID := orgOf(r)
 	var trigger synchandoff.Trigger
 	err := h.inTx(r.Context(), func(tx pgx.Tx) error {
@@ -163,6 +174,11 @@ func (h handlers) handOff(w http.ResponseWriter, r *http.Request, scope triggerS
 		if err != nil {
 			return err
 		}
+		if check != nil {
+			if err := check(target); err != nil {
+				return err
+			}
+		}
 		input := synchandoff.MintInput{Mode: mode, TriggeredBy: triggeredBy, Since: since, Before: before,
 			SourceIDs: target.sources, DatasetKeys: target.datasets, Caller: "integrationsadmin." + mode}
 		if scope.sourceIDsSet {
@@ -178,11 +194,7 @@ func (h handlers) handOff(w http.ResponseWriter, r *http.Request, scope triggerS
 		}
 		return err
 	})
-	if err != nil {
-		h.fail(w, r, "hand off the "+mode, err)
-		return
-	}
-	h.handoffResponse(w, r, r.PathValue("integration_id"), trigger)
+	return trigger, err
 }
 
 // handoffResponse waits for the scheduler's plan of the occurrence and writes

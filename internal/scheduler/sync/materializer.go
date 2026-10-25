@@ -1730,7 +1730,8 @@ func syncTargetsRequireCanonicalIncident(targets []string) bool {
 // that clock, never the worker clock or the occurrence's scheduled time). The
 // (org_id, integration_id) equality pair is the leading prefix of
 // ix_sync_run_units_coverage_scan (alembic 0076: org_id, integration_id,
-// source_id, dataset_key, before_at), so the read is bounded by this one
+// source_id, dataset_key, before_at) and of the partial
+// ix_sync_run_units_failure_streak, so the read is bounded by this one
 // integration's unit rows. It runs only for a plan with no enabled work-item
 // family row, never for a healthy plan.
 const workItemLastSuccessSQL = `

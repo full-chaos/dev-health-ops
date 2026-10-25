@@ -50,7 +50,7 @@ func TestAuthServiceCapacityDefaults(t *testing.T) {
 	}
 }
 
-// Steady pool is replicas x maxConns; a rollout adds one surge pod
+// Steady pool is replicas x maxConns; a rollout adds one surge pod (planning figure, terminating pods can overlap it)
 // (maxSurge 1), so the ceiling is (replicas + 1) x maxConns. The chart pins no
 // auth database budget; this test fixes only the figures the chart itself owns.
 func TestAuthServiceConnectionCeiling(t *testing.T) {
@@ -185,9 +185,9 @@ func maxConnsArg(t *testing.T, deployment map[string]any) string {
 }
 
 func TestAuthServiceMaxConnsCannotBeSetThroughExtraArgs(t *testing.T) {
-	for _, arg := range []string{"--database-max-conns=4", "database-max-conns=4", "-database-max-conns=4"} {
+	for _, arg := range []string{"--database-max-conns=4", "database-max-conns=4", "-database-max-conns=4", "--database-max-conns =4", " --database-max-conns\\t=4"} {
 		_, out, err := renderAuth(t, authWith("--set-json", `authService.extraArgs=["`+arg+`"]`)...)
-		if err == nil || !strings.Contains(out, "authService.extraArgs must not set "+arg) || !strings.Contains(out, "authService.database.maxConns") {
+		if err == nil || !strings.Contains(out, "authService.extraArgs must not set") || !strings.Contains(out, "authService.database.maxConns") {
 			t.Errorf("extraArgs %q rendered: err=%v out=%.300s", arg, err, out)
 		}
 	}

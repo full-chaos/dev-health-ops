@@ -201,7 +201,8 @@ authService:
     # -- Connection pool of EACH replica (AUTH_DATABASE_MAX_CONNS), a whole
     #    number from 1 to 32. The pods connect to the database directly, not
     #    through the go-pgbouncer pools, so the database must hold
-    #    replicas x maxConns (plus one surge pod while rolling). Not settable
+    #    replicas x maxConns (plus one surge pod while rolling, and
+    #    briefly more while old pods finish their requests). Not settable
     #    through extraEnv or extraArgs; the chart renders it as the
     #    --database-max-conns flag.
     maxConns: 8
@@ -278,7 +279,8 @@ authService:
     failureThreshold: 3
   # -- Measured in docs/operate/plan/auth-service-capacity.md: login is CPU
   #    bound (about 3.7 logins/s per core), memory peaked at 27 MiB. Requests
-  #    are 250m per pod, 500m for two replicas, 750m during a rollout surge.
+  #    are 250m per pod, 500m for two replicas, 750m with one surge pod
+  #    (pods that are shutting down can overlap it briefly; not measured).
   resources:
     requests:
       memory: "64Mi"

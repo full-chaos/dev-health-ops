@@ -60,6 +60,7 @@ Worked example, 2 CPU cores per pod and 60 logins per minute at peak: `safe(logi
 - The refresh knee above 300 requests/s. About 600 requests/s per pod is a linear extrapolation, not a measurement.
 - A valid-login ladder. The address limit (20 per 15 minutes by design) stops it, so login capacity is derived from the per-attempt cost.
 - Mixed load. Login and token issue were not run together, and no pod was removed during a run. The sum rule above is arithmetic, not a measured result.
+- Rollout overlap. Connection and CPU use while old pods terminate beside the surge pod was not measured; no run delayed an old pod's shutdown and recorded the database connection high-water mark.
 - Production hardware. Re-measure on the target node type before committing a production size.
 - Login failure codes under a database fault, the key publication tail under a database stall, and the key-read path can change these numbers. Re-read this page when they change (CHAOS-11373, CHAOS-11374, CHAOS-11375).
 
@@ -75,4 +76,4 @@ The chart keeps auth-service off by default (`authService.enabled: false`). When
 | `authService.resources.limits.memory` | 256Mi | Peak use was 27 MiB. |
 | `authService.database.maxConns` | 8 | Pool per replica, a whole number from 1 to 32. Set it here, not through `extraEnv` or `extraArgs`; the chart passes it as the `--database-max-conns` flag. |
 
-With two or more replicas the chart also renders a PodDisruptionBudget with `minAvailable: 1`. The pods connect to the database directly, so the database must hold `replicas x maxConns`, plus one surge pod while rolling: 16 connections steady and 24 during a rollout at the defaults. The chart does not pin a total auth database budget; check these figures against the budget in [Capacity and sizing](capacity-and-sizing.md). The node capacity of a release is not known to the chart: confirm the cluster can schedule the CPU requests above before enabling the service.
+With two or more replicas the chart also renders a PodDisruptionBudget with `minAvailable: 1`. The pods connect to the database directly, so the database must hold `replicas x maxConns`, plus one surge pod while rolling: 16 connections steady and 24 during a rollout at the defaults. These are planning figures, not a ceiling: a pod that is shutting down (up to 20 s, and it holds its connections until its in-flight requests finish) can overlap with the surge pod, so leave room above 24. The overlap was not measured. The chart does not pin a total auth database budget; check these figures against the budget in [Capacity and sizing](capacity-and-sizing.md). The node capacity of a release is not known to the chart: confirm the cluster can schedule the CPU requests above before enabling the service.

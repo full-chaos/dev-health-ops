@@ -8,7 +8,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -38,18 +40,28 @@ func eventLines(t *testing.T, events []goTestEvent) string {
 	return b.String()
 }
 
-func censusRows(t *testing.T) [][2]string {
-	t.Helper()
+// parseCensusRows reads census text with the rule of the loader in ci/check_go.sh: an empty line and a # line are skipped, every
+// other line is <package><TAB><test> with both columns non-empty after trimming exactly space, tab and carriage return.
+func parseCensusRows(text string) ([][2]string, error) {
 	var rows [][2]string
-	for i, line := range strings.Split(readText(t, scriptPath(t, "ci/race_excluded_tests.tsv")), "\n") {
+	for i, line := range strings.Split(text, "\n") {
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
 		f := strings.Split(line, "\t")
 		if len(f) != 2 || strings.Trim(f[0], " \t\r") == "" || strings.Trim(f[1], " \t\r") == "" {
-			t.Fatalf("census line %d is not <package><TAB><test>: %q", i+1, line)
+			return nil, fmt.Errorf("census line %d is not <package><TAB><test>: %q", i+1, line)
 		}
 		rows = append(rows, [2]string{strings.Trim(f[0], " \t\r"), strings.Trim(f[1], " \t\r")})
+	}
+	return rows, nil
+}
+
+func censusRows(t *testing.T) [][2]string {
+	t.Helper()
+	rows, err := parseCensusRows(readText(t, scriptPath(t, "ci/race_excluded_tests.tsv")))
+	if err != nil {
+		t.Fatal(err)
 	}
 	if len(rows) == 0 {
 		t.Fatal("the census holds no row")
@@ -163,7 +175,7 @@ func TestRaceExcludedReceiptsFailOnEachPlantedFault(t *testing.T) {
 	t.Run("a census row that go list omits", censusRowThatGoListOmitsSubtests)
 	t.Run("a duplicated census row", duplicateCensusSubtests)
 	t.Run("a malformed census line", malformedCensusSubtests)
-	t.Run("a vertical-tab census column", vtabCensusColumnSubtest)
+	t.Run("every line case of the shared table", lineCasesSubtests)
 }
 
 const shardFakeGo = `#!/usr/bin/env bash
@@ -470,15 +482,64 @@ func malformedCensusSubtests(t *testing.T) {
 	})
 }
 
-// The loader trims exactly space, tab and carriage return. A test column that holds only a vertical tab is therefore a name, not
-// an empty column; the Go census parsers trim the same set, so the three agree.
-func vtabCensusColumnSubtest(t *testing.T) {
-	events := append(append([]goTestEvent{}, cleanEvents()...), pass(pkgA, "\v"))
-	res := receiptsVerb(t, fixtureCensus+pkgA+"\t\v\n", eventLines(t, events))
-	if res.code != 0 {
-		t.Fatalf("a vertical-tab test column was refused: %s", tail(res.stderr, 500))
+// ci/race_excluded_line_cases.tsv is one row set for the three readers of the census: the loader of ci/check_go.sh and the two
+// Go parsers (parseCensusRows here, parseCensusExcluded in internal/cigates/testshard, which reads the same file). Each case is put
+// at line 2 of a census whose line 1 is a valid row; the accept or refuse result and the line number must be the same everywhere.
+func lineCasesSubtests(t *testing.T) {
+	cases := readText(t, scriptPath(t, "ci/race_excluded_line_cases.tsv"))
+	seen := 0
+	for i, raw := range strings.Split(cases, "\n") {
+		if raw == "" || strings.HasPrefix(raw, "#") {
+			continue
+		}
+		f := strings.Split(raw, "\t")
+		if len(f) != 4 {
+			t.Fatalf("ci/race_excluded_line_cases.tsv line %d has %d columns, want 4", i+1, len(f))
+		}
+		name, want := f[0], f[2]
+		line, err1 := strconv.Unquote(f[1])
+		test, err2 := strconv.Unquote(f[3])
+		if err1 != nil || err2 != nil || (want != "accept" && want != "refuse" && want != "skip") {
+			t.Fatalf("ci/race_excluded_line_cases.tsv line %d is malformed: %q", i+1, raw)
+		}
+		seen++
+		t.Run(name, func(t *testing.T) {
+			census := pkgB + "\tTestZero\n" + line + "\n"
+			rows, perr := parseCensusRows(census)
+			events := []goTestEvent{pass(pkgB, "TestZero")}
+			if want == "accept" {
+				events = append(events, pass(pkgA, test))
+			}
+			res := receiptsVerb(t, census, eventLines(t, events))
+			switch want {
+			case "refuse":
+				if perr == nil || !strings.Contains(perr.Error(), "census line 2 ") {
+					t.Errorf("the Go parser: want an error naming census line 2, got %v", perr)
+				}
+				if res.code == 0 || !strings.Contains(res.stderr, "census line 2 ") {
+					t.Errorf("the loader: want a refusal naming census line 2, got code %d: %s", res.code, tail(res.stderr, 500))
+				}
+			default:
+				wantRows := [][2]string{{pkgB, "TestZero"}}
+				if want == "accept" {
+					wantRows = append(wantRows, [2]string{pkgA, test})
+				}
+				if perr != nil || !reflect.DeepEqual(rows, wantRows) {
+					t.Errorf("the Go parser: want %q, got %q, %v", wantRows, rows, perr)
+				}
+				if res.code != 0 {
+					t.Fatalf("the loader refused the line: %s", tail(res.stderr, 500))
+				}
+				if got := strings.Count(res.stdout, "race-excluded-ran:"); got != len(wantRows)+1 {
+					t.Errorf("the loader: want %d receipt lines and 1 count line, got %d:\n%s", len(wantRows), got, res.stdout)
+				}
+				if want == "accept" && !strings.Contains(res.stdout, "race-excluded-ran: "+pkgA+" "+test+" PASS") {
+					t.Errorf("the loader did not trim to the test name %q:\n%s", test, res.stdout)
+				}
+			}
+		})
 	}
-	if got := strings.Count(res.stdout, "race-excluded-ran:"); got != 5 {
-		t.Errorf("want 4 receipt lines and 1 count line, got %d:\n%s", got, res.stdout)
+	if seen == 0 {
+		t.Fatal("ci/race_excluded_line_cases.tsv holds no case")
 	}
 }

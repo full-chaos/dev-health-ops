@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
@@ -47,15 +48,13 @@ VALUES ($1, $2, NULLIF($3, ''), $4, NULLIF($5, ''), $6, $7, true, $8, false, 0, 
 // 1 to token_version in the same statement, as go-api's own password change
 // does, so a go-api token minted before it is refused. A user with no public
 // row fails the transaction.
-func updatePublicPassword(ctx context.Context, tx audit.TxOps, id uuid.UUID, hash string) error {
-	tag, err := tx.Exec(ctx, `UPDATE public.users SET password_hash = $2, token_version = token_version + 1, updated_at = now() WHERE id = $1`, id, hash)
-	if err != nil {
-		return err
+func updatePublicPassword(ctx context.Context, tx audit.TxOps, id uuid.UUID, hash string) (int64, error) {
+	var version int64
+	err := tx.QueryRow(ctx, `UPDATE public.users SET password_hash = $2, token_version = token_version + 1, updated_at = now() WHERE id = $1 RETURNING token_version`, id, hash).Scan(&version)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, ErrLegacyProjection
 	}
-	if tag.RowsAffected() != 1 {
-		return ErrLegacyProjection
-	}
-	return nil
+	return version, err
 }
 
 // updatePublicVerified marks the public.users row verified.

@@ -128,7 +128,7 @@ func startBillingVenueAPI(t *testing.T, ctx context.Context, cfg config.Config, 
 		Now: clock,
 	}
 	scope := policy.NewScope(auth, logger)
-	server, err := apiservice.NewServer(cfg, logger, apiservice.Routes(deps, logger), scope.OrgScope, scope.Impersonation)
+	server, err := apiservice.NewServer(cfg, logger, apiservice.Routes(deps, logger), scope.Layers()...)
 	if err != nil {
 		t.Fatal(err)
 	}

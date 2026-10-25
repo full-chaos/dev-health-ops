@@ -277,6 +277,9 @@ func serve(handler http.Handler, method, path string, headers map[string]string)
 	return response{recorder.Code, recorder.Body.String(), recorder.Header()}
 }
 
+// orgScoped is OrgScope behind the Principal step, over echo.
+func orgScoped(scope *Scope) http.Handler { return scope.Principal(scope.OrgScope(echo)) }
+
 // echo reports what the route saw.
 var echo = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 	user := UserFrom(r.Context())
@@ -394,7 +397,7 @@ func TestOrgScopeFirstOfTwoXOrgIDValuesDecides(t *testing.T) {
 				request.Header.Add("X-Org-Id", value)
 			}
 			recorder := httptest.NewRecorder()
-			NewScope(authenticator(t, newStore()), quiet()).OrgScope(echo).ServeHTTP(recorder, request)
+			orgScoped(NewScope(authenticator(t, newStore()), quiet())).ServeHTTP(recorder, request)
 			if recorder.Code != test.status || !strings.HasPrefix(recorder.Body.String(), test.body) {
 				t.Fatalf("%d %s, want %d %s", recorder.Code, recorder.Body.String(), test.status, test.body)
 			}
@@ -453,7 +456,7 @@ func TestOrgScopeDecisionTable(t *testing.T) {
 			if path == "" {
 				path = "/x"
 			}
-			got := serve(NewScope(authenticator(t, store), quiet()).OrgScope(echo), http.MethodGet, path, headers)
+			got := serve(orgScoped(NewScope(authenticator(t, store), quiet())), http.MethodGet, path, headers)
 			if got.status != test.status || (test.body != "" && !strings.HasPrefix(got.body, test.body)) {
 				t.Fatalf("%d %s, want %d %s", got.status, got.body, test.status, test.body)
 			}
@@ -480,15 +483,18 @@ func TestImpersonationDecisionTable(t *testing.T) {
 		store        func(*fakeStore)
 		status       int
 		impersonated bool
-		userLookups  int
+		// userLookups is the Principal step's one read; sessionLookups shows
+		// whether the impersonation check ran.
+		userLookups    int
+		sessionLookups int
 	}{
 		{name: "no header", status: 200},
-		{name: "claim not superuser skips lookups", auth: "valid", store: superRow, status: 200, userLookups: 0},
+		{name: "claim not superuser skips the session lookup", auth: "valid", store: superRow, status: 200, userLookups: 1},
 		{name: "claim superuser, row not", auth: "valid", claims: superClaim, store: func(s *fakeStore) { s.sessions[userID] = active }, status: 200, userLookups: 1},
-		{name: "superuser without session", auth: "valid", claims: superClaim, store: superRow, status: 200, userLookups: 1},
-		{name: "superuser with session", auth: "valid", claims: superClaim, store: func(s *fakeStore) { superRow(s); s.sessions[userID] = active }, status: 200, impersonated: true, userLookups: 1},
-		{name: "truthy string claim", auth: "valid", claims: func(c jwt.MapClaims) { c["is_superuser"] = "no" }, store: func(s *fakeStore) { superRow(s); s.sessions[userID] = active }, status: 200, impersonated: true, userLookups: 1},
-		{name: "session lookup fails closed", auth: "valid", claims: superClaim, store: func(s *fakeStore) { superRow(s); s.errSession = errors.New("x") }, status: 500, userLookups: 1},
+		{name: "superuser without session", auth: "valid", claims: superClaim, store: superRow, status: 200, userLookups: 1, sessionLookups: 1},
+		{name: "superuser with session", auth: "valid", claims: superClaim, store: func(s *fakeStore) { superRow(s); s.sessions[userID] = active }, status: 200, impersonated: true, userLookups: 1, sessionLookups: 1},
+		{name: "truthy string claim", auth: "valid", claims: func(c jwt.MapClaims) { c["is_superuser"] = "no" }, store: func(s *fakeStore) { superRow(s); s.sessions[userID] = active }, status: 200, impersonated: true, userLookups: 1, sessionLookups: 1},
+		{name: "session lookup fails closed", auth: "valid", claims: superClaim, store: func(s *fakeStore) { superRow(s); s.errSession = errors.New("x") }, status: 500, userLookups: 1, sessionLookups: 1},
 		{name: "user lookup fails", auth: "valid", claims: superClaim, store: func(s *fakeStore) { s.errUser = errors.New("x") }, status: 500, userLookups: 1},
 		{name: "refused token", auth: "Bearer x." + "eyJpc19zdXBlcnVzZXIiOnRydWV9" + ".z", status: 200},
 	}
@@ -507,12 +513,12 @@ func TestImpersonationDecisionTable(t *testing.T) {
 				headers["Authorization"] = test.auth
 			}
 			scope := NewScope(authenticator(t, store), quiet())
-			got := serve(scope.Impersonation(echo), http.MethodGet, "/x", headers)
+			got := serve(scope.Principal(scope.Impersonation(echo)), http.MethodGet, "/x", headers)
 			if got.status != test.status {
 				t.Fatalf("status %d %s", got.status, got.body)
 			}
-			if store.userCalls != test.userLookups {
-				t.Fatalf("%d user lookups, want %d", store.userCalls, test.userLookups)
+			if store.userCalls != test.userLookups || store.sessionCalls != test.sessionLookups {
+				t.Fatalf("%d user lookups, %d session lookups, want %d and %d", store.userCalls, store.sessionCalls, test.userLookups, test.sessionLookups)
 			}
 			hasHeaders := got.header.Get("X-Impersonating") == "true" &&
 				got.header.Get("X-Impersonated-User-Id") == targetUserID.String()
@@ -533,7 +539,7 @@ func TestImpersonationWinsOverOrgScope(t *testing.T) {
 	store.users[userID] = UserState{IsActive: true, IsSuperuser: true}
 	store.sessions[userID] = &Impersonation{AdminUserID: userID, TargetUserID: targetUserID, TargetOrgID: targetOrgID}
 	scope := NewScope(authenticator(t, store), quiet())
-	handler := scope.OrgScope(scope.Impersonation(echo))
+	handler := scope.Principal(scope.OrgScope(scope.Impersonation(echo)))
 	token := sign(t, claims(func(c jwt.MapClaims) { c["is_superuser"] = true }))
 	got := serve(handler, http.MethodGet, "/x", map[string]string{"Authorization": "Bearer " + token, "X-Org-Id": strangerOrg})
 	if got.status != 200 || !strings.HasPrefix(got.body, "org="+targetOrgID.String()) {

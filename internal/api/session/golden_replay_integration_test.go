@@ -208,7 +208,7 @@ func startStackWithMailAndIssuer(t *testing.T, ctx context.Context, mail authmai
 		mux.Handle(route.Method+" "+route.Pattern, route.Handler)
 	}
 	scope := policy.NewScope(auth, logger)
-	server := httptest.NewServer(scope.OrgScope(scope.Impersonation(mux)))
+	server := httptest.NewServer(scope.Principal(scope.OrgScope(scope.Impersonation(mux))))
 	t.Cleanup(server.Close)
 	return stack{pool: pool, pg: pg, server: server, signer: signer, specs: specs,
 		openWindows: func() { limiterOffset.Add(int64(16 * time.Minute)) }}

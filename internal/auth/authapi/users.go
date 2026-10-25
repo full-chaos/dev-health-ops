@@ -9,6 +9,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 )
 
 // UserState is the live public.users state an access token is minted from.
@@ -59,8 +61,13 @@ var errUsersStore = errors.New("authapi: users store unavailable")
 // is_superuser reads false and a NULL token_version reads 0
 // (internal/api/policy/store.go UserState).
 func (p PGUsers) State(ctx context.Context, userID uuid.UUID) (UserState, bool, error) {
+	return p.StateOn(ctx, p.Pool, userID)
+}
+
+// StateOn is State on q: the caller's connection or transaction.
+func (p PGUsers) StateOn(ctx context.Context, q session.Queryer, userID uuid.UUID) (UserState, bool, error) {
 	var s UserState
-	err := p.Pool.QueryRow(ctx, `
+	err := q.QueryRow(ctx, `
 		SELECT email, username, full_name, COALESCE(is_active, false), COALESCE(is_superuser, false),
 		       COALESCE(token_version, 0)
 		FROM public.users WHERE id = $1`, userID).

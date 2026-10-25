@@ -56,7 +56,7 @@ func TestSignatureOnlyRouteSkipsScopeOnlyForExactRoute(t *testing.T) {
 		{Method: http.MethodPost, Pattern: exemptPath, Handler: http.HandlerFunc(reached)},
 		{Method: http.MethodPost, Pattern: "/api/v1/billing/other", Handler: http.HandlerFunc(reached)},
 	}
-	server, err := NewServer(apiTestConfig(), quietLogger(), routes, scope.OrgScope, scope.Impersonation)
+	server, err := NewServer(apiTestConfig(), quietLogger(), routes, scope.Layers()...)
 	if err != nil {
 		t.Fatal(err)
 	}

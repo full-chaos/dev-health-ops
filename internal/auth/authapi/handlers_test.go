@@ -66,7 +66,9 @@ type fakeSessions struct {
 	revokedLegacy   []session.LegacyRefresh
 	revokeLegacyErr error
 	legacyResult    session.Result
-	legacyErr       error
+	// minted counts accepted exchanges: a successor a client never receives.
+	minted    int
+	legacyErr error
 }
 
 // createdSession is one CreateAudited call.
@@ -116,7 +118,19 @@ func (f *fakeSessions) RevokeLegacy(_ context.Context, legacy session.LegacyRefr
 }
 
 func (f *fakeSessions) Exchange(context.Context, contracts.SecretString) (session.Result, error) {
+	if f.err == nil && f.result.Reason.Success() {
+		f.minted++
+	}
 	return f.result, f.err
+}
+
+func (f *fakeSessions) ExchangeGuarded(ctx context.Context, credential contracts.SecretString, guard session.Guard) (session.Result, error) {
+	if f.err == nil && f.result.Reason == session.ReasonAccepted {
+		if err := guard(ctx, nil, f.result.Session); err != nil {
+			return session.Result{Issued: session.Issued{Session: f.result.Session}}, err
+		}
+	}
+	return f.Exchange(ctx, credential)
 }
 
 func (f *fakeSessions) Current(_ context.Context, id uuid.UUID) (session.Record, error) {

@@ -44,7 +44,7 @@ func TestProviderIntakeRoutesRunTheirCheckBeforeAnyCredentialDecode(t *testing.T
 	scope := policy.NewScope(auth, quietLogger())
 	secrets := webhookintake.Secrets{GitHub: "gh-" + uuid.NewString()}
 	routes := webhookintake.Routes(webhookintake.Deps{Secrets: secrets, Logger: quietLogger()})
-	server, err := NewServer(apiTestConfig(), quietLogger(), routes, scope.OrgScope, scope.Impersonation)
+	server, err := NewServer(apiTestConfig(), quietLogger(), routes, scope.Layers()...)
 	if err != nil {
 		t.Fatal(err)
 	}

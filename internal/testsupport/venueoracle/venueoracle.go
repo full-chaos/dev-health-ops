@@ -44,6 +44,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -224,6 +225,9 @@ func Start(t *testing.T, ctx context.Context, options Options) *Venue {
 		if err := chAdmin.Exec(ctx, "CREATE DATABASE IF NOT EXISTS "+database); err != nil {
 			t.Fatal(err)
 		}
+		// On a shared server (containers.RunWithSharedServers) a database left
+		// behind is a leak; on a private container this is a no-op before Terminate.
+		t.Cleanup(func() { _ = chAdmin.Exec(context.Background(), "DROP DATABASE IF EXISTS "+database) })
 	}
 	for _, database := range []string{v.PythonClickHouseDB, v.GoClickHouseDB} {
 		v.migrateClickHouseGo(t, ctx, database)
@@ -268,6 +272,14 @@ func Start(t *testing.T, ctx context.Context, options Options) *Venue {
 	if _, err := server.Exec(ctx, fmt.Sprintf(`CREATE DATABASE %q TEMPLATE %q`, v.GoDB, v.SourceDB)); err != nil {
 		t.Fatal(err)
 	}
+	dropGoDB := func() {
+		dropCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if _, err := server.Exec(dropCtx, fmt.Sprintf(`DROP DATABASE IF EXISTS %q WITH (FORCE)`, v.GoDB)); err != nil {
+			t.Logf("venue: drop %s: %v", v.GoDB, err)
+		}
+	}
+	t.Cleanup(dropGoDB)
 
 	// 3. The api role, provisioned and granted exactly as a deploy does.
 	for _, name := range []string{"domain", "queue", "coordinator", "api"} {
@@ -278,6 +290,9 @@ func Start(t *testing.T, ctx context.Context, options Options) *Venue {
 		v.Roles[name] = role
 	}
 	t.Cleanup(func() {
+		// The roles hold privileges inside the Go copy; DROP ROLE fails while
+		// that database exists, so it goes first.
+		dropGoDB()
 		for _, role := range v.Roles {
 			containers.DropRole(server, role, t.Logf)
 		}

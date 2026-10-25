@@ -7,6 +7,7 @@ import (
 	"go.opentelemetry.io/otel"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/egressallow"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
@@ -21,5 +22,5 @@ func TestMain(m *testing.M) {
 	egressallow.LocalTests()
 	testMeterReader = sdkmetric.NewManualReader()
 	otel.SetMeterProvider(sdkmetric.NewMeterProvider(sdkmetric.WithReader(testMeterReader)))
-	os.Exit(venueoracle.RunTests(m))
+	os.Exit(containers.RunWithSharedServers(func() int { return venueoracle.RunTests(m) }))
 }

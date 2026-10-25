@@ -9,7 +9,7 @@ import (
 )
 
 type optInRow struct {
-	value *string
+	value *bool
 	err   error
 }
 
@@ -17,39 +17,47 @@ func (row optInRow) Scan(dest ...any) error {
 	if row.err != nil {
 		return row.err
 	}
-	*(dest[0].(**string)) = row.value
+	*(dest[0].(**bool)) = row.value
 	return nil
 }
 
-type optInQueryer struct{ row optInRow }
+type optInQueryer struct {
+	row  optInRow
+	sql  *string
+	args *[]any
+}
 
-func (queryer optInQueryer) QueryRow(context.Context, string, ...any) pgx.Row { return queryer.row }
-
-func TestCategorizeBYOIsOffUnlessTheRowIsExactlyTrue(t *testing.T) {
-	text := func(s string) *string { return &s }
-	for name, tc := range map[string]struct {
-		row  optInRow
-		want bool
-	}{
-		"no row": {optInRow{err: pgx.ErrNoRows}, false},
-		"null":   {optInRow{}, false},
-		"true":   {optInRow{value: text("true")}, true},
-		"false":  {optInRow{value: text("false")}, false},
-		"empty":  {optInRow{value: text("")}, false},
-		"upper":  {optInRow{value: text("TRUE")}, false},
-		"one":    {optInRow{value: text("1")}, false},
-		"padded": {optInRow{value: text(" true")}, false},
-		"yes":    {optInRow{value: text("yes")}, false},
-	} {
-		t.Run(name, func(t *testing.T) {
-			got, err := CategorizeBYOEnabled(context.Background(), optInQueryer{tc.row}, "org")
-			if err != nil || got != tc.want {
-				t.Fatalf("CategorizeBYOEnabled = %v, %v; want %v", got, err, tc.want)
-			}
-		})
+func (queryer optInQueryer) QueryRow(_ context.Context, sql string, args ...any) pgx.Row {
+	if queryer.sql != nil {
+		*queryer.sql, *queryer.args = sql, args
 	}
-	if _, err := CategorizeBYOEnabled(context.Background(), optInQueryer{optInRow{err: errors.New("down")}}, "org"); err == nil {
-		t.Fatal("a database fault must be an error, not off")
+	return queryer.row
+}
+
+// The value rule ("true" only) lives in the definer function; its parity table
+// runs against PostgreSQL in internal/jobs/investment's domain-role test.
+func TestCategorizeBYOReadsTheDefinerFunctionAndNeverTheTable(t *testing.T) {
+	yes, no := true, false
+	var sql string
+	var args []any
+	got, err := CategorizeBYOEnabled(context.Background(), optInQueryer{optInRow{value: &yes}, &sql, &args}, "org-1")
+	if err != nil || !got {
+		t.Fatalf("CategorizeBYOEnabled = %v, %v; want true", got, err)
+	}
+	if sql != "SELECT public.categorize_byo_opted_in($1)" || len(args) != 1 || args[0] != "org-1" {
+		t.Fatalf("opt-in read = %q %v; want the definer function with the org id only", sql, args)
+	}
+	if got, err := CategorizeBYOEnabled(context.Background(), optInQueryer{row: optInRow{value: &no}}, "org"); err != nil || got {
+		t.Fatalf("CategorizeBYOEnabled = %v, %v; want false", got, err)
+	}
+	for name, row := range map[string]optInRow{
+		"database fault": {err: errors.New("down")},
+		"no rows":        {err: pgx.ErrNoRows},
+		"null answer":    {},
+	} {
+		if _, err := CategorizeBYOEnabled(context.Background(), optInQueryer{row: row}, "org"); err == nil {
+			t.Fatalf("%s must be an error, not off", name)
+		}
 	}
 }
 

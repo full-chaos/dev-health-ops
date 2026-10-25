@@ -4,12 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/categorize"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/categorize/decision"
@@ -273,7 +276,7 @@ func TestAnOptedInOrgWithAUsableOwnModelGetsItsOwnBackend(t *testing.T) {
 // The closed set of refusal codes is pinned: a new code is a new decision.
 func TestTheCategorizeRefusalCodeSetIsClosed(t *testing.T) {
 	want := []string{
-		"ai_features_turned_off", "categorize_byo_model_unreported", "categorize_byo_model_unsupported", "categorize_byo_unavailable", "invalid_base_url", "missing_credentials", "model_required",
+		"ai_features_turned_off", "categorize_byo_model_unreported", "categorize_byo_model_unsupported", "categorize_byo_optin_unreadable", "categorize_byo_unavailable", "invalid_base_url", "missing_credentials", "model_required",
 		"not_configured", "own_model_gate_closed", "own_model_turned_off", "service_model_not_entitled",
 		"unknown_provider", "unreadable_row",
 	}
@@ -374,11 +377,27 @@ func TestAnOptedInOrgThatIsRefusedIsNeverServedByTheCannedPlatformPath(t *testin
 		t.Fatal("a refused org reached the platform provider path")
 	}
 
-	unreadable := &stubByo{optedInErr: errors.New("postgres: connection refused at 10.0.0.1")}
-	executor.byo = unreadable
-	_, err = executor.Execute(context.Background(), materializeClaim(t, `{}`))
-	if err == nil || deterministicClass(err) != "" || reached != 0 || unreadable.built != 0 || strings.Contains(err.Error(), "10.0.0.1") {
-		t.Fatalf("an unreadable opt-in must stop the run (retryable, no text): %v reached=%d", err, reached)
+	var reasons []string
+	recordOptInUnreadable = func(_ context.Context, reason string) { reasons = append(reasons, reason) }
+	t.Cleanup(func() { recordOptInUnreadable = defaultRecordOptInUnreadable })
+	for cause, want := range map[error]string{
+		errors.New("postgres: connection refused at 10.0.0.1"):                               "unavailable",
+		fmt.Errorf("read: %w", &pgconn.PgError{Code: "42501", Message: "permission denied"}): "permission_denied",
+		// A worker up before pgmigrate 0156 created the function: refused once,
+		// deterministically, never retried (roll order: 0156, then the grants).
+		fmt.Errorf("read: %w", &pgconn.PgError{Code: "42883", Message: "function does not exist"}): "function_missing",
+	} {
+		reasons = nil
+		unreadable := &stubByo{optedInErr: cause}
+		executor.byo = unreadable
+		_, err = executor.Execute(context.Background(), materializeClaim(t, `{}`))
+		if deterministicClass(err) != workgraph.ClassLLMProviderInvalid || !strings.Contains(err.Error(), llmorgsettings.CodeCategorizeBYOOptInUnreadable) ||
+			reached != 0 || unreadable.built != 0 || strings.Contains(err.Error(), "10.0.0.1") || strings.Contains(err.Error(), "permission") || strings.Contains(err.Error(), "does not exist") {
+			t.Fatalf("an unreadable opt-in must refuse the run (no retry, no jev, no text): %v reached=%d", err, reached)
+		}
+		if len(reasons) != 1 || reasons[0] != want {
+			t.Fatalf("opt-in unreadable metric reasons = %v, want [%s]", reasons, want)
+		}
 	}
 
 	other := &stubByo{optedIn: true, buildErr: errors.New("provider text https://x.example.invalid")}

@@ -623,6 +623,31 @@ func grantStatementsForPosture(role string, posture RolePosture) []string {
 			"GRANT USAGE ON SEQUENCE public.%s TO %s", sequence, role,
 		))
 	}
+	for _, function := range posture.RequiredFunctions {
+		statements = append(statements, fmt.Sprintf(
+			"GRANT EXECUTE ON FUNCTION public.%s TO %s", function, role,
+		))
+	}
+	return statements
+}
+
+// definerShellStatements creates each RequiredFunctions signature as a
+// SECURITY DEFINER shell with EXECUTE revoked from PUBLIC, as its migration does.
+func definerShellStatements(postures ...RolePosture) []string {
+	seen := map[string]bool{}
+	var statements []string
+	for _, posture := range postures {
+		for _, function := range posture.RequiredFunctions {
+			if seen[function] {
+				continue
+			}
+			seen[function] = true
+			statements = append(statements,
+				"CREATE FUNCTION public."+function+" RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS 'SELECT false'",
+				"REVOKE ALL ON FUNCTION public."+function+" FROM PUBLIC",
+			)
+		}
+	}
 	return statements
 }
 
@@ -762,6 +787,7 @@ func TestDomainAndCoordinatorPosturesSatisfyAttributionAgainstTheRealManifest(t 
 	for name := range sequenceNames {
 		setup = append(setup, "CREATE SEQUENCE public."+name)
 	}
+	setup = append(setup, definerShellStatements(domain, coordinator)...)
 	setup = append(setup, grantStatementsForPosture(domainRole, domain)...)
 	setup = append(setup, grantStatementsForPosture(coordinatorRole, coordinator)...)
 	for _, statement := range setup {

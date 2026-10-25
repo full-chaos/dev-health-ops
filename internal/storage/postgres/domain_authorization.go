@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"strconv"
 	"time"
 
@@ -147,6 +148,15 @@ WITH required_table_privileges(table_name, allow_insert, allow_update, allow_del
 ), public_functions AS (
 	SELECT procedure.oid
 	FROM pg_catalog.pg_proc AS procedure
+	JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = procedure.pronamespace
+	WHERE namespace.nspname = 'public'
+), required_function_signatures(signature) AS (
+	SELECT * FROM unnest($11::text[])
+), required_functions AS (
+	SELECT procedure.oid, procedure.prosecdef, procedure.proacl, procedure.proowner
+	FROM required_function_signatures AS required
+	JOIN pg_catalog.pg_proc AS procedure
+		ON procedure.oid = pg_catalog.to_regprocedure('public.' || required.signature)::oid
 	JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = procedure.pronamespace
 	WHERE namespace.nspname = 'public'
 ), member_roles AS (
@@ -496,6 +506,8 @@ SELECT
 			AND entry.grantee IN (0, (SELECT oid FROM current_role_identity))
 	)
 	AND NOT EXISTS (
+		-- EXECUTE on a public function is refused for PUBLIC always, and for
+		-- the caller unless the posture declares the function.
 		SELECT 1
 		FROM public_functions AS public_function
 		JOIN pg_catalog.pg_proc AS procedure ON procedure.oid = public_function.oid
@@ -503,7 +515,38 @@ SELECT
 			procedure.proacl, pg_catalog.acldefault('f'::"char", procedure.proowner)
 		)) AS entry
 		WHERE entry.privilege_type = 'EXECUTE'
-			AND entry.grantee IN (0, (SELECT oid FROM current_role_identity))
+			AND (
+				entry.grantee = 0
+				OR (
+					entry.grantee = (SELECT oid FROM current_role_identity)
+					AND public_function.oid NOT IN (SELECT oid FROM required_functions)
+				)
+			)
+	)
+	-- Every declared function exists, is SECURITY DEFINER, and the caller
+	-- holds EXECUTE on it by name and without the option to re-delegate it.
+	AND (SELECT count(*) FROM required_functions) =
+		(SELECT count(*) FROM required_function_signatures)
+	AND NOT EXISTS (
+		SELECT 1
+		FROM required_functions AS required
+		WHERE NOT required.prosecdef
+			OR NOT EXISTS (
+				SELECT 1
+				FROM pg_catalog.aclexplode(COALESCE(
+					required.proacl, pg_catalog.acldefault('f'::"char", required.proowner)
+				)) AS entry
+				WHERE entry.privilege_type = 'EXECUTE'
+					AND entry.grantee = (SELECT oid FROM current_role_identity)
+			)
+			OR EXISTS (
+				SELECT 1
+				FROM pg_catalog.aclexplode(COALESCE(
+					required.proacl, pg_catalog.acldefault('f'::"char", required.proowner)
+				)) AS entry
+				WHERE entry.grantee = (SELECT oid FROM current_role_identity)
+					AND entry.is_grantable
+			)
 	)`
 
 // TablePrivilege declares the exact table-level privileges one role's
@@ -550,6 +593,11 @@ type RolePosture struct {
 	RequiredTables    []TablePrivilege
 	ColumnScoped      []ColumnPrivilege
 	RequiredSequences []string
+	// RequiredFunctions are public SECURITY DEFINER functions the role must
+	// hold EXECUTE on (without grant option), by regprocedure signature, e.g.
+	// "name(text)". EXECUTE on any other public function stays refused, and
+	// PUBLIC may never hold EXECUTE on one of these.
+	RequiredFunctions []string
 }
 
 // domainPosture is the domain runtime role's declared manifest under the
@@ -877,6 +925,10 @@ func domainPosture() RolePosture {
 			{"worker_job_completion_fences", "completion_key", "SELECT"},
 			{"worker_job_completion_fences", "completion_key", "INSERT"},
 		},
+		// The heavy worker reads an org's categorization opt-in through this
+		// definer function (pgmigrate 0156): settings also holds the orgs'
+		// encrypted provider keys, so the role gets nothing on that table.
+		RequiredFunctions: []string{"categorize_byo_opted_in(text)"},
 	}
 }
 
@@ -1315,7 +1367,7 @@ func CheckRolePosture(ctx context.Context, pool *pgxpool.Pool, expectedRole, riv
 	}
 }
 
-// rolePostureArgs builds rolePostureQuery's parameters ($1..$10) from a role's
+// rolePostureArgs builds rolePostureQuery's parameters ($1..$11) from a role's
 // declared posture, refusing an internally inconsistent one. It is separate
 // from CheckRolePosture so the differential oracle for the query runs the
 // production argument construction, not a copy of it.
@@ -1358,6 +1410,12 @@ func rolePostureArgs(expectedRole, riverSchema string, posture RolePosture) ([]a
 	); err != nil {
 		return nil, err
 	}
+	requiredFunctions := append([]string{}, posture.RequiredFunctions...)
+	for _, signature := range requiredFunctions {
+		if !validFunctionSignature(signature) {
+			return nil, fmt.Errorf("postgres: required function %q is not a name(argument types) signature", signature)
+		}
+	}
 	if err := validateParallelArrayLengths(
 		"column-scoped privileges", len(columnTables), len(columnNames), len(columnPrivileges),
 	); err != nil {
@@ -1368,7 +1426,16 @@ func rolePostureArgs(expectedRole, riverSchema string, posture RolePosture) ([]a
 		tableNames, allowInserts, allowUpdates,
 		columnTables, columnNames, columnPrivileges,
 		allowDeletes, posture.RequiredSequences,
+		requiredFunctions,
 	}, nil
+}
+
+var functionSignaturePattern = regexp.MustCompile(`^[a-z_][a-z0-9_]*\((?:[a-z][a-z0-9_ ]*(?:, [a-z][a-z0-9_ ]*)*)?\)$`)
+
+// validFunctionSignature accepts a lowercase regprocedure signature such as
+// "name(text)" or "name(text, uuid)".
+func validFunctionSignature(signature string) bool {
+	return functionSignaturePattern.MatchString(signature)
 }
 
 // rolePostureStatementTimeout is the server-side bound on one posture

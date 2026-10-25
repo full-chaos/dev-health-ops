@@ -96,6 +96,10 @@ func writePostureDigestInput(hash io.Writer, posture RolePosture) {
 	for _, sequence := range posture.RequiredSequences {
 		fmt.Fprintf(hash, "sequence|%s\n", sequence)
 	}
+	fmt.Fprint(hash, "--\n")
+	for _, function := range posture.RequiredFunctions {
+		fmt.Fprintf(hash, "function|%s\n", function)
+	}
 	fmt.Fprint(hash, "==\n")
 }
 

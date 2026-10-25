@@ -2,9 +2,14 @@ package investment
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/licensing"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/categorize"
@@ -33,6 +38,40 @@ type BYORefusal struct{ Code string }
 
 func (refusal *BYORefusal) Error() string {
 	return "categorization on the organization's own model is refused: " + llmorgsettings.SafeCategorizeRefusalCode(refusal.Code)
+}
+
+// optInUnreadableCounter counts runs refused because the org's opt-in could not
+// be read, by reason: permission_denied (SQLSTATE 42501: the worker role lacks
+// the grant), function_missing (42883: the worker runs before pgmigrate 0156)
+// or unavailable (any other fault).
+var optInUnreadableCounter = func() metric.Int64Counter {
+	const name = "dev_health_categorize_byo_optin_unreadable_total"
+	counter, err := otel.Meter("github.com/full-chaos/dev-health-ops/internal/jobs/investment").
+		Int64Counter(name, metric.WithDescription("investment.materialize runs refused because the org's categorization opt-in could not be read, by reason"))
+	if err != nil {
+		counter, _ = otel.GetMeterProvider().Meter("noop").Int64Counter(name)
+	}
+	return counter
+}()
+
+// recordOptInUnreadable is a variable so a test can observe it.
+var recordOptInUnreadable = defaultRecordOptInUnreadable
+
+func defaultRecordOptInUnreadable(ctx context.Context, reason string) {
+	optInUnreadableCounter.Add(ctx, 1, metric.WithAttributes(attribute.String("reason", reason)))
+}
+
+func optInUnreadableReason(err error) string {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		switch pgErr.Code {
+		case "42501":
+			return "permission_denied"
+		case "42883":
+			return "function_missing"
+		}
+	}
+	return "unavailable"
 }
 
 // orgCategorizeBYO is the production CategorizeBYO. Its collaborators are fields

@@ -22,6 +22,7 @@ internal/apiservice/admin	TestOwnModelToggle	run
 internal/apiservice/admin	TestPagerDutyAuthorizeVenueOracle	run
 internal/apiservice/admin	TestPagerDutyAuthorizeWithoutClientIDVenueOracle	run
 internal/apiservice/admin	TestPagerDutyAuthorizeWithoutEncryptionKeyVenueOracle	run
+internal/apiservice/admin	TestPagerDutyBindingOrganizationScope	run
 internal/apiservice/admin	TestPagerDutyCallbackAndManualVenueOracle	run
 internal/apiservice/admin	TestPagerDutyDisconnectVenueOracle	run
 internal/apiservice/admin	TestPagerDutyDisconnectWithoutClientIDVenueOracle	run

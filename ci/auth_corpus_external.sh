@@ -198,22 +198,29 @@ FORWARDED=()
 if [ "${LEG}" = "acp" ]; then
   AUTH_API_PORT="$(hostport auth-service 8095)"
   printf 'step 1c: the aggregates auth-service serves\n'
-  SERVED=()
-  for aggregate in "${AGGREGATES[@]}"; do
-    probe "${aggregate}"
-    if [ "${PROBED}" = served ]; then
-      SERVED+=("${aggregate}")
-    fi
-  done
-  for aggregate in "${REQUIRED[@]}"; do
-    [[ " ${SERVED[*]:-} " == *" ${aggregate} "* ]] || die "required aggregate ${aggregate} is not served by auth-service"
-  done
-  # The sessions aggregate gates the others, as go-api's own start-up check does.
-  if [[ " ${SERVED[*]} " == *" sessions "* ]]; then
-    for aggregate in "${SERVED[@]}"; do
-      [[ " ${KEPT_ON_GO_API[*]} " == *" ${aggregate} "* ]] || FORWARDED+=("${aggregate}")
+  # classify probes every aggregate and sets SERVED and FORWARDED (the served ones, minus those kept on go-api, when
+  # sessions is served). Run again after step 1e: auth-service mounts the credentials routes only with users owned.
+  classify() {
+    local aggregate
+    SERVED=()
+    FORWARDED=()
+    for aggregate in "${AGGREGATES[@]}"; do
+      probe "${aggregate}"
+      if [ "${PROBED}" = served ]; then
+        SERVED+=("${aggregate}")
+      fi
     done
-  fi
+    for aggregate in "${REQUIRED[@]}"; do
+      [[ " ${SERVED[*]:-} " == *" ${aggregate} "* ]] || die "required aggregate ${aggregate} is not served by auth-service"
+    done
+    # The sessions aggregate gates the others, as go-api's own start-up check does.
+    if [[ " ${SERVED[*]} " == *" sessions "* ]]; then
+      for aggregate in "${SERVED[@]}"; do
+        [[ " ${KEPT_ON_GO_API[*]} " == *" ${aggregate} "* ]] || FORWARDED+=("${aggregate}")
+      done
+    fi
+  }
+  classify
   printf 'leg acp forwards: %s\n' "${FORWARDED[*]:-none (sessions is not served; every route stays in go-api)}"
   if [ "${#FORWARDED[@]}" -gt 0 ]; then
     # go-api asks auth-service's issue route for the sessions of the sign-in flows it still serves, with an
@@ -253,11 +260,21 @@ SQL
       timeout --kill-after=10 "${AUTH_CORPUS_UP_SECONDS:-1500}" docker compose -p "${PROJECT}" "${COMPOSE_FILES[@]}" --profile auth \
         run --rm --no-deps -e AUTH_DATABASE_URI migrate auth users-backfill
     ) || die "users-backfill failed"
-    export AUTH_USERS_OWNED=true
-    timeout --kill-after=10 "${AUTH_CORPUS_UP_SECONDS:-1500}" docker compose -p "${PROJECT}" "${COMPOSE_FILES[@]}" --profile auth \
+    # The flag is set for these two commands only (not exported): the go-api recreates that follow take it from the state.
+    AUTH_USERS_OWNED=true timeout --kill-after=10 "${AUTH_CORPUS_UP_SECONDS:-1500}" docker compose -p "${PROJECT}" "${COMPOSE_FILES[@]}" --profile auth \
       run --rm --no-deps auth-grants >/dev/null
-    timeout --kill-after=10 "${AUTH_CORPUS_UP_SECONDS:-1500}" docker compose -p "${PROJECT}" "${COMPOSE_FILES[@]}" --profile auth \
+    AUTH_USERS_OWNED=true timeout --kill-after=10 "${AUTH_CORPUS_UP_SECONDS:-1500}" docker compose -p "${PROJECT}" "${COMPOSE_FILES[@]}" --profile auth \
       up --detach --no-deps --force-recreate --no-build --wait --wait-timeout 300 auth-service
+    # go-api refuses AUTH_USERS_OWNED without AUTH_PROXY_CREDENTIALS, and auth-service serves the credentials routes only
+    # now: probe every aggregate again, forward what it serves now, and turn the credentials flag on BEFORE the owned flag.
+    printf 'step 1f: the aggregates auth-service serves with users owned\n'
+    BEFORE_OWNED=("${FORWARDED[@]}")
+    classify
+    [[ " ${SERVED[*]} " == *" credentials "* ]] || die "credentials is not served by auth-service after step 1e (users owned)"
+    printf 'leg acp forwards (users owned): %s\n' "${FORWARDED[*]}"
+    for aggregate in "${FORWARDED[@]}"; do
+      [[ " ${BEFORE_OWNED[*]} " == *" ${aggregate} "* ]] || bash "${SCRIPT_DIR}/auth_corpus_set_env.sh" "AUTH_PROXY_$(tr '[:lower:]' '[:upper:]' <<<"${aggregate}")" true
+    done
     bash "${SCRIPT_DIR}/auth_corpus_set_env.sh" AUTH_USERS_OWNED true
   fi
 fi

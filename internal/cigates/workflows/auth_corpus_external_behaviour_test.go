@@ -28,6 +28,10 @@ case "$*" in
   *" down "*)
     if [ -n "$FAKE_BLOCK_DOWN" ]; then exec sleep "$FAKE_BLOCK_DOWN"; fi ;;
   *" up "*)
+    case "$*" in
+      *--force-recreate*" auth-service") : > "` + record + `.owned" ;;
+      *--force-recreate*" go-api") printf '%s %s\n' "${AUTH_PROXY_CREDENTIALS:-}" "${AUTH_USERS_OWNED:-}" >> "` + record + `.goapi" ;;
+    esac
     printf '%s %s %s\n' "${AUTH_SESSION_SUCCESSOR_KEY:-}" "${AUTH_LOGIN_LOCKOUT_KEY:-}" "${AUTH_JWT_SECRET_KEY:+jwt}" >> "` + record + `.keys"
     if [ -n "$FAKE_BLOCK_UP" ]; then exec sleep "$FAKE_BLOCK_UP"; fi
     if [ -n "$FAKE_FAIL_UP" ]; then exit 1; fi ;;
@@ -35,7 +39,9 @@ case "$*" in
     if [ -z "${FAKE_AUTH_LOGS+x}" ]; then echo 'level=INFO msg="listener bound"'; else printf '%s\n' "$FAKE_AUTH_LOGS"; fi ;;
   *" port "*) echo 127.0.0.1:12345 ;;
   *" ps -q go-api"*) echo cid-go-api ;;
-  *"inspect --format"*) echo "${FAKE_HEALTH:-healthy}" ;;
+  *"inspect --format"*)
+    # go-api refuses AUTH_USERS_OWNED=true without AUTH_PROXY_CREDENTIALS (apiservice/usersowned.go)
+    if [ -z "$FAKE_HEALTH" ] && [ -e "` + record + `.goapi" ] && [ "$(tail -n 1 "` + record + `.goapi")" = " true" ]; then echo unhealthy; else echo "${FAKE_HEALTH:-healthy}"; fi ;;
 esac
 exit 0
 `
@@ -244,7 +250,9 @@ func (f fakeDocker) withCurl(t *testing.T) {
 for arg in "$@"; do last="$arg"; done
 if [[ " $* " == *" -X OPTIONS "* ]]; then
   path="/${last#http://*/}"
-  if [[ ",${FAKE_SERVED}," == *",${path},"* ]]; then printf 405; else printf 404; fi
+  served="${FAKE_SERVED}"
+  if [ -e "` + f.record + `.owned" ] && [ -n "${FAKE_SERVED_OWNED+x}" ]; then served="${FAKE_SERVED_OWNED}"; fi
+  if [[ ",${served}," == *",${path},"* ]]; then printf 405; else printf 404; fi
   exit 0
 fi
 printf '%s\n' "${FAKE_METRICS:-}"
@@ -254,7 +262,19 @@ printf '%s\n' "${FAKE_METRICS:-}"
 	}
 }
 
+// runAcpLeg runs leg acp with users NOT owned (AUTH_CORPUS_USERS_UNOWNED): the probe tests below are about the first probe.
 func runAcpLeg(t *testing.T, extra ...string) (fakeDocker, string, error) {
+	t.Helper()
+	return runAcpLegWith(t, append([]string{"AUTH_CORPUS_USERS_UNOWNED=1"}, extra...)...)
+}
+
+// runAcpOwnedLeg runs leg acp as the script does by default: users owned by auth-service.
+func runAcpOwnedLeg(t *testing.T, extra ...string) (fakeDocker, string, error) {
+	t.Helper()
+	return runAcpLegWith(t, extra...)
+}
+
+func runAcpLegWith(t *testing.T, extra ...string) (fakeDocker, string, error) {
 	t.Helper()
 	fake := newFakeDocker(t)
 	fake.withCurl(t)
@@ -518,11 +538,13 @@ func TestAuthCorpusAcpLegFailsOnAuthServiceWriterViolations(t *testing.T) {
 	}
 }
 
+const credentialsRoutes = "/api/v1/auth/register,/api/v1/auth/verify,/api/v1/auth/resend-verification,/api/v1/auth/forgot-password,/api/v1/auth/reset-password,/api/v1/auth/change-password"
+
 // Leg acp copies public.users into the auth schema before AUTH_USERS_OWNED turns on (the backfill refuses once it is
 // true), then applies the grants, restarts auth-service and go-api with it; AUTH_CORPUS_USERS_UNOWNED skips all of it.
 func TestAuthCorpusAcpLegBackfillsUsersBeforeTheOwnedFlag(t *testing.T) {
-	metrics := metric("sessions") + "\n" + metric("local_login")
-	fake, out, err := runAcpLeg(t, "FAKE_SERVED="+requiredServed, "FAKE_METRICS="+metrics)
+	metrics := metric("sessions") + "\n" + metric("local_login") + "\n" + metric("credentials")
+	fake, out, err := runAcpOwnedLeg(t, "FAKE_SERVED="+requiredServed, "FAKE_SERVED_OWNED="+requiredServed+","+credentialsRoutes, "FAKE_METRICS="+metrics)
 	if err != nil || !strings.Contains(out, "AUTH CORPUS EXTERNAL (acp) PASSED") {
 		t.Fatalf("want a pass, got err=%v:\n%s", err, out)
 	}
@@ -537,11 +559,81 @@ func TestAuthCorpusAcpLegBackfillsUsersBeforeTheOwnedFlag(t *testing.T) {
 		t.Errorf("the backfill must run with the flag off:\n%s", calls)
 	}
 
-	fake, out, err = runAcpLeg(t, "FAKE_SERVED="+requiredServed, "FAKE_METRICS="+metrics, "AUTH_CORPUS_USERS_UNOWNED=1")
+	fake, out, err = runAcpLeg(t, "FAKE_SERVED="+requiredServed, "FAKE_METRICS="+metric("sessions")+"\n"+metric("local_login"))
 	if err != nil || !strings.Contains(out, "AUTH CORPUS EXTERNAL (acp) PASSED") {
 		t.Fatalf("want a pass, got err=%v:\n%s", err, out)
 	}
 	if calls := fake.calls(t); strings.Contains(calls, "users-backfill") || strings.Contains(calls, "auth-grants") {
 		t.Errorf("AUTH_CORPUS_USERS_UNOWNED must skip step 1e:\n%s", calls)
+	}
+}
+
+func goAPIFlagRecreates(t *testing.T, fake fakeDocker) []string {
+	t.Helper()
+	raw, err := os.ReadFile(fake.record + ".goapi")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.Split(strings.TrimRight(string(raw), "\n"), "\n")
+}
+
+// go-api refuses the owned flag without the credentials flag: the script turns credentials on first, and the fake
+// docker's go-api turns unhealthy for the reverse order, so a script that swapped them fails here.
+func TestAuthCorpusAcpOwnedLegTurnsCredentialsOnBeforeTheOwnedFlag(t *testing.T) {
+	metrics := metric("sessions") + "\n" + metric("local_login") + "\n" + metric("credentials")
+	fake, out, err := runAcpOwnedLeg(t, "FAKE_SERVED="+requiredServed, "FAKE_SERVED_OWNED="+requiredServed+","+credentialsRoutes, "FAKE_METRICS="+metrics)
+	if err != nil || !strings.Contains(out, "AUTH CORPUS EXTERNAL (acp) PASSED") {
+		t.Fatalf("want a pass, got err=%v:\n%s", err, out)
+	}
+	got := goAPIFlagRecreates(t, fake)
+	want := []string{" ", " ", "true ", "true true"}
+	if len(got) != len(want) {
+		t.Fatalf("go-api recreates (credentials owned) = %q, want %q", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("go-api recreate %d = %q, want %q (all %q)", i, got[i], want[i], got)
+		}
+	}
+	if !strings.Contains(out, "leg acp forwards (users owned): sessions local_login credentials\n") {
+		t.Errorf("want the re-probed forwarded set in the output:\n%s", out)
+	}
+}
+
+// The owned leg fails by name when credentials is still not served after step 1e.
+func TestAuthCorpusAcpOwnedLegFailsWhenCredentialsStaysNotServed(t *testing.T) {
+	_, out, err := runAcpOwnedLeg(t, "FAKE_SERVED="+requiredServed, "FAKE_SERVED_OWNED="+requiredServed,
+		"FAKE_METRICS="+metric("sessions")+"\n"+metric("local_login"))
+	if err == nil || !strings.Contains(out, "credentials is not served by auth-service after step 1e (users owned)") {
+		t.Fatalf("want a failure naming credentials, got err=%v:\n%s", err, out)
+	}
+}
+
+func forwardedLine(t *testing.T, out, prefix string) []string {
+	t.Helper()
+	for _, line := range strings.Split(out, "\n") {
+		if strings.HasPrefix(line, prefix) {
+			return strings.Fields(strings.TrimPrefix(line, prefix))
+		}
+	}
+	t.Fatalf("no %q line:\n%s", prefix, out)
+	return nil
+}
+
+// The owned and the unowned legs forward the same aggregates but credentials.
+func TestAuthCorpusAcpOwnedAndUnownedForwardedSetsDifferByCredentialsOnly(t *testing.T) {
+	served := "FAKE_SERVED=" + requiredServed
+	both := "FAKE_SERVED_OWNED=" + requiredServed + "," + credentialsRoutes
+	_, owned, err := runAcpOwnedLeg(t, served, both, "FAKE_METRICS="+metric("sessions")+"\n"+metric("local_login")+"\n"+metric("credentials"))
+	if err != nil {
+		t.Fatalf("owned: %v\n%s", err, owned)
+	}
+	_, unowned, err := runAcpLeg(t, served, both, "FAKE_METRICS="+metric("sessions")+"\n"+metric("local_login"))
+	if err != nil {
+		t.Fatalf("unowned: %v\n%s", err, unowned)
+	}
+	o, u := forwardedLine(t, owned, "leg acp forwards (users owned): "), forwardedLine(t, unowned, "leg acp forwards: ")
+	if strings.Join(u, ",") != "sessions,local_login" || strings.Join(o, ",") != "sessions,local_login,credentials" {
+		t.Fatalf("owned %v, unowned %v: they must differ by credentials only", o, u)
 	}
 }

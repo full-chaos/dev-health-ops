@@ -13,8 +13,8 @@
 //
 // StartPostgresIsolated / StartClickHouseIsolated always take path 3, for a
 // test that changes server-wide state. StartValkey always takes path 3.
-// DEV_HEALTH_TEST_HARNESS_TIMING_FILE records start, close and schema times
-// (timing.go).
+// DEV_HEALTH_TEST_HARNESS_TIMING=1 logs start, close and schema times to
+// stderr (timing.go).
 package containers
 
 import (

@@ -2,37 +2,37 @@ package containers
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"sync"
 	"time"
 )
 
-// HarnessTimingFileEnv names a file that receives one line per harness phase
-// (start, close, schema), so container cost can be measured against test time.
-// Unset: nothing is written.
-const HarnessTimingFileEnv = "DEV_HEALTH_TEST_HARNESS_TIMING_FILE"
+// HarnessTimingEnv set to "1" writes one stderr line per harness phase (start,
+// close, schema), so container cost can be measured against test time:
+//
+//	containers: harness-timing <phase> <engine> <mode> <ms>
+//
+// Tab-separated after the prefix. Unset: nothing is written.
+const HarnessTimingEnv = "DEV_HEALTH_TEST_HARNESS_TIMING"
 
-var timingMu sync.Mutex
+const harnessTimingPrefix = "containers: harness-timing"
+
+var (
+	timingMu  sync.Mutex
+	timingLog io.Writer = os.Stderr
+)
 
 // TimePhase starts a timer for one harness phase; the returned func records it.
 func TimePhase(phase, engine, mode string) func() {
-	path := strings.TrimSpace(os.Getenv(HarnessTimingFileEnv))
-	if path == "" {
+	if strings.TrimSpace(os.Getenv(HarnessTimingEnv)) != "1" {
 		return func() {}
 	}
 	began := time.Now()
-	return func() { writeTiming(path, phase, engine, mode, time.Since(began)) }
-}
-
-func writeTiming(path, phase, engine, mode string, elapsed time.Duration) {
-	timingMu.Lock()
-	defer timingMu.Unlock()
-	file, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "containers: harness timing file: %v\n", err)
-		return
+	return func() {
+		timingMu.Lock()
+		defer timingMu.Unlock()
+		fmt.Fprintf(timingLog, "%s\t%s\t%s\t%s\t%d\n", harnessTimingPrefix, phase, engine, mode, time.Since(began).Milliseconds())
 	}
-	defer file.Close()
-	fmt.Fprintf(file, "%s\t%s\t%s\t%d\n", phase, engine, mode, elapsed.Milliseconds())
 }

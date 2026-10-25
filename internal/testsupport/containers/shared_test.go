@@ -3,8 +3,6 @@ package containers
 import (
 	"bytes"
 	"context"
-	"os"
-	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -189,25 +187,25 @@ func TestRequiredPostgresConnectionsCoversEveryParallelPool(t *testing.T) {
 	}
 }
 
-func TestTimingFileWritesOnlyWhenSet(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "timing.tsv")
-	t.Setenv(HarnessTimingFileEnv, "")
+func TestTimingLinesOnlyWhenSet(t *testing.T) {
+	var buffer bytes.Buffer
+	original := timingLog
+	timingLog = &buffer
+	t.Cleanup(func() { timingLog = original })
+
+	t.Setenv(HarnessTimingEnv, "")
 	TimePhase("start", "postgres", "container")()
-	if _, err := os.Stat(path); !os.IsNotExist(err) {
-		t.Fatalf("timing file exists with %s unset: %v", HarnessTimingFileEnv, err)
+	if buffer.Len() != 0 {
+		t.Fatalf("timing written with %s unset: %q", HarnessTimingEnv, buffer.String())
 	}
 
-	t.Setenv(HarnessTimingFileEnv, path)
+	t.Setenv(HarnessTimingEnv, "1")
 	TimePhase("start", "postgres", "shared")()
 	TimePhase("schema", "clickhouse", "")()
 
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
-	if len(lines) != 2 || !strings.HasPrefix(lines[0], "start\tpostgres\tshared\t") ||
-		!strings.HasPrefix(lines[1], "schema\tclickhouse\t\t") {
+	lines := strings.Split(strings.TrimSpace(buffer.String()), "\n")
+	if len(lines) != 2 || !strings.HasPrefix(lines[0], harnessTimingPrefix+"\tstart\tpostgres\tshared\t") ||
+		!strings.HasPrefix(lines[1], harnessTimingPrefix+"\tschema\tclickhouse\t\t") {
 		t.Errorf("timing lines = %q", lines)
 	}
 }

@@ -34,7 +34,7 @@ func TestMain(m *testing.M) {
 		ClickHouseHTTPDSNEnv,
 		ScratchPrefixEnv,
 		SharedServersEnv,
-		HarnessTimingFileEnv,
+		HarnessTimingEnv,
 	} {
 		if err := os.Unsetenv(key); err != nil {
 			fmt.Fprintf(os.Stderr, "clear %s: %v\n", key, err)

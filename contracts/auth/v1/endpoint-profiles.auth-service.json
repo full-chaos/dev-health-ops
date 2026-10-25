@@ -522,6 +522,24 @@
     {
       "accepted_credential_classes": [],
       "classification": "public",
+      "disclosure_behavior": "The same 202 body for a new address and a taken one; a taken address is told by mail and nothing about the requester is named.",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "POST /api/v1/auth/register [dev-health-auth-service @api]",
+      "method": "POST",
+      "public_rationale": "Creates an unverified local user from the body, and the organization with its owner membership unless the sign-up setting turns that off, then sends a verification link. Rate limited 3 per hour per client address.",
+      "route": "/api/v1/auth/register",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authapi/register.go",
+        "line": 55
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "none"
+    },
+    {
+      "accepted_credential_classes": [],
+      "classification": "public",
       "disclosure_behavior": "The same 200 body for a known, unknown or already verified address; an unknown address runs a decoy that stores and sends nothing.",
       "gaps": [],
       "graphql_field_name": null,
@@ -1032,5 +1050,5 @@
     }
   ],
   "schema_version": "endpoint-profile.v1",
-  "source_commit": "e984926bd50232664af2171a0af124f82ea85153"
+  "source_commit": "c2caed1bae92dcd25251c56aa5aa52890027eef0"
 }

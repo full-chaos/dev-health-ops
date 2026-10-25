@@ -372,7 +372,7 @@ func (h compatHandlers) compatRefresh(w http.ResponseWriter, r *http.Request) {
 		SessionID: record.ID, User: user,
 	})
 	if err != nil {
-		h.fail(w, r, opCompatRefresh, err)
+		h.failMint(w, r, opCompatRefresh, err)
 		return
 	}
 	h.rec.record(ctx, opCompatRefresh, "success", string(result.Reason), nil)

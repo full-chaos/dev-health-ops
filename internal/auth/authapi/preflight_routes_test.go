@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -309,6 +310,97 @@ func TestSSOAdaptersPreflightIsTheIssuers(t *testing.T) {
 	_, err := sessions.OIDC().Issue(context.Background(), oidc.SessionRequest{PrincipalID: f.principal, OrgID: &f.org, Role: "owner"})
 	if !errors.Is(err, oidc.ErrSessionUnavailable) {
 		t.Fatalf("OIDC issue %v, want oidc.ErrSessionUnavailable", err)
+	}
+}
+
+// lateSigner passes its check and then cannot sign: a key that turned bad
+// inside the memo window.
+type lateSigner struct{ signs atomic.Int64 }
+
+func (s *lateSigner) Sign(context.Context, string, []byte) (string, string, error) {
+	s.signs.Add(1)
+	return "", "", errors.New("key unreadable")
+}
+
+func (s *lateSigner) Check(context.Context) error { return nil }
+
+// A mint that fails because the signer cannot sign answers go-api's 503; any
+// other mint failure (here the kid record) keeps go-api's generic 500.
+func TestAMintFailureAnswers503OnlyWhenTheSignerCannotSign(t *testing.T) {
+	const internal = `{"detail":"Internal Server Error"}`
+	late := func(t *testing.T) (*Issuer, *lateSigner) {
+		signer := &lateSigner{}
+		return newEdDSAIssuer(t, signer, testAudience), signer
+	}
+	kidDown := func(t *testing.T) *Issuer {
+		return newEdDSAIssuer(t, readableKeySigner(t), testAudience).WithKidRecorder(&fakeKidRecorder{err: errors.New("kid store down")})
+	}
+	routes := map[string]func(*testing.T, *Issuer) *httptest.ResponseRecorder{
+		"compat refresh": func(t *testing.T, issuer *Issuer) *httptest.ResponseRecorder {
+			f := newCompatFixture(t)
+			f.sessions.result = accepted(f.record)
+			f.issuer = issuer
+			f.buildCompat()
+			return f.do(http.MethodPost, PatternCompatRefresh, `{"refresh_token":"`+credential()+`"}`, nil)
+		},
+		"login": func(t *testing.T, issuer *Issuer) *httptest.ResponseRecorder {
+			f := newCompatFixture(t)
+			f.issuer = issuer
+			f.buildCompat()
+			return f.do(http.MethodPost, PatternCompatLogin, loginBody(compatEmail, compatPassword, ""), nil)
+		},
+		"social": func(t *testing.T, issuer *Issuer) *httptest.ResponseRecorder {
+			f, fake := newSocialFixture(t)
+			fake.result = social.ExchangeResult{PrincipalID: f.principal}
+			f.issuer = issuer
+			f.buildCompat()
+			return f.do(http.MethodPost, PatternCompatSocialLogin, `{"provider":"github","provider_access_token":"tok"}`, nil)
+		},
+		"change password": func(t *testing.T, issuer *Issuer) *httptest.ResponseRecorder {
+			c := newCredFixtureOn(t, httpapi.NewMemoryCounters(nil), newFixtureWith(t, issuer))
+			hs, err := NewIssuer(testSecret, testIssuer, testAudience)
+			if err != nil {
+				t.Fatal(err)
+			}
+			token, err := hs.Access(c.grant())
+			if err != nil {
+				t.Fatal(err)
+			}
+			return c.call(http.MethodPost, PatternChangePassword, `{"current_password":"current-password-1","new_password":"Brand-new-pass-77!"}`,
+				map[string]string{"Authorization": "Bearer " + token})
+		},
+		"saml session": func(t *testing.T, issuer *Issuer) *httptest.ResponseRecorder {
+			f := newCompatFixture(t)
+			f.issuer = issuer
+			w, r := samlRequest()
+			f.ssoSessions(t).SAML().IssueFederatedSession(w, r, saml.SignIn{PrincipalID: f.principal, OrganizationID: &f.org, AMR: []string{"fed"}})
+			return w
+		},
+	}
+	for name, send := range routes {
+		t.Run(name, func(t *testing.T) {
+			issuer, signer := late(t)
+			expectGoAPIUnavailable(t, send(t, issuer))
+			if signer.signs.Load() != 1 {
+				t.Fatalf("%d signs, want the one failed mint", signer.signs.Load())
+			}
+			other := send(t, kidDown(t))
+			if other.Code != http.StatusInternalServerError || strings.TrimSpace(other.Body.String()) != internal {
+				t.Fatalf("another mint failure answered %d %s, want go-api's 500", other.Code, other.Body)
+			}
+		})
+	}
+	issuer, _ := late(t)
+	f := newCompatFixture(t)
+	f.issuer = issuer
+	if _, err := f.ssoSessions(t).OIDC().Issue(context.Background(), oidc.SessionRequest{PrincipalID: f.principal, OrgID: &f.org, Role: "owner"}); !errors.Is(err, oidc.ErrSessionUnavailable) {
+		t.Fatalf("OIDC issue with a signer that cannot sign: %v, want oidc.ErrSessionUnavailable", err)
+	}
+	f = newCompatFixture(t)
+	f.issuer = kidDown(t)
+	if _, err := f.ssoSessions(t).OIDC().Issue(context.Background(), oidc.SessionRequest{PrincipalID: f.principal, OrgID: &f.org, Role: "owner"}); err == nil ||
+		errors.Is(err, oidc.ErrSessionUnavailable) {
+		t.Fatalf("OIDC issue with a failed kid record: %v, want a plain failure", err)
 	}
 }
 

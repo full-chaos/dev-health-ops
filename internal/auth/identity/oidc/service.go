@@ -613,6 +613,8 @@ func (s *Service) newAccount(ctx context.Context, row Provider, v validated, req
 		return Login{}, deny(http.StatusBadRequest, ReasonMalformed, "Email address from OIDC claims is malformed")
 	case errors.Is(err, ErrInvalidKey):
 		return Login{}, authFailed(ReasonMalformed, err)
+	case errors.Is(err, ErrSessionUnavailable):
+		return Login{}, unavailable(err)
 	default:
 		return Login{}, internal(ReasonStoreUnavailable, err)
 	}

@@ -15,8 +15,9 @@ import (
 // (sessionissue.UnavailableText), so the go-api routes here answer its bytes.
 const textAuthUnavailable = "Authentication service unavailable"
 
-// errSignerUnavailable marks a failed preflight inside a shared session path,
-// so its caller answers 503 rather than a generic failure.
+// errSignerUnavailable marks a signer that cannot sign: a failed preflight
+// inside a shared session path, or a failed EdDSA Sign at mint. Its callers
+// answer 503 rather than a generic failure.
 var errSignerUnavailable = errors.New("authapi: the access signer is unavailable")
 
 // signerCheckTTL is how long one signer check answers for an EdDSA Issuer.
@@ -100,4 +101,14 @@ func (i *Issuer) Preflight(ctx context.Context) error {
 func (h compatHandlers) unavailableCompat(w http.ResponseWriter, r *http.Request, operation string, err error) {
 	h.rec.record(r.Context(), operation, "error", reasonDependency, err)
 	policy.WriteDetail(w, http.StatusServiceUnavailable, policy.ErrorDetail(textAuthUnavailable), nil)
+}
+
+// failMint answers a failed mint on a go-api route: go-api's 503 when the
+// signer could not sign, its generic 500 for any other failure.
+func (h compatHandlers) failMint(w http.ResponseWriter, r *http.Request, operation string, err error) {
+	if errors.Is(err, errSignerUnavailable) {
+		h.unavailableCompat(w, r, operation, err)
+		return
+	}
+	h.fail(w, r, operation, err)
 }

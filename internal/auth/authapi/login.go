@@ -174,7 +174,7 @@ func (h compatHandlers) loginSucceeded(w http.ResponseWriter, r *http.Request, a
 		PrincipalID: outcome.PrincipalID, OrganizationID: org, Role: role, SessionID: issued.Session.ID, User: attempt.user,
 	})
 	if err != nil {
-		h.fail(w, r, opCompatLogin, err)
+		h.failMint(w, r, opCompatLogin, err)
 		return
 	}
 	h.rec.record(r.Context(), opCompatLogin, "success", string(outcome.Reason), nil)

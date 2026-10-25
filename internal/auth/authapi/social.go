@@ -118,7 +118,7 @@ func (h compatHandlers) socialSignedIn(w http.ResponseWriter, r *http.Request, r
 	}
 	access, err := h.Issuer.AccessContext(ctx, Grant{PrincipalID: principalID, OrganizationID: org, Role: role, SessionID: issued.Session.ID, User: user})
 	if err != nil {
-		h.fail(w, r, opSocialLogin, err)
+		h.failMint(w, r, opSocialLogin, err)
 		return
 	}
 	created := result.Created

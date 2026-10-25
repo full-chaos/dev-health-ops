@@ -1591,11 +1591,10 @@ PROVIDER_TEST_SHARD_COUNT=0
 PROVIDER_INTEGRATION_TEST_WEIGHT=0
 PROVIDER_ORDINARY_TEST_WEIGHT=0
 
-# scan_listed_go_tests validates the test file names `go list` returned for one package directory, then reads every file
-# in ONE awk pass (a per-file grep + sed launched ~2300 processes per plan). It fills three globals keyed by source path:
-# SCAN_TAGGED (file carries an integration build constraint), SCAN_TESTS (newline-separated top-level Test names,
-# file order) and SCAN_HOOK (the first `func init` or `func TestMain` of the file). The names are validated before any
-# file is read; the list goes through NUL-delimited xargs, not argv.
+# scan_listed_go_tests validates the test file names `go list` returned for one package directory, then parses every
+# file in ONE gotestfuncs run (go/parser, so a comment or a string can neither hide nor invent a function). It fills two
+# globals keyed by source path: SCAN_TESTS (newline-separated top-level test names, file order; TestMain is not one)
+# and SCAN_HOOK (the first `func init` or `func TestMain` of the file). The names are validated before any file is read.
 scan_listed_go_tests() {
   local label="$1" dir="$2" listed="$3" go_file
   local -a paths=()
@@ -1618,42 +1617,77 @@ check_listed_test_file() {
   [ -f "${dir}/${go_file}" ] || die "go list returned missing ${label} test file '${go_file}'"
 }
 
-# scan_go_test_paths PATH...: the one awk pass of scan_listed_go_tests over validated paths.
+# gotestfuncs_bin prints the path of ci/tools/gotestfuncs built from this tree, building it once per source and Go
+# version (a stdlib-only program, build tag ignore, so it is no package of ./...).
+GOTESTFUNCS_BIN=""
+gotestfuncs_bin() {
+  local source="${ROOT}/ci/tools/gotestfuncs/main.go" key target
+  if [ -z "${GOTESTFUNCS_BIN:-}" ]; then
+    [ -f "${source}" ] || die "ci/tools/gotestfuncs/main.go is missing"
+    key="$(cd "${ROOT}" && { sha256sum "${source}"; "${GO_ENV_OFF[@]}" GOWORK=off go env GOVERSION; } | sha256sum | cut -c1-16)" \
+      || die "could not key the gotestfuncs build"
+    target="${TMPDIR:-/tmp}/dev-health-gotestfuncs-${key}"
+    if [ ! -x "${target}" ]; then
+      (cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOWORK=off go build -mod=readonly -trimpath -o "${target}.$$" "${source}") \
+        || die "go build of ci/tools/gotestfuncs failed"
+      mv -f "${target}.$$" "${target}"
+    fi
+    GOTESTFUNCS_BIN="${target}"
+  fi
+  printf '%s\n' "${GOTESTFUNCS_BIN}"
+}
+
+# scan_go_test_paths PATH...: the one gotestfuncs run of scan_listed_go_tests over validated paths.
 scan_go_test_paths() {
-  local kind path name
-  declare -gA SCAN_TAGGED=() SCAN_TESTS=() SCAN_HOOK=()
+  local kind path name bin scanned
+  declare -gA SCAN_TESTS=() SCAN_HOOK=()
   [ "$#" -gt 0 ] || return 0
+  bin="$(gotestfuncs_bin)" || exit 2
+  scanned="$(printf '%s\0' "$@" | xargs -0 "${bin}")" || die "gotestfuncs could not parse the listed test files"
   while IFS=$'\037' read -r kind path name; do
     case "${kind}" in
-      I) SCAN_TAGGED["${path}"]=1 ;;
       T) SCAN_TESTS["${path}"]+="${name}"$'\n' ;;
       H) SCAN_HOOK["${path}"]="${name}" ;;
+      "") ;;
+      *) die "gotestfuncs printed an unknown record '${kind}'" ;;
     esac
-  done < <(
-    # shellcheck disable=SC2016 # the awk program is single-quoted on purpose
-    printf '%s\0' "$@" | xargs -0 awk '
-      FNR == 1 { tagged = 0; hooked = 0 }
-      !tagged && /^\/\/go:build.*(^|[^[:alnum:]_])integration([^[:alnum:]_]|$)/ { tagged = 1; printf "I\037%s\n", FILENAME }
-      !hooked && /^func[[:space:]]+(init|TestMain)[[:space:]]*\(/ {
-        s = $0; sub(/^func[[:space:]]+/, "", s); match(s, /^[A-Za-z]+/)
-        hooked = 1; printf "H\037%s\037%s\n", FILENAME, substr(s, 1, RLENGTH)
-      }
-      /^func[[:space:]]+Test[A-Za-z0-9_]+[[:space:]]*\(/ {
-        s = $0; sub(/^func[[:space:]]+/, "", s); match(s, /^Test[A-Za-z0-9_]+/)
-        printf "T\037%s\037%s\n", FILENAME, substr(s, 1, RLENGTH)
-      }'
-  )
+  done <<<"${scanned}"
+}
+
+# go_test_name_ok NAME: NAME is "Test" plus identifier characters (ASCII letters, digits, '_', or any non-ASCII byte of
+# a Unicode letter or digit), so it is safe inside a `-run '^(...)$'` alternation. gotestfuncs prints Go identifiers
+# only; this refuses anything else loudly.
+go_test_name_ok() {
+  local LC_ALL=C rest
+  case "$1" in Test*) ;; *) return 1 ;; esac
+  rest="${1//[A-Za-z0-9_]/}"
+  [[ ! "${rest}" =~ [[:print:][:cntrl:]] ]]
+}
+
+# split_plain_test_files KEY: SPLIT_PLAIN_FILES[file] for every test file plain `go list -e` lists for a split package.
+# A file the integration build lists and this one does not is integration-tagged (the same set difference as
+# discover_integration_tagged_tests; the text of a build line is never read).
+split_plain_test_files() {
+  local key="$1" listed go_file
+  declare -gA SPLIT_PLAIN_FILES=()
+  listed="$(cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -e -mod=readonly \
+    -f '{{range .TestGoFiles}}{{println .}}{{end}}{{range .XTestGoFiles}}{{println .}}{{end}}' "./${key}")" \
+    || die "failed to list the plain test files of ${key} with go list"
+  while IFS= read -r go_file; do
+    [ -n "${go_file}" ] || continue
+    SPLIT_PLAIN_FILES["${go_file}"]=1
+  done <<<"${listed}"
 }
 
 # split_package_hook KEY LISTED: "<key>/<file> <func>" of the first integration-tagged test file of a split package that
-# declares `func init` or `func TestMain` (from the SCAN_* globals of its scan), or nothing. Such a package keeps every
-# test in its shards, as run_integration_packages keeps such a package whole.
+# declares `func init` or `func TestMain` (SCAN_HOOK of its scan, SPLIT_PLAIN_FILES for the class), or nothing. Such a
+# package keeps every test in its shards, as run_integration_packages keeps such a package whole.
 split_package_hook() {
   local key="$1" listed="$2" go_file source_file
   while IFS= read -r go_file; do
     [ -n "${go_file}" ] || continue
     source_file="${ROOT}/${key}/${go_file}"
-    if [ -n "${SCAN_TAGGED[${source_file}]+set}" ] && [ -n "${SCAN_HOOK[${source_file}]+set}" ]; then
+    if [ -z "${SPLIT_PLAIN_FILES[${go_file}]+set}" ] && [ -n "${SCAN_HOOK[${source_file}]+set}" ]; then
       printf '%s/%s %s\n' "${key}" "${go_file}" "${SCAN_HOOK[${source_file}]}"
       return 0
     fi
@@ -1746,10 +1780,7 @@ discover_integration_tagged_tests() {
     fi
     while IFS= read -r name; do
       [ -n "${name}" ] || continue
-      [ "${name}" != "TestMain" ] || continue
-      case "${name}" in
-        Test*[![:alnum:]_]*) die "integration test discovery returned unsupported top-level test name '${name}' in ${path}" ;;
-      esac
+      go_test_name_ok "${name}" || die "integration test discovery returned unsupported top-level test name '${name}' in ${path}"
       if [ -n "${tag_only[${path}]+set}" ]; then
         INTEGRATION_TAGGED_TESTS["${pkg}"]+="${name}"$'\n'
       else
@@ -2244,21 +2275,19 @@ discover_providersync_tests() {
   PROVIDER_TEST_NAMES=()
   PROVIDER_INTEGRATION_TEST_NAMES=()
   scan_listed_go_tests 'providersync' "${ROOT}/${PROVIDER_INTEGRATION_PACKAGE_KEY}" "${files_output}"
+  split_plain_test_files "${PROVIDER_INTEGRATION_PACKAGE_KEY}"
   PROVIDER_UNFILTERED="$(split_package_hook "${PROVIDER_INTEGRATION_PACKAGE_KEY}" "${files_output}")"
   while IFS= read -r go_file; do
     [ -n "${go_file}" ] || continue
     source_file="${ROOT}/${PROVIDER_INTEGRATION_PACKAGE_KEY}/${go_file}"
-    integration_file=0
-    if [ -n "${SCAN_TAGGED[${source_file}]+set}" ]; then
-      integration_file=1
+    integration_file=1
+    if [ -n "${SPLIT_PLAIN_FILES[${go_file}]+set}" ]; then
+      integration_file=0
     fi
     while IFS= read -r test_name; do
       [ -n "${test_name}" ] || continue
       case "${test_name}" in
-        Test*[![:alnum:]_]*)
-          die "providersync source discovery returned unsupported top-level test name '${test_name}'"
-          ;;
-        Test*) ;;
+        Test*) go_test_name_ok "${test_name}" || die "providersync source discovery returned unsupported top-level test name '${test_name}'" ;;
         *) continue ;;
       esac
       [ -z "${discovered_names[${test_name}]+set}" ] \
@@ -2325,8 +2354,7 @@ load_providersync_measured_weights() {
       *"${tab}"*) die "provider test weights ${weights}:${line_number} must contain exactly two tab-separated fields" ;;
     esac
     case "${name}" in
-      Test*[![:alnum:]_]*) die "provider test weights ${weights}:${line_number} has unsupported test name '${name}'" ;;
-      Test*) ;;
+      Test*) go_test_name_ok "${name}" || die "provider test weights ${weights}:${line_number} has unsupported test name '${name}'" ;;
       *) die "provider test weights ${weights}:${line_number} name '${name}' is not a top-level Test function" ;;
     esac
     [[ "${seconds}" =~ ^[0-9]+(\.[0-9]{1,2})?$ ]] \
@@ -2497,23 +2525,21 @@ discover_daily_tests() {
   DAILY_TEST_NAMES=()
   DAILY_INTEGRATION_TEST_NAMES=()
   scan_listed_go_tests 'daily' "${ROOT}/${DAILY_INTEGRATION_PACKAGE_KEY}" "${files_output}"
+  split_plain_test_files "${DAILY_INTEGRATION_PACKAGE_KEY}"
   DAILY_UNFILTERED="$(split_package_hook "${DAILY_INTEGRATION_PACKAGE_KEY}" "${files_output}")"
   while IFS= read -r go_file; do
     [ -n "${go_file}" ] || continue
     source_file="${ROOT}/${DAILY_INTEGRATION_PACKAGE_KEY}/${go_file}"
-    integration_file=0
-    if [ -n "${SCAN_TAGGED[${source_file}]+set}" ]; then
-      integration_file=1
+    integration_file=1
+    if [ -n "${SPLIT_PLAIN_FILES[${go_file}]+set}" ]; then
+      integration_file=0
     fi
     while IFS= read -r test_name; do
       [ -n "${test_name}" ] || continue
       # TestMain is the process entry point, not a selectable test.
       [ "${test_name}" != "TestMain" ] || continue
       case "${test_name}" in
-        Test*[![:alnum:]_]*)
-          die "daily source discovery returned unsupported top-level test name '${test_name}'"
-          ;;
-        Test*) ;;
+        Test*) go_test_name_ok "${test_name}" || die "daily source discovery returned unsupported top-level test name '${test_name}'" ;;
         *) continue ;;
       esac
       [ -z "${discovered_names[${test_name}]+set}" ] \
@@ -2709,23 +2735,21 @@ discover_workerservice_tests() {
   WORKERSERVICE_TEST_NAMES=()
   WORKERSERVICE_INTEGRATION_TEST_NAMES=()
   scan_listed_go_tests 'workerservice' "${ROOT}/${WORKERSERVICE_INTEGRATION_PACKAGE_KEY}" "${files_output}"
+  split_plain_test_files "${WORKERSERVICE_INTEGRATION_PACKAGE_KEY}"
   WORKERSERVICE_UNFILTERED="$(split_package_hook "${WORKERSERVICE_INTEGRATION_PACKAGE_KEY}" "${files_output}")"
   while IFS= read -r go_file; do
     [ -n "${go_file}" ] || continue
     source_file="${ROOT}/${WORKERSERVICE_INTEGRATION_PACKAGE_KEY}/${go_file}"
-    integration_file=0
-    if [ -n "${SCAN_TAGGED[${source_file}]+set}" ]; then
-      integration_file=1
+    integration_file=1
+    if [ -n "${SPLIT_PLAIN_FILES[${go_file}]+set}" ]; then
+      integration_file=0
     fi
     while IFS= read -r test_name; do
       [ -n "${test_name}" ] || continue
       # TestMain is the process entry point, not a selectable test.
       [ "${test_name}" != "TestMain" ] || continue
       case "${test_name}" in
-        Test*[![:alnum:]_]*)
-          die "workerservice source discovery returned unsupported top-level test name '${test_name}'"
-          ;;
-        Test*) ;;
+        Test*) go_test_name_ok "${test_name}" || die "workerservice source discovery returned unsupported top-level test name '${test_name}'" ;;
         *) continue ;;
       esac
       [ -z "${discovered_names[${test_name}]+set}" ] \
@@ -2921,23 +2945,21 @@ discover_queryapiserver_tests() {
   QAPISERVER_TEST_NAMES=()
   QAPISERVER_INTEGRATION_TEST_NAMES=()
   scan_listed_go_tests 'queryapiserver' "${ROOT}/${QAPISERVER_INTEGRATION_PACKAGE_KEY}" "${files_output}"
+  split_plain_test_files "${QAPISERVER_INTEGRATION_PACKAGE_KEY}"
   QAPISERVER_UNFILTERED="$(split_package_hook "${QAPISERVER_INTEGRATION_PACKAGE_KEY}" "${files_output}")"
   while IFS= read -r go_file; do
     [ -n "${go_file}" ] || continue
     source_file="${ROOT}/${QAPISERVER_INTEGRATION_PACKAGE_KEY}/${go_file}"
-    integration_file=0
-    if [ -n "${SCAN_TAGGED[${source_file}]+set}" ]; then
-      integration_file=1
+    integration_file=1
+    if [ -n "${SPLIT_PLAIN_FILES[${go_file}]+set}" ]; then
+      integration_file=0
     fi
     while IFS= read -r test_name; do
       [ -n "${test_name}" ] || continue
       # TestMain is the process entry point, not a selectable test.
       [ "${test_name}" != "TestMain" ] || continue
       case "${test_name}" in
-        Test*[![:alnum:]_]*)
-          die "queryapiserver source discovery returned unsupported top-level test name '${test_name}'"
-          ;;
-        Test*) ;;
+        Test*) go_test_name_ok "${test_name}" || die "queryapiserver source discovery returned unsupported top-level test name '${test_name}'" ;;
         *) continue ;;
       esac
       [ -z "${discovered_names[${test_name}]+set}" ] \
@@ -3133,23 +3155,21 @@ discover_remaining_tests() {
   REMAINING_TEST_NAMES=()
   REMAINING_INTEGRATION_TEST_NAMES=()
   scan_listed_go_tests 'remaining' "${ROOT}/${REMAINING_INTEGRATION_PACKAGE_KEY}" "${files_output}"
+  split_plain_test_files "${REMAINING_INTEGRATION_PACKAGE_KEY}"
   REMAINING_UNFILTERED="$(split_package_hook "${REMAINING_INTEGRATION_PACKAGE_KEY}" "${files_output}")"
   while IFS= read -r go_file; do
     [ -n "${go_file}" ] || continue
     source_file="${ROOT}/${REMAINING_INTEGRATION_PACKAGE_KEY}/${go_file}"
-    integration_file=0
-    if [ -n "${SCAN_TAGGED[${source_file}]+set}" ]; then
-      integration_file=1
+    integration_file=1
+    if [ -n "${SPLIT_PLAIN_FILES[${go_file}]+set}" ]; then
+      integration_file=0
     fi
     while IFS= read -r test_name; do
       [ -n "${test_name}" ] || continue
       # TestMain is the process entry point, not a selectable test.
       [ "${test_name}" != "TestMain" ] || continue
       case "${test_name}" in
-        Test*[![:alnum:]_]*)
-          die "remaining source discovery returned unsupported top-level test name '${test_name}'"
-          ;;
-        Test*) ;;
+        Test*) go_test_name_ok "${test_name}" || die "remaining source discovery returned unsupported top-level test name '${test_name}'" ;;
         *) continue ;;
       esac
       [ -z "${discovered_names[${test_name}]+set}" ] \

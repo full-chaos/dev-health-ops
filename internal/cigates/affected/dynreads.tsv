@@ -239,6 +239,7 @@ internal/cigates/scripts	relevance_step_script_test.go
 internal/cigates/scripts	shard_row_files_merge_test.go
 internal/cigates/scripts	tmp_dirs_removed_test.go
 internal/cigates/splitshards	ci_script_helpers_test.go
+internal/cigates/splitshards	split_package_shards_test.go
 internal/cigates/testshard	providersync_test.go
 internal/cigates/testshard	raceshard_test.go
 internal/cigates/testshard	standin_test.go

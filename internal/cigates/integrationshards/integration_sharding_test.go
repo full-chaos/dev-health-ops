@@ -820,6 +820,8 @@ func TestIntegrationShardScriptShape(t *testing.T) {
 		}
 		got := runDiscoveryFixture(t, files, `
 run_integration_packages --dry-run . fixture ./p ./h ./q
+regex="$(run_integration_packages --dry-run . fixture ./p | sed -n 's/^  SHARD-REGEX \. //p')"
+GOWORK=off go test -mod=readonly -tags=integration -list "${regex}" ./p | sed -n 's/^Test/LISTED Test/p'
 DAILY_INTEGRATION_PACKAGE_KEY=p DAILY_TEST_SHARD_COUNT=1
 discover_daily_tests
 for n in "${DAILY_TEST_NAMES[@]}"; do printf 'CLASS %s %s\n' "${n}" "${DAILY_TEST_CLASS[${n}]}"; done
@@ -835,6 +837,7 @@ printf 'SPLITHOOK h [%s]\n' "${DAILY_UNFILTERED}"
 			"CLASS TestLegacyTagged integration", "CLASS TestPlain ordinary", "CLASS TestPlainMention ordinary",
 			"CLASS TestTaggedASCII integration", "CLASS TestÖ integration",
 			"SPLITHOOK p []", "SPLITHOOK h [h/hook_test.go init]",
+			"LISTED TestLegacyTagged", "LISTED TestTaggedASCII", "LISTED TestÖ",
 		}
 		for _, w := range want {
 			if !strings.Contains(got, w+"\n") {
@@ -843,6 +846,8 @@ printf 'SPLITHOOK h [%s]\n' "${DAILY_UNFILTERED}"
 		}
 		for _, l := range strings.Split(got, "\n") {
 			switch {
+			case l == "LISTED TestPlain" || l == "LISTED TestPlainMention":
+				t.Errorf("the shard regex selects a plain test: %q", l)
 			case l == "  SHARD-TEST p TestPlain" || l == "  SHARD-TEST p TestPlainMention":
 				t.Errorf("a test file the plain build lists runs in the shard: %q", l)
 			case strings.HasPrefix(l, "  SHARD-UNFILTERED q "):

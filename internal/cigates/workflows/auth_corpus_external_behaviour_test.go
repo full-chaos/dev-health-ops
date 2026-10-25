@@ -280,7 +280,7 @@ func (f fakeDocker) withCurl(t *testing.T) {
 	t.Helper()
 	curl := `#!/bin/bash
 for arg in "$@"; do last="$arg"; done
-if [[ " $* " == *"/accepts"* ]] && [ -n "${FAKE_SINK_DOWN:-}" ]; then exit 22; fi
+if [[ " $* " == *"/mails"* ]] && [ -n "${FAKE_SINK_DOWN:-}" ]; then exit 22; fi
 if [[ " $* " == *" -X OPTIONS "* ]]; then
   path="/${last#http://*/}"
   served="${FAKE_SERVED}"

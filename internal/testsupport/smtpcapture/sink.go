@@ -149,10 +149,10 @@ func (remote *Remote) Drain(t testing.TB) []Mail {
 	return out
 }
 
-// Reachable is an error unless the read API answers.
+// Reachable is an error unless GET /mails answers.
 func (remote *Remote) Reachable() error {
-	var out map[string]int
-	return remote.call(http.MethodGet, "/accepts", &out)
+	var out []wireMail
+	return remote.call(http.MethodGet, "/mails", &out)
 }
 
 func (server *Sink) serve(conn net.Conn) {

@@ -174,7 +174,7 @@ SMTP_ADMIN_PORT="$(hostport smtpsink 9090)"
 SMTP_ADMIN="http://127.0.0.1:${SMTP_ADMIN_PORT}"
 sink_up=""
 for _ in $(seq 1 "${AUTH_CORPUS_SINK_TRIES:-30}"); do
-  if curl --silent --fail --max-time 5 "${SMTP_ADMIN}/accepts" >/dev/null; then sink_up=1; break; fi
+  if curl --silent --fail --max-time 5 "${SMTP_ADMIN}/mails" >/dev/null; then sink_up=1; break; fi
   sleep 1
 done
 [ -n "${sink_up}" ] || die "the corpus mail sink's read API does not answer at ${SMTP_ADMIN}"

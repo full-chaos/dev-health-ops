@@ -1,0 +1,4 @@
+{
+  "rotate: active binding of another organisation on this source": "404 {\"detail\":\"Active webhook binding not found\"}",
+  "rotate: another organisation's active binding": "404 {\"detail\":\"Active webhook binding not found\"}"
+}

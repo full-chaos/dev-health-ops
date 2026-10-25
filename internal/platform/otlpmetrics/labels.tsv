@@ -32,6 +32,7 @@ devhealth_auth_outbox_delivered_total		code: internal/audit/publisher.go
 devhealth_auth_outbox_delivery_failures_total	reason	code: internal/audit/publisher.go
 devhealth_auth_outbox_oldest_pending_age_seconds		code: internal/audit/outboxloop.go
 devhealth_auth_outbox_publisher_enabled		code: internal/audit/outboxloop.go
+dev_health_categorize_byo_optin_unreadable_total	reason	code: internal/jobs/investment/categorizebyo.go
 dev_health_generation_repair_failures_total	step	code: internal/jobs/metrics/daily/generation_repair_metrics.go
 dev_health_generation_repair_partial_total		code: internal/jobs/metrics/daily/generation_repair_metrics.go
 dev_health_ic_finalize_refused_empty_org_total		code: internal/jobs/metrics/daily/icfinalize/executor.go

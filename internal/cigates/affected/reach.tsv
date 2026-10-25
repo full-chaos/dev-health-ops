@@ -2,6 +2,7 @@
 cmd/dev-health-migration-matrix	main.go	cmd/dev-health-migration-matrix
 cmd/dev-health-provider-fixture	main.go	cmd/dev-health-provider-fixture
 cmd/dev-health-provider-normalized-fixture	main.go	cmd/dev-health-provider-normalized-fixture
+cmd/faultproxy	main.go	cmd/faultproxy
 cmd/gqlgen-guard	main.go	cmd/gqlgen-guard
 cmd/loadtest	main.go	cmd/loadtest
 cmd/registrydump	main.go	cmd/registrydump

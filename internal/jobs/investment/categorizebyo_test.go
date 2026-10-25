@@ -4,12 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/categorize"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/categorize/decision"
@@ -32,7 +35,12 @@ type stubOrgModel struct {
 	failure       error
 }
 
-func (stub *stubOrgModel) Complete(_ context.Context, request categorize.CompletionRequest) (categorize.CompletionResult, error) {
+func (stub *stubOrgModel) Complete(ctx context.Context, request categorize.CompletionRequest) (categorize.CompletionResult, error) {
+	// A real client sends nothing on a cancelled context (net/http refuses it
+	// before the dial), so such a call is not counted.
+	if err := ctx.Err(); err != nil {
+		return categorize.CompletionResult{}, err
+	}
 	stub.calls = append(stub.calls, request)
 	if stub.failure != nil {
 		return categorize.CompletionResult{}, stub.failure
@@ -268,7 +276,7 @@ func TestAnOptedInOrgWithAUsableOwnModelGetsItsOwnBackend(t *testing.T) {
 // The closed set of refusal codes is pinned: a new code is a new decision.
 func TestTheCategorizeRefusalCodeSetIsClosed(t *testing.T) {
 	want := []string{
-		"ai_features_turned_off", "categorize_byo_model_unreported", "categorize_byo_model_unsupported", "categorize_byo_unavailable", "invalid_base_url", "missing_credentials", "model_required",
+		"ai_features_turned_off", "categorize_byo_model_unreported", "categorize_byo_model_unsupported", "categorize_byo_optin_unreadable", "categorize_byo_unavailable", "invalid_base_url", "missing_credentials", "model_required",
 		"not_configured", "own_model_gate_closed", "own_model_turned_off", "service_model_not_entitled",
 		"unknown_provider", "unreadable_row",
 	}
@@ -369,11 +377,27 @@ func TestAnOptedInOrgThatIsRefusedIsNeverServedByTheCannedPlatformPath(t *testin
 		t.Fatal("a refused org reached the platform provider path")
 	}
 
-	unreadable := &stubByo{optedInErr: errors.New("postgres: connection refused at 10.0.0.1")}
-	executor.byo = unreadable
-	_, err = executor.Execute(context.Background(), materializeClaim(t, `{}`))
-	if err == nil || deterministicClass(err) != "" || reached != 0 || unreadable.built != 0 || strings.Contains(err.Error(), "10.0.0.1") {
-		t.Fatalf("an unreadable opt-in must stop the run (retryable, no text): %v reached=%d", err, reached)
+	var reasons []string
+	recordOptInUnreadable = func(_ context.Context, reason string) { reasons = append(reasons, reason) }
+	t.Cleanup(func() { recordOptInUnreadable = defaultRecordOptInUnreadable })
+	for cause, want := range map[error]string{
+		errors.New("postgres: connection refused at 10.0.0.1"):                               "unavailable",
+		fmt.Errorf("read: %w", &pgconn.PgError{Code: "42501", Message: "permission denied"}): "permission_denied",
+		// A worker up before pgmigrate 0156 created the function: refused once,
+		// deterministically, never retried (roll order: 0156, then the grants).
+		fmt.Errorf("read: %w", &pgconn.PgError{Code: "42883", Message: "function does not exist"}): "function_missing",
+	} {
+		reasons = nil
+		unreadable := &stubByo{optedInErr: cause}
+		executor.byo = unreadable
+		_, err = executor.Execute(context.Background(), materializeClaim(t, `{}`))
+		if deterministicClass(err) != workgraph.ClassLLMProviderInvalid || !strings.Contains(err.Error(), llmorgsettings.CodeCategorizeBYOOptInUnreadable) ||
+			reached != 0 || unreadable.built != 0 || strings.Contains(err.Error(), "10.0.0.1") || strings.Contains(err.Error(), "permission") || strings.Contains(err.Error(), "does not exist") {
+			t.Fatalf("an unreadable opt-in must refuse the run (no retry, no jev, no text): %v reached=%d", err, reached)
+		}
+		if len(reasons) != 1 || reasons[0] != want {
+			t.Fatalf("opt-in unreadable metric reasons = %v, want [%s]", reasons, want)
+		}
 	}
 
 	other := &stubByo{optedIn: true, buildErr: errors.New("provider text https://x.example.invalid")}
@@ -478,6 +502,43 @@ func TestAnEmptyReturnedModelRefusesAndStopsTheRun(t *testing.T) {
 	}
 	if len(stub.calls) != 1 || len(outcomes) != 0 {
 		t.Fatalf("the org model was asked %d times and %d units have an outcome; the run must stop after one request", len(stub.calls), len(outcomes))
+	}
+}
+
+// dispatchCountingModel counts every unit that reaches the org model, also one
+// that arrives with a cancelled context.
+type dispatchCountingModel struct {
+	*stubOrgModel
+	dispatched int
+}
+
+func (model *dispatchCountingModel) Complete(ctx context.Context, request categorize.CompletionRequest) (categorize.CompletionResult, error) {
+	model.dispatched++
+	return model.stubOrgModel.Complete(ctx, request)
+}
+
+// After the refusal stops the run, no further unit is handed to the model.
+// The race is in the scheduler, so one run seldom shows it; the loop makes a
+// run that dispatches after the stop near certain to fail under -race.
+func TestNoUnitIsDispatchedAfterTheRefusalStopsTheRun(t *testing.T) {
+	for run := 0; run < 25; run++ {
+		model := &dispatchCountingModel{stubOrgModel: &stubOrgModel{model: "org-model-1", returnedEmpty: true, reply: answerAllQuestions}}
+		served, err := newBYOSystemOne(model, "openai", testLogger())
+		if err != nil {
+			t.Fatal(err)
+		}
+		m := &Materializer{logger: testLogger()}
+		m.SetServed(served)
+		cfg := shadowTestConfig()
+		cfg.LLMConcurrency = 1
+		stats := Stats{LLMFailureCounts: map[string]int{}}
+		err = m.categorizePending(context.Background(), cfg, shadowTestEntries(t, "u1", "u2", "u3"), map[int]categorize.CategorizationOutcome{}, &stats)
+		if deterministicClass(err) != workgraph.ClassLLMDeterministic {
+			t.Fatalf("run %d: categorizePending = %v, want the llm_deterministic class", run, err)
+		}
+		if model.dispatched != 1 {
+			t.Fatalf("run %d: %d units reached the org model; the run must stop after the first", run, model.dispatched)
+		}
 	}
 }
 

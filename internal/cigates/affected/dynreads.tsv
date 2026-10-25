@@ -7,6 +7,7 @@ cmd/dev-health-provider-fixture	main.go
 cmd/dev-health-provider-normalized-fixture	main.go
 cmd/dho	compose_dsn_class_test.go
 cmd/dho	service_migrate_guard_test.go
+cmd/faultproxy	main.go
 cmd/gqlgen-guard	main.go
 cmd/gqlgen-guard	main_test.go
 cmd/loadtest	main.go
@@ -115,6 +116,7 @@ internal/chmigrate	testops_test_flake_counts_integration_test.go
 internal/chmigrate	work_item_metrics_nullable_integration_test.go
 internal/cigates/affected	ci_script_helpers_test.go
 internal/cigates/affected	go_affected_integration_test.go
+internal/cigates/affected	md_bounded_test.go
 internal/cigates/affected	plan.go
 internal/cigates/affected	reach.go
 internal/cigates/affected	reach_test.go

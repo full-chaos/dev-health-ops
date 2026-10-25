@@ -14,11 +14,11 @@ ids=$(gh api "repos/${repo}/actions/workflows/go.yml/runs?event=merge_group&head
 
 for id in ${ids}; do
   shards=$(gh api --paginate "repos/${repo}/actions/runs/${id}/jobs?per_page=100&filter=latest" \
-    --jq '.jobs[] | select(.name | startswith("go-storage-integration-shard-")) | .conclusion' 2>/dev/null) || continue
+    --jq '.jobs[] | select(.name | startswith("go-storage-integration-shard-")) | .conclusion | tojson' 2>/dev/null) || continue
   [ -n "${shards}" ] || continue
   all_green=1
   while IFS= read -r conclusion; do
-    if [ "${conclusion}" != "success" ]; then
+    if [ "${conclusion}" != '"success"' ]; then
       all_green=0
       break
     fi

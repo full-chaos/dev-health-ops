@@ -8,7 +8,7 @@
 # 2026-12-01.
 #
 # Usage: posture_integration.sh [--run] [--paths FILE]
-#   default paths: git diff --name-only -z origin/main...HEAD (cwd repo); BASE <sha> is printed; an unresolvable
+#   default paths: git diff --no-renames --name-only -z origin/main...HEAD (cwd repo); BASE <sha> is printed; an unresolvable
 #   origin/main exits non-zero with no package line. --paths FILE: NUL-terminated change list (no BASE resolved).
 # stdout (list): "BASE <sha|paths-file>" then either "POSTURE <package>" lines or "NONE no posture path changed".
 # --run: "RECEIPT-HEAD <sha> clean=yes", then one "RECEIPT <pkg> PASS|FAIL <secs>s rc=<n>" per package and
@@ -45,7 +45,7 @@ else
   base="$(git rev-parse --verify --quiet 'origin/main^{commit}')" || { echo "origin/main does not resolve; fetch it first" >&2; exit 3; }
   changed_tmp="$(mktemp)"
   trap 'rm -f "${changed_tmp}"' EXIT
-  git diff --name-only -z "${base}...HEAD" > "${changed_tmp}" || { echo "git diff against ${base} failed" >&2; exit 3; }
+  git diff --no-renames --name-only -z "${base}...HEAD" > "${changed_tmp}" || { echo "git diff against ${base} failed" >&2; exit 3; }
   changed_src="${changed_tmp}"
 fi
 
@@ -79,7 +79,8 @@ for pkg in "${packages[@]}"; do printf 'POSTURE %s\n' "${pkg}"; done
 [ "${run}" -eq 1 ] || exit 0
 
 sha="$(git rev-parse HEAD)"
-[ -z "$(git status --porcelain)" ] || { echo "RECEIPT-HEAD ${sha} clean=no" >&2; echo "dirty tree: commit or stash first" >&2; exit 4; }
+status="$(git status --porcelain)" || { echo "git status failed; the tree is not known to be clean" >&2; exit 4; }
+[ -z "${status}" ] || { echo "RECEIPT-HEAD ${sha} clean=no" >&2; echo "dirty tree: commit or stash first" >&2; exit 4; }
 printf 'RECEIPT-HEAD %s clean=yes\n' "${sha}"
 export GOMODCACHE="${GOMODCACHE:-/var/lib/oci-cache/go-mod}" GOCACHE="${GOCACHE:-/var/lib/oci-cache/go-build}" GOTMPDIR="${GOTMPDIR:-/var/lib/oci-cache/go-tmp}"
 pass=0

@@ -143,6 +143,11 @@ func CredentialRoutes(deps CredentialDeps) ([]httpapi.Route, error) {
 		{Method: http.MethodPost, Pattern: PatternResetPassword, Handler: h.resetPassword(flows)},
 		{Method: http.MethodPost, Pattern: PatternChangePassword, Handler: h.authenticatedChange()},
 	}
+	register, err := h.registerRoute(flows)
+	if err != nil {
+		return nil, err
+	}
+	routes = append(routes, register)
 	return routes, nil
 }
 
@@ -342,6 +347,10 @@ func (h credentialHandlers) changePassword(w http.ResponseWriter, r *http.Reques
 	ctx := r.Context()
 	caller, _ := ctx.Value(changeAuthKey{}).(changeCaller)
 	input := inputOf(r)
+	if err := h.Issuer.Preflight(ctx); err != nil {
+		h.compat.unavailableCompat(w, r, opChangePassword, err)
+		return
+	}
 	outcome, err := h.flows.Change(ctx, local.ChangeRequest{
 		PrincipalID: caller.bearer.PrincipalID, OrganizationID: caller.record.OrganizationID,
 		Current: input.current, New: input.password, Impersonated: caller.bearer.Impersonated,
@@ -406,7 +415,7 @@ func (h credentialHandlers) changed(w http.ResponseWriter, r *http.Request, call
 	issued := outcome.Issued
 	access, err := h.Issuer.Access(Grant{PrincipalID: principal, OrganizationID: org, Role: role, SessionID: issued.Session.ID, User: user})
 	if err != nil {
-		h.compat.fail(w, r, opChangePassword, err)
+		h.compat.failMint(w, r, opChangePassword, err)
 		return
 	}
 	h.compat.rec.record(ctx, opChangePassword, "success", reasonAccepted, nil)

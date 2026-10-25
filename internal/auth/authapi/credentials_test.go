@@ -30,20 +30,21 @@ type credLinkKey struct {
 // credFakes backs a real local.Flows: one account, a link store that is
 // single-use and purpose-bound, a counting mailer.
 type credFakes struct {
-	mu        sync.Mutex
-	user      *local.User
-	email     string
-	links     map[credLinkKey]uuid.UUID
-	issued    []uuid.UUID
-	mails     []local.Message
-	password  string
-	pwdSet    int
-	revoked   int
-	endErr    error
-	created   int
-	issueErr  error
-	principal uuid.UUID
-	org       *uuid.UUID
+	mu          sync.Mutex
+	user        *local.User
+	email       string
+	links       map[credLinkKey]uuid.UUID
+	issued      []uuid.UUID
+	mails       []local.Message
+	password    string
+	pwdSet      int
+	revoked     int
+	endErr      error
+	created     int
+	issueErr    error
+	provisioned []local.ProvisionLocalRequest
+	principal   uuid.UUID
+	org         *uuid.UUID
 }
 
 func (c *credFakes) ByEmail(_ context.Context, email string) (*local.User, error) {
@@ -62,8 +63,11 @@ func (c *credFakes) ByID(_ context.Context, id uuid.UUID) (*local.User, error) {
 	return nil, nil
 }
 
-func (c *credFakes) ProvisionLocal(context.Context, local.ProvisionLocalRequest) (uuid.UUID, error) {
-	return uuid.Nil, errors.New("not used")
+func (c *credFakes) ProvisionLocal(_ context.Context, req local.ProvisionLocalRequest) (uuid.UUID, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.provisioned = append(c.provisioned, req)
+	return uuid.New(), nil
 }
 func (c *credFakes) SetEmailVerified(_ context.Context, id uuid.UUID) error {
 	c.mu.Lock()
@@ -155,7 +159,11 @@ func newCredFixture(t *testing.T) *credFixture {
 
 func newCredFixtureWith(t *testing.T, counters httpapi.CounterStore) *credFixture {
 	t.Helper()
-	f := newFixture(t)
+	return newCredFixtureOn(t, counters, newFixture(t))
+}
+
+func newCredFixtureOn(t *testing.T, counters httpapi.CounterStore, f *fixture) *credFixture {
+	t.Helper()
 	hash := "stored-hash"
 	provider := "local"
 	fakes := &credFakes{

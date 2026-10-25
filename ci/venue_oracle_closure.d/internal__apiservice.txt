@@ -29,6 +29,7 @@ internal/api/pyjson
 internal/api/pytime
 internal/api/ratelimit
 internal/api/recordvalidation
+internal/api/registerorg
 internal/api/restcore
 internal/api/session
 internal/api/sessionissue

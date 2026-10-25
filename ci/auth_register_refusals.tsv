@@ -1,0 +1,16 @@
+# Refusal parity of POST /api/v1/auth/register: go-api (internal/api/session/register.go) against auth-service (internal/auth/authapi/register.go).
+# The go_api and auth_service columns of the first seven rows are response shapes: "<status> <shape>", checked by TestRegisterRouteRefusalsMatchTheCheckedInTable against the real auth-service response and against go-api's frozen answers (internal/apiservice/authflowvenue/testdata/golden/auth-flow-venue-oracle.json; the 202 row against internal/api/session/register.go).
+# id<TAB>go_api<TAB>auth_service<TAB>kind<TAB>reason<TAB>test   (kind: same | stricter | divergent; a stricter or divergent row names its reason; test = a Test name in this package, or dir:Test relative to internal/auth)
+malformed_body	422 detail[]	422 detail[]	same	-	TestRegisterRouteRefusalsMatchTheCheckedInTable
+invalid_email	422 detail[]	422 detail[]	same	-	TestRegisterRouteRefusalsMatchTheCheckedInTable
+password_too_short	422 detail[]	422 detail[]	same	-	TestRegisterRouteRefusalsMatchTheCheckedInTable
+password_policy	422 detail{errors[],message} Password validation failed	422 detail{errors[],message} Password validation failed	same	-	TestRegisterRouteRefusalsMatchTheCheckedInTable
+password_over_72_bytes	500 detail Internal Server Error	422 detail{errors[],message} Password validation failed	stricter	bcrypt reads 72 bytes; refusing at validation keeps a hash error from being a 500 (acp accepted 2026-10-25)	TestRegisterRouteRefusalsMatchTheCheckedInTable
+email_taken	202 {message} Check your email to continue	202 {message} Check your email to continue	same	-	TestRegisterRouteRefusalsMatchTheCheckedInTable
+rate_limited	429 detail{message} Rate limit exceeded. Please try again later.	429 detail{message} Rate limit exceeded. Please try again later.	same	-	TestRegisterRouteRefusalsMatchTheCheckedInTable
+spoofed_forwarded_header	client address from the trusted-proxy rule	client address from the trusted-proxy rule	same	-	TestRegisterRouteIgnoresAForwardedHeaderFromAnUntrustedPeer
+users_owned_moved_refusal	moved-operation refusal while auth-service owns users	route exists only when AUTH_USERS_OWNED is on	same	-	TestRegisterRouteIsMountedAsGoAPIsPattern
+org_created_at_register	organization + owner membership (AUTH_AUTO_CREATE_ORG_ON_REGISTER default true)	the same rows, new rows only, in the user's transaction	same	-	identity/local:TestRegisterCreatesTheOrganizationAndOwnerMembershipWithTheUser
+org_setting_off	no organization when the setting is 0/false/no/off	the same, parsed by the same function	same	-	TestRegisterRouteOrganizationSettingParsesAsGoAPIDoes
+email_collision_rolls_back_org	one transaction	one transaction	same	-	identity/local:TestAnEmailCollisionRollsBackTheOrganizationAndMembership
+public_audit_row_user_registered	public audit_logs row "User registered" with the organization id	auth.principal.provisioned in the auth audit; no public audit_logs write	divergent	named gap, acp ruling 2026-10-25: same audit class as the other credentials routes; acp files a Low ticket for the public row	identity/local:TestRegisterCreatesTheOrganizationAndOwnerMembershipWithTheUser

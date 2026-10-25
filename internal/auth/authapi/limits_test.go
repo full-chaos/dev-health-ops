@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -163,8 +164,11 @@ func TestTheLimitTableIsPinned(t *testing.T) {
 
 func TestLimitIDsListEveryLimiter(t *testing.T) {
 	got := LimitIDs()
-	if len(got) != 12 {
-		t.Fatalf("%d ids, want the table's 12", len(got))
+	if len(got) != 13 {
+		t.Fatalf("%d ids, want the table's 13", len(got))
+	}
+	if !slices.Contains(got, registerIPLimit.ID) {
+		t.Fatalf("LimitIDs lacks the register limiter %q", registerIPLimit.ID)
 	}
 	seen := map[string]bool{}
 	for _, id := range got {

@@ -27,8 +27,10 @@ The chart keys in B1 to B4 that come from open leaves are not on ops main yet: C
 
 ## States
 
-- **Unflipped (dark):** the auth service runs, no ingress path reaches it, and every `goApi.authProxy.*` flag is `false`. The auth service mounts two routes (the JWKS document); discovery is off; the OIDC, OAuth, SAML and social-link routes answer 404. "Routes: 0" is not the dark check; the check is ingress paths = 0 plus the proxy flags off.
-- **Flipped (sessions):** `goApi.authProxy.sessions=true`. The session routes (`POST /api/v1/auth/refresh` and `POST /api/v1/auth/logout`) go to auth-service. Login (`localLogin`), register and e-mail link routes (`credentials`) and `social` stay `false`: go-api still serves them in this roll. Each of those is its own later flip, one per roll.
+The states are `authService.phase` values (the phase table is in [the deployment page](../../contribute/architecture/auth-control-plane-deployment.md#cutover-phases)); the chart refuses the old hand-set flags.
+
+- **Unflipped (dark):** `authService.phase=1`. The auth service runs, no ingress path reaches it, and go-api carries no `AUTH_PROXY_*` flag. The auth service mounts two routes (the JWKS document); discovery is off; the OIDC, OAuth, SAML and social-link routes answer 404. "Routes: 0" is not the dark check; the check is ingress paths = 0 plus phase 1.
+- **Flipped (sessions):** `authService.phase=2`. The session routes (`POST /api/v1/auth/refresh` and `POST /api/v1/auth/logout`) go to auth-service. Login and social sign-in (phase 3) and the register and e-mail link routes (phase 4) stay with go-api in this roll. Each later phase is its own flip, one per roll.
 
 ## Roll A: NetworkPolicy roll
 
@@ -97,12 +99,12 @@ The key-set names and key ids sit in the deploy prod values under `authService.k
 
 Run the roll step `<chaos roll step: sessions-flip roll>` with these values (chart keys on main):
 
-- `goApi.authProxy.sessions=true`
+- `authService.phase=2` (from `1`)
 - `authService.migrate.sessionReaders.goApi` and `authService.migrate.sessionReaders.queryApi`: the go-api login and the query-api registry login. The render fails while either is empty. They must be two distinct existing logins, and neither may be the auth-migrate login.
 - `authService.sessionKeys.successor.secretName`, with `secretKey` `AUTH_SESSION_SUCCESSOR_KEY` (32 bytes, base64url without padding): the Secret must exist first. Its create-only host script is not named in any leaf yet: `<create-only script for the successor key: CHAOS-11031>`; it follows the B3 rules (one key per call, create only, no value in arguments).
 - From the open leaves (B1 to B3): `authService.valkey.secretName`, `valkey.acl.enabled`, `valkey.acl.secretName`, and the `authService.keySet.keys` entries.
 
-Other `goApi.authProxy.*` flags stay `false`. The access-token key is the Secret go-api already reads as `JWT_SECRET_KEY`; nothing sets it here.
+Phase 2 turns on the sessions flag only. The access-token key is the Secret go-api already reads as `JWT_SECRET_KEY`; nothing sets it here.
 
 ### B5 Readback
 
@@ -123,11 +125,11 @@ E-mail verify and reset links change with the later `credentials` flip, not with
 
 ### B7 Rollback of the flip
 
-Primary: run `helm upgrade <release> <chart> --namespace <namespace> --values <production values file> --set goApi.authProxy.sessions=false` (release, namespace and values come from the deploy sources and the roll kit; `<deploy wrapper>` is the sanctioned form). This always works: the grant hook runs on every upgrade and restores the grants (13 to 17 s in the rehearsal, record run above).
+Primary: run `helm upgrade <release> <chart> --namespace <namespace> --values <production values file> --set authService.phase=1` (release, namespace and values come from the deploy sources and the roll kit; `<deploy wrapper>` is the sanctioned form). This always works: the grant hook runs on every upgrade and restores the grants (13 to 17 s in the rehearsal, record run above).
 
 Use `helm rollback` only to a revision rendered with the chart that carries the pre-rollback grant hook (CHAOS-10719). That chart re-grants on rollback, because the grant hook also runs before a rollback. A rollback to an older revision does not re-grant: the go-api pod refuses to start and the rollback times out.
 
-Fallback: if the target revision is older than that chart, or the grant hook refuses (a River schema newer than the target image knows), run `helm rollback --no-hooks`, then `helm upgrade` with `goApi.authProxy.sessions=false`. With `riverMigrate.enabled=false` a rollback re-grants nothing.
+Fallback: if the target revision is older than that chart, or the grant hook refuses (a River schema newer than the target image knows), run `helm rollback --no-hooks`, then `helm upgrade` with `authService.phase=1`. With `riverMigrate.enabled=false` a rollback re-grants nothing.
 
 The roll that carries the CHAOS-10719 chart must land before the baseline revision of roll B.
 

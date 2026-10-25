@@ -123,16 +123,8 @@ func TestFailureStreakReadMatchesTheLegacyWindowQuery(t *testing.T) {
 			want[source] = streak
 		}
 	}
-	tx, err := fixture.pool.Begin(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = tx.Rollback(context.Background()) }()
-	got, err := callLoadFailureStreaks(context.Background(), tx, streakOrgID, streakIntegrationID, "github",
+	got := loadFailureStreaks(context.Background(), fixture.pool, streakOrgID, streakIntegrationID, "github",
 		[]PlanDataset{{Key: workitemcontract.FamilyDatasets()[0]}})
-	if err != nil {
-		t.Fatal(err)
-	}
 	gotJSON, _ := json.Marshal(got)
 	wantJSON, _ := json.Marshal(want)
 	if string(gotJSON) != string(wantJSON) {
@@ -140,11 +132,11 @@ func TestFailureStreakReadMatchesTheLegacyWindowQuery(t *testing.T) {
 	}
 }
 
-// CHAOS-11391: a failure-history read that cannot finish inside the step
-// budget must leave the materialize transaction usable. Before the fix the
-// client-side cancel killed the connection, the next statement failed with a
-// non-context error, and the occurrence was deferred until it was quarantined.
-// A table lock held by another session stands in for the slow read.
+// CHAOS-11391 + CHAOS-11427: a failure-history read that cannot finish must
+// end at its own bound and leave the materialize (coordinator) transaction
+// untouched: the read runs on its own connection, so the coordinator
+// transaction stays usable and its statement_timeout never changes. A table
+// lock held by another session stands in for the slow read.
 func TestFailureStreakReadThatCannotFinishLeavesTheTransactionUsable(t *testing.T) {
 	fixture := startMaterializerPostgres(t)
 	seedStreakUnits(t, fixture.pool, 20)
@@ -174,27 +166,27 @@ func TestFailureStreakReadThatCannotFinishLeavesTheTransactionUsable(t *testing.
 		t.Fatal(err)
 	}
 
-	stepCtx, cancel := context.WithTimeout(background, 2*time.Second)
+	stepCtx, cancel := context.WithTimeout(background, 15*time.Second)
 	defer cancel()
 	started := time.Now()
-	got, err := callLoadFailureStreaks(stepCtx, tx, streakOrgID, streakIntegrationID, "github",
+	got := loadFailureStreaks(stepCtx, fixture.pool, streakOrgID, streakIntegrationID, "github",
 		[]PlanDataset{{Key: workitemcontract.FamilyDatasets()[0]}})
-	if err != nil || got != nil {
-		t.Fatalf("streaks = %v, err = %v, want nil and no error", got, err)
+	if got != nil {
+		t.Fatalf("streaks = %v, want nil", got)
 	}
-	if elapsed := time.Since(started); elapsed > 1900*time.Millisecond {
-		t.Fatalf("the read held the step for %s: the server-side bound did not end it before the step context", elapsed)
+	if elapsed := time.Since(started); elapsed > failureStreakReadCap+failureStreakClientMargin+300*time.Millisecond {
+		t.Fatalf("the read held the step for %s: want it ended near the %s bound", elapsed, failureStreakReadCap)
 	}
 
 	var one int
 	if err := tx.QueryRow(background, "SELECT 1").Scan(&one); err != nil {
-		t.Fatalf("the transaction is unusable after a failed streak read: %v", err)
+		t.Fatalf("the coordinator transaction is unusable after a failed streak read: %v", err)
 	}
 	var after string
 	if err := tx.QueryRow(background, "SHOW statement_timeout").Scan(&after); err != nil {
 		t.Fatal(err)
 	}
 	if after != original {
-		t.Fatalf("statement_timeout after the read = %q, want the original %q (acp C2: no SET LOCAL may outlive the savepoint)", after, original)
+		t.Fatalf("statement_timeout after the read = %q, want the original %q", after, original)
 	}
 }

@@ -309,8 +309,31 @@ type Pool interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 }
 
-// PgStore is the Postgres Store.
-type PgStore struct{ Pool Pool }
+// LimitSource is where Admit reads the org's budget limit row from. It is a
+// closed set: the SQL text of each member is a constant.
+type LimitSource int
+
+const (
+	// LimitFromSettings reads the settings table (the api's roles hold SELECT on it).
+	LimitFromSettings LimitSource = iota
+	// LimitFromCategorizeBYODefiner reads the definer function of pgmigrate 0158:
+	// the heavy worker's domain role holds EXECUTE on it and nothing on settings.
+	LimitFromCategorizeBYODefiner
+)
+
+func (source LimitSource) from() string {
+	if source == LimitFromCategorizeBYODefiner {
+		return "public.categorize_byo_settings($1) AS settings"
+	}
+	return "settings"
+}
+
+// PgStore is the Postgres Store. Limit is where Admit reads the budget limit
+// from; the zero value is the settings table.
+type PgStore struct {
+	Pool  Pool
+	Limit LimitSource
+}
 
 var _ Store = PgStore{}
 
@@ -338,7 +361,7 @@ func (s PgStore) Admit(ctx context.Context, request AdmitRequest) (Admission, er
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, LockKey(request.OrgID)); err != nil {
 		return Admission{}, unavailable(err)
 	}
-	rawLimit, err := readSetting(ctx, tx, request.OrgID, Category, LimitKey)
+	rawLimit, err := readSetting(ctx, tx, s.Limit, request.OrgID, Category, LimitKey)
 	if err != nil {
 		return Admission{}, unavailable(err)
 	}
@@ -392,11 +415,10 @@ VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, 'reserved', $7, $8) RETURNING
 // readSetting reads one plain setting. An encrypted value is an error here:
 // the budget limit is stored unencrypted, and a value this package cannot
 // decrypt must stop admission, never read as "no budget".
-func readSetting(ctx context.Context, tx pgx.Tx, orgID, category, key string) (*string, error) {
+func readSetting(ctx context.Context, tx pgx.Tx, source LimitSource, orgID, category, key string) (*string, error) {
 	var value *string
 	var encrypted bool
-	err := tx.QueryRow(ctx, `SELECT value, is_encrypted FROM settings WHERE org_id = $1 AND category = $2 AND key = $3`,
-		orgID, category, key).Scan(&value, &encrypted)
+	err := tx.QueryRow(ctx, readSettingSQL(source), orgID, category, key).Scan(&value, &encrypted)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -407,6 +429,10 @@ func readSetting(ctx context.Context, tx pgx.Tx, orgID, category, key string) (*
 		return nil, fmt.Errorf("setting %s/%s is encrypted", category, key)
 	}
 	return value, nil
+}
+
+func readSettingSQL(source LimitSource) string {
+	return `SELECT value, is_encrypted FROM ` + source.from() + ` WHERE org_id = $1 AND category = $2 AND key = $3`
 }
 
 // Settle is _reconcile_reservation. The update is guarded by status =

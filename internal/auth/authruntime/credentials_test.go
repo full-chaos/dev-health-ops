@@ -52,8 +52,8 @@ func TestCredentialRoutesMountOnlyWithTheSessionSecretsAndUsersOwned(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(routes) != 5 || len(components) != 1 {
-		t.Fatalf("routes %d components %d; want 5 and 1", len(routes), len(components))
+	if len(routes) != 6 || len(components) != 1 {
+		t.Fatalf("routes %d components %d; want 6 and 1", len(routes), len(components))
 	}
 	if err := components[0].Shutdown(context.Background()); err != nil {
 		t.Fatalf("link-mail shutdown: %v", err)

@@ -1197,8 +1197,8 @@ sides:
   (the old ReplicaSet keeps serving) until an operator revokes it; the refusal names
   the first one.
 
-**Auth session read.** While auth-service owns sessions (`goApi.authProxy.sessions`,
-`AUTH_PROXY_SESSIONS`), the manifest also holds USAGE on the auth schema
+**Auth session read.** While auth-service owns sessions (`authService.phase` 2 or
+more, `AUTH_PROXY_SESSIONS`), the manifest also holds USAGE on the auth schema
 (`AUTH_DATABASE_SCHEMA`, default `auth`) and column SELECT on
 `sessions(id, principal_id, revoked_at)`: the same list auth-migrate grants a
 session reader (`authschema.SessionReaderColumns`), declared once in
@@ -1210,7 +1210,7 @@ the read is skipped with a `auth_sessions_absent` warning, the migration still
 succeeds, and query-api stays not ready until a later run grants it. The chart
 requires `authService.migrate.sessionReaders.queryApi` to equal the
 `QUERY_API_DATABASE_ROLE` set in `queryApi.extraEnv`, and refuses that reader
-while `goApi.authProxy.sessions` is off: the reader and the flag are set (and
+below phase 2: the reader and the phase are set (and
 removed) in one values change, so auth-migrate and river-migrate never undo each
 other's grant.
 

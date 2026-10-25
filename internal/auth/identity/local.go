@@ -25,14 +25,23 @@ type LocalProvisionRequest struct {
 	FullName     string
 	PasswordHash *string
 	Actor        Actor
+	// Organization, when set, adds a new public organization named so and the
+	// user's owner membership in the same transaction (go-api's register does
+	// the same). Only new rows are written.
+	Organization *NewOrganization
 }
+
+// NewOrganization is the organization a sign-up creates.
+type NewOrganization struct{ Name string }
 
 // ProvisionLocal creates a user principal and its auth.users row in one
 // audit.Commit (reason principal_provisioned). It writes the auth schema only
 // and is available only after the users cutover (ErrSignupNotAvailable
 // before). An email another principal holds is ErrEmailTaken. The email is
 // stored as its login key (NormalizeEmail), as the go-api register route
-// stores it.
+// stores it. With req.Organization the public organization and the owner
+// membership are written in the same transaction, so an email collision leaves
+// neither.
 func (s *Store) ProvisionLocal(ctx context.Context, req LocalProvisionRequest) (_ uuid.UUID, err error) {
 	defer func() { s.countLink(ctx, "provision", err) }()
 	if !s.ownsUsers {
@@ -66,7 +75,13 @@ VALUES ($1, $2, $2, $3, $4, CASE WHEN $3::text IS NULL THEN NULL ELSE clock_time
 				return err
 			}
 			provider := "local"
-			return insertPublicUser(ctx, tx, publicUser{ID: principal, Email: email, PasswordHash: req.PasswordHash, FullName: req.FullName, AuthProvider: provider})
+			if err := insertPublicUser(ctx, tx, publicUser{ID: principal, Email: email, PasswordHash: req.PasswordHash, FullName: req.FullName, AuthProvider: provider}); err != nil {
+				return err
+			}
+			if req.Organization == nil {
+				return nil
+			}
+			return insertPublicOwnedOrganization(ctx, tx, principal, req.Organization.Name)
 		},
 		Audit:  localAudit("auth.principal.provisioned", "principal_provisioned", subject, req.Actor),
 		Events: []audit.OutboxEvent{principalEvent(subject, "principal.created", true), userEvent(subject, "user.created")},

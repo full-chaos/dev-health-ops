@@ -64,6 +64,10 @@ func (h compatHandlers) compatSocialLogin(w http.ResponseWriter, r *http.Request
 	if !ok {
 		return
 	}
+	if err := h.Issuer.Preflight(ctx); err != nil {
+		h.unavailableCompat(w, r, opSocialLogin, err)
+		return
+	}
 	result, err := h.Social.Exchange(ctx, provider, token, requestid.Audit(ctx))
 	if err != nil {
 		status, reason := social.Classify(err)
@@ -114,7 +118,7 @@ func (h compatHandlers) socialSignedIn(w http.ResponseWriter, r *http.Request, r
 	}
 	access, err := h.Issuer.AccessContext(ctx, Grant{PrincipalID: principalID, OrganizationID: org, Role: role, SessionID: issued.Session.ID, User: user})
 	if err != nil {
-		h.fail(w, r, opSocialLogin, err)
+		h.failMint(w, r, opSocialLogin, err)
 		return
 	}
 	created := result.Created

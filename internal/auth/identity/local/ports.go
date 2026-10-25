@@ -34,6 +34,9 @@ type ProvisionLocalRequest struct {
 	Email        string
 	FullName     *string
 	PasswordHash string
+	// OrganizationName, when not nil, names the organization and owner
+	// membership created with the user.
+	OrganizationName *string
 }
 
 // Accounts is the B2 identity store as the link flows use it. ByEmail and

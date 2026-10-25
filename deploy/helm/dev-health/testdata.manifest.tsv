@@ -1,0 +1,7 @@
+# Every file under deploy/helm/dev-health/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
+# python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
+# header-before-stamp set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
+92043a02d5c42e3cba96c63fae68aad1b66e305737bb8e27a34ceb0c512637af	go-generated	auth_phase/phase0.golden.json
+d0c73bdee88cfee0c5d32b3f9fe37f7e23e8d25d248c5773763f2090e305b6fa	go-generated	auth_phase/phase1.golden.json
+9ecac568ed1a04e8b7bac4b23b0b15aaf6c904efcb44e181b480eef5a1edf4a6	go-generated	auth_phase/phase2.golden.json
+683eb6f94c60a23a7ce34e09d102289ebf8d6af57aab0e9d6a297230aa3ad55c	go-generated	auth_phase/phase3.golden.json

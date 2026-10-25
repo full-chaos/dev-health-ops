@@ -153,10 +153,13 @@ type PgSource struct {
 	Licensing licensing.Store
 	Queryer   SavedQueryer
 	Config    ConfigSource
+	// Relation is where the saved-provider reads go; the zero value is the
+	// settings table. It must match the Config store's.
+	Relation SettingsRelation
 }
 
 func (s PgSource) Inputs(ctx context.Context, orgID string) (Inputs, error) {
-	saved, err := HasSavedBYO(ctx, s.Queryer, orgID)
+	saved, err := hasSavedBYO(ctx, s.Queryer, s.Relation, orgID)
 	if err != nil {
 		return Inputs{}, err
 	}
@@ -174,7 +177,7 @@ func (s PgSource) Inputs(ctx context.Context, orgID string) (Inputs, error) {
 	if err != nil {
 		return Inputs{}, fmt.Errorf("llmmodelgate: %s: %w", ACRServiceModelFeatureKey, err)
 	}
-	serviceModelOn, err := EffectiveServiceModel(ctx, s.Queryer, orgID, serviceModel)
+	serviceModelOn, err := effectiveServiceModel(ctx, s.Queryer, s.Relation, orgID, serviceModel)
 	if err != nil {
 		return Inputs{}, fmt.Errorf("llmorgsettings: effective %s: %w", ACRServiceModelFeatureKey, err)
 	}

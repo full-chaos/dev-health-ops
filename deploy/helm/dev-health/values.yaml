@@ -89,24 +89,14 @@ goApi:
   #    api's CORS_ALLOWED_ORIGINS. Empty keeps the binary's default
   #    (http://localhost:3000, the Python api's own default).
   corsAllowedOrigins: ""
-  # -- The /api/v1/auth/* proxy to auth-service (CHAOS-10231), one flag per
-  #    aggregate. Every flag is off: go-api serves the route itself, as before.
-  #    A flag on forwards that aggregate to this release's auth-service
-  #    (AUTH_PROXY_URL is rendered from authService.port), behind go-api's own
-  #    guard and rate limits; an unreachable auth-service is a 503/504, never a
-  #    go-api answer. A flag needs authService.enabled, and every flag other
-  #    than sessions needs sessions. Do not switch login before social login
-  #    works through auth-service in production (CHAOS-3275). Set AUTH_PROXY_*
-  #    only here: a flag set through goApi.envFrom bypasses these checks and
-  #    the auth-service NetworkPolicy rule (go-api still refuses an unsafe
-  #    combination at start-up and logs its routing as "auth proxy routing").
-  authProxy:
-    sessions: false
-    localLogin: false
-    credentials: false
-    social: false
-    oidc: false
-    saml: false
+  # -- The /api/v1/auth/* proxy to auth-service has no key here: authService.phase
+  #    renders it (AUTH_PROXY_URL and one AUTH_PROXY_<aggregate> flag per aggregate
+  #    the phase moves). goApi.authProxy is refused. From phase 2 every
+  #    AUTH_PROXY_* flag is rendered "true" or "false", so an env entry beats a
+  #    same-named variable from goApi.envFrom. At phase 0-1 a flag set through
+  #    goApi.envFrom still bypasses the chart's checks and the auth-service
+  #    NetworkPolicy rule (go-api still refuses an unsafe combination at start-up
+  #    and logs its routing as "auth proxy routing").
   # -- Extra flags appended after the rendered ones (for example
   #    --log-level=debug). Credentials never go here: an argument is visible
   #    to anyone who can read the Pod spec.
@@ -144,7 +134,10 @@ goApi:
   #    nothing from the platform Secret/ConfigMap unless listed here.
   envFrom: []
   # -- Extra environment variables (list of name/value pairs), for example
-  #    OTEL_ENABLED / OTEL_EXPORTER_OTLP_ENDPOINT.
+  #    OTEL_ENABLED / OTEL_EXPORTER_OTLP_ENDPOINT. Refused: any name the chart
+  #    renders for go-api (any case), and a literal `value` under a secret-like
+  #    name (*_SECRET, *_PASSWORD, *_TOKEN, *_KEY, *_DSN, *_CREDENTIALS, any
+  #    case); such a name may come only by valueFrom.secretKeyRef.
   extraEnv: []
   nodeSelector: {}
   tolerations: []
@@ -154,10 +147,10 @@ goApi:
 # =============================================================================
 # Auth Control Plane (CHAOS-4886, Wave 1 of CHAOS-3274) -- DORMANT
 # =============================================================================
-# `auth-service` and its separate `auth-migrate` Job. Defaults off. Enabling it
-# changes no request's destination: no route is mounted, no production token is
-# issued, nothing calls it, and rolling it back (enabled=false) removes it with
-# no effect on the current auth authority.
+# `auth-service` and its separate `auth-migrate` Job. Defaults off (phase 0).
+# Phase 1 changes no request's destination: no route is mounted, no production
+# token is issued, nothing calls it, and rolling it back (phase 0) removes it
+# with no effect on the current auth authority.
 #
 # Everything sensitive is referenced, never created: this chart renders no
 # Secret for it. The Secrets named below must exist in the release namespace:
@@ -169,21 +162,50 @@ goApi:
 #   - signingKey.secretName/key: an Ed25519 PKCS#8 PEM private key. The service
 #     refuses any key file with a group or world mode bit (ACP-ADR-02 §3).
 authService:
-  enabled: false
-  replicas: 1
-  # -- The users-owned switch (D3c, AUTH_USERS_OWNED). true: auth-service owns
-  #    user creation, projects each user to public.users in the same transaction,
-  #    mounts the password and e-mail verification routes, and does not become
-  #    ready while auth.users is incomplete; the auth-migrate and grants Jobs then
-  #    grant its runtime role INSERT/UPDATE on the projection columns of
-  #    public.users (false revokes them). The flip is a production decision.
-  usersOwned: false
-  # -- The orgs-owned switch (AUTH_ORGS_OWNED). true: auth-service is the only
-  #    writer of organizations; the sign-in projection reads no public table.
-  #    ONE key: auth-service and the backfill Job read it, nothing else. Turn it
-  #    on only after the organization backfill is complete; while it is true
-  #    `dho auth orgs-backfill` refuses (exit 3). The flip is a production decision.
-  orgsOwned: false
+  # -- The auth cutover phase, a whole number. It is the ONLY key that turns
+  #    auth-service on and moves auth routes to it; rollback is phase minus 1.
+  #      0  go-api only: no auth-service.
+  #      1  auth-service runs dark: no route reaches it.
+  #      2  sessions: go-api forwards refresh and logout (AUTH_PROXY_SESSIONS).
+  #      3  login and social sign-in too (AUTH_PROXY_LOCAL_LOGIN, AUTH_PROXY_SOCIAL).
+  #      4  users owned: the credential routes too (AUTH_PROXY_CREDENTIALS) and
+  #         AUTH_USERS_OWNED. Meaning (D6358): auth-service writes the existing
+  #         public users table; no auth-schema copy, no projection.
+  #      5  orgs owned: AUTH_ORGS_OWNED too. Meaning (D6358): auth-service writes
+  #         the existing public organizations and memberships tables.
+  #    Phases 4 and 5 are refused at render: they need the public-table writer
+  #    decision first. The chart refuses the keys this replaces (goApi.authProxy,
+  #    authService.enabled, authService.usersOwned, authService.orgsOwned).
+  phase: 0
+  # -- Two replicas keep the service up through one pod loss or node drain
+  #    (N+1, docs/operate/plan/auth-service-capacity.md); a PodDisruptionBudget
+  #    (minAvailable 1) renders only while this is 2 or more.
+  replicas: 2
+  # -- AUTH_ACCESS_TOKEN_CLASS, the one class of access token auth-service mints.
+  #    Empty renders nothing (the service default, hs256_compat). eddsa needs
+  #    phase >= 2 and accessToken.issuerURL. Any value needs phase >= 2.
+  accessToken:
+    class: ""
+    # -- The https issuer of eddsa access tokens: auth-service signs it
+    #    (AUTH_TOKEN_ISSUER_URL, with AUTH_JWT_AUDIENCE=dev-health-api) and go-api
+    #    verifies it (AUTH_ACCESS_TOKEN_ISSUER) against its JWKS. Rendered only
+    #    with class eddsa; go-api must reach the issuer's JWKS document.
+    issuerURL: ""
+  # -- AUTH_SOCIAL_LINK_ROUTES: mounts the bearer-only social link and unlink
+  #    routes. Needs phase >= 2 (the session secrets).
+  socialLinkRoutes: false
+  # -- OIDC and SAML sign-in through auth-service (AUTH_PROXY_OIDC / AUTH_PROXY_SAML).
+  #    true is refused: the chart does not render auth-service's SSO settings yet,
+  #    so its OIDC and SAML routes would not mount.
+  sso:
+    oidc: false
+    saml: false
+  # -- The social sign-in client settings of auth-service, from phase 3: one
+  #    existing Secret holding SOCIAL_<PROVIDER>_CLIENT_ID and _CLIENT_SECRET for
+  #    github, gitlab and google, the names go-api reads. Each key is optional:
+  #    an absent key leaves that provider off. Required from phase 3.
+  social:
+    secretName: ""
   # -- The auth API listener. It mounts no route in Wave 1.
   port: 8095
   # -- The operator listener: /healthz, /readyz, /metrics. Probes use it, never
@@ -201,6 +223,14 @@ authService:
     secretName: ""
     secretKey: AUTH_DATABASE_URI
     schema: auth
+    # -- Connection pool of EACH replica (AUTH_DATABASE_MAX_CONNS), a whole
+    #    number from 1 to 32. The pods connect to the database directly, not
+    #    through the go-pgbouncer pools, so the database must hold
+    #    replicas x maxConns (plus one surge pod while rolling, and
+    #    briefly more while old pods finish their requests). Not settable
+    #    through extraEnv or extraArgs; the chart renders it as the
+    #    --database-max-conns flag.
+    maxConns: 8
   # -- The shared rate-limit store's login (AUTH_VALKEY_URI, database 1): an
   #    ACL user of its own, limited to the auth_svc_ key prefix, never go-api's.
   #    Leave secretName empty while no limited route (login, credentials,
@@ -210,7 +240,7 @@ authService:
     secretName: ""
     secretKey: AUTH_VALKEY_URI
   # -- AUTH_SERVICE_TRUSTED_PROXIES: the peers (IP addresses or strict CIDR networks) whose single X-Forwarded-For
-  #    value names the client. Required while any goApi.authProxy flag is on, because otherwise every proxied caller
+  #    value names the client. Required from authService.phase 2 (go-api forwards auth routes), because otherwise every proxied caller
   #    shares the proxy's own address in the rate-limit keys. List the go-api pods' network only: the render refuses
   #    0.0.0.0/0, ::/0 and IPv4-mapped forms. Trust is safe because the auth-service NetworkPolicy admits go-api's pods
   #    and no other pod on the API port while a proxy flag is on.
@@ -245,8 +275,8 @@ authService:
     #    retiring, retired or compromised; file is a bare name.
     keys: []
   # -- The session routes' key material, by secretKeyRef (the chart creates no
-  #    Secret). Both keys render together or not at all; goApi.authProxy.sessions
-  #    fails the render while the successor key is unset.
+  #    Secret). Both keys render together or not at all; phase >= 2 fails the
+  #    render while the successor key is unset.
   sessionKeys:
     # -- AUTH_JWT_SECRET_KEY is not set here: it is always the Secret and key
     #    go-api reads as JWT_SECRET_KEY (hs256Secret), so the two cannot differ.
@@ -254,6 +284,11 @@ authService:
     successor:
       secretName: ""
       secretKey: AUTH_SESSION_SUCCESSOR_KEY
+    # -- AUTH_LOGIN_LOCKOUT_KEY: 32 bytes, base64url without padding. With the
+    #    session keys it mounts the login route. Required from phase 3.
+    loginLockout:
+      secretName: ""
+      secretKey: AUTH_LOGIN_LOCKOUT_KEY
   # -- Whole seconds ("20s"). Must stay below terminationGracePeriodSeconds: the whole
   #    ordered shutdown (readiness gate, API, operator, database) is bounded
   #    by it.
@@ -261,6 +296,10 @@ authService:
   terminationGracePeriodSeconds: 30
   # -- Extra flags after the rendered ones. Credentials never go here.
   extraArgs: []
+  # -- Extra environment entries. Refused: any name the chart renders for
+  #    auth-service (any case), and a literal `value` under a secret-like name
+  #    (*_SECRET, *_PASSWORD, *_TOKEN, *_KEY, *_DSN, *_CREDENTIALS, any case);
+  #    such a name may come only by valueFrom.secretKeyRef.
   extraEnv: []
   livenessProbe:
     initialDelaySeconds: 5
@@ -272,13 +311,17 @@ authService:
     periodSeconds: 10
     timeoutSeconds: 3
     failureThreshold: 3
+  # -- Measured in docs/operate/plan/auth-service-capacity.md: login is CPU
+  #    bound (about 3.7 logins/s per core), memory peaked at 27 MiB. Requests
+  #    are 250m per pod, 500m for two replicas, 750m with one surge pod
+  #    (pods that are shutting down can overlap it briefly; not measured).
   resources:
     requests:
       memory: "64Mi"
-      cpu: "50m"
+      cpu: "250m"
     limits:
       memory: "256Mi"
-      cpu: "500m"
+      cpu: "1000m"
   nodeSelector: {}
   tolerations: []
   affinity: {}
@@ -303,10 +346,9 @@ authService:
     #    (AUTH_SESSION_READER_ROLES). Each must already exist. Empty grants none:
     #    a token auth-service issued is then refused by go-api and query-api.
     sessionReaderRoles: []
-    # -- The logins that must read auth sessions while goApi.authProxy.sessions
-    #    is on: go-api's API_DATABASE_ROLE and query-api's registry login. Both
+    # -- The logins that must read auth sessions from phase 2 (sessions): go-api's API_DATABASE_ROLE and query-api's registry login. Both
     #    are granted like sessionReaderRoles (the rendered list is the union);
-    #    sessions=true fails the render while either is empty.
+    #    phase >= 2 fails the render while either is empty.
     sessionReaders:
       goApi: ""
       queryApi: ""
@@ -336,7 +378,7 @@ authService:
         cpu: "250m"
   # -- One `dho auth <verb>` run as a plain Job (not a hook), off by default. It
   #    uses the chart's dho image (goApi.image), the auth-service runtime login
-  #    by the same secret reference, and the same usersOwned / orgsOwned keys.
+  #    by the same secret reference, and the same owned switches (from authService.phase).
   #    The Job name carries a hash of verb, dryRun, batch, image and runId: the
   #    same inputs keep the same Job (no immutable-field patch, no rerun on the
   #    next upgrade); a changed input is a new Job. enabled=true holds for ONE
@@ -1173,6 +1215,22 @@ migrations:
       #    operator's responsibility, the same as any other digest pin.
       image: ""
       pullPolicy: ""
+    # -- Build ix_sync_run_units_failure_streak CONCURRENTLY in a
+    #    weight -2 pre-hook Job (`dho migrate postgres build-index
+    #    failure-streak`), BEFORE the migrate Job runs revision 0159 (which
+    #    then finds the index and does nothing; its plain build would hold a
+    #    SHARE lock on sync_run_units). OFF = no such Job in the render; turn it
+    #    on for the roll that carries revision 0159 on a database with a large
+    #    sync_run_units. The Job fails, and so does the release before the
+    #    migrate Job, unless the index ends present and valid. With
+    #    localBundledPostgres the Job runs on pre-upgrade only. Pass a helm --timeout above activeDeadlineSeconds.
+    streakIndex:
+      enabled: false
+      activeDeadlineSeconds: 3600
+      # -- lock_timeout of each build attempt, in seconds (1 to 60).
+      lockTimeoutSeconds: 5
+      attempts: 20
+      retryDelaySeconds: 15
     backoffLimit: 2
     activeDeadlineSeconds: 1800
     resources:

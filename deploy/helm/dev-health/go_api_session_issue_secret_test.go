@@ -7,7 +7,7 @@ import (
 
 const dedicatedIssueSecret = "dev-health-auth-session-issue"
 
-var issueSessionsOn = []string{"--set", "goApi.authProxy.sessions=true"}
+var issueSessionsOn = []string{"--set", "authService.phase=2"}
 
 func issueRef(t *testing.T, docs []map[string]any) any {
 	t.Helper()

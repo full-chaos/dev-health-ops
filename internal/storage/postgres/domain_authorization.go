@@ -805,9 +805,11 @@ func domainPosture() RolePosture {
 			{"sync_watermarks", true, true, true},
 			{"sync_dispatch_outbox", true, true, false},
 			{"worker_job_outbox", true, false, false},
-			// Read only: the stale-reservation job (CHAOS-9476) counts rows left
-			// in `reserved`; it never voids one, so it holds no write.
-			{"byo_llm_budget_reservations", false, false, false},
+			// The heavy worker's categorization on an org's own model reserves
+			// a budget row (llmbudget.PgStore.Admit: INSERT) and settles it
+			// (Settle: the column-scoped UPDATE below). The stale-reservation
+			// job (CHAOS-9476) only reads. No DELETE and no table-wide UPDATE.
+			{"byo_llm_budget_reservations", true, false, false},
 			// UPDATE as of CHAOS-4209: stampCanonicalSyncConfig
 			// (native_finalize_sync_run.go:582,597) writes the run's
 			// last_sync_at/last_sync_success/last_sync_error/last_sync_stats on
@@ -924,11 +926,19 @@ func domainPosture() RolePosture {
 			{"integration_credentials", "updated_at", "UPDATE"},
 			{"worker_job_completion_fences", "completion_key", "SELECT"},
 			{"worker_job_completion_fences", "completion_key", "INSERT"},
+			// The columns llmbudget.PgStore.Settle writes, and no other.
+			{"byo_llm_budget_reservations", "status", "UPDATE"},
+			{"byo_llm_budget_reservations", "input_tokens", "UPDATE"},
+			{"byo_llm_budget_reservations", "output_tokens", "UPDATE"},
+			{"byo_llm_budget_reservations", "cached_input_tokens", "UPDATE"},
+			{"byo_llm_budget_reservations", "actual_micro_usd", "UPDATE"},
+			{"byo_llm_budget_reservations", "reconciled_at", "UPDATE"},
 		},
-		// The heavy worker reads an org's categorization opt-in through this
-		// definer function (pgmigrate 0156): settings also holds the orgs'
-		// encrypted provider keys, so the role gets nothing on that table.
-		RequiredFunctions: []string{"categorize_byo_opted_in(text)"},
+		// The heavy worker reads an org's categorization opt-in (pgmigrate 0156)
+		// and an opted-in org's categorize configuration and budget limit
+		// (pgmigrate 0158) through these definer functions: settings also holds
+		// the orgs' encrypted provider keys, so the role gets nothing on that table.
+		RequiredFunctions: []string{"categorize_byo_opted_in(text)", "categorize_byo_settings(text)"},
 	}
 }
 

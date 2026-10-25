@@ -29,7 +29,7 @@ func (w Writer) Key() string {
 
 var publicTables = []string{
 	"users", "refresh_tokens", "email_verification_tokens", "password_reset_tokens",
-	"login_attempts", "org_invites", "memberships", "sso_providers", "impersonation_sessions",
+	"login_attempts", "org_invites", "memberships", "sso_providers", "impersonation_sessions", "organizations",
 }
 
 const unresolved = "\x00"

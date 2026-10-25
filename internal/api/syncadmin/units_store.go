@@ -2,9 +2,11 @@ package syncadmin
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	schedsync "github.com/full-chaos/dev-health-ops/internal/scheduler/sync"
 )
@@ -29,22 +31,75 @@ type runUnit struct {
 	SourceName, SourceFullName, SourceExternalID *string
 }
 
-// runUnits is SyncRunService.list_units after the id parsed: the org's
-// units of the run, ordered by id.
-func (s store) runUnits(ctx context.Context, orgID string, runID uuid.UUID) ([]runUnit, error) {
-	rows, err := s.pool.Query(ctx, `
-SELECT u.id, u.sync_run_id, u.integration_id, u.source_id, u.org_id, u.provider, u.dataset_key, u.cost_class,
+// unitFilter narrows the units of one run. The zero value keeps every unit.
+type unitFilter struct {
+	Statuses   []string
+	DatasetKey *string
+	SourceID   *uuid.UUID
+	// ErrorCategory keeps units whose stored result carries that error_category.
+	ErrorCategory *string
+	// Since keeps units that do not end before it; Before keeps units that
+	// do not start after it (a unit with no bound on that side is kept).
+	Since, Before *time.Time
+}
+
+// runUnitScope is the org scope of every units read: the run and the org,
+// the same two predicates the whole-run read has always carried. The filter
+// only adds AND terms after them.
+func (f unitFilter) where(orgID string, runID uuid.UUID) (string, []any) {
+	args := []any{runID, orgID}
+	clause := "u.sync_run_id = $1 AND u.org_id = $2"
+	add := func(sql string, value any) {
+		args = append(args, value)
+		clause += " AND " + fmt.Sprintf(sql, len(args))
+	}
+	if len(f.Statuses) > 0 {
+		add("u.status = ANY($%d)", f.Statuses)
+	}
+	if f.DatasetKey != nil {
+		add("u.dataset_key = $%d", *f.DatasetKey)
+	}
+	if f.SourceID != nil {
+		add("u.source_id = $%d", *f.SourceID)
+	}
+	if f.ErrorCategory != nil {
+		add("u.result::jsonb ->> 'error_category' = $%d", *f.ErrorCategory)
+	}
+	if f.Since != nil {
+		add("(u.before_at IS NULL OR u.before_at >= $%d)", *f.Since)
+	}
+	if f.Before != nil {
+		add("(u.since_at IS NULL OR u.since_at <= $%d)", *f.Before)
+	}
+	return clause, args
+}
+
+const runUnitFromJoin = `
+FROM sync_run_units AS u
+LEFT JOIN integration_sources AS s ON s.id = u.source_id`
+
+// fullUnitColumns is every column of a unit the response renders.
+const fullUnitColumns = `u.id, u.sync_run_id, u.integration_id, u.source_id, u.org_id, u.provider, u.dataset_key, u.cost_class,
        u.mode, u.status, u.since_at, u.before_at, u.available_at, u.attempts, u.rate_limit_deferrals,
        u.budget_deferrals, u.duration_seconds, u.error, u.last_heartbeat_at, u.result::text,
        u.processor_flags::text, u.created_at, u.updated_at,
-       s.id IS NOT NULL, s.name, s.full_name, s.external_id
-FROM sync_run_units AS u
-LEFT JOIN integration_sources AS s ON s.id = u.source_id
-WHERE u.sync_run_id = $1 AND u.org_id = $2
-ORDER BY u.id`, runID, orgID)
-	if err != nil {
-		return nil, err
-	}
+       s.id IS NOT NULL, s.name, s.full_name, s.external_id`
+
+// rollupUnitColumns is the same row without the large columns: error is
+// NULL and result is only the two keys the rollups read (error_category,
+// retry_exhausted), present only when the stored result is an object that
+// has them, so an explicit null stays distinct from a missing key.
+const rollupUnitColumns = `u.id, u.sync_run_id, u.integration_id, u.source_id, u.org_id, u.provider, u.dataset_key, u.cost_class,
+       u.mode, u.status, u.since_at, u.before_at, u.available_at, u.attempts, u.rate_limit_deferrals,
+       u.budget_deferrals, u.duration_seconds, NULL::text, u.last_heartbeat_at,
+       CASE WHEN jsonb_typeof(u.result::jsonb) = 'object' THEN
+         (CASE WHEN u.result::jsonb ? 'error_category' THEN jsonb_build_object('error_category', u.result::jsonb -> 'error_category') ELSE '{}'::jsonb END
+          || CASE WHEN u.result::jsonb ? 'retry_exhausted' THEN jsonb_build_object('retry_exhausted', u.result::jsonb -> 'retry_exhausted') ELSE '{}'::jsonb END)::text
+       END,
+       u.processor_flags::text, u.created_at, u.updated_at,
+       s.id IS NOT NULL, s.name, s.full_name, s.external_id`
+
+func scanRunUnits(rows pgx.Rows) ([]runUnit, error) {
 	defer rows.Close()
 	var units []runUnit
 	for rows.Next() {
@@ -60,6 +115,45 @@ ORDER BY u.id`, runID, orgID)
 		units = append(units, unit)
 	}
 	return units, rows.Err()
+}
+
+// runUnitRollupRows is SyncRunService.list_units for the rollups: every unit
+// of the run in id order, without the large columns.
+func (s store) runUnitRollupRows(ctx context.Context, orgID string, runID uuid.UUID) ([]runUnit, error) {
+	where, args := unitFilter{}.where(orgID, runID)
+	rows, err := s.pool.Query(ctx, "SELECT "+rollupUnitColumns+runUnitFromJoin+"\nWHERE "+where+"\nORDER BY u.id", args...)
+	if err != nil {
+		return nil, err
+	}
+	return scanRunUnits(rows)
+}
+
+// runUnitsPage reads the full rows of the filtered units in id order,
+// skipping offset and stopping after limit (nil = no stop).
+func (s store) runUnitsPage(ctx context.Context, orgID string, runID uuid.UUID, filter unitFilter, offset int64, limit *int64) ([]runUnit, error) {
+	where, args := filter.where(orgID, runID)
+	query := "SELECT " + fullUnitColumns + runUnitFromJoin + "\nWHERE " + where + "\nORDER BY u.id"
+	if limit != nil {
+		args = append(args, *limit)
+		query += fmt.Sprintf(" LIMIT $%d", len(args))
+	}
+	if offset > 0 {
+		args = append(args, offset)
+		query += fmt.Sprintf(" OFFSET $%d", len(args))
+	}
+	rows, err := s.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	return scanRunUnits(rows)
+}
+
+// countRunUnits is the number of units the filter keeps.
+func (s store) countRunUnits(ctx context.Context, orgID string, runID uuid.UUID, filter unitFilter) (int64, error) {
+	where, args := filter.where(orgID, runID)
+	var count int64
+	err := s.pool.QueryRow(ctx, "SELECT count(*) FROM sync_run_units AS u WHERE "+where, args...).Scan(&count)
+	return count, err
 }
 
 // watermarkRows is build_dataset_freshness's select: the org's watermark

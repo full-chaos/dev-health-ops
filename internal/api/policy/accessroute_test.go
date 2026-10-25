@@ -227,13 +227,13 @@ func TestImpersonationRunsForAUserToken(t *testing.T) {
 	auth := routed(t, store, &fakeValidator{result: userClaims(nil)})
 	scope := NewScope(auth, quiet())
 	header, _ := jwt.NewWithClaims(jwt.SigningMethodEdDSA, jwt.MapClaims{}).SigningString()
-	got := serve(RouteProfiles(func(*http.Request) (string, bool) { return "GET /p", true })(scope.Impersonation(echo)), http.MethodGet, "/p",
+	got := serve(RouteProfiles(func(*http.Request) (string, bool) { return "GET /p", true })(scope.Principal(scope.Impersonation(echo))), http.MethodGet, "/p",
 		map[string]string{"Authorization": "Bearer " + header + ".sig"})
 	if !strings.Contains(got.body, "imp="+target.String()) || got.header.Get("X-Impersonating") != "true" {
 		t.Fatalf("%d %s %v", got.status, got.body, got.header)
 	}
 	unrouted := NewScope(authenticator(t, store), quiet())
-	if got := serve(unrouted.Impersonation(echo), http.MethodGet, "/p", map[string]string{"Authorization": "Bearer " + header + ".sig"}); strings.Contains(got.body, "imp="+target.String()) {
+	if got := serve(unrouted.Principal(unrouted.Impersonation(echo)), http.MethodGet, "/p", map[string]string{"Authorization": "Bearer " + header + ".sig"}); strings.Contains(got.body, "imp="+target.String()) {
 		t.Fatalf("an unrouted scope ran the check for an EdDSA header: %s", got.body)
 	}
 }

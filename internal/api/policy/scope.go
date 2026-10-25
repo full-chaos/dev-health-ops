@@ -3,8 +3,6 @@ package policy
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
-	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
@@ -78,12 +76,14 @@ func ImpersonationDecided(ctx context.Context) bool {
 	return decided
 }
 
-// Scope holds the two request-wide middlewares. They run for every request
-// on the api listener, public routes and unknown paths included, exactly as
-// the Python middlewares do.
+// Scope holds the request-wide steps: Principal, then OrgScope and
+// Impersonation. They run for every request on the api listener, public
+// routes and unknown paths included, as the Python middlewares do.
 type Scope struct {
-	auth   *Authenticator
-	logger *slog.Logger
+	auth         *Authenticator
+	logger       *slog.Logger
+	rows         func(profile string) (BearerRow, bool)
+	authenticate func(ctx context.Context, token string) (*User, error)
 }
 
 // NewScope builds the middlewares over auth.
@@ -97,26 +97,26 @@ func NewScope(auth *Authenticator, logger *slog.Logger) *Scope {
 // acrInternalPrefix is the path prefix OrgIdMiddleware skips.
 const acrInternalPrefix = "/api/v1/internal/acr/"
 
-// headerAuthenticate is get_authenticated_user_from_headers: the first
-// Authorization header, a refused credential as nil, a store failure as an
-// error.
-func (s *Scope) headerAuthenticate(r *http.Request) (*User, error) {
-	values := r.Header.Values("Authorization")
-	if len(values) == 0 {
-		return nil, nil
-	}
-	token, ok := BearerToken(values[0])
+// principalFrom is the caller the Principal step decided for the request:
+// the user, nil for an anonymous or refused caller, or the store failure.
+// The scope never reads the Authorization header itself. With no decision
+// (the Principal step did not run first) it answers errNoPrincipal, so both
+// middlewares refuse the request with the generic 500: they fail closed.
+func principalFrom(r *http.Request) (*User, error) {
+	decision, ok := decisionFrom(r.Context())
 	if !ok {
+		return nil, errNoPrincipal
+	}
+	if decision.err != nil {
+		return nil, decision.err
+	}
+	if decision.user == nil {
 		return nil, nil
 	}
-	user, err := s.auth.Authenticate(r.Context(), token)
-	if err == nil {
-		return user, nil
-	}
-	if isRefusal(err) {
-		return nil, nil
-	}
-	return nil, err
+	// Each consumer gets its own copy, so a change one of them makes to the
+	// User never reaches the other one (the rule ReadOnce keeps for its
+	// reads).
+	return copyUser(decision.user), nil
 }
 
 // OrgScope is OrgIdMiddleware. With an X-Org-Id header and an authenticated
@@ -135,11 +135,11 @@ func (s *Scope) OrgScope(next http.Handler) http.Handler {
 		if values := r.Header.Values("X-Org-Id"); len(values) > 0 {
 			headerOrgID = strings.TrimFunc(Latin1(values[0]), isPySpace)
 		}
-		user, err := s.headerAuthenticate(r)
+		user, err := principalFrom(r)
 		if err != nil {
 			s.logger.ErrorContext(r.Context(), "api org scope: caller lookup failed",
 				slog.String("path", r.Pattern), slog.Bool("unavailable", isUnavailable(err)),
-				slog.String("missing_grant", MissingGrant(err)))
+				slog.String("missing_grant", MissingGrant(err)), slog.String("reason", scopeReason(err)))
 			WriteInternal(w)
 			return
 		}
@@ -227,10 +227,10 @@ func (s *Scope) Impersonation(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		user, err := s.headerAuthenticate(r)
+		user, err := principalFrom(r)
 		if err != nil {
 			s.logger.ErrorContext(r.Context(), "api impersonation: caller lookup failed",
-				slog.Bool("unavailable", isUnavailable(err)), slog.String("missing_grant", MissingGrant(err)))
+				slog.Bool("unavailable", isUnavailable(err)), slog.String("missing_grant", MissingGrant(err)), slog.String("reason", scopeReason(err)))
 			WriteInternal(w)
 			return
 		}
@@ -261,34 +261,6 @@ func (s *Scope) Impersonation(next http.Handler) http.Handler {
 		header.Add("X-Impersonated-User-Id", session.TargetUserID.String())
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
-}
-
-// maybeSuperuser is _may_be_superuser's header peek: the first
-// Authorization header's bearer token, its payload segment decoded without
-// verification, and Python truthiness of "is_superuser". It only decides
-// whether the full check runs.
-func maybeSuperuser(r *http.Request) bool {
-	values := r.Header.Values("Authorization")
-	if len(values) == 0 {
-		return false
-	}
-	token, ok := BearerToken(values[0])
-	if !ok {
-		return false
-	}
-	segments := strings.Split(token, ".")
-	if len(segments) < 2 {
-		return false
-	}
-	payload, err := base64.RawURLEncoding.DecodeString(strings.TrimRight(segments[1], "="))
-	if err != nil {
-		return false
-	}
-	var claims map[string]any
-	if err := json.Unmarshal(payload, &claims); err != nil {
-		return false
-	}
-	return pyTruthy(claims["is_superuser"])
 }
 
 // pyTruthy is bool() of a decoded JSON value.

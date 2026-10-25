@@ -61,7 +61,7 @@ func TestAdminRoutesAnswerNoStoreThroughTheRealServerChain(t *testing.T) {
 		stubRoute(http.MethodGet, modelsPath, http.StatusOK),
 		stubRoute(http.MethodPut, "/api/v1/admin/llm-settings", http.StatusNoContent),
 		stubRoute(http.MethodGet, "/api/v1/other", http.StatusOK),
-	}, scope.OrgScope)
+	}, scope.Principal, scope.OrgScope)
 
 	over := httptest.NewRequest(http.MethodPut, "/api/v1/admin/llm-settings", io.LimitReader(zeros{}, maxBodyBytes+1))
 	over.ContentLength = maxBodyBytes + 1

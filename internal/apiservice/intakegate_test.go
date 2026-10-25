@@ -51,7 +51,7 @@ func TestIntakeGateCountsEveryIdShapeOnceAheadOfScope(t *testing.T) {
 	}
 	scope := policy.NewScope(auth, quiet)
 	routes := webhookintake.Routes(webhookintake.Deps{Logger: quiet})
-	server, err := NewServerWithGate(apiTestConfig(), quiet, routes, webhookintake.NewGate(httpapi.NewMemoryCounters(nil), nil, quiet), scope.OrgScope, scope.Impersonation)
+	server, err := NewServerWithGate(apiTestConfig(), quiet, routes, webhookintake.NewGate(httpapi.NewMemoryCounters(nil), nil, quiet), scope.Layers()...)
 	if err != nil {
 		t.Fatal(err)
 	}

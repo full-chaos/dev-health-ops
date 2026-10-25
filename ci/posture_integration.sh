@@ -14,7 +14,7 @@
 # --run: "RECEIPT-HEAD <sha> clean=yes runner=<capped.sh path> sha256=<its hash>", then one "RECEIPT <pkg> PASS|FAIL <secs>s rc=<n>" per package and
 #   "RECEIPT-SUMMARY <sha> pass=<n> fail=<n>". A dirty tree or an error exits non-zero. Runs testcontainers: follow the
 #   D6363 caps (capped.sh below) and remove your own containers afterwards. The runner is fixed (no env override).
-#   --test-runner FILE is for tests only: every line is prefixed STUB-, RECEIPT-HEAD says runner=STUB, exit is 5.
+#   --test-runner FILE is for tests only: every line starts SIMULATED (SIMULATED-HEAD, SIMULATED <pkg>, SIMULATED-SUMMARY), no line says RECEIPT, exit is 5.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -88,13 +88,13 @@ status="$(git status --porcelain)" || { echo "git status failed; the tree is not
 if [ -n "${stub}" ]; then
   [ -x "${stub}" ] || { echo "test runner is not executable: ${stub}" >&2; exit 3; }
   capped="${stub}"
-  printf 'RECEIPT-HEAD %s clean=yes runner=STUB\n' "${sha}"
-  tag="STUB-"
+  printf 'SIMULATED-HEAD %s clean=yes runner=test-runner\n' "${sha}"
+  rec="SIMULATED"; sum="SIMULATED-SUMMARY"
 else
   [ -f "${capped}" ] && [ -x "${capped}" ] || { echo "runner not found: ${capped}" >&2; exit 3; }
   runner_sha="$(sha256sum "${capped}")" || { echo "cannot hash the runner ${capped}" >&2; exit 3; }
   printf 'RECEIPT-HEAD %s clean=yes runner=%s sha256=%s\n' "${sha}" "${capped}" "${runner_sha%% *}"
-  tag=""
+  rec="RECEIPT"; sum="RECEIPT-SUMMARY"
 fi
 export GOMODCACHE="${GOMODCACHE:-/var/lib/oci-cache/go-mod}" GOCACHE="${GOCACHE:-/var/lib/oci-cache/go-build}" GOTMPDIR="${GOTMPDIR:-/var/lib/oci-cache/go-tmp}"
 pass=0
@@ -106,12 +106,12 @@ for pkg in "${packages[@]}"; do
   secs=$((SECONDS - start))
   if [ "${rc}" -eq 0 ]; then
     pass=$((pass + 1))
-    printf '%sRECEIPT %s PASS %ss rc=0\n' "${tag}" "${pkg}" "${secs}"
+    printf '%s %s PASS %ss rc=0\n' "${rec}" "${pkg}" "${secs}"
   else
     fail=$((fail + 1))
-    printf '%sRECEIPT %s FAIL %ss rc=%s\n' "${tag}" "${pkg}" "${secs}" "${rc}"
+    printf '%s %s FAIL %ss rc=%s\n' "${rec}" "${pkg}" "${secs}" "${rc}"
   fi
 done
-printf '%sRECEIPT-SUMMARY %s pass=%s fail=%s\n' "${tag}" "${sha}" "${pass}" "${fail}"
+printf '%s %s pass=%s fail=%s\n' "${sum}" "${sha}" "${pass}" "${fail}"
 [ -z "${stub}" ] || { echo "a --test-runner run is not a receipt" >&2; exit 5; }
 [ "${fail}" -eq 0 ]

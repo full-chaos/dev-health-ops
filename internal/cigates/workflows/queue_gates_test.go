@@ -102,7 +102,7 @@ var queueGates = []queueGateSpec{
 		file:      "go.yml",
 		job:       "go-queue-gate",
 		condition: "always() && (github.event_name == 'pull_request' || github.event_name == 'merge_group')",
-		needs: []string{"go-storage-integration-plan", "go-storage-integration", "go-container-smoke", "go-container-security",
+		needs: []string{"go-storage-integration-plan", "go-storage-integration", "go-container-build", "go-container-smoke", "go-container-security",
 			"go-container-reproducibility", "go-container-reproducibility-self-hosted", "go-auth-compose-proof", "go-auth-web-proxy-proof",
 			"graphql-wire-parity"},
 		env: map[string]string{
@@ -121,6 +121,7 @@ var queueGates = []queueGateSpec{
 			"go-auth-compose-proof|queue-heavy|${{ needs.go-auth-compose-proof.result }}",
 			"go-auth-web-proxy-proof|queue-heavy|${{ needs.go-auth-web-proxy-proof.result }}",
 			"graphql-wire-parity|queue-heavy|${{ needs.graphql-wire-parity.result }}",
+			"go-container-build|queue-heavy|${{ needs.go-container-build.result }}",
 		},
 	},
 	{

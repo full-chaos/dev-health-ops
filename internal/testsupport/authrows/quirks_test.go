@@ -226,3 +226,48 @@ func TestOwnershipDecidesWhichLegsAQuirkIsLiveOn(t *testing.T) {
 		t.Errorf("an unknown ownership is one problem: %v", problems)
 	}
 }
+
+func TestReportNamesEachQuirkFormDistinctly(t *testing.T) {
+	table := []Quirk{
+		{ID: "r", Kind: Deliberate, Reason: "r", Table: TableUsers, Needs: []Aggregate{LocalLogin},
+			Rewrite: func(l string) (string, bool) { return strings.Replace(l, "old", "new", 1), strings.Contains(l, "old") }},
+		{ID: "e", Kind: Deliberate, Reason: "r", Table: TableUsers, Needs: []Aggregate{LocalLogin}, Max: 1,
+			Extra: func(l string) bool { return strings.HasPrefix(l, "extra") }},
+		{ID: "m", Kind: Deliberate, Reason: "r", Table: TableUsers, Needs: []Aggregate{LocalLogin}, Max: 1,
+			Missing: func(l string) bool { return strings.HasPrefix(l, "gone") }},
+	}
+	l, err := newLedger(forwarded(t, "local_login"), false, table)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if problems := l.Compare(TableUsers, "a old | gone", "a new | extra"); len(problems) != 0 {
+		t.Fatal(problems)
+	}
+	if got, want := l.Report(), "r=1 rewrite, e=1 extra, m=1 missing"; got != want {
+		t.Fatalf("Report = %q, want %q", got, want)
+	}
+}
+
+func TestAQuirkCannotBeBothMissingAndExtra(t *testing.T) {
+	both := []Quirk{{ID: "x", Kind: Deliberate, Reason: "r", Table: TableUsers, Needs: []Aggregate{LocalLogin}, Max: 1,
+		Missing: func(string) bool { return true }, Extra: func(string) bool { return true }}}
+	if problems := CheckTable(both); len(problems) == 0 || !strings.Contains(strings.Join(problems, ";"), "exactly one") {
+		t.Fatalf("a quirk setting Missing and Extra was accepted: %v", problems)
+	}
+}
+
+func TestMissingQuirkWithNoGoldenRowToCoverIsDead(t *testing.T) {
+	table := []Quirk{{ID: "m", Kind: Deliberate, Reason: "r", Table: TableUsers, Needs: []Aggregate{LocalLogin}, Max: 1,
+		Missing: func(l string) bool { return strings.HasPrefix(l, "gone") }}}
+	l, err := newLedger(forwarded(t, "local_login"), false, table)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if problems := l.Compare(TableUsers, "a", "a"); len(problems) != 0 {
+		t.Fatal(problems)
+	}
+	dead := l.Dead()
+	if len(dead) != 1 || !strings.Contains(dead[0], "m: a live missing-row quirk covered no row") {
+		t.Fatalf("Dead = %v, want the missing-row quirk reported", dead)
+	}
+}

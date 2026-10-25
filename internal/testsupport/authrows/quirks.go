@@ -264,7 +264,7 @@ func (l *Ledger) Dead() []string {
 		switch {
 		case !q.live(l.forwarded, l.owned):
 		case l.covered[q.ID] == 0:
-			problems = append(problems, fmt.Sprintf("%s: a live quirk covered no row (%s)", q.ID, q.Reason))
+			problems = append(problems, fmt.Sprintf("%s: a live %s-row quirk covered no row (%s)", q.ID, q.form(), q.Reason))
 		case q.Exact && l.covered[q.ID] != q.Max:
 			problems = append(problems, fmt.Sprintf("%s: covered %d rows, the scenario holds exactly %d (%s)", q.ID, l.covered[q.ID], q.Max, q.Reason))
 		}
@@ -281,6 +281,27 @@ func (l *Ledger) Covered() string {
 		}
 	}
 	return strings.Join(parts, " ")
+}
+
+func (q Quirk) form() string {
+	switch {
+	case q.Missing != nil:
+		return "missing"
+	case q.Extra != nil:
+		return "extra"
+	}
+	return "rewrite"
+}
+
+// Report is the rows each live quirk covered with the form of the quirk, "id=n form", comma separated.
+func (l *Ledger) Report() string {
+	var parts []string
+	for _, q := range l.table {
+		if q.live(l.forwarded, l.owned) {
+			parts = append(parts, fmt.Sprintf("%s=%d %s", q.ID, l.covered[q.ID], q.form()))
+		}
+	}
+	return strings.Join(parts, ", ")
 }
 
 // difference is the lines each side holds more often than the other, with how many more.

@@ -547,3 +547,18 @@ func TestPlanVerdictMarkdownShadowedGateAndConstantGlob(t *testing.T) {
 			extra: md, changed: []string{"README.md"}, want: "AFFECTED 1", keys: []string{"x"}},
 	})
 }
+
+// fmt.Sprintf of constants in an exec argument folds to a Markdown pattern too.
+func TestPlanReadsExecSprintfPattern(t *testing.T) {
+	for name, c := range map[string]struct{ src, want string }{
+		"sprintf_glob": {"package x\n\nimport (\n\t\"fmt\"\n\t\"os/exec\"\n)\n\nconst ext = \"md\"\n\nfunc tracked() ([]byte, error) {\n" +
+			"\treturn exec.Command(\"git\", \"ls-files\", \"--\", fmt.Sprintf(\"*.%s\", ext)).Output()\n}\n", "x\tx_fmt_test.go\t*.md\n"},
+		"sprintf_name": {"package x\n\nimport (\n\t\"fmt\"\n\t\"os/exec\"\n)\n\nfunc tracked() ([]byte, error) {\n" +
+			"\treturn exec.Command(\"git\", \"show\", fmt.Sprintf(\"%s.%s\", \"README\", \"md\")).Output()\n}\n", "x\tx_fmt_test.go\tREADME.md\n"},
+	} {
+		res := planReads(t, readsFixture(t, map[string]string{"x/x_fmt_test.go": c.src}))
+		if out := res.stdout + res.stderr; !strings.Contains(out, c.want) {
+			t.Errorf("%s: want the patterns.tsv row %q:\n%s", name, c.want, out)
+		}
+	}
+}

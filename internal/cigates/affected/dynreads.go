@@ -1710,12 +1710,12 @@ func (c *fileCtx) execEdges(x *ast.CallExpr, name string, sc *scope, line int, a
 		}
 		args = args[1:]
 	}
-	// A constant argument that names Markdown files (`*.md`, `README.md`, a constant or a + chain holding one) is a read
-	// of them whatever the program.
+	// A constant argument that names Markdown files (`*.md`, `README.md`; a named constant, a + chain or fmt.Sprintf of
+	// constants) is a read of them whatever the program.
 	for _, a := range args {
 		ast.Inspect(a, func(n ast.Node) bool {
 			switch n.(type) {
-			case *ast.BasicLit, *ast.Ident, *ast.SelectorExpr, *ast.BinaryExpr, *ast.ParenExpr:
+			case *ast.BasicLit, *ast.Ident, *ast.SelectorExpr, *ast.BinaryExpr, *ast.ParenExpr, *ast.CallExpr:
 			default:
 				return true
 			}

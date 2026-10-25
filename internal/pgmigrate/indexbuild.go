@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -26,6 +27,8 @@ const FailureStreakIndexBody = FailureStreakIndexName + ` ON public.sync_run_uni
 WHERE status IN ('success', 'failed')`
 
 const failureStreakBuildSQL = "CREATE INDEX CONCURRENTLY IF NOT EXISTS " + FailureStreakIndexBody
+
+const failureStreakDropSQL = "DROP INDEX CONCURRENTLY IF EXISTS public." + FailureStreakIndexName
 
 // IndexBuildOptions bound how long one attempt may wait for a lock and how often the build is retried.
 type IndexBuildOptions struct {
@@ -55,7 +58,7 @@ func BuildFailureStreakIndex(ctx context.Context, conn *pgx.Conn, options IndexB
 	if _, err := conn.Exec(ctx, "SET statement_timeout = 0"); err != nil {
 		return result, fmt.Errorf("set statement_timeout: %w", err)
 	}
-	if _, err := conn.Exec(ctx, fmt.Sprintf("SET lock_timeout = %d", options.LockTimeout.Milliseconds())); err != nil {
+	if _, err := conn.Exec(ctx, "SELECT set_config('lock_timeout', $1, false)", strconv.FormatInt(options.LockTimeout.Milliseconds(), 10)); err != nil {
 		return result, fmt.Errorf("set lock_timeout: %w", err)
 	}
 	var hasTable bool
@@ -90,7 +93,7 @@ func BuildFailureStreakIndex(ctx context.Context, conn *pgx.Conn, options IndexB
 		if exists {
 			// IF NOT EXISTS would skip an INVALID leftover and report success.
 			result.Action = "rebuilt"
-			if _, err := conn.Exec(ctx, "DROP INDEX CONCURRENTLY IF EXISTS public."+FailureStreakIndexName); err != nil {
+			if _, err := conn.Exec(ctx, failureStreakDropSQL); err != nil {
 				lastErr = err
 				logger.Warn("build-index: drop of the invalid index failed", "attempt", attempt, "sqlstate", sqlState(err))
 				continue

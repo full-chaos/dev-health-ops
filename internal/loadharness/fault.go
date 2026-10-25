@@ -163,12 +163,44 @@ func ApplyAssertions(r Report, targets []Target) Report {
 			}
 			add("forbid_5xx", n == 0, fmt.Sprintf("%d 5xx responses", n))
 		}
+		if t.MaxErrorRate != nil {
+			add("max_error_rate", p.ErrorRate <= *t.MaxErrorRate, fmt.Sprintf("error rate %.4f, limit %g", p.ErrorRate, *t.MaxErrorRate))
+		}
+		codes := make([]string, 0, len(t.MaxStatusCount))
+		for k := range t.MaxStatusCount {
+			codes = append(codes, k)
+		}
+		sort.Strings(codes)
+		for _, k := range codes {
+			n := p.Statuses[k]
+			add("max_status_count_"+k, n <= t.MaxStatusCount[k], fmt.Sprintf("%d responses, limit %d", n, t.MaxStatusCount[k]))
+		}
 		req := append([]int(nil), t.RequireStatus...)
 		sort.Ints(req)
 		for _, s := range req {
 			n := p.Statuses[strconv.Itoa(s)]
 			add("require_status_"+strconv.Itoa(s), n > 0, fmt.Sprintf("%d responses", n))
 		}
+	}
+	return r
+}
+
+// ApplyRequireDegrade fails the report when the fault window never degraded
+// the run, or when there is no fault window to judge.
+func ApplyRequireDegrade(r Report) Report {
+	c := AssertionCheck{Path: "fault", Name: "require_degrade"}
+	switch {
+	case r.Fault == nil:
+		c.Detail = "no fault window was given"
+	case r.Fault.TimeToDegradeMs == nil:
+		c.Detail = "the fault window never degraded the run"
+	default:
+		c.OK = true
+		c.Detail = fmt.Sprintf("degraded after %dms", *r.Fault.TimeToDegradeMs)
+	}
+	r.Assertions = append(r.Assertions, c)
+	if !c.OK {
+		r.AssertOK = false
 	}
 	return r
 }

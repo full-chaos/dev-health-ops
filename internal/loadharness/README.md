@@ -22,35 +22,42 @@ shipped.
 ## Profiles and the status each one expects
 
 Expected statuses come from `internal/auth/authapi` (login, refresh, issue,
-limits). A run that sees anything else fails with `ASSERTION FAILED` and exit 1.
+limits). Every abuse profile sets `max_error_rate` 0, so a status outside
+`expect_status` (or a transport failure) fails the run with `ASSERTION FAILED`
+and exit 1; `fault-mix` does not, because errors are expected inside a fault
+window.
 
 | Profile | Request | Must see | Hard asserts |
 |---|---|---|---|
-| `login-badcreds.json` | wrong password, new account each request | 401, then 429 at the address limit | never 200, never 5xx |
+| `login-badcreds.json` | wrong password, new account each request | 401, then 429 at the address limit (send more than 20 requests: `--rate 30 --duration 3s`); both must be seen | never 200, never 5xx |
 | `burst-limit.json` | wrong password, one account | 401 and 429 (account limit 10, address limit 20 per 15 min) | never 200, never 5xx |
 | `oversize-body.json` | login with a 2 MiB body | 413 | never 200, never 5xx |
 | `forged-credentials.json` | garbage, JWT-shaped and wrong-class bearer on `GET /v1/sessions/current` | 401 | never 200, never 5xx |
-| `refresh-replay.json` | the same refresh credential again and again | one 200, then 401 | never 5xx |
+| `refresh-replay.json` | the same refresh credential again and again | exactly one 200 (`max_status_count`), then 401; both must be seen | never 5xx |
 | `refresh-storm.json` | refresh from a credential pool | 200 or 401 | never 5xx |
 | `fault-mix.json` | JWKS, issue, refresh and bad-credential login together | see the fault table | never 200 for bad credentials, never 500 on issue or refresh |
 
-`refresh-replay`: read the exact count with
-`jq '.paths[] | select(.name=="refresh-replay") | .statuses' report.json`; the
-`200` count must be 1.
+`refresh-replay` fails when the `200` count is above 1 or when no `200` or no
+`401` is seen. The counts are in the report:
+`jq '.paths[] | select(.name=="refresh-replay") | .statuses' report.json`.
 
 ## Faults
 
 The proxy sits between a service and one dependency. Run it next to the
-service, point the service at the proxy address, and start `loadtest` and
-`faultproxy` back to back so the fault window offsets line up (skew up to one
-second; keep recovery bounds at 5 s or more).
+service and point the service at the proxy address. Start the proxy in the
+background, save its pid, then start `loadtest` straight after so the fault
+window offsets line up (skew up to one second; keep recovery bounds at 5 s or
+more). `--require-degrade` fails the run when the fault never degraded it, so a
+fault that did not reach the path cannot pass as a recovery.
 
 ```sh
 faultproxy --listen 127.0.0.1:15432 --upstream postgres:5432 --allow-host postgres \
-  --schedule 20s=blackhole,50s=pass --events fault-events.jsonl
+  --schedule 20s=blackhole,50s=pass --events fault-events.jsonl &
+PROXY_PID=$!
 loadtest --config internal/loadharness/testdata/abuse/fault-mix.json --profile normal \
   --duration 90s --fault-name postgres-blackhole --fault-on 20s --fault-off 50s \
-  --fault-max-err 0.05 --fault-sustain 3 --recover-within 30s --out report.json
+  --fault-max-err 0.05 --fault-sustain 3 --recover-within 30s --require-degrade --out report.json
+kill "$PROXY_PID"
 ```
 
 Modes: `pass`, `delay:<latency>`, `slow:<bytes per second>`, `drop` (reset),
@@ -74,21 +81,25 @@ then `curl -X POST '127.0.0.1:19000/mode?name=cut'` and
 
 ## ADR-03 access TTL (10 min against 60 min)
 
-A 10-minute access token means six times the refresh rate. Run `refresh-storm`
-at six times the normal refresh rate and compare with the objective:
+A 10-minute access token means six times the refresh rate. This run measures the
+capacity side of that choice: refresh latency and error rate at six times the
+normal refresh rate. It does not read or check the token lifetime; the TTL value
+comes from the issuer configuration.
 
 ```sh
 loadtest --config internal/loadharness/testdata/abuse/refresh-storm.json --rate 120 \
   --duration 120s --concurrency 64 --slo refresh:p95=200ms,err=0.01 --out ttl-report.json
 ```
 
-Verdict line for the record: confirms the 10-minute TTL if the SLO holds, and
-falsifies it with the first window where it does not.
+Verdict line for the record: at six times the refresh rate the refresh objective
+holds (p95 and error rate), or it first fails in the window where it does not.
+That is the load evidence for ADR-03; the TTL decision itself stays with the
+issuer settings.
 
 ## Record for the decision log
 
 One entry per run: fault or abuse profile, venue (kind or compose project
 name), offered rate and duration, `time_to_degrade_ms`, `time_to_recover_ms`,
 the status histogram per path, `unexpected_5xx`, `first_seen_ms` of the first
-429, the assertion lines, and for the TTL run the verdict line. The report
+429, the assertion lines, and for the refresh-storm run the verdict line. The report
 holds names, counts and timings only; keep it that way.

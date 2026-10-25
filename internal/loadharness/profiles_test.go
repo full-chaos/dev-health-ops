@@ -2,6 +2,7 @@ package loadharness
 
 import (
 	"context"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -171,5 +172,112 @@ func TestFaultMixHardAsserts(t *testing.T) {
 	}
 	if rep := runProfile(t, "fault-mix", serve(401, 500), 80, 500*time.Millisecond); rep.AssertOK {
 		t.Fatal("a 500 on issue passed (must fail closed with 503)")
+	}
+}
+
+func TestProfilesCarryTheReviewedRules(t *testing.T) {
+	for _, name := range []string{"login-badcreds", "burst-limit", "oversize-body", "forged-credentials", "refresh-replay", "refresh-storm"} {
+		for _, tg := range loadProfile(t, name).Targets {
+			if tg.MaxErrorRate == nil || *tg.MaxErrorRate != 0 {
+				t.Fatalf("%s/%s: an abuse profile needs max_error_rate 0", name, tg.Name)
+			}
+		}
+	}
+	for _, tg := range loadProfile(t, "fault-mix").Targets {
+		if tg.MaxErrorRate != nil {
+			t.Fatalf("fault-mix/%s: transport errors are expected inside a fault window", tg.Name)
+		}
+	}
+	login := loadProfile(t, "login-badcreds").Targets[0]
+	if !slices.Contains(login.RequireStatus, 401) || !slices.Contains(login.RequireStatus, 429) {
+		t.Fatalf("login-badcreds must require 401 and 429: %+v", login.RequireStatus)
+	}
+	replay := loadProfile(t, "refresh-replay").Targets[0]
+	if !slices.Contains(replay.RequireStatus, 200) || !slices.Contains(replay.RequireStatus, 401) || replay.MaxStatusCount["200"] != 1 {
+		t.Fatalf("refresh-replay must require 200 and 401 and allow one 200: %+v %+v", replay.RequireStatus, replay.MaxStatusCount)
+	}
+}
+
+func TestLoginBadCredsNeedsTheAddressLimit(t *testing.T) {
+	rep := runProfile(t, "login-badcreds", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(401) }, 50, 300*time.Millisecond)
+	if rep.AssertOK {
+		t.Fatalf("a run that never reached the address limit passed: %+v", rep.Paths[0].Statuses)
+	}
+	var n atomic.Int64
+	rep = runProfile(t, "login-badcreds", func(w http.ResponseWriter, r *http.Request) {
+		if n.Add(1) > 20 {
+			w.WriteHeader(429)
+			return
+		}
+		w.WriteHeader(401)
+	}, 100, 500*time.Millisecond)
+	if !rep.AssertOK {
+		t.Fatalf("%+v", rep.Assertions)
+	}
+}
+
+func TestRefreshReplayNeedsExactlyOneSuccess(t *testing.T) {
+	only401 := func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(401) }
+	if rep := runProfile(t, "refresh-replay", only401, 50, 300*time.Millisecond); rep.AssertOK {
+		t.Fatal("a replay run with no 200 at all passed")
+	}
+	every200 := func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) }
+	if rep := runProfile(t, "refresh-replay", every200, 50, 300*time.Millisecond); rep.AssertOK {
+		t.Fatal("a replayed credential accepted every time passed")
+	}
+	var n atomic.Int64
+	once := func(w http.ResponseWriter, r *http.Request) {
+		if n.Add(1) == 1 {
+			w.WriteHeader(200)
+			return
+		}
+		w.WriteHeader(401)
+	}
+	if rep := runProfile(t, "refresh-replay", once, 50, 300*time.Millisecond); !rep.AssertOK {
+		t.Fatalf("one 200 then 401 failed: %+v", rep.Assertions)
+	}
+}
+
+func TestMaxErrorRateAndStatusCountAreValidated(t *testing.T) {
+	env := func(string) string { return "x" }
+	for _, bad := range []string{
+		`"max_error_rate": 1.5`, `"max_error_rate": -0.1`, `"max_error_rate": "NaN"`,
+		`"max_status_count": {"99": 1}`, `"max_status_count": {"600": 1}`, `"max_status_count": {"abc": 1}`, `"max_status_count": {"200": -1}`,
+	} {
+		doc := `{"targets":[{"name":"a","path":"/",` + bad + `}]}`
+		if _, err := ParseConfig([]byte(doc), env); err == nil {
+			t.Fatalf("%s accepted", bad)
+		}
+	}
+	for _, v := range []float64{math.NaN(), math.Inf(1), math.Inf(-1)} {
+		if err := (Target{MaxErrorRate: &v}).validateRules(); err == nil {
+			t.Fatalf("max_error_rate %v accepted", v)
+		}
+	}
+	ok := `{"targets":[{"name":"a","path":"/","max_error_rate":0,"max_status_count":{"200":1,"599":0}}]}`
+	if _, err := ParseConfig([]byte(ok), env); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestMaxErrorRateAssertionFailsOn404(t *testing.T) {
+	rep := runOne(t, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(404) },
+		Target{ExpectStatus: []int{200}, MaxErrorRate: ptr(0.0)}, 50, 200*time.Millisecond)
+	if rep.AssertOK || rep.Assertions[0].Name != "max_error_rate" {
+		t.Fatalf("%+v", rep.Assertions)
+	}
+}
+
+func TestRequireDegrade(t *testing.T) {
+	healthy := Report{AssertOK: true, Fault: &FaultResult{Recovered: true}}
+	if ApplyRequireDegrade(healthy).AssertOK {
+		t.Fatal("a fault window that never degraded the run passed")
+	}
+	if ApplyRequireDegrade(Report{AssertOK: true}).AssertOK {
+		t.Fatal("no fault window passed")
+	}
+	got := ApplyRequireDegrade(Report{AssertOK: true, Fault: &FaultResult{TimeToDegradeMs: ptr(int64(1200))}})
+	if !got.AssertOK || got.Assertions[0].Name != "require_degrade" {
+		t.Fatalf("%+v", got)
 	}
 }

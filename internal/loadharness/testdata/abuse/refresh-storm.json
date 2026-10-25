@@ -5,7 +5,7 @@
       "name": "refresh", "method": "POST", "path": "/v1/token/refresh",
       "headers": {"Content-Type": "application/json"},
       "body": "{\"schema_version\":\"refresh-request.v1\",\"refresh_credential\":\"${POOL:AUTH_LOADTEST_REFRESH_POOL}\"}",
-      "expect_status": [200, 401], "forbid_5xx": true
+      "expect_status": [200, 401], "forbid_5xx": true, "max_error_rate": 0
     }
   ]
 }

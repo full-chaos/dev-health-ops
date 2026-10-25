@@ -194,6 +194,13 @@ completions="$(K get events --field-selector "involvedObject.name=${RELEASE}-dev
 printf 'migration Job Completed events across install and upgrade: %s\n' "${completions}"
 [ "${completions:-0}" -ge 2 ] || die "the migration hook did not run on both install and upgrade (${completions:-0})"
 K rollout status deploy/"${RELEASE}-dev-health-auth-service" --timeout=240s
+# capacity defaults: two Ready replicas, the pool bound reaches the container, and the budget allows one disruption
+ready="$(K get deploy "${RELEASE}-dev-health-auth-service" -o jsonpath='{.status.readyReplicas}')"
+[ "${ready}" = 2 ] || die "auth-service has ${ready:-0} ready replicas, want 2"
+[ "$(K get deploy "${RELEASE}-dev-health-auth-service" -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="AUTH_DATABASE_MAX_CONNS")].value}')" = 8 ] || die "AUTH_DATABASE_MAX_CONNS is not 8"
+[ "$(K get pdb "${RELEASE}-dev-health-auth-service" -o jsonpath='{.spec.minAvailable}')" = 1 ] || die "the PodDisruptionBudget does not hold minAvailable 1"
+[ "$(K get pdb "${RELEASE}-dev-health-auth-service" -o jsonpath='{.status.disruptionsAllowed}')" = 1 ] || die "the PodDisruptionBudget does not allow exactly one disruption"
+printf 'capacity defaults: 2 ready replicas, AUTH_DATABASE_MAX_CONNS=8, PodDisruptionBudget minAvailable 1 allows 1 disruption\n'
 POD="$(K get pod -l app.kubernetes.io/component=auth-service --field-selector=status.phase=Running -o jsonpath='{.items[0].metadata.name}')"
 POD_IP="$(K get pod "${POD}" -o jsonpath='{.status.podIP}')"
 printf 'pod %s ip %s\n' "${POD}" "${POD_IP}"

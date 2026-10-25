@@ -161,7 +161,7 @@ shell, no sleep binary): the native sleep action, a Kubernetes >= 1.30 feature (
 {{- if eq (upper (trim .name)) "AUTH_USERS_OWNED" }}{{- fail "goApi.extraEnv must not set AUTH_USERS_OWNED: use authService.usersOwned, which the auth-migrate and auth-grants Jobs and auth-service read too" }}{{- end }}
 {{- end }}
 {{- /* The users-owned switch moves every route that writes users to auth-service: go-api refuses to start unless the proxy aggregates that serve them are on (internal/apiservice ParseUsersOwned). */}}
-{{- if .Values.authService.usersOwned }}
+{{- if eq (include "dev-health.authBool" (dict "value" .Values.authService.usersOwned "key" "authService.usersOwned")) "true" }}
 {{- range $flag := list "sessions" "localLogin" "credentials" }}
 {{- if not (index $.Values.goApi.authProxy $flag) }}{{- fail (printf "authService.usersOwned needs goApi.authProxy.%s on: auth-service serves the routes that write users, and go-api refuses to start without the proxy" $flag) }}{{- end }}
 {{- end }}
@@ -290,7 +290,7 @@ spec:
               valueFrom: {secretKeyRef: {name: {{ include "dev-health.sessionIssueSecretName" . }}, key: {{ required "goApi.sessionIssue.secretKey is required" (default dict .Values.goApi.sessionIssue).secretKey }}}}
             {{- end }}
             {{- end }}
-            {{- if .Values.authService.usersOwned }}
+            {{- if eq (include "dev-health.authBool" (dict "value" .Values.authService.usersOwned "key" "authService.usersOwned")) "true" }}
             - name: AUTH_USERS_OWNED
               value: "true"
             {{- end }}

@@ -158,11 +158,11 @@ spec:
             - name: AUTH_SESSION_SUCCESSOR_KEY
               valueFrom: {secretKeyRef: {name: {{ $a.sessionKeys.successor.secretName | quote }}, key: {{ $a.sessionKeys.successor.secretKey | quote }}}}
           {{- end }}
-          {{- if $a.usersOwned }}
+          {{- if eq (include "dev-health.authBool" (dict "value" $a.usersOwned "key" "authService.usersOwned")) "true" }}
             - name: AUTH_USERS_OWNED
               value: "true"
           {{- end }}
-          {{- if $a.orgsOwned }}
+          {{- if eq (include "dev-health.authBool" (dict "value" $a.orgsOwned "key" "authService.orgsOwned")) "true" }}
             - name: AUTH_ORGS_OWNED
               value: "true"
           {{- end }}

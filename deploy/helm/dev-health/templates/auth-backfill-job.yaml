@@ -8,16 +8,18 @@ the same Job, and a changed input is a new Job. The roll that enables it also di
 */ -}}
 {{- $a := .Values.authService }}
 {{- $b := $a.backfill }}
-{{- if $b.enabled }}
+{{- $enabled := eq (include "dev-health.authBool" (dict "value" $b.enabled "key" "authService.backfill.enabled")) "true" }}
+{{- $dryRun := eq (include "dev-health.authBool" (dict "value" $b.dryRun "key" "authService.backfill.dryRun")) "true" }}
+{{- if $enabled }}
 {{- if not $a.enabled }}{{- fail "authService.backfill.enabled needs authService.enabled: the Job uses the auth-service database login" }}{{- end }}
 {{- if not (has (toString $b.verb) (list "users-backfill" "orgs-backfill")) }}{{- fail "authService.backfill.verb must be users-backfill or orgs-backfill" }}{{- end }}
-{{- if empty (toString $b.runId) }}{{- fail "authService.backfill.runId is required when authService.backfill.enabled: it names this run, and a new value makes a new Job" }}{{- end }}
-{{- if or (lt (int $b.batch) 1) (gt (int $b.batch) 10000) }}{{- fail "authService.backfill.batch must be 1..10000" }}{{- end }}
+{{- if or (not (kindIs "string" $b.runId)) (empty $b.runId) }}{{- fail "authService.backfill.runId is required when authService.backfill.enabled: it names this run, and a new value makes a new Job" }}{{- end }}
+{{- if not (and (has (kindOf $b.batch) (list "int" "int64" "float64")) (eq (float64 $b.batch) (floor (float64 $b.batch))) (ge (int $b.batch) 1) (le (int $b.batch) 10000)) }}{{- fail "authService.backfill.batch must be a whole number from 1 to 10000" }}{{- end }}
 {{- range $b.extraEnv }}
 {{- if has (upper (trim .name)) (list "AUTH_USERS_OWNED" "AUTH_ORGS_OWNED" "AUTH_DATABASE_URI" "AUTH_DATABASE_SCHEMA") }}{{- fail (printf "authService.backfill.extraEnv must not set %s: the chart renders it from authService (usersOwned, orgsOwned, database)" .name) }}{{- end }}
 {{- end }}
 {{- $image := include "dev-health.goApiImage" . }}
-{{- $dry := ternary "true" "false" (default false $b.dryRun) }}
+{{- $dry := ternary "true" "false" $dryRun }}
 {{- $hash := sha256sum (join "|" (list $b.verb $dry (int $b.batch) $image $b.runId)) | trunc 8 }}
 apiVersion: batch/v1
 kind: Job
@@ -47,7 +49,7 @@ spec:
             - auth
             - {{ $b.verb }}
             - {{ printf "--batch=%d" (int $b.batch) | quote }}
-            {{- if $b.dryRun }}
+            {{- if $dryRun }}
             - "--dry-run"
             {{- end }}
           env:
@@ -55,11 +57,11 @@ spec:
               valueFrom: {secretKeyRef: {name: {{ $a.database.secretName | quote }}, key: {{ $a.database.secretKey | quote }}}}
             - name: AUTH_DATABASE_SCHEMA
               value: {{ include "dev-health.authDatabaseSchema" . | quote }}
-            {{- if $a.usersOwned }}
+            {{- if eq (include "dev-health.authBool" (dict "value" $a.usersOwned "key" "authService.usersOwned")) "true" }}
             - name: AUTH_USERS_OWNED
               value: "true"
             {{- end }}
-            {{- if $a.orgsOwned }}
+            {{- if eq (include "dev-health.authBool" (dict "value" $a.orgsOwned "key" "authService.orgsOwned")) "true" }}
             - name: AUTH_ORGS_OWNED
               value: "true"
             {{- end }}

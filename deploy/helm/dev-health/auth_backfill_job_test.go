@@ -291,10 +291,28 @@ func TestAuthBackfillJobNameIsStableAndFollowsItsInputs(t *testing.T) {
 	}
 }
 
-func TestAuthBackfillJobPodLabelsAreOutsideTheAuthPolicies(t *testing.T) {
+func TestAuthBackfillJobPodIsSelectedByTheReleasePolicyAndNoAuthPolicy(t *testing.T) {
 	_, job := renderBackfill(t, backfillOn)
-	labels, _ := at(job, "spec", "template", "metadata", "labels").(map[string]any)
+	labels := map[string]string{}
+	for k, v := range at(job, "spec", "template", "metadata", "labels").(map[string]any) {
+		labels[k] = fmt.Sprint(v)
+	}
 	if labels["app.kubernetes.io/component"] != "auth-backfill" {
-		t.Errorf("component label = %v, want auth-backfill", labels["app.kubernetes.io/component"])
+		t.Fatalf("component label = %q, want auth-backfill", labels["app.kubernetes.io/component"])
+	}
+	labels["app.kubernetes.io/instance"] = "np"
+	var selecting []string
+	for _, policy := range renderNetpols(t, backfillOn...) {
+		if policy.Spec.PodSelector.selects(labels) {
+			selecting = append(selecting, policy.Metadata.Name)
+		}
+	}
+	if len(selecting) == 0 {
+		t.Fatal("no NetworkPolicy selects the Job pod: it would have no egress rule at all")
+	}
+	for _, name := range selecting {
+		if strings.Contains(name, "auth-service") || strings.Contains(name, "auth-migrate") {
+			t.Errorf("auth policy %s selects the backfill Job pod", name)
+		}
 	}
 }

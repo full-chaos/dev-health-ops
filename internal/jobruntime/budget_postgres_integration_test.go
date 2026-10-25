@@ -379,3 +379,61 @@ func TestPostgresConcurrencyBudgetProcessWorker(t *testing.T) {
 	time.Sleep(3 * time.Second)
 	lease.Release()
 }
+
+func TestPostgresConcurrencyBudgetReportsContentionOnlyOnAFullLeaseRead(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = instance.Close(context.Background()) })
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	if _, err := pool.Exec(ctx, `
+		CREATE TABLE public.worker_concurrency_leases (
+			id uuid PRIMARY KEY, budget_key varchar(320) NOT NULL,
+			job_kind varchar(96) NOT NULL, concurrency_scope varchar(16) NOT NULL,
+			organization_id uuid NULL, owner_token uuid NOT NULL UNIQUE,
+			lease_expires_at timestamptz NOT NULL, created_at timestamptz NOT NULL,
+			updated_at timestamptz NOT NULL)`); err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewPostgresConcurrencyBudget(pool, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contended := 0
+	request := BudgetRequest{
+		Kind: "system.heartbeat", ConcurrencyScope: "fleet", ConcurrencyLimit: 1,
+		OnContended: func() { contended++ },
+	}
+	held, err := store.Acquire(ctx, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if contended != 0 {
+		t.Fatalf("contention reported %d times for an uncontended acquire", contended)
+	}
+	blockedCtx, blockedCancel := context.WithTimeout(ctx, 450*time.Millisecond)
+	defer blockedCancel()
+	if _, err := store.Acquire(blockedCtx, request); err == nil {
+		t.Fatal("acquired a fleet lease while capacity was held")
+	}
+	if contended < 2 {
+		t.Fatalf("contention reported %d times across a 450 ms wait, want a call per full read", contended)
+	}
+	held.Release()
+	before := contended
+	freed, err := store.Acquire(ctx, request)
+	if err != nil {
+		t.Fatalf("acquire after release: %v", err)
+	}
+	freed.Release()
+	if contended != before {
+		t.Fatalf("contention reported after the lease was free: %d -> %d", before, contended)
+	}
+}

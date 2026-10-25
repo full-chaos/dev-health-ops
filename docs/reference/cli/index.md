@@ -2344,6 +2344,9 @@ dho migrate status --check
 # Print, read-only, what the upgrade will do to this database
 dho migrate postgres preflight
 
+# Build the failure-streak index without blocking writes (before the upgrade that carries it)
+dho migrate postgres build-index failure-streak
+
 # Show migration history
 dho migrate postgres history
 
@@ -2358,6 +2361,8 @@ dho migrate postgres heads
 `dho migrate status --check` is read-only. It exits 1 if a required migration is pending and 0 if the application schema is current. Only this flat form takes `--check`: `dho migrate postgres status` takes no flags.
 
 `dho migrate postgres preflight` is read-only and exits 0 when the database is at the head, 10 when the upgrade applies cleanly (1 with `--strict`), 1 when the upgrade needs manual work, and 3 when the measurement did not happen.
+
+`dho migrate postgres build-index failure-streak` builds `ix_sync_run_units_failure_streak` with `CREATE INDEX CONCURRENTLY`, outside the upgrade transaction, so a large `sync_run_units` keeps taking writes. Each attempt runs under `--lock-timeout` (default 5s, up to `--attempts`, default 20, `--retry-delay` apart); an invalid leftover index is dropped and rebuilt. It exits 0 only when the index is present and valid. The upgrade revision that carries the index (0159) then finds it and does nothing. The chart runs it as a pre-upgrade hook Job when `migrations.hook.streakIndex.enabled=true`.
 
 **Flat aliases:** `dho migrate current`, `heads`, `history`, `status` and `downgrade` target PostgreSQL. `dho migrate upgrade` is not an alias: it runs the full set described above.
 

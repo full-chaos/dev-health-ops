@@ -418,12 +418,27 @@ race_excluded_rows() {
   [ "${#rows[@]}" -gt 0 ] || die "ci/race_excluded_tests.tsv lists no test: nothing would be measured"
   if [ -n "${shard}" ]; then
     check_test_shard_args "${shard}" "${shard_count}"
+    census_assert_listed "$(printf '%s\n' "${rows[@]}")"
     plan="$(check_test_shard_plan "${shard}" "${shard_count}")" || exit 2
     plan_keys="$(printf '%s\n' "${plan}" | awk -F'\t' '$1 == "." { print $3 }')"
   fi
   for row in "${rows[@]}"; do
-    if [ -z "${shard}" ] || printf '%s\n' "${plan_keys}" | grep -qxF -- "${row%%$'\t'*}"; then printf '%s\n' "${row}"; fi
+    if [ -z "${shard}" ] || grep -qxF -- "${row%%$'\t'*}" <<<"${plan_keys}"; then printf '%s\n' "${row}"; fi
   done
+}
+
+# census_assert_listed ROWS: every row of ROWS names a package that `go list ./...` lists, whether or not this leg selects it. A
+# stale row, or a directory `go list` omits (testdata, no buildable file), is in no shard plan, so no shard would ever check it.
+census_assert_listed() {
+  local census_rows="$1" modpath all row package
+  modpath="$(cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -m)" || die "go list -m failed"
+  all="$(cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -mod=readonly -f '{{.ImportPath}}' ./...)" || die "go list failed"
+  while IFS= read -r row; do
+    [ -n "${row}" ] || continue
+    package="${row%%$'\t'*}"
+    grep -qxF -- "${modpath}/${package}" <<<"${all}" \
+      || die "race-excluded package ${package} is not listed by go list ./...: no test shard would check its census row"
+  done <<<"${census_rows}"
 }
 
 # census_package_partition KIND MODPATH KEYS: the import paths on stdin that are (KIND=rows) or are not (KIND=plain) packages
@@ -488,6 +503,7 @@ check_race_excluded_ran() {
   local listing json package names
   load_quality_selection
   listing="$(race_excluded_rows)" || exit 2
+  census_assert_listed "${listing}"
   json="$(mktemp "${TMPDIR:-/tmp}/dev-health-race-excluded.XXXXXX")"
   while IFS= read -r package; do
     [ -n "${package}" ] || continue
@@ -558,6 +574,7 @@ quality_filter() {
 check_test() {
   local module_dir all modpath rest rest_rows census_keys ran_heavy=0 json heavy_key
   census_keys="$(race_excluded_rows | cut -f1 | LC_ALL=C sort -u)" || exit 2
+  census_assert_listed "$(race_excluded_rows)"
   json="$(mktemp "${TMPDIR:-/tmp}/dev-health-test-json.XXXXXX")"
   for module_dir in "${MODULE_DIRS[@]}"; do
     printf 'go test: %s\n' "${module_dir}"
@@ -587,7 +604,7 @@ check_test() {
       printf 'go test (alone): %s\n' "${SERIAL_HEAVY_TEST_PACKAGE}"
       (
         cd "${ROOT}/${module_dir}"
-        if [ "${module_dir}" = "." ] && printf '%s\n' "${census_keys}" | grep -qxF -- "${heavy_key}"; then
+        if [ "${module_dir}" = "." ] && grep -qxF -- "${heavy_key}" <<<"${census_keys}"; then
           go_test_json_run "${json}" /dev/null "${SERIAL_HEAVY_TEST_PACKAGE}"
         else
           "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath "${SERIAL_HEAVY_TEST_PACKAGE}"
@@ -685,6 +702,7 @@ check_test_shard() {
   local shard="${1:-}" count="${2:-}" plan log json started wall module_dir rest rest_rows census_keys heavy_is_row listing
   check_test_shard_args "${shard}" "${count}"
   plan="$(check_test_shard_plan "${shard}" "${count}")"
+  listing="$(race_excluded_rows "${shard}" "${count}")" || exit 2
   census_keys="$(race_excluded_rows | cut -f1 | LC_ALL=C sort -u)" || exit 2
   log="$(mktemp "${TMPDIR:-/tmp}/dev-health-test-shard.XXXXXX")"
   json="$(mktemp "${TMPDIR:-/tmp}/dev-health-test-shard-json.XXXXXX")"
@@ -731,7 +749,6 @@ check_test_shard() {
       fi
     fi
   done
-  listing="$(race_excluded_rows "${shard}" "${count}")" || exit 2
   check_race_excluded_receipts "${listing}" "${json}" || { rm -f -- "${log}" "${json}"; return 1; }
   wall=$(($(date +%s) - started))
   (check_test_shard_unweighted_guard "${shard}" "${count}" "${log}") || { rm -f -- "${log}" "${json}"; return 1; }

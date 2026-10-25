@@ -132,3 +132,37 @@ func TestNoRowSkipRemains(t *testing.T) {
 		}
 	}
 }
+
+func TestMissingQuirkCountsAGoldenOnlyRowAndFailsOverAndUnderMax(t *testing.T) {
+	table := []Quirk{{ID: "gone", Kind: Deliberate, Reason: "r", Table: TableAuditLogs, Needs: []Aggregate{Credentials}, Max: 2, Exact: true,
+		Missing: func(line string) bool { return strings.HasPrefix(line, "gone") }}}
+	if problems := CheckTable(table); len(problems) > 0 {
+		t.Fatalf("a Missing quirk is well formed: %v", problems)
+	}
+	for _, c := range []struct {
+		golden string
+		want   bool
+	}{{"keep | gone1 | gone2", true}, {"keep | gone1", false}, {"keep | gone1 | gone2 | gone3", false}} {
+		l, err := newLedger(forwarded(t, "credentials"), table)
+		if err != nil {
+			t.Fatal(err)
+		}
+		problems := append(l.Compare(TableAuditLogs, c.golden, "keep"), l.Dead()...)
+		if (len(problems) == 0) != c.want {
+			t.Errorf("golden %q: problems %v, want clean=%v", c.golden, problems, c.want)
+		}
+	}
+	bad := []Quirk{
+		{ID: "m1", Kind: Deliberate, Reason: "r", Table: TableAuditLogs, Needs: []Aggregate{Credentials}, Missing: func(string) bool { return true }},
+		{ID: "m2", Kind: Deliberate, Reason: "r", Table: TableAuditLogs, Needs: []Aggregate{Credentials}, Max: 1, Missing: func(string) bool { return true },
+			Extra: func(string) bool { return true }},
+		{ID: "m3", Kind: Deliberate, Reason: "r", Table: TableAuditLogs, Needs: []Aggregate{Credentials}, Max: 1, Exact: true,
+			Rewrite: func(l string) (string, bool) { return l, true }},
+	}
+	got := strings.Join(CheckTable(bad), "\n")
+	for _, want := range []string{"m1: a missing-row quirk sets Max", "m2: exactly one", "m3: only an extra-row or missing-row quirk sets Exact"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("no problem containing %q in:\n%s", want, got)
+		}
+	}
+}

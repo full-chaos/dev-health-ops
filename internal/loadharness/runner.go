@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -18,6 +19,16 @@ type Options struct {
 	AllowHosts []string
 	Getenv     func(string) string
 	Client     *http.Client
+	Fault      *FaultWindow
+}
+
+// FaultWindow marks when the operator turns a fault on and off, as offsets
+// from the start of the run. The harness only measures; it injects nothing.
+type FaultWindow struct {
+	Name    string
+	On, Off time.Duration
+	MaxErr  float64
+	Sustain int
 }
 
 type job struct {
@@ -27,9 +38,18 @@ type job struct {
 }
 
 type acc struct {
-	lat     []time.Duration
-	errs    int
-	dropped int
+	lat       []time.Duration
+	errs      int
+	dropped   int
+	statuses  map[int]int
+	forbidden int
+	five      int
+	first     map[int]time.Duration
+}
+
+type outcome struct {
+	failed bool
+	status int
 }
 
 // Run drives the profile against the config. Requests are scheduled at a
@@ -65,27 +85,40 @@ func Run(ctx context.Context, cfg Config, opt Options) (Report, error) {
 	jobs := make(chan job, max(p.Concurrency*4, 64))
 	results := make([]acc, len(cfg.Targets))
 	var mu sync.Mutex
+	timeline := map[int]*bucketAcc{}
 
+	start := time.Now()
 	var wg sync.WaitGroup
 	for w := 0; w < p.Concurrency; w++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			for j := range jobs {
-				failed := send(ctx, client, base, cfg.Targets[j.target], j.seq, getenv)
+				tg := cfg.Targets[j.target]
+				o := send(ctx, client, base, tg, j.seq, getenv)
 				lat := time.Since(j.scheduled)
 				mu.Lock()
 				a := &results[j.target]
 				a.lat = append(a.lat, lat)
-				if failed {
+				if o.failed {
 					a.errs++
+				}
+				a.record(o.status, tg, j.scheduled.Sub(start))
+				sec := int(j.scheduled.Sub(start) / time.Second)
+				b := timeline[sec]
+				if b == nil {
+					b = &bucketAcc{}
+					timeline[sec] = b
+				}
+				b.lat = append(b.lat, lat)
+				if o.failed {
+					b.errors++
 				}
 				mu.Unlock()
 			}
 		}()
 	}
 
-	start := time.Now()
 	for i := 0; i < total && ctx.Err() == nil; i++ {
 		at := start.Add(time.Duration(i) * interval)
 		if d := time.Until(at); d > 0 {
@@ -108,24 +141,32 @@ func Run(ctx context.Context, cfg Config, opt Options) (Report, error) {
 
 	in := ReportInput{
 		Profile: p.Name, StartedAt: start, Duration: time.Since(start),
-		Rate: p.Rate, Concurrency: p.Concurrency,
+		Rate: p.Rate, Concurrency: p.Concurrency, Timeline: buildTimeline(timeline),
 	}
 	for i, t := range cfg.Targets {
-		in.Paths = append(in.Paths, PathResult{Name: t.Name, Latencies: results[i].lat, Errors: results[i].errs, Dropped: results[i].dropped})
+		r := results[i]
+		in.Paths = append(in.Paths, PathResult{Name: t.Name, Latencies: r.lat, Errors: r.errs, Dropped: r.dropped,
+			Statuses: r.statuses, Forbidden: r.forbidden, Five: r.five, FirstSeen: r.first})
 	}
-	return BuildReport(in), nil
+	rep := ApplyAssertions(BuildReport(in), cfg.Targets)
+	if f := opt.Fault; f != nil {
+		res := AnalyzeFault(rep.Timeline, f.On, f.Off, f.MaxErr, f.Sustain)
+		res.Name = f.Name
+		rep.Fault = &res
+	}
+	return rep, nil
 }
 
 // send performs one request and reports whether it failed. The error text is
 // never kept: it can carry the request URL.
-func send(ctx context.Context, c *http.Client, base string, t Target, seq int, getenv func(string) string) bool {
+func send(ctx context.Context, c *http.Client, base string, t Target, seq int, getenv func(string) string) outcome {
 	path, err := expand(t.Path, seq, getenv)
 	if err != nil {
-		return true
+		return outcome{failed: true}
 	}
 	body, err := expand(t.Body, seq, getenv)
 	if err != nil {
-		return true
+		return outcome{failed: true}
 	}
 	var rd io.Reader
 	if body != "" {
@@ -133,7 +174,7 @@ func send(ctx context.Context, c *http.Client, base string, t Target, seq int, g
 	}
 	req, err := http.NewRequestWithContext(ctx, t.Method, base+path, rd)
 	if err != nil {
-		return true
+		return outcome{failed: true}
 	}
 	for k, v := range t.Headers {
 		req.Header.Set(k, v)
@@ -143,18 +184,16 @@ func send(ctx context.Context, c *http.Client, base string, t Target, seq int, g
 	}
 	resp, err := c.Do(req)
 	if err != nil {
-		return true
+		return outcome{failed: true}
 	}
 	defer resp.Body.Close()
+	o := outcome{status: resp.StatusCode}
 	if _, err := io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20)); err != nil {
-		return true
+		o.failed = true
+		return o
 	}
-	for _, s := range t.ExpectStatus {
-		if resp.StatusCode == s {
-			return false
-		}
-	}
-	return true
+	o.failed = !slices.Contains(t.ExpectStatus, resp.StatusCode)
+	return o
 }
 
 // newClient copies a supplied client (or builds one), gives it a transport that
@@ -172,4 +211,21 @@ func newClient(supplied *http.Client) *http.Client {
 		return http.ErrUseLastResponse
 	}
 	return client
+}
+
+// record notes one completed response. Status 0 is a transport failure.
+func (a *acc) record(status int, t Target, at time.Duration) {
+	if a.statuses == nil {
+		a.statuses, a.first = map[int]int{}, map[int]time.Duration{}
+	}
+	a.statuses[status]++
+	if _, seen := a.first[status]; !seen {
+		a.first[status] = at
+	}
+	if status >= 500 && !slices.Contains(t.ExpectStatus, status) {
+		a.five++
+	}
+	if slices.Contains(t.ForbidStatus, status) {
+		a.forbidden++
+	}
 }

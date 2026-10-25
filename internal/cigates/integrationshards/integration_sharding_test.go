@@ -954,6 +954,43 @@ done
 			t.Logf("fixture output:\n%.4000s", got)
 		}
 	})
+	t.Run("go test groups do not depend on the package order", func(t *testing.T) {
+		t.Parallel()
+		files := map[string]string{}
+		for _, p := range []string{"a", "b", "c", "d"} {
+			files[p+"/plain_test.go"] = "package " + p + "\n\nimport \"testing\"\n\nfunc TestPlain" + strings.ToUpper(p) + "(t *testing.T) {}\n"
+			files[p+"/tag_test.go"] = "//go:build integration\n\npackage " + p + "\n\nimport \"testing\"\n\nfunc TestTag" + strings.ToUpper(p) + "(t *testing.T) {}\n"
+		}
+		// b's tagged name is c's plain name: b and c must sit in different groups whatever the order.
+		files["c/plain_test.go"] = "package c\n\nimport \"testing\"\n\nfunc TestTagB(t *testing.T) {}\n"
+		got := runDiscoveryFixture(t, files, `
+run_integration_packages --dry-run . fixture ./a ./b ./c ./d > one.txt
+run_integration_packages --dry-run . fixture ./d ./c ./b ./a > two.txt
+cmp -s one.txt two.txt && echo SAME || { echo DIFFERENT; diff one.txt two.txt || true; }
+`)
+		if !strings.Contains(got, "SAME\n") {
+			t.Errorf("the receipts change with the package order:\n%s", got)
+		}
+	})
+	t.Run("a package over the regex budget on its own fails by name and plans nothing", func(t *testing.T) {
+		t.Parallel()
+		var b strings.Builder
+		b.WriteString("//go:build integration\n\npackage big\n\nimport \"testing\"\n\n")
+		for i := 0; i < 800; i++ {
+			fmt.Fprintf(&b, "func TestBigAVeryLongIntegrationTestNameThatPadsTheRunRegexTowardsTheArgumentLimit%04d(t *testing.T) {}\n", i)
+		}
+		files := map[string]string{
+			"big/long_test.go":  b.String(),
+			"small/tag_test.go": "//go:build integration\n\npackage small\n\nimport \"testing\"\n\nfunc TestSmall(t *testing.T) {}\n",
+		}
+		res := discoveryHarness(t, files, "", "run_integration_packages --dry-run . fixture ./small ./big\n")
+		if res.code == 0 || !strings.Contains(res.stderr, "big") || !strings.Contains(res.stderr, "budget") {
+			t.Errorf("exit %d stderr %q: want a failure that names big and the budget", res.code, res.stderr)
+		}
+		if strings.Contains(res.stdout, "SHARD-") {
+			t.Errorf("an over-budget package still printed plan lines: %.500s", res.stdout)
+		}
+	})
 	t.Run("the integration verb plans bounded, collision-free groups on the real tree", func(t *testing.T) {
 		t.Parallel()
 		keys := sortedKeys(expectedPackages(t))

@@ -5,6 +5,9 @@ package integrationshards_test
 import (
 	"encoding/json"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -13,6 +16,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"unicode"
+	"unicode/utf8"
 )
 
 // Contracts for deterministic Go storage-integration CI sharding (ci/check_go.sh integration-shard-plan,
@@ -391,27 +396,23 @@ func providerTests(t *testing.T) (map[string]bool, map[string]bool) {
 		if res.code != 0 {
 			return
 		}
-		providerTopLevel = map[string]bool{}
-		fn := regexp.MustCompile(`(?m)^func (Test[A-Za-z0-9_]+)` + pyS + `*\(`)
-		for _, f := range strings.Split(res.stdout, "\n") {
-			if f == "" {
-				continue
-			}
-			for _, m := range fn.FindAllStringSubmatch(readText(t, filepath.Join(root, providerPackage, f)), -1) {
-				providerTopLevel[m[1]] = true
-			}
+		plain := freeSpec{dir: root, env: inheritedEnv(nil, "GOTOOLCHAIN="+pinnedGoToolchain(t), "GOWORK=off")}.run("go", "list", "-e", "-mod=readonly",
+			"-f={{range .TestGoFiles}}{{println .}}{{end}}{{range .XTestGoFiles}}{{println .}}{{end}}", "./"+providerPackage)
+		if plain.code != 0 {
+			return
 		}
-		providerIntegrationT = map[string]bool{}
-		files, _ := filepath.Glob(filepath.Join(root, providerPackage, "*_test.go"))
-		tagged := regexp.MustCompile(`(?m)^//go:build.*` + pyBefore + `integration` + pyAfter)
-		fn2 := regexp.MustCompile(`(?m)^func (Test[A-Za-z0-9_]+)`)
-		for _, f := range files {
-			src := readText(t, f)
-			if !tagged.MatchString(src) {
-				continue
-			}
-			for _, m := range fn2.FindAllStringSubmatch(src, -1) {
-				providerIntegrationT[m[1]] = true
+		inPlain := map[string]bool{}
+		for _, f := range strings.Fields(plain.stdout) {
+			inPlain[f] = true
+		}
+		providerTopLevel, providerIntegrationT = map[string]bool{}, map[string]bool{}
+		for _, f := range strings.Fields(res.stdout) {
+			tests, _ := parsedTestFuncs(t, filepath.Join(root, providerPackage, f))
+			for _, n := range tests {
+				providerTopLevel[n] = true
+				if !inPlain[f] {
+					providerIntegrationT[n] = true
+				}
 			}
 		}
 	})
@@ -419,6 +420,37 @@ func providerTests(t *testing.T) (map[string]bool, map[string]bool) {
 		t.Fatal("providersync test discovery found nothing")
 	}
 	return providerTopLevel, providerIntegrationT
+}
+
+// parsedTestFuncs parses one Go test file and returns its top-level tests (testing's rule: "Test" or "Test" plus a rune
+// that is not lower case, no receiver; TestMain aside) and the first top-level init or TestMain ("" when none).
+func parsedTestFuncs(t *testing.T, path string) ([]string, string) {
+	t.Helper()
+	file, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatalf("parse %s: %v", path, err)
+	}
+	var tests []string
+	hook := ""
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Recv != nil {
+			continue
+		}
+		name := fn.Name.Name
+		if name == "init" || name == "TestMain" {
+			if hook == "" {
+				hook = name
+			}
+			continue
+		}
+		if rest, ok := strings.CutPrefix(name, "Test"); ok {
+			if r, _ := utf8.DecodeRuneInString(rest); rest == "" || !unicode.IsLower(r) {
+				tests = append(tests, name)
+			}
+		}
+	}
+	return tests, hook
 }
 
 // taggedFacts is the oracle for the tag filter, built apart from check_go.sh: per package key, the top-level tests of
@@ -470,8 +502,6 @@ func integrationTaggedFacts(t *testing.T) taggedFacts {
 		if withTag == nil || plain == nil {
 			return
 		}
-		fn := regexp.MustCompile(`(?m)^func (Test[A-Za-z0-9_]+)` + pyS + `*\(`)
-		hookFn := regexp.MustCompile(`(?m)^func (init|TestMain)` + pyS + `*\(`)
 		taggedVal = taggedFacts{tagged: map[string]map[string]bool{}, untagged: map[string]map[string]bool{}, hook: map[string]string{}}
 		for _, k := range keys {
 			inPlain := map[string]bool{}
@@ -480,18 +510,16 @@ func integrationTaggedFacts(t *testing.T) taggedFacts {
 			}
 			taggedVal.tagged[k], taggedVal.untagged[k] = map[string]bool{}, map[string]bool{}
 			for _, f := range withTag[k] {
-				src := readText(t, filepath.Join(root, k, f))
+				tests, hook := parsedTestFuncs(t, filepath.Join(root, k, f))
 				into := taggedVal.untagged[k]
 				if !inPlain[f] {
 					into = taggedVal.tagged[k]
-					if m := hookFn.FindStringSubmatch(src); m != nil && taggedVal.hook[k] == "" {
-						taggedVal.hook[k] = k + "/" + f + " " + m[1]
+					if hook != "" && taggedVal.hook[k] == "" {
+						taggedVal.hook[k] = k + "/" + f + " " + hook
 					}
 				}
-				for _, m := range fn.FindAllStringSubmatch(src, -1) {
-					if m[1] != "TestMain" {
-						into[m[1]] = true
-					}
+				for _, n := range tests {
+					into[n] = true
 				}
 			}
 		}
@@ -607,6 +635,53 @@ func sameSet(a, b map[string]bool) bool {
 		}
 	}
 	return true
+}
+
+// discoveryFunctions are the ci/check_go.sh functions runDiscoveryFixture lifts into its harness. A name the script
+// does not define is skipped, so the same test runs against an older script.
+var discoveryFunctions = []string{
+	"die", "check_listed_test_file", "scan_listed_go_tests", "scan_go_test_paths", "gotestfuncs_bin", "go_test_name_ok",
+	"split_plain_test_files", "split_package_hook", "discover_integration_tagged_tests", "run_integration_packages",
+	"discover_daily_tests",
+}
+
+// runDiscoveryFixture writes files into a temporary module (plus the repo's ci/tools/gotestfuncs when it exists) and
+// runs body in bash with the discovery functions of ci/check_go.sh, the module as ROOT. It returns stdout.
+func runDiscoveryFixture(t *testing.T, files map[string]string, body string) string {
+	t.Helper()
+	root := rootOf(t)
+	src := readText(t, filepath.Join(root, "ci", "check_go.sh"))
+	dir := t.TempDir()
+	write := func(rel, text string) {
+		p := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("go.mod", "module fixture\n\ngo 1.22\n")
+	for rel, text := range files {
+		write(rel, text)
+	}
+	if tool, err := os.ReadFile(filepath.Join(root, "ci", "tools", "gotestfuncs", "main.go")); err == nil {
+		write("ci/tools/gotestfuncs/main.go", string(tool))
+	}
+	var b strings.Builder
+	b.WriteString("set -euo pipefail\nROOT=" + strconv.Quote(dir) + "\nGO_ENV_OFF=(env -u GOFLAGS -u GOEXPERIMENT)\nINTEGRATION_TEST_ENV=()\n")
+	b.WriteString("declare -A DAILY_INTEGRATION_TEST_NAMES=() DAILY_TEST_CLASS=()\ndeclare -a DAILY_TEST_NAMES=()\n")
+	for _, name := range discoveryFunctions {
+		if m := regexp.MustCompile(`(?ms)^` + name + `\(\) \{\n.*?^\}\n`).FindString(src); m != "" {
+			b.WriteString(m)
+		}
+	}
+	b.WriteString(body)
+	res := freeSpec{dir: dir, env: inheritedEnv(nil, "GOTOOLCHAIN="+pinnedGoToolchain(t), "GOWORK=off", "TMPDIR="+t.TempDir())}.run("bash", "-c", b.String())
+	if res.code != 0 {
+		t.Fatalf("fixture harness exit %d:\n%s%s", res.code, res.stdout, res.stderr)
+	}
+	return res.stdout
 }
 
 const mergeGroupReceipt = "CHAOS-11407 retired the receipt \"unit test re-run under -tags=integration\": the integration shards skip " +
@@ -727,6 +802,59 @@ func TestIntegrationShardScriptShape(t *testing.T) {
 			if len(runIntegrationPackagesDefects(strings.Replace(m[1], plant[0], plant[1], 1))) == 0 {
 				t.Errorf("planted defect not caught: %s", name)
 			}
+		}
+	})
+	t.Run("discovery parses Go: build constraints, Unicode names and hooks", func(t *testing.T) {
+		t.Parallel()
+		files := map[string]string{
+			"p/plain_test.go":     "package p\n\nimport \"testing\"\n\nfunc TestPlain(t *testing.T) {}\n",
+			"p/either_test.go":    "//go:build linux || integration\n\npackage p\n\nimport \"testing\"\n\nfunc TestPlainMention(t *testing.T) {}\n",
+			"p/legacy_test.go":    "// +build integration\n\npackage p\n\nimport \"testing\"\n\nfunc TestLegacyTagged(t *testing.T) {}\n",
+			"p/unicode_test.go":   "//go:build integration\n\npackage p\n\nimport \"testing\"\n\nfunc TestTaggedASCII(t *testing.T) {}\n\nfunc TestÖ(t *testing.T) {}\n",
+			"h/plain_test.go":     "package h\n\nimport \"testing\"\n\nfunc TestOrdinary(t *testing.T) {}\n",
+			"h/hook_test.go":      "//go:build integration\n\npackage h\n\nimport \"testing\"\n\nfunc /* hook comment */ init() {}\n\nfunc TestHookTagged(t *testing.T) {}\n",
+			"q/plain_test.go":     "package q\n\nimport \"testing\"\n\nfunc TestQ(t *testing.T) {}\n",
+			"q/commented_test.go": "//go:build integration\n\npackage q\n\nimport \"testing\"\n\n/*\nfunc init() {}\n*/\n\nconst src = `\nfunc TestFake(t *testing.T) {}\n`\n\nfunc TestQTagged(t *testing.T) { _ = src }\n",
+			"q/lowercase_test.go": "//go:build integration\n\npackage q\n\nimport \"testing\"\n\nfunc Testable(t *testing.T) {}\n",
+			"q/method_test.go":    "//go:build integration\n\npackage q\n\nimport \"testing\"\n\ntype s struct{}\n\nfunc (s) TestMethod(t *testing.T) {}\n",
+		}
+		got := runDiscoveryFixture(t, files, `
+run_integration_packages --dry-run . fixture ./p ./h ./q
+DAILY_INTEGRATION_PACKAGE_KEY=p DAILY_TEST_SHARD_COUNT=1
+discover_daily_tests
+for n in "${DAILY_TEST_NAMES[@]}"; do printf 'CLASS %s %s\n' "${n}" "${DAILY_TEST_CLASS[${n}]}"; done
+printf 'SPLITHOOK p [%s]\n' "${DAILY_UNFILTERED}"
+DAILY_INTEGRATION_PACKAGE_KEY=h
+discover_daily_tests
+printf 'SPLITHOOK h [%s]\n' "${DAILY_UNFILTERED}"
+`)
+		want := []string{
+			"  SHARD-TEST p TestLegacyTagged", "  SHARD-TEST p TestTaggedASCII", "  SHARD-TEST p TestÖ",
+			"  SHARD-UNFILTERED h h/hook_test.go init",
+			"  SHARD-TEST q TestQTagged",
+			"CLASS TestLegacyTagged integration", "CLASS TestPlain ordinary", "CLASS TestPlainMention ordinary",
+			"CLASS TestTaggedASCII integration", "CLASS TestÖ integration",
+			"SPLITHOOK p []", "SPLITHOOK h [h/hook_test.go init]",
+		}
+		for _, w := range want {
+			if !strings.Contains(got, w+"\n") {
+				t.Errorf("missing %q", w)
+			}
+		}
+		for _, l := range strings.Split(got, "\n") {
+			switch {
+			case l == "  SHARD-TEST p TestPlain" || l == "  SHARD-TEST p TestPlainMention":
+				t.Errorf("a test file the plain build lists runs in the shard: %q", l)
+			case strings.HasPrefix(l, "  SHARD-UNFILTERED q "):
+				t.Errorf("a hook inside a comment made q unfiltered: %q", l)
+			case strings.HasPrefix(l, "  SHARD-TEST h "):
+				t.Errorf("a package with a real hook was filtered: %q", l)
+			case strings.Contains(l, "TestFake") || strings.Contains(l, "Testable") || strings.Contains(l, "TestMethod"):
+				t.Errorf("a string, a lower-case name or a method was taken for a test: %q", l)
+			}
+		}
+		if t.Failed() {
+			t.Logf("fixture output:\n%s", got)
 		}
 	})
 	t.Run("merge_group stays a FULL go-quality plan", func(t *testing.T) {

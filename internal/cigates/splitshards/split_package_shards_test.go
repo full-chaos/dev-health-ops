@@ -4,12 +4,16 @@ package splitshards_test
 
 import (
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"testing"
+	"unicode"
+	"unicode/utf8"
 )
 
 // The packages too big for one integration job run as name-partitioned test shards (ci/go_*_test_shards.tsv). Every test
@@ -51,6 +55,37 @@ func goTestList(t *testing.T, root, pkg string) map[string]bool {
 	return out
 }
 
+// parsedTestFuncs parses one Go test file and returns its top-level tests (testing's rule: "Test" or "Test" plus a rune
+// that is not lower case, no receiver; TestMain aside) and the first top-level init or TestMain ("" when none).
+func parsedTestFuncs(t *testing.T, path string) ([]string, string) {
+	t.Helper()
+	file, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatalf("parse %s: %v", path, err)
+	}
+	var tests []string
+	hook := ""
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Recv != nil {
+			continue
+		}
+		name := fn.Name.Name
+		if name == "init" || name == "TestMain" {
+			if hook == "" {
+				hook = name
+			}
+			continue
+		}
+		if rest, ok := strings.CutPrefix(name, "Test"); ok {
+			if r, _ := utf8.DecodeRuneInString(rest); rest == "" || !unicode.IsLower(r) {
+				tests = append(tests, name)
+			}
+		}
+	}
+	return tests, hook
+}
+
 // taggedOnly is the oracle for one split package, built apart from check_go.sh: the top-level tests of the test files
 // that only the integration build lists (go list -tags=integration minus plain go list), and the first `func init` or
 // `func TestMain` of such a file ("" when none). A hook changes the process the untagged tests run in, so that package
@@ -70,21 +105,17 @@ func taggedOnly(t *testing.T, root, pkg string) (map[string]bool, string) {
 	for _, f := range files() {
 		inPlain[f] = true
 	}
-	fn := regexp.MustCompile(`(?m)^func (Test[A-Za-z0-9_]+)[ \t]*\(`)
-	hookFn := regexp.MustCompile(`(?m)^func (init|TestMain)[ \t]*\(`)
 	tagged, hook := map[string]bool{}, ""
 	for _, f := range files("-tags=integration") {
 		if inPlain[f] {
 			continue
 		}
-		src := readText(t, filepath.Join(root, pkg, f))
-		if m := hookFn.FindStringSubmatch(src); m != nil && hook == "" {
-			hook = pkg + "/" + f + " " + m[1]
+		tests, h := parsedTestFuncs(t, filepath.Join(root, pkg, f))
+		if h != "" && hook == "" {
+			hook = pkg + "/" + f + " " + h
 		}
-		for _, m := range fn.FindAllStringSubmatch(src, -1) {
-			if m[1] != "TestMain" {
-				tagged[m[1]] = true
-			}
+		for _, n := range tests {
+			tagged[n] = true
 		}
 	}
 	if len(tagged) == 0 {

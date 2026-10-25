@@ -270,9 +270,10 @@ after the weight -5 ConfigMap and Secret this Job reads, before the migrate Job.
 activeDeadlineSeconds for the prod table and pass a helm --timeout above it.
 */}}
 {{- if .Values.migrations.hook.streakIndex.enabled }}
-{{- if $localBundledPostgres }}
-{{- fail "migrations.hook.streakIndex.enabled is for an existing database: it cannot run with migrations.hook.localBundledPostgres=true" }}
-{{- end }}
+{{- /*
+With localBundledPostgres the Job runs on pre-upgrade only: the bundled database exists on an upgrade, and a fresh
+install builds the index in revision 0159 on an empty table.
+*/}}
 ---
 apiVersion: batch/v1
 kind: Job
@@ -282,7 +283,7 @@ metadata:
   labels:
     {{- include "dev-health.componentLabels" (dict "component" "migrate" "context" $) | nindent 4 }}
   annotations:
-    helm.sh/hook: {{ join "," $hookEvents }}
+    helm.sh/hook: {{ if $localBundledPostgres }}pre-upgrade{{ else }}{{ join "," $hookEvents }}{{ end }}
     helm.sh/hook-weight: "-2"
     helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
 spec:
@@ -297,6 +298,27 @@ spec:
       restartPolicy: Never
       securityContext:
         runAsNonRoot: true
+      {{- if $localBundledPostgres }}
+      initContainers:
+        - name: wait-for-postgresql
+          image: {{ .Values.postgresql.image.repository }}:{{ .Values.postgresql.image.tag }}
+          # The PostgreSQL image's own policy, never image.pullPolicy: this
+          # container runs a registry image, not the application image a local
+          # profile side-loads and marks Never.
+          imagePullPolicy: {{ .Values.postgresql.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsUser: 70
+            runAsGroup: 70
+          command:
+            - sh
+            - -ec
+            - >-
+              until pg_isready --host {{ include "dev-health.fullname" . }}-postgresql
+              --port 5432 --username {{ .Values.postgresql.credentials.user | quote }}
+              --dbname {{ .Values.postgresql.credentials.database | quote }};
+              do sleep 2; done
+      {{- end }}
       containers:
         - name: streak-index
           image: {{ $migrateImage | quote }}

@@ -47,10 +47,8 @@ func TestStreakIndexJobIsOffByDefaultAndOrderedBeforeTheMigrateJob(t *testing.T)
 	}
 }
 
-func TestStreakIndexJobRefusesTheBundledPostgresAndBadBounds(t *testing.T) {
+func TestStreakIndexJobRefusesBadBounds(t *testing.T) {
 	for name, sets := range map[string][]string{
-		"bundled postgres": {"web.enabled=false", "migrations.hook.streakIndex.enabled=true", "migrations.hook.localBundledPostgres=true",
-			"migrations.hook.events={post-install,pre-upgrade}", "postgresql.enabled=true"},
 		"lock timeout over a minute": {"web.enabled=false", "migrations.hook.streakIndex.enabled=true", "migrations.hook.streakIndex.lockTimeoutSeconds=61"},
 		"null enabled":               {"web.enabled=false", "migrations.hook.streakIndex=null"},
 	} {
@@ -63,5 +61,48 @@ func TestStreakIndexJobRefusesTheBundledPostgresAndBadBounds(t *testing.T) {
 				t.Fatalf("the refusal does not name streakIndex: %.300s", refusal)
 			}
 		})
+	}
+}
+
+// With the bundled PostgreSQL the Job runs on pre-upgrade only (a fresh install builds the index in revision 0159 on an
+// empty table), waits for the database like the migrate Job, and the flag off renders no Job.
+func TestStreakIndexJobWithBundledPostgresIsPreUpgradeOnly(t *testing.T) {
+	bundled := []string{"web.enabled=false", "migrations.hook.localBundledPostgres=true",
+		"migrations.hook.events={post-install,pre-upgrade}", "postgresql.enabled=true"}
+	jobs, _, refusal := renderJobs(t, bundled...)
+	if refusal != "" {
+		t.Fatalf("render refused: %s", refusal)
+	}
+	if _, ok := jobs["t-dev-health-streak-index"]; ok {
+		t.Fatal("the streak index Job renders with the flag off")
+	}
+	jobs, _, refusal = renderJobs(t, append(bundled, "migrations.hook.streakIndex.enabled=true")...)
+	if refusal != "" {
+		t.Fatalf("render refused: %s", refusal)
+	}
+	job, ok := jobs["t-dev-health-streak-index"]
+	if !ok {
+		t.Fatal("no streak index Job with the flag on")
+	}
+	annotations := job["metadata"].(map[string]any)["annotations"].(map[string]any)
+	if annotations["helm.sh/hook"] != "pre-upgrade" || annotations["helm.sh/hook-weight"] != "-2" {
+		t.Fatalf("hook annotations = %v, want pre-upgrade at weight -2", annotations)
+	}
+	if strings.Contains(annotations["helm.sh/hook"].(string), "post-install") {
+		t.Fatal("the streak index Job carries post-install")
+	}
+	wait := func(j map[string]any) map[string]any {
+		inits := j["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)["initContainers"].([]any)
+		if len(inits) != 1 {
+			t.Fatalf("initContainers = %d, want 1", len(inits))
+		}
+		return inits[0].(map[string]any)
+	}
+	got, want := wait(job), wait(jobs["t-dev-health-migrate"])
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("wait-for-postgresql differs from the migrate Job's:\n%v\n%v", got, want)
+	}
+	if args := stringsOf(container(t, job, "streak-index")["args"]); args[len(args)-1] != "failure-streak" {
+		t.Fatalf("args = %v", args)
 	}
 }

@@ -1195,8 +1195,8 @@ migrations:
     #    SHARE lock on sync_run_units). OFF = no such Job in the render; turn it
     #    on for the roll that carries revision 0159 on a database with a large
     #    sync_run_units. The Job fails, and so does the release before the
-    #    migrate Job, unless the index ends present and valid. Not for
-    #    localBundledPostgres. Pass a helm --timeout above activeDeadlineSeconds.
+    #    migrate Job, unless the index ends present and valid. With
+    #    localBundledPostgres the Job runs on pre-upgrade only. Pass a helm --timeout above activeDeadlineSeconds.
     streakIndex:
       enabled: false
       activeDeadlineSeconds: 3600

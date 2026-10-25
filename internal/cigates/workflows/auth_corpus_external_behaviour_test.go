@@ -455,3 +455,21 @@ func TestAuthCorpusStateFileIsPrivateFromItsFirstWrite(t *testing.T) {
 		t.Errorf("the state file mode before its chmod is %q, want 600", got)
 	}
 }
+
+// A failed run names the logs of auth-service and the provider stub, the two services whose answers the corpus
+// compares against go-api's, next to go-api's own.
+func TestAuthCorpusFailureDumpIncludesAuthServiceAndTheStub(t *testing.T) {
+	fake, out, err := runAcpLeg(t, "FAKE_SERVED=")
+	if err == nil {
+		t.Fatalf("want a failing run:\n%s", out)
+	}
+	found := false
+	for _, call := range strings.Split(fake.calls(t), "\n") {
+		if strings.Contains(call, " logs ") && strings.HasSuffix(call, " auth-service providerstub") && strings.Contains(call, "--tail=200") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("no `compose logs --tail=200 auth-service providerstub` call at failure:\n%s", fake.calls(t))
+	}
+}

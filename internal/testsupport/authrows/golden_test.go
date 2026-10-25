@@ -61,9 +61,23 @@ func acpRows(t *testing.T, golden map[string]string) map[string]string {
 		users = append(users, line)
 	}
 	out[TableUsers] = strings.Join(users, rowSeparator)
+	var refresh []string
+	for _, line := range lines(golden[TableRefreshTokens]) {
+		switch line {
+		case "alice@example.comorg-bfalse 1":
+			line = "alice@example.comorg-afalse 1"
+		case "alice@example.comorg-btrue 1":
+			line = "alice@example.comorg-atrue 2"
+		}
+		refresh = append(refresh, line)
+	}
+	out[TableRefreshTokens] = strings.Join(refresh, rowSeparator)
 	var audit []string
 	failed := 0
 	for _, line := range lines(golden[TableAuditLogs]) {
+		if strings.HasPrefix(line, "Org Balice@example.comloginsessionuser:") {
+			line = "Org A" + strings.TrimPrefix(line, "Org B")
+		}
 		if strings.Contains(line, "login_failedsession") {
 			failed++
 			line = regexp.MustCompile(`\{"email": "[^"]*"\}`).ReplaceAllString(line, "{}")
@@ -93,7 +107,7 @@ func TestQuirksCoverTheGoldenAndTheExpectedTargetRowsExactly(t *testing.T) {
 	if dead := l.Dead(); len(dead) != 0 {
 		t.Errorf("dead quirks: %v", dead)
 	}
-	want := "audit-login-failed-attempted-email-not-recorded=1 audit-login-without-organization-recorded=1 users-last-login-not-stamped=2"
+	want := "audit-login-failed-attempted-email-not-recorded=1 audit-login-without-organization-recorded=1 login-organization-chosen-without-activity=2 audit-login-organization-chosen-without-activity=2 users-last-login-not-stamped=2"
 	if got := l.Covered(); got != want {
 		t.Errorf("Covered = %q, want %q", got, want)
 	}
@@ -106,7 +120,7 @@ func TestQuirksReportARowTheGoldenDoesNotHold(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	changed := strings.Replace(acp[TableRefreshTokens], "alice@example.comorg-bfalse 1", "alice@example.comorg-bfalse 2", 1)
+	changed := strings.Replace(acp[TableRefreshTokens], "alice@example.comorg-afalse 1", "alice@example.comorg-afalse 2", 1)
 	if changed == acp[TableRefreshTokens] {
 		t.Fatal("the golden's refresh_tokens row has changed")
 	}
@@ -200,5 +214,53 @@ func TestScriptExportedValueIsTheForwardedSet(t *testing.T) {
 		if err != nil || string(out) != c.want {
 			t.Errorf("FORWARDED=(%s) exports %q (%v), want %q", c.array, out, err, c.want)
 		}
+	}
+}
+
+// The organization-choice quirks cover alice's sign-in rows and nothing else: every other organization-B row, in
+// either table, stays a difference.
+func TestOrganizationChoiceQuirksRewriteOnlyAlicesSignInRows(t *testing.T) {
+	golden := goldenRows(t)
+	for id, want := range map[string]int{"login-organization-chosen-without-activity": 2, "audit-login-organization-chosen-without-activity": 2} {
+		var quirk *Quirk
+		for i := range Quirks {
+			if Quirks[i].ID == id {
+				quirk = &Quirks[i]
+			}
+		}
+		if quirk == nil {
+			t.Fatalf("no quirk %s", id)
+		}
+		hits := 0
+		for _, line := range lines(golden[quirk.Table]) {
+			if rewritten, ok := quirk.Rewrite(line); ok {
+				hits++
+				if !strings.Contains(line, "alice@example.com") || strings.Contains(rewritten, "Org B") || strings.Contains(rewritten, "org-b") {
+					t.Errorf("%s rewrote %q to %q", id, line, rewritten)
+				}
+			}
+		}
+		if hits != want {
+			t.Errorf("%s rewrites %d golden rows, want %d", id, hits, want)
+		}
+		for _, line := range []string{
+			"ivan@example.comorg-bfalse 1", "alice@example.comorg-bfalse 2", "alice@example.comorg-dfalse 1",
+			"Org Bivan@example.comloginsessionuser:ivan@example.comUser logged in{}{}success<null>",
+			"Org Balice@example.comlogin_failedsessionuser:alice@example.comLogin failed: invalid credentials{}{}failureInvalid credentials",
+			"Org Balice@example.comloginsessionuser:alice@example.comUser logged in{}{}success<null> | Org B",
+		} {
+			if rewritten, ok := quirk.Rewrite(line); ok {
+				t.Errorf("%s rewrote %q to %q", id, line, rewritten)
+			}
+		}
+	}
+	acp := acpRows(t, golden)
+	l, err := NewLedger(forwarded(t, "sessions,local_login,social"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	extra := acp[TableRefreshTokens] + rowSeparator + "ivan@example.comorg-bfalse 1"
+	if problems := l.Compare(TableRefreshTokens, golden[TableRefreshTokens], extra); len(problems) != 1 {
+		t.Errorf("a non-alice organization-B row was classified: %v", problems)
 	}
 }

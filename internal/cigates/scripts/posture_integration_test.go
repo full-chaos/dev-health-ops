@@ -2,6 +2,7 @@ package scripts_test
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -64,7 +65,7 @@ func TestPostureIntegrationListsTheFourteenPackagesOnATrigger(t *testing.T) {
 		"internal/testsupport/domainroledb/domainroledb.go", "internal/storage/postgres/domain_authorization.go",
 		"internal/storage/postgres/posture_manifest.go", "internal/storage/postgres/role_posture_integration_test.go",
 		"internal/storage/postgres/authschema/x.go", "internal/storage/postgres/aclguard/x.go",
-		"internal/storage/roleprovision/x.go", "ci/bigboy/pg-grants-check.sh", "ci/posture_integration_packages.tsv",
+		"internal/storage/roleprovision/x.go", "ci/bigboy/pg-grants-check.sh", "ci/posture_integration_packages.tsv", "ci/posture_integration.sh",
 	}
 	for _, k := range keys { // every listed package directory is itself a trigger
 		triggers = append(triggers, k+"/anything.go")
@@ -259,5 +260,81 @@ func TestPostureIntegrationRunRefusesADirtyTree(t *testing.T) {
 	if res.code != 0 || !strings.Contains(res.stdout, "RECEIPT-HEAD "+sha+" clean=yes") ||
 		!strings.Contains(res.stdout, "RECEIPT-SUMMARY "+sha+" pass=14 fail=0") || strings.Count(res.stdout, "RECEIPT internal/") != 14 {
 		t.Fatalf("clean tree with a stub runner: exit %d stdout=%q stderr=%q", res.code, res.stdout, res.stderr)
+	}
+}
+
+func postureRepo(t *testing.T) (repo string, git func(args ...string) string) {
+	t.Helper()
+	repo = t.TempDir()
+	git = func(args ...string) string {
+		a := append([]string{"-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false"}, args...)
+		res := cmdSpec{dir: repo, env: []string{shimBasePath()}}.run("git", a...)
+		if res.code != 0 {
+			t.Fatalf("git %v: %q", args, res.stderr)
+		}
+		return strings.TrimSpace(res.stdout)
+	}
+	return repo, git
+}
+
+// A file moved out of a posture path leaves the old path out of a rename-detecting diff; the helper must still list.
+func TestPostureIntegrationListsAFileMovedOutOfAPosturePath(t *testing.T) {
+	repo, git := postureRepo(t)
+	git("init", "-q", "-b", "main")
+	for _, d := range []string{"internal/storage/postgres", "internal/storage/clickhouse"} {
+		if err := os.MkdirAll(filepath.Join(repo, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	src := filepath.Join(repo, "internal", "storage", "postgres", "posture_probe.go")
+	if err := os.WriteFile(src, []byte("package postgres\n\nvar probe = 1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	git("add", ".")
+	git("commit", "-q", "-m", "base")
+	git("update-ref", "refs/remotes/origin/main", git("rev-parse", "HEAD"))
+	git("mv", "internal/storage/postgres/posture_probe.go", "internal/storage/clickhouse/probe.go")
+	git("commit", "-q", "-m", "move out")
+	res := cmdSpec{dir: repo, env: []string{shimBasePath()}}.run("bash", filepath.Join(repoRoot(t), "ci", "posture_integration.sh"))
+	if _, pkgs := postureLines(res.stdout); res.code != 0 || len(pkgs) != 14 {
+		t.Fatalf("a file moved out of a posture path: exit %d stdout=%q, want the 14 packages", res.code, res.stdout)
+	}
+}
+
+// A git status that fails is not a clean tree: --run must exit non-zero and run nothing.
+func TestPostureIntegrationRunFailsClosedWhenGitStatusFails(t *testing.T) {
+	repo, git := postureRepo(t)
+	git("init", "-q", "-b", "main")
+	git("commit", "-q", "--allow-empty", "-m", "base")
+	git("update-ref", "refs/remotes/origin/main", git("rev-parse", "HEAD"))
+	if err := os.MkdirAll(filepath.Join(repo, "internal", "pgmigrate", "sql"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "internal", "pgmigrate", "sql", "0001_x.sql"), []byte("select 1;\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	git("add", ".")
+	git("commit", "-q", "-m", "change")
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	shim := t.TempDir()
+	body := "#!/bin/sh\nif [ \"$1\" = status ]; then exit 1; fi\nexec " + realGit + " \"$@\"\n"
+	if err := os.WriteFile(filepath.Join(shim, "git"), []byte(body), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	calls := filepath.Join(t.TempDir(), "calls")
+	stub := filepath.Join(t.TempDir(), "capped.sh")
+	if err := os.WriteFile(stub, []byte("#!/bin/sh\necho x >> "+calls+"\nexit 0\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	env := []string{"PATH=" + shim + ":" + withShims("/usr/bin:/bin:/usr/local/bin"), "POSTURE_CAPPED_SH=" + stub}
+	res := cmdSpec{dir: repo, env: env}.run("bash", filepath.Join(repoRoot(t), "ci", "posture_integration.sh"), "--run")
+	if res.code == 0 || strings.Contains(res.stdout, "clean=yes") || strings.Contains(res.stdout, "RECEIPT ") {
+		t.Fatalf("failed git status: exit %d stdout=%q, want non-zero, no clean=yes, no receipt", res.code, res.stdout)
+	}
+	if _, err := os.Stat(calls); err == nil {
+		t.Fatal("a failed git status must run no package")
 	}
 }

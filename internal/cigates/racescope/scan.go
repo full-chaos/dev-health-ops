@@ -27,7 +27,7 @@ type Row struct {
 // bannedImports start work the race detector would watch (goroutines, processes, signal handlers, sockets) or hold shared state.
 var bannedImports = map[string]bool{
 	"sync": true, "sync/atomic": true, "golang.org/x/sync/errgroup": true,
-	"os/exec": true, "os/signal": true, "C": true, "net": true, "net/http": true, "database/sql": true,
+	"os/exec": true, "os/signal": true, "C": true, "plugin": true, "net": true, "net/http": true, "database/sql": true,
 }
 
 // bannedSelectors are calls that start a goroutine or a timer goroutine without a `go` statement.
@@ -38,6 +38,16 @@ type goPackage struct {
 	Dir            string
 	GoFiles        []string
 	CgoFiles       []string
+	CFiles         []string
+	CXXFiles       []string
+	MFiles         []string
+	HFiles         []string
+	FFiles         []string
+	SFiles         []string
+	SwigFiles      []string
+	SwigCXXFiles   []string
+	SysoFiles      []string
+	Error          *struct{ Err string }
 	TestGoFiles    []string
 	XTestGoFiles   []string
 	IgnoredGoFiles []string
@@ -91,7 +101,7 @@ func goList(root string) (modpath string, pkgs map[string]*goPackage, err error)
 		return "", nil, fmt.Errorf("go list -m: %w", err)
 	}
 	modpath = strings.TrimSpace(string(out))
-	out, err = run("list", "-tags", "race", "-json", "./...")
+	out, err = run("list", "-e", "-tags", "race", "-json", "./...")
 	if err != nil {
 		return "", nil, fmt.Errorf("go list ./...: %w", err)
 	}
@@ -122,6 +132,9 @@ func scanFile(path string, names declNames) []string {
 		for _, c := range cg.List {
 			if strings.HasPrefix(c.Text, "//go:build") && strings.Contains(c.Text, "race") {
 				at(c.Pos(), "build constraint names race")
+			}
+			if strings.HasPrefix(c.Text, "//go:linkname") {
+				at(c.Pos(), "go:linkname directive: it reaches a symbol of another package the scan never reads")
 			}
 			if strings.HasPrefix(c.Text, "//export ") {
 				at(c.Pos(), "//export directive: the function is callable from C threads")
@@ -156,8 +169,17 @@ func scanFile(path string, names declNames) []string {
 				at(x.Pos(), "use of ."+x.Sel.Name)
 			}
 		case *ast.CallExpr:
-			for _, a := range x.Args {
-				if funcValue(a, names) && !pureCallees[calleeName(x)] && !isCallbackCallee(x) {
+			idx, pure := pureCallees[calleeName(x)]
+			for i, a := range x.Args {
+				switch {
+				case pure && i == idx:
+					// A pure callee runs only a function whose body is scanned: a literal, or a function of this package.
+					if id, ok := a.(*ast.Ident); !ok || !names.funcs[id.Name] {
+						if _, lit := a.(*ast.FuncLit); !lit {
+							at(a.Pos(), "function value passed to "+calleeName(x)+" is a body the scan cannot see (only a literal or a function of this package is scanned)")
+						}
+					}
+				case funcValue(a, names) && !isCallbackCallee(x):
 					at(a.Pos(), "function value passed as an argument: the callee may run it on another goroutine")
 				}
 			}
@@ -174,14 +196,14 @@ type declNames struct{ funcs, methods map[string]bool }
 // pureCallees lists the callees that run a function-valued argument synchronously, on the calling goroutine only, by their documented
 // contract. It starts empty (acp threat-model ruling, CHAOS-11413); an entry needs its reason on its line. The callback check of a
 // covered-by row never consults it: a callback that is shared by several workers may pass no function value at all.
-var pureCallees = map[string]bool{
-	"filepath.WalkDir":      true, // walks in lexical order and calls fn on the calling goroutine
-	"filepath.Walk":         true, // same contract as WalkDir
-	"sort.Slice":            true, // sorts on the calling goroutine and calls less there
-	"sort.SliceStable":      true, // same contract as sort.Slice
-	"slices.SortFunc":       true, // sorts on the calling goroutine
-	"slices.SortStableFunc": true,
-	"t.Run":                 true, // testing: runs the subtest on a new goroutine but waits for it, and only a t.Parallel (refused here) lets it overlap
+var pureCallees = map[string]int{ // callee -> index of its function-valued argument
+	"filepath.WalkDir":      1, // walks in lexical order and calls fn on the calling goroutine (documented contract)
+	"filepath.Walk":         1, // same contract as WalkDir: fn is called on the calling goroutine
+	"sort.Slice":            1, // sorts on the calling goroutine and calls less there (documented contract)
+	"sort.SliceStable":      1, // same contract as sort.Slice: less is called on the calling goroutine
+	"slices.SortFunc":       1, // sorts on the calling goroutine and calls cmp there (documented contract)
+	"slices.SortStableFunc": 1, // same contract as slices.SortFunc: cmp is called on the calling goroutine
+	"t.Run":                 1, // testing: waits for the subtest; only t.Parallel (refused here) lets it overlap its parent
 }
 
 // isCallbackCallee: the registration call of a callbackCallees function (CheckTree) hands over its callback on purpose; callbackProblems
@@ -249,6 +271,14 @@ func goFilesOf(p *goPackage, tests bool) []string {
 
 func scanPackage(p *goPackage, tests bool) []string {
 	var out []string
+	if p.Error != nil {
+		out = append(out, "go list reports an error for the package: "+strings.TrimSpace(p.Error.Err))
+	}
+	for _, group := range [][]string{p.CFiles, p.CXXFiles, p.MFiles, p.HFiles, p.FFiles, p.SFiles, p.SwigFiles, p.SwigCXXFiles, p.SysoFiles} {
+		for _, f := range group {
+			out = append(out, f+": non-Go source the scan cannot read")
+		}
+	}
 	names := declNamesOf(p, tests)
 	for _, f := range goFilesOf(p, tests) {
 		out = append(out, scanFile(filepath.Join(p.Dir, f), names)...)

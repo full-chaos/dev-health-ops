@@ -560,6 +560,7 @@ internal/teamattribution	is_primary_census_test.go
 internal/teamcreated	census_test.go
 internal/teamprovider	census_test.go
 internal/teamresolve	golden_test.go
+internal/testsupport/authrows	credentials_test.go
 internal/testsupport/authrows	golden_test.go
 internal/testsupport/authrows	responses_test.go
 internal/testsupport/chschema	contract_test.go

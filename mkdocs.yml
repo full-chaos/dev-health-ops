@@ -128,6 +128,7 @@ nav:
           - operate/plan/index.md
           - Prerequisites: operate/plan/prerequisites.md
           - Capacity and sizing: operate/plan/capacity-and-sizing.md
+          - Auth-service capacity: operate/plan/auth-service-capacity.md
       - Install:
           - operate/install/index.md
           - Local evaluation: operate/install/local-evaluation.md

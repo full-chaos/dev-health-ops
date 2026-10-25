@@ -125,3 +125,5 @@ Scale only after observing:
 - error and retry amplification.
 
 Scale the binding constraint first. When a dependency sample fails, treat capacity as unknown rather than reading a missing metric as zero usage.
+
+For auth-service, see [Auth-service capacity](auth-service-capacity.md).

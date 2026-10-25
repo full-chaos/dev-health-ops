@@ -1275,7 +1275,7 @@ func (c *fileCtx) walkFilter(lit *ast.FuncLit) (string, int) {
 				ds := chain(ifs.Cond, token.LOR)
 				for j, d := range ds {
 					if u, ok := ast.Unparen(d).(*ast.UnaryExpr); ok && u.Op == token.NOT {
-						if s := suffix(u.X); s != "" && c.allPure(ds[:j]) {
+						if s := suffix(u.X); s != "" && c.allPure(ds[:j], entry) {
 							return "*" + s, i
 						}
 					}
@@ -1288,13 +1288,13 @@ func (c *fileCtx) walkFilter(lit *ast.FuncLit) (string, int) {
 			}
 			if cs := chain(ifs.Cond, token.LAND); rest && len(body.List) > i+1 {
 				for j, d := range cs {
-					if s := suffix(d); s != "" && c.allPure(cs[:j]) {
+					if s := suffix(d); s != "" && c.allPure(cs[:j], entry) {
 						return "*" + s, i
 					}
 				}
 			}
 		}
-		if !c.preGate(st, false, errName, locals) {
+		if !c.preGate(st, false, errName, entry, locals) {
 			return "", 0
 		}
 		if a, ok := st.(*ast.AssignStmt); ok {
@@ -1325,7 +1325,7 @@ func (c *fileCtx) walkFilter(lit *ast.FuncLit) (string, int) {
 // preGate reports whether a statement before a walk callback's gate does nothing but return early for some entries:
 // pure conditions and values, locals of the callback, `return nil`, the walk's own error, or filepath.SkipDir under an
 // IsDir test (a file that returned SkipDir would skip the rest of its directory).
-func (c *fileCtx) preGate(st ast.Stmt, dir bool, errName string, locals map[string]bool) bool {
+func (c *fileCtx) preGate(st ast.Stmt, dir bool, errName, entry string, locals map[string]bool) bool {
 	switch s := st.(type) {
 	case *ast.EmptyStmt:
 		return true
@@ -1339,41 +1339,41 @@ func (c *fileCtx) preGate(st ast.Stmt, dir bool, errName string, locals map[stri
 				return false
 			}
 		}
-		return c.allPure(s.Rhs)
+		return c.allPure(s.Rhs, entry)
 	case *ast.BlockStmt:
 		for _, x := range s.List {
-			if !c.preGate(x, dir, errName, locals) {
+			if !c.preGate(x, dir, errName, entry, locals) {
 				return false
 			}
 		}
 		return true
 	case *ast.IfStmt:
-		if s.Init != nil || !c.allPure([]ast.Expr{s.Cond}) {
+		if s.Init != nil || !c.allPure([]ast.Expr{s.Cond}, entry) {
 			return false
 		}
 		inDir := dir
 		for _, cj := range chain(s.Cond, token.LAND) {
-			if call, ok := ast.Unparen(cj).(*ast.CallExpr); ok && len(call.Args) == 0 {
-				if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "IsDir" {
+			if call, ok := ast.Unparen(cj).(*ast.CallExpr); ok && entryMethod(call, entry) {
+				if sel := call.Fun.(*ast.SelectorExpr); sel.Sel.Name == "IsDir" {
 					inDir = true
 				}
 			}
 		}
-		if !c.preGate(s.Body, inDir, errName, locals) {
+		if !c.preGate(s.Body, inDir, errName, entry, locals) {
 			return false
 		}
-		return s.Else == nil || c.preGate(s.Else, dir, errName, locals)
+		return s.Else == nil || c.preGate(s.Else, dir, errName, entry, locals)
 	case *ast.SwitchStmt:
-		if s.Init != nil || (s.Tag != nil && !c.allPure([]ast.Expr{s.Tag})) {
+		if s.Init != nil || (s.Tag != nil && !c.allPure([]ast.Expr{s.Tag}, entry)) {
 			return false
 		}
 		for _, cl := range s.Body.List {
 			cc, ok := cl.(*ast.CaseClause)
-			if !ok || !c.allPure(cc.List) {
+			if !ok || !c.allPure(cc.List, entry) {
 				return false
 			}
 			for _, x := range cc.Body {
-				if !c.preGate(x, dir, errName, locals) {
+				if !c.preGate(x, dir, errName, entry, locals) {
 					return false
 				}
 			}
@@ -1399,7 +1399,7 @@ func (c *fileCtx) preGate(st ast.Stmt, dir bool, errName string, locals map[stri
 
 // allPure reports whether the expressions call nothing but string and path functions and the Name/IsDir/Type/Mode
 // methods of an entry: they read, write and keep nothing.
-func (c *fileCtx) allPure(es []ast.Expr) bool {
+func (c *fileCtx) allPure(es []ast.Expr, entry string) bool {
 	pure := true
 	for _, e := range es {
 		ast.Inspect(e, func(n ast.Node) bool {
@@ -1414,13 +1414,8 @@ func (c *fileCtx) allPure(es []ast.Expr) bool {
 					name == "path/filepath.Base" || name == "path/filepath.Ext" || name == "path/filepath.Clean" ||
 					name == "path/filepath.Dir" || name == "path/filepath.Join":
 				default:
-					sel, ok := x.Fun.(*ast.SelectorExpr)
-					if !ok || len(x.Args) != 0 || !pureMethods[sel.Sel.Name] {
+					if !entryMethod(x, entry) {
 						pure = false
-					} else if id, ok := sel.X.(*ast.Ident); ok {
-						if _, pkg := c.s.imports[id.Name]; pkg {
-							pure = false
-						}
 					}
 				}
 			}
@@ -1431,6 +1426,23 @@ func (c *fileCtx) allPure(es []ast.Expr) bool {
 }
 
 var pureMethods = map[string]bool{"Name": true, "IsDir": true, "Type": true, "Mode": true, "IsRegular": true}
+
+// entryMethod reports whether a call is a Name/IsDir/Type/Mode/IsRegular method of the walk callback's own entry
+// parameter (fs.DirEntry or os.FileInfo), or of such a call's result (entry.Mode().IsRegular()): a method of any other
+// value may read or write.
+func entryMethod(call *ast.CallExpr, entry string) bool {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok || len(call.Args) != 0 || !pureMethods[sel.Sel.Name] || entry == "" || entry == "_" {
+		return false
+	}
+	switch x := ast.Unparen(sel.X).(type) {
+	case *ast.Ident:
+		return x.Name == entry
+	case *ast.CallExpr:
+		return entryMethod(x, entry)
+	}
+	return false
+}
 
 func returnsNil(st ast.Stmt) bool {
 	r, ok := st.(*ast.ReturnStmt)

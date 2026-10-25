@@ -201,6 +201,9 @@ func TestPlanReadsBareNamesAreNotRootReads(t *testing.T) {
 		{"keep_struct_field_read_later", "func TestX(t *testing.T) {\n\tcases := []struct{ name, file string }{{\"a\", \"README.md\"}}\n\tfor _, c := range cases {\n" +
 			"\t\tt.Run(c.name, func(t *testing.T) { _, _ = os.ReadFile(c.file) })\n\t}\n}\n", 1, "p\ttest\tREADME.md"},
 		{"keep_cross_package_helper", "var text = othermod.Read(\"README.md\")\n", 1, "p\ttest\tREADME.md"},
+		{"keep_max_result", "func repoRoot() string { return \"..\" }\n\nfunc read() ([]byte, error) {\n\tname := max(\"README.md\", \"A\")\n\treturn os.ReadFile(filepath.Join(repoRoot(), name))\n}\n", 1, "p\ttest\tREADME.md"},
+		{"keep_trim_result", "func repoRoot() string { return \"..\" }\n\nfunc read() ([]byte, error) {\n\treturn os.ReadFile(filepath.Join(repoRoot(), strings.TrimSuffix(\"README.md\", \".txt\")))\n}\n", 1, "p\ttest\tREADME.md"},
+		{"keep_imported_method_with_a_local_namesake", "type local struct{}\n\nfunc (local) Read(string) {}\n\nvar r othermod.Reader\n\nvar text = r.Read(\"README.md\")\n", 1, "p\ttest\tREADME.md"},
 		{"keep_method_with_no_declaration", "type guard struct{}\n\nvar _ = guard{}.read(\"README.md\")\n", 1, "p\ttest\tREADME.md"},
 		// The fixture shapes of the README.md rows the flow drops: a changed-path list written to a file, a struct field
 		// only compared, and a path list handed to a script by the name of the file that holds it.
@@ -244,6 +247,20 @@ func importsFor(src string) string {
 	}
 	b.WriteString(")\n\n")
 	return b.String()
+}
+
+// A method named like an entry method but called on another value (here one that reads README.md) is no pure gate
+// condition: the walk records no filter.
+func TestPlanReadsWalkFilterTrustsOnlyTheEntrysMethods(t *testing.T) {
+	src := "package w\n\nimport (\n\t\"io/fs\"\n\t\"os\"\n\t\"path/filepath\"\n\t\"strings\"\n)\n\n" +
+		"type probeT struct{}\n\nfunc (probeT) IsDir() bool {\n\t_, err := os.ReadFile(\"../README.md\")\n\treturn err != nil\n}\n\nvar probe probeT\n\n" +
+		"func repoRoot() string { return \"..\" }\n\nfunc walk() error {\n\treturn filepath.WalkDir(repoRoot(), func(path string, d fs.DirEntry, err error) error {\n" +
+		"\t\tif probe.IsDir() {\n\t\t\treturn nil\n\t\t}\n\t\tif !strings.HasSuffix(path, \".go\") {\n\t\t\treturn nil\n\t\t}\n\t\t_, rerr := os.ReadFile(path)\n\t\treturn rerr\n\t})\n}\n"
+	res := planReads(t, readsFixture(t, map[string]string{"w/w_walk_test.go": src}))
+	out := res.stdout + res.stderr
+	if !strings.Contains(out, "w\tw_walk_test.go\t.\ttree\t*\n") || strings.Contains(out, "w\tw_walk_test.go\t.\ttree\t*.go") {
+		t.Fatalf("want the walk row with filter *, and none with *.go:\n%s", out)
+	}
 }
 
 // A walk whose callback returns nil for every file without a suffix, before it does anything else with a file, acts on

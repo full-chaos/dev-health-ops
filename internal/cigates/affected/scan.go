@@ -27,10 +27,9 @@ var readCalls = map[string]bool{
 	"fs.WalkDir": true, "fs.Glob": true, "fs.ReadFile": true, "fs.ReadDir": true, "fs.Sub": true, "os.OpenFile": true,
 }
 
-// nameTests are the calls that test a name against a string argument and open nothing.
+// nameTests are the calls that test a name against a string argument and return only a bool: the name opens nothing.
 var nameTests = map[string]bool{
 	"strings.HasSuffix": true, "strings.HasPrefix": true, "strings.EqualFold": true, "strings.Contains": true,
-	"strings.CutSuffix": true, "strings.CutPrefix": true, "strings.TrimSuffix": true, "strings.TrimPrefix": true,
 }
 
 // Kinds of Read: a path named or resolved (ReadPath), a read the tool cannot bound (ReadDyn), a walk of Root to Depth

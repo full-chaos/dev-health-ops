@@ -26,11 +26,12 @@ type flowGroup struct {
 	fileOf  map[*ast.File]*srcFile
 	funcs   map[string][]*ast.FuncDecl // name -> functions and methods of that name
 	callers map[string][]*ast.CallExpr // function or method name -> the calls that name it
+	types   map[string]*ast.TypeSpec   // the types the directory declares
 }
 
 func newFlowGroup(files []*srcFile) *flowGroup {
 	g := &flowGroup{files: files, parent: map[ast.Node]ast.Node{}, fileOf: map[*ast.File]*srcFile{},
-		funcs: map[string][]*ast.FuncDecl{}, callers: map[string][]*ast.CallExpr{}}
+		funcs: map[string][]*ast.FuncDecl{}, callers: map[string][]*ast.CallExpr{}, types: map[string]*ast.TypeSpec{}}
 	for _, s := range files {
 		g.fileOf[s.file] = s
 		var stack []ast.Node
@@ -46,6 +47,8 @@ func newFlowGroup(files []*srcFile) *flowGroup {
 			switch x := n.(type) {
 			case *ast.FuncDecl:
 				g.funcs[x.Name.Name] = append(g.funcs[x.Name.Name], x)
+			case *ast.TypeSpec:
+				g.types[x.Name.Name] = x
 			case *ast.CallExpr:
 				switch f := ast.Unparen(x.Fun).(type) {
 				case *ast.Ident:
@@ -80,7 +83,7 @@ var testingQuiet = map[string]bool{"Errorf": true, "Fatalf": true, "Logf": true,
 	"Skip": true, "Skipf": true, "Run": true, "Helper": true}
 
 var quietBuiltins = map[string]bool{"len": true, "cap": true, "delete": true, "print": true, "println": true, "panic": true,
-	"new": true, "make": true, "clear": true, "min": true, "max": true, "complex": true, "real": true, "imag": true, "close": true}
+	"new": true, "make": true, "clear": true, "complex": true, "real": true, "imag": true, "close": true}
 
 const flowBudget = 20000
 
@@ -259,10 +262,15 @@ func (r *flowRun) call(c *ast.CallExpr, i int, field string, mapKey bool, ret []
 			return r.expr(c, field, mapKey, ret, depth)
 		case f.Name == "string" || f.Name == "byte" || f.Name == "rune":
 			return r.expr(c, field, mapKey, ret, depth)
+		case f.Name == "min" || f.Name == "max":
+			return r.expr(c, field, mapKey, ret, depth) // the result is one of the arguments
 		case f.Name == "copy":
 			return true
 		case quietBuiltins[f.Name]:
 			return false
+		}
+		if s := r.file(c); s == nil || dotImports(s.file) {
+			return true
 		}
 		var decls []*ast.FuncDecl
 		for _, d := range r.g.funcs[f.Name] {
@@ -319,10 +327,14 @@ func (r *flowRun) pkgCall(imp, name string, c *ast.CallExpr, field string, mapKe
 
 // method follows the value into a method call: as argument i, or as the receiver (i < 0).
 func (r *flowRun) method(c *ast.CallExpr, sel *ast.SelectorExpr, i int, field string, mapKey bool, ret []flowFrame, depth int) bool {
+	// Only a receiver whose type is a type of this directory resolves to that type's method: a method of the same name
+	// on a type of another package must not stand in for it.
 	var decls []*ast.FuncDecl
-	for _, d := range r.g.funcs[sel.Sel.Name] {
-		if d.Recv != nil {
-			decls = append(decls, d)
+	if typ := r.typeName(r.typeOf(sel.X, 0)); typ != "" {
+		for _, d := range r.g.funcs[sel.Sel.Name] {
+			if d.Recv != nil && len(d.Recv.List) == 1 && r.typeName(d.Recv.List[0].Type) == typ {
+				decls = append(decls, d)
+			}
 		}
 	}
 	if len(decls) == 0 {
@@ -563,4 +575,212 @@ func (r *flowRun) use(id *ast.Ident) bool {
 		return false
 	}
 	return true
+}
+
+func dotImports(f *ast.File) bool {
+	for _, im := range f.Imports {
+		if im.Name != nil && im.Name.Name == "." {
+			return true
+		}
+	}
+	return false
+}
+
+// typeName is the directory's own type a type expression names (T or *T), "" for any other type or none.
+func (r *flowRun) typeName(t ast.Expr) string {
+	switch x := t.(type) {
+	case *ast.StarExpr:
+		return r.typeName(x.X)
+	case *ast.ParenExpr:
+		return r.typeName(x.X)
+	case *ast.IndexExpr:
+		return r.typeName(x.X)
+	case *ast.Ident:
+		if _, ok := r.g.types[x.Name]; ok {
+			return x.Name
+		}
+	}
+	return ""
+}
+
+// elem is the element type of a slice, array, map or variadic type (also through a type of the directory); nil when
+// it is not known.
+func (r *flowRun) elem(t ast.Expr) ast.Expr {
+	switch x := t.(type) {
+	case *ast.ArrayType:
+		return x.Elt
+	case *ast.MapType:
+		return x.Value
+	case *ast.Ellipsis:
+		return x.Elt
+	case *ast.Ident:
+		if s, ok := r.g.types[x.Name]; ok {
+			return r.elem(s.Type)
+		}
+	}
+	return nil
+}
+
+// typeOf is the type of an expression as far as its syntax says: a composite literal, &, new, a conversion to a type of
+// the directory, a call of a function of the directory with one result, an element of a typed slice or map, or a
+// variable whose every declaration in its scope says the same type. nil when it is not known.
+func (r *flowRun) typeOf(e ast.Expr, n int) ast.Expr {
+	if n > 8 {
+		return nil
+	}
+	switch x := e.(type) {
+	case *ast.ParenExpr:
+		return r.typeOf(x.X, n+1)
+	case *ast.CompositeLit:
+		return x.Type
+	case *ast.UnaryExpr:
+		if x.Op == token.AND {
+			return r.typeOf(x.X, n+1)
+		}
+	case *ast.StarExpr:
+		return r.typeOf(x.X, n+1)
+	case *ast.IndexExpr:
+		return r.elem(r.typeOf(x.X, n+1))
+	case *ast.CallExpr:
+		f, ok := ast.Unparen(x.Fun).(*ast.Ident)
+		if !ok {
+			return nil
+		}
+		if f.Name == "new" && len(x.Args) == 1 {
+			return x.Args[0]
+		}
+		if _, ok := r.g.types[f.Name]; ok {
+			return f
+		}
+		var result ast.Expr
+		for _, d := range r.g.funcs[f.Name] {
+			if d.Recv != nil || d.Type.Results == nil || len(d.Type.Results.List) != 1 || len(d.Type.Results.List[0].Names) > 1 {
+				return nil
+			}
+			if result != nil && r.typeName(result) != r.typeName(d.Type.Results.List[0].Type) {
+				return nil
+			}
+			result = d.Type.Results.List[0].Type
+		}
+		return result
+	case *ast.Ident:
+		return r.identType(x, n)
+	}
+	return nil
+}
+
+// resultType is the type of result j of `a, b := f(...)` where f is the directory's only function of that name; nil
+// otherwise.
+func (r *flowRun) resultType(rhs []ast.Expr, j int) ast.Expr {
+	if len(rhs) != 1 {
+		return nil
+	}
+	call, ok := rhs[0].(*ast.CallExpr)
+	if !ok {
+		return nil
+	}
+	f, ok := ast.Unparen(call.Fun).(*ast.Ident)
+	if !ok || len(r.g.funcs[f.Name]) != 1 {
+		return nil
+	}
+	d := r.g.funcs[f.Name][0]
+	if d.Recv != nil || d.Type.Results == nil {
+		return nil
+	}
+	var results []ast.Expr
+	for _, fl := range d.Type.Results.List {
+		for range max(1, len(fl.Names)) {
+			results = append(results, fl.Type)
+		}
+	}
+	if j >= len(results) {
+		return nil
+	}
+	return results[j]
+}
+
+// identType is the type every declaration of the name in its scope gives it; nil when one is unknown or they differ.
+func (r *flowRun) identType(id *ast.Ident, n int) ast.Expr {
+	var scope []ast.Node
+	for p := r.g.parent[id]; p != nil; p = r.g.parent[p] {
+		if d, ok := p.(*ast.FuncDecl); ok {
+			scope = []ast.Node{d}
+			break
+		}
+	}
+	local := scope != nil
+	if !local {
+		for _, s := range r.g.files {
+			scope = append(scope, s.file)
+		}
+	}
+	var types []ast.Expr
+	unknown := false
+	add := func(t ast.Expr) {
+		if t == nil {
+			unknown = true
+		}
+		types = append(types, t)
+	}
+	for _, sc := range scope {
+		ast.Inspect(sc, func(m ast.Node) bool {
+			switch x := m.(type) {
+			case *ast.Field:
+				for _, nm := range x.Names {
+					if nm.Name == id.Name {
+						add(x.Type)
+					}
+				}
+			case *ast.AssignStmt:
+				if x.Tok != token.DEFINE {
+					return true
+				}
+				for j, l := range x.Lhs {
+					if lid, ok := l.(*ast.Ident); ok && lid.Name == id.Name {
+						if len(x.Lhs) == len(x.Rhs) {
+							if rid, ok := x.Rhs[j].(*ast.Ident); ok && rid.Name == id.Name {
+								continue // `row := row` keeps the type of the outer row
+							}
+						}
+						if len(x.Lhs) != len(x.Rhs) {
+							add(r.resultType(x.Rhs, j))
+						} else {
+							add(r.typeOf(x.Rhs[j], n+1))
+						}
+					}
+				}
+			case *ast.ValueSpec:
+				for j, nm := range x.Names {
+					if nm.Name != id.Name {
+						continue
+					}
+					switch {
+					case x.Type != nil:
+						add(x.Type)
+					case j < len(x.Values) && len(x.Values) == len(x.Names):
+						add(r.typeOf(x.Values[j], n+1))
+					default:
+						add(nil)
+					}
+				}
+			case *ast.RangeStmt:
+				if v, ok := x.Value.(*ast.Ident); ok && v.Name == id.Name {
+					add(r.elem(r.typeOf(x.X, n+1)))
+				}
+				if k, ok := x.Key.(*ast.Ident); ok && k.Name == id.Name {
+					add(nil)
+				}
+			}
+			return true
+		})
+	}
+	if unknown || len(types) == 0 {
+		return nil
+	}
+	for _, t := range types[1:] {
+		if r.typeName(t) != r.typeName(types[0]) || r.typeName(t) == "" {
+			return nil
+		}
+	}
+	return types[0]
 }

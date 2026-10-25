@@ -43,6 +43,12 @@ func (u *unitsReader) kept(filter unitFilter) []runUnit {
 		if filter.SourceID != nil && unit.SourceID != *filter.SourceID {
 			continue
 		}
+		if filter.ErrorCategory != nil {
+			var stored map[string]any
+			if unit.Result == nil || json.Unmarshal([]byte(*unit.Result), &stored) != nil || stored["error_category"] != *filter.ErrorCategory {
+				continue
+			}
+		}
 		if filter.Since != nil && unit.BeforeAt != nil && unit.BeforeAt.Before(*filter.Since) {
 			continue
 		}
@@ -329,7 +335,7 @@ func TestRunUnitsPagedQuery(t *testing.T) {
 
 	for _, query := range []string{"?limit=1001&offset=0", "?offset=-1", "?offset=x", "?source_id=x", "?since=yesterday",
 		"?before=2026-13-01&offset=0", "?status=", "?status=failed,,failed", "?dataset_key=&offset=0", "?limit=-1&offset=0",
-		"?status=" + strings.Repeat("a", 129), "?status=failed%3BDROP", "?status=bogus&offset=0", "?offset=1000001", "?offset=99999999999999999999",
+		"?status=" + strings.Repeat("a", 129), "?status=failed%3BDROP", "?error_category=auth&offset=0", "?error_category=", "?status=bogus&offset=0", "?offset=1000001", "?offset=99999999999999999999",
 		"?status=failed,failed,failed,failed,failed,failed,failed,failed,failed,failed,failed,failed,failed"} {
 		r := reader()
 		if _, status, body := serveUnits(t, r, query, now); status != http.StatusUnprocessableEntity || r.calls["runUnits"] != 0 {
@@ -385,17 +391,79 @@ func TestRunUnitsFilterBindsEveryValue(t *testing.T) {
 	source := uuid.New()
 	since, before := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)
 	clause, args := unitFilter{Statuses: []string{"failed", "retrying"}, DatasetKey: &hostile, SourceID: &source,
-		Since: &since, Before: &before}.where("org", faultRunID)
+		ErrorCategory: &hostile, Since: &since, Before: &before}.where("org", faultRunID)
 	if !strings.HasPrefix(clause, "u.sync_run_id = $1 AND u.org_id = $2") {
 		t.Errorf("the org scope is not the first terms: %s", clause)
 	}
 	if strings.Contains(clause, hostile) || strings.Contains(clause, "DROP") || strings.Contains(clause, "failed") || strings.Contains(clause, source.String()) {
 		t.Errorf("a value reached the SQL text: %s", clause)
 	}
-	if len(args) != 7 || args[0] != faultRunID || args[1] != "org" {
-		t.Errorf("args %v, want run, org and 5 filter values", args)
+	if len(args) != 8 || args[0] != faultRunID || args[1] != "org" {
+		t.Errorf("args %v, want run, org and 6 filter values", args)
 	}
 	if bare, bareArgs := (unitFilter{}).where("org", faultRunID); bare != "u.sync_run_id = $1 AND u.org_id = $2" || len(bareArgs) != 2 {
 		t.Errorf("an empty filter changed the old scope: %s %v", bare, bareArgs)
+	}
+}
+
+// TestRunUnitsPagedExtras pins the whole-run views a paged read carries: the
+// label of every source (full name, else name, none without a source row) and
+// the min/max window of all units and of the successful ones. They never
+// follow a filter, and a read without paging does not carry them.
+func TestRunUnitsPagedExtras(t *testing.T) {
+	unsetForTest(t, "SYNC_INCREMENTAL_HEAVY_MAX_WINDOW_DAYS")
+	unsetForTest(t, "SYNC_WATERMARK_OVERLAP")
+	now := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+	day := func(d int) *time.Time { t := time.Date(2026, 5, d, 0, 0, 0, 0, time.UTC); return &t }
+	full, shortName := "org/a", "b"
+	srcA, srcB, srcGone := uuid.New(), uuid.New(), uuid.New()
+	base := runUnit{SyncRunID: faultRunID, OrgID: "org", Provider: "github", DatasetKey: "commits", CostClass: "medium",
+		Mode: "incremental", CreatedAt: now, UpdatedAt: now}
+	mk := func(status string, source uuid.UUID, has bool, since, before *time.Time) runUnit {
+		unit := base
+		unit.ID, unit.Status, unit.SourceID, unit.HasSource, unit.SinceAt, unit.BeforeAt = uuid.New(), status, source, has, since, before
+		if source == srcA {
+			unit.SourceFullName, unit.SourceName = &full, &shortName
+		} else if source == srcB {
+			unit.SourceName = &shortName
+		}
+		return unit
+	}
+	units := []runUnit{
+		mk("failed", srcA, true, day(1), day(30)),
+		mk("success", srcB, true, day(10), day(20)),
+		mk("success", srcGone, false, day(12), day(25)),
+		mk("success", srcA, true, nil, nil),
+	}
+	_, status, body := serveUnits(t, &unitsReader{faultReader: &faultReader{}, units: units}, "?offset=0&limit=1&status=success", now)
+	if status != http.StatusOK {
+		t.Fatalf("paged: %d %s", status, body)
+	}
+	for _, want := range []string{
+		`"source_names":{"` + srcA.String() + `":"org/a","` + srcB.String() + `":"b"}`,
+		`"requested_window":{"since_at":"2026-05-01T00:00:00Z","before_at":"2026-05-30T00:00:00Z"}`,
+		`"covered_window":{"since_at":"2026-05-10T00:00:00Z","before_at":"2026-05-25T00:00:00Z"}`,
+		`"filtered_unit_count":3`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("paged body lacks %s", want)
+		}
+	}
+	if names := body[strings.Index(body, `"source_names":`):]; strings.Contains(names[:strings.Index(names, "}")], srcGone.String()) {
+		t.Errorf("a source without a source row got a name: %s", body)
+	}
+	_, status, body = serveUnits(t, &unitsReader{faultReader: &faultReader{}, units: units[:1]}, "?offset=0", now)
+	if status != http.StatusOK || !strings.Contains(body, `"covered_window":{"since_at":null,"before_at":null}`) {
+		t.Errorf("no successful unit: %d %s", status, body)
+	}
+	_, status, body = serveUnits(t, &unitsReader{faultReader: &faultReader{}, units: units}, "", now)
+	if status != http.StatusOK || strings.Contains(body, "source_names") || strings.Contains(body, "requested_window") || strings.Contains(body, "covered_window") {
+		t.Errorf("a read without paging carries the paged views: %d", status)
+	}
+	waiting := `{"error_category":"provider_budget_contention"}`
+	units[1].Result = &waiting
+	_, status, body = serveUnits(t, &unitsReader{faultReader: &faultReader{}, units: units}, "?error_category=provider_budget_contention&offset=0", now)
+	if status != http.StatusOK || !strings.Contains(body, `"filtered_unit_count":1`) {
+		t.Errorf("error_category filter: %d", status)
 	}
 }

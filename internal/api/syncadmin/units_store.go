@@ -36,6 +36,8 @@ type unitFilter struct {
 	Statuses   []string
 	DatasetKey *string
 	SourceID   *uuid.UUID
+	// ErrorCategory keeps units whose stored result carries that error_category.
+	ErrorCategory *string
 	// Since keeps units that do not end before it; Before keeps units that
 	// do not start after it (a unit with no bound on that side is kept).
 	Since, Before *time.Time
@@ -59,6 +61,9 @@ func (f unitFilter) where(orgID string, runID uuid.UUID) (string, []any) {
 	}
 	if f.SourceID != nil {
 		add("u.source_id = $%d", *f.SourceID)
+	}
+	if f.ErrorCategory != nil {
+		add("u.result::jsonb ->> 'error_category' = $%d", *f.ErrorCategory)
 	}
 	if f.Since != nil {
 		add("(u.before_at IS NULL OR u.before_at >= $%d)", *f.Since)

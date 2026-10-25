@@ -142,6 +142,10 @@ func (h *handlers) getRunUnits(w http.ResponseWriter, r *http.Request) {
 	out := summarizeInModelOrder(summary)
 	if query.paged {
 		out.Set("filtered_unit_count", pyjson.IntOf(filteredTotal))
+		names, requested, covered := runUnitExtras(units)
+		out.Set("source_names", names)
+		out.Set("requested_window", requested)
+		out.Set("covered_window", covered)
 	}
 	policy.WriteModel(w, http.StatusOK, out, nil)
 }
@@ -577,4 +581,49 @@ func summarizeInModelOrder(values *pyjson.Object) *pyjson.Object {
 		out.Set(key, value)
 	}
 	return out
+}
+
+// runUnitExtras are the whole-run views the page cannot rebuild from one page
+// of units: the label of every source (full name, else name; none when the
+// source row is gone) and the extent (min since_at, max before_at) of all
+// units and of the successful ones.
+func runUnitExtras(units []decodedUnit) (names, requested, covered *pyjson.Object) {
+	names = pyjson.NewObject()
+	var allSince, allBefore, okSince, okBefore *time.Time
+	earlier := func(current, candidate *time.Time) *time.Time {
+		if candidate != nil && (current == nil || candidate.Before(*current)) {
+			return candidate
+		}
+		return current
+	}
+	later := func(current, candidate *time.Time) *time.Time {
+		if candidate != nil && (current == nil || candidate.After(*current)) {
+			return candidate
+		}
+		return current
+	}
+	seen := map[string]bool{}
+	for _, unit := range units {
+		if id := unit.SourceID.String(); !seen[id] {
+			seen[id] = true
+			switch {
+			case !unit.HasSource:
+			case unit.SourceFullName != nil:
+				names.Set(id, *unit.SourceFullName)
+			case unit.SourceName != nil:
+				names.Set(id, *unit.SourceName)
+			}
+		}
+		allSince, allBefore = earlier(allSince, unit.SinceAt), later(allBefore, unit.BeforeAt)
+		if unit.Status == "success" {
+			okSince, okBefore = earlier(okSince, unit.SinceAt), later(okBefore, unit.BeforeAt)
+		}
+	}
+	window := func(since, before *time.Time) *pyjson.Object {
+		out := pyjson.NewObject()
+		out.Set("since_at", pyTimeOrNone(since))
+		out.Set("before_at", pyTimeOrNone(before))
+		return out
+	}
+	return names, window(allSince, allBefore), window(okSince, okBefore)
 }

@@ -2,6 +2,7 @@ package authapi
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -131,7 +132,7 @@ func TestCompatLoginRefusesBeforeTheCredentialCheckWhenSignerUnavailable(t *test
 		{"wrong password", nil, func(f *compatFixture) *httptest.ResponseRecorder {
 			return f.do(http.MethodPost, PatternCompatLogin, loginBody(compatEmail, "wrong", ""), nil)
 		}, http.StatusUnauthorized},
-		{"locked", func(f *compatFixture) { f.attempts.locked, f.attempts.remaining = true, 900 * time.Second }, good, http.StatusTooManyRequests},
+		{"locked", func(f *compatFixture) { f.attempts.locked, f.attempts.remaining = true, 900*time.Second }, good, http.StatusTooManyRequests},
 		{"email unverified", func(f *compatFixture) {
 			provider := "local"
 			user := f.loginUsers.byEmail[compatEmail]
@@ -171,8 +172,10 @@ func TestSocialLoginRefusesBeforeTheExchangeWhenSignerUnavailable(t *testing.T) 
 		program func(*compatFixture, *fakeSocial)
 		healthy int
 	}{
-		"accepted": {func(f *compatFixture, fake *fakeSocial) { fake.result = social.ExchangeResult{PrincipalID: f.principal} }, http.StatusOK},
-		"refused":  {func(_ *compatFixture, fake *fakeSocial) { fake.err = social.ErrProviderRefused }, http.StatusUnauthorized},
+		"accepted": {func(f *compatFixture, fake *fakeSocial) {
+			fake.result = social.ExchangeResult{PrincipalID: f.principal}
+		}, http.StatusOK},
+		"refused": {func(_ *compatFixture, fake *fakeSocial) { fake.err = social.ErrProviderRefused }, http.StatusUnauthorized},
 	} {
 		t.Run(name, func(t *testing.T) {
 			fakes := map[*compatFixture]*fakeSocial{}
@@ -279,6 +282,33 @@ func TestSSOSessionIssueRefusesBeforeTheSessionWriteWhenSignerUnavailable(t *tes
 	expectGoAPIUnavailable(t, w)
 	if n := compatWrites(f); n != 0 || signer.signs.Load() != 0 {
 		t.Fatalf("%d writes, %d signs before the token could be signed", n, signer.signs.Load())
+	}
+}
+
+// The SSO adapters' Preflight is the issuer's: nil under hs256, an
+// unavailable mark under an EdDSA signer that cannot sign.
+func TestSSOAdaptersPreflightIsTheIssuers(t *testing.T) {
+	if textAuthUnavailable != sessionissue.UnavailableText {
+		t.Fatalf("textAuthUnavailable %q is not go-api's %q", textAuthUnavailable, sessionissue.UnavailableText)
+	}
+	hs := newCompatFixture(t).ssoSessions(t)
+	if err := hs.OIDC().Preflight(context.Background()); err != nil {
+		t.Fatalf("hs256 OIDC preflight: %v", err)
+	}
+	if err := hs.SAML().Preflight(context.Background()); err != nil {
+		t.Fatalf("hs256 SAML preflight: %v", err)
+	}
+	f := onEdDSA(t, newCompatFixture(t), unreadableKeySigner(t))
+	sessions := f.ssoSessions(t)
+	if err := sessions.OIDC().Preflight(context.Background()); !errors.Is(err, oidc.ErrSessionUnavailable) {
+		t.Fatalf("OIDC preflight %v, want oidc.ErrSessionUnavailable", err)
+	}
+	if err := sessions.SAML().Preflight(context.Background()); err == nil {
+		t.Fatal("SAML preflight passed while the signer cannot sign")
+	}
+	_, err := sessions.OIDC().Issue(context.Background(), oidc.SessionRequest{PrincipalID: f.principal, OrgID: &f.org, Role: "owner"})
+	if !errors.Is(err, oidc.ErrSessionUnavailable) {
+		t.Fatalf("OIDC issue %v, want oidc.ErrSessionUnavailable", err)
 	}
 }
 

@@ -335,6 +335,9 @@ func (s *Service) callbackOAuth(ctx context.Context, admitted StoredProvider, in
 	if cookie == "" || !constantTimeEqual(hashLoginNonce(cookie), state.NonceHash) {
 		return Login{}, clear, oauthFailure(ReasonMalformed, "oauth_state_invalid", errors.New("login nonce cookie missing or wrong"))
 	}
+	if err := s.cfg.Sessions.Preflight(ctx); err != nil {
+		return Login{}, nil, unavailable(err)
+	}
 	consumed, err := s.cfg.Flows.Consume(ctx, flowHash(state.ID), protocolOAuth, row.ID, now)
 	if err != nil {
 		return Login{}, clear, internal(ReasonStoreUnavailable, err)

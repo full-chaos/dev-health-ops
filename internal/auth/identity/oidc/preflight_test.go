@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -86,6 +87,28 @@ func (env *unitEnv) sealedCallback(t *testing.T, c routeCase, row storedRow) fun
 		req.Header.Set("Content-Type", "application/json")
 		req.AddCookie(&http.Cookie{Name: name, Value: "cookie-1"})
 		return req
+	}
+}
+
+// unavailableIssue is a SessionIssuer whose Issue cannot mint now.
+type unavailableIssue struct{ stubSessions }
+
+func (unavailableIssue) Issue(context.Context, SessionRequest) (Tokens, error) {
+	return Tokens{}, fmt.Errorf("%w: signer", ErrSessionUnavailable)
+}
+
+// An Issue that reports ErrSessionUnavailable answers go-api's 503, not 500.
+func TestResolveAnswers503WhenTheSessionCannotBeIssuedNow(t *testing.T) {
+	svc := &Service{cfg: Config{Identities: &resolveIdentities{principal: Principal{ID: uuid.New(), Active: true}},
+		Memberships: resolveMembers{found: true, role: "admin"}, Sessions: unavailableIssue{}}}
+	_, failure := svc.resolve(context.Background(), Provider{ID: uuid.New(), OrgID: uuid.New(), Protocol: "oidc"},
+		validated{profile: profile{Email: "p@example.com", EmailVerified: true}}, nil)
+	if failure == nil || failure.Status != http.StatusServiceUnavailable || failure.Reason != ReasonDependency ||
+		!reflect.DeepEqual(failure.Detail, map[string]any{"message": sessionissue.UnavailableText}) {
+		t.Fatalf("failure %+v, want go-api's 503", failure)
+	}
+	if UnavailableText != sessionissue.UnavailableText {
+		t.Fatalf("UnavailableText %q is not go-api's %q", UnavailableText, sessionissue.UnavailableText)
 	}
 }
 

@@ -47,6 +47,12 @@ func (g *gatedSessions) Preflight(context.Context) error {
 	return g.err
 }
 
+func TestSAMLUnavailableTextIsGoAPIs(t *testing.T) {
+	if saml.UnavailableText != sessionissue.UnavailableText {
+		t.Fatalf("UnavailableText %q is not go-api's %q", saml.UnavailableText, sessionissue.UnavailableText)
+	}
+}
+
 // ACS checks the signer after the body is read and before the response is
 // consumed: on a failed check it answers go-api's 503 and uses nothing, and
 // the same response signs in once the signer is back.

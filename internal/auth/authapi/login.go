@@ -110,6 +110,10 @@ func (h compatHandlers) compatLogin(w http.ResponseWriter, r *http.Request) {
 		charge{h.loginAccount, h.Limits.accountKey(r, input.email)}) {
 		return
 	}
+	if err := h.Issuer.Preflight(r.Context()); err != nil {
+		h.unavailableCompat(w, r, opCompatLogin, err)
+		return
+	}
 	var requested *uuid.UUID
 	if input.orgID != nil {
 		if parsed, ok := policy.ParsePyUUID(*input.orgID); ok {

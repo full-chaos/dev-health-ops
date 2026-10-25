@@ -342,6 +342,10 @@ func (h credentialHandlers) changePassword(w http.ResponseWriter, r *http.Reques
 	ctx := r.Context()
 	caller, _ := ctx.Value(changeAuthKey{}).(changeCaller)
 	input := inputOf(r)
+	if err := h.Issuer.Preflight(ctx); err != nil {
+		h.compat.unavailableCompat(w, r, opChangePassword, err)
+		return
+	}
 	outcome, err := h.flows.Change(ctx, local.ChangeRequest{
 		PrincipalID: caller.bearer.PrincipalID, OrganizationID: caller.record.OrganizationID,
 		Current: input.current, New: input.password, Impersonated: caller.bearer.Impersonated,

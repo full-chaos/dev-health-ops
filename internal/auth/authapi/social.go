@@ -64,6 +64,10 @@ func (h compatHandlers) compatSocialLogin(w http.ResponseWriter, r *http.Request
 	if !ok {
 		return
 	}
+	if err := h.Issuer.Preflight(ctx); err != nil {
+		h.unavailableCompat(w, r, opSocialLogin, err)
+		return
+	}
 	result, err := h.Social.Exchange(ctx, provider, token, requestid.Audit(ctx))
 	if err != nil {
 		status, reason := social.Classify(err)

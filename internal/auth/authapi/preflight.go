@@ -2,10 +2,22 @@ package authapi
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
 	"sync"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 )
+
+// textAuthUnavailable is go-api's 503 detail when it cannot issue a session
+// (sessionissue.UnavailableText), so the go-api routes here answer its bytes.
+const textAuthUnavailable = "Authentication service unavailable"
+
+// errSignerUnavailable marks a failed preflight inside a shared session path,
+// so its caller answers 503 rather than a generic failure.
+var errSignerUnavailable = errors.New("authapi: the access signer is unavailable")
 
 // signerCheckTTL is how long one signer check answers for an EdDSA Issuer.
 // A check reads the key and signs a probe, so it must not run once per
@@ -81,4 +93,11 @@ func (i *Issuer) Preflight(ctx context.Context) error {
 		return fmt.Errorf("%w: no access token class is configured", errIssue)
 	}
 	return nil
+}
+
+// unavailableCompat answers a failed preflight on a go-api route with
+// go-api's own 503: {"detail": {"message": ...}} and no Retry-After.
+func (h compatHandlers) unavailableCompat(w http.ResponseWriter, r *http.Request, operation string, err error) {
+	h.rec.record(r.Context(), operation, "error", reasonDependency, err)
+	policy.WriteDetail(w, http.StatusServiceUnavailable, policy.ErrorDetail(textAuthUnavailable), nil)
 }

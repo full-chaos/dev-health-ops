@@ -78,11 +78,14 @@ func TestGoAPIAuthProxyIsOffByDefault(t *testing.T) {
 	}
 }
 
-func TestGoAPIAuthProxyRendersOnlyTheFlagsThePhaseTurnsOn(t *testing.T) {
+func TestGoAPIAuthProxyRendersEveryFlagExplicitlyFromPhase2(t *testing.T) {
 	for phase, want := range map[string]map[string]string{
-		"2": {"AUTH_PROXY_URL": "http://a-dev-health-auth-service:8095", "AUTH_PROXY_SESSIONS": "true"},
+		"2": {"AUTH_PROXY_URL": "http://a-dev-health-auth-service:8095", "AUTH_PROXY_SESSIONS": "true",
+			"AUTH_PROXY_LOCAL_LOGIN": "false", "AUTH_PROXY_CREDENTIALS": "false", "AUTH_PROXY_SOCIAL": "false",
+			"AUTH_PROXY_OIDC": "false", "AUTH_PROXY_SAML": "false"},
 		"3": {"AUTH_PROXY_URL": "http://a-dev-health-auth-service:8095", "AUTH_PROXY_SESSIONS": "true",
-			"AUTH_PROXY_LOCAL_LOGIN": "true", "AUTH_PROXY_SOCIAL": "true"},
+			"AUTH_PROXY_LOCAL_LOGIN": "true", "AUTH_PROXY_CREDENTIALS": "false", "AUTH_PROXY_SOCIAL": "true",
+			"AUTH_PROXY_OIDC": "false", "AUTH_PROXY_SAML": "false"},
 	} {
 		docs, out, err := renderAuth(t, goAPIWithAuth(append([]string{"--set", "authService.phase=" + phase}, phase3Secrets...)...)...)
 		if err != nil {

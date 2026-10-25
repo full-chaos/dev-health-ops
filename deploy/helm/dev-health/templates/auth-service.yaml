@@ -89,6 +89,7 @@ stage-signing-key init container exists.
 {{- if eq (upper (trim .name)) "AUTH_LOGIN_LOCKOUT_KEY" }}{{- fail "authService.extraEnv must not set AUTH_LOGIN_LOCKOUT_KEY: use authService.sessionKeys.loginLockout, which reaches the container by secretKeyRef" }}{{- end }}
 {{- if eq (upper (trim .name)) "AUTH_SOCIAL_LINK_ROUTES" }}{{- fail "authService.extraEnv must not set AUTH_SOCIAL_LINK_ROUTES: use authService.socialLinkRoutes, which the render checks" }}{{- end }}
 {{- if eq .name "AUTH_SIGNING_KEY" }}{{- fail "authService.extraEnv must not set AUTH_SIGNING_KEY: direct-value signing material is rejected by the service (ACP-ADR-02 §4); use authService.signingKey" }}{{- end }}
+{{- if has (upper (trim (toString .name))) (include "dev-health.authServiceEnvNames" $ | fromJsonArray) }}{{- fail (printf "authService.extraEnv must not set %s: the chart renders it for auth-service, and a later entry would shadow the rendered value (a Secret reference included)" .name) }}{{- end }}
 {{- if eq (lower (trim .name)) "auth_signing_keyset_file" }}{{- fail "authService.extraEnv must not set AUTH_SIGNING_KEYSET_FILE: the chart renders it (authService.keySet) or stages one signing key (authService.signingKey); the service refuses a key-set manifest beside a single key" }}{{- end }}
 {{- end }}
 apiVersion: apps/v1

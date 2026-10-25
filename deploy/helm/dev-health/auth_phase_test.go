@@ -157,19 +157,21 @@ func TestAuthPhaseRendersExactFlagSet(t *testing.T) {
 	}
 }
 
-// The ladder itself, stated once more without the goldens: which AUTH_PROXY_* flags go-api carries per phase.
+// The ladder itself, stated once more without the goldens: which AUTH_PROXY_* flags go-api carries "true" per phase.
 func TestAuthPhaseLadder(t *testing.T) {
 	ladder := map[int][]string{
 		0: nil,
 		1: nil,
-		2: {"AUTH_PROXY_SESSIONS", "AUTH_PROXY_URL"},
-		3: {"AUTH_PROXY_LOCAL_LOGIN", "AUTH_PROXY_SESSIONS", "AUTH_PROXY_SOCIAL", "AUTH_PROXY_URL"},
+		2: {"AUTH_PROXY_SESSIONS"},
+		3: {"AUTH_PROXY_LOCAL_LOGIN", "AUTH_PROXY_SESSIONS", "AUTH_PROXY_SOCIAL"},
 	}
 	for phase, want := range ladder {
 		docs := renderPhase(t, phase)
 		var got []string
-		for name := range proxyEnv(t, docs) {
-			got = append(got, name)
+		for name, value := range proxyEnv(t, docs) {
+			if name != "AUTH_PROXY_URL" && value == "true" {
+				got = append(got, name)
+			}
 		}
 		sort.Strings(got)
 		if strings.Join(got, ",") != strings.Join(want, ",") {
@@ -233,6 +235,10 @@ func TestAuthPhaseRefusesHandSetFlags(t *testing.T) {
 		"token class below 2":     {phaseArgs(1, "--set", "authService.accessToken.class=hs256_compat"), "authService.accessToken.class needs authService.phase >= 2"},
 		"token class unknown":     {phaseArgs(2, "--set", "authService.accessToken.class=rs256"), "must be empty, hs256_compat or eddsa"},
 		"token class not string":  {phaseArgs(2, "--set-json", "authService.accessToken.class=true"), "must be strings"},
+		"token class false":       {phaseArgs(2, "--set-json", "authService.accessToken.class=false"), "must be strings"},
+		"token class zero":        {phaseArgs(2, "--set-json", "authService.accessToken.class=0"), "must be strings"},
+		"issuer false":            {phaseArgs(2, "--set-json", "authService.accessToken.issuerURL=false"), "must be strings"},
+		"issuer zero":             {phaseArgs(2, "--set-json", "authService.accessToken.issuerURL=0"), "must be strings"},
 		"eddsa without issuer":    {phaseArgs(2, "--set", "authService.accessToken.class=eddsa"), "needs authService.accessToken.issuerURL"},
 		"eddsa http issuer":       {phaseArgs(2, "--set", "authService.accessToken.class=eddsa", "--set", "authService.accessToken.issuerURL=http://auth.example"), "needs authService.accessToken.issuerURL"},
 		"eddsa trailing slash":    {phaseArgs(2, "--set", "authService.accessToken.class=eddsa", "--set", "authService.accessToken.issuerURL=https://auth.example/"), "needs authService.accessToken.issuerURL"},
@@ -464,5 +470,80 @@ func TestAuthPhaseStartupAgrees(t *testing.T) {
 				t.Errorf("token class %s with issuer %q, go-api verifies issuer %q", cfg.Session.AccessClass, cfg.TokenIssuerURL, issuer)
 			}
 		})
+	}
+}
+
+// From phase 2 go-api carries every AUTH_PROXY_* flag as an explicit "true" or "false" value: an env entry beats a
+// same-named variable from goApi.envFrom, so no envFrom source can forward a route the phase does not move.
+// Phases 0 and 1 render none (the prod render stays byte-identical).
+func TestGoAPIAuthProxyFlagsAreExplicitFromPhase2(t *testing.T) {
+	all := []string{"AUTH_PROXY_SESSIONS", "AUTH_PROXY_LOCAL_LOGIN", "AUTH_PROXY_CREDENTIALS", "AUTH_PROXY_SOCIAL", "AUTH_PROXY_OIDC", "AUTH_PROXY_SAML"}
+	on := map[int]map[string]bool{
+		2: {"AUTH_PROXY_SESSIONS": true},
+		3: {"AUTH_PROXY_SESSIONS": true, "AUTH_PROXY_LOCAL_LOGIN": true, "AUTH_PROXY_SOCIAL": true},
+	}
+	for phase := 0; phase <= 3; phase++ {
+		goAPI := authDoc(renderPhase(t, phase), "Deployment", "a-dev-health-go-api")
+		for _, name := range all {
+			value, set := containerEnvValue(t, goAPI, name)
+			if phase < 2 {
+				if set {
+					t.Errorf("phase %d renders %s=%q; phases 0 and 1 render no AUTH_PROXY_* flag", phase, name, value)
+				}
+				continue
+			}
+			want := "false"
+			if on[phase][name] {
+				want = "true"
+			}
+			if !set || value != want {
+				t.Errorf("phase %d: %s = %q (set %v), want the explicit value %q", phase, name, value, set, want)
+			}
+		}
+	}
+}
+
+// Every env name the chart renders for auth-service (Secret references and phase-derived settings) is refused in
+// authService.extraEnv, in any case: a later entry with the same name would shadow the rendered one, a Secret
+// reference included, and put a literal in the manifest.
+func TestAuthServiceExtraEnvRefusesEveryRenderedName(t *testing.T) {
+	configs := map[string][]string{
+		"phase 3 with link routes":  phaseArgs(3, "--set", "authService.socialLinkRoutes=true"),
+		"phase 2 with eddsa tokens": phaseArgs(2, "--set", "authService.accessToken.class=eddsa", "--set", "authService.accessToken.issuerURL=https://auth.example"),
+	}
+	names := map[string][]string{}
+	for label, args := range configs {
+		docs, out, err := renderAuth(t, args...)
+		if err != nil {
+			t.Fatalf("%s: render failed: %v\n%.400s", label, err, out)
+		}
+		service := authDoc(docs, "Deployment", "a-dev-health-auth-service")
+		for _, container := range podContainers(service) {
+			env, _ := at(container, "env").([]any)
+			for _, entry := range env {
+				name, _ := at(entry, "name").(string)
+				names[name] = args
+			}
+		}
+	}
+	// The owned switches render only from phases 4 and 5 (refused at render), so no render above can show them.
+	for _, name := range []string{"AUTH_USERS_OWNED", "AUTH_ORGS_OWNED"} {
+		names[name] = configs["phase 3 with link routes"]
+	}
+	if len(names) < 18 {
+		t.Fatalf("only %d auth-service env names rendered: %v", len(names), names)
+	}
+	for name, args := range names {
+		for _, spelling := range []string{name, strings.ToLower(name)} {
+			_, out, err := renderAuth(t, append(append([]string{}, args...),
+				"--set-json", fmt.Sprintf(`authService.extraEnv=[{"name":%q,"value":"literal"}]`, spelling))...)
+			if err == nil {
+				t.Errorf("authService.extraEnv %s rendered: a literal would shadow the chart's %s", spelling, name)
+				continue
+			}
+			if !strings.Contains(out, "authService.extraEnv must not set") {
+				t.Errorf("authService.extraEnv %s: the refusal does not name extraEnv: %.300s", spelling, out)
+			}
+		}
 	}
 }

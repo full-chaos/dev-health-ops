@@ -107,7 +107,7 @@ rollback is the phase minus 1.
 | --- | --- | --- |
 | 0 | go-api only | No auth-service, no `AUTH_PROXY_*`. |
 | 1 | auth-service dark | auth-service, its migrate and grants Jobs and policies; `AUTH_DATABASE_SCHEMA` on go-api, query-api and the River hooks. No route reaches the service. |
-| 2 | Sessions | Phase 1 plus `AUTH_PROXY_URL`, `AUTH_PROXY_SESSIONS` and `AUTH_SESSION_ISSUE_TOKEN` on go-api, `AUTH_PROXY_SESSIONS` on query-api, the migrate Job and the River hooks, the session keys on auth-service, and the auth-service API port open to go-api only. Needs the session readers, the successor key and the rate-limit store. |
+| 2 | Sessions | Phase 1 plus `AUTH_PROXY_URL`, `AUTH_PROXY_SESSIONS` and `AUTH_SESSION_ISSUE_TOKEN` on go-api (from phase 2 every `AUTH_PROXY_*` flag is rendered `"true"` or `"false"`, so an env entry beats `goApi.envFrom`), `AUTH_PROXY_SESSIONS` on query-api, the migrate Job and the River hooks, the session keys on auth-service, and the auth-service API port open to go-api only. Needs the session readers, the successor key and the rate-limit store. |
 | 3 | Login and social sign-in | Phase 2 plus `AUTH_PROXY_LOCAL_LOGIN` and `AUTH_PROXY_SOCIAL` on go-api, and on auth-service `AUTH_LOGIN_LOCKOUT_KEY` (`authService.sessionKeys.loginLockout`) and the six optional `SOCIAL_<PROVIDER>_CLIENT_ID` / `_CLIENT_SECRET` keys (`authService.social.secretName`). |
 | 4 | Users owned | Phase 3 plus `AUTH_PROXY_CREDENTIALS` and `AUTH_USERS_OWNED` (go-api, auth-service, the migrate, grants and backfill Jobs). **Refused at render.** |
 | 5 | Orgs owned | Phase 4 plus `AUTH_ORGS_OWNED` (auth-service and the backfill Job). **Refused at render.** |
@@ -128,6 +128,8 @@ phase 2 or more; `eddsa` needs `authService.accessToken.issuerURL`, which the
 chart renders for auth-service and for go-api's verifier),
 `authService.socialLinkRoutes` (phase 2 or more) and `authService.sso.oidc` /
 `saml` (refused while the chart does not render auth-service's SSO settings).
+`authService.extraEnv` refuses every env name the chart renders for
+auth-service, in any case, so no entry can shadow a Secret reference.
 
 The chart creates **no Secret** for it. Create these in the release namespace
 first and reference them by name:

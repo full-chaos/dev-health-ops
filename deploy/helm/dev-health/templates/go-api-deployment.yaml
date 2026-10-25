@@ -266,11 +266,10 @@ spec:
             {{- if $proxyOn }}
             - name: AUTH_PROXY_URL
               value: {{ printf "http://%s-auth-service:%v" (include "dev-health.fullname" .) .Values.authService.port | quote }}
+            {{- /* From phase 2 every flag is rendered, "true" or "false": an env entry beats a same-named variable from goApi.envFrom, so no envFrom source can forward a route the phase does not move. */}}
             {{- range $proxyFlags }}
-            {{- if index . 1 }}
             - name: {{ index . 0 }}
-              value: "true"
-            {{- end }}
+              value: {{ ternary "true" "false" (index . 1) | quote }}
             {{- end }}
             {{- if $sessionsOn }}
             {{- /* The auth-session-issuer svc_ credential go-api presents to

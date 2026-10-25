@@ -91,8 +91,10 @@ goApi:
   corsAllowedOrigins: ""
   # -- The /api/v1/auth/* proxy to auth-service has no key here: authService.phase
   #    renders it (AUTH_PROXY_URL and one AUTH_PROXY_<aggregate> flag per aggregate
-  #    the phase moves). goApi.authProxy is refused. A flag set through
-  #    goApi.envFrom bypasses the chart's checks and the auth-service
+  #    the phase moves). goApi.authProxy is refused. From phase 2 every
+  #    AUTH_PROXY_* flag is rendered "true" or "false", so an env entry beats a
+  #    same-named variable from goApi.envFrom. At phase 0-1 a flag set through
+  #    goApi.envFrom still bypasses the chart's checks and the auth-service
   #    NetworkPolicy rule (go-api still refuses an unsafe combination at start-up
   #    and logs its routing as "auth proxy routing").
   # -- Extra flags appended after the rendered ones (for example

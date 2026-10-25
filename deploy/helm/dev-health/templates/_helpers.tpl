@@ -724,6 +724,18 @@ decision), and renders the phase. Every ladder read goes through dev-health.auth
 {{- end -}}
 
 {{/*
+Every env name the chart renders for the auth-service container (Secret references and phase-derived settings), as a
+JSON list. authService.extraEnv refuses each of them in any case: a later entry with the same name would shadow the
+rendered one, a Secret reference included, and put a literal in the manifest. auth_phase_test.go walks the rendered
+names and proves each is refused.
+*/}}
+{{- define "dev-health.authServiceEnvNames" -}}
+{{- $names := list "AUTH_DATABASE_URI" "AUTH_JWT_SECRET_KEY" "AUTH_SESSION_SUCCESSOR_KEY" "AUTH_LOGIN_LOCKOUT_KEY" "AUTH_SOCIAL_LINK_ROUTES" "AUTH_ACCESS_TOKEN_CLASS" "AUTH_TOKEN_ISSUER_URL" "AUTH_JWT_AUDIENCE" "AUTH_USERS_OWNED" "AUTH_ORGS_OWNED" "AUTH_VALKEY_URI" "AUTH_SERVICE_TRUSTED_PROXIES" -}}
+{{- range $provider := list "GITHUB" "GITLAB" "GOOGLE" }}{{- range $suffix := list "CLIENT_ID" "CLIENT_SECRET" }}{{- $names = append $names (printf "SOCIAL_%s_%s" $provider $suffix) }}{{- end }}{{- end -}}
+{{- toJson $names -}}
+{{- end -}}
+
+{{/*
 "true" when authService.phase turns the ladder flag on, else "". Call with (dict "flag" <name> "context" $).
 The ladder (each flag is on from its phase up): service 1, sessions 2, localLogin 3, social 3, credentials 4,
 usersOwned 4, orgsOwned 5. credentials moves with usersOwned: auth-service mounts the credential routes only with
@@ -753,9 +765,9 @@ auth-service's issuerURLPattern (internal/auth/authconfig), so a value the servi
 */}}
 {{- define "dev-health.authEdDSAIssuer" -}}
 {{- $t := default dict .Values.authService.accessToken -}}
+{{- if not (and (or (kindIs "invalid" $t.class) (kindIs "string" $t.class)) (or (kindIs "invalid" $t.issuerURL) (kindIs "string" $t.issuerURL))) }}{{- fail "authService.accessToken.class and authService.accessToken.issuerURL must be strings" }}{{- end -}}
 {{- $class := $t.class | default "" -}}
 {{- $issuer := $t.issuerURL | default "" -}}
-{{- if not (and (kindIs "string" $class) (kindIs "string" $issuer)) }}{{- fail "authService.accessToken.class and authService.accessToken.issuerURL must be strings" }}{{- end -}}
 {{- if $class -}}
 {{- if not (has $class (list "hs256_compat" "eddsa")) }}{{- fail "authService.accessToken.class must be empty, hs256_compat or eddsa" }}{{- end -}}
 {{- if not (include "dev-health.authOn" (dict "flag" "sessions" "context" .)) }}{{- fail "authService.accessToken.class needs authService.phase >= 2: auth-service mints access tokens only on its session routes" }}{{- end -}}

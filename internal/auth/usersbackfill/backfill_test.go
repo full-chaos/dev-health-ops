@@ -236,3 +236,29 @@ func TestPlatformAdminRoleNameIsTheCatalogName(t *testing.T) {
 		t.Fatalf("role key is not a platform role of the catalog: %+v %v", role, err)
 	}
 }
+
+func TestPlaceholderIsTheSharedDefinitionAndStaysNotCarried(t *testing.T) {
+	s := func(v string) *string { return &v }
+	for name, c := range map[string]struct {
+		row  Row
+		want bool
+	}{
+		"service, no credential":       {Row{AuthProvider: s("service")}, true},
+		"service with a password hash": {Row{AuthProvider: s("service"), PasswordHash: s("$2b$12$x")}, false},
+		"service with a provider id":   {Row{AuthProvider: s("service"), AuthProviderID: s("sub")}, false},
+		"saml, no credential":          {Row{AuthProvider: s("saml")}, false},
+		"local":                        {Row{AuthProvider: s("local")}, false},
+	} {
+		if got := IsPlaceholder(c.row); got != c.want {
+			t.Errorf("%s: IsPlaceholder = %v, want %v", name, got, c.want)
+		}
+		if got := IsPlaceholder(c.row); got != identity.IsServicePlaceholder(c.row.AuthProvider, c.row.PasswordHash, c.row.AuthProviderID) {
+			t.Errorf("%s: IsPlaceholder diverges from identity.IsServicePlaceholder", name)
+		}
+		if c.row.AuthProvider != nil && *c.row.AuthProvider != "local" {
+			if _, _, notCarried := mapIdentity(c.row); !notCarried {
+				t.Errorf("%s: a provider row with no social identity must stay identity_not_carried", name)
+			}
+		}
+	}
+}

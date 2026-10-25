@@ -116,18 +116,19 @@ VALUES ($1, $2, NULL, $3, true, true, false, 0, now(), now())`, id, id.String()+
 
 	// The ops schema may carry users of its own: mirror each one into the auth
 	// schema so the starting state has no gap.
-	seeded, err := admin.Query(ctx, `SELECT id, email, coalesce(auth_provider, '') FROM public.users`)
+	seeded, err := admin.Query(ctx, `SELECT id, email, coalesce(auth_provider, ''), password_hash, auth_provider_id FROM public.users`)
 	if err != nil {
 		t.Fatal(err)
 	}
 	type seedRow struct {
-		id              uuid.UUID
-		email, provider string
+		id               uuid.UUID
+		email, provider  string
+		hash, providerID *string
 	}
 	var seeds []seedRow
 	for seeded.Next() {
 		var r seedRow
-		if err := seeded.Scan(&r.id, &r.email, &r.provider); err != nil {
+		if err := seeded.Scan(&r.id, &r.email, &r.provider, &r.hash, &r.providerID); err != nil {
 			t.Fatal(err)
 		}
 		seeds = append(seeds, r)
@@ -140,7 +141,7 @@ VALUES ($1, $2, NULL, $3, true, true, false, 0, now(), now())`, id, id.String()+
 		if _, err := admin.Exec(ctx, `INSERT INTO auth.users (principal_id, email, email_lower) VALUES ($1, $2, lower($2))`, r.id, r.email); err != nil {
 			t.Fatalf("mirror user: %v", err)
 		}
-		if r.provider != "" && r.provider != "local" {
+		if r.provider != "" && r.provider != "local" && !identity.IsServicePlaceholder(&r.provider, r.hash, r.providerID) {
 			identityOf(r.id)
 		}
 	}
@@ -169,6 +170,37 @@ VALUES ($1, $2, NULL, $3, true, true, false, 0, now(), now())`, id, id.String()+
 	check("public users without an auth user=0", "auth users without a public user=0", "external identity=1")
 	identityOf(social)
 	check()
+
+	// The service placeholder (the baseline's go-api-prove row is one) needs no identity; every other row of that
+	// provider, and every other uncarried provider, still does. The SQL agrees with identity.IsServicePlaceholder.
+	s := func(v string) *string { return &v }
+	cases := []struct {
+		name               string
+		provider, hash, id *string
+	}{
+		{"service placeholder", s("service"), nil, nil},
+		{"service with empty credentials", s("service"), s(""), s("")},
+		{"service with a password hash", s("service"), s("$2b$12$abcdefghijklmnopqrstuuabcdefghijklmnopqrstuvwxyz0123"), nil},
+		{"service with a provider id", s("service"), nil, s("subject-1")},
+		{"saml without credential", s("saml"), nil, nil},
+		{"oidc without credential", s("oidc"), nil, nil},
+	}
+	for _, c := range cases {
+		id := uuid.New()
+		if _, err := admin.Exec(ctx, `INSERT INTO public.users
+	(id, email, password_hash, auth_provider, auth_provider_id, is_active, is_verified, is_superuser, token_version, created_at, updated_at)
+VALUES ($1, $2, $3, $4, $5, true, true, false, 0, now(), now())`, id, id.String()+"@example.com", c.hash, c.provider, c.id); err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		authUser(id)
+		if identity.IsServicePlaceholder(c.provider, c.hash, c.id) {
+			check()
+		} else {
+			check("external identity=1")
+			identityOf(id)
+			check()
+		}
+	}
 
 	// All three at once, each counted once.
 	publicUser(uuid.New(), "local")

@@ -216,6 +216,7 @@ internal/cigates/queuecreds	gate_test.go
 internal/cigates/queuecreds	queuerows_test.go
 internal/cigates/queuecreds	scan.go
 internal/cigates/queuecreds	scan_test.go
+internal/cigates/racescope	scan.go
 internal/cigates/raceunweighted	raceunweighted_test.go
 internal/cigates/releasetag	parity_test.go
 internal/cigates/releasetag	releasetag.go

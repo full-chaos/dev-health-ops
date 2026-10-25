@@ -94,6 +94,8 @@ internal/cigates/integrationshards	free_run_test.go	unexpressed
 internal/cigates/nopython	trackedfiles_test.go	unexpressed
 internal/cigates/outboundtransport	outboundtransport_test.go	unexpressed
 internal/cigates/proofteardown	harness_test.go	unexpressed
+internal/cigates/racescope	racescope_test.go	unexpressed
+internal/cigates/racescope	scan.go	unexpressed
 internal/cigates/raceunweighted	raceunweighted_test.go	unexpressed
 internal/cigates/releasetag	parity_test.go	cmd/cigate
 internal/cigates/releasetag	parity_test.go	unexpressed

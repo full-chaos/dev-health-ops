@@ -16,6 +16,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
+	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
@@ -115,6 +116,7 @@ func newRefreshRig(t *testing.T) *refreshRig {
 	compat, err := CompatRoutes(CompatDeps{
 		Sessions: store, Users: r.users, Issuer: issuer, Logger: logger, Projector: r.projector,
 		AppendAudit: func(context.Context, audit.AuditEvent) error { r.audited.Add(1); return nil },
+		Limits:      mustLimits(t, unlimitedStore{}),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -127,6 +129,13 @@ func newRefreshRig(t *testing.T) *refreshRig {
 	r.base = connects.Count()
 	return r
 }
+
+// unlimitedStore counts every hit as the first: these rows probe credential handling, not the budget.
+type unlimitedStore struct{}
+
+func (unlimitedStore) Increment(context.Context, httpapi.Hit) (int64, error) { return 1, nil }
+func (unlimitedStore) Peek(context.Context, httpapi.Hit) (int64, error)      { return 0, nil }
+func (unlimitedStore) Backend() string                                       { return "memory" }
 
 func (r *refreshRig) post(pattern, body string) (int, string) {
 	request := httptest.NewRequest(http.MethodPost, pattern, strings.NewReader(body))

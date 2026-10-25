@@ -103,7 +103,7 @@ func checkExecutedGrantPosture(
 	}
 
 	checkTablePosture := func(roleLabel, roleName string, posture postgresstore.RolePosture) {
-		declared := len(posture.RequiredTables) + len(posture.ColumnScoped) + len(posture.RequiredSequences)
+		declared := len(posture.RequiredTables) + len(posture.ColumnScoped) + len(posture.RequiredSequences) + len(posture.RequiredFunctions)
 		gaps, err := postgresstore.DiagnoseRolePosture(ctx, pool, roleName, posture)
 		if err != nil {
 			// The diagnostic query itself failed (unreachable database, an

@@ -21,14 +21,6 @@ func TestServiceTokenShapeAndHash(t *testing.T) {
 	if want := "svc_acr_" + strings.Repeat("A", 43); token != want {
 		t.Fatalf("token %q, want %q", token, want)
 	}
-	serviceCredentialRandom = bytes.NewReader(bytes.Repeat([]byte{0xff}, 32))
-	worker, err := generateServiceToken(ServiceWorkerOperator)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if want := "svc_worker_" + strings.Repeat("_", 42) + "8"; worker != want {
-		t.Fatalf("worker token %q, want %q", worker, want)
-	}
 	serviceCredentialRandom = bytes.NewReader(make([]byte, 32))
 	issuer, err := generateServiceToken(ServiceAuthSessionIssuer)
 	if err != nil {

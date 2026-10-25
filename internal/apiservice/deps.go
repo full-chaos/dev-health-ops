@@ -129,7 +129,7 @@ type Deps struct {
 	Verifier *edgetoken.Verifier
 	Signer   *edgetoken.Signer
 	// AccessVerify is the profile-routed access-token validator; nil when
-	// AUTH_ACCESS_TOKEN_ISSUER is unset. No route calls it yet.
+	// AUTH_ACCESS_TOKEN_ISSUER is unset. When set, Auth routes through it.
 	AccessVerify *accessverify.Validator
 	// SessionOAuth is the social-login profile client; nil means the
 	// providers' real endpoints. A venue test points it at a fake provider.

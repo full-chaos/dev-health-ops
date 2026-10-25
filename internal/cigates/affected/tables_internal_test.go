@@ -32,3 +32,36 @@ func TestClassGlobs(t *testing.T) {
 		}
 	}
 }
+
+// A walk's filter bounds what it covers; an unexpressed walk covers everything.
+func TestWalkRowFilterCovers(t *testing.T) {
+	cases := []struct {
+		root, depth, filter, path string
+		want                      bool
+	}{
+		{".", depthTree, "*", "README.md", true},
+		{".", depthTree, "*.go", "README.md", false},
+		{".", depthTree, "*.go", "internal/x/x.go", true},
+		{".", depthTree, "*_test.go", "internal/x/x.go", false},
+		{"docs", depthDir, "*.md", "docs/a.md", true},
+		{"docs", depthDir, "*.md", "docs/sub/a.md", false},
+		{"docs", depthTree, "*.go", "docs/a.md", false},
+		{unexpressed, "-", "-", "README.md", true},
+	}
+	for _, c := range cases {
+		w := walkRow{root: c.root, depth: c.depth, filter: c.filter}
+		if got := w.covers(c.path); got != c.want {
+			t.Errorf("walk %s %s %s covers(%q) = %v, want %v", c.root, c.depth, c.filter, c.path, got, c.want)
+		}
+	}
+	for _, f := range []string{"*", "*.go", "*_test.go"} {
+		if !validFilter(f) {
+			t.Errorf("validFilter(%q) = false", f)
+		}
+	}
+	for _, f := range []string{"", "-", ".go", "**.go", "*/x.go", "*.[ch]"} {
+		if validFilter(f) {
+			t.Errorf("validFilter(%q) = true", f)
+		}
+	}
+}

@@ -7,6 +7,7 @@ cmd/dev-health-provider-fixture	main.go
 cmd/dev-health-provider-normalized-fixture	main.go
 cmd/dho	compose_dsn_class_test.go
 cmd/dho	service_migrate_guard_test.go
+cmd/faultproxy	main.go
 cmd/gqlgen-guard	main.go
 cmd/gqlgen-guard	main_test.go
 cmd/loadtest	main.go
@@ -21,6 +22,9 @@ internal/api/syncadmin	gate_reader_census_test.go
 internal/api/syncadmin	repositories_write_venue_oracle_integration_test.go
 internal/api/teamsidentity	deleted_at_writer_census_test.go
 internal/api/teamsidentity	team_id_writer_census_test.go
+internal/apiservice	accessroute_probe_test.go
+internal/apiservice	accessroute_routed_test.go
+internal/apiservice	accessroute_unset_test.go
 internal/apiservice	endpoint_profile_rows_test.go
 internal/apiservice	endpoint_profile_scan_test.go
 internal/apiservice	githubapp_config.go
@@ -37,6 +41,7 @@ internal/auth/authruntime	audit_request_id_scan_test.go
 internal/auth/authruntime	endpoint_profile_rows_test.go
 internal/auth/authruntime	kidwiring_callers_test.go
 internal/auth/contracts	access_token_goldens_test.go
+internal/auth/contracts	anchor_ranges_test.go
 internal/auth/contracts	authorization_goldens_test.go
 internal/auth/contracts	authorization_schema_test.go
 internal/auth/contracts	contracts.go
@@ -115,6 +120,7 @@ internal/chmigrate	testops_test_flake_counts_integration_test.go
 internal/chmigrate	work_item_metrics_nullable_integration_test.go
 internal/cigates/affected	ci_script_helpers_test.go
 internal/cigates/affected	go_affected_integration_test.go
+internal/cigates/affected	md_bounded_test.go
 internal/cigates/affected	plan.go
 internal/cigates/affected	reach.go
 internal/cigates/affected	reach_test.go
@@ -375,6 +381,7 @@ internal/jobs/report	report_test.go
 internal/jobs/report	runtime_integration_test.go
 internal/jobs/workgraph/operationaledges	incidents_golden_integration_test.go
 internal/llmorgsettings	baseurl_reader_guard_test.go
+internal/loadharness	profiles_test.go
 internal/localgit	blame.go
 internal/localgit	git.go
 internal/localgit	refs.go
@@ -552,6 +559,7 @@ internal/teamcreated	census_test.go
 internal/teamprovider	census_test.go
 internal/teamresolve	golden_test.go
 internal/testsupport/authrows	golden_test.go
+internal/testsupport/authrows	responses_test.go
 internal/testsupport/chschema	contract_test.go
 internal/testsupport/goldenscan	tree.go
 internal/testsupport/goldenscan	vectors_test.go

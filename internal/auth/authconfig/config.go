@@ -97,6 +97,8 @@ const (
 
 	// EnvUsersOwned is the D3c users-owned switch (true or false, default false).
 	EnvUsersOwned = "AUTH_USERS_OWNED"
+	// EnvOrgsOwned is the organizations-owned switch (true or false, default false).
+	EnvOrgsOwned = "AUTH_ORGS_OWNED"
 	// EnvSocialLinkRoutes ("true" or "false", default false) mounts the
 	// bearer-only social link and unlink routes; it needs the session secrets.
 	EnvSocialLinkRoutes = "AUTH_SOCIAL_LINK_ROUTES"
@@ -212,6 +214,10 @@ type Config struct {
 	// UsersOwned is AUTH_USERS_OWNED: auth-service owns user creation and the
 	// local credential links.
 	UsersOwned bool
+
+	// OrgsOwned is AUTH_ORGS_OWNED: auth-service is the only writer of
+	// auth.organizations; the legacy login projection writes nothing.
+	OrgsOwned bool
 
 	// SSO holds the federated sign-in settings; a protocol without all of its
 	// values mounts no route.
@@ -439,6 +445,9 @@ func Load(spec Spec) (Config, error) {
 	if cfg.UsersOwned, err = usersOwned(lookup); err != nil {
 		return Config{}, err
 	}
+	if cfg.OrgsOwned, err = orgsOwned(lookup); err != nil {
+		return Config{}, err
+	}
 	if cfg.SSO, err = ssoSettings(lookup); err != nil {
 		return Config{}, err
 	}
@@ -449,14 +458,11 @@ func Load(spec Spec) (Config, error) {
 }
 
 // LimitedRoutesMounted reports whether a route that counts in the shared
-// rate-limit store is mounted: login, the credential routes (session secrets
-// and AUTH_USERS_OWNED) or the social link routes. The JWKS, discovery,
-// session and SSO routes carry no such limit.
+// rate-limit store is mounted: every session route set (it carries the
+// compatibility refresh), and with it login, the credential routes and the
+// social link routes. The JWKS and discovery routes carry no such limit.
 func (c Config) LimitedRoutesMounted() bool {
-	if !c.Session.Enabled {
-		return false
-	}
-	return c.Session.LoginEnabled || c.UsersOwned || c.Session.SocialLinkRoutes
+	return c.Session.Enabled
 }
 
 // valkeySetting resolves AUTH_VALKEY_URI. A syntactically bad value is
@@ -471,7 +477,7 @@ func valkeySetting(lookup secrets.LookupEnv, required bool) (secrets.Value, erro
 	if !set {
 		if required {
 			return secrets.Value{}, fmt.Errorf(
-				"%s or %s_FILE is required while the login, credential or social link routes are mounted: "+
+				"%s or %s_FILE is required while the session routes are mounted: "+
 					"an in-process limiter is per replica and so no limit", EnvValkeyURI, EnvValkeyURI)
 		}
 		return secrets.Value{}, nil
@@ -866,12 +872,17 @@ func tokenIssuerURL(lookup secrets.LookupEnv) (string, error) {
 
 // usersOwned reads AUTH_USERS_OWNED: unset or empty is false; anything but
 // true or false is refused.
-func usersOwned(lookup secrets.LookupEnv) (bool, error) {
-	switch strings.ToLower(strings.TrimSpace(valueOf(lookup, EnvUsersOwned))) {
+func usersOwned(lookup secrets.LookupEnv) (bool, error) { return ownedSwitch(lookup, EnvUsersOwned) }
+
+// orgsOwned reads AUTH_ORGS_OWNED with the same rule as AUTH_USERS_OWNED.
+func orgsOwned(lookup secrets.LookupEnv) (bool, error) { return ownedSwitch(lookup, EnvOrgsOwned) }
+
+func ownedSwitch(lookup secrets.LookupEnv, name string) (bool, error) {
+	switch strings.ToLower(strings.TrimSpace(valueOf(lookup, name))) {
 	case "", "false":
 		return false, nil
 	case "true":
 		return true, nil
 	}
-	return false, fmt.Errorf("%s must be true or false", EnvUsersOwned)
+	return false, fmt.Errorf("%s must be true or false", name)
 }

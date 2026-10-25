@@ -500,7 +500,7 @@ Wave 0 established the workload-identity ground truth:
 4. **`svc_worker_*` is retired, not migrated.** It has no consumer. The CI gate
    must not encode a validator that nothing reaches, and Wave 8 should remove
    the mint path rather than build an exchange for a class with no caller.
-   Retirement still follows G-63's evidence rule.
+   Retirement still follows G-63's evidence rule. Implemented by CHAOS-10044: `service-credentials create` and `rotate` refuse `worker-operator`; `list` and `revoke` keep working on stored rows.
 5. **Infrastructure identity stays independent** (G-37). A workload token does
    not replace least-privilege database roles, TLS, or network policy — and per
    the threat model §1.1, the private-network boundary is a real control that

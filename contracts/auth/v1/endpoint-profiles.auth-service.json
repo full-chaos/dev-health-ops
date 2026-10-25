@@ -352,7 +352,7 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/compat.go",
-        "line": 123
+        "line": 126
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
@@ -380,7 +380,7 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/compat.go",
-        "line": 124
+        "line": 127
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"

@@ -337,7 +337,13 @@ func llmFailureOf(err error) (class string, deterministic bool) {
 // unit has none (a failed request, a cancelled context).
 func (served *ServedDecision) categorize(ctx context.Context, cfg Config, entry preprocessed) (categorize.CategorizationOutcome, error) {
 	unit := shadowUnit{workUnitID: entry.result.Investment.WorkUnitID, bundle: entry.result.Bundle}
-	result := served.classifyOne(ctx, unit)
+	// The worker pool can still hand over a unit after the run stopped (its
+	// producer's select picks at random between two ready cases): that unit is
+	// never sent.
+	result := shadowResult{unit: unit, err: ctx.Err()}
+	if result.err == nil {
+		result = served.classifyOne(ctx, unit)
+	}
 	if result.err != nil {
 		// A cancelled or expired context (the only error Classify returns for a
 		// completer that NewCompleter built). The unit still has its one outcome
@@ -634,6 +640,9 @@ func (m *Materializer) noteSkippedTerminal(count int) {
 func (m *Materializer) categorizeEntry(ctx context.Context, cfg Config, entry preprocessed) (categorize.CategorizationOutcome, error) {
 	if backend := m.backend(); backend != nil {
 		return backend.categorize(ctx, cfg, entry)
+	}
+	if err := ctx.Err(); err != nil {
+		return categorize.CategorizationOutcome{}, err
 	}
 	return categorize.CategorizeTextBundle(ctx, entry.result.Bundle, categorize.CategorizeOptions{
 		Provider: m.provider, ProviderName: cfg.ProviderName, Model: cfg.Model, Telemetry: m.llmTelemetry,

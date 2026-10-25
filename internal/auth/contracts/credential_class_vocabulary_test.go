@@ -24,9 +24,7 @@ import (
 // rather than inventing a parallel class, because the frozen vocabulary
 // already has that concept and a second name for one thing is how a closed
 // vocabulary stops being closed.
-var waveOnePlatformCredentialClasses = map[string]string{
-	"workload_token": "TRD section 11, Workload token: EdDSA JWS, exact audience, obtained by federation or bootstrap exchange.",
-}
+var waveOnePlatformCredentialClasses = map[string]string{}
 
 func frozenCredentialClassIDs(t *testing.T) map[string]bool {
 	t.Helper()

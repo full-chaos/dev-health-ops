@@ -61,9 +61,23 @@ func acpRows(t *testing.T, golden map[string]string) map[string]string {
 		users = append(users, line)
 	}
 	out[TableUsers] = strings.Join(users, rowSeparator)
+	var refresh []string
+	for _, line := range lines(golden[TableRefreshTokens]) {
+		switch line {
+		case "alice@example.comorg-bfalse 1":
+			line = "alice@example.comorg-afalse 1"
+		case "alice@example.comorg-btrue 1":
+			line = "alice@example.comorg-atrue 2"
+		}
+		refresh = append(refresh, line)
+	}
+	out[TableRefreshTokens] = strings.Join(refresh, rowSeparator)
 	var audit []string
 	failed := 0
 	for _, line := range lines(golden[TableAuditLogs]) {
+		if strings.HasPrefix(line, "Org Balice@example.comloginsessionuser:") {
+			line = "Org A" + strings.TrimPrefix(line, "Org B")
+		}
 		if strings.Contains(line, "login_failedsession") {
 			failed++
 			line = regexp.MustCompile(`\{"email": "[^"]*"\}`).ReplaceAllString(line, "{}")
@@ -81,7 +95,7 @@ func acpRows(t *testing.T, golden map[string]string) map[string]string {
 func TestQuirksCoverTheGoldenAndTheExpectedTargetRowsExactly(t *testing.T) {
 	golden := goldenRows(t)
 	acp := acpRows(t, golden)
-	l, err := NewLedger(forwarded(t, "sessions,local_login,social"))
+	l, err := NewLedger(forwarded(t, "sessions,local_login"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +107,7 @@ func TestQuirksCoverTheGoldenAndTheExpectedTargetRowsExactly(t *testing.T) {
 	if dead := l.Dead(); len(dead) != 0 {
 		t.Errorf("dead quirks: %v", dead)
 	}
-	want := "audit-login-failed-attempted-email-not-recorded=1 audit-login-without-organization-recorded=1 users-last-login-not-stamped=2"
+	want := "audit-login-failed-attempted-email-not-recorded=1 audit-login-without-organization-recorded=1 login-organization-chosen-without-activity=2 audit-login-organization-chosen-without-activity=2 refresh-stale-token-rotated-before-the-pin-check=1 users-last-login-not-stamped=2"
 	if got := l.Covered(); got != want {
 		t.Errorf("Covered = %q, want %q", got, want)
 	}
@@ -102,11 +116,11 @@ func TestQuirksCoverTheGoldenAndTheExpectedTargetRowsExactly(t *testing.T) {
 func TestQuirksReportARowTheGoldenDoesNotHold(t *testing.T) {
 	golden := goldenRows(t)
 	acp := acpRows(t, golden)
-	l, err := NewLedger(forwarded(t, "sessions,local_login,social"))
+	l, err := NewLedger(forwarded(t, "sessions,local_login"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	changed := strings.Replace(acp[TableRefreshTokens], "alice@example.comorg-bfalse 1", "alice@example.comorg-bfalse 2", 1)
+	changed := strings.Replace(acp[TableRefreshTokens], "alice@example.comorg-afalse 1", "alice@example.comorg-afalse 2", 1)
 	if changed == acp[TableRefreshTokens] {
 		t.Fatal("the golden's refresh_tokens row has changed")
 	}
@@ -128,6 +142,18 @@ func TestQuirkRewritesHitARowOfTheFrozenGolden(t *testing.T) {
 		for _, line := range lines(golden[q.Table]) {
 			if _, ok := q.Rewrite(line); ok {
 				hits++
+				continue
+			}
+			// a quirk may act on the line another quirk's rewrite produced
+			for _, other := range Quirks {
+				if other.Table != q.Table || other.Rewrite == nil || other.ID == q.ID {
+					continue
+				}
+				if once, ok := other.Rewrite(line); ok {
+					if _, ok := q.Rewrite(once); ok {
+						hits++
+					}
+				}
 			}
 		}
 		if hits == 0 {
@@ -148,7 +174,7 @@ func TestEveryProjectedTableIsAGoldenComparison(t *testing.T) {
 func TestQuirkExtraRowsAreLimitedToTheirCount(t *testing.T) {
 	golden := goldenRows(t)
 	acp := acpRows(t, golden)
-	l, err := NewLedger(forwarded(t, "sessions,local_login,social"))
+	l, err := NewLedger(forwarded(t, "sessions,local_login"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -200,5 +226,140 @@ func TestScriptExportedValueIsTheForwardedSet(t *testing.T) {
 		if err != nil || string(out) != c.want {
 			t.Errorf("FORWARDED=(%s) exports %q (%v), want %q", c.array, out, err, c.want)
 		}
+	}
+}
+
+// The organization-choice quirks cover alice's sign-in rows and nothing else: every other organization-B row, in
+// either table, stays a difference.
+func TestOrganizationChoiceQuirksRewriteOnlyAlicesSignInRows(t *testing.T) {
+	golden := goldenRows(t)
+	for id, want := range map[string]int{"login-organization-chosen-without-activity": 2, "audit-login-organization-chosen-without-activity": 2} {
+		var quirk *Quirk
+		for i := range Quirks {
+			if Quirks[i].ID == id {
+				quirk = &Quirks[i]
+			}
+		}
+		if quirk == nil {
+			t.Fatalf("no quirk %s", id)
+		}
+		hits := 0
+		for _, line := range lines(golden[quirk.Table]) {
+			if rewritten, ok := quirk.Rewrite(line); ok {
+				hits++
+				if !strings.Contains(line, "alice@example.com") || strings.Contains(rewritten, "Org B") || strings.Contains(rewritten, "org-b") {
+					t.Errorf("%s rewrote %q to %q", id, line, rewritten)
+				}
+			}
+		}
+		if hits != want {
+			t.Errorf("%s rewrites %d golden rows, want %d", id, hits, want)
+		}
+		for _, line := range []string{
+			"ivan@example.comorg-bfalse 1", "alice@example.comorg-bfalse 2", "alice@example.comorg-dfalse 1",
+			"Org Bivan@example.comloginsessionuser:ivan@example.comUser logged in{}{}success<null>",
+			"Org Balice@example.comlogin_failedsessionuser:alice@example.comLogin failed: invalid credentials{}{}failureInvalid credentials",
+			"Org Balice@example.comloginsessionuser:alice@example.comUser logged in{}{}success<null> | Org B",
+		} {
+			if rewritten, ok := quirk.Rewrite(line); ok {
+				t.Errorf("%s rewrote %q to %q", id, line, rewritten)
+			}
+		}
+	}
+	acp := acpRows(t, golden)
+	l, err := NewLedger(forwarded(t, "sessions,local_login"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The revoked count is pinned: a third revoked credential is not what the stale-token ruling explains.
+	moreRevoked := strings.Replace(acp[TableRefreshTokens], "alice@example.comorg-atrue 2", "alice@example.comorg-atrue 3", 1)
+	if moreRevoked == acp[TableRefreshTokens] {
+		t.Fatal("the expected organization-A revoked row changed")
+	}
+	if problems := l.Compare(TableRefreshTokens, golden[TableRefreshTokens], moreRevoked); len(problems) != 2 {
+		t.Errorf("a changed revoked count was classified: %v", problems)
+	}
+	l, err = NewLedger(forwarded(t, "sessions,local_login"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	extra := acp[TableRefreshTokens] + rowSeparator + "ivan@example.comorg-bfalse 1"
+	if problems := l.Compare(TableRefreshTokens, golden[TableRefreshTokens], extra); len(problems) != 1 {
+		t.Errorf("a non-alice organization-B row was classified: %v", problems)
+	}
+}
+
+// The stale-token quirk rewrites one row, alice's revoked credential in organization A, and nothing else: a revoked
+// count anywhere else stays a difference.
+func TestStaleTokenQuirkRewritesOnlyAlicesRevokedRow(t *testing.T) {
+	var quirk *Quirk
+	for i := range Quirks {
+		if Quirks[i].ID == "refresh-stale-token-rotated-before-the-pin-check" {
+			quirk = &Quirks[i]
+		}
+	}
+	if quirk == nil {
+		t.Fatal("no stale-token quirk")
+	}
+	if quirk.Tracked != "CHAOS-11347" || quirk.Kind != Deliberate {
+		t.Errorf("the quirk is %s citing %q, want deliberate CHAOS-11347", quirk.Kind, quirk.Tracked)
+	}
+	golden := goldenRows(t)
+	for _, line := range lines(golden[TableRefreshTokens]) {
+		if rewritten, ok := quirk.Rewrite(line); ok {
+			t.Errorf("the quirk rewrote the golden row %q to %q directly: it acts only after the organization quirk", line, rewritten)
+		}
+	}
+	if got, ok := quirk.Rewrite("alice@example.comorg-atrue 1"); !ok || got != "alice@example.comorg-atrue 2" {
+		t.Errorf("alice's organization-A revoked row became %q (%v), want org-atrue 2", got, ok)
+	}
+	for _, line := range []string{
+		"alice@example.comorg-afalse 1", "alice@example.comorg-btrue 1", "alice@example.comorg-atrue 2", "alice@example.comorg-atrue 3",
+		"ivan@example.comorg-atrue 1", "ivan@example.comorg-afalse 1", "pia@example.com<null>true 1",
+	} {
+		if got, ok := quirk.Rewrite(line); ok {
+			t.Errorf("the quirk rewrote %q to %q", line, got)
+		}
+	}
+	acp := acpRows(t, golden)
+	l, err := NewLedger(forwarded(t, "sessions,local_login"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := strings.Replace(acp[TableRefreshTokens], "ivan@example.comorg-afalse 1", "ivan@example.comorg-afalse 2", 1)
+	if other == acp[TableRefreshTokens] {
+		t.Fatal("the golden's ivan row has changed")
+	}
+	if problems := l.Compare(TableRefreshTokens, golden[TableRefreshTokens], other); len(problems) != 2 {
+		t.Errorf("a revoked-count style change on another user's row was classified: %v", problems)
+	}
+}
+
+// A chain of quirks covers one target row per golden row, and every quirk it used is counted: a row the golden holds
+// twice and the target once leaves one difference, and so does a target row beyond the golden's. (A rewrite quirk is
+// bounded by the golden's own rows, so it has no Max; an extra-row quirk keeps its Max, see
+// TestQuirkExtraRowsAreLimitedToTheirCount.)
+func TestChainedRewritesCoverOneTargetRowPerGoldenRow(t *testing.T) {
+	golden := goldenRows(t)
+	acp := acpRows(t, golden)
+	run := func(goldenRefresh, acpRefresh string) (problems []string, covered string) {
+		l, err := NewLedger(forwarded(t, "sessions,local_login"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return l.Compare(TableRefreshTokens, goldenRefresh, acpRefresh), l.Covered()
+	}
+	if problems, covered := run(golden[TableRefreshTokens], acp[TableRefreshTokens]); len(problems) != 0 ||
+		!strings.Contains(covered, "login-organization-chosen-without-activity=2") ||
+		!strings.Contains(covered, "refresh-stale-token-rotated-before-the-pin-check=1") {
+		t.Fatalf("the expected rows were not covered by the chain: %v %q", problems, covered)
+	}
+	twice := golden[TableRefreshTokens] + rowSeparator + "alice@example.comorg-btrue 1"
+	if problems, _ := run(twice, acp[TableRefreshTokens]); len(problems) != 1 || !strings.Contains(problems[0], "golden only") {
+		t.Errorf("a golden row held twice and covered once left %v, want one golden-only difference", problems)
+	}
+	more := acp[TableRefreshTokens] + rowSeparator + "alice@example.comorg-atrue 2"
+	if problems, _ := run(golden[TableRefreshTokens], more); len(problems) != 1 || !strings.Contains(problems[0], "target only") {
+		t.Errorf("a target row beyond the golden's left %v, want one target-only difference", problems)
 	}
 }

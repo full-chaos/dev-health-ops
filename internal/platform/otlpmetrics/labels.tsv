@@ -29,6 +29,7 @@ devhealth_auth_outbox_delivered_total		code: internal/audit/publisher.go
 devhealth_auth_outbox_delivery_failures_total	reason	code: internal/audit/publisher.go
 devhealth_auth_outbox_oldest_pending_age_seconds		code: internal/audit/outboxloop.go
 devhealth_auth_outbox_publisher_enabled		code: internal/audit/outboxloop.go
+dev_health_categorize_byo_optin_unreadable_total	reason	code: internal/jobs/investment/categorizebyo.go
 dev_health_generation_repair_failures_total	step	code: internal/jobs/metrics/daily/generation_repair_metrics.go
 dev_health_generation_repair_partial_total		code: internal/jobs/metrics/daily/generation_repair_metrics.go
 dev_health_ic_finalize_refused_empty_org_total		code: internal/jobs/metrics/daily/icfinalize/executor.go
@@ -118,19 +119,20 @@ river.insert_many_duration	status	third-party: github.com/riverqueue/rivercontri
 river.insert_many_duration_histogram	status	third-party: github.com/riverqueue/rivercontrib/otelriver v0.12.0 middleware instrument
 river.job_get_available_count	queue	third-party: github.com/riverqueue/rivercontrib/otelriver v0.12.0 middleware instrument
 river.job_get_available_duration	queue	third-party: github.com/riverqueue/rivercontrib/otelriver v0.12.0 middleware instrument
-river.work_count	attempt,cancel,kind,priority,queue,snooze,status,tag	third-party: otelriver work instrument, 8 keys today (over the budget of 6; the cut is a follow-up, not part of this leaf)
-river.work_duration	attempt,cancel,kind,priority,queue,snooze,status,tag	third-party: otelriver work instrument, 8 keys today (over the budget of 6; the cut is a follow-up, not part of this leaf)
-river.work_duration_histogram	attempt,cancel,kind,priority,queue,snooze,status,tag	third-party: otelriver work instrument, 8 keys today (over the budget of 6; the cut is a follow-up, not part of this leaf)
+river.work_count	attempt,cancel,kind,priority,queue,snooze,status	third-party: otelriver work instrument, 7 keys kept (over the budget of 6; otelriver also sets tag, which this table drops)
+river.work_duration	attempt,cancel,kind,priority,queue,snooze,status	third-party: otelriver work instrument, 7 keys kept (over the budget of 6; otelriver also sets tag, which this table drops)
+river.work_duration_histogram	attempt,cancel,kind,priority,queue,snooze,status	third-party: otelriver work instrument, 7 keys kept (over the budget of 6; otelriver also sets tag, which this table drops)
 session_org_activity_fallback_total		code: internal/api/session/activity_metrics.go
 session_org_activity_read_failures_total	error_class,table	code: internal/api/session/activity_metrics.go
 sync_finalize_delivery_not_current_total	reason	code: internal/syncdispatchruntime/native_finalize_sync_run.go
 sync_route_generation_stranded_total	action,kind	code: internal/syncreconciler/generation_reconcile.go
 team_catalog_snapshot_close_abandoned_total	kind,provider,reason	code: internal/providersync/snapshot_close_report.go
 team_repo_ownership_retraction_held_total	kind,provider,reason	code: internal/providersync/team_repo_ownership_retraction_guard.go
-workgraph_issue_pr_fallback_beside_native_issue_rows	organization_id	code: internal/jobs/workgraph/issuepredges/invariant.go (named by a table row, created in a loop)
-workgraph_issue_pr_fallback_beside_native_pull_request_rows	organization_id	code: internal/jobs/workgraph/issuepredges/invariant.go (named by a table row, created in a loop)
-workgraph_issue_pr_fallback_beside_native_rows	organization_id	code: internal/jobs/workgraph/issuepredges/invariant.go (named by a table row, created in a loop)
-workgraph_issue_pr_fallback_pull_request_issue_side_rows	organization_id	code: internal/jobs/workgraph/issuepredges/invariant.go (named by a table row, created in a loop)
+workgraph_issue_pr_fallback_beside_native_issue_rows_total		code: internal/jobs/workgraph/issuepredges/invariant.go (named by a table row, created in a loop)
+workgraph_issue_pr_fallback_beside_native_pull_request_rows_total		code: internal/jobs/workgraph/issuepredges/invariant.go (named by a table row, created in a loop)
+workgraph_issue_pr_fallback_beside_native_rows_total		code: internal/jobs/workgraph/issuepredges/invariant.go (named by a table row, created in a loop)
+workgraph_issue_pr_fallback_invariant_checks_total		code: internal/jobs/workgraph/issuepredges/invariant.go (named by a table row, created in a loop)
+workgraph_issue_pr_fallback_pull_request_issue_side_rows_total		code: internal/jobs/workgraph/issuepredges/invariant.go (named by a table row, created in a loop)
 dev_health_ai_impact_linkage_unavailable_total		code: internal/jobs/metrics/aiimpact/metrics.go
 dev_health_api_rate_limit_rejections_total	limit	code: internal/auth/httpapi/hitstore.go
 dev_health_api_rate_limit_store_errors_total	limit	code: internal/auth/httpapi/hitstore.go

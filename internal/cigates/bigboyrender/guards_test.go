@@ -418,6 +418,32 @@ func TestDomainPostureDeltaExpectsAddedColumnPrivileges(t *testing.T) {
 	}
 }
 
+// A RequiredFunctions literal is read back as EXECUTE on each added signature (spaces dropped, so the
+// expectation line stays three fields); an unchanged function has no line.
+func TestDomainPostureDeltaExpectsAddedFunctionExecute(t *testing.T) {
+	withFunctions := func(list string) string {
+		return strings.Replace(domainNew, "\t\t},\n\t}\n}", "\t\t},\n\t\tRequiredFunctions: []string{"+list+"},\n\t}\n}", 1)
+	}
+	before := withFunctions(`"kept_fn(text)"`)
+	after := withFunctions(`"kept_fn(text)", "added_fn(text, uuid)"`)
+	code, _, lines := posture(t, "domain", "domain_authorization.go", before, after)
+	if code != 0 || len(lines) != 1 || lines[0] != "devhealth_domain added_fn(text,uuid) EXECUTE" {
+		t.Fatalf("exit %d, lines %v", code, lines)
+	}
+	for name, text := range map[string]string{
+		"call":         strings.Replace(domainNew, "\t\t},\n\t}\n}", "\t\t},\n\t\tRequiredFunctions: functions(),\n\t}\n}", 1),
+		"ident":        strings.Replace(domainNew, "\t\t},\n\t}\n}", "\t\t},\n\t\tRequiredFunctions: fns,\n\t}\n}", 1),
+		"unquoted":     withFunctions(`"kept_fn(text)", name`),
+		"bad name":     withFunctions(`"Kept-fn(text)"`),
+		"two literals": withFunctions(`"kept_fn(text)"},\n\t\tRequiredFunctions: []string{"other_fn(text)"`),
+	} {
+		code, stdout, lines := posture(t, "domain", "domain_authorization.go", before, text)
+		if code == 0 || !strings.Contains(stdout, "unparsable") || len(lines) != 0 {
+			t.Errorf("%s: exit %d, stdout %q, lines %v", name, code, stdout, lines)
+		}
+	}
+}
+
 func TestPostureDeltaReadsACompactButValidRow(t *testing.T) {
 	code, stdout, _ := posture(t, "api", "api_authorization.go", postureV2, strings.ReplaceAll(postureV2, ", ", ","))
 	if code != 0 || strings.Contains(stdout, "unparsable") {

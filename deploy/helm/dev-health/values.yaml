@@ -37,6 +37,12 @@ legacyIngest:
 goApi:
   enabled: false
   replicas: 1
+  # -- CHAOS-11217: where go-api reads AUTH_SESSION_ISSUE_TOKEN (sessions on only).
+  #    Empty secretName = the shared Secret. Set it to a dedicated operator-created
+  #    Secret that holds the key.
+  sessionIssue:
+    secretName: ""
+    secretKey: AUTH_SESSION_ISSUE_TOKEN
   # -- The api listener (requests). The Service targets this port.
   port: 8000
   # -- The operator listener: /healthz, /readyz and /metrics. Probes use it.
@@ -197,6 +203,12 @@ authService:
   valkey:
     secretName: ""
     secretKey: AUTH_VALKEY_URI
+  # -- AUTH_SERVICE_TRUSTED_PROXIES: the peers (IP addresses or strict CIDR networks) whose single X-Forwarded-For
+  #    value names the client. Required while any goApi.authProxy flag is on, because otherwise every proxied caller
+  #    shares the proxy's own address in the rate-limit keys. List the go-api pods' network only: the render refuses
+  #    0.0.0.0/0, ::/0 and IPv4-mapped forms. Trust is safe because the auth-service NetworkPolicy admits go-api's pods
+  #    and no other pod on the API port while a proxy flag is on.
+  trustedProxies: []
   signingKey:
     secretName: ""
     secretKey: signing-key.pem

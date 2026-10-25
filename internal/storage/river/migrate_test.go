@@ -554,6 +554,7 @@ func TestRuntimeGrantStatementsMatchProvisionedLeastPrivilegePolicy(t *testing.T
 		"REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM \"queue_runtime\"",
 		"REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM \"queue_runtime\"",
 		"REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA public FROM PUBLIC, \"domain_runtime\", \"queue_runtime\"",
+		"DO $$ BEGIN IF to_regprocedure('public.categorize_byo_opted_in(text)') IS NOT NULL THEN GRANT EXECUTE ON FUNCTION public.categorize_byo_opted_in(text) TO \"domain_runtime\"; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.worker_job_outbox') IS NOT NULL THEN GRANT SELECT, UPDATE, DELETE ON TABLE public.worker_job_outbox TO \"queue_runtime\"; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.worker_job_delivery_abandonments') IS NOT NULL THEN GRANT SELECT, INSERT ON TABLE public.worker_job_delivery_abandonments TO \"queue_runtime\"; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.worker_job_completion_fences') IS NOT NULL THEN GRANT SELECT, UPDATE, DELETE ON TABLE public.worker_job_completion_fences TO \"queue_runtime\"; END IF; END $$",

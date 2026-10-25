@@ -123,9 +123,7 @@ func symbolsConstructedByTheWorker(t *testing.T) map[string]bool {
 		}
 		name := selector.Sel.Name
 		direct[name] = true
-		// A constructor names the type its comment lives on: the stale claim
-		// sits on GitLabWorkItemDeriver, while the wiring file only ever says
-		// NewGitLabWorkItemDeriver.
+		// A constructor names the type its comment lives on.
 		if strings.HasPrefix(name, "New") && len(name) > 3 {
 			direct[name[3:]] = true
 		}
@@ -655,18 +653,6 @@ func TestDriftGuardSeesTheSymbolsItMustCover(t *testing.T) {
 	// JiraWorkItemsRouteHandler is genuinely unconstructed -- jira's live path
 	// uses JiraAtlassianRouteHandler -- and its "intentionally unregistered"
 	// comment is TRUE and must stay (CHAOS-4848).
-	// The four work-item derivers are not wired either: the work-items unit
-	// writes raw rows only and the worker constructs no deriver. Their doc
-	// comments say so, and a guard that reported them as wired would force
-	// those comments to be falsified.
-	for _, deriver := range []string{
-		"GitHubWorkItemDeriver", "GitLabWorkItemDeriver",
-		"JiraWorkItemDeriver", "LinearWorkItemDeriver",
-	} {
-		if wired[deriver] || wired["New"+deriver] {
-			t.Errorf("%s is reported as wired, but the worker constructs no work-item deriver", deriver)
-		}
-	}
 	if wired["JiraWorkItemsRouteHandler"] {
 		t.Error("JiraWorkItemsRouteHandler is reported as wired, but jira's live route is " +
 			"JiraAtlassianRouteHandler; treating it as wired would force a correct comment to be falsified")

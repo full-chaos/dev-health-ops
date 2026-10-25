@@ -1106,6 +1106,10 @@ func runtimeGrantStatements(options MigrationOptions) []string {
 		"REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM " + queueRole,
 		"REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM " + queueRole,
 		"REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA public FROM PUBLIC, " + domainRole + ", " + queueRole,
+		// The one public function the domain role may run: the definer read of an
+		// org's categorization opt-in (pgmigrate 0156; domainPosture's
+		// RequiredFunctions). It holds nothing on settings itself.
+		"DO $$ BEGIN IF to_regprocedure('public.categorize_byo_opted_in(text)') IS NOT NULL THEN GRANT EXECUTE ON FUNCTION public.categorize_byo_opted_in(text) TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.worker_job_outbox') IS NOT NULL THEN GRANT SELECT, UPDATE, DELETE ON TABLE public.worker_job_outbox TO " + queueRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.worker_job_delivery_abandonments') IS NOT NULL THEN GRANT SELECT, INSERT ON TABLE public.worker_job_delivery_abandonments TO " + queueRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.worker_job_completion_fences') IS NOT NULL THEN GRANT SELECT, UPDATE, DELETE ON TABLE public.worker_job_completion_fences TO " + queueRole + "; END IF; END $$",

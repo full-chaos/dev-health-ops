@@ -244,6 +244,7 @@ type runner struct {
 	goBase         string
 	external       bool
 	forwarded      authrows.Forwarded
+	usersOwned     bool
 	ledger         *authrows.Ledger
 	pySink, goSink *smtpcapture.Server
 	receipt        strings.Builder
@@ -655,8 +656,11 @@ func TestAuthFlowVenueOracle(t *testing.T) {
 		if r.forwarded, err = authrows.FromEnv(); err != nil {
 			t.Fatal(err)
 		}
+		if r.usersOwned, err = authrows.UsersOwnedFromEnv(); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if r.ledger, err = authrows.NewLedger(r.forwarded, false); err != nil {
+	if r.ledger, err = authrows.NewLedger(r.forwarded, r.usersOwned); err != nil {
 		t.Fatal(err)
 	}
 	if r.goBase == "" {

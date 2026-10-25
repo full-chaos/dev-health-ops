@@ -81,9 +81,9 @@ var Quirks = []Quirk{
 		},
 	},
 	{
-		ID: "users-last-login-not-stamped", Kind: Gap, Table: TableUsers, Needs: []Aggregate{LocalLogin},
+		ID: "users-last-login-not-stamped", Kind: Gap, Table: TableUsers, Needs: []Aggregate{LocalLogin}, Owned: NotOwned,
 		Tracked: "CHAOS-10630",
-		Reason:  "a sign-in through auth-service stamps no last login on public.users or auth.users until the users-owned switch lands, so the row reads as never signed in",
+		Reason:  "a sign-in through auth-service stamps no last login on public.users or auth.users until the users-owned switch lands, so the row reads as never signed in; on a leg that owns users (AUTH_USERS_OWNED=true) the last login is stamped and this difference is not expected",
 		Rewrite: func(line string) (string, bool) {
 			return replaceOnce(lastLoginSet, line, "${1}false${2}")
 		},

@@ -242,6 +242,24 @@ SQL
   for aggregate in "${FORWARDED[@]}"; do
     bash "${SCRIPT_DIR}/auth_corpus_set_env.sh" "AUTH_PROXY_$(tr '[:lower:]' '[:upper:]' <<<"${aggregate}")" true
   done
+  # CHAOS-11387: this leg runs with auth-service owning users (CI and local only; prod and the other leg stay off).
+  # users-backfill refuses once the flag is true and auth-service is not ready while public.users and auth.users
+  # have gaps, so the copy runs first, with the flag still off; then grants and auth-service, then go-api.
+  # AUTH_CORPUS_USERS_UNOWNED=1 skips it: the non-vacuity run, which must still pass the golden through the not-owned quirks.
+  if [ -z "${AUTH_CORPUS_USERS_UNOWNED:-}" ]; then
+    printf 'step 1e: users-backfill, then AUTH_USERS_OWNED=true\n'
+    (
+      export "AUTH_DATABASE_URI=host=postgres port=5432 user=${AUTH_RUNTIME_DATABASE_ROLE:-devhealth_auth} password='${AUTH_RUNTIME_DATABASE_PASSWORD:-devhealth_auth}' dbname=${POSTGRES_DB:-postgres} sslmode=disable"
+      timeout --kill-after=10 "${AUTH_CORPUS_UP_SECONDS:-1500}" docker compose -p "${PROJECT}" "${COMPOSE_FILES[@]}" --profile auth \
+        run --rm --no-deps -e AUTH_DATABASE_URI migrate auth users-backfill
+    ) || die "users-backfill failed"
+    export AUTH_USERS_OWNED=true
+    timeout --kill-after=10 "${AUTH_CORPUS_UP_SECONDS:-1500}" docker compose -p "${PROJECT}" "${COMPOSE_FILES[@]}" --profile auth \
+      run --rm --no-deps auth-grants >/dev/null
+    timeout --kill-after=10 "${AUTH_CORPUS_UP_SECONDS:-1500}" docker compose -p "${PROJECT}" "${COMPOSE_FILES[@]}" --profile auth \
+      up --detach --no-deps --force-recreate --no-build --wait --wait-timeout 300 auth-service
+    bash "${SCRIPT_DIR}/auth_corpus_set_env.sh" AUTH_USERS_OWNED true
+  fi
 fi
 
 printf 'step 2: TestAuthFlowVenueOracle through the base-URL runner\n'
@@ -256,6 +274,12 @@ export DEVHEALTH_AUTH_ORACLE_STUB_ADMIN="${STUB_ADMIN}"
 # (internal/testsupport/authrows).
 DEVHEALTH_AUTH_ORACLE_FORWARDED="$(IFS=,; printf '%s' "${FORWARDED[*]:-}")"
 export DEVHEALTH_AUTH_ORACLE_FORWARDED
+# Whether auth-service owns users on this leg (leg acp only, step 1e): the corpus expects the users rows of go-api's golden.
+if [ "${LEG}" = "acp" ] && [ -z "${AUTH_CORPUS_USERS_UNOWNED:-}" ]; then
+  export DEVHEALTH_AUTH_ORACLE_USERS_OWNED=true
+else
+  export DEVHEALTH_AUTH_ORACLE_USERS_OWNED=false
+fi
 (cd "${ROOT}" && go test -trimpath -tags integration -count=1 -v -run '^TestAuthFlowVenueOracle$' ./internal/apiservice/authflowvenue)
 
 if [ "${LEG}" = "acp" ]; then

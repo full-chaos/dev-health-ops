@@ -271,3 +271,33 @@ func TestMissingQuirkWithNoGoldenRowToCoverIsDead(t *testing.T) {
 		t.Fatalf("Dead = %v, want the missing-row quirk reported", dead)
 	}
 }
+
+func ownedTable() []Quirk {
+	return []Quirk{{ID: "stamp", Kind: Gap, Tracked: "CHAOS-10630", Reason: "r", Table: TableUsers, Needs: []Aggregate{LocalLogin}, Owned: NotOwned,
+		Rewrite: func(line string) (string, bool) {
+			if line == "login true" {
+				return "login false", true
+			}
+			return "", false
+		}}}
+}
+
+func TestOwnedLegFailsALastLoginFalseRow(t *testing.T) {
+	l, err := newLedger(forwarded(t, "local_login"), true, ownedTable())
+	if err != nil {
+		t.Fatal(err)
+	}
+	problems := l.Compare(TableUsers, "login true", "login false")
+	if len(problems) != 2 || !strings.Contains(problems[0], "users: unclassified difference") {
+		t.Fatalf("a never-stamped row on the owned leg must fail as unclassified: %v", problems)
+	}
+}
+
+func TestRealTableLastLoginQuirkIsNotOwnedOnly(t *testing.T) {
+	for _, q := range Quirks {
+		if q.ID == "users-last-login-not-stamped" && q.Owned != NotOwned {
+			t.Fatalf("users-last-login-not-stamped must be NotOwned, is %q", q.Owned)
+		}
+	}
+}
+

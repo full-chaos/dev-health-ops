@@ -316,3 +316,21 @@ func TestChainedRewritesCoverOneTargetRowPerGoldenRow(t *testing.T) {
 		t.Errorf("a target row beyond the golden's left %v, want one target-only difference", problems)
 	}
 }
+
+func TestOwnedLegExpectsTheGoldensUsersRowsWithNoQuirk(t *testing.T) {
+	golden := goldenRows(t)
+	l, err := NewLedger(forwarded(t, "sessions,local_login"), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if problems := l.Compare(TableUsers, golden[TableUsers], golden[TableUsers]); len(problems) != 0 {
+		t.Fatalf("users rows equal to the golden's: %v", problems)
+	}
+	if got := l.Covered(); strings.Contains(got, "users-last-login-not-stamped") {
+		t.Fatalf("the last-login quirk is live on the owned leg: %q", got)
+	}
+	notStamped := acpRows(t, golden)[TableUsers]
+	if problems := l.Compare(TableUsers, golden[TableUsers], notStamped); len(problems) == 0 {
+		t.Fatal("never-stamped users rows passed on the owned leg")
+	}
+}

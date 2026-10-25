@@ -31,6 +31,7 @@ case "$*" in
     printf '%s %s %s\n' "${AUTH_SESSION_SUCCESSOR_KEY:-}" "${AUTH_LOGIN_LOCKOUT_KEY:-}" "${AUTH_JWT_SECRET_KEY:+jwt}" >> "` + record + `.keys"
     if [ -n "$FAKE_BLOCK_UP" ]; then exec sleep "$FAKE_BLOCK_UP"; fi
     if [ -n "$FAKE_FAIL_UP" ]; then exit 1; fi ;;
+  *" logs "*" auth-service"*) printf '%s\n' "${FAKE_AUTH_LOGS:-}" ;;
   *" port "*) echo 127.0.0.1:12345 ;;
   *" ps -q go-api"*) echo cid-go-api ;;
   *"inspect --format"*) echo "${FAKE_HEALTH:-healthy}" ;;
@@ -477,5 +478,36 @@ func TestAuthCorpusFailureDumpIncludesAuthServiceAndTheStub(t *testing.T) {
 	}
 	if !authLogs || !stubLogs {
 		t.Errorf("want `compose logs --tail=3000 auth-service` and `--tail=200 providerstub` at failure (auth %v, stub %v):\n%s", authLogs, stubLogs, fake.calls(t))
+	}
+}
+
+// Leg acp reads auth-service's own log: the corpus test runs in another process than auth-service, so a body written
+// with the wrong writer for its route is visible only as the policy's ERROR line.
+func TestAuthCorpusAcpLegFailsOnAuthServiceWriterViolations(t *testing.T) {
+	served := "/api/v1/auth/refresh,/api/v1/auth/logout,/api/v1/auth/login"
+	metrics := `devhealth_api_auth_proxy_requests_total{aggregate="sessions",outcome="forwarded"} 3` + "\n" +
+		`devhealth_api_auth_proxy_requests_total{aggregate="local_login",outcome="forwarded"} 3`
+	violation := `level=ERROR msg="policy: wrong body writer for the route; FastAPI writes this body the other way" route="POST /api/v1/auth/login"`
+	for name, tc := range map[string]struct {
+		logs, wantError string
+	}{
+		"clean log":        {logs: `level=INFO msg="listener bound"`},
+		"empty log":        {},
+		"one violation":    {logs: violation, wantError: "auth-service logged 1 body-writer violations"},
+		"two violations":   {logs: violation + "\n" + violation, wantError: "auth-service logged 2 body-writer violations"},
+		"other error line": {logs: `level=ERROR msg="api response: body could not be serialized"`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, out, err := runAcpLeg(t, "FAKE_SERVED="+served, "FAKE_METRICS="+metrics, "FAKE_AUTH_LOGS="+tc.logs)
+			if tc.wantError != "" {
+				if err == nil || !strings.Contains(out, tc.wantError) {
+					t.Fatalf("want a failure naming %q, got err=%v:\n%s", tc.wantError, err, out)
+				}
+				return
+			}
+			if err != nil || !strings.Contains(out, "AUTH CORPUS EXTERNAL (acp) PASSED") {
+				t.Fatalf("want a pass, got err=%v:\n%s", err, out)
+			}
+		})
 	}
 }

@@ -100,11 +100,11 @@ func oidcService(
 func oidcRoutes(service *oidc.Service, sessions authapi.SSOSessions) []httpapi.Route {
 	refusal := sessions.TransportRefusal("")
 	return []httpapi.Route{
-		{Method: http.MethodPost, Pattern: "/api/v1/auth/oidc/{provider_id}/authorize", Handler: service.AuthorizeHandler(), ErrorWriter: refusal},
-		{Method: http.MethodPost, Pattern: "/api/v1/auth/oidc/{provider_id}/callback", Handler: service.CallbackHandler(), ErrorWriter: refusal},
-		{Method: http.MethodPost, Pattern: "/api/v1/auth/oauth/{provider_id}/authorize", Handler: service.OAuthAuthorizeHandler(), ErrorWriter: refusal},
-		{Method: http.MethodGet, Pattern: "/api/v1/auth/oauth/{provider_id}/authorize", Handler: byProviderType(service.OAuthAuthorizeByTypeHandler()), ErrorWriter: refusal},
-		{Method: http.MethodPost, Pattern: "/api/v1/auth/oauth/{provider_id}/callback", Handler: service.OAuthCallbackHandler(), ErrorWriter: refusal},
+		{Method: http.MethodPost, Pattern: "/api/v1/auth/oidc/{provider_id}/authorize", Handler: service.AuthorizeHandler(), ResponseModel: true, ErrorWriter: refusal},
+		{Method: http.MethodPost, Pattern: "/api/v1/auth/oidc/{provider_id}/callback", Handler: service.CallbackHandler(), ResponseModel: true, ErrorWriter: refusal},
+		{Method: http.MethodPost, Pattern: "/api/v1/auth/oauth/{provider_id}/authorize", Handler: service.OAuthAuthorizeHandler(), ResponseModel: true, ErrorWriter: refusal},
+		{Method: http.MethodGet, Pattern: "/api/v1/auth/oauth/{provider_id}/authorize", Handler: byProviderType(service.OAuthAuthorizeByTypeHandler()), ResponseModel: true, ErrorWriter: refusal},
+		{Method: http.MethodPost, Pattern: "/api/v1/auth/oauth/{provider_id}/callback", Handler: service.OAuthCallbackHandler(), ResponseModel: true, ErrorWriter: refusal},
 	}
 }
 
@@ -143,9 +143,9 @@ func samlRoutes(service *saml.Service, sessions authapi.SSOSessions, logger *slo
 	handlers := saml.Handlers{Service: service, Sessions: sessions.SAML(), Logger: logger}
 	refusal := sessions.TransportRefusal("saml")
 	return []httpapi.Route{
-		{Method: http.MethodGet, Pattern: "/api/v1/auth/saml/{provider_id}/metadata", Handler: http.HandlerFunc(handlers.Metadata), ErrorWriter: refusal},
-		{Method: http.MethodPost, Pattern: "/api/v1/auth/saml/{provider_id}/initiate", Handler: http.HandlerFunc(handlers.Initiate), ErrorWriter: refusal},
-		{Method: http.MethodPost, Pattern: "/api/v1/auth/saml/{provider_id}/acs", Handler: http.HandlerFunc(handlers.ACS), ErrorWriter: refusal},
+		{Method: http.MethodGet, Pattern: "/api/v1/auth/saml/{provider_id}/metadata", Handler: http.HandlerFunc(handlers.Metadata), ResponseModel: true, ErrorWriter: refusal},
+		{Method: http.MethodPost, Pattern: "/api/v1/auth/saml/{provider_id}/initiate", Handler: http.HandlerFunc(handlers.Initiate), ResponseModel: true, ErrorWriter: refusal},
+		{Method: http.MethodPost, Pattern: "/api/v1/auth/saml/{provider_id}/acs", Handler: http.HandlerFunc(handlers.ACS), ResponseModel: true, ErrorWriter: refusal},
 	}
 }
 

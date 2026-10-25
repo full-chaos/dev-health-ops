@@ -31,8 +31,13 @@ func TestAuthServiceTrustedProxiesRenderWithTheProxyOnAndTheBoundary(t *testing.
 	if got, ok := envValue(container, trustedEnvName); !ok || got != "10.8.0.0/16,10.9.0.5/32" {
 		t.Fatalf("%s = %q (set %v), want the listed networks", trustedEnvName, got, ok)
 	}
-	if from := authServiceAPIFrom(t, docs); len(from) == 0 {
-		t.Fatal("the proxy is on and trust is set, but the auth-service NetworkPolicy admits no pod on the API port")
+	from := authServiceAPIFrom(t, docs)
+	if len(from) != 1 {
+		t.Fatalf("the API port admits %d peers, want exactly the go-api pods: %v", len(from), from)
+	}
+	selector := aMap(at(from[0], "podSelector", "matchLabels"))
+	if selector["app.kubernetes.io/component"] != "go-api" || at(from[0], "namespaceSelector") != nil || at(from[0], "ipBlock") != nil {
+		t.Fatalf("the one API-port peer is not the go-api pod selector: %v", from[0])
 	}
 }
 
@@ -96,32 +101,104 @@ func TestAuthServiceStoreIsRequiredExactlyWhenTheSessionRoutesAreOn(t *testing.T
 	}
 }
 
-// The template accepts exactly what clientaddr.ParseTrust accepts (internal/auth/clientaddr/clientaddr.go:53-71: a bare
-// address or a strict CIDR with no host bits, no zone), minus the forms the chart refuses on purpose (/0, IPv4-mapped).
-// A value the service refuses would stop auth-service at start, so it must not render.
-func TestAuthServiceTrustedProxiesRenderOnlyWhatTheServiceAccepts(t *testing.T) {
-	render := func(entry string) error {
+// Parity: every entry goes through BOTH the chart render and clientaddr.ParseTrust, the parser authconfig calls for
+// AUTH_SERVICE_TRUSTED_PROXIES (internal/auth/authconfig/config.go:439; entry rules internal/auth/clientaddr/clientaddr.go:53-71).
+// A value that renders but the service refuses would stop auth-service at start: that is the failure. The chart may be
+// stricter only where it says so on purpose (a /0 network, an IPv4-mapped form, a padded entry).
+func TestAuthServiceTrustedProxiesRenderIffTheServiceParses(t *testing.T) {
+	render := func(entry string) bool {
 		args := append(goAPIWithAuth("--set", "goApi.authProxy.sessions=true"), "--set-json", `authService.trustedProxies=["`+entry+`"]`)
 		_, _, err := renderAuth(t, args...)
-		return err
+		return err == nil
 	}
-	valid := []string{"10.8.0.0/16", "10.9.0.5", "10.9.0.5/32", "172.16.0.0/12", "2001:db8::/32", "fd00::1", "fd00::1/128", "fd00:0:0:0:0:0:0:1", "2001:db8:1:2::/64", "fe80::/10"}
-	for _, entry := range valid {
-		if _, err := clientaddr.ParseTrust(entry); err != nil {
-			t.Fatalf("test table: the service refuses %q: %v", entry, err)
-		}
-		if err := render(entry); err != nil {
-			t.Errorf("valid entry %q refused by the render: %v", entry, err)
+	stricterOnPurpose := map[string]string{
+		"0.0.0.0/0": "/0", "::/0": "/0", "10.0.0.0/0": "/0", "::ffff:10.0.0.9": "IPv4-mapped", " 10.0.0.1": "padded",
+		"10.0.0.0/8, 0.0.0.0/0": "a list in one entry",
+	}
+	entries := []string{
+		"10.8.0.0/16", "10.9.0.5", "10.9.0.5/32", "172.16.0.0/12", "10.0.0.0/8", "2001:db8::/32", "fd00::/8", "2001:db8::1", "fd00::1/128",
+		"fd00:0:0:0:0:0:0:1", "2001:db8:1:2::/64", "fe80::/10",
+		"10.0.0.0/33", "::/129", "256.1.1.1", "10.0.0.1/8", "10.0.0.01", "1.2.3", "1.2.3.4.5", "10.0.0.0/08", "10.0.0.0/-1", "10.0.0.0/8/9",
+		"1::2::3", ":::1", "12345::1", "1:2:3:4:5:6:7", "1:2:3:4:5:6:7:8:9", "g::1", "fd00::/130", "fd00::1/1x", "10.0.0.0/", "fe80::1%eth0",
+		"2001:db8::1/32", "fe80::/7", "192.168.1.0/23", "not-an-ip", "garbage/8", "*", "10.0.0.0/8, 0.0.0.0/0",
+		"0.0.0.0/0", "::/0", "10.0.0.0/0", "::ffff:10.0.0.9", " 10.0.0.1",
+	}
+	var parsedAndRendered, refusedByBoth int
+	for _, entry := range entries {
+		_, parseErr := clientaddr.ParseTrust(entry)
+		parses, renders := parseErr == nil, render(entry)
+		switch {
+		case renders && !parses:
+			t.Errorf("%q renders but the service refuses it (%v): auth-service would not start", entry, parseErr)
+		case parses && !renders:
+			if _, ok := stricterOnPurpose[entry]; !ok {
+				t.Errorf("%q parses in the service but the chart refuses it, and it is not a listed stricter case", entry)
+			}
+		case parses && renders:
+			if _, ok := stricterOnPurpose[entry]; ok {
+				t.Errorf("%q is listed as refused on purpose but rendered", entry)
+			}
+			parsedAndRendered++
+		default:
+			refusedByBoth++
 		}
 	}
-	invalid := []string{"10.0.0.0/33", "::/129", "256.1.1.1", "10.0.0.1/8", "10.0.0.01", "1.2.3", "1.2.3.4.5", "10.0.0.0/08", "10.0.0.0/-1", "10.0.0.0/8/9",
-		"1::2::3", ":::1", "12345::1", "1:2:3:4:5:6:7", "1:2:3:4:5:6:7:8:9", "g::1", "fd00::/130", "fd00::1/1x", "10.0.0.0/", " 10.0.0.1", "fe80::1%eth0", "2001:db8::1/32", "fe80::/7", "192.168.1.0/23"}
-	for _, entry := range invalid {
-		if _, err := clientaddr.ParseTrust(entry); err == nil && entry != " 10.0.0.1" {
-			t.Fatalf("test table: the service accepts %q", entry)
+	if parsedAndRendered < 10 || refusedByBoth < 20 {
+		t.Fatalf("the table does not exercise both outcomes: %d accepted by both, %d refused by both", parsedAndRendered, refusedByBoth)
+	}
+}
+
+// Trust of the forwarded address is safe only while the API port admits go-api and no other pod, so an operator-set
+// allowedFrom beside a proxy flag fails the render; the operator port (metricsFrom) is untouched.
+func TestAuthServiceProxyOnRefusesAnExtraAPIPortPeer(t *testing.T) {
+	extra := []string{"--set-json", `authService.networkPolicy.allowedFrom=[{"matchLabels":{"app":"other-pod"}}]`}
+	_, out, err := renderAuth(t, goAPIWithAuth(append([]string{"--set", "goApi.authProxy.sessions=true"}, extra...)...)...)
+	if err == nil || !strings.Contains(out, "authService.networkPolicy.allowedFrom") {
+		t.Fatalf("proxy on with an extra API-port peer rendered or named the wrong key: err=%v\n%.400s", err, out)
+	}
+}
+
+func TestAuthServiceProxyOffKeepsAllowedFromAndMetricsFromOnTheirPorts(t *testing.T) {
+	args := append(append([]string{"--set", "goApi.enabled=true"}, authBase...),
+		"--set-json", `authService.networkPolicy.allowedFrom=[{"matchLabels":{"app":"consumer"}}]`,
+		"--set-json", `authService.networkPolicy.metricsFrom=[{"matchLabels":{"app":"scraper"}}]`)
+	docs, out, err := renderAuth(t, args...)
+	if err != nil {
+		t.Fatalf("render: %v\n%.400s", err, out)
+	}
+	if from := authServiceAPIFrom(t, docs); len(from) != 1 || at(from[0], "podSelector", "matchLabels", "app") != "consumer" {
+		t.Fatalf("API-port peers = %v, want only the listed consumer", from)
+	}
+	policy := authDoc(docs, "NetworkPolicy", "a-dev-health-auth-service")
+	var operator []any
+	for _, rule := range aList(at(policy, "spec", "ingress")) {
+		for _, port := range aList(at(rule, "ports")) {
+			if at(port, "port") == 8096 {
+				operator = aList(at(rule, "from"))
+			}
 		}
-		if err := render(entry); err == nil {
-			t.Errorf("invalid entry %q rendered", entry)
+	}
+	if len(operator) != 1 || at(operator[0], "podSelector", "matchLabels", "app") != "scraper" {
+		t.Fatalf("operator-port peers = %v, want only the listed scraper", operator)
+	}
+}
+
+func TestAuthServiceProxyOnKeepsMetricsFromOnTheOperatorPort(t *testing.T) {
+	args := goAPIWithAuth("--set", "goApi.authProxy.sessions=true", "--set-json", `authService.networkPolicy.metricsFrom=[{"matchLabels":{"app":"scraper"}}]`)
+	docs, out, err := renderAuth(t, args...)
+	if err != nil {
+		t.Fatalf("render: %v\n%.400s", err, out)
+	}
+	policy := authDoc(docs, "NetworkPolicy", "a-dev-health-auth-service")
+	var operator []any
+	for _, rule := range aList(at(policy, "spec", "ingress")) {
+		for _, port := range aList(at(rule, "ports")) {
+			if at(port, "port") == 8096 {
+				operator = aList(at(rule, "from"))
+			}
 		}
+	}
+	if len(operator) != 1 || at(operator[0], "podSelector", "matchLabels", "app") != "scraper" {
+		t.Fatalf("operator-port peers = %v, want only the listed scraper", operator)
 	}
 }

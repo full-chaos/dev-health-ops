@@ -365,6 +365,10 @@ func (s *Store) lockSession(ctx context.Context, db queryRower, sessionID string
 // is set only when the store failed or the grace successor could not be
 // recomputed; Result.Reason then says which.
 func (s *Store) Exchange(ctx context.Context, credential contracts.SecretString) (result Result, err error) {
+	return s.exchange(ctx, credential, nil)
+}
+
+func (s *Store) exchange(ctx context.Context, credential contracts.SecretString, guard Guard) (result Result, err error) {
 	defer func() { s.recordExchange(ctx, result, err) }()
 	if !wellFormed(credential) {
 		return Result{Reason: ReasonMalformed}, nil
@@ -412,6 +416,9 @@ func (s *Store) Exchange(ctx context.Context, credential contracts.SecretString)
 		case !p.consumed && p.expired:
 			result.Reason = ReasonRefreshExpired
 		case !p.consumed:
+			if err := runGuard(ctx, tx, locked.Record, guard); err != nil {
+				return err
+			}
 			issued, err := s.rotate(ctx, tx, locked.Record, p, credential)
 			if err != nil {
 				return err
@@ -438,7 +445,7 @@ func (s *Store) Exchange(ctx context.Context, credential contracts.SecretString)
 		return nil
 	})
 	if err != nil {
-		if errors.Is(err, ErrGraceUnavailable) {
+		if errors.Is(err, ErrGraceUnavailable) || errors.Is(err, ErrGuardRefused) {
 			return Result{Reason: ReasonDependency}, err
 		}
 		return Result{Reason: ReasonStoreUnavailable}, fmt.Errorf("%w: refresh exchange: %w", ErrStore, err)
@@ -714,6 +721,9 @@ func actorID(a Actor) *string {
 }
 
 func (s *Store) recordExchange(ctx context.Context, result Result, err error) {
+	if errors.Is(err, ErrGuardRefused) {
+		return
+	}
 	s.exchanges.Add(ctx, 1, metric.WithAttributes(attribute.String("reason_code", string(result.Reason))))
 	switch {
 	case err != nil:

@@ -39,7 +39,7 @@ const (
 // CompatSessions is the session domain the compatibility routes drive
 // (*session.Store).
 type CompatSessions interface {
-	Sessions
+	GuardedSessions
 	RevokeByCredential(ctx context.Context, credential contracts.SecretString, actor session.Actor) (bool, error)
 	ExchangeLegacy(ctx context.Context, legacy session.LegacyRefresh) (session.Result, error)
 	RevokeLegacy(ctx context.Context, legacy session.LegacyRefresh, actor session.Actor) (bool, error)
@@ -308,13 +308,14 @@ func (h compatHandlers) compatRefresh(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	} else {
-		result, err = h.Sessions.Exchange(ctx, contracts.NewSecretString(token))
+		result, err = h.Sessions.ExchangeGuarded(ctx, contracts.NewSecretString(token), h.refreshGuard)
 	}
-	if err != nil {
+	guardRefused := errors.Is(err, session.ErrGuardRefused)
+	if err != nil && !guardRefused {
 		h.fail(w, r, opCompatRefresh, err)
 		return
 	}
-	if !result.Reason.Success() {
+	if !guardRefused && !result.Reason.Success() {
 		h.refuseCompat(w, r, opCompatRefresh, http.StatusUnauthorized, string(result.Reason), compatRefreshMessage(result.Reason))
 		return
 	}
@@ -346,6 +347,10 @@ func (h compatHandlers) compatRefresh(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		h.refuseCompat(w, r, opCompatRefresh, http.StatusUnauthorized, reasonRevisionStale, textRefreshReused)
+		return
+	}
+	if guardRefused {
+		h.refuseCompat(w, r, opCompatRefresh, http.StatusUnauthorized, reasonRevisionStale, textInvalidRefresh)
 		return
 	}
 	role := roleText(nil, false)

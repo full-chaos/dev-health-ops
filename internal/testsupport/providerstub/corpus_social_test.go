@@ -1,6 +1,7 @@
 package providerstub
 
 import (
+	"encoding/json"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -95,4 +96,41 @@ func (r *responseRecorder) Write(b []byte) (int, error) {
 		r.code = 200
 	}
 	return r.body.Write(b)
+}
+
+// auth-service checks a GitHub token with the client's own credentials before it reads the user: the stub answers
+// that check for the corpus client only, and a wrong client secret, client id or token stays unstubbed.
+func TestSocialStubAnswersTheTokenCheckOnlyForTheCorpusClient(t *testing.T) {
+	stub, err := LoadDir(corpusFile(t, "ci", "auth_corpus_stub"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ask := func(client, secret, token string) (int, string) {
+		request, _ := http.NewRequest(http.MethodPost, "https://api.github.com/applications/"+client+"/token",
+			strings.NewReader(`{"access_token":"`+token+`"}`))
+		request.Host = "api.github.com"
+		request.SetBasicAuth(client, secret)
+		recorder := &responseRecorder{header: http.Header{}}
+		stub.ServeHTTP(recorder, request)
+		return recorder.code, recorder.body.String()
+	}
+	code, body := ask("gh-client", "gh-secret", "gh-corpus")
+	var answer struct {
+		App struct {
+			ClientID string `json:"client_id"`
+		} `json:"app"`
+		User struct{ ID int } `json:"user"`
+	}
+	if err := json.Unmarshal([]byte(body), &answer); err != nil || code != 200 || answer.App.ClientID != "gh-client" || answer.User.ID != 910001 {
+		t.Fatalf("the corpus client's token check answered %d %q, want 200 with its client id and the stubbed user (%v)", code, body, err)
+	}
+	for name, got := range map[string]int{
+		"wrong secret":    func() int { c, _ := ask("gh-client", "other-secret", "gh-corpus"); return c }(),
+		"wrong client id": func() int { c, _ := ask("other-client", "gh-secret", "gh-corpus"); return c }(),
+		"wrong token":     func() int { c, _ := ask("gh-client", "gh-secret", "another-token"); return c }(),
+	} {
+		if got != 599 {
+			t.Errorf("%s answered %d, want 599 (unstubbed)", name, got)
+		}
+	}
 }

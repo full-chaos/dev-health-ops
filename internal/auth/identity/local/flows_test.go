@@ -40,17 +40,21 @@ func (r *flowRecorder) names() []string {
 }
 
 type flowAccounts struct {
-	rec      *flowRecorder
-	byEmail  map[string]*User
-	byID     map[uuid.UUID]*User
-	taken    bool
-	provided []ProvisionLocalRequest
-	verified []uuid.UUID
-	hashes   []string
-	newID    uuid.UUID
-	writeErr error
-	locker   *flowLocker
-	outside  int
+	rec       *flowRecorder
+	byEmail   map[string]*User
+	byID      map[uuid.UUID]*User
+	taken     bool
+	provided  []ProvisionLocalRequest
+	verified  []uuid.UUID
+	hashes    []string
+	ended     []uuid.UUID
+	created   []uuid.UUID
+	links     *flowLinks
+	afterPeek func()
+	newID     uuid.UUID
+	writeErr  error
+	locker    *flowLocker
+	outside   int
 }
 
 func (a *flowAccounts) ByEmail(_ context.Context, email string) (*User, error) {
@@ -81,16 +85,37 @@ func (a *flowAccounts) SetEmailVerified(_ context.Context, id uuid.UUID) error {
 	return nil
 }
 
-func (a *flowAccounts) SetPasswordHash(_ context.Context, _ uuid.UUID, hash string) error {
-	a.rec.add("SetPasswordHash")
+func (a *flowAccounts) PeekResetLink(_ context.Context, hash [32]byte) (uuid.UUID, bool, error) {
+	a.rec.add("PeekResetLink")
+	id, ok := a.links.redeem[hash]
+	if ok && a.afterPeek != nil {
+		a.afterPeek()
+	}
+	return id, ok, nil
+}
+
+func (a *flowAccounts) SetPasswordEndingSessions(_ context.Context, req PasswordEnd) (PasswordEndResult, error) {
+	a.rec.add("SetPasswordEndingSessions")
 	if a.locker != nil && !a.locker.active {
 		a.outside++
 	}
 	if a.writeErr != nil {
-		return a.writeErr
+		return PasswordEndResult{}, a.writeErr
 	}
-	a.hashes = append(a.hashes, hash)
-	return nil
+	if req.ResetLink != nil {
+		if _, ok := a.links.redeem[*req.ResetLink]; !ok {
+			return PasswordEndResult{}, ErrResetLinkUnusable
+		}
+		delete(a.links.redeem, *req.ResetLink)
+	}
+	a.hashes = append(a.hashes, req.Hash)
+	a.ended = append(a.ended, req.ID)
+	var res PasswordEndResult
+	if req.NewSession != nil {
+		a.created = append(a.created, req.ID)
+		res.Issued = &session.Issued{}
+	}
+	return res, nil
 }
 
 type flowLinks struct {
@@ -117,11 +142,8 @@ func (l *flowLinks) Redeem(_ context.Context, req RedeemRequest) (uuid.UUID, boo
 }
 
 type flowSessions struct {
-	rec       *flowRecorder
-	revoked   []uuid.UUID
-	created   []uuid.UUID
-	revokeErr error
-	attempts  int
+	rec     *flowRecorder
+	created []uuid.UUID
 }
 
 type flowLocker struct {
@@ -141,16 +163,6 @@ func (s *flowSessions) Create(_ context.Context, id uuid.UUID, _ *uuid.UUID, amr
 	s.rec.add("Create")
 	s.created = append(s.created, id)
 	return session.Issued{}, nil
-}
-
-func (s *flowSessions) RevokeAll(_ context.Context, id uuid.UUID, _ session.Actor) (int, error) {
-	s.rec.add("RevokeAll")
-	s.attempts++
-	if s.revokeErr != nil {
-		return 0, s.revokeErr
-	}
-	s.revoked = append(s.revoked, id)
-	return 1, nil
 }
 
 type flowMail struct {
@@ -189,6 +201,7 @@ func newFlowRig(t *testing.T, owned bool) *flowRig {
 		locker:   &flowLocker{},
 	}
 	rig.accounts.locker = rig.locker
+	rig.accounts.links = rig.links
 	f, err := NewFlows(FlowsConfig{Accounts: rig.accounts, Links: rig.links, Sessions: rig.sessions, Mail: rig.mail, Locker: rig.locker,
 		UsersOwnedByAuth: owned,
 		Hash:             func(p string) (string, error) { return "hash-of:" + p, nil },
@@ -383,11 +396,11 @@ func TestResetSetsPasswordRevokesEverySessionAndIsSingleUse(t *testing.T) {
 	if err != nil || out.Kind != FlowOK {
 		t.Fatalf("Reset = %+v, %v", out, err)
 	}
-	if want := []string{"Redeem", "SetPasswordHash", "RevokeAll"}; !reflect.DeepEqual(rig.rec.names(), want) {
+	if want := []string{"PeekResetLink", "SetPasswordEndingSessions"}; !reflect.DeepEqual(rig.rec.names(), want) {
 		t.Fatalf("calls = %v, want %v", rig.rec.names(), want)
 	}
-	if rig.links.redeemed[0].Purpose != PurposePasswordReset || rig.accounts.hashes[0] != "hash-of:A-new-pass-77" || rig.sessions.revoked[0] != u.ID {
-		t.Errorf("redeem %+v hashes %v revoked %v", rig.links.redeemed[0], rig.accounts.hashes, rig.sessions.revoked)
+	if rig.accounts.hashes[0] != "hash-of:A-new-pass-77" || rig.accounts.ended[0] != u.ID {
+		t.Errorf("hashes %v ended %v", rig.accounts.hashes, rig.accounts.ended)
 	}
 	again, err := rig.f.Reset(context.Background(), "reset-secret", "Another-pass-88")
 	if err != nil || again.Kind != FlowInvalidToken || len(rig.accounts.hashes) != 1 {
@@ -419,8 +432,8 @@ func TestChangePassword(t *testing.T) {
 		calls  []string
 	}
 	cases := []tc{
-		{"success revokes all, then issues the caller a new session", nil, FlowOK,
-			[]string{"ByID", "SetPasswordHash", "RevokeAll", "Create"}},
+		{"success ends every credential and issues the caller a new session in the password write", nil, FlowOK,
+			[]string{"ByID", "SetPasswordEndingSessions"}},
 		{"impersonated session", func(_ *flowRig, _ *User, r *ChangeRequest) { r.Impersonated = true }, FlowNotAllowed, nil},
 		{"inactive user", func(_ *flowRig, u *User, _ *ChangeRequest) { u.IsActive = false }, FlowNotAllowed, []string{"ByID"}},
 		{"unknown user", func(rig *flowRig, u *User, _ *ChangeRequest) { delete(rig.accounts.byID, u.ID) }, FlowNotAllowed, []string{"ByID"}},
@@ -460,8 +473,9 @@ func TestChangePassword(t *testing.T) {
 
 var _ = contracts.NewSecretString
 
-// A write that fails after the consume leaves the link spent: the error
-// surfaces, nothing is retried, and a replay is refused. The user asks again.
+// A verification write that fails after the consume leaves the link spent: the
+// error surfaces, nothing is retried, and a replay is refused. A reset's link
+// is consumed in the password write, so its failed write leaves it usable.
 func TestFailedWriteAfterTheConsumeLeavesTheLinkSpent(t *testing.T) {
 	boom := errors.New("store down")
 	t.Run("reset", func(t *testing.T) {
@@ -472,12 +486,12 @@ func TestFailedWriteAfterTheConsumeLeavesTheLinkSpent(t *testing.T) {
 		if _, err := rig.f.Reset(context.Background(), "s", "A-new-pass-77"); !errors.Is(err, boom) {
 			t.Fatalf("Reset error = %v, want the store error", err)
 		}
-		if len(rig.sessions.revoked) != 0 {
-			t.Error("sessions were revoked although the password did not change")
+		if len(rig.accounts.ended) != 0 {
+			t.Error("credentials were ended although the password did not change")
 		}
 		rig.accounts.writeErr = nil
-		if out, err := rig.f.Reset(context.Background(), "s", "A-new-pass-77"); err != nil || out.Kind != FlowInvalidToken {
-			t.Errorf("replay = %+v, %v; want the spent link refused", out, err)
+		if out, err := rig.f.Reset(context.Background(), "s", "A-new-pass-77"); err != nil || out.Kind != FlowOK {
+			t.Errorf("retry = %+v, %v; want the link usable after the failed write", out, err)
 		}
 	})
 	t.Run("verify", func(t *testing.T) {
@@ -549,36 +563,20 @@ func TestPasswordFlowsRunUnderThePrincipalLock(t *testing.T) {
 	}
 }
 
-// The password change is the security event; ending older sessions is cleanup
-// that is retried and reported, never a failed flow.
-func TestRevokeFailureAfterAPasswordChangeIsRetriedAndReported(t *testing.T) {
+// Ending the older credentials is part of the password write: when it fails
+// the flow fails, the caller gets no session and the password is unchanged.
+func TestAFailedPasswordWriteFailsTheFlowAndIssuesNoSession(t *testing.T) {
 	boom := errors.New("sessions down")
-	t.Run("reset", func(t *testing.T) {
-		rig := newFlowRig(t, true)
-		u := rig.user("r@example.com", true)
-		rig.grant("s", u.ID)
-		rig.sessions.revokeErr = boom
-		out, err := rig.f.Reset(context.Background(), "s", "A-new-pass-77")
-		if err != nil || out.Kind != FlowOK {
-			t.Fatalf("Reset = %+v, %v; want success", out, err)
-		}
-		if !errors.Is(out.RevokeErr, ErrSessionsNotRevoked) || !errors.Is(out.RevokeErr, boom) {
-			t.Errorf("RevokeErr = %v", out.RevokeErr)
-		}
-		if rig.sessions.attempts != 3 || len(rig.accounts.hashes) != 1 {
-			t.Errorf("revoke attempts %d, password writes %d; want 3 and 1", rig.sessions.attempts, len(rig.accounts.hashes))
-		}
-	})
-	t.Run("change still issues the caller a session", func(t *testing.T) {
+	t.Run("change", func(t *testing.T) {
 		rig := newFlowRig(t, true)
 		u := rig.user("c@example.com", true)
-		rig.sessions.revokeErr = boom
+		rig.accounts.writeErr = boom
 		out, err := rig.f.Change(context.Background(), ChangeRequest{PrincipalID: u.ID, Current: flowPassword, New: "Brand-new-pass-42"})
-		if err != nil || out.Kind != FlowOK || out.Issued == nil || !errors.Is(out.RevokeErr, ErrSessionsNotRevoked) {
-			t.Fatalf("Change = %+v, %v", out, err)
+		if !errors.Is(err, boom) || out.Issued != nil {
+			t.Fatalf("Change = %+v, %v; want the store error and no session", out, err)
 		}
-		if rig.sessions.attempts != 3 || len(rig.sessions.created) != 1 {
-			t.Errorf("revoke attempts %d, sessions created %d; want 3 and 1", rig.sessions.attempts, len(rig.sessions.created))
+		if len(rig.sessions.created) != 0 || len(rig.accounts.ended) != 0 {
+			t.Errorf("sessions created %d, credentials ended %d; want none", len(rig.sessions.created), len(rig.accounts.ended))
 		}
 	})
 }
@@ -615,7 +613,7 @@ func TestPasswordBoundsAreRefusedBeforeAnyConsumeInEveryFlow(t *testing.T) {
 					t.Fatalf("%s = %+v, %v; want a policy refusal", flow, out, err)
 				}
 				for _, call := range rig.rec.names() {
-					if call == "Redeem" || call == "ProvisionLocal" || call == "SetPasswordHash" {
+					if call == "PeekResetLink" || call == "ProvisionLocal" || call == "SetPasswordEndingSessions" {
 						t.Errorf("%s made the call %s before refusing", flow, call)
 					}
 				}
@@ -677,8 +675,11 @@ func TestVerifyAndResetRedeemOnlyTheirOwnPurpose(t *testing.T) {
 	for _, r := range rig.links.redeemed {
 		got = append(got, r.Purpose)
 	}
-	if want := []Purpose{PurposeEmailVerification, PurposePasswordReset}; !reflect.DeepEqual(got, want) {
+	if want := []Purpose{PurposeEmailVerification}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("redeemed purposes = %v, want %v", got, want)
+	}
+	if _, ok := rig.links.redeem[sha256.Sum256([]byte("reset-secret"))]; ok {
+		t.Error("the reset link was not consumed by the password write")
 	}
 }
 
@@ -698,5 +699,49 @@ func TestRegisterOutcomeIsTheSameForNewAndExistingAddress(t *testing.T) {
 	oldBytes, _ := json.Marshal(oldOut)
 	if !bytes.Equal(newBytes, oldBytes) || !reflect.DeepEqual(newOut, oldOut) || newOut.PrincipalID != uuid.Nil {
 		t.Errorf("outcomes differ or carry an id: new %+v, existing %+v", newOut, oldOut)
+	}
+}
+
+func TestResetWhoseLinkWasUsedFirstChangesNothing(t *testing.T) {
+	rig := newFlowRig(t, true)
+	u := rig.user("r@example.com", true)
+	rig.grant("reset-secret", u.ID)
+	digest := sha256.Sum256([]byte("reset-secret"))
+	rig.accounts.afterPeek = func() { delete(rig.links.redeem, digest) }
+	out, err := rig.f.Reset(context.Background(), "reset-secret", "A-new-pass-77")
+	if err != nil || out.Kind != FlowInvalidToken || len(rig.accounts.hashes) != 0 {
+		t.Fatalf("Reset = %+v, %v, hash writes %d; want the invalid-token answer and no write", out, err, len(rig.accounts.hashes))
+	}
+}
+
+func TestAFailedResetWriteLeavesTheLinkUsable(t *testing.T) {
+	rig := newFlowRig(t, true)
+	u := rig.user("r@example.com", true)
+	rig.grant("reset-secret", u.ID)
+	rig.accounts.writeErr = errors.New("store down")
+	if _, err := rig.f.Reset(context.Background(), "reset-secret", "A-new-pass-77"); err == nil {
+		t.Fatal("Reset succeeded although the write failed")
+	}
+	if _, ok := rig.links.redeem[sha256.Sum256([]byte("reset-secret"))]; !ok {
+		t.Fatal("the failed write burned the link")
+	}
+	rig.accounts.writeErr = nil
+	if out, err := rig.f.Reset(context.Background(), "reset-secret", "A-new-pass-77"); err != nil || out.Kind != FlowOK {
+		t.Fatalf("Reset after the failure = %+v, %v", out, err)
+	}
+}
+
+func TestAChangeIssuesItsSessionInTheSameWrite(t *testing.T) {
+	rig := newFlowRig(t, true)
+	u := rig.user("c@example.com", true)
+	rig.accounts.writeErr = errors.New("store down")
+	out, err := rig.f.Change(context.Background(), ChangeRequest{PrincipalID: u.ID, Current: flowPassword, New: "Brand-new-pass-42"})
+	if err == nil || out.Issued != nil || len(rig.accounts.created) != 0 {
+		t.Fatalf("Change = %+v, %v, sessions %d; want an error and no session", out, err, len(rig.accounts.created))
+	}
+	rig.accounts.writeErr = nil
+	out, err = rig.f.Change(context.Background(), ChangeRequest{PrincipalID: u.ID, Current: flowPassword, New: "Brand-new-pass-42"})
+	if err != nil || out.Issued == nil || len(rig.accounts.created) != 1 || len(rig.sessions.created) != 0 {
+		t.Fatalf("Change = %+v, %v, write-created %d, separate Create %d; want the session made inside the write", out, err, len(rig.accounts.created), len(rig.sessions.created))
 	}
 }

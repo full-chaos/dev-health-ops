@@ -28,18 +28,21 @@ func TestTheDormantMountSetNeedsNoValkey(t *testing.T) {
 	if cfg.ValkeyURI.Configured() {
 		t.Fatal("a Valkey URI appeared from nowhere")
 	}
-	// Session secrets alone mount the session, compatibility refresh and
-	// logout routes: none of them counts in the store.
+	// Session secrets alone mount the session routes, and the compatibility refresh counts in the store.
 	session := sessionEnv(testAccessSecret, testSuccessorKey)
 	delete(session, EnvValkeyURI)
-	cfg, err = Load(Spec{LookupEnv: lookupFrom(session)})
-	if err != nil || cfg.LimitedRoutesMounted() {
-		t.Fatalf("session routes: err %v, limited mounted %v", err, cfg.LimitedRoutesMounted())
+	if _, err = Load(Spec{LookupEnv: lookupFrom(session)}); err == nil || !strings.Contains(err.Error(), EnvValkeyURI) {
+		t.Fatalf("session routes without the URI: err %v, want a refusal naming %s", err, EnvValkeyURI)
+	}
+	cfg, err = Load(Spec{LookupEnv: lookupFrom(withValkey(sessionEnv(testAccessSecret, testSuccessorKey), testLimitedValkeyURI))})
+	if err != nil || !cfg.LimitedRoutesMounted() {
+		t.Fatalf("session routes with the URI: err %v, limited mounted %v", err, cfg.LimitedRoutesMounted())
 	}
 }
 
 func TestEveryLimitedRouteNeedsTheValkeyURI(t *testing.T) {
 	mount := map[string]func(map[string]string){
+		"session":     func(map[string]string) {},
 		"login":       func(env map[string]string) { env[EnvLoginLockoutKey] = testLockoutKey },
 		"credentials": func(env map[string]string) { env[EnvUsersOwned] = "true" },
 		"social link": func(env map[string]string) { env[EnvSocialLinkRoutes] = "true" },

@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
+	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
 
@@ -86,6 +87,54 @@ func (l *PGLinks) WithPrincipalLock(ctx context.Context, principalID uuid.UUID, 
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("local: releasing the principal lock: %w", err)
+	}
+	return nil
+}
+
+// EndResetLinksInTx deletes the principal's unconsumed password-reset
+// credentials inside the caller's transaction, so a link issued before a
+// password change is unknown after it. Verification links stay: they change no
+// password. The statement is the one Issue uses to replace a prior credential.
+// It returns how many credentials it deleted.
+func (l *PGLinks) EndResetLinksInTx(ctx context.Context, tx audit.TxOps, principalID uuid.UUID) (int64, error) {
+	tag, err := tx.Exec(ctx, `DELETE FROM `+l.q+`.link_credentials
+WHERE principal_id = $1::uuid AND purpose = $2 AND consumed_at IS NULL`, principalID.String(), string(PurposePasswordReset))
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}
+
+// PeekResetLink reads the principal a live reset credential belongs to and
+// consumes nothing: a garbage secret costs one read. ok is false for an
+// unknown, consumed or expired credential.
+func (l *PGLinks) PeekResetLink(ctx context.Context, tokenHash [32]byte) (uuid.UUID, bool, error) {
+	var principal uuid.UUID
+	err := l.pool.QueryRow(ctx, `SELECT principal_id FROM `+l.q+`.link_credentials
+WHERE token_hash = $1 AND purpose = $2 AND consumed_at IS NULL AND expires_at > now()`, tokenHash[:], string(PurposePasswordReset)).Scan(&principal)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return uuid.Nil, false, nil
+	}
+	if err != nil {
+		return uuid.Nil, false, fmt.Errorf("local: reading a reset link: %w", err)
+	}
+	return principal, true, nil
+}
+
+// ConsumeResetLinkInTx marks the principal's reset credential consumed inside
+// the caller's transaction, on the database clock. It returns
+// identity.ErrLinkUnusable, writing nothing, when the credential is not
+// exactly one live row of that principal (a replay, an expiry, a replacement),
+// so the caller's transaction rolls back and the password stays.
+func (l *PGLinks) ConsumeResetLinkInTx(ctx context.Context, tx audit.TxOps, principalID uuid.UUID, tokenHash [32]byte) error {
+	tag, err := tx.Exec(ctx, `UPDATE `+l.q+`.link_credentials SET consumed_at = now()
+WHERE token_hash = $1 AND purpose = $2 AND principal_id = $3::uuid AND consumed_at IS NULL AND expires_at > now()`,
+		tokenHash[:], string(PurposePasswordReset), principalID.String())
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() != 1 {
+		return identity.ErrLinkUnusable
 	}
 	return nil
 }

@@ -304,8 +304,8 @@ func (f *compatFixture) buildCompat() {
 		f.t.Fatal(err)
 	}
 	mux := http.NewServeMux()
-	for _, route := range routes {
-		mux.Handle(route.Method+" "+route.Pattern, requestid.Middleware(route.Handler))
+	for _, route := range MarkResponseModels(routes) {
+		mux.Handle(route.Method+" "+route.Pattern, requestid.Middleware(flaggedHandler(route)))
 	}
 	f.server = mux
 }
@@ -876,7 +876,8 @@ func TestCompatRoutesNeedAProjectorAndAnAuditAppender(t *testing.T) {
 		t.Fatal("compatibility routes mounted without a projector and an audit appender")
 	}
 	routes, err := CompatRoutes(CompatDeps{Sessions: f.sessions, Users: f.users, Issuer: f.issuer,
-		Projector: &fakeProjector{}, AppendAudit: func(context.Context, audit.AuditEvent) error { return nil }})
+		Projector: &fakeProjector{}, AppendAudit: func(context.Context, audit.AuditEvent) error { return nil },
+		Limits: mustLimits(t, httpapi.NewMemoryCounters(nil))})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1158,5 +1159,56 @@ func TestCompatSocialLoginOfAMemberOrASuperuserKeepsTheSessionCredential(t *test
 				t.Fatalf("refresh_token is not the session's credential: %s", response.Body)
 			}
 		})
+	}
+}
+
+func compatRefreshRefusalMintsNothing(t *testing.T, golden string, mutate func(*fixture)) {
+	t.Helper()
+	f := newCompatFixture(t)
+	mutate(f.fixture)
+	f.sessions.result = session.Result{Reason: session.ReasonAccepted, Issued: session.Issued{
+		Session: f.record, Credential: contracts.NewSecretString(credential()), ExpiresAt: time.Now().Add(time.Hour),
+	}}
+	response := f.do(http.MethodPost, PatternCompatRefresh, `{"refresh_token":"`+credential()+`"}`, nil)
+	expectGolden(t, response, response.Body.Bytes(), golden)
+	if f.sessions.minted != 0 {
+		t.Fatalf("%s: %d successors minted before the refusal, want 0", golden, f.sessions.minted)
+	}
+}
+
+func TestCompatRefreshOfAGoneOrDisabledUserMintsNoSuccessor(t *testing.T) {
+	compatRefreshRefusalMintsNothing(t, "refresh: live jti, subject no user", func(f *fixture) { delete(f.users.users, f.principal) })
+	compatRefreshRefusalMintsNothing(t, "refresh: judy deactivated", func(f *fixture) {
+		user := f.users.users[f.principal]
+		user.IsActive = false
+		f.users.users[f.principal] = user
+	})
+}
+
+func TestCompatRefreshOfAStalePinMintsNoSuccessorAndRevokesTheSession(t *testing.T) {
+	f := newCompatFixture(t)
+	stale := *f.record.LegacyTokenVersion + 1
+	user := f.users.users[f.principal]
+	user.TokenVersion = stale
+	f.users.users[f.principal] = user
+	f.sessions.result = session.Result{Reason: session.ReasonAccepted, Issued: session.Issued{
+		Session: f.record, Credential: contracts.NewSecretString(credential()), ExpiresAt: time.Now().Add(time.Hour),
+	}}
+	response := f.do(http.MethodPost, PatternCompatRefresh, `{"refresh_token":"`+credential()+`"}`, nil)
+	if response.Code != http.StatusUnauthorized || f.sessions.minted != 0 || len(f.sessions.revoked) != 1 || f.sessions.revoked[0] != f.record.ID {
+		t.Fatalf("status %d minted %d revoked %v, want 401, 0 and the session", response.Code, f.sessions.minted, f.sessions.revoked)
+	}
+}
+
+func TestCompatRefreshOfAMissingPinMintsNoSuccessorAndRevokesNothing(t *testing.T) {
+	f := newCompatFixture(t)
+	record := f.record
+	record.LegacyTokenVersion = nil
+	f.sessions.result = session.Result{Reason: session.ReasonAccepted, Issued: session.Issued{
+		Session: record, Credential: contracts.NewSecretString(credential()), ExpiresAt: time.Now().Add(time.Hour),
+	}}
+	response := f.do(http.MethodPost, PatternCompatRefresh, `{"refresh_token":"`+credential()+`"}`, nil)
+	if response.Code != http.StatusUnauthorized || f.sessions.minted != 0 || len(f.sessions.revoked) != 0 {
+		t.Fatalf("status %d minted %d revoked %v, want 401, 0 and none", response.Code, f.sessions.minted, f.sessions.revoked)
 	}
 }

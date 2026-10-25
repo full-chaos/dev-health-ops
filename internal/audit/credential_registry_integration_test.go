@@ -399,15 +399,22 @@ func TestCredentialRegistryTRDColumnsAndLifecycleRules(t *testing.T) {
 			`, ARRAY[`+strings.Join(many, ",")+`]::auth.credential_token_name[]`), "audiences_bounded")
 		mustFail(t, "null element", insertCredential(ctx, env, id, credPrincipal, `, scopes`,
 			`, ARRAY['api:read', NULL]::auth.credential_scope[]`), "scopes_bounded")
-		mustFail(t, "unknown owner", insertCredential(ctx, env, id, credPrincipal, `, domain_owner`, `, 'nobody'`), "domain_owner_closed")
-		mustFail(t, "projected without reference", insertCredential(ctx, env, id, credPrincipal, `, domain_owner`, `, 'acr'`), "matches_owner")
+		// PostgreSQL tests CHECK constraints in name order, so these rows use the fingerprint-only form to reach the constraint they name.
+		fingerprintOnly := func(columns, values string) error {
+			return commitCredential(ctx, env,
+				`INSERT INTO auth.credential_registry (id, principal_id, credential_class, secret_hash, hash_algorithm, fingerprint`+columns+`)
+				 VALUES ($1, $2, 'workload_token', decode('`+fp+`', 'hex'), 'fingerprint', '`+fp+`'`+values+`)`, id, credPrincipal)
+		}
+		mustFail(t, "unknown owner", fingerprintOnly(`, domain_owner`, `, 'nobody'`), "domain_owner_closed")
+		mustFail(t, "projected without reference", fingerprintOnly(`, domain_owner`, `, 'acr'`), "matches_owner")
+		mustFail(t, "projected with a real hash", insertCredential(ctx, env, id, credPrincipal, `, domain_owner, external_reference`, `, 'acr', 'ext-1'`), "domain_owned_fingerprint_only")
 		mustFail(t, "platform with reference", insertCredential(ctx, env, id, credPrincipal, `, external_reference`, `, 'ext-1'`), "matches_owner")
 		mustFail(t, "bad fingerprint", commitCredential(ctx, env,
 			`INSERT INTO auth.credential_registry (id, principal_id, credential_class, secret_hash, hash_algorithm, fingerprint)
 			 VALUES ($1, $2, 'workload_token', decode(md5(random()::text), 'hex'), 'sha256', 'NOT-HEX')`, id, credPrincipal), "fingerprint_shape")
 		if err := commitCredential(ctx, env,
 			`INSERT INTO auth.credential_registry (id, principal_id, credential_class, secret_hash, hash_algorithm, fingerprint, domain_owner, external_reference)
-			 VALUES ($1, $2, 'workload_token', decode(md5(random()::text), 'hex'), 'sha256', '0123456789abcdef', 'acr', 'ext-1')`, id, credPrincipal); err != nil {
+			 VALUES ($1, $2, 'workload_token', decode('0123456789abcdef', 'hex'), 'fingerprint', '0123456789abcdef', 'acr', 'ext-1')`, id, credPrincipal); err != nil {
 			t.Fatalf("a well-formed projected credential was refused: %v", err)
 		}
 	})

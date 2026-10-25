@@ -9,6 +9,7 @@ internal/adminops	users_password_fixtures_test.go	internal/adminops/testdata/gol
 internal/adminops	usersowned_test.go	internal/adminops	dir	*
 internal/api/integrationsadmin/discoveryvenue	discover_venue_oracle_integration_test.go	internal/api/syncadmin/testdata/jira_recorded	dir	*
 internal/api/policy	accessroute_test.go	.	tree	*
+internal/api/policy	principalonce_test.go	internal/api/policy	dir	*
 internal/api/syncadmin	create_config_venue_oracle_integration_test.go	internal/api/syncadmin/testdata/jira_recorded	dir	*
 internal/api/syncadmin	dataset_writer_census_test.go	unexpressed	-	*.go
 internal/api/syncadmin	dataset_writer_lock_census_test.go	unexpressed	-	-
@@ -31,6 +32,7 @@ internal/auth/authruntime	audit_request_id_scan_test.go	unexpressed	-	-
 internal/auth/authruntime	keystate_source_test.go	internal/auth/authruntime	dir	*
 internal/auth/authruntime	kidwiring_callers_test.go	internal/auth/authruntime	dir	*
 internal/auth/contracts	access_token_goldens_test.go	unexpressed	-	-
+internal/auth/contracts	anchor_ranges_test.go	unexpressed	-	-
 internal/auth/contracts	authorization_goldens_test.go	unexpressed	-	-
 internal/auth/contracts	credential_goldens_test.go	unexpressed	-	-
 internal/auth/contracts	discovery_goldens_test.go	unexpressed	-	-

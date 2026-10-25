@@ -1,0 +1,221 @@
+// Package sharedserver_test guards the shared-server test mode
+// (containers.RunWithSharedServers): in a package that opts in, a test file
+// that changes server-wide state must take a private server with
+// containers.StartPostgresIsolated or containers.StartClickHouseIsolated.
+// The runtime leak check catches what a test leaves behind; this guard catches
+// server-wide changes that are undone before the end but still reach
+// neighbouring tests while they run.
+package sharedserver_test
+
+import (
+	"io/fs"
+	"os"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strings"
+	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
+)
+
+const (
+	optInCall = "containers.RunWithSharedServers("
+	ident     = `[A-Za-z_][A-Za-z0-9_]*`
+)
+
+// serverWide lists statements whose effect is not limited to the caller's
+// scratch database. A name built at run time (containers.RoleName) is unique
+// per call and passes; only a literal name in the source is flagged.
+var serverWide = []struct {
+	name    string
+	pattern *regexp.Regexp
+}{
+	{"ALTER SYSTEM", regexp.MustCompile(`(?i)\bALTER\s+SYSTEM\b`)},
+	{"pg_reload_conf", regexp.MustCompile(`(?i)\bpg_reload_conf\s*\(`)},
+	{"CREATE TABLESPACE", regexp.MustCompile(`(?i)\bCREATE\s+TABLESPACE\b`)},
+	{"ALTER ROLE/USER with a literal name", regexp.MustCompile(`(?i)\bALTER\s+(ROLE|USER)\s+` + ident)},
+	{"CREATE access entity with a literal name", regexp.MustCompile(
+		`(?i)\bCREATE\s+(ROLE|USER|QUOTA|SETTINGS\s+PROFILE|ROW\s+POLICY)\s+(IF\s+NOT\s+EXISTS\s+)?` + ident)},
+	{"GRANT <role> TO with literal names", regexp.MustCompile(
+		`(?i)\bGRANT\s+` + ident + `(\s*,\s*` + ident + `)*\s+TO\s`)},
+	{"REVOKE <role> FROM with literal names", regexp.MustCompile(
+		`(?i)\bREVOKE\s+(ADMIN\s+OPTION\s+FOR\s+)?` + ident + `(\s*,\s*` + ident + `)*\s+FROM\s`)},
+	{"CREATE EXTENSION with a literal schema", regexp.MustCompile(`(?i)\bCREATE\s+EXTENSION\b.*\bSCHEMA\s+` + ident)},
+	{"server SYSTEM command", regexp.MustCompile(`(?i)\bSYSTEM\s+(DROP|RELOAD|SHUTDOWN|KILL)\b`)},
+	{"SYSTEM STOP/START without a table", regexp.MustCompile(
+		"\\bSYSTEM\\s+(STOP|START)\\s+(TTL MERGES|MERGES|MOVES|FETCHES|REPLICATED SENDS|DISTRIBUTED SENDS|" +
+			"REPLICATION QUEUES|LISTEN)\\s*[\"`]\\s*($|[,);])")},
+	{"KILL QUERY", regexp.MustCompile(`(?i)\bKILL\s+QUERY\b`)},
+	{"Instance.Container access", regexp.MustCompile(`\.Container\.`)},
+}
+
+var isolatedCall = regexp.MustCompile(`\bcontainers\.Start(Postgres|ClickHouse)Isolated\(`)
+
+type finding struct {
+	file string
+	line int
+	kind string
+}
+
+// scan returns the opted-in package directories under root and every
+// server-wide statement in a test file of one of them that takes no private server.
+func scan(t *testing.T, root string) ([]string, []finding) {
+	t.Helper()
+	testFiles := map[string][]string{}
+	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			switch entry.Name() {
+			case ".git", "node_modules", "testdata", "vendor":
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if strings.HasSuffix(path, "_test.go") {
+			testFiles[filepath.Dir(path)] = append(testFiles[filepath.Dir(path)], path)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var optedIn []string
+	var findings []finding
+	for dir, files := range testFiles {
+		sources := map[string]string{}
+		opted := false
+		for _, file := range files {
+			data, err := os.ReadFile(file)
+			if err != nil {
+				t.Fatal(err)
+			}
+			sources[file] = string(data)
+			opted = opted || strings.Contains(sources[file], optInCall)
+		}
+		if !opted {
+			continue
+		}
+		rel, _ := filepath.Rel(root, dir)
+		optedIn = append(optedIn, filepath.ToSlash(rel))
+		for file, source := range sources {
+			if isolatedCall.MatchString(source) {
+				continue
+			}
+			relFile, _ := filepath.Rel(root, file)
+			for number, line := range strings.Split(source, "\n") {
+				if strings.HasPrefix(strings.TrimSpace(line), "//") {
+					continue
+				}
+				for _, statement := range serverWide {
+					if statement.pattern.MatchString(line) {
+						findings = append(findings, finding{filepath.ToSlash(relFile), number + 1, statement.name})
+					}
+				}
+			}
+		}
+	}
+	sort.Strings(optedIn)
+	sort.Slice(findings, func(i, j int) bool {
+		if findings[i].file != findings[j].file {
+			return findings[i].file < findings[j].file
+		}
+		return findings[i].line < findings[j].line
+	})
+	return optedIn, findings
+}
+
+func TestSharedServerPackagesIsolateServerWideStatements(t *testing.T) {
+	root, err := moduleroot.Root()
+	if err != nil {
+		t.Fatal(err)
+	}
+	optedIn, findings := scan(t, filepath.Join(root, "internal"))
+	// This package's own fixtures name the opt-in call and every planted
+	// statement in string literals; it is not a package that runs on a shared server.
+	const self = "cigates/sharedserver"
+	kept := optedIn[:0]
+	for _, dir := range optedIn {
+		if dir != self {
+			kept = append(kept, dir)
+		}
+	}
+	if len(kept) == 0 {
+		t.Fatal("no package calls " + optInCall + "; the guard would pass on nothing")
+	}
+	for _, f := range findings {
+		if strings.HasPrefix(f.file, self+"/") {
+			continue
+		}
+		t.Errorf("internal/%s:%d: %s in a package that runs on a shared server (containers.RunWithSharedServers): "+
+			"use containers.StartPostgresIsolated / StartClickHouseIsolated in this file, or build the name per call "+
+			"(containers.RoleName)", f.file, f.line, f.kind)
+	}
+}
+
+func TestGuardFlagsPlantedServerWideStatements(t *testing.T) {
+	root := t.TempDir()
+	write := func(rel, body string) {
+		t.Helper()
+		path := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	planted := []string{
+		`exec("ALTER SYSTEM SET work_mem = '7MB'")`,
+		`exec("SELECT pg_reload_conf()")`,
+		`exec("CREATE TABLESPACE ts LOCATION '/tmp'")`,
+		`exec("ALTER ROLE app_writer SET search_path = x")`,
+		`exec("CREATE ROLE venue_writer LOGIN")`,
+		`exec("CREATE USER IF NOT EXISTS ch_reader")`,
+		`exec("CREATE SETTINGS PROFILE tight")`,
+		`exec("GRANT pg_monitor TO worker_test")`,
+		`exec("GRANT reader, writer TO app")`,
+		`exec("REVOKE pg_monitor FROM worker_test")`,
+		`exec("CREATE EXTENSION citext SCHEMA ext_schema")`,
+		`exec("SYSTEM DROP DNS CACHE")`,
+		"exec(`SYSTEM STOP MERGES`)",
+		`exec("KILL QUERY WHERE 1")`,
+		`instance.Container.Stop(ctx, nil)`,
+	}
+	allowed := []string{
+		`exec("CREATE ROLE " + role + " LOGIN")`,
+		`exec("GRANT " + role + " TO " + other)`,
+		`exec("GRANT SELECT ON ALL TABLES IN SCHEMA public TO " + role)`,
+		`exec("SYSTEM STOP MERGES " + table)`,
+		`exec("SYSTEM STOP MERGES teams")`,
+		`exec("SYSTEM FLUSH LOGS")`,
+		`// CREATE ROLE is cluster-scoped; ALTER SYSTEM too`,
+	}
+	write("internal/opted/main_test.go", "package opted\nfunc TestMain(m *testing.M) { os.Exit(containers.RunWithSharedServers(m.Run)) }\n")
+	write("internal/opted/planted_test.go", "package opted\n"+strings.Join(planted, "\n")+"\n")
+	write("internal/opted/allowed_test.go", "package opted\n"+strings.Join(allowed, "\n")+"\n")
+	write("internal/opted/isolated_test.go", "package opted\ninstance, _ := containers.StartPostgresIsolated(ctx)\n"+
+		strings.Join(planted, "\n")+"\n")
+	write("internal/notopted/planted_test.go", "package notopted\n"+strings.Join(planted, "\n")+"\n")
+
+	optedIn, findings := scan(t, filepath.Join(root, "internal"))
+
+	if strings.Join(optedIn, ",") != "opted" {
+		t.Errorf("opted-in packages = %v, want [opted]", optedIn)
+	}
+	flagged := map[int]bool{}
+	for _, f := range findings {
+		if f.file != "opted/planted_test.go" {
+			t.Errorf("unexpected finding %s:%d %s", f.file, f.line, f.kind)
+			continue
+		}
+		flagged[f.line] = true
+	}
+	for index, line := range planted {
+		if !flagged[index+2] {
+			t.Errorf("planted line not flagged: %s", line)
+		}
+	}
+}

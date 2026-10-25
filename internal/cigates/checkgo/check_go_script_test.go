@@ -924,7 +924,7 @@ func TestCheckGoDiscoversEveryTestName(t *testing.T) {
 	scenarios := discoveryScenarios()
 	assertAllPass(t, script, scenarios)
 	assertPlantsCaught(t, script, scenarios, []plant{
-		p("the scan drops one test name", `printf "T\037%s\037%s\n", FILENAME, substr(s, 1, RLENGTH)`, `if (s !~ /^TestZz/) printf "T\037%s\037%s\n", FILENAME, substr(s, 1, RLENGTH)`,
+		p("the scan drops one test name", `T) SCAN_TESTS["${path}"]+="${name}"$'\n' ;;`, `T) [[ "${name}" == TestZz* ]] || SCAN_TESTS["${path}"]+="${name}"$'\n' ;;`,
 			"a_new_test_name_is_planned_exactly_once", "has 0 PROVIDER-SHARD rows"),
 		p("a control byte passes the name check", `*[[:cntrl:]]*) die "go list returned unsafe ${label} test filename with a control byte`, `*[[:cntrl:]][[:cntrl:]][[:cntrl:]]*) die "go list returned unsafe ${label} test filename with a control byte`,
 			"a_control_byte_in_a_test_file_name_is_refused", "want exit 2"),

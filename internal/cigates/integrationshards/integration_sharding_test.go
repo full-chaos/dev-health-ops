@@ -582,6 +582,9 @@ func checkTaggedSelection(stdout string, shardKeys map[string]bool, f taggedFact
 		selected[k][n] = true
 		union[n] = true
 	}
+	if c := lineValues(stdout, "  SHARD-COLLISION "); len(c) > 0 {
+		return fmt.Errorf("a go test group regex selects an untagged test of another package: %v", c)
+	}
 	unfiltered := map[string]bool{}
 	for _, v := range lineValues(stdout, "  SHARD-UNFILTERED ") {
 		fs := strings.Fields(v)
@@ -809,9 +812,9 @@ func runIntegrationPackagesDefects(body string) []string {
 		switch {
 		case dryReturn < 0 || i < dryReturn:
 			d = append(d, "a go test runs before the dry-run return")
-		case strings.HasSuffix(l, `-run "${test_regex}" "${run_pkgs[@]}"`):
-			if prev != `run_pkgs=("${filtered[@]}")` {
-				d = append(d, "the -run go test does not run the filtered packages")
+		case strings.HasSuffix(l, `-run "${group_regex[${group}]}" "${run_pkgs[@]}"`):
+			if prev != `mapfile -t run_pkgs <<<"${group_pkgs[${group}]%$'\n'}"` {
+				d = append(d, "the -run go test does not run the packages of its group")
 			}
 		case strings.HasSuffix(l, `-timeout=30m "${run_pkgs[@]}"`) && !strings.Contains(l, "-run"):
 			if prev != `run_pkgs=("${unfiltered[@]}")` {
@@ -822,9 +825,9 @@ func runIntegrationPackagesDefects(body string) []string {
 		}
 	}
 	if goTests != 2 {
-		d = append(d, fmt.Sprintf("%d go test lines, want 2 (filtered with -run, hook packages whole)", goTests))
+		d = append(d, fmt.Sprintf("%d go test lines, want 2 (each group with -run, hook packages whole)", goTests))
 	}
-	if !strings.Contains(body, `printf '  SHARD-REGEX %s %s\n' "${module_dir}" "${test_regex}"`) {
+	if !strings.Contains(body, `printf '  SHARD-REGEX %s %s\n' "${module_dir}" "${group_regex[${group}]}"`) {
 		d = append(d, "the SHARD-REGEX receipt does not print the regex go test receives")
 	}
 	return d
@@ -870,6 +873,98 @@ func TestIntegrationShardScriptShape(t *testing.T) {
 			}
 			if !strings.Contains(m[1], "TEST_FILE_TAG_ONLY[") {
 				t.Errorf("%s does not take the class from TEST_FILE_TAG_ONLY", fn)
+			}
+		}
+	})
+	t.Run("go test groups: no cross-package name collision, bounded regex", func(t *testing.T) {
+		t.Parallel()
+		files := map[string]string{
+			"a/plain_test.go": "package a\n\nimport \"testing\"\n\nfunc TestA(t *testing.T) {}\n",
+			"a/tag_test.go":   "//go:build integration\n\npackage a\n\nimport \"testing\"\n\nfunc TestShared(t *testing.T) {}\n",
+			"b/plain_test.go": "package b\n\nimport \"testing\"\n\nfunc TestShared(t *testing.T) {}\n",
+			"b/tag_test.go":   "//go:build integration\n\npackage b\n\nimport \"testing\"\n\nfunc TestB(t *testing.T) {}\n",
+		}
+		// Two packages whose tagged names alone make a regex over the 60000-byte group budget.
+		for _, p := range []string{"c1", "c2"} {
+			var b strings.Builder
+			b.WriteString("//go:build integration\n\npackage " + p + "\n\nimport \"testing\"\n\n")
+			for i := 0; i < 400; i++ {
+				fmt.Fprintf(&b, "func Test%sAVeryLongIntegrationTestNameThatPadsTheRunRegexTowardsTheArgumentLimit%04d(t *testing.T) {}\n", strings.ToUpper(p), i)
+			}
+			files[p+"/long_test.go"] = b.String()
+			files[p+"/plain_test.go"] = "package " + p + "\n\nimport \"testing\"\n\nfunc TestPlain" + p + "(t *testing.T) {}\n"
+		}
+		got := runDiscoveryFixture(t, files, `
+run_integration_packages --dry-run . fixture ./a ./b ./c1 ./c2 > receipts.txt
+cat receipts.txt
+mapfile -t regexes < <(sed -n 's/^  SHARD-REGEX \. //p' receipts.txt)
+mapfile -t groups < <(sed -n 's/^  SHARD-GROUP \. [0-9]* //p' receipts.txt)
+[ "${#groups[@]}" -gt 0 ] || groups=("a b c1 c2")
+for i in "${!regexes[@]}"; do
+  read -r -a members <<<"${groups[${i}]}"
+  for m in "${members[@]}"; do
+    GOWORK=off go test -mod=readonly -tags=integration -list "${regexes[${i}]}" "./${m}" | sed -n "s|^Test|LISTEDG ${m} Test|p"
+  done
+done
+`)
+		if strings.Contains(got, "SHARD-COLLISION") {
+			t.Error("a cross-package name collision is still receipted instead of avoided")
+		}
+		want := map[string]bool{}
+		for _, v := range lineValues(got, "  SHARD-TEST ") {
+			want[v] = true
+		}
+		listed := map[string]int{}
+		for _, v := range lineValues(got, "LISTEDG ") {
+			listed[v]++
+		}
+		for v, n := range listed {
+			if !want[v] || n != 1 {
+				t.Errorf("a group regex runs %q %d time(s); it is no SHARD-TEST of that package", v, n)
+			}
+		}
+		for v := range want {
+			if listed[v] != 1 {
+				t.Errorf("SHARD-TEST %q is run by no group regex", v)
+			}
+		}
+		if listed["b TestShared"] > 0 || listed["a TestA"] > 0 {
+			t.Error("a plain test is selected by a group regex")
+		}
+		regexes := lineValues(got, "  SHARD-REGEX . ")
+		for _, r := range regexes {
+			if len(r) > 60000 {
+				t.Errorf("a go test group regex is %d bytes, over the 60000-byte budget", len(r))
+			}
+		}
+		if len(regexes) < 3 {
+			t.Errorf("%d go test group(s); want a and b apart and c1 and c2 apart (budget)", len(regexes))
+		}
+		if t.Failed() {
+			t.Logf("fixture output:\n%.4000s", got)
+		}
+	})
+	t.Run("the integration verb plans bounded, collision-free groups on the real tree", func(t *testing.T) {
+		t.Parallel()
+		keys := sortedKeys(expectedPackages(t))
+		var pkgs []string
+		for _, k := range keys {
+			pkgs = append(pkgs, "./"+k)
+		}
+		res := discoveryHarness(t, nil, "", "run_integration_packages --dry-run . integration "+strings.Join(pkgs, " ")+"\n")
+		if res.code != 0 {
+			t.Fatalf("exit %d: %.2000s%.2000s", res.code, res.stdout, res.stderr)
+		}
+		if strings.Contains(res.stdout, "SHARD-COLLISION") {
+			t.Error("the integration verb receipts a collision instead of avoiding it")
+		}
+		regexes := lineValues(res.stdout, "  SHARD-REGEX . ")
+		if len(regexes) == 0 {
+			t.Fatal("no SHARD-REGEX line")
+		}
+		for _, r := range regexes {
+			if len(r) > 60000 {
+				t.Errorf("an integration-verb group regex is %d bytes, over the 60000-byte budget (Linux refuses one argument over 128 KiB)", len(r))
 			}
 		}
 	})
@@ -936,9 +1031,9 @@ func TestIntegrationShardScriptShape(t *testing.T) {
 			t.Fatalf("run_integration_packages: %v", d)
 		}
 		for name, plant := range map[string][2]string{
-			"the filtered go test drops -run":         {`-run "${test_regex}" "${run_pkgs[@]}"`, `"${run_pkgs[@]}"`},
-			"the filtered go test runs the hook list": {`run_pkgs=("${filtered[@]}")`, `run_pkgs=("${unfiltered[@]}")`},
-			"the receipt prints another regex":        {`printf '  SHARD-REGEX %s %s\n' "${module_dir}" "${test_regex}"`, `printf '  SHARD-REGEX %s %s\n' "${module_dir}" '^(.*)$'`},
+			"the filtered go test drops -run":         {`-run "${group_regex[${group}]}" "${run_pkgs[@]}"`, `"${run_pkgs[@]}"`},
+			"the filtered go test runs the hook list": {`mapfile -t run_pkgs <<<"${group_pkgs[${group}]%$'\n'}"`, `run_pkgs=("${unfiltered[@]}")`},
+			"the receipt prints another regex":        {`printf '  SHARD-REGEX %s %s\n' "${module_dir}" "${group_regex[${group}]}"`, `printf '  SHARD-REGEX %s %s\n' "${module_dir}" '^(.*)$'`},
 			"a dry run executes tests":                {`[ "${mode}" != "--dry-run" ] || return 0`, `:`},
 		} {
 			if !strings.Contains(m[1], plant[0]) {

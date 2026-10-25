@@ -122,7 +122,7 @@ func llmConfigHandler(verifier CredentialVerifier, source LLMConfigSource, logge
 		if !strings.HasPrefix(token, acrTokenPrefix) && isWorkloadToken(token) {
 			subject, reason := workload.decide(token)
 			if reason != "" {
-				refuseWorkloadLLMConfig(ctx, w, logger, subject, reason)
+				refuseWorkloadLLMConfig(ctx, w, logger, reason)
 				return
 			}
 			countWorkloadAccepted(ctx, routeLLMConfig)
@@ -229,9 +229,9 @@ func llmConfigHandler(verifier CredentialVerifier, source LLMConfigSource, logge
 // refuseWorkloadLLMConfig answers a refused workload token: 403 for a valid
 // token of another workload, 401 for every other reason. The reason is
 // counted and logged, never sent.
-func refuseWorkloadLLMConfig(ctx context.Context, w http.ResponseWriter, logger *slog.Logger, subject, reason string) {
+func refuseWorkloadLLMConfig(ctx context.Context, w http.ResponseWriter, logger *slog.Logger, reason string) {
 	countWorkloadRefused(ctx, routeLLMConfig, reason)
-	logWorkloadRefused(ctx, logger, routeLLMConfig, subject, reason)
+	logWorkloadRefused(ctx, logger, routeLLMConfig, reason)
 	if reason == ReasonPrincipal {
 		countLLMConfig(ctx, "forbidden_workload")
 		writeDetail(w, http.StatusForbidden, "Forbidden")

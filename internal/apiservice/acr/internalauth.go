@@ -191,7 +191,7 @@ func (a routeAuth) authenticateWorkload(w http.ResponseWriter, r *http.Request, 
 		status, outcome, detail = http.StatusForbidden, outcomeWorkloadForbidden, "Forbidden"
 	}
 	countWorkloadRefused(ctx, a.route, reason)
-	logWorkloadRefused(ctx, a.logger, a.route, subject, reason)
+	logWorkloadRefused(ctx, a.logger, a.route, reason)
 	if !a.audit(ctx, "", "", orgID, outcome) {
 		a.unavailable(w, r, "audit_failed")
 		return Credential{}, false

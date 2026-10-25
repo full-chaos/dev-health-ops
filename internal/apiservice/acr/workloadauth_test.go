@@ -352,12 +352,17 @@ func TestWorkloadRefusalCountedAndLoggedByReason(t *testing.T) {
 					if record["reason"] != tc.reason || record["route"] != route.key {
 						t.Fatalf("log record %v, want reason %s route %s", record, tc.reason, route.key)
 					}
-					if _, has := record["workload_subject"]; has != (tc.reason == ReasonPrincipal) {
-						t.Fatalf("workload_subject logged = %v for reason %s", has, tc.reason)
+					if _, has := record["workload_subject"]; has {
+						t.Fatalf("a refusal log record names the workload subject: %v", record)
 					}
 				}
 				if !found {
 					t.Fatalf("no refusal log record in %s", h.logs.String())
+				}
+				for _, claim := range []string{wlSubject, wlOther, wlIssuer, "prn_"} {
+					if strings.Contains(h.logs.String(), claim) {
+						t.Fatalf("a verified claim %q reached a refusal log line: %s", claim, h.logs.String())
+					}
 				}
 				for _, secret := range strings.Split(token, ".") {
 					if secret != "" && strings.Contains(h.logs.String(), secret) {
@@ -414,5 +419,61 @@ func TestWorkloadSeriesAreDeclaredAtZero(t *testing.T) {
 				t.Errorf("no zero series for %s/%s", route.key, reason)
 			}
 		}
+	}
+}
+
+type wlCountingKeys struct {
+	inner authverify.KeySource
+	calls int
+}
+
+func (k *wlCountingKeys) PublicKey(kid string) (ed25519.PublicKey, bool) {
+	k.calls++
+	return k.inner.PublicKey(kid)
+}
+
+func TestUnsupportedClassesWriteOnlyTheParityAuditRow(t *testing.T) {
+	signer := newWLSigner(t)
+	userHeader := wlHeader()
+	userHeader["typ"] = "at+jwt"
+	hs256 := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"HS256","typ":"JWT"}`)) + ".e30.c2lnbmF0dXJl"
+	remainder := "R3m41nd3rSecretBytes0123456789"
+	classes := map[string]string{
+		"user access token": signer.sign(userHeader, wlClaims()),
+		"fcacr":             "fcacr_" + remainder,
+		"push key":          "dh_push_" + remainder,
+		"svc_worker":        "svc_worker_" + remainder,
+		"svc_authsess":      "svc_authsess_" + remainder,
+		"hs256":             hs256,
+	}
+	for name, token := range classes {
+		t.Run(name, func(t *testing.T) {
+			keys := &wlCountingKeys{inner: authverify.StaticKeys{wlKid: signer.pub}}
+			verifier, err := authverify.NewWorkloadVerifier(authverify.WorkloadVerifierConfig{Issuer: wlIssuer, Audience: "dev-health-api", Keys: keys})
+			if err != nil {
+				t.Fatal(err)
+			}
+			h := newWLHarness(t, &WorkloadAuth{Verifier: verifier, Subject: wlSubject, Now: func() time.Time { return wlNow }})
+			rec := do(h.handler, entitlementPath+someOrg, "Bearer "+token)
+			if rec.Code != http.StatusUnauthorized {
+				t.Fatalf("status = %d, want 401", rec.Code)
+			}
+			if want := []auditRow{{"", someOrg, "missing_or_malformed_token"}}; !reflect.DeepEqual(h.creds.audits, want) || !reflect.DeepEqual(h.creds.principals, []string{""}) {
+				t.Fatalf("audits %+v principals %v, want exactly the parity row %+v with a NULL principal", h.creds.audits, h.creds.principals, want)
+			}
+			if h.creds.findCalls != 0 || len(h.creds.used) != 0 || keys.calls != 0 || h.llm.gotToken != "" {
+				t.Fatalf("a lookup happened: finds %d used %v key reads %d verifier token %q", h.creds.findCalls, h.creds.used, keys.calls, h.llm.gotToken)
+			}
+			for _, secret := range []string{token, remainder} {
+				if strings.Contains(h.logs.String(), secret) || strings.Contains(h.creds.audits[0].outcome, secret) || strings.Contains(h.creds.audits[0].orgID, secret) {
+					t.Fatalf("token bytes reached the log or the audit row: %q", secret)
+				}
+			}
+			for _, segment := range strings.Split(token, ".") {
+				if len(segment) > 12 && strings.Contains(h.logs.String(), segment) {
+					t.Fatalf("a token segment reached the log: %q", segment)
+				}
+			}
+		})
 	}
 }

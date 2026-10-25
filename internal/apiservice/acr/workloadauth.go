@@ -86,15 +86,10 @@ func declareWorkloadSeries() {
 	}
 }
 
-// logWorkloadRefused logs one refusal by reason. Only a principal refusal
-// names the subject (a prn_ id of a verified token); no token, claim or key
-// byte is ever logged.
-func logWorkloadRefused(ctx context.Context, logger *slog.Logger, route, subject, reason string) {
-	attrs := []any{slog.String("route", route), slog.String("reason", reason)}
-	if reason == ReasonPrincipal {
-		attrs = append(attrs, slog.String("workload_subject", subject))
-	}
-	logger.WarnContext(ctx, "acr internal: workload token refused", attrs...)
+// logWorkloadRefused logs one refusal by route and reason code only; no
+// token, claim or key byte is ever logged.
+func logWorkloadRefused(ctx context.Context, logger *slog.Logger, route, reason string) {
+	logger.WarnContext(ctx, "acr internal: workload token refused", slog.String("route", route), slog.String("reason", reason))
 }
 
 func countWorkloadRefused(ctx context.Context, route, reason string) {
@@ -128,8 +123,7 @@ func isWorkloadToken(token string) bool {
 }
 
 // decide verifies token and returns the workload subject and the refusal
-// reason (empty reason = accepted). The subject is set only for a verified
-// token: on accept, and on a principal refusal.
+// reason (empty reason = accepted). The subject is set only on accept.
 func (w *WorkloadAuth) decide(token string) (subject, reason string) {
 	if w == nil || w.Verifier == nil || w.Subject == "" {
 		return "", ReasonNotConfigured
@@ -143,7 +137,7 @@ func (w *WorkloadAuth) decide(token string) (subject, reason string) {
 		return "", workloadReason(err)
 	}
 	if claims.Subject != w.Subject {
-		return claims.Subject, ReasonPrincipal
+		return "", ReasonPrincipal
 	}
 	return claims.Subject, ""
 }

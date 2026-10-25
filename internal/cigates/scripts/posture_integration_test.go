@@ -280,9 +280,10 @@ func TestPostureIntegrationRunIgnoresARunnerOverrideInTheEnvironment(t *testing.
 	git("add", ".")
 	git("commit", "-q", "-m", "change")
 	res := cmdSpec{dir: repo, env: []string{shimBasePath(), "POSTURE_CAPPED_SH=/bin/true"}}.run("bash", filepath.Join(repoRoot(t), "ci", "posture_integration.sh"), "--run")
-	if res.code == 0 || strings.Contains(res.stdout, " PASS ") || strings.Contains(res.stdout, "pass=14") ||
-		!strings.Contains(res.stdout, "runner=/home/ubuntu/devhealth/scripts/capped.sh sha256=") {
-		t.Fatalf("env runner override: exit %d stdout=%q, want non-zero, no PASS, the real capped.sh named with its sha256", res.code, res.stdout)
+	missing := res.code == 3 && (strings.Contains(res.stderr, "runner not found") || strings.Contains(res.stderr, "go not found"))
+	named := strings.Contains(res.stdout, "runner=/home/ubuntu/devhealth/scripts/capped.sh sha256=")
+	if res.code == 0 || strings.Contains(res.stdout, " PASS ") || strings.Contains(res.stdout, "pass=14") || !(missing || named) {
+		t.Fatalf("env runner override: exit %d stdout=%q stderr=%q, want non-zero, no PASS, and either the missing-runner exit 3 or the real capped.sh named with its sha256", res.code, res.stdout, res.stderr)
 	}
 }
 
@@ -359,5 +360,152 @@ func TestPostureIntegrationRunFailsClosedWhenGitStatusFails(t *testing.T) {
 	}
 	if _, err := os.Stat(calls); err == nil {
 		t.Fatal("a failed git status must run no package")
+	}
+}
+
+// postureDemo builds a throwaway module with a copy of the helper, a list of the two demo packages, a package whose test
+// writes a marker file when it really runs, and a package with no test files. Everything is committed (clean tree).
+func postureDemo(t *testing.T) (dir string) {
+	t.Helper()
+	dir, git := postureRepo(t)
+	write := func(rel, body string, mode os.FileMode) {
+		p := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), mode); err != nil {
+			t.Fatal(err)
+		}
+	}
+	script, err := os.ReadFile(filepath.Join(repoRoot(t), "ci", "posture_integration.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	write("ci/posture_integration.sh", string(script), 0o755)
+	write("ci/posture_integration_packages.tsv", "internal/empty\ninternal/ok\n", 0o644)
+	write("go.mod", "module demo\n\ngo 1.21\n", 0o644)
+	write("internal/ok/ok_test.go", "package ok\n\nimport (\n\t\"os\"\n\t\"testing\"\n)\n\nfunc TestRan(t *testing.T) {\n\tif err := os.WriteFile(\"ran.marker\", []byte(\"x\"), 0o600); err != nil {\n\t\tt.Fatal(err)\n\t}\n}\n", 0o644)
+	write("internal/empty/empty.go", "package empty\n", 0o644)
+	write(".gitignore", "ran.marker\n", 0o644)
+	write("trigger.txt", "x\n", 0o644)
+	git("init", "-q", "-b", "main")
+	git("add", ".")
+	git("commit", "-q", "-m", "demo")
+	return dir
+}
+
+func postureDemoRun(t *testing.T, dir string, extraEnv ...string) cmdResult {
+	t.Helper()
+	pass := filepath.Join(t.TempDir(), "runner.sh")
+	if err := os.WriteFile(pass, []byte("#!/bin/sh\nshift 5\nexec \"$@\"\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	paths := filepath.Join(t.TempDir(), "changed.txt")
+	if err := os.WriteFile(paths, []byte("internal/ok/ok_test.go\x00"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env := append(goListEnv(), extraEnv...)
+	env = append(env, "PATH="+filepath.Dir(goBinary(t))+string(os.PathListSeparator)+"/usr/bin:/bin")
+	return cmdSpec{dir: dir, env: env}.run("bash", filepath.Join(dir, "ci", "posture_integration.sh"), "--run", "--paths", paths, "--test-runner", pass)
+}
+
+func goBinary(t *testing.T) string {
+	t.Helper()
+	p, err := exec.LookPath("go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// A package is PASS only when go test ran at least one test and none failed: a package with no test files, or a
+// forged environment that makes go test exit 0 without running tests, must never print a PASS row.
+func TestPostureIntegrationPassNeedsExecutedTests(t *testing.T) {
+	marker := func(dir string) string { return filepath.Join(dir, "internal", "ok", "ran.marker") }
+	cases := []struct {
+		name string
+		env  []string
+	}{
+		{"plain", nil},
+		{"GOFLAGS exec true", []string{"GOFLAGS=-exec=/bin/true"}},
+		{"GOFLAGS run nothing", []string{"GOFLAGS=-run=^$"}},
+		{"GOENV file carries GOFLAGS", nil},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			dir := postureDemo(t)
+			env := c.env
+			if c.name == "GOENV file carries GOFLAGS" {
+				f := filepath.Join(t.TempDir(), "goenv")
+				if err := os.WriteFile(f, []byte("GOFLAGS=-exec=/bin/true\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				env = []string{"GOENV=" + f}
+			}
+			res := postureDemoRun(t, dir, env...)
+			if res.code == 0 {
+				t.Fatalf("a simulated run exits non-zero, got 0: %q", res.stdout)
+			}
+			okRow, emptyRow := "", ""
+			for _, l := range strings.Split(res.stdout, "\n") {
+				switch {
+				case strings.HasPrefix(l, "SIMULATED internal/ok "):
+					okRow = l
+				case strings.HasPrefix(l, "SIMULATED internal/empty "):
+					emptyRow = l
+				}
+			}
+			if !strings.Contains(emptyRow, " FAIL ") {
+				t.Fatalf("a package with no tests must be FAIL, got %q (stdout=%q stderr=%q)", emptyRow, res.stdout, res.stderr)
+			}
+			_, markerErr := os.Stat(marker(dir))
+			if strings.Contains(okRow, " PASS ") && (markerErr != nil || !strings.Contains(okRow, "tests=1")) {
+				t.Fatalf("PASS row without an executed test: %q marker=%v", okRow, markerErr)
+			}
+			if !strings.Contains(okRow, " PASS ") && !strings.Contains(okRow, " FAIL ") {
+				t.Fatalf("no row for internal/ok: stdout=%q stderr=%q", res.stdout, res.stderr)
+			}
+		})
+	}
+}
+
+// In test-runner mode every stdout line starts SIMULATED (the list lines included) and the usage names the flag.
+func TestPostureIntegrationSimulatedModeMarksEveryLine(t *testing.T) {
+	dir := postureDemo(t)
+	res := postureDemoRun(t, dir)
+	for _, l := range strings.Split(strings.TrimSpace(res.stdout), "\n") {
+		if !strings.HasPrefix(l, "SIMULATED") || strings.Contains(l, "RECEIPT") {
+			t.Fatalf("line %q must start SIMULATED and not say RECEIPT; stdout=%q", l, res.stdout)
+		}
+	}
+	bad := cmdSpec{dir: dir, env: []string{shimBasePath()}}.run("bash", filepath.Join(dir, "ci", "posture_integration.sh"), "--nope")
+	if bad.code != 2 || !strings.Contains(bad.stderr, "--test-runner") {
+		t.Fatalf("usage: exit %d stderr=%q, want 2 naming --test-runner", bad.code, bad.stderr)
+	}
+}
+
+// The real runner path: RECEIPT-HEAD names the runner and the go toolchain with their hashes, or the run fails closed
+// with exit 3 and a missing-runner message (hosted runners have no capped.sh). Never a PASS without the head fields.
+func TestPostureIntegrationRealRunHeadNamesTheToolchain(t *testing.T) {
+	dir := postureDemo(t)
+	paths := filepath.Join(t.TempDir(), "changed.txt")
+	if err := os.WriteFile(paths, []byte("internal/ok/ok_test.go\x00"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env := append(goListEnv(), "PATH="+filepath.Dir(goBinary(t))+string(os.PathListSeparator)+"/usr/bin:/bin")
+	res := cmdSpec{dir: dir, env: env}.run("bash", filepath.Join(dir, "ci", "posture_integration.sh"), "--run", "--paths", paths)
+	if res.code == 3 && strings.Contains(res.stderr, "runner not found") {
+		return
+	}
+	head := ""
+	for _, l := range strings.Split(res.stdout, "\n") {
+		if strings.HasPrefix(l, "RECEIPT-HEAD ") {
+			head = l
+		}
+	}
+	for _, want := range []string{" clean=yes ", " runner=/home/ubuntu/devhealth/scripts/capped.sh sha256=", " go=", " go_sha256=", " go_version="} {
+		if !strings.Contains(head, want) {
+			t.Fatalf("RECEIPT-HEAD %q lacks %q (exit %d stdout=%q stderr=%q)", head, want, res.code, res.stdout, res.stderr)
+		}
 	}
 }

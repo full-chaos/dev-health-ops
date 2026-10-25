@@ -126,6 +126,7 @@ internal/cigates/affected	md_bounded_test.go
 internal/cigates/affected	plan.go
 internal/cigates/affected	reach.go
 internal/cigates/affected	reach_test.go
+internal/cigates/affected	reachcache.go
 internal/cigates/affected	reachcache_test.go
 internal/cigates/affected	scan.go
 internal/cigates/affected	tables.go

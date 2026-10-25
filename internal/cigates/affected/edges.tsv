@@ -56,6 +56,7 @@ internal/cigates/affected	ci_script_helpers_test.go	unexpressed
 internal/cigates/affected	plan.go	unexpressed
 internal/cigates/affected	plan_wiring_test.go	unexpressed
 internal/cigates/affected	reach.go	unexpressed
+internal/cigates/affected	reachcache.go	unexpressed
 internal/cigates/affected	scan.go	unexpressed
 internal/cigates/affectedmatrix	ci_script_helpers_test.go	unexpressed
 internal/cigates/affectedmodule	ci_script_helpers_test.go	unexpressed
@@ -174,6 +175,7 @@ internal/platform/shell	otlp_push_test.go	unexpressed
 internal/platform/shell	stop_bound_test.go	unexpressed
 internal/platform/tracing	environment_proxy_test.go	unexpressed
 internal/providerfoundation	environment_proxy_test.go	unexpressed
+internal/providersync	census_load_test.go	unexpressed
 internal/providersync	project_id_test.go	unexpressed
 internal/providersync	work_item_row_base_census_test.go	unexpressed
 internal/queryapi/principal	verifier.go	unexpressed

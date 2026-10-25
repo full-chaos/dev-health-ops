@@ -260,7 +260,7 @@ jobs:
             echo "ERROR: leg acp passed without the auth-service keys"
             exit 1
           fi
-          grep -q 'required aggregate sessions is not served by auth-service' "${NOKEYS_LOG}" || {
+          grep -a 'required aggregate sessions is not served by auth-service' "${NOKEYS_LOG}" || {
             echo "ERROR: leg acp failed, but not on the required aggregate sessions"
             exit 1
           }

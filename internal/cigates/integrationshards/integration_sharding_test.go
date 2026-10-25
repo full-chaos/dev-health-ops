@@ -609,6 +609,34 @@ func sameSet(a, b map[string]bool) bool {
 	return true
 }
 
+const mergeGroupReceipt = "CHAOS-11407 retired the receipt \"unit test re-run under -tags=integration\": the integration shards skip " +
+	"untagged tests because the go-quality test and race legs run every package on merge_group (plan-verdict FULL). " +
+	"merge_group must stay FULL, or the shards must run the untagged tests of the packages a merge_group plan leaves out"
+
+// mergeGroupFullDefects checks internal/cigates/affected/plan.go: the judged events (the only ones planned narrower
+// than FULL) exclude merge_group, and plan returns FULL for every other event before it reads the change set.
+func mergeGroupFullDefects(src string) []string {
+	var d []string
+	m := regexp.MustCompile(`(?m)^\s*judgedEvents\s*=\s*map\[string\]bool\{([^}]*)\}`).FindStringSubmatch(src)
+	if m == nil {
+		return append(d, "plan.go has no judgedEvents table to check")
+	}
+	keys := map[string]bool{}
+	for _, k := range regexp.MustCompile(`"([^"]+)"\s*:\s*true`).FindAllStringSubmatch(m[1], -1) {
+		keys[k[1]] = true
+	}
+	if len(keys) == 0 {
+		d = append(d, "judgedEvents holds no event")
+	}
+	if keys["merge_group"] {
+		d = append(d, "judgedEvents holds merge_group: a merge group is planned narrower than FULL")
+	}
+	if !regexp.MustCompile(`(?m)^\s*if !judgedEvents\[in\.event\] \{\n\s*return full\(`).MatchString(src) {
+		d = append(d, "plan no longer returns FULL first for an event outside judgedEvents")
+	}
+	return d
+}
+
 // runIntegrationPackagesDefects checks the body of run_integration_packages: after the dry-run return, exactly two
 // go test lines run, the filtered packages with -run of the printed SHARD-REGEX and the hook packages whole.
 func runIntegrationPackagesDefects(body string) []string {
@@ -697,6 +725,25 @@ func TestIntegrationShardScriptShape(t *testing.T) {
 				t.Fatalf("plant %q: anchor %q is absent", name, plant[0])
 			}
 			if len(runIntegrationPackagesDefects(strings.Replace(m[1], plant[0], plant[1], 1))) == 0 {
+				t.Errorf("planted defect not caught: %s", name)
+			}
+		}
+	})
+	t.Run("merge_group stays a FULL go-quality plan", func(t *testing.T) {
+		t.Parallel()
+		planSrc := readText(t, filepath.Join(rootOf(t), "internal", "cigates", "affected", "plan.go"))
+		if d := mergeGroupFullDefects(planSrc); len(d) > 0 {
+			t.Fatalf("%s:\n  %s", mergeGroupReceipt, strings.Join(d, "\n  "))
+		}
+		for name, plant := range map[string][2]string{
+			"merge_group becomes a judged event":     {`judgedEvents = map[string]bool{"pull_request": true, "range": true}`, `judgedEvents = map[string]bool{"pull_request": true, "range": true, "merge_group": true}`},
+			"an unjudged event no longer plans FULL": {"if !judgedEvents[in.event] {\n\t\treturn full(", "if !judgedEvents[in.event] {\n\t\treturn affected("},
+			"the judged-event table moved":           {"judgedEvents = map[string]bool{", "judged = map[string]bool{"},
+		} {
+			if !strings.Contains(planSrc, plant[0]) {
+				t.Fatalf("plant %q: anchor %q is absent from plan.go", name, plant[0])
+			}
+			if len(mergeGroupFullDefects(strings.Replace(planSrc, plant[0], plant[1], 1))) == 0 {
 				t.Errorf("planted defect not caught: %s", name)
 			}
 		}

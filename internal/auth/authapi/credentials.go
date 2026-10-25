@@ -143,6 +143,11 @@ func CredentialRoutes(deps CredentialDeps) ([]httpapi.Route, error) {
 		{Method: http.MethodPost, Pattern: PatternResetPassword, Handler: h.resetPassword(flows)},
 		{Method: http.MethodPost, Pattern: PatternChangePassword, Handler: h.authenticatedChange()},
 	}
+	register, err := h.registerRoute(flows)
+	if err != nil {
+		return nil, err
+	}
+	routes = append(routes, register)
 	return routes, nil
 }
 

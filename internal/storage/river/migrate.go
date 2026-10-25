@@ -1031,9 +1031,10 @@ func runtimeGrantStatements(options MigrationOptions) []string {
 		"DO $$ BEGIN IF to_regclass('public.backfill_jobs') IS NOT NULL THEN GRANT SELECT, UPDATE ON TABLE public.backfill_jobs TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.sync_coverage_projections') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_coverage_projections TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.organizations') IS NOT NULL THEN GRANT SELECT ON TABLE public.organizations TO " + domainRole + "; END IF; END $$",
-		// CHAOS-9476: the stale-reservation job lists rows left in `reserved`;
-		// read only, it never voids one.
-		"DO $$ BEGIN IF to_regclass('public.byo_llm_budget_reservations') IS NOT NULL THEN GRANT SELECT ON TABLE public.byo_llm_budget_reservations TO " + domainRole + "; END IF; END $$",
+		// The heavy worker reserves a BYO budget row (INSERT) and settles it
+		// (UPDATE of the Settle columns only); the stale-reservation job
+		// (CHAOS-9476) only reads. No DELETE, no table-wide UPDATE.
+		"DO $$ BEGIN IF to_regclass('public.byo_llm_budget_reservations') IS NOT NULL THEN GRANT SELECT, INSERT ON TABLE public.byo_llm_budget_reservations TO " + domainRole + "; GRANT UPDATE (status, input_tokens, output_tokens, cached_input_tokens, actual_micro_usd, reconciled_at) ON TABLE public.byo_llm_budget_reservations TO " + domainRole + "; END IF; END $$",
 		// The native phone-home heartbeat runs on the domain pool
 		// (internal/jobs/system/heartbeat_native.go): it counts users
 		// alongside organizations and records each run as an audit_logs row.
@@ -1106,10 +1107,12 @@ func runtimeGrantStatements(options MigrationOptions) []string {
 		"REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM " + queueRole,
 		"REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM " + queueRole,
 		"REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA public FROM PUBLIC, " + domainRole + ", " + queueRole,
-		// The one public function the domain role may run: the definer read of an
-		// org's categorization opt-in (pgmigrate 0156; domainPosture's
-		// RequiredFunctions). It holds nothing on settings itself.
+		// The public functions the domain role may run: the definer reads of an
+		// org's categorization opt-in (pgmigrate 0156) and of an opted-in org's
+		// categorize configuration and budget limit (pgmigrate 0158);
+		// domainPosture's RequiredFunctions. It holds nothing on settings itself.
 		"DO $$ BEGIN IF to_regprocedure('public.categorize_byo_opted_in(text)') IS NOT NULL THEN GRANT EXECUTE ON FUNCTION public.categorize_byo_opted_in(text) TO " + domainRole + "; END IF; END $$",
+		"DO $$ BEGIN IF to_regprocedure('public.categorize_byo_settings(text)') IS NOT NULL THEN GRANT EXECUTE ON FUNCTION public.categorize_byo_settings(text) TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.worker_job_outbox') IS NOT NULL THEN GRANT SELECT, UPDATE, DELETE ON TABLE public.worker_job_outbox TO " + queueRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.worker_job_delivery_abandonments') IS NOT NULL THEN GRANT SELECT, INSERT ON TABLE public.worker_job_delivery_abandonments TO " + queueRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.worker_job_completion_fences') IS NOT NULL THEN GRANT SELECT, UPDATE, DELETE ON TABLE public.worker_job_completion_fences TO " + queueRole + "; END IF; END $$",

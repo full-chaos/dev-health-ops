@@ -13,7 +13,9 @@ import (
 
 const (
 	defaultConcurrencyLease = 15 * time.Minute
-	concurrencyRetryDelay   = 100 * time.Millisecond
+	// BudgetLeaseTTL is how long a held concurrency lease lasts without renewal.
+	BudgetLeaseTTL        = defaultConcurrencyLease
+	concurrencyRetryDelay = 100 * time.Millisecond
 )
 
 // CHAOS-4235 REMOVED an acquireQueryTimeout that once bounded each tryAcquire
@@ -118,6 +120,9 @@ func (store *PostgresConcurrencyBudget) Acquire(
 			}
 			_ = store.observeWait(labels, store.now().Sub(started))
 			return lease, nil
+		}
+		if leased >= 0 && request.OnContended != nil {
+			request.OnContended()
 		}
 		timer := time.NewTimer(concurrencyRetryDelay)
 		select {

@@ -173,10 +173,17 @@ func TestAPIRoleEndToEnd(t *testing.T) {
 		}
 	}
 
-	// a column-scoped grant needs its column on the stand-in table
+	// a column-scoped grant needs its column on the stand-in table; the
+	// migration also applies the domain role's column grants to any stand-in
+	// it finds, so a domain column-scoped table present here needs its columns.
 	for _, column := range postgres.APIPosture(false).ColumnScoped {
 		if _, err := admin.Exec(ctx, "ALTER TABLE public."+column.TableName+" ADD COLUMN IF NOT EXISTS "+column.ColumnName+" uuid"); err != nil {
 			t.Fatalf("stand-in column %s.%s: %v", column.TableName, column.ColumnName, err)
+		}
+	}
+	for _, column := range postgres.DomainPosture().ColumnScoped {
+		if _, err := admin.Exec(ctx, "ALTER TABLE IF EXISTS public."+column.TableName+" ADD COLUMN IF NOT EXISTS "+column.ColumnName+" uuid"); err != nil {
+			t.Fatalf("stand-in domain column %s.%s: %v", column.TableName, column.ColumnName, err)
 		}
 	}
 

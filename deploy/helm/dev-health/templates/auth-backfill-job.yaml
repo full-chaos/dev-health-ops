@@ -1,0 +1,115 @@
+{{- /*
+One `dho auth <verb>` run (users-backfill or orgs-backfill) as a plain Job. Off by default.
+It reads the SAME keys as auth-service: authService.usersOwned and authService.orgsOwned feed
+AUTH_USERS_OWNED / AUTH_ORGS_OWNED, so a verb never sees a different switch than the service.
+The runtime login is the auth-service secret reference (no value in the chart). The Job is not
+a hook: its name carries a hash of its whole rendered pod template, so the next upgrade with the
+same inputs renders the same Job, and any changed input is a new Job. The roll that enables it
+also disables it. The Job uses the auth database login, so it has the auth boundary: its own
+NetworkPolicy (DNS and the auth database only, no ingress), rendered with the Job, and it is
+excluded from the release-wide policy (networkpolicy.yaml).
+*/ -}}
+{{- define "dev-health.authBackfillPodTemplate" -}}
+{{- $a := .Values.authService }}
+{{- $b := $a.backfill }}
+{{- $dryRun := eq (include "dev-health.authBool" (dict "value" $b.dryRun "key" "authService.backfill.dryRun")) "true" }}
+metadata:
+  labels:
+    {{- include "dev-health.componentSelectorLabels" (dict "component" "auth-backfill" "context" .) | nindent 4 }}
+  annotations:
+    dev-health/backfill-run-id: {{ $b.runId | quote }}
+spec:
+  {{- include "dev-health.imagePullSecrets" . | nindent 2 }}
+  automountServiceAccountToken: false
+  restartPolicy: Never
+  securityContext: {runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, seccompProfile: {type: RuntimeDefault}}
+  containers:
+    - name: auth-backfill
+      image: {{ include "dev-health.goApiImage" . }}
+      imagePullPolicy: {{ .Values.goApi.image.pullPolicy }}
+      args:
+        - auth
+        - {{ $b.verb }}
+        - {{ printf "--batch=%d" (int $b.batch) | quote }}
+        {{- if $dryRun }}
+        - "--dry-run"
+        {{- end }}
+      env:
+        - name: AUTH_DATABASE_URI
+          valueFrom: {secretKeyRef: {name: {{ $a.database.secretName | quote }}, key: {{ $a.database.secretKey | quote }}}}
+        - name: AUTH_DATABASE_SCHEMA
+          value: {{ include "dev-health.authDatabaseSchema" . | quote }}
+        {{- if eq (include "dev-health.authBool" (dict "value" $a.usersOwned "key" "authService.usersOwned")) "true" }}
+        - name: AUTH_USERS_OWNED
+          value: "true"
+        {{- end }}
+        {{- if eq (include "dev-health.authBool" (dict "value" $a.orgsOwned "key" "authService.orgsOwned")) "true" }}
+        - name: AUTH_ORGS_OWNED
+          value: "true"
+        {{- end }}
+        {{- with $b.extraEnv }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      resources:
+        {{- toYaml $b.resources | nindent 8 }}
+      securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, capabilities: {drop: [ALL]}, seccompProfile: {type: RuntimeDefault}}
+{{- end }}
+{{- $a := .Values.authService }}
+{{- $b := $a.backfill }}
+{{- $enabled := eq (include "dev-health.authBool" (dict "value" $b.enabled "key" "authService.backfill.enabled")) "true" }}
+{{- $null := include "dev-health.authBool" (dict "value" $b.dryRun "key" "authService.backfill.dryRun") }}
+{{- if $enabled }}
+{{- if not $a.enabled }}{{- fail "authService.backfill.enabled needs authService.enabled: the Job uses the auth-service database login" }}{{- end }}
+{{- if not (has (toString $b.verb) (list "users-backfill" "orgs-backfill")) }}{{- fail "authService.backfill.verb must be users-backfill or orgs-backfill" }}{{- end }}
+{{- if or (not (kindIs "string" $b.runId)) (empty $b.runId) }}{{- fail "authService.backfill.runId is required when authService.backfill.enabled: it names this run, and a new value makes a new Job" }}{{- end }}
+{{- if not (and (has (kindOf $b.batch) (list "int" "int64" "float64")) (eq (float64 $b.batch) (floor (float64 $b.batch))) (ge (int $b.batch) 1) (le (int $b.batch) 10000)) }}{{- fail "authService.backfill.batch must be a whole number from 1 to 10000" }}{{- end }}
+{{- range $b.extraEnv }}
+{{- if has (upper (trim .name)) (list "AUTH_USERS_OWNED" "AUTH_ORGS_OWNED" "AUTH_DATABASE_URI" "AUTH_DATABASE_SCHEMA") }}{{- fail (printf "authService.backfill.extraEnv must not set %s: the chart renders it from authService (usersOwned, orgsOwned, database)" .name) }}{{- end }}
+{{- end }}
+{{- if not $a.networkPolicy.egress.database.to }}{{- fail "authService.networkPolicy.egress.database.to is required with authService.backfill.enabled: the Job has its own NetworkPolicy and an empty list would cut it off from the database" }}{{- end }}
+{{- $podTemplate := include "dev-health.authBackfillPodTemplate" . }}
+{{- $hash := sha256sum $podTemplate | trunc 8 }}
+{{- $base := include "dev-health.fullname" . | trunc 40 | trimSuffix "-" }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $base }}-auth-backfill-{{ $hash }}
+  namespace: {{ include "dev-health.namespace" . }}
+  labels:
+    {{- include "dev-health.componentLabels" (dict "component" "auth-backfill" "context" $) | nindent 4 }}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: {{ $b.activeDeadlineSeconds }}
+  ttlSecondsAfterFinished: {{ $b.ttlSecondsAfterFinished }}
+  template:
+    {{- $podTemplate | nindent 4 }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $base }}-auth-backfill
+  namespace: {{ include "dev-health.namespace" . }}
+  labels:
+    {{- include "dev-health.componentLabels" (dict "component" "auth-backfill" "context" $) | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "dev-health.componentSelectorLabels" (dict "component" "auth-backfill" "context" $) | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress: []
+  egress:
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        {{- toYaml $a.networkPolicy.egress.database.to | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: {{ $a.networkPolicy.egress.database.port }}
+{{- end }}

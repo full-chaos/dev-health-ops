@@ -242,6 +242,11 @@ func applyRuntimeGrants(ctx context.Context, conn querier, manifest []TablePrivi
 		return err
 	}
 	publicStatements = append(publicStatements, usersWrite...)
+	registerWrite, err := registerOrganizationStatements(ctx, conn, options, logger)
+	if err != nil {
+		return err
+	}
+	publicStatements = append(publicStatements, registerWrite...)
 
 	tx, err := conn.Begin(ctx)
 	if err != nil {

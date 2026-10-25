@@ -87,7 +87,7 @@ func NewLimits(store httpapi.CounterStore, secret string) (*Limits, error) {
 func LimitIDs() []string {
 	limits := []httpapi.Limit{
 		loginIPLimit, loginAccountLimit, verifyLimit, resendLimit, resendIPLimit, forgotLimit, forgotIPLimit,
-		resetIPLimit, resetTokenLimit, changePasswordLimit, socialLinkLimit, refreshLimit,
+		resetIPLimit, resetTokenLimit, changePasswordLimit, socialLinkLimit, refreshLimit, registerIPLimit,
 	}
 	ids := make([]string, len(limits))
 	for i, limit := range limits {

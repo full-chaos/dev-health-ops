@@ -96,6 +96,17 @@ type HandlerReturnObserver interface {
 	HandlerReturned(context.Context, JobLabels)
 }
 
+// BudgetContentionObserver reports a slot waiting on another holder's
+// concurrency lease. BudgetContended fires once, after the budget has read the
+// lease table live and found it full; BudgetContentionEnded fires exactly once
+// for it on every exit of the wait (acquired, error, context end, panic).
+// started is the same value in both calls and identifies the wait.
+// Optional, like HandlerInvocationObserver.
+type BudgetContentionObserver interface {
+	BudgetContended(ctx context.Context, labels JobLabels, started time.Time)
+	BudgetContentionEnded(ctx context.Context, labels JobLabels, started time.Time)
+}
+
 // SyncLeaseObserver is the narrower capability concrete expired-lease
 // recovery implementations depend on directly, the same way concrete budget
 // implementations call ObserveProviderBudgetWait directly rather than through

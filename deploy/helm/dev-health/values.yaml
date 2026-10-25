@@ -170,7 +170,10 @@ goApi:
 #     refuses any key file with a group or world mode bit (ACP-ADR-02 §3).
 authService:
   enabled: false
-  replicas: 1
+  # -- Two replicas keep the service up through one pod loss or node drain
+  #    (N+1, docs/operate/plan/auth-service-capacity.md); a PodDisruptionBudget
+  #    (minAvailable 1) renders only while this is 2 or more.
+  replicas: 2
   # -- The users-owned switch (D3c, AUTH_USERS_OWNED). true: auth-service owns
   #    user creation, projects each user to public.users in the same transaction,
   #    mounts the password and e-mail verification routes, and does not become
@@ -178,6 +181,12 @@ authService:
   #    grant its runtime role INSERT/UPDATE on the projection columns of
   #    public.users (false revokes them). The flip is a production decision.
   usersOwned: false
+  # -- The orgs-owned switch (AUTH_ORGS_OWNED). true: auth-service is the only
+  #    writer of organizations; the sign-in projection reads no public table.
+  #    ONE key: auth-service and the backfill Job read it, nothing else. Turn it
+  #    on only after the organization backfill is complete; while it is true
+  #    `dho auth orgs-backfill` refuses (exit 3). The flip is a production decision.
+  orgsOwned: false
   # -- The auth API listener. It mounts no route in Wave 1.
   port: 8095
   # -- The operator listener: /healthz, /readyz, /metrics. Probes use it, never
@@ -195,6 +204,14 @@ authService:
     secretName: ""
     secretKey: AUTH_DATABASE_URI
     schema: auth
+    # -- Connection pool of EACH replica (AUTH_DATABASE_MAX_CONNS), a whole
+    #    number from 1 to 32. The pods connect to the database directly, not
+    #    through the go-pgbouncer pools, so the database must hold
+    #    replicas x maxConns (plus one surge pod while rolling, and
+    #    briefly more while old pods finish their requests). Not settable
+    #    through extraEnv or extraArgs; the chart renders it as the
+    #    --database-max-conns flag.
+    maxConns: 8
   # -- The shared rate-limit store's login (AUTH_VALKEY_URI, database 1): an
   #    ACL user of its own, limited to the auth_svc_ key prefix, never go-api's.
   #    Leave secretName empty while no limited route (login, credentials,
@@ -266,13 +283,17 @@ authService:
     periodSeconds: 10
     timeoutSeconds: 3
     failureThreshold: 3
+  # -- Measured in docs/operate/plan/auth-service-capacity.md: login is CPU
+  #    bound (about 3.7 logins/s per core), memory peaked at 27 MiB. Requests
+  #    are 250m per pod, 500m for two replicas, 750m with one surge pod
+  #    (pods that are shutting down can overlap it briefly; not measured).
   resources:
     requests:
       memory: "64Mi"
-      cpu: "50m"
+      cpu: "250m"
     limits:
       memory: "256Mi"
-      cpu: "500m"
+      cpu: "1000m"
   nodeSelector: {}
   tolerations: []
   affinity: {}
@@ -328,6 +349,34 @@ authService:
       limits:
         memory: "128Mi"
         cpu: "250m"
+  # -- One `dho auth <verb>` run as a plain Job (not a hook), off by default. It
+  #    uses the chart's dho image (goApi.image), the auth-service runtime login
+  #    by the same secret reference, and the same usersOwned / orgsOwned keys.
+  #    The Job name carries a hash of verb, dryRun, batch, image and runId: the
+  #    same inputs keep the same Job (no immutable-field patch, no rerun on the
+  #    next upgrade); a changed input is a new Job. enabled=true holds for ONE
+  #    roll: the same roll sets it false again and reads that the Job is gone.
+  backfill:
+    enabled: false
+    # -- users-backfill or orgs-backfill.
+    verb: ""
+    # -- true: read and report, write nothing. A real run needs an explicit false.
+    dryRun: true
+    # -- Rows read per page, 1..10000.
+    batch: 500
+    # -- Required when enabled. A fixed label of this run; a new value makes a new Job.
+    runId: ""
+    activeDeadlineSeconds: 1800
+    ttlSecondsAfterFinished: 86400
+    # -- Tuning env only. AUTH_USERS_OWNED and AUTH_ORGS_OWNED are refused here.
+    extraEnv: []
+    resources:
+      requests:
+        memory: "32Mi"
+        cpu: "20m"
+      limits:
+        memory: "256Mi"
+        cpu: "500m"
   # -- Rendered whenever authService is enabled (independent of the release-wide
   #    networkPolicy.enabled): enabling the service must never deploy it without
   #    its boundary. The auth pods are EXCLUDED from the release-wide policy (which

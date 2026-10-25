@@ -27,10 +27,22 @@ ROOT="$(cd -- "${SCRIPT_DIR}/.." >/dev/null 2>&1 && pwd -P)"
 
 readonly KIND_VERSION="v0.33.0"
 readonly KIND_SHA256_AMD64="aee6151561422756b764a4ae28e7f44cda5af5a9eead3cc9985112b1de8d8e0d"
+readonly KIND_SHA256_ARM64="20022bee6cfcd5086cb7234d218e3454e6090022f2a8f55d1fa7fcf42c3867a2"
 readonly HELM_VERSION="v3.21.4"
 readonly HELM_SHA256_AMD64="61f88ab166748cb19604d7884cb100ae9ccb13804ddeb98e08af167eacbb6a14"
+readonly HELM_SHA256_ARM64="b54c04b4e0b2540bbdc08c17a121dab70e9a2ed0de5705528fec68a5fd3b85a7"
 readonly KUBECTL_VERSION="v1.37.0"
 readonly KUBECTL_SHA256_AMD64="6129359f4e1f3848a5572ccb0b26cf28b8ca08cef38c95a765b2f64a2c961a2f"
+readonly KUBECTL_SHA256_ARM64="922df28df248cc00a9e025f947704f1d1482de64ece54cfe57e61f19eaf1eef3"
+# Official release checksums: kind-linux-<arch>.sha256sum on the kind release page,
+# helm-<version>-linux-<arch>.tar.gz.sha256sum on get.helm.sh, kubectl.sha256 on dl.k8s.io.
+# The node and PostgreSQL image digests below are OCI indexes (amd64 and arm64 inside).
+case "$(uname -m)" in
+  x86_64 | amd64) ARCH=amd64; KIND_SHA256="${KIND_SHA256_AMD64}"; HELM_SHA256="${HELM_SHA256_AMD64}"; KUBECTL_SHA256="${KUBECTL_SHA256_AMD64}" ;;
+  aarch64 | arm64) ARCH=arm64; KIND_SHA256="${KIND_SHA256_ARM64}"; HELM_SHA256="${HELM_SHA256_ARM64}"; KUBECTL_SHA256="${KUBECTL_SHA256_ARM64}" ;;
+  *) printf 'ERROR: unsupported machine %s\n' "$(uname -m)" >&2; exit 1 ;;
+esac
+readonly ARCH KIND_SHA256 HELM_SHA256 KUBECTL_SHA256
 readonly NODE_IMAGE="kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5"
 # One pinned image serves PostgreSQL and every helper pod (its busybox has
 # wget, stat, ls and sh), and is the chart's own staging-image default.
@@ -68,6 +80,7 @@ cleanup() {
   # A signal that lands while `kind create cluster` is mid-flight can leave the node container
   # behind a delete that ran too early: remove it by its exact, pid-unique name.
   docker rm --force --volumes "${CLUSTER}-control-plane" >/dev/null 2>&1 || true
+  docker image rm "${LOCAL_SVC}" "${LOCAL_MIG}" >/dev/null 2>&1 || true
   rm -rf "${WORK}"
   exit "${status}"
 }
@@ -88,22 +101,22 @@ K_RENDER() {
 # --- tooling: kind by checksum, not by whatever the runner ships ---------------
 printf 'step 0: kind %s (sha256 pinned) and the pinned node image\n' "${KIND_VERSION}"
 curl --fail --silent --show-error --location --output "${WORK}/kind" \
-  "https://github.com/kubernetes-sigs/kind/releases/download/${KIND_VERSION}/kind-linux-amd64"
-printf '%s  %s\n' "${KIND_SHA256_AMD64}" "${WORK}/kind" | sha256sum --check --status \
+  "https://github.com/kubernetes-sigs/kind/releases/download/${KIND_VERSION}/kind-linux-${ARCH}"
+printf '%s  %s\n' "${KIND_SHA256}" "${WORK}/kind" | sha256sum --check --status \
   || die "kind ${KIND_VERSION} does not match its pinned sha256"
 chmod +x "${WORK}/kind"
 
 # helm and kubectl are pinned the same way: the runner image's versions are not a contract.
 mkdir -p "${WORK}/bin"
 curl --fail --silent --show-error --location --output "${WORK}/helm.tgz" \
-  "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz"
-printf '%s  %s\n' "${HELM_SHA256_AMD64}" "${WORK}/helm.tgz" | sha256sum --check --status \
+  "https://get.helm.sh/helm-${HELM_VERSION}-linux-${ARCH}.tar.gz"
+printf '%s  %s\n' "${HELM_SHA256}" "${WORK}/helm.tgz" | sha256sum --check --status \
   || die "helm ${HELM_VERSION} does not match its pinned sha256"
-tar -xzf "${WORK}/helm.tgz" -C "${WORK}" linux-amd64/helm
-mv "${WORK}/linux-amd64/helm" "${WORK}/bin/helm"
+tar -xzf "${WORK}/helm.tgz" -C "${WORK}" linux-${ARCH}/helm
+mv "${WORK}/linux-${ARCH}/helm" "${WORK}/bin/helm"
 curl --fail --silent --show-error --location --output "${WORK}/bin/kubectl" \
-  "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
-printf '%s  %s\n' "${KUBECTL_SHA256_AMD64}" "${WORK}/bin/kubectl" | sha256sum --check --status \
+  "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${ARCH}/kubectl"
+printf '%s  %s\n' "${KUBECTL_SHA256}" "${WORK}/bin/kubectl" | sha256sum --check --status \
   || die "kubectl ${KUBECTL_VERSION} does not match its pinned sha256"
 chmod +x "${WORK}/bin/helm" "${WORK}/bin/kubectl"
 export PATH="${WORK}/bin:${PATH}"
@@ -194,6 +207,13 @@ completions="$(K get events --field-selector "involvedObject.name=${RELEASE}-dev
 printf 'migration Job Completed events across install and upgrade: %s\n' "${completions}"
 [ "${completions:-0}" -ge 2 ] || die "the migration hook did not run on both install and upgrade (${completions:-0})"
 K rollout status deploy/"${RELEASE}-dev-health-auth-service" --timeout=240s
+# capacity defaults: two Ready replicas, the pool bound reaches the container, and the budget allows one disruption
+ready="$(K get deploy "${RELEASE}-dev-health-auth-service" -o jsonpath='{.status.readyReplicas}')"
+[ "${ready}" = 2 ] || die "auth-service has ${ready:-0} ready replicas, want 2"
+[[ "$(K get deploy "${RELEASE}-dev-health-auth-service" -o jsonpath='{.spec.template.spec.containers[0].args}')" == *'"--database-max-conns=8"'* ]] || die "the auth-service args do not carry --database-max-conns=8"
+[ "$(K get pdb "${RELEASE}-dev-health-auth-service" -o jsonpath='{.spec.minAvailable}')" = 1 ] || die "the PodDisruptionBudget does not hold minAvailable 1"
+[ "$(K get pdb "${RELEASE}-dev-health-auth-service" -o jsonpath='{.status.disruptionsAllowed}')" = 1 ] || die "the PodDisruptionBudget does not allow exactly one disruption"
+printf 'capacity defaults: 2 ready replicas, --database-max-conns=8, PodDisruptionBudget minAvailable 1 allows 1 disruption\n'
 POD="$(K get pod -l app.kubernetes.io/component=auth-service --field-selector=status.phase=Running -o jsonpath='{.items[0].metadata.name}')"
 POD_IP="$(K get pod "${POD}" -o jsonpath='{.status.podIP}')"
 printf 'pod %s ip %s\n' "${POD}" "${POD_IP}"
@@ -295,9 +315,16 @@ fi
 
 # The Service routes to the pod, by name, on both published ports.
 printf 'step 8b: the Service reaches the pod (DNS name, endpoints, both ports)\n'
-ep="$(K get endpoints "${RELEASE}-dev-health-auth-service" -o jsonpath='{.subsets[0].addresses[0].ip}')"
-printf 'Service endpoint: %s (pod %s)\n' "${ep}" "${POD_IP}"
-[ "${ep}" = "${POD_IP}" ] || die "the Service does not select the pod"
+# Every Ready pod of the Deployment must be a ready endpoint of the Service, and nothing else.
+pod_ips="$(K get pod -l app.kubernetes.io/component=auth-service -o json \
+  | jq -r '.items[] | select(.status.phase == "Running" and ([.status.conditions[] | select(.type == "Ready" and .status == "True")] | length) == 1) | .status.podIP' | sort)"
+ep_ips="$(K get endpointslice -l "kubernetes.io/service-name=${RELEASE}-dev-health-auth-service" -o json \
+  | jq -r '.items[].endpoints[] | select(.conditions.ready == true) | .addresses[]' | sort)"
+printf 'Ready pod IPs: %s\nService endpoint IPs: %s\n' "$(tr '\n' ' ' <<<"${pod_ips}")" "$(tr '\n' ' ' <<<"${ep_ips}")"
+[ -n "${pod_ips}" ] || die "no Ready auth-service pod"
+[ "$(wc -l <<<"${pod_ips}")" -eq "$(K get deploy "${RELEASE}-dev-health-auth-service" -o jsonpath='{.spec.replicas}')" ] \
+  || die "the Ready pod count is not the Deployment replica count"
+[ "${ep_ips}" = "${pod_ips}" ] || die "the Service endpoints are not exactly the Ready pods"
 SVC_HOST="${RELEASE}-dev-health-auth-service"
 via_svc="$(fetch consumer2 role=auth-consumer "http://${SVC_HOST}:8095/anything")"
 printf 'consumer -> Service API port: %s\n' "${via_svc}"

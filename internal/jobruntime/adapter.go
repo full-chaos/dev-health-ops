@@ -68,6 +68,10 @@ type BudgetRequest struct {
 	OrganizationID   *string
 	ConcurrencyScope string
 	ConcurrencyLimit int
+	// OnContended, when set, is called by a budget each time it has just
+	// read the lease table live and found it full. It is the proof that a
+	// slot is waiting on another holder, not hung.
+	OnContended func()
 }
 
 type BudgetLease interface {
@@ -378,12 +382,31 @@ func (adapter *Adapter[T]) execute(parent context.Context, job *river.Job[T], la
 	ctx = scoped
 
 	waitStarted := time.Now()
-	lease, err := adapter.budget.Acquire(ctx, BudgetRequest{
-		Kind:             adapter.descriptor.Kind,
-		OrganizationID:   envelope.OrganizationID,
-		ConcurrencyScope: adapter.descriptor.ConcurrencyScope,
-		ConcurrencyLimit: adapter.descriptor.ConcurrencyLimit,
-	})
+	var contendedAt time.Time
+	contentionObserver, observesContention := adapter.observer.(BudgetContentionObserver)
+	onContended := func() {}
+	if observesContention {
+		onContended = func() {
+			if contendedAt.IsZero() {
+				contendedAt = time.Now()
+				observe(func() { contentionObserver.BudgetContended(ctx, labels, contendedAt) })
+			}
+		}
+	}
+	lease, err := func() (BudgetLease, error) {
+		defer func() {
+			if !contendedAt.IsZero() {
+				observe(func() { contentionObserver.BudgetContentionEnded(ctx, labels, contendedAt) })
+			}
+		}()
+		return adapter.budget.Acquire(ctx, BudgetRequest{
+			Kind:             adapter.descriptor.Kind,
+			OrganizationID:   envelope.OrganizationID,
+			ConcurrencyScope: adapter.descriptor.ConcurrencyScope,
+			ConcurrencyLimit: adapter.descriptor.ConcurrencyLimit,
+			OnContended:      onContended,
+		})
+	}()
 	waitResult := "acquired"
 	if err != nil {
 		waitResult = waitResultForContext(ctx)

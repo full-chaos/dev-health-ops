@@ -261,6 +261,7 @@ func TestPostureIntegrationRunRefusesADirtyTree(t *testing.T) {
 	if res.code == 0 || !strings.Contains(res.stdout, "SIMULATED-HEAD "+sha+" clean=yes") ||
 		!strings.Contains(res.stdout, "SIMULATED-SUMMARY "+sha+" pass=14 fail=0") || strings.Count(res.stdout, "SIMULATED internal/") != 14 ||
 		strings.Contains(res.stdout, "RECEIPT") {
+		t.Fatalf("clean tree with a simulated runner: exit %d stdout=%q stderr=%q", res.code, res.stdout, res.stderr)
 	}
 }
 

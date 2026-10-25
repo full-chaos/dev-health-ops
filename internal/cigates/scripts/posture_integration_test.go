@@ -248,7 +248,7 @@ func TestPostureIntegrationRunRefusesADirtyTree(t *testing.T) {
 		t.Fatal(err)
 	}
 	script := filepath.Join(repoRoot(t), "ci", "posture_integration.sh")
-	res := cmdSpec{dir: repo, env: []string{shimBasePath(), "POSTURE_CAPPED_SH=" + stub}}.run("bash", script, "--run")
+	res := cmdSpec{dir: repo, env: []string{shimBasePath()}}.run("bash", script, "--run", "--test-runner", stub)
 	if res.code == 0 || strings.Contains(res.stdout, "RECEIPT ") || !strings.Contains(res.stderr, "clean=no") {
 		t.Fatalf("dirty tree: exit %d stdout=%q stderr=%q, want non-zero, clean=no, no receipt", res.code, res.stdout, res.stderr)
 	}
@@ -256,10 +256,33 @@ func TestPostureIntegrationRunRefusesADirtyTree(t *testing.T) {
 		t.Fatal(err)
 	}
 	sha := git("rev-parse", "HEAD")
-	res = cmdSpec{dir: repo, env: []string{shimBasePath(), "POSTURE_CAPPED_SH=" + stub}}.run("bash", script, "--run")
-	if res.code != 0 || !strings.Contains(res.stdout, "RECEIPT-HEAD "+sha+" clean=yes") ||
-		!strings.Contains(res.stdout, "RECEIPT-SUMMARY "+sha+" pass=14 fail=0") || strings.Count(res.stdout, "RECEIPT internal/") != 14 {
+	res = cmdSpec{dir: repo, env: []string{shimBasePath()}}.run("bash", script, "--run", "--test-runner", stub)
+	// A stub runner is a test aid: it must never produce a receipt a lane could paste, and it must exit non-zero.
+	if res.code == 0 || !strings.Contains(res.stdout, "RECEIPT-HEAD "+sha+" clean=yes runner=STUB") ||
+		!strings.Contains(res.stdout, "STUB-SUMMARY "+sha+" pass=14 fail=0") || strings.Count(res.stdout, "STUB-RECEIPT internal/") != 14 ||
+		strings.Contains(res.stdout, "\nRECEIPT internal/") || strings.Contains(res.stdout, "\nRECEIPT-SUMMARY") {
 		t.Fatalf("clean tree with a stub runner: exit %d stdout=%q stderr=%q", res.code, res.stdout, res.stderr)
+	}
+}
+
+// The runner is not replaceable by the environment: POSTURE_CAPPED_SH=/bin/true must not yield a PASS receipt.
+func TestPostureIntegrationRunIgnoresARunnerOverrideInTheEnvironment(t *testing.T) {
+	repo, git := postureRepo(t)
+	git("init", "-q", "-b", "main")
+	git("commit", "-q", "--allow-empty", "-m", "base")
+	git("update-ref", "refs/remotes/origin/main", git("rev-parse", "HEAD"))
+	if err := os.MkdirAll(filepath.Join(repo, "internal", "pgmigrate", "sql"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "internal", "pgmigrate", "sql", "0001_x.sql"), []byte("select 1;\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	git("add", ".")
+	git("commit", "-q", "-m", "change")
+	res := cmdSpec{dir: repo, env: []string{shimBasePath(), "POSTURE_CAPPED_SH=/bin/true"}}.run("bash", filepath.Join(repoRoot(t), "ci", "posture_integration.sh"), "--run")
+	if res.code == 0 || strings.Contains(res.stdout, " PASS ") || strings.Contains(res.stdout, "pass=14") ||
+		!strings.Contains(res.stdout, "runner=/home/ubuntu/devhealth/scripts/capped.sh sha256=") {
+		t.Fatalf("env runner override: exit %d stdout=%q, want non-zero, no PASS, the real capped.sh named with its sha256", res.code, res.stdout)
 	}
 }
 
@@ -329,8 +352,8 @@ func TestPostureIntegrationRunFailsClosedWhenGitStatusFails(t *testing.T) {
 	if err := os.WriteFile(stub, []byte("#!/bin/sh\necho x >> "+calls+"\nexit 0\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	env := []string{"PATH=" + shim + ":" + withShims("/usr/bin:/bin:/usr/local/bin"), "POSTURE_CAPPED_SH=" + stub}
-	res := cmdSpec{dir: repo, env: env}.run("bash", filepath.Join(repoRoot(t), "ci", "posture_integration.sh"), "--run")
+	env := []string{"PATH=" + shim + ":" + withShims("/usr/bin:/bin:/usr/local/bin")}
+	res := cmdSpec{dir: repo, env: env}.run("bash", filepath.Join(repoRoot(t), "ci", "posture_integration.sh"), "--run", "--test-runner", stub)
 	if res.code == 0 || strings.Contains(res.stdout, "clean=yes") || strings.Contains(res.stdout, "RECEIPT ") {
 		t.Fatalf("failed git status: exit %d stdout=%q, want non-zero, no clean=yes, no receipt", res.code, res.stdout)
 	}

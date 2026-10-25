@@ -38,3 +38,15 @@ func TestCheckBackfillScaleTextNamesOnlyTheCallersNumbers(t *testing.T) {
 		t.Fatalf("%q, want %q", refusal.Error(), want)
 	}
 }
+
+func TestCanonicalSourceIDsDedupesAndSkipsJunk(t *testing.T) {
+	const a = "0f8b3c1e-2d4a-4b6c-8e9f-1a2b3c4d5e6f"
+	const b = "1f8b3c1e-2d4a-4b6c-8e9f-1a2b3c4d5e6f"
+	got := canonicalSourceIDs([]string{a, "0F8B3C1E-2D4A-4B6C-8E9F-1A2B3C4D5E6F", "urn:uuid:" + a, "not-a-uuid", "", b, a})
+	if len(got) != 2 || got[0] != a || got[1] != b {
+		t.Fatalf("%v, want [%s %s]", got, a, b)
+	}
+	if got := canonicalSourceIDs(nil); len(got) != 0 {
+		t.Fatalf("%v, want none", got)
+	}
+}

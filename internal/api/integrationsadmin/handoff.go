@@ -154,7 +154,7 @@ func (h handlers) handOff(w http.ResponseWriter, r *http.Request, scope triggerS
 // mintHandOff resolves the integration and its configuration and writes the
 // occurrence and manual trigger in one transaction. check, when set, runs after
 // the target resolves and before anything is written; its error rolls back.
-func (h handlers) mintHandOff(r *http.Request, scope triggerScope, mode, triggeredBy string, since, before *time.Time, check func(target handoffScope) error) (synchandoff.Trigger, error) {
+func (h handlers) mintHandOff(r *http.Request, scope triggerScope, mode, triggeredBy string, since, before *time.Time, check func(ctx context.Context, tx pgx.Tx, integrationID uuid.UUID, target handoffScope) error) (synchandoff.Trigger, error) {
 	orgID := orgOf(r)
 	var trigger synchandoff.Trigger
 	err := h.inTx(r.Context(), func(tx pgx.Tx) error {
@@ -175,7 +175,7 @@ func (h handlers) mintHandOff(r *http.Request, scope triggerScope, mode, trigger
 			return err
 		}
 		if check != nil {
-			if err := check(target); err != nil {
+			if err := check(r.Context(), tx, id, target); err != nil {
 				return err
 			}
 		}

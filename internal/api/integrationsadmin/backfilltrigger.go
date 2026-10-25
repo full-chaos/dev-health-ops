@@ -1,8 +1,12 @@
 package integrationsadmin
 
 import (
+	"context"
 	"net/http"
 	"time"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
@@ -106,8 +110,8 @@ func (h handlers) backfillTrigger(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var since, before time.Time = request.since.Time.UTC(), request.before.Time.UTC()
-	trigger, err := h.mintHandOff(r, request.scope, "backfill", "backfill", &since, &before, func(target handoffScope) error {
-		return checkBackfillWindow(request.scope, target, since, before)
+	trigger, err := h.mintHandOff(r, request.scope, "backfill", "backfill", &since, &before, func(ctx context.Context, tx pgx.Tx, integrationID uuid.UUID, target handoffScope) error {
+		return checkBackfillWindow(ctx, tx, orgOf(r), integrationID, request.scope, target, since, before)
 	})
 	if err != nil {
 		h.fail(w, r, "hand off the backfill", err)
@@ -124,19 +128,22 @@ func (h handlers) backfillTrigger(w http.ResponseWriter, r *http.Request) {
 // checkBackfillWindow refuses, before any write, a window whose since is not
 // before its before (Python's planner refused it too) and a window and scope the
 // scheduler would refuse over its unit cap.
-func checkBackfillWindow(scope triggerScope, target handoffScope, since, before time.Time) error {
+func checkBackfillWindow(ctx context.Context, tx pgx.Tx, orgID string, integrationID uuid.UUID, scope triggerScope, target handoffScope, since, before time.Time) error {
 	if !since.Before(before) {
 		return refuse(http.StatusBadRequest, "Backfill since must be before")
 	}
 	if scope.datasetKeysSet && len(scope.datasetKeys) == 0 || scope.sourceIDsSet && len(scope.sourceIDs) == 0 {
 		return nil
 	}
-	sources := len(target.sources)
+	sources := int64(len(target.sources))
 	if scope.sourceIDsSet {
-		sources = len(scope.sourceIDs)
+		var err error
+		if sources, err = synchandoff.CountEnabledSources(ctx, tx, orgID, integrationID.String(), scope.sourceIDs); err != nil {
+			return err
+		}
 	}
 	days := (before.UnixMicro() - since.UnixMicro()) / int64(24*time.Hour/time.Microsecond)
-	if err := synchandoff.CheckBackfillScale(days, int64(sources), int64(schedsync.UnitCapFromEnv())); err != nil {
+	if err := synchandoff.CheckBackfillScale(days, sources, int64(schedsync.UnitCapFromEnv())); err != nil {
 		return refuse(http.StatusUnprocessableEntity, err.Error())
 	}
 	return nil

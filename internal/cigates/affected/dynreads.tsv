@@ -235,6 +235,7 @@ internal/cigates/scripts	local_validate_clickhouse_test.go
 internal/cigates/scripts	merge_tree_vet_script_test.go
 internal/cigates/scripts	oracle_selection_helpers_test.go
 internal/cigates/scripts	ported_contract_guards_test.go
+internal/cigates/scripts	posture_integration_test.go
 internal/cigates/scripts	relevance_step_script_test.go
 internal/cigates/scripts	shard_row_files_merge_test.go
 internal/cigates/scripts	tmp_dirs_removed_test.go

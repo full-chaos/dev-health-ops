@@ -70,6 +70,25 @@ func normalizeProviderKind(name string) ProviderKind {
 	return ProviderKind(strings.ToLower(strings.TrimSpace(name)))
 }
 
+// IsAutoProviderRequest reports a request that names no provider: empty or "auto".
+func IsAutoProviderRequest(requested string) bool {
+	return normalizeProviderKind(requested) == providerKindAuto
+}
+
+// OperatorDisablesLLM reports the operator kill-switch: LLM_PROVIDER=none or mock.
+func OperatorDisablesLLM() bool {
+	switch platformProviderEnv() {
+	case ProviderKindNone, ProviderKindMock:
+		return true
+	}
+	return false
+}
+
+// platformProviderEnv is the one read of LLM_PROVIDER.
+func platformProviderEnv() ProviderKind {
+	return normalizeProviderKind(envsecrets.GetenvNamed("LLM_PROVIDER"))
+}
+
 // firstNonEmptyEnv returns the value of the first set environment variable
 // among names, in priority order -- e.g. a provider-specific override
 // before a generic BYO fallback. Only variable NAMES are ever hardcoded
@@ -142,7 +161,7 @@ func ResolveProviderKindForOrg(
 		return normalized, nil
 	}
 
-	envKind := normalizeProviderKind(envsecrets.GetenvNamed("LLM_PROVIDER"))
+	envKind := platformProviderEnv()
 	// Operator kill-switch / explicit disable: LLM_PROVIDER=none or mock
 	// must not be overridden by auto-detection OR by org BYO.
 	if envKind == ProviderKindNone || envKind == ProviderKindMock {

@@ -316,6 +316,7 @@ func TestLoadRejectsAnUndeclaredOverride(t *testing.T) {
 func TestEveryDeclaredOptionResolves(t *testing.T) {
 	distinct := map[string]string{
 		EnvUsersOwned:             "true",
+		EnvOrgsOwned:              "true",
 		EnvLogLevel:               "debug",
 		EnvShutdownTimeout:        "42s",
 		EnvHealthCheckTimeout:     "1500ms",
@@ -342,6 +343,7 @@ func TestEveryDeclaredOptionResolves(t *testing.T) {
 	}
 	read := map[string]func(Config) string{
 		EnvUsersOwned:             func(c Config) string { return strconv.FormatBool(c.UsersOwned) },
+		EnvOrgsOwned:              func(c Config) string { return strconv.FormatBool(c.OrgsOwned) },
 		EnvLogLevel:               func(c Config) string { return c.LogLevel.String() },
 		EnvShutdownTimeout:        func(c Config) string { return c.ShutdownTimeout.String() },
 		EnvHealthCheckTimeout:     func(c Config) string { return c.HealthCheckTimeout.String() },
@@ -394,6 +396,7 @@ func TestEveryDeclaredOptionResolves(t *testing.T) {
 			}
 			if option.Env == EnvSocialLinkRoutes {
 				env[EnvAccessTokenSecret], env[EnvSessionSuccessorKey] = testAccessSecret, testSuccessorKey
+				env[EnvValkeyURI] = testValkeyURI
 			}
 			env[option.Env] = value
 			cfg, err := Load(Spec{LookupEnv: lookupFrom(env)})
@@ -498,5 +501,39 @@ func TestUsersOwnedRefusesAnythingButTrueOrFalse(t *testing.T) {
 		if _, err := Load(Spec{LookupEnv: lookupFrom(env)}); err == nil {
 			t.Fatalf("%s=%s loaded; want a refusal", EnvUsersOwned, value)
 		}
+	}
+}
+
+func TestOrgsOwnedDefaultsOff(t *testing.T) {
+	cfg, err := Load(Spec{LookupEnv: lookupFrom(baseEnv())})
+	if err != nil || cfg.OrgsOwned {
+		t.Fatalf("default OrgsOwned = %v, err %v; want false", cfg.OrgsOwned, err)
+	}
+}
+
+func TestOrgsOwnedParsesLikeUsersOwned(t *testing.T) {
+	for _, value := range []string{"", "false", "true", "TRUE", " true ", "False", "yes", "1", "on", "enabled"} {
+		users, orgs := baseEnv(), baseEnv()
+		users[EnvUsersOwned], orgs[EnvOrgsOwned] = value, value
+		uc, uerr := Load(Spec{LookupEnv: lookupFrom(users)})
+		oc, oerr := Load(Spec{LookupEnv: lookupFrom(orgs)})
+		if (uerr == nil) != (oerr == nil) {
+			t.Fatalf("value %q: AUTH_USERS_OWNED err=%v, AUTH_ORGS_OWNED err=%v; the parse rules differ", value, uerr, oerr)
+		}
+		if uerr == nil && uc.UsersOwned != oc.OrgsOwned {
+			t.Fatalf("value %q: UsersOwned=%v OrgsOwned=%v", value, uc.UsersOwned, oc.OrgsOwned)
+		}
+	}
+}
+
+func TestOrgsOwnedDoesNotMountAnyRoute(t *testing.T) {
+	env := baseEnv()
+	env[EnvOrgsOwned] = "true"
+	cfg, err := Load(Spec{LookupEnv: lookupFrom(env)})
+	if err != nil || !cfg.OrgsOwned {
+		t.Fatalf("OrgsOwned = %v, err %v", cfg.OrgsOwned, err)
+	}
+	if cfg.LimitedRoutesMounted() {
+		t.Fatal("AUTH_ORGS_OWNED mounted a rate-limited route")
 	}
 }

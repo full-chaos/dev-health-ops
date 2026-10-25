@@ -28,6 +28,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/chquery"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/chwrite"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph"
+	"github.com/full-chaos/dev-health-ops/internal/llmorgsettings"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
 
@@ -78,6 +79,15 @@ type NativeExecutor struct {
 	// A backend that cannot be built is an error of the run: it must never be
 	// served by the generative provider in silence.
 	newServed func(model string) (*ServedDecision, error)
+	// byo is the optional categorization on an org's own model (D6279). Nil, the
+	// default, means no org can use it.
+	byo CategorizeBYO
+}
+
+// SetCategorizeBYO wires the per-org opt-in categorization on the org's own
+// model. Nil is tolerated: no org can then use it.
+func (executor *NativeExecutor) SetCategorizeBYO(byo CategorizeBYO) {
+	executor.byo = byo
 }
 
 // SetShadowObserver wires the optional shadow-phase telemetry. Nil is
@@ -275,19 +285,56 @@ func (executor *NativeExecutor) Execute(ctx context.Context, claim workgraph.Cla
 		requestedProvider = *scope.LLMProvider
 	}
 	orgID := claim.Request.OrganizationID
-	// Categorization is served by the platform provider only: an organization's
-	// own provider configuration never applies to it.
-	provider, kind, err := executor.newProvider(requestedProvider, claim.Request.ModelRef)
-	stampModel := claim.Request.ModelRef
-	if err != nil {
-		var det *workgraph.DeterministicError
-		if errors.As(err, &det) {
-			return nil, err
+	// Categorization is served by the platform provider (jev) unless the org
+	// opted in to its own model (D6279). "auto" is the only request that can
+	// reach the org's model; an explicit provider, the operator kill-switch and
+	// an org that did not opt in all keep the platform path.
+	var byoServed *ServedDecision
+	if executor.byo != nil && orgID != "" && categorize.IsAutoProviderRequest(requestedProvider) && !categorize.OperatorDisablesLLM() {
+		optedIn, optErr := executor.byo.OptedIn(ctx, orgID)
+		if optErr != nil {
+			// Fail closed and do not retry: a run whose opt-in is unknown is
+			// never served by the platform model (D6107), and a missing grant
+			// does not heal by retrying.
+			reason := optInUnreadableReason(optErr)
+			recordOptInUnreadable(ctx, reason)
+			executor.logger.ErrorContext(ctx, "categorize byo opt-in unreadable", slog.String("org_id", orgID),
+				slog.String("reason", reason), slog.String("error", optErr.Error()))
+			return nil, workgraph.Deterministic(workgraph.ClassLLMProviderInvalid,
+				&BYORefusal{Code: llmorgsettings.CodeCategorizeBYOOptInUnreadable})
 		}
-		return nil, workgraph.Deterministic(workgraph.ClassLLMProviderInvalid,
-			fmt.Errorf("resolve llm provider: %w", err))
+		if optedIn {
+			var refusal *BYORefusal
+			byoServed, optErr = executor.byo.Build(ctx, orgID)
+			if errors.As(optErr, &refusal) {
+				return nil, workgraph.Deterministic(workgraph.ClassLLMProviderInvalid, refusal)
+			}
+			if optErr != nil {
+				executor.logger.ErrorContext(ctx, "categorize byo build failed", slog.String("org_id", orgID), slog.String("error", optErr.Error()))
+				return nil, workgraph.Deterministic(workgraph.ClassLLMProviderInvalid, &BYORefusal{Code: llmorgsettings.CodeCategorizeBYOUnavailable})
+			}
+		}
 	}
-	defer func() { _ = provider.Close() }()
+	var (
+		provider categorize.Provider
+		kind     categorize.ProviderKind
+	)
+	if byoServed != nil {
+		defer func() { _ = byoServed.Close() }()
+		provider, kind = servedDecisionProvider{}, categorize.ProviderKindTypeSafe
+	} else {
+		provider, kind, err = executor.newProvider(requestedProvider, claim.Request.ModelRef)
+		if err != nil {
+			var det *workgraph.DeterministicError
+			if errors.As(err, &det) {
+				return nil, err
+			}
+			return nil, workgraph.Deterministic(workgraph.ClassLLMProviderInvalid,
+				fmt.Errorf("resolve llm provider: %w", err))
+		}
+		defer func() { _ = provider.Close() }()
+	}
+	stampModel := claim.Request.ModelRef
 	// materialize.py raised for provider_batch on a provider with no Batch
 	// API; here it is refused before any read. auto uses the synchronous path.
 	if batch.mode == LLMBatchModeProvider {
@@ -363,7 +410,10 @@ func (executor *NativeExecutor) Execute(ctx context.Context, claim workgraph.Cla
 	// provider selection resolved to the decision kind. Its run has no shadow
 	// phase: the same backend must not be paid two times for one unit.
 	var served *ServedDecision
-	if categorize.IsDecisionProviderKind(kind) {
+	if byoServed != nil {
+		served = byoServed
+		// byoServed is closed by the defer above.
+	} else if categorize.IsDecisionProviderKind(kind) {
 		if executor.newServed == nil {
 			return nil, workgraph.Deterministic(workgraph.ClassLLMProviderInvalid,
 				errors.New("the decision backend is selected and this executor cannot build it"))
@@ -377,7 +427,9 @@ func (executor *NativeExecutor) Execute(ctx context.Context, claim workgraph.Cla
 	materializer.SetLLMTelemetry(executor.llmTelemetry)
 	if served != nil {
 		served.SetObserver(executor.servedObserver)
-		defer func() { _ = served.Close() }()
+		if byoServed == nil {
+			defer func() { _ = served.Close() }()
+		}
 		materializer.SetServed(served)
 	}
 	// The shadow phase is built AFTER every refusal above, so a request that is

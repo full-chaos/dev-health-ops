@@ -131,6 +131,20 @@ Secret name — either the one we create or an external one
 {{- end }}
 
 {{/*
+CHAOS-11217: the Secret that holds AUTH_SESSION_ISSUE_TOKEN, the credential go-api
+presents to auth-service's session issue route. goApi.sessionIssue.secretName names a
+dedicated, operator-created Secret; empty keeps the shared Secret. Only go-api reads it.
+*/}}
+{{- define "dev-health.sessionIssueSecretName" -}}
+{{- $issue := default dict .Values.goApi.sessionIssue }}
+{{- if $issue.secretName }}
+{{- $issue.secretName }}
+{{- else }}
+{{- include "dev-health.secretName" . }}
+{{- end }}
+{{- end }}
+
+{{/*
 CHAOS-10446: the Secret that holds JWT_SECRET_KEY, the HS256 access-token key. It is
 its own Secret so the shared Secret the worker groups envFrom never carries it.
 hs256Secret.externalSecretName names an operator-managed one; otherwise the chart
@@ -723,3 +737,224 @@ schema Job and the grants Job.
 {{- define "dev-health.authDatabaseSchema" -}}
 {{- default "auth" .Values.authService.database.schema -}}
 {{- end }}
+
+{{/*
+Database DSN names a Go worker group never takes from the shared Secret or the
+shared ConfigMap. goWorkers.secretKeys refuses them and each worker group blanks
+them, from this one list (internal/platform/dsnclass classifies the same names).
+*/}}
+{{- define "dev-health.goWorkerDSNNames" -}}
+{{- toJson (list "DATABASE_URI" "DATABASE_URL" "POSTGRES_URL" "API_DATABASE_URI" "GO_API_REGISTRY_POSTGRES_URI" "MIGRATION_DATABASE_URI" "AUTH_DATABASE_URI" "AUTH_MIGRATION_DATABASE_URI" "COORDINATOR_DATABASE_URI" "WORKER_DATABASE_URI") -}}
+{{- end }}
+
+{{/*
+The closed list of keys of the shared Secret a Go worker group may take
+(goWorkers.secretKeys). A name outside it refuses the render, so an unlisted
+database DSN name cannot reach a worker pod either.
+*/}}
+{{- define "dev-health.goWorkerSecretKeyNames" -}}
+{{- toJson (list "APP_BASE_URL" "CLICKHOUSE_URI" "EMAIL_API_KEY" "EMAIL_FROM_ADDRESS" "EMAIL_PROVIDER" "EXPECTED_WORKER_GROUPS" "INVESTMENT_LLM_BATCH_MODE" "INVESTMENT_LLM_BATCH_TIMEOUT_SECONDS" "LICENSE_PRIVATE_KEY" "LINEAR_API_KEY" "LLM_MODEL" "LLM_PROVIDER" "OPENAI_API_KEY" "PAGER_DUTY_CLIENT_ID" "PAGER_DUTY_REDIRECT_URI" "PAGER_DUTY_SECRET" "SETTINGS_ENCRYPTION_KEY" "STRIPE_SECRET_KEY" "STRIPE_WEBHOOK_SECRET" "WORKER_GITHUB_WORK_ITEMS_STATUS_MAPPING_PATH") -}}
+{{- end }}
+
+{{/*
+The query-api pods leave the release-wide NetworkPolicy and get their own ingress and egress policies while a listener
+that trusts internal identity headers (internal or MCP) is on: the release-wide in-namespace rule admits every port.
+Renders "true" or nothing.
+*/}}
+{{- define "dev-health.queryApiOwnNetworkPolicy" -}}
+{{- if and .Values.networkPolicy.enabled .Values.queryApi.enabled (or .Values.queryApi.internal.enabled .Values.queryApi.mcp.enabled) }}true{{- end }}
+{{- end }}
+
+{{/*
+Egress rules shared by the release-wide, go-api and query-api egress policies: DNS (UDP and TCP), the release
+namespace, HTTPS, then networkPolicy.extraEgress. The auth pods never use these rules.
+*/}}
+{{- define "dev-health.networkPolicyEgress" -}}
+{{- range $i, $rule := .Values.networkPolicy.extraEgress }}
+{{- if not (kindIs "map" $rule) }}
+{{- fail (printf "networkPolicy.extraEgress[%d] must be a NetworkPolicy egress rule: an object with to and/or ports" $i) }}
+{{- end }}
+{{- range $key := keys $rule | sortAlpha }}
+{{- if not (has $key (list "to" "ports")) }}
+{{- fail (printf "networkPolicy.extraEgress[%d] takes only to and ports, not %q: Kubernetes drops an unknown key, so the rule would be wider than written" $i $key) }}
+{{- end }}
+{{- end }}
+{{- range $key := list "to" "ports" }}
+{{- if and (hasKey $rule $key) (not (kindIs "slice" (index $rule $key))) (not (kindIs "invalid" (index $rule $key))) }}
+{{- fail (printf "networkPolicy.extraEgress[%d].%s must be a list" $i $key) }}
+{{- end }}
+{{- end }}
+{{- $to := $rule.to | default list }}
+{{- $ports := $rule.ports | default list }}
+{{- if and (empty $to) (empty $ports) }}
+{{- fail (printf "networkPolicy.extraEgress[%d] has neither a non-empty to nor non-empty ports: Kubernetes reads that rule as every destination on every port" $i) }}
+{{- end }}
+{{- range $j, $port := $ports }}
+{{- if not (kindIs "map" $port) }}
+{{- fail (printf "networkPolicy.extraEgress[%d].ports[%d] must be an object with port (and protocol, endPort)" $i $j) }}
+{{- end }}
+{{- range $key := keys $port | sortAlpha }}
+{{- if not (has $key (list "protocol" "port" "endPort")) }}
+{{- fail (printf "networkPolicy.extraEgress[%d].ports[%d] takes only protocol, port and endPort, not %q" $i $j $key) }}
+{{- end }}
+{{- end }}
+{{- $number := has (kindOf $port.port) (list "float64" "int64" "int") }}
+{{- if not (or (and $number (eq (float64 $port.port) (floor (float64 $port.port))) (ge (int $port.port) 1) (le (int $port.port) 65535)) (and (kindIs "string" $port.port) (ne $port.port ""))) }}
+{{- fail (printf "networkPolicy.extraEgress[%d].ports[%d] needs a port (1-65535 or a port name): Kubernetes reads an entry with no port as every port of its protocol" $i $j) }}
+{{- end }}
+{{- if and (hasKey $port "protocol") (not (has (toString $port.protocol) (list "TCP" "UDP" "SCTP"))) }}
+{{- fail (printf "networkPolicy.extraEgress[%d].ports[%d].protocol %v is not TCP, UDP or SCTP" $i $j $port.protocol) }}
+{{- end }}
+{{- if hasKey $port "endPort" }}
+{{- if not (and $number (has (kindOf $port.endPort) (list "float64" "int64" "int")) (eq (float64 $port.endPort) (floor (float64 $port.endPort))) (ge (int $port.endPort) (int $port.port)) (le (int $port.endPort) 65535)) }}
+{{- fail (printf "networkPolicy.extraEgress[%d].ports[%d].endPort needs a numeric port and must be a number from port to 65535" $i $j) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- range $j, $peer := $to }}
+{{- if not (kindIs "map" $peer) }}
+{{- fail (printf "networkPolicy.extraEgress[%d].to[%d] must be an object with podSelector, namespaceSelector or ipBlock" $i $j) }}
+{{- end }}
+{{- if empty (keys $peer) }}
+{{- fail (printf "networkPolicy.extraEgress[%d].to[%d] is empty: name a podSelector, namespaceSelector or ipBlock" $i $j) }}
+{{- end }}
+{{- range $key := keys $peer | sortAlpha }}
+{{- if not (has $key (list "podSelector" "namespaceSelector" "ipBlock")) }}
+{{- fail (printf "networkPolicy.extraEgress[%d].to[%d] takes only podSelector, namespaceSelector and ipBlock, not %q" $i $j $key) }}
+{{- end }}
+{{- end }}
+{{- range $selector := list "podSelector" "namespaceSelector" }}
+{{- if hasKey $peer $selector }}
+{{- if not (kindIs "map" (index $peer $selector)) }}
+{{- fail (printf "networkPolicy.extraEgress[%d].to[%d].%s must be an object with matchLabels and/or matchExpressions" $i $j $selector) }}
+{{- end }}
+{{- range $key := keys (index $peer $selector) | sortAlpha }}
+{{- if not (has $key (list "matchLabels" "matchExpressions")) }}
+{{- fail (printf "networkPolicy.extraEgress[%d].to[%d].%s takes only matchLabels and matchExpressions, not %q: Kubernetes drops an unknown key, so the selector would be wider than written" $i $j $selector $key) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- if hasKey $peer "ipBlock" }}
+{{- if not (and (kindIs "map" $peer.ipBlock) (kindIs "string" $peer.ipBlock.cidr) (ne $peer.ipBlock.cidr "")) }}
+{{- fail (printf "networkPolicy.extraEgress[%d].to[%d].ipBlock needs a cidr" $i $j) }}
+{{- end }}
+{{- range $key := keys $peer.ipBlock | sortAlpha }}
+{{- if not (has $key (list "cidr" "except")) }}
+{{- fail (printf "networkPolicy.extraEgress[%d].to[%d].ipBlock takes only cidr and except, not %q: Kubernetes drops an unknown key, so the block would be wider than written" $i $j $key) }}
+{{- end }}
+{{- end }}
+{{- if hasKey $peer.ipBlock "except" }}
+{{- if not (kindIs "slice" $peer.ipBlock.except) }}
+{{- fail (printf "networkPolicy.extraEgress[%d].to[%d].ipBlock.except must be a list of CIDR strings" $i $j) }}
+{{- end }}
+{{- range $peer.ipBlock.except }}
+{{- if not (and (kindIs "string" .) (ne . "")) }}
+{{- fail (printf "networkPolicy.extraEgress[%d].to[%d].ipBlock.except must be a list of CIDR strings" $i $j) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- if and (empty $ports) (regexMatch "/0+$" $peer.ipBlock.cidr) (empty $peer.ipBlock.except) }}
+{{- fail (printf "networkPolicy.extraEgress[%d] sends to ipBlock %s with no except and no ports: that is every destination on every port; name the ports" $i $peer.ipBlock.cidr) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
+# DNS resolution
+- to:
+    - namespaceSelector: {}
+  ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+# Internal communication
+- to:
+    - podSelector: {}
+# External HTTPS (GitHub, GitLab, Jira, Stripe APIs)
+- to:
+    - ipBlock:
+        cidr: 0.0.0.0/0
+  ports:
+    - protocol: TCP
+      port: 443
+{{- range .Values.networkPolicy.extraEgress }}
+- {{ toYaml . | nindent 2 | trim }}
+{{- end }}
+{{- end }}
+
+{{/*
+One authService.trustedProxies entry is what internal/auth/clientaddr ParseTrust accepts (a bare IP address, or a strict CIDR
+network: canonical prefix digits, no host bits, no zone), so a rendered value never stops auth-service at start. Prints "true" when
+the entry is valid, nothing otherwise. The chart refuses /0 and IPv4-mapped forms on top of this.
+*/}}
+{{- define "dev-health.trustedProxyEntry" -}}
+{{- $parts := splitList "/" (toString .) -}}
+{{- $addr := index $parts 0 -}}
+{{- $hasPrefix := eq (len $parts) 2 -}}
+{{- $prefix := "" -}}
+{{- if $hasPrefix }}{{- $prefix = index $parts 1 }}{{- end -}}
+{{- $ok := false -}}
+{{- if and (le (len $parts) 2) (or (not $hasPrefix) (regexMatch "^(0|[1-9][0-9]{0,2})$" $prefix)) -}}
+{{- $octet := "(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])" -}}
+{{- if regexMatch (printf "^%s(\\.%s){3}$" $octet $octet) $addr -}}
+{{- $ok = true -}}
+{{- if $hasPrefix -}}
+{{- $p := int $prefix -}}
+{{- if gt $p 32 }}{{- $ok = false }}{{- else -}}
+{{- $o := splitList "." $addr -}}
+{{- $v := add (add (mul (int (index $o 0)) 16777216) (mul (int (index $o 1)) 65536)) (add (mul (int (index $o 2)) 256) (int (index $o 3))) -}}
+{{- $pow := 1 -}}
+{{- range until (int (sub 32 $p)) }}{{- $pow = mul $pow 2 }}{{- end -}}
+{{- if ne (int (mod $v $pow)) 0 }}{{- $ok = false }}{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- else if and (contains ":" $addr) (regexMatch "^[0-9A-Fa-f:]+$" $addr) (not (contains ":::" $addr)) -}}
+{{- $groups := list -}}
+{{- $shape := false -}}
+{{- if contains "::" $addr -}}
+{{- $halves := splitn "::" 2 $addr -}}
+{{- $left := $halves._0 -}}
+{{- $right := $halves._1 -}}
+{{- $half := "^([0-9A-Fa-f]{1,4}(:[0-9A-Fa-f]{1,4})*)?$" -}}
+{{- if and (regexMatch $half $left) (regexMatch $half $right) -}}
+{{- $l := list -}}{{- if $left }}{{- $l = splitList ":" $left }}{{- end -}}
+{{- $r := list -}}{{- if $right }}{{- $r = splitList ":" $right }}{{- end -}}
+{{- if le (add (len $l) (len $r)) 7 -}}
+{{- $shape = true -}}
+{{- $zeros := list -}}
+{{- range until (int (sub 8 (add (len $l) (len $r)))) }}{{- $zeros = append $zeros "0" }}{{- end -}}
+{{- $groups = concat $l $zeros $r -}}
+{{- end -}}
+{{- end -}}
+{{- else if regexMatch "^([0-9A-Fa-f]{1,4}:){7}[0-9A-Fa-f]{1,4}$" $addr -}}
+{{- $shape = true -}}
+{{- $groups = splitList ":" $addr -}}
+{{- end -}}
+{{- if $shape -}}
+{{- $ok = true -}}
+{{- /* IPv4-mapped in every spelling: five zero groups then ffff, any case, compressed or not, hex tail. */ -}}
+{{- if and (regexMatch "^0{1,4}$" (index $groups 0)) (regexMatch "^0{1,4}$" (index $groups 1)) (regexMatch "^0{1,4}$" (index $groups 2)) (regexMatch "^0{1,4}$" (index $groups 3)) (regexMatch "^0{1,4}$" (index $groups 4)) (eq (lower (index $groups 5)) "ffff") }}{{- $ok = false }}{{- end -}}
+{{- if $hasPrefix -}}
+{{- $p := int $prefix -}}
+{{- if gt $p 128 }}{{- $ok = false }}{{- else -}}
+{{- $digits := "0123456789abcdef" -}}
+{{- range $i, $g := $groups -}}
+{{- $val := 0 -}}
+{{- range $c := (regexSplit "" (lower $g) -1) }}
+{{- if $c }}{{- range $d := until 16 }}{{- if eq (substr $d (int (add1 $d)) $digits) $c }}{{- $val = add (mul $val 16) $d }}{{- end }}{{- end }}{{- end }}
+{{- end -}}
+{{- $covered := int (sub $p (mul $i 16)) -}}
+{{- if lt $covered 0 }}{{- $covered = 0 }}{{- end -}}
+{{- if gt $covered 16 }}{{- $covered = 16 }}{{- end -}}
+{{- $pow := 1 -}}
+{{- range until (int (sub 16 $covered)) }}{{- $pow = mul $pow 2 }}{{- end -}}
+{{- if ne (int (mod $val $pow)) 0 }}{{- $ok = false }}{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- if $ok }}true{{ end -}}
+{{- end -}}

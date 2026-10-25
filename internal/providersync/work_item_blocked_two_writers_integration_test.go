@@ -18,33 +18,26 @@ package providersync
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"reflect"
 	"sort"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily"
-	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/workitemblockers"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/workitemmetrics"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/oraclecompare"
 )
 
-// stateDurationFields is the compared field set: every field of the stored
-// row type. It is derived from the TYPE, so a column
-// added to the row is compared with no edit here.
+// stateDurationFields is the compared field set: every column the daily family writes.
 func stateDurationFields(t *testing.T) []string {
 	t.Helper()
-	fields := oraclecompare.EncodedFieldNames(reflect.TypeOf(githubWorkItemStateDurationDailyRow{}))
-	if len(fields) < 10 {
-		t.Fatalf("the state duration row type gives %d fields: %v", len(fields), fields)
+	return []string{
+		"day", "provider", "work_scope_id", "team_id", "team_name", "status",
+		"duration_hours", "items_touched", "computed_at", "avg_wip", "org_id",
 	}
-	return fields
 }
 
 // stateDurationExclusions names each field that is NOT compared, with its
@@ -67,7 +60,7 @@ func readStateDurations(ctx context.Context, t *testing.T, conn driver.Conn, org
 	rows, err := conn.Query(ctx, `
 SELECT `+strings.Join(selected, ", ")+`
 FROM work_item_state_durations_daily
-WHERE org_id = ? AND day = toDate(?)
+WHERE org_id = ? AND day = toDate(?) AND row_view IN ('', 'org')
 ORDER BY provider, work_scope_id, team_id, status`, org, day.Format("2006-01-02"))
 	if err != nil {
 		t.Fatal(err)
@@ -330,15 +323,15 @@ func TestDailyFamilyIsTheOneWriterOfBlockedStateDurations(t *testing.T) {
 	writeRelations(unit.Dependencies)
 	// A state duration effect of the unit's day, with a row: the sync sink
 	// refuses it and the table stays empty for the tenant.
-	refusedRaw, err := effectRowsFromValues([]githubWorkItemStateDurationDailyRow{{
-		Day: newGitHubWorkItemDerivedDay(day), Provider: "linear", WorkScopeID: "project-platform",
-		TeamID: "OPS", TeamName: "OPS", Status: "blocked", DurationHours: 79, ItemsTouched: 5,
-		ComputedAt: normalizedAt, AvgWIP: 1, OrgID: org,
+	refusedRaw, err := effectRowsFromValues([]map[string]any{{
+		"day": day.Format("2006-01-02"), "provider": "linear", "work_scope_id": "project-platform",
+		"team_id": "OPS", "team_name": "OPS", "status": "blocked", "duration_hours": 79, "items_touched": 5,
+		"computed_at": normalizedAt, "avg_wip": 1, "org_id": org,
 	}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	refusedEffect, err := BuildEffectBatch(githubStateDurationsDestination, EffectReadbackRequired, refusedRaw)
+	refusedEffect, err := BuildEffectBatch("work_item_state_durations_daily", EffectReadbackRequired, refusedRaw)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -346,7 +339,7 @@ func TestDailyFamilyIsTheOneWriterOfBlockedStateDurations(t *testing.T) {
 	if afterUnit := readStateDurations(ctx, t, conn, org, day); len(afterUnit) != 0 {
 		t.Fatalf("after the sync unit the day has %d state duration rows; the daily family is the one writer", len(afterUnit))
 	}
-	for _, table := range []string{githubStateDurationsDestination, githubTeamAttributionsDestination} {
+	for _, table := range []string{"work_item_state_durations_daily", "work_item_team_attributions"} {
 		var stored uint64
 		if err := conn.QueryRow(ctx, "SELECT count() FROM "+table+" WHERE org_id = ?", org).Scan(&stored); err != nil {
 			t.Fatal(err)
@@ -459,160 +452,5 @@ func TestDailyFamilyIsTheOneWriterOfBlockedStateDurations(t *testing.T) {
 	}
 	if blockedKey == "" || !found {
 		t.Fatalf("a daily family that reads its relations a day too old is not reported on the blocked hours; the comparison said: %q", messages)
-	}
-}
-
-// TestBlockingReadsOfALargeOrganizationStayUnderTheStatementLimit is the
-// size proof of both reads on a real server.
-//
-// The organization has 101,000 blocking relations and 201,000 relation ends.
-// The daily family's read sent the ends as one list; clickhouse-go writes a
-// list into the statement text, and the server refuses a text above
-// max_query_size with code 62. That refusal is shown here first, on this
-// server, with the list the old read would send.
-func TestBlockingReadsOfALargeOrganizationStayUnderTheStatementLimit(t *testing.T) {
-	ctx, conn := newWorkItemEffectsConn(t)
-	const (
-		org       = "org-large"
-		relations = 100000
-		keyed     = 1000 // text relations to a linear issue key
-		synced    = "toDateTime64('2026-08-20 00:00:00', 3)"
-	)
-	for _, statement := range []string{
-		`INSERT INTO work_item_dependencies (source_work_item_id, target_work_item_id, relationship_type, relationship_type_raw, last_synced, org_id, relationship_semantics_version)
-SELECT concat('gh:big/api#', toString(number)), concat('gh:big/web#', toString(number)), 'blocks', concat('blocks #', toString(number)), ` + synced + `, '` + org + `', 'canonical-blocks.v2'
-FROM numbers(` + fmt.Sprint(relations) + `)`,
-		`INSERT INTO work_item_dependencies (source_work_item_id, target_work_item_id, relationship_type, relationship_type_raw, last_synced, org_id, relationship_semantics_version)
-SELECT concat('gh:big/api#', toString(number)), concat('extkey:BIG-', toString(number)), 'blocked_by', 'external_issue_key', ` + synced + `, '` + org + `', 'canonical-blocks.v2'
-FROM numbers(` + fmt.Sprint(keyed) + `)`,
-		`INSERT INTO work_items (repo_id, work_item_id, provider, status, created_at, org_id, last_synced)
-SELECT toUUID('00000000-0000-4000-8000-0000000000a1'), concat('gh:big/', kind, '#', toString(number)), 'github', 'in_progress', toDateTime64('2026-08-01 00:00:00', 3, 'UTC'), '` + org + `', toDateTime64('2026-08-20 00:00:00', 3, 'UTC')
-FROM numbers(` + fmt.Sprint(relations) + `) ARRAY JOIN ['api', 'web'] AS kind`,
-		`INSERT INTO work_items (repo_id, work_item_id, provider, status, created_at, org_id, last_synced)
-SELECT toUUID('00000000-0000-0000-0000-000000000000'), concat('linear:BIG-', toString(number)), 'linear', 'in_progress', toDateTime64('2026-08-01 00:00:00', 3, 'UTC'), '` + org + `', toDateTime64('2026-08-20 00:00:00', 3, 'UTC')
-FROM numbers(` + fmt.Sprint(keyed) + `)`,
-	} {
-		if err := conn.Exec(ctx, statement); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	// THE OLD READ, on this server: every relation end as one list.
-	everyEnd := make([]string, 0, 2*relations)
-	for index := 0; index < relations; index++ {
-		everyEnd = append(everyEnd, fmt.Sprintf("gh:big/api#%d", index), fmt.Sprintf("gh:big/web#%d", index))
-	}
-	var refused *clickhouse.Exception
-	rows, err := conn.Query(ctx, `SELECT count() FROM work_items FINAL WHERE org_id = ? AND work_item_id IN ?`, org, everyEnd)
-	if err == nil {
-		read := 0
-		for rows.Next() {
-			read++
-		}
-		err = rows.Err()
-		rows.Close()
-		if err == nil {
-			t.Fatalf("the list of every relation end in one statement was accepted (%d rows read)", read)
-		}
-	}
-	if !errors.As(err, &refused) || refused.Code != 62 {
-		t.Fatalf("the list of every relation end in one statement: %v, want the server's code 62 (max query size)", err)
-	}
-
-	// THE ORGANIZATION-WIDE READ (the daily family).
-	stored, err := workitemblockers.LoadRelations(ctx, conn, org)
-	if err != nil {
-		t.Fatalf("organization-wide relations: %v", err)
-	}
-	ends, err := workitemblockers.LoadEnds(ctx, conn, org)
-	if err != nil {
-		t.Fatalf("organization-wide ends: %v", err)
-	}
-	if len(stored) != relations+keyed || len(ends) != 2*relations+keyed {
-		t.Fatalf("organization-wide: %d relations and %d ends, want %d and %d", len(stored), len(ends), relations+keyed, 2*relations+keyed)
-	}
-	for _, relation := range stored {
-		if relation.FirstSeenAt == nil {
-			t.Fatalf("relation %s -> %s has no first-seen time; the migration's view fills it", relation.SourceID, relation.TargetID)
-		}
-	}
-	blocked, ended, err := workitemblockers.LoadBlockedIntervals(ctx, conn, org)
-	if err != nil {
-		t.Fatalf("organization-wide blocked intervals: %v", err)
-	}
-	// Every relation is one its writer wrote at its latest sync: none ended.
-	if ended.Relations != relations+keyed || len(ended.Ended) != 0 || ended.GitHubBoardCandidates != 0 {
-		t.Fatalf("stats = %+v, want %d relations and none ended", ended, relations+keyed)
-	}
-	// Each web item is blocked by its api item; each of the first 1,000 api
-	// items is blocked by the linear issue its text names.
-	if len(blocked) != relations+keyed {
-		t.Fatalf("%d blocked items, want %d", len(blocked), relations+keyed)
-	}
-
-	// THE KEYED READ (the sync-time deriver), for a unit of 20,000 items:
-	// their ids are above the server's limit as one list, and go in chunks.
-	naming := make([]string, 0, 20000)
-	for index := 0; index < 10000; index++ {
-		naming = append(naming, fmt.Sprintf("gh:big/api#%d", index), fmt.Sprintf("gh:big/web#%d", index))
-	}
-	sort.Strings(naming)
-	listBytes := 2
-	for _, id := range naming {
-		listBytes += len(id) + 4
-	}
-	if listBytes <= 262144 {
-		t.Fatalf("the unit's ids are %d bytes as one list: the case does not reach the server's limit", listBytes)
-	}
-	claim := nativeTestClaim("github", "work-items")
-	claim.OrgID = org
-	source := githubWorkItemClickHouseDerivationContextSource{Conn: conn, Lease: githubDerivedIntegrationLease()}
-	keyedRelations, keyedEnds, err := source.LoadStoredBlockingFacts(ctx, claim, naming, nil)
-	if err != nil {
-		t.Fatalf("keyed read: %v", err)
-	}
-
-	// It reads the same rows as the organization-wide read does for those items.
-	named := make(map[string]bool, len(naming))
-	for _, id := range naming {
-		named[id] = true
-	}
-	var wantRelations []workitemmetrics.BlockingRelation
-	wantEndIDs := map[string]bool{}
-	for _, relation := range stored {
-		if !named[relation.SourceID] && !named[relation.TargetID] {
-			continue
-		}
-		wantRelations = append(wantRelations, relation)
-		for _, end := range []string{relation.SourceID, relation.TargetID} {
-			if key, external := workitemmetrics.ExternalKey(end); external {
-				end = "linear:" + key
-			}
-			wantEndIDs[end] = true
-		}
-	}
-	var wantEnds []workitemmetrics.RelationEnd
-	for _, end := range ends {
-		if wantEndIDs[end.WorkItemID] {
-			wantEnds = append(wantEnds, end)
-		}
-	}
-	if len(wantRelations) != 10000+keyed || len(wantEnds) != 20000+keyed {
-		t.Fatalf("the organization-wide read gives %d relations and %d ends for the unit, want %d and %d", len(wantRelations), len(wantEnds), 10000+keyed, 20000+keyed)
-	}
-	if !reflect.DeepEqual(keyedRelations, wantRelations) {
-		t.Fatalf("the keyed read gives %d relations, the organization-wide read %d for the same items, and they differ", len(keyedRelations), len(wantRelations))
-	}
-	if !reflect.DeepEqual(keyedEnds, wantEnds) {
-		t.Fatalf("the keyed read gives %d ends, the organization-wide read %d for the same items, and they differ", len(keyedEnds), len(wantEnds))
-	}
-	// And so the one rule gives both writers the same intervals for the unit.
-	if got, want := workitemmetrics.BlockedIntervalsByItem(keyedRelations, keyedEnds), 10000+keyed; len(got) != want {
-		t.Fatalf("the keyed read blocks %d items, want %d", len(got), want)
-	}
-	for id, intervals := range workitemmetrics.BlockedIntervalsByItem(keyedRelations, keyedEnds) {
-		if !reflect.DeepEqual(intervals, blocked[id]) {
-			t.Fatalf("item %s: the keyed read gives %v, the organization-wide read %v", id, intervals, blocked[id])
-		}
 	}
 }

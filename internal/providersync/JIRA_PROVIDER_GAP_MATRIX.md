@@ -86,9 +86,6 @@ and withholds its watermark.
   compute producers over provider=`jira`, including multi-day and donor cases.
 - `jira-work_items_atlassian.py` now compares the reflected, explicitly empty
   `ProviderBatch.ai_attributions` field as well as worklogs and sprints.
-- `jira_work_item_derived_effects_integration_test.go` uses the production
-  ClickHouse migration chain for the attribution-context loader plus tenant,
-  replay, lease, and readback proof.
 - `jira_work_items_derived.json` is the shared-harness mutation plan for the
   provider-local composition and evaluated-empty AI disposition.
 - No registry, matrix, shared constructor, admission, route switch, scheduler,

@@ -14,7 +14,7 @@
 # Leg acp turns on the AUTH_PROXY_* flag of an aggregate only when the running auth-service serves every route of it
 # (ci/auth_corpus_acp_routes.tsv): a route auth-service mounts answers OPTIONS with 405, one it does not with 404.
 # An aggregate's flag therefore turns on in the change that lands its mount, and sessions gates the others, as go-api's
-# own start-up check does.
+# own start-up check does. Leg acp also requires sessions and local_login to be served (REQUIRED).
 # The project is private to this run and is removed with its volumes on exit. CI only (docker, the Go toolchain).
 set -euo pipefail
 
@@ -66,20 +66,51 @@ free_port() {
 }
 API_PORT="$(free_port)"
 OPERATOR_PORT="$(free_port)"
+# The corpus provider stub's CA and certificate, made now and mounted read-only into the stub, go-api and auth-service
+# (docker/providerstub.Dockerfile; nothing key-shaped is checked in). The directory and files are readable by the
+# containers' non-root user: the directory is inside this run's private temporary directory.
+STUB_DIR="${WORK}/stub"
+(cd "${ROOT}" && go run -trimpath ./internal/testsupport/providerstub/cmd/providerstub certs -out "${STUB_DIR}") >/dev/null
+chmod 0755 "${STUB_DIR}"
+chmod 0644 "${STUB_DIR}"/ca.pem "${STUB_DIR}"/server.pem "${STUB_DIR}"/server.key
 JWT_KEY="$(sed -n 's/^const Key = "\(.*\)"$/\1/p' "${ROOT}/internal/testsupport/sessionscenario/sessionscenario.go")"
 [ -n "${JWT_KEY}" ] || die "could not read sessionscenario.Key"
-{
-  printf 'export BUGSINK_SECRET_KEY=%q\n' "auth-corpus-external"
-  printf 'export COMMIT=%q\n' "${COMMIT:-0000000000000000000000000000000000000000}"
-  printf 'export AUTH_CORPUS_API_PORT=%s\n' "${API_PORT}"
-  printf 'export AUTH_CORPUS_OPERATOR_PORT=%s\n' "${OPERATOR_PORT}"
-  printf 'export JWT_SECRET_KEY=%q\n' "${JWT_KEY}"
-  printf 'export EMAIL_PROVIDER=%q\n' "smtp"
-  printf 'export EMAIL_FROM_ADDRESS=%q\n' "Dev Health <auth@example.test>"
-  if [ "${LEG}" = "acp" ]; then
-    printf 'export AUTH_PROXY_URL=%q\n' "http://auth-service:8095"
+# The session keys of auth-service's compat routes (leg acp), made now, masked in the CI log before anything else,
+# and held only in the private state file (mode 0600, removed with ${WORK}): never in an argument or the output.
+# AUTH_CORPUS_OMIT_AUTH_KEYS=1 leaves all of them out: the non-vacuity leg, which must then fail on a required
+# aggregate that is not served.
+SESSION_SUCCESSOR_KEY=""
+LOGIN_LOCKOUT_KEY=""
+if [ "${LEG}" = "acp" ] && [ -z "${AUTH_CORPUS_OMIT_AUTH_KEYS:-}" ]; then
+  SESSION_SUCCESSOR_KEY="$(head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=\n')"
+  LOGIN_LOCKOUT_KEY="$(head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=\n')"
+  if [ -n "${GITHUB_ACTIONS:-}" ]; then
+    printf '::add-mask::%s\n' "${SESSION_SUCCESSOR_KEY}" "${LOGIN_LOCKOUT_KEY}"
   fi
-} >"${STATE}"
+fi
+(
+  umask 077
+  {
+    printf 'export BUGSINK_SECRET_KEY=%q\n' "auth-corpus-external"
+    printf 'export COMMIT=%q\n' "${COMMIT:-0000000000000000000000000000000000000000}"
+    printf 'export AUTH_CORPUS_API_PORT=%s\n' "${API_PORT}"
+    printf 'export AUTH_CORPUS_OPERATOR_PORT=%s\n' "${OPERATOR_PORT}"
+    printf 'export AUTH_CORPUS_STUB_DIR=%q\n' "${STUB_DIR}"
+    printf 'export JWT_SECRET_KEY=%q\n' "${JWT_KEY}"
+    printf 'export EMAIL_PROVIDER=%q\n' "smtp"
+    printf 'export EMAIL_FROM_ADDRESS=%q\n' "Dev Health <auth@example.test>"
+    if [ "${LEG}" = "acp" ]; then
+      printf 'export AUTH_PROXY_URL=%q\n' "http://auth-service:8095"
+    fi
+    if [ "${LEG}" = "acp" ] && [ -z "${AUTH_CORPUS_OMIT_AUTH_KEYS:-}" ]; then
+      printf 'export AUTH_JWT_SECRET_KEY=%q\n' "${JWT_KEY}"
+      printf 'export AUTH_SESSION_SUCCESSOR_KEY=%q\n' "${SESSION_SUCCESSOR_KEY}"
+      printf 'export AUTH_LOGIN_LOCKOUT_KEY=%q\n' "${LOGIN_LOCKOUT_KEY}"
+    fi
+  } >"${STATE}"
+)
+chmod 0600 "${STATE}"
+unset SESSION_SUCCESSOR_KEY LOGIN_LOCKOUT_KEY
 # shellcheck disable=SC1090
 . "${STATE}"
 
@@ -97,6 +128,8 @@ cleanup() {
     printf '\n--- services at failure ---\n' >&2
     timeout --kill-after=5 60 docker compose -p "${PROJECT}" "${COMPOSE_FILES[@]}" --profile auth ps --all >&2 || true
     timeout --kill-after=5 60 docker compose -p "${PROJECT}" "${COMPOSE_FILES[@]}" --profile auth logs --no-color --tail 80 go-api go-river-migrate migrate >&2 || true
+    timeout --kill-after=5 60 docker compose -p "${PROJECT}" "${COMPOSE_FILES[@]}" --profile auth logs --no-color --tail=3000 auth-service >&2 || true
+    timeout --kill-after=5 60 docker compose -p "${PROJECT}" "${COMPOSE_FILES[@]}" --profile auth logs --no-color --tail=200 providerstub >&2 || true
   fi
   # Bounded: a hung docker daemon must not hold the step until the job timeout.
   timeout --kill-after=10 "${AUTH_CORPUS_DOWN_SECONDS:-180}" docker compose -p "${PROJECT}" "${COMPOSE_FILES[@]}" --profile auth down --volumes --remove-orphans >/dev/null 2>&1 || true
@@ -115,6 +148,11 @@ if [ "${LEG}" = "acp" ]; then
 fi
 
 AGGREGATES=(sessions local_login credentials social oidc saml)
+# Leg acp serves these through auth-service (CHAOS-10410); one that is not served fails the leg by name.
+REQUIRED=(sessions local_login)
+# Served by auth-service but left to go-api on this leg: auth-service creates no account for a new social sign-in until it
+# owns users, so forwarding social would refuse the corpus's new-user row.
+KEPT_ON_GO_API=(social)
 ROUTES="${SCRIPT_DIR}/auth_corpus_acp_routes.tsv"
 
 hostport() {
@@ -123,6 +161,9 @@ hostport() {
   [[ "${port}" =~ ^[0-9]+$ ]] || die "could not read the published port of $1 $2 (${port})"
   printf '%s' "${port}"
 }
+STUB_ADMIN_PORT="$(hostport providerstub 9090)"
+STUB_ADMIN="http://127.0.0.1:${STUB_ADMIN_PORT}"
+curl --silent --show-error --fail --max-time 10 "${STUB_ADMIN}/requests" >/dev/null || die "the corpus provider stub's recorder does not answer at ${STUB_ADMIN}"
 PG_PORT="$(hostport postgres 5432)"
 CH_PORT="$(hostport clickhouse 9000)"
 VALKEY_PORT="$(hostport valkey 6379)"
@@ -164,9 +205,14 @@ if [ "${LEG}" = "acp" ]; then
       SERVED+=("${aggregate}")
     fi
   done
+  for aggregate in "${REQUIRED[@]}"; do
+    [[ " ${SERVED[*]:-} " == *" ${aggregate} "* ]] || die "required aggregate ${aggregate} is not served by auth-service"
+  done
   # The sessions aggregate gates the others, as go-api's own start-up check does.
   if [[ " ${SERVED[*]} " == *" sessions "* ]]; then
-    FORWARDED=("${SERVED[@]}")
+    for aggregate in "${SERVED[@]}"; do
+      [[ " ${KEPT_ON_GO_API[*]} " == *" ${aggregate} "* ]] || FORWARDED+=("${aggregate}")
+    done
   fi
   printf 'leg acp forwards: %s\n' "${FORWARDED[*]:-none (sessions is not served; every route stays in go-api)}"
   if [ "${#FORWARDED[@]}" -gt 0 ]; then
@@ -205,6 +251,11 @@ export DEVHEALTH_AUTH_ORACLE_POSTGRES_URI="postgres://${POSTGRES_USER:-postgres}
 export DEVHEALTH_AUTH_ORACLE_CLICKHOUSE_URI="clickhouse://${CLICKHOUSE_USER:-ch}:${CLICKHOUSE_PASSWORD:-ch}@127.0.0.1:${CH_PORT}/${CLICKHOUSE_DB:-default}"
 export DEVHEALTH_AUTH_ORACLE_VALKEY_URI="redis://127.0.0.1:${VALKEY_PORT}/1"
 export DEVHEALTH_AUTH_ORACLE_SMTP_LISTEN="0.0.0.0:2525"
+export DEVHEALTH_AUTH_ORACLE_STUB_ADMIN="${STUB_ADMIN}"
+# The aggregates go-api forwarded, comma separated (empty on leg go-api): the corpus reads auth-service's rows for them
+# (internal/testsupport/authrows).
+DEVHEALTH_AUTH_ORACLE_FORWARDED="$(IFS=,; printf '%s' "${FORWARDED[*]:-}")"
+export DEVHEALTH_AUTH_ORACLE_FORWARDED
 (cd "${ROOT}" && go test -trimpath -tags integration -count=1 -v -run '^TestAuthFlowVenueOracle$' ./internal/apiservice/authflowvenue)
 
 if [ "${LEG}" = "acp" ]; then

@@ -32,6 +32,10 @@ type User struct {
 	FullName       *string
 	ImpersonatedBy *string
 	TokenVersion   int
+	// superuserClaim is the verified legacy token's is_superuser claim, by
+	// Python truthiness; accessToken marks a user access token.
+	superuserClaim bool
+	accessToken    bool
 }
 
 // IsAdmin is AuthenticatedUser.is_admin.
@@ -73,6 +77,7 @@ type Authenticator struct {
 	verifier *edgetoken.Verifier
 	store    Store
 	logger   *slog.Logger
+	routed   *routedAccess
 }
 
 // NewAuthenticator builds an Authenticator.
@@ -101,12 +106,22 @@ func BearerToken(authorization string) (string, bool) {
 
 // Authenticate verifies token and checks the users row. It returns
 // (nil, errRejected) for every case Python answers with None, and a wrapped
-// store error (ErrUnavailable or other) when the lookup fails.
+// store error (ErrUnavailable or other) when the lookup fails. After
+// RouteAccess the request's endpoint-profile row picks the validator.
+func (a *Authenticator) Authenticate(ctx context.Context, token string) (*User, error) {
+	if a.routed != nil {
+		return a.authenticateRouted(ctx, token)
+	}
+	return a.AuthenticateLegacy(ctx, token)
+}
+
+// AuthenticateLegacy is the HS256 ops access-token path: the token is
+// verified with the go-api key and the users row checked.
 //
 // A request bound to a (ReadOnce) gets the answer of its first
 // Authenticate of the same token: the token is verified and the users row
 // read once for the whole request.
-func (a *Authenticator) Authenticate(ctx context.Context, token string) (*User, error) {
+func (a *Authenticator) AuthenticateLegacy(ctx context.Context, token string) (*User, error) {
 	reads := a.readsFor(ctx)
 	if reads == nil {
 		return a.authenticate(ctx, token)
@@ -200,6 +215,7 @@ func userFromClaims(claims jwt.MapClaims) (*User, error) {
 	user.Username = optionalString(claims, "username")
 	user.FullName = optionalString(claims, "full_name")
 	user.ImpersonatedBy = optionalString(claims, "impersonating_user_id")
+	user.superuserClaim = pyTruthy(claims["is_superuser"])
 	return user, nil
 }
 

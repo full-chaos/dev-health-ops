@@ -57,6 +57,16 @@
           "type": "object",
           "properties": { "preStopSeconds": { "type": "integer", "minimum": 0, "maximum": 600 } }
         },
+        "sessionIssue": {
+          "description": "CHAOS-11217: the Secret and key go-api reads AUTH_SESSION_ISSUE_TOKEN from. Empty secretName keeps the shared Secret.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["secretName", "secretKey"],
+          "properties": {
+            "secretName": { "type": "string", "maxLength": 253, "pattern": "^([a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?)*)?$" },
+            "secretKey": { "type": "string", "pattern": "^[A-Za-z0-9_-][A-Za-z0-9._-]{0,252}$" }
+          }
+        },
         "shutdownTimeout": { "type": "string", "pattern": "^[1-9][0-9]{0,4}s$" },
         "terminationGracePeriodSeconds": { "type": "integer", "minimum": 1, "maximum": 86400 },
         "authProxy": {
@@ -146,6 +156,7 @@
         "enabled": { "type": "boolean" },
         "image": { "type": "string", "minLength": 1 },
         "extraEnvFrom": { "$ref": "#/definitions/extraEnvFrom" },
+        "secretKeys": { "type": "array", "items": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$", "enum": ["APP_BASE_URL", "CLICKHOUSE_URI", "EMAIL_API_KEY", "EMAIL_FROM_ADDRESS", "EMAIL_PROVIDER", "EXPECTED_WORKER_GROUPS", "INVESTMENT_LLM_BATCH_MODE", "INVESTMENT_LLM_BATCH_TIMEOUT_SECONDS", "LICENSE_PRIVATE_KEY", "LINEAR_API_KEY", "LLM_MODEL", "LLM_PROVIDER", "OPENAI_API_KEY", "PAGER_DUTY_CLIENT_ID", "PAGER_DUTY_REDIRECT_URI", "PAGER_DUTY_SECRET", "SETTINGS_ENCRYPTION_KEY", "STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET", "WORKER_GITHUB_WORK_ITEMS_STATUS_MAPPING_PATH"] }, "uniqueItems": true },
         "pgbouncer": {
           "type": "object",
           "properties": {

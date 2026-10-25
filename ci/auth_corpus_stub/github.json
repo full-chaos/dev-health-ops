@@ -1,0 +1,19 @@
+[
+  {
+    "provider": "github",
+    "method": "GET",
+    "path": "/user",
+    "status": 200,
+    "request_headers": {"Authorization": "Bearer gh-corpus"},
+    "body": {"id": 910001, "login": "corpus-social", "name": "Corpus Social", "email": "corpus-social@example.com", "avatar_url": "https://avatars.example.test/u/910001"}
+  },
+  {
+    "provider": "github",
+    "method": "POST",
+    "path": "/applications/gh-client/token",
+    "status": 200,
+    "request_headers": {"Authorization": "Basic Z2gtY2xpZW50OmdoLXNlY3JldA=="},
+    "body_contains": "\"access_token\":\"gh-corpus\"",
+    "body": {"app": {"client_id": "gh-client"}, "user": {"id": 910001}}
+  }
+]

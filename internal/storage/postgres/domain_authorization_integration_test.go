@@ -130,6 +130,10 @@ func TestDomainAuthorizationRequiresExactCanaryAndReconcilerPrivileges(t *testin
 		"CREATE TABLE public.org_feature_overrides (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.org_licenses (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.byo_llm_budget_reservations (id uuid PRIMARY KEY)",
+		// domainPosture's RequiredFunctions: a SECURITY DEFINER shell with
+		// EXECUTE revoked from PUBLIC, as pgmigrate 0156 creates it.
+		"CREATE FUNCTION public.categorize_byo_opted_in(p_org_id text) RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS 'SELECT false'",
+		"REVOKE ALL ON FUNCTION public.categorize_byo_opted_in(text) FROM PUBLIC",
 		// CHAOS-4175 family 3's DispatchGuard total-cap read dual-granted this
 		// table; see the doc comment above domainPosture().
 		"CREATE TABLE public.tier_limits (id bigint PRIMARY KEY)",
@@ -150,6 +154,7 @@ func TestDomainAuthorizationRequiresExactCanaryAndReconcilerPrivileges(t *testin
 		"GRANT CONNECT ON DATABASE " + dbName + " TO " + authorizedDomainRole,
 		"GRANT USAGE ON SCHEMA public TO " + authorizedDomainRole,
 		"GRANT SELECT ON TABLE public.alembic_version, public.integrations, public.integration_credentials, public.sync_dispatch_transport_routes, public.feature_flags, public.org_feature_overrides, public.scheduled_report_occurrences, public.organizations, public.users, public.billing_notifications, public.external_ingest_sources, public.org_licenses, public.byo_llm_budget_reservations, public.tier_limits, public.webhook_deliveries TO " + authorizedDomainRole,
+		"GRANT EXECUTE ON FUNCTION public.categorize_byo_opted_in(text) TO " + authorizedDomainRole,
 		"GRANT SELECT, UPDATE ON TABLE public.scheduled_jobs TO " + authorizedDomainRole,
 		"GRANT SELECT, UPDATE ON TABLE public.provider_oauth_credentials TO " + authorizedDomainRole,
 		"GRANT SELECT, INSERT, UPDATE ON TABLE public.github_app_installations TO " + authorizedDomainRole,
@@ -368,6 +373,26 @@ func TestDomainAuthorizationRequiresExactCanaryAndReconcilerPrivileges(t *testin
 			name:   "public function execution",
 			grant:  "GRANT EXECUTE ON FUNCTION public.runtime_probe() TO " + authorizedDomainRole,
 			revoke: "REVOKE EXECUTE ON FUNCTION public.runtime_probe() FROM " + authorizedDomainRole,
+		},
+		{
+			name:   "missing EXECUTE on a required function",
+			grant:  "REVOKE EXECUTE ON FUNCTION public.categorize_byo_opted_in(text) FROM " + authorizedDomainRole,
+			revoke: "GRANT EXECUTE ON FUNCTION public.categorize_byo_opted_in(text) TO " + authorizedDomainRole,
+		},
+		{
+			name:   "required function EXECUTE held with grant option",
+			grant:  "GRANT EXECUTE ON FUNCTION public.categorize_byo_opted_in(text) TO " + authorizedDomainRole + " WITH GRANT OPTION",
+			revoke: "REVOKE GRANT OPTION FOR EXECUTE ON FUNCTION public.categorize_byo_opted_in(text) FROM " + authorizedDomainRole,
+		},
+		{
+			name:   "PUBLIC EXECUTE on a required function",
+			grant:  "GRANT EXECUTE ON FUNCTION public.categorize_byo_opted_in(text) TO PUBLIC",
+			revoke: "REVOKE EXECUTE ON FUNCTION public.categorize_byo_opted_in(text) FROM PUBLIC",
+		},
+		{
+			name:   "required function is not SECURITY DEFINER",
+			grant:  "ALTER FUNCTION public.categorize_byo_opted_in(text) SECURITY INVOKER",
+			revoke: "ALTER FUNCTION public.categorize_byo_opted_in(text) SECURITY DEFINER",
 		},
 		{
 			name:   "River schema usage",

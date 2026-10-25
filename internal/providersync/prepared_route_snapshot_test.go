@@ -8,12 +8,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"reflect"
 	"sort"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
@@ -47,11 +48,11 @@ func TestPreparedRouteSnapshotRetainsMembershipRejections(t *testing.T) {
 	normalizedAt := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
 	batch := preparedGitHubWorkItemsFixture(t, claim)
 	teamID := "nonowner"
-	rejections := []githubWorkItemTeamAttributionRejectionRow{
+	rejections := []preparedMembershipRejectionRow{
 		{WorkItemID: "acme/api#1", Provider: "github", Source: "assignee_membership", TeamID: &teamID, Reason: "repo_not_owned"},
 		{WorkItemID: "acme/api#1", Provider: "github", Source: "author_membership", TeamID: &teamID, Reason: "repo_not_owned"},
 	}
-	marshaledRejections, err := marshalGitHubWorkItemDerivedRows(rejections)
+	marshaledRejections, err := effectRowsFromValues(rejections)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1241,4 +1242,14 @@ func TestOnlyAnUntouchedSupersededDocumentMayBeDiscarded(t *testing.T) {
 	if isSafeGitHubBlameReplanState(claim, state) {
 		t.Fatal("the blame replan predicate accepted a work-items document")
 	}
+}
+
+// preparedMembershipRejectionRow is the shape of one membership rejection the
+// envelope carries beside an effect.
+type preparedMembershipRejectionRow struct {
+	WorkItemID string  `json:"work_item_id"`
+	Provider   string  `json:"provider"`
+	Source     string  `json:"source"`
+	TeamID     *string `json:"team_id"`
+	Reason     string  `json:"reason"`
 }

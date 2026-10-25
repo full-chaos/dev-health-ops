@@ -36,9 +36,8 @@ import (
 // "dir/" (every file under it), "file" (every declaration of it) or
 // "file:Declaration". A stale key fails the census.
 var unruledReads = map[string]string{
-	"internal/providersync/":       "sync writers of the daily tables and their read-back of the exact keys they wrote",
-	"internal/goapiproof/":         "proof routes: the SQL of the reference plane quoted in a Reason text, no query of this process",
-	"internal/jobs/metrics/daily/": "daily family writers and their own reads: the live-key reads of the rule, and the latest-generation read of the cognitive load family, which the writer keeps safe by the compute time of the row of zeros",
+	"internal/goapiproof/":                                             "proof routes: the SQL of the reference plane quoted in a Reason text, no query of this process",
+	"internal/jobs/metrics/daily/":                                     "daily family writers and their own reads: the live-key reads of the rule, and the latest-generation read of the cognitive load family, which the writer keeps safe by the compute time of the row of zeros",
 	"internal/api/syncadmin/backfill_detail.go:compoundingRiskQuery":   "reads scope 'repo' rows only; a team retraction row has scope 'team'",
 	"internal/queryapi/compoundingrisk/read.go:repoTrend":              "reads scope 'repo' rows only; a team retraction row has scope 'team'",
 	"internal/queryapi/home/queries_signals.go:compoundingRiskSQLBase": "statement text with a placeholder for the rule; its one user, fetchRiskSignals, passes the rule to it",
@@ -63,7 +62,7 @@ var unruledReads = map[string]string{
 		"a retraction row must stay the newest row of its key, and it holds NULL",
 	"internal/jobs/metrics/remaining/recommendations_loader.go:loadCompoundingRiskPersisted": "the newest row of ONE team over the window, whole: a retraction row is that row, " +
 		"and it reads as the read answers for no row at all (no score, severity unknown)",
-	"internal/jobs/metrics/remaining/capacity_native_clickhouse.go:loadBacklog": "sum of the WIP on the newest day of the scope: a retraction row adds 0 and must stay in the newest-day pick",
+	"internal/jobs/metrics/remaining/capacity_native_clickhouse.go:capacityNewestRows": "the newest-version subquery of the capacity reads; the throughput and scope reads apply the rule after it, and the backlog sums the WIP on the newest day of the scope: a retraction row adds 0 and must stay in the newest-day pick",
 }
 
 // heldBy names, for an unruledReads entry whose reason is "the rule reaches

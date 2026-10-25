@@ -31,15 +31,63 @@ jobs:
     # stalled (org plan change, 2026-09-04; chris ruling 16:54 PDT). Flip the
     # repo variable SELF_HOSTED_RUNNERS back to 'disabled' to restore the
     # hosted runner with no code change. Fork PRs always stay hosted -- same
-    # safety condition as go.yml's dual-leg jobs. (live-e2e below is not a
-    # required context and is left otherwise untouched; it shares this job.)
+    # safety condition as go.yml's dual-leg jobs. (live-e2e below shares this
+    # job; it is a required context too, judged in the merge queue.)
     runs-on: ${{ (vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')) && fromJSON('["self-hosted","oci-arc-runners"]') || 'ubuntu-latest' }}
     permissions:
       contents: read
     outputs:
       code: ${{ steps.filter.outputs.code }}
+      docs_only: ${{ steps.docs.outputs.docs_only }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The docs-only verdict diffs the base commit against the head: history is needed, blobs are fetched lazily.
+          fetch-depth: 0
+          filter: blob:none
+
+      # ONE docs-only definition (ci/codeql_docs_only.sh), run from the BASE commit so a change cannot rewrite its own
+      # judge. pull_request: the PR's base...head. merge_group: the target branch tip...the entry head, so the whole
+      # group ahead of this entry is judged, never this PR alone (merge_group.base_sha is the parent ENTRY). Any other
+      # event, and any fetch, merge-base or judge error, is docs_only=false. internal/cigates/workflows pins every copy identical.
+      - name: Docs-only change (judged by the base commit's ci/codeql_docs_only.sh)
+        id: docs
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          MG_BASE_REF: ${{ github.event.merge_group.base_ref }}
+          MG_HEAD_SHA: ${{ github.event.merge_group.head_sha }}
+        run: |
+          set -uo pipefail
+          docs_only=false
+          base=""
+          head=""
+          case "${EVENT_NAME}" in
+            pull_request)
+              base="${PR_BASE_SHA}"
+              head="${PR_HEAD_SHA}"
+              ;;
+            merge_group)
+              head="${MG_HEAD_SHA}"
+              if [[ "${MG_BASE_REF}" == refs/heads/* ]] \
+                && git fetch --no-tags --filter=blob:none origin "+${MG_BASE_REF}:refs/remotes/origin/docs-only-base"; then
+                base="$(git rev-parse --verify 'refs/remotes/origin/docs-only-base^{commit}')" || base=""
+              fi
+              ;;
+          esac
+          if [ -n "${base}" ] && [ -n "${head}" ] \
+            && git fetch --no-tags --filter=blob:none origin "${base}" "${head}" \
+            && git merge-base "${base}" "${head}" > /dev/null \
+            && git show "${base}:ci/codeql_docs_only.sh" > "${RUNNER_TEMP}/docs_only_judge.sh"; then
+            docs_only="$(bash "${RUNNER_TEMP}/docs_only_judge.sh" "${base}" "${head}")" || docs_only=false
+          fi
+          [ "${docs_only}" = "true" ] || docs_only=false
+          echo "docs_only=${docs_only}" >> "${GITHUB_OUTPUT}"
+          echo "docs-only: ${docs_only} (${EVENT_NAME} ${base:-<none>}...${head:-<none>})"
+
+      # On merge_group this filter sees only the entry's own PR (the event base is the parent ENTRY), so the jobs
+      # below do not read `code` there: they run for every queue entry the docs step did not call docs-only.
       - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         id: filter
         # Always run on workflow_dispatch
@@ -83,11 +131,13 @@ jobs:
               - 'contracts/auth/v1/**'
               - '.github/workflows/live-e2e.yml'
 
-  live-e2e:
+  live-e2e-run:
     needs: [changes]
     if: >-
-      (!(github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) &&
+      (!(github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) &&
+      needs.changes.outputs.docs_only != 'true' &&
       (github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'merge_group' ||
       needs.changes.outputs.code == 'true')
     runs-on: ubuntu-latest
     # Live E2E needs package read access for dependency installs.
@@ -194,6 +244,7 @@ jobs:
           ./ci/run_tests.sh live-e2e
 
       - name: Upload live-e2e logs
+        continue-on-error: true
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
@@ -218,11 +269,13 @@ jobs:
   # zero_rows_with_source_data for every family. It goes green once
   # CHAOS-4263 merges. Do not mark it a required check before that -- see the
   # PR's RISK-NOTES.
-  metrics-executed-proof:
+  metrics-executed-proof-run:
     needs: [changes]
     if: >-
-      (!(github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) &&
+      (!(github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) &&
+      needs.changes.outputs.docs_only != 'true' &&
       (github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'merge_group' ||
       needs.changes.outputs.code == 'true')
     # Same ARC routing as `changes` above.
     runs-on: ${{ (vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')) && fromJSON('["self-hosted","oci-arc-runners"]') || 'ubuntu-latest' }}
@@ -340,6 +393,7 @@ jobs:
           ./ci/run_metrics_executed_proof.sh
 
       - name: Upload metrics-executed-proof logs
+        continue-on-error: true
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
@@ -349,3 +403,52 @@ jobs:
             metrics-executed-proof-reconciler.log
             metrics-executed-proof-family-summary.json
           if-no-files-found: ignore
+
+  # REQUIRED status checks (ruleset): live-e2e and metrics-executed-proof are fan-ins of the work jobs above. A skipped
+  # job reports success, so a failed `changes` (which skips both work jobs) must fail here, never pass: always(), and the
+  # aggregate fails unless `changes` succeeded. A work job's skip is legitimate only on a pull request without ci:full,
+  # or when there is nothing to run (docs-only, or a pull request whose live-e2e paths did not change) (`queue-heavy`).
+  # Pull requests and merge queue entries only: the ruleset judges those.
+  live-e2e:
+    name: live-e2e
+    if: always() && (github.event_name == 'pull_request' || github.event_name == 'merge_group')
+    needs: [changes, live-e2e-run]
+    runs-on: ${{ (vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')) && fromJSON('["self-hosted","oci-arc-runners"]') || 'ubuntu-latest' }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Aggregate the live-e2e result
+        env:
+          GATE_NAME: live-e2e
+          EVENT_NAME: ${{ github.event_name }}
+          GATE_HAS_SELECTOR: "true"
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          CHANGES_CODE: ${{ (needs.changes.outputs.docs_only == 'true' || (github.event_name == 'pull_request' && needs.changes.outputs.code == 'false')) && 'false' || 'true' }}
+          HEAVY_ON_PR: ${{ contains(github.event.pull_request.labels.*.name, 'ci:full') && 'true' || 'false' }}
+          GATED_JOB_1: live-e2e-run|queue-heavy|${{ needs.live-e2e-run.result }}
+        run: |
+          chmod +x ci/aggregate_gate_results.sh
+          ./ci/aggregate_gate_results.sh
+
+  metrics-executed-proof:
+    name: metrics-executed-proof
+    if: always() && (github.event_name == 'pull_request' || github.event_name == 'merge_group')
+    needs: [changes, metrics-executed-proof-run]
+    runs-on: ${{ (vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')) && fromJSON('["self-hosted","oci-arc-runners"]') || 'ubuntu-latest' }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Aggregate the metrics-executed-proof result
+        env:
+          GATE_NAME: metrics-executed-proof
+          EVENT_NAME: ${{ github.event_name }}
+          GATE_HAS_SELECTOR: "true"
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          CHANGES_CODE: ${{ (needs.changes.outputs.docs_only == 'true' || (github.event_name == 'pull_request' && needs.changes.outputs.code == 'false')) && 'false' || 'true' }}
+          HEAVY_ON_PR: ${{ contains(github.event.pull_request.labels.*.name, 'ci:full') && 'true' || 'false' }}
+          GATED_JOB_1: metrics-executed-proof-run|queue-heavy|${{ needs.metrics-executed-proof-run.result }}
+        run: |
+          chmod +x ci/aggregate_gate_results.sh
+          ./ci/aggregate_gate_results.sh

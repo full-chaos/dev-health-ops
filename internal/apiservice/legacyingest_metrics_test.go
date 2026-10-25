@@ -19,7 +19,8 @@ import (
 func TestLegacyIngestRefusalsAreScrapedFromTheOperatorRegistry(t *testing.T) {
 	t.Setenv("INGEST_API_KEYS", "")
 	t.Setenv("INGEST_SIGNING_SECRET", "")
-	t.Setenv("ENVIRONMENT", "production")
+	t.Setenv("ENVIRONMENT", "development")
+	t.Setenv("DEV_HEALTH_LEGACY_INGEST_ENABLED", "true")
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	registry := health.NewRegistry(time.Second)
@@ -109,6 +110,29 @@ func TestOperatorMetricsExposeTheManualTriggerAwaitFamilies(t *testing.T) {
 	} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("%q not exposed:\n%s", want, out.String())
+		}
+	}
+}
+
+// TestOperatorMetricsExposeTheSignUpMailFamily pins the registration of the
+// sign-up mail counter: every series is on /metrics at 0.
+func TestOperatorMetricsExposeTheSignUpMailFamily(t *testing.T) {
+	registry := health.NewRegistry(time.Second)
+	var deps Deps
+	if err := RegisterOperatorMetrics(registry, &deps); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := registry.WriteMetrics(&out); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"# TYPE devhealth_api_session_mail_sends_total counter",
+		`devhealth_api_session_mail_sends_total{purpose="email_verification",outcome="dropped"} 0`,
+		`devhealth_api_session_mail_sends_total{purpose="account_exists",outcome="sent"} 0`,
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("scrape lacks %q:\n%s", want, out.String())
 		}
 	}
 }

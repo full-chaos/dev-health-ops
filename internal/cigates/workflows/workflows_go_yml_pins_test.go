@@ -22,6 +22,7 @@ const selfHostedCondition = "vars.SELF_HOSTED_RUNNERS == 'enabled' && " +
 
 const eligibilityCondition = "github.event_name == 'workflow_dispatch' || " +
 	"github.event_name == 'release' || " +
+	"(github.event_name == 'merge_group' && needs.changes.outputs.docs_only != 'true') || " +
 	"(github.event_name == 'push' && github.ref == 'refs/heads/main') || " +
 	"needs.changes.outputs.code == 'true'"
 
@@ -29,12 +30,28 @@ const routingExpression = "${{ (" + selfHostedCondition + ") " +
 	"&& fromJSON('[\"self-hosted\",\"oci-arc-runners\"]') " +
 	"|| 'ubuntu-latest' }}"
 
+var imageRoutingExpression = "${{ ((vars.SELF_HOSTED_IMAGE_BUILDS == 'enabled' || vars.SELF_HOSTED_RUNNERS == 'enabled') && " +
+	strings.TrimPrefix(selfHostedCondition, "vars.SELF_HOSTED_RUNNERS == 'enabled' && ") + ") " +
+	"&& fromJSON('[\"self-hosted\",\"oci-arc-runners\"]') " +
+	"|| 'ubuntu-latest' }}"
+
 const draftGatePrefix = "(!(github.event_name == 'pull_request' && github.event.pull_request.draft && " +
 	"!contains(github.event.pull_request.labels.*.name, 'ci:full'))) && ("
 
+// goHeavyGatePrefix: go.yml's heavy jobs run in the merge queue, on the main push and on a pull request only with ci:full,
+// and a docs-only change skips them. imageHeavyGatePrefix: docker-images.yml's builds, which a non-draft hotfix-image
+// pull request also runs (it publishes tree-<tree> images for promotion).
+const goHeavyGatePrefix = "(!(github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) && " +
+	"needs.go-storage-integration-plan.outputs.docs_only != 'true' && ("
+
+const imageHeavyGatePrefix = "(!(github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'ci:full') && " +
+	"(github.event.pull_request.draft || !contains(github.event.pull_request.labels.*.name, 'hotfix-image')))) && ("
+
 func withoutDraftGate(v string) string {
-	if strings.HasPrefix(v, draftGatePrefix) && strings.HasSuffix(v, ")") {
-		return v[len(draftGatePrefix) : len(v)-1]
+	for _, prefix := range []string{draftGatePrefix, goHeavyGatePrefix, imageHeavyGatePrefix} {
+		if strings.HasPrefix(v, prefix) && strings.HasSuffix(v, ")") {
+			return v[len(prefix) : len(v)-1]
+		}
 	}
 	return v
 }
@@ -276,11 +293,11 @@ func poolRoutingDefects(goDoc, dockerDoc yamlMap) []string {
 	noPoll("go-arm64-numeric-parity", parity)
 
 	db := pinJob(dockerDoc, build)
-	expectedIf := "always() && needs.changes.result == 'success' && needs." + dind + ".result != 'failure' && needs." + dind + ".result != 'cancelled' && (" + eligibilityCondition + ")"
+	expectedIf := "always() && needs.changes.result == 'success' && needs.resolve.result == 'success' && needs.resolve.outputs.promoted != 'true' && needs." + dind + ".result != 'failure' && needs." + dind + ".result != 'cancelled' && (" + eligibilityCondition + ")"
 	if got := withoutDraftGate(asString(db["if"])); got != expectedIf {
 		add("%s if %q is not the eligibility and dind-tolerance condition", build, got)
 	}
-	if got := asString(db["runs-on"]); got != routingExpression {
+	if got := asString(db["runs-on"]); got != imageRoutingExpression {
 		add("%s runs-on %q is not the ARC-or-x64 routing expression", build, got)
 	}
 	if _, n := stepNamed(db, "Set up QEMU"); n == 0 {

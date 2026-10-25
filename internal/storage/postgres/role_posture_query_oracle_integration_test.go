@@ -321,6 +321,17 @@ func oracleDomainPosture(t *testing.T, ctx context.Context, env oracleEnv, role 
 		}
 	}
 	posture.ColumnScoped = kept
+	// The frozen legacy query predates RequiredFunctions and refuses EXECUTE on
+	// every public function, so the comparison runs without the declared
+	// functions and with their EXECUTE revoked. Their predicates are pinned by
+	// the function cases of TestDomainAuthorizationRequiresExactCanaryAndReconcilerPrivileges.
+	for _, function := range posture.RequiredFunctions {
+		statement := "REVOKE EXECUTE ON FUNCTION public." + function + " FROM " + pgx.Identifier{role}.Sanitize()
+		if _, err := env.admin.Exec(ctx, statement); err != nil {
+			t.Fatalf("%s: %v", statement, err)
+		}
+	}
+	posture.RequiredFunctions = nil
 	return posture
 }
 
@@ -388,6 +399,14 @@ func evaluateOracleIn(ctx context.Context, pool *pgxpool.Pool, query, role, rive
 	args, err := rolePostureArgs(role, riverSchema, posture)
 	if err != nil {
 		return false, err
+	}
+	if query == legacyRolePostureQuery {
+		// The legacy query has no $11 (RequiredFunctions); it may only be asked
+		// about a posture that declares none.
+		if len(posture.RequiredFunctions) != 0 {
+			return false, fmt.Errorf("the legacy posture query cannot judge RequiredFunctions")
+		}
+		args = args[:10]
 	}
 	var authorized bool
 	err = pool.QueryRow(ctx, query, args...).Scan(&authorized)

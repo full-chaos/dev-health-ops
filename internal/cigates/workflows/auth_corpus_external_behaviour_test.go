@@ -28,6 +28,7 @@ case "$*" in
   *" down "*)
     if [ -n "$FAKE_BLOCK_DOWN" ]; then exec sleep "$FAKE_BLOCK_DOWN"; fi ;;
   *" up "*)
+    printf '%s %s %s\n' "${AUTH_SESSION_SUCCESSOR_KEY:-}" "${AUTH_LOGIN_LOCKOUT_KEY:-}" "${AUTH_JWT_SECRET_KEY:+jwt}" >> "` + record + `.keys"
     if [ -n "$FAKE_BLOCK_UP" ]; then exec sleep "$FAKE_BLOCK_UP"; fi
     if [ -n "$FAKE_FAIL_UP" ]; then exit 1; fi ;;
   *" port "*) echo 127.0.0.1:12345 ;;
@@ -36,8 +37,19 @@ case "$*" in
 esac
 exit 0
 `
-	goShim := "#!/bin/sh\nexit 0\n"
-	for name, body := range map[string]string{"docker": docker, "go": goShim} {
+	goShim := `#!/bin/sh
+case "$*" in
+  *" certs -out "*)
+    for arg in "$@"; do last="$arg"; done
+    mkdir -p "$last" && : > "$last/ca.pem" && : > "$last/server.pem" && : > "$last/server.key" ;;
+esac
+exit 0
+`
+	chmodShim := `#!/bin/sh
+if [ "$1" = 0600 ]; then stat -c %a "$2" >> "` + record + `.premode"; fi
+exec /bin/chmod "$@"
+`
+	for name, body := range map[string]string{"docker": docker, "go": goShim, "chmod": chmodShim} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -267,6 +279,7 @@ func proxyFlagRecreates(calls string) []string {
 // with go-api's answer.
 func TestAuthCorpusAcpLegForwardsOnlyWhatAuthServiceServes(t *testing.T) {
 	sessions := "/api/v1/auth/refresh,/api/v1/auth/logout"
+	required := sessions + ",/api/v1/auth/login,/api/v1/auth/social-login"
 	forwarded := func(aggregate string) string {
 		return `devhealth_api_auth_proxy_requests_total{aggregate="` + aggregate + `",outcome="forwarded"} 3`
 	}
@@ -277,13 +290,19 @@ func TestAuthCorpusAcpLegForwardsOnlyWhatAuthServiceServes(t *testing.T) {
 		wantProbes      []string
 		wantError       string
 	}{
-		"nothing served": {wantForwards: "leg acp forwards: none (", wantProbes: []string{
+		"nothing served": {wantError: "required aggregate sessions is not served by auth-service", wantProbes: []string{
 			"probe sessions: not served (2 routes)", "probe local_login: not served (1 routes)", "probe credentials: not served (6 routes)",
 			"probe social: not served (1 routes)", "probe oidc: not served (2 routes)", "probe saml: not served (3 routes)"}},
-		"login without sessions": {served: "/api/v1/auth/login", wantForwards: "leg acp forwards: none (",
+		"login without sessions": {served: "/api/v1/auth/login", wantError: "required aggregate sessions is not served by auth-service",
 			wantProbes: []string{"probe sessions: not served (2 routes)", "probe local_login: served (1 routes)"}},
-		"sessions":           {served: sessions, metrics: forwarded("sessions"), wantRecreates: 1, wantForwards: "leg acp forwards: sessions\n"},
-		"sessions and login": {served: sessions + ",/api/v1/auth/login", metrics: forwarded("sessions") + "\n" + forwarded("local_login"), wantRecreates: 2, wantForwards: "leg acp forwards: sessions local_login\n"},
+		"sessions only": {served: sessions, wantError: "required aggregate local_login is not served by auth-service"},
+		"sessions and login": {served: sessions + ",/api/v1/auth/login", metrics: forwarded("sessions") + "\n" + forwarded("local_login"),
+			wantRecreates: 2, wantForwards: "leg acp forwards: sessions local_login\n"},
+		"social served stays on go-api": {served: required, metrics: forwarded("sessions") + "\n" + forwarded("local_login"),
+			wantRecreates: 2, wantForwards: "leg acp forwards: sessions local_login\n"},
+		"social forwarded although kept on go-api": {served: required, wantRecreates: 2,
+			metrics:   forwarded("sessions") + "\n" + forwarded("local_login") + "\n" + forwarded("social"),
+			wantError: "go-api forwarded aggregate social, whose flag is off"},
 		"half an aggregate": {served: "/api/v1/auth/refresh", wantError: "auth-service serves 1 of the 2 routes of aggregate sessions",
 			wantProbes: []string{"probe sessions: partial (1 of 2 routes served)"}},
 		"half a non-session aggregate": {served: sessions + ",/api/v1/auth/oidc/p-probe/authorize",
@@ -291,8 +310,8 @@ func TestAuthCorpusAcpLegForwardsOnlyWhatAuthServiceServes(t *testing.T) {
 			wantProbes: []string{"probe sessions: served (2 routes)", "probe oidc: partial (1 of 2 routes served)"}},
 		"half a non-session aggregate without sessions": {served: "/api/v1/auth/saml/p-probe/metadata",
 			wantError: "auth-service serves 1 of the 3 routes of aggregate saml"},
-		"served but not forwarded": {served: sessions, wantRecreates: 1, wantError: "no forwarded request for aggregate sessions"},
-		"forwarded while off":      {metrics: forwarded("saml"), wantError: "go-api forwarded aggregate saml, whose flag is off"},
+		"served but not forwarded": {served: required, wantRecreates: 2, wantError: "no forwarded request for aggregate sessions"},
+		"forwarded while off":      {served: required, wantRecreates: 2, metrics: forwarded("sessions") + "\n" + forwarded("local_login") + "\n" + forwarded("saml"), wantError: "go-api forwarded aggregate saml, whose flag is off"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			fake, out, err := runAcpLeg(t, "FAKE_SERVED="+tc.served, "FAKE_METRICS="+tc.metrics)
@@ -321,8 +340,8 @@ func TestAuthCorpusAcpLegForwardsOnlyWhatAuthServiceServes(t *testing.T) {
 // Leg acp stores go-api's session issue credential and applies the sessions-owned grants before go-api first
 // restarts with the sessions flag, and no call line carries the token.
 func TestAuthCorpusAcpLegStoresTheIssueCredentialAndGrantsBeforeTheSessionsFlag(t *testing.T) {
-	fake, out, err := runAcpLeg(t, "FAKE_SERVED=/api/v1/auth/refresh,/api/v1/auth/logout",
-		"FAKE_METRICS=devhealth_api_auth_proxy_requests_total{aggregate=\"sessions\",outcome=\"forwarded\"} 3")
+	fake, out, err := runAcpLeg(t, "FAKE_SERVED=/api/v1/auth/refresh,/api/v1/auth/logout,/api/v1/auth/login,/api/v1/auth/social-login",
+		"FAKE_METRICS="+metric("sessions")+"\n"+metric("local_login"))
 	if err != nil {
 		t.Fatalf("leg acp failed: %v\n%s", err, out)
 	}
@@ -342,5 +361,121 @@ func TestAuthCorpusAcpLegStoresTheIssueCredentialAndGrantsBeforeTheSessionsFlag(
 	store, grants, flag := index("exec -T postgres psql"), index("run --rm --no-deps -e AUTH_PROXY_SESSIONS=true go-river-migrate"), index("--force-recreate")
 	if store < 0 || grants < 0 || flag < 0 || !(store < flag && grants < flag) {
 		t.Fatalf("want the credential store (%d) and the grants (%d) before the first go-api recreate (%d):\n%s", store, grants, flag, calls)
+	}
+}
+
+func metric(aggregate string) string {
+	return `devhealth_api_auth_proxy_requests_total{aggregate="` + aggregate + `",outcome="forwarded"} 3`
+}
+
+// upKeys returns, per `compose up`, the successor key, the lockout key and "jwt" when the access-token secret was set
+// in the environment the script gave compose.
+func upKeys(t *testing.T, fake fakeDocker) [][3]string {
+	t.Helper()
+	raw, err := os.ReadFile(fake.record + ".keys")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out [][3]string
+	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+		var row [3]string
+		copy(row[:], strings.Fields(line))
+		out = append(out, row)
+	}
+	return out
+}
+
+const requiredServed = "/api/v1/auth/refresh,/api/v1/auth/logout,/api/v1/auth/login,/api/v1/auth/social-login"
+
+// Leg acp gives auth-service freshly made session keys through the compose environment only: never an argument, never
+// the output (CI masks them first), and none at all when AUTH_CORPUS_OMIT_AUTH_KEYS is set.
+func TestAuthCorpusAcpLegKeysStayOutOfArgumentsAndOutput(t *testing.T) {
+	metrics := metric("sessions") + "\n" + metric("local_login")
+	fake, out, err := runAcpLeg(t, "FAKE_SERVED="+requiredServed, "FAKE_METRICS="+metrics)
+	if err != nil {
+		t.Fatalf("leg acp failed: %v\n%s", err, out)
+	}
+	rows := upKeys(t, fake)
+	if len(rows) == 0 {
+		t.Fatal("no compose up recorded")
+	}
+	calls := fake.calls(t)
+	for _, row := range rows {
+		if len(row[0]) != 43 || len(row[1]) != 43 || row[0] == row[1] || row[2] != "jwt" {
+			t.Fatalf("a compose up did not get two distinct 43-character keys and the access-token secret: %v", row)
+		}
+		for _, key := range row[:2] {
+			if strings.Contains(out, key) || strings.Contains(calls, key) {
+				t.Fatalf("a session key reached a docker argument or the output:\n%s\n%s", calls, out)
+			}
+		}
+	}
+}
+
+func TestAuthCorpusAcpLegMasksTheKeysBeforeAnythingElse(t *testing.T) {
+	metrics := metric("sessions") + "\n" + metric("local_login")
+	fake, out, err := runAcpLeg(t, "GITHUB_ACTIONS=true", "FAKE_SERVED="+requiredServed, "FAKE_METRICS="+metrics)
+	if err != nil {
+		t.Fatalf("leg acp failed: %v\n%s", err, out)
+	}
+	row := upKeys(t, fake)[0]
+	for _, key := range row[:2] {
+		if got := strings.Count(out, key); got != 1 || !strings.Contains(out, "::add-mask::"+key+"\n") {
+			t.Errorf("a key appears %d times in the output, want once as the mask command:\n%s", got, out)
+		}
+		if strings.Index(out, "::add-mask::"+key) > strings.Index(out, "step 1:") {
+			t.Error("a key is masked after the first step started")
+		}
+	}
+}
+
+func TestAuthCorpusAcpLegOmitsEveryKeyWhenAsked(t *testing.T) {
+	fake, out, err := runAcpLeg(t, "AUTH_CORPUS_OMIT_AUTH_KEYS=1", "FAKE_SERVED=")
+	if err == nil || !strings.Contains(out, "required aggregate sessions is not served by auth-service") {
+		t.Fatalf("want a failure on the required aggregate sessions, got err=%v:\n%s", err, out)
+	}
+	for _, row := range upKeys(t, fake) {
+		if row != ([3]string{}) {
+			t.Fatalf("a compose up got a key although they were omitted: %v", row)
+		}
+	}
+}
+
+// The state file holds the session keys: it is created under umask 077, so it is 0600 from its first write, even
+// when the caller's umask would make it world-readable.
+func TestAuthCorpusStateFileIsPrivateFromItsFirstWrite(t *testing.T) {
+	fake := newFakeDocker(t)
+	fake.withCurl(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "bash", "-c", `umask 000; exec bash "$1" acp`, "bash", filepath.Join(authProofRoot(t), "ci", "auth_corpus_external.sh"))
+	cmd.Env = fake.env("FAKE_SERVED=")
+	_, _ = cmd.CombinedOutput()
+	raw, err := os.ReadFile(fake.record + ".premode")
+	if err != nil {
+		t.Fatalf("the script never made the state file private: %v", err)
+	}
+	if got := strings.TrimSpace(string(raw)); got != "600" {
+		t.Errorf("the state file mode before its chmod is %q, want 600", got)
+	}
+}
+
+// A failed run dumps the logs of auth-service (a whole corpus run: it is the side whose answers are compared with
+// go-api's) and of the provider stub, next to go-api's own.
+func TestAuthCorpusFailureDumpIncludesAuthServiceAndTheStub(t *testing.T) {
+	fake, out, err := runAcpLeg(t, "FAKE_SERVED=")
+	if err == nil {
+		t.Fatalf("want a failing run:\n%s", out)
+	}
+	var authLogs, stubLogs bool
+	for _, call := range strings.Split(fake.calls(t), "\n") {
+		if !strings.Contains(call, " logs ") {
+			continue
+		}
+		authLogs = authLogs || (strings.HasSuffix(call, " auth-service") && strings.Contains(call, "--tail=3000"))
+		stubLogs = stubLogs || (strings.HasSuffix(call, " providerstub") && strings.Contains(call, "--tail=200"))
+	}
+	if !authLogs || !stubLogs {
+		t.Errorf("want `compose logs --tail=3000 auth-service` and `--tail=200 providerstub` at failure (auth %v, stub %v):\n%s", authLogs, stubLogs, fake.calls(t))
 	}
 }

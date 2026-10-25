@@ -43,7 +43,7 @@ func intakeEntry(t *testing.T, body string) streamrunner.Message {
 	return streamrunner.Message{Stream: streams.stream, ID: "1-0", Fields: streams.fields}
 }
 
-const replayBatch = `{"orgIdHash":"h1","events":[` +
+const replayBatch = `{"orgIdHash":"fnv1a-0123abcd","events":[` +
 	`{"name":"page_viewed","schemaVersion":"1","eventId":"e1","ts":"2026-09-23T02:00:00Z","sessionId":"s","anonymousUserId":"a","payload":{"n":1.5,"ok":true}},` +
 	`{"name":"session_ended","schemaVersion":"1","eventId":"e2","ts":"2026-09-23T02:00:01Z","sessionId":"s","anonymousUserId":"a","payload":{}}]}`
 
@@ -86,7 +86,18 @@ func TestQuarantinedProductTelemetryEntryIsReplayableFromItsDeadLetterRow(t *tes
 
 // An entry refused for a banned payload key is quarantined without its text.
 func TestEntryRefusedForABannedPayloadKeyIsNotCopiedIntoTheDeadLetterRow(t *testing.T) {
-	entry := intakeEntry(t, strings.Replace(replayBatch, `"payload":{}`, `"payload":{"email":"person@example.test"}`, 1))
+	// The intake now drops that event (the value has an "@"), so the entry is the one of another
+	// writer: the intake entry of the valid batch with the banned key put into its second event.
+	banned := strings.Replace(replayBatch, `"payload":{}`, `"payload":{"email":"person@example.test"}`, 1)
+	if code, dropped := intakeRawBody(t, banned); code != http.StatusAccepted || strings.Contains(dropped.Fields["events"], "person@example.test") {
+		t.Fatalf("intake: status %d, stored events %q: the banned value must not reach the stream", code, dropped.Fields["events"])
+	}
+	entry := intakeEntry(t, replayBatch)
+	// The intake writes Python's json.dumps spelling (a space after the colon).
+	entry.Fields["events"] = strings.Replace(entry.Fields["events"], `"payload": {}`, `"payload": {"email": "person@example.test"}`, 1)
+	if !strings.Contains(entry.Fields["events"], "person@example.test") {
+		t.Fatalf("the banned key was not put into the entry: %s", entry.Fields["events"])
+	}
 	handler, err := NewProductTelemetryHandler(&productSink{batch: &productBatch{}})
 	if err != nil {
 		t.Fatal(err)
@@ -107,11 +118,18 @@ func TestEntryRefusedForABannedPayloadKeyIsNotCopiedIntoTheDeadLetterRow(t *test
 	}
 }
 
-// An orgIdHash the intake accepts without a length limit must not make the dead-letter row unbounded.
+// The intake bounds the org hash, so a huge one reaches the stream only from another writer or an older
+// entry. The dead-letter row of such an entry must stay bounded all the same.
 func TestEntryWithAHugeOrgHashFromTheIntakeGivesABoundedRow(t *testing.T) {
 	huge := strings.Repeat("h", 300*1024)
-	entry := intakeEntry(t, `{"orgIdHash":"`+huge+`","events":[`+
-		`{"name":"page_viewed","schemaVersion":"1","eventId":"e1","ts":"2026-09-23T02:00:00Z","sessionId":"s","anonymousUserId":"a","payload":{}}]}`)
+	body := `{"orgIdHash":"` + huge + `","events":[` +
+		`{"name":"page_viewed","schemaVersion":"1","eventId":"e1","ts":"2026-09-23T02:00:00Z","sessionId":"s","anonymousUserId":"a","payload":{}}]}`
+	if code, refused := intakeRawBody(t, body); code != http.StatusUnprocessableEntity || refused.Fields != nil {
+		t.Fatalf("intake answered %d with entry %v for a huge org hash, want 422 and no entry", code, refused.Fields)
+	}
+	entry := intakeEntry(t, replayBatch)
+	entry.Stream = "product-telemetry:" + huge + ":events"
+	entry.Fields["org_id_hash"] = huge
 	row := streamrunner.DeadLetterFields(entry, "max_deliveries_exceeded", "t")
 	for key, value := range row {
 		if key != "events" && len(value) > streamrunner.MaxDeadLetterFieldBytes {

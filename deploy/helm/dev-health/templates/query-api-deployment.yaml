@@ -23,6 +23,22 @@ exits 2 on the `query-api` argument, so the render refuses it by name.
 {{- end }}
 {{- end }}
 {{- /*
+The session reader query-api is granted (authService.migrate.sessionReaders.queryApi)
+must be the login query-api connects as, which is the role it names in
+QUERY_API_DATABASE_ROLE: the posture check requires exactly that login, so any
+other pair leaves the pod not ready or the sessions unread.
+*/}}
+{{- $queryRole := "" }}
+{{- range .Values.queryApi.extraEnv }}{{- if eq .name "QUERY_API_DATABASE_ROLE" }}{{- $queryRole = toString .value }}{{- end }}{{- end }}
+{{- $queryReader := trim (toString .Values.authService.migrate.sessionReaders.queryApi) }}
+{{- if and $queryReader (ne $queryRole $queryReader) }}
+{{- fail (printf "authService.migrate.sessionReaders.queryApi (%q) must equal the QUERY_API_DATABASE_ROLE in queryApi.extraEnv (%q): query-api reads sessions as the role it logs in as" $queryReader $queryRole) }}
+{{- end }}
+{{- /* With the flag off river-migrate revokes the auth read auth-migrate would grant: set the reader in the same change as the flag. */}}
+{{- if and $queryReader (not .Values.goApi.authProxy.sessions) }}
+{{- fail "authService.migrate.sessionReaders.queryApi is set while goApi.authProxy.sessions is off: set the query-api reader in the same change that turns the sessions flag on" }}
+{{- end }}
+{{- /*
 CHAOS-7085: the MCP caller-class listener (QUERY_API_MCP_ADDR). It trusts the
 X-DH-Internal-* identity headers from whoever can connect, so the NetworkPolicy
 below (queryApi.mcp.allowedFrom only) IS its authentication boundary. Every guard
@@ -42,6 +58,13 @@ the release-wide policy admits every pod in the namespace).
 {{- fail "queryApi.extraEnv must not set QUERY_API_MCP_BOUNDARY: the chart sets the MCP boundary marker only beside the MCP NetworkPolicy (queryApi.mcp.enabled); a marker from extraEnv would defeat the process's refusal to start an MCP address that arrived without the boundary" }}
 {{- end }}
 {{- end }}
+{{- if .Values.queryApi.internal.enabled }}
+{{- range .Values.queryApi.internal.allowedFrom }}
+{{- if not (and (kindIs "map" .) (or .matchLabels .matchExpressions)) }}
+{{- fail "queryApi.internal.allowedFrom entries must select pods by non-empty matchLabels or matchExpressions: an empty selector admits every pod in the namespace to the internal listener" }}
+{{- end }}
+{{- end }}
+{{- end }}
 {{- if .Values.queryApi.mcp.enabled }}
 {{- $mcpPort := int .Values.queryApi.mcp.port }}
 {{- if eq $mcpPort (int .Values.queryApi.port) }}
@@ -49,9 +72,6 @@ the release-wide policy admits every pod in the namespace).
 {{- end }}
 {{- if and .Values.queryApi.internal.enabled (eq $mcpPort (int .Values.queryApi.internal.port)) }}
 {{- fail "queryApi.mcp.port must differ from queryApi.internal.port (the internal listener)" }}
-{{- end }}
-{{- if .Values.networkPolicy.enabled }}
-{{- fail "queryApi.mcp.enabled with networkPolicy.enabled: the release-wide NetworkPolicy also selects the query-api pods and admits every pod in the namespace on every port; NetworkPolicies are additive, so it would open the MCP port to every pod. Disable one of them" }}
 {{- end }}
 {{- range .Values.queryApi.mcp.allowedFrom }}
 {{- if not (or .matchLabels .matchExpressions) }}
@@ -149,6 +169,11 @@ spec:
             {{- /* The auth schema the sid check reads auth-service sessions in. */}}
             - name: AUTH_DATABASE_SCHEMA
               value: {{ include "dev-health.authDatabaseSchema" . | quote }}
+            {{- end }}
+            {{- if .Values.goApi.authProxy.sessions }}
+            {{- /* go-api's AUTH_PROXY_SESSIONS: the query-api role's posture requires the auth session read while it is on. */}}
+            - name: AUTH_PROXY_SESSIONS
+              value: "true"
             {{- end }}
             {{- if .Values.queryApi.internal.enabled }}
             {{- /*
@@ -307,17 +332,20 @@ spec:
       {{- include "dev-health.componentSelectorLabels" (dict "component" "query-api" "context" $) | nindent 6 }}
   policyTypes:
     - Ingress
+  {{- if or (not .Values.networkPolicy.enabled) .Values.queryApi.internal.allowedFrom }}
   ingress:
+    {{- if not .Values.networkPolicy.enabled }}
     # The public listener: open to every source, exactly as before this policy existed.
     - ports:
         - protocol: TCP
           port: {{ .Values.queryApi.port }}
+    {{- end }}
     {{- /*
     The internal listener trusts X-DH-Internal-* identity headers from whoever can reach it, so the network is the
     boundary: only the pod selectors the operator names under queryApi.internal.allowedFrom (for example the tools pod
     that runs `dho goapi prove-write`). CHAOS-7520: no workload of this release calls the internal port any more (its
     only caller was the Python api's edge dispatcher), so there is no release-local peer. With allowedFrom empty the
-    rule is OMITTED: a rule with an empty `from` admits every source, so this policy denies the port to everybody. With networkPolicy.enabled the shared policy's in-namespace rule still admits every release pod on this port (NetworkPolicies are additive); only the ingress controller and sources outside the namespace are denied.
+    rule is OMITTED: a rule with an empty `from` admits every source, so this policy denies the port to everybody. With networkPolicy.enabled the query-api pods leave the release-wide policy, and the public port is admitted by the -ingress-query-api policy (release namespace and ingress controller) instead of the open rule above.
     */}}
     {{- with .Values.queryApi.internal.allowedFrom }}
     - from:
@@ -329,6 +357,9 @@ spec:
         - protocol: TCP
           port: {{ $.Values.queryApi.internal.port }}
     {{- end }}
+  {{- else }}
+  ingress: []
+  {{- end }}
 {{- end }}
 {{- if .Values.queryApi.mcp.enabled }}
 ---
@@ -362,12 +393,15 @@ spec:
       {{- include "dev-health.componentSelectorLabels" (dict "component" "query-api" "context" $) | nindent 6 }}
   policyTypes:
     - Ingress
+  {{- if or (not .Values.networkPolicy.enabled) .Values.queryApi.mcp.allowedFrom }}
   ingress:
+    {{- if not .Values.networkPolicy.enabled }}
     # The public listener: open to every source, exactly as before this policy existed
     # (a policy selecting these pods would otherwise deny it).
     - ports:
         - protocol: TCP
           port: {{ .Values.queryApi.port }}
+    {{- end }}
     {{- /*
     The MCP listener trusts X-DH-Internal-* identity headers from whoever can reach it, so
     this list IS its authentication boundary: only queryApi.mcp.allowedFrom (the acr-api
@@ -384,5 +418,8 @@ spec:
         - protocol: TCP
           port: {{ .Values.queryApi.mcp.port }}
     {{- end }}
+  {{- else }}
+  ingress: []
+  {{- end }}
 {{- end }}
 {{- end }}

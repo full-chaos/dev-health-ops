@@ -1,7 +1,10 @@
 {
   "accepted_credential_classes": [
-    "workload_token"
+    "user_access_token"
   ],
+  "access_token_validation": {
+    "legacy_hs256": false
+  },
   "action": "authz.decide",
   "cache_class": "none",
   "classification": "protected",
@@ -15,7 +18,7 @@
   "tenant_requirement": "none",
   "token": {
     "algorithm": "EdDSA",
-    "audience": "dev-health-auth",
+    "audience": "auth-service",
     "issuer": "https://auth.fullchaos.dev",
     "token_type": "at+jwt"
   }

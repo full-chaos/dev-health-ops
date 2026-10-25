@@ -61,10 +61,17 @@ var venuePackagesWithoutSchema = map[string]string{
 	// migrated schema (pgschema.Apply), so there is no hand-built venue whose DDL
 	// could fall behind domainPosture().
 	"internal/rivermigrate/rolese2e": "runs on the real migrated schema (pgschema.Apply), no hand-built venue",
+	// CHAOS-11335: the heavy worker's categorization opt-in read runs as the
+	// domain role on the real migrated schema (pgschema.Apply).
+	"internal/llmorgsettings": "runs on the real migrated schema (pgschema.Apply), no hand-built venue",
 }
 
 var createTablePattern = regexp.MustCompile(
 	`(?i)CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?public\.([a-z0-9_]+)`,
+)
+
+var createFunctionPattern = regexp.MustCompile(
+	`(?i)CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+public\.([a-z0-9_]+)\s*\(`,
 )
 
 // TestHandBuiltVenuesCreateEveryDomainPostureTable requires every package that
@@ -89,7 +96,7 @@ func TestHandBuiltVenuesCreateEveryDomainPostureTable(t *testing.T) {
 
 	exempt := map[string]bool{}
 	for _, pkg := range packages {
-		created := createdTables(t, filepath.Join(root, pkg))
+		created := createdObjects(t, filepath.Join(root, pkg), createTablePattern)
 		if len(created) == 0 {
 			reason, allowed := venuePackagesWithoutSchema[pkg]
 			if !allowed {
@@ -108,6 +115,16 @@ func TestHandBuiltVenuesCreateEveryDomainPostureTable(t *testing.T) {
 		for _, table := range required {
 			if !created[table] {
 				missing = append(missing, table)
+			}
+		}
+		functions := createdObjects(t, filepath.Join(root, pkg), createFunctionPattern)
+		for _, function := range requiredPostureFunctionNames() {
+			if !functions[function] {
+				t.Errorf("%s builds a venue by hand but never creates function public.%s, which "+
+					"domainPosture() requires (RequiredFunctions). CheckDomainAuthorization fails "+
+					"closed on a missing function, and ApplyPinnedMigrations' EXECUTE grant for it "+
+					"is guarded by `IF to_regprocedure(...) IS NOT NULL`. Add a SECURITY DEFINER "+
+					"CREATE FUNCTION with EXECUTE revoked from PUBLIC to this package's fixture.", pkg, function)
 			}
 		}
 		if len(missing) > 0 {
@@ -152,6 +169,17 @@ func requiredPostureTables() []string {
 	}
 	sort.Strings(tables)
 	return tables
+}
+
+// requiredPostureFunctionNames is the name part of every domainPosture()
+// RequiredFunctions signature.
+func requiredPostureFunctionNames() []string {
+	var names []string
+	for _, signature := range domainPosture().RequiredFunctions {
+		names = append(names, signature[:strings.IndexByte(signature, '(')])
+	}
+	sort.Strings(names)
+	return names
 }
 
 func repositoryRoot(t *testing.T) string {
@@ -251,11 +279,11 @@ func callsDomainAuthorization(t *testing.T, path string) bool {
 	return called
 }
 
-// createdTables collects the tables a package's tests create, reading only
+// createdObjects collects the objects a package's tests create, reading only
 // STRING LITERALS. A regex over raw file text would count a table named in a
 // comment as created -- which is precisely the direction that must never be
 // wrong here, since a false "created" reading silently exempts a real gap.
-func createdTables(t *testing.T, dir string) map[string]bool {
+func createdObjects(t *testing.T, dir string, pattern *regexp.Regexp) map[string]bool {
 	t.Helper()
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -282,7 +310,7 @@ func createdTables(t *testing.T, dir string) map[string]bool {
 				// this only fires on a literal this walk should not see at all.
 				return true
 			}
-			for _, match := range createTablePattern.FindAllStringSubmatch(text, -1) {
+			for _, match := range pattern.FindAllStringSubmatch(text, -1) {
 				created[strings.ToLower(match[1])] = true
 			}
 			return true

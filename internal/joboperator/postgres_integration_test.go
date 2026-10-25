@@ -526,6 +526,10 @@ func createOperatorIntegrationSchema(
 		"CREATE TABLE public.org_feature_overrides (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.org_licenses (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.byo_llm_budget_reservations (id uuid PRIMARY KEY)",
+		// domainPosture's RequiredFunctions: a SECURITY DEFINER shell with
+		// EXECUTE revoked from PUBLIC, as pgmigrate 0156 creates it.
+		"CREATE FUNCTION public.categorize_byo_opted_in(p_org_id text) RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS 'SELECT false'",
+		"REVOKE ALL ON FUNCTION public.categorize_byo_opted_in(text) FROM PUBLIC",
 		"CREATE TABLE public.dev_conversations (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.dev_conversation_tombstones (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.provider_rate_limit_observations (id bigint PRIMARY KEY)",

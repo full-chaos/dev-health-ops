@@ -24,6 +24,8 @@ func eventContext(event, ref, headRef, refName, prNumber, sha string) ctxMap {
 		"github.workflow": "W", "github.event_name": event, "github.sha": sha, "github.run_id": "1",
 		// `inputs.*` only exists in a workflow_dispatch payload; no modelled event carries one.
 		"github.event.inputs.ref": "",
+		// no modelled event is a `labeled` pull_request action
+		"github.event.action": "", "github.event.label.name": "",
 	}
 }
 
@@ -524,7 +526,7 @@ func TestBareTriggersCountAsEveryBranch(t *testing.T) {
 func workflowFilePathViolations(t *testing.T, root string) []string {
 	t.Helper()
 	var out []string
-	for _, event := range []string{"push", "pull_request"} {
+	for _, event := range goFilteredEvents(t, root) {
 		paths := goPaths(t, root, event)
 		for _, n := range workflowNames(t, root) {
 			if rel := ".github/workflows/" + n; !matchesAny(t, rel, paths) {

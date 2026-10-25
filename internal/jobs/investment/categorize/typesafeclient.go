@@ -55,12 +55,25 @@ import (
 // layer of a transport error (it holds the peer's bytes): log the class or the
 // top-level text.
 type TypeSafeClient struct {
-	cfg    TypeSafeClientConfig
+	cfg TypeSafeClientConfig
+	// target is the one URL and the one bearer of this client, fixed by its
+	// constructor (NewTypeSafeClient: jev; NewClefClient: clef). Nothing else
+	// holds the credential, so a client of one backend cannot send to the other.
+	target systemOneTarget
 	client *http.Client
 	logger *slog.Logger
 	// sleep waits out a retry backoff; false means ctx ended first. Tests
 	// replace it; production uses sleepForRetry.
 	sleep func(ctx context.Context, d time.Duration) bool
+}
+
+// systemOneTarget is where one SystemOne backend lives: the full POST URL, the
+// bearer, and the name the backend goes by in errors and logs. It is built only
+// by the constructors of this file and clefclient.go, from validated parts.
+type systemOneTarget struct {
+	provider ProviderKind
+	url      string
+	bearer   secrets.Hidden
 }
 
 // TypeSafeClientConfig configures TypeSafeClient.
@@ -150,7 +163,8 @@ func NewTypeSafeClient(cfg TypeSafeClientConfig) (*TypeSafeClient, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &TypeSafeClient{cfg: cfg, client: client, logger: logger, sleep: sleepForRetry}, nil
+	target := systemOneTarget{provider: ProviderKindTypeSafe, url: cfg.BaseURL + typeSafeSystemOnePath, bearer: cfg.APIKey}
+	return &TypeSafeClient{cfg: cfg, target: target, client: client, logger: logger, sleep: sleepForRetry}, nil
 }
 
 // minKeyFormLen: a spelling shorter than this would match ordinary text, so it
@@ -188,7 +202,7 @@ const minFragmentLen = 12
 func (c *TypeSafeClient) leaksKey(s string) bool {
 	// Computed on each check and never stored: a copy of the key's spellings in
 	// the struct would be printed by any unexported-holder format verb.
-	key := c.cfg.APIKey.Reveal()
+	key := c.target.bearer.Reveal()
 	lower := strings.ToLower(s)
 	for _, form := range keySpellings(key) {
 		if strings.Contains(lower, form) {
@@ -588,15 +602,15 @@ type systemOneUsageProbe struct {
 // the classified *llmError.
 func (c *TypeSafeClient) once(ctx context.Context, body []byte, lenient bool) (SystemOneResult, SystemOneAttempt, *SystemOneError) {
 	var att SystemOneAttempt
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.cfg.BaseURL+typeSafeSystemOnePath, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.target.url, bytes.NewReader(body))
 	if err != nil {
 		return SystemOneResult{}, att, &SystemOneError{Class: SystemOneClassBuildRequest, cause: logging.TransportFailure(err)}
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+c.cfg.APIKey.Reveal())
+	req.Header.Set("Authorization", "Bearer "+c.target.bearer.Reveal())
 
 	started := time.Now()
-	resp, err := tracedLLMDo(c.client, req, ProviderKindTypeSafe, c.cfg.Model)
+	resp, err := tracedLLMDo(c.client, req, c.target.provider, c.cfg.Model)
 	att.Latency = time.Since(started)
 	if err != nil {
 		if ctx.Err() != nil {
@@ -626,7 +640,7 @@ func (c *TypeSafeClient) once(ctx context.Context, body []byte, lenient bool) (S
 		markInvalidAnswer(resp)
 		att.Class = string(SystemOneClassTooLarge)
 		return SystemOneResult{}, att, &SystemOneError{Class: SystemOneClassTooLarge, StatusCode: resp.StatusCode,
-			cause: &llmError{kind: llmErrorGeneric, message: "response exceeded the size bound", provider: string(ProviderKindTypeSafe), model: c.cfg.Model}}
+			cause: &llmError{kind: llmErrorGeneric, message: "response exceeded the size bound", provider: string(c.target.provider), model: c.cfg.Model}}
 	}
 
 	if resp.StatusCode != http.StatusOK {
@@ -655,12 +669,12 @@ func (c *TypeSafeClient) once(ctx context.Context, body []byte, lenient bool) (S
 		if tc := logging.TransportClass(readErr); tc == "timeout" || tc == "deadline" {
 			att.Class = string(SystemOneClassTimeout)
 			return SystemOneResult{}, att, &SystemOneError{Class: SystemOneClassTimeout, StatusCode: resp.StatusCode,
-				cause: &llmError{kind: llmErrorTimeout, message: "LLM provider request timed out.", provider: string(ProviderKindTypeSafe), model: c.cfg.Model,
+				cause: &llmError{kind: llmErrorTimeout, message: "LLM provider request timed out.", provider: string(c.target.provider), model: c.cfg.Model,
 					cause: logging.TransportFailure(readErr)}}
 		}
 		att.Class = string(SystemOneClassBodyReadError)
 		return SystemOneResult{}, att, &SystemOneError{Class: SystemOneClassBodyReadError, StatusCode: resp.StatusCode,
-			cause: &llmError{kind: llmErrorTransport, message: "response body could not be read", provider: string(ProviderKindTypeSafe), model: c.cfg.Model,
+			cause: &llmError{kind: llmErrorTransport, message: "response body could not be read", provider: string(c.target.provider), model: c.cfg.Model,
 				cause: logging.TransportFailure(readErr)}}
 	}
 
@@ -671,7 +685,7 @@ func (c *TypeSafeClient) once(ctx context.Context, body []byte, lenient bool) (S
 		markInvalidAnswer(resp)
 		att.Class = string(SystemOneClassDecode)
 		return SystemOneResult{}, att, &SystemOneError{Class: SystemOneClassDecode, StatusCode: resp.StatusCode,
-			cause: &llmError{kind: llmErrorGeneric, message: "response is not a JSON object", provider: string(ProviderKindTypeSafe), model: c.cfg.Model,
+			cause: &llmError{kind: llmErrorGeneric, message: "response is not a JSON object", provider: string(c.target.provider), model: c.cfg.Model,
 				cause: logging.DecodeFailure(err)}}
 	}
 	out := SystemOneResult{Body: payload, Header: http.Header{}}
@@ -688,7 +702,7 @@ func (c *TypeSafeClient) once(ctx context.Context, body []byte, lenient bool) (S
 // contain digits or words that match its substring rules); 402 and 403 are
 // then folded into auth because a rejected or unpaid key stops the arm.
 func (c *TypeSafeClient) classify(err error, status int, header http.Header) (SystemOneClass, *llmError) {
-	llm := classifyProviderError(err, status, header, string(ProviderKindTypeSafe), c.cfg.Model)
+	llm := classifyProviderError(err, status, header, string(c.target.provider), c.cfg.Model)
 	if status == http.StatusPaymentRequired || status == http.StatusForbidden {
 		llm.kind = llmErrorAuth
 		llm.message = "Invalid or missing LLM API key."
@@ -697,7 +711,7 @@ func (c *TypeSafeClient) classify(err error, status int, header http.Header) (Sy
 		// An unknown model id: every later request fails the same way, so
 		// FailureClass reads model_not_found and IsDeterministicFailure is true.
 		llm.kind = llmErrorModelNotFound
-		llm.message = fmt.Sprintf("LLM model not found for provider %q using configured model %q.", ProviderKindTypeSafe, c.cfg.Model)
+		llm.message = fmt.Sprintf("LLM model not found for provider %q using configured model %q.", c.target.provider, c.cfg.Model)
 	}
 	switch llm.kind {
 	case llmErrorAuth:
@@ -724,7 +738,7 @@ func (c *TypeSafeClient) classify(err error, status int, header http.Header) (Sy
 // only; never the URL, a header, the request body or the response body.
 func (c *TypeSafeClient) logFailure(err *SystemOneError, attempt int, retrying bool, latency time.Duration) {
 	c.logger.Warn("typesafe systemone attempt failed",
-		slog.String("provider", string(ProviderKindTypeSafe)),
+		slog.String("provider", string(c.target.provider)),
 		slog.String("model", c.cfg.Model),
 		slog.String("class", string(err.Class)),
 		slog.Int("status", err.StatusCode),
@@ -742,14 +756,14 @@ func (c *TypeSafeClient) logSuccess(r SystemOneResult) {
 	switch {
 	case r.Usage.Rejected:
 		c.logger.Warn("typesafe systemone usage out of range",
-			slog.String("provider", string(ProviderKindTypeSafe)),
+			slog.String("provider", string(c.target.provider)),
 			slog.String("model", c.cfg.Model),
 			slog.String("request_id", r.RequestID),
 			slog.Int("attempts", r.AttemptCount()),
 		)
 	case !r.Usage.Reported:
 		c.logger.Warn("typesafe systemone response carried no usage",
-			slog.String("provider", string(ProviderKindTypeSafe)),
+			slog.String("provider", string(c.target.provider)),
 			slog.String("model", c.cfg.Model),
 			slog.String("request_id", r.RequestID),
 			slog.Int("attempts", r.AttemptCount()),
@@ -757,13 +771,13 @@ func (c *TypeSafeClient) logSuccess(r SystemOneResult) {
 	}
 	if r.ModelRejected {
 		c.logger.Warn("typesafe systemone returned model refused",
-			slog.String("provider", string(ProviderKindTypeSafe)),
+			slog.String("provider", string(c.target.provider)),
 			slog.String("model", c.cfg.Model),
 			slog.String("request_id", r.RequestID),
 		)
 	}
 	c.logger.Debug("typesafe systemone ok",
-		slog.String("provider", string(ProviderKindTypeSafe)),
+		slog.String("provider", string(c.target.provider)),
 		slog.String("model", c.cfg.Model),
 		slog.String("returned_model", r.Model),
 		slog.Bool("returned_model_rejected", r.ModelRejected),

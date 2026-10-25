@@ -128,7 +128,7 @@ func NewNativeMaterializer(domainPool *pgxpool.Pool) (*NativeMaterializer, error
 		return nil, ErrInvalidMaterializer
 	}
 	overlap := boundedEnvInt("SYNC_WATERMARK_OVERLAP", 0, 0)
-	cap := boundedEnvInt("SYNC_RUN_MAX_UNITS", 1000, 1)
+	cap := UnitCapFromEnv()
 	refreshSeconds := boundedEnvInt("SYNC_EXECUTED_PROOF_REFRESH_SECONDS", 300, 30)
 	// boundedEnvInt only lower-bounds. Without an upper bound here too, a
 	// value shaped like a typo (or a deliberately huge one) multiplied by
@@ -509,10 +509,10 @@ func (materializer *NativeMaterializer) Materialize(
 			return PlanResult{}, err
 		}
 	}
-	if err := errIfOnlySkippedDatasetsHadWork(loaded.featureOffSkippedDatasets, len(units)); err != nil {
+	if err := errIfOnlySkippedDatasetsHadWork(len(loaded.featureOffSkippedDatasetKeys), len(units)); err != nil {
 		return PlanResult{}, err
 	}
-	if len(units) > loaded.totalUnitCap {
+	if loaded.totalUnitCap > 0 && len(units) > loaded.totalUnitCap {
 		return PlanResult{}, fmt.Errorf("%w: plan has %d units over cap %d", ErrInvalidPlan, len(units), loaded.totalUnitCap)
 	}
 	if (len(units) > 0 || zeroUnitPlanNeedsCredentialStamp(loaded.provider)) && loaded.terminalReason == "" {
@@ -597,9 +597,9 @@ type loadedMaterializationPlan struct {
 	terminalReason         string
 	ensureSecurityDataset  bool
 	pagerDutyRepair        *pagerDutyDomainRepair
-	// featureOffSkippedDatasets is the number of enabled datasets the plan
-	// left out because the canonical-incident feature is off.
-	featureOffSkippedDatasets int
+	// featureOffSkippedDatasetKeys are the enabled datasets the plan left out
+	// because the canonical-incident feature is off.
+	featureOffSkippedDatasetKeys []string
 	// triggeredBy is CHAOS-4602's sync_runs.triggered_by stamp: "schedule"
 	// for an ordinary cron-minted occurrence (every pre-CHAOS-4602 caller
 	// keeps this value, unconditionally), or the sync_manual_triggers row's
@@ -802,7 +802,7 @@ WHERE config.id = $1::uuid AND config.org_id = $2 AND integration.is_active`, oc
 			return loadedMaterializationPlan{}, err
 		}
 	}
-	datasets, featureOffSkippedDatasets, err := dropCanonicalIncidentDatasetsWhenFeatureOff(ctx, tx, orgID, integrationID, provider, datasets, occurrence.ScheduledFor)
+	datasets, featureOffSkippedDatasetKeys, err := dropCanonicalIncidentDatasetsWhenFeatureOff(ctx, tx, orgID, integrationID, provider, datasets, occurrence.ScheduledFor)
 	if err != nil {
 		return loadedMaterializationPlan{}, err
 	}
@@ -858,7 +858,7 @@ WHERE config.id = $1::uuid AND config.org_id = $2 AND integration.is_active`, oc
 		pagerDutyRepair:        pagerDutyRepair,
 		triggeredBy:            triggeredBy,
 
-		featureOffSkippedDatasets: featureOffSkippedDatasets,
+		featureOffSkippedDatasetKeys: featureOffSkippedDatasetKeys,
 	}, nil
 }
 
@@ -1159,8 +1159,7 @@ WHERE organization.id=$1::uuid`, orgID).Scan(&orgTier, &licenseTier, &overridesJ
 		return &value, true
 	}
 	backfill, backfillSet := resolveOverride("backfill_days")
-	unitCap, unitCapSet := resolveOverride("max_sync_units")
-	rows, err := tx.Query(ctx, `SELECT limit_key,limit_value FROM public.tier_limits WHERE tier=$1 AND limit_key IN ('backfill_days','max_sync_units')`, resolvedTier)
+	rows, err := tx.Query(ctx, `SELECT limit_key,limit_value FROM public.tier_limits WHERE tier=$1 AND limit_key='backfill_days'`, resolvedTier)
 	if err != nil {
 		return nil, 0, fmt.Errorf("load scheduled sync tier limits: %w", err)
 	}
@@ -1173,9 +1172,6 @@ WHERE organization.id=$1::uuid`, orgID).Scan(&orgTier, &licenseTier, &overridesJ
 		}
 		if key == "backfill_days" && !backfillSet {
 			backfill, backfillSet = parseOptionalPositiveInt(value)
-		}
-		if key == "max_sync_units" && !unitCapSet {
-			unitCap, unitCapSet = parseOptionalPositiveInt(value)
 		}
 	}
 	if err := rows.Err(); err != nil {
@@ -1191,34 +1187,16 @@ WHERE organization.id=$1::uuid`, orgID).Scan(&orgTier, &licenseTier, &overridesJ
 			backfill = &value
 		}
 	}
-	totalCap := defaultUnitCap
-	if unitCap != nil {
-		totalCap = *unitCap
-	}
-	return backfill, totalCap, nil
+	return backfill, defaultUnitCap, nil
 }
 
-// ResolveMaxSyncUnitsCap resolves the org's tier-based max_sync_units cap --
-// the same organizations/org_licenses/tier_limits resolution loadPlanLimits
-// already performs for scheduling, shared (not duplicated) for
-// DispatchGuard's total-cap check (CHAOS-4175 family 3, port of
-// guard.py's DispatchGuard.authorize_run / TierLimitService.get_limit).
-//
-// Callers porting Python's _resolve_total_unit_cap must NOT propagate a
-// non-nil error as a hard failure: Python's version catches every exception
-// (missing org, missing tier_limits table, a malformed override) and falls
-// back to defaultCap unconditionally, by design (CHAOS-2580's savepoint
-// discussion). loadPlanLimits, in contrast, treats a genuinely missing
-// organizations row as ErrOccurrenceIneligible -- a meaningful signal for
-// the SCHEDULER's own caller, but not one DispatchGuard's fallback-on-any-
-// error semantics should adopt. A caller wanting Python parity should catch
-// any error from this function and substitute defaultCap itself.
-func ResolveMaxSyncUnitsCap(ctx context.Context, tx pgx.Tx, orgID string, defaultCap int) (int, error) {
-	_, totalCap, err := loadPlanLimits(ctx, tx, orgID, defaultCap)
-	if err != nil {
-		return 0, err
-	}
-	return totalCap, nil
+// UnitCapFromEnv is the total unit cap of one planned sync run, read by the
+// materializer and by DispatchGuard alike: SYNC_RUN_MAX_UNITS, opt-in. Unset,
+// empty, zero, negative or unparseable means NO cap (0); a positive value is
+// the cap. The org's tier limit and limits_override no longer set it
+// (the tier default quarantined valid backfills).
+func UnitCapFromEnv() int {
+	return boundedEnvInt("SYNC_RUN_MAX_UNITS", 0, 0)
 }
 
 func parseOptionalPositiveInt(value *string) (*int, bool) {
@@ -1700,7 +1678,7 @@ func firstTruthyString(options map[string]any, keys ...string) string {
 	return ""
 }
 
-func requestedDatasetKeys(provider string, targets []string, sourceID *string) map[string]bool {
+func RequestedDatasetKeys(provider string, targets []string, sourceID *string) map[string]bool {
 	// Python's plan_request_for_config leaves parent dataset scope unset. Child
 	// configs derive dataset keys only from the provider registry's legacy
 	// targets; an empty mapping deliberately falls back to all enabled datasets.
@@ -1801,7 +1779,7 @@ func loadWorkItemLastSuccessAt(ctx context.Context, tx pgx.Tx, provider, orgID, 
 // explicitDatasetKeys is CHAOS-4602's manual/backfill selector
 // (sync_manual_triggers.dataset_keys, mirroring Python's
 // SyncPlanRequest.dataset_keys/_load_enabled_datasets): nil falls back to
-// the legacy-target-derived scope requestedDatasetKeys already computed
+// the legacy-target-derived scope RequestedDatasetKeys already computed
 // (unchanged behavior for every ordinary scheduled occurrence); a non-nil
 // slice is a direct dataset_key allowlist with NO legacy-target mapping and
 // NO auto security-forcing, matching _load_enabled_datasets' plain
@@ -1830,7 +1808,7 @@ func loadPlanDatasets(ctx context.Context, tx pgx.Tx, orgID, integrationID, prov
 			return nil, false, nil, nil
 		}
 	} else {
-		requested = requestedDatasetKeys(provider, targets, sourceID)
+		requested = RequestedDatasetKeys(provider, targets, sourceID)
 		if provider == "github" || provider == "gitlab" {
 			securityRequested = true
 			if requested != nil {
@@ -2138,6 +2116,12 @@ func persistDomainGraph(ctx context.Context, tx pgx.Tx, ids materializationIDs, 
 		completedAt = pointerTime(createdAt)
 		runError = &loaded.terminalReason
 		resultJSON = []byte(`{"error_category":"pagerduty_sync_disabled"}`)
+	} else if skipped := SkippedDatasetsResult(loaded.featureOffSkippedDatasetKeys); skipped != nil {
+		encoded, err := json.Marshal(map[string]any{"skipped_datasets": skipped})
+		if err != nil {
+			return fmt.Errorf("encode skipped datasets: %w", err)
+		}
+		resultJSON = encoded
 	}
 	triggeredByStamp := loaded.triggeredBy
 	if triggeredByStamp == "" {
@@ -2170,65 +2154,113 @@ ON CONFLICT (id) DO NOTHING`, ids.SyncRunID, loaded.input.OrgID, loaded.input.In
 	if org != loaded.input.OrgID || integration != loaded.input.IntegrationID || triggeredBy != triggeredByStamp || mode != loaded.input.Mode || status != expectedStatus || total != len(units) || completed != 0 || failed != 0 || !equalOptionalString(credential, loaded.credentialID) || !equalOptionalString(auth, loaded.authSource) || !equalOptionalString(fingerprint, loaded.credentialFingerprint) || persistedStartedAt != nil || !equalOptionalTime(persistedCompletedAt, completedAt) || !equalOptionalString(persistedError, runError) || !equalOptionalJSON(persistedResult, resultJSON) || !persistedCreatedAt.Equal(createdAt) {
 		return fmt.Errorf("%w: deterministic sync run identity maps to different state", ErrInvalidPlan)
 	}
-	type expectedUnit struct {
-		unit  PlannedUnit
-		flags map[string]bool
+	return persistPlannedUnits(ctx, tx, ids, units, createdAt, unitChunkSize)
+}
+
+// unitChunkSize is the most sync_run_units a statement batch, an executed-proof
+// array or a verify read holds. It matches the dispatch runtime's page size,
+// which this package cannot import: that package imports this one.
+const unitChunkSize = 500
+
+// unitStatementTx is the statement surface persistPlannedUnits uses; a pgx.Tx
+// satisfies it, and a test double counts what each statement holds.
+type unitStatementTx interface {
+	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
+	Query(context.Context, string, ...any) (pgx.Rows, error)
+	QueryRow(context.Context, string, ...any) pgx.Row
+	SendBatch(context.Context, *pgx.Batch) pgx.BatchResults
+}
+
+type expectedPlannedUnit struct {
+	unit  PlannedUnit
+	flags map[string]bool
+}
+
+// persistPlannedUnits writes and verifies the run's units in chunks of
+// chunkSize inside the caller's transaction: no batch, array, expected map or
+// read of this function grows with the unit count (the planner's own unit slice
+// does). Every insert is ON CONFLICT DO NOTHING and the executed-proof ledger
+// insert is DISTINCT and ON CONFLICT DO NOTHING, so a replay and a split into
+// chunks leave the same rows as one batch would.
+func persistPlannedUnits(ctx context.Context, tx unitStatementTx, ids materializationIDs, units []PlannedUnit, createdAt time.Time, chunkSize int) error {
+	if chunkSize < 1 {
+		return fmt.Errorf("%w: unit chunk size %d", ErrInvalidPlan, chunkSize)
 	}
-	expectedUnits := make(map[string]expectedUnit, len(units))
-	batch := &pgx.Batch{}
-	for ordinal, unit := range units {
-		unitID, err := deterministicUnitID(ids.SyncRunID, ordinal)
-		if err != nil {
-			return err
-		}
-		flags, err := json.Marshal(unit.ProcessorFlags)
-		if err != nil {
-			return err
-		}
-		batch.Queue(`
+	for start := 0; start < len(units); start += chunkSize {
+		end := min(start+chunkSize, len(units))
+		chunk := units[start:end]
+		expectedUnits := make(map[string]expectedPlannedUnit, len(chunk))
+		unitIDs := make([]string, 0, len(chunk))
+		providers := make([]string, 0, len(chunk))
+		datasets := make([]string, 0, len(chunk))
+		batch := &pgx.Batch{}
+		for offset, unit := range chunk {
+			unitID, err := deterministicUnitID(ids.SyncRunID, start+offset)
+			if err != nil {
+				return err
+			}
+			flags, err := json.Marshal(unit.ProcessorFlags)
+			if err != nil {
+				return err
+			}
+			batch.Queue(`
 INSERT INTO public.sync_run_units
  (id,org_id,sync_run_id,integration_id,source_id,provider,dataset_key,cost_class,mode,since_at,before_at,status,attempts,processor_flags,created_at,updated_at)
 VALUES ($1::uuid,$2,$3::uuid,$4::uuid,$5::uuid,$6,$7,$8,$9,$10,$11,'planned',0,$12::jsonb,$13,$13)
 ON CONFLICT (id) DO NOTHING`, unitID, unit.OrgID, ids.SyncRunID, unit.IntegrationID, unit.SourceID, unit.Provider,
-			unit.Dataset, unit.CostClass, unit.Mode, unit.WindowStart, unit.WindowEnd, flags, createdAt)
-		expectedUnits[unitID] = expectedUnit{unit: unit, flags: unit.ProcessorFlags}
-	}
-	results := tx.SendBatch(ctx, batch)
-	for ordinal := range units {
-		if _, err := results.Exec(); err != nil {
-			_ = results.Close()
-			return fmt.Errorf("persist scheduled sync unit %d: %w", ordinal, err)
+				unit.Dataset, unit.CostClass, unit.Mode, unit.WindowStart, unit.WindowEnd, flags, createdAt)
+			expectedUnits[unitID] = expectedPlannedUnit{unit: unit, flags: unit.ProcessorFlags}
+			unitIDs = append(unitIDs, unitID)
+			providers = append(providers, unit.Provider)
+			datasets = append(datasets, unit.Dataset)
+		}
+		results := tx.SendBatch(ctx, batch)
+		for offset := range chunk {
+			if _, err := results.Exec(); err != nil {
+				_ = results.Close()
+				return fmt.Errorf("persist scheduled sync unit %d: %w", start+offset, err)
+			}
+		}
+		if err := results.Close(); err != nil {
+			return fmt.Errorf("finish scheduled sync unit batch: %w", err)
+		}
+		// Every pair this plan just minted a row for is ATTEMPTED
+		// from this instant, and the durable ledger has to say so in the SAME
+		// transaction the rows commit in. "Attempted" is a statement about row
+		// existence, not about terminalization -- the evidence query it replaces
+		// had no WHERE clause at all -- so recording it any later would leave a
+		// window where the gate reads a freshly-planned pair as never-attempted
+		// and bootstraps it through. That is the fail-OPEN direction, which is
+		// the one direction this gate must never take.
+		if err := providersync.RecordExecutedProofAttempted(
+			ctx, tx, providers, datasets, createdAt,
+		); err != nil {
+			return fmt.Errorf("record scheduled sync unit executed-proof attempts: %w", err)
+		}
+		if err := verifyPlannedUnitChunk(ctx, tx, ids, unitIDs, expectedUnits, createdAt); err != nil {
+			return err
 		}
 	}
-	if err := results.Close(); err != nil {
-		return fmt.Errorf("finish scheduled sync unit batch: %w", err)
+	var persisted int
+	if err := tx.QueryRow(ctx, `SELECT count(*) FROM public.sync_run_units WHERE sync_run_id=$1::uuid`, ids.SyncRunID).Scan(&persisted); err != nil {
+		return fmt.Errorf("count scheduled sync units: %w", err)
 	}
-	// CHAOS-4114: every pair this plan just minted a row for is ATTEMPTED
-	// from this instant, and the durable ledger has to say so in the SAME
-	// transaction the rows commit in. "Attempted" is a statement about row
-	// existence, not about terminalization -- the evidence query it replaces
-	// had no WHERE clause at all -- so recording it any later would leave a
-	// window where the gate reads a freshly-planned pair as never-attempted
-	// and bootstraps it through. That is the fail-OPEN direction, which is
-	// the one direction this gate must never take.
-	providers := make([]string, 0, len(units))
-	datasets := make([]string, 0, len(units))
-	for _, unit := range units {
-		providers = append(providers, unit.Provider)
-		datasets = append(datasets, unit.Dataset)
+	if persisted != len(units) {
+		return fmt.Errorf("%w: deterministic sync run has %d units, expected %d", ErrInvalidPlan, persisted, len(units))
 	}
-	if err := providersync.RecordExecutedProofAttempted(
-		ctx, tx, providers, datasets, createdAt,
-	); err != nil {
-		return fmt.Errorf("record scheduled sync unit executed-proof attempts: %w", err)
-	}
+	return nil
+}
+
+// verifyPlannedUnitChunk reads back the chunk's own rows (at most chunkSize, by
+// id) and requires every one to hold exactly the state this plan wrote.
+func verifyPlannedUnitChunk(ctx context.Context, tx unitStatementTx, ids materializationIDs, unitIDs []string, expectedUnits map[string]expectedPlannedUnit, createdAt time.Time) error {
 	rows, err := tx.Query(ctx, `
 SELECT id::text,org_id,sync_run_id::text,integration_id::text,source_id::text,provider,dataset_key,
        cost_class,mode,since_at,before_at,status,attempts,available_at,rate_limit_deferrals,
        rate_limit_first_seen_at,expired_lease_retry_count,last_retry_reason,retry_exhausted_at,
        duration_seconds,error,result::jsonb,processor_flags::jsonb,lease_owner,lease_expires_at,
        last_heartbeat_at,created_at,updated_at
-FROM public.sync_run_units WHERE sync_run_id=$1::uuid`, ids.SyncRunID)
+FROM public.sync_run_units WHERE sync_run_id=$1::uuid AND id=ANY($2::uuid[])`, ids.SyncRunID, unitIDs)
 	if err != nil {
 		return fmt.Errorf("verify scheduled sync units: %w", err)
 	}
@@ -2269,8 +2301,8 @@ FROM public.sync_run_units WHERE sync_run_id=$1::uuid`, ids.SyncRunID)
 	if err := rows.Err(); err != nil {
 		return err
 	}
-	if seen != len(units) {
-		return fmt.Errorf("%w: deterministic sync run has %d units, expected %d", ErrInvalidPlan, seen, len(units))
+	if seen != len(unitIDs) {
+		return fmt.Errorf("%w: deterministic sync run holds %d of %d units of a chunk", ErrInvalidPlan, seen, len(unitIDs))
 	}
 	return nil
 }

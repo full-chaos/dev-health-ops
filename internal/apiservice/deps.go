@@ -5,6 +5,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/oauthprovider"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
+	"github.com/full-chaos/dev-health-ops/internal/auth/accessverify"
 	envsecrets "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"net/http"
 
@@ -101,6 +102,10 @@ type Deps struct {
 	// LegacyIngestMetrics counts the legacy ingest routes' credential
 	// refusals (registered on the operator metrics endpoint by configure).
 	LegacyIngestMetrics *legacyingest.Metrics
+	// LegacyIngestEnabled mounts the legacy ingest routes (default off);
+	// LegacyIngestOptions hardens them. buildDeps sets both.
+	LegacyIngestEnabled bool
+	LegacyIngestOptions legacyingest.Options
 	// Pool is nil when API_DATABASE_URI is not configured (the CHAOS-6269
 	// bootstrap has not run yet in this environment). A route needing it
 	// answers CodeInternal rather than dereferencing a nil pool; the
@@ -123,6 +128,9 @@ type Deps struct {
 	// and verify with them.
 	Verifier *edgetoken.Verifier
 	Signer   *edgetoken.Signer
+	// AccessVerify is the profile-routed access-token validator; nil when
+	// AUTH_ACCESS_TOKEN_ISSUER is unset. When set, Auth routes through it.
+	AccessVerify *accessverify.Validator
 	// SessionOAuth is the social-login profile client; nil means the
 	// providers' real endpoints. A venue test points it at a fake provider.
 	SessionOAuth *oauthprovider.Client
@@ -130,8 +138,8 @@ type Deps struct {
 	Probes ProbeConfig
 	// Telemetry is the telemetry areas' configuration.
 	Telemetry TelemetryConfig
-	// Producer publishes to the job outbox (webhookintake's GitHub/GitLab/
-	// Jira durable deliveries -- jobcontract.KindWebhookDelivery). Nil under
+	// Producer publishes to the job outbox (webhookintake's GitHub and
+	// PagerDuty durable deliveries -- jobcontract.KindWebhookDelivery). Nil under
 	// the same "not configured yet" rule as Pool.
 	Producer *joboutbox.Producer
 	// Decryptor decrypts pagerduty_webhook_bindings.signing_secret_encrypted
@@ -194,6 +202,9 @@ type Deps struct {
 	// auth-service when it owns sessions (AUTH_PROXY_SESSIONS); nil mints
 	// them in go-api.
 	SessionIssuer sessionissue.Issuer
+	// UsersOwned is AUTH_USERS_OWNED: auth-service owns users, so the go-api
+	// routes and verbs that write public.users refuse.
+	UsersOwned bool
 	// Limits is the rate-limit store every limited route counts through
 	// (see limitStore); nil means the Valkey-backed store when Valkey is
 	// configured, else an in-process one.
@@ -320,6 +331,12 @@ func buildDeps(
 	// development, else every limit is per replica. A process with no
 	// database configured (the pre-bootstrap shape) serves none of them and
 	// still starts.
+	legacyEnabled, legacyOptions, legacyReason, legacyErr := checkLegacyIngest(envsecrets.ProcessLookup)
+	if legacyErr != nil {
+		return Deps{}, nil, dependencyFailure(ctx, logger, "legacy_ingest", legacyReason, legacyErr)
+	}
+	deps.LegacyIngestEnabled, deps.LegacyIngestOptions = legacyEnabled, legacyOptions
+
 	if cfg.APIDatabaseURI.Configured() && !cfg.ValkeyURI.Configured() && !developmentEnvironment(envsecrets.ProcessLookup) {
 		return Deps{}, nil, dependencyFailure(ctx, logger, "api_rate_limiter", "api_rate_limiter_shared_store_required", errSharedLimiterRequired)
 	}
@@ -367,6 +384,8 @@ func buildDeps(
 			if err != nil {
 				return Deps{}, nil, dependencyFailure(ctx, logger, "webhook_secret_decryptor", "api_secret_decryptor_failed", fmt.Errorf("build webhook intake secret decryptor: %w", err))
 			}
+			// One round trip derives the settings key now, so no request does.
+			_, _ = decryptor.Encrypt([]byte("warm"))
 			deps.Decryptor = decryptor
 		}
 	}

@@ -435,6 +435,10 @@ type DiffOptions struct {
 	// NormalizePython runs on the Python body only, after OnOrglessRefused, for a value a declared divergence shifts
 	// on the Python plane alone (a counter a Python-only side effect advanced).
 	NormalizePython func(request Request, body string) string
+	// LoginNoStore declares the ACP target's one non-admin no-store divergence (acp decision log 2026-10-25 08:1xZ
+	// "10410 login no-store"): POST /api/v1/auth/login answers Cache-Control: no-store and Pragma: no-cache, which the
+	// go-api goldens never carried (intendedNoStore). Only the external ACP leg that forwards local login sets it.
+	LoginNoStore bool
 	// orglessHeaderNames is set by Diff: every header name any Python answer of the run carries. A refusal's headers
 	// must come from it (or be a Volatile header or content-length); nil refuses the rule, so a direct Compare call
 	// cannot skip headers without it.
@@ -609,8 +613,8 @@ func Compare(request Request, python, goResponse Response, options DiffOptions) 
 		// middleware that adds the security headers, so no header is compared.
 		return true, nil, py, gr
 	}
-	if intendedNoStore(request, py, gr) {
-		skip = withSkipped(skip, "cache-control")
+	for _, header := range intendedNoStore(request, py, gr, options) {
+		skip = withSkipped(skip, header)
 	}
 	if intendedOrglessRefusal(request, python, goResponse, options) {
 		return true, nil, py, gr
@@ -635,20 +639,38 @@ func Compare(request Request, python, goResponse Response, options DiffOptions) 
 // (httpapi.AdminRoutes), only when the golden has no cache-control, and only for
 // exactly "no-store"; any other Go value, a golden that has the header, or a
 // path no package mounts under the prefix still compares.
+// One more declared divergence rides on it: the ACP target's POST /api/v1/auth/login (DiffOptions.LoginNoStore).
 // adminNoStore is the serving router's own no-store decision, unbound: the
 // same decode, strict-path and mux-pattern steps as the api service.
 var adminNoStore = httpapi.NewNoStoreRoutes(httpapi.AdminRoutes)
 
-func intendedNoStore(request Request, py, gr Response) bool {
+func intendedNoStore(request Request, py, gr Response, options DiffOptions) []string {
+	if options.LoginNoStore && request.Method == http.MethodPost && request.Path == acpLoginPath {
+		// The ACP target's sign-in answer (acp decision log 2026-10-25 08:1xZ "10410 login no-store"): exactly these two
+		// headers with exactly these values, and a golden that carries neither. Any other header, value, method or
+		// route compares.
+		_, hasCacheControl := py.Headers["cache-control"]
+		_, hasPragma := py.Headers["pragma"]
+		if !hasCacheControl && !hasPragma && gr.Headers["cache-control"] == "no-store" && gr.Headers["pragma"] == "no-cache" {
+			return []string{"cache-control", "pragma"}
+		}
+		return nil
+	}
 	target, err := url.ParseRequestURI(request.Path)
 	if err != nil || !adminNoStore.Matches(&http.Request{Method: request.Method, URL: target}) {
-		return false
+		return nil
 	}
 	if _, has := py.Headers["cache-control"]; has {
-		return false
+		return nil
 	}
-	return gr.Headers["cache-control"] == "no-store"
+	if gr.Headers["cache-control"] != "no-store" {
+		return nil
+	}
+	return []string{"cache-control"}
 }
+
+// acpLoginPath is the one route whose answer carries LoginNoStore's headers.
+const acpLoginPath = "/api/v1/auth/login"
 
 // intendedAllowWidening is the declared divergence "admin 405 Allow lists every served method" (chris, CHAOS-10555,
 // RFC 9110 10.2.1): Starlette named only the first matching route's methods, which the frozen goldens carry; Go lists

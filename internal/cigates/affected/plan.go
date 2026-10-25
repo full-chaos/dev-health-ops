@@ -20,6 +20,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -29,7 +30,7 @@ var (
 	sharedFiles    = map[string]bool{"go.mod": true, "go.sum": true, "go.work": true, "go.work.sum": true}
 	// Pure distribution tables: they move packages between CI shards and change no test, so a change to one is not a shared
 	// change. The set is exact (a new ci/ file is FULL) and is matched against the path as written, never a cleaned one.
-	bookkeepingFiles = map[string]bool{"ci/go_test_weights.tsv": true, "ci/go_providersync_race_weights.tsv": true}
+	bookkeepingFiles = map[string]bool{"ci/go_test_weights.tsv": true, "ci/go_providersync_race_weights.tsv": true, "ci/go_providersync_test_weights.tsv": true}
 	bookkeepingDirs  = []string{"ci/go_race_weights.d/", "ci/venue_oracle_weights.d/"}
 	// The planner's code and data, and the workflow steps that build and run it: a change here can steer the verdict of
 	// this very change set, so it is FULL. Test files (outside testdata) are not inputs.
@@ -177,8 +178,13 @@ type planInput struct {
 	tables      *tables                  // the read tables; nil plans every non-Go path FULL
 	guard       []string                 // defects of the read tables against the code (plan-reads): any one plans FULL
 	guardFn     func() ([]string, error) // computes guard when the verdict reaches it; nil keeps guard
-	symlinks    []string                 // repository paths tracked symlinks point at
-	log         io.Writer                // one line per selected package and why; nil discards
+	// mdBounded: a pull request whose every changed path is a Markdown file outside testdata and no go:embed target
+	// plans its bounded readers: reads.tsv readers by the exact paths their code names (markdownOnly, boundedReads), walks
+	// and edges that cover the files, and the unbounded sites with Markdown evidence (a walk gate, patterns.tsv)
+	mdBounded bool
+	scanned   *[]Read   // the reads of the code the guard scanned; nil when no scan ran
+	symlinks  []string  // repository paths tracked symlinks point at
+	log       io.Writer // one line per selected package and why; nil discards
 }
 
 func hasAnyPrefix(p string, prefixes []string) bool {
@@ -267,6 +273,7 @@ func plan(in planInput) (Verdict, error) {
 	}
 	t := in.tables
 	sel := &selection{changed: map[string]string{}, direct: map[string]string{}}
+	mdOnly := in.mdBounded && in.event == "pull_request" && markdownOnly(in.changed, packages)
 	var goPaths, nonGo []string
 	for _, raw := range in.changed {
 		p := path.Clean(raw)
@@ -315,7 +322,7 @@ func plan(in planInput) (Verdict, error) {
 		}
 		nonGo = append(nonGo, p)
 		for _, r := range t.reads {
-			if classes[r.class] {
+			if classes[r.class] && !mdOnly {
 				sel.reader(importPath(r.pkg), r.scope == scopeTest, "reads.tsv "+r.pkg+" "+r.scope+" "+r.class+" ("+p+")")
 			}
 		}
@@ -345,10 +352,25 @@ func plan(in planInput) (Verdict, error) {
 	if t == nil {
 		t = &tables{}
 	}
+	if mdOnly {
+		var scanned []Read
+		if in.scanned != nil {
+			scanned = *in.scanned
+		}
+		boundedReads(t, scanned, nonGo, sel, importPath)
+	}
 	changedPaths := append(append([]string{}, goPaths...), nonGo...)
 	// A code-scope site the tool cannot bound runs only in the programs that reach it (reach.tsv): their packages are
 	// selected (and every key that runs one). A site reach.tsv does not place selects its reverse import closure.
+	// A Markdown-only pull request drops the unbounded sites (the merge queue runs the full plan) but keeps those
+	// with positive Markdown evidence: a walk whose gate passes a changed file, a pattern that matches one (patterns.tsv).
+	var unboundedAll func(r siteRow, why string)
 	unbounded := func(r siteRow, why string) {
+		if !mdOnly {
+			unboundedAll(r, why)
+		}
+	}
+	unboundedAll = func(r siteRow, why string) {
 		if r.test() {
 			sel.only(importPath(r.pkg), why)
 			return
@@ -366,6 +388,15 @@ func plan(in planInput) (Verdict, error) {
 	}
 	for _, w := range t.walks {
 		if w.root == unexpressed {
+			if mdOnly && w.filter != "-" && w.filter != "*" {
+				for _, p := range changedPaths {
+					if filterPasses(w.filter, p) {
+						unboundedAll(w.siteRow, "walks.tsv "+w.pkg+" "+w.site+" walks an unbounded root for "+w.filter+" ("+p+")")
+						break
+					}
+				}
+				continue
+			}
 			unbounded(w.siteRow, "walks.tsv "+w.pkg+" "+w.site+" walks an unbounded root")
 			continue
 		}
@@ -395,7 +426,8 @@ func plan(in planInput) (Verdict, error) {
 		if len(pkgs) == 0 {
 			if e.target == unexpressed {
 				unbounded(e.siteRow, "edges.tsv "+e.pkg+" "+e.site+" runs "+e.target)
-			} else {
+			} else if !mdOnly {
+				// it runs Go packages outside the listed module (a fixture module)
 				sel.reader(importPath(e.pkg), e.test(), "edges.tsv "+e.pkg+" "+e.site+" runs "+e.target)
 			}
 			continue
@@ -405,6 +437,16 @@ func plan(in planInput) (Verdict, error) {
 	// An unbounded read may name a changed Go file as well as a data file: every change set selects its readers.
 	for _, d := range t.dynReads {
 		unbounded(d, "dynreads.tsv "+d.pkg+" "+d.site+" reads an unbounded path")
+	}
+	if mdOnly {
+		for _, pr := range t.patterns {
+			for _, p := range nonGo {
+				if patternMatches(pr.pattern, p) {
+					unboundedAll(pr.siteRow, "patterns.tsv "+pr.pkg+" "+pr.site+" reads "+pr.pattern+" ("+p+")")
+					break
+				}
+			}
+		}
 	}
 	always := map[string]bool{}
 	for _, k := range in.always {
@@ -487,6 +529,58 @@ func plan(in planInput) (Verdict, error) {
 	return Verdict{Kind: "AFFECTED", Keys: affected}, nil
 }
 
+// markdownOnly reports whether every changed path is a Markdown file (.md) with no testdata segment that no package
+// embeds (go:embed of a package, its tests or its external tests).
+func markdownOnly(changed []string, packages map[string]goListEntry) bool {
+	embedded := map[string]bool{}
+	for dir, e := range packages {
+		for _, list := range [][]string{e.EmbedFiles, e.TestEmbedFiles, e.XTestEmbedFiles} {
+			for _, f := range list {
+				embedded[path.Join(dir, f)] = true
+			}
+		}
+	}
+	for _, raw := range changed {
+		p := path.Clean(raw)
+		if p != raw || !strings.HasSuffix(p, ".md") || embedded[p] || slices.Contains(strings.Split(p, "/"), "testdata") {
+			return false
+		}
+	}
+	return len(changed) > 0
+}
+
+// boundedReads selects the reads.tsv readers of the changed Markdown files by the exact paths the scan found their
+// code naming: a reader whose named path is the file or a directory above it. A reads.tsv row whose package names no
+// path of that class in the scan (a read the scan does not see, such as one through another package's helper) still
+// selects, as in every other plan.
+func boundedReads(t *tables, scanned []Read, changed []string, sel *selection, importPath func(string) string) {
+	for _, p := range changed {
+		classes, _ := t.classesOf(p)
+		for _, r := range t.reads {
+			if !classes[r.class] {
+				continue
+			}
+			named, hit, code := false, "", false
+			for _, x := range scanned {
+				if x.Kind != ReadPath || x.Package != r.pkg || !t.covers(x.Path, map[string]string{r.class: r.scope}) {
+					continue
+				}
+				named = true
+				if x.Path == p || strings.HasPrefix(p, x.Path+"/") {
+					hit = x.Path
+					code = code || !x.Test
+				}
+			}
+			switch {
+			case !named:
+				sel.reader(importPath(r.pkg), r.scope == scopeTest, "reads.tsv "+r.pkg+" "+r.scope+" "+r.class+" names no exact path ("+p+")")
+			case hit != "":
+				sel.reader(importPath(r.pkg), !code, "reads.tsv "+r.pkg+" "+r.scope+" "+r.class+" names "+hit+" ("+p+")")
+			}
+		}
+	}
+}
+
 // PlanVerdict prints the plan verdict of a change set: NONE, `AFFECTED <n>` and one key per line, or `FULL <reason>`.
 // It returns the exit code: 0 with a verdict, 1 on a read, table or event error, 2 on a usage error.
 func PlanVerdict(args []string, stdout, stderr io.Writer) int {
@@ -499,6 +593,7 @@ func PlanVerdict(args []string, stdout, stderr io.Writer) int {
 	root := fs.String("root", "", "repository root (the head tree: its Go sources are scanned for reads)")
 	fs.String("base", "", "base sha of the change set (kept for the callers; the verdict reads no file at the base)")
 	goFilesFull := fs.Bool("go-files-full", false, "a change set with any .go file is FULL (the go-quality legs then run no package subset)")
+	mdBounded := fs.Bool("md-bounded", false, "a pull_request whose every changed path is a Markdown file (no testdata, no go:embed target) plans only the bounded readers of those files and the unbounded sites with Markdown evidence")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -532,7 +627,7 @@ func PlanVerdict(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	in := planInput{event: *event, changed: changed, golist: golist, keys: keys, root: *root, goFilesFull: *goFilesFull,
-		always: alwaysList(), log: stderr}
+		always: alwaysList(), log: stderr, mdBounded: *mdBounded}
 	// A root that does not exist (a synthetic go list) has no code to scan: no tables, so every non-Go path is FULL and
 	// a .go plan is the import closure and always.tsv.
 	if _, statErr := os.Stat(*root); judgedEvents[*event] && len(changed) > 0 && statErr == nil {
@@ -545,11 +640,14 @@ func PlanVerdict(args []string, stdout, stderr io.Writer) int {
 			return 1
 		}
 		// The scan is the cost of the call (parsing every Go source): it runs only for a verdict that reaches the guard.
+		var scanned []Read
+		in.scanned = &scanned
 		in.tables, in.guardFn = tb, func() ([]string, error) {
 			reads, err := ScanReads(*root)
 			if err != nil {
 				return nil, fmt.Errorf("scan the Go sources for reads: %w", err)
 			}
+			scanned = reads
 			return checkReads(*root, tb, reads).defects, nil
 		}
 		if in.symlinks, err = symlinkTargets(*root); err != nil {

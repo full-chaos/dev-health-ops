@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
@@ -33,7 +34,21 @@ type Metrics struct {
 	mu       sync.Mutex
 	rejected map[string]uint64
 	requests map[requestSeries]uint64
+	accepted map[string]uint64
 }
+
+// acceptedName is the series of the acceptance counter: one count per request
+// whose credentials were accepted, by the mechanism that accepted it.
+const acceptedName = "devhealth_ingest_legacy_accepted_total"
+
+// The mechanisms are the closed vocabulary of the acceptance counter. A request
+// that passes both configured checks counts once, as hmac.
+const (
+	mechanismAPIKey = "api_key"
+	mechanismHMAC   = "hmac"
+)
+
+var acceptanceMechanisms = []string{mechanismAPIKey, mechanismHMAC}
 
 // requestsName is the series of the per-route, per-credential-class counter
 // that shows whether any caller still uses the routes.
@@ -65,7 +80,20 @@ func NewMetrics() *Metrics {
 			}
 		}
 	}
-	return &Metrics{rejected: counts, requests: requests}
+	accepted := make(map[string]uint64, len(acceptanceMechanisms))
+	for _, mechanism := range acceptanceMechanisms {
+		accepted[mechanism] = 0
+	}
+	return &Metrics{rejected: counts, requests: requests, accepted: accepted}
+}
+
+func (m *Metrics) countAccepted(mechanism string) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.accepted[mechanism]++
 }
 
 func (m *Metrics) countRequest(route, keyClass, outcome string) {
@@ -102,6 +130,10 @@ func (m *Metrics) WritePrometheus(writer io.Writer) error {
 		requests = append(requests, series)
 		requestCounts[series] = value
 	}
+	acceptedCounts := make(map[string]uint64, len(m.accepted))
+	for mechanism, value := range m.accepted {
+		acceptedCounts[mechanism] = value
+	}
 	m.mu.Unlock()
 	if _, err := io.WriteString(writer, "# HELP "+authRejectedName+
 		" Legacy /api/v1/ingest/* requests refused for their credentials, by reason.\n# TYPE "+authRejectedName+" counter\n"); err != nil {
@@ -133,6 +165,15 @@ func (m *Metrics) WritePrometheus(writer io.Writer) error {
 	}
 	for _, series := range requests {
 		if _, err := fmt.Fprintf(writer, "%s{route=%q,key_class=%q,outcome=%q} %d\n", requestsName, series.route, series.keyClass, series.outcome, requestCounts[series]); err != nil {
+			return err
+		}
+	}
+	if _, err := io.WriteString(writer, "# HELP "+acceptedName+
+		" Legacy /api/v1/ingest/* requests whose credentials were accepted, by mechanism.\n# TYPE "+acceptedName+" counter\n"); err != nil {
+		return err
+	}
+	for _, mechanism := range acceptanceMechanisms {
+		if _, err := fmt.Fprintf(writer, "%s{mechanism=%q} %d\n", acceptedName, mechanism, acceptedCounts[mechanism]); err != nil {
 			return err
 		}
 	}
@@ -247,6 +288,13 @@ func (h handler) authenticate(w http.ResponseWriter, r *http.Request, raw []byte
 		outcome = "rejected"
 	}
 	h.metrics.countRequest(h.route.kind, class, outcome)
+	if ok {
+		mechanism := mechanismAPIKey
+		if secret != "" {
+			mechanism = mechanismHMAC
+		}
+		h.metrics.countAccepted(mechanism)
+	}
 	return ok
 }
 
@@ -264,6 +312,14 @@ func (h handler) checkCredentials(w http.ResponseWriter, r *http.Request, raw []
 		}
 	}
 	if secret != "" {
+		options := optionsFrom(r.Context())
+		if options.RequireSignatureTimestamp {
+			if !h.timestampedSignatureValid(r, raw, secret, options) {
+				h.reject(w, "invalid_signature", "Invalid signature")
+				return false
+			}
+			return true
+		}
 		signature := r.Header.Get("X-Signature-256")
 		valid := false
 		if strings.HasPrefix(signature, "sha256=") {
@@ -285,4 +341,29 @@ func (h handler) checkCredentials(w http.ResponseWriter, r *http.Request, raw []
 		}
 	}
 	return true
+}
+
+// timestampedSignatureValid checks X-Signature-256 as the HMAC-SHA256 of
+// timestamp + "." + body, with the timestamp inside the window.
+func (h handler) timestampedSignatureValid(r *http.Request, raw []byte, secret string, options Options) bool {
+	now := time.Now
+	if options.Now != nil {
+		now = options.Now
+	}
+	timestamp := r.Header.Get(SignatureTimestampHeader)
+	if !signedTimestamp(timestamp, now()) {
+		return false
+	}
+	signature := r.Header.Get("X-Signature-256")
+	if !strings.HasPrefix(signature, "sha256=") {
+		return false
+	}
+	presented, err := hex.DecodeString(signature[len("sha256="):])
+	if err != nil {
+		return false
+	}
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte(timestamp + "."))
+	mac.Write(raw)
+	return hmac.Equal(mac.Sum(nil), presented)
 }

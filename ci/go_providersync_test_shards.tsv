@@ -7,9 +7,11 @@
 # source files through `go list`, and applies these relative weights before
 # deterministic longest-processing-time-first assignment.
 #
-# These are intentionally relative source classes, not invented wall-clock
+# Since CHAOS-11105 the weights are 10 ms units: ordinary-test-weight 1 (10 ms) and integration-test-weight 200 (2 s) are
+# the defaults of an unlisted test, and ci/go_providersync_test_weights.tsv gives the measured seconds of the slow ones.
+# Older text: these are intentionally relative source classes, not invented wall-clock
 # seconds: integration-tagged tests dominate container-backed runtime, while
 # ordinary tests are retained in the exact-once partition at the base weight.
 shards	8
-integration-test-weight	100
+integration-test-weight	200
 ordinary-test-weight	1

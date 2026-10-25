@@ -13,7 +13,7 @@
       "alg": "EdDSA",
       "use": "sig",
       "kid": "auth-example-2026-04",
-      "x": "ThDGmJV4DBdBGPmGXaKqV05TQoYGFxliYJT8coUFaQQ"
+      "x": "J0t08k_5eSp96AajtcHf9zUs6EM48P6Pe1VWnAZY5Xk"
     }
   ],
   "decision_order": [
@@ -72,6 +72,15 @@
       "why": "two audiences: a workload token names exactly one service."
     },
     {
+      "file": "invalid-aud-query-api.json",
+      "now": 1760000300,
+      "verify_as_audience": "auth-service",
+      "expect": "reject",
+      "reason": "contract",
+      "contract_stage": "schema",
+      "why": "query-api is carried only by the effective principal envelope: not a workload audience."
+    },
+    {
       "file": "invalid-aud-unknown.json",
       "now": 1760000300,
       "verify_as_audience": "auth-service",
@@ -81,13 +90,12 @@
       "why": "an audience no workload token carries."
     },
     {
-      "file": "invalid-aud-user-api.json",
-      "now": 1760000300,
+      "file": "invalid-aud-wrong-service-api.json",
+      "now": 1760000100,
       "verify_as_audience": "auth-service",
       "expect": "reject",
-      "reason": "contract",
-      "contract_stage": "schema",
-      "why": "the user-token audience dev-health-api: not a workload audience."
+      "reason": "audience",
+      "why": "A valid dev-health-api workload token presented to auth-service: the audience is exactly one service."
     },
     {
       "file": "invalid-aud-wrong-service.json",
@@ -532,6 +540,13 @@
       "verify_as_audience": "auth-service",
       "expect": "accept",
       "why": "nbf later than iat: the clock equals nbf, so the token is valid."
+    },
+    {
+      "file": "valid-dev-health-api.json",
+      "now": 1760000100,
+      "verify_as_audience": "dev-health-api",
+      "expect": "accept",
+      "why": "The workload token for dev-health-api, typ workload+jwt, signed by the active key: a verifier that is dev-health-api accepts it."
     },
     {
       "file": "valid-last-second-before-exp.json",

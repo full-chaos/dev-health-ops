@@ -166,3 +166,35 @@ func TestWorkItemsUnitWindowDaysBound(t *testing.T) {
 		t.Fatalf("one-day window: days=%d error=%v", len(days), err)
 	}
 }
+
+// The window a backfill's last chunk had when the request ended at exactly UTC
+// midnight: since == before == D 00:00. It is refused as a malformed window,
+// with a sentinel of its own that the unit handler ends on the first attempt.
+func TestWorkItemsUnitWindowDaysRefusesAZeroWidthWindowAsMalformed(t *testing.T) {
+	normalizedAt := time.Date(2026, 10, 23, 12, 0, 0, 0, time.UTC)
+	midnight := time.Date(2026, 10, 8, 0, 0, 0, 0, time.UTC)
+	tooWideSince := midnight.AddDate(0, 0, -githubWorkItemDerivedMaxBackfillDays-1)
+	zero := time.Time{}
+	inverted := midnight.AddDate(0, 0, 2)
+	for _, test := range []struct {
+		name          string
+		since, before *time.Time
+	}{
+		{"zero width", &midnight, &midnight},
+		{"inverted", &inverted, &midnight},
+		{"over the bound", &tooWideSince, &midnight},
+		{"zero since", &zero, &midnight},
+		{"zero before", &midnight, &zero},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			days, err := WorkItemsUnitWindowDays(test.since, test.before, normalizedAt)
+			if !errors.Is(err, ErrInvalidUnitWindow) || !errors.Is(err, ErrInvalidConfiguration) || days != nil {
+				t.Fatalf("days=%v error=%v want ErrInvalidUnitWindow (also ErrInvalidConfiguration) and no days", days, err)
+			}
+		})
+	}
+	oneDay := midnight.AddDate(0, 0, 1)
+	if days, err := WorkItemsUnitWindowDays(&midnight, &oneDay, normalizedAt); err != nil || len(days) != 1 {
+		t.Fatalf("a window of exactly one day: days=%d error=%v want 1 day", len(days), err)
+	}
+}

@@ -381,9 +381,17 @@ func normalizeGitHubState(_ venueoracle.Request, body string) string {
 	return stateQuery.ReplaceAllString(body, "state=STATE")
 }
 
+// linkedElsewhereRequest is the request whose Python reference (409) the CHAOS-10928 ruling retired.
+const linkedElsewhereRequest = "callback: installation owned by another org"
+
+const linkedElsewhereRuling = "CHAOS-10928: an installation another organization holds is refused like one the installer cannot access; the frozen Python reference answers 409"
+
+// linkedElsewherePinSHA256 is the digest of testdata/venue/github-app-install.go-pin.json.
+const linkedElsewherePinSHA256 = "55febfa8006a231224657d496fb99cbb3f75c911e0227564aca40f3ad22a5bf6"
+
 // runGitHubAppVariant sets the process environment both planes read, starts
 // a Go api under it, and diffs the requests.
-func runGitHubAppVariant(t *testing.T, ctx context.Context, golden *venueoracle.Golden, venue *venueoracle.Venue, stub *githubStub, stubClient *http.Client, name string, env map[string]string, full bool, orgs [2]string) string {
+func runGitHubAppVariant(t *testing.T, ctx context.Context, golden *venueoracle.Golden, venue *venueoracle.Venue, stub *githubStub, stubClient *http.Client, name string, env map[string]string, full bool, orgs [2]string, pin *venueoracle.GoPin) string {
 	t.Helper()
 	for _, key := range []string{"GITHUB_APP_SLUG", "GITHUB_APP_ID", "GITHUB_APP_PRIVATE_KEY", "GITHUB_APP_PRIVATE_KEY_PATH", "GITHUB_APP_CLIENT_ID", "GITHUB_APP_CLIENT_SECRET", "GITHUB_APP_CALLBACK_URL"} {
 		t.Setenv(key, env[key])
@@ -401,7 +409,20 @@ func runGitHubAppVariant(t *testing.T, ctx context.Context, golden *venueoracle.
 	}()), full)
 	pythonResponses := golden.Python(t, venue, requests)
 	pythonSeen := strings.Split(golden.InspectRows(t, "python github requests: "+name), "\n")
-	receipt := venueoracle.Diff(t, base, requests, pythonResponses, venueoracle.DiffOptions{Golden: golden, Normalize: normalizeGitHubState})
+	options := venueoracle.DiffOptions{Golden: golden, Normalize: normalizeGitHubState}
+	answers := map[string]string{}
+	if pin != nil {
+		options.Retire = func(request venueoracle.Request) bool { return request.Name == linkedElsewhereRequest }
+		options.Pin = pin
+		options.Inspect = func(request venueoracle.Request, goResponse venueoracle.Response) {
+			answers[request.Name] = venueoracle.PinText(goResponse)
+		}
+	}
+	receipt := venueoracle.Diff(t, base, requests, pythonResponses, options)
+	if pin != nil && answers[linkedElsewhereRequest] != answers["callback: installation not accessible"] {
+		t.Errorf("%s: an installation linked elsewhere is not answered like one the installer cannot access:\n elsewhere %s\n inaccessible %s",
+			name, answers[linkedElsewhereRequest], answers["callback: installation not accessible"])
+	}
 	pythonShape := golden.InspectRows(t, "python minted state: "+name)
 	goMinted, err := (githubapp.Signer{Secret: venueKey, Issuer: "dev-health-ops", Audience: "dev-health-api"}).Mint(orgs[0], &returnTo, time.Now())
 	if err != nil {
@@ -463,8 +484,9 @@ func TestVenueOracleGitHubAppInstall(t *testing.T) {
 		"GITHUB_APP_CLIENT_ID": "Iv1.client", "GITHUB_APP_CLIENT_SECRET": "client-secret", "GITHUB_APP_CALLBACK_URL": "https://app.example.test/cb?x=1&y=é",
 	}
 	orgs := [2]string{seed.orgA.String(), seed.orgB.String()}
+	pin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/venue/github-app-install.go-pin.json", SHA256: linkedElsewherePinSHA256, Ruling: linkedElsewhereRuling})
 	var receipt strings.Builder
-	receipt.WriteString(runGitHubAppVariant(t, ctx, golden, venue, stub, stubClient, "configured", full, true, orgs))
+	receipt.WriteString(runGitHubAppVariant(t, ctx, golden, venue, stub, stubClient, "configured", full, true, orgs, pin))
 	compareGitHubAppRows(t, ctx, golden, venue, &receipt, generatedPEM)
 
 	noCallback := map[string]string{}
@@ -472,16 +494,17 @@ func TestVenueOracleGitHubAppInstall(t *testing.T) {
 		noCallback[key] = value
 	}
 	noCallback["GITHUB_APP_CALLBACK_URL"] = ""
-	receipt.WriteString(runGitHubAppVariant(t, ctx, golden, venue, stub, stubClient, "no callback URL", noCallback, false, orgs))
-	receipt.WriteString(runGitHubAppVariant(t, ctx, golden, venue, stub, stubClient, "nothing configured", map[string]string{}, false, orgs))
+	receipt.WriteString(runGitHubAppVariant(t, ctx, golden, venue, stub, stubClient, "no callback URL", noCallback, false, orgs, nil))
+	receipt.WriteString(runGitHubAppVariant(t, ctx, golden, venue, stub, stubClient, "nothing configured", map[string]string{}, false, orgs, nil))
 	receipt.WriteString(runGitHubAppVariant(t, ctx, golden, venue, stub, stubClient, "no OAuth client", map[string]string{
 		"GITHUB_APP_SLUG": "app", "GITHUB_APP_ID": "12345", "GITHUB_APP_PRIVATE_KEY": pemKey,
-	}, false, orgs))
+	}, false, orgs, nil))
 	receipt.WriteString(runGitHubAppVariant(t, ctx, golden, venue, stub, stubClient, "unreadable key file", map[string]string{
 		"GITHUB_APP_SLUG": "app", "GITHUB_APP_ID": "12345", "GITHUB_APP_PRIVATE_KEY_PATH": "/nonexistent/github-app.pem",
 		"GITHUB_APP_CLIENT_ID": "c", "GITHUB_APP_CLIENT_SECRET": "s",
-	}, false, orgs))
+	}, false, orgs, nil))
 	t.Logf("\n%s", receipt.String())
+	pin.Finish(t)
 	golden.Finish(t)
 }
 
@@ -665,7 +688,7 @@ func startGoServer(t *testing.T, ctx context.Context, venue *venueoracle.Venue, 
 		GitHubAppHTTPClient: client,
 	}, logger)
 	scope := policy.NewScope(auth, logger)
-	server, err := apiservice.NewServer(cfg, logger, routes, scope.OrgScope, scope.Impersonation)
+	server, err := apiservice.NewServer(cfg, logger, routes, scope.Layers()...)
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
 	}

@@ -5,7 +5,10 @@ import (
 	"context"
 	"testing"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/full-chaos/dev-health-ops/internal/cli"
+	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
 
 func TestCommandTreeIsValid(t *testing.T) {
@@ -83,5 +86,45 @@ func TestReconcileVerbWithoutADatabaseFailsWithoutRunning(t *testing.T) {
 		Lookup: func(string) (string, bool) { return "", false }, Stdout: &stdout, Stderr: &stderr})
 	if code != cli.ExitFailure || !bytes.Contains(stderr.Bytes(), []byte("AUTH_DATABASE_URI")) || stdout.Len() != 0 {
 		t.Fatalf("exit %d, stderr %q, stdout %q", code, stderr.String(), stdout.String())
+	}
+}
+
+func TestVerbRefusesWhileTheUsersOwnedSwitchIsOn(t *testing.T) {
+	var stderr bytes.Buffer
+	lookup := func(k string) (string, bool) {
+		if k == "AUTH_USERS_OWNED" {
+			return "true", true
+		}
+		return "", false
+	}
+	code := Command().Children[0].Run(context.Background(), cli.Env{Args: []string{"-dry-run"}, Lookup: lookup, Stdout: &bytes.Buffer{}, Stderr: &stderr})
+	if code != cli.ExitRefused || !bytes.Contains(stderr.Bytes(), []byte("refused")) {
+		t.Fatalf("exit %d, stderr %q", code, stderr.String())
+	}
+	lookup = func(k string) (string, bool) {
+		if k == "AUTH_USERS_OWNED" {
+			return "maybe", true
+		}
+		return "", false
+	}
+	if code := Command().Children[0].Run(context.Background(), cli.Env{Args: []string{"-dry-run"}, Lookup: lookup, Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}}); code != cli.ExitFailure {
+		t.Fatalf("a malformed switch must fail, exit %d", code)
+	}
+}
+
+func TestUsersVerbRefusesBeforeConnectOnRealAndDryRun(t *testing.T) {
+	orig := connectFn
+	connectFn = func(context.Context, cli.Env, string) (*pgxpool.Pool, authschema.ValidatedIdentifier, int) {
+		t.Fatal("connect was reached: the ownership gate must refuse before any database access")
+		return nil, authschema.ValidatedIdentifier{}, cli.ExitFailure
+	}
+	t.Cleanup(func() { connectFn = orig })
+	lookup := func(k string) (string, bool) { return "true", k == "AUTH_USERS_OWNED" }
+	for _, args := range [][]string{nil, {"-dry-run"}} {
+		var stderr bytes.Buffer
+		code := Command().Children[0].Run(context.Background(), cli.Env{Args: args, Lookup: lookup, Stdout: &bytes.Buffer{}, Stderr: &stderr})
+		if code != cli.ExitRefused || !bytes.Contains(stderr.Bytes(), []byte("AUTH_USERS_OWNED")) {
+			t.Fatalf("args %v: exit %d, stderr %q", args, code, stderr.String())
+		}
 	}
 }

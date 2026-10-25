@@ -32,7 +32,13 @@
 # main, merge group, schedule or manual run, and any failure of the plan: every package
 # runs. A non-Go path in a declared class plans the packages that read it (AFFECTED) or
 # NONE when no package reads it; NONE skips the test and race legs, AFFECTED runs only its
-# packages. The static leg and the fan-in always run and report.
+# packages. The static leg and the fan-in always run and report. On a pull request the plan
+# also gets --md-bounded: a change of Markdown files only (no testdata, no go:embed target)
+# plans their bounded readers and the unbounded sites with Markdown evidence; a merge group
+# then runs the full plan before main. The plan
+# verdict is exact, so no docs-only rule overrides it: some docs files are Go test inputs. The race legs are
+# heavy: on a pull request without the ci:full label they report success without running
+# (they run in the merge queue and on the main push).
 name: Go quality
 
 on:
@@ -109,11 +115,16 @@ jobs:
             full "go list -test failed"
           else
             sed -e "s#^${modpath}/##" -e "s#^${modpath}\$#.#" "${RUNNER_TEMP}/packages.txt" > "${RUNNER_TEMP}/keys.txt"
+            # A pull request of Markdown files only plans their bounded readers; every other event keeps the full plan.
+            md=()
+            if [ "${EVENT_NAME}" = pull_request ]; then
+              md=(--md-bounded)
+            fi
             if ! mb="$(git merge-base "${BASE_SHA}" HEAD)" \
               || ! git worktree add --detach "${RUNNER_TEMP}/planbase" "${mb}" \
               || ! go -C "${RUNNER_TEMP}/planbase" build -trimpath -mod=readonly -o "${RUNNER_TEMP}/cigate-base" ./cmd/cigate; then
               full "could not build the planner at the merge base"
-            elif ! "${RUNNER_TEMP}/cigate-base" plan-verdict --event "${EVENT_NAME}" --go-files-full \
+            elif ! "${RUNNER_TEMP}/cigate-base" plan-verdict --event "${EVENT_NAME}" --go-files-full "${md[@]}" \
               --changed "${RUNNER_TEMP}/changed.txt" --golist "${RUNNER_TEMP}/golist.json" --keys "${RUNNER_TEMP}/keys.txt" \
               --root "${GITHUB_WORKSPACE}" --base "${BASE_SHA}" > "${out}"; then
               full "plan program failed"
@@ -146,22 +157,26 @@ jobs:
             args: test 2 3
           - name: test-3-of-3
             args: test 3 3
-          # CHAOS-8135: three race legs. Two legs held ~5k s of race CPU, two
+          # CHAOS-8135: race legs. Two legs held ~5k s of race CPU, two
           # 400-600 s packages per leg, and a leg's packages slow each other
           # (providersync 340-601 s, goapiproof 346-600 s): race-2 crossed the
-          # 600 s go test default. The legs are not required status contexts
-          # (the ruleset requires the `go-quality` aggregate), so the count can
-          # change without a ruleset edit.
-          - name: race-1-of-3
-            args: race 1 3
+          # 600 s go test default. CHAOS-10922: with three legs the slowest took 18-30 min of the 30 min job cap
+          # (one hit it the second its stage printed "race: OK"), so there are four. The legs are not required status
+          # contexts (the ruleset requires the `go-quality` aggregate), so the count can change without a ruleset edit.
+          - name: race-1-of-4
+            args: race 1 4
             heavy: true
             pool: true
-          - name: race-2-of-3
-            args: race 2 3
+          - name: race-2-of-4
+            args: race 2 4
             heavy: true
             pool: true
-          - name: race-3-of-3
-            args: race 3 3
+          - name: race-3-of-4
+            args: race 3 4
+            heavy: true
+            pool: true
+          - name: race-4-of-4
+            args: race 4 4
             heavy: true
             pool: true
     # Routed to the self-hosted ARC pool while GitHub-hosted dispatch is
@@ -213,16 +228,17 @@ jobs:
       - name: Decide whether this leg runs, and on which packages
         id: relevance
         env:
-          # CHAOS-9949: a heavy (race) leg of a draft PR without the ci:full label reports success without running, through the same
-          # relevant=false path as a NONE plan. It runs once the PR is ready for review.
-          DRAFT_SKIP: ${{ matrix.heavy && github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full') && 'true' || 'false' }}
+          # A heavy (race) leg runs in the merge queue, on a main push and on a pull request that carries ci:full; on any
+          # other pull request (drafts included, CHAOS-9949) it reports success without running, through the same
+          # relevant=false path as a NONE plan.
+          HEAVY_SKIP: ${{ matrix.heavy && github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'ci:full') && 'true' || 'false' }}
           LEG: ${{ matrix.name }}
           PLAN_VERDICT: ${{ needs.go-quality-plan.outputs.verdict }}
           PLAN_SELECTION: ${{ needs.go-quality-plan.outputs.selection }}
         run: |
           set -euo pipefail
-          if [ "${DRAFT_SKIP}" = "true" ]; then
-            echo "draft PR without the ci:full label: heavy leg skipped until the PR is ready for review"
+          if [ "${HEAVY_SKIP}" = "true" ]; then
+            echo "pull request without the ci:full label: this heavy leg runs in the merge queue, not here"
             printf 'relevant=false\n' >> "${GITHUB_OUTPUT}"
             exit 0
           fi
@@ -251,7 +267,7 @@ jobs:
       - name: Report that the gate was skipped, and why
         if: steps.relevance.outputs.relevant != 'true'
         run: |
-          echo "skipped: the go-quality-plan verdict is NONE (or this is a draft's heavy leg)."
+          echo "skipped: the go-quality-plan verdict is NONE (or this heavy leg runs in the merge queue, not on this pull request)."
           echo "The verdict comes from cmd/cigate plan-verdict. This job still REPORTS, so the"
           echo "required check is satisfied honestly rather than by a second workflow."
 
@@ -397,6 +413,7 @@ jobs:
         run: bash ci/check_go.sh ci-leg ${{ matrix.args }}
 
       - name: Upload the providersync race slice's go test -json (race legs)
+        continue-on-error: true
         # CHAOS-10498: check_go.sh writes the race leg's providersync slice as go test -json (go-test-json/providersync-race-<shard>.json);
         # uploaded after a failed leg too, so a timeout or a slow test can be read after the run.
         if: always() && steps.relevance.outputs.relevant == 'true' && startsWith(matrix.name, 'race-')
@@ -480,6 +497,16 @@ jobs:
         # rejected -- the second is what catches a linter that has silently
         # stopped linting, which otherwise reports exactly what a clean tree does.
         run: bash ci/check_shellcheck_pin.sh
+
+      - name: Test the session-issue Secret create script
+        if: steps.relevance.outputs.relevant == 'true' && matrix.name == 'static'
+        run: bash scripts/create-session-issue-secret_test.sh
+
+      - name: Test the auth key-set Secret script
+        if: steps.relevance.outputs.relevant == 'true' && matrix.name == 'static'
+        # A fake kubectl and no cluster: proves the script creates only, leaves no value
+        # file or output, and refuses names that are not one keySet entry of the values file.
+        run: bash scripts/create-auth-keyset-secrets_test.sh
 
       - name: Validate River compatibility harness
         if: steps.relevance.outputs.relevant == 'true' && matrix.name == 'static'

@@ -14,11 +14,10 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"time"
-
-	"golang.org/x/crypto/pbkdf2"
 )
 
 const (
@@ -49,6 +48,10 @@ type Cipher struct {
 	salt []byte
 }
 
+// A Cipher never prints: it holds the key and salt.
+func (Cipher) Format(state fmt.State, _ rune) { _, _ = state.Write([]byte("fernet.Cipher")) }
+func (Cipher) MarshalJSON() ([]byte, error)   { return []byte(`"fernet.Cipher"`), nil }
+
 // New binds the key; an empty salt is DefaultSalt. An empty key is ErrInvalid.
 func New(key, salt string) (Cipher, error) {
 	if key == "" {
@@ -57,7 +60,10 @@ func New(key, salt string) (Cipher, error) {
 	if salt == "" {
 		salt = DefaultSalt
 	}
-	return Cipher{key: []byte(key), salt: []byte(salt)}, nil
+	cipher := Cipher{key: []byte(key), salt: []byte(salt)}
+	// Derive now (once per key and salt): no later Open or Seal is the first.
+	_, _ = derivedKey(cipher.key, cipher.salt)
+	return cipher, nil
 }
 
 // Open decrypts a stored value: "v1:" + token (PBKDF2 key) or a bare token
@@ -67,7 +73,11 @@ func (c Cipher) Open(stored string) ([]byte, error) {
 		return nil, ErrInvalid
 	}
 	if strings.HasPrefix(stored, V1Prefix) {
-		return DecryptToken(strings.TrimPrefix(stored, V1Prefix), pbkdf2.Key(c.key, c.salt, pbkdf2Rounds, 32, sha256.New))
+		derived, err := derivedKey(c.key, c.salt)
+		if err != nil {
+			return nil, ErrInvalid
+		}
+		return DecryptToken(strings.TrimPrefix(stored, V1Prefix), derived)
 	}
 	if strings.HasPrefix(stored, "v") && strings.Contains(stored, ":") {
 		return nil, ErrInvalid
@@ -81,7 +91,11 @@ func (c Cipher) Seal(plaintext []byte, now time.Time, entropy io.Reader) (string
 	if len(c.key) == 0 {
 		return "", ErrInvalid
 	}
-	token, err := EncryptToken(plaintext, pbkdf2.Key(c.key, c.salt, pbkdf2Rounds, 32, sha256.New), now, entropy)
+	derived, err := derivedKey(c.key, c.salt)
+	if err != nil {
+		return "", ErrInvalid
+	}
+	token, err := EncryptToken(plaintext, derived, now, entropy)
 	if err != nil {
 		return "", err
 	}

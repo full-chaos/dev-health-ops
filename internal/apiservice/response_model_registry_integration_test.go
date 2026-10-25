@@ -107,7 +107,7 @@ func TestRouteResponseModelsMatchTheFrozenFastAPITable(t *testing.T) {
 	guard := &policy.Guard{}
 	// admin and teamsidentity mount only with a pool and a ClickHouse
 	// connection; their route lists do not need either to be built.
-	routes := Routes(Deps{Guard: guard}, logger)
+	routes := Routes(Deps{Guard: guard, LegacyIngestEnabled: true}, logger)
 	routes = append(routes, markResponseModels(admin.Routes(admin.Deps{Guard: guard, Logger: logger, Write: WriteError}))...)
 	routes = append(routes, markResponseModels(teamsidentity.Routes(nil, guard, logger, nil, nil))...)
 	// billing mounts only with a pool; its route list needs neither a pool

@@ -161,17 +161,18 @@ func fetchInvestmentFlowItems(ctx context.Context, client QueryClient, startTS, 
         ARRAY JOIN CAST(work_unit_investments.theme_distribution_json AS Array(Tuple(String, Float32))) AS theme_kv
         WHERE work_unit_investments.to_ts >= {start_ts:DateTime64(3, 'UTC')} AND work_unit_investments.to_ts < {end_ts:DateTime64(3, 'UTC')}
           AND work_unit_investments.org_id = {org_id:String}
+          AND %s
             %s
         GROUP BY source, target
         ORDER BY value DESC
-        LIMIT {limit:UInt64}
+        LIMIT {limit_n:UInt64}
         %s
-    `, effortShareSQL, analytics.LatestWorkUnitInvestmentsSource(), scopeFilterSQL, settingsMaxExecutionTime())
+    `, effortShareSQL, analytics.LatestWorkUnitInvestmentsSource(), analytics.CategorizedOnlySQL, scopeFilterSQL, settingsMaxExecutionTime())
 	bindings := append([]dhclickhouse.Binding{
 		{Name: "start_ts", Value: startTS},
 		{Name: "end_ts", Value: endTS},
 		{Name: "org_id", Value: orgID},
-		{Name: "limit", Value: limit},
+		{Name: "limit_n", Value: limit},
 	}, scopeBindings...)
 
 	rows, err := client.Query(ctx, query, bindings)
@@ -463,14 +464,14 @@ func fetchHotspotRows(ctx context.Context, client QueryClient, startDay, endDay 
             %[1]s
         GROUP BY repo, directory, file_path
         ORDER BY churn DESC
-        LIMIT {limit:UInt64}
+        LIMIT {limit_n:UInt64}
         %[2]s
     `, scopeFilterSQL, settingsMaxExecutionTime())
 	bindings := append([]dhclickhouse.Binding{
 		{Name: "start_day", Value: dateBindingValue(startDay)},
 		{Name: "end_day", Value: dateBindingValue(endDay)},
 		{Name: "org_id", Value: orgID},
-		{Name: "limit", Value: limit},
+		{Name: "limit_n", Value: limit},
 	}, scopeBindings...)
 
 	rows, err := client.Query(ctx, query, bindings)

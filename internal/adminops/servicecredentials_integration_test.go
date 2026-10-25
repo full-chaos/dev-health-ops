@@ -18,6 +18,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/admin"
 	"github.com/full-chaos/dev-health-ops/internal/cli"
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
@@ -359,7 +360,7 @@ func credStderr(code int, text string) string {
 	return "<no error line>"
 }
 
-func (db *database) credSession(t *testing.T, run func(*testing.T, *database, []string) (int, string, string)) ([]stepResult, map[int]map[string]bool) {
+func (db *database) credSession(t *testing.T, run func(*testing.T, *database, []string) (int, string, string), frozen []stepResult) ([]stepResult, map[int]map[string]bool) {
 	t.Helper()
 	db.credReset(t)
 	session := &credentialRun{tokens: map[string]string{}, full: map[string]string{}, expiry: map[string]expirySeen{}}
@@ -379,6 +380,9 @@ func (db *database) credSession(t *testing.T, run func(*testing.T, *database, []
 			args[i] = db.credResolve(t, arg)
 		}
 		code, stdout, stderr := run(t, db, args)
+		if retiredCredStep(s.args) && index < len(frozen) && frozen[index].Exit == 0 {
+			db.seedLegacyWorkerMint(t, session, index, args)
+		}
 		out = append(out, stepResult{Args: s.args, Exit: code, Stdout: maskStdout(session, index, stdout), Stderr: session.m.mask(stderr), State: session.m.mask(db.credState(t, session, start))})
 		if s.args[0] == "list" && code == 0 {
 			validity[index] = db.expectedValidity(t, &session.m, stdout, start)
@@ -458,12 +462,93 @@ func withoutIsValid(t *testing.T, steps []stepResult, validity map[int]map[strin
 	return out
 }
 
+// credentialRetiredRuling names why create and rotate for worker-operator are pinned to Go's own answer.
+const credentialRetiredRuling = "CHAOS-10044 D6129: create and rotate refuse the retired worker-operator service (stricter than Python)"
+
+// svcVerbsGoPinDigest is the sha256 of the go pin file.
+const svcVerbsGoPinDigest = "ac27dbc9ca5a9a6c8e66b6c530502ba725e662c11c7319f74c90f64c678ebfa1"
+
+// retiredCredStep is a create or rotate for worker-operator: Python minted a svc_worker_ token, Go refuses.
+func retiredCredStep(args []string) bool {
+	if len(args) == 0 || (args[0] != "create" && args[0] != "rotate") {
+		return false
+	}
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] == "--service" && args[i+1] == "worker-operator" {
+			return true
+		}
+	}
+	return false
+}
+
+// seedLegacyWorkerMint stores what Python's create or rotate left behind for a retired step, so the steps
+// that follow (list, revoke, rotate of a stored row) run against the same rows as the frozen session.
+func (db *database) seedLegacyWorkerMint(t *testing.T, run *credentialRun, index int, args []string) {
+	t.Helper()
+	seen := map[string]bool{}
+	var scopes []any
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] == "--expires-at" || args[i] == "--created-by-user-id" {
+			t.Fatalf("step %d: the legacy seed does not model %s", index, args[i])
+		}
+		if args[i] == "--scope" && !seen[args[i+1]] {
+			seen[args[i+1]] = true
+			scopes = append(scopes, args[i+1])
+		}
+	}
+	sort.Slice(scopes, func(i, j int) bool { return scopes[i].(string) < scopes[j].(string) })
+	encoded, err := pythonparity.MarshalPythonJSONSorted(scopes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if args[0] == "rotate" {
+		overlap := 0
+		for i := 0; i+1 < len(args); i++ {
+			if args[i] == "--overlap-seconds" {
+				fmt.Sscan(args[i+1], &overlap)
+			}
+		}
+		if _, err := db.conn.Exec(ctx, `UPDATE internal_service_credentials SET expires_at = now() + make_interval(secs => $2) WHERE id = $1::uuid`, args[1], overlap); err != nil {
+			t.Fatalf("step %d: %v", index, err)
+		}
+	}
+	// The first 16 characters name the step: a listed token_prefix is matched to a printed token by them.
+	token := "svc_worker_" + fmt.Sprintf("%05d%038d", index, index)
+	sum := sha256.Sum256([]byte(token))
+	key := hex.EncodeToString(sum[:])
+	run.tokens[key] = fmt.Sprintf("token of step %d", index)
+	run.full[key] = token
+	if _, err := db.conn.Exec(ctx, `INSERT INTO internal_service_credentials (id, service_name, token_hash, token_prefix, scopes, created_at)
+		VALUES (gen_random_uuid(), 'worker-operator', $1, $2, $3::json, now())`, key, token[:16], string(encoded)); err != nil {
+		t.Fatalf("step %d: %v", index, err)
+	}
+}
+
+// pinRetiredCredSteps checks the exit, stdout and stderr of every retired step against the Go pin and
+// makes them equal to the frozen answer, so compare still reads the rows of those steps.
+func pinRetiredCredSteps(t *testing.T, got, want []stepResult, pin *venueoracle.GoPin) []stepResult {
+	t.Helper()
+	out := make([]stepResult, len(want))
+	copy(out, want)
+	for index := range got {
+		if index >= len(want) || !retiredCredStep(got[index].Args) {
+			continue
+		}
+		pin.Check(t, fmt.Sprintf("step %02d exit", index), fmt.Sprint(got[index].Exit))
+		pin.Check(t, fmt.Sprintf("step %02d stdout", index), got[index].Stdout)
+		pin.Check(t, fmt.Sprintf("step %02d stderr", index), got[index].Stderr)
+		out[index].Exit, out[index].Stdout, out[index].Stderr = got[index].Exit, got[index].Stdout, got[index].Stderr
+	}
+	return out
+}
+
 func compareCredentials(t *testing.T, got, want []stepResult, validity map[int]map[string]bool, wantName string) {
 	t.Helper()
 	if wantName == "frozen Python" {
 		got = withoutIsValid(t, got, validity)
 	}
-	compare(t, got, want, wantName)
+	compare(t, got, want, wantName, nil, nil)
 	for index := range got {
 		if index < len(want) && got[index].Stderr != want[index].Stderr {
 			t.Errorf("step %d (%s): stderr %q, %s stderr %q", index, strings.Join(got[index].Args, " "), got[index].Stderr, wantName, want[index].Stderr)
@@ -495,8 +580,18 @@ func TestServiceCredentialsMatchTheFrozenPythonOutput(t *testing.T) {
 		t.Fatal(err)
 	}
 	db := startDatabase(t)
-	got, validity := db.credSession(t, credGo)
-	compareCredentials(t, got, frozen, validity, "frozen Python")
+	pin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/golden/svc_verbs.go-pin.json", SHA256: svcVerbsGoPinDigest, Ruling: credentialRetiredRuling})
+	got, validity := db.credSession(t, credGo, frozen)
+	compareCredentials(t, got, pinRetiredCredSteps(t, got, frozen, pin), validity, "frozen Python")
+	retired := 0
+	for _, step := range got {
+		if retiredCredStep(step.Args) {
+			retired++
+		}
+	}
+	if retired != 5 {
+		t.Fatalf("%d retired steps, want the 3 creates and 2 rotates of worker-operator", retired)
+	}
 	refused, printed, usage := 0, 0, 0
 	for _, item := range frozen {
 		switch {
@@ -512,7 +607,99 @@ func TestServiceCredentialsMatchTheFrozenPythonOutput(t *testing.T) {
 		t.Fatalf("the golden has %d refusals, %d usage errors and %d printed tokens: it measures too little", refused, usage, printed)
 	}
 	golden.SkipDiff(t)
+	pin.Finish(t)
 	golden.Finish(t)
+	venueoracle.WriteGoOnlyProof(t, "the service-credentials verbs against the frozen Python session; create and rotate for worker-operator are pinned to Go's own refusal, the rows they would have left are seeded")
 }
 
 var _ = admin.ServiceACR
+
+func workerOperatorSnapshot(t *testing.T, db *database) string {
+	t.Helper()
+	rows, err := db.conn.Query(context.Background(), `SELECT id::text, token_hash, token_prefix, scopes::text, coalesce(expires_at::text, ''), coalesce(revoked_at::text, '') FROM internal_service_credentials ORDER BY id`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var a, b, c, d, e, f string
+		if err := rows.Scan(&a, &b, &c, &d, &e, &f); err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, strings.Join([]string{a, b, c, d, e, f}, "|"))
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return strings.Join(out, "\n")
+}
+
+// A retired service keeps its stored rows listable and revocable, active and revoked ones alike; a refused
+// create or rotate changes no row.
+func TestServiceCredentialsListAndRevokeWorkOnStoredWorkerOperatorRows(t *testing.T) {
+	db := startDatabase(t)
+	db.credReset(t)
+	ctx := context.Background()
+	const (
+		active  = "00000000-0000-4000-8000-0000000000a1"
+		revoked = "00000000-0000-4000-8000-0000000000a2"
+		expired = "00000000-0000-4000-8000-0000000000a3"
+	)
+	for i, row := range []struct{ id, extra string }{{active, "NULL, NULL"}, {revoked, "NULL, now() - interval '2 hour'"}, {expired, "now() - interval '1 hour', NULL"}} {
+		token := fmt.Sprintf("svc_worker_%043d", i)
+		sum := sha256.Sum256([]byte(token))
+		if _, err := db.conn.Exec(ctx, `INSERT INTO internal_service_credentials (id, service_name, token_hash, token_prefix, scopes, expires_at, revoked_at, created_at)
+			VALUES ($1, 'worker-operator', $2, $3, '["workers:operate", "workers:read"]'::json, `+row.extra+`, now())`, row.id, hex.EncodeToString(sum[:]), token[:16]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	before := workerOperatorSnapshot(t, db)
+	for _, args := range [][]string{
+		{"create", "--service", "worker-operator", "--scope", "workers:read"},
+		{"rotate", active, "--service", "worker-operator", "--scope", "workers:read", "--overlap-seconds", "60"},
+		{"rotate", revoked, "--service", "worker-operator", "--scope", "workers:read"},
+	} {
+		code, stdout, stderr := credGo(t, db, args)
+		if code != 1 || stdout != "" || !strings.Contains(stderr, "retired") {
+			t.Fatalf("%v: exit %d stdout %q stderr %q", args, code, stdout, stderr)
+		}
+	}
+	if after := workerOperatorSnapshot(t, db); after != before {
+		t.Fatalf("a refused create or rotate changed the rows:\n%s\n%s", before, after)
+	}
+
+	code, stdout, _ := credGo(t, db, []string{"list", "--service", "worker-operator"})
+	var listed []struct {
+		ID      string `json:"id"`
+		IsValid bool   `json:"is_valid"`
+	}
+	if code != 0 || json.Unmarshal([]byte(stdout), &listed) != nil || len(listed) != 3 {
+		t.Fatalf("list: exit %d stdout %s", code, stdout)
+	}
+	wantValid := map[string]bool{active: true, revoked: false, expired: false}
+	for _, item := range listed {
+		if want, ok := wantValid[item.ID]; !ok || want != item.IsValid {
+			t.Errorf("listed %s is_valid %v, want %v", item.ID, item.IsValid, want)
+		}
+	}
+
+	revokedAt := func(id string) time.Time {
+		var at *time.Time
+		if err := db.conn.QueryRow(ctx, `SELECT revoked_at FROM internal_service_credentials WHERE id = $1::uuid`, id).Scan(&at); err != nil || at == nil {
+			t.Fatalf("%s: revoked_at %v err %v", id, at, err)
+		}
+		return *at
+	}
+	if code, _, stderr := credGo(t, db, []string{"revoke", active}); code != 0 {
+		t.Fatalf("revoke active: exit %d %s", code, stderr)
+	}
+	revokedAt(active)
+	first := revokedAt(revoked)
+	if code, _, stderr := credGo(t, db, []string{"revoke", revoked}); code != 0 {
+		t.Fatalf("revoke revoked: exit %d %s", code, stderr)
+	}
+	if !revokedAt(revoked).After(first) {
+		t.Error("revoking a revoked row did not set revoked_at again")
+	}
+}

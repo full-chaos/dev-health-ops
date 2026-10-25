@@ -1,0 +1,447 @@
+instrument	labels	reason
+auth.api.session_route_outcomes	operation,reason_code,result	code: internal/auth/authapi/wire.go
+auth.identity.external_links	action,outcome	code: internal/auth/identity/store.go
+auth.identity.projections	kind,outcome	code: internal/auth/identity/store.go
+auth.identity.wire_slug_omitted		code: internal/auth/identity/store.go
+auth.oidc.outcomes	outcome,reason,route	code: internal/auth/identity/oidc/service.go
+auth.org.mutations	outcome,verb	code: internal/auth/org/store.go
+auth.session.refresh_exchanges	reason_code	code: internal/auth/session/store.go
+auth.session.revocations	reason	code: internal/auth/session/store.go
+auth.social.outcomes	operation,provider,reason_code	code: internal/auth/identity/social/service.go
+credential_mapping_rejected_total	missing_field,provider	code: internal/providerfoundation/credential_mapping_metrics.go
+credential_origin_departures_total	action,site	code: internal/httpguard/origin.go
+daily_finalize_org_day_deferred_total		code: internal/jobs/metrics/daily/finalize_org_day_gate.go
+daily_finalize_org_day_defer_seconds	outcome	code: internal/jobs/metrics/daily/finalize_org_day_gate.go
+devhealth_acr_internal_requests_total	outcome,route	code: internal/apiservice/acr/internalauth.go
+devhealth_acr_llm_config_requests_total	outcome	code: internal/apiservice/acr/llmconfig.go
+devhealth_api_auth_proxy_requests_total	aggregate,outcome	code: internal/apiservice/authproxy.go
+devhealth_api_auth_proxy_upstream_duration_seconds	aggregate	code: internal/apiservice/authproxy.go
+devhealth_auth_access_token_accepted_total	class,profile,service	code: internal/auth/accessverify/accessverify.go
+devhealth_auth_access_token_refused_total	profile,reason,service	code: internal/auth/accessverify/accessverify.go
+dev_health_api_http_request_duration_seconds	listener,method,route,status_class	code: internal/auth/httpapi/accesslog.go
+dev_health_api_http_requests_total	listener,method,route,status_class	code: internal/auth/httpapi/tracehandler.go
+dev_health_api_stripe_refund_event_decisions_total	reason	code: internal/api/billing/refundowner.go
+dev_health_api_stripe_webhook_signature_failures_total	class	code: internal/api/billing/webhook.go
+dev_health_api_stripe_webhook_unhandled_events_total	event_type	code: internal/api/billing/webhook.go
+devhealth_api_session_mail_sends_total	outcome,purpose	code: internal/api/session/sendqueue.go
+devhealth_auth_linkmail_sends_total	outcome,purpose	code: internal/auth/linkmail/linkmail.go
+devhealth_auth_outbox_delivered_total		code: internal/audit/publisher.go
+devhealth_auth_outbox_delivery_failures_total	reason	code: internal/audit/publisher.go
+devhealth_auth_outbox_oldest_pending_age_seconds		code: internal/audit/outboxloop.go
+devhealth_auth_outbox_publisher_enabled		code: internal/audit/outboxloop.go
+dev_health_categorize_byo_optin_unreadable_total	reason	code: internal/jobs/investment/categorizebyo.go
+dev_health_generation_repair_failures_total	step	code: internal/jobs/metrics/daily/generation_repair_metrics.go
+dev_health_generation_repair_partial_total		code: internal/jobs/metrics/daily/generation_repair_metrics.go
+dev_health_ic_finalize_refused_empty_org_total		code: internal/jobs/metrics/daily/icfinalize/executor.go
+devhealth_integration_credential_decrypt_failed_total	provider	code: internal/api/credentials/metrics.go
+devhealth_llmorgsettings_decrypt_failure_total		code: internal/llmorgsettings/telemetry.go
+devhealth_llmorgsettings_key_validation_failed_total		code: internal/llmorgsettings/telemetry.go
+dev_health_metric_labels_dropped_total	instrument,label	the allowlist drop counter: instrument and label name only, never a value
+devhealth_operational_webhook_ignored_total	event_type,provider	code: internal/jobs/operational/telemetry.go
+dev_health_project_catalog_ensure_total	outcome,provider	code: internal/providersync/project_catalog_ensure_skip.go
+devhealth_query_api_analytics_calls_total		code: internal/queryapi/graph/telemetry.go
+devhealth_query_api_analytics_client_cancelled_total	phase	code: internal/queryapi/analytics/clientcancel.go
+devhealth_query_api_analytics_degraded_total	phase	code: internal/queryapi/analytics/telemetry.go
+devhealth_query_api_analytics_outcome_total	outcome	code: internal/queryapi/graph/telemetry.go
+devhealth_query_api_capacity_forecast_calls_total		code: internal/queryapi/graph/telemetry.go
+devhealth_query_api_capacity_forecast_outcome_total	outcome	code: internal/queryapi/graph/telemetry.go
+devhealth_query_api_capacity_forecasts_calls_total		code: internal/queryapi/graph/telemetry.go
+devhealth_query_api_capacity_forecasts_outcome_total	outcome	code: internal/queryapi/graph/telemetry.go
+devhealth_query_api_catalog_calls_total		code: internal/queryapi/graph/telemetry.go
+devhealth_query_api_catalog_outcome_total	outcome	code: internal/queryapi/graph/telemetry.go
+devhealth_query_api_cognitive_load_calls_total		code: internal/queryapi/graph/telemetry.go
+devhealth_query_api_cognitive_load_outcome_total	outcome	code: internal/queryapi/graph/telemetry.go
+devhealth_query_api_complexity_timeseries_calls_total		code: internal/queryapi/graph/telemetry.go
+devhealth_query_api_complexity_timeseries_outcome_total	outcome	code: internal/queryapi/graph/telemetry.go
+devhealth_query_api_data_health_calls_total	field	code: internal/queryapi/graph/telemetry.go
+devhealth_query_api_data_health_outcome_total	field,outcome	code: internal/queryapi/graph/telemetry.go
+dev_health_query_api_edge_rejected_total	reason	code: internal/queryapi/principal/edge_telemetry.go
+devhealth_query_api_edge_verify_total	outcome	code: internal/queryapi/principal/edge_telemetry.go
+dev_health_query_api_envelope_rejected_total	reason	code: internal/queryapi/principal/telemetry.go
+devhealth_query_api_envelope_verify_total	outcome	code: internal/queryapi/principal/telemetry.go
+devhealth_query_api_experiments_calls_total		code: internal/queryapi/graph/telemetry.go
+devhealth_query_api_experiments_outcome_total	outcome	code: internal/queryapi/graph/telemetry.go
+devhealth_query_api_feature_flag_events_calls_total		code: internal/queryapi/graph/telemetry.go
+devhealth_query_api_feature_flag_events_outcome_total	outcome	code: internal/queryapi/graph/telemetry.go
+devhealth_query_api_feature_flags_calls_total		code: internal/queryapi/graph/telemetry.go
+devhealth_query_api_feature_flags_outcome_total	outcome	code: internal/queryapi/graph/telemetry.go
+devhealth_query_api_hotspots_calls_total		code: internal/queryapi/graph/telemetry.go
+devhealth_query_api_hotspots_outcome_total	outcome	code: internal/queryapi/graph/telemetry.go
+devhealth_query_api_internal_headers_dropped_total	path_class	code: internal/queryapi/internalidentity/listener.go
+devhealth_query_api_internal_identity_total	carrier,outcome	code: internal/queryapi/internalidentity/telemetry.go
+devhealth_query_api_internal_peer_refused_total	listener	code: internal/queryapi/server/peerallowlist.go
+devhealth_query_api_investment_argmax_null_transition_fetch_failed_total		code: internal/queryapi/analytics/investmentargmaxtransitionguard.go
+devhealth_query_api_investment_argmax_null_transition_multi_generation_units		code: internal/queryapi/analytics/investmentargmaxtransitionguard.go
+devhealth_query_api_investment_argmax_null_transition_total	column	code: internal/queryapi/analytics/investmentargmaxtransitionguard.go
+devhealth_query_api_investment_coverage_query_failed_total	reason,resolver	code: internal/queryapi/analytics/sankeycoverage.go
+devhealth_query_api_investment_explain_write_failed_total	write	code: internal/queryapi/investmentexplain/writefailure.go
+devhealth_query_api_investment_membership_scope_lag_seconds	scope_mode	code: internal/queryapi/analytics/investmentmembershiptelemetry.go
+devhealth_query_api_investment_membership_scope_stale_total	scope_mode	code: internal/queryapi/analytics/investmentmembershiptelemetry.go
+devhealth_query_api_investment_repo_join_dedup_collision_check_failed_total		code: internal/queryapi/analytics/investmentrepojointelemetry.go
+devhealth_query_api_investment_repo_join_dedup_collisions_total		code: internal/queryapi/analytics/investmentrepojointelemetry.go
+devhealth_query_api_mcp_elevated_claims_total	claim	code: internal/queryapi/server/mcp_route.go
+devhealth_query_api_mcp_request_duration_seconds	caller_class,outcome,reason	code: internal/queryapi/server/mcp_route.go
+devhealth_query_api_mcp_requests_total	caller_class,outcome,reason	code: internal/queryapi/server/mcp_route.go
+devhealth_query_api_operating_review_calls_total		code: internal/queryapi/graph/telemetry.go
+devhealth_query_api_operating_review_fetch_swallowed_total	table	code: internal/queryapi/operatingreview/operatingreview.go
+devhealth_query_api_operating_review_known_count_guard_fired_total	field	code: internal/queryapi/operatingreview/operatingreview.go
+devhealth_query_api_operating_review_outcome_total	outcome	code: internal/queryapi/graph/telemetry.go
+devhealth_query_api_product_telemetry_calls_total	field	code: internal/queryapi/graph/telemetry.go
+devhealth_query_api_product_telemetry_outcome_total	field,outcome	code: internal/queryapi/graph/telemetry.go
+devhealth_query_api_readyz_total	check,outcome	code: internal/queryapi/server/readyz_telemetry.go
+devhealth_query_api_review_edges_calls_total		code: internal/queryapi/graph/telemetry.go
+devhealth_query_api_review_edges_outcome_total	outcome	code: internal/queryapi/graph/telemetry.go
+devhealth_query_api_throughput_forecast_calls_total		code: internal/queryapi/graph/telemetry.go
+devhealth_query_api_throughput_forecast_outcome_total	outcome	code: internal/queryapi/graph/telemetry.go
+devhealth_query_api_work_graph_artifacts_calls_total		code: internal/queryapi/graph/telemetry.go
+devhealth_query_api_work_graph_artifacts_outcome_total	outcome	code: internal/queryapi/graph/telemetry.go
+devhealth_query_api_work_graph_edges_calls_total		code: internal/queryapi/graph/telemetry.go
+devhealth_query_api_work_graph_edges_outcome_total	outcome	code: internal/queryapi/graph/telemetry.go
+devhealth_query_api_work_graph_flow_calls_total		code: internal/queryapi/graph/telemetry.go
+devhealth_query_api_work_graph_flow_outcome_total	outcome	code: internal/queryapi/graph/telemetry.go
+devhealth_query_api_workgraph_membership_rows_per_endpoint		code: internal/queryapi/workgraph/membership_telemetry.go
+devhealth_query_api_workgraph_truncation_total	family,op	code: internal/queryapi/workgraph/teamattribution.go
+dev_health_stream_product_telemetry_nonfinite_total		code: internal/streamhandlers/product_telemetry_metrics.go
+devhealth_sync_work_items_limit_open_total		code: internal/api/syncadmin/manual_trigger.go
+dev_health_team_id_carry_kept_teams_not_restated_total		code: internal/providersync/team_id_carry.go
+dev_health_teams_identity_page_walk_failed_total	cause,provider,walk	code: internal/api/teamsidentity/page_walk.go
+devhealth_telemetry_org_id_rejected_total	reason	code: internal/api/telemetry/telemetry.go
+dev_health_workgraph_build_permanent_cancels_total	error_class	code: internal/jobs/workgraph/handler.go
+dev_health_work_item_user_rows_spanning_teams_total	provider	code: internal/jobs/metrics/daily/work_item_user_rows_metrics.go
+jira_project_discovery_total	outcome	code: internal/providerfoundation/jira_discovery_metrics.go
+jira_team_catalog_ownership_snapshot_incomplete_total	reason	code: internal/providersync/jira_team_catalog_metrics.go
+linear_reference_catalog_ownership_snapshot_incomplete_total	reason	code: internal/providersync/linear_reference_catalog_metrics.go
+post_sync_error_chain_defect_total	defect	code: internal/syncdispatchruntime/post_sync_failure.go
+provider_sync_sprint_recovery_newer_row_total	provider,reason,verdict	code: internal/providersync/github_work_items_direct_effects_clickhouse.go
+river.insert_count	status,unique_skipped_as_duplicate	third-party: github.com/riverqueue/rivercontrib/otelriver v0.12.0 middleware instrument
+river.insert_many_count	status	third-party: github.com/riverqueue/rivercontrib/otelriver v0.12.0 middleware instrument
+river.insert_many_duration	status	third-party: github.com/riverqueue/rivercontrib/otelriver v0.12.0 middleware instrument
+river.insert_many_duration_histogram	status	third-party: github.com/riverqueue/rivercontrib/otelriver v0.12.0 middleware instrument
+river.job_get_available_count	queue	third-party: github.com/riverqueue/rivercontrib/otelriver v0.12.0 middleware instrument
+river.job_get_available_duration	queue	third-party: github.com/riverqueue/rivercontrib/otelriver v0.12.0 middleware instrument
+river.work_count	attempt,cancel,kind,priority,queue,snooze,status	third-party: otelriver work instrument, 7 keys kept (over the budget of 6; otelriver also sets tag, which this table drops)
+river.work_duration	attempt,cancel,kind,priority,queue,snooze,status	third-party: otelriver work instrument, 7 keys kept (over the budget of 6; otelriver also sets tag, which this table drops)
+river.work_duration_histogram	attempt,cancel,kind,priority,queue,snooze,status	third-party: otelriver work instrument, 7 keys kept (over the budget of 6; otelriver also sets tag, which this table drops)
+session_org_activity_fallback_total		code: internal/api/session/activity_metrics.go
+session_org_activity_read_failures_total	error_class,table	code: internal/api/session/activity_metrics.go
+sync_finalize_delivery_not_current_total	reason	code: internal/syncdispatchruntime/native_finalize_sync_run.go
+sync_route_generation_stranded_total	action,kind	code: internal/syncreconciler/generation_reconcile.go
+team_catalog_snapshot_close_abandoned_total	kind,provider,reason	code: internal/providersync/snapshot_close_report.go
+team_repo_ownership_retraction_held_total	kind,provider,reason	code: internal/providersync/team_repo_ownership_retraction_guard.go
+workgraph_issue_pr_fallback_beside_native_issue_rows_total		code: internal/jobs/workgraph/issuepredges/invariant.go (named by a table row, created in a loop)
+workgraph_issue_pr_fallback_beside_native_pull_request_rows_total		code: internal/jobs/workgraph/issuepredges/invariant.go (named by a table row, created in a loop)
+workgraph_issue_pr_fallback_beside_native_rows_total		code: internal/jobs/workgraph/issuepredges/invariant.go (named by a table row, created in a loop)
+workgraph_issue_pr_fallback_invariant_checks_total		code: internal/jobs/workgraph/issuepredges/invariant.go (named by a table row, created in a loop)
+workgraph_issue_pr_fallback_pull_request_issue_side_rows_total		code: internal/jobs/workgraph/issuepredges/invariant.go (named by a table row, created in a loop)
+dev_health_ai_impact_linkage_unavailable_total		code: internal/jobs/metrics/aiimpact/metrics.go
+dev_health_api_rate_limit_rejections_total	limit	code: internal/auth/httpapi/hitstore.go
+dev_health_api_rate_limit_store_errors_total	limit	code: internal/auth/httpapi/hitstore.go
+dev_health_benchmarking_nonfinite_percentile_inputs_total		code: internal/jobs/metrics/daily/benchmarking/nonfinite.go
+dev_health_benchmarking_rows_written_total	org_scoped	code: internal/jobs/metrics/daily/benchmarking/metrics.go
+dev_health_cicd_duplicate_natural_key_total	dataset,provider,table	code: internal/providerfoundation/budget.go
+dev_health_cicd_duplicate_test_case_total	dataset,provider	code: internal/providerfoundation/budget.go
+dev_health_cicd_duplicate_test_suite_total	dataset,provider	code: internal/providerfoundation/budget.go
+dev_health_cicd_partial_success_total	reason	code: internal/providerfoundation/budget.go
+dev_health_cicd_rows_written_total	org_scoped	code: internal/jobs/metrics/daily/cicd/metrics.go
+dev_health_compounding_risk_rows_written_total	org_scoped	code: internal/jobs/metrics/daily/compoundingrisk/metrics.go
+dev_health_daily_metrics_families_zero_rows_with_source_total	family	code: internal/jobruntime/telemetry.go
+dev_health_daily_metrics_finalize_ledger_repair_rows_total	outcome	code: internal/jobruntime/telemetry.go
+dev_health_daily_metrics_finalize_redrive_days_total	outcome	code: internal/jobruntime/telemetry.go
+dev_health_daily_metrics_partition_recompute_days_total	family,outcome	code: internal/jobruntime/telemetry.go
+dev_health_daily_metrics_redrive_partitions_total	reason	code: internal/jobruntime/telemetry.go
+dev_health_daily_metrics_run_marker_appends_total	outcome,state	code: internal/jobruntime/telemetry.go
+dev_health_daily_metrics_runs_blocked_cleared_total		code: internal/jobruntime/telemetry.go
+dev_health_daily_metrics_runs_blocked_marked_total		code: internal/jobruntime/telemetry.go
+dev_health_daily_metrics_runs_blocked_reconcile_failed_total		code: internal/jobruntime/telemetry.go
+dev_health_daily_metrics_runs_finalized_by_sweep_total		code: internal/jobruntime/telemetry.go
+dev_health_daily_metrics_stranded_finalize_runs_detected_total		code: internal/jobruntime/telemetry.go
+dev_health_execution_liveness_probe_failures_total	probe,reason	code: internal/platform/selfprobe/monitor.go
+dev_health_execution_liveness_seconds_since_success	probe	code: internal/platform/selfprobe/monitor.go
+dev_health_gate_penalize_errors_total	path,provider	code: internal/providerfoundation/budget.go
+dev_health_github_tree_walk_near_ceiling_total	limit	code: internal/providerfoundation/budget.go
+dev_health_github_work_items_issue_list_cap_exceeded_total	reason	code: internal/providerfoundation/budget.go
+dev_health_github_work_items_issue_list_stopped_total	reason	code: internal/providerfoundation/budget.go
+dev_health_github_work_items_issue_list_tie_paged_total	reason	code: internal/providerfoundation/budget.go
+dev_health_gitlab_closing_mr_fetch_total	outcome	code: internal/providerfoundation/budget.go
+dev_health_incident_valid_from_guard_rows_total	reason	code: internal/jobruntime/telemetry.go
+dev_health_investment_repo_attribution_total	source	code: internal/jobruntime/telemetry.go
+dev_health_investment_served_outcomes_total	model,outcome,provider	code: internal/jobruntime/telemetry.go
+dev_health_investment_shadow_attempt_latency_seconds	role	code: internal/jobruntime/telemetry.go
+dev_health_investment_shadow_attempt_rows_dropped_total		code: internal/jobruntime/telemetry.go
+dev_health_investment_shadow_attempt_write_errors_total		code: internal/jobruntime/telemetry.go
+dev_health_investment_shadow_attempts_total	model,provider,role,state	code: internal/jobruntime/telemetry.go
+dev_health_investment_shadow_panics_recovered_total		code: internal/jobruntime/telemetry.go
+dev_health_investment_shadow_phase_cancelled_runs_total		code: internal/jobruntime/telemetry.go
+dev_health_investment_shadow_phase_stops_total	reason	code: internal/jobruntime/telemetry.go
+dev_health_jira_dev_status_total	outcome	code: internal/providerfoundation/budget.go
+dev_health_jira_search_pages_total	outcome	code: internal/providerfoundation/budget.go
+dev_health_metric_compat_retry_total	decision,worker_kind	code: internal/jobruntime/telemetry.go
+dev_health_metrics_finite_boundary_nonfinite_total	family,field,reason	code: internal/jobs/metrics/finite/finite.go
+dev_health_otel_init_failures_total	attempt	code: internal/platform/tracing/initfailures.go
+dev_health_otel_spans_total	outcome	code: internal/platform/tracing/spancounters.go
+dev_health_otel_spans_unaccounted		code: internal/platform/tracing/spancounters.go
+dev_health_otlp_metrics_bridge_source_failures_total	source	code: internal/platform/otlpmetrics/stats.go
+dev_health_otlp_metrics_export_failures_total		code: internal/platform/otlpmetrics/stats.go
+dev_health_otlp_metrics_exports_total		code: internal/platform/otlpmetrics/stats.go
+dev_health_post_sync_fanout_total	outcome	code: internal/jobruntime/telemetry.go
+dev_health_post_sync_touched_days_total	event	code: internal/jobruntime/telemetry.go
+dev_health_provider_all_artifacts_unreadable_total	dataset,provider	code: internal/providerfoundation/budget.go
+dev_health_provider_artifact_skipped_total	dataset,provider,reason	code: internal/providerfoundation/budget.go
+dev_health_provider_budget_denied_total	provider	code: internal/providerfoundation/budget.go
+dev_health_provider_budget_release_errors_total	provider	code: internal/providerfoundation/budget.go
+dev_health_provider_budget_underestimate_total	dataset,dimension,provider	code: internal/providerfoundation/budget.go
+dev_health_provider_chunk_continuation_total	dataset,provider	code: internal/providerfoundation/budget.go
+dev_health_provider_incident_entitlement_refused_total	dataset,provider,seam	code: internal/providerfoundation/budget.go
+dev_health_provider_inventory_page_cap_total	dataset,provider	code: internal/providerfoundation/budget.go
+dev_health_provider_per_run_truncation_total	cause,component,dataset,provider	code: internal/providerfoundation/budget.go
+dev_health_provider_prepared_snapshot_discarded_total	dataset,provider,reason	code: internal/providerfoundation/budget.go
+dev_health_provider_request_usage_dropped_requests_total		code: internal/providersync/request_usage.go
+dev_health_provider_request_usage_dropped_rows_total		code: internal/providersync/request_usage.go
+dev_health_provider_requests_total	class,provider	code: internal/providerfoundation/budget.go
+dev_health_provider_resume_reanchor_total	dataset,phase,provider	code: internal/providerfoundation/budget.go
+dev_health_provider_skipped_artifact_cause_overflow_total	cause,dataset,provider	code: internal/providerfoundation/budget.go
+dev_health_provider_sync_lease_renewal_failed_total	reason	code: internal/platform/workersignals/workersignals.go
+dev_health_provider_unit_claimed_total	dataset,provider	code: internal/providerfoundation/budget.go
+dev_health_provider_unit_deferred_total	dataset,provider,reason	code: internal/providerfoundation/budget.go
+dev_health_provider_unit_failed_total	dataset,provider,reason	code: internal/providerfoundation/budget.go
+dev_health_provider_unit_terminal_with_rows_total	dataset,provider	code: internal/providerfoundation/budget.go
+dev_health_providersync_projects_v2_degraded_snapshots_total	reason	code: internal/providerfoundation/budget.go
+dev_health_reconciler_stage_acquire_wait_seconds		code: internal/syncreconciler/pipeline.go
+dev_health_reconciler_stage_cancelled_total	sqlstate,stage	code: internal/syncreconciler/pipeline.go
+dev_health_reconciler_stage_duration_seconds		code: internal/syncreconciler/pipeline.go
+dev_health_release_impact_degraded_missing_telemetry_total		code: internal/jobruntime/telemetry.go
+dev_health_remaining_metrics_manual_backfill_total	family,outcome	code: internal/jobruntime/telemetry.go
+dev_health_remaining_metrics_manual_overlap_total	family	code: internal/jobruntime/telemetry.go
+dev_health_remaining_metrics_open_day_zero_row_total	family	code: internal/jobruntime/telemetry.go
+dev_health_remaining_metrics_scope_refused_total	family,reason	code: internal/jobruntime/telemetry.go
+dev_health_repo_user_commit_rows_written_total	org_scoped	code: internal/jobs/metrics/daily/repouser/metrics.go
+dev_health_review_edges_rows_written_total	org_scoped	code: internal/jobs/metrics/daily/reviewedges/metrics.go
+dev_health_runtime_check_failed	check	code: internal/platform/health/server.go
+dev_health_runtime_grants_applied_total	role	code: internal/rivermigrate/posture_gate.go
+dev_health_runtime_info	service,version	code: internal/platform/health/server.go
+dev_health_runtime_live		code: internal/platform/health/server.go
+dev_health_runtime_metrics_source_failed	source	code: internal/platform/health/server.go
+dev_health_runtime_posture_excess_grants	role	code: internal/rivermigrate/posture_gate.go
+dev_health_runtime_posture_missing	role	code: internal/rivermigrate/posture_gate.go
+dev_health_runtime_ready		code: internal/platform/health/server.go
+dev_health_runtime_required_checks		code: internal/platform/health/server.go
+dev_health_runtime_uptime_seconds		code: internal/platform/health/server.go
+dev_health_scheduler_explicit_datasets_without_row_total		code: internal/scheduler/sync/materializer.go
+dev_health_sync_coverage_datasets_excluded_by_intent_total	provider	code: internal/synccoverage/metrics.go
+dev_health_sync_coverage_folded_key_resolutions_total	canonical_dataset_key	code: internal/synccoverage/metrics.go
+dev_health_sync_dispatch_advisory_lock_wait_total	outcome	code: internal/platform/workersignals/workersignals.go
+dev_health_sync_dispatch_outbox_closed_total	kind,outcome	code: internal/syncreconciler/pipeline.go
+dev_health_sync_dispatch_woken_total	outcome,path	code: internal/syncrunrollup/dispatch_wake.go
+dev_health_sync_manual_trigger_refused_total	reason	code: internal/synchandoff/refusal_metrics.go
+dev_health_sync_run_rollup_bumped_total	outcome,path	code: internal/providerfoundation/budget.go
+dev_health_team_attribution_membership_layer_total	layer	code: internal/providerfoundation/budget.go
+dev_health_team_attribution_ownership_checked_total	reason	code: internal/providerfoundation/budget.go
+dev_health_team_catalog_dispatch_total	entry_point,outcome,provider	code: internal/jobruntime/telemetry.go
+dev_health_team_catalog_rows_written_total	provider,table	code: internal/jobruntime/telemetry.go
+dev_health_team_metrics_daily_repo_count		code: internal/jobruntime/telemetry.go
+dev_health_team_repo_ownership_derivation_resolution_arm_total	arm	code: internal/jobruntime/telemetry.go
+dev_health_team_repo_ownership_derivation_row_count		code: internal/jobruntime/telemetry.go
+dev_health_team_repo_ownership_derivation_total	outcome	code: internal/jobruntime/telemetry.go
+dev_health_touched_days_drain_total	event	code: internal/jobruntime/telemetry.go
+dev_health_touched_days_oldest_pending_age_seconds		code: internal/jobruntime/telemetry.go
+dev_health_work_item_derived_tables_left_to_daily_job_total	provider	code: internal/providerfoundation/budget.go
+dev_health_work_item_prepared_retired_effects_skipped_total	provider	code: internal/providerfoundation/budget.go
+dev_health_work_item_team_attributions_written_total	provider,source	code: internal/providerfoundation/budget.go
+dev_health_work_items_outside_window_dropped_total	provider	code: internal/providerfoundation/budget.go
+dev_health_worker_posture_manifest_mismatch	service	code: internal/platform/postureguard/postureguard.go
+devhealth_ingest_legacy_accepted_total	mechanism	code: internal/api/legacyingest/auth.go
+devhealth_ingest_legacy_auth_rejected_total	reason	code: internal/api/legacyingest/auth.go
+devhealth_ingest_legacy_requests_total	key_class,outcome,route	code: internal/api/legacyingest/auth.go
+devhealth_scheduler_executed_proof_evidence_state		code: internal/scheduler/sync/materializer.go
+devhealth_scheduler_executed_proof_gate_degraded		code: internal/scheduler/sync/materializer.go
+devhealth_scheduler_executed_proof_refresh_failures_total		code: internal/scheduler/sync/materializer.go
+devhealth_scheduler_materialized_occurrences_total		code: internal/scheduler/sync/materializer.go
+devhealth_scheduler_planned_units		code: internal/scheduler/sync/materializer.go
+devhealth_scheduler_webhook_sync_requests_total	outcome	code: internal/scheduler/sync/webhook_requests.go
+devhealth_scheduler_zero_planned_occurrences_total		code: internal/scheduler/sync/materializer.go
+devhealth_sync_coverage_cache_invalidations_consumed_total	provider	code: internal/jobruntime/telemetry.go
+devhealth_sync_coverage_cache_invalidations_emitted_total	provider	code: internal/jobruntime/telemetry.go
+devhealth_sync_run_zero_unit_finalizations_total	provider,reason	code: internal/jobruntime/telemetry.go
+fixed_scheduler_cold_starts_total	schedule	code: internal/scheduler/fixed/loop.go
+fixed_scheduler_consecutive_failures		code: internal/scheduler/fixed/loop.go
+fixed_scheduler_failures_total		code: internal/scheduler/fixed/loop.go
+fixed_scheduler_handoffs_total	schedule	code: internal/scheduler/fixed/loop.go
+fixed_scheduler_last_success_age_seconds		code: internal/scheduler/fixed/loop.go
+fixed_scheduler_missing_occurrence_seconds	schedule	code: internal/scheduler/fixed/loop.go
+fixed_scheduler_occurrences_total		code: internal/scheduler/fixed/loop.go
+fixed_scheduler_schedule_degraded	reason,schedule	code: internal/scheduler/fixed/loop.go
+fixed_scheduler_up		code: internal/scheduler/fixed/loop.go
+fixed_scheduler_windows_total		code: internal/scheduler/fixed/loop.go
+provider_source_discovery_total	outcome,provider	code: internal/scheduler/sync/source_discovery.go
+reconciler_database_pool_saturation_ratio	pool	code: internal/platform/poolstat/poolstat.go
+reconciler_database_pool_saturation_ratio_acquired_conns	pool	code: internal/platform/poolstat/poolstat.go
+reconciler_database_pool_saturation_ratio_max_conns	pool	code: internal/platform/poolstat/poolstat.go
+scheduler_database_pool_saturation_ratio	pool	code: internal/platform/poolstat/poolstat.go
+scheduler_database_pool_saturation_ratio_acquired_conns	pool	code: internal/platform/poolstat/poolstat.go
+scheduler_database_pool_saturation_ratio_max_conns	pool	code: internal/platform/poolstat/poolstat.go
+sync_config_dataset_rows_changed_total	direction,provider	code: internal/api/syncadmin/selection_metrics.go
+sync_dispatch_discovery_rearmed_total		code: internal/syncreconciler/loop.go
+sync_dispatch_exhausted_delivery_recoveries_total		code: internal/syncreconciler/loop.go
+sync_dispatch_observer_celery_due_pending		code: internal/syncreconciler/loop.go
+sync_dispatch_observer_due_pending	kind	code: internal/syncreconciler/loop.go
+sync_dispatch_observer_expired_claims	kind	code: internal/syncreconciler/loop.go
+sync_dispatch_observer_last_success_age_seconds		code: internal/syncreconciler/loop.go
+sync_dispatch_observer_river_due_pending		code: internal/syncreconciler/loop.go
+sync_dispatch_observer_sampled_candidates		code: internal/syncreconciler/loop.go
+sync_dispatch_observer_truncated		code: internal/syncreconciler/loop.go
+sync_dispatch_observer_unknown_kinds		code: internal/syncreconciler/loop.go
+sync_dispatch_observer_up		code: internal/syncreconciler/loop.go
+sync_dispatch_runaway_dispatch_wakeups		code: internal/syncreconciler/loop.go
+sync_dispatch_unreclaimable_candidates		code: internal/syncreconciler/loop.go
+sync_dispatch_unreclaimable_sweep_failures_total		code: internal/syncreconciler/loop.go
+sync_dispatch_unreclaimable_terminalized_total		code: internal/syncreconciler/loop.go
+sync_dispatch_wakeup_report_failures_total		code: internal/syncreconciler/loop.go
+sync_initial_backfill_total	outcome	code: internal/scheduler/sync/initial_backfill.go
+sync_manual_trigger_await_latency_seconds		code: internal/synchandoff/await_metrics.go
+sync_manual_trigger_await_outcome_total	outcome	code: internal/synchandoff/await_metrics.go
+sync_plan_gate_total	dataset,outcome,provider	code: internal/scheduler/sync/plan_gate_telemetry.go
+sync_reconciler_stage_budget_seconds	stage	code: internal/syncreconciler/pipeline.go
+sync_reconciler_stage_degraded	stage	code: internal/syncreconciler/pipeline.go
+sync_reconciler_stage_duration_seconds	stage	code: internal/syncreconciler/pipeline.go
+sync_reconciler_stage_failures_total	stage	code: internal/syncreconciler/pipeline.go
+sync_reconciler_step_overrun_total	stage	code: internal/syncreconciler/pipeline.go
+sync_scheduler_configs_without_schedule		code: internal/scheduler/sync/loop.go
+sync_scheduler_consecutive_failures		code: internal/scheduler/sync/loop.go
+sync_scheduler_failures_total		code: internal/scheduler/sync/loop.go
+sync_scheduler_handoffs_total		code: internal/scheduler/sync/loop.go
+sync_scheduler_idle_due_windows_total		code: internal/scheduler/sync/loop.go
+sync_scheduler_invalid_cron_total		code: internal/scheduler/sync/loop.go
+sync_scheduler_last_success_age_seconds		code: internal/scheduler/sync/loop.go
+sync_scheduler_occurrences_completed_total		code: internal/scheduler/sync/loop.go
+sync_scheduler_occurrences_minted_total		code: internal/scheduler/sync/loop.go
+sync_scheduler_occurrences_quarantined_total		code: internal/scheduler/sync/loop.go
+sync_scheduler_occurrences_repeated_total		code: internal/scheduler/sync/loop.go
+sync_scheduler_occurrences_retried_total		code: internal/scheduler/sync/loop.go
+sync_scheduler_open_run_past_bound_age_cap_total		code: internal/scheduler/sync/loop.go
+sync_scheduler_open_run_past_bound_no_progress_total		code: internal/scheduler/sync/loop.go
+sync_scheduler_reconcile_budget_exhausted_total		code: internal/scheduler/sync/loop.go
+sync_scheduler_skipped_feature_disabled_total		code: internal/scheduler/sync/loop.go
+sync_scheduler_skipped_not_planner_managed_total		code: internal/scheduler/sync/loop.go
+sync_scheduler_skipped_open_run_total		code: internal/scheduler/sync/loop.go
+sync_scheduler_skipped_org_missing_total		code: internal/scheduler/sync/loop.go
+sync_scheduler_unsupported_cron_fallback_total		code: internal/scheduler/sync/loop.go
+sync_scheduler_up		code: internal/scheduler/sync/loop.go
+sync_scheduler_windows_total		code: internal/scheduler/sync/loop.go
+worker_budget_wait_seconds	cost_class,provider	code: internal/jobruntime/telemetry.go
+worker_capacity_native_partitions_total		code: internal/jobruntime/telemetry.go
+worker_capacity_native_refused_total	reason	code: internal/jobruntime/telemetry.go
+worker_capacity_native_rows_written_total		code: internal/jobruntime/telemetry.go
+worker_capacity_native_scopes_total		code: internal/jobruntime/telemetry.go
+worker_capacity_native_skipped_scopes_total		code: internal/jobruntime/telemetry.go
+worker_complexity_native_blame_unusable_repos_total		code: internal/jobruntime/telemetry.go
+worker_complexity_native_partitions_total		code: internal/jobruntime/telemetry.go
+worker_complexity_native_refused_total	reason	code: internal/jobruntime/telemetry.go
+worker_complexity_native_repos_scanned_total		code: internal/jobruntime/telemetry.go
+worker_complexity_native_repos_with_data_total		code: internal/jobruntime/telemetry.go
+worker_concurrency_budget_capacity	kind,scope	code: internal/jobruntime/telemetry.go
+worker_concurrency_budget_lease_events_total	kind,result,scope	code: internal/jobruntime/telemetry.go
+worker_concurrency_budget_leased	kind,scope	code: internal/jobruntime/telemetry.go
+worker_concurrency_budget_wait_seconds	kind,scope	code: internal/jobruntime/telemetry.go
+worker_daily_metrics_discovery_total	outcome,trigger	code: internal/jobruntime/telemetry.go
+worker_daily_metrics_lease_total	result,stage	code: internal/jobruntime/telemetry.go
+worker_daily_metrics_native_family_duration_seconds	family	code: internal/jobruntime/telemetry.go
+worker_daily_metrics_native_family_outcome_total	family,outcome	code: internal/jobruntime/telemetry.go
+worker_daily_metrics_native_family_rows_written_total	family	code: internal/jobruntime/telemetry.go
+worker_daily_metrics_work_item_state_missing_attribution_total		code: internal/jobruntime/telemetry.go
+worker_database_pool_acquire_seconds	pool,result	code: internal/jobruntime/telemetry.go
+worker_database_pool_saturation_ratio	pool	code: internal/jobruntime/telemetry.go
+worker_dispatch_budget_estimate_failures_total	reason	code: internal/jobruntime/telemetry.go
+worker_domain_state_mismatch_total	domain_type	code: internal/jobruntime/telemetry.go
+worker_dora_native_days_total		code: internal/jobruntime/telemetry.go
+worker_dora_native_empty_partitions_total		code: internal/jobruntime/telemetry.go
+worker_dora_native_partitions_total		code: internal/jobruntime/telemetry.go
+worker_dora_native_refused_total	reason	code: internal/jobruntime/telemetry.go
+worker_dora_native_rows_written_total		code: internal/jobruntime/telemetry.go
+worker_dora_native_skipped_rows_total		code: internal/jobruntime/telemetry.go
+worker_execution_saturation_ratio	queue	code: internal/jobruntime/telemetry.go
+worker_external_project_memberships_sunk_total	provider	code: internal/jobruntime/telemetry.go
+worker_external_record_refused_total	reason,source_system	code: internal/jobruntime/telemetry.go
+worker_idempotency_renewal_retired_total	reason	code: internal/jobruntime/telemetry.go
+worker_job_attempts_total	error_category,kind,result	code: internal/jobruntime/telemetry.go
+worker_job_cancellations_total	kind,reason	code: internal/jobruntime/telemetry.go
+worker_job_deterministic_failures_total	kind,reason	code: internal/jobruntime/telemetry.go
+worker_job_duration_seconds	kind,queue,result	code: internal/jobruntime/telemetry.go
+worker_job_oldest_age_seconds	queue	code: internal/jobruntime/telemetry.go
+worker_job_panics_total	kind	code: internal/jobruntime/telemetry.go
+worker_job_wait_seconds	kind,queue	code: internal/jobruntime/telemetry.go
+worker_jobs_available	kind,queue	code: internal/jobruntime/telemetry.go
+worker_jobs_retryable	queue	code: internal/jobruntime/telemetry.go
+worker_jobs_running	kind,queue	code: internal/jobruntime/telemetry.go
+worker_jobs_scheduled	queue	code: internal/jobruntime/telemetry.go
+worker_membership_backfill_native_components_total		code: internal/jobruntime/telemetry.go
+worker_membership_backfill_native_dropped_edges_total		code: internal/jobruntime/telemetry.go
+worker_membership_backfill_native_dropped_nodes_total		code: internal/jobruntime/telemetry.go
+worker_membership_backfill_native_marker_lag_alerts_total		code: internal/jobruntime/telemetry.go
+worker_membership_backfill_native_marker_lag_seconds		code: internal/jobruntime/telemetry.go
+worker_membership_backfill_native_matched_total		code: internal/jobruntime/telemetry.go
+worker_membership_backfill_native_oversized_components_total		code: internal/jobruntime/telemetry.go
+worker_membership_backfill_native_prune_failures_total		code: internal/jobruntime/telemetry.go
+worker_membership_backfill_native_refused_total	reason	code: internal/jobruntime/telemetry.go
+worker_membership_backfill_native_rows_written_total		code: internal/jobruntime/telemetry.go
+worker_membership_backfill_native_runs_total		code: internal/jobruntime/telemetry.go
+worker_membership_backfill_native_skipped_total		code: internal/jobruntime/telemetry.go
+worker_outbox_reconciler_claimed_total		code: internal/joboutbox/loop.go
+worker_outbox_reconciler_dead_total		code: internal/joboutbox/loop.go
+worker_outbox_reconciler_degraded		code: internal/joboutbox/loop.go
+worker_outbox_reconciler_delivered_total		code: internal/joboutbox/loop.go
+worker_outbox_reconciler_last_success_age_seconds		code: internal/joboutbox/loop.go
+worker_outbox_reconciler_lease_lost_total		code: internal/joboutbox/loop.go
+worker_outbox_reconciler_post_repair_contract_rejections_recovered_total		code: internal/joboutbox/loop.go
+worker_outbox_reconciler_provider_unit_strands_rearmed_total		code: internal/joboutbox/loop.go
+worker_outbox_reconciler_retried_total		code: internal/joboutbox/loop.go
+worker_outbox_reconciler_step_failures_total		code: internal/joboutbox/loop.go
+worker_outbox_reconciler_strand_claims_live_total		code: internal/joboutbox/loop.go
+worker_outbox_reconciler_strand_claims_settled_total		code: internal/joboutbox/loop.go
+worker_outbox_reconciler_strand_jobs_skipped_live_total		code: internal/joboutbox/loop.go
+worker_outbox_reconciler_strand_passes_skipped_idle_total		code: internal/joboutbox/loop.go
+worker_outbox_reconciler_strand_race_lost_total		code: internal/joboutbox/loop.go
+worker_outbox_reconciler_strands_rearmed_total		code: internal/joboutbox/loop.go
+worker_outbox_reconciler_terminal_deliveries_recovered_total		code: internal/joboutbox/loop.go
+worker_outbox_reconciler_undelivered_blocked		code: internal/joboutbox/loop.go
+worker_outbox_reconciler_undelivered_outbox_dead_total		code: internal/joboutbox/loop.go
+worker_outbox_reconciler_undelivered_race_lost_total		code: internal/joboutbox/loop.go
+worker_outbox_reconciler_undelivered_requests_canceled_total		code: internal/joboutbox/loop.go
+worker_outbox_reconciler_up		code: internal/joboutbox/loop.go
+worker_presence_heartbeat_failed_total		code: internal/platform/workersignals/workersignals.go
+worker_recommendations_native_refused_total	reason	code: internal/jobruntime/telemetry.go
+worker_recommendations_readiness_fail_open_total	class	code: internal/jobruntime/telemetry.go
+worker_recommendations_readiness_skipped_total		code: internal/jobruntime/telemetry.go
+worker_release_impact_native_days_total		code: internal/jobruntime/telemetry.go
+worker_release_impact_native_empty_partitions_total		code: internal/jobruntime/telemetry.go
+worker_release_impact_native_partitions_total		code: internal/jobruntime/telemetry.go
+worker_release_impact_native_rows_written_total		code: internal/jobruntime/telemetry.go
+worker_remaining_metrics_lease_release_lost_total		code: internal/jobruntime/telemetry.go
+worker_report_dedup_guard_observed_rows_total	reason,table	code: internal/jobruntime/telemetry.go
+worker_report_dedup_guard_skipped_rows_total	reason,table	code: internal/jobruntime/telemetry.go
+worker_report_run_lease_expired_total	result	code: internal/jobruntime/telemetry.go
+worker_runtime_info	commit,version	code: internal/jobruntime/telemetry.go
+worker_stream_failures_total		code: internal/streamrunner/runner.go
+worker_stream_lag	consumer_group,stream	code: internal/streamrunner/runner.go
+worker_stream_last_success_age_seconds		code: internal/streamrunner/runner.go
+worker_stream_oldest_pending_seconds	consumer_group,stream	code: internal/streamrunner/runner.go
+worker_stream_pending	consumer_group,stream	code: internal/streamrunner/runner.go
+worker_stream_processed_total		code: internal/streamrunner/runner.go
+worker_stream_quarantined_by_reason_total	reason,stream	code: internal/streamrunner/runner.go
+worker_stream_quarantined_total		code: internal/streamrunner/runner.go
+worker_stream_reclaimed_total		code: internal/streamrunner/runner.go
+worker_stream_retries_total		code: internal/streamrunner/runner.go
+worker_stream_up		code: internal/streamrunner/runner.go
+worker_sync_lease_expired_total	dataset_family,provider,result	code: internal/jobruntime/telemetry.go
+worker_work_graph_issue_edge_duration_seconds		code: internal/jobruntime/telemetry.go
+worker_work_graph_issue_edge_rows_total	outcome	code: internal/jobruntime/telemetry.go
+worker_work_graph_issue_edge_runs_total		code: internal/jobruntime/telemetry.go
+worker_work_item_attribution_native_items_seen_total		code: internal/jobruntime/telemetry.go
+worker_work_item_attribution_native_noop_runs_total		code: internal/jobruntime/telemetry.go
+worker_work_item_attribution_native_org_wide_runs_total		code: internal/jobruntime/telemetry.go
+worker_work_item_attribution_native_project_scopes_total		code: internal/jobruntime/telemetry.go
+worker_work_item_attribution_native_refused_total	reason	code: internal/jobruntime/telemetry.go
+worker_work_item_attribution_native_repo_scopes_total		code: internal/jobruntime/telemetry.go
+worker_work_item_attribution_native_rows_written_total		code: internal/jobruntime/telemetry.go
+worker_work_item_attribution_native_runs_total		code: internal/jobruntime/telemetry.go
+worker_work_item_attribution_native_scoped_runs_total		code: internal/jobruntime/telemetry.go
+worker_workgraph_lease_release_lost_total		code: internal/jobruntime/telemetry.go

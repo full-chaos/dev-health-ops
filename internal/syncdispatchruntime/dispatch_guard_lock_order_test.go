@@ -39,20 +39,27 @@ func TestAuthorizeRunAcquiresBucketLocksBeforeTheHardCapCheck(t *testing.T) {
 	}
 	source := string(raw)
 
-	funcMarker := "func authorizeRun("
-	funcStart := strings.Index(source, funcMarker)
-	if funcStart < 0 {
-		t.Fatalf("%s: could not find %q -- has authorizeRun's signature changed? update this test's marker", file, funcMarker)
-	}
-	body := source[funcStart:]
-
-	lockIndex := strings.Index(body, "acquireBucketAdvisoryLocks(ctx, tx,")
-	if lockIndex < 0 {
-		t.Fatalf("%s: authorizeRun no longer calls acquireBucketAdvisoryLocks directly -- "+
+	// authorizeRun wires the lock to acquireBucketAdvisoryLocks; the ORDER is decideDispatchGuard's.
+	authorizeStart := strings.Index(source, "func authorizeRun(")
+	if authorizeStart < 0 || !strings.Contains(source[authorizeStart:], "acquireBucketAdvisoryLocks(ctx, tx,") {
+		t.Fatalf("%s: authorizeRun no longer wires the bucket locks to acquireBucketAdvisoryLocks -- "+
 			"has the bucket-locking mechanism changed shape? update this test's marker", file)
 	}
 
-	capCheckMarker := "if len(units) > totalCap {"
+	funcMarker := "func decideDispatchGuard("
+	funcStart := strings.Index(source, funcMarker)
+	if funcStart < 0 {
+		t.Fatalf("%s: could not find %q -- has the guard decision's signature changed? update this test's marker", file, funcMarker)
+	}
+	body := source[funcStart:]
+
+	lockIndex := strings.Index(body, "env.lockBuckets(")
+	if lockIndex < 0 {
+		t.Fatalf("%s: decideDispatchGuard no longer takes the bucket locks through env.lockBuckets -- "+
+			"has the bucket-locking mechanism changed shape? update this test's marker", file)
+	}
+
+	capCheckMarker := "if totalCap > 0 && total > totalCap {"
 	capCheckIndex := strings.Index(body, capCheckMarker)
 	if capCheckIndex < 0 {
 		t.Fatalf("%s: could not find %q -- has the total-unit-cap check changed shape? update this test's marker", file, capCheckMarker)

@@ -1815,10 +1815,28 @@ discover_integration_tagged_tests() {
 run_integration_packages() {
   local mode="$1" module_dir="$2" label="$3" pkg key name tests=0 result=0 status groups=0 group fits size names_len regex_max=60000
   local -a filtered=() unfiltered=() run_pkgs=() group_pkgs=() group_keys=() group_regex=() group_size=()
+  local -a pkgs=()
   local -A tagged_in=() untagged_in=()
   shift 3
-  discover_integration_tagged_tests "${module_dir}" "$@"
-  for pkg in "$@"; do
+  # Sorted (C locale): the same packages give the same groups and receipts in any argument order.
+  mapfile -t pkgs < <(printf '%s\n' "$@" | LC_ALL=C sort -u)
+  discover_integration_tagged_tests "${module_dir}" "${pkgs[@]}"
+  # Every refusal comes before the first receipt line, so a refused run prints no plan.
+  for pkg in "${pkgs[@]}"; do
+    key="${module_dir}/${pkg#./}"
+    key="${key#./}"
+    [ -z "${INTEGRATION_HOOK[${pkg}]+set}" ] || continue
+    [ -n "${INTEGRATION_TAGGED_TESTS[${pkg}]-}" ] \
+      || die "${label}: ${key} runs in an integration shard, but no test file that only the integration build lists declares a top-level Test"
+    names_len=0
+    while IFS= read -r name; do
+      [ -n "${name}" ] || continue
+      names_len=$((names_len + ${#name} + 1))
+    done <<<"${INTEGRATION_TAGGED_TESTS[${pkg}]}"
+    [ $((names_len + 4)) -le "${regex_max}" ] \
+      || die "${label}: the integration-tagged test names of ${key} alone exceed the ${regex_max}-byte -run budget"
+  done
+  for pkg in "${pkgs[@]}"; do
     key="${module_dir}/${pkg#./}"
     key="${key#./}"
     if [ -n "${INTEGRATION_HOOK[${pkg}]+set}" ]; then
@@ -1826,18 +1844,12 @@ run_integration_packages() {
       unfiltered+=("${pkg}")
       continue
     fi
-    [ -n "${INTEGRATION_TAGGED_TESTS[${pkg}]-}" ] \
-      || die "${label}: ${key} runs in an integration shard, but no test file that only the integration build lists declares a top-level Test"
     filtered+=("${pkg}")
-    names_len=0
     while IFS= read -r name; do
       [ -n "${name}" ] || continue
       printf '  SHARD-TEST %s %s\n' "${key}" "${name}"
       tests=$((tests + 1))
-      names_len=$((names_len + ${#name} + 1))
     done <<<"${INTEGRATION_TAGGED_TESTS[${pkg}]}"
-    [ $((names_len + 4)) -le "${regex_max}" ] \
-      || die "${label}: the integration-tagged test names of ${key} alone exceed the ${regex_max}-byte -run budget"
     for ((group = 0; group < groups; group++)); do
       fits=1
       size="${group_size[${group}]}"
@@ -1872,7 +1884,7 @@ run_integration_packages() {
     group_keys[group]+=" ${key}"
   done
   printf '%s: %d package(s), %d integration-tagged test(s), %d unfiltered package(s), %d go test group(s)\n' \
-    "${label}" "$#" "${tests}" "${#unfiltered[@]}" "${groups}"
+    "${label}" "${#pkgs[@]}" "${tests}" "${#unfiltered[@]}" "${groups}"
   for ((group = 0; group < groups; group++)); do
     group_regex[group]="^(${group_regex[${group}]})\$"
     printf '  SHARD-GROUP %s %d%s\n' "${module_dir}" "$((group + 1))" "${group_keys[${group}]}"

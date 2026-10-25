@@ -74,7 +74,10 @@ N-1 0.39.0, a 250 ms fetch interval, and 20 execution samples per mode.
 - A real `SIGKILL` of an executing worker was rescued as attempt 2 in both
   direct and PollOnly profiles, with one recorded first-attempt error.
 - Go consumed the committed Python payload through both connection profiles;
-  the exact fixture is also decoded by the Python and River 0.39 tests.
+  the exact fixture was also decoded by the Python and River 0.39 tests when
+  the spike ran. Those tests are gone from this repository: this README and
+  the result file are frozen evidence, and `ci/check_river_compat_static.sh`
+  checks only that they are intact.
 
 Exact measurements live only in the raw generated result to prevent derived
 documentation from drifting after a rerun. They are local compatibility

@@ -68,6 +68,11 @@ on:
       # declared before it exists and the required check fails at pull time.
       - .github/workflows/test.yml
       - .github/workflows/live-e2e.yml
+      # The precheck library and its hermetic suite (CHAOS-11422): a change to either runs the suite.
+      - ci/mirror_precheck_lib.sh
+      - ci/mirror_precheck_lib_test.sh
+      - ci/run_shell_tests.sh
+      - ci/suites.tsv
       - .github/workflows/mirror-test-images.yml
   pull_request:
     paths:
@@ -86,6 +91,11 @@ on:
       # declared before it exists and the required check fails at pull time.
       - .github/workflows/test.yml
       - .github/workflows/live-e2e.yml
+      # The precheck library and its hermetic suite (CHAOS-11422): a change to either runs the suite.
+      - ci/mirror_precheck_lib.sh
+      - ci/mirror_precheck_lib_test.sh
+      - ci/run_shell_tests.sh
+      - ci/suites.tsv
       - .github/workflows/mirror-test-images.yml
 
 permissions:
@@ -280,6 +290,17 @@ jobs:
             fi
           done < images.txt
           echo "missing=${missing}" >> "${GITHUB_OUTPUT}"
+
+  # CHAOS-11422: the library's hermetic fixture suite (docker stubbed, no network, under a second).
+  precheck-lib-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Run the precheck library suite
+        run: bash ci/run_shell_tests.sh mirror-precheck-lib
 
   mirror:
     needs: precheck

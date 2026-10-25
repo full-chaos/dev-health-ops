@@ -24,7 +24,7 @@ var columns = []string{"suite", "owner", "risk", "command", "inputs", "trigger",
 var (
 	commandStart = regexp.MustCompile(`(?:^|[\s(!;&|])(?:bash\s+|\./)?((?:ci/(?:check|run)_[A-Za-z0-9_]+\.sh|scripts/[A-Za-z0-9_.-]+_test\.sh|ci/[A-Za-z0-9_.-]+_test\.sh)\b.*|go test\b.*)$`)
 	commandCut   = regexp.MustCompile(`\s+(?:\|\||\||&&|;|\d?>|<|\))|;\s.*$|\s\\$`)
-	goTestFlags  = regexp.MustCompile(`\s-(?:mod=\S+|trimpath|count=\S+|tags=\S+|timeout[= ]\S+|v|json|race)\b`)
+	goTestFlags  = regexp.MustCompile(`\s-(?:mod=\S+|trimpath|count=\S+|timeout[= ]\S+|v|json|race)\b`)
 	shellSuite   = regexp.MustCompile(`(?:_test|^test-[A-Za-z0-9_-]+)\.sh$`)
 )
 
@@ -252,6 +252,12 @@ func plantTree(t *testing.T) string {
 	root := repoRoot(t)
 	dst := t.TempDir()
 	copyFile := func(rel string) {
+		if st, err := os.Stat(filepath.Join(root, rel)); err == nil && st.IsDir() {
+			if err := os.MkdirAll(filepath.Join(dst, rel), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			return
+		}
 		raw, err := os.ReadFile(filepath.Join(root, rel))
 		if err != nil {
 			return
@@ -314,7 +320,7 @@ func TestPlantedFaults(t *testing.T) {
 	t.Run("workflow runs a command with no row", func(t *testing.T) {
 		root := plantTree(t)
 		edit(t, filepath.Join(root, ".github/workflows/go-quality.yml"), func(s string) string {
-			return strings.Replace(s, "bash ci/check_river_compat_static.sh", "bash ci/check_river_compat_static.sh\n          bash ci/check_go.sh newverb", 1)
+			return strings.Replace(s, "run: bash ci/check_river_compat_static.sh", "run: |\n          bash ci/check_river_compat_static.sh\n          bash ci/check_go.sh newverb", 1)
 		})
 		wantViolation(t, root, `uncatalogued test command: go-quality.yml runs "ci/check_go.sh newverb"`)
 	})

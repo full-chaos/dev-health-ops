@@ -467,3 +467,7 @@ func TestRunUnitsPagedExtras(t *testing.T) {
 		t.Errorf("error_category filter: %d", status)
 	}
 }
+
+func (u *unitsReader) unitsSnapshot(_ context.Context, fn func(unitsSnapshotReads) error) error {
+	return fn(u)
+}

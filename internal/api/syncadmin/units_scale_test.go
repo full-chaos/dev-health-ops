@@ -98,3 +98,7 @@ func TestRunUnitsLargeRunScale(t *testing.T) {
 		}
 	}
 }
+
+func (s *slimRollupReader) unitsSnapshot(_ context.Context, fn func(unitsSnapshotReads) error) error {
+	return fn(s)
+}

@@ -34,6 +34,7 @@ type reader interface {
 	runUnitRollupRows(ctx context.Context, orgID string, runID uuid.UUID) ([]runUnit, error)
 	runUnitsPage(ctx context.Context, orgID string, runID uuid.UUID, filter unitFilter, offset int64, limit *int64) ([]runUnit, error)
 	countRunUnits(ctx context.Context, orgID string, runID uuid.UUID, filter unitFilter) (int64, error)
+	unitsSnapshot(ctx context.Context, fn func(unitsSnapshotReads) error) error
 	watermarkRows(ctx context.Context, orgID string, sourceKeys, lookupValues []string) ([]schedsync.WatermarkRow, error)
 	backfillJobByID(ctx context.Context, orgID string, id uuid.UUID) (*backfillJob, error)
 	occurrencePlanOf(ctx context.Context, orgID, occurrenceID string) (occurrencePlan, error)

@@ -81,8 +81,6 @@ func linkToken(id string) (token, hash string) {
 	return signedtoken.Build(uuid.MustParse(id), sessionscenario.Key)
 }
 
-var linkPattern = regexp.MustCompile(`token=([0-9a-f]{32}\.[0-9a-f]{64})`)
-
 // sentMail is one captured message as its receiver reads it: envelope and
 // headers exactly, the HTML part decoded, the link token lifted out so each
 // plane's own random token can be compared by shape and used in later
@@ -106,7 +104,7 @@ type remoteSink struct{ *smtpcapture.Remote }
 
 func (r remoteSink) Drain(t *testing.T) []smtpcapture.Mail { return r.Remote.Drain(t) }
 
-func decodeMail(t *testing.T, captured smtpcapture.Mail) sentMail {
+func decodeMail(t *testing.T, captured smtpcapture.Mail, owned bool) sentMail {
 	t.Helper()
 	captured = smtpcapture.Normalize(captured)
 	message, err := mail.ReadMessage(strings.NewReader(captured.Data))
@@ -143,18 +141,18 @@ func decodeMail(t *testing.T, captured smtpcapture.Mail) sentMail {
 		}
 		body = string(decoded)
 	}
-	match := linkPattern.FindStringSubmatch(body)
-	if match == nil && tokenOptional(out.subject) {
+	token, found := extractLinkToken(body, owned)
+	if !found && tokenOptional(out.subject) {
 		if forbidden := noticeLinkOrToken(body); forbidden != "" {
 			t.Fatalf("the account-exists notice carries a token or a link (%q):\n%s", redactLinkTokens(forbidden), redactLinkTokens(body))
 		}
 		out.html = body
 		return out
 	}
-	if match == nil {
-		t.Fatalf("no link token in the captured HTML:\n%s", redactLinkTokens(body))
+	if !found {
+		t.Fatalf("no link token of the leg's format (users owned: %v) in the captured HTML:\n%s", owned, redactLinkTokens(body))
 	}
-	out.token = match[1]
+	out.token = token
 	out.html = strings.ReplaceAll(body, out.token, "TOKEN")
 	return out
 }
@@ -428,7 +426,7 @@ func (r *runner) compareMail(label string) {
 	var goMails []sentMail
 	for attempt := 0; attempt < 10; attempt++ {
 		for _, captured := range r.goSink.Drain(r.t) {
-			goMails = append(goMails, decodeMail(r.t, captured))
+			goMails = append(goMails, decodeMail(r.t, captured, r.usersOwned))
 		}
 		if len(goMails) >= owed {
 			break
@@ -454,6 +452,11 @@ func (r *runner) compareMail(label string) {
 		r.t.Errorf("%s: %d account-exists mails, want %d", label, got, r.notices)
 	}
 	py, gv := planes["python"], planes["go"]
+	if pyLinks, goLinks := linkMailRows(py), linkMailRows(gv); len(pyLinks) > 0 || len(goLinks) > 0 {
+		for _, problem := range r.ledger.Compare(authrows.TableLinkMails, strings.Join(pyLinks, " | "), strings.Join(goLinks, " | ")) {
+			r.t.Errorf("%s: %s", label, problem)
+		}
+	}
 	same := len(py) == len(gv)
 	for index := 0; same && index < len(py); index++ {
 		a, b := py[index], gv[index]
@@ -464,6 +467,18 @@ func (r *runner) compareMail(label string) {
 	if !same {
 		r.t.Errorf("%s: the planes sent different e-mail:\n python %+v\n go     %+v", label, py, gv)
 	}
+}
+
+// linkMailRows is one line per mail that carries a link token: its subject and the format of the token. The planes
+// are compared on it through the quirk table, so a plane that mails a token of another format is named, not ignored.
+func linkMailRows(mails []sentMail) []string {
+	var rows []string
+	for _, mail := range mails {
+		if mail.token != "" {
+			rows = append(rows, authrows.LinkMailRow(mail.subject, linkTokenFormat(mail.token)))
+		}
+	}
+	return rows
 }
 
 func countSubject(mails []sentMail, subject string) int {

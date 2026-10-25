@@ -34,9 +34,23 @@ func goldenRows(t *testing.T) map[string]string {
 		t.Fatal(err)
 	}
 	out := map[string]string{}
+	var linkMails []string
 	for name, rows := range golden.Rows {
 		out[name] = rows.Rows
+		if !strings.HasPrefix(name, "python mails: ") {
+			continue
+		}
+		var mails []struct{ Subject, Token string }
+		if err := json.Unmarshal([]byte(rows.Rows), &mails); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		for _, mail := range mails {
+			if mail.Token != "" {
+				linkMails = append(linkMails, LinkMailRow(mail.Subject, LinkTokenGoAPI))
+			}
+		}
 	}
+	out[TableLinkMails] = strings.Join(linkMails, rowSeparator)
 	return out
 }
 

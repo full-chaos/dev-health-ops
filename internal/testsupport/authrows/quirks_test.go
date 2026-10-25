@@ -301,3 +301,83 @@ func TestRealTableLastLoginQuirkIsNotOwnedOnly(t *testing.T) {
 	}
 }
 
+
+func linkMailLines(format string, subjects ...string) string {
+	lines := make([]string, 0, len(subjects))
+	for _, subject := range subjects {
+		lines = append(lines, LinkMailRow(subject, format))
+	}
+	return strings.Join(lines, rowSeparator)
+}
+
+var linkMailSubjects = []string{"Verify your email address", "Verify your email address", "Reset your password"}
+
+// On the owned leg auth-service's link mails carry the opaque token where the golden's carry go-api's signed one: the
+// named quirk covers each such mail, once.
+func TestLinkTokenFormatQuirkCoversTheOwnedLegsMails(t *testing.T) {
+	l, err := NewLedger(forwarded(t, "sessions,local_login,credentials"), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	golden, acp := linkMailLines(LinkTokenGoAPI, linkMailSubjects...), linkMailLines(LinkTokenOpaque, linkMailSubjects...)
+	if problems := l.Compare(TableLinkMails, golden, acp); len(problems) != 0 {
+		t.Fatalf("the owned leg's opaque tokens: %v", problems)
+	}
+	if got := l.Covered(); !strings.Contains(got, "link-token-format-auth-service=3") {
+		t.Fatalf("Covered = %q, want the quirk covering 3 mails", got)
+	}
+}
+
+// Off the owned leg the quirk is not live: an opaque token there is unclassified, and so is a mail whose format is neither.
+func TestLinkTokenFormatQuirkIsOwnedLegOnly(t *testing.T) {
+	l, err := NewLedger(forwarded(t, "sessions,local_login,credentials"), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	golden := linkMailLines(LinkTokenGoAPI, linkMailSubjects...)
+	if problems := l.Compare(TableLinkMails, golden, linkMailLines(LinkTokenOpaque, linkMailSubjects...)); len(problems) == 0 {
+		t.Fatal("an opaque token off the owned leg must fail")
+	}
+	l2, _ := NewLedger(forwarded(t, "sessions,local_login,credentials"), false)
+	if problems := l2.Compare(TableLinkMails, golden, golden); len(problems) != 0 {
+		t.Fatalf("equal formats off the owned leg: %v", problems)
+	}
+	if strings.Contains(l2.Covered(), "link-token-format-auth-service") {
+		t.Fatalf("the quirk is live off the owned leg: %q", l2.Covered())
+	}
+}
+
+// The quirk covers at most the golden's link mails: one more opaque mail than the golden holds is unclassified, an
+// unknown format never is, and on the owned leg a go-api format token is no difference (the quirk then covers nothing and dies).
+func TestLinkTokenFormatQuirkIsBounded(t *testing.T) {
+	l, _ := NewLedger(forwarded(t, "sessions,local_login,credentials"), true)
+	golden := linkMailLines(LinkTokenGoAPI, linkMailSubjects...)
+	if problems := l.Compare(TableLinkMails, golden, linkMailLines(LinkTokenOpaque, append(linkMailSubjects, "Reset your password")...)); len(problems) == 0 {
+		t.Fatal("a ninth-style extra mail must be unclassified")
+	}
+	l2, _ := NewLedger(forwarded(t, "sessions,local_login,credentials"), true)
+	if problems := l2.Compare(TableLinkMails, golden, linkMailLines("other", linkMailSubjects...)); len(problems) == 0 {
+		t.Fatal("an unknown token format must be unclassified")
+	}
+	l3, _ := NewLedger(forwarded(t, "sessions,local_login,credentials"), true)
+	if problems := l3.Compare(TableLinkMails, golden, golden); len(problems) != 0 {
+		t.Fatalf("equal formats: %v", problems)
+	}
+	if dead := l3.Dead(); len(dead) == 0 {
+		t.Fatal("on the owned leg a go-api format token leaves the quirk covering nothing: it must be reported dead")
+	}
+}
+
+// Max is the number of link mails the golden's Python plane sent, counted from the frozen golden.
+func TestLinkTokenFormatQuirkMaxIsTheGoldensLinkMails(t *testing.T) {
+	golden := lines(goldenRows(t)[TableLinkMails])
+	for _, q := range Quirks {
+		if q.ID == "link-token-format-auth-service" {
+			if q.Owned != OwnedOnly || q.Table != TableLinkMails || q.Max != len(golden) {
+				t.Fatalf("the quirk = owned %q table %q max %d, want owned-only, link_mails, %d (the golden's link mails)", q.Owned, q.Table, q.Max, len(golden))
+			}
+			return
+		}
+	}
+	t.Fatal("no quirk link-token-format-auth-service")
+}

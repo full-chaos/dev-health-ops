@@ -14,6 +14,8 @@ var (
 	loginNoOrg = regexp.MustCompile(`^<nil>.*loginsessionuser:.*User logged in\{\}.*success<null>$`)
 	// Alice's two successful sign-in audit rows: go-api signed her in to organization B, auth-service to A.
 	aliceLoginOrgB = regexp.MustCompile(`^Org B(alice@example\.comloginsessionuser:alice@example\.comUser logged in\{\}.*success<null>)$`)
+	// A link mail whose token is go-api's format.
+	linkTokenGoAPIRow = regexp.MustCompile(`^(.* link token )` + LinkTokenGoAPI + `$`)
 )
 
 var (
@@ -125,6 +127,14 @@ var Quirks = []Quirk{
 		Reason: "go-api audits a password reset request for a user with a membership (alice); auth-service's issue of a link credential writes no audit event",
 		Max:    1, Exact: true,
 		Missing: func(line string) bool { return resetAsked.MatchString(line) },
+	},
+	{
+		ID: "link-token-format-auth-service", Kind: Deliberate, Table: TableLinkMails, Needs: []Aggregate{Credentials}, Owned: OwnedOnly,
+		Max:    8,
+		Reason: "with users owned by auth-service its credentials flows mail an opaque 43-character link token where go-api and Python mail a signed one, and verify and reset accept only the token of their own plane: a link mailed before the switch lapses after it, and the reverse after a rollback (CHAOS-10688; runbook lines on CHAOS-10625). Max is the golden's eight link mails",
+		Rewrite: func(line string) (string, bool) {
+			return replaceOnce(linkTokenGoAPIRow, line, "${1}"+LinkTokenOpaque)
+		},
 	},
 }
 

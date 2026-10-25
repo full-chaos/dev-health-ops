@@ -36,10 +36,11 @@ type claimLiveness struct {
 	// inHandler counts, per queue, the jobs of THIS process that are inside a
 	// handler right now (HandlerInvoked minus HandlerReturned). River counts a
 	// job as running from claim -- including one failing at its idempotency
-	// Begin -- so a queue whose Running count equals inHandler is genuinely busy
-	// with handler work, while Running above inHandler means slots are stuck
-	// BEFORE their handler. That difference is what lets a full queue stay
-	// healthy for long-running jobs yet still turn red for a stale pooler.
+	// Begin -- so a queue whose Running count equals inHandler plus the slots in
+	// leaseWaits is genuinely busy with handler work or a lease wait, while
+	// Running above that sum means slots are stuck BEFORE their handler. That
+	// difference is what lets a full queue stay healthy for long-running jobs
+	// yet still turn red for a stale pooler.
 	inHandler map[string]int64
 	// leaseWaits is, per queue, the slots of THIS process waiting on another
 	// holder's org concurrency lease, keyed by wait start. A slot is entered
@@ -690,8 +691,9 @@ func collectQueueFacts(snapshot riverstore.QueueTelemetrySnapshot, claim *claimL
 //	work that should be reaching a handler is not, and nothing has run for a
 //	whole window.
 //
-// "Should be reaching a handler" is either a claimed slot that is not inside a
-// handler (running > inside) or a backlog with free capacity to claim it. The
+// "Should be reaching a handler" is either a claimed slot that is neither inside
+// a handler nor waiting on an org lease (running > inside+leaseWaiting) or a
+// backlog with free capacity to claim it. The
 // queue is healthy exactly when every running slot is inside a handler (long
 // work, however deep the backlog behind a FULL queue) or nothing is waiting
 // at all. The two ways it is not:

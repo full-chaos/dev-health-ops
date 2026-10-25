@@ -3,6 +3,7 @@ package testshard_test
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -384,21 +385,37 @@ func censusExcludedFound(mod string, plain, raced map[string]censusPkg, read fun
 
 func censusExcludedListed(t *testing.T) map[censusExcludedRow]bool {
 	t.Helper()
-	listed := map[censusExcludedRow]bool{}
-	for _, line := range strings.Split(censusRead(t, "ci/race_excluded_tests.tsv"), "\n") {
-		if strings.TrimSpace(line) == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		f := strings.Split(line, "\t")
-		if len(f) != 2 {
-			t.Fatalf("bad race_excluded_tests.tsv row %q", line)
-		}
-		listed[censusExcludedRow{f[0], f[1]}] = true
+	listed, err := parseCensusExcluded(censusRead(t, "ci/race_excluded_tests.tsv"))
+	if err != nil {
+		t.Fatal(err)
 	}
 	if len(listed) == 0 {
 		t.Fatal("ci/race_excluded_tests.tsv lists no test")
 	}
 	return listed
+}
+
+// parseCensusExcluded reads the census rows after the same trim and tab split as the loader of ci/check_go.sh, and refuses a
+// repeated (package, test) row BEFORE it enters the map: a map would collapse it and hide the duplicate.
+func parseCensusExcluded(text string) (map[censusExcludedRow]bool, error) {
+	listed := map[censusExcludedRow]bool{}
+	firstLine := map[censusExcludedRow]int{}
+	for i, line := range strings.Split(text, "\n") {
+		if strings.TrimSpace(line) == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		f := strings.Split(line, "\t")
+		if len(f) != 2 {
+			return nil, fmt.Errorf("bad race_excluded_tests.tsv row %q", line)
+		}
+		row := censusExcludedRow{strings.TrimSpace(f[0]), strings.TrimSpace(f[1])}
+		if first, dup := firstLine[row]; dup {
+			return nil, fmt.Errorf("duplicate race_excluded_tests.tsv row %s %s: lines %d and %d", row.pkg, row.name, first, i+1)
+		}
+		firstLine[row] = i + 1
+		listed[row] = true
+	}
+	return listed, nil
 }
 
 func censusDiff(a, b map[censusExcludedRow]bool) []censusExcludedRow {
@@ -476,5 +493,21 @@ func TestEveryRaceExcludedTestIsListedPlanted(t *testing.T) {
 	})
 	if err != nil || len(got) != 1 || !got[censusExcludedRow{"pkg", "TestPlantedOnly"}] {
 		t.Errorf("planted race-excluded file not derived: %v %v", got, err)
+	}
+}
+
+func TestTheCensusParserRefusesADuplicateRowBeforeItEntersTheMap(t *testing.T) {
+	t.Parallel()
+	for name, text := range map[string]string{
+		"exact":          "a/b\tTestOne\nc/d\tTestTwo\na/b\tTestOne\n",
+		"trailing space": "a/b\tTestOne\na/b\tTestOne \n",
+	} {
+		_, err := parseCensusExcluded(text)
+		if err == nil || !strings.Contains(err.Error(), "duplicate") || !strings.Contains(err.Error(), "a/b") {
+			t.Errorf("%s: want a duplicate-row error naming a/b, got %v", name, err)
+		}
+	}
+	if got, err := parseCensusExcluded("# c\na/b\tTestOne\nc/d\tTestTwo\n"); err != nil || len(got) != 2 {
+		t.Errorf("a clean census: got %v, %v", got, err)
 	}
 }

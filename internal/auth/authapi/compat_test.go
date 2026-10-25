@@ -876,7 +876,8 @@ func TestCompatRoutesNeedAProjectorAndAnAuditAppender(t *testing.T) {
 		t.Fatal("compatibility routes mounted without a projector and an audit appender")
 	}
 	routes, err := CompatRoutes(CompatDeps{Sessions: f.sessions, Users: f.users, Issuer: f.issuer,
-		Projector: &fakeProjector{}, AppendAudit: func(context.Context, audit.AuditEvent) error { return nil }})
+		Projector: &fakeProjector{}, AppendAudit: func(context.Context, audit.AuditEvent) error { return nil },
+		Limits: mustLimits(t, httpapi.NewMemoryCounters(nil))})
 	if err != nil {
 		t.Fatal(err)
 	}

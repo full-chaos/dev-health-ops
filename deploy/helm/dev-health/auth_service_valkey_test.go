@@ -171,3 +171,17 @@ func aList(v any) []any { l, _ := v.([]any); return l }
 func aMap(v any) map[string]any { m, _ := v.(map[string]any); return m }
 
 func aStr(v any) string { s, _ := v.(string); return s }
+
+// The session routes count the compatibility refresh in the shared store, so
+// the chart refuses to render them without the store's login.
+func TestAuthServiceSessionKeysNeedTheRateLimitStore(t *testing.T) {
+	sessions := []string{"--set", "authService.sessionKeys.successor.secretName=auth-session"}
+	_, out, err := renderAuth(t, append(append([]string{}, authBase...), sessions...)...)
+	if err == nil || !strings.Contains(out, "authService.valkey.secretName is required") {
+		t.Fatalf("sessions without the store rendered: err %v\n%.400s", err, out)
+	}
+	withStore := append(append(append([]string{}, authBase...), sessions...), authValkey...)
+	if _, out, err := renderAuth(t, withStore...); err != nil {
+		t.Fatalf("sessions with the store refused: %v\n%.400s", err, out)
+	}
+}

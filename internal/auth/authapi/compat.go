@@ -97,7 +97,7 @@ type compatHandlers struct {
 	rec   recorder
 	login *local.Service
 
-	loginIP, loginAccount *httpapi.KeyedLimiter
+	loginIP, loginAccount, refresh *httpapi.KeyedLimiter
 }
 
 // CompatRoutes returns go-api's refresh and logout, and login and
@@ -118,15 +118,15 @@ func CompatRoutes(deps CompatDeps) ([]httpapi.Route, error) {
 	if err != nil {
 		return nil, err
 	}
-	h := compatHandlers{CompatDeps: deps, rec: rec}
+	if deps.Limits == nil {
+		return nil, errNoLimits
+	}
+	h := compatHandlers{CompatDeps: deps, rec: rec, refresh: deps.Limits.limiter(refreshLimit)}
 	routes := []httpapi.Route{
 		{Method: http.MethodPost, Pattern: PatternCompatRefresh, Handler: http.HandlerFunc(h.compatRefresh)},
 		{Method: http.MethodPost, Pattern: PatternCompatLogout, Handler: http.HandlerFunc(h.compatLogout)},
 	}
 	if deps.Login != nil {
-		if deps.Limits == nil {
-			return nil, errNoLimits
-		}
 		h.loginIP, h.loginAccount = deps.Limits.limiter(loginIPLimit), deps.Limits.limiter(loginAccountLimit)
 		login, err := local.New(local.Config{
 			Users: deps.Login.Users, Attempts: deps.Login.Attempts, LockoutKey: deps.Login.LockoutKey,
@@ -294,6 +294,9 @@ func (h compatHandlers) compatRefresh(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	token, ok := h.readRefreshToken(w, r, opCompatRefresh)
 	if !ok {
+		return
+	}
+	if !admit(w, r, goAPIRefusal, PatternCompatRefresh, charge{h.refresh, clientKey(r)}) {
 		return
 	}
 	var (

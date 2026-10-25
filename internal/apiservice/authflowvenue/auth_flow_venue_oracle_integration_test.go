@@ -308,8 +308,15 @@ func (r *runner) batch(label string, steps []step) map[string][2]venueoracle.Res
 				r.checkUniformLength(s.name, goResponse)
 			}
 		}
+		if r.external && r.forwarded.Has(authrows.Sessions) {
+			// auth-service answers a sign-in with an opaque refresh credential, a sid claim and (for alice) her
+			// earliest organization: each ruled difference is classified by authrows, any other still differs.
+			pyCompared.Body = authrows.GoldenResponseBody(s.name, pyCompared.Body)
+			goProjected.Body = authrows.TargetResponseBody(goProjected.Body)
+		}
 		same, compared, pyShown, goShown := venueoracle.Compare(s.python, pyCompared, goProjected,
-			venueoracle.DiffOptions{Normalize: func(_ venueoracle.Request, body string) string { return normalize(body) }})
+			venueoracle.DiffOptions{Normalize: func(_ venueoracle.Request, body string) string { return normalize(body) },
+				LoginNoStore: r.external && r.forwarded.Has(authrows.LocalLogin)})
 		fmt.Fprintf(&r.receipt, "%-70s python=%d go=%d %s\n", s.name, pyResponses[index].Status, goProjected.Status, venueoracle.Mark(same))
 		if !same {
 			r.t.Errorf("%s:\n python %d %s %v\n go     %d %s %v", s.name, pyShown.Status, pyShown.Body, pick(pyShown.Headers, compared),

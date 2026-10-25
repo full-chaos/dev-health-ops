@@ -133,17 +133,13 @@ func (l *Ledger) Compare(table, golden, acp string) []string {
 	for _, line := range sortedKeys(goldenOnly) {
 		for goldenOnly[line] > 0 {
 			covered := false
-			for _, q := range l.table {
-				if q.Table != table || !q.live(l.forwarded) || q.Rewrite == nil {
-					continue
+			if final, used, ok := l.rewriteChain(table, line, acpOnly); ok {
+				goldenOnly[line]--
+				acpOnly[final]--
+				for _, id := range used {
+					l.covered[id]++
 				}
-				if rewritten, ok := q.Rewrite(line); ok && acpOnly[rewritten] > 0 {
-					goldenOnly[line]--
-					acpOnly[rewritten]--
-					l.covered[q.ID]++
-					covered = true
-					break
-				}
+				covered = true
 			}
 			if !covered {
 				problems = append(problems, fmt.Sprintf("%s: unclassified difference, golden only: %s", table, line))
@@ -169,6 +165,45 @@ func (l *Ledger) Compare(table, golden, acp string) []string {
 		}
 	}
 	return problems
+}
+
+// maxRewriteChain is how many rewrites may follow one another on a golden line: a row can differ for more than one
+// named reason (its organization, then its revoked count), each reason its own quirk.
+const maxRewriteChain = 3
+
+// rewriteChain finds the quirks, each used at most once and in table order of discovery, whose rewrites take a line of
+// the golden to a line only the ACP target holds. Every step is a live quirk of table.
+func (l *Ledger) rewriteChain(table, line string, acpOnly map[string]int) (final string, used []string, ok bool) {
+	var walk func(current string, taken []string) (string, []string, bool)
+	walk = func(current string, taken []string) (string, []string, bool) {
+		if len(taken) == maxRewriteChain {
+			return "", nil, false
+		}
+	next:
+		for _, q := range l.table {
+			if q.Table != table || !q.live(l.forwarded) || q.Rewrite == nil {
+				continue
+			}
+			for _, id := range taken {
+				if id == q.ID {
+					continue next
+				}
+			}
+			rewritten, applies := q.Rewrite(current)
+			if !applies {
+				continue
+			}
+			chain := append(append([]string(nil), taken...), q.ID)
+			if acpOnly[rewritten] > 0 {
+				return rewritten, chain, true
+			}
+			if final, ids, found := walk(rewritten, chain); found {
+				return final, ids, true
+			}
+		}
+		return "", nil, false
+	}
+	return walk(line, nil)
 }
 
 // Dead is every live quirk that covered no row, and an empty ledger.

@@ -42,6 +42,7 @@ internal/auth/authruntime	audit_request_id_scan_test.go
 internal/auth/authruntime	endpoint_profile_rows_test.go
 internal/auth/authruntime	kidwiring_callers_test.go
 internal/auth/contracts	access_token_goldens_test.go
+internal/auth/contracts	anchor_ranges_test.go
 internal/auth/contracts	authorization_goldens_test.go
 internal/auth/contracts	authorization_schema_test.go
 internal/auth/contracts	contracts.go
@@ -559,6 +560,7 @@ internal/teamcreated	census_test.go
 internal/teamprovider	census_test.go
 internal/teamresolve	golden_test.go
 internal/testsupport/authrows	golden_test.go
+internal/testsupport/authrows	responses_test.go
 internal/testsupport/chschema	contract_test.go
 internal/testsupport/goldenscan	tree.go
 internal/testsupport/goldenscan	vectors_test.go

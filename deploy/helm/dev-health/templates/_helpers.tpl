@@ -882,3 +882,79 @@ namespace, HTTPS, then networkPolicy.extraEgress. The auth pods never use these 
 - {{ toYaml . | nindent 2 | trim }}
 {{- end }}
 {{- end }}
+
+{{/*
+One authService.trustedProxies entry is what internal/auth/clientaddr ParseTrust accepts (a bare IP address, or a strict CIDR
+network: canonical prefix digits, no host bits, no zone), so a rendered value never stops auth-service at start. Prints "true" when
+the entry is valid, nothing otherwise. The chart refuses /0 and IPv4-mapped forms on top of this.
+*/}}
+{{- define "dev-health.trustedProxyEntry" -}}
+{{- $parts := splitList "/" (toString .) -}}
+{{- $addr := index $parts 0 -}}
+{{- $hasPrefix := eq (len $parts) 2 -}}
+{{- $prefix := "" -}}
+{{- if $hasPrefix }}{{- $prefix = index $parts 1 }}{{- end -}}
+{{- $ok := false -}}
+{{- if and (le (len $parts) 2) (or (not $hasPrefix) (regexMatch "^(0|[1-9][0-9]{0,2})$" $prefix)) -}}
+{{- $octet := "(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])" -}}
+{{- if regexMatch (printf "^%s(\\.%s){3}$" $octet $octet) $addr -}}
+{{- $ok = true -}}
+{{- if $hasPrefix -}}
+{{- $p := int $prefix -}}
+{{- if gt $p 32 }}{{- $ok = false }}{{- else -}}
+{{- $o := splitList "." $addr -}}
+{{- $v := add (add (mul (int (index $o 0)) 16777216) (mul (int (index $o 1)) 65536)) (add (mul (int (index $o 2)) 256) (int (index $o 3))) -}}
+{{- $pow := 1 -}}
+{{- range until (int (sub 32 $p)) }}{{- $pow = mul $pow 2 }}{{- end -}}
+{{- if ne (int (mod $v $pow)) 0 }}{{- $ok = false }}{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- else if and (contains ":" $addr) (regexMatch "^[0-9A-Fa-f:]+$" $addr) (not (contains ":::" $addr)) -}}
+{{- $groups := list -}}
+{{- $shape := false -}}
+{{- if contains "::" $addr -}}
+{{- $halves := splitn "::" 2 $addr -}}
+{{- $left := $halves._0 -}}
+{{- $right := $halves._1 -}}
+{{- $half := "^([0-9A-Fa-f]{1,4}(:[0-9A-Fa-f]{1,4})*)?$" -}}
+{{- if and (regexMatch $half $left) (regexMatch $half $right) -}}
+{{- $l := list -}}{{- if $left }}{{- $l = splitList ":" $left }}{{- end -}}
+{{- $r := list -}}{{- if $right }}{{- $r = splitList ":" $right }}{{- end -}}
+{{- if le (add (len $l) (len $r)) 7 -}}
+{{- $shape = true -}}
+{{- $zeros := list -}}
+{{- range until (int (sub 8 (add (len $l) (len $r)))) }}{{- $zeros = append $zeros "0" }}{{- end -}}
+{{- $groups = concat $l $zeros $r -}}
+{{- end -}}
+{{- end -}}
+{{- else if regexMatch "^([0-9A-Fa-f]{1,4}:){7}[0-9A-Fa-f]{1,4}$" $addr -}}
+{{- $shape = true -}}
+{{- $groups = splitList ":" $addr -}}
+{{- end -}}
+{{- if $shape -}}
+{{- $ok = true -}}
+{{- /* IPv4-mapped in every spelling: five zero groups then ffff, any case, compressed or not, hex tail. */ -}}
+{{- if and (regexMatch "^0{1,4}$" (index $groups 0)) (regexMatch "^0{1,4}$" (index $groups 1)) (regexMatch "^0{1,4}$" (index $groups 2)) (regexMatch "^0{1,4}$" (index $groups 3)) (regexMatch "^0{1,4}$" (index $groups 4)) (eq (lower (index $groups 5)) "ffff") }}{{- $ok = false }}{{- end -}}
+{{- if $hasPrefix -}}
+{{- $p := int $prefix -}}
+{{- if gt $p 128 }}{{- $ok = false }}{{- else -}}
+{{- $digits := "0123456789abcdef" -}}
+{{- range $i, $g := $groups -}}
+{{- $val := 0 -}}
+{{- range $c := (regexSplit "" (lower $g) -1) }}
+{{- if $c }}{{- range $d := until 16 }}{{- if eq (substr $d (int (add1 $d)) $digits) $c }}{{- $val = add (mul $val 16) $d }}{{- end }}{{- end }}{{- end }}
+{{- end -}}
+{{- $covered := int (sub $p (mul $i 16)) -}}
+{{- if lt $covered 0 }}{{- $covered = 0 }}{{- end -}}
+{{- if gt $covered 16 }}{{- $covered = 16 }}{{- end -}}
+{{- $pow := 1 -}}
+{{- range until (int (sub 16 $covered)) }}{{- $pow = mul $pow 2 }}{{- end -}}
+{{- if ne (int (mod $val $pow)) 0 }}{{- $ok = false }}{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- if $ok }}true{{ end -}}
+{{- end -}}

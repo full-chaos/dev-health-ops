@@ -15,7 +15,7 @@ const postureModule = "github.com/full-chaos/dev-health-ops/"
 
 func postureKeys(t *testing.T, root string) []string {
 	t.Helper()
-	b, err := os.ReadFile(filepath.Join(root, "ci", "posture_integration_packages.txt"))
+	b, err := os.ReadFile(filepath.Join(root, "ci", "posture_integration_packages.tsv"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +64,7 @@ func TestPostureIntegrationListsTheTwelvePackagesOnATrigger(t *testing.T) {
 		"internal/testsupport/domainroledb/domainroledb.go", "internal/storage/postgres/domain_authorization.go",
 		"internal/storage/postgres/posture_manifest.go", "internal/storage/postgres/role_posture_integration_test.go",
 		"internal/storage/postgres/authschema/x.go", "internal/storage/postgres/aclguard/x.go",
-		"internal/storage/roleprovision/x.go", "ci/bigboy/pg-grants-check.sh", "ci/posture_integration_packages.txt",
+		"internal/storage/roleprovision/x.go", "ci/bigboy/pg-grants-check.sh", "ci/posture_integration_packages.tsv",
 	}
 	for _, k := range keys { // every listed package directory is itself a trigger
 		triggers = append(triggers, k+"/anything.go")

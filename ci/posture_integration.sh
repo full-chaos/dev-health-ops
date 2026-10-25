@@ -4,7 +4,7 @@
 # untested (CHAOS-11410). No CI runs this; the lane shows its output in the DELTA.
 #
 # THIS IS A HEURISTIC. A posture bug reached through a path outside the trigger list below still reaches the queue.
-# Retire this tool and ci/posture_integration_packages.txt when the posture / role migration work settles; review by
+# Retire this tool and ci/posture_integration_packages.tsv when the posture / role migration work settles; review by
 # 2026-12-01.
 #
 # Usage: posture_integration.sh [--run] [--paths FILE]
@@ -17,7 +17,7 @@
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-list_file="${here}/posture_integration_packages.txt"
+list_file="${here}/posture_integration_packages.tsv"
 capped="${POSTURE_CAPPED_SH:-/home/ubuntu/devhealth/scripts/capped.sh}"
 
 run=0
@@ -63,7 +63,7 @@ while IFS= read -r -d '' path; do
     internal/pgmigrate/sql/* | internal/pgmigrate/baseline/* | internal/rivermigrate/* | internal/testsupport/domainroledb/*) hit="${path}" ;;
     internal/storage/postgres/domain_authorization* | internal/storage/postgres/posture_* | internal/storage/postgres/role*) hit="${path}" ;;
     internal/storage/postgres/authschema/* | internal/storage/postgres/aclguard/* | internal/storage/roleprovision/*) hit="${path}" ;;
-    ci/bigboy/pg-grants-check.sh | ci/posture_integration_packages.txt | ci/posture_integration.sh) hit="${path}" ;;
+    ci/bigboy/pg-grants-check.sh | ci/posture_integration_packages.tsv | ci/posture_integration.sh) hit="${path}" ;;
   esac
   for pkg in "${packages[@]}"; do
     case "${path}" in "${pkg}"/*) hit="${path}" ;; esac

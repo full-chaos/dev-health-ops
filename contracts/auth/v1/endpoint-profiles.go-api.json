@@ -758,10 +758,17 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": null,
+      "gaps": [
+        "action: no catalog action covers SSO provider management; no settings action is mapped because the handler check is not proven to equal one (this leaf does not extend the vocabulary)",
+        "disclosure_behavior: the by-id or unauthenticated answer of this route is not traced in this record"
+      ],
       "graphql_field_name": null,
       "id": "DELETE /api/v1/auth/sso/providers/{provider_id} [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "DELETE",
       "primary_validator": {
         "anchor": {
@@ -794,6 +801,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:115)",
       "route": "/api/v1/auth/sso/providers/{provider_id}",
       "service": "dev-health-ops-api",
       "source": {
@@ -816,10 +824,17 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": null,
+      "gaps": [
+        "action: no catalog action covers billing management; the action it needs is billing.manage (this leaf does not extend the vocabulary)",
+        "disclosure_behavior: the by-id or unauthenticated answer of this route is not traced in this record"
+      ],
       "graphql_field_name": null,
       "id": "DELETE /api/v1/billing/plans/{plan_id} [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "DELETE",
       "primary_validator": {
         "anchor": {
@@ -852,6 +867,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:115)",
       "route": "/api/v1/billing/plans/{plan_id}",
       "service": "dev-health-ops-api",
       "source": {
@@ -4881,10 +4897,16 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:115; internal/api/policy/orgless.go:26)",
+      "gaps": [
+        "action: no catalog action covers the session and onboarding routes (this leaf does not extend the vocabulary)"
+      ],
       "graphql_field_name": null,
       "id": "GET /api/v1/auth/me [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -4917,6 +4939,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:115)",
       "route": "/api/v1/auth/me",
       "service": "dev-health-ops-api",
       "source": {
@@ -4939,10 +4962,16 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:115; internal/api/policy/orgless.go:26)",
+      "gaps": [
+        "action: no catalog action covers the session and onboarding routes (this leaf does not extend the vocabulary)"
+      ],
       "graphql_field_name": null,
       "id": "GET /api/v1/auth/me/organizations [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -4975,6 +5004,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:115)",
       "route": "/api/v1/auth/me/organizations",
       "service": "dev-health-ops-api",
       "source": {
@@ -5038,10 +5068,16 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:115; internal/api/policy/orgless.go:26)",
+      "gaps": [
+        "action: no catalog action covers the session and onboarding routes (this leaf does not extend the vocabulary)"
+      ],
       "graphql_field_name": null,
       "id": "GET /api/v1/auth/onboarding/state [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -5074,6 +5110,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:115)",
       "route": "/api/v1/auth/onboarding/state",
       "service": "dev-health-ops-api",
       "source": {
@@ -5137,10 +5174,16 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; once any body-first validation has run, a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:115; internal/api/policy/orgless.go:26)",
+      "gaps": [
+        "action: no catalog action covers SSO provider management; no settings action is mapped because the handler check is not proven to equal one (this leaf does not extend the vocabulary)"
+      ],
       "graphql_field_name": null,
       "id": "GET /api/v1/auth/sso/providers [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -5173,6 +5216,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:115)",
       "route": "/api/v1/auth/sso/providers",
       "service": "dev-health-ops-api",
       "source": {
@@ -5195,10 +5239,17 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": null,
+      "gaps": [
+        "action: no catalog action covers SSO provider management; no settings action is mapped because the handler check is not proven to equal one (this leaf does not extend the vocabulary)",
+        "disclosure_behavior: the by-id or unauthenticated answer of this route is not traced in this record"
+      ],
       "graphql_field_name": null,
       "id": "GET /api/v1/auth/sso/providers/{provider_id} [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -5231,6 +5282,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:115)",
       "route": "/api/v1/auth/sso/providers/{provider_id}",
       "service": "dev-health-ops-api",
       "source": {
@@ -5294,10 +5346,16 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:115; internal/api/policy/orgless.go:26)",
+      "gaps": [
+        "action: no catalog action covers billing read; the action it needs is billing.read (this leaf does not extend the vocabulary)"
+      ],
       "graphql_field_name": null,
       "id": "GET /api/v1/billing/audit [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -5330,6 +5388,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:115)",
       "route": "/api/v1/billing/audit",
       "service": "dev-health-ops-api",
       "source": {
@@ -5352,10 +5411,17 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": null,
+      "gaps": [
+        "action: no catalog action covers billing read; the action it needs is billing.read (this leaf does not extend the vocabulary)",
+        "disclosure_behavior: the by-id or unauthenticated answer of this route is not traced in this record"
+      ],
       "graphql_field_name": null,
       "id": "GET /api/v1/billing/audit/{audit_id} [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -5388,6 +5454,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:115)",
       "route": "/api/v1/billing/audit/{audit_id}",
       "service": "dev-health-ops-api",
       "source": {
@@ -5410,10 +5477,17 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": null,
+      "gaps": [
+        "action: no catalog action covers entitlement read; the action it needs is license.read (this leaf does not extend the vocabulary)",
+        "disclosure_behavior: the by-id or unauthenticated answer of this route is not traced in this record"
+      ],
       "graphql_field_name": null,
       "id": "GET /api/v1/billing/entitlements/{org_id} [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -5446,6 +5520,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_path: the {org_id} path segment names the target organization and is compared with the caller's organization (internal/api/billing/entitlements.go:84)",
       "route": "/api/v1/billing/entitlements/{org_id}",
       "service": "dev-health-ops-api",
       "source": {
@@ -5468,10 +5543,16 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:115; internal/api/policy/orgless.go:26)",
+      "gaps": [
+        "action: no catalog action covers billing read; the action it needs is billing.read (this leaf does not extend the vocabulary)"
+      ],
       "graphql_field_name": null,
       "id": "GET /api/v1/billing/invoices [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -5504,6 +5585,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:115)",
       "route": "/api/v1/billing/invoices",
       "service": "dev-health-ops-api",
       "source": {
@@ -5526,10 +5608,17 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": null,
+      "gaps": [
+        "action: no catalog action covers billing read; the action it needs is billing.read (this leaf does not extend the vocabulary)",
+        "disclosure_behavior: the by-id or unauthenticated answer of this route is not traced in this record"
+      ],
       "graphql_field_name": null,
       "id": "GET /api/v1/billing/invoices/{invoice_id} [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -5562,6 +5651,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:115)",
       "route": "/api/v1/billing/invoices/{invoice_id}",
       "service": "dev-health-ops-api",
       "source": {
@@ -5584,10 +5674,17 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: no authorization read (internal/api/billing/routes.go:87)",
+      "disclosure_behavior": null,
+      "gaps": [
+        "action: no catalog action covers the plan catalog read; the action it needs is billing.read (this leaf does not extend the vocabulary)",
+        "disclosure_behavior: the by-id or unauthenticated answer of this route is not traced in this record"
+      ],
       "graphql_field_name": null,
       "id": "GET /api/v1/billing/plans [dev-health-ops-api @api]",
+      "impersonation_policy": "exempt_no_org_context",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -5620,6 +5717,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "none: the route reads no caller organization (internal/api/billing/routes.go:87)",
       "route": "/api/v1/billing/plans",
       "service": "dev-health-ops-api",
       "source": {
@@ -5642,10 +5740,17 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: no authorization read (internal/api/billing/routes.go:96)",
+      "disclosure_behavior": null,
+      "gaps": [
+        "action: no catalog action covers the plan catalog read; the action it needs is billing.read (this leaf does not extend the vocabulary)",
+        "disclosure_behavior: the by-id or unauthenticated answer of this route is not traced in this record"
+      ],
       "graphql_field_name": null,
       "id": "GET /api/v1/billing/plans/{plan_id} [dev-health-ops-api @api]",
+      "impersonation_policy": "exempt_no_org_context",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -5678,6 +5783,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "none: the route reads no caller organization (internal/api/billing/routes.go:96)",
       "route": "/api/v1/billing/plans/{plan_id}",
       "service": "dev-health-ops-api",
       "source": {
@@ -5700,10 +5806,16 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:115; internal/api/policy/orgless.go:26)",
+      "gaps": [
+        "action: no catalog action covers billing read; the action it needs is billing.read (this leaf does not extend the vocabulary)"
+      ],
       "graphql_field_name": null,
       "id": "GET /api/v1/billing/refunds [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -5736,6 +5848,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:115)",
       "route": "/api/v1/billing/refunds",
       "service": "dev-health-ops-api",
       "source": {
@@ -5758,10 +5871,17 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": null,
+      "gaps": [
+        "action: no catalog action covers billing read; the action it needs is billing.read (this leaf does not extend the vocabulary)",
+        "disclosure_behavior: the by-id or unauthenticated answer of this route is not traced in this record"
+      ],
       "graphql_field_name": null,
       "id": "GET /api/v1/billing/refunds/{refund_id} [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -5794,6 +5914,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:115)",
       "route": "/api/v1/billing/refunds/{refund_id}",
       "service": "dev-health-ops-api",
       "source": {
@@ -5816,10 +5937,16 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:115; internal/api/policy/orgless.go:26)",
+      "gaps": [
+        "action: no catalog action covers billing read; the action it needs is billing.read (this leaf does not extend the vocabulary)"
+      ],
       "graphql_field_name": null,
       "id": "GET /api/v1/billing/subscriptions [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -5852,6 +5979,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:115)",
       "route": "/api/v1/billing/subscriptions",
       "service": "dev-health-ops-api",
       "source": {
@@ -5874,10 +6002,16 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:115; internal/api/policy/orgless.go:26)",
+      "gaps": [
+        "action: no catalog action covers billing read; the action it needs is billing.read (this leaf does not extend the vocabulary)"
+      ],
       "graphql_field_name": null,
       "id": "GET /api/v1/billing/subscriptions/history [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -5910,6 +6044,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:115)",
       "route": "/api/v1/billing/subscriptions/history",
       "service": "dev-health-ops-api",
       "source": {
@@ -5932,10 +6067,16 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:115; internal/api/policy/orgless.go:26)",
+      "gaps": [
+        "action: no catalog action covers billing read; the action it needs is billing.read (this leaf does not extend the vocabulary)"
+      ],
       "graphql_field_name": null,
       "id": "GET /api/v1/billing/subscriptions/list [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -5968,6 +6109,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:115)",
       "route": "/api/v1/billing/subscriptions/list",
       "service": "dev-health-ops-api",
       "source": {
@@ -6212,10 +6354,19 @@
       "accepted_credential_classes": [
         "internal_svc_acr_token"
       ],
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: no authorization read (internal/apiservice/acr/internalauth.go:105)",
+      "disclosure_behavior": null,
+      "gaps": [
+        "action: no catalog action covers the internal service entitlement and configuration reads (this leaf does not extend the vocabulary)",
+        "impersonation_policy: the route has an organization context from the request path; the internal listener runs no organization-scope or impersonation middleware (internal/apiservice/service.go:390 names them on the main listener only); enum values seen in the schema: subject_to_impersonation_override, exempt_no_org_context, not_applicable_non_main_app, unknown; not_applicable_non_main_app recorded pending a ruling",
+        "disclosure_behavior: the by-id or unauthenticated answer of this route is not traced in this record",
+        "credential_binding: the service credential is not bound to an organization; any holder may name any organization; it closes with the organization-bound workload claim and the acr-to-ops workload-token work (W8/W9), not in this leaf"
+      ],
       "graphql_field_name": null,
       "id": "GET /api/v1/internal/acr/entitlements/{org_id} [dev-health-ops-api @internal]",
+      "impersonation_policy": "not_applicable_non_main_app",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -6226,6 +6377,7 @@
         "description": "routeAuth: the internal listener verifies the svc_acr_ service credential (hashed at rest) before any read, with a keyed attempt limiter."
       },
       "public_rationale": null,
+      "resource_resolver": "organization_from_path: the {org_id} path segment is the requested organization (internal/apiservice/acr/handlers.go:141); the service credential carries no organization binding that the handler compares with it",
       "route": "/api/v1/internal/acr/entitlements/{org_id}",
       "service": "dev-health-ops-api",
       "source": {
@@ -6239,10 +6391,17 @@
       "accepted_credential_classes": [
         "internal_svc_acr_token"
       ],
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: no authorization read (internal/apiservice/acr/internalauth.go:105)",
+      "disclosure_behavior": null,
+      "gaps": [
+        "action: no catalog action covers the internal service entitlement and configuration reads (this leaf does not extend the vocabulary)",
+        "disclosure_behavior: the by-id or unauthenticated answer of this route is not traced in this record"
+      ],
       "graphql_field_name": null,
       "id": "GET /api/v1/internal/acr/health [dev-health-ops-api @internal]",
+      "impersonation_policy": "exempt_no_org_context",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -6253,6 +6412,7 @@
         "description": "routeAuth: the internal listener verifies the svc_acr_ service credential (hashed at rest) before any read, with a keyed attempt limiter."
       },
       "public_rationale": null,
+      "resource_resolver": "none: the route reads no organization (internal/apiservice/acr/handlers.go:67)",
       "route": "/api/v1/internal/acr/health",
       "service": "dev-health-ops-api",
       "source": {
@@ -6266,10 +6426,19 @@
       "accepted_credential_classes": [
         "internal_svc_acr_token"
       ],
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: no authorization read (internal/apiservice/acr/internalauth.go:105)",
+      "disclosure_behavior": null,
+      "gaps": [
+        "action: no catalog action covers the internal service entitlement and configuration reads (this leaf does not extend the vocabulary)",
+        "impersonation_policy: the route has an organization context from the request path; the internal listener runs no organization-scope or impersonation middleware (internal/apiservice/service.go:390 names them on the main listener only); enum values seen in the schema: subject_to_impersonation_override, exempt_no_org_context, not_applicable_non_main_app, unknown; not_applicable_non_main_app recorded pending a ruling",
+        "disclosure_behavior: the by-id or unauthenticated answer of this route is not traced in this record",
+        "credential_binding: the service credential is not bound to an organization; any holder may name any organization; it closes with the organization-bound workload claim and the acr-to-ops workload-token work (W8/W9), not in this leaf"
+      ],
       "graphql_field_name": null,
       "id": "GET /api/v1/internal/acr/orgs/{org_id}/llm-config [dev-health-ops-api @internal]",
+      "impersonation_policy": "not_applicable_non_main_app",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -6280,6 +6449,7 @@
         "description": "routeAuth: the internal listener verifies the svc_acr_ service credential (hashed at rest) before any read, with a keyed attempt limiter."
       },
       "public_rationale": null,
+      "resource_resolver": "organization_from_path: the {org_id} path segment is the requested organization (internal/apiservice/acr/llmconfig.go:137); the service credential carries no organization binding that the handler compares with it",
       "route": "/api/v1/internal/acr/orgs/{org_id}/llm-config",
       "service": "dev-health-ops-api",
       "source": {
@@ -6296,10 +6466,17 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": null,
+      "gaps": [
+        "action: no catalog action covers entitlement read; the action it needs is license.read (this leaf does not extend the vocabulary)",
+        "disclosure_behavior: the by-id or unauthenticated answer of this route is not traced in this record"
+      ],
       "graphql_field_name": null,
       "id": "GET /api/v1/licensing/entitlements/{org_id} [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -6332,6 +6509,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_path: the {org_id} path segment names the target organization and is compared with the caller's organization (internal/api/orgs/orgs.go:212)",
       "route": "/api/v1/licensing/entitlements/{org_id}",
       "service": "dev-health-ops-api",
       "source": {
@@ -6354,10 +6532,16 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:115; internal/api/policy/orgless.go:26)",
+      "gaps": [
+        "action: no catalog action is proven to equal this handler's own check on the own organization profile (candidate for a ruling; this leaf does not extend the vocabulary)"
+      ],
       "graphql_field_name": null,
       "id": "GET /api/v1/orgs/me [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -6390,6 +6574,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:115)",
       "route": "/api/v1/orgs/me",
       "service": "dev-health-ops-api",
       "source": {
@@ -7858,10 +8043,17 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": null,
+      "gaps": [
+        "action: no catalog action covers SSO provider management; no settings action is mapped because the handler check is not proven to equal one (this leaf does not extend the vocabulary)",
+        "disclosure_behavior: the by-id or unauthenticated answer of this route is not traced in this record"
+      ],
       "graphql_field_name": null,
       "id": "PATCH /api/v1/auth/oauth/{first}/{second} [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "PATCH",
       "primary_validator": {
         "anchor": {
@@ -7894,6 +8086,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:115)",
       "route": "/api/v1/auth/oauth/{first}/{second}",
       "service": "dev-health-ops-api",
       "source": {
@@ -7916,10 +8109,17 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": null,
+      "gaps": [
+        "action: no catalog action covers SSO provider management; no settings action is mapped because the handler check is not proven to equal one (this leaf does not extend the vocabulary)",
+        "disclosure_behavior: the by-id or unauthenticated answer of this route is not traced in this record"
+      ],
       "graphql_field_name": null,
       "id": "PATCH /api/v1/auth/sso/providers/{provider_id} [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "PATCH",
       "primary_validator": {
         "anchor": {
@@ -7952,6 +8152,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:115)",
       "route": "/api/v1/auth/sso/providers/{provider_id}",
       "service": "dev-health-ops-api",
       "source": {
@@ -7974,10 +8175,16 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; once any body-first validation has run, a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:115; internal/api/policy/orgless.go:26)",
+      "gaps": [
+        "action: no catalog action is proven to equal this handler's own check on the own organization profile (candidate for a ruling; this leaf does not extend the vocabulary)"
+      ],
       "graphql_field_name": null,
       "id": "PATCH /api/v1/orgs/me [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "PATCH",
       "primary_validator": {
         "anchor": {
@@ -8010,6 +8217,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:115)",
       "route": "/api/v1/orgs/me",
       "service": "dev-health-ops-api",
       "source": {
@@ -11266,10 +11474,16 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; once any body-first validation has run, a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:115; internal/api/policy/orgless.go:26)",
+      "gaps": [
+        "action: no catalog action covers the session and onboarding routes (this leaf does not extend the vocabulary)"
+      ],
       "graphql_field_name": null,
       "id": "POST /api/v1/auth/accept-invite [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -11302,6 +11516,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:115)",
       "route": "/api/v1/auth/accept-invite",
       "service": "dev-health-ops-api",
       "source": {
@@ -11324,10 +11539,16 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; once any body-first validation has run, a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:115; internal/api/policy/orgless.go:26)",
+      "gaps": [
+        "action: no catalog action covers the session and onboarding routes (this leaf does not extend the vocabulary)"
+      ],
       "graphql_field_name": null,
       "id": "POST /api/v1/auth/change-password [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -11360,6 +11581,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:115)",
       "route": "/api/v1/auth/change-password",
       "service": "dev-health-ops-api",
       "source": {
@@ -11461,14 +11683,21 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "class_disambiguator": {
         "kind": "authorization_scheme",
         "name": "Bearer"
       },
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: no authorization read (internal/api/session/session.go:148)",
+      "disclosure_behavior": null,
+      "gaps": [
+        "action: no catalog action covers the session and onboarding routes (this leaf does not extend the vocabulary)",
+        "disclosure_behavior: the by-id or unauthenticated answer of this route is not traced in this record"
+      ],
       "graphql_field_name": null,
       "id": "POST /api/v1/auth/logout [dev-health-ops-api @api]",
+      "impersonation_policy": "exempt_no_org_context",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -11501,6 +11730,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "none: the route reads no caller organization (internal/api/session/session.go:148)",
       "route": "/api/v1/auth/logout",
       "service": "dev-health-ops-api",
       "source": {
@@ -11523,10 +11753,16 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; once any body-first validation has run, a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:115; internal/api/policy/orgless.go:26)",
+      "gaps": [
+        "action: no catalog action covers SSO provider management; no settings action is mapped because the handler check is not proven to equal one (this leaf does not extend the vocabulary)"
+      ],
       "graphql_field_name": null,
       "id": "POST /api/v1/auth/oauth/providers [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -11559,6 +11795,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:115)",
       "route": "/api/v1/auth/oauth/providers",
       "service": "dev-health-ops-api",
       "source": {
@@ -11704,10 +11941,16 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; once any body-first validation has run, a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:115; internal/api/policy/orgless.go:26)",
+      "gaps": [
+        "action: no catalog action covers the session and onboarding routes (this leaf does not extend the vocabulary)"
+      ],
       "graphql_field_name": null,
       "id": "POST /api/v1/auth/onboard [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -11740,6 +11983,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:115)",
       "route": "/api/v1/auth/onboard",
       "service": "dev-health-ops-api",
       "source": {
@@ -11762,10 +12006,16 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:115; internal/api/policy/orgless.go:26)",
+      "gaps": [
+        "action: no catalog action covers the session and onboarding routes (this leaf does not extend the vocabulary)"
+      ],
       "graphql_field_name": null,
       "id": "POST /api/v1/auth/onboarding/skip-integration [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -11798,6 +12048,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:115)",
       "route": "/api/v1/auth/onboarding/skip-integration",
       "service": "dev-health-ops-api",
       "source": {
@@ -12103,10 +12354,16 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; once any body-first validation has run, a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:115; internal/api/policy/orgless.go:26)",
+      "gaps": [
+        "action: no catalog action covers SSO provider management; no settings action is mapped because the handler check is not proven to equal one (this leaf does not extend the vocabulary)"
+      ],
       "graphql_field_name": null,
       "id": "POST /api/v1/auth/sso/providers [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -12139,6 +12396,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:115)",
       "route": "/api/v1/auth/sso/providers",
       "service": "dev-health-ops-api",
       "source": {
@@ -12161,10 +12419,17 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": null,
+      "gaps": [
+        "action: no catalog action covers SSO provider management; no settings action is mapped because the handler check is not proven to equal one (this leaf does not extend the vocabulary)",
+        "disclosure_behavior: the by-id or unauthenticated answer of this route is not traced in this record"
+      ],
       "graphql_field_name": null,
       "id": "POST /api/v1/auth/sso/providers/{provider_id}/activate [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -12197,6 +12462,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:115)",
       "route": "/api/v1/auth/sso/providers/{provider_id}/activate",
       "service": "dev-health-ops-api",
       "source": {
@@ -12219,10 +12485,17 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": null,
+      "gaps": [
+        "action: no catalog action covers SSO provider management; no settings action is mapped because the handler check is not proven to equal one (this leaf does not extend the vocabulary)",
+        "disclosure_behavior: the by-id or unauthenticated answer of this route is not traced in this record"
+      ],
       "graphql_field_name": null,
       "id": "POST /api/v1/auth/sso/providers/{provider_id}/deactivate [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -12255,6 +12528,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:115)",
       "route": "/api/v1/auth/sso/providers/{provider_id}/deactivate",
       "service": "dev-health-ops-api",
       "source": {
@@ -12277,10 +12551,16 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; once any body-first validation has run, a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:115; internal/api/policy/orgless.go:26)",
+      "gaps": [
+        "action: no catalog action covers the session and onboarding routes (this leaf does not extend the vocabulary)"
+      ],
       "graphql_field_name": null,
       "id": "POST /api/v1/auth/switch-org [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -12313,6 +12593,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:115)",
       "route": "/api/v1/auth/switch-org",
       "service": "dev-health-ops-api",
       "source": {
@@ -12335,10 +12616,17 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: no authorization read (internal/api/session/session.go:146)",
+      "disclosure_behavior": null,
+      "gaps": [
+        "action: no catalog action covers the session and onboarding routes (this leaf does not extend the vocabulary)",
+        "disclosure_behavior: the by-id or unauthenticated answer of this route is not traced in this record"
+      ],
       "graphql_field_name": null,
       "id": "POST /api/v1/auth/validate [dev-health-ops-api @api]",
+      "impersonation_policy": "exempt_no_org_context",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -12371,6 +12659,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "none: the route reads no caller organization (internal/api/session/session.go:146)",
       "route": "/api/v1/auth/validate",
       "service": "dev-health-ops-api",
       "source": {
@@ -12393,10 +12682,17 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": null,
+      "gaps": [
+        "action: no catalog action covers billing management; the action it needs is billing.manage (this leaf does not extend the vocabulary)",
+        "disclosure_behavior: the by-id or unauthenticated answer of this route is not traced in this record"
+      ],
       "graphql_field_name": null,
       "id": "POST /api/v1/billing/audit/{audit_id}/resolve [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -12429,6 +12725,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:115)",
       "route": "/api/v1/billing/audit/{audit_id}/resolve",
       "service": "dev-health-ops-api",
       "source": {
@@ -12451,10 +12748,16 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:115; internal/api/policy/orgless.go:26)",
+      "gaps": [
+        "action: no catalog action covers billing management; the action it needs is billing.manage (this leaf does not extend the vocabulary)"
+      ],
       "graphql_field_name": null,
       "id": "POST /api/v1/billing/checkout [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -12487,6 +12790,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:115)",
       "route": "/api/v1/billing/checkout",
       "service": "dev-health-ops-api",
       "source": {
@@ -12509,10 +12813,17 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": null,
+      "gaps": [
+        "action: no catalog action covers billing management; the action it needs is billing.manage (this leaf does not extend the vocabulary)",
+        "disclosure_behavior: the by-id or unauthenticated answer of this route is not traced in this record"
+      ],
       "graphql_field_name": null,
       "id": "POST /api/v1/billing/invoices/{invoice_id}/void [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -12545,6 +12856,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:115)",
       "route": "/api/v1/billing/invoices/{invoice_id}/void",
       "service": "dev-health-ops-api",
       "source": {
@@ -12567,10 +12879,16 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:115; internal/api/policy/orgless.go:26)",
+      "gaps": [
+        "action: no catalog action covers billing management; the action it needs is billing.manage (this leaf does not extend the vocabulary)"
+      ],
       "graphql_field_name": null,
       "id": "POST /api/v1/billing/plans [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -12603,6 +12921,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:115)",
       "route": "/api/v1/billing/plans",
       "service": "dev-health-ops-api",
       "source": {
@@ -12625,10 +12944,16 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "platform route, behaviour today: only a superuser passes, any other caller answers 403 (internal/api/policy/guard.go:137); the caller's own organization is not read",
+      "gaps": [
+        "action: no catalog action covers billing management; the action it needs is billing.manage (this leaf does not extend the vocabulary)"
+      ],
       "graphql_field_name": null,
       "id": "POST /api/v1/billing/plans/pull-stripe [dev-health-ops-api @api]",
+      "impersonation_policy": "exempt_no_org_context",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -12661,6 +12986,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "none: platform route; the caller's own organization is not read (internal/api/policy/guard.go:137)",
       "route": "/api/v1/billing/plans/pull-stripe",
       "service": "dev-health-ops-api",
       "source": {
@@ -12722,10 +13048,17 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": null,
+      "gaps": [
+        "action: no catalog action covers billing management; the action it needs is billing.manage (this leaf does not extend the vocabulary)",
+        "disclosure_behavior: the by-id or unauthenticated answer of this route is not traced in this record"
+      ],
       "graphql_field_name": null,
       "id": "POST /api/v1/billing/plans/{plan_id}/sync-stripe [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -12758,6 +13091,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:115)",
       "route": "/api/v1/billing/plans/{plan_id}/sync-stripe",
       "service": "dev-health-ops-api",
       "source": {
@@ -12780,10 +13114,16 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:115; internal/api/policy/orgless.go:26)",
+      "gaps": [
+        "action: no catalog action covers billing management; the action it needs is billing.manage (this leaf does not extend the vocabulary)"
+      ],
       "graphql_field_name": null,
       "id": "POST /api/v1/billing/portal [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -12816,6 +13156,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:115)",
       "route": "/api/v1/billing/portal",
       "service": "dev-health-ops-api",
       "source": {
@@ -12838,10 +13179,16 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:115; internal/api/policy/orgless.go:26)",
+      "gaps": [
+        "action: no catalog action covers billing management; the action it needs is billing.manage (this leaf does not extend the vocabulary)"
+      ],
       "graphql_field_name": null,
       "id": "POST /api/v1/billing/reconcile [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -12874,6 +13221,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:115)",
       "route": "/api/v1/billing/reconcile",
       "service": "dev-health-ops-api",
       "source": {
@@ -12896,10 +13244,16 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:115; internal/api/policy/orgless.go:26)",
+      "gaps": [
+        "action: no catalog action covers billing management; the action it needs is billing.manage (this leaf does not extend the vocabulary)"
+      ],
       "graphql_field_name": null,
       "id": "POST /api/v1/billing/refunds [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -12932,6 +13286,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:115)",
       "route": "/api/v1/billing/refunds",
       "service": "dev-health-ops-api",
       "source": {
@@ -12954,10 +13309,16 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:115; internal/api/policy/orgless.go:26); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "gaps": [
+        "action: no catalog action covers billing management; the action it needs is billing.manage (this leaf does not extend the vocabulary)"
+      ],
       "graphql_field_name": null,
       "id": "POST /api/v1/billing/subscriptions/cancel [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -12990,6 +13351,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:115)",
       "route": "/api/v1/billing/subscriptions/cancel",
       "service": "dev-health-ops-api",
       "source": {
@@ -13012,10 +13374,16 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:115; internal/api/policy/orgless.go:26); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "gaps": [
+        "action: no catalog action covers billing management; the action it needs is billing.manage (this leaf does not extend the vocabulary)"
+      ],
       "graphql_field_name": null,
       "id": "POST /api/v1/billing/subscriptions/change-plan [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -13048,6 +13416,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:115)",
       "route": "/api/v1/billing/subscriptions/change-plan",
       "service": "dev-health-ops-api",
       "source": {
@@ -13070,10 +13439,16 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:115; internal/api/policy/orgless.go:26); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "gaps": [
+        "action: no catalog action covers billing management; the action it needs is billing.manage (this leaf does not extend the vocabulary)"
+      ],
       "graphql_field_name": null,
       "id": "POST /api/v1/billing/subscriptions/reactivate [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -13106,6 +13481,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:115)",
       "route": "/api/v1/billing/subscriptions/reactivate",
       "service": "dev-health-ops-api",
       "source": {
@@ -13125,10 +13501,17 @@
       "accepted_credential_classes": [
         "stripe_webhook_signature"
       ],
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: no authorization read (internal/api/billing/edge.go:104)",
+      "disclosure_behavior": null,
+      "gaps": [
+        "action: no catalog action covers the payment provider webhook; the signature is its only credential (this leaf does not extend the vocabulary)",
+        "disclosure_behavior: the by-id or unauthenticated answer of this route is not traced in this record"
+      ],
       "graphql_field_name": null,
       "id": "POST /api/v1/billing/webhooks/stripe [dev-health-ops-api @api]",
+      "impersonation_policy": "exempt_no_org_context",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -13139,6 +13522,7 @@
         "description": "The Stripe webhook handler verifies the Stripe-Signature header over the raw body before it acts."
       },
       "public_rationale": null,
+      "resource_resolver": "none: the provider signature is the only credential and the route reads no caller organization (internal/api/billing/edge.go:104)",
       "route": "/api/v1/billing/webhooks/stripe",
       "service": "dev-health-ops-api",
       "source": {
@@ -13152,10 +13536,17 @@
       "accepted_credential_classes": [
         "stripe_webhook_signature"
       ],
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: no authorization read (internal/api/billing/edge.go:104)",
+      "disclosure_behavior": null,
+      "gaps": [
+        "action: no catalog action covers the payment provider webhook; the signature is its only credential (this leaf does not extend the vocabulary)",
+        "disclosure_behavior: the by-id or unauthenticated answer of this route is not traced in this record"
+      ],
       "graphql_field_name": null,
       "id": "POST /api/v1/billing/webhooks/stripe [dev-health-ops-billing-edge @billing-edge]",
+      "impersonation_policy": "exempt_no_org_context",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -13166,6 +13557,7 @@
         "description": "The Stripe webhook handler verifies the Stripe-Signature header over the raw body before it acts."
       },
       "public_rationale": null,
+      "resource_resolver": "none: the provider signature is the only credential and the route reads no caller organization (internal/api/billing/edge.go:104)",
       "route": "/api/v1/billing/webhooks/stripe",
       "service": "dev-health-ops-billing-edge",
       "source": {
@@ -14313,10 +14705,17 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": null,
+      "gaps": [
+        "action: no catalog action covers billing management; the action it needs is billing.manage (this leaf does not extend the vocabulary)",
+        "disclosure_behavior: the by-id or unauthenticated answer of this route is not traced in this record"
+      ],
       "graphql_field_name": null,
       "id": "PUT /api/v1/billing/plans/{plan_id} [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "PUT",
       "primary_validator": {
         "anchor": {
@@ -14349,6 +14748,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:115)",
       "route": "/api/v1/billing/plans/{plan_id}",
       "service": "dev-health-ops-api",
       "source": {

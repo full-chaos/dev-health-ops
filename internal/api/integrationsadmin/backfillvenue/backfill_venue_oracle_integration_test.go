@@ -53,8 +53,8 @@ const (
 // is planned by Python and refused with 409 by the hand-off (nothing
 // written); a window with since not before before is refused by both, in
 // different words (Python's planner only when it plans a unit); a plan the
-// scheduler has not made within the wait answers 202 "pending" with the
-// occurrence id. These are asserted below, not compared.
+// scheduler has not made is no longer waited for (CHAOS-11402): the submit answers 202 "accepted" at once with the
+// occurrence id, and the Python answers that planned are retired by name. These are asserted below, not compared.
 //
 // Named divergence (CHAOS-10064, chris 2026-10-17: a trigger that names no
 // sources plans the sources a scheduled run of the configuration plans): on
@@ -138,26 +138,28 @@ func TestIntegrationBackfillVenueOracle(t *testing.T) {
 	}()
 	t.Cleanup(func() { stop(); <-done })
 
-	same := sameRequests(venue, v)
-	python := golden.Python(t, venue, same)
-	for index, request := range same {
-		if request.Name == untaggedRequest && !strings.Contains(python[index].Body, `"total_units":6`) {
-			t.Errorf("%s: python %s (the divergence assumes Python planned 6 units)", request.Name, python[index].Body)
+	all := sameRequests(venue, v)
+	allPython := golden.Python(t, venue, all)
+	for index, request := range all {
+		if request.Name == untaggedRequest && !strings.Contains(allPython[index].Body, `"total_units":6`) {
+			t.Errorf("%s: python %s (the divergence assumes Python planned 6 units)", request.Name, allPython[index].Body)
 		}
-		if emptyLastWindowRequests[request.Name] && !strings.Contains(python[index].Body, `"total_units":12`) {
-			t.Errorf("%s: python %s (the divergence assumes Python planned 12 units, 3 windows of 2 sources and 2 datasets)", request.Name, python[index].Body)
+		if emptyLastWindowRequests[request.Name] && !strings.Contains(allPython[index].Body, `"total_units":12`) {
+			t.Errorf("%s: python %s (the divergence assumes Python planned 12 units, 3 windows of 2 sources and 2 datasets)", request.Name, allPython[index].Body)
 		}
 	}
-	receipt := venueoracle.Diff(t, base, same, python, venueoracle.DiffOptions{Golden: golden, Normalize: normalizeRuled,
-		Inspect: func(request venueoracle.Request, goResponse venueoracle.Response) {
-			if emptyLastWindowRequests[request.Name] && !strings.Contains(goResponse.Body, `"total_units":8`) {
-				t.Errorf("%s: go %d %s, want 8 units (the empty last window is not planned)", request.Name, goResponse.Status, goResponse.Body)
-			}
-			if request.Name == untaggedRequest && !strings.Contains(goResponse.Body, `"total_units":4`) {
-				t.Errorf("%s: go %d %s, want 4 units (the two tagged enabled sources, two datasets each)", request.Name, goResponse.Status, goResponse.Body)
-			}
-		}})
+	same, python, retired, retiredPython := splitRetiredBackfills(all, allPython)
+	receipt := venueoracle.Diff(t, base, same, python, venueoracle.DiffOptions{Golden: golden, Normalize: normalizeRuled})
 	t.Logf("receipt (%d requests):\n%s", len(same), receipt)
+
+	// Retired (CHAOS-11402): Python planned these in the request and answered with the run; the Go submit answers 202
+	// accepted at once with the occurrence. The run the scheduler plans from each is still compared below (sync_runs and
+	// sync_run_units), once every occurrence is planned.
+	golden.Retired(t, backfillSubmitRuling, retiredPython...)
+	for _, request := range retired {
+		assertAcceptedBackfill(t, request.Name, venueoracle.Do(t, base, request))
+	}
+	waitForPlans(t, ctx, schedulerPool)
 
 	// The rows each plane planned, columns that are ids or a ruled difference
 	// left out. The integrations the ruled requests name are excluded: Python
@@ -230,9 +232,8 @@ WHERE c.integration_id = ANY($1::uuid[])`, refusedIDs).Scan(&refusedOccurrences)
 		t.Errorf("a refused hand-off wrote %d occurrences (err %v)", refusedOccurrences, err)
 	}
 
-	// Ruled divergence: a window whose since is not before its before. Both
-	// planes refuse it with 400, in their own words; the scheduler's planner
-	// quarantines the occurrence, which the route reports.
+	// A window whose since is not before its before: the pre-check refuses it
+	// before any write, with Python's own answer.
 	windows := windowRequests(venue, v)
 	pythonWindows := golden.Python(t, venue, windows)
 	golden.Consumed(t, pythonWindows...)
@@ -241,17 +242,17 @@ WHERE c.integration_id = ANY($1::uuid[])`, refusedIDs).Scan(&refusedOccurrences)
 		if pythonWindows[index].Status != 400 || pythonWindows[index].Body != `{"detail":"Backfill since must be before"}` {
 			t.Errorf("%s: python %d %s", request.Name, pythonWindows[index].Status, pythonWindows[index].Body)
 		}
-		if goResponse.Status != 400 || !strings.HasPrefix(goResponse.Body, `{"detail":"Sync plan rejected: `) {
+		if goResponse.Status != 400 || goResponse.Body != pythonWindows[index].Body {
 			t.Errorf("%s: go %d %s", request.Name, goResponse.Status, goResponse.Body)
 		}
 	}
 
-	// The scheduler stopped: the wait ends with 202 "pending" and the
-	// occurrence id, and the occurrence and its trigger are there for it.
+	// The scheduler stopped: the submit still answers 202 accepted at once, and the
+	// occurrence and its trigger are there for the scheduler.
 	paused.Store(true)
 	pending := venueoracle.Do(t, base, post(venue, "scheduler stopped", v.get("pending").id.String(), "adminA",
 		venueoracle.B64(`{`+window("2026-09-01T00:00:00Z", "2026-09-10T00:00:00Z")+`}`)))
-	if pending.Status != 202 || !regexp.MustCompile(`^\{"status":"pending","integration_id":"`+v.get("pending").id.String()+`","occurrence_id":"sha256:[0-9a-f]{64}"\}$`).MatchString(pending.Body) {
+	if pending.Status != 202 || !regexp.MustCompile(`^\{"status":"accepted","integration_id":"`+v.get("pending").id.String()+`","occurrence_id":"(sha256:[0-9a-f]{64})","task_id":"occurrence:sha256:[0-9a-f]{64}"\}$`).MatchString(pending.Body) {
 		t.Errorf("scheduler stopped: %d %s", pending.Status, pending.Body)
 	}
 	var status, mode, triggeredBy string
@@ -266,6 +267,68 @@ JOIN sync_manual_triggers m USING (occurrence_id) JOIN sync_configurations c ON 
 	}
 	paused.Store(false)
 	golden.Finish(t)
+}
+
+// backfillSubmitRuling names the ruling that retires the Python answers of the backfill submits that planned.
+const backfillSubmitRuling = "CHAOS-11402: the integrations backfill submit answers 202 accepted without waiting for the plan"
+
+// retiredBackfillNames are the frozen requests Python planned in the request and answered with the run: the pre-check
+// now answers before the plan, and the Go submit never names a run.
+var retiredBackfillNames = map[string]bool{
+	"clock: since and before are unix numbers":                  true,
+	"clock: selector null and a flat window":                    true,
+	"clock: flat window over three weeks, every enabled source": true,
+	"clock: selector window":                                    true,
+	"clock: flat window, explicit source and dataset":           true,
+	"clock: selector with empty lists":                          true,
+	"clock: naive datetimes":                                    true,
+	"clock: offset datetimes":                                   true,
+	"clock: date-only strings":                                  true,
+	"clock: chunk edges (exact weeks)":                          true,
+	"clock: an enabled source no configuration tagged":          true,
+	"clock: path spelling is echoed (upper-case uuid)":          true,
+}
+
+// splitRetiredBackfills separates the requests (and their frozen Python answers) of the retired submits from the ones
+// still compared, each in its original order.
+func splitRetiredBackfills(requests []venueoracle.Request, python []venueoracle.Response) (kept []venueoracle.Request, keptPython []venueoracle.Response, retired []venueoracle.Request, retiredPython []venueoracle.Response) {
+	for index, request := range requests {
+		if retiredBackfillNames[request.Name] {
+			retired, retiredPython = append(retired, request), append(retiredPython, python[index])
+			continue
+		}
+		kept, keptPython = append(kept, request), append(keptPython, python[index])
+	}
+	return kept, keptPython, retired, retiredPython
+}
+
+// assertAcceptedBackfill checks one retired answer: 202 "accepted" naming the occurrence, never a run.
+func assertAcceptedBackfill(t *testing.T, name string, response venueoracle.Response) {
+	t.Helper()
+	if response.Status != 202 || !strings.Contains(response.Body, `"status":"accepted"`) || strings.Contains(response.Body, "sync_run_id") ||
+		strings.Contains(response.Body, "total_units") || !regexp.MustCompile(`"occurrence_id":"(sha256:[0-9a-f]{64})","task_id":"occurrence:sha256:[0-9a-f]{64}"`).MatchString(response.Body) {
+		t.Errorf("%s: %d %s, want 202 accepted naming the occurrence and no run", name, response.Status, response.Body)
+	}
+}
+
+// waitForPlans returns when the scheduler has planned or quarantined every occurrence written so far: a state poll,
+// never a fixed delay.
+func waitForPlans(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Minute)
+	for {
+		var open int
+		if err := pool.QueryRow(ctx, `SELECT count(*) FROM scheduled_sync_occurrences WHERE reconcile_status IN ('pending', 'retry')`).Scan(&open); err != nil {
+			t.Fatal(err)
+		}
+		if open == 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%d occurrences are still not planned", open)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 }
 
 var anyUUID = regexp.MustCompile(`[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`)

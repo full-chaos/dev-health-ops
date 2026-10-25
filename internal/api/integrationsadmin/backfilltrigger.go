@@ -8,6 +8,8 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/api/pytime"
+	schedsync "github.com/full-chaos/dev-health-ops/internal/scheduler/sync"
+	"github.com/full-chaos/dev-health-ops/internal/synchandoff"
 )
 
 // backfillBody is BackfillTriggerRequest after its model validator: the
@@ -93,7 +95,9 @@ func parseBackfill(body pybody.Body) (backfillBody, pybody.Errors) {
 	return flat, problems
 }
 
-// backfillTrigger is POST /integrations/{integration_id}/backfill.
+// backfillTrigger is POST /integrations/{integration_id}/backfill. It writes
+// the occurrence and its trigger and answers 202 at once; the scheduler plans
+// the run, and the occurrence is the handle to it.
 func (h handlers) backfillTrigger(w http.ResponseWriter, r *http.Request) {
 	body, _ := policy.BodyFrom(r.Context())
 	request, problems := parseBackfill(body)
@@ -102,5 +106,38 @@ func (h handlers) backfillTrigger(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var since, before time.Time = request.since.Time.UTC(), request.before.Time.UTC()
-	h.handOff(w, r, request.scope, "backfill", "backfill", &since, &before)
+	trigger, err := h.mintHandOff(r, request.scope, "backfill", "backfill", &since, &before, func(target handoffScope) error {
+		return checkBackfillWindow(request.scope, target, since, before)
+	})
+	if err != nil {
+		h.fail(w, r, "hand off the backfill", err)
+		return
+	}
+	out := pyjson.NewObject()
+	out.Set("status", "accepted")
+	out.Set("integration_id", r.PathValue("integration_id"))
+	out.Set("occurrence_id", trigger.OccurrenceID)
+	out.Set("task_id", "occurrence:"+trigger.OccurrenceID)
+	policy.WriteModel(w, http.StatusAccepted, out, nil)
+}
+
+// checkBackfillWindow refuses, before any write, a window whose since is not
+// before its before (Python's planner refused it too) and a window and scope the
+// scheduler would refuse over its unit cap.
+func checkBackfillWindow(scope triggerScope, target handoffScope, since, before time.Time) error {
+	if !since.Before(before) {
+		return refuse(http.StatusBadRequest, "Backfill since must be before")
+	}
+	if scope.datasetKeysSet && len(scope.datasetKeys) == 0 || scope.sourceIDsSet && len(scope.sourceIDs) == 0 {
+		return nil
+	}
+	sources := len(target.sources)
+	if scope.sourceIDsSet {
+		sources = len(scope.sourceIDs)
+	}
+	days := (before.UnixMicro() - since.UnixMicro()) / int64(24*time.Hour/time.Microsecond)
+	if err := synchandoff.CheckBackfillScale(days, int64(sources), int64(schedsync.UnitCapFromEnv())); err != nil {
+		return refuse(http.StatusUnprocessableEntity, err.Error())
+	}
+	return nil
 }

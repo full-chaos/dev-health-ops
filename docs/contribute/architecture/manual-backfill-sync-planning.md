@@ -151,6 +151,16 @@ sync with a warning log and the `devhealth_sync_work_items_limit_open_total`
 counter (the tier cap is not enforced for that request); an ACCESS_DENIED or
 AUTH_FAILED answer (a login without the grant) fails closed with an error log.
 
+`POST /api/v1/admin/integrations/{integration_id}/backfill` answers the same
+way: it writes the occurrence and its manual trigger in one transaction and
+answers 202 `accepted` with `occurrence_id` and `task_id` (`occurrence:<id>`) at
+once, never `sync_run_id` or `total_units`; the occurrence is the handle to the
+run the scheduler plans. It writes no `backfill_jobs` row and takes no
+`Idempotency-Key`. A window whose since is not before its before is refused 400
+and an over-cap window 422 (`SYNC_RUN_MAX_UNITS`, the same check and text as the
+sync config route), both before any write. The integration sync trigger still
+waits for the plan.
+
 Named divergences from the Python routes: a configuration that is neither
 planner-managed nor pinned to one source (which Python plans in process) is
 refused with 409 and nothing written, the same ruling as the integration routes;

@@ -323,7 +323,7 @@ func (r *endRig) accepts(t *testing.T, ctx context.Context, id uuid.UUID, tv int
 	if err != nil {
 		t.Fatal(err)
 	}
-	auth, err := policy.NewAuthenticator(verifier, policy.PGStore{Pool: r.env.runtime, AuthSchema: "auth"}, nil)
+	auth, err := policy.NewAuthenticator(verifier, policy.PGStore{Pool: r.env.admin, AuthSchema: "auth"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

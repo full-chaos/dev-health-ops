@@ -374,7 +374,7 @@ func logJiraWorkItemsWindow(ctx context.Context, claim Claim, projectKey, jql st
 // asks Jira to inline each issue's changelog: JiraWorkItemsRouteHandler needs
 // it (it normalizes transitions straight off the search response), but
 // JiraAtlassianRouteHandler.Collect fetches -- and then overwrites
-// issue["changelog"] with -- its OWN separate per-issue changelog read, so an
+// issue["changelog"] with -- its OWN separate bulkfetch changelog read, so an
 // inlined changelog it never reads is pure wasted response bytes that can
 // trip the shared 2MiB per-object cap (nativeMaxObjectBytes) on a
 // history-heavy page and fail an otherwise-healthy sync (CHAOS-4585 review).

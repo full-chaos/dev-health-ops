@@ -751,7 +751,8 @@ func collectJiraAtlassianIssues(ctx context.Context, client *providerfoundation.
 // after the last page has an empty history; a missing page, a repeated token
 // or an unknown issueId is an error. The result is keyed by issue id.
 // maxResults bounds history entries, not bytes: a page the object cap refuses
-// restarts that chunk at half the page size, down to one entry.
+// restarts that chunk at half the page size, down to one entry. The page cap
+// is maxPages per issue of the chunk, the budget the per-issue route had.
 func collectJiraAtlassianChangelogs(ctx context.Context, client *providerfoundation.HTTPClient, issues []map[string]any, maxPages int) (map[string][]any, int, error) {
 	result := make(map[string][]any, len(issues))
 	ids := make([]string, 0, len(issues))
@@ -797,8 +798,9 @@ func collectJiraAtlassianChangelogChunk(ctx context.Context, client *providerfou
 	}
 	token := ""
 	seenTokens := make(map[string]struct{})
+	pageCap := maxPages * len(chunk)
 	for pages := 0; ; pages++ {
-		if pages >= maxPages {
+		if pages >= pageCap {
 			return nil, pages, ErrPaginationCapExceeded
 		}
 		request := map[string]any{"issueIdsOrKeys": chunk, "maxResults": perPage}

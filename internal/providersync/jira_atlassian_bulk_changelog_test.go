@@ -265,3 +265,32 @@ func TestCollectJiraAtlassianChangelogsRefusesAPageTooLargeAtOneEntry(t *testing
 		t.Fatalf("last maxResults %d, want the restarts to end at 1", last)
 	}
 }
+
+func TestCollectJiraAtlassianChangelogsPageCapIsPerIssueOfTheChunk(t *testing.T) {
+	t.Parallel()
+	const pagesNeeded = 1010 // 1000 issues x 101 histories at 100 per page
+	server := &bulkChangelogServer{t: t, reply: func(index int, _ bulkChangelogRequest) (int, string) {
+		if index == pagesNeeded-1 {
+			return http.StatusOK, `{"issueChangeLogs":[],"nextPageToken":null}`
+		}
+		return http.StatusOK, `{"issueChangeLogs":[],"nextPageToken":"t` + strconv.Itoa(index) + `"}`
+	}}
+	_, pages, err := collectJiraAtlassianChangelogs(context.Background(), jiraDevStatusTestClient(t, server), bulkIssues(1000), jiraAtlassianMaxPages)
+	if err != nil || pages != pagesNeeded {
+		t.Fatalf("pages=%d err=%v, want %d pages inside the 1000-pages-per-issue budget", pages, err, pagesNeeded)
+	}
+}
+
+func TestCollectJiraAtlassianChangelogsEndlessTokensStillHitTheChunkCap(t *testing.T) {
+	t.Parallel()
+	server := &bulkChangelogServer{t: t, reply: func(index int, _ bulkChangelogRequest) (int, string) {
+		return http.StatusOK, `{"issueChangeLogs":[],"nextPageToken":"t` + strconv.Itoa(index) + `"}`
+	}}
+	result, _, err := collectJiraAtlassianChangelogs(context.Background(), jiraDevStatusTestClient(t, server), bulkIssues(2), 3)
+	if !errors.Is(err, ErrPaginationCapExceeded) || result != nil {
+		t.Fatalf("result=%v err=%v, want the page cap", result, err)
+	}
+	if len(server.requests) != 6 {
+		t.Fatalf("requests=%d, want 6 (3 pages per issue x 2 issues)", len(server.requests))
+	}
+}

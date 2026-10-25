@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
@@ -197,12 +196,7 @@ func buildIndex(ctx context.Context, resolve ResolveDSN, env cli.Env) int {
 	logger := logging.NewJSON(env.Stderr, slog.LevelInfo)
 	result, err := BuildFailureStreakIndex(ctx, conn, options, logger)
 	if err != nil {
-		var pgErr *pgconn.PgError
-		detail := err.Error()
-		if errors.As(err, &pgErr) {
-			detail = boundary.Redact(err).Error()
-		}
-		return writeError(env.Stderr, "build_index_failed", detail)
+		return writeError(env.Stderr, "build_index_failed", boundary.Redact(err).Error())
 	}
 	return writeResult(env.Stdout, env.Stderr, result)
 }

@@ -160,7 +160,6 @@ internal/testsupport/pgschema
 internal/testsupport/pgseed
 internal/testsupport/poolpg
 internal/testsupport/programoracle
-internal/testsupport/providersyncschema
 internal/testsupport/proxycapture
 internal/testsupport/pydanticecho
 internal/testsupport/venueoracle

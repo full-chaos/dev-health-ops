@@ -189,7 +189,7 @@ func TestDocsCheckMatchesCI(t *testing.T) {
 			return d.edit(t, makefilePath, "\tgo test -mod=readonly -trimpath -count=1 ./internal/cigates/docs/...\n", "")
 		}, `CI runs "go test ./internal/cigates/docs/..." but`},
 		{"docs:check stops running the build script", func(t *testing.T, d docTree) docTree {
-			return d.edit(t, makefilePath, "docs\\:check-fast\n\t$(PYTHON) scripts/build_docs_cloudflare.py --mode preview --full-check\n", "docs\\:check-fast\n")
+			return d.edit(t, makefilePath, "/docs/...\n\t$(PYTHON) scripts/build_docs_cloudflare.py --mode preview --full-check\n", "/docs/...\n")
 		}, "CI runs"},
 		{"a second job builds the site again", func(t *testing.T, d docTree) docTree {
 			return d.appended(t, docsGuardsPath, "  rebuild:\n    runs-on: ubuntu-latest\n    steps:\n      - run: python -m mkdocs build --strict --config-file mkdocs.yml\n")

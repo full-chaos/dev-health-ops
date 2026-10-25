@@ -1804,15 +1804,18 @@ discover_integration_tagged_tests() {
 
 # run_integration_packages MODE MODULE_DIR LABEL PKG...: runs the PKGs of one module under the integration tag
 # (CHAOS-11407). The untagged tests of these packages already run in the go-quality test legs (plain) and race legs
-# (-race), which run every package on every merge_group (plan-verdict FULL); here they ran a third time. So one go test
-# runs every package with `-run` of its integration-tagged top-level tests (one regex for all, so -p keeps the
-# packages parallel; a tagged name equal to an untagged name of another package also runs that test, printed as
-# SHARD-COLLISION), and a package with a tag-only hook (INTEGRATION_HOOK) runs whole in a second go test.
-# Receipts: SHARD-TEST <key> <Test> per selected test, SHARD-UNFILTERED <key> <file> <func>, SHARD-REGEX <module> <regex>.
+# (-race), which run every package on every merge_group (plan-verdict FULL); here they ran a third time. So each
+# package runs only its integration-tagged top-level tests, through `-run`. The filtered packages are packed first-fit
+# into go test groups (-p keeps a group's packages parallel): a package joins a group only when no tagged name of it
+# is an untagged name of a group member or the reverse (a shared `-run` would run that plain test again), and while
+# the group's regex stays within regex_max bytes (Linux refuses one argument over 128 KiB, MAX_ARG_STRLEN; every
+# integration package of the root module in one regex is about 163 KB). A package with a tag-only hook (INTEGRATION_HOOK) runs
+# whole in a last go test. Receipts: SHARD-TEST <key> <Test> per selected test, SHARD-UNFILTERED <key> <file> <func>,
+# and per group SHARD-GROUP <module> <n> <key>... then SHARD-REGEX <module> <regex>.
 run_integration_packages() {
-  local mode="$1" module_dir="$2" label="$3" pkg key name separator="" test_regex='^(' tests=0 result=0 status
-  local -a filtered=() unfiltered=() run_pkgs=()
-  local -A union=()
+  local mode="$1" module_dir="$2" label="$3" pkg key name tests=0 result=0 status groups=0 group fits size names_len regex_max=60000
+  local -a filtered=() unfiltered=() run_pkgs=() group_pkgs=() group_keys=() group_regex=() group_size=()
+  local -A tagged_in=() untagged_in=()
   shift 3
   discover_integration_tagged_tests "${module_dir}" "$@"
   for pkg in "$@"; do
@@ -1826,39 +1829,63 @@ run_integration_packages() {
     [ -n "${INTEGRATION_TAGGED_TESTS[${pkg}]-}" ] \
       || die "${label}: ${key} runs in an integration shard, but no test file that only the integration build lists declares a top-level Test"
     filtered+=("${pkg}")
+    names_len=0
     while IFS= read -r name; do
       [ -n "${name}" ] || continue
       printf '  SHARD-TEST %s %s\n' "${key}" "${name}"
       tests=$((tests + 1))
-      if [ -z "${union[${name}]+set}" ]; then
-        union["${name}"]=1
-        test_regex+="${separator}${name}"
-        separator="|"
-      fi
+      names_len=$((names_len + ${#name} + 1))
     done <<<"${INTEGRATION_TAGGED_TESTS[${pkg}]}"
-  done
-  test_regex+=')$'
-  for pkg in ${filtered[@]+"${filtered[@]}"}; do
-    key="${module_dir}/${pkg#./}"
-    key="${key#./}"
+    [ $((names_len + 4)) -le "${regex_max}" ] \
+      || die "${label}: the integration-tagged test names of ${key} alone exceed the ${regex_max}-byte -run budget"
+    for ((group = 0; group < groups; group++)); do
+      fits=1
+      size="${group_size[${group}]}"
+      while IFS= read -r name; do
+        [ -n "${name}" ] || continue
+        if [ -n "${untagged_in[${group}|${name}]+set}" ]; then fits=0; break; fi
+        [ -n "${tagged_in[${group}|${name}]+set}" ] || size=$((size + ${#name} + 1))
+      done <<<"${INTEGRATION_TAGGED_TESTS[${pkg}]}"
+      [ "${fits}" -eq 1 ] && [ "${size}" -le "${regex_max}" ] || continue
+      while IFS= read -r name; do
+        [ -n "${name}" ] || continue
+        if [ -n "${tagged_in[${group}|${name}]+set}" ]; then fits=0; break; fi
+      done <<<"${INTEGRATION_UNTAGGED_TESTS[${pkg}]-}"
+      [ "${fits}" -eq 1 ] && break
+    done
+    if [ "${group}" -eq "${groups}" ]; then
+      groups=$((groups + 1))
+      group_pkgs[group]="" group_keys[group]="" group_regex[group]="" group_size[group]=4
+    fi
     while IFS= read -r name; do
       [ -n "${name}" ] || continue
-      [ -z "${union[${name}]+set}" ] || printf '  SHARD-COLLISION %s %s\n' "${key}" "${name}"
+      [ -z "${tagged_in[${group}|${name}]+set}" ] || continue
+      tagged_in["${group}|${name}"]=1
+      group_regex[group]+="${group_regex[${group}]:+|}${name}"
+      group_size[group]=$((group_size[group] + ${#name} + 1))
+    done <<<"${INTEGRATION_TAGGED_TESTS[${pkg}]}"
+    while IFS= read -r name; do
+      [ -n "${name}" ] || continue
+      untagged_in["${group}|${name}"]=1
     done <<<"${INTEGRATION_UNTAGGED_TESTS[${pkg}]-}"
+    group_pkgs[group]+="${pkg}"$'\n'
+    group_keys[group]+=" ${key}"
   done
-  printf '%s: %d package(s), %d integration-tagged test(s), %d unfiltered package(s)\n' \
-    "${label}" "$#" "${tests}" "${#unfiltered[@]}"
-  if [ "${#filtered[@]}" -gt 0 ]; then
-    printf '  SHARD-REGEX %s %s\n' "${module_dir}" "${test_regex}"
-  fi
+  printf '%s: %d package(s), %d integration-tagged test(s), %d unfiltered package(s), %d go test group(s)\n' \
+    "${label}" "$#" "${tests}" "${#unfiltered[@]}" "${groups}"
+  for ((group = 0; group < groups; group++)); do
+    group_regex[group]="^(${group_regex[${group}]})\$"
+    printf '  SHARD-GROUP %s %d%s\n' "${module_dir}" "$((group + 1))" "${group_keys[${group}]}"
+    printf '  SHARD-REGEX %s %s\n' "${module_dir}" "${group_regex[${group}]}"
+  done
   [ "${mode}" != "--dry-run" ] || return 0
-  if [ "${#filtered[@]}" -gt 0 ]; then
+  for ((group = 0; group < groups; group++)); do
     (
       cd "${ROOT}/${module_dir}"
-      run_pkgs=("${filtered[@]}")
-      "${GO_ENV_OFF[@]}" GOWORK=off ${INTEGRATION_TEST_ENV[@]+"${INTEGRATION_TEST_ENV[@]}"} go test -mod=readonly -trimpath -tags=integration -count=1 -timeout=30m -run "${test_regex}" "${run_pkgs[@]}"
-    ) || result=$?
-  fi
+      mapfile -t run_pkgs <<<"${group_pkgs[${group}]%$'\n'}"
+      "${GO_ENV_OFF[@]}" GOWORK=off ${INTEGRATION_TEST_ENV[@]+"${INTEGRATION_TEST_ENV[@]}"} go test -mod=readonly -trimpath -tags=integration -count=1 -timeout=30m -run "${group_regex[${group}]}" "${run_pkgs[@]}"
+    ) || { status=$?; [ "${result}" -ne 0 ] || result="${status}"; }
+  done
   if [ "${#unfiltered[@]}" -gt 0 ]; then
     (
       cd "${ROOT}/${module_dir}"
@@ -1868,6 +1895,7 @@ run_integration_packages() {
   fi
   return "${result}"
 }
+
 
 # discover_integration_packages populates parallel module/package arrays with
 # every module-relative "./pkg/dir" entry that has at least one tracked or

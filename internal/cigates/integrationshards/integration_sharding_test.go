@@ -937,8 +937,18 @@ done
 				t.Errorf("a go test group regex is %d bytes, over the 60000-byte budget", len(r))
 			}
 		}
-		if len(regexes) < 3 {
-			t.Errorf("%d go test group(s); want a and b apart and c1 and c2 apart (budget)", len(regexes))
+		groupOf := map[string]string{}
+		for _, v := range lineValues(got, "  SHARD-GROUP . ") {
+			f := strings.Fields(v)
+			for _, m := range f[1:] {
+				groupOf[m] = f[0]
+			}
+		}
+		if groupOf["a"] == "" || groupOf["a"] == groupOf["b"] {
+			t.Errorf("a and b (TestShared tagged in a, plain in b) share go test group %q", groupOf["a"])
+		}
+		if groupOf["c1"] == "" || groupOf["c1"] == groupOf["c2"] {
+			t.Errorf("c1 and c2 (over the regex budget together) share go test group %q", groupOf["c1"])
 		}
 		if t.Failed() {
 			t.Logf("fixture output:\n%.4000s", got)

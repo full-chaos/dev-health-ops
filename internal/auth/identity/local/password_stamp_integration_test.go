@@ -13,10 +13,12 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
+	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
@@ -266,5 +268,60 @@ func TestAPasswordChangeEndsTheEarlierResetLinksOnly(t *testing.T) {
 	}
 	if out, err := rig.flows.Verify(ctx, "verify"); err != nil || out.Kind != FlowOK {
 		t.Errorf("the verification link = %+v, %v; want it to stay valid", out, err)
+	}
+}
+
+// accepts is go-api's live access-token check (policy.Authenticator.CheckClaims)
+// for an access token with no sid claim and token version tv.
+func (r *endRig) accepts(t *testing.T, ctx context.Context, id uuid.UUID, tv int) bool {
+	t.Helper()
+	verifier, err := edgetoken.New(strings.Repeat("k", 40), "dev-health-ops", "dev-health-api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	auth, err := policy.NewAuthenticator(verifier, policy.PGStore{Pool: r.env.runtime, AuthSchema: "auth"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = auth.CheckClaims(ctx, jwt.MapClaims{"sub": id.String(), "type": "access", "tv": tv})
+	return err == nil
+}
+
+// A go-api access token minted before a reset or a change carries no sid, so
+// only the token version ends it; after either it is refused, a token at the
+// new version is accepted.
+func TestANoSidGoAPIAccessTokenIsRefusedAfterResetAndChange(t *testing.T) {
+	ctx := context.Background()
+	rig := newEndRig(t, ctx)
+
+	reset := rig.account(t, ctx, "Old-pass-12345")
+	if !rig.accepts(t, ctx, reset, 3) {
+		t.Fatal("the token is refused before the reset")
+	}
+	if err := rig.links.Issue(ctx, IssueRequest{PrincipalID: reset, Purpose: PurposePasswordReset, TokenHash: linkHash("reset-secret"), TTL: ResetTTL}); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := rig.flows.Reset(ctx, "reset-secret", "A-new-pass-77"); err != nil || out.Kind != FlowOK {
+		t.Fatalf("Reset = %+v, %v", out, err)
+	}
+	if rig.accepts(t, ctx, reset, 3) {
+		t.Error("the pre-reset no-sid access token is accepted after the reset")
+	}
+	if !rig.accepts(t, ctx, reset, 4) {
+		t.Error("a token at the new version is refused after the reset")
+	}
+
+	change := rig.account(t, ctx, "Old-pass-12345")
+	if !rig.accepts(t, ctx, change, 3) {
+		t.Fatal("the token is refused before the change")
+	}
+	if out, err := rig.flows.Change(ctx, ChangeRequest{PrincipalID: change, Current: "Old-pass-12345", New: "Brand-new-pass-42"}); err != nil || out.Kind != FlowOK {
+		t.Fatalf("Change = %+v, %v", out, err)
+	}
+	if rig.accepts(t, ctx, change, 3) {
+		t.Error("the pre-change no-sid access token is accepted after the change")
+	}
+	if !rig.accepts(t, ctx, change, 4) {
+		t.Error("a token at the new version is refused after the change")
 	}
 }

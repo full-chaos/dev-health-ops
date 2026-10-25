@@ -547,3 +547,40 @@ func TestWorkloadCorpusFailsAReaderThatSkipsTheClientRules(t *testing.T) {
 		}
 	}
 }
+
+func TestWorkloadCorpusHasOneAcceptedRowPerWorkloadAudienceAndBothCrossRefusals(t *testing.T) {
+	c, err := Load(filepath.Join(testRoot(t), WorkloadDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	audienceOf := func(e Entry) string {
+		var claims struct {
+			Aud any `json:"aud"`
+		}
+		if err := json.Unmarshal([]byte(c.Vectors[e.File].PayloadJSON), &claims); err != nil {
+			return ""
+		}
+		s, _ := claims.Aud.(string)
+		return s
+	}
+	accepted := map[string]string{}
+	crossRefused := map[string]bool{}
+	for _, e := range c.Manifest.Vectors {
+		aud := audienceOf(e)
+		if e.Expect == Accept && strings.HasPrefix(e.File, "valid-") && e.VerifyAs == aud {
+			accepted[aud] = e.VerifyAs
+		}
+		if e.Expect == Reject && e.Reason == ReasonAudience && (aud == AudienceAuth || aud == AudienceAPI) && e.VerifyAs != aud {
+			crossRefused[aud+"@"+e.VerifyAs] = true
+		}
+	}
+	other := map[string]string{AudienceAuth: AudienceAPI, AudienceAPI: AudienceAuth}
+	for _, aud := range []string{AudienceAuth, AudienceAPI} {
+		if accepted[aud] != aud {
+			t.Errorf("no accepted vector for aud %s verified as %s: %v", aud, aud, accepted)
+		}
+		if !crossRefused[aud+"@"+other[aud]] {
+			t.Errorf("no audience refusal for a %s token at a %s verifier", aud, other[aud])
+		}
+	}
+}

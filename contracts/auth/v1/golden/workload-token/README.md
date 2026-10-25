@@ -14,7 +14,9 @@ decision it must reach, in `decision_order`.
   string is stored.
 - The token's `typ` is `workload+jwt`, exact bytes. A case variant, a missing
   typ, `JWT`, `jwt`, `at+jwt` and an `application/`-prefixed form are refused.
-- A workload token names exactly one audience, has no `org_id`, no `sid` and no
+- A workload token names exactly one audience, `auth-service` or `dev-health-api`
+  (the audiences whose classes include `workload_token`); a token for one is
+  refused at the verifier of the other, reason `audience`. It has no `org_id`, no `sid` and no
   `scope`, and lives at most 300 seconds (`exp - iat`).
 - `leeway_seconds` is 0: valid from `nbf` inclusive until `exp` exclusive.
 

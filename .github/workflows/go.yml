@@ -725,7 +725,6 @@ jobs:
       - go-storage-integration-plan
       - go-storage-integration-shard
     permissions:
-      contents: read
       actions: read
     runs-on: ubuntu-latest
     timeout-minutes: 5

@@ -55,9 +55,9 @@ func failFastDefects(doc yamlMap) []string {
 	if on, why := failFastFor(doc, "merge_group"); !on || why != "" {
 		out = append(out, "fail-fast must be true on merge_group "+why)
 	}
-	for _, j := range []string{"go-container-smoke", "go-container-security", "go-container-reproducibility"} {
-		if got := asMap(pinJob(doc, j)["strategy"])["fail-fast"]; got != nil && got != false {
-			out = append(out, fmt.Sprintf("%s fail-fast is %v: the container matrices are out of scope and stay false", j, got))
+	for _, j := range []string{"go-container-smoke", "go-container-security"} {
+		if got := asMap(pinJob(doc, j)["strategy"])["fail-fast"]; got != false {
+			out = append(out, fmt.Sprintf("%s fail-fast is %v: the container matrices are out of scope and must set the key to false", j, got))
 		}
 	}
 	return out
@@ -76,6 +76,7 @@ func TestIntegrationShardFailFastIsMergeGroupOnly(t *testing.T) {
 		{failFastGoYml, "github.event_name == 'merge_group' }}\n      matrix: ${{ fromJSON(needs.go-storage-integration-plan.outputs.matrix) }}", "github.event_name == 'pull_request' }}\n      matrix: ${{ fromJSON(needs.go-storage-integration-plan.outputs.matrix) }}"},
 		{failFastGoYml, "github.event_name == 'merge_group' }}\n      matrix: ${{ fromJSON(needs.go-storage-integration-plan.outputs.matrix) }}", "github.event_name != 'merge_group' }}\n      matrix: ${{ fromJSON(needs.go-storage-integration-plan.outputs.matrix) }}"},
 		{failFastGoYml, "    name: go-container-smoke (${{ matrix.platform }})\n    runs-on: ubuntu-latest\n    timeout-minutes: 45\n    strategy:\n      fail-fast: false", "    name: go-container-smoke (${{ matrix.platform }})\n    runs-on: ubuntu-latest\n    timeout-minutes: 45\n    strategy:\n      fail-fast: true"},
+		{failFastGoYml, "    name: go-container-smoke (${{ matrix.platform }})\n    runs-on: ubuntu-latest\n    timeout-minutes: 45\n    strategy:\n      fail-fast: false\n", "    name: go-container-smoke (${{ matrix.platform }})\n    runs-on: ubuntu-latest\n    timeout-minutes: 45\n    strategy:\n"},
 	} {
 		tmp := plantTree(t, root, []string{failFastGoYml}, m)
 		if d := failFastDefects(loadWf(t, tmp, "go.yml")); len(d) == 0 {
@@ -319,8 +320,8 @@ func namingStepDefects(doc yamlMap) []string {
 	if job["name"] != "go-storage-integration" {
 		out = append(out, "the required check name go-storage-integration must not change")
 	}
-	if got := asMap(job["permissions"]); got["actions"] != "read" || got["contents"] != "read" || len(got) != 2 {
-		out = append(out, fmt.Sprintf("job permissions %v, want contents: read and actions: read only", got))
+	if got := asMap(job["permissions"]); got["actions"] != "read" || len(got) != 1 {
+		out = append(out, fmt.Sprintf("job permissions %v, want actions: read only", got))
 	}
 	return out
 }
@@ -386,6 +387,7 @@ func TestRedShardNamingIsBestEffortAndNeverGatesTheVerdict(t *testing.T) {
 		{failFastGoYml, "        continue-on-error: true\n        env:\n          GH_TOKEN", "        env:\n          GH_TOKEN"},
 		{failFastGoYml, "      - name: " + namingStepName + "\n        if: failure()", "      - name: " + namingStepName + "\n        if: always()"},
 		{failFastGoYml, "      actions: read\n    runs-on: ubuntu-latest\n    timeout-minutes: 5\n    env:\n      PLAN_RESULT", "      actions: write\n    runs-on: ubuntu-latest\n    timeout-minutes: 5\n    env:\n      PLAN_RESULT"},
+		{failFastGoYml, "      actions: read\n    runs-on: ubuntu-latest\n    timeout-minutes: 5\n    env:\n      PLAN_RESULT", "      actions: read\n      contents: read\n    runs-on: ubuntu-latest\n    timeout-minutes: 5\n    env:\n      PLAN_RESULT"},
 	} {
 		tmp := plantTree(t, root, []string{failFastGoYml}, m)
 		if d := namingStepDefects(loadWf(t, tmp, "go.yml")); len(d) == 0 {

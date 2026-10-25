@@ -2,6 +2,8 @@ package workflows_test
 
 import (
 	"fmt"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"regexp"
@@ -304,4 +306,51 @@ func TestAuthFuzzRegistryIgnoresCommentedRows(t *testing.T) {
 	const cg = "ci/check_go.sh"
 	tree := plantTree(t, root, authFiles, mutation{cg, "AUTH_FUZZ_TARGETS=(\n", "AUTH_FUZZ_TARGETS=(\n  # \"./internal/auth/x FuzzCommentedOut\"\n"})
 	expectNoViolations(t, authViolations(t, tree))
+}
+
+// authFuzzLoopScript is the run script of the auth-fuzz step, read from the workflow (not copied).
+func authFuzzLoopScript(t *testing.T, root string) string {
+	t.Helper()
+	doc := parseYAML(t, readFile(t, filepath.Join(root, ".github/workflows/go-auth-service.yml")), "go-auth-service.yml")
+	for _, st := range stepsOf(jobsOf(doc)["auth-fuzz"]) {
+		if r := str(st["run"]); strings.Contains(r, "for target in ${TARGETS}") {
+			return r
+		}
+	}
+	t.Fatal("auth-fuzz has no step looping over ${TARGETS}")
+	return ""
+}
+
+// A red target in the middle of a group must not hide the receipts of the targets after it (CHAOS-11417): the loop runs
+// every target, prints every proof line, and the job still fails. The script is the workflow's own, run against a stub
+// ci/check_go.sh that fails exactly one target.
+func TestAuthFuzzGroupRunsEveryTargetAndStillFails(t *testing.T) {
+	script := authFuzzLoopScript(t, repoRoot(t))
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "ci"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stub := "#!/bin/bash\nif [ \"$3\" = FuzzRed ]; then echo \"stub-red $3\" >&2; exit 1; fi\necho \"auth-fuzz-proof: $3\"\n"
+	if err := os.WriteFile(filepath.Join(dir, "ci/check_go.sh"), []byte(stub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	run := func(targets string) (string, error) {
+		cmd := exec.Command("bash", "-e", "-o", "pipefail", "-c", script)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(), "TARGETS="+targets)
+		out, err := cmd.CombinedOutput()
+		return string(out), err
+	}
+	out, err := run("FuzzFirst FuzzRed FuzzLast")
+	if err == nil {
+		t.Fatalf("a group with a red target must fail the job; output:\n%s", out)
+	}
+	for _, want := range []string{"auth-fuzz-proof: FuzzFirst", "stub-red FuzzRed", "auth-fuzz-proof: FuzzLast"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output lacks %q: a target after the red one did not run\n%s", want, out)
+		}
+	}
+	if out, err = run("FuzzFirst FuzzLast"); err != nil {
+		t.Fatalf("an all-green group must pass: %v\n%s", err, out)
+	}
 }

@@ -10,6 +10,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 )
 
 func refuseGuard(context.Context, Queryer, Record) error { return ErrGuardRefused }
@@ -42,15 +44,25 @@ func TestExchangeGuardedRefusalWritesNothing(t *testing.T) {
 func TestExchangeGuardedPinMissingLeavesZeroLiveSuccessors(t *testing.T) {
 	ctx := testContext(t)
 	e := newEnv(t, ctx)
-	issued := e.create(t, ctx, e.goUser(t, ctx, 1))
-	if _, err := e.admin.Exec(ctx, `UPDATE auth.sessions SET legacy_token_version = NULL WHERE id = $1`, issued.Session.ID.String()); err != nil {
+	principal := e.principal(t, ctx)
+	credential, err := newCredential()
+	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := e.store.ExchangeGuarded(ctx, issued.Credential, func(context.Context, Queryer, Record) error { return nil })
+	sessionID := uuid.New()
+	if _, err := e.admin.Exec(ctx, `INSERT INTO auth.sessions (id, principal_id, token_hash, expires_at, amr)
+		VALUES ($1, $2, $3, 'infinity', '{pwd}')`, sessionID, principal, hashCredential(contracts.NewSecretString("pinless-handle"))); err != nil {
+		t.Fatalf("seed a pinless session: %v", err)
+	}
+	if _, err := e.admin.Exec(ctx, `INSERT INTO auth.refresh_credentials (session_id, principal_id, token_hash, expires_at)
+		VALUES ($1, $2, $3, now() + interval '1 hour')`, sessionID, principal, hashCredential(credential)); err != nil {
+		t.Fatalf("seed its credential: %v", err)
+	}
+	result, err := e.store.ExchangeGuarded(ctx, credential, func(context.Context, Queryer, Record) error { return nil })
 	if err != nil || result.Reason != ReasonRevisionStale {
 		t.Fatalf("ExchangeGuarded = %s, %v; want revision_stale", result.Reason, err)
 	}
-	if n := liveSuccessors(t, e, ctx, issued.Session.ID); n != 0 {
+	if n := liveSuccessors(t, e, ctx, sessionID); n != 0 {
 		t.Fatalf("%d live successor rows after the refusal, want 0", n)
 	}
 }

@@ -18,6 +18,9 @@ func TestAuthSwitchesRefuseNonBooleans(t *testing.T) {
 			"string true":  {"--set-string", key + "=true"},
 			"null":         {"--set-json", key + "=null"},
 			"number":       {"--set-json", key + "=1"},
+			"empty string": {"--set-string", key + "="},
+			"list":         {"--set-json", key + "=[]"},
+			"map":          {"--set-json", key + "={}"},
 		} {
 			t.Run(key+"/"+name, func(t *testing.T) {
 				_, out, err := renderAuth(t, append(backfillOnWithout(key), flag...)...)

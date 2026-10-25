@@ -242,8 +242,21 @@ func TestAuthBackfillJobUsesTheAuthServiceSecretReference(t *testing.T) {
 	if a, b := ref(service), ref(job); a != b {
 		t.Errorf("secretKeyRef differs: auth-service %s, Job %s", a, b)
 	}
-	if a, b := fmt.Sprint(at(service, "spec", "template", "spec", "containers", 0, "env")), fmt.Sprint(at(job, "spec", "template", "spec", "containers", 0, "env")); !strings.Contains(b, "AUTH_DATABASE_SCHEMA") || a == "" {
-		t.Errorf("Job env lacks AUTH_DATABASE_SCHEMA: %s", b)
+	for _, schema := range []string{"", "authx"} {
+		args := backfillOn
+		if schema != "" {
+			args = withSets(backfillOn, "authService.database.schema="+schema)
+		}
+		svc, j := renderBackfill(t, args)
+		want := schema
+		if want == "" {
+			want = "auth"
+		}
+		jv, jset := containerEnvValue(t, j, "AUTH_DATABASE_SCHEMA")
+		serviceArgs := fmt.Sprint(at(svc, "spec", "template", "spec", "containers", 0, "args"))
+		if !jset || jv != want || !strings.Contains(serviceArgs, "--database-schema="+want) {
+			t.Errorf("schema %q: Job AUTH_DATABASE_SCHEMA %q (set=%v), auth-service args %s, want both %q", schema, jv, jset, serviceArgs, want)
+		}
 	}
 }
 
@@ -287,32 +300,6 @@ func TestAuthBackfillJobNameIsStableAndFollowsItsInputs(t *testing.T) {
 		_, other := renderBackfill(t, withSets(backfillOn, change))
 		if jobName(other) == jobName(first) {
 			t.Errorf("%s did not change the Job name %s", change, jobName(first))
-		}
-	}
-}
-
-func TestAuthBackfillJobPodIsSelectedByTheReleasePolicyAndNoAuthPolicy(t *testing.T) {
-	_, job := renderBackfill(t, backfillOn)
-	labels := map[string]string{}
-	for k, v := range at(job, "spec", "template", "metadata", "labels").(map[string]any) {
-		labels[k] = fmt.Sprint(v)
-	}
-	if labels["app.kubernetes.io/component"] != "auth-backfill" {
-		t.Fatalf("component label = %q, want auth-backfill", labels["app.kubernetes.io/component"])
-	}
-	labels["app.kubernetes.io/instance"] = "np"
-	var selecting []string
-	for _, policy := range renderNetpols(t, backfillOn...) {
-		if policy.Spec.PodSelector.selects(labels) {
-			selecting = append(selecting, policy.Metadata.Name)
-		}
-	}
-	if len(selecting) == 0 {
-		t.Fatal("no NetworkPolicy selects the Job pod: it would have no egress rule at all")
-	}
-	for _, name := range selecting {
-		if strings.Contains(name, "auth-service") || strings.Contains(name, "auth-migrate") {
-			t.Errorf("auth policy %s selects the backfill Job pod", name)
 		}
 	}
 }

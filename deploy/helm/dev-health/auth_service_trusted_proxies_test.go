@@ -206,3 +206,23 @@ func TestAuthServiceProxyOnKeepsMetricsFromOnTheOperatorPort(t *testing.T) {
 		t.Fatalf("operator-port peers = %v, want only the listed scraper", operator)
 	}
 }
+
+// The trusted proxies are safe only while the auth-service NetworkPolicy admits go-api alone, so a disabled policy
+// beside a proxy flag fails the render; with the proxy off a disabled policy still renders.
+func TestAuthServiceProxyOnRefusesADisabledNetworkPolicy(t *testing.T) {
+	_, out, err := renderAuth(t, goAPIWithAuth("--set", "goApi.authProxy.sessions=true", "--set", "authService.networkPolicy.enabled=false")...)
+	if err == nil || !strings.Contains(out, "authService.networkPolicy.enabled") {
+		t.Fatalf("proxy on with the policy disabled rendered or named the wrong key: err=%v\n%.400s", err, out)
+	}
+}
+
+func TestAuthServiceProxyOffRendersWithADisabledNetworkPolicy(t *testing.T) {
+	args := append(append([]string{"--set", "goApi.enabled=true"}, authBase...), "--set", "authService.networkPolicy.enabled=false")
+	docs, out, err := renderAuth(t, args...)
+	if err != nil {
+		t.Fatalf("proxy off with the policy disabled: %v\n%.400s", err, out)
+	}
+	if authDoc(docs, "NetworkPolicy", "a-dev-health-auth-service") != nil {
+		t.Error("the auth-service NetworkPolicy rendered although it is disabled")
+	}
+}

@@ -15,6 +15,12 @@ var (
 
 // aliceRefreshRowsInOrgA maps each of alice's refresh_tokens rows in the golden (grouped by organization and
 // revocation) to the same row in organization A: the organization changes, the count never does.
+// aliceRevokedAfterStaleRefresh is the one row the stale-token refresh changes: alice's revoked credential in
+// organization A is held twice.
+var aliceRevokedAfterStaleRefresh = map[string]string{
+	"alice@example.comorg-atrue 1": "alice@example.comorg-atrue 2",
+}
+
 var aliceRefreshRowsInOrgA = map[string]string{
 	"alice@example.comorg-bfalse 1": "alice@example.comorg-afalse 1",
 	"alice@example.comorg-btrue 1":  "alice@example.comorg-atrue 1",
@@ -51,6 +57,15 @@ var Quirks = []Quirk{
 		Reason: "the same organization choice as login-organization-chosen-without-activity: alice's two sign-in audit rows name organization A where the golden's name B (CHAOS-10228, authapi chooseMembership)",
 		Rewrite: func(line string) (string, bool) {
 			return replaceOnce(aliceLoginOrgB, line, "Org A${1}")
+		},
+	},
+	{
+		ID: "refresh-stale-token-rotated-before-the-pin-check", Kind: Deliberate, Table: TableRefreshTokens, Needs: []Aggregate{Sessions},
+		Tracked: "CHAOS-11347",
+		Reason:  "auth-service rotates a refresh credential before it checks the session's token_version pin, so a stale token leaves its consumed credential and a revoked successor where go-api leaves one revoked row (CHAOS-11347 ruling: auth-service refuses the same request, but with one more revoked credential)",
+		Rewrite: func(line string) (string, bool) {
+			rewritten, ok := aliceRevokedAfterStaleRefresh[line]
+			return rewritten, ok
 		},
 	},
 	{

@@ -30,6 +30,7 @@ internal/auth/authruntime	audit_request_id_scan_test.go	unexpressed	-	-
 internal/auth/authruntime	keystate_source_test.go	internal/auth/authruntime	dir	*
 internal/auth/authruntime	kidwiring_callers_test.go	internal/auth/authruntime	dir	*
 internal/auth/contracts	access_token_goldens_test.go	unexpressed	-	-
+internal/auth/contracts	anchor_ranges_test.go	unexpressed	-	-
 internal/auth/contracts	authorization_goldens_test.go	unexpressed	-	-
 internal/auth/contracts	credential_goldens_test.go	unexpressed	-	-
 internal/auth/contracts	discovery_goldens_test.go	unexpressed	-	-

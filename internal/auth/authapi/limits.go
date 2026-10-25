@@ -43,6 +43,8 @@ var (
 	resetTokenLimit     = httpapi.Limit{ID: "auth_svc_reset_ip_token", Count: 5, Window: time.Hour}
 	changePasswordLimit = httpapi.Limit{ID: "auth_svc_change_password", Count: 5, Window: time.Hour}
 	socialLinkLimit     = httpapi.Limit{ID: "auth_svc_social_link_ip_principal", Count: 10, Window: time.Hour}
+	// refreshLimit is go-api's auth_refresh budget (10 per 15 minutes per client address) for the compatibility refresh route.
+	refreshLimit = httpapi.Limit{ID: "auth_svc_refresh", Count: 10, Window: 15 * time.Minute}
 )
 
 // rateLimitKeyInfo is the HKDF info of the key that digests identifiers in the
@@ -85,7 +87,7 @@ func NewLimits(store httpapi.CounterStore, secret string) (*Limits, error) {
 func LimitIDs() []string {
 	limits := []httpapi.Limit{
 		loginIPLimit, loginAccountLimit, verifyLimit, resendLimit, resendIPLimit, forgotLimit, forgotIPLimit,
-		resetIPLimit, resetTokenLimit, changePasswordLimit, socialLinkLimit,
+		resetIPLimit, resetTokenLimit, changePasswordLimit, socialLinkLimit, refreshLimit,
 	}
 	ids := make([]string, len(limits))
 	for i, limit := range limits {
@@ -126,6 +128,7 @@ type charge struct {
 // neutral code the store keys on. A route outside it is refused, never counted.
 var scopeCodes = map[string]string{
 	PatternCompatLogin:   "s01",
+	PatternCompatRefresh: "s04",
 	PatternResetPassword: "s02",
 	socialLinkRoute:      "s03",
 }

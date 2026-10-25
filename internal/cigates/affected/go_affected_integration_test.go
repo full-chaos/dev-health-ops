@@ -318,7 +318,8 @@ func TestGoWorkflowGatesShardsOnLegsAndAggregatorAcceptsOnlyExplicitZero(t *test
 	for _, s := range planJob.Steps {
 		if strings.HasPrefix(s.Name, "Select the integration") {
 			selected = true
-			if s.If != "github.event_name == 'pull_request'" {
+			// pull_request only; a docs-only change keeps the docs-only step's NONE selection instead.
+			if s.If != "github.event_name == 'pull_request' && steps.docs.outputs.docs_only != 'true'" {
 				t.Fatalf("the selection step must run on pull_request only, got if: %q", s.If)
 			}
 		}

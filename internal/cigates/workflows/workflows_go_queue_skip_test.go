@@ -164,15 +164,18 @@ func TestQueueTestedShaAnswersOnlyForAGreenMergeGroupRunWithGreenShards(t *testi
 }
 
 // A green merge_group run proves the main-push shards only if the merge_group run planned the same shard set. The plan
-// reads nothing but INTEGRATION_AFFECTED_FILE, and only a pull request (selection) or a queue-tested push (skip) sets it.
+// reads nothing but INTEGRATION_AFFECTED_FILE, and only a pull request (selection), a queue-tested push (skip) or a
+// docs-only change sets it. The docs-only case cannot fake a proof: its merge_group run has no shard job, and
+// ci/queue_tested_sha.sh accepts only a run in which at least one shard ran and all succeeded (a docs-only push, for
+// its part, matches no go.yml push path: ci/codeql_docs_only.sh refuses every Go input).
 func TestMergeGroupPlansTheSameIntegrationShardsAsAMainPush(t *testing.T) {
 	root := rootOf(t)
 	raw, err := os.ReadFile(filepath.Join(root, ".github", "workflows", "go.yml"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Count(string(raw), `echo "INTEGRATION_AFFECTED_FILE=${out}" >> "${GITHUB_ENV}"`); got != 2 {
-		t.Errorf("INTEGRATION_AFFECTED_FILE is set in %d places, want 2 (pull request selection, queue-tested push skip)", got)
+	if got := strings.Count(string(raw), `echo "INTEGRATION_AFFECTED_FILE=${out}" >> "${GITHUB_ENV}"`); got != 3 {
+		t.Errorf("INTEGRATION_AFFECTED_FILE is set in %d places, want 3 (pull request selection, queue-tested push skip, docs-only skip)", got)
 	}
 	job := pinJob(loadWf(t, root, "go.yml"), "go-storage-integration-plan")
 	for _, step := range stepsOf(job) {
@@ -183,8 +186,12 @@ func TestMergeGroupPlansTheSameIntegrationShardsAsAMainPush(t *testing.T) {
 		condition := asString(step["if"])
 		switch name {
 		case "Select the integration packages the change can affect":
-			if condition != "github.event_name == 'pull_request'" {
+			if condition != "github.event_name == 'pull_request' && steps.docs.outputs.docs_only != 'true'" {
 				t.Errorf("selection step if %q: a merge_group run must plan the full set", condition)
+			}
+		case "Skip the integration shards for a docs-only change":
+			if condition != "steps.docs.outputs.docs_only == 'true'" {
+				t.Errorf("docs-only skip step if %q: only the docs-only verdict may skip", condition)
 			}
 		case queueSkipStep:
 			if !strings.Contains(condition, "github.event_name == 'push'") {

@@ -11,7 +11,7 @@ func TestGoYmlPathFiltersCoverCiTablesByGlob(t *testing.T) {
 	root := rootOf(t)
 	doc := loadWf(t, root, "go.yml")
 	globs := []string{"ci/*.tsv", "ci/*.awk", "ci/*.d/**"}
-	for _, event := range []string{"push", "pull_request"} {
+	for _, event := range goFilteredEvents(t, root) {
 		paths := map[string]bool{}
 		for _, p := range asList(asMap(asMap(doc["on"])[event])["paths"]) {
 			paths[asString(p)] = true
@@ -43,7 +43,7 @@ func TestGoYmlPathFiltersSelectNewCiFiles(t *testing.T) {
 		"ci/zz_new_shard.awk",
 		"ci/zz_new_rows.d/anything.txt",
 	}
-	for _, event := range []string{"push", "pull_request"} {
+	for _, event := range goFilteredEvents(t, root) {
 		paths := goPaths(t, root, event)
 		for _, p := range paths {
 			if strings.HasPrefix(p, "!") {

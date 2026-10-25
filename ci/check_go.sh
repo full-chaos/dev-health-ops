@@ -111,37 +111,62 @@ fi
 # containers of that session are removed by id (ci/reap-testcontainers-session.sh:
 # label filter only, never a prune). A caller-set TESTCONTAINERS_SESSION_ID wins.
 # The go test runs in its own session (setsid), so its pid is its process-group id and the trap
-# stops the whole group (TERM, then KILL after 10 s) before the reap. A SIGKILL of this script skips the trap; the reaper (when on) or a host sweep
-# by session id covers that case.
-TC_TRAP_PID="" TC_TRAP_SID=""
+# stops the whole group (TERM, then KILL after 10 s) before the reap, but only when the pgid is that pid and not
+# this shell's own group; otherwise it stops the recorded pid only. A SIGKILL of this script skips the trap; the
+# reaper (when on) or a host sweep by session id covers that case.
+TC_TRAP_PID="" TC_TRAP_SID="" TC_TRAP_PGID=""
 tc_trap() {
   local i
-  kill -TERM -- "-${TC_TRAP_PID}" 2>/dev/null || true
-  for i in $(seq 1 100); do
-    kill -0 -- "-${TC_TRAP_PID}" 2>/dev/null || break
-    sleep 0.1
-  done
-  kill -KILL -- "-${TC_TRAP_PID}" 2>/dev/null || true
+  # Group kill only for a private group: pgid == the recorded go test pid and != this shell's own group.
+  if [ -n "${TC_TRAP_PGID}" ] && [ "${TC_TRAP_PGID}" = "${TC_TRAP_PID}" ] \
+    && [ "${TC_TRAP_PGID}" != "$(ps -o pgid= -p "$$" | tr -d ' ')" ]; then
+    kill -TERM -- "-${TC_TRAP_PGID}" 2>/dev/null || true
+    for i in $(seq 1 100); do
+      pgrep -g "${TC_TRAP_PGID}" >/dev/null 2>&1 || break
+      sleep 0.1
+    done
+    if pgrep -g "${TC_TRAP_PGID}" >/dev/null 2>&1; then
+      kill -KILL -- "-${TC_TRAP_PGID}" 2>/dev/null || true
+    fi
+  else
+    echo "check_go.sh: no private process group for the go test; stopping pid ${TC_TRAP_PID} only" >&2
+    kill -TERM "${TC_TRAP_PID}" 2>/dev/null || true
+  fi
   wait "${TC_TRAP_PID}" 2>/dev/null || true
   bash "${SCRIPT_DIR}/reap-testcontainers-session.sh" "${TC_TRAP_SID}" || true
   exit 143
 }
 
 run_integration_go_test() {
-  local module_dir="$1" sid pid rc=0
+  local module_dir="$1" sid pid rc=0 i own_pgid
+  local -a private_group=()
   shift
   sid="${TESTCONTAINERS_SESSION_ID:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')}"
   [[ "${sid}" =~ ^[A-Za-z0-9._-]{8,64}$ ]] \
     || die "TESTCONTAINERS_SESSION_ID must match ^[A-Za-z0-9._-]{8,64}\$"
+  if command -v setsid >/dev/null 2>&1; then
+    private_group=(setsid)
+  fi
   (
     cd "${ROOT}/${module_dir}"
-    exec setsid "${GO_ENV_OFF[@]}" GOWORK=off TESTCONTAINERS_SESSION_ID="${sid}" ${INTEGRATION_TEST_ENV[@]+"${INTEGRATION_TEST_ENV[@]}"} \
+    exec ${private_group[@]+"${private_group[@]}"} "${GO_ENV_OFF[@]}" GOWORK=off TESTCONTAINERS_SESSION_ID="${sid}" ${INTEGRATION_TEST_ENV[@]+"${INTEGRATION_TEST_ENV[@]}"} \
       go test -mod=readonly -trimpath -tags=integration -count=1 -timeout=30m "$@"
   ) &
   pid=$!
   TC_TRAP_PID="${pid}"
   TC_TRAP_SID="${sid}"
+  TC_TRAP_PGID=""
   trap tc_trap INT TERM
+  if [ "${#private_group[@]}" -gt 0 ]; then
+    own_pgid="$(ps -o pgid= -p "$$" | tr -d ' ')"
+    for i in $(seq 1 50); do
+      kill -0 "${pid}" 2>/dev/null || { TC_TRAP_PGID=""; break; }
+      TC_TRAP_PGID="$(ps -o pgid= -p "${pid}" 2>/dev/null | tr -d ' ' || true)"
+      [ "${TC_TRAP_PGID}" = "${pid}" ] && [ "${TC_TRAP_PGID}" != "${own_pgid}" ] && break
+      TC_TRAP_PGID=""
+      sleep 0.1
+    done
+  fi
   wait "${pid}" || rc=$?
   trap - INT TERM
   bash "${SCRIPT_DIR}/reap-testcontainers-session.sh" "${sid}" || rc=$?

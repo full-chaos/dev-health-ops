@@ -11,11 +11,12 @@
 #   default paths: git diff --no-renames --name-only -z origin/main...HEAD (cwd repo); BASE <sha> is printed; an unresolvable
 #   origin/main exits non-zero with no package line. --paths FILE: NUL-terminated change list (no BASE resolved).
 # stdout (list): "BASE <sha|paths-file>" then either "POSTURE <package>" lines or "NONE no posture path changed".
-# --run: "RECEIPT-HEAD <sha> clean=yes runner=<capped.sh> sha256=<hash> go=<path> go_sha256=<hash> go_version=<text>",
+# --run: "RECEIPT-HEAD <sha> clean=yes runner= sha256= go= go_sha256= go_version= go_env=GOOS= GOARCH= GOROOT= GOTOOLDIR= script_sha256= packages=<n> packages_sha256=",
 #   then one "RECEIPT <pkg> PASS|FAIL <secs>s rc=<n> tests=<n>" per package and "RECEIPT-SUMMARY <sha> pass=<n> fail=<n>".
 #   A package is PASS only when `go test -json` exits 0, shows at least one passed test and no failed event; a package
-#   with no test run is FAIL. go test runs with GOENV=off, GOFLAGS empty, GOTOOLCHAIN=local and no GIT_DIR, so the
-#   caller's environment cannot make it pass without running tests. A dirty tree or an error exits non-zero. Runs
+#   with no test run is FAIL. Every go invocation runs under `env -i` with an allowlist (HOME, PATH, GOENV=off, GOFLAGS
+#   empty, GOTOOLCHAIN, fixed cache paths, DOCKER_HOST and a few named TESTCONTAINERS_* vars), so GOFLAGS, GOARCH, GOROOT,
+#   CC and PATH helpers like go_linux_amd64_exec cannot reach go test. A dirty tree or an error exits non-zero. Runs
 #   testcontainers: follow the D6363 caps (capped.sh) and remove your own containers afterwards. The runner is fixed.
 #   --test-runner FILE is for tests only: EVERY stdout line starts SIMULATED, no line says RECEIPT, exit is 5.
 set -euo pipefail
@@ -93,16 +94,33 @@ for pkg in "${packages[@]}"; do printf '%sPOSTURE %s\n' "${pfx}" "${pkg}"; done
 
 sha="$(git rev-parse HEAD)"
 status="$(git status --porcelain)" || { echo "git status failed; the tree is not known to be clean" >&2; exit 4; }
-[ -z "${status}" ] || { echo "RECEIPT-HEAD ${sha} clean=no" >&2; echo "dirty tree: commit or stash first" >&2; exit 4; }
+if [ -n "${status}" ]; then
+  if [ -n "${stub}" ]; then echo "SIMULATED-HEAD ${sha} clean=no" >&2; else echo "RECEIPT-HEAD ${sha} clean=no" >&2; fi
+  echo "dirty tree: commit or stash first" >&2
+  exit 4
+fi
 
-# go test runs with a fixed environment: no GOENV file, no GOFLAGS (-exec, -run, ...), no toolchain download, no GIT_DIR.
-goenv=(env GOENV=off GOFLAGS= GOTOOLCHAIN=local)
+# EVERY go invocation (toolchain resolution included) runs under `env -i` with an explicit allowlist, so nothing from the
+# caller (GOFLAGS, GOARCH, GOROOT, GOEXPERIMENT, CC, CGO_*, GIT_*, a PATH helper such as go_linux_amd64_exec) reaches
+# compile, link, vet or the test binaries. Names are listed one by one: no pattern, no env dump (D6331).
+if [ -n "${stub}" ]; then
+  # A simulated run is never a receipt and may run on a machine without the fixed cache paths (hosted CI).
+  gomod="${GOMODCACHE:-$(mktemp -d)}"; gocache="${GOCACHE:-$(mktemp -d)}"; gotmp="${GOTMPDIR:-$(mktemp -d)}"
+else
+  gomod="/var/lib/oci-cache/go-mod"; gocache="/var/lib/oci-cache/go-build"; gotmp="/var/lib/oci-cache/go-tmp"
+fi
+common=("HOME=${HOME:-/nonexistent}" GOENV=off GOFLAGS= "GOMODCACHE=${gomod}" "GOCACHE=${gocache}" "GOTMPDIR=${gotmp}")
+for name in DOCKER_HOST TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX TESTCONTAINERS_RYUK_DISABLED TESTCONTAINERS_HOST_OVERRIDE \
+  TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE TESTCONTAINERS_RYUK_CONTAINER_PRIVILEGED; do
+  if [ -n "${!name+x}" ]; then common+=("${name}=${!name}"); fi
+done
 go_first="$(command -v go)" || { echo "go not found on PATH" >&2; exit 3; }
-# The toolchain go.mod selects (a downloaded one when the module is newer than the installed go) is resolved once with a
-# fixed environment; the tests then run that exact binary with GOTOOLCHAIN=local, so no switch happens mid-run.
-go_root="$(env GOENV=off GOFLAGS= GOTOOLCHAIN=auto "${go_first}" env GOROOT)" || { echo "cannot resolve the go toolchain" >&2; exit 3; }
+# The toolchain go.mod selects (a downloaded one when the module is newer than the installed go) is resolved once with
+# GOTOOLCHAIN=auto; the tests then run that exact binary with GOTOOLCHAIN=local, so no switch happens mid-run.
+go_root="$(env -i "${common[@]}" "PATH=$(dirname "${go_first}"):/usr/local/bin:/usr/bin:/bin" GOTOOLCHAIN=auto "${go_first}" env GOROOT)" || { echo "cannot resolve the go toolchain" >&2; exit 3; }
 go_path="${go_root}/bin/go"
 [ -x "${go_path}" ] || { echo "go not found: ${go_path}" >&2; exit 3; }
+goenv=(env -i "${common[@]}" "PATH=${go_root}/bin:/usr/local/bin:/usr/bin:/bin" GOTOOLCHAIN=local)
 if [ -n "${stub}" ]; then
   [ -x "${stub}" ] || { echo "test runner is not executable: ${stub}" >&2; exit 3; }
   capped="${stub}"
@@ -112,12 +130,16 @@ else
   [ -f "${capped}" ] && [ -x "${capped}" ] || { echo "runner not found: ${capped}" >&2; exit 3; }
   runner_sha="$(sha256sum "${capped}")" || { echo "cannot hash the runner ${capped}" >&2; exit 3; }
   go_sha="$(sha256sum "${go_path}")" || { echo "cannot hash ${go_path}" >&2; exit 3; }
+  script_sha="$(sha256sum "${BASH_SOURCE[0]}")" || { echo "cannot hash the script" >&2; exit 3; }
+  pkgs_sha="$(printf '%s\n' "${packages[@]}" | sha256sum)" || { echo "cannot hash the package list" >&2; exit 3; }
   go_version="$("${goenv[@]}" "${go_path}" version)" || { echo "go version failed" >&2; exit 3; }
-  printf 'RECEIPT-HEAD %s clean=yes runner=%s sha256=%s go=%s go_sha256=%s go_version="%s"\n' \
-    "${sha}" "${capped}" "${runner_sha%% *}" "${go_path}" "${go_sha%% *}" "${go_version}"
+  mapfile -t gv < <("${goenv[@]}" "${go_path}" env GOOS GOARCH GOROOT GOTOOLDIR) || { echo "go env failed" >&2; exit 3; }
+  [ "${#gv[@]}" -eq 4 ] || { echo "go env GOOS GOARCH GOROOT GOTOOLDIR did not print 4 values" >&2; exit 3; }
+  printf 'RECEIPT-HEAD %s clean=yes runner=%s sha256=%s go=%s go_sha256=%s go_version="%s" go_env=GOOS=%s GOARCH=%s GOROOT=%s GOTOOLDIR=%s script_sha256=%s packages=%s packages_sha256=%s\n' \
+    "${sha}" "${capped}" "${runner_sha%% *}" "${go_path}" "${go_sha%% *}" "${go_version}" "${gv[0]}" "${gv[1]}" "${gv[2]}" "${gv[3]}" \
+    "${script_sha%% *}" "${#packages[@]}" "${pkgs_sha%% *}"
   rec="RECEIPT"; sum="RECEIPT-SUMMARY"
 fi
-export GOMODCACHE="${GOMODCACHE:-/var/lib/oci-cache/go-mod}" GOCACHE="${GOCACHE:-/var/lib/oci-cache/go-build}" GOTMPDIR="${GOTMPDIR:-/var/lib/oci-cache/go-tmp}"
 json_tmp="$(mktemp)"
 pass=0
 fail=0

@@ -55,7 +55,7 @@ func TestIssuerSetBodyFirstRoutesKeepTheRouteProfile(t *testing.T) {
 	t.Cleanup(func() { _ = clickHouse.Close() })
 	deps := Deps{Pool: pool, ClickHouse: clickHouse, Auth: auth, Guard: policy.NewGuard(auth, quietLogger()), Verifier: verifier, Signer: signer}
 	scope := policy.NewScope(auth, quietLogger())
-	server, err := NewServer(apiTestConfig(), quietLogger(), Routes(deps, quietLogger()), scope.OrgScope, scope.Impersonation)
+	server, err := NewServer(apiTestConfig(), quietLogger(), Routes(deps, quietLogger()), scope.Layers()...)
 	if err != nil {
 		t.Fatal(err)
 	}

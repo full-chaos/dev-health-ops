@@ -271,6 +271,10 @@ func (f *Flows) reissue(ctx context.Context, email string, purpose Purpose, ttl 
 	return f.issueAndSend(ctx, principal, purpose, ttl, normalized, nil)
 }
 
+// linkDigest is the stored form of a one-time link secret: the SHA-256 of 32
+// random bytes, not of a password.
+func linkDigest(secret string) [32]byte { return sha256.Sum256([]byte(secret)) }
+
 // Reset consumes a reset link, sets the password and ends every credential.
 // The link is consumed in the password transaction, after the user lock: link,
 // password and ends commit together, a failed write leaves the link usable,
@@ -284,7 +288,7 @@ func (f *Flows) Reset(ctx context.Context, secret, newPassword string) (FlowOutc
 	if v := passwordRefusal(newPassword); v != nil {
 		return FlowOutcome{Kind: FlowPolicy, Violations: v}, nil
 	}
-	link := RedeemRequest{Purpose: PurposePasswordReset, TokenHash: sha256.Sum256([]byte(secret))}
+	link := RedeemRequest{Purpose: PurposePasswordReset, TokenHash: linkDigest(secret)}
 	id, ok, err := f.accounts.PeekResetLink(ctx, link.TokenHash)
 	if err != nil {
 		return FlowOutcome{}, fmt.Errorf("local: reading a reset link: %w", err)

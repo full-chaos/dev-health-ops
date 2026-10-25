@@ -15,34 +15,36 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/issueprlinks"
 )
 
-func fallbackInvariantGauge(t *testing.T, reader *sdkmetric.ManualReader) map[string]int64 {
-	t.Helper()
-	return fallbackInvariantGaugeNamed(t, reader, FallbackBesideNativeGauge)
-}
-
-func fallbackInvariantGaugeNamed(t *testing.T, reader *sdkmetric.ManualReader, name string) map[string]int64 {
+// fallbackInvariantCounter reads one counter by name: its summed value, the
+// number of data points, and how many of them carry any attribute.
+func fallbackInvariantCounter(t *testing.T, reader *sdkmetric.ManualReader, name string) (total int64, points, attributed int) {
 	t.Helper()
 	var resource metricdata.ResourceMetrics
 	if err := reader.Collect(context.Background(), &resource); err != nil {
 		t.Fatal(err)
 	}
-	out := map[string]int64{}
 	for _, scope := range resource.ScopeMetrics {
 		for _, m := range scope.Metrics {
 			if m.Name != name {
 				continue
 			}
-			gauge, ok := m.Data.(metricdata.Gauge[int64])
+			sum, ok := m.Data.(metricdata.Sum[int64])
 			if !ok {
-				t.Fatalf("%s is %T, want an int64 gauge", m.Name, m.Data)
+				t.Fatalf("%s is %T, want an int64 sum", m.Name, m.Data)
 			}
-			for _, point := range gauge.DataPoints {
-				org, _ := point.Attributes.Value("organization_id")
-				out[org.AsString()] = point.Value
+			if !sum.IsMonotonic {
+				t.Fatalf("%s is not monotonic", m.Name)
+			}
+			for _, point := range sum.DataPoints {
+				points++
+				total += point.Value
+				if point.Attributes.Len() != 0 {
+					attributed++
+				}
 			}
 		}
 	}
-	return out
+	return total, points, attributed
 }
 
 func logLines(t *testing.T, buffer *bytes.Buffer) []map[string]any {
@@ -62,9 +64,9 @@ func logLines(t *testing.T, buffer *bytes.Buffer) []map[string]any {
 }
 
 // A build that left a lower-tier link beside a native one is LOUD: a WARN
-// line with the org and the counts, and the per-org gauge above 0. An org
-// with none reports 0 on the gauge and logs no WARN.
-func TestReportFallbackInvariantWarnsAndSetsTheGaugeOnABreach(t *testing.T) {
+// line with the org and the counts, and the counters above 0. An org
+// with none adds 0 to them and logs no WARN.
+func TestReportFallbackInvariantWarnsAndCountsOnABreach(t *testing.T) {
 	reader := sdkmetric.NewManualReader()
 	previous := otel.GetMeterProvider()
 	otel.SetMeterProvider(sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)))
@@ -84,16 +86,15 @@ func TestReportFallbackInvariantWarnsAndSetsTheGaugeOnABreach(t *testing.T) {
 		OrganizationID: "org-clean", LinksRead: 1, Beside: issueprlinks.CountFallbacksBesideNative(stored[:1]),
 	})
 
-	if got := fallbackInvariantGauge(t, reader); got["org-breach"] != 2 || got["org-clean"] != 0 || len(got) != 2 {
-		t.Fatalf("gauge = %v, want org-breach 2 and org-clean 0", got)
-	}
-	for name, want := range map[string]map[string]int64{
-		FallbackBesideNativePullRequestGauge: {"org-breach": 1, "org-clean": 0},
-		FallbackBesideNativeIssueGauge:       {"org-breach": 1, "org-clean": 0},
-		FallbackPullRequestIssueSideGauge:    {"org-breach": 0, "org-clean": 0},
+	for name, want := range map[string]int64{
+		FallbackBesideNativeCounter:            2,
+		FallbackBesideNativePullRequestCounter: 1,
+		FallbackBesideNativeIssueCounter:       1,
+		FallbackPullRequestIssueSideCounter:    0,
+		FallbackInvariantChecksCounter:         2,
 	} {
-		if got := fallbackInvariantGaugeNamed(t, reader, name); len(got) != 2 || got["org-breach"] != want["org-breach"] || got["org-clean"] != want["org-clean"] {
-			t.Fatalf("%s = %v, want %v", name, got, want)
+		if total, _, attributed := fallbackInvariantCounter(t, reader, name); total != want || attributed != 0 {
+			t.Fatalf("%s = %d (%d attributed points), want %d with no attributes", name, total, attributed, want)
 		}
 	}
 	lines := logLines(t, &buffer)
@@ -130,9 +131,10 @@ func TestCheckFallbackInvariantRefusesWithoutAConnectionOrAnOrg(t *testing.T) {
 	}
 }
 
-// Each side has its own gauge, so an alert from metrics alone names the side
-// (CHAOS-10070); the total keeps its own series.
-func TestReportFallbackInvariantSetsOneGaugePerSide(t *testing.T) {
+// Each side has its own counter, so the metrics alone name the side
+// (CHAOS-10070); the total keeps its own series. No instrument carries any
+// attribute: the organization is named by the log line only.
+func TestReportFallbackInvariantCountsOnePerSideWithNoAttribute(t *testing.T) {
 	reader := sdkmetric.NewManualReader()
 	previous := otel.GetMeterProvider()
 	otel.SetMeterProvider(sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)))
@@ -143,13 +145,34 @@ func TestReportFallbackInvariantSetsOneGaugePerSide(t *testing.T) {
 		Beside:         issueprlinks.FallbacksBesideNative{Total: 11, ByPullRequest: 3, ByIssue: 5, PullRequestIssueSide: 7},
 	})
 	for name, want := range map[string]int64{
-		FallbackBesideNativeGauge:            11,
-		FallbackBesideNativePullRequestGauge: 3,
-		FallbackBesideNativeIssueGauge:       5,
-		FallbackPullRequestIssueSideGauge:    7,
+		FallbackBesideNativeCounter:            11,
+		FallbackBesideNativePullRequestCounter: 3,
+		FallbackBesideNativeIssueCounter:       5,
+		FallbackPullRequestIssueSideCounter:    7,
+		FallbackInvariantChecksCounter:         1,
 	} {
-		if got := fallbackInvariantGaugeNamed(t, reader, name); len(got) != 1 || got["org-sides"] != want {
-			t.Errorf("%s = %v, want org-sides %d", name, got, want)
+		total, points, attributed := fallbackInvariantCounter(t, reader, name)
+		if total != want || points != 1 || attributed != 0 {
+			t.Errorf("%s = %d over %d points (%d attributed), want %d over 1 point with none", name, total, points, attributed, want)
 		}
+	}
+}
+
+// A counter, unlike the gauge it replaces, is not overwritten by the next
+// organization's build: a breach stays visible after a clean build follows.
+func TestReportFallbackInvariantBreachSurvivesALaterCleanBuild(t *testing.T) {
+	reader := sdkmetric.NewManualReader()
+	previous := otel.GetMeterProvider()
+	otel.SetMeterProvider(sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)))
+	t.Cleanup(func() { otel.SetMeterProvider(previous) })
+
+	logger := slog.New(slog.NewJSONHandler(&bytes.Buffer{}, nil))
+	reportFallbackInvariant(context.Background(), logger, InvariantOutcome{OrganizationID: "org-a", Beside: issueprlinks.FallbacksBesideNative{Total: 4}})
+	reportFallbackInvariant(context.Background(), logger, InvariantOutcome{OrganizationID: "org-b"})
+	if total, _, _ := fallbackInvariantCounter(t, reader, FallbackBesideNativeCounter); total != 4 {
+		t.Fatalf("breach rows = %d after a clean build, want 4", total)
+	}
+	if total, _, _ := fallbackInvariantCounter(t, reader, FallbackInvariantChecksCounter); total != 2 {
+		t.Fatalf("checks = %d, want 2", total)
 	}
 }

@@ -747,22 +747,31 @@ jobs:
           fi
           echo "all deterministic Go integration shards passed"
 
-  go-container-smoke:
+  # CHAOS-11415: the six Go image targets are built ONCE per platform here and every other consumer in this
+  # workflow loads that build instead of compiling its own copy. Each consumer compares the id of the image it
+  # loaded with the id this job reported as a job output (not with a file inside the artifact), and fails when
+  # they differ or when no id is given. The artifact name carries the run id and attempt, so a rerun never reads
+  # another attempt's images. go-container-reproducibility does NOT use this job: it exists to build twice from
+  # scratch and compare. docker-images.yml (image-queue-gate) does not use it either: it builds with the real
+  # commit metadata for the publish path, and the fixed phase1-ci metadata here is what smoke asserts.
+  go-container-build:
     # Heavy: runs in the merge queue, on the main push, and on a pull request only with ci:full; a docs-only change skips it.
     needs: go-storage-integration-plan
     if: (!(github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) && needs.go-storage-integration-plan.outputs.docs_only != 'true'
-    # Every Go image is smoked on both architectures it ships for. The arm64
-    # leg runs on the same x64 host: the Dockerfile's build stage is
-    # `--platform=$BUILDPLATFORM` (Go cross-compiles natively), and only the
-    # arm64 runtime images run under QEMU, selected by DOCKER_DEFAULT_PLATFORM
-    # (on the smoke step only) for both `docker build` and `docker run`.
-    name: go-container-smoke (${{ matrix.platform }})
+    name: go-container-build (${{ matrix.platform }})
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    outputs:
+      ids_amd64: ${{ steps.build.outputs.ids_amd64 }}
+      ids_arm64: ${{ steps.build.outputs.ids_arm64 }}
     strategy:
       fail-fast: false
       matrix:
-        platform: [linux/amd64, linux/arm64]
+        include:
+          - platform: linux/amd64
+            arch: amd64
+          - platform: linux/arm64
+            arch: arm64
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -773,40 +782,101 @@ jobs:
           # CHAOS-9064: the mirrored binfmt image (ci/builder_images.tsv)
           image: ghcr.io/full-chaos/tonistiigi/binfmt@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
 
-      - name: Build and smoke Go images
+      - name: Build every Go image once
+        id: build
+        # Only this step selects the platform (see go-container-smoke below for why).
+        env:
+          DOCKER_DEFAULT_PLATFORM: ${{ matrix.platform }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          bash ci/check_go_containers.sh build-shared "${RUNNER_TEMP}/go-images"
+          echo "ids_${ARCH}=$(cat "${RUNNER_TEMP}/go-images/ids.txt")" >> "${GITHUB_OUTPUT}"
+
+      - name: Upload the shared Go images
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: go-images-${{ matrix.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/go-images/images.tar
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 1
+
+  go-container-smoke:
+    # Heavy: runs in the merge queue, on the main push, and on a pull request only with ci:full; a docs-only change skips it.
+    needs: [go-storage-integration-plan, go-container-build]
+    if: (!(github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) && needs.go-storage-integration-plan.outputs.docs_only != 'true'
+    # Every Go image is smoked on both architectures it ships for. The arm64
+    # leg runs on the same x64 host: the Dockerfile's build stage is
+    # `--platform=$BUILDPLATFORM` (Go cross-compiles natively), and only the
+    # arm64 runtime images run under QEMU, selected by DOCKER_DEFAULT_PLATFORM
+    # (on the smoke step only) for `docker run`. The images come from
+    # go-container-build, verified by id.
+    name: go-container-smoke (${{ matrix.platform }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            arch: amd64
+          - platform: linux/arm64
+            arch: arm64
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up QEMU
+        if: matrix.platform == 'linux/arm64'
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+        with:
+          # CHAOS-9064: the mirrored binfmt image (ci/builder_images.tsv)
+          image: ghcr.io/full-chaos/tonistiigi/binfmt@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
+
+      - name: Download the shared Go images
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: go-images-${{ matrix.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/go-images
+
+      - name: Load the shared Go images and smoke them
         # Only this step selects the platform: set job-wide, it made the QEMU
         # setup step pull the arm64 binfmt image and fail with "exec format
         # error" before emulation was registered.
         env:
           DOCKER_DEFAULT_PLATFORM: ${{ matrix.platform }}
-        run: bash ci/check_go_containers.sh smoke
+          GO_IMAGES_PREBUILT: "1"
+          GO_IMAGES_CONSUMER: smoke
+          GO_IMAGES_EXPECTED: ${{ matrix.arch == 'amd64' && needs.go-container-build.outputs.ids_amd64 || needs.go-container-build.outputs.ids_arm64 }}
+        run: |
+          docker load --input "${RUNNER_TEMP}/go-images/images.tar"
+          bash ci/check_go_containers.sh verify-images
+          bash ci/check_go_containers.sh smoke
 
   go-container-security:
     # Heavy: runs in the merge queue, on the main push, and on a pull request only with ci:full; a docs-only change skips it.
-    needs: go-storage-integration-plan
+    # CHAOS-11415: one job scans the six images of go-container-build (amd64), each by the id that job reported. Every
+    # target is scanned even when an earlier one fails; the job is red if any step is red.
+    needs: [go-storage-integration-plan, go-container-build]
     if: (!(github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) && needs.go-storage-integration-plan.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 25
-    strategy:
-      fail-fast: false
-      matrix:
-        target: [operator, contractcheck, migrate, dho, auth-service, auth-migrate]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Build ${{ matrix.target }} security image
+      - name: Download the shared Go images
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: go-images-amd64-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/go-images
+
+      - name: Load the shared Go images and verify their ids
+        id: load
         env:
-          TARGET: ${{ matrix.target }}
+          GO_IMAGES_CONSUMER: security
+          GO_IMAGES_EXPECTED: ${{ needs.go-container-build.outputs.ids_amd64 }}
         run: |
-          docker build \
-            --file docker/go-worker.Dockerfile \
-            --target "${TARGET}" \
-            --build-arg VERSION=phase1-ci \
-            --build-arg COMMIT=0000000000000000000000000000000000000000 \
-            --build-arg BUILD_TIME=1970-01-01T00:00:00Z \
-            --build-arg SOURCE_DATE_EPOCH=0 \
-            --tag "dev-health-go-${TARGET}:security" \
-            .
+          docker load --input "${RUNNER_TEMP}/go-images/images.tar"
+          bash ci/check_go_containers.sh verify-images
 
       # CHAOS-5012: the syft installer that anchore/sbom-action runs
       # internally (curl + checksum verify against a GitHub release) flakes
@@ -840,22 +910,154 @@ jobs:
         with:
           syft-version: v1.42.3
 
-      - name: Generate ${{ matrix.target }} SBOM
+      - name: Generate operator SBOM
+        if: ${{ !cancelled() && steps.load.outcome == 'success' }}
         uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
         with:
-          image: dev-health-go-${{ matrix.target }}:security
+          image: dev-health-go-operator:ci
           format: spdx-json
-          artifact-name: go-${{ matrix.target }}-sbom.spdx.json
+          artifact-name: go-operator-sbom.spdx.json
           syft-version: v1.42.3
           dependency-snapshot: false
           upload-artifact: true
           upload-artifact-retention: 14
           upload-release-assets: false
 
-      - name: Scan ${{ matrix.target }} for critical vulnerabilities
+      - name: Scan operator for critical vulnerabilities
+        if: ${{ !cancelled() && steps.load.outcome == 'success' }}
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          image-ref: dev-health-go-${{ matrix.target }}:security
+          image-ref: dev-health-go-operator:ci
+          scan-type: image
+          scanners: vuln
+          vuln-type: os,library
+          severity: CRITICAL
+          ignore-unfixed: false
+          exit-code: '1'
+          version: v0.70.0
+
+      - name: Generate contractcheck SBOM
+        if: ${{ !cancelled() && steps.load.outcome == 'success' }}
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          image: dev-health-go-contractcheck:ci
+          format: spdx-json
+          artifact-name: go-contractcheck-sbom.spdx.json
+          syft-version: v1.42.3
+          dependency-snapshot: false
+          upload-artifact: true
+          upload-artifact-retention: 14
+          upload-release-assets: false
+
+      - name: Scan contractcheck for critical vulnerabilities
+        if: ${{ !cancelled() && steps.load.outcome == 'success' }}
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: dev-health-go-contractcheck:ci
+          scan-type: image
+          scanners: vuln
+          vuln-type: os,library
+          severity: CRITICAL
+          ignore-unfixed: false
+          exit-code: '1'
+          version: v0.70.0
+
+      - name: Generate migrate SBOM
+        if: ${{ !cancelled() && steps.load.outcome == 'success' }}
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          image: dev-health-go-migrate:ci
+          format: spdx-json
+          artifact-name: go-migrate-sbom.spdx.json
+          syft-version: v1.42.3
+          dependency-snapshot: false
+          upload-artifact: true
+          upload-artifact-retention: 14
+          upload-release-assets: false
+
+      - name: Scan migrate for critical vulnerabilities
+        if: ${{ !cancelled() && steps.load.outcome == 'success' }}
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: dev-health-go-migrate:ci
+          scan-type: image
+          scanners: vuln
+          vuln-type: os,library
+          severity: CRITICAL
+          ignore-unfixed: false
+          exit-code: '1'
+          version: v0.70.0
+
+      - name: Generate dho SBOM
+        if: ${{ !cancelled() && steps.load.outcome == 'success' }}
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          image: dev-health-go-dho:ci
+          format: spdx-json
+          artifact-name: go-dho-sbom.spdx.json
+          syft-version: v1.42.3
+          dependency-snapshot: false
+          upload-artifact: true
+          upload-artifact-retention: 14
+          upload-release-assets: false
+
+      - name: Scan dho for critical vulnerabilities
+        if: ${{ !cancelled() && steps.load.outcome == 'success' }}
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: dev-health-go-dho:ci
+          scan-type: image
+          scanners: vuln
+          vuln-type: os,library
+          severity: CRITICAL
+          ignore-unfixed: false
+          exit-code: '1'
+          version: v0.70.0
+
+      - name: Generate auth-service SBOM
+        if: ${{ !cancelled() && steps.load.outcome == 'success' }}
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          image: dev-health-go-auth-service:ci
+          format: spdx-json
+          artifact-name: go-auth-service-sbom.spdx.json
+          syft-version: v1.42.3
+          dependency-snapshot: false
+          upload-artifact: true
+          upload-artifact-retention: 14
+          upload-release-assets: false
+
+      - name: Scan auth-service for critical vulnerabilities
+        if: ${{ !cancelled() && steps.load.outcome == 'success' }}
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: dev-health-go-auth-service:ci
+          scan-type: image
+          scanners: vuln
+          vuln-type: os,library
+          severity: CRITICAL
+          ignore-unfixed: false
+          exit-code: '1'
+          version: v0.70.0
+
+      - name: Generate auth-migrate SBOM
+        if: ${{ !cancelled() && steps.load.outcome == 'success' }}
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          image: dev-health-go-auth-migrate:ci
+          format: spdx-json
+          artifact-name: go-auth-migrate-sbom.spdx.json
+          syft-version: v1.42.3
+          dependency-snapshot: false
+          upload-artifact: true
+          upload-artifact-retention: 14
+          upload-release-assets: false
+
+      - name: Scan auth-migrate for critical vulnerabilities
+        if: ${{ !cancelled() && steps.load.outcome == 'success' }}
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: dev-health-go-auth-migrate:ci
           scan-type: image
           scanners: vuln
           vuln-type: os,library
@@ -969,7 +1171,7 @@ jobs:
   # is the part that RUNS them together.
   go-auth-compose-proof:
     # Heavy: runs in the merge queue, on the main push, and on a pull request only with ci:full; a docs-only change skips it.
-    needs: go-storage-integration-plan
+    needs: [go-storage-integration-plan, go-container-build]
     if: (!(github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) && needs.go-storage-integration-plan.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -983,6 +1185,20 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Download the shared Go images
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: go-images-amd64-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/go-images
+
+      - name: Load the shared Go images and verify their ids
+        env:
+          GO_IMAGES_CONSUMER: auth-compose-proof
+          GO_IMAGES_EXPECTED: ${{ needs.go-container-build.outputs.ids_amd64 }}
+        run: |
+          docker load --input "${RUNNER_TEMP}/go-images/images.tar"
+          bash ci/check_go_containers.sh verify-images
+
       - name: Start a decoy postgres that owns the dev stack's container name and host port
         run: |
           docker run --detach --name postgres -e POSTGRES_PASSWORD=decoy -p 127.0.0.1:5555:5432 \
@@ -990,6 +1206,13 @@ jobs:
           docker inspect --format '{{.Id}} {{.State.StartedAt}}' postgres >"${RUNNER_TEMP}/decoy.id"
 
       - name: Compose up the auth profile, probe it, roll it back
+        env:
+          AUTH_PROOF_PREBUILT: "1"
+          DEV_HEALTH_GO_OPERATOR_IMAGE: dev-health-go-operator:ci
+          DEV_HEALTH_GO_DHO_IMAGE: dev-health-go-dho:ci
+          DEV_HEALTH_GO_CONTRACTCHECK_IMAGE: dev-health-go-contractcheck:ci
+          DEV_HEALTH_GO_AUTH_MIGRATE_IMAGE: dev-health-go-auth-migrate:ci
+          DEV_HEALTH_GO_AUTH_SERVICE_IMAGE: dev-health-go-auth-service:ci
         run: bash ci/check_auth_compose.sh
 
       - name: The decoy postgres is the same container, running and never restarted
@@ -1005,7 +1228,7 @@ jobs:
   # name on dev-health-web, else main.
   go-auth-web-proxy-proof:
     # Heavy: runs in the merge queue, on the main push, and on a pull request only with ci:full; a docs-only change skips it.
-    needs: go-storage-integration-plan
+    needs: [go-storage-integration-plan, go-container-build]
     if: (!(github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) && needs.go-storage-integration-plan.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 40
@@ -1061,6 +1284,20 @@ jobs:
         working-directory: dev-health-web
         run: pnpm install --frozen-lockfile
 
+      - name: Download the shared Go images
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: go-images-amd64-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/go-images
+
+      - name: Load the shared Go images and verify their ids
+        env:
+          GO_IMAGES_CONSUMER: auth-web-proxy-proof
+          GO_IMAGES_EXPECTED: ${{ needs.go-container-build.outputs.ids_amd64 }}
+        run: |
+          docker load --input "${RUNNER_TEMP}/go-images/images.tar"
+          bash ci/check_go_containers.sh verify-images
+
       - name: Start a decoy postgres that owns the dev stack's container name and host port
         run: |
           docker run --detach --name postgres -e POSTGRES_PASSWORD=decoy -p 127.0.0.1:5555:5432 \
@@ -1069,6 +1306,12 @@ jobs:
 
       - name: Web login, refresh and logout through go-api to auth-service
         env:
+          AUTH_PROOF_PREBUILT: "1"
+          DEV_HEALTH_GO_OPERATOR_IMAGE: dev-health-go-operator:ci
+          DEV_HEALTH_GO_DHO_IMAGE: dev-health-go-dho:ci
+          DEV_HEALTH_GO_CONTRACTCHECK_IMAGE: dev-health-go-contractcheck:ci
+          DEV_HEALTH_GO_AUTH_MIGRATE_IMAGE: dev-health-go-auth-migrate:ci
+          DEV_HEALTH_GO_AUTH_SERVICE_IMAGE: dev-health-go-auth-service:ci
           AUTH_PROOF_WEB_DIR: ${{ github.workspace }}/dev-health-web
         run: bash ci/check_auth_web_proxy_compose.sh
 
@@ -1196,6 +1439,7 @@ jobs:
     needs:
       - go-storage-integration-plan
       - go-storage-integration
+      - go-container-build
       - go-container-smoke
       - go-container-security
       - go-container-reproducibility
@@ -1226,6 +1470,7 @@ jobs:
           GATED_JOB_5: go-auth-compose-proof|queue-heavy|${{ needs.go-auth-compose-proof.result }}
           GATED_JOB_6: go-auth-web-proxy-proof|queue-heavy|${{ needs.go-auth-web-proxy-proof.result }}
           GATED_JOB_7: graphql-wire-parity|queue-heavy|${{ needs.graphql-wire-parity.result }}
+          GATED_JOB_8: go-container-build|queue-heavy|${{ needs.go-container-build.result }}
         run: |
           chmod +x ci/aggregate_gate_results.sh
           ./ci/aggregate_gate_results.sh

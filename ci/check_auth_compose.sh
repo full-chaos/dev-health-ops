@@ -98,8 +98,10 @@ assert_project_prefixed() {
 }
 
 
-printf 'step 1: up --build --wait auth-service\n'
-compose --profile auth up --build --detach --wait --wait-timeout 600 auth-service
+BUILD_FLAG=--build
+[ "${AUTH_PROOF_PREBUILT:-}" != 1 ] || BUILD_FLAG=--no-build
+printf 'step 1: up %s --wait auth-service\n' "${BUILD_FLAG}"
+compose --profile auth up "${BUILD_FLAG}" --detach --wait --wait-timeout 600 auth-service
 assert_project_prefixed
 PORT="$(compose --profile auth port auth-service 8096 | sed 's/.*://')"
 [[ "${PORT}" =~ ^[0-9]+$ ]] || die "could not read the ephemeral operator port (${PORT})"

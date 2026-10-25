@@ -114,7 +114,14 @@ WHERE principal_id = $1 AND email_verified_at IS DISTINCT FROM $2`, principal, a
 // password_changed) and adds 1 to legacy_token_version, as the public.users
 // token_version gets (a go-api token minted before it ends and the users
 // reconciliation stays at zero diff). Available only after the users cutover.
-func (s *Store) SetPasswordHash(ctx context.Context, principal uuid.UUID, hash string, actor Actor) (err error) {
+func (s *Store) SetPasswordHash(ctx context.Context, principal uuid.UUID, hash string, actor Actor) error {
+	return s.SetPasswordHashWith(ctx, principal, hash, actor, nil)
+}
+
+// SetPasswordHashWith is SetPasswordHash with end, when not nil, run in the
+// same transaction after the password is written: an error from end rolls the
+// password back with everything else.
+func (s *Store) SetPasswordHashWith(ctx context.Context, principal uuid.UUID, hash string, actor Actor, end func(context.Context, audit.TxOps) error) (err error) {
 	defer func() { s.countLink(ctx, "set_password", err) }()
 	if !s.ownsUsers {
 		return ErrSignupNotAvailable
@@ -128,14 +135,19 @@ func (s *Store) SetPasswordHash(ctx context.Context, principal uuid.UUID, hash s
 			if err := s.lockUser(ctx, tx, principal); err != nil {
 				return err
 			}
-			_, err := tx.Exec(ctx, `UPDATE `+s.q+`.users
+			if _, err := tx.Exec(ctx, `UPDATE `+s.q+`.users
 SET password_hash = $2, password_algorithm = $3, password_updated_at = clock_timestamp(),
     legacy_token_version = legacy_token_version + 1, updated_at = clock_timestamp()
-WHERE principal_id = $1`, principal, hash, passwordAlgorithm)
-			if err != nil {
+WHERE principal_id = $1`, principal, hash, passwordAlgorithm); err != nil {
 				return err
 			}
-			return updatePublicPassword(ctx, tx, principal, hash)
+			if err := updatePublicPassword(ctx, tx, principal, hash); err != nil {
+				return err
+			}
+			if end != nil {
+				return end(ctx, tx)
+			}
+			return nil
 		},
 		Audit:  localAudit("auth.user.password_changed", "password_changed", subject, actor),
 		Events: []audit.OutboxEvent{userEvent(subject, "user.credentials_changed")},

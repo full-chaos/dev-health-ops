@@ -4,7 +4,9 @@ package local
 
 import (
 	"context"
-	"errors"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -13,25 +15,19 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
 
-// revokeDown is the B1 store whose RevokeAll always fails.
-type revokeDown struct{ *session.Store }
-
-func (revokeDown) RevokeAll(context.Context, uuid.UUID, session.Actor) (int, error) {
-	return 0, errors.New("session store unavailable")
-}
-
 func cheapHash(password string) (string, error) {
 	h, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.MinCost)
 	return strings.Replace(string(h), "$2a$", "$2b$", 1), err
 }
 
-type stampRig struct {
+type endRig struct {
 	env      *pgEnv
 	links    *PGLinks
 	sessions *session.Store
@@ -39,7 +35,7 @@ type stampRig struct {
 	flows    *Flows
 }
 
-func newStampRig(t *testing.T, ctx context.Context) *stampRig {
+func newEndRig(t *testing.T, ctx context.Context) *endRig {
 	t.Helper()
 	env, links := linkEnv(t, ctx)
 	schema, err := authschema.NewValidatedIdentifier("auth")
@@ -55,8 +51,8 @@ func newStampRig(t *testing.T, ctx context.Context) *stampRig {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rig := &stampRig{env: env, links: links, sessions: sessions, accounts: IdentityAccounts{Store: store}}
-	rig.flows, err = NewFlows(FlowsConfig{Accounts: rig.accounts, Links: links, Sessions: revokeDown{sessions}, Mail: &liveMail{},
+	rig := &endRig{env: env, links: links, sessions: sessions, accounts: IdentityAccounts{Store: store, Sessions: sessions, Links: links}}
+	rig.flows, err = NewFlows(FlowsConfig{Accounts: rig.accounts, Links: links, Sessions: sessions, Mail: &liveMail{},
 		Locker: links, UsersOwnedByAuth: true, Hash: cheapHash})
 	if err != nil {
 		t.Fatal(err)
@@ -64,7 +60,9 @@ func newStampRig(t *testing.T, ctx context.Context) *stampRig {
 	return rig
 }
 
-func (r *stampRig) account(t *testing.T, ctx context.Context, password string) uuid.UUID {
+// account makes the auth user and go-api's users and refresh_tokens rows of
+// one principal.
+func (r *endRig) account(t *testing.T, ctx context.Context, password string) uuid.UUID {
 	t.Helper()
 	hash, err := cheapHash(password)
 	if err != nil {
@@ -74,10 +72,28 @@ func (r *stampRig) account(t *testing.T, ctx context.Context, password string) u
 	if err != nil {
 		t.Fatalf("ProvisionLocal: %v", err)
 	}
+	r.goAPIRows(t, ctx, id)
 	return id
 }
 
-func (r *stampRig) live(t *testing.T, ctx context.Context, issued session.Issued) bool {
+// legacyJTI is the jti of the go-api refresh token seeded for a principal.
+const legacyJTI = "go-api-refresh-jti"
+
+// goAPIRows sets the principal's public.users token_version to 3 and one live refresh
+// token whose digest is that of legacyJTI.
+func (r *endRig) goAPIRows(t *testing.T, ctx context.Context, id uuid.UUID) {
+	t.Helper()
+	if _, err := r.env.admin.Exec(ctx, `UPDATE public.users SET token_version = 3 WHERE id = $1`, id); err != nil {
+		t.Fatalf("seed go-api token version: %v", err)
+	}
+	digest := sha256.Sum256([]byte(legacyJTI))
+	if _, err := r.env.admin.Exec(ctx, `INSERT INTO public.refresh_tokens (id, user_id, org_id, token_hash, family_id, expires_at, created_at)
+		VALUES (gen_random_uuid(), $1, NULL, $2, gen_random_uuid(), now() + interval '1 day', now())`, id, hex.EncodeToString(digest[:])); err != nil {
+		t.Fatalf("seed go-api refresh token: %v", err)
+	}
+}
+
+func (r *endRig) live(t *testing.T, ctx context.Context, issued session.Issued) bool {
 	t.Helper()
 	record, err := r.sessions.Current(ctx, issued.Session.ID)
 	if err != nil {
@@ -86,11 +102,32 @@ func (r *stampRig) live(t *testing.T, ctx context.Context, issued session.Issued
 	return record.RevokedAt == nil
 }
 
-// A reset whose RevokeAll fails still ends the older sessions: the password
-// stamp voids them at verify, and a session created afterwards is live.
-func TestResetWithRevokeAllDownRefusesTheOldSession(t *testing.T) {
+func (r *endRig) tokenVersion(t *testing.T, ctx context.Context, id uuid.UUID) int {
+	t.Helper()
+	return r.env.count(t, ctx, `SELECT token_version FROM public.users WHERE id = $1`, id)
+}
+
+func (r *endRig) liveLegacyRows(t *testing.T, ctx context.Context, id uuid.UUID) int {
+	t.Helper()
+	return r.env.count(t, ctx, `SELECT count(*) FROM public.refresh_tokens WHERE user_id = $1 AND revoked_at IS NULL`, id)
+}
+
+func (r *endRig) passwordHash(t *testing.T, ctx context.Context, id uuid.UUID) string {
+	t.Helper()
+	var hash string
+	if err := r.env.admin.QueryRow(ctx, `SELECT password_hash FROM auth.users WHERE principal_id = $1`, id).Scan(&hash); err != nil {
+		t.Fatal(err)
+	}
+	return hash
+}
+
+// After a reset every credential class of the principal is ended in the same
+// transaction: the auth session (physical revoked_at, what policy's
+// SessionState reads), the native refresh credential, go-api's token_version
+// (which ends access tokens without a sid) and the go-api refresh rows.
+func TestResetEndsEveryCredentialClass(t *testing.T) {
 	ctx := context.Background()
-	rig := newStampRig(t, ctx)
+	rig := newEndRig(t, ctx)
 	id := rig.account(t, ctx, "Old-pass-12345")
 	old, err := rig.sessions.Create(ctx, id, nil, []string{"pwd"})
 	if err != nil {
@@ -100,14 +137,30 @@ func TestResetWithRevokeAllDownRefusesTheOldSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	out, err := rig.flows.Reset(ctx, "reset-secret", "A-new-pass-77")
-	if err != nil || out.Kind != FlowOK || !errors.Is(out.RevokeErr, ErrSessionsNotRevoked) {
+	if err != nil || out.Kind != FlowOK {
 		t.Fatalf("Reset = %+v, %v", out, err)
 	}
 	if rig.live(t, ctx, old) {
-		t.Fatal("the pre-reset session is still live after the password changed")
+		t.Error("the pre-reset session is live")
+	}
+	if n := rig.env.count(t, ctx, `SELECT count(*) FROM auth.sessions WHERE id = $1 AND revoked_at IS NOT NULL`, old.Session.ID); n != 1 {
+		t.Errorf("the pre-reset session is not physically revoked (%d rows)", n)
 	}
 	if res, err := rig.sessions.Exchange(ctx, old.Credential); err != nil || res.Reason != session.ReasonSessionRevoked {
 		t.Errorf("Exchange of the old credential = %+v, %v; want %s", res, err, session.ReasonSessionRevoked)
+	}
+	if v := rig.tokenVersion(t, ctx, id); v != 4 {
+		t.Errorf("go-api token_version = %d, want 4", v)
+	}
+	if n := rig.liveLegacyRows(t, ctx, id); n != 0 {
+		t.Errorf("%d go-api refresh rows are still live", n)
+	}
+	state, found, err := policy.PGStore{Pool: rig.env.runtime, AuthSchema: "auth"}.SessionState(ctx, old.Session.ID)
+	if err != nil || !found || !state.Revoked {
+		t.Errorf("policy SessionState of the old session = %+v found %v err %v; want revoked", state, found, err)
+	}
+	if res, err := rig.sessions.ExchangeLegacy(ctx, session.LegacyRefresh{PrincipalID: id, JTI: contracts.NewSecretString(legacyJTI)}); err != nil || res.Reason.Success() {
+		t.Errorf("ExchangeLegacy after the reset = %+v, %v; want a refusal", res, err)
 	}
 	time.Sleep(20 * time.Millisecond)
 	after, err := rig.sessions.Create(ctx, id, nil, []string{"pwd"})
@@ -116,11 +169,11 @@ func TestResetWithRevokeAllDownRefusesTheOldSession(t *testing.T) {
 	}
 }
 
-// A change keeps the caller's own new session and a later second device live,
-// and voids the older device, even with RevokeAll down.
-func TestChangeKeepsTheWinnersSessionAndALaterDeviceAndVoidsTheOlderOne(t *testing.T) {
+// A change ends the same classes, keeps the caller's own new session and a
+// later second device live.
+func TestChangeEndsEveryCredentialClassAndKeepsTheCallersNewSession(t *testing.T) {
 	ctx := context.Background()
-	rig := newStampRig(t, ctx)
+	rig := newEndRig(t, ctx)
 	id := rig.account(t, ctx, "Old-pass-12345")
 	older, err := rig.sessions.Create(ctx, id, nil, []string{"pwd"})
 	if err != nil {
@@ -136,9 +189,82 @@ func TestChangeKeepsTheWinnersSessionAndALaterDeviceAndVoidsTheOlderOne(t *testi
 	if !rig.live(t, ctx, *out.Issued) {
 		t.Error("the session the change issued to the caller is void")
 	}
-	time.Sleep(20 * time.Millisecond)
-	second, err := rig.sessions.Create(ctx, id, nil, []string{"pwd"})
-	if err != nil || !rig.live(t, ctx, second) {
-		t.Errorf("a second device's session after the change is not live: %v", err)
+	if v := rig.tokenVersion(t, ctx, id); v != 4 {
+		t.Errorf("go-api token_version = %d, want 4", v)
+	}
+	if n := rig.liveLegacyRows(t, ctx, id); n != 0 {
+		t.Errorf("%d go-api refresh rows are still live", n)
+	}
+}
+
+// When any step of the transaction fails the password is unchanged, the
+// sessions stay live and go-api's rows are untouched.
+func TestAFailedStepRollsTheWholePasswordChangeBack(t *testing.T) {
+	steps := map[string]string{
+		"the refresh token revoke": `REVOKE UPDATE (revoked_at) ON public.refresh_tokens FROM %s`,
+	}
+	for name, revoke := range steps {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			rig := newEndRig(t, ctx)
+			id := rig.account(t, ctx, "Old-pass-12345")
+			old, err := rig.sessions.Create(ctx, id, nil, []string{"pwd"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			before := rig.passwordHash(t, ctx, id)
+			var role string
+			if err := rig.env.runtime.QueryRow(ctx, `SELECT current_user`).Scan(&role); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := rig.env.admin.Exec(ctx, fmt.Sprintf(revoke, `"`+role+`"`)); err != nil {
+				t.Fatal(err)
+			}
+			if err := rig.links.Issue(ctx, IssueRequest{PrincipalID: id, Purpose: PurposePasswordReset, TokenHash: linkHash("reset-secret"), TTL: ResetTTL}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := rig.flows.Reset(ctx, "reset-secret", "A-new-pass-77"); err == nil {
+				t.Fatal("Reset succeeded although a step failed")
+			}
+			if _, err := rig.flows.Change(ctx, ChangeRequest{PrincipalID: id, Current: "Old-pass-12345", New: "Brand-new-pass-42"}); err == nil {
+				t.Fatal("Change succeeded although a step failed")
+			}
+			if got := rig.passwordHash(t, ctx, id); got != before {
+				t.Error("the password changed although the transaction failed")
+			}
+			if !rig.live(t, ctx, old) {
+				t.Error("the session was revoked although the transaction failed")
+			}
+			if v := rig.tokenVersion(t, ctx, id); v != 3 {
+				t.Errorf("go-api token_version = %d, want 3 (unchanged)", v)
+			}
+			if n := rig.liveLegacyRows(t, ctx, id); n != 1 {
+				t.Errorf("%d go-api refresh rows are live, want the 1 seeded", n)
+			}
+		})
+	}
+}
+
+// A reset link issued before a password change is unknown after it, for a
+// change and for a reset by another link; a verification link stays.
+func TestAPasswordChangeEndsTheEarlierResetLinksOnly(t *testing.T) {
+	ctx := context.Background()
+	rig := newEndRig(t, ctx)
+	id := rig.account(t, ctx, "Old-pass-12345")
+	if err := rig.links.Issue(ctx, IssueRequest{PrincipalID: id, Purpose: PurposePasswordReset, TokenHash: linkHash("earlier-reset"), TTL: ResetTTL}); err != nil {
+		t.Fatal(err)
+	}
+	if err := rig.links.Issue(ctx, IssueRequest{PrincipalID: id, Purpose: PurposeEmailVerification, TokenHash: linkHash("verify"), TTL: VerificationTTL}); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := rig.flows.Change(ctx, ChangeRequest{PrincipalID: id, Current: "Old-pass-12345", New: "Brand-new-pass-42"}); err != nil || out.Kind != FlowOK {
+		t.Fatalf("Change = %+v, %v", out, err)
+	}
+	out, err := rig.flows.Reset(ctx, "earlier-reset", "A-new-pass-77")
+	if err != nil || out.Kind != FlowInvalidToken {
+		t.Errorf("a reset link issued before the change = %+v, %v; want it refused", out, err)
+	}
+	if out, err := rig.flows.Verify(ctx, "verify"); err != nil || out.Kind != FlowOK {
+		t.Errorf("the verification link = %+v, %v; want it to stay valid", out, err)
 	}
 }

@@ -97,7 +97,12 @@ status="$(git status --porcelain)" || { echo "git status failed; the tree is not
 
 # go test runs with a fixed environment: no GOENV file, no GOFLAGS (-exec, -run, ...), no toolchain download, no GIT_DIR.
 goenv=(env GOENV=off GOFLAGS= GOTOOLCHAIN=local)
-go_path="$(command -v go)" || { echo "go not found on PATH" >&2; exit 3; }
+go_first="$(command -v go)" || { echo "go not found on PATH" >&2; exit 3; }
+# The toolchain go.mod selects (a downloaded one when the module is newer than the installed go) is resolved once with a
+# fixed environment; the tests then run that exact binary with GOTOOLCHAIN=local, so no switch happens mid-run.
+go_root="$(env GOENV=off GOFLAGS= GOTOOLCHAIN=auto "${go_first}" env GOROOT)" || { echo "cannot resolve the go toolchain" >&2; exit 3; }
+go_path="${go_root}/bin/go"
+[ -x "${go_path}" ] || { echo "go not found: ${go_path}" >&2; exit 3; }
 if [ -n "${stub}" ]; then
   [ -x "${stub}" ] || { echo "test runner is not executable: ${stub}" >&2; exit 3; }
   capped="${stub}"

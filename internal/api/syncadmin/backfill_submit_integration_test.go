@@ -251,7 +251,7 @@ func TestBackfillSubmitRefusesARunTheSchedulerWouldRefuse(t *testing.T) {
 
 // TestOccurrenceSyncRunIDIsOrgScoped: the lazy occurrence read filters on the
 // occurrence id AND the org in one query: another org's read finds no run, the
-// owner's read sees the quarantine (the run path is unit-tested; a planned row needs job_runs and sync_runs rows).
+// owner's read sees the run once the scheduler planned it, or the quarantine.
 func TestOccurrenceSyncRunIDIsOrgScoped(t *testing.T) {
 	v, one, path := submitVenue(t, 1)
 	status, text := v.call("POST", path, `{"selector":{"since":"2026-09-01T00:00:00Z","before":"2026-09-02T00:00:00Z"}}`)
@@ -261,6 +261,18 @@ func TestOccurrenceSyncRunIDIsOrgScoped(t *testing.T) {
 	planned, err := reader.occurrencePlanOf(ctx, v.org, submitted.OccurrenceID)
 	if err != nil || planned.RunID != nil || planned.ErrorCode != "" {
 		t.Fatalf("unplanned occurrence: %v %v, want empty", planned, err)
+	}
+	run, jobRun := uuid.New(), uuid.New()
+	v.exec(`INSERT INTO job_runs (id, job_id, status, triggered_by, created_at) VALUES ($1, $2, 0, 'backfill', now())`, jobRun, one.job)
+	v.exec(`INSERT INTO sync_runs (id, org_id, integration_id, triggered_by, mode, status, total_units, completed_units, failed_units, created_at)
+VALUES ($1, $2, $3, 'backfill', 'backfill', 'planned', 0, 0, 0, now())`, run, v.org, one.integration)
+	v.exec(`UPDATE scheduled_sync_occurrences SET sync_run_id = $2, job_run_id = $3, reconcile_status = 'completed' WHERE occurrence_id = $1`,
+		submitted.OccurrenceID, run, jobRun)
+	if got, err := reader.occurrencePlanOf(ctx, v.org, submitted.OccurrenceID); err != nil || got.RunID == nil || *got.RunID != run || got.ErrorCode != "" {
+		t.Fatalf("owner read of a planned occurrence: %v %v, want run %s", got, err, run)
+	}
+	if got, err := reader.occurrencePlanOf(ctx, uuid.NewString(), submitted.OccurrenceID); err != nil || got.RunID != nil || got.ErrorCode != "" {
+		t.Fatalf("another org's read of a planned occurrence: %v %v, want not found, never a run", got, err)
 	}
 	other := submitVenueSecond(t, v, one)
 	v.exec(`UPDATE scheduled_sync_occurrences SET sync_run_id = NULL, job_run_id = NULL, reconcile_status = 'quarantined', reconcile_error_code = 'invalid_plan', reconcile_error_at = now() WHERE occurrence_id = $1`, other)

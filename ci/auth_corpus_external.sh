@@ -14,7 +14,7 @@
 # Leg acp turns on the AUTH_PROXY_* flag of an aggregate only when the running auth-service serves every route of it
 # (ci/auth_corpus_acp_routes.tsv): a route auth-service mounts answers OPTIONS with 405, one it does not with 404.
 # An aggregate's flag therefore turns on in the change that lands its mount, and sessions gates the others, as go-api's
-# own start-up check does. Leg acp also requires sessions, local_login and social to be served (REQUIRED).
+# own start-up check does. Leg acp also requires sessions and local_login to be served (REQUIRED).
 # The project is private to this run and is removed with its volumes on exit. CI only (docker, the Go toolchain).
 set -euo pipefail
 
@@ -149,7 +149,10 @@ fi
 
 AGGREGATES=(sessions local_login credentials social oidc saml)
 # Leg acp serves these through auth-service (CHAOS-10410); one that is not served fails the leg by name.
-REQUIRED=(sessions local_login social)
+REQUIRED=(sessions local_login)
+# Served by auth-service but left to go-api on this leg: auth-service creates no account for a new social sign-in until it
+# owns users, so forwarding social would refuse the corpus's new-user row.
+KEPT_ON_GO_API=(social)
 ROUTES="${SCRIPT_DIR}/auth_corpus_acp_routes.tsv"
 
 hostport() {
@@ -207,7 +210,9 @@ if [ "${LEG}" = "acp" ]; then
   done
   # The sessions aggregate gates the others, as go-api's own start-up check does.
   if [[ " ${SERVED[*]} " == *" sessions "* ]]; then
-    FORWARDED=("${SERVED[@]}")
+    for aggregate in "${SERVED[@]}"; do
+      [[ " ${KEPT_ON_GO_API[*]} " == *" ${aggregate} "* ]] || FORWARDED+=("${aggregate}")
+    done
   fi
   printf 'leg acp forwards: %s\n' "${FORWARDED[*]:-none (sessions is not served; every route stays in go-api)}"
   if [ "${#FORWARDED[@]}" -gt 0 ]; then

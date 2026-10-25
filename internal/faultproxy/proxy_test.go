@@ -446,3 +446,37 @@ func TestBlackholedConnClosesOnCutWithoutData(t *testing.T) {
 		t.Fatalf("blackholed conn survived a cut: %v", err)
 	}
 }
+
+func TestJitterWithinStaysInBounds(t *testing.T) {
+	if got := jitterWithin(0); got != 0 {
+		t.Fatalf("jitterWithin(0) = %v", got)
+	}
+	const max = 10 * time.Millisecond
+	seen := map[time.Duration]bool{}
+	for i := 0; i < 500; i++ {
+		d := jitterWithin(max)
+		if d < 0 || d > max {
+			t.Fatalf("jitter %v outside [0,%v]", d, max)
+		}
+		seen[d] = true
+	}
+	if len(seen) < 100 {
+		t.Fatalf("jitter took only %d distinct values in 500 draws", len(seen))
+	}
+}
+
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) { return 0, errors.New("disk full") }
+
+func TestEventsWriteErrorIsKept(t *testing.T) {
+	p := startProxy(t, Config{MaxConns: 8, Events: failingWriter{}})
+	p.Set(Setting{Mode: Cut})
+	if err := p.EventsErr(); err == nil || !strings.Contains(err.Error(), "disk full") {
+		t.Fatalf("EventsErr = %v", err)
+	}
+	q := startProxy(t, Config{MaxConns: 8})
+	if q.EventsErr() != nil {
+		t.Fatal("EventsErr set without an events writer")
+	}
+}

@@ -6,6 +6,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -30,7 +31,7 @@ func main() {
 	os.Exit(run(ctx, os.Args[1:], os.Stdout, os.Stderr))
 }
 
-func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+func run(ctx context.Context, args []string, stdout, stderr io.Writer) (code int) {
 	fs := flag.NewFlagSet("faultproxy", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	var (
@@ -69,12 +70,23 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		}
 	}
 	cfg := faultproxy.Config{Listen: *listen, Upstream: *upstream, MaxConns: *maxConns}
+	var p *faultproxy.Proxy
 	if *events != "" {
 		f, err := os.OpenFile(*events, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 		if err != nil {
 			return fail("open events file: %v", err)
 		}
-		defer f.Close()
+		// runs after the proxy has stopped, so no event is written after the close
+		defer func() {
+			var werr error
+			if p != nil {
+				werr = p.EventsErr()
+			}
+			if err := errors.Join(werr, f.Sync(), f.Close()); err != nil {
+				fmt.Fprintf(stderr, "faultproxy: events file not written cleanly: %v\n", err)
+				code = 1
+			}
+		}()
 		cfg.Events = f
 	}
 	if *control != "" {
@@ -82,10 +94,11 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 			return fail("control: %v", err)
 		}
 	}
-	p, err := faultproxy.New(cfg)
+	started, err := faultproxy.New(cfg)
 	if err != nil {
 		return fail("%v", err)
 	}
+	p = started
 	defer p.Stop()
 	var ctlAddr string
 	if *control != "" {

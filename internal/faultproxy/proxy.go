@@ -1,10 +1,11 @@
 package faultproxy
 
 import (
+	crand "crypto/rand"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"io"
-	"math/rand/v2"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -51,7 +52,8 @@ type Proxy struct {
 	clients int
 	stopped bool
 
-	evMu sync.Mutex
+	evMu  sync.Mutex
+	evErr error
 
 	accepted, refused, bytesUp, bytesDown atomic.Int64
 }
@@ -151,6 +153,26 @@ func (p *Proxy) Stop() {
 	p.wg.Wait()
 }
 
+// EventsErr is the first error from writing the events file, if any.
+func (p *Proxy) EventsErr() error {
+	p.evMu.Lock()
+	defer p.evMu.Unlock()
+	return p.evErr
+}
+
+// jitterWithin returns a uniform duration in [0, max]; a failed random read
+// means no jitter.
+func jitterWithin(max time.Duration) time.Duration {
+	if max <= 0 {
+		return 0
+	}
+	var b [8]byte
+	if _, err := crand.Read(b[:]); err != nil {
+		return 0
+	}
+	return time.Duration(binary.BigEndian.Uint64(b[:]) % (uint64(max) + 1))
+}
+
 func (p *Proxy) event(s Setting) {
 	if p.cfg.Events == nil {
 		return
@@ -162,7 +184,9 @@ func (p *Proxy) event(s Setting) {
 	}{s.Mode, time.Since(p.start).Milliseconds(), time.Now().UnixMilli()})
 	p.evMu.Lock()
 	defer p.evMu.Unlock()
-	_, _ = p.cfg.Events.Write(append(line, '\n'))
+	if _, err := p.cfg.Events.Write(append(line, '\n')); err != nil && p.evErr == nil {
+		p.evErr = err
+	}
 }
 
 func closeConn(c net.Conn, reset bool) {
@@ -316,7 +340,7 @@ func (p *Proxy) forward(dst net.Conn, b []byte, s Setting) bool {
 	case Delay:
 		d := s.Latency
 		if s.Jitter > 0 {
-			d += time.Duration(rand.Int64N(int64(s.Jitter) + 1))
+			d += jitterWithin(s.Jitter)
 		}
 		if !p.sleep(d) {
 			return false

@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -68,5 +70,52 @@ func TestCLIRunsUntilCancelled(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("run did not stop on cancel")
+	}
+}
+
+func TestCLIEventsWriteFailureExitsNonZero(t *testing.T) {
+	if _, err := os.Stat("/dev/full"); err != nil {
+		t.Skip("no /dev/full")
+	}
+	var o, e safeBuf
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan int, 1)
+	go func() {
+		done <- run(ctx, []string{"--listen", "127.0.0.1:0", "--upstream", "127.0.0.1:1", "--events", "/dev/full"}, &o, &e)
+	}()
+	deadline := time.Now().Add(3 * time.Second)
+	for !strings.Contains(o.String(), "listening") && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	select {
+	case code := <-done:
+		if code != 1 || !strings.Contains(e.String(), "events") {
+			t.Fatalf("code=%d err=%q", code, e.String())
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("run did not stop")
+	}
+}
+
+func TestCLIEventsFileIsWrittenAndClosedCleanly(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ev.jsonl")
+	var o, e safeBuf
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan int, 1)
+	go func() {
+		done <- run(ctx, []string{"--listen", "127.0.0.1:0", "--upstream", "127.0.0.1:1", "--events", path}, &o, &e)
+	}()
+	deadline := time.Now().Add(3 * time.Second)
+	for !strings.Contains(o.String(), "listening") && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	if code := <-done; code != 0 {
+		t.Fatalf("code=%d err=%q", code, e.String())
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || !strings.Contains(string(data), `"pass"`) {
+		t.Fatalf("%q %v", data, err)
 	}
 }

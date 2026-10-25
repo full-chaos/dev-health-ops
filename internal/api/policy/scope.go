@@ -76,9 +76,9 @@ func ImpersonationDecided(ctx context.Context) bool {
 	return decided
 }
 
-// Scope holds the two request-wide middlewares. They run for every request
-// on the api listener, public routes and unknown paths included, exactly as
-// the Python middlewares do.
+// Scope holds the request-wide steps: Principal, then OrgScope and
+// Impersonation. They run for every request on the api listener, public
+// routes and unknown paths included, as the Python middlewares do.
 type Scope struct {
 	auth         *Authenticator
 	logger       *slog.Logger

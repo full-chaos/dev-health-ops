@@ -55,8 +55,28 @@ func goTestList(t *testing.T, root, pkg string) map[string]bool {
 	return out
 }
 
-// parsedTestFuncs parses one Go test file and returns its top-level tests (testing's rule: "Test" or "Test" plus a rune
-// that is not lower case, no receiver; TestMain aside) and the first top-level init or TestMain ("" when none).
+// goTestSignature is the signature rule of cmd/go for a test: one parameter of type *T or *x.T, no results, no type
+// parameters (go test refuses to build a package whose Test-named function breaks it).
+func goTestSignature(fn *ast.FuncDecl) bool {
+	if fn.Type.TypeParams.NumFields() > 0 || fn.Type.Results.NumFields() > 0 || fn.Type.Params == nil ||
+		len(fn.Type.Params.List) != 1 || len(fn.Type.Params.List[0].Names) > 1 {
+		return false
+	}
+	ptr, ok := fn.Type.Params.List[0].Type.(*ast.StarExpr)
+	if !ok {
+		return false
+	}
+	switch x := ptr.X.(type) {
+	case *ast.Ident:
+		return x.Name == "T"
+	case *ast.SelectorExpr:
+		return x.Sel.Name == "T"
+	}
+	return false
+}
+
+// parsedTestFuncs parses one Go test file and returns its top-level tests (cmd/go's rule: "Test" or "Test" plus a rune
+// that is not lower case, no receiver, goTestSignature; TestMain aside) and the first top-level init or TestMain.
 func parsedTestFuncs(t *testing.T, path string) ([]string, string) {
 	t.Helper()
 	file, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.SkipObjectResolution)
@@ -77,7 +97,7 @@ func parsedTestFuncs(t *testing.T, path string) ([]string, string) {
 			}
 			continue
 		}
-		if rest, ok := strings.CutPrefix(name, "Test"); ok {
+		if rest, ok := strings.CutPrefix(name, "Test"); ok && goTestSignature(fn) {
 			if r, _ := utf8.DecodeRuneInString(rest); rest == "" || !unicode.IsLower(r) {
 				tests = append(tests, name)
 			}

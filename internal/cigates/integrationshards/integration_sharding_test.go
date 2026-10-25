@@ -422,8 +422,28 @@ func providerTests(t *testing.T) (map[string]bool, map[string]bool) {
 	return providerTopLevel, providerIntegrationT
 }
 
-// parsedTestFuncs parses one Go test file and returns its top-level tests (testing's rule: "Test" or "Test" plus a rune
-// that is not lower case, no receiver; TestMain aside) and the first top-level init or TestMain ("" when none).
+// goTestSignature is the signature rule of cmd/go for a test: one parameter of type *T or *x.T, no results, no type
+// parameters (go test refuses to build a package whose Test-named function breaks it).
+func goTestSignature(fn *ast.FuncDecl) bool {
+	if fn.Type.TypeParams.NumFields() > 0 || fn.Type.Results.NumFields() > 0 || fn.Type.Params == nil ||
+		len(fn.Type.Params.List) != 1 || len(fn.Type.Params.List[0].Names) > 1 {
+		return false
+	}
+	ptr, ok := fn.Type.Params.List[0].Type.(*ast.StarExpr)
+	if !ok {
+		return false
+	}
+	switch x := ptr.X.(type) {
+	case *ast.Ident:
+		return x.Name == "T"
+	case *ast.SelectorExpr:
+		return x.Sel.Name == "T"
+	}
+	return false
+}
+
+// parsedTestFuncs parses one Go test file and returns its top-level tests (cmd/go's rule: "Test" or "Test" plus a rune
+// that is not lower case, no receiver, goTestSignature; TestMain aside) and the first top-level init or TestMain.
 func parsedTestFuncs(t *testing.T, path string) ([]string, string) {
 	t.Helper()
 	file, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.SkipObjectResolution)
@@ -444,7 +464,7 @@ func parsedTestFuncs(t *testing.T, path string) ([]string, string) {
 			}
 			continue
 		}
-		if rest, ok := strings.CutPrefix(name, "Test"); ok {
+		if rest, ok := strings.CutPrefix(name, "Test"); ok && goTestSignature(fn) {
 			if r, _ := utf8.DecodeRuneInString(rest); rest == "" || !unicode.IsLower(r) {
 				tests = append(tests, name)
 			}
@@ -637,36 +657,44 @@ func sameSet(a, b map[string]bool) bool {
 	return true
 }
 
-// discoveryFunctions are the ci/check_go.sh functions runDiscoveryFixture lifts into its harness. A name the script
-// does not define is skipped, so the same test runs against an older script.
+// discoveryFunctions are the ci/check_go.sh functions the discovery harness lifts into bash. A name the script does not
+// define is skipped, so the same test runs against an older script.
 var discoveryFunctions = []string{
 	"die", "check_listed_test_file", "scan_listed_go_tests", "scan_go_test_paths", "gotestfuncs_bin", "go_test_name_ok",
-	"split_plain_test_files", "split_package_hook", "discover_integration_tagged_tests", "run_integration_packages",
-	"discover_daily_tests",
+	"integration_test_files", "split_plain_test_files", "split_package_hook", "discover_integration_tagged_tests",
+	"run_integration_packages", "discover_daily_tests",
 }
 
-// runDiscoveryFixture writes files into a temporary module (plus the repo's ci/tools/gotestfuncs when it exists) and
-// runs body in bash with the discovery functions of ci/check_go.sh, the module as ROOT. It returns stdout.
-func runDiscoveryFixture(t *testing.T, files map[string]string, body string) string {
+// discoveryHarness runs body in bash with the discovery functions of ci/check_go.sh. With files, ROOT is a temporary
+// module holding them (plus the repo's ci/tools/gotestfuncs, or tool when it is not empty); without, ROOT is the repo.
+func discoveryHarness(t *testing.T, files map[string]string, tool, body string) cmdResult {
 	t.Helper()
 	root := rootOf(t)
 	src := readText(t, filepath.Join(root, "ci", "check_go.sh"))
-	dir := t.TempDir()
-	write := func(rel, text string) {
-		p := filepath.Join(dir, rel)
-		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-			t.Fatal(err)
+	dir := root
+	if files != nil {
+		dir = t.TempDir()
+		write := func(rel, text string) {
+			p := filepath.Join(dir, rel)
+			if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(p, []byte(text), 0o644); err != nil {
+				t.Fatal(err)
+			}
 		}
-		if err := os.WriteFile(p, []byte(text), 0o644); err != nil {
-			t.Fatal(err)
+		write("go.mod", "module fixture\n\ngo 1.22\n")
+		for rel, text := range files {
+			write(rel, text)
 		}
-	}
-	write("go.mod", "module fixture\n\ngo 1.22\n")
-	for rel, text := range files {
-		write(rel, text)
-	}
-	if tool, err := os.ReadFile(filepath.Join(root, "ci", "tools", "gotestfuncs", "main.go")); err == nil {
-		write("ci/tools/gotestfuncs/main.go", string(tool))
+		if tool == "" {
+			if raw, err := os.ReadFile(filepath.Join(root, "ci", "tools", "gotestfuncs", "main.go")); err == nil {
+				tool = string(raw)
+			}
+		}
+		if tool != "" {
+			write("ci/tools/gotestfuncs/main.go", tool)
+		}
 	}
 	var b strings.Builder
 	b.WriteString("set -euo pipefail\nROOT=" + strconv.Quote(dir) + "\nGO_ENV_OFF=(env -u GOFLAGS -u GOEXPERIMENT)\nINTEGRATION_TEST_ENV=()\n")
@@ -677,11 +705,58 @@ func runDiscoveryFixture(t *testing.T, files map[string]string, body string) str
 		}
 	}
 	b.WriteString(body)
-	res := freeSpec{dir: dir, env: inheritedEnv(nil, "GOTOOLCHAIN="+pinnedGoToolchain(t), "GOWORK=off", "TMPDIR="+t.TempDir())}.run("bash", "-c", b.String())
+	return freeSpec{dir: dir, env: inheritedEnv(nil, "GOTOOLCHAIN="+pinnedGoToolchain(t), "GOWORK=off", "TMPDIR="+t.TempDir())}.run("bash", "-c", b.String())
+}
+
+// runDiscoveryFixture is discoveryHarness on a fixture module that must succeed; it returns stdout.
+func runDiscoveryFixture(t *testing.T, files map[string]string, body string) string {
+	t.Helper()
+	res := discoveryHarness(t, files, "", body)
 	if res.code != 0 {
 		t.Fatalf("fixture harness exit %d:\n%s%s", res.code, res.stdout, res.stderr)
 	}
 	return res.stdout
+}
+
+// listerAgreesWithGoTestList compares, per package, the tests discover_integration_tagged_tests found (tagged and
+// untagged, from LISTER <pkg> <name> lines) with the compiled `go test -tags=integration -list` of the same package
+// (COMPILED <pkg> <name> lines).
+func listerAgreesWithGoTestList(out string, pkgs []string) error {
+	lister, compiled := map[string]map[string]bool{}, map[string]map[string]bool{}
+	for _, p := range pkgs {
+		lister[p], compiled[p] = map[string]bool{}, map[string]bool{}
+	}
+	for _, l := range strings.Split(out, "\n") {
+		f := strings.Fields(l)
+		if len(f) != 3 || (f[0] != "LISTER" && f[0] != "COMPILED") || lister[f[1]] == nil {
+			continue
+		}
+		if f[0] == "LISTER" {
+			lister[f[1]][f[2]] = true
+		} else {
+			compiled[f[1]][f[2]] = true
+		}
+	}
+	for _, p := range pkgs {
+		if len(compiled[p]) == 0 {
+			return fmt.Errorf("%s: go test -list printed no test: the comparison measured nothing", p)
+		}
+		if !sameSet(lister[p], compiled[p]) {
+			return fmt.Errorf("%s: the lister found %v, go test -list compiled %v", p, sortedKeys(lister[p]), sortedKeys(compiled[p]))
+		}
+	}
+	return nil
+}
+
+// listerVsCompiledBody prints LISTER and COMPILED lines for the packages (module-relative "./dir" paths).
+func listerVsCompiledBody(pkgs []string) string {
+	var b strings.Builder
+	b.WriteString("discover_integration_tagged_tests . " + strings.Join(pkgs, " ") + "\n")
+	for _, p := range pkgs {
+		b.WriteString(fmt.Sprintf("printf '%%s' \"${INTEGRATION_TAGGED_TESTS[%s]-}${INTEGRATION_UNTAGGED_TESTS[%s]-}\" | sed -n 's|^Test|LISTER %s Test|p'\n", p, p, p))
+		b.WriteString(fmt.Sprintf("GOWORK=off go test -mod=readonly -tags=integration -list '^Test' %s | sed -n 's|^Test|COMPILED %s Test|p'\n", p, p))
+	}
+	return b.String()
 }
 
 const mergeGroupReceipt = "CHAOS-11407 retired the receipt \"unit test re-run under -tags=integration\": the integration shards skip " +
@@ -765,9 +840,79 @@ func TestIntegrationShardScriptShape(t *testing.T) {
 			t.Fatal("discover_providersync_tests moved")
 		}
 		body := m[1]
-		if !strings.Contains(body, "go list -mod=readonly -tags=integration") || strings.Contains(body, "go test -mod=readonly") ||
+		if !strings.Contains(body, `integration_test_files . "./${PROVIDER_INTEGRATION_PACKAGE_KEY}"`) || strings.Contains(body, "go test -mod=readonly") ||
 			strings.Contains(body, `done <<< "${files_output}"`) || !strings.Contains(body, `done < <(printf '%s\n' "${files_output}")`) {
 			t.Errorf("provider test discovery is not list-based and here-string free:\n%s", body)
+		}
+	})
+	t.Run("one helper classes test files for every shard path", func(t *testing.T) {
+		t.Parallel()
+		helper := regexp.MustCompile(`(?ms)^integration_test_files\(\) \{\n(.*?)^\}`).FindStringSubmatch(src)
+		if helper == nil {
+			t.Fatal("integration_test_files is missing")
+		}
+		if !strings.Contains(helper[1], "go list -e -mod=readonly -f") || !strings.Contains(helper[1], "go list -mod=readonly -tags=integration -f") ||
+			!strings.Contains(helper[1], "{{range .TestGoFiles}}") || !strings.Contains(helper[1], "{{range .XTestGoFiles}}") {
+			t.Errorf("integration_test_files does not take both file lists from go list:\n%s", helper[1])
+		}
+		for _, fn := range []string{"discover_integration_tagged_tests", "discover_providersync_tests", "discover_daily_tests",
+			"discover_workerservice_tests", "discover_queryapiserver_tests", "discover_remaining_tests", "split_package_hook"} {
+			m := regexp.MustCompile(`(?ms)^` + fn + `\(\) \{\n(.*?)^\}`).FindStringSubmatch(src)
+			if m == nil {
+				t.Errorf("%s is missing", fn)
+				continue
+			}
+			if strings.Contains(m[1], "go list") || strings.Contains(m[1], "*_test.go") || strings.Contains(m[1], "go:build") {
+				t.Errorf("%s lists, globs or reads build lines itself instead of using integration_test_files", fn)
+			}
+			if fn != "split_package_hook" && !strings.Contains(m[1], "integration_test_files ") {
+				t.Errorf("%s does not call integration_test_files", fn)
+			}
+			if !strings.Contains(m[1], "TEST_FILE_TAG_ONLY[") {
+				t.Errorf("%s does not take the class from TEST_FILE_TAG_ONLY", fn)
+			}
+		}
+	})
+	t.Run("the lister agrees with go test -list on two real packages", func(t *testing.T) {
+		t.Parallel()
+		pkgs := []string{"./internal/llmorgsettings", "./internal/auth/org"}
+		res := discoveryHarness(t, nil, "", listerVsCompiledBody(pkgs))
+		if res.code != 0 {
+			t.Fatalf("exit %d: %s%s", res.code, res.stdout, res.stderr)
+		}
+		if err := listerAgreesWithGoTestList(res.stdout, pkgs); err != nil {
+			t.Error(err)
+		}
+	})
+	t.Run("a lister failure plans nothing", func(t *testing.T) {
+		t.Parallel()
+		good := map[string]string{
+			"x/plain_test.go": "package x\n\nimport \"testing\"\n\nfunc TestPlain(t *testing.T) {}\n",
+			"x/tag_test.go":   "//go:build integration\n\npackage x\n\nimport \"testing\"\n\nfunc TestTagged(t *testing.T) {}\n",
+		}
+		broken := map[string]string{
+			"x/plain_test.go": good["x/plain_test.go"],
+			"x/tag_test.go":   "//go:build integration\n\npackage x\n\nimport \"testing\"\n\nfunc TestTagged(t *testing.T) {\n",
+		}
+		body := "run_integration_packages --dry-run . fixture ./x\nDAILY_INTEGRATION_PACKAGE_KEY=x DAILY_TEST_SHARD_COUNT=1\ndiscover_daily_tests\nprintf 'CLASS %s\\n' \"${DAILY_TEST_NAMES[@]}\"\n"
+		if res := discoveryHarness(t, good, "", body); res.code != 0 || !strings.Contains(res.stdout, "  SHARD-TEST x TestTagged\n") {
+			t.Fatalf("control: exit %d: %s%s", res.code, res.stdout, res.stderr)
+		}
+		for name, c := range map[string]struct {
+			files map[string]string
+			tool  string
+		}{
+			"a test file that does not parse":   {broken, ""},
+			"a lister that does not build":      {good, "//go:build ignore\n\npackage main\n\nfunc main() {\n"},
+			"a lister that exits non-zero":      {good, "//go:build ignore\n\npackage main\n\nimport \"os\"\n\nfunc main() { os.Exit(3) }\n"},
+			"a lister that prints a bad record": {good, "//go:build ignore\n\npackage main\n\nimport \"fmt\"\n\nfunc main() { fmt.Print(\"Z\\x1fx\\x1fy\\n\") }\n"},
+		} {
+			for _, step := range []string{"run_integration_packages --dry-run . fixture ./x\n", "DAILY_INTEGRATION_PACKAGE_KEY=x DAILY_TEST_SHARD_COUNT=1\ndiscover_daily_tests\nprintf 'CLASS %s\\n' \"${DAILY_TEST_NAMES[@]}\"\n"} {
+				res := discoveryHarness(t, c.files, c.tool, step)
+				if res.code == 0 || strings.Contains(res.stdout, "SHARD-") || strings.Contains(res.stdout, "CLASS") {
+					t.Errorf("%s: %q exit %d, output %q: a lister failure must stop the plan", name, strings.SplitN(step, "\n", 2)[0], res.code, res.stdout)
+				}
+			}
 		}
 	})
 	t.Run("package discovery does not spawn grep for every tracked test", func(t *testing.T) {
@@ -815,11 +960,15 @@ func TestIntegrationShardScriptShape(t *testing.T) {
 			"h/hook_test.go":      "//go:build integration\n\npackage h\n\nimport \"testing\"\n\nfunc /* hook comment */ init() {}\n\nfunc TestHookTagged(t *testing.T) {}\n",
 			"q/plain_test.go":     "package q\n\nimport \"testing\"\n\nfunc TestQ(t *testing.T) {}\n",
 			"q/commented_test.go": "//go:build integration\n\npackage q\n\nimport \"testing\"\n\n/*\nfunc init() {}\n*/\n\nconst src = `\nfunc TestFake(t *testing.T) {}\n`\n\nfunc TestQTagged(t *testing.T) { _ = src }\n",
-			"q/lowercase_test.go": "//go:build integration\n\npackage q\n\nimport \"testing\"\n\nfunc Testable(t *testing.T) {}\n",
+			"v/lowercase_test.go": "//go:build integration\n\npackage v\n\nimport \"testing\"\n\nfunc Testable(t *testing.T) {}\n",
+			"v/good_test.go":      "//go:build integration\n\npackage v\n\nimport \"testing\"\n\nfunc TestVGood(t *testing.T) {}\n",
 			"q/method_test.go":    "//go:build integration\n\npackage q\n\nimport \"testing\"\n\ntype s struct{}\n\nfunc (s) TestMethod(t *testing.T) {}\n",
+			"w/sig_test.go":       "//go:build integration\n\npackage w\n\nimport tt \"testing\"\n\nfunc TestGood(t *tt.T) {}\n\nfunc TestNoArgs() {}\n\nfunc TestWrong(x int) {}\n\nfunc TestResult(t *tt.T) error { return nil }\n\nfunc TestTwo(a, b *tt.T) {}\n\nfunc TestGeneric[P any](t *tt.T) {}\n",
 		}
 		got := runDiscoveryFixture(t, files, `
-run_integration_packages --dry-run . fixture ./p ./h ./q
+run_integration_packages --dry-run . fixture ./p ./h ./q ./w ./v
+GOWORK=off go test -mod=readonly -tags=integration -list . ./w >/dev/null 2>wrong.txt || printf "WSIG %s\n" "$(grep -c "wrong signature" wrong.txt)"
+GOWORK=off go test -mod=readonly -tags=integration -list . ./v >/dev/null 2>lower.txt || printf "VNAME %s\n" "$(grep -c "malformed name" lower.txt)"
 regex="$(run_integration_packages --dry-run . fixture ./p | sed -n 's/^  SHARD-REGEX \. //p')"
 GOWORK=off go test -mod=readonly -tags=integration -list "${regex}" ./p | sed -n 's/^Test/LISTED Test/p'
 DAILY_INTEGRATION_PACKAGE_KEY=p DAILY_TEST_SHARD_COUNT=1
@@ -857,6 +1006,29 @@ printf 'SPLITHOOK h [%s]\n' "${DAILY_UNFILTERED}"
 			case strings.Contains(l, "TestFake") || strings.Contains(l, "Testable") || strings.Contains(l, "TestMethod"):
 				t.Errorf("a string, a lower-case name or a method was taken for a test: %q", l)
 			}
+		}
+		for _, l := range strings.Split(got, "\n") {
+			if strings.HasPrefix(l, "  SHARD-TEST w ") && l != "  SHARD-TEST w TestGood" {
+				t.Errorf("a Test-named function with a signature cmd/go refuses was taken for a test: %q", l)
+			}
+		}
+		if !strings.Contains(got, "  SHARD-TEST w TestGood\n") {
+			t.Error("TestGood(t *tt.T) with testing imported as tt is not selected")
+		}
+		// cmd/go agrees: go test refuses to build w ("wrong signature", reported for the first bad function) and v (vet:
+		// "malformed name" for Testable), so none of them is a runnable test either way; a shard holding one fails loudly.
+		if !regexp.MustCompile(`(?m)^WSIG [1-9]`).MatchString(got) {
+			t.Errorf("go test -list on w did not fail with wrong signature: %q", got)
+		}
+		if !regexp.MustCompile(`(?m)^VNAME [1-9]`).MatchString(got) {
+			t.Errorf("go test -list on v did not fail with malformed name: %q", got)
+		}
+		if !strings.Contains(got, "  SHARD-TEST v TestVGood\n") || strings.Contains(got, "SHARD-TEST v Testable") {
+			t.Error("package v: want TestVGood selected and Testable not")
+		}
+		listed := runDiscoveryFixture(t, files, listerVsCompiledBody([]string{"./p", "./h", "./q"}))
+		if err := listerAgreesWithGoTestList(listed, []string{"./p", "./h", "./q"}); err != nil {
+			t.Error(err)
 		}
 		if t.Failed() {
 			t.Logf("fixture output:\n%s", got)

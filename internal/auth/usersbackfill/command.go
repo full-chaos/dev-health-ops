@@ -178,6 +178,7 @@ func runOrgs(ctx context.Context, env cli.Env) int {
 		fmt.Fprintln(env.Stderr, "argument error: positional arguments are not accepted and -batch must be 1..10000")
 		return cli.ExitUsage
 	}
+	var owned, malformed []string
 	for _, gate := range []struct {
 		name string
 		read func(secrets.LookupEnv) (bool, error)
@@ -185,13 +186,24 @@ func runOrgs(ctx context.Context, env cli.Env) int {
 		{authconfig.EnvUsersOwned, authconfig.UsersOwnedFromLookup},
 		{authconfig.EnvOrgsOwned, authconfig.OrgsOwnedFromLookup},
 	} {
-		if owned, err := gate.read(env.Lookup); err != nil {
-			fmt.Fprintf(env.Stderr, "orgs-backfill: %s must be true or false\n", gate.name)
-			return cli.ExitFailure
-		} else if owned {
-			fmt.Fprintf(env.Stderr, "orgs-backfill: refused: %s is true, the auth schema is the authority and this command copies from public tables\n", gate.name)
-			return cli.ExitRefused
+		on, err := gate.read(env.Lookup)
+		if err != nil {
+			malformed = append(malformed, gate.name)
+		} else if on {
+			owned = append(owned, gate.name)
 		}
+	}
+	for _, name := range malformed {
+		fmt.Fprintf(env.Stderr, "orgs-backfill: %s must be true or false\n", name)
+	}
+	if len(malformed) > 0 {
+		return cli.ExitFailure
+	}
+	for _, name := range owned {
+		fmt.Fprintf(env.Stderr, "orgs-backfill: refused: %s is true, the auth schema is the authority and this command copies from public tables\n", name)
+	}
+	if len(owned) > 0 {
+		return cli.ExitRefused
 	}
 	pool, schema, code := connectFn(ctx, env, "orgs-backfill")
 	if code != cli.ExitOK {

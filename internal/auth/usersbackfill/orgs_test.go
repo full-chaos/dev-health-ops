@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"sort"
 	"strings"
 	"testing"
@@ -419,36 +420,76 @@ func failIfConnected(t *testing.T) {
 
 func TestOrgsVerbOwnershipGateRefusesBeforeConnect(t *testing.T) {
 	failIfConnected(t)
+	const users, orgs = "AUTH_USERS_OWNED", "AUTH_ORGS_OWNED"
 	cases := []struct {
-		name, switchName, value string
-		args                    []string
-		want                    int
+		name     string
+		usersVal string
+		orgsVal  string
+		want     int
+		names    []string
 	}{
-		{"orgs on real run", "AUTH_ORGS_OWNED", "true", nil, cli.ExitRefused},
-		{"orgs on dry run", "AUTH_ORGS_OWNED", "true", []string{"-dry-run"}, cli.ExitRefused},
-		{"users on real run", "AUTH_USERS_OWNED", "true", nil, cli.ExitRefused},
-		{"users on dry run", "AUTH_USERS_OWNED", "true", []string{"-dry-run"}, cli.ExitRefused},
-		{"orgs malformed", "AUTH_ORGS_OWNED", "maybe", []string{"-dry-run"}, cli.ExitFailure},
-		{"users malformed", "AUTH_USERS_OWNED", "maybe", nil, cli.ExitFailure},
+		{"orgs on", "", "true", cli.ExitRefused, []string{orgs}},
+		{"users on", "true", "", cli.ExitRefused, []string{users}},
+		{"both on", "true", "true", cli.ExitRefused, []string{users, orgs}},
+		{"orgs malformed", "", "maybe", cli.ExitFailure, []string{orgs}},
+		{"users malformed", "maybe", "", cli.ExitFailure, []string{users}},
+		{"users true, orgs malformed", "true", "maybe", cli.ExitFailure, []string{orgs}},
+		{"orgs true, users malformed", "maybe", "true", cli.ExitFailure, []string{users}},
+		{"both malformed", "maybe", "yes please", cli.ExitFailure, []string{users, orgs}},
 	}
 	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			lookup := func(k string) (string, bool) {
-				if k == c.switchName {
-					return c.value, true
+		for _, args := range [][]string{nil, {"-dry-run"}} {
+			t.Run(fmt.Sprintf("%s %v", c.name, args), func(t *testing.T) {
+				lookup := func(k string) (string, bool) {
+					switch k {
+					case users:
+						return c.usersVal, c.usersVal != ""
+					case orgs:
+						return c.orgsVal, c.orgsVal != ""
+					case "AUTH_DATABASE_URI":
+						return "postgres://secret-user:secret-pass@db/x", true
+					}
+					return "", false
 				}
-				return "postgres://secret-user:secret-pass@db/x", k == "AUTH_DATABASE_URI"
+				var stdout, stderr bytes.Buffer
+				code := orgsVerbWith(t).Run(context.Background(), cli.Env{Args: args, Lookup: lookup, Stdout: &stdout, Stderr: &stderr})
+				out := stderr.String()
+				if code != c.want || stdout.Len() != 0 {
+					t.Fatalf("exit %d, want %d; stdout %q stderr %q", code, c.want, stdout.String(), out)
+				}
+				for _, name := range []string{users, orgs} {
+					want := false
+					for _, n := range c.names {
+						want = want || n == name
+					}
+					if strings.Contains(out, name) != want {
+						t.Fatalf("stderr %q: naming %s = %v, want %v", out, name, !want, want)
+					}
+				}
+				if i, j := strings.Index(out, users), strings.Index(out, orgs); i >= 0 && j >= 0 && i > j {
+					t.Fatalf("stderr %q: %s must come before %s", out, users, orgs)
+				}
+				for _, raw := range []string{"secret-pass", "maybe", "yes please"} {
+					if strings.Contains(out, raw) {
+						t.Fatalf("stderr %q holds the raw input %q", out, raw)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestOrgsVerbNeverEchoesARawSwitchValue(t *testing.T) {
+	failIfConnected(t)
+	for _, raw := range []string{"maybe", "yes please", "TRUE\x00x"} {
+		for _, name := range []string{"AUTH_USERS_OWNED", "AUTH_ORGS_OWNED"} {
+			lookup := func(k string) (string, bool) { return raw, k == name }
+			var stderr bytes.Buffer
+			code := orgsVerbWith(t).Run(context.Background(), cli.Env{Lookup: lookup, Stdout: &bytes.Buffer{}, Stderr: &stderr})
+			if code != cli.ExitFailure || strings.Contains(stderr.String(), raw) || !strings.Contains(stderr.String(), name) {
+				t.Fatalf("%s=%q: exit %d, stderr %q", name, raw, code, stderr.String())
 			}
-			var stdout, stderr bytes.Buffer
-			code := orgsVerbWith(t).Run(context.Background(), cli.Env{Args: c.args, Lookup: lookup, Stdout: &stdout, Stderr: &stderr})
-			if code != c.want {
-				t.Fatalf("exit %d, want %d (%s)", code, c.want, stderr.String())
-			}
-			out := stderr.String()
-			if !strings.Contains(out, c.switchName) || strings.Contains(out, "secret-pass") || strings.Contains(out, "maybe") || stdout.Len() != 0 {
-				t.Fatalf("stderr %q stdout %q: must name %s only", out, stdout.String(), c.switchName)
-			}
-		})
+		}
 	}
 }
 

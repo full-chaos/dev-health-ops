@@ -179,6 +179,30 @@ FROM resolved
 ORDER BY sequence_name
 `
 
+// diagnoseFunctionPostureQuery is the role-name counterpart of
+// rolePostureQuery's required-function predicates: each declared public
+// function must exist, be SECURITY DEFINER, and be executable by the role
+// without the grant option.
+const diagnoseFunctionPostureQuery = `
+WITH required(signature) AS (
+	SELECT * FROM unnest($2::text[])
+), resolved AS (
+	SELECT
+		required.signature,
+		pg_catalog.to_regprocedure('public.' || required.signature) AS function
+	FROM required
+)
+SELECT
+	resolved.signature,
+	resolved.function IS NULL AS function_missing,
+	resolved.function IS NOT NULL AND NOT has_function_privilege($1, resolved.function, 'EXECUTE') AS missing,
+	resolved.function IS NOT NULL AND has_function_privilege($1, resolved.function, 'EXECUTE WITH GRANT OPTION') AS excess_grant,
+	resolved.function IS NOT NULL AND NOT procedure.prosecdef AS not_definer
+FROM resolved
+LEFT JOIN pg_catalog.pg_proc AS procedure ON procedure.oid = resolved.function::oid
+ORDER BY resolved.signature
+`
+
 // diagnoseColumnScopedExcessQuery is the admin-callable, role-NAME-parameterized
 // counterpart of rolePostureQuery's "no table-wide privilege leakage on a
 // column-scoped table" predicate (domain_authorization.go's
@@ -349,6 +373,14 @@ func DiagnoseRolePosture(
 		gaps = append(gaps, sequenceGaps...)
 	}
 
+	if len(posture.RequiredFunctions) > 0 {
+		functionGaps, err := diagnoseFunctionPosture(ctx, pool, expectedRole, posture.RequiredFunctions)
+		if err != nil {
+			return nil, err
+		}
+		gaps = append(gaps, functionGaps...)
+	}
+
 	otherGaps, err := diagnoseOtherRelationsExcess(ctx, pool, expectedRole, declaredTableNames(posture))
 	if err != nil {
 		return nil, err
@@ -485,6 +517,50 @@ func diagnoseTablePosture(
 		}
 		if len(excess) > 0 {
 			gaps = append(gaps, PostureGap{TableName: tableName, Excess: excess})
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, ErrUnavailable
+	}
+	return gaps, nil
+}
+
+// diagnoseFunctionPosture reports, per required function, a missing function,
+// a missing EXECUTE, an EXECUTE held with grant option, or a function that is
+// not SECURITY DEFINER (reported as missing "SECURITY DEFINER").
+func diagnoseFunctionPosture(
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	expectedRole string,
+	functions []string,
+) ([]PostureGap, error) {
+	rows, err := pool.Query(ctx, diagnoseFunctionPostureQuery, expectedRole, functions)
+	if err != nil {
+		return nil, ErrUnavailable
+	}
+	defer rows.Close()
+
+	var gaps []PostureGap
+	for rows.Next() {
+		var (
+			signature                                         string
+			functionMissing, missing, excessGrant, notDefiner bool
+		)
+		if err := rows.Scan(&signature, &functionMissing, &missing, &excessGrant, &notDefiner); err != nil {
+			return nil, ErrUnavailable
+		}
+		if functionMissing {
+			gaps = append(gaps, PostureGap{TableName: signature, TableMissing: true})
+			continue
+		}
+		if missing {
+			gaps = append(gaps, PostureGap{TableName: signature, Missing: []string{"EXECUTE"}})
+		}
+		if notDefiner {
+			gaps = append(gaps, PostureGap{TableName: signature, Missing: []string{"SECURITY DEFINER"}})
+		}
+		if excessGrant {
+			gaps = append(gaps, PostureGap{TableName: signature, Excess: []string{"EXECUTE WITH GRANT OPTION"}})
 		}
 	}
 	if err := rows.Err(); err != nil {

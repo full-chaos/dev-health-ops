@@ -1007,6 +1007,10 @@ func createKernelIntegrationFixture(
 		"CREATE TABLE public.org_feature_overrides (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.org_licenses (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.byo_llm_budget_reservations (id uuid PRIMARY KEY)",
+		// domainPosture's RequiredFunctions: a SECURITY DEFINER shell with
+		// EXECUTE revoked from PUBLIC, as pgmigrate 0156 creates it.
+		"CREATE FUNCTION public.categorize_byo_opted_in(p_org_id text) RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS 'SELECT false'",
+		"REVOKE ALL ON FUNCTION public.categorize_byo_opted_in(text) FROM PUBLIC",
 		// CHAOS-4175 family 3's DispatchGuard total-cap read dual-granted this
 		// table; see the doc comment above domainPosture() in
 		// internal/storage/postgres/domain_authorization.go.

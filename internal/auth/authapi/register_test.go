@@ -1,13 +1,17 @@
 package authapi
 
 import (
+	"encoding/json"
 	"errors"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -62,38 +66,129 @@ func TestRegisterRouteAnswersAcceptedForNewAndTakenAddress(t *testing.T) {
 	}
 }
 
+// shapeOf is "<status> <shape>" of a JSON answer: detail[] for a validation
+// list, detail{keys} message for a detail object, detail text for a string,
+// {keys} message for a plain object; errors is written errors[].
+func shapeOf(t *testing.T, status int, body string) string {
+	t.Helper()
+	var doc map[string]any
+	if err := json.Unmarshal([]byte(body), &doc); err != nil {
+		t.Fatalf("answer is not a JSON object: %v: %.80s", err, body)
+	}
+	keysOf := func(object map[string]any) (string, string) {
+		keys := make([]string, 0, len(object))
+		for key := range object {
+			if key == "errors" {
+				key = "errors[]"
+			}
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		message, _ := object["message"].(string)
+		return "{" + strings.Join(keys, ",") + "}", message
+	}
+	out := strconv.Itoa(status) + " "
+	switch detail := doc["detail"].(type) {
+	case []any:
+		return out + "detail[]"
+	case string:
+		return out + "detail " + detail
+	case map[string]any:
+		keys, message := keysOf(detail)
+		return strings.TrimSpace(out + "detail" + keys + " " + message)
+	}
+	keys, message := keysOf(doc)
+	return strings.TrimSpace(out + keys + " " + message)
+}
+
 func TestRegisterRouteRefusalsMatchTheCheckedInTable(t *testing.T) {
 	registerEnv(t, "")
-	cases := map[string]struct {
-		body   string
-		status int
-		text   string
-	}{
-		"malformed_body":         {`{not json`, http.StatusUnprocessableEntity, ""},
-		"invalid_email":          {`{"email":"not an address","password":"Correct-horse-battery-9"}`, http.StatusUnprocessableEntity, ""},
-		"password_too_short":     {`{"email":"a@example.com","password":"short"}`, http.StatusUnprocessableEntity, ""},
-		"password_policy":        {`{"email":"a@example.com","password":"aaaaaaaaaaaa"}`, http.StatusUnprocessableEntity, "Password validation failed"},
-		"password_over_72_bytes": {`{"email":"a@example.com","password":"Aa1-` + strings.Repeat("é", 40) + `"}`, http.StatusUnprocessableEntity, "Password validation failed"},
+	oracleRows := map[string]struct {
+		Name   string `json:"name"`
+		Status int    `json:"status"`
+		Body   string `json:"body"`
+	}{}
+	raw, err := os.ReadFile(filepath.Join("..", "..", "apiservice", "authflowvenue", "testdata", "golden", "auth-flow-venue-oracle.json"))
+	if err != nil {
+		t.Fatal(err)
 	}
+	var oracle struct {
+		Requests []struct {
+			Name   string `json:"name"`
+			Status int    `json:"status"`
+			Body   string `json:"body"`
+		} `json:"requests"`
+	}
+	if err := json.Unmarshal(raw, &oracle); err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range oracle.Requests {
+		oracleRows[row.Name] = struct {
+			Name   string `json:"name"`
+			Status int    `json:"status"`
+			Body   string `json:"body"`
+		}(row)
+	}
+	registerSource, err := os.ReadFile(filepath.Join("..", "..", "api", "session", "register.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := map[string]struct{ body, oracle string }{
+		"malformed_body":         {`{not json`, "register: malformed json"},
+		"invalid_email":          {`{"email":"not an address","password":"Correct-horse-battery-9"}`, "register: invalid email"},
+		"password_too_short":     {`{"email":"a@example.com","password":"short"}`, "register: password 7 chars"},
+		"password_policy":        {`{"email":"a@example.com","password":"aaaaaaaaaaaa"}`, "register: policy, too short"},
+		"password_over_72_bytes": {`{"email":"a@example.com","password":"Aa1-` + strings.Repeat("é", 40) + `"}`, "register: password over 72 bytes"},
+	}
+	table := registerParityRows(t)
 	for id, tc := range cases {
 		c := newCredFixture(t)
 		r := c.call(http.MethodPost, PatternRegister, tc.body, nil)
-		if r.Code != tc.status || !strings.Contains(r.Body.String(), tc.text) || len(c.fakes.provisioned) != 0 || len(c.fakes.mails) != 0 {
-			t.Fatalf("%s = %d %s, provisioned %d, mails %d", id, r.Code, r.Body, len(c.fakes.provisioned), len(c.fakes.mails))
+		if len(c.fakes.provisioned) != 0 || len(c.fakes.mails) != 0 {
+			t.Fatalf("%s provisioned %d, mailed %d", id, len(c.fakes.provisioned), len(c.fakes.mails))
 		}
 		if strings.Contains(r.Body.String(), "Correct-horse") || strings.Contains(r.Body.String(), "aaaaaaaaaaaa") {
 			t.Fatalf("%s echoed the password", id)
 		}
+		row := oracleRows[tc.oracle]
+		if row.Name == "" {
+			t.Fatalf("%s: oracle row %q is missing", id, tc.oracle)
+		}
+		if got := shapeOf(t, r.Code, r.Body.String()); got != table[id].authService {
+			t.Fatalf("%s: auth-service answers %q, the table says %q", id, got, table[id].authService)
+		}
+		if got := shapeOf(t, row.Status, row.Body); got != table[id].goAPI {
+			t.Fatalf("%s: go-api's frozen answer is %q, the table says %q", id, got, table[id].goAPI)
+		}
+	}
+	taken := newCredFixture(t)
+	answer := taken.call(http.MethodPost, PatternRegister, `{"email":"`+credKnownEmail+`","password":"Correct-horse-battery-9"}`, nil)
+	if got := shapeOf(t, answer.Code, answer.Body.String()); got != table["email_taken"].authService {
+		t.Fatalf("email_taken: auth-service answers %q, the table says %q", got, table["email_taken"].authService)
+	}
+	if !strings.Contains(string(registerSource), `registerAcceptedMessage = "Check your email to continue"`) || !strings.Contains(string(registerSource), "http.StatusAccepted") ||
+		table["email_taken"].goAPI != table["email_taken"].authService {
+		t.Fatal("email_taken: go-api's register.go does not answer 202 with the table's message")
 	}
 	c := newCredFixture(t)
+	var limited *httptest.ResponseRecorder
 	for i := 1; i <= 4; i++ {
 		want := http.StatusAccepted
 		if i > 3 {
 			want = http.StatusTooManyRequests
 		}
-		if r := c.call(http.MethodPost, PatternRegister, registerBody, nil); r.Code != want {
+		r := c.call(http.MethodPost, PatternRegister, registerBody, nil)
+		if r.Code != want {
 			t.Fatalf("rate_limited call %d = %d, want %d", i, r.Code, want)
 		}
+		limited = r
+	}
+	row := oracleRows["limit: register 4/4"]
+	if got := shapeOf(t, limited.Code, limited.Body.String()); got != table["rate_limited"].authService {
+		t.Fatalf("rate_limited: auth-service answers %q, the table says %q", got, table["rate_limited"].authService)
+	}
+	if got := shapeOf(t, row.Status, row.Body); got != table["rate_limited"].goAPI {
+		t.Fatalf("rate_limited: go-api's frozen answer is %q, the table says %q", got, table["rate_limited"].goAPI)
 	}
 }
 
@@ -191,7 +286,7 @@ func TestRegisterParityTableNamesARealTestForEveryRow(t *testing.T) {
 	}
 }
 
-type parityRow struct{ kind, reason, test string }
+type parityRow struct{ goAPI, authService, kind, reason, test string }
 
 func registerParityRows(t *testing.T) map[string]parityRow {
 	t.Helper()
@@ -208,7 +303,7 @@ func registerParityRows(t *testing.T) map[string]parityRow {
 		if len(f) != 6 {
 			t.Fatalf("parity row %q has %d columns, want 6", line, len(f))
 		}
-		rows[f[0]] = parityRow{kind: f[3], reason: f[4], test: f[5]}
+		rows[f[0]] = parityRow{goAPI: f[1], authService: f[2], kind: f[3], reason: f[4], test: f[5]}
 	}
 	return rows
 }

@@ -125,9 +125,11 @@ func TestTheDomainRoleBuildsAnOptedInOrgsBackendAndKeepsItsBudgetLedger(t *testi
 	defer cancel()
 	venue := domainroledb.Start(t, ctx, "byobuild")
 	venue.RequireReady(t, ctx)
-	// acr_service_model on for every plan: a clef-only org saves no provider the
-	// saved-config read counts, and production orgs hold the grant.
-	pgseed.FeatureFlag(ctx, t, venue.Admin, uuid.NewString(), llmorgsettings.ACRServiceModelFeatureKey, "community", true)
+	// acr_service_model is an explicit-purchase feature: a clef-only org saves
+	// no provider the saved-config read counts, so it needs the org grant
+	// production orgs hold.
+	serviceModelFlag := uuid.NewString()
+	pgseed.FeatureFlag(ctx, t, venue.Admin, serviceModelFlag, llmorgsettings.ACRServiceModelFeatureKey, "community", true)
 	cipher, err := providerfoundation.NewFernetDecryptor(secrets.NewValue("test-master-key"), "")
 	if err != nil {
 		t.Fatal(err)
@@ -177,6 +179,7 @@ func TestTheDomainRoleBuildsAnOptedInOrgsBackendAndKeepsItsBudgetLedger(t *testi
 	t.Run("clef override", func(t *testing.T) {
 		org := uuid.NewString()
 		pgseed.Org(ctx, t, venue.Admin, org, "enterprise")
+		pgseed.OrgOverride(ctx, t, venue.Admin, org, serviceModelFlag, true)
 		const baseURL = "https://api.cloudflare.com/client/v4/accounts/0123456789abcdef0123456789abcdef/ai"
 		seedOrgSettings(ctx, t, venue.Admin, cipher, org, map[string]string{
 			llmorgsettings.KeyCategorizeBYOEnabled: "true", "purpose:categorize:provider": "clef", "purpose:categorize:model": "clef",

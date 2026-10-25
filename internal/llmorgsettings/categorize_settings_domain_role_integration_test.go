@@ -215,9 +215,11 @@ func TestTheDefinerReadersMatchTheTableReadersForAnOptedInOrg(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	admin, domain, denials, _ := startDomainRoleDatabase(t, ctx)
-	// acr_service_model on for every plan, so the gate reaches the config check
-	// for every shape (a clef-only org saves no provider HasSavedBYO counts).
-	pgseed.FeatureFlag(ctx, t, admin, uuid.NewString(), llmorgsettings.ACRServiceModelFeatureKey, "community", true)
+	// acr_service_model is an explicit-purchase feature: a clef-only org saves no
+	// provider HasSavedBYO counts, so its case holds the org grant production
+	// orgs hold, and the gate reaches the config check.
+	serviceModelFlag := uuid.NewString()
+	pgseed.FeatureFlag(ctx, t, admin, serviceModelFlag, llmorgsettings.ACRServiceModelFeatureKey, "community", true)
 	cipher, err := providerfoundation.NewFernetDecryptor(secrets.NewValue("test-master-key"), "")
 	if err != nil {
 		t.Fatal(err)
@@ -238,13 +240,15 @@ func TestTheDefinerReadersMatchTheTableReadersForAnOptedInOrg(t *testing.T) {
 		// configOnly compares the configs only: the gate would resolve the base_url host.
 		configOnly bool
 		notOptedIn bool
+		// serviceModelGrant gives the org the acr_service_model org grant.
+		serviceModelGrant bool
 	}{
 		{name: "default config", rows: []settingRow{optIn, plain("provider", "openai"), plain("model", "gpt-5-mini"), enc("api_key", "sk-default")}},
 		{name: "categorize override with its own key", rows: []settingRow{optIn, plain("provider", "openai"), plain("model", "gpt-5-mini"), enc("api_key", "sk-default"),
 			plain("purpose:categorize:provider", "anthropic"), plain("purpose:categorize:model", "claude-x"), enc("purpose:categorize:api_key", "sk-cat")}},
 		{name: "override inherits the default key", rows: []settingRow{optIn, plain("provider", "openai"), plain("model", "gpt-5-mini"), enc("api_key", "sk-default"),
 			plain("purpose:categorize:provider", "openai"), plain("purpose:categorize:model", "gpt-5")}},
-		{name: "clef override", rows: []settingRow{optIn, plain("purpose:categorize:provider", "clef"), plain("purpose:categorize:model", "clef"),
+		{name: "clef override", serviceModelGrant: true, rows: []settingRow{optIn, plain("purpose:categorize:provider", "clef"), plain("purpose:categorize:model", "clef"),
 			enc("purpose:categorize:api_key", "cf-token"), plain("purpose:categorize:base_url", clefURL)}},
 		{name: "prompt cache on anthropic", rows: []settingRow{optIn, plain("provider", "anthropic"), plain("model", "claude-x"), enc("api_key", "sk-a"), plain("prompt_cache", "true")}},
 		{name: "own model turned off", rows: []settingRow{optIn, plain("provider", "openai"), plain("model", "gpt-5-mini"), enc("api_key", "sk-default"), plain("own_model_enabled", "false")}},
@@ -268,6 +272,9 @@ func TestTheDefinerReadersMatchTheTableReadersForAnOptedInOrg(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			org := uuid.NewString()
 			pgseed.Org(ctx, t, admin, org, "enterprise")
+			if tc.serviceModelGrant {
+				pgseed.OrgOverride(ctx, t, admin, org, serviceModelFlag, true)
+			}
 			seedSettings(ctx, t, admin, cipher, org, tc.rows)
 			tableView := configView(tableStore.OrgConfig(ctx, org))
 			definerView := configView(definerStore.OrgConfig(ctx, org))
@@ -295,6 +302,9 @@ func TestTheDefinerReadersMatchTheTableReadersForAnOptedInOrg(t *testing.T) {
 			definerInputs, definerErr := llmorgsettings.PgSource{Licensing: licensing.PostgresStore{Pool: domain}, Queryer: domain, Config: definerStore, Relation: llmorgsettings.CategorizeBYODefiner}.Inputs(ctx, org)
 			if fmt.Sprintf("%+v %v", tableInputs, tableErr != nil) != fmt.Sprintf("%+v %v", definerInputs, definerErr != nil) {
 				t.Fatalf("model-gate inputs differ:\n table   %+v (%v)\n definer %+v (%v)", tableInputs, tableErr, definerInputs, definerErr)
+			}
+			if tc.serviceModelGrant && !definerInputs.ConfigUsable {
+				t.Fatalf("the granted clef org's config is not usable on the worker path: %+v", definerInputs)
 			}
 			if tc.wantInvalidBaseURL && (definerInputs.ConfigUsable || definerInputs.ConfigReason != llmorgsettings.ConfigInvalidBaseURL) {
 				t.Fatalf("the gate inputs on the worker path = %+v, want invalid_base_url", definerInputs)

@@ -270,6 +270,9 @@ func proxyFlagRecreates(calls string) []string {
 	var out []string
 	for _, line := range strings.Split(calls, "\n") {
 		if strings.Contains(line, " up ") && strings.Contains(line, "--force-recreate") {
+			if strings.HasSuffix(line, " auth-service") {
+				break // step 1e (users owned) follows the proxy flags
+			}
 			out = append(out, line)
 		}
 	}
@@ -512,5 +515,33 @@ func TestAuthCorpusAcpLegFailsOnAuthServiceWriterViolations(t *testing.T) {
 				t.Fatalf("want a pass, got err=%v:\n%s", err, out)
 			}
 		})
+	}
+}
+
+// Leg acp copies public.users into the auth schema before AUTH_USERS_OWNED turns on (the backfill refuses once it is
+// true), then applies the grants, restarts auth-service and go-api with it; AUTH_CORPUS_USERS_UNOWNED skips all of it.
+func TestAuthCorpusAcpLegBackfillsUsersBeforeTheOwnedFlag(t *testing.T) {
+	metrics := metric("sessions") + "\n" + metric("local_login")
+	fake, out, err := runAcpLeg(t, "FAKE_SERVED="+requiredServed, "FAKE_METRICS="+metrics)
+	if err != nil || !strings.Contains(out, "AUTH CORPUS EXTERNAL (acp) PASSED") {
+		t.Fatalf("want a pass, got err=%v:\n%s", err, out)
+	}
+	calls := fake.calls(t)
+	backfill := strings.Index(calls, "users-backfill")
+	grants := strings.Index(calls, "auth-grants")
+	restart := strings.Index(calls, "--force-recreate --no-build --wait --wait-timeout 300 auth-service")
+	if backfill < 0 || grants < backfill || restart < grants {
+		t.Fatalf("want users-backfill, then auth-grants, then the auth-service restart; got positions %d %d %d:\n%s", backfill, grants, restart, calls)
+	}
+	if strings.Contains(calls, "-e AUTH_USERS_OWNED") {
+		t.Errorf("the backfill must run with the flag off:\n%s", calls)
+	}
+
+	fake, out, err = runAcpLeg(t, "FAKE_SERVED="+requiredServed, "FAKE_METRICS="+metrics, "AUTH_CORPUS_USERS_UNOWNED=1")
+	if err != nil || !strings.Contains(out, "AUTH CORPUS EXTERNAL (acp) PASSED") {
+		t.Fatalf("want a pass, got err=%v:\n%s", err, out)
+	}
+	if calls := fake.calls(t); strings.Contains(calls, "users-backfill") || strings.Contains(calls, "auth-grants") {
+		t.Errorf("AUTH_CORPUS_USERS_UNOWNED must skip step 1e:\n%s", calls)
 	}
 }

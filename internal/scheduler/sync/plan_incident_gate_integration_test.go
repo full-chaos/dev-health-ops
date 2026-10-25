@@ -185,6 +185,7 @@ func captureIncidentGateSignals(t *testing.T) *bytes.Buffer {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	t.Cleanup(func() { slog.SetDefault(original) })
 	globalPlanGateTelemetry.resetForTest()
+	globalPlanIncidentSkipWarn.resetForTest()
 	return &logs
 }
 

@@ -98,6 +98,9 @@ func startDomainRoleDatabase(t *testing.T, ctx context.Context) (*pgxpool.Pool, 
 	}
 	if _, err := riverstore.ApplyPinnedMigrations(ctx, admin, riverstore.MigrationOptions{
 		Schema: "river", DomainRole: domainRole, QueueRole: queueRole,
+		// As go-river-migrate runs it: the digest creates and stamps the
+		// posture-manifest table the domain posture requires.
+		PostureManifestDigest: postgresstore.PostureManifestDigest(),
 	}); err != nil {
 		t.Fatal(err)
 	}

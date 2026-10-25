@@ -7,24 +7,28 @@
 # Retire this tool and ci/posture_integration_packages.tsv when the posture / role migration work settles; review by
 # 2026-12-01.
 #
-# Usage: posture_integration.sh [--run] [--paths FILE]
+# Usage: posture_integration.sh [--run] [--paths FILE] [--test-runner FILE]
 #   default paths: git diff --no-renames --name-only -z origin/main...HEAD (cwd repo); BASE <sha> is printed; an unresolvable
 #   origin/main exits non-zero with no package line. --paths FILE: NUL-terminated change list (no BASE resolved).
 # stdout (list): "BASE <sha|paths-file>" then either "POSTURE <package>" lines or "NONE no posture path changed".
-# --run: "RECEIPT-HEAD <sha> clean=yes", then one "RECEIPT <pkg> PASS|FAIL <secs>s rc=<n>" per package and
+# --run: "RECEIPT-HEAD <sha> clean=yes runner=<capped.sh path> sha256=<its hash>", then one "RECEIPT <pkg> PASS|FAIL <secs>s rc=<n>" per package and
 #   "RECEIPT-SUMMARY <sha> pass=<n> fail=<n>". A dirty tree or an error exits non-zero. Runs testcontainers: follow the
-#   D6363 caps (capped.sh below) and remove your own containers afterwards.
+#   D6363 caps (capped.sh below) and remove your own containers afterwards. The runner is fixed (no env override).
+#   --test-runner FILE is for tests only: every line is prefixed STUB-, RECEIPT-HEAD says runner=STUB, exit is 5.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 list_file="${here}/posture_integration_packages.tsv"
-capped="${POSTURE_CAPPED_SH:-/home/ubuntu/devhealth/scripts/capped.sh}"
+# The runner is fixed: no environment variable replaces it, so a receipt cannot be forged by an override.
+capped="/home/ubuntu/devhealth/scripts/capped.sh"
 
 run=0
 paths=""
+stub=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --run) run=1; shift ;;
+    --test-runner) [ $# -ge 2 ] || { echo "--test-runner needs a file" >&2; exit 2; }; stub="$2"; shift 2 ;;
     --paths) [ $# -ge 2 ] || { echo "--paths needs a file" >&2; exit 2; }; paths="$2"; shift 2 ;;
     *) echo "usage: posture_integration.sh [--run] [--paths FILE]" >&2; exit 2 ;;
   esac
@@ -81,7 +85,17 @@ for pkg in "${packages[@]}"; do printf 'POSTURE %s\n' "${pkg}"; done
 sha="$(git rev-parse HEAD)"
 status="$(git status --porcelain)" || { echo "git status failed; the tree is not known to be clean" >&2; exit 4; }
 [ -z "${status}" ] || { echo "RECEIPT-HEAD ${sha} clean=no" >&2; echo "dirty tree: commit or stash first" >&2; exit 4; }
-printf 'RECEIPT-HEAD %s clean=yes\n' "${sha}"
+if [ -n "${stub}" ]; then
+  [ -x "${stub}" ] || { echo "test runner is not executable: ${stub}" >&2; exit 3; }
+  capped="${stub}"
+  printf 'RECEIPT-HEAD %s clean=yes runner=STUB\n' "${sha}"
+  tag="STUB-"
+else
+  [ -f "${capped}" ] && [ -x "${capped}" ] || { echo "runner not found: ${capped}" >&2; exit 3; }
+  runner_sha="$(sha256sum "${capped}")" || { echo "cannot hash the runner ${capped}" >&2; exit 3; }
+  printf 'RECEIPT-HEAD %s clean=yes runner=%s sha256=%s\n' "${sha}" "${capped}" "${runner_sha%% *}"
+  tag=""
+fi
 export GOMODCACHE="${GOMODCACHE:-/var/lib/oci-cache/go-mod}" GOCACHE="${GOCACHE:-/var/lib/oci-cache/go-build}" GOTMPDIR="${GOTMPDIR:-/var/lib/oci-cache/go-tmp}"
 pass=0
 fail=0
@@ -92,11 +106,12 @@ for pkg in "${packages[@]}"; do
   secs=$((SECONDS - start))
   if [ "${rc}" -eq 0 ]; then
     pass=$((pass + 1))
-    printf 'RECEIPT %s PASS %ss rc=0\n' "${pkg}" "${secs}"
+    printf '%sRECEIPT %s PASS %ss rc=0\n' "${tag}" "${pkg}" "${secs}"
   else
     fail=$((fail + 1))
-    printf 'RECEIPT %s FAIL %ss rc=%s\n' "${pkg}" "${secs}" "${rc}"
+    printf '%sRECEIPT %s FAIL %ss rc=%s\n' "${tag}" "${pkg}" "${secs}" "${rc}"
   fi
 done
-printf 'RECEIPT-SUMMARY %s pass=%s fail=%s\n' "${sha}" "${pass}" "${fail}"
+printf '%sRECEIPT-SUMMARY %s pass=%s fail=%s\n' "${tag}" "${sha}" "${pass}" "${fail}"
+[ -z "${stub}" ] || { echo "a --test-runner run is not a receipt" >&2; exit 5; }
 [ "${fail}" -eq 0 ]

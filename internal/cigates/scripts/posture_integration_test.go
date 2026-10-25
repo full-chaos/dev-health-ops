@@ -259,7 +259,7 @@ func TestPostureIntegrationRunRefusesADirtyTree(t *testing.T) {
 	res = cmdSpec{dir: repo, env: []string{shimBasePath()}}.run("bash", script, "--run", "--test-runner", stub)
 	// A stub runner is a test aid: it must never produce a receipt a lane could paste, and it must exit non-zero.
 	if res.code == 0 || !strings.Contains(res.stdout, "RECEIPT-HEAD "+sha+" clean=yes runner=STUB") ||
-		!strings.Contains(res.stdout, "STUB-SUMMARY "+sha+" pass=14 fail=0") || strings.Count(res.stdout, "STUB-RECEIPT internal/") != 14 ||
+		!strings.Contains(res.stdout, "STUB-RECEIPT-SUMMARY "+sha+" pass=14 fail=0") || strings.Count(res.stdout, "STUB-RECEIPT internal/") != 14 ||
 		strings.Contains(res.stdout, "\nRECEIPT internal/") || strings.Contains(res.stdout, "\nRECEIPT-SUMMARY") {
 		t.Fatalf("clean tree with a stub runner: exit %d stdout=%q stderr=%q", res.code, res.stdout, res.stderr)
 	}

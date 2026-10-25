@@ -16,7 +16,14 @@ for id in ${ids}; do
   shards=$(gh api --paginate "repos/${repo}/actions/runs/${id}/jobs?per_page=100&filter=latest" \
     --jq '.jobs[] | select(.name | startswith("go-storage-integration-shard-")) | .conclusion' 2>/dev/null) || continue
   [ -n "${shards}" ] || continue
-  if ! printf '%s\n' "${shards}" | grep -qvx 'success'; then
+  all_green=1
+  while IFS= read -r conclusion; do
+    if [ "${conclusion}" != "success" ]; then
+      all_green=0
+      break
+    fi
+  done <<<"${shards}"
+  if [ "${all_green}" -eq 1 ]; then
     exit 0
   fi
 done

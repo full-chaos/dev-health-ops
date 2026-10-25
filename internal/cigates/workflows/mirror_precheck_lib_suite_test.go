@@ -1,6 +1,7 @@
 package workflows_test
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -26,8 +27,12 @@ func mirrorSuiteDefects(doc yamlMap) []string {
 			paths[asString(p)] = true
 		}
 		for _, want := range mirrorSuitePaths {
-			if !paths[want] {
+			if event == "pull_request" && !paths[want] {
 				out = append(out, event+" paths lack "+want)
+			}
+			// A push filter is workflow-wide: a suite-only push to main would start the publisher job.
+			if event == "push" && paths[want] {
+				out = append(out, "push paths must not list "+want+": the mirror publisher would run on a suite-only push")
 			}
 		}
 	}
@@ -37,6 +42,20 @@ func mirrorSuiteDefects(doc yamlMap) []string {
 	}
 	if job["needs"] != nil {
 		out = append(out, "job precheck-lib-test must not wait on another job")
+	}
+	if asString(job["runs-on"]) != "ubuntu-latest" {
+		out = append(out, "job precheck-lib-test must run on ubuntu-latest")
+	}
+	if n, _ := job["timeout-minutes"].(int); n == 0 || n > 10 {
+		out = append(out, "job precheck-lib-test needs a timeout-minutes of at most 10")
+	}
+	if perms := asMap(job["permissions"]); len(perms) != 1 || asString(perms["contents"]) != "read" {
+		out = append(out, "job precheck-lib-test permissions must be exactly contents: read")
+	}
+	for _, s := range stepsOf(job) {
+		if strings.Contains(fmt.Sprint(s), "secrets.") {
+			out = append(out, "job precheck-lib-test must use no secret")
+		}
 	}
 	ran := false
 	for _, s := range stepsOf(job) {
@@ -60,6 +79,8 @@ func TestMirrorPrecheckLibSuiteRunsOnItsTrigger(t *testing.T) {
 		{mirrorWf, "      - ci/mirror_precheck_lib_test.sh\n", allMarker},
 		{mirrorWf, "bash ci/run_shell_tests.sh mirror-precheck-lib", "true"},
 		{mirrorWf, "  precheck-lib-test:\n", "  precheck-lib-test:\n    needs: precheck\n"},
+		{mirrorWf, "  push:\n    branches: [main]\n    paths:\n", "  push:\n    branches: [main]\n    paths:\n      - ci/suites.tsv\n"},
+		{mirrorWf, "    timeout-minutes: 5\n    permissions:\n      contents: read\n    steps:\n      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n      - name: Run the precheck library suite", "    timeout-minutes: 5\n    permissions:\n      contents: read\n      packages: write\n    steps:\n      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n      - name: Run the precheck library suite"},
 	} {
 		tmp := plantTree(t, root, []string{mirrorWf}, m)
 		if d := mirrorSuiteDefects(loadWf(t, tmp, "mirror-test-images.yml")); len(d) == 0 {

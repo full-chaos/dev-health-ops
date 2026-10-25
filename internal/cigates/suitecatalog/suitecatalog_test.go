@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -316,6 +317,37 @@ func TestPlantedTreeBaselineIsClean(t *testing.T) {
 	}
 }
 
+// plantRowEdit breaks the first mode=ci shell row in one way (kind selects which) and asserts the message.
+func plantRowEdit(t *testing.T, a, b string, kind int, want string) {
+	t.Helper()
+	root := plantTree(t)
+	edit(t, filepath.Join(root, catalogPath), func(s string) string {
+		lines := strings.Split(s, "\n")
+		for i, l := range lines {
+			cells := strings.Split(l, "\t")
+			if len(cells) != len(columns) || cells[0] != "migration-matrix-selftest" {
+				continue
+			}
+			switch kind {
+			case 0:
+				cells[0] = "go-worker-fixture-selftest"
+			case 1:
+				cells[1] = ""
+			case 2:
+				cells[4] = cells[4] + ";ci/does_not_exist.sh"
+			case 3:
+				cells[11] = "manual"
+				cells[12] = "planted"
+			case 4:
+				cells[3] = "ci/go_worker_fixture_test.sh"
+			}
+			lines[i] = strings.Join(cells, "\t")
+		}
+		return strings.Join(lines, "\n")
+	})
+	wantViolation(t, root, want)
+}
+
 func TestPlantedFaults(t *testing.T) {
 	t.Run("workflow runs a command with no row", func(t *testing.T) {
 		root := plantTree(t)
@@ -369,6 +401,40 @@ func TestPlantedFaults(t *testing.T) {
 		})
 		wantViolation(t, root, "empty why_manual")
 	})
+	t.Run("a second command after && is seen", func(t *testing.T) {
+		root := plantTree(t)
+		edit(t, filepath.Join(root, ".github/workflows/go-quality.yml"), func(s string) string {
+			return strings.Replace(s, "run: bash ci/check_river_compat_static.sh", "run: bash ci/check_river_compat_static.sh && bash ci/check_go.sh hidden || true", 1)
+		})
+		wantViolation(t, root, `uncatalogued test command: go-quality.yml runs "ci/check_go.sh hidden"`)
+	})
+	t.Run("a command in a composite action is seen", func(t *testing.T) {
+		root := plantTree(t)
+		dir := filepath.Join(root, ".github", "actions", "probe")
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		action := "runs:\n  using: composite\n  steps:\n    - shell: bash\n      run: bash ci/check_go.sh actionhidden\n"
+		if err := os.WriteFile(filepath.Join(dir, "action.yml"), []byte(action), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		wantViolation(t, root, `uncatalogued test command: probe/action.yml runs "ci/check_go.sh actionhidden"`)
+	})
+	t.Run("a command moved to another workflow than the row names", func(t *testing.T) {
+		root := plantTree(t)
+		edit(t, filepath.Join(root, catalogPath), func(s string) string {
+			return strings.Replace(s, "go-quality.yml static leg\tnone\tthe frozen CHAOS-3034", "go.yml static leg\tnone\tthe frozen CHAOS-3034", 1)
+		})
+		wantViolation(t, root, "go-quality.yml runs")
+		wantViolation(t, root, "names go.yml")
+	})
+	t.Run("duplicate suite id", func(t *testing.T) {
+		plantRowEdit(t, "migration-matrix-selftest", "go-worker-fixture-selftest", 0, "duplicate suite id")
+	})
+	t.Run("empty column", func(t *testing.T) { plantRowEdit(t, "", "", 1, "empty owner") })
+	t.Run("input that does not exist", func(t *testing.T) { plantRowEdit(t, "", "", 2, "does not exist") })
+	t.Run("manual row that a workflow runs", func(t *testing.T) { plantRowEdit(t, "", "", 3, "is mode=manual but") })
+	t.Run("duplicate command", func(t *testing.T) { plantRowEdit(t, "", "", 4, "duplicate command") })
 	t.Run("a refactor that keeps every command passes", func(t *testing.T) {
 		root := plantTree(t)
 		edit(t, filepath.Join(root, ".github/workflows/go-quality.yml"), func(s string) string {
@@ -378,4 +444,36 @@ func TestPlantedFaults(t *testing.T) {
 			t.Fatalf("a step rename must not fail the guard:\n  %s", strings.Join(v, "\n  "))
 		}
 	})
+}
+
+func TestRunShellTestsForwardsArgumentsToANamedSuite(t *testing.T) {
+	root := t.TempDir()
+	for _, d := range []string{"ci", "scripts"} {
+		if err := os.MkdirAll(filepath.Join(root, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	real, err := os.ReadFile(filepath.Join(repoRoot(t), "ci", "run_shell_tests.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cat := strings.Join(columns, "\t") + "\n" +
+		strings.Join([]string{"probe", "ci", "low", "scripts/probe_test.sh", "scripts/probe_test.sh", "none", "none", "p", "none", "r", "shell", "manual", "needs an argument"}, "\t") + "\n"
+	files := map[string]string{
+		"ci/run_shell_tests.sh": string(real),
+		"ci/suites.tsv":         cat,
+		"scripts/probe_test.sh": "#!/usr/bin/env bash\necho \"args=$*\"\n",
+	}
+	for p, c := range files {
+		if err := os.WriteFile(filepath.Join(root, p), []byte(c), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out, err := exec.Command("bash", filepath.Join(root, "ci", "run_shell_tests.sh"), "probe", "wrapper-path", "second").CombinedOutput()
+	if err != nil {
+		t.Fatalf("named suite failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "args=wrapper-path second") {
+		t.Fatalf("arguments were not forwarded:\n%s", out)
+	}
 }

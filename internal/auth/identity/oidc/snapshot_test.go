@@ -50,6 +50,8 @@ func (stubSessions) Issue(context.Context, SessionRequest) (Tokens, error) {
 	return Tokens{}, errUnused
 }
 
+func (stubSessions) Preflight(context.Context) error { return nil }
+
 type countingEntitlements struct {
 	allowed bool
 	calls   atomic.Int64

@@ -210,10 +210,10 @@ K rollout status deploy/"${RELEASE}-dev-health-auth-service" --timeout=240s
 # capacity defaults: two Ready replicas, the pool bound reaches the container, and the budget allows one disruption
 ready="$(K get deploy "${RELEASE}-dev-health-auth-service" -o jsonpath='{.status.readyReplicas}')"
 [ "${ready}" = 2 ] || die "auth-service has ${ready:-0} ready replicas, want 2"
-[ "$(K get deploy "${RELEASE}-dev-health-auth-service" -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="AUTH_DATABASE_MAX_CONNS")].value}')" = 8 ] || die "AUTH_DATABASE_MAX_CONNS is not 8"
+[[ "$(K get deploy "${RELEASE}-dev-health-auth-service" -o jsonpath='{.spec.template.spec.containers[0].args}')" == *'"--database-max-conns=8"'* ]] || die "the auth-service args do not carry --database-max-conns=8"
 [ "$(K get pdb "${RELEASE}-dev-health-auth-service" -o jsonpath='{.spec.minAvailable}')" = 1 ] || die "the PodDisruptionBudget does not hold minAvailable 1"
 [ "$(K get pdb "${RELEASE}-dev-health-auth-service" -o jsonpath='{.status.disruptionsAllowed}')" = 1 ] || die "the PodDisruptionBudget does not allow exactly one disruption"
-printf 'capacity defaults: 2 ready replicas, AUTH_DATABASE_MAX_CONNS=8, PodDisruptionBudget minAvailable 1 allows 1 disruption\n'
+printf 'capacity defaults: 2 ready replicas, --database-max-conns=8, PodDisruptionBudget minAvailable 1 allows 1 disruption\n'
 POD="$(K get pod -l app.kubernetes.io/component=auth-service --field-selector=status.phase=Running -o jsonpath='{.items[0].metadata.name}')"
 POD_IP="$(K get pod "${POD}" -o jsonpath='{.status.podIP}')"
 printf 'pod %s ip %s\n' "${POD}" "${POD_IP}"
@@ -315,9 +315,16 @@ fi
 
 # The Service routes to the pod, by name, on both published ports.
 printf 'step 8b: the Service reaches the pod (DNS name, endpoints, both ports)\n'
-ep="$(K get endpoints "${RELEASE}-dev-health-auth-service" -o jsonpath='{.subsets[0].addresses[0].ip}')"
-printf 'Service endpoint: %s (pod %s)\n' "${ep}" "${POD_IP}"
-[ "${ep}" = "${POD_IP}" ] || die "the Service does not select the pod"
+# Every Ready pod of the Deployment must be a ready endpoint of the Service, and nothing else.
+pod_ips="$(K get pod -l app.kubernetes.io/component=auth-service -o json \
+  | jq -r '.items[] | select(.status.phase == "Running" and ([.status.conditions[] | select(.type == "Ready" and .status == "True")] | length) == 1) | .status.podIP' | sort)"
+ep_ips="$(K get endpointslice -l "kubernetes.io/service-name=${RELEASE}-dev-health-auth-service" -o json \
+  | jq -r '.items[].endpoints[] | select(.conditions.ready == true) | .addresses[]' | sort)"
+printf 'Ready pod IPs: %s\nService endpoint IPs: %s\n' "$(tr '\n' ' ' <<<"${pod_ips}")" "$(tr '\n' ' ' <<<"${ep_ips}")"
+[ -n "${pod_ips}" ] || die "no Ready auth-service pod"
+[ "$(wc -l <<<"${pod_ips}")" -eq "$(K get deploy "${RELEASE}-dev-health-auth-service" -o jsonpath='{.spec.replicas}')" ] \
+  || die "the Ready pod count is not the Deployment replica count"
+[ "${ep_ips}" = "${pod_ips}" ] || die "the Service endpoints are not exactly the Ready pods"
 SVC_HOST="${RELEASE}-dev-health-auth-service"
 via_svc="$(fetch consumer2 role=auth-consumer "http://${SVC_HOST}:8095/anything")"
 printf 'consumer -> Service API port: %s\n' "${via_svc}"

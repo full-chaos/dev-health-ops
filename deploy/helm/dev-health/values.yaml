@@ -202,7 +202,8 @@ authService:
     #    number from 1 to 32. The pods connect to the database directly, not
     #    through the go-pgbouncer pools, so the database must hold
     #    replicas x maxConns (plus one surge pod while rolling). Not settable
-    #    through extraEnv.
+    #    through extraEnv or extraArgs; the chart renders it as the
+    #    --database-max-conns flag.
     maxConns: 8
   # -- The shared rate-limit store's login (AUTH_VALKEY_URI, database 1): an
   #    ACL user of its own, limited to the auth_svc_ key prefix, never go-api's.

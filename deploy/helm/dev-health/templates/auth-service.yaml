@@ -64,7 +64,7 @@ stage-signing-key init container exists.
 {{- if not (regexMatch "^[0-9]+s$" (toString $a.shutdownTimeout)) }}{{- fail "authService.shutdownTimeout must be whole seconds such as 20s" }}{{- end }}
 {{- if ge (int (trimSuffix "s" (toString $a.shutdownTimeout))) (int $a.terminationGracePeriodSeconds) }}{{- fail "authService.shutdownTimeout must be below authService.terminationGracePeriodSeconds: the kubelet kills the pod at the grace period, so a longer shutdown bound is never reached" }}{{- end }}
 {{- range $a.extraArgs }}
-{{- if has (trimAll "-" (lower (trim (toString .))) | splitList "=" | first) (list "signing-key-file" "signing-key-id" "signing-keyset-file") }}{{- fail (printf "authService.extraArgs must not set %s: the chart renders the signing key flags (authService.signingKey or authService.keySet)" .) }}{{- end }}
+{{- if has (trimAll "-" (lower (trim (toString .))) | splitList "=" | first) (list "signing-key-file" "signing-key-id" "signing-keyset-file" "database-max-conns") }}{{- fail (printf "authService.extraArgs must not set %s: the chart renders the signing key flags (authService.signingKey or authService.keySet) and the pool bound (authService.database.maxConns)" .) }}{{- end }}
 {{- end }}
 {{- if and $ksOn $a.podAnnotations (hasKey $a.podAnnotations "checksum/keyset") }}{{- fail "authService.podAnnotations must not set checksum/keyset: the chart sets it from the key-set manifest" }}{{- end }}
 {{- range $a.extraEnv }}
@@ -142,6 +142,7 @@ spec:
             - {{ printf "--operator-http-addr=:%v" $a.operatorPort | quote }}
             - {{ printf "--shutdown-timeout=%s" $a.shutdownTimeout | quote }}
             - {{ printf "--database-schema=%s" (include "dev-health.authDatabaseSchema" .) | quote }}
+            - {{ printf "--database-max-conns=%s" (include "dev-health.authMaxConns" .) | quote }}
             {{- if $ksOn }}
             - "--signing-keyset-file=/run/auth/signing/keyset.json"
             {{- else }}
@@ -167,8 +168,6 @@ spec:
             - name: AUTH_SESSION_SUCCESSOR_KEY
               valueFrom: {secretKeyRef: {name: {{ $a.sessionKeys.successor.secretName | quote }}, key: {{ $a.sessionKeys.successor.secretKey | quote }}}}
           {{- end }}
-            - name: AUTH_DATABASE_MAX_CONNS
-              value: {{ include "dev-health.authMaxConns" . | quote }}
           {{- if $a.usersOwned }}
             - name: AUTH_USERS_OWNED
               value: "true"

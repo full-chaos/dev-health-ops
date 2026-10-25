@@ -42,8 +42,11 @@ func TestAuthServiceCapacityDefaults(t *testing.T) {
 			t.Errorf("%v = %v, want %s", want.path, got, want.val)
 		}
 	}
-	if value, set := containerEnvValue(t, deployment, "AUTH_DATABASE_MAX_CONNS"); !set || value != "8" {
-		t.Errorf("AUTH_DATABASE_MAX_CONNS = %q (set=%v), want 8", value, set)
+	if got := maxConnsArg(t, deployment); got != "8" {
+		t.Errorf("--database-max-conns = %q, want 8", got)
+	}
+	if _, set := containerEnvValue(t, deployment, "AUTH_DATABASE_MAX_CONNS"); set {
+		t.Error("the pool bound is also set as an environment variable: the service warns for settings that arrive only through the environment")
 	}
 }
 
@@ -56,7 +59,7 @@ func TestAuthServiceConnectionCeiling(t *testing.T) {
 		t.Fatalf("render: %v\n%.400s", err, out)
 	}
 	deployment := authDoc(docs, "Deployment", "a-dev-health-auth-service")
-	value, _ := containerEnvValue(t, deployment, "AUTH_DATABASE_MAX_CONNS")
+	value := maxConnsArg(t, deployment)
 	if value != "8" {
 		t.Fatalf("maxConns %q", value)
 	}
@@ -95,8 +98,8 @@ func TestAuthServiceMaxConnsStrict(t *testing.T) {
 			continue
 		}
 		want := strings.SplitN(ok[1], "=", 2)[1]
-		if got, _ := containerEnvValue(t, authDoc(docs, "Deployment", "a-dev-health-auth-service"), "AUTH_DATABASE_MAX_CONNS"); got != want {
-			t.Errorf("%v: env %q, want %s", ok, got, want)
+		if got := maxConnsArg(t, authDoc(docs, "Deployment", "a-dev-health-auth-service")); got != want {
+			t.Errorf("%v: --database-max-conns %q, want %s", ok, got, want)
 		}
 	}
 }
@@ -162,6 +165,30 @@ func sortStrings(s []string) {
 			if s[j] < s[i] {
 				s[i], s[j] = s[j], s[i]
 			}
+		}
+	}
+}
+
+func maxConnsArg(t *testing.T, deployment map[string]any) string {
+	t.Helper()
+	args, _ := at(deployment, "spec", "template", "spec", "containers", 0, "args").([]any)
+	var found []string
+	for _, arg := range args {
+		if text, _ := arg.(string); strings.HasPrefix(text, "--database-max-conns=") {
+			found = append(found, strings.TrimPrefix(text, "--database-max-conns="))
+		}
+	}
+	if len(found) != 1 {
+		t.Fatalf("want exactly one --database-max-conns argument, got %v", found)
+	}
+	return found[0]
+}
+
+func TestAuthServiceMaxConnsCannotBeSetThroughExtraArgs(t *testing.T) {
+	for _, arg := range []string{"--database-max-conns=4", "database-max-conns=4", "-database-max-conns=4"} {
+		_, out, err := renderAuth(t, authWith("--set-json", `authService.extraArgs=["`+arg+`"]`)...)
+		if err == nil || !strings.Contains(out, "authService.extraArgs must not set "+arg) || !strings.Contains(out, "authService.database.maxConns") {
+			t.Errorf("extraArgs %q rendered: err=%v out=%.300s", arg, err, out)
 		}
 	}
 }

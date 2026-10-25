@@ -73,6 +73,6 @@ The chart keeps auth-service off by default (`authService.enabled: false`). When
 | `authService.resources.requests.cpu` | 250m | Login is CPU bound; 500m is requested for two pods and 750m while a rollout surges a third. |
 | `authService.resources.limits.cpu` | 1000m | The measured run used one CPU per pod. |
 | `authService.resources.limits.memory` | 256Mi | Peak use was 27 MiB. |
-| `authService.database.maxConns` | 8 | Pool per replica, a whole number from 1 to 32. Set it here, not through `extraEnv`. |
+| `authService.database.maxConns` | 8 | Pool per replica, a whole number from 1 to 32. Set it here, not through `extraEnv` or `extraArgs`; the chart passes it as the `--database-max-conns` flag. |
 
 With two or more replicas the chart also renders a PodDisruptionBudget with `minAvailable: 1`. The pods connect to the database directly, so the database must hold `replicas x maxConns`, plus one surge pod while rolling: 16 connections steady and 24 during a rollout at the defaults. The chart does not pin a total auth database budget; check these figures against the budget in [Capacity and sizing](capacity-and-sizing.md). The node capacity of a release is not known to the chart: confirm the cluster can schedule the CPU requests above before enabling the service.

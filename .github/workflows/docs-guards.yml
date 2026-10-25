@@ -169,8 +169,8 @@ jobs:
           retention-days: 14
 
   # Pull requests only: the Cloudflare preview assets from the site docs-guards just validated. This job runs the checks only
-  # the preview has (candidate facts) and prepares the assets; it does not build or check the site again. With no validated
-  # site for this revision, build_docs_cloudflare.py builds and checks it itself.
+  # the preview has (candidate facts) and prepares the assets; it does not build or check the site again. A site that is
+  # missing, or stamped for another revision, fails this job; it is never rebuilt or reused across revisions.
   docs-preview:
     name: docs-preview
     if: github.event_name == 'pull_request'
@@ -192,11 +192,30 @@ jobs:
           name: docs-site-${{ github.sha }}
           path: .build
 
+      - name: Check the validated site is for this revision
+        run: |
+          set -o pipefail
+          go run -trimpath -mod=readonly ./cmd/cigate docs check-validated-site \
+            --site-dir .build/docs \
+            --stamp .build/docs-validated.sha \
+            --revision "$GITHUB_SHA" \
+            2>&1 | tee .build/docs-validated-site.log
+
+      - name: Check candidate facts
+        run: |
+          set -o pipefail
+          go run -trimpath -mod=readonly ./cmd/cigate docs check-candidate-facts \
+            2>&1 | tee .build/docs-candidate-facts.log
+
       - name: Prepare validated preview assets
         run: |
-          mkdir -p .build
           set -o pipefail
-          python3 scripts/build_docs_cloudflare.py --mode preview --full-check --reuse-site \
+          go run -trimpath -mod=readonly ./cmd/cigate docs-prepare \
+            --source .build/docs \
+            --output .build/docs-cloudflare \
+            --mode preview \
+            --redirects docs-data/redirects.tsv \
+            --source-revision "$GITHUB_SHA" \
             2>&1 | tee .build/docs-cloudflare-build.log
 
       - name: Upload build evidence and diagnostics
@@ -207,6 +226,8 @@ jobs:
           path: |
             .build/docs-cloudflare/**
             .build/docs-cloudflare-build.log
+            .build/docs-validated-site.log
+            .build/docs-candidate-facts.log
           include-hidden-files: true
           if-no-files-found: warn
           retention-days: 14

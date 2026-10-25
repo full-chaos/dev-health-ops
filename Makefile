@@ -28,8 +28,9 @@ docs\:check-links:
 #                                         code prerequisites, freshness inventory (it uploads the checked site)
 #                                      job docs-preview (PRs)  -> reuses that site, then candidate facts and
 #                                         Cloudflare asset preparation
-# `build_docs_cloudflare.py --full-check` runs the docs-guards and docs-preview chain, so it stands in for
-# both jobs here. internal/cigates/docs/parity_test.go fails when either side has a check the other lacks.
+# `build_docs_cloudflare.py --full-check` runs the build, the site checks and candidate facts and prepares the assets;
+# the code-prerequisite and freshness checks are separate lines below. internal/cigates/docs/parity_test.go fails when
+# either side has a check the other lacks.
 #
 # Deliberately excluded: `docs:check-external-links` reaches the public internet and is
 # `continue-on-error` in CI, so it would make this gate flaky rather than meaningful.
@@ -41,6 +42,8 @@ docs\:check-links:
 docs\:check:
 	@$(MAKE) --no-print-directory docs\:check-fast
 	go test -mod=readonly -trimpath -count=1 ./internal/cigates/docs/...
+	go run -trimpath -mod=readonly ./cmd/cigate docs check-code-prerequisites
+	go run -trimpath -mod=readonly ./cmd/cigate docs check-freshness
 	$(PYTHON) scripts/build_docs_cloudflare.py --mode preview --full-check
 
 # Fast inner loop while editing pages: catches taxonomy drift, queue-mapping drift,

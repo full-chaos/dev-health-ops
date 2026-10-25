@@ -11,7 +11,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SITE_DIR = ROOT / ".build" / "docs"
-VALIDATED_STAMP = ROOT / ".build" / "docs-validated.sha"
 ASSET_DIR = ROOT / ".build" / "docs-cloudflare"
 REDIRECTS = ROOT / "docs-data" / "redirects.tsv"
 SEARCH_ACCEPTANCE = ROOT / "docs-data" / "search-acceptance.json"
@@ -53,81 +52,65 @@ def _validate_asset_tree() -> None:
         raise RuntimeError(f"prepared Cloudflare asset tree is incomplete: {joined}")
 
 
-# Checks of the built site, in run order. validate-publication runs before the build, the rest after it. Docs Guards runs
-# the same verbs; a parity test (internal/cigates/docs/parity_test.go) fails when either side drifts.
-SITE_CHECK_VERBS = (
-    "validate-publication",
-    "check-built-site-links",
-    "check-docs-search",
-    "check-docs-accessibility",
-    "check-code-prerequisites",
-    "check-freshness",
-)
-PREVIEW_ONLY_VERBS = ("check-candidate-facts",)
-VERB_ARGS = {
-    "check-built-site-links": ["--site-dir", str(SITE_DIR.relative_to(ROOT))],
-    "check-docs-search": [
-        "--site-dir",
-        str(SITE_DIR.relative_to(ROOT)),
-        "--queries",
-        str(SEARCH_ACCEPTANCE.relative_to(ROOT)),
-    ],
-    "check-docs-accessibility": [
-        "--site-dir",
-        str(SITE_DIR.relative_to(ROOT)),
-        "--css",
-        "docs/stylesheets/extra.css",
-    ],
-}
-
-
-def _check(verb: str) -> None:
-    _run([*CIGATE_DOCS, verb, *VERB_ARGS.get(verb, [])])
-
-
-def _validated_site_is_current() -> bool:
-    """True when .build/docs was built and fully checked for this exact revision."""
-    if not (SITE_DIR / "index.html").is_file() or not VALIDATED_STAMP.is_file():
-        print("No validated site found; building it here.", flush=True)
-        return False
-    stamped = VALIDATED_STAMP.read_text(encoding="utf-8").strip()
-    revision = _source_revision()
-    if stamped != revision or revision == "unknown":
-        print(
-            f"Validated site is for {stamped!r}, not {revision!r}; building it here.",
-            flush=True,
-        )
-        return False
-    return True
-
-
-def build(*, mode: str, full_check: bool, reuse_site: bool = False) -> None:
+def build(*, mode: str, full_check: bool) -> None:
     """Build MkDocs, run the requested checks, and prepare Wrangler assets."""
     (ROOT / ".build").mkdir(parents=True, exist_ok=True)
 
-    if not (reuse_site and _validated_site_is_current()):
-        if full_check:
-            _check(SITE_CHECK_VERBS[0])
+    if full_check:
+        _run([*CIGATE_DOCS, "validate-publication"])
 
-        _run(
-            [
-                sys.executable,
-                "-m",
-                "mkdocs",
-                "build",
-                "--strict",
-                "--config-file",
-                "mkdocs.yml",
-            ]
-        )
-
-        if full_check:
-            for verb in SITE_CHECK_VERBS[1:]:
-                _check(verb)
+    _run(
+        [
+            sys.executable,
+            "-m",
+            "mkdocs",
+            "build",
+            "--strict",
+            "--config-file",
+            "mkdocs.yml",
+        ]
+    )
 
     if full_check:
-        for verb in PREVIEW_ONLY_VERBS:
-            _check(verb)
+        _run(
+            [
+                *CIGATE_DOCS,
+                "check-built-site-links",
+                "--site-dir",
+                str(SITE_DIR.relative_to(ROOT)),
+            ]
+        )
+        _run(
+            [
+                *CIGATE_DOCS,
+                "check-docs-search",
+                "--site-dir",
+                str(SITE_DIR.relative_to(ROOT)),
+                "--queries",
+                str(SEARCH_ACCEPTANCE.relative_to(ROOT)),
+            ]
+        )
+        _run(
+            [
+                *CIGATE_DOCS,
+                "check-docs-accessibility",
+                "--site-dir",
+                str(SITE_DIR.relative_to(ROOT)),
+                "--css",
+                "docs/stylesheets/extra.css",
+            ]
+        )
+        _run(
+            [
+                "go",
+                "run",
+                "-trimpath",
+                "-mod=readonly",
+                "./cmd/cigate",
+                "docs",
+                "check-candidate-facts",
+            ]
+        )
 
     _run(
         [
@@ -165,24 +148,13 @@ def main(argv: list[str]) -> int:
         action="store_true",
         help="Run the complete reader-critical gate before preparing assets.",
     )
-    parser.add_argument(
-        "--reuse-site",
-        action="store_true",
-        help=(
-            "Preview only: reuse .build/docs when .build/docs-validated.sha names this "
-            "revision (Docs Guards wrote it after every site check passed); otherwise "
-            "build and check the site here."
-        ),
-    )
     args = parser.parse_args(argv)
-    if args.reuse_site and args.mode != "preview":
-        parser.error("--reuse-site is only valid with --mode preview")
 
     # Production is never prepared without the full publication gate.
     full_check = args.full_check or args.mode == "production"
 
     try:
-        build(mode=args.mode, full_check=full_check, reuse_site=args.reuse_site)
+        build(mode=args.mode, full_check=full_check)
     except FileNotFoundError as exc:
         print(f"ERROR: required command was not found: {exc}", file=sys.stderr)
         return 1

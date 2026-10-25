@@ -494,11 +494,17 @@ func TestDocsGuardsWorkflowContract(t *testing.T) {
 			return d.edit(t, docsGuardsPath, "          name: docs-site-${{ github.sha }}\n          path: .build\n", "          name: docs-site-main\n          path: .build\n")
 		}, "its own revision"},
 		plantCase{"docs-preview builds the site again", func(t *testing.T, d docTree) docTree {
-			return d.edit(t, docsGuardsPath, "          mkdir -p .build\n          set -o pipefail\n          python3 scripts", "          mkdir -p .build\n          python3 -m mkdocs build --strict\n          set -o pipefail\n          python3 scripts")
-		}, "must not build the site again"},
-		plantCase{"docs-preview loses --reuse-site", func(t *testing.T, d docTree) docTree {
-			return d.edit(t, docsGuardsPath, "--full-check --reuse-site", "--full-check")
-		}, "--reuse-site"},
+			return d.edit(t, docsGuardsPath, "      - name: Check candidate facts\n        run: |\n", "      - name: Check candidate facts\n        run: |\n          python -m mkdocs build --strict\n")
+		}, "must not build the site again or run Python"},
+		plantCase{"docs-preview runs the Python build script", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, docsGuardsPath, "      - name: Check candidate facts\n        run: |\n", "      - name: Check candidate facts\n        run: |\n          python3 scripts/build_docs_cloudflare.py --mode preview\n")
+		}, "must not build the site again or run Python"},
+		plantCase{"docs-preview stops checking the stamp", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, docsGuardsPath, "docs check-validated-site", "docs check-candidate-facts")
+		}, "check-validated-site"},
+		plantCase{"docs-preview prepares another revision", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, docsGuardsPath, `--source-revision "$GITHUB_SHA"`, `--source-revision main`)
+		}, "--source-revision"},
 	)
 	assertGuard(t, docsGuardsGuard, plants)
 }
@@ -677,22 +683,36 @@ func docsPreviewFindings(wf map[string]any) []string {
 				out = append(out, "the validated-site download must not carry an if")
 			}
 		}
-		if run := strings.ToLower(asString(s["run"])); strings.Contains(run, "mkdocs") || strings.Contains(run, "pip install") {
-			out = append(out, "docs-preview must not build the site again: "+asString(s["name"]))
+		run := strings.ToLower(asString(s["run"]))
+		for _, forbidden := range []string{"mkdocs", "pip ", "python", "scripts/", ".py"} {
+			if strings.Contains(run, forbidden) {
+				out = append(out, fmt.Sprintf("docs-preview must not build the site again or run Python (%q in step %q)", forbidden, asString(s["name"])))
+			}
 		}
 		if strings.HasPrefix(asString(s["uses"]), "actions/setup-python@") {
-			out = append(out, "docs-preview installs no Python packages, so it cannot build the site")
+			out = append(out, "docs-preview installs no Python, so it cannot build the site")
 		}
 	}
 	if downloads != 1 {
 		out = append(out, fmt.Sprintf("docs-preview must download the validated site once, found %d", downloads))
 	}
-	run := stepRuns(steps)["Prepare validated preview assets"]
-	if !runsCommand(run, "python3 scripts/build_docs_cloudflare.py", "--mode preview", "--full-check", "--reuse-site") {
-		out = append(out, "docs-preview does not run build_docs_cloudflare.py --mode preview --full-check --reuse-site")
-	}
-	if !strings.Contains(run, "set -o pipefail") || !strings.Contains(run, "| tee ") {
-		out = append(out, "the docs-preview prepare step must stream through tee under set -o pipefail")
+	runs := stepRuns(steps)
+	for _, c := range []expectedCheck{
+		{"Check the validated site is for this revision", goCmd("check-validated-site"), []string{"--site-dir .build/docs", "--stamp .build/docs-validated.sha", `--revision "$GITHUB_SHA"`}},
+		{"Check candidate facts", goCmd("check-candidate-facts"), nil},
+		{"Prepare validated preview assets", "go run -trimpath -mod=readonly ./cmd/cigate docs-prepare", []string{"--source .build/docs", "--mode preview", `--source-revision "$GITHUB_SHA"`}},
+	} {
+		run, ok := runs[c.step]
+		if !ok {
+			out = append(out, fmt.Sprintf("docs-preview is missing the step %q", c.step))
+			continue
+		}
+		if !runsCommand(run, c.command, c.args...) {
+			out = append(out, fmt.Sprintf("docs-preview step %q does not run %q with %v", c.step, c.command, c.args))
+		}
+		if !strings.Contains(run, "set -o pipefail") || !strings.Contains(run, "| tee ") {
+			out = append(out, fmt.Sprintf("docs-preview step %q must stream through tee under set -o pipefail", c.step))
+		}
 	}
 	return out
 }

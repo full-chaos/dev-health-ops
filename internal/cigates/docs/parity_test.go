@@ -2,6 +2,11 @@ package docs_test
 
 import (
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -29,39 +34,27 @@ var (
 	cigateVerb    = regexp.MustCompile(`cmd/cigate (docs-prepare|docs ([a-z][a-z-]*))`)
 	goTestDocs    = regexp.MustCompile(`^go test .*\./internal/cigates/docs/\.\.\.`)
 	mkdocsCmd     = regexp.MustCompile(`mkdocs build\b`)
-	scriptVerbs   = regexp.MustCompile(`(SITE_CHECK_VERBS|PREVIEW_ONLY_VERBS) = \(([^)]*)\)`)
-	quoted        = regexp.MustCompile(`"([a-z][a-z-]*)"`)
 	makeSubTarget = regexp.MustCompile(`\$\(MAKE\)[^\n]* (docs\\:[a-z-]+)`)
 )
 
-func scriptChecks(script string) (site, previewOnly []string) {
-	for _, m := range scriptVerbs.FindAllStringSubmatch(script, -1) {
-		var verbs []string
-		for _, q := range quoted.FindAllStringSubmatch(m[2], -1) {
-			verbs = append(verbs, q[1])
-		}
-		if m[1] == "SITE_CHECK_VERBS" {
-			site = verbs
-		} else {
-			previewOnly = verbs
-		}
-	}
-	return site, previewOnly
+// scriptChain is what `build_docs_cloudflare.py --mode preview --full-check` runs, in order. The test reads the script as
+// text only (never runs it) and fails when a verb of the chain is not named in it.
+var scriptChain = []string{
+	"validate-publication", mkdocsBuild, "check-built-site-links", "check-docs-search", "check-docs-accessibility",
+	"check-candidate-facts", docsPrepare,
 }
 
-// checksOf lists the checks one command line runs. A run of the build script expands to its declared chain.
-func checksOf(line, script string) []string {
-	site, previewOnly := scriptChecks(script)
+// ciOnly are checks CI runs and `make docs:check` need not: the preview job compares the stamp of the site it downloaded.
+var ciOnly = map[string]bool{"check-validated-site": true}
+
+// checksOf lists the checks one command line runs. A run of the build script expands to scriptChain.
+func checksOf(line string) []string {
 	switch {
 	case strings.Contains(line, "scripts/build_docs_cloudflare.py"):
-		if strings.Contains(line, "--reuse-site") {
-			return append(append([]string{}, previewOnly...), docsPrepare)
-		}
 		if !strings.Contains(line, "--full-check") {
 			return nil
 		}
-		out := append([]string{mkdocsBuild}, site...)
-		return append(append(out, previewOnly...), docsPrepare)
+		return append([]string{}, scriptChain...)
 	case mkdocsCmd.MatchString(line):
 		return []string{mkdocsBuild}
 	case goTestDocs.MatchString(line):
@@ -76,7 +69,7 @@ func checksOf(line, script string) []string {
 	return nil
 }
 
-func ciChecks(d docTree, script string) ([]string, []string) {
+func ciChecks(d docTree) ([]string, []string) {
 	wf, err := parseYAML(d, docsGuardsPath)
 	if err != nil {
 		return nil, []string{err.Error()}
@@ -85,7 +78,7 @@ func ciChecks(d docTree, script string) ([]string, []string) {
 	for job := range asMap(wf["jobs"]) {
 		for _, s := range workflowSteps(wf, job) {
 			for _, line := range commandLines(asString(s["run"])) {
-				out = append(out, checksOf(line, script)...)
+				out = append(out, checksOf(line)...)
 			}
 		}
 	}
@@ -118,11 +111,11 @@ func makeRecipe(makefile, target string, seen map[string]bool) []string {
 	return recipe
 }
 
-func localChecks(makefile, script string) []string {
+func localChecks(makefile string) []string {
 	var out []string
 	for _, line := range makeRecipe(makefile, `docs\:check`, map[string]bool{}) {
 		line = strings.ReplaceAll(line, "$(PYTHON)", "python")
-		out = append(out, checksOf(line, script)...)
+		out = append(out, checksOf(line)...)
 	}
 	sort.Strings(out)
 	return out
@@ -137,12 +130,17 @@ func parityGuard(d docTree) []string {
 	if err != nil {
 		return []string{err.Error()}
 	}
-	ci, errs := ciChecks(d, script)
+	ci, errs := ciChecks(d)
 	if errs != nil {
 		return errs
 	}
-	local := localChecks(makefile, script)
 	var out []string
+	for _, verb := range scriptChain {
+		if verb != mkdocsBuild && verb != docsPrepare && !strings.Contains(script, `"`+verb+`"`) {
+			out = append(out, fmt.Sprintf("%s does not name %q: scriptChain in this test is out of date", buildScriptPath, verb))
+		}
+	}
+	local := localChecks(makefile)
 	seen := map[string]int{}
 	for _, c := range ci {
 		seen[c]++
@@ -159,7 +157,7 @@ func parityGuard(d docTree) []string {
 	inCI := map[string]bool{}
 	for _, c := range ci {
 		inCI[c] = true
-		if !have[c] {
+		if !have[c] && !ciOnly[c] {
 			out = append(out, fmt.Sprintf("CI runs %q but `make docs:check` does not", c))
 		}
 	}
@@ -176,12 +174,15 @@ func parityGuard(d docTree) []string {
 
 func TestDocsCheckMatchesCI(t *testing.T) {
 	assertGuard(t, parityGuard, []plantCase{
-		{"a check is dropped from the build script chain", func(t *testing.T, d docTree) docTree {
-			return d.edit(t, buildScriptPath, "    \"check-docs-search\",\n", "")
-		}, `CI runs "check-docs-search" but`},
-		{"a check is added to the build script chain only", func(t *testing.T, d docTree) docTree {
-			return d.edit(t, buildScriptPath, "    \"check-docs-search\",\n", "    \"check-docs-search\",\n    \"check-new-thing\",\n")
+		{"a check is dropped from docs:check", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, makefilePath, "check-code-prerequisites\n\tgo run -trimpath -mod=readonly ./cmd/cigate docs check-freshness\n", "check-code-prerequisites\n")
+		}, `CI runs "check-freshness" but`},
+		{"a check is added to docs:check only", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, makefilePath, "check-code-prerequisites\n\tgo run -trimpath -mod=readonly ./cmd/cigate docs check-freshness\n", "check-code-prerequisites\n\tgo run -trimpath -mod=readonly ./cmd/cigate docs check-freshness\n\tgo run -trimpath -mod=readonly ./cmd/cigate docs check-new-thing\n")
 		}, `runs "check-new-thing" but docs-guards.yml does not`},
+		{"the build script stops naming a chain check", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, buildScriptPath, `"check-docs-search"`, `"check-docs-sear"`)
+		}, `does not name "check-docs-search"`},
 		{"a check is added to docs-guards.yml only", func(t *testing.T, d docTree) docTree {
 			return d.edit(t, docsGuardsPath, "      - name: Upload documentation quality evidence\n", "      - name: Check new thing\n        run: go run -trimpath -mod=readonly ./cmd/cigate docs check-new-thing\n\n      - name: Upload documentation quality evidence\n")
 		}, `CI runs "check-new-thing" but`},
@@ -189,10 +190,86 @@ func TestDocsCheckMatchesCI(t *testing.T) {
 			return d.edit(t, makefilePath, "\tgo test -mod=readonly -trimpath -count=1 ./internal/cigates/docs/...\n", "")
 		}, `CI runs "go test ./internal/cigates/docs/..." but`},
 		{"docs:check stops running the build script", func(t *testing.T, d docTree) docTree {
-			return d.edit(t, makefilePath, "/docs/...\n\t$(PYTHON) scripts/build_docs_cloudflare.py --mode preview --full-check\n", "/docs/...\n")
+			return d.edit(t, makefilePath, "check-freshness\n\t$(PYTHON) scripts/build_docs_cloudflare.py --mode preview --full-check\n", "check-freshness\n")
 		}, "CI runs"},
 		{"a second job builds the site again", func(t *testing.T, d docTree) docTree {
 			return d.appended(t, docsGuardsPath, "  rebuild:\n    runs-on: ubuntu-latest\n    steps:\n      - run: python -m mkdocs build --strict --config-file mkdocs.yml\n")
 		}, `runs "mkdocs build" 2 times`},
 	})
+}
+
+// No test of this package runs Python, the build script or a Makefile target (which runs the script): the docs checks are Go.
+// pythonExecFindings parses one test file and reports each os/exec call that names an interpreter, a .py file, the docs build
+// script or make.
+func pythonExecFindings(name string, src []byte) []string {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, name, src, 0)
+	if err != nil {
+		return []string{name + ": " + err.Error()}
+	}
+	var out []string
+	ast.Inspect(file, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		if pkg, ok := sel.X.(*ast.Ident); !ok || pkg.Name != "exec" || !strings.HasPrefix(sel.Sel.Name, "Command") {
+			return true
+		}
+		for _, arg := range call.Args {
+			ast.Inspect(arg, func(m ast.Node) bool {
+				lit, ok := m.(*ast.BasicLit)
+				if !ok || lit.Kind != token.STRING {
+					return true
+				}
+				v := strings.ToLower(lit.Value)
+				for _, bad := range []string{"python", ".py", "build_docs_cloudflare", `"make"`, "mkdocs"} {
+					if strings.Contains(v, bad) {
+						out = append(out, fmt.Sprintf("%s: exec call names %s", fset.Position(lit.Pos()), lit.Value))
+						break
+					}
+				}
+				return true
+			})
+		}
+		return true
+	})
+	return out
+}
+
+func TestDocsTestsExecuteNoPython(t *testing.T) {
+	files, err := filepath.Glob("*_test.go")
+	if err != nil || len(files) == 0 {
+		t.Fatalf("no test files found: %v", err)
+	}
+	for _, f := range files {
+		src, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, finding := range pythonExecFindings(f, src) {
+			t.Error(finding)
+		}
+	}
+	planted := map[string]string{
+		"python3":     `exec.Command("python3", "-c", "print(1)")`,
+		"the script":  `exec.CommandContext(ctx, "sh", "-c", "scripts/build_docs_cloudflare.py --mode preview")`,
+		"a py file":   `exec.Command("./check.py")`,
+		"make":        `exec.Command("make", "docs:check")`,
+		"mkdocs":      `exec.Command("mkdocs", "build")`,
+		"interpreter": `exec.Command("/usr/bin/python", "x")`,
+	}
+	for name, call := range planted {
+		src := "package p\nimport \"os/exec\"\nfunc f(ctx int) { _ = " + call + " }\n"
+		if len(pythonExecFindings("planted.go", []byte(src))) == 0 {
+			t.Errorf("planted exec of %s: the detector found nothing", name)
+		}
+	}
+	if got := pythonExecFindings("clean.go", []byte("package p\nimport \"os/exec\"\nfunc f() { _ = exec.Command(\"git\", \"ls-files\") }\n")); len(got) != 0 {
+		t.Errorf("a git call was flagged: %v", got)
+	}
 }

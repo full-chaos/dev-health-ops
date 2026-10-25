@@ -18,7 +18,7 @@ import (
 // that is the pods' whole boundary.
 
 var authBase = []string{
-	"--set", "authService.enabled=true",
+	"--set", "authService.phase=1",
 	"--set", "authService.database.secretName=auth-db",
 	"--set", "authService.signingKey.secretName=auth-key",
 	"--set", "authService.signingKey.keyId=auth-2026-10",
@@ -325,16 +325,16 @@ func TestAuthServiceRefusals(t *testing.T) {
 		args []string
 		want string
 	}{
-		"no database secret":  {[]string{"--set", "authService.enabled=true", "--set", "authService.signingKey.secretName=k", "--set", "authService.signingKey.keyId=x"}, "authService.database.secretName is required"},
-		"no signing secret":   {[]string{"--set", "authService.enabled=true", "--set", "authService.database.secretName=d", "--set", "authService.signingKey.keyId=x"}, "authService.signingKey.secretName is required"},
-		"no key id":           {[]string{"--set", "authService.enabled=true", "--set", "authService.database.secretName=d", "--set", "authService.signingKey.secretName=k"}, "authService.signingKey.keyId is required"},
+		"no database secret":  {[]string{"--set", "authService.phase=1", "--set", "authService.signingKey.secretName=k", "--set", "authService.signingKey.keyId=x"}, "authService.database.secretName is required"},
+		"no signing secret":   {[]string{"--set", "authService.phase=1", "--set", "authService.database.secretName=d", "--set", "authService.signingKey.keyId=x"}, "authService.signingKey.secretName is required"},
+		"no key id":           {[]string{"--set", "authService.phase=1", "--set", "authService.database.secretName=d", "--set", "authService.signingKey.secretName=k"}, "authService.signingKey.keyId is required"},
 		"no migration secret": {append(append([]string{}, authBase[:8]...), "--set", "authService.migrate.secretName=", "--set-json", `authService.networkPolicy.egress.database.to=[{"podSelector":{"matchLabels":{"app":"x"}}}]`), "authService.migrate.secretName is required"},
 		"same port":           {append(append([]string{}, authBase...), "--set", "authService.operatorPort=8095"), "must differ"},
 		"shutdown too long":   {append(append([]string{}, authBase...), "--set", "authService.shutdownTimeout=30s"), "must be below authService.terminationGracePeriodSeconds"},
 		"direct signing key":  {append(append([]string{}, authBase...), "--set", "authService.extraEnv[0].name=AUTH_SIGNING_KEY", "--set", "authService.extraEnv[0].value=x"), "AUTH_SIGNING_KEY"},
 		"key-set manifest":    {append(append([]string{}, authBase...), "--set", "authService.extraEnv[0].name=AUTH_SIGNING_KEYSET_FILE", "--set", "authService.extraEnv[0].value=/k/keyset.json"), "AUTH_SIGNING_KEYSET_FILE"},
 		"key-set, folded":     {append(append([]string{}, authBase...), "--set-json", `authService.extraEnv=[{"name":" auth_signing_keyset_file ","value":"/k/keyset.json"}]`), "AUTH_SIGNING_KEYSET_FILE"},
-		"policy without db":   {[]string{"--set", "authService.enabled=true", "--set", "authService.database.secretName=d", "--set", "authService.signingKey.secretName=k", "--set", "authService.signingKey.keyId=x", "--set", "authService.migrate.secretName=m"}, "authService.networkPolicy.egress.database.to is required"},
+		"policy without db":   {[]string{"--set", "authService.phase=1", "--set", "authService.database.secretName=d", "--set", "authService.signingKey.secretName=k", "--set", "authService.signingKey.keyId=x", "--set", "authService.migrate.secretName=m"}, "authService.networkPolicy.egress.database.to is required"},
 		"empty podSelector":   {append(append([]string{}, authBase...), "--set-json", `authService.networkPolicy.allowedFrom=[{"matchLabels":{}}]`), "non-empty matchLabels"},
 	}
 	for name, tc := range cases {

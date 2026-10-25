@@ -66,7 +66,7 @@ Worked example, 2 CPU cores per pod and 60 logins per minute at peak: `safe(logi
 
 ## Chart values
 
-The chart keeps auth-service off by default (`authService.enabled: false`). When it is on, the defaults follow the rules above:
+The chart keeps auth-service off by default (`authService.phase: 0`). When it is on (phase 1 or more), the defaults follow the rules above:
 
 | Value | Default | Why |
 |---|---|---|

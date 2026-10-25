@@ -74,7 +74,7 @@ func TestGoAPIAndQueryAPIReadSessionsInTheAuthSchema(t *testing.T) {
 
 var sessionsOn = append([]string{
 	"--set", "goApi.enabled=true",
-	"--set", "goApi.authProxy.sessions=true",
+	"--set", "authService.phase=2",
 }, authTrusted...)
 
 var sessionReaders = []string{

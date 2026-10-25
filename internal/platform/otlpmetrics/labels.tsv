@@ -14,6 +14,9 @@ daily_finalize_org_day_deferred_total		code: internal/jobs/metrics/daily/finaliz
 daily_finalize_org_day_defer_seconds	outcome	code: internal/jobs/metrics/daily/finalize_org_day_gate.go
 devhealth_acr_internal_requests_total	outcome,route	code: internal/apiservice/acr/internalauth.go
 devhealth_acr_llm_config_requests_total	outcome	code: internal/apiservice/acr/llmconfig.go
+devhealth_acr_svc_acr_compat_total	route	code: internal/apiservice/acr/workloadauth.go
+devhealth_acr_workload_accepted_total	route	code: internal/apiservice/acr/workloadauth.go
+devhealth_acr_workload_refused_total	reason,route	code: internal/apiservice/acr/workloadauth.go
 devhealth_api_auth_proxy_requests_total	aggregate,outcome	code: internal/apiservice/authproxy.go
 devhealth_api_auth_proxy_upstream_duration_seconds	aggregate	code: internal/apiservice/authproxy.go
 devhealth_auth_access_token_accepted_total	class,profile,service	code: internal/auth/accessverify/accessverify.go

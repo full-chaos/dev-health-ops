@@ -173,8 +173,8 @@ type okCreds struct{}
 func (okCreds) Find(context.Context, string) (acr.Credential, bool, error) {
 	return acr.Credential{ID: "cred", ServiceName: "acr", Scopes: []string{acr.EntitlementScope}}, true, nil
 }
-func (okCreds) MarkUsed(context.Context, string, time.Time) error   { return nil }
-func (okCreds) Audit(context.Context, string, string, string) error { return nil }
+func (okCreds) MarkUsed(context.Context, string, time.Time) error           { return nil }
+func (okCreds) Audit(context.Context, string, string, string, string) error { return nil }
 
 // TestInternalRoutesSucceedWithoutWriterViolations: a SUCCESSFUL response
 // through the real server wrapper (not the bare handler) on the internal

@@ -65,6 +65,8 @@ type routeAuth struct {
 	// audited routes write an audit row per outcome and stamp last_used_at
 	// (the entitlement route); the health route does neither.
 	audited bool
+	// workload lets the route also accept the acr-api workload token.
+	workload *WorkloadAuth
 }
 
 // extractToken is _extract_token: a case-sensitive "Bearer " header whose
@@ -81,11 +83,11 @@ func extractToken(r *http.Request) (string, bool) {
 	return token, true
 }
 
-func (a routeAuth) audit(ctx context.Context, credentialID, orgID, outcome string) bool {
+func (a routeAuth) audit(ctx context.Context, credentialID, principalID, orgID, outcome string) bool {
 	if !a.audited {
 		return true
 	}
-	if err := a.store.Audit(ctx, credentialID, orgID, outcome); err != nil {
+	if err := a.store.Audit(ctx, credentialID, principalID, orgID, outcome); err != nil {
 		a.logger.ErrorContext(ctx, "acr internal: audit write failed",
 			slog.String("route", a.route), slog.String("outcome", outcome), slog.String("error_type", errorKind(err)))
 		countInternal(ctx, a.route, "audit_failed")
@@ -122,7 +124,7 @@ func (a routeAuth) authenticate(w http.ResponseWriter, r *http.Request, orgID st
 		return Credential{}, false
 	}
 	deny := func(credentialID, outcome string, status int, detail string) (Credential, bool) {
-		if !a.audit(ctx, credentialID, orgID, outcome) {
+		if !a.audit(ctx, credentialID, "", orgID, outcome) {
 			a.unavailable(w, r, "audit_failed")
 			return Credential{}, false
 		}
@@ -132,6 +134,9 @@ func (a routeAuth) authenticate(w http.ResponseWriter, r *http.Request, orgID st
 			slog.String("credential_id", credentialID))
 		writeDetail(w, status, detail)
 		return Credential{}, false
+	}
+	if bearer, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer "); ok && !strings.HasPrefix(bearer, acrTokenPrefix) && isWorkloadToken(bearer) {
+		return a.authenticateWorkload(w, r, orgID, bearer)
 	}
 	token, ok := extractToken(r)
 	if !ok {
@@ -163,5 +168,35 @@ func (a routeAuth) authenticate(w http.ResponseWriter, r *http.Request, orgID st
 	}
 	a.logger.DebugContext(ctx, "acr internal: credential accepted",
 		slog.String("route", a.route), slog.String("credential_id", cred.ID))
+	countSvcAcrCompat(ctx, a.route)
 	return cred, true
+}
+
+// authenticateWorkload is the workload-token branch of authenticate: no
+// credential row exists, so nothing is looked up or stamped. A refusal is
+// counted and logged by reason, audited with a NULL principal (an audited
+// route), and answered 401, or 403 for a valid token of another workload. An
+// accepted token's subject is the Credential's PrincipalID, which the audit
+// row of the answer carries.
+func (a routeAuth) authenticateWorkload(w http.ResponseWriter, r *http.Request, orgID, token string) (Credential, bool) {
+	ctx := r.Context()
+	subject, reason := a.workload.decide(token)
+	if reason == "" {
+		countWorkloadAccepted(ctx, a.route)
+		a.logger.DebugContext(ctx, "acr internal: workload token accepted", slog.String("route", a.route))
+		return Credential{PrincipalID: subject}, true
+	}
+	status, outcome, detail := http.StatusUnauthorized, outcomeWorkloadRefused, "Unauthorized"
+	if reason == ReasonPrincipal {
+		status, outcome, detail = http.StatusForbidden, outcomeWorkloadForbidden, "Forbidden"
+	}
+	countWorkloadRefused(ctx, a.route, reason)
+	logWorkloadRefused(ctx, a.logger, a.route, subject, reason)
+	if !a.audit(ctx, "", "", orgID, outcome) {
+		a.unavailable(w, r, "audit_failed")
+		return Credential{}, false
+	}
+	countInternal(ctx, a.route, outcome)
+	writeDetail(w, status, detail)
+	return Credential{}, false
 }

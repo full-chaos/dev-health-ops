@@ -28,6 +28,7 @@ case "$*" in
   *" down "*)
     if [ -n "$FAKE_BLOCK_DOWN" ]; then exec sleep "$FAKE_BLOCK_DOWN"; fi ;;
   *" up "*)
+    printf '%s %s %s\n' "${AUTH_SESSION_SUCCESSOR_KEY:-}" "${AUTH_LOGIN_LOCKOUT_KEY:-}" "${AUTH_JWT_SECRET_KEY:+jwt}" >> "` + record + `.keys"
     if [ -n "$FAKE_BLOCK_UP" ]; then exec sleep "$FAKE_BLOCK_UP"; fi
     if [ -n "$FAKE_FAIL_UP" ]; then exit 1; fi ;;
   *" port "*) echo 127.0.0.1:12345 ;;
@@ -357,4 +358,77 @@ func TestAuthCorpusAcpLegStoresTheIssueCredentialAndGrantsBeforeTheSessionsFlag(
 
 func metric(aggregate string) string {
 	return `devhealth_api_auth_proxy_requests_total{aggregate="` + aggregate + `",outcome="forwarded"} 3`
+}
+
+// upKeys returns, per `compose up`, the successor key, the lockout key and "jwt" when the access-token secret was set
+// in the environment the script gave compose.
+func upKeys(t *testing.T, fake fakeDocker) [][3]string {
+	t.Helper()
+	raw, err := os.ReadFile(fake.record + ".keys")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out [][3]string
+	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+		var row [3]string
+		copy(row[:], strings.Fields(line))
+		out = append(out, row)
+	}
+	return out
+}
+
+const requiredServed = "/api/v1/auth/refresh,/api/v1/auth/logout,/api/v1/auth/login,/api/v1/auth/social-login"
+
+// Leg acp gives auth-service freshly made session keys through the compose environment only: never an argument, never
+// the output (CI masks them first), and none at all when AUTH_CORPUS_OMIT_AUTH_KEYS is set.
+func TestAuthCorpusAcpLegKeysStayOutOfArgumentsAndOutput(t *testing.T) {
+	metrics := metric("sessions") + "\n" + metric("local_login") + "\n" + metric("social")
+	fake, out, err := runAcpLeg(t, "FAKE_SERVED="+requiredServed, "FAKE_METRICS="+metrics)
+	if err != nil {
+		t.Fatalf("leg acp failed: %v\n%s", err, out)
+	}
+	rows := upKeys(t, fake)
+	if len(rows) == 0 {
+		t.Fatal("no compose up recorded")
+	}
+	calls := fake.calls(t)
+	for _, row := range rows {
+		if len(row[0]) != 43 || len(row[1]) != 43 || row[0] == row[1] || row[2] != "jwt" {
+			t.Fatalf("a compose up did not get two distinct 43-character keys and the access-token secret: %v", row)
+		}
+		for _, key := range row[:2] {
+			if strings.Contains(out, key) || strings.Contains(calls, key) {
+				t.Fatalf("a session key reached a docker argument or the output:\n%s\n%s", calls, out)
+			}
+		}
+	}
+}
+
+func TestAuthCorpusAcpLegMasksTheKeysBeforeAnythingElse(t *testing.T) {
+	metrics := metric("sessions") + "\n" + metric("local_login") + "\n" + metric("social")
+	fake, out, err := runAcpLeg(t, "GITHUB_ACTIONS=true", "FAKE_SERVED="+requiredServed, "FAKE_METRICS="+metrics)
+	if err != nil {
+		t.Fatalf("leg acp failed: %v\n%s", err, out)
+	}
+	row := upKeys(t, fake)[0]
+	for _, key := range row[:2] {
+		if got := strings.Count(out, key); got != 1 || !strings.Contains(out, "::add-mask::"+key+"\n") {
+			t.Errorf("a key appears %d times in the output, want once as the mask command:\n%s", got, out)
+		}
+		if strings.Index(out, "::add-mask::"+key) > strings.Index(out, "step 1:") {
+			t.Error("a key is masked after the first step started")
+		}
+	}
+}
+
+func TestAuthCorpusAcpLegOmitsEveryKeyWhenAsked(t *testing.T) {
+	fake, out, err := runAcpLeg(t, "AUTH_CORPUS_OMIT_AUTH_KEYS=1", "FAKE_SERVED=")
+	if err == nil || !strings.Contains(out, "required aggregate sessions is not served by auth-service") {
+		t.Fatalf("want a failure on the required aggregate sessions, got err=%v:\n%s", err, out)
+	}
+	for _, row := range upKeys(t, fake) {
+		if row != ([3]string{}) {
+			t.Fatalf("a compose up got a key although they were omitted: %v", row)
+		}
+	}
 }

@@ -75,6 +75,19 @@ chmod 0755 "${STUB_DIR}"
 chmod 0644 "${STUB_DIR}"/ca.pem "${STUB_DIR}"/server.pem "${STUB_DIR}"/server.key
 JWT_KEY="$(sed -n 's/^const Key = "\(.*\)"$/\1/p' "${ROOT}/internal/testsupport/sessionscenario/sessionscenario.go")"
 [ -n "${JWT_KEY}" ] || die "could not read sessionscenario.Key"
+# The session keys of auth-service's compat routes (leg acp), made now, masked in the CI log before anything else,
+# and held only in the private state file (mode 0600, removed with ${WORK}): never in an argument or the output.
+# AUTH_CORPUS_OMIT_AUTH_KEYS=1 leaves all of them out: the non-vacuity leg, which must then fail on a required
+# aggregate that is not served.
+SESSION_SUCCESSOR_KEY=""
+LOGIN_LOCKOUT_KEY=""
+if [ "${LEG}" = "acp" ] && [ -z "${AUTH_CORPUS_OMIT_AUTH_KEYS:-}" ]; then
+  SESSION_SUCCESSOR_KEY="$(head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=\n')"
+  LOGIN_LOCKOUT_KEY="$(head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=\n')"
+  if [ -n "${GITHUB_ACTIONS:-}" ]; then
+    printf '::add-mask::%s\n' "${SESSION_SUCCESSOR_KEY}" "${LOGIN_LOCKOUT_KEY}"
+  fi
+fi
 {
   printf 'export BUGSINK_SECRET_KEY=%q\n' "auth-corpus-external"
   printf 'export COMMIT=%q\n' "${COMMIT:-0000000000000000000000000000000000000000}"
@@ -87,7 +100,14 @@ JWT_KEY="$(sed -n 's/^const Key = "\(.*\)"$/\1/p' "${ROOT}/internal/testsupport/
   if [ "${LEG}" = "acp" ]; then
     printf 'export AUTH_PROXY_URL=%q\n' "http://auth-service:8095"
   fi
+  if [ "${LEG}" = "acp" ] && [ -z "${AUTH_CORPUS_OMIT_AUTH_KEYS:-}" ]; then
+    printf 'export AUTH_JWT_SECRET_KEY=%q\n' "${JWT_KEY}"
+    printf 'export AUTH_SESSION_SUCCESSOR_KEY=%q\n' "${SESSION_SUCCESSOR_KEY}"
+    printf 'export AUTH_LOGIN_LOCKOUT_KEY=%q\n' "${LOGIN_LOCKOUT_KEY}"
+  fi
 } >"${STATE}"
+chmod 0600 "${STATE}"
+unset SESSION_SUCCESSOR_KEY LOGIN_LOCKOUT_KEY
 # shellcheck disable=SC1090
 . "${STATE}"
 

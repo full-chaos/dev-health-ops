@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"os"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
@@ -13,6 +12,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/registerorg"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity/local"
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
 
 const (
@@ -40,7 +40,7 @@ type registerInput struct {
 
 // registerGetenv reads AUTH_AUTO_CREATE_ORG_ON_REGISTER on every request, as
 // go-api does; a test replaces it.
-var registerGetenv = os.Getenv
+var registerGetenv = secrets.ProcessGetenv
 
 // registerRoute is POST /api/v1/auth/register. Beside the user it inserts the
 // organization and owner membership go-api's register inserts, unless

@@ -43,6 +43,12 @@ func (u *unitsReader) kept(filter unitFilter) []runUnit {
 		if filter.SourceID != nil && unit.SourceID != *filter.SourceID {
 			continue
 		}
+		if filter.Since != nil && unit.BeforeAt != nil && unit.BeforeAt.Before(*filter.Since) {
+			continue
+		}
+		if filter.Before != nil && unit.SinceAt != nil && unit.SinceAt.After(*filter.Before) {
+			continue
+		}
 		out = append(out, unit)
 	}
 	return out
@@ -347,6 +353,17 @@ func TestRunUnitsPagedQuery(t *testing.T) {
 	_, status, body = serveUnits(t, reader(), "?dataset_key=files&source_id="+source.String()+"&since=2026-01-01&before=2026-12-31T00:00:00Z", now)
 	if status != http.StatusOK || strings.Count(body, `"sync_run_id"`) != 2 || !strings.Contains(body, `"filtered_unit_count":2`) {
 		t.Errorf("dataset and source filter: %d %s", status, body)
+	}
+	at := func(day int) *time.Time { d := time.Date(2026, 5, day, 0, 0, 0, 0, time.UTC); return &d }
+	windowed := reader()
+	windowed.units = append([]runUnit(nil), units...)
+	// inside, ends before the window, starts after it, no bounds, spans it
+	for i, bounds := range [][2]*time.Time{{at(10), at(20)}, {at(1), at(5)}, {at(25), at(28)}, {nil, nil}, {at(1), at(31)}} {
+		windowed.units[i].SinceAt, windowed.units[i].BeforeAt = bounds[0], bounds[1]
+	}
+	_, status, body = serveUnits(t, windowed, "?since=2026-05-12&before=2026-05-20", now)
+	if status != http.StatusOK || !strings.Contains(body, `"filtered_unit_count":3`) {
+		t.Errorf("date window: %d %s", status, body)
 	}
 	_, status, body = serveUnits(t, reader(), "?limit=3", now)
 	if status != http.StatusOK || strings.Contains(body, "filtered_unit_count") || strings.Count(body, `"sync_run_id"`) != 3 {

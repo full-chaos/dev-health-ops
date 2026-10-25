@@ -115,6 +115,42 @@ SELECT $1, $2, $3, integration_id, $4, 'github', $5, 'medium', 'incremental', $6
 		}
 	}
 
+	// Date window: a unit inside, one that ends before it, one that starts after
+	// it, one with NULL bounds and one that spans it; asked through the real SQL.
+	window := func(since, before any) {
+		v.exec(`INSERT INTO sync_run_units (id, org_id, sync_run_id, integration_id, source_id, provider, dataset_key, cost_class, mode,
+status, attempts, result, since_at, before_at, available_at, created_at, updated_at)
+SELECT $1, $2, $3, integration_id, $4, 'github', 'window', 'medium', 'incremental', 'success', 1, '{}'::json,
+ $5::timestamptz, $6::timestamptz, now(), now(), now() FROM sync_runs WHERE id = $3`, uuid.New(), v.org, run, sources[0], since, before)
+	}
+	window("2026-05-10 00:00:00+00", "2026-05-20 00:00:00+00")
+	window("2026-04-01 00:00:00+00", "2026-04-10 00:00:00+00")
+	window("2026-06-10 00:00:00+00", "2026-06-20 00:00:00+00")
+	window(nil, nil)
+	window("2026-04-01 00:00:00+00", "2026-06-30 00:00:00+00")
+	for _, tc := range []struct {
+		query string
+		want  int
+	}{
+		{"&since=2026-05-12&before=2026-05-18", 3},
+		{"&since=2026-05-12", 4},
+		{"&before=2026-05-18", 4},
+		{"&since=2026-06-25T00:00:00Z", 2},
+		{"&before=2026-03-01", 1},
+		{"", 5},
+	} {
+		code, body := v.call("GET", "/api/v1/admin/sync-runs/"+run.String()+"/units?offset=0&limit=100&dataset_key=window"+tc.query, "")
+		var parsed struct {
+			Filtered int `json:"filtered_unit_count"`
+			Units    []struct {
+				DatasetKey string `json:"dataset_key"`
+			} `json:"units"`
+		}
+		if err := json.Unmarshal([]byte(body), &parsed); code != http.StatusOK || err != nil || parsed.Filtered != tc.want || len(parsed.Units) != tc.want {
+			t.Errorf("window%s: %d filtered %d page %d (%v), want %d", tc.query, code, parsed.Filtered, len(parsed.Units), err, tc.want)
+		}
+	}
+
 	other := uuid.NewString()
 	pgseed.Org(t.Context(), t, v.pool, other, "enterprise")
 	for _, query := range []string{"", "?offset=0&limit=5", "?status=failed&offset=0"} {

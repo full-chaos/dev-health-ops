@@ -204,9 +204,9 @@ func TestEveryServedAuthRouteHasAnEndpointProfileRowAndNoRowIsStale(t *testing.T
 }
 
 // servedAuthRouteCount is every route the probe serves: four session routes, two social link routes,
-// four compatibility routes, the session issue route, the eight federated sign-in routes, the five credentials routes and the three operator
+// four compatibility routes, the session issue route, the eight federated sign-in routes, the six credentials routes and the three operator
 // paths on GET and HEAD, and GET and HEAD of the JWKS and the discovery document.
-const servedAuthRouteCount = 34
+const servedAuthRouteCount = 35
 
 // compareServedToRows returns the served routes with no row and the rows for
 // routes nothing serves, per method and listener.
@@ -308,7 +308,7 @@ func TestAuthEndpointProfileAnchorsStillPointAtTheirSymbols(t *testing.T) {
 		"/v1/identities/social": "PatternSocialLink", "/v1/identities/social/{id}": "PatternSocialUnlink",
 		"/api/v1/auth/verify": "PatternVerifyEmail", "/api/v1/auth/resend-verification": "PatternResendVerification",
 		"/api/v1/auth/forgot-password": "PatternForgotPassword", "/api/v1/auth/reset-password": "PatternResetPassword",
-		"/api/v1/auth/change-password": "PatternChangePassword",
+		"/api/v1/auth/change-password": "PatternChangePassword", "/api/v1/auth/register": "PatternRegister",
 	}
 	checked := 0
 	var walk func(node any, where string)

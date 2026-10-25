@@ -421,7 +421,7 @@ func TestServerRunsTheScopeMiddlewaresOutsideSecurityHeadersAndCORS(t *testing.T
 	scope := policy.NewScope(auth, quietLogger())
 	cfg := apiTestConfig()
 	cfg.CORSAllowedOrigins = []string{"https://app.example"}
-	server, err := NewServer(cfg, quietLogger(), nil, scope.OrgScope, scope.Impersonation)
+	server, err := NewServer(cfg, quietLogger(), nil, scope.Layers()...)
 	if err != nil {
 		t.Fatal(err)
 	}

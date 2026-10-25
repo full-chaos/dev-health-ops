@@ -972,7 +972,7 @@ func startGoAPI(t *testing.T, ctx context.Context, venue *venueoracle.Venue, mai
 	deps := apiservice.Deps{Pool: pool, Valkey: valkeyClient, ClickHouse: ch, Auth: auth, Guard: policy.NewGuard(auth, logger),
 		Verifier: verifier, Signer: signer, Invites: mailConfig}
 	scope := policy.NewScope(auth, logger)
-	server, err := apiservice.NewServer(cfg, logger, apiservice.Routes(deps, logger), scope.OrgScope, scope.Impersonation)
+	server, err := apiservice.NewServer(cfg, logger, apiservice.Routes(deps, logger), scope.Layers()...)
 	if err != nil {
 		t.Fatal(err)
 	}

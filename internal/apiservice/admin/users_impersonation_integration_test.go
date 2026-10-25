@@ -77,7 +77,7 @@ VALUES ($1, $2, $3, $4, now(), now(), now())`, uuid.New(), m.org, ids[m.user], m
 		}
 	}
 	scope := policy.NewScope(auth, logger)
-	server := httptest.NewServer(scope.OrgScope(scope.Impersonation(mux)))
+	server := httptest.NewServer(scope.Principal(scope.OrgScope(scope.Impersonation(mux))))
 	t.Cleanup(server.Close)
 
 	root, err := signer.Access(edgetoken.AccessClaims{UserID: ids["root"].String(), Email: "imp-root@example.com",

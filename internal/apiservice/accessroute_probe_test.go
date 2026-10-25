@@ -179,7 +179,7 @@ func probeServer(t *testing.T, store policy.Store, adjust func(*policy.Authentic
 		adjust(auth)
 	}
 	scope := policy.NewScope(auth, quietLogger())
-	server, err := NewServer(apiTestConfig(), quietLogger(), probeRoutes(policy.NewGuard(auth, quietLogger())), scope.OrgScope, scope.Impersonation)
+	server, err := NewServer(apiTestConfig(), quietLogger(), probeRoutes(policy.NewGuard(auth, quietLogger())), scope.Layers()...)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -438,7 +438,7 @@ func (s *Store) Exchange(ctx context.Context, credential contracts.SecretString)
 		return nil
 	})
 	if err != nil {
-		if errors.Is(err, ErrGraceUnavailable) {
+		if errors.Is(err, ErrGraceUnavailable) || errors.Is(err, ErrGuardRefused) {
 			return Result{Reason: ReasonDependency}, err
 		}
 		return Result{Reason: ReasonStoreUnavailable}, fmt.Errorf("%w: refresh exchange: %w", ErrStore, err)
@@ -459,6 +459,9 @@ type Issued struct {
 // rotate inserts the successor and consumes the parent. The caller holds the
 // session lock.
 func (s *Store) rotate(ctx context.Context, tx pgx.Tx, session Record, p presented, parent contracts.SecretString) (Issued, error) {
+	if err := runGuard(ctx, tx, session); err != nil {
+		return Issued{}, err
+	}
 	childID, err := uuid.NewRandom()
 	if err != nil {
 		return Issued{}, err
@@ -744,6 +747,9 @@ func actorID(a Actor) *string {
 }
 
 func (s *Store) recordExchange(ctx context.Context, result Result, err error) {
+	if errors.Is(err, ErrGuardRefused) {
+		return
+	}
 	s.exchanges.Add(ctx, 1, metric.WithAttributes(attribute.String("reason_code", string(result.Reason))))
 	switch {
 	case err != nil:

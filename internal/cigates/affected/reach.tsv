@@ -9,6 +9,7 @@ cmd/loadtest	main.go	cmd/loadtest
 cmd/registrydump	main.go	cmd/registrydump
 cmd/strip-agent-attribution	main.go	cmd/strip-agent-attribution
 internal/api/credentials	probes.go	cmd/dho
+internal/api/credentials	probes.go	deploy/helm/dev-health
 internal/api/credentials	probes.go	internal/adminops
 internal/api/credentials	probes.go	internal/api/credentials
 internal/api/credentials	probes.go	internal/api/externalingest
@@ -39,6 +40,7 @@ internal/api/credentials	probes.go	internal/auth/authapi
 internal/api/credentials	probes.go	internal/auth/authruntime
 internal/api/credentials	probes.go	internal/billingcli
 internal/apiservice	githubapp_config.go	cmd/dho
+internal/apiservice	githubapp_config.go	deploy/helm/dev-health
 internal/apiservice	githubapp_config.go	internal/api/githubapp
 internal/apiservice	githubapp_config.go	internal/api/integrationsadmin/backfillvenue
 internal/apiservice	githubapp_config.go	internal/api/integrationsadmin/discoveryvenue
@@ -64,6 +66,7 @@ internal/apiservice	githubapp_config.go	internal/auth/authruntime
 internal/auth/contracts	contracts.go	cmd/auth-migrate
 internal/auth/contracts	contracts.go	cmd/auth-service
 internal/auth/contracts	contracts.go	cmd/dho
+internal/auth/contracts	contracts.go	deploy/helm/dev-health
 internal/auth/contracts	contracts.go	internal/api/billing
 internal/auth/contracts	contracts.go	internal/api/externalingest
 internal/auth/contracts	contracts.go	internal/api/legacyingest

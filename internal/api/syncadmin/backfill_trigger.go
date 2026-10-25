@@ -17,6 +17,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
+	"github.com/full-chaos/dev-health-ops/internal/synchandoff"
 )
 
 // maxErrorTextLength is error_sanitize.DEFAULT_MAX_ERROR_TEXT_LENGTH.
@@ -181,24 +182,10 @@ func backfillOccurrenceID(job *backfillJob) string {
 
 const backfillOccurrenceMarker = "occurrence:"
 
-// checkBackfillScale refuses a window and scope the scheduler would refuse over
-// SYNC_RUN_MAX_UNITS (schedsync.UnitCapFromEnv; materializer.go: a plan over the
-// cap is quarantined). It is a floor, never an estimate above the truth: every
-// source plans at least one unit per window of the widest planner chunk (14
-// days), so only a run over that floor is refused. No cap (0) or no known
-// sources refuses nothing. The text names only the caller's own numbers.
+// checkBackfillScale is the shared scale check answered as this route's 422.
 func checkBackfillScale(days, sources, unitCap int64) error {
-	if unitCap <= 0 || sources <= 0 {
-		return nil
-	}
-	const widestChunkDays = 14
-	chunks := (days + widestChunkDays - 1) / widestChunkDays
-	if chunks < 1 {
-		chunks = 1
-	}
-	if floor := sources * chunks; floor > unitCap {
-		return refuse(http.StatusUnprocessableEntity, fmt.Sprintf(
-			"Backfill is too large: at least %d work units for this window and scope, over the limit of %d. Narrow the window or the scope.", floor, unitCap))
+	if err := synchandoff.CheckBackfillScale(days, sources, unitCap); err != nil {
+		return refuse(http.StatusUnprocessableEntity, err.Error())
 	}
 	return nil
 }

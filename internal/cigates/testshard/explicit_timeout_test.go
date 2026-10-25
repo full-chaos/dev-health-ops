@@ -8,10 +8,10 @@ import (
 	"testing"
 )
 
-// CHAOS-10359: every `go test` of the sharded test leg and of the race-excluded census names its -timeout, so a slow run panics
+// CHAOS-10359: every `go test` of the sharded test leg and of the race-excluded census run names its -timeout, so a slow run panics
 // with the names of the tests that were running (a goroutine dump) before the 30 min job cap cancels the job with no output.
 
-var explicitTimeoutFunctions = []string{"check_test_shard", "check_race_excluded_ran"}
+var explicitTimeoutFunctions = []string{"check_test_shard", "go_test_json_run"}
 
 var goTestWithoutTimeout = regexp.MustCompile(`go test (?:[^\n]*\s)?-mod=readonly`)
 
@@ -60,7 +60,7 @@ func readCheckGo(t *testing.T) string {
 func TestTheShardedTestLegNamesEveryGoTestTimeout(t *testing.T) {
 	missing, seen := callsMissingTimeout(t, readCheckGo(t))
 	if seen != 3 {
-		t.Fatalf("saw %d go test line(s) in %v, want 3 (the batch, the heavy package alone, one census row): the scan is stale", seen, explicitTimeoutFunctions)
+		t.Fatalf("saw %d go test line(s) in %v, want 3 (the batch, the heavy package alone, the one fresh census run): the scan is stale", seen, explicitTimeoutFunctions)
 	}
 	for _, line := range missing {
 		t.Errorf("go test without an explicit -timeout: %s", line)
@@ -73,9 +73,9 @@ func TestAGoTestLineWithoutATimeoutIsReported(t *testing.T) {
 	if len(missing) != 1 || !strings.Contains(missing[0], "check_test_shard") {
 		t.Fatalf("want exactly the planted check_test_shard line, got %v", missing)
 	}
-	script = strings.Replace(readCheckGo(t), "-count=1 -timeout 5m -v", "-count=1 -v", 1)
+	script = strings.Replace(readCheckGo(t), "-json -count=1 -timeout 10m", "-json -count=1", 1)
 	missing, _ = callsMissingTimeout(t, script)
-	if len(missing) != 1 || !strings.Contains(missing[0], "check_race_excluded_ran") {
+	if len(missing) != 1 || !strings.Contains(missing[0], "go_test_json_run") {
 		t.Fatalf("want exactly the planted census line, got %v", missing)
 	}
 }

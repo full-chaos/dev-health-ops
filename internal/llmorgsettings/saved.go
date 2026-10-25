@@ -32,10 +32,18 @@ func savedProviderKeys() []string {
 // configuration behind a closed gate is still saved, and its consumer
 // refuses it with its own reason.
 func HasSavedBYO(ctx context.Context, queryer SavedQueryer, orgID string) (bool, error) {
+	return hasSavedBYO(ctx, queryer, SettingsTable, orgID)
+}
+
+func savedProvidersSQL(relation SettingsRelation) string {
+	return `
+SELECT coalesce(json_agg(coalesce(value, '')), '[]'::json) FROM ` + relation.From() + `
+WHERE org_id = $1 AND category = $2 AND key = ANY($3) AND coalesce(value, '') <> ''`
+}
+
+func hasSavedBYO(ctx context.Context, queryer SavedQueryer, relation SettingsRelation, orgID string) (bool, error) {
 	var encoded []byte
-	err := queryer.QueryRow(ctx, `
-SELECT coalesce(json_agg(coalesce(value, '')), '[]'::json) FROM settings
-WHERE org_id = $1 AND category = $2 AND key = ANY($3) AND coalesce(value, '') <> ''`,
+	err := queryer.QueryRow(ctx, savedProvidersSQL(relation),
 		orgID, settingsCategoryLLM, savedProviderKeys()).Scan(&encoded)
 	if err != nil {
 		return false, fmt.Errorf("llmorgsettings: saved BYO providers for org %q: %w", orgID, err)
@@ -62,12 +70,16 @@ WHERE org_id = $1 AND category = $2 AND key = ANY($3) AND coalesce(value, '') <>
 // configuration of any purpose (auto-enrolment), else the plan or license
 // decision.
 func EffectiveServiceModel(ctx context.Context, queryer SavedQueryer, orgID string, decision licensing.Decision) (bool, error) {
+	return effectiveServiceModel(ctx, queryer, SettingsTable, orgID, decision)
+}
+
+func effectiveServiceModel(ctx context.Context, queryer SavedQueryer, relation SettingsRelation, orgID string, decision licensing.Decision) (bool, error) {
 	switch decision.Reason {
 	case licensing.ReasonEnabledByOrgOverride, licensing.ReasonOrgOverrideDisabled,
 		licensing.ReasonGlobalDisabled, licensing.ReasonInvalidFeatureState:
 		return decision.Allowed, nil
 	}
-	saved, err := HasSavedBYO(ctx, queryer, orgID)
+	saved, err := hasSavedBYO(ctx, queryer, relation, orgID)
 	if err != nil {
 		return false, err
 	}

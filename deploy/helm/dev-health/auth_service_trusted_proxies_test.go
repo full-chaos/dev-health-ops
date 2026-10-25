@@ -23,7 +23,7 @@ func envValue(container any, name string) (string, bool) {
 // With the go-api auth proxy on, auth-service believes the one forwarded address only from the listed peers, and
 // admits no pod but go-api's: trust without that boundary would let any caller name its own address.
 func TestAuthServiceTrustedProxiesRenderWithTheProxyOnAndTheBoundary(t *testing.T) {
-	docs, out, err := renderAuth(t, goAPIWithAuth("--set", "goApi.authProxy.sessions=true")...)
+	docs, out, err := renderAuth(t, goAPIWithAuth("--set", "authService.phase=2")...)
 	if err != nil {
 		t.Fatalf("render: %v\n%.500s", err, out)
 	}
@@ -42,14 +42,15 @@ func TestAuthServiceTrustedProxiesRenderWithTheProxyOnAndTheBoundary(t *testing.
 }
 
 func TestAuthServiceProxyOnWithNoTrustedProxiesFailsTheRender(t *testing.T) {
-	for _, flag := range []string{"sessions", "localLogin", "credentials", "social", "oidc", "saml"} {
+	for _, phase := range []string{"2", "3"} {
 		args := append(append([]string{"--set", "goApi.enabled=true"}, authBase...), sessionReaders...)
 		args = append(args, "--set", "authService.sessionKeys.successor.secretName=auth-session")
 		args = append(args, authValkey...)
-		args = append(args, "--set", "goApi.authProxy.sessions=true", "--set", "goApi.authProxy."+flag+"=true")
+		args = append(args, phase3Secrets...)
+		args = append(args, "--set", "authService.phase="+phase)
 		_, out, err := renderAuth(t, args...)
 		if err == nil || !strings.Contains(out, "authService.trustedProxies is required") {
-			t.Errorf("proxy flag %s with no trusted proxies: err=%v\n%.400s", flag, err, out)
+			t.Errorf("phase %s with no trusted proxies: err=%v\n%.400s", phase, err, out)
 		}
 	}
 }
@@ -68,7 +69,7 @@ func TestAuthServiceProxyOffRendersWithoutTrustedProxies(t *testing.T) {
 
 func TestAuthServiceTrustedProxiesRefuseTheWholeInternet(t *testing.T) {
 	for _, entry := range []string{"0.0.0.0/0", "::/0", "::ffff:0.0.0.0/96", "::ffff:10.0.0.0/104", "10.0.0.0/8, 0.0.0.0/0", "*", "0:0:0:0:0:ffff:10.0.0.9", "0:0:0:0:0:FFFF:a00:9", "::0:ffff:10.0.0.9", "0::ffff:10.0.0.9", "::0000:ffff:a00:9", "0:0:0:0:0:ffff:a00:9", "::FFFF:a00:9", "0000:0:0:0:0:ffff:a00:9", "::ffff:a00:9", "0:0:0:0:0:ffff:0:0/96", "::0:ffff:0:0/96", "0:0:0:0:0:FFFF::/96"} {
-		args := append(goAPIWithAuth("--set", "goApi.authProxy.sessions=true"), "--set-json", `authService.trustedProxies=["`+entry+`"]`)
+		args := append(goAPIWithAuth("--set", "authService.phase=2"), "--set-json", `authService.trustedProxies=["`+entry+`"]`)
 		_, out, err := renderAuth(t, args...)
 		if err == nil || !strings.Contains(out, "authService.trustedProxies") {
 			t.Errorf("entry %q rendered or named the wrong key: err=%v\n%.300s", entry, err, out)
@@ -107,7 +108,7 @@ func TestAuthServiceStoreIsRequiredExactlyWhenTheSessionRoutesAreOn(t *testing.T
 // stricter only where it says so on purpose (a /0 network, an IPv4-mapped form, a padded entry).
 func TestAuthServiceTrustedProxiesRenderIffTheServiceParses(t *testing.T) {
 	render := func(entry string) bool {
-		args := append(goAPIWithAuth("--set", "goApi.authProxy.sessions=true"), "--set-json", `authService.trustedProxies=["`+entry+`"]`)
+		args := append(goAPIWithAuth("--set", "authService.phase=2"), "--set-json", `authService.trustedProxies=["`+entry+`"]`)
 		_, _, err := renderAuth(t, args...)
 		return err == nil
 	}
@@ -156,7 +157,7 @@ func TestAuthServiceTrustedProxiesRenderIffTheServiceParses(t *testing.T) {
 // allowedFrom beside a proxy flag fails the render; the operator port (metricsFrom) is untouched.
 func TestAuthServiceProxyOnRefusesAnExtraAPIPortPeer(t *testing.T) {
 	extra := []string{"--set-json", `authService.networkPolicy.allowedFrom=[{"matchLabels":{"app":"other-pod"}}]`}
-	_, out, err := renderAuth(t, goAPIWithAuth(append([]string{"--set", "goApi.authProxy.sessions=true"}, extra...)...)...)
+	_, out, err := renderAuth(t, goAPIWithAuth(append([]string{"--set", "authService.phase=2"}, extra...)...)...)
 	if err == nil || !strings.Contains(out, "authService.networkPolicy.allowedFrom") {
 		t.Fatalf("proxy on with an extra API-port peer rendered or named the wrong key: err=%v\n%.400s", err, out)
 	}
@@ -188,7 +189,7 @@ func TestAuthServiceProxyOffKeepsAllowedFromAndMetricsFromOnTheirPorts(t *testin
 }
 
 func TestAuthServiceProxyOnKeepsMetricsFromOnTheOperatorPort(t *testing.T) {
-	args := goAPIWithAuth("--set", "goApi.authProxy.sessions=true", "--set-json", `authService.networkPolicy.metricsFrom=[{"matchLabels":{"app":"scraper"}}]`)
+	args := goAPIWithAuth("--set", "authService.phase=2", "--set-json", `authService.networkPolicy.metricsFrom=[{"matchLabels":{"app":"scraper"}}]`)
 	docs, out, err := renderAuth(t, args...)
 	if err != nil {
 		t.Fatalf("render: %v\n%.400s", err, out)
@@ -210,7 +211,7 @@ func TestAuthServiceProxyOnKeepsMetricsFromOnTheOperatorPort(t *testing.T) {
 // The trusted proxies are safe only while the auth-service NetworkPolicy admits go-api alone, so a disabled policy
 // beside a proxy flag fails the render; with the proxy off a disabled policy still renders.
 func TestAuthServiceProxyOnRefusesADisabledNetworkPolicy(t *testing.T) {
-	_, out, err := renderAuth(t, goAPIWithAuth("--set", "goApi.authProxy.sessions=true", "--set", "authService.networkPolicy.enabled=false")...)
+	_, out, err := renderAuth(t, goAPIWithAuth("--set", "authService.phase=2", "--set", "authService.networkPolicy.enabled=false")...)
 	if err == nil || !strings.Contains(out, "authService.networkPolicy.enabled") {
 		t.Fatalf("proxy on with the policy disabled rendered or named the wrong key: err=%v\n%.400s", err, out)
 	}

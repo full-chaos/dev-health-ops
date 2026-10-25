@@ -69,6 +69,8 @@ type fakeSessions struct {
 	// minted counts accepted exchanges: a successor a client never receives.
 	minted    int
 	legacyErr error
+	// exchanges counts every Exchange, accepted or refused: each one writes.
+	exchanges int
 }
 
 // createdSession is one CreateAudited call.
@@ -118,6 +120,7 @@ func (f *fakeSessions) RevokeLegacy(_ context.Context, legacy session.LegacyRefr
 }
 
 func (f *fakeSessions) Exchange(context.Context, contracts.SecretString) (session.Result, error) {
+	f.exchanges++
 	if f.err == nil && f.result.Reason.Success() {
 		f.minted++
 	}

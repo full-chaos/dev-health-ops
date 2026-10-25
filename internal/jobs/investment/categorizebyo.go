@@ -91,33 +91,52 @@ type orgCategorizeBYO struct {
 }
 
 // NewOrgCategorizeBYO wires the opt-in, the model gate, the org's categorize
-// configuration and its budget guard over the registry pool. A zero decryptor
-// makes every encrypted row unreadable, which the gate refuses as unreadable_row.
+// configuration and its budget guard over the worker's domain pool. Every
+// settings read goes through the definer functions of pgmigrate 0156 and 0158:
+// the domain role holds nothing on settings. A zero decryptor makes every
+// encrypted row unreadable, which the gate refuses as unreadable_row.
 func NewOrgCategorizeBYO(pool *pgxpool.Pool, decryptor providerfoundation.FernetDecryptor, logger *slog.Logger) CategorizeBYO {
-	store := llmorgsettings.Store{Pool: pool, Decryptor: decryptor}.ForPurpose(llmorgsettings.PurposeCategorize)
+	return newOrgCategorizeBYO(pool, decryptor, logger,
+		func(kind categorize.ProviderKind, apiKey, baseURL, model string) (categorize.Provider, error) {
+			return categorize.NewProviderFromCredentials(kind, apiKey, baseURL, model)
+		},
+		categorize.NewClefClient)
+}
+
+// newOrgCategorizeBYO is the production wiring with the two provider
+// constructors given, so a test drives it with stubs and never builds a real
+// provider (D6279).
+func newOrgCategorizeBYO(
+	pool *pgxpool.Pool, decryptor providerfoundation.FernetDecryptor, logger *slog.Logger,
+	newProvider func(kind categorize.ProviderKind, apiKey, baseURL, model string) (categorize.Provider, error),
+	newClef func(cfg categorize.ClefClientConfig) (*categorize.TypeSafeClient, error),
+) *orgCategorizeBYO {
+	store := llmorgsettings.Store{Pool: pool, Decryptor: decryptor, Relation: llmorgsettings.CategorizeBYODefiner}.ForPurpose(llmorgsettings.PurposeCategorize)
 	gate := llmorgsettings.Gate{
-		Source: llmorgsettings.PgSource{Licensing: licensing.PostgresStore{Pool: pool}, Queryer: pool, Config: store},
+		Source: llmorgsettings.PgSource{
+			Licensing: licensing.PostgresStore{Pool: pool}, Queryer: pool, Config: store,
+			Relation: llmorgsettings.CategorizeBYODefiner,
+		},
 		Logger: logger,
 	}
+	budget := llmbudget.PgStore{Pool: pool, Limit: llmbudget.LimitFromCategorizeBYODefiner}
 	return &orgCategorizeBYO{
 		logger: logger,
 		optedIn: func(ctx context.Context, orgID string) (bool, error) {
 			return llmorgsettings.CategorizeBYOEnabled(ctx, pool, orgID)
 		},
-		gate:   gate.Decide,
-		config: store.OrgConfig,
-		newProvider: func(kind categorize.ProviderKind, apiKey, baseURL, model string) (categorize.Provider, error) {
-			return categorize.NewProviderFromCredentials(kind, apiKey, baseURL, model)
-		},
+		gate:        gate.Decide,
+		config:      store.OrgConfig,
+		newProvider: newProvider,
 		guard: func(provider categorize.Provider, orgID string, kind categorize.ProviderKind, baseURL string) categorize.Provider {
 			return categorize.WithBudget(provider, llmbudget.Guard{
-				Store: llmbudget.PgStore{Pool: pool}, OrgID: orgID, Provider: string(kind), Model: provider.Model(),
+				Store: budget, OrgID: orgID, Provider: string(kind), Model: provider.Model(),
 				BaseURL: baseURL, Lookup: secrets.ProcessLookup,
 			})
 		},
-		newClef: categorize.NewClefClient,
+		newClef: newClef,
 		clefBudget: func(orgID, model, postURL string) *llmbudget.Guard {
-			return newClefGuard(llmbudget.PgStore{Pool: pool}, orgID, model, postURL)
+			return newClefGuard(budget, orgID, model, postURL)
 		},
 	}
 }

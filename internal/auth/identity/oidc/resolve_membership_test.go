@@ -41,6 +41,8 @@ func (s *resolveSessions) Issue(_ context.Context, req SessionRequest) (Tokens, 
 	return Tokens{AccessToken: "a"}, nil
 }
 
+func (*resolveSessions) Preflight(context.Context) error { return nil }
+
 type resolveJIT struct {
 	calls []SessionRequest
 	new   []FederatedAccount

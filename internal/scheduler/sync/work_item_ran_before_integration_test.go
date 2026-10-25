@@ -260,8 +260,10 @@ func TestLoadWorkItemLastSuccessAtLivePostgres(t *testing.T) {
 	if got := ask("another-org", integrationID); got != nil {
 		t.Fatalf("another org's integration id must not match: %v", got)
 	}
-	// The PR states the probe uses ix_sync_run_units_coverage_scan; plan the
-	// same statement with sequential scans disabled and require that index.
+	// The probe is bounded by one integration's unit rows through an index that leads with
+	// (org_id, integration_id): ix_sync_run_units_coverage_scan, or the partial
+	// ix_sync_run_units_failure_streak. Plan the same statement with sequential scans disabled
+	// and require one of them.
 	tx, err := fixture.pool.Begin(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -287,8 +289,8 @@ func TestLoadWorkItemLastSuccessAtLivePostgres(t *testing.T) {
 	if err := rows.Err(); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(plan.String(), "ix_sync_run_units_coverage_scan") {
-		t.Fatalf("probe does not use ix_sync_run_units_coverage_scan:\n%s", plan.String())
+	if !strings.Contains(plan.String(), "ix_sync_run_units_coverage_scan") && !strings.Contains(plan.String(), "ix_sync_run_units_failure_streak") {
+		t.Fatalf("probe uses neither ix_sync_run_units_coverage_scan nor ix_sync_run_units_failure_streak (both lead with org_id, integration_id):\n%s", plan.String())
 	}
 }
 

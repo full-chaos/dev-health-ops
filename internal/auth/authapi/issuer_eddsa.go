@@ -92,7 +92,7 @@ func (m *eddsaMinter) mint(ctx context.Context, grant Grant, now time.Time) (str
 	}
 	token, kid, err := m.signer.Sign(ctx, accessTokenTyp, payload)
 	if err != nil {
-		return "", "", fmt.Errorf("%w: %w", errIssue, err)
+		return "", "", fmt.Errorf("%w: %w: %w", errIssue, errSignerUnavailable, err)
 	}
 	return token, kid, nil
 }

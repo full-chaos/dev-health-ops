@@ -38,6 +38,9 @@ type Store struct {
 	// Now is injectable for tests exercising the org-override expiry edge;
 	// nil means time.Now().
 	Now func() time.Time
+	// Relation is where the readers read the org's rows from; the zero value is
+	// the settings table.
+	Relation SettingsRelation
 
 	purpose Purpose
 }
@@ -72,9 +75,7 @@ func (s Store) loadRawSettingsFrom(ctx context.Context, q rowQuerier, orgID stri
 	if orgID == "" {
 		return map[string]string{}, nil
 	}
-	rows, err := q.Query(ctx, `
-SELECT key, value, is_encrypted FROM settings
-WHERE org_id = $1 AND category = $2`, orgID, settingsCategoryLLM)
+	rows, err := q.Query(ctx, rawSettingsSQL(s.Relation), orgID, settingsCategoryLLM)
 	if err != nil {
 		return nil, fmt.Errorf("query org llm settings: %w", err)
 	}
@@ -113,6 +114,12 @@ WHERE org_id = $1 AND category = $2`, orgID, settingsCategoryLLM)
 		return nil, fmt.Errorf("iterate org llm settings: %w", err)
 	}
 	return settings, nil
+}
+
+func rawSettingsSQL(relation SettingsRelation) string {
+	return `
+SELECT key, value, is_encrypted FROM ` + relation.From() + `
+WHERE org_id = $1 AND category = $2`
 }
 
 // loadGatedSettings ports _load_org_llm_settings in full: an org with no

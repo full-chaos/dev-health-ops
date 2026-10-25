@@ -160,6 +160,7 @@ func TestRaceExcludedReceiptsFailOnEachPlantedFault(t *testing.T) {
 			}
 		})
 	}
+	t.Run("a census row that go list omits", censusRowThatGoListOmitsSubtests)
 }
 
 const shardFakeGo = `#!/usr/bin/env bash
@@ -193,7 +194,7 @@ done
 exit 0
 `
 
-func runShardWithFakeGo(t *testing.T, shard int, slowPackage string) (cmdResult, []string) {
+func runShardWithFakeGo(t *testing.T, shard int, slowPackage string, extraEnv ...string) (cmdResult, []string) {
 	t.Helper()
 	script := scriptPath(t, "ci/check_go.sh")
 	repo := filepath.Dir(filepath.Dir(script))
@@ -216,6 +217,7 @@ func runShardWithFakeGo(t *testing.T, shard int, slowPackage string) (cmdResult,
 	env := inheritedEnv([]string{"PATH", "TMPDIR", "GO_RACE_EXCLUDED_TESTS", "GO_QUALITY_SELECTION_FILE", "FAKE_SLOW_PACKAGE"},
 		"PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"), "TMPDIR="+work, "FAKE_REAL_GO="+realGo, "FAKE_GO_LOG="+logPath,
 		"FAKE_CENSUS="+filepath.Join(repo, "ci", "race_excluded_tests.tsv"), "FAKE_SLOW_PACKAGE="+slowPackage)
+	env = append(env, extraEnv...)
 	res := cmdSpec{dir: repo, env: env}.run("bash", script, "ci-leg", "test", fmt.Sprint(shard), "3")
 	raw, err := os.ReadFile(logPath)
 	if err != nil {
@@ -309,4 +311,64 @@ func hasField(line, want string) bool {
 		}
 	}
 	return false
+}
+
+const plantedUnlistedPackage = "internal/api/billing/testdata"
+
+func plantedCensus(t *testing.T) string {
+	t.Helper()
+	repo := filepath.Dir(filepath.Dir(scriptPath(t, "ci/check_go.sh")))
+	real := readText(t, filepath.Join(repo, "ci", "race_excluded_tests.tsv"))
+	path := filepath.Join(t.TempDir(), "planted-census.tsv")
+	if err := os.WriteFile(path, []byte(real+plantedUnlistedPackage+"\tTestPlanted\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// A census row whose package `go list ./...` omits (a stale row, an existing testdata directory) is in no shard plan: it must
+// fail every shard and every selection mode with the package named, never read as zero tests checked.
+func censusRowThatGoListOmitsSubtests(t *testing.T) {
+	script := scriptPath(t, "ci/check_go.sh")
+	repo := filepath.Dir(filepath.Dir(script))
+	planted := plantedCensus(t)
+	selection := filepath.Join(t.TempDir(), "selection.txt")
+	dirs, err := os.ReadDir(filepath.Join(repo, "internal", "cigates"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var selected []string
+	for _, d := range dirs {
+		if d.IsDir() {
+			selected = append(selected, "internal/cigates/"+d.Name())
+		}
+	}
+	if err := os.WriteFile(selection, []byte(fmt.Sprintf("AFFECTED %d\n%s\n", len(selected), strings.Join(selected, "\n"))), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Run("shard plan", func(t *testing.T) {
+		res := cmdSpec{dir: repo, env: inheritedEnv([]string{"GO_RACE_EXCLUDED_TESTS", "GO_QUALITY_SELECTION_FILE"}, "GO_RACE_EXCLUDED_TESTS="+planted)}.
+			run("bash", script, "race-excluded-shard-plan", "1", "3")
+		if res.code == 0 || !strings.Contains(res.stderr, plantedUnlistedPackage) {
+			t.Fatalf("exit %d, stderr %q: want a failure naming %s", res.code, tail(res.stderr, 500), plantedUnlistedPackage)
+		}
+	})
+	t.Run("full leg", func(t *testing.T) {
+		res, _ := runShardWithFakeGo(t, 2, "", "GO_RACE_EXCLUDED_TESTS="+planted)
+		if res.code == 0 || !strings.Contains(res.stderr, plantedUnlistedPackage) {
+			t.Fatalf("exit %d, stderr %q: want a failed leg naming %s", res.code, tail(res.stderr, 500), plantedUnlistedPackage)
+		}
+	})
+	t.Run("affected selection that excludes the package", func(t *testing.T) {
+		res, _ := runShardWithFakeGo(t, 2, "", "GO_RACE_EXCLUDED_TESTS="+planted, "GO_QUALITY_SELECTION_FILE="+selection)
+		if res.code == 0 || !strings.Contains(res.stderr, plantedUnlistedPackage) {
+			t.Fatalf("exit %d, stderr %q: want a failed leg naming %s", res.code, tail(res.stderr, 500), plantedUnlistedPackage)
+		}
+	})
+	t.Run("clean control", func(t *testing.T) {
+		res, _ := runShardWithFakeGo(t, 2, "", "GO_QUALITY_SELECTION_FILE="+selection)
+		if res.code != 0 {
+			t.Fatalf("the real census under the same selection exited %d: %s", res.code, tail(res.stderr+res.stdout, 1500))
+		}
+	})
 }

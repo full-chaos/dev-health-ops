@@ -255,6 +255,7 @@ for ((i = 0; i < ${#args[@]}; i++)); do
   [ "${args[i]}" = "--jq" ] && jqexpr="${args[i+1]}"
 done
 case "${args[*]}" in
+  *status=queued*|*status=in_progress*) echo "${args[*]}" >> "$STUB_LOG.gets" ;;&
   *status=queued*) f="$STUB_DIR/queued.json" ;;
   *status=in_progress*) f="$STUB_DIR/in_progress.json" ;;
   *) echo "unexpected gh call: ${args[*]}" >&2; exit 9 ;;
@@ -263,7 +264,7 @@ esac
 jq -r "$jqexpr" "$f"
 `
 
-func runCancelScript(t *testing.T, scriptRoot string, env ...string) (string, []string) {
+func runCancelScript(t *testing.T, scriptRoot string, env ...string) (string, []string, int) {
 	t.Helper()
 	dir := t.TempDir()
 	for name, body := range map[string]string{"gh": ghStub, "queued.json": fixtureQueued, "in_progress.json": fixtureInProgress} {
@@ -297,19 +298,26 @@ func runCancelScript(t *testing.T, scriptRoot string, env ...string) (string, []
 		}
 	}
 	sort.Strings(ids)
-	return string(out), ids
+	gets := 0
+	if b, err := os.ReadFile(logf + ".gets"); err == nil {
+		gets = len(strings.Fields(strings.ReplaceAll(string(b), "\n", " "))) / len(strings.Fields(strings.SplitN(string(b), "\n", 2)[0]))
+	}
+	return string(out), ids, gets
 }
 
 func TestStackedQueueCancelSelectsOnlyTheChain(t *testing.T) {
 	root := rootOf(t)
-	_, ids := runCancelScript(t, root)
+	_, ids, gets := runCancelScript(t, root)
+	if gets != 6 {
+		t.Fatalf("run-list GETs %d, want 6 (queued and in_progress, 3 pages each at most)", gets)
+	}
 	if got, want := strings.Join(ids, ","), "101,102,103,201"; got != want {
 		t.Fatalf("cancelled runs %s, want %s (children, grandchildren; never the red run 105, an unrelated entry 104, a non-queue or look-alike branch 202-206)", got, want)
 	}
 }
 
 func TestStackedQueueCancelDryRunWritesNothing(t *testing.T) {
-	out, ids := runCancelScript(t, rootOf(t), "DRY_RUN=1")
+	out, ids, _ := runCancelScript(t, rootOf(t), "DRY_RUN=1")
 	if len(ids) != 0 {
 		t.Fatalf("dry run wrote: %v", ids)
 	}
@@ -320,13 +328,13 @@ func TestStackedQueueCancelDryRunWritesNothing(t *testing.T) {
 
 func TestStackedQueueCancelSurvivesFailures(t *testing.T) {
 	root := rootOf(t)
-	if _, ids := runCancelScript(t, root, "STUB_POST_RC=1"); len(ids) != 4 {
+	if _, ids, _ := runCancelScript(t, root, "STUB_POST_RC=1"); len(ids) != 4 {
 		t.Fatalf("a failed cancel must not stop the others: attempted %v", ids)
 	}
-	if _, ids := runCancelScript(t, root, "STUB_LIST_FAIL=1"); len(ids) != 0 {
+	if _, ids, _ := runCancelScript(t, root, "STUB_LIST_FAIL=1"); len(ids) != 0 {
 		t.Fatalf("an unreadable run list must cancel nothing: %v", ids)
 	}
-	if _, ids := runCancelScript(t, root, "HEAD_SHA=not-a-sha"); len(ids) != 0 {
+	if _, ids, _ := runCancelScript(t, root, "HEAD_SHA=not-a-sha"); len(ids) != 0 {
 		t.Fatalf("a malformed HEAD_SHA must cancel nothing: %v", ids)
 	}
 }
@@ -343,10 +351,11 @@ func TestStackedQueueCancelPlantedSelectionFaults(t *testing.T) {
 		{cancelScript, `    [ -n "${frontier[${BASH_REMATCH[1]}]:-}" ] || continue
 `, ``},
 		{cancelScript, `for status in queued in_progress; do`, `for status in queued; do`},
+		{cancelScript, `max_pages=3`, `max_pages=30`},
 	} {
 		tmp := plantTree(t, root, []string{cancelScript}, m)
-		_, ids := runCancelScript(t, tmp)
-		if strings.Join(ids, ",") == "101,102,103,201" {
+		_, ids, gets := runCancelScript(t, tmp)
+		if strings.Join(ids, ",") == "101,102,103,201" && gets == 6 {
 			t.Errorf("planted selection fault was not caught: %q -> %q", m.old, m.new)
 		}
 	}

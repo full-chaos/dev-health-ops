@@ -20,11 +20,15 @@ dry_run="${DRY_RUN:-0}"
 branch_re='^gh-readonly-queue/main/pr-[0-9]+-([0-9a-f]{40})$'
 [[ "${head_sha}" =~ ^[0-9a-f]{40}$ ]] || { echo "HEAD_SHA is not a 40-char sha; nothing cancelled"; exit 0; }
 
+max_pages=3
 rows=""
 for status in queued in_progress; do
-  page="$(gh api --paginate "repos/${repo}/actions/runs?event=merge_group&status=${status}&per_page=100" \
-    --jq '.workflow_runs[] | [.id, .head_branch, .head_sha, .name] | @tsv')" || page=""
-  rows+="${page}"$'\n'
+  for ((p = 1; p <= max_pages; p++)); do
+    page="$(gh api "repos/${repo}/actions/runs?event=merge_group&status=${status}&per_page=100&page=${p}" \
+      --jq '.workflow_runs[] | [.id, .head_branch, .head_sha, .name] | @tsv')" || page=""
+    [ -n "${page}" ] || break
+    rows+="${page}"$'\n'
+  done
 done
 
 declare -A frontier=(["${head_sha}"]=1)

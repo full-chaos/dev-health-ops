@@ -165,6 +165,7 @@ internal/cigates/chparams	chparams_test.go
 internal/cigates/chpin	chpin_test.go
 internal/cigates/docmaketargets	docmaketargets_test.go
 internal/cigates/docs	docs_helpers_test.go
+internal/cigates/docs	parity_test.go
 internal/cigates/docs	repo_paths_test.go
 internal/cigates/docsprepare	docsprepare.go
 internal/cigates/docsprepare	docsprepare_test.go
@@ -202,6 +203,7 @@ internal/cigates/docstools	refusals_test.go
 internal/cigates/docstools	validate_inventory_argparse_test.go
 internal/cigates/docstools	validate_inventory_review.go
 internal/cigates/docstools	validate_inventory_review_cases_test.go
+internal/cigates/docstools	validatedsite.go
 internal/cigates/emitscan	scan.go
 internal/cigates/frozengoldens	frozengoldens.go
 internal/cigates/frozengoldens	frozengoldens_test.go

@@ -933,6 +933,8 @@ the entry is valid, nothing otherwise. The chart refuses /0 and IPv4-mapped form
 {{- end -}}
 {{- if $shape -}}
 {{- $ok = true -}}
+{{- /* IPv4-mapped in every spelling: five zero groups then ffff, any case, compressed or not, hex tail. */ -}}
+{{- if and (regexMatch "^0{1,4}$" (index $groups 0)) (regexMatch "^0{1,4}$" (index $groups 1)) (regexMatch "^0{1,4}$" (index $groups 2)) (regexMatch "^0{1,4}$" (index $groups 3)) (regexMatch "^0{1,4}$" (index $groups 4)) (eq (lower (index $groups 5)) "ffff") }}{{- $ok = false }}{{- end -}}
 {{- if $hasPrefix -}}
 {{- $p := int $prefix -}}
 {{- if gt $p 128 }}{{- $ok = false }}{{- else -}}

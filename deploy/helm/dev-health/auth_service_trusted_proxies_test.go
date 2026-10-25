@@ -67,7 +67,7 @@ func TestAuthServiceProxyOffRendersWithoutTrustedProxies(t *testing.T) {
 }
 
 func TestAuthServiceTrustedProxiesRefuseTheWholeInternet(t *testing.T) {
-	for _, entry := range []string{"0.0.0.0/0", "::/0", "::ffff:0.0.0.0/96", "::ffff:10.0.0.0/104", "10.0.0.0/8, 0.0.0.0/0", "*"} {
+	for _, entry := range []string{"0.0.0.0/0", "::/0", "::ffff:0.0.0.0/96", "::ffff:10.0.0.0/104", "10.0.0.0/8, 0.0.0.0/0", "*", "0:0:0:0:0:ffff:10.0.0.9", "0:0:0:0:0:FFFF:a00:9", "::0:ffff:10.0.0.9", "0::ffff:10.0.0.9", "::0000:ffff:a00:9", "0:0:0:0:0:ffff:a00:9", "::FFFF:a00:9", "0000:0:0:0:0:ffff:a00:9", "::ffff:a00:9", "0:0:0:0:0:ffff:0:0/96", "::0:ffff:0:0/96", "0:0:0:0:0:FFFF::/96"} {
 		args := append(goAPIWithAuth("--set", "goApi.authProxy.sessions=true"), "--set-json", `authService.trustedProxies=["`+entry+`"]`)
 		_, out, err := renderAuth(t, args...)
 		if err == nil || !strings.Contains(out, "authService.trustedProxies") {
@@ -113,7 +113,10 @@ func TestAuthServiceTrustedProxiesRenderIffTheServiceParses(t *testing.T) {
 	}
 	stricterOnPurpose := map[string]string{
 		"0.0.0.0/0": "/0", "::/0": "/0", "10.0.0.0/0": "/0", "::ffff:10.0.0.9": "IPv4-mapped", " 10.0.0.1": "padded",
-		"10.0.0.0/8, 0.0.0.0/0": "a list in one entry",
+		"10.0.0.0/8, 0.0.0.0/0":   "a list in one entry",
+		"0:0:0:0:0:ffff:10.0.0.9": "IPv4-mapped", "0:0:0:0:0:FFFF:a00:9": "IPv4-mapped", "::0:ffff:10.0.0.9": "IPv4-mapped", "0::ffff:10.0.0.9": "IPv4-mapped",
+		"::0000:ffff:a00:9": "IPv4-mapped", "0:0:0:0:0:ffff:a00:9": "IPv4-mapped", "::FFFF:a00:9": "IPv4-mapped", "0000:0:0:0:0:ffff:a00:9": "IPv4-mapped",
+		"::ffff:a00:9": "IPv4-mapped",
 	}
 	entries := []string{
 		"10.8.0.0/16", "10.9.0.5", "10.9.0.5/32", "172.16.0.0/12", "10.0.0.0/8", "2001:db8::/32", "fd00::/8", "2001:db8::1", "fd00::1/128",
@@ -122,6 +125,7 @@ func TestAuthServiceTrustedProxiesRenderIffTheServiceParses(t *testing.T) {
 		"1::2::3", ":::1", "12345::1", "1:2:3:4:5:6:7", "1:2:3:4:5:6:7:8:9", "g::1", "fd00::/130", "fd00::1/1x", "10.0.0.0/", "fe80::1%eth0",
 		"2001:db8::1/32", "fe80::/7", "192.168.1.0/23", "not-an-ip", "garbage/8", "*", "10.0.0.0/8, 0.0.0.0/0",
 		"0.0.0.0/0", "::/0", "10.0.0.0/0", "::ffff:10.0.0.9", " 10.0.0.1",
+		"0:0:0:0:0:ffff:10.0.0.9", "0:0:0:0:0:FFFF:a00:9", "::0:ffff:10.0.0.9", "0::ffff:10.0.0.9", "::0000:ffff:a00:9", "0:0:0:0:0:ffff:a00:9", "::FFFF:a00:9", "0000:0:0:0:0:ffff:a00:9", "::ffff:a00:9", "0:0:0:0:0:ffff:0:0/96", "::0:ffff:0:0/96", "0:0:0:0:0:FFFF::/96",
 	}
 	var parsedAndRendered, refusedByBoth int
 	for _, entry := range entries {

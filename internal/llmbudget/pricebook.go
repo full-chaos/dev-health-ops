@@ -35,10 +35,12 @@ import (
 //     256K, Singapore over 256K). The page lists no qwen-plus cache price.
 //   - qwen on Cloudflare Workers AI: https://developers.cloudflare.com/workers-ai/platform/pricing/
 //     (last updated 2026-10-15). The daily free neurons are not deducted.
+//   - clef on Cloudflare Workers AI (rows added 2026-10-24, which is why the list
+//     version is that day's): same pricing page, last updated Oct 20, 2026.
 
 // ListPricingVersion is the version of this list, stored with each
 // reservation it prices. The OpenAI book keeps PricingVersion.
-const ListPricingVersion = "provider-list-2026-10-16.v1"
+const ListPricingVersion = "provider-list-2026-10-24.v1"
 
 type listPriceRow struct {
 	provider string
@@ -62,6 +64,9 @@ var (
 	// workersAIRoute is the Workers AI OpenAI-compatible base path; the client
 	// posts to <base>/chat/completions, so no other path reaches Workers AI.
 	workersAIRoute = regexp.MustCompile(`\A/client/v4/accounts/[^/]+/ai/v1/?\z`)
+	// clefRoute is the path a clef request is POSTed to, the one the budget guard
+	// prices: the account, then /ai/run/@cf/cloudflare/<clef|clef-flash>.
+	clefRoute = regexp.MustCompile(`\A/client/v4/accounts/[0-9a-f]{32}/ai/run/@cf/cloudflare/clef(-flash)?\z`)
 
 	// defaultHosts is the host of each provider's default endpoint in the
 	// shared llm package: the endpoint a call with no base URL reaches.
@@ -99,6 +104,14 @@ var listPrices = []listPriceRow{
 	{provider: "qwen", hosts: workersAIHosts, route: workersAIRoute, model: "@cf/qwen/qwen3.8-27b", rates: listRates(450_000, 450_000, 3_200_000)},
 	{provider: "qwen", hosts: workersAIHosts, route: workersAIRoute, model: "@cf/qwen/qwq-32b", rates: listRates(660_000, 660_000, 1_000_000)},
 	{provider: "qwen", hosts: workersAIHosts, route: workersAIRoute, model: "@cf/qwen/qwen2.5-coder-32b-instruct", rates: listRates(660_000, 660_000, 1_000_000)},
+
+	// clef on Cloudflare Workers AI, a SystemOne decision model: $0.24 per M input
+	// tokens (21,818 neurons), clef-flash $0.038 (3,455 neurons); output tokens
+	// are not charged and no cache price is listed. Source:
+	// https://developers.cloudflare.com/workers-ai/platform/pricing/ (last
+	// updated Oct 20, 2026; read 2026-10-24).
+	{provider: "clef", hosts: workersAIHosts, route: clefRoute, model: "clef", rates: listRates(240_000, 240_000, 0)},
+	{provider: "clef", hosts: workersAIHosts, route: clefRoute, model: "clef-flash", rates: listRates(38_000, 38_000, 0)},
 }
 
 func utcDay(year int, month time.Month, day int) time.Time {

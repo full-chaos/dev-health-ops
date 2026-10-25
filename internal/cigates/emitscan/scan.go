@@ -1030,7 +1030,7 @@ func isMajorVersion(element string) bool {
 // attribute set: a label assembled in a slice or a set is a metric label too.
 func (s *fileScan) markMetricFunctions(file *ast.File) {
 	flagged := map[ast.Node]bool{} // a function with a metric-options or attribute-set call anywhere in its body, nested closures included
-	var stack []ast.Node
+	var stack, funcs []ast.Node    // every open node; the open functions among them, so the nearest one is found in O(1)
 	isFunc := func(node ast.Node) bool {
 		switch fn := node.(type) {
 		case *ast.FuncDecl:
@@ -1044,27 +1044,23 @@ func (s *fileScan) markMetricFunctions(file *ast.File) {
 		if node == nil {
 			top := stack[len(stack)-1]
 			stack = stack[:len(stack)-1]
-			if isFunc(top) && flagged[top] {
-				for i := len(stack) - 1; i >= 0; i-- {
-					if isFunc(stack[i]) {
-						flagged[stack[i]] = true
-						break
-					}
+			if isFunc(top) {
+				funcs = funcs[:len(funcs)-1]
+				if flagged[top] && len(funcs) > 0 {
+					flagged[funcs[len(funcs)-1]] = true
 				}
 			}
 			return true
 		}
 		stack = append(stack, node)
-		if call, ok := node.(*ast.CallExpr); ok {
+		if isFunc(node) {
+			funcs = append(funcs, node)
+		}
+		if call, ok := node.(*ast.CallExpr); ok && len(funcs) > 0 {
 			pkg, name, ok := s.qualified(call.Fun)
 			if ok && ((pkg == "metric" && (name == "WithAttributes" || name == "WithAttributeSet")) ||
 				(pkg == "attribute" && name == "NewSet")) {
-				for i := len(stack) - 1; i >= 0; i-- {
-					if isFunc(stack[i]) {
-						flagged[stack[i]] = true
-						break
-					}
-				}
+				flagged[funcs[len(funcs)-1]] = true
 			}
 		}
 		return true

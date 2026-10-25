@@ -21,6 +21,9 @@ spec:
     {{- if and .Values.goApi.enabled .Values.goApi.internal.enabled }}
     {{- $excluded = append $excluded "go-api" }}
     {{- end }}
+    {{- if include "dev-health.queryApiOwnNetworkPolicy" . }}
+    {{- $excluded = append $excluded "query-api" }}
+    {{- end }}
     {{- if .Values.authService.enabled }}
     {{- $excluded = concat $excluded (list "auth-service") }}
     {{- if .Values.authService.migrate.enabled }}{{- $excluded = concat $excluded (list "auth-migrate") }}{{- end }}
@@ -31,6 +34,8 @@ spec:
     admits every pod on every port. The go-api pods are gated by their own policy (go-api-internal)
     so the internal port is reachable only from goApi.internal.allowedFrom; they keep this
     policy's egress through the go-api-egress policy below.
+    The query-api pods, while their internal or MCP listener is on, likewise: the -ingress-query-api policy admits
+    queryApi.port, the query-api-internal and query-api-mcp policies their own ports, and -query-api-egress below.
     CHAOS-4886: the auth pods are gated by their own policies (auth-service, auth-migrate) and,
     unlike go-api, get NO egress from this one: their database and DNS egress is the whole of it.
     */}}
@@ -52,22 +57,7 @@ spec:
     - from:
         - podSelector: {}
   egress:
-    # DNS resolution
-    - to:
-        - namespaceSelector: {}
-      ports:
-        - protocol: UDP
-          port: 53
-    # Internal communication
-    - to:
-        - podSelector: {}
-    # External HTTPS (GitHub, GitLab, Jira, Stripe APIs)
-    - to:
-        - ipBlock:
-            cidr: 0.0.0.0/0
-      ports:
-        - protocol: TCP
-          port: 443
+    {{- include "dev-health.networkPolicyEgress" . | trim | nindent 4 }}
 {{- /* CHAOS-10743: with goApi.networkPolicy.enabled the go-api-internal policy admits the controller (its pods, not its namespace) to the fenced ports, so this namespace-wide go-api rule is not rendered. */}}
 {{- range $target := list (dict "component" "go-api" "enabled" (and .Values.goApi.enabled (not .Values.goApi.networkPolicy.enabled)) "port" .Values.goApi.port) (dict "component" "web" "enabled" .Values.web.enabled "port" .Values.web.port) (dict "component" "query-api" "enabled" .Values.queryApi.enabled "port" .Values.queryApi.port) }}
 {{- if $target.enabled }}
@@ -95,6 +85,14 @@ spec:
       ports:
         - protocol: TCP
           port: {{ $target.port }}
+    {{- if and (eq $target.component "query-api") (include "dev-health.queryApiOwnNetworkPolicy" $) }}
+    # The pods of the release namespace reach the query-api Service port and no other query-api port.
+    - from:
+        - podSelector: {}
+      ports:
+        - protocol: TCP
+          port: {{ $target.port }}
+    {{- end }}
 {{- end }}
 {{- end }}
 {{- if and .Values.goApi.enabled .Values.goApi.internal.enabled }}
@@ -113,21 +111,24 @@ spec:
   policyTypes:
     - Egress
   egress:
-    # DNS resolution
-    - to:
-        - namespaceSelector: {}
-      ports:
-        - protocol: UDP
-          port: 53
-    # Internal communication
-    - to:
-        - podSelector: {}
-    # External HTTPS (GitHub, GitLab, Jira, Stripe APIs)
-    - to:
-        - ipBlock:
-            cidr: 0.0.0.0/0
-      ports:
-        - protocol: TCP
-          port: 443
+    {{- include "dev-health.networkPolicyEgress" . | trim | nindent 4 }}
+{{- end }}
+{{- if include "dev-health.queryApiOwnNetworkPolicy" . }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "dev-health.fullname" . }}-query-api-egress
+  namespace: {{ include "dev-health.namespace" . }}
+  labels:
+    {{- include "dev-health.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "dev-health.componentSelectorLabels" (dict "component" "query-api" "context" $) | nindent 6 }}
+  policyTypes:
+    - Egress
+  egress:
+    {{- include "dev-health.networkPolicyEgress" . | trim | nindent 4 }}
 {{- end }}
 {{- end }}

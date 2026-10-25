@@ -266,3 +266,31 @@ func TestPartiallyReadableConstIsAFinding(t *testing.T) {
 		t.Errorf("rules = %q, want R1", got)
 	}
 }
+
+// Finding the function that holds a metric-options call costs O(1) per node, however deep non-function nesting goes, and
+// a metric call in a closure still marks the constructors of every function around it, and only those.
+func TestMetricFunctionMarkingIsLinearAndKeepsItsScope(t *testing.T) {
+	const depth = 20000
+	deep := "func f(c metric.Int64Counter, v string) {\n\tx := attribute.String(\"user_id\", v)\n\t_ = x\n\t_ = " +
+		strings.Repeat("metric.WithAttributes(", depth) + strings.Repeat(")", depth) + "\n\t_ = " +
+		strings.Repeat("metric.WithAttributes(", depth) + strings.Repeat(")", depth) + "\n}\n"
+	var got []emitscan.Finding
+	timed(t, "2 x 20000 nested metric calls", 600*time.Millisecond, func() string { got = scanSource(t, header+deep); return "" })
+	if !hasFinding(got, "R2", "user_id") && !tripped(got) {
+		t.Errorf("deep nesting: findings = %v, want R2 user_id or the census finding", got)
+	}
+
+	flaggedClosures := "func f(c metric.Int64Counter, v string) {\n\t_ = " + strings.Repeat("g(func() { _ = metric.WithAttributes() }, ", 24000) + "0" + strings.Repeat(")", 24000) + "\n}\n"
+	timed(t, "24000 nested calls each holding a metric closure", 600*time.Millisecond, func() string { scanSource(t, header+flaggedClosures); return "" })
+
+	closure := "func f(c metric.Int64Counter, v string) {\n\tx := attribute.String(\"user_id\", v)\n\t_ = x\n\tfunc() {\n\t\t_ = metric.WithAttributes()\n\t}()\n}\n"
+	if got := scanSource(t, header+closure); !hasFinding(got, "R2", "user_id") {
+		t.Errorf("closure: findings = %v, want R2 user_id (the metric call in the closure marks the function around it)", got)
+	}
+
+	scoped := "func f(c metric.Int64Counter) {\n\tfunc() {\n\t\tfunc() {\n\t\t\t_ = metric.WithAttributes()\n\t\t}()\n\t}()\n}\n" +
+		"func g(v string) {\n\t_ = attribute.String(\"user_id\", v)\n}\n"
+	if got := scanSource(t, header+scoped); hasFinding(got, "R2", "user_id") {
+		t.Errorf("scoped: findings = %v, a function without a metric call must stay unmarked", got)
+	}
+}

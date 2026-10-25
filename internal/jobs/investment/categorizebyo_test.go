@@ -268,7 +268,7 @@ func TestAnOptedInOrgWithAUsableOwnModelGetsItsOwnBackend(t *testing.T) {
 // The closed set of refusal codes is pinned: a new code is a new decision.
 func TestTheCategorizeRefusalCodeSetIsClosed(t *testing.T) {
 	want := []string{
-		"ai_features_turned_off", "categorize_byo_model_unreported", "categorize_byo_unavailable", "invalid_base_url", "missing_credentials", "model_required",
+		"ai_features_turned_off", "categorize_byo_model_unreported", "categorize_byo_model_unsupported", "categorize_byo_unavailable", "invalid_base_url", "missing_credentials", "model_required",
 		"not_configured", "own_model_gate_closed", "own_model_turned_off", "service_model_not_entitled",
 		"unknown_provider", "unreadable_row",
 	}

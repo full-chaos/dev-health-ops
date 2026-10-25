@@ -5,8 +5,9 @@
 # stdout: "run <reason>" (let the planner pick shards) or "skip <reason>" (no shard runs).
 # Any bad input (usage, unreadable labels, empty list, unterminated or empty record) exits non-zero and prints no
 # verdict: the caller must then fall back to the planner (run), never to a skip.
-# Store .go code is not a trigger: integration runs on every main push. A lane that wants the shards on its PR
-# sets the label ci:integration before its push; a label change alone starts no run.
+# No path is a trigger: the shards run in the merge queue (merge_group) for every entry that is not docs-only. A PR
+# that wants them on the PR itself carries ci:integration (shards) or ci:full (every heavy job), with the reason in
+# the PR body, set before its push; a label change alone starts no run.
 set -euo pipefail
 
 list="${1:-}"
@@ -26,14 +27,6 @@ n=0
 while IFS= read -r -d '' path; do
   [ -n "${path}" ] || { echo "empty record in change list" >&2; exit 3; }
   n=$((n + 1))
-  case "${path}" in
-    *.sql | go.mod | go.sum | */go.mod | */go.sum) echo "run trigger path ${path}"; exit 0 ;;
-    migrations/* | */migrations/*) echo "run trigger path ${path}"; exit 0 ;;
-    internal/chmigrate/* | internal/pgmigrate/* | internal/rivermigrate/* | internal/migrationmatrix/*) echo "run trigger path ${path}"; exit 0 ;;
-    compose*.yml | */compose*.yml) echo "run trigger path ${path}"; exit 0 ;;
-    .github/workflows/* | internal/cigates/* | ci/*) echo "run trigger path ${path}"; exit 0 ;;
-    deploy/* | contracts/* | docker/* | testdata/* | */testdata/* | */pytables/* | */baseline/* | */templates/*) echo "run trigger path ${path}"; exit 0 ;;
-  esac
 done < "${list}"
 
-echo "skip no trigger path and no ci:integration label in ${n} changed files"
+echo "skip no ci:integration or ci:full label (${n} changed files); the shards run in the merge queue"

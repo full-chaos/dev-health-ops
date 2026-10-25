@@ -120,6 +120,9 @@ type llmPurposeUpsert struct {
 }
 
 func (h *handlers) applyLLMPurpose(ctx context.Context, orgID string, in llmPurposeUpsert) (*pyjson.Object, *llmRefusal, error) {
+	if refusal := clefRefusal(in.provider, in.purpose, true, in.model, in.baseURL); refusal != nil {
+		return nil, refusal, nil
+	}
 	baseURLText := ""
 	if in.baseURL != nil {
 		baseURLText = *in.baseURL

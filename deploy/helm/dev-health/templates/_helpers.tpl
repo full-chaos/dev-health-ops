@@ -741,3 +741,130 @@ database DSN name cannot reach a worker pod either.
 {{- define "dev-health.goWorkerSecretKeyNames" -}}
 {{- toJson (list "APP_BASE_URL" "CLICKHOUSE_URI" "EMAIL_API_KEY" "EMAIL_FROM_ADDRESS" "EMAIL_PROVIDER" "EXPECTED_WORKER_GROUPS" "INVESTMENT_LLM_BATCH_MODE" "INVESTMENT_LLM_BATCH_TIMEOUT_SECONDS" "LICENSE_PRIVATE_KEY" "LINEAR_API_KEY" "LLM_MODEL" "LLM_PROVIDER" "OPENAI_API_KEY" "PAGER_DUTY_CLIENT_ID" "PAGER_DUTY_REDIRECT_URI" "PAGER_DUTY_SECRET" "SETTINGS_ENCRYPTION_KEY" "STRIPE_SECRET_KEY" "STRIPE_WEBHOOK_SECRET" "WORKER_GITHUB_WORK_ITEMS_STATUS_MAPPING_PATH") -}}
 {{- end }}
+
+{{/*
+The query-api pods leave the release-wide NetworkPolicy and get their own ingress and egress policies while a listener
+that trusts internal identity headers (internal or MCP) is on: the release-wide in-namespace rule admits every port.
+Renders "true" or nothing.
+*/}}
+{{- define "dev-health.queryApiOwnNetworkPolicy" -}}
+{{- if and .Values.networkPolicy.enabled .Values.queryApi.enabled (or .Values.queryApi.internal.enabled .Values.queryApi.mcp.enabled) }}true{{- end }}
+{{- end }}
+
+{{/*
+Egress rules shared by the release-wide, go-api and query-api egress policies: DNS (UDP and TCP), the release
+namespace, HTTPS, then networkPolicy.extraEgress. The auth pods never use these rules.
+*/}}
+{{- define "dev-health.networkPolicyEgress" -}}
+{{- range $i, $rule := .Values.networkPolicy.extraEgress }}
+{{- if not (kindIs "map" $rule) }}
+{{- fail (printf "networkPolicy.extraEgress[%d] must be a NetworkPolicy egress rule: an object with to and/or ports" $i) }}
+{{- end }}
+{{- range $key := keys $rule | sortAlpha }}
+{{- if not (has $key (list "to" "ports")) }}
+{{- fail (printf "networkPolicy.extraEgress[%d] takes only to and ports, not %q: Kubernetes drops an unknown key, so the rule would be wider than written" $i $key) }}
+{{- end }}
+{{- end }}
+{{- range $key := list "to" "ports" }}
+{{- if and (hasKey $rule $key) (not (kindIs "slice" (index $rule $key))) (not (kindIs "invalid" (index $rule $key))) }}
+{{- fail (printf "networkPolicy.extraEgress[%d].%s must be a list" $i $key) }}
+{{- end }}
+{{- end }}
+{{- $to := $rule.to | default list }}
+{{- $ports := $rule.ports | default list }}
+{{- if and (empty $to) (empty $ports) }}
+{{- fail (printf "networkPolicy.extraEgress[%d] has neither a non-empty to nor non-empty ports: Kubernetes reads that rule as every destination on every port" $i) }}
+{{- end }}
+{{- range $j, $port := $ports }}
+{{- if not (kindIs "map" $port) }}
+{{- fail (printf "networkPolicy.extraEgress[%d].ports[%d] must be an object with port (and protocol, endPort)" $i $j) }}
+{{- end }}
+{{- range $key := keys $port | sortAlpha }}
+{{- if not (has $key (list "protocol" "port" "endPort")) }}
+{{- fail (printf "networkPolicy.extraEgress[%d].ports[%d] takes only protocol, port and endPort, not %q" $i $j $key) }}
+{{- end }}
+{{- end }}
+{{- $number := has (kindOf $port.port) (list "float64" "int64" "int") }}
+{{- if not (or (and $number (eq (float64 $port.port) (floor (float64 $port.port))) (ge (int $port.port) 1) (le (int $port.port) 65535)) (and (kindIs "string" $port.port) (ne $port.port ""))) }}
+{{- fail (printf "networkPolicy.extraEgress[%d].ports[%d] needs a port (1-65535 or a port name): Kubernetes reads an entry with no port as every port of its protocol" $i $j) }}
+{{- end }}
+{{- if and (hasKey $port "protocol") (not (has (toString $port.protocol) (list "TCP" "UDP" "SCTP"))) }}
+{{- fail (printf "networkPolicy.extraEgress[%d].ports[%d].protocol %v is not TCP, UDP or SCTP" $i $j $port.protocol) }}
+{{- end }}
+{{- if hasKey $port "endPort" }}
+{{- if not (and $number (has (kindOf $port.endPort) (list "float64" "int64" "int")) (eq (float64 $port.endPort) (floor (float64 $port.endPort))) (ge (int $port.endPort) (int $port.port)) (le (int $port.endPort) 65535)) }}
+{{- fail (printf "networkPolicy.extraEgress[%d].ports[%d].endPort needs a numeric port and must be a number from port to 65535" $i $j) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- range $j, $peer := $to }}
+{{- if not (kindIs "map" $peer) }}
+{{- fail (printf "networkPolicy.extraEgress[%d].to[%d] must be an object with podSelector, namespaceSelector or ipBlock" $i $j) }}
+{{- end }}
+{{- if empty (keys $peer) }}
+{{- fail (printf "networkPolicy.extraEgress[%d].to[%d] is empty: name a podSelector, namespaceSelector or ipBlock" $i $j) }}
+{{- end }}
+{{- range $key := keys $peer | sortAlpha }}
+{{- if not (has $key (list "podSelector" "namespaceSelector" "ipBlock")) }}
+{{- fail (printf "networkPolicy.extraEgress[%d].to[%d] takes only podSelector, namespaceSelector and ipBlock, not %q" $i $j $key) }}
+{{- end }}
+{{- end }}
+{{- range $selector := list "podSelector" "namespaceSelector" }}
+{{- if hasKey $peer $selector }}
+{{- if not (kindIs "map" (index $peer $selector)) }}
+{{- fail (printf "networkPolicy.extraEgress[%d].to[%d].%s must be an object with matchLabels and/or matchExpressions" $i $j $selector) }}
+{{- end }}
+{{- range $key := keys (index $peer $selector) | sortAlpha }}
+{{- if not (has $key (list "matchLabels" "matchExpressions")) }}
+{{- fail (printf "networkPolicy.extraEgress[%d].to[%d].%s takes only matchLabels and matchExpressions, not %q: Kubernetes drops an unknown key, so the selector would be wider than written" $i $j $selector $key) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- if hasKey $peer "ipBlock" }}
+{{- if not (and (kindIs "map" $peer.ipBlock) (kindIs "string" $peer.ipBlock.cidr) (ne $peer.ipBlock.cidr "")) }}
+{{- fail (printf "networkPolicy.extraEgress[%d].to[%d].ipBlock needs a cidr" $i $j) }}
+{{- end }}
+{{- range $key := keys $peer.ipBlock | sortAlpha }}
+{{- if not (has $key (list "cidr" "except")) }}
+{{- fail (printf "networkPolicy.extraEgress[%d].to[%d].ipBlock takes only cidr and except, not %q: Kubernetes drops an unknown key, so the block would be wider than written" $i $j $key) }}
+{{- end }}
+{{- end }}
+{{- if hasKey $peer.ipBlock "except" }}
+{{- if not (kindIs "slice" $peer.ipBlock.except) }}
+{{- fail (printf "networkPolicy.extraEgress[%d].to[%d].ipBlock.except must be a list of CIDR strings" $i $j) }}
+{{- end }}
+{{- range $peer.ipBlock.except }}
+{{- if not (and (kindIs "string" .) (ne . "")) }}
+{{- fail (printf "networkPolicy.extraEgress[%d].to[%d].ipBlock.except must be a list of CIDR strings" $i $j) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- if and (empty $ports) (regexMatch "/0+$" $peer.ipBlock.cidr) (empty $peer.ipBlock.except) }}
+{{- fail (printf "networkPolicy.extraEgress[%d] sends to ipBlock %s with no except and no ports: that is every destination on every port; name the ports" $i $peer.ipBlock.cidr) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
+# DNS resolution
+- to:
+    - namespaceSelector: {}
+  ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+# Internal communication
+- to:
+    - podSelector: {}
+# External HTTPS (GitHub, GitLab, Jira, Stripe APIs)
+- to:
+    - ipBlock:
+        cidr: 0.0.0.0/0
+  ports:
+    - protocol: TCP
+      port: 443
+{{- range .Values.networkPolicy.extraEgress }}
+- {{ toYaml . | nindent 2 | trim }}
+{{- end }}
+{{- end }}

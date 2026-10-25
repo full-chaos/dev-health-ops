@@ -1,0 +1,11 @@
+{
+  "base_url": "http://127.0.0.1:8081",
+  "targets": [
+    {
+      "name": "refresh-replay", "method": "POST", "path": "/v1/token/refresh",
+      "headers": {"Content-Type": "application/json"},
+      "body": "{\"schema_version\":\"refresh-request.v1\",\"refresh_credential\":\"${ENV:AUTH_LOADTEST_REFRESH_CREDENTIAL}\"}",
+      "expect_status": [200, 401], "forbid_5xx": true, "require_status": [401]
+    }
+  ]
+}

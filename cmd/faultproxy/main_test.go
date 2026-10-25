@@ -5,6 +5,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -117,5 +118,45 @@ func TestCLIEventsFileIsWrittenAndClosedCleanly(t *testing.T) {
 	data, err := os.ReadFile(path)
 	if err != nil || !strings.Contains(string(data), `"pass"`) {
 		t.Fatalf("%q %v", data, err)
+	}
+}
+
+func TestRunbookFaultproxyFlagsExist(t *testing.T) {
+	var o, e bytes.Buffer
+	run(context.Background(), []string{"-h"}, &o, &e)
+	known := map[string]bool{}
+	for _, l := range strings.Split(e.String(), "\n") {
+		if l = strings.TrimSpace(l); strings.HasPrefix(l, "-") {
+			known[strings.Fields(l)[0]] = true
+		}
+	}
+	if len(known) < 6 {
+		t.Fatalf("read %d flags from the usage text", len(known))
+	}
+	data, err := os.ReadFile("../../internal/loadharness/README.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cmds int
+	var cur string
+	for _, l := range strings.Split(string(data), "\n") {
+		l = strings.TrimSpace(l)
+		if cur == "" && !strings.HasPrefix(l, "faultproxy ") {
+			continue
+		}
+		cur += " " + strings.TrimSuffix(l, `\`)
+		if strings.HasSuffix(l, `\`) {
+			continue
+		}
+		cmds++
+		for _, f := range regexp.MustCompile(`\s(--?[a-z][a-z0-9-]*)`).FindAllStringSubmatch(cur, -1) {
+			if !known["-"+strings.TrimLeft(f[1], "-")] {
+				t.Errorf("runbook uses an unknown faultproxy flag %s in: %s", f[1], cur)
+			}
+		}
+		cur = ""
+	}
+	if cmds < 2 {
+		t.Fatalf("the runbook holds %d faultproxy commands", cmds)
 	}
 }

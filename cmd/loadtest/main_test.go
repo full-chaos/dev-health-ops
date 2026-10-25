@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -120,4 +121,59 @@ func TestFaultMaxErrMustBeARatio(t *testing.T) {
 			t.Fatalf("%s: code=%d err=%s", v, code, errOut)
 		}
 	}
+}
+
+func TestRunbookLoadtestFlagsExist(t *testing.T) {
+	var o, e bytes.Buffer
+	run(context.Background(), []string{"-h"}, &o, &e, func(string) string { return "" })
+	known := map[string]bool{}
+	for _, l := range strings.Split(e.String(), "\n") {
+		if l = strings.TrimSpace(l); strings.HasPrefix(l, "-") {
+			known[strings.Fields(l)[0]] = true
+		}
+	}
+	if len(known) < 10 {
+		t.Fatalf("read %d flags from the usage text", len(known))
+	}
+	data, err := os.ReadFile("../../internal/loadharness/README.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cmds int
+	for _, line := range joinedCommandLines(string(data), "loadtest") {
+		cmds++
+		for _, f := range regexp.MustCompile(`\s(--?[a-z][a-z0-9-]*)`).FindAllStringSubmatch(line, -1) {
+			if !known["-"+strings.TrimLeft(f[1], "-")] {
+				t.Errorf("runbook uses an unknown loadtest flag %s in: %s", f[1], line)
+			}
+		}
+	}
+	if cmds < 2 {
+		t.Fatalf("the runbook holds %d loadtest commands", cmds)
+	}
+}
+
+// joinedCommandLines returns the runbook lines that start with name, with
+// backslash continuations joined.
+func joinedCommandLines(doc, name string) []string {
+	var out []string
+	var cur string
+	for _, l := range strings.Split(doc, "\n") {
+		l = strings.TrimSpace(l)
+		if cur != "" {
+			cur += " " + strings.TrimSuffix(l, `\`)
+			if !strings.HasSuffix(l, `\`) {
+				out, cur = append(out, cur), ""
+			}
+			continue
+		}
+		if strings.HasPrefix(l, name+" ") {
+			if strings.HasSuffix(l, `\`) {
+				cur = strings.TrimSuffix(l, `\`)
+			} else {
+				out = append(out, l)
+			}
+		}
+	}
+	return out
 }

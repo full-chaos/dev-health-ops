@@ -1173,7 +1173,7 @@ migrations:
       #    operator's responsibility, the same as any other digest pin.
       image: ""
       pullPolicy: ""
-    # -- CHAOS-11392: build ix_sync_run_units_failure_streak CONCURRENTLY in a
+    # -- Build ix_sync_run_units_failure_streak CONCURRENTLY in a
     #    weight -2 pre-hook Job (`dho migrate postgres build-index
     #    failure-streak`), BEFORE the migrate Job runs revision 0159 (which
     #    then finds the index and does nothing; its plain build would hold a

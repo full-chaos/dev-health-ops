@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// CHAOS-11392: the failure-streak index Job is OFF by default, so a prod render carries no such Job; ON it runs the
+// The failure-streak index Job is OFF by default, so a prod render carries no such Job; ON it runs the
 // build-index verb from the migrate image as a pre-hook that runs after the weight -5 ConfigMap and Secret it reads and
 // before the weight-0 migrate Job, and a failed build fails the release before the migrate Job.
 func TestStreakIndexJobIsOffByDefaultAndOrderedBeforeTheMigrateJob(t *testing.T) {
@@ -35,7 +35,7 @@ func TestStreakIndexJobIsOffByDefaultAndOrderedBeforeTheMigrateJob(t *testing.T)
 		t.Fatalf("backoffLimit/activeDeadlineSeconds = %v/%v, want 0/3600", spec["backoffLimit"], spec["activeDeadlineSeconds"])
 	}
 	c := container(t, job, "streak-index")
-	want := []string{"migrate", "postgres", "build-index", "failure-streak", "--lock-timeout=5s", "--attempts=20", "--retry-delay=15s"}
+	want := []string{"migrate", "postgres", "build-index", "--lock-timeout=5s", "--attempts=20", "--retry-delay=15s", "failure-streak"}
 	if args := stringsOf(c["args"]); !reflect.DeepEqual(args, want) {
 		t.Fatalf("args = %v, want %v", args, want)
 	}

@@ -162,7 +162,18 @@ func buildIndex(ctx context.Context, resolve ResolveDSN, env cli.Env) int {
 		}
 		return cli.ExitUsage
 	}
-	if flags.NArg() != 1 || flags.Arg(0) != "failure-streak" {
+	positional := flags.Args()
+	if len(positional) > 0 {
+		// The standard parser stops at the first positional argument: read the flags that follow it too.
+		if err := flags.Parse(positional[1:]); err != nil {
+			if errors.Is(err, flag.ErrHelp) {
+				return cli.ExitOK
+			}
+			return cli.ExitUsage
+		}
+		positional = append(positional[:1], flags.Args()...)
+	}
+	if len(positional) != 1 || positional[0] != "failure-streak" {
 		fmt.Fprintln(env.Stderr, "argument error: the one index this verb builds is named failure-streak")
 		return cli.ExitUsage
 	}

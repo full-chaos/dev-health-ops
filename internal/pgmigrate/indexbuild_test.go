@@ -114,3 +114,34 @@ func TestBuildIndexRefusesAnyOtherIndexName(t *testing.T) {
 		t.Fatal("a refused invocation resolved the DSN")
 	}
 }
+
+// The chart passes the flags and then the index name; an operator may type them the other way round. Both orders must
+// pass the argument parser and reach the DSN resolver (which here refuses, so nothing connects).
+func TestBuildIndexAcceptsFlagsBeforeAndAfterTheIndexName(t *testing.T) {
+	flags := []string{"--lock-timeout=5s", "--attempts=20", "--retry-delay=15s"}
+	for name, args := range map[string][]string{
+		"chart order": append(append([]string{}, flags...), "failure-streak"),
+		"name first":  append([]string{"failure-streak"}, flags...),
+		"flags both":  {"--lock-timeout=5s", "failure-streak", "--attempts=20", "--retry-delay=15s"},
+		"name alone":  {"failure-streak"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			resolved := false
+			resolve := pgmigrate.ResolveDSN(func(secrets.LookupEnv, io.Writer) (secrets.Value, string, bool) {
+				resolved = true
+				return secrets.Value{}, "", false
+			})
+			var run func(context.Context, cli.Env) int
+			for _, child := range pgmigrate.Command(resolve).Children {
+				if child.Name == "build-index" {
+					run = child.Run
+				}
+			}
+			var stderr bytes.Buffer
+			code := run(context.Background(), cli.Env{Args: args, Stdout: io.Discard, Stderr: &stderr})
+			if !resolved || code == cli.ExitUsage {
+				t.Fatalf("args %v: exit %d resolved=%v (%s)", args, code, resolved, stderr.String())
+			}
+		})
+	}
+}

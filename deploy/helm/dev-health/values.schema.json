@@ -108,7 +108,7 @@
                 "retryDelaySeconds": { "type": "integer", "minimum": 0 }
               },
               "required": ["enabled"],
-              "description": "CHAOS-11392: the weight -2 pre-hook Job that builds ix_sync_run_units_failure_streak CONCURRENTLY before revision 0159. Boolean-only enabled; required so a null override cannot delete the key."
+              "description": "The weight -2 pre-hook Job that builds ix_sync_run_units_failure_streak CONCURRENTLY before revision 0159."
             },
             "classDecisionLiveSchemaDigest": {
               "type": "string",

@@ -261,7 +261,7 @@ spec:
           resources:
             {{- toYaml .Values.migrations.hook.resources | nindent 12 }}
 {{- /*
-The failure-streak index Job (CHAOS-11392): `dho migrate postgres build-index failure-streak` builds
+The failure-streak index Job: `dho migrate postgres build-index failure-streak` builds
 ix_sync_run_units_failure_streak CONCURRENTLY, outside the upgrade transaction, so a large sync_run_units keeps taking
 unit writes while the index builds. Revision 0159 (CREATE INDEX IF NOT EXISTS) then finds it and does nothing. OFF by
 default: a render with the flag off has no such Job. A failed or partial build (the verb exits non-zero unless the
@@ -307,10 +307,10 @@ spec:
             - migrate
             - postgres
             - build-index
-            - failure-streak
             - --lock-timeout={{ .Values.migrations.hook.streakIndex.lockTimeoutSeconds }}s
             - --attempts={{ .Values.migrations.hook.streakIndex.attempts }}
             - --retry-delay={{ .Values.migrations.hook.streakIndex.retryDelaySeconds }}s
+            - failure-streak
           envFrom:
             - configMapRef:
                 name: {{ include "dev-health.fullname" . }}-migrate-config

@@ -574,13 +574,13 @@ func TestWorkloadCorpusHasOneAcceptedRowPerWorkloadAudienceAndBothCrossRefusals(
 			crossRefused[aud+"@"+e.VerifyAs] = true
 		}
 	}
-	if accepted[AudienceAPI] != AudienceAPI {
-		t.Errorf("no accepted vector for aud %s verified as %s: %v", AudienceAPI, AudienceAPI, accepted)
-	}
-	if !crossRefused[AudienceAuth+"@"+AudienceAPI] {
-		t.Error("no audience refusal for an auth-service token at a dev-health-api verifier")
-	}
-	if !crossRefused[AudienceAPI+"@"+AudienceAuth] {
-		t.Error("no audience refusal for a dev-health-api token at an auth-service verifier")
+	other := map[string]string{AudienceAuth: AudienceAPI, AudienceAPI: AudienceAuth}
+	for _, aud := range []string{AudienceAuth, AudienceAPI} {
+		if accepted[aud] != aud {
+			t.Errorf("no accepted vector for aud %s verified as %s: %v", aud, aud, accepted)
+		}
+		if !crossRefused[aud+"@"+other[aud]] {
+			t.Errorf("no audience refusal for a %s token at a %s verifier", aud, other[aud])
+		}
 	}
 }

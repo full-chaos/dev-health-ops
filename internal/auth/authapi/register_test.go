@@ -15,9 +15,17 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity/local"
 )
 
+func registerEnv(t *testing.T, value string) {
+	t.Helper()
+	previous := registerGetenv
+	registerGetenv = func(string) string { return value }
+	t.Cleanup(func() { registerGetenv = previous })
+}
+
 const registerBody = `{"email":"newcomer@example.com","password":"Correct-horse-battery-9","full_name":"New Comer","org_name":"Ignored Org"}`
 
 func TestRegisterRouteIsMountedAsGoAPIsPattern(t *testing.T) {
+	registerEnv(t, "")
 	c := newCredFixture(t)
 	routes, err := CredentialRoutes(CredentialDeps{Flows: &local.Flows{}, Sessions: c.sessions, Users: c.users, Issuer: c.issuer, Limits: mustLimits(t, httpapi.NewMemoryCounters(nil))})
 	if err != nil {
@@ -32,6 +40,7 @@ func TestRegisterRouteIsMountedAsGoAPIsPattern(t *testing.T) {
 }
 
 func TestRegisterRouteAnswersAcceptedForNewAndTakenAddress(t *testing.T) {
+	registerEnv(t, "")
 	newcomer, taken := newCredFixture(t), newCredFixture(t)
 	a := newcomer.call(http.MethodPost, PatternRegister, registerBody, nil)
 	b := taken.call(http.MethodPost, PatternRegister, `{"email":"`+credKnownEmail+`","password":"Correct-horse-battery-9"}`, nil)
@@ -54,6 +63,7 @@ func TestRegisterRouteAnswersAcceptedForNewAndTakenAddress(t *testing.T) {
 }
 
 func TestRegisterRouteRefusalsMatchTheCheckedInTable(t *testing.T) {
+	registerEnv(t, "")
 	cases := map[string]struct {
 		body   string
 		status int
@@ -88,6 +98,7 @@ func TestRegisterRouteRefusalsMatchTheCheckedInTable(t *testing.T) {
 }
 
 func TestRegisterRouteLimitsThreePerHourPerEndClientAddress(t *testing.T) {
+	registerEnv(t, "")
 	c := newCredFixture(t)
 	h := trustedProxy(t, c.routes)
 	post := func(peer, forwarded string) int {
@@ -107,6 +118,7 @@ func TestRegisterRouteLimitsThreePerHourPerEndClientAddress(t *testing.T) {
 }
 
 func TestRegisterRouteIgnoresAForwardedHeaderFromAnUntrustedPeer(t *testing.T) {
+	registerEnv(t, "")
 	c := newCredFixture(t)
 	h := trustedProxy(t, c.routes)
 	for i := 1; i <= 3; i++ {
@@ -120,6 +132,7 @@ func TestRegisterRouteIgnoresAForwardedHeaderFromAnUntrustedPeer(t *testing.T) {
 }
 
 func TestRegisterRouteLogsNoSecretOrAddress(t *testing.T) {
+	registerEnv(t, "")
 	c := newCredFixture(t)
 	c.fakes.issueErr = errors.New("db down for newcomer@example.com")
 	c.call(http.MethodPost, PatternRegister, registerBody, nil)
@@ -134,9 +147,10 @@ func TestRegisterRouteLogsNoSecretOrAddress(t *testing.T) {
 	}
 }
 
-func TestRegisterNoOrgAtRegisterRowIsNamedInTheParityTable(t *testing.T) {
+func TestRegisterParityTableNamesTheDivergentRows(t *testing.T) {
+	registerEnv(t, "")
 	rows := registerParityRows(t)
-	for id, kind := range map[string]string{"no_org_at_register_under_users_owned": "divergent", "audit_class_principal_provisioned": "divergent", "password_over_72_bytes": "stricter"} {
+	for id, kind := range map[string]string{"public_audit_row_user_registered": "divergent", "password_over_72_bytes": "stricter"} {
 		row, ok := rows[id]
 		if !ok || row.kind != kind || row.reason == "" || row.reason == "-" {
 			t.Fatalf("parity table lacks the named %s row %q with a reason", kind, id)
@@ -145,6 +159,7 @@ func TestRegisterNoOrgAtRegisterRowIsNamedInTheParityTable(t *testing.T) {
 }
 
 func TestRegisterParityTableNamesARealTestForEveryRow(t *testing.T) {
+	registerEnv(t, "")
 	declared := func(dir string) map[string]bool {
 		pkgs, err := parser.ParseDir(token.NewFileSet(), dir, nil, 0)
 		if err != nil {
@@ -196,4 +211,39 @@ func registerParityRows(t *testing.T) map[string]parityRow {
 		rows[f[0]] = parityRow{kind: f[3], reason: f[4], test: f[5]}
 	}
 	return rows
+}
+
+func TestRegisterRouteCreatesTheOrganizationByDefaultAndNamesItFromOrgName(t *testing.T) {
+	c := newCredFixture(t)
+	c.call(http.MethodPost, PatternRegister, registerBody, nil)
+	c.call(http.MethodPost, PatternRegister, `{"email":"b@example.com","password":"Correct-horse-battery-9"}`, nil)
+	c.call(http.MethodPost, PatternRegister, `{"email":"c@example.com","password":"Correct-horse-battery-9","org_name":""}`, nil)
+	names := []string{}
+	for _, req := range c.fakes.provisioned {
+		if req.OrganizationName == nil {
+			t.Fatal("a sign-up under the default setting created no organization")
+		}
+		names = append(names, *req.OrganizationName)
+	}
+	if len(names) != 3 || names[0] != "Ignored Org" || names[1] != "My Organization" || names[2] != "My Organization" {
+		t.Fatalf("organization names = %v", names)
+	}
+}
+
+func TestRegisterRouteOrganizationSettingParsesAsGoAPIDoes(t *testing.T) {
+	cases := map[string]bool{
+		"": true, "1": true, "true": true, "yes": true, "on": true, "junk": true, "offf": true,
+		"0": false, "false": false, "FALSE": false, "No": false, "off": false, " OFF ": false, "\u2003off\u2003": false,
+	}
+	for value, wantOrg := range cases {
+		registerEnv(t, value)
+		c := newCredFixture(t)
+		c.call(http.MethodPost, PatternRegister, registerBody, nil)
+		if len(c.fakes.provisioned) != 1 {
+			t.Fatalf("%q: provisioned %d", value, len(c.fakes.provisioned))
+		}
+		if got := c.fakes.provisioned[0].OrganizationName != nil; got != wantOrg {
+			t.Fatalf("setting %q: organization = %v, want %v", value, got, wantOrg)
+		}
+	}
 }

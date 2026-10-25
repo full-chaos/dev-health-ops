@@ -191,15 +191,93 @@ func loadAuthServiceRows(t *testing.T) []map[string]any {
 // nothing serves, per method and listener.
 func TestEveryServedAuthRouteHasAnEndpointProfileRowAndNoRowIsStale(t *testing.T) {
 	served := servedAuthRoutes(t)
-	missing, stale := compareServedToRows(t, served, loadAuthServiceRows(t))
-	if len(missing) > 0 {
-		t.Errorf("served with no endpoint-profile row (contracts/auth/v1/endpoint-profiles.auth-service.json): %v", missing)
+	rows := loadAuthServiceRows(t)
+	missing, stale := compareServedToRows(t, served, rows)
+	if problems := pendingRowProblems(pendingRows, served, missing); len(problems) > 0 {
+		t.Errorf("the pending row list is wrong: %v", problems)
+	}
+	var unexplained []string
+	for _, key := range missing {
+		if !isPending(key) {
+			unexplained = append(unexplained, key)
+		}
+	}
+	if len(unexplained) > 0 {
+		t.Errorf("served with no endpoint-profile row (contracts/auth/v1/endpoint-profiles.auth-service.json): %v", unexplained)
 	}
 	if len(stale) > 0 {
 		t.Errorf("endpoint-profile rows for routes nothing serves: %v", stale)
 	}
 	if len(served) != servedAuthRouteCount {
 		t.Fatalf("%d served routes found, want %d: a mount was dropped or added without a row", len(served), servedAuthRouteCount)
+	}
+}
+
+// pendingRows is the one route served before its row exists (CHAOS-11401 adds
+// the row, moves source_commit and empties this list). Nothing else may be
+// listed.
+var pendingRows = []string{"POST /api/v1/auth/register@api"}
+
+func isPending(key string) bool {
+	for _, pending := range pendingRows {
+		if pending == key {
+			return true
+		}
+	}
+	return false
+}
+
+// pendingRowProblems refuses a pending list that holds anything but register,
+// a route nothing serves, or a route that already has a row.
+func pendingRowProblems(pending []string, served map[string]bool, missing []string) []string {
+	var problems []string
+	hasNoRow := map[string]bool{}
+	for _, key := range missing {
+		hasNoRow[key] = true
+	}
+	for _, key := range pending {
+		switch {
+		case key != "POST /api/v1/auth/register@api":
+			problems = append(problems, key+" is not the one route that may be pending")
+		case !served[key]:
+			problems = append(problems, key+" is pending but nothing serves it")
+		case !hasNoRow[key]:
+			problems = append(problems, key+" is pending but already has a row: empty the list")
+		}
+	}
+	if len(pending) > 1 {
+		problems = append(problems, "the pending list holds more than one route")
+	}
+	return problems
+}
+
+func TestThePendingRowListRefusesAnyOtherRoute(t *testing.T) {
+	served := map[string]bool{"POST /api/v1/auth/register@api": true, "POST /api/v1/auth/login@api": true}
+	missing := []string{"POST /api/v1/auth/login@api", "POST /api/v1/auth/register@api"}
+	if p := pendingRowProblems([]string{"POST /api/v1/auth/register@api", "POST /api/v1/auth/login@api"}, served, missing); len(p) == 0 {
+		t.Fatal("a second pending route was accepted")
+	}
+	if p := pendingRowProblems([]string{"POST /api/v1/auth/login@api"}, served, missing); len(p) == 0 {
+		t.Fatal("a pending route other than register was accepted")
+	}
+	if p := pendingRowProblems([]string{"POST /api/v1/auth/register@api"}, served, missing); len(p) != 0 {
+		t.Fatalf("register alone was refused: %v", p)
+	}
+}
+
+func TestThePendingRowListRefusesARouteThatNowHasARow(t *testing.T) {
+	served := map[string]bool{"POST /api/v1/auth/register@api": true}
+	if p := pendingRowProblems([]string{"POST /api/v1/auth/register@api"}, served, nil); len(p) == 0 {
+		t.Fatal("a pending route that has a row was accepted")
+	}
+	if p := pendingRowProblems([]string{"POST /api/v1/auth/register@api"}, map[string]bool{}, nil); len(p) == 0 {
+		t.Fatal("a pending route nothing serves was accepted")
+	}
+}
+
+func TestThePendingRowListIsExactlyRegisterUntilItsRowLands(t *testing.T) {
+	if len(pendingRows) != 1 || pendingRows[0] != "POST /api/v1/auth/register@api" {
+		t.Fatalf("pendingRows = %v, want exactly register", pendingRows)
 	}
 }
 
@@ -308,7 +386,7 @@ func TestAuthEndpointProfileAnchorsStillPointAtTheirSymbols(t *testing.T) {
 		"/v1/identities/social": "PatternSocialLink", "/v1/identities/social/{id}": "PatternSocialUnlink",
 		"/api/v1/auth/verify": "PatternVerifyEmail", "/api/v1/auth/resend-verification": "PatternResendVerification",
 		"/api/v1/auth/forgot-password": "PatternForgotPassword", "/api/v1/auth/reset-password": "PatternResetPassword",
-		"/api/v1/auth/change-password": "PatternChangePassword", "/api/v1/auth/register": "PatternRegister",
+		"/api/v1/auth/change-password": "PatternChangePassword",
 	}
 	checked := 0
 	var walk func(node any, where string)

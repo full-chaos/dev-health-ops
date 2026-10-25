@@ -522,24 +522,6 @@
     {
       "accepted_credential_classes": [],
       "classification": "public",
-      "disclosure_behavior": "The same 202 body for a new address and a taken one; a taken address is told by mail and nothing about the requester is named.",
-      "gaps": [],
-      "graphql_field_name": null,
-      "id": "POST /api/v1/auth/register [dev-health-auth-service @api]",
-      "method": "POST",
-      "public_rationale": "Creates an unverified local user from the body and sends a verification link; it writes users only, so the organization comes from onboarding. Rate limited 3 per hour per client address.",
-      "route": "/api/v1/auth/register",
-      "service": "dev-health-auth-service",
-      "source": {
-        "file": "internal/api/session/session.go",
-        "line": 149
-      },
-      "surface_kind": "rest",
-      "tenant_requirement": "none"
-    },
-    {
-      "accepted_credential_classes": [],
-      "classification": "public",
       "disclosure_behavior": "The same 200 body for a known, unknown or already verified address; an unknown address runs a decoy that stores and sends nothing.",
       "gaps": [],
       "graphql_field_name": null,

@@ -54,6 +54,9 @@ type RegisterRequest struct {
 	Email    string
 	Password string
 	FullName *string
+	// OrganizationName, when not nil, creates an organization of that name
+	// with the user as owner, in the same transaction as the user.
+	OrganizationName *string
 }
 
 // ChangeRequest is one signed-in password change. Impersonated is true for
@@ -200,7 +203,7 @@ func (f *Flows) Register(ctx context.Context, req RegisterRequest) (FlowOutcome,
 	if existing != nil {
 		return f.noticeExisting(ctx, email), nil
 	}
-	id, err := f.accounts.ProvisionLocal(ctx, ProvisionLocalRequest{Email: email, FullName: req.FullName, PasswordHash: hash})
+	id, err := f.accounts.ProvisionLocal(ctx, ProvisionLocalRequest{Email: email, FullName: req.FullName, PasswordHash: hash, OrganizationName: req.OrganizationName})
 	if errors.Is(err, identity.ErrEmailTaken) {
 		return f.noticeExisting(ctx, email), nil
 	}

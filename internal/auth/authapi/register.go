@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/api/registerorg"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity/local"
 )
@@ -32,13 +34,18 @@ type registerFlow interface {
 type registerInputKey struct{}
 
 type registerInput struct {
-	email, password string
-	fullName        *string
+	email, password   string
+	fullName, orgName *string
 }
 
-// registerRoute is POST /api/v1/auth/register. It writes users only: no
-// organization or membership (the aggregate owner keeps them), so the new user
-// reaches an organization through /api/v1/auth/onboard.
+// registerGetenv reads AUTH_AUTO_CREATE_ORG_ON_REGISTER on every request, as
+// go-api does; a test replaces it.
+var registerGetenv = os.Getenv
+
+// registerRoute is POST /api/v1/auth/register. Beside the user it inserts the
+// organization and owner membership go-api's register inserts, unless
+// AUTH_AUTO_CREATE_ORG_ON_REGISTER turns that off; it inserts new rows only
+// and updates none.
 func (h credentialHandlers) registerRoute(flows CredentialFlows) (httpapi.Route, error) {
 	register, ok := flows.(registerFlow)
 	if !ok {
@@ -63,7 +70,9 @@ func (h credentialHandlers) validateRegister(w http.ResponseWriter, r *http.Requ
 		if value, present := errs.OptionalString(object, "full_name", 0, 0); present {
 			input.fullName = &value
 		}
-		_, _ = errs.OptionalString(object, "org_name", 0, 0)
+		if value, present := errs.OptionalString(object, "org_name", 0, 0); present {
+			input.orgName = &value
+		}
 	}
 	if len(errs) > 0 {
 		h.compat.rec.record(r.Context(), opRegister, "denied", reasonMalformed, nil)
@@ -76,7 +85,12 @@ func (h credentialHandlers) validateRegister(w http.ResponseWriter, r *http.Requ
 func (h credentialHandlers) register(flow registerFlow) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		input, _ := r.Context().Value(registerInputKey{}).(registerInput)
-		outcome, err := flow.Register(r.Context(), local.RegisterRequest{Email: input.email, Password: input.password, FullName: input.fullName})
+		request := local.RegisterRequest{Email: input.email, Password: input.password, FullName: input.fullName}
+		if registerorg.Enabled(registerGetenv(registerorg.EnvName)) {
+			name := registerorg.Name(input.orgName)
+			request.OrganizationName = &name
+		}
+		outcome, err := flow.Register(r.Context(), request)
 		if err != nil {
 			h.compat.fail(w, r, opRegister, err)
 			return

@@ -4,7 +4,7 @@ import "testing"
 
 var riverRollbackSets = []string{
 	"--set", "web.enabled=false", "--set", "goWorkers.enabled=false",
-	"--set", "postgresql.enabled=true", "--set", "goApi.enabled=true", "--set", "authService.enabled=false",
+	"--set", "postgresql.enabled=true", "--set", "goApi.enabled=true", "--set", "authService.phase=0",
 	"--set", "migrations.hook.provisionRoles.enabled=true",
 	"--set", "migrations.hook.riverMigrate.enabled=true",
 	"--set", "migrations.hook.riverMigrate.image=ghcr.io/full-chaos/dho:sha-0123456789ab",
@@ -52,7 +52,7 @@ func TestRiverMigrateHookRunsOnPreRollback(t *testing.T) {
 // migrate Job, or the auth hooks.
 func TestOtherHooksDoNotRunOnPreRollback(t *testing.T) {
 	sets := append(append([]string{}, riverRollbackSets...),
-		"--set", "authService.enabled=true",
+		"--set", "authService.phase=1",
 		"--set", "authService.database.secretName=auth-db", "--set", "authService.migrate.secretName=auth-migrate-db",
 		"--set", "authService.signingKey.secretName=auth-key", "--set", "authService.signingKey.keyId=rollback-test", "--set", "authService.networkPolicy.enabled=false")
 	docs := renderDocs(t, sets...)

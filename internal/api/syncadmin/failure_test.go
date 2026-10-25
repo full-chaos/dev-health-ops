@@ -255,3 +255,7 @@ func TestEmptyIDSetsSendNoQuery(t *testing.T) {
 		t.Fatal(runs, err)
 	}
 }
+
+func (f *faultReader) unitsSnapshot(_ context.Context, fn func(unitsSnapshotReads) error) error {
+	return fn(f)
+}

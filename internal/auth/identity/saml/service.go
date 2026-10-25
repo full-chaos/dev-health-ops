@@ -27,7 +27,12 @@ var (
 	ErrDomainNotAllowed      = errors.New("saml: email domain is not allowed for this provider")
 	ErrAutoProvisionDisabled = errors.New("saml: user not found and auto-provisioning disabled")
 	ErrAccountDisabled       = errors.New("saml: account is disabled")
+	// ErrSessionUnavailable: tokens cannot be minted now; ACS answers 503.
+	ErrSessionUnavailable = errors.New("saml: the session cannot be issued now")
 )
+
+// UnavailableText is go-api's 503 detail when it cannot issue a session.
+const UnavailableText = "Authentication service unavailable"
 
 // EmailConflictError: no identity matched, and the asserted email belongs to
 // an existing account. No account, identity or session was written; the request and assertion are consumed. The user signs in with Method and

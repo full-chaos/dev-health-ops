@@ -2,7 +2,7 @@
 # session cutover touches: goApi probes and args as in the prod values, and the
 # go-api session reader role from the deploy repo's prod values (sessionReaders.goApi). The query-api
 # reader is NOT set here: the owner login is the auth migration login and may not be a reader, so prod
-# sets none; the script's flip layer adds a separate role, because the chart refuses sessions=true without one.
+# sets none; the script's flip layer adds a separate role, because the chart refuses phase 2 (sessions) without one.
 # Everything the cutover does not touch is off. Credentials never appear here: the script writes
 # them to a mode-0600 values file it creates itself.
 web: {enabled: false}
@@ -21,7 +21,7 @@ goApi:
   extraEnv:
     - {name: VALKEY_URI, value: "redis://ap-dev-health-valkey:6379/1"}
 authService:
-  enabled: true
+  phase: 1
   database: {secretName: auth-db}
   networkPolicy: {enabled: false}
   signingKey: {secretName: auth-key, keyId: rehearsal}

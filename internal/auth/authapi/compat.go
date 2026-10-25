@@ -299,6 +299,10 @@ func (h compatHandlers) compatRefresh(w http.ResponseWriter, r *http.Request) {
 	if !admit(w, r, goAPIRefusal, PatternCompatRefresh, charge{h.refresh, clientKey(r)}) {
 		return
 	}
+	if err := h.Issuer.Preflight(ctx); err != nil {
+		h.unavailableCompat(w, r, opCompatRefresh, err)
+		return
+	}
 	var (
 		result session.Result
 		err    error
@@ -368,7 +372,7 @@ func (h compatHandlers) compatRefresh(w http.ResponseWriter, r *http.Request) {
 		SessionID: record.ID, User: user,
 	})
 	if err != nil {
-		h.fail(w, r, opCompatRefresh, err)
+		h.failMint(w, r, opCompatRefresh, err)
 		return
 	}
 	h.rec.record(ctx, opCompatRefresh, "success", string(result.Reason), nil)

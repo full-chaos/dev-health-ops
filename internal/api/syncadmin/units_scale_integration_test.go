@@ -109,7 +109,7 @@ SELECT $1, $2, $3, integration_id, $4, 'github', $5, 'medium', 'incremental', $6
 	if !strings.Contains(string(pagedBody["partial_failure_summary"]), `"unknown"`) || !strings.Contains(string(pagedBody["partial_failure_summary"]), `"auth"`) {
 		t.Errorf("failed categories lost: %s", pagedBody["partial_failure_summary"])
 	}
-	for _, query := range []string{"?limit=1001&offset=0", "?offset=-1", "?source_id=x", "?since=yesterday", "?status=", "?status=bogus", "?offset=1000001", "?limit=-1&offset=0"} {
+	for _, query := range []string{"?limit=1001&offset=0", "?offset=-1", "?source_id=x", "?since=yesterday", "?status=", "?status=bogus", "?error_category=auth", "?offset=1000001", "?limit=-1&offset=0"} {
 		if code, body := v.call("GET", "/api/v1/admin/sync-runs/"+run.String()+"/units"+query, ""); code != http.StatusUnprocessableEntity {
 			t.Errorf("%s: %d %s, want 422", query, code, body)
 		}
@@ -151,11 +151,38 @@ SELECT $1, $2, $3, integration_id, $4, 'github', 'window', 'medium', 'incrementa
 		}
 	}
 
+	// Whole-run views of the paged read, from real SQL: every source label and the
+	// windows over all units and over the successful ones; and a unit that waits
+	// for provider capacity is found by error_category.
+	v.exec(`INSERT INTO sync_run_units (id, org_id, sync_run_id, integration_id, source_id, provider, dataset_key, cost_class, mode,
+status, attempts, result, since_at, before_at, available_at, created_at, updated_at)
+SELECT $1, $2, $3, integration_id, $4, 'github', 'waiting', 'medium', 'incremental', 'dispatching', 1,
+ '{"error_category":"provider_budget_contention","provider_budget_contention_deferrals":2}'::json,
+ '2026-03-01 00:00:00+00', '2026-07-15 00:00:00+00', now(), now(), now() FROM sync_runs WHERE id = $3`, uuid.New(), v.org, run, sources[1])
+	code, body := v.call("GET", "/api/v1/admin/sync-runs/"+run.String()+"/units?offset=0&limit=1&error_category=provider_budget_contention", "")
+	var extras struct {
+		Filtered int                             `json:"filtered_unit_count"`
+		Names    map[string]string               `json:"source_names"`
+		Req      struct{ Since, Before *string } `json:"requested_window"`
+		Cov      struct{ Since, Before *string } `json:"covered_window"`
+	}
+	if err := json.Unmarshal([]byte(body), &extras); code != http.StatusOK || err != nil {
+		t.Fatalf("extras: %d %v %.200s", code, err, body)
+	}
+	if extras.Filtered != 1 || extras.Names[sources[0].String()] != "acme/r0" || extras.Names[sources[1].String()] != "acme/r1" || len(extras.Names) != 2 {
+		t.Errorf("filtered %d, names %v; want 1 waiting unit and the 2 source labels", extras.Filtered, extras.Names)
+	}
+	if body := body; !strings.Contains(body, `"requested_window":{"since_at":"2026-03-01T00:00:00Z","before_at":"2026-07-15T00:00:00Z"}`) ||
+		!strings.Contains(body, `"covered_window":{"since_at":"2026-04-01T00:00:00Z","before_at":"2026-06-30T00:00:00Z"}`) {
+		t.Errorf("windows: %.600s", body)
+	}
+
 	other := uuid.NewString()
 	pgseed.Org(t.Context(), t, v.pool, other, "enterprise")
-	for _, query := range []string{"", "?offset=0&limit=5", "?status=failed&offset=0"} {
+	for _, query := range []string{"", "?offset=0&limit=5", "?status=failed&offset=0", "?error_category=provider_budget_contention&offset=0"} {
 		code, body := v.callAsOrg(other, "/api/v1/admin/sync-runs/"+run.String()+"/units"+query)
-		if code != http.StatusNotFound || strings.Contains(body, "unit_count") || strings.Contains(body, sources[0].String()) {
+		if code != http.StatusNotFound || strings.Contains(body, "unit_count") || strings.Contains(body, sources[0].String()) ||
+			strings.Contains(body, "source_names") || strings.Contains(body, "acme/r0") || strings.Contains(body, "_window") {
 			t.Errorf("org B reading org A's run %q: %d %s, want 404 with no unit and no count", query, code, body)
 		}
 	}

@@ -110,6 +110,10 @@ func (h compatHandlers) compatLogin(w http.ResponseWriter, r *http.Request) {
 		charge{h.loginAccount, h.Limits.accountKey(r, input.email)}) {
 		return
 	}
+	if err := h.Issuer.Preflight(r.Context()); err != nil {
+		h.unavailableCompat(w, r, opCompatLogin, err)
+		return
+	}
 	var requested *uuid.UUID
 	if input.orgID != nil {
 		if parsed, ok := policy.ParsePyUUID(*input.orgID); ok {
@@ -170,7 +174,7 @@ func (h compatHandlers) loginSucceeded(w http.ResponseWriter, r *http.Request, a
 		PrincipalID: outcome.PrincipalID, OrganizationID: org, Role: role, SessionID: issued.Session.ID, User: attempt.user,
 	})
 	if err != nil {
-		h.fail(w, r, opCompatLogin, err)
+		h.failMint(w, r, opCompatLogin, err)
 		return
 	}
 	h.rec.record(r.Context(), opCompatLogin, "success", string(outcome.Reason), nil)

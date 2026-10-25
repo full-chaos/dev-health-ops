@@ -163,6 +163,8 @@ func (r *recordingSessions) Issue(_ context.Context, req SessionRequest) (Tokens
 	return Tokens{AccessToken: fmt.Sprintf("access-%d", len(r.requests)), RefreshToken: fmt.Sprintf("refresh-%d", len(r.requests)), ExpiresIn: 3600}, nil
 }
 
+func (*recordingSessions) Preflight(context.Context) error { return nil }
+
 func (r *recordingSessions) count() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()

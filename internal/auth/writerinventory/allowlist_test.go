@@ -10,6 +10,11 @@ func (e Entry) Key() string {
 }
 
 var Allowlist = []Entry{
+	// go-api organization writers, pre-existing; organizations are not owned by auth-service. The auth-service register inserts below only add new rows.
+	{File: "internal/api/billing/subscription.go", Func: "handlers.syncOrgLicense", Table: "public.organizations", Verb: "UPDATE"},
+	{File: "internal/api/billing/subscriptionhooks.go", Func: "handlers.revokeLicense", Table: "public.organizations", Verb: "UPDATE"},
+	{File: "internal/api/billing/webhook.go", Func: "handlers.persistLicense", Table: "public.organizations", Verb: "UPDATE"},
+	{File: "internal/api/orgs/orgs.go", Func: "handlers.updateOwnOrg", Table: "public.organizations", Verb: "UPDATE"},
 	{File: "internal/api/session/changepassword.go", Func: "handlers.changePassword", Table: "public.users", Verb: "UPDATE"},
 	{File: "internal/api/session/invites.go", Func: "handlers.acceptInvite", Table: "public.org_invites", Verb: "UPDATE"},
 	{File: "internal/api/session/linktokens.go", Func: "deleteLinkTokens", Table: "public.email_verification_tokens", Verb: "DELETE"},
@@ -20,8 +25,10 @@ var Allowlist = []Entry{
 	{File: "internal/api/session/linktokens.go", Func: "handlers.replaceLinkToken", Table: "public.password_reset_tokens", Verb: "INSERT"},
 	{File: "internal/api/session/lockout.go", Func: "clearAttempts", Table: "public.login_attempts", Verb: "DELETE"},
 	{File: "internal/api/session/lockout.go", Func: "handlers.recordFailedAttempt", Table: "public.login_attempts", Verb: "INSERT"},
+	{File: "internal/api/session/onboarding.go", Func: "handlers.skipIntegration", Table: "public.organizations", Verb: "UPDATE"},
 	{File: "internal/api/session/register.go", Func: "handlers.register", Table: "public.users", Verb: "INSERT"},
 	{File: "internal/api/session/register.go", Func: "insertMembership", Table: "public.memberships", Verb: "INSERT"},
+	{File: "internal/api/session/register.go", Func: "insertOrganization", Table: "public.organizations", Verb: "INSERT"},
 	{File: "internal/api/session/social.go", Func: "handlers.createSocialUser", Table: "public.users", Verb: "INSERT"},
 	{File: "internal/api/session/store.go", Func: "insertRefresh", Table: "public.refresh_tokens", Verb: "INSERT"},
 	{File: "internal/api/session/store.go", Func: "markRotated", Table: "public.refresh_tokens", Verb: "UPDATE"},
@@ -43,9 +50,11 @@ var Allowlist = []Entry{
 	{File: "internal/api/sso/provision.go", Func: "handlers.provisionOrGetUser", Table: "public.users", Verb: "UPDATE"},
 	{File: "internal/apiservice/admin/invites.go", Func: "handlers.createInvite", Table: "public.org_invites", Verb: "INSERT"},
 	{File: "internal/apiservice/admin/orgstore.go", Func: "pgStore.insertMembershipTx", Table: "public.memberships", Verb: "INSERT"},
+	{File: "internal/apiservice/admin/orgstore.go", Func: "pgStore.insertOrganizationTx", Table: "public.organizations", Verb: "INSERT"},
 	{File: "internal/apiservice/admin/orgstore.go", Func: "pgStore.removeMembership", Table: "public.memberships", Verb: "DELETE"},
 	{File: "internal/apiservice/admin/orgstore.go", Func: "pgStore.transferOwnership", Table: "public.memberships", Verb: "UPDATE"},
 	{File: "internal/apiservice/admin/orgstore.go", Func: "pgStore.updateMembershipRole", Table: "public.memberships", Verb: "UPDATE"},
+	{File: "internal/apiservice/admin/orgstore.go", Func: "pgStore.updateOrganization", Table: "public.organizations", Verb: "UPDATE"},
 	{File: "internal/apiservice/admin/store.go", Func: "pgStore.endActiveImpersonationSessions", Table: "public.impersonation_sessions", Verb: "UPDATE"},
 	{File: "internal/apiservice/admin/store.go", Func: "pgStore.endImpersonationSession", Table: "public.impersonation_sessions", Verb: "UPDATE"},
 	{File: "internal/apiservice/admin/store.go", Func: "pgStore.insertImpersonationSession", Table: "public.impersonation_sessions", Verb: "INSERT"},
@@ -96,6 +105,8 @@ var Allowlist = []Entry{
 	{File: "internal/auth/identity/organization.go", Func: "Store.insertOrganization", Table: "auth.organizations", Verb: "INSERT"},
 	{File: "internal/auth/identity/organization.go", Func: "Store.updateOrganization", Table: "auth.organizations", Verb: "UPDATE"},
 	// The users-owned projection (CHAOS-10630): written only inside the audit.Commit that writes the auth rows; the runtime role holds the matching column grants only while AUTH_USERS_OWNED is on.
+	{File: "internal/auth/identity/publicusers.go", Func: "insertPublicOwnedOrganization", Table: "public.memberships", Verb: "INSERT"},
+	{File: "internal/auth/identity/publicusers.go", Func: "insertPublicOwnedOrganization", Table: "public.organizations", Verb: "INSERT"},
 	{File: "internal/auth/identity/publicusers.go", Func: "insertPublicUser", Table: "public.users", Verb: "INSERT"},
 	{File: "internal/auth/identity/publicusers.go", Func: "updatePublicPassword", Table: "public.users", Verb: "UPDATE"},
 	{File: "internal/auth/identity/publicusers.go", Func: "updatePublicVerified", Table: "public.users", Verb: "UPDATE"},
@@ -127,11 +138,13 @@ var Allowlist = []Entry{
 	{File: "internal/maintenancecli/maintenance.go", Func: "CleanupExpiredTokens", Table: "public.refresh_tokens", Verb: "DELETE"},
 	{File: "internal/testsupport/pgseed/pgseed.go", Func: "ImpersonationSession", Table: "public.impersonation_sessions", Verb: "INSERT"},
 	{File: "internal/testsupport/pgseed/pgseed.go", Func: "Membership", Table: "public.memberships", Verb: "INSERT"},
+	{File: "internal/testsupport/pgseed/pgseed.go", Func: "Org", Table: "public.organizations", Verb: "INSERT"},
 	{File: "internal/testsupport/pgseed/pgseed.go", Func: "SetUserState", Table: "public.users", Verb: "UPDATE"},
 	{File: "internal/testsupport/pgseed/pgseed.go", Func: "User", Table: "public.users", Verb: "INSERT"},
 	{File: "internal/testsupport/sessionscenario/sessionscenario.go", Func: "Run", Table: "public.login_attempts", Verb: "UPDATE"},
 	{File: "internal/testsupport/sessionscenario/sessionscenario.go", Func: "Run", Table: "public.refresh_tokens", Verb: "UPDATE"},
 	{File: "internal/testsupport/sessionscenario/sessionscenario.go", Func: "Run", Table: "public.users", Verb: "UPDATE"},
 	{File: "internal/testsupport/sessionscenario/sessionscenario.go", Func: "Seed", Table: "public.memberships", Verb: "INSERT"},
+	{File: "internal/testsupport/sessionscenario/sessionscenario.go", Func: "Seed", Table: "public.organizations", Verb: "INSERT"},
 	{File: "internal/testsupport/sessionscenario/sessionscenario.go", Func: "Seed", Table: "public.users", Verb: "INSERT"},
 }

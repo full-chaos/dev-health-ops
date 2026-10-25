@@ -87,6 +87,44 @@ func mdExecPattern(pattern string) string {
 	return "package x\n\nimport \"os/exec\"\n\nfunc tracked() ([]byte, error) {\n\treturn exec.Command(\"git\", \"ls-files\", \"-z\", \"--\", \"" + pattern + "\").Output()\n}\n"
 }
 
+// mdEvidenceHead is the fixture with the plain dynamic reader b plus one reader file and its table rows (each table's
+// rows newline-terminated, "" for none).
+func mdEvidenceHead(file, src, dyn, edges, patterns, walks string) map[string]string {
+	return mdHead(map[string]string{
+		file:                       src,
+		"b/b_dyn.go":               fmt.Sprintf(plantedEnvReader, "b"),
+		tablesDir + "dynreads.tsv": "b\tb_dyn.go\n" + dyn,
+		tablesDir + "reach.tsv":    "b\tb_dyn.go\t*\n",
+		tablesDir + "edges.tsv":    "#\n" + edges,
+		tablesDir + "patterns.tsv": "#\n" + patterns,
+		tablesDir + "walks.tsv":    "d\td_walk_test.go\t.\ttree\t*.go\n" + walks,
+	})
+}
+
+const mdGlobRead = "package x\n\nimport (\n\t\"os\"\n\t\"path/filepath\"\n)\n\nfunc docs() ([]string, error) {\n\treturn filepath.Glob(filepath.Join(os.Getenv(\"DOC_DIR\"), \"*.md\"))\n}\n"
+
+const mdConcatRead = "package x\n\nimport \"os\"\n\nfunc readme() ([]byte, error) {\n\treturn os.ReadFile(os.Getenv(\"DOC_DIR\") + \"/README.md\")\n}\n"
+
+const mdSuffixWalk = `package d
+
+import (
+	"io/fs"
+	"os"
+	"path/filepath"
+	"strings"
+)
+
+func scan() error {
+	return filepath.WalkDir(os.Getenv("SCAN_ROOT"), func(path string, entry fs.DirEntry, err error) error {
+		if err != nil || entry.IsDir() || !strings.HasSuffix(path, ".md") {
+			return nil
+		}
+		_, err = os.ReadFile(path)
+		return err
+	})
+}
+`
+
 const mdTailRead = "package x\n\nimport (\n\t\"os\"\n\t\"path/filepath\"\n)\n\nfunc readme() ([]byte, error) {\n\treturn os.ReadFile(filepath.Join(os.Getenv(\"DOC_DIR\"), \"README.md\"))\n}\n"
 
 const mdExtWalk = `package d
@@ -141,17 +179,30 @@ func TestPlanVerdictMarkdownOnlyPlansTheBoundedReaders(t *testing.T) {
 		{name: "unnamed_docs_file_is_none", head: h, extra: md, changed: []string{"docs/zz.md"}, want: "NONE"},
 		// An unbounded reader with no Markdown evidence is dropped on a Markdown-only pull request; the merge group runs it.
 		{name: "plain_dynamic_reader_is_dropped_on_a_markdown_pr", head: hd, extra: md, changed: []string{"README.md"}, want: "NONE"},
+		// Each reader with Markdown evidence is kept while the plain dynamic reader b beside it is dropped.
 		// An exec whose literal pattern names Markdown files reads them: git ls-files -- '*.md'.
-		{name: "exec_md_pattern_selects_on_a_markdown_pr", head: mdHead(map[string]string{"x/x_md_test.go": mdExecPattern("*.md"),
-			tablesDir + "edges.tsv": "x\tx_md_test.go\tunexpressed\n", tablesDir + "patterns.tsv": "x\tx_md_test.go\t*.md\n"}),
+		{name: "exec_md_pattern_selects_on_a_markdown_pr", head: mdEvidenceHead("x/x_md_test.go", mdExecPattern("*.md"),
+			"", "x\tx_md_test.go\tunexpressed\n", "x\tx_md_test.go\t*.md\n", ""),
 			extra: md, changed: []string{"README.md"}, want: "AFFECTED 1", keys: []string{"x"}},
+		// A glob of an unbounded directory for *.md.
+		{name: "glob_md_pattern_selects_on_a_markdown_pr", head: mdEvidenceHead("x/x_glob_test.go", mdGlobRead,
+			"", "", "x\tx_glob_test.go\t**/*.md\n", "x\tx_glob_test.go\tunexpressed\t-\t-\n"),
+			extra: md, changed: []string{"docs/zz.md"}, want: "AFFECTED 1", keys: []string{"x"}},
+		// An unbounded directory joined to, or concatenated with, a constant .md name.
+		{name: "join_to_an_md_name_selects_on_a_markdown_pr", head: mdEvidenceHead("x/x_tail_test.go", mdTailRead,
+			"x\tx_tail_test.go\n", "", "x\tx_tail_test.go\t**/README.md\n", ""),
+			extra: md, changed: []string{"README.md"}, want: "AFFECTED 1", keys: []string{"x"}},
+		{name: "concat_to_an_md_name_selects_on_a_markdown_pr", head: mdEvidenceHead("x/x_cat_test.go", mdConcatRead,
+			"x\tx_cat_test.go\n", "", "x\tx_cat_test.go\t**/README.md\n", ""),
+			extra: md, changed: []string{"README.md"}, want: "AFFECTED 1", keys: []string{"x"}},
+		// A walk of an unbounded root whose suffix gate passes only .md files.
+		{name: "md_suffix_gate_walk_selects_on_a_markdown_pr", head: mdEvidenceHead("d/d_md_test.go", mdSuffixWalk,
+			"d\td_md_test.go\n", "", "", "d\td_md_test.go\tunexpressed\t-\t*.md\n"),
+			extra: md, changed: []string{"docs/zz.md"}, want: "AFFECTED 1", keys: []string{"d"}},
 		{name: "exec_go_pattern_is_dropped_on_a_markdown_pr", head: mdHead(map[string]string{"x/x_md_test.go": mdExecPattern("*.go"),
 			tablesDir + "edges.tsv": "x\tx_md_test.go\tunexpressed\n"}),
 			extra: md, changed: []string{"README.md"}, want: "NONE"},
 		// An unbounded directory joined to a constant .md name reads files of that name.
-		{name: "unbounded_join_to_an_md_name_selects_that_name", head: mdHead(map[string]string{"x/x_tail_test.go": mdTailRead,
-			tablesDir + "dynreads.tsv": "x\tx_tail_test.go\n", tablesDir + "patterns.tsv": "x\tx_tail_test.go\t**/README.md\n"}),
-			extra: md, changed: []string{"README.md"}, want: "AFFECTED 1", keys: []string{"x"}},
 		{name: "unbounded_join_to_an_md_name_skips_another_name", head: mdHead(map[string]string{"x/x_tail_test.go": mdTailRead,
 			tablesDir + "dynreads.tsv": "x\tx_tail_test.go\n", tablesDir + "patterns.tsv": "x\tx_tail_test.go\t**/README.md\n"}),
 			extra: md, changed: []string{"docs/zz.md"}, want: "NONE"},
@@ -414,5 +465,27 @@ func TestPlanReadsWalkFilterExtensionSet(t *testing.T) {
 		if out := res.stdout + res.stderr; !strings.Contains(out, c.want) {
 			t.Errorf("%s: want the row %q:\n%s", name, c.want, out)
 		}
+	}
+}
+
+// The generator records every read with Markdown evidence from the code: an exec or glob pattern, a constant .md tail
+// joined or concatenated to an unbounded directory (patterns.tsv), and the gate filter of an unbounded walk (walks.tsv).
+func TestPlanReadsRecordsMarkdownEvidence(t *testing.T) {
+	for name, c := range map[string]struct{ file, src, want string }{
+		"exec_pattern":     {"x/x_md_test.go", mdExecPattern("*.md"), "x\tx_md_test.go\t*.md\n"},
+		"glob_pattern":     {"x/x_glob_test.go", mdGlobRead, "x\tx_glob_test.go\t**/*.md\n"},
+		"join_tail":        {"x/x_tail_test.go", mdTailRead, "x\tx_tail_test.go\t**/README.md\n"},
+		"concat_tail":      {"x/x_cat_test.go", mdConcatRead, "x\tx_cat_test.go\t**/README.md\n"},
+		"suffix_gate_walk": {"d/d_md_test.go", mdSuffixWalk, "d\td_md_test.go\tunexpressed\t-\t*.md\n"},
+		"ext_map_walk":     {"d/d_ext_test.go", mdExtWalk, "d\td_ext_test.go\tunexpressed\t-\t*.go|*.md\n"},
+	} {
+		res := planReads(t, readsFixture(t, map[string]string{c.file: c.src}))
+		if out := res.stdout + res.stderr; !strings.Contains(out, c.want) {
+			t.Errorf("%s: plan-reads does not ask for the row %q:\n%s", name, c.want, out)
+		}
+	}
+	res := planReads(t, readsFixture(t, map[string]string{"x/x_md_test.go": mdExecPattern("*.go")}))
+	if out := res.stdout + res.stderr; strings.Contains(out, "patterns.tsv") {
+		t.Errorf("an exec of '*.go' asks for a patterns.tsv row:\n%s", out)
 	}
 }

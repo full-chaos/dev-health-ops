@@ -10,10 +10,12 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/auth/policycatalog"
 	"github.com/full-chaos/dev-health-ops/internal/cli"
+	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
 
 func TestMapOrg(t *testing.T) {
@@ -393,3 +395,76 @@ func TestOrgsVerbRefusesWhileTheUsersOwnedSwitchIsOn(t *testing.T) {
 }
 
 var testTime = time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+
+func orgsVerbWith(t *testing.T) cli.Command {
+	t.Helper()
+	for _, c := range Command().Children {
+		if c.Name == "orgs-backfill" {
+			return c
+		}
+	}
+	t.Fatal("orgs-backfill is not registered")
+	return cli.Command{}
+}
+
+func failIfConnected(t *testing.T) {
+	t.Helper()
+	orig := connectFn
+	connectFn = func(context.Context, cli.Env, string) (*pgxpool.Pool, authschema.ValidatedIdentifier, int) {
+		t.Fatal("connect was reached: the ownership gate must refuse before any database access")
+		return nil, authschema.ValidatedIdentifier{}, cli.ExitFailure
+	}
+	t.Cleanup(func() { connectFn = orig })
+}
+
+func TestOrgsVerbOwnershipGateRefusesBeforeConnect(t *testing.T) {
+	failIfConnected(t)
+	cases := []struct {
+		name, switchName, value string
+		args                    []string
+		want                    int
+	}{
+		{"orgs on real run", "AUTH_ORGS_OWNED", "true", nil, cli.ExitRefused},
+		{"orgs on dry run", "AUTH_ORGS_OWNED", "true", []string{"-dry-run"}, cli.ExitRefused},
+		{"users on real run", "AUTH_USERS_OWNED", "true", nil, cli.ExitRefused},
+		{"users on dry run", "AUTH_USERS_OWNED", "true", []string{"-dry-run"}, cli.ExitRefused},
+		{"orgs malformed", "AUTH_ORGS_OWNED", "maybe", []string{"-dry-run"}, cli.ExitFailure},
+		{"users malformed", "AUTH_USERS_OWNED", "maybe", nil, cli.ExitFailure},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			lookup := func(k string) (string, bool) {
+				if k == c.switchName {
+					return c.value, true
+				}
+				return "postgres://secret-user:secret-pass@db/x", k == "AUTH_DATABASE_URI"
+			}
+			var stdout, stderr bytes.Buffer
+			code := orgsVerbWith(t).Run(context.Background(), cli.Env{Args: c.args, Lookup: lookup, Stdout: &stdout, Stderr: &stderr})
+			if code != c.want {
+				t.Fatalf("exit %d, want %d (%s)", code, c.want, stderr.String())
+			}
+			out := stderr.String()
+			if !strings.Contains(out, c.switchName) || strings.Contains(out, "secret-pass") || strings.Contains(out, "maybe") || stdout.Len() != 0 {
+				t.Fatalf("stderr %q stdout %q: must name %s only", out, stdout.String(), c.switchName)
+			}
+		})
+	}
+}
+
+func TestOrgsVerbPassesTheGateWhenNeitherSwitchIsOn(t *testing.T) {
+	orig := connectFn
+	reached := false
+	connectFn = func(context.Context, cli.Env, string) (*pgxpool.Pool, authschema.ValidatedIdentifier, int) {
+		reached = true
+		return nil, authschema.ValidatedIdentifier{}, cli.ExitFailure
+	}
+	t.Cleanup(func() { connectFn = orig })
+	for _, v := range []string{"", "false"} {
+		reached = false
+		lookup := func(k string) (string, bool) { return v, k == "AUTH_ORGS_OWNED" || k == "AUTH_USERS_OWNED" }
+		if code := orgsVerbWith(t).Run(context.Background(), cli.Env{Lookup: lookup, Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}}); code != cli.ExitFailure || !reached {
+			t.Fatalf("value %q: exit %d reached=%v; want the gate passed", v, code, reached)
+		}
+	}
+}

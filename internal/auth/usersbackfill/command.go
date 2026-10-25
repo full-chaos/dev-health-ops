@@ -24,6 +24,9 @@ const (
 	dsnEnv    = authconfig.EnvDatabaseURI
 )
 
+// connectFn is the database connect step; tests replace it to prove a gate refuses first.
+var connectFn = connect
+
 // Command is the `auth` group of dho.
 func Command() cli.Command {
 	return cli.Command{
@@ -71,7 +74,7 @@ func run(ctx context.Context, env cli.Env) int {
 		fmt.Fprintln(env.Stderr, "users-backfill: refused: AUTH_USERS_OWNED is true, auth.users is the authority and this command copies from public.users")
 		return cli.ExitRefused
 	}
-	pool, schema, code := connect(ctx, env, "users-backfill")
+	pool, schema, code := connectFn(ctx, env, "users-backfill")
 	if code != cli.ExitOK {
 		return code
 	}
@@ -135,7 +138,7 @@ func runReconcile(ctx context.Context, env cli.Env) int {
 		fmt.Fprintln(env.Stderr, "argument error: positional arguments are not accepted and -batch must be 1..10000")
 		return cli.ExitUsage
 	}
-	pool, schema, code := connect(ctx, env, "users-reconcile")
+	pool, schema, code := connectFn(ctx, env, "users-reconcile")
 	if code != cli.ExitOK {
 		return code
 	}
@@ -175,14 +178,22 @@ func runOrgs(ctx context.Context, env cli.Env) int {
 		fmt.Fprintln(env.Stderr, "argument error: positional arguments are not accepted and -batch must be 1..10000")
 		return cli.ExitUsage
 	}
-	if owned, err := authconfig.UsersOwnedFromLookup(env.Lookup); err != nil {
-		fmt.Fprintln(env.Stderr, "orgs-backfill: AUTH_USERS_OWNED must be true or false")
-		return cli.ExitFailure
-	} else if owned {
-		fmt.Fprintln(env.Stderr, "orgs-backfill: refused: AUTH_USERS_OWNED is true, the auth schema is the authority and this command copies from public tables")
-		return cli.ExitRefused
+	for _, gate := range []struct {
+		name string
+		read func(secrets.LookupEnv) (bool, error)
+	}{
+		{authconfig.EnvUsersOwned, authconfig.UsersOwnedFromLookup},
+		{authconfig.EnvOrgsOwned, authconfig.OrgsOwnedFromLookup},
+	} {
+		if owned, err := gate.read(env.Lookup); err != nil {
+			fmt.Fprintf(env.Stderr, "orgs-backfill: %s must be true or false\n", gate.name)
+			return cli.ExitFailure
+		} else if owned {
+			fmt.Fprintf(env.Stderr, "orgs-backfill: refused: %s is true, the auth schema is the authority and this command copies from public tables\n", gate.name)
+			return cli.ExitRefused
+		}
 	}
-	pool, schema, code := connect(ctx, env, "orgs-backfill")
+	pool, schema, code := connectFn(ctx, env, "orgs-backfill")
 	if code != cli.ExitOK {
 		return code
 	}

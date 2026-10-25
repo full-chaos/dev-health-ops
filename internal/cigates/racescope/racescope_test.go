@@ -313,3 +313,53 @@ func TestACoveredByCallbackThatWritesACapturedVariableIsRefused(t *testing.T) {
 		}
 	}
 }
+
+// r1 P1: a dot import hides the package qualifier, so a timer goroutine (or any banned call) is a bare identifier.
+func TestADotImportInAnExcludedPackageIsRefused(t *testing.T) {
+	for name, files := range map[string]map[string]string{
+		"dot-imported time in a package file": {"a/a.go": "package a\n\nimport . \"time\"\n\nfunc F() int { AfterFunc(0, func() {}); return 1 }\n", "a/a_test.go": cleanTest},
+		"dot-imported time in a test file":    {"a/a.go": cleanPkg, "a/a_test.go": "package a\n\nimport (\n\t. \"time\"\n\t\"testing\"\n)\n\nfunc TestF(t *testing.T) { NewTicker(1) }\n"},
+		"dot-imported in a dependency":        {"a/a.go": "package a\n\nimport \"example.test/m/b\"\n\nfunc F() int { return b.G() }\n", "a/a_test.go": cleanTest, "b/b.go": "package b\n\nimport . \"time\"\n\nfunc G() int { AfterFunc(0, func() {}); return 1 }\n"},
+	} {
+		if got := problemsOf(t, files, rowA); !strings.Contains(got, "dot import") {
+			t.Errorf("%s: want a dot import problem, got:\n%s", name, got)
+		}
+	}
+}
+
+// r1 P1: a callback may call only builtins and the listed standard-library packages, so a helper cannot write the captured variable
+// for it (a pointer to a captured slice passed to a helper), and a CheckTree reference that is not a direct call cannot hide it.
+func TestACoveredByCallbackThatCallsAHelperOrAliasesTheCalleeIsRefused(t *testing.T) {
+	covered := Row{"a", "covered-by:c", "TestH", "pool in c"}
+	helper := func(cb string) map[string]string {
+		files := callbackModule(cb)
+		files["a/a.go"] += "\nfunc appendTo(p *[]string, s string) { *p = append(*p, s) }\n\nfunc pure(s string) int { return len(s) }\n"
+		return files
+	}
+	for name, cb := range map[string]string{
+		"helper given a pointer to a captured slice":  `func(path string) int { appendTo(&out, path); return 0 }`,
+		"helper without a captured argument":          `func(path string) int { return pure(path) }`,
+		"method call on a captured value":             `func(path string) int { out2.add(path); return 0 }`,
+		"field write":                                 `func(path string) int { st.n = 1; return 0 }`,
+		"range assign to a captured variable":         `func(path string) int { for out2 = range path {}; return 0 }`,
+		"package-level function that writes a global": `writesGlobal`,
+	} {
+		files := helper(cb)
+		files["a/a.go"] = strings.Replace(files["a/a.go"], "\\treturn c.CheckTree", "\\tvar out2 int\\n\\tst := struct{ n int }{}\\n\\t_, _ = out2, st\\n\\treturn c.CheckTree", 1)
+		files["a/a.go"] += "\nvar global []string\n\nfunc writesGlobal(p string) int { global = append(global, p); return 0 }\n"
+		files["a/a.go"] = strings.Replace(files["a/a.go"], "var out []string", "var out []string\n\tvar out2 string", 1)
+		if got := problemsOf(t, files, covered); !strings.Contains(got, "callback") {
+			t.Errorf("%s: no callback problem, got:\n%s", name, got)
+		}
+	}
+	alias := callbackModule(`func(path string) int { return len(path) }`)
+	alias["a/a.go"] = strings.Replace(alias["a/a.go"], "return c.CheckTree(", "check := c.CheckTree\n\treturn check(", 1)
+	if got := problemsOf(t, alias, covered); !strings.Contains(got, "CheckTree is used other than as a direct call") {
+		t.Errorf("an aliased CheckTree was accepted:\n%s", got)
+	}
+	pure := callbackModule(`func(path string) int { return len(strings.TrimSpace(path)) }`)
+	pure["a/a.go"] = strings.Replace(pure["a/a.go"], "import \"example.test/m/c\"", "import (\n\t\"strings\"\n\n\t\"example.test/m/c\"\n)", 1)
+	if got := problemsOf(t, pure, covered); got != "" {
+		t.Errorf("a callback that calls only the standard library was refused:\n%s", got)
+	}
+}

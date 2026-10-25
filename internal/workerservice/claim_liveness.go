@@ -50,10 +50,11 @@ type claimLiveness struct {
 	// exit of the wait.
 	leaseWaits map[string]map[time.Time]int64
 	// preHandlerSince is, per queue, when the CURRENT unbroken run of
-	// observations began in which at least one running slot was not inside a
-	// handler (Running > inHandler). It is written only by preHandlerStuckFor,
-	// from the readiness poll, and cleared the moment a poll sees every running
-	// slot inside a handler (or none running).
+	// observations began in which at least one running slot was neither inside
+	// a handler nor within a credited lease wait (Running > inHandler +
+	// leaseWaiting). It is written only by preHandlerStuckFor, from the
+	// readiness poll, and cleared the moment a poll sees every running slot
+	// inside a handler or within a credited lease wait (or none running).
 	preHandlerSince map[string]time.Time
 	// gateFailures is, per queue, the run of idempotency-gate failures (a job
 	// that failed at its idempotency Begin, or at its completion claim) seen
@@ -249,9 +250,12 @@ func (c *claimLiveness) handlerReturned(queue string, now time.Time) {
 }
 
 // preHandlerStuckFor reports how long queue has CONTINUOUSLY had a running slot
-// that is not inside a handler, as seen by successive readiness polls; zero when
-// every running slot is inside a handler (or none is running), and on the first
-// observation. It exists for the case the backlog check cannot see (CHAOS-6818
+// that is neither inside a handler nor within a credited org-lease wait
+// (running > inHandler+leaseWaiting; a wait is credited while
+// now.Sub(started) <= leaseWaitCredit(), the lease TTL plus the window), as seen
+// by successive readiness polls; zero when every running slot is inside a
+// handler or within a credited lease wait (or none is running), and on the
+// first observation. It exists for the case the backlog check cannot see (CHAOS-6818
 // r2c): the only claimed job stalls at its idempotency Begin on a stale pooler,
 // River counts it running, and nothing is available, so there is no backlog to
 // fail on. A single observation proves nothing (a job is always briefly between
@@ -695,22 +699,25 @@ func collectQueueFacts(snapshot riverstore.QueueTelemetrySnapshot, claim *claimL
 //
 // "Should be reaching a handler" is either a claimed slot that is neither inside
 // a handler nor waiting on an org lease (running > inside+leaseWaiting) or a
-// backlog with free capacity to claim it. The
-// queue is healthy exactly when every running slot is inside a handler (long
-// work, however deep the backlog behind a FULL queue) or nothing is waiting
-// at all. The two ways it is not:
+// backlog with free capacity to claim it. A lease wait counts only while
+// now.Sub(started) <= leaseWaitCredit() (the lease TTL plus the window). The
+// queue is healthy exactly when every running slot is inside a handler or
+// within a credited lease wait (long work, however deep the backlog behind a
+// FULL queue) or nothing is waiting at all. The three ways it is not:
 //
-//   - a running slot outside a handler, unbroken across polls for more than the
+//   - a running slot outside a handler and not within a credited lease wait
+//     (running > inside+leaseWaiting), unbroken across polls for more than the
 //     window, with no handler activity for the window: a job stalled at its
 //     idempotency Begin (a stale or recreated pooler, CHAOS-4029), with or
 //     without a backlog behind it. The unbroken-run and no-activity conditions
 //     keep a job merely between claim and handler, and a busy queue whose polls
 //     each catch one, from ever counting;
 //   - a backlog with a slot to claim it (or one whose full slots are not all in
-//     handlers) and no handler activity for the window: the consumer is not
-//     claiming.
+//     handlers or credited lease waits) and no handler activity for the
+//     window: the consumer is not claiming;
+//   - the idempotency-gate failure run below.
 //
-// The third way is independent of the snapshot (CHAOS-6864): jobs that keep
+// That third way is independent of the snapshot (CHAOS-6864): jobs that keep
 // failing at their idempotency gate, across more than a window, with no handler
 // running or inside one. River parks such a job as retryable until its backoff
 // elapses (5s, 10s ... 5m), so between failures the queue reads Available=0 and

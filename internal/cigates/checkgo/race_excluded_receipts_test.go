@@ -162,6 +162,7 @@ func TestRaceExcludedReceiptsFailOnEachPlantedFault(t *testing.T) {
 	}
 	t.Run("a census row that go list omits", censusRowThatGoListOmitsSubtests)
 	t.Run("a duplicated census row", duplicateCensusSubtests)
+	t.Run("a malformed census line", malformedCensusSubtests)
 }
 
 const shardFakeGo = `#!/usr/bin/env bash
@@ -411,4 +412,59 @@ func duplicateCensusSubtests(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A census line must be exactly <package><TAB><test>. A whitespace-only line, a 1-column line, a line with more than 2 columns and
+// a line with an empty column are refused by the loader every verb shares, naming the line number; a CRLF line ending is trimmed
+// like any other surrounding whitespace, so the row still counts once.
+func malformedCensusSubtests(t *testing.T) {
+	script := scriptPath(t, "ci/check_go.sh")
+	repo := filepath.Dir(filepath.Dir(script))
+	real := readText(t, filepath.Join(repo, "ci", "race_excluded_tests.tsv"))
+	plants := []struct{ name, line string }{
+		{"whitespace-only", "   "},
+		{"tab-only", "\t"},
+		{"carriage-return-only", "\r"},
+		{"1 column", pkgA},
+		{"3 columns", pkgA + "\tTestFour\textra"},
+		{"empty test column", pkgA + "\t "},
+		{"empty package column", " \tTestFour"},
+	}
+	for _, p := range plants {
+		p := p
+		t.Run(p.name+", receipts verb", func(t *testing.T) {
+			res := receiptsVerb(t, fixtureCensus+p.line+"\n", eventLines(t, cleanEvents()))
+			if res.code == 0 {
+				t.Fatalf("a census with the line %q was accepted: %s", p.line, res.stdout)
+			}
+			if !strings.Contains(res.stderr, "census line 4 ") {
+				t.Errorf("the failure does not name line 4: %s", tail(res.stderr, 500))
+			}
+		})
+		t.Run(p.name+", shard plan verb", func(t *testing.T) {
+			list := filepath.Join(t.TempDir(), "census.tsv")
+			if err := os.WriteFile(list, []byte(real+p.line+"\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			res := cmdSpec{dir: repo, env: inheritedEnv([]string{"GO_RACE_EXCLUDED_TESTS", "GO_QUALITY_SELECTION_FILE"}, "GO_RACE_EXCLUDED_TESTS="+list)}.
+				run("bash", script, "race-excluded-shard-plan", "1", "3")
+			if res.code == 0 {
+				t.Fatalf("a census with the line %q was accepted: %s", p.line, res.stdout)
+			}
+			want := fmt.Sprintf("census line %d ", strings.Count(real, "\n")+1)
+			if !strings.Contains(res.stderr, want) {
+				t.Errorf("the failure does not say %q: %s", want, tail(res.stderr, 500))
+			}
+		})
+	}
+	t.Run("a CRLF row is trimmed and counted once", func(t *testing.T) {
+		census := pkgA + "\tTestOne\r\n" + pkgA + "\tTestTwo\r\n" + pkgB + "\tTestThree\r\n"
+		res := receiptsVerb(t, census, eventLines(t, cleanEvents()))
+		if res.code != 0 {
+			t.Fatalf("a CRLF census was refused: %s", tail(res.stderr, 500))
+		}
+		if got := strings.Count(res.stdout, "race-excluded-ran:"); got != 4 {
+			t.Errorf("want 3 receipt lines and 1 count line, got %d:\n%s", got, res.stdout)
+		}
+	})
 }

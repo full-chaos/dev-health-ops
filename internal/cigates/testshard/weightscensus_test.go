@@ -511,3 +511,25 @@ func TestTheCensusParserRefusesADuplicateRowBeforeItEntersTheMap(t *testing.T) {
 		t.Errorf("a clean census: got %v, %v", got, err)
 	}
 }
+
+func TestTheCensusParserRefusesMalformedLinesNamingTheLine(t *testing.T) {
+	t.Parallel()
+	for name, line := range map[string]string{
+		"whitespace-only":      "   ",
+		"tab-only":             "\t",
+		"carriage-return-only": "\r",
+		"1 column":             "a/b",
+		"3 columns":            "a/b\tTestOne\textra",
+		"empty test column":    "a/b\t ",
+		"empty package column": " \tTestOne",
+	} {
+		_, err := parseCensusExcluded("# c\nc/d\tTestTwo\n" + line + "\n")
+		if err == nil || !strings.Contains(err.Error(), "census line 3 ") {
+			t.Errorf("%s: want an error naming census line 3, got %v", name, err)
+		}
+	}
+	got, err := parseCensusExcluded("# c\n\na/b\tTestOne\r\nc/d\tTestTwo\n")
+	if err != nil || len(got) != 2 || !got[censusExcludedRow{"a/b", "TestOne"}] {
+		t.Errorf("a CRLF row and an empty line: got %v, %v", got, err)
+	}
+}

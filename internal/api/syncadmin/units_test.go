@@ -8,6 +8,7 @@ import (
 	"math/big"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -26,8 +27,41 @@ type unitsReader struct {
 	askedLookups []string
 }
 
-func (u *unitsReader) runUnits(context.Context, string, uuid.UUID) ([]runUnit, error) {
+func (u *unitsReader) runUnitRollupRows(context.Context, string, uuid.UUID) ([]runUnit, error) {
 	return u.units, u.hit("runUnits")
+}
+
+func (u *unitsReader) kept(filter unitFilter) []runUnit {
+	var out []runUnit
+	for _, unit := range u.units {
+		if len(filter.Statuses) > 0 && !slices.Contains(filter.Statuses, unit.Status) {
+			continue
+		}
+		if filter.DatasetKey != nil && unit.DatasetKey != *filter.DatasetKey {
+			continue
+		}
+		if filter.SourceID != nil && unit.SourceID != *filter.SourceID {
+			continue
+		}
+		out = append(out, unit)
+	}
+	return out
+}
+
+func (u *unitsReader) runUnitsPage(_ context.Context, _ string, _ uuid.UUID, filter unitFilter, offset int64, limit *int64) ([]runUnit, error) {
+	kept := u.kept(filter)
+	if offset > int64(len(kept)) {
+		offset = int64(len(kept))
+	}
+	kept = kept[offset:]
+	if limit != nil && *limit < int64(len(kept)) {
+		kept = kept[:*limit]
+	}
+	return kept, u.hit("runUnitsPage")
+}
+
+func (u *unitsReader) countRunUnits(_ context.Context, _ string, _ uuid.UUID, filter unitFilter) (int64, error) {
+	return int64(len(u.kept(filter))), u.hit("countRunUnits")
 }
 
 func (u *unitsReader) watermarkRows(_ context.Context, _ string, sources, lookups []string) ([]schedsync.WatermarkRow, error) {
@@ -265,6 +299,62 @@ func TestRunUnitsCatchingUpFollowsTheWorkItemWindowRatchet(t *testing.T) {
 		}
 		if got := strings.Contains(body, `"catching_up":true`); got != wantCatchingUp {
 			t.Errorf("%s: catching_up = %v, want %v:\n%s", provider, got, wantCatchingUp, body)
+		}
+	}
+}
+
+// TestRunUnitsPagedQuery pins the paged read's parameters: any of offset,
+// status, dataset_key, source_id, since or before pages the filtered units
+// (limit default 100, at most 1000) and adds filtered_unit_count; a bad value
+// is a 422 and reads nothing; without them the whole-run answer is unchanged.
+func TestRunUnitsPagedQuery(t *testing.T) {
+	unsetForTest(t, "SYNC_INCREMENTAL_HEAVY_MAX_WINDOW_DAYS")
+	unsetForTest(t, "SYNC_WATERMARK_OVERLAP")
+	now := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+	name := "repo"
+	source := uuid.New()
+	var units []runUnit
+	for i, status := range []string{"success", "failed", "retrying", "failed", "success"} {
+		units = append(units, runUnit{ID: uuid.New(), SyncRunID: faultRunID, SourceID: source, OrgID: "org", Provider: "github",
+			DatasetKey: []string{"commits", "files"}[i%2], CostClass: "medium", Mode: "incremental", Status: status,
+			CreatedAt: now, UpdatedAt: now, HasSource: true, SourceName: &name, SourceFullName: &name, SourceExternalID: &name})
+	}
+	reader := func() *unitsReader { return &unitsReader{faultReader: &faultReader{}, units: units} }
+
+	for _, query := range []string{"?limit=1001&offset=0", "?offset=-1", "?offset=x", "?source_id=x", "?since=yesterday",
+		"?before=2026-13-01&offset=0", "?status=", "?status=a,,b", "?dataset_key=&offset=0", "?limit=-1&offset=0",
+		"?status=" + strings.Repeat("a", 129), "?status=a,b,c,d,e,f,g,h,i,j,k,l,m"} {
+		r := reader()
+		if _, status, body := serveUnits(t, r, query, now); status != http.StatusUnprocessableEntity || r.calls["runUnits"] != 0 {
+			t.Errorf("%s: %d %s, %d unit reads, want 422 and none", query, status, body, r.calls["runUnits"])
+		}
+	}
+
+	r := reader()
+	_, status, body := serveUnits(t, r, "?status=failed,retrying&offset=1&limit=2", now)
+	if status != http.StatusOK || !strings.Contains(body, `"filtered_unit_count":3`) || !strings.Contains(body, `"unit_count":5`) ||
+		strings.Count(body, `"sync_run_id"`) != 2 {
+		t.Errorf("paged: %d %s", status, body)
+	}
+	if !strings.Contains(body, `"by_status":{"success":2,"failed":2,"retrying":1}`) {
+		t.Errorf("a filter narrowed the rollups: %s", body)
+	}
+	_, status, body = serveUnits(t, reader(), "?offset=0", now)
+	if status != http.StatusOK || strings.Count(body, `"sync_run_id"`) != 5 || !strings.Contains(body, `"filtered_unit_count":5`) {
+		t.Errorf("default page: %d %s", status, body)
+	}
+	_, status, body = serveUnits(t, reader(), "?dataset_key=files&source_id="+source.String()+"&since=2026-01-01&before=2026-12-31T00:00:00Z", now)
+	if status != http.StatusOK || strings.Count(body, `"sync_run_id"`) != 2 || !strings.Contains(body, `"filtered_unit_count":2`) {
+		t.Errorf("dataset and source filter: %d %s", status, body)
+	}
+	_, status, body = serveUnits(t, reader(), "?limit=3", now)
+	if status != http.StatusOK || strings.Contains(body, "filtered_unit_count") || strings.Count(body, `"sync_run_id"`) != 3 {
+		t.Errorf("whole-run limit slice changed: %d %s", status, body)
+	}
+	for _, step := range []string{"countRunUnits", "runUnitsPage"} {
+		_, status, body := serveUnits(t, &unitsReader{faultReader: &faultReader{fail: step}, units: units}, "?offset=0", now)
+		if status != http.StatusInternalServerError || body != `{"detail":"Internal Server Error"}` {
+			t.Errorf("failing %s: %d %s", step, status, body)
 		}
 	}
 }

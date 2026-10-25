@@ -122,8 +122,14 @@ func (f *faultReader) runStatusCounts(context.Context, string, uuid.UUID) (map[s
 	return map[string]int64{}, f.hit("runStatusCounts")
 }
 
-func (f *faultReader) runUnits(context.Context, string, uuid.UUID) ([]runUnit, error) {
+func (f *faultReader) runUnitRollupRows(context.Context, string, uuid.UUID) ([]runUnit, error) {
 	return nil, f.hit("runUnits")
+}
+func (f *faultReader) runUnitsPage(context.Context, string, uuid.UUID, unitFilter, int64, *int64) ([]runUnit, error) {
+	return nil, f.hit("runUnitsPage")
+}
+func (f *faultReader) countRunUnits(context.Context, string, uuid.UUID, unitFilter) (int64, error) {
+	return 0, f.hit("countRunUnits")
 }
 func (f *faultReader) watermarkRows(context.Context, string, []string, []string) ([]schedsync.WatermarkRow, error) {
 	return nil, f.hit("watermarkRows")

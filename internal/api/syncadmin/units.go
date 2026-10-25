@@ -39,12 +39,7 @@ type decodedUnit struct {
 // slice) as SyncRunUnitResponse.
 func (h *handlers) getRunUnits(w http.ResponseWriter, r *http.Request) {
 	var errs pybody.Errors
-	var limit *big.Int
-	if raw := pybody.LastQuery(r.URL.Query(), "limit"); raw != nil {
-		if value, ok := errs.QueryInt("limit", raw, 0, nil, nil); ok {
-			limit = value
-		}
-	}
+	query := parseUnitsQuery(r.URL.Query(), &errs)
 	if len(errs) > 0 {
 		writeQueryErrors(w, errs)
 		return
@@ -65,7 +60,7 @@ func (h *handlers) getRunUnits(w http.ResponseWriter, r *http.Request) {
 		policy.WriteDetail(w, http.StatusNotFound, "Sync run not found", nil)
 		return
 	}
-	rows, err := h.store.runUnits(ctx, org, id)
+	rows, err := h.store.runUnitRollupRows(ctx, org, id)
 	if err != nil {
 		h.fail(w, r, "list_units", err)
 		return
@@ -112,8 +107,30 @@ func (h *handlers) getRunUnits(w http.ResponseWriter, r *http.Request) {
 	summary.Set("catching_up_dataset_count", pyjson.IntOf(catchingUp))
 	summary.Set("dataset_freshness_scope", "run")
 
-	listed := make([]pyjson.Value, 0, len(units))
-	for _, unit := range units[:pySliceEnd(limit, len(units))] {
+	var stop int64
+	var filteredTotal int64
+	if query.paged {
+		if filteredTotal, err = h.store.countRunUnits(ctx, org, id, query.filter); err != nil {
+			h.fail(w, r, "count_units", err)
+			return
+		}
+		stop = query.limit.Int64()
+	} else {
+		stop = int64(pySliceEnd(query.limit, len(units)))
+	}
+	pageRows, err := h.store.runUnitsPage(ctx, org, id, query.filter, query.offset, &stop)
+	if err != nil {
+		h.fail(w, r, "list_unit_page", err)
+		return
+	}
+	listed := make([]pyjson.Value, 0, len(pageRows))
+	for _, row := range pageRows {
+		unit := decodedUnit{runUnit: row}
+		if unit.result, err = decodeStored(row.Result); err != nil {
+			h.fail(w, r, "decode_unit_result", err)
+			return
+		}
+		unit.resultDict, _ = unit.result.(*pyjson.Object)
 		response, err := unitResponse(unit)
 		if err != nil {
 			h.fail(w, r, "render_unit", err)
@@ -122,7 +139,11 @@ func (h *handlers) getRunUnits(w http.ResponseWriter, r *http.Request) {
 		listed = append(listed, response)
 	}
 	summary.Set("units", listed)
-	policy.WriteModel(w, http.StatusOK, summarizeInModelOrder(summary), nil)
+	out := summarizeInModelOrder(summary)
+	if query.paged {
+		out.Set("filtered_unit_count", pyjson.IntOf(filteredTotal))
+	}
+	policy.WriteModel(w, http.StatusOK, out, nil)
 }
 
 // pySliceEnd is the stop of seq[:limit] for a sequence of length n: nil is

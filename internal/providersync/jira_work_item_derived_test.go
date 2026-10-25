@@ -4,77 +4,18 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/workitemmetrics"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"slices"
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
+
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
-	"github.com/full-chaos/dev-health-ops/internal/teamattribution"
 	"github.com/full-chaos/dev-health-ops/internal/workitemcontract"
 )
 
 type jiraDerivedStubConn struct{ driver.Conn }
-
-var errJiraDerivedPrepare = errors.New("jira derived prepare reached")
-
-type jiraDerivedProbeConn struct{ driver.Conn }
-
-func (jiraDerivedProbeConn) PrepareBatch(
-	context.Context,
-	string,
-	...driver.PrepareBatchOption,
-) (driver.Batch, error) {
-	return nil, errJiraDerivedPrepare
-}
-
-func (jiraDerivedProbeConn) Query(context.Context, string, ...any) (driver.Rows, error) {
-	return nil, errJiraDerivedPrepare
-}
-
-func TestBuildJiraWorkItemDerivedEffectsKeepsTenTypedDestinations(t *testing.T) {
-	metric := githubWorkItemMetricTestGroupRow()
-	metric.Provider = "jira"
-	metric.ItemsCompletedUnassigned = 7
-	effects, err := BuildJiraWorkItemDerivedEffects(JiraWorkItemDerivedEffectRows{
-		WorkItemMetricsDaily: []JiraWorkItemMetricsDailyRow{metric},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(effects) != len(jiraWorkItemDerivedDestinations) {
-		t.Fatalf("effects=%d want=%d", len(effects), len(jiraWorkItemDerivedDestinations))
-	}
-	for index, effect := range effects {
-		if effect.Destination != jiraWorkItemDerivedDestinations[index] ||
-			effect.Recovery != EffectReadbackRequired {
-			t.Fatalf("effect[%d]=%+v", index, effect)
-		}
-		wantRows := 0
-		if effect.Destination == "work_item_metrics_daily" {
-			wantRows = 1
-		}
-		if len(effect.Rows) != wantRows {
-			t.Fatalf("effect[%d] rows=%d want=%d", index, len(effect.Rows), wantRows)
-		}
-	}
-	if effects[0].Destination != "ai_attribution" || len(effects[0].Rows) != 0 {
-		t.Fatalf("AI no-producer disposition=%+v", effects[0])
-	}
-	var persisted JiraWorkItemMetricsDailyRow
-	for _, effect := range effects {
-		if effect.Destination == "work_item_metrics_daily" {
-			if err := json.Unmarshal(effect.Rows[0], &persisted); err != nil {
-				t.Fatal(err)
-			}
-		}
-	}
-	if persisted.Provider != "jira" || persisted.ItemsCompletedUnassigned != 7 {
-		t.Fatalf("typed metric projection=%+v", persisted)
-	}
-}
 
 type jiraDerivedRecordingAdapter struct {
 	writes, inspections int
@@ -215,207 +156,6 @@ func TestJiraCompositeSinkOwnsDirectDerivedAndEvaluatedEmptyAI(t *testing.T) {
 	}
 }
 
-// The Jira sync sink refuses the three work-item metric tables before any
-// store call: the daily job is their one writer.
-func TestJiraSyncSinkRefusesTheMetricTripletEffects(t *testing.T) {
-	claim := nativeTestClaim("jira", "work-items")
-	group := githubWorkItemMetricTestGroupRow()
-	group.Provider, group.OrgID = "jira", claim.OrgID
-	user := githubWorkItemMetricTestUserRow()
-	user.Provider, user.OrgID = "jira", claim.OrgID
-	cycle := githubWorkItemMetricTestCycleRow()
-	cycle.Provider, cycle.OrgID = "jira", claim.OrgID
-	effects, err := BuildJiraWorkItemDerivedEffects(JiraWorkItemDerivedEffectRows{
-		WorkItemMetricsDaily:     []JiraWorkItemMetricsDailyRow{group},
-		WorkItemUserMetricsDaily: []JiraWorkItemUserMetricsDailyRow{user},
-		WorkItemCycleTimes:       []JiraWorkItemCycleTimePersistenceRow{cycle},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	sink, err := NewJiraWorkItemDerivedClickHouseEffects(
-		jiraDerivedProbeConn{},
-		providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }), nil,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	seen := 0
-	for _, effect := range effects {
-		switch effect.Destination {
-		case "work_item_metrics_daily", "work_item_user_metrics_daily", "work_item_cycle_times":
-			seen++
-			if err := sink.WriteEffect(context.Background(), claim, effect); !errors.Is(err, ErrInvalidConfiguration) || errors.Is(err, errJiraDerivedPrepare) {
-				t.Fatalf("%s write=%v want a refusal before the store", effect.Destination, err)
-			}
-			if inspection, err := sink.InspectEffect(context.Background(), claim, effect); inspection != EffectConflict || !errors.Is(err, ErrInvalidConfiguration) || errors.Is(err, errJiraDerivedPrepare) {
-				t.Fatalf("%s readback=%v/%v want a refusal before the store", effect.Destination, inspection, err)
-			}
-		}
-	}
-	if seen != 3 {
-		t.Fatalf("metric triplet effects exercised=%d want=3", seen)
-	}
-}
-
-func TestJiraWorkItemDeriverRejectsForeignProviderAndTenant(t *testing.T) {
-	source := &githubMultiDayOracleSource{}
-	deriver := JiraWorkItemDeriver{
-		Source: source, statusMapping: loadRealStatusMapping(t),
-	}
-	claim := nativeTestClaim("jira", "work-items")
-	day := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
-	before := day.AddDate(0, 0, 1)
-	claim.SinceAt, claim.BeforeAt = &day, &before
-	foreignProvider := claim
-	foreignProvider.Provider = "github"
-	if _, err := deriver.Derive(
-		context.Background(), foreignProvider, jiraWorkItemRows{}, day.Add(time.Hour),
-	); !errors.Is(err, ErrInvalidConfiguration) {
-		t.Fatalf("foreign provider error=%v want ErrInvalidConfiguration", err)
-	}
-	if source.loads != 0 {
-		t.Fatalf("foreign provider reached attribution context: %d load(s)", source.loads)
-	}
-	foreignTenant := jiraWorkItemRow{
-		WorkItemID: "jira:OPS-1", Provider: "jira", Title: "foreign", Type: "task",
-		Status: "todo", CreatedAt: day, UpdatedAt: day, OrgID: "org-other",
-	}
-	if _, err := deriver.Derive(
-		context.Background(), claim,
-		jiraWorkItemRows{WorkItems: []jiraWorkItemRow{foreignTenant}}, day.Add(time.Hour),
-	); !errors.Is(err, providerfoundation.ErrInvalidScope) {
-		t.Fatalf("foreign tenant error=%v want ErrInvalidScope", err)
-	}
-	if source.loads != 0 {
-		t.Fatalf("foreign tenant reached attribution context: %d load(s)", source.loads)
-	}
-}
-
-type jiraDerivedFailingContextSource struct{ err error }
-
-func (source jiraDerivedFailingContextSource) Load(
-	context.Context,
-	Claim,
-	teamattribution.GithubWorkItemDerivationLoadRequest,
-) (teamattribution.GithubWorkItemDerivationFacts, error) {
-	return teamattribution.GithubWorkItemDerivationFacts{}, source.err
-}
-
-// Succeeds on purpose: this double exists to pin Load's fail-closed path, so
-// the stored-edge read must not be the thing that fails (CHAOS-3978).
-// AnchorGitLabSubjects is a no-op: this fake carries no GitLab repos rows.
-func (source jiraDerivedFailingContextSource) AnchorGitLabSubjects(context.Context, map[string]teamattribution.GithubWorkItemDerivationSubject) error {
-	return nil
-}
-
-func (source jiraDerivedFailingContextSource) LoadStoredInheritableEdges(
-	context.Context, Claim, []string,
-) ([]githubWorkItemDependencyRow, error) {
-	return nil, nil
-}
-
-func TestJiraWorkItemDeriverFailsClosedWhenAttributionContextCannotLoad(t *testing.T) {
-	wantErr := errors.New("attribution context unavailable")
-	deriver := JiraWorkItemDeriver{
-		Source:        jiraDerivedFailingContextSource{err: wantErr},
-		statusMapping: loadRealStatusMapping(t),
-	}
-	claim := nativeTestClaim("jira", "work-items")
-	if _, err := deriver.Derive(
-		context.Background(), claim, jiraWorkItemRows{},
-		time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC),
-	); !errors.Is(err, wantErr) {
-		t.Fatalf("derive error=%v want=%v", err, wantErr)
-	}
-}
-
-func TestJiraClickHouseDerivationSourceUsesTenantScopedLoadersAndLease(t *testing.T) {
-	claim := nativeTestClaim("jira", "work-items")
-	conn := &recordingGitHubWorkItemDerivationConn{}
-	leaseChecks := 0
-	source := jiraWorkItemClickHouseDerivationContextSource{
-		delegate: githubWorkItemClickHouseDerivationContextSource{
-			Conn: conn,
-			Lease: providerfoundation.LeaseGuardFunc(func(context.Context) error {
-				leaseChecks++
-				return nil
-			}),
-		},
-	}
-	_, err := source.Load(
-		context.Background(), claim,
-		teamattribution.GithubWorkItemDerivationLoadRequest{
-			AsOf:             time.Date(2026, 8, 11, 16, 0, 0, 0, time.UTC),
-			DonorWorkItemIDs: []string{"jira:OPS-2"},
-		},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if leaseChecks != 2 {
-		t.Fatalf("lease checks=%d want=2", leaseChecks)
-	}
-	// CHAOS-4321: loadMembers issues two queries (identities, teams --
-	// admin-authored data) and loadProviderMembers restores the
-	// pre-CHAOS-4321 team_memberships query as the fallback layer (chris,
-	// 08:30 PT), so the full Load() total grows from 6 to 8.
-	if len(conn.queries) != 8 {
-		t.Fatalf("migrated context queries=%d want=8", len(conn.queries))
-	}
-	for index, args := range conn.args {
-		if len(args) == 0 || !queryArgsCarryOrgID(args, claim.OrgID) {
-			t.Fatalf("query %d lost tenant fence: %#v", index, args)
-		}
-	}
-
-	lostConn := &recordingGitHubWorkItemDerivationConn{}
-	lost := jiraWorkItemClickHouseDerivationContextSource{
-		delegate: githubWorkItemClickHouseDerivationContextSource{
-			Conn: lostConn,
-			Lease: providerfoundation.LeaseGuardFunc(func(context.Context) error {
-				return providerfoundation.ErrLeaseLost
-			}),
-		},
-	}
-	if _, err := lost.Load(
-		context.Background(), claim,
-		teamattribution.GithubWorkItemDerivationLoadRequest{AsOf: time.Date(2026, 8, 11, 16, 0, 0, 0, time.UTC)},
-	); !errors.Is(err, providerfoundation.ErrLeaseLost) {
-		t.Fatalf("lost lease error=%v", err)
-	}
-	if len(lostConn.queries) != 0 {
-		t.Fatalf("lost lease reached context store: %d queries", len(lostConn.queries))
-	}
-
-	lostAfterConn := &recordingGitHubWorkItemDerivationConn{}
-	lostAfterChecks := 0
-	lostAfter := jiraWorkItemClickHouseDerivationContextSource{
-		delegate: githubWorkItemClickHouseDerivationContextSource{
-			Conn: lostAfterConn,
-			Lease: providerfoundation.LeaseGuardFunc(func(context.Context) error {
-				lostAfterChecks++
-				if lostAfterChecks == 2 {
-					return providerfoundation.ErrLeaseLost
-				}
-				return nil
-			}),
-		},
-	}
-	if _, err := lostAfter.Load(
-		context.Background(), claim,
-		teamattribution.GithubWorkItemDerivationLoadRequest{
-			AsOf:             time.Date(2026, 8, 11, 16, 0, 0, 0, time.UTC),
-			DonorWorkItemIDs: []string{"jira:OPS-2"},
-		},
-	); !errors.Is(err, providerfoundation.ErrLeaseLost) {
-		t.Fatalf("post-load lost lease error=%v", err)
-	}
-	if lostAfterChecks != 2 || len(lostAfterConn.queries) != 8 {
-		t.Fatalf("post-load lease checks/queries=%d/%d want=2/8", lostAfterChecks, len(lostAfterConn.queries))
-	}
-}
-
 // The Jira unit stores raw rows only and takes its watermark from the window
 // it stored; no derived table has an effect in its batch.
 func TestJiraAtlassianRouteStoresRawRowsAndAdvancesWatermark(t *testing.T) {
@@ -509,12 +249,4 @@ func TestJiraCanonicalAliasesComposeTheFamilyDestinationsPlusWorklogs(t *testing
 			}
 		})
 	}
-}
-
-// LoadStoredBlockingFacts: this double holds no stored blocking relation
-// (CHAOS-8493), so no item of its units has an open blocker.
-func (source jiraDerivedFailingContextSource) LoadStoredBlockingFacts(
-	context.Context, Claim, []string, []workitemmetrics.BlockingRelation,
-) ([]workitemmetrics.BlockingRelation, []workitemmetrics.RelationEnd, error) {
-	return nil, nil, nil
 }

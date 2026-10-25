@@ -244,6 +244,7 @@ jobs:
           ./ci/run_tests.sh live-e2e
 
       - name: Upload live-e2e logs
+        continue-on-error: true
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
@@ -392,6 +393,7 @@ jobs:
           ./ci/run_metrics_executed_proof.sh
 
       - name: Upload metrics-executed-proof logs
+        continue-on-error: true
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:

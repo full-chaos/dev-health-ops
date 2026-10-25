@@ -6,6 +6,10 @@
       "why": "The ordinary workload token: audience auth-service, typ workload+jwt, no organization, no session, five minutes."
     },
     {
+      "file": "valid-dev-health-api.json",
+      "why": "The workload token for dev-health-api: audience dev-health-api, typ workload+jwt, no organization, no session, five minutes."
+    },
+    {
       "file": "valid-lifetime-at-the-ceiling.json",
       "why": "exp - iat equals the 300 s ceiling: the longest lifetime a verifier accepts."
     },
@@ -130,10 +134,10 @@
       "why": "A crit header member: a verifier never reads a key, key URL or certificate from the token."
     },
     {
-      "file": "invalid-aud-user-api.json",
+      "file": "invalid-aud-query-api.json",
       "expect_instance_location": "/claims/aud",
       "expect_keyword": "enum",
-      "why": "The user-token audience dev-health-api: not a workload audience."
+      "why": "query-api is carried only by the effective principal envelope: not a workload audience."
     },
     {
       "file": "invalid-aud-unknown.json",

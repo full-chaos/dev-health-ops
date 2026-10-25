@@ -39,14 +39,17 @@ type HeaderEnv struct {
 
 // Target is one measured path.
 type Target struct {
-	Name         string               `json:"name"`
-	Method       string               `json:"method"`
-	Path         string               `json:"path"`
-	Headers      map[string]string    `json:"headers"`
-	HeaderEnv    map[string]HeaderEnv `json:"header_env"`
-	Body         string               `json:"body"`
-	ExpectStatus []int                `json:"expect_status"`
-	Weight       int                  `json:"weight"`
+	Name          string               `json:"name"`
+	Method        string               `json:"method"`
+	Path          string               `json:"path"`
+	Headers       map[string]string    `json:"headers"`
+	HeaderEnv     map[string]HeaderEnv `json:"header_env"`
+	Body          string               `json:"body"`
+	ExpectStatus  []int                `json:"expect_status"`
+	ForbidStatus  []int                `json:"forbid_status"`
+	RequireStatus []int                `json:"require_status"`
+	Forbid5xx     bool                 `json:"forbid_5xx"`
+	Weight        int                  `json:"weight"`
 }
 
 // Config is the target list. The same shape serves any path, so a PDP path
@@ -81,7 +84,7 @@ func ParseConfig(data []byte, getenv func(string) string) (Config, error) {
 		if !strings.HasPrefix(t.Path, "/") {
 			return Config{}, fmt.Errorf("config: target %q path must start with /", t.Name)
 		}
-		if strings.Contains(t.Path, "${ENV:") || strings.Contains(t.Path, "${POOL:") {
+		if strings.Contains(t.Path, "${ENV:") || strings.Contains(t.Path, "${POOL:") || strings.Contains(t.Path, "${PAD:") {
 			return Config{}, fmt.Errorf("config: target %q path may use ${SEQ} only", t.Name)
 		}
 		if t.Weight < 0 {
@@ -105,13 +108,22 @@ func ParseConfig(data []byte, getenv func(string) string) (Config, error) {
 	return cfg, nil
 }
 
-// expand fills ${SEQ}, ${ENV:NAME} and ${POOL:NAME} (comma list, round robin
-// by seq).
+// MaxPad is the largest ${PAD:N} body padding in bytes.
+const MaxPad = 8 << 20
+
+// MaxExpanded is the largest body or path an expansion may produce.
+const MaxExpanded = 8 << 20
+
+// expand fills ${SEQ}, ${ENV:NAME}, ${PAD:N} (N filler bytes) and ${POOL:NAME}
+// (comma list, round robin by seq).
 func expand(s string, seq int, getenv func(string) string) (string, error) {
 	var b strings.Builder
 	for {
 		i := strings.Index(s, "${")
 		if i < 0 {
+			if b.Len()+len(s) > MaxExpanded {
+				return "", fmt.Errorf("expansion is larger than %d bytes", MaxExpanded)
+			}
 			b.WriteString(s)
 			return b.String(), nil
 		}
@@ -131,6 +143,15 @@ func expand(s string, seq int, getenv func(string) string) (string, error) {
 				return "", fmt.Errorf("env var %q is not set", tok[4:])
 			}
 			b.WriteString(v)
+		case strings.HasPrefix(tok, "PAD:"):
+			n, err := strconv.Atoi(tok[4:])
+			if err != nil || n < 0 || n > MaxPad {
+				return "", fmt.Errorf("pad must be 0..%d bytes", MaxPad)
+			}
+			if b.Len()+n > MaxExpanded {
+				return "", fmt.Errorf("expansion is larger than %d bytes", MaxExpanded)
+			}
+			b.WriteString(strings.Repeat("a", n))
 		case strings.HasPrefix(tok, "POOL:"):
 			parts := strings.Split(getenv(tok[5:]), ",")
 			if len(parts) == 1 && parts[0] == "" {

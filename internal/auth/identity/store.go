@@ -65,6 +65,10 @@ type Config struct {
 	// public.users columns, and HasPassword reads public.users. On, auth.users
 	// is the authority and no public table is read.
 	UsersOwnedByAuth bool
+	// OrgsOwnedByAuth is the organizations switch. Off (the default), ProjectOrganization
+	// copies public.organizations onto auth.organizations. On, auth.organizations is
+	// the authority: the projection reads no public table and writes nothing.
+	OrgsOwnedByAuth bool
 	// Meter registers the projection and link counters; nil uses the process
 	// meter.
 	Meter metric.Meter
@@ -76,6 +80,8 @@ type Store struct {
 	schema      authschema.ValidatedIdentifier
 	q           string
 	ownsUsers   bool
+	ownsOrgs    bool
+	orgDB       orgDB
 	logger      *slog.Logger
 	projections metric.Int64Counter
 	links       metric.Int64Counter
@@ -90,7 +96,7 @@ func New(cfg Config) (*Store, error) {
 	if cfg.Schema.String() == "" {
 		return nil, errors.New("identity: no auth schema")
 	}
-	s := &Store{pool: cfg.Pool, schema: cfg.Schema, q: authschema.Quote(cfg.Schema), ownsUsers: cfg.UsersOwnedByAuth, logger: cfg.Logger}
+	s := &Store{pool: cfg.Pool, schema: cfg.Schema, q: authschema.Quote(cfg.Schema), ownsUsers: cfg.UsersOwnedByAuth, ownsOrgs: cfg.OrgsOwnedByAuth, orgDB: cfg.Pool, logger: cfg.Logger}
 	if s.logger == nil {
 		s.logger = slog.Default()
 	}

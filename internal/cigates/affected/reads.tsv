@@ -14,6 +14,7 @@ deploy/helm/dev-health	test	docs
 internal/api/webhookintake	test	contracts
 internal/apiservice	code	contracts
 internal/apiservice	test	ci
+internal/apiservice/admin	test	contracts
 internal/apiservice/billingvenue	test	contracts
 internal/audit	test	contracts
 internal/auth/authapi	test	contracts
@@ -127,6 +128,8 @@ internal/contractcheck	code	deploy
 internal/deploymentcontract	code	contracts
 internal/deploymentcontract	test	deploy
 internal/envelopemint	test	contracts
+internal/faultproxy	test	deploy
+internal/faultproxy	test	docker
 internal/fixturescli	code	contracts
 internal/fixturescli	test	README.md
 internal/fixturescli	test	ci

@@ -10,22 +10,8 @@ import (
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
-	"github.com/full-chaos/dev-health-ops/internal/teamattribution"
 	"github.com/google/uuid"
 )
-
-type linearDerivedEngineStub struct{}
-
-func (linearDerivedEngineStub) Derive(
-	context.Context,
-	Claim,
-	githubWorkItemRows,
-	time.Time,
-	time.Time,
-	teamattribution.GithubWorkItemDerivationContext,
-) (map[string][]json.RawMessage, error) {
-	return map[string][]json.RawMessage{"issue_type_metrics_daily": {}}, nil
-}
 
 func linearDerivedTestClaim() Claim {
 	claim := nativeTestClaim("linear", "work-items")
@@ -37,169 +23,7 @@ func linearDerivedTestClaim() Claim {
 	return claim
 }
 
-func TestBuildLinearWorkItemDerivedEffectsKeepsAllEightDestinations(t *testing.T) {
-	effects, err := BuildLinearWorkItemDerivedEffects(LinearWorkItemDerivedEffectRows{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(effects) != 8 {
-		t.Fatalf("effects=%d want 8", len(effects))
-	}
-	for index, effect := range effects {
-		if effect.Destination != linearWorkItemDerivedEffectDestinations[index] {
-			t.Fatalf("effect[%d]=%q want %q", index, effect.Destination, linearWorkItemDerivedEffectDestinations[index])
-		}
-		if effect.Recovery != EffectReadbackRequired {
-			t.Fatalf("%s recovery=%v want readback", effect.Destination, effect.Recovery)
-		}
-	}
-}
-
-func TestLinearWorkItemDeriverUsesLinearRowsAndEvaluatesAllEightDestinations(t *testing.T) {
-	claim := linearDerivedTestClaim()
-	day := *claim.SinceAt
-	row := linearWorkItemRow{
-		WorkItemID: "LIN-1", Provider: "linear", Title: "Repair delivery path",
-		Type: "issue", Status: "todo", CreatedAt: day.Add(time.Hour),
-		UpdatedAt: day.Add(2 * time.Hour), Labels: []string{"codex"}, OrgID: claim.OrgID,
-	}
-	source := &fakeGitHubWorkItemDerivationContextSource{}
-	deriver := LinearWorkItemDeriver{
-		Source: source,
-		engine: linearDerivedEngineStub{},
-	}
-	derived, _, err := deriver.Derive(
-		context.Background(), claim, linearWorkItemRows{
-			WorkItems: []linearWorkItemRow{row},
-			StatusTransitions: []linearWorkItemTransitionRow{{
-				WorkItemID: "LIN-1", Provider: "linear", OccurredAt: day.Add(2 * time.Hour),
-				FromStatus: "todo", ToStatus: "in_progress", OrgID: claim.OrgID,
-			}},
-		},
-		day.Add(3*time.Hour),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(derived) != len(linearWorkItemDerivedEffectDestinations) {
-		t.Fatalf("derived destinations=%d want %d: %v", len(derived), len(linearWorkItemDerivedEffectDestinations), derived)
-	}
-	for _, destination := range linearWorkItemDerivedEffectDestinations {
-		if _, ok := derived[destination]; !ok {
-			t.Fatalf("destination %q was not evaluated", destination)
-		}
-	}
-	if len(derived["ai_attribution"]) != 1 {
-		t.Fatalf("Linear explicit issue label attribution rows=%d want 1", len(derived["ai_attribution"]))
-	}
-	var attribution LinearAIAttributionRow
-	if err := json.Unmarshal(derived["ai_attribution"][0], &attribution); err != nil {
-		t.Fatal(err)
-	}
-	if attribution.Provider != "linear" || attribution.SubjectType != "issue" ||
-		attribution.SubjectID != "LIN-1" || attribution.RepoID != nil ||
-		attribution.Source != "issue_label" || attribution.OrgID.String() != claim.OrgID {
-		t.Fatalf("Linear attribution lost semantic fence: %+v", attribution)
-	}
-	if len(derived["work_item_metrics_daily"]) == 0 ||
-		len(derived["estimate_coverage_metrics_daily"]) == 0 ||
-		len(derived["work_item_state_durations_daily"]) == 0 {
-		t.Fatalf("real derived builders produced no rows: metrics=%d coverage=%d states=%d",
-			len(derived["work_item_metrics_daily"]), len(derived["estimate_coverage_metrics_daily"]),
-			len(derived["work_item_state_durations_daily"]))
-	}
-	var metricRow LinearWorkItemMetricsDailyRow
-	if err := json.Unmarshal(derived["work_item_metrics_daily"][0], &metricRow); err != nil {
-		t.Fatal(err)
-	}
-	if metricRow.Provider != "linear" || metricRow.OrgID != claim.OrgID {
-		t.Fatalf("derived row lost Linear tenant/provider fence: %+v", metricRow)
-	}
-}
-
-func TestLinearWorkItemDeriverRejectsWrongProviderClaim(t *testing.T) {
-	claim := linearDerivedTestClaim()
-	claim.Provider = "github"
-	day := *claim.SinceAt
-	deriver := LinearWorkItemDeriver{
-		Source: &fakeGitHubWorkItemDerivationContextSource{},
-		engine: linearDerivedEngineStub{},
-	}
-	_, _, err := deriver.Derive(
-		context.Background(), claim, linearWorkItemRows{}, day.Add(3*time.Hour),
-	)
-	if !errors.Is(err, ErrInvalidConfiguration) {
-		t.Fatalf("error=%v want ErrInvalidConfiguration", err)
-	}
-}
-
-func TestLinearWorkItemDeriverRejectsMalformedRepositoryID(t *testing.T) {
-	claim := linearDerivedTestClaim()
-	day := *claim.SinceAt
-	badRepo := "not-a-uuid"
-	deriver := LinearWorkItemDeriver{
-		Source: &fakeGitHubWorkItemDerivationContextSource{},
-		engine: linearDerivedEngineStub{},
-	}
-	_, _, err := deriver.Derive(context.Background(), claim, linearWorkItemRows{
-		WorkItems: []linearWorkItemRow{{
-			WorkItemID: "LIN-1", Provider: "linear", CreatedAt: day.Add(time.Hour),
-			UpdatedAt: day.Add(2 * time.Hour), OrgID: claim.OrgID, RepoID: &badRepo,
-		}},
-	}, day.Add(3*time.Hour))
-	if !errors.Is(err, ErrInvalidConfiguration) {
-		t.Fatalf("error=%v want ErrInvalidConfiguration", err)
-	}
-}
-
 type linearDerivedStubConn struct{ driver.Conn }
-
-// The Linear sync sink beside the raw tables serves ai_attribution alone and
-// refuses each table the daily job computes from stored rows.
-func TestNewLinearWorkItemDerivedClickHouseEffectsServesOnlyAIAttribution(t *testing.T) {
-	lease := providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil })
-	sink, err := NewLinearWorkItemDerivedClickHouseEffects(linearDerivedStubConn{}, lease, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := sink.MissingDestinations(); len(got) != 0 {
-		t.Fatalf("missing=%v", got)
-	}
-	if adapter, known := sink.adapterForDestination("ai_attribution"); !known || adapter == nil {
-		t.Fatal("ai_attribution is not wired")
-	}
-	effects, err := BuildLinearWorkItemDerivedEffects(LinearWorkItemDerivedEffectRows{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	claim := linearDerivedTestClaim()
-	refused := make([]string, 0, len(githubWorkItemDerivedDestinations))
-	for _, effect := range effects {
-		if effect.Destination != "ai_attribution" {
-			if _, known := sink.adapterForDestination(effect.Destination); known {
-				t.Fatalf("the sync sink has an adapter for the daily-job table %q", effect.Destination)
-			}
-			if err := sink.WriteEffect(context.Background(), claim, effect); !errors.Is(err, ErrInvalidConfiguration) {
-				t.Fatalf("write %s: %v want ErrInvalidConfiguration", effect.Destination, err)
-			}
-			if inspection, err := sink.InspectEffect(context.Background(), claim, effect); !errors.Is(err, ErrInvalidConfiguration) || inspection != EffectConflict {
-				t.Fatalf("inspect %s: verdict=%v err=%v want a refused conflict", effect.Destination, inspection, err)
-			}
-			refused = append(refused, effect.Destination)
-			continue
-		}
-		if err := sink.WriteEffect(context.Background(), claim, effect); err != nil {
-			t.Fatalf("write %s: %v", effect.Destination, err)
-		}
-		if inspection, err := sink.InspectEffect(context.Background(), claim, effect); err != nil || inspection != EffectAbsent {
-			t.Fatalf("inspect %s: verdict=%v err=%v want absent", effect.Destination, inspection, err)
-		}
-	}
-	slices.Sort(refused)
-	if !slices.Equal(refused, githubWorkItemDerivedDestinations) {
-		t.Fatalf("refused=%v want=%v", refused, githubWorkItemDerivedDestinations)
-	}
-}
 
 // linearDailyJobAdapterIdentity is the identity a unit-held adapter of a
 // daily-job table would receive. The sync sink identity refuses such a
@@ -214,43 +38,6 @@ func linearDailyJobAdapterIdentity(t *testing.T, claim Claim, effect EffectBatch
 		OrgID: claim.OrgID, Provider: claim.Provider, Dataset: claim.Dataset,
 		Generation: claim.GenerationKey(), Destination: effect.Destination,
 		ContentDigest: effect.ContentDigest, RowCount: len(effect.Rows),
-	}
-}
-
-func TestLinearDerivedAdapterRejectsProviderAndTenantCrossingRows(t *testing.T) {
-	claim := linearDerivedTestClaim()
-	row := githubWorkItemMetricTestGroupRow()
-	row.Provider, row.OrgID = "github", claim.OrgID
-	raw, err := effectRowsFromValues([]githubWorkItemMetricsDailyRow{row})
-	if err != nil {
-		t.Fatal(err)
-	}
-	effect, err := BuildEffectBatch(
-		"work_item_metrics_daily", EffectReadbackRequired, raw,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	identity := linearDailyJobAdapterIdentity(t, claim, effect)
-	adapter := linearDerivedGitHubAdapter{
-		destination: "work_item_metrics_daily", delegate: &linearDerivedRecordingAdapter{},
-	}
-	if err := adapter.WriteLinearWorkItemEffect(context.Background(), identity, effect); !errors.Is(err, ErrInvalidConfiguration) {
-		t.Fatalf("provider crossing error=%v want ErrInvalidConfiguration", err)
-	}
-
-	row.Provider, row.OrgID = "linear", "org-other"
-	raw, err = effectRowsFromValues([]githubWorkItemMetricsDailyRow{row})
-	if err != nil {
-		t.Fatal(err)
-	}
-	effect, err = BuildEffectBatch("work_item_metrics_daily", EffectReadbackRequired, raw)
-	if err != nil {
-		t.Fatal(err)
-	}
-	identity = linearDailyJobAdapterIdentity(t, claim, effect)
-	if err := adapter.WriteLinearWorkItemEffect(context.Background(), identity, effect); !errors.Is(err, ErrInvalidConfiguration) {
-		t.Fatalf("tenant crossing error=%v want ErrInvalidConfiguration", err)
 	}
 }
 
@@ -344,11 +131,8 @@ func TestLinearDerivedSinkRejectsIncompleteBeforeDispatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// An adapter of a daily-job table is no part of the sync sink: a sink
-	// without it is complete and still writes ai_attribution.
-	sink.WorkItemMetricsDaily = nil
 	if err := sink.WriteEffect(context.Background(), linearDerivedTestClaim(), effect); err != nil {
-		t.Fatalf("a sink without a daily-job adapter refused ai_attribution: %v", err)
+		t.Fatalf("the sink refused ai_attribution: %v", err)
 	}
 	sink.AIAttribution = nil
 	if missing := sink.MissingDestinations(); !slices.Equal(missing, []string{"ai_attribution"}) {

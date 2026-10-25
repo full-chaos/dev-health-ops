@@ -132,8 +132,8 @@ func (route *jiraPointsRoute) Do(request *http.Request) (*http.Response, error) 
 			`{"id":"1","key":"OPS-1","self":"https://acme.atlassian.net/rest/api/3/issue/OPS-1","fields":{"project":{"key":"OPS"},"summary":"sized","status":{"name":"Open","statusCategory":{"key":"new"}},"issuetype":{"name":"Task"},"labels":[],"created":"2026-08-01T00:00:00Z","updated":"2026-08-01T00:00:00Z","customfield_10042":5,"customfield_10016":null},"changelog":{"histories":[]}},`+
 			`{"id":"2","key":"OPS-2","self":"https://acme.atlassian.net/rest/api/3/issue/OPS-2","fields":{"project":{"key":"OPS"},"summary":"estimate only","status":{"name":"Open","statusCategory":{"key":"new"}},"issuetype":{"name":"Task"},"labels":[],"created":"2026-08-01T00:00:00Z","updated":"2026-08-01T00:00:00Z","customfield_10042":null,"customfield_10016":8},"changelog":{"histories":[]}},`+
 			`{"id":"3","key":"OPS-3","self":"https://acme.atlassian.net/rest/api/3/issue/OPS-3","fields":{"project":{"key":"OPS"},"summary":"unsized","status":{"name":"Open","statusCategory":{"key":"new"}},"issuetype":{"name":"Task"},"labels":[],"created":"2026-08-01T00:00:00Z","updated":"2026-08-01T00:00:00Z"},"changelog":{"histories":[]}}],"isLast":true}`)
-	case strings.HasSuffix(request.URL.Path, "/changelog"):
-		return respond(http.StatusOK, `{"values":[],"total":0,"isLast":true}`)
+	case request.URL.Path == "/rest/api/3/changelog/bulkfetch":
+		return respond(http.StatusOK, `{"issueChangeLogs":[],"nextPageToken":null}`)
 	}
 	return respond(http.StatusNotFound, `{}`)
 }

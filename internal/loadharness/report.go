@@ -11,7 +11,7 @@ import (
 )
 
 // ReportSchemaVersion is the version of the JSON report layout.
-const ReportSchemaVersion = 1
+const ReportSchemaVersion = 2
 
 // PathResult is the raw measurement of one path.
 type PathResult struct {
@@ -19,6 +19,10 @@ type PathResult struct {
 	Latencies []time.Duration
 	Errors    int
 	Dropped   int
+	Statuses  map[int]int
+	Forbidden int
+	Five      int
+	FirstSeen map[int]time.Duration
 }
 
 // ReportInput is what BuildReport turns into a Report.
@@ -29,19 +33,24 @@ type ReportInput struct {
 	Rate        float64
 	Concurrency int
 	Paths       []PathResult
+	Timeline    []Bucket
 }
 
 // PathReport is one path in the JSON report.
 type PathReport struct {
-	Name      string  `json:"name"`
-	Count     int     `json:"count"`
-	Errors    int     `json:"errors"`
-	Dropped   int     `json:"dropped"`
-	ErrorRate float64 `json:"error_rate"`
-	P50Ms     float64 `json:"p50_ms"`
-	P95Ms     float64 `json:"p95_ms"`
-	P99Ms     float64 `json:"p99_ms"`
-	MaxMs     float64 `json:"max_ms"`
+	Name          string             `json:"name"`
+	Count         int                `json:"count"`
+	Errors        int                `json:"errors"`
+	Dropped       int                `json:"dropped"`
+	ErrorRate     float64            `json:"error_rate"`
+	P50Ms         float64            `json:"p50_ms"`
+	P95Ms         float64            `json:"p95_ms"`
+	P99Ms         float64            `json:"p99_ms"`
+	MaxMs         float64            `json:"max_ms"`
+	Statuses      map[string]int     `json:"statuses"`
+	Unexpected5xx int                `json:"unexpected_5xx"`
+	Forbidden     int                `json:"forbidden"`
+	FirstSeenMs   map[string]float64 `json:"first_seen_ms,omitempty"`
 }
 
 // SLOCheck is one evaluated objective.
@@ -55,15 +64,38 @@ type SLOCheck struct {
 
 // Report is the JSON report. It holds names, counts and timings only.
 type Report struct {
-	SchemaVersion int          `json:"schema_version"`
-	Profile       string       `json:"profile"`
-	StartedAt     string       `json:"started_at"`
-	DurationMs    int64        `json:"duration_ms"`
-	Rate          float64      `json:"rate"`
-	Concurrency   int          `json:"concurrency"`
-	Paths         []PathReport `json:"paths"`
-	SLOChecks     []SLOCheck   `json:"slo_checks,omitempty"`
-	SLOOK         bool         `json:"slo_ok"`
+	SchemaVersion int              `json:"schema_version"`
+	Profile       string           `json:"profile"`
+	StartedAt     string           `json:"started_at"`
+	DurationMs    int64            `json:"duration_ms"`
+	Rate          float64          `json:"rate"`
+	Concurrency   int              `json:"concurrency"`
+	Paths         []PathReport     `json:"paths"`
+	SLOChecks     []SLOCheck       `json:"slo_checks,omitempty"`
+	SLOOK         bool             `json:"slo_ok"`
+	Assertions    []AssertionCheck `json:"assertions,omitempty"`
+	AssertOK      bool             `json:"assert_ok"`
+	Timeline      []Bucket         `json:"timeline,omitempty"`
+	Fault         *FaultResult     `json:"fault,omitempty"`
+}
+
+func statusStrings(m map[int]int) map[string]int {
+	out := map[string]int{}
+	for k, v := range m {
+		out[strconv.Itoa(k)] = v
+	}
+	return out
+}
+
+func firstSeenMs(m map[int]time.Duration) map[string]float64 {
+	if len(m) == 0 {
+		return nil
+	}
+	out := map[string]float64{}
+	for k, v := range m {
+		out[strconv.Itoa(k)] = toMs(v)
+	}
+	return out
 }
 
 func toMs(d time.Duration) float64 { return float64(d) / float64(time.Millisecond) }
@@ -78,6 +110,8 @@ func BuildReport(in ReportInput) Report {
 		Rate:          in.Rate,
 		Concurrency:   in.Concurrency,
 		SLOOK:         true,
+		AssertOK:      true,
+		Timeline:      in.Timeline,
 	}
 	for _, p := range in.Paths {
 		s := Summarize(p.Latencies, p.Errors, p.Dropped)
@@ -85,6 +119,8 @@ func BuildReport(in ReportInput) Report {
 			Name: p.Name, Count: s.Count, Errors: s.Errors, Dropped: s.Dropped,
 			ErrorRate: s.ErrorRate, P50Ms: toMs(s.P50), P95Ms: toMs(s.P95),
 			P99Ms: toMs(s.P99), MaxMs: toMs(s.Max),
+			Statuses: statusStrings(p.Statuses), Unexpected5xx: p.Five, Forbidden: p.Forbidden,
+			FirstSeenMs: firstSeenMs(p.FirstSeen),
 		})
 	}
 	sort.Slice(r.Paths, func(i, j int) bool { return r.Paths[i].Name < r.Paths[j].Name })

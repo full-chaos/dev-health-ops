@@ -109,7 +109,7 @@ A GitHub PR closing Linear `CHAOS-2400` borrows that issue's `CHAOS` team.
 > `manual_fallback` (now 7) — this widens the `Enum8` (migration 078; CS1's
 > own migrate-before-emit rule) and adds a 9th precedence stage. See
 > `metrics/compute_work_items.py:405-642` and
-> `internal/providersync/github_work_items_derivation_context.go:605-754`.
+> `internal/teamattribution` (the Go owner; the sync-time loader was removed with the deriver).
 
 > **CHAOS-4321 (chris's ruling, 2026-08-26, final form 08:30 PT).** Plain
 > wording (chris-approved, quoted verbatim wherever this rule is described —
@@ -2751,8 +2751,7 @@ One path: `run_team_autoimport` → `team_autoimport_<provider>.populate()` → 
   too, and prunes them on the same
   `(source_work_item_id, relationship_type_raw)` provenance key Python uses.
   That key shape is pinned by test on BOTH sides
-  (`work_item_cross_provider_donor_test.go`,
-  `tests/metrics/test_cross_provider_donor_edges.py` (removed with the Python api)): both runtimes write
+  (the sync-time loader test is removed with the loader; `tests/metrics/test_cross_provider_donor_edges.py` is removed with the Python api): both runtimes write
   `work_item_team_attributions` for the same items, so a divergence in it
   would undo CHAOS-4112 from whichever side drifted.
   **Failure policy differs from Python deliberately:** the Go read retries once
@@ -2925,14 +2924,13 @@ written (2026-08-19); that has since changed for GitHub/GitLab/Jira/Linear work 
 `write_work_item_team_attributions` remain the ORACLE — Python is still authoritative for the
 precedence ladder's *correctness* (the Go port below is verified against it, not the other way
 around) — but a full independent Go REIMPLEMENTATION now exists:
-`internal/providersync/github_work_items_derivation_context.go`'s `resolve()`, shared across
-GitHub/GitLab/Jira/Linear via `loadWorkItemDerivationContextForProvider`, with its own
-`work_item_team_attributions` writer (`github_work_item_derived_effects_clickhouse.go`) and a
+`internal/teamattribution`'s `NewGitHubWorkItemDerivationContext`, shared across
+GitHub/GitLab/Jira/Linear (the sync-time loader and writer in providersync were deleted; the daily job is the one writer), with a
 row-vs-row compute-parity oracle (`internal/testsupport/oraclecompare`,
 `github_work_items_derivation_context_oracle_test.go`, run via `ci/check_go.sh live-python-oracles`
 or `fast`/`ci`/`all` — see `ops/.claude/skills/go-checks/SKILL.md`). Any change to the precedence
 ladder or its source tables — CHAOS-4321 included — must land in BOTH `compute_work_items.py` and
-`github_work_items_derivation_context.go` in the same PR, or the oracle gate fails: confirmed
+`internal/teamattribution` in the same PR, or the oracle gate fails: confirmed
 directly during CHAOS-4321, where an interim Go-only change (a telemetry evidence string, then a
 `team_memberships`-vs-`identities`/`teams` query mismatch) failed dozens of oracle cases under
 `ci/check_go.sh fast` while plain `go test` stayed green — see AGENTS.md "Anything
@@ -3556,9 +3554,9 @@ over Jira, Linear, GitHub and GitLab). Where it is held:
   `issue_pr_edges_heuristic`, the last step that writes `work_graph_issue_pr`. It counts the lower-tier rows that
   still break the rule: beside a native link (by pull request side, by issue side) or with a pull request work item as the
   issue side, and the total (each row once; the same rows `issue_pr_fallback_retraction` removes). The count must be 0. The step repairs
-  nothing. It sets the gauge `workgraph_issue_pr_fallback_beside_native_rows` per `organization_id` on every build (0
-  included), and one gauge per side (`workgraph_issue_pr_fallback_beside_native_pull_request_rows`,
-  `..._beside_native_issue_rows`, `..._pull_request_issue_side_rows`; a row can be on several sides, so they do not add up to the total). On a nonzero count it logs a WARN `issue-pr fallback invariant breached` with the organization and the
+  nothing. It adds the rows it finds to the unlabeled counter `workgraph_issue_pr_fallback_beside_native_rows_total` on every build (0
+  included), and to one counter per side (`workgraph_issue_pr_fallback_beside_native_pull_request_rows_total`,
+  `..._beside_native_issue_rows_total`, `..._pull_request_issue_side_rows_total`; a row can be on several sides, so they do not add up to the total), plus `workgraph_issue_pr_fallback_invariant_checks_total` (one per check that ran). The counters are exported; no alert rule reads them yet. The WARN line names the organization. On a nonzero count it logs a WARN `issue-pr fallback invariant breached` with the organization and the
   counts (never row contents) and reports FAILED: it returns a `workgraph.StepFailure`, so its evidence fragment
   carries `status: failed` with `organization_id` and the counts, the build evidence names it under `failed_steps`, the build logs an ERROR
   naming it, and the later steps still run. The request still completes (`succeeded`): the request ledger has no

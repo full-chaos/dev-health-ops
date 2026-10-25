@@ -108,7 +108,7 @@ fi
 usage() {
   # Backticks in the literal help text document commands; they are not substitutions.
   # shellcheck disable=SC2016
-  printf '%s\n' 'Usage: ci/check_go.sh [auth [STAGE]|fmt|vet|test|race|venue-oracles [SHARD COUNT]|venue-oracle-plan COUNT|ci-leg LEG [SHARD COUNT]|test-shard-plan SHARD COUNT|race-shard-plan SHARD COUNT|race-excluded-shard-plan SHARD COUNT|test-shard-wall-guard SHARD COUNT WALL LOGFILE|test-shard-unweighted-guard SHARD COUNT LOGFILE|build|contract|ratchets|race-weights-rows|multi-replica-workers|integration-vet|integration-coverage|race-excluded-ran|integration-shard-plan|integration-prepull|integration-shard|integration|fast|ci|all]
+  printf '%s\n' 'Usage: ci/check_go.sh [auth [STAGE]|fmt|vet|test|race|venue-oracles [SHARD COUNT]|venue-oracle-plan COUNT|ci-leg LEG [SHARD COUNT]|ci-leg-warm test|race SHARD COUNT|test-shard-plan SHARD COUNT|race-shard-plan SHARD COUNT|race-excluded-shard-plan SHARD COUNT|test-shard-wall-guard SHARD COUNT WALL LOGFILE|test-shard-unweighted-guard SHARD COUNT LOGFILE|build|contract|ratchets|race-weights-rows|multi-replica-workers|integration-vet|integration-coverage|race-excluded-ran|integration-shard-plan|integration-prepull|integration-shard|integration|fast|ci|all]
 
   auth   (CHAOS-4887) The Auth Control Plane gates over the auth packages ALONE: gofmt, vet, test,
          -race, the production-middleware stack test (G-69, must log its marker), one fuzz run per
@@ -176,6 +176,10 @@ usage() {
          slices, ci/go_race_weights.d). The
          legs run exactly the steps of `ci` (pinned by a tooling test); each
          stage prints UTC start/done stamps.
+  ci-leg-warm test|race SHARD COUNT
+         Compile the packages of that leg slice with the leg own flags and
+         run no test (go test -run ^$), to fill the leg Go build cache on a
+         main push whose test and race legs the merge queue already ran.
   test-shard-plan SHARD COUNT
          Print the packages (module, import path, weights key) of the SHARD-th of
          COUNT weight-balanced slices of the unit tests (ci/go_test_weights.tsv,
@@ -969,6 +973,33 @@ check_ci_leg() {
       ;;
   esac
   printf 'ci-leg %s: OK\n' "${leg}"
+}
+
+# check_ci_leg_warm test|race SHARD COUNT (CHAOS-11408): compile, run nothing. A main push that the merge queue already
+# tested skips its test and race legs, and this fills the leg's Go build cache on a key miss so the pull requests that restore
+# it still hit. The flags are the ones of the real leg (-mod=readonly -trimpath, -race for a race leg) plus -run '^$', so the
+# compiled objects are the ones the real leg would cache.
+check_ci_leg_warm() {
+  local leg="${1:-}" shard="${2:-}" count="${3:-}" module_dir plan pkg
+  local -a pkgs flags=(-mod=readonly -trimpath)
+  case "${leg}" in
+    test) plan="$(check_test_shard_plan "${shard}" "${count}")" || die "test shard plan failed" ;;
+    race) plan="$(check_race_shard_plan "${shard}" "${count}")" || die "race shard plan failed"; flags+=(-race) ;;
+    *) die "ci-leg-warm LEG must be test or race (got '${leg}')" ;;
+  esac
+  for module_dir in "${MODULE_DIRS[@]}"; do
+    pkgs=()
+    while IFS= read -r pkg; do
+      [ -n "${pkg}" ] && pkgs+=("${pkg}")
+    done < <(printf '%s\n' "${plan}" | awk -F'\t' -v m="${module_dir}" '$1 == m { print $2 }')
+    [ "${#pkgs[@]}" -gt 0 ] || continue
+    printf 'go test -run ^$ (%s %s/%s): %s: %d package(s)\n' "${leg}" "${shard}" "${count}" "${module_dir}" "${#pkgs[@]}"
+    (
+      cd "${ROOT}/${module_dir}"
+      "${GO_ENV_OFF[@]}" GOWORK=off go test "${flags[@]}" -run '^$' "${pkgs[@]}"
+    )
+  done
+  printf 'ci-leg-warm %s: OK\n' "${leg}"
 }
 
 # check_venue_oracles (CHAOS-6314) runs every venue oracle test in the repo,
@@ -4060,6 +4091,11 @@ case "${1:-all}" in
     { [ "$#" -eq 2 ] || [ "$#" -eq 4 ]; } || die "ci-leg accepts LEG, or 'test|race SHARD COUNT'"
     shift
     check_ci_leg "$@"
+    ;;
+  ci-leg-warm)
+    [ "$#" -eq 4 ] || die "ci-leg-warm accepts test|race SHARD COUNT"
+    shift
+    check_ci_leg_warm "$@"
     ;;
   build)
     check_build

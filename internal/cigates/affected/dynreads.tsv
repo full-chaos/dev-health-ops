@@ -161,6 +161,7 @@ internal/cigates/checkgo	ci_script_helpers_test.go
 internal/cigates/checkgo	discovery_tree_test.go
 internal/cigates/checkgo	race_solo_load_test.go
 internal/cigates/checkgo	race_solo_test.go
+internal/cigates/checkgo	testcontainers_session_reap_test.go
 internal/cigates/chparams	chparams_test.go
 internal/cigates/chpin	chpin_test.go
 internal/cigates/docmaketargets	docmaketargets_test.go

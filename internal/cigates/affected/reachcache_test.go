@@ -3,6 +3,7 @@ package affected_test
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -63,7 +64,7 @@ func TestReachCacheKeyCoversEveryInput(t *testing.T) {
 	if res := writeTables(t, f.root); res.code != 0 {
 		t.Fatalf("plan-reads --write exited %d:\n%s%s", res.code, res.stdout, res.stderr)
 	}
-	env := reachEnv()
+	env := reachEnv("CGO_ENABLED=0")
 	base := reachKeyOf(t, f.root, env)
 	if again := reachKeyOf(t, f.root, env); again != base {
 		t.Fatalf("the key is not stable: %s then %s", base, again)
@@ -87,10 +88,10 @@ func TestReachCacheKeyCoversEveryInput(t *testing.T) {
 		{name: "a go:embed file", apply: func() { appendTo(t, p("b/assets/x.txt"), "y\n") }},
 		{name: "a non-Go file beside Go files", apply: func() { appendTo(t, p("b/notes.txt"), "y\n") }},
 		{name: "GOFLAGS", env: reachEnv("GOFLAGS=-mod=readonly")},
-		{name: "GOARCH", env: reachEnv("GOARCH=arm64")},
+		{name: "GOARCH", env: reachEnv("GOARCH=" + otherArch())},
 		{name: "GOOS", env: reachEnv("GOOS=plan9")},
 		{name: "CGO_ENABLED", env: reachEnv("CGO_ENABLED=1")},
-		{name: "GOEXPERIMENT", env: reachEnv("GOEXPERIMENT=nocoverageredesign")},
+		{name: "GOEXPERIMENT", env: reachEnv("GOEXPERIMENT=fieldtrack")},
 	}
 	for _, c := range changes {
 		t.Run(c.name, func(t *testing.T) {
@@ -117,6 +118,13 @@ func TestReachCacheKeyCoversEveryInput(t *testing.T) {
 			t.Errorf("changing %s moved the key: a change outside the Go inputs must reuse", rel)
 		}
 	}
+}
+
+func otherArch() string {
+	if runtime.GOARCH == "amd64" {
+		return "arm64"
+	}
+	return "amd64"
 }
 
 func snapshotTree(t *testing.T, root string) map[string][]byte {

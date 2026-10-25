@@ -154,10 +154,16 @@ func itoaCensus(value int) string {
 
 func loadWorkItemRowCensusPackage(t *testing.T, dir string, pattern string) (*packages.Package, []types.Type) {
 	t.Helper()
-	loaded, err := packages.Load(&packages.Config{
-		Mode: packages.NeedName | packages.NeedFiles | packages.NeedSyntax | packages.NeedTypes | packages.NeedTypesInfo,
-		Dir:  dir,
-	}, pattern)
+	var loaded []*packages.Package
+	var err error
+	if dir == "../.." {
+		loaded, err = censusLoad(pattern)
+	} else {
+		loaded, err = packages.Load(&packages.Config{
+			Mode: packages.NeedName | packages.NeedFiles | packages.NeedSyntax | packages.NeedTypes | packages.NeedTypesInfo,
+			Dir:  dir,
+		}, pattern)
+	}
 	if err != nil || packages.PrintErrors(loaded) > 0 || len(loaded) != 1 {
 		t.Fatalf("load %s: %v", pattern, err)
 	}

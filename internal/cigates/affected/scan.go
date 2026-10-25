@@ -523,6 +523,11 @@ func checkReach(root string, t *tables, reads []Read) ([]string, reachStats, err
 	if err != nil {
 		return nil, st, err
 	}
+	return reachDefects(t, want), st, nil
+}
+
+// reachDefects compares the reach rows the call graph calls for with the rows of reach.tsv.
+func reachDefects(t *tables, want map[string]bool) []string {
 	var defects []string
 	for _, row := range sortedKeys(want) {
 		if _, ok := t.reachRows[row]; !ok {
@@ -534,7 +539,7 @@ func checkReach(root string, t *tables, reads []Read) ([]string, reachStats, err
 			defects = append(defects, fmt.Sprintf("%s:%s: %s is a row the call graph does not call for (run cigate plan-reads --root . --write)", reachFile, t.reachRows[row], row))
 		}
 	}
-	return defects, st, nil
+	return defects
 }
 
 var tableWhat = map[string]string{walksFile: "walk", dynReadsFile: "unbounded read", edgesFile: "run or load of Go packages",
@@ -604,6 +609,8 @@ func PlanReads(args []string, stdout, stderr io.Writer) int {
 	tablesDir := fs.String("tables", "", "directory of the read tables (default ROOT/internal/cigates/affected)")
 	write := fs.Bool("write", false, "write walks.tsv, dynreads.tsv, edges.tsv and reach.tsv from the code, then check")
 	checkCallGraph := fs.Bool("reach", false, "also recompute reach.tsv from the call graph (go/packages, SSA, RTA) and fail on any difference")
+	reachCache := fs.String("reach-cache", "", "with --reach: directory of a reach store; reuse the rows stored for an identical input hash, store them after a green computed run")
+	printKey := fs.Bool("print-reach-key", false, "print the input hash of the call graph and exit")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -617,6 +624,15 @@ func PlanReads(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	*root = absRoot
+	if *printKey {
+		key, err := reachKey(*root)
+		if err != nil {
+			fmt.Fprintln(stderr, "plan-reads:", err)
+			return 1
+		}
+		fmt.Fprintln(stdout, key)
+		return 0
+	}
 	dir := *tablesDir
 	if dir == "" {
 		dir = filepath.Join(*root, "internal", "cigates", "affected")
@@ -649,12 +665,11 @@ func PlanReads(args []string, stdout, stderr io.Writer) int {
 	}
 	g := checkReads(*root, t, reads)
 	if *checkCallGraph && !*write {
-		defects, st, err := checkReach(*root, t, reads)
+		defects, err := checkReachStored(*root, *reachCache, t, reads, len(g.defects) == 0, stdout)
 		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
-		printReachStats(stdout, st)
 		g.defects = append(g.defects, defects...)
 	}
 	for _, d := range g.defects {
@@ -680,6 +695,41 @@ func PlanReads(args []string, stdout, stderr io.Writer) int {
 	fmt.Fprintf(stdout, "plan-reads: %d read(s) covered by %d reads, %d walks, %d dynreads, %d edges and %d reach row(s)\n", len(reads),
 		len(t.reads), len(t.walks), len(t.dynReads), len(t.edges), len(t.reachRows))
 	return 0
+}
+
+// checkReachStored is checkReach with the reach store of --reach-cache: a store of the same input hash stands in for the
+// computation and is compared with reach.tsv like it; a green computed run stores its rows. Any doubt recomputes.
+func checkReachStored(root, cacheDir string, t *tables, reads []Read, readsGreen bool, stdout io.Writer) ([]string, error) {
+	key := ""
+	if cacheDir != "" {
+		k, err := reachKey(root)
+		if err != nil {
+			fmt.Fprintf(stdout, "plan-reads: reach: not reusable (%v): computed\n", err)
+		} else {
+			key = k
+		}
+	}
+	if key != "" {
+		if rows, ok := loadReachStore(cacheDir, key); ok {
+			fmt.Fprintf(stdout, "plan-reads: reach: reused for input hash %s\n", key)
+			return reachDefects(t, rows), nil
+		}
+	}
+	want, st, err := reachRows(root, reads)
+	if err != nil {
+		return nil, err
+	}
+	printReachStats(stdout, st)
+	defects := reachDefects(t, want)
+	if key != "" {
+		fmt.Fprintf(stdout, "plan-reads: reach: computed for input hash %s\n", key)
+		if len(defects) == 0 && readsGreen {
+			if err := writeReachStore(cacheDir, key, want); err != nil {
+				fmt.Fprintf(stdout, "plan-reads: reach: store not written: %v\n", err)
+			}
+		}
+	}
+	return defects, nil
 }
 
 func printReachStats(w io.Writer, st reachStats) {

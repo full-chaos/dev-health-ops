@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -126,6 +127,12 @@ func TestHandBuiltVenuesCreateEveryDomainPostureTable(t *testing.T) {
 					"is guarded by `IF to_regprocedure(...) IS NOT NULL`. Add a SECURITY DEFINER "+
 					"CREATE FUNCTION with EXECUTE revoked from PUBLIC to this package's fixture.", pkg, function)
 			}
+		}
+		for _, problem := range columnScopedVenueGaps(createdTableColumns(t, filepath.Join(root, pkg))) {
+			t.Errorf("%s: %s. domainPosture() declares a column-scoped privilege on it "+
+				"(ColumnScoped): ApplyPinnedMigrations' column GRANT fails on a missing "+
+				"column and the readiness check cannot answer for it. Add the column to "+
+				"this package's CREATE TABLE.", pkg, problem)
 		}
 		if len(missing) > 0 {
 			t.Errorf("%s builds a venue by hand but never creates %v, which "+
@@ -317,4 +324,126 @@ func createdObjects(t *testing.T, dir string, pattern *regexp.Regexp) map[string
 		})
 	}
 	return created
+}
+
+var createTableStart = regexp.MustCompile(`(?i)CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?public\.([a-z0-9_]+)\s*\(`)
+
+var tableConstraintWords = map[string]bool{
+	"primary": true, "unique": true, "constraint": true, "check": true,
+	"foreign": true, "exclude": true, "like": true,
+}
+
+// createdTableColumns reads, from the string literals of a package's tests, the
+// column list of every CREATE TABLE public.x (...): one entry per statement.
+func createdTableColumns(t *testing.T, dir string) map[string][][]string {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tables := map[string][][]string{}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), "_test.go") {
+			continue
+		}
+		path := filepath.Join(dir, entry.Name())
+		file, parseErr := parser.ParseFile(token.NewFileSet(), path, nil, 0)
+		if parseErr != nil {
+			t.Fatalf("parse %s: %v", path, parseErr)
+		}
+		ast.Inspect(file, func(node ast.Node) bool {
+			literal, ok := node.(*ast.BasicLit)
+			if !ok || literal.Kind != token.STRING {
+				return true
+			}
+			text, unquoteErr := strconv.Unquote(literal.Value)
+			if unquoteErr != nil {
+				return true
+			}
+			for _, match := range createTableStart.FindAllStringSubmatchIndex(text, -1) {
+				table := strings.ToLower(text[match[2]:match[3]])
+				tables[table] = append(tables[table], tableColumns(text[match[1]:]))
+			}
+			return true
+		})
+	}
+	return tables
+}
+
+// tableColumns is the column names of the body that follows a CREATE TABLE's
+// opening parenthesis, up to its matching close.
+func tableColumns(body string) []string {
+	var columns []string
+	depth, start := 0, 0
+	add := func(segment string) {
+		fields := strings.Fields(segment)
+		if len(fields) > 0 && !tableConstraintWords[strings.ToLower(fields[0])] {
+			columns = append(columns, strings.ToLower(strings.Trim(fields[0], `"`)))
+		}
+	}
+	for i, r := range body {
+		switch r {
+		case '(':
+			depth++
+		case ')':
+			if depth == 0 {
+				add(body[start:i])
+				return columns
+			}
+			depth--
+		case ',':
+			if depth == 0 {
+				add(body[start:i])
+				start = i + 1
+			}
+		}
+	}
+	return columns
+}
+
+// columnScopedVenueGaps names every CREATE TABLE of a column-scoped table that
+// lacks a column domainPosture() scopes a privilege to.
+func columnScopedVenueGaps(created map[string][][]string) []string {
+	required := map[string][]string{}
+	for _, column := range domainPosture().ColumnScoped {
+		required[column.TableName] = append(required[column.TableName], column.ColumnName)
+	}
+	var gaps []string
+	tables := make([]string, 0, len(required))
+	for table := range required {
+		tables = append(tables, table)
+	}
+	sort.Strings(tables)
+	for _, table := range tables {
+		for _, columns := range created[table] {
+			have := map[string]bool{}
+			for _, column := range columns {
+				have[column] = true
+			}
+			var missing []string
+			for _, column := range required[table] {
+				if !have[column] && !slices.Contains(missing, column) {
+					missing = append(missing, column)
+				}
+			}
+			if len(missing) > 0 {
+				gaps = append(gaps, "a CREATE TABLE public."+table+" lacks column(s) "+strings.Join(missing, ", "))
+			}
+		}
+	}
+	return gaps
+}
+
+func TestTheVenueColumnCheckReadsColumnListsAndNamesAGap(t *testing.T) {
+	got := tableColumns("id uuid PRIMARY KEY, status text, amount numeric(10, 2), CONSTRAINT x UNIQUE (id, status)) more")
+	if strings.Join(got, ",") != "id,status,amount" {
+		t.Fatalf("tableColumns = %v", got)
+	}
+	gaps := columnScopedVenueGaps(map[string][][]string{
+		"byo_llm_budget_reservations":  {{"id"}},
+		"worker_job_completion_fences": {{"completion_key"}},
+	})
+	if len(gaps) != 1 || !strings.Contains(gaps[0], "byo_llm_budget_reservations") || !strings.Contains(gaps[0], "reconciled_at") {
+		t.Fatalf("gaps = %v, want one naming byo_llm_budget_reservations and its Settle columns", gaps)
+	}
 }

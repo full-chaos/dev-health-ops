@@ -5,11 +5,9 @@ package llmorgsettings_test
 import (
 	"context"
 	"errors"
-	"sync"
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -17,107 +15,17 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	postgresstore "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
-	riverstore "github.com/full-chaos/dev-health-ops/internal/storage/river"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/domainroledb"
 )
-
-const optInDomainPassword = "categorize-optin-domain"
-
-// permissionDenials records every statement the domain connection had refused
-// with SQLSTATE 42501.
-type permissionDenials struct {
-	mu         sync.Mutex
-	statements []string
-}
-
-type deniedStatementKey struct{}
-
-func (denials *permissionDenials) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
-	return context.WithValue(ctx, deniedStatementKey{}, data.SQL)
-}
-
-func (denials *permissionDenials) TraceQueryEnd(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryEndData) {
-	var pgErr *pgconn.PgError
-	if errors.As(data.Err, &pgErr) && pgErr.Code == "42501" {
-		statement, _ := ctx.Value(deniedStatementKey{}).(string)
-		denials.mu.Lock()
-		denials.statements = append(denials.statements, statement)
-		denials.mu.Unlock()
-	}
-}
-
-func (denials *permissionDenials) all() []string {
-	denials.mu.Lock()
-	defer denials.mu.Unlock()
-	return append([]string(nil), denials.statements...)
-}
 
 // startDomainRoleDatabase builds the REAL migrated schema, applies the REAL
 // go-river-migrate runtime grants to a fresh domain role, and returns an admin
 // pool plus a pool authenticated as that role. Seeding goes through admin only:
 // the domain pool is what the heavy worker holds (workerservice: pools.Domain).
-func startDomainRoleDatabase(t *testing.T, ctx context.Context) (*pgxpool.Pool, *pgxpool.Pool, *permissionDenials, string) {
+func startDomainRoleDatabase(t *testing.T, ctx context.Context) (*pgxpool.Pool, *pgxpool.Pool, *domainroledb.Denials, string) {
 	t.Helper()
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		closeCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		if err := instance.Close(closeCtx); err != nil {
-			t.Errorf("terminate PostgreSQL: %v", err)
-		}
-	})
-	admin, err := pgxpool.New(ctx, instance.URI)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(admin.Close)
-	pgschema.Apply(ctx, t, admin)
-
-	domainRole, err := containers.RoleName("optin_domain_runtime", instance)
-	if err != nil {
-		t.Fatal(err)
-	}
-	queueRole, err := containers.RoleName("optin_queue_runtime", instance)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { containers.DropRole(admin, domainRole, t.Logf) })
-	t.Cleanup(func() { containers.DropRole(admin, queueRole, t.Logf) })
-	for _, statement := range []string{
-		"CREATE ROLE " + domainRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + optInDomainPassword + "'",
-		"CREATE ROLE " + queueRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + optInDomainPassword + "'",
-		"REVOKE CREATE ON SCHEMA public FROM PUBLIC",
-	} {
-		if _, err := admin.Exec(ctx, statement); err != nil {
-			t.Fatalf("%s: %v", statement, err)
-		}
-	}
-	if _, err := riverstore.ApplyPinnedMigrations(ctx, admin, riverstore.MigrationOptions{
-		Schema: "river", DomainRole: domainRole, QueueRole: queueRole,
-		// As go-river-migrate runs it: the digest creates and stamps the
-		// posture-manifest table the domain posture requires.
-		PostureManifestDigest: postgresstore.PostureManifestDigest(),
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	config, err := pgxpool.ParseConfig(instance.URI)
-	if err != nil {
-		t.Fatal(err)
-	}
-	config.ConnConfig.User, config.ConnConfig.Password = domainRole, optInDomainPassword
-	denials := &permissionDenials{}
-	config.ConnConfig.Tracer = denials
-	domain, err := pgxpool.NewWithConfig(ctx, config)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(domain.Close)
-	return admin, domain, denials, domainRole
+	venue := domainroledb.Start(t, ctx, "optin")
+	return venue.Admin, venue.Domain, venue.Denials, venue.DomainRole
 }
 
 // The heavy worker reads an org's categorization opt-in on the domain role
@@ -194,7 +102,7 @@ VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, now(), now())`, orgID, category, 
 			t.Fatalf("%s: SQL opt-in on the domain role = %v, %v; Go rule says %v", tc.org, got, err, goWant)
 		}
 	}
-	if denied := denials.all(); len(denied) != 0 {
+	if denied := denials.All(); len(denied) != 0 {
 		t.Fatalf("the domain role was refused %d statement(s) on the opt-in path: %q", len(denied), denied)
 	}
 

@@ -1642,7 +1642,8 @@ scan_go_test_paths() {
   local kind path name bin scanned
   declare -gA SCAN_TESTS=() SCAN_HOOK=()
   [ "$#" -gt 0 ] || return 0
-  bin="$(gotestfuncs_bin)" || exit 2
+  gotestfuncs_bin >/dev/null
+  bin="${GOTESTFUNCS_BIN}"
   scanned="$(printf '%s\0' "$@" | xargs -0 "${bin}")" || die "gotestfuncs could not parse the listed test files"
   while IFS=$'\037' read -r kind path name; do
     case "${kind}" in
@@ -1664,30 +1665,68 @@ go_test_name_ok() {
   [[ ! "${rest}" =~ [[:print:][:cntrl:]] ]]
 }
 
-# split_plain_test_files KEY: SPLIT_PLAIN_FILES[file] for every test file plain `go list -e` lists for a split package.
-# A file the integration build lists and this one does not is integration-tagged (the same set difference as
-# discover_integration_tagged_tests; the text of a build line is never read).
-split_plain_test_files() {
-  local key="$1" listed go_file
-  declare -gA SPLIT_PLAIN_FILES=()
-  listed="$(cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -e -mod=readonly \
-    -f '{{range .TestGoFiles}}{{println .}}{{end}}{{range .XTestGoFiles}}{{println .}}{{end}}' "./${key}")" \
-    || die "failed to list the plain test files of ${key} with go list"
-  while IFS= read -r go_file; do
-    [ -n "${go_file}" ] || continue
-    SPLIT_PLAIN_FILES["${go_file}"]=1
-  done <<<"${listed}"
+# integration_test_files MODULE_DIR PKG...: the ONE place that decides which test files of a package belong to the
+# integration run, for the packages shards and the split planners alike. A file belongs to it when
+# `go list -tags=integration` lists it (TestGoFiles + XTestGoFiles) and plain `go list -e` does not: build constraints
+# decide membership through go list alone; no file text is read and no file is globbed. Fills TEST_FILES_TAGGED[PKG]
+# (the newline list of every test file the integration build lists, in go list order) and TEST_FILE_TAG_ONLY[path]
+# (absolute path of such a file that the plain build does not list).
+integration_test_files() {
+  local module_dir="$1" modpath pkg import base dir go_file plain_out tagged_out
+  shift
+  declare -gA TEST_FILES_TAGGED=() TEST_FILE_TAG_ONLY=()
+  local -A pkg_by_import=() in_plain=()
+  local -a fields=()
+  local template='{{.ImportPath}}{{range .TestGoFiles}}{{"\t"}}{{.}}{{end}}{{range .XTestGoFiles}}{{"\t"}}{{.}}{{end}}'
+
+  [ "$#" -gt 0 ] || return 0
+  base="${ROOT}"
+  [ "${module_dir}" = "." ] || base="${ROOT}/${module_dir}"
+  modpath="$(cd "${base}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -mod=readonly -m)" \
+    || die "go list -m failed in ${module_dir}"
+  for pkg in "$@"; do
+    case "${pkg}" in
+      .|./) import="${modpath}" ;;
+      *) import="${modpath}/${pkg#./}" ;;
+    esac
+    pkg_by_import["${import}"]="${pkg}"
+  done
+  # -e: a package whose every test file is tagged has no plain build; it still prints its (empty) plain file list.
+  plain_out="$(cd "${base}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -e -mod=readonly -f "${template}" "$@")" \
+    || die "go list failed while listing the plain test files in ${module_dir}"
+  tagged_out="$(cd "${base}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -mod=readonly -tags=integration -f "${template}" "$@")" \
+    || die "go list -tags=integration failed while listing the test files in ${module_dir}"
+  while IFS=$'\t' read -r -a fields; do
+    [ "${#fields[@]}" -gt 0 ] || continue
+    pkg="${pkg_by_import[${fields[0]}]-}"
+    [ -n "${pkg}" ] || die "go list returned the unrequested package '${fields[0]}' in ${module_dir}"
+    for go_file in "${fields[@]:1}"; do
+      in_plain["${pkg}/${go_file}"]=1
+    done
+  done <<<"${plain_out}"
+  while IFS=$'\t' read -r -a fields; do
+    [ "${#fields[@]}" -gt 0 ] || continue
+    pkg="${pkg_by_import[${fields[0]}]-}"
+    [ -n "${pkg}" ] || die "go list -tags=integration returned the unrequested package '${fields[0]}' in ${module_dir}"
+    dir="${base}/${pkg#./}"
+    TEST_FILES_TAGGED["${pkg}"]=""
+    for go_file in "${fields[@]:1}"; do
+      check_listed_test_file "integration" "${dir}" "${go_file}"
+      TEST_FILES_TAGGED["${pkg}"]+="${go_file}"$'\n'
+      [ -n "${in_plain[${pkg}/${go_file}]+set}" ] || TEST_FILE_TAG_ONLY["${dir}/${go_file}"]=1
+    done
+  done <<<"${tagged_out}"
 }
 
 # split_package_hook KEY LISTED: "<key>/<file> <func>" of the first integration-tagged test file of a split package that
-# declares `func init` or `func TestMain` (SCAN_HOOK of its scan, SPLIT_PLAIN_FILES for the class), or nothing. Such a
+# declares `func init` or `func TestMain` (SCAN_HOOK of its scan; the class from integration_test_files), or nothing. Such a
 # package keeps every test in its shards, as run_integration_packages keeps such a package whole.
 split_package_hook() {
   local key="$1" listed="$2" go_file source_file
   while IFS= read -r go_file; do
     [ -n "${go_file}" ] || continue
     source_file="${ROOT}/${key}/${go_file}"
-    if [ -z "${SPLIT_PLAIN_FILES[${go_file}]+set}" ] && [ -n "${SCAN_HOOK[${source_file}]+set}" ]; then
+    if [ -n "${TEST_FILE_TAG_ONLY[${source_file}]+set}" ] && [ -n "${SCAN_HOOK[${source_file}]+set}" ]; then
       printf '%s/%s %s\n' "${key}" "${go_file}" "${SCAN_HOOK[${source_file}]}"
       return 0
     fi
@@ -1718,61 +1757,34 @@ split_plan_scope() {
 }
 
 # discover_integration_tagged_tests MODULE_DIR PKG...: for module-relative packages ("./dir") of one module, the tests a
-# shard runs. A test file belongs to the integration run when `go list -tags=integration` lists it and plain `go list`
-# does not (the tag only adds files: no non-test file and no `!integration` file carries it). Fills, keyed by PKG:
-# INTEGRATION_TAGGED_TESTS (newline list of the top-level Test names of those files, TestMain aside),
-# INTEGRATION_UNTAGGED_TESTS (the same for every other test file) and INTEGRATION_HOOK ("<key>/<file> <func>" of the
-# first `func init` or `func TestMain` in such a file: that hook changes the process the untagged tests run in under
-# the tag, so the package runs whole, as before).
+# shard runs: the files integration_test_files classes as integration-only, parsed by gotestfuncs. Fills, keyed by PKG:
+# INTEGRATION_TAGGED_TESTS (newline list of the top-level tests of those files), INTEGRATION_UNTAGGED_TESTS (the same
+# for every other test file the integration build lists) and INTEGRATION_HOOK ("<key>/<file> <func>" of the first
+# `func init` or `func TestMain` in an integration-only file: that hook changes the process the untagged tests run in
+# under the tag, so the package runs whole, as before).
 discover_integration_tagged_tests() {
-  local module_dir="$1" modpath pkg import key dir go_file path name rel
+  local module_dir="$1" pkg key base dir go_file path name rel
   shift
   declare -gA INTEGRATION_TAGGED_TESTS=() INTEGRATION_UNTAGGED_TESTS=() INTEGRATION_HOOK=()
-  local -A pkg_by_import=() in_plain=() tag_only=() path_pkg=()
-  local -a fields=() paths=()
-  local template='{{.ImportPath}}{{range .TestGoFiles}}{{"\t"}}{{.}}{{end}}{{range .XTestGoFiles}}{{"\t"}}{{.}}{{end}}'
-  local plain_out tagged_out
+  local -A path_pkg=()
+  local -a paths=()
 
   [ "$#" -gt 0 ] || return 0
-  modpath="$(cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -mod=readonly -m)" \
-    || die "go list -m failed in ${module_dir}"
+  integration_test_files "${module_dir}" "$@"
+  base="${ROOT}"
+  [ "${module_dir}" = "." ] || base="${ROOT}/${module_dir}"
   for pkg in "$@"; do
-    case "${pkg}" in
-      .|./) import="${modpath}" ;;
-      *) import="${modpath}/${pkg#./}" ;;
-    esac
-    pkg_by_import["${import}"]="${pkg}"
+    dir="${base}/${pkg#./}"
+    while IFS= read -r go_file; do
+      [ -n "${go_file}" ] || continue
+      path_pkg["${dir}/${go_file}"]="${pkg}"
+      paths+=("${dir}/${go_file}")
+    done <<<"${TEST_FILES_TAGGED[${pkg}]-}"
   done
-  # -e: a package whose every test file is tagged has no plain build; it still prints its (empty) plain file list.
-  plain_out="$(cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -e -mod=readonly -f "${template}" "$@")" \
-    || die "go list failed while listing the plain test files in ${module_dir}"
-  tagged_out="$(cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -mod=readonly -tags=integration -f "${template}" "$@")" \
-    || die "go list -tags=integration failed while listing the test files in ${module_dir}"
-  while IFS=$'\t' read -r -a fields; do
-    [ "${#fields[@]}" -gt 0 ] || continue
-    pkg="${pkg_by_import[${fields[0]}]-}"
-    [ -n "${pkg}" ] || die "go list returned the unrequested package '${fields[0]}' in ${module_dir}"
-    for go_file in "${fields[@]:1}"; do
-      in_plain["${pkg}/${go_file}"]=1
-    done
-  done <<<"${plain_out}"
-  while IFS=$'\t' read -r -a fields; do
-    [ "${#fields[@]}" -gt 0 ] || continue
-    pkg="${pkg_by_import[${fields[0]}]-}"
-    [ -n "${pkg}" ] || die "go list -tags=integration returned the unrequested package '${fields[0]}' in ${module_dir}"
-    dir="${ROOT}/${module_dir}/${pkg#./}"
-    for go_file in "${fields[@]:1}"; do
-      check_listed_test_file "integration" "${dir}" "${go_file}"
-      path="${dir}/${go_file}"
-      path_pkg["${path}"]="${pkg}"
-      [ -n "${in_plain[${pkg}/${go_file}]+set}" ] || tag_only["${path}"]=1
-      paths+=("${path}")
-    done
-  done <<<"${tagged_out}"
   scan_go_test_paths ${paths[@]+"${paths[@]}"}
   for path in ${paths[@]+"${paths[@]}"}; do
     pkg="${path_pkg[${path}]}"
-    if [ -n "${tag_only[${path}]+set}" ] && [ -n "${SCAN_HOOK[${path}]+set}" ] && [ -z "${INTEGRATION_HOOK[${pkg}]+set}" ]; then
+    if [ -n "${TEST_FILE_TAG_ONLY[${path}]+set}" ] && [ -n "${SCAN_HOOK[${path}]+set}" ] && [ -z "${INTEGRATION_HOOK[${pkg}]+set}" ]; then
       key="${module_dir}/${pkg#./}"
       key="${key#./}"
       rel="${key}/${path##*/}"
@@ -1781,7 +1793,7 @@ discover_integration_tagged_tests() {
     while IFS= read -r name; do
       [ -n "${name}" ] || continue
       go_test_name_ok "${name}" || die "integration test discovery returned unsupported top-level test name '${name}' in ${path}"
-      if [ -n "${tag_only[${path}]+set}" ]; then
+      if [ -n "${TEST_FILE_TAG_ONLY[${path}]+set}" ]; then
         INTEGRATION_TAGGED_TESTS["${pkg}"]+="${name}"$'\n'
       else
         INTEGRATION_UNTAGGED_TESTS["${pkg}"]+="${name}"$'\n'
@@ -2263,26 +2275,19 @@ discover_providersync_tests() {
   local files_output go_file source_file test_name integration_file
   declare -A discovered_names=()
 
-  if ! files_output="$(
-    cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" GOWORK=off go list -mod=readonly -tags=integration \
-      -f '{{range .TestGoFiles}}{{println .}}{{end}}{{range .XTestGoFiles}}{{println .}}{{end}}' \
-      ./internal/providersync
-  )"; then
-    die "failed to discover active providersync test files with go list"
-  fi
+  integration_test_files . "./${PROVIDER_INTEGRATION_PACKAGE_KEY}"
+  files_output="${TEST_FILES_TAGGED[./${PROVIDER_INTEGRATION_PACKAGE_KEY}]-}"
 
   PROVIDER_TEST_NAMES=()
   PROVIDER_INTEGRATION_TEST_NAMES=()
   scan_listed_go_tests 'providersync' "${ROOT}/${PROVIDER_INTEGRATION_PACKAGE_KEY}" "${files_output}"
-  split_plain_test_files "${PROVIDER_INTEGRATION_PACKAGE_KEY}"
   PROVIDER_UNFILTERED="$(split_package_hook "${PROVIDER_INTEGRATION_PACKAGE_KEY}" "${files_output}")"
   while IFS= read -r go_file; do
     [ -n "${go_file}" ] || continue
     source_file="${ROOT}/${PROVIDER_INTEGRATION_PACKAGE_KEY}/${go_file}"
-    integration_file=1
-    if [ -n "${SPLIT_PLAIN_FILES[${go_file}]+set}" ]; then
-      integration_file=0
+    integration_file=0
+    if [ -n "${TEST_FILE_TAG_ONLY[${source_file}]+set}" ]; then
+      integration_file=1
     fi
     while IFS= read -r test_name; do
       [ -n "${test_name}" ] || continue
@@ -2513,26 +2518,19 @@ discover_daily_tests() {
   local files_output go_file source_file test_name integration_file
   declare -A discovered_names=()
 
-  if ! files_output="$(
-    cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" GOWORK=off go list -mod=readonly -tags=integration \
-      -f '{{range .TestGoFiles}}{{println .}}{{end}}{{range .XTestGoFiles}}{{println .}}{{end}}' \
-      "./${DAILY_INTEGRATION_PACKAGE_KEY}"
-  )"; then
-    die "failed to discover active daily test files with go list"
-  fi
+  integration_test_files . "./${DAILY_INTEGRATION_PACKAGE_KEY}"
+  files_output="${TEST_FILES_TAGGED[./${DAILY_INTEGRATION_PACKAGE_KEY}]-}"
 
   DAILY_TEST_NAMES=()
   DAILY_INTEGRATION_TEST_NAMES=()
   scan_listed_go_tests 'daily' "${ROOT}/${DAILY_INTEGRATION_PACKAGE_KEY}" "${files_output}"
-  split_plain_test_files "${DAILY_INTEGRATION_PACKAGE_KEY}"
   DAILY_UNFILTERED="$(split_package_hook "${DAILY_INTEGRATION_PACKAGE_KEY}" "${files_output}")"
   while IFS= read -r go_file; do
     [ -n "${go_file}" ] || continue
     source_file="${ROOT}/${DAILY_INTEGRATION_PACKAGE_KEY}/${go_file}"
-    integration_file=1
-    if [ -n "${SPLIT_PLAIN_FILES[${go_file}]+set}" ]; then
-      integration_file=0
+    integration_file=0
+    if [ -n "${TEST_FILE_TAG_ONLY[${source_file}]+set}" ]; then
+      integration_file=1
     fi
     while IFS= read -r test_name; do
       [ -n "${test_name}" ] || continue
@@ -2723,26 +2721,19 @@ discover_workerservice_tests() {
   local files_output go_file source_file test_name integration_file
   declare -A discovered_names=()
 
-  if ! files_output="$(
-    cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" GOWORK=off go list -mod=readonly -tags=integration \
-      -f '{{range .TestGoFiles}}{{println .}}{{end}}{{range .XTestGoFiles}}{{println .}}{{end}}' \
-      "./${WORKERSERVICE_INTEGRATION_PACKAGE_KEY}"
-  )"; then
-    die "failed to discover active workerservice test files with go list"
-  fi
+  integration_test_files . "./${WORKERSERVICE_INTEGRATION_PACKAGE_KEY}"
+  files_output="${TEST_FILES_TAGGED[./${WORKERSERVICE_INTEGRATION_PACKAGE_KEY}]-}"
 
   WORKERSERVICE_TEST_NAMES=()
   WORKERSERVICE_INTEGRATION_TEST_NAMES=()
   scan_listed_go_tests 'workerservice' "${ROOT}/${WORKERSERVICE_INTEGRATION_PACKAGE_KEY}" "${files_output}"
-  split_plain_test_files "${WORKERSERVICE_INTEGRATION_PACKAGE_KEY}"
   WORKERSERVICE_UNFILTERED="$(split_package_hook "${WORKERSERVICE_INTEGRATION_PACKAGE_KEY}" "${files_output}")"
   while IFS= read -r go_file; do
     [ -n "${go_file}" ] || continue
     source_file="${ROOT}/${WORKERSERVICE_INTEGRATION_PACKAGE_KEY}/${go_file}"
-    integration_file=1
-    if [ -n "${SPLIT_PLAIN_FILES[${go_file}]+set}" ]; then
-      integration_file=0
+    integration_file=0
+    if [ -n "${TEST_FILE_TAG_ONLY[${source_file}]+set}" ]; then
+      integration_file=1
     fi
     while IFS= read -r test_name; do
       [ -n "${test_name}" ] || continue
@@ -2933,26 +2924,19 @@ discover_queryapiserver_tests() {
   local files_output go_file source_file test_name integration_file
   declare -A discovered_names=()
 
-  if ! files_output="$(
-    cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" GOWORK=off go list -mod=readonly -tags=integration \
-      -f '{{range .TestGoFiles}}{{println .}}{{end}}{{range .XTestGoFiles}}{{println .}}{{end}}' \
-      "./${QAPISERVER_INTEGRATION_PACKAGE_KEY}"
-  )"; then
-    die "failed to discover active queryapiserver test files with go list"
-  fi
+  integration_test_files . "./${QAPISERVER_INTEGRATION_PACKAGE_KEY}"
+  files_output="${TEST_FILES_TAGGED[./${QAPISERVER_INTEGRATION_PACKAGE_KEY}]-}"
 
   QAPISERVER_TEST_NAMES=()
   QAPISERVER_INTEGRATION_TEST_NAMES=()
   scan_listed_go_tests 'queryapiserver' "${ROOT}/${QAPISERVER_INTEGRATION_PACKAGE_KEY}" "${files_output}"
-  split_plain_test_files "${QAPISERVER_INTEGRATION_PACKAGE_KEY}"
   QAPISERVER_UNFILTERED="$(split_package_hook "${QAPISERVER_INTEGRATION_PACKAGE_KEY}" "${files_output}")"
   while IFS= read -r go_file; do
     [ -n "${go_file}" ] || continue
     source_file="${ROOT}/${QAPISERVER_INTEGRATION_PACKAGE_KEY}/${go_file}"
-    integration_file=1
-    if [ -n "${SPLIT_PLAIN_FILES[${go_file}]+set}" ]; then
-      integration_file=0
+    integration_file=0
+    if [ -n "${TEST_FILE_TAG_ONLY[${source_file}]+set}" ]; then
+      integration_file=1
     fi
     while IFS= read -r test_name; do
       [ -n "${test_name}" ] || continue
@@ -3143,26 +3127,19 @@ discover_remaining_tests() {
   local files_output go_file source_file test_name integration_file
   declare -A discovered_names=()
 
-  if ! files_output="$(
-    cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" GOWORK=off go list -mod=readonly -tags=integration \
-      -f '{{range .TestGoFiles}}{{println .}}{{end}}{{range .XTestGoFiles}}{{println .}}{{end}}' \
-      "./${REMAINING_INTEGRATION_PACKAGE_KEY}"
-  )"; then
-    die "failed to discover active remaining test files with go list"
-  fi
+  integration_test_files . "./${REMAINING_INTEGRATION_PACKAGE_KEY}"
+  files_output="${TEST_FILES_TAGGED[./${REMAINING_INTEGRATION_PACKAGE_KEY}]-}"
 
   REMAINING_TEST_NAMES=()
   REMAINING_INTEGRATION_TEST_NAMES=()
   scan_listed_go_tests 'remaining' "${ROOT}/${REMAINING_INTEGRATION_PACKAGE_KEY}" "${files_output}"
-  split_plain_test_files "${REMAINING_INTEGRATION_PACKAGE_KEY}"
   REMAINING_UNFILTERED="$(split_package_hook "${REMAINING_INTEGRATION_PACKAGE_KEY}" "${files_output}")"
   while IFS= read -r go_file; do
     [ -n "${go_file}" ] || continue
     source_file="${ROOT}/${REMAINING_INTEGRATION_PACKAGE_KEY}/${go_file}"
-    integration_file=1
-    if [ -n "${SPLIT_PLAIN_FILES[${go_file}]+set}" ]; then
-      integration_file=0
+    integration_file=0
+    if [ -n "${TEST_FILE_TAG_ONLY[${source_file}]+set}" ]; then
+      integration_file=1
     fi
     while IFS= read -r test_name; do
       [ -n "${test_name}" ] || continue

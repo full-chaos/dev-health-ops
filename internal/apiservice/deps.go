@@ -5,6 +5,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/oauthprovider"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
+	"github.com/full-chaos/dev-health-ops/internal/apiservice/acr"
 	"github.com/full-chaos/dev-health-ops/internal/auth/accessverify"
 	envsecrets "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"net/http"
@@ -131,6 +132,10 @@ type Deps struct {
 	// AccessVerify is the profile-routed access-token validator; nil when
 	// AUTH_ACCESS_TOKEN_ISSUER is unset. When set, Auth routes through it.
 	AccessVerify *accessverify.Validator
+	// ACRWorkload lets the internal acr routes accept the acr-api workload
+	// token; nil refuses every workload token (AUTH_ACR_WORKLOAD_SUBJECT or
+	// the issuer is unset).
+	ACRWorkload *acr.WorkloadAuth
 	// SessionOAuth is the social-login profile client; nil means the
 	// providers' real endpoints. A venue test points it at a fake provider.
 	SessionOAuth *oauthprovider.Client

@@ -38,7 +38,7 @@ func (c *countingCredentials) MarkUsed(context.Context, string, time.Time) error
 	c.markUsed++
 	return nil
 }
-func (c *countingCredentials) Audit(_ context.Context, _, _, outcome string) error {
+func (c *countingCredentials) Audit(_ context.Context, _, _, _, outcome string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.audited++

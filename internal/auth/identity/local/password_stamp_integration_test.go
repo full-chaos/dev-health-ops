@@ -355,17 +355,18 @@ func TestANoSidGoAPIAccessTokenIsRefusedAfterResetAndChange(t *testing.T) {
 		t.Error("a token at the new version is refused after the reset")
 	}
 
-	change := rig.account(t, ctx, "Old-pass-12345")
-	if !rig.accepts(t, ctx, change, 3) {
+	rig2 := newEndRig(t, ctx)
+	change := rig2.account(t, ctx, "Old-pass-12345")
+	if !rig2.accepts(t, ctx, change, 3) {
 		t.Fatal("the token is refused before the change")
 	}
-	if out, err := rig.flows.Change(ctx, ChangeRequest{PrincipalID: change, Current: "Old-pass-12345", New: "Brand-new-pass-42"}); err != nil || out.Kind != FlowOK {
+	if out, err := rig2.flows.Change(ctx, ChangeRequest{PrincipalID: change, Current: "Old-pass-12345", New: "Brand-new-pass-42"}); err != nil || out.Kind != FlowOK {
 		t.Fatalf("Change = %+v, %v", out, err)
 	}
-	if rig.accepts(t, ctx, change, 3) {
+	if rig2.accepts(t, ctx, change, 3) {
 		t.Error("the pre-change no-sid access token is accepted after the change")
 	}
-	if !rig.accepts(t, ctx, change, 4) {
+	if !rig2.accepts(t, ctx, change, 4) {
 		t.Error("a token at the new version is refused after the change")
 	}
 }

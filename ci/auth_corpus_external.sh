@@ -277,6 +277,9 @@ if [ "${LEG}" = "acp" ]; then
   printf 'step 4: auth-service wrote every body with its route'"'"'s writer\n'
   auth_logs="$(timeout --kill-after=5 60 docker compose -p "${PROJECT}" "${COMPOSE_FILES[@]}" --profile auth logs --no-color auth-service)" \
     || die "could not read the auth-service logs"
+  # A log that is empty or lacks the line auth-service always logs once a listener is up (authruntime/runtime.go:557)
+  # was not read in full, and an absent violation line would prove nothing.
+  grep -q 'msg="listener bound"\|"msg":"listener bound"' <<<"${auth_logs}" || die "auth-service logs empty or unrecognised"
   violations="$(grep -c 'policy: wrong body writer for the route' <<<"${auth_logs}" || true)"
   if [ "${violations}" != "0" ]; then
     grep 'policy: wrong body writer for the route' <<<"${auth_logs}" >&2 || true

@@ -31,7 +31,8 @@ case "$*" in
     printf '%s %s %s\n' "${AUTH_SESSION_SUCCESSOR_KEY:-}" "${AUTH_LOGIN_LOCKOUT_KEY:-}" "${AUTH_JWT_SECRET_KEY:+jwt}" >> "` + record + `.keys"
     if [ -n "$FAKE_BLOCK_UP" ]; then exec sleep "$FAKE_BLOCK_UP"; fi
     if [ -n "$FAKE_FAIL_UP" ]; then exit 1; fi ;;
-  *" logs "*" auth-service"*) printf '%s\n' "${FAKE_AUTH_LOGS:-}" ;;
+  *" logs "*" auth-service"*)
+    if [ -z "${FAKE_AUTH_LOGS+x}" ]; then echo 'level=INFO msg="listener bound"'; else printf '%s\n' "$FAKE_AUTH_LOGS"; fi ;;
   *" port "*) echo 127.0.0.1:12345 ;;
   *" ps -q go-api"*) echo cid-go-api ;;
   *"inspect --format"*) echo "${FAKE_HEALTH:-healthy}" ;;
@@ -487,15 +488,17 @@ func TestAuthCorpusAcpLegFailsOnAuthServiceWriterViolations(t *testing.T) {
 	served := "/api/v1/auth/refresh,/api/v1/auth/logout,/api/v1/auth/login"
 	metrics := `devhealth_api_auth_proxy_requests_total{aggregate="sessions",outcome="forwarded"} 3` + "\n" +
 		`devhealth_api_auth_proxy_requests_total{aggregate="local_login",outcome="forwarded"} 3`
+	known := `level=INFO msg="listener bound" component=auth-api-http address=127.0.0.1:8095`
 	violation := `level=ERROR msg="policy: wrong body writer for the route; FastAPI writes this body the other way" route="POST /api/v1/auth/login"`
 	for name, tc := range map[string]struct {
 		logs, wantError string
 	}{
-		"clean log":        {logs: `level=INFO msg="listener bound"`},
-		"empty log":        {},
-		"one violation":    {logs: violation, wantError: "auth-service logged 1 body-writer violations"},
-		"two violations":   {logs: violation + "\n" + violation, wantError: "auth-service logged 2 body-writer violations"},
-		"other error line": {logs: `level=ERROR msg="api response: body could not be serialized"`},
+		"clean log":        {logs: known},
+		"empty log":        {wantError: "auth-service logs empty or unrecognised"},
+		"unrecognised log": {logs: `level=INFO msg="something else"`, wantError: "auth-service logs empty or unrecognised"},
+		"one violation":    {logs: known + "\n" + violation, wantError: "auth-service logged 1 body-writer violations"},
+		"two violations":   {logs: known + "\n" + violation + "\n" + violation, wantError: "auth-service logged 2 body-writer violations"},
+		"other error line": {logs: known + "\n" + `level=ERROR msg="api response: body could not be serialized"`},
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, out, err := runAcpLeg(t, "FAKE_SERVED="+served, "FAKE_METRICS="+metrics, "FAKE_AUTH_LOGS="+tc.logs)

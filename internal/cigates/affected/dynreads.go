@@ -1227,6 +1227,17 @@ func (c *fileCtx) walkFilter(lit *ast.FuncLit) (string, int) {
 	aliases := map[string]int{names[0]: 0}
 	locals := map[string]bool{}
 	upto := 0 // the statements before the one being read
+	// The entry methods are trusted only on the parameter itself: once the statements so far (the one being read
+	// included) declare or assign its name again (`d := probe{}`, `var d probe`, a closure parameter), it may hold
+	// another value, whose methods may read.
+	trusted := func() string {
+		for _, st := range body.List[:upto+1] {
+			if countAssigns(st, entry) > 0 {
+				return ""
+			}
+		}
+		return entry
+	}
 	before := func(name string) int {
 		n := 0
 		for _, st := range body.List[:upto] {
@@ -1243,7 +1254,7 @@ func (c *fileCtx) walkFilter(lit *ast.FuncLit) (string, int) {
 		case *ast.CallExpr:
 			if sel, ok := x.Fun.(*ast.SelectorExpr); ok && len(x.Args) == 0 && sel.Sel.Name == "Name" {
 				id, ok := sel.X.(*ast.Ident)
-				return ok && entry != "" && entry != "_" && id.Name == entry && countAssigns(body, entry) == 0
+				return ok && trusted() != "" && trusted() != "_" && id.Name == trusted()
 			}
 			switch c.s.callName(x.Fun) {
 			case "path/filepath.ToSlash", "path/filepath.FromSlash", "path/filepath.Base", "path/filepath.Clean", "path.Base", "path.Clean":
@@ -1275,7 +1286,7 @@ func (c *fileCtx) walkFilter(lit *ast.FuncLit) (string, int) {
 				ds := chain(ifs.Cond, token.LOR)
 				for j, d := range ds {
 					if u, ok := ast.Unparen(d).(*ast.UnaryExpr); ok && u.Op == token.NOT {
-						if s := suffix(u.X); s != "" && c.allPure(ds[:j], entry) {
+						if s := suffix(u.X); s != "" && c.allPure(ds[:j], trusted()) {
 							return "*" + s, i
 						}
 					}
@@ -1288,13 +1299,13 @@ func (c *fileCtx) walkFilter(lit *ast.FuncLit) (string, int) {
 			}
 			if cs := chain(ifs.Cond, token.LAND); rest && len(body.List) > i+1 {
 				for j, d := range cs {
-					if s := suffix(d); s != "" && c.allPure(cs[:j], entry) {
+					if s := suffix(d); s != "" && c.allPure(cs[:j], trusted()) {
 						return "*" + s, i
 					}
 				}
 			}
 		}
-		if !c.preGate(st, false, errName, entry, locals) {
+		if !c.preGate(st, false, errName, trusted(), locals) {
 			return "", 0
 		}
 		if a, ok := st.(*ast.AssignStmt); ok {
@@ -1469,6 +1480,18 @@ func countAssigns(body ast.Node, name string) int {
 		case *ast.AssignStmt:
 			for _, l := range x.Lhs {
 				if id, ok := l.(*ast.Ident); ok && id.Name == name {
+					n++
+				}
+			}
+		case *ast.ValueSpec:
+			for _, id := range x.Names {
+				if id.Name == name {
+					n++
+				}
+			}
+		case *ast.Field:
+			for _, id := range x.Names {
+				if id.Name == name {
 					n++
 				}
 			}

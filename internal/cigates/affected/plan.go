@@ -179,7 +179,8 @@ type planInput struct {
 	guard       []string                 // defects of the read tables against the code (plan-reads): any one plans FULL
 	guardFn     func() ([]string, error) // computes guard when the verdict reaches it; nil keeps guard
 	// mdBounded: a pull request whose every changed path is a Markdown file outside testdata and no go:embed target
-	// plans only the bounded readers of those files (markdownOnly, boundedReads)
+	// selects a reads.tsv reader only by the exact paths its code names (markdownOnly, boundedReads); every other reader,
+	// unbounded ones included, selects as in any plan
 	mdBounded bool
 	scanned   *[]Read   // the reads of the code the guard scanned; nil when no scan ran
 	symlinks  []string  // repository paths tracked symlinks point at
@@ -361,11 +362,8 @@ func plan(in planInput) (Verdict, error) {
 	changedPaths := append(append([]string{}, goPaths...), nonGo...)
 	// A code-scope site the tool cannot bound runs only in the programs that reach it (reach.tsv): their packages are
 	// selected (and every key that runs one). A site reach.tsv does not place selects its reverse import closure.
-	// A Markdown-only pull request plans the bounded readers alone: no unbounded site selects.
+	// A Markdown-only pull request keeps every unbounded site too: its path is not known, so it may name a .md file.
 	unbounded := func(r siteRow, why string) {
-		if mdOnly {
-			return
-		}
 		if r.test() {
 			sel.only(importPath(r.pkg), why)
 			return
@@ -412,8 +410,7 @@ func plan(in planInput) (Verdict, error) {
 		if len(pkgs) == 0 {
 			if e.target == unexpressed {
 				unbounded(e.siteRow, "edges.tsv "+e.pkg+" "+e.site+" runs "+e.target)
-			} else if !mdOnly {
-				// it runs Go packages outside the listed module (a fixture module): a Markdown file changes none of them
+			} else {
 				sel.reader(importPath(e.pkg), e.test(), "edges.tsv "+e.pkg+" "+e.site+" runs "+e.target)
 			}
 			continue
@@ -569,7 +566,7 @@ func PlanVerdict(args []string, stdout, stderr io.Writer) int {
 	root := fs.String("root", "", "repository root (the head tree: its Go sources are scanned for reads)")
 	fs.String("base", "", "base sha of the change set (kept for the callers; the verdict reads no file at the base)")
 	goFilesFull := fs.Bool("go-files-full", false, "a change set with any .go file is FULL (the go-quality legs then run no package subset)")
-	mdBounded := fs.Bool("md-bounded", false, "a pull_request whose every changed path is a Markdown file (no testdata, no go:embed target) plans only the bounded readers of those files")
+	mdBounded := fs.Bool("md-bounded", false, "a pull_request whose every changed path is a Markdown file (no testdata, no go:embed target) selects a reads.tsv reader only by the exact paths its code names")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}

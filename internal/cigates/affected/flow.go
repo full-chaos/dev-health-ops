@@ -26,12 +26,13 @@ type flowGroup struct {
 	fileOf  map[*ast.File]*srcFile
 	funcs   map[string][]*ast.FuncDecl // name -> functions and methods of that name
 	callers map[string][]*ast.CallExpr // function or method name -> the calls that name it
-	types   map[string]*ast.TypeSpec   // the types the directory declares
+	types   map[string]*ast.TypeSpec   // the types the directory declares once, at package level, not as an alias
 }
 
 func newFlowGroup(files []*srcFile) *flowGroup {
 	g := &flowGroup{files: files, parent: map[ast.Node]ast.Node{}, fileOf: map[*ast.File]*srcFile{},
 		funcs: map[string][]*ast.FuncDecl{}, callers: map[string][]*ast.CallExpr{}, types: map[string]*ast.TypeSpec{}}
+	typeDecls := map[string][]*ast.TypeSpec{}
 	for _, s := range files {
 		g.fileOf[s.file] = s
 		var stack []ast.Node
@@ -48,7 +49,7 @@ func newFlowGroup(files []*srcFile) *flowGroup {
 			case *ast.FuncDecl:
 				g.funcs[x.Name.Name] = append(g.funcs[x.Name.Name], x)
 			case *ast.TypeSpec:
-				g.types[x.Name.Name] = x
+				typeDecls[x.Name.Name] = append(typeDecls[x.Name.Name], x)
 			case *ast.CallExpr:
 				switch f := ast.Unparen(x.Fun).(type) {
 				case *ast.Ident:
@@ -59,6 +60,18 @@ func newFlowGroup(files []*srcFile) *flowGroup {
 			}
 			return true
 		})
+	}
+	// A type name declared twice (the package and its external tests, or a function-local type) or as an alias does not
+	// say which type a value has.
+	for name, specs := range typeDecls {
+		if len(specs) != 1 || specs[0].Assign.IsValid() {
+			continue
+		}
+		if decl, ok := g.parent[specs[0]].(*ast.GenDecl); ok {
+			if _, top := g.parent[decl].(*ast.File); top {
+				g.types[name] = specs[0]
+			}
+		}
 	}
 	return g
 }
@@ -74,6 +87,10 @@ var flowSinks = map[string]bool{"os.WriteFile": true, "os.MkdirAll": true, "os.M
 	"os.CreateTemp": true, "os.MkdirTemp": true,
 	// an error's text is reported, never opened
 	"fmt.Errorf": true, "errors.New": true}
+
+// flowWriters: standard-library calls that write an argument's value into their first argument.
+var flowWriters = map[string]bool{"fmt.Fprint": true, "fmt.Fprintf": true, "fmt.Fprintln": true, "io.WriteString": true,
+	"io.Copy": true, "io.CopyN": true, "io.CopyBuffer": true, "encoding/binary.Write": true}
 
 var flowReaderPrefixes = []string{"io/fs.", "io/ioutil.", "go/build.", "go/importer.", "debug/", "embed."}
 
@@ -101,6 +118,21 @@ type flowKey struct {
 	field  string
 	mapKey bool
 	top    *ast.CallExpr
+}
+
+// shadowed reports whether a call's package qualifier (strings in strings.HasSuffix) is also a local or package-level
+// name of the directory, so the call may not be the package's function.
+func (g *flowGroup) shadowed(call *ast.CallExpr) bool {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	x, ok := sel.X.(*ast.Ident)
+	if !ok {
+		return true
+	}
+	r := &flowRun{g: g}
+	return r.localDecls(x.Name, call) > 0 || r.pkgVar(x.Name)
 }
 
 // reaches reports whether the value of the literal can reach a read (true when the flow cannot be followed).
@@ -257,6 +289,14 @@ func (r *flowRun) call(c *ast.CallExpr, i int, field string, mapKey bool, ret []
 	case *ast.ArrayType:
 		return r.expr(c, field, mapKey, ret, depth) // a conversion
 	case *ast.Ident:
+		// A local name (a closure variable, a parameter) or a package variable shadows a builtin and a function of the
+		// same name: only a closure the name is declared once to hold is followed.
+		if nd := r.localDecls(f.Name, c); nd > 0 || r.pkgVar(f.Name) {
+			if lit := r.closure(f); nd == 1 && lit != nil && len(ret) < 6 {
+				return r.intoLit(lit, c, i, field, mapKey, ret, depth)
+			}
+			return true
+		}
 		switch {
 		case f.Name == "append":
 			return r.expr(c, field, mapKey, ret, depth)
@@ -279,17 +319,14 @@ func (r *flowRun) call(c *ast.CallExpr, i int, field string, mapKey bool, ret []
 			}
 		}
 		if len(decls) == 0 {
-			if lit := r.closure(f); lit != nil && len(ret) < 6 {
-				return r.intoLit(lit, c, i, field, mapKey, ret, depth)
-			}
 			return true // a function value, a dot import or a type of another package
 		}
 		return r.into(decls, c, i, field, mapKey, ret, depth)
 	case *ast.SelectorExpr:
 		if x, ok := f.X.(*ast.Ident); ok {
 			if s := r.file(c); s != nil {
-				if imp, ok := s.imports[x.Name]; ok {
-					return r.pkgCall(imp, f.Sel.Name, c, field, mapKey, ret, depth)
+				if imp, ok := s.imports[x.Name]; ok && r.localDecls(x.Name, c) == 0 && !r.pkgVar(x.Name) {
+					return r.pkgCall(imp, f.Sel.Name, c, i, field, mapKey, ret, depth)
 				}
 			}
 		}
@@ -299,10 +336,38 @@ func (r *flowRun) call(c *ast.CallExpr, i int, field string, mapKey bool, ret []
 }
 
 // pkgCall follows the value into a function of an imported package.
-func (r *flowRun) pkgCall(imp, name string, c *ast.CallExpr, field string, mapKey bool, ret []flowFrame, depth int) bool {
+func (r *flowRun) pkgCall(imp, name string, c *ast.CallExpr, i int, field string, mapKey bool, ret []flowFrame, depth int) bool {
 	full := imp + "." + name
 	if strings.Contains(strings.SplitN(imp, "/", 2)[0], ".") {
 		return true // another package of the module, or a third party: not followed
+	}
+	// A writer call carries the value into its first argument, the writer: follow the writer variable too.
+	if flowWriters[full] && i > 0 && len(c.Args) > 0 {
+		w := ast.Expr(c.Args[0])
+		for {
+			switch x := w.(type) {
+			case *ast.UnaryExpr:
+				w = x.X
+				continue
+			case *ast.ParenExpr:
+				w = x.X
+				continue
+			case *ast.SelectorExpr:
+				w = x.X
+				continue
+			case *ast.IndexExpr:
+				w = x.X
+				continue
+			case *ast.StarExpr:
+				w = x.X
+				continue
+			}
+			break
+		}
+		id, ok := w.(*ast.Ident)
+		if !ok || r.variable(id.Name, c, "", false, ret, depth) {
+			return true
+		}
 	}
 	_, read := readArg[full]
 	_, walk := walkArg[full]
@@ -774,13 +839,111 @@ func (r *flowRun) identType(id *ast.Ident, n int) ast.Expr {
 			return true
 		})
 	}
-	if unknown || len(types) == 0 {
+	// Exactly one declaration, and in a function no package-level name it could also mean: blocks are not modelled, so
+	// two declarations (a sibling block, a parameter and a local) leave the type unknown.
+	if unknown || len(types) != 1 || (local && r.pkgDeclared(id.Name)) {
 		return nil
 	}
-	for _, t := range types[1:] {
-		if r.typeName(t) != r.typeName(types[0]) || r.typeName(t) == "" {
-			return nil
+	return types[0]
+}
+
+// pkgDeclared reports whether the directory declares name at package level: a variable, a constant or a function.
+func (r *flowRun) pkgDeclared(name string) bool {
+	for _, s := range r.g.files {
+		for _, d := range s.file.Decls {
+			switch x := d.(type) {
+			case *ast.FuncDecl:
+				if x.Recv == nil && x.Name.Name == name {
+					return true
+				}
+			case *ast.GenDecl:
+				for _, sp := range x.Specs {
+					if vs, ok := sp.(*ast.ValueSpec); ok {
+						for _, nm := range vs.Names {
+							if nm.Name == name {
+								return true
+							}
+						}
+					}
+				}
+			}
 		}
 	}
-	return types[0]
+	return false
+}
+
+// pkgVar reports whether the directory declares name as a package-level variable or constant.
+func (r *flowRun) pkgVar(name string) bool {
+	for _, s := range r.g.files {
+		for _, d := range s.file.Decls {
+			if x, ok := d.(*ast.GenDecl); ok {
+				for _, sp := range x.Specs {
+					if vs, ok := sp.(*ast.ValueSpec); ok {
+						for _, nm := range vs.Names {
+							if nm.Name == name {
+								return true
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	return false
+}
+
+// localDecls is the number of declarations of name in the function that holds at (parameters, results, the receiver,
+// := and var declarations, range variables, closure parameters); `x := x` copies x and is not counted.
+func (r *flowRun) localDecls(name string, at ast.Node) int {
+	var fn *ast.FuncDecl
+	for p := at; p != nil; p = r.g.parent[p] {
+		if d, ok := p.(*ast.FuncDecl); ok {
+			fn = d
+			break
+		}
+	}
+	if fn == nil {
+		return 0
+	}
+	n := 0
+	ast.Inspect(fn, func(m ast.Node) bool {
+		switch x := m.(type) {
+		case *ast.Field:
+			for _, nm := range x.Names {
+				if nm.Name == name {
+					n++
+				}
+			}
+		case *ast.AssignStmt:
+			if x.Tok != token.DEFINE {
+				return true
+			}
+			for j, l := range x.Lhs {
+				if id, ok := l.(*ast.Ident); ok && id.Name == name {
+					if len(x.Lhs) == len(x.Rhs) {
+						if rid, ok := x.Rhs[j].(*ast.Ident); ok && rid.Name == name {
+							continue
+						}
+					}
+					n++
+				}
+			}
+		case *ast.ValueSpec:
+			for _, nm := range x.Names {
+				if nm.Name == name {
+					n++
+				}
+			}
+		case *ast.RangeStmt:
+			if x.Tok == token.DEFINE {
+				for _, e := range []ast.Expr{x.Key, x.Value} {
+					if id, ok := e.(*ast.Ident); ok && id.Name == name {
+						n++
+					}
+				}
+			}
+		}
+		return true
+	})
+	return n
 }

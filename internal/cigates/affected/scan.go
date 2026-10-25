@@ -343,9 +343,9 @@ func scanFile(fset *token.FileSet, f *ast.File, rel string, top map[string]bool,
 			case lit == nil:
 			case join:
 				joinArg[lit] = true
-			case nameTests[name]:
+			case nameTests[name] && !flow.shadowed(call):
 				nameOnly[lit] = true
-			case readCalls[name] && !strings.HasPrefix(name, "fs."):
+			case readCalls[name] && !strings.HasPrefix(name, "fs.") && !flow.shadowed(call):
 				// the os and filepath calls open a relative name in the working directory (fs calls: in their fs.FS)
 				readArgLit[lit] = true
 			}

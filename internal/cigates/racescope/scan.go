@@ -210,7 +210,21 @@ func Check(root string, rows []Row) ([]string, error) {
 		for _, hit := range scanPackage(p, true) {
 			problems = append(problems, fmt.Sprintf("%s: own file: %s", r.Package, hit))
 		}
+		if covered != "" {
+			for _, f := range goFilesOf(p, true) {
+				for _, hit := range callbackProblems(filepath.Join(p.Dir, f)) {
+					problems = append(problems, fmt.Sprintf("%s: own file: %s", r.Package, hit))
+				}
+			}
+		}
 		for _, dep := range closure(modpath, pkgs, p) {
+			if covered != "" {
+				for _, f := range goFilesOf(pkgs[dep], false) {
+					for _, hit := range callbackProblems(filepath.Join(pkgs[dep].Dir, f)) {
+						problems = append(problems, fmt.Sprintf("%s: imports %s: %s", r.Package, strings.TrimPrefix(dep, modpath+"/"), hit))
+					}
+				}
+			}
 			for _, hit := range scanPackage(pkgs[dep], false) {
 				if dep == covered {
 					continue
@@ -279,4 +293,160 @@ func witnessProblems(r Row, covered *goPackage) []string {
 		}
 	}
 	return []string{r.Package + ": witness test " + r.Witness + " not found in " + r.Class}
+}
+
+// callbackCallees names the functions that call their callback from several goroutines, with the index of that argument. A
+// covered-by row is sound only while the callback writes nothing shared: the race detector would have to see two workers write it.
+var callbackCallees = map[string]int{"CheckTree": 1}
+
+// callbackProblems: every call of a callbackCallees function in the file passes a package-level function, or a function literal
+// that assigns to no variable it did not declare itself (no assignment, op-assignment, ++/--, append, map or field write to a
+// captured variable).
+func callbackProblems(path string) []string {
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, path, nil, 0)
+	if err != nil {
+		return nil
+	}
+	top := map[string]bool{}
+	for _, d := range f.Decls {
+		if fn, ok := d.(*ast.FuncDecl); ok && fn.Recv == nil {
+			top[fn.Name.Name] = true
+		}
+	}
+	var out []string
+	at := func(p token.Pos, what string) {
+		out = append(out, fmt.Sprintf("%s:%d: %s", filepath.Base(path), fset.Position(p).Line, what))
+	}
+	ast.Inspect(f, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		name := ""
+		switch fn := call.Fun.(type) {
+		case *ast.Ident:
+			name = fn.Name
+		case *ast.SelectorExpr:
+			name = fn.Sel.Name
+		}
+		idx, watched := callbackCallees[name]
+		if !watched || len(call.Args) <= idx {
+			return true
+		}
+		switch cb := call.Args[idx].(type) {
+		case *ast.FuncLit:
+			for _, w := range capturedWrites(cb) {
+				at(w.pos, name+" callback writes captured variable "+w.name)
+			}
+		case *ast.Ident:
+			if !top[cb.Name] {
+				at(cb.Pos(), name+" callback "+cb.Name+" is not a package-level function")
+			}
+		default:
+			at(call.Args[idx].Pos(), name+" callback is neither a package-level function nor a function literal")
+		}
+		return true
+	})
+	return out
+}
+
+type write struct {
+	pos  token.Pos
+	name string
+}
+
+// capturedWrites: assignments inside lit to a root variable that lit did not declare (parameter, result, :=, var, range).
+func capturedWrites(lit *ast.FuncLit) []write {
+	local := map[string]bool{"_": true}
+	declare := func(fl *ast.FieldList) {
+		if fl == nil {
+			return
+		}
+		for _, fld := range fl.List {
+			for _, n := range fld.Names {
+				local[n.Name] = true
+			}
+		}
+	}
+	declare(lit.Type.Params)
+	declare(lit.Type.Results)
+	ast.Inspect(lit.Body, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.AssignStmt:
+			if x.Tok == token.DEFINE {
+				for _, l := range x.Lhs {
+					if id, ok := l.(*ast.Ident); ok {
+						local[id.Name] = true
+					}
+				}
+			}
+		case *ast.ValueSpec:
+			for _, id := range x.Names {
+				local[id.Name] = true
+			}
+		case *ast.RangeStmt:
+			if x.Tok == token.DEFINE {
+				for _, e := range []ast.Expr{x.Key, x.Value} {
+					if id, ok := e.(*ast.Ident); ok {
+						local[id.Name] = true
+					}
+				}
+			}
+		case *ast.FuncLit:
+			declare(x.Type.Params)
+			declare(x.Type.Results)
+		}
+		return true
+	})
+	root := func(e ast.Expr) string {
+		for {
+			switch x := e.(type) {
+			case *ast.Ident:
+				return x.Name
+			case *ast.IndexExpr:
+				e = x.X
+			case *ast.SelectorExpr:
+				e = x.X
+			case *ast.StarExpr:
+				e = x.X
+			case *ast.ParenExpr:
+				e = x.X
+			default:
+				return ""
+			}
+		}
+	}
+	var out []write
+	check := func(e ast.Expr, pos token.Pos, define bool) {
+		if define {
+			return
+		}
+		if n := root(e); n != "" && !local[n] {
+			out = append(out, write{pos, n})
+		}
+	}
+	ast.Inspect(lit.Body, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.AssignStmt:
+			for _, l := range x.Lhs {
+				check(l, x.Pos(), x.Tok == token.DEFINE)
+			}
+		case *ast.IncDecStmt:
+			check(x.X, x.Pos(), false)
+		case *ast.RangeStmt:
+			if x.Tok == token.ASSIGN {
+				check(x.Key, x.Pos(), false)
+				check(x.Value, x.Pos(), false)
+			}
+		case *ast.CallExpr:
+			if id, ok := x.Fun.(*ast.Ident); ok && (id.Name == "append" || id.Name == "copy" || id.Name == "delete" || id.Name == "clear") && len(x.Args) > 0 {
+				if id.Name != "append" {
+					check(x.Args[0], x.Pos(), false)
+				}
+			}
+		}
+		return true
+	})
+	return out
 }

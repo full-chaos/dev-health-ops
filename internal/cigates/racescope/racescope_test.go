@@ -271,3 +271,45 @@ func TestRowsThatNameNothingRunnableAreRefused(t *testing.T) {
 		}
 	}
 }
+
+func callbackModule(callback string) map[string]string {
+	return map[string]string{
+		"a/a.go":      "package a\n\nimport \"example.test/m/c\"\n\nfunc F() int {\n\tvar out []string\n\t_ = out\n\treturn c.CheckTree([]string{\"x\"}, " + callback + ")\n}\n",
+		"a/a_test.go": cleanTest,
+		"c/c.go":      "package c\n\nimport \"sync\"\n\nvar mu sync.Mutex\n\nfunc CheckTree(p []string, read func(string) int) int { return read(p[0]) }\n",
+		"c/c_test.go": "package c\n\nimport \"testing\"\n\nfunc TestH(t *testing.T) {}\n",
+	}
+}
+
+// The callback of the worker pool must write no captured variable (CHAOS-11413): two workers writing it would be a race that
+// only the excluded package's own -race run could see.
+func TestACoveredByCallbackThatWritesACapturedVariableIsRefused(t *testing.T) {
+	covered := Row{"a", "covered-by:c", "TestH", "pool in c"}
+	ok := []string{
+		`func(path string) int { n := len(path); n++; return n }`,
+		`func(path string) int { var buf []string; buf = append(buf, path); return len(buf) }`,
+		`func(path string) int { m := map[string]int{}; m[path] = 1; return m[path] }`,
+	}
+	for _, cb := range ok {
+		if got := problemsOf(t, callbackModule(cb), covered); got != "" {
+			t.Errorf("callback %s was refused:\n%s", cb, got)
+		}
+	}
+	bad := map[string]string{
+		"append to a captured slice": `func(path string) int { out = append(out, path); return 0 }`,
+		"captured counter":           `func(path string) int { out = nil; return 0 }`,
+		"captured map or field":      `func(path string) int { out[0] = path; return 0 }`,
+		"increment":                  `func(path string) int { out2++; return 0 }`,
+		"a variable, not a function": `cb`,
+	}
+	for name, cb := range bad {
+		files := callbackModule(cb)
+		files["a/a.go"] = strings.Replace(files["a/a.go"], "\treturn c.CheckTree", "\tvar out2 int\n\tcb := func(string) int { return 0 }\n\t_ = out2\n\treturn c.CheckTree", 1)
+		if name == "increment" {
+			files["a/a.go"] = strings.Replace(files["a/a.go"], "var out2 int\n", "var out2 int\n", 1)
+		}
+		if got := problemsOf(t, files, covered); !strings.Contains(got, "callback") {
+			t.Errorf("%s: no callback problem, got:\n%s", name, got)
+		}
+	}
+}

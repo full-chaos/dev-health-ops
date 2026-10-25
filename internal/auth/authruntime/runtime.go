@@ -663,7 +663,7 @@ func apiServerOptions(cfg authconfig.Config, logger *slog.Logger, routes []httpa
 	return httpapi.ServerOptions{
 		Address:        cfg.APIAddress,
 		Logger:         logger,
-		Routes:         routes,
+		Routes:         authapi.MarkResponseModels(routes),
 		RequestTimeout: cfg.RequestTimeout,
 		MaxBodyBytes:   cfg.MaxBodyBytes,
 		RateLimit:      cfg.RateLimit.PerSecond,

@@ -304,8 +304,8 @@ func (f *compatFixture) buildCompat() {
 		f.t.Fatal(err)
 	}
 	mux := http.NewServeMux()
-	for _, route := range routes {
-		mux.Handle(route.Method+" "+route.Pattern, requestid.Middleware(route.Handler))
+	for _, route := range MarkResponseModels(routes) {
+		mux.Handle(route.Method+" "+route.Pattern, requestid.Middleware(flaggedHandler(route)))
 	}
 	f.server = mux
 }

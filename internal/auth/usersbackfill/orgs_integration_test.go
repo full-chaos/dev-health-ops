@@ -3,12 +3,17 @@
 package usersbackfill
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
+
+	"github.com/full-chaos/dev-health-ops/internal/cli"
 )
 
 func (e *reconEnv) count(t *testing.T, ctx context.Context, sql string, args ...any) int {
@@ -199,6 +204,11 @@ func TestOrgsBackfillRefusalsAndAuthOnly(t *testing.T) {
 	if e.count(t, ctx, `SELECT count(*) FROM auth.memberships WHERE organization_id = $1 AND principal_id = $2`, org, known) != 1 {
 		t.Fatal("an auth-only membership was deleted")
 	}
+	// Leave the shared database with no auth-only row and no refused row for the tests that follow.
+	e.seedMember(t, ctx, org, known, "owner")
+	if _, err := e.admin.Exec(ctx, `DELETE FROM public.memberships WHERE org_id = $1 AND user_id = $2`, org, other); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestSuperuserBecomesPlatformAdminThroughUsersBackfill(t *testing.T) {
@@ -215,5 +225,86 @@ func TestSuperuserBecomesPlatformAdminThroughUsersBackfill(t *testing.T) {
 	}
 	if e.count(t, ctx, `SELECT count(*) FROM auth.memberships WHERE principal_id = $1`, id) != 0 {
 		t.Fatal("a platform role created a membership")
+	}
+}
+
+// A page of one row sees every public row once; the unique key on public.memberships refuses a duplicate.
+func TestOrgsBackfillBatchOneSeesEveryRowAndDuplicatesAreRefusedByTheSource(t *testing.T) {
+	e := getReconEnv(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	org1, _ := e.seedOrg(t, ctx, true)
+	org2, _ := e.seedOrg(t, ctx, true)
+	u1 := e.seed(t, ctx, uniq("b1"), true, true)
+	u2 := e.seed(t, ctx, uniq("b1"), true, true)
+	e.backfill(t, ctx)
+	e.seedMember(t, ctx, org1, u1, "owner")
+	e.seedMember(t, ctx, org1, u2, "member")
+	e.seedMember(t, ctx, org2, u1, "viewer")
+
+	rep, err := RunOrgs(ctx, PGOrgSource{Pool: e.runtime}, e.store, PGAuthOnly{Pool: e.runtime, Schema: e.schema}, Options{DryRun: true, BatchSize: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := e.count(t, ctx, `SELECT count(*) FROM public.organizations`); rep.OrgsSeen != want {
+		t.Fatalf("orgs_seen = %d, public.organizations = %d", rep.OrgsSeen, want)
+	}
+	if want := e.count(t, ctx, `SELECT count(*) FROM public.memberships`); rep.MembershipsSeen != want {
+		t.Fatalf("memberships_seen = %d, public.memberships = %d", rep.MembershipsSeen, want)
+	}
+
+	_, err = e.admin.Exec(ctx, `INSERT INTO public.memberships (id, user_id, org_id, role, joined_at, created_at, updated_at)
+VALUES ($1, $2, $3, 'member', now(), now(), now())`, uuid.New(), u1, org1)
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != "23505" {
+		t.Fatalf("a duplicate (user_id, org_id) was not refused with 23505: %v", err)
+	}
+}
+
+// An auth organization without a public row is counted, kept, and reported with the STOP line; the exit stays 0.
+func TestOrgsVerbAuthOnlyOrganizationStopsTheCutoverButExitsZero(t *testing.T) {
+	e := getReconEnv(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	before, err := PGAuthOnly{Pool: e.runtime, Schema: e.schema}.AuthOnly(ctx)
+	if err != nil || before.Orgs != 0 || before.Memberships != 0 {
+		t.Fatalf("the shared database starts with auth-only rows: %+v %v", before, err)
+	}
+	orphan, _ := e.seedOrg(t, ctx, true)
+	if rep := e.runOrgs(t, ctx, false); rep.OrgsInserted < 1 || rep.SkippedTotal() != 0 {
+		t.Fatalf("seeding run: %+v", rep)
+	}
+	if _, err := e.admin.Exec(ctx, `DELETE FROM public.organizations WHERE id = $1`, orphan); err != nil {
+		t.Fatal(err)
+	}
+
+	dsn := e.runtime.Config().ConnString()
+	lookup := func(name string) (string, bool) {
+		switch name {
+		case "AUTH_DATABASE_URI":
+			return dsn, true
+		case "AUTH_DATABASE_SCHEMA":
+			return "auth", true
+		}
+		return "", false
+	}
+	var stdout, stderr bytes.Buffer
+	code := runOrgs(ctx, cli.Env{Args: nil, Lookup: lookup, Stdout: &stdout, Stderr: &stderr})
+	if code != cli.ExitOK {
+		t.Fatalf("exit = %d, stderr %q", code, stderr.String())
+	}
+	for _, line := range []string{"auth_only_orgs=1", "auth_only_memberships=0"} {
+		if !strings.Contains(stdout.String(), line+"\n") {
+			t.Fatalf("stdout lacks %q: %q", line, stdout.String())
+		}
+	}
+	if !strings.Contains(stderr.String(), "auth_only_orgs is above zero: STOP for the cutover") {
+		t.Fatalf("stderr lacks the STOP line: %q", stderr.String())
+	}
+	if strings.Contains(stderr.String(), "auth_only_memberships is above zero") {
+		t.Fatal("the memberships STOP line printed with zero auth-only memberships")
+	}
+	if e.count(t, ctx, `SELECT count(*) FROM auth.organizations WHERE id = $1`, orphan) != 1 {
+		t.Fatal("the auth-only organization was removed")
 	}
 }

@@ -91,6 +91,7 @@ stage-signing-key init container exists.
 {{- if eq .name "AUTH_SIGNING_KEY" }}{{- fail "authService.extraEnv must not set AUTH_SIGNING_KEY: direct-value signing material is rejected by the service (ACP-ADR-02 §4); use authService.signingKey" }}{{- end }}
 {{- if has (upper (trim (toString .name))) (include "dev-health.authServiceEnvNames" $ | fromJsonArray) }}{{- fail (printf "authService.extraEnv must not set %s: the chart renders it for auth-service, and a later entry would shadow the rendered value (a Secret reference included)" .name) }}{{- end }}
 {{- if eq (lower (trim .name)) "auth_signing_keyset_file" }}{{- fail "authService.extraEnv must not set AUTH_SIGNING_KEYSET_FILE: the chart renders it (authService.keySet) or stages one signing key (authService.signingKey); the service refuses a key-set manifest beside a single key" }}{{- end }}
+{{- if and (hasKey . "value") (regexMatch "(?i)_(SECRET|PASSWORD|TOKEN|KEY|DSN|CREDENTIALS)$" (trim (toString .name))) }}{{- fail (printf "authService.extraEnv must not set %s as a literal value: the name looks like a secret, and a literal would put it in the manifest; reference it with valueFrom.secretKeyRef" .name) }}{{- end }}
 {{- end }}
 apiVersion: apps/v1
 kind: Deployment

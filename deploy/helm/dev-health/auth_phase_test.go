@@ -547,3 +547,58 @@ func TestAuthServiceExtraEnvRefusesEveryRenderedName(t *testing.T) {
 		}
 	}
 }
+
+// authService.extraEnv refuses a literal value under any name that looks like a secret, rendered by the chart or not,
+// in any case; a valueFrom entry (secretKeyRef) under such a name stays allowed.
+func TestAuthServiceExtraEnvRefusesSecretLikeLiterals(t *testing.T) {
+	refused := map[string]string{
+		"collision with a rendered name": `[{"name":"SOCIAL_GITHUB_CLIENT_SECRET","value":"literal"}]`,
+		"unknown social client secret":   `[{"name":"SOCIAL_X_CLIENT_SECRET","value":"literal"}]`,
+		"mixed case":                     `[{"name":"Partner_Api_Token","value":"literal"}]`,
+		"password":                       `[{"name":"SMTP_PASSWORD","value":"literal"}]`,
+		"key":                            `[{"name":"WEBHOOK_SIGNING_KEY","value":"literal"}]`,
+		"dsn":                            `[{"name":"REPORTING_DSN","value":"literal"}]`,
+		"credentials":                    `[{"name":"partner_credentials","value":"literal"}]`,
+		"empty literal":                  `[{"name":"OTHER_SECRET","value":""}]`,
+	}
+	for name, env := range refused {
+		t.Run(name, func(t *testing.T) {
+			_, out, err := renderAuth(t, phaseArgs(3, "--set-json", "authService.extraEnv="+env)...)
+			if err == nil {
+				t.Fatalf("%s rendered a literal under a secret-like name", env)
+			}
+			if !strings.Contains(out, "authService.extraEnv must not set") {
+				t.Fatalf("the refusal does not name extraEnv: %.300s", out)
+			}
+		})
+	}
+	control := `[{"name":"PARTNER_API_TOKEN","valueFrom":{"secretKeyRef":{"name":"partner","key":"token"}}},{"name":"LOG_FORMAT","value":"json"}]`
+	docs, out, err := renderAuth(t, phaseArgs(3, "--set-json", "authService.extraEnv="+control)...)
+	if err != nil {
+		t.Fatalf("a secretKeyRef under a secret-like name and a plain literal were refused: %v\n%.400s", err, out)
+	}
+	service := authDoc(docs, "Deployment", "a-dev-health-auth-service")
+	if ref := envEntryValue(func() any {
+		for _, container := range podContainers(service) {
+			env, _ := at(container, "env").([]any)
+			for _, entry := range env {
+				if at(entry, "name") == "PARTNER_API_TOKEN" {
+					return entry
+				}
+			}
+		}
+		return nil
+	}()); ref != "secret:partner/token" {
+		t.Errorf("PARTNER_API_TOKEN = %s, want the Secret reference", ref)
+	}
+}
+
+// An empty access-token class and issuer are the defaults: they render, and set nothing.
+func TestAuthPhaseEmptyTokenClassIsTheDefault(t *testing.T) {
+	docs := renderPhase(t, 2, "--set-string", "authService.accessToken.class=", "--set-string", "authService.accessToken.issuerURL=")
+	for _, env := range []string{"AUTH_ACCESS_TOKEN_CLASS", "AUTH_TOKEN_ISSUER_URL", "AUTH_JWT_AUDIENCE"} {
+		if value, set := containerEnvValue(t, authDoc(docs, "Deployment", "a-dev-health-auth-service"), env); set {
+			t.Errorf("an empty class renders %s=%q", env, value)
+		}
+	}
+}

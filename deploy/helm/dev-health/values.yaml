@@ -293,6 +293,10 @@ authService:
   terminationGracePeriodSeconds: 30
   # -- Extra flags after the rendered ones. Credentials never go here.
   extraArgs: []
+  # -- Extra environment entries. Refused: any name the chart renders for
+  #    auth-service (any case), and a literal `value` under a secret-like name
+  #    (*_SECRET, *_PASSWORD, *_TOKEN, *_KEY, *_DSN, *_CREDENTIALS, any case);
+  #    such a name may come only by valueFrom.secretKeyRef.
   extraEnv: []
   livenessProbe:
     initialDelaySeconds: 5

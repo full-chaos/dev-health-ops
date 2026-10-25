@@ -129,7 +129,10 @@ chart renders for auth-service and for go-api's verifier),
 `authService.socialLinkRoutes` (phase 2 or more) and `authService.sso.oidc` /
 `saml` (refused while the chart does not render auth-service's SSO settings).
 `authService.extraEnv` refuses every env name the chart renders for
-auth-service, in any case, so no entry can shadow a Secret reference.
+auth-service, in any case, so no entry can shadow a Secret reference, and it
+refuses a literal `value` under any secret-like name (`*_SECRET`, `*_PASSWORD`,
+`*_TOKEN`, `*_KEY`, `*_DSN`, `*_CREDENTIALS`); such a name comes only by
+`valueFrom.secretKeyRef`.
 
 The chart creates **no Secret** for it. Create these in the release namespace
 first and reference them by name:

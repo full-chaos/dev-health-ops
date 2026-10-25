@@ -1,4 +1,4 @@
--- Revision 0156 downgrade (0156 -> 0155), the reverse of ../0156_add_internal_service_credential_audits_principal_id.sql.
+-- Revision 0157 downgrade (0157 -> 0156), the reverse of ../0157_add_internal_service_credential_audits_principal_id.sql.
 -- The migrator runs this file and the alembic_version update in one transaction.
 -- Audit rows are never changed: when a row holds a principal_id, the downgrade stops with the count and leaves the
 -- schema as it was.
@@ -12,7 +12,7 @@ DECLARE
 BEGIN
     SELECT count(*) INTO pending FROM internal_service_credential_audits WHERE principal_id IS NOT NULL;
     IF pending > 0 THEN
-        RAISE EXCEPTION 'cannot downgrade 0156: % internal_service_credential_audits rows hold a principal_id; audit rows are never changed', pending
+        RAISE EXCEPTION 'cannot downgrade 0157: % internal_service_credential_audits rows hold a principal_id; audit rows are never changed', pending
             USING ERRCODE = 'check_violation';
     END IF;
 END

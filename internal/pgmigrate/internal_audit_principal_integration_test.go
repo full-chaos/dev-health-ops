@@ -15,32 +15,32 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/pgmigrate"
 )
 
-// Revision 0156 adds internal_service_credential_audits.principal_id (the workload token subject of an internal acr
+// Revision 0157 adds internal_service_credential_audits.principal_id (the workload token subject of an internal acr
 // request): nullable, no default, no backfill, at most one of credential_id and principal_id, at most 255 characters.
 
-func position0156(t *testing.T, chain []pgmigrate.ChainFile) int {
+func position0157(t *testing.T, chain []pgmigrate.ChainFile) int {
 	t.Helper()
 	for i, file := range chain {
-		if file.Revision == "0156" {
+		if file.Revision == "0157" {
 			return i
 		}
 	}
-	t.Fatal("the chain holds no revision 0156")
+	t.Fatal("the chain holds no revision 0157")
 	return 0
 }
 
-func TestRevision0156KeepsOldAuditRowsVerbatim(t *testing.T) {
+func TestRevision0157KeepsOldAuditRowsVerbatim(t *testing.T) {
 	chain, err := pgmigrate.LoadChain()
 	if err != nil {
 		t.Fatal(err)
 	}
-	idx := position0156(t, chain)
+	idx := position0157(t, chain)
 	d := newDownInstance(t)
 	conn := connect(t, d.at(t, idx))
 	ctx := context.Background()
 	credential := uuid.New()
 	if _, err := conn.Exec(ctx, `INSERT INTO internal_service_credentials (id, service_name, token_hash, token_prefix, scopes, created_at)
-VALUES ($1, 'acr', 'hash-0156', 'svc_acr_0156', '["entitlements:read"]'::json, now())`, credential); err != nil {
+VALUES ($1, 'acr', 'hash-0157', 'svc_acr_0157', '["entitlements:read"]'::json, now())`, credential); err != nil {
 		t.Fatal(err)
 	}
 	for _, row := range []struct {
@@ -48,7 +48,7 @@ VALUES ($1, 'acr', 'hash-0156', 'svc_acr_0156', '["entitlements:read"]'::json, n
 		outcome    string
 	}{{&credential, "success"}, {nil, "unknown_token"}} {
 		if _, err := conn.Exec(ctx, `INSERT INTO internal_service_credential_audits (id, credential_id, requested_org_id, action, outcome, created_at)
-VALUES ($1, $2, 'org-0156', 'acr_entitlement_lookup', $3, '2026-10-01T00:00:00Z')`, uuid.New(), row.credential, row.outcome); err != nil {
+VALUES ($1, $2, 'org-0157', 'acr_entitlement_lookup', $3, '2026-10-01T00:00:00Z')`, uuid.New(), row.credential, row.outcome); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -62,7 +62,7 @@ VALUES ($1, $2, 'org-0156', 'acr_entitlement_lookup', $3, '2026-10-01T00:00:00Z'
 		t.Fatal(err)
 	}
 	if _, err := pgmigrate.Upgrade(ctx, conn, baseline, chain[:idx+1]); err != nil {
-		t.Fatalf("upgrade to 0156: %v", err)
+		t.Fatalf("upgrade to 0157: %v", err)
 	}
 	var after string
 	var withPrincipal int
@@ -81,23 +81,23 @@ VALUES ($1, $2, 'org-0156', 'acr_entitlement_lookup', $3, '2026-10-01T00:00:00Z'
 	}
 }
 
-func TestRevision0156ChecksRefuseBothActorsAndALongPrincipal(t *testing.T) {
+func TestRevision0157ChecksRefuseBothActorsAndALongPrincipal(t *testing.T) {
 	chain, err := pgmigrate.LoadChain()
 	if err != nil {
 		t.Fatal(err)
 	}
-	position0156(t, chain)
+	position0157(t, chain)
 	d := newDownInstance(t)
 	conn := connect(t, d.at(t, len(chain)))
 	ctx := context.Background()
 	credential := uuid.New()
 	if _, err := conn.Exec(ctx, `INSERT INTO internal_service_credentials (id, service_name, token_hash, token_prefix, scopes, created_at)
-VALUES ($1, 'acr', 'hash-0156b', 'svc_acr_0156b', '["entitlements:read"]'::json, now())`, credential); err != nil {
+VALUES ($1, 'acr', 'hash-0157b', 'svc_acr_0157b', '["entitlements:read"]'::json, now())`, credential); err != nil {
 		t.Fatal(err)
 	}
 	insert := func(credentialID *uuid.UUID, principal *string) error {
 		_, err := conn.Exec(ctx, `INSERT INTO internal_service_credential_audits (id, credential_id, principal_id, requested_org_id, action, outcome, created_at)
-VALUES ($1, $2, $3, 'org-0156', 'acr_entitlement_lookup', 'success', now())`, uuid.New(), credentialID, principal)
+VALUES ($1, $2, $3, 'org-0157', 'acr_entitlement_lookup', 'success', now())`, uuid.New(), credentialID, principal)
 		return err
 	}
 	prn := func(n int) *string { s := "prn_" + strings.Repeat("A", n-4); return &s }
@@ -124,24 +124,24 @@ VALUES ($1, $2, $3, 'org-0156', 'acr_entitlement_lookup', 'success', now())`, uu
 	}
 }
 
-func TestRevision0156DowngradeRefusesWhileRowsHoldAPrincipal(t *testing.T) {
+func TestRevision0157DowngradeRefusesWhileRowsHoldAPrincipal(t *testing.T) {
 	chain, err := pgmigrate.LoadChain()
 	if err != nil {
 		t.Fatal(err)
 	}
-	position := position0156(t, chain) + 1
+	position := position0157(t, chain) + 1
 	d := newDownInstance(t)
 	uri := d.at(t, position)
 	conn := connect(t, uri)
 	ctx := context.Background()
 	if _, err := conn.Exec(ctx, `INSERT INTO internal_service_credential_audits (id, credential_id, principal_id, requested_org_id, action, outcome, created_at)
-VALUES ($1, NULL, 'prn_AAAAAAAAAAAAAAAAAAAAAA', 'org-0156', 'acr_entitlement_lookup', 'success', now())`, uuid.New()); err != nil {
+VALUES ($1, NULL, 'prn_AAAAAAAAAAAAAAAAAAAAAA', 'org-0157', 'acr_entitlement_lookup', 'success', now())`, uuid.New()); err != nil {
 		t.Fatal(err)
 	}
 	before := schemaShape(t, uri)
 	code, _, stderr := goDowngrade(t, uri, previousName(chain, position-1))
-	if code != cli.ExitFailure || !strings.Contains(stderr, "1 internal_service_credential_audits rows hold a principal_id") {
-		t.Fatalf("downgrade with a principal row: exit %d stderr %q, want a refusal naming 1 row", code, stderr)
+	if code != cli.ExitFailure || !strings.Contains(stderr, "1 internal_service_credential_audits rows hold a principal_id") || !strings.Contains(stderr, "audit rows are never changed") {
+		t.Fatalf("downgrade with a principal row: exit %d stderr %q, want a refusal naming 1 row and the rule (audit rows are never changed)", code, stderr)
 	}
 	if after := schemaShape(t, uri); after != before {
 		t.Fatalf("a refused downgrade changed the schema:\n%s", shapeDiff(before, after))

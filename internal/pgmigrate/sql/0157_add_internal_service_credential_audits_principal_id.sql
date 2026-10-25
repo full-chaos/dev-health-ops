@@ -1,4 +1,4 @@
--- Revision 0156 (down_revision 0155), written by hand.
+-- Revision 0157 (down_revision 0156), written by hand.
 -- principal_id is the workload token subject (a prn_ id) of an internal acr request whose token verified. It is
 -- NULL for every row written before this revision, for every svc_acr_ row, and for every request refused before or
 -- at verification. A row names a credential or a principal, never both.

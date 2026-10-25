@@ -45,6 +45,7 @@ Count all server-side connection pools:
 - API and Go worker direct pools where used;
 - operator CLI invocation;
 - migration and administrative reserve.
+- auth-service direct pools, when enabled: replicas plus one surge pod, each holding `authService.database.maxConns` connections (see [Auth-service capacity](auth-service-capacity.md)).
 
 The Go deployment manifest describes each worker group selected by deployment.
 For each group, calculate the fleet budget from its replica range, one River

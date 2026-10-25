@@ -157,7 +157,7 @@ func entitlementHandler(store EntitlementStore, auth routeAuth, logger *slog.Log
 			}
 			countInternal(ctx, routeEntitlement, outcome)
 			logger.InfoContext(ctx, "acr entitlement lookup: answered",
-				slog.String("org_id", orgID), slog.String("credential_id", cred.ID), slog.String("workload_subject", cred.PrincipalID), slog.String("outcome", outcome))
+				slog.String("org_id", orgID), slog.String("credential_id", cred.ID), slog.String("outcome", outcome))
 			write()
 		}
 		if store == nil {

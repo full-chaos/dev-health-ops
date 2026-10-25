@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"strings"
 
 	"go.opentelemetry.io/otel"
@@ -61,6 +62,10 @@ func buildAccessVerify(lookup func(string) (string, bool), auth *policy.Authenti
 	return validator, keys, err
 }
 
+// principalIDPattern is the principal id of the credential contracts
+// (contracts/auth/v1/jsonschema/credential-entry.v1.schema.json).
+var principalIDPattern = regexp.MustCompile(`^prn_[A-Za-z0-9_-]{1,64}$`)
+
 // buildACRWorkload builds the workload-token verifier of the internal acr
 // routes: the access-token issuer and keys, audience dev-health-api only (a
 // token for any other audience is refused), leeway 0. No issuer or no
@@ -74,8 +79,8 @@ func buildACRWorkload(lookup func(string) (string, bool), keys authverify.KeySou
 	if issuer == "" || keys == nil || subject == "" {
 		return nil, nil
 	}
-	if !strings.HasPrefix(subject, "prn_") || len(subject) > 255 {
-		return nil, fmt.Errorf("%s is not a prn_ principal id", envACRWorkloadSubject)
+	if !principalIDPattern.MatchString(subject) {
+		return nil, fmt.Errorf("%s is not a valid principal id", envACRWorkloadSubject)
 	}
 	verifier, err := authverify.NewWorkloadVerifier(authverify.WorkloadVerifierConfig{Issuer: issuer, Audience: accessTokenAudienceAPI, Keys: keys})
 	if err != nil {

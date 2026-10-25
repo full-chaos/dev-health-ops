@@ -477,3 +477,132 @@ func TestUnsupportedClassesWriteOnlyTheParityAuditRow(t *testing.T) {
 		})
 	}
 }
+
+func TestSuccessLogsCarryNoWorkloadClaim(t *testing.T) {
+	signer := newWLSigner(t)
+	token := signer.sign(wlHeader(), wlClaims())
+	for _, route := range wlRoutesUnderTest {
+		t.Run(route.key, func(t *testing.T) {
+			h := newWLHarness(t, wlAuth(t, signer, "dev-health-api"))
+			if rec := do(h.handler, route.path, "Bearer "+token); rec.Code != http.StatusOK {
+				t.Fatalf("status = %d", rec.Code)
+			}
+			if h.logs.Len() == 0 {
+				t.Fatal("no log line to check")
+			}
+			for _, claim := range []string{wlSubject, wlIssuer, "prn_", "workload_subject"} {
+				if strings.Contains(h.logs.String(), claim) {
+					t.Fatalf("a verified claim %q reached a success log line: %s", claim, h.logs.String())
+				}
+			}
+		})
+	}
+}
+
+func TestWorkloadClassIsChosenByTheHeaderAlone(t *testing.T) {
+	signer := newWLSigner(t)
+	full := signer.sign(wlHeader(), wlClaims())
+	segments := strings.Split(full, ".")
+	enc := base64.RawURLEncoding
+	workloadShaped := map[string]string{
+		"two segments":  segments[0] + "." + segments[1],
+		"four segments": full + ".extra",
+		"one segment":   segments[0],
+	}
+	garbage := map[string]string{
+		"header not base64":       "!!!not-base64!!." + segments[1] + "." + segments[2],
+		"header not an object":    enc.EncodeToString([]byte("[1,2]")) + "." + segments[1] + "." + segments[2],
+		"header without typ":      enc.EncodeToString([]byte(`{"alg":"EdDSA"}`)) + "." + segments[1] + "." + segments[2],
+		"header with another typ": enc.EncodeToString([]byte(`{"typ":"at+jwt"}`)) + "." + segments[1] + "." + segments[2],
+	}
+	for _, route := range wlRoutesUnderTest {
+		for name, token := range workloadShaped {
+			t.Run(route.key+"/"+name, func(t *testing.T) {
+				h := newWLHarness(t, wlAuth(t, signer, "dev-health-api"))
+				before := wlCounts(t, "devhealth_acr_workload_refused_total")
+				if rec := do(h.handler, route.path, "Bearer "+token); rec.Code != http.StatusUnauthorized {
+					t.Fatalf("status = %d, want 401", rec.Code)
+				}
+				if got := wlDelta(before, wlCounts(t, "devhealth_acr_workload_refused_total")); !reflect.DeepEqual(got, map[string]int64{route.key + "/" + ReasonContract: 1}) {
+					t.Fatalf("refused counter delta = %v, want %s/contract once", got, route.key)
+				}
+				if !strings.Contains(h.logs.String(), "acr internal: workload token refused") || !strings.Contains(h.logs.String(), `"reason":"contract"`) {
+					t.Fatalf("no workload refusal log line: %s", h.logs.String())
+				}
+				if h.creds.findCalls != 0 || h.llm.gotToken != "" {
+					t.Fatalf("a store or verifier was called: finds %d verifier token %q", h.creds.findCalls, h.llm.gotToken)
+				}
+			})
+		}
+		for name, token := range garbage {
+			t.Run(route.key+"/"+name, func(t *testing.T) {
+				h := newWLHarness(t, wlAuth(t, signer, "dev-health-api"))
+				before := wlCounts(t, "devhealth_acr_workload_refused_total")
+				if rec := do(h.handler, route.path, "Bearer "+token); rec.Code != http.StatusUnauthorized {
+					t.Fatalf("status = %d, want 401", rec.Code)
+				}
+				if got := wlDelta(before, wlCounts(t, "devhealth_acr_workload_refused_total")); len(got) != 0 {
+					t.Fatalf("a non-workload header was counted as a workload refusal: %v", got)
+				}
+				if strings.Contains(h.logs.String(), "workload token refused") {
+					t.Fatalf("a workload refusal line for a non-workload header: %s", h.logs.String())
+				}
+			})
+		}
+	}
+}
+
+func TestPrefixClassedTokensAreNeverWorkloadClassed(t *testing.T) {
+	signer := newWLSigner(t)
+	full := signer.sign(wlHeader(), wlClaims())
+	for _, prefix := range []string{"svc_acr_", "svc_worker_", "svc_authsess_", "fcacr_", "fcpush_"} {
+		if isWorkloadToken(prefix+full) || isWorkloadToken(prefix+strings.Split(full, ".")[0]) {
+			t.Fatalf("a %s token was workload-classed", prefix)
+		}
+	}
+	if !isWorkloadToken(full) {
+		t.Fatal("a workload token was not workload-classed")
+	}
+}
+
+func TestUnsupportedClassesOnLLMConfigTouchNoStoreOrKey(t *testing.T) {
+	signer := newWLSigner(t)
+	userHeader := wlHeader()
+	userHeader["typ"] = "at+jwt"
+	hs256 := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"HS256","typ":"JWT"}`)) + ".e30.c2lnbmF0dXJl"
+	remainder := "R3m41nd3rSecretBytes0123456789"
+	classes := map[string]string{
+		"user access token": signer.sign(userHeader, wlClaims()),
+		"fcacr":             "fcacr_" + remainder,
+		"push key":          "fcpush_" + remainder,
+		"svc_worker":        "svc_worker_" + remainder,
+		"svc_authsess":      "svc_authsess_" + remainder,
+		"hs256":             hs256,
+	}
+	for name, token := range classes {
+		t.Run(name, func(t *testing.T) {
+			keys := &wlCountingKeys{inner: authverify.StaticKeys{wlKid: signer.pub}}
+			verifier, err := authverify.NewWorkloadVerifier(authverify.WorkloadVerifierConfig{Issuer: wlIssuer, Audience: "dev-health-api", Keys: keys})
+			if err != nil {
+				t.Fatal(err)
+			}
+			h := newWLHarness(t, &WorkloadAuth{Verifier: verifier, Subject: wlSubject, Now: func() time.Time { return wlNow }})
+			before := wlCounts(t, "devhealth_acr_workload_refused_total")
+			rec := do(h.handler, wlRoutesUnderTest[2].path, "Bearer "+token)
+			if rec.Code != http.StatusUnauthorized {
+				t.Fatalf("status = %d, want 401", rec.Code)
+			}
+			if h.creds.findCalls != 0 || h.llm.gotToken != "" || keys.calls != 0 {
+				t.Fatalf("a lookup happened: finds %d verifier token %q key reads %d", h.creds.findCalls, h.llm.gotToken, keys.calls)
+			}
+			if got := wlDelta(before, wlCounts(t, "devhealth_acr_workload_refused_total")); len(got) != 0 {
+				t.Fatalf("counted as a workload refusal: %v", got)
+			}
+			for _, secret := range []string{token, remainder} {
+				if strings.Contains(h.logs.String(), secret) {
+					t.Fatalf("token bytes reached the log: %q", secret)
+				}
+			}
+		})
+	}
+}

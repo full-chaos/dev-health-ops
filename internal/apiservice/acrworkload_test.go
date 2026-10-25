@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -83,5 +84,29 @@ func TestBuildACRWorkloadRefusesASubjectThatIsNotAPrincipalID(t *testing.T) {
 		if workload, err := buildACRWorkload(lookup, authverify.StaticKeys{}); err == nil || workload != nil {
 			t.Fatalf("subject %.12q accepted", subject)
 		}
+	}
+}
+
+func TestBuildACRWorkloadNamesTheVariableNeverTheValue(t *testing.T) {
+	for name, subject := range map[string]string{
+		"invalid character": "prn_invalid!",
+		"empty suffix":      "prn_",
+		"suffix too long":   "prn_" + strings.Repeat("A", 65),
+		"space inside":      "prn_AAAA BBBB",
+	} {
+		t.Run(name, func(t *testing.T) {
+			lookup := acrWorkloadLookup(map[string]string{envAccessTokenIssuer: acrWorkloadIssuer, envACRWorkloadSubject: subject})
+			workload, err := buildACRWorkload(lookup, authverify.StaticKeys{})
+			if err == nil || workload != nil {
+				t.Fatalf("subject %q accepted", subject)
+			}
+			if !strings.Contains(err.Error(), envACRWorkloadSubject) || strings.Contains(err.Error(), subject) {
+				t.Fatalf("error %q must name the variable and never its value", err)
+			}
+		})
+	}
+	lookup := acrWorkloadLookup(map[string]string{envAccessTokenIssuer: acrWorkloadIssuer, envACRWorkloadSubject: "prn_" + strings.Repeat("A", 64)})
+	if workload, err := buildACRWorkload(lookup, authverify.StaticKeys{}); err != nil || workload == nil {
+		t.Fatalf("a 64 character suffix: %v %v", workload, err)
 	}
 }

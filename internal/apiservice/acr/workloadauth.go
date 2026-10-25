@@ -104,15 +104,23 @@ func countSvcAcrCompat(ctx context.Context, route string) {
 	svcAcrCompat.Add(ctx, 1, metric.WithAttributes(attribute.String("route", route)))
 }
 
-// isWorkloadToken reads the unverified header and reports typ workload+jwt on
-// a three-part compact token. It only picks the verification path; the
-// verifier re-checks everything.
+// classedPrefixes are the credential prefixes of the other token classes
+// (service credentials, acr client credentials, External Push keys); a token
+// that carries one is never workload-classed and its header is never decoded.
+var classedPrefixes = []string{"svc_", "fcacr_", "fcpush_"}
+
+// isWorkloadToken reads the unverified JOSE header alone, whatever the
+// segment count, and reports typ workload+jwt. It only picks the
+// verification path; the verifier re-checks everything, so a missing or extra
+// segment is a contract refusal there.
 func isWorkloadToken(token string) bool {
-	parts := strings.Split(token, ".")
-	if len(parts) != 3 {
-		return false
+	for _, prefix := range classedPrefixes {
+		if strings.HasPrefix(token, prefix) {
+			return false
+		}
 	}
-	raw, err := base64.RawURLEncoding.DecodeString(parts[0])
+	head, _, _ := strings.Cut(token, ".")
+	raw, err := base64.RawURLEncoding.DecodeString(head)
 	if err != nil {
 		return false
 	}

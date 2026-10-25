@@ -6382,7 +6382,7 @@
         "description": "routeAuth: the internal listener verifies, before any read, either the svc_acr_ service credential (hashed at rest; migration compat) or the acr-api workload token (workload-token.v1: EdDSA, typ workload+jwt, aud dev-health-api, issuer pin AUTH_ACCESS_TOKEN_ISSUER, sub equal to AUTH_ACR_WORKLOAD_SUBJECT; no scope claim), with a keyed attempt limiter."
       },
       "public_rationale": null,
-      "resource_resolver": "organization_from_path: the {org_id} path segment is the requested organization (internal/apiservice/acr/handlers.go:141); the service credential carries no organization binding that the handler compares with it",
+      "resource_resolver": "organization_from_path: the {org_id} path segment is the requested organization (internal/apiservice/acr/handlers.go:145); the service credential carries no organization binding that the handler compares with it",
       "route": "/api/v1/internal/acr/entitlements/{org_id}",
       "service": "dev-health-ops-api",
       "source": {
@@ -6428,7 +6428,7 @@
         "description": "routeAuth: the internal listener verifies, before any read, either the svc_acr_ service credential (hashed at rest; migration compat) or the acr-api workload token (workload-token.v1: EdDSA, typ workload+jwt, aud dev-health-api, issuer pin AUTH_ACCESS_TOKEN_ISSUER, sub equal to AUTH_ACR_WORKLOAD_SUBJECT; no scope claim), with a keyed attempt limiter."
       },
       "public_rationale": null,
-      "resource_resolver": "none: the route reads no organization (internal/apiservice/acr/handlers.go:67)",
+      "resource_resolver": "none: the route reads no organization (internal/apiservice/acr/handlers.go:71)",
       "route": "/api/v1/internal/acr/health",
       "service": "dev-health-ops-api",
       "source": {
@@ -6476,7 +6476,7 @@
         "description": "routeAuth: the internal listener verifies, before any read, either the svc_acr_ service credential (hashed at rest; migration compat) or the acr-api workload token (workload-token.v1: EdDSA, typ workload+jwt, aud dev-health-api, issuer pin AUTH_ACCESS_TOKEN_ISSUER, sub equal to AUTH_ACR_WORKLOAD_SUBJECT; no scope claim), with a keyed attempt limiter."
       },
       "public_rationale": null,
-      "resource_resolver": "organization_from_path: the {org_id} path segment is the requested organization (internal/apiservice/acr/llmconfig.go:137); the service credential carries no organization binding that the handler compares with it",
+      "resource_resolver": "organization_from_path: the {org_id} path segment is the requested organization (internal/apiservice/acr/llmconfig.go:152); the service credential carries no organization binding that the handler compares with it",
       "route": "/api/v1/internal/acr/orgs/{org_id}/llm-config",
       "service": "dev-health-ops-api",
       "source": {

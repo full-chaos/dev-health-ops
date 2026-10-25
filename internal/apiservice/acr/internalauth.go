@@ -135,7 +135,7 @@ func (a routeAuth) authenticate(w http.ResponseWriter, r *http.Request, orgID st
 		writeDetail(w, status, detail)
 		return Credential{}, false
 	}
-	if bearer, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer "); ok && !strings.HasPrefix(bearer, acrTokenPrefix) && isWorkloadToken(bearer) {
+	if bearer, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer "); ok && isWorkloadToken(bearer) {
 		return a.authenticateWorkload(w, r, orgID, bearer)
 	}
 	token, ok := extractToken(r)

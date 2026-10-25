@@ -118,16 +118,18 @@ func llmConfigHandler(verifier CredentialVerifier, source LLMConfigSource, logge
 			unauthorized(ctx, w, "missing")
 			return
 		}
-		var credentialID, workloadSubject string
-		if !strings.HasPrefix(token, acrTokenPrefix) && isWorkloadToken(token) {
-			subject, reason := workload.decide(token)
-			if reason != "" {
+		var credentialID string
+		switch {
+		case isWorkloadToken(token):
+			if _, reason := workload.decide(token); reason != "" {
 				refuseWorkloadLLMConfig(ctx, w, logger, reason)
 				return
 			}
 			countWorkloadAccepted(ctx, routeLLMConfig)
-			workloadSubject = subject
-		} else {
+		case !strings.HasPrefix(token, acrTokenPrefix):
+			unauthorized(ctx, w, "invalid")
+			return
+		default:
 			var err error
 			credentialID, err = verifier.Verify(ctx, token, LLMConfigScope)
 			switch {
@@ -206,7 +208,7 @@ func llmConfigHandler(verifier CredentialVerifier, source LLMConfigSource, logge
 		}
 		body := llmConfigBody(orgID, cfg)
 		logger.InfoContext(ctx, "acr llm-config: served",
-			slog.String("org_id", orgID), slog.String("credential_id", credentialID), slog.String("workload_subject", workloadSubject), slog.String("version", cfg.Version))
+			slog.String("org_id", orgID), slog.String("credential_id", credentialID), slog.String("version", cfg.Version))
 		countLLMConfig(ctx, "served")
 		out := pyjson.NewObject()
 		out.Set("schema_version", body.SchemaVersion)

@@ -68,19 +68,17 @@
           }
         },
         "shutdownTimeout": { "type": "string", "pattern": "^[1-9][0-9]{0,4}s$" },
-        "terminationGracePeriodSeconds": { "type": "integer", "minimum": 1, "maximum": 86400 },
-        "authProxy": {
-          "description": "CHAOS-10231: the /api/v1/auth/* proxy flags. YAML booleans only: a string such as \"false\" is refused, never read as on.",
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "sessions": { "type": "boolean" },
-            "localLogin": { "type": "boolean" },
-            "credentials": { "type": "boolean" },
-            "social": { "type": "boolean" },
-            "oidc": { "type": "boolean" },
-            "saml": { "type": "boolean" }
-          }
+        "terminationGracePeriodSeconds": { "type": "integer", "minimum": 1, "maximum": 86400 }
+      }
+    },
+    "authService": {
+      "type": "object",
+      "properties": {
+        "phase": {
+          "description": "CHAOS-11382: the auth cutover phase, a whole number 0..5 (values.yaml). The templates also refuse 4 and 5 and the keys it replaces.",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 5
         }
       }
     },

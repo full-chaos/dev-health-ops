@@ -3,6 +3,7 @@ package authapi
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 
@@ -62,6 +63,11 @@ func (s SSOSessions) issue(ctx context.Context, principalID uuid.UUID, org *uuid
 	if !found {
 		return ssoIssued{}, errors.New("authapi: a federated sign-in's user is not in public.users")
 	}
+	// The routes check before they consume the flow; this repeat, inside the
+	// memo window, runs no second check.
+	if err := s.h.Issuer.Preflight(ctx); err != nil {
+		return ssoIssued{}, fmt.Errorf("%w: %w", errSignerUnavailable, err)
+	}
 	issued, err := s.h.startSession(ctx, principalID, membership, nil, amr, provider)
 	if err != nil {
 		return ssoIssued{}, err
@@ -82,10 +88,20 @@ type oidcSessions struct{ SSOSessions }
 func (s oidcSessions) Issue(ctx context.Context, req oidc.SessionRequest) (oidc.Tokens, error) {
 	role := req.Role
 	out, err := s.issue(ctx, req.PrincipalID, req.OrgID, &role, req.AMR, ssoProvider)
+	if errors.Is(err, errSignerUnavailable) {
+		return oidc.Tokens{}, fmt.Errorf("%w: %w", oidc.ErrSessionUnavailable, err)
+	}
 	if err != nil {
 		return oidc.Tokens{}, err
 	}
 	return oidc.Tokens{AccessToken: out.access, RefreshToken: out.refresh, ExpiresIn: int64(AccessExpiresIn)}, nil
+}
+
+func (s oidcSessions) Preflight(ctx context.Context) error {
+	if err := s.h.Issuer.Preflight(ctx); err != nil {
+		return fmt.Errorf("%w: %w", oidc.ErrSessionUnavailable, err)
+	}
+	return nil
 }
 
 // SAML is the saml.SessionIssuer.
@@ -109,6 +125,10 @@ func (s samlSessions) IssueFederatedSession(w http.ResponseWriter, r *http.Reque
 		}
 	}
 	out, err := s.issue(ctx, signIn.PrincipalID, signIn.OrganizationID, role, signIn.AMR, samlProvider)
+	if errors.Is(err, errSignerUnavailable) {
+		s.h.unavailableCompat(w, r, opSSOSession, err)
+		return
+	}
 	if err != nil {
 		s.h.fail(w, r, opSSOSession, err)
 		return
@@ -129,6 +149,8 @@ func (s samlSessions) IssueFederatedSession(w http.ResponseWriter, r *http.Reque
 	s.h.rec.record(ctx, opSSOSession, "success", reasonAccepted, nil)
 	writeCompatModel(w, body)
 }
+
+func (s samlSessions) Preflight(ctx context.Context) error { return s.h.Issuer.Preflight(ctx) }
 
 // TransportRefusal renders a federated route's transport refusals, auditing a
 // refused body the way the other sign-in routes do.

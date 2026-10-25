@@ -1,9 +1,13 @@
 package pgmigrate
 
 import (
+	"context"
 	"io/fs"
+	"log/slog"
 	"testing"
 	"testing/fstest"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // UseChainFS makes LoadChain and LoadDownChain read fsys (layout sql/ and sql/down/) until the test ends. Tests
@@ -66,4 +70,9 @@ func UseFrozenChain(t testing.TB) {
 func UsePlantedChain(t testing.TB, extra fs.FS) {
 	t.Helper()
 	UseChainFS(t, FrozenChainFS(t, extra))
+}
+
+// DropInvalidFailureStreakIndex runs the cleanup that follows a final failed build.
+func DropInvalidFailureStreakIndex(ctx context.Context, conn *pgx.Conn, options IndexBuildOptions, logger *slog.Logger) {
+	dropInvalidFailureStreakIndex(ctx, conn, options, logger)
 }

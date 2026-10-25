@@ -1,6 +1,6 @@
 {{- /*
 One `dho auth <verb>` run (users-backfill or orgs-backfill) as a plain Job. Off by default.
-It reads the SAME keys as auth-service: authService.usersOwned and authService.orgsOwned feed
+It reads the SAME switches as auth-service: authService.phase (4 users owned, 5 orgs owned) feeds
 AUTH_USERS_OWNED / AUTH_ORGS_OWNED, so a verb never sees a different switch than the service.
 The runtime login is the auth-service secret reference (no value in the chart). The Job is not
 a hook: its name carries a hash of its whole rendered pod template, so the next upgrade with the
@@ -39,11 +39,11 @@ spec:
           valueFrom: {secretKeyRef: {name: {{ $a.database.secretName | quote }}, key: {{ $a.database.secretKey | quote }}}}
         - name: AUTH_DATABASE_SCHEMA
           value: {{ include "dev-health.authDatabaseSchema" . | quote }}
-        {{- if eq (include "dev-health.authBool" (dict "value" $a.usersOwned "key" "authService.usersOwned")) "true" }}
+        {{- if eq (include "dev-health.authOn" (dict "flag" "usersOwned" "context" .)) "true" }}
         - name: AUTH_USERS_OWNED
           value: "true"
         {{- end }}
-        {{- if eq (include "dev-health.authBool" (dict "value" $a.orgsOwned "key" "authService.orgsOwned")) "true" }}
+        {{- if eq (include "dev-health.authOn" (dict "flag" "orgsOwned" "context" .)) "true" }}
         - name: AUTH_ORGS_OWNED
           value: "true"
         {{- end }}
@@ -59,12 +59,12 @@ spec:
 {{- $enabled := eq (include "dev-health.authBool" (dict "value" $b.enabled "key" "authService.backfill.enabled")) "true" }}
 {{- $null := include "dev-health.authBool" (dict "value" $b.dryRun "key" "authService.backfill.dryRun") }}
 {{- if $enabled }}
-{{- if not $a.enabled }}{{- fail "authService.backfill.enabled needs authService.enabled: the Job uses the auth-service database login" }}{{- end }}
+{{- if not (include "dev-health.authOn" (dict "flag" "service" "context" .)) }}{{- fail "authService.backfill.enabled needs authService.phase >= 1: the Job uses the auth-service database login" }}{{- end }}
 {{- if not (has (toString $b.verb) (list "users-backfill" "orgs-backfill")) }}{{- fail "authService.backfill.verb must be users-backfill or orgs-backfill" }}{{- end }}
 {{- if or (not (kindIs "string" $b.runId)) (empty $b.runId) }}{{- fail "authService.backfill.runId is required when authService.backfill.enabled: it names this run, and a new value makes a new Job" }}{{- end }}
 {{- if not (and (has (kindOf $b.batch) (list "int" "int64" "float64")) (eq (float64 $b.batch) (floor (float64 $b.batch))) (ge (int $b.batch) 1) (le (int $b.batch) 10000)) }}{{- fail "authService.backfill.batch must be a whole number from 1 to 10000" }}{{- end }}
 {{- range $b.extraEnv }}
-{{- if has (upper (trim .name)) (list "AUTH_USERS_OWNED" "AUTH_ORGS_OWNED" "AUTH_DATABASE_URI" "AUTH_DATABASE_SCHEMA") }}{{- fail (printf "authService.backfill.extraEnv must not set %s: the chart renders it from authService (usersOwned, orgsOwned, database)" .name) }}{{- end }}
+{{- if has (upper (trim .name)) (list "AUTH_USERS_OWNED" "AUTH_ORGS_OWNED" "AUTH_DATABASE_URI" "AUTH_DATABASE_SCHEMA") }}{{- fail (printf "authService.backfill.extraEnv must not set %s: the chart renders it from authService (phase, database)" .name) }}{{- end }}
 {{- end }}
 {{- if not $a.networkPolicy.egress.database.to }}{{- fail "authService.networkPolicy.egress.database.to is required with authService.backfill.enabled: the Job has its own NetworkPolicy and an empty list would cut it off from the database" }}{{- end }}
 {{- $podTemplate := include "dev-health.authBackfillPodTemplate" . }}

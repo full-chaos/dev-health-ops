@@ -12,7 +12,7 @@ import (
 )
 
 var keySetBase = []string{
-	"--set", "authService.enabled=true",
+	"--set", "authService.phase=1",
 	"--set", "authService.database.secretName=auth-db",
 	"--set", "authService.migrate.secretName=auth-migrate-db",
 	"--set", "authService.migrate.secretKey=MIGRATION_URI",

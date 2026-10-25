@@ -98,26 +98,27 @@ func TestAuthOrgsOwnedDefaultUnset(t *testing.T) {
 	}
 }
 
+// The owned switches come from authService.phase alone: auth-service and the Job agree in every rendered phase, and
+// the phases that would set them (4 users owned, 5 orgs owned) are refused until the public-table writer decision.
 func TestAuthOrgsOwnedOneKeyAllConsumers(t *testing.T) {
 	for _, verb := range []string{"users-backfill", "orgs-backfill"} {
-		for _, sets := range [][]string{
-			{"authService.orgsOwned=true"},
-			{"authService.usersOwned=true"},
-			{"authService.orgsOwned=true", "authService.usersOwned=true"},
-		} {
-			t.Run(verb+"/"+strings.Join(sets, ","), func(t *testing.T) {
-				service, job := renderBackfill(t, withSets(backfillOn, append([]string{"authService.backfill.verb=" + verb}, sets...)...))
+		for _, phase := range []string{"1", "2", "3"} {
+			t.Run(verb+"/phase "+phase, func(t *testing.T) {
+				args := withSets(append(append([]string{}, backfillOn...), phase3Secrets...), "authService.backfill.verb="+verb, "authService.phase="+phase)
+				if phase != "1" {
+					args = append(append(args, sessionReaders...), sessionSuccessor...)
+				}
+				service, job := renderBackfill(t, args)
 				if err := ownedSwitchesAgree(t, service, job); err != nil {
 					t.Fatal(err)
 				}
-				for _, set := range sets {
-					name := "AUTH_ORGS_OWNED"
-					if strings.Contains(set, "usersOwned") {
-						name = "AUTH_USERS_OWNED"
-					}
-					if v, _ := containerEnvValue(t, job, name); v != "true" {
-						t.Errorf("Job %s = %q, want true", name, v)
-					}
+			})
+		}
+		for _, phase := range []string{"4", "5"} {
+			t.Run(verb+"/phase "+phase+" refused", func(t *testing.T) {
+				_, out, err := renderAuth(t, withSets(backfillOn, "authService.backfill.verb="+verb, "authService.phase="+phase)...)
+				if err == nil || !strings.Contains(out, "phases 4 and 5 need the public-table writer decision") {
+					t.Fatalf("phase %s rendered: err=%v out=%.300s", phase, err, out)
 				}
 			})
 		}
@@ -126,7 +127,7 @@ func TestAuthOrgsOwnedOneKeyAllConsumers(t *testing.T) {
 
 // Each consumer, read a different value or a literal, makes the equality fail.
 func TestAuthOrgsOwnedEqualityFailsForEachConsumer(t *testing.T) {
-	service, job := renderBackfill(t, withSets(backfillOn, "authService.orgsOwned=true"))
+	service, job := renderBackfill(t, backfillOn)
 	if err := ownedSwitchesAgree(t, service, job); err != nil {
 		t.Fatalf("baseline: %v", err)
 	}
@@ -149,7 +150,7 @@ func TestAuthOrgsOwnedEqualityFailsForEachConsumer(t *testing.T) {
 	}
 }
 
-// A stray key is no second source: only authService.orgsOwned feeds the switch.
+// A stray key is no second source: only authService.phase feeds the switch.
 func TestAuthOrgsOwnedStrayKeyIsIgnoredByTheJob(t *testing.T) {
 	service, job := renderBackfill(t, withSets(backfillOn, "authService.backfill.orgsOwned=true"))
 	for name, doc := range map[string]map[string]any{"auth-service": service, "Job": job} {
@@ -207,7 +208,7 @@ func TestAuthBackfillJobNeedsRunIdAndAuthService(t *testing.T) {
 		t.Errorf("enabled without runId rendered: err=%v out=%.200s", err, out)
 	}
 	off := []string{"--set", "authService.backfill.enabled=true", "--set", "authService.backfill.verb=orgs-backfill", "--set", "authService.backfill.runId=r1"}
-	if _, out, err := renderAuth(t, off...); err == nil || !strings.Contains(out, "authService.enabled") {
+	if _, out, err := renderAuth(t, off...); err == nil || !strings.Contains(out, "authService.phase >= 1") {
 		t.Errorf("Job without auth-service rendered: err=%v out=%.200s", err, out)
 	}
 }

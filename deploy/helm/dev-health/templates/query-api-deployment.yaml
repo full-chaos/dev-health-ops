@@ -35,8 +35,8 @@ other pair leaves the pod not ready or the sessions unread.
 {{- fail (printf "authService.migrate.sessionReaders.queryApi (%q) must equal the QUERY_API_DATABASE_ROLE in queryApi.extraEnv (%q): query-api reads sessions as the role it logs in as" $queryReader $queryRole) }}
 {{- end }}
 {{- /* With the flag off river-migrate revokes the auth read auth-migrate would grant: set the reader in the same change as the flag. */}}
-{{- if and $queryReader (not .Values.goApi.authProxy.sessions) }}
-{{- fail "authService.migrate.sessionReaders.queryApi is set while goApi.authProxy.sessions is off: set the query-api reader in the same change that turns the sessions flag on" }}
+{{- if and $queryReader (not (eq (include "dev-health.authOn" (dict "flag" "sessions" "context" .)) "true")) }}
+{{- fail "authService.migrate.sessionReaders.queryApi is set while authService.phase is below 2 (sessions): set the query-api reader in the same change that moves to phase 2" }}
 {{- end }}
 {{- /*
 CHAOS-7085: the MCP caller-class listener (QUERY_API_MCP_ADDR). It trusts the
@@ -165,12 +165,12 @@ spec:
           env:
             - name: QUERY_API_ADDR
               value: {{ printf ":%v" .Values.queryApi.port | quote }}
-            {{- if .Values.authService.enabled }}
+            {{- if (eq (include "dev-health.authOn" (dict "flag" "service" "context" .)) "true") }}
             {{- /* The auth schema the sid check reads auth-service sessions in. */}}
             - name: AUTH_DATABASE_SCHEMA
               value: {{ include "dev-health.authDatabaseSchema" . | quote }}
             {{- end }}
-            {{- if .Values.goApi.authProxy.sessions }}
+            {{- if (eq (include "dev-health.authOn" (dict "flag" "sessions" "context" .)) "true") }}
             {{- /* go-api's AUTH_PROXY_SESSIONS: the query-api role's posture requires the auth session read while it is on. */}}
             - name: AUTH_PROXY_SESSIONS
               value: "true"

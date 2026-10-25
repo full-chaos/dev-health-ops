@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
-	"net"
 	"strings"
 	"testing"
 	"time"
@@ -20,19 +19,6 @@ import (
 
 // testCredential is planted in every DSN below; no log line may contain it.
 const testCredential = "planted-credential-6369"
-
-func closedAddress(t *testing.T) string {
-	t.Helper()
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	address := listener.Addr().String()
-	if err := listener.Close(); err != nil {
-		t.Fatal(err)
-	}
-	return address
-}
 
 func reachableDatabase(cfg config.Config) config.Config {
 	cfg.APIDatabaseURI = secrets.NewValue("postgres://api:" + testCredential + "@127.0.0.1:1/app")

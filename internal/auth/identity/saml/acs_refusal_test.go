@@ -125,6 +125,8 @@ func (s *sessionsSpy) IssueFederatedSession(w http.ResponseWriter, _ *http.Reque
 	w.WriteHeader(http.StatusOK)
 }
 
+func (*sessionsSpy) Preflight(context.Context) error { return nil }
+
 type acsRun struct {
 	status   int
 	detail   string

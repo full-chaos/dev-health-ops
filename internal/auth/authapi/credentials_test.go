@@ -159,7 +159,11 @@ func newCredFixture(t *testing.T) *credFixture {
 
 func newCredFixtureWith(t *testing.T, counters httpapi.CounterStore) *credFixture {
 	t.Helper()
-	f := newFixture(t)
+	return newCredFixtureOn(t, counters, newFixture(t))
+}
+
+func newCredFixtureOn(t *testing.T, counters httpapi.CounterStore, f *fixture) *credFixture {
+	t.Helper()
 	hash := "stored-hash"
 	provider := "local"
 	fakes := &credFakes{

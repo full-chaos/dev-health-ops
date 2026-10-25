@@ -107,6 +107,7 @@ func BuildFailureStreakIndex(ctx context.Context, conn *pgx.Conn, options IndexB
 		break
 	}
 	if lastErr != nil {
+		dropInvalidFailureStreakIndex(ctx, conn, options, logger)
 		return result, fmt.Errorf("the index was not built after %d attempts: %w", result.Attempts, lastErr)
 	}
 	valid, exists, err = failureStreakIndexState(ctx, conn)
@@ -118,6 +119,52 @@ func BuildFailureStreakIndex(ctx context.Context, conn *pgx.Conn, options IndexB
 	}
 	result.Valid = true
 	return result, nil
+}
+
+const (
+	failureStreakDropAttempts = 3
+	failureStreakDropGap      = 2 * time.Second
+	failureStreakDropCap      = 5 * time.Minute
+)
+
+// failureStreakDropBudget bounds the whole cleanup; it ignores RetryDelay so no option can push it past the Job deadline.
+func failureStreakDropBudget(options IndexBuildOptions) time.Duration {
+	return min(time.Duration(failureStreakDropAttempts)*(options.LockTimeout+failureStreakDropGap)+30*time.Second, failureStreakDropCap)
+}
+
+// dropInvalidFailureStreakIndex runs after the final failed build: an INVALID index is still maintained by every writer
+// and must not stay. DROP INDEX CONCURRENTLY waits on the same open transactions that can fail the build, so it is
+// retried within a bounded budget (it outlives a cancelled ctx). A VALID index is never dropped. A failure here is logged
+// with its SQLSTATE only; the next run drops the leftover at the start of its first attempt.
+func dropInvalidFailureStreakIndex(ctx context.Context, conn *pgx.Conn, options IndexBuildOptions, logger *slog.Logger) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), failureStreakDropBudget(options))
+	defer cancel()
+	for attempt := 1; attempt <= failureStreakDropAttempts; attempt++ {
+		valid, exists, err := failureStreakIndexState(ctx, conn)
+		if err != nil {
+			logger.Warn("build-index: invalid index left; the next run drops it", "stage", "state", "attempt", attempt, "sqlstate", sqlState(err))
+			return
+		}
+		if !exists || valid {
+			return
+		}
+		if _, err := conn.Exec(ctx, failureStreakDropSQL); err == nil {
+			logger.Info("build-index: dropped the invalid index after the final failure", "attempt", attempt)
+			return
+		} else {
+			logger.Warn("build-index: drop of the invalid index failed", "attempt", attempt, "sqlstate", sqlState(err))
+			if attempt == failureStreakDropAttempts {
+				logger.Warn("build-index: invalid index left; the next run drops it", "stage", "drop", "attempt", attempt, "sqlstate", sqlState(err))
+				return
+			}
+		}
+		select {
+		case <-ctx.Done():
+			logger.Warn("build-index: invalid index left; the next run drops it", "stage", "budget", "attempt", attempt)
+			return
+		case <-time.After(failureStreakDropGap):
+		}
+	}
 }
 
 // failureStreakIndexState reads whether the index exists and whether it is valid and ready.

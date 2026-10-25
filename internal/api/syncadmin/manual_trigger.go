@@ -321,7 +321,11 @@ func (h *handlers) handOffManualTx(ctx context.Context, tx pgx.Tx, org string, c
 			input.SourceIDs, input.DatasetKeys = nil, nil
 			if window.SourceIDsSet {
 				input.SourceIDs = append([]string{}, window.SourceIDs...)
-				scopedSources = len(input.SourceIDs)
+				counted, err := synchandoff.CountEnabledSources(ctx, tx, org, *config.IntegrationID, input.SourceIDs)
+				if err != nil {
+					return synchandoff.Trigger{}, err
+				}
+				scopedSources = int(counted)
 			}
 			if window.DatasetKeysSet {
 				input.DatasetKeys = append([]string{}, window.DatasetKeys...)

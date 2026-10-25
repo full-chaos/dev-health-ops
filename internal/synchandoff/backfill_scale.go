@@ -1,6 +1,12 @@
 package synchandoff
 
-import "fmt"
+import (
+	"context"
+	"fmt"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+)
 
 // ScaleRefusal is a window and scope the scheduler would refuse over its unit
 // cap. Routes answer it 422 with Error() as the detail.
@@ -29,4 +35,46 @@ func CheckBackfillScale(days, sources, unitCap int64) error {
 		return &ScaleRefusal{floor: floor, unitCap: unitCap}
 	}
 	return nil
+}
+
+// rowQuerier is the one read CountEnabledSources needs (a pgx.Tx or pool).
+type rowQuerier interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
+// canonicalSourceIDs is the parseable ids in their canonical lower-case form,
+// each once, in first-seen order. An id that is not a uuid plans no source.
+func canonicalSourceIDs(ids []string) []string {
+	seen := make(map[uuid.UUID]bool, len(ids))
+	out := make([]string, 0, len(ids))
+	for _, raw := range ids {
+		parsed, err := uuid.Parse(raw)
+		if err != nil || seen[parsed] {
+			continue
+		}
+		seen[parsed] = true
+		out = append(out, parsed.String())
+	}
+	return out
+}
+
+// CountEnabledSources is how many distinct explicit source ids are enabled
+// sources of the org's integration: the sources the scheduler plans for them
+// (loadPlanSources filters on the same org, integration and is_enabled). A
+// duplicate, an unmatched id or another org's id adds nothing. It is one indexed
+// count, read in the caller's transaction.
+func CountEnabledSources(ctx context.Context, q rowQuerier, orgID, integrationID string, ids []string) (int64, error) {
+	canonical := canonicalSourceIDs(ids)
+	if len(canonical) == 0 {
+		return 0, nil
+	}
+	var count int64
+	err := q.QueryRow(ctx, `
+SELECT count(*) FROM public.integration_sources
+WHERE org_id = $1 AND integration_id = $2::uuid AND is_enabled AND id = ANY($3::uuid[])`,
+		orgID, integrationID, canonical).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("count the enabled explicit sources: %w", err)
+	}
+	return count, nil
 }

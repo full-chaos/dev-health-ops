@@ -13,7 +13,7 @@ lifecycle: active
 
 # Auth-service capacity
 
-Size auth-service from the request rate of each path, not from one total. Login is bound by CPU (password hashing); token issue, refresh, and key publication are fast and bound by the in-flight cap and the database.
+Size auth-service from the request rate of each path, not from one total. Login is bound by CPU (password hashing). Token issue, refresh, and key publication are fast, but they share the same CPU and the same in-flight cap as login, so add the paths together.
 {: .fc-page-lede }
 
 ## What the numbers are
@@ -43,22 +43,23 @@ Let `knee(path)` be the measured knee above, per CPU core, and `demand(path)` th
 
 1. Plan to 70% of the knee: `safe(path) = 0.7 x knee(path) x cores`. For login, `safe = 0.7 x 3.7 x cores`.
 2. In-flight bound: `64 / p95 latency in seconds` is the most a pod can hold before it sheds with 429. Keep demand under half of it. A 10 s database hang gives 6.4 requests/s per pod, so a database stall sheds load even on key publication.
-3. Pods: `ceil(max over paths of demand(path) / safe(path)) + 1`. The extra pod keeps the rule true after the loss of one pod.
+3. Pods: add the load of all paths, because they share one CPU budget: `S = sum over paths of demand(path) / safe(path)` (the 1 CPU knees above are per core, so `safe` already includes the core count), then `pods = ceil(S) + 1`. The extra pod keeps `S / (pods - 1)` at or under 1 after the loss of one pod. The 64 in-flight slots are one pool per pod across all routes, not one per path. Mixed load with a pod removed was not measured (see Not measured).
 4. Database budget: `pods x AUTH_DATABASE_MAX_CONNS` must fit inside the database connection budget described in [Capacity and sizing](capacity-and-sizing.md). Lower the pool before adding a pod when the budget is tight.
 5. Refresh demand is `active sessions / access-token lifetime in seconds`. Shortening the lifetime raises refresh demand in the same ratio.
 
-Worked example, 2 CPU cores per pod and 60 logins per minute at peak: `safe(login) = 0.7 x 3.7 x 2 = 5.2` logins/s per pod, demand is 1 login/s, so one pod carries it and the N+1 rule gives 2 pods. Failed logins cost the same as valid ones, so a burst of 20 failed logins keeps one 1 CPU pod busy for about 5 s; size the login path for attack bursts, not only for normal use.
+Worked example, 2 CPU cores per pod and 60 logins per minute at peak: `safe(login) = 0.7 x 3.7 x 2 = 5.2` logins/s per pod, demand is 1 login/s, so `S = 1 / 5.2 = 0.19` for login alone, one pod carries it, and the N+1 rule gives 2 pods. Add the token issue, refresh, and key publication demand to `S` before you read the result. Failed logins cost the same as valid ones, so a burst of 20 failed logins keeps one 1 CPU pod busy for about 5 s; size the login path for attack bursts, not only for normal use.
 
 ## Dependency behavior to plan for
 
-- Postgres unreachable: token issue and refresh answer 503, key publication keeps answering 200 (with 429 shedding once the in-flight cap fills), login answers 500.
-- Valkey (rate-limit store) unreachable: login fails closed with 500; other paths are not affected.
+- Postgres unreachable: token issue and the native refresh route (`/v1/token/refresh`) answer 503; the compatibility refresh route (`/api/v1/auth/refresh`) and login answer 500. Key publication keeps answering 200 from its cached key-state snapshot (with 429 shedding once the in-flight cap fills), but only while that snapshot is no more than five minutes old; after that it stops answering 200. The measured fault windows were shorter than that.
+- Valkey (rate-limit store) unreachable: every route that uses the shared limiter fails closed with 500: login, compatibility refresh, credential routes, password reset, and social link. Routes that do not call the limiter (key publication measured unaffected) keep answering. Only the login failure was measured.
 - Degrade started 6 s (blackhole) or 11 s (delay) after a database fault began, as 429 load shedding. Every fault recovered within about 1 s of the dependency returning.
 
 ## Not measured
 
 - The refresh knee above 300 requests/s. About 600 requests/s per pod is a linear extrapolation, not a measurement.
 - A valid-login ladder. The address limit (20 per 15 minutes by design) stops it, so login capacity is derived from the per-attempt cost.
+- Mixed load. Login and token issue were not run together, and no pod was removed during a run. The sum rule above is arithmetic, not a measured result.
 - Production hardware. Re-measure on the target node type before committing a production size.
 - Login failure codes under a database fault, the key publication tail under a database stall, and the key-read path can change these numbers. Re-read this page when they change (CHAOS-11373, CHAOS-11374, CHAOS-11375).
 

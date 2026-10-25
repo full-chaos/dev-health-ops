@@ -173,6 +173,13 @@ func TestRefusalTableHasOneRowPerPrefix(t *testing.T) {
 			tableClass[class] = refusal.Prefix
 		}
 	}
+	var prefixes []string
+	for _, refusal := range earlyRefusals {
+		prefixes = append(prefixes, refusal.Prefix)
+	}
+	if want := []string{"svc_", "fcpush_", "fcacr_", "whsec_"}; !slices.Equal(prefixes, want) {
+		t.Fatalf("refusal prefixes %v, want exactly %v", prefixes, want)
+	}
 	var document struct {
 		Classes []struct {
 			ClassID string `json:"class_id"`

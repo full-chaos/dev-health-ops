@@ -12,7 +12,7 @@ import (
 // Helm reads the non-empty string "false" as true. Every authService switch this chart reads is refused unless it is a
 // YAML boolean, and the refusal names the key.
 func TestAuthSwitchesRefuseNonBooleans(t *testing.T) {
-	for _, key := range []string{"authService.orgsOwned", "authService.usersOwned", "authService.backfill.enabled", "authService.backfill.dryRun"} {
+	for _, key := range []string{"authService.backfill.enabled", "authService.backfill.dryRun", "authService.socialLinkRoutes", "authService.sso.oidc", "authService.sso.saml"} {
 		for name, flag := range map[string][]string{
 			"string false": {"--set-string", key + "=false"},
 			"string true":  {"--set-string", key + "=true"},
@@ -32,6 +32,10 @@ func TestAuthSwitchesRefuseNonBooleans(t *testing.T) {
 		t.Run(key+"/bool passes", func(t *testing.T) {
 			for _, value := range []string{"true", "false"} {
 				if key == "authService.backfill.enabled" && value == "false" {
+					continue
+				}
+				// socialLinkRoutes=true needs phase >= 2 and sso.*=true is refused: their true cases live in auth_phase_test.go.
+				if value == "true" && (key == "authService.socialLinkRoutes" || strings.HasPrefix(key, "authService.sso.")) {
 					continue
 				}
 				if _, out, err := renderAuth(t, withSets(backfillOn, key+"="+value)...); err != nil {
@@ -92,10 +96,10 @@ func TestAuthBackfillBatchMustBeAWholeNumberInRange(t *testing.T) {
 	}
 }
 
-// Each template that reads a switch reads it through dev-health.authBool: a bare `if .Values.authService.usersOwned`
-// would let a string pass in that one consumer.
+// Each template that reads a switch reads it through dev-health.authBool: a bare `if .Values.authService.socialLinkRoutes`
+// would let a string pass in that one consumer. The owned switches have no key at all (authService.phase renders them).
 func TestAuthSwitchesAreOnlyReadThroughTheStrictHelper(t *testing.T) {
-	read := regexp.MustCompile(`(\.usersOwned|\.orgsOwned|\$b\.enabled|\$b\.dryRun|backfill\.(enabled|dryRun))\b`)
+	read := regexp.MustCompile(`(\.socialLinkRoutes|\$b\.enabled|\$b\.dryRun|backfill\.(enabled|dryRun))\b`)
 	files, err := filepath.Glob("templates/*.yaml")
 	if err != nil || len(files) == 0 {
 		t.Fatalf("no templates: %v", err)
@@ -121,8 +125,8 @@ func TestAuthSwitchesAreOnlyReadThroughTheStrictHelper(t *testing.T) {
 			reads++
 		}
 	}
-	if want := 9; reads < want {
-		t.Errorf("found %d strict reads, want at least %d (auth-service x2, migrate, grants, go-api x2, Job x4 incl. enabled and dryRun)", reads, want)
+	if want := 5; reads < want {
+		t.Errorf("found %d strict reads, want at least %d (auth-service socialLinkRoutes, Job x3 incl. enabled and dryRun, release policy)", reads, want)
 	}
 	_ = fmt.Sprint
 }

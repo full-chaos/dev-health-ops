@@ -93,9 +93,41 @@ de-escalated by re-provisioning, the key is `400 65532`, the all four auth servi
 
 ## Kubernetes (Helm)
 
-The chart section is `authService`, default **off**. Nothing is rendered unless
-`authService.enabled=true`; the default render of the chart is byte-identical to
-a chart without it.
+The chart section is `authService`, default **off**. One value turns it on and
+moves auth routes to it: `authService.phase`. Nothing is rendered at phase 0 (the
+default); the default render of the chart is byte-identical to a chart without it.
+
+### Cutover phases
+
+`authService.phase` is a whole number. Each phase renders an exact set of flags
+(the golden tests in `deploy/helm/dev-health/auth_phase_test.go` pin it), and
+rollback is the phase minus 1.
+
+| Phase | Meaning | What the chart renders |
+| --- | --- | --- |
+| 0 | go-api only | No auth-service, no `AUTH_PROXY_*`. |
+| 1 | auth-service dark | auth-service, its migrate and grants Jobs and policies; `AUTH_DATABASE_SCHEMA` on go-api, query-api and the River hooks. No route reaches the service. |
+| 2 | Sessions | Phase 1 plus `AUTH_PROXY_URL`, `AUTH_PROXY_SESSIONS` and `AUTH_SESSION_ISSUE_TOKEN` on go-api, `AUTH_PROXY_SESSIONS` on query-api, the migrate Job and the River hooks, the session keys on auth-service, and the auth-service API port open to go-api only. Needs the session readers, the successor key and the rate-limit store. |
+| 3 | Login and social sign-in | Phase 2 plus `AUTH_PROXY_LOCAL_LOGIN` and `AUTH_PROXY_SOCIAL` on go-api, and on auth-service `AUTH_LOGIN_LOCKOUT_KEY` (`authService.sessionKeys.loginLockout`) and the six optional `SOCIAL_<PROVIDER>_CLIENT_ID` / `_CLIENT_SECRET` keys (`authService.social.secretName`). |
+| 4 | Users owned | Phase 3 plus `AUTH_PROXY_CREDENTIALS` and `AUTH_USERS_OWNED` (go-api, auth-service, the migrate, grants and backfill Jobs). **Refused at render.** |
+| 5 | Orgs owned | Phase 4 plus `AUTH_ORGS_OWNED` (auth-service and the backfill Job). **Refused at render.** |
+
+Phases 4 and 5 mean (D6358) that auth-service becomes the writer of the existing
+public `users` table (4) and of the public `organizations` and `memberships`
+tables (5): no auth-schema copy, no projection. The service does not do that
+yet, so the chart refuses both phases until the public-table writer decision.
+The credential routes move with users owned, not with login: auth-service mounts
+them only with `AUTH_USERS_OWNED`, and go-api refuses `AUTH_USERS_OWNED` unless
+the credential routes go to auth-service.
+
+The chart refuses the keys the phase replaces, whatever their value:
+`goApi.authProxy.*`, `authService.enabled`, `authService.usersOwned` and
+`authService.orgsOwned`. The choices that are not steps of the ladder stay small
+named keys: `authService.accessToken.class` (empty, `hs256_compat` or `eddsa`;
+phase 2 or more; `eddsa` needs `authService.accessToken.issuerURL`, which the
+chart renders for auth-service and for go-api's verifier),
+`authService.socialLinkRoutes` (phase 2 or more) and `authService.sso.oidc` /
+`saml` (refused while the chart does not render auth-service's SSO settings).
 
 The chart creates **no Secret** for it. Create these in the release namespace
 first and reference them by name:
@@ -141,7 +173,7 @@ port) or scrapers (`metricsFrom`, operator port). Egress is DNS plus
 the service off); `egress.keyCustody.to` is empty because Wave 1 custody is a
 file. When the release-wide policy is on, the auth pods are excluded from it.
 
-Rollback is `authService.enabled=false`; nothing depends on the service. After the sessions flip, use the [flip and rollback runbook](../../operate/runbooks/auth-sessions-flip-and-rollback.md).
+Rollback from phase 1 is phase 0; nothing depends on the service. After the sessions flip (phase 2), use the [flip and rollback runbook](../../operate/runbooks/auth-sessions-flip-and-rollback.md).
 
 ## Verified against
 

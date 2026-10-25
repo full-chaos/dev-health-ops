@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
-# Rollback rehearsal for the sessions flag (goApi.authProxy.sessions), in the chart's real form.
+# Rollback rehearsal for the sessions step (authService.phase 1 -> 2 and back), in the chart's real form.
 #
 # Installs the dev-health chart (go-api, auth-service, bundled PostgreSQL/ClickHouse/Valkey and the
 # real migration hooks) into a kind cluster from images built from this tree, then rehearses, only
 # inside that cluster:
 #
-#   baseline   sessions=false, session readers set (the deploy repo's prod values shape)
+#   baseline   phase 1 (sessions off), session readers set (the deploy repo's prod values shape)
 #   prep       the successor-key Secret and a stand-in issuer token, as the flip steps create them
-#   guards     sessions=true is refused while the readers or the successor key are unset
-#   FLIP       one `helm upgrade` with sessions=true: the river hook revokes the api role's INSERT and
+#   guards     phase 2 is refused while the readers or the successor key are unset
+#   FLIP       one `helm upgrade` with phase 2: the river hook revokes the api role's INSERT and
 #              UPDATE on refresh_tokens, then go-api rolls
-#   ROLLBACK_UP  `helm upgrade` with sessions=false: the hook re-GRANTs, then go-api rolls
+#   ROLLBACK_UP  `helm upgrade` with phase 1: the hook re-GRANTs, then go-api rolls
 #   REFLIP     the flip again (repeatable)
 #   NOHOOKS    negative control: `helm rollback --no-hooks` leaves the grant revoked and the rolled-back pod NotReady
-#   RESTORE, REFLIP2  a flag-off upgrade, then the flip again
+#   RESTORE, REFLIP2  a phase 1 upgrade, then the flip again
 #   ROLLBACK_HELM  `helm rollback` to the baseline revision: the pre-rollback grant hook re-GRANTs (measured)
 #
 # Probes run through every phase: a read probe on go-api's public Service (every 0.25 s), a grant probe
@@ -28,7 +28,7 @@
 #
 # CI only (needs docker, kind, kubectl, helm). Test Secrets are made in the cluster by this script and
 # die with it. The two-upgrade form of the flip (migrate first, flag second) is NOT run: the river hook
-# and go-api both read goApi.authProxy.sessions, so the chart cannot express it; the script says so.
+# and go-api both read the sessions flag from authService.phase, so the chart cannot express it; the script says so.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)"
@@ -304,7 +304,7 @@ assert_state() { # <name> <flag:true|unset> <insert> <update>
 }
 
 # --- baseline ------------------------------------------------------------------------------------
-printf 'step 3: baseline upgrade with the hooks: sessions=false, readers set (prod today plus the deploy prep leaf)\n'
+printf 'step 3: baseline upgrade with the hooks: phase 1 (sessions off), readers set (prod today plus the deploy prep leaf)\n'
 helm upgrade "${HELM_BASE[@]}" --history-max 0 --wait --timeout 12m
 BASE_REV="$(rev)"
 printf 'baseline revision %s\n' "${BASE_REV}"
@@ -351,7 +351,7 @@ assert_state CONTROL unset t t
 printf 'step 4: the successor-key Secret and the issuer token (test values, this cluster only)\n'
 openssl rand -base64 32 | tr '+/' '-_' | tr -d '=\n' | K create secret generic auth-session --from-file=AUTH_SESSION_SUCCESSOR_KEY=/dev/stdin
 
-printf 'step 5: guards: sessions=true is refused while a setting is unset\n'
+printf 'step 5: guards: phase 2 (sessions) is refused while a setting is unset\n'
 guard() { # <must-name> <helm --set...>
   local must="$1" out
   shift
@@ -361,17 +361,17 @@ guard() { # <must-name> <helm --set...>
   grep -q "${must}" <<<"${out}" || die "guard: the refusal does not name ${must}: ${out:0:400}"
   printf 'guard: refused, naming %s\n' "${must}"
 }
-guard authService.sessionKeys.successor.secretName --set goApi.authProxy.sessions=true \
+guard authService.sessionKeys.successor.secretName --set authService.phase=2 \
   --set authService.migrate.sessionReaders.queryApi=devhealth_query_api
-guard sessionReaders.goApi --set goApi.authProxy.sessions=true --set authService.migrate.sessionReaders.goApi= \
+guard sessionReaders.goApi --set authService.phase=2 --set authService.migrate.sessionReaders.goApi= \
   --set authService.migrate.sessionReaders.queryApi=devhealth_query_api \
   --set authService.sessionKeys.successor.secretName=auth-session
-guard sessionReaders.queryApi --set goApi.authProxy.sessions=true \
+guard sessionReaders.queryApi --set authService.phase=2 \
   --set authService.sessionKeys.successor.secretName=auth-session
 
 # --- the rehearsal ---------------------------------------------------------------------------------------
-printf 'step 6: FLIP: one helm upgrade, sessions=true\n'
-phase FLIP revoke "${HELM_SESSION[@]}" --set goApi.authProxy.sessions=true
+printf 'step 6: FLIP: one helm upgrade, phase 2 (sessions)\n'
+phase FLIP revoke "${HELM_SESSION[@]}" --set authService.phase=2
 assert_state FLIP true f f
 [ "$(col_update)" = t ] || die "FLIP: the api role lost UPDATE on refresh_tokens.revoked_at (the posture keeps it)"
 [ "$(priv insert)" = f ] || die "FLIP: INSERT not revoked"
@@ -379,12 +379,12 @@ printf 'FLIP: column UPDATE(revoked_at) kept\n'
 reader_ok devhealth_api FLIP
 reader_ok devhealth_query_api FLIP
 
-printf 'step 7: ROLLBACK_UP: helm upgrade, sessions=false (the re-GRANT)\n'
-phase ROLLBACK_UP regrant "${HELM_SESSION[@]}" --set goApi.authProxy.sessions=false
+printf 'step 7: ROLLBACK_UP: helm upgrade, phase 1 (the re-GRANT)\n'
+phase ROLLBACK_UP regrant "${HELM_SESSION[@]}" --set authService.phase=1
 assert_state ROLLBACK_UP unset t t
 
 printf 'step 8: REFLIP: the flip again\n'
-phase REFLIP revoke "${HELM_SESSION[@]}" --set goApi.authProxy.sessions=true
+phase REFLIP revoke "${HELM_SESSION[@]}" --set authService.phase=2
 assert_state REFLIP true f f
 
 printf 'step 9: NEGATIVE CONTROL: helm rollback --no-hooks to revision %s (no hook, so no re-GRANT)\n' "${BASE_REV}"
@@ -395,11 +395,11 @@ if K rollout status deploy/"${FULL}-go-api" --timeout=45s >/dev/null 2>&1; then
   die "NOHOOKS: the rolled-back go-api pod became Ready without the re-GRANT"
 fi
 note "NEGATIVE CONTROL: helm rollback --no-hooks leaves INSERT revoked and the rolled-back go-api pod NotReady (the re-GRANT in the next rollback comes from the hook)"
-printf 'step 10: RESTORE: helm upgrade, sessions=false, after the no-hooks rollback\n'
-phase RESTORE regrant --set goApi.authProxy.sessions=false
+printf 'step 10: RESTORE: helm upgrade, phase 1, after the no-hooks rollback\n'
+phase RESTORE regrant --set authService.phase=1
 assert_state RESTORE unset t t
 printf 'step 11: REFLIP2: the flip once more, so the rollback below starts from the flipped state\n'
-phase REFLIP2 revoke "${HELM_SESSION[@]}" --set goApi.authProxy.sessions=true
+phase REFLIP2 revoke "${HELM_SESSION[@]}" --set authService.phase=2
 assert_state REFLIP2 true f f
 
 printf 'step 12: ROLLBACK_HELM: helm rollback to revision %s (the pre-rollback grant hook re-GRANTs)\n' "${BASE_REV}"
@@ -412,7 +412,7 @@ assert_state ROLLBACK_HELM unset t t
 reader_ok devhealth_api ROLLBACK_HELM
 
 # --- F3 and the verdict ---------------------------------------------------------------------------------
-note "F3: the two-upgrade form (hook with sessions=true, then go-api flag) is not expressible: templates/river-hooks.yaml and templates/go-api-deployment.yaml both read goApi.authProxy.sessions; the one-upgrade windows above are the whole answer"
+note "F3: the two-upgrade form (hook at phase 2, then go-api) is not expressible: templates/river-hooks.yaml and templates/go-api-deployment.yaml both read the sessions flag from authService.phase; the one-upgrade windows above are the whole answer"
 kill "${SAMPLER_PID}" 2>/dev/null || true
 SAMPLER_PID=""
 

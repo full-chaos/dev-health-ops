@@ -707,12 +707,73 @@ serve it).
 {{- end -}}
 
 {{/*
-CHAOS-10231: "true" when go-api is enabled and any goApi.authProxy flag is on
-(go-api then forwards those /api/v1/auth/* routes to auth-service), else "".
+authService.phase, the one auth cutover key (values.yaml lists the phases). It refuses the keys it replaces, refuses
+any value that is not a whole number from 0 to 5, refuses phases 4 and 5 (D6358: they wait for the public-table writer
+decision), and renders the phase. Every ladder read goes through dev-health.authOn, so every render runs these checks.
+*/}}
+{{- define "dev-health.authPhase" -}}
+{{- $v := .Values -}}
+{{- if hasKey $v.goApi "authProxy" }}{{- fail "goApi.authProxy is replaced by authService.phase (0 go-api only, 1 auth-service dark, 2 sessions, 3 login and social sign-in, 4 users owned, 5 orgs owned): remove goApi.authProxy and set authService.phase" }}{{- end -}}
+{{- if hasKey $v.authService "enabled" }}{{- fail "authService.enabled is replaced by authService.phase: enabled=true is phase 1 and enabled=false is phase 0; remove authService.enabled and set authService.phase" }}{{- end -}}
+{{- if hasKey $v.authService "usersOwned" }}{{- fail "authService.usersOwned is replaced by authService.phase: users owned is phase 4; remove authService.usersOwned" }}{{- end -}}
+{{- if hasKey $v.authService "orgsOwned" }}{{- fail "authService.orgsOwned is replaced by authService.phase: orgs owned is phase 5; remove authService.orgsOwned" }}{{- end -}}
+{{- $p := $v.authService.phase -}}
+{{- if not (and (has (kindOf $p) (list "int" "int64" "float64")) (eq (float64 $p) (floor (float64 $p))) (ge (float64 $p) 0.0) (le (float64 $p) 5.0)) }}{{- fail (printf "authService.phase must be a whole number from 0 to 5, got %s %v" (kindOf $p) $p) }}{{- end -}}
+{{- if ge (int $p) 4 }}{{- fail (printf "authService.phase %d: phases 4 and 5 need the public-table writer decision (D6358): auth-service does not yet write the existing public users, organizations and memberships tables, so phase 3 is the highest phase this chart renders" (int $p)) }}{{- end -}}
+{{- int $p -}}
+{{- end -}}
+
+{{/*
+"true" when authService.phase turns the ladder flag on, else "". Call with (dict "flag" <name> "context" $).
+The ladder (each flag is on from its phase up): service 1, sessions 2, localLogin 3, social 3, credentials 4,
+usersOwned 4, orgsOwned 5. credentials moves with usersOwned: auth-service mounts the credential routes only with
+AUTH_USERS_OWNED, and go-api refuses AUTH_USERS_OWNED unless the credential routes go to auth-service.
+*/}}
+{{- define "dev-health.authOn" -}}
+{{- $ladder := dict "service" 1 "sessions" 2 "localLogin" 3 "social" 3 "credentials" 4 "usersOwned" 4 "orgsOwned" 5 -}}
+{{- if not (hasKey $ladder .flag) }}{{- fail (printf "dev-health.authOn: %s is not a ladder flag" .flag) }}{{- end -}}
+{{- if ge (int (include "dev-health.authPhase" .context)) (int (get $ladder .flag)) -}}true{{- end -}}
+{{- end -}}
+
+{{/*
+OIDC and SAML through auth-service (authService.sso.oidc / .saml): "true" or "". true is refused: the chart does not
+render auth-service's SSO settings, so go-api would forward to routes auth-service does not mount.
+Call with (dict "flag" "oidc"|"saml" "context" $).
+*/}}
+{{- define "dev-health.authSSOOn" -}}
+{{- $key := printf "authService.sso.%s" .flag -}}
+{{- $sso := default dict .context.Values.authService.sso -}}
+{{- if eq (include "dev-health.authBool" (dict "value" (index $sso .flag) "key" $key)) "true" }}{{- fail (printf "%s=true is refused: the chart does not render auth-service's SSO settings (state key, base URL, encryption key) yet, so its %s routes would not mount" $key (upper .flag)) }}{{- end -}}
+{{- end -}}
+
+{{/*
+The access-token class (authService.accessToken). Checks it and renders the eddsa issuer URL, or "" for any other
+class: one value for auth-service (AUTH_TOKEN_ISSUER_URL) and go-api (AUTH_ACCESS_TOKEN_ISSUER). The pattern is
+auth-service's issuerURLPattern (internal/auth/authconfig), so a value the service would refuse fails the render.
+*/}}
+{{- define "dev-health.authEdDSAIssuer" -}}
+{{- $t := default dict .Values.authService.accessToken -}}
+{{- $class := $t.class | default "" -}}
+{{- $issuer := $t.issuerURL | default "" -}}
+{{- if not (and (kindIs "string" $class) (kindIs "string" $issuer)) }}{{- fail "authService.accessToken.class and authService.accessToken.issuerURL must be strings" }}{{- end -}}
+{{- if $class -}}
+{{- if not (has $class (list "hs256_compat" "eddsa")) }}{{- fail "authService.accessToken.class must be empty, hs256_compat or eddsa" }}{{- end -}}
+{{- if not (include "dev-health.authOn" (dict "flag" "sessions" "context" .)) }}{{- fail "authService.accessToken.class needs authService.phase >= 2: auth-service mints access tokens only on its session routes" }}{{- end -}}
+{{- end -}}
+{{- if eq $class "eddsa" -}}
+{{- if not (regexMatch "^https://[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?(:[0-9]{1,5})?(/[A-Za-z0-9_~-][A-Za-z0-9._~-]{0,63}){0,8}$" $issuer) }}{{- fail "authService.accessToken.class=eddsa needs authService.accessToken.issuerURL: an https URL with a lowercase host, no trailing slash, userinfo, query or fragment" }}{{- end -}}
+{{- $issuer -}}
+{{- else if $issuer -}}
+{{- fail "authService.accessToken.issuerURL is set but authService.accessToken.class is not eddsa: the issuer is rendered only for eddsa tokens" }}
+{{- end -}}
+{{- end -}}
+
+{{/*
+CHAOS-10231: "true" when go-api is enabled and go-api forwards /api/v1/auth/* routes to auth-service (phase >= 2:
+every other aggregate needs sessions), else "".
 */}}
 {{- define "dev-health.authProxyOn" -}}
-{{- $p := .Values.goApi.authProxy -}}
-{{- if and .Values.goApi.enabled (or $p.sessions $p.localLogin $p.credentials $p.social $p.oidc $p.saml) -}}true{{- end -}}
+{{- if and .Values.goApi.enabled (include "dev-health.authOn" (dict "flag" "sessions" "context" .)) -}}true{{- end -}}
 {{- end -}}
 
 {{/*
@@ -737,7 +798,7 @@ schema Job and the grants Job.
 {{/*
 A strict boolean switch of authService: renders "true" or "false", and FAILS the render for anything that is
 not a YAML boolean (a string such as "false" is non-empty and would read as true; null is no value). Every read
-of authService.usersOwned, authService.orgsOwned, authService.backfill.enabled and authService.backfill.dryRun
+of authService.backfill.enabled, authService.backfill.dryRun, authService.socialLinkRoutes and authService.sso.*
 goes through it. Call with (dict "value" <value> "key" "<dotted key>").
 */}}
 {{- define "dev-health.authBool" -}}

@@ -228,7 +228,7 @@ spec:
             - name: DHO_CLASS_DECISION_LIVE_SCHEMA_DIGEST
               value: {{ . | quote }}
             {{- end }}
-            {{- if .Values.goApi.authProxy.sessions }}
+            {{- if (eq (include "dev-health.authOn" (dict "flag" "sessions" "context" .)) "true") }}
             {{- /* go-api's AUTH_PROXY_SESSIONS: the River step's api role
             grants on refresh_tokens follow it (postgres.APIPosture). */}}
             - name: AUTH_PROXY_SESSIONS

@@ -2,7 +2,7 @@
 The Auth Control Plane service (CHAOS-4886, Wave 1 of CHAOS-3274): `auth-service`
 from the auth-service image (docker/go-worker.Dockerfile target `auth-service`).
 DORMANT: the API listener mounts no route, no production token is issued, and
-nothing routes to it. Defaults off; removing it (authService.enabled=false) has
+nothing routes to it. Defaults off (authService.phase 0); phase 1 runs it dark, and phase 0 again has
 no effect on the current auth authority.
 
 Two listeners, never one: the API listener (authService.port) carries requests,
@@ -18,8 +18,19 @@ group/world mode bit) cannot be met by mounting the Secret straight into the
 container -- see authService.signingKey.stagingImage in values.yaml for why the
 stage-signing-key init container exists.
 */ -}}
-{{- if .Values.authService.enabled }}
+{{- /* The auth keys are checked in every render, whatever the phase and whether go-api renders. */}}
+{{- $eddsaIssuer := include "dev-health.authEdDSAIssuer" . }}
+{{- $_ := include "dev-health.authSSOOn" (dict "flag" "oidc" "context" .) }}
+{{- $_ := include "dev-health.authSSOOn" (dict "flag" "saml" "context" .) }}
+{{- $linkRoutes := eq (include "dev-health.authBool" (dict "value" .Values.authService.socialLinkRoutes "key" "authService.socialLinkRoutes")) "true" }}
+{{- if and $linkRoutes (not (include "dev-health.authOn" (dict "flag" "sessions" "context" .))) }}{{- fail "authService.socialLinkRoutes needs authService.phase >= 2: the link routes need the session secrets" }}{{- end }}
+{{- if eq (include "dev-health.authOn" (dict "flag" "service" "context" .)) "true" }}
 {{- $a := .Values.authService }}
+{{- $loginOn := eq (include "dev-health.authOn" (dict "flag" "localLogin" "context" .)) "true" }}
+{{- $socialOn := eq (include "dev-health.authOn" (dict "flag" "social" "context" .)) "true" }}
+{{- $tokenClass := (default dict $a.accessToken).class | default "" }}
+{{- if and $loginOn (not (trim (toString $a.sessionKeys.loginLockout.secretName))) }}{{- fail "authService.phase >= 3 (login) needs authService.sessionKeys.loginLockout.secretName: without the lockout key auth-service mounts no login route, and go-api would forward sign-in to a 404" }}{{- end }}
+{{- if and $socialOn (not (trim (toString $a.social.secretName))) }}{{- fail "authService.phase >= 3 (social sign-in) needs authService.social.secretName: the Secret with the SOCIAL_<PROVIDER>_CLIENT_ID and _CLIENT_SECRET keys go-api reads, so auth-service signs in with the same providers" }}{{- end }}
 {{- if not $a.database.secretName }}{{- fail "authService.database.secretName is required: the Secret holding the runtime login's DSN (key authService.database.secretKey)" }}{{- end }}
 {{- $ks := $a.keySet }}
 {{- $ksOn := and $ks $ks.enabled }}
@@ -62,8 +73,11 @@ stage-signing-key init container exists.
 {{- range $a.extraEnv }}
 {{- if eq .name "AUTH_VALKEY_URI" }}{{- fail "authService.extraEnv must not set AUTH_VALKEY_URI: use authService.valkey, which reaches the container by secretKeyRef" }}{{- end }}
 {{- if has .name (list "AUTH_JWT_SECRET_KEY" "AUTH_SESSION_SUCCESSOR_KEY") }}{{- fail (printf "authService.extraEnv must not set %s: use authService.sessionKeys, which reaches the container by secretKeyRef" .name) }}{{- end }}
-{{- if eq (upper (trim .name)) "AUTH_USERS_OWNED" }}{{- fail "authService.extraEnv must not set AUTH_USERS_OWNED: use authService.usersOwned, which the auth-migrate and grants Jobs read too so the write grant on public.users follows the switch" }}{{- end }}
-{{- if eq (upper (trim .name)) "AUTH_ORGS_OWNED" }}{{- fail "authService.extraEnv must not set AUTH_ORGS_OWNED: use authService.orgsOwned, which the backfill Job reads too" }}{{- end }}
+{{- if eq (upper (trim .name)) "AUTH_USERS_OWNED" }}{{- fail "authService.extraEnv must not set AUTH_USERS_OWNED: authService.phase renders it, for the auth-migrate, grants and backfill Jobs too, so the write grant on public.users follows the switch" }}{{- end }}
+{{- if eq (upper (trim .name)) "AUTH_ORGS_OWNED" }}{{- fail "authService.extraEnv must not set AUTH_ORGS_OWNED: authService.phase renders it, for the backfill Job too" }}{{- end }}
+{{- if has (upper (trim .name)) (list "AUTH_ACCESS_TOKEN_CLASS" "AUTH_TOKEN_ISSUER_URL" "AUTH_JWT_AUDIENCE") }}{{- fail (printf "authService.extraEnv must not set %s: use authService.accessToken, which go-api reads too" .name) }}{{- end }}
+{{- if eq (upper (trim .name)) "AUTH_LOGIN_LOCKOUT_KEY" }}{{- fail "authService.extraEnv must not set AUTH_LOGIN_LOCKOUT_KEY: use authService.sessionKeys.loginLockout, which reaches the container by secretKeyRef" }}{{- end }}
+{{- if eq (upper (trim .name)) "AUTH_SOCIAL_LINK_ROUTES" }}{{- fail "authService.extraEnv must not set AUTH_SOCIAL_LINK_ROUTES: use authService.socialLinkRoutes, which the render checks" }}{{- end }}
 {{- if eq .name "AUTH_SIGNING_KEY" }}{{- fail "authService.extraEnv must not set AUTH_SIGNING_KEY: direct-value signing material is rejected by the service (ACP-ADR-02 §4); use authService.signingKey" }}{{- end }}
 {{- if eq (lower (trim .name)) "auth_signing_keyset_file" }}{{- fail "authService.extraEnv must not set AUTH_SIGNING_KEYSET_FILE: the chart renders it (authService.keySet) or stages one signing key (authService.signingKey); the service refuses a key-set manifest beside a single key" }}{{- end }}
 {{- end }}
@@ -158,11 +172,37 @@ spec:
             - name: AUTH_SESSION_SUCCESSOR_KEY
               valueFrom: {secretKeyRef: {name: {{ $a.sessionKeys.successor.secretName | quote }}, key: {{ $a.sessionKeys.successor.secretKey | quote }}}}
           {{- end }}
-          {{- if eq (include "dev-health.authBool" (dict "value" $a.usersOwned "key" "authService.usersOwned")) "true" }}
+          {{- if $loginOn }}
+            - name: AUTH_LOGIN_LOCKOUT_KEY
+              valueFrom: {secretKeyRef: {name: {{ $a.sessionKeys.loginLockout.secretName | quote }}, key: {{ $a.sessionKeys.loginLockout.secretKey | quote }}}}
+          {{- end }}
+          {{- if $socialOn }}
+          {{- range $provider := list "GITHUB" "GITLAB" "GOOGLE" }}
+          {{- range $suffix := list "CLIENT_ID" "CLIENT_SECRET" }}
+            - name: {{ printf "SOCIAL_%s_%s" $provider $suffix }}
+              valueFrom: {secretKeyRef: {name: {{ $a.social.secretName | quote }}, key: {{ printf "SOCIAL_%s_%s" $provider $suffix | quote }}, optional: true}}
+          {{- end }}
+          {{- end }}
+          {{- end }}
+          {{- if $linkRoutes }}
+            - name: AUTH_SOCIAL_LINK_ROUTES
+              value: "true"
+          {{- end }}
+          {{- with $tokenClass }}
+            - name: AUTH_ACCESS_TOKEN_CLASS
+              value: {{ . | quote }}
+          {{- end }}
+          {{- with $eddsaIssuer }}
+            - name: AUTH_TOKEN_ISSUER_URL
+              value: {{ . | quote }}
+            - name: AUTH_JWT_AUDIENCE
+              value: "dev-health-api"
+          {{- end }}
+          {{- if eq (include "dev-health.authOn" (dict "flag" "usersOwned" "context" .)) "true" }}
             - name: AUTH_USERS_OWNED
               value: "true"
           {{- end }}
-          {{- if eq (include "dev-health.authBool" (dict "value" $a.orgsOwned "key" "authService.orgsOwned")) "true" }}
+          {{- if eq (include "dev-health.authOn" (dict "flag" "orgsOwned" "context" .)) "true" }}
             - name: AUTH_ORGS_OWNED
               value: "true"
           {{- end }}
@@ -289,7 +329,7 @@ spec:
   policyTypes:
     - Ingress
     - Egress
-  {{- /* CHAOS-10231: go-api's pods reach the API port only while a goApi.authProxy flag is on. */}}
+  {{- /* CHAOS-10231: go-api's pods reach the API port only while go-api forwards to it (authService.phase >= 2). */}}
   {{- $apiFrom := $a.networkPolicy.allowedFrom }}
   {{- if eq (include "dev-health.authProxyOn" $) "true" }}
   {{- $apiFrom = append $apiFrom (dict "matchLabels" (include "dev-health.componentSelectorLabels" (dict "component" "go-api" "context" $) | fromYaml)) }}

@@ -33,7 +33,7 @@ func TestQueryAPIReaderMustBeTheRoleQueryAPILogsInAs(t *testing.T) {
 	if _, out, err := renderAuth(t, queryAPIRoleArgs(reader, roleEnv("other_role"))...); err == nil || !strings.Contains(out, "QUERY_API_DATABASE_ROLE") {
 		t.Errorf("a mismatched role rendered: err=%v\n%.500s", err, out)
 	}
-	flip := []string{"--set", "goApi.authProxy.sessions=true", "--set", "authService.sessionKeys.successor.secretName=auth-session"}
+	flip := []string{"--set", "authService.phase=2", "--set", "authService.sessionKeys.successor.secretName=auth-session"}
 	if _, out, err := renderAuth(t, queryAPIRoleArgs(reader, flip, roleEnv("devhealth_query_api"))...); err != nil {
 		t.Errorf("matching role refused: %v\n%.500s", err, out)
 	}
@@ -48,14 +48,14 @@ func TestQueryAPIReaderMustBeTheRoleQueryAPILogsInAs(t *testing.T) {
 func TestQueryAPIReaderIsSetOnlyWithTheSessionsFlag(t *testing.T) {
 	reader := []string{"--set", "authService.migrate.sessionReaders.queryApi=devhealth_query_api"}
 	_, out, err := renderAuth(t, queryAPIRoleArgs(reader, roleEnv("devhealth_query_api"))...)
-	if err == nil || !strings.Contains(out, "goApi.authProxy.sessions") {
+	if err == nil || !strings.Contains(out, "authService.phase is below 2") {
 		t.Errorf("a query-api reader with the sessions flag off rendered or named the wrong key: err=%v\n%.500s", err, out)
 	}
 }
 
 func TestQueryAPIReadsTheSessionsFlagForItsPostureCheck(t *testing.T) {
 	on := queryAPIRoleArgs(
-		[]string{"--set", "authService.migrate.sessionReaders.queryApi=devhealth_query_api", "--set", "goApi.authProxy.sessions=true",
+		[]string{"--set", "authService.migrate.sessionReaders.queryApi=devhealth_query_api", "--set", "authService.phase=2",
 			"--set", "authService.sessionKeys.successor.secretName=auth-session"},
 		roleEnv("devhealth_query_api"))
 	docs, out, err := renderAuth(t, on...)

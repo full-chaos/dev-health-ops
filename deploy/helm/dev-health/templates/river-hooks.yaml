@@ -432,12 +432,12 @@ spec:
               value: {{ .value | quote }}
             {{- end }}
             {{- end }}
-            {{- if .Values.authService.enabled }}
+            {{- if (eq (include "dev-health.authOn" (dict "flag" "service" "context" .)) "true") }}
             {{- /* The auth schema of the query-api session read (AUTH_PROXY_SESSIONS). */}}
             - name: AUTH_DATABASE_SCHEMA
               value: {{ include "dev-health.authDatabaseSchema" . | quote }}
             {{- end }}
-            {{- if .Values.goApi.authProxy.sessions }}
+            {{- if (eq (include "dev-health.authOn" (dict "flag" "sessions" "context" .)) "true") }}
             {{- /* go-api's AUTH_PROXY_SESSIONS: the api role's
             refresh_tokens grants follow it (postgres.APIPosture). */}}
             - name: AUTH_PROXY_SESSIONS

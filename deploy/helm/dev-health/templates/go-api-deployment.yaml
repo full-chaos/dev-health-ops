@@ -97,34 +97,29 @@ ranges (the fenced ports and the internal port), zero-padded so a string sort is
 {{- end }}
 {{- end }}
 {{- /*
-CHAOS-10231: the /api/v1/auth/* proxy flags. Each renders only when on, so
-the default render carries no AUTH_PROXY_* variable and dho api keeps every
-route (its own default is off). The URL is this release's auth-service.
+CHAOS-10231: the /api/v1/auth/* proxy flags, rendered from authService.phase (dev-health.authOn; OIDC and SAML from
+authService.sso). Each renders only when on, so phases 0 and 1 carry no AUTH_PROXY_* variable and dho api keeps
+every route (its own default is off). The URL is this release's auth-service.
 */}}
-{{- $proxy := .Values.goApi.authProxy }}
-{{- $proxyFlags := list (list "sessions" "AUTH_PROXY_SESSIONS") (list "localLogin" "AUTH_PROXY_LOCAL_LOGIN") (list "credentials" "AUTH_PROXY_CREDENTIALS") (list "social" "AUTH_PROXY_SOCIAL") (list "oidc" "AUTH_PROXY_OIDC") (list "saml" "AUTH_PROXY_SAML") }}
+{{- $sessionsOn := eq (include "dev-health.authOn" (dict "flag" "sessions" "context" .)) "true" }}
+{{- $proxyFlags := list (list "AUTH_PROXY_SESSIONS" $sessionsOn) (list "AUTH_PROXY_LOCAL_LOGIN" (eq (include "dev-health.authOn" (dict "flag" "localLogin" "context" .)) "true")) (list "AUTH_PROXY_CREDENTIALS" (eq (include "dev-health.authOn" (dict "flag" "credentials" "context" .)) "true")) (list "AUTH_PROXY_SOCIAL" (eq (include "dev-health.authOn" (dict "flag" "social" "context" .)) "true")) (list "AUTH_PROXY_OIDC" (eq (include "dev-health.authSSOOn" (dict "flag" "oidc" "context" .)) "true")) (list "AUTH_PROXY_SAML" (eq (include "dev-health.authSSOOn" (dict "flag" "saml" "context" .)) "true")) }}
 {{- $proxyOn := eq (include "dev-health.authProxyOn" .) "true" }}
-{{- if and $proxyOn (not .Values.authService.enabled) }}
-{{- fail "goApi.authProxy flags need authService.enabled: a flag on forwards its routes to this release's auth-service" }}
-{{- end }}
-{{- if and $proxyOn (not $proxy.sessions) }}
-{{- fail "goApi.authProxy.sessions must be on when any other goApi.authProxy flag is: the refresh credentials those flows issue are rotated only by the sessions owner" }}
-{{- end }}
-{{- if and $proxy.sessions .Values.authService.enabled }}
+{{- if $sessionsOn }}
 {{- $rd := .Values.authService.migrate.sessionReaders }}
 {{- $missing := list }}
 {{- if not (trim (toString $rd.goApi)) }}{{- $missing = append $missing "authService.migrate.sessionReaders.goApi (go-api's API_DATABASE_ROLE)" }}{{- end }}
 {{- if not (trim (toString $rd.queryApi)) }}{{- $missing = append $missing "authService.migrate.sessionReaders.queryApi (query-api's registry login)" }}{{- end }}
 {{- if $missing }}
-{{- fail (printf "goApi.authProxy.sessions needs the session-reader roles of both services: unset %s" (join ", " $missing)) }}
+{{- fail (printf "authService.phase >= 2 (sessions) needs the session-reader roles of both services: unset %s" (join ", " $missing)) }}
 {{- end }}
 {{- $miss := list }}
 {{- if not (trim (toString .Values.authService.sessionKeys.successor.secretName)) }}{{- $miss = append $miss "authService.sessionKeys.successor.secretName" }}{{- end }}
 {{- if not (trim (toString .Values.authService.sessionKeys.successor.secretKey)) }}{{- $miss = append $miss "authService.sessionKeys.successor.secretKey" }}{{- end }}
 {{- if $miss }}
-{{- fail (printf "goApi.authProxy.sessions needs the auth-service session keys: unset %s (the access-token key is go-api's JWT_SECRET_KEY Secret)" (join ", " $miss)) }}
+{{- fail (printf "authService.phase >= 2 (sessions) needs the auth-service session keys: unset %s (the access-token key is go-api's JWT_SECRET_KEY Secret)" (join ", " $miss)) }}
 {{- end }}
 {{- end }}
+{{- $eddsaIssuer := include "dev-health.authEdDSAIssuer" . }}
 {{- /*
 CHAOS-10718: the old go-api pod keeps serving while its endpoint is removed. kubelet sends SIGTERM and
 the endpoint removal in parallel, and the pod closes its listener at SIGTERM, so a few new connections
@@ -157,14 +152,9 @@ shell, no sleep binary): the native sleep action, a Kubernetes >= 1.30 feature (
 {{- if eq .name "DEV_HEALTH_SHUTDOWN_TIMEOUT" }}{{- fail "goApi.extraEnv must not set DEV_HEALTH_SHUTDOWN_TIMEOUT: goApi.shutdownTimeout owns it, and the grace-period guard reads that value" }}{{- end }}
 {{- end }}
 {{- range .Values.goApi.extraEnv }}
-{{- if hasPrefix "AUTH_PROXY_" .name }}{{- fail "goApi.extraEnv must not set AUTH_PROXY_*: use goApi.authProxy, which the chart checks" }}{{- end }}
-{{- if eq (upper (trim .name)) "AUTH_USERS_OWNED" }}{{- fail "goApi.extraEnv must not set AUTH_USERS_OWNED: use authService.usersOwned, which the auth-migrate and auth-grants Jobs and auth-service read too" }}{{- end }}
-{{- end }}
-{{- /* The users-owned switch moves every route that writes users to auth-service: go-api refuses to start unless the proxy aggregates that serve them are on (internal/apiservice ParseUsersOwned). */}}
-{{- if eq (include "dev-health.authBool" (dict "value" .Values.authService.usersOwned "key" "authService.usersOwned")) "true" }}
-{{- range $flag := list "sessions" "localLogin" "credentials" }}
-{{- if not (index $.Values.goApi.authProxy $flag) }}{{- fail (printf "authService.usersOwned needs goApi.authProxy.%s on: auth-service serves the routes that write users, and go-api refuses to start without the proxy" $flag) }}{{- end }}
-{{- end }}
+{{- if hasPrefix "AUTH_PROXY_" (upper (trim .name)) }}{{- fail "goApi.extraEnv must not set AUTH_PROXY_*: authService.phase renders them, and the chart checks the phase" }}{{- end }}
+{{- if eq (upper (trim .name)) "AUTH_USERS_OWNED" }}{{- fail "goApi.extraEnv must not set AUTH_USERS_OWNED: authService.phase renders it, for auth-service and the auth-migrate and auth-grants Jobs too" }}{{- end }}
+{{- if eq (upper (trim .name)) "AUTH_ACCESS_TOKEN_ISSUER" }}{{- fail "goApi.extraEnv must not set AUTH_ACCESS_TOKEN_ISSUER: authService.accessToken.issuerURL renders it, for auth-service too" }}{{- end }}
 {{- end }}
 apiVersion: apps/v1
 kind: Deployment
@@ -252,7 +242,7 @@ spec:
               valueFrom: {secretKeyRef: {name: {{ include "dev-health.secretName" . }}, key: API_DATABASE_URI}}
             - name: JWT_SECRET_KEY
               valueFrom: {secretKeyRef: {name: {{ include "dev-health.hs256SecretName" . }}, key: JWT_SECRET_KEY}}
-            {{- if .Values.authService.enabled }}
+            {{- if eq (include "dev-health.authOn" (dict "flag" "service" "context" .)) "true" }}
             {{- /* The auth schema the sid check reads auth-service sessions in. */}}
             - name: AUTH_DATABASE_SCHEMA
               value: {{ include "dev-health.authDatabaseSchema" . | quote }}
@@ -277,12 +267,12 @@ spec:
             - name: AUTH_PROXY_URL
               value: {{ printf "http://%s-auth-service:%v" (include "dev-health.fullname" .) .Values.authService.port | quote }}
             {{- range $proxyFlags }}
-            {{- if index $proxy (index . 0) }}
-            - name: {{ index . 1 }}
+            {{- if index . 1 }}
+            - name: {{ index . 0 }}
               value: "true"
             {{- end }}
             {{- end }}
-            {{- if $proxy.sessions }}
+            {{- if $sessionsOn }}
             {{- /* The auth-session-issuer svc_ credential go-api presents to
             auth-service's session issue route. Not optional: sessions on
             without it would fail every sign-in. */}}
@@ -290,9 +280,14 @@ spec:
               valueFrom: {secretKeyRef: {name: {{ include "dev-health.sessionIssueSecretName" . }}, key: {{ required "goApi.sessionIssue.secretKey is required" (default dict .Values.goApi.sessionIssue).secretKey }}}}
             {{- end }}
             {{- end }}
-            {{- if eq (include "dev-health.authBool" (dict "value" .Values.authService.usersOwned "key" "authService.usersOwned")) "true" }}
+            {{- if eq (include "dev-health.authOn" (dict "flag" "usersOwned" "context" .)) "true" }}
             - name: AUTH_USERS_OWNED
               value: "true"
+            {{- end }}
+            {{- with $eddsaIssuer }}
+            {{- /* The eddsa access-token issuer go-api verifies against its JWKS: the same value auth-service signs. */}}
+            - name: AUTH_ACCESS_TOKEN_ISSUER
+              value: {{ . | quote }}
             {{- end }}
             {{- /* CHAOS-10743: always rendered, so an env entry beats a same-named variable from goApi.envFrom: "true" only where the request-port fence renders, "false" everywhere else (goApi.extraEnv may not set it: refused above). go-api reads only the exact string "true". */}}
             - name: TRUSTED_PROXIES_NETWORK_FENCED

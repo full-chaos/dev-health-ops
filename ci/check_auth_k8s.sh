@@ -152,7 +152,7 @@ HELM_ARGS=(
   "${RELEASE}" "${ROOT}/deploy/helm/dev-health" --namespace "${NS}"
   --set web.enabled=false --set goWorkers.enabled=false --set valkey.enabled=false
   --set clickhouse.enabled=false --set migrations.hook.enabled=false --set secrets.create=false
-  --set authService.enabled=true
+  --set authService.phase=1
   --set authService.image.repository=auth-proof/auth-service --set authService.image.tag=ci
   --set authService.image.pullPolicy=Never
   --set authService.migrate.image.repository=auth-proof/auth-migrate --set authService.migrate.image.tag=ci

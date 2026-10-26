@@ -422,6 +422,17 @@ const (
 	emmaTarget  = "emma@example.com<null><null>localtrue false false 0 false true$2b$12$"
 )
 
+// deadOf is the Dead() lines naming one quirk: the other quirks of a leg cover no row in a users-only comparison.
+func deadOf(l *Ledger, id string) []string {
+	var named []string
+	for _, line := range l.Dead() {
+		if strings.HasPrefix(line, id+":") {
+			named = append(named, line)
+		}
+	}
+	return named
+}
+
 func ownedUsersLedger(t *testing.T, owned bool) *Ledger {
 	t.Helper()
 	l, err := NewLedger(forwarded(t, "sessions,local_login,credentials"), owned)
@@ -436,14 +447,14 @@ func ownedUsersLedger(t *testing.T, owned bool) *Ledger {
 func TestOwnedLegCoversTheNeverStampedLastLoginOfExactlyTwoUsers(t *testing.T) {
 	golden := strings.Join([]string{aliceGolden, piaGolden}, rowSeparator)
 	l := ownedUsersLedger(t, true)
-	if problems := append(l.Compare(TableUsers, golden, strings.Join([]string{aliceTarget, piaTarget}, rowSeparator)), l.Dead()...); len(problems) != 0 {
+	if problems := append(l.Compare(TableUsers, golden, strings.Join([]string{aliceTarget, piaTarget}, rowSeparator)), deadOf(l, "users-last-login-not-stamped-owned")...); len(problems) != 0 {
 		t.Fatalf("the owned leg's never-stamped last logins: %v", problems)
 	}
 	if got := l.Covered(); !strings.Contains(got, "users-last-login-not-stamped-owned=2") {
 		t.Fatalf("Covered = %q, want the owned quirk covering 2 rows", got)
 	}
 	fewer := ownedUsersLedger(t, true)
-	problems := append(fewer.Compare(TableUsers, golden, strings.Join([]string{aliceTarget, piaGolden}, rowSeparator)), fewer.Dead()...)
+	problems := append(fewer.Compare(TableUsers, golden, strings.Join([]string{aliceTarget, piaGolden}, rowSeparator)), deadOf(fewer, "users-last-login-not-stamped-owned")...)
 	if len(problems) == 0 || !strings.Contains(strings.Join(problems, "\n"), "users-last-login-not-stamped-owned: covered 1 rows") {
 		t.Fatalf("one stamped last login must fail the exact count by name: %v", problems)
 	}
@@ -467,7 +478,7 @@ func TestNotOwnedLegKeepsItsOwnLastLoginQuirkAndNotTheOwnedOne(t *testing.T) {
 // go-api stores the empty full name of a register request as ”, auth-service's public.users projection as NULL.
 func TestOwnedLegCoversTheEmptyFullNameStoredAsNullOnceAndNotElsewhere(t *testing.T) {
 	l := ownedUsersLedger(t, true)
-	if problems := append(l.Compare(TableUsers, emmaGolden, emmaTarget), l.Dead()...); len(problems) != 0 {
+	if problems := append(l.Compare(TableUsers, emmaGolden, emmaTarget), deadOf(l, "users-empty-full-name-stored-null-owned")...); len(problems) != 0 {
 		t.Fatalf("emma's empty full name: %v", problems)
 	}
 	if got := l.Covered(); !strings.Contains(got, "users-empty-full-name-stored-null-owned=1") {

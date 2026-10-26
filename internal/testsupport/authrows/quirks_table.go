@@ -14,6 +14,8 @@ var (
 	loginNoOrg = regexp.MustCompile(`^<nil>.*loginsessionuser:.*User logged in\{\}.*success<null>$`)
 	// Alice's two successful sign-in audit rows: go-api signed her in to organization B, auth-service to A.
 	aliceLoginOrgB = regexp.MustCompile(`^Org B(alice@example\.comloginsessionuser:alice@example\.comUser logged in\{\}.*success<null>)$`)
+	// Emma's users row as go-api writes it: the empty full name reads as nothing between the username and the provider.
+	emptyFullNameEmma = regexp.MustCompile(`^(emma@example\.com<null>)(local.*)$`)
 	// A link mail whose token is go-api's format.
 	linkTokenGoAPIRow = regexp.MustCompile(`^(.* link token )` + LinkTokenGoAPI + `$`)
 )
@@ -88,6 +90,22 @@ var Quirks = []Quirk{
 		Reason:  "a sign-in through auth-service stamps no last login on public.users or auth.users until the users-owned switch lands, so the row reads as never signed in; on a leg that owns users (AUTH_USERS_OWNED=true) the last login is stamped and this difference is not expected",
 		Rewrite: func(line string) (string, bool) {
 			return replaceOnce(lastLoginSet, line, "${1}false${2}")
+		},
+	},
+	{
+		ID: "users-last-login-not-stamped-owned", Kind: Gap, Table: TableUsers, Needs: []Aggregate{LocalLogin}, Owned: OwnedOnly,
+		Tracked: "CHAOS-TBD-LASTLOGIN", Max: 2, Exact: true,
+		Reason: "a sign-in through auth-service stamps no last login on public.users or auth.users even while it owns users (no last_login_at write in internal/auth outside the backfill), so the rows of the two users who sign in (alice, pia) read as never signed in; Max is those two",
+		Rewrite: func(line string) (string, bool) {
+			return replaceOnce(lastLoginSet, line, "${1}false${2}")
+		},
+	},
+	{
+		ID: "users-empty-full-name-stored-null-owned", Kind: Gap, Table: TableUsers, Needs: []Aggregate{Credentials}, Owned: OwnedOnly,
+		Tracked: "CHAOS-TBD-FULLNAME", Max: 1, Exact: true,
+		Reason: "go-api stores the empty full name of a register request (emma's) as '', auth-service's public.users projection stores NULL (identity/publicusers.go insertPublicUser NULLIF); Max is that one registration",
+		Rewrite: func(line string) (string, bool) {
+			return replaceOnce(emptyFullNameEmma, line, "${1}<null>${2}")
 		},
 	},
 	{

@@ -876,3 +876,36 @@ func TestAuthCorpusSetEnvRecreatesAuthServiceOnlyForTheAutoOrgVariableOnLegAcp(t
 		}
 	}
 }
+
+// The two images the corpus builds for itself carry the project in their tag, and the trap that removes the project removes
+// exactly those two tags by name after `down`: no prune, no other image (the dev stack's :local images are not the run's).
+func TestAuthCorpusCleanupRemovesExactlyTheProjectsOwnBuiltImagesAfterDown(t *testing.T) {
+	for _, leg := range []string{"go-api", "acp"} {
+		fake := newFakeDocker(t)
+		cmd := exec.Command("bash", filepath.Join(authProofRoot(t), "ci", "auth_corpus_external.sh"), leg)
+		cmd.Env = fake.env("FAKE_FAIL_UP=1")
+		if out, err := cmd.CombinedOutput(); err == nil {
+			t.Fatalf("%s: the failing up must fail the script: %s", leg, out)
+		}
+		calls := fake.calls(t)
+		fields := strings.Fields(calls[strings.Index(calls, "compose -p "):])
+		project := fields[2]
+		if !strings.HasPrefix(project, "authcorpus") {
+			t.Fatalf("%s: project %q", leg, project)
+		}
+		down := strings.Index(calls, " down --volumes")
+		var removals []string
+		for _, line := range strings.Split(strings.TrimSpace(calls), "\n") {
+			if strings.HasPrefix(line, "image ") || strings.HasPrefix(line, "rmi ") || strings.Contains(line, "prune") || strings.HasPrefix(line, "system ") {
+				removals = append(removals, line)
+			}
+		}
+		want := []string{"image rm authcorpus-providerstub:" + project, "image rm authcorpus-smtpsink:" + project}
+		if strings.Join(removals, "\n") != strings.Join(want, "\n") {
+			t.Errorf("%s: image commands:\n%s\nwant:\n%s", leg, strings.Join(removals, "\n"), strings.Join(want, "\n"))
+		}
+		if down < 0 || strings.Index(calls, want[0]) < down || strings.Index(calls, want[1]) < down {
+			t.Errorf("%s: the images are not removed after `down`:\n%s", leg, calls)
+		}
+	}
+}

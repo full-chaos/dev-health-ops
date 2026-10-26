@@ -470,3 +470,23 @@ func TestAuthCorpusAcpOverridePassesTheAutoOrgVariableToAuthService(t *testing.T
 	}
 	t.Errorf("auth-service's environment lacks AUTH_AUTO_CREATE_ORG_ON_REGISTER: %v", override.Services["auth-service"].Environment)
 }
+
+// The corpus's own built images are tagged by project, so two runs never share a tag and a run removes only its own.
+func TestAuthCorpusOverrideTagsItsBuiltImagesByProject(t *testing.T) {
+	var override struct {
+		Services map[string]struct {
+			Image string `yaml:"image"`
+		} `yaml:"services"`
+	}
+	if err := yaml.Unmarshal([]byte(readRepoFile(t, "ci", "auth_corpus_external.override.yml")), &override); err != nil {
+		t.Fatal(err)
+	}
+	for service, want := range map[string]string{
+		"providerstub": "authcorpus-providerstub:${AUTH_CORPUS_PROJECT:-local}",
+		"smtpsink":     "authcorpus-smtpsink:${AUTH_CORPUS_PROJECT:-local}",
+	} {
+		if got := override.Services[service].Image; got != want {
+			t.Errorf("%s image = %q, want %q", service, got, want)
+		}
+	}
+}

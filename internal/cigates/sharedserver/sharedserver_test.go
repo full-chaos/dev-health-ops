@@ -55,7 +55,17 @@ var serverWide = []struct {
 	{"ALTER SYSTEM", regexp.MustCompile(`(?i)\bALTER\s+SYSTEM\b`)},
 	{"pg_reload_conf", regexp.MustCompile(`(?i)\bpg_reload_conf\s*\(`)},
 	{"CREATE TABLESPACE", regexp.MustCompile(`(?i)\bCREATE\s+TABLESPACE\b`)},
-	{"ALTER ROLE/USER with a literal name", regexp.MustCompile(`(?i)\bALTER\s+(ROLE|USER)\s+` + name)},
+	{"ALTER access entity with a literal name", regexp.MustCompile(
+		`(?i)\bALTER\s+(ROLE|USER|QUOTA|SETTINGS\s+PROFILE|ROW\s+POLICY|MASKING\s+POLICY|WORKLOAD|RESOURCE)\s+(IF\s+EXISTS\s+)?` + name)},
+	{"ClickHouse workload, resource or masking policy", regexp.MustCompile(
+		`(?i)\bCREATE\s+(OR\s+REPLACE\s+)?(WORKLOAD|RESOURCE|MASKING\s+POLICY)\b`)},
+	{"subscription", regexp.MustCompile(`(?i)\bCREATE\s+SUBSCRIPTION\b`)},
+	{"replication origin", regexp.MustCompile(`(?i)\bpg_replication_origin_create\b`)},
+	{"SECURITY LABEL", regexp.MustCompile(`(?i)\bSECURITY\s+LABEL\b`)},
+	{"action on another session", regexp.MustCompile(`(?i)\bpg_(terminate|cancel)_backend\b`)},
+	{"cluster-wide statistics reset", regexp.MustCompile(`(?i)\bpg_stat_reset_(shared|slru|replication_slot|subscription_stats)\b`)},
+	{"server WAL or log action", regexp.MustCompile(`(?i)\bpg_(switch_wal|rotate_logfile|create_restore_point)\b`)},
+	{"CHECKPOINT", regexp.MustCompile("(?i)[\"`]\\s*CHECKPOINT\\s*;?\\s*[\"`]")},
 	{"CREATE access entity with a literal name", regexp.MustCompile(
 		`(?i)\bCREATE\s+(ROLE|USER|QUOTA|SETTINGS\s+PROFILE|ROW\s+POLICY)\s+(IF\s+NOT\s+EXISTS\s+|OR\s+REPLACE\s+)?` + name)},
 	{"ClickHouse named collection", regexp.MustCompile(`(?i)\b(CREATE|ALTER)\s+NAMED\s+COLLECTION\b`)},

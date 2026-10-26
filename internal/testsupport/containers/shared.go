@@ -284,6 +284,10 @@ var postgresSnapshotQueries = []string{
 	`SELECT 'parameter-acl ' || parname || ' ' || coalesce(array_to_string(paracl, ','), '') FROM pg_parameter_acl`,
 	`SELECT 'replication-slot ' || slot_name FROM pg_replication_slots`,
 	`SELECT 'prepared-xact ' || gid FROM pg_prepared_xacts`,
+	`SELECT 'subscription ' || subname FROM pg_subscription`,
+	`SELECT 'replication-origin ' || roname FROM pg_replication_origin`,
+	`SELECT 'shared-comment ' || classoid::regclass::text || ' ' || objoid || ' ' || description FROM pg_shdescription`,
+	`SELECT 'shared-seclabel ' || provider || ' ' || classoid::regclass::text || ' ' || objoid || ' ' || label FROM pg_shseclabel`,
 	// The admin database the shared server boots with; callers get scratch databases.
 	`SELECT 'admin-db-relation ' || n.nspname || '.' || c.relname FROM pg_class c
 	   JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -333,6 +337,9 @@ var clickHouseSnapshotQueries = []string{
 	`SELECT concat('shared-db-table ', database, '.', name) FROM system.tables
 	  WHERE database NOT IN ('system', 'INFORMATION_SCHEMA', 'information_schema')`,
 	`SELECT concat('dictionary ', database, '.', name) FROM system.dictionaries`,
+	`SELECT concat('workload ', name) FROM system.workloads`,
+	`SELECT concat('resource ', name) FROM system.resources`,
+	`SELECT concat('masking-policy ', name) FROM system.masking_policies`,
 }
 
 func clickHouseSnapshot(ctx context.Context, dsn string) ([]string, error) {

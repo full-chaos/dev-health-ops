@@ -281,7 +281,8 @@ case "$all" in
   *) echo "unexpected gh call: $all" >&2; exit 9 ;;
 esac
 page=1
-if [[ "$all" =~ page=([0-9]+) ]]; then page="${BASH_REMATCH[1]}"; fi
+page_re='[&?]page=([0-9]+)'
+if [[ "$all" =~ $page_re ]]; then page="${BASH_REMATCH[1]}"; fi
 echo "$status $page" >> "$STUB_LOG.gets"
 [ -n "${STUB_LIST_FAIL:-}" ] && exit 1
 f="$STUB_DIR/$status.$page.json"
@@ -355,7 +356,7 @@ func runCancelScript(t *testing.T, scriptRoot string, env ...string) (string, []
 
 // stalePages builds n pages of per queued stale runs (each a child of the red entry), ids from 1000.
 func stalePages(n, per int) map[string]string {
-	files := map[string]string{}
+	files := map[string]string{"in_progress.1.json": `{"workflow_runs":[]}`}
 	id := 1000
 	for p := 1; p <= n; p++ {
 		var rows []string
@@ -375,7 +376,7 @@ func TestStackedQueueCancelPagesAreRequestedInOrderAndStopAtAnEmptyOne(t *testin
 	}
 	r = runCancelScriptWith(t, rootOf(t), stalePages(3, 100))
 	if r.rc != 0 || len(r.ids) != 300 || strings.Contains(r.out, "::warning::") {
-		t.Fatalf("3 full pages then an empty one: rc=%d cancelled=%d out=%q, want rc 0, 300 cancelled, no warning", r.rc, len(r.ids), r.out)
+		t.Fatalf("3 full pages then an empty one: rc=%d cancelled=%d, want rc 0, 300 cancelled, no warning", r.rc, len(r.ids))
 	}
 }
 
@@ -455,7 +456,6 @@ func TestStackedQueueCancelPlantedSelectionFaults(t *testing.T) {
 		{cancelScript, `    [ -n "${frontier[${BASH_REMATCH[1]}]:-}" ] || continue
 `, ``},
 		{cancelScript, `for status in queued in_progress; do`, `for status in queued; do`},
-		{cancelScript, `max_pages=5`, `max_pages=50`},
 	} {
 		tmp := plantTree(t, root, []string{cancelScript}, m)
 		_, ids, gets := runCancelScript(t, tmp)
@@ -469,7 +469,8 @@ func TestStackedQueueCancelPlantedTruncationFaults(t *testing.T) {
 	root := rootOf(t)
 	for _, m := range []mutation{
 		{cancelScript, `max_pages=5`, `max_pages=50`},
-		{cancelScript, `exit 2`, `exit 0`},
+		{cancelScript, "page=${p}", "page=1"},
+		{cancelScript, `exit 2`, allMarker + `exit 0`},
 		{cancelScript, `::warning::stale-run scan truncated`, `stale-run scan truncated`},
 		{cancelScript, `truncated=1`, `truncated=0`},
 		{cancelScript, `-eq 100`, `-gt 100`},

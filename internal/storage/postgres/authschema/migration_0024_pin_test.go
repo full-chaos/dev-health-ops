@@ -81,7 +81,7 @@ func acceptValidation(version int, constraints map[string]string) map[string]str
 	names := validatedConstraints
 	switch version {
 	case 24:
-	case 30:
+	case 31:
 		names = []string{"sessions_pin_present"}
 	default:
 		return constraints

@@ -6361,7 +6361,7 @@
         "name": "workload+jwt"
       },
       "classification": "protected",
-      "current_state_cache_behavior": "none: no authorization read (internal/apiservice/acr/internalauth.go:107)",
+      "current_state_cache_behavior": "none: per-request read (internal/apiservice/acr/internalauth.go:145): svc_acr_ credential: store read every request, no cache; workload token: signature verify only, no store read",
       "disclosure_behavior": null,
       "gaps": [
         "action: no catalog action covers the internal service entitlement and configuration reads (this leaf does not extend the vocabulary)",
@@ -6409,7 +6409,7 @@
         "name": "workload+jwt"
       },
       "classification": "protected",
-      "current_state_cache_behavior": "none: no authorization read (internal/apiservice/acr/internalauth.go:107)",
+      "current_state_cache_behavior": "none: per-request read (internal/apiservice/acr/internalauth.go:145): svc_acr_ credential: store read every request, no cache; workload token: signature verify only, no store read",
       "disclosure_behavior": null,
       "gaps": [
         "action: no catalog action covers the internal service entitlement and configuration reads (this leaf does not extend the vocabulary)",
@@ -6455,7 +6455,7 @@
         "name": "workload+jwt"
       },
       "classification": "protected",
-      "current_state_cache_behavior": "none: no authorization read (internal/apiservice/acr/internalauth.go:107)",
+      "current_state_cache_behavior": "none: per-request read (internal/apiservice/acr/llmconfig.go:140): svc_acr_ credential: store read every request, no cache; workload token: signature verify only, no store read",
       "disclosure_behavior": null,
       "gaps": [
         "action: no catalog action covers the internal service entitlement and configuration reads (this leaf does not extend the vocabulary)",
@@ -6473,7 +6473,7 @@
           "note": "Pattern:",
           "path": "internal/apiservice/acr/handlers.go"
         },
-        "description": "routeAuth: the internal listener verifies, before any read, either the svc_acr_ service credential (hashed at rest; migration compat) or the acr-api workload token (workload-token.v1: EdDSA, typ workload+jwt, aud dev-health-api, issuer pin AUTH_ACCESS_TOKEN_ISSUER, sub equal to AUTH_ACR_WORKLOAD_SUBJECT; no scope claim), with a keyed attempt limiter."
+        "description": "llmConfigHandler (its own bearer check) verifies, before any read, either the acr-api workload token (workload-token.v1: EdDSA, typ workload+jwt, aud dev-health-api, issuer pin AUTH_ACCESS_TOKEN_ISSUER, sub equal to AUTH_ACR_WORKLOAD_SUBJECT; no scope claim) or a svc_acr_ service credential (hashed at rest; migration compat) that must hold the llm_config:read scope (a credential without it is refused with 403)."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_path: the {org_id} path segment is the requested organization (internal/apiservice/acr/llmconfig.go:152); the service credential carries no organization binding that the handler compares with it",

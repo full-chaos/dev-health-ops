@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/usersowned"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/authrows"
 )
 
@@ -104,5 +105,29 @@ func TestTargetLinkMailsAreReadByTheirTokens(t *testing.T) {
 	want := []string{authrows.LinkMailRow("A", authrows.LinkTokenOpaque), authrows.LinkMailRow("B", authrows.LinkTokenGoAPI)}
 	if strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Fatalf("rows = %v, want %v", got, want)
+	}
+}
+
+// While auth-service owns users, go-api's social sign-up (still served by go-api until CHAOS-11350) refuses to create the
+// user: 409 with the moved-operation detail, and no session. Every other leg expects the session.
+func TestSocialAnswerOfTheOwnedLegIsTheMovedOperationRefusal(t *testing.T) {
+	refusal := `{"detail":{"message":"` + usersowned.Message + `","reason":"` + usersowned.Reason + `"}}`
+	session := `{"access_token":"x","user":{"email":"corpus-social@example.com"}}`
+	for name, c := range map[string]struct {
+		owned  bool
+		status int
+		body   string
+		ok     bool
+	}{
+		"owned refuses":                     {true, 409, refusal, true},
+		"owned with a session is wrong":     {true, 200, session, false},
+		"owned with another 409 is wrong":   {true, 409, `{"detail":"An account with this email already exists."}`, false},
+		"owned with another status":         {true, 500, refusal, false},
+		"not owned gets the session":        {false, 200, session, true},
+		"not owned with the refusal is bad": {false, 409, refusal, false},
+	} {
+		if _, err := checkSocialAnswer(c.owned, c.status, c.body); (err == nil) != c.ok {
+			t.Errorf("%s: err = %v, want ok=%v", name, err, c.ok)
+		}
 	}
 }

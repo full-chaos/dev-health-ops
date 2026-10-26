@@ -1137,6 +1137,16 @@ func authScrub(text string) string {
 	return text
 }
 
+// checkSocialAnswer is the verdict on the answer of go-api's social sign-up: a session for the stubbed account. The
+// decoded session is returned for it.
+func checkSocialAnswer(owned bool, status int, body string) (map[string]any, error) {
+	var decoded map[string]any
+	if status != http.StatusOK || json.Unmarshal([]byte(body), &decoded) != nil || decoded["access_token"] == nil {
+		return nil, fmt.Errorf("answered %d with %d body bytes, want 200 and a session", status, len(body))
+	}
+	return decoded, nil
+}
+
 // socialRow signs a new user in with a GitHub token the corpus provider stub answers, through the target, and requires
 // that the stub recorded the request. It runs after every row comparison: the user it creates is not in the golden's rows.
 func (r *runner) socialRow() {
@@ -1152,13 +1162,15 @@ func (r *runner) socialRow() {
 	_ = reset.Body.Close()
 	body := `{"provider": "github", "provider_access_token": "gh-corpus"}`
 	answer := venueoracle.Do(r.t, r.goBase, request("social: github new user through the provider stub", http.MethodPost, "/api/v1/auth/social-login", "", body))
-	var decoded map[string]any
-	if answer.Status != http.StatusOK || json.Unmarshal([]byte(answer.Body), &decoded) != nil || decoded["access_token"] == nil {
-		r.t.Fatalf("social-login through the provider stub answered %d with %d body bytes, want 200 and a session", answer.Status, len(answer.Body))
+	decoded, err := checkSocialAnswer(r.usersOwned, answer.Status, answer.Body)
+	if err != nil {
+		r.t.Fatalf("social-login through the provider stub: %v", err)
 	}
-	user, _ := json.Marshal(decoded["user"])
-	if !strings.Contains(string(user), "corpus-social@example.com") {
-		r.t.Errorf("the session's user is not the stubbed account")
+	if decoded != nil {
+		user, _ := json.Marshal(decoded["user"])
+		if !strings.Contains(string(user), "corpus-social@example.com") {
+			r.t.Errorf("the session's user is not the stubbed account")
+		}
 	}
 	recorded, err := http.Get(admin + "/requests")
 	if err != nil {

@@ -201,7 +201,8 @@ func Map(row Row) (target identity.BackfillTarget, class string, notCarried bool
 	if row.FullName != nil {
 		target.DisplayName = *row.FullName
 	}
-	if row.PasswordHash != nil {
+	// A service-provider row never carries a password into the auth schema (identity.IsServiceProvider).
+	if row.PasswordHash != nil && !identity.IsServiceProvider(row.AuthProvider) {
 		if !isBcrypt(*row.PasswordHash) {
 			return target, SkipUnknownHashFormat, false
 		}

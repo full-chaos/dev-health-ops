@@ -297,6 +297,10 @@ func (s *Service) Link(ctx context.Context, who SignedIn, provider Provider, tok
 		reason = ReasonIdentityConflict
 		return identity.Identity{}, identity.ErrIdentityConflict
 	}
+	if found && principal.ServiceProvider {
+		reason = ReasonPrincipalDeactivated
+		return identity.Identity{}, ErrPrincipalDisabled
+	}
 	all, err := s.store.ListIdentities(ctx, who.PrincipalID)
 	if err != nil {
 		reason = ReasonStoreUnavailable

@@ -11,7 +11,8 @@ import (
 )
 
 // Every non-test caller of IdentityBySubject under internal/auth must read the ServiceProvider field of the
-// principal it gets back; a caller that ignores it signs a service-provider principal in.
+// principal it gets back; a caller that ignores it signs a service-provider principal in. The check is a floor:
+// each path also has its own behavioural test.
 func TestEveryCallerOfIdentityBySubjectReadsTheServiceProviderField(t *testing.T) {
 	call := regexp.MustCompile(`\.IdentityBySubject\(`)
 	root := filepath.Join("..")

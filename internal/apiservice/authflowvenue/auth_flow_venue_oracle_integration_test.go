@@ -490,6 +490,11 @@ func linkMailRows(mails []sentMail, declared string) []string {
 	return rows
 }
 
+// greetsByEmailOnly is the declared difference "greeting by e-mail" of the users-owned leg (CHAOS-TBD-GREETING):
+// auth-service's resend and forgot mails greet the user by e-mail address where the golden greets by full name. It
+// holds only when the two mails are otherwise the same, apart from the encoding a non-ASCII name needs.
+func greetsByEmailOnly(python, target sentMail) bool { return false }
+
 // describeMails is the mails for a failure message: the link token of each is a credential and never printed.
 func describeMails(mails []sentMail) string {
 	shown := make([]sentMail, len(mails))

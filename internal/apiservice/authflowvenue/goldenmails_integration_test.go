@@ -131,3 +131,36 @@ func TestSocialAnswerOfTheOwnedLegIsTheMovedOperationRefusal(t *testing.T) {
 		}
 	}
 }
+
+func greetingMail(name, html string) sentMail {
+	return sentMail{mailFrom: "<auth@example.test>", rcptTo: "<alice@example.com>", from: "Dev Health <auth@example.test>", to: "alice@example.com",
+		subject: "Reset your password", partType: `text/html; charset="us-ascii"; 7bit`,
+		html: "<h1>Reset your password</h1>\n<p>Hi " + name + ",</p>\n<p>We received a request.</p>\n" + html}
+}
+
+func TestGreetingByEmailIsTheOnlyDifferenceItNames(t *testing.T) {
+	golden := greetingMail("Alice Ä", "")
+	golden.partType = `text/html; charset="utf-8"; base64`
+	target := greetingMail("alice@example.com", "")
+	if !greetsByEmailOnly(golden, target) {
+		t.Fatal("a greeting by e-mail where the golden greets by a non-ASCII name must be covered")
+	}
+	plain := greetingMail("Alice", "")
+	if !greetsByEmailOnly(plain, target) {
+		t.Fatal("a greeting by e-mail where the golden greets by an ASCII name must be covered")
+	}
+	for name, other := range map[string]sentMail{
+		"another body":                       greetingMail("alice@example.com", "<p>extra</p>"),
+		"another subject":                    func() sentMail { m := target; m.subject = "Verify your email address"; return m }(),
+		"another recipient":                  func() sentMail { m := target; m.rcptTo = "<bob@example.com>"; return m }(),
+		"another greeting name":              greetingMail("Bob", ""),
+		"another encoding for an ASCII name": func() sentMail { m := target; m.partType = `text/html; charset="utf-8"; base64`; return m }(),
+	} {
+		if greetsByEmailOnly(plain, other) {
+			t.Errorf("%s was covered", name)
+		}
+	}
+	if greetsByEmailOnly(target, target) {
+		t.Error("equal mails need no quirk")
+	}
+}

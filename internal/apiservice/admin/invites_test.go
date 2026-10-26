@@ -118,6 +118,7 @@ func TestSendInviteEmailEscapesTheOrgAndInviterNames(t *testing.T) {
 	invite := &orgInvite{ID: uuid.New(), OrgID: uuid.New(), Email: "invitee@example.test"}
 	h.sendInviteEmail(context.Background(), `Acme <script>alert(1)</script>`, `Eve "<img src=x onerror=y>" & Co`, invite, "tok.en")
 	got := sink.Take(t).Data
+	_, got, _ = strings.Cut(strings.ReplaceAll(got, "\r\n", "\n"), "\n\n")
 	for _, bad := range []string{"<script", "<img src=x"} {
 		if strings.Contains(got, bad) {
 			t.Errorf("markup %q reached the body:\n%s", bad, got)
@@ -137,7 +138,8 @@ func TestSendInviteEmailSubjectCannotInjectAHeader(t *testing.T) {
 		invite := &orgInvite{ID: uuid.New(), OrgID: uuid.New(), Email: "invitee@example.test"}
 		h.sendInviteEmail(context.Background(), orgName, "Ada", invite, "tok.en")
 		got := sink.Take(t).Data
-		for _, line := range strings.Split(strings.ReplaceAll(got, "\r\n", "\n"), "\n") {
+		headers, _, _ := strings.Cut(strings.ReplaceAll(got, "\r\n", "\n"), "\n\n")
+		for _, line := range strings.Split(headers, "\n") {
 			if strings.HasPrefix(line, "Bcc:") {
 				t.Errorf("%s: a Bcc header line was injected:\n%s", label, got)
 			}

@@ -3,6 +3,7 @@ package mail
 import (
 	"embed"
 	"fmt"
+	"html"
 	"strings"
 )
 
@@ -17,10 +18,13 @@ var templateFiles embed.FS
 // RenderTemplate is EmailService.render_template (email.py): it substitutes
 // context into the named template with the same `str.format` rules Python
 // applies -- `{field}` is replaced by the field's value, `{{` and `}}` are
-// literal braces -- and, exactly like Python, performs NO HTML escaping: a
-// value containing markup lands in the message as markup. That is the source
-// system's behavior, ported as it is; escaping here would make the two
-// planes send different bytes for the same input.
+// literal braces -- with ONE deliberate difference: every substituted value is
+// HTML-escaped (EscapeHTML), the URL fields included (& in a query string
+// becomes &amp;, which an href decodes back). Frozen Python wrote values raw;
+// that let a user-controlled name (an org's name, an inviter's name sent to a
+// third party) put markup into a mail, so the Go plane no longer does, on
+// security grounds. Both planes render through this function, so the bytes
+// are the same on both.
 //
 // Only plain `{identifier}` replacement fields are supported. Python's format
 // mini-language (`{x!r}`, `{x:>10}`, attribute and index access) is not: no
@@ -28,12 +32,30 @@ var templateFiles embed.FS
 // silently rendered differently. A field with no value in context is an
 // error, as `str.format` raises KeyError for it.
 func RenderTemplate(name string, context map[string]string) (string, error) {
+	return renderTemplate(name, context, true)
+}
+
+// renderTemplate is RenderTemplate with the escape switchable: the frozen
+// Python oracle tests render with escape false, because the Python answers
+// they replay wrote values raw; the escape itself is pinned in template_test.go.
+func renderTemplate(name string, context map[string]string, escape bool) (string, error) {
 	raw, err := templateFiles.ReadFile("templates/" + name + ".html")
 	if err != nil {
 		return "", fmt.Errorf("email template %q not found", name)
 	}
-	return formatTemplate(string(raw), context)
+	values := context
+	if escape {
+		values = make(map[string]string, len(context))
+		for field, value := range context {
+			values[field] = EscapeHTML(value)
+		}
+	}
+	return formatTemplate(string(raw), values)
 }
+
+// EscapeHTML is the one escape every mail value goes through: & < > ' and "
+// become &amp; &lt; &gt; &#39; and &#34;.
+func EscapeHTML(value string) string { return html.EscapeString(value) }
 
 func formatTemplate(template string, context map[string]string) (string, error) {
 	var out strings.Builder

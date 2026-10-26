@@ -177,3 +177,24 @@ func TestEveryTemplateFieldIsEscapedAndUrlFieldsSitInAttributes(t *testing.T) {
 		}
 	}
 }
+
+// The escape is the only difference between the Go render and the Python str.format render.
+func TestEscapedRenderIsTheRawRenderOfEscapedValues(t *testing.T) {
+	context := map[string]string{"org_name": "École <b>&amp;</b>", "inviter_name": `René "Rene" O'Brien`, "accept_url": "http://localhost:3000/accept-invite?token=a%2Fb.c&x=1"}
+	escaped := map[string]string{}
+	for k, v := range context {
+		escaped[k] = html.EscapeString(v)
+	}
+	want, err := renderTemplate("invite", escaped, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := RenderTemplate("invite", context)
+	if err != nil || got != want {
+		t.Fatalf("got %q (%v), want %q", got, err, want)
+	}
+	raw, err := renderTemplate("invite", context, false)
+	if err != nil || raw == got {
+		t.Fatalf("the raw render equals the escaped one: the escape did nothing (%v)", err)
+	}
+}

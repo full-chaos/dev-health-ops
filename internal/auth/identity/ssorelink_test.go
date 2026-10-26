@@ -1,6 +1,7 @@
 package identity
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -8,31 +9,93 @@ import (
 	"github.com/google/uuid"
 )
 
+// ssoRelinkShape is one public.users row for the relink rule. bound names the protocol of the provider row the
+// account is bound to ("" = unbound). relinkable is the readiness waiver (IsSSORelinkable); unverifiable is the
+// bound SAML account with a keyable value whose NameID format go-api never stored.
+type ssoRelinkShape struct {
+	name              string
+	provider, subject *string
+	bound             string
+	relinkable        bool
+	unverifiable      bool
+}
+
+// ssoRelinkShapes is the ONE row table both the Go rule and its SQL twin are run over (TestIsSSORelinkable here,
+// TestSSORelinkGoAndSQLAgreeOverOneShapeTable against PostgreSQL). Each subject shape is a key the sign-in path
+// accepts or refuses (ExternalKey.Validate).
+func ssoRelinkShapes() []ssoRelinkShape {
+	s := func(v string) *string { return &v }
+	oidc := func(name, subject string, want bool) ssoRelinkShape {
+		return ssoRelinkShape{name: name, provider: s("oidc"), subject: s(subject), bound: "oidc", relinkable: want}
+	}
+	return []ssoRelinkShape{
+		oidc("oidc bound to an oidc row", "sub", true),
+		oidc("oidc subject with an inner space", "su b", true),
+		oidc("oidc subject with a zero-width space", "s\u200bub", true),
+		oidc("oidc subject of 1024 bytes", strings.Repeat("a", 1024), true),
+		oidc("oidc subject of 1025 bytes", strings.Repeat("a", 1025), false),
+		oidc("oidc subject of 1025 bytes ending in a two-byte rune", strings.Repeat("a", 1023)+"\u00e9", false),
+		oidc("oidc subject with a leading space", " sub", false),
+		oidc("oidc subject with a trailing space", "sub ", false),
+		oidc("oidc subject with a trailing no-break space", "sub\u00a0", false),
+		oidc("oidc subject with a leading ideographic space", "\u3000sub", false),
+		oidc("oidc subject with a trailing line separator", "sub\u2028", false),
+		oidc("oidc subject with a trailing tab", "sub\t", false),
+		oidc("oidc subject with a C0 control", "s\x01ub", false),
+		oidc("oidc subject with a C1 control", "s\u0085ub", false),
+		oidc("oidc subject with a replacement character", "s\ufffdub", false),
+		oidc("oidc empty subject", "", false),
+		{name: "oidc NULL subject", provider: s("oidc"), bound: "oidc"},
+		{name: "oidc unbound", provider: s("oidc"), subject: s("sub")},
+		{name: "oidc bound to a saml row", provider: s("oidc"), subject: s("sub"), bound: "saml"},
+		{name: "oidc bound to an oauth row", provider: s("oidc"), subject: s("sub"), bound: "oauth"},
+		{name: "saml bound to a saml row: no stored NameID format", provider: s("saml"), subject: s("nameid@example.com"), bound: "saml", unverifiable: true},
+		{name: "saml transient-looking NameID value", provider: s("saml"), subject: s("_8f2c1e0a9b7d"), bound: "saml", unverifiable: true},
+		{name: "saml NameID with a trailing space", provider: s("saml"), subject: s("nameid@example.com "), bound: "saml"},
+		{name: "saml empty NameID", provider: s("saml"), subject: s(""), bound: "saml"},
+		{name: "saml unbound", provider: s("saml"), subject: s("nameid@example.com")},
+		{name: "saml bound to an oidc row", provider: s("saml"), subject: s("nameid@example.com"), bound: "oidc"},
+		{name: "another case of the protocol", provider: s("OIDC"), subject: s("sub"), bound: "oidc"},
+		{name: "oauth-type login", provider: s("github"), subject: s("910001"), bound: "oidc"},
+		{name: "service", provider: s("service")},
+		{name: "local", provider: s("local")},
+		{name: "no provider", subject: s("sub"), bound: "oidc"},
+	}
+}
+
+// goArgs is the shape as IsSSORelinkable's arguments; a bound shape names one provider row of its protocol.
+func (c ssoRelinkShape) goArgs(row uuid.UUID) (provider, subject *string, bound *uuid.UUID, protocol *string) {
+	if c.bound != "" {
+		p := c.bound
+		return c.provider, c.subject, &row, &p
+	}
+	return c.provider, c.subject, nil, nil
+}
+
 func TestIsSSORelinkable(t *testing.T) {
+	row := uuid.New()
+	for _, c := range ssoRelinkShapes() {
+		if got := IsSSORelinkable(c.goArgs(row)); got != c.relinkable {
+			t.Errorf("%s: IsSSORelinkable = %v, want %v", c.name, got, c.relinkable)
+		}
+	}
+	s := func(v string) *string { return &v }
+	if IsSSORelinkable(s("oidc"), s("sub"), &row, nil) {
+		t.Error("oidc bound to a provider row that is gone: IsSSORelinkable = true, want false")
+	}
+}
+
+// The three r1 review probes: a value the sign-in path cannot key is never waived by readiness.
+func TestWhitespaceSubjectIsNotRelinkable(t *testing.T) {
 	s := func(v string) *string { return &v }
 	row := uuid.New()
-	cases := []struct {
-		name                        string
-		provider, subject, protocol *string
-		bound                       *uuid.UUID
-		want                        bool
-	}{
-		{"oidc bound to an oidc row", s("oidc"), s("sub"), s("oidc"), &row, true},
-		{"saml bound to a saml row", s("saml"), s("nameid"), s("saml"), &row, true},
-		{"oidc unbound", s("oidc"), s("sub"), nil, nil, false},
-		{"oidc bound, row gone", s("oidc"), s("sub"), nil, &row, false},
-		{"saml bound to an oidc row", s("saml"), s("nameid"), s("oidc"), &row, false},
-		{"oidc empty subject", s("oidc"), s(""), s("oidc"), &row, false},
-		{"oidc NULL subject", s("oidc"), nil, s("oidc"), &row, false},
-		{"another case of the protocol", s("OIDC"), s("sub"), s("OIDC"), &row, false},
-		{"oauth-type login", s("github"), s("910001"), s("github"), &row, false},
-		{"service", s("service"), nil, nil, nil, false},
-		{"local", s("local"), nil, nil, nil, false},
-		{"no provider", nil, s("sub"), s("oidc"), &row, false},
-	}
-	for _, c := range cases {
-		if got := IsSSORelinkable(c.provider, c.subject, c.bound, c.protocol); got != c.want {
-			t.Errorf("%s: IsSSORelinkable = %v, want %v", c.name, got, c.want)
+	for _, subject := range []string{" sub", "sub ", "sub\u00a0"} {
+		if IsSSORelinkable(s("oidc"), s(subject), &row, s("oidc")) {
+			t.Errorf("%q: IsSSORelinkable = true, want false", subject)
+		}
+		_, found, err := (&Store{}).IdentityBySubject(context.Background(), "https://idp.example.com", Provider(row.String()), subject, &LegacyMatch{AuthProvider: "oidc"})
+		if found || !errors.Is(err, ErrInvalidExternalKey) {
+			t.Errorf("%q: IdentityBySubject = %v, %v; want ErrInvalidExternalKey", subject, found, err)
 		}
 	}
 }

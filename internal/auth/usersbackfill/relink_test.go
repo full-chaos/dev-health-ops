@@ -11,7 +11,8 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 )
 
-// relinkRows is one row per SSO shape: the bound OIDC and SAML accounts are re-linkable, every other one is not.
+// relinkRows is one row per SSO shape: the bound OIDC account with a keyable subject is re-linkable, every other one
+// is not (a bound SAML account has no stored NameID format).
 func relinkRows() (rows []Row, relinkable int) {
 	bound := uuid.New()
 	shapes := []struct {
@@ -20,7 +21,8 @@ func relinkRows() (rows []Row, relinkable int) {
 		want                        bool
 	}{
 		{str("oidc"), str("sub-1"), str("oidc"), true, true},
-		{str("saml"), str("nameid-1"), str("saml"), true, true},
+		{str("saml"), str("nameid-1"), str("saml"), true, false},
+		{str("oidc"), str(" sub-4"), str("oidc"), true, false},
 		{str("oidc"), str("sub-2"), nil, false, false},
 		{str("oidc"), str("sub-3"), nil, true, false},
 		{str("saml"), str(""), str("saml"), true, false},
@@ -125,7 +127,7 @@ func TestReconcilePrintsRelinkPendingAndNeverGatesIt(t *testing.T) {
 	if rep.SSORelinkPending != want || rep.Diffs[DiffMissingInAuth] != len(rows) {
 		t.Fatalf("missing in auth: relink pending %d (want %d), %v", rep.SSORelinkPending, want, rep.Diffs)
 	}
-	if !strings.Contains(strings.Join(rep.Lines(), "\n"), "info.sso_identity_relink_pending=2") {
+	if !strings.Contains(strings.Join(rep.Lines(), "\n"), "info.sso_identity_relink_pending=1") {
 		t.Fatalf("lines:\n%s", strings.Join(rep.Lines(), "\n"))
 	}
 }

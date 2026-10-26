@@ -46,7 +46,9 @@ func TestSSORelinkSQLAndTheBackfillAgreeRowByRow(t *testing.T) {
 		want              bool
 	}{
 		{"oidc bound to an oidc row", s("oidc"), s("sub-1"), "oidc", true},
-		{"saml bound to a saml row", s("saml"), s("nameid-1"), "saml", true},
+		{"saml bound to a saml row (NameID format not stored)", s("saml"), s("nameid-1"), "saml", false},
+		{"oidc subject with a leading space", s("oidc"), s(" sub-6"), "oidc", false},
+		{"oidc subject with a trailing no-break space", s("oidc"), s("sub-7\u00a0"), "oidc", false},
 		{"oidc unbound", s("oidc"), s("sub-2"), "", false},
 		{"saml unbound", s("saml"), s("nameid-2"), "", false},
 		{"oidc empty subject", s("oidc"), s(""), "oidc", false},

@@ -20,12 +20,13 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 )
 
-// TestUsersOwnedGuardIsReadyWithBoundSSOUsersAndRefusesTheRest runs the real users backfill and then the guard, both
-// as the auth runtime role. An OIDC and a SAML user bound to a provider row of their protocol (users.sso_provider_id)
-// are re-linked at their first owned sign-in, so the guard is ready with them and no identity. Each other SSO shape
-// (unbound, no subject, bound to a row of another protocol) and a social user with no subject is refused until the
-// row is repaired.
-func TestUsersOwnedGuardIsReadyWithBoundSSOUsersAndRefusesTheRest(t *testing.T) {
+// TestUsersOwnedGuardWaivesOnlyKeyableBoundOIDCUsers runs the real users backfill and then the guard, both as the
+// auth runtime role. An OIDC user bound to an OIDC provider row (users.sso_provider_id) with a subject the sign-in
+// path can key is re-linked at its first owned sign-in, so the guard is ready with it and no identity. A bound SAML
+// user is never waived: go-api stores only the NameID value, not its format, so its key cannot be verified; it holds
+// the guard until it has an identity. Each other shape (unbound, no subject, a subject the key rule refuses, bound to
+// a row of another protocol) and a social user with no subject is refused until the row is repaired.
+func TestUsersOwnedGuardWaivesOnlyKeyableBoundOIDCUsers(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	instance, err := containers.StartPostgres(ctx)
@@ -141,14 +142,22 @@ VALUES ($1, $2, $3, $4, $5, $6, true, true, false, 0, now(), now())`, id, id.Str
 	user("local", s(string(hash)), nil, nil)
 	user("github", nil, s("920001"), nil)
 	user("oidc", nil, s("oidc-sub-1"), &oidcRow)
-	user("saml", nil, s("nameid-1@example.com"), &samlRow)
 	backfill(0)
-	check("local + github + bound oidc + bound saml", "")
+	check("local + github + bound oidc", "")
+
+	samlBound := user("saml", nil, s("nameid-1@example.com"), &samlRow)
+	backfill(0)
+	check("saml row bound to a saml provider row (NameID format not stored)", refused)
 	var links int
 	if err := admin.QueryRow(ctx, `SELECT count(*) FROM auth.external_identities WHERE provider IN ($1, $2)`,
 		oidcRow.String(), samlRow.String()).Scan(&links); err != nil || links != 0 {
-		t.Fatalf("the backfill linked %d SSO identities (%v); a bound SSO user is re-linked at sign-in, never carried", links, err)
+		t.Fatalf("the backfill linked %d SSO identities (%v); a bound SSO user is never carried", links, err)
 	}
+	if _, err := store.LinkIdentity(ctx, identity.ExternalKey{Issuer: "https://idp.example.com/saml", Provider: identity.Provider(samlRow.String()),
+		Subject: "saml1|urn:oasis:names:tc:SAML:2.0:nameid-format:persistent||nameid-1@example.com"}, samlBound, identity.Actor{}); err != nil {
+		t.Fatalf("link the saml identity: %v", err)
+	}
+	check("the saml row with its identity", "")
 
 	unbound := user("oidc", nil, s("oidc-sub-2"), nil)
 	backfill(0)
@@ -157,12 +166,12 @@ VALUES ($1, $2, $3, $4, $5, $6, true, true, false, 0, now(), now())`, id, id.Str
 	backfill(0)
 	check("the oidc row bound again", "")
 
-	noSubject := user("saml", nil, nil, &samlRow)
+	noSubject := user("oidc", nil, nil, &oidcRow)
 	backfill(0)
-	check("saml row with no NameID", refused)
-	set(noSubject, "auth_provider_id", "nameid-2@example.com")
+	check("oidc row with no subject", refused)
+	set(noSubject, "auth_provider_id", "oidc-sub-5")
 	backfill(0)
-	check("the saml row with its NameID", "")
+	check("the oidc row with its subject", "")
 
 	emptySubject := user("oidc", nil, s(""), &oidcRow)
 	backfill(0)
@@ -171,12 +180,19 @@ VALUES ($1, $2, $3, $4, $5, $6, true, true, false, 0, now(), now())`, id, id.Str
 	backfill(0)
 	check("the oidc row with its subject", "")
 
-	otherProtocol := user("saml", nil, s("nameid-3@example.com"), &oidcRow)
+	edgeSpace := user("oidc", nil, s(" oidc-sub-6"), &oidcRow)
 	backfill(0)
-	check("saml row bound to an oidc provider row", refused)
-	set(otherProtocol, "sso_provider_id", samlRow)
+	check("oidc row with a subject the key rule refuses (leading space)", refused)
+	set(edgeSpace, "auth_provider_id", "oidc-sub-6")
 	backfill(0)
-	check("the saml row bound to a saml provider row", "")
+	check("the oidc row with a keyable subject", "")
+
+	otherProtocol := user("oidc", nil, s("oidc-sub-4"), &samlRow)
+	backfill(0)
+	check("oidc row bound to a saml provider row", refused)
+	set(otherProtocol, "sso_provider_id", oidcRow)
+	backfill(0)
+	check("the oidc row bound to an oidc provider row", "")
 
 	socialEmpty := user("github", nil, s(""), nil)
 	backfill(1)

@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"math/big"
 	"net"
 	"net/http"
@@ -942,17 +943,53 @@ func TestTheExchangeBoundsEveryReviewByReviewCallTimeout(t *testing.T) {
 }
 
 // A requested audience reaches a log line or a counter label only as one of the
-// literals auth-service, dev-health-api or none: no request byte is logged.
+// literals auth-service, dev-health-api or none: for known and unknown
+// audiences alike, the set of audience values in every log line and every
+// counter point is a subset of those literals, and no request byte appears.
 func TestARequestAudienceNeverReachesALogOrALabel(t *testing.T) {
-	for _, audience := range []string{"PLANTEDAUDIENCEq7", "auth-service\nPLANTEDAUDIENCEq7", "Auth-Service", "auth-service "} {
-		t.Run(audience, func(t *testing.T) {
+	literals := map[string]bool{"auth-service": true, "dev-health-api": true, "none": true}
+	for _, tc := range []struct {
+		audience, label string
+		status          int
+	}{
+		{"auth-service", "auth-service", http.StatusOK},
+		{"dev-health-api", "dev-health-api", http.StatusBadRequest},
+		{"PLANTEDAUDIENCEq7", "none", http.StatusBadRequest},
+		{"auth-service\nPLANTEDAUDIENCEq7", "none", http.StatusBadRequest},
+		{"Auth-Service", "none", http.StatusBadRequest},
+		{"auth-service ", "none", http.StatusBadRequest},
+	} {
+		t.Run(tc.audience, func(t *testing.T) {
 			h := newHarness(t)
-			rec := h.post(form(h.validSubject(), audience, "").Encode())
-			if rec.Code != http.StatusBadRequest {
-				t.Fatalf("status %d, want the uniform 400", rec.Code)
+			rec := h.post(form(h.validSubject(), tc.audience, "").Encode())
+			if rec.Code != tc.status {
+				t.Fatalf("status %d, want %d", rec.Code, tc.status)
 			}
-			if got := h.metricPoints()["refused/audience_refused/none"]; got != 1 {
-				t.Fatalf("counter refused/audience_refused/none = %d; points %v", got, h.metricPoints())
+			seen := map[string]bool{}
+			for _, line := range strings.Split(strings.TrimSpace(h.logs.String()), "\n") {
+				var entry map[string]any
+				if err := json.Unmarshal([]byte(line), &entry); err != nil {
+					t.Fatalf("log line is not JSON: %q", line)
+				}
+				if v, ok := entry["audience"]; ok {
+					seen[fmt.Sprint(v)] = true
+				}
+			}
+			counted := false
+			for key, value := range h.metricPoints() {
+				parts := strings.Split(key, "/")
+				seen[parts[len(parts)-1]] = true
+				if value > 0 && parts[len(parts)-1] == tc.label {
+					counted = true
+				}
+			}
+			for value := range seen {
+				if !literals[value] {
+					t.Errorf("an audience value outside the literals reached a log or a label: %q", value)
+				}
+			}
+			if !counted {
+				t.Errorf("no counter point with audience %q", tc.label)
 			}
 			for surface, text := range map[string]string{"logs": h.logs.String(), "metrics": dumpMetrics(t, h.reader)} {
 				if strings.Contains(text, "PLANTEDAUDIENCEq7") || strings.Contains(text, "Auth-Service") || strings.Contains(text, `"auth-service "`) {

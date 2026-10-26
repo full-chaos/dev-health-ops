@@ -223,6 +223,9 @@ type Config struct {
 	// values mounts no route.
 	SSO SSO
 
+	// WorkloadExchange is the workload-token exchange (off by default).
+	WorkloadExchange WorkloadExchange
+
 	// EnvOnlySettings names the non-secret settings that were resolved from
 	// the environment although a canonical flag exists for them. A deployment
 	// configured that way is invisible in `docker compose config`, so the
@@ -296,6 +299,7 @@ func (c Config) SafeAttrs() []slog.Attr {
 		slog.String("jwt_issuer", c.Session.AccessIssuer),
 		slog.String("jwt_audience", c.Session.AccessAudience),
 		slog.String("access_class", c.Session.AccessClass),
+		slog.Bool("workload_exchange_enabled", c.WorkloadExchange.Enabled),
 	}
 }
 
@@ -449,6 +453,9 @@ func Load(spec Spec) (Config, error) {
 		return Config{}, err
 	}
 	if cfg.SSO, err = ssoSettings(lookup); err != nil {
+		return Config{}, err
+	}
+	if cfg.WorkloadExchange, err = workloadExchange(lookup, cfg.TokenIssuerURL); err != nil {
 		return Config{}, err
 	}
 	if cfg.ValkeyURI, err = valkeySetting(lookup, cfg.LimitedRoutesMounted()); err != nil {

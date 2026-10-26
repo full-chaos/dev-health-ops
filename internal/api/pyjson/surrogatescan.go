@@ -1,6 +1,7 @@
 package pyjson
 
 import (
+	"bytes"
 	"encoding/json"
 	"strings"
 )
@@ -77,21 +78,35 @@ func hex4(data []byte, at int) (int, bool) {
 	return value, true
 }
 
-// MemberHasLoneSurrogateEscape applies HasLoneSurrogateEscape to the value of
-// the top-level member name of a JSON object, and to nothing else: a member
-// the handler never reads may keep a surrogate, as pydantic ignores an extra
-// field. With foldCase every member whose key matches name case-insensitively
-// is checked (encoding/json matches a struct tag that way). A document that
+// MemberHasLoneSurrogateEscape applies HasLoneSurrogateEscape to the value
+// encoding/json keeps for the top-level member name of a JSON object, and to
+// nothing else: a member the handler never reads may keep a surrogate, as
+// pydantic ignores an extra field. encoding/json takes the last member whose
+// key matches (with foldCase: equal ignoring case, as a struct tag matches),
+// and a later null replaces an earlier value in a pointer or an interface, so
+// the last matching member decides and a null there means no value. Only a
+// JSON string is scanned: an object, an array or a number is the type check's
+// answer, and the strings nested in them are not this field. A document that
 // is not an object, or does not decode, reports false.
 func MemberHasLoneSurrogateEscape(data []byte, name string, foldCase bool) bool {
-	var members map[string]json.RawMessage
-	if err := json.Unmarshal(data, &members); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	if token, err := decoder.Token(); err != nil || token != json.Delim('{') {
 		return false
 	}
-	for key, raw := range members {
-		if (key == name || (foldCase && strings.EqualFold(key, name))) && HasLoneSurrogateEscape(raw) {
-			return true
+	var kept json.RawMessage
+	for decoder.More() {
+		token, err := decoder.Token()
+		key, isKey := token.(string)
+		if err != nil || !isKey {
+			return false
+		}
+		var value json.RawMessage
+		if err := decoder.Decode(&value); err != nil {
+			return false
+		}
+		if key == name || (foldCase && strings.EqualFold(key, name)) {
+			kept = value
 		}
 	}
-	return false
+	return len(kept) > 0 && kept[0] == '"' && HasLoneSurrogateEscape(kept)
 }

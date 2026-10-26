@@ -326,8 +326,8 @@ func (loop *ReconcilerLoop) startupStep(ctx context.Context) error {
 			loop.logger().WarnContext(ctx, "outbox reconciler initial step unreachable, retrying",
 				"cause", health.CauseUnreachable,
 				"attempt", attempt,
-				"elapsed", fmt.Sprint(elapsed),
-				"retry_in", fmt.Sprint(wait),
+				"elapsed", elapsed,
+				"retry_in", wait,
 			)
 		},
 	}, step)

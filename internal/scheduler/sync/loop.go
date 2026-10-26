@@ -276,8 +276,8 @@ func (loop *Loop) Start(ctx context.Context) error {
 				loop.logger().WarnContext(ctx, "sync scheduler initial handoff unreachable, retrying",
 					"cause", health.CauseUnreachable,
 					"attempt", attempt,
-					"elapsed", fmt.Sprint(elapsed),
-					"retry_in", fmt.Sprint(wait),
+					"elapsed", elapsed,
+					"retry_in", wait,
 				)
 			},
 		}, step)

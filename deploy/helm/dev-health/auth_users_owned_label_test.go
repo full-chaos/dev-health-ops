@@ -41,8 +41,8 @@ func TestAuthServicePodCarriesTheUsersOwnedLabelAtStageOwnedOnly(t *testing.T) {
 func TestNarrowAfterFlipBackIsRefusedFromPhase4AtEveryStage(t *testing.T) {
 	for _, stage := range []string{"goApi", "owned"} {
 		_, out, err := renderAuth(t, goAPIWithAuth(append([]string{"--set", "authService.phase=4", "--set", "authService.usersOwnedStage=" + stage,
-			"--set", "authService.migrate.narrowAfterFlipBack=true"}, phase3Secrets...)...)...)
-		if err == nil || !strings.Contains(out, "authService.migrate.narrowAfterFlipBack is refused at authService.phase >= 4") {
+			"--set", "authService.migrate.acknowledgeGrantNarrowing=" + ackDigest, "--set", "authService.migrate.narrowAfterFlipBack=true"}, phase3Secrets...)...)...)
+		if err == nil || !strings.Contains(out, "authService.migrate.narrowAfterFlipBack is refused at authService.phase 4 or higher") {
 			t.Errorf("phase 4 stage %s: narrowAfterFlipBack rendered or refusal text changed: err=%v out=%.300s", stage, err, out)
 		}
 	}

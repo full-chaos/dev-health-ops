@@ -372,3 +372,17 @@ func TestRegisterAcceptsEmojiAndPairedEscapesInNames(t *testing.T) {
 		t.Fatalf("%d %s provisioned %d", r.Code, r.Body.String(), len(c.fakes.provisioned))
 	}
 }
+
+// The names below are written as JSON escapes (a surrogate pair), not as literal characters.
+func TestRegisterAcceptsEscapedSurrogatePairsInNames(t *testing.T) {
+	registerEnv(t, "")
+	c := newCredFixture(t)
+	r := c.call(http.MethodPost, PatternRegister, `{"email":"pairs@example.com","password":"Correct-horse-battery-9","full_name":"\ud83d\ude00","org_name":"\ud83c\uddf3\ud83c\uddf1 Team"}`, nil)
+	if r.Code != http.StatusAccepted || len(c.fakes.provisioned) != 1 {
+		t.Fatalf("%d %s provisioned %d", r.Code, r.Body.String(), len(c.fakes.provisioned))
+	}
+	got := c.fakes.provisioned[0]
+	if got.FullName == nil || *got.FullName != "\U0001F600" || got.OrganizationName == nil || *got.OrganizationName != "\U0001F1F3\U0001F1F1 Team" {
+		t.Fatalf("the pairs did not decode to the characters: %+v", got)
+	}
+}

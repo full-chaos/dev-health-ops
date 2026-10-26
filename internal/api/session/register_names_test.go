@@ -53,10 +53,11 @@ func TestRegisterRefusesALoneSurrogateNameBeforeTheHandler(t *testing.T) {
 
 func TestRegisterAcceptsEmojiAndPairedEscapesInNames(t *testing.T) {
 	for name, body := range map[string]string{
-		"emoji":  `{"email":"a@example.com","password":"Correct-horse-battery-9","full_name":"Ann 😀","org_name":"Ünï 名前 😀"}`,
-		"empty":  `{"email":"a@example.com","password":"Correct-horse-battery-9","full_name":"","org_name":""}`,
-		"absent": `{"email":"a@example.com","password":"Correct-horse-battery-9"}`,
-		"null":   `{"email":"a@example.com","password":"Correct-horse-battery-9","full_name":null}`,
+		"emoji":              `{"email":"a@example.com","password":"Correct-horse-battery-9","full_name":"Ann 😀","org_name":"Ünï 名前 😀"}`,
+		"escaped pairs only": `{"email":"a@example.com","password":"Correct-horse-battery-9","full_name":"\ud83d\ude00","org_name":"\ud83d\ude00 \ud83c\uddf3\ud83c\uddf1"}`,
+		"empty":              `{"email":"a@example.com","password":"Correct-horse-battery-9","full_name":"","org_name":""}`,
+		"absent":             `{"email":"a@example.com","password":"Correct-horse-battery-9"}`,
+		"null":               `{"email":"a@example.com","password":"Correct-horse-battery-9","full_name":null}`,
 	} {
 		w := httptest.NewRecorder()
 		if _, ok := validateRegister(w, registerRequest(t, body)); !ok {

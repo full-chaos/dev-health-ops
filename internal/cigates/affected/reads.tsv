@@ -92,6 +92,7 @@ internal/cigates/docstools	test	ci
 internal/cigates/integrationshards	test	ci
 internal/cigates/metricsproof	test	ci
 internal/cigates/nopython	test	ci
+internal/cigates/outboundtransport	test	ci
 internal/cigates/proofteardown	test	ci
 internal/cigates/queuecreds	code	contracts
 internal/cigates/raceunweighted	test	ci
@@ -156,6 +157,7 @@ internal/gqlgenguard	code	contracts
 internal/gqlgenguard	test	.github
 internal/gqlgenguard	test	ci
 internal/gqlgenguard	test	docs
+internal/httpguard	test	ci
 internal/ingressplanes	code	contracts
 internal/ingressplanes	test	ci
 internal/ingressplanes	test	compose.yml

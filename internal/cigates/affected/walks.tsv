@@ -56,6 +56,7 @@ internal/auth/contracts/tokencorpus	corpus.go	unexpressed	-	-
 internal/auth/contracts/tokencorpus	corpus_test.go	unexpressed	-	-
 internal/auth/contracts/tokencorpus	workload_test.go	unexpressed	-	-
 internal/auth/identity	externalkey_test.go	internal/auth/identity	dir	*
+internal/auth/identity	placeholder_copies_test.go	.	tree	*
 internal/auth/identity	placeholder_copies_test.go	internal/auth/authruntime	dir	*
 internal/auth/identity	placeholder_copies_test.go	internal/auth/usersbackfill	dir	*
 internal/auth/keystore	custody_test.go	internal/auth/keystore	dir	*

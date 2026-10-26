@@ -834,7 +834,7 @@ func Do(t RowsReporter, base string, request Request) Response {
 	defer response.Body.Close()
 	raw, err := io.ReadAll(response.Body)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatal(RedactError(err))
 	}
 	headers := map[string]string{}
 	for key, values := range response.Header {

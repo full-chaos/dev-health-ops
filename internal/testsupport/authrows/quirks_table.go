@@ -138,7 +138,7 @@ var Quirks = []Quirk{
 	},
 	{
 		ID: "link-token-format-auth-service", Kind: Deliberate, Table: TableLinkMails, Needs: []Aggregate{Credentials}, Owned: OwnedOnly,
-		Max:    8,
+		Max: 8, Exact: true,
 		Reason: "with users owned by auth-service its credentials flows mail an opaque 43-character link token where go-api and Python mail a signed one, and verify and reset accept only the token of their own plane: a link mailed before the switch lapses after it, and the reverse after a rollback (CHAOS-10688; runbook lines on CHAOS-10625). Max is the golden's eight link mails",
 		Rewrite: func(line string) (string, bool) {
 			return replaceOnce(linkTokenGoAPIRow, line, "${1}"+LinkTokenOpaque)

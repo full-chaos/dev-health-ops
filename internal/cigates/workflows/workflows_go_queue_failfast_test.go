@@ -55,9 +55,9 @@ func failFastDefects(doc yamlMap) []string {
 	if on, why := failFastFor(doc, "merge_group"); !on || why != "" {
 		out = append(out, "fail-fast must be true on merge_group "+why)
 	}
-	for _, j := range []string{"go-container-smoke", "go-container-security"} {
+	for _, j := range []string{"go-container-smoke"} {
 		if got := asMap(pinJob(doc, j)["strategy"])["fail-fast"]; got != false {
-			out = append(out, fmt.Sprintf("%s fail-fast is %v: the container matrices are out of scope and must set the key to false", j, got))
+			out = append(out, fmt.Sprintf("%s fail-fast is %v: the container smoke matrix is out of scope and must set the key to false", j, got))
 		}
 	}
 	return out

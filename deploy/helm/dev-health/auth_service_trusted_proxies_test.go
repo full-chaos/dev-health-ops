@@ -362,20 +362,55 @@ func checkBand(t *testing.T, entry, tier string) {
 	}
 }
 
-// With the ack and the pod range, the only thing that makes the trust safe is the policy: the API port admits the go-api
-// pod selector alone (no ipBlock, no namespace, no second peer), and an extra peer or a policy turned off is refused.
+// authServiceAPIRules returns the from-list of EVERY ingress rule of the auth-service NetworkPolicy that holds the API
+// port: a second rule on that port adds peers the first-rule helper authServiceAPIFrom never sees.
+func authServiceAPIRules(t *testing.T, docs []map[string]any) [][]any {
+	t.Helper()
+	policy := authDoc(docs, "NetworkPolicy", "a-dev-health-auth-service")
+	if policy == nil {
+		t.Fatal("no auth-service NetworkPolicy in the render")
+	}
+	ingress, _ := at(policy, "spec", "ingress").([]any)
+	var rules [][]any
+	for _, rule := range ingress {
+		ports, _ := at(rule, "ports").([]any)
+		for _, port := range ports {
+			if at(port, "port") == 8095 {
+				from, _ := at(rule, "from").([]any)
+				rules = append(rules, from)
+				break
+			}
+		}
+	}
+	return rules
+}
+
+// goAPIOnlyProblem is "" when exactly one ingress rule holds the API port and its only peer is the go-api pod selector.
+func goAPIOnlyProblem(rules [][]any) string {
+	if len(rules) != 1 {
+		return fmt.Sprintf("%d ingress rules hold the API port, want exactly one", len(rules))
+	}
+	from := rules[0]
+	if len(from) != 1 {
+		return fmt.Sprintf("the API port admits %d peers, want exactly the go-api pods: %v", len(from), from)
+	}
+	selector := aMap(at(from[0], "podSelector", "matchLabels"))
+	if selector["app.kubernetes.io/component"] != "go-api" || at(from[0], "namespaceSelector") != nil || at(from[0], "ipBlock") != nil {
+		return fmt.Sprintf("the one API-port peer is not the go-api pod selector: %v", from[0])
+	}
+	return ""
+}
+
+// With the ack and the pod range, the only thing that makes the trust safe is the policy: the one ingress rule on the API
+// port admits the go-api pod selector alone (no ipBlock, no namespace, no second peer, no second rule), and an extra peer or
+// a policy turned off is refused.
 func TestAuthServiceWideTrustedProxiesNeedTheGoAPIOnlyBoundary(t *testing.T) {
 	docs, out, err := renderWide(t, "10.42.0.0/24", "--set", wideAckKey+"=true")
 	if err != nil {
 		t.Fatalf("render: %v\n%.400s", err, out)
 	}
-	from := authServiceAPIFrom(t, docs)
-	if len(from) != 1 {
-		t.Fatalf("the API port admits %d peers, want exactly the go-api pods: %v", len(from), from)
-	}
-	selector := aMap(at(from[0], "podSelector", "matchLabels"))
-	if selector["app.kubernetes.io/component"] != "go-api" || at(from[0], "namespaceSelector") != nil || at(from[0], "ipBlock") != nil {
-		t.Fatalf("the one API-port peer is not the go-api pod selector: %v", from[0])
+	if problem := goAPIOnlyProblem(authServiceAPIRules(t, docs)); problem != "" {
+		t.Fatal(problem)
 	}
 	extra := `authService.networkPolicy.allowedFrom=[{"matchLabels":{"app":"other-pod"}}]`
 	if _, out, err := renderWide(t, "10.42.0.0/24", "--set", wideAckKey+"=true", "--set-json", extra); err == nil || !strings.Contains(out, "authService.networkPolicy.allowedFrom") {
@@ -383,5 +418,56 @@ func TestAuthServiceWideTrustedProxiesNeedTheGoAPIOnlyBoundary(t *testing.T) {
 	}
 	if _, out, err := renderWide(t, "10.42.0.0/24", "--set", wideAckKey+"=true", "--set", "authService.networkPolicy.enabled=false"); err == nil || !strings.Contains(out, "authService.networkPolicy.enabled") {
 		t.Errorf("ack with the policy off: err=%v\n%.300s", err, out)
+	}
+}
+
+// The boundary check sees every rule on the API port: a planted second rule (a fixture, since the chart renders only one)
+// is reported, and so is a second peer, an ipBlock and a wrong selector.
+func TestAuthServiceAPIPortBoundaryCheckSeesASecondIngressRule(t *testing.T) {
+	goAPI := map[string]any{"podSelector": map[string]any{"matchLabels": map[string]any{"app.kubernetes.io/component": "go-api"}}}
+	rule := func(peers ...any) map[string]any {
+		return map[string]any{"from": peers, "ports": []any{map[string]any{"protocol": "TCP", "port": 8095}}}
+	}
+	policy := func(rules ...any) []map[string]any {
+		return []map[string]any{{"kind": "NetworkPolicy", "metadata": map[string]any{"name": "a-dev-health-auth-service"}, "spec": map[string]any{"ingress": rules}}}
+	}
+	for name, tc := range map[string]struct {
+		docs []map[string]any
+		ok   bool
+	}{
+		"one go-api rule":         {policy(rule(goAPI)), true},
+		"a second rule":           {policy(rule(goAPI), rule(map[string]any{"podSelector": map[string]any{"matchLabels": map[string]any{"app": "other"}}})), false},
+		"a second go-api rule":    {policy(rule(goAPI), rule(goAPI)), false},
+		"a second peer":           {policy(rule(goAPI, map[string]any{"podSelector": map[string]any{"matchLabels": map[string]any{"app": "other"}}})), false},
+		"an ipBlock":              {policy(rule(map[string]any{"ipBlock": map[string]any{"cidr": "10.42.0.0/24"}})), false},
+		"another selector":        {policy(rule(map[string]any{"podSelector": map[string]any{"matchLabels": map[string]any{"app.kubernetes.io/component": "web"}}})), false},
+		"no rule on the API port": {policy(), false},
+	} {
+		if got := goAPIOnlyProblem(authServiceAPIRules(t, tc.docs)) == ""; got != tc.ok {
+			t.Errorf("%s: boundary check passes = %v, want %v", name, got, tc.ok)
+		}
+	}
+}
+
+// A wide list needs the ack at every phase, because the entry is rendered into the env whatever the phase and the API port
+// is open to any listed peer while the proxy is off. A list wider than the pod range is refused at every phase.
+func TestAuthServiceWideTrustedProxiesNeedTheAckAtEveryPhase(t *testing.T) {
+	phase1 := func(entry string, extra ...string) (string, error) {
+		args := append(append([]string{"--set", "goApi.enabled=true"}, authBase...), sessionReaders...)
+		args = append(append(args, sessionSuccessor...), "--set", "authService.phase=1", "--set-json", `authService.trustedProxies=["`+entry+`"]`)
+		_, out, err := renderAuth(t, append(args, extra...)...)
+		return out, err
+	}
+	if out, err := phase1("10.42.0.0/24"); err == nil || !strings.Contains(out, wideNeedsAck) {
+		t.Errorf("phase 1, wide entry, no ack: err=%v\n%.300s", err, out)
+	}
+	if out, err := phase1("10.42.0.0/24", "--set", wideAckKey+"=true"); err != nil {
+		t.Errorf("phase 1, wide entry, ack: %v\n%.300s", err, out)
+	}
+	if out, err := phase1("10.42.0.0/16", "--set", wideAckKey+"=true"); err == nil || !strings.Contains(out, wideTooWideMsg) {
+		t.Errorf("phase 1, too wide entry, ack: err=%v\n%.300s", err, out)
+	}
+	if out, err := phase1("10.42.0.0/28"); err != nil {
+		t.Errorf("phase 1, narrow entry, no ack: %v\n%.300s", err, out)
 	}
 }

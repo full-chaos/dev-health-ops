@@ -258,8 +258,10 @@ authService:
   #    refused even with it. Pod addresses change at a restart, so a range is the only stable value: the NetworkPolicy
   #    above is then the whole boundary.
   trustedProxies: []
-  # -- Permission to list an entry wider than a /28 (IPv6 /124), up to the node pod range (/24, IPv6 /64). Not a requirement:
-  #    it changes nothing while every entry is narrow or the proxy is off.
+  # -- Permission to list an entry wider than a /28 (IPv6 /124), up to the node pod range (/24, IPv6 /64). A wide entry (/24..
+  #    /27, IPv6 /64../123) needs it at ANY phase, the proxy off included, because the list is rendered into the env whatever the
+  #    phase; an entry wider than the pod range is refused at every phase. With only narrow entries, or no list, the ack
+  #    changes nothing.
   trustedProxiesWideAccepted: false
   signingKey:
     secretName: ""

@@ -255,7 +255,8 @@ func (h compatHandlers) auditOrganization(ctx context.Context, principal uuid.UU
 // auditSignInFailed is the one path every refused sign-in (password or
 // social) writes its auth.login.failed row through. A known principal is
 // projected first, since the row references it; one go-api no longer holds is
-// recorded without a subject.
+// recorded without a subject. The row names the principal of every refused known
+// account on purpose (go-api parity); TestCompatLoginRefusalsTakeOneStepSequence pins the steps.
 func (h compatHandlers) auditSignInFailed(ctx context.Context, principal uuid.UUID, requested *uuid.UUID, reason, provider string) error {
 	org, err := h.auditOrganization(ctx, principal, requested)
 	if err != nil {

@@ -665,7 +665,7 @@ func (s *Store) BumpRevision(ctx context.Context, sessionID uuid.UUID, actor Act
 			if err != nil {
 				return err
 			}
-			if locked.RevokedAt != nil || locked.expired {
+			if locked.RevokedAt != nil || locked.expired || locked.LegacyTokenVersion == nil {
 				return nil
 			}
 			return tx.QueryRow(ctx, `

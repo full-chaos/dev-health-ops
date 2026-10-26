@@ -16,7 +16,7 @@
 # stdout (list): "BASE <sha|paths-file>" then either "POSTURE <package>" lines or "NONE no posture path changed".
 # --run: "RECEIPT-HEAD <sha> clean=yes runner= sha256= go= go_sha256= go_version= go_env=GOOS= GOARCH= GOROOT= GOTOOLDIR=
 #   script_sha256= packages=<n> packages_sha256= worktree_sha=<sha>", then one "RECEIPT <pkg> PASS|FAIL <secs>s rc=<n>
-#   tests=<n>" per package and "RECEIPT-SUMMARY <sha> pass=<n> fail=<n>". A package is PASS only when `go test -json`
+#   tests=<n>" per package and "RECEIPT-SUMMARY <sha> pass=<n> fail=<n> packages=<n> partial=<yes|no>". A package is PASS only when `go test -json`
 #   exits 0, shows at least one passed test and no failed event; a package with no test run is FAIL.
 #   The script re-executes itself under `env -i` with an allowlist (HOME, PATH=/usr/bin:/bin, GOENV=off, GOFLAGS empty,
 #   GOWORK=off, fixed cache paths, DOCKER_HOST and a few named TESTCONTAINERS_* vars); the go toolchain runs with
@@ -96,8 +96,15 @@ trap cleanup EXIT
 trap 'exit 130' INT TERM HUP
 
 packages=()
-while IFS= read -r line; do
+# The list is read strictly: it must end with a newline, and no line may hold a carriage return, a space or a tab.
+[ -f "${list_file}" ] || { echo "cannot read ${list_file}" >&2; exit 3; }
+if [ -s "${list_file}" ] && [ "$(tail -c1 "${list_file}" | od -An -tx1 | tr -d ' \n')" != "0a" ]; then
+  echo "${list_file} does not end with a newline" >&2
+  exit 3
+fi
+while IFS= read -r line || [ -n "${line}" ]; do
   case "${line}" in "" | "#"*) continue ;; esac
+  case "${line}" in *[[:space:]]*) echo "${list_file}: a package line holds whitespace or a carriage return" >&2; exit 3 ;; esac
   packages+=("${line}")
 done < "${list_file}" || { echo "cannot read ${list_file}" >&2; exit 3; }
 [ "${#packages[@]}" -gt 0 ] || { echo "empty package list" >&2; exit 3; }
@@ -164,6 +171,13 @@ fi
 wt_root="$("${MKTEMP}" -d)"
 "${GIT}" worktree add --detach "${wt_root}/tree" "${sha}" > /dev/null 2>&1 || { echo "git worktree add failed" >&2; exit 3; }
 wt="${wt_root}/tree"
+# A new worktree inherits the caller's sparse-checkout settings: turn them off, then refuse any file the index marks
+# other than a plain cached one (sparse, skip-worktree, assume-unchanged), so every test committed at HEAD is on disk.
+"${GIT}" -C "${wt}" sparse-checkout disable > /dev/null 2>&1 || { echo "cannot disable sparse-checkout in the worktree" >&2; exit 3; }
+lsv="$("${GIT}" -C "${wt}" ls-files -v)" || { echo "git ls-files -v failed in the worktree" >&2; exit 3; }
+while IFS= read -r entry; do
+  case "${entry}" in "H "* | "") ;; *) echo "worktree index flags a file other than a plain cached one: ${entry}" >&2; exit 3 ;; esac
+done <<< "${lsv}"
 wt_sha="$("${GIT}" -C "${wt}" rev-parse HEAD)" || { echo "cannot read the worktree sha" >&2; exit 3; }
 [ "${wt_sha}" = "${sha}" ] || { echo "worktree sha ${wt_sha} is not HEAD ${sha}" >&2; exit 3; }
 "${CMP}" -s "${self}" "${wt}/ci/posture_integration.sh" || { echo "this script is not the one committed at HEAD" >&2; exit 3; }
@@ -226,6 +240,8 @@ for pkg in "${packages[@]}"; do
     printf '%s %s FAIL %ss rc=%s tests=%s failed_events=%s\n' "${rec}" "${pkg}" "${secs}" "${rc}" "${tests}" "${failed}"
   fi
 done
-printf '%s %s pass=%s fail=%s\n' "${sum}" "${sha}" "${pass}" "${fail}"
+partial="no"
+[ -z "${only}" ] || partial="yes"
+printf '%s %s pass=%s fail=%s packages=%s partial=%s\n' "${sum}" "${sha}" "${pass}" "${fail}" "${#packages[@]}" "${partial}"
 [ -z "${stub}" ] || { echo "a --test-runner run is not a receipt" >&2; exit 5; }
 [ "${fail}" -eq 0 ]

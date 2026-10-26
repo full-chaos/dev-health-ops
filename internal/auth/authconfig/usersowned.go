@@ -9,3 +9,9 @@ import "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 func UsersOwnedFromLookup(lookup secrets.LookupEnv) (bool, error) {
 	return usersOwned(lookup)
 }
+
+// OrgsOwnedFromLookup reads AUTH_ORGS_OWNED with the same parse as
+// UsersOwnedFromLookup.
+func OrgsOwnedFromLookup(lookup secrets.LookupEnv) (bool, error) {
+	return orgsOwned(lookup)
+}

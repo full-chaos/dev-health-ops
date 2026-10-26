@@ -306,7 +306,6 @@ func jiraIssueAnswers(issues []jiraIssue) []providerAnswer {
 	for _, issue := range issues {
 		byProject[issue.Project.Key] = append(byProject[issue.Project.Key], issue.payload())
 		answers = append(answers,
-			get(jiraHost, "/rest/api/3/issue/"+issue.Key+"/changelog", "*", issue.changelog()),
 			get(jiraHost, "/rest/api/3/issue/"+issue.Key+"/comment", "*", map[string]any{"startAt": 0, "maxResults": 100, "total": 0, "comments": []any{}}),
 		)
 		for _, application := range []string{"GitHub", "GitLab"} {
@@ -327,6 +326,7 @@ func jiraIssueAnswers(issues []jiraIssue) []providerAnswer {
 					"_instance": map[string]any{"name": application, "type": application}}}}))
 		}
 	}
+	answers = append(answers, jiraBulkChangelogAnswer(issues))
 	// The search answers each project's own JQL with that project's issues, in one page.
 	answers = append(answers, providerAnswer{
 		Method: "GET", Host: jiraHost, Path: "/rest/api/3/search/jql", Query: "*", Status: 200,
@@ -437,4 +437,37 @@ var jiraWorld = providerWorld{
 		{Kind: "team_catalog", Provider: "jira", Credential: jiraCredential, Config: jiraConfig,
 			Sources: [][2]string{{jiraPAY.Key, jiraPAY.Name}, {jiraOPS.Key, jiraOPS.Name}}},
 	},
+}
+
+// jiraBulkChangelogAnswer answers POST /rest/api/3/changelog/bulkfetch with the histories of the issues
+// the request names, in one page: the same histories (same order) the per-issue changelog served.
+func jiraBulkChangelogAnswer(issues []jiraIssue) providerAnswer {
+	byID := map[string]jiraIssue{}
+	for _, issue := range issues {
+		byID[issue.ID] = issue
+	}
+	return providerAnswer{
+		Method: "POST", Host: jiraHost, Path: "/rest/api/3/changelog/bulkfetch", Query: "*", Status: 200,
+		Respond: func(request replayRequest) (any, bool) {
+			var asked struct {
+				IssueIDsOrKeys []string `json:"issueIdsOrKeys"`
+			}
+			if json.Unmarshal(request.Payload, &asked) != nil || len(asked.IssueIDsOrKeys) == 0 {
+				return nil, false
+			}
+			logs := []any{}
+			for _, id := range asked.IssueIDsOrKeys {
+				issue, ok := byID[id]
+				if !ok {
+					return nil, false
+				}
+				histories, _ := issue.changelog()["values"].([]any)
+				if len(histories) == 0 {
+					continue
+				}
+				logs = append(logs, map[string]any{"issueId": issue.ID, "changeHistories": histories})
+			}
+			return map[string]any{"issueChangeLogs": logs, "nextPageToken": nil}, true
+		},
+	}
 }

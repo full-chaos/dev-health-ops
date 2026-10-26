@@ -103,7 +103,7 @@ func countLLMConfig(ctx context.Context, outcome string) {
 // llmConfigHandler serves GET .../orgs/{org_id}/llm-config. Order: bearer
 // (401), scope (403), org id (404), store (503), config (200 or 404). No
 // branch logs or returns the key, the token, or an error that could carry one.
-func llmConfigHandler(verifier CredentialVerifier, source LLMConfigSource, logger *slog.Logger) http.Handler {
+func llmConfigHandler(verifier CredentialVerifier, source LLMConfigSource, logger *slog.Logger, workload *WorkloadAuth) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 		w.Header().Set("Cache-Control", "no-store")
@@ -118,21 +118,36 @@ func llmConfigHandler(verifier CredentialVerifier, source LLMConfigSource, logge
 			unauthorized(ctx, w, "missing")
 			return
 		}
-		credentialID, err := verifier.Verify(ctx, token, LLMConfigScope)
+		var credentialID string
 		switch {
-		case errors.Is(err, ErrCredentialInvalid):
+		case isWorkloadToken(token):
+			if _, reason := workload.decide(token); reason != "" {
+				refuseWorkloadLLMConfig(ctx, w, logger, reason)
+				return
+			}
+			countWorkloadAccepted(ctx, routeLLMConfig)
+		case !strings.HasPrefix(token, acrTokenPrefix):
 			unauthorized(ctx, w, "invalid")
 			return
-		case errors.Is(err, ErrCredentialScope):
-			logger.InfoContext(ctx, "acr llm-config: scope refused", slog.String("credential_id", credentialID))
-			countLLMConfig(ctx, "forbidden")
-			writeDetail(w, http.StatusForbidden, "Forbidden")
-			return
-		case err != nil:
-			logger.ErrorContext(ctx, "acr llm-config: credential lookup failed", slog.String("error_type", errorKind(err)))
-			countLLMConfig(ctx, "credential_unavailable")
-			writeDetail(w, http.StatusServiceUnavailable, "Service unavailable")
-			return
+		default:
+			var err error
+			credentialID, err = verifier.Verify(ctx, token, LLMConfigScope)
+			switch {
+			case errors.Is(err, ErrCredentialInvalid):
+				unauthorized(ctx, w, "invalid")
+				return
+			case errors.Is(err, ErrCredentialScope):
+				logger.InfoContext(ctx, "acr llm-config: scope refused", slog.String("credential_id", credentialID))
+				countLLMConfig(ctx, "forbidden")
+				writeDetail(w, http.StatusForbidden, "Forbidden")
+				return
+			case err != nil:
+				logger.ErrorContext(ctx, "acr llm-config: credential lookup failed", slog.String("error_type", errorKind(err)))
+				countLLMConfig(ctx, "credential_unavailable")
+				writeDetail(w, http.StatusServiceUnavailable, "Service unavailable")
+				return
+			}
+			countSvcAcrCompat(ctx, routeLLMConfig)
 		}
 		orgID := r.PathValue("org_id")
 		if _, err := uuid.Parse(orgID); err != nil {
@@ -211,6 +226,24 @@ func llmConfigHandler(verifier CredentialVerifier, source LLMConfigSource, logge
 		// A Go-only route has no response model: the JSONResponse writer, not WriteModel.
 		policy.WriteJSON(w, http.StatusOK, out, http.Header{"X-Content-Type-Options": {"nosniff"}})
 	})
+}
+
+// refuseWorkloadLLMConfig answers a refused workload token: 403 for a valid
+// token of another workload, 503 when the key source could not be read, 401
+// for every other reason. The reason is counted and logged, never sent.
+func refuseWorkloadLLMConfig(ctx context.Context, w http.ResponseWriter, logger *slog.Logger, reason string) {
+	countWorkloadRefused(ctx, routeLLMConfig, reason)
+	logWorkloadRefused(ctx, logger, routeLLMConfig, reason)
+	if reason == ReasonUnavailable {
+		writeDetail(w, http.StatusServiceUnavailable, "Service unavailable")
+		return
+	}
+	if reason == ReasonPrincipal {
+		countLLMConfig(ctx, "forbidden_workload")
+		writeDetail(w, http.StatusForbidden, "Forbidden")
+		return
+	}
+	unauthorized(ctx, w, "workload")
 }
 
 func unauthorized(ctx context.Context, w http.ResponseWriter, outcome string) {

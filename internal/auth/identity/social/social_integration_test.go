@@ -762,7 +762,7 @@ func TestInfoLogsCarryNoIds(t *testing.T) {
 
 	hash := testVerifier(t)
 	if _, err := stores[true].ProvisionLocal(ctx, identity.LocalProvisionRequest{Email: "logs-local-new@example.com",
-		FullName: "Logs", PasswordHash: &hash}); err != nil {
+		FullName: func() *string { s := "Logs"; return &s }(), PasswordHash: &hash}); err != nil {
 		t.Fatalf("ProvisionLocal: %v", err)
 	}
 	org := uuid.New()

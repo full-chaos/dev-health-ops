@@ -17,6 +17,7 @@ func TestBookkeepingTablesAreNotSharedChanges(t *testing.T) {
 	runRows(t, []verdictRow{
 		{name: "test_weights", changed: []string{"ci/go_test_weights.tsv"}, want: "AFFECTED 1", keys: x},
 		{name: "providersync_race_weights", changed: []string{"ci/go_providersync_race_weights.tsv"}, want: "AFFECTED 1", keys: x},
+		{name: "providersync_test_weights", changed: []string{"ci/go_providersync_test_weights.tsv"}, want: "AFFECTED 1", keys: x},
 		{name: "race_weights_dir_file", changed: []string{"ci/go_race_weights.d/internal__a.tsv"}, want: "AFFECTED 1", keys: x},
 		{name: "venue_weights_dir_file", changed: []string{"ci/venue_oracle_weights.d/internal__a.tsv"}, want: "AFFECTED 1", keys: x},
 		{name: "two_tables_and_a_leaf_go_file", changed: []string{"ci/go_test_weights.tsv", "ci/go_race_weights.d/a.tsv", "a/a.go"}, want: "AFFECTED 2", keys: []string{"a", "x"}},
@@ -78,6 +79,7 @@ func TestBookkeepingTablesSelectTheirReadersInTheRealModule(t *testing.T) {
 	}{
 		{"ci/go_test_weights.tsv", []string{"internal/cigates/testshard", "internal/cigates/weightsfiles"}},
 		{"ci/go_providersync_race_weights.tsv", []string{"internal/cigates/testshard", "internal/cigates/weightsfiles"}},
+		{"ci/go_providersync_test_weights.tsv", []string{"internal/cigates/integrationshards"}},
 		{"ci/go_race_weights.d/internal__providersync.tsv", []string{"internal/cigates/testshard", "internal/cigates/weightsfiles"}},
 		{"ci/venue_oracle_weights.d/internal__scheduler__sync.tsv", []string{"internal/cigates/testshard", "internal/cigates/weightsfiles", "internal/cigates/workflows"}},
 	} {

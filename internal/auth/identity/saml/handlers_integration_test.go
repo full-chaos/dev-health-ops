@@ -27,6 +27,8 @@ func (r *recordingIssuer) IssueFederatedSession(w http.ResponseWriter, _ *http.R
 	w.WriteHeader(http.StatusOK)
 }
 
+func (*recordingIssuer) Preflight(context.Context) error { return nil }
+
 func (h *harness) mux(issuer saml.SessionIssuer) *http.ServeMux {
 	handlers := saml.Handlers{Service: h.svc, Sessions: issuer}
 	mux := http.NewServeMux()

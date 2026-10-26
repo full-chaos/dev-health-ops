@@ -122,8 +122,14 @@ func (f *faultReader) runStatusCounts(context.Context, string, uuid.UUID) (map[s
 	return map[string]int64{}, f.hit("runStatusCounts")
 }
 
-func (f *faultReader) runUnits(context.Context, string, uuid.UUID) ([]runUnit, error) {
+func (f *faultReader) runUnitRollupRows(context.Context, string, uuid.UUID) ([]runUnit, error) {
 	return nil, f.hit("runUnits")
+}
+func (f *faultReader) runUnitsPage(context.Context, string, uuid.UUID, unitFilter, int64, *int64) ([]runUnit, error) {
+	return nil, f.hit("runUnitsPage")
+}
+func (f *faultReader) countRunUnits(context.Context, string, uuid.UUID, unitFilter) (int64, error) {
+	return 0, f.hit("countRunUnits")
 }
 func (f *faultReader) watermarkRows(context.Context, string, []string, []string) ([]schedsync.WatermarkRow, error) {
 	return nil, f.hit("watermarkRows")
@@ -136,6 +142,9 @@ func (f *faultReader) backfillJobByID(context.Context, string, uuid.UUID) (*back
 	return &backfillJob{ID: uuid.New(), CeleryTaskID: &task,
 		SinceDate:  time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 		BeforeDate: time.Date(2026, 1, 3, 0, 0, 0, 0, time.UTC)}, f.hit("backfillJobByID")
+}
+func (f *faultReader) occurrencePlanOf(context.Context, string, string) (occurrencePlan, error) {
+	return occurrencePlan{}, f.hit("occurrencePlanOf")
 }
 func (f *faultReader) coverageProjection(context.Context, string, uuid.UUID, int, int) (*coverageProjection, error) {
 	return &coverageProjection{Payload: "{}"}, f.hit("coverageProjection")
@@ -245,4 +254,8 @@ func TestEmptyIDSetsSendNoQuery(t *testing.T) {
 	if runs, err := empty.syncRunsByID(ctx, "org", nil); err != nil || len(runs) != 0 {
 		t.Fatal(runs, err)
 	}
+}
+
+func (f *faultReader) unitsSnapshot(_ context.Context, fn func(unitsSnapshotReads) error) error {
+	return fn(f)
 }

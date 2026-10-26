@@ -11,6 +11,15 @@
 // strconv.Itoa / fmt.Sprint of constants are folded into a key; any other call in key position is a dynamic key (R2 on
 // a metric label or a span attribute). Named limits (not seen by the scan): a constant key taken from another package (for example
 // tracing.StageAttribute); a constructor returned by a function call; a constant whose folding exceeds 8 values, 256 bytes, 64 passes or 4096 expression nodes, or that has a declaration the scan cannot read (it, and every constant built from it, is marked saturated and a key that uses it is an R1 finding); a package that exhausts the work budget (1,000,000 steps plus 100 per syntax node, and 64 steps per alias entry kept; one R1 "census incomplete: work budget" finding at its package clause, and its scan stops); a constructor reached through a function parameter, an append, or a map or struct field read under another name; a constructor converted to a function type (T(attribute.String)); a constructor assigned to a map entry or struct field after its literal (m[k] = f, x.f = f); a call through a dereferenced pointer ((*p)(...)); and a key that is a variable and not a constant.
+// A function whose slice parameter reaches a metric attribute sink (metric.WithAttributes, metric.WithAttributeSet,
+// attribute.NewSet), directly, through local names or through a call to another such function in the package, marks that
+// parameter; every same-package call of it then checks the attribute constructors that reach the argument as metric
+// labels (a literal, a name bound to constructors anywhere in the package, an append, a slice or an index of those).
+// A method expression (T.add(r, ...), rec[int].add(r, ...), (*T).add(&r, ...)) is matched by the type's name: its
+// arguments are tried both as written and shifted past the receiver (a value of the same name is noise accepted).
+// Named limits of that flow: a call into another package; a slice returned by a call; a slice read from a selector (a
+// struct field or a map entry); a function literal bound to a name; a function value bound to a name or passed as a
+// value (g := record[int]; g(...), g := r.add; g(...)); and a method matched by its name alone (noise accepted).
 // The runtime sentinel tests are the primary defence.
 package emitscan
 
@@ -240,9 +249,13 @@ type pkgInfo struct {
 	rawFuncs    map[string]bool        // functions whose result carries a raw request path or query
 	constNames  map[string]bool        // every constant name declared in the package
 	stringTypes map[string]bool        // package types whose underlying type is string (conversions of a constant keep its text)
+	typeNames   map[string]bool        // every type name declared in the package (a method expression names one)
 	aliases     map[string][][2]string // every watched constructor a name is ever bound to anywhere in the package, deduped
 	saturated   map[string]bool        // constants whose folding hit a bound: no value is kept, a use is an unfoldable const key
 	budget      *budget
+	labelParams map[string]map[int]bool // function name -> parameter slots that reach a metric attribute sink
+	variadic    map[string]map[int]bool // function name -> its variadic parameter slot
+	labelMarked map[*ast.CallExpr]bool  // attribute constructors that reach a metric label through a package-local call
 }
 
 func packageInfo(group []parsedFile) *pkgInfo {
@@ -256,10 +269,11 @@ func packageInfo(group []parsedFile) *pkgInfo {
 		})
 	}
 	info := &pkgInfo{consts: map[string][]string{}, rawFuncs: map[string]bool{}, constNames: map[string]bool{},
-		stringTypes: map[string]bool{}, aliases: map[string][][2]string{}, saturated: map[string]bool{}, budget: &budget{limit: workBase + workPerNode*nodes}}
+		stringTypes: map[string]bool{}, typeNames: map[string]bool{}, aliases: map[string][][2]string{}, saturated: map[string]bool{}, labelParams: map[string]map[int]bool{}, variadic: map[string]map[int]bool{}, labelMarked: map[*ast.CallExpr]bool{}, budget: &budget{limit: workBase + workPerNode*nodes}}
 	for _, parsed := range group {
 		ast.Inspect(parsed.file, func(node ast.Node) bool {
 			if spec, ok := node.(*ast.TypeSpec); ok {
+				info.typeNames[spec.Name.Name] = true
 				if ident, isIdent := spec.Type.(*ast.Ident); isIdent && ident.Name == "string" {
 					info.stringTypes[spec.Name.Name] = true
 				}
@@ -334,6 +348,7 @@ func packageInfo(group []parsedFile) *pkgInfo {
 	info.saturateEmptyDecls(group)
 	info.saturateDependants(group)
 	info.collectAliases(group)
+	info.collectLabelFlow(group)
 	for changed := true; changed && !info.budget.over; {
 		changed = false
 		for _, parsed := range group {
@@ -739,7 +754,7 @@ func (info *pkgInfo) altsOf(expr ast.Expr, imports map[string]string) [][2]strin
 
 func scanFile(parsed parsedFile, info *pkgInfo) []Finding {
 	file := parsed.file
-	s := &fileScan{fset: parsed.fset, rel: parsed.rel, metricAttrs: map[*ast.CallExpr]bool{}, reported: map[string]bool{}, pkg: info,
+	s := &fileScan{fset: parsed.fset, rel: parsed.rel, metricAttrs: info.labelMarked, reported: map[string]bool{}, pkg: info,
 		imports: importNames(file)}
 	for _, spec := range file.Imports {
 		if spec.Name != nil && spec.Name.Name == "." {
@@ -1015,7 +1030,7 @@ func isMajorVersion(element string) bool {
 // attribute set: a label assembled in a slice or a set is a metric label too.
 func (s *fileScan) markMetricFunctions(file *ast.File) {
 	flagged := map[ast.Node]bool{} // a function with a metric-options or attribute-set call anywhere in its body, nested closures included
-	var stack []ast.Node
+	var stack, funcs []ast.Node    // every open node; the open functions among them, so the nearest one is found in O(1)
 	isFunc := func(node ast.Node) bool {
 		switch fn := node.(type) {
 		case *ast.FuncDecl:
@@ -1029,27 +1044,23 @@ func (s *fileScan) markMetricFunctions(file *ast.File) {
 		if node == nil {
 			top := stack[len(stack)-1]
 			stack = stack[:len(stack)-1]
-			if isFunc(top) && flagged[top] {
-				for i := len(stack) - 1; i >= 0; i-- {
-					if isFunc(stack[i]) {
-						flagged[stack[i]] = true
-						break
-					}
+			if isFunc(top) {
+				funcs = funcs[:len(funcs)-1]
+				if flagged[top] && len(funcs) > 0 {
+					flagged[funcs[len(funcs)-1]] = true
 				}
 			}
 			return true
 		}
 		stack = append(stack, node)
-		if call, ok := node.(*ast.CallExpr); ok {
+		if isFunc(node) {
+			funcs = append(funcs, node)
+		}
+		if call, ok := node.(*ast.CallExpr); ok && len(funcs) > 0 {
 			pkg, name, ok := s.qualified(call.Fun)
 			if ok && ((pkg == "metric" && (name == "WithAttributes" || name == "WithAttributeSet")) ||
 				(pkg == "attribute" && name == "NewSet")) {
-				for i := len(stack) - 1; i >= 0; i-- {
-					if isFunc(stack[i]) {
-						flagged[stack[i]] = true
-						break
-					}
-				}
+				flagged[funcs[len(funcs)-1]] = true
 			}
 		}
 		return true

@@ -58,7 +58,7 @@ func TestProvisionLocalWritesTheRowGoAPIRegisterWrites(t *testing.T) {
 	defer cancel()
 	hash := projectionHash(t, "projection-local-material")
 	email := uniqueEmailCom("proj-local")
-	id, err := e.owned.ProvisionLocal(ctx, LocalProvisionRequest{Email: strings.ToUpper(email), FullName: "Local Person", PasswordHash: &hash, Actor: SelfSignUp(nil)})
+	id, err := e.owned.ProvisionLocal(ctx, LocalProvisionRequest{Email: strings.ToUpper(email), FullName: strPtr("Local Person"), PasswordHash: &hash, Actor: SelfSignUp(nil)})
 	if err != nil {
 		t.Fatalf("ProvisionLocal: %v", err)
 	}
@@ -80,7 +80,7 @@ func TestProvisionFederatedWritesTheRowGoAPISocialLoginWrites(t *testing.T) {
 	defer cancel()
 	subject := "gh-" + uuid.NewString()
 	key := ExternalKey{Issuer: "https://github.com", Provider: ProviderGitHub, Subject: subject}
-	id, err := e.owned.ProvisionFederated(ctx, ProvisionRequest{Key: key, Email: uniqueEmailCom("proj-social"), FullName: "Display", Username: "octo", LegacyFullName: "Octo Cat", Actor: SelfSignUp(nil)})
+	id, err := e.owned.ProvisionFederated(ctx, ProvisionRequest{Key: key, Email: uniqueEmailCom("proj-social"), FullName: "Display", Username: "octo", LegacyFullName: strPtr("Octo Cat"), Actor: SelfSignUp(nil)})
 	if err != nil {
 		t.Fatalf("ProvisionFederated: %v", err)
 	}
@@ -233,5 +233,38 @@ func TestSwitchOffWritesNothingToPublicUsers(t *testing.T) {
 	}
 	if n := e.count(t, ctx, `SELECT count(*) FROM public.users`); n != total {
 		t.Fatalf("public.users rows %d -> %d with the switch off", total, n)
+	}
+}
+
+// The full name is stored as given, as go-api stores it: nil is NULL and the
+// empty string is ”.
+func TestPublicUsersFullNameNullVersusEmpty(t *testing.T) {
+	e := getEnv(t)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	empty := ""
+	hash := projectionHash(t, "projection-fullname-material")
+	for name, tc := range map[string]struct {
+		in   *string
+		want *string
+	}{"nil": {nil, nil}, "empty": {&empty, &empty}} {
+		local, err := e.owned.ProvisionLocal(ctx, LocalProvisionRequest{Email: uniqueEmailCom("fn-local-" + name), FullName: tc.in, PasswordHash: &hash, Actor: SelfSignUp(nil)})
+		if err != nil {
+			t.Fatalf("%s local: %v", name, err)
+		}
+		key := ExternalKey{Issuer: "https://github.com", Provider: ProviderGitHub, Subject: "gh-" + uuid.NewString()}
+		fed, err := e.owned.ProvisionFederated(ctx, ProvisionRequest{Key: key, Email: uniqueEmailCom("fn-fed-" + name), LegacyFullName: tc.in, Actor: SelfSignUp(nil)})
+		if err != nil {
+			t.Fatalf("%s federated: %v", name, err)
+		}
+		for kind, id := range map[string]uuid.UUID{"local": local, "federated": fed} {
+			row, ok := e.publicUser(t, ctx, id)
+			if !ok {
+				t.Fatalf("%s %s: no row", name, kind)
+			}
+			if (row.FullName == nil) != (tc.want == nil) || (row.FullName != nil && *row.FullName != *tc.want) {
+				t.Errorf("%s %s: full_name %v, want %v", name, kind, row.FullName, tc.want)
+			}
+		}
 	}
 }

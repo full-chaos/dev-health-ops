@@ -185,6 +185,7 @@ func captureIncidentGateSignals(t *testing.T) *bytes.Buffer {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	t.Cleanup(func() { slog.SetDefault(original) })
 	globalPlanGateTelemetry.resetForTest()
+	globalPlanIncidentSkipWarn.resetForTest()
 	return &logs
 }
 
@@ -607,6 +608,40 @@ func TestDropCanonicalIncidentDatasetsCountsEachDatasetAndLocksTheFeatureRows(t 
 	if _, err := config.fixture.pool.Exec(ctx,
 		`SELECT id FROM public.feature_flags WHERE key='canonical_incident_ingestion' FOR UPDATE NOWAIT`); err != nil {
 		t.Fatalf("the feature row must be free after the plan's transaction ended: %v", err)
+	}
+}
+
+// Every attempt through the production gate counts each left-out dataset on
+// sync_plan_gate_total, while the skip WARN is written once for the same
+// configuration, day and skipped set.
+func TestDropCanonicalIncidentDatasetsCountsEveryAttemptWhileWarningOncePerDay(t *testing.T) {
+	config := startIncidentGateConfig(t, "pagerduty", nil, nil)
+	config.setIncidentFeature(t, false)
+	logs := captureIncidentGateSignals(t)
+	ctx := context.Background()
+	datasets := []PlanDataset{{Key: "incidents"}, {Key: "services"}}
+	const attempts = 5
+	for attempt := 1; attempt <= attempts; attempt++ {
+		tx, err := config.fixture.pool.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, skipped, err := dropCanonicalIncidentDatasetsWhenFeatureOff(ctx, tx, config.occurrence.OrgID, config.integrationID,
+			"pagerduty", datasets, config.occurrence.ScheduledFor)
+		if rollbackErr := tx.Rollback(ctx); rollbackErr != nil {
+			t.Fatal(rollbackErr)
+		}
+		if !errors.Is(err, ErrOccurrenceIneligible) || len(skipped) != len(datasets) {
+			t.Fatalf("attempt %d: skipped=%v err=%v, want 2 skipped and ErrOccurrenceIneligible", attempt, skipped, err)
+		}
+		for _, dataset := range datasets {
+			if got := globalPlanGateTelemetry.snapshotForTest("pagerduty", dataset.Key, planGateOutcomeFeatureDisabled); got != uint64(attempt) {
+				t.Fatalf("attempt %d: feature_disabled count for %s = %d, want %d", attempt, dataset.Key, got, attempt)
+			}
+		}
+	}
+	if lines := skipWarnLines(logs); len(lines) != 1 {
+		t.Fatalf("skip WARN lines after %d same-day attempts = %d, want 1:\n%s", attempts, len(lines), logs.String())
 	}
 }
 

@@ -119,37 +119,65 @@ func (h handlers) verify(w http.ResponseWriter, r *http.Request) {
 	policy.WriteModel(w, http.StatusOK, verifyEmailResponse("Email verified successfully", true), nil)
 }
 
-// resendVerification is POST /api/v1/auth/resend-verification.
+// resendVerification is POST /api/v1/auth/resend-verification. The answer
+// follows one lookup and is the same for every address: the token write and
+// the mail run off the request, and an address with no unverified account
+// runs a decoy job of the same shape.
+//
+// Stricter than Python (D6129): the known-address failure that Python answered
+// as a 500 after the lookup (a token write or mail error) is logged and counted
+// off the request, so no failure is visible to the caller.
 func (h handlers) resendVerification(w http.ResponseWriter, r *http.Request) {
+	if h.refuseWhileUsersOwned(w) {
+		return
+	}
 	email, _ := r.Context().Value(emailInputKey{}).(string)
 	ctx := r.Context()
 	generic := verifyEmailResponse("If an account exists with that email, a verification link has been sent", false)
-	tx, err := h.Pool.Begin(ctx)
-	if err != nil {
-		h.fail(w, r, "begin", err)
-		return
-	}
-	defer func() { _ = tx.Rollback(context.Background()) }()
-	user, err := userByEmail(ctx, tx, pythonparity.Strip(pythonparity.Lower(email)))
+	user, err := h.lookupByEmail(ctx, email)
 	if err != nil {
 		h.fail(w, r, "load user", err)
 		return
 	}
-	if user == nil || user.IsVerified {
-		policy.WriteModel(w, http.StatusOK, generic, nil)
-		return
+	h.queueLinkJob(ctx, r, mailVerification, resendActsOn(user), func(ctx context.Context, jobRequest *http.Request) error {
+		return h.issueVerificationLink(ctx, user)
+	})
+	policy.WriteModel(w, http.StatusOK, generic, nil)
+}
+
+// resendActsOn is the refusal kept from before: a resend acts only on an
+// account that exists and is not verified yet; anything else is a decoy.
+func resendActsOn(user *userRow) bool { return user != nil && !user.IsVerified }
+
+// forgotActsOn: a reset link is issued for any account that exists.
+func forgotActsOn(user *userRow) bool { return user != nil }
+
+// lookupByEmail is the one state-dependent step left on the request of the
+// forgot and resend routes.
+func (h handlers) lookupByEmail(ctx context.Context, email string) (*userRow, error) {
+	tx, err := h.Pool.Begin(ctx)
+	if err != nil {
+		return nil, err
 	}
+	defer func() { _ = tx.Rollback(context.Background()) }()
+	return userByEmail(ctx, tx, pythonparity.Strip(pythonparity.Lower(email)))
+}
+
+// issueVerificationLink replaces the user's verification token and mails it.
+func (h handlers) issueVerificationLink(ctx context.Context, user *userRow) error {
+	tx, err := h.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(context.Background()) }()
 	token, err := h.replaceLinkToken(ctx, tx, verificationTokens, user.ID, h.Now(), verificationTTL)
 	if err != nil {
-		h.fail(w, r, "verification token", err)
-		return
+		return err
 	}
 	if err := tx.Commit(ctx); err != nil {
-		h.fail(w, r, "commit", err)
-		return
+		return err
 	}
-	h.sendVerification(ctx, user, token)
-	policy.WriteModel(w, http.StatusOK, generic, nil)
+	return h.sendRegisterVerification(ctx, user, token)
 }
 
 // auditUserEvent writes a user-resource audit row in the user's first
@@ -165,43 +193,48 @@ func (h handlers) auditUserEvent(ctx context.Context, r *http.Request, tx pgx.Tx
 		resourceID: user.ID.String(), userID: &userID, description: description})
 }
 
-// forgotPassword is POST /api/v1/auth/forgot-password.
+// forgotPassword is POST /api/v1/auth/forgot-password. Like resend, the answer
+// follows one lookup and is the same for every address; the token write, the
+// audit row and the mail run off the request, and an unknown address runs a
+// decoy job. The 500 that only a known address could reach is gone (D6129,
+// stricter than Python).
 func (h handlers) forgotPassword(w http.ResponseWriter, r *http.Request) {
+	if h.refuseWhileUsersOwned(w) {
+		return
+	}
 	email, _ := r.Context().Value(emailInputKey{}).(string)
 	ctx := r.Context()
 	generic := verifyEmailResponse("If the account exists, a password reset email has been sent", false)
-	tx, err := h.Pool.Begin(ctx)
-	if err != nil {
-		h.fail(w, r, "begin", err)
-		return
-	}
-	defer func() { _ = tx.Rollback(context.Background()) }()
-	user, err := userByEmail(ctx, tx, pythonparity.Strip(pythonparity.Lower(email)))
+	user, err := h.lookupByEmail(ctx, email)
 	if err != nil {
 		h.fail(w, r, "load user", err)
 		return
 	}
-	if user == nil {
-		// No audit row for an unknown address: the row needs an
-		// organization, and none may leak whether the account exists.
-		policy.WriteModel(w, http.StatusOK, generic, nil)
-		return
+	h.queueLinkJob(ctx, r, mailPasswordReset, forgotActsOn(user), func(ctx context.Context, jobRequest *http.Request) error {
+		return h.issueResetLink(ctx, jobRequest, user)
+	})
+	policy.WriteModel(w, http.StatusOK, generic, nil)
+}
+
+// issueResetLink replaces the user's reset token, audits the request and mails
+// the link. There is no audit row for an address with no organization.
+func (h handlers) issueResetLink(ctx context.Context, r *http.Request, user *userRow) error {
+	tx, err := h.Pool.Begin(ctx)
+	if err != nil {
+		return err
 	}
+	defer func() { _ = tx.Rollback(context.Background()) }()
 	token, err := h.replaceLinkToken(ctx, tx, resetTokens, user.ID, h.Now(), resetTTL)
 	if err != nil {
-		h.fail(w, r, "reset token", err)
-		return
+		return err
 	}
 	if err := h.auditUserEvent(ctx, r, tx, user, audit.ActionPasswordResetAsked, "Password reset requested"); err != nil {
-		h.fail(w, r, "audit", err)
-		return
+		return err
 	}
 	if err := tx.Commit(ctx); err != nil {
-		h.fail(w, r, "commit", err)
-		return
+		return err
 	}
-	h.sendPasswordReset(ctx, user, token)
-	policy.WriteModel(w, http.StatusOK, generic, nil)
+	return h.sendResetMail(ctx, user, token)
 }
 
 // resetPassword is POST /api/v1/auth/reset-password. It has no rate limit;

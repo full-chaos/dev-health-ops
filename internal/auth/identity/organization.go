@@ -3,9 +3,11 @@ package identity
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 
@@ -14,8 +16,9 @@ import (
 )
 
 var (
-	// ErrOrganizationNotFound reports a ProjectOrganization of an id
-	// public.organizations does not hold.
+	// ErrOrganizationNotFound reports a ProjectOrganization of an id the
+	// authority does not hold: public.organizations, or auth.organizations
+	// when Config.OrgsOwnedByAuth is on.
 	ErrOrganizationNotFound = errors.New("identity: organization not found")
 	// ErrOrganizationSlugCollision reports a projection whose slug another
 	// organization already holds in the auth schema. Nothing is written.
@@ -37,7 +40,9 @@ type orgState struct {
 // ProjectOrganization makes auth.organizations agree with public.organizations
 // for one org (id, slug, name, and disabled_at from is_active). go-api stays
 // the organizations writer until Wave 4; this is a read projection, so it is
-// not gated by UsersOwnedByAuth. auth.organizations is guarded on every write,
+// not gated by UsersOwnedByAuth. With Config.OrgsOwnedByAuth on, auth.organizations
+// is the authority instead: the call reads no public table, writes nothing, and
+// only proves the auth row exists. auth.organizations is guarded on every write,
 // so the first projection (reason organization_created) and a change (reason
 // organization_updated) each commit through audit.Commit with one audit row
 // and one outbox event. An unchanged org writes nothing.
@@ -54,6 +59,19 @@ func (s *Store) ProjectOrganization(ctx context.Context, orgID uuid.UUID) (err e
 		}
 		s.projections.Add(ctx, 1, metric.WithAttributes(attribute.String("kind", "organization"), attribute.String("outcome", outcome)))
 	}()
+	if s.ownsOrgs {
+		outcome = ownedOutcome
+		var exists bool
+		err = s.orgDB.QueryRow(ctx, fmt.Sprintf(ownedOrgExistsSQL, s.q), orgID).Scan(&exists)
+		if errors.Is(err, pgx.ErrNoRows) {
+			outcome = "not_found"
+			return ErrOrganizationNotFound
+		}
+		if err != nil {
+			return s.storeErr(ctx, "read auth.organizations", err)
+		}
+		return nil
+	}
 	var src orgState
 	err = s.pool.QueryRow(ctx, `SELECT slug, name, is_active FROM public.organizations WHERE id = $1`, orgID).
 		Scan(&src.slug, &src.name, &src.active)
@@ -193,4 +211,17 @@ func organizationAudit(eventType, reason, org string) audit.AuditEvent {
 		EventType: eventType, Outcome: audit.OutcomeAllowed, OrganizationID: &org,
 		Attributes: map[string]any{"reason_code": reason, "target_kind": "organization", "target_id": org},
 	}
+}
+
+// ownedOrgExistsSQL is the whole organizations-owned projection: auth.organizations is the authority,
+// so it only proves the row is there.
+const ownedOrgExistsSQL = `SELECT true FROM %s.organizations WHERE id = $1`
+
+const ownedOutcome = "owned"
+
+// orgDB is what the organizations-owned branch may use: one read, and an Exec that
+// exists only so a test can prove the branch never calls it.
+type orgDB interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 }

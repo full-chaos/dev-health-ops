@@ -15,7 +15,7 @@ import (
 var guardedTables = []string{
 	"auth_outbox_events", "security_audit_events", "resource_grants", "memberships",
 	"platform_role_assignments", "policy_revisions", "entitlement_snapshots",
-	"credential_registry", "service_accounts", "workloads", "external_identities",
+	"credential_registry", "service_accounts", "workloads", "workload_bindings", "external_identities",
 	"organizations", "aggregate_revisions", "signing_keys",
 }
 
@@ -184,6 +184,9 @@ var unguardedColumns = map[string]map[string]string{
 		// Written once at insert; its own trigger (0016) refuses any change,
 		// inside audit.Commit or not, so it has no UPDATE OF guard.
 		"legacy_token_version": "lifecycle",
+		// Appended at every mint, outside audit.Commit: a key set, not a
+		// session decision.
+		"signing_kids": "lifecycle",
 	},
 	"refresh_credentials": {
 		"id": "lifecycle", "session_id": "lifecycle", "principal_id": "lifecycle", "superseded_by": "lifecycle",

@@ -20,6 +20,8 @@ import (
 // APIKey stays a Hidden so no formatter, logger or JSON encoder of this
 // struct can print it; the one caller that must serve it calls Reveal.
 type OrgConfig struct {
+	// Purpose is the purpose of the Store that read this config ("" for the default row).
+	Purpose  Purpose
 	Provider string
 	Model    string
 	BaseURL  string
@@ -78,10 +80,7 @@ func (s Store) OrgConfig(ctx context.Context, orgID string) (OrgConfig, bool, er
 	if s.purpose != "" {
 		candidateKeys = append(candidateKeys, PurposeKeys(s.purpose)...)
 	}
-	versionRows, err := tx.Query(ctx, `
-SELECT key, updated_at, coalesce(value, '') FROM settings
-WHERE org_id = $1 AND category = $2 AND key = ANY($3) ORDER BY key`,
-		orgID, settingsCategoryLLM, candidateKeys)
+	versionRows, err := tx.Query(ctx, versionRowsSQL(s.Relation), orgID, settingsCategoryLLM, candidateKeys)
 	if err != nil {
 		return OrgConfig{}, false, fmt.Errorf("query org llm settings version: %w", err)
 	}
@@ -104,7 +103,7 @@ WHERE org_id = $1 AND category = $2 AND key = ANY($3) ORDER BY key`,
 	}
 	turnedOff := false
 	if ownModelTurnedOff(raw) {
-		if turnedOff, err = HasSavedBYO(ctx, tx, orgID); err != nil {
+		if turnedOff, err = hasSavedBYO(ctx, tx, s.Relation, orgID); err != nil {
 			return OrgConfig{}, false, err
 		}
 	}
@@ -176,6 +175,7 @@ WHERE org_id = $1 AND category = $2 AND key = ANY($3) ORDER BY key`,
 		return s.notResolved(ctx, orgID)
 	}
 	return OrgConfig{
+		Purpose:     s.purpose,
 		Provider:    provider,
 		Model:       settings[keyModel],
 		BaseURL:     settings[keyBaseURL],
@@ -187,17 +187,19 @@ WHERE org_id = $1 AND category = $2 AND key = ANY($3) ORDER BY key`,
 	}, true, nil
 }
 
+func versionRowsSQL(relation SettingsRelation) string {
+	return `
+SELECT key, updated_at, coalesce(value, '') FROM ` + relation.From() + `
+WHERE org_id = $1 AND category = $2 AND key = ANY($3) ORDER BY key`
+}
+
 // storedKeyInBaseURL is whether baseURL carries any api key stored for the org,
 // the default row's or a purpose override's.
 func storedKeyInBaseURL(raw orgSettings, baseURL string) bool {
 	if baseURL == "" {
 		return false
 	}
-	keys := []string{keyAPIKey}
-	for _, purpose := range Purposes {
-		keys = append(keys, PurposeKey(purpose, keyAPIKey))
-	}
-	for _, key := range keys {
+	for _, key := range append([]string{keyAPIKey}, otherPurposeAPIKeys()...) {
 		if BaseURLCarriesKey(baseURL, raw[key]) {
 			return true
 		}
@@ -238,7 +240,7 @@ func (s Store) notResolved(ctx context.Context, orgID string) (OrgConfig, bool, 
 	if s.purpose == "" {
 		return OrgConfig{}, false, nil
 	}
-	saved, err := HasSavedBYO(ctx, s.Pool, orgID)
+	saved, err := hasSavedBYO(ctx, s.Pool, s.Relation, orgID)
 	if err != nil {
 		return OrgConfig{}, false, err
 	}

@@ -514,7 +514,7 @@ dho admin users create \
 | Option | Description |
 |--------|-------------|
 | `--email` | User email (required) |
-| `--password` | Password, min 8 chars. It shows in the process list: prefer `--password-stdin` |
+| `--password` | Password, at least 12 chars with a letter and a digit, not a common password, at most 72 bytes. It shows in the process list: prefer `--password-stdin` |
 | `--password-stdin` | Read the password from the first line of standard input. One of `--password` and `--password-stdin` is required |
 | `--username` | Optional username |
 | `--full-name` | User's full name |
@@ -577,7 +577,7 @@ dho admin users update \
 | `--id` / `--email` / `--username` | Identify the user to update |
 | `--new-email` / `--new-username` | Change email/username (empty string clears username) |
 | `--full-name` | Set the user's full name |
-| `--password` / `--password-stdin` | Set a new password (min 8 chars; revokes existing sessions) |
+| `--password` / `--password-stdin` | Set a new password (at least 12 chars with a letter and a digit, not a common password, at most 72 bytes; revokes existing sessions) |
 | `--verified` / `--no-verified` | Set verified status |
 | `--superuser` / `--no-superuser` | Set superuser status |
 | `--active` / `--no-active` | Set active status |
@@ -2074,7 +2074,7 @@ dho maintenance cleanup-all
 
 ## Service Credentials
 
-Internal service credentials are the bearer tokens the ACR entitlement and LLM config lookups (`acr`) present to the API. The `worker-operator` service is retired: nothing validates a `svc_worker_*` token, so its credentials authorize nothing (`dho workers` carries no token since CHAOS-6289). The token is printed **once**, on stdout, when a credential is created or rotated; the database keeps only its SHA-256 and its first 16 characters (`token_prefix`), and `list` never prints a secret. Uses `POSTGRES_URI`. `--service` chooses the service (default `acr`), and a service can hold only its own scopes: `acr` holds `entitlements:read` and `llm_config:read` (the org LLM config route). `worker-operator` still accepts `workers:read` and `workers:operate` at creation, but they authorize nothing; do not create new ones. The `worker-llm-config` service (`svc_wllm_*`) is retired with the worker categorize config route: nothing validates its tokens.
+Internal service credentials are the bearer tokens the ACR entitlement and LLM config lookups (`acr`) present to the API. The `worker-operator` service is retired: nothing validates a `svc_worker_*` token, so its credentials authorize nothing (`dho workers` carries no token since CHAOS-6289). `create` and `rotate` refuse `--service worker-operator` (exit 1); `list` and `revoke` still work on the rows already stored. The token is printed **once**, on stdout, when a credential is created or rotated; the database keeps only its SHA-256 and its first 16 characters (`token_prefix`), and `list` never prints a secret. Uses `POSTGRES_URI`. `--service` chooses the service (default `acr`), and a service can hold only its own scopes: `acr` holds `entitlements:read` and `llm_config:read` (the org LLM config route). `worker-operator` still accepts `workers:read` and `workers:operate` at creation, but they authorize nothing; do not create new ones. The `worker-llm-config` service (`svc_wllm_*`) is retired with the worker categorize config route: nothing validates its tokens.
 
 ```bash
 # Create a credential (the token is printed once)
@@ -2344,6 +2344,9 @@ dho migrate status --check
 # Print, read-only, what the upgrade will do to this database
 dho migrate postgres preflight
 
+# Build the failure-streak index without blocking writes (before the upgrade that carries it)
+dho migrate postgres build-index failure-streak
+
 # Show migration history
 dho migrate postgres history
 
@@ -2358,6 +2361,8 @@ dho migrate postgres heads
 `dho migrate status --check` is read-only. It exits 1 if a required migration is pending and 0 if the application schema is current. Only this flat form takes `--check`: `dho migrate postgres status` takes no flags.
 
 `dho migrate postgres preflight` is read-only and exits 0 when the database is at the head, 10 when the upgrade applies cleanly (1 with `--strict`), 1 when the upgrade needs manual work, and 3 when the measurement did not happen.
+
+`dho migrate postgres build-index failure-streak` builds `ix_sync_run_units_failure_streak` with `CREATE INDEX CONCURRENTLY`, outside the upgrade transaction, so a large `sync_run_units` keeps taking writes. Each attempt runs under `--lock-timeout` (default 5s, up to `--attempts`, default 20, `--retry-delay` apart); an invalid leftover index is dropped and rebuilt. It exits 0 only when the index is present and valid. One run acts at a time: a run that finds another run holding the build lock exits 0 when the index is already valid, else non-zero (`build_index_lock_held`) with no DDL. The build lock is a session lock, so `MIGRATION_DATABASE_URI` and the `POSTGRES_URI` fallback must reach PostgreSQL directly or through a session-mode pooler; under a transaction-mode pooler the run exits non-zero (`build_index_session_changed`) with no further DDL. After such a refusal the build lock stays on the pooled backend until the pooler recycles that server connection (PgBouncer `server_lifetime`, default 3600 s; transaction mode runs no reset query); until then other runs exit non-zero (`build_index_lock_held`), or 0 when the index is already valid. The upgrade revision that carries the index (0159) then finds it and does nothing. The chart runs it as a pre-upgrade hook Job when `migrations.hook.streakIndex.enabled=true`.
 
 **Flat aliases:** `dho migrate current`, `heads`, `history`, `status` and `downgrade` target PostgreSQL. `dho migrate upgrade` is not an alias: it runs the full set described above.
 

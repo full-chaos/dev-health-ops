@@ -2,6 +2,7 @@ package session
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -91,4 +92,45 @@ func TestMailMetricsLabelSetIsClosedAndPreRegistered(t *testing.T) {
 	if strings.Join(series, "\n") != strings.Join(want, "\n") {
 		t.Errorf("series\n%s\nwant\n%s", strings.Join(series, "\n"), strings.Join(want, "\n"))
 	}
+}
+
+func TestDrainedJobIsNotCountedAgainWhenItReturns(t *testing.T) {
+	q := newSendQueue(2)
+	release, started := make(chan struct{}), make(chan struct{})
+	q.submit(mailPasswordReset, func() error { close(started); <-release; return nil })
+	<-started
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	if left := q.drain(ctx); left != 1 {
+		t.Fatalf("drain left %d, want 1", left)
+	}
+	close(release)
+	q.wait()
+	text := scrape(t, q)
+	if !strings.Contains(text, `purpose="password_reset",outcome="dropped"} 1`) || !strings.Contains(text, `purpose="password_reset",outcome="sent"} 0`) {
+		t.Errorf("a drained job was counted twice:\n%s", text)
+	}
+}
+
+func TestDrainCancelsTheContextOfAJobBoundToTheQueue(t *testing.T) {
+	q := newSendQueue(2)
+	started, cancelled := make(chan struct{}), make(chan struct{})
+	jobCtx, stop := q.bind(context.Background(), time.Minute)
+	defer stop()
+	q.submit(mailVerification, func() error {
+		close(started)
+		<-jobCtx.Done()
+		close(cancelled)
+		return jobCtx.Err()
+	})
+	<-started
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	q.drain(ctx)
+	select {
+	case <-cancelled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the job context was not cancelled at the drain deadline")
+	}
+	q.wait()
 }

@@ -4,6 +4,7 @@ op-plan	operate	/operate/plan/	Plan a deployment	landing	true	public	planned	fal
 op-models	op-plan	/operate/plan/deployment-models/	Supported deployment models	concept	true	public	planned	false	
 op-arch	op-plan	/operate/plan/architecture/	Architecture and service dependencies	concept	true	public	planned	false	
 op-sizing	op-plan	/operate/plan/capacity-and-sizing/	Capacity and sizing	reference	true	public	planned	false	
+op-auth-capacity	op-plan	/operate/plan/auth-service-capacity/	Auth-service capacity	reference	true	public	planned	false	
 op-prereq	op-plan	/operate/plan/prerequisites/	Installation prerequisites	task-guide	true	public	planned	false	
 op-install	operate	/operate/install/	Install Dev Health	landing	true	public	planned	false	
 op-local	op-install	/operate/install/local-evaluation/	Evaluate locally	tutorial	true	public	planned	false	

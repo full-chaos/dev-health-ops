@@ -293,8 +293,15 @@ func (executor *NativeExecutor) Execute(ctx context.Context, claim workgraph.Cla
 	if executor.byo != nil && orgID != "" && categorize.IsAutoProviderRequest(requestedProvider) && !categorize.OperatorDisablesLLM() {
 		optedIn, optErr := executor.byo.OptedIn(ctx, orgID)
 		if optErr != nil {
-			executor.logger.ErrorContext(ctx, "categorize byo opt-in unreadable", slog.String("org_id", orgID), slog.String("error", optErr.Error()))
-			return nil, errors.New("categorize byo opt-in unreadable")
+			// Fail closed and do not retry: a run whose opt-in is unknown is
+			// never served by the platform model (D6107), and a missing grant
+			// does not heal by retrying.
+			reason := optInUnreadableReason(optErr)
+			recordOptInUnreadable(ctx, reason)
+			executor.logger.ErrorContext(ctx, "categorize byo opt-in unreadable", slog.String("org_id", orgID),
+				slog.String("reason", reason), slog.String("error", optErr.Error()))
+			return nil, workgraph.Deterministic(workgraph.ClassLLMProviderInvalid,
+				&BYORefusal{Code: llmorgsettings.CodeCategorizeBYOOptInUnreadable})
 		}
 		if optedIn {
 			var refusal *BYORefusal

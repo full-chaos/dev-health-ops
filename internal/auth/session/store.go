@@ -71,16 +71,15 @@ var (
 type Config struct {
 	Pool   *pgxpool.Pool
 	Schema authschema.ValidatedIdentifier
-	// SuccessorKey is a 32-byte server secret, base64url without padding. It
-	// derives rotated credentials; see deriveSuccessor.
+	// SuccessorKey is a 32-byte base64url server secret deriving rotated credentials.
 	SuccessorKey contracts.SecretString
 	// RefreshTTL is a credential's idle lifetime; 0 means 7 days (go-api's).
 	RefreshTTL time.Duration
-	// SessionLifetime is an optional absolute session lifetime. 0 means no
-	// absolute cap (go-api parity: a session lives while it keeps refreshing).
-	// With a cap, a credential never outlives its session.
+	// SessionLifetime is an optional absolute session lifetime; 0 means no cap
+	// (go-api parity). With a cap, a credential never outlives its session.
 	SessionLifetime time.Duration
 	Logger          *slog.Logger
+	UsersOwned      bool // AUTH_USERS_OWNED: a sign-in stamps public.users.last_login_at
 	// Meter registers the exchange and revocation counters; nil uses the
 	// process meter.
 	Meter metric.Meter
@@ -94,6 +93,7 @@ type Store struct {
 	key             *[successorKeyBytes]byte
 	refreshTTL      time.Duration
 	sessionLifetime time.Duration
+	usersOwned      bool
 	logger          *slog.Logger
 	exchanges       metric.Int64Counter
 	revocations     metric.Int64Counter
@@ -119,7 +119,7 @@ func New(cfg Config) (*Store, error) {
 	}
 	s := &Store{
 		pool: cfg.Pool, schema: cfg.Schema, q: authschema.Quote(cfg.Schema), key: key,
-		refreshTTL: cfg.RefreshTTL, sessionLifetime: cfg.SessionLifetime, logger: cfg.Logger,
+		refreshTTL: cfg.RefreshTTL, sessionLifetime: cfg.SessionLifetime, usersOwned: cfg.UsersOwned, logger: cfg.Logger,
 	}
 	if s.refreshTTL <= 0 {
 		s.refreshTTL = defaultRefreshTTL
@@ -365,6 +365,10 @@ func (s *Store) lockSession(ctx context.Context, db queryRower, sessionID string
 // is set only when the store failed or the grace successor could not be
 // recomputed; Result.Reason then says which.
 func (s *Store) Exchange(ctx context.Context, credential contracts.SecretString) (result Result, err error) {
+	return s.exchange(ctx, credential, nil)
+}
+
+func (s *Store) exchange(ctx context.Context, credential contracts.SecretString, guard Guard) (result Result, err error) {
 	defer func() { s.recordExchange(ctx, result, err) }()
 	if !wellFormed(credential) {
 		return Result{Reason: ReasonMalformed}, nil
@@ -412,6 +416,9 @@ func (s *Store) Exchange(ctx context.Context, credential contracts.SecretString)
 		case !p.consumed && p.expired:
 			result.Reason = ReasonRefreshExpired
 		case !p.consumed:
+			if err := runGuard(ctx, tx, locked.Record, guard); err != nil {
+				return err
+			}
 			issued, err := s.rotate(ctx, tx, locked.Record, p, credential)
 			if err != nil {
 				return err
@@ -438,7 +445,7 @@ func (s *Store) Exchange(ctx context.Context, credential contracts.SecretString)
 		return nil
 	})
 	if err != nil {
-		if errors.Is(err, ErrGraceUnavailable) {
+		if errors.Is(err, ErrGraceUnavailable) || errors.Is(err, ErrGuardRefused) {
 			return Result{Reason: ReasonDependency}, err
 		}
 		return Result{Reason: ReasonStoreUnavailable}, fmt.Errorf("%w: refresh exchange: %w", ErrStore, err)
@@ -617,39 +624,9 @@ func (s *Store) RevokeAll(ctx context.Context, principalID uuid.UUID, actor Acto
 	var revoked int
 	err := audit.Commit(ctx, s.pool, s.schema, audit.Mutation{
 		Apply: func(ctx context.Context, tx audit.TxOps) error {
-			// Locks in id order, so two revoke-alls of one principal cannot
-			// deadlock; a single-session writer holds one lock and cannot either.
-			// Every unrevoked session is locked, then only the effectively
-			// live ones are revoked (the same liveness every writer uses).
-			rows, err := tx.Query(ctx, `
-				SELECT s.id::text, `+s.effectiveExpiry()+` > clock_timestamp()
-				FROM `+s.q+`.sessions s
-				WHERE s.principal_id = $1 AND s.revoked_at IS NULL
-				ORDER BY s.id FOR UPDATE OF s`, principal)
-			if err != nil {
-				return err
-			}
-			var ids []string
-			for rows.Next() {
-				var id string
-				var live bool
-				if err := rows.Scan(&id, &live); err != nil {
-					rows.Close()
-					return err
-				}
-				if live {
-					ids = append(ids, id)
-				}
-			}
-			rows.Close()
-			if err := rows.Err(); err != nil {
-				return err
-			}
-			revoked = len(ids)
-			if revoked == 0 {
-				return nil
-			}
-			return s.revokeSessions(ctx, tx, ids, revokedByCaller)
+			n, err := s.revokeAllLive(ctx, tx, principal)
+			revoked = n
+			return err
 		},
 		Audit: audit.AuditEvent{
 			EventType: "auth.session.revoked_all", Outcome: audit.OutcomeAllowed,
@@ -744,6 +721,9 @@ func actorID(a Actor) *string {
 }
 
 func (s *Store) recordExchange(ctx context.Context, result Result, err error) {
+	if errors.Is(err, ErrGuardRefused) {
+		return
+	}
 	s.exchanges.Add(ctx, 1, metric.WithAttributes(attribute.String("reason_code", string(result.Reason))))
 	switch {
 	case err != nil:

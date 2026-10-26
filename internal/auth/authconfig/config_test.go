@@ -316,6 +316,7 @@ func TestLoadRejectsAnUndeclaredOverride(t *testing.T) {
 func TestEveryDeclaredOptionResolves(t *testing.T) {
 	distinct := map[string]string{
 		EnvUsersOwned:             "true",
+		EnvOrgsOwned:              "true",
 		EnvLogLevel:               "debug",
 		EnvShutdownTimeout:        "42s",
 		EnvHealthCheckTimeout:     "1500ms",
@@ -325,6 +326,9 @@ func TestEveryDeclaredOptionResolves(t *testing.T) {
 		EnvMaxBodyBytes:           "4096",
 		EnvRateLimitPerSecond:     "3.5",
 		EnvRateLimitBurst:         "9",
+		EnvPublicMaxInFlight:      "17",
+		EnvPublicRateLimit:        "7.5",
+		EnvPublicRateLimitBurst:   "19",
 		EnvDatabaseSchema:         "authtest",
 		EnvDatabaseMaxConns:       "11",
 		EnvDatabaseConnectTimeout: "3s",
@@ -342,6 +346,7 @@ func TestEveryDeclaredOptionResolves(t *testing.T) {
 	}
 	read := map[string]func(Config) string{
 		EnvUsersOwned:             func(c Config) string { return strconv.FormatBool(c.UsersOwned) },
+		EnvOrgsOwned:              func(c Config) string { return strconv.FormatBool(c.OrgsOwned) },
 		EnvLogLevel:               func(c Config) string { return c.LogLevel.String() },
 		EnvShutdownTimeout:        func(c Config) string { return c.ShutdownTimeout.String() },
 		EnvHealthCheckTimeout:     func(c Config) string { return c.HealthCheckTimeout.String() },
@@ -351,6 +356,9 @@ func TestEveryDeclaredOptionResolves(t *testing.T) {
 		EnvMaxBodyBytes:           func(c Config) string { return itoa(c.MaxBodyBytes) },
 		EnvRateLimitPerSecond:     func(c Config) string { return ftoa(c.RateLimit.PerSecond) },
 		EnvRateLimitBurst:         func(c Config) string { return itoa(int64(c.RateLimit.Burst)) },
+		EnvPublicMaxInFlight:      func(c Config) string { return itoa(int64(c.Public.MaxInFlight)) },
+		EnvPublicRateLimit:        func(c Config) string { return ftoa(c.Public.PerSecond) },
+		EnvPublicRateLimitBurst:   func(c Config) string { return itoa(int64(c.Public.Burst)) },
 		EnvDatabaseSchema:         func(c Config) string { return c.DatabaseSchema },
 		EnvDatabaseMaxConns:       func(c Config) string { return itoa(int64(c.DatabaseMaxConns)) },
 		EnvDatabaseConnectTimeout: func(c Config) string { return c.DatabaseConnectTimeout.String() },
@@ -499,5 +507,83 @@ func TestUsersOwnedRefusesAnythingButTrueOrFalse(t *testing.T) {
 		if _, err := Load(Spec{LookupEnv: lookupFrom(env)}); err == nil {
 			t.Fatalf("%s=%s loaded; want a refusal", EnvUsersOwned, value)
 		}
+	}
+}
+
+func TestOrgsOwnedDefaultsOff(t *testing.T) {
+	cfg, err := Load(Spec{LookupEnv: lookupFrom(baseEnv())})
+	if err != nil || cfg.OrgsOwned {
+		t.Fatalf("default OrgsOwned = %v, err %v; want false", cfg.OrgsOwned, err)
+	}
+}
+
+func TestOrgsOwnedParsesLikeUsersOwned(t *testing.T) {
+	for _, value := range []string{"", "false", "true", "TRUE", " true ", "False", "yes", "1", "on", "enabled"} {
+		users, orgs := baseEnv(), baseEnv()
+		users[EnvUsersOwned], orgs[EnvOrgsOwned] = value, value
+		uc, uerr := Load(Spec{LookupEnv: lookupFrom(users)})
+		oc, oerr := Load(Spec{LookupEnv: lookupFrom(orgs)})
+		if (uerr == nil) != (oerr == nil) {
+			t.Fatalf("value %q: AUTH_USERS_OWNED err=%v, AUTH_ORGS_OWNED err=%v; the parse rules differ", value, uerr, oerr)
+		}
+		if uerr == nil && uc.UsersOwned != oc.OrgsOwned {
+			t.Fatalf("value %q: UsersOwned=%v OrgsOwned=%v", value, uc.UsersOwned, oc.OrgsOwned)
+		}
+	}
+}
+
+func TestOrgsOwnedDoesNotMountAnyRoute(t *testing.T) {
+	env := baseEnv()
+	env[EnvOrgsOwned] = "true"
+	cfg, err := Load(Spec{LookupEnv: lookupFrom(env)})
+	if err != nil || !cfg.OrgsOwned {
+		t.Fatalf("OrgsOwned = %v, err %v", cfg.OrgsOwned, err)
+	}
+	if cfg.LimitedRoutesMounted() {
+		t.Fatal("AUTH_ORGS_OWNED mounted a rate-limited route")
+	}
+}
+
+func TestPublicAdmissionDefaultsAndRanges(t *testing.T) {
+	cfg, err := Load(Spec{LookupEnv: lookupFrom(baseEnv())})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := PublicAdmission{MaxInFlight: defaultPublicMaxInFlight, PerSecond: defaultPublicRateLimit, Burst: defaultPublicRateLimitBurst}
+	if cfg.Public != want {
+		t.Errorf("Public = %+v, want %+v", cfg.Public, want)
+	}
+	for env, bad := range map[string][]string{
+		EnvPublicMaxInFlight:    {"0", "100001", "x"},
+		EnvPublicRateLimit:      {"0", "100001", "NaN"},
+		EnvPublicRateLimitBurst: {"0", "100001", "x"},
+	} {
+		for _, value := range bad {
+			e := baseEnv()
+			e[env] = value
+			if _, err := Load(Spec{LookupEnv: lookupFrom(e)}); err == nil {
+				t.Errorf("%s=%s accepted, want a range refusal", env, value)
+			}
+		}
+	}
+}
+
+// A value beyond the range of an int on any platform is refused with the
+// range message, not wrapped into an in-range one (4294967297 wraps to 1).
+func TestPublicAdmissionRefusesAValueBeyondIntRange(t *testing.T) {
+	for _, env := range []string{EnvPublicMaxInFlight, EnvPublicRateLimitBurst} {
+		for _, value := range []string{"4294967297", "2147483648", "9223372036854775808", "-2147483649"} {
+			e := baseEnv()
+			e[env] = value
+			_, err := Load(Spec{LookupEnv: lookupFrom(e)})
+			if err == nil || !strings.Contains(err.Error(), "must be between") {
+				t.Errorf("%s=%s: error = %v, want a range refusal", env, value, err)
+			}
+		}
+	}
+	e := baseEnv()
+	e[EnvPublicMaxInFlight] = "1.5"
+	if _, err := Load(Spec{LookupEnv: lookupFrom(e)}); err == nil || !strings.Contains(err.Error(), "must be an integer") {
+		t.Errorf("1.5: error = %v, want an integer refusal", err)
 	}
 }

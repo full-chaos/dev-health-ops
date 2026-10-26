@@ -107,3 +107,13 @@ func TestARetiredAnswerIsUsedOnceAndNamedInTheProof(t *testing.T) {
 		t.Fatal("an empty reason was accepted")
 	}
 }
+
+func TestAGoPinWithAnUnrecordedDigestNeverOpens(t *testing.T) {
+	path, _ := writePinFile(t, pinFileText)
+	if _, err := openGoPin(GoPinSpec{Path: path, SHA256: "RECORD-ME", Ruling: "r"}, false); err == nil {
+		t.Fatal("a placeholder digest opened a pin file")
+	}
+	if _, err := openGoPin(GoPinSpec{Path: filepath.Join(t.TempDir(), "missing.json"), SHA256: "RECORD-ME", Ruling: "r"}, false); err == nil {
+		t.Fatal("a missing pin file opened")
+	}
+}

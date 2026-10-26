@@ -53,7 +53,7 @@ func PublicReadColumns() []ColumnGrant {
 // SessionReaderColumns is what a session reader role may SELECT in the auth
 // schema: column-level, on the sessions table only.
 func SessionReaderColumns() ColumnGrant {
-	return ColumnGrant{Table: "sessions", Columns: []string{"id", "principal_id", "revoked_at"}}
+	return ColumnGrant{Table: "sessions", Columns: []string{"id", "principal_id", "revoked_at", "legacy_token_version"}}
 }
 
 // TableWriteGrant is a column-level SELECT and UPDATE grant on one ops-schema
@@ -86,12 +86,71 @@ func LegacyRefreshTokenGrant() TableWriteGrant {
 // columns, no DELETE, no TRUNCATE, no other table. token_version is inserted
 // as 0 and updated only by a password change, which adds 1 in the same
 // transaction (go-api's own reset does), so go-api tokens minted before it end.
+// last_login_at is updated only by a sign-in, with updated_at, as go-api's does.
 func UsersWriteGrant() (insert, update []string) {
 	return []string{
 			"id", "email", "username", "password_hash", "full_name", "auth_provider", "auth_provider_id",
 			"is_active", "is_verified", "is_superuser", "token_version", "created_at", "updated_at",
 		},
-		[]string{"password_hash", "is_verified", "token_version", "updated_at"}
+		[]string{"password_hash", "is_verified", "token_version", "last_login_at", "updated_at"}
+}
+
+// InsertGrant is a column-level INSERT grant on one ops-schema table.
+type InsertGrant struct {
+	Table   string
+	Columns []string
+}
+
+// RegisterOrganizationGrants is the switch-gated INSERT access the auth
+// runtime role needs so a sign-up writes go-api's organization and owner
+// membership in the transaction of the user it creates (AUTH_USERS_OWNED).
+// INSERT on exactly these columns of these two tables: no UPDATE, no DELETE,
+// no TRUNCATE, and no SELECT beyond PublicReadColumns. go-api keeps every
+// update of an organization or a membership.
+func RegisterOrganizationGrants() []InsertGrant {
+	return []InsertGrant{
+		{Table: "organizations", Columns: []string{"id", "slug", "name", "settings", "tier", "managed_by", "is_active", "created_at", "updated_at"}},
+		{Table: "memberships", Columns: []string{"id", "user_id", "org_id", "role", "joined_at", "created_at", "updated_at"}},
+	}
+}
+
+// registerOrganizationStatements grants RegisterOrganizationGrants when the
+// switch is on. Off, the REVOKE ALL that publicReadStatements issues on both
+// tables already removed any write privilege.
+func registerOrganizationStatements(ctx context.Context, conn querier, options Options, logger *slog.Logger) ([]string, error) {
+	if !options.UsersOwned {
+		return nil, nil
+	}
+	roleID, err := NewValidatedIdentifier(options.RuntimeRole)
+	if err != nil {
+		return nil, err
+	}
+	role := quoteIdentifier(roleID)
+	var statements []string
+	for _, grant := range RegisterOrganizationGrants() {
+		exists, err := publicTableState(ctx, conn, grant.Table)
+		if err != nil {
+			return nil, err
+		}
+		if !exists {
+			if options.RequirePublicTables {
+				return nil, fmt.Errorf("%w: %s.%s", ErrPublicTableMissing, publicSchema, grant.Table)
+			}
+			continue
+		}
+		tableID, err := NewValidatedIdentifier(grant.Table)
+		if err != nil {
+			return nil, err
+		}
+		columns, err := quotedColumns(grant.Columns)
+		if err != nil {
+			return nil, err
+		}
+		table := quoteIdentifier(mustValidatedIdentifier(publicSchema)) + "." + quoteIdentifier(tableID)
+		logger.InfoContext(ctx, "applying the register organization insert grant", "schema", publicSchema, "table", grant.Table)
+		statements = append(statements, fmt.Sprintf(`GRANT INSERT (%s) ON TABLE %s TO %s`, strings.Join(columns, ", "), table, role))
+	}
+	return statements, nil
 }
 
 // usersWriteStatements grants UsersWriteGrant when the switch is on. Off, the
@@ -131,6 +190,87 @@ func usersWriteStatements(ctx context.Context, conn querier, options Options, lo
 		fmt.Sprintf(`GRANT INSERT (%s) ON TABLE %s TO %s`, strings.Join(insertColumns, ", "), table, role),
 		fmt.Sprintf(`GRANT UPDATE (%s) ON TABLE %s TO %s`, strings.Join(updateColumns, ", "), table, role),
 	}, nil
+}
+
+// DeleteGrant is the switch-gated purge access to one ops-schema table:
+// table-level DELETE and column-level SELECT of the named columns.
+type DeleteGrant struct {
+	Table  string
+	Select []string
+}
+
+// LegacyLinkPurgeGrants is the switch-gated access the auth runtime role needs
+// to purge go-api's link-token rows once users are owned (AUTH_USERS_OWNED):
+// DELETE on the two legacy link-token tables and SELECT of their id column
+// (the purge counts the rows it deletes). No INSERT, UPDATE, TRUNCATE or other
+// column, and no other table. Off, it is revoked (acp ruling 2026-10-26, CHAOS-11506).
+func LegacyLinkPurgeGrants() []DeleteGrant {
+	return []DeleteGrant{
+		{Table: "email_verification_tokens", Select: []string{"id"}},
+		{Table: "password_reset_tokens", Select: []string{"id"}},
+	}
+}
+
+// legacyLinkPurgeStatements grants LegacyLinkPurgeGrants when the switch is on
+// and revokes anything the role holds on those tables when it is off.
+func legacyLinkPurgeStatements(ctx context.Context, conn querier, options Options, logger *slog.Logger) ([]string, error) {
+	roleID, err := NewValidatedIdentifier(options.RuntimeRole)
+	if err != nil {
+		return nil, err
+	}
+	role := quoteIdentifier(roleID)
+	var statements []string
+	for _, grant := range LegacyLinkPurgeGrants() {
+		exists, err := publicTableState(ctx, conn, grant.Table)
+		if err != nil {
+			return nil, err
+		}
+		if !exists {
+			if options.RequirePublicTables && options.UsersOwned {
+				return nil, fmt.Errorf("%w: %s.%s", ErrPublicTableMissing, publicSchema, grant.Table)
+			}
+			continue
+		}
+		tableID, err := NewValidatedIdentifier(grant.Table)
+		if err != nil {
+			return nil, err
+		}
+		table := quoteIdentifier(mustValidatedIdentifier(publicSchema)) + "." + quoteIdentifier(tableID)
+		if !options.UsersOwned {
+			var held bool
+			if err := conn.QueryRow(ctx,
+				`SELECT has_table_privilege($1, format('%I.%I', $2::text, $3::text), 'DELETE')
+				     OR has_column_privilege($1, format('%I.%I', $2::text, $3::text), 'id', 'SELECT')`,
+				options.RuntimeRole, publicSchema, grant.Table,
+			).Scan(&held); err != nil {
+				return nil, fmt.Errorf("%w: reading the legacy link purge grant of %s.%s", ErrMigrationFailed, publicSchema, grant.Table)
+			}
+			if held {
+				statements = append(statements, fmt.Sprintf(`REVOKE ALL ON TABLE %s FROM %s`, table, role))
+			}
+			continue
+		}
+		columns, err := quotedColumns(grant.Select)
+		if err != nil {
+			return nil, err
+		}
+		logger.InfoContext(ctx, "applying the legacy link purge grant", "schema", publicSchema, "table", grant.Table)
+		statements = append(statements,
+			fmt.Sprintf(`REVOKE ALL ON TABLE %s FROM %s`, table, role),
+			fmt.Sprintf(`GRANT DELETE ON TABLE %s TO %s`, table, role),
+			fmt.Sprintf(`GRANT SELECT (%s) ON TABLE %s TO %s`, strings.Join(columns, ", "), table, role),
+		)
+	}
+	return statements, nil
+}
+
+func isLegacyLinkPurgeTable(table string) bool {
+	for _, grant := range LegacyLinkPurgeGrants() {
+		if grant.Table == table {
+			return true
+		}
+	}
+	return false
 }
 
 // quotedColumns validates and quotes each name.
@@ -308,8 +448,68 @@ func publicReadViolations(ctx context.Context, conn *pgx.Conn, options Options) 
 		usersDeclared["UPDATE"][column] = struct{}{}
 	}
 
+	registerDeclared := map[string]map[string]struct{}{}
+	for _, grant := range RegisterOrganizationGrants() {
+		columns := make(map[string]struct{}, len(grant.Columns))
+		for _, column := range grant.Columns {
+			columns[column] = struct{}{}
+		}
+		registerDeclared[grant.Table] = columns
+	}
+
 	var violations []Violation
 	if options.UsersOwned {
+		for _, grant := range RegisterOrganizationGrants() {
+			exists, err := publicTableState(ctx, conn, grant.Table)
+			if err != nil {
+				return nil, err
+			}
+			if !exists {
+				continue
+			}
+			for _, column := range grant.Columns {
+				var held bool
+				if err := conn.QueryRow(ctx,
+					`SELECT has_column_privilege($1, format('%I.%I', $2::text, $3::text), $4, 'INSERT')`,
+					options.RuntimeRole, publicSchema, grant.Table, column,
+				).Scan(&held); err != nil {
+					return nil, fmt.Errorf("%w: column %s.%s.%s is missing or unreadable to the posture check",
+						ErrMigrationFailed, publicSchema, grant.Table, column)
+				}
+				if !held {
+					violations = append(violations, Violation{
+						Kind: "column", Schema: publicSchema, Object: grant.Table + "." + column, Privilege: "INSERT",
+						Detail: "declared in RegisterOrganizationGrants (the switch is on) but the runtime role does not hold it (missing grant)",
+					})
+				}
+			}
+		}
+		for _, grant := range LegacyLinkPurgeGrants() {
+			exists, err := publicTableState(ctx, conn, grant.Table)
+			if err != nil {
+				return nil, err
+			}
+			if !exists {
+				continue
+			}
+			var deleteHeld, selectHeld bool
+			if err := conn.QueryRow(ctx,
+				`SELECT has_table_privilege($1, format('%I.%I', $2::text, $3::text), 'DELETE'),
+				        has_column_privilege($1, format('%I.%I', $2::text, $3::text), 'id', 'SELECT')`,
+				options.RuntimeRole, publicSchema, grant.Table,
+			).Scan(&deleteHeld, &selectHeld); err != nil {
+				return nil, fmt.Errorf("%w: table %s.%s is missing or unreadable to the posture check",
+					ErrMigrationFailed, publicSchema, grant.Table)
+			}
+			for privilege, held := range map[string]bool{"DELETE": deleteHeld, "SELECT": selectHeld} {
+				if !held {
+					violations = append(violations, Violation{
+						Kind: "column", Schema: publicSchema, Object: grant.Table, Privilege: privilege,
+						Detail: "declared in LegacyLinkPurgeGrants (the switch is on) but the runtime role does not hold it (missing grant)",
+					})
+				}
+			}
+		}
 		usersExist, err := publicTableState(ctx, conn, "users")
 		if err != nil {
 			return nil, err
@@ -423,6 +623,14 @@ func publicReadViolations(ctx context.Context, conn *pgx.Conn, options Options) 
 		}
 		if options.UsersOwned && schema == publicSchema && table == "users" && (kind == "r" || kind == "p") {
 			if _, ok := usersDeclared[privilege][column]; ok {
+				continue
+			}
+		}
+		if options.UsersOwned && schema == publicSchema && privilege == "SELECT" && isLegacyLinkPurgeTable(table) && column == "id" {
+			continue
+		}
+		if options.UsersOwned && schema == publicSchema && privilege == "INSERT" && (kind == "r" || kind == "p") {
+			if _, ok := registerDeclared[table][column]; ok {
 				continue
 			}
 		}

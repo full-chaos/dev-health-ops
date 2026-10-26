@@ -293,6 +293,9 @@ func relationViolations(
 			return nil, fmt.Errorf("%w: reading a relation privilege", ErrMigrationFailed)
 		}
 		if schema != options.Schema {
+			if options.UsersOwned && schema == publicSchema && privilege == "DELETE" && isLegacyLinkPurgeTable(object) {
+				continue
+			}
 			violations = append(violations, Violation{
 				Kind: "relation", Schema: schema, Object: object, Privilege: privilege,
 				Detail: "outside the auth-owned schema",

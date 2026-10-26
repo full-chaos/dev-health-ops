@@ -15,9 +15,10 @@ networks:
 services:
   go-api:
     networks:
-      - default
-      - planes
-      - auth_plane
+      default:
+      planes:
+      auth_plane:
+        ipv4_address: 10.199.91.20
     environment:
       - TRUSTED_PROXIES=10.199.90.1,10.199.91.1
       - AUTH_PROXY_URL
@@ -32,3 +33,43 @@ services:
   # proxied routes it serves (OPTIONS: 405 served, 404 not) before it turns an aggregate's flag on.
   auth-service:
     ports: !override ["127.0.0.1::8096", "127.0.0.1::8095"]
+    # auth-service reaches the provider hostnames at the stub on its own network and trusts the stub's CA; the corpus's
+    # throwaway social client settings and the session keys below let it serve sessions, local login and social.
+    depends_on:
+      providerstub:
+        condition: service_started
+      valkey:
+        condition: service_healthy
+    extra_hosts:
+      - "api.github.com:10.199.91.10"
+      - "github.com:10.199.91.10"
+    environment:
+      - SSL_CERT_FILE=/run/corpus-stub/ca.pem
+      # The session keys come from the project state file only when the leg makes them (ci/auth_corpus_external.sh);
+      # unset they stay unset, and auth-service mounts no session route.
+      - AUTH_JWT_SECRET_KEY
+      - AUTH_SESSION_SUCCESSOR_KEY
+      - AUTH_LOGIN_LOCKOUT_KEY
+      # The login's rate limits live in the same Valkey database as go-api's (/1; authconfig requires it), under the
+      # auth_svc_ key prefix. The venue's Valkey has no ACL users, so the URI carries none.
+      - AUTH_VALKEY_URI=redis://valkey:6379/1
+      # go-api forwards the client address; auth-service trusts X-Forwarded-For from go-api's pinned address only.
+      - AUTH_SERVICE_TRUSTED_PROXIES=10.199.91.20/32
+      - SOCIAL_GITHUB_CLIENT_ID=gh-client
+      - SOCIAL_GITHUB_CLIENT_SECRET=gh-secret
+    volumes:
+      - ${AUTH_CORPUS_STUB_DIR}:/run/corpus-stub:ro
+  # auth-service counts the login's rate limits in the venue's Valkey, which it reaches over auth_plane.
+  valkey:
+    networks: !override [default, auth_plane]
+  # The api and query-api roles read auth.sessions (sid check); the same value on both commands that apply grants.
+  auth-migrate:
+    environment:
+      - AUTH_SESSION_READER_ROLES=devhealth_api,devhealth_query_api
+  auth-grants:
+    environment:
+      - AUTH_SESSION_READER_ROLES=devhealth_api,devhealth_query_api
+  providerstub:
+    networks:
+      auth_plane:
+        ipv4_address: 10.199.91.10

@@ -3,6 +3,9 @@ package sync
 import (
 	"context"
 	"log/slog"
+	"slices"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -11,6 +14,82 @@ import (
 // planIncidentDatasetsSkippedEvent is the WARN written when a plan leaves out
 // datasets because the canonical-incident feature is off for the organization.
 const planIncidentDatasetsSkippedEvent = "sync.plan.incident_datasets_skipped_feature_disabled"
+
+// planIncidentSkipWarnNow is the clock the once-per-day WARN reads; tests replace it.
+var planIncidentSkipWarnNow = time.Now
+
+// planIncidentSkipWarnPruneAt is the entry count above which entries for past days are dropped.
+const planIncidentSkipWarnPruneAt = 4096
+
+type planIncidentSkipWarnKey struct {
+	orgID         string
+	integrationID string
+}
+
+type planIncidentSkipWarnState struct {
+	day     string
+	keysSig string
+}
+
+// planIncidentSkipWarnMemory remembers, in this process only, the last day and skipped
+// dataset set a WARN was written for, per (organization, integration). A restart, or a second
+// scheduler replica, writes at most one more WARN per configuration per day.
+type planIncidentSkipWarnMemory struct {
+	mu      sync.Mutex
+	entries map[planIncidentSkipWarnKey]planIncidentSkipWarnState
+}
+
+var globalPlanIncidentSkipWarn = &planIncidentSkipWarnMemory{entries: make(map[planIncidentSkipWarnKey]planIncidentSkipWarnState)}
+
+// shouldLog is true the first time, on a new UTC day, or when the skipped set changes
+// (order ignored), and records that decision.
+func (memory *planIncidentSkipWarnMemory) shouldLog(orgID, integrationID string, now time.Time, skippedKeys []string) bool {
+	sorted := slices.Clone(skippedKeys)
+	slices.Sort(sorted)
+	state := planIncidentSkipWarnState{day: now.UTC().Format(time.DateOnly), keysSig: strings.Join(sorted, ",")}
+	key := planIncidentSkipWarnKey{orgID: orgID, integrationID: integrationID}
+	memory.mu.Lock()
+	defer memory.mu.Unlock()
+	if memory.entries == nil {
+		memory.entries = make(map[planIncidentSkipWarnKey]planIncidentSkipWarnState)
+	}
+	if previous, ok := memory.entries[key]; ok && previous == state {
+		return false
+	}
+	if len(memory.entries) >= planIncidentSkipWarnPruneAt {
+		for other, entry := range memory.entries {
+			if entry.day != state.day {
+				delete(memory.entries, other)
+			}
+		}
+	}
+	memory.entries[key] = state
+	return true
+}
+
+func (memory *planIncidentSkipWarnMemory) resetForTest() {
+	memory.mu.Lock()
+	defer memory.mu.Unlock()
+	memory.entries = make(map[planIncidentSkipWarnKey]planIncidentSkipWarnState)
+}
+
+// emitIncidentSkipWarn writes the skip WARN once per configuration per UTC day, or again
+// when the skipped set changes. sync_plan_gate_total is counted by the caller on every attempt.
+func emitIncidentSkipWarn(provider, orgID, integrationID, decisionReason string, skippedKeys []string, plannedDatasets int) {
+	if !globalPlanIncidentSkipWarn.shouldLog(orgID, integrationID, planIncidentSkipWarnNow(), skippedKeys) {
+		return
+	}
+	slog.Default().Warn(planIncidentDatasetsSkippedEvent,
+		slog.String("provider", provider),
+		slog.String("org_id", orgID),
+		slog.String("integration_id", integrationID),
+		slog.String("reason", planGateOutcomeFeatureDisabled),
+		slog.String("feature_decision_reason", decisionReason),
+		slog.Int("skipped_datasets", len(skippedKeys)),
+		slog.Any("skipped_dataset_keys", skippedKeys),
+		slog.Int("planned_datasets", plannedDatasets),
+	)
+}
 
 // PlanDatasetRequiresCanonicalIncident reports whether one dataset of a
 // provider writes canonical incident data, by the same legacy-target rule the
@@ -50,8 +129,9 @@ func splitCanonicalIncidentDatasets(provider string, datasets []PlanDataset) (ke
 // and through the row-locking phase-B read, as before.
 //
 // A skip is never silent. Each left-out dataset counts on
-// sync_plan_gate_total (outcome feature_disabled) and one WARN names the
-// dataset keys and the feature decision's reason. When EVERY enabled dataset
+// sync_plan_gate_total (outcome feature_disabled) on every attempt, and a WARN
+// names the dataset keys and the feature decision's reason once per
+// configuration per UTC day, or again when the skipped set changes. When EVERY enabled dataset
 // needs the feature the occurrence has nothing to do and the answer stays
 // ErrOccurrenceIneligible, with the same count and WARN: an accepted run that
 // plans zero units and reports success would read as coverage.
@@ -79,16 +159,7 @@ func dropCanonicalIncidentDatasetsWhenFeatureOff(
 		skippedKeys = append(skippedKeys, dataset.Key)
 		globalPlanGateTelemetry.observe(provider, dataset.Key, planGateOutcomeFeatureDisabled)
 	}
-	slog.Default().Warn(planIncidentDatasetsSkippedEvent,
-		slog.String("provider", provider),
-		slog.String("org_id", orgID),
-		slog.String("integration_id", integrationID),
-		slog.String("reason", planGateOutcomeFeatureDisabled),
-		slog.String("feature_decision_reason", string(reason)),
-		slog.Int("skipped_datasets", len(skippedKeys)),
-		slog.Any("skipped_dataset_keys", skippedKeys),
-		slog.Int("planned_datasets", len(kept)),
-	)
+	emitIncidentSkipWarn(provider, orgID, integrationID, string(reason), skippedKeys, len(kept))
 	if len(kept) == 0 {
 		return nil, skippedKeys, ErrOccurrenceIneligible
 	}

@@ -47,6 +47,9 @@ DEV_HEALTH_GO_BUILD_OUTPUT=""
 DEV_HEALTH_GO_BUILD_TEMP_ROOT=""
 DEV_HEALTH_GO_INTEGRATION_SHARD_MANIFEST="${DEV_HEALTH_GO_INTEGRATION_SHARD_MANIFEST:-${ROOT}/ci/go_integration_shards.d}"
 DEV_HEALTH_GO_PROVIDER_TEST_SHARD_MANIFEST="${DEV_HEALTH_GO_PROVIDER_TEST_SHARD_MANIFEST:-${ROOT}/ci/go_providersync_test_shards.tsv}"
+DEV_HEALTH_GO_PROVIDER_TEST_WEIGHTS="${DEV_HEALTH_GO_PROVIDER_TEST_WEIGHTS:-${ROOT}/ci/go_providersync_test_weights.tsv}"
+# 75% of the 22 min go test -timeout of a providersync shard, in 10 ms units (1320 s * 0.75 = 990 s).
+DEV_HEALTH_GO_PROVIDER_SHARD_BUDGET="${DEV_HEALTH_GO_PROVIDER_SHARD_BUDGET:-99000}"
 DEV_HEALTH_GO_DAILY_TEST_SHARD_MANIFEST="${DEV_HEALTH_GO_DAILY_TEST_SHARD_MANIFEST:-${ROOT}/ci/go_daily_test_shards.tsv}"
 DEV_HEALTH_GO_WORKERSERVICE_TEST_SHARD_MANIFEST="${DEV_HEALTH_GO_WORKERSERVICE_TEST_SHARD_MANIFEST:-${ROOT}/ci/go_workerservice_test_shards.tsv}"
 DEV_HEALTH_GO_QAPISERVER_TEST_SHARD_MANIFEST="${DEV_HEALTH_GO_QAPISERVER_TEST_SHARD_MANIFEST:-${ROOT}/ci/go_queryapi_server_test_shards.tsv}"
@@ -102,10 +105,78 @@ if [ "${CI:-}" = "true" ] && [ -z "${TESTCONTAINERS_RYUK_DISABLED+x}" ]; then
   INTEGRATION_TEST_ENV=(TESTCONTAINERS_RYUK_DISABLED=true)
 fi
 
+# run_integration_go_test (CHAOS-10036): one testcontainers session id per
+# `go test -tags=integration` call, so ONE label names every container the call
+# starts, with the reaper on or off. After the call (pass, fail, INT, TERM) the
+# containers of that session are removed by id (ci/reap-testcontainers-session.sh:
+# label filter only, never a prune). A caller-set TESTCONTAINERS_SESSION_ID wins.
+# The go test runs in its own session (setsid), so its pid is its process-group id and the trap
+# stops the whole group (TERM, then KILL after 10 s) before the reap, but only when the pgid is that pid and not
+# this shell's own group; otherwise it stops the recorded pid only. A SIGKILL of this script skips the trap; the
+# reaper (when on) or a host sweep by session id covers that case.
+TC_TRAP_PID="" TC_TRAP_SID="" TC_TRAP_PGID=""
+tc_trap() {
+  local i
+  # Group kill only for a private group: pgid == the recorded go test pid and != this shell's own group.
+  if [ -n "${TC_TRAP_PGID}" ] && [ "${TC_TRAP_PGID}" = "${TC_TRAP_PID}" ] \
+    && [ "${TC_TRAP_PGID}" != "$(ps -o pgid= -p "$$" | tr -d ' ')" ]; then
+    kill -TERM -- "-${TC_TRAP_PGID}" 2>/dev/null || true
+    for i in $(seq 1 100); do
+      pgrep -g "${TC_TRAP_PGID}" >/dev/null 2>&1 || break
+      sleep 0.1
+    done
+    if pgrep -g "${TC_TRAP_PGID}" >/dev/null 2>&1; then
+      kill -KILL -- "-${TC_TRAP_PGID}" 2>/dev/null || true
+    fi
+  else
+    echo "check_go.sh: no private process group for the go test; stopping pid ${TC_TRAP_PID} only" >&2
+    kill -TERM "${TC_TRAP_PID}" 2>/dev/null || true
+  fi
+  wait "${TC_TRAP_PID}" 2>/dev/null || true
+  bash "${SCRIPT_DIR}/reap-testcontainers-session.sh" "${TC_TRAP_SID}" || true
+  exit 143
+}
+
+run_integration_go_test() {
+  local module_dir="$1" sid pid rc=0 i own_pgid
+  local -a private_group=()
+  shift
+  sid="${TESTCONTAINERS_SESSION_ID:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')}"
+  [[ "${sid}" =~ ^[A-Za-z0-9._-]{8,64}$ ]] \
+    || die "TESTCONTAINERS_SESSION_ID must match ^[A-Za-z0-9._-]{8,64}\$"
+  if command -v setsid >/dev/null 2>&1; then
+    private_group=(setsid)
+  fi
+  (
+    cd "${ROOT}/${module_dir}"
+    exec ${private_group[@]+"${private_group[@]}"} "${GO_ENV_OFF[@]}" GOWORK=off TESTCONTAINERS_SESSION_ID="${sid}" ${INTEGRATION_TEST_ENV[@]+"${INTEGRATION_TEST_ENV[@]}"} \
+      go test -mod=readonly -trimpath -tags=integration -count=1 -timeout=30m "$@"
+  ) &
+  pid=$!
+  TC_TRAP_PID="${pid}"
+  TC_TRAP_SID="${sid}"
+  TC_TRAP_PGID=""
+  trap tc_trap INT TERM
+  if [ "${#private_group[@]}" -gt 0 ]; then
+    own_pgid="$(ps -o pgid= -p "$$" | tr -d ' ')"
+    for i in $(seq 1 50); do
+      kill -0 "${pid}" 2>/dev/null || { TC_TRAP_PGID=""; break; }
+      TC_TRAP_PGID="$(ps -o pgid= -p "${pid}" 2>/dev/null | tr -d ' ' || true)"
+      [ "${TC_TRAP_PGID}" = "${pid}" ] && [ "${TC_TRAP_PGID}" != "${own_pgid}" ] && break
+      TC_TRAP_PGID=""
+      sleep 0.1
+    done
+  fi
+  wait "${pid}" || rc=$?
+  trap - INT TERM
+  bash "${SCRIPT_DIR}/reap-testcontainers-session.sh" "${sid}" || rc=$?
+  return "${rc}"
+}
+
 usage() {
   # Backticks in the literal help text document commands; they are not substitutions.
   # shellcheck disable=SC2016
-  printf '%s\n' 'Usage: ci/check_go.sh [auth [STAGE]|fmt|vet|test|race|venue-oracles [SHARD COUNT]|venue-oracle-plan COUNT|ci-leg LEG [SHARD COUNT]|test-shard-plan SHARD COUNT|race-shard-plan SHARD COUNT|race-excluded-shard-plan SHARD COUNT|test-shard-wall-guard SHARD COUNT WALL LOGFILE|test-shard-unweighted-guard SHARD COUNT LOGFILE|build|contract|ratchets|race-weights-rows|multi-replica-workers|integration-vet|integration-coverage|race-excluded-ran|integration-shard-plan|integration-prepull|integration-shard|integration|fast|ci|all]
+  printf '%s\n' 'Usage: ci/check_go.sh [auth [STAGE]|fmt|vet|test|race|venue-oracles [SHARD COUNT]|venue-oracle-plan COUNT|ci-leg LEG [SHARD COUNT]|ci-leg-warm test|race SHARD COUNT|test-shard-plan SHARD COUNT|race-shard-plan SHARD COUNT|race-excluded-shard-plan SHARD COUNT|race-excluded-receipts JSON...|test-shard-wall-guard SHARD COUNT WALL LOGFILE|test-shard-unweighted-guard SHARD COUNT LOGFILE|build|contract|ratchets|race-weights-rows|multi-replica-workers|integration-vet|integration-coverage|race-excluded-ran|integration-shard-plan|integration-prepull|integration-shard|integration|fast|ci|all]
 
   auth   (CHAOS-4887) The Auth Control Plane gates over the auth packages ALONE: gofmt, vet, test,
          -race, the production-middleware stack test (G-69, must log its marker), one fuzz run per
@@ -173,6 +244,10 @@ usage() {
          slices, ci/go_race_weights.d). The
          legs run exactly the steps of `ci` (pinned by a tooling test); each
          stage prints UTC start/done stamps.
+  ci-leg-warm test|race SHARD COUNT
+         Compile the packages of that leg slice with the leg own flags and
+         run no test (go test -run ^$), to fill the leg Go build cache on a
+         main push whose test and race legs the merge queue already ran.
   test-shard-plan SHARD COUNT
          Print the packages (module, import path, weights key) of the SHARD-th of
          COUNT weight-balanced slices of the unit tests (ci/go_test_weights.tsv,
@@ -184,7 +259,12 @@ usage() {
          internal/providersync (a test-name slice in every race leg).
   race-excluded-shard-plan SHARD COUNT
          Print the rows of ci/race_excluded_tests.tsv that the SHARD-th of COUNT
-         test legs runs without -race (every row runs in exactly one leg).
+         test legs checks without -race: the rows whose package is in the plan of that
+         shard (every row is checked in exactly one leg).
+  race-excluded-receipts JSON...
+         Read the receipt of every row of ci/race_excluded_tests.tsv from go test
+         -json files: exactly one pass event per row, and a missing, skipped,
+         failed, repeated or cached (package) result fails.
   test-shard-wall-guard SHARD COUNT WALL LOGFILE
          Log the wall seconds of a test shard and fail above 85% of the 30 min
          job cap (GO_TEST_SHARD_CAP_SECONDS), naming the shard and its three
@@ -392,47 +472,130 @@ check_vet() {
   run_in_modules "go vet" go vet -mod=readonly -trimpath ./...
 }
 
-# check_race_excluded_ran (CHAOS-8135, CHAOS-8118): a test compiled out of the -race leg by a `!race` build tag must
-# still run in the non-race leg, or its measurement is lost silently. ci/race_excluded_tests.tsv is the closed list; each
-# test runs by name, uncached and without -race, and the run fails unless its own "--- PASS: <name>" line is printed
-# (the leg log then names every moved test). An empty list, a missing file, a missing PASS line or a non-zero go test
-# exit all fail (a measurement that did not happen is a failure). check_test calls it, so every leg that runs the
-# unit tests runs it.
-# With SHARD COUNT (CHAOS-10355) it runs only the rows at 0-based positions P with P % COUNT == SHARD - 1, so the test shards split
-# the census (~570 s, 16 rows) and every row runs in exactly one shard (`race-excluded-shard-plan SHARD COUNT` lists a shard's rows).
+# Race-excluded proof (CHAOS-8135, CHAOS-8118, CHAOS-11406): a test compiled out of the -race leg by a `!race` build tag must
+# still run in the non-race leg, or its measurement is lost silently. ci/race_excluded_tests.tsv is the closed list. The leg runs
+# the packages that hold rows ONCE, fresh and without -race (`go test -json -count=1`), and the receipts are read from that one
+# run: each row needs exactly one `pass` event of its own (Package + Test), and a missing event, a `skip`, a `fail`, a second
+# terminal event, or a `(cached)` summary of its package all fail (a measurement that did not happen is a failure). An empty list
+# or a missing file fails too. check_test and check_test_shard call it, so every leg that runs the unit tests runs it.
+# With SHARD COUNT (CHAOS-10355, CHAOS-11406) race_excluded_rows lists only the rows whose package is in the SHARD-th of COUNT test
+# shard plans; the plans partition `go list ./...`, so every row is checked in exactly one shard (`race-excluded-shard-plan SHARD
+# COUNT` lists a shard's rows).
 # race_excluded_rows [SHARD COUNT]: the rows of ci/race_excluded_tests.tsv (the shard's rows with SHARD COUNT), one per line.
+# A line must be exactly <package><TAB><test> (CHAOS-11436): an empty line and a # comment are skipped; a whitespace-only line, one
+# column, more than two columns or an empty column dies naming the line; a CRLF ending is trimmed.
 race_excluded_rows() {
-  local list="${GO_RACE_EXCLUDED_TESTS:-${ROOT}/ci/race_excluded_tests.tsv}" row shard="${1:-}" shard_count="${2:-}" position=0
+  local list="${GO_RACE_EXCLUDED_TESTS:-${ROOT}/ci/race_excluded_tests.tsv}" row shard="${1:-}" shard_count="${2:-}" plan="" plan_keys="" normalised
   local -a rows=()
   [ -f "${list}" ] || die "ci/race_excluded_tests.tsv is missing"
-  while IFS= read -r row; do rows+=("${row}"); done < <(grep -v '^#' "${list}" | grep -v '^$')
+  normalised="$(awk -F'\t' '
+    function trim(s) { gsub(/^[ \t\r]+|[ \t\r]+$/, "", s); return s }
+    /^#/ || /^$/ { next }
+    NF != 2 || trim($1) == "" || trim($2) == "" { printf "ERROR: census line %d of %s is not <package><TAB><test> (whitespace-only, 1 column, more than 2 columns, or an empty column): %s\n", NR, FILENAME, $0 > "/dev/stderr"; exit 1 }
+    { key = trim($1) "\t" trim($2)
+      if (key in seen) { printf "ERROR: duplicate census row (package<TAB>test) %s: lines %d and %d of %s\n", trim($1) " " trim($2), seen[key], NR, FILENAME > "/dev/stderr"; exit 1 }
+      seen[key] = NR; print key }' "${list}")" || die "the race-excluded census holds a malformed or duplicated row"
+  while IFS= read -r row; do [ -z "${row}" ] || rows+=("${row}"); done <<<"${normalised}"
   [ "${#rows[@]}" -gt 0 ] || die "ci/race_excluded_tests.tsv lists no test: nothing would be measured"
-  if [ -n "${shard}" ]; then check_test_shard_args "${shard}" "${shard_count}"; fi
+  if [ -n "${shard}" ]; then
+    check_test_shard_args "${shard}" "${shard_count}"
+    census_assert_listed "$(printf '%s\n' "${rows[@]}")"
+    plan="$(check_test_shard_plan "${shard}" "${shard_count}")" || exit 2
+    plan_keys="$(printf '%s\n' "${plan}" | awk -F'\t' '$1 == "." { print $3 }')"
+  fi
   for row in "${rows[@]}"; do
-    if [ -z "${shard}" ] || [ "$((position % shard_count))" -eq "$((shard - 1))" ]; then printf '%s\n' "${row}"; fi
-    position=$((position + 1))
+    if [ -z "${shard}" ] || grep -qxF -- "${row%%$'\t'*}" <<<"${plan_keys}"; then printf '%s\n' "${row}"; fi
   done
 }
 
-check_race_excluded_ran() {
-  local row package name out count=0 listing
-  local -a rows=()
+# census_assert_listed ROWS: every row of ROWS names a package that `go list ./...` lists, whether or not this leg selects it. A
+# stale row, or a directory `go list` omits (testdata, no buildable file), is in no shard plan, so no shard would ever check it.
+census_assert_listed() {
+  local census_rows="$1" modpath all row package
+  modpath="$(cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -m)" || die "go list -m failed"
+  all="$(cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -mod=readonly -f '{{.ImportPath}}' ./...)" || die "go list failed"
+  while IFS= read -r row; do
+    [ -n "${row}" ] || continue
+    package="${row%%$'\t'*}"
+    grep -qxF -- "${modpath}/${package}" <<<"${all}" \
+      || die "race-excluded package ${package} is not listed by go list ./...: no test shard would check its census row"
+  done <<<"${census_rows}"
+}
+
+# census_package_partition KIND MODPATH KEYS: the import paths on stdin that are (KIND=rows) or are not (KIND=plain) packages
+# of the census; KEYS is the newline list of census packages relative to the root module.
+census_package_partition() {
+  awk -v kind="$1" -v mod="$2" -v keys="$3" '
+    BEGIN { n = split(keys, k, "\n"); for (i = 1; i <= n; i++) if (k[i] != "") isrow[k[i]] = 1 }
+    NF { key = ($0 == mod) ? "." : substr($0, length(mod) + 2); if ((key in isrow) == (kind == "rows")) print }'
+}
+
+# go_test_json_run JSON_FILE LOG_FILE PKG...: ONE fresh `go test -json` run of the packages (run it from the module directory).
+# The events are appended to JSON_FILE; jq turns them back into the plain go test log on stdout and in LOG_FILE (the ok lines
+# the wall and unweighted guards read). pipefail keeps go test's exit code.
+go_test_json_run() {
+  local json="$1" log="$2"
+  shift 2
+  command -v jq >/dev/null 2>&1 || die "the race-excluded receipts need jq to read go test -json events"
+  "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -json -count=1 -timeout 10m "$@" \
+    | tee -a "${json}" \
+    | jq -rj 'select(.Action == "output") | .Output' \
+    | tee -a "${log}"
+}
+
+# check_race_excluded_receipts ROWS JSON_FILE...: the receipt for every row of ROWS (package<TAB>test lines) from the go test -json
+# events of the fresh run. One `pass` event of the test itself (not a subtest, not another package) per row; see above.
+check_race_excluded_receipts() {
+  local listing="$1" row package name count=0 modpath actions
+  shift
+  [ "$#" -gt 0 ] || die "race-excluded receipts need at least one go test -json file"
+  command -v jq >/dev/null 2>&1 || die "the race-excluded receipts need jq to read go test -json events"
   load_quality_selection
-  listing="$(race_excluded_rows "$@")" || exit 2
-  while IFS= read -r row; do [ -z "${row}" ] || rows+=("${row}"); done <<<"${listing}"
-  for row in "${rows[@]}"; do
+  modpath="$(cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -m)" || die "go list -m failed"
+  while IFS= read -r row; do
+    [ -n "${row}" ] || continue
     name="${row#*$'\t'}"
     package="${row%%$'\t'*}"
     [ -n "${name}" ] && [ -n "${package}" ] && [ "${name}" != "${package}" ] || die "race_excluded_tests.tsv row is not <package><TAB><test>"
     quality_selected . "${package}" || continue
     [ -d "${ROOT}/${package}" ] || die "race-excluded package ${package} does not exist"
-    out="$(cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -count=1 -timeout 5m -v -run "^${name}\$" "./${package}" 2>&1)" \
-      || { printf '%s\n' "${out}" | tail -n 40 >&2; die "race-excluded test ${package} ${name} failed in the non-race leg"; }
-    printf '%s\n' "${out}" | grep -q -- "^--- PASS: ${name} (" || die "race-excluded test ${package} ${name} did not run in the non-race leg (no PASS line)"
+    if jq -e --arg p "${modpath}/${package}" 'select(.Action == "output" and .Package == $p and ((.Output // "") | test("\\(cached\\)")))' "$@" >/dev/null 2>&1; then
+      die "race-excluded package ${package} was served from the test cache: its tests did not run in the non-race leg (cached)"
+    fi
+    actions="$(jq -r --arg p "${modpath}/${package}" --arg n "${name}" \
+      'select(.Package == $p and .Test == $n and (.Action == "pass" or .Action == "fail" or .Action == "skip")) | .Action' "$@")" \
+      || die "cannot read the go test -json events for race-excluded test ${package} ${name}"
+    case "${actions}" in
+      pass) ;;
+      "") die "race-excluded test ${package} ${name} did not run in the non-race leg (no terminal event)" ;;
+      *skip*) die "race-excluded test ${package} ${name} was skipped in the non-race leg" ;;
+      *fail*) die "race-excluded test ${package} ${name} failed in the non-race leg" ;;
+      *) die "race-excluded test ${package} ${name} has more than one terminal event in the non-race leg" ;;
+    esac
     printf 'race-excluded-ran: %s %s PASS\n' "${package}" "${name}"
     count=$((count + 1))
-  done
+  done <<<"${listing}"
   printf 'race-excluded-ran: %d test(s) ran and passed without -race\n' "${count}"
+}
+
+# check_race_excluded_ran (verb race-excluded-ran, no SHARD): every census package once (one process per package, its rows in
+# one -run), then the receipts.
+check_race_excluded_ran() {
+  local listing json package names
+  load_quality_selection
+  listing="$(race_excluded_rows)" || exit 2
+  census_assert_listed "${listing}"
+  json="$(mktemp "${TMPDIR:-/tmp}/dev-health-race-excluded.XXXXXX")"
+  while IFS= read -r package; do
+    [ -n "${package}" ] || continue
+    quality_selected . "${package}" || continue
+    [ -d "${ROOT}/${package}" ] || { rm -f -- "${json}"; die "race-excluded package ${package} does not exist"; }
+    names="$(printf '%s\n' "${listing}" | awk -F'\t' -v p="${package}" '$1 == p { printf "%s%s", (n++ ? "|" : ""), $2 }')"
+    (cd "${ROOT}" && go_test_json_run "${json}" /dev/null -run "^(${names})\$" "./${package}") \
+      || { rm -f -- "${json}"; die "race-excluded tests of ${package} failed in the non-race leg"; }
+  done < <(printf '%s\n' "${listing}" | cut -f1 | LC_ALL=C sort -u)
+  check_race_excluded_receipts "${listing}" "${json}" || { rm -f -- "${json}"; return 1; }
+  rm -f -- "${json}"
 }
 
 # SERIAL_HEAVY_TEST_PACKAGE (CHAOS-9867): internal/gqlgenguard runs ~8 whole-repository gqlgen generations one after
@@ -490,30 +653,49 @@ quality_filter() {
 }
 
 check_test() {
-  local module_dir all rest ran_heavy=0
+  local module_dir all modpath rest rest_rows census_keys ran_heavy=0 json heavy_key
+  census_keys="$(race_excluded_rows | cut -f1 | LC_ALL=C sort -u)" || exit 2
+  census_assert_listed "$(race_excluded_rows)"
+  json="$(mktemp "${TMPDIR:-/tmp}/dev-health-test-json.XXXXXX")"
   for module_dir in "${MODULE_DIRS[@]}"; do
     printf 'go test: %s\n' "${module_dir}"
     all="$(cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -mod=readonly -f '{{.ImportPath}}' ./...)" \
       || die "go list failed in ${module_dir}"
+    modpath="$(cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -m)" || die "go list -m failed in ${module_dir}"
+    heavy_key="${SERIAL_HEAVY_TEST_PACKAGE#"${modpath}/"}"
     rest="$(printf '%s\n' "${all}" | grep -vx -- "${SERIAL_HEAVY_TEST_PACKAGE}" || true)"
+    rest_rows=""
+    if [ "${module_dir}" = "." ]; then
+      rest_rows="$(printf '%s\n' "${rest}" | census_package_partition rows "${modpath}" "${census_keys}")"
+      rest="$(printf '%s\n' "${rest}" | census_package_partition plain "${modpath}" "${census_keys}")"
+    fi
     (
       cd "${ROOT}/${module_dir}"
       if [ -n "${rest}" ]; then
         # shellcheck disable=SC2086
         "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath ${rest}
       fi
-    ) || return 1
+      if [ -n "${rest_rows}" ]; then
+        # shellcheck disable=SC2086
+        go_test_json_run "${json}" /dev/null ${rest_rows}
+      fi
+    ) || { rm -f -- "${json}"; return 1; }
     if printf '%s\n' "${all}" | grep -qx -- "${SERIAL_HEAVY_TEST_PACKAGE}"; then
       ran_heavy=1
       printf 'go test (alone): %s\n' "${SERIAL_HEAVY_TEST_PACKAGE}"
       (
         cd "${ROOT}/${module_dir}"
-        "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath "${SERIAL_HEAVY_TEST_PACKAGE}"
-      ) || return 1
+        if [ "${module_dir}" = "." ] && grep -qxF -- "${heavy_key}" <<<"${census_keys}"; then
+          go_test_json_run "${json}" /dev/null "${SERIAL_HEAVY_TEST_PACKAGE}"
+        else
+          "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath "${SERIAL_HEAVY_TEST_PACKAGE}"
+        fi
+      ) || { rm -f -- "${json}"; return 1; }
     fi
   done
-  [ "${ran_heavy}" -eq 1 ] || die "check_test never ran ${SERIAL_HEAVY_TEST_PACKAGE}: it was split out of ./... and must run alone"
-  check_race_excluded_ran
+  [ "${ran_heavy}" -eq 1 ] || { rm -f -- "${json}"; die "check_test never ran ${SERIAL_HEAVY_TEST_PACKAGE}: it was split out of ./... and must run alone"; }
+  check_race_excluded_receipts "$(race_excluded_rows)" "${json}" || { rm -f -- "${json}"; return 1; }
+  rm -f -- "${json}"
 }
 
 # CHAOS-10355: the test leg runs as COUNT weight-balanced shards (`ci-leg test SHARD COUNT`). The single leg held ~3,030 s of
@@ -595,37 +777,64 @@ check_test_shard_unweighted_guard() {
 }
 
 # check_test_shard SHARD COUNT: the SHARD-th of COUNT slices of the unit tests (what check_test runs as one). The slices
-# partition `go list ./...`; internal/gqlgenguard runs alone after the rest of its shard. Each shard also runs its slice of the
-# race-excluded census (check_race_excluded_ran SHARD COUNT): one run of the whole census took ~570 s and made shard 1 18.5 min.
+# partition `go list ./...`; internal/gqlgenguard runs alone after the rest of its shard. The packages that hold race-excluded rows run once,
+# fresh, with go test -json, and the shard reads the receipts of its rows from that run (check_race_excluded_receipts): no second execution.
 check_test_shard() {
-  local shard="${1:-}" count="${2:-}" plan log started wall module_dir rest
+  local shard="${1:-}" count="${2:-}" plan log json started wall module_dir rest rest_rows census_keys heavy_is_row listing
   check_test_shard_args "${shard}" "${count}"
   plan="$(check_test_shard_plan "${shard}" "${count}")"
+  listing="$(race_excluded_rows "${shard}" "${count}")" || exit 2
+  census_keys="$(race_excluded_rows | cut -f1 | LC_ALL=C sort -u)" || exit 2
   log="$(mktemp "${TMPDIR:-/tmp}/dev-health-test-shard.XXXXXX")"
+  json="$(mktemp "${TMPDIR:-/tmp}/dev-health-test-shard-json.XXXXXX")"
   started="$(date +%s)"
   for module_dir in "${MODULE_DIRS[@]}"; do
-    rest="$(printf '%s\n' "${plan}" | awk -F'\t' -v m="${module_dir}" -v heavy="${SERIAL_HEAVY_TEST_PACKAGE}" '$1 == m && $2 != heavy { print $2 }')"
-    printf 'go test (shard %s/%s): %s: %d package(s)\n' "${shard}" "${count}" "${module_dir}" "$(printf '%s\n' "${rest}" | grep -c . || true)"
+    rest="$(printf '%s\n' "${plan}" | awk -F'\t' -v m="${module_dir}" -v heavy="${SERIAL_HEAVY_TEST_PACKAGE}" -v keys="${census_keys}" '
+      BEGIN { n = split(keys, k, "\n"); for (i = 1; i <= n; i++) if (k[i] != "") isrow[k[i]] = 1 }
+      $1 == m && $2 != heavy && !(m == "." && ($3 in isrow)) { print $2 }')"
+    rest_rows="$(printf '%s\n' "${plan}" | awk -F'\t' -v m="${module_dir}" -v heavy="${SERIAL_HEAVY_TEST_PACKAGE}" -v keys="${census_keys}" '
+      BEGIN { n = split(keys, k, "\n"); for (i = 1; i <= n; i++) if (k[i] != "") isrow[k[i]] = 1 }
+      $1 == m && $2 != heavy && m == "." && ($3 in isrow) { print $2 }')"
+    printf 'go test (shard %s/%s): %s: %d package(s), %d with race-excluded rows\n' "${shard}" "${count}" "${module_dir}" \
+      "$(printf '%s\n%s\n' "${rest}" "${rest_rows}" | grep -c . || true)" "$(printf '%s\n' "${rest_rows}" | grep -c . || true)"
     if [ -n "${rest}" ]; then
       (
         cd "${ROOT}/${module_dir}"
         # shellcheck disable=SC2086
         "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -timeout 10m ${rest} 2>&1 | tee -a "${log}"
-      ) || { (check_test_shard_unweighted_guard "${shard}" "${count}" "${log}" partial) || true; rm -f -- "${log}"; return 1; }
+      ) || { (check_test_shard_unweighted_guard "${shard}" "${count}" "${log}" partial) || true; rm -f -- "${log}" "${json}"; return 1; }
+    fi
+    if [ -n "${rest_rows}" ]; then
+      (
+        cd "${ROOT}/${module_dir}"
+        # shellcheck disable=SC2086
+        go_test_json_run "${json}" "${log}" ${rest_rows}
+      ) || { (check_test_shard_unweighted_guard "${shard}" "${count}" "${log}" partial) || true; rm -f -- "${log}" "${json}"; return 1; }
     fi
     if printf '%s\n' "${plan}" | awk -F'\t' -v m="${module_dir}" -v heavy="${SERIAL_HEAVY_TEST_PACKAGE}" '$1 == m && $2 == heavy { found = 1 } END { exit !found }'; then
       printf 'go test (shard %s/%s, alone): %s\n' "${shard}" "${count}" "${SERIAL_HEAVY_TEST_PACKAGE}"
-      (
-        cd "${ROOT}/${module_dir}"
-        "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -timeout 10m "${SERIAL_HEAVY_TEST_PACKAGE}" 2>&1 | tee -a "${log}"
-      ) || { (check_test_shard_unweighted_guard "${shard}" "${count}" "${log}" partial) || true; rm -f -- "${log}"; return 1; }
+      heavy_is_row=0
+      if [ "${module_dir}" = "." ] && printf '%s\n' "${plan}" | awk -F'\t' -v heavy="${SERIAL_HEAVY_TEST_PACKAGE}" -v keys="${census_keys}" '
+          BEGIN { n = split(keys, k, "\n"); for (i = 1; i <= n; i++) isrow[k[i]] = 1 }
+          $1 == "." && $2 == heavy && ($3 in isrow) { found = 1 } END { exit !found }'; then heavy_is_row=1; fi
+      if [ "${heavy_is_row}" -eq 1 ]; then
+        (
+          cd "${ROOT}/${module_dir}"
+          go_test_json_run "${json}" "${log}" "${SERIAL_HEAVY_TEST_PACKAGE}"
+        ) || { (check_test_shard_unweighted_guard "${shard}" "${count}" "${log}" partial) || true; rm -f -- "${log}" "${json}"; return 1; }
+      else
+        (
+          cd "${ROOT}/${module_dir}"
+          "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -timeout 10m "${SERIAL_HEAVY_TEST_PACKAGE}" 2>&1 | tee -a "${log}"
+        ) || { (check_test_shard_unweighted_guard "${shard}" "${count}" "${log}" partial) || true; rm -f -- "${log}" "${json}"; return 1; }
+      fi
     fi
   done
-  check_race_excluded_ran "${shard}" "${count}"
+  check_race_excluded_receipts "${listing}" "${json}" || { rm -f -- "${log}" "${json}"; return 1; }
   wall=$(($(date +%s) - started))
-  (check_test_shard_unweighted_guard "${shard}" "${count}" "${log}") || { rm -f -- "${log}"; return 1; }
-  (check_test_shard_wall_guard "${shard}" "${count}" "${wall}" "${log}") || { rm -f -- "${log}"; return 1; }
-  rm -f -- "${log}"
+  (check_test_shard_unweighted_guard "${shard}" "${count}" "${log}") || { rm -f -- "${log}" "${json}"; return 1; }
+  (check_test_shard_wall_guard "${shard}" "${count}" "${wall}" "${log}") || { rm -f -- "${log}" "${json}"; return 1; }
+  rm -f -- "${log}" "${json}"
 }
 
 check_race() {
@@ -966,6 +1175,37 @@ check_ci_leg() {
       ;;
   esac
   printf 'ci-leg %s: OK\n' "${leg}"
+}
+
+# check_ci_leg_warm test|race SHARD COUNT (CHAOS-11408): compile, run nothing. A main push that the merge queue already
+# tested skips its test and race legs, and this fills the leg's Go build cache on a key miss so the pull requests that restore
+# it still hit. The flags are the ones of the real leg (-mod=readonly -trimpath, -race for a race leg) plus -run '^$', so the
+# compiled objects are the ones the real leg would cache.
+check_ci_leg_warm() {
+  local leg="${1:-}" shard="${2:-}" count="${3:-}" module_dir plan pkg
+  local -a pkgs
+  case "${leg}" in
+    test) plan="$(check_test_shard_plan "${shard}" "${count}")" || die "test shard plan failed" ;;
+    race) plan="$(check_race_shard_plan "${shard}" "${count}")" || die "race shard plan failed" ;;
+    *) die "ci-leg-warm LEG must be test or race (got '${leg}')" ;;
+  esac
+  for module_dir in "${MODULE_DIRS[@]}"; do
+    pkgs=()
+    while IFS= read -r pkg; do
+      [ -n "${pkg}" ] && pkgs+=("${pkg}")
+    done < <(printf '%s\n' "${plan}" | awk -F'\t' -v m="${module_dir}" '$1 == m { print $2 }')
+    [ "${#pkgs[@]}" -gt 0 ] || continue
+    printf 'go test -run ^$ (%s %s/%s): %s: %d package(s)\n' "${leg}" "${shard}" "${count}" "${module_dir}" "${#pkgs[@]}"
+    (
+      cd "${ROOT}/${module_dir}"
+      if [ "${leg}" = race ]; then
+        "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -race -run '^$' "${pkgs[@]}"
+      else
+        "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -run '^$' "${pkgs[@]}"
+      fi
+    )
+  done
+  printf 'ci-leg-warm %s: OK\n' "${leg}"
 }
 
 # check_venue_oracles (CHAOS-6314) runs every venue oracle test in the repo,
@@ -1574,6 +1814,7 @@ declare -a REMAINING_TEST_SHARD_COUNTS=()
 declare -A PROVIDER_INTEGRATION_TEST_NAMES=()
 declare -A PROVIDER_TEST_WEIGHTS=()
 declare -A PROVIDER_TEST_CLASS=()
+declare -A PROVIDER_MEASURED_WEIGHTS=()
 declare -A PROVIDER_TEST_SHARD_BY_NAME=()
 declare -a PROVIDER_TEST_NAMES=()
 declare -a PROVIDER_TEST_SHARD_TOTALS=()
@@ -2072,6 +2313,7 @@ discover_providersync_tests() {
   [ "${#PROVIDER_INTEGRATION_TEST_NAMES[@]}" -gt 0 ] \
     || die "providersync source discovery returned zero integration-tagged top-level tests"
 
+  load_providersync_measured_weights
   PROVIDER_TEST_WEIGHTS=()
   PROVIDER_TEST_CLASS=()
   for test_name in "${PROVIDER_TEST_NAMES[@]}"; do
@@ -2082,7 +2324,54 @@ discover_providersync_tests() {
       PROVIDER_TEST_WEIGHTS["${test_name}"]="${PROVIDER_ORDINARY_TEST_WEIGHT}"
       PROVIDER_TEST_CLASS["${test_name}"]="ordinary"
     fi
+    if [ -n "${PROVIDER_MEASURED_WEIGHTS[${test_name}]+set}" ]; then
+      PROVIDER_TEST_WEIGHTS["${test_name}"]="${PROVIDER_MEASURED_WEIGHTS[${test_name}]}"
+    fi
   done
+  for test_name in "${!PROVIDER_MEASURED_WEIGHTS[@]}"; do
+    [ -n "${PROVIDER_TEST_CLASS[${test_name}]+set}" ] \
+      || die "providersync test weights name '${test_name}', which is not a discovered top-level test: remove or rename the row in ${DEV_HEALTH_GO_PROVIDER_TEST_WEIGHTS}"
+  done
+}
+
+# ci/go_providersync_test_weights.tsv: `TestName<TAB>seconds` measured per-test wall time of the slow tests (CHAOS-11105).
+# A listed test weighs its measured time in 10 ms units; an unlisted test keeps its class weight from the manifest.
+load_providersync_measured_weights() {
+  local weights="${DEV_HEALTH_GO_PROVIDER_TEST_WEIGHTS}"
+  local line_number=0 line name seconds centis tab=$'\t'
+  PROVIDER_MEASURED_WEIGHTS=()
+  [ -f "${weights}" ] || die "provider test weights file not found: ${weights}"
+  while IFS= read -r line || [ -n "${line}" ]; do
+    line_number=$((line_number + 1))
+    case "${line}" in
+      ""|\#*) continue ;;
+    esac
+    # Split by hand: `read` with a tab IFS collapses consecutive tabs, so an empty field would pass as a missing one.
+    case "${line}" in
+      *"${tab}"*) ;;
+      *) die "provider test weights ${weights}:${line_number} must contain exactly two tab-separated fields" ;;
+    esac
+    name="${line%%"${tab}"*}"
+    seconds="${line#*"${tab}"}"
+    case "${seconds}" in
+      *"${tab}"*) die "provider test weights ${weights}:${line_number} must contain exactly two tab-separated fields" ;;
+    esac
+    case "${name}" in
+      Test*[![:alnum:]_]*) die "provider test weights ${weights}:${line_number} has unsupported test name '${name}'" ;;
+      Test*) ;;
+      *) die "provider test weights ${weights}:${line_number} name '${name}' is not a top-level Test function" ;;
+    esac
+    [[ "${seconds}" =~ ^[0-9]+(\.[0-9]{1,2})?$ ]] \
+      || die "provider test weights ${weights}:${line_number} seconds '${seconds}' must be a positive number with at most two decimals"
+    centis="$(awk -v s="${seconds}" 'BEGIN { printf "%d", s * 100 + 0.5 }')"
+    [ "${centis}" -gt 0 ] || die "provider test weights ${weights}:${line_number} seconds must be positive"
+    [ -z "${PROVIDER_MEASURED_WEIGHTS[${name}]+set}" ] \
+      || die "provider test weights ${weights}:${line_number} lists '${name}' more than once"
+    PROVIDER_MEASURED_WEIGHTS["${name}"]="${centis}"
+    if [ "${centis}" -gt "${DEV_HEALTH_GO_PROVIDER_SHARD_BUDGET}" ]; then
+      die "providersync test '${name}' measures ${seconds} s, over the shard budget of $((DEV_HEALTH_GO_PROVIDER_SHARD_BUDGET / 100)) s (75% of the go test timeout); one test cannot be split, so speed it up"
+    fi
+  done < "${weights}"
 }
 
 # Deterministic longest-processing-time-first assignment balances the costly
@@ -2130,6 +2419,12 @@ plan_providersync_test_shards() {
       printf '%s\t%s\n' "${PROVIDER_TEST_WEIGHTS[${test_name}]}" "${test_name}"
     done | LC_ALL=C sort -t $'\t' -k1,1nr -k2,2
   )
+
+  for ((shard = 1; shard <= PROVIDER_TEST_SHARD_COUNT; shard++)); do
+    if [ "${PROVIDER_TEST_SHARD_TOTALS[${shard}]}" -gt "${DEV_HEALTH_GO_PROVIDER_SHARD_BUDGET}" ]; then
+      die "providersync test shard ${shard} plans $((PROVIDER_TEST_SHARD_TOTALS[shard] / 100)) s, over the shard budget of $((DEV_HEALTH_GO_PROVIDER_SHARD_BUDGET / 100)) s (75% of the 22 min go test timeout): raise the shard count in ${DEV_HEALTH_GO_PROVIDER_TEST_SHARD_MANIFEST} or refresh ${DEV_HEALTH_GO_PROVIDER_TEST_WEIGHTS}"
+    fi
+  done
 
   printf 'providersync test plan: %d shard(s), %d top-level test(s), %d integration-tagged\n' \
     "${PROVIDER_TEST_SHARD_COUNT}" \
@@ -3337,10 +3632,7 @@ check_integration_package_shard() {
     if [ "${mode}" = "--dry-run" ]; then
       continue
     fi
-    (
-      cd "${ROOT}/${module_dir}"
-      "${GO_ENV_OFF[@]}" GOWORK=off ${INTEGRATION_TEST_ENV[@]+"${INTEGRATION_TEST_ENV[@]}"} go test -mod=readonly -trimpath -tags=integration -count=1 -timeout=30m "${run_pkgs[@]}"
-    )
+    run_integration_go_test "${module_dir}" "${run_pkgs[@]}"
   done
 
   [ "${selected_count}" -gt 0 ] \
@@ -3451,10 +3743,7 @@ check_integration() {
     [ "${#run_pkgs[@]}" -gt 0 ] || continue
 
     printf 'go test integration: %s -> %s\n' "${module_dir}" "${run_pkgs[*]}"
-    (
-      cd "${ROOT}/${module_dir}"
-      "${GO_ENV_OFF[@]}" GOWORK=off ${INTEGRATION_TEST_ENV[@]+"${INTEGRATION_TEST_ENV[@]}"} go test -mod=readonly -trimpath -tags=integration -count=1 -timeout=30m "${run_pkgs[@]}"
-    )
+    run_integration_go_test "${module_dir}" "${run_pkgs[@]}"
   done
 }
 
@@ -3535,6 +3824,7 @@ AUTH_FUZZ_TARGETS=(
   "./internal/auth/contracts FuzzRevisionUnmarshal"
   "./internal/auth/contracts FuzzTimestampUnmarshal"
   "./internal/auth/contracts FuzzParseAccessToken"
+  "./internal/auth/contracts FuzzParseWorkloadToken"
   "./internal/auth/edgetoken FuzzVerifyToken"
   "./internal/auth/signedtoken FuzzValidSignedToken"
   "./internal/auth/httpapi FuzzParseLimit"
@@ -3800,7 +4090,7 @@ auth_relevant() {
 auth_path_relevant() {
   local file="$1" closure="$2" dir
   case "${file}" in
-    cmd/auth-service/*|cmd/auth-migrate/*|internal/auth/*|internal/audit/*|internal/storage/postgres/authschema/*|contracts/auth/*|go.mod|go.sum|ci/check_go.sh|cmd/cigate/*|internal/cigates/*|ci/auth_gate_scope_exempt.txt|ci/auth_closure_allow.tsv|.github/workflows/go-auth-service.yml)
+    cmd/auth-service/*|cmd/auth-migrate/*|internal/auth/*|internal/audit/*|internal/storage/postgres/authschema/*|contracts/auth/*|go.mod|go.sum|ci/check_go.sh|cmd/cigate/*|internal/cigates/*|ci/auth_gate_scope_exempt.txt|ci/auth_closure_allow.tsv|ci/auth_queue_relevance.sh|.github/workflows/go-auth-service.yml)
       return 0
       ;;
   esac
@@ -3825,7 +4115,7 @@ auth_path_relevant() {
 check_auth_paths_selftest() {
   local closure inside outside file
   closure="$(printf 'internal/auth/authruntime\ninternal/platform/secrets\n')"
-  inside=(internal/authnew/a.go internal/some/auth_helper/x.go internal/audit/audit.go internal/auth/contracts/deleted_package/x.go cmd/auth-service/main.go internal/auth/authruntime/runtime.go internal/platform/secrets/secrets.go internal/auth/authruntime/testdata/fixture.txt internal/platform/secrets/testdata/nested/golden.json contracts/auth/v1/README.md go.mod ci/check_go.sh)
+  inside=(internal/authnew/a.go internal/some/auth_helper/x.go internal/audit/audit.go internal/auth/contracts/deleted_package/x.go cmd/auth-service/main.go internal/auth/authruntime/runtime.go internal/platform/secrets/secrets.go internal/auth/authruntime/testdata/fixture.txt internal/platform/secrets/testdata/nested/golden.json contracts/auth/v1/README.md go.mod ci/check_go.sh ci/auth_queue_relevance.sh)
   outside=(internal/providersync/sync.go docs/index.md web/README.md internal/platform/other/x.go internal/platform/secretsx/y.go src/dev_health_ops/cli.py)
   for file in "${inside[@]}"; do
     auth_path_relevant "${file}" "${closure}" || die "auth path filter: ${file} must select the auth gates and does not"
@@ -4003,6 +4293,11 @@ case "${1:-all}" in
     shift
     check_ci_leg "$@"
     ;;
+  ci-leg-warm)
+    [ "$#" -eq 4 ] || die "ci-leg-warm accepts test|race SHARD COUNT"
+    shift
+    check_ci_leg_warm "$@"
+    ;;
   build)
     check_build
     ;;
@@ -4038,6 +4333,12 @@ case "${1:-all}" in
   race-weights-rows)
     [ "$#" -eq 1 ] || die "race-weights-rows accepts no arguments"
     check_race_weights_rows
+    ;;
+  race-excluded-receipts)
+    [ "$#" -ge 2 ] || die "race-excluded-receipts accepts go test -json file(s)"
+    race_excluded_receipts_listing="$(race_excluded_rows)" || exit 2
+    shift
+    check_race_excluded_receipts "${race_excluded_receipts_listing}" "$@"
     ;;
   race-excluded-ran)
     [ "$#" -eq 1 ] || die "race-excluded-ran accepts no arguments"

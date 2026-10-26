@@ -1,16 +1,8 @@
 name: Documentation Cloudflare delivery
 
+# A pull request gets its preview assets from docs-guards.yml (job docs-preview), which reuses the site Docs Guards
+# validated for the same revision. This workflow is the manual build and the production smoke test.
 on:
-  pull_request:
-    paths:
-      - 'docs/**'
-      - 'mkdocs.yml'
-      - 'requirements-docs.txt'
-      - 'Makefile'
-      - 'wrangler.jsonc'
-      - 'scripts/build_docs_cloudflare.py'
-      - 'docs-data/**'
-      - '.github/workflows/docs-cloudflare.yml'
   workflow_dispatch:
     inputs:
       action:
@@ -39,7 +31,7 @@ permissions:
 
 jobs:
   preview-or-build:
-    if: github.event_name == 'pull_request' || inputs.action == 'build'
+    if: inputs.action == 'build'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

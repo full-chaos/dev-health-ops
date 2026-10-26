@@ -39,12 +39,7 @@ type decodedUnit struct {
 // slice) as SyncRunUnitResponse.
 func (h *handlers) getRunUnits(w http.ResponseWriter, r *http.Request) {
 	var errs pybody.Errors
-	var limit *big.Int
-	if raw := pybody.LastQuery(r.URL.Query(), "limit"); raw != nil {
-		if value, ok := errs.QueryInt("limit", raw, 0, nil, nil); ok {
-			limit = value
-		}
-	}
+	query := parseUnitsQuery(r.URL.Query(), &errs)
 	if len(errs) > 0 {
 		writeQueryErrors(w, errs)
 		return
@@ -65,9 +60,29 @@ func (h *handlers) getRunUnits(w http.ResponseWriter, r *http.Request) {
 		policy.WriteDetail(w, http.StatusNotFound, "Sync run not found", nil)
 		return
 	}
-	rows, err := h.store.runUnits(ctx, org, id)
+	var rows, pageRows []runUnit
+	var filteredTotal, stop int64
+	step := "list_units"
+	err = h.store.unitsSnapshot(ctx, func(reads unitsSnapshotReads) error {
+		var err error
+		if rows, err = reads.runUnitRollupRows(ctx, org, id); err != nil {
+			return err
+		}
+		if query.paged {
+			step = "count_units"
+			if filteredTotal, err = reads.countRunUnits(ctx, org, id, query.filter); err != nil {
+				return err
+			}
+			stop = query.limit.Int64()
+		} else {
+			stop = int64(pySliceEnd(query.limit, len(rows)))
+		}
+		step = "list_unit_page"
+		pageRows, err = reads.runUnitsPage(ctx, org, id, query.filter, query.offset, &stop)
+		return err
+	})
 	if err != nil {
-		h.fail(w, r, "list_units", err)
+		h.fail(w, r, step, err)
 		return
 	}
 	units := make([]decodedUnit, len(rows))
@@ -112,8 +127,14 @@ func (h *handlers) getRunUnits(w http.ResponseWriter, r *http.Request) {
 	summary.Set("catching_up_dataset_count", pyjson.IntOf(catchingUp))
 	summary.Set("dataset_freshness_scope", "run")
 
-	listed := make([]pyjson.Value, 0, len(units))
-	for _, unit := range units[:pySliceEnd(limit, len(units))] {
+	listed := make([]pyjson.Value, 0, len(pageRows))
+	for _, row := range pageRows {
+		unit := decodedUnit{runUnit: row}
+		if unit.result, err = decodeStored(row.Result); err != nil {
+			h.fail(w, r, "decode_unit_result", err)
+			return
+		}
+		unit.resultDict, _ = unit.result.(*pyjson.Object)
 		response, err := unitResponse(unit)
 		if err != nil {
 			h.fail(w, r, "render_unit", err)
@@ -122,7 +143,15 @@ func (h *handlers) getRunUnits(w http.ResponseWriter, r *http.Request) {
 		listed = append(listed, response)
 	}
 	summary.Set("units", listed)
-	policy.WriteModel(w, http.StatusOK, summarizeInModelOrder(summary), nil)
+	out := summarizeInModelOrder(summary)
+	if query.paged {
+		out.Set("filtered_unit_count", pyjson.IntOf(filteredTotal))
+		names, requested, covered := runUnitExtras(units)
+		out.Set("source_names", names)
+		out.Set("requested_window", requested)
+		out.Set("covered_window", covered)
+	}
+	policy.WriteModel(w, http.StatusOK, out, nil)
 }
 
 // pySliceEnd is the stop of seq[:limit] for a sequence of length n: nil is
@@ -556,4 +585,49 @@ func summarizeInModelOrder(values *pyjson.Object) *pyjson.Object {
 		out.Set(key, value)
 	}
 	return out
+}
+
+// runUnitExtras are the whole-run views the page cannot rebuild from one page
+// of units: the label of every source (full name, else name; none when the
+// source row is gone) and the extent (min since_at, max before_at) of all
+// units and of the successful ones.
+func runUnitExtras(units []decodedUnit) (names, requested, covered *pyjson.Object) {
+	names = pyjson.NewObject()
+	var allSince, allBefore, okSince, okBefore *time.Time
+	earlier := func(current, candidate *time.Time) *time.Time {
+		if candidate != nil && (current == nil || candidate.Before(*current)) {
+			return candidate
+		}
+		return current
+	}
+	later := func(current, candidate *time.Time) *time.Time {
+		if candidate != nil && (current == nil || candidate.After(*current)) {
+			return candidate
+		}
+		return current
+	}
+	seen := map[string]bool{}
+	for _, unit := range units {
+		if id := unit.SourceID.String(); !seen[id] {
+			seen[id] = true
+			switch {
+			case !unit.HasSource:
+			case unit.SourceFullName != nil:
+				names.Set(id, *unit.SourceFullName)
+			case unit.SourceName != nil:
+				names.Set(id, *unit.SourceName)
+			}
+		}
+		allSince, allBefore = earlier(allSince, unit.SinceAt), later(allBefore, unit.BeforeAt)
+		if unit.Status == "success" {
+			okSince, okBefore = earlier(okSince, unit.SinceAt), later(okBefore, unit.BeforeAt)
+		}
+	}
+	window := func(since, before *time.Time) *pyjson.Object {
+		out := pyjson.NewObject()
+		out.Set("since_at", pyTimeOrNone(since))
+		out.Set("before_at", pyTimeOrNone(before))
+		return out
+	}
+	return names, window(allSince, allBefore), window(okSince, okBefore)
 }

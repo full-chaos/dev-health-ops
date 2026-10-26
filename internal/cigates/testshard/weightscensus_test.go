@@ -3,11 +3,13 @@ package testshard_test
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -384,21 +386,37 @@ func censusExcludedFound(mod string, plain, raced map[string]censusPkg, read fun
 
 func censusExcludedListed(t *testing.T) map[censusExcludedRow]bool {
 	t.Helper()
-	listed := map[censusExcludedRow]bool{}
-	for _, line := range strings.Split(censusRead(t, "ci/race_excluded_tests.tsv"), "\n") {
-		if strings.TrimSpace(line) == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		f := strings.Split(line, "\t")
-		if len(f) != 2 {
-			t.Fatalf("bad race_excluded_tests.tsv row %q", line)
-		}
-		listed[censusExcludedRow{f[0], f[1]}] = true
+	listed, err := parseCensusExcluded(censusRead(t, "ci/race_excluded_tests.tsv"))
+	if err != nil {
+		t.Fatal(err)
 	}
 	if len(listed) == 0 {
 		t.Fatal("ci/race_excluded_tests.tsv lists no test")
 	}
 	return listed
+}
+
+// parseCensusExcluded reads the census rows after the same trim and tab split as the loader of ci/check_go.sh, and refuses a
+// repeated (package, test) row BEFORE it enters the map: a map would collapse it and hide the duplicate.
+func parseCensusExcluded(text string) (map[censusExcludedRow]bool, error) {
+	listed := map[censusExcludedRow]bool{}
+	firstLine := map[censusExcludedRow]int{}
+	for i, line := range strings.Split(text, "\n") {
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		f := strings.Split(line, "\t")
+		if len(f) != 2 || strings.Trim(f[0], " \t\r") == "" || strings.Trim(f[1], " \t\r") == "" {
+			return nil, fmt.Errorf("census line %d is not <package><TAB><test>: %q", i+1, line)
+		}
+		row := censusExcludedRow{strings.Trim(f[0], " \t\r"), strings.Trim(f[1], " \t\r")}
+		if first, dup := firstLine[row]; dup {
+			return nil, fmt.Errorf("duplicate race_excluded_tests.tsv row %s %s: lines %d and %d", row.pkg, row.name, first, i+1)
+		}
+		firstLine[row] = i + 1
+		listed[row] = true
+	}
+	return listed, nil
 }
 
 func censusDiff(a, b map[censusExcludedRow]bool) []censusExcludedRow {
@@ -476,5 +494,96 @@ func TestEveryRaceExcludedTestIsListedPlanted(t *testing.T) {
 	})
 	if err != nil || len(got) != 1 || !got[censusExcludedRow{"pkg", "TestPlantedOnly"}] {
 		t.Errorf("planted race-excluded file not derived: %v %v", got, err)
+	}
+}
+
+func TestTheCensusParserRefusesADuplicateRowBeforeItEntersTheMap(t *testing.T) {
+	t.Parallel()
+	for name, text := range map[string]string{
+		"exact":          "a/b\tTestOne\nc/d\tTestTwo\na/b\tTestOne\n",
+		"trailing space": "a/b\tTestOne\na/b\tTestOne \n",
+	} {
+		_, err := parseCensusExcluded(text)
+		if err == nil || !strings.Contains(err.Error(), "duplicate") || !strings.Contains(err.Error(), "a/b") {
+			t.Errorf("%s: want a duplicate-row error naming a/b, got %v", name, err)
+		}
+	}
+	if got, err := parseCensusExcluded("# c\na/b\tTestOne\nc/d\tTestTwo\n"); err != nil || len(got) != 2 {
+		t.Errorf("a clean census: got %v, %v", got, err)
+	}
+}
+
+func TestTheCensusParserRefusesMalformedLinesNamingTheLine(t *testing.T) {
+	t.Parallel()
+	for name, line := range map[string]string{
+		"whitespace-only":      "   ",
+		"tab-only":             "\t",
+		"carriage-return-only": "\r",
+		"1 column":             "a/b",
+		"3 columns":            "a/b\tTestOne\textra",
+		"empty test column":    "a/b\t ",
+		"empty package column": " \tTestOne",
+	} {
+		_, err := parseCensusExcluded("# c\nc/d\tTestTwo\n" + line + "\n")
+		if err == nil || !strings.Contains(err.Error(), "census line 3 ") {
+			t.Errorf("%s: want an error naming census line 3, got %v", name, err)
+		}
+	}
+	got, err := parseCensusExcluded("# c\n\na/b\tTestOne\r\nc/d\tTestTwo\n")
+	if err != nil || len(got) != 2 || !got[censusExcludedRow{"a/b", "TestOne"}] {
+		t.Errorf("a CRLF row and an empty line: got %v, %v", got, err)
+	}
+}
+
+// censusLineCase is one row of ci/race_excluded_line_cases.tsv, the row set that the loader of ci/check_go.sh and both Go census
+// parsers must answer identically (internal/cigates/checkgo reads the same file).
+type censusLineCase struct{ name, line, want, test string }
+
+func readCensusLineCases(t *testing.T) []censusLineCase {
+	t.Helper()
+	var cases []censusLineCase
+	for i, raw := range strings.Split(censusRead(t, "ci/race_excluded_line_cases.tsv"), "\n") {
+		if raw == "" || strings.HasPrefix(raw, "#") {
+			continue
+		}
+		f := strings.Split(raw, "\t")
+		if len(f) != 4 {
+			t.Fatalf("ci/race_excluded_line_cases.tsv line %d has %d columns, want 4", i+1, len(f))
+		}
+		line, err1 := strconv.Unquote(f[1])
+		test, err2 := strconv.Unquote(f[3])
+		if err1 != nil || err2 != nil || (f[2] != "accept" && f[2] != "refuse" && f[2] != "skip") {
+			t.Fatalf("ci/race_excluded_line_cases.tsv line %d is malformed: %q", i+1, raw)
+		}
+		cases = append(cases, censusLineCase{f[0], line, f[2], test})
+	}
+	if len(cases) == 0 {
+		t.Fatal("ci/race_excluded_line_cases.tsv holds no case")
+	}
+	return cases
+}
+
+func TestTheCensusParserAnswersEveryLineCaseLikeTheLoader(t *testing.T) {
+	t.Parallel()
+	for _, c := range readCensusLineCases(t) {
+		c := c
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := parseCensusExcluded("internal/httpguard\tTestZero\n" + c.line + "\n")
+			switch c.want {
+			case "refuse":
+				if err == nil || !strings.Contains(err.Error(), "census line 2 ") {
+					t.Errorf("want an error naming census line 2, got %v", err)
+				}
+			case "skip":
+				if err != nil || len(got) != 1 {
+					t.Errorf("want only the first row, got %v, %v", got, err)
+				}
+			default:
+				if err != nil || len(got) != 2 || !got[censusExcludedRow{"internal/goapiproof", c.test}] {
+					t.Errorf("want the row internal/goapiproof %q, got %v, %v", c.test, got, err)
+				}
+			}
+		})
 	}
 }

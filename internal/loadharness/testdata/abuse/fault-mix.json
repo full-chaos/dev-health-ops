@@ -1,0 +1,28 @@
+{
+  "base_url": "http://127.0.0.1:8081",
+  "targets": [
+    {
+      "name": "jwks", "method": "GET", "path": "/.well-known/jwks.json", "weight": 8,
+      "expect_status": [200]
+    },
+    {
+      "name": "issue", "method": "POST", "path": "/internal/v1/sessions", "weight": 1,
+      "headers": {"Content-Type": "application/json"},
+      "header_env": {"Authorization": {"env": "AUTH_LOADTEST_ISSUER_CREDENTIAL", "prefix": "Bearer "}},
+      "body": "{\"principal_id\":\"${ENV:AUTH_LOADTEST_PRINCIPAL_ID}\",\"organization_id\":null,\"amr\":[\"pwd\"]}",
+      "expect_status": [200, 503], "forbid_status": [500]
+    },
+    {
+      "name": "refresh", "method": "POST", "path": "/v1/token/refresh", "weight": 1,
+      "headers": {"Content-Type": "application/json"},
+      "body": "{\"schema_version\":\"refresh-request.v1\",\"refresh_credential\":\"${POOL:AUTH_LOADTEST_REFRESH_POOL}\"}",
+      "expect_status": [200, 401, 503], "forbid_status": [500]
+    },
+    {
+      "name": "login-badcreds", "method": "POST", "path": "/api/v1/auth/login", "weight": 1,
+      "headers": {"Content-Type": "application/json"},
+      "body": "{\"email\":\"loadtest-nobody-${SEQ}@example.com\",\"password\":\"wrong-password-${SEQ}\"}",
+      "expect_status": [401, 429, 500, 503], "forbid_status": [200]
+    }
+  ]
+}

@@ -178,7 +178,6 @@ func TestQueryAPIMCPListenerChart(t *testing.T) {
 		{"must not set QUERY_API_MCP_ADDR", []string{"--set-json", `queryApi.extraEnv=[{"name":"QUERY_API_MCP_ADDR","value":":18092"}]`}},
 		{"non-empty matchLabels or matchExpressions", []string{"--set-json", "queryApi.mcp.allowedFrom=[{}]"}},
 		{"non-empty matchLabels or matchExpressions", []string{"--set-json", `queryApi.mcp.allowedFrom=[{"matchLabels":{}}]`}},
-		{"with networkPolicy.enabled", []string{"--set", "networkPolicy.enabled=true"}},
 		{"must differ from queryApi.port", []string{"--set", "queryApi.mcp.port=8090"}},
 		{"must differ from queryApi.internal.port", []string{"--set", "queryApi.internal.enabled=true", "--set", "queryApi.mcp.port=8091"}},
 	} {

@@ -23,6 +23,8 @@ CREATE TABLE auth.sessions (id uuid PRIMARY KEY, principal_id uuid, organization
 CREATE TABLE auth.refresh_credentials (id uuid PRIMARY KEY, session_id uuid, consumed_at timestamptz, revoked_at timestamptz);
 CREATE TABLE auth.security_audit_events (id uuid PRIMARY KEY, event_type text, organization_id uuid, subject_principal_id uuid,
 	actor_principal_id uuid, client_ip inet, user_agent text, attributes jsonb, occurred_at timestamptz);
+CREATE TABLE auth.link_credentials (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), principal_id uuid NOT NULL, purpose text NOT NULL,
+	token_hash bytea NOT NULL, expires_at timestamptz NOT NULL, consumed_at timestamptz, created_at timestamptz NOT NULL DEFAULT now());
 INSERT INTO organizations (id, slug, name) VALUES ('00000000-0000-4000-8000-0000000000a1', 'acme', 'Acme');
 INSERT INTO users (id, email, auth_provider) VALUES ('00000000-0000-4000-8000-0000000000b1', 'a@example.com', 'local'),
 	('00000000-0000-4000-8000-0000000000b2', 'b@example.com', 'local');
@@ -62,7 +64,12 @@ func forwardedAll(t *testing.T) Forwarded {
 
 func run(t *testing.T, conn *pgx.Conn, table, public string) []string {
 	t.Helper()
-	query, projected, err := Query(table, public, forwardedAll(t))
+	return runWith(t, conn, table, public, forwardedAll(t))
+}
+
+func runWith(t *testing.T, conn *pgx.Conn, table, public string, f Forwarded) []string {
+	t.Helper()
+	query, projected, err := Query(table, public, f)
 	if err != nil || !projected {
 		t.Fatalf("%s: projected %v err %v", table, projected, err)
 	}
@@ -145,5 +152,74 @@ INSERT INTO auth.refresh_credentials VALUES ('00000000-0000-4000-8000-0000000000
 	got := run(t, conn, TableRefreshTokens, "")
 	if len(got) != 1 || got[0] != "a@example.com|acme|true|1" {
 		t.Fatalf("a credential of a revoked session reads revoked, got %v", got)
+	}
+}
+
+func credentialsForwarded(t *testing.T) Forwarded {
+	t.Helper()
+	f, err := ParseForwarded("sessions,local_login,credentials")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return f
+}
+
+func TestAuthRowsLinkTokenProjectionReadsPublicAndAuthServiceRowsIntegration(t *testing.T) {
+	conn := fixture(t, `
+INSERT INTO email_verification_tokens (id, user_id, token_hash, expires_at, created_at) VALUES ('00000000-0000-4000-8000-0000000000c1', '00000000-0000-4000-8000-0000000000b1', repeat('a', 64), now() - interval '1 hour', now() - interval '25 hours');
+INSERT INTO auth.link_credentials (principal_id, purpose, token_hash, expires_at, created_at) VALUES
+ ('00000000-0000-4000-8000-0000000000b2', 'email_verification', decode(repeat('ab', 32), 'hex'), now() + interval '1 day', now()),
+ ('00000000-0000-4000-8000-0000000000b2', 'password_reset', decode(repeat('cd', 32), 'hex'), now() + interval '1 hour', now());
+INSERT INTO auth.link_credentials (principal_id, purpose, token_hash, expires_at, consumed_at, created_at) VALUES
+ ('00000000-0000-4000-8000-0000000000b1', 'email_verification', decode(repeat('ef', 32), 'hex'), now() + interval '1 day', now(), now());`)
+	f := credentialsForwarded(t)
+	got := strings.Join(runWith(t, conn, TableEmailVerificationTokens, "", f), "\n")
+	want := "a@example.com|true|false|64|1440\nb@example.com|true|true|64|1440"
+	if got != want {
+		t.Fatalf("email_verification_tokens rows:\n%s\nwant:\n%s", got, want)
+	}
+	got = strings.Join(runWith(t, conn, TablePasswordResetTokens, "", f), "\n")
+	if want = "b@example.com|true|true|64|60"; got != want {
+		t.Fatalf("password_reset_tokens rows:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestAuthRowsCredentialsAuditProjectionMapsEveryEventIntegration(t *testing.T) {
+	var events []string
+	i := 0
+	for eventType := range CredentialAuditEvents() {
+		i++
+		events = append(events, fmt.Sprintf(`('00000000-0000-4000-8000-00000000ff%02d', '%s', NULL, '00000000-0000-4000-8000-0000000000b1', NULL, '192.0.2.1', 'agent', '{}', '2026-01-01T00:00:%02dZ')`, i, eventType, i))
+	}
+	conn := fixture(t, `INSERT INTO auth.security_audit_events VALUES `+strings.Join(events, ",")+`,
+ ('00000000-0000-4000-8000-00000000fe01', 'auth.principal.projected', NULL, '00000000-0000-4000-8000-0000000000b1', NULL, NULL, NULL, '{}', '2026-01-02T00:00:00Z'),
+ ('00000000-0000-4000-8000-00000000fe02', 'auth.session.revoked', NULL, '00000000-0000-4000-8000-0000000000b1', NULL, NULL, NULL, '{}', '2026-01-02T00:00:01Z');`)
+	got := runWith(t, conn, TableAuditLogs, "", credentialsForwarded(t))
+	if len(got) != len(CredentialAuditEvents()) {
+		t.Fatalf("want one row per mapped event and none for ignored events, got %d: %v", len(got), got)
+	}
+	for _, row := range got {
+		if !strings.HasPrefix(row, "<nil>|a@example.com|") || !strings.Contains(row, "|user:a@example.com|") || !strings.Contains(row, `{"ip_address": "192.0.2.1", "user_agent": "agent"}`) {
+			t.Errorf("row %s", row)
+		}
+	}
+}
+
+func TestAuthRowsCredentialsAuditProjectionFailsNamingAnUnmappedEventIntegration(t *testing.T) {
+	conn := fixture(t, `INSERT INTO auth.security_audit_events VALUES
+ ('00000000-0000-4000-8000-00000000fd01', 'auth.user.unheard_of', NULL, '00000000-0000-4000-8000-0000000000b1', NULL, NULL, NULL, '{}', '2026-01-01T00:00:00Z');`)
+	query, _, err := Query(TableAuditLogs, "", credentialsForwarded(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, err := conn.Query(context.Background(), query)
+	if err == nil {
+		for rows.Next() {
+		}
+		err = rows.Err()
+		rows.Close()
+	}
+	if err == nil || !strings.Contains(err.Error(), "auth.user.unheard_of") {
+		t.Fatalf("an unmapped credentials event must fail the query naming it, got %v", err)
 	}
 }

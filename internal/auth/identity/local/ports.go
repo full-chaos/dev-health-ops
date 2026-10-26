@@ -2,6 +2,7 @@ package local
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
@@ -33,6 +34,9 @@ type ProvisionLocalRequest struct {
 	Email        string
 	FullName     *string
 	PasswordHash string
+	// OrganizationName, when not nil, names the organization and owner
+	// membership created with the user.
+	OrganizationName *string
 }
 
 // Accounts is the B2 identity store as the link flows use it. ByEmail and
@@ -45,13 +49,23 @@ type Accounts interface {
 	// ProvisionLocal returns identity.ErrEmailTaken for a taken email.
 	ProvisionLocal(ctx context.Context, req ProvisionLocalRequest) (uuid.UUID, error)
 	SetEmailVerified(ctx context.Context, id uuid.UUID) error
-	SetPasswordHash(ctx context.Context, id uuid.UUID, hash string) error
+	// PeekResetLink reads the principal of a live reset link and consumes
+	// nothing. ok is false, in the same one read, for a link of an account
+	// that is gone or of the service provider.
+	PeekResetLink(ctx context.Context, tokenHash [32]byte) (principalID uuid.UUID, ok bool, err error)
+	// SetPasswordEndingSessions writes the password and, in the same
+	// transaction after the user lock: consumes the reset link (when
+	// req.ResetLink is set), ends every other credential of the principal
+	// (auth sessions, go-api token version and refresh tokens), deletes the
+	// other reset links and creates the caller's new session (when
+	// req.NewSession is set). An error leaves everything as it was;
+	// ErrResetLinkUnusable means the link was no longer usable at that moment.
+	SetPasswordEndingSessions(ctx context.Context, req PasswordEnd) (PasswordEndResult, error)
 }
 
 // SessionAdmin is the B1 session store as the flows use it.
 type SessionAdmin interface {
 	Sessions
-	RevokeAll(ctx context.Context, principalID uuid.UUID, actor session.Actor) (int, error)
 }
 
 // IssueRequest asks Links for one new credential. A zero PrincipalID is a
@@ -99,4 +113,31 @@ type Mailer interface {
 // the lock is released.
 type Locker interface {
 	WithPrincipalLock(ctx context.Context, principalID uuid.UUID, fn func(ctx context.Context) error) error
+}
+
+// ErrResetLinkUnusable is SetPasswordEndingSessions' refusal of a reset link
+// that was replayed, expired or replaced before the write: nothing changed.
+var ErrResetLinkUnusable = errors.New("local: the reset link is no longer usable")
+
+// PasswordEnd is one password write and what ends with it.
+type PasswordEnd struct {
+	ID   uuid.UUID
+	Hash string
+	// ResetLink, when set, is the digest of the reset link consumed in the
+	// same transaction.
+	ResetLink *[32]byte
+	// NewSession, when set, is the session created in the same transaction
+	// for the caller of a change.
+	NewSession *NewSession
+}
+
+// NewSession asks for the caller's new session.
+type NewSession struct {
+	OrganizationID *uuid.UUID
+	AMR            []string
+}
+
+// PasswordEndResult is what the write returned.
+type PasswordEndResult struct {
+	Issued *session.Issued
 }

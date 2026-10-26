@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
 )
 
@@ -93,6 +94,21 @@ func parseAuthorizeBody(data []byte) (authorizeBody, []fieldError) {
 	}
 	body := authorizeBody{RedirectURI: optionalString(object, "redirect_uri", &errs)}
 	optionalBool(object, "use_pkce", &errs)
+	return body, errs
+}
+
+// parseOIDCAuthorizeBody is parseAuthorizeBody for the OIDC route, whose
+// redirect_uri reaches the authorization URL and the sealed state.
+// encoding/json already turned a lone surrogate escape into U+FFFD there, so
+// the raw member is read. The OAuth route shares parseAuthorizeBody for its
+// shape only and never reads redirect_uri, so it does not come through here;
+// nor do the callback fields, which end in the token exchange or the state
+// check and never in a 2xx.
+func parseOIDCAuthorizeBody(data []byte) (authorizeBody, []fieldError) {
+	body, errs := parseAuthorizeBody(data)
+	if pyjson.MemberHasLoneSurrogateEscape(data, "redirect_uri", false) {
+		errs = append([]fieldError{bodyError("string_unicode", "redirect_uri", "Input should be a valid string, unable to parse raw data as a unicode string")}, errs...)
+	}
 	return body, errs
 }
 
@@ -219,7 +235,7 @@ func (s *Service) AuthorizeHandler() http.Handler {
 			s.reject(w, r, routeAuthorize, providerID, failure)
 			return
 		}
-		body, errs := parseAuthorizeBody(data)
+		body, errs := parseOIDCAuthorizeBody(data)
 		if len(errs) > 0 {
 			s.reject(w, r, routeAuthorize, providerID, deny(http.StatusUnprocessableEntity, ReasonMalformed, errs))
 			return

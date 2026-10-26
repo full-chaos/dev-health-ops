@@ -50,14 +50,19 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
 {{/*
-Service account name
+Workload ServiceAccount name: <fullname>-<component>. Call with (dict "ctx" $ "component" "web").
 */}}
-{{- define "dev-health.serviceAccountName" -}}
-{{- if .Values.serviceAccount.create }}
-{{- default (include "dev-health.fullname" .) .Values.serviceAccount.name }}
-{{- else }}
-{{- default "default" .Values.serviceAccount.name }}
+{{- define "dev-health.workloadServiceAccountName" -}}
+{{- printf "%s-%s" (include "dev-health.fullname" .ctx) .component }}
 {{- end }}
+
+{{/*
+The pod-spec lines that bind a workload to its own ServiceAccount.
+Call with (dict "ctx" $ "component" "web" "cfg" .Values.web.serviceAccount).
+*/}}
+{{- define "dev-health.workloadServiceAccount" -}}
+serviceAccountName: {{ include "dev-health.workloadServiceAccountName" . }}
+automountServiceAccountToken: {{ .cfg.automountToken | default false }}
 {{- end }}
 
 {{/*
@@ -127,6 +132,20 @@ Secret name — either the one we create or an external one
 {{- include "dev-health.fullname" . }}-secrets
 {{- else }}
 {{- required "secrets.externalSecretName is required when secrets.create is false" .Values.secrets.externalSecretName }}
+{{- end }}
+{{- end }}
+
+{{/*
+CHAOS-11217: the Secret that holds AUTH_SESSION_ISSUE_TOKEN, the credential go-api
+presents to auth-service's session issue route. goApi.sessionIssue.secretName names a
+dedicated, operator-created Secret; empty keeps the shared Secret. Only go-api reads it.
+*/}}
+{{- define "dev-health.sessionIssueSecretName" -}}
+{{- $issue := default dict .Values.goApi.sessionIssue }}
+{{- if $issue.secretName }}
+{{- $issue.secretName }}
+{{- else }}
+{{- include "dev-health.secretName" . }}
 {{- end }}
 {{- end }}
 
@@ -693,12 +712,161 @@ serve it).
 {{- end -}}
 
 {{/*
-CHAOS-10231: "true" when go-api is enabled and any goApi.authProxy flag is on
-(go-api then forwards those /api/v1/auth/* routes to auth-service), else "".
+authService.phase, the one auth cutover key (values.yaml lists the phases). It refuses the keys it replaces, refuses
+any value that is not a whole number from 0 to 5, refuses phases 4 and 5 (D6358: they wait for the public-table writer
+decision), and renders the phase. Every ladder read goes through dev-health.authOn, so every render runs these checks.
+*/}}
+{{- define "dev-health.authPhase" -}}
+{{- $v := .Values -}}
+{{- if hasKey $v.goApi "authProxy" }}{{- fail "goApi.authProxy is replaced by authService.phase (0 go-api only, 1 auth-service dark, 2 sessions, 3 login and social sign-in, 4 users owned, 5 orgs owned): remove goApi.authProxy and set authService.phase" }}{{- end -}}
+{{- if hasKey $v.authService "enabled" }}{{- fail "authService.enabled is replaced by authService.phase: enabled=true is phase 1 and enabled=false is phase 0; remove authService.enabled and set authService.phase" }}{{- end -}}
+{{- if hasKey $v.authService "usersOwned" }}{{- fail "authService.usersOwned is replaced by authService.phase: users owned is phase 4; remove authService.usersOwned" }}{{- end -}}
+{{- if hasKey $v.authService "orgsOwned" }}{{- fail "authService.orgsOwned is replaced by authService.phase: orgs owned is phase 5; remove authService.orgsOwned" }}{{- end -}}
+{{- $p := $v.authService.phase -}}
+{{- if not (and (has (kindOf $p) (list "int" "int64" "float64")) (eq (float64 $p) (floor (float64 $p))) (ge (float64 $p) 0.0) (le (float64 $p) 5.0)) }}{{- fail (printf "authService.phase must be a whole number from 0 to 5, got %s %v" (kindOf $p) $p) }}{{- end -}}
+{{- if ge (int $p) 4 }}{{- fail (printf "authService.phase %d: phases 4 and 5 need the public-table writer decision (D6358): auth-service does not yet write the existing public users, organizations and memberships tables, so phase 3 is the highest phase this chart renders" (int $p)) }}{{- end -}}
+{{- int $p -}}
+{{- end -}}
+
+{{/*
+Every env name the chart renders for the auth-service container (Secret references and phase-derived settings), as a
+JSON list. authService.extraEnv refuses each of them in any case: a later entry with the same name would shadow the
+rendered one, a Secret reference included, and put a literal in the manifest. auth_phase_test.go walks the rendered
+names and proves each is refused.
+*/}}
+{{- define "dev-health.authServiceEnvNames" -}}
+{{- $names := list "AUTH_DATABASE_URI" "AUTH_JWT_SECRET_KEY" "AUTH_SESSION_SUCCESSOR_KEY" "AUTH_LOGIN_LOCKOUT_KEY" "AUTH_SOCIAL_LINK_ROUTES" "AUTH_ACCESS_TOKEN_CLASS" "AUTH_TOKEN_ISSUER_URL" "AUTH_JWT_AUDIENCE" "AUTH_USERS_OWNED" "AUTH_ORGS_OWNED" "AUTH_VALKEY_URI" "AUTH_SERVICE_TRUSTED_PROXIES" -}}
+{{- range $provider := list "GITHUB" "GITLAB" "GOOGLE" }}{{- range $suffix := list "CLIENT_ID" "CLIENT_SECRET" }}{{- $names = append $names (printf "SOCIAL_%s_%s" $provider $suffix) }}{{- end }}{{- end -}}
+{{- toJson $names -}}
+{{- end -}}
+
+{{/*
+Every env name the chart renders for the go-api container, as a JSON list. goApi.extraEnv refuses each of them in
+any case, for the same reason as dev-health.authServiceEnvNames. auth_phase_test.go walks the rendered names. The DSN name is appended, not listed, so the worker DSN list keeps the only listed spelling (a chartgates planted defect edits it).
+*/}}
+{{- define "dev-health.goApiEnvNames" -}}
+{{- $names := list "JWT_SECRET_KEY" "AUTH_DATABASE_SCHEMA" "HIDE_MIGRATED_CHILD_CONFIGS" "SYNC_WATERMARK_OVERLAP" "SYNC_INCREMENTAL_HEAVY_MAX_WINDOW_DAYS" "AUTH_PROXY_URL" "AUTH_PROXY_SESSIONS" "AUTH_PROXY_LOCAL_LOGIN" "AUTH_PROXY_CREDENTIALS" "AUTH_PROXY_SOCIAL" "AUTH_PROXY_OIDC" "AUTH_PROXY_SAML" "AUTH_SESSION_ISSUE_TOKEN" "AUTH_USERS_OWNED" "AUTH_ACCESS_TOKEN_ISSUER" "TRUSTED_PROXIES_NETWORK_FENCED" "DEV_HEALTH_LEGACY_INGEST_ENABLED" "DEV_HEALTH_LEGACY_INGEST_SUNSET" -}}
+{{- $names = (append $names "API_DATABASE_URI") }}{{- toJson $names -}}
+{{- end -}}
+
+{{/*
+"true" when an extraEnv entry carries a literal value under a secret-like name: the name ends, in any case, in
+_SECRET, _PASSWORD, _TOKEN, _KEY, _DSN or _CREDENTIALS. Such a name may come only by valueFrom.secretKeyRef.
+Call with the extraEnv entry.
+*/}}
+{{- define "dev-health.secretLikeLiteralEnv" -}}
+{{- if and (kindIs "map" .) (hasKey . "value") (regexMatch "(?i)_(SECRET|PASSWORD|TOKEN|KEY|DSN|CREDENTIALS)$" (trim (toString .name))) -}}true{{- end -}}
+{{- end -}}
+
+{{/*
+"true" when the value is a valid Kubernetes Secret key: ^[-._a-zA-Z0-9]+$, at most 253 characters, and not ".",
+".." or a name that starts with "..". Call with the value.
+*/}}
+{{- define "dev-health.validSecretKey" -}}
+{{- $k := toString . -}}
+{{- if and (kindIs "string" .) (regexMatch "^[-._a-zA-Z0-9]+$" $k) (le (len $k) 253) (not (has $k (list "." ".."))) (not (hasPrefix ".." $k)) -}}true{{- end -}}
+{{- end -}}
+
+{{/*
+Every auth check that must hold in every render, whatever the phase and whatever goApi.enabled, queryApi.enabled
+and the other enable flags say. templates/auth-service.yaml includes it once, outside every gate.
+- Class rule: every Secret key the auth values read is a valid Kubernetes Secret key (dev-health.validSecretKey):
+  authService.database.secretKey, authService.migrate.secretKey, authService.signingKey.secretKey,
+  authService.valkey.secretKey, authService.sessionKeys.successor.secretKey,
+  authService.sessionKeys.loginLockout.secretKey, goApi.sessionIssue.secretKey and each set
+  authService.keySet.keys[].secretKey.
+- Phase 2 preconditions (both session readers, the successor key): query-api, the migrate Job and the River hooks
+  carry AUTH_PROXY_SESSIONS from phase 2 even when go-api is off.
+- Phase 3: the login lockout key is named.
+- The access-token class, SSO and social link route keys.
+*/}}
+{{- define "dev-health.authValidate" -}}
+{{- $a := .Values.authService -}}
+{{- $session := default dict $a.sessionKeys -}}
+{{- $keys := list (list "authService.database.secretKey" (default dict $a.database).secretKey) (list "authService.migrate.secretKey" (default dict $a.migrate).secretKey) (list "authService.signingKey.secretKey" (default dict $a.signingKey).secretKey) (list "authService.valkey.secretKey" (default dict $a.valkey).secretKey) (list "authService.sessionKeys.successor.secretKey" (default dict $session.successor).secretKey) (list "authService.sessionKeys.loginLockout.secretKey" (default dict $session.loginLockout).secretKey) (list "goApi.sessionIssue.secretKey" (default dict .Values.goApi.sessionIssue).secretKey) -}}
+{{- range $keys }}
+{{- if not (include "dev-health.validSecretKey" (index . 1)) }}{{- fail (printf "%s must be a Secret key: letters, digits, '-', '_' and '.', at most 253 characters, not '.', '..' or a name that starts with '..'" (index . 0)) }}{{- end }}
+{{- end }}
+{{- range $i, $k := ((default dict $a.keySet).keys | default list) }}
+{{- if and (kindIs "map" $k) $k.secretKey (not (include "dev-health.validSecretKey" $k.secretKey)) }}{{- fail (printf "authService.keySet.keys[%d].secretKey must be a Secret key: letters, digits, '-', '_' and '.', at most 253 characters, not '.', '..' or a name that starts with '..'" $i) }}{{- end }}
+{{- end }}
+{{- if eq (include "dev-health.authOn" (dict "flag" "sessions" "context" .)) "true" }}
+{{- /* Phase 2 preconditions: query-api, the migrate Job and the River hooks carry AUTH_PROXY_SESSIONS from phase 2 even when go-api is off, so they are checked here, once. */}}
+{{- $rd := .Values.authService.migrate.sessionReaders }}
+{{- $missing := list }}
+{{- if not (trim (toString $rd.goApi)) }}{{- $missing = append $missing "authService.migrate.sessionReaders.goApi (go-api's API_DATABASE_ROLE)" }}{{- end }}
+{{- if not (trim (toString $rd.queryApi)) }}{{- $missing = append $missing "authService.migrate.sessionReaders.queryApi (query-api's registry login)" }}{{- end }}
+{{- if $missing }}
+{{- fail (printf "authService.phase >= 2 (sessions) needs the session-reader roles of both services: unset %s" (join ", " $missing)) }}
+{{- end }}
+{{- $miss := list }}
+{{- if not (trim (toString .Values.authService.sessionKeys.successor.secretName)) }}{{- $miss = append $miss "authService.sessionKeys.successor.secretName" }}{{- end }}
+{{- if not (include "dev-health.validSecretKey" .Values.authService.sessionKeys.successor.secretKey) }}{{- $miss = append $miss "authService.sessionKeys.successor.secretKey (a Secret key: letters, digits, '-', '_', '.')" }}{{- end }}
+{{- if $miss }}
+{{- fail (printf "authService.phase >= 2 (sessions) needs the auth-service session keys: unset %s (the access-token key is go-api's JWT_SECRET_KEY Secret)" (join ", " $miss)) }}
+{{- end }}
+{{- end }}
+{{- if eq (include "dev-health.authOn" (dict "flag" "localLogin" "context" .)) "true" }}
+{{- if not (include "dev-health.validSecretKey" .Values.authService.sessionKeys.loginLockout.secretKey) }}{{- fail "authService.phase >= 3 (login) needs authService.sessionKeys.loginLockout.secretKey to be a Secret key: letters, digits, '-', '_', '.'" }}{{- end }}
+{{- end }}
+{{- $_ := include "dev-health.authEdDSAIssuer" . }}
+{{- $_ := include "dev-health.authSSOOn" (dict "flag" "oidc" "context" .) }}
+{{- $_ := include "dev-health.authSSOOn" (dict "flag" "saml" "context" .) }}
+{{- $linkRoutes := eq (include "dev-health.authBool" (dict "value" .Values.authService.socialLinkRoutes "key" "authService.socialLinkRoutes")) "true" }}
+{{- if and $linkRoutes (not (include "dev-health.authOn" (dict "flag" "sessions" "context" .))) }}{{- fail "authService.socialLinkRoutes needs authService.phase >= 2: the link routes need the session secrets" }}{{- end }}
+{{- end -}}
+
+{{/*
+"true" when authService.phase turns the ladder flag on, else "". Call with (dict "flag" <name> "context" $).
+The ladder (each flag is on from its phase up): service 1, sessions 2, localLogin 3, social 3, credentials 4,
+usersOwned 4, orgsOwned 5. credentials moves with usersOwned: auth-service mounts the credential routes only with
+AUTH_USERS_OWNED, and go-api refuses AUTH_USERS_OWNED unless the credential routes go to auth-service.
+*/}}
+{{- define "dev-health.authOn" -}}
+{{- $ladder := dict "service" 1 "sessions" 2 "localLogin" 3 "social" 3 "credentials" 4 "usersOwned" 4 "orgsOwned" 5 -}}
+{{- if not (hasKey $ladder .flag) }}{{- fail (printf "dev-health.authOn: %s is not a ladder flag" .flag) }}{{- end -}}
+{{- if ge (int (include "dev-health.authPhase" .context)) (int (get $ladder .flag)) -}}true{{- end -}}
+{{- end -}}
+
+{{/*
+OIDC and SAML through auth-service (authService.sso.oidc / .saml): "true" or "". true is refused: the chart does not
+render auth-service's SSO settings, so go-api would forward to routes auth-service does not mount.
+Call with (dict "flag" "oidc"|"saml" "context" $).
+*/}}
+{{- define "dev-health.authSSOOn" -}}
+{{- $key := printf "authService.sso.%s" .flag -}}
+{{- $sso := default dict .context.Values.authService.sso -}}
+{{- if eq (include "dev-health.authBool" (dict "value" (index $sso .flag) "key" $key)) "true" }}{{- fail (printf "%s=true is refused: the chart does not render auth-service's SSO settings (state key, base URL, encryption key) yet, so its %s routes would not mount" $key (upper .flag)) }}{{- end -}}
+{{- end -}}
+
+{{/*
+The access-token class (authService.accessToken). Checks it and renders the eddsa issuer URL, or "" for any other
+class: one value for auth-service (AUTH_TOKEN_ISSUER_URL) and go-api (AUTH_ACCESS_TOKEN_ISSUER). The pattern is
+auth-service's issuerURLPattern (internal/auth/authconfig), so a value the service would refuse fails the render.
+*/}}
+{{- define "dev-health.authEdDSAIssuer" -}}
+{{- $t := default dict .Values.authService.accessToken -}}
+{{- if not (and (or (kindIs "invalid" $t.class) (kindIs "string" $t.class)) (or (kindIs "invalid" $t.issuerURL) (kindIs "string" $t.issuerURL))) }}{{- fail "authService.accessToken.class and authService.accessToken.issuerURL must be strings" }}{{- end -}}
+{{- $class := $t.class | default "" -}}
+{{- $issuer := $t.issuerURL | default "" -}}
+{{- if $class -}}
+{{- if not (has $class (list "hs256_compat" "eddsa")) }}{{- fail "authService.accessToken.class must be empty, hs256_compat or eddsa" }}{{- end -}}
+{{- if not (include "dev-health.authOn" (dict "flag" "sessions" "context" .)) }}{{- fail "authService.accessToken.class needs authService.phase >= 2: auth-service mints access tokens only on its session routes" }}{{- end -}}
+{{- end -}}
+{{- if eq $class "eddsa" -}}
+{{- if not (regexMatch "^https://[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?(:[0-9]{1,5})?(/[A-Za-z0-9_~-][A-Za-z0-9._~-]{0,63}){0,8}$" $issuer) }}{{- fail "authService.accessToken.class=eddsa needs authService.accessToken.issuerURL: an https URL with a lowercase host, no trailing slash, userinfo, query or fragment" }}{{- end -}}
+{{- $issuer -}}
+{{- else if $issuer -}}
+{{- fail "authService.accessToken.issuerURL is set but authService.accessToken.class is not eddsa: the issuer is rendered only for eddsa tokens" }}
+{{- end -}}
+{{- end -}}
+
+{{/*
+CHAOS-10231: "true" when go-api is enabled and go-api forwards /api/v1/auth/* routes to auth-service (phase >= 2:
+every other aggregate needs sessions), else "".
 */}}
 {{- define "dev-health.authProxyOn" -}}
-{{- $p := .Values.goApi.authProxy -}}
-{{- if and .Values.goApi.enabled (or $p.sessions $p.localLogin $p.credentials $p.social $p.oidc $p.saml) -}}true{{- end -}}
+{{- if and .Values.goApi.enabled (include "dev-health.authOn" (dict "flag" "sessions" "context" .)) -}}true{{- end -}}
 {{- end -}}
 
 {{/*
@@ -718,6 +886,17 @@ schema Job and the grants Job.
 {{- if not (regexMatch "^[0-9a-f]{16}$" $ack) }}{{- fail "authService.migrate.acknowledgeGrantNarrowing must be the 16 lowercase hex characters of the digest a refused auth-migrate run prints" }}{{- end -}}
 -ack-grant-narrowing={{ $ack }}
 {{- end -}}
+{{- end }}
+
+{{/*
+A strict boolean switch of authService: renders "true" or "false", and FAILS the render for anything that is
+not a YAML boolean (a string such as "false" is non-empty and would read as true; null is no value). Every read
+of authService.backfill.enabled, authService.backfill.dryRun, authService.socialLinkRoutes and authService.sso.*
+goes through it. Call with (dict "value" <value> "key" "<dotted key>").
+*/}}
+{{- define "dev-health.authBool" -}}
+{{- if not (kindIs "bool" .value) }}{{- fail (printf "%s must be the boolean true or false, got %s %v" .key (kindOf .value) .value) }}{{- end }}
+{{- .value }}
 {{- end }}
 
 {{- define "dev-health.authDatabaseSchema" -}}
@@ -741,3 +920,348 @@ database DSN name cannot reach a worker pod either.
 {{- define "dev-health.goWorkerSecretKeyNames" -}}
 {{- toJson (list "APP_BASE_URL" "CLICKHOUSE_URI" "EMAIL_API_KEY" "EMAIL_FROM_ADDRESS" "EMAIL_PROVIDER" "EXPECTED_WORKER_GROUPS" "INVESTMENT_LLM_BATCH_MODE" "INVESTMENT_LLM_BATCH_TIMEOUT_SECONDS" "LICENSE_PRIVATE_KEY" "LINEAR_API_KEY" "LLM_MODEL" "LLM_PROVIDER" "OPENAI_API_KEY" "PAGER_DUTY_CLIENT_ID" "PAGER_DUTY_REDIRECT_URI" "PAGER_DUTY_SECRET" "SETTINGS_ENCRYPTION_KEY" "STRIPE_SECRET_KEY" "STRIPE_WEBHOOK_SECRET" "WORKER_GITHUB_WORK_ITEMS_STATUS_MAPPING_PATH") -}}
 {{- end }}
+
+{{/*
+The query-api pods leave the release-wide NetworkPolicy and get their own ingress and egress policies while a listener
+that trusts internal identity headers (internal or MCP) is on: the release-wide in-namespace rule admits every port.
+Renders "true" or nothing.
+*/}}
+{{- define "dev-health.queryApiOwnNetworkPolicy" -}}
+{{- if and .Values.networkPolicy.enabled .Values.queryApi.enabled (or .Values.queryApi.internal.enabled .Values.queryApi.mcp.enabled) }}true{{- end }}
+{{- end }}
+
+{{/*
+Egress rules shared by the release-wide, go-api and query-api egress policies: DNS (UDP and TCP), the release
+namespace, HTTPS, then networkPolicy.extraEgress. The auth pods never use these rules.
+*/}}
+{{- define "dev-health.networkPolicyEgress" -}}
+{{- range $i, $rule := .Values.networkPolicy.extraEgress }}
+{{- if not (kindIs "map" $rule) }}
+{{- fail (printf "networkPolicy.extraEgress[%d] must be a NetworkPolicy egress rule: an object with to and/or ports" $i) }}
+{{- end }}
+{{- range $key := keys $rule | sortAlpha }}
+{{- if not (has $key (list "to" "ports")) }}
+{{- fail (printf "networkPolicy.extraEgress[%d] takes only to and ports, not %q: Kubernetes drops an unknown key, so the rule would be wider than written" $i $key) }}
+{{- end }}
+{{- end }}
+{{- range $key := list "to" "ports" }}
+{{- if and (hasKey $rule $key) (not (kindIs "slice" (index $rule $key))) (not (kindIs "invalid" (index $rule $key))) }}
+{{- fail (printf "networkPolicy.extraEgress[%d].%s must be a list" $i $key) }}
+{{- end }}
+{{- end }}
+{{- $to := $rule.to | default list }}
+{{- $ports := $rule.ports | default list }}
+{{- if and (empty $to) (empty $ports) }}
+{{- fail (printf "networkPolicy.extraEgress[%d] has neither a non-empty to nor non-empty ports: Kubernetes reads that rule as every destination on every port" $i) }}
+{{- end }}
+{{- range $j, $port := $ports }}
+{{- if not (kindIs "map" $port) }}
+{{- fail (printf "networkPolicy.extraEgress[%d].ports[%d] must be an object with port (and protocol, endPort)" $i $j) }}
+{{- end }}
+{{- range $key := keys $port | sortAlpha }}
+{{- if not (has $key (list "protocol" "port" "endPort")) }}
+{{- fail (printf "networkPolicy.extraEgress[%d].ports[%d] takes only protocol, port and endPort, not %q" $i $j $key) }}
+{{- end }}
+{{- end }}
+{{- $number := has (kindOf $port.port) (list "float64" "int64" "int") }}
+{{- if not (or (and $number (eq (float64 $port.port) (floor (float64 $port.port))) (ge (int $port.port) 1) (le (int $port.port) 65535)) (and (kindIs "string" $port.port) (ne $port.port ""))) }}
+{{- fail (printf "networkPolicy.extraEgress[%d].ports[%d] needs a port (1-65535 or a port name): Kubernetes reads an entry with no port as every port of its protocol" $i $j) }}
+{{- end }}
+{{- if and (hasKey $port "protocol") (not (has (toString $port.protocol) (list "TCP" "UDP" "SCTP"))) }}
+{{- fail (printf "networkPolicy.extraEgress[%d].ports[%d].protocol %v is not TCP, UDP or SCTP" $i $j $port.protocol) }}
+{{- end }}
+{{- if hasKey $port "endPort" }}
+{{- if not (and $number (has (kindOf $port.endPort) (list "float64" "int64" "int")) (eq (float64 $port.endPort) (floor (float64 $port.endPort))) (ge (int $port.endPort) (int $port.port)) (le (int $port.endPort) 65535)) }}
+{{- fail (printf "networkPolicy.extraEgress[%d].ports[%d].endPort needs a numeric port and must be a number from port to 65535" $i $j) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- range $j, $peer := $to }}
+{{- if not (kindIs "map" $peer) }}
+{{- fail (printf "networkPolicy.extraEgress[%d].to[%d] must be an object with podSelector, namespaceSelector or ipBlock" $i $j) }}
+{{- end }}
+{{- if empty (keys $peer) }}
+{{- fail (printf "networkPolicy.extraEgress[%d].to[%d] is empty: name a podSelector, namespaceSelector or ipBlock" $i $j) }}
+{{- end }}
+{{- range $key := keys $peer | sortAlpha }}
+{{- if not (has $key (list "podSelector" "namespaceSelector" "ipBlock")) }}
+{{- fail (printf "networkPolicy.extraEgress[%d].to[%d] takes only podSelector, namespaceSelector and ipBlock, not %q" $i $j $key) }}
+{{- end }}
+{{- end }}
+{{- range $selector := list "podSelector" "namespaceSelector" }}
+{{- if hasKey $peer $selector }}
+{{- if not (kindIs "map" (index $peer $selector)) }}
+{{- fail (printf "networkPolicy.extraEgress[%d].to[%d].%s must be an object with matchLabels and/or matchExpressions" $i $j $selector) }}
+{{- end }}
+{{- range $key := keys (index $peer $selector) | sortAlpha }}
+{{- if not (has $key (list "matchLabels" "matchExpressions")) }}
+{{- fail (printf "networkPolicy.extraEgress[%d].to[%d].%s takes only matchLabels and matchExpressions, not %q: Kubernetes drops an unknown key, so the selector would be wider than written" $i $j $selector $key) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- if hasKey $peer "ipBlock" }}
+{{- if not (and (kindIs "map" $peer.ipBlock) (kindIs "string" $peer.ipBlock.cidr) (ne $peer.ipBlock.cidr "")) }}
+{{- fail (printf "networkPolicy.extraEgress[%d].to[%d].ipBlock needs a cidr" $i $j) }}
+{{- end }}
+{{- range $key := keys $peer.ipBlock | sortAlpha }}
+{{- if not (has $key (list "cidr" "except")) }}
+{{- fail (printf "networkPolicy.extraEgress[%d].to[%d].ipBlock takes only cidr and except, not %q: Kubernetes drops an unknown key, so the block would be wider than written" $i $j $key) }}
+{{- end }}
+{{- end }}
+{{- if hasKey $peer.ipBlock "except" }}
+{{- if not (kindIs "slice" $peer.ipBlock.except) }}
+{{- fail (printf "networkPolicy.extraEgress[%d].to[%d].ipBlock.except must be a list of CIDR strings" $i $j) }}
+{{- end }}
+{{- range $peer.ipBlock.except }}
+{{- if not (and (kindIs "string" .) (ne . "")) }}
+{{- fail (printf "networkPolicy.extraEgress[%d].to[%d].ipBlock.except must be a list of CIDR strings" $i $j) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- if and (empty $ports) (regexMatch "/0+$" $peer.ipBlock.cidr) (empty $peer.ipBlock.except) }}
+{{- fail (printf "networkPolicy.extraEgress[%d] sends to ipBlock %s with no except and no ports: that is every destination on every port; name the ports" $i $peer.ipBlock.cidr) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
+# DNS resolution
+- to:
+    - namespaceSelector: {}
+  ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+# Internal communication
+- to:
+    - podSelector: {}
+# External HTTPS (GitHub, GitLab, Jira, Stripe APIs)
+- to:
+    - ipBlock:
+        cidr: 0.0.0.0/0
+  ports:
+    - protocol: TCP
+      port: 443
+{{- range .Values.networkPolicy.extraEgress }}
+- {{ toYaml . | nindent 2 | trim }}
+{{- end }}
+{{- end }}
+
+{{/*
+One authService.trustedProxies entry is what internal/auth/clientaddr ParseTrust accepts (a bare IP address, or a strict CIDR
+network: canonical prefix digits, no host bits, no zone), so a rendered value never stops auth-service at start. Prints "true" when
+the entry is valid, nothing otherwise. The chart refuses /0 and IPv4-mapped forms on top of this.
+*/}}
+{{- define "dev-health.trustedProxyEntry" -}}
+{{- $parts := splitList "/" (toString .) -}}
+{{- $addr := index $parts 0 -}}
+{{- $hasPrefix := eq (len $parts) 2 -}}
+{{- $prefix := "" -}}
+{{- if $hasPrefix }}{{- $prefix = index $parts 1 }}{{- end -}}
+{{- $ok := false -}}
+{{- if and (le (len $parts) 2) (or (not $hasPrefix) (regexMatch "^(0|[1-9][0-9]{0,2})$" $prefix)) -}}
+{{- $octet := "(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])" -}}
+{{- if regexMatch (printf "^%s(\\.%s){3}$" $octet $octet) $addr -}}
+{{- $ok = true -}}
+{{- if $hasPrefix -}}
+{{- $p := int $prefix -}}
+{{- if gt $p 32 }}{{- $ok = false }}{{- else -}}
+{{- $o := splitList "." $addr -}}
+{{- $v := add (add (mul (int (index $o 0)) 16777216) (mul (int (index $o 1)) 65536)) (add (mul (int (index $o 2)) 256) (int (index $o 3))) -}}
+{{- $pow := 1 -}}
+{{- range until (int (sub 32 $p)) }}{{- $pow = mul $pow 2 }}{{- end -}}
+{{- if ne (int (mod $v $pow)) 0 }}{{- $ok = false }}{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- else if and (contains ":" $addr) (regexMatch "^[0-9A-Fa-f:]+$" $addr) (not (contains ":::" $addr)) -}}
+{{- $groups := list -}}
+{{- $shape := false -}}
+{{- if contains "::" $addr -}}
+{{- $halves := splitn "::" 2 $addr -}}
+{{- $left := $halves._0 -}}
+{{- $right := $halves._1 -}}
+{{- $half := "^([0-9A-Fa-f]{1,4}(:[0-9A-Fa-f]{1,4})*)?$" -}}
+{{- if and (regexMatch $half $left) (regexMatch $half $right) -}}
+{{- $l := list -}}{{- if $left }}{{- $l = splitList ":" $left }}{{- end -}}
+{{- $r := list -}}{{- if $right }}{{- $r = splitList ":" $right }}{{- end -}}
+{{- if le (add (len $l) (len $r)) 7 -}}
+{{- $shape = true -}}
+{{- $zeros := list -}}
+{{- range until (int (sub 8 (add (len $l) (len $r)))) }}{{- $zeros = append $zeros "0" }}{{- end -}}
+{{- $groups = concat $l $zeros $r -}}
+{{- end -}}
+{{- end -}}
+{{- else if regexMatch "^([0-9A-Fa-f]{1,4}:){7}[0-9A-Fa-f]{1,4}$" $addr -}}
+{{- $shape = true -}}
+{{- $groups = splitList ":" $addr -}}
+{{- end -}}
+{{- if $shape -}}
+{{- $ok = true -}}
+{{- /* IPv4-mapped in every spelling: five zero groups then ffff, any case, compressed or not, hex tail. */ -}}
+{{- if and (regexMatch "^0{1,4}$" (index $groups 0)) (regexMatch "^0{1,4}$" (index $groups 1)) (regexMatch "^0{1,4}$" (index $groups 2)) (regexMatch "^0{1,4}$" (index $groups 3)) (regexMatch "^0{1,4}$" (index $groups 4)) (eq (lower (index $groups 5)) "ffff") }}{{- $ok = false }}{{- end -}}
+{{- if $hasPrefix -}}
+{{- $p := int $prefix -}}
+{{- if gt $p 128 }}{{- $ok = false }}{{- else -}}
+{{- $digits := "0123456789abcdef" -}}
+{{- range $i, $g := $groups -}}
+{{- $val := 0 -}}
+{{- range $c := (regexSplit "" (lower $g) -1) }}
+{{- if $c }}{{- range $d := until 16 }}{{- if eq (substr $d (int (add1 $d)) $digits) $c }}{{- $val = add (mul $val 16) $d }}{{- end }}{{- end }}{{- end }}
+{{- end -}}
+{{- $covered := int (sub $p (mul $i 16)) -}}
+{{- if lt $covered 0 }}{{- $covered = 0 }}{{- end -}}
+{{- if gt $covered 16 }}{{- $covered = 16 }}{{- end -}}
+{{- $pow := 1 -}}
+{{- range until (int (sub 16 $covered)) }}{{- $pow = mul $pow 2 }}{{- end -}}
+{{- if ne (int (mod $val $pow)) 0 }}{{- $ok = false }}{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- if $ok }}true{{ end -}}
+{{- end -}}
+
+{{/*
+authService.database.maxConns -> AUTH_DATABASE_MAX_CONNS. A whole number from
+1 to 32; anything else fails the render. A values file and --set-json decode
+numbers as float64, --set as int64, so both are accepted when whole; a string,
+a bool, null or a fraction is not.
+*/}}
+{{- define "dev-health.authMaxConns" -}}
+{{- $v := .Values.authService.database.maxConns -}}
+{{- $ok := false -}}
+{{- if has (kindOf $v) (list "int" "int64" "float64") -}}
+{{- if eq (toString (int64 $v)) (toString $v) -}}
+{{- if and (ge (int64 $v) 1) (le (int64 $v) 32) -}}{{- $ok = true -}}{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- if not $ok -}}{{- fail "authService.database.maxConns must be a whole number from 1 to 32: it is the connection pool of each auth-service replica, replicas x maxConns (plus one surge pod while rolling) is what the auth database must hold" -}}{{- end -}}
+{{- int64 $v -}}
+{{- end -}}
+
+{{/*
+The rolling-update surge of the auth-service Deployment: the one figure the
+connection budget and the Deployment strategy share.
+*/}}
+{{- define "dev-health.authMaxSurge" -}}1{{- end -}}
+
+{{/*
+authService.database.connectionBudget: the connections the release may hold on
+the auth database, that is max_connections minus superuser_reserved_connections
+(Postgres defaults 100 - 3 = 97). 0 turns the check off. Above 0 the render
+fails when
+  (authService.replicas + surge) x authService.database.maxConns
+  + every go-pgbouncer pool (one per (user, database) pair: the transaction
+    pooler counts its own role at transaction.poolSize and each
+    transaction.extraUsers entry at its own poolSize, else at the transaction
+    poolSize, ALL of them times (1 + the rollout surge pods of the transaction
+    pooler): a surge pod opens every one of those pools again; the two session
+    poolers count one pool each)
+exceeds it. Poolers count only while goWorkers and goWorkers.pgbouncer are on.
+A static upper bound: a pool holds server connections only while it needs them.
+Named assumption (CHAOS-11521 kind measurement, not a counted term): the two
+session poolers add +0 while they roll. Their old pod keeps its clients until it
+is stopped (24 to 31 s, the 30 s grace period), so the surge pod opens no server
+connection; the measured total stayed at the baseline in every session-pooler
+case. The transaction pooler is different: its surge pod serves new connections
+at once (+18 measured), so it is counted.
+*/}}
+{{/*
+One number the connection budget adds or multiplies: a whole number from min to
+max, else the render fails naming the key. The bound keeps the sum from
+wrapping, whether or not the schema ran (helm --skip-schema-validation).
+*/}}
+{{- define "dev-health.budgetTerm" -}}
+{{- $v := .value -}}
+{{- $ok := false -}}
+{{- if has (kindOf $v) (list "int" "int64" "float64") -}}
+{{- if eq (toString (int64 $v)) (toString $v) -}}
+{{- if and (ge (int64 $v) (int64 .min)) (le (int64 $v) (int64 .max)) -}}{{- $ok = true -}}{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- if not $ok -}}{{- fail (printf "%s must be a whole number from %d to %d when authService.database.connectionBudget is set: the budget adds it with the other pools" .key (int64 .min) (int64 .max)) -}}{{- end -}}
+{{- int64 $v -}}
+{{- end -}}
+
+{{/*
+goWorkers.pgbouncer.transaction.rollingUpdate, validated, as a JSON object for
+the Deployment's rollingUpdate; empty when unset (no strategy key: the
+Kubernetes default, 25 percent, which is one surge pod at one replica). Whole
+numbers only (the budget counts surge pods, a percentage cannot be counted) and
+maxSurge 0 needs maxUnavailable of 1 or more (Kubernetes refuses both at 0).
+*/}}
+{{- define "dev-health.pgbouncerTransactionRollingUpdate" -}}
+{{- $ru := .Values.goWorkers.pgbouncer.transaction.rollingUpdate | default dict -}}
+{{- if $ru -}}
+{{- $out := dict -}}
+{{- range $k := list "maxSurge" "maxUnavailable" -}}
+{{- if hasKey $ru $k -}}
+{{- $v := get $ru $k -}}
+{{- $ok := false -}}
+{{- if has (kindOf $v) (list "int" "int64" "float64") -}}
+{{- if and (eq (toString (int64 $v)) (toString $v)) (ge (int64 $v) 0) (le (int64 $v) 10) -}}{{- $ok = true -}}{{- end -}}
+{{- end -}}
+{{- if not $ok -}}{{- fail (printf "goWorkers.pgbouncer.transaction.rollingUpdate.%s must be a whole number from 0 to 10: the connection budget counts surge pods, a percentage cannot be counted" $k) -}}{{- end -}}
+{{- $_ := set $out $k (int64 $v) -}}
+{{- end -}}
+{{- end -}}
+{{- range $k, $_ := $ru -}}
+{{- if not (has $k (list "maxSurge" "maxUnavailable")) -}}{{- fail (printf "goWorkers.pgbouncer.transaction.rollingUpdate.%s is not a known key: use maxSurge and maxUnavailable" $k) -}}{{- end -}}
+{{- end -}}
+{{- if and (hasKey $out "maxSurge") (eq (int64 (get $out "maxSurge")) 0) (lt (int64 (default 0 (get $out "maxUnavailable"))) 1) -}}{{- fail "goWorkers.pgbouncer.transaction.rollingUpdate: maxSurge 0 needs maxUnavailable of 1 or more (Kubernetes refuses a rolling update that may neither surge nor remove a pod)" -}}{{- end -}}
+{{- toJson $out -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Surge pods of the transaction pooler during a rollout, the figure the budget
+check and the Deployment share: rollingUpdate.maxSurge when set, else 1 (the
+Kubernetes default of 25 percent rounds up to one pod at one replica).
+*/}}
+{{- define "dev-health.pgbouncerTransactionSurge" -}}
+{{- $j := include "dev-health.pgbouncerTransactionRollingUpdate" . -}}
+{{- if $j -}}
+{{- $ru := fromJson $j -}}
+{{- if hasKey $ru "maxSurge" -}}{{- int64 (get $ru "maxSurge") -}}{{- else -}}1{{- end -}}
+{{- else -}}1{{- end -}}
+{{- end -}}
+
+{{- define "dev-health.authConnectionBudget" -}}
+{{- $v := .Values.authService.database.connectionBudget -}}
+{{- $ok := false -}}
+{{- if has (kindOf $v) (list "int" "int64" "float64") -}}
+{{- if eq (toString (int64 $v)) (toString $v) -}}
+{{- if ge (int64 $v) 0 -}}{{- $ok = true -}}{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- if not $ok -}}{{- fail "authService.database.connectionBudget must be a whole number of 0 or more (0 = no check): the connections the auth database may hold, max_connections minus superuser_reserved_connections" -}}{{- end -}}
+{{- if gt (int64 $v) 0 -}}
+{{- $pools := 0 -}}
+{{- $txnDetail := "no go-pgbouncer pools" -}}
+{{- if and .Values.goWorkers.enabled .Values.goWorkers.pgbouncer.enabled -}}
+{{- $p := .Values.goWorkers.pgbouncer -}}
+{{- $txn := int64 (include "dev-health.budgetTerm" (dict "key" "goWorkers.pgbouncer.transaction.poolSize" "value" $p.transaction.poolSize "min" 1 "max" 1000)) -}}
+{{- $users := $txn -}}
+{{- range $u := ($p.transaction.extraUsers | default (list)) -}}
+{{- if hasKey $u "poolSize" -}}
+{{- $users = add $users (int64 (include "dev-health.budgetTerm" (dict "key" "goWorkers.pgbouncer.transaction.extraUsers[].poolSize" "value" $u.poolSize "min" 1 "max" 1000))) -}}
+{{- else -}}
+{{- $users = add $users $txn -}}
+{{- end -}}
+{{- end -}}
+{{- $queue := int64 (include "dev-health.budgetTerm" (dict "key" "goWorkers.pgbouncer.queueSession.poolSize" "value" $p.queueSession.poolSize "min" 1 "max" 1000)) -}}
+{{- $coordinator := int64 (include "dev-health.budgetTerm" (dict "key" "goWorkers.pgbouncer.coordinatorSession.poolSize" "value" $p.coordinatorSession.poolSize "min" 1 "max" 1000)) -}}
+{{- $surge := int64 (include "dev-health.pgbouncerTransactionSurge" .) -}}
+{{- $txnTotal := mul $users (add1 $surge) -}}
+{{- $pools = add $txnTotal (add $queue $coordinator) -}}
+{{- $txnDetail = printf "transaction pooler pools %d x (1 + %d surge pod) = %d, queue-session %d, coordinator-session %d" $users $surge $txnTotal $queue $coordinator -}}
+{{- end -}}
+{{- $replicas := int64 (include "dev-health.budgetTerm" (dict "key" "authService.replicas" "value" .Values.authService.replicas "min" 0 "max" 100)) -}}
+{{- $direct := mul (add $replicas (int64 (include "dev-health.authMaxSurge" .))) (int64 (include "dev-health.authMaxConns" .)) -}}
+{{- $used := add $pools $direct -}}
+{{- if gt $used (int64 $v) -}}{{- fail (printf "authService.database.connectionBudget: %d connections are needed but the budget is %d: (authService.replicas %d + %d surge) x authService.database.maxConns %d = %d direct, plus %d go-pgbouncer pool connections (%s). Lower a pool or add capacity before raising the budget" $used (int64 $v) $replicas (int64 (include "dev-health.authMaxSurge" .)) (int64 (include "dev-health.authMaxConns" .)) $direct $pools $txnDetail) -}}{{- end -}}
+{{- end -}}
+{{- end -}}

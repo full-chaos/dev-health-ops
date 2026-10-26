@@ -57,20 +57,29 @@
           "type": "object",
           "properties": { "preStopSeconds": { "type": "integer", "minimum": 0, "maximum": 600 } }
         },
-        "shutdownTimeout": { "type": "string", "pattern": "^[1-9][0-9]{0,4}s$" },
-        "terminationGracePeriodSeconds": { "type": "integer", "minimum": 1, "maximum": 86400 },
-        "authProxy": {
-          "description": "CHAOS-10231: the /api/v1/auth/* proxy flags. YAML booleans only: a string such as \"false\" is refused, never read as on.",
+        "sessionIssue": {
+          "description": "CHAOS-11217: the Secret and key go-api reads AUTH_SESSION_ISSUE_TOKEN from. Empty secretName keeps the shared Secret.",
           "type": "object",
           "additionalProperties": false,
+          "required": ["secretName", "secretKey"],
           "properties": {
-            "sessions": { "type": "boolean" },
-            "localLogin": { "type": "boolean" },
-            "credentials": { "type": "boolean" },
-            "social": { "type": "boolean" },
-            "oidc": { "type": "boolean" },
-            "saml": { "type": "boolean" }
+            "secretName": { "type": "string", "maxLength": 253, "pattern": "^([a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?)*)?$" },
+            "secretKey": { "type": "string", "pattern": "^[A-Za-z0-9_-][A-Za-z0-9._-]{0,252}$" }
           }
+        },
+        "shutdownTimeout": { "type": "string", "pattern": "^[1-9][0-9]{0,4}s$" },
+        "terminationGracePeriodSeconds": { "type": "integer", "minimum": 1, "maximum": 86400 }
+      }
+    },
+    "authService": {
+      "type": "object",
+      "properties": {
+        "replicas": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "phase": {
+          "description": "CHAOS-11382: the auth cutover phase, a whole number 0..5 (values.yaml). The templates also refuse 4 and 5 and the keys it replaces.",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 5
         }
       }
     },
@@ -88,6 +97,19 @@
               ]
             },
             "localBundledPostgres": { "type": "boolean" },
+            "streakIndex": {
+              "type": "object",
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "activeDeadlineSeconds": { "type": "integer", "minimum": 60 },
+                "lockTimeoutSeconds": { "type": "integer", "minimum": 1, "maximum": 60 },
+                "deadlineSeconds": { "type": "integer", "minimum": 60 },
+                "attempts": { "type": "integer", "minimum": 1 },
+                "retryDelaySeconds": { "type": "integer", "minimum": 0 }
+              },
+              "required": ["enabled"],
+              "description": "The weight -2 pre-hook Job that builds ix_sync_run_units_failure_streak CONCURRENTLY before revision 0159."
+            },
             "classDecisionLiveSchemaDigest": {
               "type": "string",
               "pattern": "^(sha256:[0-9a-f]{64})?$",
@@ -152,9 +174,23 @@
           "properties": {
             "enabled": { "type": "boolean" },
             "image": { "type": "string" },
+            "queueSession": { "type": "object", "properties": { "poolSize": { "type": "integer", "minimum": 1, "maximum": 1000 } } },
+            "coordinatorSession": { "type": "object", "properties": { "poolSize": { "type": "integer", "minimum": 1, "maximum": 1000 } } },
             "transaction": {
               "type": "object",
               "properties": {
+                "poolSize": { "type": "integer", "minimum": 1, "maximum": 1000 },
+                "rollingUpdate": {
+                  "type": "object",
+                  "description": "Rolling update of the transaction pooler Deployment. Whole numbers only: the connection budget counts surge pods. Empty renders no strategy key (the Kubernetes default, one surge pod at one replica, which the budget counts).",
+                  "properties": {
+                    "maxSurge": { "type": "integer", "minimum": 0, "maximum": 10 },
+                    "maxUnavailable": { "type": "integer", "minimum": 0, "maximum": 10 }
+                  },
+                  "if": { "properties": { "maxSurge": { "const": 0 } }, "required": ["maxSurge"] },
+                  "then": { "properties": { "maxUnavailable": { "minimum": 1 } }, "required": ["maxUnavailable"] },
+                  "additionalProperties": false
+                },
                 "extraUsers": {
                   "type": "array",
                   "description": "Roles the transaction pooler authenticates in addition to its own. Both fields are required and neither may be empty: the chart writes each entry as one `\"role\" \"password\"` userlist line, so a missing role would emit a line PgBouncer silently reads as a blank user, and a missing passwordKey has no Secret value to resolve.",
@@ -162,7 +198,8 @@
                     "type": "object",
                     "properties": {
                       "role": { "type": "string", "minLength": 1 },
-                      "passwordKey": { "type": "string", "minLength": 1 }
+                      "passwordKey": { "type": "string", "minLength": 1 },
+                      "poolSize": { "type": "integer", "minimum": 1, "maximum": 1000, "description": "Server connections of this role's pool. Optional: without it the entry takes goWorkers.pgbouncer.transaction.poolSize." }
                     },
                     "required": ["role", "passwordKey"],
                     "additionalProperties": false

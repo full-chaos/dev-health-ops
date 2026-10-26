@@ -37,6 +37,7 @@ import (
 	"errors"
 	"log/slog"
 	"math"
+	"strings"
 	"sync"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
@@ -45,6 +46,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/chquery"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/chwrite"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/units"
+	"github.com/full-chaos/dev-health-ops/internal/llmorgsettings"
 )
 
 const (
@@ -203,6 +205,8 @@ type servedClassifier interface {
 // ServedDecision is the served decision backend of one Execute: built once,
 // used by one Materializer.Run, then closed.
 type ServedDecision struct {
+	// byo marks the backend of an org's own model (newBYOSystemOne); jev is false.
+	byo        bool
 	classifier servedClassifier
 	// identity and stamp are fixed at construction from configured values only,
 	// never from a response field.
@@ -289,13 +293,32 @@ func (served *ServedDecision) Close() error {
 type servedFailure struct {
 	class         string
 	deterministic bool
-	calls         int
-	inputTokens   int
-	outputTokens  int
+	// code is a member of the closed refusal set (llmorgsettings), or empty.
+	code         string
+	calls        int
+	inputTokens  int
+	outputTokens int
 }
 
 func (failure *servedFailure) Error() string {
+	if failure.code != "" {
+		return "investment served decision: the request failed (" + failure.class + ": " + failure.code + ")"
+	}
 	return "investment served decision: the request failed (" + failure.class + ")"
+}
+
+// unreportedModel reports an answer of an org's own model that names no model.
+// The org's provider reports none on every request, so the run stops.
+func (served *ServedDecision) unreportedModel(classification decision.Classification) bool {
+	if !served.byo || classification.ModelReturned != "" {
+		return false
+	}
+	for _, code := range classification.Errors {
+		if strings.HasPrefix(code, "request_failed:model_mismatch") {
+			return true
+		}
+	}
+	return false
 }
 
 // llmFailureOf is the class of a categorization error and whether it recurs on
@@ -314,7 +337,13 @@ func llmFailureOf(err error) (class string, deterministic bool) {
 // unit has none (a failed request, a cancelled context).
 func (served *ServedDecision) categorize(ctx context.Context, cfg Config, entry preprocessed) (categorize.CategorizationOutcome, error) {
 	unit := shadowUnit{workUnitID: entry.result.Investment.WorkUnitID, bundle: entry.result.Bundle}
-	result := served.classifyOne(ctx, unit)
+	// The worker pool can still hand over a unit after the run stopped (its
+	// producer's select picks at random between two ready cases): that unit is
+	// never sent.
+	result := shadowResult{unit: unit, err: ctx.Err()}
+	if result.err == nil {
+		result = served.classifyOne(ctx, unit)
+	}
 	if result.err != nil {
 		// A cancelled or expired context (the only error Classify returns for a
 		// completer that NewCompleter built). The unit still has its one outcome
@@ -346,6 +375,9 @@ func (served *ServedDecision) categorize(ctx context.Context, cfg Config, entry 
 		failure := &servedFailure{
 			class: label, deterministic: classification.Stop,
 			calls: servedSentCalls(result.exchange), inputTokens: classification.InputTokens, outputTokens: classification.OutputTokens,
+		}
+		if served.unreportedModel(classification) {
+			failure.deterministic, failure.code = true, llmorgsettings.CodeCategorizeBYOModelUnreported
 		}
 		if !failure.deterministic {
 			served.mu.Lock()
@@ -608,6 +640,9 @@ func (m *Materializer) noteSkippedTerminal(count int) {
 func (m *Materializer) categorizeEntry(ctx context.Context, cfg Config, entry preprocessed) (categorize.CategorizationOutcome, error) {
 	if backend := m.backend(); backend != nil {
 		return backend.categorize(ctx, cfg, entry)
+	}
+	if err := ctx.Err(); err != nil {
+		return categorize.CategorizationOutcome{}, err
 	}
 	return categorize.CategorizeTextBundle(ctx, entry.result.Bundle, categorize.CategorizeOptions{
 		Provider: m.provider, ProviderName: cfg.ProviderName, Model: cfg.Model, Telemetry: m.llmTelemetry,

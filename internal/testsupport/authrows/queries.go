@@ -77,16 +77,16 @@ const auditLogsACP = `SELECT org, email, action, rtype, resource, description, c
 // aggregate is forwarded.
 var publicOnly = map[string]bool{TableOrganizations: true, TableMemberships: true, TableOrgInvites: true}
 
-// linkCredentialTables are written to auth.link_credentials when the credentials aggregate is forwarded; their
-// projection is a separate leaf, so a run that forwards credentials fails here instead of skipping the rows.
-var linkCredentialTables = map[string]bool{TableEmailVerificationTokens: true, TablePasswordResetTokens: true}
+// linkCredentialPurposes are the comparisons written to auth.link_credentials when the credentials aggregate is
+// forwarded, with the purpose of the credential.
+var linkCredentialPurposes = map[string]string{TableEmailVerificationTokens: "email_verification", TablePasswordResetTokens: "password_reset"}
 
 // projected are the comparisons an auth-service sign-in changes.
 var projected = map[string]bool{TableUsers: true, TableRefreshTokens: true, TableAuditLogs: true}
 
 // unprojectedAggregates are the forwarded aggregates whose rows have no projection yet. A run that forwards one
 // fails on the first table it could change: nothing is compared against the wrong rows and nothing is skipped.
-var unprojectedAggregates = []Aggregate{Credentials, OIDC, SAML}
+var unprojectedAggregates = []Aggregate{OIDC, SAML}
 
 // Query is the SQL the corpus runs for table's row comparison when f is forwarded, and whether it differs from
 // public (the query go-api's own rows are read with). With nothing forwarded it is public, byte for byte. An
@@ -95,12 +95,12 @@ func Query(table, public string, f Forwarded) (query string, isProjected bool, e
 	if !f.Any() {
 		return public, false, nil
 	}
-	known := projected[table] || publicOnly[table] || linkCredentialTables[table]
+	known := projected[table] || publicOnly[table] || linkCredentialPurposes[table] != ""
 	if !known {
 		return "", false, fmt.Errorf("authrows: no row comparison named %q", table)
 	}
-	if linkCredentialTables[table] && f.Has(Credentials) {
-		return "", false, fmt.Errorf("authrows: %s is written to auth.link_credentials when credentials is forwarded, and its projection is not built; forwarded: %s", table, f)
+	if purpose := linkCredentialPurposes[table]; purpose != "" && f.Has(Credentials) {
+		return linkTokensACP(table, purpose), true, nil
 	}
 	if projected[table] {
 		for _, a := range unprojectedAggregates {
@@ -118,6 +118,9 @@ func Query(table, public string, f Forwarded) (query string, isProjected bool, e
 	case TableRefreshTokens:
 		return refreshTokensACP, true, nil
 	case TableAuditLogs:
+		if f.Has(Credentials) {
+			return auditLogsCredentials(), true, nil
+		}
 		return auditLogsACP, true, nil
 	}
 	return public, false, nil

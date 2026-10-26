@@ -9,6 +9,7 @@ internal/api/pybody
 internal/api/pyheaders
 internal/api/pyjson
 internal/api/pytime
+internal/api/registerorg
 internal/audit
 internal/auth/authapi
 internal/auth/clientaddr
@@ -26,6 +27,7 @@ internal/auth/identity/social
 internal/auth/keystore
 internal/auth/passwordhash
 internal/auth/passwordpolicy
+internal/auth/policycatalog
 internal/auth/requestid
 internal/auth/servicecred
 internal/auth/session

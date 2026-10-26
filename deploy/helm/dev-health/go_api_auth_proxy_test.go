@@ -16,7 +16,7 @@ var authProxyFlags = map[string]string{
 
 func goAPIWithAuth(sets ...string) []string {
 	base := append(append([]string{"--set", "goApi.enabled=true"}, authBase...), sessionReaders...)
-	return append(append(base, sessionSuccessor...), sets...)
+	return append(append(append(base, sessionSuccessor...), authTrusted...), sets...)
 }
 
 func proxyEnv(t *testing.T, docs []map[string]any) map[string]string {
@@ -78,35 +78,31 @@ func TestGoAPIAuthProxyIsOffByDefault(t *testing.T) {
 	}
 }
 
-func TestGoAPIAuthProxyRendersOnlyTheFlagsThatAreOn(t *testing.T) {
-	docs, out, err := renderAuth(t, goAPIWithAuth("--set", "goApi.authProxy.sessions=true", "--set", "goApi.authProxy.saml=true")...)
-	if err != nil {
-		t.Fatalf("render failed: %v\n%.400s", err, out)
-	}
-	want := map[string]string{
-		"AUTH_PROXY_URL": "http://a-dev-health-auth-service:8095", "AUTH_PROXY_SESSIONS": "true", "AUTH_PROXY_SAML": "true",
-	}
-	got := proxyEnv(t, docs)
-	if len(got) != len(want) {
-		t.Fatalf("AUTH_PROXY_* = %v, want %v", got, want)
-	}
-	for name, value := range want {
-		if got[name] != value {
-			t.Errorf("%s = %q, want %q", name, got[name], value)
-		}
-	}
-	from := authServiceAPIFrom(t, docs)
-	if len(from) != 1 || at(from[0], "podSelector", "matchLabels", "app.kubernetes.io/component") != "go-api" {
-		t.Fatalf("auth-service API port admits %v, want only the go-api pods", from)
-	}
-	for flag, env := range authProxyFlags {
-		args := goAPIWithAuth("--set", "goApi.authProxy.sessions=true", "--set", "goApi.authProxy."+flag+"=true")
-		docs, out, err := renderAuth(t, args...)
+func TestGoAPIAuthProxyRendersEveryFlagExplicitlyFromPhase2(t *testing.T) {
+	for phase, want := range map[string]map[string]string{
+		"2": {"AUTH_PROXY_URL": "http://a-dev-health-auth-service:8095", "AUTH_PROXY_SESSIONS": "true",
+			"AUTH_PROXY_LOCAL_LOGIN": "false", "AUTH_PROXY_CREDENTIALS": "false", "AUTH_PROXY_SOCIAL": "false",
+			"AUTH_PROXY_OIDC": "false", "AUTH_PROXY_SAML": "false"},
+		"3": {"AUTH_PROXY_URL": "http://a-dev-health-auth-service:8095", "AUTH_PROXY_SESSIONS": "true",
+			"AUTH_PROXY_LOCAL_LOGIN": "true", "AUTH_PROXY_CREDENTIALS": "false", "AUTH_PROXY_SOCIAL": "true",
+			"AUTH_PROXY_OIDC": "false", "AUTH_PROXY_SAML": "false"},
+	} {
+		docs, out, err := renderAuth(t, goAPIWithAuth(append([]string{"--set", "authService.phase=" + phase}, phase3Secrets...)...)...)
 		if err != nil {
-			t.Fatalf("%s: render failed: %v\n%.400s", flag, err, out)
+			t.Fatalf("phase %s: render failed: %v\n%.400s", phase, err, out)
 		}
-		if proxyEnv(t, docs)[env] != "true" {
-			t.Errorf("goApi.authProxy.%s does not render %s", flag, env)
+		got := proxyEnv(t, docs)
+		if len(got) != len(want) {
+			t.Fatalf("phase %s: AUTH_PROXY_* = %v, want %v", phase, got, want)
+		}
+		for name, value := range want {
+			if got[name] != value {
+				t.Errorf("phase %s: %s = %q, want %q", phase, name, got[name], value)
+			}
+		}
+		from := authServiceAPIFrom(t, docs)
+		if len(from) != 1 || at(from[0], "podSelector", "matchLabels", "app.kubernetes.io/component") != "go-api" {
+			t.Fatalf("phase %s: auth-service API port admits %v, want only the go-api pods", phase, from)
 		}
 	}
 }
@@ -116,11 +112,12 @@ func TestGoAPIAuthProxyRefusals(t *testing.T) {
 		args []string
 		want string
 	}{
-		"no auth-service": {[]string{"--set", "goApi.enabled=true", "--set", "goApi.authProxy.sessions=true"}, "goApi.authProxy flags need authService.enabled"},
-		"login without sessions": {goAPIWithAuth("--set", "goApi.authProxy.localLogin=true"),
-			"goApi.authProxy.sessions must be on"},
 		"extraEnv flag": {goAPIWithAuth("--set", "goApi.extraEnv[0].name=AUTH_PROXY_SESSIONS", "--set", "goApi.extraEnv[0].value=true"),
 			"goApi.extraEnv must not set AUTH_PROXY_*"},
+		"extraEnv flag, lower case": {goAPIWithAuth("--set", "goApi.extraEnv[0].name=auth_proxy_sessions", "--set", "goApi.extraEnv[0].value=true"),
+			"goApi.extraEnv must not set AUTH_PROXY_*"},
+		"extraEnv issuer": {goAPIWithAuth("--set", "goApi.extraEnv[0].name=AUTH_ACCESS_TOKEN_ISSUER", "--set", "goApi.extraEnv[0].value=https://x.example"),
+			"goApi.extraEnv must not set AUTH_ACCESS_TOKEN_ISSUER"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, out, err := renderAuth(t, tc.args...)
@@ -134,18 +131,20 @@ func TestGoAPIAuthProxyRefusals(t *testing.T) {
 	}
 }
 
-// A flag is a YAML boolean: a string, "false" included, is refused, never
-// read as on.
-func TestGoAPIAuthProxyRefusesNonBooleanFlags(t *testing.T) {
+// A hand-set goApi.authProxy flag is refused whatever its value or type: authService.phase owns every flag.
+func TestGoAPIAuthProxyRefusesEveryHandSetFlag(t *testing.T) {
 	for flag := range authProxyFlags {
-		for _, value := range []string{"false", "true", "no"} {
-			docs, out, err := renderAuth(t, goAPIWithAuth("--set", "goApi.authProxy.sessions=true", "--set-string", "goApi.authProxy."+flag+"="+value)...)
+		for _, set := range [][]string{
+			{"--set", "goApi.authProxy." + flag + "=true"}, {"--set", "goApi.authProxy." + flag + "=false"},
+			{"--set-string", "goApi.authProxy." + flag + "=false"}, {"--set-string", "goApi.authProxy." + flag + "=no"},
+		} {
+			docs, out, err := renderAuth(t, goAPIWithAuth(append([]string{"--set", "authService.phase=2"}, set...)...)...)
 			if err == nil {
-				t.Errorf("goApi.authProxy.%s=%q (a string) rendered %v; it must be refused", flag, value, proxyEnv(t, docs))
+				t.Errorf("%v rendered %v; it must be refused", set, proxyEnv(t, docs))
 				continue
 			}
-			if !strings.Contains(out, "authProxy") {
-				t.Errorf("goApi.authProxy.%s=%q: the refusal does not name the field: %.300s", flag, value, out)
+			if !strings.Contains(out, "goApi.authProxy is replaced by authService.phase") {
+				t.Errorf("%v: the refusal does not name the replacement: %.300s", set, out)
 			}
 		}
 	}

@@ -156,3 +156,68 @@ func TestResolveQueryAPIRoleDecisionTable(t *testing.T) {
 		}
 	}
 }
+
+func sessionReadOptions() MigrationOptions {
+	options := queryAPIOptions()
+	options.QueryAPISessionRead = &SessionReadGrant{Schema: "auth", Table: "sessions", Columns: []string{"id", "principal_id", "revoked_at", "legacy_token_version"}}
+	return options
+}
+
+func TestQueryAPIGrantStatementsCarryTheSessionReadOnlyWhenSet(t *testing.T) {
+	t.Parallel()
+	without := strings.Join(queryAPIGrantStatements(queryAPIOptions()), "\n")
+	if strings.Contains(without, `"auth"`) {
+		t.Fatalf("no session read requested, statements mention auth:\n%s", without)
+	}
+	with := strings.Join(queryAPIGrantStatements(sessionReadOptions()), "\n")
+	for _, want := range []string{
+		`GRANT USAGE ON SCHEMA "auth" TO "dev_health_query_api"`,
+		`GRANT SELECT ("id", "principal_id", "revoked_at", "legacy_token_version") ON TABLE "auth"."sessions" TO "dev_health_query_api"`,
+	} {
+		if !strings.Contains(with, want) {
+			t.Errorf("missing %s in:\n%s", want, with)
+		}
+	}
+}
+
+func TestMigrationOptionsValidateTheQueryAPISessionRead(t *testing.T) {
+	t.Parallel()
+	if err := ValidateMigrationOptions(sessionReadOptions()); err != nil {
+		t.Fatalf("valid session read refused: %v", err)
+	}
+	cases := map[string]func(*MigrationOptions){
+		"without role":  func(o *MigrationOptions) { o.QueryAPIRole, o.QueryAPIGrants = "", nil },
+		"unsafe schema": func(o *MigrationOptions) { o.QueryAPISessionRead.Schema = "auth; DROP SCHEMA x" },
+		"unsafe column": func(o *MigrationOptions) { o.QueryAPISessionRead.Columns = []string{"id; x"} },
+		"no columns":    func(o *MigrationOptions) { o.QueryAPISessionRead.Columns = nil },
+		"unsafe table":  func(o *MigrationOptions) { o.QueryAPISessionRead.Table = "s;" },
+	}
+	for name, mutate := range cases {
+		options := sessionReadOptions()
+		mutate(&options)
+		if err := ValidateMigrationOptions(options); !errors.Is(err, ErrMigrationConfiguration) {
+			t.Errorf("%s: %v, want ErrMigrationConfiguration", name, err)
+		}
+	}
+}
+
+// The backstop (flag on, auth schema or sessions table absent): the session grant
+// is dropped, the rest of the leg is unchanged, nothing aborts.
+func TestSessionReadIsSkippedWhenTheAuthSessionsTableIsAbsent(t *testing.T) {
+	t.Parallel()
+	options := sessionReadOptions()
+	kept, skipped := resolveQueryAPISessionRead(options, true)
+	if skipped || kept.QueryAPISessionRead == nil {
+		t.Fatalf("present table: skipped=%v read=%v", skipped, kept.QueryAPISessionRead)
+	}
+	dropped, skipped := resolveQueryAPISessionRead(options, false)
+	if !skipped || dropped.QueryAPISessionRead != nil {
+		t.Fatalf("absent table: skipped=%v read=%v", skipped, dropped.QueryAPISessionRead)
+	}
+	if !reflect.DeepEqual(queryAPIGrantStatements(dropped), queryAPIGrantStatements(queryAPIOptions())) {
+		t.Fatal("a skipped session read must leave the leg's statements unchanged")
+	}
+	if options.QueryAPISessionRead == nil {
+		t.Fatal("the caller's options were mutated")
+	}
+}

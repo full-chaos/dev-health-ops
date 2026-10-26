@@ -19,7 +19,8 @@ import (
 func TestLegacyIngestRefusalsAreScrapedFromTheOperatorRegistry(t *testing.T) {
 	t.Setenv("INGEST_API_KEYS", "")
 	t.Setenv("INGEST_SIGNING_SECRET", "")
-	t.Setenv("ENVIRONMENT", "production")
+	t.Setenv("ENVIRONMENT", "development")
+	t.Setenv("DEV_HEALTH_LEGACY_INGEST_ENABLED", "true")
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	registry := health.NewRegistry(time.Second)

@@ -45,6 +45,7 @@ Count all server-side connection pools:
 - API and Go worker direct pools where used;
 - operator CLI invocation;
 - migration and administrative reserve.
+- auth-service direct pools, when enabled: replicas plus one surge pod (and briefly the pods still shutting down), each holding `authService.database.maxConns` connections; `authService.database.connectionBudget` makes the chart check the sum, with a per-user pool size for each extra pooler role, the transaction pooler pools counted again for its rollout surge pod, and a named assumption of +0 for the session poolers (see [Auth-service capacity](auth-service-capacity.md)).
 
 The Go deployment manifest describes each worker group selected by deployment.
 For each group, calculate the fleet budget from its replica range, one River
@@ -125,3 +126,5 @@ Scale only after observing:
 - error and retry amplification.
 
 Scale the binding constraint first. When a dependency sample fails, treat capacity as unknown rather than reading a missing metric as zero usage.
+
+For auth-service, see [Auth-service capacity](auth-service-capacity.md).

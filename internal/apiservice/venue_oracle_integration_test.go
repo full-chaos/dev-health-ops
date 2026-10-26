@@ -266,8 +266,15 @@ func TestVenueOracleProtectedRoutes(t *testing.T) {
 // base URL once readiness is true as the api role.
 func startVenueAPI(t *testing.T, ctx context.Context, cfg config.Config, venue *venueoracle.Venue) string {
 	t.Helper()
+	return startVenueAPIWith(t, ctx, cfg, venue, nil)
+}
+
+// startVenueAPIWith is startVenueAPI with adjust applied to the built Deps
+// before the routes are composed.
+func startVenueAPIWith(t *testing.T, ctx context.Context, cfg config.Config, venue *venueoracle.Venue, adjust func(*Deps)) string {
+	t.Helper()
 	registry := health.NewRegistry(5 * time.Second)
-	components, err := configure(ctx, cfg, registry, quietLogger())
+	components, err := configureWith(ctx, cfg, registry, quietLogger(), adjust)
 	if err != nil {
 		t.Fatal(err)
 	}

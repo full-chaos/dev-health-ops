@@ -69,6 +69,20 @@ type routesEnv struct {
 // DSN logs in AS that role.
 func newRoutesEnv(t *testing.T, ctx context.Context) *routesEnv {
 	t.Helper()
+	return newRoutesEnvWith(t, ctx, nil)
+}
+
+// newRoutesEnvWith is newRoutesEnv with extra settings over the defaults.
+func newRoutesEnvWith(t *testing.T, ctx context.Context, extra map[string]string) *routesEnv {
+	t.Helper()
+	return newRoutesEnvDialing(t, ctx, extra, nil)
+}
+
+// newRoutesEnvDialing is newRoutesEnvWith with the service's database URL
+// rewritten by dial (nil keeps it): a test puts a fault proxy between the
+// service and PostgreSQL.
+func newRoutesEnvDialing(t *testing.T, ctx context.Context, extra map[string]string, dial func(*url.URL) *url.URL) *routesEnv {
+	t.Helper()
 	instance, err := containers.StartPostgres(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -108,6 +122,9 @@ func newRoutesEnv(t *testing.T, ctx context.Context) *routesEnv {
 		t.Fatal(err)
 	}
 	dsn.User = url.UserPassword(role, password)
+	if dial != nil {
+		dsn = dial(dsn)
+	}
 	store, err := containers.StartValkey(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -127,6 +144,9 @@ func newRoutesEnv(t *testing.T, ctx context.Context) *routesEnv {
 		authconfig.EnvOperatorAddress: "127.0.0.1:1",
 	})
 	env[authconfig.EnvValkeyURI] = store.URI
+	for name, value := range extra {
+		env[name] = value
+	}
 	cfg, err := authconfig.Load(authconfig.Spec{LookupEnv: lookupFrom(env)})
 	if err != nil {
 		t.Fatalf("load config: %v", err)

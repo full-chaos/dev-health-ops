@@ -129,7 +129,13 @@ func TestDomainAuthorizationRequiresExactCanaryAndReconcilerPrivileges(t *testin
 		"CREATE TABLE public.feature_flags (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.org_feature_overrides (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.org_licenses (id bigint PRIMARY KEY)",
-		"CREATE TABLE public.byo_llm_budget_reservations (id uuid PRIMARY KEY)",
+		"CREATE TABLE public.byo_llm_budget_reservations (id uuid PRIMARY KEY, status text, input_tokens integer, output_tokens integer, cached_input_tokens integer, actual_micro_usd bigint, reconciled_at timestamptz)",
+		// domainPosture's RequiredFunctions: a SECURITY DEFINER shell with
+		// EXECUTE revoked from PUBLIC, as pgmigrate 0156 and 0158 create them.
+		"CREATE FUNCTION public.categorize_byo_opted_in(p_org_id text) RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS 'SELECT false'",
+		"REVOKE ALL ON FUNCTION public.categorize_byo_opted_in(text) FROM PUBLIC",
+		"CREATE FUNCTION public.categorize_byo_settings(p_org_id text) RETURNS TABLE (org_id text, category text, key text, value text, is_encrypted boolean, updated_at timestamptz) LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS 'SELECT NULL::text, NULL::text, NULL::text, NULL::text, NULL::boolean, NULL::timestamptz WHERE false'",
+		"REVOKE ALL ON FUNCTION public.categorize_byo_settings(text) FROM PUBLIC",
 		// CHAOS-4175 family 3's DispatchGuard total-cap read dual-granted this
 		// table; see the doc comment above domainPosture().
 		"CREATE TABLE public.tier_limits (id bigint PRIMARY KEY)",
@@ -150,6 +156,10 @@ func TestDomainAuthorizationRequiresExactCanaryAndReconcilerPrivileges(t *testin
 		"GRANT CONNECT ON DATABASE " + dbName + " TO " + authorizedDomainRole,
 		"GRANT USAGE ON SCHEMA public TO " + authorizedDomainRole,
 		"GRANT SELECT ON TABLE public.alembic_version, public.integrations, public.integration_credentials, public.sync_dispatch_transport_routes, public.feature_flags, public.org_feature_overrides, public.scheduled_report_occurrences, public.organizations, public.users, public.billing_notifications, public.external_ingest_sources, public.org_licenses, public.byo_llm_budget_reservations, public.tier_limits, public.webhook_deliveries TO " + authorizedDomainRole,
+		"GRANT EXECUTE ON FUNCTION public.categorize_byo_opted_in(text) TO " + authorizedDomainRole,
+		"GRANT EXECUTE ON FUNCTION public.categorize_byo_settings(text) TO " + authorizedDomainRole,
+		"GRANT INSERT ON TABLE public.byo_llm_budget_reservations TO " + authorizedDomainRole,
+		"GRANT UPDATE (status, input_tokens, output_tokens, cached_input_tokens, actual_micro_usd, reconciled_at) ON TABLE public.byo_llm_budget_reservations TO " + authorizedDomainRole,
 		"GRANT SELECT, UPDATE ON TABLE public.scheduled_jobs TO " + authorizedDomainRole,
 		"GRANT SELECT, UPDATE ON TABLE public.provider_oauth_credentials TO " + authorizedDomainRole,
 		"GRANT SELECT, INSERT, UPDATE ON TABLE public.github_app_installations TO " + authorizedDomainRole,
@@ -368,6 +378,68 @@ func TestDomainAuthorizationRequiresExactCanaryAndReconcilerPrivileges(t *testin
 			name:   "public function execution",
 			grant:  "GRANT EXECUTE ON FUNCTION public.runtime_probe() TO " + authorizedDomainRole,
 			revoke: "REVOKE EXECUTE ON FUNCTION public.runtime_probe() FROM " + authorizedDomainRole,
+		},
+		{
+			name:   "missing EXECUTE on a required function",
+			grant:  "REVOKE EXECUTE ON FUNCTION public.categorize_byo_opted_in(text) FROM " + authorizedDomainRole,
+			revoke: "GRANT EXECUTE ON FUNCTION public.categorize_byo_opted_in(text) TO " + authorizedDomainRole,
+		},
+		{
+			name:   "required function EXECUTE held with grant option",
+			grant:  "GRANT EXECUTE ON FUNCTION public.categorize_byo_opted_in(text) TO " + authorizedDomainRole + " WITH GRANT OPTION",
+			revoke: "REVOKE GRANT OPTION FOR EXECUTE ON FUNCTION public.categorize_byo_opted_in(text) FROM " + authorizedDomainRole,
+		},
+		{
+			name:   "PUBLIC EXECUTE on a required function",
+			grant:  "GRANT EXECUTE ON FUNCTION public.categorize_byo_opted_in(text) TO PUBLIC",
+			revoke: "REVOKE EXECUTE ON FUNCTION public.categorize_byo_opted_in(text) FROM PUBLIC",
+		},
+		{
+			name:   "required function is not SECURITY DEFINER",
+			grant:  "ALTER FUNCTION public.categorize_byo_opted_in(text) SECURITY INVOKER",
+			revoke: "ALTER FUNCTION public.categorize_byo_opted_in(text) SECURITY DEFINER",
+		},
+		{
+			name:   "missing EXECUTE on the categorize settings function",
+			grant:  "REVOKE EXECUTE ON FUNCTION public.categorize_byo_settings(text) FROM " + authorizedDomainRole,
+			revoke: "GRANT EXECUTE ON FUNCTION public.categorize_byo_settings(text) TO " + authorizedDomainRole,
+		},
+		{
+			name:   "missing budget-reservation INSERT",
+			grant:  "REVOKE INSERT ON TABLE public.byo_llm_budget_reservations FROM " + authorizedDomainRole,
+			revoke: "GRANT INSERT ON TABLE public.byo_llm_budget_reservations TO " + authorizedDomainRole,
+		},
+		{
+			name:   "budget-reservation INSERT held with grant option",
+			grant:  "GRANT INSERT ON TABLE public.byo_llm_budget_reservations TO " + authorizedDomainRole + " WITH GRANT OPTION",
+			revoke: "REVOKE GRANT OPTION FOR INSERT ON TABLE public.byo_llm_budget_reservations FROM " + authorizedDomainRole,
+		},
+		{
+			name:   "missing UPDATE of a Settle column",
+			grant:  "REVOKE UPDATE (reconciled_at) ON TABLE public.byo_llm_budget_reservations FROM " + authorizedDomainRole,
+			revoke: "GRANT UPDATE (reconciled_at) ON TABLE public.byo_llm_budget_reservations TO " + authorizedDomainRole,
+		},
+		{
+			name:   "Settle column UPDATE held with grant option",
+			grant:  "GRANT UPDATE (status) ON TABLE public.byo_llm_budget_reservations TO " + authorizedDomainRole + " WITH GRANT OPTION",
+			revoke: "REVOKE GRANT OPTION FOR UPDATE (status) ON TABLE public.byo_llm_budget_reservations FROM " + authorizedDomainRole,
+		},
+		{
+			name:   "UPDATE of an undeclared budget-reservation column",
+			grant:  "GRANT UPDATE (id) ON TABLE public.byo_llm_budget_reservations TO " + authorizedDomainRole,
+			revoke: "REVOKE UPDATE (id) ON TABLE public.byo_llm_budget_reservations FROM " + authorizedDomainRole,
+		},
+		{
+			// A table-level REVOKE also drops the column grants, so the restore
+			// puts the declared column UPDATE back.
+			name:   "table-wide budget-reservation UPDATE",
+			grant:  "GRANT UPDATE ON TABLE public.byo_llm_budget_reservations TO " + authorizedDomainRole,
+			revoke: "REVOKE UPDATE ON TABLE public.byo_llm_budget_reservations FROM " + authorizedDomainRole + "; GRANT UPDATE (status, input_tokens, output_tokens, cached_input_tokens, actual_micro_usd, reconciled_at) ON TABLE public.byo_llm_budget_reservations TO " + authorizedDomainRole,
+		},
+		{
+			name:   "budget-reservation DELETE",
+			grant:  "GRANT DELETE ON TABLE public.byo_llm_budget_reservations TO " + authorizedDomainRole,
+			revoke: "REVOKE DELETE ON TABLE public.byo_llm_budget_reservations FROM " + authorizedDomainRole,
 		},
 		{
 			name:   "River schema usage",

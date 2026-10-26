@@ -182,6 +182,16 @@ func usersOwnedFromEnv(env cli.Env) (bool, error) {
 	return usersowned.FromLookup(env.Lookup)
 }
 
+// usersWriteOperator is accountOperator for a verb that may write public.users:
+// with the switch on and a users write ahead, the refusal answers before a DSN
+// is resolved or a pool is built.
+func usersWriteOperator(ctx context.Context, env cli.Env, writesUsers bool) (admin.Operator, func(), int) {
+	if owned, err := usersOwnedFromEnv(env); err == nil && owned && writesUsers {
+		return admin.Operator{}, func() {}, report(env, nil, admin.ErrUsersOwned)
+	}
+	return accountOperator(ctx, env)
+}
+
 func operatorFor(ctx context.Context, env cli.Env, resolve dsnResolver) (admin.Operator, func(), int) {
 	owned, err := usersOwnedFromEnv(env)
 	if err != nil {
@@ -239,7 +249,7 @@ func runUsersCreate(ctx context.Context, env cli.Env) int {
 	flags := newAccountFlags(env, "dho admin users create")
 	var email, password, username, fullName optString
 	flags.Var(&email, "email", "user email address (required)")
-	flags.Var(&password, "password", "user password, at least 8 characters (one of --password, --password-stdin is required; --password shows in the process list)")
+	flags.Var(&password, "password", "user password, at least 12 characters, with a letter and a digit, not a common password, at most 72 bytes (one of --password, --password-stdin is required; --password shows in the process list)")
 	flags.Var(&username, "username", "optional username")
 	flags.Var(&fullName, "full-name", "the user's full name")
 	superuser := flags.Bool("superuser", false, "grant superuser privileges")
@@ -254,7 +264,7 @@ func runUsersCreate(ctx context.Context, env cli.Env) int {
 		fmt.Fprintln(env.Stderr, "argument error: --email and --password (or --password-stdin) are required")
 		return cli.ExitUsage
 	}
-	op, closePool, code := accountOperator(ctx, env)
+	op, closePool, code := usersWriteOperator(ctx, env, true)
 	defer closePool()
 	if code != 0 {
 		return code
@@ -383,7 +393,7 @@ func runUsersUpdate(ctx context.Context, env cli.Env) int {
 	flags.Var(&newEmail, "new-email", "set a new email address")
 	flags.Var(&newUsername, "new-username", "set a new username (an empty value clears it)")
 	flags.Var(&fullName, "full-name", "set the user's full name")
-	flags.Var(&password, "password", "set a new password, at least 8 characters; revokes existing sessions")
+	flags.Var(&password, "password", "set a new password, at least 12 characters, with a letter and a digit, not a common password, at most 72 bytes; revokes existing sessions")
 	verified := optionalBool(flags, "verified", "set verified status (--verified / --no-verified)")
 	superuser := optionalBool(flags, "superuser", "set superuser status (--superuser / --no-superuser)")
 	active := optionalBool(flags, "active", "set active status (--active / --no-active)")
@@ -405,17 +415,18 @@ func runUsersUpdate(ctx context.Context, env cli.Env) int {
 			return cli.ExitUsage
 		}
 	}
-	op, closePool, code := accountOperator(ctx, env)
-	defer closePool()
-	if code != 0 {
-		return code
-	}
-	result, err := op.UpdateUser(ctx, admin.UpdateUserInput{
+	update := admin.UpdateUserInput{
 		ID: id.ptr(), Email: email.ptr(), Username: username.ptr(),
 		NewEmail: newEmail.ptr(), NewUsername: newUsername.ptr(), FullName: fullName.ptr(), Password: password.ptr(),
 		Active: active.ptr(), Verified: verified.ptr(), Superuser: superuser.ptr(),
 		MembershipOrg: org.ptr(), Role: role.ptr(), RemoveFromOrg: removeFromOrg.ptr(),
-	})
+	}
+	op, closePool, code := usersWriteOperator(ctx, env, update.WritesUsers())
+	defer closePool()
+	if code != 0 {
+		return code
+	}
+	result, err := op.UpdateUser(ctx, update)
 	if err != nil {
 		return report(env, accountRedactor(env), err)
 	}
@@ -441,7 +452,7 @@ func runUsersDelete(ctx context.Context, env cli.Env) int {
 	if code, ok := parseArgs(flags, env); !ok {
 		return code
 	}
-	op, closePool, code := accountOperator(ctx, env)
+	op, closePool, code := usersWriteOperator(ctx, env, true)
 	defer closePool()
 	if code != 0 {
 		return code

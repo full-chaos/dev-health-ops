@@ -14,12 +14,14 @@ import (
 
 // pgPosture: `pg-posture api|domain <old-sha> <new-sha> <pg-expect-out-file>`.
 //
-// Reads a postgres posture function (RequiredTables {table, insert, update, delete}, SELECT implied, and
-// ColumnScoped {table, column, privilege}) at two git shas of BIGBOY_OPS_REPO and appends every privilege ADDED
-// between them to the out file as an expectation line for pg-grants-check.sh:
+// Reads a postgres posture function (RequiredTables {table, insert, update, delete}, SELECT implied,
+// ColumnScoped {table, column, privilege} and RequiredFunctions []string{"name(types)"}) at two git shas of
+// BIGBOY_OPS_REPO and appends every privilege ADDED between them to the out file as an expectation line for
+// pg-grants-check.sh:
 //
 //	devhealth_<role> <table> <PRIV>[,<PRIV>]            (has_table_privilege read-back)
 //	devhealth_<role> <table>.<column> <PRIV>[,<PRIV>]   (has_column_privilege read-back)
+//	devhealth_<role> <name>(<types>) EXECUTE             (has_function_privilege read-back; no spaces)
 //
 // Scope: an added-privileges read-back. It names what a cut grants and proves the grants are held; it cannot see
 // an unwanted extra (a table-wide UPDATE also makes has_column_privilege true). Exactness is the readiness gate's
@@ -84,16 +86,20 @@ func pgPosture(args []string, stdout, stderr io.Writer) int {
 
 var pgPrivileges = []string{"SELECT", "INSERT", "UPDATE", "DELETE", "REFERENCES"}
 
-// posture is the tables (privilege -> held) and columns (privileges) of one posture function.
+// posture is the tables (privilege -> held), columns (privileges) and functions (EXECUTE) of one posture function.
 type posture struct {
-	tables  map[string]map[string]bool
-	columns map[string]map[string]bool
+	tables    map[string]map[string]bool
+	columns   map[string]map[string]bool
+	functions map[string]bool
 }
 
 var (
 	lineComment = regexp.MustCompile(`//[^\n]*`)
 	tableRow    = regexp.MustCompile(`\{[` + pySpace + `]*"([` + pyWord + `]+)"[` + pySpace + `]*,[` + pySpace + `]*(true|false)[` + pySpace + `]*,[` + pySpace + `]*(true|false)[` + pySpace + `]*,[` + pySpace + `]*(true|false)[` + pySpace + `]*\}`)
-	columnRow   = regexp.MustCompile(`\{[` + pySpace + `]*"([` + pyWord + `]+)"[` + pySpace + `]*,[` + pySpace + `]*"([` + pyWord + `]+)"[` + pySpace + `]*,[` + pySpace + `]*"(SELECT|INSERT|UPDATE|REFERENCES)"[` + pySpace + `]*\}`)
+	// functionList is a RequiredFunctions literal of quoted signatures; any other form is unreadable.
+	functionList = regexp.MustCompile(`RequiredFunctions[` + pySpace + `]*:[` + pySpace + `]*\[\]string\{([^}]*)\}`)
+	functionItem = regexp.MustCompile(`"([a-z_][a-z0-9_]*\([a-z0-9_, ]*\))"`)
+	columnRow    = regexp.MustCompile(`\{[` + pySpace + `]*"([` + pyWord + `]+)"[` + pySpace + `]*,[` + pySpace + `]*"([` + pyWord + `]+)"[` + pySpace + `]*,[` + pySpace + `]*"(SELECT|INSERT|UPDATE|REFERENCES)"[` + pySpace + `]*\}`)
 )
 
 // keyedFields is the keys of re.finditer(r"\b(\w+)\s*:(?!=)", s): a word run that starts at a word boundary, optional
@@ -132,7 +138,7 @@ func loadPostureSource(src, fn string) (posture, bool) {
 	}
 	body := beforeFirst(rest, "\nfunc ")
 	body = lineComment.ReplaceAllString(body, "")
-	p := posture{tables: map[string]map[string]bool{}, columns: map[string]map[string]bool{}}
+	p := posture{tables: map[string]map[string]bool{}, columns: map[string]map[string]bool{}, functions: map[string]bool{}}
 	tablesSeen := 0
 	for _, m := range tableRow.FindAllStringSubmatch(body, -1) {
 		tablesSeen++
@@ -162,11 +168,28 @@ func loadPostureSource(src, fn string) (posture, bool) {
 		}
 		prev = r
 	}
-	// The read-back covers tables and columns only: any other keyed grant list, whatever its value
-	// (RequiredSequences: []string{...}, a name or a call) is a grant it cannot read back, so it must fail
-	// rather than vanish from the delta.
+	// The read-back covers tables, columns and a literal RequiredFunctions list: any other keyed grant list,
+	// whatever its value (RequiredSequences: []string{...}, a name or a call) is a grant it cannot read back, so
+	// it must fail rather than vanish from the delta.
+	functionLists := functionList.FindAllStringSubmatch(body, -1)
 	for _, key := range keyedFields(body) {
-		if key != "RequiredTables" && key != "ColumnScoped" {
+		switch key {
+		case "RequiredTables", "ColumnScoped":
+		case "RequiredFunctions":
+			if len(functionLists) != 1 {
+				return posture{}, false
+			}
+		default:
+			return posture{}, false
+		}
+	}
+	for _, list := range functionLists {
+		rest := list[1]
+		for _, m := range functionItem.FindAllStringSubmatch(list[1], -1) {
+			p.functions[strings.ReplaceAll(m[1], " ", "")] = true
+			rest = strings.Replace(rest, m[0], "", 1)
+		}
+		if strings.Trim(rest, ", \t\n") != "" {
 			return posture{}, false
 		}
 	}
@@ -197,7 +220,8 @@ func loadPosture(repo, sha, gofile, fn string) (p posture, ok bool, undecodable 
 	return p, ok, ""
 }
 
-// postureDelta is the expectation lines of the privileges after has and before lacks, tables then columns, sorted.
+// postureDelta is the expectation lines of the privileges after has and before lacks, tables, columns, then
+// functions, sorted.
 func postureDelta(role string, before, after posture) []string {
 	var lines []string
 	for _, table := range sortedKeys(after.tables) {
@@ -222,6 +246,11 @@ func postureDelta(role string, before, after posture) []string {
 		}
 		if len(added) > 0 {
 			lines = append(lines, fmt.Sprintf("devhealth_%s %s %s", role, column, strings.Join(added, ",")))
+		}
+	}
+	for _, function := range sortedKeys(after.functions) {
+		if !before.functions[function] {
+			lines = append(lines, fmt.Sprintf("devhealth_%s %s EXECUTE", role, function))
 		}
 	}
 	return lines

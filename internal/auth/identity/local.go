@@ -21,18 +21,29 @@ const passwordAlgorithm = "bcrypt"
 // LocalProvisionRequest is a new local (email and password) user. A
 // self-service registration passes Actor: SelfSignUp(requestID).
 type LocalProvisionRequest struct {
-	Email        string
-	FullName     string
+	Email string
+	// FullName is stored as given in public.users (nil is NULL, "" is '');
+	// the principal display name is "" for nil.
+	FullName     *string
 	PasswordHash *string
 	Actor        Actor
+	// Organization, when set, adds a new public organization named so and the
+	// user's owner membership in the same transaction (go-api's register does
+	// the same). Only new rows are written.
+	Organization *NewOrganization
 }
+
+// NewOrganization is the organization a sign-up creates.
+type NewOrganization struct{ Name string }
 
 // ProvisionLocal creates a user principal and its auth.users row in one
 // audit.Commit (reason principal_provisioned). It writes the auth schema only
 // and is available only after the users cutover (ErrSignupNotAvailable
 // before). An email another principal holds is ErrEmailTaken. The email is
 // stored as its login key (NormalizeEmail), as the go-api register route
-// stores it.
+// stores it. With req.Organization the public organization and the owner
+// membership are written in the same transaction, so an email collision leaves
+// neither.
 func (s *Store) ProvisionLocal(ctx context.Context, req LocalProvisionRequest) (_ uuid.UUID, err error) {
 	defer func() { s.countLink(ctx, "provision", err) }()
 	if !s.ownsUsers {
@@ -56,7 +67,7 @@ func (s *Store) ProvisionLocal(ctx context.Context, req LocalProvisionRequest) (
 		Apply: func(ctx context.Context, tx audit.TxOps) error {
 			// The 0013 create guard counts these two rows as the state change.
 			if _, err := tx.Exec(ctx, `INSERT INTO `+s.q+`.principals (id, kind, display_name) VALUES ($1, 'user', $2)`,
-				principal, req.FullName); err != nil {
+				principal, derefOrEmpty(req.FullName)); err != nil {
 				return err
 			}
 			if _, err := tx.Exec(ctx, `INSERT INTO `+s.q+`.users
@@ -66,7 +77,13 @@ VALUES ($1, $2, $2, $3, $4, CASE WHEN $3::text IS NULL THEN NULL ELSE clock_time
 				return err
 			}
 			provider := "local"
-			return insertPublicUser(ctx, tx, publicUser{ID: principal, Email: email, PasswordHash: req.PasswordHash, FullName: req.FullName, AuthProvider: provider})
+			if err := insertPublicUser(ctx, tx, publicUser{ID: principal, Email: email, PasswordHash: req.PasswordHash, FullName: req.FullName, AuthProvider: provider}); err != nil {
+				return err
+			}
+			if req.Organization == nil {
+				return nil
+			}
+			return insertPublicOwnedOrganization(ctx, tx, principal, req.Organization.Name)
 		},
 		Audit:  localAudit("auth.principal.provisioned", "principal_provisioned", subject, req.Actor),
 		Events: []audit.OutboxEvent{principalEvent(subject, "principal.created", true), userEvent(subject, "user.created")},
@@ -114,13 +131,43 @@ WHERE principal_id = $1 AND email_verified_at IS DISTINCT FROM $2`, principal, a
 // password_changed) and adds 1 to legacy_token_version, as the public.users
 // token_version gets (a go-api token minted before it ends and the users
 // reconciliation stays at zero diff). Available only after the users cutover.
-func (s *Store) SetPasswordHash(ctx context.Context, principal uuid.UUID, hash string, actor Actor) (err error) {
+func (s *Store) SetPasswordHash(ctx context.Context, principal uuid.UUID, hash string, actor Actor) error {
+	return s.SetPasswordHashWith(ctx, principal, hash, actor, nil)
+}
+
+// SetPasswordHashWith is SetPasswordHash with end, when not nil, run in the
+// same transaction after the password is written: an error from end rolls the
+// password back with everything else.
+func (s *Store) SetPasswordHashWith(ctx context.Context, principal uuid.UUID, hash string, actor Actor, end func(context.Context, audit.TxOps) error) error {
+	_, err := s.SetPasswordHashFor(ctx, principal, hash, actor, PasswordChanged, end)
+	return err
+}
+
+// ErrLinkUnusable is what an end callback returns when the one-time link it
+// meant to consume is no longer usable: the transaction rolls back, the
+// password is unchanged, and the store reports it without logging a failure.
+var ErrLinkUnusable = errors.New("identity: the one-time link is unusable")
+
+// PasswordCause names why a password was written; it picks the audit event
+// type and reason.
+type PasswordCause struct{ eventType, reason string }
+
+var (
+	// PasswordChanged is a signed-in user's own change.
+	PasswordChanged = PasswordCause{"auth.user.password_changed", "password_changed"}
+	// PasswordReset is a reset by a one-time link.
+	PasswordReset = PasswordCause{"auth.password.reset", "password_reset"}
+)
+
+// SetPasswordHashFor is SetPasswordHashWith with the audit event type and
+// reason of cause. It returns the new public.users.token_version.
+func (s *Store) SetPasswordHashFor(ctx context.Context, principal uuid.UUID, hash string, actor Actor, cause PasswordCause, end func(context.Context, audit.TxOps) error) (version int64, err error) {
 	defer func() { s.countLink(ctx, "set_password", err) }()
 	if !s.ownsUsers {
-		return ErrSignupNotAvailable
+		return 0, ErrSignupNotAvailable
 	}
 	if !validBcrypt(hash) {
-		return ErrInvalidPasswordHash
+		return 0, ErrInvalidPasswordHash
 	}
 	subject := principal.String()
 	err = audit.Commit(ctx, s.pool, s.schema, audit.Mutation{
@@ -128,19 +175,25 @@ func (s *Store) SetPasswordHash(ctx context.Context, principal uuid.UUID, hash s
 			if err := s.lockUser(ctx, tx, principal); err != nil {
 				return err
 			}
-			_, err := tx.Exec(ctx, `UPDATE `+s.q+`.users
+			if _, err := tx.Exec(ctx, `UPDATE `+s.q+`.users
 SET password_hash = $2, password_algorithm = $3, password_updated_at = clock_timestamp(),
     legacy_token_version = legacy_token_version + 1, updated_at = clock_timestamp()
-WHERE principal_id = $1`, principal, hash, passwordAlgorithm)
-			if err != nil {
+WHERE principal_id = $1`, principal, hash, passwordAlgorithm); err != nil {
 				return err
 			}
-			return updatePublicPassword(ctx, tx, principal, hash)
+			var err error
+			if version, err = updatePublicPassword(ctx, tx, principal, hash); err != nil {
+				return err
+			}
+			if end != nil {
+				return end(ctx, tx)
+			}
+			return nil
 		},
-		Audit:  localAudit("auth.user.password_changed", "password_changed", subject, actor),
+		Audit:  localAudit(cause.eventType, cause.reason, subject, actor),
 		Events: []audit.OutboxEvent{userEvent(subject, "user.credentials_changed")},
 	})
-	return s.localErr(ctx, "set password hash", err)
+	return version, s.localErr(ctx, "set password hash", err)
 }
 
 func (s *Store) lockUser(ctx context.Context, tx audit.TxOps, principal uuid.UUID) error {
@@ -158,6 +211,8 @@ func (s *Store) localErr(ctx context.Context, op string, err error) error {
 		return nil
 	case errors.Is(err, ErrUserNotFound):
 		return ErrUserNotFound
+	case errors.Is(err, ErrLinkUnusable):
+		return ErrLinkUnusable
 	}
 	return s.storeErr(ctx, op, err)
 }

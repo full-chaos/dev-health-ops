@@ -7,7 +7,6 @@ import (
 	"io"
 	"net/http"
 	"sort"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -232,7 +231,7 @@ func (doer *jiraCreationDoer) Do(request *http.Request) (*http.Response, error) 
 	switch {
 	case request.URL.Path == "/rest/api/3/search/jql":
 		body = `{"issues":[` + doer.issue + `],"isLast":true}`
-	case strings.HasPrefix(request.URL.Path, "/rest/api/3/issue/OPS-9/changelog"):
+	case request.URL.Path == "/rest/api/3/changelog/bulkfetch":
 		body = doer.changelog
 	case strings.HasPrefix(request.URL.Path, "/rest/api/3/project/"):
 		return &http.Response{StatusCode: http.StatusNotFound, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{}`)), Request: request}, nil
@@ -257,7 +256,7 @@ func jiraCreationBatch(t *testing.T, created, changelogValues string) CompleteRo
 		createdField = `"created":"` + created + `",`
 	}
 	issue := `{"id":"10060","key":"OPS-9","self":"https://acme.atlassian.net/rest/api/3/issue/OPS-9","fields":{"project":{"key":"OPS","id":"10001","name":"Operations"},"summary":"s","status":{"name":"Done","statusCategory":{"key":"done"}},"issuetype":{"name":"Task"},"labels":[],` + createdField + `"updated":"2026-08-02T09:00:00Z"}}`
-	doer := &jiraCreationDoer{t: t, issue: issue, changelog: `{"values":[` + changelogValues + `],"total":` + strconv.Itoa(strings.Count(changelogValues, `"items"`)) + `,"isLast":true}`}
+	doer := &jiraCreationDoer{t: t, issue: issue, changelog: `{"issueChangeLogs":[{"issueId":"10060","changeHistories":[` + changelogValues + `]}],"nextPageToken":null}`}
 	claim := jiraAtlassianClaim()
 	claim.DatasetOptions = map[string]any{"fetch_worklogs": false, "fetch_board_sprints": false, "fetch_comments": false}
 	client := jiraWorkItemsTestClient(t, fakehttp.Client(doer), providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))

@@ -191,7 +191,8 @@ func loadAuthServiceRows(t *testing.T) []map[string]any {
 // nothing serves, per method and listener.
 func TestEveryServedAuthRouteHasAnEndpointProfileRowAndNoRowIsStale(t *testing.T) {
 	served := servedAuthRoutes(t)
-	missing, stale := compareServedToRows(t, served, loadAuthServiceRows(t))
+	rows := loadAuthServiceRows(t)
+	missing, stale := compareServedToRows(t, served, rows)
 	if len(missing) > 0 {
 		t.Errorf("served with no endpoint-profile row (contracts/auth/v1/endpoint-profiles.auth-service.json): %v", missing)
 	}
@@ -203,10 +204,33 @@ func TestEveryServedAuthRouteHasAnEndpointProfileRowAndNoRowIsStale(t *testing.T
 	}
 }
 
+func TestAPlantedMissingRowForARegisteredRouteIsNamedAlone(t *testing.T) {
+	served := servedAuthRoutes(t)
+	for _, other := range []string{"POST /api/v1/auth/login@api", "POST /api/v1/auth/register@api"} {
+		plantedMissingRow(t, served, other)
+	}
+}
+
+func plantedMissingRow(t *testing.T, served map[string]bool, other string) {
+	t.Helper()
+	var kept []map[string]any
+	for _, row := range loadAuthServiceRows(t) {
+		id, _ := row["id"].(string)
+		if match := authRowID.FindStringSubmatch(id); match != nil && match[1]+" "+match[2]+"@"+match[3] == other {
+			continue
+		}
+		kept = append(kept, row)
+	}
+	missing, _ := compareServedToRows(t, served, kept)
+	if len(missing) != 1 || missing[0] != other {
+		t.Fatalf("missing = %v, want exactly %s", missing, other)
+	}
+}
+
 // servedAuthRouteCount is every route the probe serves: four session routes, two social link routes,
-// four compatibility routes, the session issue route, the eight federated sign-in routes, the five credentials routes and the three operator
+// four compatibility routes, the session issue route, the eight federated sign-in routes, the six credentials routes and the three operator
 // paths on GET and HEAD, and GET and HEAD of the JWKS and the discovery document.
-const servedAuthRouteCount = 34
+const servedAuthRouteCount = 35
 
 // compareServedToRows returns the served routes with no row and the rows for
 // routes nothing serves, per method and listener.
@@ -308,7 +332,7 @@ func TestAuthEndpointProfileAnchorsStillPointAtTheirSymbols(t *testing.T) {
 		"/v1/identities/social": "PatternSocialLink", "/v1/identities/social/{id}": "PatternSocialUnlink",
 		"/api/v1/auth/verify": "PatternVerifyEmail", "/api/v1/auth/resend-verification": "PatternResendVerification",
 		"/api/v1/auth/forgot-password": "PatternForgotPassword", "/api/v1/auth/reset-password": "PatternResetPassword",
-		"/api/v1/auth/change-password": "PatternChangePassword",
+		"/api/v1/auth/change-password": "PatternChangePassword", "/api/v1/auth/register": "PatternRegister",
 	}
 	checked := 0
 	var walk func(node any, where string)

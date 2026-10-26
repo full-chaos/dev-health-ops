@@ -132,6 +132,21 @@ var optionRegistry = []Option{
 		Usage: "instantaneous burst allowance per route bucket",
 	},
 	{
+		Flag: "public-max-in-flight", Env: EnvPublicMaxInFlight, Kind: KindInt,
+		Default: fmt.Sprintf("%d", defaultPublicMaxInFlight), Group: GroupHTTP,
+		Usage: "in-flight cap of the key and discovery routes, separate from the shared cap",
+	},
+	{
+		Flag: "public-rate-limit", Env: EnvPublicRateLimit, Kind: KindFloat,
+		Default: fmt.Sprintf("%g", defaultPublicRateLimit), Group: GroupHTTP,
+		Usage: "sustained requests per second per key and discovery route bucket",
+	},
+	{
+		Flag: "public-rate-limit-burst", Env: EnvPublicRateLimitBurst, Kind: KindInt,
+		Default: fmt.Sprintf("%d", defaultPublicRateLimitBurst), Group: GroupHTTP,
+		Usage: "instantaneous burst allowance per key and discovery route bucket",
+	},
+	{
 		Flag: "trusted-proxies", Env: EnvTrustedProxies, Kind: KindString, Group: GroupHTTP,
 		Usage: "comma-separated IP addresses and strict CIDR networks of the proxies whose single " +
 			"X-Forwarded-For value names the client (the go-api proxy); \"*\" and hostnames are refused; empty trusts none",
@@ -213,6 +228,10 @@ var optionRegistry = []Option{
 	{
 		Flag: "users-owned", Env: EnvUsersOwned, Kind: KindString, Default: "false", Group: GroupSession,
 		Usage: "true when auth-service owns user creation and local credential links; with the session secrets it mounts the password and e-mail verification routes",
+	},
+	{
+		Flag: "orgs-owned", Env: EnvOrgsOwned, Kind: KindString, Default: "false", Group: GroupSession,
+		Usage: "true when auth-service is the only writer of organizations; the sign-in organization projection then reads no public table and writes nothing. Mounts no route",
 	},
 	{
 		Flag: "social-link-routes", Env: EnvSocialLinkRoutes, Kind: KindString, Group: GroupSession, Default: "false",

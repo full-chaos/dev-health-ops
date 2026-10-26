@@ -238,6 +238,7 @@ spec:
         {{- include "dev-health.componentSelectorLabels" (dict "component" "provision-roles" "context" $) | nindent 8 }}
     spec:
       {{- include "dev-health.imagePullSecrets" . | nindent 6 }}
+      automountServiceAccountToken: false
       restartPolicy: Never
       securityContext:
         runAsNonRoot: true
@@ -392,6 +393,7 @@ spec:
         {{- include "dev-health.componentSelectorLabels" (dict "component" "river-migrate" "context" $) | nindent 8 }}
     spec:
       {{- include "dev-health.imagePullSecrets" . | nindent 6 }}
+      automountServiceAccountToken: false
       restartPolicy: Never
       securityContext:
         runAsNonRoot: true
@@ -425,7 +427,19 @@ spec:
               value: {{ .Values.config.RIVER_QUEUE_DATABASE_ROLE | quote }}
             - name: RIVER_COORDINATOR_DATABASE_ROLE
               value: {{ .Values.config.RIVER_COORDINATOR_DATABASE_ROLE | quote }}
-            {{- if .Values.goApi.authProxy.sessions }}
+            {{- /* The query-api login (queryApi.extraEnv), so this step provisions its grants. */}}
+            {{- range .Values.queryApi.extraEnv }}
+            {{- if eq .name "QUERY_API_DATABASE_ROLE" }}
+            - name: QUERY_API_DATABASE_ROLE
+              value: {{ .value | quote }}
+            {{- end }}
+            {{- end }}
+            {{- if (eq (include "dev-health.authOn" (dict "flag" "service" "context" .)) "true") }}
+            {{- /* The auth schema of the query-api session read (AUTH_PROXY_SESSIONS). */}}
+            - name: AUTH_DATABASE_SCHEMA
+              value: {{ include "dev-health.authDatabaseSchema" . | quote }}
+            {{- end }}
+            {{- if (eq (include "dev-health.authOn" (dict "flag" "sessions" "context" .)) "true") }}
             {{- /* go-api's AUTH_PROXY_SESSIONS: the api role's
             refresh_tokens grants follow it (postgres.APIPosture). */}}
             - name: AUTH_PROXY_SESSIONS

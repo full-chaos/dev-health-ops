@@ -65,8 +65,7 @@ Design docs (read the guardrails at minimum):
 | `org_context_header` | active | human | |
 | `impersonation_session` | active | human | |
 | `internal_svc_acr_token` | active | service_account | |
-| `internal_svc_worker_token` | **unconsumed** | service_account | |
-| `worker_operational_bridge_token` | **unconsumed** | infrastructure | |
+| `internal_svc_worker_token` | **unconsumed** | service_account | mint retired (CHAOS-10044); stored rows list/revoke only |
 | `acr_client_credential` | active | client_credential | |
 | `acr_device_flow_code` | active | human | |
 | `acr_web_assertion` | active | workload | |
@@ -92,10 +91,11 @@ Design docs (read the guardrails at minimum):
 | `internal_svc_authsess_token` | active | service_account | |
 | `link_credential` | active | human | |
 | `pagerduty_webhook_signature` | active | external_source | |
+| `workload_token` | **unconsumed** | workload | |
 
-**30 classes at the Wave 0 freeze** (31 with `effective_principal_envelope`, added by CHAOS-4737 below). 6 were not in CHAOS-3273's minimum list and were discovered
+**30 classes at the Wave 0 freeze** (31 with `effective_principal_envelope`, added by CHAOS-4737 below). 5 were not in CHAOS-3273's minimum list and were discovered
 during this inventory (`new_vs_ticket: true` in the JSON):
-`internal_svc_worker_token`, `worker_operational_bridge_token`,
+`internal_svc_worker_token`,
 `acr_workload_identity_exchange`, `org_invite_token`, `license_key`, and the
 distinction between `sso_saml_exchange`/`sso_oidc_exchange` as two classes
 rather than one.
@@ -155,6 +155,15 @@ superuser bit or token version: authorization is checked per request. Its
 lifetime is at most the 60 min HS256-compat ceiling. The class is
 `unconsumed`: nothing mints or verifies it yet.
 
+**`workload_token` (CHAOS-10782).** The EdDSA workload token of TRD section 11
+for one internal service caller. Its wire contract is `workload-token.v1`:
+header {alg EdDSA, typ `workload+jwt`, kid}; claims iss, aud (exactly one
+service), sub, principal_type `workload`, jti, iat, nbf, exp; no `org_id`, no
+`sid`, no `scope`; lifetime at most 300 seconds. Its typ separates it from the
+user access token (`at+jwt`). Nothing mints or verifies it yet, so the class is
+`unconsumed`. The document parser `ParseWorkloadToken` is under
+`FuzzParseWorkloadToken`.
+
 ## The CHAOS-3271 class: credentials that reach a validator that is not their own
 
 The org scope (`Scope.OrgScope`, `internal/api/policy/scope.go:128`) reads every
@@ -183,13 +192,12 @@ this:
 | Credential class | Route(s) | Exempted from the path prefix? |
 | --- | --- | --- |
 | `internal_svc_worker_token` (`svc_worker_*`) | none found (see below) | **No** — no HTTP validator exists for it anywhere, so if one were ever wired up at a non-`/api/v1/internal/acr/` path it would silently degrade to anonymous first. |
-| `worker_operational_bridge_token` (`WORKER_OPERATIONAL_BRIDGE_TOKEN`) | `/api/internal/worker-operational` (CHAOS-6240 deleted `/internal/worker`'s only routes along with worker_metrics.py; `/api/internal/worker-sync` was deleted separately, CHAOS-6243) | **No.** None of these paths start with `/api/v1/internal/acr/`. |
 | `external_push_ingest_token` (`fcpush_*`) | External Push data-plane endpoints | **No.** The module docstring for `external_ingest/auth.py` says as much: *"OrgIdMiddleware only understands user JWTs and takes its anonymous pass-through branch for an `fcpush_...` bearer"* — meaning the decode attempt still happens, it just fails harmlessly. |
 
 Only `internal_svc_acr_token` (`svc_acr_*`) got the fix. The fix is a path
 exemption, not a credential-class dispatch — so it only protects whatever
 happens to be mounted under `/api/v1/internal/acr/*` today. Any new route
-for `svc_worker_*`, the worker-bridge tokens, or any future opaque credential
+for `svc_worker_*` or any future opaque credential
 mounted **outside** that one path prefix inherits the original bug's shape
 by default. **The durable fix is credential-class-aware dispatch (check the
 token's own shape/prefix before choosing a decoder), not a growing exemption
@@ -226,12 +234,16 @@ unset single credential skips its own check, so it stays a gap to review.
 
 ## Unconsumed credential: `svc_worker_*`
 
-`WORKER_OPERATOR_TOKEN_PREFIX = "svc_worker_"` is defined and minted through
-the exact same code path as `svc_acr_*`
+**Mint retired (CHAOS-10044).** `dho service-credentials create` and `rotate` refuse
+`--service worker-operator` before a database is opened (exit 1, one JSON error line on
+stderr); no `svc_worker_*` token is issued any more. `list` and `revoke` keep working on
+the rows already stored, active and revoked. No row was migrated or deleted.
+
+`WORKER_OPERATOR_TOKEN_PREFIX = "svc_worker_"` was minted through
+the same code path as `svc_acr_*`
 (`internal/apiservice/admin/servicecredentials.go`), with
 its own scope set (`workers:read`, `workers:operate`,
-`internal/apiservice/admin/servicecredentials.go:36-44`) and a full CLI lifecycle
-(create/list/rotate/revoke). No HTTP route in ops, web, or acr was found
+`internal/apiservice/admin/servicecredentials.go:36-44`). No HTTP route in ops, web, or acr was found
 that validates a `svc_worker_`-prefixed bearer token — `internal/apiservice/acr/internalauth.go:57-71`
 `extractToken` only accepts the `svc_acr_` prefix. Either this is
 scaffolding for a not-yet-wired consumer, or a consumer exists in the Go

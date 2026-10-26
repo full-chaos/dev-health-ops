@@ -1,0 +1,1027 @@
+[
+  {
+    "Name": "eddsa at authenticated route",
+    "Status": 401,
+    "Headers": {
+      "Content-Length": [
+        "49"
+      ],
+      "Content-Security-Policy": [
+        "default-src 'none'; frame-ancestors 'none'; base-uri 'none'"
+      ],
+      "Content-Type": [
+        "application/json"
+      ],
+      "Referrer-Policy": [
+        "strict-origin-when-cross-origin"
+      ],
+      "Strict-Transport-Security": [
+        "max-age=31536000; includeSubDomains"
+      ],
+      "Vary": [
+        "Origin"
+      ],
+      "Www-Authenticate": [
+        "Bearer"
+      ],
+      "X-Content-Type-Options": [
+        "nosniff"
+      ],
+      "X-Dev-Health-Plane": [
+        "go"
+      ],
+      "X-Frame-Options": [
+        "DENY"
+      ]
+    },
+    "Body": "{\"detail\":{\"message\":\"Invalid or expired token\"}}"
+  },
+  {
+    "Name": "eddsa at optional route",
+    "Status": 200,
+    "Headers": {
+      "Content-Security-Policy": [
+        "default-src 'none'; frame-ancestors 'none'; base-uri 'none'"
+      ],
+      "Content-Type": [
+        "application/json"
+      ],
+      "Referrer-Policy": [
+        "strict-origin-when-cross-origin"
+      ],
+      "Strict-Transport-Security": [
+        "max-age=31536000; includeSubDomains"
+      ],
+      "Vary": [
+        "Origin"
+      ],
+      "X-Content-Type-Options": [
+        "nosniff"
+      ],
+      "X-Dev-Health-Plane": [
+        "go"
+      ],
+      "X-Frame-Options": [
+        "DENY"
+      ]
+    },
+    "Body": "{\"org\":\"\"}\n"
+  },
+  {
+    "Name": "eddsa with x-org-id",
+    "Status": 401,
+    "Headers": {
+      "Content-Length": [
+        "49"
+      ],
+      "Content-Security-Policy": [
+        "default-src 'none'; frame-ancestors 'none'; base-uri 'none'"
+      ],
+      "Content-Type": [
+        "application/json"
+      ],
+      "Referrer-Policy": [
+        "strict-origin-when-cross-origin"
+      ],
+      "Strict-Transport-Security": [
+        "max-age=31536000; includeSubDomains"
+      ],
+      "Vary": [
+        "Origin"
+      ],
+      "Www-Authenticate": [
+        "Bearer"
+      ],
+      "X-Content-Type-Options": [
+        "nosniff"
+      ],
+      "X-Dev-Health-Plane": [
+        "go"
+      ],
+      "X-Frame-Options": [
+        "DENY"
+      ]
+    },
+    "Body": "{\"detail\":{\"message\":\"Invalid or expired token\"}}"
+  },
+  {
+    "Name": "head on a get route",
+    "Status": 405,
+    "Headers": {
+      "Allow": [
+        "GET"
+      ],
+      "Content-Length": [
+        "31"
+      ],
+      "Content-Security-Policy": [
+        "default-src 'none'; frame-ancestors 'none'; base-uri 'none'"
+      ],
+      "Content-Type": [
+        "application/json"
+      ],
+      "Referrer-Policy": [
+        "strict-origin-when-cross-origin"
+      ],
+      "Strict-Transport-Security": [
+        "max-age=31536000; includeSubDomains"
+      ],
+      "Vary": [
+        "Origin"
+      ],
+      "X-Content-Type-Options": [
+        "nosniff"
+      ],
+      "X-Dev-Health-Plane": [
+        "go"
+      ],
+      "X-Frame-Options": [
+        "DENY"
+      ]
+    },
+    "Body": "{\"detail\":\"Method Not Allowed\"}"
+  },
+  {
+    "Name": "hs256 admin at admin route",
+    "Status": 200,
+    "Headers": {
+      "Cache-Control": [
+        "no-store"
+      ],
+      "Content-Security-Policy": [
+        "default-src 'none'; frame-ancestors 'none'; base-uri 'none'"
+      ],
+      "Content-Type": [
+        "application/json"
+      ],
+      "Referrer-Policy": [
+        "strict-origin-when-cross-origin"
+      ],
+      "Strict-Transport-Security": [
+        "max-age=31536000; includeSubDomains"
+      ],
+      "Vary": [
+        "Origin"
+      ],
+      "X-Content-Type-Options": [
+        "nosniff"
+      ],
+      "X-Dev-Health-Plane": [
+        "go"
+      ],
+      "X-Frame-Options": [
+        "DENY"
+      ]
+    },
+    "Body": "{\"org\":\"00000000-0000-4000-8000-0000000000b1\",\"user\":{\"email\":\"user@example.test\",\"full_name\":null,\"is_superuser\":false,\"org_id\":\"00000000-0000-4000-8000-0000000000b1\",\"role\":\"admin\",\"token_version\":3,\"user_id\":\"00000000-0000-4000-8000-0000000000a1\",\"username\":null}}\n"
+  },
+  {
+    "Name": "hs256 expired",
+    "Status": 401,
+    "Headers": {
+      "Content-Length": [
+        "49"
+      ],
+      "Content-Security-Policy": [
+        "default-src 'none'; frame-ancestors 'none'; base-uri 'none'"
+      ],
+      "Content-Type": [
+        "application/json"
+      ],
+      "Referrer-Policy": [
+        "strict-origin-when-cross-origin"
+      ],
+      "Strict-Transport-Security": [
+        "max-age=31536000; includeSubDomains"
+      ],
+      "Vary": [
+        "Origin"
+      ],
+      "Www-Authenticate": [
+        "Bearer"
+      ],
+      "X-Content-Type-Options": [
+        "nosniff"
+      ],
+      "X-Dev-Health-Plane": [
+        "go"
+      ],
+      "X-Frame-Options": [
+        "DENY"
+      ]
+    },
+    "Body": "{\"detail\":{\"message\":\"Invalid or expired token\"}}"
+  },
+  {
+    "Name": "hs256 inactive",
+    "Status": 401,
+    "Headers": {
+      "Content-Length": [
+        "49"
+      ],
+      "Content-Security-Policy": [
+        "default-src 'none'; frame-ancestors 'none'; base-uri 'none'"
+      ],
+      "Content-Type": [
+        "application/json"
+      ],
+      "Referrer-Policy": [
+        "strict-origin-when-cross-origin"
+      ],
+      "Strict-Transport-Security": [
+        "max-age=31536000; includeSubDomains"
+      ],
+      "Vary": [
+        "Origin"
+      ],
+      "Www-Authenticate": [
+        "Bearer"
+      ],
+      "X-Content-Type-Options": [
+        "nosniff"
+      ],
+      "X-Dev-Health-Plane": [
+        "go"
+      ],
+      "X-Frame-Options": [
+        "DENY"
+      ]
+    },
+    "Body": "{\"detail\":{\"message\":\"Invalid or expired token\"}}"
+  },
+  {
+    "Name": "hs256 member at admin route",
+    "Status": 403,
+    "Headers": {
+      "Cache-Control": [
+        "no-store"
+      ],
+      "Content-Length": [
+        "34"
+      ],
+      "Content-Security-Policy": [
+        "default-src 'none'; frame-ancestors 'none'; base-uri 'none'"
+      ],
+      "Content-Type": [
+        "application/json"
+      ],
+      "Referrer-Policy": [
+        "strict-origin-when-cross-origin"
+      ],
+      "Strict-Transport-Security": [
+        "max-age=31536000; includeSubDomains"
+      ],
+      "Vary": [
+        "Origin"
+      ],
+      "X-Content-Type-Options": [
+        "nosniff"
+      ],
+      "X-Dev-Health-Plane": [
+        "go"
+      ],
+      "X-Frame-Options": [
+        "DENY"
+      ]
+    },
+    "Body": "{\"detail\":\"Admin access required\"}"
+  },
+  {
+    "Name": "hs256 member at superuser route",
+    "Status": 403,
+    "Headers": {
+      "Cache-Control": [
+        "no-store"
+      ],
+      "Content-Length": [
+        "38"
+      ],
+      "Content-Security-Policy": [
+        "default-src 'none'; frame-ancestors 'none'; base-uri 'none'"
+      ],
+      "Content-Type": [
+        "application/json"
+      ],
+      "Referrer-Policy": [
+        "strict-origin-when-cross-origin"
+      ],
+      "Strict-Transport-Security": [
+        "max-age=31536000; includeSubDomains"
+      ],
+      "Vary": [
+        "Origin"
+      ],
+      "X-Content-Type-Options": [
+        "nosniff"
+      ],
+      "X-Dev-Health-Plane": [
+        "go"
+      ],
+      "X-Frame-Options": [
+        "DENY"
+      ]
+    },
+    "Body": "{\"detail\":\"Superuser access required\"}"
+  },
+  {
+    "Name": "hs256 sid live",
+    "Status": 200,
+    "Headers": {
+      "Content-Security-Policy": [
+        "default-src 'none'; frame-ancestors 'none'; base-uri 'none'"
+      ],
+      "Content-Type": [
+        "application/json"
+      ],
+      "Referrer-Policy": [
+        "strict-origin-when-cross-origin"
+      ],
+      "Strict-Transport-Security": [
+        "max-age=31536000; includeSubDomains"
+      ],
+      "Vary": [
+        "Origin"
+      ],
+      "X-Content-Type-Options": [
+        "nosniff"
+      ],
+      "X-Dev-Health-Plane": [
+        "go"
+      ],
+      "X-Frame-Options": [
+        "DENY"
+      ]
+    },
+    "Body": "{\"org\":\"00000000-0000-4000-8000-0000000000b1\",\"user\":{\"email\":\"user@example.test\",\"full_name\":null,\"is_superuser\":false,\"org_id\":\"00000000-0000-4000-8000-0000000000b1\",\"role\":\"admin\",\"token_version\":3,\"user_id\":\"00000000-0000-4000-8000-0000000000a1\",\"username\":null}}\n"
+  },
+  {
+    "Name": "hs256 sid of another principal",
+    "Status": 401,
+    "Headers": {
+      "Content-Length": [
+        "49"
+      ],
+      "Content-Security-Policy": [
+        "default-src 'none'; frame-ancestors 'none'; base-uri 'none'"
+      ],
+      "Content-Type": [
+        "application/json"
+      ],
+      "Referrer-Policy": [
+        "strict-origin-when-cross-origin"
+      ],
+      "Strict-Transport-Security": [
+        "max-age=31536000; includeSubDomains"
+      ],
+      "Vary": [
+        "Origin"
+      ],
+      "Www-Authenticate": [
+        "Bearer"
+      ],
+      "X-Content-Type-Options": [
+        "nosniff"
+      ],
+      "X-Dev-Health-Plane": [
+        "go"
+      ],
+      "X-Frame-Options": [
+        "DENY"
+      ]
+    },
+    "Body": "{\"detail\":{\"message\":\"Invalid or expired token\"}}"
+  },
+  {
+    "Name": "hs256 sid revoked",
+    "Status": 401,
+    "Headers": {
+      "Content-Length": [
+        "49"
+      ],
+      "Content-Security-Policy": [
+        "default-src 'none'; frame-ancestors 'none'; base-uri 'none'"
+      ],
+      "Content-Type": [
+        "application/json"
+      ],
+      "Referrer-Policy": [
+        "strict-origin-when-cross-origin"
+      ],
+      "Strict-Transport-Security": [
+        "max-age=31536000; includeSubDomains"
+      ],
+      "Vary": [
+        "Origin"
+      ],
+      "Www-Authenticate": [
+        "Bearer"
+      ],
+      "X-Content-Type-Options": [
+        "nosniff"
+      ],
+      "X-Dev-Health-Plane": [
+        "go"
+      ],
+      "X-Frame-Options": [
+        "DENY"
+      ]
+    },
+    "Body": "{\"detail\":{\"message\":\"Invalid or expired token\"}}"
+  },
+  {
+    "Name": "hs256 sid unknown",
+    "Status": 401,
+    "Headers": {
+      "Content-Length": [
+        "49"
+      ],
+      "Content-Security-Policy": [
+        "default-src 'none'; frame-ancestors 'none'; base-uri 'none'"
+      ],
+      "Content-Type": [
+        "application/json"
+      ],
+      "Referrer-Policy": [
+        "strict-origin-when-cross-origin"
+      ],
+      "Strict-Transport-Security": [
+        "max-age=31536000; includeSubDomains"
+      ],
+      "Vary": [
+        "Origin"
+      ],
+      "Www-Authenticate": [
+        "Bearer"
+      ],
+      "X-Content-Type-Options": [
+        "nosniff"
+      ],
+      "X-Dev-Health-Plane": [
+        "go"
+      ],
+      "X-Frame-Options": [
+        "DENY"
+      ]
+    },
+    "Body": "{\"detail\":{\"message\":\"Invalid or expired token\"}}"
+  },
+  {
+    "Name": "hs256 stale tv",
+    "Status": 401,
+    "Headers": {
+      "Content-Length": [
+        "49"
+      ],
+      "Content-Security-Policy": [
+        "default-src 'none'; frame-ancestors 'none'; base-uri 'none'"
+      ],
+      "Content-Type": [
+        "application/json"
+      ],
+      "Referrer-Policy": [
+        "strict-origin-when-cross-origin"
+      ],
+      "Strict-Transport-Security": [
+        "max-age=31536000; includeSubDomains"
+      ],
+      "Vary": [
+        "Origin"
+      ],
+      "Www-Authenticate": [
+        "Bearer"
+      ],
+      "X-Content-Type-Options": [
+        "nosniff"
+      ],
+      "X-Dev-Health-Plane": [
+        "go"
+      ],
+      "X-Frame-Options": [
+        "DENY"
+      ]
+    },
+    "Body": "{\"detail\":{\"message\":\"Invalid or expired token\"}}"
+  },
+  {
+    "Name": "hs256 store down",
+    "Status": 500,
+    "Headers": {
+      "Content-Length": [
+        "34"
+      ],
+      "Content-Type": [
+        "application/json"
+      ],
+      "X-Dev-Health-Plane": [
+        "go"
+      ]
+    },
+    "Body": "{\"detail\":\"Internal Server Error\"}"
+  },
+  {
+    "Name": "hs256 sub not a string",
+    "Status": 500,
+    "Headers": {
+      "Content-Length": [
+        "34"
+      ],
+      "Content-Type": [
+        "application/json"
+      ],
+      "X-Dev-Health-Plane": [
+        "go"
+      ]
+    },
+    "Body": "{\"detail\":\"Internal Server Error\"}"
+  },
+  {
+    "Name": "hs256 superuser impersonating",
+    "Status": 200,
+    "Headers": {
+      "Cache-Control": [
+        "no-store"
+      ],
+      "Content-Security-Policy": [
+        "default-src 'none'; frame-ancestors 'none'; base-uri 'none'"
+      ],
+      "Content-Type": [
+        "application/json"
+      ],
+      "Referrer-Policy": [
+        "strict-origin-when-cross-origin"
+      ],
+      "Strict-Transport-Security": [
+        "max-age=31536000; includeSubDomains"
+      ],
+      "Vary": [
+        "Origin"
+      ],
+      "X-Content-Type-Options": [
+        "nosniff"
+      ],
+      "X-Dev-Health-Plane": [
+        "go"
+      ],
+      "X-Frame-Options": [
+        "DENY"
+      ],
+      "X-Impersonated-User-Id": [
+        "00000000-0000-4000-8000-0000000000a6"
+      ],
+      "X-Impersonating": [
+        "true"
+      ]
+    },
+    "Body": "{\"impersonating\":\"00000000-0000-4000-8000-0000000000a6\",\"org\":\"00000000-0000-4000-8000-0000000000b3\",\"user\":{\"email\":\"\",\"full_name\":null,\"is_superuser\":true,\"org_id\":\"00000000-0000-4000-8000-0000000000b1\",\"role\":\"member\",\"token_version\":0,\"user_id\":\"00000000-0000-4000-8000-0000000000a5\",\"username\":null}}\n"
+  },
+  {
+    "Name": "hs256 unknown user",
+    "Status": 401,
+    "Headers": {
+      "Content-Length": [
+        "49"
+      ],
+      "Content-Security-Policy": [
+        "default-src 'none'; frame-ancestors 'none'; base-uri 'none'"
+      ],
+      "Content-Type": [
+        "application/json"
+      ],
+      "Referrer-Policy": [
+        "strict-origin-when-cross-origin"
+      ],
+      "Strict-Transport-Security": [
+        "max-age=31536000; includeSubDomains"
+      ],
+      "Vary": [
+        "Origin"
+      ],
+      "Www-Authenticate": [
+        "Bearer"
+      ],
+      "X-Content-Type-Options": [
+        "nosniff"
+      ],
+      "X-Dev-Health-Plane": [
+        "go"
+      ],
+      "X-Frame-Options": [
+        "DENY"
+      ]
+    },
+    "Body": "{\"detail\":{\"message\":\"Invalid or expired token\"}}"
+  },
+  {
+    "Name": "hs256 valid",
+    "Status": 200,
+    "Headers": {
+      "Content-Security-Policy": [
+        "default-src 'none'; frame-ancestors 'none'; base-uri 'none'"
+      ],
+      "Content-Type": [
+        "application/json"
+      ],
+      "Referrer-Policy": [
+        "strict-origin-when-cross-origin"
+      ],
+      "Strict-Transport-Security": [
+        "max-age=31536000; includeSubDomains"
+      ],
+      "Vary": [
+        "Origin"
+      ],
+      "X-Content-Type-Options": [
+        "nosniff"
+      ],
+      "X-Dev-Health-Plane": [
+        "go"
+      ],
+      "X-Frame-Options": [
+        "DENY"
+      ]
+    },
+    "Body": "{\"org\":\"00000000-0000-4000-8000-0000000000b1\",\"user\":{\"email\":\"user@example.test\",\"full_name\":null,\"is_superuser\":false,\"org_id\":\"00000000-0000-4000-8000-0000000000b1\",\"role\":\"admin\",\"token_version\":3,\"user_id\":\"00000000-0000-4000-8000-0000000000a1\",\"username\":null}}\n"
+  },
+  {
+    "Name": "hs256 wrong key",
+    "Status": 401,
+    "Headers": {
+      "Content-Length": [
+        "49"
+      ],
+      "Content-Security-Policy": [
+        "default-src 'none'; frame-ancestors 'none'; base-uri 'none'"
+      ],
+      "Content-Type": [
+        "application/json"
+      ],
+      "Referrer-Policy": [
+        "strict-origin-when-cross-origin"
+      ],
+      "Strict-Transport-Security": [
+        "max-age=31536000; includeSubDomains"
+      ],
+      "Vary": [
+        "Origin"
+      ],
+      "Www-Authenticate": [
+        "Bearer"
+      ],
+      "X-Content-Type-Options": [
+        "nosniff"
+      ],
+      "X-Dev-Health-Plane": [
+        "go"
+      ],
+      "X-Frame-Options": [
+        "DENY"
+      ]
+    },
+    "Body": "{\"detail\":{\"message\":\"Invalid or expired token\"}}"
+  },
+  {
+    "Name": "hs256 x-org-id member",
+    "Status": 200,
+    "Headers": {
+      "Content-Security-Policy": [
+        "default-src 'none'; frame-ancestors 'none'; base-uri 'none'"
+      ],
+      "Content-Type": [
+        "application/json"
+      ],
+      "Referrer-Policy": [
+        "strict-origin-when-cross-origin"
+      ],
+      "Strict-Transport-Security": [
+        "max-age=31536000; includeSubDomains"
+      ],
+      "Vary": [
+        "Origin"
+      ],
+      "X-Content-Type-Options": [
+        "nosniff"
+      ],
+      "X-Dev-Health-Plane": [
+        "go"
+      ],
+      "X-Frame-Options": [
+        "DENY"
+      ]
+    },
+    "Body": "{\"org\":\"00000000-0000-4000-8000-0000000000b2\",\"user\":{\"email\":\"user@example.test\",\"full_name\":null,\"is_superuser\":false,\"org_id\":\"00000000-0000-4000-8000-0000000000b1\",\"role\":\"admin\",\"token_version\":3,\"user_id\":\"00000000-0000-4000-8000-0000000000a1\",\"username\":null}}\n"
+  },
+  {
+    "Name": "hs256 x-org-id not a member",
+    "Status": 403,
+    "Headers": {
+      "Content-Length": [
+        "50"
+      ],
+      "Content-Type": [
+        "application/json"
+      ],
+      "X-Dev-Health-Plane": [
+        "go"
+      ]
+    },
+    "Body": "{\"detail\": \"X-Org-Id not permitted for this user\"}"
+  },
+  {
+    "Name": "no header",
+    "Status": 401,
+    "Headers": {
+      "Content-Length": [
+        "42"
+      ],
+      "Content-Security-Policy": [
+        "default-src 'none'; frame-ancestors 'none'; base-uri 'none'"
+      ],
+      "Content-Type": [
+        "application/json"
+      ],
+      "Referrer-Policy": [
+        "strict-origin-when-cross-origin"
+      ],
+      "Strict-Transport-Security": [
+        "max-age=31536000; includeSubDomains"
+      ],
+      "Vary": [
+        "Origin"
+      ],
+      "Www-Authenticate": [
+        "Bearer"
+      ],
+      "X-Content-Type-Options": [
+        "nosniff"
+      ],
+      "X-Dev-Health-Plane": [
+        "go"
+      ],
+      "X-Frame-Options": [
+        "DENY"
+      ]
+    },
+    "Body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
+  },
+  {
+    "Name": "not bearer",
+    "Status": 401,
+    "Headers": {
+      "Content-Length": [
+        "53"
+      ],
+      "Content-Security-Policy": [
+        "default-src 'none'; frame-ancestors 'none'; base-uri 'none'"
+      ],
+      "Content-Type": [
+        "application/json"
+      ],
+      "Referrer-Policy": [
+        "strict-origin-when-cross-origin"
+      ],
+      "Strict-Transport-Security": [
+        "max-age=31536000; includeSubDomains"
+      ],
+      "Vary": [
+        "Origin"
+      ],
+      "Www-Authenticate": [
+        "Bearer"
+      ],
+      "X-Content-Type-Options": [
+        "nosniff"
+      ],
+      "X-Dev-Health-Plane": [
+        "go"
+      ],
+      "X-Frame-Options": [
+        "DENY"
+      ]
+    },
+    "Body": "{\"detail\":{\"message\":\"Invalid authorization header\"}}"
+  },
+  {
+    "Name": "optional hs256 valid",
+    "Status": 200,
+    "Headers": {
+      "Content-Security-Policy": [
+        "default-src 'none'; frame-ancestors 'none'; base-uri 'none'"
+      ],
+      "Content-Type": [
+        "application/json"
+      ],
+      "Referrer-Policy": [
+        "strict-origin-when-cross-origin"
+      ],
+      "Strict-Transport-Security": [
+        "max-age=31536000; includeSubDomains"
+      ],
+      "Vary": [
+        "Origin"
+      ],
+      "X-Content-Type-Options": [
+        "nosniff"
+      ],
+      "X-Dev-Health-Plane": [
+        "go"
+      ],
+      "X-Frame-Options": [
+        "DENY"
+      ]
+    },
+    "Body": "{\"org\":\"00000000-0000-4000-8000-0000000000b1\",\"user\":{\"email\":\"user@example.test\",\"full_name\":null,\"is_superuser\":false,\"org_id\":\"00000000-0000-4000-8000-0000000000b1\",\"role\":\"admin\",\"token_version\":3,\"user_id\":\"00000000-0000-4000-8000-0000000000a1\",\"username\":null}}\n"
+  },
+  {
+    "Name": "optional hs256 wrong key",
+    "Status": 200,
+    "Headers": {
+      "Content-Security-Policy": [
+        "default-src 'none'; frame-ancestors 'none'; base-uri 'none'"
+      ],
+      "Content-Type": [
+        "application/json"
+      ],
+      "Referrer-Policy": [
+        "strict-origin-when-cross-origin"
+      ],
+      "Strict-Transport-Security": [
+        "max-age=31536000; includeSubDomains"
+      ],
+      "Vary": [
+        "Origin"
+      ],
+      "X-Content-Type-Options": [
+        "nosniff"
+      ],
+      "X-Dev-Health-Plane": [
+        "go"
+      ],
+      "X-Frame-Options": [
+        "DENY"
+      ]
+    },
+    "Body": "{\"org\":\"\"}\n"
+  },
+  {
+    "Name": "optional no token",
+    "Status": 200,
+    "Headers": {
+      "Content-Security-Policy": [
+        "default-src 'none'; frame-ancestors 'none'; base-uri 'none'"
+      ],
+      "Content-Type": [
+        "application/json"
+      ],
+      "Referrer-Policy": [
+        "strict-origin-when-cross-origin"
+      ],
+      "Strict-Transport-Security": [
+        "max-age=31536000; includeSubDomains"
+      ],
+      "Vary": [
+        "Origin"
+      ],
+      "X-Content-Type-Options": [
+        "nosniff"
+      ],
+      "X-Dev-Health-Plane": [
+        "go"
+      ],
+      "X-Frame-Options": [
+        "DENY"
+      ]
+    },
+    "Body": "{\"org\":\"\"}\n"
+  },
+  {
+    "Name": "public hs256 valid",
+    "Status": 200,
+    "Headers": {
+      "Content-Security-Policy": [
+        "default-src 'none'; frame-ancestors 'none'; base-uri 'none'"
+      ],
+      "Content-Type": [
+        "application/json"
+      ],
+      "Referrer-Policy": [
+        "strict-origin-when-cross-origin"
+      ],
+      "Strict-Transport-Security": [
+        "max-age=31536000; includeSubDomains"
+      ],
+      "Vary": [
+        "Origin"
+      ],
+      "X-Content-Type-Options": [
+        "nosniff"
+      ],
+      "X-Dev-Health-Plane": [
+        "go"
+      ],
+      "X-Frame-Options": [
+        "DENY"
+      ]
+    },
+    "Body": "{\"org\":\"00000000-0000-4000-8000-0000000000b1\"}\n"
+  },
+  {
+    "Name": "public hs256 x-org-id not a member",
+    "Status": 403,
+    "Headers": {
+      "Content-Length": [
+        "50"
+      ],
+      "Content-Type": [
+        "application/json"
+      ],
+      "X-Dev-Health-Plane": [
+        "go"
+      ]
+    },
+    "Body": "{\"detail\": \"X-Org-Id not permitted for this user\"}"
+  },
+  {
+    "Name": "trailing slash",
+    "Status": 307,
+    "Headers": {
+      "Content-Length": [
+        "0"
+      ],
+      "Content-Security-Policy": [
+        "default-src 'none'; frame-ancestors 'none'; base-uri 'none'"
+      ],
+      "Location": [
+        "http://example.com/api/v1/auth/me"
+      ],
+      "Referrer-Policy": [
+        "strict-origin-when-cross-origin"
+      ],
+      "Strict-Transport-Security": [
+        "max-age=31536000; includeSubDomains"
+      ],
+      "Vary": [
+        "Origin"
+      ],
+      "X-Content-Type-Options": [
+        "nosniff"
+      ],
+      "X-Dev-Health-Plane": [
+        "go"
+      ],
+      "X-Frame-Options": [
+        "DENY"
+      ]
+    },
+    "Body": ""
+  },
+  {
+    "Name": "unknown path hs256 valid",
+    "Status": 404,
+    "Headers": {
+      "Content-Length": [
+        "22"
+      ],
+      "Content-Security-Policy": [
+        "default-src 'none'; frame-ancestors 'none'; base-uri 'none'"
+      ],
+      "Content-Type": [
+        "application/json"
+      ],
+      "Referrer-Policy": [
+        "strict-origin-when-cross-origin"
+      ],
+      "Strict-Transport-Security": [
+        "max-age=31536000; includeSubDomains"
+      ],
+      "Vary": [
+        "Origin"
+      ],
+      "X-Content-Type-Options": [
+        "nosniff"
+      ],
+      "X-Dev-Health-Plane": [
+        "go"
+      ],
+      "X-Frame-Options": [
+        "DENY"
+      ]
+    },
+    "Body": "{\"detail\":\"Not Found\"}"
+  },
+  {
+    "Name": "unknown path hs256 x-org-id not a member",
+    "Status": 403,
+    "Headers": {
+      "Content-Length": [
+        "50"
+      ],
+      "Content-Type": [
+        "application/json"
+      ],
+      "X-Dev-Health-Plane": [
+        "go"
+      ]
+    },
+    "Body": "{\"detail\": \"X-Org-Id not permitted for this user\"}"
+  }
+]

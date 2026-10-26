@@ -60,11 +60,18 @@ type fakeSessions struct {
 	byCredential    []string
 	byCredentialErr error
 	created         []createdSession
+	signIns         int
 	createErr       error
 	// ExchangeLegacy.
-	legacy       []session.LegacyRefresh
-	legacyResult session.Result
-	legacyErr    error
+	legacy          []session.LegacyRefresh
+	revokedLegacy   []session.LegacyRefresh
+	revokeLegacyErr error
+	legacyResult    session.Result
+	// minted counts accepted exchanges: a successor a client never receives.
+	minted    int
+	legacyErr error
+	// exchanges counts every Exchange, accepted or refused: each one writes.
+	exchanges int
 }
 
 // createdSession is one CreateAudited call.
@@ -83,9 +90,12 @@ func (f *fakeSessions) RevokeByCredential(_ context.Context, credential contract
 	return f.byCredentialErr == nil, f.byCredentialErr
 }
 
-func (f *fakeSessions) CreateAudited(_ context.Context, principal uuid.UUID, org *uuid.UUID, amr []string, event audit.AuditEvent) (session.Issued, error) {
+func (f *fakeSessions) CreateAudited(ctx context.Context, principal uuid.UUID, org *uuid.UUID, amr []string, event audit.AuditEvent) (session.Issued, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if session.IsSignIn(ctx) {
+		f.signIns++
+	}
 	if f.createErr != nil {
 		return session.Issued{}, f.createErr
 	}
@@ -106,8 +116,28 @@ func (f *fakeSessions) ExchangeLegacy(_ context.Context, legacy session.LegacyRe
 	return f.legacyResult, f.legacyErr
 }
 
+func (f *fakeSessions) RevokeLegacy(_ context.Context, legacy session.LegacyRefresh, actor session.Actor) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.revokedLegacy, f.actors = append(f.revokedLegacy, legacy), append(f.actors, actor)
+	return f.revokeLegacyErr == nil, f.revokeLegacyErr
+}
+
 func (f *fakeSessions) Exchange(context.Context, contracts.SecretString) (session.Result, error) {
+	f.exchanges++
+	if f.err == nil && f.result.Reason.Success() {
+		f.minted++
+	}
 	return f.result, f.err
+}
+
+func (f *fakeSessions) ExchangeGuarded(ctx context.Context, credential contracts.SecretString, guard session.Guard) (session.Result, error) {
+	if f.err == nil && f.result.Reason == session.ReasonAccepted {
+		if err := guard(ctx, nil, f.result.Session); err != nil {
+			return session.Result{Issued: session.Issued{Session: f.result.Session}}, err
+		}
+	}
+	return f.Exchange(ctx, credential)
 }
 
 func (f *fakeSessions) Current(_ context.Context, id uuid.UUID) (session.Record, error) {

@@ -111,8 +111,8 @@ func TestConfigureRegistersTheListenerReadinessCheck(t *testing.T) {
 	if err != nil {
 		t.Fatalf("configure: %v", err)
 	}
-	if len(components) != 1 {
-		t.Fatalf("%d components", len(components))
+	if len(components) != 2 {
+		t.Fatalf("%d components, want the mail queue drain + the server", len(components))
 	}
 	if registry.RequiredCount() != 1 {
 		t.Fatalf("%d required checks, want only the listener (no database/valkey configured)", registry.RequiredCount())
@@ -120,7 +120,7 @@ func TestConfigureRegistersTheListenerReadinessCheck(t *testing.T) {
 	if ready := registry.CheckRequired(context.Background()); ready.Ready {
 		t.Fatal("ready before the listener is bound")
 	}
-	server := components[0].(*httpapi.Server)
+	server := components[len(components)-1].(*httpapi.Server)
 	if err := server.Start(context.Background()); err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -191,8 +191,8 @@ func TestConfigureRegistersTheDatabaseCheckOnlyWhenConfigured(t *testing.T) {
 	if registry.RequiredCount() != 2 {
 		t.Fatalf("%d required checks, want listener + api_database", registry.RequiredCount())
 	}
-	if len(components) != 2 {
-		t.Fatalf("%d components, want the pgx pool component + the server", len(components))
+	if len(components) != 3 {
+		t.Fatalf("%d components, want the pgx pool component + the mail queue drain + the server", len(components))
 	}
 	server := components[len(components)-1].(*httpapi.Server)
 	if err := server.Start(context.Background()); err != nil {
@@ -214,7 +214,7 @@ func TestConfigureRegistersTheDatabaseCheckOnlyWhenConfigured(t *testing.T) {
 // and webhookintake's routes both register unconditionally too (a handler
 // that needs a live dependency answers an error at request time instead).
 func TestRoutesMountsEveryArea(t *testing.T) {
-	routes := Routes(Deps{}, nil)
+	routes := Routes(Deps{LegacyIngestEnabled: true}, nil)
 	want := map[string]bool{
 		"GET /api/v1/external-ingest/schemas":                  false,
 		"GET /api/v1/external-ingest/schemas/{schema_version}": false,
@@ -421,7 +421,7 @@ func TestServerRunsTheScopeMiddlewaresOutsideSecurityHeadersAndCORS(t *testing.T
 	scope := policy.NewScope(auth, quietLogger())
 	cfg := apiTestConfig()
 	cfg.CORSAllowedOrigins = []string{"https://app.example"}
-	server, err := NewServer(cfg, quietLogger(), nil, scope.OrgScope, scope.Impersonation)
+	server, err := NewServer(cfg, quietLogger(), nil, scope.Layers()...)
 	if err != nil {
 		t.Fatal(err)
 	}

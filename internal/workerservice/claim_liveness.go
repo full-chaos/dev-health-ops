@@ -36,16 +36,25 @@ type claimLiveness struct {
 	// inHandler counts, per queue, the jobs of THIS process that are inside a
 	// handler right now (HandlerInvoked minus HandlerReturned). River counts a
 	// job as running from claim -- including one failing at its idempotency
-	// Begin -- so a queue whose Running count equals inHandler is genuinely busy
-	// with handler work, while Running above inHandler means slots are stuck
-	// BEFORE their handler. That difference is what lets a full queue stay
-	// healthy for long-running jobs yet still turn red for a stale pooler.
+	// Begin -- so a queue whose Running count is at most inHandler plus
+	// leaseWaiting (the leaseWaits slots whose wait is within credit:
+	// now.Sub(started) <= leaseWaitCredit()) has no slot stuck before its
+	// handler, while Running above that sum can mean slots are stuck BEFORE their
+	// handler; it counts only once it has been unbroken for the window with no
+	// handler activity (judgeQueue). That difference is what lets a full queue
+	// stay healthy for long-running jobs yet still turn red for a stale pooler.
 	inHandler map[string]int64
+	// leaseWaits is, per queue, the slots of THIS process waiting on another
+	// holder's org concurrency lease, keyed by wait start. A slot is entered
+	// only after a live read found the lease table full, and leaves on every
+	// exit of the wait.
+	leaseWaits map[string]map[time.Time]int64
 	// preHandlerSince is, per queue, when the CURRENT unbroken run of
-	// observations began in which at least one running slot was not inside a
-	// handler (Running > inHandler). It is written only by preHandlerStuckFor,
-	// from the readiness poll, and cleared the moment a poll sees every running
-	// slot inside a handler (or none running).
+	// observations began in which at least one running slot was neither inside
+	// a handler nor within a credited lease wait (Running > inHandler +
+	// leaseWaiting). It is written only by preHandlerStuckFor, from the
+	// readiness poll, and cleared the moment a poll sees every running slot
+	// inside a handler or within a credited lease wait (or none running).
 	preHandlerSince map[string]time.Time
 	// gateFailures is, per queue, the run of idempotency-gate failures (a job
 	// that failed at its idempotency Begin, or at its completion claim) seen
@@ -241,18 +250,21 @@ func (c *claimLiveness) handlerReturned(queue string, now time.Time) {
 }
 
 // preHandlerStuckFor reports how long queue has CONTINUOUSLY had a running slot
-// that is not inside a handler, as seen by successive readiness polls; zero when
-// every running slot is inside a handler (or none is running), and on the first
-// observation. It exists for the case the backlog check cannot see (CHAOS-6818
+// that is neither inside a handler nor within a credited org-lease wait
+// (running > inHandler+leaseWaiting; a wait is credited while
+// now.Sub(started) <= leaseWaitCredit(), the lease TTL plus the window), as seen
+// by successive readiness polls; zero when every running slot is inside a
+// handler or within a credited lease wait (or none is running), and on the
+// first observation. It exists for the case the backlog check cannot see (CHAOS-6818
 // r2c): the only claimed job stalls at its idempotency Begin on a stale pooler,
 // River counts it running, and nothing is available, so there is no backlog to
 // fail on. A single observation proves nothing (a job is always briefly between
 // claim and handler), so callers require BOTH a long unbroken run and no handler
 // activity on the queue for the staleness window.
-func (c *claimLiveness) preHandlerStuckFor(queue string, running int64, now time.Time) time.Duration {
+func (c *claimLiveness) preHandlerStuckFor(queue string, running, leaseWaiting int64, now time.Time) time.Duration {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if running <= c.inHandler[queue] {
+	if running <= c.inHandler[queue]+leaseWaiting {
 		delete(c.preHandlerSince, queue)
 		return 0
 	}
@@ -265,6 +277,49 @@ func (c *claimLiveness) preHandlerStuckFor(queue string, running int64, now time
 		return 0
 	}
 	return now.Sub(first)
+}
+
+// leaseWaitCredit bounds how long one lease wait counts as accounted for: the
+// lease TTL plus the liveness window. A holder that never releases outlives it.
+func (c *claimLiveness) leaseWaitCredit() time.Duration {
+	return jobruntime.BudgetLeaseTTL + c.staleness()
+}
+
+func (c *claimLiveness) leaseWaitStarted(queue string, started time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.leaseWaits == nil {
+		c.leaseWaits = make(map[string]map[time.Time]int64, 1)
+	}
+	if c.leaseWaits[queue] == nil {
+		c.leaseWaits[queue] = make(map[time.Time]int64, 1)
+	}
+	c.leaseWaits[queue][started]++
+}
+
+func (c *claimLiveness) leaseWaitEnded(queue string, started time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	waits := c.leaseWaits[queue]
+	if waits[started] > 1 {
+		waits[started]--
+		return
+	}
+	delete(waits, started)
+}
+
+// leaseWaiting counts the slots on queue whose wait is still within credit.
+func (c *claimLiveness) leaseWaiting(queue string, now time.Time) int64 {
+	credit := c.leaseWaitCredit()
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	var total int64
+	for started, count := range c.leaseWaits[queue] {
+		if now.Sub(started) <= credit {
+			total += count
+		}
+	}
+	return total
 }
 
 func (c *claimLiveness) handlersInside(queue string) int64 {
@@ -405,6 +460,20 @@ func (observer claimLivenessObserver) JobFinished(
 	observer.MetricsCollector.JobFinished(ctx, labels, result, category, duration)
 	if observer.liveness != nil && category == jobruntime.CategoryIdempotency {
 		observer.liveness.recordGateFailure(labels.Queue, result == jobruntime.ResultRetry, time.Now())
+	}
+}
+
+// BudgetContended implements jobruntime.BudgetContentionObserver.
+func (observer claimLivenessObserver) BudgetContended(_ context.Context, labels jobruntime.JobLabels, started time.Time) {
+	if observer.liveness != nil {
+		observer.liveness.leaseWaitStarted(labels.Queue, started)
+	}
+}
+
+// BudgetContentionEnded pairs BudgetContended.
+func (observer claimLivenessObserver) BudgetContentionEnded(_ context.Context, labels jobruntime.JobLabels, started time.Time) {
+	if observer.liveness != nil {
+		observer.liveness.leaseWaitEnded(labels.Queue, started)
 	}
 }
 
@@ -552,6 +621,10 @@ type queueFacts struct {
 	capacity, running int64
 	// inside is how many of those slots are inside a handler right now.
 	inside int64
+	// leaseWaiting is how many running slots are waiting on a contended org
+	// lease (proven by a live full read, within the credit bound). They are
+	// accounted for like slots inside a handler.
+	leaseWaiting int64
 	// claimAge is how long since a handler last ran on this queue.
 	claimAge time.Duration
 	// stuckFor is how long successive polls have CONTINUOUSLY seen a running
@@ -607,9 +680,10 @@ func collectQueueFacts(snapshot riverstore.QueueTelemetrySnapshot, claim *claimL
 	for _, queue := range order {
 		facts := byQueue[queue]
 		facts.inside = claim.handlersInside(queue)
+		facts.leaseWaiting = claim.leaseWaiting(queue, now)
 		facts.claimAge = claim.since(queue, now)
 		if !preclaim {
-			facts.stuckFor = claim.preHandlerStuckFor(queue, facts.running, now)
+			facts.stuckFor = claim.preHandlerStuckFor(queue, facts.running, facts.leaseWaiting, now)
 		}
 		facts.gateFails, facts.gateFailSpan = claim.gateFailureEvidence(queue, now)
 		out = append(out, *facts)
@@ -623,23 +697,27 @@ func collectQueueFacts(snapshot riverstore.QueueTelemetrySnapshot, claim *claimL
 //	work that should be reaching a handler is not, and nothing has run for a
 //	whole window.
 //
-// "Should be reaching a handler" is either a claimed slot that is not inside a
-// handler (running > inside) or a backlog with free capacity to claim it. The
-// queue is healthy exactly when every running slot is inside a handler (long
-// work, however deep the backlog behind a FULL queue) or nothing is waiting
-// at all. The two ways it is not:
+// "Should be reaching a handler" is either a claimed slot that is neither inside
+// a handler nor waiting on an org lease (running > inside+leaseWaiting) or a
+// backlog with free capacity to claim it. A lease wait counts only while
+// now.Sub(started) <= leaseWaitCredit() (the lease TTL plus the window). The
+// queue is healthy exactly when every running slot is inside a handler or
+// within a credited lease wait (long work, however deep the backlog behind a
+// FULL queue) or nothing is waiting at all. The three ways it is not:
 //
-//   - a running slot outside a handler, unbroken across polls for more than the
+//   - a running slot outside a handler and not within a credited lease wait
+//     (running > inside+leaseWaiting), unbroken across polls for more than the
 //     window, with no handler activity for the window: a job stalled at its
 //     idempotency Begin (a stale or recreated pooler, CHAOS-4029), with or
 //     without a backlog behind it. The unbroken-run and no-activity conditions
 //     keep a job merely between claim and handler, and a busy queue whose polls
 //     each catch one, from ever counting;
 //   - a backlog with a slot to claim it (or one whose full slots are not all in
-//     handlers) and no handler activity for the window: the consumer is not
-//     claiming.
+//     handlers or credited lease waits) and no handler activity for the
+//     window: the consumer is not claiming;
+//   - the idempotency-gate failure run below.
 //
-// The third way is independent of the snapshot (CHAOS-6864): jobs that keep
+// That third way is independent of the snapshot (CHAOS-6864): jobs that keep
 // failing at their idempotency gate, across more than a window, with no handler
 // running or inside one. River parks such a job as retryable until its backoff
 // elapses (5s, 10s ... 5m), so between failures the queue reads Available=0 and
@@ -651,7 +729,7 @@ func collectQueueFacts(snapshot riverstore.QueueTelemetrySnapshot, claim *claimL
 // Before River starts (preclaim) no handler can have run, so no arm can
 // fail; a queue that WOULD have failed the backlog arm is reported as a skip.
 func judgeQueue(f queueFacts) queueVerdict {
-	outside := f.running > f.inside
+	outside := f.running > f.inside+f.leaseWaiting
 	if !f.preclaim && outside && f.stuckFor > f.window && f.claimAge > f.window {
 		return verdictSlotStuck
 	}
@@ -723,6 +801,7 @@ func (dependencies *workerDependencies) logClaimLivenessRefusal(
 		"capacity", facts.capacity,
 		"running", facts.running,
 		"inside_handler", facts.inside,
+		"lease_waiting", facts.leaseWaiting,
 		"claim_age_ms", facts.claimAge.Milliseconds(),
 		"stuck_for_ms", facts.stuckFor.Milliseconds(),
 		"gate_failures", facts.gateFails,

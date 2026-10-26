@@ -7,6 +7,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
 
@@ -22,7 +23,7 @@ type usersReader interface {
 
 // checkUsersOwned counts the gaps between public.users and the auth schema:
 // public users with no auth user, auth users with no public user, and users of
-// a provider other than local (SSO or social) with no external identity. Any
+// a provider other than local (SSO or social) with no external identity; a non-interactive service placeholder (identity.IsServicePlaceholder) is not counted. Any
 // gap refuses the switch. The first gap is not a reason to stop counting, so
 // the refusal names all three.
 func checkUsersOwned(ctx context.Context, db usersReader, schema authschema.ValidatedIdentifier) error {
@@ -33,6 +34,7 @@ func checkUsersOwned(ctx context.Context, db usersReader, schema authschema.Vali
   (SELECT count(*) FROM `+q+`.users a WHERE NOT EXISTS (SELECT 1 FROM public.users u WHERE u.id = a.principal_id)),
   (SELECT count(*) FROM public.users u
      WHERE u.auth_provider IS NOT NULL AND u.auth_provider NOT IN ('', 'local')
+       AND NOT `+identity.ServicePlaceholderSQL("u")+`
        AND NOT EXISTS (SELECT 1 FROM `+q+`.external_identities e WHERE e.principal_id = u.id))`,
 	).Scan(&missingInAuth, &missingInPublic, &noIdentity); err != nil {
 		return fmt.Errorf("authruntime: reading the users-owned guard counts failed")

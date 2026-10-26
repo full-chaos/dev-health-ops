@@ -113,19 +113,22 @@ func TestConfigureServesInternalRoutesOnlyOnTheInternalListener(t *testing.T) {
 	if err != nil {
 		t.Fatalf("configure (off): %v", err)
 	}
-	if len(off) != 1 {
-		t.Fatalf("%d components with the internal address unset, want only the api", len(off))
+	if len(off) != 2 {
+		t.Fatalf("%d components with the internal address unset, want the mail queue drain and the api", len(off))
 	}
 	components, err := configure(context.Background(), config.Config{APIAddress: "127.0.0.1:0", APIInternalAddress: "127.0.0.1:0"}, registry, quietLogger())
 	if err != nil {
 		t.Fatalf("configure: %v", err)
 	}
-	if len(components) != 2 || registry.RequiredCount() != 2 {
-		t.Fatalf("%d components, %d required checks, want the api and the internal listener", len(components), registry.RequiredCount())
+	if len(components) != 3 || registry.RequiredCount() != 2 {
+		t.Fatalf("%d components, %d required checks, want the api, the mail queue drain and the internal listener", len(components), registry.RequiredCount())
 	}
 	servers := map[string]*httpapi.Server{}
 	for _, component := range components {
-		server := component.(*httpapi.Server)
+		server, ok := component.(*httpapi.Server)
+		if !ok {
+			continue
+		}
 		servers[server.Name()] = server
 		if err := server.Start(context.Background()); err != nil {
 			t.Fatalf("start %s: %v", server.Name(), err)
@@ -170,8 +173,8 @@ type okCreds struct{}
 func (okCreds) Find(context.Context, string) (acr.Credential, bool, error) {
 	return acr.Credential{ID: "cred", ServiceName: "acr", Scopes: []string{acr.EntitlementScope}}, true, nil
 }
-func (okCreds) MarkUsed(context.Context, string, time.Time) error   { return nil }
-func (okCreds) Audit(context.Context, string, string, string) error { return nil }
+func (okCreds) MarkUsed(context.Context, string, time.Time) error           { return nil }
+func (okCreds) Audit(context.Context, string, string, string, string) error { return nil }
 
 // TestInternalRoutesSucceedWithoutWriterViolations: a SUCCESSFUL response
 // through the real server wrapper (not the bare handler) on the internal

@@ -27,6 +27,7 @@ package authconfig
 
 import (
 	"encoding/base64"
+	"errors"
 	"fmt"
 	envsecrets "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"log/slog"
@@ -59,6 +60,9 @@ const (
 	EnvMaxBodyBytes           = "AUTH_SERVICE_MAX_BODY_BYTES"
 	EnvRateLimitPerSecond     = "AUTH_SERVICE_RATE_LIMIT_PER_SECOND"
 	EnvRateLimitBurst         = "AUTH_SERVICE_RATE_LIMIT_BURST"
+	EnvPublicMaxInFlight      = "AUTH_SERVICE_PUBLIC_MAX_IN_FLIGHT"
+	EnvPublicRateLimit        = "AUTH_SERVICE_PUBLIC_RATE_LIMIT_PER_SECOND"
+	EnvPublicRateLimitBurst   = "AUTH_SERVICE_PUBLIC_RATE_LIMIT_BURST"
 	EnvDatabaseURI            = "AUTH_DATABASE_URI"
 	EnvDatabaseSchema         = "AUTH_DATABASE_SCHEMA"
 	EnvDatabaseMaxConns       = "AUTH_DATABASE_MAX_CONNS"
@@ -97,6 +101,8 @@ const (
 
 	// EnvUsersOwned is the D3c users-owned switch (true or false, default false).
 	EnvUsersOwned = "AUTH_USERS_OWNED"
+	// EnvOrgsOwned is the organizations-owned switch (true or false, default false).
+	EnvOrgsOwned = "AUTH_ORGS_OWNED"
 	// EnvSocialLinkRoutes ("true" or "false", default false) mounts the
 	// bearer-only social link and unlink routes; it needs the session secrets.
 	EnvSocialLinkRoutes = "AUTH_SOCIAL_LINK_ROUTES"
@@ -136,6 +142,9 @@ const (
 	defaultMaxBodyBytes           = int64(1 << 20)
 	defaultRateLimitPerSecond     = float64(20)
 	defaultRateLimitBurst         = 40
+	defaultPublicMaxInFlight      = 256
+	defaultPublicRateLimit        = float64(500)
+	defaultPublicRateLimitBurst   = 1000
 	defaultDatabaseMaxConns       = int32(8)
 	defaultDatabaseConnectTimeout = 5 * time.Second
 	// go-api's JWT_ISSUER and JWT_AUDIENCE defaults (internal/platform/config).
@@ -163,6 +172,8 @@ const (
 	maxRateLimitBurst         = 100_000
 	minRateLimitPerSecond     = float64(0.01)
 	maxRateLimitPerSecond     = float64(100_000)
+	minPublicMaxInFlight      = 1
+	maxPublicMaxInFlight      = 100_000
 )
 
 // Config is the fully resolved, validated configuration of one auth-service
@@ -180,6 +191,9 @@ type Config struct {
 	RequestTimeout  time.Duration
 	MaxBodyBytes    int64
 	RateLimit       RateLimit
+	// Public is the admission class of the key and discovery routes: its own
+	// in-flight cap and per-route bucket, apart from the shared ones.
+	Public PublicAdmission
 
 	DatabaseURI secrets.Value
 	// ValkeyURI is AUTH_VALKEY_URI: the shared rate-limit store.
@@ -213,9 +227,16 @@ type Config struct {
 	// local credential links.
 	UsersOwned bool
 
+	// OrgsOwned is AUTH_ORGS_OWNED: auth-service is the only writer of
+	// auth.organizations; the legacy login projection writes nothing.
+	OrgsOwned bool
+
 	// SSO holds the federated sign-in settings; a protocol without all of its
 	// values mounts no route.
 	SSO SSO
+
+	// WorkloadExchange is the workload-token exchange (off by default).
+	WorkloadExchange WorkloadExchange
 
 	// EnvOnlySettings names the non-secret settings that were resolved from
 	// the environment although a canonical flag exists for them. A deployment
@@ -253,6 +274,14 @@ type SocialClient struct {
 	Secret secrets.Value
 }
 
+// PublicAdmission is the in-flight cap and token-bucket shape of the
+// public-document routes.
+type PublicAdmission struct {
+	MaxInFlight int
+	PerSecond   float64
+	Burst       int
+}
+
 // RateLimit is the token-bucket shape applied per route bucket.
 type RateLimit struct {
 	PerSecond float64
@@ -275,6 +304,9 @@ func (c Config) SafeAttrs() []slog.Attr {
 		slog.Int64("max_body_bytes", c.MaxBodyBytes),
 		slog.Float64("rate_limit_per_second", c.RateLimit.PerSecond),
 		slog.Int("rate_limit_burst", c.RateLimit.Burst),
+		slog.Int("public_max_in_flight", c.Public.MaxInFlight),
+		slog.Float64("public_rate_limit_per_second", c.Public.PerSecond),
+		slog.Int("public_rate_limit_burst", c.Public.Burst),
 		slog.Bool("database_configured", c.DatabaseURI.Configured()),
 		slog.Bool("valkey_configured", c.ValkeyURI.Configured()),
 		slog.String("database_schema", c.DatabaseSchema),
@@ -290,6 +322,7 @@ func (c Config) SafeAttrs() []slog.Attr {
 		slog.String("jwt_issuer", c.Session.AccessIssuer),
 		slog.String("jwt_audience", c.Session.AccessAudience),
 		slog.String("access_class", c.Session.AccessClass),
+		slog.Bool("workload_exchange_enabled", c.WorkloadExchange.Enabled),
 	}
 }
 
@@ -370,6 +403,21 @@ func Load(spec Spec) (Config, error) {
 		return Config{}, err
 	}
 	cfg.RateLimit.Burst = int(burst)
+	if cfg.Public.MaxInFlight, err = smallInteger(
+		lookup, EnvPublicMaxInFlight, defaultPublicMaxInFlight, minPublicMaxInFlight, maxPublicMaxInFlight,
+	); err != nil {
+		return Config{}, err
+	}
+	if cfg.Public.PerSecond, err = float(
+		lookup, EnvPublicRateLimit, defaultPublicRateLimit, minRateLimitPerSecond, maxRateLimitPerSecond,
+	); err != nil {
+		return Config{}, err
+	}
+	if cfg.Public.Burst, err = smallInteger(
+		lookup, EnvPublicRateLimitBurst, defaultPublicRateLimitBurst, minRateLimitBurst, maxRateLimitBurst,
+	); err != nil {
+		return Config{}, err
+	}
 
 	// secrets.Resolve is the platform's direct-value/_FILE mutual exclusion
 	// (TRD §6, ACP-ADR-02 §4). It is reused rather than reimplemented so this
@@ -439,7 +487,13 @@ func Load(spec Spec) (Config, error) {
 	if cfg.UsersOwned, err = usersOwned(lookup); err != nil {
 		return Config{}, err
 	}
+	if cfg.OrgsOwned, err = orgsOwned(lookup); err != nil {
+		return Config{}, err
+	}
 	if cfg.SSO, err = ssoSettings(lookup); err != nil {
+		return Config{}, err
+	}
+	if cfg.WorkloadExchange, err = workloadExchange(lookup, cfg.TokenIssuerURL); err != nil {
 		return Config{}, err
 	}
 	if cfg.ValkeyURI, err = valkeySetting(lookup, cfg.LimitedRoutesMounted()); err != nil {
@@ -449,14 +503,11 @@ func Load(spec Spec) (Config, error) {
 }
 
 // LimitedRoutesMounted reports whether a route that counts in the shared
-// rate-limit store is mounted: login, the credential routes (session secrets
-// and AUTH_USERS_OWNED) or the social link routes. The JWKS, discovery,
-// session and SSO routes carry no such limit.
+// rate-limit store is mounted: every session route set (it carries the
+// compatibility refresh), and with it login, the credential routes and the
+// social link routes. The JWKS and discovery routes carry no such limit.
 func (c Config) LimitedRoutesMounted() bool {
-	if !c.Session.Enabled {
-		return false
-	}
-	return c.Session.LoginEnabled || c.UsersOwned || c.Session.SocialLinkRoutes
+	return c.Session.Enabled
 }
 
 // valkeySetting resolves AUTH_VALKEY_URI. A syntactically bad value is
@@ -471,7 +522,7 @@ func valkeySetting(lookup secrets.LookupEnv, required bool) (secrets.Value, erro
 	if !set {
 		if required {
 			return secrets.Value{}, fmt.Errorf(
-				"%s or %s_FILE is required while the login, credential or social link routes are mounted: "+
+				"%s or %s_FILE is required while the session routes are mounted: "+
 					"an in-process limiter is per replica and so no limit", EnvValkeyURI, EnvValkeyURI)
 		}
 		return secrets.Value{}, nil
@@ -802,6 +853,28 @@ func integer(lookup secrets.LookupEnv, key string, fallback, low, high int64) (i
 	return value, nil
 }
 
+// smallInteger is integer for a setting held as an int: the value is parsed at
+// 32 bits, so it can never wrap on the way into the int, and then range
+// checked like integer's.
+func smallInteger(lookup secrets.LookupEnv, key string, fallback, low, high int) (int, error) {
+	raw := strings.TrimSpace(valueOf(lookup, key))
+	if raw == "" {
+		return fallback, nil
+	}
+	value, err := strconv.ParseInt(raw, 10, 32)
+	if err != nil {
+		var numErr *strconv.NumError
+		if errors.As(err, &numErr) && errors.Is(numErr.Err, strconv.ErrRange) {
+			return 0, fmt.Errorf("%s must be between %d and %d", key, low, high)
+		}
+		return 0, fmt.Errorf("%s must be an integer", key)
+	}
+	if int(value) < low || int(value) > high {
+		return 0, fmt.Errorf("%s must be between %d and %d", key, low, high)
+	}
+	return int(value), nil
+}
+
 func float(lookup secrets.LookupEnv, key string, fallback, low, high float64) (float64, error) {
 	raw := strings.TrimSpace(valueOf(lookup, key))
 	if raw == "" {
@@ -866,12 +939,17 @@ func tokenIssuerURL(lookup secrets.LookupEnv) (string, error) {
 
 // usersOwned reads AUTH_USERS_OWNED: unset or empty is false; anything but
 // true or false is refused.
-func usersOwned(lookup secrets.LookupEnv) (bool, error) {
-	switch strings.ToLower(strings.TrimSpace(valueOf(lookup, EnvUsersOwned))) {
+func usersOwned(lookup secrets.LookupEnv) (bool, error) { return ownedSwitch(lookup, EnvUsersOwned) }
+
+// orgsOwned reads AUTH_ORGS_OWNED with the same rule as AUTH_USERS_OWNED.
+func orgsOwned(lookup secrets.LookupEnv) (bool, error) { return ownedSwitch(lookup, EnvOrgsOwned) }
+
+func ownedSwitch(lookup secrets.LookupEnv, name string) (bool, error) {
+	switch strings.ToLower(strings.TrimSpace(valueOf(lookup, name))) {
 	case "", "false":
 		return false, nil
 	case "true":
 		return true, nil
 	}
-	return false, fmt.Errorf("%s must be true or false", EnvUsersOwned)
+	return false, fmt.Errorf("%s must be true or false", name)
 }

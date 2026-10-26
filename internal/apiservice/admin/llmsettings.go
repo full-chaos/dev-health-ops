@@ -462,6 +462,9 @@ func byoProviderNeedsModel(in llmUpsert) bool {
 // transaction that a refusal or a failed response rolls back. The route and the
 // operator verb both run it.
 func (h *handlers) applyLLMSettings(ctx context.Context, orgID string, in llmUpsert) (*pyjson.Object, *llmRefusal, error) {
+	if refusal := clefRefusal(in.provider, "", false, "", nil); refusal != nil {
+		return nil, refusal, nil
+	}
 	baseURLText := ""
 	if in.baseURL != nil {
 		baseURLText = *in.baseURL

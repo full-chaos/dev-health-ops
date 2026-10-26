@@ -266,15 +266,56 @@ func TestLeaseSessionRunReportsLeaseLossWhenRenewalOutlivesGrantedExpiry(t *test
 	}
 }
 
+// leaseTestClock is a session clock that moves only when the test moves it.
+type leaseTestClock struct {
+	mu  sync.Mutex
+	now time.Time
+}
+
+func (clock *leaseTestClock) Now() time.Time {
+	clock.mu.Lock()
+	defer clock.mu.Unlock()
+	return clock.now
+}
+
+func (clock *leaseTestClock) advance(step time.Duration) {
+	clock.mu.Lock()
+	defer clock.mu.Unlock()
+	clock.now = clock.now.Add(step)
+}
+
+// The session clock moves only inside a granted renewal, so how late the
+// scheduler runs the heartbeat never decides whether a renewal starts before
+// the claim-time expiry. The renewal still fails on its context, so a
+// heartbeat that bounded renewals by the claim-time expiry would lose the
+// lease once the clock reaches it.
 func TestLeaseSessionRunKeepsRenewingPastTheClaimTimeExpiry(t *testing.T) {
 	t.Parallel()
-	session, _ := scriptedLeaseSession(t, func(ctx context.Context, _ int) error { return ctx.Err() })
-	sessionClockAhead(session, 900*time.Millisecond)
-	err := session.Run(context.Background(), 20*time.Millisecond, func(ctx context.Context, guard providerfoundation.LeaseGuard) error {
+	const step = 10 * time.Second
+	start := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
+	claimExpiry := start.Add(30 * time.Second)
+	clock := &leaseTestClock{now: start}
+	renewedPastClaimExpiry := make(chan struct{})
+	var once sync.Once
+	session, _ := scriptedLeaseSession(t, func(ctx context.Context, _ int) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if clock.Now().After(claimExpiry) {
+			once.Do(func() { close(renewedPastClaimExpiry) })
+		}
+		clock.advance(step)
+		return nil
+	})
+	session.Claim.LeaseExpiresAt = claimExpiry
+	session.LeaseDuration = time.Minute
+	session.Deadline = start.Add(time.Hour)
+	session.Now = clock.Now
+	err := session.Run(context.Background(), time.Millisecond, func(ctx context.Context, guard providerfoundation.LeaseGuard) error {
 		select {
 		case <-ctx.Done():
 			return context.Cause(ctx)
-		case <-time.After(300 * time.Millisecond):
+		case <-renewedPastClaimExpiry:
 		}
 		return guard.Assert(ctx)
 	})

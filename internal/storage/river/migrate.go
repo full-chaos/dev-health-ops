@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -80,6 +81,14 @@ type ColumnGrant struct {
 	Privilege  string
 }
 
+// SessionReadGrant names the auth session columns query-api may read: USAGE on
+// Schema and column SELECT on Schema.Table(Columns).
+type SessionReadGrant struct {
+	Schema  string
+	Table   string
+	Columns []string
+}
+
 type MigrationOptions struct {
 	Schema     string
 	DomainRole string
@@ -139,6 +148,14 @@ type MigrationOptions struct {
 	// APIColumnGrants; what is NOT legitimate is supplying it without a
 	// role, rejected alongside QueryAPIGrants for the same reason.
 	QueryAPIColumnGrants []ColumnGrant
+	// QueryAPISessionRead is the auth session read added to the manifest while
+	// auth-service owns sessions (AUTH_PROXY_SESSIONS): USAGE on the auth schema
+	// and column SELECT on its sessions table. Optional; requires QueryAPIRole.
+	// It is applied after the role's REVOKE, so the role ends with exactly the
+	// manifest plus this read. When the table is absent at run time the read is
+	// skipped (resolveQueryAPISessionRead) and the query-api readiness check stays
+	// not-ready until a later run grants it.
+	QueryAPISessionRead *SessionReadGrant
 	// PostureManifestDigest is the sha256 hex digest CHAOS-5437's lockstep
 	// guard stamps into worker_posture_manifest_applied on every run
 	// (postgres.PostureManifestDigest() -- injected the same way
@@ -657,7 +674,7 @@ func ValidateMigrationOptions(options MigrationOptions) error {
 // of their own: this leg's REVOKE ALL and GRANT would overwrite theirs.
 func validateQueryAPIOptions(options MigrationOptions) error {
 	if options.QueryAPIRole == "" {
-		if len(options.QueryAPIGrants) != 0 || len(options.QueryAPIColumnGrants) != 0 {
+		if len(options.QueryAPIGrants) != 0 || len(options.QueryAPIColumnGrants) != 0 || options.QueryAPISessionRead != nil {
 			return ErrMigrationConfiguration
 		}
 		return nil
@@ -671,6 +688,16 @@ func validateQueryAPIOptions(options MigrationOptions) error {
 	}
 	if len(options.QueryAPIGrants) == 0 {
 		return ErrMigrationConfiguration
+	}
+	if read := options.QueryAPISessionRead; read != nil {
+		if !validIdentifier(read.Schema) || !validIdentifier(read.Table) || len(read.Columns) == 0 {
+			return ErrMigrationConfiguration
+		}
+		for _, column := range read.Columns {
+			if !validIdentifier(column) {
+				return ErrMigrationConfiguration
+			}
+		}
 	}
 	return validateGrantSet(options.QueryAPIGrants, options.QueryAPIColumnGrants, nil)
 }
@@ -819,7 +846,7 @@ func resolveQueryAPIRole(
 			options.Logger.WarnContext(ctx, "query-api Postgres role does not exist; query-api grants skipped",
 				"query_api_role", options.QueryAPIRole)
 		}
-		options.QueryAPIRole, options.QueryAPIGrants, options.QueryAPIColumnGrants = "", nil, nil
+		options.QueryAPIRole, options.QueryAPIGrants, options.QueryAPIColumnGrants, options.QueryAPISessionRead = "", nil, nil, nil
 		return options, nil
 	}
 	if !eligible || migrationRole == options.QueryAPIRole {
@@ -868,9 +895,33 @@ func validIdentifier(value string) bool {
 	return true
 }
 
+// resolveQueryAPISessionRead drops the auth session read when the auth sessions
+// table is absent (the auth schema is not migrated yet): the rest of the leg
+// still applies and the migration does not abort. query-api's readiness check
+// then stays not-ready, because it requires the read, until a later run grants
+// it. It reports whether the read was skipped.
+func resolveQueryAPISessionRead(options MigrationOptions, tablePresent bool) (MigrationOptions, bool) {
+	if options.QueryAPISessionRead == nil || tablePresent {
+		return options, false
+	}
+	options.QueryAPISessionRead = nil
+	return options, true
+}
+
 func applyRuntimeGrants(ctx context.Context, tx pgx.Tx, options MigrationOptions) error {
 	if err := aclguard.Lock(ctx, tx); err != nil {
 		return fmt.Errorf("take the privilege writer lock")
+	}
+	if read := options.QueryAPISessionRead; read != nil && options.QueryAPIRole != "" {
+		var present bool
+		if err := tx.QueryRow(ctx, "SELECT to_regclass(format('%I.%I', $1::text, $2::text)) IS NOT NULL", read.Schema, read.Table).Scan(&present); err != nil {
+			return fmt.Errorf("read whether the auth sessions table exists")
+		}
+		var skipped bool
+		if options, skipped = resolveQueryAPISessionRead(options, present); skipped && options.Logger != nil {
+			options.Logger.WarnContext(ctx, "auth sessions table absent; query-api session read skipped",
+				"class", "auth_sessions_absent", "query_api_role", options.QueryAPIRole)
+		}
 	}
 	if options.QueryAPIRole != "" {
 		// CHAOS-6804 (lead D2616): the query-api role is provisioned from the SAME
@@ -980,9 +1031,10 @@ func runtimeGrantStatements(options MigrationOptions) []string {
 		"DO $$ BEGIN IF to_regclass('public.backfill_jobs') IS NOT NULL THEN GRANT SELECT, UPDATE ON TABLE public.backfill_jobs TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.sync_coverage_projections') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_coverage_projections TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.organizations') IS NOT NULL THEN GRANT SELECT ON TABLE public.organizations TO " + domainRole + "; END IF; END $$",
-		// CHAOS-9476: the stale-reservation job lists rows left in `reserved`;
-		// read only, it never voids one.
-		"DO $$ BEGIN IF to_regclass('public.byo_llm_budget_reservations') IS NOT NULL THEN GRANT SELECT ON TABLE public.byo_llm_budget_reservations TO " + domainRole + "; END IF; END $$",
+		// The heavy worker reserves a BYO budget row (INSERT) and settles it
+		// (UPDATE of the Settle columns only); the stale-reservation job
+		// (CHAOS-9476) only reads. No DELETE, no table-wide UPDATE.
+		"DO $$ BEGIN IF to_regclass('public.byo_llm_budget_reservations') IS NOT NULL THEN GRANT SELECT, INSERT ON TABLE public.byo_llm_budget_reservations TO " + domainRole + "; GRANT UPDATE (status, input_tokens, output_tokens, cached_input_tokens, actual_micro_usd, reconciled_at) ON TABLE public.byo_llm_budget_reservations TO " + domainRole + "; END IF; END $$",
 		// The native phone-home heartbeat runs on the domain pool
 		// (internal/jobs/system/heartbeat_native.go): it counts users
 		// alongside organizations and records each run as an audit_logs row.
@@ -1055,6 +1107,12 @@ func runtimeGrantStatements(options MigrationOptions) []string {
 		"REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM " + queueRole,
 		"REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM " + queueRole,
 		"REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA public FROM PUBLIC, " + domainRole + ", " + queueRole,
+		// The public functions the domain role may run: the definer reads of an
+		// org's categorization opt-in (pgmigrate 0156) and of an opted-in org's
+		// categorize configuration and budget limit (pgmigrate 0158);
+		// domainPosture's RequiredFunctions. It holds nothing on settings itself.
+		"DO $$ BEGIN IF to_regprocedure('public.categorize_byo_opted_in(text)') IS NOT NULL THEN GRANT EXECUTE ON FUNCTION public.categorize_byo_opted_in(text) TO " + domainRole + "; END IF; END $$",
+		"DO $$ BEGIN IF to_regprocedure('public.categorize_byo_settings(text)') IS NOT NULL THEN GRANT EXECUTE ON FUNCTION public.categorize_byo_settings(text) TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.worker_job_outbox') IS NOT NULL THEN GRANT SELECT, UPDATE, DELETE ON TABLE public.worker_job_outbox TO " + queueRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.worker_job_delivery_abandonments') IS NOT NULL THEN GRANT SELECT, INSERT ON TABLE public.worker_job_delivery_abandonments TO " + queueRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.worker_job_completion_fences') IS NOT NULL THEN GRANT SELECT, UPDATE, DELETE ON TABLE public.worker_job_completion_fences TO " + queueRole + "; END IF; END $$",
@@ -1134,6 +1192,16 @@ func queryAPIGrantStatements(options MigrationOptions) []string {
 				grant.Privilege+" ("+pgx.Identifier{grant.ColumnName}.Sanitize()+
 				") ON TABLE "+pgx.Identifier{"public", grant.TableName}.Sanitize()+
 				" TO "+role+"; END IF; END $$",
+		)
+	}
+	if read := options.QueryAPISessionRead; read != nil {
+		columns := make([]string, len(read.Columns))
+		for i, column := range read.Columns {
+			columns[i] = pgx.Identifier{column}.Sanitize()
+		}
+		statements = append(statements,
+			"GRANT USAGE ON SCHEMA "+pgx.Identifier{read.Schema}.Sanitize()+" TO "+role,
+			"GRANT SELECT ("+strings.Join(columns, ", ")+") ON TABLE "+pgx.Identifier{read.Schema, read.Table}.Sanitize()+" TO "+role,
 		)
 	}
 	return statements

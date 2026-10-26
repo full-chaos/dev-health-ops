@@ -36,15 +36,9 @@ func discard() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, ni
 // no readiness check, with or without a URI in the environment.
 func TestNoStoreIsBuiltWhileNoLimitedRouteMounts(t *testing.T) {
 	for name, env := range map[string]map[string]string{
-		"dormant, no URI":     {},
-		"dormant, URI set":    {authconfig.EnvValkeyURI: testValkeyURI},
-		"session routes only": sessionEnvironment(map[string]string{}),
-		"session routes, URI absent": func() map[string]string {
-			e := sessionEnvironment(map[string]string{})
-			delete(e, authconfig.EnvValkeyURI)
-			return e
-		}(),
-		"discovery": {authconfig.EnvTokenIssuerURL: "https://auth.example.com"},
+		"dormant, no URI":  {},
+		"dormant, URI set": {authconfig.EnvValkeyURI: testValkeyURI},
+		"discovery":        {authconfig.EnvTokenIssuerURL: "https://auth.example.com"},
 	} {
 		cfg := limitConfig(t, env)
 		registry := health.NewRegistry(time.Second)
@@ -57,6 +51,19 @@ func TestNoStoreIsBuiltWhileNoLimitedRouteMounts(t *testing.T) {
 
 // Nothing dials at startup: an unreachable store leaves the process up, and
 // the first count answers a store error, which the routes turn into a closed 500.
+// The compatibility refresh route counts in the store, so session routes alone build it.
+func TestSessionRoutesAloneBuildTheStoreForTheRefreshLimit(t *testing.T) {
+	registry := health.NewRegistry(time.Second)
+	limits, components, err := limitStore(limitConfig(t, sessionEnvironment(map[string]string{})), discard(), registry)
+	if err != nil || limits == nil || len(components) != 1 {
+		t.Fatalf("limits %v, %d components, err %v; want the store", limits, len(components), err)
+	}
+	defer components[0].Shutdown(context.Background())
+	if registry.RequiredCount() != 1 {
+		t.Fatalf("%d required checks, want the valkey check", registry.RequiredCount())
+	}
+}
+
 func TestTheStoreDialsOnFirstUseAndAnUnreachableOneIsAnErrorNotAPass(t *testing.T) {
 	cfg := limitConfig(t, compatEnvironment(map[string]string{}))
 	registry := health.NewRegistry(time.Second)
@@ -132,6 +139,7 @@ func TestTheStoreErrorCounterIsOnTheServiceScrape(t *testing.T) {
 		"auth_svc_login_ip", "auth_svc_login_ip_account", "auth_svc_verify", "auth_svc_resend_verification",
 		"auth_svc_resend_verification_ip", "auth_svc_forgot_password", "auth_svc_forgot_password_ip",
 		"auth_svc_reset_ip", "auth_svc_reset_ip_token", "auth_svc_change_password", "auth_svc_social_link_ip_principal",
+		"auth_svc_refresh",
 	}
 	for _, id := range ids {
 		sample := regexp.MustCompile(`(?m)^dev_health_api_rate_limit_store_errors_total\{limit="` + id + `"\} \d+$`)
@@ -141,8 +149,8 @@ func TestTheStoreErrorCounterIsOnTheServiceScrape(t *testing.T) {
 	}
 
 	quiet := health.NewRegistry(time.Second)
-	if limits, _, err := limitStore(limitConfig(t, sessionEnvironment(map[string]string{})), discard(), quiet); err != nil || limits != nil {
-		t.Fatalf("session routes only: limits %v, err %v", limits, err)
+	if limits, _, err := limitStore(limitConfig(t, map[string]string{}), discard(), quiet); err != nil || limits != nil {
+		t.Fatalf("no session routes: limits %v, err %v", limits, err)
 	}
 	var none bytes.Buffer
 	if err := quiet.WriteMetrics(&none); err != nil {
@@ -196,10 +204,8 @@ func TestTheDormantMountSetBootsWithoutTheStoreSecret(t *testing.T) {
 	if required == 0 {
 		t.Fatal("no readiness gate found: the boot did not reach the end of configure")
 	}
-	// The same service with the session secrets but no limited route: still no store,
-	// and a value in AUTH_VALKEY_URI beside no limited route changes nothing.
-	withURI := sessionEnvironment(map[string]string{})
-	withURI[authconfig.EnvValkeyURI] = testValkeyURI
+	// A value in AUTH_VALKEY_URI beside no limited route changes nothing.
+	withURI := map[string]string{authconfig.EnvValkeyURI: testValkeyURI}
 	namesURI, requiredURI := boot(withURI)
 	for _, name := range namesURI {
 		if strings.Contains(name, "valkey") {

@@ -10,8 +10,8 @@ import (
 // read a changed path. Each case below is one way a reader escapes a naive bound; the fixture is the git tree of
 // plan_verdict_test.go (a, b, c imports b, d, x, cmd/tool imports a). The tables the planner reads beside classes.tsv
 // and reads.tsv are generated from the code: dynreads.tsv (`package<TAB>site`: the site reads a path the tool cannot
-// bound), walks.tsv (`package<TAB>site<TAB>root<TAB>depth`: the site walks root, a repository directory taken from the
-// code) and edges.tsv (`package<TAB>site<TAB>target`: the site runs or loads the Go packages of target). A case passes
+// bound), walks.tsv (`package<TAB>site<TAB>root<TAB>depth<TAB>filter`: the site walks root, a repository directory taken
+// from the code, and acts on the files filter names) and edges.tsv (`package<TAB>site<TAB>target`: the site runs or loads the Go packages of target). A case passes
 // only with the exact verdict: FULL where a selection is due fails it as much as a selection that misses a reader.
 
 const tablesDir = "internal/cigates/affected/"
@@ -155,15 +155,15 @@ func TestNonGoPlanWalkRowsComeFromTheCode(t *testing.T) {
 	root := fmt.Sprintf(walk, "repoRoot()")
 	docs := fmt.Sprintf(walk, `filepath.Join(repoRoot(), "docs")`)
 	runNongo(t, []nongoCase{
-		{name: "narrow_row_for_a_root_walk_fails", head: map[string]string{"x/x_walk_test.go": root, tablesDir + "walks.tsv": "x\tx_walk_test.go\tdocs\ttree\n"},
+		{name: "narrow_row_for_a_root_walk_fails", head: map[string]string{"x/x_walk_test.go": root, tablesDir + "walks.tsv": "x\tx_walk_test.go\tdocs\ttree\t*\n"},
 			changed: []string{"contracts/auth/v1/x.json"}, want: "FULL *", readsCode: 1, readsWant: []string{"x\tx_walk_test.go\t.\ttree"}},
 		{name: "missing_row_for_a_root_walk_fails", head: map[string]string{"x/x_walk_test.go": root},
 			changed: []string{"contracts/auth/v1/x.json"}, want: "FULL *", readsCode: 1, readsWant: []string{"x\tx_walk_test.go\t.\ttree"}},
-		{name: "root_walk_selects_its_walker", head: map[string]string{"x/x_walk_test.go": root, tablesDir + "walks.tsv": "x\tx_walk_test.go\t.\ttree\n"},
+		{name: "root_walk_selects_its_walker", head: map[string]string{"x/x_walk_test.go": root, tablesDir + "walks.tsv": "x\tx_walk_test.go\t.\ttree\t*\n"},
 			changed: []string{"contracts/auth/v1/x.json"}, want: "AFFECTED 3", keys: []string{"b", "c", "x"}},
-		{name: "wide_row_for_a_docs_walk_fails", head: map[string]string{"x/x_walk_test.go": docs, tablesDir + "reads.tsv": withReads("x\ttest\tdocs\n"), tablesDir + "walks.tsv": "x\tx_walk_test.go\t.\ttree\n"},
+		{name: "wide_row_for_a_docs_walk_fails", head: map[string]string{"x/x_walk_test.go": docs, tablesDir + "reads.tsv": withReads("x\ttest\tdocs\n"), tablesDir + "walks.tsv": "x\tx_walk_test.go\t.\ttree\t*\n"},
 			changed: []string{"contracts/auth/v1/x.json"}, want: "FULL *", readsCode: 1, readsWant: []string{"x\tx_walk_test.go\tdocs\ttree"}},
-		{name: "docs_walk_skips_a_contracts_change", head: map[string]string{"x/x_walk_test.go": docs, tablesDir + "reads.tsv": withReads("x\ttest\tdocs\n"), tablesDir + "walks.tsv": "x\tx_walk_test.go\tdocs\ttree\n"},
+		{name: "docs_walk_skips_a_contracts_change", head: map[string]string{"x/x_walk_test.go": docs, tablesDir + "reads.tsv": withReads("x\ttest\tdocs\n"), tablesDir + "walks.tsv": "x\tx_walk_test.go\tdocs\ttree\t*\n"},
 			changed: []string{"contracts/auth/v1/x.json"}, want: "AFFECTED 2", keys: []string{"b", "c"}},
 	})
 }
@@ -178,10 +178,10 @@ func TestNonGoPlanReproModuleWalkOfEveryTestFile(t *testing.T) {
 		"\nfunc ScanHandTables(t *testing.T) int {\n\tn := 0\n\troot := repoRootDir(t)\n\terr := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {\n\t\tif err != nil || d.IsDir() || !strings.HasSuffix(path, \"_test.go\") {\n\t\t\treturn err\n\t\t}\n\t\traw, err := os.ReadFile(path)\n\t\tn += len(raw)\n\t\treturn err\n\t})\n\tif err != nil {\n\t\tt.Fatal(err)\n\t}\n\treturn n\n}\n"
 	runNongo(t, []nongoCase{
 		{name: "test_walker_runs_for_another_packages_test_file", head: map[string]string{"x/x_ddl_test.go": fmt.Sprintf(scan, "x"),
-			tablesDir + "walks.tsv": "x\tx_ddl_test.go\t.\ttree\n"},
+			tablesDir + "walks.tsv": "x\tx_ddl_test.go\t.\ttree\t*\n"},
 			changed: []string{"a/a_test.go"}, want: "AFFECTED 2", keys: []string{"a", "x"}},
 		{name: "code_walker_runs_its_importers", head: map[string]string{"b/b_ddl.go": fmt.Sprintf(scan, "b"),
-			tablesDir + "walks.tsv": "b\tb_ddl.go\t.\ttree\n"},
+			tablesDir + "walks.tsv": "b\tb_ddl.go\t.\ttree\t*\n"},
 			changed: []string{"a/a_test.go"}, want: "AFFECTED 3", keys: []string{"a", "b", "c"}},
 	})
 }
@@ -265,9 +265,9 @@ func TestNonGoPlanCmdArgsMutatedThroughAnAlias(t *testing.T) {
 func TestNonGoPlanOsRootReadsAreBounded(t *testing.T) {
 	const root = "package x\n\nimport (\n\t\"os\"\n\t\"testing\"\n)\n\nfunc TestRoot(t *testing.T) {\n\tr, err := os.OpenRoot(%s)\n\tif err != nil {\n\t\tt.Fatal(err)\n\t}\n\t_, _ = r.ReadFile(os.Getenv(\"FILE_NAME\"))\n}\n"
 	runNongo(t, []nongoCase{
-		{name: "env_root_is_an_unbounded_walk", head: map[string]string{"x/x_root_test.go": fmt.Sprintf(root, `os.Getenv("ROOT_DIR")`), tablesDir + "walks.tsv": "x\tx_root_test.go\tunexpressed\t-\n"},
+		{name: "env_root_is_an_unbounded_walk", head: map[string]string{"x/x_root_test.go": fmt.Sprintf(root, `os.Getenv("ROOT_DIR")`), tablesDir + "walks.tsv": "x\tx_root_test.go\tunexpressed\t-\t-\n"},
 			changed: []string{"docs/a.md"}, want: "AFFECTED 2", keys: []string{"a", "x"}},
-		{name: "constant_root_walks_that_directory", head: map[string]string{"x/x_root_test.go": fmt.Sprintf(root, `"../docs"`), tablesDir + "walks.tsv": "x\tx_root_test.go\tdocs\ttree\n", tablesDir + "reads.tsv": withReads("x\ttest\tdocs\n")},
+		{name: "constant_root_walks_that_directory", head: map[string]string{"x/x_root_test.go": fmt.Sprintf(root, `"../docs"`), tablesDir + "walks.tsv": "x\tx_root_test.go\tdocs\ttree\t*\n", tablesDir + "reads.tsv": withReads("x\ttest\tdocs\n")},
 			changed: []string{"docs/a.md"}, want: "AFFECTED 2", keys: []string{"a", "x"}},
 		{name: "env_root_without_its_row_fails_the_guard", head: map[string]string{"x/x_root_test.go": fmt.Sprintf(root, `os.Getenv("ROOT_DIR")`)},
 			changed: []string{"docs/a.md"}, want: "FULL *", readsCode: 1, readsWant: []string{"x\tx_root_test.go\tunexpressed\t-"}},

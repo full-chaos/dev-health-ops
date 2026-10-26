@@ -43,7 +43,6 @@ const (
 	textChangeInvalid         = "Invalid password change request"
 	textPasswordValidation    = "Password validation failed"
 	reasonCredentialsRefusal  = "invalid_token"
-	reasonSessionsNotRevoked  = "sessions_not_revoked"
 	reasonPasswordPolicy      = "password_policy"
 	reasonCurrentRejected     = "current_password_rejected"
 	reasonManagedElsewhere    = "password_managed_elsewhere"
@@ -126,13 +125,13 @@ func CredentialRoutes(deps CredentialDeps) ([]httpapi.Route, error) {
 	}
 	write := goAPIRefusal
 	limited := func(validate httpapi.RequestValidator, limit httpapi.Limit, key httpapi.KeyFunc, next http.HandlerFunc) http.Handler {
-		return httpapi.ValidateThenLimit(validate, deps.Limits.limiter(limit), key, write)(next)
+		return httpapi.ValidateThenLimitDependency(validate, deps.Limits.limiter(limit), key, write)(next)
 	}
 	// mailLimited is limited with a per-client-address cap in front of the
 	// per-account budget: validate, the address cap, the account budget.
 	mailLimited := func(validate httpapi.RequestValidator, ipLimit, accountLimit httpapi.Limit, next http.HandlerFunc) http.Handler {
-		account := httpapi.LimitWith(deps.Limits.limiter(accountLimit), h.credentialAuthKey, write)(next)
-		return httpapi.ValidateThenLimit(validate, deps.Limits.limiter(ipLimit), clientKey, write)(account)
+		account := httpapi.LimitWithDependency(deps.Limits.limiter(accountLimit), h.credentialAuthKey, write)(next)
+		return httpapi.ValidateThenLimitDependency(validate, deps.Limits.limiter(ipLimit), clientKey, write)(account)
 	}
 	h.resetIP, h.resetToken = deps.Limits.limiter(resetIPLimit), deps.Limits.limiter(resetTokenLimit)
 	h.change = limited(h.validateChange, changePasswordLimit, h.changePasswordKey, h.changePassword)
@@ -144,6 +143,11 @@ func CredentialRoutes(deps CredentialDeps) ([]httpapi.Route, error) {
 		{Method: http.MethodPost, Pattern: PatternResetPassword, Handler: h.resetPassword(flows)},
 		{Method: http.MethodPost, Pattern: PatternChangePassword, Handler: h.authenticatedChange()},
 	}
+	register, err := h.registerRoute(flows)
+	if err != nil {
+		return nil, err
+	}
+	routes = append(routes, register)
 	return routes, nil
 }
 
@@ -292,11 +296,6 @@ func (h credentialHandlers) resetPassword(flows CredentialFlows) http.Handler {
 		}
 		switch outcome.Kind {
 		case local.FlowOK:
-			if outcome.RevokeErr != nil {
-				h.compat.rec.record(r.Context(), opResetPassword, "error", reasonSessionsNotRevoked, outcome.RevokeErr)
-				policy.WriteInternal(w)
-				return
-			}
 			h.compat.rec.record(r.Context(), opResetPassword, "success", reasonAccepted, nil)
 			writeCompatModel(w, verifyModel(textResetDone, false))
 		case local.FlowPolicy:
@@ -348,6 +347,10 @@ func (h credentialHandlers) changePassword(w http.ResponseWriter, r *http.Reques
 	ctx := r.Context()
 	caller, _ := ctx.Value(changeAuthKey{}).(changeCaller)
 	input := inputOf(r)
+	if err := h.Issuer.Preflight(ctx); err != nil {
+		h.compat.unavailableCompat(w, r, opChangePassword, err)
+		return
+	}
 	outcome, err := h.flows.Change(ctx, local.ChangeRequest{
 		PrincipalID: caller.bearer.PrincipalID, OrganizationID: caller.record.OrganizationID,
 		Current: input.current, New: input.password, Impersonated: caller.bearer.Impersonated,
@@ -359,11 +362,6 @@ func (h credentialHandlers) changePassword(w http.ResponseWriter, r *http.Reques
 	}
 	switch outcome.Kind {
 	case local.FlowOK:
-		if outcome.RevokeErr != nil {
-			h.compat.rec.record(ctx, opChangePassword, "error", reasonSessionsNotRevoked, outcome.RevokeErr)
-			policy.WriteInternal(w)
-			return
-		}
 		h.changed(w, r, caller, outcome)
 	case local.FlowPolicy:
 		h.compat.rec.record(ctx, opChangePassword, "denied", reasonPasswordPolicy, nil)
@@ -417,7 +415,7 @@ func (h credentialHandlers) changed(w http.ResponseWriter, r *http.Request, call
 	issued := outcome.Issued
 	access, err := h.Issuer.Access(Grant{PrincipalID: principal, OrganizationID: org, Role: role, SessionID: issued.Session.ID, User: user})
 	if err != nil {
-		h.compat.fail(w, r, opChangePassword, err)
+		h.compat.failMint(w, r, opChangePassword, err)
 		return
 	}
 	h.compat.rec.record(ctx, opChangePassword, "success", reasonAccepted, nil)

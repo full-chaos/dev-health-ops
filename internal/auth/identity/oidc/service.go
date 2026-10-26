@@ -58,10 +58,12 @@ type LegacyMatch struct {
 // FederatedAccount is a new account created from an IdP sign-in. RequestID is
 // the server-minted audit request id, nil when there is none.
 type FederatedAccount struct {
-	Key       ExternalKey
-	Email     string
-	FullName  string
-	RequestID *string
+	Key      ExternalKey
+	Email    string
+	FullName string
+	// LegacyFullName is the public.users full_name: nil is NULL.
+	LegacyFullName *string
+	RequestID      *string
 }
 
 // IdentityStore is the identity store as this flow uses it.
@@ -121,9 +123,12 @@ type Tokens struct {
 	ExpiresIn    int64
 }
 
-// SessionIssuer creates the session and mints its tokens.
+// SessionIssuer creates the session and mints its tokens. Preflight reports
+// whether tokens can be minted now; a callback calls it before its first
+// write and answers 503 with nothing written when it fails.
 type SessionIssuer interface {
 	Issue(ctx context.Context, req SessionRequest) (Tokens, error)
+	Preflight(ctx context.Context) error
 }
 
 // Config builds a Service.
@@ -452,6 +457,11 @@ func (s *Service) callback(ctx context.Context, admitted StoredProvider, in Call
 	if cookie == "" || !constantTimeEqual(hashLoginNonce(cookie), state.NonceHash) {
 		return Login{}, clear, authFailed(ReasonMalformed, errors.New("login nonce cookie missing or wrong"))
 	}
+	// No clearing cookie: the flow is not consumed, so the same callback can
+	// be retried.
+	if err := s.cfg.Sessions.Preflight(ctx); err != nil {
+		return Login{}, nil, unavailable(err)
+	}
 	consumed, err := s.cfg.Flows.Consume(ctx, flowHash(state.ID), protocolOIDC, row.ID, now)
 	if err != nil {
 		return Login{}, clear, internal(ReasonStoreUnavailable, err)
@@ -565,6 +575,9 @@ func (s *Service) resolve(ctx context.Context, row Provider, v validated, reques
 	default:
 		return Login{}, notMember()
 	}
+	if errors.Is(err, ErrSessionUnavailable) {
+		return Login{}, unavailable(err)
+	}
 	if err != nil {
 		return Login{}, internal(ReasonStoreUnavailable, err)
 	}
@@ -590,7 +603,7 @@ func (s *Service) newAccount(ctx context.Context, row Provider, v validated, req
 	org := row.OrgID
 	req := SessionRequest{OrgID: &org, Role: "member", AMR: AMR}
 	principal, tokens, err := s.cfg.MembershipJIT.ProvisionJoinAndIssue(ctx,
-		FederatedAccount{Key: v.key, Email: p.Email, FullName: p.FullName, RequestID: requestID}, org, req)
+		FederatedAccount{Key: v.key, Email: p.Email, FullName: p.FullName, LegacyFullName: p.LegacyFullName, RequestID: requestID}, org, req)
 	switch {
 	case err == nil:
 		return Login{PrincipalID: principal.ID, Email: principal.Email, OrgID: &org, Role: req.Role, Tokens: tokens}, nil
@@ -602,6 +615,8 @@ func (s *Service) newAccount(ctx context.Context, row Provider, v validated, req
 		return Login{}, deny(http.StatusBadRequest, ReasonMalformed, "Email address from OIDC claims is malformed")
 	case errors.Is(err, ErrInvalidKey):
 		return Login{}, authFailed(ReasonMalformed, err)
+	case errors.Is(err, ErrSessionUnavailable):
+		return Login{}, unavailable(err)
 	default:
 		return Login{}, internal(ReasonStoreUnavailable, err)
 	}

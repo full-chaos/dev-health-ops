@@ -191,6 +191,29 @@ func TestModelAccepted(t *testing.T) {
 	}
 }
 
+func TestModelAcceptedStrictNeverTakesASiblingModelForTheRequestedOne(t *testing.T) {
+	for _, c := range []struct {
+		requested, returned string
+		want                bool
+	}{
+		{"clef", "clef", true},
+		{"clef", "clef-20261024", true},
+		{"clef", "clef-1.0", true},
+		{"clef", "clef-flash", false},
+		{"clef", "clef-", false},
+		{"clef", "clef1", false},
+		{"clef", "clef-x1", false},
+		{"clef", "", false},
+		{"clef-flash", "clef", false},
+		{"", "", false},
+		{"", "-1", false},
+	} {
+		if got := ModelAcceptedStrict(c.requested, c.returned); got != c.want {
+			t.Errorf("ModelAcceptedStrict(%q, %q) = %v, want %v", c.requested, c.returned, got, c.want)
+		}
+	}
+}
+
 // --- failure states that the wire cannot plant --------------------------------
 
 func TestATransportErrorIsRequestFailedWithItsClass(t *testing.T) {

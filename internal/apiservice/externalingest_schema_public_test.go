@@ -72,7 +72,7 @@ func TestExternalPushSchemaRoutesAreGlobalOnTheRealListenerChain(t *testing.T) {
 	}
 	scope := policy.NewScope(auth, quietLogger())
 	routes := markResponseModels(externalingest.Routes(externalingest.Deps{Pool: pool, Logger: quietLogger()}))
-	server, err := NewServer(apiTestConfig(), quietLogger(), routes, scope.OrgScope, scope.Impersonation)
+	server, err := NewServer(apiTestConfig(), quietLogger(), routes, scope.Layers()...)
 	if err != nil {
 		t.Fatal(err)
 	}

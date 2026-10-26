@@ -618,7 +618,13 @@ func startGrantHarness(t *testing.T, ctx context.Context) (*pgxpool.Pool, string
 			id uuid PRIMARY KEY DEFAULT gen_random_uuid(), org_id uuid NOT NULL UNIQUE,
 			tier text NOT NULL, features_override json, limits_override json
 		)`,
-		"CREATE TABLE public.byo_llm_budget_reservations (id uuid PRIMARY KEY)",
+		"CREATE TABLE public.byo_llm_budget_reservations (id uuid PRIMARY KEY, status text, input_tokens integer, output_tokens integer, cached_input_tokens integer, actual_micro_usd bigint, reconciled_at timestamptz)",
+		// domainPosture's RequiredFunctions: a SECURITY DEFINER shell with
+		// EXECUTE revoked from PUBLIC, as pgmigrate 0156 and 0158 create them.
+		"CREATE FUNCTION public.categorize_byo_opted_in(p_org_id text) RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS 'SELECT false'",
+		"REVOKE ALL ON FUNCTION public.categorize_byo_opted_in(text) FROM PUBLIC",
+		"CREATE FUNCTION public.categorize_byo_settings(p_org_id text) RETURNS TABLE (org_id text, category text, key text, value text, is_encrypted boolean, updated_at timestamptz) LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS 'SELECT NULL::text, NULL::text, NULL::text, NULL::text, NULL::boolean, NULL::timestamptz WHERE false'",
+		"REVOKE ALL ON FUNCTION public.categorize_byo_settings(text) FROM PUBLIC",
 		`CREATE TABLE public.tier_limits (
 			id uuid PRIMARY KEY DEFAULT gen_random_uuid(), tier text NOT NULL,
 			limit_key text NOT NULL, limit_value text

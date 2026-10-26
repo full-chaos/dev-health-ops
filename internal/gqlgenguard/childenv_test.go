@@ -413,7 +413,8 @@ func TestConfigPathInputDomain(t *testing.T) {
 
 // TestTheGuardsOwnInputsAreInBothParsedPathLists: the path filters are
 // asserted as YAML values, so a pattern that survives only in a
-// comment is missing.
+// comment is missing. A pull_request trigger with no paths key runs on every
+// change (go.yml's, since the merge queue split), so it has nothing to list.
 func TestTheGuardsOwnInputsAreInBothParsedPathLists(t *testing.T) {
 	var wf struct {
 		On struct {
@@ -421,7 +422,7 @@ func TestTheGuardsOwnInputsAreInBothParsedPathLists(t *testing.T) {
 				Paths []string `yaml:"paths"`
 			} `yaml:"push"`
 			PullRequest struct {
-				Paths []string `yaml:"paths"`
+				Paths *[]string `yaml:"paths"`
 			} `yaml:"pull_request"`
 		} `yaml:"on"`
 	}
@@ -429,7 +430,11 @@ func TestTheGuardsOwnInputsAreInBothParsedPathLists(t *testing.T) {
 		t.Fatalf("parse go.yml: %v", err)
 	}
 	for _, want := range []string{"**/*.go", "internal/queryapi/gqlgen.yml", "contracts/**", ".github/workflows/go-quality.yml", ".github/workflows/go.yml", "**/go.mod", "**/go.sum"} {
-		for event, list := range map[string][]string{"push": wf.On.Push.Paths, "pull_request": wf.On.PullRequest.Paths} {
+		lists := map[string][]string{"push": wf.On.Push.Paths}
+		if wf.On.PullRequest.Paths != nil {
+			lists["pull_request"] = *wf.On.PullRequest.Paths
+		}
+		for event, list := range lists {
 			found := false
 			for _, p := range list {
 				if p == want {

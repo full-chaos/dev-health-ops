@@ -4,7 +4,8 @@
     {
       "audience": "dev-health-api",
       "classes": [
-        "user_access_token"
+        "user_access_token",
+        "workload_token"
       ],
       "services": [
         "dev-health-ops-api",

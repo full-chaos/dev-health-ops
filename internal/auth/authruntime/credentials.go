@@ -55,8 +55,11 @@ func credentialRoutes(
 	cfg authconfig.Config, logger *slog.Logger, pool *pgxpool.Pool, schema authschema.ValidatedIdentifier,
 	limits *authapi.Limits,
 ) ([]httpapi.Route, []lifecycle.Component, error) {
-	if !cfg.Session.Enabled || !cfg.UsersOwned {
+	if !cfg.Session.Enabled {
 		return nil, nil, nil
+	}
+	if !cfg.UsersOwned {
+		return authapi.NotOwnedCredentialRoutes(), nil, nil
 	}
 	sessions, err := session.New(session.Config{
 		Pool: pool, Schema: schema, Logger: logger,
@@ -88,7 +91,7 @@ func credentialRoutes(
 	}
 	links := local.NewPGLinks(pool, schema)
 	flows, err := local.NewFlows(local.FlowsConfig{
-		Accounts: local.IdentityAccounts{Store: identities, RequestID: requestid.Audit},
+		Accounts: local.IdentityAccounts{Store: identities, RequestID: requestid.Audit, Sessions: sessions, Links: links},
 		Links:    links, Sessions: sessions, Mail: sender, Locker: links,
 		UsersOwnedByAuth: true,
 	})

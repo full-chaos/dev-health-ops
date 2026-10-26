@@ -12,3 +12,13 @@ internal/auth/authruntime/access_class_test.go:generic-api-key:30
 # CHAOS-10450: the same two enum-value lines after main added lines above them in the merge commit.
 internal/auth/authconfig/config.go:generic-api-key:208
 docs/reference/auth/configuration.md:generic-api-key:62
+# CHAOS-10453: test fixture (an HS256 signing key for the probe tokens) in an earlier branch commit; the test now builds it at runtime. Not a credential.
+internal/apiservice/accessroute_probe_test.go:generic-api-key:119
+# CHAOS-11382: the enum value "hs256_compat" of accessToken.class matches generic-api-key by name shape; it is a class name, not a credential.
+# Commit-less file:rule:line form: the branch-commit lines (760, 232, 281) and the same lines at the tip (848, 235, 288).
+deploy/helm/dev-health/templates/_helpers.tpl:generic-api-key:760
+deploy/helm/dev-health/templates/_helpers.tpl:generic-api-key:848
+deploy/helm/dev-health/auth_phase_test.go:generic-api-key:232
+deploy/helm/dev-health/auth_phase_test.go:generic-api-key:235
+deploy/helm/dev-health/auth_phase_test.go:generic-api-key:281
+deploy/helm/dev-health/auth_phase_test.go:generic-api-key:288

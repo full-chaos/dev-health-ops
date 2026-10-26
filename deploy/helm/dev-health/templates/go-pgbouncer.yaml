@@ -43,6 +43,37 @@ existing $extraUsers loop below with no changes to this Secret block.
 {{- if $extraUsers }}
 {{- $userlistSecret = $secretName }}
 {{- end }}
+{{- /*
+CHAOS-11490: a per-user pool size (extraUsers[].poolSize). The image's own
+entrypoint writes pgbouncer.ini from the environment and is left alone: the
+transaction pooler starts from a second file that %includes that generated ini
+and adds a [users] section with one `pool_size` line per sized entry. Entries
+without poolSize get no line and keep default_pool_size (the transaction
+poolSize). No sized entry renders none of this.
+*/ -}}
+{{- $usersConfigName := printf "%s-go-pgbouncer-transaction-users" (include "dev-health.fullname" .) }}
+{{- $usersIni := "" }}
+{{- range $user := $extraUsers }}
+{{- if hasKey $user "poolSize" }}
+{{- if not (regexMatch "^[A-Za-z_][A-Za-z0-9_]*$" (toString $user.role)) }}
+{{- fail (printf "goWorkers.pgbouncer.transaction.extraUsers: role %q sets poolSize but is not a plain role name (letters, digits, underscore): it becomes a PgBouncer [users] key" (toString $user.role)) }}
+{{- end }}
+{{- $usersIni = printf "%s%s = pool_size=%d\n" $usersIni $user.role (int64 $user.poolSize) }}
+{{- end }}
+{{- end }}
+{{- if $usersIni }}
+{{- $usersIni = printf "%%include /etc/pgbouncer/pgbouncer.ini\n[users]\n%s" $usersIni }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $usersConfigName }}
+  namespace: {{ include "dev-health.namespace" . }}
+  labels:
+    {{- include "dev-health.componentLabels" (dict "component" "go-pgbouncer-transaction" "context" .) | nindent 4 }}
+data:
+  pgbouncer.ini: {{ $usersIni | quote }}
+---
+{{- end }}
 {{- /* CHAOS-5594: at least one group with KEDA autoscaling enabled means the
 transaction pooler's NetworkPolicy (below) must admit the KEDA operator's
 namespace too, not just go-worker pods. */ -}}
@@ -85,7 +116,7 @@ stringData:
 ---
 {{- end }}
 {{- $poolers := list
-  (dict "name" "transaction" "component" "go-pgbouncer-transaction" "port" .Values.goWorkers.pgbouncer.transaction.port "poolMode" "transaction" "poolSize" .Values.goWorkers.pgbouncer.transaction.poolSize "maxClientConnections" .Values.goWorkers.pgbouncer.transaction.maxClientConnections "role" .Values.config.RIVER_DOMAIN_DATABASE_ROLE "passwordKey" "RIVER_DOMAIN_DATABASE_PASSWORD" "userlistSecret" $userlistSecret)
+  (dict "name" "transaction" "component" "go-pgbouncer-transaction" "port" .Values.goWorkers.pgbouncer.transaction.port "poolMode" "transaction" "poolSize" .Values.goWorkers.pgbouncer.transaction.poolSize "maxClientConnections" .Values.goWorkers.pgbouncer.transaction.maxClientConnections "rollingUpdate" (include "dev-health.pgbouncerTransactionRollingUpdate" .) "role" .Values.config.RIVER_DOMAIN_DATABASE_ROLE "passwordKey" "RIVER_DOMAIN_DATABASE_PASSWORD" "userlistSecret" $userlistSecret "usersIni" $usersIni "usersConfigName" $usersConfigName)
   (dict "name" "queue-session" "component" "go-pgbouncer-queue-session" "port" .Values.goWorkers.pgbouncer.queueSession.port "poolMode" "session" "poolSize" .Values.goWorkers.pgbouncer.queueSession.poolSize "maxClientConnections" .Values.goWorkers.pgbouncer.queueSession.maxClientConnections "role" .Values.config.RIVER_QUEUE_DATABASE_ROLE "passwordKey" "RIVER_QUEUE_DATABASE_PASSWORD")
   (dict "name" "coordinator-session" "component" "go-pgbouncer-coordinator-session" "port" .Values.goWorkers.pgbouncer.coordinatorSession.port "poolMode" "session" "poolSize" .Values.goWorkers.pgbouncer.coordinatorSession.poolSize "maxClientConnections" .Values.goWorkers.pgbouncer.coordinatorSession.maxClientConnections "role" .Values.config.RIVER_COORDINATOR_DATABASE_ROLE "passwordKey" "RIVER_COORDINATOR_DATABASE_PASSWORD")
 }}
@@ -99,6 +130,11 @@ metadata:
     {{- include "dev-health.componentLabels" (dict "component" $pooler.component "context" $) | nindent 4 }}
 spec:
   replicas: 1
+  {{- with $pooler.rollingUpdate }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: {{ . }}
+  {{- end }}
   selector:
     matchLabels:
       {{- include "dev-health.componentSelectorLabels" (dict "component" $pooler.component "context" $) | nindent 6 }}
@@ -106,8 +142,13 @@ spec:
     metadata:
       labels:
         {{- include "dev-health.componentSelectorLabels" (dict "component" $pooler.component "context" $) | nindent 8 }}
+      {{- if $pooler.usersIni }}
+      annotations:
+        checksum/users-ini: {{ $pooler.usersIni | sha256sum }}
+      {{- end }}
     spec:
       {{- include "dev-health.imagePullSecrets" $ | nindent 6 }}
+      automountServiceAccountToken: false
       # edoburu/pgbouncer runs as postgres (UID/GID 70) and writes its generated
       # pgbouncer.ini and userlist.txt below /etc/pgbouncer at startup. Keep the
       # root filesystem read-only, but give that exact path an fsGroup-owned
@@ -117,6 +158,9 @@ spec:
         - name: pgbouncer
           image: {{ $.Values.goWorkers.pgbouncer.image | quote }}
           imagePullPolicy: {{ $.Values.goWorkers.pgbouncer.pullPolicy }}
+          {{- if $pooler.usersIni }}
+          args: ["/usr/bin/pgbouncer", "/etc/pgbouncer-users/pgbouncer.ini"]
+          {{- end }}
           ports: [{name: pgbouncer, containerPort: {{ $pooler.port }}}]
           env:
             - {name: DB_HOST, value: {{ $postgresHost | quote }}}
@@ -164,6 +208,9 @@ spec:
             {{- if $pooler.userlistSecret }}
             - {name: userlist, mountPath: /etc/pgbouncer-userlist, readOnly: true}
             {{- end }}
+            {{- if $pooler.usersIni }}
+            - {name: users, mountPath: /etc/pgbouncer-users, readOnly: true}
+            {{- end }}
           resources:
             {{- toYaml $.Values.goWorkers.pgbouncer.resources | nindent 12 }}
       volumes:
@@ -176,6 +223,10 @@ spec:
         # writable -- which the entrypoint never needs it to be.
         - name: userlist
           secret: {secretName: {{ . }}, defaultMode: 0440, items: [{key: userlist.txt, path: userlist.txt}]}
+        {{- end }}
+        {{- if $pooler.usersIni }}
+        - name: users
+          configMap: {name: {{ $pooler.usersConfigName }}}
         {{- end }}
 ---
 apiVersion: v1

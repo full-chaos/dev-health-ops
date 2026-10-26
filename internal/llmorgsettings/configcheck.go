@@ -21,12 +21,18 @@ const (
 // CheckProvider is the no-I/O half: the normalized provider name and, when it
 // cannot serve, why.
 func CheckProvider(provider string) (string, ConfigReason) {
+	return CheckProviderFor("", provider)
+}
+
+// CheckProviderFor is CheckProvider for a purpose: clef is known to the
+// categorize purpose only.
+func CheckProviderFor(purpose Purpose, provider string) (string, ConfigReason) {
 	name := normalizeProvider(provider)
 	switch name {
 	case "", "auto", "mock", "none":
 		return name, ConfigNotConfigured
 	}
-	if !isKnownProvider(name) {
+	if !isKnownProvider(name) && !(purpose == PurposeCategorize && name == ProviderClef) {
 		return name, ConfigUnknownProvider
 	}
 	return name, ConfigActive
@@ -41,7 +47,7 @@ func CheckCredentials(ctx context.Context, provider, apiKey, baseURL string) (Co
 // CheckOrgConfig is CheckConfig over an OrgConfig: its KeyInBaseURL flag (a key
 // the org stores other than the served one) refuses the url before any lookup.
 func CheckOrgConfig(ctx context.Context, cfg OrgConfig) (ConfigReason, error) {
-	name, reason := CheckProvider(cfg.Provider)
+	name, reason := CheckProviderFor(cfg.Purpose, cfg.Provider)
 	if reason != ConfigActive {
 		return reason, nil
 	}
@@ -57,6 +63,14 @@ func checkCredentials(ctx context.Context, provider, apiKey, baseURL string, key
 	}
 	if keyInBaseURL {
 		return ConfigInvalidBaseURL, nil
+	}
+	if provider == ProviderClef {
+		// The host is fixed, so there is nothing to resolve: the exact account
+		// URL is the whole rule, and it must not carry the token.
+		if _, ok := ParseClefBaseURL(baseURL); !ok || BaseURLCarriesKey(baseURL, apiKey) {
+			return ConfigInvalidBaseURL, nil
+		}
+		return ConfigActive, nil
 	}
 	ok, _, _, err := ValidateBaseURLForKeys(ctx, baseURL, apiKey)
 	if err != nil {

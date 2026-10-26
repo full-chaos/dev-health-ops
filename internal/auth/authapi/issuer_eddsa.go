@@ -24,9 +24,12 @@ const EdDSAAccessLifetime = contracts.AccessTokenLifetimeCeiling
 // accessTokenTyp is the JWS typ of an access-token.v1 token.
 const accessTokenTyp = "at+jwt"
 
-// AccessSigner signs a compact JWS with the active key of the key set.
+// AccessSigner signs a compact JWS with the active key of the key set. Check
+// proves it can sign now (token.Signer.Check: the key set loads and the
+// active key signs a probe that verifies).
 type AccessSigner interface {
 	Sign(ctx context.Context, typ string, payload []byte) (token, kid string, err error)
+	Check(ctx context.Context) error
 }
 
 type eddsaMinter struct {
@@ -34,6 +37,7 @@ type eddsaMinter struct {
 	issuer   string
 	audience string
 	scope    string
+	check    signerCheck
 }
 
 // NewEdDSAIssuer builds an Issuer whose access tokens are access-token.v1
@@ -62,7 +66,7 @@ func NewEdDSAIssuer(secret, legacyIssuer, audience string, signer AccessSigner, 
 	}, nil
 }
 
-func (m *eddsaMinter) mint(ctx context.Context, grant Grant, now time.Time) (string, error) {
+func (m *eddsaMinter) mint(ctx context.Context, grant Grant, now time.Time) (string, string, error) {
 	claims := contracts.AccessTokenClaims{
 		Iss:           m.issuer,
 		Aud:           m.audience,
@@ -80,17 +84,17 @@ func (m *eddsaMinter) mint(ctx context.Context, grant Grant, now time.Time) (str
 		claims.OrgID = &org
 	}
 	if err := checkAccessClaims(claims); err != nil {
-		return "", fmt.Errorf("%w: %w", errIssue, err)
+		return "", "", fmt.Errorf("%w: %w", errIssue, err)
 	}
 	payload, err := json.Marshal(claims)
 	if err != nil {
-		return "", fmt.Errorf("%w: %w", errIssue, err)
+		return "", "", fmt.Errorf("%w: %w", errIssue, err)
 	}
-	token, _, err := m.signer.Sign(ctx, accessTokenTyp, payload)
+	token, kid, err := m.signer.Sign(ctx, accessTokenTyp, payload)
 	if err != nil {
-		return "", fmt.Errorf("%w: %w", errIssue, err)
+		return "", "", fmt.Errorf("%w: %w: %w", errIssue, errSignerUnavailable, err)
 	}
-	return token, nil
+	return token, kid, nil
 }
 
 // checkAccessClaims refuses claims access-token.v1 refuses and a verifier

@@ -265,6 +265,14 @@ func (r *gitRepo) classify(base, head string) string {
 	return strings.TrimSpace(string(out))
 }
 
+// seedGoYml is the smallest base go.yml the classifier parses: its on.push.paths are the Go test inputs that are never
+// docs-only. ci/bigboy/** stands in for the real list's Go-read docs paths.
+const seedGoYml = "name: Go\non:\n  push:\n    branches: [main]\n    paths:\n      # a comment line is skipped\n      - '**/*.go'\n      - 'ci/bigboy/**'\n      - 'docs/go-*.md'\n  pull_request:\n    paths:\n      - 'docs/**'\n"
+
+func seedFiles() map[string]string {
+	return map[string]string{"seed.txt": "s", ".github/workflows/go.yml": seedGoYml}
+}
+
 func TestCodeQLDocsOnlyClassifier(t *testing.T) {
 	cases := []struct {
 		name  string
@@ -272,7 +280,11 @@ func TestCodeQLDocsOnlyClassifier(t *testing.T) {
 		pr    map[string]string
 		want  string
 	}{
-		{"markdown at the root (the 10950 shape)", map[string]string{"ci/bigboy/README.md": "a"}, map[string]string{"ci/bigboy/README.md": "b"}, "true"},
+		{"markdown in a directory (the 10950 shape)", map[string]string{"ci/other/README.md": "a"}, map[string]string{"ci/other/README.md": "b"}, "true"},
+		{"a docs path the base go.yml lists as a Go input (the 10950 file: ci/bigboy/**)", map[string]string{"ci/bigboy/README.md": "a"}, map[string]string{"ci/bigboy/README.md": "b"}, "false"},
+		{"a docs/ file a single-star Go input glob matches", nil, map[string]string{"docs/go-migration-matrix.md": "x"}, "false"},
+		{"a single star does not cross a directory", nil, map[string]string{"docs/go-x/a.md": "x"}, "true"},
+		{"pull_request paths are not read (push paths are the Go inputs)", nil, map[string]string{"docs/a.md": "x"}, "true"},
 		{"every docs pattern", nil, map[string]string{"docs/a/b.png": "x", "docs-data/x.json": "x", "README.md": "x", ".github/docs-legacy/x.yml": "x", "mkdocs.yml": "x"}, "true"},
 		{"mixed docs and code runs the real scan", nil, map[string]string{"docs/a.md": "x", "internal/x.go": "x"}, "false"},
 		{"a code file renamed into docs: the source is code", map[string]string{"internal/x.go": "package x\n// enough content to be detected as a rename\n"}, map[string]string{"internal/x.go": "", "docs/x.md": "package x\n// enough content to be detected as a rename\n"}, "false"},
@@ -289,7 +301,7 @@ func TestCodeQLDocsOnlyClassifier(t *testing.T) {
 	}
 	for _, c := range cases {
 		r := newGitRepo(t)
-		base := r.commit(map[string]string{"seed.txt": "s"})
+		base := r.commit(seedFiles())
 		if c.setup != nil {
 			base = r.commit(c.setup)
 		}
@@ -304,7 +316,7 @@ func TestCodeQLDocsOnlyClassifier(t *testing.T) {
 // run was given, so the run for B can never read A's file list.
 func TestCodeQLDocsOnlyClassifierIsPinnedToTheEventHead(t *testing.T) {
 	r := newGitRepo(t)
-	base := r.commit(map[string]string{"seed.txt": "s"})
+	base := r.commit(seedFiles())
 	headA := r.commit(map[string]string{"docs/a.md": "a"})
 	headB := r.commit(map[string]string{"internal/x.go": "package x\n"})
 	if got := r.classify(base, headA); got != "true" {
@@ -318,7 +330,7 @@ func TestCodeQLDocsOnlyClassifierIsPinnedToTheEventHead(t *testing.T) {
 // A git that prints a docs path and then fails must not read as docs-only.
 func TestCodeQLDocsOnlyClassifierFailsClosedWhenGitFailsAfterOutput(t *testing.T) {
 	r := newGitRepo(t)
-	base := r.commit(map[string]string{"seed.txt": "s"})
+	base := r.commit(seedFiles())
 	head := r.commit(map[string]string{"docs/a.md": "a"})
 	bin := t.TempDir()
 	fake := "#!/bin/sh\nprintf 'docs/a.md\\0'\nexit 1\n"
@@ -344,7 +356,7 @@ func TestCodeQLDocsOnlyClassifierFailsClosedWhenGitFailsAfterOutput(t *testing.T
 
 func TestCodeQLDocsOnlyClassifierFailsClosedOnBadInput(t *testing.T) {
 	r := newGitRepo(t)
-	base := r.commit(map[string]string{"seed.txt": "s"})
+	base := r.commit(seedFiles())
 	head := r.commit(map[string]string{"docs/a.md": "a"})
 	for name, args := range map[string][]string{
 		"no arguments":        {},
@@ -450,13 +462,20 @@ func docsWorkflowPathProblems(t *testing.T, file string, wf map[string]any, even
 	return problems
 }
 
+// A pull request gets its preview from docs-guards.yml (job docs-preview); a second pull_request build here would build the
+// site twice per revision.
+func TestDocsCloudflareWorkflowHasNoPullRequestTrigger(t *testing.T) {
+	if triggerMap(t, loadWorkflowMap(t, "docs-cloudflare.yml"), "pull_request") != nil {
+		t.Error("docs-cloudflare.yml must not run on pull_request: docs-guards.yml builds and checks the site once per revision")
+	}
+}
+
 func TestWorkflowPathFiltersDocsWorkflowsRunOnlyForDocsPaths(t *testing.T) {
 	cases := []struct {
 		file   string
 		events []string
 	}{
 		{"docs-guards.yml", []string{"pull_request", "push"}},
-		{"docs-cloudflare.yml", []string{"pull_request"}},
 	}
 	for _, c := range cases {
 		for _, problem := range docsWorkflowPathProblems(t, c.file, loadWorkflowMap(t, c.file), c.events) {

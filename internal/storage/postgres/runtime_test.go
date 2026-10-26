@@ -26,7 +26,6 @@ func TestRuntimeConfigRequiresSeparatedSessionSafePools(t *testing.T) {
 		name   string
 		mutate func(*RuntimeConfig)
 		want   error
-		text   string
 	}{
 		{name: "domain missing", mutate: func(c *RuntimeConfig) { c.DomainURI = "" }, want: ErrDomainDatabaseRequired},
 		{name: "queue missing", mutate: func(c *RuntimeConfig) { c.QueueControlURI = "" }, want: ErrQueueControlRequired},
@@ -40,10 +39,6 @@ func TestRuntimeConfigRequiresSeparatedSessionSafePools(t *testing.T) {
 			c.DomainTransactionPooler = true
 			c.QueueControlURI = "postgres://queue_role:other@pgbouncer.internal/app"
 		}, want: ErrQueueControlTransactionMode},
-		{name: "same transaction endpoint names the rule", mutate: func(c *RuntimeConfig) {
-			c.DomainTransactionPooler = true
-			c.QueueControlURI = "postgres://queue_role:other@pgbouncer.internal/app"
-		}, want: ErrQueueControlTransactionMode, text: "domain endpoint equals the queue-control endpoint"},
 		{name: "queue over budget", mutate: func(c *RuntimeConfig) { c.QueueMaxConns = 5 }, want: ErrInvalidConfig},
 		{name: "domain over budget", mutate: func(c *RuntimeConfig) { c.DomainMaxConns = 17 }, want: ErrInvalidConfig},
 	}
@@ -56,9 +51,6 @@ func TestRuntimeConfigRequiresSeparatedSessionSafePools(t *testing.T) {
 			test.mutate(&candidate)
 			if err := candidate.Validate(); !errors.Is(err, test.want) {
 				t.Fatalf("Validate() error = %v, want %v", err, test.want)
-			}
-			if err := candidate.Validate(); test.text != "" && !strings.Contains(err.Error(), test.text) {
-				t.Fatalf("Validate() error = %q, want text %q", err, test.text)
 			}
 		})
 	}

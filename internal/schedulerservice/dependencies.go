@@ -634,7 +634,7 @@ func buildSchedulerLoopWithSources(
 			logger.Error(
 				"database configuration refused; process stays live and unready",
 				"error_category", "dependency_configuration_failed",
-				"reason", err.Error(),
+				"reason", postgres.ConfigurationRejectedReason(err),
 			)
 		}
 		// A DECLARED configuration rejection -- most commonly no DSN supplied

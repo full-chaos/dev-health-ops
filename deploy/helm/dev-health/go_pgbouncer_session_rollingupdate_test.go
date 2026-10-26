@@ -277,12 +277,24 @@ func TestGoldenBaseCheckFailsOnAbsentShaAndNonAncestorAndSkipsOnlyWithoutGit(t *
 // refused, for every pooler: the chart default must not replace an explicit value.
 func TestPgbouncerRollingUpdateNonMapIsRefusedByTheHelper(t *testing.T) {
 	for _, pooler := range []string{"transaction", "queueSession", "coordinatorSession"} {
-		for name, v := range map[string]string{"false": `false`, "string": `"x"`, "list": `[1]`} {
+		for name, v := range map[string]string{"false": `false`, "string": `"x"`, "list": `[1]`, "number": `5`} {
 			set := []string{"--set-json", "goWorkers.pgbouncer." + pooler + ".rollingUpdate=" + v, "--skip-schema-validation"}
 			_, out, err := renderAuth(t, authWith(set...)...)
 			want := "goWorkers.pgbouncer." + pooler + ".rollingUpdate must be a map of maxSurge and maxUnavailable, or unset"
 			if err == nil || !strings.Contains(out, want) {
 				t.Errorf("%s %s: want the helper refusal %q: err=%v out=%.300s", pooler, name, want, err, out)
+			}
+		}
+	}
+}
+
+// Without --skip-schema-validation the same non-map values are refused by the schema.
+func TestPgbouncerRollingUpdateNonMapIsRefusedBySchema(t *testing.T) {
+	for _, pooler := range []string{"transaction", "queueSession", "coordinatorSession"} {
+		for name, v := range map[string]string{"false": `false`, "string": `"x"`, "list": `[1]`, "number": `5`} {
+			_, out, err := renderAuth(t, authWith("--set-json", "goWorkers.pgbouncer."+pooler+".rollingUpdate="+v)...)
+			if err == nil || !strings.Contains(out, schemaRefusal) || !strings.Contains(out, pooler+"/rollingUpdate") {
+				t.Errorf("%s %s: the SCHEMA must refuse: err=%v out=%.300s", pooler, name, err, out)
 			}
 		}
 	}

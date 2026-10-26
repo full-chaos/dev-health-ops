@@ -58,13 +58,13 @@ const EnvMailAllowConsole = "AUTH_MAIL_ALLOW_CONSOLE"
 
 // ownedUsersMailProvider builds go-api's mail provider for the verify and reset mails and refuses to start while
 // they could not reach a user: no real provider, a provider missing its settings, no from-address, or an
-// APP_BASE_URL that is not an absolute http(s) URL (links would point at the built-in localhost default). Every
+// APP_BASE_URL that is not an absolute https URL (http only under the console override) (links would point at the built-in localhost default). Every
 // refusal names a variable and never a value.
 func ownedUsersMailProvider(logger *slog.Logger) (mail.Sender, error) {
 	if from, set := os.LookupEnv("EMAIL_FROM_ADDRESS"); !set || strings.TrimSpace(from) == "" {
 		return nil, errors.New("auth mail: EMAIL_FROM_ADDRESS is required while auth-service owns users")
 	}
-	if err := checkAppBaseURL(os.Getenv("APP_BASE_URL")); err != nil {
+	if err := checkAppBaseURL(os.Getenv("APP_BASE_URL"), os.Getenv(EnvMailAllowConsole) == "true"); err != nil {
 		return nil, err
 	}
 	provider, err := mail.NewSenderFromEnv(nil)
@@ -85,17 +85,19 @@ func ownedUsersMailProvider(logger *slog.Logger) (mail.Sender, error) {
 	return provider, nil
 }
 
-func checkAppBaseURL(raw string) error {
+func checkAppBaseURL(raw string, allowHTTP bool) error {
 	parsed, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Hostname() == "" {
-		return errors.New("auth mail: APP_BASE_URL must be an absolute http(s) URL while auth-service owns users")
+	if err != nil || (parsed.Scheme != "https" && !(allowHTTP && parsed.Scheme == "http")) || parsed.Hostname() == "" || parsed.User != nil {
+		return errors.New("auth mail: APP_BASE_URL must be an absolute https URL without credentials while auth-service owns users (http only under " + EnvMailAllowConsole + "=true)")
 	}
 	return nil
 }
 
 // credentialRoutes mounts go-api's password and e-mail verification routes
 // when the session secrets and AUTH_USERS_OWNED are set, and nothing
-// otherwise. The returned component closes the link-mail sender.
+// otherwise. It refuses to start (error naming the variable) without a usable
+// mail setting; see ownedUsersMailProvider. The returned component closes the
+// link-mail sender.
 func credentialRoutes(
 	cfg authconfig.Config, logger *slog.Logger, pool *pgxpool.Pool, schema authschema.ValidatedIdentifier,
 	limits *authapi.Limits,

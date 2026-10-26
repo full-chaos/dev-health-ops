@@ -191,3 +191,19 @@ func TestMain(m *testing.M) {
 	}
 	os.Exit(m.Run())
 }
+
+func TestOwnedUsersRefuseAnHTTPAppBaseURLWithoutTheOverride(t *testing.T) {
+	wantRefusal(t, with(smtpMail(), "APP_BASE_URL", "http://app.example.com"), "APP_BASE_URL")
+}
+
+func TestOwnedUsersAcceptAnHTTPAppBaseURLUnderTheOverride(t *testing.T) {
+	mailEnv(t, with(with(with(smtpMail(), "EMAIL_PROVIDER", "console"), "AUTH_MAIL_ALLOW_CONSOLE", "true"), "APP_BASE_URL", "http://app.example.com"))
+	var logs bytes.Buffer
+	if err := ownedRoutes(t, &logs); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestOwnedUsersRefuseAnAppBaseURLWithUserinfo(t *testing.T) {
+	wantRefusal(t, with(smtpMail(), "APP_BASE_URL", "https://sentinel-user:sentinel-pass@app.example.com"), "APP_BASE_URL", "sentinel")
+}

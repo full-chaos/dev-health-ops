@@ -1,4 +1,4 @@
-//go:build integration && linux
+//go:build integration && linux && (amd64 || arm64)
 
 package apiservice
 
@@ -12,6 +12,10 @@ import (
 	"time"
 )
 
+// soReusePort is SO_REUSEPORT on linux/amd64 and linux/arm64; the frozen syscall
+// package defines it on arm64 only.
+const soReusePort = 0xf
+
 // heldPort returns a loopback address that refuses connections while the
 // returned socket is held: it is bound with SO_REUSEPORT and never listens.
 // Only a listener that also sets SO_REUSEPORT can take the same port, so the
@@ -23,7 +27,7 @@ func heldPort(t *testing.T) (address string, fd int) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = syscall.Close(fd) })
-	if err := syscall.SetsockoptInt(fd, syscall.SOL_SOCKET, syscall.SO_REUSEPORT, 1); err != nil {
+	if err := syscall.SetsockoptInt(fd, syscall.SOL_SOCKET, soReusePort, 1); err != nil {
 		t.Fatal(err)
 	}
 	if err := syscall.Bind(fd, &syscall.SockaddrInet4{Addr: [4]byte{127, 0, 0, 1}}); err != nil {
@@ -40,7 +44,7 @@ func listenOnHeldPort(address string) (net.Listener, error) {
 	config := net.ListenConfig{Control: func(_, _ string, conn syscall.RawConn) error {
 		var setErr error
 		if err := conn.Control(func(fd uintptr) {
-			setErr = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_REUSEPORT, 1)
+			setErr = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, soReusePort, 1)
 		}); err != nil {
 			return err
 		}

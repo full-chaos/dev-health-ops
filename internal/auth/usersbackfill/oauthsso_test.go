@@ -2,6 +2,7 @@ package usersbackfill
 
 import (
 	"context"
+	"sort"
 	"strings"
 	"testing"
 
@@ -81,16 +82,25 @@ func (p pagedCands) Page(_ context.Context, after *OAuthSSOCursor, limit int) ([
 	return p.rows[start:end], nil
 }
 
-func TestRunOAuthSSOTwoSameNamespaceRowsGiveTwoKeys(t *testing.T) {
-	u, r1, r2 := uuid.New(), uuid.New(), uuid.New()
+func TestRunOAuthSSOTwoCandidateRowsCarryNothingAndAreCounted(t *testing.T) {
+	one, two, ok := uuid.New(), uuid.New(), uuid.New()
 	sink := &fakeCarry{keys: map[uuid.UUID][]identity.ExternalKey{}}
-	rep, err := RunOAuthSSO(context.Background(),
-		pagedCands{rows: []OAuthSSOCandidate{cand(u, r1, "github", "9", ""), cand(u, r2, "github", "9", "")}}, sink, Options{BatchSize: 1})
-	if err != nil {
-		t.Fatal(err)
+	rows := []OAuthSSOCandidate{
+		cand(one, uuid.New(), "github", "9", ""), cand(one, uuid.New(), "github", "9", ""),
+		cand(two, uuid.New(), "github", "8", ""), cand(two, uuid.New(), "github", "8", ""), cand(two, uuid.New(), "github", "8", ""),
+		cand(ok, uuid.New(), "github", "7", ""),
 	}
-	if len(sink.keys[u]) != 2 || rep.Users != 1 || rep.Linked != 2 || rep.SelfHostedUnbindable != 0 {
-		t.Fatalf("keys=%d report=%+v", len(sink.keys[u]), rep)
+	sort.Slice(rows, func(a, b int) bool { return rows[a].UserID.String() < rows[b].UserID.String() })
+	for _, batch := range []int{1, 2, 500} {
+		sink.keys = map[uuid.UUID][]identity.ExternalKey{}
+		rep, err := RunOAuthSSO(context.Background(), pagedCands{rows: rows}, sink, Options{BatchSize: batch})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(sink.keys[one]) != 0 || len(sink.keys[two]) != 0 || len(sink.keys[ok]) != 1 ||
+			rep.Users != 3 || rep.Linked != 1 || rep.Ambiguous != 2 || rep.SelfHostedUnbindable != 0 {
+			t.Fatalf("batch %d: keys one=%d two=%d ok=%d report=%+v", batch, len(sink.keys[one]), len(sink.keys[two]), len(sink.keys[ok]), rep)
+		}
 	}
 }
 
@@ -110,9 +120,9 @@ func TestRunOAuthSSOSelfHostedWritesNothingAndIsCountedOncePerUser(t *testing.T)
 }
 
 func TestOAuthSSOReportLinesCountsOnly(t *testing.T) {
-	rep := OAuthSSOReport{Users: 3, Linked: 2, SelfHostedUnbindable: 1, Skipped: map[string]int{SkipStoreError: 1}}
+	rep := OAuthSSOReport{Users: 3, Linked: 2, Ambiguous: 4, SelfHostedUnbindable: 1, Skipped: map[string]int{SkipStoreError: 1}}
 	got := strings.Join(rep.Lines(), "\n")
-	for _, want := range []string{"oauth_sso_users=3", "oauth_sso_keys_linked=2", "oauth_sso_selfhosted_unbindable=1", "skipped.store_error=1"} {
+	for _, want := range []string{"oauth_sso_users=3", "oauth_sso_keys_linked=2", "oauth_sso_ambiguous_row=4", "oauth_sso_selfhosted_unbindable=1", "skipped.store_error=1"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %q in %q", want, got)
 		}
@@ -120,8 +130,8 @@ func TestOAuthSSOReportLinesCountsOnly(t *testing.T) {
 }
 
 func TestOAuthSSOCountLineCountsOnly(t *testing.T) {
-	line := identity.OAuthSSOCount{Total: 5, Keyed: 3, Missing: 1, SelfHostedUnbindable: 1}.Line()
-	if line != "oauth_sso total=5 keyed=3 missing=1 selfhosted_unbindable=1" {
+	line := identity.OAuthSSOCount{Total: 5, Keyed: 3, Missing: 1, Ambiguous: 2, SelfHostedUnbindable: 1}.Line()
+	if line != "oauth_sso total=5 keyed=3 missing=1 ambiguous=2 selfhosted_unbindable=1" {
 		t.Fatalf("line %q", line)
 	}
 	if strings.ContainsAny(line, "@-") {

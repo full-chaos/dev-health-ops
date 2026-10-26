@@ -80,7 +80,6 @@ func TestBackfillOAuthSSOThenOwnedLoginHitsKey(t *testing.T) {
 	base := e.settleOAuthSSO(t, ctx)
 	org := e.oauthOrg(t, ctx)
 	rowA := e.oauthRow(t, ctx, org, "oauth_github", `{}`)
-	rowB := e.oauthRow(t, ctx, org, "oauth_github", `{}`)
 	gh := e.oauthUser(t, ctx, org, "github", "777")
 
 	shOrg := e.oauthOrg(t, ctx)
@@ -100,7 +99,7 @@ func TestBackfillOAuthSSOThenOwnedLoginHitsKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, row := range []uuid.UUID{rowA, rowB} {
+	for _, row := range []uuid.UUID{rowA} {
 		p, found, err := owned.IdentityBySubject(ctx, "https://github.com", identity.Provider(row.String()), "777", nil)
 		if err != nil || !found || p.ID != gh {
 			t.Fatalf("owned login at row %s: found=%v id=%v err=%v", row, found, p.ID, err)
@@ -121,7 +120,7 @@ func TestBackfillOAuthSSOThenOwnedLoginHitsKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if count != (identity.OAuthSSOCount{Total: base.Total + 2, Keyed: base.Keyed + 1, Missing: 0, SelfHostedUnbindable: base.SelfHostedUnbindable + 1}) {
+	if count != (identity.OAuthSSOCount{Total: base.Total + 2, Keyed: base.Keyed + 1, Missing: 0, Ambiguous: base.Ambiguous, SelfHostedUnbindable: base.SelfHostedUnbindable + 1}) {
 		t.Fatalf("count line %q", count.Line())
 	}
 	again, err := RunOAuthSSO(ctx, PGOAuthSSOSource{Pool: e.runtime}, e.store, Options{})
@@ -188,7 +187,7 @@ func TestVerbUsersBackfillCarriesOAuthSSOAndCountVerbPrintsOneLine(t *testing.T)
 	e.oauthRow(t, ctx, org, "oauth_gitlab", `{"base_url":"https://gitlab.com/"}`)
 	e.oauthUser(t, ctx, org, "github", "8101")
 	e.oauthUser(t, ctx, org, "gitlab", "8102")
-	for i, odd := range []string{"https://GitLab.com/", "https://gitlab.com:443"} {
+	for i, odd := range []string{"https://GitLab.com/", "https://gitlab.com:443", "https://gitlab.com//"} {
 		o := e.oauthOrg(t, ctx)
 		e.oauthRow(t, ctx, o, "oauth_gitlab", fmt.Sprintf(`{"base_url":%q}`, odd))
 		e.oauthUser(t, ctx, o, "gitlab", fmt.Sprintf("820%d", i))
@@ -203,7 +202,7 @@ func TestVerbUsersBackfillCarriesOAuthSSOAndCountVerbPrintsOneLine(t *testing.T)
 		return out.String()
 	}
 	before := countOut()
-	if want := (identity.OAuthSSOCount{Total: base.Total + 4, Keyed: base.Keyed, Missing: 2, SelfHostedUnbindable: base.SelfHostedUnbindable + 2}).Line() + "\n"; before != want {
+	if want := (identity.OAuthSSOCount{Total: base.Total + 5, Keyed: base.Keyed, Missing: 2, Ambiguous: base.Ambiguous, SelfHostedUnbindable: base.SelfHostedUnbindable + 3}).Line() + "\n"; before != want {
 		t.Fatalf("before the verb: %q, want %q", before, want)
 	}
 
@@ -216,10 +215,118 @@ func TestVerbUsersBackfillCarriesOAuthSSOAndCountVerbPrintsOneLine(t *testing.T)
 		t.Fatalf("stdout %q", stdout.String())
 	}
 	after := countOut()
-	if want := (identity.OAuthSSOCount{Total: base.Total + 4, Keyed: base.Keyed + 2, Missing: 0, SelfHostedUnbindable: base.SelfHostedUnbindable + 2}).Line() + "\n"; after != want {
+	if want := (identity.OAuthSSOCount{Total: base.Total + 5, Keyed: base.Keyed + 2, Missing: 0, Ambiguous: base.Ambiguous, SelfHostedUnbindable: base.SelfHostedUnbindable + 3}).Line() + "\n"; after != want {
 		t.Fatalf("after the verb: %q, want %q", after, want)
 	}
 	if strings.ContainsAny(after, "@") || strings.Count(after, "\n") != 1 {
 		t.Fatalf("the count line is not one line of counts: %q", after)
+	}
+}
+
+func (e *reconEnv) principalCount(t *testing.T, ctx context.Context) int {
+	t.Helper()
+	var n int
+	if err := e.admin.QueryRow(ctx, `SELECT count(*) FROM auth.principals`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+func (e *reconEnv) keysAt(t *testing.T, ctx context.Context, principal uuid.UUID) int {
+	t.Helper()
+	var n int
+	if err := e.admin.QueryRow(ctx, `SELECT count(*) FROM auth.external_identities WHERE principal_id = $1`, principal).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+// Exactly one candidate row carries; zero rows carries nothing and is not counted (a plain social user, the
+// social key is its identity); two rows in one org or one row in each of two orgs carries nothing and is counted
+// as ambiguous_row. A social user in a row's org gets the row key and nothing else: no new principal.
+func TestBackfillOAuthSSOCarriesOnlyExactlyOneRowAndCountsTheRest(t *testing.T) {
+	e := getReconEnv(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	base := e.settleOAuthSSO(t, ctx)
+
+	oneOrg := e.oauthOrg(t, ctx)
+	e.oauthRow(t, ctx, oneOrg, "oauth_github", `{}`)
+	one := e.oauthUser(t, ctx, oneOrg, "github", "9101")
+
+	noRowOrg := e.oauthOrg(t, ctx)
+	zero := e.oauthUser(t, ctx, noRowOrg, "github", "9102")
+
+	twoOrg := e.oauthOrg(t, ctx)
+	e.oauthRow(t, ctx, twoOrg, "oauth_github", `{}`)
+	e.oauthRow(t, ctx, twoOrg, "oauth_github", `{}`)
+	sameOrg := e.oauthUser(t, ctx, twoOrg, "github", "9103")
+
+	orgA, orgB := e.oauthOrg(t, ctx), e.oauthOrg(t, ctx)
+	e.oauthRow(t, ctx, orgA, "oauth_github", `{}`)
+	e.oauthRow(t, ctx, orgB, "oauth_github", `{}`)
+	across := e.oauthUser(t, ctx, orgA, "github", "9104")
+	if _, err := e.admin.Exec(ctx, `INSERT INTO public.memberships (id, user_id, org_id, role) VALUES ($1, $2, $3, 'member')`, uuid.New(), across, orgB); err != nil {
+		t.Fatal(err)
+	}
+
+	e.backfill(t, ctx)
+	principals := e.principalCount(t, ctx)
+	rep, err := RunOAuthSSO(ctx, PGOAuthSSOSource{Pool: e.runtime}, e.store, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.Linked != 1 || len(rep.Skipped) != 0 || rep.Ambiguous != int(base.Ambiguous)+2 {
+		t.Fatalf("report %+v", rep)
+	}
+	if got := e.principalCount(t, ctx); got != principals {
+		t.Fatalf("the carry created principals: %d -> %d", principals, got)
+	}
+	for name, want := range map[string]struct {
+		id   uuid.UUID
+		keys int
+	}{"one row": {one, 2}, "zero rows": {zero, 1}, "two rows in one org": {sameOrg, 1}, "one row in each of two orgs": {across, 1}} {
+		if got := e.keysAt(t, ctx, want.id); got != want.keys {
+			t.Fatalf("%s: %d identities, want %d", name, got, want.keys)
+		}
+	}
+	count, err := identity.ReadOAuthSSOCount(ctx, e.runtime, authschemaQuote(e))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != (identity.OAuthSSOCount{Total: base.Total + 3, Keyed: base.Keyed + 1, Missing: 0, Ambiguous: base.Ambiguous + 2, SelfHostedUnbindable: base.SelfHostedUnbindable}) {
+		t.Fatalf("count line %q", count.Line())
+	}
+	again, err := RunOAuthSSO(ctx, PGOAuthSSOSource{Pool: e.runtime}, e.store, Options{})
+	if err != nil || again.Linked != 0 || again.Ambiguous != rep.Ambiguous {
+		t.Fatalf("rerun %+v (%v)", again, err)
+	}
+	if after, _ := identity.ReadOAuthSSOCount(ctx, e.runtime, authschemaQuote(e)); after != count {
+		t.Fatalf("rerun changed the count: %q -> %q", count.Line(), after.Line())
+	}
+}
+
+// A skipped carry (the row key is already linked to another principal) fails the verb with exit 1 and a skip class.
+func TestVerbUsersBackfillOAuthSSOSkipFailsWithExitOne(t *testing.T) {
+	e := getReconEnv(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	e.settleOAuthSSO(t, ctx)
+	e.verbPool(t, ctx)
+
+	org := e.oauthOrg(t, ctx)
+	row := e.oauthRow(t, ctx, org, "oauth_github", `{}`)
+	e.oauthUser(t, ctx, org, "github", "9201")
+	other := e.seed(t, ctx, uniq("skip"), true, false)
+	e.backfill(t, ctx)
+	key := identity.ExternalKey{Issuer: "https://github.com", Provider: identity.Provider(row.String()), Subject: "9201"}
+	if _, err := e.store.CarryExtraIdentity(ctx, other, key, false); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	code := Command().Children[0].Run(ctx, cli.Env{Lookup: func(string) (string, bool) { return "", false }, Stdout: &stdout, Stderr: &bytes.Buffer{}})
+	if code != cli.ExitFailure || !strings.Contains(stdout.String(), "skipped.identity_conflict=1\n") {
+		t.Fatalf("exit %d, stdout %q", code, stdout.String())
 	}
 }

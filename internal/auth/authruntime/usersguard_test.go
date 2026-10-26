@@ -14,7 +14,7 @@ import (
 )
 
 type countsRow struct {
-	values [6]int64
+	values [7]int64
 	err    error
 }
 
@@ -40,12 +40,12 @@ func TestCheckUsersOwnedNamesEveryGapAndOnlyCounts(t *testing.T) {
 	if err := checkUsersOwned(context.Background(), countsDB{countsRow{}}, schema); err != nil {
 		t.Fatalf("no gap: %v", err)
 	}
-	for name, values := range map[string][6]int64{
-		"public user without an auth user": {2, 0, 0, 0, 0, 0},
-		"auth user without a public user":  {0, 3, 0, 0, 0, 0},
-		"provider user without identity":   {0, 0, 4, 0, 0, 0},
-		"all three":                        {1, 2, 3, 0, 0, 0},
-		"unverifiable SAML subjects":       {0, 0, 2, 2, 0, 0},
+	for name, values := range map[string][7]int64{
+		"public user without an auth user": {2, 0, 0, 0, 0, 0, 0},
+		"auth user without a public user":  {0, 3, 0, 0, 0, 0, 0},
+		"provider user without identity":   {0, 0, 4, 0, 0, 0, 0},
+		"all three":                        {1, 2, 3, 0, 0, 0, 0},
+		"unverifiable SAML subjects":       {0, 0, 2, 2, 0, 0, 0},
 	} {
 		err := checkUsersOwned(context.Background(), countsDB{countsRow{values: values}}, schema)
 		if !errors.Is(err, ErrUsersOwnedNotReady) {
@@ -109,12 +109,13 @@ func TestCheckUsersOwnedCountsOAuthSSOAsOwnClass(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, c := range map[string]struct {
-		values [6]int64
+		values [7]int64
 		want   string
 	}{
-		"missing row key":      {[6]int64{0, 0, 0, 0, 2, 0}, "oauth_sso_missing_row_key=2"},
-		"self-hosted unbound":  {[6]int64{0, 0, 0, 0, 0, 3}, "oauth_sso_selfhosted_unbindable=3"},
-		"both with other gaps": {[6]int64{1, 0, 0, 0, 4, 5}, "oauth_sso_missing_row_key=4, oauth_sso_selfhosted_unbindable=5"},
+		"missing row key":     {[7]int64{0, 0, 0, 0, 2, 0, 0}, "oauth_sso_missing_row_key=2"},
+		"ambiguous row":       {[7]int64{0, 0, 0, 0, 0, 6, 0}, "oauth_sso_ambiguous_row=6"},
+		"self-hosted unbound": {[7]int64{0, 0, 0, 0, 0, 0, 3}, "oauth_sso_selfhosted_unbindable=3"},
+		"all with other gaps": {[7]int64{1, 0, 0, 0, 4, 6, 5}, "oauth_sso_missing_row_key=4, oauth_sso_ambiguous_row=6, oauth_sso_selfhosted_unbindable=5"},
 	} {
 		err := checkUsersOwned(context.Background(), countsDB{countsRow{values: c.values}}, schema)
 		if !errors.Is(err, ErrUsersOwnedNotReady) {
@@ -135,10 +136,18 @@ func TestGuardCountsUseTheSharedOAuthSSODefinition(t *testing.T) {
 	if err := checkUsersOwned(context.Background(), recordingDB{&sql}, schema); err != nil {
 		t.Fatal(err)
 	}
-	q := authschema.Quote(schema)
-	for _, want := range []string{identity.OAuthSSOMissingKeySubquery(q), identity.OAuthSSOSelfHostedSubquery(q)} {
+	for _, want := range []string{
+		"SELECT count(*) FROM flag WHERE missing)",
+		"SELECT count(*) FROM flag WHERE ambiguous)",
+		"SELECT count(*) FROM flag WHERE selfh)",
+		"'https://github.com'",
+		`"auth".external_identities e`,
+	} {
 		if !strings.Contains(sql, want) {
-			t.Fatalf("the guard does not use the shared OAuth-SSO count %q", want[:60])
+			t.Fatalf("the guard SQL does not contain the literal %q", want)
 		}
+	}
+	if strings.Count(sql, "WITH cand AS") != 3 {
+		t.Fatalf("the guard SQL carries %d OAuth-SSO candidate sets, want 3", strings.Count(sql, "WITH cand AS"))
 	}
 }

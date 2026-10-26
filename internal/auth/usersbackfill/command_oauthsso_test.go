@@ -46,6 +46,7 @@ func TestOAuthSSOKeysOddSocialBaseURLFormsAreSelfHostedUnbindable(t *testing.T) 
 		"https://gitlab.com":      true,
 		"https://gitlab.com/":     true,
 		"https://GitLab.com/":     false,
+		"https://gitlab.com//":    false,
 		"https://gitlab.com:443":  false,
 		"https://gitlab.com/path": false,
 		"http://gitlab.com":       false,

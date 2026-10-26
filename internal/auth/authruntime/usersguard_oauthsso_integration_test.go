@@ -74,6 +74,17 @@ func TestUsersOwnedGuardCountsOAuthSSOAsItsOwnClass(t *testing.T) {
 	if _, err := admin.Exec(ctx, `INSERT INTO public.organizations (id, slug, name) VALUES ($1, $2, 'guard-oauthsso')`, org, "org-"+org.String()); err != nil {
 		t.Fatal(err)
 	}
+	parity := func() {
+		t.Helper()
+		c, err := identity.ReadOAuthSSOCount(ctx, runtime, authschema.Quote(schema))
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := fmt.Sprintf("oauth_sso_missing_row_key=%d, oauth_sso_ambiguous_row=%d, oauth_sso_selfhosted_unbindable=%d", c.Missing, c.Ambiguous, c.SelfHostedUnbindable)
+		if err := checkUsersOwned(ctx, runtime, schema); err == nil || !strings.Contains(err.Error(), want) {
+			t.Fatalf("the guard and the count line disagree: want %q in %v (line %q)", want, err, c.Line())
+		}
+	}
 	row := func(protocol, config string) uuid.UUID {
 		t.Helper()
 		id := uuid.New()
@@ -83,6 +94,7 @@ func TestUsersOwnedGuardCountsOAuthSSOAsItsOwnClass(t *testing.T) {
 		}
 		return id
 	}
+	memberOrg := org
 	user := func(provider, subject string) {
 		t.Helper()
 		id := uuid.New()
@@ -91,7 +103,7 @@ func TestUsersOwnedGuardCountsOAuthSSOAsItsOwnClass(t *testing.T) {
 VALUES ($1, $2, $3, $4, true, true, false, 0, now(), now())`, id, id.String()+"@example.com", provider, subject); err != nil {
 			t.Fatalf("user: %v", err)
 		}
-		if _, err := admin.Exec(ctx, `INSERT INTO public.memberships (id, user_id, org_id, role) VALUES ($1, $2, $3, 'member')`, uuid.New(), id, org); err != nil {
+		if _, err := admin.Exec(ctx, `INSERT INTO public.memberships (id, user_id, org_id, role) VALUES ($1, $2, $3, 'member')`, uuid.New(), id, memberOrg); err != nil {
 			t.Fatalf("membership: %v", err)
 		}
 	}
@@ -121,13 +133,32 @@ VALUES ($1, $2, $3, $4, true, true, false, 0, now(), now())`, id, id.String()+"@
 		}
 	}
 
+	plainOrg := uuid.New()
+	if _, err := admin.Exec(ctx, `INSERT INTO public.organizations (id, slug, name) VALUES ($1, $2, 'guard-plain')`, plainOrg, "org-"+plainOrg.String()); err != nil {
+		t.Fatal(err)
+	}
+	memberOrg = plainOrg
+	user("github", "930000")
+	memberOrg = org
+	backfill()
+	check("plain social user, no provider row", "")
 	row("oauth_github", `{}`)
+	check("plain social user, row only in another org", "")
 	user("github", "930001")
 	backfill()
 	check("social key carried, so no identity gap", "provider users without an external identity=0 ")
 	check("social key carried, row key not (class)", "oauth_sso_missing_row_key=1")
 	carry()
 	check("row key carried", "")
+	second := row("oauth_github", `{}`)
+	backfill()
+	carry()
+	check("a second active row makes the user ambiguous", "oauth_sso_ambiguous_row=1")
+	parity()
+	if _, err := admin.Exec(ctx, `UPDATE public.sso_providers SET status = 'disabled' WHERE id = $1`, second); err != nil {
+		t.Fatal(err)
+	}
+	check("second row disabled", "")
 
 	hosted := row("oauth_gitlab", `{"base_url":"https://git.corp.example"}`)
 	user("gitlab", "930002")

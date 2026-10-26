@@ -139,7 +139,7 @@ func TestReachStorePlantedDefectsAreCaught(t *testing.T) {
 	files := []string{gq}
 	const prOnly = " && github.event_name == 'pull_request'"
 	const looseHosted = "steps.relevance.outputs.relevant == 'true' && matrix.name == 'static'"
-	const restoreTail = "          key: ${{ steps.reach-key.outputs.key }}\n\n      - name: Set up Helm"
+	const restoreTail = "          key: ${{ steps.reach-key.outputs.key }}\n\n      - name: Compile this leg's packages"
 	cases := []struct {
 		name string
 		m    mutation
@@ -152,7 +152,7 @@ func TestReachStorePlantedDefectsAreCaught(t *testing.T) {
 		{"the export also on the pool", mutation{gq, "        id: reach-key\n        if: " + reachStoreHostedIf, "        id: reach-key\n        if: steps.relevance.outputs.relevant == 'true'"}, "must run on GitHub-hosted static legs only"},
 		{"no fresh flag outside pull requests", mutation{gq, "          if [ \"${EVENT_NAME}\" != \"pull_request\" ]; then\n            echo \"PLAN_READS_REACH_FRESH=1\" >> \"${GITHUB_ENV}\"\n          fi\n", ""}, "must set PLAN_READS_REACH_FRESH"},
 		{"the fresh flag only on pull requests", mutation{gq, "if [ \"${EVENT_NAME}\" != \"pull_request\" ]; then", "if [ \"${EVENT_NAME}\" = \"pull_request\" ]; then"}, "must set PLAN_READS_REACH_FRESH"},
-		{"restore-keys", mutation{gq, restoreTail, "          key: ${{ steps.reach-key.outputs.key }}\n          restore-keys: plan-reads-reach-v3-\n\n      - name: Set up Helm"}, "restore-keys would reuse"},
+		{"restore-keys", mutation{gq, restoreTail, "          key: ${{ steps.reach-key.outputs.key }}\n          restore-keys: plan-reads-reach-v3-\n\n      - name: Compile this leg's packages"}, "restore-keys would reuse"},
 		{"pull requests save", mutation{gq, "          && github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'full-chaos/dev-health-ops'\n        uses: actions/cache/save", "          && github.repository == 'full-chaos/dev-health-ops'\n        uses: actions/cache/save"}, "github.event_name == 'push'"},
 		{"save reads the restore step", mutation{gq, " && github.repository == 'full-chaos/dev-health-ops'\n        uses: actions/cache/save", " && github.repository == 'full-chaos/dev-health-ops' && steps.reach-store.outputs.cache-hit != 'true'\n        uses: actions/cache/save"}, "must not read the restore step"},
 		{"hostPath store", mutation{gq, "path: ${{ runner.temp }}/plan-reads-reach\n" + restoreTail, "path: /mnt/go-cache/plan-reads-reach\n" + restoreTail}, "shared hostPath"},

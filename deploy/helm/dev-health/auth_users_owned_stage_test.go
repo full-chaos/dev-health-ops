@@ -42,7 +42,7 @@ func TestUsersOwnedStageIsRefusedBelowPhase4(t *testing.T) {
 func TestUsersOwnedStageValueIsClosed(t *testing.T) {
 	for _, bad := range []string{"GoApi", "go-api", "both", "true"} {
 		_, out, err := renderAuth(t, stageArgs("4", bad)...)
-		if err == nil || !strings.Contains(out, "authService.usersOwnedStage") {
+		if err == nil || !strings.Contains(out, "usersOwnedStage") {
 			t.Errorf("stage %q rendered: err=%v out=%.300s", bad, err, out)
 		}
 	}

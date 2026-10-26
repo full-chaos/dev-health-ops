@@ -53,4 +53,5 @@ op-rb-dr	op-runbooks	/operate/runbooks/disaster-recovery/	Disaster recovery	runb
 op-rb-prod-k3s	op-runbooks	/operate/runbooks/prod-k3s-deploy-and-operate/	Prod k3s deploy and operate	runbook	true	public	active	false
 op-rb-query-api	op-runbooks	/operate/runbooks/query-api-bootstrap/	Query-api bootstrap on prod k3s	runbook	true	public	active	false
 op-rb-auth-sessions-flip	op-runbooks	/operate/runbooks/auth-sessions-flip-and-rollback/	Auth sessions flip and rollback	runbook	true	public	active	false
+op-rb-auth-users-owned-flip	op-runbooks	/operate/runbooks/auth-users-owned-flip-and-rollback/	Auth users-owned flip and rollback	runbook	true	public	active	false
 op-prod-cutover-lessons	operate	/operate/prod-cutover-2026-09-11-lessons/	Prod cutover 2026-09-11 lessons	landing	true	public	active	false	

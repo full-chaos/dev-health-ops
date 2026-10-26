@@ -188,7 +188,7 @@ func TestAuthBackfillJobOffByDefault(t *testing.T) {
 }
 
 func TestAuthBackfillJobVerbEnum(t *testing.T) {
-	for _, verb := range []string{"", "users-reconcile", "orgs-backfill --x"} {
+	for _, verb := range []string{"", "users-delete", "orgs-backfill --x"} {
 		_, out, err := renderAuth(t, withSets(backfillOn, "authService.backfill.verb="+verb)...)
 		if err == nil || !strings.Contains(out, "authService.backfill.verb") {
 			t.Errorf("verb %q rendered: err=%v out=%.200s", verb, err, out)

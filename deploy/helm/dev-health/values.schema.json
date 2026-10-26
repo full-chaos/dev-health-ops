@@ -80,6 +80,11 @@
           "type": "integer",
           "minimum": 0,
           "maximum": 5
+        },
+        "usersOwnedStage": {
+          "description": "CHAOS-11606: the roll order of phase 4, goApi then owned. Required at phase 4, refused elsewhere (the templates check both).",
+          "type": "string",
+          "enum": ["", "goApi", "owned"]
         }
       }
     },

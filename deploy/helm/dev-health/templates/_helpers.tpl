@@ -725,6 +725,10 @@ leaf), and renders the phase. Every ladder read goes through dev-health.authOn, 
 {{- $p := $v.authService.phase -}}
 {{- if not (and (has (kindOf $p) (list "int" "int64" "float64")) (eq (float64 $p) (floor (float64 $p))) (ge (float64 $p) 0.0) (le (float64 $p) 5.0)) }}{{- fail (printf "authService.phase must be a whole number from 0 to 5, got %s %v" (kindOf $p) $p) }}{{- end -}}
 {{- if ge (int $p) 5 }}{{- fail (printf "authService.phase %d: phase 5 (orgs owned) needs its own public-table writer leaf (D6358): auth-service does not yet write the existing public organizations and memberships tables, so phase 4 is the highest phase this chart renders" (int $p)) }}{{- end -}}
+{{- $stage := toString (default "" $v.authService.usersOwnedStage) -}}
+{{- if not (has $stage (list "" "goApi" "owned")) }}{{- fail (printf "authService.usersOwnedStage must be goApi or owned, got %q" $stage) }}{{- end -}}
+{{- if and (eq (int $p) 4) (eq $stage "") }}{{- fail "authService.phase 4 needs authService.usersOwnedStage: goApi first (go-api forwards the credential routes, auth-service does not own users yet), then owned after the barrier (docs/operate/runbooks/auth-users-owned-flip-and-rollback.md)" }}{{- end -}}
+{{- if and (ne (int $p) 4) (ne $stage "") }}{{- fail (printf "authService.usersOwnedStage is set but authService.phase is %d: the stage exists only at phase 4" (int $p)) }}{{- end -}}
 {{- int $p -}}
 {{- end -}}
 
@@ -809,7 +813,8 @@ and the other enable flags say. templates/auth-service.yaml includes it once, ou
 {{- if eq (include "dev-health.authOn" (dict "flag" "localLogin" "context" .)) "true" }}
 {{- if not (include "dev-health.validSecretKey" .Values.authService.sessionKeys.loginLockout.secretKey) }}{{- fail "authService.phase >= 3 (login) needs authService.sessionKeys.loginLockout.secretKey to be a Secret key: letters, digits, '-', '_', '.'" }}{{- end }}
 {{- end }}
-{{- if and (eq (include "dev-health.authOn" (dict "flag" "usersOwned" "context" .)) "true") (hasKey (default dict .Values.authService.migrate) "narrowAfterFlipBack") }}{{- fail "authService.migrate.narrowAfterFlipBack is refused at authService.phase >= 4: a flip-back narrowing is not a phase 4 setting; remove it" }}{{- end }}
+{{- if and (ge (int (include "dev-health.authPhase" .)) 4) (hasKey (default dict .Values.authService.migrate) "narrowAfterFlipBack") }}{{- fail "authService.migrate.narrowAfterFlipBack is refused at authService.phase >= 4: a flip-back narrowing is not a phase 4 setting; remove it" }}{{- end }}
+{{- if and (ge (int (include "dev-health.authPhase" .)) 4) (not .Values.goApi.enabled) }}{{- fail (printf "authService.usersOwnedStage=%s needs go-api (goApi.enabled=true): go-api forwards the credential routes and refuses local user writes, and an owned auth-service must never run without it" .Values.authService.usersOwnedStage) }}{{- end }}
 {{- $_ := include "dev-health.authEdDSAIssuer" . }}
 {{- $_ := include "dev-health.authSSOOn" (dict "flag" "oidc" "context" .) }}
 {{- $_ := include "dev-health.authSSOOn" (dict "flag" "saml" "context" .) }}
@@ -820,13 +825,18 @@ and the other enable flags say. templates/auth-service.yaml includes it once, ou
 {{/*
 "true" when authService.phase turns the ladder flag on, else "". Call with (dict "flag" <name> "context" $).
 The ladder (each flag is on from its phase up): service 1, sessions 2, localLogin 3, social 3, credentials 4,
-usersOwned 4, orgsOwned 5. credentials moves with usersOwned: go-api refuses AUTH_USERS_OWNED unless the credential routes
+usersOwned 4, orgsOwned 5. credentials moves with go-api's users switch: go-api refuses AUTH_USERS_OWNED unless the credential routes
 go to auth-service. auth-service mounts them from phase 2 (a 503 stub until users are owned).
+Phase 4 has two stages (authService.usersOwnedStage): goApiUsersOwned (go-api's AUTH_USERS_OWNED) is on at both; usersOwned (auth-service,
+the auth Jobs, the grants) is on only at stage owned, so go-api rolls first and auth-service owns users after (CHAOS-11606).
 */}}
 {{- define "dev-health.authOn" -}}
-{{- $ladder := dict "service" 1 "sessions" 2 "localLogin" 3 "social" 3 "credentials" 4 "usersOwned" 4 "orgsOwned" 5 -}}
+{{- $ladder := dict "service" 1 "sessions" 2 "localLogin" 3 "social" 3 "credentials" 4 "goApiUsersOwned" 4 "usersOwned" 4 "orgsOwned" 5 -}}
 {{- if not (hasKey $ladder .flag) }}{{- fail (printf "dev-health.authOn: %s is not a ladder flag" .flag) }}{{- end -}}
-{{- if ge (int (include "dev-health.authPhase" .context)) (int (get $ladder .flag)) -}}true{{- end -}}
+{{- $phase := int (include "dev-health.authPhase" .context) -}}
+{{- if ge $phase (int (get $ladder .flag)) -}}
+{{- if or (ne .flag "usersOwned") (ge $phase 5) (eq (toString .context.Values.authService.usersOwnedStage) "owned") -}}true{{- end -}}
+{{- end -}}
 {{- end -}}
 
 {{/*

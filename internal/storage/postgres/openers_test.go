@@ -77,6 +77,7 @@ var openers = map[string]struct {
 	"internal/testsupport/containers/remote.go":         {kindTest, "test containers"},
 	"internal/testsupport/domainroledb/domainroledb.go": {kindTest, "domain-role venue: the migrated schema and grants, a pool as the domain role"},
 	"internal/testsupport/pgschema/pgschema.go":         {kindTest, "test schema helper"},
+	"internal/testsupport/pinrig/pinrig.go":             {kindTest, "pin proof: pools as the runtime and session reader roles"},
 	"internal/testsupport/usertokens/usertokens.go":     {kindTest, "user-token proof: a pool that refuses every connection and counts the attempts"},
 	"internal/testsupport/venueoracle/venueoracle.go":   {kindTest, "venue oracle harness"},
 	"internal/testsupport/venueoracle/gosubstrate.go":   {kindTest, "venue oracle harness: the Go-built schema of a frozen venue"},

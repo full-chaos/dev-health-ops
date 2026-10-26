@@ -18,6 +18,9 @@ import (
 type SessionRow struct {
 	PrincipalID uuid.UUID
 	Revoked     bool
+	// LegacyTokenVersion is the users.token_version the session began at; nil
+	// for a session from before the pin existed.
+	LegacyTokenVersion *int64
 }
 
 // SessionStore is the Store half that reads auth-service sessions: a token
@@ -50,7 +53,7 @@ func AuthSchemaFromEnv(getenv func(string) string) (string, error) {
 // checkSession decides the sid claim: absent, nothing to check (a go-api
 // token); present, it must name a live session of subject. A lookup that
 // fails is that error, never a pass.
-func (a *Authenticator) checkSession(ctx context.Context, claims map[string]any, subject uuid.UUID) error {
+func (a *Authenticator) checkSession(ctx context.Context, claims map[string]any, subject uuid.UUID, userVersion int64) error {
 	raw, present := claims["sid"]
 	if !present {
 		return nil
@@ -82,13 +85,19 @@ func (a *Authenticator) checkSession(ctx context.Context, claims map[string]any,
 	case row.Revoked:
 		a.logger.WarnContext(ctx, "api access denied: session revoked", slog.String("user_id", subject.String()))
 		return errRejected
+	case row.LegacyTokenVersion == nil:
+		a.logger.InfoContext(ctx, "api access: session has no token_version pin",
+			slog.String("user_id", subject.String()), slog.String("reason_code", "session_pin_missing"))
+	case *row.LegacyTokenVersion != userVersion:
+		a.logger.WarnContext(ctx, "api access denied: session predates the token_version", slog.String("user_id", subject.String()))
+		return errRejected
 	}
 	return nil
 }
 
 // sessionStateQuery reads one auth-service session in PostgreSQL by its
 // primary key; {auth_schema} is the validated, quoted AUTH_DATABASE_SCHEMA.
-const sessionStateQuery = `SELECT principal_id, revoked_at IS NOT NULL FROM {auth_schema}.sessions WHERE id = $1`
+const sessionStateQuery = `SELECT principal_id, revoked_at IS NOT NULL, legacy_token_version FROM {auth_schema}.sessions WHERE id = $1`
 
 // SessionState reads the session id names, in the auth schema AuthSchema
 // names: its principal and whether it is revoked.
@@ -102,15 +111,16 @@ func (s PGStore) SessionState(ctx context.Context, id uuid.UUID) (SessionRow, bo
 	}
 	var principal uuid.UUID
 	var revoked bool
+	var pin *int64
 	query := strings.ReplaceAll(sessionStateQuery, "{auth_schema}", pgx.Identifier{name}.Sanitize())
-	err := s.Pool.QueryRow(ctx, query, id).Scan(&principal, &revoked)
+	err := s.Pool.QueryRow(ctx, query, id).Scan(&principal, &revoked, &pin)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return SessionRow{}, false, nil
 	}
 	if err != nil {
-		return SessionRow{}, false, storeError(err, "SELECT on <auth schema>.sessions (id, principal_id, revoked_at)")
+		return SessionRow{}, false, storeError(err, "SELECT on <auth schema>.sessions (id, principal_id, revoked_at, legacy_token_version)")
 	}
-	return SessionRow{PrincipalID: principal, Revoked: revoked}, true, nil
+	return SessionRow{PrincipalID: principal, Revoked: revoked, LegacyTokenVersion: pin}, true, nil
 }
 
 // errSchemaName is a schema name that cannot be a bare PostgreSQL identifier.

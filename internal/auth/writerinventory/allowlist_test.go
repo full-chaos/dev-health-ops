@@ -151,6 +151,8 @@ var Allowlist = []Entry{
 	{File: "internal/testsupport/pgseed/pgseed.go", Func: "Org", Table: "public.organizations", Verb: "INSERT"},
 	{File: "internal/testsupport/pgseed/pgseed.go", Func: "SetUserState", Table: "public.users", Verb: "UPDATE"},
 	{File: "internal/testsupport/pgseed/pgseed.go", Func: "User", Table: "public.users", Verb: "INSERT"},
+	{File: "internal/testsupport/pinrig/pinrig.go", Func: "PinRig.ClearPin", Table: "auth.sessions", Verb: "UPDATE"},
+	{File: "internal/testsupport/pinrig/pinrig.go", Func: "PinRig.SignIn", Table: "auth.principals", Verb: "INSERT"},
 	{File: "internal/testsupport/sessionscenario/sessionscenario.go", Func: "Run", Table: "public.login_attempts", Verb: "UPDATE"},
 	{File: "internal/testsupport/sessionscenario/sessionscenario.go", Func: "Run", Table: "public.refresh_tokens", Verb: "UPDATE"},
 	{File: "internal/testsupport/sessionscenario/sessionscenario.go", Func: "Run", Table: "public.users", Verb: "UPDATE"},

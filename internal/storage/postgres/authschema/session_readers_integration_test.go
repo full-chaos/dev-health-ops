@@ -84,7 +84,7 @@ func TestSessionReaderRolesReadExactlyTheSessionColumns(t *testing.T) {
 		t.Fatalf("Apply with a session reader: %v", err)
 	}
 
-	if err := readerStatement(ctx, pool, `SELECT id, principal_id, revoked_at FROM auth.sessions`); err != nil {
+	if err := readerStatement(ctx, pool, `SELECT id, principal_id, revoked_at, legacy_token_version FROM auth.sessions`); err != nil {
 		t.Fatalf("the reader cannot read its columns: %v", err)
 	}
 	for _, refused := range []string{
@@ -123,7 +123,7 @@ func TestSessionReaderRolesReadExactlyTheSessionColumns(t *testing.T) {
 		columns = append(columns, entry)
 	}
 	rows.Close()
-	if want := "sessions.id:SELECT,sessions.principal_id:SELECT,sessions.revoked_at:SELECT"; strings.Join(columns, ",") != want {
+	if want := "sessions.id:SELECT,sessions.legacy_token_version:SELECT,sessions.principal_id:SELECT,sessions.revoked_at:SELECT"; strings.Join(columns, ",") != want {
 		t.Errorf("the reader's column grants = %v, want %s", columns, want)
 	}
 	if found := readerViolations(t, ctx, env, reader); len(found) != 0 {

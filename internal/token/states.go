@@ -87,6 +87,8 @@ type KeyStates struct {
 	attempted bool
 	// flight is the read in progress, nil when none.
 	flight chan struct{}
+	// closed is set by Close: no read starts after it.
+	closed bool
 	// base ends every read when the service stops.
 	base context.Context
 	stop context.CancelFunc
@@ -134,7 +136,7 @@ func (s *KeyStates) Rows(ctx context.Context) ([]KeyStateRow, error) {
 	s.mu.Lock()
 	now := s.now()
 	started := false
-	if (!s.attempted || now.Sub(s.attemptAt) >= s.refreshEvery) && s.flight == nil {
+	if !s.closed && (!s.attempted || now.Sub(s.attemptAt) >= s.refreshEvery) && s.flight == nil {
 		s.attempted, s.attemptAt, started = true, now, true
 		s.flight = make(chan struct{})
 		go s.read(s.flight, now)
@@ -176,11 +178,12 @@ func (s *KeyStates) current() ([]KeyStateRow, error) {
 
 // Close ends the read in flight and every later one and waits, for at most the
 // read timeout, for that read to return; a caller with a usable snapshot keeps
-// getting it, one without is refused. It is idempotent and safe with no read in
+// getting it, one without is refused, and no read starts after it. It is idempotent and safe with no read in
 // flight.
 func (s *KeyStates) Close() {
 	s.stop()
 	s.mu.Lock()
+	s.closed = true
 	flight := s.flight
 	s.mu.Unlock()
 	if flight == nil {

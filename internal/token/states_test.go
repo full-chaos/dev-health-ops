@@ -860,3 +860,32 @@ func TestKeyStatesCloseWaitsForTheReadToEnd(t *testing.T) {
 	}
 	states.Close()
 }
+
+// After Close no read starts: a caller with a usable snapshot gets it, one
+// without is refused, and the source is not read again.
+func TestKeyStatesRowsAfterCloseStartNoRead(t *testing.T) {
+	source := &hungStates{rows: []KeyStateRow{{KeyID: "a", State: StateActive}}}
+	clock := &fakeClock{now: time.Unix(0, 0)}
+	states := NewKeyStates(KeyStatesConfig{Source: source, RefreshEvery: 10 * time.Second, MaxStale: JWKSCacheTTL,
+		InlineWait: time.Millisecond, Now: clock.Now})
+	if _, err := states.Rows(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	states.Close()
+	reads := source.readCount()
+	clock.advance(11 * time.Second)
+	if rows, err := states.Rows(context.Background()); err != nil || len(rows) != 1 {
+		t.Fatalf("Rows after Close with a usable snapshot = %v, %v", rows, err)
+	}
+	clock.advance(JWKSCacheTTL)
+	if rows, err := states.Rows(context.Background()); !reasonIs(err, ReasonKeyStatesUnavailable) || rows != nil {
+		t.Fatalf("Rows after Close past the bound = %v, %v; want %s", rows, err, ReasonKeyStatesUnavailable)
+	}
+	time.Sleep(20 * time.Millisecond)
+	if got := source.readCount(); got != reads {
+		t.Fatalf("the source was read %d more times after Close, want 0", got-reads)
+	}
+	if !states.idle() {
+		t.Fatal("a read is in flight after Close")
+	}
+}

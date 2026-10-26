@@ -45,6 +45,16 @@ func (e *pgEnv) principal(t *testing.T, ctx context.Context) uuid.UUID {
 	return id
 }
 
+// owner is a principal with its auth.users row: the account a reset link can belong to.
+func (e *pgEnv) owner(t *testing.T, ctx context.Context) uuid.UUID {
+	t.Helper()
+	id := e.principal(t, ctx)
+	if _, err := e.admin.Exec(ctx, `INSERT INTO auth.users (principal_id, email, email_lower) VALUES ($1, $2, $2)`, id.String(), id.String()+"@example.com"); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	return id
+}
+
 func linkHash(s string) [32]byte { return sha256.Sum256([]byte(s)) }
 
 // preAged inserts a credential whose clock already ran out (or still runs):
@@ -354,7 +364,7 @@ func liveFlows(t *testing.T, links *PGLinks, accounts *liveAccounts, mail *liveM
 func TestRaceResetReplay(t *testing.T) {
 	ctx := context.Background()
 	env, links := linkEnv(t, ctx)
-	p := env.principal(t, ctx)
+	p := env.owner(t, ctx)
 	provider := "local"
 	accounts := &liveAccounts{users: map[string]*User{}, byID: map[uuid.UUID]*User{p: {ID: p, IsActive: true, AuthProvider: &provider}}, links: links}
 	rec := &flowRecorder{}
@@ -499,7 +509,7 @@ func TestCorpusAuthFlowDecisionRows(t *testing.T) {
 	accounts := &liveAccounts{users: map[string]*User{}, byID: map[uuid.UUID]*User{}, links: links}
 	pw, provider := "x", "local"
 	mk := func(email string, verified bool) uuid.UUID {
-		id := env.principal(t, ctx)
+		id := env.owner(t, ctx)
 		u := &User{ID: id, IsActive: true, IsVerified: verified, PasswordHash: &pw, AuthProvider: &provider}
 		accounts.users[email], accounts.byID[id] = u, u
 		return id

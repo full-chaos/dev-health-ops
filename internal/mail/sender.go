@@ -54,6 +54,29 @@ const maxResponseBytes = 4 * 1024
 // the process is set up to send mail it cannot send.
 var ErrProviderUnsupported = errors.New("mail provider is unsupported")
 
+// Configuration faults of the constructor, matchable with errors.Is. Their
+// text is unchanged for existing callers.
+var (
+	ErrSMTPPortInvalid   = errors.New("smtp port is invalid")
+	ErrSMTPCAFileInvalid = errors.New("smtp tls ca file is invalid")
+	ErrResendKeyMissing  = errors.New("resend api key is missing")
+)
+
+// taggedError keeps its own text and also matches a sentinel.
+type taggedError struct {
+	msg string
+	tag error
+	err error
+}
+
+func (e *taggedError) Error() string { return e.msg }
+func (e *taggedError) Unwrap() []error {
+	if e.err != nil {
+		return []error{e.tag, e.err}
+	}
+	return []error{e.tag}
+}
+
 // AmbiguousSendError marks a Send failure where the message may already have
 // reached the recipient's mail infrastructure despite the caller never
 // learning that -- Resend accepting the HTTP request and then the response
@@ -117,7 +140,22 @@ func configuredValue(name string) (string, bool) {
 	return strings.TrimSpace(raw), present
 }
 
-func NewSenderFromEnv(client *http.Client) (Sender, error) {
+// SenderOption adjusts NewSenderFromEnv.
+type SenderOption func(*senderOptions)
+
+type senderOptions struct{ redact bool }
+
+// Redacted makes NewSenderFromEnv hold no configured value in its logs and
+// errors (a provider name, a port, a file path, the from-address): the same
+// selection and checks, value-free text.
+func Redacted() SenderOption { return func(o *senderOptions) { o.redact = true } }
+
+func NewSenderFromEnv(client *http.Client, options ...SenderOption) (Sender, error) {
+	var opts senderOptions
+	for _, option := range options {
+		option(&opts)
+	}
+	redact := opts.redact
 	provider, providerSet := configuredValue("EMAIL_PROVIDER")
 	if !providerSet {
 		provider = "console"
@@ -145,6 +183,9 @@ func NewSenderFromEnv(client *http.Client) (Sender, error) {
 	}
 	switch provider {
 	case "console":
+		if redact {
+			from = "sender-withheld"
+		}
 		return &consoleSender{from: from}, nil
 	case "resend":
 		// Python accepted either name, preferring EMAIL_API_KEY.
@@ -155,8 +196,10 @@ func NewSenderFromEnv(client *http.Client) (Sender, error) {
 		if key == "" {
 			slog.Error("mail resend API key is missing or empty",
 				"variables", "EMAIL_API_KEY,RESEND_API_KEY")
-			return nil, errors.New(
-				"EMAIL_API_KEY (or RESEND_API_KEY) is required when EMAIL_PROVIDER=resend")
+			return nil, &taggedError{
+				msg: "EMAIL_API_KEY (or RESEND_API_KEY) is required when EMAIL_PROVIDER=resend",
+				tag: ErrResendKeyMissing,
+			}
 		}
 		if client == nil {
 			client = &http.Client{Timeout: 30 * time.Second, Transport: httpguard.SharedTransport()}
@@ -171,7 +214,11 @@ func NewSenderFromEnv(client *http.Client) (Sender, error) {
 			if err != nil || parsed <= 0 || parsed > 65535 {
 				slog.Error("mail SMTP port is not a valid port",
 					"variable", "SMTP_PORT")
-				return nil, fmt.Errorf("SMTP_PORT is not a valid port: %q", raw)
+				msg := fmt.Sprintf("SMTP_PORT is not a valid port: %q", raw)
+				if redact {
+					msg = "SMTP_PORT is not a valid port"
+				}
+				return nil, &taggedError{msg: msg, tag: ErrSMTPPortInvalid}
 			}
 			port = parsed
 		}
@@ -240,9 +287,13 @@ func NewSenderFromEnv(client *http.Client) (Sender, error) {
 			if caFileSet {
 				pool, err := loadSMTPTLSCAPool(caFile)
 				if err != nil {
+					if redact {
+						slog.Error("mail SMTP TLS CA file is invalid", "variable", "SMTP_TLS_CA_FILE")
+						return nil, &taggedError{msg: "SMTP_TLS_CA_FILE is invalid", tag: ErrSMTPCAFileInvalid}
+					}
 					slog.Error("mail SMTP TLS CA file is invalid",
 						"variable", "SMTP_TLS_CA_FILE", "value", caFile, "error", err)
-					return nil, fmt.Errorf("SMTP_TLS_CA_FILE is invalid: %w", err)
+					return nil, &taggedError{msg: "SMTP_TLS_CA_FILE is invalid: " + err.Error(), tag: ErrSMTPCAFileInvalid, err: err}
 				}
 				tlsConfig.RootCAs = pool
 			}
@@ -257,6 +308,10 @@ func NewSenderFromEnv(client *http.Client) (Sender, error) {
 			tlsConfig: tlsConfig,
 		}, nil
 	default:
+		if redact {
+			slog.Error("mail provider is unsupported", "variable", "EMAIL_PROVIDER")
+			return nil, ErrProviderUnsupported
+		}
 		slog.Error("mail provider is unsupported",
 			"variable", "EMAIL_PROVIDER", "value", provider)
 		return nil, fmt.Errorf("%w: %q", ErrProviderUnsupported, provider)

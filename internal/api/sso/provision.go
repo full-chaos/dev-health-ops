@@ -48,8 +48,9 @@ func stringOrEmpty(value *string) string {
 // disagree).
 //
 // Existing accounts are selected by (auth_provider, sso provider, auth_provider_id)
-// and only full_name and last_login_at are written; the identity columns are never
-// rewritten (resolveProviderIdentity).
+// and only full_name, last_login_at and updated_at are written, plus the SAML NameID
+// format and SPNameQualifier of a SAML sign-in (saml_nameid_format, saml_sp_name_qualifier);
+// the identity columns are never rewritten (resolveProviderIdentity).
 func (h handlers) provisionOrGetUser(ctx context.Context, row *providerRow, email, name string, providerID uuid.UUID, externalID string, saml *samlNameIDParts) (*provisionedUser, *provisionedMembership, error) {
 	authProviderValue := "oidc"
 	if row.Protocol == "saml" {

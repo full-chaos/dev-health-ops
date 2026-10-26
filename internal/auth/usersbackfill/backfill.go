@@ -79,8 +79,9 @@ type Report struct {
 	// IdentityRelinkPending counts the not-carried SSO accounts the owned store re-links at their first sign-in
 	// (identity.IsSSORelinkable).
 	IdentityRelinkPending int
-	// SSOSubjectUnverifiable counts the not-carried SAML accounts readiness cannot waive because go-api never stored
-	// their NameID format (identity.IsSSOSubjectUnverifiable); each holds the users-owned guard until it has an identity.
+	// SSOSubjectUnverifiable counts the not-carried SAML accounts readiness cannot waive: their stored NameID
+	// parts are missing (never signed in) or do not key, e.g. a transient NameID (SubjectUnverifiable); each holds the
+	// users-owned guard until it has an identity.
 	SSOSubjectUnverifiable int
 }
 

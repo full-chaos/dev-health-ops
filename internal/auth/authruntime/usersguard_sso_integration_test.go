@@ -20,13 +20,13 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 )
 
-// TestUsersOwnedGuardWaivesOnlyKeyableBoundOIDCUsers runs the real users backfill and then the guard, both as the
+// TestUsersOwnedGuardWaivesOnlyKeyableBoundSSOUsers runs the real users backfill and then the guard, both as the
 // auth runtime role. An OIDC user bound to an OIDC provider row (users.sso_provider_id) with a subject the sign-in
 // path can key is re-linked at its first owned sign-in, so the guard is ready with it and no identity. A bound SAML
-// user is never waived: go-api stores only the NameID value, not its format, so its key cannot be verified; it holds
-// the guard until it has an identity. Each other shape (unbound, no subject, a subject the key rule refuses, bound to
+// user is waived only when the NameID parts go-api stored at sign-in key under saml.SubjectFromStored; one that never
+// signed in (NULL parts) or has a transient NameID holds the guard until it has an identity. Each other shape (unbound, no subject, a subject the key rule refuses, bound to
 // a row of another protocol) and a social user with no subject is refused until the row is repaired.
-func TestUsersOwnedGuardWaivesOnlyKeyableBoundOIDCUsers(t *testing.T) {
+func TestUsersOwnedGuardWaivesOnlyKeyableBoundSSOUsers(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	instance, err := containers.StartPostgres(ctx)

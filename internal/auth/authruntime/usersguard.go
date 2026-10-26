@@ -25,7 +25,7 @@ type usersReader interface {
 
 // checkUsersOwned counts the gaps between public.users and the auth schema:
 // public users with no auth user, auth users with no public user, and users of
-// a provider other than local (SSO or social) with no external identity; a non-interactive service placeholder (identity.IsServicePlaceholder) and an SSO account the owned store re-links at its first sign-in (identity.IsSSORelinkable) are not counted. Any
+// a provider other than local (SSO or social) with no external identity; a non-interactive service placeholder (identity.IsServicePlaceholder) and an SSO account the owned store re-links at its first sign-in (identity.IsSSORelinkable, or a bound SAML account whose stored NameID parts key under saml.SubjectFromStored) are not counted. Any
 // gap refuses the switch. The first gap is not a reason to stop counting, so
 // the refusal names all three, and the part of the third that is the
 // sso_subject_unverifiable bucket (identity.IsSSOSubjectUnverifiable).

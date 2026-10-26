@@ -91,3 +91,18 @@ func TestNarrowAfterFlipBackIsRefusedWithoutTheAck(t *testing.T) {
 		}
 	}
 }
+
+// narrowAfterFlipBack at phase 4 with the acknowledgement fails the render.
+// Today the phase check refuses phase 4 first (phases 4 and 5 wait for the
+// public-table writer decision), so either refusal passes.
+func TestNarrowAfterFlipBackIsRefusedAtPhase4(t *testing.T) {
+	_, out, err := renderAuth(t, phaseArgs(4,
+		"--set", "authService.migrate.acknowledgeGrantNarrowing="+ackDigest,
+		"--set", "authService.migrate.narrowAfterFlipBack=true")...)
+	if err == nil {
+		t.Fatal("render with narrowAfterFlipBack at phase 4 succeeded")
+	}
+	if !strings.Contains(out, "narrowAfterFlipBack") && !strings.Contains(out, "phases 4 and 5 need the public-table writer decision") {
+		t.Errorf("phase 4 refusal names neither narrowAfterFlipBack nor the phase 4 check:\n%.600s", out)
+	}
+}

@@ -205,8 +205,7 @@ func TestEveryCounterSeriesIsDeclaredAtZero(t *testing.T) {
 	points := h.metricPoints()
 	want := map[string]bool{}
 	for _, reason := range []string{
-		"subject_token_invalid", "unknown_tuple", "workload_disabled", "principal_disabled", "binding_disabled",
-		"uid_mismatch", "no_audience", "wrong_kind", "bad_input", "store_error", "resolve_refused",
+		"subject_token_invalid", "unknown", "disabled", "uid_mismatch", "no_audience", "store_error", "resolve_refused",
 		"audience_refused", "scope_refused", "lifetime_too_short",
 	} {
 		for _, aud := range []string{"auth-service", "dev-health-api", "none"} {

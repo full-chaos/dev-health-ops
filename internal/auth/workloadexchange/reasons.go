@@ -42,10 +42,7 @@ const (
 
 // resolveReasons are the reasons the workload store names for a refused
 // Resolve. A reason outside the set counts as resolve_refused.
-var resolveReasons = []string{
-	"unknown_tuple", "workload_disabled", "principal_disabled", "binding_disabled",
-	"uid_mismatch", "no_audience", "wrong_kind", "bad_input", "store_error",
-}
+var resolveReasons = []string{"unknown", "disabled", "uid_mismatch", "no_audience", "store_error"}
 
 var refusedReasons = append(append([]string{reasonSubjectTokenInvalid}, resolveReasons...),
 	reasonResolveRefused, reasonAudienceRefused, reasonScopeRefused, reasonLifetimeTooShort)

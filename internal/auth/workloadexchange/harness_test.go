@@ -28,6 +28,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
+	"github.com/full-chaos/dev-health-ops/internal/auth/workload"
 	"github.com/full-chaos/dev-health-ops/internal/token"
 )
 
@@ -238,23 +239,15 @@ func (f *fakeRegistry) Resolve(_ context.Context, id Identity) (Registration, er
 	return reg, nil
 }
 
-var errFakeRefused = errors.New("workload: refused")
+var errFakeRefused = workload.ErrRefused
 
-// refusedBecause is the store's refusal: errors.Is ErrRefused, with a reason
-// only RefusalReason reads.
-type refusedBecause struct{ reason string }
-
-func (r refusedBecause) Error() string { return "workload: refused" }
-func (r refusedBecause) Is(target error) bool {
-	return target == errFakeRefused
-}
-
-func fakeRefusalReason(err error) string {
-	var r refusedBecause
-	if errors.As(err, &r) {
-		return r.reason
+// refusedBecause is the store's refusal for reason; "" is a refusal the store
+// did not name.
+func refusedBecause(reason string) error {
+	if reason == "" {
+		return errors.New("workload: refused")
 	}
-	return ""
+	return &workload.RefusalError{Reason: workload.Reason(reason)}
 }
 
 type harness struct {
@@ -321,7 +314,7 @@ func newHarness(t *testing.T, opts ...harnessOption) *harness {
 	}
 	h.reader = sdkmetric.NewManualReader()
 	deps := Deps{
-		Validator: validator, Registry: h.registry, RefusalReason: fakeRefusalReason, Signer: h.signer,
+		Validator: validator, Registry: h.registry, RefusalReason: workload.RefusalReason, Signer: h.signer,
 		Audit: h.writeAudit, IssuerURL: testIssuerURL, ClusterIssuer: testClusterIssuer,
 		Logger: slog.New(slog.NewJSONHandler(h.logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
 		Meter:  sdkmetric.NewMeterProvider(sdkmetric.WithReader(h.reader)).Meter("test"),

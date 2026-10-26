@@ -18,6 +18,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
+	"github.com/full-chaos/dev-health-ops/internal/auth/workload"
 	"github.com/full-chaos/dev-health-ops/internal/token"
 )
 
@@ -204,7 +205,7 @@ func refusalCases() []refusalCase {
 	sa := "system:serviceaccount:" + testNamespace + ":" + testSAName
 	store := func(reason string) func(h *harness) string {
 		return func(h *harness) string {
-			h.registry.err = refusedBecause{reason: reason}
+			h.registry.err = refusedBecause(reason)
 			return form(h.validSubject(), "auth-service", "").Encode()
 		}
 	}
@@ -232,8 +233,7 @@ func refusalCases() []refusalCase {
 		}},
 		{"a refusal the store did not name", "resolve_refused", store("")},
 	}
-	for _, reason := range []string{"unknown_tuple", "workload_disabled", "principal_disabled", "binding_disabled",
-		"uid_mismatch", "no_audience", "wrong_kind", "bad_input", "store_error"} {
+	for _, reason := range []string{"unknown", "disabled", "uid_mismatch", "no_audience", "store_error"} {
 		cases = append(cases, refusalCase{"store: " + reason, reason, store(reason)})
 	}
 	return cases
@@ -643,7 +643,7 @@ func TestRoutesRefusesMissingCollaborators(t *testing.T) {
 	base := func() Deps {
 		v, _ := NewReviewValidator(ReviewConfig{APIServerURL: h.review.server.URL, CAFile: h.review.caFile,
 			ReviewerTokenFile: writeTemp(t, "x"), TrustDomain: testTrustDomain})
-		return Deps{Validator: v, Registry: h.registry, RefusalReason: fakeRefusalReason, Signer: h.signer,
+		return Deps{Validator: v, Registry: h.registry, RefusalReason: workload.RefusalReason, Signer: h.signer,
 			Audit: h.writeAudit, IssuerURL: testIssuerURL, ClusterIssuer: testClusterIssuer}
 	}
 	if _, err := Routes(base()); err != nil {

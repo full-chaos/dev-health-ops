@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -126,7 +127,7 @@ func ctxT(t *testing.T) context.Context {
 func name() string { return "t-" + uuid.NewString()[:8] }
 
 func tuple(ns string) BindingSpec {
-	return BindingSpec{Environment: "test", TrustDomain: "cluster.local", Issuer: "https://issuer.test", Namespace: ns, ServiceAccountName: "sa"}
+	return BindingSpec{Environment: "test", TrustDomain: "cluster.local", Issuer: "https://issuer.test", Namespace: ns, ServiceAccountName: "sa-probe-7x"}
 }
 
 func (b BindingSpec) input() ResolveInput {
@@ -258,8 +259,17 @@ func TestResolveRefusals(t *testing.T) {
 	ctx := ctxT(t)
 	refused := func(t *testing.T, in ResolveInput, want reason) {
 		t.Helper()
-		if _, err := e.reader.Resolve(ctx, in); !errors.Is(err, ErrRefused) {
+		_, err := e.reader.Resolve(ctx, in)
+		if !errors.Is(err, ErrRefused) {
 			t.Fatalf("Resolve = %v, want ErrRefused", err)
+		}
+		if got := ReasonOf(err); got != publicReason(want) {
+			t.Fatalf("ReasonOf = %q, want %q", got, publicReason(want))
+		}
+		for _, v := range []string{in.Namespace, in.ServiceAccountName, in.ServiceAccountUID, in.Issuer, in.TrustDomain} {
+			if v != "" && strings.Contains(err.Error(), v) {
+				t.Fatalf("refusal text %q holds input value %q", err.Error(), v)
+			}
 		}
 		if _, why, err := e.reader.resolve(ctx, in); err != nil || why != want {
 			t.Fatalf("internal reason = %q, %v; want %q", why, err, want)
@@ -353,8 +363,9 @@ func TestResolveRefusals(t *testing.T) {
 	t.Run("store error fails closed", func(t *testing.T) {
 		cancelled, cancel := context.WithCancel(ctx)
 		cancel()
-		if _, err := e.reader.Resolve(cancelled, tuple("ns-x").input()); !errors.Is(err, ErrRefused) {
-			t.Fatalf("Resolve on a dead context = %v, want ErrRefused", err)
+		_, err := e.reader.Resolve(cancelled, tuple("ns-x").input())
+		if !errors.Is(err, ErrRefused) || ReasonOf(err) != ReasonStoreError {
+			t.Fatalf("Resolve on a dead context = %v, want ErrRefused / store_error", err)
 		}
 	})
 }

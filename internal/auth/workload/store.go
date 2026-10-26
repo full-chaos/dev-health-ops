@@ -571,19 +571,19 @@ type ResolveInput struct {
 
 // Resolve maps a verified federated identity to its registered workload. It
 // reads the current rows on every call and caches nothing. Any refusal and
-// any store error returns ErrRefused: no reason leaves this package except in
-// the log and the resolve counter.
+// any store error is a *RefusalError: errors.Is(err, ErrRefused) holds, and the
+// Reason (ReasonOf) is for logs and counters, never for the client.
 func (s *Store) Resolve(ctx context.Context, in ResolveInput) (Registration, error) {
 	reg, why, err := s.resolve(ctx, in)
 	switch {
 	case err != nil:
 		s.resolves.Add(ctx, 1, metric.WithAttributes(attribute.String("outcome", "error")))
 		s.logger.ErrorContext(ctx, "workload: resolve store failure", logging.ErrorAttr(err))
-		return Registration{}, ErrRefused
+		return Registration{}, &RefusalError{Reason: ReasonStoreError}
 	case why != "":
 		s.resolves.Add(ctx, 1, metric.WithAttributes(attribute.String("outcome", "refused")))
 		s.logger.InfoContext(ctx, "workload: resolve refused", "reason", string(why))
-		return Registration{}, ErrRefused
+		return Registration{}, &RefusalError{Reason: publicReason(why)}
 	}
 	s.resolves.Add(ctx, 1, metric.WithAttributes(attribute.String("outcome", "ok")))
 	return reg, nil

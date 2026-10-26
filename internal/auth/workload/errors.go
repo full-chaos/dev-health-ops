@@ -18,3 +18,43 @@ var (
 	// package, so a caller cannot tell the exchange's client which one fired.
 	ErrRefused = errors.New("workload: refused")
 )
+
+// Reason is why Resolve refused. It is for logs and counters only: a caller
+// must answer every Reason the same way.
+type Reason string
+
+const (
+	ReasonUnknown     Reason = "unknown"
+	ReasonDisabled    Reason = "disabled"
+	ReasonUIDMismatch Reason = "uid_mismatch"
+	ReasonNoAudience  Reason = "no_audience"
+	ReasonStoreError  Reason = "store_error"
+)
+
+// RefusalError is what Resolve returns. errors.Is(err, ErrRefused) is always
+// true; the text is the fixed reason word and never holds an input value.
+type RefusalError struct{ Reason Reason }
+
+func (e *RefusalError) Error() string        { return "workload: refused: " + string(e.Reason) }
+func (e *RefusalError) Is(target error) bool { return target == ErrRefused }
+
+// ReasonOf returns the Reason of a Resolve refusal, or "" for any other error.
+func ReasonOf(err error) Reason {
+	var r *RefusalError
+	if errors.As(err, &r) {
+		return r.Reason
+	}
+	return ""
+}
+
+func publicReason(r reason) Reason {
+	switch r {
+	case reasonWorkloadDisabled, reasonPrincipalOff, reasonBindingDisabled:
+		return ReasonDisabled
+	case reasonUIDMismatch:
+		return ReasonUIDMismatch
+	case reasonNoAudience:
+		return ReasonNoAudience
+	}
+	return ReasonUnknown
+}

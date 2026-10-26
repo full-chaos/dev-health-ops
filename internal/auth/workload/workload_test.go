@@ -83,3 +83,26 @@ func TestValidators(t *testing.T) {
 		t.Error("an unpinned uid must be accepted")
 	}
 }
+
+func TestRefusalErrorIsErrRefusedAndCarriesOnlyTheReasonWord(t *testing.T) {
+	for _, r := range []Reason{ReasonUnknown, ReasonDisabled, ReasonUIDMismatch, ReasonNoAudience, ReasonStoreError} {
+		err := error(&RefusalError{Reason: r})
+		if !errors.Is(err, ErrRefused) || ReasonOf(err) != r {
+			t.Errorf("%s: Is/ReasonOf broken", r)
+		}
+		if err.Error() != "workload: refused: "+string(r) {
+			t.Errorf("%s: text %q", r, err.Error())
+		}
+	}
+	if ReasonOf(ErrRefused) != "" || ReasonOf(nil) != "" {
+		t.Error("ReasonOf of a non-refusal must be empty")
+	}
+	want := map[reason]Reason{reasonUnknown: ReasonUnknown, reasonBadInput: ReasonUnknown, reasonWrongKind: ReasonUnknown,
+		reasonWorkloadDisabled: ReasonDisabled, reasonPrincipalOff: ReasonDisabled, reasonBindingDisabled: ReasonDisabled,
+		reasonUIDMismatch: ReasonUIDMismatch, reasonNoAudience: ReasonNoAudience}
+	for in, out := range want {
+		if publicReason(in) != out {
+			t.Errorf("publicReason(%s) = %s, want %s", in, publicReason(in), out)
+		}
+	}
+}

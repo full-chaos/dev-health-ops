@@ -13,7 +13,7 @@ Phase 4 moves ownership of users from go-api to auth-service. While the roll run
 
 ## Rules
 
-- Read the cluster only with `kubectl get ... -o jsonpath`, through `deploy/scripts/auth-users-owned-barrier.sh`, and with `kubectl logs` of the Jobs a step names. Every kubectl call has `--request-timeout=30s`. Never run `kubectl exec`, `kubectl get secret` or an env dump.
+- Read the cluster only with `kubectl get ... -o jsonpath`, through `deploy/scripts/auth-users-owned-barrier.sh`, and with `kubectl logs` of the Jobs a step names. Every kubectl call has `--request-timeout=30s`. Never run `kubectl exec` (the one read-only psql readback of D3 is the only exception), `kubectl get secret` or an env dump.
 - Each step below is one `helm upgrade`, one script run or one read. The exit code of a script run gates the next step: any non-zero exit means STOP and report. Do not retry in a loop.
 - The values files set the stage (`authService.usersOwnedStage`). No `--set` is needed or allowed for it.
 - Both stages need `goApi.enabled=true`. The render refuses phase 4 without a stage, and refuses `narrowAfterFlipBack` at every phase from 4.
@@ -57,8 +57,17 @@ Roll back in the opposite order. auth-service stops owning users first, so no ow
 4. **D3.** Set `authService.phase: 3` (no stage), `authService.migrate.narrowAfterFlipBack: true` and `authService.migrate.acknowledgeGrantNarrowing` to the digest of the deferred grants. Upgrade. This is the narrowing release. The grants are still wide after D2, which is a security leftover, so D3 is required. Before it, run the pod check of step 3 in [the flip-back grants runbook](auth-users-flip-back-grants.md) and go on only when it prints `OK: 0 old owned pods`. A wrong digest is refused and the refusal prints the right one. After D3, read the grants back with the database admin login, read only:
 
    ```bash
-   psql "$ADMIN_DSN" -At -c "SELECT concat_ws(',', has_column_privilege('<runtime role>','public.users','password_hash','UPDATE')::text, has_column_privilege('<runtime role>','public.users','email','INSERT')::text, has_column_privilege('<runtime role>','public.memberships','org_id','INSERT')::text)"
+   kubectl -n <namespace> --request-timeout=30s exec -i <postgres pod> -- psql -X -q -v ON_ERROR_STOP=1 -At -U <admin user> -d <database> <<'SQL'
+   BEGIN READ ONLY;
+   SELECT concat_ws(',',
+     has_column_privilege('<runtime role>','public.users','password_hash','UPDATE')::text,
+     has_column_privilege('<runtime role>','public.users','email','INSERT')::text,
+     has_column_privilege('<runtime role>','public.memberships','org_id','INSERT')::text);
+   ROLLBACK;
+   SQL
    ```
+
+   The SQL goes in on stdin, so no DSN and no password is on a command line. This is the one `kubectl exec` of this runbook: it reads, in a read-only transaction that is rolled back, and it runs no other command.
 
    Expected output, one line:
 

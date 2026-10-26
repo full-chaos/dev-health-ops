@@ -98,10 +98,10 @@ func TestAuthServiceDrainRefusals(t *testing.T) {
 		"preStop fractional": {[]string{"--set", "authService.drain.preStopSeconds=1.5"}, "preStopSeconds"},
 		"preStop text":       {[]string{"--set-string", "authService.drain.preStopSeconds=abc"}, "preStopSeconds"},
 		"preStop huge":       {[]string{"--set-string", "authService.drain.preStopSeconds=99999999999999999999"}, "preStopSeconds"},
-		"shutdown zero":      {[]string{"--set", "authService.shutdownTimeout=0s"}, "authService.shutdownTimeout"},
-		"shutdown over 3 h":  {[]string{"--set", "authService.shutdownTimeout=10801s", "--set", "authService.terminationGracePeriodSeconds=86400"}, "authService.shutdownTimeout"},
-		"grace zero":         {[]string{"--set", "authService.terminationGracePeriodSeconds=0"}, "authService.terminationGracePeriodSeconds"},
-		"extraArgs shutdown": {[]string{"--set", "authService.extraArgs[0]=--shutdown-timeout=5s"}, "authService.extraArgs must not set shutdown-timeout"},
+		"shutdown zero":      {[]string{"--set", "authService.shutdownTimeout=0s"}, "shutdownTimeout"},
+		"shutdown over 3 h":  {[]string{"--set", "authService.shutdownTimeout=10801s", "--set", "authService.terminationGracePeriodSeconds=86400"}, "shutdownTimeout"},
+		"grace zero":         {[]string{"--set", "authService.terminationGracePeriodSeconds=0"}, "terminationGracePeriodSeconds"},
+		"extraArgs shutdown": {[]string{"--set", "authService.extraArgs[0]=--shutdown-timeout=5s"}, "authService.extraArgs must not set --shutdown-timeout=5s"},
 		"extraEnv shutdown":  {[]string{"--set", "authService.extraEnv[0].name=AUTH_SERVICE_SHUTDOWN_TIMEOUT", "--set", "authService.extraEnv[0].value=5s"}, "AUTH_SERVICE_SHUTDOWN_TIMEOUT"},
 	} {
 		t.Run(name, func(t *testing.T) {

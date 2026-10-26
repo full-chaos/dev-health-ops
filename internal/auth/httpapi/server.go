@@ -608,7 +608,11 @@ func (s *Server) Start(ctx context.Context) error {
 		return fmt.Errorf("listen for %s on %s: %w", s.name, s.server.Addr, err)
 	}
 	s.listener = listener
-	s.server.BaseContext = func(net.Listener) context.Context { return ctx }
+	// SIGTERM cancels ctx, but a request in flight must finish: Shutdown drains
+	// it within its budget. A cancelled request context fails the store call under
+	// it and the caller would get a 500.
+	requestBase := context.WithoutCancel(ctx)
+	s.server.BaseContext = func(net.Listener) context.Context { return requestBase }
 	go func() {
 		if serveErr := s.server.Serve(listener); serveErr != nil &&
 			!errors.Is(serveErr, http.ErrServerClosed) {

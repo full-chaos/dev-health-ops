@@ -1,0 +1,178 @@
+package devhealth_test
+
+import (
+	"bytes"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"strings"
+	"testing"
+)
+
+const barrierScript = "../../scripts/auth-users-owned-barrier.sh"
+
+// fakeBarrierKubectl records argv and answers `get <resource> -l ...component=<c>` from $FAKE_DIR/<resource>.<c>
+// (component "all" when the selector has none). FAKE_FAIL=<resource>.<c> makes that one call exit 1.
+const fakeBarrierKubectl = `#!/usr/bin/env bash
+printf '%s\n' "$*" >>"${FAKE_DIR}/argv"
+res=""; sel=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+  get) res="$2"; shift ;;
+  -l) sel="$2"; shift ;;
+  esac
+  shift
+done
+comp=all
+case "$sel" in *component=*) comp="${sel##*component=}" ;; esac
+key="${res}.${comp}"
+[ "${FAKE_FAIL:-}" = "$key" ] && exit 1
+[ -f "${FAKE_DIR}/${key}" ] && cat "${FAKE_DIR}/${key}"
+exit 0
+`
+
+func goodBarrierWorld() map[string]string {
+	return map[string]string{
+		"deploy.go-api":       "3 3 3 3 3 3\n",
+		"rs.go-api":           "rs-old||4\nrs-new|3|5\n",
+		"pods.go-api":         "p1||true|true\np2||true|true\np3||true|true\n",
+		"pods.all":            "p1|go-api|[\"api\"]\nm1|migrate|[\"migrate\"]\n",
+		"pods.auth-service":   "a1|\na2|\n",
+		"deploy.auth-service": "2 2 2 2 2 2\n",
+		"rs.auth-service":     "as-old||7\nas-new|2|8\n",
+	}
+}
+
+type barrierRun struct {
+	rc             int
+	stdout, stderr string
+	argv           string
+}
+
+func runBarrier(t *testing.T, world map[string]string, env []string, args ...string) barrierRun {
+	t.Helper()
+	dir, bin := t.TempDir(), t.TempDir()
+	for name, text := range world {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(text), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(bin, "kubectl"), []byte(fakeBarrierKubectl), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("bash", append([]string{barrierScript}, args...)...)
+	cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"), "FAKE_DIR="+dir, "RELEASE=a")
+	cmd.Env = append(cmd.Env, env...)
+	var out, errb bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &errb
+	err := cmd.Run()
+	rc := 0
+	if err != nil {
+		if exit, ok := err.(*exec.ExitError); ok {
+			rc = exit.ExitCode()
+		} else {
+			t.Fatalf("run: %v", err)
+		}
+	}
+	argv, _ := os.ReadFile(filepath.Join(dir, "argv"))
+	return barrierRun{rc, out.String(), errb.String(), string(argv)}
+}
+
+func TestBarrierPassesAndPrintsTheTime(t *testing.T) {
+	for _, mode := range []string{"up-go-api", "up-owned", "down-auth"} {
+		r := runBarrier(t, goodBarrierWorld(), nil, mode)
+		if r.rc != 0 || !regexp.MustCompile(`(?m)^barrier_ok mode=`+mode+` time=\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$`).MatchString(r.stdout) {
+			t.Errorf("%s: rc=%d stdout=%q stderr=%q", mode, r.rc, r.stdout, r.stderr)
+		}
+	}
+}
+
+func TestBarrierPlanRunsNothing(t *testing.T) {
+	r := runBarrier(t, goodBarrierWorld(), nil, "up-go-api", "--plan")
+	if r.rc != 0 || r.argv != "" || !strings.Contains(r.stdout, "plan:") {
+		t.Errorf("--plan: rc=%d argv=%q stdout=%q", r.rc, r.argv, r.stdout)
+	}
+}
+
+func TestBarrierRefusesBadUsage(t *testing.T) {
+	if r := runBarrier(t, goodBarrierWorld(), nil); r.rc == 0 {
+		t.Error("no mode passed")
+	}
+	if r := runBarrier(t, goodBarrierWorld(), nil, "sideways"); r.rc == 0 {
+		t.Error("unknown mode passed")
+	}
+	if r := runBarrier(t, goodBarrierWorld(), []string{"RELEASE="}, "up-go-api"); r.rc == 0 {
+		t.Error("empty RELEASE passed")
+	}
+}
+
+func TestBarrierFailsOnEachBrokenState(t *testing.T) {
+	cases := []struct {
+		name   string
+		mode   string
+		mutate func(w map[string]string)
+	}{
+		{"old ReplicaSet still has a pod", "up-go-api", func(w map[string]string) { w["rs.go-api"] = "rs-old|1|4\nrs-new|3|5\n" }},
+		{"old ReplicaSet newer revision number only", "up-go-api", func(w map[string]string) { w["rs.go-api"] = "rs-a|2|9\nrs-b|2|10\n" }},
+		{"one pod lacks AUTH_USERS_OWNED", "up-go-api", func(w map[string]string) { w["pods.go-api"] = "p1||true|true\np2|||true\np3||true|true\n" }},
+		{"one pod has AUTH_USERS_OWNED false", "up-go-api", func(w map[string]string) { w["pods.go-api"] = "p1||true|true\np2||true|true\np3||false|true\n" }},
+		{"the last pod lacks AUTH_PROXY_CREDENTIALS", "up-go-api", func(w map[string]string) { w["pods.go-api"] = "p1||true|true\np2||true|true\np3||true|\n" }},
+		{"a terminating pod", "up-go-api", func(w map[string]string) { w["pods.go-api"] += "p4|2026-10-26T15:00:00Z|true|true\n" }},
+		{"no go-api pod", "up-go-api", func(w map[string]string) { w["pods.go-api"] = "" }},
+		{"deployment mid-roll", "up-go-api", func(w map[string]string) { w["deploy.go-api"] = "3 3 3 2 2 3\n" }},
+		{"observedGeneration behind", "up-go-api", func(w map[string]string) { w["deploy.go-api"] = "4 3 3 3 3 3\n" }},
+		{"no Deployment", "up-go-api", func(w map[string]string) { w["deploy.go-api"] = "" }},
+		{"an admin users Job", "up-go-api", func(w map[string]string) {
+			w["pods.all"] += "j1|operator|[\"admin\",\"users\",\"create\"]\n"
+		}},
+		{"an auth-service pod already owned", "up-owned", func(w map[string]string) { w["pods.auth-service"] = "a1|true\na2|\n" }},
+		{"an owned auth-service pod on the way down", "down-auth", func(w map[string]string) { w["pods.auth-service"] = "a1|true\na2|\n" }},
+		{"old auth-service ReplicaSet alive on the way down", "down-auth", func(w map[string]string) { w["rs.auth-service"] = "as-old|1|7\nas-new|2|8\n" }},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			world := goodBarrierWorld()
+			c.mutate(world)
+			r := runBarrier(t, world, nil, c.mode)
+			if r.rc == 0 || strings.Contains(r.stdout, "barrier_ok") {
+				t.Fatalf("passed: rc=%d stdout=%q stderr=%q", r.rc, r.stdout, r.stderr)
+			}
+		})
+	}
+}
+
+// A kubectl error is never a pass, whichever call it hits.
+func TestBarrierFailsClosedWhenKubectlFails(t *testing.T) {
+	for _, key := range []string{"deploy.go-api", "rs.go-api", "pods.go-api", "pods.all"} {
+		r := runBarrier(t, goodBarrierWorld(), []string{"FAKE_FAIL=" + key}, "up-go-api")
+		if r.rc == 0 || strings.Contains(r.stdout, "barrier_ok") {
+			t.Errorf("kubectl %s failing passed: rc=%d", key, r.rc)
+		}
+	}
+	for _, key := range []string{"deploy.auth-service", "rs.auth-service", "pods.auth-service"} {
+		r := runBarrier(t, goodBarrierWorld(), []string{"FAKE_FAIL=" + key}, "down-auth")
+		if r.rc == 0 || strings.Contains(r.stdout, "barrier_ok") {
+			t.Errorf("kubectl %s failing passed: rc=%d", key, r.rc)
+		}
+	}
+}
+
+// Read-only: every call is `get ... -o jsonpath=...`, never a Secret, never a write, exec or describe.
+func TestBarrierCallsOnlyKubectlGetJSONPath(t *testing.T) {
+	for _, mode := range []string{"up-go-api", "up-owned", "down-auth"} {
+		r := runBarrier(t, goodBarrierWorld(), nil, mode)
+		lines := strings.Split(strings.TrimSpace(r.argv), "\n")
+		if len(lines) < 3 {
+			t.Fatalf("%s: kubectl called %d times", mode, len(lines))
+		}
+		for _, line := range lines {
+			if !regexp.MustCompile(`^-n dev-health get (deploy|rs|pods) -l app\.kubernetes\.io/instance=a\S* -o jsonpath=`).MatchString(line) {
+				t.Errorf("%s: kubectl call outside the read-only shape: %s", mode, line)
+			}
+			if regexp.MustCompile(`\b(secret|secrets|exec|describe|apply|patch|replace|delete|logs|env)\b`).MatchString(strings.SplitN(line, "-o jsonpath=", 2)[0]) {
+				t.Errorf("%s: forbidden word in %s", mode, line)
+			}
+		}
+	}
+}

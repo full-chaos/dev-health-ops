@@ -108,6 +108,9 @@ func TestAuthOrgsOwnedOneKeyAllConsumers(t *testing.T) {
 				if phase != "1" {
 					args = append(append(args, sessionReaders...), sessionSuccessor...)
 				}
+				if phase == "4" {
+					args = append(withSets(args, "authService.usersOwnedStage=owned", "goApi.enabled=true"), authTrusted...)
+				}
 				service, job := renderBackfill(t, args)
 				if err := ownedSwitchesAgree(t, service, job); err != nil {
 					t.Fatal(err)
@@ -332,8 +335,8 @@ func TestAuthBackfillJobLegacyLinkPurgeRendersWhereUsersAreOwned(t *testing.T) {
 	for _, runID := range []string{"r1", "roll-1.a_b", strings.Repeat("a", 63)} {
 		t.Run(runID, func(t *testing.T) {
 			args := withSets(append(append([]string{}, backfillOn...), phase3Secrets...),
-				"authService.backfill.verb=legacy-link-purge", "authService.backfill.runId="+runID, "authService.phase=4")
-			args = append(append(args, sessionReaders...), sessionSuccessor...)
+				"authService.backfill.verb=legacy-link-purge", "authService.backfill.runId="+runID, "authService.phase=4", "authService.usersOwnedStage=owned", "goApi.enabled=true")
+			args = append(append(append(args, sessionReaders...), sessionSuccessor...), authTrusted...)
 			service, job := renderBackfill(t, args)
 			got := jobArgs(t, job)
 			if len(got) < 4 || got[0] != "auth" || got[1] != "legacy-link-purge" || !strings.HasPrefix(got[2], "--batch=") {

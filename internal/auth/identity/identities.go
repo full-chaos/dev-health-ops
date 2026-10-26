@@ -129,9 +129,10 @@ func (s *Store) IdentityBySubject(ctx context.Context, issuer string, provider P
 
 func (s *Store) principalByKey(ctx context.Context, key ExternalKey) (Principal, bool, error) {
 	var p Principal
-	err := s.pool.QueryRow(ctx, `SELECT p.id, p.disabled_at FROM `+s.q+`.external_identities e
+	err := s.pool.QueryRow(ctx, `SELECT p.id, p.disabled_at, `+ServiceProviderSQL("pu")+` FROM `+s.q+`.external_identities e
 JOIN `+s.q+`.principals p ON p.id = e.principal_id
-WHERE e.issuer = $1 AND e.provider = $2 AND e.subject = $3`, key.Issuer, string(key.Provider), key.Subject).Scan(&p.ID, &p.DisabledAt)
+LEFT JOIN public.users pu ON pu.id = p.id
+WHERE e.issuer = $1 AND e.provider = $2 AND e.subject = $3`, key.Issuer, string(key.Provider), key.Subject).Scan(&p.ID, &p.DisabledAt, &p.ServiceProvider)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Principal{}, false, nil
 	}

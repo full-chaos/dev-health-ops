@@ -27,7 +27,7 @@ func (s IdentityStore) IdentityBySubject(ctx context.Context, id Identity, legac
 	if err != nil || !found {
 		return Principal{}, false, LookupError(err)
 	}
-	out := Principal{ID: p.ID, Disabled: p.DisabledAt != nil || !p.IsActive}
+	out := Principal{ID: p.ID, Disabled: p.DisabledAt != nil || !p.IsActive, ServiceProvider: p.ServiceProvider}
 	return out, true, nil
 }
 

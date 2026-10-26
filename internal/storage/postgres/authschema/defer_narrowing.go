@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+
+	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/aclguard"
+	"github.com/jackc/pgx/v5"
 )
 
 // Options.DeferNarrowing is the 4->3 flip-back release's grants pass. The old
@@ -60,7 +63,11 @@ func usersOwnedPublicGrant(g GrantRecord) bool {
 // users-owned public grant, and returns those records with bare table names.
 // lost names public objects "public.<table>" (applyRuntimeGrants). Each
 // statement names its privilege as a keyword of its own format.
-func retainUsersOwnedGrants(ctx context.Context, tx querier, lost []GrantRecord, roleID ValidatedIdentifier) ([]GrantRecord, error) {
+func retainUsersOwnedGrants(ctx context.Context, tx pgx.Tx, lost []GrantRecord, roleID ValidatedIdentifier) ([]GrantRecord, error) {
+	// applyRuntimeGrants already holds the lock in tx; a second take in the same transaction returns at once.
+	if err := aclguard.Lock(ctx, tx); err != nil {
+		return nil, fmt.Errorf("%w: taking the privilege writer lock", ErrMigrationFailed)
+	}
 	var retained []GrantRecord
 	for _, g := range lost {
 		table, ok := strings.CutPrefix(g.Object, publicSchema+".")

@@ -111,6 +111,7 @@ func TestEveryPrivilegeWriterOfTheSharedDatabaseTakesTheLock(t *testing.T) {
 		t.Fatalf("the census scanned %d Go files; it must see the whole module", c.scanned)
 	}
 	want := []string{
+		"internal/storage/postgres/authschema/defer_narrowing.go",
 		"internal/storage/postgres/authschema/grants.go",
 		"internal/storage/river/migrate.go",
 		"internal/storage/roleprovision/roleprovision.go",

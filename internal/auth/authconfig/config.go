@@ -59,6 +59,9 @@ const (
 	EnvMaxBodyBytes           = "AUTH_SERVICE_MAX_BODY_BYTES"
 	EnvRateLimitPerSecond     = "AUTH_SERVICE_RATE_LIMIT_PER_SECOND"
 	EnvRateLimitBurst         = "AUTH_SERVICE_RATE_LIMIT_BURST"
+	EnvPublicMaxInFlight      = "AUTH_SERVICE_PUBLIC_MAX_IN_FLIGHT"
+	EnvPublicRateLimit        = "AUTH_SERVICE_PUBLIC_RATE_LIMIT_PER_SECOND"
+	EnvPublicRateLimitBurst   = "AUTH_SERVICE_PUBLIC_RATE_LIMIT_BURST"
 	EnvDatabaseURI            = "AUTH_DATABASE_URI"
 	EnvDatabaseSchema         = "AUTH_DATABASE_SCHEMA"
 	EnvDatabaseMaxConns       = "AUTH_DATABASE_MAX_CONNS"
@@ -138,6 +141,9 @@ const (
 	defaultMaxBodyBytes           = int64(1 << 20)
 	defaultRateLimitPerSecond     = float64(20)
 	defaultRateLimitBurst         = 40
+	defaultPublicMaxInFlight      = 256
+	defaultPublicRateLimit        = float64(500)
+	defaultPublicRateLimitBurst   = 1000
 	defaultDatabaseMaxConns       = int32(8)
 	defaultDatabaseConnectTimeout = 5 * time.Second
 	// go-api's JWT_ISSUER and JWT_AUDIENCE defaults (internal/platform/config).
@@ -165,6 +171,8 @@ const (
 	maxRateLimitBurst         = 100_000
 	minRateLimitPerSecond     = float64(0.01)
 	maxRateLimitPerSecond     = float64(100_000)
+	minPublicMaxInFlight      = 1
+	maxPublicMaxInFlight      = 100_000
 )
 
 // Config is the fully resolved, validated configuration of one auth-service
@@ -182,6 +190,9 @@ type Config struct {
 	RequestTimeout  time.Duration
 	MaxBodyBytes    int64
 	RateLimit       RateLimit
+	// Public is the admission class of the key and discovery routes: its own
+	// in-flight cap and per-route bucket, apart from the shared ones.
+	Public PublicAdmission
 
 	DatabaseURI secrets.Value
 	// ValkeyURI is AUTH_VALKEY_URI: the shared rate-limit store.
@@ -259,6 +270,14 @@ type SocialClient struct {
 	Secret secrets.Value
 }
 
+// PublicAdmission is the in-flight cap and token-bucket shape of the
+// public-document routes.
+type PublicAdmission struct {
+	MaxInFlight int
+	PerSecond   float64
+	Burst       int
+}
+
 // RateLimit is the token-bucket shape applied per route bucket.
 type RateLimit struct {
 	PerSecond float64
@@ -281,6 +300,9 @@ func (c Config) SafeAttrs() []slog.Attr {
 		slog.Int64("max_body_bytes", c.MaxBodyBytes),
 		slog.Float64("rate_limit_per_second", c.RateLimit.PerSecond),
 		slog.Int("rate_limit_burst", c.RateLimit.Burst),
+		slog.Int("public_max_in_flight", c.Public.MaxInFlight),
+		slog.Float64("public_rate_limit_per_second", c.Public.PerSecond),
+		slog.Int("public_rate_limit_burst", c.Public.Burst),
 		slog.Bool("database_configured", c.DatabaseURI.Configured()),
 		slog.Bool("valkey_configured", c.ValkeyURI.Configured()),
 		slog.String("database_schema", c.DatabaseSchema),
@@ -376,6 +398,25 @@ func Load(spec Spec) (Config, error) {
 		return Config{}, err
 	}
 	cfg.RateLimit.Burst = int(burst)
+	publicInFlight, err := integer(
+		lookup, EnvPublicMaxInFlight, int64(defaultPublicMaxInFlight), minPublicMaxInFlight, maxPublicMaxInFlight,
+	)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.Public.MaxInFlight = int(publicInFlight)
+	if cfg.Public.PerSecond, err = float(
+		lookup, EnvPublicRateLimit, defaultPublicRateLimit, minRateLimitPerSecond, maxRateLimitPerSecond,
+	); err != nil {
+		return Config{}, err
+	}
+	publicBurst, err := integer(
+		lookup, EnvPublicRateLimitBurst, int64(defaultPublicRateLimitBurst), minRateLimitBurst, maxRateLimitBurst,
+	)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.Public.Burst = int(publicBurst)
 
 	// secrets.Resolve is the platform's direct-value/_FILE mutual exclusion
 	// (TRD §6, ACP-ADR-02 §4). It is reused rather than reimplemented so this

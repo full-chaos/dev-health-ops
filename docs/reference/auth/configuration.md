@@ -47,6 +47,9 @@ and `/readyz` fails closed, naming the check. See the
 | `--max-body-bytes` | `AUTH_SERVICE_MAX_BODY_BYTES` | `1048576` | 1024 to 33554432. |
 | `--rate-limit` | `AUTH_SERVICE_RATE_LIMIT_PER_SECOND` | `20` | 0.01 to 100000, per route bucket. |
 | `--rate-limit-burst` | `AUTH_SERVICE_RATE_LIMIT_BURST` | `40` | 1 to 100000, per route bucket. |
+| `--public-max-in-flight` | `AUTH_SERVICE_PUBLIC_MAX_IN_FLIGHT` | `256` | 1 to 100000. In-flight cap of the key and discovery routes, apart from the shared cap of 64. |
+| `--public-rate-limit` | `AUTH_SERVICE_PUBLIC_RATE_LIMIT_PER_SECOND` | `500` | 0.01 to 100000, per key or discovery route bucket. |
+| `--public-rate-limit-burst` | `AUTH_SERVICE_PUBLIC_RATE_LIMIT_BURST` | `1000` | 1 to 100000, per key or discovery route bucket. |
 | (none, secret) | `AUTH_DATABASE_URI` or `AUTH_DATABASE_URI_FILE` | required | The **runtime** login's DSN. Exactly one of the two. |
 | `--database-schema` | `AUTH_DATABASE_SCHEMA` | `auth` | Lowercase unquoted identifier `[a-z][a-z0-9_]*`, at most 63 characters. |
 | `--database-max-conns` | `AUTH_DATABASE_MAX_CONNS` | `8` | 1 to 256, per replica. The chart sets it from `authService.database.maxConns` (1 to 32). |

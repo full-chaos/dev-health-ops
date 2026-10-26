@@ -660,15 +660,23 @@ func writeArgumentError(w io.Writer, err error) {
 // builds its server from it with a probe route, so the test exercises the
 // configuration the service really runs, not a hand-assembled router.
 func apiServerOptions(cfg authconfig.Config, logger *slog.Logger, routes []httpapi.Route) httpapi.ServerOptions {
+	routes = append([]httpapi.Route(nil), routes...)
+	for i := range routes {
+		if routes[i].PublicClass && routes[i].RateLimitPerSecond <= 0 {
+			routes[i].RateLimitPerSecond = cfg.Public.PerSecond
+			routes[i].RateLimitBurst = cfg.Public.Burst
+		}
+	}
 	return httpapi.ServerOptions{
-		Address:        cfg.APIAddress,
-		Logger:         logger,
-		Routes:         authapi.MarkResponseModels(routes),
-		RequestTimeout: cfg.RequestTimeout,
-		MaxBodyBytes:   cfg.MaxBodyBytes,
-		RateLimit:      cfg.RateLimit.PerSecond,
-		RateLimitBurst: cfg.RateLimit.Burst,
-		MaxInFlight:    maxInFlightRequests,
+		PublicMaxInFlight: cfg.Public.MaxInFlight,
+		Address:           cfg.APIAddress,
+		Logger:            logger,
+		Routes:            authapi.MarkResponseModels(routes),
+		RequestTimeout:    cfg.RequestTimeout,
+		MaxBodyBytes:      cfg.MaxBodyBytes,
+		RateLimit:         cfg.RateLimit.PerSecond,
+		RateLimitBurst:    cfg.RateLimit.Burst,
+		MaxInFlight:       maxInFlightRequests,
 		// The server-minted request id (internal/auth/requestid) wraps the
 		// whole mux, so the transport's own refusals (404, 405, 413, 429)
 		// carry X-Auth-Request-ID as route answers do. The client address

@@ -57,6 +57,8 @@ func TestEveryStatusTheStackAnswersIsAnOpenAPIResponse(t *testing.T) {
 		authconfig.EnvMaxBodyBytes:           "1024",
 		authconfig.EnvRateLimitPerSecond:     "0.01",
 		authconfig.EnvRateLimitBurst:         "4",
+		authconfig.EnvPublicRateLimit:        "0.01",
+		authconfig.EnvPublicRateLimitBurst:   "4",
 		authconfig.EnvAPIAddress:             "127.0.0.1:0",
 		authconfig.EnvOperatorAddress:        "127.0.0.1:1",
 		authconfig.EnvSocialLinkRoutes:       "true",

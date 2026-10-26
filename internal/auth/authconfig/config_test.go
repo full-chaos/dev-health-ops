@@ -326,6 +326,9 @@ func TestEveryDeclaredOptionResolves(t *testing.T) {
 		EnvMaxBodyBytes:           "4096",
 		EnvRateLimitPerSecond:     "3.5",
 		EnvRateLimitBurst:         "9",
+		EnvPublicMaxInFlight:      "17",
+		EnvPublicRateLimit:        "7.5",
+		EnvPublicRateLimitBurst:   "19",
 		EnvDatabaseSchema:         "authtest",
 		EnvDatabaseMaxConns:       "11",
 		EnvDatabaseConnectTimeout: "3s",
@@ -353,6 +356,9 @@ func TestEveryDeclaredOptionResolves(t *testing.T) {
 		EnvMaxBodyBytes:           func(c Config) string { return itoa(c.MaxBodyBytes) },
 		EnvRateLimitPerSecond:     func(c Config) string { return ftoa(c.RateLimit.PerSecond) },
 		EnvRateLimitBurst:         func(c Config) string { return itoa(int64(c.RateLimit.Burst)) },
+		EnvPublicMaxInFlight:      func(c Config) string { return itoa(int64(c.Public.MaxInFlight)) },
+		EnvPublicRateLimit:        func(c Config) string { return ftoa(c.Public.PerSecond) },
+		EnvPublicRateLimitBurst:   func(c Config) string { return itoa(int64(c.Public.Burst)) },
 		EnvDatabaseSchema:         func(c Config) string { return c.DatabaseSchema },
 		EnvDatabaseMaxConns:       func(c Config) string { return itoa(int64(c.DatabaseMaxConns)) },
 		EnvDatabaseConnectTimeout: func(c Config) string { return c.DatabaseConnectTimeout.String() },
@@ -535,5 +541,29 @@ func TestOrgsOwnedDoesNotMountAnyRoute(t *testing.T) {
 	}
 	if cfg.LimitedRoutesMounted() {
 		t.Fatal("AUTH_ORGS_OWNED mounted a rate-limited route")
+	}
+}
+
+func TestPublicAdmissionDefaultsAndRanges(t *testing.T) {
+	cfg, err := Load(Spec{LookupEnv: lookupFrom(baseEnv())})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := PublicAdmission{MaxInFlight: defaultPublicMaxInFlight, PerSecond: defaultPublicRateLimit, Burst: defaultPublicRateLimitBurst}
+	if cfg.Public != want {
+		t.Errorf("Public = %+v, want %+v", cfg.Public, want)
+	}
+	for env, bad := range map[string][]string{
+		EnvPublicMaxInFlight:    {"0", "100001", "x"},
+		EnvPublicRateLimit:      {"0", "100001", "NaN"},
+		EnvPublicRateLimitBurst: {"0", "100001", "x"},
+	} {
+		for _, value := range bad {
+			e := baseEnv()
+			e[env] = value
+			if _, err := Load(Spec{LookupEnv: lookupFrom(e)}); err == nil {
+				t.Errorf("%s=%s accepted, want a range refusal", env, value)
+			}
+		}
 	}
 }

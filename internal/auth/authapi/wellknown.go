@@ -76,15 +76,15 @@ func WellKnownRoutes(deps WellKnownDeps) []httpapi.Route {
 		deps.Logger = slog.Default()
 	}
 	routes := []httpapi.Route{
-		{Method: http.MethodGet, Pattern: PatternJWKS, Handler: http.HandlerFunc(deps.serveJWKS)},
-		{Method: http.MethodHead, Pattern: PatternJWKS, Handler: http.HandlerFunc(deps.serveJWKS)},
+		{Method: http.MethodGet, Pattern: PatternJWKS, Handler: http.HandlerFunc(deps.serveJWKS), PublicClass: true},
+		{Method: http.MethodHead, Pattern: PatternJWKS, Handler: http.HandlerFunc(deps.serveJWKS), PublicClass: true},
 	}
 	if deps.IssuerURL == "" {
 		return routes
 	}
 	return append(routes,
-		httpapi.Route{Method: http.MethodGet, Pattern: PatternDiscovery, Handler: http.HandlerFunc(deps.serveDiscovery)},
-		httpapi.Route{Method: http.MethodHead, Pattern: PatternDiscovery, Handler: http.HandlerFunc(deps.serveDiscovery)},
+		httpapi.Route{Method: http.MethodGet, Pattern: PatternDiscovery, Handler: http.HandlerFunc(deps.serveDiscovery), PublicClass: true},
+		httpapi.Route{Method: http.MethodHead, Pattern: PatternDiscovery, Handler: http.HandlerFunc(deps.serveDiscovery), PublicClass: true},
 	)
 }
 

@@ -3,15 +3,13 @@
 package docsbuild
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
-
-	"github.com/full-chaos/dev-health-ops/internal/cigates/docsprepare"
-	"github.com/full-chaos/dev-health-ops/internal/cigates/docstools"
 )
 
 const (
@@ -24,38 +22,82 @@ const (
 
 var requiredAssets = []string{"index.html", "404.html", "_headers", "_redirects", "robots.txt", "cloudflare-build-manifest.json"}
 
-// Deps are the side effects of a build: the cigate verbs, the prepare step, the MkDocs call and the revision lookup.
+// Deps are the side effects of a build: the cigate verbs, the prepare step, the MkDocs call and the revision lookup. Every
+// one runs in root, the repository root found from Start, so the build does not depend on the caller's directory.
 type Deps struct {
-	Docs     func(args []string) int
-	Prepare  func(args []string) int
-	MkDocs   func() error
-	Revision func() string
+	Start    string
+	Docs     func(root string, args []string) int
+	Prepare  func(root string, args []string) int
+	MkDocs   func(root string) (interpreter string, err error)
+	Revision func(root string) string
 }
 
 // OSDeps runs the verbs in this process and MkDocs as a tool call, `python3 -m mkdocs build --strict --config-file
 // mkdocs.yml`, the command the former script ran with its own interpreter. DOCS_PYTHON names another interpreter.
 func OSDeps(stdout, stderr io.Writer) Deps {
+	start, _ := os.Getwd()
+	// The verbs read and write paths relative to their working directory, and a process-wide chdir would race every other
+	// verb in this process, so each runs as this same binary with its own working directory.
+	self := func(root string, args []string) int {
+		exe, err := os.Executable()
+		if err != nil {
+			fmt.Fprintf(stderr, "ERROR: %s\n", err)
+			return 1
+		}
+		cmd := exec.Command(exe, args...)
+		cmd.Dir, cmd.Stdout, cmd.Stderr = root, stdout, stderr
+		if err := cmd.Run(); err != nil {
+			var exit *exec.ExitError
+			if errors.As(err, &exit) {
+				return exit.ExitCode()
+			}
+			fmt.Fprintf(stderr, "ERROR: %s\n", err)
+			return 1
+		}
+		return 0
+	}
 	return Deps{
-		Docs:    func(args []string) int { return docstools.Run(args, stdout, stderr) },
-		Prepare: func(args []string) int { return docsprepare.Run(args, stdout, stderr) },
-		MkDocs: func() error {
+		Start:   start,
+		Docs:    func(root string, args []string) int { return self(root, append([]string{"docs"}, args...)) },
+		Prepare: func(root string, args []string) int { return self(root, append([]string{"docs-prepare"}, args...)) },
+		MkDocs: func(root string) (string, error) {
 			python := os.Getenv("DOCS_PYTHON")
 			if python == "" {
 				python = "python3"
 			}
 			cmd := exec.Command(python, "-m", "mkdocs", "build", "--strict", "--config-file", "mkdocs.yml")
-			cmd.Stdout, cmd.Stderr = stdout, stderr
-			return cmd.Run()
+			cmd.Dir, cmd.Stdout, cmd.Stderr = root, stdout, stderr
+			return python, cmd.Run()
 		},
 		Revision: sourceRevision,
 	}
 }
 
-func sourceRevision() string {
+// findRoot returns the nearest directory at or above start that holds go.mod and mkdocs.yml, the files the docs build reads
+// from the repository root.
+func findRoot(start string) (string, error) {
+	for dir := start; ; dir = filepath.Dir(dir) {
+		if isFile(filepath.Join(dir, "go.mod")) && isFile(filepath.Join(dir, "mkdocs.yml")) {
+			return dir, nil
+		}
+		if filepath.Dir(dir) == dir {
+			return "", fmt.Errorf("no repository root (go.mod and mkdocs.yml) at or above %s", start)
+		}
+	}
+}
+
+func isFile(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.Mode().IsRegular()
+}
+
+func sourceRevision(root string) string {
 	if sha := strings.TrimSpace(os.Getenv("GITHUB_SHA")); sha != "" {
 		return sha
 	}
-	out, err := exec.Command("git", "rev-parse", "HEAD").Output()
+	cmd := exec.Command("git", "rev-parse", "HEAD")
+	cmd.Dir = root
+	out, err := cmd.Output()
 	if err != nil {
 		return "unknown"
 	}
@@ -73,15 +115,20 @@ func run(args []string, deps Deps, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "%s\ndocs-build: error: %s\n", usage, problem)
 		return 2
 	}
+	root, err := findRoot(deps.Start)
+	if err != nil {
+		fmt.Fprintf(stderr, "ERROR: %s\n", err)
+		return 1
+	}
 	// Production is never prepared without the full publication gate.
 	fullCheck = fullCheck || mode == "production"
-	if err := os.MkdirAll(".build", 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(root, ".build"), 0o755); err != nil {
 		fmt.Fprintf(stderr, "ERROR: %s\n", err)
 		return 1
 	}
 	docs := func(args ...string) bool {
 		fmt.Fprintf(stdout, "+ cigate docs %s\n", strings.Join(args, " "))
-		return deps.Docs(args) == 0
+		return deps.Docs(root, args) == 0
 	}
 	fail := func(step string) int {
 		fmt.Fprintf(stderr, "ERROR: documentation build step failed: %s\nInstall the documentation environment with: python -m pip install -r requirements-docs.txt\n", step)
@@ -90,8 +137,9 @@ func run(args []string, deps Deps, stdout, stderr io.Writer) int {
 	if fullCheck && !docs("validate-publication") {
 		return fail("validate-publication")
 	}
-	fmt.Fprintln(stdout, "+ python3 -m mkdocs build --strict --config-file mkdocs.yml")
-	if err := deps.MkDocs(); err != nil {
+	python, err := deps.MkDocs(root)
+	fmt.Fprintf(stdout, "+ %s -m mkdocs build --strict --config-file mkdocs.yml\n", python)
+	if err != nil {
 		return fail("mkdocs build: " + err.Error())
 	}
 	if fullCheck {
@@ -101,12 +149,12 @@ func run(args []string, deps Deps, stdout, stderr io.Writer) int {
 			}
 		}
 	}
-	prepare := []string{"--source", siteDir, "--output", assetDir, "--mode", mode, "--redirects", redirects, "--source-revision", deps.Revision()}
+	prepare := []string{"--source", siteDir, "--output", assetDir, "--mode", mode, "--redirects", redirects, "--source-revision", deps.Revision(root)}
 	fmt.Fprintf(stdout, "+ cigate docs-prepare %s\n", strings.Join(prepare, " "))
-	if deps.Prepare(prepare) != 0 {
+	if deps.Prepare(root, prepare) != 0 {
 		return fail("docs-prepare")
 	}
-	if err := validateAssetTree(); err != nil {
+	if err := validateAssetTree(root); err != nil {
 		fmt.Fprintf(stderr, "ERROR: %s\n", err)
 		return 1
 	}
@@ -124,10 +172,10 @@ func fullCheckSteps() [][]string {
 	}
 }
 
-func validateAssetTree() error {
+func validateAssetTree(root string) error {
 	var missing []string
 	for _, name := range requiredAssets {
-		if info, err := os.Stat(filepath.Join(assetDir, name)); err != nil || !info.Mode().IsRegular() {
+		if info, err := os.Stat(filepath.Join(root, assetDir, name)); err != nil || !info.Mode().IsRegular() {
 			missing = append(missing, filepath.Join(assetDir, name))
 		}
 	}

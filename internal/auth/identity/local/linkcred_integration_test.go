@@ -355,7 +355,8 @@ func TestRaceResetReplay(t *testing.T) {
 	ctx := context.Background()
 	env, links := linkEnv(t, ctx)
 	p := env.principal(t, ctx)
-	accounts := &liveAccounts{users: map[string]*User{}, byID: map[uuid.UUID]*User{}, links: links}
+	provider := "local"
+	accounts := &liveAccounts{users: map[string]*User{}, byID: map[uuid.UUID]*User{p: {ID: p, IsActive: true, AuthProvider: &provider}}, links: links}
 	rec := &flowRecorder{}
 	sessions := &flowSessions{rec: rec}
 	f, err := NewFlows(FlowsConfig{Accounts: accounts, Links: links, Sessions: sessions, Mail: &liveMail{}, Locker: links, UsersOwnedByAuth: true})

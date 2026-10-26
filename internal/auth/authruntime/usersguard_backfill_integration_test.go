@@ -15,15 +15,16 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/auth/usersbackfill"
+	"github.com/full-chaos/dev-health-ops/internal/edgetokenmint"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 )
 
 // TestUsersOwnedGuardAndBackfillAgreeOnAServicePrincipalInLivePostgres runs the real users backfill and then the
-// guard, both as the auth runtime role: local + github + the service placeholder is ready and the backfill report
-// still lists the placeholder as not carried; a saml user without an identity is refused; a service row with a
-// password hash is refused.
+// guard, both as the auth runtime role: local + github + the two proof placeholders is ready and the backfill report
+// still lists them as not carried; a same-shaped service row under another id, a saml user without an identity, a
+// proof principal with a password and a service row with a password hash are each refused.
 func TestUsersOwnedGuardAndBackfillAgreeOnAServicePrincipalInLivePostgres(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
@@ -73,7 +74,7 @@ func TestUsersOwnedGuardAndBackfillAgreeOnAServicePrincipalInLivePostgres(t *tes
 		t.Fatal(err)
 	}
 
-	user := func(provider string, hash, subject *string) {
+	user := func(provider string, hash, subject *string) uuid.UUID {
 		t.Helper()
 		id := uuid.New()
 		if _, err := admin.Exec(ctx, `INSERT INTO public.users
@@ -81,6 +82,7 @@ func TestUsersOwnedGuardAndBackfillAgreeOnAServicePrincipalInLivePostgres(t *tes
 VALUES ($1, $2, $3, $4, $5, true, true, false, 0, now(), now())`, id, id.String()+"@example.com", hash, provider, subject); err != nil {
 			t.Fatalf("public user %s: %v", provider, err)
 		}
+		return id
 	}
 	backfill := func() usersbackfill.Report {
 		t.Helper()
@@ -106,7 +108,27 @@ VALUES ($1, $2, $3, $4, $5, true, true, false, 0, now(), now())`, id, id.String(
 			t.Fatalf("expected a refusal naming %q, got %v", want, err)
 		}
 	}
+	link := func(id uuid.UUID) {
+		t.Helper()
+		key := identity.ExternalKey{Issuer: "https://github.com", Provider: identity.ProviderGitHub, Subject: id.String()}
+		if _, err := store.LinkIdentity(ctx, key, id, identity.Actor{}); err != nil {
+			t.Fatalf("identity: %v", err)
+		}
+	}
+	const refused = "provider users without an external identity=1"
 
+	// The baseline holds the go-api-prove placeholder; add the admin proof placeholder too.
+	prove, admin2 := edgetokenmint.ProvePrincipalID, edgetokenmint.AdminProofPrincipalID
+	var baseline int
+	if err := admin.QueryRow(ctx, `SELECT count(*) FROM public.users WHERE id = $1 AND auth_provider = 'service' AND password_hash IS NULL AND auth_provider_id IS NULL`, prove).Scan(&baseline); err != nil || baseline != 1 {
+		t.Fatalf("the baseline go-api-prove placeholder row is missing (%d, %v)", baseline, err)
+	}
+	if _, err := admin.Exec(ctx, `INSERT INTO public.users
+	(id, email, password_hash, auth_provider, auth_provider_id, is_active, is_verified, is_superuser, token_version, created_at, updated_at)
+VALUES ($1, 'admin-proof@service.dev-health.invalid', NULL, 'service', NULL, true, false, false, 0, now(), now())
+ON CONFLICT (id) DO NOTHING`, admin2); err != nil {
+		t.Fatalf("admin proof placeholder: %v", err)
+	}
 	hash, err := bcrypt.GenerateFromPassword([]byte("guard-backfill-local"), bcrypt.MinCost)
 	if err != nil {
 		t.Fatal(err)
@@ -114,38 +136,51 @@ VALUES ($1, $2, $3, $4, $5, true, true, false, 0, now(), now())`, id, id.String(
 	local, subject := string(hash), "910001"
 	user("local", &local, nil)
 	user("github", nil, &subject)
-	user("service", nil, nil)
 
 	var placeholders, uncarried int
 	if err := admin.QueryRow(ctx, `SELECT
-  count(*) FILTER (WHERE auth_provider = 'service' AND password_hash IS NULL AND auth_provider_id IS NULL),
+  count(*) FILTER (WHERE id IN ($1::uuid, $2::uuid) AND auth_provider = 'service' AND password_hash IS NULL AND auth_provider_id IS NULL),
   count(*) FILTER (WHERE auth_provider IS NOT NULL AND auth_provider NOT IN ('', 'local', 'github', 'gitlab', 'google'))
-FROM public.users`).Scan(&placeholders, &uncarried); err != nil {
+FROM public.users`, prove, admin2).Scan(&placeholders, &uncarried); err != nil {
 		t.Fatal(err)
 	}
-	if placeholders < 1 || uncarried != placeholders {
-		t.Fatalf("start state: %d service placeholders, %d rows of a provider the backfill cannot carry; want only placeholders", placeholders, uncarried)
+	if placeholders != 2 || uncarried != placeholders {
+		t.Fatalf("start state: %d proof placeholders, %d rows of a provider the backfill cannot carry; want the 2 placeholders only", placeholders, uncarried)
 	}
 	rep := backfill()
 	if rep.IdentityNotCarry != placeholders || rep.IdentityLinked != 1 {
-		t.Fatalf("the report must list every service placeholder as not carried (%d) and link the github identity: %v", placeholders, rep.Lines())
+		t.Fatalf("the report must list both proof placeholders as not carried (%d) and link the github identity: %v", placeholders, rep.Lines())
 	}
 	check("")
 
-	user("saml", nil, nil)
+	// The same shape under any other id is an ordinary row of a provider without an identity: refused.
+	sameShape := user("service", nil, nil)
+	if rep := backfill(); rep.IdentityNotCarry != placeholders+1 {
+		t.Fatalf("the report must list the same-shaped row as not carried too: %v", rep.Lines())
+	}
+	check(refused)
+	link(sameShape)
+	check("")
+
+	saml := user("saml", nil, nil)
 	backfill()
-	check("provider users without an external identity=1")
-	var samlID uuid.UUID
-	if err := admin.QueryRow(ctx, `SELECT id FROM public.users WHERE auth_provider = 'saml'`).Scan(&samlID); err != nil {
+	check(refused)
+	link(saml)
+	check("")
+
+	// A proof principal with a password is not a placeholder: refused until the password is gone again.
+	if _, err := admin.Exec(ctx, `UPDATE public.users SET password_hash = $2 WHERE id = $1`, admin2, local); err != nil {
 		t.Fatal(err)
 	}
-	key := identity.ExternalKey{Issuer: "https://github.com", Provider: identity.ProviderGitHub, Subject: samlID.String()}
-	if _, err := store.LinkIdentity(ctx, key, samlID, identity.Actor{}); err != nil {
-		t.Fatalf("identity: %v", err)
+	backfill()
+	check(refused)
+	if _, err := admin.Exec(ctx, `UPDATE public.users SET password_hash = NULL WHERE id = $1`, admin2); err != nil {
+		t.Fatal(err)
 	}
+	backfill()
 	check("")
 
 	user("service", &local, nil)
 	backfill()
-	check("provider users without an external identity=1")
+	check(refused)
 }

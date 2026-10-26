@@ -243,7 +243,7 @@ func mapIdentity(row Row) (key *identity.ExternalKey, class string, notCarried b
 // IsPlaceholder is a non-interactive service placeholder row: the one definition the users-owned guard uses to
 // leave it out of its identity count (identity.IsServicePlaceholder). It is still reported as not carried.
 func IsPlaceholder(row Row) bool {
-	return identity.IsServicePlaceholder(row.AuthProvider, row.PasswordHash, row.AuthProviderID)
+	return identity.IsServicePlaceholder(row.ID, row.AuthProvider, row.PasswordHash, row.AuthProviderID)
 }
 
 func isBcrypt(hash string) bool {

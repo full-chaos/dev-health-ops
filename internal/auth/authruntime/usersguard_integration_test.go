@@ -141,7 +141,7 @@ VALUES ($1, $2, NULL, $3, true, true, false, 0, now(), now())`, id, id.String()+
 		if _, err := admin.Exec(ctx, `INSERT INTO auth.users (principal_id, email, email_lower) VALUES ($1, $2, lower($2))`, r.id, r.email); err != nil {
 			t.Fatalf("mirror user: %v", err)
 		}
-		if r.provider != "" && r.provider != "local" && !identity.IsServicePlaceholder(&r.provider, r.hash, r.providerID) {
+		if r.provider != "" && r.provider != "local" && !identity.IsServicePlaceholder(r.id, &r.provider, r.hash, r.providerID) {
 			identityOf(r.id)
 		}
 	}
@@ -171,8 +171,9 @@ VALUES ($1, $2, NULL, $3, true, true, false, 0, now(), now())`, id, id.String()+
 	identityOf(social)
 	check()
 
-	// The service placeholder (the baseline's go-api-prove row is one) needs no identity; every other row of that
-	// provider, and every other uncarried provider, still does. The SQL agrees with identity.IsServicePlaceholder.
+	// Only the fixed proof principals (the baseline's go-api-prove row is one) are placeholders that need no identity;
+	// these rows have other ids, so each one, a same-shaped service row included, still needs an identity. The SQL
+	// agrees with identity.IsServicePlaceholder.
 	s := func(v string) *string { return &v }
 	cases := []struct {
 		name               string
@@ -193,7 +194,7 @@ VALUES ($1, $2, $3, $4, $5, true, true, false, 0, now(), now())`, id, id.String(
 			t.Fatalf("%s: %v", c.name, err)
 		}
 		authUser(id)
-		if identity.IsServicePlaceholder(c.provider, c.hash, c.id) {
+		if identity.IsServicePlaceholder(id, c.provider, c.hash, c.id) {
 			check()
 		} else {
 			check("external identity=1")

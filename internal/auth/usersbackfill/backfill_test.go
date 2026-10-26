@@ -13,6 +13,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/auth/policycatalog"
+	"github.com/full-chaos/dev-health-ops/internal/edgetokenmint"
 )
 
 func str(s string) *string { return &s }
@@ -239,20 +240,22 @@ func TestPlatformAdminRoleNameIsTheCatalogName(t *testing.T) {
 
 func TestPlaceholderIsTheSharedDefinitionAndStaysNotCarried(t *testing.T) {
 	s := func(v string) *string { return &v }
+	prove := uuid.MustParse(edgetokenmint.ProvePrincipalID)
 	for name, c := range map[string]struct {
 		row  Row
 		want bool
 	}{
-		"service, no credential":       {Row{AuthProvider: s("service")}, true},
-		"service with a password hash": {Row{AuthProvider: s("service"), PasswordHash: s("$2b$12$x")}, false},
-		"service with a provider id":   {Row{AuthProvider: s("service"), AuthProviderID: s("sub")}, false},
-		"saml, no credential":          {Row{AuthProvider: s("saml")}, false},
-		"local":                        {Row{AuthProvider: s("local")}, false},
+		"proof principal, service, no credential": {Row{ID: prove, AuthProvider: s("service")}, true},
+		"another id, same shape":                  {Row{ID: uuid.New(), AuthProvider: s("service")}, false},
+		"service with a password hash":            {Row{ID: prove, AuthProvider: s("service"), PasswordHash: s("$2b$12$x")}, false},
+		"service with a provider id":              {Row{ID: prove, AuthProvider: s("service"), AuthProviderID: s("sub")}, false},
+		"saml, no credential":                     {Row{ID: prove, AuthProvider: s("saml")}, false},
+		"local":                                   {Row{ID: prove, AuthProvider: s("local")}, false},
 	} {
 		if got := IsPlaceholder(c.row); got != c.want {
 			t.Errorf("%s: IsPlaceholder = %v, want %v", name, got, c.want)
 		}
-		if got := IsPlaceholder(c.row); got != identity.IsServicePlaceholder(c.row.AuthProvider, c.row.PasswordHash, c.row.AuthProviderID) {
+		if got := IsPlaceholder(c.row); got != identity.IsServicePlaceholder(c.row.ID, c.row.AuthProvider, c.row.PasswordHash, c.row.AuthProviderID) {
 			t.Errorf("%s: IsPlaceholder diverges from identity.IsServicePlaceholder", name)
 		}
 		if c.row.AuthProvider != nil && *c.row.AuthProvider != "local" {

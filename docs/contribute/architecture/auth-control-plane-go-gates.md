@@ -71,7 +71,10 @@ pins the names, the fuzz matrix against the registry and the fan-in.
 
 These live in `go.yml` and `docker-images.yml`, not the auth workflow:
 
-- `go-container-security` builds `auth-service` and `auth-migrate`, generates an
+- `go-container-build` builds every Go image once per platform. Smoke, the scans and the
+  Compose proofs load that build and fail unless each image id equals the one the build
+  job reported.
+- `go-container-security` scans `auth-service` and `auth-migrate` from that build: it generates an
   SBOM and scans for critical vulnerabilities (Trivy).
 - `go-container-smoke` runs both images read-only and non-root: the service must
   be live and not ready without its database and key, and `auth-migrate` must

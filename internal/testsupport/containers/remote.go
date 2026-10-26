@@ -209,8 +209,13 @@ func postgresScratchDDL(database string) (createStatement string, dropStatement 
 // identifiers with backticks and, like PostgreSQL, cannot parameterise one in
 // DDL. assertSafeIdentifier at the call site is what makes this safe -- its
 // pattern excludes the backtick entirely.
+//
+// SYNC: an Atomic database drop otherwise only detaches its tables and removes
+// their data after database_atomic_delay_before_drop_table_sec (480 s by
+// default), so on a shared server the dropped tables' data and parts stay
+// behind under the following tests. SYNC removes them before Close returns.
 func clickHouseScratchDDL(database string) (createStatement string, dropStatement string) {
-	return "CREATE DATABASE `" + database + "`", "DROP DATABASE IF EXISTS `" + database + "`"
+	return "CREATE DATABASE `" + database + "`", "DROP DATABASE IF EXISTS `" + database + "` SYNC"
 }
 
 // A scratch database is created on one connection and dropped on a later,

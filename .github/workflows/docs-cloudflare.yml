@@ -1,16 +1,8 @@
 name: Documentation Cloudflare delivery
 
+# A pull request gets its preview assets from docs-guards.yml (job docs-preview), which reuses the site Docs Guards
+# validated for the same revision. This workflow is the manual build and the production smoke test.
 on:
-  pull_request:
-    paths:
-      - 'docs/**'
-      - 'mkdocs.yml'
-      - 'requirements-docs.txt'
-      - 'Makefile'
-      - 'wrangler.jsonc'
-      - 'scripts/build_docs_cloudflare.py'
-      - 'docs-data/**'
-      - '.github/workflows/docs-cloudflare.yml'
   workflow_dispatch:
     inputs:
       action:
@@ -39,7 +31,7 @@ permissions:
 
 jobs:
   preview-or-build:
-    if: github.event_name == 'pull_request' || inputs.action == 'build'
+    if: inputs.action == 'build'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -62,8 +54,12 @@ jobs:
         run: |
           mkdir -p .build
           set -o pipefail
-          python scripts/build_docs_cloudflare.py --mode preview --full-check \
+          go run -trimpath -mod=readonly ./cmd/cigate docs-build pre --mode preview --full-check \
             2>&1 | tee .build/docs-cloudflare-build.log
+          python -m mkdocs build --strict --config-file mkdocs.yml \
+            2>&1 | tee -a .build/docs-cloudflare-build.log
+          go run -trimpath -mod=readonly ./cmd/cigate docs-build post --mode preview --full-check \
+            2>&1 | tee -a .build/docs-cloudflare-build.log
 
       - name: Upload build evidence and diagnostics
         if: always()

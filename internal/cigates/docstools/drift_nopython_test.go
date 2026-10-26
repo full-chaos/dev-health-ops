@@ -59,7 +59,7 @@ func TestCandidateFactsGuardIsTheGoVerb(t *testing.T) {
 		".github/workflows/docs-guards.yml",
 		".github/workflows/docs-cloudflare.yml",
 		".github/workflows/docs-drift.yml",
-		"scripts/build_docs_cloudflare.py",
+		"internal/cigates/docsbuild/docsbuild.go",
 		"Makefile",
 	} {
 		raw, err := os.ReadFile(filepath.Join(root, rel))
@@ -70,7 +70,7 @@ func TestCandidateFactsGuardIsTheGoVerb(t *testing.T) {
 			t.Errorf("%s still names scripts/check_docs_candidate_facts.py; the guard is `cigate docs check-candidate-facts`", rel)
 		}
 	}
-	for _, rel := range []string{".github/workflows/docs-drift.yml", "scripts/build_docs_cloudflare.py"} {
+	for _, rel := range []string{".github/workflows/docs-drift.yml", "internal/cigates/docsbuild/docsbuild.go"} {
 		raw, err := os.ReadFile(filepath.Join(root, rel))
 		if err != nil {
 			t.Fatal(err)

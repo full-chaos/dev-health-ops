@@ -80,22 +80,22 @@ type IO struct {
 const maxInFlightRequests = 64
 
 // sessionRoutes is the service's mounted route set when cfg.Session is
-// enabled, and nothing otherwise: the session routes (CHAOS-10228) and
-// go-api's compatibility refresh, logout and social-login, and login when the
-// lockout key is set too. Without the session
-// secrets the service stays as CHAOS-4881 built it, dormant: every path
-// receives the 404 envelope and no token is issued. No deployed stack sets
-// those secrets yet, and go-api routes to these only behind its AUTH_PROXY_*
-// flags, all off; prod enablement is a separate decision (CHAOS-3275 D1).
+// enabled: the session routes and go-api's compatibility refresh, logout and
+// social-login, and login when the lockout key is set too (until then, login
+// answers a 503 stub). Without the session secrets no token is issued: refresh
+// and logout answer the retryable 503 stub, so a go-api that proxies them never
+// meets a 404, and every other path receives the 404 envelope, except the
+// well-known routes mounted when a token issuer URL is set and the workload
+// exchange when it is on.
 func sessionRoutes(
 	cfg authconfig.Config, logger *slog.Logger, pool *pgxpool.Pool, schema authschema.ValidatedIdentifier,
 	accessSigner authapi.AccessSigner, limits *authapi.Limits,
 ) ([]httpapi.Route, error) {
 	if !cfg.Session.Enabled {
-		return nil, nil
+		return authapi.SessionsNotEnabledRoutes(), nil
 	}
 	sessions, err := session.New(session.Config{
-		Pool: pool, Schema: schema, Logger: logger,
+		Pool: pool, Schema: schema, Logger: logger, UsersOwned: cfg.UsersOwned,
 		SuccessorKey: contracts.NewSecretString(cfg.Session.SuccessorKey.Reveal()),
 	})
 	if err != nil {
@@ -116,6 +116,17 @@ func sessionRoutes(
 		return nil, err
 	}
 	return append(routes, compat...), nil
+}
+
+// logAPIRoutes states what the API listener serves. The refresh and logout
+// stubs of a pod without session secrets are not counted as mounted routes.
+func logAPIRoutes(ctx context.Context, logger *slog.Logger, cfg authconfig.Config, routes []httpapi.Route, extra int) {
+	real := len(routes)
+	if !cfg.Session.Enabled {
+		real -= len(authapi.SessionsNotEnabledRoutes())
+	}
+	logger.InfoContext(ctx, "auth API routes", "api_routes_mounted", real > 0, "routes", len(routes)+extra,
+		"sessions_stub", !cfg.Session.Enabled, "discovery_mounted", cfg.TokenIssuerURL != "")
 }
 
 // newAccessIssuer builds the one issuer of cfg's access token class: the HS256
@@ -178,6 +189,9 @@ func compatRoutes(
 	routes, err := authapi.CompatRoutes(deps)
 	if err != nil {
 		return nil, err
+	}
+	if !cfg.Session.LoginEnabled {
+		routes = append(routes, authapi.LoginNotEnabledRoute())
 	}
 	var link social.Domain
 	if cfg.Session.SocialLinkRoutes {
@@ -370,11 +384,12 @@ func configureWithRoutes(
 	// The token signer is built here and proved by readiness; nothing issues
 	// with it yet. Key states come from the rotation state machine's table
 	// (a cached snapshot; an empty table keeps custody's own states).
+	keyStates := token.NewKeyStates(token.KeyStatesConfig{Source: keyStateSource(store.Pool(), schemaID)})
 	signer := token.NewFileSigner(token.FileConfig{
 		KeySetPath: cfg.SigningKeySetPath,
 		KeyPath:    cfg.SigningKeyPath,
 		KeyID:      cfg.SigningKeyID,
-		States:     token.NewKeyStates(token.KeyStatesConfig{Source: keyStateSource(store.Pool(), schemaID)}),
+		States:     keyStates,
 	})
 
 	registry := health.NewRegistry(cfg.HealthCheckTimeout)
@@ -494,11 +509,16 @@ func configureWithRoutes(
 		}
 		closeLimited()
 	}
+	workloadRoutes, err := exchangeRoutes(cfg, logger, store.Pool(), schemaID, signer)
+	if err != nil {
+		closeStore()
+		return nil, err
+	}
+	routes = append(routes, workloadRoutes...)
 	routes = append(routes, authapi.WellKnownRoutes(authapi.WellKnownDeps{
 		Keys: signer, IssuerURL: cfg.TokenIssuerURL, Logger: logger,
 	})...)
-	logger.InfoContext(ctx, "auth API routes", "api_routes_mounted", len(routes) > 0, "routes", len(routes)+len(extra),
-		"discovery_mounted", cfg.TokenIssuerURL != "")
+	logAPIRoutes(ctx, logger, cfg, routes, len(extra))
 	routes = append(routes, extra...)
 
 	apiHTTP, err := httpapi.NewServer(apiServerOptions(cfg, logger, routes))
@@ -519,7 +539,7 @@ func configureWithRoutes(
 		return nil, err
 	}
 
-	components := []lifecycle.Component{store}
+	components := []lifecycle.Component{store, keyStatesComponent{states: keyStates}}
 	components = append(components, limitComponents...)
 	components = append(components, credComponents...)
 	return append(components,
@@ -529,6 +549,15 @@ func configureWithRoutes(
 		health.Gate{Registry: registry},
 	), nil
 }
+
+// keyStatesComponent ends the key-state read in flight on shutdown, before the
+// pool closes: a read stalled on a connection would otherwise hold the pool's
+// Close until its own timeout.
+type keyStatesComponent struct{ states *token.KeyStates }
+
+func (keyStatesComponent) Name() string                     { return "auth-key-states" }
+func (keyStatesComponent) Start(context.Context) error      { return nil }
+func (k keyStatesComponent) Shutdown(context.Context) error { k.states.Close(); return nil }
 
 // listener is the surface a socket-binding component exposes: its lifecycle,
 // the errors it can raise after a successful bind, and the address it bound.
@@ -660,15 +689,23 @@ func writeArgumentError(w io.Writer, err error) {
 // builds its server from it with a probe route, so the test exercises the
 // configuration the service really runs, not a hand-assembled router.
 func apiServerOptions(cfg authconfig.Config, logger *slog.Logger, routes []httpapi.Route) httpapi.ServerOptions {
+	routes = append([]httpapi.Route(nil), routes...)
+	for i := range routes {
+		if routes[i].PublicClass && routes[i].RateLimitPerSecond <= 0 {
+			routes[i].RateLimitPerSecond = cfg.Public.PerSecond
+			routes[i].RateLimitBurst = cfg.Public.Burst
+		}
+	}
 	return httpapi.ServerOptions{
-		Address:        cfg.APIAddress,
-		Logger:         logger,
-		Routes:         authapi.MarkResponseModels(routes),
-		RequestTimeout: cfg.RequestTimeout,
-		MaxBodyBytes:   cfg.MaxBodyBytes,
-		RateLimit:      cfg.RateLimit.PerSecond,
-		RateLimitBurst: cfg.RateLimit.Burst,
-		MaxInFlight:    maxInFlightRequests,
+		PublicMaxInFlight: cfg.Public.MaxInFlight,
+		Address:           cfg.APIAddress,
+		Logger:            logger,
+		Routes:            authapi.MarkResponseModels(routes),
+		RequestTimeout:    cfg.RequestTimeout,
+		MaxBodyBytes:      cfg.MaxBodyBytes,
+		RateLimit:         cfg.RateLimit.PerSecond,
+		RateLimitBurst:    cfg.RateLimit.Burst,
+		MaxInFlight:       maxInFlightRequests,
 		// The server-minted request id (internal/auth/requestid) wraps the
 		// whole mux, so the transport's own refusals (404, 405, 413, 429)
 		// carry X-Auth-Request-ID as route answers do. The client address

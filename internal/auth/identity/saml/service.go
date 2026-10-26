@@ -269,7 +269,7 @@ func (s *Service) ConsumeFor(ctx context.Context, p Provider, posted string, coo
 		s.logger().InfoContext(ctx, "auth saml: sign-in accepted", "provider_id", p.ID, "org_id", org)
 		return SignIn{PrincipalID: principalID, OrganizationID: &org, ProviderID: p.ID, AMR: []string{AMRFederated}, AuthTime: now}, nil
 	}
-	if principal.Disabled {
+	if principal.Disabled || principal.ServiceProvider {
 		return SignIn{}, s.refuse(ctx, p, ErrAccountDisabled)
 	}
 	if err := s.requireMember(ctx, p, principal.ID); err != nil {

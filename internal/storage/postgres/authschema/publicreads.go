@@ -33,7 +33,7 @@ func PublicReadColumns() []ColumnGrant {
 	return []ColumnGrant{
 		{Table: "users", Columns: []string{
 			"id", "email", "password_hash", "full_name", "username", "auth_provider", "auth_provider_id",
-			"is_active", "is_verified", "is_superuser", "token_version", "last_login_at",
+			"is_active", "is_verified", "is_superuser", "token_version", "last_login_at", "sso_provider_id",
 		}},
 		{Table: "memberships", Columns: []string{"user_id", "org_id", "role", "joined_at", "created_at"}},
 		{Table: "sso_providers", Columns: []string{
@@ -53,7 +53,7 @@ func PublicReadColumns() []ColumnGrant {
 // SessionReaderColumns is what a session reader role may SELECT in the auth
 // schema: column-level, on the sessions table only.
 func SessionReaderColumns() ColumnGrant {
-	return ColumnGrant{Table: "sessions", Columns: []string{"id", "principal_id", "revoked_at"}}
+	return ColumnGrant{Table: "sessions", Columns: []string{"id", "principal_id", "revoked_at", "legacy_token_version"}}
 }
 
 // TableWriteGrant is a column-level SELECT and UPDATE grant on one ops-schema
@@ -86,12 +86,13 @@ func LegacyRefreshTokenGrant() TableWriteGrant {
 // columns, no DELETE, no TRUNCATE, no other table. token_version is inserted
 // as 0 and updated only by a password change, which adds 1 in the same
 // transaction (go-api's own reset does), so go-api tokens minted before it end.
+// last_login_at is updated only by a sign-in, with updated_at, as go-api's does.
 func UsersWriteGrant() (insert, update []string) {
 	return []string{
 			"id", "email", "username", "password_hash", "full_name", "auth_provider", "auth_provider_id",
 			"is_active", "is_verified", "is_superuser", "token_version", "created_at", "updated_at",
 		},
-		[]string{"password_hash", "is_verified", "token_version", "updated_at"}
+		[]string{"password_hash", "is_verified", "token_version", "last_login_at", "updated_at"}
 }
 
 // InsertGrant is a column-level INSERT grant on one ops-schema table.
@@ -191,6 +192,87 @@ func usersWriteStatements(ctx context.Context, conn querier, options Options, lo
 	}, nil
 }
 
+// DeleteGrant is the switch-gated purge access to one ops-schema table:
+// table-level DELETE and column-level SELECT of the named columns.
+type DeleteGrant struct {
+	Table  string
+	Select []string
+}
+
+// LegacyLinkPurgeGrants is the switch-gated access the auth runtime role needs
+// to purge go-api's link-token rows once users are owned (AUTH_USERS_OWNED):
+// DELETE on the two legacy link-token tables and SELECT of their id column
+// (the purge counts the rows it deletes). No INSERT, UPDATE, TRUNCATE or other
+// column, and no other table. Off, it is revoked (acp ruling 2026-10-26, CHAOS-11506).
+func LegacyLinkPurgeGrants() []DeleteGrant {
+	return []DeleteGrant{
+		{Table: "email_verification_tokens", Select: []string{"id"}},
+		{Table: "password_reset_tokens", Select: []string{"id"}},
+	}
+}
+
+// legacyLinkPurgeStatements grants LegacyLinkPurgeGrants when the switch is on
+// and revokes anything the role holds on those tables when it is off.
+func legacyLinkPurgeStatements(ctx context.Context, conn querier, options Options, logger *slog.Logger) ([]string, error) {
+	roleID, err := NewValidatedIdentifier(options.RuntimeRole)
+	if err != nil {
+		return nil, err
+	}
+	role := quoteIdentifier(roleID)
+	var statements []string
+	for _, grant := range LegacyLinkPurgeGrants() {
+		exists, err := publicTableState(ctx, conn, grant.Table)
+		if err != nil {
+			return nil, err
+		}
+		if !exists {
+			if options.RequirePublicTables && options.UsersOwned {
+				return nil, fmt.Errorf("%w: %s.%s", ErrPublicTableMissing, publicSchema, grant.Table)
+			}
+			continue
+		}
+		tableID, err := NewValidatedIdentifier(grant.Table)
+		if err != nil {
+			return nil, err
+		}
+		table := quoteIdentifier(mustValidatedIdentifier(publicSchema)) + "." + quoteIdentifier(tableID)
+		if !options.UsersOwned {
+			var held bool
+			if err := conn.QueryRow(ctx,
+				`SELECT has_table_privilege($1, format('%I.%I', $2::text, $3::text), 'DELETE')
+				     OR has_column_privilege($1, format('%I.%I', $2::text, $3::text), 'id', 'SELECT')`,
+				options.RuntimeRole, publicSchema, grant.Table,
+			).Scan(&held); err != nil {
+				return nil, fmt.Errorf("%w: reading the legacy link purge grant of %s.%s", ErrMigrationFailed, publicSchema, grant.Table)
+			}
+			if held {
+				statements = append(statements, fmt.Sprintf(`REVOKE ALL ON TABLE %s FROM %s`, table, role))
+			}
+			continue
+		}
+		columns, err := quotedColumns(grant.Select)
+		if err != nil {
+			return nil, err
+		}
+		logger.InfoContext(ctx, "applying the legacy link purge grant", "schema", publicSchema, "table", grant.Table)
+		statements = append(statements,
+			fmt.Sprintf(`REVOKE ALL ON TABLE %s FROM %s`, table, role),
+			fmt.Sprintf(`GRANT DELETE ON TABLE %s TO %s`, table, role),
+			fmt.Sprintf(`GRANT SELECT (%s) ON TABLE %s TO %s`, strings.Join(columns, ", "), table, role),
+		)
+	}
+	return statements, nil
+}
+
+func isLegacyLinkPurgeTable(table string) bool {
+	for _, grant := range LegacyLinkPurgeGrants() {
+		if grant.Table == table {
+			return true
+		}
+	}
+	return false
+}
+
 // quotedColumns validates and quotes each name.
 func quotedColumns(names []string) ([]string, error) {
 	columns := make([]string, 0, len(names))
@@ -227,6 +309,22 @@ func publicRelationKind(ctx context.Context, conn rowQuerier1, table string) (st
 	return kind, nil
 }
 
+// publicColumnExists reports whether public.<table> has a live column named
+// column. A manifest column a later ops revision adds (users.sso_provider_id,
+// revision 0155) is absent on a schema before it.
+func publicColumnExists(ctx context.Context, conn rowQuerier1, table, column string) (bool, error) {
+	var exists bool
+	if err := conn.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid
+		 JOIN pg_namespace n ON n.oid = c.relnamespace
+		 WHERE n.nspname = $1 AND c.relname = $2 AND a.attname = $3 AND a.attnum > 0 AND NOT a.attisdropped)`,
+		publicSchema, table, column,
+	).Scan(&exists); err != nil {
+		return false, fmt.Errorf("%w: looking for %s.%s.%s", ErrMigrationFailed, publicSchema, table, column)
+	}
+	return exists, nil
+}
+
 // publicTableState classifies public.<table> for the manifest: absent, a table
 // ('r' or 'p'), or something else, which is an error rather than a skip.
 func publicTableState(ctx context.Context, conn rowQuerier1, table string) (exists bool, err error) {
@@ -249,7 +347,12 @@ func publicTableState(ctx context.Context, conn rowQuerier1, table string) (exis
 // EXISTS, revoke every privilege the role holds on it (table and column level)
 // and grant SELECT on exactly the manifest columns. A manifest table that does
 // not exist (an auth-only database) is skipped and logged by name;
-// VerifyRuntimePosture requires the grants as soon as it does exist. They run
+// VerifyRuntimePosture requires the grants as soon as it does exist. A manifest
+// column that does not exist yet (a schema before the ops revision that adds
+// it) is skipped and logged as DEFERRED by Apply: the grants pass after ops
+// migrate grants it, and VerifyRuntimePosture holds it PENDING until the column
+// exists and FAILS once it exists without the grant. The grants pass itself
+// (RequirePublicTables) refuses an absent column, naming it. They run
 // inside applyRuntimeGrants' transaction, so a privilege they would remove is a
 // narrowing that needs the same acknowledgement as any other.
 //
@@ -286,15 +389,27 @@ func publicReadStatements(ctx context.Context, conn querier, options Options, lo
 			if err != nil {
 				return nil, err
 			}
+			present, err := publicColumnExists(ctx, conn, entry.Table, name)
+			if err != nil {
+				return nil, err
+			}
+			if !present && options.RequirePublicTables {
+				return nil, fmt.Errorf("%w: %s.%s.%s", ErrPublicColumnMissing, publicSchema, entry.Table, name)
+			}
+			if !present {
+				logger.WarnContext(ctx, "public read grant DEFERRED: the column does not exist yet",
+					"schema", publicSchema, "table", entry.Table, "column", name, "state", "DEFERRED")
+				continue
+			}
 			columns = append(columns, quoteIdentifier(columnID))
 		}
 		table := quoteIdentifier(mustValidatedIdentifier(publicSchema)) + "." + quoteIdentifier(tableID)
-		statements = append(statements,
-			fmt.Sprintf(`REVOKE ALL ON TABLE %s FROM %s`, table, role),
-			fmt.Sprintf(`GRANT SELECT (%s) ON TABLE %s TO %s`, strings.Join(columns, ", "), table, role),
-		)
+		statements = append(statements, fmt.Sprintf(`REVOKE ALL ON TABLE %s FROM %s`, table, role))
+		if len(columns) > 0 {
+			statements = append(statements, fmt.Sprintf(`GRANT SELECT (%s) ON TABLE %s TO %s`, strings.Join(columns, ", "), table, role))
+		}
 		logger.InfoContext(ctx, "applying public read grants",
-			"schema", publicSchema, "table", entry.Table, "columns", len(entry.Columns))
+			"schema", publicSchema, "table", entry.Table, "columns", len(columns), "deferred", len(entry.Columns)-len(columns))
 	}
 	write := LegacyRefreshTokenGrant()
 	exists, err := publicTableState(ctx, conn, write.Table)
@@ -402,6 +517,32 @@ func publicReadViolations(ctx context.Context, conn *pgx.Conn, options Options) 
 				}
 			}
 		}
+		for _, grant := range LegacyLinkPurgeGrants() {
+			exists, err := publicTableState(ctx, conn, grant.Table)
+			if err != nil {
+				return nil, err
+			}
+			if !exists {
+				continue
+			}
+			var deleteHeld, selectHeld bool
+			if err := conn.QueryRow(ctx,
+				`SELECT has_table_privilege($1, format('%I.%I', $2::text, $3::text), 'DELETE'),
+				        has_column_privilege($1, format('%I.%I', $2::text, $3::text), 'id', 'SELECT')`,
+				options.RuntimeRole, publicSchema, grant.Table,
+			).Scan(&deleteHeld, &selectHeld); err != nil {
+				return nil, fmt.Errorf("%w: table %s.%s is missing or unreadable to the posture check",
+					ErrMigrationFailed, publicSchema, grant.Table)
+			}
+			for privilege, held := range map[string]bool{"DELETE": deleteHeld, "SELECT": selectHeld} {
+				if !held {
+					violations = append(violations, Violation{
+						Kind: "column", Schema: publicSchema, Object: grant.Table, Privilege: privilege,
+						Detail: "declared in LegacyLinkPurgeGrants (the switch is on) but the runtime role does not hold it (missing grant)",
+					})
+				}
+			}
+		}
 		usersExist, err := publicTableState(ctx, conn, "users")
 		if err != nil {
 			return nil, err
@@ -436,6 +577,18 @@ func publicReadViolations(ctx context.Context, conn *pgx.Conn, options Options) 
 			continue
 		}
 		for _, column := range entry.Columns {
+			present, err := publicColumnExists(ctx, conn, entry.Table, column)
+			if err != nil {
+				return nil, err
+			}
+			if !present {
+				// PENDING: a DEFERRED grant of a column a later ops revision adds.
+				if options.Logger != nil {
+					options.Logger.InfoContext(ctx, "public read grant PENDING: the column does not exist yet",
+						"schema", publicSchema, "table", entry.Table, "column", column, "state", "PENDING")
+				}
+				continue
+			}
 			var readable bool
 			if err := conn.QueryRow(ctx,
 				`SELECT has_column_privilege($1, format('%I.%I', $2::text, $3::text), $4, 'SELECT')`,
@@ -517,6 +670,9 @@ func publicReadViolations(ctx context.Context, conn *pgx.Conn, options Options) 
 			if _, ok := usersDeclared[privilege][column]; ok {
 				continue
 			}
+		}
+		if options.UsersOwned && schema == publicSchema && privilege == "SELECT" && isLegacyLinkPurgeTable(table) && column == "id" {
+			continue
 		}
 		if options.UsersOwned && schema == publicSchema && privilege == "INSERT" && (kind == "r" || kind == "p") {
 			if _, ok := registerDeclared[table][column]; ok {

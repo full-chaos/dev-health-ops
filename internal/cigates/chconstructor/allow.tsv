@@ -4,5 +4,6 @@ internal/queryapi/chclient/chclient.go	New	query-client	1	the shared query-clien
 internal/cigates/metricsproof/proof.go	OpenClickHouse	driver-open	1	CI proof tool against a throwaway ClickHouse on localhost (one short-lived connection, not a service pool); no RTT to Cloud
 internal/testsupport/containers/harness.go	pingClickHouseOnce	driver-open	1	test harness readiness ping against a local testcontainer; never in a production binary
 internal/testsupport/containers/remote.go	startClickHouseRemote	driver-open	2	test harness readiness check of a remote test ClickHouse; never in a production binary
+internal/testsupport/containers/shared.go	clickHouseSnapshot	driver-open	1	test harness leak snapshot of the shared test ClickHouse (one short-lived admin connection); never in a production binary
 internal/testsupport/crossorg/crossorg.go	Start	driver-open	1	test fixture connection to a local testcontainer; never in a production binary
 internal/testsupport/retractionseed/retractionseed.go	Start	driver-open	1	test fixture connection to a local testcontainer; never in a production binary

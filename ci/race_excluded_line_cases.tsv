@@ -1,0 +1,20 @@
+# One row set for the three readers of ci/race_excluded_tests.tsv: the loader of ci/check_go.sh, parseCensusExcluded (internal/cigates/testshard)
+# and parseCensusRows (internal/cigates/checkgo). Each reader puts the line at line 2 of a census whose line 1 is a valid row.
+# Columns: case name, the census line as a Go-quoted string, result (accept | refuse | skip), the trimmed test name of an accepted row as a Go-quoted string.
+# accept = one row (package internal/goapiproof, that test name); refuse = the reader fails naming "census line 2 "; skip = no row.
+vertical-tab column	"internal/goapiproof\t\v"	accept	"\v"
+form-feed column	"internal/goapiproof\t\f"	accept	"\f"
+no-break space column	"internal/goapiproof\t "	accept	" "
+leading and trailing space	"internal/goapiproof\t TestSpace "	accept	"TestSpace"
+leading and trailing space in the package	"  internal/goapiproof \tTestSpace"	accept	"TestSpace"
+CRLF ending	"internal/goapiproof\tTestCrlf\r"	accept	"TestCrlf"
+empty line	""	skip	""
+comment line	"# a comment"	skip	""
+indented comment line	"  # a comment"	refuse	""
+whitespace-only line	"   "	refuse	""
+tab-only line	"\t"	refuse	""
+CR-only line	"\r"	refuse	""
+1 column	"internal/goapiproof"	refuse	""
+3 columns	"internal/goapiproof\tTestOne\textra"	refuse	""
+empty test column	"internal/goapiproof\t "	refuse	""
+empty package column	" \tTestOne"	refuse	""

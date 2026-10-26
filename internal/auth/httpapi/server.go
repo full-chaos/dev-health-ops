@@ -58,6 +58,15 @@ type Route struct {
 	// body bound, rate limit, in-flight cap and recovered panic) instead of
 	// the server's.
 	ErrorWriter ErrorWriter
+	// PublicClass puts the route in the public-document admission class: its
+	// own in-flight pool (ServerOptions.PublicMaxInFlight) instead of the
+	// shared one, so a stalled dependency behind other routes cannot refuse
+	// it. Only a route that does no dependency I/O belongs here.
+	PublicClass bool
+	// Unthrottled skips the server's body bound, in-flight cap and rate limit
+	// for this route; recovery, the deadline and the route record stay. Only a
+	// constant handler that reads no body and does no I/O belongs here.
+	Unthrottled bool
 }
 
 // RouteWriter is implemented by the writer every registered route's
@@ -173,6 +182,9 @@ type ServerOptions struct {
 	// limit bounds admission per second and runs first, this bounds how many
 	// admitted requests are in flight together. Zero means no cap.
 	MaxInFlight int
+	// PublicMaxInFlight is the separate in-flight cap of the routes marked
+	// PublicClass. Zero means those routes use MaxInFlight's pool.
+	PublicMaxInFlight int
 	// Now is injectable so a test can drive the rate limiter's clock. Nil
 	// means time.Now.
 	Now func() time.Time
@@ -390,8 +402,16 @@ func buildHandler(options ServerOptions, logger *slog.Logger) (http.Handler, err
 	if options.MaxInFlight > 0 {
 		inFlight = make(chan struct{}, options.MaxInFlight)
 	}
+	publicInFlight := inFlight
+	if options.PublicMaxInFlight > 0 {
+		publicInFlight = make(chan struct{}, options.PublicMaxInFlight)
+	}
 	for _, route := range options.Routes {
-		handler := routeChain(route, options, logger, write, inFlight)
+		routeInFlight := inFlight
+		if route.PublicClass {
+			routeInFlight = publicInFlight
+		}
+		handler := routeChain(route, options, logger, write, routeInFlight)
 		// A GET pattern also matches HEAD in net/http's mux; a path with
 		// its own HEAD route sends HEAD there instead (the more specific
 		// pattern). With ExplicitHead the GET route itself refuses HEAD as
@@ -517,9 +537,11 @@ func routeChain(route Route, options ServerOptions, logger *slog.Logger, write E
 
 	handler := RecoverWith(logger, route.Method+" "+route.Pattern, write)(markRoute(route))
 	handler = Deadline(options.RequestTimeout)(handler)
-	handler = MaxBodyWith(maxBody, write)(handler)
-	handler = inFlightLimit(inFlight, logger, write)(handler)
-	handler = RateLimitWith(NewBucket(perSecond, burst, options.Now), write)(handler)
+	if !route.Unthrottled {
+		handler = MaxBodyWith(maxBody, write)(handler)
+		handler = inFlightLimit(inFlight, logger, write)(handler)
+		handler = RateLimitWith(NewBucket(perSecond, burst, options.Now), write)(handler)
+	}
 	// Outermost, so a request the route's own rate limit or body bound
 	// refuses is still counted against the route it addressed.
 	pattern := route.Pattern

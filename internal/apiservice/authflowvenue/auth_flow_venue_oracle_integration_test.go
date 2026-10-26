@@ -30,6 +30,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/api/usersowned"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/admin"
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
@@ -40,6 +41,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/storage/valkey"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/authrows"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/proofprincipals"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/providerstub"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/sessionscenario"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/smtpcapture"
@@ -81,8 +83,6 @@ func linkToken(id string) (token, hash string) {
 	return signedtoken.Build(uuid.MustParse(id), sessionscenario.Key)
 }
 
-var linkPattern = regexp.MustCompile(`token=([0-9a-f]{32}\.[0-9a-f]{64})`)
-
 // sentMail is one captured message as its receiver reads it: envelope and
 // headers exactly, the HTML part decoded, the link token lifted out so each
 // plane's own random token can be compared by shape and used in later
@@ -93,12 +93,25 @@ type sentMail struct {
 	token                                         string
 }
 
-func decodeMail(t *testing.T, captured smtpcapture.Mail) sentMail {
+// envSMTPAdmin is the read API of the corpus mail sink (ci/auth_corpus_external.sh).
+const envSMTPAdmin = "DEVHEALTH_AUTH_ORACLE_SMTP_ADMIN"
+
+// mailSink is what the runner reads the Go plane's mail from: the in-process server of a self-contained run, or the
+// corpus mail sink container of an external one.
+type mailSink interface {
+	Drain(t *testing.T) []smtpcapture.Mail
+}
+
+type remoteSink struct{ *smtpcapture.Remote }
+
+func (r remoteSink) Drain(t *testing.T) []smtpcapture.Mail { return r.Remote.Drain(t) }
+
+func decodeMail(t *testing.T, captured smtpcapture.Mail, owned bool) sentMail {
 	t.Helper()
 	captured = smtpcapture.Normalize(captured)
 	message, err := mail.ReadMessage(strings.NewReader(captured.Data))
 	if err != nil {
-		t.Fatalf("captured message does not parse: %v\n%s", err, captured.Data)
+		t.Fatalf("captured message does not parse: %v\n%s", err, redactLinkTokens(captured.Data))
 	}
 	out := sentMail{mailFrom: captured.MailFrom, rcptTo: strings.Join(captured.RcptTo, ","),
 		from: message.Header.Get("From"), to: message.Header.Get("To"), subject: message.Header.Get("Subject")}
@@ -130,18 +143,18 @@ func decodeMail(t *testing.T, captured smtpcapture.Mail) sentMail {
 		}
 		body = string(decoded)
 	}
-	match := linkPattern.FindStringSubmatch(body)
-	if match == nil && tokenOptional(out.subject) {
+	token, found := extractLinkToken(body, owned)
+	if !found && tokenOptional(out.subject) {
 		if forbidden := noticeLinkOrToken(body); forbidden != "" {
-			t.Fatalf("the account-exists notice carries a token or a link (%q):\n%s", forbidden, body)
+			t.Fatalf("the account-exists notice carries a token or a link (%q):\n%s", redactLinkTokens(forbidden), redactLinkTokens(body))
 		}
 		out.html = body
 		return out
 	}
-	if match == nil {
-		t.Fatalf("no link token in the captured HTML:\n%s", body)
+	if !found {
+		t.Fatalf("no link token of the leg's format (users owned: %v) in the captured HTML:\n%s", owned, redactLinkTokens(body))
 	}
-	out.token = match[1]
+	out.token = token
 	out.html = strings.ReplaceAll(body, out.token, "TOKEN")
 	return out
 }
@@ -237,16 +250,18 @@ func (m recordedMail) sent() sentMail {
 }
 
 type runner struct {
-	golden         *venueoracle.Golden
-	t              *testing.T
-	ctx            context.Context
-	venue          *venueoracle.Venue
-	goBase         string
-	external       bool
-	forwarded      authrows.Forwarded
-	ledger         *authrows.Ledger
-	pySink, goSink *smtpcapture.Server
-	receipt        strings.Builder
+	golden     *venueoracle.Golden
+	t          *testing.T
+	ctx        context.Context
+	venue      *venueoracle.Venue
+	goBase     string
+	external   bool
+	forwarded  authrows.Forwarded
+	usersOwned bool
+	ledger     *authrows.Ledger
+	pySink     *smtpcapture.Server
+	goSink     mailSink
+	receipt    strings.Builder
 	// mails are each plane's messages so far, by "recipient|subject", the
 	// latest last.
 	mails map[string]map[string][]sentMail
@@ -254,6 +269,8 @@ type runner struct {
 	// for an existing address: it queues an account-exists mail the Python
 	// plane never sent.
 	notices int
+	// divergencesFired counts, by step, the declared step differences of ownedStepDivergences that covered an answer.
+	divergencesFired map[string]int
 	// registers is set when the current batch carried a sign-up, a resend or a forgot request: the Go plane
 	// sends their mail off the request, so mails are compared in a fixed order.
 	registers bool
@@ -316,11 +333,20 @@ func (r *runner) batch(label string, steps []step) map[string][2]venueoracle.Res
 		}
 		same, compared, pyShown, goShown := venueoracle.Compare(s.python, pyCompared, goProjected,
 			venueoracle.DiffOptions{Normalize: func(_ venueoracle.Request, body string) string { return normalize(body) },
-				LoginNoStore: r.external && r.forwarded.Has(authrows.LocalLogin)})
+				LoginNoStore:       r.external && r.forwarded.Has(authrows.LocalLogin),
+				CredentialsNoStore: credentialsNoStore(r.external, r.forwarded)})
+		if !same && r.usersOwned && r.forwarded.Has(authrows.Credentials) {
+			for _, declared := range ownedStepDivergences {
+				if declared.covers(s.name, pyShown, goShown, compared) {
+					r.divergencesFired[declared.Step]++
+					same = true
+					break
+				}
+			}
+		}
 		fmt.Fprintf(&r.receipt, "%-70s python=%d go=%d %s\n", s.name, pyResponses[index].Status, goProjected.Status, venueoracle.Mark(same))
 		if !same {
-			r.t.Errorf("%s:\n python %d %s %v\n go     %d %s %v", s.name, pyShown.Status, pyShown.Body, pick(pyShown.Headers, compared),
-				goShown.Status, goShown.Body, pick(goShown.Headers, compared))
+			r.t.Error(venueoracle.DescribeDifference(s.name, pyShown, goShown, compared))
 		}
 		out[s.name] = [2]venueoracle.Response{pyResponses[index], goResponse}
 	}
@@ -339,7 +365,7 @@ func (r *runner) checkUniformLength(name string, goResponse venueoracle.Response
 		r.t.Errorf("%s: uniform sign-up answer has content-length %q, want %q", name, got, want)
 	}
 	if goResponse.Body != signUpAnswer {
-		r.t.Errorf("%s: uniform sign-up answer body %q, want %q", name, goResponse.Body, signUpAnswer)
+		r.t.Errorf("%s: uniform sign-up answer body %q, want %q", name, venueoracle.RedactText(goResponse.Body), signUpAnswer)
 	}
 	if r.signUpLength == "" {
 		r.signUpLength = got
@@ -413,7 +439,7 @@ func (r *runner) compareMail(label string) {
 	var goMails []sentMail
 	for attempt := 0; attempt < 10; attempt++ {
 		for _, captured := range r.goSink.Drain(r.t) {
-			goMails = append(goMails, decodeMail(r.t, captured))
+			goMails = append(goMails, decodeMail(r.t, captured, r.usersOwned))
 		}
 		if len(goMails) >= owed {
 			break
@@ -439,6 +465,11 @@ func (r *runner) compareMail(label string) {
 		r.t.Errorf("%s: %d account-exists mails, want %d", label, got, r.notices)
 	}
 	py, gv := planes["python"], planes["go"]
+	if pyLinks, goLinks := linkMailRows(py, authrows.LinkTokenGoAPI), linkMailRows(gv, ""); len(pyLinks) > 0 || len(goLinks) > 0 {
+		for _, problem := range r.ledger.Compare(authrows.TableLinkMails, strings.Join(pyLinks, " | "), strings.Join(goLinks, " | ")) {
+			r.t.Errorf("%s: %s", label, problem)
+		}
+	}
 	same := len(py) == len(gv)
 	for index := 0; same && index < len(py); index++ {
 		a, b := py[index], gv[index]
@@ -447,8 +478,41 @@ func (r *runner) compareMail(label string) {
 	}
 	fmt.Fprintf(&r.receipt, "%-70s python=%d go=%d %s\n", label+": e-mails", len(py), len(gv), venueoracle.Mark(same))
 	if !same {
-		r.t.Errorf("%s: the planes sent different e-mail:\n python %+v\n go     %+v", label, py, gv)
+		r.t.Errorf("%s: the planes sent different e-mail:\n python %s\n go     %s", label, describeMails(py), describeMails(gv))
 	}
+}
+
+// linkMailRows is one line per mail that carries a link token: its subject and the format of the token. The planes
+// are compared on it through the quirk table, so a plane that mails a token of another format is named, not ignored.
+//
+// declared is the format the plane that mailed them is known to use, or empty to read each token: the golden's tokens are
+// scrubbed to a placeholder when it is frozen, so its plane (Python, go-api's signed format) is declared, never inferred.
+func linkMailRows(mails []sentMail, declared string) []string {
+	var rows []string
+	for _, mail := range mails {
+		if mail.token == "" {
+			continue
+		}
+		format := declared
+		if format == "" {
+			format = linkTokenFormat(mail.token)
+		}
+		rows = append(rows, authrows.LinkMailRow(mail.subject, format))
+	}
+	return rows
+}
+
+// describeMails is the mails for a failure message: the link token of each is a credential and never printed.
+func describeMails(mails []sentMail) string {
+	shown := make([]sentMail, len(mails))
+	for index, mail := range mails {
+		if mail.token != "" {
+			mail.token = "<link-token>"
+		}
+		mail.html = redactLinkTokens(mail.html)
+		shown[index] = mail
+	}
+	return fmt.Sprintf("%+v", shown)
 }
 
 func countSubject(mails []sentMail, subject string) int {
@@ -514,7 +578,40 @@ func (r *runner) projectedRows(name, goRows string) {
 	}
 }
 
-func seed(t *testing.T, ctx context.Context, admin *pgxpool.Pool, venue *venueoracle.Venue) map[string]map[string]any {
+// waitForUsersOwnedFlip is the owned leg's hand-off: the seed has put the users into public.users, so the run script may
+// now copy them (users-backfill), restart auth-service and go-api with AUTH_USERS_OWNED, and tell this test which
+// aggregates go-api forwards after that. Without the two files in the environment the run does not hand off.
+func waitForUsersOwnedFlip(t *testing.T, ctx context.Context) {
+	t.Helper()
+	seeded, flipped := os.Getenv("DEVHEALTH_AUTH_ORACLE_SEEDED_FILE"), os.Getenv("DEVHEALTH_AUTH_ORACLE_FLIPPED_FILE")
+	if seeded == "" && flipped == "" {
+		return
+	}
+	if seeded == "" || flipped == "" {
+		t.Fatal("DEVHEALTH_AUTH_ORACLE_SEEDED_FILE and DEVHEALTH_AUTH_ORACLE_FLIPPED_FILE are set together or not at all")
+	}
+	if err := os.WriteFile(seeded, nil, 0o600); err != nil {
+		t.Fatalf("signal the seed: %v", err)
+	}
+	deadline := time.Now().Add(20 * time.Minute)
+	for {
+		if file, err := os.Open(flipped); err == nil {
+			raw, readErr := io.ReadAll(io.LimitReader(file, 4096))
+			_ = file.Close()
+			if readErr != nil {
+				t.Fatalf("read the forwarded set: %v", readErr)
+			}
+			t.Setenv(authrows.EnvForwarded, strings.TrimSpace(string(raw)))
+			return
+		}
+		if time.Now().After(deadline) || ctx.Err() != nil {
+			t.Fatal("the run script did not finish the users-owned switch")
+		}
+		time.Sleep(time.Second)
+	}
+}
+
+func seed(t *testing.T, ctx context.Context, admin *pgxpool.Pool, venue *venueoracle.Venue, ownedLeg bool) map[string]map[string]any {
 	t.Helper()
 	raw := venue.CallPython(t, venueoracle.PythonCall{Target: "dev_health_ops.api.services.users:_hash_password",
 		Args: []any{sessionscenario.Password}})
@@ -523,7 +620,11 @@ func seed(t *testing.T, ctx context.Context, admin *pgxpool.Pool, venue *venueor
 	if err != nil || !ok {
 		t.Fatalf("password hash: %v %s", err, raw[0])
 	}
-	tokens := sessionscenario.Seed(t, ctx, admin, hash)
+	var options []sessionscenario.SeedOption
+	if ownedLeg {
+		options = append(options, sessionscenario.OwnedLegSeed)
+	}
+	tokens := sessionscenario.Seed(t, ctx, admin, hash, options...)
 	exec := func(sql string, args ...any) {
 		t.Helper()
 		if _, err := admin.Exec(ctx, sql, args...); err != nil {
@@ -604,19 +705,35 @@ func TestAuthFlowVenueOracle(t *testing.T) {
 		t.Fatalf("%s: %v", sessionscenario.EnvBaseURL, err)
 	}
 	var external *venueoracle.ExternalStores
+	var goSink mailSink
 	if isExternal {
 		external = &stores
-		if err := smtpcapture.ValidateExternalListen(smtpcapture.ListenAddr()); err != nil {
-			t.Fatalf("%s: %v", smtpcapture.EnvListen, err)
+		smtpAdmin := os.Getenv(envSMTPAdmin)
+		if smtpAdmin == "" {
+			t.Fatalf("%s is not set: an external run reads the mail through the corpus mail sink", envSMTPAdmin)
 		}
+		remote := smtpcapture.NewRemote(smtpAdmin)
+		if err := remote.Reachable(); err != nil {
+			t.Fatalf("the corpus mail sink at %s does not answer: %v", smtpAdmin, err)
+		}
+		goSink = remoteSink{remote}
 	}
-	pySink, goSink := smtpcapture.Start(t), smtpcapture.StartAt(t, smtpcapture.ListenAddr())
+	pySink := smtpcapture.Start(t)
+	if goSink == nil {
+		goSink = smtpcapture.StartAt(t, smtpcapture.DefaultListen)
+	}
 	pyHost, pyPort := pySink.HostPort(t)
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{External: external,
 		Golden: golden, Root: venueRoot(), JWTKey: sessionscenario.Key, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		PythonEnv: []string{"EMAIL_PROVIDER=smtp", "EMAIL_FROM_ADDRESS=" + fromAddress,
 			"SMTP_HOST=" + pyHost, "SMTP_PORT=" + strconv.Itoa(pyPort), "APP_BASE_URL=" + appBaseURL},
-		Seed: seed,
+		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, venue *venueoracle.Venue) map[string]map[string]any {
+			var tokens map[string]map[string]any
+			seedAround(os.Getenv("DEVHEALTH_AUTH_ORACLE_SEEDED_FILE") != "",
+				func(ownedLeg bool) { tokens = seed(t, ctx, admin, venue, ownedLeg) },
+				func() { waitForUsersOwnedFlip(t, ctx) })
+			return tokens
+		},
 	})
 	metricsDatabases := []string{venue.PythonClickHouseDB, venue.GoClickHouseDB}
 	if external != nil {
@@ -634,7 +751,10 @@ func TestAuthFlowVenueOracle(t *testing.T) {
 		}
 		_ = conn.Close()
 	}
-	goHost, goPort := goSink.HostPort(t)
+	goHost, goPort := pyHost, pyPort // the in-process Go sender is built and never used when go-api is external
+	if server, ok := goSink.(*smtpcapture.Server); ok {
+		goHost, goPort = server.HostPort(t)
+	}
 	t.Setenv("EMAIL_PROVIDER", "smtp")
 	t.Setenv("EMAIL_FROM_ADDRESS", fromAddress)
 	t.Setenv("SMTP_HOST", goHost)
@@ -649,14 +769,17 @@ func TestAuthFlowVenueOracle(t *testing.T) {
 		t.Fatalf("go mail sender: %v", err)
 	}
 	r := &runner{golden: golden, t: t, ctx: ctx, venue: venue, pySink: pySink, goSink: goSink,
-		mails:  map[string]map[string][]sentMail{"python": {}, "go": {}},
+		mails: map[string]map[string][]sentMail{"python": {}, "go": {}}, divergencesFired: map[string]int{},
 		goBase: externalBase, external: external != nil}
 	if external != nil {
 		if r.forwarded, err = authrows.FromEnv(); err != nil {
 			t.Fatal(err)
 		}
+		if r.usersOwned, err = authrows.UsersOwnedFromEnv(); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if r.ledger, err = authrows.NewLedger(r.forwarded); err != nil {
+	if r.ledger, err = authrows.NewLedger(r.forwarded, r.usersOwned); err != nil {
 		t.Fatal(err)
 	}
 	if r.goBase == "" {
@@ -784,6 +907,7 @@ func TestAuthFlowVenueOracle(t *testing.T) {
 		same("register: password over 72 bytes", post, register, "", `{"email": "long@example.com", "password": "Ab1`+strings.Repeat("x", 70)+`"}`),
 	})
 	r.batch("register names", []step{
+		// All three planes answer 500 here (PostgreSQL 22021 on the lone surrogate): CHAOS-11450, no difference to classify.
 		same("register: full name with a lone surrogate", post, register, "", `{"email": "surr@example.com", "password": "Surr-pass-2026", "full_name": "\ud800"}`),
 		same("register: empty org name", post, register, "", `{"email": "emma@example.com", "password": "Emma-pass-2026", "full_name": "", "org_name": ""}`),
 		same("register: no names", post, register, "", `{"email": "ned@example.com", "password": "Ned-pass-2026"}`),
@@ -861,7 +985,7 @@ func TestAuthFlowVenueOracle(t *testing.T) {
 
 	r.rows("users", `SELECT email, coalesce(username, '<null>'), coalesce(full_name, '<null>'), coalesce(auth_provider, '<null>'),
 		is_active, is_verified, is_superuser, token_version, last_login_at IS NOT NULL, updated_at >= created_at,
-		coalesce(left(password_hash, 7), '<null>') FROM users WHERE auth_provider IS DISTINCT FROM 'service' ORDER BY email`)
+		coalesce(left(password_hash, 7), '<null>') FROM users WHERE `+proofprincipals.ComparedSQL("users")+` ORDER BY email`)
 	r.rows("organizations", `SELECT o.name, regexp_replace(o.slug, '-[0-9a-f]{8}$', '-<id8>'),
 		coalesce(right(o.slug, 8) = (SELECT left(m.user_id::text, 8) FROM memberships m WHERE m.org_id = o.id AND m.role = 'owner' LIMIT 1), false),
 		coalesce(o.description, '<null>'), o.settings::text, o.tier, coalesce(o.stripe_customer_id, '<null>'), o.managed_by, o.is_active,
@@ -894,6 +1018,11 @@ func TestAuthFlowVenueOracle(t *testing.T) {
 
 	if violations := policy.WriterViolations(); violations > 0 {
 		t.Errorf("%d body writes used the wrong writer for their route", violations)
+	}
+	if r.usersOwned && r.forwarded.Has(authrows.Credentials) {
+		for _, problem := range divergenceVerdict(ownedStepDivergences, r.divergencesFired) {
+			t.Error(problem)
+		}
 	}
 	if r.forwarded.Any() {
 		for _, problem := range r.ledger.Dead() {
@@ -1025,6 +1154,59 @@ func authScrub(text string) string {
 	return text
 }
 
+// checkSocialAnswer is the verdict on the answer of go-api's social sign-up: a session for the stubbed account, and
+// while auth-service owns users the 409 moved-operation refusal (social stays on go-api until CHAOS-11350). The decoded
+// session is returned for the first.
+func checkSocialAnswer(owned bool, status int, body string) (map[string]any, error) {
+	var decoded map[string]any
+	if owned {
+		var refusal struct {
+			Detail struct{ Message, Reason string } `json:"detail"`
+		}
+		if status != http.StatusConflict || json.Unmarshal([]byte(body), &refusal) != nil ||
+			refusal.Detail.Message != usersowned.Message || refusal.Detail.Reason != usersowned.Reason {
+			return nil, fmt.Errorf("users are owned: answered %d with %d body bytes, want the 409 moved-operation refusal", status, len(body))
+		}
+		return nil, nil
+	}
+	if status != http.StatusOK || json.Unmarshal([]byte(body), &decoded) != nil || decoded["access_token"] == nil {
+		return nil, fmt.Errorf("answered %d with %d body bytes, want 200 and a session", status, len(body))
+	}
+	return decoded, nil
+}
+
+// socialGitHubCalls is what go-api asks the provider on the sign-up path: GET /user only, because the stubbed account has
+// a public e-mail and /user/emails is not asked (oauthprovider.go:192-200); the refusal comes after it (api/session/social.go:77,128-131).
+const socialGitHubCalls = 1
+
+// userAndSessionState is stateSQLForLeg's hash of the target's database, for the leg ci/auth_corpus_external.sh runs.
+func (r *runner) userAndSessionState() string {
+	r.t.Helper()
+	sql, err := stateSQLForLeg(os.Getenv("AUTH_CORPUS_LEG"))
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	return venueoracle.TableRows(r.t, r.ctx, r.venue.AdminURI(r.t, r.venue.GoDB), sql)
+}
+
+// checkSocialRefusalEffects is the verdict on a refused social sign-up of the users-owned leg beyond its answer: the CONTENT
+// of the user and session tables did not change (the refusal must come before any write), and the provider stub recorded
+// exactly one request in all, the matched GET /user of github (socialGitHubCalls): a request to any other provider, path or
+// method fails.
+func checkSocialRefusalEffects(before, after string, requests []providerstub.Recorded) error {
+	if before != after {
+		return fmt.Errorf("the refused social sign-up changed the user or session rows: before %q, after %q", before, after)
+	}
+	if len(requests) != socialGitHubCalls {
+		return fmt.Errorf("the provider stub recorded %d requests, want exactly %d", len(requests), socialGitHubCalls)
+	}
+	only := requests[0]
+	if !only.Matched || only.Provider != "github" || only.Method != http.MethodGet || only.Path != "/user" {
+		return fmt.Errorf("the one provider request is %s %s of %s (matched %v), want the matched GET /user of github", only.Method, only.Path, only.Provider, only.Matched)
+	}
+	return nil
+}
+
 // socialRow signs a new user in with a GitHub token the corpus provider stub answers, through the target, and requires
 // that the stub recorded the request. It runs after every row comparison: the user it creates is not in the golden's rows.
 func (r *runner) socialRow() {
@@ -1034,30 +1216,40 @@ func (r *runner) socialRow() {
 		r.t.Fatal("DEVHEALTH_AUTH_ORACLE_STUB_ADMIN is not set: an external run starts the corpus provider stub")
 	}
 	reset, err := http.Post(admin+"/reset", "application/json", nil)
-	if err != nil || reset.StatusCode != http.StatusNoContent {
-		r.t.Fatalf("provider stub reset: %v", err)
+	if err != nil {
+		r.t.Fatalf("provider stub reset: %s", venueoracle.RedactError(err))
+	}
+	if reset.StatusCode != http.StatusNoContent {
+		r.t.Fatalf("provider stub reset: status %d", reset.StatusCode)
 	}
 	_ = reset.Body.Close()
 	body := `{"provider": "github", "provider_access_token": "gh-corpus"}`
+	before := r.userAndSessionState()
 	answer := venueoracle.Do(r.t, r.goBase, request("social: github new user through the provider stub", http.MethodPost, "/api/v1/auth/social-login", "", body))
-	var decoded map[string]any
-	if answer.Status != http.StatusOK || json.Unmarshal([]byte(answer.Body), &decoded) != nil || decoded["access_token"] == nil {
-		r.t.Fatalf("social-login through the provider stub answered %d with %d body bytes, want 200 and a session", answer.Status, len(answer.Body))
+	decoded, err := checkSocialAnswer(r.usersOwned, answer.Status, answer.Body)
+	if err != nil {
+		r.t.Fatalf("social-login through the provider stub: %v", err)
 	}
-	user, _ := json.Marshal(decoded["user"])
-	if !strings.Contains(string(user), "corpus-social@example.com") {
-		r.t.Errorf("the session's user is not the stubbed account")
+	if decoded != nil {
+		user, _ := json.Marshal(decoded["user"])
+		if !strings.Contains(string(user), "corpus-social@example.com") {
+			r.t.Errorf("the session's user is not the stubbed account")
+		}
 	}
 	recorded, err := http.Get(admin + "/requests")
 	if err != nil {
-		r.t.Fatalf("provider stub requests: %v", err)
+		r.t.Fatalf("provider stub requests: %s", venueoracle.RedactError(err))
 	}
 	defer recorded.Body.Close()
 	var requests []providerstub.Recorded
 	if err := json.NewDecoder(recorded.Body).Decode(&requests); err != nil {
 		r.t.Fatalf("provider stub requests: %v", err)
 	}
-	if err := providerstub.CheckRecorded(requests, "github", 1); err != nil {
+	if r.usersOwned {
+		if err := checkSocialRefusalEffects(before, r.userAndSessionState(), requests); err != nil {
+			r.t.Error(err)
+		}
+	} else if err := providerstub.CheckRecorded(requests, "github", 1); err != nil {
 		r.t.Error(err)
 	}
 	fmt.Fprintf(&r.receipt, "social: github new user through the provider stub: status %d, stub github requests %d %s\n", answer.Status, len(requests), venueoracle.Mark(r.t != nil && !r.t.Failed()))

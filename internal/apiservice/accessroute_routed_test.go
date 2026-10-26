@@ -110,22 +110,11 @@ func realRows(t *testing.T) []accessverify.Row {
 	return rows
 }
 
-// userRows is the real table with AcceptsUser turned on for the probe
-// routes: no go-api row accepts user_access_token yet (the rows are widened
-// in a later leaf), so the user path is proved on a test table.
+// userRows is the real table: every row with the HS256 opt-in also accepts
+// user_access_token.
 func userRows(t *testing.T) []accessverify.Row {
 	t.Helper()
-	rows := realRows(t)
-	on := map[string]bool{}
-	for _, path := range []string{probeAuthenticated, probeAdmin, probeOptional, probeSuperuser} {
-		on["GET "+path] = true
-	}
-	for index := range rows {
-		if on[rows[index].Profile] {
-			rows[index].AcceptsUser = true
-		}
-	}
-	return rows
+	return realRows(t)
 }
 
 const probeIssuer = "https://auth.probe.test"
@@ -553,7 +542,7 @@ func TestGoAPIAccessRowsAreTheFullInventory(t *testing.T) {
 			user++
 		}
 	}
-	if legacy < 190 || user != 0 {
+	if legacy != 196 || user != 196 {
 		t.Errorf("%d legacy rows, %d user rows", legacy, user)
 	}
 }

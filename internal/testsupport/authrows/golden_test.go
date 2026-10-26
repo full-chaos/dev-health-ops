@@ -34,9 +34,23 @@ func goldenRows(t *testing.T) map[string]string {
 		t.Fatal(err)
 	}
 	out := map[string]string{}
+	var linkMails []string
 	for name, rows := range golden.Rows {
 		out[name] = rows.Rows
+		if !strings.HasPrefix(name, "python mails: ") {
+			continue
+		}
+		var mails []struct{ Subject, Token string }
+		if err := json.Unmarshal([]byte(rows.Rows), &mails); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		for _, mail := range mails {
+			if mail.Token != "" {
+				linkMails = append(linkMails, LinkMailRow(mail.Subject, LinkTokenGoAPI))
+			}
+		}
 	}
+	out[TableLinkMails] = strings.Join(linkMails, rowSeparator)
 	return out
 }
 
@@ -95,7 +109,7 @@ func acpRows(t *testing.T, golden map[string]string) map[string]string {
 func TestQuirksCoverTheGoldenAndTheExpectedTargetRowsExactly(t *testing.T) {
 	golden := goldenRows(t)
 	acp := acpRows(t, golden)
-	l, err := NewLedger(forwarded(t, "sessions,local_login"))
+	l, err := NewLedger(forwarded(t, "sessions,local_login"), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,7 +130,7 @@ func TestQuirksCoverTheGoldenAndTheExpectedTargetRowsExactly(t *testing.T) {
 func TestQuirksReportARowTheGoldenDoesNotHold(t *testing.T) {
 	golden := goldenRows(t)
 	acp := acpRows(t, golden)
-	l, err := NewLedger(forwarded(t, "sessions,local_login"))
+	l, err := NewLedger(forwarded(t, "sessions,local_login"), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,7 +188,7 @@ func TestEveryProjectedTableIsAGoldenComparison(t *testing.T) {
 func TestQuirkExtraRowsAreLimitedToTheirCount(t *testing.T) {
 	golden := goldenRows(t)
 	acp := acpRows(t, golden)
-	l, err := NewLedger(forwarded(t, "sessions,local_login"))
+	l, err := NewLedger(forwarded(t, "sessions,local_login"), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,8 +235,19 @@ func TestScriptExportedValueIsTheForwardedSet(t *testing.T) {
 	if assign == "" {
 		t.Fatalf("the script does not assign %s", EnvForwarded)
 	}
+	// The assignment calls the script's join helper: it runs with that helper in front of it, nothing else of the script.
+	text := string(raw)
+	start := strings.Index(text, "\njoin_comma() {")
+	if start < 0 {
+		t.Fatal("the script has no join_comma helper")
+	}
+	end := strings.Index(text[start+1:], "\n}\n")
+	if end < 0 {
+		t.Fatal("join_comma is not closed")
+	}
+	helper := text[start+1 : start+1+end+3]
 	for _, c := range []struct{ array, want string }{{"", ""}, {"sessions", "sessions"}, {"sessions local_login social", "sessions,local_login,social"}} {
-		out, err := exec.Command("bash", "-c", "FORWARDED=("+c.array+"); "+assign+`; printf '%s' "$`+EnvForwarded+`"`).Output()
+		out, err := exec.Command("bash", "-c", "set -euo pipefail\n"+helper+"\nFORWARDED=("+c.array+"); "+assign+`; printf '%s' "$`+EnvForwarded+`"`).Output()
 		if err != nil || string(out) != c.want {
 			t.Errorf("FORWARDED=(%s) exports %q (%v), want %q", c.array, out, err, c.want)
 		}
@@ -267,7 +292,7 @@ func TestOrganizationChoiceQuirksRewriteOnlyAlicesSignInRows(t *testing.T) {
 		}
 	}
 	acp := acpRows(t, golden)
-	l, err := NewLedger(forwarded(t, "sessions,local_login"))
+	l, err := NewLedger(forwarded(t, "sessions,local_login"), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -279,7 +304,7 @@ func TestOrganizationChoiceQuirksRewriteOnlyAlicesSignInRows(t *testing.T) {
 	if problems := l.Compare(TableRefreshTokens, golden[TableRefreshTokens], moreRevoked); len(problems) != 2 {
 		t.Errorf("a changed revoked count was classified: %v", problems)
 	}
-	l, err = NewLedger(forwarded(t, "sessions,local_login"))
+	l, err = NewLedger(forwarded(t, "sessions,local_login"), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -297,7 +322,7 @@ func TestChainedRewritesCoverOneTargetRowPerGoldenRow(t *testing.T) {
 	golden := goldenRows(t)
 	acp := acpRows(t, golden)
 	run := func(goldenRefresh, acpRefresh string) (problems []string, covered string) {
-		l, err := NewLedger(forwarded(t, "sessions,local_login"))
+		l, err := NewLedger(forwarded(t, "sessions,local_login"), false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -314,5 +339,24 @@ func TestChainedRewritesCoverOneTargetRowPerGoldenRow(t *testing.T) {
 	more := acp[TableRefreshTokens] + rowSeparator + "alice@example.comorg-atrue 2"
 	if problems, _ := run(golden[TableRefreshTokens], more); len(problems) != 1 || !strings.Contains(problems[0], "target only") {
 		t.Errorf("a target row beyond the golden's left %v, want one target-only difference", problems)
+	}
+}
+
+func TestOwnedLegExpectsTheGoldensUsersRowsWithNoQuirk(t *testing.T) {
+	golden := goldenRows(t)
+	l, err := NewLedger(forwarded(t, "sessions,local_login"), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if problems := l.Compare(TableUsers, golden[TableUsers], golden[TableUsers]); len(problems) != 0 {
+		t.Fatalf("users rows equal to the golden's: %v", problems)
+	}
+	if got := l.Covered(); strings.Contains(got, "users-last-login-not-stamped=") {
+		t.Fatalf("the last-login quirk is live on the owned leg: %q", got)
+	}
+	// CHAOS-11502 stamps the last login on public.users while users are owned: never-stamped rows are a difference there.
+	notStamped := acpRows(t, golden)[TableUsers]
+	if problems := l.Compare(TableUsers, golden[TableUsers], notStamped); len(problems) == 0 {
+		t.Fatal("never-stamped users rows passed on the owned leg")
 	}
 }

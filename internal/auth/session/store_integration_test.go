@@ -47,6 +47,12 @@ type env struct {
 // production grants and through the 0006/0010 guard triggers.
 func newEnv(t *testing.T, ctx context.Context) *env {
 	t.Helper()
+	return newEnvOwned(t, ctx, false)
+}
+
+// newEnvOwned is newEnv with the users-owned grant switch set as given.
+func newEnvOwned(t *testing.T, ctx context.Context, usersOwned bool) *env {
+	t.Helper()
 	instance, err := containers.StartPostgres(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -75,7 +81,7 @@ func newEnv(t *testing.T, ctx context.Context) *env {
 		t.Fatalf("create role: %v", err)
 	}
 	t.Cleanup(func() { containers.DropRole(admin, role, t.Logf) })
-	if _, err := authschema.Apply(ctx, admin, authschema.Options{Schema: "auth", RuntimeRole: role}); err != nil {
+	if _, err := authschema.Apply(ctx, admin, authschema.Options{Schema: "auth", RuntimeRole: role, UsersOwned: usersOwned}); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	cfg := admin.Config().Copy()

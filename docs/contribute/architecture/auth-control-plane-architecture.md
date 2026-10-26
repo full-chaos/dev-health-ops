@@ -24,8 +24,10 @@ exist, and nothing in production calls the service.
 {: .fc-page-lede }
 
 !!! info "What dormant means here"
-    The auth API listener mounts **no route** (`authruntime.Routes()` returns
-    an empty set), so every path answers the service's own 404 envelope. No
+    Without the session keys the auth API listener mounts only the refresh and
+    logout routes, as retryable 503 stubs. It also mounts the well-known routes
+    when a token issuer URL is set, and the workload exchange when that is
+    switched on. Every other path answers the service's own 404 envelope. No
     production token is issued. Auth.js and the Ops login path are unchanged,
     and no resource API depends on this process. Only the operator listener
     (`/healthz`, `/readyz`, `/metrics`) does real work.

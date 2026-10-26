@@ -236,3 +236,62 @@ func TestDiffDeclaresOrglessRefusalsInOrderAndShiftsPythonAfterThem(t *testing.T
 		t.Fatalf("receipt does not count the refusal:\n%s", receipt)
 	}
 }
+
+// The credentials routes of auth-service answer Cache-Control: no-store and Pragma: no-cache like its login, which the
+// go-api goldens never carried (D6129, the 10410 ruling). Same exactness as LoginNoStore: only when the run says so
+// (DiffOptions.CredentialsNoStore), only for the six credentials routes, only the pair with exactly these values on a
+// golden that carries neither; any other header, value, method or route still compares.
+func TestCredentialsNoStoreIsAnIntendedDivergenceOnlyOnTheSixCredentialsRoutes(t *testing.T) {
+	both := map[string]string{"a": "1", "cache-control": "no-store", "pragma": "no-cache"}
+	with := func(base map[string]string, pairs ...string) map[string]string {
+		out := map[string]string{}
+		for key, value := range base {
+			out[key] = value
+		}
+		for i := 0; i < len(pairs); i += 2 {
+			out[pairs[i]] = pairs[i+1]
+		}
+		return out
+	}
+	plain := map[string]string{"a": "1"}
+	register := Request{Method: "POST", Path: "/api/v1/auth/register"}
+	cases := []struct {
+		name    string
+		request Request
+		option  bool
+		py      map[string]string
+		gr      map[string]string
+		same    bool
+	}{
+		{"register", register, true, plain, both, true},
+		{"verify with its token query", Request{Method: "GET", Path: "/api/v1/auth/verify?token=abc&email=x"}, true, plain, both, true},
+		{"resend-verification", Request{Method: "POST", Path: "/api/v1/auth/resend-verification"}, true, plain, both, true},
+		{"forgot-password", Request{Method: "POST", Path: "/api/v1/auth/forgot-password"}, true, plain, both, true},
+		{"reset-password", Request{Method: "POST", Path: "/api/v1/auth/reset-password"}, true, plain, both, true},
+		{"change-password", Request{Method: "POST", Path: "/api/v1/auth/change-password"}, true, plain, both, true},
+		{"without the option (credentials not forwarded)", register, false, plain, both, false},
+		{"a third extra header", register, true, plain, with(both, "x-extra", "1"), false},
+		{"a changed cache-control value", register, true, plain, with(both, "cache-control", "no-cache"), false},
+		{"a cache-control value with a suffix", register, true, plain, with(both, "cache-control", "no-store, private"), false},
+		{"a changed pragma value", register, true, plain, with(both, "pragma", "no-store"), false},
+		{"only cache-control", register, true, plain, map[string]string{"a": "1", "cache-control": "no-store"}, false},
+		{"only pragma", register, true, plain, map[string]string{"a": "1", "pragma": "no-cache"}, false},
+		{"the golden has cache-control", register, true, with(plain, "cache-control", "no-store"), both, false},
+		{"the golden has pragma", register, true, with(plain, "pragma", "no-cache"), both, false},
+		{"a GET of register", Request{Method: "GET", Path: "/api/v1/auth/register"}, true, plain, both, false},
+		{"a POST of verify", Request{Method: "POST", Path: "/api/v1/auth/verify"}, true, plain, both, false},
+		{"login (its own option)", Request{Method: "POST", Path: "/api/v1/auth/login"}, true, plain, both, false},
+		{"social login", Request{Method: "POST", Path: "/api/v1/auth/social-login"}, true, plain, both, false},
+		{"refresh", Request{Method: "POST", Path: "/api/v1/auth/refresh"}, true, plain, both, false},
+		{"register with a trailing slash", Request{Method: "POST", Path: "/api/v1/auth/register/"}, true, plain, both, false},
+		{"a longer path", Request{Method: "POST", Path: "/api/v1/auth/register-x"}, true, plain, both, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			same, _, _, _ := Compare(tc.request, Response{Status: 200, Headers: tc.py, Body: "{}"}, Response{Status: 200, Headers: tc.gr, Body: "{}"}, DiffOptions{CredentialsNoStore: tc.option})
+			if same != tc.same {
+				t.Fatalf("same = %v, want %v", same, tc.same)
+			}
+		})
+	}
+}

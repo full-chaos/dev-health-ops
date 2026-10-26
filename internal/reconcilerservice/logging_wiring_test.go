@@ -133,3 +133,53 @@ func TestSyncDispatchObserverLoopReceivesTheComposedLoggerFromReconcilerComposit
 		t.Fatalf("composed logger output omitted the failure cause: %s", output)
 	}
 }
+
+// TestProductionReconcilerLoopsGetARetryBudgetAndEveryRetryFunc proves the
+// startup retry cannot ship switched off: the config the production loader
+// returns with no environment set reaches both loops with a budget above zero
+// and every retry func set.
+func TestProductionReconcilerLoopsGetARetryBudgetAndEveryRetryFunc(t *testing.T) {
+	t.Chdir(filepath.Join("..", ".."))
+	cfg, err := config.Load(config.Spec{
+		Service:   reconcilerSpec.Service,
+		LookupEnv: func(string) (string, bool) { return "", false },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sources := reconcilerSourcesForTest(t, &fakeReconcilerDatabase{})
+	sources.buildRelay = func(_, _, _ *pgxpool.Pool, _ string, _ *jobruntime.Registry) (joboutbox.RelayStepper, error) {
+		return reconcilerStepFunc(func(context.Context, time.Time, int) (joboutbox.StepResult, error) {
+			return joboutbox.StepResult{}, nil
+		}), nil
+	}
+	var outbox joboutbox.ReconcilerLoopConfig
+	var observer syncreconciler.LoopConfig
+	buildLoop := sources.newLoop
+	sources.newLoop = func(stepper joboutbox.RelayStepper, config joboutbox.ReconcilerLoopConfig) (*joboutbox.ReconcilerLoop, error) {
+		outbox = config
+		return buildLoop(stepper, config)
+	}
+	buildSyncLoop := sources.newSyncLoop
+	sources.newSyncLoop = func(stepper syncreconciler.Stepper, config syncreconciler.LoopConfig) (*syncreconciler.Loop, error) {
+		observer = config
+		return buildSyncLoop(stepper, config)
+	}
+	cfg.RiverDatabaseSchema = "river"
+	dependencies := buildReconcilerDependencies(
+		context.Background(), cfg, health.NewRegistry(readinessTestCheckTimeout),
+		slog.New(slog.NewJSONHandler(&bytes.Buffer{}, nil)), checkedInReconcilerActivation, sources,
+	)
+	if dependencies.databaseErr != nil || dependencies.relayErr != nil || dependencies.loop == nil {
+		t.Fatalf("the production config built no loop: database=%v relay=%v", dependencies.databaseErr, dependencies.relayErr)
+	}
+	if cfg.PreclaimReadinessTimeout <= 0 {
+		t.Fatalf("the production default budget is %v", cfg.PreclaimReadinessTimeout)
+	}
+	if outbox.StartupRetryBudget != cfg.PreclaimReadinessTimeout || observer.StartupRetryBudget != cfg.PreclaimReadinessTimeout {
+		t.Fatalf("budgets outbox=%v observer=%v, want %v", outbox.StartupRetryBudget, observer.StartupRetryBudget, cfg.PreclaimReadinessTimeout)
+	}
+	if outbox.StartupRetry == nil || outbox.IsTransientDial == nil || outbox.MaskUnreachable == nil || outbox.StartupJitter == nil {
+		t.Fatalf("the outbox loop is missing a retry func: %+v", outbox)
+	}
+}

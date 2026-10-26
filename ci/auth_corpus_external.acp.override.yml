@@ -38,6 +38,8 @@ services:
     depends_on:
       providerstub:
         condition: service_started
+      smtpsink:
+        condition: service_started
       valkey:
         condition: service_healthy
     extra_hosts:
@@ -50,6 +52,8 @@ services:
       - AUTH_JWT_SECRET_KEY
       - AUTH_SESSION_SUCCESSOR_KEY
       - AUTH_LOGIN_LOCKOUT_KEY
+      # auth-service reads it on every register request, as go-api does; ci/auth_corpus_set_env.sh recreates it on a change.
+      - AUTH_AUTO_CREATE_ORG_ON_REGISTER
       # The login's rate limits live in the same Valkey database as go-api's (/1; authconfig requires it), under the
       # auth_svc_ key prefix. The venue's Valkey has no ACL users, so the URI carries none.
       - AUTH_VALKEY_URI=redis://valkey:6379/1
@@ -57,6 +61,14 @@ services:
       - AUTH_SERVICE_TRUSTED_PROXIES=10.199.91.20/32
       - SOCIAL_GITHUB_CLIENT_ID=gh-client
       - SOCIAL_GITHUB_CLIENT_SECRET=gh-secret
+      # The credentials flows of auth-service mail through the corpus's sink, the smtpsink service of this project,
+      # which joins auth_plane below and is reached by its service name.
+      # EMAIL_FROM_ADDRESS comes from the project state file, the value go-api's mail carries.
+      - EMAIL_PROVIDER=smtp
+      - EMAIL_FROM_ADDRESS
+      - SMTP_HOST=smtpsink
+      - SMTP_PORT=2525
+      - APP_BASE_URL=https://app.example.test/
     volumes:
       - ${AUTH_CORPUS_STUB_DIR}:/run/corpus-stub:ro
   # auth-service counts the login's rate limits in the venue's Valkey, which it reaches over auth_plane.
@@ -73,3 +85,8 @@ services:
     networks:
       auth_plane:
         ipv4_address: 10.199.91.10
+  # The sink is on both networks: go-api reaches it on the project's default network, auth-service on auth_plane.
+  smtpsink:
+    networks:
+      default:
+      auth_plane:

@@ -41,6 +41,7 @@ spec:
         {{- end }}
       {{- end }}
     spec:
+      automountServiceAccountToken: false
       {{- if .Values.clickhouse.usersd }}
       initContainers:
         {{- /* CHAOS-6474: users.d is an emptyDir (the image entrypoint still writes its own

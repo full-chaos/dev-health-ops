@@ -119,8 +119,10 @@ AUTH_PROOF_SMTP_PORT="$(cat "${SINK_DIR}/port")"
 export AUTH_PROOF_SMTP_PORT
 printf 'SMTP sink pid %s on port %s\n' "${SINK_PID}" "${AUTH_PROOF_SMTP_PORT}"
 
-printf 'step 1: up --build --wait go-api auth-service\n'
-compose --profile auth up --build --detach --wait --wait-timeout 900 go-api auth-service
+BUILD_FLAG=--build
+[ "${AUTH_PROOF_PREBUILT:-}" != 1 ] || BUILD_FLAG=--no-build
+printf 'step 1: up %s --wait go-api auth-service\n' "${BUILD_FLAG}"
+compose --profile auth up "${BUILD_FLAG}" --detach --wait --wait-timeout 900 go-api auth-service
 assert_project_prefixed
 compose exec -T postgres psql -v ON_ERROR_STOP=1 -q -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-postgres}" >/dev/null \
   < <(printf '\\set token %s\n' "'${AUTH_SESSION_ISSUE_TOKEN}'"; cat <<'SQL'

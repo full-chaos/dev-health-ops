@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -366,20 +367,11 @@ func TestAuthCorpusAcpOverrideTrustsEveryGatewayItJoins(t *testing.T) {
 	t.Errorf("the acp override's go-api environment lacks %q: %v", want, acp.Services.GoAPI.Environment)
 }
 
-// go-api mails to the runner's sink through the pinned gateway of its own network: that address is the host as the
-// container sees it. host.docker.internal (host-gateway) is docker0's address, which a container on another bridge
-// reaches only when the host routes between bridges.
-func TestAuthCorpusOverrideMailsToTheGatewayOfItsNetwork(t *testing.T) {
+// go-api mails to the corpus mail sink, a service of the project, by its service name. host.docker.internal
+// (host-gateway) is docker0's address, which a container on another bridge reaches only when the host routes between
+// bridges, and the host's own firewall may refuse it: the host is no part of the mail path.
+func TestAuthCorpusOverrideMailsToTheSinkService(t *testing.T) {
 	var override struct {
-		Networks struct {
-			Default struct {
-				IPAM struct {
-					Config []struct {
-						Gateway string `yaml:"gateway"`
-					} `yaml:"config"`
-				} `yaml:"ipam"`
-			} `yaml:"default"`
-		} `yaml:"networks"`
 		Services struct {
 			GoAPI struct {
 				Environment []string `yaml:"environment"`
@@ -390,23 +382,18 @@ func TestAuthCorpusOverrideMailsToTheGatewayOfItsNetwork(t *testing.T) {
 	if err := yaml.Unmarshal([]byte(readRepoFile(t, "ci", "auth_corpus_external.override.yml")), &override); err != nil {
 		t.Fatal(err)
 	}
-	config := override.Networks.Default.IPAM.Config
-	if len(config) != 1 {
-		t.Fatalf("the override does not pin the default network: %+v", config)
-	}
-	want := "SMTP_HOST=" + config[0].Gateway
 	found := false
 	for _, entry := range override.Services.GoAPI.Environment {
-		if entry == want {
+		if entry == "SMTP_HOST=smtpsink" {
 			found = true
 		}
 	}
 	if !found {
-		t.Errorf("go-api's environment lacks %s: %v", want, override.Services.GoAPI.Environment)
+		t.Errorf("go-api's environment lacks SMTP_HOST=smtpsink: %v", override.Services.GoAPI.Environment)
 	}
 	for _, entry := range override.Services.GoAPI.ExtraHosts {
 		if strings.Contains(entry, "host-gateway") || strings.Contains(entry, "host.docker.internal") {
-			t.Errorf("go-api keeps extra_hosts entry %q: the host is its network's gateway", entry)
+			t.Errorf("go-api keeps extra_hosts entry %q: the host is no part of the mail path", entry)
 		}
 	}
 }
@@ -464,5 +451,96 @@ func TestAuthCorpusAcpOverrideTrustsOnlyGoAPIsPinnedAddress(t *testing.T) {
 	}
 	if count != 1 {
 		t.Errorf("auth-service sets AUTH_SERVICE_TRUSTED_PROXIES %d times, want once", count)
+	}
+}
+
+// The set_env recreate of auth-service needs the variable in its environment.
+func TestAuthCorpusAcpOverridePassesTheAutoOrgVariableToAuthService(t *testing.T) {
+	var override struct {
+		Services map[string]struct {
+			Environment []string `yaml:"environment"`
+		} `yaml:"services"`
+	}
+	if err := yaml.Unmarshal([]byte(readRepoFile(t, "ci", "auth_corpus_external.acp.override.yml")), &override); err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range override.Services["auth-service"].Environment {
+		if entry == "AUTH_AUTO_CREATE_ORG_ON_REGISTER" {
+			return
+		}
+	}
+	t.Errorf("auth-service's environment lacks AUTH_AUTO_CREATE_ORG_ON_REGISTER: %v", override.Services["auth-service"].Environment)
+}
+
+// The corpus's own built images are tagged by project, so two runs never share a tag and a run removes only its own.
+func TestAuthCorpusOverrideTagsItsBuiltImagesByProject(t *testing.T) {
+	var override struct {
+		Services map[string]struct {
+			Image string `yaml:"image"`
+		} `yaml:"services"`
+	}
+	if err := yaml.Unmarshal([]byte(readRepoFile(t, "ci", "auth_corpus_external.override.yml")), &override); err != nil {
+		t.Fatal(err)
+	}
+	for service, want := range map[string]string{
+		"providerstub": "authcorpus-providerstub:${AUTH_CORPUS_PROJECT:-local}",
+		"smtpsink":     "authcorpus-smtpsink:${AUTH_CORPUS_PROJECT:-local}",
+	} {
+		if got := override.Services[service].Image; got != want {
+			t.Errorf("%s image = %q, want %q", service, got, want)
+		}
+	}
+}
+
+// joinComma runs the script's join helper on items in a bash that holds nothing else of the script.
+func joinComma(t *testing.T, items ...string) string {
+	t.Helper()
+	script := readRepoFile(t, "ci", "auth_corpus_external.sh")
+	start := strings.Index(script, "\njoin_comma() {")
+	if start < 0 {
+		t.Fatal("the script has no join_comma helper")
+	}
+	end := strings.Index(script[start+1:], "\n}\n")
+	if end < 0 {
+		t.Fatal("join_comma is not closed")
+	}
+	helper := script[start+1 : start+1+end+3]
+	cmd := exec.Command("bash", append([]string{"-c", "set -euo pipefail\n" + helper + "\njoin_comma \"$@\"", "bash"}, items...)...)
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("join_comma %q: %v", items, err)
+	}
+	return string(out)
+}
+
+// The forwarded set is joined with commas by one helper that assigns no IFS (semgrep bash ifs-tampering): exact strings for
+// none, one and two aggregates, no trailing newline, none dropped.
+func TestAuthCorpusJoinsTheForwardedSetWithCommasExactly(t *testing.T) {
+	for _, c := range []struct {
+		items []string
+		want  string
+	}{
+		{nil, ""},
+		{[]string{"sessions"}, "sessions"},
+		{[]string{"sessions", "local_login"}, "sessions,local_login"},
+		{[]string{"sessions", "local_login", "credentials"}, "sessions,local_login,credentials"},
+	} {
+		if got := joinComma(t, c.items...); got != c.want {
+			t.Errorf("join_comma %q = %q, want %q", c.items, got, c.want)
+		}
+	}
+}
+
+func TestAuthCorpusScriptAssignsNoIFSExceptTheReadOfItsRouteTable(t *testing.T) {
+	var found []string
+	for number, line := range strings.Split(readRepoFile(t, "ci", "auth_corpus_external.sh"), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "#") || !strings.Contains(line, "IFS") {
+			continue
+		}
+		found = append(found, strings.TrimSpace(line)+" (line "+strconv.Itoa(number+1)+")")
+	}
+	if len(found) != 1 || !strings.HasPrefix(found[0], "while IFS=$'\\t' read -r name method pattern; do") {
+		t.Fatalf("IFS appears in the script outside the route table read: %q", found)
 	}
 }

@@ -47,7 +47,7 @@ func TestRatchetRefusesASilentlyNarrowedManifestAndRollsBack(t *testing.T) {
 	if !hasPrivilege(t, ctx, env, "sessions", "DELETE") {
 		t.Fatal("precondition: the fixture runtime role must hold DELETE on sessions")
 	}
-	err = applyRuntimeGrants(ctx, conn.Conn(), manifestWithout("sessions"), options)
+	err = applyRuntimeGrants(ctx, conn.Conn(), manifestWithout("sessions"), options, nil)
 	var narrowed *NarrowingError
 	if !errors.As(err, &narrowed) || !errors.Is(err, ErrRuntimeGrantsNarrowed) {
 		t.Fatalf("applyRuntimeGrants = %v, want *NarrowingError", err)
@@ -57,12 +57,12 @@ func TestRatchetRefusesASilentlyNarrowedManifestAndRollsBack(t *testing.T) {
 	}
 
 	options.AcknowledgeNarrowing = "0000000000000000"
-	if err := applyRuntimeGrants(ctx, conn.Conn(), manifestWithout("sessions"), options); !errors.Is(err, ErrRuntimeGrantsNarrowed) {
+	if err := applyRuntimeGrants(ctx, conn.Conn(), manifestWithout("sessions"), options, nil); !errors.Is(err, ErrRuntimeGrantsNarrowed) {
 		t.Fatalf("a wrong digest must still refuse; got %v", err)
 	}
 
 	options.AcknowledgeNarrowing = narrowed.Digest
-	if err := applyRuntimeGrants(ctx, conn.Conn(), manifestWithout("sessions"), options); err != nil {
+	if err := applyRuntimeGrants(ctx, conn.Conn(), manifestWithout("sessions"), options, nil); err != nil {
 		t.Fatalf("the printed digest must acknowledge the same narrowing: %v", err)
 	}
 	if hasPrivilege(t, ctx, env, "sessions", "DELETE") {
@@ -104,7 +104,7 @@ func TestRatchetIgnoresInheritedGrantsAndFirstRuns(t *testing.T) {
 			t.Fatalf("an inherited grant leaked into the direct snapshot: %v", g)
 		}
 	}
-	if err := applyRuntimeGrants(ctx, conn.Conn(), RuntimePosture(), options); err != nil {
+	if err := applyRuntimeGrants(ctx, conn.Conn(), RuntimePosture(), options, nil); err != nil {
 		t.Fatalf("an unchanged manifest over a role with inherited grants must pass: %v", err)
 	}
 
@@ -131,7 +131,7 @@ func TestRatchetSeesALostGrantOption(t *testing.T) {
 	)); err != nil {
 		t.Fatal(err)
 	}
-	if err := applyRuntimeGrants(ctx, conn.Conn(), RuntimePosture(), options); !errors.Is(err, ErrRuntimeGrantsNarrowed) {
+	if err := applyRuntimeGrants(ctx, conn.Conn(), RuntimePosture(), options, nil); !errors.Is(err, ErrRuntimeGrantsNarrowed) {
 		t.Fatalf("losing WITH GRANT OPTION must refuse; got %v", err)
 	}
 }
@@ -161,7 +161,7 @@ func TestRatchetDigestDoesNotCoverADifferentDottedIdentifierGrant(t *testing.T) 
 		}
 	}
 	var first *NarrowingError
-	if err := applyRuntimeGrants(ctx, conn.Conn(), RuntimePosture(), options); !errors.As(err, &first) {
+	if err := applyRuntimeGrants(ctx, conn.Conn(), RuntimePosture(), options, nil); !errors.As(err, &first) {
 		t.Fatalf("first loss must refuse; got %v", err)
 	}
 	if _, err := env.migration.Exec(ctx, fmt.Sprintf(`REVOKE SELECT ("b.c") ON %s."a" FROM %s`, schema, role)); err != nil {
@@ -171,7 +171,7 @@ func TestRatchetDigestDoesNotCoverADifferentDottedIdentifierGrant(t *testing.T) 
 		t.Fatal(err)
 	}
 	options.AcknowledgeNarrowing = first.Digest
-	if err := applyRuntimeGrants(ctx, conn.Conn(), RuntimePosture(), options); !errors.Is(err, ErrRuntimeGrantsNarrowed) {
+	if err := applyRuntimeGrants(ctx, conn.Conn(), RuntimePosture(), options, nil); !errors.Is(err, ErrRuntimeGrantsNarrowed) {
 		t.Fatalf("an acknowledgement for a.\"b.c\" must not cover \"a.b\".c; got %v", err)
 	}
 }

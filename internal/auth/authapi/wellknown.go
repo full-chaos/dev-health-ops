@@ -80,12 +80,21 @@ func WellKnownRoutes(deps WellKnownDeps) []httpapi.Route {
 		{Method: http.MethodHead, Pattern: PatternJWKS, Handler: http.HandlerFunc(deps.serveJWKS)},
 	}
 	if deps.IssuerURL == "" {
-		return routes
+		return markPublicClass(routes)
 	}
-	return append(routes,
+	return markPublicClass(append(routes,
 		httpapi.Route{Method: http.MethodGet, Pattern: PatternDiscovery, Handler: http.HandlerFunc(deps.serveDiscovery)},
 		httpapi.Route{Method: http.MethodHead, Pattern: PatternDiscovery, Handler: http.HandlerFunc(deps.serveDiscovery)},
-	)
+	))
+}
+
+// markPublicClass puts every route in the public-document admission class:
+// none of them does dependency I/O on a request.
+func markPublicClass(routes []httpapi.Route) []httpapi.Route {
+	for i := range routes {
+		routes[i].PublicClass = true
+	}
+	return routes
 }
 
 func (d WellKnownDeps) serveJWKS(w http.ResponseWriter, r *http.Request) {

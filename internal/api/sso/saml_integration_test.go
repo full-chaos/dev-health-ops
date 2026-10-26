@@ -320,6 +320,47 @@ func TestSAMLMetadataAndInitiate(t *testing.T) {
 	}
 }
 
+// A lone surrogate in relay_state is refused as string_unicode where the
+// value goes into the redirect_url query (allow_idp_initiated); where the
+// route replaces it with its own sealed token it is still ignored.
+func TestSAMLInitiateRefusesALoneSurrogateRelayStateOnlyWhereItIsForwarded(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	st := startStack(t, ctx)
+	orgID := seedOrg(t, ctx, st.pool, "enterprise")
+	idp := newSAMLIdP(t)
+	config := fmt.Sprintf(`{"entity_id":"https://idp.test/entity","sso_url":"https://idp.test/sso","certificate":%q}`, idp.certConfigValue())
+	forwarded := seedProvider(t, ctx, st.pool, orgID, providerOpts{protocol: "saml", status: "active", config: config, autoProvision: true})
+	sealed := seedProvider(t, ctx, st.pool, orgID, providerOpts{protocol: "saml", status: "active", config: config, autoProvision: true, disallowIdpInitiated: true})
+
+	post := func(id uuid.UUID, raw string) (int, string) {
+		t.Helper()
+		resp, err := http.Post(st.server.URL+"/api/v1/auth/saml/"+id.String()+"/initiate", "application/json", strings.NewReader(raw))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		text, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp.StatusCode, string(text)
+	}
+	for _, escape := range []string{`\ud800`, `\udbff`, `\udc00`, `\udfff`} {
+		status, text := post(forwarded, `{"relay_state":"a`+escape+`b"}`)
+		if status != http.StatusUnprocessableEntity || !strings.Contains(text, `"string_unicode"`) || !strings.Contains(text, `"relay_state"`) {
+			t.Errorf("forwarded %s: status=%d body=%s", escape, status, text)
+		}
+		if status, text = post(sealed, `{"relay_state":"a`+escape+`b"}`); status != http.StatusOK || !strings.Contains(text, "redirect_url") {
+			t.Errorf("sealed %s: status=%d body=%s", escape, status, text)
+		}
+	}
+	status, text := post(forwarded, `{"relay_state":"a\ud83d\ude00b"}`)
+	if status != http.StatusOK || !strings.Contains(text, "RelayState=a") {
+		t.Errorf("a surrogate pair: status=%d body=%s", status, text)
+	}
+}
+
 func getJSON(t *testing.T, server *httptest.Server, path string) (int, map[string]any) {
 	t.Helper()
 	resp, err := http.Get(server.URL + path)

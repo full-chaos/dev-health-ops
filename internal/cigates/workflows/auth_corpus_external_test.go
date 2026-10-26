@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -488,5 +489,58 @@ func TestAuthCorpusOverrideTagsItsBuiltImagesByProject(t *testing.T) {
 		if got := override.Services[service].Image; got != want {
 			t.Errorf("%s image = %q, want %q", service, got, want)
 		}
+	}
+}
+
+// joinComma runs the script's join helper on items in a bash that holds nothing else of the script.
+func joinComma(t *testing.T, items ...string) string {
+	t.Helper()
+	script := readRepoFile(t, "ci", "auth_corpus_external.sh")
+	start := strings.Index(script, "\njoin_comma() {")
+	if start < 0 {
+		t.Fatal("the script has no join_comma helper")
+	}
+	end := strings.Index(script[start+1:], "\n}\n")
+	if end < 0 {
+		t.Fatal("join_comma is not closed")
+	}
+	helper := script[start+1 : start+1+end+3]
+	cmd := exec.Command("bash", append([]string{"-c", "set -euo pipefail\n" + helper + "\njoin_comma \"$@\"", "bash"}, items...)...)
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("join_comma %q: %v", items, err)
+	}
+	return string(out)
+}
+
+// The forwarded set is joined with commas by one helper that assigns no IFS (semgrep bash ifs-tampering): exact strings for
+// none, one and two aggregates, no trailing newline, none dropped.
+func TestAuthCorpusJoinsTheForwardedSetWithCommasExactly(t *testing.T) {
+	for _, c := range []struct {
+		items []string
+		want  string
+	}{
+		{nil, ""},
+		{[]string{"sessions"}, "sessions"},
+		{[]string{"sessions", "local_login"}, "sessions,local_login"},
+		{[]string{"sessions", "local_login", "credentials"}, "sessions,local_login,credentials"},
+	} {
+		if got := joinComma(t, c.items...); got != c.want {
+			t.Errorf("join_comma %q = %q, want %q", c.items, got, c.want)
+		}
+	}
+}
+
+func TestAuthCorpusScriptAssignsNoIFSExceptTheReadOfItsRouteTable(t *testing.T) {
+	var found []string
+	for number, line := range strings.Split(readRepoFile(t, "ci", "auth_corpus_external.sh"), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "#") || !strings.Contains(line, "IFS") {
+			continue
+		}
+		found = append(found, strings.TrimSpace(line)+" (line "+strconv.Itoa(number+1)+")")
+	}
+	if len(found) != 1 || !strings.HasPrefix(found[0], "while IFS=$'\\t' read -r name method pattern; do") {
+		t.Fatalf("IFS appears in the script outside the route table read: %q", found)
 	}
 }

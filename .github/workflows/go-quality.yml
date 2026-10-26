@@ -147,6 +147,8 @@ jobs:
       - name: Plan the change set (NONE / AFFECTED / FULL)
         id: plan
         env:
+          # CHAOS-11418: every go command of this workflow runs with GOWORK=off, as ci/check_go.sh does.
+          GOWORK: "off"
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
           EVENT_NAME: ${{ github.event_name }}
         run: |
@@ -432,6 +434,8 @@ jobs:
         # -update is deliberately absent: it REWRITES the record instead of
         # comparing against it, which would make this step incapable of failing.
         # A test asserts this command does not carry it.
+        env:
+          GOWORK: "off"
         run: go run -trimpath ./cmd/gqlgen-guard check-drift
 
       - name: Prepare base job contracts

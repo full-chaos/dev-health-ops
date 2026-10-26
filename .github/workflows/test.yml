@@ -105,6 +105,8 @@ jobs:
       - name: Run the started-chart test (ClickHouse config.d)
         env:
           CHART_STARTED_TEST_REQUIRED: "1"
+          # CHAOS-11418: no go.work can change what this test compiles against, so the filter above need not list one.
+          GOWORK: "off"
         run: go test -mod=readonly -trimpath -count=1 -v -run '^TestClickHouseConfigdStartsAndAnswersOnThePodAddress$' ./deploy/helm/dev-health
 
   # Required-status-check gate. Branch protection requires a check named

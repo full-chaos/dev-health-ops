@@ -227,3 +227,35 @@ func assertExitErrorHasNoAddress(t *testing.T, err error, address string) {
 		t.Fatalf("exit error %q must still unwrap to the refused dial", text)
 	}
 }
+
+func TestStartupRetryFuncsAreRequiredWithABudget(t *testing.T) {
+	build := func(retry StartupRetryFunc, mask func(error) error, jitter func(time.Duration) time.Duration) error {
+		_, err := newLoop(schedulerHandoffStepper(func() (HandoffResult, error) { return HandoffResult{}, nil }), CoordinatorFunc(func(context.Context, HandoffTransaction, Occurrence) (HandoffOutcome, error) {
+			return OccurrenceMinted, nil
+		}), LoopConfig{
+			PollInterval: minLoopPollInterval,
+			StepTimeout:  time.Second,
+			MaxBackoff:   80 * time.Millisecond,
+			Limit:        3,
+			Registry:     health.NewRegistry(time.Second),
+			Occurrences:  &stubOccurrences{},
+		}.WithStartupRetry(time.Minute, retry, mask, jitter), &testLoopClock{})
+		return err
+	}
+	mask := func(err error) error { return err }
+	jitter := func(wait time.Duration) time.Duration { return wait }
+	if err := build(testStartupRetry, mask, jitter); err != nil {
+		t.Fatalf("a full config must construct: %v", err)
+	}
+	for name, err := range map[string]error{
+		"NilStartupRetry":    build(nil, mask, jitter),
+		"NilMaskUnreachable": build(testStartupRetry, nil, jitter),
+		"NilStartupJitter":   build(testStartupRetry, mask, nil),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if !errors.Is(err, ErrInvalidTransactionRequest) {
+				t.Fatalf("with a budget: err = %v, want ErrInvalidTransactionRequest", err)
+			}
+		})
+	}
+}

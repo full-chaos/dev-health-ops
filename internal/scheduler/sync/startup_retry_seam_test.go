@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
+	"github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 )
 
 // newStartupRetryLoop builds a loop with a startup retry budget, a fake wait
@@ -31,11 +32,26 @@ func newStartupRetryLoop(
 		Limit:        3,
 		Registry:     registry,
 		Occurrences:  &stubOccurrences{},
-	}.WithLogger(slog.New(slog.NewTextHandler(logs, nil))).WithStartupRetryBudget(budget), clock)
+	}.WithLogger(slog.New(slog.NewTextHandler(logs, nil))).WithStartupRetry(budget, testStartupRetry, postgres.MaskUnreachable, postgres.DialRetryJitter), clock)
 	if err != nil {
 		t.Fatal(err)
 	}
 	loop.sleep = sleep
 	loop.jitter = nil
 	return loop, registry, logs
+}
+
+func testStartupRetry(
+	ctx context.Context,
+	budget time.Duration,
+	seams StartupRetrySeams,
+	step func(context.Context) error,
+) error {
+	return postgres.DialRetry{
+		Budget:  budget,
+		Now:     seams.Now,
+		Sleep:   seams.Sleep,
+		Jitter:  seams.Jitter,
+		OnRetry: seams.OnRetry,
+	}.Do(ctx, step)
 }

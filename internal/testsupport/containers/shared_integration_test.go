@@ -228,9 +228,6 @@ func TestSharedServerLeakCheck(t *testing.T) {
 				"CREATE USER planted_member IDENTIFIED WITH sha256_password BY 'planted'",
 				"GRANT planted_ch_role TO planted_member")
 		}, "clickhouse new role-grant planted_member||planted_ch_role|0"},
-		{"clickhouse named collection", func(t *testing.T, ctx context.Context, s *sharedServers) {
-			chExec(t, ctx, s.ch.adminDSN, "CREATE NAMED COLLECTION planted_nc AS host = 'planted'")
-		}, "clickhouse new named-collection planted_nc"},
 		{"clickhouse SQL user-defined function", func(t *testing.T, ctx context.Context, s *sharedServers) {
 			chExec(t, ctx, s.ch.adminDSN, "CREATE FUNCTION planted_udf AS (x) -> x + 1")
 		}, "clickhouse new function planted_udf"},
@@ -254,17 +251,17 @@ func TestSharedServerLeakCheck(t *testing.T) {
 	}
 }
 
-// TestSharedServerNamedCollectionCrossesDatabases shows why named collections
-// are in the leak check: one made through one caller's scratch database is
-// visible from another caller's, and the run exits 1 naming it.
-func TestSharedServerNamedCollectionCrossesDatabases(t *testing.T) {
+// TestSharedServerFunctionCrossesDatabases shows why SQL user-defined
+// functions are in the leak check: one made through one caller's scratch
+// database is callable from another caller's, and the run exits 1 naming it.
+func TestSharedServerFunctionCrossesDatabases(t *testing.T) {
 	ctx := sharedCtx(t)
 	log := captureSharedLog(t)
 	ran := false
 	code := RunWithSharedServers(func() int {
 		first := mustStart(t, StartClickHouse, ctx)
 		second := mustStart(t, StartClickHouse, ctx)
-		chExec(t, ctx, first.URI, "CREATE NAMED COLLECTION crossing_nc AS host = 'planted'")
+		chExec(t, ctx, first.URI, "CREATE FUNCTION crossing_udf AS (x) -> x + 41")
 		options, err := clickhousego.ParseDSN(second.URI)
 		if err != nil {
 			t.Fatal(err)
@@ -273,22 +270,46 @@ func TestSharedServerNamedCollectionCrossesDatabases(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		var seen uint64
-		if err := conn.QueryRow(ctx, "SELECT count() FROM system.named_collections WHERE name = 'crossing_nc'").Scan(&seen); err != nil {
+		var answer uint64
+		if err := conn.QueryRow(ctx, "SELECT toUInt64(crossing_udf(1))").Scan(&answer); err != nil {
 			t.Fatal(err)
 		}
 		_ = conn.Close()
-		if seen != 1 {
-			t.Errorf("named collection seen %d times from another scratch database; want 1", seen)
+		if answer != 42 {
+			t.Errorf("crossing_udf(1) from another scratch database = %d, want 42", answer)
 		}
 		mustClose(t, ctx, first)
 		mustClose(t, ctx, second)
 		ran = true
 		return 0
 	})
-	if !ran || code != 1 || !strings.Contains(log.String(), "FAIL: shared server leak: clickhouse new named-collection crossing_nc") {
-		t.Errorf("ran %v code %d; want 1 and the named collection reported; log:\n%s", ran, code, log)
+	if !ran || code != 1 || !strings.Contains(log.String(), "FAIL: shared server leak: clickhouse new function crossing_udf") {
+		t.Errorf("ran %v code %d; want 1 and the function reported; log:\n%s", ran, code, log)
 	}
+}
+
+// TestSharedServerUserCannotCreateNamedCollections: the harness's ClickHouse
+// user holds no CREATE NAMED COLLECTION grant, so no test can make one on the
+// shared server; the leak snapshot reads system.named_collections all the same.
+func TestSharedServerUserCannotCreateNamedCollections(t *testing.T) {
+	ctx := sharedCtx(t)
+	runShared(t, func() {
+		instance := mustStart(t, StartClickHouse, ctx)
+		defer mustClose(t, ctx, instance)
+		options, err := clickhousego.ParseDSN(instance.URI)
+		if err != nil {
+			t.Fatal(err)
+		}
+		conn, err := clickhousego.Open(options)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = conn.Close() }()
+		err = conn.Exec(ctx, "CREATE NAMED COLLECTION refused_nc AS host = 'planted'")
+		if err == nil || !strings.Contains(err.Error(), "Not enough privileges") {
+			t.Errorf("CREATE NAMED COLLECTION as the harness user: %v; want a privilege refusal", err)
+		}
+	})
 }
 
 func TestIsolatedGetsAPrivateServerInSharedMode(t *testing.T) {

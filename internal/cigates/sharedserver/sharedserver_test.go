@@ -1,5 +1,5 @@
 // Package sharedserver_test guards the shared-server test mode
-// (containers.RunWithSharedServers): in a package that opts in, a test file
+// (containers.RunWithSharedServers): in a package that opts in, a test func
 // that changes server-wide state must take a private server with
 // containers.StartPostgresIsolated or containers.StartClickHouseIsolated.
 // The runtime leak check catches what a test leaves behind; this guard catches
@@ -36,7 +36,10 @@ var serverWide = []struct {
 	{"CREATE TABLESPACE", regexp.MustCompile(`(?i)\bCREATE\s+TABLESPACE\b`)},
 	{"ALTER ROLE/USER with a literal name", regexp.MustCompile(`(?i)\bALTER\s+(ROLE|USER)\s+` + ident)},
 	{"CREATE access entity with a literal name", regexp.MustCompile(
-		`(?i)\bCREATE\s+(ROLE|USER|QUOTA|SETTINGS\s+PROFILE|ROW\s+POLICY)\s+(IF\s+NOT\s+EXISTS\s+)?` + ident)},
+		`(?i)\bCREATE\s+(ROLE|USER|QUOTA|SETTINGS\s+PROFILE|ROW\s+POLICY)\s+(IF\s+NOT\s+EXISTS\s+|OR\s+REPLACE\s+)?` + ident)},
+	{"ClickHouse named collection", regexp.MustCompile(`(?i)\b(CREATE|ALTER)\s+NAMED\s+COLLECTION\b`)},
+	{"ClickHouse SQL user-defined function", regexp.MustCompile(
+		`(?i)\bCREATE\s+(OR\s+REPLACE\s+)?FUNCTION\s+(IF\s+NOT\s+EXISTS\s+)?` + ident + `\s+(ON\s+CLUSTER\s+\S+\s+)?AS\s*\(`)},
 	{"GRANT <role> TO with literal names", regexp.MustCompile(
 		`(?i)\bGRANT\s+` + ident + `(\s*,\s*` + ident + `)*\s+TO\s`)},
 	{"REVOKE <role> FROM with literal names", regexp.MustCompile(
@@ -101,12 +104,17 @@ func scan(t *testing.T, root string) ([]string, []finding) {
 		rel, _ := filepath.Rel(root, dir)
 		optedIn = append(optedIn, filepath.ToSlash(rel))
 		for file, source := range sources {
-			if isolatedCall.MatchString(source) {
-				continue
-			}
 			relFile, _ := filepath.Rel(root, file)
-			for number, line := range strings.Split(source, "\n") {
-				if strings.HasPrefix(strings.TrimSpace(line), "//") {
+			lines := strings.Split(source, "\n")
+			regions := topLevelFuncs(lines)
+			isolated := map[int]bool{}
+			for number, line := range lines {
+				if regions[number] >= 0 && isolatedCall.MatchString(line) {
+					isolated[regions[number]] = true
+				}
+			}
+			for number, line := range lines {
+				if strings.HasPrefix(strings.TrimSpace(line), "//") || (regions[number] >= 0 && isolated[regions[number]]) {
 					continue
 				}
 				for _, statement := range serverWide {
@@ -125,6 +133,25 @@ func scan(t *testing.T, root string) ([]string, []finding) {
 		return findings[i].line < findings[j].line
 	})
 	return optedIn, findings
+}
+
+// topLevelFuncs maps each line to the line index of the top-level func it is
+// in, or -1 outside every func. The Isolated exemption holds per func: a
+// server-wide statement passes only in a func that takes a private server.
+func topLevelFuncs(lines []string) []int {
+	regions := make([]int, len(lines))
+	current := -1
+	for number, line := range lines {
+		if strings.HasPrefix(line, "func ") {
+			current = number
+		}
+		regions[number] = current
+		// "}" alone closes a gofmt'd top-level func; a one-line func closes on its own line.
+		if line == "}" || (strings.HasPrefix(line, "func ") && strings.HasSuffix(strings.TrimSpace(line), "}")) {
+			current = -1
+		}
+	}
+	return regions
 }
 
 func TestSharedServerPackagesIsolateServerWideStatements(t *testing.T) {
@@ -150,7 +177,7 @@ func TestSharedServerPackagesIsolateServerWideStatements(t *testing.T) {
 			continue
 		}
 		t.Errorf("internal/%s:%d: %s in a package that runs on a shared server (containers.RunWithSharedServers): "+
-			"use containers.StartPostgresIsolated / StartClickHouseIsolated in this file, or build the name per call "+
+			"use containers.StartPostgresIsolated / StartClickHouseIsolated in this func, or build the name per call "+
 			"(containers.RoleName)", f.file, f.line, f.kind)
 	}
 }

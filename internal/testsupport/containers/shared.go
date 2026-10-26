@@ -303,8 +303,9 @@ func postgresSnapshot(ctx context.Context, dsn string) ([]string, error) {
 	return rows, nil
 }
 
-// clickHouseSnapshotQueries are the ClickHouse counterpart: databases and
-// every access entity, grant and role grant.
+// clickHouseSnapshotQueries are the ClickHouse counterpart: databases, every
+// access entity, grant and role grant, named collections and SQL user-defined
+// functions (the last two live outside every database).
 var clickHouseSnapshotQueries = []string{
 	`SELECT concat('database ', name) FROM system.databases`,
 	`SELECT concat('user ', name) FROM system.users`,
@@ -317,6 +318,8 @@ var clickHouseSnapshotQueries = []string{
 	        toString(is_partial_revoke), '|', toString(grant_option)) FROM system.grants`,
 	`SELECT concat('role-grant ', ifNull(user_name, ''), '|', ifNull(role_name, ''), '|', granted_role_name, '|',
 	        toString(with_admin_option)) FROM system.role_grants`,
+	`SELECT concat('named-collection ', name) FROM system.named_collections`,
+	`SELECT concat('function ', name) FROM system.functions WHERE origin = 'SQLUserDefined'`,
 }
 
 func clickHouseSnapshot(ctx context.Context, dsn string) ([]string, error) {

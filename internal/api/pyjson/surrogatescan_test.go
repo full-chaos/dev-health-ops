@@ -3,6 +3,7 @@ package pyjson_test
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 )
@@ -46,7 +47,7 @@ func TestHasLoneSurrogateEscape(t *testing.T) {
 	}
 }
 
-// walkHasSurrogate is the reference: json.loads (pyjson.Decode) keeps a lone
+// walkHasSurrogate is the reference: json.loads (pyjson.DecodeString) keeps a lone
 // escape as a lone surrogate, so a string or key that holds one is exactly
 // what the scanner must report.
 func walkHasSurrogate(value pyjson.Value) bool {
@@ -75,7 +76,13 @@ func walkHasSurrogate(value pyjson.Value) bool {
 // callers scan only a body their decoder already accepted.
 func differential(t testing.TB, doc []byte) {
 	t.Helper()
-	value, err := pyjson.Decode(doc)
+	// The handlers decode with encoding/json, which reads UTF-8 only: a body
+	// pyjson.Decode would re-read as UTF-16 or UTF-32 (json.detect_encoding)
+	// is not a document they accept, so the reference sees the same text.
+	if !utf8.Valid(doc) {
+		return
+	}
+	value, err := pyjson.DecodeString(string(doc))
 	if err != nil {
 		return
 	}

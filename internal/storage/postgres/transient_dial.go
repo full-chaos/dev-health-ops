@@ -11,12 +11,20 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
+// ErrDialUnreachable is the bounded cause a sanitizer keeps when it drops a
+// transient dial error's text, so the classification survives the
+// sanitizing (CHAOS-11608).
+var ErrDialUnreachable = errors.New("postgres: endpoint unreachable")
+
 // IsTransientDialError classifies err by type and code only, never by text.
 // Auth (28P01, 28000), permission (42501), other server answers, TLS and
 // configuration failures are final.
 func IsTransientDialError(err error) bool {
 	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return false
+	}
+	if errors.Is(err, ErrDialUnreachable) {
+		return true
 	}
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) {

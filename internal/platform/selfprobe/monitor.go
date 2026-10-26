@@ -45,6 +45,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -129,9 +130,15 @@ func Once(ctx context.Context, opener TxOpener) (err error) {
 // problem. Only a deadline is a "the pool was busy" signal; every other failure, cancellation
 // included, stays an opaque hard failure: a wrong password must not read as "slow", and neither
 // must a cancellation.
+//
+// CHAOS-11608: a refused or pooler-refused dial keeps postgres.ErrDialUnreachable as its cause, so
+// it classifies transient (unreachable), never as a timeout and never with the driver text.
 func sanitizedProbeError(operation string, err error) error {
 	if errors.Is(err, context.DeadlineExceeded) {
 		return fmt.Errorf("%s: unavailable: %w", operation, context.DeadlineExceeded)
+	}
+	if postgres.IsTransientDialError(err) {
+		return fmt.Errorf("%s: unavailable: %w", operation, postgres.ErrDialUnreachable)
 	}
 	return fmt.Errorf("%s: unavailable", operation)
 }

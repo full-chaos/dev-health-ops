@@ -148,10 +148,15 @@ func Routes(deps Deps) ([]httpapi.Route, error) {
 var issuerURLPattern = regexp.MustCompile(`^https://[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?(:[0-9]{1,5})?(/[A-Za-z0-9_~-][A-Za-z0-9._~-]{0,63}){0,8}$`)
 
 var (
-	invalidRequestBody = []byte(`{"error":"invalid_request"}`)
-	invalidGrantBody   = []byte(`{"error":"invalid_grant"}`)
-	unavailableBody    = []byte(`{"error":"temporarily_unavailable"}`)
+	invalidRequestBody = oauthError{Error: "invalid_request"}
+	invalidGrantBody   = oauthError{Error: "invalid_grant"}
+	unavailableBody    = oauthError{Error: "temporarily_unavailable"}
 )
+
+// oauthError is the RFC 6749 error answer; the value is one fixed code.
+type oauthError struct {
+	Error string `json:"error"`
+}
 
 type handler struct {
 	Deps
@@ -247,15 +252,10 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.answer(w, r, outcomeUnavailable, reasonAuditUnavailable, audience)
 		return
 	}
-	body, err := json.Marshal(issuedAnswer{
+	h.rec.record(ctx, outcomeIssued, reasonIssued, audience)
+	writeJSON(w, http.StatusOK, issuedAnswer{
 		AccessToken: issued, IssuedTokenType: TokenTypeJWT, TokenType: "Bearer", ExpiresIn: lifetime,
 	})
-	if err != nil {
-		h.answer(w, r, outcomeUnavailable, reasonSignerUnavailable, audience)
-		return
-	}
-	h.rec.record(ctx, outcomeIssued, reasonIssued, audience)
-	writeJSON(w, http.StatusOK, body)
 }
 
 // review authenticates the subject token through TokenReview, at most
@@ -304,13 +304,15 @@ func (h *handler) transportError(w http.ResponseWriter, r *http.Request, code ht
 	httpapi.WriteError(w, r, code)
 }
 
-func writeJSON(w http.ResponseWriter, status int, body []byte) {
+// writeJSON is the route's one response writer: an explicit Content-Type and
+// json.NewEncoder(w).Encode, never a raw w.Write of bytes.
+func writeJSON(w http.ResponseWriter, status int, value any) {
 	header := w.Header()
 	header.Set("Content-Type", "application/json")
 	header.Set("Cache-Control", "no-store")
 	header.Set("Pragma", "no-cache")
 	w.WriteHeader(status)
-	_, _ = w.Write(body)
+	_ = json.NewEncoder(w).Encode(value)
 }
 
 var requestFields = map[string]bool{

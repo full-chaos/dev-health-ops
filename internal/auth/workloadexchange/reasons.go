@@ -76,9 +76,14 @@ func isWorkloadAudience(audience string) bool {
 	return false
 }
 
+// audienceLabel is the log and counter label of a requested audience: one of
+// the string literals below, never a request byte.
 func audienceLabel(audience string) string {
-	if isWorkloadAudience(audience) {
-		return audience
+	switch audience {
+	case "auth-service":
+		return "auth-service"
+	case "dev-health-api":
+		return "dev-health-api"
 	}
 	return audienceNone
 }

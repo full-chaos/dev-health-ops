@@ -109,7 +109,7 @@ func TestTheWorkloadExchangeIsMountedWhenOn(t *testing.T) {
 		t.Fatal(err)
 	}
 	rec := exchangeShapeFault(t, api, http.MethodPost)
-	if rec.Code != http.StatusBadRequest || rec.Body.String() != `{"error":"invalid_request"}` {
+	if rec.Code != http.StatusBadRequest || rec.Body.String() != "{\"error\":\"invalid_request\"}\n" {
 		t.Fatalf("POST answered %d %q, want the exchange's 400 invalid_request", rec.Code, rec.Body.String())
 	}
 	if rec := exchangeShapeFault(t, api, http.MethodGet); rec.Code != http.StatusMethodNotAllowed {

@@ -214,7 +214,7 @@ func TestADisabledWorkloadIsRefusedAtOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	rec := h.post(form(h.validSubject(), "auth-service", "").Encode())
-	if rec.Code != http.StatusBadRequest || rec.Body.String() != `{"error":"invalid_grant"}` {
+	if rec.Code != http.StatusBadRequest || rec.Body.String() != "{\"error\":\"invalid_grant\"}\n" {
 		t.Fatalf("after disable: %d %q, want the uniform 400", rec.Code, rec.Body.String())
 	}
 	if got := h.metricPoints()["refused/disabled/auth-service"]; got != 1 {
@@ -229,7 +229,7 @@ func TestAnUnboundServiceAccountIsRefused(t *testing.T) {
 		writeReview(w, http.StatusCreated, true, []string{ReviewAudience}, "system:serviceaccount:other-ns:"+testSAName, testSAUID)
 	})
 	rec := h.post(form(h.validSubject(), "auth-service", "").Encode())
-	if rec.Code != http.StatusBadRequest || rec.Body.String() != `{"error":"invalid_grant"}` {
+	if rec.Code != http.StatusBadRequest || rec.Body.String() != "{\"error\":\"invalid_grant\"}\n" {
 		t.Fatalf("unbound: %d %q", rec.Code, rec.Body.String())
 	}
 	if got := h.metricPoints()["refused/unknown/auth-service"]; got != 1 {

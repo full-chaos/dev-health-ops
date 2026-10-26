@@ -258,7 +258,7 @@ func TestEveryRefusalAnswersTheSameBytes(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newHarness(t)
 			rec := h.post(tc.setup(h))
-			if rec.Code != http.StatusBadRequest || rec.Body.String() != `{"error":"invalid_grant"}` {
+			if rec.Code != http.StatusBadRequest || rec.Body.String() != "{\"error\":\"invalid_grant\"}\n" {
 				t.Fatalf("status %d body %q, want 400 {\"error\":\"invalid_grant\"}", rec.Code, rec.Body.String())
 			}
 			if first == nil {
@@ -398,7 +398,7 @@ func encodeValues(v map[string][]string) string {
 
 func assertInvalidRequest(t *testing.T, h *harness, rec *httptest.ResponseRecorder) {
 	t.Helper()
-	if rec.Code != http.StatusBadRequest || rec.Body.String() != `{"error":"invalid_request"}` {
+	if rec.Code != http.StatusBadRequest || rec.Body.String() != "{\"error\":\"invalid_request\"}\n" {
 		t.Fatalf("status %d body %q, want 400 {\"error\":\"invalid_request\"}", rec.Code, rec.Body.String())
 	}
 	if n := h.review.count(); n != 0 {
@@ -443,7 +443,7 @@ func TestTokenReviewFailuresFailClosedWith503(t *testing.T) {
 
 func assertUnavailable(t *testing.T, h *harness, rec *httptest.ResponseRecorder, reason string) {
 	t.Helper()
-	if rec.Code != http.StatusServiceUnavailable || rec.Body.String() != `{"error":"temporarily_unavailable"}` {
+	if rec.Code != http.StatusServiceUnavailable || rec.Body.String() != "{\"error\":\"temporarily_unavailable\"}\n" {
 		t.Fatalf("status %d body %q, want 503 {\"error\":\"temporarily_unavailable\"}", rec.Code, rec.Body.String())
 	}
 	if h.registry.resolved != 0 && reason == "tokenreview_unavailable" {
@@ -615,7 +615,7 @@ func TestOneReviewOverTheInFlightCapAnswers503(t *testing.T) {
 	rec := h.post(form(h.validSubject(), "auth-service", "").Encode())
 	close(release)
 	wg.Wait()
-	if rec.Code != http.StatusServiceUnavailable || rec.Body.String() != `{"error":"temporarily_unavailable"}` {
+	if rec.Code != http.StatusServiceUnavailable || rec.Body.String() != "{\"error\":\"temporarily_unavailable\"}\n" {
 		t.Fatalf("status %d body %q, want 503", rec.Code, rec.Body.String())
 	}
 	if got := h.metricPoints()["unavailable/saturated/auth-service"]; got != 1 {
@@ -938,5 +938,27 @@ func TestTheExchangeBoundsEveryReviewByReviewCallTimeout(t *testing.T) {
 	}
 	if end := time.Now(); !fake.deadline.After(start) || fake.deadline.After(end.Add(ReviewCallTimeout)) {
 		t.Fatalf("review deadline %s after the start, want at most ReviewCallTimeout (%s) after the call", fake.deadline.Sub(start), ReviewCallTimeout)
+	}
+}
+
+// A requested audience reaches a log line or a counter label only as one of the
+// literals auth-service, dev-health-api or none: no request byte is logged.
+func TestARequestAudienceNeverReachesALogOrALabel(t *testing.T) {
+	for _, audience := range []string{"PLANTEDAUDIENCEq7", "auth-service\nPLANTEDAUDIENCEq7", "Auth-Service", "auth-service "} {
+		t.Run(audience, func(t *testing.T) {
+			h := newHarness(t)
+			rec := h.post(form(h.validSubject(), audience, "").Encode())
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status %d, want the uniform 400", rec.Code)
+			}
+			if got := h.metricPoints()["refused/audience_refused/none"]; got != 1 {
+				t.Fatalf("counter refused/audience_refused/none = %d; points %v", got, h.metricPoints())
+			}
+			for surface, text := range map[string]string{"logs": h.logs.String(), "metrics": dumpMetrics(t, h.reader)} {
+				if strings.Contains(text, "PLANTEDAUDIENCEq7") || strings.Contains(text, "Auth-Service") || strings.Contains(text, `"auth-service "`) {
+					t.Errorf("%s carry the requested audience", surface)
+				}
+			}
+		})
 	}
 }

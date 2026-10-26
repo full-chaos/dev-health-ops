@@ -54,6 +54,7 @@ internal/auth/sessionid
 internal/auth/signedtoken
 internal/chmigrate
 internal/cli
+internal/edgetokenmint
 internal/egressguard
 internal/entitlements
 internal/httpguard
@@ -129,6 +130,7 @@ internal/teamprovider
 internal/testsupport/authrows
 internal/testsupport/containers
 internal/testsupport/moduleroot
+internal/testsupport/proofprincipals
 internal/testsupport/providerstub
 internal/testsupport/pydanticecho
 internal/testsupport/sessionscenario

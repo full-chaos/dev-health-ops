@@ -15,6 +15,24 @@ import (
 // auth-service, comma separated and empty for none.
 const EnvForwarded = "DEVHEALTH_AUTH_ORACLE_FORWARDED"
 
+// EnvUsersOwned is the environment variable ci/auth_corpus_external.sh sets to "true" or "false": whether the target's
+// auth-service owns users on this leg.
+const EnvUsersOwned = "DEVHEALTH_AUTH_ORACLE_USERS_OWNED"
+
+// UsersOwnedFromEnv reads EnvUsersOwned. Only the exact strings true and false are accepted; unset is an error.
+func UsersOwnedFromEnv() (bool, error) {
+	text, ok := os.LookupEnv(EnvUsersOwned)
+	switch {
+	case !ok:
+		return false, fmt.Errorf("authrows: %s is not set; the run script exports true or false", EnvUsersOwned)
+	case text == "true":
+		return true, nil
+	case text == "false":
+		return false, nil
+	}
+	return false, fmt.Errorf("authrows: %s must be true or false", EnvUsersOwned)
+}
+
 // Aggregate is one AUTH_PROXY_* aggregate of go-api.
 type Aggregate string
 

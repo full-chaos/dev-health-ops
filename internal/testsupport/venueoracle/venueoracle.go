@@ -439,6 +439,11 @@ type DiffOptions struct {
 	// "10410 login no-store"): POST /api/v1/auth/login answers Cache-Control: no-store and Pragma: no-cache, which the
 	// go-api goldens never carried (intendedNoStore). Only the external ACP leg that forwards local login sets it.
 	LoginNoStore bool
+	// CredentialsNoStore declares the same divergence for the six credentials routes of auth-service (register, verify,
+	// resend-verification, forgot-password, reset-password, change-password), D6129 and the 10410 ruling: exactly
+	// Cache-Control: no-store and Pragma: no-cache on a golden that carries neither. Only a run that forwards the
+	// credentials aggregate sets it.
+	CredentialsNoStore bool
 	// orglessHeaderNames is set by Diff: every header name any Python answer of the run carries. A refusal's headers
 	// must come from it (or be a Volatile header or content-length); nil refuses the rule, so a direct Compare call
 	// cannot skip headers without it.
@@ -538,8 +543,8 @@ func Diff(t *testing.T, goBase string, requests []Request, python []Response, op
 		same, compared, pyShown, goShown := Compare(request, pythonResponse, goResponse, compareOptions)
 		fmt.Fprintf(&receipt, "%-58s python=%d go=%d %s\n", request.Name, python[index].Status, goResponse.Status, Mark(same))
 		if !same {
-			t.Errorf("%s:\n python %d %s %v\n go     %d %s %v", request.Name, python[index].Status, pyShown.Body,
-				pick(pyShown.Headers, compared), goResponse.Status, goShown.Body, pick(goShown.Headers, compared))
+			pyShown.Status, goShown.Status = python[index].Status, goResponse.Status
+			t.Error(DescribeDifference(request.Name, pyShown, goShown, compared))
 		}
 	}
 	if orglessRefused > options.MaxOrglessRefusals {
@@ -656,6 +661,16 @@ func intendedNoStore(request Request, py, gr Response, options DiffOptions) []st
 		}
 		return nil
 	}
+	if options.CredentialsNoStore && credentialsNoStoreRoute(request) {
+		// The ACP target's credentials answers (D6129, the 10410 ruling): the same exact pair, a golden that carries
+		// neither. Any other header, value, method or route compares.
+		_, hasCacheControl := py.Headers["cache-control"]
+		_, hasPragma := py.Headers["pragma"]
+		if !hasCacheControl && !hasPragma && gr.Headers["cache-control"] == "no-store" && gr.Headers["pragma"] == "no-cache" {
+			return []string{"cache-control", "pragma"}
+		}
+		return nil
+	}
 	target, err := url.ParseRequestURI(request.Path)
 	if err != nil || !adminNoStore.Matches(&http.Request{Method: request.Method, URL: target}) {
 		return nil
@@ -667,6 +682,22 @@ func intendedNoStore(request Request, py, gr Response, options DiffOptions) []st
 		return nil
 	}
 	return []string{"cache-control"}
+}
+
+// credentialsNoStoreRoutes are the six routes whose answer carries CredentialsNoStore's headers, by method and path
+// without the query (verify carries its token there).
+var credentialsNoStoreRoutes = map[string]bool{
+	http.MethodPost + " /api/v1/auth/register":            true,
+	http.MethodGet + " /api/v1/auth/verify":               true,
+	http.MethodPost + " /api/v1/auth/resend-verification": true,
+	http.MethodPost + " /api/v1/auth/forgot-password":     true,
+	http.MethodPost + " /api/v1/auth/reset-password":      true,
+	http.MethodPost + " /api/v1/auth/change-password":     true,
+}
+
+func credentialsNoStoreRoute(request Request) bool {
+	path, _, _ := strings.Cut(request.Path, "?")
+	return credentialsNoStoreRoutes[request.Method+" "+path]
 }
 
 // acpLoginPath is the one route whose answer carries LoginNoStore's headers.
@@ -772,7 +803,7 @@ var noRedirects = &http.Client{CheckRedirect: func(*http.Request, []*http.Reques
 
 // Do sends one request to base and reads the whole answer; a redirect is
 // returned, not followed.
-func Do(t *testing.T, base string, request Request) Response {
+func Do(t RowsReporter, base string, request Request) Response {
 	t.Helper()
 	var body io.Reader
 	if request.Body != nil {
@@ -784,7 +815,7 @@ func Do(t *testing.T, base string, request Request) Response {
 	}
 	httpRequest, err := http.NewRequest(request.Method, base+request.Path, body)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatal(RedactError(err))
 	}
 	// TestClient sends Host: testserver unless the request names one; net/http
 	// takes the Host from req.Host, never from a Host header.
@@ -798,12 +829,12 @@ func Do(t *testing.T, base string, request Request) Response {
 	}
 	response, err := noRedirects.Do(httpRequest)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatal(RedactError(err))
 	}
 	defer response.Body.Close()
 	raw, err := io.ReadAll(response.Body)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatal(RedactError(err))
 	}
 	headers := map[string]string{}
 	for key, values := range response.Header {

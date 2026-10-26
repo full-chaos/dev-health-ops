@@ -685,6 +685,7 @@ internal/testsupport/venueoracle	golden_walk.go	internal/apiservice/ssovenue
 internal/testsupport/venueoracle	golden_walk.go	internal/atlassianteams
 internal/testsupport/venueoracle	golden_walk.go	internal/auth/identity/local
 internal/testsupport/venueoracle	golden_walk.go	internal/auth/signedtoken
+internal/testsupport/venueoracle	golden_walk.go	internal/auth/usersbackfill
 internal/testsupport/venueoracle	golden_walk.go	internal/backfillrun
 internal/testsupport/venueoracle	golden_walk.go	internal/edgetokenmint
 internal/testsupport/venueoracle	golden_walk.go	internal/externalrecompute
@@ -784,6 +785,7 @@ internal/testsupport/venueoracle	opened.go	internal/auth/edgetoken
 internal/testsupport/venueoracle	opened.go	internal/auth/httpapi
 internal/testsupport/venueoracle	opened.go	internal/auth/identity/local
 internal/testsupport/venueoracle	opened.go	internal/auth/signedtoken
+internal/testsupport/venueoracle	opened.go	internal/auth/usersbackfill
 internal/testsupport/venueoracle	opened.go	internal/backfillrun
 internal/testsupport/venueoracle	opened.go	internal/chmigrate
 internal/testsupport/venueoracle	opened.go	internal/cli

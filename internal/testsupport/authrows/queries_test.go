@@ -4,11 +4,14 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/proofprincipals"
 )
 
 // the corpus's public queries as the test holds them on main (CHAOS-10160), reduced to what Query reads.
+var publicUsers = `SELECT email, token_version, last_login_at IS NOT NULL, updated_at >= created_at FROM users WHERE ` + proofprincipals.ComparedSQL("users") + ` ORDER BY email`
+
 const (
-	publicUsers   = `SELECT email, token_version, last_login_at IS NOT NULL, updated_at >= created_at FROM users WHERE auth_provider IS DISTINCT FROM 'service' ORDER BY email`
 	publicRefresh = `SELECT u.email FROM refresh_tokens rt JOIN users u ON u.id = rt.user_id`
 	publicAudit   = `SELECT 1 FROM audit_logs a`
 )

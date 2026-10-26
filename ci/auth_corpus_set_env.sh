@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Changes one environment variable of the go-api container of the private compose project that
-# ci/auth_corpus_external.sh brought up, then recreates go-api (only go-api, only through compose) and waits,
+# ci/auth_corpus_external.sh brought up, then recreates go-api (through compose; on leg acp also auth-service for AUTH_AUTO_CREATE_ORG_ON_REGISTER) and waits,
 # bounded, until it is healthy again (CHAOS-10160).
 #
 #   ci/auth_corpus_set_env.sh NAME VALUE      (an empty VALUE removes NAME)
@@ -59,6 +59,13 @@ fi
 
 printf 'auth_corpus_set_env: %s %s; recreating go-api of %s\n' "${NAME}" "$([ -n "${VALUE}" ] && echo set || echo unset)" "${PROJECT}"
 timeout --kill-after=2 "${wait_seconds}" docker compose -p "${PROJECT}" "${COMPOSE_FILES[@]}" --profile auth up --detach --no-deps --force-recreate --no-build go-api
+
+# Leg acp: auth-service reads the same variable on every register request, so it is recreated with the state too (and with
+# AUTH_USERS_OWNED from it); the wait is bounded by compose.
+if [ "${LEG}" = "acp" ] && [ "${NAME}" = "AUTH_AUTO_CREATE_ORG_ON_REGISTER" ]; then
+  timeout --kill-after=2 "${wait_seconds}" docker compose -p "${PROJECT}" "${COMPOSE_FILES[@]}" --profile auth \
+    up --detach --no-deps --force-recreate --no-build --wait --wait-timeout "${wait_seconds}" auth-service
+fi
 
 deadline=$((SECONDS + wait_seconds))
 while :; do

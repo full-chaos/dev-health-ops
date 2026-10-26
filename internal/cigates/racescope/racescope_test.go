@@ -515,3 +515,53 @@ func TestLinknameNonGoSourcesAndPluginsAreRefused(t *testing.T) {
 		}
 	}
 }
+
+// acp final verify (CHAOS-11413): a function value is judged by its TYPE, not by how it is spelled. A package-level func variable, a
+// local variable, a struct field or a call result handed to a callee that runs it elsewhere (singleflight.DoChan) raced under -race.
+func TestAFunctionValueOfAnySpellingPassedToACalleeIsRefused(t *testing.T) {
+	head := "package a\n\ntype G struct{}\n\nfunc (G) DoChan(key string, fn func() (any, error)) {}\n\ntype J struct{ fn func() (any, error) }\n\nvar work = func() (any, error) { return nil, nil }\n\nfunc pick() func() (any, error) { return work }\n\n"
+	for name, body := range map[string]string{
+		"package-level func variable": `var g G; g.DoChan("k", work)`,
+		"struct field":                `var g G; j := J{fn: work}; g.DoChan("k", j.fn)`,
+		"local variable":              `var g G; w := work; g.DoChan("k", w)`,
+		"call result":                 `var g G; g.DoChan("k", pick())`,
+		"conversion":                  `var g G; g.DoChan("k", (func() (any, error))(work))`,
+		"parenthesised":               `var g G; g.DoChan("k", (work))`,
+	} {
+		files := map[string]string{"a/a.go": head + "func F() int { " + body + "; return 1 }\n", "a/a_test.go": cleanTest}
+		if got := problemsOf(t, files, rowA); !strings.Contains(got, "function value") {
+			t.Errorf("%s: want a function value problem, got:\n%s", name, got)
+		}
+	}
+	if got := problemsOf(t, map[string]string{"a/a.go": head + "func F() int { var g G; g.DoChan(\"k\", nil); return len(\"k\") }\n", "a/a_test.go": cleanTest}, rowA); got != "" {
+		t.Errorf("a call that passes no function value was refused:\n%s", got)
+	}
+}
+
+// t.Run is pinned by the type of its receiver (*testing.T), not by the receiver's name; a method named Run on another type is not pure.
+func TestThePinnedTRunIsResolvedByType(t *testing.T) {
+	okTest := "package a\n\nimport \"testing\"\n\nfunc TestF(tt *testing.T) { tt.Run(\"x\", func(u *testing.T) {}) }\n"
+	if got := problemsOf(t, map[string]string{"a/a.go": cleanPkg, "a/a_test.go": okTest}, rowA); got != "" {
+		t.Errorf("tt.Run on a *testing.T was refused:\n%s", got)
+	}
+	fake := "package a\n\nimport \"testing\"\n\ntype runner struct{}\n\nfunc (runner) Run(name string, fn func()) {}\n\nfunc TestF(t *testing.T) { var r runner; t.Run(\"x\", func(u *testing.T) {}); r.Run(\"x\", func() {}) }\n"
+	if got := problemsOf(t, map[string]string{"a/a.go": cleanPkg, "a/a_test.go": fake}, rowA); !strings.Contains(got, "function value") {
+		t.Errorf("a method named Run on another type was treated as the pinned t.Run:\n%s", got)
+	}
+}
+
+// Code outside the standard library and this module (singleflight, otel, grpc) runs user code on goroutines of its own.
+func TestAnOutOfModuleImportInTheClosureIsRefused(t *testing.T) {
+	own := map[string]string{"a/a.go": "package a\n\nimport \"golang.org/x/sync/singleflight\"\n\nvar g singleflight.Group\n\nfunc F() int { return 1 }\n", "a/a_test.go": cleanTest}
+	if got := problemsOf(t, own, rowA); !strings.Contains(got, "out-of-module") {
+		t.Errorf("an out-of-module import in the package was accepted:\n%s", got)
+	}
+	dep := map[string]string{"a/a.go": "package a\n\nimport \"example.test/m/b\"\n\nfunc F() int { return b.G() }\n", "a/a_test.go": cleanTest, "b/b.go": "package b\n\nimport _ \"golang.org/x/sync/singleflight\"\n\nfunc G() int { return 1 }\n"}
+	if got := problemsOf(t, dep, rowA); !strings.Contains(got, "out-of-module") {
+		t.Errorf("an out-of-module import in a dependency was accepted:\n%s", got)
+	}
+	testImport := map[string]string{"a/a.go": cleanPkg, "a/a_test.go": "package a\n\nimport (\n\t\"testing\"\n\n\t_ \"golang.org/x/sync/singleflight\"\n)\n\nfunc TestF(t *testing.T) {}\n"}
+	if got := problemsOf(t, testImport, rowA); !strings.Contains(got, "out-of-module") {
+		t.Errorf("an out-of-module import in a test file was accepted:\n%s", got)
+	}
+}

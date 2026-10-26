@@ -92,7 +92,7 @@ func CheckTable(table []Quirk) []string {
 		if q.Kind == Gap && strings.TrimSpace(q.Tracked) == "" {
 			problems = append(problems, q.ID+": a gap names the ticket that closes it")
 		}
-		if !projected[q.Table] && q.Table != TableLinkMails {
+		if !projected[q.Table] && q.Table != TableLinkMails && linkCredentialPurposes[q.Table] == "" {
 			problems = append(problems, fmt.Sprintf("%s: table %q has no projection", q.ID, q.Table))
 		}
 		if len(q.Needs) == 0 {

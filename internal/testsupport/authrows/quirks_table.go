@@ -16,6 +16,8 @@ var (
 	aliceLoginOrgB = regexp.MustCompile(`^Org B(alice@example\.comloginsessionuser:alice@example\.comUser logged in\{\}.*success<null>)$`)
 	// Emma's users row as go-api writes it: the empty full name reads as nothing between the username and the provider.
 	emptyFullNameEmma = regexp.MustCompile(`^(emma@example\.com<null>)(local.*)$`)
+	// Uma's seeded expired verification token as the public table holds it: expired, a 64-digit hash, a 24-hour lifetime.
+	legacyUmaVerificationRow = regexp.MustCompile(`^uma@example\.comtrue false 64 1440$`)
 	// A link mail whose token is go-api's format.
 	linkTokenGoAPIRow = regexp.MustCompile(`^(.* link token )` + LinkTokenGoAPI + `$`)
 )
@@ -107,6 +109,12 @@ var Quirks = []Quirk{
 		Rewrite: func(line string) (string, bool) {
 			return replaceOnce(emptyFullNameEmma, line, "${1}<null>${2}")
 		},
+	},
+	{
+		ID: "email-verification-legacy-row-not-purged-owned", Kind: Gap, Table: TableEmailVerificationTokens, Needs: []Aggregate{Credentials}, Owned: OwnedOnly,
+		Tracked: "CHAOS-11506", Max: 1, Exact: true,
+		Reason: "go-api replaces a user's verification token on issue; auth-service issues into auth.link_credentials and never touches public.email_verification_tokens, so uma's seeded expired legacy row stays. No reader of it is reachable while users are owned (go-api's verify and reset refuse and are proxied: session/verify.go:86,:237, authproxy.go:155-158; startup guard usersowned.go:15-25; auth-service reads auth.link_credentials only); its purge is CHAOS-11506, the resend and forgot guard gap CHAOS-11507. Max is that one row",
+		Extra:  func(line string) bool { return legacyUmaVerificationRow.MatchString(line) },
 	},
 	{
 		ID: "audit-register-organization-and-changes-not-recorded", Kind: Deliberate, Table: TableAuditLogs, Needs: []Aggregate{Credentials},

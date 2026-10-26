@@ -123,3 +123,42 @@ func TestCreateAuditedLeavesLastLoginUnchangedWhenUsersOwned(t *testing.T) {
 		t.Fatalf("last_login_at = %v, want NULL", last)
 	}
 }
+
+// A disabled principal's sign-in under users owned is refused before the
+// stamp: no session, no audit row, public.users untouched.
+func TestSignInForADisabledPrincipalWritesNothingWhenUsersOwned(t *testing.T) {
+	ctx := testContext(t)
+	e := newEnvOwned(t, ctx, true)
+	e.store = e.newStore(t, e.keyText, Config{UsersOwned: true})
+	principal := e.principal(t, ctx)
+	e.publicUser(t, ctx, principal)
+	planted := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	if _, err := e.admin.Exec(ctx, `UPDATE public.users SET last_login_at = $2, updated_at = $2 WHERE id = $1`, principal, planted); err != nil {
+		t.Fatalf("plant last_login_at: %v", err)
+	}
+	e.guarded(t, ctx, `UPDATE auth.principals SET disabled_at = now() WHERE id = $1`, principal.String())
+
+	const sessions = `SELECT count(*) FROM auth.sessions WHERE principal_id = $1`
+	const audits = `SELECT count(*) FROM auth.security_audit_events`
+	sessionsBefore := e.count(t, ctx, sessions, principal.String())
+	auditsBefore := e.count(t, ctx, audits)
+	lastBefore, updatedBefore := e.lastLogin(t, ctx, principal)
+	if lastBefore == nil || !lastBefore.UTC().Equal(planted) {
+		t.Fatalf("planted last_login_at = %v, want %v", lastBefore, planted)
+	}
+
+	_, err := e.store.CreateAudited(WithSignIn(ctx), principal, nil, []string{"pwd"}, signInEvent(principal))
+	if !errors.Is(err, ErrPrincipalUnavailable) {
+		t.Fatalf("err = %v, want ErrPrincipalUnavailable", err)
+	}
+	if n := e.count(t, ctx, sessions, principal.String()); n != sessionsBefore {
+		t.Fatalf("sessions %d -> %d for a refused sign-in", sessionsBefore, n)
+	}
+	if n := e.count(t, ctx, audits); n != auditsBefore {
+		t.Fatalf("audit rows %d -> %d for a refused sign-in", auditsBefore, n)
+	}
+	lastAfter, updatedAfter := e.lastLogin(t, ctx, principal)
+	if lastAfter == nil || !lastAfter.Equal(*lastBefore) || !updatedAfter.Equal(updatedBefore) {
+		t.Fatalf("public.users changed: last_login_at %v -> %v, updated_at %v -> %v", lastBefore, lastAfter, updatedBefore, updatedAfter)
+	}
+}

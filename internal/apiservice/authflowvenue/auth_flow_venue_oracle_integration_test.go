@@ -270,6 +270,8 @@ type runner struct {
 	notices int
 	// greetings counts the mails the owned leg's declared difference "greeting by e-mail" covered.
 	greetings int
+	// divergencesFired counts, by step, the declared step differences of ownedStepDivergences that covered an answer.
+	divergencesFired map[string]int
 	// registers is set when the current batch carried a sign-up, a resend or a forgot request: the Go plane
 	// sends their mail off the request, so mails are compared in a fixed order.
 	registers bool
@@ -332,7 +334,17 @@ func (r *runner) batch(label string, steps []step) map[string][2]venueoracle.Res
 		}
 		same, compared, pyShown, goShown := venueoracle.Compare(s.python, pyCompared, goProjected,
 			venueoracle.DiffOptions{Normalize: func(_ venueoracle.Request, body string) string { return normalize(body) },
-				LoginNoStore: r.external && r.forwarded.Has(authrows.LocalLogin)})
+				LoginNoStore:       r.external && r.forwarded.Has(authrows.LocalLogin),
+				CredentialsNoStore: credentialsNoStore(r.external, r.forwarded)})
+		if !same && r.usersOwned && r.forwarded.Has(authrows.Credentials) {
+			for _, declared := range ownedStepDivergences {
+				if declared.covers(s.name, pyShown, goShown, compared) {
+					r.divergencesFired[declared.Step]++
+					same = true
+					break
+				}
+			}
+		}
 		fmt.Fprintf(&r.receipt, "%-70s python=%d go=%d %s\n", s.name, pyResponses[index].Status, goProjected.Status, venueoracle.Mark(same))
 		if !same {
 			r.t.Errorf("%s:\n python %d %s %v\n go     %d %s %v", s.name, pyShown.Status, pyShown.Body, pick(pyShown.Headers, compared),
@@ -800,7 +812,7 @@ func TestAuthFlowVenueOracle(t *testing.T) {
 		t.Fatalf("go mail sender: %v", err)
 	}
 	r := &runner{golden: golden, t: t, ctx: ctx, venue: venue, pySink: pySink, goSink: goSink,
-		mails:  map[string]map[string][]sentMail{"python": {}, "go": {}},
+		mails: map[string]map[string][]sentMail{"python": {}, "go": {}}, divergencesFired: map[string]int{},
 		goBase: externalBase, external: external != nil}
 	if external != nil {
 		if r.forwarded, err = authrows.FromEnv(); err != nil {
@@ -1049,6 +1061,11 @@ func TestAuthFlowVenueOracle(t *testing.T) {
 
 	if violations := policy.WriterViolations(); violations > 0 {
 		t.Errorf("%d body writes used the wrong writer for their route", violations)
+	}
+	if r.usersOwned && r.forwarded.Has(authrows.Credentials) {
+		for _, problem := range divergenceVerdict(ownedStepDivergences, r.divergencesFired) {
+			t.Error(problem)
+		}
 	}
 	if r.usersOwned && r.forwarded.Has(authrows.Credentials) && r.greetings != greetingMails {
 		t.Errorf("greeting by e-mail (CHAOS-11504): covered %d mails, the scenario holds exactly %d", r.greetings, greetingMails)

@@ -25,19 +25,80 @@ type stepDivergence struct {
 
 // credentialsNoStore is DiffOptions.CredentialsNoStore for a run: only an external run that forwards the credentials
 // aggregate.
-func credentialsNoStore(external bool, forwarded authrows.Forwarded) bool { return external }
+func credentialsNoStore(external bool, forwarded authrows.Forwarded) bool {
+	return external && forwarded.Has(authrows.Credentials)
+}
 
 // checkStepDivergences is every way a table of declared divergences is malformed.
-func checkStepDivergences(table []stepDivergence) []string { return nil }
+func checkStepDivergences(table []stepDivergence) []string {
+	var problems []string
+	seen := map[string]bool{}
+	for _, d := range table {
+		switch {
+		case d.Step == "":
+			problems = append(problems, "an entry has no step")
+			continue
+		case seen[d.Step]:
+			problems = append(problems, d.Step+": step repeated")
+		}
+		seen[d.Step] = true
+		if d.GoStatus < 400 || d.GoStatus >= 500 {
+			problems = append(problems, fmt.Sprintf("%s: go status %d is not a 4xx: only a stricter go answer may be declared", d.Step, d.GoStatus))
+		}
+		if d.PythonStatus < 400 {
+			problems = append(problems, fmt.Sprintf("%s: python status %d is not an error answer", d.Step, d.PythonStatus))
+		}
+		if d.PythonBodyMarker == "" || d.GoBodyMarker == "" {
+			problems = append(problems, d.Step+": both body markers are named")
+		}
+		if len(d.Headers) == 0 {
+			problems = append(problems, d.Step+": the differing headers are named")
+		}
+		names := map[string]bool{}
+		for _, name := range d.Headers {
+			if names[name] {
+				problems = append(problems, d.Step+": header "+name+" repeated")
+			}
+			names[name] = true
+		}
+		if !strings.Contains(d.Reason, "CHAOS-11398") {
+			problems = append(problems, d.Step+": the reason cites the CHAOS-11398 family")
+		}
+	}
+	return problems
+}
 
 // covers is true when this is the divergence: the step, the statuses, both body markers, and exactly the headers it
 // names differ among the compared ones.
 func (d stepDivergence) covers(step string, python, goResponse venueoracle.Response, compared []string) bool {
-	return false
+	if step != d.Step || python.Status != d.PythonStatus || goResponse.Status != d.GoStatus ||
+		!strings.Contains(python.Body, d.PythonBodyMarker) || !strings.Contains(goResponse.Body, d.GoBodyMarker) {
+		return false
+	}
+	var differing []string
+	for _, name := range compared {
+		pv, pok := python.Headers[name]
+		gv, gok := goResponse.Headers[name]
+		if pv != gv || pok != gok {
+			differing = append(differing, name)
+		}
+	}
+	want := append([]string(nil), d.Headers...)
+	sort.Strings(differing)
+	sort.Strings(want)
+	return strings.Join(differing, ",") == strings.Join(want, ",")
 }
 
 // divergenceVerdict is every entry of table that did not fire exactly once.
-func divergenceVerdict(table []stepDivergence, fired map[string]int) []string { return nil }
+func divergenceVerdict(table []stepDivergence, fired map[string]int) []string {
+	var problems []string
+	for _, d := range table {
+		if fired[d.Step] != 1 {
+			problems = append(problems, fmt.Sprintf("%s: the declared difference fired %d times, want exactly 1", d.Step, fired[d.Step]))
+		}
+	}
+	return problems
+}
 
 const credentialsFamily = "CHAOS-11398 family: auth-service's credentials and refresh routes answer where the Python plane and go-api did not"
 
@@ -199,5 +260,18 @@ func TestStepDivergenceMustFireExactlyOnce(t *testing.T) {
 		if len(problems) != 1 || !strings.Contains(problems[0], first) || !strings.Contains(problems[0], fmt.Sprint(count)) {
 			t.Errorf("%s: problems %v", name, problems)
 		}
+	}
+}
+
+// The steps run 2 of the owned leg showed answering differently, each declared once and no other.
+func TestOwnedStepDivergenceTableHoldsExactlyTheFiveObservedSteps(t *testing.T) {
+	var got []string
+	for _, d := range ownedStepDivergences {
+		got = append(got, d.Step)
+	}
+	want := []string{"verify: non-ascii signature", "reset: non-ascii signature", "register: password over 72 bytes",
+		"refresh: alice's token from before the reset", "limit: verify, another e-mail key"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("declared steps = %q, want %q", got, want)
 	}
 }

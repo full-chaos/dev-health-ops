@@ -22,7 +22,7 @@ const (
 	cancelScript  = "ci/cancel_stacked_queue_runs.sh"
 	cancelIf      = "failure() && github.event_name == 'merge_group'"
 
-	cancelCheckoutRef = "${{ github.event.merge_group.base_sha }}"
+	cancelCheckoutRef = "${{ github.event.merge_group.base_ref }}"
 )
 
 func cancelJobDefects(doc yamlMap) []string {
@@ -141,7 +141,7 @@ func TestStackedQueueCancelJobShape(t *testing.T) {
 		{cancelGoYml, "        with:\n          ref: " + cancelCheckoutRef + "\n          sparse-checkout: " + cancelScript + "\n", "        with:\n          sparse-checkout: " + cancelScript + "\n"},
 		{cancelGoYml, "          ref: " + cancelCheckoutRef + "\n", "          ref: ${{ github.sha }}\n"},
 		{cancelGoYml, "          ref: " + cancelCheckoutRef + "\n", "          ref: ${{ github.event.merge_group.head_sha }}\n"},
-		{cancelGoYml, "          ref: " + cancelCheckoutRef + "\n", "          ref: ${{ github.event.merge_group.base_ref }}\n"},
+		{cancelGoYml, "          ref: " + cancelCheckoutRef + "\n", "          ref: ${{ github.event.merge_group.base_sha }}\n"},
 		{cancelGoYml, "          persist-credentials: false\n          sparse-checkout-cone-mode: false\n", "          persist-credentials: true\n          sparse-checkout-cone-mode: false\n"},
 		{cancelGoYml, "          sparse-checkout-cone-mode: false\n      - name: Cancel the runs stacked", "          sparse-checkout-cone-mode: false\n          token: ${{ github.token }}\n      - name: Cancel the runs stacked"},
 		{cancelGoYml, "        with:\n          ref: " + cancelCheckoutRef, "        env:\n          GH_TOKEN: ${{ github.token }}\n        with:\n          ref: " + cancelCheckoutRef},

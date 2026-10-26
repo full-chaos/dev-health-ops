@@ -3,6 +3,9 @@
 package integrationshards_test
 
 import (
+	"os"
+	"os/exec"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -74,5 +77,49 @@ func TestAPackagesShardStartsItsLongestPackageFirstAndTheOrderIsStable(t *testin
 	}
 	if checked < 2 {
 		t.Fatalf("only %d packages shard held two or more packages: the order check measured nothing", checked)
+	}
+}
+
+func TestTheSortDoesNotChangeTheLocaleOfTheGoTestChild(t *testing.T) {
+	t.Parallel()
+	_, weights := manifestRows(t)
+	realGo, err := exec.LookPath("go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	record := filepath.Join(dir, "child-locale")
+	stub := "#!/usr/bin/env bash\nif [ \"${1:-}\" = test ]; then\n  printf '%s\\n' \"${LC_ALL-unset}\" >> " + record + "\n  printf '%s\\n' \"$*\" >> " + record + ".args\n  exit 0\nfi\nexec " + realGo + " \"$@\"\n"
+	if err := os.WriteFile(filepath.Join(dir, "go"), []byte(stub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	shard := 0
+	var pkgs []string
+	for s, p := range packagesShardsOfThePlan(t) {
+		if len(p) >= 2 && (shard == 0 || s < shard) {
+			shard, pkgs = s, p
+		}
+	}
+	if shard == 0 {
+		t.Fatal("no packages shard held two packages")
+	}
+	const callerLocale = "en_US.utf8"
+	r := runCheckGoSharding(t, shardEnv{extra: []string{"LC_ALL=" + callerLocale, "PATH=" + dir + string(os.PathListSeparator) + os.Getenv("PATH")}}, "integration-shard", "packages", strconv.Itoa(shard))
+	if r.code != 0 {
+		t.Fatalf("shard %d with a stub go: exit %d: %s%s", shard, r.code, r.stdout, r.stderr)
+	}
+	got := fileLines(dir, "child-locale")
+	if len(got) != 1 || got[0] != callerLocale {
+		t.Errorf("the go test child saw LC_ALL %v, want the caller's %q", got, callerLocale)
+	}
+	want := append([]string(nil), pkgs...)
+	sort.SliceStable(want, func(i, j int) bool {
+		if weights[want[i]] != weights[want[j]] {
+			return weights[want[i]] > weights[want[j]]
+		}
+		return want[i] < want[j]
+	})
+	if order := lineValues(r.stdout, "  SHARD-RUN "); strings.Join(order, "\n") != strings.Join(want, "\n") {
+		t.Errorf("under the caller locale %q the shard starts %v, want byte order %v", callerLocale, order, want)
 	}
 }

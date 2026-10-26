@@ -38,10 +38,12 @@ if [ -z "${POSTURE_CLEAN_ENV:-}" ]; then
     if [ "${a}" = "--test-runner" ]; then stub_mode=1; fi
   done
   allow=("HOME=${HOME:-/nonexistent}" "PATH=/usr/bin:/bin" GOENV=off GOFLAGS= GOWORK=off POSTURE_CLEAN_ENV=1)
+  # go is resolved from the caller PATH once, here; the receipt names the binary, its hash and its version. Hosted runners
+  # install go through setup-go, so no toolchain location is hard-coded.
+  first="$(command -v go)" || first=""
+  allow+=("POSTURE_GO_FIRST=${first}")
   if [ "${stub_mode}" -eq 1 ]; then
-    # A simulated run is never a receipt: it may use the caller's go and cache dirs (hosted CI has no fixed paths).
-    first="$(command -v go)" || first=""
-    allow+=("POSTURE_GO_FIRST=${first}")
+    # A simulated run is never a receipt: it may use the caller's cache dirs (hosted CI has no fixed paths).
     for name in GOMODCACHE GOCACHE GOTMPDIR; do
       if [ -n "${!name+x}" ]; then allow+=("${name}=${!name}"); fi
     done
@@ -183,13 +185,15 @@ wt_sha="$("${GIT}" -C "${wt}" rev-parse HEAD)" || { echo "cannot read the worktr
 "${CMP}" -s "${self}" "${wt}/ci/posture_integration.sh" || { echo "this script is not the one committed at HEAD" >&2; exit 3; }
 "${CMP}" -s "${list_file}" "${wt}/ci/posture_integration_packages.tsv" || { echo "the package list is not the one committed at HEAD" >&2; exit 3; }
 
+if [ -z "${stub}" ]; then
+  [ -f "${capped}" ] && [ -x "${capped}" ] || { echo "runner not found: ${capped}" >&2; exit 3; }
+fi
 if [ -n "${stub}" ]; then
   gomod="${GOMODCACHE:-$("${MKTEMP}" -d)}"; gocache="${GOCACHE:-$("${MKTEMP}" -d)}"; gotmp="${GOTMPDIR:-$("${MKTEMP}" -d)}"
-  go_first="${POSTURE_GO_FIRST:-}"
 else
   gomod="/var/lib/oci-cache/go-mod"; gocache="/var/lib/oci-cache/go-build"; gotmp="/var/lib/oci-cache/go-tmp"
-  go_first="/usr/local/go/bin/go"
 fi
+go_first="${POSTURE_GO_FIRST:-}"
 [ -n "${go_first}" ] && [ -x "${go_first}" ] || { echo "go not found: ${go_first:-<none>}" >&2; exit 3; }
 common=("HOME=${HOME:-/nonexistent}" GOENV=off GOFLAGS= GOWORK=off "GOMODCACHE=${gomod}" "GOCACHE=${gocache}" "GOTMPDIR=${gotmp}")
 for name in DOCKER_HOST TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX TESTCONTAINERS_RYUK_DISABLED TESTCONTAINERS_HOST_OVERRIDE \
@@ -208,7 +212,6 @@ if [ -n "${stub}" ]; then
   printf 'SIMULATED-HEAD %s clean=yes runner=test-runner\n' "${sha}"
   rec="SIMULATED"; sum="SIMULATED-SUMMARY"
 else
-  [ -f "${capped}" ] && [ -x "${capped}" ] || { echo "runner not found: ${capped}" >&2; exit 3; }
   runner_sha="$("${SHA}" "${capped}")" || { echo "cannot hash the runner ${capped}" >&2; exit 3; }
   go_sha="$("${SHA}" "${go_path}")" || { echo "cannot hash ${go_path}" >&2; exit 3; }
   script_sha="$("${SHA}" "${self}")" || { echo "cannot hash the script" >&2; exit 3; }

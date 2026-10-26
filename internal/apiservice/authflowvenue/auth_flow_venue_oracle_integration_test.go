@@ -452,7 +452,7 @@ func (r *runner) compareMail(label string) {
 		r.t.Errorf("%s: %d account-exists mails, want %d", label, got, r.notices)
 	}
 	py, gv := planes["python"], planes["go"]
-	if pyLinks, goLinks := linkMailRows(py), linkMailRows(gv); len(pyLinks) > 0 || len(goLinks) > 0 {
+	if pyLinks, goLinks := linkMailRows(py, authrows.LinkTokenGoAPI), linkMailRows(gv, ""); len(pyLinks) > 0 || len(goLinks) > 0 {
 		for _, problem := range r.ledger.Compare(authrows.TableLinkMails, strings.Join(pyLinks, " | "), strings.Join(goLinks, " | ")) {
 			r.t.Errorf("%s: %s", label, problem)
 		}
@@ -471,18 +471,36 @@ func (r *runner) compareMail(label string) {
 
 // linkMailRows is one line per mail that carries a link token: its subject and the format of the token. The planes
 // are compared on it through the quirk table, so a plane that mails a token of another format is named, not ignored.
-func linkMailRows(mails []sentMail) []string {
+//
+// declared is the format the plane that mailed them is known to use, or empty to read each token: the golden's tokens are
+// scrubbed to a placeholder when it is frozen, so its plane (Python, go-api's signed format) is declared, never inferred.
+func linkMailRows(mails []sentMail, declared string) []string {
 	var rows []string
 	for _, mail := range mails {
-		if mail.token != "" {
-			rows = append(rows, authrows.LinkMailRow(mail.subject, linkTokenFormat(mail.token)))
+		if mail.token == "" {
+			continue
 		}
+		format := declared
+		if format == "" {
+			format = linkTokenFormat(mail.token)
+		}
+		rows = append(rows, authrows.LinkMailRow(mail.subject, format))
 	}
 	return rows
 }
 
-// describeMails is the mails for a failure message.
-func describeMails(mails []sentMail) string { return fmt.Sprintf("%+v", mails) }
+// describeMails is the mails for a failure message: the link token of each is a credential and never printed.
+func describeMails(mails []sentMail) string {
+	shown := make([]sentMail, len(mails))
+	for index, mail := range mails {
+		if mail.token != "" {
+			mail.token = "<link-token>"
+		}
+		mail.html = redactLinkTokens(mail.html)
+		shown[index] = mail
+	}
+	return fmt.Sprintf("%+v", shown)
+}
 
 func countSubject(mails []sentMail, subject string) int {
 	n := 0

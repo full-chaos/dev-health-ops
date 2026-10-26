@@ -63,3 +63,21 @@ func TestOAuthAuthorizeIgnoresALoneSurrogateRedirectURI(t *testing.T) {
 		}
 	}
 }
+
+// A redirect_uri that is not a string keeps its own type error: the scan
+// reads only a JSON string as the field, never the strings nested in an
+// object or an array value.
+func TestAuthorizeAnswersTheTypeErrorForANonStringRedirectURI(t *testing.T) {
+	c := routeCases[0]
+	for _, value := range []string{`{"x":"\ud800"}`, `["\ud800"]`} {
+		row := c.activeRow()
+		env := newUnitEnv(t, &fakeProviders{before: row})
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/oidc/"+row.ID.String()+"/authorize", strings.NewReader(`{"redirect_uri":`+value+`}`))
+		req.Header.Set("Content-Type", "application/json")
+		rec := env.serve(c, req)
+		body := rec.Body.String()
+		if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(body, `"string_type"`) || strings.Contains(body, "string_unicode") {
+			t.Errorf("%s: status=%d body=%s", value, rec.Code, body)
+		}
+	}
+}

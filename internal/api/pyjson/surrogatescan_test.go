@@ -1,6 +1,7 @@
 package pyjson_test
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -140,11 +141,71 @@ func TestMemberHasLoneSurrogateEscapeReadsOnlyTheNamedMember(t *testing.T) {
 		{"null", `{"relay_state":null}`, true, false},
 		{"not an object", `["\ud800"]`, true, false},
 		{"does not decode", `{"relay_state":"\ud800"`, true, false},
-		{"nested object value", `{"relay_state":{"a":"\ud800"}}`, true, true},
+		{"object value is not the string", `{"relay_state":{"a":"\ud800"}}`, true, false},
+		{"array value is not the string", `{"relay_state":["\ud800"]}`, true, false},
+		{"number value", `{"relay_state":1}`, true, false},
+		{"the last member wins: first lone, second clean", `{"RELAY_STATE":"\ud800","relay_state":"ok"}`, true, false},
+		{"the last member wins: first clean, second lone", `{"relay_state":"ok","RELAY_STATE":"\ud800"}`, true, true},
+		{"exact duplicates: last wins, clean", `{"relay_state":"\ud800","relay_state":"ok"}`, false, false},
+		{"exact duplicates: last wins, lone", `{"relay_state":"ok","relay_state":"\ud800"}`, false, true},
+		{"a null after a string resets a pointer or interface target", `{"relay_state":"\ud800","relay_state":null}`, true, false},
+		{"a string after a null", `{"relay_state":null,"relay_state":"\ud800"}`, true, true},
+		{"the long s folds to s", `{"relay_\u017ftate":"\ud800"}`, true, true},
+		{"the long s is not the name when folding is off", `{"relay_\u017ftate":"\ud800"}`, false, false},
+		{"an escaped key is the same key", `{"relay\u005fstate":"\ud800"}`, false, true},
 	}
 	for _, tc := range cases {
 		if got := pyjson.MemberHasLoneSurrogateEscape([]byte(tc.doc), "relay_state", tc.fold); got != tc.want {
 			t.Errorf("%s: %q fold=%v = %v, want %v", tc.name, tc.doc, tc.fold, got, tc.want)
 		}
+	}
+}
+
+// The oracle for the member scan is encoding/json itself, the decoder both
+// handlers use: a lone surrogate escape in the value it keeps comes out as
+// U+FFFD, and no value in the generated bodies holds a literal U+FFFD. The
+// route decodes into a *string (SAML) or an interface (OIDC), where a later
+// null replaces an earlier value with nil.
+func TestMemberHasLoneSurrogateEscapeAgreesWithEncodingJSONOnEveryBody(t *testing.T) {
+	keys := []string{"relay_state", "RELAY_STATE", "Relay_State", "relay_\u017ftate", "relay\u005fstate", "other"}
+	values := []string{`"ok"`, `"\ud800"`, `"a\ud83d\ude00b"`, `"\\ud800"`, `"\ud83d"`, `null`, `{"x":"\ud800"}`, `["\ud800"]`, `1`, `true`}
+	compared, refusedByDecoder := 0, 0
+	var build func(members []string, depth int)
+	build = func(members []string, depth int) {
+		if depth == 0 {
+			body := []byte("{" + strings.Join(members, ",") + "}")
+			var typed struct {
+				RelayState *string `json:"relay_state"`
+			}
+			if err := json.Unmarshal(body, &typed); err != nil {
+				refusedByDecoder++
+				return
+			}
+			want := typed.RelayState != nil && strings.Contains(*typed.RelayState, "\ufffd")
+			if got := pyjson.MemberHasLoneSurrogateEscape(body, "relay_state", true); got != want {
+				t.Fatalf("%s: scan %v, encoding/json keeps %v (typed target)", body, got, want)
+			}
+			var generic map[string]any
+			if err := json.Unmarshal(body, &generic); err != nil {
+				t.Fatalf("%s: %v", body, err)
+			}
+			text, isString := generic["relay_state"].(string)
+			if got, want := pyjson.MemberHasLoneSurrogateEscape(body, "relay_state", false), isString && strings.Contains(text, "\ufffd"); got != want {
+				t.Fatalf("%s: exact-key scan %v, encoding/json keeps %v (map target)", body, got, want)
+			}
+			compared++
+			return
+		}
+		for _, key := range keys {
+			for _, value := range values {
+				build(append(members[:len(members):len(members)], `"`+key+`":`+value), depth-1)
+			}
+		}
+	}
+	for depth := 1; depth <= 3; depth++ {
+		build(nil, depth)
+	}
+	if compared < 10000 || refusedByDecoder == 0 {
+		t.Fatalf("compared %d bodies, %d skipped as not decodable", compared, refusedByDecoder)
 	}
 }

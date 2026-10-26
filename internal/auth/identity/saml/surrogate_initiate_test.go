@@ -74,3 +74,40 @@ func TestInitiateKeepsForwardingAPairedRelayState(t *testing.T) {
 		}
 	}
 }
+
+// encoding/json keeps the last matching member (a later null resets the
+// pointer), so the value the route forwards decides, not any member.
+func TestInitiateRefusesOnlyTheRelayStateThatWouldBeForwarded(t *testing.T) {
+	cases := []struct {
+		body        string
+		wantStatus  int
+		wantForward string
+	}{
+		{`{"RELAY_STATE":"\ud800","relay_state":"ok"}`, http.StatusOK, "ok"},
+		{`{"relay_state":"ok","RELAY_STATE":"\ud800"}`, http.StatusUnprocessableEntity, ""},
+		{`{"relay_state":"\ud800","relay_state":"ok"}`, http.StatusOK, "ok"},
+		{`{"relay_state":"ok","relay_state":"\ud800"}`, http.StatusUnprocessableEntity, ""},
+		{`{"relay_state":"\ud800","relay_state":null}`, http.StatusOK, ""},
+		{`{"relay_state":null,"relay_state":"\ud800"}`, http.StatusUnprocessableEntity, ""},
+	}
+	for _, tc := range cases {
+		rec, _ := initiateRequest(t, tc.body)
+		if rec.Code != tc.wantStatus {
+			t.Errorf("%s: status=%d want %d body=%s", tc.body, rec.Code, tc.wantStatus, rec.Body.String())
+			continue
+		}
+		if tc.wantStatus != http.StatusOK {
+			continue
+		}
+		var out struct {
+			RedirectURL string `json:"redirect_url"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+			t.Fatal(err)
+		}
+		parsed, err := url.Parse(out.RedirectURL)
+		if err != nil || parsed.Query().Get("RelayState") != tc.wantForward {
+			t.Errorf("%s: forwarded RelayState=%q want %q (%v)", tc.body, parsed.Query().Get("RelayState"), tc.wantForward, err)
+		}
+	}
+}

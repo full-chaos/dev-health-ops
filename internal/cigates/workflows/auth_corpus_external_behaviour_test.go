@@ -514,3 +514,101 @@ func TestAuthCorpusAcpLegFailsOnAuthServiceWriterViolations(t *testing.T) {
 		})
 	}
 }
+
+// credentials is mounted by auth-service as a 503 stub before it owns the users: go-api must keep forwarding nothing for
+// it until an owned step sets USERS_OWNED, however many of its routes answer OPTIONS.
+func TestAuthCorpusAcpLegDoesNotForwardMountedCredentialsBeforeUsersAreOwned(t *testing.T) {
+	credentials := "/api/v1/auth/register,/api/v1/auth/verify,/api/v1/auth/resend-verification,/api/v1/auth/forgot-password," +
+		"/api/v1/auth/reset-password,/api/v1/auth/change-password"
+	served := "/api/v1/auth/refresh,/api/v1/auth/logout,/api/v1/auth/login,/api/v1/auth/social-login," + credentials
+	metrics := `devhealth_api_auth_proxy_requests_total{aggregate="sessions",outcome="forwarded"} 3` + "\n" +
+		`devhealth_api_auth_proxy_requests_total{aggregate="local_login",outcome="forwarded"} 3`
+	for name, extra := range map[string][]string{"no caller env": nil, "caller env USERS_OWNED=1": {"USERS_OWNED=1"}} {
+		t.Run(name, func(t *testing.T) {
+			fake, out, err := runAcpLeg(t, append([]string{"FAKE_SERVED=" + served, "FAKE_METRICS=" + metrics}, extra...)...)
+			if err != nil || !strings.Contains(out, "leg acp forwards: sessions local_login\n") {
+				t.Fatalf("want credentials kept on go-api, got err=%v:\n%s", err, out)
+			}
+			if got := proxyFlagRecreates(fake.calls(t)); len(got) != 2 {
+				t.Errorf("go-api recreated %d times for proxy flags, want 2: %q", len(got), got)
+			}
+		})
+	}
+}
+
+// gateOwned runs the script's gate_owned function alone with USERS_OWNED set inside the shell, never by the caller env.
+func gateOwned(t *testing.T, owned, probed string) (string, error) {
+	t.Helper()
+	script := filepath.Join(authProofRoot(t), "ci", "auth_corpus_external.sh")
+	prog := `die() { printf 'ERROR: %s\n' "$1"; exit 1; }
+eval "$(sed -n '/^gate_owned() {$/,/^}$/p' "$1")"
+USERS_OWNED="$2"; PROBED="$3"
+gate_owned "$4"
+printf 'PROBED=%s\n' "${PROBED}"`
+	out, err := exec.Command("env", "-u", "USERS_OWNED", "bash", "-c", prog, "x", script, owned, probed, "credentials").CombinedOutput()
+	return string(out), err
+}
+
+func TestAuthCorpusCredentialsGateNeedsMountAndOwnedUsers(t *testing.T) {
+	for name, tc := range map[string]struct {
+		owned, probed, want string
+		fails               bool
+	}{
+		"not owned and mounted stays on go-api": {owned: "0", probed: "served", want: "PROBED=not owned"},
+		"owned and mounted is forwarded":        {owned: "1", probed: "served", want: "PROBED=served"},
+		"owned and unmounted fails the leg":     {owned: "1", probed: "not served", want: "aggregate credentials is not served", fails: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			out, err := gateOwned(t, tc.owned, tc.probed)
+			if (err != nil) != tc.fails || !strings.Contains(out, tc.want) {
+				t.Fatalf("want %q (fails=%v), got err=%v:\n%s", tc.want, tc.fails, err, out)
+			}
+		})
+	}
+}
+
+// A partly mounted credentials aggregate fails in probe, owned or not, before the gate runs.
+func TestAuthCorpusPartlyMountedCredentialsFailTheLeg(t *testing.T) {
+	_, out, err := runAcpLeg(t, "FAKE_SERVED=/api/v1/auth/refresh,/api/v1/auth/logout,/api/v1/auth/login,/api/v1/auth/register")
+	if err == nil || !strings.Contains(out, "auth-service serves 1 of the 6 routes of aggregate credentials") {
+		t.Fatalf("want a partial-mount failure, got err=%v:\n%s", err, out)
+	}
+}
+
+func TestAuthCorpusUsersOwnedIsScriptInternal(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join(authProofRoot(t), "ci", "auth_corpus_external.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var zero int
+	for _, line := range strings.Split(string(raw), "\n") {
+		trim := strings.TrimSpace(line)
+		switch {
+		case trim == "USERS_OWNED=0":
+			zero++
+		case strings.Contains(trim, "USERS_OWNED=1") && !strings.HasPrefix(trim, "#"):
+			t.Errorf("no step owns the users yet, but the script sets: %s", trim)
+		case strings.Contains(trim, "USERS_OWNED:-"):
+			t.Errorf("USERS_OWNED must not be read from the caller env: %s", trim)
+		}
+	}
+	if zero != 1 {
+		t.Errorf("want exactly one unconditional USERS_OWNED=0, got %d", zero)
+	}
+}
+
+// local_login keeps today's rule: mounted means served, and it is required. Its mount is only real when auth-service
+// has the lockout key, so the corpus env must keep setting it.
+func TestAuthCorpusLocalLoginStaysRequiredAndKeyed(t *testing.T) {
+	_, out, err := runAcpLeg(t, "FAKE_SERVED=/api/v1/auth/refresh,/api/v1/auth/logout")
+	if err == nil || !strings.Contains(out, "required aggregate local_login is not served by auth-service") {
+		t.Fatalf("want local_login required, got err=%v:\n%s", err, out)
+	}
+	raw, err := os.ReadFile(filepath.Join(authProofRoot(t), "ci", "auth_corpus_external.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `printf 'export AUTH_LOGIN_LOCKOUT_KEY=%q\n' "${LOGIN_LOCKOUT_KEY}"`) {
+		t.Error("the corpus env no longer sets AUTH_LOGIN_LOCKOUT_KEY")
+	}
+}

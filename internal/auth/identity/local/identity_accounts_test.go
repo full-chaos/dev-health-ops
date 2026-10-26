@@ -44,7 +44,7 @@ func (r *recordingEnder) PeekResetLink(context.Context, [32]byte) (uuid.UUID, bo
 	return uuid.Nil, false, nil
 }
 
-func (r *recordingEnder) ConsumeResetLinkInTx(context.Context, audit.TxOps, uuid.UUID, [32]byte) error {
+func (r *recordingEnder) ConsumeBoundResetLinkInTx(context.Context, audit.TxOps, uuid.UUID, [32]byte) error {
 	r.consumed++
 	return nil
 }

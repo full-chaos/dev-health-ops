@@ -130,7 +130,7 @@ type flowLinks struct {
 	redeem   map[[32]byte]uuid.UUID
 }
 
-func (l *flowLinks) Issue(_ context.Context, req IssueRequest) error {
+func (l *flowLinks) IssueBound(_ context.Context, req IssueRequest) error {
 	l.rec.add("Issue")
 	l.issued = append(l.issued, req)
 	return nil

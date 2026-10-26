@@ -808,7 +808,7 @@ func runIntegrationPackagesDefects(body string) []string {
 		if l == `[ "${mode}" != "--dry-run" ] || return 0` {
 			dryReturn = i
 		}
-		if regexp.MustCompile(`\bgo test\b`).MatchString(l) {
+		if regexp.MustCompile(`\bgo test -`).MatchString(l) {
 			d = append(d, "run_integration_packages runs go test itself instead of through run_integration_go_test: "+l)
 		}
 		if !strings.HasPrefix(l, `run_integration_go_test "${module_dir}" "${run_pkgs[@]}"`) {

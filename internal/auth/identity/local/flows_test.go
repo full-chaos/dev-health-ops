@@ -396,7 +396,7 @@ func TestResetSetsPasswordRevokesEverySessionAndIsSingleUse(t *testing.T) {
 	if err != nil || out.Kind != FlowOK {
 		t.Fatalf("Reset = %+v, %v", out, err)
 	}
-	if want := []string{"PeekResetLink", "SetPasswordEndingSessions"}; !reflect.DeepEqual(rig.rec.names(), want) {
+	if want := []string{"PeekResetLink", "ByID", "SetPasswordEndingSessions"}; !reflect.DeepEqual(rig.rec.names(), want) {
 		t.Fatalf("calls = %v, want %v", rig.rec.names(), want)
 	}
 	if rig.accounts.hashes[0] != "hash-of:A-new-pass-77" || rig.accounts.ended[0] != u.ID {
@@ -743,5 +743,27 @@ func TestAChangeIssuesItsSessionInTheSameWrite(t *testing.T) {
 	out, err = rig.f.Change(context.Background(), ChangeRequest{PrincipalID: u.ID, Current: flowPassword, New: "Brand-new-pass-42"})
 	if err != nil || out.Issued == nil || len(rig.accounts.created) != 1 || len(rig.sessions.created) != 0 {
 		t.Fatalf("Change = %+v, %v, write-created %d, separate Create %d; want the session made inside the write", out, err, len(rig.accounts.created), len(rig.sessions.created))
+	}
+}
+
+func TestForgotAndResetTreatAServiceProviderAccountAsUnknown(t *testing.T) {
+	rig := newFlowRig(t, true)
+	u := rig.user("svc@example.com", true)
+	service := "service"
+	u.AuthProvider = &service
+	if err := rig.f.Forgot(context.Background(), "svc@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	iss, msg := rig.links.issued[len(rig.links.issued)-1], rig.mail.sent[len(rig.mail.sent)-1]
+	if iss.PrincipalID != uuid.Nil || msg.Deliver {
+		t.Errorf("Forgot for a service-provider account: principal set %v, deliver %v; want the unknown-address decoy", iss.PrincipalID != uuid.Nil, msg.Deliver)
+	}
+	rig.grant("svc-secret", u.ID)
+	out, err := rig.f.Reset(context.Background(), "svc-secret", "A-new-pass-77")
+	if err != nil || out.Kind != FlowInvalidToken {
+		t.Fatalf("Reset with a service-provider account's link = %+v, %v; want %s", out, err, FlowInvalidToken)
+	}
+	if len(rig.accounts.hashes) != 0 {
+		t.Errorf("a password was set: %v", rig.accounts.hashes)
 	}
 }

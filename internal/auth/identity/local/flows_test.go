@@ -20,6 +20,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/callseq"
 )
 
 type flowRecorder struct {
@@ -88,6 +89,10 @@ func (a *flowAccounts) SetEmailVerified(_ context.Context, id uuid.UUID) error {
 func (a *flowAccounts) PeekResetLink(_ context.Context, hash [32]byte) (uuid.UUID, bool, error) {
 	a.rec.add("PeekResetLink")
 	id, ok := a.links.redeem[hash]
+	// The port's contract: a link of an account that is gone or of the service provider reads as not ok.
+	if user := a.byID[id]; ok && (user == nil || identity.IsServiceProvider(user.AuthProvider)) {
+		return uuid.Nil, false, nil
+	}
 	if ok && a.afterPeek != nil {
 		a.afterPeek()
 	}
@@ -388,6 +393,36 @@ func TestResendAndForgotMakeOneCallSequenceForEveryAddress(t *testing.T) {
 	}
 }
 
+// A refused reset link (unknown, of a service-provider account, of an account that is gone) makes the one call
+// PeekResetLink and answers FlowInvalidToken, the same steps as an unknown link.
+func TestResetMakesOneCallSequenceForEveryRefusedLink(t *testing.T) {
+	sequences := map[string][]string{}
+	for _, name := range []string{"unknown", "service-provider", "gone"} {
+		rig := newFlowRig(t, true)
+		switch name {
+		case "service-provider":
+			provider := "service"
+			u := &User{ID: uuid.New(), IsActive: true, IsVerified: true, AuthProvider: &provider}
+			rig.accounts.byID[u.ID] = u
+			rig.grant("refused-secret", u.ID)
+		case "gone":
+			rig.grant("refused-secret", uuid.New())
+		}
+		out, err := rig.f.Reset(context.Background(), "refused-secret", "A-new-pass-77")
+		if err != nil || out.Kind != FlowInvalidToken {
+			t.Fatalf("%s: Reset = %+v, %v", name, out, err)
+		}
+		if len(rig.accounts.hashes) != 0 {
+			t.Errorf("%s: a password was written", name)
+		}
+		sequences[name] = rig.rec.names()
+	}
+	if want := []string{"PeekResetLink"}; !reflect.DeepEqual(sequences["unknown"], want) {
+		t.Fatalf("unknown link calls = %v, want %v", sequences["unknown"], want)
+	}
+	callseq.Same(t, "refused reset links", sequences)
+}
+
 func TestResetSetsPasswordRevokesEverySessionAndIsSingleUse(t *testing.T) {
 	rig := newFlowRig(t, true)
 	u := rig.user("r@example.com", true)
@@ -396,7 +431,7 @@ func TestResetSetsPasswordRevokesEverySessionAndIsSingleUse(t *testing.T) {
 	if err != nil || out.Kind != FlowOK {
 		t.Fatalf("Reset = %+v, %v", out, err)
 	}
-	if want := []string{"PeekResetLink", "ByID", "SetPasswordEndingSessions"}; !reflect.DeepEqual(rig.rec.names(), want) {
+	if want := []string{"PeekResetLink", "SetPasswordEndingSessions"}; !reflect.DeepEqual(rig.rec.names(), want) {
 		t.Fatalf("calls = %v, want %v", rig.rec.names(), want)
 	}
 	if rig.accounts.hashes[0] != "hash-of:A-new-pass-77" || rig.accounts.ended[0] != u.ID {

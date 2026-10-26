@@ -25,7 +25,7 @@ const liveTokenVersion = `(SELECT COALESCE(u.token_version, 0) FROM public.users
 
 // boundToLiveTokenVersion is the condition PeekResetLink adds: the counter has
 // not moved since the link was issued.
-const boundToLiveTokenVersion = ` AND issued_token_version = ` + liveTokenVersion
+const boundToLiveTokenVersion = ` AND c.issued_token_version = (SELECT COALESCE(lu.token_version, 0) FROM public.users lu WHERE lu.id = c.principal_id)`
 
 // IssueBound is Issue with the row bound to the principal's current
 // public.users.token_version. The statements, their order and the decoy are

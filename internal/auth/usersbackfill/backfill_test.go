@@ -265,3 +265,27 @@ func TestPlaceholderIsTheSharedDefinitionAndStaysNotCarried(t *testing.T) {
 		}
 	}
 }
+
+func TestRunCarriesNoPasswordHashForAServiceProviderRow(t *testing.T) {
+	hash, err := bcrypt.GenerateFromPassword([]byte("service-row-password"), bcrypt.MinCost)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := func(v string) *string { return &v }
+	h := string(hash)
+	service := Row{ID: uuid.New(), Email: "svc@example.test", Active: true, AuthProvider: s("service"), PasswordHash: &h}
+	local := Row{ID: uuid.New(), Email: "local@example.test", Active: true, AuthProvider: s("local"), PasswordHash: &h}
+	rows := []Row{service, local}
+	sort.Slice(rows, func(i, j int) bool { return rows[i].ID.String() < rows[j].ID.String() })
+	sink := &memSink{seen: map[uuid.UUID]identity.BackfillTarget{}}
+	rep, err := Run(context.Background(), pagedSource{rows: rows}, sink, Options{})
+	if err != nil || rep.SkippedTotal() != 0 {
+		t.Fatalf("Run = %v, %v", rep.Lines(), err)
+	}
+	if got := sink.seen[service.ID].PasswordHash; got != nil {
+		t.Errorf("the backfill passed a password hash to its auth sink for a service-provider row (%d bytes)", len(*got))
+	}
+	if got := sink.seen[local.ID].PasswordHash; got == nil || *got != h {
+		t.Error("the backfill must still carry a local row's password hash")
+	}
+}

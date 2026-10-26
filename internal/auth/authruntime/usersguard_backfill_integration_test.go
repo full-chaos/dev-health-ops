@@ -152,6 +152,10 @@ FROM public.users`, prove, admin2).Scan(&placeholders, &uncarried); err != nil {
 		t.Fatalf("the report must list both proof placeholders as not carried (%d) and link the github identity: %v", placeholders, rep.Lines())
 	}
 	check("")
+	var placeholderLinks int
+	if err := admin.QueryRow(ctx, `SELECT count(*) FROM auth.external_identities WHERE principal_id IN ($1::uuid, $2::uuid)`, prove, admin2).Scan(&placeholderLinks); err != nil || placeholderLinks != 0 {
+		t.Fatalf("a proof placeholder holds %d identity link(s) after the backfill (%v); want 0", placeholderLinks, err)
+	}
 
 	// The same shape under any other id is an ordinary row of a provider without an identity: refused.
 	sameShape := user("service", nil, nil)

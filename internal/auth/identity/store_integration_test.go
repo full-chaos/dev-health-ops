@@ -1738,3 +1738,36 @@ func TestIdentityBySubjectNamesThePrincipalOfAProviderAlreadyLinkedRefusal(t *te
 		t.Fatalf("second subject = %+v, %v, %v; want ErrProviderAlreadyLinked naming %v", p, found, err, user)
 	}
 }
+
+func TestByEmailReturnsTheStoredFullNameInBothReadModes(t *testing.T) {
+	e := getEnv(t)
+	ctx := context.Background()
+
+	legacyEmail := uniqueEmail("fullname-legacy")
+	legacyID := e.seedUser(t, ctx, legacyEmail, true, true)
+	if _, err := e.admin.Exec(ctx, `UPDATE public.users SET full_name = $2 WHERE id = $1`, legacyID, "Zoë Müller 山田"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := e.store.ByEmail(ctx, legacyEmail)
+	if err != nil || got == nil || got.FullName == nil || *got.FullName != "Zoë Müller 山田" {
+		t.Fatalf("legacy ByEmail = %+v, %v; want full name from public.users.full_name", got, err)
+	}
+	unnamed := uniqueEmail("fullname-null")
+	e.seedUser(t, ctx, unnamed, true, true)
+	if got, err := e.store.ByEmail(ctx, unnamed); err != nil || got == nil || got.FullName != nil {
+		t.Fatalf("legacy ByEmail of a NULL full_name = %+v, %v; want a nil name", got, err)
+	}
+
+	ownedEmail := "fullname-owned-" + uuid.NewString()[:8] + "@example.com"
+	hash := testBcrypt
+	request := uuid.NewString()
+	id, err := e.owned.ProvisionLocal(ctx, LocalProvisionRequest{Email: ownedEmail, FullName: strPtr("Zoë Müller 山田"), PasswordHash: &hash, Actor: SelfSignUp(&request)})
+	if err != nil {
+		t.Fatalf("ProvisionLocal: %v", err)
+	}
+	key, _ := NormalizeEmail(ownedEmail)
+	got, err = e.owned.ByEmail(ctx, key)
+	if err != nil || got == nil || got.ID != id || got.FullName == nil || *got.FullName != "Zoë Müller 山田" {
+		t.Fatalf("owned ByEmail = %+v, %v; want full name from auth.principals.display_name", got, err)
+	}
+}

@@ -134,3 +134,18 @@ func TestIdentityAccountsPassesTheHashNotThePasswordAndOneRequestID(t *testing.T
 		t.Error("an unknown user must map to nil")
 	}
 }
+
+func TestIdentityAccountsCopiesThePrincipalFullNameToTheUser(t *testing.T) {
+	name := "Zoë Müller 山田"
+	store := &recordingStore{principal: &identity.Principal{ID: uuid.New(), IsActive: true, FullName: &name}}
+	acc := IdentityAccounts{Store: store}
+	ctx := context.Background()
+	byEmail, err := acc.ByEmail(ctx, "a@example.com")
+	if err != nil || byEmail == nil || byEmail.FullName == nil || *byEmail.FullName != name {
+		t.Errorf("ByEmail user = %+v, %v; want the full name", byEmail, err)
+	}
+	byID, err := acc.ByID(ctx, uuid.New())
+	if err != nil || byID == nil || byID.FullName == nil || *byID.FullName != name {
+		t.Errorf("ByID user = %+v, %v; want the full name", byID, err)
+	}
+}

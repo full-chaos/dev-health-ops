@@ -11,7 +11,7 @@ var Quirks = []Quirk{
 	{
 		ID: "lone-surrogate-500", Class: Accidental,
 		Steps:  []Step{{"login: password with lone surrogate", 500}, {"validate: lone surrogate", 500}, {"burst: login surrogate password 1", 500}, {"burst: login surrogate password 2", 500}, {"burst: login surrogate password 3", 500}, {"burst: login surrogate password past the limit", 500}, {"register: password lone surrogate", 500}, {"register: full name with a lone surrogate", 500}},
-		Reason: "Python raised while encoding a lone surrogate and answered 500; a clean 4xx refusal breaks no client",
+		Reason: "Python raised while encoding a lone surrogate and answered 500; a clean 4xx refusal breaks no client. The register full-name step is frozen at 500 for the python plane only: both go planes answer 422 string_unicode since CHAOS-11450 (golden regen: CHAOS-11531)",
 	},
 	{
 		ID: "origin-urlparse-500", Class: Accidental,

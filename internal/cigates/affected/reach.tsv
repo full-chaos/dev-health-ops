@@ -65,6 +65,7 @@ internal/apiservice	githubapp_config.go	internal/auth/authruntime
 internal/auth/contracts	contracts.go	cmd/auth-migrate
 internal/auth/contracts	contracts.go	cmd/auth-service
 internal/auth/contracts	contracts.go	cmd/dho
+internal/auth/contracts	contracts.go	cmd/loadtest
 internal/auth/contracts	contracts.go	deploy/helm/dev-health
 internal/auth/contracts	contracts.go	internal/api/billing
 internal/auth/contracts	contracts.go	internal/api/externalingest
@@ -193,6 +194,8 @@ internal/cigates/docstools	pyurl.go	cmd/cigate
 internal/cigates/docstools	pyurl.go	internal/cigates/docstools
 internal/cigates/docstools	validate_inventory_review.go	cmd/cigate
 internal/cigates/docstools	validate_inventory_review.go	internal/cigates/docstools
+internal/cigates/docstools	validatedsite.go	cmd/cigate
+internal/cigates/docstools	validatedsite.go	internal/cigates/docstools
 internal/cigates/emitscan	scan.go	internal/cigates/emitscan
 internal/cigates/frozengoldens	frozengoldens.go	internal/cigates/frozengoldens
 internal/cigates/livee2e	cli.go	cmd/cigate

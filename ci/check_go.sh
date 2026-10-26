@@ -105,10 +105,78 @@ if [ "${CI:-}" = "true" ] && [ -z "${TESTCONTAINERS_RYUK_DISABLED+x}" ]; then
   INTEGRATION_TEST_ENV=(TESTCONTAINERS_RYUK_DISABLED=true)
 fi
 
+# run_integration_go_test (CHAOS-10036): one testcontainers session id per
+# `go test -tags=integration` call, so ONE label names every container the call
+# starts, with the reaper on or off. After the call (pass, fail, INT, TERM) the
+# containers of that session are removed by id (ci/reap-testcontainers-session.sh:
+# label filter only, never a prune). A caller-set TESTCONTAINERS_SESSION_ID wins.
+# The go test runs in its own session (setsid), so its pid is its process-group id and the trap
+# stops the whole group (TERM, then KILL after 10 s) before the reap, but only when the pgid is that pid and not
+# this shell's own group; otherwise it stops the recorded pid only. A SIGKILL of this script skips the trap; the
+# reaper (when on) or a host sweep by session id covers that case.
+TC_TRAP_PID="" TC_TRAP_SID="" TC_TRAP_PGID=""
+tc_trap() {
+  local i
+  # Group kill only for a private group: pgid == the recorded go test pid and != this shell's own group.
+  if [ -n "${TC_TRAP_PGID}" ] && [ "${TC_TRAP_PGID}" = "${TC_TRAP_PID}" ] \
+    && [ "${TC_TRAP_PGID}" != "$(ps -o pgid= -p "$$" | tr -d ' ')" ]; then
+    kill -TERM -- "-${TC_TRAP_PGID}" 2>/dev/null || true
+    for i in $(seq 1 100); do
+      pgrep -g "${TC_TRAP_PGID}" >/dev/null 2>&1 || break
+      sleep 0.1
+    done
+    if pgrep -g "${TC_TRAP_PGID}" >/dev/null 2>&1; then
+      kill -KILL -- "-${TC_TRAP_PGID}" 2>/dev/null || true
+    fi
+  else
+    echo "check_go.sh: no private process group for the go test; stopping pid ${TC_TRAP_PID} only" >&2
+    kill -TERM "${TC_TRAP_PID}" 2>/dev/null || true
+  fi
+  wait "${TC_TRAP_PID}" 2>/dev/null || true
+  bash "${SCRIPT_DIR}/reap-testcontainers-session.sh" "${TC_TRAP_SID}" || true
+  exit 143
+}
+
+run_integration_go_test() {
+  local module_dir="$1" sid pid rc=0 i own_pgid
+  local -a private_group=()
+  shift
+  sid="${TESTCONTAINERS_SESSION_ID:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')}"
+  [[ "${sid}" =~ ^[A-Za-z0-9._-]{8,64}$ ]] \
+    || die "TESTCONTAINERS_SESSION_ID must match ^[A-Za-z0-9._-]{8,64}\$"
+  if command -v setsid >/dev/null 2>&1; then
+    private_group=(setsid)
+  fi
+  (
+    cd "${ROOT}/${module_dir}"
+    exec ${private_group[@]+"${private_group[@]}"} "${GO_ENV_OFF[@]}" GOWORK=off TESTCONTAINERS_SESSION_ID="${sid}" ${INTEGRATION_TEST_ENV[@]+"${INTEGRATION_TEST_ENV[@]}"} \
+      go test -mod=readonly -trimpath -tags=integration -count=1 -timeout=30m "$@"
+  ) &
+  pid=$!
+  TC_TRAP_PID="${pid}"
+  TC_TRAP_SID="${sid}"
+  TC_TRAP_PGID=""
+  trap tc_trap INT TERM
+  if [ "${#private_group[@]}" -gt 0 ]; then
+    own_pgid="$(ps -o pgid= -p "$$" | tr -d ' ')"
+    for i in $(seq 1 50); do
+      kill -0 "${pid}" 2>/dev/null || { TC_TRAP_PGID=""; break; }
+      TC_TRAP_PGID="$(ps -o pgid= -p "${pid}" 2>/dev/null | tr -d ' ' || true)"
+      [ "${TC_TRAP_PGID}" = "${pid}" ] && [ "${TC_TRAP_PGID}" != "${own_pgid}" ] && break
+      TC_TRAP_PGID=""
+      sleep 0.1
+    done
+  fi
+  wait "${pid}" || rc=$?
+  trap - INT TERM
+  bash "${SCRIPT_DIR}/reap-testcontainers-session.sh" "${sid}" || rc=$?
+  return "${rc}"
+}
+
 usage() {
   # Backticks in the literal help text document commands; they are not substitutions.
   # shellcheck disable=SC2016
-  printf '%s\n' 'Usage: ci/check_go.sh [auth [STAGE]|fmt|vet|test|race|venue-oracles [SHARD COUNT]|venue-oracle-plan COUNT|ci-leg LEG [SHARD COUNT]|test-shard-plan SHARD COUNT|race-shard-plan SHARD COUNT|race-excluded-shard-plan SHARD COUNT|race-excluded-receipts JSON...|test-shard-wall-guard SHARD COUNT WALL LOGFILE|test-shard-unweighted-guard SHARD COUNT LOGFILE|build|contract|ratchets|race-weights-rows|multi-replica-workers|integration-vet|integration-coverage|race-excluded-ran|integration-shard-plan|integration-prepull|integration-shard|integration|fast|ci|all]
+  printf '%s\n' 'Usage: ci/check_go.sh [auth [STAGE]|fmt|vet|test|race|venue-oracles [SHARD COUNT]|venue-oracle-plan COUNT|ci-leg LEG [SHARD COUNT]|ci-leg-warm test|race SHARD COUNT|test-shard-plan SHARD COUNT|race-shard-plan SHARD COUNT|race-excluded-shard-plan SHARD COUNT|race-excluded-receipts JSON...|test-shard-wall-guard SHARD COUNT WALL LOGFILE|test-shard-unweighted-guard SHARD COUNT LOGFILE|build|contract|ratchets|race-weights-rows|multi-replica-workers|integration-vet|integration-coverage|race-excluded-ran|integration-shard-plan|integration-prepull|integration-shard|integration|fast|ci|all]
 
   auth   (CHAOS-4887) The Auth Control Plane gates over the auth packages ALONE: gofmt, vet, test,
          -race, the production-middleware stack test (G-69, must log its marker), one fuzz run per
@@ -176,6 +244,10 @@ usage() {
          slices, ci/go_race_weights.d). The
          legs run exactly the steps of `ci` (pinned by a tooling test); each
          stage prints UTC start/done stamps.
+  ci-leg-warm test|race SHARD COUNT
+         Compile the packages of that leg slice with the leg own flags and
+         run no test (go test -run ^$), to fill the leg Go build cache on a
+         main push whose test and race legs the merge queue already ran.
   test-shard-plan SHARD COUNT
          Print the packages (module, import path, weights key) of the SHARD-th of
          COUNT weight-balanced slices of the unit tests (ci/go_test_weights.tsv,
@@ -410,6 +482,8 @@ check_vet() {
 # shard plans; the plans partition `go list ./...`, so every row is checked in exactly one shard (`race-excluded-shard-plan SHARD
 # COUNT` lists a shard's rows).
 # race_excluded_rows [SHARD COUNT]: the rows of ci/race_excluded_tests.tsv (the shard's rows with SHARD COUNT), one per line.
+# A line must be exactly <package><TAB><test> (CHAOS-11436): an empty line and a # comment are skipped; a whitespace-only line, one
+# column, more than two columns or an empty column dies naming the line; a CRLF ending is trimmed.
 race_excluded_rows() {
   local list="${GO_RACE_EXCLUDED_TESTS:-${ROOT}/ci/race_excluded_tests.tsv}" row shard="${1:-}" shard_count="${2:-}" plan="" plan_keys="" normalised
   local -a rows=()
@@ -417,9 +491,10 @@ race_excluded_rows() {
   normalised="$(awk -F'\t' '
     function trim(s) { gsub(/^[ \t\r]+|[ \t\r]+$/, "", s); return s }
     /^#/ || /^$/ { next }
+    NF != 2 || trim($1) == "" || trim($2) == "" { printf "ERROR: census line %d of %s is not <package><TAB><test> (whitespace-only, 1 column, more than 2 columns, or an empty column): %s\n", NR, FILENAME, $0 > "/dev/stderr"; exit 1 }
     { key = trim($1) "\t" trim($2)
       if (key in seen) { printf "ERROR: duplicate census row (package<TAB>test) %s: lines %d and %d of %s\n", trim($1) " " trim($2), seen[key], NR, FILENAME > "/dev/stderr"; exit 1 }
-      seen[key] = NR; print key }' "${list}")" || die "the race-excluded census holds a duplicated row"
+      seen[key] = NR; print key }' "${list}")" || die "the race-excluded census holds a malformed or duplicated row"
   while IFS= read -r row; do [ -z "${row}" ] || rows+=("${row}"); done <<<"${normalised}"
   [ "${#rows[@]}" -gt 0 ] || die "ci/race_excluded_tests.tsv lists no test: nothing would be measured"
   if [ -n "${shard}" ]; then
@@ -1102,6 +1177,37 @@ check_ci_leg() {
       ;;
   esac
   printf 'ci-leg %s: OK\n' "${leg}"
+}
+
+# check_ci_leg_warm test|race SHARD COUNT (CHAOS-11408): compile, run nothing. A main push that the merge queue already
+# tested skips its test and race legs, and this fills the leg's Go build cache on a key miss so the pull requests that restore
+# it still hit. The flags are the ones of the real leg (-mod=readonly -trimpath, -race for a race leg) plus -run '^$', so the
+# compiled objects are the ones the real leg would cache.
+check_ci_leg_warm() {
+  local leg="${1:-}" shard="${2:-}" count="${3:-}" module_dir plan pkg
+  local -a pkgs
+  case "${leg}" in
+    test) plan="$(check_test_shard_plan "${shard}" "${count}")" || die "test shard plan failed" ;;
+    race) plan="$(check_race_shard_plan "${shard}" "${count}")" || die "race shard plan failed" ;;
+    *) die "ci-leg-warm LEG must be test or race (got '${leg}')" ;;
+  esac
+  for module_dir in "${MODULE_DIRS[@]}"; do
+    pkgs=()
+    while IFS= read -r pkg; do
+      [ -n "${pkg}" ] && pkgs+=("${pkg}")
+    done < <(printf '%s\n' "${plan}" | awk -F'\t' -v m="${module_dir}" '$1 == m { print $2 }')
+    [ "${#pkgs[@]}" -gt 0 ] || continue
+    printf 'go test -run ^$ (%s %s/%s): %s: %d package(s)\n' "${leg}" "${shard}" "${count}" "${module_dir}" "${#pkgs[@]}"
+    (
+      cd "${ROOT}/${module_dir}"
+      if [ "${leg}" = race ]; then
+        "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -race -run '^$' "${pkgs[@]}"
+      else
+        "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -run '^$' "${pkgs[@]}"
+      fi
+    )
+  done
+  printf 'ci-leg-warm %s: OK\n' "${leg}"
 }
 
 # check_venue_oracles (CHAOS-6314) runs every venue oracle test in the repo,
@@ -3528,10 +3634,7 @@ check_integration_package_shard() {
     if [ "${mode}" = "--dry-run" ]; then
       continue
     fi
-    (
-      cd "${ROOT}/${module_dir}"
-      "${GO_ENV_OFF[@]}" GOWORK=off ${INTEGRATION_TEST_ENV[@]+"${INTEGRATION_TEST_ENV[@]}"} go test -mod=readonly -trimpath -tags=integration -count=1 -timeout=30m "${run_pkgs[@]}"
-    )
+    run_integration_go_test "${module_dir}" "${run_pkgs[@]}"
   done
 
   [ "${selected_count}" -gt 0 ] \
@@ -3642,10 +3745,7 @@ check_integration() {
     [ "${#run_pkgs[@]}" -gt 0 ] || continue
 
     printf 'go test integration: %s -> %s\n' "${module_dir}" "${run_pkgs[*]}"
-    (
-      cd "${ROOT}/${module_dir}"
-      "${GO_ENV_OFF[@]}" GOWORK=off ${INTEGRATION_TEST_ENV[@]+"${INTEGRATION_TEST_ENV[@]}"} go test -mod=readonly -trimpath -tags=integration -count=1 -timeout=30m "${run_pkgs[@]}"
-    )
+    run_integration_go_test "${module_dir}" "${run_pkgs[@]}"
   done
 }
 
@@ -3726,6 +3826,7 @@ AUTH_FUZZ_TARGETS=(
   "./internal/auth/contracts FuzzRevisionUnmarshal"
   "./internal/auth/contracts FuzzTimestampUnmarshal"
   "./internal/auth/contracts FuzzParseAccessToken"
+  "./internal/auth/contracts FuzzParseWorkloadToken"
   "./internal/auth/edgetoken FuzzVerifyToken"
   "./internal/auth/signedtoken FuzzValidSignedToken"
   "./internal/auth/httpapi FuzzParseLimit"
@@ -4193,6 +4294,11 @@ case "${1:-all}" in
     { [ "$#" -eq 2 ] || [ "$#" -eq 4 ]; } || die "ci-leg accepts LEG, or 'test|race SHARD COUNT'"
     shift
     check_ci_leg "$@"
+    ;;
+  ci-leg-warm)
+    [ "$#" -eq 4 ] || die "ci-leg-warm accepts test|race SHARD COUNT"
+    shift
+    check_ci_leg_warm "$@"
     ;;
   build)
     check_build

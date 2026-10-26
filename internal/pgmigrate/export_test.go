@@ -74,5 +74,12 @@ func UsePlantedChain(t testing.TB, extra fs.FS) {
 
 // DropInvalidFailureStreakIndex runs the cleanup that follows a final failed build.
 func DropInvalidFailureStreakIndex(ctx context.Context, conn *pgx.Conn, options IndexBuildOptions, logger *slog.Logger) {
-	dropInvalidFailureStreakIndex(ctx, conn, options, logger)
+	var pid int32
+	if err := conn.QueryRow(ctx, "SELECT pg_backend_pid()").Scan(&pid); err != nil {
+		panic(err)
+	}
+	dropInvalidFailureStreakIndex(ctx, lockedSession{conn: conn, pid: pid}, options, logger)
 }
+
+// BuildIndexLockKey is the advisory lock key one build-index run holds.
+const BuildIndexLockKey = buildIndexLockKey

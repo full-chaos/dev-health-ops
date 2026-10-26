@@ -86,12 +86,13 @@ func LegacyRefreshTokenGrant() TableWriteGrant {
 // columns, no DELETE, no TRUNCATE, no other table. token_version is inserted
 // as 0 and updated only by a password change, which adds 1 in the same
 // transaction (go-api's own reset does), so go-api tokens minted before it end.
+// last_login_at is updated only by a sign-in, with updated_at, as go-api's does.
 func UsersWriteGrant() (insert, update []string) {
 	return []string{
 			"id", "email", "username", "password_hash", "full_name", "auth_provider", "auth_provider_id",
 			"is_active", "is_verified", "is_superuser", "token_version", "created_at", "updated_at",
 		},
-		[]string{"password_hash", "is_verified", "token_version", "updated_at"}
+		[]string{"password_hash", "is_verified", "token_version", "last_login_at", "updated_at"}
 }
 
 // InsertGrant is a column-level INSERT grant on one ops-schema table.

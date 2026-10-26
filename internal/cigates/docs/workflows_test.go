@@ -240,9 +240,14 @@ func docsGuardsGuard(d docTree) []string {
 			out = append(out, fmt.Sprintf("step %q must stream through tee under set -o pipefail", c.step))
 		}
 	}
-	var uploads []map[string]any
+	var uploads, site []map[string]any
 	for _, s := range steps {
-		if strings.HasPrefix(asString(s["uses"]), "actions/upload-artifact@") {
+		if !strings.HasPrefix(asString(s["uses"]), "actions/upload-artifact@") {
+			continue
+		}
+		if strings.HasPrefix(asString(asMap(s["with"])["name"]), "docs-site-") {
+			site = append(site, s)
+		} else {
 			uploads = append(uploads, s)
 		}
 	}
@@ -256,6 +261,38 @@ func docsGuardsGuard(d docTree) []string {
 			out = append(out, "the evidence artifact must include .build/docs-*.log")
 		}
 	}
+	// The validated site is uploaded only after every check passed (no if: the default is success()), stamped with its revision.
+	if len(site) != 1 {
+		out = append(out, fmt.Sprintf("want exactly one validated-site upload step, got %d", len(site)))
+	} else if _, ok := site[0]["if"]; ok {
+		out = append(out, "the validated site must be uploaded only after every check passed: no if: on the upload step")
+	}
+	if names := []string{"Stamp the validated site with its revision", "Upload the validated site"}; len(steps) > 2 {
+		var order []string
+		for _, s := range steps {
+			order = append(order, asString(s["name"]))
+		}
+		last := func(n string) int {
+			for i, o := range order {
+				if o == n {
+					return i
+				}
+			}
+			return -1
+		}
+		for _, c := range docsGuardsChecks {
+			if last(names[0]) < last(c.step) || last(c.step) < 0 {
+				out = append(out, fmt.Sprintf("the validated-site stamp must come after the check %q", c.step))
+			}
+		}
+		if last(names[1]) < last(names[0]) || last(names[0]) < 0 {
+			out = append(out, "the validated site must be uploaded after it is stamped")
+		}
+	}
+	if !strings.Contains(runs["Stamp the validated site with its revision"], `"$GITHUB_SHA" > .build/docs-validated.sha`) {
+		out = append(out, "the stamp step must write $GITHUB_SHA to .build/docs-validated.sha")
+	}
+	out = append(out, docsPreviewFindings(wf)...)
 	// The Go guards of the docs content run on every docs change, in a job that installs no Python.
 	content := asMap(jobs[contentJob])
 	if content == nil {
@@ -344,7 +381,7 @@ func TestDocsGuardsWorkflowContract(t *testing.T) {
 			return d.edit(t, docsGuardsPath, "--css docs/stylesheets/extra.css", "")
 		}, `step "Check structural accessibility invariants" does not run the command`},
 		{"the evidence upload is not always", func(t *testing.T, d docTree) docTree {
-			return d.edit(t, docsGuardsPath, "        if: always()\n        uses: actions/upload-artifact", "        uses: actions/upload-artifact")
+			return d.editFirst(t, docsGuardsPath, "        if: always()\n        uses: actions/upload-artifact", "        uses: actions/upload-artifact")
 		}, "the evidence artifact must be uploaded with if: always()"},
 		{"the external link check joins the gate", func(t *testing.T, d docTree) docTree {
 			return d.edit(t, docsGuardsPath, "      - name: Check freshness inventory", "      - name: Extra\n        run: "+goCmd("check-external-links")+" --built-site .build/docs\n      - name: Check freshness inventory")
@@ -440,6 +477,35 @@ func TestDocsGuardsWorkflowContract(t *testing.T) {
 			}, fmt.Sprintf("step %q must not carry an if", step)})
 		}
 	}
+	plants = append(plants,
+		plantCase{"the validated site is uploaded even when a check failed", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, docsGuardsPath, "      - name: Upload the validated site\n", "      - name: Upload the validated site\n        if: always()\n")
+		}, "no if: on the upload step"},
+		plantCase{"the stamp step is removed", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, docsGuardsPath, "      - name: Stamp the validated site with its revision\n        run: printf '%s\\n' \"$GITHUB_SHA\" > .build/docs-validated.sha\n", "")
+		}, "stamp"},
+		plantCase{"docs-preview stops needing docs-guards", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, docsGuardsPath, "    needs: docs-guards\n", "")
+		}, "docs-preview must need docs-guards"},
+		plantCase{"docs-preview runs on every event", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, docsGuardsPath, "    if: github.event_name == 'pull_request'\n", "")
+		}, "pull requests only"},
+		plantCase{"docs-preview downloads another revision's site", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, docsGuardsPath, "          name: docs-site-${{ github.sha }}\n          path: .build\n", "          name: docs-site-main\n          path: .build\n")
+		}, "its own revision"},
+		plantCase{"docs-preview builds the site again", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, docsGuardsPath, "      - name: Check candidate facts\n        run: |\n", "      - name: Check candidate facts\n        run: |\n          python -m mkdocs build --strict\n")
+		}, "must not build the site again or run Python"},
+		plantCase{"docs-preview runs the Python build script", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, docsGuardsPath, "      - name: Check candidate facts\n        run: |\n", "      - name: Check candidate facts\n        run: |\n          python3 scripts/build_docs_cloudflare.py --mode preview\n")
+		}, "must not build the site again or run Python"},
+		plantCase{"docs-preview stops checking the stamp", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, docsGuardsPath, "docs check-validated-site", "docs check-candidate-facts")
+		}, "check-validated-site"},
+		plantCase{"docs-preview prepares another revision", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, docsGuardsPath, `--source-revision "$GITHUB_SHA"`, `--source-revision main`)
+		}, "--source-revision"},
+	)
 	assertGuard(t, docsGuardsGuard, plants)
 }
 
@@ -589,4 +655,64 @@ func TestCloudflareWorkflowGates(t *testing.T) {
 			return d.added(cloudflarePath, text[:i]+text[i+j:])
 		}, "preview-or-build must set up Go exactly once, found 0"},
 	})
+}
+
+// docsPreviewFindings: the preview job of docs-guards.yml reuses the site docs-guards validated and never builds it again.
+func docsPreviewFindings(wf map[string]any) []string {
+	var out []string
+	job := asMap(asMap(wf["jobs"])["docs-preview"])
+	if job == nil {
+		return []string{"missing the job docs-preview: a pull request would get no Cloudflare preview assets"}
+	}
+	if asString(job["needs"]) != "docs-guards" {
+		out = append(out, "docs-preview must need docs-guards (the site it reuses is that job's output)")
+	}
+	if asString(job["if"]) != "github.event_name == 'pull_request'" {
+		out = append(out, "docs-preview must run on pull requests only")
+	}
+	steps := workflowSteps(wf, "docs-preview")
+	out = append(out, maskFindings("docs-preview", job, steps)...)
+	downloads := 0
+	for _, s := range steps {
+		if strings.HasPrefix(asString(s["uses"]), "actions/download-artifact@") {
+			downloads++
+			if asString(asMap(s["with"])["name"]) != "docs-site-${{ github.sha }}" {
+				out = append(out, "docs-preview must download the validated site of its own revision (docs-site-${{ github.sha }})")
+			}
+			if _, ok := s["if"]; ok {
+				out = append(out, "the validated-site download must not carry an if")
+			}
+		}
+		run := strings.ToLower(asString(s["run"]))
+		for _, forbidden := range []string{"mkdocs", "pip ", "python", "scripts/", ".py"} {
+			if strings.Contains(run, forbidden) {
+				out = append(out, fmt.Sprintf("docs-preview must not build the site again or run Python (%q in step %q)", forbidden, asString(s["name"])))
+			}
+		}
+		if strings.HasPrefix(asString(s["uses"]), "actions/setup-python@") {
+			out = append(out, "docs-preview installs no Python, so it cannot build the site")
+		}
+	}
+	if downloads != 1 {
+		out = append(out, fmt.Sprintf("docs-preview must download the validated site once, found %d", downloads))
+	}
+	runs := stepRuns(steps)
+	for _, c := range []expectedCheck{
+		{"Check the validated site is for this revision", goCmd("check-validated-site"), []string{"--site-dir .build/docs", "--stamp .build/docs-validated.sha", `--revision "$GITHUB_SHA"`}},
+		{"Check candidate facts", goCmd("check-candidate-facts"), nil},
+		{"Prepare validated preview assets", "go run -trimpath -mod=readonly ./cmd/cigate docs-prepare", []string{"--source .build/docs", "--mode preview", `--source-revision "$GITHUB_SHA"`}},
+	} {
+		run, ok := runs[c.step]
+		if !ok {
+			out = append(out, fmt.Sprintf("docs-preview is missing the step %q", c.step))
+			continue
+		}
+		if !runsCommand(run, c.command, c.args...) {
+			out = append(out, fmt.Sprintf("docs-preview step %q does not run %q with %v", c.step, c.command, c.args))
+		}
+		if !strings.Contains(run, "set -o pipefail") || !strings.Contains(run, "| tee ") {
+			out = append(out, fmt.Sprintf("docs-preview step %q must stream through tee under set -o pipefail", c.step))
+		}
+	}
+	return out
 }

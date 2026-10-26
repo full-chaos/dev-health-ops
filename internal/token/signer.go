@@ -28,6 +28,15 @@ type Signer struct {
 	custody keystore.Custody
 }
 
+// FileReads is the key-file reader custody shares (see keystore.FileReads).
+type FileReads = keystore.FileReads
+
+// NewFileReads returns a FileReads whose reads go through read; a test uses it
+// to make a key read hang.
+func NewFileReads(read func(path string, limit int64) ([]byte, error)) *FileReads {
+	return keystore.NewFileReads(read)
+}
+
 // FileConfig selects file custody: a key-set manifest, or one key file and its
 // kid (an active one-key set). authconfig makes the two forms exclusive.
 // States, when set, gives every key its durable rotation state.
@@ -36,6 +45,8 @@ type FileConfig struct {
 	KeyPath    string
 	KeyID      string
 	States     *KeyStates
+	// Reads, when set, is the file reader the custody shares; nil makes one.
+	Reads *FileReads
 }
 
 // NewFileSigner returns a Signer over file custody.
@@ -48,10 +59,14 @@ func fileCustody(config FileConfig) keystore.Custody {
 	if config.States != nil {
 		states = config.States.override
 	}
-	if config.KeySetPath != "" {
-		return keystore.NewFileCustodyWithStates(config.KeySetPath, states)
+	reads := config.Reads
+	if reads == nil {
+		reads = &keystore.FileReads{}
 	}
-	return keystore.FileSource{Path: config.KeyPath, KeyID: config.KeyID, States: states}
+	if config.KeySetPath != "" {
+		return keystore.NewFileCustodyWithReads(config.KeySetPath, states, reads)
+	}
+	return keystore.FileSource{Path: config.KeyPath, KeyID: config.KeyID, States: states, Reads: reads}
 }
 
 // CustodyKeys lists every custodied key with the state custody itself gives

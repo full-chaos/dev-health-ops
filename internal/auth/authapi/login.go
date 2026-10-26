@@ -55,7 +55,7 @@ type loginInput struct {
 // (internal/api/session/limits.go): EmailStr, a password of at most 128
 // characters and an optional organization id.
 func (h compatHandlers) readLogin(w http.ResponseWriter, r *http.Request) (loginInput, bool) {
-	body, ok := h.readCompatBody(w, r, opCompatLogin, h.bodyRefused(providerLocal))
+	body, ok := h.readCompatBody(w, r, opCompatLogin, h.loginBodyRefused(w, r))
 	if !ok {
 		return loginInput{}, false
 	}
@@ -69,7 +69,7 @@ func (h compatHandlers) readLogin(w http.ResponseWriter, r *http.Request) (login
 		}
 	}
 	if len(errs) > 0 {
-		h.refuseBody(w, r, opCompatLogin, h.bodyRefused(providerLocal), func() {
+		h.refuseBody(w, r, opCompatLogin, h.loginBodyRefused(w, r), func() {
 			policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail(errs), nil)
 		})
 		return loginInput{}, false
@@ -364,7 +364,7 @@ func (h compatHandlers) startSession(ctx context.Context, principalID uuid.UUID,
 		text := auditOrg.String()
 		event.OrganizationID = &text
 	}
-	return h.Sessions.CreateAudited(ctx, principalID, sessionOrg, amr, event)
+	return h.Sessions.CreateAudited(session.WithSignIn(ctx), principalID, sessionOrg, amr, event)
 }
 
 // userInfo is go-api's _to_user_info(user, membership).

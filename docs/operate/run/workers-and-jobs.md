@@ -125,11 +125,6 @@ these nine have no flag and `--help` documents them as environment-only:
 `CLICKHOUSE_URI`, `VALKEY_URI`, `SETTINGS_ENCRYPTION_KEY`,
 `SETTINGS_ENCRYPTION_SALT`, `PAGER_DUTY_CLIENT_ID`, `PAGER_DUTY_SECRET`.
 
-`WORKER_OPERATIONAL_BRIDGE_TOKEN` (formerly here) is deleted entirely from
-the Go config surface (CHAOS-6279) — nothing sends or reads it any more,
-the Python HTTP bridge it authenticated having already been deleted
-(CHAOS-5320).
-
 Everything else a Go worker reads is a flag, and the shipped Compose and Helm
 surfaces pass it in `command:`/`args:` — so `docker compose config` and
 `kubectl describe pod` show the deployed configuration in one place instead of

@@ -154,7 +154,10 @@ func (s *Service) Exchange(ctx context.Context, provider Provider, token contrac
 		res, reason, err = s.settleTaken(ctx, profile.ExternalKey, method, owner)
 		return res, err
 	}
-	name := profile.FullName
+	name := ""
+	if profile.FullName != nil {
+		name = *profile.FullName
+	}
 	if name == "" {
 		name = profile.Username
 	}

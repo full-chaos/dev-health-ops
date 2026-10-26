@@ -32,7 +32,7 @@ func (s *Store) CreateAudited(ctx context.Context, principalID uuid.UUID, organi
 		Apply: func(ctx context.Context, tx audit.TxOps) error {
 			var err error
 			out, err = s.insertSession(ctx, tx, principalID, organizationID, amr, contracts.SecretString{})
-			return err
+			return s.stampSignIn(ctx, tx, out.Session.ID, err)
 		},
 		Audit:     event,
 		OffStream: audit.OffStreamSessionLifecycle,

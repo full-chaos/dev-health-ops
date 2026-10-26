@@ -72,14 +72,45 @@ jobs:
     # Same ARC routing as the fan-in below.
     runs-on: ${{ (vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')) && fromJSON('["self-hosted","oci-arc-runners"]') || 'ubuntu-latest' }}
     timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: read
+      actions: read
     outputs:
       verdict: ${{ steps.plan.outputs.verdict }}
       selection: ${{ steps.plan.outputs.selection }}
+      queue_run: ${{ steps.queue.outputs.queue_run }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # The diff needs the base commit; the default depth-1 checkout cannot see it.
           fetch-depth: 0
+
+      # CHAOS-11408: a main push whose sha the merge queue already ran green through this workflow (the helper checks the
+      # same sha, this repository, the latest attempt, and that every leg ran its gate) skips its test and race legs. Any
+      # error here leaves queue_run empty, and every leg runs.
+      - name: Find a merge_group run of this workflow that already tested the pushed sha
+        id: queue
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.MERGE_QUEUE == 'enabled'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          queue_file="${RUNNER_TEMP}/queue-tested-run-id"
+          rm -f "${queue_file}"
+          run_id=""
+          if QUEUE_TESTED_RUN_ID_FILE="${queue_file}" bash ci/queue_tested_sha.sh "${GITHUB_REPOSITORY}" "${GITHUB_SHA}" go-quality.yml 'go-quality-leg (' 'Run Go quality leg' 8; then
+            run_id="$(cat "${queue_file}" 2>/dev/null || true)"
+          fi
+          case "${run_id}" in
+            '' | *[!0-9]*) run_id="" ;;
+          esac
+          if [ -n "${run_id}" ]; then
+            printf 'queue_run=%s\n' "${run_id}" >> "${GITHUB_OUTPUT}"
+            echo "::notice title=QUEUE-TESTED SHA: legs skipped::the merge queue ran go-quality green on this sha (run ${run_id}); the test and race legs are skipped on this push"
+          else
+            echo "::notice title=GO-QUALITY LEGS RUN ON THE MAIN PUSH::no green merge_group run of go-quality.yml for this sha (a push that did not come through the queue, or the lookup failed)"
+          fi
 
       - name: Configure self-hosted Go cache paths
         if: vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')
@@ -235,6 +266,7 @@ jobs:
           LEG: ${{ matrix.name }}
           PLAN_VERDICT: ${{ needs.go-quality-plan.outputs.verdict }}
           PLAN_SELECTION: ${{ needs.go-quality-plan.outputs.selection }}
+          QUEUE_RUN: ${{ needs.go-quality-plan.outputs.queue_run }}
         run: |
           set -euo pipefail
           if [ "${HEAVY_SKIP}" = "true" ]; then
@@ -246,6 +278,11 @@ jobs:
           if [ "${LEG}" = "static" ]; then
             echo "the static leg runs on every change set"
             printf 'relevant=true\n' >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          if [ "${GITHUB_EVENT_NAME}" = push ] && [ -n "${QUEUE_RUN}" ]; then
+            echo "skipped: queue-tested sha, merge_group run ${QUEUE_RUN} ran this leg green on this sha"
+            printf 'relevant=false\nwarm=true\n' >> "${GITHUB_OUTPUT}"
             exit 0
           fi
           case "${PLAN_VERDICT}" in
@@ -266,7 +303,13 @@ jobs:
 
       - name: Report that the gate was skipped, and why
         if: steps.relevance.outputs.relevant != 'true'
+        env:
+          QUEUE_RUN: ${{ needs.go-quality-plan.outputs.queue_run }}
         run: |
+          if [ -n "${QUEUE_RUN}" ] && [ "${GITHUB_EVENT_NAME}" = push ]; then
+            echo "skipped: queue-tested sha ${QUEUE_RUN}: the merge queue ran this leg green on this sha."
+            exit 0
+          fi
           echo "skipped: the go-quality-plan verdict is NONE (or this heavy leg runs in the merge queue, not on this pull request)."
           echo "The verdict comes from cmd/cigate plan-verdict. This job still REPORTS, so the"
           echo "required check is satisfied honestly rather than by a second workflow."
@@ -283,7 +326,7 @@ jobs:
 
       - name: Set up Go
         id: setup-go
-        if: steps.relevance.outputs.relevant == 'true'
+        if: steps.relevance.outputs.relevant == 'true' || (steps.relevance.outputs.warm == 'true' && runner.environment == 'github-hosted')
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
@@ -299,7 +342,7 @@ jobs:
         # The segment after go-quality- is the layout of the cached directory (v1 was built into /tmp, so it held little):
         # bump it whenever that layout changes, because a key is immutable and the save runs only on a key miss.
         id: go-cache
-        if: steps.relevance.outputs.relevant == 'true' && runner.environment == 'github-hosted'
+        if: (steps.relevance.outputs.relevant == 'true' || steps.relevance.outputs.warm == 'true') && runner.environment == 'github-hosted'
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
@@ -313,7 +356,7 @@ jobs:
         # CHAOS-10486: check_go.sh builds into DEV_HEALTH_GO_CACHE, else an inherited or configured GOCACHE, else
         # /tmp/dev-health-go-build-cache. A hosted runner's GOCACHE is the unset default, so the cache restored above was
         # never read. An expanded absolute path (a literal ~ is not expanded by the shell). The pool legs keep their hostPath.
-        if: steps.relevance.outputs.relevant == 'true' && runner.environment == 'github-hosted'
+        if: (steps.relevance.outputs.relevant == 'true' || steps.relevance.outputs.warm == 'true') && runner.environment == 'github-hosted'
         run: echo "DEV_HEALTH_GO_CACHE=${HOME}/.cache/go-build" >> "${GITHUB_ENV}"
 
       - name: Point the plan-reads call graph at its store (GitHub-hosted static leg)
@@ -348,6 +391,12 @@ jobs:
         with:
           path: ${{ runner.temp }}/plan-reads-reach
           key: ${{ steps.reach-key.outputs.key }}
+
+      - name: Compile this leg's packages into the cache on a queue-skipped push (key miss only)
+        id: warm-build
+        if: steps.relevance.outputs.warm == 'true' && runner.environment == 'github-hosted' && steps.go-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        run: bash ci/check_go.sh ci-leg-warm ${{ matrix.args }}
 
       - name: Set up Helm
         # internal/cigates/chartgates renders the chart with `helm template` in the test and race legs; the
@@ -474,7 +523,7 @@ jobs:
         # because its compiled packages are as valid as a passing leg's (the build cache is content-addressed) and a leg
         # that fails on a timeout is the one that most needs a warm start. A cancelled leg does not save.
         if: >-
-          !cancelled() && steps.relevance.outputs.relevant == 'true' && runner.environment == 'github-hosted'
+          !cancelled() && (steps.relevance.outputs.relevant == 'true' || (steps.relevance.outputs.warm == 'true' && steps.warm-build.outcome == 'success')) && runner.environment == 'github-hosted'
           && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.go-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -568,6 +617,19 @@ jobs:
     runs-on: ${{ (vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')) && fromJSON('["self-hosted","oci-arc-runners"]') || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Report which legs ran and which the queue rule skipped
+        if: always() && github.event_name == 'push'
+        env:
+          QUEUE_RUN: ${{ needs.go-quality-plan.outputs.queue_run }}
+        run: |
+          if [ -n "${QUEUE_RUN}" ]; then
+            summary="go-quality on this push: static ran; test-1-of-3, test-2-of-3, test-3-of-3, race-1-of-4, race-2-of-4, race-3-of-4, race-4-of-4 skipped: queue-tested sha, merge_group run ${QUEUE_RUN}"
+          else
+            summary="go-quality on this push: every leg ran (no queue-tested sha)"
+          fi
+          echo "${summary}"
+          echo "${summary}" >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Aggregate go-quality result
         env:

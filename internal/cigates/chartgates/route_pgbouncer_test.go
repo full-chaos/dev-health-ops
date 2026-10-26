@@ -456,6 +456,9 @@ func pgScopesRoleDSNsAndPreservesDirectMigrations(g *guard) {
 		if n == "transaction" {
 			mounts = append(mounts, doc{"name": "userlist", "mountPath": "/etc/pgbouncer-userlist", "readOnly": true})
 			volumes = append(volumes, doc{"name": "userlist", "secret": doc{"secretName": poolSecret, "defaultMode": 288, "items": []any{doc{"key": "userlist.txt", "path": "userlist.txt"}}}})
+			// CHAOS-11490: the default KEDA user carries its own pool size, so the transaction pooler loads a [users] file.
+			mounts = append(mounts, doc{"name": "users", "mountPath": "/etc/pgbouncer-users", "readOnly": true})
+			volumes = append(volumes, doc{"name": "users", "configMap": doc{"name": poolRelease + "-dev-health-go-pgbouncer-transaction-users"}})
 		}
 		g.expect(equal(c["volumeMounts"], mounts), "%s volumeMounts are %v", n, c["volumeMounts"])
 		g.expect(equal(podSpec(d)["volumes"], volumes), "%s volumes are %v", n, podSpec(d)["volumes"])

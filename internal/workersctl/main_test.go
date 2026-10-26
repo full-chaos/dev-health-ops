@@ -375,7 +375,7 @@ func TestManifestQueueStatusSourceCombinesFreshQueueAndPresenceState(t *testing.
 	// case the budget has to cover.
 	if status.ConnectionBudget.QueueSession != (connectionBudgetStatus{Used: 34, Limit: 50, Headroom: 16}) ||
 		status.ConnectionBudget.CoordinatorSession != (connectionBudgetStatus{Used: 10, Limit: 14, Headroom: 4}) ||
-		status.ConnectionBudget.Server != (connectionBudgetStatus{Used: 119, Limit: 200, Headroom: 81}) {
+		status.ConnectionBudget.Server != (connectionBudgetStatus{Used: 111, Limit: 200, Headroom: 89}) {
 		t.Fatalf("connection budget = %#v", status.ConnectionBudget)
 	}
 }

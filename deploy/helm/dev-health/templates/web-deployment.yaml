@@ -29,7 +29,7 @@ spec:
         {{- include "dev-health.componentSelectorLabels" (dict "component" "web" "context" $) | nindent 8 }}
     spec:
       {{- include "dev-health.imagePullSecrets" . | nindent 6 }}
-      serviceAccountName: {{ include "dev-health.serviceAccountName" . }}
+      {{- include "dev-health.workloadServiceAccount" (dict "ctx" . "component" "web" "cfg" .Values.web.serviceAccount) | nindent 6 }}
       containers:
         - name: web
           image: {{ include "dev-health.webImage" . }}

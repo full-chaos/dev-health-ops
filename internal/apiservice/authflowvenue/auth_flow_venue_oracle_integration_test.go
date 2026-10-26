@@ -656,7 +656,7 @@ func TestAuthFlowVenueOracle(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if r.ledger, err = authrows.NewLedger(r.forwarded); err != nil {
+	if r.ledger, err = authrows.NewLedger(r.forwarded, false); err != nil {
 		t.Fatal(err)
 	}
 	if r.goBase == "" {

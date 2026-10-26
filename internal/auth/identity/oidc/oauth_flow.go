@@ -374,9 +374,13 @@ func (s *Service) callbackOAuth(ctx context.Context, admitted StoredProvider, in
 	if !validSubject(prof.Subject) {
 		return Login{}, clear, oauthFailure(ReasonMissingSub, "oauth_userinfo_fetch_failed", errors.New("provider subject invalid"))
 	}
+	var displayName string
+	if prof.FullName != nil {
+		displayName = *prof.FullName
+	}
 	login, failure := s.resolve(ctx, row, validated{
 		key:                ExternalKey{Issuer: target.issuer, Provider: row.ID.String(), Subject: prof.Subject},
-		profile:            profile{Email: prof.Email, EmailVerified: prof.EmailVerified, FullName: prof.FullName},
+		profile:            profile{Email: prof.Email, EmailVerified: prof.EmailVerified, FullName: displayName, LegacyFullName: prof.FullName},
 		legacyAuthProvider: string(target.provider),
 	}, in.RequestID)
 	if failure != nil {

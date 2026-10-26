@@ -1,11 +1,11 @@
 # Every file under internal/loadharness/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
 # python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
 # header-before-stamp set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
-65421bfb1e4ced7f97b4a04f0786a4b5da7474c2c273eaa46c48072126f037b5	hand-written	abuse/burst-limit.json
-10fe2cc08ce445db3fd7a76cbdf6ce64236a8a77107f250bde7b02ad03a3b0a2	hand-written	abuse/fault-mix.json
+cdfd716440b901c87ea0da66ac7244a0675af629bd1266fc1c38ecd448f7c955	hand-written	abuse/burst-limit.json
+59dae343581ba11d41e0c33d4f9ceb77ea8390514a32072dfd2e3f97527d98da	hand-written	abuse/fault-mix.json
 4751da0dfde0a0c2d212509b6edafbe39184fee5d7413f7f2f00141d88297600	hand-written	abuse/forged-credentials.json
-02b1c334b68da2ab5eb2f4dd9a5e759b22350d18f1d6a4291bfa32fb84c2cb75	hand-written	abuse/login-badcreds.json
-c2d03a2444e125b3e724d25568b2dc1870302928e78466194f5d685361443b41	hand-written	abuse/oversize-body.json
+d95eaf08b75330295952f2f25e498d97a9d61620e860f9a73d9a2bd3889e0dfc	hand-written	abuse/login-badcreds.json
+bb0884b25191816491e6e675925b6e2a04f5992a3dd7f5f516751cda03ff3d11	hand-written	abuse/oversize-body.json
 b5e97dbd99a2f432e371da578383183b18a5735c6be6bd794bdeda7f3ec76077	hand-written	abuse/refresh-replay.json
 2f74b30098724d6a7c1059f34ad8a46788971e74df4ac9168e6bd243f816944d	hand-written	abuse/refresh-storm.json
-acb35a28247d833f7892636d7c2814e944ca072605c89fb80f35a26548f12136	hand-written	example.config.json
+1d1e82bd6768ab03fd4fea702967c493bd8ca5114900df8d19d76f26a4ceeb51	hand-written	example.config.json

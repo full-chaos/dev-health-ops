@@ -462,13 +462,20 @@ func docsWorkflowPathProblems(t *testing.T, file string, wf map[string]any, even
 	return problems
 }
 
+// A pull request gets its preview from docs-guards.yml (job docs-preview); a second pull_request build here would build the
+// site twice per revision.
+func TestDocsCloudflareWorkflowHasNoPullRequestTrigger(t *testing.T) {
+	if triggerMap(t, loadWorkflowMap(t, "docs-cloudflare.yml"), "pull_request") != nil {
+		t.Error("docs-cloudflare.yml must not run on pull_request: docs-guards.yml builds and checks the site once per revision")
+	}
+}
+
 func TestWorkflowPathFiltersDocsWorkflowsRunOnlyForDocsPaths(t *testing.T) {
 	cases := []struct {
 		file   string
 		events []string
 	}{
 		{"docs-guards.yml", []string{"pull_request", "push"}},
-		{"docs-cloudflare.yml", []string{"pull_request"}},
 	}
 	for _, c := range cases {
 		for _, problem := range docsWorkflowPathProblems(t, c.file, loadWorkflowMap(t, c.file), c.events) {

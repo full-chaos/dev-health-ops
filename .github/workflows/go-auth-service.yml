@@ -156,7 +156,7 @@ jobs:
           - package: internal/auth/authapi
             targets: FuzzParseRefreshRequest
           - package: internal/auth/contracts
-            targets: FuzzParseErrorEnvelope FuzzRevisionUnmarshal FuzzTimestampUnmarshal FuzzParseAccessToken
+            targets: FuzzParseErrorEnvelope FuzzRevisionUnmarshal FuzzTimestampUnmarshal FuzzParseAccessToken FuzzParseWorkloadToken
           - package: internal/auth/edgetoken
             targets: FuzzVerifyToken
           - package: internal/auth/signedtoken

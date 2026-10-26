@@ -10,7 +10,7 @@
   "postgres_budget": {
     "server_max_connections": 200,
     "server_reserved_connections": 15,
-    "pgbouncer_transaction_pool_size": 20,
+    "pgbouncer_transaction_pool_size": 16,
     "pgbouncer_transaction_server_pool_count": 2,
     "pgbouncer_transaction_max_client_connections": 1000,
     "pgbouncer_queue_session_pool_size": 50,

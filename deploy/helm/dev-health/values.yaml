@@ -768,7 +768,9 @@ goWorkers:
       networkPolicyCIDR: ""
     transaction:
       port: 6432
-      poolSize: 20
+      # -- Server connections of the transaction pooler's own role, and the
+      #    default for every extraUsers entry that sets no poolSize.
+      poolSize: 16
       maxClientConnections: 1000
       # -- Additional roles this pooler may authenticate, beyond its own
       #    RIVER_DOMAIN_DATABASE_ROLE. Each entry is
@@ -792,8 +794,13 @@ goWorkers:
       #    expressed in this file at all -- rotate rather than try.
       #
       #    Two costs before adding one. PgBouncer pools per (user, database)
-      #    pair, so each extra role adds up to poolSize more server connections
-      #    -- size max_connections for the sum, not for poolSize. And with
+      #    pair, so each extra role adds up to its pool size more server
+      #    connections -- size max_connections for the sum, not for poolSize.
+      #    An entry may set its own `poolSize` (a whole number of 1 or more);
+      #    without it the entry takes the transaction poolSize above. A sized
+      #    entry renders a ConfigMap with a [users] file that the pooler loads
+      #    after its generated config; the pooler pod rolls when a size changes.
+      #    And with
       #    secret.create=false the userlist.txt key must be present in the
       #    pre-created Secret too, the same way POSTGRES_URI and the two other
       #    DSNs already must be.
@@ -806,6 +813,8 @@ goWorkers:
       extraUsers:
         - role: devhealth_keda_readonly
           passwordKey: RIVER_KEDA_READONLY_PASSWORD
+          # KEDA only runs a count query against river_job.
+          poolSize: 4
     queueSession:
       port: 6433
       poolSize: 50

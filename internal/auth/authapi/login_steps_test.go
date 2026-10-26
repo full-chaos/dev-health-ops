@@ -123,8 +123,9 @@ func newLoginStepsRig(t *testing.T) *loginStepsRig {
 	return r
 }
 
-// steps runs one refused login on a fresh rig and returns its calls and its audit row.
-func loginSteps(t *testing.T, email, password string, requestedOrg, locked bool) ([]string, audit.AuditEvent) {
+// loginSteps runs one refused login on a fresh rig and returns its calls, its audit row and the id the store
+// holds for the address (uuid.Nil for an unknown address).
+func loginSteps(t *testing.T, email, password string, requestedOrg, locked bool) ([]string, audit.AuditEvent, uuid.UUID) {
 	t.Helper()
 	r := newLoginStepsRig(t)
 	r.attempts.locked, r.attempts.remaining = locked, time.Minute
@@ -136,7 +137,11 @@ func loginSteps(t *testing.T, email, password string, requestedOrg, locked bool)
 	if len(r.events) != 1 {
 		t.Fatalf("%s: %d audit rows, want 1", email, len(r.events))
 	}
-	return r.rec.Names(), r.events[0]
+	var user uuid.UUID
+	if u := r.loginUsers.byEmail[email]; u != nil {
+		user = u.ID
+	}
+	return r.rec.Names(), r.events[0], user
 }
 
 // A refused sign-in of a known account takes the same steps whatever the refusal (no password, wrong password,
@@ -157,10 +162,14 @@ func TestCompatLoginRefusalsTakeOneStepSequence(t *testing.T) {
 			sequences := map[string][]string{}
 			var noPassword audit.AuditEvent
 			for name, c := range known {
-				seq, event := loginSteps(t, c.email, c.password, requested, c.locked)
+				seq, event, user := loginSteps(t, c.email, c.password, requested, c.locked)
 				sequences[name] = seq
-				if event.SubjectPrincipalID == nil {
-					t.Errorf("%s: the audit row names no principal", name)
+				subject := "<none>"
+				if event.SubjectPrincipalID != nil {
+					subject = *event.SubjectPrincipalID
+				}
+				if subject != user.String() {
+					t.Errorf("%s: the audit row names %s, want the account %s", name, subject, user)
 				}
 				if name == "no password" {
 					noPassword = event
@@ -168,7 +177,7 @@ func TestCompatLoginRefusalsTakeOneStepSequence(t *testing.T) {
 			}
 			callseq.Same(t, "known-account refusals", sequences)
 
-			unknown, event := loginSteps(t, "nobody@example.com", "x", requested, false)
+			unknown, event, _ := loginSteps(t, "nobody@example.com", "x", requested, false)
 			if event.SubjectPrincipalID != nil {
 				t.Errorf("unknown account: the audit row names a principal")
 			}

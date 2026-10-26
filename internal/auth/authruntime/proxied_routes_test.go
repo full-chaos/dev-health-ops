@@ -154,6 +154,9 @@ func TestEveryGoAPIProxiedAuthRouteIsMountedInEveryAuthServicePhase(t *testing.T
 				continue
 			}
 			if pc.phase == 1 && pendingPhase1Gap[r.key] {
+				if mounted[r.key] {
+					t.Errorf("%s is mounted at phase 1 but is still listed in pendingPhase1Gap: empty the list", r.key)
+				}
 				continue
 			}
 			if !mounted[r.key] {

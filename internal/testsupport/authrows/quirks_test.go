@@ -493,3 +493,39 @@ func TestOwnedLegCoversTheEmptyFullNameStoredAsNullOnceAndNotElsewhere(t *testin
 		t.Fatal("another user's empty full name is not the named difference")
 	}
 }
+
+// The owned leg keeps the seeded expired legacy verification row of uma in public.email_verification_tokens: go-api
+// replaced it on issue, auth-service issues into auth.link_credentials and never touches the public table (no reader of
+// it is reachable while users are owned; its purge is CHAOS-11506). One named extra row, exactly.
+func TestOwnedLegCoversUmasLegacyVerificationRowOnceAndNothingElse(t *testing.T) {
+	const umaLegacy = "uma@example.comtrue false 64 1440"
+	golden := goldenRows(t)[TableEmailVerificationTokens]
+	target := golden + rowSeparator + umaLegacy
+	l := ownedUsersLedger(t, true)
+	if problems := append(l.Compare(TableEmailVerificationTokens, golden, target), deadOf(l, "email-verification-legacy-row-not-purged-owned")...); len(problems) != 0 {
+		t.Fatalf("uma's legacy row on the owned leg: %v", problems)
+	}
+	if got := l.Covered(); !strings.Contains(got, "email-verification-legacy-row-not-purged-owned=1") {
+		t.Fatalf("Covered = %q", got)
+	}
+	for name, c := range map[string]struct {
+		owned  bool
+		table  string
+		target string
+	}{
+		"not owned":                   {false, TableEmailVerificationTokens, target},
+		"two such rows":               {true, TableEmailVerificationTokens, target + rowSeparator + umaLegacy},
+		"another user":                {true, TableEmailVerificationTokens, golden + rowSeparator + "zed@example.comtrue false 64 1440"},
+		"another table":               {true, TablePasswordResetTokens, goldenRows(t)[TablePasswordResetTokens] + rowSeparator + umaLegacy},
+		"a live row of the same user": {true, TableEmailVerificationTokens, golden + rowSeparator + "uma@example.comtrue true 64 1440"},
+	} {
+		l := ownedUsersLedger(t, c.owned)
+		goldenFor := golden
+		if c.table == TablePasswordResetTokens {
+			goldenFor = goldenRows(t)[TablePasswordResetTokens]
+		}
+		if problems := l.Compare(c.table, goldenFor, c.target); len(problems) == 0 {
+			t.Errorf("%s: an extra legacy row was covered", name)
+		}
+	}
+}

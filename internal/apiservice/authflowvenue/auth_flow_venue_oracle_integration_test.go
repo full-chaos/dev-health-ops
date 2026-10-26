@@ -496,7 +496,7 @@ func linkMailRows(mails []sentMail, declared string) []string {
 	return rows
 }
 
-// greetsByEmailOnly is the declared difference "greeting by e-mail" of the users-owned leg (CHAOS-TBD-GREETING):
+// greetsByEmailOnly is the declared difference "greeting by e-mail" of the users-owned leg (CHAOS-11504):
 // auth-service's resend and forgot mails greet the user by e-mail address where the golden greets by full name. It
 // holds only when the two mails are otherwise the same, apart from the encoding a non-ASCII name needs.
 func greetsByEmailOnly(python, target sentMail) bool {
@@ -1051,7 +1051,7 @@ func TestAuthFlowVenueOracle(t *testing.T) {
 		t.Errorf("%d body writes used the wrong writer for their route", violations)
 	}
 	if r.usersOwned && r.forwarded.Has(authrows.Credentials) && r.greetings != greetingMails {
-		t.Errorf("greeting by e-mail (CHAOS-TBD-GREETING): covered %d mails, the scenario holds exactly %d", r.greetings, greetingMails)
+		t.Errorf("greeting by e-mail (CHAOS-11504): covered %d mails, the scenario holds exactly %d", r.greetings, greetingMails)
 	}
 	if r.forwarded.Any() {
 		for _, problem := range r.ledger.Dead() {

@@ -94,7 +94,7 @@ var Quirks = []Quirk{
 	},
 	{
 		ID: "users-last-login-not-stamped-owned", Kind: Gap, Table: TableUsers, Needs: []Aggregate{LocalLogin}, Owned: OwnedOnly,
-		Tracked: "CHAOS-TBD-LASTLOGIN", Max: 2, Exact: true,
+		Tracked: "CHAOS-11502", Max: 2, Exact: true,
 		Reason: "a sign-in through auth-service stamps no last login on public.users or auth.users even while it owns users (no last_login_at write in internal/auth outside the backfill), so the rows of the two users who sign in (alice, pia) read as never signed in; Max is those two",
 		Rewrite: func(line string) (string, bool) {
 			return replaceOnce(lastLoginSet, line, "${1}false${2}")
@@ -102,7 +102,7 @@ var Quirks = []Quirk{
 	},
 	{
 		ID: "users-empty-full-name-stored-null-owned", Kind: Gap, Table: TableUsers, Needs: []Aggregate{Credentials}, Owned: OwnedOnly,
-		Tracked: "CHAOS-TBD-FULLNAME", Max: 1, Exact: true,
+		Tracked: "CHAOS-11503", Max: 1, Exact: true,
 		Reason: "go-api stores the empty full name of a register request (emma's) as '', auth-service's public.users projection stores NULL (identity/publicusers.go insertPublicUser NULLIF); Max is that one registration",
 		Rewrite: func(line string) (string, bool) {
 			return replaceOnce(emptyFullNameEmma, line, "${1}<null>${2}")

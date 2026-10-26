@@ -610,6 +610,7 @@ func PlanReads(args []string, stdout, stderr io.Writer) int {
 	write := fs.Bool("write", false, "write walks.tsv, dynreads.tsv, edges.tsv and reach.tsv from the code, then check")
 	checkCallGraph := fs.Bool("reach", false, "also recompute reach.tsv from the call graph (go/packages, SSA, RTA) and fail on any difference")
 	reachCache := fs.String("reach-cache", "", "with --reach: directory of a reach store; reuse the rows stored for an identical input hash, store them after a green computed run")
+	reachFresh := fs.Bool("reach-cache-fresh", false, "with --reach-cache: never read the store; compute, and store a green result (merge queue and main pushes)")
 	printKey := fs.Bool("print-reach-key", false, "print the input hash of the call graph and exit")
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -665,7 +666,7 @@ func PlanReads(args []string, stdout, stderr io.Writer) int {
 	}
 	g := checkReads(*root, t, reads)
 	if *checkCallGraph && !*write {
-		defects, err := checkReachStored(*root, *reachCache, t, reads, len(g.defects) == 0, stdout)
+		defects, err := checkReachStored(*root, *reachCache, *reachFresh, t, reads, len(g.defects) == 0, stdout)
 		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
@@ -699,7 +700,7 @@ func PlanReads(args []string, stdout, stderr io.Writer) int {
 
 // checkReachStored is checkReach with the reach store of --reach-cache: a store of the same input hash stands in for the
 // computation and is compared with reach.tsv like it; a green computed run stores its rows. Any doubt recomputes.
-func checkReachStored(root, cacheDir string, t *tables, reads []Read, readsGreen bool, stdout io.Writer) ([]string, error) {
+func checkReachStored(root, cacheDir string, fresh bool, t *tables, reads []Read, readsGreen bool, stdout io.Writer) ([]string, error) {
 	key := ""
 	if cacheDir != "" {
 		k, err := reachKey(root)
@@ -709,7 +710,7 @@ func checkReachStored(root, cacheDir string, t *tables, reads []Read, readsGreen
 			key = k
 		}
 	}
-	if key != "" {
+	if key != "" && !fresh {
 		rows, reason, ok := loadReachStore(cacheDir, key)
 		if ok {
 			fmt.Fprintf(stdout, "plan-reads: reach: reused for input hash %s\n", key)

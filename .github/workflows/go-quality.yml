@@ -316,35 +316,38 @@ jobs:
         if: steps.relevance.outputs.relevant == 'true' && runner.environment == 'github-hosted'
         run: echo "DEV_HEALTH_GO_CACHE=${HOME}/.cache/go-build" >> "${GITHUB_ENV}"
 
-      - name: Hash the inputs of the plan-reads call graph (GitHub-hosted static leg)
-        # CHAOS-11421: the static leg recomputes reach.tsv from the call graph (about 3.5 min, 13 GiB) on every change. The
-        # hash covers every input of that computation (the Go files, go.mod/go.sum, the files beside them, the read tables,
-        # the toolchain environment); a change outside them (docs, workflows, web) leaves it alone. GitHub-hosted legs only:
-        # the self-hosted pool shares a hostPath any pull request job can write, so it never restores or saves a store and
-        # recomputes every time.
+      - name: Point the plan-reads call graph at its store (GitHub-hosted static leg)
+        # CHAOS-11421: the static leg recomputes reach.tsv from the call graph (about 4 min, 13 to 15 GiB) on every change.
+        # Only a pull request may READ a stored result (the restore below); a merge-queue run and a push to main always
+        # compute fresh (PLAN_READS_REACH_FRESH makes the tool ignore any store), and a push to main saves what it computed.
+        # The key here is coarse (a hash of the Go files, go.mod/go.sum and the read tables); the tool itself names the
+        # stored file by the exact input hash and refuses a store of another hash, so this key never causes a stale reuse.
+        # GitHub-hosted legs only: the self-hosted pool shares a hostPath any pull request job can write, so it never
+        # restores or saves a store and recomputes every time.
         id: reach-key
         if: steps.relevance.outputs.relevant == 'true' && runner.environment == 'github-hosted' && matrix.name == 'static'
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REACH_KEY: plan-reads-reach-v3-${{ hashFiles('**/*.go', '**/go.mod', '**/go.sum', 'internal/cigates/affected/*.tsv') }}
         run: |
           set -euo pipefail
-          key="$(GOWORK=off go run -mod=readonly -trimpath ./cmd/cigate plan-reads --root "${GITHUB_WORKSPACE}" --print-reach-key)"
-          if [ "${#key}" -ne 64 ]; then
-            echo "plan-reads --print-reach-key printed no 64-character hash" >&2
-            exit 1
-          fi
-          printf 'key=%s\n' "${key}" >> "${GITHUB_OUTPUT}"
+          printf 'key=%s\n' "${REACH_KEY}" >> "${GITHUB_OUTPUT}"
           echo "PLAN_READS_REACH_CACHE=${RUNNER_TEMP}/plan-reads-reach" >> "${GITHUB_ENV}"
+          if [ "${EVENT_NAME}" != "pull_request" ]; then
+            echo "PLAN_READS_REACH_FRESH=1" >> "${GITHUB_ENV}"
+          fi
 
-      - name: Restore the plan-reads call-graph result (GitHub-hosted static leg)
-        # CHAOS-11421: exact key, no restore-keys (no result of another input set is ever reused). The result is compared with
-        # reach.tsv again on a hit. The stored header binds its rows to the key (rows-sha256): a store that fails the digest is
-        # refused and the leg computes fresh. The directory is under RUNNER_TEMP, outside the workspace; only the tool (after a
-        # green computed run), this restore and the save step below touch it (reach_store_hosted_only_test.go).
+      - name: Restore the plan-reads call-graph result (pull requests, GitHub-hosted static leg)
+        # CHAOS-11421: exact key, no restore-keys. The result is compared with reach.tsv again on a hit. The stored header
+        # binds its rows to the exact input hash (rows-sha256): a store that fails the digest is refused and the leg
+        # computes fresh. The directory is under RUNNER_TEMP, outside the workspace; only the tool (after a green computed
+        # run), this restore and the save step below touch it (reach_store_hosted_only_test.go).
         id: reach-store
-        if: steps.relevance.outputs.relevant == 'true' && runner.environment == 'github-hosted' && matrix.name == 'static'
+        if: steps.relevance.outputs.relevant == 'true' && runner.environment == 'github-hosted' && matrix.name == 'static' && github.event_name == 'pull_request'
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/plan-reads-reach
-          key: plan-reads-reach-v2-${{ steps.reach-key.outputs.key }}
+          key: ${{ steps.reach-key.outputs.key }}
 
       - name: Set up Helm
         # internal/cigates/chartgates renders the chart with `helm template` in the test and race legs; the
@@ -455,15 +458,16 @@ jobs:
           if-no-files-found: warn
 
       - name: Save the plan-reads call-graph result (main pushes, GitHub-hosted static leg)
-        # CHAOS-11421: only a push to main saves, only after the leg passed (the tool stores a result only when the run found
-        # no defect), only on a key miss. A pull request restores what main saved and never writes.
+        # CHAOS-11421: only a push to main saves, only after the leg passed, and what it saves is a FRESH compute (the push
+        # run never reads a store). A pull request restores what main saved and never writes. A key that already exists is
+        # kept (the save logs a warning and the step passes).
         if: >-
           success() && steps.relevance.outputs.relevant == 'true' && runner.environment == 'github-hosted' && matrix.name == 'static'
-          && github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'full-chaos/dev-health-ops' && steps.reach-store.outputs.cache-hit != 'true'
+          && github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'full-chaos/dev-health-ops'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/plan-reads-reach
-          key: ${{ steps.reach-store.outputs.cache-primary-key }}
+          key: ${{ steps.reach-key.outputs.key }}
 
       - name: Save this leg's Go build and module cache (main pushes, GitHub-hosted legs)
         # CHAOS-10486: only a push to main saves, and only on a key miss (a key is immutable); a failed leg still saves,

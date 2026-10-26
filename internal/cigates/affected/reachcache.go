@@ -18,10 +18,12 @@ import (
 
 // The reach store (CHAOS-11421): `plan-reads --reach --reach-cache DIR` keeps the rows reachRows computed for a tree under
 // DIR/reach-<key>.tsv, written only after a computed run found no defect. The key hashes the content of every input of
-// the computation: each Go file, go.mod/go.sum/go.work, every other file in a directory that holds a Go file (embedded
-// files, the generated tables, cgo and assembly sources), every file under a //go:embed path, the build tag sets, and the
-// toolchain environment. A change outside those (docs, workflows, web) leaves the key alone. A stored result is still
-// compared with reach.tsv like a computed one, and any doubt (no git, unreadable or foreign store) recomputes.
+// the computation: every file the go command selects (go list, IgnoredGoFiles included), every Go file on disk, go.mod and
+// go.sum, every other file in a directory that holds a Go file, every //go:embed path, the build tag sets, and the whole
+// `go env` minus volatileGoEnv. A change outside those (docs, workflows, web) leaves the key alone. The header binds the
+// rows to the key with a digest; the digest catches accident and is NOT authentication: CI therefore lets only pull
+// requests read a store (--reach-cache-fresh on every other event), and the stored result is compared with reach.tsv
+// like a computed one. Any doubt (a go command failing, a replace outside the repository, a foreign store) recomputes.
 const reachCacheSchema = "reach-cache-v2"
 
 var embedLine = regexp.MustCompile(`(?m)^//go:embed[ \t]+(.+)$`)
@@ -229,7 +231,31 @@ func checkLocalReplaces(root string) error {
 	return nil
 }
 
-// goEnvLine is the toolchain environment that selects files, types and build constraints.
+// volatileGoEnv names the `go env` keys left out of the key; every other key counts. Each is a path or a network or
+// telemetry setting that moves between runners without changing which files the build selects or how it types them.
+var volatileGoEnv = map[string]string{
+	"GOCACHE":        "build cache location",
+	"GOCACHEPROG":    "build cache backend program",
+	"GOMODCACHE":     "module cache location; go.sum pins the module content",
+	"GOTMPDIR":       "temp directory",
+	"GOENV":          "location of the go env file",
+	"GOPATH":         "workspace location",
+	"GOROOT":         "toolchain location; GOVERSION names the toolchain",
+	"GOTOOLDIR":      "path under GOROOT",
+	"GOMOD":          "absolute path of go.mod; go.mod is hashed",
+	"GOGCCFLAGS":     "holds a temp directory path",
+	"GOTELEMETRY":    "telemetry mode",
+	"GOTELEMETRYDIR": "telemetry location",
+	"GOPROXY":        "module download source; go.sum pins the content",
+	"GOSUMDB":        "checksum database; go.sum pins the content",
+	"GONOSUMDB":      "checksum database scope",
+	"GONOPROXY":      "module download scope",
+	"GOPRIVATE":      "module download scope",
+	"GOAUTH":         "download credentials",
+	"GOBIN":          "install location",
+}
+
+// goEnvLine is the whole `go env -json` minus volatileGoEnv, as sorted key=value pairs.
 func goEnvLine(root string) (string, error) {
 	cmd := exec.Command("go", "env", "-json")
 	cmd.Dir = root
@@ -242,8 +268,10 @@ func goEnvLine(root string) (string, error) {
 		return "", fmt.Errorf("go env output: %w", err)
 	}
 	var parts []string
-	for _, k := range []string{"GOVERSION", "GOOS", "GOARCH", "GOAMD64", "GOARM", "GOARM64", "GO386", "GOMIPS", "GOMIPS64", "GOPPC64",
-		"GORISCV64", "GOEXPERIMENT", "GOFIPS140", "CGO_ENABLED", "GOFLAGS", "GOWORK", "GOTOOLCHAIN"} {
+	for _, k := range sortedKeys(env) {
+		if _, skip := volatileGoEnv[k]; skip {
+			continue
+		}
 		parts = append(parts, k+"="+env[k])
 	}
 	return strings.Join(parts, "|"), nil

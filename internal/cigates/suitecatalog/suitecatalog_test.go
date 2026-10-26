@@ -267,7 +267,7 @@ func violations(t *testing.T, root string) []string {
 			bad = append(bad, fmt.Sprintf("uncatalogued test command: %s runs %q", s.workflow, s.command))
 		}
 	}
-	bad = append(bad, dynamicViolations(t, root)...)
+	bad = append(bad, lockViolations(t, root, rows)...)
 	for _, f := range shellSuiteFiles(root) {
 		if !files[f] {
 			bad = append(bad, fmt.Sprintf("shell suite %s is named by no catalog row inputs", f))
@@ -330,7 +330,7 @@ func plantTree(t *testing.T) string {
 		copyFile(rel)
 	}
 	copyFile(catalogPath)
-	copyFile(exceptionsPath)
+	copyFile(lockPath)
 	rows, _ := readCatalog(root)
 	for _, r := range rows {
 		for _, in := range strings.Split(r["inputs"], ";") {
@@ -490,13 +490,13 @@ func TestPlantedFaults(t *testing.T) {
 	t.Run("input that does not exist", func(t *testing.T) { plantRowEdit(t, "", "", 2, "does not exist") })
 	t.Run("manual row that a workflow runs", func(t *testing.T) { plantRowEdit(t, "", "", 3, "is mode=manual but") })
 	t.Run("duplicate command", func(t *testing.T) { plantRowEdit(t, "", "", 4, "duplicate command") })
-	t.Run("a refactor that keeps every command passes", func(t *testing.T) {
+	t.Run("a refactor that keeps every command and run text passes", func(t *testing.T) {
 		root := plantTree(t)
 		edit(t, filepath.Join(root, ".github/workflows/go-quality.yml"), func(s string) string {
-			return strings.Replace(s, "name: Validate River compatibility harness", "name: Check the River harness", 1)
+			return strings.Replace(s, "- name: Set up Go", "- name: Install the Go toolchain", 1)
 		})
 		if v := violations(t, root); len(v) > 0 {
-			t.Fatalf("a step rename must not fail the guard:\n  %s", strings.Join(v, "\n  "))
+			t.Fatalf("renaming a step that runs nothing must not fail the guard:\n  %s", strings.Join(v, "\n  "))
 		}
 	})
 }
@@ -558,134 +558,6 @@ func triggerViolations(id, trigger, command string, actual map[string]bool) []st
 		}
 		if !hit {
 			bad = append(bad, fmt.Sprintf("suite %q: its trigger names %s but no such workflow runs %q", id, tok, command))
-		}
-	}
-	return bad
-}
-
-const exceptionsPath = "ci/suites_dynamic_exceptions.tsv"
-
-func plantDynamic(t *testing.T, level, line string) string {
-	t.Helper()
-	root := plantTree(t)
-	wf := filepath.Join(root, ".github/workflows/go-quality.yml")
-	edit(t, wf, func(s string) string {
-		step := "run: |\n          bash ci/check_river_compat_static.sh\n          " + line
-		switch level {
-		case "step":
-			step = "env:\n          RUNNER: go\n        " + step
-		case "job":
-			s = strings.Replace(s, "  go-quality:\n    name: go-quality\n", "  go-quality:\n    name: go-quality\n    env:\n      RUNNER: go\n", 1)
-		case "workflow":
-			s = strings.Replace(s, "\njobs:\n", "\nenv:\n  RUNNER: go\njobs:\n", 1)
-		}
-		return strings.Replace(s, "run: bash ci/check_river_compat_static.sh", step, 1)
-	})
-	return root
-}
-
-func TestDynamicTestCommandsAreRefused(t *testing.T) {
-	lines := map[string]string{
-		"env variable":         `$RUNNER test ./internal/cigates/suitecatalog`,
-		"braced variable":      `${RUNNER} test ./internal/cigates/suitecatalog`,
-		"command substitution": `$(echo go) test ./internal/cigates/suitecatalog`,
-		"backtick":             "`echo go` test ./internal/cigates/suitecatalog",
-		"bash -c variable":     `bash -c "$CMD"`,
-		"eval":                 `eval "$CMD"`,
-		"xargs":                `echo ./x | xargs go test`,
-		"function":             "runit() { go test ./x; }\n          runit",
-	}
-	for name, line := range lines {
-		for _, level := range []string{"step", "job", "workflow"} {
-			t.Run(name+"/"+level, func(t *testing.T) {
-				wantViolation(t, plantDynamic(t, level, line), "variable-built command")
-			})
-		}
-	}
-	t.Run("a literal command with a variable argument stays clean", func(t *testing.T) {
-		root := plantDynamic(t, "step", `go test ./internal/cigates/suitecatalog "$EXTRA"`)
-		if v := strings.Join(violations(t, root), "\n"); strings.Contains(v, "variable-built command") {
-			t.Fatalf("a variable argument is not a variable command:\n%s", v)
-		}
-	})
-}
-
-func TestDynamicExceptionTable(t *testing.T) {
-	t.Run("an exception with an empty reason is refused", func(t *testing.T) {
-		root := plantTree(t)
-		edit(t, filepath.Join(root, exceptionsPath), func(s string) string {
-			lines := strings.Split(s, "\n")
-			for i, l := range lines {
-				if cells := strings.Split(l, "\t"); len(cells) == 3 && !strings.HasPrefix(l, "#") && cells[0] != "file" {
-					cells[2] = ""
-					lines[i] = strings.Join(cells, "\t")
-					break
-				}
-			}
-			return strings.Join(lines, "\n")
-		})
-		wantViolation(t, root, "empty reason")
-	})
-	t.Run("an exception that matches no workflow line is refused", func(t *testing.T) {
-		root := plantTree(t)
-		edit(t, filepath.Join(root, exceptionsPath), func(s string) string {
-			return s + "go.yml\t\"${GONE}/tool\"\tplanted stale row\n"
-		})
-		wantViolation(t, root, "matches no workflow line")
-	})
-	t.Run("removing a reviewed exception makes its line a violation", func(t *testing.T) {
-		root := plantTree(t)
-		edit(t, filepath.Join(root, exceptionsPath), func(s string) string {
-			var keep []string
-			for _, l := range strings.Split(s, "\n") {
-				if !strings.Contains(l, "gitleaks") {
-					keep = append(keep, l)
-				}
-			}
-			return strings.Join(keep, "\n")
-		})
-		wantViolation(t, root, "security-scan.yml: variable-built command")
-	})
-}
-
-// dynamicViolations refuses every command whose command word is not a literal, unless a reviewed exception names it.
-func dynamicViolations(t *testing.T, root string) []string {
-	t.Helper()
-	type key struct{ file, word string }
-	reviewed := map[key]string{}
-	var bad []string
-	raw, err := os.ReadFile(filepath.Join(root, exceptionsPath))
-	if err != nil {
-		return []string{fmt.Sprintf("%s: %v", exceptionsPath, err)}
-	}
-	for i, line := range strings.Split(string(raw), "\n") {
-		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, "file\t") {
-			continue
-		}
-		cells := strings.Split(line, "\t")
-		if len(cells) != 3 || cells[0] == "" || cells[1] == "" {
-			bad = append(bad, fmt.Sprintf("%s:%d: want file<TAB>word<TAB>reason", exceptionsPath, i+1))
-			continue
-		}
-		if strings.TrimSpace(cells[2]) == "" {
-			bad = append(bad, fmt.Sprintf("%s:%d: exception for %s %s has an empty reason", exceptionsPath, i+1, cells[0], cells[1]))
-		}
-		reviewed[key{cells[0], cells[1]}] = cells[2]
-	}
-	used := map[key]bool{}
-	for _, b := range allRuns(t, root) {
-		for _, h := range dynamicCommands(b.run) {
-			k := key{b.file, h.word}
-			if _, ok := reviewed[k]; ok {
-				used[k] = true
-				continue
-			}
-			bad = append(bad, fmt.Sprintf("%s: %s", b.file, h.text))
-		}
-	}
-	for k := range reviewed {
-		if !used[k] {
-			bad = append(bad, fmt.Sprintf("%s: exception for %s %s matches no workflow line", exceptionsPath, k.file, k.word))
 		}
 	}
 	return bad

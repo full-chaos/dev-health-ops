@@ -3,6 +3,7 @@ package workflows_test
 import (
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -77,8 +78,21 @@ func mirrorSuiteDefects(doc yamlMap) []string {
 	if perms := asMap(job["permissions"]); len(perms) != 1 || asString(perms["contents"]) != "read" {
 		out = append(out, "job precheck-lib-test permissions must be exactly contents: read")
 	}
-	dockerWord := regexp.MustCompile(`(^|[\s;&|(])docker(\s|$)`)
+	dockerWord := regexp.MustCompile(`(^|[\s;&|(\/])(docker|podman)(\s|$)`)
+	var jobKeys []string
+	for k := range job {
+		jobKeys = append(jobKeys, k)
+	}
+	sort.Strings(jobKeys)
+	if strings.Join(jobKeys, ",") != "permissions,runs-on,steps,timeout-minutes" {
+		out = append(out, "job precheck-lib-test job keys must be exactly permissions, runs-on, steps, timeout-minutes (no services, container or env): "+strings.Join(jobKeys, ", "))
+	}
 	for _, s := range stepsOf(job) {
+		for k := range s {
+			if k != "uses" && k != "name" && k != "run" {
+				out = append(out, "job precheck-lib-test step keys must be uses, name or run only, got "+k)
+			}
+		}
 		if dockerWord.MatchString(asString(s["run"])) {
 			out = append(out, "job precheck-lib-test must run no docker command")
 		}

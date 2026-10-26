@@ -158,7 +158,7 @@ func TestRunBlockLockPlants(t *testing.T) {
 			lines := strings.Split(s, "\n")
 			for i, l := range lines {
 				cells := strings.Split(l, "\t")
-				if len(cells) == 7 && cells[0] == "go-quality.yml" && cells[5] != "none" {
+				if len(cells) == 7 && cells[0] == ".github/workflows/go-quality.yml" && cells[5] != "none" {
 					cells[5] = "none"
 					lines[i] = strings.Join(cells, "\t")
 					break

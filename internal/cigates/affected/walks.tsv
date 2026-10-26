@@ -30,6 +30,7 @@ internal/atlassianteams	vendored_patch_chain_test.go	unexpressed	-	-
 internal/audit	writer_guard_test.go	.	tree	*.go
 internal/auth/authapi	register_test.go	unexpressed	-	-
 internal/auth/authruntime	audit_request_id_scan_test.go	unexpressed	-	-
+internal/auth/authruntime	fixed_credential_scan_test.go	internal/auth/authruntime	dir	*
 internal/auth/authruntime	keystate_source_test.go	internal/auth/authruntime	dir	*
 internal/auth/authruntime	kidwiring_callers_test.go	internal/auth/authruntime	dir	*
 internal/auth/contracts	access_token_goldens_test.go	unexpressed	-	-
@@ -60,6 +61,7 @@ internal/auth/identity	placeholder_copies_test.go	.	tree	*
 internal/auth/identity	placeholder_copies_test.go	internal/auth/authruntime	dir	*
 internal/auth/identity	placeholder_copies_test.go	internal/auth/usersbackfill	dir	*
 internal/auth/identity	service_provider_callers_test.go	internal/auth	tree	*
+internal/auth/identity/local	linkbind_census_test.go	.	tree	*
 internal/auth/keystore	custody_test.go	internal/auth/keystore	dir	*
 internal/auth/writerinventory	scan_test.go	unexpressed	-	-
 internal/bigboycompose	billing_edge_override_test.go	unexpressed	-	-
@@ -132,6 +134,7 @@ internal/cigates/scripts	registry_guard_script_test.go	unexpressed	-	-
 internal/cigates/scripts	relevance_step_script_test.go	unexpressed	-	-
 internal/cigates/scripts	shard_row_files_merge_test.go	unexpressed	-	-
 internal/cigates/scripts	tmp_dirs_removed_test.go	unexpressed	-	-
+internal/cigates/sharedserver	sharedserver_test.go	unexpressed	-	*_test.go
 internal/cigates/splitshards	support_test.go	unexpressed	-	-
 internal/cigates/testshard	raceweightsdir_test.go	ci/go_race_weights.d	dir	*
 internal/cigates/testshard	trimpath_test.go	.github/workflows	dir	*

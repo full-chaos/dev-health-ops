@@ -1,5 +1,5 @@
 {{- /*
-One `dho auth <verb>` run (users-backfill or orgs-backfill) as a plain Job. Off by default.
+One `dho auth <verb>` run (users-backfill, orgs-backfill or legacy-link-purge) as a plain Job. Off by default.
 It reads the SAME switches as auth-service: authService.phase (4 users owned, 5 orgs owned) feeds
 AUTH_USERS_OWNED / AUTH_ORGS_OWNED, so a verb never sees a different switch than the service.
 The runtime login is the auth-service secret reference (no value in the chart). The Job is not
@@ -34,6 +34,9 @@ spec:
         {{- if $dryRun }}
         - "--dry-run"
         {{- end }}
+        {{- if eq (toString $b.verb) "legacy-link-purge" }}
+        - {{ printf "--run-id=%s" $b.runId | quote }}
+        {{- end }}
       env:
         - name: AUTH_DATABASE_URI
           valueFrom: {secretKeyRef: {name: {{ $a.database.secretName | quote }}, key: {{ $a.database.secretKey | quote }}}}
@@ -60,7 +63,11 @@ spec:
 {{- $null := include "dev-health.authBool" (dict "value" $b.dryRun "key" "authService.backfill.dryRun") }}
 {{- if $enabled }}
 {{- if not (include "dev-health.authOn" (dict "flag" "service" "context" .)) }}{{- fail "authService.backfill.enabled needs authService.phase >= 1: the Job uses the auth-service database login" }}{{- end }}
-{{- if not (has (toString $b.verb) (list "users-backfill" "orgs-backfill")) }}{{- fail "authService.backfill.verb must be users-backfill or orgs-backfill" }}{{- end }}
+{{- if not (has (toString $b.verb) (list "users-backfill" "orgs-backfill" "legacy-link-purge")) }}{{- fail "authService.backfill.verb must be users-backfill, orgs-backfill or legacy-link-purge" }}{{- end }}
+{{- if eq (toString $b.verb) "legacy-link-purge" }}
+{{- if not (regexMatch "^[a-z0-9][a-z0-9._-]{0,62}$" (toString $b.runId)) }}{{- fail "authService.backfill.runId for legacy-link-purge must be a lowercase slug (letters, digits, . _ -; at most 63): it is written to the audit row" }}{{- end }}
+{{- if not (eq (include "dev-health.authOn" (dict "flag" "usersOwned" "context" .)) "true") }}{{- fail "authService.backfill.verb legacy-link-purge needs users owned (authService.phase >= 4): go-api still serves the legacy link-token rows before it" }}{{- end }}
+{{- end }}
 {{- if or (not (kindIs "string" $b.runId)) (empty $b.runId) }}{{- fail "authService.backfill.runId is required when authService.backfill.enabled: it names this run, and a new value makes a new Job" }}{{- end }}
 {{- if not (and (has (kindOf $b.batch) (list "int" "int64" "float64")) (eq (float64 $b.batch) (floor (float64 $b.batch))) (ge (int $b.batch) 1) (le (int $b.batch) 10000)) }}{{- fail "authService.backfill.batch must be a whole number from 1 to 10000" }}{{- end }}
 {{- range $b.extraEnv }}

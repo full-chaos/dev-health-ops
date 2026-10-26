@@ -49,7 +49,7 @@ func TestUsersOwnedGuardAndBackfillAgreeOnAServicePrincipalInLivePostgres(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	const password = "guard-backfill-test-only-not-a-credential"
+	password := testRolePassword(t)
 	if _, err := admin.Exec(ctx, fmt.Sprintf(`CREATE ROLE %q LOGIN PASSWORD '%s'`, role, password)); err != nil {
 		t.Fatal(err)
 	}

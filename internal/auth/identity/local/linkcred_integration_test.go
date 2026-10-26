@@ -42,6 +42,21 @@ func (e *pgEnv) principal(t *testing.T, ctx context.Context) uuid.UUID {
 	if _, err := e.admin.Exec(ctx, `INSERT INTO auth.principals (id, kind, display_name) VALUES ($1, 'user', 'link test')`, id.String()); err != nil {
 		t.Fatalf("seed principal: %v", err)
 	}
+	// Its go-api row: a bound reset link reads the user's token_version.
+	if _, err := e.admin.Exec(ctx, `INSERT INTO public.users (id, email, is_active, is_verified, is_superuser, token_version, created_at, updated_at)
+VALUES ($1, $2, true, true, false, 0, now(), now())`, id.String(), id.String()+"@example.com"); err != nil {
+		t.Fatalf("seed public user: %v", err)
+	}
+	return id
+}
+
+// owner is a principal with its auth.users row: the account a reset link can belong to.
+func (e *pgEnv) owner(t *testing.T, ctx context.Context) uuid.UUID {
+	t.Helper()
+	id := e.principal(t, ctx)
+	if _, err := e.admin.Exec(ctx, `INSERT INTO auth.users (principal_id, email, email_lower) VALUES ($1, $2, $2)`, id.String(), id.String()+"@example.com"); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
 	return id
 }
 
@@ -71,7 +86,7 @@ func TestLinkCredentialIsSingleUseAndStoredAsAHashOnly(t *testing.T) {
 	ctx := context.Background()
 	env, links := linkEnv(t, ctx)
 	p := env.principal(t, ctx)
-	if err := links.Issue(ctx, IssueRequest{PrincipalID: p, Purpose: PurposePasswordReset, TokenHash: linkHash("s1"), TTL: ResetTTL}); err != nil {
+	if err := links.IssueBound(ctx, IssueRequest{PrincipalID: p, Purpose: PurposePasswordReset, TokenHash: linkHash("s1"), TTL: ResetTTL}); err != nil {
 		t.Fatal(err)
 	}
 	var stored []byte
@@ -114,7 +129,7 @@ func TestLinkCredentialOfAnotherPurposeIsNotRedeemed(t *testing.T) {
 	ctx := context.Background()
 	env, links := linkEnv(t, ctx)
 	p := env.principal(t, ctx)
-	if err := links.Issue(ctx, IssueRequest{PrincipalID: p, Purpose: PurposeEmailVerification, TokenHash: linkHash("v"), TTL: VerificationTTL}); err != nil {
+	if err := links.IssueBound(ctx, IssueRequest{PrincipalID: p, Purpose: PurposeEmailVerification, TokenHash: linkHash("v"), TTL: VerificationTTL}); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok, err := links.Redeem(ctx, RedeemRequest{Purpose: PurposePasswordReset, TokenHash: linkHash("v")}); err != nil || ok {
@@ -134,7 +149,7 @@ func TestLinkCredentialOfAnotherPurposeIsNotRedeemedBothWays(t *testing.T) {
 		{PurposePasswordReset, PurposeEmailVerification},
 	} {
 		hash := linkHash("both-ways-" + string(tc.issued))
-		if err := links.Issue(ctx, IssueRequest{PrincipalID: p, Purpose: tc.issued, TokenHash: hash, TTL: ResetTTL}); err != nil {
+		if err := links.IssueBound(ctx, IssueRequest{PrincipalID: p, Purpose: tc.issued, TokenHash: hash, TTL: ResetTTL}); err != nil {
 			t.Fatal(err)
 		}
 		if _, ok, err := links.Redeem(ctx, RedeemRequest{Purpose: tc.wrong, TokenHash: hash}); err != nil || ok {
@@ -154,7 +169,7 @@ func TestReissueDeletesPriorUnconsumedCredentialsOfThePurpose(t *testing.T) {
 	p := env.principal(t, ctx)
 	issue := func(secret string, purpose Purpose, ttl time.Duration) {
 		t.Helper()
-		if err := links.Issue(ctx, IssueRequest{PrincipalID: p, Purpose: purpose, TokenHash: linkHash(secret), TTL: ttl}); err != nil {
+		if err := links.IssueBound(ctx, IssueRequest{PrincipalID: p, Purpose: purpose, TokenHash: linkHash(secret), TTL: ttl}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -186,7 +201,7 @@ func TestReissueDeletesPriorUnconsumedCredentialsOfThePurpose(t *testing.T) {
 func TestDecoyIssueWritesNothing(t *testing.T) {
 	ctx := context.Background()
 	env, links := linkEnv(t, ctx)
-	if err := links.Issue(ctx, IssueRequest{Purpose: PurposePasswordReset, TokenHash: linkHash("decoy"), TTL: ResetTTL}); err != nil {
+	if err := links.IssueBound(ctx, IssueRequest{Purpose: PurposePasswordReset, TokenHash: linkHash("decoy"), TTL: ResetTTL}); err != nil {
 		t.Fatal(err)
 	}
 	if n := env.count(t, ctx, `SELECT count(*) FROM auth.link_credentials`); n != 0 {
@@ -208,7 +223,7 @@ func TestRedeemCommitsAnAuditRowAndNoProvisioningEvent(t *testing.T) {
 	}
 	for _, c := range cases {
 		secret := string(c.purpose)
-		if err := links.Issue(ctx, IssueRequest{PrincipalID: p, Purpose: c.purpose, TokenHash: linkHash(secret), TTL: time.Hour}); err != nil {
+		if err := links.IssueBound(ctx, IssueRequest{PrincipalID: p, Purpose: c.purpose, TokenHash: linkHash(secret), TTL: time.Hour}); err != nil {
 			t.Fatal(err)
 		}
 		if _, ok, err := links.Redeem(ctx, RedeemRequest{Purpose: c.purpose, TokenHash: linkHash(secret)}); err != nil || !ok {
@@ -234,7 +249,7 @@ func TestRaceRedeemReplay(t *testing.T) {
 	ctx := context.Background()
 	env, links := linkEnv(t, ctx)
 	p := env.principal(t, ctx)
-	if err := links.Issue(ctx, IssueRequest{PrincipalID: p, Purpose: PurposePasswordReset, TokenHash: linkHash("race"), TTL: ResetTTL}); err != nil {
+	if err := links.IssueBound(ctx, IssueRequest{PrincipalID: p, Purpose: PurposePasswordReset, TokenHash: linkHash("race"), TTL: ResetTTL}); err != nil {
 		t.Fatal(err)
 	}
 	const callers = 24
@@ -354,7 +369,7 @@ func liveFlows(t *testing.T, links *PGLinks, accounts *liveAccounts, mail *liveM
 func TestRaceResetReplay(t *testing.T) {
 	ctx := context.Background()
 	env, links := linkEnv(t, ctx)
-	p := env.principal(t, ctx)
+	p := env.owner(t, ctx)
 	provider := "local"
 	accounts := &liveAccounts{users: map[string]*User{}, byID: map[uuid.UUID]*User{p: {ID: p, IsActive: true, AuthProvider: &provider}}, links: links}
 	rec := &flowRecorder{}
@@ -363,7 +378,7 @@ func TestRaceResetReplay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := links.Issue(ctx, IssueRequest{PrincipalID: p, Purpose: PurposePasswordReset, TokenHash: linkHash("flow-race"), TTL: ResetTTL}); err != nil {
+	if err := links.IssueBound(ctx, IssueRequest{PrincipalID: p, Purpose: PurposePasswordReset, TokenHash: linkHash("flow-race"), TTL: ResetTTL}); err != nil {
 		t.Fatal(err)
 	}
 	const callers = 16
@@ -499,7 +514,7 @@ func TestCorpusAuthFlowDecisionRows(t *testing.T) {
 	accounts := &liveAccounts{users: map[string]*User{}, byID: map[uuid.UUID]*User{}, links: links}
 	pw, provider := "x", "local"
 	mk := func(email string, verified bool) uuid.UUID {
-		id := env.principal(t, ctx)
+		id := env.owner(t, ctx)
 		u := &User{ID: id, IsActive: true, IsVerified: verified, PasswordHash: &pw, AuthProvider: &provider}
 		accounts.users[email], accounts.byID[id] = u, u
 		return id
@@ -628,7 +643,7 @@ func TestRaceIssueLeavesOneLiveCredential(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			<-start
-			errs <- links.Issue(ctx, IssueRequest{PrincipalID: p, Purpose: PurposePasswordReset, TokenHash: linkHash(fmt.Sprintf("issue-%d", i)), TTL: ResetTTL})
+			errs <- links.IssueBound(ctx, IssueRequest{PrincipalID: p, Purpose: PurposePasswordReset, TokenHash: linkHash(fmt.Sprintf("issue-%d", i)), TTL: ResetTTL})
 		}(i)
 	}
 	close(start)
@@ -819,7 +834,7 @@ func TestIssueRunsOneStatementSequenceForEveryCase(t *testing.T) {
 
 	run := func(req IssueRequest) []string {
 		trace.take()
-		if err := links.Issue(ctx, req); err != nil {
+		if err := links.IssueBound(ctx, req); err != nil {
 			t.Fatal(err)
 		}
 		return trace.take()
@@ -851,7 +866,7 @@ func TestOlderCredentialTakesTheUnknownCredentialPath(t *testing.T) {
 	env, links := linkEnv(t, ctx)
 	p := env.principal(t, ctx)
 	for _, s := range []string{"older", "newer"} {
-		if err := links.Issue(ctx, IssueRequest{PrincipalID: p, Purpose: PurposePasswordReset, TokenHash: linkHash(s), TTL: ResetTTL}); err != nil {
+		if err := links.IssueBound(ctx, IssueRequest{PrincipalID: p, Purpose: PurposePasswordReset, TokenHash: linkHash(s), TTL: ResetTTL}); err != nil {
 			t.Fatal(err)
 		}
 	}

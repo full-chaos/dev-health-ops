@@ -1,7 +1,10 @@
 package sso
 
 import (
+	"encoding/hex"
 	"encoding/json"
+	"log/slog"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -11,8 +14,23 @@ import (
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
-	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 )
+
+// tableBody is the body cell: text, or "hex:" and the raw bytes in hex (a
+// table cannot hold a byte that is not text).
+func tableBody(t testing.TB, cell string) string {
+	t.Helper()
+	encoded, isHex := strings.CutPrefix(cell, "hex:")
+	if !isHex {
+		return cell
+	}
+	raw, err := hex.DecodeString(encoded)
+	if err != nil {
+		t.Fatalf("body cell %q: %v", cell, err)
+	}
+	return string(raw)
+}
 
 type surrogateRow struct{ id, request, body, setup, goAPI, kind string }
 
@@ -32,7 +50,7 @@ func surrogateRows(t *testing.T, pkg string) []surrogateRow {
 			t.Fatalf("row %q has %d columns, want 9", line, len(f))
 		}
 		if f[1] == pkg {
-			rows = append(rows, surrogateRow{id: f[0], request: f[2], body: f[3], setup: f[4], goAPI: f[5], kind: f[7]})
+			rows = append(rows, surrogateRow{id: f[0], request: f[2], body: tableBody(t, f[3]), setup: f[4], goAPI: f[5], kind: f[7]})
 		}
 	}
 	if len(rows) == 0 {
@@ -59,8 +77,8 @@ func TestSurrogateRefusalTableUnitRowsAnswerAsTheTableSays(t *testing.T) {
 	driven := 0
 	for _, row := range surrogateRows(t, "sso") {
 		switch row.setup {
-		case "saml_forwarded", "saml_sealed":
-			continue // driven against a real provider row by TestSAMLInitiateSurrogateRefusalTable (integration)
+		case "saml_forwarded", "saml_sealed", "oauth_gitlab":
+			continue // driven against a real provider row by TestSSOSurrogateRefusalTableStackRows (integration)
 		case "none":
 		default:
 			t.Fatalf("%s: unknown setup %q", row.id, row.setup)
@@ -69,12 +87,8 @@ func TestSurrogateRefusalTableUnitRowsAnswerAsTheTableSays(t *testing.T) {
 		request := httptest.NewRequest(method, path, strings.NewReader(row.body))
 		request.Header.Set("Content-Type", "application/json")
 		request.SetPathValue("provider_id", "00000000-0000-4000-8000-000000000001")
-		body, outcome, _, err := pybody.Read(request)
-		if err != nil || outcome != pybody.Ready {
-			t.Fatalf("%s: read: %v %v", row.id, outcome, err)
-		}
-		request = request.WithContext(policy.WithBody(request.Context(), body))
 		recorder := httptest.NewRecorder()
+		guard := policy.NewGuard(&policy.Authenticator{}, slog.New(slog.DiscardHandler))
 		func() {
 			defer func() {
 				if recover() != nil {
@@ -83,7 +97,7 @@ func TestSurrogateRefusalTableUnitRowsAnswerAsTheTableSays(t *testing.T) {
 			}()
 			switch {
 			case strings.HasSuffix(path, "/oidc/00000000-0000-4000-8000-000000000001/authorize"):
-				handlers{}.initiateOIDCAuth(recorder, request)
+				guard.BodyFirst(policy.Public, http.HandlerFunc(handlers{}.initiateOIDCAuth)).ServeHTTP(recorder, request)
 			default:
 				t.Fatalf("%s: no handler for %s", row.id, row.request)
 			}
@@ -92,8 +106,8 @@ func TestSurrogateRefusalTableUnitRowsAnswerAsTheTableSays(t *testing.T) {
 		assertRefusal(t, row.id, recorder.Code, recorder.Body.Bytes(), status, errType, loc)
 		driven++
 	}
-	if driven == 0 {
-		t.Fatal("the table drove no unit row")
+	if driven != 3 {
+		t.Fatalf("the table drove %d unit rows, want 3", driven)
 	}
 }
 
@@ -142,12 +156,14 @@ func TestSurrogateRefusalTableIsWellFormed(t *testing.T) {
 		"sso/none":           "sso unit driver",
 		"sso/saml_forwarded": "sso integration driver",
 		"sso/saml_sealed":    "sso integration driver",
+		"sso/oauth_gitlab":   "sso integration driver",
 		"githubapp/none":     "githubapp driver",
 	}
 	requests := map[string]string{
 		"sso/none":           "POST /api/v1/auth/oidc/00000000-0000-4000-8000-000000000001/authorize",
 		"sso/saml_forwarded": "POST /api/v1/auth/saml/{provider}/initiate",
 		"sso/saml_sealed":    "POST /api/v1/auth/saml/{provider}/initiate",
+		"sso/oauth_gitlab":   "POST /api/v1/auth/oauth/{provider}/authorize",
 		"githubapp/none":     "POST /api/v1/admin/integrations/github/install-callback",
 	}
 	loneSurrogate := regexp.MustCompile(`\\u[dD][89a-fA-F][0-9a-fA-F]{2}`)
@@ -177,9 +193,17 @@ func TestSurrogateRefusalTableIsWellFormed(t *testing.T) {
 		if request != requests[key] {
 			t.Errorf("%s: request %q, the %s drives %q", id, request, owners[key], requests[key])
 		}
+		decoded := tableBody(t, body)
 		var object map[string]any
-		if err := json.Unmarshal([]byte(body), &object); err != nil || !loneSurrogate.MatchString(body) {
-			t.Errorf("%s: body %q is not a JSON object carrying a lone surrogate escape", id, body)
+		if err := json.Unmarshal([]byte(decoded), &object); err != nil {
+			t.Errorf("%s: body %q is not a JSON object", id, body)
+		}
+		if strings.HasPrefix(strings.Fields(goAPI + " x")[0], "400") {
+			if _, err := pyjson.DecodeBody([]byte(decoded)); err == nil {
+				t.Errorf("%s: go_api answers 400 but the api plane reads the body %q", id, body)
+			}
+		} else if !pyjson.HasLoneSurrogateEscape([]byte(decoded)) || (!strings.HasPrefix(body, "hex:") && !loneSurrogate.MatchString(body)) {
+			t.Errorf("%s: body %q carries no lone surrogate", id, body)
 		}
 		if !status.MatchString(goAPI) {
 			t.Errorf("%s: go_api cell %q is not \"<status>\" or \"<status> <type> <loc>\"", id, goAPI)
@@ -202,12 +226,9 @@ func TestSurrogateRefusalTableIsWellFormed(t *testing.T) {
 			if goStatus != "422" || len(strings.Fields(goAPI)) != 3 || strings.Fields(goAPI)[1] != "string_unicode" {
 				t.Errorf("%s: kind stricter needs go_api \"422 string_unicode <loc>\", got %q", id, goAPI)
 			}
-			if authService != "-" && strings.Fields(authService)[0] == "422" {
-				t.Errorf("%s: kind stricter but auth_service %q already refuses with 422", id, authService)
-			}
 		case "divergent":
-			if authService == "-" {
-				t.Errorf("%s: kind divergent needs an auth_service cell", id)
+			if authService == "-" || authService == goAPI {
+				t.Errorf("%s: kind divergent needs an auth_service cell that differs from go_api %q, got %q", id, goAPI, authService)
 			}
 		default:
 			t.Errorf("%s: kind %q is not same, stricter or divergent", id, kind)

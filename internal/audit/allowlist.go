@@ -35,6 +35,18 @@ var allowedAttributeKeys = map[string]struct{}{
 	"related_key_id":      {},
 	"rotation_verb":       {},
 	"rotation_refusal":    {},
+	// The auth.workload.token_issued row: the token's jti and the registry
+	// rows it came from.
+	"jti":          {},
+	"principal_id": {},
+	"binding_id":   {},
+	"revision":     {},
+	"audience":     {},
+	"actions":      {},
+
+	"purged_email_verification_tokens": {},
+	"purged_password_reset_tokens":     {},
+	"run_id":                           {},
 }
 
 // ValidateAttributes refuses an audit attribute map that has a key outside the
@@ -82,6 +94,18 @@ func valueAllowed(key string, value any) bool {
 		v, isString := value.(string)
 		return isString && rule.MatchString(v)
 	}
+	if rule, ok := attributeListRules[key]; ok {
+		v, isList := value.([]string)
+		if !isList || len(v) > maxAttributeListLength {
+			return false
+		}
+		for _, item := range v {
+			if !rule.MatchString(item) {
+				return false
+			}
+		}
+		return true
+	}
 	if _, ok := attributeNumberKeys[key]; ok {
 		switch value.(type) {
 		case int, int32, int64:
@@ -128,7 +152,7 @@ var attributeVocabulary = map[string][]string{
 		"grant_created", "grant_revoked", "credential_issued", "credential_rotated", "credential_revoked",
 		"session_revoked", "organization_created", "organization_updated", "principal_disabled",
 		"principal_enabled", "principal_projected", "principal_provisioned", "email_verified", "password_changed", "password_reset",
-		"identity_linked", "identity_unlinked", "identity_projected", "policy_revision_activated",
+		"identity_linked", "identity_unlinked", "identity_projected", "identity_relinked", "policy_revision_activated",
 		"entitlement_snapshot_applied", "denied_no_membership", "denied_no_grant", "denied_policy",
 		"accepted", "invalid_credentials", "account_locked", "principal_deactivated", "email_unverified",
 		"email_collision", "signup_unavailable", "identity_conflict",
@@ -150,8 +174,10 @@ var attributeVocabulary = map[string][]string{
 		"custody_not_one_active", "wrong_state", "floor_not_reached", "compromised_terminal",
 		"successor_ineligible", "unknown_verb", "state_changed",
 	},
-	"provider":         {"local", "github", "gitlab", "jira", "linear", "google", "microsoft", "saml", "oidc"},
-	"client_service":   {"auth-service", "api", "web", "billing-edge", "worker", "acr-api", "acr-mcp"},
+	"provider":       {"local", "github", "gitlab", "jira", "linear", "google", "microsoft", "saml", "oidc"},
+	"client_service": {"auth-service", "api", "web", "billing-edge", "worker", "acr-api", "acr-mcp"},
+	// audience is a workload token's aud: a workload audience only.
+	"audience":         {"auth-service", "dev-health-api"},
 	"credential_class": {"user_access_token", "refresh_credential", "workload_token", "acr_client", "external_push", "service_account_key"},
 	// source names who started an auth-service record: go-api-delegated is a
 	// session go-api signed the user in for and asked auth-service to issue.
@@ -183,10 +209,28 @@ var attributeIDRules = map[string]*regexp.Regexp{
 	"display_prefix": regexp.MustCompile(`^(fcacr|fcpush|svc|rt)_[A-Za-z0-9]{2,8}$`),
 	// A signing key's kid: public, the JWS header value (keystore.KeyIDPattern).
 	"key_id":         regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`),
+	"jti":            uuidPattern,
+	"principal_id":   uuidPattern,
+	"binding_id":     uuidPattern,
 	"related_key_id": regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`),
+	// run_id names one operator run (a roll's purge Job): a short slug, never free text.
+	"run_id": regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,62}$`),
 }
 
 var uuidPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 // attributeNumberKeys take a whole number.
-var attributeNumberKeys = map[string]struct{}{"membership_revision": {}, "policy_revision": {}}
+var attributeNumberKeys = map[string]struct{}{
+	"membership_revision": {}, "policy_revision": {}, "revision": {},
+	"purged_email_verification_tokens": {}, "purged_password_reset_tokens": {},
+}
+
+// attributeListRules are the list-valued keys: every member must satisfy the
+// rule, and the list may be empty (a workload token narrowed to no action).
+var attributeListRules = map[string]*regexp.Regexp{
+	"actions": regexp.MustCompile(`^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*){1,3}$`),
+}
+
+// maxAttributeListLength bounds a list-valued attribute (the workload
+// registry's own bound on allowed actions).
+const maxAttributeListLength = 64

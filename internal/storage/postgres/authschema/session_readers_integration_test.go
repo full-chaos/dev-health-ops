@@ -71,8 +71,8 @@ func readerViolations(t *testing.T, ctx context.Context, env *authFixture, reade
 	return found
 }
 
-// A session reader (go-api, query-api) may SELECT exactly id, principal_id
-// and revoked_at of the auth sessions, column-level, and nothing else in the
+// A session reader (go-api, query-api) may SELECT exactly id, principal_id,
+// revoked_at and legacy_token_version of the auth sessions, column-level, and nothing else in the
 // auth schema; a re-apply restores exactly that, and the posture names any
 // widening.
 func TestSessionReaderRolesReadExactlyTheSessionColumns(t *testing.T) {
@@ -84,7 +84,7 @@ func TestSessionReaderRolesReadExactlyTheSessionColumns(t *testing.T) {
 		t.Fatalf("Apply with a session reader: %v", err)
 	}
 
-	if err := readerStatement(ctx, pool, `SELECT id, principal_id, revoked_at FROM auth.sessions`); err != nil {
+	if err := readerStatement(ctx, pool, `SELECT id, principal_id, revoked_at, legacy_token_version FROM auth.sessions`); err != nil {
 		t.Fatalf("the reader cannot read its columns: %v", err)
 	}
 	for _, refused := range []string{
@@ -123,7 +123,7 @@ func TestSessionReaderRolesReadExactlyTheSessionColumns(t *testing.T) {
 		columns = append(columns, entry)
 	}
 	rows.Close()
-	if want := "sessions.id:SELECT,sessions.principal_id:SELECT,sessions.revoked_at:SELECT"; strings.Join(columns, ",") != want {
+	if want := "sessions.id:SELECT,sessions.legacy_token_version:SELECT,sessions.principal_id:SELECT,sessions.revoked_at:SELECT"; strings.Join(columns, ",") != want {
 		t.Errorf("the reader's column grants = %v, want %s", columns, want)
 	}
 	if found := readerViolations(t, ctx, env, reader); len(found) != 0 {

@@ -182,6 +182,8 @@ on:
       - 'docs-data/external-link-allowlist.yml'
       # file names internal/cigates/docstools (validate-inventory-review) names; no Go test reads these files
       - 'docs-data/inventory/**'
+      # internal/cigates/docsbuild names docs-data/redirects.tsv and docs-data/search-acceptance.json, the inputs of the docs build
+      - 'docs-data/**'
       - 'ci/check_migration_matrix.sh'
       - 'ci/check_migration_matrix_test.sh'
       - 'ci/go_worker_fixture_test.sh'
@@ -673,6 +675,8 @@ jobs:
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository_owner }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
 
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0

@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/pgmigrate"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
 // Apply builds the migrated schema in the database behind pool. It fails the
@@ -28,6 +29,7 @@ func Apply(ctx context.Context, t testing.TB, pool *pgxpool.Pool) {
 // ApplyURI is Apply for a test that holds a connection string, not a pool.
 func ApplyURI(ctx context.Context, t testing.TB, uri string) {
 	t.Helper()
+	defer containers.TimePhase("schema", "postgres", "")()
 	conn, err := pgx.Connect(ctx, uri)
 	if err != nil {
 		t.Fatalf("pgschema: connect: %v", err)

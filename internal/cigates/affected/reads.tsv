@@ -26,6 +26,8 @@ internal/auth/authruntime	test	contracts
 internal/auth/contracts	code	contracts
 internal/auth/contracts	test	docs
 internal/auth/contracts/tokencorpus	code	contracts
+internal/auth/identity/oidc	test	ci
+internal/auth/identity/saml	test	ci
 internal/auth/ratelimitvalkey	test	deploy
 internal/auth/ratelimitvalkey	test	docs
 internal/bigboycompose	test	.env.example
@@ -76,6 +78,9 @@ internal/cigates/docs	test	docs
 internal/cigates/docs	test	docs-data
 internal/cigates/docs	test	mkdocs.yml
 internal/cigates/docsprepare	test	docs-data
+internal/cigates/docsbuild	code	docs
+internal/cigates/docsbuild	code	docs-data
+internal/cigates/docsbuild	code	mkdocs.yml
 internal/cigates/docstools	code	contracts
 internal/cigates/docstools	code	deploy
 internal/cigates/docstools	code	docs
@@ -87,6 +92,7 @@ internal/cigates/docstools	test	ci
 internal/cigates/integrationshards	test	ci
 internal/cigates/metricsproof	test	ci
 internal/cigates/nopython	test	ci
+internal/cigates/outboundtransport	test	ci
 internal/cigates/proofteardown	test	ci
 internal/cigates/queuecreds	code	contracts
 internal/cigates/raceunweighted	test	ci
@@ -151,6 +157,7 @@ internal/gqlgenguard	code	contracts
 internal/gqlgenguard	test	.github
 internal/gqlgenguard	test	ci
 internal/gqlgenguard	test	docs
+internal/httpguard	test	ci
 internal/ingressplanes	code	contracts
 internal/ingressplanes	test	ci
 internal/ingressplanes	test	compose.yml

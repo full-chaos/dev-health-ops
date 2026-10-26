@@ -79,6 +79,11 @@ func newAccessStore() *accessStore {
 	}
 }
 
+func pinAccess(s *accessStore, userVersion int64, pin *int64) {
+	s.users[userID] = UserState{IsActive: true, TokenVersion: userVersion}
+	s.rows[liveSID] = SessionRow{PrincipalID: userID, LegacyTokenVersion: pin}
+}
+
 func userClaims(mutate func(*AccessTokenClaims)) *RoutedResult {
 	org := ownOrg
 	claims := &AccessTokenClaims{Subject: wireOwner, SessionID: sessionid.Wire(liveSID), OrgID: &org}
@@ -173,6 +178,10 @@ func TestRoutedUserPath(t *testing.T) {
 		"subject not a principal": {result: userClaims(func(c *AccessTokenClaims) { c.Subject = userID.String() })},
 		"not a member of the org": {result: userClaims(func(c *AccessTokenClaims) { org := "66666666-6666-4666-8666-666666666666"; c.OrgID = &org })},
 		"revoked session":         {result: userClaims(nil), adjust: func(s *accessStore) { s.rows[liveSID] = SessionRow{PrincipalID: userID, Revoked: true} }},
+		"pin older than the row":  {result: userClaims(nil), adjust: func(s *accessStore) { pinAccess(s, 2, i64(1)) }},
+		"pin newer than the row":  {result: userClaims(nil), adjust: func(s *accessStore) { pinAccess(s, 2, i64(3)) }},
+		"pin equal to the row":    {result: userClaims(nil), adjust: func(s *accessStore) { pinAccess(s, 2, i64(2)) }, ok: true},
+		"no pin":                  {result: userClaims(nil), adjust: func(s *accessStore) { pinAccess(s, 2, nil) }, ok: true},
 		"inactive user":           {result: userClaims(nil), adjust: func(s *accessStore) { s.users[userID] = UserState{} }},
 		"users read unavailable":  {result: userClaims(nil), adjust: func(s *accessStore) { s.errUser = ErrUnavailable }, err: ErrUnavailable},
 		"membership read fails":   {result: userClaims(nil), adjust: func(s *accessStore) { s.errMember = ErrUnavailable }, err: ErrUnavailable},

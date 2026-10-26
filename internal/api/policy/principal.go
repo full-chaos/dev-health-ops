@@ -187,7 +187,7 @@ func (a *Authenticator) CheckClaims(ctx context.Context, claims jwt.MapClaims) (
 		a.logger.WarnContext(ctx, "api access denied: stale session", slog.String("user_id", user.UserID))
 		return nil, errRejected
 	}
-	if err := a.checkSession(ctx, claims, id); err != nil {
+	if err := a.checkSession(ctx, claims, id, state.TokenVersion); err != nil {
 		return nil, err
 	}
 	user.IsSuperuser = state.IsSuperuser

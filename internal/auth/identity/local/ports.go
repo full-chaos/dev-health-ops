@@ -50,7 +50,8 @@ type Accounts interface {
 	ProvisionLocal(ctx context.Context, req ProvisionLocalRequest) (uuid.UUID, error)
 	SetEmailVerified(ctx context.Context, id uuid.UUID) error
 	// PeekResetLink reads the principal of a live reset link and consumes
-	// nothing.
+	// nothing. ok is false, in the same one read, for a link of an account
+	// that is gone or of the service provider.
 	PeekResetLink(ctx context.Context, tokenHash [32]byte) (principalID uuid.UUID, ok bool, err error)
 	// SetPasswordEndingSessions writes the password and, in the same
 	// transaction after the user lock: consumes the reset link (when
@@ -88,7 +89,7 @@ type RedeemRequest struct {
 // unknown, expired, consumed, replaced or wrong-purpose credential, all the
 // same refusal; the database clock decides expiry.
 type Links interface {
-	Issue(ctx context.Context, req IssueRequest) error
+	IssueBound(ctx context.Context, req IssueRequest) error
 	Redeem(ctx context.Context, req RedeemRequest) (principalID uuid.UUID, ok bool, err error)
 }
 

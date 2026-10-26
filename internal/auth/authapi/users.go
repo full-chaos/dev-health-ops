@@ -21,6 +21,7 @@ type UserState struct {
 	IsActive     bool
 	IsSuperuser  bool
 	TokenVersion int64
+	AuthProvider *string
 }
 
 // Users reads the go-api-owned user and membership rows. Until the users
@@ -69,9 +70,9 @@ func (p PGUsers) StateOn(ctx context.Context, q session.Queryer, userID uuid.UUI
 	var s UserState
 	err := q.QueryRow(ctx, `
 		SELECT email, username, full_name, COALESCE(is_active, false), COALESCE(is_superuser, false),
-		       COALESCE(token_version, 0)
+		       COALESCE(token_version, 0), auth_provider
 		FROM public.users WHERE id = $1`, userID).
-		Scan(&s.Email, &s.Username, &s.FullName, &s.IsActive, &s.IsSuperuser, &s.TokenVersion)
+		Scan(&s.Email, &s.Username, &s.FullName, &s.IsActive, &s.IsSuperuser, &s.TokenVersion, &s.AuthProvider)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return UserState{}, false, nil
 	}

@@ -147,7 +147,7 @@ VALUES ($1, $2, $3, $4, $5, $6, true, true, false, 0, now(), now())`, id, id.Str
 
 	samlBound := user("saml", nil, s("nameid-1@example.com"), &samlRow)
 	backfill(0)
-	check("saml row bound to a saml provider row (NameID format not stored)", refused)
+	check("saml row bound to a saml provider row (NameID format not stored)", refused+" (sso_subject_unverifiable=1)")
 	var links int
 	if err := admin.QueryRow(ctx, `SELECT count(*) FROM auth.external_identities WHERE provider IN ($1, $2)`,
 		oidcRow.String(), samlRow.String()).Scan(&links); err != nil || links != 0 {

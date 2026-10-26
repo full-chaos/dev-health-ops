@@ -75,6 +75,9 @@ type Report struct {
 	// IdentityRelinkPending counts the not-carried SSO accounts the owned store re-links at their first sign-in
 	// (identity.IsSSORelinkable).
 	IdentityRelinkPending int
+	// SSOSubjectUnverifiable counts the not-carried SAML accounts readiness cannot waive because go-api never stored
+	// their NameID format (identity.IsSSOSubjectUnverifiable); each holds the users-owned guard until it has an identity.
+	SSOSubjectUnverifiable int
 }
 
 // SkippedTotal is the number of users that were not written.
@@ -101,6 +104,7 @@ func (r Report) Lines() []string {
 		fmt.Sprintf("identity_linked=%d", r.IdentityLinked),
 		fmt.Sprintf("identity_not_carried=%d", r.IdentityNotCarry),
 		fmt.Sprintf("identity_relink_pending=%d", r.IdentityRelinkPending),
+		fmt.Sprintf("sso_subject_unverifiable=%d", r.SSOSubjectUnverifiable),
 		fmt.Sprintf("display_name_drift=%d", r.DisplayNameDrift),
 		fmt.Sprintf("last_login_drift=%d", r.LastLoginDrift),
 		fmt.Sprintf("platform_role_granted=%d", r.RoleGranted),
@@ -155,6 +159,9 @@ func Run(ctx context.Context, src Source, sink Sink, opts Options) (Report, erro
 				rep.IdentityNotCarry++
 				if Relinkable(row) {
 					rep.IdentityRelinkPending++
+				}
+				if SubjectUnverifiable(row) {
+					rep.SSOSubjectUnverifiable++
 				}
 			}
 			res, err := sink.BackfillUser(ctx, target, opts.DryRun)
@@ -263,6 +270,12 @@ func IsPlaceholder(row Row) bool {
 // uses to leave it out of its identity count (identity.IsSSORelinkable). It is still reported as not carried.
 func Relinkable(row Row) bool {
 	return identity.IsSSORelinkable(row.AuthProvider, row.AuthProviderID, row.SSOProviderID, row.SSOProviderProtocol)
+}
+
+// SubjectUnverifiable is the sso_subject_unverifiable bucket (identity.IsSSOSubjectUnverifiable): a bound SAML account
+// readiness does not waive because its NameID format was never stored.
+func SubjectUnverifiable(row Row) bool {
+	return identity.IsSSOSubjectUnverifiable(row.AuthProvider, row.AuthProviderID, row.SSOProviderID, row.SSOProviderProtocol)
 }
 
 func isBcrypt(hash string) bool {

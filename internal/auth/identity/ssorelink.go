@@ -29,28 +29,70 @@ func isSSORelinkProtocol(authProvider string) bool {
 	return false
 }
 
-// IsSSORelinkable is the one definition of a go-api SSO account that the owned store re-links at its first sign-in
-// instead of the users backfill carrying its identity: provider oidc or saml, a non-empty stored subject, and a
-// binding to an existing provider row of that same protocol (boundProtocol is that row's protocol, nil when the
-// account is unbound or the row is gone). The users-owned guard leaves such an account out of its identity count.
-func IsSSORelinkable(authProvider, authProviderID *string, ssoProviderID *uuid.UUID, boundProtocol *string) bool {
+// isSSOBound: provider oidc or saml, bound to an existing provider row of that same protocol (boundProtocol is that
+// row's protocol, nil when the account is unbound or the row is gone).
+func isSSOBound(authProvider *string, ssoProviderID *uuid.UUID, boundProtocol *string) bool {
 	return authProvider != nil && isSSORelinkProtocol(*authProvider) &&
-		authProviderID != nil && *authProviderID != "" &&
 		ssoProviderID != nil && boundProtocol != nil && *boundProtocol == *authProvider
 }
 
-// SSORelinkableSQL is IsSSORelinkable as a predicate over the public.users row aliased alias; never NULL.
-func SSORelinkableSQL(alias string) string {
-	return fmt.Sprintf(`(coalesce(%[1]s.auth_provider, '') IN ('oidc', 'saml') AND coalesce(%[1]s.auth_provider_id, '') <> ''`+
+// IsSSORelinkable is the one definition of a go-api SSO account that readiness waives because the owned store
+// re-links it at its first sign-in: it holds only when that sign-in can key it. The account is OIDC (its stored
+// subject IS the key subject), bound to an existing OIDC provider row, and its subject passes ValidSubject, the rule
+// IdentityBySubject and the OIDC subject check apply. A SAML account is never waived: go-api stores only the NameID
+// value, not its format, so a transient NameID cannot be told apart (IsSSOSubjectUnverifiable counts it). The
+// users-owned guard leaves a relinkable account out of its identity count.
+func IsSSORelinkable(authProvider, authProviderID *string, ssoProviderID *uuid.UUID, boundProtocol *string) bool {
+	return isSSOBound(authProvider, ssoProviderID, boundProtocol) && *authProvider == "oidc" &&
+		authProviderID != nil && ValidSubject(*authProviderID)
+}
+
+// IsSSOSubjectUnverifiable is the readiness bucket sso_subject_unverifiable: a SAML account bound to an existing SAML
+// provider row whose stored NameID value passes ValidSubject, but whose NameID format go-api never stored. It is
+// not waived (fail closed) and holds the users-owned guard until it has an identity.
+func IsSSOSubjectUnverifiable(authProvider, authProviderID *string, ssoProviderID *uuid.UUID, boundProtocol *string) bool {
+	return isSSOBound(authProvider, ssoProviderID, boundProtocol) && *authProvider == "saml" &&
+		authProviderID != nil && ValidSubject(*authProviderID)
+}
+
+// subjectEdgeSpace is every rune unicode.IsSpace accepts that unicode.IsControl does not (the controls are refused
+// anywhere in the value), as a PostgreSQL bracket expression body.
+const subjectEdgeSpace = ` \u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000`
+
+// SubjectKeyableSQL is ValidSubject over the text expression expr, for a UTF8 database (text there is always valid
+// UTF-8 and never holds NUL); never NULL.
+func SubjectKeyableSQL(expr string) string {
+	return fmt.Sprintf(`(coalesce(octet_length(%[1]s), 0) BETWEEN 1 AND %[2]d`+
+		` AND %[1]s !~ '[\u0001-\u001f\u007f-\u009f\ufffd]'`+
+		` AND %[1]s !~ '^[%[3]s]' AND %[1]s !~ '[%[3]s]$')`, expr, maxSubjectBytes, subjectEdgeSpace)
+}
+
+// ssoBoundSQL is isSSOBound over the public.users row aliased alias; never NULL.
+func ssoBoundSQL(alias string) string {
+	return fmt.Sprintf(`(coalesce(%[1]s.auth_provider, '') IN ('oidc', 'saml')`+
 		` AND %[1]s.sso_provider_id IS NOT NULL AND EXISTS (SELECT 1 FROM public.sso_providers sp_relink`+
 		` WHERE sp_relink.id = %[1]s.sso_provider_id AND sp_relink.protocol = %[1]s.auth_provider))`, alias)
 }
 
+// SSORelinkableSQL is IsSSORelinkable as a predicate over the public.users row aliased alias; never NULL.
+func SSORelinkableSQL(alias string) string {
+	return fmt.Sprintf(`(%[2]s AND %[1]s.auth_provider = 'oidc' AND %[3]s)`,
+		alias, ssoBoundSQL(alias), SubjectKeyableSQL(alias+".auth_provider_id"))
+}
+
+// SSOSubjectUnverifiableSQL is IsSSOSubjectUnverifiable as a predicate over the public.users row aliased alias;
+// never NULL.
+func SSOSubjectUnverifiableSQL(alias string) string {
+	return fmt.Sprintf(`(%[2]s AND %[1]s.auth_provider = 'saml' AND %[3]s)`,
+		alias, ssoBoundSQL(alias), SubjectKeyableSQL(alias+".auth_provider_id"))
+}
+
 // relinkOwned is IdentityBySubject's fallback after the users cutover, for an SSO key that missed. The go-api
 // accounts of legacy.AuthProvider that carry the stored subject are read; one bound to another provider row of the
-// same protocol is that provider's identity and is not read. No such account is a miss. Exactly one that is
-// re-linkable (IsSSORelinkable), bound to the key's provider row and holding an auth user is linked to the key
-// under audit (reason identity_relinked); nothing is written to public.users or to the account's auth rows. Any
+// same protocol is that provider's identity and is not read. No such account is a miss. Exactly one that is bound
+// (isSSOBound) to the key's provider row and holds an auth user is linked to the key under audit (reason
+// identity_relinked); the key itself already passed Validate, and a SAML key is built from the live NameID format,
+// which saml.Subject refuses when transient. Nothing is written to public.users or to the account's auth rows. Any
 // other carrier is ErrRelinkRefused.
 func (s *Store) relinkOwned(ctx context.Context, key ExternalKey, legacy LegacyMatch) (Principal, bool, error) {
 	if !key.Provider.IsSSO() || !isSSORelinkProtocol(legacy.AuthProvider) {
@@ -60,7 +102,7 @@ func (s *Store) relinkOwned(ctx context.Context, key ExternalKey, legacy LegacyM
 	if legacy.Subject != "" {
 		stored = legacy.Subject
 	}
-	rows, err := s.pool.Query(ctx, `SELECT u.id, `+SSORelinkableSQL("u")+` AND coalesce(u.sso_provider_id = $3::uuid, false)
+	rows, err := s.pool.Query(ctx, `SELECT u.id, `+ssoBoundSQL("u")+` AND coalesce(u.sso_provider_id = $3::uuid, false)
        AND EXISTS (SELECT 1 FROM `+s.q+`.users a WHERE a.principal_id = u.id)
 FROM public.users u
 WHERE u.auth_provider = $1 AND u.auth_provider_id = $2

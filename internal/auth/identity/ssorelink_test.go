@@ -78,6 +78,17 @@ func TestIsSSORelinkable(t *testing.T) {
 		if got := IsSSORelinkable(c.goArgs(row)); got != c.relinkable {
 			t.Errorf("%s: IsSSORelinkable = %v, want %v", c.name, got, c.relinkable)
 		}
+		if got := IsSSOSubjectUnverifiable(c.goArgs(row)); got != c.unverifiable {
+			t.Errorf("%s: IsSSOSubjectUnverifiable = %v, want %v", c.name, got, c.unverifiable)
+		}
+		// The waiver keys exactly what the sign-in path keys.
+		if c.relinkable && !ValidSubject(*c.subject) {
+			t.Errorf("%s: relinkable with a subject ValidSubject refuses", c.name)
+		}
+		if c.subject != nil && c.provider != nil && *c.provider == "oidc" && c.bound == "oidc" &&
+			IsSSORelinkable(c.goArgs(row)) != (ExternalKey{Issuer: "https://idp.example.com", Provider: Provider(row.String()), Subject: *c.subject}.Validate() == nil) {
+			t.Errorf("%s: IsSSORelinkable disagrees with ExternalKey.Validate", c.name)
+		}
 	}
 	s := func(v string) *string { return &v }
 	if IsSSORelinkable(s("oidc"), s("sub"), &row, nil) {
@@ -101,15 +112,19 @@ func TestWhitespaceSubjectIsNotRelinkable(t *testing.T) {
 }
 
 func TestSSORelinkableSQLNamesTheAliasAndTheRule(t *testing.T) {
-	sql := SSORelinkableSQL("u")
-	for _, part := range []string{"coalesce(u.auth_provider, '') IN ('oidc', 'saml')", "coalesce(u.auth_provider_id, '') <> ''",
-		"u.sso_provider_id IS NOT NULL", "sp_relink.id = u.sso_provider_id", "sp_relink.protocol = u.auth_provider"} {
-		if !strings.Contains(sql, part) {
-			t.Errorf("SSORelinkableSQL lacks %q:\n%s", part, sql)
+	for name, sql := range map[string]string{"SSORelinkableSQL": SSORelinkableSQL("u"), "SSOSubjectUnverifiableSQL": SSOSubjectUnverifiableSQL("u")} {
+		for _, part := range []string{"coalesce(u.auth_provider, '') IN ('oidc', 'saml')", "u.sso_provider_id IS NOT NULL",
+			"sp_relink.id = u.sso_provider_id", "sp_relink.protocol = u.auth_provider", SubjectKeyableSQL("u.auth_provider_id")} {
+			if !strings.Contains(sql, part) {
+				t.Errorf("%s lacks %q:\n%s", name, part, sql)
+			}
+		}
+		if strings.Count(sql, "(") != strings.Count(sql, ")") {
+			t.Fatalf("%s: unbalanced predicate: %s", name, sql)
 		}
 	}
-	if strings.Count(sql, "(") != strings.Count(sql, ")") {
-		t.Fatalf("unbalanced predicate: %s", sql)
+	if !strings.Contains(SSORelinkableSQL("u"), "u.auth_provider = 'oidc'") || !strings.Contains(SSOSubjectUnverifiableSQL("u"), "u.auth_provider = 'saml'") {
+		t.Fatal("the waiver is OIDC only and the unverifiable bucket SAML only")
 	}
 }
 

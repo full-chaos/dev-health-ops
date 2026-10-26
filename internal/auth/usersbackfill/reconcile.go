@@ -87,6 +87,10 @@ type Reconciliation struct {
 	// SSORelinkPending counts the not-carried SSO accounts the owned store re-links at their first sign-in
 	// (Relinkable). Printed, never gated.
 	SSORelinkPending int
+
+	// SSOSubjectUnverifiable counts the not-carried accounts of the sso_subject_unverifiable bucket
+	// (SubjectUnverifiable). Printed, never gated.
+	SSOSubjectUnverifiable int
 }
 
 // GatedTotal is the number of gated diffs: zero is the gate.
@@ -116,6 +120,7 @@ func (r Reconciliation) Lines() []string {
 		fmt.Sprintf("info.identity_not_carried=%d", r.IdentityNotCarried),
 		fmt.Sprintf("info.sso_identity_unmatched=%d", r.SSOIdentityUnmatched),
 		fmt.Sprintf("info.sso_identity_relink_pending=%d", r.SSORelinkPending),
+		fmt.Sprintf("info.sso_subject_unverifiable=%d", r.SSOSubjectUnverifiable),
 	)
 	return lines
 }
@@ -152,6 +157,9 @@ func Reconcile(ctx context.Context, src Source, tgt Target, batch int) (Reconcil
 				rep.IdentityNotCarried++
 				if Relinkable(row) {
 					rep.SSORelinkPending++
+				}
+				if SubjectUnverifiable(row) {
+					rep.SSOSubjectUnverifiable++
 				}
 			}
 			for _, class := range skips {
@@ -199,6 +207,9 @@ func compareOne(ctx context.Context, tgt Target, row Row, a AuthRow, rep *Reconc
 		rep.IdentityNotCarried++
 		if Relinkable(row) {
 			rep.SSORelinkPending++
+		}
+		if SubjectUnverifiable(row) {
+			rep.SSOSubjectUnverifiable++
 		}
 	}
 	classes := append([]string(nil), skips...)

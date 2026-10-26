@@ -90,9 +90,13 @@ VALUES ($1, $2, $3, $4, $5, true, true, false, 0, now(), now())`, id, id.String(
 		if row == nil {
 			t.Fatalf("%s: the backfill reader did not return the row", c.name)
 		}
-		var sql *bool
-		if err := tx.QueryRow(ctx, `SELECT `+identity.SSORelinkableSQL("u")+` FROM public.users u WHERE u.id = $1`, id).Scan(&sql); err != nil {
+		var sql, unverifiable *bool
+		if err := tx.QueryRow(ctx, `SELECT `+identity.SSORelinkableSQL("u")+`, `+identity.SSOSubjectUnverifiableSQL("u")+` FROM public.users u WHERE u.id = $1`,
+			id).Scan(&sql, &unverifiable); err != nil {
 			t.Fatalf("%s: %v", c.name, err)
+		}
+		if unverifiable == nil || *unverifiable != SubjectUnverifiable(*row) {
+			t.Errorf("%s: backfill SubjectUnverifiable = %v, guard SQL = %v", c.name, SubjectUnverifiable(*row), unverifiable)
 		}
 		if sql == nil {
 			t.Errorf("%s: the guard SQL is NULL", c.name)

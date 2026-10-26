@@ -309,6 +309,22 @@ func publicRelationKind(ctx context.Context, conn rowQuerier1, table string) (st
 	return kind, nil
 }
 
+// publicColumnExists reports whether public.<table> has a live column named
+// column. A manifest column a later ops revision adds (users.sso_provider_id,
+// revision 0155) is absent on a schema before it.
+func publicColumnExists(ctx context.Context, conn rowQuerier1, table, column string) (bool, error) {
+	var exists bool
+	if err := conn.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid
+		 JOIN pg_namespace n ON n.oid = c.relnamespace
+		 WHERE n.nspname = $1 AND c.relname = $2 AND a.attname = $3 AND a.attnum > 0 AND NOT a.attisdropped)`,
+		publicSchema, table, column,
+	).Scan(&exists); err != nil {
+		return false, fmt.Errorf("%w: looking for %s.%s.%s", ErrMigrationFailed, publicSchema, table, column)
+	}
+	return exists, nil
+}
+
 // publicTableState classifies public.<table> for the manifest: absent, a table
 // ('r' or 'p'), or something else, which is an error rather than a skip.
 func publicTableState(ctx context.Context, conn rowQuerier1, table string) (exists bool, err error) {
@@ -331,7 +347,11 @@ func publicTableState(ctx context.Context, conn rowQuerier1, table string) (exis
 // EXISTS, revoke every privilege the role holds on it (table and column level)
 // and grant SELECT on exactly the manifest columns. A manifest table that does
 // not exist (an auth-only database) is skipped and logged by name;
-// VerifyRuntimePosture requires the grants as soon as it does exist. They run
+// VerifyRuntimePosture requires the grants as soon as it does exist. A manifest
+// column that does not exist yet (a schema before the ops revision that adds
+// it) is skipped and logged as DEFERRED, never an error: the grants pass after
+// ops migrate grants it, and VerifyRuntimePosture holds it PENDING until the
+// column exists and FAILS once it exists without the grant. They run
 // inside applyRuntimeGrants' transaction, so a privilege they would remove is a
 // narrowing that needs the same acknowledgement as any other.
 //
@@ -368,15 +388,24 @@ func publicReadStatements(ctx context.Context, conn querier, options Options, lo
 			if err != nil {
 				return nil, err
 			}
+			present, err := publicColumnExists(ctx, conn, entry.Table, name)
+			if err != nil {
+				return nil, err
+			}
+			if !present {
+				logger.WarnContext(ctx, "public read grant DEFERRED: the column does not exist yet",
+					"schema", publicSchema, "table", entry.Table, "column", name, "state", "DEFERRED")
+				continue
+			}
 			columns = append(columns, quoteIdentifier(columnID))
 		}
 		table := quoteIdentifier(mustValidatedIdentifier(publicSchema)) + "." + quoteIdentifier(tableID)
-		statements = append(statements,
-			fmt.Sprintf(`REVOKE ALL ON TABLE %s FROM %s`, table, role),
-			fmt.Sprintf(`GRANT SELECT (%s) ON TABLE %s TO %s`, strings.Join(columns, ", "), table, role),
-		)
+		statements = append(statements, fmt.Sprintf(`REVOKE ALL ON TABLE %s FROM %s`, table, role))
+		if len(columns) > 0 {
+			statements = append(statements, fmt.Sprintf(`GRANT SELECT (%s) ON TABLE %s TO %s`, strings.Join(columns, ", "), table, role))
+		}
 		logger.InfoContext(ctx, "applying public read grants",
-			"schema", publicSchema, "table", entry.Table, "columns", len(entry.Columns))
+			"schema", publicSchema, "table", entry.Table, "columns", len(columns), "deferred", len(entry.Columns)-len(columns))
 	}
 	write := LegacyRefreshTokenGrant()
 	exists, err := publicTableState(ctx, conn, write.Table)
@@ -544,6 +573,18 @@ func publicReadViolations(ctx context.Context, conn *pgx.Conn, options Options) 
 			continue
 		}
 		for _, column := range entry.Columns {
+			present, err := publicColumnExists(ctx, conn, entry.Table, column)
+			if err != nil {
+				return nil, err
+			}
+			if !present {
+				// PENDING: a DEFERRED grant of a column a later ops revision adds.
+				if options.Logger != nil {
+					options.Logger.InfoContext(ctx, "public read grant PENDING: the column does not exist yet",
+						"schema", publicSchema, "table", entry.Table, "column", column, "state", "PENDING")
+				}
+				continue
+			}
 			var readable bool
 			if err := conn.QueryRow(ctx,
 				`SELECT has_column_privilege($1, format('%I.%I', $2::text, $3::text), $4, 'SELECT')`,

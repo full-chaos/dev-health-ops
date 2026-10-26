@@ -10,8 +10,9 @@ import (
 	"github.com/google/uuid"
 )
 
-// TestSSORelinkGoAndSQLAgreeOverOneShapeTable runs IsSSORelinkable and SSORelinkableSQL over the one shape table
-// (ssoRelinkShapes) on real PostgreSQL rows. Each shape lives in its own savepoint of one rolled-back transaction.
+// TestSSORelinkGoAndSQLAgreeOverOneShapeTable runs IsSSORelinkable and SSORelinkableSQL, IsSSOSubjectUnverifiable and
+// SSOSubjectUnverifiableSQL, and ValidSubject and SubjectKeyableSQL over the one shape table (ssoRelinkShapes) on
+// real PostgreSQL rows. Each shape lives in its own savepoint of one rolled-back transaction.
 func TestSSORelinkGoAndSQLAgreeOverOneShapeTable(t *testing.T) {
 	e := getEnv(t)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
@@ -49,8 +50,9 @@ func TestSSORelinkGoAndSQLAgreeOverOneShapeTable(t *testing.T) {
 VALUES ($1, $2, $3, $4, $5, true, true, false, 0, now(), now())`, id, id.String()+"@example.com", c.provider, c.subject, bound); err != nil {
 			t.Fatalf("%s: %v", c.name, err)
 		}
-		var relinkable *bool
-		if err := tx.QueryRow(ctx, `SELECT `+SSORelinkableSQL("u")+` FROM public.users u WHERE u.id = $1`, id).Scan(&relinkable); err != nil {
+		var relinkable, unverifiable, keyable *bool
+		if err := tx.QueryRow(ctx, `SELECT `+SSORelinkableSQL("u")+`, `+SSOSubjectUnverifiableSQL("u")+`, `+SubjectKeyableSQL("u.auth_provider_id")+`
+FROM public.users u WHERE u.id = $1`, id).Scan(&relinkable, &unverifiable, &keyable); err != nil {
 			t.Fatalf("%s: %v", c.name, err)
 		}
 		row := uuid.Nil
@@ -63,6 +65,20 @@ VALUES ($1, $2, $3, $4, $5, true, true, false, 0, now(), now())`, id, id.String(
 			t.Errorf("%s: SSORelinkableSQL is NULL", c.name)
 		case *relinkable != goRelinkable || goRelinkable != c.relinkable:
 			t.Errorf("%s: SSORelinkableSQL = %v, IsSSORelinkable = %v, want %v", c.name, *relinkable, goRelinkable, c.relinkable)
+		}
+		goUnverifiable := IsSSOSubjectUnverifiable(c.goArgs(row))
+		switch {
+		case unverifiable == nil:
+			t.Errorf("%s: SSOSubjectUnverifiableSQL is NULL", c.name)
+		case *unverifiable != goUnverifiable || goUnverifiable != c.unverifiable:
+			t.Errorf("%s: SSOSubjectUnverifiableSQL = %v, IsSSOSubjectUnverifiable = %v, want %v", c.name, *unverifiable, goUnverifiable, c.unverifiable)
+		}
+		goKeyable := c.subject != nil && ValidSubject(*c.subject)
+		switch {
+		case keyable == nil:
+			t.Errorf("%s: SubjectKeyableSQL is NULL", c.name)
+		case *keyable != goKeyable:
+			t.Errorf("%s: SubjectKeyableSQL = %v, ValidSubject = %v", c.name, *keyable, goKeyable)
 		}
 		if _, err := tx.Exec(ctx, `ROLLBACK TO SAVEPOINT shape`); err != nil {
 			t.Fatal(err)

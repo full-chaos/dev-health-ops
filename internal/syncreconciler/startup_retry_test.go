@@ -146,9 +146,11 @@ func TestStartExitsWhenTheRetryBudgetIsSpent(t *testing.T) {
 		return Observation{}, dialEndpoint(ctx, address)
 	}), clock, budget, waits.sleep)
 	openReadinessGate(t, registry)
-	if err := loop.Start(context.Background()); err == nil {
+	err := loop.Start(context.Background())
+	if err == nil {
 		t.Fatal("Start = nil, want the refused dial after the budget")
 	}
+	assertExitErrorHasNoAddress(t, err, address)
 	if waits.total() != budget || len(waits.waits) < 2 {
 		t.Fatalf("waits=%v total=%v, want waits summing to the %v budget", waits.waits, waits.total(), budget)
 	}
@@ -305,9 +307,7 @@ func TestTickExitsOnceTransientDialFailuresOutlastTheBudget(t *testing.T) {
 	run.tick(base.Add(320 * time.Second))
 	select {
 	case err := <-run.loop.Errors():
-		if !errors.Is(err, syscall.ECONNREFUSED) {
-			t.Fatalf("fatal error = %v, want the refused dial", err)
-		}
+		assertExitErrorHasNoAddress(t, err, address)
 	case <-time.After(5 * time.Second):
 		t.Fatal("a dead database did not surface after the budget")
 	}
@@ -328,5 +328,19 @@ func TestTickPermanentErrorIsFatalAtOnce(t *testing.T) {
 		t.Fatal("a permanent error was absorbed")
 	case <-time.After(5 * time.Second):
 		t.Fatal("a permanent error did not end the loop")
+	}
+}
+
+// assertExitErrorHasNoAddress checks the error as the lifecycle runtime logs it
+// ("start component %s: %w"): it names the unreachable cause, never the dial
+// address, and still unwraps to the refused dial.
+func assertExitErrorHasNoAddress(t *testing.T, err error, address string) {
+	t.Helper()
+	text := fmt.Errorf("component x failed: %w", err).Error()
+	if strings.Contains(text, address) || strings.Contains(text, "127.0.0.1") || !strings.Contains(text, "cause=unreachable") {
+		t.Fatalf("exit error text = %q, want the unreachable cause and no dial address", text)
+	}
+	if !errors.Is(err, syscall.ECONNREFUSED) {
+		t.Fatalf("exit error %q must still unwrap to the refused dial", text)
 	}
 }

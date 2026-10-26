@@ -246,13 +246,9 @@ func (loop *Loop) Start(ctx context.Context) error {
 		return loop.step(stepCtx, loop.clock.Now())
 	})
 	if err != nil {
+		err = postgres.MaskUnreachable(err)
 		loop.setFailed()
-		if postgres.IsTransientDialError(err) {
-			loop.logger().ErrorContext(ctx, "sync scheduler initial handoff failed",
-				"cause", health.CauseUnreachable)
-		} else {
-			loop.logger().ErrorContext(ctx, "sync scheduler initial handoff failed", "error", err.Error())
-		}
+		loop.logger().ErrorContext(ctx, "sync scheduler initial handoff failed", "error", err.Error())
 		cancel()
 		close(done)
 		return fmt.Errorf("initial scheduler handoff: %w", err)

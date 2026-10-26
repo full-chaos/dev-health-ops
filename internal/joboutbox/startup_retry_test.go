@@ -3,10 +3,12 @@ package joboutbox
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -183,9 +185,11 @@ func TestStartExitsWhenTheRetryBudgetIsSpent(t *testing.T) {
 		return StepResult{}, dialEndpoint(ctx, address)
 	}), clock, budget, waits.sleep)
 	openReconcilerReadiness(t, registry)
-	if err := loop.Start(context.Background()); err == nil {
+	err := loop.Start(context.Background())
+	if err == nil {
 		t.Fatal("Start = nil, want the refused dial after the budget")
 	}
+	assertExitErrorHasNoAddress(t, err, address)
 	if waits.total() != budget || len(waits.waits) < 2 {
 		t.Fatalf("waits=%v total=%v, want waits summing to the %v budget", waits.waits, waits.total(), budget)
 	}
@@ -251,4 +255,18 @@ func TestHealthzAnswersWhileTheFirstStepRetries(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer loop.Shutdown(context.Background())
+}
+
+// assertExitErrorHasNoAddress checks the error as the lifecycle runtime logs it
+// ("start component %s: %w"): it names the unreachable cause, never the dial
+// address, and still unwraps to the refused dial.
+func assertExitErrorHasNoAddress(t *testing.T, err error, address string) {
+	t.Helper()
+	text := fmt.Errorf("start component x: %w", err).Error()
+	if strings.Contains(text, address) || strings.Contains(text, "127.0.0.1") || !strings.Contains(text, "cause=unreachable") {
+		t.Fatalf("exit error text = %q, want the unreachable cause and no dial address", text)
+	}
+	if !errors.Is(err, syscall.ECONNREFUSED) || !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("exit error %q must still unwrap to the refused dial and ErrUnavailable", text)
+	}
 }

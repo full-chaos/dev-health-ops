@@ -259,6 +259,7 @@ func (loop *ReconcilerLoop) Start(ctx context.Context) error {
 	}).Do(ctx, func(stepCtx context.Context) error {
 		return loop.step(stepCtx, loop.clock.Now())
 	}); err != nil {
+		err = postgres.MaskUnreachable(err)
 		loop.setFailed()
 		loop.logger().ErrorContext(ctx, "outbox reconciler initial step failed", "error", err.Error())
 		return fmt.Errorf("initial outbox reconciliation: %w", err)

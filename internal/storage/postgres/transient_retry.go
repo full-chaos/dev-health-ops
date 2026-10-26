@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/binary"
+	"errors"
 	"time"
 )
 
@@ -105,4 +106,23 @@ func (window *TransientWindow) Exceeded(now time.Time, err error, budget time.Du
 		window.since = now
 	}
 	return now.Sub(window.since) >= budget
+}
+
+// UnreachableError is a transient dial failure returned from a startup path.
+// Its text names only the bounded cause: the underlying error can carry the
+// dial address, and the lifecycle runtime logs a start error verbatim. Unwrap
+// keeps the cause for errors.Is and errors.As.
+type UnreachableError struct{ cause error }
+
+func (UnreachableError) Error() string   { return "dependency unreachable: cause=unreachable" }
+func (e UnreachableError) Unwrap() error { return e.cause }
+
+// MaskUnreachable returns err as an UnreachableError when it is a transient
+// dial failure, and err unchanged otherwise.
+func MaskUnreachable(err error) error {
+	var masked UnreachableError
+	if err == nil || errors.As(err, &masked) || !IsTransientDialError(err) {
+		return err
+	}
+	return UnreachableError{cause: err}
 }

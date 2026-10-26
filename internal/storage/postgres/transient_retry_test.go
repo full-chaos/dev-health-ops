@@ -3,6 +3,8 @@ package postgres
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -52,5 +54,23 @@ func TestTransientWindowResetsOnSuccessAndEndsOnBudgetOrFinalError(t *testing.T)
 	}
 	if !(&TransientWindow{}).Exceeded(base, errors.New("final"), time.Minute) {
 		t.Fatal("a final error must end the loop at once")
+	}
+}
+
+func TestMaskUnreachableHidesTheTextAndKeepsTheCause(t *testing.T) {
+	cause := fmt.Errorf("failed to connect to 127.0.0.1:5432: %w", syscall.ECONNREFUSED)
+	masked := MaskUnreachable(cause)
+	if strings.Contains(masked.Error(), "127.0.0.1") || !strings.Contains(masked.Error(), "cause=unreachable") {
+		t.Fatalf("masked text = %q", masked.Error())
+	}
+	if !errors.Is(masked, syscall.ECONNREFUSED) || !IsTransientDialError(masked) {
+		t.Fatal("the cause must stay visible to errors.Is and the classifier")
+	}
+	if MaskUnreachable(masked) != masked {
+		t.Fatal("masking twice must not wrap again")
+	}
+	final := errors.New("final 127.0.0.1")
+	if MaskUnreachable(final) != final || MaskUnreachable(nil) != nil {
+		t.Fatal("a final error and nil must pass through unchanged")
 	}
 }

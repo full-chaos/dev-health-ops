@@ -289,13 +289,9 @@ func (loop *Loop) Start(ctx context.Context) error {
 	}
 	if err != nil {
 		if !errors.Is(err, ErrDegradedStage) && !errors.Is(err, ErrStepEnvelopeExceeded) {
+			err = postgres.MaskUnreachable(err)
 			loop.setFailed()
-			if postgres.IsTransientDialError(err) {
-				loop.logger().ErrorContext(ctx, "sync dispatch observer initial step failed",
-					"cause", health.CauseUnreachable)
-			} else {
-				loop.logger().ErrorContext(ctx, "sync dispatch observer initial step failed", "error", err.Error())
-			}
+			loop.logger().ErrorContext(ctx, "sync dispatch observer initial step failed", "error", err.Error())
 			cancel()
 			close(done)
 			return fmt.Errorf("initial sync dispatch observation: %w", err)
@@ -343,12 +339,7 @@ func (loop *Loop) run(ctx context.Context, ticker loopTicker, done chan struct{}
 	defer ticker.Stop()
 	defer func() {
 		if fatal != nil {
-			if postgres.IsTransientDialError(fatal) {
-				loop.logger().ErrorContext(ctx, "sync dispatch observer step failed",
-					"cause", health.CauseUnreachable)
-			} else {
-				loop.logger().ErrorContext(ctx, "sync dispatch observer step failed", "error", fatal.Error())
-			}
+			loop.logger().ErrorContext(ctx, "sync dispatch observer step failed", "error", fatal.Error())
 			loop.reportError(ctx, fatal)
 		}
 	}()
@@ -403,7 +394,7 @@ func (loop *Loop) run(ctx context.Context, ticker loopTicker, done chan struct{}
 					}
 					continue
 				}
-				fatal = fmt.Errorf("sync dispatch observation step: %w", err)
+				fatal = fmt.Errorf("sync dispatch observation step: %w", postgres.MaskUnreachable(err))
 				return
 			}
 			window.Exceeded(now, nil, 0)

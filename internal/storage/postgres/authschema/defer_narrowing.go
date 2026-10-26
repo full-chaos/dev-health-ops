@@ -58,8 +58,9 @@ func usersOwnedPublicGrant(g GrantRecord) bool {
 
 // retainUsersOwnedGrants re-grants, in tx, every lost record that is a
 // users-owned public grant, and returns those records with bare table names.
-// lost names public objects "public.<table>" (applyRuntimeGrants).
-func retainUsersOwnedGrants(ctx context.Context, tx querier, lost []GrantRecord, role string) ([]GrantRecord, error) {
+// lost names public objects "public.<table>" (applyRuntimeGrants). Each
+// statement names its privilege as a keyword of its own format.
+func retainUsersOwnedGrants(ctx context.Context, tx querier, lost []GrantRecord, roleID ValidatedIdentifier) ([]GrantRecord, error) {
 	var retained []GrantRecord
 	for _, g := range lost {
 		table, ok := strings.CutPrefix(g.Object, publicSchema+".")
@@ -75,14 +76,31 @@ func retainUsersOwnedGrants(ctx context.Context, tx querier, lost []GrantRecord,
 		if err != nil {
 			return nil, err
 		}
-		target := quoteIdentifier(mustValidatedIdentifier(publicSchema)) + "." + quoteIdentifier(tableID)
-		statement := fmt.Sprintf(`GRANT %s ON TABLE %s TO %s`, record.Privilege, target, role)
-		if record.Kind == "column" {
+		schemaID := mustValidatedIdentifier(publicSchema)
+		var statement string
+		switch {
+		case record.Kind == "relation" && record.Privilege == "DELETE":
+			statement = fmt.Sprintf(`GRANT DELETE ON TABLE %s.%s TO %s`,
+				quoteIdentifier(schemaID), quoteIdentifier(tableID), quoteIdentifier(roleID))
+		case record.Kind == "column":
 			columnID, err := NewValidatedIdentifier(record.Column)
 			if err != nil {
 				return nil, err
 			}
-			statement = fmt.Sprintf(`GRANT %s (%s) ON TABLE %s TO %s`, record.Privilege, quoteIdentifier(columnID), target, role)
+			switch record.Privilege {
+			case "INSERT":
+				statement = fmt.Sprintf(`GRANT INSERT (%s) ON TABLE %s.%s TO %s`,
+					quoteIdentifier(columnID), quoteIdentifier(schemaID), quoteIdentifier(tableID), quoteIdentifier(roleID))
+			case "UPDATE":
+				statement = fmt.Sprintf(`GRANT UPDATE (%s) ON TABLE %s.%s TO %s`,
+					quoteIdentifier(columnID), quoteIdentifier(schemaID), quoteIdentifier(tableID), quoteIdentifier(roleID))
+			case "SELECT":
+				statement = fmt.Sprintf(`GRANT SELECT (%s) ON TABLE %s.%s TO %s`,
+					quoteIdentifier(columnID), quoteIdentifier(schemaID), quoteIdentifier(tableID), quoteIdentifier(roleID))
+			}
+		}
+		if statement == "" {
+			return nil, fmt.Errorf("%w: no re-grant form for a users-owned %s %s", ErrMigrationFailed, record.Kind, record.Privilege)
 		}
 		if _, err := tx.Exec(ctx, statement); err != nil {
 			return nil, fmt.Errorf("%w: %s: %v", ErrMigrationFailed, statement, redactPGError(err))

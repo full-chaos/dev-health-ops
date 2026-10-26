@@ -317,7 +317,7 @@ func applyGrantsAndVerify(ctx context.Context, conn pooledConn, options Options,
 	// corrected by the next migrate run rather than persisting because no new
 	// migration happened to be pending.
 	var retained []GrantRecord
-	if err := applyRuntimeGrantsRetaining(ctx, conn.Conn(), RuntimePosture(), options, &retained); err != nil {
+	if err := applyRuntimeGrants(ctx, conn.Conn(), RuntimePosture(), options, &retained); err != nil {
 		return result, err
 	}
 	logger.InfoContext(

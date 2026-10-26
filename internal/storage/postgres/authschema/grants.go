@@ -152,7 +152,7 @@ func runtimeSequences() []string {
 // deliberately not rewritten here, and are caught instead by
 // VerifyRuntimePosture, which Apply calls and fails on.
 func ApplyRuntimeGrants(ctx context.Context, conn *pgx.Conn, options Options) error {
-	return applyRuntimeGrants(ctx, conn, RuntimePosture(), options)
+	return applyRuntimeGrants(ctx, conn, RuntimePosture(), options, nil)
 }
 
 // applyRuntimeGrants takes the manifest as a parameter so a test can hand it a
@@ -171,15 +171,11 @@ func ApplyRuntimeGrants(ctx context.Context, conn *pgx.Conn, options Options) er
 // says the manifest has not regressed from the previous deployment, not that
 // the manifest is right (CHAOS-4885 is the functional half). Only DIRECT grants
 // are compared; see snapshotDirectGrants.
-func applyRuntimeGrants(ctx context.Context, conn querier, manifest []TablePrivilege, options Options) error {
-	return applyRuntimeGrantsRetaining(ctx, conn, manifest, options, nil)
-}
-
-// applyRuntimeGrantsRetaining is applyRuntimeGrants; with
-// Options.DeferNarrowing it stores in *retained (when not nil) the acknowledged
-// lost records it kept (retainUsersOwnedGrants), which the posture check then
-// excuses.
-func applyRuntimeGrantsRetaining(ctx context.Context, conn querier, manifest []TablePrivilege, options Options, retained *[]GrantRecord) error {
+//
+// With Options.DeferNarrowing it stores in *retained (when not nil) the
+// acknowledged lost records it kept (retainUsersOwnedGrants), which the
+// posture check then excuses.
+func applyRuntimeGrants(ctx context.Context, conn querier, manifest []TablePrivilege, options Options, retained *[]GrantRecord) error {
 	schemaID, err := NewValidatedIdentifier(options.Schema)
 	if err != nil {
 		return err
@@ -321,7 +317,7 @@ func applyRuntimeGrantsRetaining(ctx context.Context, conn querier, manifest []T
 		}
 		var kept []GrantRecord
 		if options.DeferNarrowing {
-			kept, err = retainUsersOwnedGrants(ctx, tx, lost, role)
+			kept, err = retainUsersOwnedGrants(ctx, tx, lost, roleID)
 			if err != nil {
 				return err
 			}

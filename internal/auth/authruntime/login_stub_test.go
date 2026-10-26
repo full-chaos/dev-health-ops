@@ -170,3 +170,73 @@ func TestOnlyTheLoginPairIsUnthrottledWhileLoginIsNotEnabled(t *testing.T) {
 		}
 	}
 }
+
+func TestUnthrottledSetOfTheFullRouteSetIsExactlyTheStubs(t *testing.T) {
+	notOwned := []string{
+		"GET /api/v1/auth/verify", "POST /api/v1/auth/resend-verification", "POST /api/v1/auth/forgot-password",
+		"POST /api/v1/auth/reset-password", "POST /api/v1/auth/change-password", "POST /api/v1/auth/register",
+	}
+	schema, err := authschema.NewValidatedIdentifier("auth")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool, err := pgxpool.New(context.Background(), "postgres://auth@127.0.0.1:1/devhealth")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	for _, owned := range []string{"", "false", "true"} {
+		for _, lockout := range []bool{false, true} {
+			env := map[string]string{
+				authconfig.EnvDatabaseURI:    "postgres://auth@127.0.0.1:1/devhealth",
+				authconfig.EnvSigningKeyFile: "/nonexistent",
+				authconfig.EnvSigningKeyID:   "full-census-test",
+			}
+			if lockout {
+				env = compatEnvironment(env)
+			} else {
+				env = sessionEnvironment(env)
+			}
+			if owned != "" {
+				env[authconfig.EnvUsersOwned] = owned
+			}
+			cfg, err := authconfig.Load(authconfig.Spec{LookupEnv: lookupFrom(env)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			session, err := sessionRoutes(cfg, logger, pool, schema, nil, mustLimits(t))
+			if err != nil {
+				t.Fatal(err)
+			}
+			credentials, _, err := credentialRoutes(cfg, logger, pool, schema, mustLimits(t))
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := map[string]bool{}
+			if owned != "true" {
+				for _, key := range notOwned {
+					want[key] = true
+				}
+			}
+			if !lockout {
+				want["POST "+loginPattern] = true
+			}
+			got := map[string]bool{}
+			for _, route := range append(append([]httpapi.Route{}, session...), credentials...) {
+				if route.Unthrottled {
+					got[route.Method+" "+route.Pattern] = true
+				}
+			}
+			label := "owned=" + owned + " lockout=" + map[bool]string{false: "unset", true: "set"}[lockout]
+			if len(got) != len(want) {
+				t.Fatalf("%s: unthrottled %v; want exactly %v", label, got, want)
+			}
+			for key := range want {
+				if !got[key] {
+					t.Fatalf("%s: %s is not unthrottled; got %v", label, key, got)
+				}
+			}
+		}
+	}
+}

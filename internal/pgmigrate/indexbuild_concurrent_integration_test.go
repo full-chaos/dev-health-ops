@@ -4,6 +4,7 @@ package pgmigrate_test
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"regexp"
@@ -18,9 +19,9 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/pgmigrate"
 )
 
-const buildLockKey int64 = 0x64686f5f6978
+const buildLockKey = pgmigrate.BuildIndexLockKey
 
-const lockHeldRefusal = "another build-index run holds the lock"
+var lockHeldRefusal = pgmigrate.ErrBuildLockHeld.Error()
 
 // sqlRecorder is a pgx tracer that keeps every statement a connection sends.
 type sqlRecorder struct {
@@ -204,7 +205,7 @@ func TestBuildIndexRefusesWhileAnotherRunHoldsTheBuildLock(t *testing.T) {
 	result, err := pgmigrate.BuildFailureStreakIndex(context.Background(), run,
 		pgmigrate.IndexBuildOptions{LockTimeout: 2 * time.Second, Attempts: 3, RetryDelay: time.Second, Deadline: 30 * time.Second},
 		slog.New(slog.NewJSONHandler(logs, nil)))
-	if err == nil || !strings.Contains(err.Error(), lockHeldRefusal) {
+	if !errors.Is(err, pgmigrate.ErrBuildLockHeld) {
 		t.Fatalf("result %+v err %v, want the refusal %q", result, err, lockHeldRefusal)
 	}
 	if elapsed := time.Since(started); elapsed > 10*time.Second {
@@ -302,7 +303,7 @@ AND (query LIKE 'DROP INDEX CONCURRENTLY%' OR query LIKE 'CREATE INDEX CONCURREN
 	release()
 	firstOutcome := <-firstDone
 
-	if err == nil || !strings.Contains(err.Error(), lockHeldRefusal) {
+	if !errors.Is(err, pgmigrate.ErrBuildLockHeld) {
 		t.Fatalf("second run: result %+v err %v, want the refusal %q", result, err, lockHeldRefusal)
 	}
 	if elapsed > 10*time.Second {

@@ -29,6 +29,14 @@ const failureStreakBuildSQL = "CREATE INDEX CONCURRENTLY " + FailureStreakIndexB
 
 const failureStreakDropSQL = "DROP INDEX CONCURRENTLY IF EXISTS public." + FailureStreakIndexName
 
+// buildIndexLockKey is the session advisory lock ("dho_ix") one build-index run holds from its first state read to its
+// return. It is not the migrator's lockKey, so it never holds up a migration.
+const buildIndexLockKey int64 = 0x64686f5f6978
+
+// ErrBuildLockHeld is the refusal of a run that finds another build-index run holding the build lock while the index is not
+// valid. The run sends no DDL: an INVALID index then may be the other run's build in progress.
+var ErrBuildLockHeld = errors.New("another build-index run holds the lock")
+
 // IndexBuildOptions bound how long one attempt may wait for the table lock, how long the whole build may wait for
 // older transactions, and how often a failed attempt is retried.
 type IndexBuildOptions struct {
@@ -71,6 +79,10 @@ type IndexBuildResult struct {
 // context deadline). The table lock is taken first by a short probe under lock_timeout, so a stuck lock queue still ends
 // the attempt. A failed attempt leaves an INVALID index, which the next attempt drops before it builds again. It returns
 // nil only when the index is present, valid and ready.
+//
+// One run at a time acts: a run takes the build lock without waiting. A run that misses it reads the state once and
+// returns "present" over a valid index, else ErrBuildLockHeld, with no DDL. The winner reads the state again after each
+// table-lock probe, so an index a builder outside the lock made valid during the probe wait is kept.
 func BuildFailureStreakIndex(ctx context.Context, conn *pgx.Conn, options IndexBuildOptions, logger *slog.Logger) (IndexBuildResult, error) {
 	result := IndexBuildResult{Index: FailureStreakIndexName}
 	if options.Attempts < 1 {
@@ -92,6 +104,23 @@ func BuildFailureStreakIndex(ctx context.Context, conn *pgx.Conn, options IndexB
 	if !hasTable {
 		return result, errors.New("public.sync_run_units does not exist: the database is not at the baseline")
 	}
+	var locked bool
+	if err := conn.QueryRow(ctx, "SELECT pg_try_advisory_lock($1)", buildIndexLockKey).Scan(&locked); err != nil {
+		return result, fmt.Errorf("take the build lock: %w", err)
+	}
+	if !locked {
+		info, err := readIndexInfo(ctx, conn)
+		if err != nil {
+			return result, err
+		}
+		logIndexInfo(logger, "build_lock_held", 0, info)
+		if info.ready() {
+			result.Action, result.Valid = "present", true
+			return result, nil
+		}
+		return result, ErrBuildLockHeld
+	}
+	defer releaseBuildLock(ctx, conn, logger)
 	windowEnd := time.Now().Add(options.Deadline)
 	watch := startBlockerWatch(ctx, conn, options, logger)
 	defer watch.stop()
@@ -126,7 +155,7 @@ func BuildFailureStreakIndex(ctx context.Context, conn *pgx.Conn, options IndexB
 			lastErr = nil
 			break
 		}
-		stage, err := runBuildAttempt(ctx, conn, info, &result, windowEnd, options.LockTimeout)
+		stage, err := runBuildAttempt(ctx, conn, &result, windowEnd, options.LockTimeout)
 		if err == nil {
 			lastErr = nil
 			break
@@ -160,10 +189,19 @@ func BuildFailureStreakIndex(ctx context.Context, conn *pgx.Conn, options IndexB
 	return result, nil
 }
 
-// runBuildAttempt runs one attempt: probe the table lock, drop an INVALID leftover, build. stage names where it failed.
-func runBuildAttempt(ctx context.Context, conn *pgx.Conn, info indexInfo, result *IndexBuildResult, windowEnd time.Time, lock time.Duration) (stage string, err error) {
+// runBuildAttempt runs one attempt: probe the table lock, read the state, drop an INVALID leftover, build. stage names
+// where it failed. The state is read after the probe: the probe can wait behind a builder that ends with a valid index.
+func runBuildAttempt(ctx context.Context, conn *pgx.Conn, result *IndexBuildResult, windowEnd time.Time, lock time.Duration) (stage string, err error) {
 	if err := probeTableLock(ctx, conn); err != nil {
 		return "probe", err
+	}
+	info, err := readIndexInfo(ctx, conn)
+	if err != nil {
+		return "state", err
+	}
+	if info.ready() {
+		result.Action = "present"
+		return "", nil
 	}
 	if info.exists {
 		result.Action = "rebuilt"
@@ -190,6 +228,14 @@ func probeTableLock(ctx context.Context, conn *pgx.Conn) error {
 		return err
 	}
 	return tx.Commit(ctx)
+}
+
+func releaseBuildLock(ctx context.Context, conn *pgx.Conn, logger *slog.Logger) {
+	releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), statementTimeoutResetLimit)
+	defer cancel()
+	if _, err := conn.Exec(releaseCtx, "SELECT pg_advisory_unlock($1)", buildIndexLockKey); err != nil {
+		logger.Warn("build-index: build lock not released; the session end releases it", "sqlstate", sqlState(err))
+	}
 }
 
 func ms(d time.Duration) string { return strconv.FormatInt(d.Milliseconds(), 10) }
@@ -337,6 +383,7 @@ func buildIndex(ctx context.Context, resolve ResolveDSN, env cli.Env) int {
 		fmt.Fprint(env.Stderr, "\nUsage: dho migrate postgres build-index failure-streak\n"+
 			"\nBuilds "+FailureStreakIndexName+" CONCURRENTLY (revision 0159 then finds it and does nothing).\n"+
 			"Exit 0 only when the index is present and valid.\n"+
+			"A run that finds another run holding the build lock, while the index is not valid, exits non-zero (build_index_lock_held) with no DDL.\n"+
 			"\nEnvironment:\n"+
 			"  MIGRATION_DATABASE_URI (or _FILE, or the DEV_HEALTH_MIGRATION_PG_* component form)   elevated DSN, direct to PostgreSQL\n"+
 			"  POSTGRES_URI (or _FILE)                   used when MIGRATION_DATABASE_URI is not configured\n")
@@ -378,6 +425,9 @@ func buildIndex(ctx context.Context, resolve ResolveDSN, env cli.Env) int {
 	defer conn.Close(context.Background())
 	logger := logging.NewJSON(env.Stderr, slog.LevelInfo)
 	result, err := BuildFailureStreakIndex(ctx, conn, options, logger)
+	if errors.Is(err, ErrBuildLockHeld) {
+		return writeError(env.Stderr, "build_index_lock_held", err.Error())
+	}
 	if err != nil {
 		return writeError(env.Stderr, "build_index_failed", boundary.Redact(err).Error())
 	}

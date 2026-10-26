@@ -76,3 +76,6 @@ func UsePlantedChain(t testing.TB, extra fs.FS) {
 func DropInvalidFailureStreakIndex(ctx context.Context, conn *pgx.Conn, options IndexBuildOptions, logger *slog.Logger) {
 	dropInvalidFailureStreakIndex(ctx, conn, options, logger)
 }
+
+// BuildIndexLockKey is the advisory lock key one build-index run holds.
+const BuildIndexLockKey = buildIndexLockKey

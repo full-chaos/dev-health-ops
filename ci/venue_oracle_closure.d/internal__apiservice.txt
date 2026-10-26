@@ -54,6 +54,7 @@ internal/auth/emaildomain
 internal/auth/httpapi
 internal/auth/identity
 internal/auth/identity/local
+internal/auth/keystore
 internal/auth/linkmail
 internal/auth/passwordhash
 internal/auth/passwordpolicy
@@ -62,6 +63,7 @@ internal/auth/requestid
 internal/auth/session
 internal/auth/sessionid
 internal/auth/signedtoken
+internal/auth/workloadexchange
 internal/chmigrate
 internal/cli
 internal/edgetokenmint
@@ -154,6 +156,7 @@ internal/testsupport/proxycapture
 internal/testsupport/pydanticecho
 internal/testsupport/usertokens
 internal/testsupport/venueoracle
+internal/token
 internal/workitemcontract
 ~internal/api/externalingest/testdata
 ~internal/api/recordvalidation/testdata

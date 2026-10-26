@@ -17,7 +17,7 @@ func TestDefaultSchedulerGroupRunsTheDhoVerb(t *testing.T) {
 		t.Fatalf("default render failed: %v\n%s", err, output)
 	}
 	rendered := string(output)
-	start := strings.Index(rendered, "name: scheduler-test-dev-health-go-scheduler\n")
+	start := strings.Index(rendered, "kind: Deployment\nmetadata:\n  name: scheduler-test-dev-health-go-scheduler\n")
 	if start < 0 {
 		t.Fatalf("no scheduler Deployment in the default render")
 	}

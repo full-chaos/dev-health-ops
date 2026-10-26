@@ -87,6 +87,7 @@ func RuntimePosture() []TablePrivilege {
 		{Table: "platform_role_assignments", Select: true, Insert: true, Delete: true},
 		{Table: "service_accounts", Select: true, Insert: true, Update: true},
 		{Table: "workloads", Select: true, Insert: true, Update: true},
+		{Table: "workload_bindings", Select: true},
 
 		// Session lifecycle.
 		{Table: "sessions", Select: true, Insert: true, Update: true, Delete: true},
@@ -247,6 +248,11 @@ func applyRuntimeGrants(ctx context.Context, conn querier, manifest []TablePrivi
 		return err
 	}
 	publicStatements = append(publicStatements, registerWrite...)
+	linkPurge, err := legacyLinkPurgeStatements(ctx, conn, options, logger)
+	if err != nil {
+		return err
+	}
+	publicStatements = append(publicStatements, linkPurge...)
 
 	tx, err := conn.Begin(ctx)
 	if err != nil {

@@ -15,7 +15,7 @@ import (
 var guardedTables = []string{
 	"auth_outbox_events", "security_audit_events", "resource_grants", "memberships",
 	"platform_role_assignments", "policy_revisions", "entitlement_snapshots",
-	"credential_registry", "service_accounts", "workloads", "external_identities",
+	"credential_registry", "service_accounts", "workloads", "workload_bindings", "external_identities",
 	"organizations", "aggregate_revisions", "signing_keys",
 }
 
@@ -197,6 +197,7 @@ var unguardedColumns = map[string]map[string]string{
 	"link_credentials": {
 		"id": "lifecycle", "created_at": "lifecycle",
 		"principal_id": "security", "purpose": "security", "token_hash": "security", "expires_at": "security", "consumed_at": "security",
+		"issued_token_version": "security",
 	},
 	"sso_flow_states": {
 		"id": "lifecycle", "protocol": "lifecycle", "provider_id": "lifecycle", "flow_hash": "lifecycle", "binding_hash": "lifecycle",

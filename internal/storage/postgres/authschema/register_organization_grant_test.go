@@ -18,7 +18,7 @@ func TestRegisterOrganizationGrantIsTheReviewedColumns(t *testing.T) {
 		t.Fatalf("RegisterOrganizationGrants = %v, want %v", got, want)
 	}
 	insert, update := UsersWriteGrant()
-	if len(insert) != 13 || len(update) != 4 {
+	if len(insert) != 13 || len(update) != 5 {
 		t.Fatalf("the public.users write grant changed: %v / %v", insert, update)
 	}
 }

@@ -93,15 +93,19 @@ type Identity struct {
 // is linked to it under audit.Commit (reason identity_projected). found is
 // false when nothing matches; a disabled principal is found with DisabledAt
 // set. A legacy user that holds another identity at the key's provider is
-// ErrProviderAlreadyLinked with that user's ID.
+// ErrProviderAlreadyLinked with that user's ID. After the cutover the legacy
+// fallback is the SSO re-link only (relinkOwned).
 func (s *Store) IdentityBySubject(ctx context.Context, issuer string, provider Provider, subject string, legacy *LegacyMatch) (Principal, bool, error) {
 	key := ExternalKey{Issuer: issuer, Provider: provider, Subject: subject}
 	if err := key.Validate(); err != nil {
 		return Principal{}, false, err
 	}
 	p, found, err := s.principalByKey(ctx, key)
-	if err != nil || found || legacy == nil || s.ownsUsers {
+	if err != nil || found || legacy == nil {
 		return p, found, err
+	}
+	if s.ownsUsers {
+		return s.relinkOwned(ctx, key, *legacy)
 	}
 	userID, found, err := s.legacyUser(ctx, key, *legacy)
 	if err != nil || !found {
@@ -252,9 +256,9 @@ type ProvisionRequest struct {
 	FullName string
 	Actor    Actor
 	// Username and LegacyFullName are the provider's own username and full
-	// name, written to public.users as go-api writes them (empty is NULL).
+	// name, written to public.users as go-api writes them (nil is NULL; Username empty is NULL).
 	Username       string
-	LegacyFullName string
+	LegacyFullName *string
 	// LegacyProvider and LegacySubject are the public.users auth_provider and
 	// auth_provider_id of an SSO account (its key's provider is a provider row
 	// id); a social key derives both from itself.

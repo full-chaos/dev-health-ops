@@ -18,6 +18,7 @@ spec:
       labels:
         {{- include "dev-health.componentSelectorLabels" (dict "component" "valkey" "context" $) | nindent 8 }}
     spec:
+      automountServiceAccountToken: false
       containers:
         - name: valkey
           image: {{ .Values.valkey.image.repository }}:{{ .Values.valkey.image.tag }}

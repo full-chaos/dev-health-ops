@@ -20,6 +20,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/callseq"
 )
 
 type flowRecorder struct {
@@ -88,6 +89,10 @@ func (a *flowAccounts) SetEmailVerified(_ context.Context, id uuid.UUID) error {
 func (a *flowAccounts) PeekResetLink(_ context.Context, hash [32]byte) (uuid.UUID, bool, error) {
 	a.rec.add("PeekResetLink")
 	id, ok := a.links.redeem[hash]
+	// The port's contract: a link of an account that is gone or of the service provider reads as not ok.
+	if user := a.byID[id]; ok && (user == nil || identity.IsServiceProvider(user.AuthProvider)) {
+		return uuid.Nil, false, nil
+	}
 	if ok && a.afterPeek != nil {
 		a.afterPeek()
 	}
@@ -125,7 +130,7 @@ type flowLinks struct {
 	redeem   map[[32]byte]uuid.UUID
 }
 
-func (l *flowLinks) Issue(_ context.Context, req IssueRequest) error {
+func (l *flowLinks) IssueBound(_ context.Context, req IssueRequest) error {
 	l.rec.add("Issue")
 	l.issued = append(l.issued, req)
 	return nil
@@ -386,6 +391,36 @@ func TestResendAndForgotMakeOneCallSequenceForEveryAddress(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A refused reset link (unknown, of a service-provider account, of an account that is gone) makes the one call
+// PeekResetLink and answers FlowInvalidToken, the same steps as an unknown link.
+func TestResetMakesOneCallSequenceForEveryRefusedLink(t *testing.T) {
+	sequences := map[string][]string{}
+	for _, name := range []string{"unknown", "service-provider", "gone"} {
+		rig := newFlowRig(t, true)
+		switch name {
+		case "service-provider":
+			provider := "service"
+			u := &User{ID: uuid.New(), IsActive: true, IsVerified: true, AuthProvider: &provider}
+			rig.accounts.byID[u.ID] = u
+			rig.grant("refused-secret", u.ID)
+		case "gone":
+			rig.grant("refused-secret", uuid.New())
+		}
+		out, err := rig.f.Reset(context.Background(), "refused-secret", "A-new-pass-77")
+		if err != nil || out.Kind != FlowInvalidToken {
+			t.Fatalf("%s: Reset = %+v, %v", name, out, err)
+		}
+		if len(rig.accounts.hashes) != 0 {
+			t.Errorf("%s: a password was written", name)
+		}
+		sequences[name] = rig.rec.names()
+	}
+	if want := []string{"PeekResetLink"}; !reflect.DeepEqual(sequences["unknown"], want) {
+		t.Fatalf("unknown link calls = %v, want %v", sequences["unknown"], want)
+	}
+	callseq.Same(t, "refused reset links", sequences)
 }
 
 func TestResetSetsPasswordRevokesEverySessionAndIsSingleUse(t *testing.T) {
@@ -743,5 +778,27 @@ func TestAChangeIssuesItsSessionInTheSameWrite(t *testing.T) {
 	out, err = rig.f.Change(context.Background(), ChangeRequest{PrincipalID: u.ID, Current: flowPassword, New: "Brand-new-pass-42"})
 	if err != nil || out.Issued == nil || len(rig.accounts.created) != 1 || len(rig.sessions.created) != 0 {
 		t.Fatalf("Change = %+v, %v, write-created %d, separate Create %d; want the session made inside the write", out, err, len(rig.accounts.created), len(rig.sessions.created))
+	}
+}
+
+func TestForgotAndResetTreatAServiceProviderAccountAsUnknown(t *testing.T) {
+	rig := newFlowRig(t, true)
+	u := rig.user("svc@example.com", true)
+	service := "service"
+	u.AuthProvider = &service
+	if err := rig.f.Forgot(context.Background(), "svc@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	iss, msg := rig.links.issued[len(rig.links.issued)-1], rig.mail.sent[len(rig.mail.sent)-1]
+	if iss.PrincipalID != uuid.Nil || msg.Deliver {
+		t.Errorf("Forgot for a service-provider account: principal set %v, deliver %v; want the unknown-address decoy", iss.PrincipalID != uuid.Nil, msg.Deliver)
+	}
+	rig.grant("svc-secret", u.ID)
+	out, err := rig.f.Reset(context.Background(), "svc-secret", "A-new-pass-77")
+	if err != nil || out.Kind != FlowInvalidToken {
+		t.Fatalf("Reset with a service-provider account's link = %+v, %v; want %s", out, err, FlowInvalidToken)
+	}
+	if len(rig.accounts.hashes) != 0 {
+		t.Errorf("a password was set: %v", rig.accounts.hashes)
 	}
 }

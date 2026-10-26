@@ -13,7 +13,7 @@ func TestQueryAPISessionReadFollowsTheSessionsFlag(t *testing.T) {
 		}
 	}
 	read, err := queryAPISessionRead(env(map[string]string{"AUTH_PROXY_SESSIONS": "true", "AUTH_DATABASE_SCHEMA": "acp"}))
-	if err != nil || read == nil || read.Schema != "acp" || read.Table != "sessions" || len(read.Columns) != 3 {
+	if err != nil || read == nil || read.Schema != "acp" || read.Table != "sessions" || len(read.Columns) != 4 {
 		t.Fatalf("flag on: %+v %v", read, err)
 	}
 	if _, err := queryAPISessionRead(env(map[string]string{"AUTH_PROXY_SESSIONS": "maybe"})); err == nil {

@@ -12,12 +12,6 @@ webImage:
   tag: ""  # defaults to Chart.appVersion
   pullPolicy: IfNotPresent
 
-# -- Service account
-serviceAccount:
-  create: true
-  name: ""
-  annotations: {}
-
 # =============================================================================
 # Go HTTP api (`dho api`, the dho operator binary)
 # =============================================================================
@@ -36,6 +30,11 @@ legacyIngest:
   sunset: ""
 goApi:
   enabled: false
+  # -- This workload's own ServiceAccount (<fullname>-go-api). automountToken stays
+  #    false until the workload calls the Kubernetes API (workload-token exchange).
+  serviceAccount:
+    annotations: {}
+    automountToken: false
   replicas: 1
   # -- CHAOS-11217: where go-api reads AUTH_SESSION_ISSUE_TOKEN (sessions on only).
   #    Empty secretName = the shared Secret. Set it to a dedicated operator-created
@@ -162,6 +161,11 @@ goApi:
 #   - signingKey.secretName/key: an Ed25519 PKCS#8 PEM private key. The service
 #     refuses any key file with a group or world mode bit (ACP-ADR-02 §3).
 authService:
+  # -- This workload's own ServiceAccount (<fullname>-auth-service). automountToken stays
+  #    false until the workload calls the Kubernetes API (workload-token exchange).
+  serviceAccount:
+    annotations: {}
+    automountToken: false
   # -- The auth cutover phase, a whole number. It is the ONLY key that turns
   #    auth-service on and moves auth routes to it; rollback is phase minus 1.
   #      0  go-api only: no auth-service.
@@ -231,6 +235,12 @@ authService:
     #    through extraEnv or extraArgs; the chart renders it as the
     #    --database-max-conns flag.
     maxConns: 8
+    # -- The connections the auth database may hold: max_connections minus
+    #    superuser_reserved_connections (Postgres defaults 100 - 3 = 97). 0
+    #    turns the check off. Above 0 the render fails when (replicas + one
+    #    surge pod) x maxConns plus every go-pgbouncer pool (one per
+    #    (user, database) pair) is more than this. A static upper bound.
+    connectionBudget: 0
   # -- The shared rate-limit store's login (AUTH_VALKEY_URI, database 1): an
   #    ACL user of its own, limited to the auth_svc_ key prefix, never go-api's.
   #    Leave secretName empty while no limited route (login, credentials,
@@ -342,7 +352,7 @@ authService:
     # -- The logins of the services that end an access token when its
     #    auth-service session is revoked (go-api's API_DATABASE_ROLE and
     #    query-api's registry login). auth-migrate grants each exactly SELECT on
-    #    sessions(id, principal_id, revoked_at) in the auth schema
+    #    sessions(id, principal_id, revoked_at, legacy_token_version) in the auth schema
     #    (AUTH_SESSION_READER_ROLES). Each must already exist. Empty grants none:
     #    a token auth-service issued is then refused by go-api and query-api.
     sessionReaderRoles: []
@@ -385,7 +395,7 @@ authService:
   #    roll: the same roll sets it false again and reads that the Job is gone.
   backfill:
     enabled: false
-    # -- users-backfill or orgs-backfill.
+    # -- users-backfill, orgs-backfill or legacy-link-purge (the last needs users owned; run it after the phase-4 rollout is complete).
     verb: ""
     # -- true: read and report, write nothing. A real run needs an explicit false.
     dryRun: true
@@ -455,6 +465,11 @@ authService:
 # render-time guard would block exactly the operators managing them correctly.
 queryApi:
   enabled: false
+  # -- This workload's own ServiceAccount (<fullname>-query-api). automountToken stays
+  #    false until the workload calls the Kubernetes API (workload-token exchange).
+  serviceAccount:
+    annotations: {}
+    automountToken: false
   replicas: 1
   # -- RollingUpdate parameters of the Deployment (CHAOS-6647). Empty keeps the
   #    chart's guarantee {maxUnavailable: 0, maxSurge: 1} (never below serving
@@ -610,6 +625,11 @@ queryApi:
 # creates only its own postgresql.credentials.user login.
 goWorkers:
   enabled: true
+  # -- This workload's own ServiceAccount (<fullname>-go-<group>). automountToken stays
+  #    false until the workload calls the Kubernetes API (workload-token exchange).
+  serviceAccount:
+    annotations: {}
+    automountToken: false
   # -- Default RollingUpdate parameters of every group's Deployment (CHAOS-6647);
   #    empty keeps {maxUnavailable: 0, maxSurge: 1}. A group's own
   #    `rollingUpdate` wins. {maxUnavailable: 1, maxSurge: 0} on a single-replica
@@ -748,8 +768,24 @@ goWorkers:
       networkPolicyCIDR: ""
     transaction:
       port: 6432
-      poolSize: 20
+      # -- Server connections of the transaction pooler's own role, and the
+      #    default for every extraUsers entry that sets no poolSize.
+      poolSize: 16
       maxClientConnections: 1000
+      # -- Rolling update of the transaction pooler Deployment (one replica).
+      #    Empty (the default) renders NO strategy key: the Kubernetes default,
+      #    25 percent, which is ONE surge pod at one replica. When the auth
+      #    connection budget is set (authService.database.connectionBudget),
+      #    that surge pod is COUNTED: it opens every transaction pool again, so
+      #    the transaction term is (poolSize + the extraUsers pools) x (1 +
+      #    maxSurge pods). Whole numbers only (maxSurge 0 to 10, maxUnavailable
+      #    0 to 10); maxSurge 0 needs maxUnavailable 1 or more and makes every
+      #    roll of the pooler an outage of its start time (one replica), so it
+      #    is not the default. Kind measurement (CHAOS-11521): the default
+      #    surge costs +18 server connections at pool 16 + KEDA 4 (one sample),
+      #    maxSurge 0 gave 3.5 times the client errors and a worker that
+      #    started in the gap crash-restarted 13 to 15 s.
+      # rollingUpdate: {}  (left unset: a default map here would replace a non-map override before the chart helper can refuse it)
       # -- Additional roles this pooler may authenticate, beyond its own
       #    RIVER_DOMAIN_DATABASE_ROLE. Each entry is
       #    {role: <postgres role>, passwordKey: <key in secret.data below>},
@@ -772,8 +808,13 @@ goWorkers:
       #    expressed in this file at all -- rotate rather than try.
       #
       #    Two costs before adding one. PgBouncer pools per (user, database)
-      #    pair, so each extra role adds up to poolSize more server connections
-      #    -- size max_connections for the sum, not for poolSize. And with
+      #    pair, so each extra role adds up to its pool size more server
+      #    connections -- size max_connections for the sum, not for poolSize.
+      #    An entry may set its own `poolSize` (a whole number of 1 or more);
+      #    without it the entry takes the transaction poolSize above. A sized
+      #    entry renders a ConfigMap with a [users] file that the pooler loads
+      #    after its generated config; the pooler pod rolls when a size changes.
+      #    And with
       #    secret.create=false the userlist.txt key must be present in the
       #    pre-created Secret too, the same way POSTGRES_URI and the two other
       #    DSNs already must be.
@@ -786,14 +827,28 @@ goWorkers:
       extraUsers:
         - role: devhealth_keda_readonly
           passwordKey: RIVER_KEDA_READONLY_PASSWORD
+          # KEDA only runs a count query against river_job.
+          poolSize: 4
     queueSession:
       port: 6433
       poolSize: 50
       maxClientConnections: 128
+      # -- Rolling update of this session pooler Deployment (one replica). Same
+      #    rules as transaction.rollingUpdate: empty renders NO strategy key (the
+      #    Kubernetes default, ONE surge pod) and the connection budget counts
+      #    that pod: poolSize x (1 + maxSurge). maxSurge 0 needs maxUnavailable
+      #    1 or more and makes each roll an outage of the pooler's start time.
+      # rollingUpdate: {}  (left unset: a default map here would replace a non-map override before the chart helper can refuse it)
     coordinatorSession:
       port: 6434
       poolSize: 14
       maxClientConnections: 32
+      # -- Rolling update of this session pooler Deployment (one replica). Same
+      #    rules as transaction.rollingUpdate: empty renders NO strategy key (the
+      #    Kubernetes default, ONE surge pod) and the connection budget counts
+      #    that pod: poolSize x (1 + maxSurge). maxSurge 0 needs maxUnavailable
+      #    1 or more and makes each roll an outage of the pooler's start time.
+      # rollingUpdate: {}  (left unset: a default map here would replace a non-map override before the chart helper can refuse it)
     resources:
       requests: {cpu: 50m, memory: 64Mi}
       limits: {cpu: 250m, memory: 256Mi}
@@ -851,9 +906,6 @@ goWorkers:
       # terminationGracePeriodSeconds above (7260s) both protect the
       # long-running metrics job from a scale-down SIGKILL.
       autoscaling: {enabled: true, minReplicas: 1, maxReplicas: 2, queueDepthPerReplica: 10, cooldownPeriod: 600, pollingInterval: 30}
-      # CHAOS-6279: bridgeUrl (formerly here, CHAOS-4351) is deleted -- the
-      # --operational-bridge-url flag it overrode no longer exists on the Go
-      # binaries (go-workers.yaml's own comment has the full history).
     - name: ops
       subcommand: worker
       queues: [coverage, heartbeat, retention, webhooks]
@@ -959,6 +1011,11 @@ goWorkers:
 # =============================================================================
 web:
   enabled: true
+  # -- This workload's own ServiceAccount (<fullname>-web). automountToken stays
+  #    false until the workload calls the Kubernetes API (workload-token exchange).
+  serviceAccount:
+    annotations: {}
+    automountToken: false
   replicas: 2
   port: 3000
   resources:
@@ -1226,10 +1283,15 @@ migrations:
     #    localBundledPostgres the Job runs on pre-upgrade only. Pass a helm --timeout above activeDeadlineSeconds.
     streakIndex:
       enabled: false
-      activeDeadlineSeconds: 3600
-      # -- lock_timeout of each build attempt, in seconds (1 to 60).
+      activeDeadlineSeconds: 2400
+      # -- lock_timeout of the table-lock probe before each attempt, in seconds (1 to 60). The waits for older
+      #    transactions are not under it: they run up to deadlineSeconds.
       lockTimeoutSeconds: 5
-      attempts: 20
+      # -- window of the whole build in seconds: CREATE/DROP INDEX CONCURRENTLY wait for older transactions up to it.
+      #    deadlineSeconds + 360 must not exceed activeDeadlineSeconds; the migrate Job (up to 1800 s) runs after
+      #    this hook inside the same helm --timeout.
+      deadlineSeconds: 1800
+      attempts: 3
       retryDelaySeconds: 15
     backoffLimit: 2
     activeDeadlineSeconds: 1800
@@ -1347,17 +1409,6 @@ config:
   #    role/DSN pattern as the three roles above; password lives under
   #    goWorkers.pgbouncer.secret.data.RIVER_KEDA_READONLY_PASSWORD.
   RIVER_KEDA_READONLY_DATABASE_ROLE: "devhealth_keda_readonly"
-  # CHAOS-6279: WORKER_OPERATIONAL_BRIDGE_URL and
-  # WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE (formerly here, CUT-04) are
-  # deleted -- CHAOS-5320 already deleted the Python HTTP bridge they
-  # pointed the Go PagerDuty stream runner at, and nothing in the Go
-  # binaries reads that config any more (confirmed by grep). The matching
-  # WORKER_OPERATIONAL_BRIDGE_TOKEN Secret key (secrets.data below) is
-  # deleted from this chart's own defaults too -- CHAOS-6240 already
-  # measured zero Python-side readers; this PR confirms zero Go-side
-  # senders left either. An operator's own override of that key, if any,
-  # is untouched (this only removes the empty placeholder default). The
-  # separate deploy repo's chart is the stacked follow-up, not this one.
   # -- Where the Python edge's dispatcher forwards an operation the routing
   #    registry assigns to the Go plane. Empty auto-computes the in-cluster
   #    query-api Service URL when queryApi.enabled; with queryApi disabled and

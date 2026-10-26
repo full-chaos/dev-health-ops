@@ -128,6 +128,9 @@ func (h handlers) verify(w http.ResponseWriter, r *http.Request) {
 // as a 500 after the lookup (a token write or mail error) is logged and counted
 // off the request, so no failure is visible to the caller.
 func (h handlers) resendVerification(w http.ResponseWriter, r *http.Request) {
+	if h.refuseWhileUsersOwned(w) {
+		return
+	}
 	email, _ := r.Context().Value(emailInputKey{}).(string)
 	ctx := r.Context()
 	generic := verifyEmailResponse("If an account exists with that email, a verification link has been sent", false)
@@ -196,6 +199,9 @@ func (h handlers) auditUserEvent(ctx context.Context, r *http.Request, tx pgx.Tx
 // decoy job. The 500 that only a known address could reach is gone (D6129,
 // stricter than Python).
 func (h handlers) forgotPassword(w http.ResponseWriter, r *http.Request) {
+	if h.refuseWhileUsersOwned(w) {
+		return
+	}
 	email, _ := r.Context().Value(emailInputKey{}).(string)
 	ctx := r.Context()
 	generic := verifyEmailResponse("If the account exists, a password reset email has been sent", false)

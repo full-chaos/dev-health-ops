@@ -50,14 +50,19 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
 {{/*
-Service account name
+Workload ServiceAccount name: <fullname>-<component>. Call with (dict "ctx" $ "component" "web").
 */}}
-{{- define "dev-health.serviceAccountName" -}}
-{{- if .Values.serviceAccount.create }}
-{{- default (include "dev-health.fullname" .) .Values.serviceAccount.name }}
-{{- else }}
-{{- default "default" .Values.serviceAccount.name }}
+{{- define "dev-health.workloadServiceAccountName" -}}
+{{- printf "%s-%s" (include "dev-health.fullname" .ctx) .component }}
 {{- end }}
+
+{{/*
+The pod-spec lines that bind a workload to its own ServiceAccount.
+Call with (dict "ctx" $ "component" "web" "cfg" .Values.web.serviceAccount).
+*/}}
+{{- define "dev-health.workloadServiceAccount" -}}
+serviceAccountName: {{ include "dev-health.workloadServiceAccountName" . }}
+automountServiceAccountToken: {{ .cfg.automountToken | default false }}
 {{- end }}
 
 {{/*
@@ -1135,4 +1140,137 @@ a bool, null or a fraction is not.
 {{- end -}}
 {{- if not $ok -}}{{- fail "authService.database.maxConns must be a whole number from 1 to 32: it is the connection pool of each auth-service replica, replicas x maxConns (plus one surge pod while rolling) is what the auth database must hold" -}}{{- end -}}
 {{- int64 $v -}}
+{{- end -}}
+
+{{/*
+The rolling-update surge of the auth-service Deployment: the one figure the
+connection budget and the Deployment strategy share.
+*/}}
+{{- define "dev-health.authMaxSurge" -}}1{{- end -}}
+
+{{/*
+authService.database.connectionBudget: the connections the release may hold on
+the auth database, that is max_connections minus superuser_reserved_connections
+(Postgres defaults 100 - 3 = 97). 0 turns the check off. Above 0 the render
+fails when
+  (authService.replicas + surge) x authService.database.maxConns
+  + every go-pgbouncer pool (one per (user, database) pair: the transaction
+    pooler counts its own role at transaction.poolSize and each
+    transaction.extraUsers entry at its own poolSize, else at the transaction
+    poolSize, ALL of them times (1 + the rollout surge pods of the transaction
+    pooler): a surge pod opens every one of those pools again; the queue-session
+    and coordinator-session poolers count poolSize x (1 + their own surge pods))
+exceeds it. Poolers count only while goWorkers and goWorkers.pgbouncer are on.
+A static upper bound: a pool holds server connections only while it needs them.
+Every pooler counts its surge pod (CHAOS-11583): rollingUpdate.maxSurge when set,
+else 1. CHAOS-11521 kind measurement: a session pooler's surge pod opened no
+server connection (the old pod keeps its clients until it is stopped, 24 to 31 s),
+so for the session poolers the count is an upper bound; the transaction pooler's
+surge pod serves new connections at once (+18 measured).
+*/}}
+{{/*
+One number the connection budget adds or multiplies: a whole number from min to
+max, else the render fails naming the key. The bound keeps the sum from
+wrapping, whether or not the schema ran (helm --skip-schema-validation).
+*/}}
+{{- define "dev-health.budgetTerm" -}}
+{{- $v := .value -}}
+{{- $ok := false -}}
+{{- if has (kindOf $v) (list "int" "int64" "float64") -}}
+{{- if eq (toString (int64 $v)) (toString $v) -}}
+{{- if and (ge (int64 $v) (int64 .min)) (le (int64 $v) (int64 .max)) -}}{{- $ok = true -}}{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- if not $ok -}}{{- fail (printf "%s must be a whole number from %d to %d when authService.database.connectionBudget is set: the budget adds it with the other pools" .key (int64 .min) (int64 .max)) -}}{{- end -}}
+{{- int64 $v -}}
+{{- end -}}
+
+{{/*
+goWorkers.pgbouncer.<pooler>.rollingUpdate (pooler: transaction, queueSession or
+coordinatorSession), validated, as a JSON object for the Deployment's
+rollingUpdate; empty when unset (no strategy key: the Kubernetes default, 25
+percent, which is one surge pod at one replica). Whole numbers only (the budget
+counts surge pods, a percentage cannot be counted) and maxSurge 0 needs
+maxUnavailable of 1 or more (Kubernetes refuses both at 0). Takes
+(dict "ctx" . "pooler" "<name>").
+*/}}
+{{- define "dev-health.pgbouncerRollingUpdate" -}}
+{{- $pooler := .pooler -}}
+{{- $ru := (get .ctx.Values.goWorkers.pgbouncer $pooler).rollingUpdate -}}
+{{- if and (not (kindIs "invalid" $ru)) (not (kindIs "map" $ru)) -}}{{- fail (printf "goWorkers.pgbouncer.%s.rollingUpdate must be a map of maxSurge and maxUnavailable, or unset" $pooler) -}}{{- end -}}
+{{- $ru = $ru | default dict -}}
+{{- if $ru -}}
+{{- $out := dict -}}
+{{- range $k := list "maxSurge" "maxUnavailable" -}}
+{{- if hasKey $ru $k -}}
+{{- $v := get $ru $k -}}
+{{- $ok := false -}}
+{{- if has (kindOf $v) (list "int" "int64" "float64") -}}
+{{- if and (eq (toString (int64 $v)) (toString $v)) (ge (int64 $v) 0) (le (int64 $v) 10) -}}{{- $ok = true -}}{{- end -}}
+{{- end -}}
+{{- if not $ok -}}{{- fail (printf "goWorkers.pgbouncer.%s.rollingUpdate.%s must be a whole number from 0 to 10: the connection budget counts surge pods, a percentage cannot be counted" $pooler $k) -}}{{- end -}}
+{{- $_ := set $out $k (int64 $v) -}}
+{{- end -}}
+{{- end -}}
+{{- range $k, $_ := $ru -}}
+{{- if not (has $k (list "maxSurge" "maxUnavailable")) -}}{{- fail (printf "goWorkers.pgbouncer.%s.rollingUpdate.%s is not a known key: use maxSurge and maxUnavailable" $pooler $k) -}}{{- end -}}
+{{- end -}}
+{{- if and (hasKey $out "maxSurge") (eq (int64 (get $out "maxSurge")) 0) (lt (int64 (default 0 (get $out "maxUnavailable"))) 1) -}}{{- fail (printf "goWorkers.pgbouncer.%s.rollingUpdate: maxSurge 0 needs maxUnavailable of 1 or more (Kubernetes refuses a rolling update that may neither surge nor remove a pod)" $pooler) -}}{{- end -}}
+{{- toJson $out -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Surge pods of a pgbouncer pooler during a rollout, the figure the budget check
+and the Deployment share: rollingUpdate.maxSurge when set, else 1 (the
+Kubernetes default of 25 percent rounds up to one pod at one replica). Takes
+(dict "ctx" . "pooler" "<name>").
+*/}}
+{{- define "dev-health.pgbouncerSurge" -}}
+{{- $j := include "dev-health.pgbouncerRollingUpdate" . -}}
+{{- if $j -}}
+{{- $ru := fromJson $j -}}
+{{- if hasKey $ru "maxSurge" -}}{{- int64 (get $ru "maxSurge") -}}{{- else -}}1{{- end -}}
+{{- else -}}1{{- end -}}
+{{- end -}}
+
+{{- define "dev-health.authConnectionBudget" -}}
+{{- $v := .Values.authService.database.connectionBudget -}}
+{{- $ok := false -}}
+{{- if has (kindOf $v) (list "int" "int64" "float64") -}}
+{{- if eq (toString (int64 $v)) (toString $v) -}}
+{{- if ge (int64 $v) 0 -}}{{- $ok = true -}}{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- if not $ok -}}{{- fail "authService.database.connectionBudget must be a whole number of 0 or more (0 = no check): the connections the auth database may hold, max_connections minus superuser_reserved_connections" -}}{{- end -}}
+{{- if gt (int64 $v) 0 -}}
+{{- $pools := 0 -}}
+{{- $txnDetail := "no go-pgbouncer pools" -}}
+{{- if and .Values.goWorkers.enabled .Values.goWorkers.pgbouncer.enabled -}}
+{{- $p := .Values.goWorkers.pgbouncer -}}
+{{- $txn := int64 (include "dev-health.budgetTerm" (dict "key" "goWorkers.pgbouncer.transaction.poolSize" "value" $p.transaction.poolSize "min" 1 "max" 1000)) -}}
+{{- $users := $txn -}}
+{{- range $u := ($p.transaction.extraUsers | default (list)) -}}
+{{- if hasKey $u "poolSize" -}}
+{{- $users = add $users (int64 (include "dev-health.budgetTerm" (dict "key" "goWorkers.pgbouncer.transaction.extraUsers[].poolSize" "value" $u.poolSize "min" 1 "max" 1000))) -}}
+{{- else -}}
+{{- $users = add $users $txn -}}
+{{- end -}}
+{{- end -}}
+{{- $queue := int64 (include "dev-health.budgetTerm" (dict "key" "goWorkers.pgbouncer.queueSession.poolSize" "value" $p.queueSession.poolSize "min" 1 "max" 1000)) -}}
+{{- $coordinator := int64 (include "dev-health.budgetTerm" (dict "key" "goWorkers.pgbouncer.coordinatorSession.poolSize" "value" $p.coordinatorSession.poolSize "min" 1 "max" 1000)) -}}
+{{- $surge := int64 (include "dev-health.pgbouncerSurge" (dict "ctx" . "pooler" "transaction")) -}}
+{{- $queueSurge := int64 (include "dev-health.pgbouncerSurge" (dict "ctx" . "pooler" "queueSession")) -}}
+{{- $coordinatorSurge := int64 (include "dev-health.pgbouncerSurge" (dict "ctx" . "pooler" "coordinatorSession")) -}}
+{{- $txnTotal := mul $users (add1 $surge) -}}
+{{- $queueTotal := mul $queue (add1 $queueSurge) -}}
+{{- $coordinatorTotal := mul $coordinator (add1 $coordinatorSurge) -}}
+{{- $pools = add $txnTotal (add $queueTotal $coordinatorTotal) -}}
+{{- $txnDetail = printf "transaction pooler pools %d x (1 + %d surge pod) = %d, queue-session pool %d x (1 + %d surge pod) = %d, coordinator-session pool %d x (1 + %d surge pod) = %d" $users $surge $txnTotal $queue $queueSurge $queueTotal $coordinator $coordinatorSurge $coordinatorTotal -}}
+{{- end -}}
+{{- $replicas := int64 (include "dev-health.budgetTerm" (dict "key" "authService.replicas" "value" .Values.authService.replicas "min" 0 "max" 100)) -}}
+{{- $direct := mul (add $replicas (int64 (include "dev-health.authMaxSurge" .))) (int64 (include "dev-health.authMaxConns" .)) -}}
+{{- $used := add $pools $direct -}}
+{{- if gt $used (int64 $v) -}}{{- fail (printf "authService.database.connectionBudget: %d connections are needed but the budget is %d: (authService.replicas %d + %d surge) x authService.database.maxConns %d = %d direct, plus %d go-pgbouncer pool connections (%s). Lower a pool or add capacity before raising the budget" $used (int64 $v) $replicas (int64 (include "dev-health.authMaxSurge" .)) (int64 (include "dev-health.authMaxConns" .)) $direct $pools $txnDetail) -}}{{- end -}}
+{{- end -}}
 {{- end -}}

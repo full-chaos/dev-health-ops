@@ -12,9 +12,10 @@ import (
 var gatedUploadWorkflows = []string{"go.yml", "go-quality.yml", "live-e2e.yml", "docker-images.yml"}
 
 var essentialUploads = map[string]string{
-	"docker-images.yml/go-build/Upload digest":           "go-merge downloads the digests to build the manifest list",
-	"docker-images.yml/go-build-dho-arm64/Upload digest": "go-merge downloads the digests to build the manifest list",
-	"docker-images.yml/go-api-tools-build/Upload digest": "go-api-tools-merge downloads the digests to build the manifest list",
+	"docker-images.yml/go-build/Upload digest":              "go-merge downloads the digests to build the manifest list",
+	"docker-images.yml/go-build-dho-arm64/Upload digest":    "go-merge downloads the digests to build the manifest list",
+	"docker-images.yml/go-api-tools-build/Upload digest":    "go-api-tools-merge downloads the digests to build the manifest list",
+	"go.yml/go-container-build/Upload the shared Go images": "smoke, the scans and the compose proofs load the images from this artifact",
 }
 
 func uploadArtifactViolations(t *testing.T, root string) []string {

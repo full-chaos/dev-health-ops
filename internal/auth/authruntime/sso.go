@@ -159,13 +159,8 @@ func (a samlIdentities) IdentityBySubject(ctx context.Context, id saml.Identity,
 		match = &identity.LegacyMatch{AuthProvider: legacy.AuthProvider, MembershipOrg: &org, Subject: legacy.Subject}
 	}
 	principal, found, err := a.store.IdentityBySubject(ctx, id.Issuer, identity.Provider(id.Provider), id.Subject, match)
-	switch {
-	case errors.Is(err, identity.ErrMultipleUsers):
-		return saml.Principal{}, false, saml.ErrIdentityAmbiguous
-	case errors.Is(err, identity.ErrLegacyNotMember):
-		return saml.Principal{}, false, saml.ErrNotOrgMember
-	case err != nil:
-		return saml.Principal{}, false, err
+	if err != nil {
+		return saml.Principal{}, false, saml.LookupError(err)
 	}
 	return saml.Principal{ID: principal.ID, Disabled: !principal.IsActive || principal.DisabledAt != nil}, found, nil
 }

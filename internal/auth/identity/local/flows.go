@@ -140,7 +140,7 @@ func (f *Flows) issueAndSend(ctx context.Context, principal uuid.UUID, purpose P
 	if err != nil {
 		return err
 	}
-	if err := f.links.Issue(ctx, IssueRequest{PrincipalID: principal, Purpose: purpose, TokenHash: hash, TTL: ttl}); err != nil {
+	if err := f.links.IssueBound(ctx, IssueRequest{PrincipalID: principal, Purpose: purpose, TokenHash: hash, TTL: ttl}); err != nil {
 		return fmt.Errorf("local: issuing a link credential: %w", err)
 	}
 	msg := Message{Purpose: purpose, To: to, FullName: name, Secret: secret, Deliver: principal != uuid.Nil}
@@ -252,7 +252,7 @@ func (f *Flows) Resend(ctx context.Context, email string) error {
 // Forgot issues a password reset link. Its result and call sequence are the
 // same for every address.
 func (f *Flows) Forgot(ctx context.Context, email string) error {
-	return f.reissue(ctx, email, PurposePasswordReset, ResetTTL, func(*User) bool { return true })
+	return f.reissue(ctx, email, PurposePasswordReset, ResetTTL, notServiceProvider)
 }
 
 func (f *Flows) reissue(ctx context.Context, email string, purpose Purpose, ttl time.Duration, eligible func(*User) bool) error {
@@ -373,3 +373,7 @@ func (f *Flows) changeLocked(ctx context.Context, req ChangeRequest) (FlowOutcom
 	}
 	return FlowOutcome{Kind: FlowOK, PrincipalID: user.ID, Issued: res.Issued}, nil
 }
+
+// notServiceProvider is Forgot's eligibility: a service-provider account (identity.IsServiceProvider) gets no reset
+// link and is answered as an unknown address.
+func notServiceProvider(u *User) bool { return !identity.IsServiceProvider(u.AuthProvider) }

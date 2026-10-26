@@ -58,10 +58,12 @@ type LegacyMatch struct {
 // FederatedAccount is a new account created from an IdP sign-in. RequestID is
 // the server-minted audit request id, nil when there is none.
 type FederatedAccount struct {
-	Key       ExternalKey
-	Email     string
-	FullName  string
-	RequestID *string
+	Key      ExternalKey
+	Email    string
+	FullName string
+	// LegacyFullName is the public.users full_name: nil is NULL.
+	LegacyFullName *string
+	RequestID      *string
 }
 
 // IdentityStore is the identity store as this flow uses it.
@@ -601,7 +603,7 @@ func (s *Service) newAccount(ctx context.Context, row Provider, v validated, req
 	org := row.OrgID
 	req := SessionRequest{OrgID: &org, Role: "member", AMR: AMR}
 	principal, tokens, err := s.cfg.MembershipJIT.ProvisionJoinAndIssue(ctx,
-		FederatedAccount{Key: v.key, Email: p.Email, FullName: p.FullName, RequestID: requestID}, org, req)
+		FederatedAccount{Key: v.key, Email: p.Email, FullName: p.FullName, LegacyFullName: p.LegacyFullName, RequestID: requestID}, org, req)
 	switch {
 	case err == nil:
 		return Login{PrincipalID: principal.ID, Email: principal.Email, OrgID: &org, Role: req.Role, Tokens: tokens}, nil

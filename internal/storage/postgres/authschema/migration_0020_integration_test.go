@@ -38,9 +38,9 @@ func m20Seed(t *testing.T, ctx context.Context, env *authFixture) {
 	}
 }
 
-func m20Workload(principal, org, name, namespace, actions string) string {
-	return `INSERT INTO auth.workloads (principal_id, organization_id, name, trust_domain, issuer, namespace, service_account_name, audience, allowed_actions)
-		VALUES ('` + principal + `', ` + org + `, '` + name + `', 'td', 'iss', '` + namespace + `', 'sa', 'aud', ` + actions + `)`
+func m20Workload(principal, org, name, _, actions string) string {
+	return `INSERT INTO auth.workloads (principal_id, organization_id, name, allowed_actions)
+		VALUES ('` + principal + `', ` + org + `, '` + name + `', ` + actions + `)`
 }
 
 // TestMigration0020GrantServiceAccountWorkloadShape: repository grants carry a

@@ -29,19 +29,16 @@ func (a StoreIdentities) storedEmail(ctx context.Context, id uuid.UUID) (string,
 
 // IdentityBySubject looks up (issuer, provider row, subject), then the go-api
 // fallback bound to the provider row's organization. More than one legacy
-// account carrying the subject, in any organization, is ErrIdentityAmbiguous;
+// account carrying the subject, in any organization, or an account that
+// already holds another subject at the provider row, is ErrIdentityAmbiguous;
 // one outside the provider organization is ErrNotOrgMember.
 func (a StoreIdentities) IdentityBySubject(ctx context.Context, key ExternalKey, legacy LegacyMatch) (Principal, error) {
 	org := legacy.MembershipOrg
 	p, found, err := a.Store.IdentityBySubject(ctx, key.Issuer, identity.Provider(key.Provider), key.Subject,
 		&identity.LegacyMatch{AuthProvider: legacy.AuthProvider, MembershipOrg: &org})
 	switch {
-	case errors.Is(err, identity.ErrMultipleUsers):
-		return Principal{}, ErrIdentityAmbiguous
-	case errors.Is(err, identity.ErrLegacyNotMember):
-		return Principal{}, ErrNotOrgMember
 	case err != nil:
-		return Principal{}, err
+		return Principal{}, lookupError(err)
 	case !found:
 		return Principal{}, ErrIdentityNotFound
 	}
@@ -50,6 +47,17 @@ func (a StoreIdentities) IdentityBySubject(ctx context.Context, key ExternalKey,
 		return Principal{}, err
 	}
 	return Principal{ID: p.ID, Email: email, Active: p.IsActive && p.DisabledAt == nil}, nil
+}
+
+// lookupError is the OIDC error for an identity store lookup error.
+func lookupError(err error) error {
+	switch {
+	case errors.Is(err, identity.ErrMultipleUsers), errors.Is(err, identity.ErrProviderAlreadyLinked):
+		return ErrIdentityAmbiguous
+	case errors.Is(err, identity.ErrLegacyNotMember):
+		return ErrNotOrgMember
+	}
+	return err
 }
 
 // EmailInUse reports whether any account holds the normalized address. It
@@ -75,7 +83,7 @@ func (a StoreIdentities) ProvisionFederated(ctx context.Context, account Federat
 	id, err := a.Store.ProvisionFederated(ctx, identity.ProvisionRequest{
 		Key:   identity.ExternalKey{Issuer: account.Key.Issuer, Provider: identity.Provider(account.Key.Provider), Subject: account.Key.Subject},
 		Email: account.Email, FullName: account.FullName, Actor: identity.SelfSignUp(account.RequestID),
-		LegacyProvider: ProviderKind, LegacySubject: account.Key.Subject, LegacyFullName: account.FullName,
+		LegacyProvider: ProviderKind, LegacySubject: account.Key.Subject, LegacyFullName: account.LegacyFullName,
 	})
 	switch {
 	case errors.Is(err, identity.ErrIdentityTaken), errors.Is(err, identity.ErrEmailTaken):
@@ -88,4 +96,13 @@ func (a StoreIdentities) ProvisionFederated(ctx context.Context, account Federat
 		return Principal{}, err
 	}
 	return Principal{ID: id, Email: email, Active: true}, nil
+}
+
+// legacyFullName is the public.users full_name of a claim-mapped name: the
+// mapping drops empty claims, so an empty name is an absent one.
+func legacyFullName(name string) *string {
+	if name == "" {
+		return nil
+	}
+	return &name
 }

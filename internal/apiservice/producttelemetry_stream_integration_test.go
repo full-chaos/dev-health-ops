@@ -43,19 +43,14 @@ func TestProductTelemetryStreamRecoversAfterAFailedFirstOpen(t *testing.T) {
 	t.Run("valkey unreachable at first", func(t *testing.T) {
 		target := strings.TrimPrefix(instance.URI, "redis://")
 		target = target[:strings.Index(target, "/")]
-		listener, err := net.Listen("tcp", "127.0.0.1:0")
-		if err != nil {
-			t.Fatal(err)
-		}
-		address := listener.Addr().String()
-		_ = listener.Close() // nothing listens: the first open is refused
+		address, _ := heldPort(t) // the first open is refused: the held socket never listens
 		streams := &producttelemetry.ValkeyStreams{URI: "redis://" + address + "/1"}
 		if err := streams.Append(ctx, "product-telemetry:b:events", fields); err == nil {
 			t.Fatal("append with Valkey unreachable succeeded")
 		}
-		proxy, err := net.Listen("tcp", address)
+		proxy, err := listenOnHeldPort(address)
 		if err != nil {
-			t.Fatalf("re-listen %s: %v", address, err)
+			t.Fatalf("listen on held %s: %v", address, err)
 		}
 		t.Cleanup(func() { _ = proxy.Close() })
 		go forward(proxy, target)

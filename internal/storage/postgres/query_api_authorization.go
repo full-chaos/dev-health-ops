@@ -159,7 +159,7 @@ type QueryAPISessionRead struct {
 
 // QueryAPISessionReadFor is the session read in the named auth schema.
 func QueryAPISessionReadFor(schema string) QueryAPISessionRead {
-	return QueryAPISessionRead{Schema: schema, Table: "sessions", Columns: []string{"id", "principal_id", "revoked_at"}}
+	return QueryAPISessionRead{Schema: schema, Table: "sessions", Columns: []string{"id", "principal_id", "revoked_at", "legacy_token_version"}}
 }
 
 // CheckQueryAPIAuthorization is query-api's readiness check when the deployment

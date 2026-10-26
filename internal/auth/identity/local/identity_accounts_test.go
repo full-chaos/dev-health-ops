@@ -44,7 +44,7 @@ func (r *recordingEnder) PeekResetLink(context.Context, [32]byte) (uuid.UUID, bo
 	return uuid.Nil, false, nil
 }
 
-func (r *recordingEnder) ConsumeResetLinkInTx(context.Context, audit.TxOps, uuid.UUID, [32]byte) error {
+func (r *recordingEnder) ConsumeBoundResetLinkInTx(context.Context, audit.TxOps, uuid.UUID, [32]byte) error {
 	r.consumed++
 	return nil
 }
@@ -95,7 +95,7 @@ func TestIdentityAccountsPassesTheHashNotThePasswordAndOneRequestID(t *testing.T
 	if _, err := acc.ProvisionLocal(ctx, ProvisionLocalRequest{Email: "a@example.com", FullName: &name, PasswordHash: "$2b$12$hash"}); err != nil {
 		t.Fatal(err)
 	}
-	if store.provisioned.PasswordHash == nil || *store.provisioned.PasswordHash != "$2b$12$hash" || store.provisioned.FullName != "Ada" {
+	if store.provisioned.PasswordHash == nil || *store.provisioned.PasswordHash != "$2b$12$hash" || store.provisioned.FullName == nil || *store.provisioned.FullName != "Ada" {
 		t.Errorf("provisioned %+v", store.provisioned)
 	}
 	if err := acc.SetEmailVerified(ctx, uuid.New()); err != nil || !store.verifiedAt.Equal(fixed) {

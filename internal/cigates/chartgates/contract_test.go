@@ -738,7 +738,7 @@ func TestContractGuardsPlantedDefects(t *testing.T) {
 		{"template-stops-rendering-the-drain-flag", chartAndManifest, mut(chartFile(workers), `printf "--shutdown-timeout=%ds"`, `printf "--drain=%ds"`), depReplicaAndDrainContract, "--shutdown-timeout="},
 		{"operator-image-stops-packaging-the-manifest", docker, mut(goDockerfile, "cp /src/deploy/go-workers/deployment.json /runtime/operator/app/deploy/go-workers/deployment.json;", "cp /src/deploy/go-workers/deployment.json /runtime/operator/app/deployment.json;"), depImagesPackageContracts, "operator image does not package"},
 		{"dho-stage-loses-its-workdir", docker, mut(goDockerfile, "/runtime/dho/ /\nWORKDIR /app\n", "/runtime/dho/ /\n"), depImagesPackageContracts, "must declare WORKDIR /app"},
-		{"pgbouncer-pool-drifts-from-the-budget", chartAndManifest, mut(chartFile("values.yaml"), "poolSize: 20", "poolSize: 21"), depPgbouncerBudgetMatchesHelm, "poolSize"},
+		{"pgbouncer-pool-drifts-from-the-budget", chartAndManifest, mut(chartFile("values.yaml"), "poolSize: 16", "poolSize: 17"), depPgbouncerBudgetMatchesHelm, "poolSize"},
 		{"migration-hook-stops-reading-the-external-secret", chartAndManifest, mutAll(chartFile(mjob), ".Values.migrations.hook.externalSecretName", ".Values.migrations.hook.extSecretName"), depMigrationWiring, "externalSecretName"},
 		{"shared-secret-schema-drops-the-forbidden-key", chartAndManifest, mut(chartFile(schema), `"required": ["MIGRATION_DATABASE_URI"]
               },`, `"required": ["MIGRATION_DATABASE_URI_NEVER"]

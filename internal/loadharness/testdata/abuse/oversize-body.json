@@ -4,7 +4,7 @@
     {
       "name": "login-oversize", "method": "POST", "path": "/api/v1/auth/login",
       "headers": {"Content-Type": "application/json"},
-      "body": "{\"email\":\"loadtest-big@example.invalid\",\"password\":\"${PAD:2097152}\"}",
+      "body": "{\"email\":\"loadtest-big@example.com\",\"password\":\"${PAD:2097152}\"}",
       "expect_status": [413], "forbid_status": [200], "forbid_5xx": true, "max_error_rate": 0, "require_status": [413]
     }
   ]

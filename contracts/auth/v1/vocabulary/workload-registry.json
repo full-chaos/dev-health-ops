@@ -1,0 +1,31 @@
+{
+  "schema_version": "workload-registry.v1",
+  "description": "The platform workloads the auth-service registry holds, seeded by auth-migrate. audiences are the audiences a workload token for that workload may carry, each an audience whose classes include workload_token (audiences.json); allowed_actions are catalog actions (actions.v1.json), never a wildcard. A row with no audience is a registry identity only and is never resolved by the exchange. Deployment bindings (trust domain, issuer, namespace, service account) differ per environment and are not in this file. No worker or billing row until one of them makes a credentialed call.",
+  "workloads": [
+    {
+      "name": "api",
+      "audiences": ["auth-service"],
+      "allowed_actions": []
+    },
+    {
+      "name": "auth-service",
+      "audiences": [],
+      "allowed_actions": []
+    },
+    {
+      "name": "acr-api",
+      "audiences": ["auth-service", "dev-health-api"],
+      "allowed_actions": []
+    },
+    {
+      "name": "web",
+      "audiences": [],
+      "allowed_actions": []
+    },
+    {
+      "name": "query-api",
+      "audiences": [],
+      "allowed_actions": []
+    }
+  ]
+}

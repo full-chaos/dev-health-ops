@@ -64,7 +64,7 @@ func TestVersionDigestKeepsThePromptCacheRowOutOfTheStoredKeys(t *testing.T) {
 	}
 }
 
-func TestPromptCacheOptIn(t *testing.T) {
+func TestLLMOrgSettingsPromptCacheOptIn(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
 		settings orgSettings

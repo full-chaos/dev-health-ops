@@ -410,6 +410,10 @@ func (h handlers) initiateSAMLAuth(w http.ResponseWriter, r *http.Request) {
 		// either way, so a caller-supplied relay_state passes through
 		// untouched here, matching the existing accepted delta.
 		if relaySet && relayState != "" {
+			if errs.RefuseSurrogate("relay_state", relayState) {
+				policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail(errs), nil)
+				return
+			}
 			params.Set("RelayState", relayState)
 		}
 	} else {

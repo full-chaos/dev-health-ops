@@ -370,8 +370,13 @@ func TestLinkTokenFormatQuirkIsBounded(t *testing.T) {
 
 // The control of the dead check: opaque mails on the owned leg are covered, so the quirk is not listed dead.
 func TestLinkTokenFormatQuirkIsNotDeadWhenTheOwnedLegMailsOpaqueTokens(t *testing.T) {
+	n := len(lines(goldenRows(t)[TableLinkMails]))
+	subjects := make([]string, n)
+	for i := range subjects {
+		subjects[i] = "Verify your email address"
+	}
 	l, _ := NewLedger(forwarded(t, "sessions,local_login,credentials"), true)
-	if problems := l.Compare(TableLinkMails, linkMailLines(LinkTokenGoAPI, linkMailSubjects...), linkMailLines(LinkTokenOpaque, linkMailSubjects...)); len(problems) != 0 {
+	if problems := l.Compare(TableLinkMails, linkMailLines(LinkTokenGoAPI, subjects...), linkMailLines(LinkTokenOpaque, subjects...)); len(problems) != 0 {
 		t.Fatal(problems)
 	}
 	if dead := strings.Join(l.Dead(), "\n"); strings.Contains(dead, "link-token-format-auth-service") {
@@ -543,5 +548,24 @@ func TestEmptyFullNameComparesExactlyOnEveryLeg(t *testing.T) {
 		if problems := stale.Compare(TableUsers, emmaGolden, emmaNull); len(problems) == 0 {
 			t.Errorf("owned=%v: an empty full name stored as NULL must be unclassified", owned)
 		}
+	}
+}
+
+// The quirk covers exactly the golden's link mails: seven of the eight rewritten rows is a failure by name, not a pass.
+func TestLinkTokenFormatQuirkFailsWhenOnlySevenOfTheGoldensMailsAreRewritten(t *testing.T) {
+	const id = "link-token-format-auth-service"
+	n := len(lines(goldenRows(t)[TableLinkMails]))
+	subjects := make([]string, n)
+	for i := range subjects {
+		subjects[i] = "Verify your email address"
+	}
+	full, _ := NewLedger(forwarded(t, "sessions,local_login,credentials"), true)
+	if problems := append(full.Compare(TableLinkMails, linkMailLines(LinkTokenGoAPI, subjects...), linkMailLines(LinkTokenOpaque, subjects...)), deadOf(full, id)...); len(problems) != 0 {
+		t.Fatalf("all %d mails rewritten: %v", n, problems)
+	}
+	seven, _ := NewLedger(forwarded(t, "sessions,local_login,credentials"), true)
+	problems := append(seven.Compare(TableLinkMails, linkMailLines(LinkTokenGoAPI, subjects[:n-1]...), linkMailLines(LinkTokenOpaque, subjects[:n-1]...)), deadOf(seven, id)...)
+	if text := strings.Join(problems, "\n"); !strings.Contains(text, id+": covered "+strconv.Itoa(n-1)+" rows") {
+		t.Fatalf("%d of %d rewritten rows must fail by name: %v", n-1, n, problems)
 	}
 }

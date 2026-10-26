@@ -3,6 +3,7 @@ package venueoracle
 import (
 	"crypto/rand"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -155,5 +156,38 @@ func TestRedactTextRemovesTheFragmentOfEveryURL(t *testing.T) {
 	}
 	if got := RedactText("https://h.example/p#frag"); !strings.HasPrefix(got, "https://h.example/p#") {
 		t.Errorf("the URL lost its path: %q", got)
+	}
+}
+
+type failingBody struct{ message string }
+
+func (b failingBody) Read([]byte) (int, error) { return 0, errors.New(b.message) }
+func (b failingBody) Close() error             { return nil }
+
+type bodyFailureTransport struct{}
+
+// RoundTrip answers 200 with a body whose read fails with an error that names the request URL, as a transport's read error can.
+func (bodyFailureTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	return &http.Response{StatusCode: 200, Header: http.Header{}, Request: request,
+		Body: failingBody{message: "read " + request.URL.String() + ": connection reset"}}, nil
+}
+
+// A body that fails in the middle of the read goes through the same redaction as the request failure: the URL it names holds a
+// query value, userinfo and a fragment, none of which reaches the failure text.
+func TestDoReportsABodyReadFailureWithoutTheQueryValueTheUserinfoOrTheFragment(t *testing.T) {
+	token, password, fragment := dummyToken(t), dummyToken(t), dummyToken(t)
+	original := noRedirects.Transport
+	noRedirects.Transport = bodyFailureTransport{}
+	t.Cleanup(func() { noRedirects.Transport = original })
+	got := fatalText(t, func(r RowsReporter) {
+		Do(r, "http://user:"+password+"@app.example.test", Request{Method: "GET", Path: "/auth/verify?token=" + token + "#access_token=" + fragment})
+	})
+	for _, secret := range []string{token, password, fragment} {
+		if strings.Contains(got, secret) {
+			t.Fatalf("the failure text holds %q: %s", secret, got)
+		}
+	}
+	if !strings.Contains(got, "/auth/verify") || !strings.Contains(got, "connection reset") {
+		t.Fatalf("the failure text lost the path or the cause: %s", got)
 	}
 }

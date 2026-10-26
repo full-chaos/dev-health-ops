@@ -2053,10 +2053,12 @@ discover_integration_tagged_tests() {
 # member skips or the reverse (a shared `-run` would run that skipped test again), and while the group's regex stays
 # within regex_max bytes (Linux refuses one argument over 128 KiB, MAX_ARG_STRLEN; every integration package of the root
 # module in one regex is about 163 KB). Receipts: SHARD-UNFILTERED <key> <file> <func> per hook package, SHARD-TEST
-# <key> <name> per selected name, and per group SHARD-GROUP <module> <n> <key>... then SHARD-REGEX <module> <regex>.
+# <key> <name> per selected name, and per group SHARD-GROUP <module> <n> <key>... then SHARD-REGEX <module> <regex>; a
+# group after the first also gets, per earlier group <g>, SHARD-SPLIT <module> <n> <key> <g> collision <name> <member>
+# or SHARD-SPLIT <module> <n> <key> <g> budget <bytes>: why its first package <key> did not join group <g>.
 run_integration_packages() {
-  local mode="$1" module_dir="$2" label="$3" pkg key name tests=0 result=0 status groups=0 group fits size names_len regex_max=60000
-  local -a unfiltered=() run_pkgs=() group_pkgs=() group_keys=() group_regex=() group_size=()
+  local mode="$1" module_dir="$2" label="$3" pkg key name tests=0 result=0 status groups=0 group fits why split_why size names_len regex_max=60000
+  local -a unfiltered=() run_pkgs=() group_pkgs=() group_keys=() group_regex=() group_size=() group_split=()
   local -a pkgs=()
   local -A selected_in=() skipped_in=() select_names=() skip_names=() seen=()
   shift 3
@@ -2103,35 +2105,39 @@ run_integration_packages() {
       printf '  SHARD-TEST %s %s\n' "${key}" "${name}"
       tests=$((tests + 1))
     done <<<"${select_names[${pkg}]}"
+    split_why=""
     for ((group = 0; group < groups; group++)); do
-      fits=1
+      fits=1 why=""
       size="${group_size[${group}]}"
       while IFS= read -r name; do
         [ -n "${name}" ] || continue
-        if [ -n "${skipped_in[${group}|${name}]+set}" ]; then fits=0; break; fi
+        if [ -n "${skipped_in[${group}|${name}]+set}" ]; then fits=0 why="collision ${name} ${skipped_in[${group}|${name}]}"; break; fi
         [ -n "${selected_in[${group}|${name}]+set}" ] || size=$((size + ${#name} + 1))
       done <<<"${select_names[${pkg}]}"
-      [ "${fits}" -eq 1 ] && [ "${size}" -le "${regex_max}" ] || continue
-      while IFS= read -r name; do
-        [ -n "${name}" ] || continue
-        if [ -n "${selected_in[${group}|${name}]+set}" ]; then fits=0; break; fi
-      done <<<"${skip_names[${pkg}]}"
+      if [ "${fits}" -eq 1 ] && [ "${size}" -gt "${regex_max}" ]; then fits=0 why="budget ${size}"; fi
+      if [ "${fits}" -eq 1 ]; then
+        while IFS= read -r name; do
+          [ -n "${name}" ] || continue
+          if [ -n "${selected_in[${group}|${name}]+set}" ]; then fits=0 why="collision ${name} ${selected_in[${group}|${name}]}"; break; fi
+        done <<<"${skip_names[${pkg}]}"
+      fi
       [ "${fits}" -eq 1 ] && break
+      split_why+="  SHARD-SPLIT ${module_dir} $((groups + 1)) ${key} $((group + 1)) ${why}"$'\n'
     done
     if [ "${group}" -eq "${groups}" ]; then
       groups=$((groups + 1))
-      group_pkgs[group]="" group_keys[group]="" group_regex[group]="" group_size[group]=4
+      group_pkgs[group]="" group_keys[group]="" group_regex[group]="" group_size[group]=4 group_split[group]="${split_why}"
     fi
     while IFS= read -r name; do
       [ -n "${name}" ] || continue
       [ -z "${selected_in[${group}|${name}]+set}" ] || continue
-      selected_in["${group}|${name}"]=1
+      selected_in["${group}|${name}"]="${key}"
       group_regex[group]+="${group_regex[${group}]:+|}${name}"
       group_size[group]=$((group_size[group] + ${#name} + 1))
     done <<<"${select_names[${pkg}]}"
     while IFS= read -r name; do
       [ -n "${name}" ] || continue
-      skipped_in["${group}|${name}"]=1
+      [ -n "${skipped_in[${group}|${name}]+set}" ] || skipped_in["${group}|${name}"]="${key}"
     done <<<"${skip_names[${pkg}]}"
     group_pkgs[group]+="${pkg}"$'\n'
     group_keys[group]+=" ${key}"
@@ -2142,6 +2148,7 @@ run_integration_packages() {
     group_regex[group]="^(${group_regex[${group}]})\$"
     printf '  SHARD-GROUP %s %d%s\n' "${module_dir}" "$((group + 1))" "${group_keys[${group}]}"
     printf '  SHARD-REGEX %s %s\n' "${module_dir}" "${group_regex[${group}]}"
+    printf '%s' "${group_split[${group}]}"
   done
   [ "${mode}" != "--dry-run" ] || return 0
   # Every go test goes through run_integration_go_test (one reaped testcontainers session per call); -run rides in run_pkgs.

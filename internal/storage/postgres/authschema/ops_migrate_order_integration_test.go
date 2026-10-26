@@ -546,8 +546,9 @@ func TestGrantsModeFailsClosedAndApplyDefersAnAbsentManifestColumn(t *testing.T)
 	if !strings.Contains(logs, "DEFERRED") || !strings.Contains(logs, "sso_provider_id") {
 		t.Fatalf("Apply at 0154 did not report the sso_provider_id grant as DEFERRED:\n%s", logs)
 	}
-	if err := f.grantsPass(t, "auth"); err == nil || !strings.Contains(err.Error(), "public.users.sso_provider_id") {
-		t.Fatalf("grants pass at ops revision 0154 = %v, want a failure naming public.users.sso_provider_id", err)
+	err = f.grantsPass(t, "auth")
+	if !errors.Is(err, ErrPublicColumnMissing) || !strings.Contains(err.Error(), "public.users.sso_provider_id") {
+		t.Fatalf("grants pass at ops revision 0154 = %v, want ErrPublicColumnMissing naming public.users.sso_provider_id", err)
 	}
 }
 

@@ -349,9 +349,10 @@ func publicTableState(ctx context.Context, conn rowQuerier1, table string) (exis
 // not exist (an auth-only database) is skipped and logged by name;
 // VerifyRuntimePosture requires the grants as soon as it does exist. A manifest
 // column that does not exist yet (a schema before the ops revision that adds
-// it) is skipped and logged as DEFERRED, never an error: the grants pass after
-// ops migrate grants it, and VerifyRuntimePosture holds it PENDING until the
-// column exists and FAILS once it exists without the grant. They run
+// it) is skipped and logged as DEFERRED by Apply: the grants pass after ops
+// migrate grants it, and VerifyRuntimePosture holds it PENDING until the column
+// exists and FAILS once it exists without the grant. The grants pass itself
+// (RequirePublicTables) refuses an absent column, naming it. They run
 // inside applyRuntimeGrants' transaction, so a privilege they would remove is a
 // narrowing that needs the same acknowledgement as any other.
 //
@@ -391,6 +392,9 @@ func publicReadStatements(ctx context.Context, conn querier, options Options, lo
 			present, err := publicColumnExists(ctx, conn, entry.Table, name)
 			if err != nil {
 				return nil, err
+			}
+			if !present && options.RequirePublicTables {
+				return nil, fmt.Errorf("%w: %s.%s.%s", ErrPublicColumnMissing, publicSchema, entry.Table, name)
 			}
 			if !present {
 				logger.WarnContext(ctx, "public read grant DEFERRED: the column does not exist yet",

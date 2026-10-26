@@ -199,7 +199,7 @@ full-chaos/dev-health-ops	docs/use/troubleshooting/stale-or-delayed-results.md	m
 full-chaos/dev-health-ops	external://dev-health-docs.fullchaos.workers.dev	external-gap	gap-unverified						cross-repository-or-runtime			False	False							The live Workers preview requires a URL, header, redirect, search, and publication-state crawl outside the repository inventory.
 full-chaos/dev-health-ops	mkdocs.yml	configuration	supporting-artifact						documentation-system			False	False							
 full-chaos/dev-health-ops	requirements-docs.txt	configuration	supporting-artifact						documentation-system			False	False							
-full-chaos/dev-health-ops	scripts/build_docs_cloudflare.py	tooling	supporting-artifact						documentation-system			False	False							
+full-chaos/dev-health-ops	internal/cigates/docsbuild/docsbuild.go	tooling	supporting-artifact						documentation-system			False	False							
 full-chaos/dev-health-ops	internal/cigates/docstools/dc_links.go	tooling	supporting-artifact						documentation-system			False	False							
 full-chaos/dev-health-ops	internal/cigates/docstools/dc_a11y.go	tooling	supporting-artifact						documentation-system			False	False							
 full-chaos/dev-health-ops	internal/cigates/docstools/candidatefacts.go	tooling	supporting-artifact						documentation-system			False	False							

@@ -44,6 +44,8 @@ type Principal struct {
 	ID     uuid.UUID
 	Email  string
 	Active bool
+	// ServiceProvider is a principal of the service provider: it never signs in.
+	ServiceProvider bool
 }
 
 // LegacyMatch scopes the fallback to accounts go-api signed in before the
@@ -553,7 +555,7 @@ func (s *Service) resolve(ctx context.Context, row Provider, v validated, reques
 	default:
 		return Login{}, internal(ReasonStoreUnavailable, err)
 	}
-	if !principal.Active {
+	if !principal.Active || principal.ServiceProvider {
 		return Login{}, deny(http.StatusForbidden, ReasonPrincipalDeactivated, "User account is disabled")
 	}
 

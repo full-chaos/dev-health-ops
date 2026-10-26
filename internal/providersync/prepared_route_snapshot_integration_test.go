@@ -551,15 +551,13 @@ INSERT INTO public.alembic_version (version_num) VALUES ('0093')`); err != nil {
 	}
 	// Unique-per-call names (above) removed the old collision-avoidance
 	// side effect that used to bound this role's lifetime: two runs never
-	// share a name anymore, so nothing before this line ever exercises the
-	// leading "DROP ROLE IF EXISTS" for real, and without an explicit
+	// share a name anymore, and without an explicit
 	// cleanup this role becomes a permanent, unbounded addition to the
 	// shared cluster (CHAOS-4661 follow-up). DropRole runs DROP OWNED BY
 	// before DROP ROLE so it succeeds against this role's own GRANTs
 	// (below) rather than failing "some objects depend on it".
 	defer containers.DropRole(ownerPool, role, t.Logf)
 	for _, statement := range []string{
-		`DROP ROLE IF EXISTS ` + role,
 		`CREATE ROLE ` + role + ` LOGIN PASSWORD 'probe'`,
 		`GRANT USAGE ON SCHEMA public TO ` + role,
 		`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ` + role,

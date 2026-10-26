@@ -18,8 +18,10 @@ lifecycle: active
 # Deploy the Auth Control Plane (Compose and Kubernetes)
 
 Both deployments are **dormant by default**: nothing starts unless you ask for
-it, and removing it changes no other service. The service answers only its
-operator surface; see the [architecture](auth-control-plane-architecture.md).
+it, and removing it changes no other service. Without the session keys the
+service answers only its operator surface, the refresh and logout 503 stubs, the
+well-known routes when a token issuer URL is set, and the workload exchange when
+it is on; see the [architecture](auth-control-plane-architecture.md).
 {: .fc-page-lede }
 
 ## Images
@@ -129,6 +131,8 @@ previous revision; a rollback has the mirror window. With such a release those
 pods answer 503 and `Retry-After` (a retryable answer that writes nothing);
 without it they answer 404. The commit floor of the running auth-service image:
 
+- before phase 1 to 2 and before the rollback from phase 2 to 1 (refresh and
+  logout are forwarded): at or after ca70438e;
 - before phase 2 to 3 (local login is forwarded): at or after c4d3aa6d;
 - before phase 3 to 4 (the credential routes are forwarded) and before the
   rollback from phase 4 to 3: at or after 676930d8, which c4d3aa6d includes.

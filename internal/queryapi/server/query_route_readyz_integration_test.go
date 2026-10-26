@@ -90,7 +90,10 @@ func TestReadyz_BothDependenciesReachable_ThenClickHouseDiesAfterStartup(t *test
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 
-	ch, err := containers.StartClickHouse(ctx)
+	// Isolated: the outage below is a real server stop (Close terminates the
+	// container). On a shared server Close only drops a database and the
+	// server stays up for the neighbouring tests.
+	ch, err := containers.StartClickHouseIsolated(ctx)
 	if err != nil {
 		t.Fatalf("start ClickHouse test dependency: %v", err)
 	}

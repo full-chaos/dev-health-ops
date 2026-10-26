@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
@@ -70,7 +71,7 @@ func workloadExchange(lookup secrets.LookupEnv, tokenIssuerURL string) (Workload
 		*field.into = value
 	}
 	out.KubeAPIURL = valueOf(lookup, EnvWorkloadKubeAPIURL)
-	if err := httpsOrigin(out.KubeAPIURL); err != nil {
+	if err := HTTPSOrigin(out.KubeAPIURL); err != nil {
 		return WorkloadExchange{}, fmt.Errorf("%s=true needs %s: an https origin with no path, query or credentials",
 			EnvWorkloadExchange, EnvWorkloadKubeAPIURL)
 	}
@@ -90,18 +91,31 @@ func workloadExchange(lookup secrets.LookupEnv, tokenIssuerURL string) (Workload
 	return out, nil
 }
 
-// httpsOrigin accepts only "https://host[:port]" with at most one trailing
+// HTTPSOrigin accepts only "https://host[:port]" with at most one trailing
 // slash: the value must equal its own scheme and host, so a path, a query (a
-// bare "?" included), a fragment, userinfo or an empty port ("host:") is
-// refused.
-func httpsOrigin(raw string) error {
+// bare "?" included), a fragment or userinfo is refused, and a port, when
+// present, is 1 to 65535 in decimal digits (an empty port "host:" is
+// refused). It is the one origin rule of the workload exchange: its config
+// check and its TokenReview client both call it.
+func HTTPSOrigin(raw string) error {
 	parsed, err := url.Parse(raw)
-	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || strings.HasSuffix(parsed.Host, ":") {
-		return errors.New("not an https origin")
+	if err != nil || parsed.Scheme != "https" || parsed.Hostname() == "" {
+		return errNotHTTPSOrigin
 	}
 	origin := "https://" + parsed.Host
 	if raw != origin && raw != origin+"/" {
-		return errors.New("not an https origin")
+		return errNotHTTPSOrigin
+	}
+	if strings.HasSuffix(parsed.Host, ":") {
+		return errNotHTTPSOrigin
+	}
+	if port := parsed.Port(); port != "" {
+		n, err := strconv.Atoi(port)
+		if err != nil || n < 1 || n > 65535 || strconv.Itoa(n) != port {
+			return errNotHTTPSOrigin
+		}
 	}
 	return nil
 }
+
+var errNotHTTPSOrigin = errors.New("not an https origin")

@@ -136,6 +136,7 @@ on:
       # oracle registries): globs, so a new one never edits this list (CHAOS-10300)
       - 'ci/*.tsv'
       - 'ci/*.awk'
+      - 'ci/security_fresh_packages.txt'
       - 'ci/*.d/**'
       # CHAOS-6926: the per-package venue weights the legs are balanced by.
       # CHAOS-6690: the go-quality race shards read these; a change to either
@@ -182,6 +183,8 @@ on:
       - 'docs-data/external-link-allowlist.yml'
       # file names internal/cigates/docstools (validate-inventory-review) names; no Go test reads these files
       - 'docs-data/inventory/**'
+      # internal/cigates/docsbuild names docs-data/redirects.tsv and docs-data/search-acceptance.json, the inputs of the docs build
+      - 'docs-data/**'
       - 'ci/check_migration_matrix.sh'
       - 'ci/check_migration_matrix_test.sh'
       - 'ci/go_worker_fixture_test.sh'

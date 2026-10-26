@@ -113,10 +113,17 @@ func TestRuntimeLoginKeyOnMountsRealHandler(t *testing.T) {
 	}
 }
 
-func TestRuntimeSessionDisabledStillAnswersNotFound(t *testing.T) {
+func TestRuntimeSessionDisabledMountsOnlyTheRefreshLogoutStubs(t *testing.T) {
 	routes, err := sessionRoutes(authconfig.Config{}, slog.New(slog.NewTextHandler(io.Discard, nil)), nil, authschema.ValidatedIdentifier{}, nil, nil)
-	if err != nil || len(routes) != 0 {
-		t.Fatalf("routes %d err %v; want none", len(routes), err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, route := range routes {
+		got = append(got, route.Method+" "+route.Pattern)
+	}
+	if want := "POST /api/v1/auth/refresh,POST /api/v1/auth/logout"; strings.Join(got, ",") != want {
+		t.Fatalf("routes %v; want exactly %s", got, want)
 	}
 }
 

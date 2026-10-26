@@ -7,13 +7,13 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"strings"
 	"time"
 
 	"github.com/full-chaos/dev-health-go/authverify"
 
+	"github.com/full-chaos/dev-health-ops/internal/auth/authconfig"
 	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 )
 
@@ -45,7 +45,7 @@ type ReviewConfig struct {
 // at every step. The subject token is authenticated by the API server alone;
 // nothing here decodes it.
 func NewReviewValidator(cfg ReviewConfig) (authverify.SubjectTokenValidator, error) {
-	if !isHTTPSOrigin(cfg.APIServerURL) {
+	if authconfig.HTTPSOrigin(cfg.APIServerURL) != nil {
 		return nil, errors.New("workloadexchange: the API server URL must be an https origin")
 	}
 	if cfg.CAFile == "" || cfg.ReviewerTokenFile == "" || strings.TrimSpace(cfg.TrustDomain) == "" {
@@ -89,19 +89,6 @@ func reviewHTTPClient(roots *x509.CertPool) *http.Client {
 		IdleConnTimeout:       90 * time.Second,
 	}
 	return httpguard.NoRedirects(&http.Client{Transport: transport, Timeout: ReviewCallTimeout})
-}
-
-// isHTTPSOrigin accepts only "https://host[:port]" with at most one trailing
-// slash: the URL must equal its own scheme and host, so no path, query (a
-// bare "?" included), fragment, userinfo or empty port ("host:") can move the
-// TokenReview path.
-func isHTTPSOrigin(raw string) bool {
-	parsed, err := url.Parse(raw)
-	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || strings.HasSuffix(parsed.Host, ":") {
-		return false
-	}
-	origin := "https://" + parsed.Host
-	return raw == origin || raw == origin+"/"
 }
 
 var errReviewerToken = errors.New("workloadexchange: the reviewer token is unavailable")

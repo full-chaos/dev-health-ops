@@ -12,8 +12,8 @@ Reader-facing documentation guidance lives under
 | Path | Consumed by |
 | --- | --- |
 | `ia/*.tsv` | `scripts/validate_docs_ia_v2.py`, `cigate docs validate-publication`, `cigate docs validate-inventory-review` |
-| `redirects.tsv` | `cigate docs validate-publication`, `scripts/build_docs_cloudflare.py`, `.github/workflows/docs-cloudflare.yml` |
-| `search-acceptance.json` | `cigate docs check-docs-search` (`internal/cigates/docstools`) via `.github/workflows/docs-guards.yml`, `scripts/build_docs_cloudflare.py` |
+| `redirects.tsv` | `cigate docs validate-publication`, `cigate docs-build` (`internal/cigates/docsbuild`), `.github/workflows/docs-cloudflare.yml` |
+| `search-acceptance.json` | `cigate docs check-docs-search` (`internal/cigates/docstools`) via `.github/workflows/docs-guards.yml`, `cigate docs-build` (`internal/cigates/docsbuild`) |
 | `inventory/` | `cigate docs validate-inventory-review` via `.github/workflows/docs-inventory-review.yml` (a frozen Phase 1 snapshot: its generator is deleted) |
 | `freshness-inventory.yml` | `cigate docs check-freshness` (`make docs:check-freshness`, `.github/workflows/docs-guards.yml`) |
 | `external-link-allowlist.yml` | `cigate docs check-external-links` (`make docs:check-external-links`, `.github/workflows/docs-health-report.yml`) |

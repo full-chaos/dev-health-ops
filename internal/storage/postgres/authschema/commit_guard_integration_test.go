@@ -197,6 +197,7 @@ var unguardedColumns = map[string]map[string]string{
 	"link_credentials": {
 		"id": "lifecycle", "created_at": "lifecycle",
 		"principal_id": "security", "purpose": "security", "token_hash": "security", "expires_at": "security", "consumed_at": "security",
+		"issued_token_version": "security",
 	},
 	"sso_flow_states": {
 		"id": "lifecycle", "protocol": "lifecycle", "provider_id": "lifecycle", "flow_hash": "lifecycle", "binding_hash": "lifecycle",
@@ -314,8 +315,8 @@ func TestTruncateAndSecurityColumnWritesAreRefusedOutsideCommit(t *testing.T) {
 
 	var session string
 	if err := env.admin.QueryRow(ctx, `
-		INSERT INTO auth.sessions (principal_id, token_hash, expires_at)
-		VALUES ($1, '\xdeadbeef'::bytea, now() + interval '1 hour') RETURNING id::text`, principal).Scan(&session); err != nil {
+		INSERT INTO auth.sessions (principal_id, token_hash, expires_at, legacy_token_version)
+		VALUES ($1, '\xdeadbeef'::bytea, now() + interval '1 hour', 0) RETURNING id::text`, principal).Scan(&session); err != nil {
 		t.Fatalf("seed session: %v", err)
 	}
 	if _, err := env.admin.Exec(ctx, `UPDATE auth.sessions SET last_seen_at = now() WHERE id = $1`, session); err != nil {

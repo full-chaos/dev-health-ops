@@ -713,10 +713,10 @@ func TestFlagsOverrideTheEnvironment(t *testing.T) {
 	}
 }
 
-// TestRoutesAreEmptyWithoutTheSessionSecrets is the dormancy assertion at the
-// call site: without the session secrets the service mounts nothing
-// (CHAOS-4881), and with them the four session routes (CHAOS-10228) and
-// go-api's compatibility routes, login too with the lockout key.
+// TestRoutesAreEmptyWithoutTheSessionSecrets is the assertion at the call site:
+// without the session secrets the service mounts only the refresh and logout
+// stubs, and with them the four session routes and go-api's compatibility
+// routes, login too with the lockout key.
 // A route mounted any other way is a deliberate change this test names.
 func TestRoutesAreEmptyWithoutTheSessionSecrets(t *testing.T) {
 	schema, err := authschema.NewValidatedIdentifier("auth")
@@ -731,8 +731,8 @@ func TestRoutesAreEmptyWithoutTheSessionSecrets(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
 	dormant, err := sessionRoutes(authconfig.Config{}, logger, pool, schema, nil, nil)
-	if err != nil || len(dormant) != 0 {
-		t.Fatalf("without the session secrets: %d route(s), err %v; want none", len(dormant), err)
+	if err != nil || len(dormant) != 2 {
+		t.Fatalf("without the session secrets: %d route(s), err %v; want the 2 refresh and logout stubs", len(dormant), err)
 	}
 
 	load := func(env func(map[string]string) map[string]string) authconfig.Config {
@@ -877,6 +877,47 @@ func TestTheAuthServiceScrapeRegistersTheRateLimitCounters(t *testing.T) {
 		if !bytes.Contains(body, []byte(line)) {
 			t.Errorf("operator /metrics lacks %q\n%s", line, body)
 		}
+	}
+	if code := stop(); code != 0 {
+		t.Fatalf("Execute exited %d, want 0", code)
+	}
+}
+
+// TestOneOperatorScrapeCarriesTheRateLimitAlertSeries: with a limited route
+// mounted, ONE scrape of the operator port carries the store-error counter at
+// zero for an auth_svc_ limiter and the valkey readiness check, the two series
+// the auth_service_rate_limit alerts read. The store is unreachable on purpose:
+// the check series exists either way.
+func TestOneOperatorScrapeCarriesTheRateLimitAlertSeries(t *testing.T) {
+	ports := reservePorts(t, 2)
+	apiAddress, operatorAddress := ports[0], ports[1]
+	env := sessionEnvironment(brokenEnvironment(t, apiAddress, operatorAddress))
+	_, stop := runService(t, env)
+	client := &http.Client{Timeout: 10 * time.Second}
+	defer client.CloseIdleConnections()
+
+	counter := regexp.MustCompile(`(?m)^dev_health_api_rate_limit_store_errors_total\{limit="auth_svc_[a-z_]+"\} 0$`)
+	check := regexp.MustCompile(`(?m)^dev_health_runtime_check_failed\{check="valkey"\} [01]$`)
+	var body []byte
+	deadline := time.Now().Add(20 * time.Second)
+	for {
+		scrape := awaitResponse(t, client, "http://"+operatorAddress+"/metrics")
+		var err error
+		body, err = io.ReadAll(scrape.Body)
+		_ = scrape.Body.Close()
+		if err != nil {
+			t.Fatalf("read /metrics: %v", err)
+		}
+		if (counter.Match(body) && check.Match(body)) || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if !counter.Match(body) {
+		t.Errorf("one operator scrape carries no zero store-error sample for an auth_svc_ limiter\n%s", body)
+	}
+	if !check.Match(body) {
+		t.Errorf("one operator scrape carries no valkey readiness check series\n%s", body)
 	}
 	if code := stop(); code != 0 {
 		t.Fatalf("Execute exited %d, want 0", code)

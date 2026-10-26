@@ -85,6 +85,7 @@ func checkContractEnv(value string, set bool) error {
 
 func migrate(ctx context.Context, t *testing.T, instance *containers.Instance, baseline chmigrate.Baseline) {
 	t.Helper()
+	defer containers.TimePhase("schema", "clickhouse", "")()
 	if instance == nil {
 		t.Fatal("chschema: no ClickHouse instance")
 	}

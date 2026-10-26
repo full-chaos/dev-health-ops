@@ -116,7 +116,7 @@ JOIN `+l.q+`.users u ON u.principal_id = c.principal_id
 JOIN `+l.q+`.principals p ON p.id = c.principal_id
 LEFT JOIN public.users pu ON pu.id = c.principal_id
 WHERE c.token_hash = $1 AND c.purpose = $2 AND c.consumed_at IS NULL AND c.expires_at > now()
-  AND NOT `+identity.ServiceProviderSQL("pu"), tokenHash[:], string(PurposePasswordReset)).Scan(&principal)
+  AND NOT `+identity.ServiceProviderSQL("pu")+boundToLiveTokenVersion, tokenHash[:], string(PurposePasswordReset)).Scan(&principal)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return uuid.Nil, false, nil
 	}

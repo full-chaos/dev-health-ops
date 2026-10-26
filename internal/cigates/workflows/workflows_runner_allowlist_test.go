@@ -264,17 +264,10 @@ func runnerAllowlistViolations(t *testing.T, root string) []string {
 		}
 	}
 
-	// the docker-images go-build linux/arm64 matrix leg
+	// the docker-images go-build linux/arm64 leg: no matrix include supplies the runner (CHAOS-11516), runs-on routes it
 	if j, ok := job("docker-images.yml", "go-build"); ok {
-		var arm []yamlMap
-		for _, e := range asList(asMap(asMap(j["strategy"])["matrix"])["include"]) {
-			if m := asMap(e); asString(m["platform"]) == "linux/arm64" {
-				arm = append(arm, m)
-			}
-		}
-		if len(arm) != 1 {
-			add("docker-images.yml:go-build: expected exactly one linux/arm64 matrix include entry, found %d", len(arm))
-		} else if got := str(arm[0]["runner"]); got != imageRoutingTernary {
+		want := "${{ matrix.platform == 'linux/arm64' && " + strings.TrimPrefix(imageRoutingTernary, "${{ ")
+		if got := str(j["runs-on"]); got != want {
 			add("docker-images.yml:go-build's linux/arm64 matrix runner does not EXACTLY match the routing ternary: got %q", got)
 		}
 	}
@@ -377,7 +370,7 @@ func TestSelfHostedRunnerAllowlistPlantedDefects(t *testing.T) {
 		{"hosted twin stops being the literal negation", []mutation{{goYml, "go-container-reproducibility:\n", "go-container-reproducibility:\n    # planted\n"}, {goYml, "!(vars.SELF_HOSTED_RUNNERS == 'enabled'", "(vars.SELF_HOSTED_RUNNERS != 'enabled'"}}, []string{"literal negation"}},
 		{"setup-go cache negation loses its negation", []mutation{{test_, "cache: ${{ !(vars.SELF_HOSTED_RUNNERS", "cache: ${{ (vars.SELF_HOSTED_RUNNERS"}}, []string{"cache negation does not EXACTLY match"}},
 		{"cache-path step gets a prepended disjunct", []mutation{{test_, "if: vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request'", "if: github.event_name == 'merge_group' || vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request'"}}, []string{"Configure self-hosted Go cache paths", "does not EXACTLY match the expected condition"}},
-		{"docker arm64 matrix runner is hosted-only", []mutation{{dock, "runner: ${{ ((vars.SELF_HOSTED_IMAGE_BUILDS", "runner: ${{ (vars.SELF_HOSTED_RUNNERS != 'enabled' && (vars.SELF_HOSTED_IMAGE_BUILDS"}}, []string{"linux/arm64 matrix runner"}},
+		{"docker arm64 matrix runner is hosted-only", []mutation{{dock, "runs-on: ${{ matrix.platform == 'linux/arm64' && ((vars.SELF_HOSTED_IMAGE_BUILDS", "runs-on: ${{ matrix.platform == 'linux/arm64' && (vars.SELF_HOSTED_RUNNERS != 'enabled' && (vars.SELF_HOSTED_IMAGE_BUILDS"}}, []string{"linux/arm64 matrix runner"}},
 		{"a draft-gated job is renamed away", []mutation{{secscn, "  semgrep:\n", "  semgrep-renamed:\n"}}, []string{"security-scan.yml", "semgrep"}},
 	}
 	for _, c := range cases {

@@ -1,6 +1,7 @@
 package workflows_test
 
 import (
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"path/filepath"
@@ -42,7 +43,17 @@ func stripYAMLComments(text string) string {
 
 func publishedTargets(doc yamlMap, job string) []string {
 	var out []string
-	for _, x := range asList(asMap(asMap(asMap(jobsOf(doc)[job])["strategy"])["matrix"])["target"]) {
+	axis := asMap(asMap(asMap(jobsOf(doc)[job])["strategy"])["matrix"])["target"]
+	if expr, ok := axis.(string); ok {
+		// CHAOS-11516: go-build's target is fromJSON(<queue canary> || <the whole publish list>); the publish list is what counts here.
+		if m := regexp.MustCompile(`\|\| '(\[[^']*\])'\) \}\}$`).FindStringSubmatch(strings.TrimSpace(expr)); m != nil {
+			var list []any
+			if json.Unmarshal([]byte(m[1]), &list) == nil {
+				axis = list
+			}
+		}
+	}
+	for _, x := range asList(axis) {
 		out = append(out, asString(x))
 	}
 	sort.Strings(out)
@@ -173,7 +184,7 @@ func TestGoImagePublishingPlantedDefects(t *testing.T) {
 		muts []mutation
 		want []string
 	}{
-		{"a gate target is missing from the build matrix", []mutation{{publishWorkflow, "          - auth-migrate\n        platform:", "        platform:"}}, []string{"go-build publish matrix", "ALL_TARGETS"}},
+		{"a gate target is missing from the build matrix", []mutation{{publishWorkflow, ",\"auth-migrate\"]') }}\n        platform:", "]') }}\n        platform:"}}, []string{"go-build publish matrix", "ALL_TARGETS"}},
 		{"a built target is never merged", []mutation{{publishWorkflow, "          - auth-migrate\n    steps:", "    steps:"}}, []string{"go-merge matrix", "never merged"}},
 		{"a renderer names an unpublished image", []mutation{{values, "ghcr.io/full-chaos/dev-health-go-dho", "ghcr.io/full-chaos/dev-health-go-ghost"}}, []string{"never publishes", "ghost"}},
 		{"a renderer's active image is swapped while a stale comment still names the Go image", []mutation{{"deploy/go-api/compose-query-api.yml", "ghcr.io/full-chaos/dev-health-go-dho:local}", "docker.io/library/busybox:latest}"}}, []string{"deploy/go-api/compose-query-api.yml no longer names a Go image"}},

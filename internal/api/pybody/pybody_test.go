@@ -1,6 +1,7 @@
 package pybody
 
 import (
+	"encoding/json"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pydanticecho"
 	"net/http"
 	"net/http/httptest"
@@ -274,4 +275,42 @@ func objectWithV(value string) *pyjson.Object {
 	object := pyjson.NewObject()
 	object.Set("v", value)
 	return object
+}
+
+func TestUTF8StringRefusesLoneSurrogateEvenUnbounded(t *testing.T) {
+	for _, lone := range []rune{0xd800, 0xdbff, 0xdc00, 0xdfff} {
+		object := objectWithV(pyjson.FromRunes([]rune{'a', lone}))
+		var errs Errors
+		if _, present := errs.OptionalUTF8String(object, "v"); present || len(errs) != 1 || errs[0].Type != "string_unicode" ||
+			len(errs[0].Loc) != 2 || errs[0].Loc[0] != "body" || errs[0].Loc[1] != "v" {
+			t.Errorf("%U: present=%v errs=%+v", lone, present, errs)
+		}
+	}
+	for _, ok := range []string{"", "plain", "Ünï 名前", "\U0001F600", "a\x00b"} {
+		var errs Errors
+		if text, present := errs.OptionalUTF8String(objectWithV(ok), "v"); !present || len(errs) != 0 || text != ok {
+			t.Errorf("%q: %q present=%v errs=%+v", ok, text, present, errs)
+		}
+	}
+	var errs Errors
+	if _, present := errs.OptionalUTF8String(pyjson.NewObject(), "v"); present || len(errs) != 0 {
+		t.Errorf("absent: present=%v errs=%+v", present, errs)
+	}
+	number := pyjson.NewObject()
+	number.Set("v", int64(5))
+	if _, present := errs.OptionalUTF8String(number, "v"); present || len(errs) != 1 || errs[0].Type != "string_type" {
+		t.Errorf("int: %+v", errs)
+	}
+}
+
+func TestUTF8StringDetailDoesNotEchoTheInput(t *testing.T) {
+	var errs Errors
+	errs.OptionalUTF8String(objectWithV(pyjson.FromRunes([]rune{'s', 'e', 'c', 'r', 'e', 't', 0xd800})), "v")
+	raw, err := json.Marshal(Detail(errs))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "secret") || !strings.Contains(string(raw), `"string_unicode"`) {
+		t.Fatalf("detail: %s", raw)
+	}
 }

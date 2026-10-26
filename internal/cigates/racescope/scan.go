@@ -348,7 +348,7 @@ func goFilesOf(p *goPackage, tests bool) []string {
 	return files
 }
 
-func scanPackage(p *goPackage, tests bool, modpath string, listed map[string]*goPackage, ts typeStore, loadErrs map[string][]string) []string {
+func scanPackage(p *goPackage, tests bool, modpath string, ts typeStore, loadErrs map[string][]string) []string {
 	var out []string
 	if p.Error != nil {
 		out = append(out, "go list reports an error for the package: "+strings.TrimSpace(p.Error.Err))
@@ -366,8 +366,8 @@ func scanPackage(p *goPackage, tests bool, modpath string, listed map[string]*go
 		imports = append(append(imports, p.TestImports...), p.XTestImports...)
 	}
 	for _, imp := range imports {
-		if (imp == modpath || strings.HasPrefix(imp, modpath+"/")) && listed[imp] == nil {
-			out = append(out, "imports "+imp+", an in-module path the scan does not list (testdata, an underscore or dot directory, a nested module): it is neither scanned nor type-checked")
+		if imp == modpath || strings.HasPrefix(imp, modpath+"/") {
+			out = append(out, "imports "+imp+", an in-module package: a row may import nothing from this module (what it links can start goroutines the scan cannot soundly follow, and a path outside go list ./... is not scanned at all)")
 		}
 		if external(modpath, imp) {
 			out = append(out, "imports out-of-module package "+imp+" (code outside the standard library and this module can run user code on goroutines of its own)")
@@ -390,9 +390,6 @@ func Check(root string, rows []Row) ([]string, error) {
 	for _, r := range rows {
 		if p := pkgs[modpath+"/"+r.Package]; p != nil {
 			need[p.ImportPath] = true
-			for _, dep := range closure(modpath, pkgs, p) {
-				need[dep] = true
-			}
 		}
 	}
 	var patterns []string
@@ -424,45 +421,12 @@ func Check(root string, rows []Row) ([]string, error) {
 		if r.Class != "none" || r.Witness != "-" {
 			problems = append(problems, r.Package+": only class none with witness - exists (covered-by was retired: every row is judged on its whole in-module closure)")
 		}
-		for _, hit := range scanPackage(p, true, modpath, pkgs, ts, loadErrs) {
+		for _, hit := range scanPackage(p, true, modpath, ts, loadErrs) {
 			problems = append(problems, fmt.Sprintf("%s: own file: %s", r.Package, hit))
-		}
-		for _, dep := range closure(modpath, pkgs, p) {
-			for _, hit := range scanPackage(pkgs[dep], false, modpath, pkgs, ts, loadErrs) {
-				problems = append(problems, fmt.Sprintf("%s: imports %s: %s", r.Package, strings.TrimPrefix(dep, modpath+"/"), hit))
-			}
 		}
 	}
 	sort.Strings(problems)
 	return problems, nil
-}
-
-// closure: every in-module package the package, its tests and its external tests link, directly or not.
-func closure(modpath string, pkgs map[string]*goPackage, p *goPackage) []string {
-	seen := map[string]bool{}
-	var stack []string
-	push := func(imps []string) {
-		for _, i := range imps {
-			if strings.HasPrefix(i, modpath+"/") && !seen[i] && pkgs[i] != nil {
-				seen[i] = true
-				stack = append(stack, i)
-			}
-		}
-	}
-	push(p.Imports)
-	push(p.TestImports)
-	push(p.XTestImports)
-	for len(stack) > 0 {
-		x := stack[len(stack)-1]
-		stack = stack[:len(stack)-1]
-		push(pkgs[x].Imports)
-	}
-	var out []string
-	for k := range seen {
-		out = append(out, k)
-	}
-	sort.Strings(out)
-	return out
 }
 
 // stdlibAllowed is the deny-by-default allowlist of standard-library imports (acp, CHAOS-11413): a package that is not here is refused,

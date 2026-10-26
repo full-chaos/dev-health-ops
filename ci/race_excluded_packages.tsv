@@ -1,26 +1,26 @@
 # Packages the -race legs of ci/check_go.sh do not run (CHAOS-11413). The test legs still run each one once, without -race.
 # Row: package<TAB>class<TAB>witness<TAB>reason. Key = path relative to the module root. Sorted (LC_ALL=C), no duplicates.
-#   class none: no go statement, channel, select, sync, atomic, errgroup, os/exec, net, database/sql, signal, timer goroutine,
-#     t.Parallel, dot import, cgo file or //export in the package's own files, no reflect import in its test files, no function
-#     value passed as an argument to a call outside racescope's pureCallees, and none of the rest in any in-module package it
-#     links (what the scan cannot model keeps a package in -race; CHAOS-11413 threat-model ruling); witness is -. Proven by
-#     internal/cigates/racescope, which fails when a listed package (or anything it imports from this module) gains one.
+#   class none, witness -: the package's own files and its test files import NOTHING from this module (not even a testdata, underscore
+#     or nested-module path), import only the standard-library packages in racescope's stdlibAllowed (no context, runtime, reflect, sync,
+#     net, os/exec ...), and hold no go statement, channel, select, timer goroutine, t.Parallel, dot import, cgo or non-Go source,
+#     go:linkname, plugin import, or function converted to an interface or passed to a call outside racescope's pureCallees. Proven by
+#     internal/cigates/racescope, which fails when a listed package gains one (CHAOS-11413, acp trivially sound rule).
 # A package leaves this file as soon as it needs a -race run. internal/providersync, internal/cigates/testshard and
-# internal/testsupport/goldenscan/treegate stay in -race (treegate links goldenscan.CheckTree, which starts worker goroutines).
-cmd/strip-agent-attribution	none	-	synchronous code only: no concurrency in its files or its in-module imports
-internal/auth/emaildomain	none	-	synchronous code only: no concurrency in its files or its in-module imports
-internal/jobs/metrics/checkedcast	none	-	synchronous code only: no concurrency in its files or its in-module imports
-internal/jobs/metrics/complexity/pycc	none	-	synchronous code only: no concurrency in its files or its in-module imports
-internal/jobs/metrics/deploymentstatus	none	-	synchronous code only: no concurrency in its files or its in-module imports
-internal/jobs/metrics/prrework	none	-	synchronous code only: no concurrency in its files or its in-module imports
-internal/jobs/metrics/querybound	none	-	synchronous code only: no concurrency in its files or its in-module imports
-internal/netclass	none	-	synchronous code only: no concurrency in its files or its in-module imports
-internal/platform/dsnclass	none	-	synchronous code only: no concurrency in its files or its in-module imports
-internal/platform/pgident	none	-	synchronous code only: no concurrency in its files or its in-module imports
-internal/queryapi/activeteams	none	-	synchronous code only: no concurrency in its files or its in-module imports
-internal/queryapi/chpairliteral	none	-	synchronous code only: no concurrency in its files or its in-module imports
-internal/queryapi/deltarule	none	-	synchronous code only: no concurrency in its files or its in-module imports
-internal/queryapi/graphqldate	none	-	synchronous code only: no concurrency in its files or its in-module imports
-internal/queryapi/graphqljson	none	-	synchronous code only: no concurrency in its files or its in-module imports
-internal/teamid	none	-	synchronous code only: no concurrency in its files or its in-module imports
-internal/testsupport/sqlshape	none	-	synchronous code only: no concurrency in its files or its in-module imports
+# internal/testsupport/goldenscan/treegate stay in -race (treegate imports goldenscan, whose CheckTree starts worker goroutines).
+cmd/strip-agent-attribution	none	-	imports nothing from this module; allowlisted stdlib only; no goroutine, selector or function-to-interface the scan refuses
+internal/auth/emaildomain	none	-	imports nothing from this module; allowlisted stdlib only; no goroutine, selector or function-to-interface the scan refuses
+internal/jobs/metrics/checkedcast	none	-	imports nothing from this module; allowlisted stdlib only; no goroutine, selector or function-to-interface the scan refuses
+internal/jobs/metrics/complexity/pycc	none	-	imports nothing from this module; allowlisted stdlib only; no goroutine, selector or function-to-interface the scan refuses
+internal/jobs/metrics/deploymentstatus	none	-	imports nothing from this module; allowlisted stdlib only; no goroutine, selector or function-to-interface the scan refuses
+internal/jobs/metrics/prrework	none	-	imports nothing from this module; allowlisted stdlib only; no goroutine, selector or function-to-interface the scan refuses
+internal/jobs/metrics/querybound	none	-	imports nothing from this module; allowlisted stdlib only; no goroutine, selector or function-to-interface the scan refuses
+internal/netclass	none	-	imports nothing from this module; allowlisted stdlib only; no goroutine, selector or function-to-interface the scan refuses
+internal/platform/dsnclass	none	-	imports nothing from this module; allowlisted stdlib only; no goroutine, selector or function-to-interface the scan refuses
+internal/platform/pgident	none	-	imports nothing from this module; allowlisted stdlib only; no goroutine, selector or function-to-interface the scan refuses
+internal/queryapi/activeteams	none	-	imports nothing from this module; allowlisted stdlib only; no goroutine, selector or function-to-interface the scan refuses
+internal/queryapi/chpairliteral	none	-	imports nothing from this module; allowlisted stdlib only; no goroutine, selector or function-to-interface the scan refuses
+internal/queryapi/deltarule	none	-	imports nothing from this module; allowlisted stdlib only; no goroutine, selector or function-to-interface the scan refuses
+internal/queryapi/graphqldate	none	-	imports nothing from this module; allowlisted stdlib only; no goroutine, selector or function-to-interface the scan refuses
+internal/queryapi/graphqljson	none	-	imports nothing from this module; allowlisted stdlib only; no goroutine, selector or function-to-interface the scan refuses
+internal/teamid	none	-	imports nothing from this module; allowlisted stdlib only; no goroutine, selector or function-to-interface the scan refuses
+internal/testsupport/sqlshape	none	-	imports nothing from this module; allowlisted stdlib only; no goroutine, selector or function-to-interface the scan refuses

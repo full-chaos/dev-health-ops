@@ -201,7 +201,7 @@ func TestAConcurrentInModuleImportIsRefusedDirectAndTransitive(t *testing.T) {
 		"a/a.go": "package a\n\nimport \"example.test/m/b\"\n\nfunc F() int { return b.G() }\n", "a/a_test.go": cleanTest,
 		"b/b.go": "package b\n\nfunc G() int { go func() {}(); return 1 }\n",
 	}
-	if got := problemsOf(t, direct, rowA); !strings.Contains(got, "a: imports b: b.go:3: go statement") {
+	if got := problemsOf(t, direct, rowA); !strings.Contains(got, "an in-module package") {
 		t.Errorf("a direct concurrent import was accepted:\n%s", got)
 	}
 	transitive := map[string]string{
@@ -209,14 +209,14 @@ func TestAConcurrentInModuleImportIsRefusedDirectAndTransitive(t *testing.T) {
 		"b/b.go": "package b\n\nimport \"example.test/m/c\"\n\nfunc G() int { return c.H() }\n",
 		"c/c.go": "package c\n\nimport \"sync\"\n\nvar mu sync.Mutex\n\nfunc H() int { return 1 }\n",
 	}
-	if got := problemsOf(t, transitive, rowA); !strings.Contains(got, "a: imports c: c.go:3: imports sync") {
+	if got := problemsOf(t, transitive, rowA); !strings.Contains(got, "an in-module package") {
 		t.Errorf("a transitive concurrent import was accepted:\n%s", got)
 	}
 	viaTest := map[string]string{
 		"a/a.go": cleanPkg, "a/a_test.go": "package a\n\nimport (\n\t\"testing\"\n\n\t\"example.test/m/b\"\n)\n\nfunc TestF(t *testing.T) { _ = b.G() }\n",
 		"b/b.go": "package b\n\nfunc G() int { go func() {}(); return 1 }\n",
 	}
-	if got := problemsOf(t, viaTest, rowA); !strings.Contains(got, "a: imports b") {
+	if got := problemsOf(t, viaTest, rowA); !strings.Contains(got, "an in-module package") {
 		t.Errorf("a concurrent import made by a test file was accepted:\n%s", got)
 	}
 }
@@ -239,7 +239,6 @@ func TestADotImportInAnExcludedPackageIsRefused(t *testing.T) {
 	for name, files := range map[string]map[string]string{
 		"dot-imported time in a package file": {"a/a.go": "package a\n\nimport . \"time\"\n\nfunc F() int { AfterFunc(0, func() {}); return 1 }\n", "a/a_test.go": cleanTest},
 		"dot-imported time in a test file":    {"a/a.go": cleanPkg, "a/a_test.go": "package a\n\nimport (\n\t. \"time\"\n\t\"testing\"\n)\n\nfunc TestF(t *testing.T) { NewTicker(1) }\n"},
-		"dot-imported in a dependency":        {"a/a.go": "package a\n\nimport \"example.test/m/b\"\n\nfunc F() int { return b.G() }\n", "a/a_test.go": cleanTest, "b/b.go": "package b\n\nimport . \"time\"\n\nfunc G() int { AfterFunc(0, func() {}); return 1 }\n"},
 	} {
 		if got := problemsOf(t, files, rowA); !strings.Contains(got, "dot import") {
 			t.Errorf("%s: want a dot import problem, got:\n%s", name, got)
@@ -256,14 +255,13 @@ func TestWhatTheScanCannotModelIsNotExcludable(t *testing.T) {
 		want  string
 	}{
 		"cgo file in the package":                            {map[string]string{"a/a.go": cgo, "a/a_test.go": cleanTest}, "cgo"},
-		"cgo file in a dependency":                           {map[string]string{"a/a.go": "package a\n\nimport \"example.test/m/b\"\n\nfunc F() int { return b.G() }\n", "a/a_test.go": cleanTest, "b/b.go": strings.Replace(cgo, "package a", "package b", 1)}, "cgo"},
 		"export directive":                                   {map[string]string{"a/a.go": "package a\n\n//export F\nfunc F() int { return 1 }\n", "a/a_test.go": cleanTest}, "//export"},
 		"reflect in a test file":                             {map[string]string{"a/a.go": cleanPkg, "a/a_test.go": "package a\n\nimport (\n\t\"reflect\"\n\t\"testing\"\n)\n\nfunc TestF(t *testing.T) { reflect.ValueOf(t).MethodByName(\"Parallel\").Call(nil) }\n"}, "imports reflect"},
 		"reflect in an external test":                        {map[string]string{"a/a.go": cleanPkg, "a/a_test.go": cleanTest, "a/x_test.go": "package a_test\n\nimport (\n\t\"reflect\"\n\t\"testing\"\n)\n\nfunc TestX(t *testing.T) { _ = reflect.TypeOf(t) }\n"}, "imports reflect"},
 		"closure passed to strings.Map":                      {map[string]string{"a/a.go": "package a\n\nimport \"strings\"\n\nvar shared int\n\nfunc F() int { return len(strings.Map(func(r rune) rune { shared++; return r }, \"x\")) }\n", "a/a_test.go": cleanTest}, "function value"},
 		"func name passed to a call":                         {map[string]string{"a/a.go": "package a\n\nimport \"strings\"\n\nfunc less(r rune) bool { return r < 0 }\n\nfunc F() int { _ = strings.FieldsFunc(\"x\", less); return 1 }\n", "a/a_test.go": cleanTest}, "function value"},
 		"method value passed to a call":                      {map[string]string{"a/a.go": "package a\n\nimport \"strings\"\n\ntype T struct{}\n\nfunc (T) less(r rune) bool { return r < 0 }\n\nfunc F() int { var x T; _ = strings.FieldsFunc(\"x\", x.less); return 1 }\n", "a/a_test.go": cleanTest}, "function value"},
-		"external test package imports a concurrent package": {map[string]string{"a/a.go": cleanPkg, "a/a_test.go": cleanTest, "a/x_test.go": "package a_test\n\nimport (\n\t\"testing\"\n\n\t\"example.test/m/b\"\n)\n\nfunc TestX(t *testing.T) { _ = b.G() }\n", "b/b.go": "package b\n\nfunc G() int { go func() {}(); return 1 }\n"}, "a: imports b"},
+		"external test package imports a concurrent package": {map[string]string{"a/a.go": cleanPkg, "a/a_test.go": cleanTest, "a/x_test.go": "package a_test\n\nimport (\n\t\"testing\"\n\n\t\"example.test/m/b\"\n)\n\nfunc TestX(t *testing.T) { _ = b.G() }\n", "b/b.go": "package b\n\nfunc G() int { go func() {}(); return 1 }\n"}, "an in-module package"},
 	} {
 		if got := problemsOf(t, tc.files, rowA); !strings.Contains(got, tc.want) {
 			t.Errorf("%s: want a problem naming %q, got:\n%s", name, tc.want, got)
@@ -348,13 +346,12 @@ func TestLinknameNonGoSourcesAndPluginsAreRefused(t *testing.T) {
 		files map[string]string
 		want  string
 	}{
-		"go:linkname":          {map[string]string{"a/a.go": "package a\n\nimport _ \"unsafe\"\n\n//go:linkname f runtime.f\nfunc f()\n\nfunc F() int { return 1 }\n", "a/a_test.go": cleanTest}, "go:linkname"},
-		"assembly file":        {map[string]string{"a/a.go": cleanPkg, "a/a_test.go": cleanTest, "a/a_amd64.s": "TEXT ·f(SB),0,$0-0\n\tRET\n", "a/a_arm64.s": "TEXT ·f(SB),0,$0-0\n\tRET\n"}, "non-Go source"},
-		"C source file":        {map[string]string{"a/a.go": cleanPkg, "a/a_test.go": cleanTest, "a/c.c": "void f(void) {}\n"}, "non-Go source"},
-		"header file":          {map[string]string{"a/a.go": cleanPkg, "a/a_test.go": cleanTest, "a/c.h": "void f(void);\n"}, "non-Go source"},
-		"syso object":          {map[string]string{"a/a.go": cleanPkg, "a/a_test.go": cleanTest, "a/o.syso": "x"}, "non-Go source"},
-		"plugin import":        {map[string]string{"a/a.go": "package a\n\nimport \"plugin\"\n\nvar _ = plugin.Open\n\nfunc F() int { return 1 }\n", "a/a_test.go": cleanTest}, "imports plugin"},
-		"non-Go in dependency": {map[string]string{"a/a.go": "package a\n\nimport \"example.test/m/b\"\n\nfunc F() int { return b.G() }\n", "a/a_test.go": cleanTest, "b/b.go": "package b\n\nfunc G() int { return 1 }\n", "b/b.s": "// asm\n"}, "non-Go source"},
+		"go:linkname":   {map[string]string{"a/a.go": "package a\n\nimport _ \"unsafe\"\n\n//go:linkname f runtime.f\nfunc f()\n\nfunc F() int { return 1 }\n", "a/a_test.go": cleanTest}, "go:linkname"},
+		"assembly file": {map[string]string{"a/a.go": cleanPkg, "a/a_test.go": cleanTest, "a/a_amd64.s": "TEXT ·f(SB),0,$0-0\n\tRET\n", "a/a_arm64.s": "TEXT ·f(SB),0,$0-0\n\tRET\n"}, "non-Go source"},
+		"C source file": {map[string]string{"a/a.go": cleanPkg, "a/a_test.go": cleanTest, "a/c.c": "void f(void) {}\n"}, "non-Go source"},
+		"header file":   {map[string]string{"a/a.go": cleanPkg, "a/a_test.go": cleanTest, "a/c.h": "void f(void);\n"}, "non-Go source"},
+		"syso object":   {map[string]string{"a/a.go": cleanPkg, "a/a_test.go": cleanTest, "a/o.syso": "x"}, "non-Go source"},
+		"plugin import": {map[string]string{"a/a.go": "package a\n\nimport \"plugin\"\n\nvar _ = plugin.Open\n\nfunc F() int { return 1 }\n", "a/a_test.go": cleanTest}, "imports plugin"},
 	} {
 		if got := problemsOf(t, tc.files, rowA); !strings.Contains(got, tc.want) {
 			t.Errorf("%s: want %q, got:\n%s", name, tc.want, got)
@@ -401,10 +398,6 @@ func TestAnOutOfModuleImportInTheClosureIsRefused(t *testing.T) {
 	own := map[string]string{"a/a.go": "package a\n\nimport \"golang.org/x/sync/singleflight\"\n\nvar g singleflight.Group\n\nfunc F() int { return 1 }\n", "a/a_test.go": cleanTest}
 	if got := problemsOf(t, own, rowA); !strings.Contains(got, "out-of-module") {
 		t.Errorf("an out-of-module import in the package was accepted:\n%s", got)
-	}
-	dep := map[string]string{"a/a.go": "package a\n\nimport \"example.test/m/b\"\n\nfunc F() int { return b.G() }\n", "a/a_test.go": cleanTest, "b/b.go": "package b\n\nimport _ \"golang.org/x/sync/singleflight\"\n\nfunc G() int { return 1 }\n"}
-	if got := problemsOf(t, dep, rowA); !strings.Contains(got, "out-of-module") {
-		t.Errorf("an out-of-module import in a dependency was accepted:\n%s", got)
 	}
 	testImport := map[string]string{"a/a.go": cleanPkg, "a/a_test.go": "package a\n\nimport (\n\t\"testing\"\n\n\t_ \"golang.org/x/sync/singleflight\"\n)\n\nfunc TestF(t *testing.T) {}\n"}
 	if got := problemsOf(t, testImport, rowA); !strings.Contains(got, "out-of-module") {
@@ -513,7 +506,7 @@ func TestAnInModuleImportThatGoListDoesNotListIsRefused(t *testing.T) {
 			"sub/h/h.go":  "package h\n\nfunc Spawn(p *int) { go func() { *p++ }() }\n",
 		},
 	} {
-		if got := problemsOf(t, files, rowA); !strings.Contains(got, "the scan does not list") {
+		if got := problemsOf(t, files, rowA); !strings.Contains(got, "an in-module package") {
 			t.Errorf("%s: want a refusal of the unlisted in-module import, got:\n%s", name, got)
 		}
 	}
@@ -543,7 +536,7 @@ func TestARowWhoseClosureStartsGoroutinesIsRefusedEvenWhenItNamesACoveringPackag
 			"c/c_test.go": "package c\n\nimport \"testing\"\n\nfunc TestH(t *testing.T) { _ = CheckTree([]string{\"x\"}, func(string) int { return 0 }) }\n",
 		},
 	} {
-		if got := problemsOf(t, files, covered); !strings.Contains(got, "a: imports c:") {
+		if got := problemsOf(t, files, covered); !strings.Contains(got, "an in-module package") {
 			t.Errorf("%s: want the closure of a judged without the covered-by shortcut, got:\n%s", name, got)
 		}
 	}

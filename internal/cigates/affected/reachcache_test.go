@@ -391,6 +391,8 @@ func TestReachCacheKeyIncludesAReplaceTreeInsideTheRepository(t *testing.T) {
 // CHAOS-11421 r2: the key is the whole `go env -json` minus a named denylist of volatile path keys.
 func TestReachCacheKeyCoversTheCompilerEnvironment(t *testing.T) {
 	f, _ := reachFixture(t, reachCacheHead())
+	// The first go command in the fixture may add go.sum; take that key once before comparing.
+	reachKeyOf(t, f.root, reachEnv())
 	base := reachKeyOf(t, f.root, reachEnv("CGO_ENABLED=1", "CC=gcc"))
 	for name, e := range map[string][]string{
 		"CC":           reachEnv("CGO_ENABLED=1", "CC=/definitely/missing/c-compiler"),
@@ -409,6 +411,8 @@ func TestReachCacheKeyCoversTheCompilerEnvironment(t *testing.T) {
 
 func TestReachCacheKeyIgnoresVolatilePathVariables(t *testing.T) {
 	f, _ := reachFixture(t, reachCacheHead())
+	// The first go command in the fixture may add go.sum; take that key once before comparing.
+	reachKeyOf(t, f.root, reachEnv())
 	base := reachKeyOf(t, f.root, reachEnv())
 	other := reachEnv("GOCACHE="+t.TempDir(), "GOTMPDIR="+t.TempDir(), "GOPATH="+t.TempDir(), "GOTELEMETRYDIR="+t.TempDir())
 	if got := reachKeyOf(t, f.root, other); got != base {
@@ -461,5 +465,55 @@ func TestReachCacheFreshWithoutAStoreStillComputes(t *testing.T) {
 	res := reachRun(t, f.root, reachEnv(), "--reach", "--reach-cache", store, "--reach-cache-fresh")
 	if res.code != 0 || !strings.Contains(res.stdout, "reach: computed for input hash ") || len(storeFiles(t, store)) != 1 {
 		t.Fatalf("a fresh run with an empty store: exit %d, stored %v:\n%s%s", res.code, storeFiles(t, store), res.stdout, res.stderr)
+	}
+}
+
+// A restored store that holds only another exact key (a coarse-key hit of a different environment) is a miss.
+func TestReachCacheAStoreOfAnotherExactKeyIsAMiss(t *testing.T) {
+	f, _ := reachFixture(t, reachCacheHead())
+	if res := writeTables(t, f.root); res.code != 0 {
+		t.Fatalf("plan-reads --write exited %d:\n%s%s", res.code, res.stdout, res.stderr)
+	}
+	store := t.TempDir()
+	seed := reachEnv("CGO_ENABLED=1", "CC=gcc")
+	if res := reachRun(t, f.root, seed, "--reach", "--reach-cache", store); res.code != 0 {
+		t.Fatalf("seed run exit %d:\n%s%s", res.code, res.stdout, res.stderr)
+	}
+	other := reachEnv("CGO_ENABLED=1", "CC=gcc", "CGO_CFLAGS=-O0")
+	key := reachKeyOf(t, f.root, other)
+	res := reachRun(t, f.root, other, "--reach", "--reach-cache", store)
+	if res.code != 0 || strings.Contains(res.stdout, "reach: reused") || !strings.Contains(res.stdout, "reach: computed for input hash "+key) {
+		t.Fatalf("a store of another exact key must be a miss and a fresh compute: exit %d:\n%s%s", res.code, res.stdout, res.stderr)
+	}
+	if got := storeFiles(t, store); len(got) != 2 {
+		t.Fatalf("both exact keys should now be stored, got %v", got)
+	}
+}
+
+// A corrupt restored file (binary, truncated, a directory in its place) is a miss and a fresh compute, never a FAIL.
+func TestReachCacheACorruptStoreIsAMissNotAFailure(t *testing.T) {
+	f, _ := reachFixture(t, reachCacheHead())
+	if res := writeTables(t, f.root); res.code != 0 {
+		t.Fatalf("plan-reads --write exited %d:\n%s%s", res.code, res.stdout, res.stderr)
+	}
+	env := reachEnv()
+	key := reachKeyOf(t, f.root, env)
+	for name, body := range map[string][]byte{"binary": {0x00, 0xff, 0xfe, 0x01}, "truncated header": []byte("# reach-cache-v2 key " + key[:10])} {
+		store := t.TempDir()
+		if err := os.WriteFile(filepath.Join(store, "reach-"+key+".tsv"), body, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		res := reachRun(t, f.root, env, "--reach", "--reach-cache", store)
+		if res.code != 0 || strings.Contains(res.stdout, "reach: reused") || !strings.Contains(res.stdout, "reach: computed for input hash "+key) {
+			t.Errorf("%s: want a miss and a fresh compute, exit %d:\n%s%s", name, res.code, res.stdout, res.stderr)
+		}
+	}
+	dirStore := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dirStore, "reach-"+key+".tsv"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	res := reachRun(t, f.root, env, "--reach", "--reach-cache", dirStore)
+	if res.code != 0 || strings.Contains(res.stdout, "reach: reused") {
+		t.Errorf("a directory in the store path must not fail the gate: exit %d:\n%s%s", res.code, res.stdout, res.stderr)
 	}
 }

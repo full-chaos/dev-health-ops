@@ -91,15 +91,21 @@ func TestLegacyLinkPurgeGrantFollowsTheSwitch(t *testing.T) {
 	if found := describe(posture(true)); !strings.Contains(found, "password_reset_tokens") || !strings.Contains(found, "UPDATE") {
 		t.Errorf("a widened grant (UPDATE) was not reported:\n%s", found)
 	}
+	_, err := Apply(ctx, env.migration, owned)
+	var widened *NarrowingError
+	if !errors.As(err, &widened) {
+		t.Fatalf("re-Apply over a widened grant: err = %v, want the narrowing refusal", err)
+	}
+	owned.AcknowledgeNarrowing = widened.Digest
 	if _, err := Apply(ctx, env.migration, owned); err != nil {
-		t.Fatalf("re-Apply with the switch on: %v", err)
+		t.Fatalf("re-Apply with the acknowledgement: %v", err)
 	}
 	if found := posture(true); len(found) > 0 {
 		t.Fatalf("re-Apply did not restore the exact grant:\n%s", describe(found))
 	}
 
 	off := env.options(&bytes.Buffer{})
-	_, err := Apply(ctx, env.migration, off)
+	_, err = Apply(ctx, env.migration, off)
 	var narrowed *NarrowingError
 	if !errors.As(err, &narrowed) {
 		t.Fatalf("turning the switch off: err = %v, want the narrowing refusal", err)

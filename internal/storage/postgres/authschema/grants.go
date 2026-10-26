@@ -172,6 +172,14 @@ func ApplyRuntimeGrants(ctx context.Context, conn *pgx.Conn, options Options) er
 // the manifest is right (CHAOS-4885 is the functional half). Only DIRECT grants
 // are compared; see snapshotDirectGrants.
 func applyRuntimeGrants(ctx context.Context, conn querier, manifest []TablePrivilege, options Options) error {
+	return applyRuntimeGrantsRetaining(ctx, conn, manifest, options, nil)
+}
+
+// applyRuntimeGrantsRetaining is applyRuntimeGrants; with
+// Options.DeferNarrowing it stores in *retained (when not nil) the acknowledged
+// lost records it kept (retainUsersOwnedGrants), which the posture check then
+// excuses.
+func applyRuntimeGrantsRetaining(ctx context.Context, conn querier, manifest []TablePrivilege, options Options, retained *[]GrantRecord) error {
 	schemaID, err := NewValidatedIdentifier(options.Schema)
 	if err != nil {
 		return err
@@ -311,11 +319,26 @@ func applyRuntimeGrants(ctx context.Context, conn querier, manifest []TablePrivi
 			)
 			return &NarrowingError{Schema: options.Schema, Role: options.RuntimeRole, Lost: lost, Digest: digest}
 		}
+		var kept []GrantRecord
+		if options.DeferNarrowing {
+			kept, err = retainUsersOwnedGrants(ctx, tx, lost, role)
+			if err != nil {
+				return err
+			}
+			logger.WarnContext(
+				ctx, "runtime grants narrowing deferred with operator acknowledgement",
+				"schema", options.Schema, "runtime_role", options.RuntimeRole,
+				"deferred", len(kept), "digest", digest,
+			)
+		}
 		logger.WarnContext(
 			ctx, "runtime grants narrowed with operator acknowledgement",
 			"schema", options.Schema, "runtime_role", options.RuntimeRole,
-			"narrowed", len(lost), "digest", digest,
+			"narrowed", len(lost)-len(kept), "digest", digest,
 		)
+		if retained != nil {
+			*retained = kept
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("%w: committing the runtime grants: %v", ErrMigrationFailed, redactPGError(err))

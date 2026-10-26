@@ -55,6 +55,10 @@ type Options struct {
 	// holds UsersWriteGrant on public.users. Off, it holds no write privilege
 	// there, and the grants pass revokes any it held.
 	UsersOwned bool
+	// DeferNarrowing keeps, with the acknowledgement, every lost grant the
+	// users-owned switch gives (the 4->3 flip-back release, whose old owned
+	// pods still serve); the rest narrows. See defer_narrowing.go.
+	DeferNarrowing bool
 }
 
 // Result reports what a run did.
@@ -312,7 +316,8 @@ func applyGrantsAndVerify(ctx context.Context, conn pooledConn, options Options,
 	// removed from the manifest in a later release, a restored backup -- is
 	// corrected by the next migrate run rather than persisting because no new
 	// migration happened to be pending.
-	if err := ApplyRuntimeGrants(ctx, conn.Conn(), options); err != nil {
+	var retained []GrantRecord
+	if err := applyRuntimeGrantsRetaining(ctx, conn.Conn(), RuntimePosture(), options, &retained); err != nil {
 		return result, err
 	}
 	logger.InfoContext(
@@ -339,6 +344,7 @@ func applyGrantsAndVerify(ctx context.Context, conn pooledConn, options Options,
 	if err != nil {
 		return result, err
 	}
+	violations = excuseRetained(violations, retained)
 	if len(violations) > 0 {
 		logger.ErrorContext(
 			ctx, "runtime role can escalate beyond its declared posture",

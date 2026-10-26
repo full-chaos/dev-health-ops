@@ -889,6 +889,24 @@ schema Job and the grants Job.
 {{- end }}
 
 {{/*
+-defer-narrowing for both auth-migrate Jobs, or "". A Job that passes the acknowledgement at phase 3 or lower also
+defers: that is the 4->3 flip-back release, whose old owned auth-service pods still serve while its pre-upgrade hooks
+run, so the users-owned grants it would revoke are kept (CHAOS-11581). authService.migrate.narrowAfterFlipBack, set in
+a LATER release after no pod of the old owned ReplicaSet is left, renders the acknowledgement without it, so that
+release narrows. The flag needs the acknowledgement and is refused at phase 4 or higher.
+*/}}
+{{- define "dev-health.authDeferGrantNarrowing" -}}
+{{- $m := .Values.authService.migrate -}}
+{{- $narrow := eq (include "dev-health.authBool" (dict "value" $m.narrowAfterFlipBack "key" "authService.migrate.narrowAfterFlipBack")) "true" -}}
+{{- $ack := include "dev-health.authAckGrantNarrowing" . -}}
+{{- if and $narrow (not $ack) }}{{- fail "authService.migrate.narrowAfterFlipBack=true needs authService.migrate.acknowledgeGrantNarrowing: the digest a refused auth-migrate run prints for the deferred users-owned grants" }}{{- end -}}
+{{- if and $narrow (eq (include "dev-health.authOn" (dict "flag" "usersOwned" "context" .)) "true") }}{{- fail "authService.migrate.narrowAfterFlipBack is refused at phase 4 or higher: users are owned there, so the users-owned grants are not narrowed" }}{{- end -}}
+{{- if and $ack (not $narrow) (ne (include "dev-health.authOn" (dict "flag" "usersOwned" "context" .)) "true") -}}
+-defer-narrowing
+{{- end -}}
+{{- end }}
+
+{{/*
 A strict boolean switch of authService: renders "true" or "false", and FAILS the render for anything that is
 not a YAML boolean (a string such as "false" is non-empty and would read as true; null is no value). Every read
 of authService.backfill.enabled, authService.backfill.dryRun, authService.socialLinkRoutes and authService.sso.*

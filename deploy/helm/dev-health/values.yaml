@@ -370,6 +370,13 @@ authService:
     #    clear it in the next deploy change: a run that narrows nothing ignores
     #    it, a run that narrows a different set is refused.
     acknowledgeGrantNarrowing: ""
+    # -- CHAOS-11581: at phase 3 or lower every Job that passes the
+    #    acknowledgement also passes -defer-narrowing, so the 4->3 flip-back
+    #    release keeps the users-owned grants while its old owned auth-service
+    #    pods still serve. Set true in a LATER release, after no pod of the old
+    #    owned ReplicaSet is left (runbook), with the acknowledgement of the
+    #    deferred grants: that release narrows them. Refused at phase 4 or higher.
+    narrowAfterFlipBack: false
     hookEvents: [pre-install, pre-upgrade]
     # -- CHAOS-10581: the grants-only pass (`auth-migrate grants`) after the ops
     #    migrate Job, on migrations.hook.events. It fails the release when a

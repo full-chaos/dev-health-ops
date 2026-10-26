@@ -44,7 +44,7 @@ spec:
         - name: auth-migrate
           image: {{ include "dev-health.authMigrateImage" . }}
           {{- with include "dev-health.authAckGrantNarrowing" . }}
-          args: [{{ . | quote }}]
+          args: [{{ . | quote }}{{ with include "dev-health.authDeferGrantNarrowing" $ }}, {{ . | quote }}{{ end }}]
           {{- end }}
           imagePullPolicy: {{ $m.image.pullPolicy }}
           env:

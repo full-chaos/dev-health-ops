@@ -11,6 +11,8 @@ type profile struct {
 	Email         string
 	EmailVerified bool
 	FullName      string
+	// LegacyFullName is the public.users full_name: nil is NULL.
+	LegacyFullName *string
 }
 
 // mergeClaims is go-api's merge: userinfo first, then the ID token's claims
@@ -46,6 +48,7 @@ func readProfile(merged map[string]any, mapping map[string]string) profile {
 	if p.FullName == "" {
 		p.FullName = mapped["name"]
 	}
+	p.LegacyFullName = legacyFullName(p.FullName)
 	switch v := merged["email_verified"].(type) {
 	case bool:
 		p.EmailVerified = v

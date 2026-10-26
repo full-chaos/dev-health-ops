@@ -35,10 +35,12 @@ func TestUsersOwnedRefusesEverySessionWriterBeforeTouchingTheDatabase(t *testing
 	t.Setenv("AUTH_USERS_OWNED", "true")
 	h := handlers{}
 	for name, serve := range map[string]http.HandlerFunc{
-		"change-password": h.changePassword,
-		"reset-password":  h.resetPassword,
-		"verify":          h.verify,
-		"register":        h.register,
+		"change-password":     h.changePassword,
+		"reset-password":      h.resetPassword,
+		"verify":              h.verify,
+		"resend-verification": h.resendVerification,
+		"forgot-password":     h.forgotPassword,
+		"register":            h.register,
 	} {
 		t.Run(name, func(t *testing.T) {
 			recorder := httptest.NewRecorder()

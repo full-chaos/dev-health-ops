@@ -395,7 +395,7 @@ authService:
   #    roll: the same roll sets it false again and reads that the Job is gone.
   backfill:
     enabled: false
-    # -- users-backfill or orgs-backfill.
+    # -- users-backfill, orgs-backfill or legacy-link-purge (the last needs users owned; run it after the phase-4 rollout is complete).
     verb: ""
     # -- true: read and report, write nothing. A real run needs an explicit false.
     dryRun: true
@@ -772,6 +772,20 @@ goWorkers:
       #    default for every extraUsers entry that sets no poolSize.
       poolSize: 16
       maxClientConnections: 1000
+      # -- Rolling update of the transaction pooler Deployment (one replica).
+      #    Empty (the default) renders NO strategy key: the Kubernetes default,
+      #    25 percent, which is ONE surge pod at one replica. When the auth
+      #    connection budget is set (authService.database.connectionBudget),
+      #    that surge pod is COUNTED: it opens every transaction pool again, so
+      #    the transaction term is (poolSize + the extraUsers pools) x (1 +
+      #    maxSurge pods). Whole numbers only (maxSurge 0 to 10, maxUnavailable
+      #    0 to 10); maxSurge 0 needs maxUnavailable 1 or more and makes every
+      #    roll of the pooler an outage of its start time (one replica), so it
+      #    is not the default. Kind measurement (CHAOS-11521): the default
+      #    surge costs +18 server connections at pool 16 + KEDA 4 (one sample),
+      #    maxSurge 0 gave 3.5 times the client errors and a worker that
+      #    started in the gap crash-restarted 13 to 15 s.
+      rollingUpdate: {}
       # -- Additional roles this pooler may authenticate, beyond its own
       #    RIVER_DOMAIN_DATABASE_ROLE. Each entry is
       #    {role: <postgres role>, passwordKey: <key in secret.data below>},

@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -559,5 +560,332 @@ func TestAFailedReadStillLatchesTheRowsItRead(t *testing.T) {
 				t.Fatalf("b = %s after a failed read showed it compromised", out[1].State)
 			}
 		})
+	}
+}
+
+// hungStates blocks every read until its context ends, as a database behind a
+// blackhole does.
+type hungStates struct {
+	mu    sync.Mutex
+	reads int
+	rows  []KeyStateRow
+	hang  bool
+}
+
+func (h *hungStates) KeyStates(ctx context.Context) ([]KeyStateRow, error) {
+	h.mu.Lock()
+	h.reads++
+	hang, rows := h.hang, append([]KeyStateRow(nil), h.rows...)
+	h.mu.Unlock()
+	if hang {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	return rows, nil
+}
+
+func (h *hungStates) setHang(v bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.hang = v
+}
+
+func (h *hungStates) readCount() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.reads
+}
+
+func (s *KeyStates) idle() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.flight == nil
+}
+
+// A refresh against a hung source never holds a request: every concurrent
+// caller answers from the last good snapshot within the inline wait, the
+// source is read once, and the read ends at its own timeout.
+func TestKeyStatesRefreshAgainstAHungSourceHoldsNoRequest(t *testing.T) {
+	source := &hungStates{rows: []KeyStateRow{{KeyID: "a", State: StateActive}}}
+	clock := &fakeClock{now: time.Unix(0, 0)}
+	states := NewKeyStates(KeyStatesConfig{Source: source, RefreshEvery: 10 * time.Second, MaxStale: JWKSCacheTTL,
+		ReadTimeout: 300 * time.Millisecond, InlineWait: 20 * time.Millisecond, Now: clock.Now})
+	if _, err := states.Rows(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	source.setHang(true)
+	clock.advance(11 * time.Second)
+
+	const callers = 200
+	took := make([]time.Duration, callers)
+	var wg sync.WaitGroup
+	for i := range callers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			start := time.Now()
+			rows, err := states.Rows(context.Background())
+			took[i] = time.Since(start)
+			if err != nil || len(rows) != 1 {
+				t.Errorf("caller %d = %v, %v; want the last good snapshot", i, rows, err)
+			}
+		}()
+	}
+	wg.Wait()
+	for i, d := range took {
+		if d > 250*time.Millisecond {
+			t.Errorf("caller %d waited %s on a hung source, want well under the read timeout 300ms", i, d)
+		}
+	}
+	if got := source.readCount(); got != 2 {
+		t.Errorf("the source was read %d times, want 2 (first read + one single-flight refresh)", got)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for !states.idle() {
+		if time.Now().After(deadline) {
+			t.Fatal("the refresh goroutine did not end after its read timeout")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// With no snapshot at all, a caller waits for the read but never longer than
+// its own context, and is refused (fail closed), not served nothing.
+func TestKeyStatesColdStartAgainstAHungSourceFailsClosedAtTheCallersDeadline(t *testing.T) {
+	source := &hungStates{hang: true}
+	states := NewKeyStates(KeyStatesConfig{Source: source, ReadTimeout: 2 * time.Second})
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	rows, err := states.Rows(ctx)
+	if !reasonIs(err, ReasonKeyStatesUnavailable) || rows != nil {
+		t.Fatalf("cold read = %v, %v; want %s", rows, err, ReasonKeyStatesUnavailable)
+	}
+	if took := time.Since(start); took > time.Second {
+		t.Fatalf("cold read took %s, want about the caller's 50ms", took)
+	}
+}
+
+// A compromise that lands in a background refresh is applied by the very next
+// call, and a later hung refresh does not bring the pre-compromise state back.
+func TestKeyStatesBackgroundRefreshLatchesACompromiseAtOnce(t *testing.T) {
+	pa := ed25519.PublicKey(make32(1))
+	source := &hungStates{rows: []KeyStateRow{{KeyID: "a", State: StateActive, PublicKey: pa}}}
+	clock := &fakeClock{now: time.Unix(0, 0)}
+	states := NewKeyStates(KeyStatesConfig{Source: source, RefreshEvery: 10 * time.Second, MaxStale: JWKSCacheTTL, Now: clock.Now})
+	ctx := context.Background()
+	custody := func() []keystore.Key {
+		return []keystore.Key{{KeyID: "a", State: StateActive, Algorithm: keystore.Algorithm, PublicKey: pa}}
+	}
+	if out, err := states.override(ctx, custody()); err != nil || out[0].State != StateActive {
+		t.Fatalf("before = %v, %v", out, err)
+	}
+	source.mu.Lock()
+	source.rows = []KeyStateRow{{KeyID: "a", State: StateCompromised, PublicKey: pa}}
+	source.mu.Unlock()
+	clock.advance(11 * time.Second)
+	if out, err := states.override(ctx, custody()); err != nil || out[0].State != StateCompromised {
+		t.Fatalf("after the refresh = %v, %v; want compromised in that call", out, err)
+	}
+	source.setHang(true)
+	clock.advance(11 * time.Second)
+	if out, err := states.override(ctx, custody()); err != nil || out[0].State != StateCompromised {
+		t.Fatalf("during a hung refresh = %v, %v; want compromised", out, err)
+	}
+}
+
+// Close ends a read stalled on the source at once (the goroutine leaves), and
+// the caller that held a snapshot still gets it.
+func TestKeyStatesCloseEndsTheReadInFlight(t *testing.T) {
+	source := &hungStates{rows: []KeyStateRow{{KeyID: "a", State: StateActive}}}
+	clock := &fakeClock{now: time.Unix(0, 0)}
+	states := NewKeyStates(KeyStatesConfig{Source: source, RefreshEvery: 10 * time.Second, MaxStale: JWKSCacheTTL,
+		ReadTimeout: time.Minute, InlineWait: time.Millisecond, Now: clock.Now})
+	if _, err := states.Rows(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	source.setHang(true)
+	clock.advance(11 * time.Second)
+	if rows, err := states.Rows(context.Background()); err != nil || len(rows) != 1 {
+		t.Fatalf("during the hung refresh = %v, %v", rows, err)
+	}
+	if states.idle() {
+		t.Fatal("no read in flight to end")
+	}
+	states.Close()
+	deadline := time.Now().Add(2 * time.Second)
+	for !states.idle() {
+		if time.Now().After(deadline) {
+			t.Fatal("Close did not end the read in flight")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// With a healthy database a state change (here a revocation) takes effect at
+// the next refresh, in the call that starts it: the bound is the refresh
+// period, as before the read moved off the request.
+func TestKeyStatesRevokedStateTakesEffectAtTheNextRefresh(t *testing.T) {
+	source := &hungStates{rows: []KeyStateRow{{KeyID: "a", State: StateActive}}}
+	clock := &fakeClock{now: time.Unix(0, 0)}
+	states := NewKeyStates(KeyStatesConfig{Source: source, RefreshEvery: 10 * time.Second, MaxStale: JWKSCacheTTL, Now: clock.Now})
+	ctx := context.Background()
+	if rows, _ := states.Rows(ctx); rows[0].State != StateActive {
+		t.Fatalf("first = %v", rows)
+	}
+	source.mu.Lock()
+	source.rows = []KeyStateRow{{KeyID: "a", State: StateRetired}}
+	source.mu.Unlock()
+	clock.advance(9 * time.Second)
+	if rows, _ := states.Rows(ctx); rows[0].State != StateActive {
+		t.Fatalf("inside the refresh period = %v, want the held snapshot", rows)
+	}
+	clock.advance(time.Second)
+	if rows, _ := states.Rows(ctx); rows[0].State != StateRetired {
+		t.Fatalf("at the refresh = %v, want the revoked state in that call", rows)
+	}
+}
+
+// A snapshot that was inside the bound when a stalled refresh began is not
+// served once the wait leaves it past the bound.
+func TestKeyStatesDoNotServePastMaxStaleAfterAnInlineWait(t *testing.T) {
+	source := &hungStates{rows: []KeyStateRow{{KeyID: "a", State: StateActive}}}
+	clock := &fakeClock{now: time.Unix(0, 0)}
+	states := NewKeyStates(KeyStatesConfig{Source: source, RefreshEvery: time.Millisecond, MaxStale: 100 * time.Millisecond,
+		ReadTimeout: time.Second, InlineWait: 30 * time.Millisecond, Now: clock.Now})
+	if _, err := states.Rows(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	source.setHang(true)
+	clock.advance(90 * time.Millisecond)
+	done := make(chan error, 1)
+	go func() {
+		_, err := states.Rows(context.Background())
+		done <- err
+	}()
+	time.Sleep(10 * time.Millisecond)
+	clock.advance(20 * time.Millisecond)
+	if err := <-done; !reasonIs(err, ReasonKeyStatesUnavailable) {
+		t.Fatalf("Rows = %v, want %s once the wait left the snapshot past MaxStale", err, ReasonKeyStatesUnavailable)
+	}
+}
+
+// steppedClock answers its first armed call with early and every later call
+// with late, so a test can move the clock between two reads inside one call.
+type steppedClock struct {
+	mu          sync.Mutex
+	base        time.Time
+	armed       bool
+	calls       int
+	early, late time.Duration
+}
+
+func (c *steppedClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.armed {
+		return c.base
+	}
+	c.calls++
+	if c.calls == 1 {
+		return c.base.Add(c.early)
+	}
+	return c.base.Add(c.late)
+}
+
+func (c *steppedClock) arm() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.armed = true
+}
+
+// The cached-snapshot fast path judges the age with the clock at return: a
+// snapshot inside the bound at the start of the call is not served when the
+// clock has left the bound by the return.
+func TestKeyStatesFastPathRechecksTheAgeAtReturn(t *testing.T) {
+	source := &hungStates{rows: []KeyStateRow{{KeyID: "a", State: StateActive}}}
+	clock := &steppedClock{base: time.Unix(0, 0), early: 90 * time.Millisecond, late: 110 * time.Millisecond}
+	states := NewKeyStates(KeyStatesConfig{Source: source, RefreshEvery: time.Hour, MaxStale: 100 * time.Millisecond, Now: clock.Now})
+	if _, err := states.Rows(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	clock.arm()
+	if rows, err := states.Rows(context.Background()); !reasonIs(err, ReasonKeyStatesUnavailable) || rows != nil {
+		t.Fatalf("fast path = %v, %v; want %s once the return-time clock is past MaxStale", rows, err, ReasonKeyStatesUnavailable)
+	}
+}
+
+// slowExitStates honors cancellation but takes a while to return, as a driver
+// unwinding a cancelled query does.
+type slowExitStates struct {
+	exited atomic.Bool
+	rows   []KeyStateRow
+	hang   atomic.Bool
+}
+
+func (h *slowExitStates) KeyStates(ctx context.Context) ([]KeyStateRow, error) {
+	if !h.hang.Load() {
+		return h.rows, nil
+	}
+	<-ctx.Done()
+	time.Sleep(80 * time.Millisecond)
+	h.exited.Store(true)
+	return nil, ctx.Err()
+}
+
+// Close returns only after the read in flight has returned, and is safe to
+// call again and with no read in flight.
+func TestKeyStatesCloseWaitsForTheReadToEnd(t *testing.T) {
+	source := &slowExitStates{rows: []KeyStateRow{{KeyID: "a", State: StateActive}}}
+	clock := &fakeClock{now: time.Unix(0, 0)}
+	states := NewKeyStates(KeyStatesConfig{Source: source, RefreshEvery: 10 * time.Second, MaxStale: JWKSCacheTTL,
+		ReadTimeout: 5 * time.Second, InlineWait: time.Millisecond, Now: clock.Now})
+	states.Close()
+	states = NewKeyStates(KeyStatesConfig{Source: source, RefreshEvery: 10 * time.Second, MaxStale: JWKSCacheTTL,
+		ReadTimeout: 5 * time.Second, InlineWait: time.Millisecond, Now: clock.Now})
+	if _, err := states.Rows(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	source.hang.Store(true)
+	clock.advance(11 * time.Second)
+	if _, err := states.Rows(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if states.idle() {
+		t.Fatal("no read in flight")
+	}
+	states.Close()
+	if !source.exited.Load() {
+		t.Fatal("Close returned while the cancelled read was still running")
+	}
+	states.Close()
+}
+
+// After Close no read starts: a caller with a usable snapshot gets it, one
+// without is refused, and the source is not read again.
+func TestKeyStatesRowsAfterCloseStartNoRead(t *testing.T) {
+	source := &hungStates{rows: []KeyStateRow{{KeyID: "a", State: StateActive}}}
+	clock := &fakeClock{now: time.Unix(0, 0)}
+	states := NewKeyStates(KeyStatesConfig{Source: source, RefreshEvery: 10 * time.Second, MaxStale: JWKSCacheTTL,
+		InlineWait: time.Millisecond, Now: clock.Now})
+	if _, err := states.Rows(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	states.Close()
+	reads := source.readCount()
+	clock.advance(11 * time.Second)
+	if rows, err := states.Rows(context.Background()); err != nil || len(rows) != 1 {
+		t.Fatalf("Rows after Close with a usable snapshot = %v, %v", rows, err)
+	}
+	clock.advance(JWKSCacheTTL)
+	if rows, err := states.Rows(context.Background()); !reasonIs(err, ReasonKeyStatesUnavailable) || rows != nil {
+		t.Fatalf("Rows after Close past the bound = %v, %v; want %s", rows, err, ReasonKeyStatesUnavailable)
+	}
+	time.Sleep(20 * time.Millisecond)
+	if got := source.readCount(); got != reads {
+		t.Fatalf("the source was read %d more times after Close, want 0", got-reads)
+	}
+	if !states.idle() {
+		t.Fatal("a read is in flight after Close")
 	}
 }

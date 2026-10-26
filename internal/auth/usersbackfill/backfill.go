@@ -201,7 +201,8 @@ func Map(row Row) (target identity.BackfillTarget, class string, notCarried bool
 	if row.FullName != nil {
 		target.DisplayName = *row.FullName
 	}
-	if row.PasswordHash != nil {
+	// A service-provider row never carries a password into the auth schema (identity.IsServiceProvider).
+	if row.PasswordHash != nil && !identity.IsServiceProvider(row.AuthProvider) {
 		if !isBcrypt(*row.PasswordHash) {
 			return target, SkipUnknownHashFormat, false
 		}
@@ -232,10 +233,18 @@ func mapIdentity(row Row) (key *identity.ExternalKey, class string, notCarried b
 			return nil, SkipInvalidIdentity, false
 		}
 		key = &k
+	case IsPlaceholder(row):
+		notCarried = true
 	default:
 		notCarried = true
 	}
 	return key, "", notCarried
+}
+
+// IsPlaceholder is a non-interactive service placeholder row: the one definition the users-owned guard uses to
+// leave it out of its identity count (identity.IsServicePlaceholder). It is still reported as not carried.
+func IsPlaceholder(row Row) bool {
+	return identity.IsServicePlaceholder(row.ID, row.AuthProvider, row.PasswordHash, row.AuthProviderID)
 }
 
 func isBcrypt(hash string) bool {

@@ -67,10 +67,10 @@ func (h credentialHandlers) validateRegister(w http.ResponseWriter, r *http.Requ
 	if object, ok := errs.Object(body); ok {
 		input.email, _ = errs.RequiredEmailStr(object, "email")
 		input.password, _ = errs.RequiredString(object, "password", 8, 128)
-		if value, present := errs.OptionalString(object, "full_name", 0, 0); present {
+		if value, present := errs.OptionalUTF8String(object, "full_name"); present {
 			input.fullName = &value
 		}
-		if value, present := errs.OptionalString(object, "org_name", 0, 0); present {
+		if value, present := errs.OptionalUTF8String(object, "org_name"); present {
 			input.orgName = &value
 		}
 	}

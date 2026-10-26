@@ -252,7 +252,7 @@ func (f *Flows) Resend(ctx context.Context, email string) error {
 // Forgot issues a password reset link. Its result and call sequence are the
 // same for every address.
 func (f *Flows) Forgot(ctx context.Context, email string) error {
-	return f.reissue(ctx, email, PurposePasswordReset, ResetTTL, func(*User) bool { return true })
+	return f.reissue(ctx, email, PurposePasswordReset, ResetTTL, notServiceProvider)
 }
 
 func (f *Flows) reissue(ctx context.Context, email string, purpose Purpose, ttl time.Duration, eligible func(*User) bool) error {
@@ -292,7 +292,7 @@ func (f *Flows) Reset(ctx context.Context, secret, newPassword string) (FlowOutc
 		return FlowOutcome{Kind: FlowPolicy, Violations: v}, nil
 	}
 	link := RedeemRequest{Purpose: PurposePasswordReset, TokenHash: linkDigest(secret)}
-	id, ok, err := f.accounts.PeekResetLink(ctx, link.TokenHash)
+	id, ok, err := f.peekResetLink(ctx, link.TokenHash)
 	if err != nil {
 		return FlowOutcome{}, fmt.Errorf("local: reading a reset link: %w", err)
 	}
@@ -372,4 +372,25 @@ func (f *Flows) changeLocked(ctx context.Context, req ChangeRequest) (FlowOutcom
 		return FlowOutcome{}, fmt.Errorf("local: setting the password: %w", err)
 	}
 	return FlowOutcome{Kind: FlowOK, PrincipalID: user.ID, Issued: res.Issued}, nil
+}
+
+// notServiceProvider is Forgot's eligibility: a service-provider account (identity.IsServiceProvider) gets no reset
+// link and is answered as an unknown address.
+func notServiceProvider(u *User) bool { return !identity.IsServiceProvider(u.AuthProvider) }
+
+// peekResetLink is PeekResetLink for Reset: the link of a service-provider account, or of an account that is gone,
+// reads as an unknown link, so that account never gets a password.
+func (f *Flows) peekResetLink(ctx context.Context, tokenHash [32]byte) (uuid.UUID, bool, error) {
+	id, ok, err := f.accounts.PeekResetLink(ctx, tokenHash)
+	if err != nil || !ok {
+		return id, ok, err
+	}
+	user, err := f.accounts.ByID(ctx, id)
+	if err != nil {
+		return uuid.Nil, false, fmt.Errorf("loading the user: %w", err)
+	}
+	if user == nil || identity.IsServiceProvider(user.AuthProvider) {
+		return uuid.Nil, false, nil
+	}
+	return id, true, nil
 }

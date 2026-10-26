@@ -20,14 +20,14 @@ var ErrLegacyProjection = errors.New("identity: the user cannot be projected to 
 // publicUser is the row go-api's create paths (register, social login, SSO
 // account creation) write to public.users. is_active is true, is_superuser
 // false and token_version 0 in all of them; created_at and updated_at are one
-// instant. username and full_name are NULL when empty, as the providers'
-// absent values are.
+// instant. username is NULL when empty, as the providers'
+// absent values are. full_name is stored as given: nil is NULL, "" is ”.
 type publicUser struct {
 	ID             uuid.UUID
 	Email          string
 	Username       string
 	PasswordHash   *string
-	FullName       string
+	FullName       *string
 	AuthProvider   string
 	AuthProviderID *string
 	Verified       bool
@@ -40,7 +40,7 @@ func insertPublicUser(ctx context.Context, tx audit.TxOps, u publicUser) error {
 	_, err := tx.Exec(ctx, `INSERT INTO public.users
 	(id, email, username, password_hash, full_name, auth_provider, auth_provider_id,
 	 is_active, is_verified, is_superuser, token_version, created_at, updated_at)
-VALUES ($1, $2, NULLIF($3, ''), $4, NULLIF($5, ''), $6, $7, true, $8, false, 0, now(), now())`,
+VALUES ($1, $2, NULLIF($3, ''), $4, $5, $6, $7, true, $8, false, 0, now(), now())`,
 		u.ID, u.Email, u.Username, u.PasswordHash, u.FullName, u.AuthProvider, u.AuthProviderID, u.Verified)
 	return err
 }
@@ -115,4 +115,11 @@ func federatedPublicUser(id uuid.UUID, emailLower string, req ProvisionRequest) 
 		return publicUser{}, ErrLegacyProjection
 	}
 	return u, nil
+}
+
+func derefOrEmpty(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
 }

@@ -180,6 +180,17 @@
               "type": "object",
               "properties": {
                 "poolSize": { "type": "integer", "minimum": 1, "maximum": 1000 },
+                "rollingUpdate": {
+                  "type": "object",
+                  "description": "Rolling update of the transaction pooler Deployment. Whole numbers only: the connection budget counts surge pods. Empty renders no strategy key (the Kubernetes default, one surge pod at one replica, which the budget counts).",
+                  "properties": {
+                    "maxSurge": { "type": "integer", "minimum": 0, "maximum": 10 },
+                    "maxUnavailable": { "type": "integer", "minimum": 0, "maximum": 10 }
+                  },
+                  "if": { "properties": { "maxSurge": { "const": 0 } }, "required": ["maxSurge"] },
+                  "then": { "properties": { "maxUnavailable": { "minimum": 1 } }, "required": ["maxUnavailable"] },
+                  "additionalProperties": false
+                },
                 "extraUsers": {
                   "type": "array",
                   "description": "Roles the transaction pooler authenticates in addition to its own. Both fields are required and neither may be empty: the chart writes each entry as one `\"role\" \"password\"` userlist line, so a missing role would emit a line PgBouncer silently reads as a blank user, and a missing passwordKey has no Secret value to resolve.",

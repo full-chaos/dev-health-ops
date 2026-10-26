@@ -43,6 +43,10 @@ var allowedAttributeKeys = map[string]struct{}{
 	"revision":     {},
 	"audience":     {},
 	"actions":      {},
+
+	"purged_email_verification_tokens": {},
+	"purged_password_reset_tokens":     {},
+	"run_id":                           {},
 }
 
 // ValidateAttributes refuses an audit attribute map that has a key outside the
@@ -209,12 +213,17 @@ var attributeIDRules = map[string]*regexp.Regexp{
 	"principal_id":   uuidPattern,
 	"binding_id":     uuidPattern,
 	"related_key_id": regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`),
+	// run_id names one operator run (a roll's purge Job): a short slug, never free text.
+	"run_id": regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,62}$`),
 }
 
 var uuidPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 // attributeNumberKeys take a whole number.
-var attributeNumberKeys = map[string]struct{}{"membership_revision": {}, "policy_revision": {}, "revision": {}}
+var attributeNumberKeys = map[string]struct{}{
+	"membership_revision": {}, "policy_revision": {}, "revision": {},
+	"purged_email_verification_tokens": {}, "purged_password_reset_tokens": {},
+}
 
 // attributeListRules are the list-valued keys: every member must satisfy the
 // rule, and the list may be empty (a workload token narrowed to no action).

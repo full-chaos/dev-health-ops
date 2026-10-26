@@ -102,12 +102,11 @@ func (s *Store) relinkOwned(ctx context.Context, key ExternalKey, legacy LegacyM
 	if legacy.Subject != "" {
 		stored = legacy.Subject
 	}
-	rows, err := s.pool.Query(ctx, `SELECT u.id, `+ssoBoundSQL("u")+` AND coalesce(u.sso_provider_id = $3::uuid, false)
+	rows, err := s.pool.Query(ctx, `SELECT u.id, `+ssoBoundToKeySQL("u", "$3")+`
        AND EXISTS (SELECT 1 FROM `+s.q+`.users a WHERE a.principal_id = u.id)
 FROM public.users u
 WHERE u.auth_provider = $1 AND u.auth_provider_id = $2
-  AND (u.sso_provider_id IS NULL OR u.sso_provider_id = $3::uuid
-       OR NOT EXISTS (SELECT 1 FROM public.sso_providers p WHERE p.id = u.sso_provider_id AND p.protocol = u.auth_provider))`,
+  AND `+ssoCarrierScopeSQL("u", "$3"),
 		legacy.AuthProvider, stored, string(key.Provider))
 	if err != nil {
 		return Principal{}, false, s.storeErr(ctx, "read relink user", err)

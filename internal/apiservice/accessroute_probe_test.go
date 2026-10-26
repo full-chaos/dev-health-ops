@@ -82,9 +82,9 @@ func newProbeStore() *probeStore {
 			{probeTarget, probeTargetOrg}: "member",
 		},
 		sessions: map[uuid.UUID]policy.SessionRow{
-			probeLiveSID:    {PrincipalID: probeUser},
-			probeRevokedSID: {PrincipalID: probeUser, Revoked: true},
-			probeOtherSID:   {PrincipalID: probeMember},
+			probeLiveSID:    {PrincipalID: probeUser, LegacyTokenVersion: i64ptr(3)},
+			probeRevokedSID: {PrincipalID: probeUser, Revoked: true, LegacyTokenVersion: i64ptr(3)},
+			probeOtherSID:   {PrincipalID: probeMember, LegacyTokenVersion: i64ptr(0)},
 		},
 		imperson: map[uuid.UUID]*policy.Impersonation{
 			probeAdminUser: {ID: uuid.MustParse("00000000-0000-4000-8000-0000000000d1"), AdminUserID: probeAdminUser,

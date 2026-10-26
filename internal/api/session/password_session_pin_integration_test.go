@@ -63,5 +63,5 @@ func TestPasswordWritesEndEarlierAuthSessions(t *testing.T) {
 
 	unpinned := rig.SignIn(t, ctx, bob)
 	rig.ClearPin(t, ctx, unpinned)
-	check("session without a pin", bob, unpinned, false)
+	check("session without a pin", bob, unpinned, true)
 }

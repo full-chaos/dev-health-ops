@@ -29,8 +29,8 @@ func TestLegacyLinkPurgeAttributesAreCountsAndARunIDOnly(t *testing.T) {
 
 func TestCommitPublicPurgeRefusesAnyOtherEventTypeAndCommitRefusesThisOne(t *testing.T) {
 	ctx := context.Background()
-	other := AuditEvent{EventType: "organization.created", Outcome: OutcomeAllowed}
-	if err := CommitPublicPurge(ctx, nil, authschema.ValidatedIdentifier{}, func(context.Context, TxOps) error { return nil }, other); !errors.Is(err, ErrNotPublicPurge) {
+	apply := func(context.Context, TxOps) (map[string]any, error) { return nil, nil }
+	if err := CommitPublicPurge(ctx, nil, authschema.ValidatedIdentifier{}, "organization.created", apply); !errors.Is(err, ErrNotPublicPurge) {
 		t.Fatalf("another event type: err = %v, want ErrNotPublicPurge", err)
 	}
 	purge := AuditEvent{EventType: EventLegacyLinkTokensPurged, Outcome: OutcomeAllowed}

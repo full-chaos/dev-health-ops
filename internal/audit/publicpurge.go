@@ -25,20 +25,18 @@ var publicPurgeEventTypes = map[string]bool{EventLegacyLinkTokensPurged: true}
 // publicPurgeEventTypes. Nothing is written.
 var ErrNotPublicPurge = fmt.Errorf("%w: the audit event type is not a public purge", ErrMutationFailed)
 
-// CommitPublicPurge runs apply and writes the event's audit row in one
-// transaction, or neither. It writes no outbox event: the purge changes no
-// provisioning aggregate.
-func CommitPublicPurge(ctx context.Context, pool *pgxpool.Pool, schema authschema.ValidatedIdentifier, apply func(ctx context.Context, tx TxOps) error, event AuditEvent) (err error) {
+// CommitPublicPurge runs apply and writes one audit row of eventType in one
+// transaction, or neither. apply returns the row's attributes (they hold counts
+// that exist only after it ran); they pass the same allowlist as every audit
+// row. It writes no outbox event: the purge changes no provisioning aggregate.
+func CommitPublicPurge(ctx context.Context, pool *pgxpool.Pool, schema authschema.ValidatedIdentifier, eventType string, apply func(ctx context.Context, tx TxOps) (map[string]any, error)) (err error) {
 	defer func() {
 		if err != nil {
 			slog.ErrorContext(ctx, "audit: CommitPublicPurge failed; its own transaction rolled back",
-				"audit_event_type", event.EventType, logging.ErrorAttr(err))
+				"audit_event_type", eventType, logging.ErrorAttr(err))
 		}
 	}()
-	if err := event.validate(); err != nil {
-		return err
-	}
-	if !publicPurgeEventTypes[event.EventType] {
+	if !publicPurgeEventTypes[eventType] {
 		return ErrNotPublicPurge
 	}
 	if apply == nil {
@@ -55,11 +53,16 @@ func CommitPublicPurge(ctx context.Context, pool *pgxpool.Pool, schema authschem
 	if err := armTx(ctx, tx); err != nil {
 		return err
 	}
-	if applyErr := apply(ctx, TxOps{tx: tx}); applyErr != nil {
+	attributes, applyErr := apply(ctx, TxOps{tx: tx})
+	if applyErr != nil {
 		return fmt.Errorf("%w: applying the state mutation: %w", ErrMutationFailed, applyErr)
 	}
 	if status := tx.Conn().PgConn().TxStatus(); status != 'T' {
 		return fmt.Errorf("%w: the mutation ended the transaction itself (status %q)", ErrMutationFailed, string(status))
+	}
+	event := AuditEvent{EventType: eventType, Outcome: OutcomeAllowed, Attributes: attributes}
+	if err := event.validate(); err != nil {
+		return err
 	}
 	if err := insertAuditEvent(ctx, tx, schema, event); err != nil {
 		return err

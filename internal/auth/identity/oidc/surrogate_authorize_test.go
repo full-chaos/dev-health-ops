@@ -41,3 +41,25 @@ func TestAuthorizeKeepsAcceptingAPairedRedirectURI(t *testing.T) {
 		}
 	}
 }
+
+// The OAuth authorize route reads the body for its shape only and never uses
+// redirect_uri, so a lone surrogate there is answered exactly as any other
+// value is (the api plane ignores the field the same way).
+func TestOAuthAuthorizeIgnoresALoneSurrogateRedirectURI(t *testing.T) {
+	c := routeCases[2]
+	serve := func(body string) (int, string) {
+		row := c.activeRow()
+		env := newUnitEnv(t, &fakeProviders{before: row})
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/oauth/"+row.ID.String()+"/authorize", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		rec := env.serve(c, req)
+		return rec.Code, rec.Body.String()
+	}
+	wantStatus, _ := serve(`{"redirect_uri":"https://app.example/cb"}`)
+	for _, escape := range []string{`\ud800`, `\udbff`, `\udc00`, `\udfff`, `\ud83d\ud83d`} {
+		status, body := serve(`{"redirect_uri":"https://app.example/cb` + escape + `"}`)
+		if status != wantStatus || strings.Contains(body, "string_unicode") {
+			t.Errorf("%s: status=%d want %d body=%s", escape, status, wantStatus, body)
+		}
+	}
+}

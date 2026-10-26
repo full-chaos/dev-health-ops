@@ -1212,6 +1212,38 @@ GOWORK=off go test -mod=readonly -tags=integration -list '.*' ./h | sed -nE "s/^
 			t.Logf("fixture output:\n%s", got)
 		}
 	})
+	t.Run("a group split names its cause: a collision fails by package and name, a named budget split passes", func(t *testing.T) {
+		t.Parallel()
+		files := map[string]string{
+			"f/plain_test.go": "package f\n\nimport \"testing\"\n\nfunc TestShared(t *testing.T) {}\n",
+			"f/tag_test.go":   "//go:build integration\n\npackage f\n\nimport \"testing\"\n\nfunc TestFTagged(t *testing.T) {}\n",
+			"h/plain_test.go": "package h\n\nimport \"testing\"\n\nfunc TestShared(t *testing.T) {}\n",
+			"h/hook_test.go":  "//go:build integration\n\npackage h\n\nimport \"testing\"\n\nfunc init() {}\n\nfunc TestHTagged(t *testing.T) {}\n",
+		}
+		for _, p := range []string{"c1", "c2"} {
+			var b strings.Builder
+			b.WriteString("//go:build integration\n\npackage " + p + "\n\nimport \"testing\"\n\n")
+			for i := 0; i < 400; i++ {
+				fmt.Fprintf(&b, "func Test%sAVeryLongIntegrationTestNameThatPadsTheRunRegexTowardsTheArgumentLimit%04d(t *testing.T) {}\n", strings.ToUpper(p), i)
+			}
+			files[p+"/long_test.go"] = b.String()
+		}
+		got := runDiscoveryFixture(t, files, "run_integration_packages --dry-run . fixture ./f ./h\necho '--- budget'\nrun_integration_packages --dry-run . fixture ./c1 ./c2\n")
+		collision, budget, _ := strings.Cut(got, "--- budget\n")
+		d := shardSplitDefects(collision, nil)
+		if !strings.Contains(strings.Join(d, "\n"), "h cannot join go test group 1: it and f share the name TestShared") {
+			t.Errorf("an injected collision is not refused by package and name: %q", d)
+		}
+		if d := shardSplitDefects(budget, map[string]bool{"c2": true}); len(d) > 0 {
+			t.Errorf("a named budget split is refused: %q", d)
+		}
+		if d := shardSplitDefects(budget, nil); len(d) == 0 {
+			t.Error("a budget split no exception names passes")
+		}
+		if t.Failed() {
+			t.Logf("fixture output:\n%s", got)
+		}
+	})
 	t.Run("the integration verb plans bounded, collision-free groups on the real tree", func(t *testing.T) {
 		t.Parallel()
 		keys := sortedKeys(expectedPackages(t))
@@ -2356,6 +2388,85 @@ func TestEachPackagesShardRunsEverySelectedTestExactlyOnce(t *testing.T) {
 	} {
 		if len(censusDefects(bad, 1, keys, tf)) == 0 {
 			t.Errorf("planted defect not caught: %s", name)
+		}
+	}
+}
+
+// budgetSplitPackages names the packages whose selected names cannot join the first go test group of their shard within
+// the 60000-byte -run budget (today internal/llmorgsettings, packages shard 7). Such a package opens a second go test,
+// which runs after the first; every other packages shard runs ONE go test.
+var budgetSplitPackages = map[string]bool{"internal/llmorgsettings": true}
+
+// shardSplitDefects checks one packages shard's receipts: every go test group after the first is explained by
+// `SHARD-SPLIT <module> <n> <key> <g> collision <name> <member>` or `... <g> budget <bytes>` lines (why <key> did not
+// join group <g>), and only a budget split of a package in allowed passes. A collision split (a name one package
+// selects and another skips; a shared -run cannot serve both) is refused by both packages and the name.
+func shardSplitDefects(stdout string, allowed map[string]bool) []string {
+	var d []string
+	why := map[string]int{}
+	for _, v := range lineValues(stdout, "  SHARD-SPLIT ") {
+		f := strings.Fields(v)
+		switch {
+		case len(f) == 7 && f[4] == "collision":
+			why[f[1]]++
+			d = append(d, fmt.Sprintf("%s cannot join go test group %s: it and %s share the name %s (one selects it, the other skips it, and one -run serves both); rename one copy", f[2], f[3], f[6], f[5]))
+		case len(f) == 6 && f[4] == "budget":
+			why[f[1]]++
+			if !allowed[f[2]] {
+				d = append(d, fmt.Sprintf("%s opens go test group %s: with group %s its -run regex is %s bytes, over the budget, and no named budget split covers it", f[2], f[1], f[3], f[5]))
+			}
+		default:
+			d = append(d, "malformed SHARD-SPLIT line "+strconv.Quote(v))
+		}
+	}
+	for i, v := range lineValues(stdout, "  SHARD-GROUP ") {
+		if f := strings.Fields(v); i > 0 && (len(f) < 2 || why[f[1]] == 0) {
+			d = append(d, fmt.Sprintf("go test group %q runs after another one, with no SHARD-SPLIT reason", v))
+		}
+	}
+	return d
+}
+
+// TestEachPackagesShardPlansOneGoTestGroup is the shard-shape guard: on the real tree every packages shard plans ONE go
+// test group (one go test, so no package waits for another group), except a named budget split.
+func TestEachPackagesShardPlansOneGoTestGroup(t *testing.T) {
+	t.Parallel()
+	stdout, gho := realPlan(t)
+	facts := realPlanFacts(t)
+	assignments, err := checkShardPlan(stdout, gho, facts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var shards []int
+	for s, rows := range assignments {
+		for p := range rows {
+			if !splitPackages[p] {
+				shards = append(shards, s)
+				break
+			}
+		}
+	}
+	sort.Ints(shards)
+	if len(shards) < 2 {
+		t.Fatal("fewer than two packages shards: the guard measures nothing")
+	}
+	split := map[string]bool{}
+	results := dryRuns(t, "packages", shards)
+	for _, shard := range shards {
+		r := results[shard]
+		if r.code != 0 {
+			t.Fatalf("packages shard %d: exit %d: %s%s", shard, r.code, r.stdout, r.stderr)
+		}
+		for _, d := range shardSplitDefects(r.stdout, budgetSplitPackages) {
+			t.Errorf("packages shard %d: %s", shard, d)
+		}
+		for _, v := range lineValues(r.stdout, "  SHARD-SPLIT ") {
+			split[strings.Fields(v)[2]] = true
+		}
+	}
+	for p := range budgetSplitPackages {
+		if !split[p] {
+			t.Errorf("budgetSplitPackages names %s, but no packages shard splits on it: drop the stale exception", p)
 		}
 	}
 }

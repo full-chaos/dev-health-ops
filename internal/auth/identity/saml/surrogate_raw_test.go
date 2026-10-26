@@ -66,3 +66,25 @@ func TestACSAnswers400ForAJSONBodyThatIsNotUTF8AndLeavesTheFormAlone(t *testing.
 		t.Errorf("the form branch changed: ok=%v in=%q status=%d body=%s", ok, in, rec.Code, rec.Body.String())
 	}
 }
+
+func TestInitiateKeepsItsAnswerForABodyWithASyntaxError(t *testing.T) {
+	for _, body := range []string{`{"relay_state":"x"`, `{"relay_state":`, `{"relay_state" "x"}`, `[1,`} {
+		rec, _ := initiateRequest(t, body)
+		if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "Request body must be a JSON object") {
+			t.Errorf("%q: status=%d body=%s", body, rec.Code, rec.Body.String())
+		}
+	}
+}
+
+func TestInitiateOnlyReadsTheRelayStateMemberForRawSurrogateBytes(t *testing.T) {
+	for _, body := range []string{
+		"{\"note\":\"\xed\xa0\x80\",\"relay_state\":\"ok\"}",
+		"{\"\xed\xa0\x80\":1,\"relay_state\":\"ok\"}",
+		"{\"other\":[\"\xed\xa0\x80\"],\"relay_state\":\"ok\"}",
+	} {
+		rec, _ := initiateRequest(t, body)
+		if rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), "string_unicode") {
+			t.Errorf("%q: status=%d body=%s", body, rec.Code, rec.Body.String())
+		}
+	}
+}

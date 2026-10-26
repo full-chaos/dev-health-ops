@@ -68,3 +68,37 @@ func TestRawBodiesThatAreValidKeepTheirAnswers(t *testing.T) {
 		}
 	}
 }
+
+// A body with a syntax error keeps the answer this route always gave (the api
+// plane answers 422 json_invalid there; only the invalid-byte class is a 400).
+func TestJSONRoutesKeepTheirAnswerForABodyWithASyntaxError(t *testing.T) {
+	for _, c := range routeCases[:4] {
+		kind := "oidc"
+		if c.oauth {
+			kind = "oauth"
+		}
+		for _, body := range []string{`{"redirect_uri":"https://app.example/cb"`, `{"code":`, `{"redirect_uri" "x"}`, `[1,`} {
+			status, text := serveBody(t, c, kind, body)
+			if status != http.StatusUnprocessableEntity || !strings.Contains(text, "model_attributes_type") {
+				t.Errorf("%s %q: status=%d body=%s", c.route, body, status, text)
+			}
+		}
+	}
+}
+
+// The raw check runs on the one member the route keeps, never on another
+// member or on a key.
+func TestAuthorizeOnlyReadsTheRedirectURIMemberForRawSurrogateBytes(t *testing.T) {
+	c := routeCases[0]
+	wantStatus, _ := serveBody(t, c, "oidc", `{"redirect_uri":"https://app.example/cb"}`)
+	for _, body := range []string{
+		"{\"note\":\"\xed\xa0\x80\",\"redirect_uri\":\"https://app.example/cb\"}",
+		"{\"\xed\xa0\x80\":1,\"redirect_uri\":\"https://app.example/cb\"}",
+		"{\"use_pkce\":true,\"extra\":[\"\xed\xa0\x80\"],\"redirect_uri\":\"https://app.example/cb\"}",
+	} {
+		status, text := serveBody(t, c, "oidc", body)
+		if status != wantStatus || strings.Contains(text, "string_unicode") {
+			t.Errorf("%q: status=%d want %d body=%s", body, status, wantStatus, text)
+		}
+	}
+}

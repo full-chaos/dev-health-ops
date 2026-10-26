@@ -40,3 +40,12 @@ func TestExchangeKeepsItsOtherAnswersForReadableBodies(t *testing.T) {
 		}
 	}
 }
+
+func TestExchangeKeepsItsAnswerForABodyWithASyntaxError(t *testing.T) {
+	for _, body := range []string{`{"provider":"github"`, `{"provider":`, `{"provider" "x"}`, `[1,`} {
+		rec := exchange(body)
+		if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "provider and provider_access_token are required") {
+			t.Errorf("%q: status=%d body=%s", body, rec.Code, rec.Body.String())
+		}
+	}
+}

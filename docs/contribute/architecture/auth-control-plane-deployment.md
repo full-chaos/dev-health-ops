@@ -121,14 +121,14 @@ The credential routes move with users owned, not with login: auth-service mounts
 them only with `AUTH_USERS_OWNED`, and go-api refuses `AUTH_USERS_OWNED` unless
 the credential routes go to auth-service.
 
-Before the move from phase 3 to phase 4, the running auth-service image must
-carry CHAOS-11570: it mounts the credential routes in every phase and answers
-503 with `Retry-After` while users are not owned. The one `helm upgrade` rolls
-go-api and auth-service together, so for a short time go-api pods that forward
-the credential routes meet auth-service pods of the previous revision. With
-that image those pods answer 503 and `Retry-After` (a retryable answer that
-writes nothing); without it they answer 404. The chart cannot read the running
-image, so check it before the upgrade.
+Before the move from phase 3 to phase 4, the running auth-service release must
+mount the credential routes in every phase and answer 503 with `Retry-After`
+while users are not owned. The one `helm upgrade` rolls go-api and auth-service
+together, so for a short time go-api pods that forward the credential routes
+meet auth-service pods of the previous revision. With such a release those pods
+answer 503 and `Retry-After` (a retryable answer that writes nothing); without
+it they answer 404. The chart cannot read the running image, so check it before
+the upgrade.
 
 Rolling back phase 4 narrows the runtime role's grants (the write grant on the
 public `users` table goes), and the grants ratchet refuses a narrowing without

@@ -509,6 +509,24 @@ func composeStackFindings(text []byte) ([]string, error) {
 	if !systemLogsMounted {
 		found("system logs: clickhouse does not mount the system logs file at %s, so the system log tables have no ttl", systemLogsFileTarget)
 	}
+	probe := ""
+	if clickHouse.Healthcheck != nil && len(clickHouse.Healthcheck.Test) == 2 && clickHouse.Healthcheck.Test[0] == "CMD-SHELL" {
+		probe = clickHouse.Healthcheck.Test[1]
+	}
+	if !strings.Contains(probe, "clickhouse-client") || !strings.Contains(probe, "SELECT 1") {
+		found("clickhouse health: the probe is %q, want a CMD-SHELL clickhouse-client `SELECT 1` on the native port: clients dial 9000, and an HTTP /ping probe passes before 9000 listens", probe)
+	}
+	if strings.Contains(probe, "8123") {
+		found("clickhouse health: the probe uses the HTTP port 8123, want the native port")
+	}
+	if !strings.Contains(probe, "hostname -i") || strings.Contains(probe, "localhost") || strings.Contains(probe, "127.0.0.1") {
+		found("clickhouse health: the probe host is not the container's own address (hostname -i): the first-boot temporary server listens on 127.0.0.1 only and would pass a loopback probe")
+	}
+	for _, flag := range []struct{ name, want string }{{"--user", `"$$CLICKHOUSE_USER"`}, {"--password", `"$$CLICKHOUSE_PASSWORD"`}} {
+		if !strings.Contains(probe, flag.name+" "+flag.want) {
+			found("clickhouse health: the probe must pass %s as the env ref %s (no literal credential, $$ so Compose does not expand it on the host)", flag.name, flag.want)
+		}
+	}
 	goAPIEnvironment := stack.Services[goAPIHost].Environment
 	if goAPIEnvironment["DEV_HEALTH_CH_API_HOST"] != clickHouseService || goAPIEnvironment[apiClickHouseUserKey] != apiClickHouseUser || goAPIEnvironment["DEV_HEALTH_CH_API_DB"] == "" {
 		found("api login: go-api has DEV_HEALTH_CH_API_HOST %q, %s %q, DEV_HEALTH_CH_API_DB %q, want host %s, user %s and a database: without them the team and identity admin routes are not mounted",
@@ -693,6 +711,24 @@ func TestComposeStackCheckSeesEachDefect(t *testing.T) {
 			old:  "      GO_API_HOME_ENABLED: \"true\"\n",
 			new:  "",
 			want: "route switch: query-api has GO_API_HOME_ENABLED \"\"",
+		},
+		{
+			name: "the ClickHouse probe is the HTTP ping again",
+			old:  "      test: [ \"CMD-SHELL\", \"h=$$(hostname -i | cut -d' ' -f1) && [ -n \\\"$$h\\\" ] && clickhouse-client --host \\\"$$h\\\" --user \\\"$$CLICKHOUSE_USER\\\" --password \\\"$$CLICKHOUSE_PASSWORD\\\" --query 'SELECT 1'\" ]\n",
+			new:  "      test: [ \"CMD\", \"wget\", \"--spider\", \"-q\", \"http://localhost:8123/ping\" ]\n",
+			want: "clickhouse health: the probe is \"\"",
+		},
+		{
+			name: "the ClickHouse probe dials loopback",
+			old:  "--host \\\"$$h\\\" ",
+			new:  "--host localhost ",
+			want: "clickhouse health: the probe host is not the container's own address",
+		},
+		{
+			name: "the ClickHouse probe carries a literal password",
+			old:  "--password \\\"$$CLICKHOUSE_PASSWORD\\\"",
+			new:  "--password hunter2",
+			want: "clickhouse health: the probe must pass --password as the env ref",
 		},
 		{
 			name: "the api's ClickHouse users file not mounted",

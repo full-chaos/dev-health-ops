@@ -75,5 +75,26 @@ The chart keeps auth-service off by default (`authService.phase: 0`). When it is
 | `authService.resources.limits.cpu` | 1000m | The measured run used one CPU per pod. |
 | `authService.resources.limits.memory` | 256Mi | Peak use was 27 MiB. |
 | `authService.database.maxConns` | 8 | Pool per replica, a whole number from 1 to 32. Set it here, not through `extraEnv` or `extraArgs`; the chart passes it as the `--database-max-conns` flag. |
+| `authService.database.connectionBudget` | 0 | The connections the auth database may hold: `max_connections` minus `superuser_reserved_connections` (PostgreSQL defaults: 100 - 3 = 97). 0 turns the check off. Above 0 the render fails when the static maximum below is more than the budget. |
 
-With two or more replicas the chart also renders a PodDisruptionBudget with `minAvailable: 1`. The pods connect to the database directly, so the database must hold `replicas x maxConns`, plus one surge pod while rolling: 16 connections steady and 24 during a rollout at the defaults. These are planning figures, not a ceiling: a pod that is shutting down (up to 20 s, and it holds its connections until its in-flight requests finish) can overlap with the surge pod, so leave room above 24. The overlap was measured in two runs on kind (run 2 database connections only, run 3 connections and CPU): 6 to 7 connections at the high-water mark with four pods alive and old pods held 1 to 6 s (see Other measured values); the planning figures above stay, because a longer hold keeps more connections. The chart does not pin a total auth database budget; check these figures against the budget in [Capacity and sizing](capacity-and-sizing.md). The node capacity of a release is not known to the chart: confirm the cluster can schedule the CPU requests above before enabling the service.
+With two or more replicas the chart also renders a PodDisruptionBudget with `minAvailable: 1`. The pods connect to the database directly, so the database must hold `replicas x maxConns`, plus one surge pod while rolling: 16 connections steady and 24 during a rollout at the defaults. These are planning figures, not a ceiling: a pod that is shutting down (up to 20 s, and it holds its connections until its in-flight requests finish) can overlap with the surge pod, so leave room above 24. The overlap was measured in two runs on kind (run 2 database connections only, run 3 connections and CPU): 6 to 7 connections at the high-water mark with four pods alive and old pods held 1 to 6 s (see Other measured values); the planning figures above stay, because a longer hold keeps more connections. Set `authService.database.connectionBudget` to make the chart check these figures; with the default 0 the chart does not check them, so compare them with the budget in [Capacity and sizing](capacity-and-sizing.md) yourself. The node capacity of a release is not known to the chart: confirm the cluster can schedule the CPU requests above before enabling the service.
+
+## Database connection budget
+
+The check counts every client that holds server connections on the auth database, as a static maximum:
+
+`(authService.replicas + 1 surge pod) x authService.database.maxConns` plus every go-pgbouncer pool. PgBouncer sizes a pool per (user, database) pair, so the transaction pooler counts its own role and each `goWorkers.pgbouncer.transaction.extraUsers` entry at `transaction.poolSize`; the queue-session and coordinator-session poolers count one pool each. Poolers count only while `goWorkers.enabled` and `goWorkers.pgbouncer.enabled` are on.
+
+Production shape (transaction 16, queue-session 36, coordinator-session 10, one extra user for KEDA, two replicas, pool 8):
+
+| Client | Connections | Source |
+|---|---|---|
+| Transaction pooler, own role | 16 | `goWorkers.pgbouncer.transaction.poolSize` |
+| Transaction pooler, KEDA read-only role | 16 | one `transaction.extraUsers` entry, same pool size |
+| Queue-session pooler | 36 | `goWorkers.pgbouncer.queueSession.poolSize` |
+| Coordinator-session pooler | 10 | `goWorkers.pgbouncer.coordinatorSession.poolSize` |
+| auth-service, 2 replicas + 1 surge pod | 24 | (2 + 1) x `authService.database.maxConns` 8 |
+| Static maximum | 102 | |
+| Usable with PostgreSQL defaults | 97 | `max_connections` 100 minus 3 reserved |
+
+This is an upper bound, not a measured count: a pool opens server connections only while it has work. The production values file observes 9 and 3 backends in use on the two transaction pools. With `connectionBudget: 97` this shape fails the render; the budget is there to make that visible before a change adds more, and the chart default (0) leaves every existing render unchanged. The chart default pool sizes (transaction 20, queue-session 50, coordinator-session 14) give a larger maximum than the production shape.

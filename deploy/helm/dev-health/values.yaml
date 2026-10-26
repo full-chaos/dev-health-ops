@@ -231,6 +231,12 @@ authService:
     #    through extraEnv or extraArgs; the chart renders it as the
     #    --database-max-conns flag.
     maxConns: 8
+    # -- The connections the auth database may hold: max_connections minus
+    #    superuser_reserved_connections (Postgres defaults 100 - 3 = 97). 0
+    #    turns the check off. Above 0 the render fails when (replicas + one
+    #    surge pod) x maxConns plus every go-pgbouncer pool (one per
+    #    (user, database) pair) is more than this. A static upper bound.
+    connectionBudget: 0
   # -- The shared rate-limit store's login (AUTH_VALKEY_URI, database 1): an
   #    ACL user of its own, limited to the auth_svc_ key prefix, never go-api's.
   #    Leave secretName empty while no limited route (login, credentials,

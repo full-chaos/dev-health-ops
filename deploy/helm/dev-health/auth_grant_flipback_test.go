@@ -77,15 +77,17 @@ func TestTheNarrowRendersOnlyWithTheFlag(t *testing.T) {
 }
 
 // narrowAfterFlipBack without the acknowledgement fails the render and names
-// both settings.
+// both settings, with or without the grants hook.
 func TestNarrowAfterFlipBackIsRefusedWithoutTheAck(t *testing.T) {
-	_, out, err := renderAuth(t, phaseArgs(3, "--set", "authService.migrate.narrowAfterFlipBack=true")...)
-	if err == nil {
-		t.Fatal("render with narrowAfterFlipBack and no acknowledgement succeeded")
-	}
-	for _, name := range []string{"narrowAfterFlipBack", "acknowledgeGrantNarrowing"} {
-		if !strings.Contains(out, name) {
-			t.Errorf("refusal does not name %s:\n%.600s", name, out)
+	for _, extra := range [][]string{nil, {"--set", "authService.migrate.grantsHook.enabled=false"}} {
+		_, out, err := renderAuth(t, phaseArgs(3, append([]string{"--set", "authService.migrate.narrowAfterFlipBack=true"}, extra...)...)...)
+		if err == nil {
+			t.Fatalf("%v: render with narrowAfterFlipBack and no acknowledgement succeeded", extra)
+		}
+		for _, name := range []string{"narrowAfterFlipBack", "acknowledgeGrantNarrowing"} {
+			if !strings.Contains(out, name) {
+				t.Errorf("%v: refusal does not name %s:\n%.600s", extra, name, out)
+			}
 		}
 	}
 }

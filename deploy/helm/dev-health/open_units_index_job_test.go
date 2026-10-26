@@ -49,7 +49,7 @@ func TestOpenUnitsIndexJobIsOffByDefaultAndOrderedBeforeTheMigrateJob(t *testing
 		t.Fatalf("hook annotations = %v, want pre-install,pre-upgrade at weight -2", annotations)
 	}
 	c := container(t, job, "open-units-index")
-	want := []string{"migrate", "postgres", "build-index", "--lock-timeout=5s", "--attempts=20", "--retry-delay=15s", "open-units"}
+	want := []string{"migrate", "postgres", "build-index", "--lock-timeout=5s", "--deadline=240s", "--attempts=3", "--retry-delay=15s", "open-units"}
 	if args := stringsOf(c["args"]); !reflect.DeepEqual(args, want) {
 		t.Fatalf("args = %v, want %v", args, want)
 	}

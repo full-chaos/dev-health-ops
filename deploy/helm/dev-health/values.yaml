@@ -1304,10 +1304,16 @@ migrations:
     #    localBundledPostgres the Job runs on pre-upgrade only. Pass a helm --timeout above activeDeadlineSeconds.
     openUnitsIndex:
       enabled: false
-      activeDeadlineSeconds: 3600
-      # -- lock_timeout of each build attempt, in seconds (1 to 60).
+      # -- The index is small (about 2 MiB at 830k units), so the Job is short. The hook budget is
+      #    streakIndex 2400 + openUnitsIndex 600 + the migrate Job 1800 + a 600 s rollout margin = 5400 s, the
+      #    helm --timeout of 90m; a larger value here needs a smaller streakIndex or a larger helm --timeout.
+      activeDeadlineSeconds: 600
+      # -- lock_timeout of the table-lock probe before each attempt, in seconds (1 to 60). The waits for older
+      #    transactions are not under it: they run up to deadlineSeconds.
       lockTimeoutSeconds: 5
-      attempts: 20
+      # -- window of the whole build in seconds; deadlineSeconds + 360 must not exceed activeDeadlineSeconds.
+      deadlineSeconds: 240
+      attempts: 3
       retryDelaySeconds: 15
     backoffLimit: 2
     activeDeadlineSeconds: 1800

@@ -116,6 +116,7 @@
                 "enabled": { "type": "boolean" },
                 "activeDeadlineSeconds": { "type": "integer", "minimum": 60 },
                 "lockTimeoutSeconds": { "type": "integer", "minimum": 1, "maximum": 60 },
+                "deadlineSeconds": { "type": "integer", "minimum": 60 },
                 "attempts": { "type": "integer", "minimum": 1 },
                 "retryDelaySeconds": { "type": "integer", "minimum": 0 }
               },

@@ -29,6 +29,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/ratelimitvalkey"
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
+	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 	"github.com/full-chaos/dev-health-ops/internal/storage/valkey"
@@ -61,6 +62,8 @@ type routesEnv struct {
 	edge     *principal.EdgeVerifier
 	root     string
 	logs     *safeBuffer
+	// components are what configure built, for a test that stops them itself.
+	components []lifecycle.Component
 }
 
 // newRoutesEnv builds the real stack: the go-api public schema, the auth
@@ -220,7 +223,7 @@ func newRoutesEnvDialing(t *testing.T, ctx context.Context, extra map[string]str
 		t.Fatal(err)
 	}
 	return &routesEnv{admin: admin, runtime: runtime, sessions: sessions, identity: identities, front: front,
-		client: &http.Client{Timeout: 10 * time.Second}, edge: edge, root: wd, logs: logs}
+		client: &http.Client{Timeout: 10 * time.Second}, edge: edge, root: wd, logs: logs, components: components}
 }
 
 func contractsRoot() (string, error) {

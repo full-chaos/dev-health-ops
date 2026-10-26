@@ -314,3 +314,17 @@ func TestUTF8StringDetailDoesNotEchoTheInput(t *testing.T) {
 		t.Fatalf("detail: %s", raw)
 	}
 }
+
+func TestRefuseSurrogateNamesTheFieldAndKeepsAPair(t *testing.T) {
+	var errs Errors
+	if !errs.RefuseSurrogate("relay_state", pyjson.FromRunes([]rune{'a', 0xd800})) || len(errs) != 1 || errs[0].Type != "string_unicode" ||
+		len(errs[0].Loc) != 2 || errs[0].Loc[0] != "body" || errs[0].Loc[1] != "relay_state" {
+		t.Fatalf("lone: %+v", errs)
+	}
+	var clean Errors
+	for _, ok := range []string{"", "plain", "\U0001F600"} {
+		if clean.RefuseSurrogate("relay_state", ok) || len(clean) != 0 {
+			t.Errorf("%q refused: %+v", ok, clean)
+		}
+	}
+}

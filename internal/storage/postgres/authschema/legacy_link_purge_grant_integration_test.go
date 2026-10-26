@@ -36,7 +36,7 @@ func TestLegacyLinkPurgeGrantFollowsTheSwitch(t *testing.T) {
 		return found
 	}
 	purge := func(table string) string {
-		return fmt.Sprintf(`WITH d AS (DELETE FROM public.%s WHERE id = gen_random_uuid() RETURNING id) SELECT count(*) FROM d`, table)
+		return fmt.Sprintf(`WITH d AS (DELETE FROM public.%s WHERE id = gen_random_uuid() RETURNING id) SELECT count(*) FROM d`, Quote(mustValidatedIdentifier(table)))
 	}
 	denied := func(name, statement string) {
 		t.Helper()

@@ -84,6 +84,13 @@ VALUES ($1, $2, $3, now() + interval '%s', now())`, r.table, r.ttl), uuid.New(),
 		}
 	}
 	var principal uuid.UUID
+	// The shared database also serves the reconcile tests: leave no user or principal behind.
+	t.Cleanup(func() {
+		c := context.Background()
+		_, _ = e.admin.Exec(c, `DELETE FROM public.email_verification_tokens; DELETE FROM public.password_reset_tokens`)
+		_, _ = e.admin.Exec(c, `DELETE FROM public.users WHERE id = ANY($1)`, []uuid.UUID{u1, u2})
+		_, _ = e.admin.Exec(c, `DELETE FROM auth.principals WHERE id = $1`, principal)
+	})
 	if err := e.admin.QueryRow(ctx, `INSERT INTO auth.principals (kind) VALUES ('user') RETURNING id`).Scan(&principal); err != nil {
 		t.Fatal(err)
 	}

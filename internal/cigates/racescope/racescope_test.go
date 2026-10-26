@@ -138,7 +138,9 @@ func TestRowsAreSortedUniqueAndWellFormed(t *testing.T) {
 func module(t *testing.T, files map[string]string) string {
 	t.Helper()
 	dir := t.TempDir()
-	files["go.mod"] = "module example.test/m\n\ngo 1.22\n"
+	if _, ok := files["go.mod"]; !ok {
+		files["go.mod"] = "module example.test/m\n\ngo 1.22\n"
+	}
 	for name, body := range files {
 		p := filepath.Join(dir, filepath.FromSlash(name))
 		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
@@ -642,5 +644,63 @@ func TestAFuncConvertedToAnInterfaceIsRefused(t *testing.T) {
 	ok := map[string]string{"a/a.go": "package a\n\nfunc F() int { var x any = 1; _ = x; return 1 }\n", "a/a_test.go": cleanTest}
 	if got := problemsOf(t, ok, rowA); got != "" {
 		t.Errorf("a non-function converted to an interface was refused:\n%s", got)
+	}
+}
+
+// acp delta verify of DELTA6 (CHAOS-11413), F1: an in-module import path that go list ./... does not list (testdata, an underscore
+// directory, a nested module reached by replace) was neither scanned nor refused. The verifier's plants, same sources.
+func TestAnInModuleImportThatGoListDoesNotListIsRefused(t *testing.T) {
+	for name, files := range map[string]map[string]string{
+		"testdata": map[string]string{
+			"a/a.go":            "package a\n\nimport \"example.test/m/a/testdata/h\"\n\nfunc F(p *int) { h.Spawn(p) }\n",
+			"a/a_test.go":       "package a\n\nimport (\n\t\"testing\"\n\t\"time\"\n)\n\nfunc TestRace(t *testing.T) {\n\tn := 0\n\tF(&n)\n\tn++\n\ttime.Sleep(10 * time.Millisecond)\n\t_ = n\n}\n",
+			"a/testdata/h/h.go": "package h\n\nfunc Spawn(p *int) { go func() { *p++ }() }\n",
+		},
+		"_h directory": map[string]string{
+			"_h/h.go":     "package h\n\nfunc Spawn(p *int) { go func() { *p++ }() }\n",
+			"a/a.go":      "package a\n\nimport \"example.test/m/_h\"\n\nfunc F(p *int) { h.Spawn(p) }\n",
+			"a/a_test.go": "package a\n\nimport (\n\t\"testing\"\n\t\"time\"\n)\n\nfunc TestRace(t *testing.T) {\n\tn := 0\n\tF(&n)\n\tn++\n\ttime.Sleep(10 * time.Millisecond)\n\t_ = n\n}\n",
+		},
+		"nested module": map[string]string{
+			"a/a.go":      "package a\n\nimport \"example.test/m/sub/h\"\n\nfunc F(p *int) { h.Spawn(p) }\n",
+			"a/a_test.go": "package a\n\nimport (\n\t\"testing\"\n\t\"time\"\n)\n\nfunc TestRace(t *testing.T) {\n\tn := 0\n\tF(&n)\n\tn++\n\ttime.Sleep(10 * time.Millisecond)\n\t_ = n\n}\n",
+			"go.mod":      "module example.test/m\n\ngo 1.22\n\nrequire example.test/m/sub v0.0.0\n\nreplace example.test/m/sub => ./sub\n",
+			"sub/go.mod":  "module example.test/m/sub\n\ngo 1.22\n",
+			"sub/h/h.go":  "package h\n\nfunc Spawn(p *int) { go func() { *p++ }() }\n",
+		},
+	} {
+		if got := problemsOf(t, files, rowA); !strings.Contains(got, "the scan does not list") {
+			t.Errorf("%s: want a refusal of the unlisted in-module import, got:\n%s", name, got)
+		}
+	}
+}
+
+// F2: a covered-by row skipped every hit of the covered package, and the callback check was syntactic only. Rows are now judged on
+// their full in-module closure, so a package that starts goroutines which call the row's code leaves the list, whatever the row says.
+func TestARowWhoseClosureStartsGoroutinesIsRefusedEvenWhenItNamesACoveringPackage(t *testing.T) {
+	covered := Row{"a", "covered-by:c", "TestH", "the pool lives in c"}
+	for name, files := range map[string]map[string]string{
+		"covered-fmt-writer": map[string]string{
+			"a/a.go":      "package a\n\nimport (\n\t\"bytes\"\n\t\"fmt\"\n\n\t\"example.test/m/c\"\n)\n\nvar W = new(bytes.Buffer)\n\nfunc F() int {\n\treturn c.CheckTree([]string{\"x\", \"y\", \"z\", \"w\"}, func(p string) int {\n\t\tfmt.Fprint(W, p)\n\t\treturn 0\n\t})\n}\n",
+			"a/a_test.go": "package a\n\nimport \"testing\"\n\nfunc TestF(t *testing.T) { for i := 0; i < 50; i++ { _ = F() } }\n",
+			"c/c.go":      "package c\n\nimport \"sync\"\n\nfunc CheckTree(paths []string, f func(string) int) int {\n\tvar wg sync.WaitGroup\n\tfor _, p := range paths {\n\t\twg.Add(1)\n\t\tgo func() { defer wg.Done(); f(p) }()\n\t}\n\twg.Wait()\n\treturn 0\n}\n",
+			"c/c_test.go": "package c\n\nimport \"testing\"\n\nfunc TestH(t *testing.T) { _ = CheckTree([]string{\"x\"}, func(string) int { return 0 }) }\n",
+		},
+		"covered-stringer": map[string]string{
+			"a/a.go":      "package a\n\nimport (\n\t\"fmt\"\n\n\t\"example.test/m/c\"\n)\n\ntype Counter struct{ N int }\n\nfunc (k *Counter) String() string { k.N++; return \"\" }\n\nvar K = &Counter{}\n\nfunc F() int {\n\treturn c.CheckTree([]string{\"x\", \"y\", \"z\", \"w\"}, func(p string) int {\n\t\t_ = fmt.Sprint(K)\n\t\treturn 0\n\t})\n}\n",
+			"a/a_test.go": "package a\n\nimport \"testing\"\n\nfunc TestF(t *testing.T) { for i := 0; i < 50; i++ { _ = F() } }\n",
+			"c/c.go":      "package c\n\nimport \"sync\"\n\nfunc CheckTree(paths []string, f func(string) int) int {\n\tvar wg sync.WaitGroup\n\tfor _, p := range paths {\n\t\twg.Add(1)\n\t\tgo func() { defer wg.Done(); f(p) }()\n\t}\n\twg.Wait()\n\treturn 0\n}\n",
+			"c/c_test.go": "package c\n\nimport \"testing\"\n\nfunc TestH(t *testing.T) { _ = CheckTree([]string{\"x\"}, func(string) int { return 0 }) }\n",
+		},
+		"covered-other-api": map[string]string{
+			"a/a.go":      "package a\n\nimport \"example.test/m/c\"\n\ntype D struct{ N *int }\n\nfunc (d D) Do() { *d.N++ }\n\nfunc F(p *int) { c.Each(D{p}) }\n",
+			"a/a_test.go": "package a\n\nimport \"testing\"\n\nfunc TestF(t *testing.T) { n := 0; for i := 0; i < 50; i++ { F(&n) } }\n",
+			"c/c.go":      "package c\n\nimport \"sync\"\n\nfunc CheckTree(paths []string, f func(string) int) int { return 0 }\n\ntype Doer interface{ Do() }\n\nfunc Each(d Doer) {\n\tvar wg sync.WaitGroup\n\tfor i := 0; i < 4; i++ {\n\t\twg.Add(1)\n\t\tgo func() { defer wg.Done(); d.Do() }()\n\t}\n\twg.Wait()\n}\n",
+			"c/c_test.go": "package c\n\nimport \"testing\"\n\nfunc TestH(t *testing.T) { _ = CheckTree([]string{\"x\"}, func(string) int { return 0 }) }\n",
+		},
+	} {
+		if got := problemsOf(t, files, covered); !strings.Contains(got, "a: imports c:") {
+			t.Errorf("%s: want the closure of a judged without the covered-by shortcut, got:\n%s", name, got)
+		}
 	}
 }

@@ -46,12 +46,21 @@ not hand-run a REVOKE.
    included:
 
    ```bash
-   kubectl get pods -n <namespace> \
-     -l app.kubernetes.io/instance=<release>,app.kubernetes.io/component=auth-service,pod-template-hash=<owned hash> \
-     --no-headers | wc -l
+   (
+     set -o pipefail
+     count="$(kubectl get pods -n <namespace> \
+       -l app.kubernetes.io/instance=<release>,app.kubernetes.io/component=auth-service,pod-template-hash=<owned hash> \
+       -o go-template='{{len .items}}')" || { echo "STOP: kubectl failed (rc $?)"; exit 1; }
+     case "${count}" in
+       0) echo "OK: 0 old owned pods" ;;
+       '' | *[!0-9]*) echo "STOP: no pod count read: '${count}'"; exit 1 ;;
+       *) echo "STOP: ${count} old owned pods left"; exit 1 ;;
+     esac
+   )
    ```
 
-   The count must be 0. If the hash was not recorded in step 1, the owned ReplicaSet is the one whose pod template sets
+   Go on only when it prints `OK: 0 old owned pods` and exits 0. A `STOP` line (kubectl failed, no count read, or pods
+   left) means stop: do not start the narrowing release. If the hash was not recorded in step 1, the owned ReplicaSet is the one whose pod template sets
    `AUTH_USERS_OWNED=true`. Read that one variable by name:
 
    ```bash
@@ -63,9 +72,17 @@ not hand-run a REVOKE.
    The same check then becomes:
 
    ```bash
-   kubectl get pods -n <namespace> \
-     -l app.kubernetes.io/instance=<release>,app.kubernetes.io/component=auth-service,dev-health.io/auth-users-owned=true \
-     --no-headers | wc -l
+   (
+     set -o pipefail
+     count="$(kubectl get pods -n <namespace> \
+       -l app.kubernetes.io/instance=<release>,app.kubernetes.io/component=auth-service,dev-health.io/auth-users-owned=true \
+       -o go-template='{{len .items}}')" || { echo "STOP: kubectl failed (rc $?)"; exit 1; }
+     case "${count}" in
+       0) echo "OK: 0 old owned pods" ;;
+       '' | *[!0-9]*) echo "STOP: no pod count read: '${count}'"; exit 1 ;;
+       *) echo "STOP: ${count} old owned pods left"; exit 1 ;;
+     esac
+   )
    ```
 
 4. **The narrowing release:** still phase 3, with `authService.migrate.narrowAfterFlipBack=true` and

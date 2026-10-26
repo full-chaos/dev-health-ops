@@ -56,9 +56,9 @@ var serverWide = []struct {
 	{"pg_reload_conf", regexp.MustCompile(`(?i)\bpg_reload_conf\s*\(`)},
 	{"CREATE TABLESPACE", regexp.MustCompile(`(?i)\bCREATE\s+TABLESPACE\b`)},
 	{"ALTER access entity with a literal name", regexp.MustCompile(
-		`(?i)\bALTER\s+(USER|QUOTA|SETTINGS\s+PROFILE|ROW\s+POLICY|MASKING\s+POLICY|WORKLOAD|RESOURCE)\s+(IF\s+EXISTS\s+)?` + name)},
-	{"ALTER ROLE or ALTER DATABASE, any target", regexp.MustCompile(`(?i)\bALTER\s+(ROLE|DATABASE)\b`)},
-	{"DROP ROLE, DATABASE or SCHEMA, any target", regexp.MustCompile(`(?i)\bDROP\s+(ROLE|DATABASE|SCHEMA)\b`)},
+		`(?i)\bALTER\s+(QUOTA|SETTINGS\s+PROFILE|ROW\s+POLICY|MASKING\s+POLICY|WORKLOAD|RESOURCE)\s+(IF\s+EXISTS\s+)?` + name)},
+	{"ALTER ROLE, USER, GROUP or DATABASE, any target", regexp.MustCompile(`(?i)\bALTER\s+(ROLE|USER|GROUP|DATABASE)\b`)},
+	{"DROP ROLE, USER, GROUP, DATABASE or SCHEMA, any target", regexp.MustCompile(`(?i)\bDROP\s+(ROLE|USER|GROUP|DATABASE|SCHEMA)\b`)},
 	{"DROP TABLE in a shared database", regexp.MustCompile(
 		"(?i)\\bDROP\\s+(TEMPORARY\\s+)?TABLE\\s+(IF\\s+EXISTS\\s+)?[`\"]?(default|worker_test|system|postgres|template0|template1)[`\"]?\\.")},
 	{"ClickHouse workload, resource or masking policy", regexp.MustCompile(
@@ -71,7 +71,7 @@ var serverWide = []struct {
 	{"server WAL or log action", regexp.MustCompile(`(?i)\bpg_(switch_wal|rotate_logfile|create_restore_point)\b`)},
 	{"CHECKPOINT", regexp.MustCompile("(?i)[\"`]\\s*CHECKPOINT\\s*;?\\s*[\"`]")},
 	{"CREATE access entity with a literal name", regexp.MustCompile(
-		`(?i)\bCREATE\s+(ROLE|USER|QUOTA|SETTINGS\s+PROFILE|ROW\s+POLICY)\s+(IF\s+NOT\s+EXISTS\s+|OR\s+REPLACE\s+)?` + name)},
+		`(?i)\bCREATE\s+(ROLE|USER|GROUP|QUOTA|SETTINGS\s+PROFILE|ROW\s+POLICY)\s+(IF\s+NOT\s+EXISTS\s+|OR\s+REPLACE\s+)?` + name)},
 	{"ClickHouse named collection", regexp.MustCompile(`(?i)\b(CREATE|ALTER)\s+NAMED\s+COLLECTION\b`)},
 	{"ClickHouse SQL user-defined function", regexp.MustCompile(
 		`(?i)\bCREATE\s+(OR\s+REPLACE\s+)?FUNCTION\s+(IF\s+NOT\s+EXISTS\s+)?` + ident + `\s+(ON\s+CLUSTER\s+\S+\s+)?AS\s*\(`)},

@@ -334,6 +334,61 @@ var additiveExemptions = []additiveExemption{
 		reason: "credential_class admits pagerduty_webhook_signature; the redefined list is the old list plus " +
 			"that one value, so it only widens (CHAOS-10707)",
 	},
+	{
+		version:    27,
+		regression: `column workloads.audience disappeared`,
+		reason:     "the registration keeps name, audiences and allowed actions; where a workload runs moves to workload_bindings, one row per deployment. workloads had no writer and the migration refuses a table that holds a row (CHAOS-10980, ruled by acp)",
+	},
+	{
+		version:    27,
+		regression: `column workloads.issuer disappeared`,
+		reason:     "the registration keeps name, audiences and allowed actions; where a workload runs moves to workload_bindings, one row per deployment. workloads had no writer and the migration refuses a table that holds a row (CHAOS-10980, ruled by acp)",
+	},
+	{
+		version:    27,
+		regression: `column workloads.namespace disappeared`,
+		reason:     "the registration keeps name, audiences and allowed actions; where a workload runs moves to workload_bindings, one row per deployment. workloads had no writer and the migration refuses a table that holds a row (CHAOS-10980, ruled by acp)",
+	},
+	{
+		version:    27,
+		regression: `column workloads.service_account_name disappeared`,
+		reason:     "the registration keeps name, audiences and allowed actions; where a workload runs moves to workload_bindings, one row per deployment. workloads had no writer and the migration refuses a table that holds a row (CHAOS-10980, ruled by acp)",
+	},
+	{
+		version:    27,
+		regression: `column workloads.trust_domain disappeared`,
+		reason:     "the registration keeps name, audiences and allowed actions; where a workload runs moves to workload_bindings, one row per deployment. workloads had no writer and the migration refuses a table that holds a row (CHAOS-10980, ruled by acp)",
+	},
+	{
+		version:    27,
+		regression: `constraint workloads.workloads_audience_not_null dropped`,
+		reason:     "the registration keeps name, audiences and allowed actions; where a workload runs moves to workload_bindings, one row per deployment. workloads had no writer and the migration refuses a table that holds a row (CHAOS-10980, ruled by acp)",
+	},
+	{
+		version:    27,
+		regression: `constraint workloads.workloads_issuer_not_null dropped`,
+		reason:     "the registration keeps name, audiences and allowed actions; where a workload runs moves to workload_bindings, one row per deployment. workloads had no writer and the migration refuses a table that holds a row (CHAOS-10980, ruled by acp)",
+	},
+	{
+		version:    27,
+		regression: `constraint workloads.workloads_namespace_not_null dropped`,
+		reason:     "the registration keeps name, audiences and allowed actions; where a workload runs moves to workload_bindings, one row per deployment. workloads had no writer and the migration refuses a table that holds a row (CHAOS-10980, ruled by acp)",
+	},
+	{
+		version:    27,
+		regression: `constraint workloads.workloads_service_account_name_not_null dropped`,
+		reason:     "the registration keeps name, audiences and allowed actions; where a workload runs moves to workload_bindings, one row per deployment. workloads had no writer and the migration refuses a table that holds a row (CHAOS-10980, ruled by acp)",
+	},
+	{
+		version:    27,
+		regression: `constraint workloads.workloads_trust_domain_not_null dropped`,
+		reason:     "the registration keeps name, audiences and allowed actions; where a workload runs moves to workload_bindings, one row per deployment. workloads had no writer and the migration refuses a table that holds a row (CHAOS-10980, ruled by acp)",
+	},
+	{
+		version:    27,
+		regression: `index workloads_federation_key dropped`,
+		reason:     "the registration keeps name, audiences and allowed actions; where a workload runs moves to workload_bindings, one row per deployment. workloads had no writer and the migration refuses a table that holds a row (CHAOS-10980, ruled by acp)",
+	},
 }
 
 // TestEveryMigrationStepIsAdditive applies the lineage ONE MIGRATION AT A TIME

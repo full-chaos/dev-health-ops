@@ -1188,3 +1188,27 @@ func TestAuthCorpusForceSocialNameStaysOutOfProductionCodeAndCharts(t *testing.T
 		t.Errorf("AUTH_CORPUS_FORCE_SOCIAL appears outside ci/ scripts and test files: %v", leaks)
 	}
 }
+
+// A refused AUTH_CORPUS_FORCE_SOCIAL invocation is refused before the script makes any temporary directory: the cleanup
+// trap is installed later, so a directory made first would be left behind by every refusal.
+func TestAuthCorpusRefusedForceSocialLeavesNoTemporaryDirectory(t *testing.T) {
+	for name, tc := range map[string]struct {
+		leg   string
+		extra []string
+	}{
+		"owned acp leg": {"acp", []string{"AUTH_CORPUS_FORCE_SOCIAL=1"}},
+		"go-api leg":    {"go-api", []string{"AUTH_CORPUS_FORCE_SOCIAL=1"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			tmp := t.TempDir()
+			_, out, err := runLegArg(t, tc.leg, append([]string{"TMPDIR=" + tmp}, tc.extra...)...)
+			if err == nil || !strings.Contains(out, "AUTH_CORPUS_FORCE_SOCIAL needs AUTH_CORPUS_USERS_UNOWNED=1") {
+				t.Fatalf("want the refusal by name, got err=%v:\n%s", err, out)
+			}
+			entries, readErr := os.ReadDir(tmp)
+			if readErr != nil || len(entries) != 0 {
+				t.Errorf("the refused run left %d entries in its TMPDIR (%v)", len(entries), readErr)
+			}
+		})
+	}
+}

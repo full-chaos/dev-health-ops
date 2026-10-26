@@ -25,18 +25,6 @@ case "${LEG}" in go-api | acp) ;; *)
   ;;
 esac
 
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)"
-ROOT="$(cd -- "${SCRIPT_DIR}/.." >/dev/null 2>&1 && pwd -P)"
-# From /dev/urandom: compose adopts a resource that already carries the project name, so it must not be guessable.
-PROJECT="authcorpus$(od -An -N6 -tx1 /dev/urandom | tr -d ' \n')"
-# The override tags the images this run builds with the project, so the trap removes exactly its own two.
-export AUTH_CORPUS_PROJECT="${PROJECT}"
-WORK="$(mktemp -d)"
-STATE="${WORK}/state.env"
-SEEDED_FILE="${WORK}/seeded"
-FLIPPED_FILE="${WORK}/flipped"
-TEST_PID=""
-
 die() {
   printf 'ERROR: %s\n' "$1" >&2
   exit 1
@@ -49,6 +37,18 @@ if [ -n "${AUTH_CORPUS_FORCE_SOCIAL:-}" ]; then
   [ "${LEG}" = "acp" ] && [ -n "${AUTH_CORPUS_USERS_UNOWNED:-}" ] || die "AUTH_CORPUS_FORCE_SOCIAL needs AUTH_CORPUS_USERS_UNOWNED=1 on leg acp"
   FORCE_SOCIAL=1
 fi
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)"
+ROOT="$(cd -- "${SCRIPT_DIR}/.." >/dev/null 2>&1 && pwd -P)"
+# From /dev/urandom: compose adopts a resource that already carries the project name, so it must not be guessable.
+PROJECT="authcorpus$(od -An -N6 -tx1 /dev/urandom | tr -d ' \n')"
+# The override tags the images this run builds with the project, so the trap removes exactly its own two.
+export AUTH_CORPUS_PROJECT="${PROJECT}"
+WORK="$(mktemp -d)"
+STATE="${WORK}/state.env"
+SEEDED_FILE="${WORK}/seeded"
+FLIPPED_FILE="${WORK}/flipped"
+TEST_PID=""
 
 command -v docker >/dev/null 2>&1 || die "docker is required"
 command -v go >/dev/null 2>&1 || die "go is required"

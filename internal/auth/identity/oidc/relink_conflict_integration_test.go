@@ -12,7 +12,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 )
 
-// r2 review P1, end to end: after the users cutover, a bound go-api account whose principal already holds another
+// End to end: after the users cutover, a bound go-api account whose principal already holds another
 // subject at this provider row (TestOwnedSSORelinkKeepsOneIdentityPerProvider at the store) signs in with its stored
 // subject. The re-link refuses with identity.ErrProviderAlreadyLinked; the callback answers 409 identity_conflict and
 // writes nothing.

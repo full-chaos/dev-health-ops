@@ -8,7 +8,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 )
 
-// r2 review P1: the owned re-link refuses an account that already holds another subject at the provider row with
+// The owned re-link refuses an account that already holds another subject at the provider row with
 // identity.ErrProviderAlreadyLinked. The adapter boundary (lookupError) maps it, so the resolver answers an identity
 // conflict (409 identity_conflict), never a store outage, and nothing is provisioned or issued.
 func TestResolveProviderAlreadyLinkedIsAnIdentityConflict(t *testing.T) {

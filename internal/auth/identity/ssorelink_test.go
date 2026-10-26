@@ -96,7 +96,7 @@ func TestIsSSORelinkable(t *testing.T) {
 	}
 }
 
-// The three r1 review probes: a value the sign-in path cannot key is never waived by readiness.
+// A subject with white space at either end, which the sign-in path cannot key, is never waived by readiness.
 func TestWhitespaceSubjectIsNotRelinkable(t *testing.T) {
 	s := func(v string) *string { return &v }
 	row := uuid.New()

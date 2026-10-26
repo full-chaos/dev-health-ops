@@ -66,8 +66,8 @@ func (e *env) principals(t *testing.T, ctx context.Context) int {
 }
 
 // TestOwnedSSOSignInRelinksTheBackfilledPrincipal: after the users cutover, the first sign-in of a backfilled OIDC or
-// SAML account bound to the provider row links the key to that account, whatever e-mail the IdP sends now. Before
-// the fix the key missed and the flow provisioned a second principal (a fork).
+// SAML account bound to the provider row links the key to that account, whatever e-mail the IdP sends now. Without
+// the re-link the key misses and the flow provisions a second principal (a fork).
 func TestOwnedSSOSignInRelinksTheBackfilledPrincipal(t *testing.T) {
 	e := getEnv(t)
 	ctx := context.Background()
@@ -158,7 +158,7 @@ func TestOwnedSSOSignInRefusesAnUnboundCarrier(t *testing.T) {
 	}
 }
 
-// TestOwnedSSOSignInIgnoresARowBoundToAnotherProvider (acp narrowing): the same subject on a row bound to another
+// TestOwnedSSOSignInIgnoresARowBoundToAnotherProvider: the same subject on a row bound to another
 // provider row of the same protocol is that provider's identity; a sign-in at this provider is an ordinary miss, so
 // a new user of this provider is not blocked.
 func TestOwnedSSOSignInIgnoresARowBoundToAnotherProvider(t *testing.T) {

@@ -10,9 +10,8 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 )
 
-// r2 review P1: identity.ErrProviderAlreadyLinked from the owned re-link takes the refuse path that ErrRelinkRefused
-// takes (ErrIdentityAmbiguous: ConsumeFor refuses with outcome identity_conflict, the handler answers 409), never a
-// 500.
+// identity.ErrProviderAlreadyLinked from the owned re-link takes the refuse path that ErrRelinkRefused takes
+// (ErrIdentityAmbiguous: ConsumeFor refuses with outcome identity_conflict, the handler answers 409), never a 500.
 func TestProviderAlreadyLinkedIsRefusedAsAnIdentityConflict(t *testing.T) {
 	for name, err := range map[string]error{
 		"ErrProviderAlreadyLinked": identity.ErrProviderAlreadyLinked,

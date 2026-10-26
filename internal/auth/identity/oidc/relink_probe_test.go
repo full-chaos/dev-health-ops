@@ -9,7 +9,8 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 )
 
-// r1 review probe: an OIDC subject the id-token check refuses is never waived by readiness.
+// An OIDC subject the id-token check refuses is never waived by readiness, and the id-token check and the relink
+// waiver apply one key rule.
 func TestWhitespaceOIDCSubjectIsNotRelinkable(t *testing.T) {
 	s := func(v string) *string { return &v }
 	row := uuid.New()

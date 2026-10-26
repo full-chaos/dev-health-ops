@@ -9,8 +9,8 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 )
 
-// r1 review probe: go-api stores only NameID.Value, so readiness cannot tell a transient value (which Subject
-// refuses) from a persistent one. A bound SAML account is never waived.
+// go-api stores only NameID.Value, so readiness cannot tell a transient value (which Subject refuses) from a
+// persistent one. A bound SAML account is never waived.
 func TestTransientNameIDIsNotRelinkable(t *testing.T) {
 	s := func(v string) *string { return &v }
 	row := uuid.New()

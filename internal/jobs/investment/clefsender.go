@@ -19,6 +19,18 @@ type clefSender struct {
 
 var _ systemOneSender = clefSender{}
 
+// clefSettleFailure is the error of a call that clef answered (the request was
+// sent and the answer is in result) whose accounting could not be settled. The
+// reservation stays `reserved` and counts at its maximum; an operator lists it
+// (llmbudgetstale) and settles it with llmbudget.VoidReservation.
+type clefSettleFailure struct {
+	result categorize.SystemOneResult
+	err    error
+}
+
+func (failure *clefSettleFailure) Error() string { return failure.err.Error() }
+func (failure *clefSettleFailure) Unwrap() error { return failure.err }
+
 func (sender clefSender) Model() string { return sender.client.Model() }
 func (sender clefSender) Close() error  { return sender.client.Close() }
 
@@ -27,6 +39,7 @@ func (sender clefSender) PostSystemOneDetailed(ctx context.Context, body []byte)
 		return sender.client.PostSystemOneDetailed(ctx, body)
 	}
 	var result categorize.SystemOneResult
+	sent := false
 	// A byte is at most one token, so the body length bounds the input the
 	// reservation prices; the output is not charged for clef.
 	call := llmbudget.Call{IdempotencyKey: "clef:" + uuid.NewString(), MaxInputTokens: int64(len(body))}
@@ -35,7 +48,7 @@ func (sender clefSender) PostSystemOneDetailed(ctx context.Context, body []byte)
 		if err != nil {
 			return llmbudget.Usage{}, err
 		}
-		result = posted
+		result, sent = posted, true
 		if !posted.Usage.Reported {
 			// An answer with no usage settles at the reserved amount (the whole
 			// body as input, no output): a success that is priced at the most it
@@ -51,6 +64,9 @@ func (sender clefSender) PostSystemOneDetailed(ctx context.Context, body []byte)
 		return llmbudget.UsageFrom(&input, &output, &cached, nil), nil
 	})
 	if err != nil {
+		if sent {
+			return categorize.SystemOneResult{}, &clefSettleFailure{result: result, err: err}
+		}
 		return categorize.SystemOneResult{}, err
 	}
 	return result, nil

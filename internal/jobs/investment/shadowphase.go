@@ -262,8 +262,11 @@ type shadowExchange struct {
 	billed     int64
 	// modelFromRequest: the answer omitted the model and the request's was used.
 	modelFromRequest bool
-	// accountingRefused: the budget guard refused or could not settle the call.
+	// accountingRefused: the budget guard refused the call; nothing was sent.
 	accountingRefused bool
+	// settleFailed: the call was sent and answered; its accounting could not be
+	// settled. attempts and usage are the answer's.
+	settleFailed bool
 }
 
 type shadowExchangeKey struct{}
@@ -308,8 +311,14 @@ func (transport shadowTransport) PostSystemOne(ctx context.Context, body []byte)
 		if errors.As(err, &failed) {
 			exchange.attempts = failed.Attempts
 		}
+		var settle *clefSettleFailure
 		var accounting *llmbudget.AccountingError
-		if errors.As(err, &accounting) {
+		switch {
+		case errors.As(err, &settle):
+			exchange.attempts, exchange.usage = settle.result.Attempts, settle.result.Usage
+			billed = shadowBilledNanoUSD(settle.result.Usage)
+			exchange.billed, exchange.modelFromRequest, exchange.settleFailed = billed, settle.result.ModelFromRequest, true
+		case errors.As(err, &accounting):
 			exchange.accountingRefused = true
 		}
 		// The error goes back to the adapter as it is: the adapter reads its

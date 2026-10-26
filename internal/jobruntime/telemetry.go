@@ -521,7 +521,7 @@ type InvestmentServedRun struct {
 func InvestmentServedOutcomes() []string {
 	return []string{
 		"ok", "zero_support", "evidence_none", "invalid_answer", "adapter_defect",
-		"timeout", "refused", "server_error", "rate_limited", "rejected", "transport_other", "budget_accounting", "cancelled",
+		"timeout", "refused", "server_error", "rate_limited", "rejected", "transport_other", "budget_accounting", "budget_settle_failed", "cancelled",
 	}
 }
 
@@ -4528,7 +4528,7 @@ func (collector *MetricsCollector) writeInvestmentShadowPhase(output *strings.Bu
 // mode, every series pre-seeded at zero: with LLM_PROVIDER not typesafe (the
 // default) every series reads 0.
 func (collector *MetricsCollector) writeInvestmentServedRun(output *strings.Builder) {
-	writeMetadata(output, investmentServedOutcomesMetric, "Classifications of the served decision mode of investment.materialize (LLM_PROVIDER=typesafe), by provider, requested model and outcome: ok, zero_support and evidence_none write a row from the model's answer; invalid_answer and adapter_defect write the invalid_llm_output prior row; timeout, refused, server_error, rate_limited, rejected, transport_other and budget_accounting (the budget guard refused or could not account for the call; nothing was sent) are failed requests, and the unit keeps its last row (rejected ends the run); cancelled: the run context ended before the unit had an answer (CHAOS-8914).", "counter")
+	writeMetadata(output, investmentServedOutcomesMetric, "Classifications of the served decision mode of investment.materialize (LLM_PROVIDER=typesafe), by provider, requested model and outcome: ok, zero_support and evidence_none write a row from the model's answer; invalid_answer and adapter_defect write the invalid_llm_output prior row; timeout, refused, server_error, rate_limited, rejected, transport_other, budget_accounting (the budget guard refused the call before it was sent: nothing was sent) and budget_settle_failed (the call was sent and answered, and its accounting could not be settled) are failed requests, and the unit keeps its last row (rejected ends the run); cancelled: the run context ended before the unit had an answer (CHAOS-8914).", "counter")
 	for _, model := range investmentShadowModels {
 		for _, outcome := range InvestmentServedOutcomes() {
 			writeUintSample(output, investmentServedOutcomesMetric,

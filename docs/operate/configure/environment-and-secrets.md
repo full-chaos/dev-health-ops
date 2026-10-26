@@ -250,9 +250,10 @@ investment categorization can use the decision backend:
   `adapter_defect` write the `invalid_llm_output` prior row; `timeout`,
   `refused` (the connection was refused, nothing was sent), `server_error`,
   `rate_limited`, `rejected` (a rejected key or an unknown model: the run ends)
-  `transport_other` and `budget_accounting` (the budget guard refused or could
-  not account for the call: nothing was sent) are failed requests, and those
-  units keep their last row. Every series is reported, at 0 when the mode is off. As a reference, in
+  `transport_other`, `budget_accounting` (the budget guard refused the call
+  before it was sent: nothing was sent) and `budget_settle_failed` (the call was
+  sent and answered, and its accounting could not be settled) are failed
+  requests, and those units keep their last row. Every series is reported, at 0 when the mode is off. As a reference, in
   the first shadow run on real data `zero_support` and `evidence_none` together
   were about 1.3% of the classifications (41 of 3,214), and no request failed;
   a share far above that, or a rising count of failed requests, needs a look.

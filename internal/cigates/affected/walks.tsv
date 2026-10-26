@@ -225,6 +225,7 @@ internal/loadharness	profiles_test.go	internal/loadharness/testdata	dir	*
 internal/loadharness	profiles_test.go	internal/loadharness/testdata/abuse	dir	*
 internal/localgit	blame.go	unexpressed	-	-
 internal/localgit	refs.go	unexpressed	-	-
+internal/mail	census_test.go	.	tree	*.go
 internal/migrationmatrix	restendpoints.go	unexpressed	-	-
 internal/operationalordering	finalreads_test.go	unexpressed	-	*.go
 internal/operationalordering	one_resolver_test.go	.	tree	*.go

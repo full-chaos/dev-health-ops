@@ -5,18 +5,21 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 )
 
 // Census of every code path that builds a mail body or embeds an HTML template.
 // A new one fails here until it is added with the reason it is safe: each listed
 // file renders through an escaping renderer (RenderTemplate or RenderBillingEmail).
 func TestEveryMailBodyBuilderIsKnown(t *testing.T) {
-	_, here, _, _ := runtime.Caller(0)
-	root := filepath.Join(filepath.Dir(here), "..", "..")
+	root, err := moduleroot.Root()
+	if err != nil {
+		t.Fatal(err)
+	}
 	messageBuilders := map[string]string{
 		"internal/api/authmail/authmail.go":           "HTML from mail.RenderTemplate (escapes every value)",
 		"internal/auth/linkmail/linkmail.go":          "HTML from mail.RenderTemplate (escapes every value)",
@@ -29,7 +32,7 @@ func TestEveryMailBodyBuilderIsKnown(t *testing.T) {
 	builder := regexp.MustCompile(`mail\.Message\{[^}]*\bHTML:`)
 	embed := regexp.MustCompile(`//go:embed .*\.html`)
 	foundBuilders, foundEmbeds := map[string]bool{}, map[string]bool{}
-	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+	err = filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}

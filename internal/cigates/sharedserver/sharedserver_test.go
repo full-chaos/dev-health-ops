@@ -347,3 +347,97 @@ func TestGuardFlagsPlantedServerWideStatements(t *testing.T) {
 		t.Errorf("an ALTER SYSTEM in a helper of the same file, called from the unisolated test, was not flagged (want mixed_test.go:%d)", mixedHelperLine)
 	}
 }
+
+// scanFixture writes one opted-in package whose single test func holds lines,
+// and returns the line numbers the guard flagged in it.
+func scanFixture(t *testing.T, lines []string) map[int]bool {
+	t.Helper()
+	root := t.TempDir()
+	write := func(rel, body string) {
+		t.Helper()
+		path := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("internal/opted/main_test.go", "package opted\nfunc TestMain(m *testing.M) { os.Exit(containers.RunWithSharedServers(m.Run)) }\n")
+	write("internal/opted/fixture_test.go", "package opted\nfunc TestFixture(t *testing.T) {\n"+strings.Join(lines, "\n")+"\n}\n")
+	_, findings := scan(t, filepath.Join(root, "internal"))
+	flagged := map[int]bool{}
+	for _, f := range findings {
+		if f.file != "opted/fixture_test.go" {
+			t.Errorf("unexpected finding %s:%d %s", f.file, f.line, f.kind)
+			continue
+		}
+		flagged[f.line-3] = true
+	}
+	return flagged
+}
+
+// TestGuardFlagsAnAlterBuiltFromAConcatenation: an ALTER whose target is built
+// at run time still changes a role or database every other test shares, so the
+// keyword in any string literal is enough.
+func TestGuardFlagsAnAlterBuiltFromAConcatenation(t *testing.T) {
+	statements := []string{
+		`exec("ALTER ROLE " + target + " NOLOGIN")`,
+		`exec(fmt.Sprintf("ALTER ROLE %s NOLOGIN", target))`,
+		`exec("ALTER ROLE IF EXISTS " + target + " NOLOGIN")`,
+		`exec("ALTER DATABASE " + target + " SET work_mem = '7MB'")`,
+		`exec("ALTER SYSTEM " + setting)`,
+	}
+	flagged := scanFixture(t, statements)
+	for index, statement := range statements {
+		if !flagged[index] {
+			t.Errorf("not flagged: %s", statement)
+		}
+	}
+}
+
+// TestGuardFlagsDropsOfServerWideObjects: DROP ROLE, DROP DATABASE and DROP
+// SCHEMA at any name, and DROP TABLE in a database the test does not own.
+func TestGuardFlagsDropsOfServerWideObjects(t *testing.T) {
+	flaggedStatements := []string{
+		`exec("DROP ROLE worker_test")`,
+		`exec("DROP ROLE IF EXISTS " + role)`,
+		`exec("DROP DATABASE " + database)`,
+		`exec("DROP DATABASE IF EXISTS worker_test")`,
+		`exec("DROP SCHEMA public CASCADE")`,
+		`exec("DROP SCHEMA IF EXISTS " + schema)`,
+		`exec("DROP TABLE default.events")`,
+		`exec("DROP TABLE IF EXISTS worker_test.events")`,
+		"exec(\"DROP TABLE IF EXISTS `default`.events\")",
+	}
+	allowedStatements := []string{
+		`exec("DROP TABLE events")`,
+		`exec("DROP TABLE IF EXISTS " + table)`,
+		`exec("DROP TABLE IF EXISTS public.events")`,
+		`exec("DROP INDEX events_idx")`,
+		`exec("DROP VIEW default_view")`,
+		`exec("SELECT 1 FROM drop_rolemap")`,
+		`// DROP ROLE and DROP DATABASE are cluster-scoped`,
+	}
+	statements := append(append([]string{}, flaggedStatements...), allowedStatements...)
+	flagged := scanFixture(t, statements)
+	for index, statement := range statements {
+		if want := index < len(flaggedStatements); flagged[index] != want {
+			t.Errorf("flagged = %v for %s, want %v", flagged[index], statement, want)
+		}
+	}
+}
+
+// TestGuardLetsAnIsolatedFuncDropAndAlter: the private-server exemption
+// covers the new statements like every other.
+func TestGuardLetsAnIsolatedFuncDropAndAlter(t *testing.T) {
+	flagged := scanFixture(t, []string{
+		`instance, _ := containers.StartPostgresIsolated(ctx)`,
+		`exec("ALTER ROLE " + target + " NOLOGIN")`,
+		`exec("DROP ROLE " + target)`,
+		`exec("DROP DATABASE " + target)`,
+	})
+	if len(flagged) != 0 {
+		t.Errorf("an Isolated func was flagged: %v", flagged)
+	}
+}

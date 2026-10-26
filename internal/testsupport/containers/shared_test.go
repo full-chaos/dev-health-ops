@@ -248,3 +248,43 @@ func TestTimingLinesOnlyWhenSet(t *testing.T) {
 		t.Errorf("timing lines = %q", lines)
 	}
 }
+
+// TestPostgresRoleSnapshotProjectsEveryAttribute: a role changed in place
+// (NOLOGIN, CREATEROLE, a connection limit) must change a snapshot row; the
+// password hash must never be read into a log line.
+func TestPostgresRoleSnapshotProjectsEveryAttribute(t *testing.T) {
+	var roleQuery string
+	for _, query := range postgresSnapshotQueries {
+		if strings.Contains(query, "pg_roles") && strings.Contains(query, "'role '") {
+			roleQuery = query
+		}
+	}
+	if roleQuery == "" {
+		t.Fatal("no role query in the PostgreSQL leak snapshot")
+	}
+	for _, column := range []string{
+		"rolsuper", "rolinherit", "rolcreaterole", "rolcreatedb", "rolcanlogin", "rolreplication", "rolbypassrls",
+		"rolconnlimit", "rolvaliduntil",
+	} {
+		if !strings.Contains(roleQuery, column) {
+			t.Errorf("the role row does not project %s", column)
+		}
+	}
+	if all := strings.Join(postgresSnapshotQueries, "\n"); strings.Contains(all, "rolpassword") || strings.Contains(all, "pg_authid") {
+		t.Error("the snapshot reads a password hash source (rolpassword or pg_authid)")
+	}
+}
+
+// TestPostgresDatabaseSnapshotProjectsConnectability: a test that runs ALTER
+// DATABASE ... ALLOW_CONNECTIONS false changes a row.
+func TestPostgresDatabaseSnapshotProjectsConnectability(t *testing.T) {
+	for _, query := range postgresSnapshotQueries {
+		if strings.Contains(query, "pg_database") && strings.Contains(query, "'database '") {
+			if !strings.Contains(query, "datallowconn") {
+				t.Error("the database row does not project datallowconn")
+			}
+			return
+		}
+	}
+	t.Fatal("no database query in the PostgreSQL leak snapshot")
+}

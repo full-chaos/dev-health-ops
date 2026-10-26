@@ -296,6 +296,22 @@ func TestSharedServerLeakCheck(t *testing.T) {
 		{"clickhouse resource", func(t *testing.T, ctx context.Context, s *sharedServers) {
 			chExec(t, ctx, s.ch.adminDSN, "CREATE RESOURCE planted_resource (WRITE DISK default, READ DISK default)")
 		}, "clickhouse new resource planted_resource"},
+		{"shared role set to NOLOGIN", func(t *testing.T, ctx context.Context, s *sharedServers) {
+			// A role other callers log in with: create it, then take the baseline again so it is part of it.
+			pgExec(t, ctx, s.pg.adminDSN, "CREATE ROLE shared_login_role LOGIN")
+			baseline, err := postgresSnapshot(ctx, s.pg.adminDSN)
+			if err != nil {
+				t.Fatal(err)
+			}
+			s.pg.baseline = baseline
+			pgExec(t, ctx, s.pg.adminDSN, "ALTER ROLE shared_login_role NOLOGIN")
+		}, "postgres new role shared_login_role super=false inherit=true createrole=false createdb=false login=false"},
+		{"shared role gets CREATEROLE and a connection limit", func(t *testing.T, ctx context.Context, s *sharedServers) {
+			pgExec(t, ctx, s.pg.adminDSN, "ALTER ROLE pg_monitor CREATEROLE CONNECTION LIMIT 7")
+		}, "postgres new role pg_monitor super=false inherit=true createrole=true"},
+		{"database stops accepting connections", func(t *testing.T, ctx context.Context, s *sharedServers) {
+			pgExec(t, ctx, s.pg.adminDSN, "ALTER DATABASE template1 WITH ALLOW_CONNECTIONS false")
+		}, "postgres new database template1 allowconn=false"},
 		{"clickhouse SQL user-defined function", func(t *testing.T, ctx context.Context, s *sharedServers) {
 			chExec(t, ctx, s.ch.adminDSN, "CREATE FUNCTION planted_udf AS (x) -> x + 1")
 		}, "clickhouse new function planted_udf"},

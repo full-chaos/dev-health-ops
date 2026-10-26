@@ -28,7 +28,7 @@ type Deps struct {
 	Start    string
 	Docs     func(root string, args []string) int
 	Prepare  func(root string, args []string) int
-	MkDocs   func(root string) (interpreter string, err error)
+	MkDocs   func(root string, announce func(interpreter string)) error
 	Revision func(root string) string
 }
 
@@ -60,22 +60,26 @@ func OSDeps(stdout, stderr io.Writer) Deps {
 		Start:   start,
 		Docs:    func(root string, args []string) int { return self(root, append([]string{"docs"}, args...)) },
 		Prepare: func(root string, args []string) int { return self(root, append([]string{"docs-prepare"}, args...)) },
-		MkDocs: func(root string) (string, error) {
+		MkDocs: func(root string, announce func(string)) error {
 			python := os.Getenv("DOCS_PYTHON")
 			if python == "" {
 				python = "python3"
 			}
 			cmd := exec.Command(python, "-m", "mkdocs", "build", "--strict", "--config-file", "mkdocs.yml")
 			cmd.Dir, cmd.Stdout, cmd.Stderr = root, stdout, stderr
-			return python, cmd.Run()
+			announce(python)
+			return cmd.Run()
 		},
 		Revision: sourceRevision,
 	}
 }
 
 // findRoot returns the nearest directory at or above start that holds go.mod and mkdocs.yml, the files the docs build reads
-// from the repository root.
+// from the repository root. The start directory is resolved through symlinks first, as the docs verbs resolve theirs.
 func findRoot(start string) (string, error) {
+	if physical, err := filepath.EvalSymlinks(start); err == nil {
+		start = physical
+	}
 	for dir := start; ; dir = filepath.Dir(dir) {
 		if isFile(filepath.Join(dir, "go.mod")) && isFile(filepath.Join(dir, "mkdocs.yml")) {
 			return dir, nil
@@ -137,9 +141,10 @@ func run(args []string, deps Deps, stdout, stderr io.Writer) int {
 	if fullCheck && !docs("validate-publication") {
 		return fail("validate-publication")
 	}
-	python, err := deps.MkDocs(root)
-	fmt.Fprintf(stdout, "+ %s -m mkdocs build --strict --config-file mkdocs.yml\n", python)
-	if err != nil {
+	announce := func(python string) {
+		fmt.Fprintf(stdout, "+ %s -m mkdocs build --strict --config-file mkdocs.yml\n", python)
+	}
+	if err := deps.MkDocs(root, announce); err != nil {
 		return fail("mkdocs build: " + err.Error())
 	}
 	if fullCheck {

@@ -49,10 +49,11 @@ func (f *fake) deps(t *testing.T) Deps {
 			}
 			return 0
 		},
-		MkDocs: func(root string) (string, error) {
+		MkDocs: func(root string, announce func(string)) error {
 			f.roots = append(f.roots, root)
 			f.calls = append(f.calls, "mkdocs")
-			return "python3", f.mkdocsErr
+			announce("python3")
+			return f.mkdocsErr
 		},
 		Revision: func(string) string { return "rev1" },
 	}
@@ -185,5 +186,38 @@ func TestNoRepositoryRootIsRefused(t *testing.T) {
 	code, _, stderr := runWith(t, f, "--mode", "preview")
 	if code != 1 || !strings.Contains(stderr, "no repository root") || len(f.calls) != 0 {
 		t.Errorf("code %d stderr %q calls %v", code, stderr, f.calls)
+	}
+}
+
+func TestRootIsFoundThroughASymlinkedStartDirectory(t *testing.T) {
+	root := repoDir(t)
+	sub := filepath.Join(root, "docs")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "docs-link")
+	if err := os.Symlink(sub, link); err != nil {
+		t.Fatal(err)
+	}
+	physicalRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := &fake{start: link}
+	if code, _, stderr := runWith(t, f, "--mode", "preview"); code != 0 {
+		t.Fatalf("code %d: %s", code, stderr)
+	}
+	for _, got := range f.roots {
+		if got != physicalRoot {
+			t.Errorf("a step ran in %s, not the repository root %s", got, physicalRoot)
+		}
+	}
+}
+
+func TestMkDocsBannerIsPrintedBeforeTheCall(t *testing.T) {
+	f := &fake{start: repoDir(t), mkdocsErr: errors.New("exit status 1")}
+	_, stdout, _ := runWith(t, f, "--mode", "preview")
+	if !strings.Contains(stdout, "+ python3 -m mkdocs build --strict --config-file mkdocs.yml") {
+		t.Errorf("a failing MkDocs call left no banner: %q", stdout)
 	}
 }

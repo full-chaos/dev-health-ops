@@ -35,7 +35,7 @@ type SessionEnder interface {
 // (*PGLinks).
 type ResetLinks interface {
 	PeekResetLink(ctx context.Context, tokenHash [32]byte) (uuid.UUID, bool, error)
-	ConsumeResetLinkInTx(ctx context.Context, tx audit.TxOps, principalID uuid.UUID, tokenHash [32]byte) error
+	ConsumeBoundResetLinkInTx(ctx context.Context, tx audit.TxOps, principalID uuid.UUID, tokenHash [32]byte) error
 	EndResetLinksInTx(ctx context.Context, tx audit.TxOps, principalID uuid.UUID) (int64, error)
 }
 
@@ -110,7 +110,7 @@ func (a IdentityAccounts) SetPasswordEndingSessions(ctx context.Context, req Pas
 		cause   = identity.PasswordChanged
 		endFunc = func(ctx context.Context, tx audit.TxOps) error {
 			if req.ResetLink != nil {
-				if err := a.Links.ConsumeResetLinkInTx(ctx, tx, req.ID, *req.ResetLink); err != nil {
+				if err := a.Links.ConsumeBoundResetLinkInTx(ctx, tx, req.ID, *req.ResetLink); err != nil {
 					return err
 				}
 			}

@@ -111,7 +111,7 @@ WHERE principal_id = $1::uuid AND purpose = $2 AND consumed_at IS NULL`, princip
 func (l *PGLinks) PeekResetLink(ctx context.Context, tokenHash [32]byte) (uuid.UUID, bool, error) {
 	var principal uuid.UUID
 	err := l.pool.QueryRow(ctx, `SELECT principal_id FROM `+l.q+`.link_credentials
-WHERE token_hash = $1 AND purpose = $2 AND consumed_at IS NULL AND expires_at > now()`, tokenHash[:], string(PurposePasswordReset)).Scan(&principal)
+WHERE token_hash = $1 AND purpose = $2 AND consumed_at IS NULL AND expires_at > now()`+boundToLiveTokenVersion, tokenHash[:], string(PurposePasswordReset)).Scan(&principal)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return uuid.Nil, false, nil
 	}

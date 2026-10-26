@@ -88,7 +88,7 @@ type RedeemRequest struct {
 // unknown, expired, consumed, replaced or wrong-purpose credential, all the
 // same refusal; the database clock decides expiry.
 type Links interface {
-	Issue(ctx context.Context, req IssueRequest) error
+	IssueBound(ctx context.Context, req IssueRequest) error
 	Redeem(ctx context.Context, req RedeemRequest) (principalID uuid.UUID, ok bool, err error)
 }
 

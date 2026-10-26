@@ -140,7 +140,7 @@ func (f *Flows) issueAndSend(ctx context.Context, principal uuid.UUID, purpose P
 	if err != nil {
 		return err
 	}
-	if err := f.links.Issue(ctx, IssueRequest{PrincipalID: principal, Purpose: purpose, TokenHash: hash, TTL: ttl}); err != nil {
+	if err := f.links.IssueBound(ctx, IssueRequest{PrincipalID: principal, Purpose: purpose, TokenHash: hash, TTL: ttl}); err != nil {
 		return fmt.Errorf("local: issuing a link credential: %w", err)
 	}
 	msg := Message{Purpose: purpose, To: to, FullName: name, Secret: secret, Deliver: principal != uuid.Nil}

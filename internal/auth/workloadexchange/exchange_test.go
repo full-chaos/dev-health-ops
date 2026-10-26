@@ -893,14 +893,8 @@ func (d *deadlineRecorder) RoundTrip(r *http.Request) (*http.Response, error) {
 // ReviewCallTimeout away, even when the caller's context has none.
 func TestTheOutgoingReviewRequestCarriesADeadline(t *testing.T) {
 	rs := newReviewServer(t, "x")
-	bundle, err := os.ReadFile(rs.caFile)
-	if err != nil {
-		t.Fatal(err)
-	}
 	pool := x509.NewCertPool()
-	if !pool.AppendCertsFromPEM(bundle) {
-		t.Fatal("no CA")
-	}
+	pool.AddCert(rs.server.Certificate())
 	client := reviewHTTPClient(pool)
 	recorder := &deadlineRecorder{inner: client.Transport}
 	client.Transport = recorder

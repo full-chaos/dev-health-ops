@@ -134,3 +134,26 @@ func TestRedactTextRemovesQueryValuesAndUserinfoOfEveryURL(t *testing.T) {
 		t.Fatalf("plain text changed: %s", RedactText(plain))
 	}
 }
+
+// A URL fragment can carry a credential too (an implicit-flow redirect puts access_token there): it is removed from every
+// URL in a text, on a Location header and in a body, and plain text with a '#' after a space is left alone.
+func TestRedactTextRemovesTheFragmentOfEveryURL(t *testing.T) {
+	token := dummyToken(t)
+	for name, text := range map[string]string{
+		"absolute URL":         "Location: https://app.example.test/cb#access_token=" + token + "&token_type=bearer",
+		"URL with a query":     "see http://h.example/p?next=%2F#id_token=" + token + " end",
+		"relative Location":    "location: /auth/done#" + token,
+		"fragment with a path": "https://h.example/a/b#/route?token=" + token,
+	} {
+		got := RedactText(text)
+		if strings.Contains(got, token) {
+			t.Errorf("%s: the fragment survives: %s", name, got)
+		}
+	}
+	if got := RedactText("issue #123 and ## heading"); got != "issue #123 and ## heading" {
+		t.Errorf("plain '#' text changed: %q", got)
+	}
+	if got := RedactText("https://h.example/p#frag"); !strings.HasPrefix(got, "https://h.example/p#") {
+		t.Errorf("the URL lost its path: %q", got)
+	}
+}

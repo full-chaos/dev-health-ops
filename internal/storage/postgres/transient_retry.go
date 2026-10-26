@@ -27,8 +27,11 @@ type DialRetry struct {
 }
 
 // Do runs attempt until it succeeds, fails with a final error, or the budget
-// is spent. It returns the last error unchanged.
-func (retry DialRetry) Do(ctx context.Context, attempt func(context.Context) error) error {
+// is spent. It returns the last error unchanged. attempt takes the attempt
+// number so its signature is not the common func(context.Context) error: the
+// reach analysis resolves a call of a function value to every function of the
+// same signature.
+func (retry DialRetry) Do(ctx context.Context, attempt func(ctx context.Context, attemptNum int) error) error {
 	now, sleep := retry.Now, retry.Sleep
 	if now == nil {
 		now = time.Now
@@ -39,7 +42,7 @@ func (retry DialRetry) Do(ctx context.Context, attempt func(context.Context) err
 	start := now()
 	backoff := dialRetryInitialBackoff
 	for attemptNum := 1; ; attemptNum++ {
-		err := attempt(ctx)
+		err := attempt(ctx, attemptNum)
 		if err == nil || !IsTransientDialError(err) || ctx.Err() != nil {
 			return err
 		}

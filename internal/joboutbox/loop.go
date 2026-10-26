@@ -256,7 +256,7 @@ func (loop *ReconcilerLoop) Start(ctx context.Context) error {
 				"retry_in", wait.String(),
 			)
 		},
-	}).Do(ctx, func(stepCtx context.Context) error {
+	}).Do(ctx, func(stepCtx context.Context, _ int) error {
 		return loop.step(stepCtx, loop.clock.Now())
 	}); err != nil {
 		err = postgres.MaskUnreachable(err)

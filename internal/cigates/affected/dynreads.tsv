@@ -37,6 +37,7 @@ internal/atlassianteams	absence_test.go
 internal/atlassianteams	vendored_documents_test.go
 internal/atlassianteams	vendored_patch_chain_test.go
 internal/audit	drill_pitr_integration_test.go
+internal/auth/authapi	hung_read_test.go
 internal/auth/authapi	issuer_eddsa_test.go
 internal/auth/authconfig	config_test.go
 internal/auth/authruntime	audit_request_id_scan_test.go

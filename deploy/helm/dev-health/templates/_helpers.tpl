@@ -819,8 +819,8 @@ and the other enable flags say. templates/auth-service.yaml includes it once, ou
 {{/*
 "true" when authService.phase turns the ladder flag on, else "". Call with (dict "flag" <name> "context" $).
 The ladder (each flag is on from its phase up): service 1, sessions 2, localLogin 3, social 3, credentials 4,
-usersOwned 4, orgsOwned 5. credentials moves with usersOwned: auth-service mounts the credential routes only with
-AUTH_USERS_OWNED, and go-api refuses AUTH_USERS_OWNED unless the credential routes go to auth-service.
+usersOwned 4, orgsOwned 5. credentials moves with usersOwned: go-api refuses AUTH_USERS_OWNED unless the credential routes
+go to auth-service. auth-service mounts them from phase 2 (a 503 stub until users are owned).
 */}}
 {{- define "dev-health.authOn" -}}
 {{- $ladder := dict "service" 1 "sessions" 2 "localLogin" 3 "social" 3 "credentials" 4 "usersOwned" 4 "orgsOwned" 5 -}}

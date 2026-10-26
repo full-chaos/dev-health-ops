@@ -117,18 +117,23 @@ public `users` table (4) and of the public `organizations` and `memberships`
 tables (5): no auth-schema copy, no projection. Phase 4 renders. The service does
 not write the organizations and memberships tables yet, so the chart refuses
 phase 5 until its own public-table writer leaf.
-The credential routes move with users owned, not with login: auth-service mounts
-them only with `AUTH_USERS_OWNED`, and go-api refuses `AUTH_USERS_OWNED` unless
-the credential routes go to auth-service.
+The credential routes move with users owned, not with login: go-api refuses
+`AUTH_USERS_OWNED` unless the credential routes go to auth-service. auth-service
+mounts them from phase 2 and answers 503 until users are owned.
 
-Before the move from phase 3 to phase 4, the running auth-service release must
-mount the credential routes in every phase and answer 503 with `Retry-After`
-while users are not owned. The one `helm upgrade` rolls go-api and auth-service
-together, so for a short time go-api pods that forward the credential routes
-meet auth-service pods of the previous revision. With such a release those pods
-answer 503 and `Retry-After` (a retryable answer that writes nothing); without
-it they answer 404. The chart cannot read the running image, so check it before
-the upgrade.
+Before each upgrade that turns on a forwarded route, the running auth-service
+release must already mount that route and answer 503 with `Retry-After` until it
+serves it. One `helm upgrade` rolls go-api and auth-service together, so for a
+short time go-api pods that forward a route meet auth-service pods of the
+previous revision; a rollback has the mirror window. With such a release those
+pods answer 503 and `Retry-After` (a retryable answer that writes nothing);
+without it they answer 404. The commit floor of the running auth-service image:
+
+- before phase 2 to 3 (local login is forwarded): at or after c4d3aa6d;
+- before phase 3 to 4 (the credential routes are forwarded) and before the
+  rollback from phase 4 to 3: at or after 676930d8, which c4d3aa6d includes.
+
+The chart cannot read the running image, so check it before the upgrade.
 
 Rolling back phase 4 narrows the runtime role's grants (the write grant on the
 public `users` table goes), and the grants ratchet refuses a narrowing without

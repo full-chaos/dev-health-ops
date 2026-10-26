@@ -82,7 +82,7 @@ func TestOwnedSSOSignInRelinksTheBackfilledPrincipal(t *testing.T) {
 
 			p, found, err := e.owned.IdentityBySubject(ctx, key.Issuer, key.Provider, key.Subject, legacy)
 			if err == nil && !found {
-				forked, perr := e.owned.ProvisionFederated(ctx, ProvisionRequest{Key: key, Email: uniqueEmail("changed-at-idp"),
+				forked, perr := e.owned.ProvisionFederated(ctx, ProvisionRequest{Key: key, Email: "changed-at-idp-" + uuid.NewString()[:8] + "@example.com",
 					Actor: SelfSignUp(nil), LegacyProvider: protocol, LegacySubject: raw})
 				t.Fatalf("owned sign-in of a backfilled %s account missed; the flow then provisioned principal %v (%v) beside %v: a fork",
 					protocol, forked, perr, user)

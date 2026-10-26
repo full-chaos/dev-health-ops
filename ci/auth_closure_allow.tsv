@@ -7,6 +7,7 @@
 # ch-go) is never allowed: the auth service holds signing keys and uses no
 # analytics store. Add a row only with a named reason.
 github.com/full-chaos/dev-health-ops	this module
+github.com/full-chaos/dev-health-go	authverify: the Kubernetes TokenReview validator and the canonical workload-token verifier of the workload exchange (standard library only)
 github.com/jackc/pgx/v5	ACP-ADR-01 item 5: PostgreSQL driver
 github.com/jackc/pgpassfile	pgx/v5 dependency
 github.com/jackc/pgservicefile	pgx/v5 dependency

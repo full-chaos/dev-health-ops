@@ -119,6 +119,9 @@ var Allowlist = []Entry{
 	{File: "internal/auth/keyrotation/store.go", Func: "Operator.revokeSessions", Table: "auth.sessions", Verb: "UPDATE"},
 	{File: "internal/auth/keyrotation/store.go", Func: "Operator.write", Table: "auth.signing_keys", Verb: "INSERT"},
 	{File: "internal/auth/keyrotation/store.go", Func: "Operator.write", Table: "auth.signing_keys", Verb: "UPDATE"},
+	// auth-migrate sessions revoke-unpinned (migration role): ends the sessions that have no token_version pin, inside audit.Commit.
+	{File: "internal/auth/session/unpinned.go", Func: "RevokeUnpinned", Table: "auth.refresh_credentials", Verb: "UPDATE"},
+	{File: "internal/auth/session/unpinned.go", Func: "RevokeUnpinned", Table: "auth.sessions", Verb: "UPDATE"},
 	// The workload registry (CHAOS-10980; new auth-table writers ruled by acp 10-26 00:4xZ): written by the auth-migrate operator role, inside audit.Commit.
 	{File: "internal/auth/workload/store.go", Func: "Store.AddBinding", Table: "auth.workload_bindings", Verb: "INSERT"},
 	{File: "internal/auth/workload/store.go", Func: "Store.Register", Table: "auth.principals", Verb: "INSERT"},

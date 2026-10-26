@@ -1495,8 +1495,8 @@ func TestASessionCanNameAProjectedOrganization(t *testing.T) {
 	e.seedMembership(t, ctx, user, org)
 	e.project(t, ctx, user)
 	insert := func() error {
-		_, err := e.runtime.Exec(ctx, `INSERT INTO auth.sessions (principal_id, organization_id, token_hash, expires_at)
-VALUES ($1, $2, $3, now() + interval '1 hour')`, user, org, []byte(uuid.NewString()))
+		_, err := e.runtime.Exec(ctx, `INSERT INTO auth.sessions (principal_id, organization_id, token_hash, expires_at, legacy_token_version)
+VALUES ($1, $2, $3, now() + interval '1 hour', 0)`, user, org, []byte(uuid.NewString()))
 		return err
 	}
 	if err := insert(); err == nil {

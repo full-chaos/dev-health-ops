@@ -24,6 +24,7 @@ import (
 // harness's mirrored Valkey image: the chart's pinned digest is not in the test
 // image mirror.
 func TestRenderedValkeyEvictionKeepsKeysWithoutATTL(t *testing.T) {
+	requireHelmUnderCI(t)
 	deployment, _ := valkeyDeployment(t, "--set", "valkey.maxmemoryPolicy=volatile-ttl", "--set", "valkey.maxmemory=4mb")
 	if got := valkeyArg(t, deployment, "--maxmemory-policy"); got != "volatile-ttl" {
 		t.Fatalf("the render carries --maxmemory-policy %q, want volatile-ttl", got)

@@ -18,6 +18,7 @@ func valkeyArg(t *testing.T, deployment map[string]any, flag string) string {
 }
 
 func TestValkeyMaxmemoryPolicyFollowsTheValue(t *testing.T) {
+	requireHelmUnderCI(t)
 	deployment, _ := valkeyDeployment(t)
 	if got := valkeyArg(t, deployment, "--maxmemory-policy"); got != "allkeys-lru" {
 		t.Errorf("default --maxmemory-policy = %q, want the unchanged allkeys-lru", got)
@@ -37,6 +38,7 @@ func TestValkeyMaxmemoryPolicyFollowsTheValue(t *testing.T) {
 }
 
 func TestValkeyMaxmemoryPolicyRefusesUnknownValues(t *testing.T) {
+	requireHelmUnderCI(t)
 	for name, value := range map[string]string{
 		"unknown":       "bogus",
 		"empty":         "",

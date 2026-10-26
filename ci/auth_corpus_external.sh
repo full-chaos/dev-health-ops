@@ -42,6 +42,14 @@ die() {
   exit 1
 }
 
+# AUTH_CORPUS_FORCE_SOCIAL=1 (with AUTH_CORPUS_USERS_UNOWNED=1 only) forwards social although users are not owned: the
+# non-vacuity run, whose new-user social row must fail because auth-service refuses it (403 signup_unavailable).
+FORCE_SOCIAL=""
+if [ -n "${AUTH_CORPUS_FORCE_SOCIAL:-}" ]; then
+  [ "${LEG}" = "acp" ] && [ -n "${AUTH_CORPUS_USERS_UNOWNED:-}" ] || die "AUTH_CORPUS_FORCE_SOCIAL needs AUTH_CORPUS_USERS_UNOWNED=1 on leg acp"
+  FORCE_SOCIAL=1
+fi
+
 command -v docker >/dev/null 2>&1 || die "docker is required"
 command -v go >/dev/null 2>&1 || die "go is required"
 
@@ -170,9 +178,9 @@ fi
 AGGREGATES=(sessions local_login credentials social oidc saml)
 # Leg acp serves these through auth-service (CHAOS-10410); one that is not served fails the leg by name.
 REQUIRED=(sessions local_login)
-# Served by auth-service but left to go-api on this leg: auth-service creates no account for a new social sign-in until it
-# owns users, so forwarding social would refuse the corpus's new-user row.
-KEPT_ON_GO_API=(social)
+# Aggregates kept on go-api whatever auth-service serves: none. Social is gated like credentials (gate_owned): auth-service
+# creates no account for a new social sign-in until it owns users, so go-api keeps it until step 1e.
+KEPT_ON_GO_API=()
 ROUTES="${SCRIPT_DIR}/auth_corpus_acp_routes.tsv"
 # Script-internal, never read from the caller's environment: only a step that owns the users sets it to 1 (step 1e, owned_flip).
 USERS_OWNED=0
@@ -229,8 +237,10 @@ probe() {
 # gate_owned AGGREGATE narrows PROBED for an aggregate auth-service mounts before it owns it: auth-service answers its
 # routes with a 503 stub until then, so go-api must keep them. Once USERS_OWNED=1 the aggregate must be served.
 gate_owned() {
-  local owned_gated=(credentials)
+  local owned_gated=(credentials social)
   [[ " ${owned_gated[*]} " == *" $1 "* ]] || return 0
+  # The forced non-vacuity run forwards social without the posture.
+  if [ "$1" = social ] && [ -n "${FORCE_SOCIAL:-}" ]; then return 0; fi
   if [ "${USERS_OWNED}" = 1 ]; then
     [ "${PROBED}" = served ] || die "aggregate $1 is not served by auth-service, which owns the users"
   elif [ "${PROBED}" = served ]; then
@@ -262,7 +272,7 @@ if [ "${LEG}" = "acp" ]; then
     # The sessions aggregate gates the others, as go-api's own start-up check does.
     if [[ " ${SERVED[*]} " == *" sessions "* ]]; then
       for aggregate in "${SERVED[@]}"; do
-        [[ " ${KEPT_ON_GO_API[*]} " == *" ${aggregate} "* ]] || FORWARDED+=("${aggregate}")
+        [[ " ${KEPT_ON_GO_API[*]:-} " == *" ${aggregate} "* ]] || FORWARDED+=("${aggregate}")
       done
     fi
   }

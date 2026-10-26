@@ -15,6 +15,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity/local"
 )
@@ -339,6 +341,50 @@ func TestRegisterRouteOrganizationSettingParsesAsGoAPIDoes(t *testing.T) {
 		}
 		if got := c.fakes.provisioned[0].OrganizationName != nil; got != wantOrg {
 			t.Fatalf("setting %q: organization = %v, want %v", value, got, wantOrg)
+		}
+	}
+}
+
+func TestRegisterCarriesAbsentAndEmptyFullNameApart(t *testing.T) {
+	registerEnv(t, "")
+	for name, tc := range map[string]struct {
+		body  string
+		empty bool
+		set   bool
+	}{
+		"absent": {body: `{"email":"a1@example.com","password":"Correct-horse-battery-9"}`},
+		"empty":  {body: `{"email":"a2@example.com","password":"Correct-horse-battery-9","full_name":""}`, set: true, empty: true},
+		"named":  {body: `{"email":"a3@example.com","password":"Correct-horse-battery-9","full_name":"Ann"}`, set: true},
+	} {
+		c := newCredFixture(t)
+		if got := c.call(http.MethodPost, PatternRegister, tc.body, nil); got.Code != http.StatusAccepted {
+			t.Fatalf("%s: status %d %s", name, got.Code, got.Body)
+		}
+		if len(c.fakes.provisioned) != 1 {
+			t.Fatalf("%s: %d provisions", name, len(c.fakes.provisioned))
+		}
+		got := c.fakes.provisioned[0].FullName
+		switch {
+		case !tc.set && got != nil:
+			t.Errorf("%s: full name %q, want nil", name, *got)
+		case tc.set && (got == nil || (*got == "") != tc.empty):
+			t.Errorf("%s: full name %v", name, got)
+		}
+	}
+}
+
+func TestUserInfoFullNameNullVersusEmpty(t *testing.T) {
+	empty := ""
+	for name, tc := range map[string]struct {
+		in   *string
+		want string
+	}{"null": {nil, `"full_name":null`}, "empty": {&empty, `"full_name":""`}} {
+		raw, err := json.Marshal(userInfo(uuid.New(), UserState{Email: "a@example.com", FullName: tc.in}, nil))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(strings.ReplaceAll(string(raw), " ", ""), tc.want) {
+			t.Errorf("%s: %s lacks %s", name, raw, tc.want)
 		}
 	}
 }

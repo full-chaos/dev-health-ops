@@ -11,14 +11,14 @@ func TestFederatedPublicUserMatchesWhatGoAPIWrites(t *testing.T) {
 	id := uuid.New()
 	social := ProvisionRequest{
 		Key:      ExternalKey{Issuer: "https://github.com", Provider: ProviderGitHub, Subject: "12345"},
-		Username: "someuser", LegacyFullName: "Some Name",
+		Username: "someuser", LegacyFullName: strPtr("Some Name"),
 	}
 	got, err := federatedPublicUser(id, "a@example.test", social)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got.AuthProvider != "github" || got.AuthProviderID == nil || *got.AuthProviderID != "12345" ||
-		got.Username != "someuser" || got.FullName != "Some Name" || !got.Verified || got.PasswordHash != nil || got.Email != "a@example.test" {
+		got.Username != "someuser" || got.FullName == nil || *got.FullName != "Some Name" || !got.Verified || got.PasswordHash != nil || got.Email != "a@example.test" {
 		t.Fatalf("social row: %+v", got)
 	}
 
@@ -41,3 +41,5 @@ func TestFederatedPublicUserMatchesWhatGoAPIWrites(t *testing.T) {
 		}
 	}
 }
+
+func strPtr(s string) *string { return &s }

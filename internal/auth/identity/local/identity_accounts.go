@@ -82,16 +82,12 @@ func (a IdentityAccounts) ByID(ctx context.Context, id uuid.UUID) (*User, error)
 }
 
 func (a IdentityAccounts) ProvisionLocal(ctx context.Context, req ProvisionLocalRequest) (uuid.UUID, error) {
-	name := ""
-	if req.FullName != nil {
-		name = *req.FullName
-	}
 	hash := req.PasswordHash
 	var org *identity.NewOrganization
 	if req.OrganizationName != nil {
 		org = &identity.NewOrganization{Name: *req.OrganizationName}
 	}
-	return a.Store.ProvisionLocal(ctx, identity.LocalProvisionRequest{Email: req.Email, FullName: name, PasswordHash: &hash, Actor: a.actor(ctx), Organization: org})
+	return a.Store.ProvisionLocal(ctx, identity.LocalProvisionRequest{Email: req.Email, FullName: req.FullName, PasswordHash: &hash, Actor: a.actor(ctx), Organization: org})
 }
 
 func (a IdentityAccounts) SetEmailVerified(ctx context.Context, id uuid.UUID) error {

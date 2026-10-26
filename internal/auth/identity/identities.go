@@ -252,9 +252,9 @@ type ProvisionRequest struct {
 	FullName string
 	Actor    Actor
 	// Username and LegacyFullName are the provider's own username and full
-	// name, written to public.users as go-api writes them (empty is NULL).
+	// name, written to public.users as go-api writes them (nil is NULL; Username empty is NULL).
 	Username       string
-	LegacyFullName string
+	LegacyFullName *string
 	// LegacyProvider and LegacySubject are the public.users auth_provider and
 	// auth_provider_id of an SSO account (its key's provider is a provider row
 	// id); a social key derives both from itself.

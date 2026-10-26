@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
@@ -145,16 +144,6 @@ WHERE u.auth_provider IN ('github', 'gitlab', 'google') AND coalesce(u.auth_prov
   AND ($1::uuid IS NULL OR (u.id, sp.id) > ($1::uuid, $2::uuid))
 ORDER BY u.id, sp.id LIMIT $3`
 
-// OAuthSSOReadColumns lists the public columns oauthSSOPageSQL and
-// OAuthSSOCountSQL read, by table.
-func OAuthSSOReadColumns() map[string][]string {
-	return map[string][]string{
-		"users":         {"id", "auth_provider", "auth_provider_id"},
-		"memberships":   {"user_id", "org_id"},
-		"sso_providers": {"id", "org_id", "protocol", "status", "config"},
-	}
-}
-
 // PGOAuthSSOSource reads candidates from public.users, memberships and sso_providers.
 type PGOAuthSSOSource struct{ Pool *pgxpool.Pool }
 
@@ -181,60 +170,4 @@ func (s PGOAuthSSOSource) Page(ctx context.Context, after *OAuthSSOCursor, limit
 		out = append(out, c)
 	}
 	return out, rs.Err()
-}
-
-// OAuthSSOCount is the pre-flip count line of the users-owned runbook. Counts
-// only: no id, e-mail or organization.
-type OAuthSSOCount struct {
-	Total, Keyed, Missing, SelfHostedUnbindable int64
-}
-
-// Line renders the count as one stable line.
-func (c OAuthSSOCount) Line() string {
-	return fmt.Sprintf("oauth_sso total=%d keyed=%d missing=%d selfhosted_unbindable=%d",
-		c.Total, c.Keyed, c.Missing, c.SelfHostedUnbindable)
-}
-
-// OAuthSSOCountSQL is the read-only count statement. quotedSchema is the quoted
-// auth schema. Parameters $1..$3 are the github, gitlab and google issuers.
-// total: users with an active OAuth row in a member org. keyed: every
-// social-namespace row has its key. missing: some social-namespace row has no
-// key. selfhosted_unbindable: some row has a self-hosted base_url (not carried).
-func OAuthSSOCountSQL(quotedSchema string) string {
-	return `WITH cand AS (
-  SELECT u.id AS uid, u.auth_provider_id AS sub, sp.id AS spid,
-         rtrim(coalesce(sp.config::jsonb->>'base_url', ''), '/') AS base,
-         CASE sp.protocol WHEN 'oauth_github' THEN $1::text WHEN 'oauth_gitlab' THEN $2::text WHEN 'oauth_google' THEN $3::text END AS iss
-  FROM public.users u
-  JOIN public.memberships m ON m.user_id = u.id
-  JOIN public.sso_providers sp ON sp.org_id = m.org_id AND sp.status = 'active' AND sp.protocol = 'oauth_' || u.auth_provider
-  WHERE u.auth_provider IN ('github', 'gitlab', 'google') AND coalesce(u.auth_provider_id, '') <> ''
-), flag AS (
-  SELECT c.uid,
-         bool_or(c.base <> '' AND c.base <> c.iss) AS selfh,
-         bool_or(NOT (c.base <> '' AND c.base <> c.iss)) AS social,
-         bool_or(NOT (c.base <> '' AND c.base <> c.iss) AND e.id IS NULL) AS missing
-  FROM cand c
-  LEFT JOIN ` + quotedSchema + `.external_identities e
-    ON e.principal_id = c.uid AND e.issuer = c.iss AND e.provider = c.spid::text AND e.subject = c.sub
-  GROUP BY c.uid
-)
-SELECT count(*), count(*) FILTER (WHERE social AND NOT missing), count(*) FILTER (WHERE missing), count(*) FILTER (WHERE selfh) FROM flag`
-}
-
-type countQuerier interface {
-	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
-}
-
-// ReadOAuthSSOCount runs OAuthSSOCountSQL. The issuers come from the identity
-// package, the one definition the carry uses.
-func ReadOAuthSSOCount(ctx context.Context, db countQuerier, quotedSchema string) (OAuthSSOCount, error) {
-	var c OAuthSSOCount
-	gh, _ := identity.SocialIssuer(identity.ProviderGitHub)
-	gl, _ := identity.SocialIssuer(identity.ProviderGitLab)
-	gg, _ := identity.SocialIssuer(identity.ProviderGoogle)
-	if err := db.QueryRow(ctx, OAuthSSOCountSQL(quotedSchema), gh, gl, gg).Scan(&c.Total, &c.Keyed, &c.Missing, &c.SelfHostedUnbindable); err != nil {
-		return OAuthSSOCount{}, errors.New("usersbackfill: reading the oauth sso count failed")
-	}
-	return c, nil
 }

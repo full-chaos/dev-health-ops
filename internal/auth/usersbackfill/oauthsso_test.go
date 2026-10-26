@@ -120,7 +120,7 @@ func TestOAuthSSOReportLinesCountsOnly(t *testing.T) {
 }
 
 func TestOAuthSSOCountLineCountsOnly(t *testing.T) {
-	line := OAuthSSOCount{Total: 5, Keyed: 3, Missing: 1, SelfHostedUnbindable: 1}.Line()
+	line := identity.OAuthSSOCount{Total: 5, Keyed: 3, Missing: 1, SelfHostedUnbindable: 1}.Line()
 	if line != "oauth_sso total=5 keyed=3 missing=1 selfhosted_unbindable=1" {
 		t.Fatalf("line %q", line)
 	}
@@ -134,7 +134,7 @@ func TestOAuthSSOCountSQLSelectsCountsOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sql := OAuthSSOCountSQL(authschema.Quote(schema))
+	sql := identity.OAuthSSOCountSQL(authschema.Quote(schema))
 	for _, bad := range []string{"u.email", "u.id,", "org_id,", "encrypted_secrets"} {
 		if strings.Contains(sql[strings.LastIndex(sql, "SELECT count"):], bad) {
 			t.Fatalf("final SELECT names %q", bad)
@@ -153,7 +153,7 @@ func TestOAuthSSOReadColumnsWithinRuntimeGrantAndNoSecrets(t *testing.T) {
 			grants[g.Table][c] = true
 		}
 	}
-	for table, cols := range OAuthSSOReadColumns() {
+	for table, cols := range identity.OAuthSSOReadColumns() {
 		for _, c := range cols {
 			if !grants[table][c] {
 				t.Fatalf("%s.%s is not granted to the runtime role", table, c)

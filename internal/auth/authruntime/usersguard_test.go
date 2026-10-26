@@ -14,7 +14,7 @@ import (
 )
 
 type countsRow struct {
-	values [4]int64
+	values [6]int64
 	err    error
 }
 
@@ -40,12 +40,12 @@ func TestCheckUsersOwnedNamesEveryGapAndOnlyCounts(t *testing.T) {
 	if err := checkUsersOwned(context.Background(), countsDB{countsRow{}}, schema); err != nil {
 		t.Fatalf("no gap: %v", err)
 	}
-	for name, values := range map[string][4]int64{
-		"public user without an auth user": {2, 0, 0, 0},
-		"auth user without a public user":  {0, 3, 0, 0},
-		"provider user without identity":   {0, 0, 4, 0},
-		"all three":                        {1, 2, 3, 0},
-		"unverifiable SAML subjects":       {0, 0, 2, 2},
+	for name, values := range map[string][6]int64{
+		"public user without an auth user": {2, 0, 0, 0, 0, 0},
+		"auth user without a public user":  {0, 3, 0, 0, 0, 0},
+		"provider user without identity":   {0, 0, 4, 0, 0, 0},
+		"all three":                        {1, 2, 3, 0, 0, 0},
+		"unverifiable SAML subjects":       {0, 0, 2, 2, 0, 0},
 	} {
 		err := checkUsersOwned(context.Background(), countsDB{countsRow{values: values}}, schema)
 		if !errors.Is(err, ErrUsersOwnedNotReady) {
@@ -100,5 +100,45 @@ func TestGuardCountsUseTheSharedPlaceholderDefinition(t *testing.T) {
 	}
 	if strings.Count(sql, "'service'") != 1 {
 		t.Fatalf("the guard names the placeholder literal outside the shared predicate:\n%s", sql)
+	}
+}
+
+func TestCheckUsersOwnedCountsOAuthSSOAsOwnClass(t *testing.T) {
+	schema, err := authschema.NewValidatedIdentifier("auth")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, c := range map[string]struct {
+		values [6]int64
+		want   string
+	}{
+		"missing row key":      {[6]int64{0, 0, 0, 0, 2, 0}, "oauth_sso_missing_row_key=2"},
+		"self-hosted unbound":  {[6]int64{0, 0, 0, 0, 0, 3}, "oauth_sso_selfhosted_unbindable=3"},
+		"both with other gaps": {[6]int64{1, 0, 0, 0, 4, 5}, "oauth_sso_missing_row_key=4, oauth_sso_selfhosted_unbindable=5"},
+	} {
+		err := checkUsersOwned(context.Background(), countsDB{countsRow{values: c.values}}, schema)
+		if !errors.Is(err, ErrUsersOwnedNotReady) {
+			t.Fatalf("%s: err = %v, want ErrUsersOwnedNotReady", name, err)
+		}
+		if !strings.Contains(err.Error(), c.want) {
+			t.Fatalf("%s: the refusal does not name %q: %v", name, c.want, err)
+		}
+	}
+}
+
+func TestGuardCountsUseTheSharedOAuthSSODefinition(t *testing.T) {
+	schema, err := authschema.NewValidatedIdentifier("auth")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sql string
+	if err := checkUsersOwned(context.Background(), recordingDB{&sql}, schema); err != nil {
+		t.Fatal(err)
+	}
+	q := authschema.Quote(schema)
+	for _, want := range []string{identity.OAuthSSOMissingKeySubquery(q), identity.OAuthSSOSelfHostedSubquery(q)} {
+		if !strings.Contains(sql, want) {
+			t.Fatalf("the guard does not use the shared OAuth-SSO count %q", want[:60])
+		}
 	}
 }

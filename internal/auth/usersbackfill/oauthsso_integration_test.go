@@ -3,14 +3,18 @@
 package usersbackfill
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
+	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
 
@@ -73,6 +77,7 @@ func TestBackfillOAuthSSOThenOwnedLoginHitsKey(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	base := e.settleOAuthSSO(t, ctx)
 	org := e.oauthOrg(t, ctx)
 	rowA := e.oauthRow(t, ctx, org, "oauth_github", `{}`)
 	rowB := e.oauthRow(t, ctx, org, "oauth_github", `{}`)
@@ -87,7 +92,7 @@ func TestBackfillOAuthSSOThenOwnedLoginHitsKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rep.Users != 2 || rep.Linked != 2 || rep.SelfHostedUnbindable != 1 || len(rep.Skipped) != 0 {
+	if rep.Users != int(base.Total)+2 || rep.Linked != 2 || rep.SelfHostedUnbindable != 1+int(base.SelfHostedUnbindable) || len(rep.Skipped) != 0 {
 		t.Fatalf("report %+v", rep)
 	}
 
@@ -112,11 +117,11 @@ func TestBackfillOAuthSSOThenOwnedLoginHitsKey(t *testing.T) {
 		t.Fatalf("self-hosted row keys = %d (%v)", selfHostedKeys, err)
 	}
 
-	count, err := ReadOAuthSSOCount(ctx, e.runtime, authschemaQuote(e))
+	count, err := identity.ReadOAuthSSOCount(ctx, e.runtime, authschemaQuote(e))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if count != (OAuthSSOCount{Total: 2, Keyed: 1, Missing: 0, SelfHostedUnbindable: 1}) {
+	if count != (identity.OAuthSSOCount{Total: base.Total + 2, Keyed: base.Keyed + 1, Missing: 0, SelfHostedUnbindable: base.SelfHostedUnbindable + 1}) {
 		t.Fatalf("count line %q", count.Line())
 	}
 	again, err := RunOAuthSSO(ctx, PGOAuthSSOSource{Pool: e.runtime}, e.store, Options{})
@@ -126,3 +131,95 @@ func TestBackfillOAuthSSOThenOwnedLoginHitsKey(t *testing.T) {
 }
 
 func authschemaQuote(e *reconEnv) string { return authschema.Quote(e.schema) }
+
+func (e *reconEnv) grantOAuthSSOReads(t *testing.T, ctx context.Context) {
+	t.Helper()
+	var role string
+	if err := e.runtime.QueryRow(ctx, `SELECT current_user`).Scan(&role); err != nil {
+		t.Fatal(err)
+	}
+	for _, g := range []string{
+		`GRANT SELECT (user_id, org_id) ON public.memberships TO %q`,
+		`GRANT SELECT (id, org_id, protocol, status, config) ON public.sso_providers TO %q`,
+	} {
+		if _, err := e.admin.Exec(ctx, fmt.Sprintf(g, role)); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// settleOAuthSSO carries everything pending, so a test counts only its own users.
+func (e *reconEnv) settleOAuthSSO(t *testing.T, ctx context.Context) identity.OAuthSSOCount {
+	t.Helper()
+	e.grantOAuthSSOReads(t, ctx)
+	e.backfill(t, ctx)
+	if _, err := RunOAuthSSO(ctx, PGOAuthSSOSource{Pool: e.runtime}, e.store, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	count, err := identity.ReadOAuthSSOCount(ctx, e.runtime, authschemaQuote(e))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return count
+}
+
+func (e *reconEnv) verbPool(t *testing.T, ctx context.Context) {
+	t.Helper()
+	old := connectFn
+	connectFn = func(context.Context, cli.Env, string) (*pgxpool.Pool, authschema.ValidatedIdentifier, int) {
+		pool, err := pgxpool.NewWithConfig(ctx, e.runtime.Config().Copy())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return pool, e.schema, cli.ExitOK
+	}
+	t.Cleanup(func() { connectFn = old })
+}
+
+func TestVerbUsersBackfillCarriesOAuthSSOAndCountVerbPrintsOneLine(t *testing.T) {
+	e := getReconEnv(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	base := e.settleOAuthSSO(t, ctx)
+	e.verbPool(t, ctx)
+
+	org := e.oauthOrg(t, ctx)
+	e.oauthRow(t, ctx, org, "oauth_github", `{}`)
+	e.oauthRow(t, ctx, org, "oauth_gitlab", `{"base_url":"https://gitlab.com/"}`)
+	e.oauthUser(t, ctx, org, "github", "8101")
+	e.oauthUser(t, ctx, org, "gitlab", "8102")
+	for i, odd := range []string{"https://GitLab.com/", "https://gitlab.com:443"} {
+		o := e.oauthOrg(t, ctx)
+		e.oauthRow(t, ctx, o, "oauth_gitlab", fmt.Sprintf(`{"base_url":%q}`, odd))
+		e.oauthUser(t, ctx, o, "gitlab", fmt.Sprintf("820%d", i))
+	}
+
+	countOut := func() string {
+		var out bytes.Buffer
+		code := oauthSSOCountVerb(t).Run(ctx, cli.Env{Lookup: func(string) (string, bool) { return "", false }, Stdout: &out, Stderr: &bytes.Buffer{}})
+		if code != cli.ExitOK {
+			t.Fatalf("count verb exit %d", code)
+		}
+		return out.String()
+	}
+	before := countOut()
+	if want := (identity.OAuthSSOCount{Total: base.Total + 4, Keyed: base.Keyed, Missing: 2, SelfHostedUnbindable: base.SelfHostedUnbindable + 2}).Line() + "\n"; before != want {
+		t.Fatalf("before the verb: %q, want %q", before, want)
+	}
+
+	var stdout bytes.Buffer
+	code := Command().Children[0].Run(ctx, cli.Env{Lookup: func(string) (string, bool) { return "", false }, Stdout: &stdout, Stderr: &bytes.Buffer{}})
+	if code != cli.ExitOK {
+		t.Fatalf("users-backfill exit %d\n%s", code, stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "oauth_sso_keys_linked=2\n") {
+		t.Fatalf("stdout %q", stdout.String())
+	}
+	after := countOut()
+	if want := (identity.OAuthSSOCount{Total: base.Total + 4, Keyed: base.Keyed + 2, Missing: 0, SelfHostedUnbindable: base.SelfHostedUnbindable + 2}).Line() + "\n"; after != want {
+		t.Fatalf("after the verb: %q, want %q", after, want)
+	}
+	if strings.ContainsAny(after, "@") || strings.Count(after, "\n") != 1 {
+		t.Fatalf("the count line is not one line of counts: %q", after)
+	}
+}

@@ -214,6 +214,23 @@ func (e *Errors) OptionalString(object *pyjson.Object, name string, minLength, m
 	return e.validateStringValue(raw, []pyjson.Value{"body", name}, minLength, maxLength)
 }
 
+// OptionalUTF8String is OptionalString(object, name, 0, 0) for a field whose
+// sink is strict UTF-8 text (a Postgres text column): a lone surrogate is
+// string_unicode, as on a bounded str, instead of being kept.
+func (e *Errors) OptionalUTF8String(object *pyjson.Object, name string) (string, bool) {
+	raw, ok := object.Get(name)
+	if !ok || raw == nil {
+		return "", false
+	}
+	loc := []pyjson.Value{"body", name}
+	if text, isString := raw.(string); isString && pyjson.HasSurrogate(text) {
+		*e = append(*e, Error{Type: "string_unicode", Loc: loc, Input: text,
+			Msg: "Input should be a valid string, unable to parse raw data as a unicode string"})
+		return "", false
+	}
+	return e.validateStringValue(raw, loc, 0, 0)
+}
+
 // RequiredString validates one required `str` field (no default) with
 // pydantic's min_length/max_length (code points; 0 = no bound). present is
 // false when the field is absent (a "missing" error, matching pydantic's

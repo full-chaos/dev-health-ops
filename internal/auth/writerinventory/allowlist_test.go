@@ -119,6 +119,15 @@ var Allowlist = []Entry{
 	{File: "internal/auth/keyrotation/store.go", Func: "Operator.revokeSessions", Table: "auth.sessions", Verb: "UPDATE"},
 	{File: "internal/auth/keyrotation/store.go", Func: "Operator.write", Table: "auth.signing_keys", Verb: "INSERT"},
 	{File: "internal/auth/keyrotation/store.go", Func: "Operator.write", Table: "auth.signing_keys", Verb: "UPDATE"},
+	// The workload registry (CHAOS-10980; new auth-table writers ruled by acp 10-26 00:4xZ): written by the auth-migrate operator role, inside audit.Commit.
+	{File: "internal/auth/workload/store.go", Func: "Store.AddBinding", Table: "auth.workload_bindings", Verb: "INSERT"},
+	{File: "internal/auth/workload/store.go", Func: "Store.Register", Table: "auth.principals", Verb: "INSERT"},
+	{File: "internal/auth/workload/store.go", Func: "Store.Register", Table: "auth.workloads", Verb: "INSERT"},
+	{File: "internal/auth/workload/store.go", Func: "Store.SetAllowedActions", Table: "auth.workloads", Verb: "UPDATE"},
+	{File: "internal/auth/workload/store.go", Func: "Store.SetAudiences", Table: "auth.workloads", Verb: "UPDATE"},
+	{File: "internal/auth/workload/store.go", Func: "Store.setBindingEnabled", Table: "auth.workload_bindings", Verb: "UPDATE"},
+	{File: "internal/auth/workload/store.go", Func: "Store.setEnabled", Table: "auth.principals", Verb: "UPDATE"},
+	{File: "internal/auth/workload/store.go", Func: "Store.setEnabled", Table: "auth.workloads", Verb: "UPDATE"},
 	{File: "internal/auth/org/store.go", Func: "Store.Create", Table: "auth.organizations", Verb: "INSERT"},
 	{File: "internal/auth/org/store.go", Func: "Store.mutate", Table: "auth.organizations", Verb: "UPDATE"},
 	// TEMPORARY: the one-time legacy refresh exchange revokes go-api's refresh tokens (authschema.LegacyRefreshTokenGrant). CHAOS-10408 removes both rows with the grant.

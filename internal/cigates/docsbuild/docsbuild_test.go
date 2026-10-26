@@ -2,7 +2,6 @@ package docsbuild
 
 import (
 	"bytes"
-	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,7 +11,6 @@ import (
 type fake struct {
 	calls     []string
 	failAt    string
-	mkdocsErr error
 	skipAsset string
 	start     string
 	roots     []string
@@ -49,12 +47,6 @@ func (f *fake) deps(t *testing.T) Deps {
 			}
 			return 0
 		},
-		MkDocs: func(root string, announce func(string)) error {
-			f.roots = append(f.roots, root)
-			f.calls = append(f.calls, "mkdocs")
-			announce("python3")
-			return f.mkdocsErr
-		},
 		Revision: func(string) string { return "rev1" },
 	}
 }
@@ -78,13 +70,21 @@ func runWith(t *testing.T, f *fake, args ...string) (int, string, string) {
 	return code, out.String(), errb.String()
 }
 
+func step(t *testing.T, f *fake, which string, args ...string) (int, string, string) {
+	t.Helper()
+	return runWith(t, f, append([]string{which}, args...)...)
+}
+
 func TestFullCheckChainOrder(t *testing.T) {
 	f := &fake{}
 	f.start = repoDir(t)
-	if code, _, stderr := runWith(t, f, "--mode", "preview", "--full-check"); code != 0 {
-		t.Fatalf("code %d: %s", code, stderr)
+	if code, _, stderr := step(t, f, "pre", "--mode", "preview", "--full-check"); code != 0 {
+		t.Fatalf("pre code %d: %s", code, stderr)
 	}
-	want := "docs validate-publication|mkdocs|docs check-built-site-links|docs check-docs-search|docs check-docs-accessibility|docs check-candidate-facts"
+	if code, _, stderr := step(t, f, "post", "--mode", "preview", "--full-check"); code != 0 {
+		t.Fatalf("post code %d: %s", code, stderr)
+	}
+	want := "docs validate-publication|docs check-built-site-links|docs check-docs-search|docs check-docs-accessibility|docs check-candidate-facts"
 	got := strings.Join(f.calls[:len(f.calls)-1], "|")
 	if got != want {
 		t.Errorf("chain\n got %s\nwant %s", got, want)
@@ -94,13 +94,21 @@ func TestFullCheckChainOrder(t *testing.T) {
 	}
 }
 
-func TestPreviewWithoutFullCheckBuildsAndPreparesOnly(t *testing.T) {
+func TestPreWithoutFullCheckRunsNothing(t *testing.T) {
 	f := &fake{}
 	f.start = repoDir(t)
-	if code, _, _ := runWith(t, f, "--mode=preview"); code != 0 {
+	if code, _, _ := step(t, f, "pre", "--mode=preview"); code != 0 || len(f.calls) != 0 {
+		t.Errorf("code %d calls %v", code, f.calls)
+	}
+}
+
+func TestPostWithoutFullCheckPreparesOnly(t *testing.T) {
+	f := &fake{}
+	f.start = repoDir(t)
+	if code, _, _ := step(t, f, "post", "--mode=preview"); code != 0 {
 		t.Fatal(code)
 	}
-	if len(f.calls) != 2 || f.calls[0] != "mkdocs" {
+	if len(f.calls) != 1 || !strings.HasPrefix(f.calls[0], "prepare ") {
 		t.Errorf("calls %v", f.calls)
 	}
 }
@@ -108,48 +116,57 @@ func TestPreviewWithoutFullCheckBuildsAndPreparesOnly(t *testing.T) {
 func TestProductionForcesFullCheck(t *testing.T) {
 	f := &fake{}
 	f.start = repoDir(t)
-	if code, stdout, _ := runWith(t, f, "--mode", "production"); code != 0 || !strings.Contains(stdout, "full_check=true") {
-		t.Fatalf("code %d out %s", code, stdout)
+	if code, _, _ := step(t, f, "pre", "--mode", "production"); code != 0 || len(f.calls) != 1 || f.calls[0] != "docs validate-publication" {
+		t.Fatalf("code %d calls %v", code, f.calls)
 	}
-	if f.calls[0] != "docs validate-publication" {
-		t.Errorf("calls %v", f.calls)
+	if code, stdout, _ := step(t, f, "post", "--mode", "production"); code != 0 || !strings.Contains(stdout, "full_check=true") || len(f.calls) != 6 {
+		t.Fatalf("code %d out %s calls %v", code, stdout, f.calls)
 	}
 }
 
 func TestEachStepFailureStopsTheBuild(t *testing.T) {
-	for _, step := range []string{"validate-publication", "check-built-site-links", "check-docs-search", "check-docs-accessibility", "check-candidate-facts", "docs-prepare"} {
-		f := &fake{failAt: step}
+	for _, name := range []string{"validate-publication", "check-built-site-links", "check-docs-search", "check-docs-accessibility", "check-candidate-facts", "docs-prepare"} {
+		f := &fake{failAt: name}
 		f.start = repoDir(t)
-		code, _, stderr := runWith(t, f, "--mode", "preview", "--full-check")
-		if code != 1 || !strings.Contains(stderr, step) {
-			t.Errorf("%s: code %d stderr %q", step, code, stderr)
+		which := "post"
+		if name == "validate-publication" {
+			which = "pre"
 		}
-		if strings.Contains(strings.Join(f.calls, "|"), "prepare --source") && step != "docs-prepare" {
-			t.Errorf("%s: assets were prepared after the failure", step)
+		code, _, stderr := step(t, f, which, "--mode", "preview", "--full-check")
+		if code != 1 || !strings.Contains(stderr, name) {
+			t.Errorf("%s: code %d stderr %q", name, code, stderr)
+		}
+		if strings.Contains(strings.Join(f.calls, "|"), "prepare --source") && name != "docs-prepare" {
+			t.Errorf("%s: assets were prepared after the failure", name)
 		}
 	}
 }
 
-func TestMkDocsFailureStopsTheBuild(t *testing.T) {
-	f := &fake{mkdocsErr: errors.New("exit status 1")}
-	f.start = repoDir(t)
-	code, _, stderr := runWith(t, f, "--mode", "preview", "--full-check")
-	if code != 1 || !strings.Contains(stderr, "mkdocs build") || len(f.calls) != 2 {
-		t.Errorf("code %d stderr %q calls %v", code, stderr, f.calls)
+func TestSourceNeverRunsPython(t *testing.T) {
+	src, err := os.ReadFile("docsbuild.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, banned := range []string{"mkdocs build", "python", "Python", "DOCS_PYTHON"} {
+		for _, line := range strings.Split(string(src), "\n") {
+			if strings.Contains(line, banned) && !strings.HasPrefix(strings.TrimSpace(line), "//") {
+				t.Errorf("docsbuild.go code line names %q: %s", banned, line)
+			}
+		}
 	}
 }
 
 func TestIncompleteAssetTreeFails(t *testing.T) {
 	f := &fake{skipAsset: "_headers"}
 	f.start = repoDir(t)
-	code, _, stderr := runWith(t, f, "--mode", "preview")
+	code, _, stderr := step(t, f, "post", "--mode", "preview")
 	if code != 1 || !strings.Contains(stderr, "_headers") {
 		t.Errorf("code %d stderr %q", code, stderr)
 	}
 }
 
 func TestUsageErrors(t *testing.T) {
-	for _, args := range [][]string{{}, {"--mode"}, {"--mode", "dev"}, {"--mode", "preview", "extra"}, {"--mode", "preview", "--full-check=1"}} {
+	for _, args := range [][]string{{}, {"--mode", "preview"}, {"pre"}, {"pre", "--mode"}, {"post", "--mode", "dev"}, {"bogus", "--mode", "preview"}, {"pre", "--mode", "preview", "extra"}, {"post", "--mode", "preview", "--full-check=1"}} {
 		f := &fake{}
 		f.start = repoDir(t)
 		if code, _, _ := runWith(t, f, args...); code != 2 || len(f.calls) != 0 {
@@ -165,7 +182,7 @@ func TestBuildRunsFromTheRepositoryRootWhateverTheStartDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 	f := &fake{start: sub}
-	if code, _, stderr := runWith(t, f, "--mode", "preview", "--full-check"); code != 0 {
+	if code, _, stderr := step(t, f, "post", "--mode", "preview", "--full-check"); code != 0 {
 		t.Fatalf("code %d: %s", code, stderr)
 	}
 	for _, got := range f.roots {
@@ -183,7 +200,7 @@ func TestBuildRunsFromTheRepositoryRootWhateverTheStartDirectory(t *testing.T) {
 
 func TestNoRepositoryRootIsRefused(t *testing.T) {
 	f := &fake{start: t.TempDir()}
-	code, _, stderr := runWith(t, f, "--mode", "preview")
+	code, _, stderr := step(t, f, "post", "--mode", "preview")
 	if code != 1 || !strings.Contains(stderr, "no repository root") || len(f.calls) != 0 {
 		t.Errorf("code %d stderr %q calls %v", code, stderr, f.calls)
 	}
@@ -204,7 +221,7 @@ func TestRootIsFoundThroughASymlinkedStartDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 	f := &fake{start: link}
-	if code, _, stderr := runWith(t, f, "--mode", "preview"); code != 0 {
+	if code, _, stderr := step(t, f, "post", "--mode", "preview"); code != 0 {
 		t.Fatalf("code %d: %s", code, stderr)
 	}
 	for _, got := range f.roots {
@@ -214,17 +231,9 @@ func TestRootIsFoundThroughASymlinkedStartDirectory(t *testing.T) {
 	}
 }
 
-func TestMkDocsBannerIsPrintedBeforeTheCall(t *testing.T) {
-	f := &fake{start: repoDir(t), mkdocsErr: errors.New("exit status 1")}
-	_, stdout, _ := runWith(t, f, "--mode", "preview")
-	if !strings.Contains(stdout, "+ python3 -m mkdocs build --strict --config-file mkdocs.yml") {
-		t.Errorf("a failing MkDocs call left no banner: %q", stdout)
-	}
-}
-
 func TestEmptyStartDirectoryIsRefused(t *testing.T) {
 	f := &fake{start: ""}
-	code, _, stderr := runWith(t, f, "--mode", "preview")
+	code, _, stderr := step(t, f, "post", "--mode", "preview")
 	if code != 1 || !strings.Contains(stderr, "no working directory") || len(f.calls) != 0 {
 		t.Errorf("code %d stderr %q calls %v", code, stderr, f.calls)
 	}

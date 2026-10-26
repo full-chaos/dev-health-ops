@@ -28,7 +28,8 @@ docs\:check-links:
 #                                         code prerequisites, freshness inventory (it uploads the checked site)
 #                                      job docs-preview (PRs)  -> reuses that site, then candidate facts and
 #                                         Cloudflare asset preparation
-# `cigate docs-build --full-check` runs the build, the site checks and candidate facts and prepares the assets;
+# `cigate docs-build pre|post --full-check` wraps the MkDocs call (Go never runs Python): the publication gate before it, the site
+# checks, candidate facts and the asset preparation after it;
 # the code-prerequisite and freshness checks are separate lines below. internal/cigates/docs/parity_test.go fails when
 # either side has a check the other lacks.
 #
@@ -44,7 +45,9 @@ docs\:check:
 	go test -mod=readonly -trimpath -count=1 ./internal/cigates/docs/...
 	go run -trimpath -mod=readonly ./cmd/cigate docs check-code-prerequisites
 	go run -trimpath -mod=readonly ./cmd/cigate docs check-freshness
-	DOCS_PYTHON=$(PYTHON) go run -trimpath -mod=readonly ./cmd/cigate docs-build --mode preview --full-check
+	go run -trimpath -mod=readonly ./cmd/cigate docs-build pre --mode preview --full-check
+	$(PYTHON) -m mkdocs build --strict --config-file mkdocs.yml
+	go run -trimpath -mod=readonly ./cmd/cigate docs-build post --mode preview --full-check
 
 # Fast inner loop while editing pages: catches taxonomy drift, queue-mapping drift,
 # and broken relative links/anchors without a full site build. Not sufficient before
@@ -87,7 +90,9 @@ docs\:serve:
 	$(PYTHON) -m mkdocs serve --strict --config-file mkdocs.yml --dev-addr 127.0.0.1:8001
 
 docs\:build-preview:
-	DOCS_PYTHON=$(PYTHON) go run -trimpath -mod=readonly ./cmd/cigate docs-build --mode preview
+	go run -trimpath -mod=readonly ./cmd/cigate docs-build pre --mode preview
+	$(PYTHON) -m mkdocs build --strict --config-file mkdocs.yml
+	go run -trimpath -mod=readonly ./cmd/cigate docs-build post --mode preview
 
 docs\:preview:
 	@$(MAKE) --no-print-directory docs\:build-preview
@@ -107,7 +112,9 @@ docs\:version:
 		echo 'PREVIEW_ALIAS must be 47 characters or fewer for the dev-health-docs preview hostname.'; \
 		exit 2; \
 	}
-	DOCS_PYTHON=$(PYTHON) go run -trimpath -mod=readonly ./cmd/cigate docs-build --mode preview --full-check
+	go run -trimpath -mod=readonly ./cmd/cigate docs-build pre --mode preview --full-check
+	$(PYTHON) -m mkdocs build --strict --config-file mkdocs.yml
+	go run -trimpath -mod=readonly ./cmd/cigate docs-build post --mode preview --full-check
 	$(WRANGLER) versions upload \
 		--config wrangler.jsonc \
 		--preview-alias "$(PREVIEW_ALIAS)" \
@@ -119,7 +126,9 @@ docs\:upload-preview:
 # Production creates a separate production-mode version without preview noindex headers,
 # then immediately deploys that version to 100% of traffic.
 docs\:deploy:
-	DOCS_PYTHON=$(PYTHON) go run -trimpath -mod=readonly ./cmd/cigate docs-build --mode production --full-check
+	go run -trimpath -mod=readonly ./cmd/cigate docs-build pre --mode production --full-check
+	$(PYTHON) -m mkdocs build --strict --config-file mkdocs.yml
+	go run -trimpath -mod=readonly ./cmd/cigate docs-build post --mode production --full-check
 	$(WRANGLER) deploy \
 		--config wrangler.jsonc \
 		--strict \

@@ -1,5 +1,6 @@
-// Package docsbuild builds the MkDocs site and prepares the static tree Wrangler uploads. It is the Go port of the former
-// scripts/build_docs_cloudflare.py: the same chain, in the same order, with the same flags.
+// Package docsbuild is the Go port of the former scripts/build_docs_cloudflare.py, minus the MkDocs call: Go never runs
+// Python, so the Makefile and the workflows run MkDocs themselves between the two steps. `pre` is the publication gate before
+// the build; `post` is the site checks, the Cloudflare asset preparation and the asset tree check after it.
 package docsbuild
 
 import (
@@ -17,23 +18,21 @@ const (
 	assetDir         = ".build/docs-cloudflare"
 	redirects        = "docs-data/redirects.tsv"
 	searchAcceptance = "docs-data/search-acceptance.json"
-	usage            = "usage: cigate docs-build --mode {preview,production} [--full-check]"
+	usage            = "usage: cigate docs-build {pre,post} --mode {preview,production} [--full-check]"
 )
 
 var requiredAssets = []string{"index.html", "404.html", "_headers", "_redirects", "robots.txt", "cloudflare-build-manifest.json"}
 
-// Deps are the side effects of a build: the cigate verbs, the prepare step, the MkDocs call and the revision lookup. Every
+// Deps are the side effects of a step: the cigate verbs, the prepare step and the revision lookup. Every
 // one runs in root, the repository root found from Start, so the build does not depend on the caller's directory.
 type Deps struct {
 	Start    string
 	Docs     func(root string, args []string) int
 	Prepare  func(root string, args []string) int
-	MkDocs   func(root string, announce func(interpreter string)) error
 	Revision func(root string) string
 }
 
-// OSDeps runs the verbs in this process and MkDocs as a tool call, `python3 -m mkdocs build --strict --config-file
-// mkdocs.yml`, the command the former script ran with its own interpreter. DOCS_PYTHON names another interpreter.
+// OSDeps runs each verb as this same binary, with its own working directory.
 func OSDeps(stdout, stderr io.Writer) Deps {
 	start, _ := os.Getwd()
 	// The verbs read and write paths relative to their working directory, and a process-wide chdir would race every other
@@ -57,19 +56,9 @@ func OSDeps(stdout, stderr io.Writer) Deps {
 		return 0
 	}
 	return Deps{
-		Start:   start,
-		Docs:    func(root string, args []string) int { return self(root, append([]string{"docs"}, args...)) },
-		Prepare: func(root string, args []string) int { return self(root, append([]string{"docs-prepare"}, args...)) },
-		MkDocs: func(root string, announce func(string)) error {
-			python := os.Getenv("DOCS_PYTHON")
-			if python == "" {
-				python = "python3"
-			}
-			cmd := exec.Command(python, "-m", "mkdocs", "build", "--strict", "--config-file", "mkdocs.yml")
-			cmd.Dir, cmd.Stdout, cmd.Stderr = root, stdout, stderr
-			announce(python)
-			return cmd.Run()
-		},
+		Start:    start,
+		Docs:     func(root string, args []string) int { return self(root, append([]string{"docs"}, args...)) },
+		Prepare:  func(root string, args []string) int { return self(root, append([]string{"docs-prepare"}, args...)) },
 		Revision: sourceRevision,
 	}
 }
@@ -111,13 +100,13 @@ func sourceRevision(root string) string {
 	return strings.TrimSpace(string(out))
 }
 
-// Run is the `cigate docs-build` entry point. Exit 1 on a failed step, 2 on a usage error.
+// Run is the `cigate docs-build pre|post` entry point. Exit 1 on a failed step, 2 on a usage error.
 func Run(args []string, stdout, stderr io.Writer) int {
 	return run(args, OSDeps(stdout, stderr), stdout, stderr)
 }
 
 func run(args []string, deps Deps, stdout, stderr io.Writer) int {
-	mode, fullCheck, problem := parseArgs(args)
+	which, mode, fullCheck, problem := parseArgs(args)
 	if problem != "" {
 		fmt.Fprintf(stderr, "%s\ndocs-build: error: %s\n", usage, problem)
 		return 2
@@ -129,26 +118,23 @@ func run(args []string, deps Deps, stdout, stderr io.Writer) int {
 	}
 	// Production is never prepared without the full publication gate.
 	fullCheck = fullCheck || mode == "production"
-	if err := os.MkdirAll(filepath.Join(root, ".build"), 0o755); err != nil {
-		fmt.Fprintf(stderr, "ERROR: %s\n", err)
-		return 1
-	}
 	docs := func(args ...string) bool {
 		fmt.Fprintf(stdout, "+ cigate docs %s\n", strings.Join(args, " "))
 		return deps.Docs(root, args) == 0
 	}
 	fail := func(step string) int {
-		fmt.Fprintf(stderr, "ERROR: documentation build step failed: %s\nInstall the documentation environment with: python -m pip install -r requirements-docs.txt\n", step)
+		fmt.Fprintf(stderr, "ERROR: documentation build step failed: %s\n", step)
 		return 1
 	}
-	if fullCheck && !docs("validate-publication") {
-		return fail("validate-publication")
+	if which == "pre" {
+		if fullCheck && !docs("validate-publication") {
+			return fail("validate-publication")
+		}
+		return 0
 	}
-	announce := func(python string) {
-		fmt.Fprintf(stdout, "+ %s -m mkdocs build --strict --config-file mkdocs.yml\n", python)
-	}
-	if err := deps.MkDocs(root, announce); err != nil {
-		return fail("mkdocs build: " + err.Error())
+	if err := os.MkdirAll(filepath.Join(root, ".build"), 0o755); err != nil {
+		fmt.Fprintf(stderr, "ERROR: %s\n", err)
+		return 1
 	}
 	if fullCheck {
 		for _, step := range fullCheckSteps() {
@@ -193,33 +179,37 @@ func validateAssetTree(root string) error {
 	return nil
 }
 
-func parseArgs(args []string) (mode string, fullCheck bool, problem string) {
+func parseArgs(args []string) (which, mode string, fullCheck bool, problem string) {
+	if len(args) == 0 || (args[0] != "pre" && args[0] != "post") {
+		return "", "", false, "the first argument must be pre or post"
+	}
+	which, args = args[0], args[1:]
 	for i := 0; i < len(args); i++ {
 		name, value, hasValue := strings.Cut(args[i], "=")
 		switch name {
 		case "--full-check":
 			if hasValue {
-				return "", false, "argument --full-check: ignored explicit argument " + value
+				return "", "", false, "argument --full-check: ignored explicit argument " + value
 			}
 			fullCheck = true
 		case "--mode":
 			if !hasValue {
 				if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
-					return "", false, "argument --mode: expected one argument"
+					return "", "", false, "argument --mode: expected one argument"
 				}
 				i++
 				value = args[i]
 			}
 			mode = value
 		default:
-			return "", false, "unrecognized arguments: " + args[i]
+			return "", "", false, "unrecognized arguments: " + args[i]
 		}
 	}
 	if mode == "" {
-		return "", false, "the following arguments are required: --mode"
+		return "", "", false, "the following arguments are required: --mode"
 	}
 	if mode != "preview" && mode != "production" {
-		return "", false, fmt.Sprintf("argument --mode: invalid choice: %q (choose from 'preview', 'production')", mode)
+		return "", "", false, fmt.Sprintf("argument --mode: invalid choice: %q (choose from 'preview', 'production')", mode)
 	}
-	return mode, fullCheck, ""
+	return which, mode, fullCheck, ""
 }

@@ -37,24 +37,31 @@ var (
 	makeSubTarget = regexp.MustCompile(`\$\(MAKE\)[^\n]* (docs\\:[a-z-]+)`)
 )
 
-// scriptChain is what `cigate docs-build --mode preview --full-check` runs, in order. The test reads the Go source as
-// text only (never runs it) and fails when a verb of the chain is not named in it.
-var scriptChain = []string{
-	"validate-publication", mkdocsBuild, "check-built-site-links", "check-docs-search", "check-docs-accessibility",
-	"check-candidate-facts", docsPrepare,
-}
+// preChain and postChain are what `cigate docs-build pre|post --mode preview --full-check` run; MkDocs runs between them as
+// its own command line. The test reads the Go source as text only (never runs it) and fails when a verb is not named in it.
+var (
+	preChain    = []string{"validate-publication"}
+	postChain   = []string{"check-built-site-links", "check-docs-search", "check-docs-accessibility", "check-candidate-facts", docsPrepare}
+	scriptChain = append(append(append([]string{}, preChain...), mkdocsBuild), postChain...)
+)
 
 // ciOnly are checks CI runs and `make docs:check` need not: the preview job compares the stamp of the site it downloaded.
 var ciOnly = map[string]bool{"check-validated-site": true}
 
-// checksOf lists the checks one command line runs. A run of the build script expands to scriptChain.
+// checksOf lists the checks one command line runs. A run of docs-build pre or post expands to its chain.
 func checksOf(line string) []string {
 	switch {
 	case strings.Contains(line, "cmd/cigate docs-build"):
 		if !strings.Contains(line, "--full-check") {
 			return nil
 		}
-		return append([]string{}, scriptChain...)
+		switch {
+		case strings.Contains(line, "docs-build pre "):
+			return append([]string{}, preChain...)
+		case strings.Contains(line, "docs-build post "):
+			return append([]string{}, postChain...)
+		}
+		return nil
 	case mkdocsCmd.MatchString(line):
 		return []string{mkdocsBuild}
 	case goTestDocs.MatchString(line):
@@ -189,8 +196,17 @@ func TestDocsCheckMatchesCI(t *testing.T) {
 			return d.edit(t, makefilePath, "\tgo test -mod=readonly -trimpath -count=1 ./internal/cigates/docs/...\n", "")
 		}, `CI runs "go test ./internal/cigates/docs/..." but`},
 		{"docs:check stops running the build script", func(t *testing.T, d docTree) docTree {
-			return d.edit(t, makefilePath, "check-freshness\n\tDOCS_PYTHON=$(PYTHON) go run -trimpath -mod=readonly ./cmd/cigate docs-build --mode preview --full-check\n", "check-freshness\n")
+			return d.edit(t, makefilePath, "check-freshness\n\tgo run -trimpath -mod=readonly ./cmd/cigate docs-build pre --mode preview --full-check\n\t$(PYTHON) -m mkdocs build --strict --config-file mkdocs.yml\n\tgo run -trimpath -mod=readonly ./cmd/cigate docs-build post --mode preview --full-check\n", "check-freshness\n")
 		}, "CI runs"},
+		{"docs:check drops the pre step", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, makefilePath, "check-freshness\n\tgo run -trimpath -mod=readonly ./cmd/cigate docs-build pre --mode preview --full-check\n\t$(PYTHON) -m mkdocs build --strict --config-file mkdocs.yml\n\tgo run -trimpath -mod=readonly ./cmd/cigate docs-build post --mode preview --full-check\n", "check-freshness\n\t$(PYTHON) -m mkdocs build --strict --config-file mkdocs.yml\n\tgo run -trimpath -mod=readonly ./cmd/cigate docs-build post --mode preview --full-check\n")
+		}, `CI runs "validate-publication" but`},
+		{"docs:check drops the post step", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, makefilePath, "check-freshness\n\tgo run -trimpath -mod=readonly ./cmd/cigate docs-build pre --mode preview --full-check\n\t$(PYTHON) -m mkdocs build --strict --config-file mkdocs.yml\n\tgo run -trimpath -mod=readonly ./cmd/cigate docs-build post --mode preview --full-check\n", "check-freshness\n\tgo run -trimpath -mod=readonly ./cmd/cigate docs-build pre --mode preview --full-check\n\t$(PYTHON) -m mkdocs build --strict --config-file mkdocs.yml\n")
+		}, `CI runs "check-built-site-links" but`},
+		{"docs:check drops the mkdocs build", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, makefilePath, "check-freshness\n\tgo run -trimpath -mod=readonly ./cmd/cigate docs-build pre --mode preview --full-check\n\t$(PYTHON) -m mkdocs build --strict --config-file mkdocs.yml\n\tgo run -trimpath -mod=readonly ./cmd/cigate docs-build post --mode preview --full-check\n", "check-freshness\n\tgo run -trimpath -mod=readonly ./cmd/cigate docs-build pre --mode preview --full-check\n\tgo run -trimpath -mod=readonly ./cmd/cigate docs-build post --mode preview --full-check\n")
+		}, `CI runs "mkdocs build" but`},
 		{"a second job builds the site again", func(t *testing.T, d docTree) docTree {
 			return d.appended(t, docsGuardsPath, "  rebuild:\n    runs-on: ubuntu-latest\n    steps:\n      - run: python -m mkdocs build --strict --config-file mkdocs.yml\n")
 		}, `runs "mkdocs build" 2 times`},

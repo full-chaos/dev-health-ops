@@ -1030,3 +1030,72 @@ func TestAuthCorpusLocalLoginStaysRequiredAndKeyed(t *testing.T) {
 		t.Error("the corpus env no longer sets AUTH_LOGIN_LOCKOUT_KEY")
 	}
 }
+
+// gateSessions runs the script's gate_owned function alone for the sessions aggregate with SESSIONS_KEYED set inside the
+// shell, never by the caller env.
+func gateSessions(t *testing.T, keyed, probed string, callerEnv ...string) (string, error) {
+	t.Helper()
+	script := filepath.Join(authProofRoot(t), "ci", "auth_corpus_external.sh")
+	prog := `die() { printf 'ERROR: %s\n' "$1"; exit 1; }
+eval "$(sed -n '/^gate_owned() {$/,/^}$/p' "$1")"
+USERS_OWNED=0; SESSIONS_KEYED="$2"; PROBED="$3"
+gate_owned sessions
+printf 'PROBED=%s\n' "${PROBED}"`
+	cmd := exec.Command("env", append([]string{"-u", "SESSIONS_KEYED"}, "bash", "-c", prog, "x", script, keyed, probed)...)
+	cmd.Env = append(os.Environ(), callerEnv...)
+	out, err := cmd.CombinedOutput()
+	return string(out), err
+}
+
+// Without the session keys auth-service mounts refresh and logout on a 503 stub, which answers OPTIONS 405 like the
+// real routes: mounted is not served until the keys are set.
+func TestAuthCorpusSessionsGateNeedsMountAndKeys(t *testing.T) {
+	for name, tc := range map[string]struct{ keyed, probed, want string }{
+		"keyed and mounted is served":          {keyed: "1", probed: "served", want: "PROBED=served"},
+		"unkeyed and mounted is a stub":        {keyed: "0", probed: "served", want: "PROBED=not keyed"},
+		"unkeyed and unmounted stays unserved": {keyed: "0", probed: "not served", want: "PROBED=not served"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			out, err := gateSessions(t, tc.keyed, tc.probed)
+			if err != nil || !strings.Contains(out, tc.want) {
+				t.Fatalf("want %q, got err=%v:\n%s", tc.want, err, out)
+			}
+		})
+	}
+}
+
+// The no-keys leg meets the refresh and logout stubs: it must still fail by name on sessions, not on local_login.
+func TestAuthCorpusNoKeysLegFailsOnSessionsWhenTheStubsAreMounted(t *testing.T) {
+	_, out, err := runAcpLeg(t, "AUTH_CORPUS_OMIT_AUTH_KEYS=1", "FAKE_SERVED=/api/v1/auth/refresh,/api/v1/auth/logout")
+	if err == nil || !strings.Contains(out, "required aggregate sessions is not served by auth-service") {
+		t.Fatalf("want the leg to fail on sessions, got err=%v:\n%s", err, out)
+	}
+	if !strings.Contains(out, "probe sessions: mounted, not keyed") {
+		t.Errorf("want the stub named as not keyed:\n%s", out)
+	}
+}
+
+// SESSIONS_KEYED follows the script's own key choice and is never read from the caller env.
+func TestAuthCorpusSessionsKeyedIsScriptInternal(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join(authProofRoot(t), "ci", "auth_corpus_external.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var one, zero int
+	for _, line := range strings.Split(string(raw), "\n") {
+		trim := strings.TrimSpace(line)
+		switch {
+		case trim == "SESSIONS_KEYED=1":
+			one++
+		case trim == `[ -z "${AUTH_CORPUS_OMIT_AUTH_KEYS:-}" ] || SESSIONS_KEYED=0`:
+			zero++
+		case strings.Contains(trim, "SESSIONS_KEYED:-"):
+			t.Errorf("SESSIONS_KEYED must not be read from the caller env: %s", trim)
+		case strings.Contains(trim, "SESSIONS_KEYED=") && !strings.HasPrefix(trim, "#") && !strings.HasPrefix(trim, "local "):
+			t.Errorf("unexpected SESSIONS_KEYED setter: %s", trim)
+		}
+	}
+	if one != 1 || zero != 1 {
+		t.Errorf("want exactly one unconditional SESSIONS_KEYED=1 and one key-choice SESSIONS_KEYED=0, got %d and %d", one, zero)
+	}
+}

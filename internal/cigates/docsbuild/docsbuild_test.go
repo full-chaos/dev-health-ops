@@ -221,3 +221,11 @@ func TestMkDocsBannerIsPrintedBeforeTheCall(t *testing.T) {
 		t.Errorf("a failing MkDocs call left no banner: %q", stdout)
 	}
 }
+
+func TestEmptyStartDirectoryIsRefused(t *testing.T) {
+	f := &fake{start: ""}
+	code, _, stderr := runWith(t, f, "--mode", "preview")
+	if code != 1 || !strings.Contains(stderr, "no working directory") || len(f.calls) != 0 {
+		t.Errorf("code %d stderr %q calls %v", code, stderr, f.calls)
+	}
+}

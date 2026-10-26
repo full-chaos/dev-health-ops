@@ -77,6 +77,9 @@ func OSDeps(stdout, stderr io.Writer) Deps {
 // findRoot returns the nearest directory at or above start that holds go.mod and mkdocs.yml, the files the docs build reads
 // from the repository root. The start directory is resolved through symlinks first, as the docs verbs resolve theirs.
 func findRoot(start string) (string, error) {
+	if start == "" {
+		return "", fmt.Errorf("no working directory to find the repository root from")
+	}
 	if physical, err := filepath.EvalSymlinks(start); err == nil {
 		start = physical
 	}

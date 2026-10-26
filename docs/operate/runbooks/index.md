@@ -19,5 +19,6 @@ lifecycle: active
 - [Disaster recovery](disaster-recovery.md)
 - [Auth sessions flip and rollback](auth-sessions-flip-and-rollback.md)
 - [Auth-service scrape check and alert import](auth-service-scrape-and-alerts.md)
+- [Auth users flip-back grants](auth-users-flip-back-grants.md)
 
 Retain the affected organization or workspace identifier, source, scope, time, job or request identifiers, sanitized logs, last known good checkpoint, and changes made during recovery.

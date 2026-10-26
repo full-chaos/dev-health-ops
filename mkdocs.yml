@@ -176,6 +176,7 @@ nav:
           - Query-api bootstrap: operate/runbooks/query-api-bootstrap.md
           - Auth sessions flip and rollback: operate/runbooks/auth-sessions-flip-and-rollback.md
           - Auth-service scrape check and alert import: operate/runbooks/auth-service-scrape-and-alerts.md
+          - Auth users flip-back grants: operate/runbooks/auth-users-flip-back-grants.md
       - Prod cutover 2026-09-11:
           - operate/prod-cutover-2026-09-11-lessons/index.md
   - Integrate and extend:

@@ -4,6 +4,7 @@ package proofprincipals
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/full-chaos/dev-health-ops/internal/edgetokenmint"
 )
@@ -15,5 +16,9 @@ var IDs = []string{edgetokenmint.ProvePrincipalID, edgetokenmint.AdminProofPrinc
 // ComparedSQL is a predicate over the public.users row aliased alias: true for every row except the proof principals.
 // A row of provider service with the proof principals' shape and another id is compared, never dropped.
 func ComparedSQL(alias string) string {
-	return fmt.Sprintf("%s.auth_provider IS DISTINCT FROM 'service'", alias)
+	quoted := make([]string, len(IDs))
+	for index, id := range IDs {
+		quoted[index] = "'" + id + "'::uuid"
+	}
+	return fmt.Sprintf("%s.id NOT IN (%s)", alias, strings.Join(quoted, ", "))
 }

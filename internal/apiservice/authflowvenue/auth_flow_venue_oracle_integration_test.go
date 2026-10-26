@@ -41,6 +41,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/storage/valkey"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/authrows"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/proofprincipals"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/providerstub"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/sessionscenario"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/smtpcapture"
@@ -1031,7 +1032,7 @@ func TestAuthFlowVenueOracle(t *testing.T) {
 
 	r.rows("users", `SELECT email, coalesce(username, '<null>'), coalesce(full_name, '<null>'), coalesce(auth_provider, '<null>'),
 		is_active, is_verified, is_superuser, token_version, last_login_at IS NOT NULL, updated_at >= created_at,
-		coalesce(left(password_hash, 7), '<null>') FROM users WHERE auth_provider IS DISTINCT FROM 'service' ORDER BY email`)
+		coalesce(left(password_hash, 7), '<null>') FROM users WHERE `+proofprincipals.ComparedSQL("users")+` ORDER BY email`)
 	r.rows("organizations", `SELECT o.name, regexp_replace(o.slug, '-[0-9a-f]{8}$', '-<id8>'),
 		coalesce(right(o.slug, 8) = (SELECT left(m.user_id::text, 8) FROM memberships m WHERE m.org_id = o.id AND m.role = 'owner' LIMIT 1), false),
 		coalesce(o.description, '<null>'), o.settings::text, o.tier, coalesce(o.stripe_customer_id, '<null>'), o.managed_by, o.is_active,

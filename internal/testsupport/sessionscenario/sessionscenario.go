@@ -33,6 +33,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/proofprincipals"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pydanticecho"
 	"io"
 	"net/http"
@@ -855,7 +856,7 @@ func Run(h *Harness) string {
 	h.compareRows("users", `SELECT email, coalesce(username, '<null>'), coalesce(full_name, '<null>'),
 		coalesce(auth_provider, '<null>'), coalesce(auth_provider_id, '<null>'), is_active, is_verified, is_superuser, token_version,
 		last_login_at IS NOT NULL, updated_at >= created_at, password_hash IS NULL FROM users
-		WHERE auth_provider IS DISTINCT FROM 'service' ORDER BY email`)
+		WHERE `+proofprincipals.ComparedSQL("users")+` ORDER BY email`)
 	h.compareRows("login_attempts", `SELECT email, attempt_count, first_attempt_at IS NOT NULL, coalesce(first_attempt_at = created_at, false),
 		locked_until IS NOT NULL, coalesce(locked_until > now(), false), updated_at >= created_at FROM login_attempts ORDER BY email`)
 	h.compareRows("refresh_tokens", `SELECT u.email, coalesce(o.slug, '<null>'), rt.revoked_at IS NOT NULL,

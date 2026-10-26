@@ -23,6 +23,7 @@ internal/apiservice	endpoint_profile_scan_test.go	unexpressed	-	*.go
 internal/apiservice/admin	operator_password_test.go	internal/apiservice/admin	dir	*
 internal/apiservice/admin	routeguard_test.go	internal/apiservice/admin	dir	*
 internal/apiservice/admin	routeguard_test.go	unexpressed	-	-
+internal/apiservice/authflowvenue	linkformat_test.go	internal/apiservice/authflowvenue	dir	*
 internal/atlassianteams	vendored_documents_test.go	third_party/vendor/atlassian/patches	dir	*
 internal/atlassianteams	vendored_documents_test.go	unexpressed	-	-
 internal/atlassianteams	vendored_patch_chain_test.go	third_party/vendor/atlassian	tree	*

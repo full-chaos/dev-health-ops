@@ -14,6 +14,8 @@ import (
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/rivertype"
+
+	"github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 )
 
 const (
@@ -710,8 +712,19 @@ func classifyStrandError(err error) error {
 	if errors.As(err, &pgErr) && pgErr.Code == insufficientPrivilege {
 		return ErrNotAuthorized
 	}
+	if postgres.IsTransientDialError(err) {
+		return transientUnavailable{cause: err}
+	}
 	return ErrUnavailable
 }
+
+// transientUnavailable is ErrUnavailable that keeps a transient dial cause
+// visible to errors.Is/As (so startup can retry it) while its text stays the
+// sentinel's, which never names the dial address.
+type transientUnavailable struct{ cause error }
+
+func (transientUnavailable) Error() string     { return ErrUnavailable.Error() }
+func (e transientUnavailable) Unwrap() []error { return []error{ErrUnavailable, e.cause} }
 
 const (
 	claimLive        = "claim_live"

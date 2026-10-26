@@ -14,6 +14,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/credshape"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
+	"github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 )
 
 const (
@@ -48,6 +49,10 @@ type ReconcilerLoopConfig struct {
 	// need not supply one; a nil Logger discards. Without it this loop could
 	// flip readiness closed forever and emit nothing at all (CHAOS-3907).
 	Logger *slog.Logger
+	// StartupRetryBudget bounds how long the first step retries while the
+	// database is transiently unreachable (refused, reset, dropped dial). Zero
+	// disables the retry; any other failure still ends Start at once.
+	StartupRetryBudget time.Duration
 }
 
 func DefaultReconcilerLoopConfig(registry *health.Registry) ReconcilerLoopConfig {
@@ -131,6 +136,9 @@ type ReconcilerLoop struct {
 	stepper RelayStepper
 	config  ReconcilerLoopConfig
 	clock   reconcilerClock
+	// sleep and jitter are replaced by tests; nil uses the real wait.
+	sleep  func(context.Context, time.Duration)
+	jitter func(time.Duration) time.Duration
 
 	ready atomic.Bool
 
@@ -202,6 +210,7 @@ func newReconcilerLoop(
 		config:  config,
 		clock:   clock,
 		errors:  make(chan error, 1),
+		jitter:  postgres.DialRetryJitter,
 	}
 	if err := config.Registry.RegisterRequired("reconciler_loop", loop.readiness); err != nil {
 		return nil, fmt.Errorf("register reconciler readiness: %w", err)
@@ -233,7 +242,23 @@ func (loop *ReconcilerLoop) Start(ctx context.Context) error {
 	loop.started = true
 	loop.mu.Unlock()
 
-	if err := loop.step(ctx, loop.clock.Now()); err != nil {
+	if err := (postgres.DialRetry{
+		Budget: loop.config.StartupRetryBudget,
+		Now:    loop.clock.Now,
+		Sleep:  loop.sleep,
+		Jitter: loop.jitter,
+		OnRetry: func(attempt int, elapsed, wait time.Duration) {
+			loop.setFailed()
+			loop.logger().WarnContext(ctx, "outbox reconciler initial step unreachable, retrying",
+				"cause", health.CauseUnreachable,
+				"attempt", attempt,
+				"elapsed", elapsed.String(),
+				"retry_in", wait.String(),
+			)
+		},
+	}).Do(ctx, func(stepCtx context.Context) error {
+		return loop.step(stepCtx, loop.clock.Now())
+	}); err != nil {
 		loop.setFailed()
 		loop.logger().ErrorContext(ctx, "outbox reconciler initial step failed", "error", err.Error())
 		return fmt.Errorf("initial outbox reconciliation: %w", err)

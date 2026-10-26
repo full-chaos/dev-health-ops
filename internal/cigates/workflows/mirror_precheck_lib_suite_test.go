@@ -129,6 +129,11 @@ func TestMirrorPrecheckLibSuiteRunsOnItsTrigger(t *testing.T) {
 		{mutation{mirrorWf, perms, perms + "      - name: Compose\n        run: docker compose up -d\n"}, "must run no docker command"},
 		{mutation{mirrorWf, perms, perms + "      - uses: docker/login-action@v3\n"}, "must use no docker or registry-login action"},
 		{mutation{mirrorWf, perms, perms + "      - uses: some-org/registry-login@v1\n"}, "must use no docker or registry-login action"},
+		{mutation{mirrorWf, perms, perms + "      - name: Pod\n        run: podman run alpine true\n"}, "must run no docker command"},
+		{mutation{mirrorWf, perms, "    services:\n      pg:\n        image: postgres:18\n" + perms}, "job keys must be exactly"},
+		{mutation{mirrorWf, perms, "    container: alpine\n" + perms}, "job keys must be exactly"},
+		{mutation{mirrorWf, perms, "    env:\n      X: y\n" + perms}, "job keys must be exactly"},
+		{mutation{mirrorWf, perms, perms + "      - name: Env step\n        env:\n          X: y\n        run: true\n"}, "step keys must be"},
 		{mutation{mirrorWf, perms, perms + "      - env:\n          TOKEN: ${{ secrets.GHCR_TOKEN }}\n        run: true\n"}, "must use no secret"},
 	} {
 		tmp := plantTree(t, root, []string{mirrorWf}, c.m)

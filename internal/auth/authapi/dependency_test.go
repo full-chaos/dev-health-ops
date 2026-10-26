@@ -94,11 +94,15 @@ func TestAValkeyFailureAnswers503OnEveryLimitedRoute(t *testing.T) {
 	cred := newCredFixtureWith(t, down)
 	link, _ := linkFixtureWith(t, down)
 	calls := map[string]*httptest.ResponseRecorder{
-		"login":   compat.do(http.MethodPost, PatternCompatLogin, loginBody(compatEmail, "wrong password", ""), nil),
-		"refresh": compat.do(http.MethodPost, PatternCompatRefresh, `{"refresh_token":"`+credential()+`"}`, nil),
-		"forgot":  cred.call(http.MethodPost, PatternForgotPassword, `{"email":"sentinel-person@example.com"}`, nil),
-		"reset":   cred.call(http.MethodPost, PatternResetPassword, `{"token":"sentinel-token","new_password":"another-password-1"}`, nil),
-		"link":    link.do(http.MethodPost, PatternSocialLink, linkBody, link.bearer(link.grant())),
+		"login":    compat.do(http.MethodPost, PatternCompatLogin, loginBody(compatEmail, "wrong password", ""), nil),
+		"refresh":  compat.do(http.MethodPost, PatternCompatRefresh, `{"refresh_token":"`+credential()+`"}`, nil),
+		"verify":   cred.call(http.MethodGet, PatternVerifyEmail+"?token=sentinel-token", "", nil),
+		"resend":   cred.call(http.MethodPost, PatternResendVerification, `{"email":"sentinel-person@example.com"}`, nil),
+		"register": cred.call(http.MethodPost, PatternRegister, registerBody, nil),
+		"change":   cred.call(http.MethodPost, PatternChangePassword, `{"current_password":"a-password-1","new_password":"Brand-new-pass-77!"}`, cred.bearer(cred.grant())),
+		"forgot":   cred.call(http.MethodPost, PatternForgotPassword, `{"email":"sentinel-person@example.com"}`, nil),
+		"reset":    cred.call(http.MethodPost, PatternResetPassword, `{"token":"sentinel-token","new_password":"another-password-1"}`, nil),
+		"link":     link.do(http.MethodPost, PatternSocialLink, linkBody, link.bearer(link.grant())),
 	}
 	for name, r := range calls {
 		expectDown(t, name, r, r.Body.String())

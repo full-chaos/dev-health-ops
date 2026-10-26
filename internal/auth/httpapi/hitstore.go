@@ -216,7 +216,7 @@ func newLimitCounter(name, help string) *LimitCounter {
 // RateLimitStoreErrors is the process-wide counter LimitWith increments; the
 // api and the auth service register it as a metrics source at startup.
 var RateLimitStoreErrors = newLimitCounter("dev_health_api_rate_limit_store_errors_total",
-	"Rate-limit store errors on limited routes; each answered a 500.")
+	"Rate-limit store errors on limited routes; each answered a 500 or 503.")
 
 // RateLimitRejections counts the hits a limiter refused (each answered a 429),
 // by limit id. A store error is not a rejection.
@@ -283,7 +283,7 @@ func (l *KeyedLimiter) AllowCounted(ctx context.Context, key, path string) (bool
 	allowed, err := l.Allow(ctx, key, path)
 	if err != nil {
 		id := l.ID()
-		slog.ErrorContext(ctx, "rate limit store failed; answering 500",
+		slog.ErrorContext(ctx, "rate limit store failed; answering 500 or 503",
 			slog.String("limit", id), slog.String("backend", l.Backend()), logging.ErrorAttr(err))
 		RateLimitStoreErrors.inc(id)
 	}
@@ -306,17 +306,28 @@ func (l *KeyedLimiter) TestCounted(ctx context.Context, key, path string) (bool,
 
 // LimitWith rejects a request once its (keyFunc(r), r.URL.Path) pair
 // exceeds its limiter, rendering the refusal with write. A store error is
-// the Python api's unhandled-error 500 (slowapi has no swallow_errors), or a
-// 503 when it is a dependency failure (DependencyFailure), never a silent
-// pass: it is logged with the limit's ID (never the caller key or
+// the Python api's unhandled-error 500 (slowapi has no swallow_errors), never
+// a silent pass: it is logged with the limit's ID (never the caller key or
 // path) and counted in RateLimitStoreErrors.
 func LimitWith(limiter *KeyedLimiter, keyFunc KeyFunc, write ErrorWriter) func(http.Handler) http.Handler {
+	return limitWith(limiter, keyFunc, write, false)
+}
+
+// LimitWithDependency is LimitWith for a writer that renders CodeUnavailable:
+// a store error that is a dependency failure (DependencyFailure) is passed to
+// write as CodeUnavailable, any other store error as CodeInternal. A writer
+// that does not render CodeUnavailable must use LimitWith.
+func LimitWithDependency(limiter *KeyedLimiter, keyFunc KeyFunc, write ErrorWriter) func(http.Handler) http.Handler {
+	return limitWith(limiter, keyFunc, write, true)
+}
+
+func limitWith(limiter *KeyedLimiter, keyFunc KeyFunc, write ErrorWriter, dependencyAware bool) func(http.Handler) http.Handler {
 	limiter.Declare()
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			allowed, err := limiter.AllowCounted(r.Context(), keyFunc(r), r.URL.Path)
 			if err != nil {
-				if DependencyFailure(err) {
+				if dependencyAware && DependencyFailure(err) {
 					write(w, r, CodeUnavailable)
 				} else {
 					write(w, r, CodeInternal)

@@ -59,7 +59,13 @@ func syntheticLocked(t *testing.T) string {
 func lockOnly(t *testing.T, root string) string {
 	t.Helper()
 	catalog, _ := readCatalog(root)
-	return strings.Join(lockViolations(t, root, catalog), "\n")
+	var mine []string
+	for _, v := range lockViolations(t, root, catalog) {
+		if strings.Contains(v, "zz.yml") {
+			mine = append(mine, v)
+		}
+	}
+	return strings.Join(mine, "\n")
 }
 
 func TestWholeStepLockBaselineIsClean(t *testing.T) {
@@ -135,7 +141,7 @@ func TestWholeStepLockPlants(t *testing.T) {
 		})
 	}
 	t.Run("a changed sha clears suites and reason when the table is regenerated", func(t *testing.T) {
-		steps := []runStep{{"a.yml", "j", "#1 s", "default", "newsha", "x"}}
+		steps := []runStep{{"a.yml", "j", "#1 s", "default", "newsha", "x", ""}}
 		old := []lockRow{{"a.yml", "j", "#1 s", "default", "oldsha", "suite-a", "kept before"}}
 		got := renderLock(steps, old)
 		if !strings.Contains(got, "a.yml\tj\t#1 s\tdefault\tnewsha\t\t\n") {

@@ -78,7 +78,7 @@ func mirrorSuiteDefects(doc yamlMap) []string {
 	if perms := asMap(job["permissions"]); len(perms) != 1 || asString(perms["contents"]) != "read" {
 		out = append(out, "job precheck-lib-test permissions must be exactly contents: read")
 	}
-	dockerWord := regexp.MustCompile(`(^|[\s;&|(\/])(docker|podman)(\s|$)`)
+	dockerWord := regexp.MustCompile(`(^|[\s;&|(/'"\\])(docker|podman)(['"\s]|$)`)
 	var jobKeys []string
 	for k := range job {
 		jobKeys = append(jobKeys, k)
@@ -101,7 +101,7 @@ func mirrorSuiteDefects(doc yamlMap) []string {
 		}
 	}
 	for _, s := range stepsOf(job) {
-		if strings.Contains(fmt.Sprint(s), "secrets.") {
+		if t := fmt.Sprint(s); strings.Contains(t, "secrets.") || strings.Contains(t, "secrets[") {
 			out = append(out, "job precheck-lib-test must use no secret")
 		}
 	}

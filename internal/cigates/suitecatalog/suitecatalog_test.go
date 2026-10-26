@@ -24,7 +24,7 @@ const catalogPath = "ci/suites.tsv"
 var columns = []string{"suite", "owner", "risk", "command", "inputs", "trigger", "service_needs", "proof", "context", "retirement", "kind", "mode", "why_manual"}
 
 var (
-	commandStart = regexp.MustCompile(`(?:^|[\s(!;&|])(?:bash\s+|\./)?((?:ci/(?:check|run)_[A-Za-z0-9_]+\.sh|scripts/[A-Za-z0-9_.-]+_test\.sh|ci/[A-Za-z0-9_.-]+_test\.sh)\b.*|go test\b.*)$`)
+	commandStart = regexp.MustCompile(`(?:^|[\s(!;&|])(?:bash\s+|\./)?((?:ci/(?:check|run)_[A-Za-z0-9_]+\.sh|scripts/[A-Za-z0-9_.-]+_test\.sh|ci/[A-Za-z0-9_.-]+_test\.sh|ci/auth_corpus_external\.sh)\b.*|go test\b.*|node --test\b.*|node run\.mjs\b.*|pnpm graphql:wire-parity:check\b.*|docker info\b.*|docker build -t dind-smoke-test:local\b.*)$`)
 	commandCut   = regexp.MustCompile(`\s+(?:\|\||\||&&|;|\d?>|<|\))|;\s.*$|\s\\$`)
 	goTestFlags  = regexp.MustCompile(`\s-(?:mod=\S+|trimpath|count=\S+|timeout[= ]\S+|v|json|race)\b`)
 	segmentSplit = regexp.MustCompile(`\s+(?:&&|\|\||\|)\s+|;\s+|;$`)
@@ -490,13 +490,13 @@ func TestPlantedFaults(t *testing.T) {
 	t.Run("input that does not exist", func(t *testing.T) { plantRowEdit(t, "", "", 2, "does not exist") })
 	t.Run("manual row that a workflow runs", func(t *testing.T) { plantRowEdit(t, "", "", 3, "is mode=manual but") })
 	t.Run("duplicate command", func(t *testing.T) { plantRowEdit(t, "", "", 4, "duplicate command") })
-	t.Run("a refactor that keeps every command and run text passes", func(t *testing.T) {
+	t.Run("a comment-only edit keeps every command and step hash, so it passes", func(t *testing.T) {
 		root := plantTree(t)
 		edit(t, filepath.Join(root, ".github/workflows/go-quality.yml"), func(s string) string {
-			return strings.Replace(s, "- name: Set up Go", "- name: Install the Go toolchain", 1)
+			return strings.Replace(s, "      - name: Set up Go\n", "      # reviewed comment\n      - name: Set up Go\n", 1)
 		})
 		if v := violations(t, root); len(v) > 0 {
-			t.Fatalf("renaming a step that runs nothing must not fail the guard:\n  %s", strings.Join(v, "\n  "))
+			t.Fatalf("a comment must not fail the guard:\n  %s", strings.Join(v, "\n  "))
 		}
 	})
 }
@@ -561,4 +561,13 @@ func triggerViolations(id, trigger, command string, actual map[string]bool) []st
 		}
 	}
 	return bad
+}
+
+func TestRenamingAStepNeedsItsLockRowEdited(t *testing.T) {
+	root := plantTree(t)
+	edit(t, filepath.Join(root, ".github/workflows/go-quality.yml"), func(s string) string {
+		return strings.Replace(s, "- name: Set up Go", "- name: Install the Go toolchain", 1)
+	})
+	wantViolation(t, root, "run step has no row")
+	wantViolation(t, root, "stale row")
 }

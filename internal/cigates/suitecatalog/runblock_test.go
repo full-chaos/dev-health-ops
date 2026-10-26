@@ -3,6 +3,7 @@ package suitecatalog_test
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io/fs"
@@ -25,14 +26,39 @@ var updateLock = flag.Bool("update", false, "rewrite ci/run_block_lock.tsv from 
 var lockColumns = []string{"file", "job", "step", "shell", "sha256", "suites", "reason"}
 
 type runStep struct {
-	file, job, step, shell, sha, text string
+	file, job, step, shell, sha, text, info string
 }
 
 func normRunText(s string) string { return strings.TrimRight(s, " \t\r\n") + "\n" }
 
 func shaOf(s string) string {
-	sum := sha256.Sum256([]byte(normRunText(s)))
+	sum := sha256.Sum256([]byte(s))
 	return hex.EncodeToString(sum[:])
+}
+
+// canonicalSha hashes a YAML node with anchors and aliases resolved: every key and value, keys sorted, the run text
+// normalised by a trailing white space strip and one final newline.
+func canonicalSha(t *testing.T, n *yaml.Node, drop ...string) string {
+	t.Helper()
+	var v any
+	if n != nil {
+		if err := n.Decode(&v); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+	}
+	if m, ok := v.(map[string]any); ok {
+		if run, ok := m["run"].(string); ok {
+			m["run"] = normRunText(run)
+		}
+		for _, k := range drop {
+			delete(m, k)
+		}
+	}
+	raw, err := json.Marshal(v)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	return shaOf(string(raw))
 }
 
 func docRoot(n *yaml.Node) *yaml.Node {
@@ -59,6 +85,23 @@ func scalarOf(n *yaml.Node) string {
 		return ""
 	}
 	return n.Value
+}
+
+func nodeKeys(n *yaml.Node, skip ...string) string {
+	var keys []string
+	if n != nil && n.Kind == yaml.MappingNode {
+	next:
+		for i := 0; i+1 < len(n.Content); i += 2 {
+			for _, s := range skip {
+				if n.Content[i].Value == s {
+					continue next
+				}
+			}
+			keys = append(keys, n.Content[i].Value)
+		}
+	}
+	sort.Strings(keys)
+	return strings.Join(keys, ",")
 }
 
 func defaultShell(n *yaml.Node) string {
@@ -132,14 +175,13 @@ func scanSteps(t *testing.T, root string) ([]runStep, []string) {
 				return
 			}
 			for i, st := range steps.Content {
-				follow(scalarOf(mapGet(st, "uses")))
-				run := mapGet(st, "run")
-				if run == nil {
-					continue
+				for st.Kind == yaml.AliasNode && st.Alias != nil {
+					st = st.Alias
 				}
+				follow(scalarOf(mapGet(st, "uses")))
 				key := fmt.Sprintf("#%d", i+1)
 				if id := scalarOf(mapGet(st, "id")); id != "" {
-					key = "id=" + id
+					key += " id=" + id
 				}
 				if name := strings.ReplaceAll(scalarOf(mapGet(st, "name")), "\t", " "); name != "" {
 					key += " " + name
@@ -151,20 +193,40 @@ func scanSteps(t *testing.T, root string) ([]runStep, []string) {
 				if shell == "" {
 					shell = "default"
 				}
-				out = append(out, runStep{rel, job, key, shell, shaOf(run.Value), run.Value})
+				text := ""
+				if run := mapGet(st, "run"); run != nil {
+					var s string
+					_ = run.Decode(&s)
+					text = s
+				}
+				out = append(out, runStep{rel, job, key, shell, canonicalSha(t, st), text, scalarOf(mapGet(st, "uses"))})
 			}
+		}
+		if mapGet(top, "jobs") != nil {
+			var sub yaml.Node
+			sub.Kind = yaml.MappingNode
+			for _, k := range []string{"env", "defaults"} {
+				if v := mapGet(top, k); v != nil {
+					sub.Content = append(sub.Content, &yaml.Node{Kind: yaml.ScalarNode, Value: k}, v)
+				}
+			}
+			out = append(out, runStep{rel, "(workflow)", "(top)", "-", canonicalSha(t, &sub), "", nodeKeys(&sub)})
 		}
 		if jobs := mapGet(top, "jobs"); jobs != nil {
 			wfShell := defaultShell(top)
 			for i := 0; i+1 < len(jobs.Content); i += 2 {
 				job := jobs.Content[i+1]
 				follow(scalarOf(mapGet(job, "uses")))
+				out = append(out, runStep{rel, jobs.Content[i].Value, "(job)", "-", canonicalSha(t, job, "steps"), "", nodeKeys(job, "steps")})
 				shell := defaultShell(job)
 				if shell == "" {
 					shell = wfShell
 				}
 				emit(jobs.Content[i].Value, mapGet(job, "steps"), shell)
 			}
+		}
+		if runs := mapGet(top, "runs"); runs != nil {
+			out = append(out, runStep{rel, "-", "(action)", "-", canonicalSha(t, runs, "steps"), "", nodeKeys(runs, "steps")})
 		}
 		emit("-", mapGet(mapGet(top, "runs"), "steps"), "")
 	}
@@ -303,20 +365,22 @@ func lockViolations(t *testing.T, root string, catalog []row) []string {
 	return bad
 }
 
-// renderLock writes the table for the scanned steps: an existing row keeps its suites and reason (only shell and sha
-// move); a new step gets EMPTY suites and reason, so the check fails until a reviewer fills both.
+// renderLock writes the table for the scanned steps: an existing row with the same hash keeps its suites and reason; a new step, or a step whose hash changed, gets EMPTY suites and reason, so the check fails until a reviewer fills both.
 func renderLock(steps []runStep, old []lockRow) string {
 	prev := map[string]lockRow{}
 	for _, r := range old {
 		prev[r.key()] = r
 	}
 	var b strings.Builder
-	b.WriteString("# CHAOS-11422: the run-block lock. Every run step of every workflow and action file has one reviewed row.\n")
-	b.WriteString("# sha256 = of the run text with trailing white space stripped and one final newline. suites = catalog suite ids or none.\n")
-	b.WriteString("# Regenerate the shas with: go test ./internal/cigates/suitecatalog -run TestRunBlockLockUpdate -update. A new row has empty suites and reason a reviewer must fill.\n")
+	b.WriteString("# CHAOS-11422: the whole-step lock. Every step of every workflow and action file (run or uses), every job and every workflow has one reviewed row.\n")
+	b.WriteString("# sha256 = of the canonical step (or job, or workflow env and defaults) with anchors resolved, keys sorted, run text trailing-white-space stripped plus one final newline. suites = catalog suite ids or none.\n# NAMED LIMIT: the scripts a step calls are NOT covered. The lock covers workflow and action YAML only.\n")
+	b.WriteString("# Regenerate the shas with: go test ./internal/cigates/suitecatalog -run TestRunBlockLockUpdate -update. A new or changed row has empty suites and reason a reviewer must fill.\n")
 	b.WriteString(strings.Join(lockColumns, "\t") + "\n")
 	for _, s := range steps {
 		p := prev[s.file+"\t"+s.job+"\t"+s.step]
+		if p.sha != s.sha {
+			p.suites, p.reason = "", ""
+		}
 		b.WriteString(strings.Join([]string{s.file, s.job, s.step, s.shell, s.sha, p.suites, p.reason}, "\t") + "\n")
 	}
 	return b.String()
@@ -335,11 +399,11 @@ func TestRunBlockLockUpdate(t *testing.T) {
 }
 
 func TestRenderLockLeavesANewStepEmpty(t *testing.T) {
-	steps := []runStep{{"a.yml", "j", "#1 old", "default", "s1", "x"}, {"a.yml", "j", "#2 new", "default", "s2", "y"}}
-	old := []lockRow{{"a.yml", "j", "#1 old", "default", "stale", "suite-a", "kept"}}
+	steps := []runStep{{"a.yml", "j", "#1 old", "default", "s1", "x", ""}, {"a.yml", "j", "#2 new", "default", "s2", "y", ""}}
+	old := []lockRow{{"a.yml", "j", "#1 old", "default", "s1", "suite-a", "kept"}}
 	got := renderLock(steps, old)
 	if !strings.Contains(got, "a.yml\tj\t#1 old\tdefault\ts1\tsuite-a\tkept\n") {
-		t.Fatalf("a known row must keep suites and reason and take the new sha:\n%s", got)
+		t.Fatalf("a known row must keep suites and reason when the hash is unchanged:\n%s", got)
 	}
 	if !strings.Contains(got, "a.yml\tj\t#2 new\tdefault\ts2\t\t\n") {
 		t.Fatalf("a new step must get empty suites and reason:\n%s", got)

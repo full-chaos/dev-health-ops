@@ -692,3 +692,55 @@ func TestKeyStatesBackgroundRefreshLatchesACompromiseAtOnce(t *testing.T) {
 		t.Fatalf("during a hung refresh = %v, %v; want compromised", out, err)
 	}
 }
+
+// Close ends a read stalled on the source at once (the goroutine leaves), and
+// the caller that held a snapshot still gets it.
+func TestKeyStatesCloseEndsTheReadInFlight(t *testing.T) {
+	source := &hungStates{rows: []KeyStateRow{{KeyID: "a", State: StateActive}}}
+	clock := &fakeClock{now: time.Unix(0, 0)}
+	states := NewKeyStates(KeyStatesConfig{Source: source, RefreshEvery: 10 * time.Second, MaxStale: JWKSCacheTTL,
+		ReadTimeout: time.Minute, InlineWait: time.Millisecond, Now: clock.Now})
+	if _, err := states.Rows(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	source.setHang(true)
+	clock.advance(11 * time.Second)
+	if rows, err := states.Rows(context.Background()); err != nil || len(rows) != 1 {
+		t.Fatalf("during the hung refresh = %v, %v", rows, err)
+	}
+	if states.idle() {
+		t.Fatal("no read in flight to end")
+	}
+	states.Close()
+	deadline := time.Now().Add(2 * time.Second)
+	for !states.idle() {
+		if time.Now().After(deadline) {
+			t.Fatal("Close did not end the read in flight")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// With a healthy database a state change (here a revocation) takes effect at
+// the next refresh, in the call that starts it: the bound is the refresh
+// period, as before the read moved off the request.
+func TestKeyStatesRevokedStateTakesEffectAtTheNextRefresh(t *testing.T) {
+	source := &hungStates{rows: []KeyStateRow{{KeyID: "a", State: StateActive}}}
+	clock := &fakeClock{now: time.Unix(0, 0)}
+	states := NewKeyStates(KeyStatesConfig{Source: source, RefreshEvery: 10 * time.Second, MaxStale: JWKSCacheTTL, Now: clock.Now})
+	ctx := context.Background()
+	if rows, _ := states.Rows(ctx); rows[0].State != StateActive {
+		t.Fatalf("first = %v", rows)
+	}
+	source.mu.Lock()
+	source.rows = []KeyStateRow{{KeyID: "a", State: StateRetired}}
+	source.mu.Unlock()
+	clock.advance(9 * time.Second)
+	if rows, _ := states.Rows(ctx); rows[0].State != StateActive {
+		t.Fatalf("inside the refresh period = %v, want the held snapshot", rows)
+	}
+	clock.advance(time.Second)
+	if rows, _ := states.Rows(ctx); rows[0].State != StateRetired {
+		t.Fatalf("at the refresh = %v, want the revoked state in that call", rows)
+	}
+}

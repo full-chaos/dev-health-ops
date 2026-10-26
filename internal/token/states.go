@@ -87,6 +87,9 @@ type KeyStates struct {
 	attempted bool
 	// flight is the read in progress, nil when none.
 	flight chan struct{}
+	// base ends every read when the service stops.
+	base context.Context
+	stop context.CancelFunc
 
 	// deniedKids and deniedPublics latch every compromise this process has
 	// seen, from a row or from custody, for its life: no later snapshot (a
@@ -109,6 +112,7 @@ func NewKeyStates(config KeyStatesConfig) *KeyStates {
 	if states.maxStale <= 0 {
 		states.maxStale = JWKSCacheTTL
 	}
+	states.base, states.stop = context.WithCancel(context.Background())
 	if states.readTimeout <= 0 {
 		states.readTimeout = KeyStateReadTimeout
 	}
@@ -168,6 +172,10 @@ func (s *KeyStates) Rows(ctx context.Context) ([]KeyStateRow, error) {
 	return nil, failure(ReasonKeyStatesUnavailable)
 }
 
+// Close ends the read in flight and every later one; a caller with a usable
+// snapshot keeps getting it, one without is refused.
+func (s *KeyStates) Close() { s.stop() }
+
 // snapshot is the held rows and whether they are inside the staleness bound.
 func (s *KeyStates) snapshot(now time.Time) ([]KeyStateRow, bool) {
 	return s.rows, s.have && now.Sub(s.readAt) <= s.maxStale
@@ -176,7 +184,7 @@ func (s *KeyStates) snapshot(now time.Time) ([]KeyStateRow, bool) {
 // read is the one read in flight. A failed read may still return rows: their
 // compromises latch before the read is discarded.
 func (s *KeyStates) read(flight chan struct{}, at time.Time) {
-	ctx, cancel := context.WithTimeout(context.Background(), s.readTimeout)
+	ctx, cancel := context.WithTimeout(s.base, s.readTimeout)
 	defer cancel()
 	rows, err := s.source.KeyStates(ctx)
 	s.latch(nil, rows)

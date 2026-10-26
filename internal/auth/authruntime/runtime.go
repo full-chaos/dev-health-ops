@@ -370,11 +370,12 @@ func configureWithRoutes(
 	// The token signer is built here and proved by readiness; nothing issues
 	// with it yet. Key states come from the rotation state machine's table
 	// (a cached snapshot; an empty table keeps custody's own states).
+	keyStates := token.NewKeyStates(token.KeyStatesConfig{Source: keyStateSource(store.Pool(), schemaID)})
 	signer := token.NewFileSigner(token.FileConfig{
 		KeySetPath: cfg.SigningKeySetPath,
 		KeyPath:    cfg.SigningKeyPath,
 		KeyID:      cfg.SigningKeyID,
-		States:     token.NewKeyStates(token.KeyStatesConfig{Source: keyStateSource(store.Pool(), schemaID)}),
+		States:     keyStates,
 	})
 
 	registry := health.NewRegistry(cfg.HealthCheckTimeout)
@@ -529,6 +530,15 @@ func configureWithRoutes(
 		health.Gate{Registry: registry},
 	), nil
 }
+
+// keyStatesComponent ends the key-state read in flight on shutdown, before the
+// pool closes: a read stalled on a connection would otherwise hold the pool's
+// Close until its own timeout.
+type keyStatesComponent struct{ states *token.KeyStates }
+
+func (keyStatesComponent) Name() string                     { return "auth-key-states" }
+func (keyStatesComponent) Start(context.Context) error      { return nil }
+func (k keyStatesComponent) Shutdown(context.Context) error { k.states.Close(); return nil }
 
 // listener is the surface a socket-binding component exposes: its lifecycle,
 // the errors it can raise after a successful bind, and the address it bound.

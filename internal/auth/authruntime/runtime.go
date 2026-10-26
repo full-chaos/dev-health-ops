@@ -95,7 +95,7 @@ func sessionRoutes(
 		return nil, nil
 	}
 	sessions, err := session.New(session.Config{
-		Pool: pool, Schema: schema, Logger: logger,
+		Pool: pool, Schema: schema, Logger: logger, UsersOwned: cfg.UsersOwned,
 		SuccessorKey: contracts.NewSecretString(cfg.Session.SuccessorKey.Reveal()),
 	})
 	if err != nil {

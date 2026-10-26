@@ -11,7 +11,6 @@ on:
       - 'docs-data/**'
       - 'Makefile'
       - 'wrangler.jsonc'
-      - 'scripts/build_docs_cloudflare.py'
       - '.github/workflows/docs-guards.yml'
       - '.github/workflows/docs-cloudflare.yml'
   pull_request:
@@ -24,7 +23,6 @@ on:
       - 'docs-data/**'
       - 'Makefile'
       - 'wrangler.jsonc'
-      - 'scripts/build_docs_cloudflare.py'
       - '.github/workflows/docs-guards.yml'
       - '.github/workflows/docs-cloudflare.yml'
   merge_group:

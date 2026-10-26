@@ -24,6 +24,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/cigates"
 	"github.com/full-chaos/dev-health-ops/internal/cigates/affected"
 	"github.com/full-chaos/dev-health-ops/internal/cigates/bigboyrender"
+	"github.com/full-chaos/dev-health-ops/internal/cigates/docsbuild"
 	"github.com/full-chaos/dev-health-ops/internal/cigates/docsprepare"
 	"github.com/full-chaos/dev-health-ops/internal/cigates/docstools"
 	"github.com/full-chaos/dev-health-ops/internal/cigates/livee2e"
@@ -41,7 +42,7 @@ func main() {
 
 func run(args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: cigate governance|plan-verdict|plan-reads|govulncheck|scope-candidates|metrics-proof|bigboy|docs|docs-prepare|plane-split-router|query-api-flags|route-coverage|web-env-parity|live-e2e|release [args]")
+		fmt.Fprintln(os.Stderr, "usage: cigate governance|plan-verdict|plan-reads|govulncheck|scope-candidates|metrics-proof|bigboy|docs|docs-build|docs-prepare|plane-split-router|query-api-flags|route-coverage|web-env-parity|live-e2e|release [args]")
 		return 2
 	}
 	switch args[0] {
@@ -53,6 +54,8 @@ func run(args []string) int {
 		return affected.PlanReads(args[1:], os.Stdout, os.Stderr)
 	case "govulncheck":
 		return cigates.AuthGovulncheck(os.Stdin, os.Stdout, os.Stderr)
+	case "docs-build":
+		return docsbuild.Run(args[1:], os.Stdout, os.Stderr)
 	case "docs-prepare":
 		return docsprepare.Run(args[1:], os.Stdout, os.Stderr)
 	case "release":

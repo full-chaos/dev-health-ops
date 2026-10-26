@@ -81,6 +81,7 @@ internal/cigates/chparams	chparams_test.go	unexpressed
 internal/cigates/docmaketargets	docmaketargets_test.go	unexpressed
 internal/cigates/docs	docs_helpers_test.go	unexpressed
 internal/cigates/docs	repo_paths_test.go	unexpressed
+internal/cigates/docsbuild	docsbuild.go	unexpressed
 internal/cigates/docstools	hostsmoke_live_test.go	unexpressed
 internal/cigates/docstools	link_refusals_test.go	unexpressed
 internal/cigates/docstools	provider_limits_test.go	**/cmd/cigate

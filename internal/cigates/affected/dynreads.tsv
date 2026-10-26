@@ -173,6 +173,8 @@ internal/cigates/docmaketargets	docmaketargets_test.go
 internal/cigates/docs	docs_helpers_test.go
 internal/cigates/docs	parity_test.go
 internal/cigates/docs	repo_paths_test.go
+internal/cigates/docsbuild	docsbuild.go
+internal/cigates/docsbuild	docsbuild_test.go
 internal/cigates/docsprepare	docsprepare.go
 internal/cigates/docsprepare	docsprepare_test.go
 internal/cigates/docstools	a1_pyhelp.go

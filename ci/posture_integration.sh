@@ -102,7 +102,7 @@ if [ -s "${list_file}" ] && [ "$(tail -c1 "${list_file}" | od -An -tx1 | tr -d '
   echo "${list_file} does not end with a newline" >&2
   exit 3
 fi
-while IFS= read -r line || [ -n "${line}" ]; do
+while IFS= read -r line; do
   case "${line}" in "" | "#"*) continue ;; esac
   case "${line}" in *[[:space:]]*) echo "${list_file}: a package line holds whitespace or a carriage return" >&2; exit 3 ;; esac
   packages+=("${line}")
@@ -169,11 +169,11 @@ fi
 # The tests run in a fresh worktree of HEAD, so uncommitted or index-hidden edits, a parent go.work, or a fake module in
 # the cwd never feed go test. The script and the list that run must be the ones committed at HEAD.
 wt_root="$("${MKTEMP}" -d)"
-"${GIT}" worktree add --detach "${wt_root}/tree" "${sha}" > /dev/null 2>&1 || { echo "git worktree add failed" >&2; exit 3; }
+"${GIT}" -c core.sparseCheckout=false worktree add --detach "${wt_root}/tree" "${sha}" > /dev/null 2>&1 || { echo "git worktree add failed" >&2; exit 3; }
 wt="${wt_root}/tree"
-# A new worktree inherits the caller's sparse-checkout settings: turn them off, then refuse any file the index marks
-# other than a plain cached one (sparse, skip-worktree, assume-unchanged), so every test committed at HEAD is on disk.
-"${GIT}" -C "${wt}" sparse-checkout disable > /dev/null 2>&1 || { echo "cannot disable sparse-checkout in the worktree" >&2; exit 3; }
+# core.sparseCheckout=false on the add keeps the caller's sparse patterns out of the new worktree without writing to the
+# caller's shared .git/config. Then refuse any file the index marks other than a plain cached one (sparse, skip-worktree,
+# assume-unchanged), so every test committed at HEAD is on disk.
 lsv="$("${GIT}" -C "${wt}" ls-files -v)" || { echo "git ls-files -v failed in the worktree" >&2; exit 3; }
 while IFS= read -r entry; do
   case "${entry}" in "H "* | "") ;; *) echo "worktree index flags a file other than a plain cached one: ${entry}" >&2; exit 3 ;; esac

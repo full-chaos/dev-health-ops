@@ -269,11 +269,11 @@ func TestIssuerSetUserTokenPath(t *testing.T) {
 	minter := newEdDSAMinter(t)
 	store := newProbeStore()
 	adminSID := uuid.MustParse("00000000-0000-4000-8000-0000000000c4")
-	store.sessions[adminSID] = policy.SessionRow{PrincipalID: probeAdminUser}
+	store.sessions[adminSID] = policy.SessionRow{PrincipalID: probeAdminUser, LegacyTokenVersion: i64ptr(0)}
 	memberSID := uuid.MustParse("00000000-0000-4000-8000-0000000000c5")
-	store.sessions[memberSID] = policy.SessionRow{PrincipalID: probeMember}
+	store.sessions[memberSID] = policy.SessionRow{PrincipalID: probeMember, LegacyTokenVersion: i64ptr(0)}
 	inactiveSID := uuid.MustParse("00000000-0000-4000-8000-0000000000c6")
-	store.sessions[inactiveSID] = policy.SessionRow{PrincipalID: probeInactive}
+	store.sessions[inactiveSID] = policy.SessionRow{PrincipalID: probeInactive, LegacyTokenVersion: i64ptr(0)}
 	f := newRoutedFixture(t, store, userRows(t), probeIssuer, minter.keys, nil, probeNow)
 	user := func(extra map[string]any) string { return minter.mint(probeUser, extra) }
 	userWith := func(body map[string]any) map[string]any { u, _ := body["user"].(map[string]any); return u }
@@ -420,7 +420,7 @@ func TestA2CorpusThroughGoAPI(t *testing.T) {
 				session, okSession := decodeWireID(sid[1], "ses_")
 				if okPrincipal && okSession {
 					store.users[principal] = probeUserRow{state: policy.UserState{IsActive: true}, email: "corpus@example.test"}
-					store.sessions[session] = policy.SessionRow{PrincipalID: principal}
+					store.sessions[session] = policy.SessionRow{PrincipalID: principal, LegacyTokenVersion: i64ptr(0)}
 					store.members[[2]uuid.UUID{principal, uuid.MustParse("00000000-0000-4000-8000-000000000001")}] = "member"
 				}
 			}
@@ -630,7 +630,7 @@ func TestIssuerSetCallerLookupOutageIsTheListener500(t *testing.T) {
 	minter := newEdDSAMinter(t)
 	store := newProbeStore()
 	downSID := uuid.MustParse("00000000-0000-4000-8000-0000000000c7")
-	store.sessions[downSID] = policy.SessionRow{PrincipalID: probeDown}
+	store.sessions[downSID] = policy.SessionRow{PrincipalID: probeDown, LegacyTokenVersion: i64ptr(0)}
 	legacy := probeHS256(t, probeKey, map[string]any{"sub": probeDown.String(), "org_id": probeOrg.String()})
 	user := minter.mint(probeDown, map[string]any{"sid": sessionid.Wire(downSID)})
 	unset := probeDo(probeServer(t, store, nil), probeRequest{"unset", http.MethodGet, probeAuthenticated, bearer(legacy)})

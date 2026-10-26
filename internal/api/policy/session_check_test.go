@@ -48,7 +48,7 @@ func pinSession(s *sessionStore, userVersion int64, pin *int64) {
 }
 
 func newSessionStore() *sessionStore {
-	return &sessionStore{fakeStore: newStore(), rows: map[uuid.UUID]SessionRow{liveSessionID: {PrincipalID: userID}}}
+	return &sessionStore{fakeStore: newStore(), rows: map[uuid.UUID]SessionRow{liveSessionID: {PrincipalID: userID, LegacyTokenVersion: i64(0)}}}
 }
 
 func outcomeOf(err error) string {
@@ -94,7 +94,7 @@ func TestCheckClaimsEndsATokenWhoseSessionIsRevoked(t *testing.T) {
 		{name: "pin equal to the row", claims: withTV(2), store: func(s *sessionStore) { pinSession(s, 2, i64(2)) }, want: "ok", wantReads: 1},
 		{name: "pin older than the row", claims: withTV(2), store: func(s *sessionStore) { pinSession(s, 2, i64(1)) }, want: "refused", wantReads: 1},
 		{name: "pin newer than the row", claims: withTV(2), store: func(s *sessionStore) { pinSession(s, 2, i64(3)) }, want: "refused", wantReads: 1},
-		{name: "no pin", claims: withTV(2), store: func(s *sessionStore) { pinSession(s, 2, nil) }, want: "ok", wantReads: 1},
+		{name: "no pin", claims: withTV(2), store: func(s *sessionStore) { pinSession(s, 2, nil) }, want: "refused", wantReads: 1},
 		{name: "inactive user, sid not read", claims: withSID(liveSessionID), store: func(s *sessionStore) { s.users[userID] = UserState{} }, want: "refused"},
 	} {
 		t.Run(test.name, func(t *testing.T) {

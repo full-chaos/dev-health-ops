@@ -520,7 +520,7 @@ func configureWithRoutes(
 		return nil, err
 	}
 
-	components := []lifecycle.Component{store}
+	components := []lifecycle.Component{store, keyStatesComponent{states: keyStates}}
 	components = append(components, limitComponents...)
 	components = append(components, credComponents...)
 	return append(components,

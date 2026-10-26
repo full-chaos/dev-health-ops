@@ -744,3 +744,27 @@ func TestKeyStatesRevokedStateTakesEffectAtTheNextRefresh(t *testing.T) {
 		t.Fatalf("at the refresh = %v, want the revoked state in that call", rows)
 	}
 }
+
+// A snapshot that was inside the bound when a stalled refresh began is not
+// served once the wait leaves it past the bound.
+func TestKeyStatesDoNotServePastMaxStaleAfterAnInlineWait(t *testing.T) {
+	source := &hungStates{rows: []KeyStateRow{{KeyID: "a", State: StateActive}}}
+	clock := &fakeClock{now: time.Unix(0, 0)}
+	states := NewKeyStates(KeyStatesConfig{Source: source, RefreshEvery: time.Millisecond, MaxStale: 100 * time.Millisecond,
+		ReadTimeout: time.Second, InlineWait: 30 * time.Millisecond, Now: clock.Now})
+	if _, err := states.Rows(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	source.setHang(true)
+	clock.advance(90 * time.Millisecond)
+	done := make(chan error, 1)
+	go func() {
+		_, err := states.Rows(context.Background())
+		done <- err
+	}()
+	time.Sleep(10 * time.Millisecond)
+	clock.advance(20 * time.Millisecond)
+	if err := <-done; !reasonIs(err, ReasonKeyStatesUnavailable) {
+		t.Fatalf("Rows = %v, want %s once the wait left the snapshot past MaxStale", err, ReasonKeyStatesUnavailable)
+	}
+}

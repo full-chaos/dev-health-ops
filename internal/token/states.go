@@ -155,15 +155,12 @@ func (s *KeyStates) Rows(ctx context.Context) ([]KeyStateRow, error) {
 		select {
 		case <-flight:
 		case <-timer:
-			return rows, nil
 		case <-ctx.Done():
-			if usable {
-				return rows, nil
-			}
-			return nil, failure(ReasonKeyStatesUnavailable)
 		}
+		// The age is judged again after the wait: a snapshot that was inside
+		// the bound when the wait began is not served once it is past it.
 		s.mu.Lock()
-		rows, usable = s.snapshot(now)
+		rows, usable = s.snapshot(s.now())
 		s.mu.Unlock()
 	}
 	if usable {

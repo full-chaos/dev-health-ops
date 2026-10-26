@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -18,6 +19,63 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
 
+// The package shares one Postgres: every row these tests create is removed when the test ends, so the orgs,
+// reconcile and purge tests see only their own rows.
+var oauthSSOTracked struct {
+	sync.Mutex
+	users, orgs, rows []uuid.UUID
+}
+
+func (e *reconEnv) oauthSSOCleanup(t *testing.T) {
+	t.Helper()
+	t.Cleanup(func() {
+		oauthSSOTracked.Lock()
+		defer oauthSSOTracked.Unlock()
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		// The auth security tables refuse writes outside audit.Commit; replica mode (the test owner) lifts that
+		// for this cleanup only.
+		tx, err := e.admin.Begin(ctx)
+		if err != nil {
+			t.Errorf("cleanup begin: %v", err)
+			return
+		}
+		defer func() { _ = tx.Rollback(ctx) }()
+		if _, err := tx.Exec(ctx, `SET LOCAL session_replication_role = replica`); err != nil {
+			t.Errorf("cleanup role: %v", err)
+			return
+		}
+		for _, q := range []struct {
+			sql string
+			ids []uuid.UUID
+		}{
+			{`DELETE FROM auth.external_identities WHERE principal_id = ANY($1)`, oauthSSOTracked.users},
+			{`DELETE FROM auth.users WHERE principal_id = ANY($1)`, oauthSSOTracked.users},
+			{`DELETE FROM auth.principals WHERE id = ANY($1)`, oauthSSOTracked.users},
+			{`DELETE FROM public.memberships WHERE user_id = ANY($1)`, oauthSSOTracked.users},
+			{`DELETE FROM public.users WHERE id = ANY($1)`, oauthSSOTracked.users},
+			{`DELETE FROM public.sso_providers WHERE id = ANY($1)`, oauthSSOTracked.rows},
+			{`DELETE FROM public.memberships WHERE org_id = ANY($1)`, oauthSSOTracked.orgs},
+			{`DELETE FROM public.organizations WHERE id = ANY($1)`, oauthSSOTracked.orgs},
+		} {
+			if _, err := tx.Exec(ctx, q.sql, q.ids); err != nil {
+				t.Errorf("cleanup %q: %v", q.sql, err)
+				return
+			}
+		}
+		if err := tx.Commit(ctx); err != nil {
+			t.Errorf("cleanup commit: %v", err)
+		}
+		oauthSSOTracked.users, oauthSSOTracked.orgs, oauthSSOTracked.rows = nil, nil, nil
+	})
+}
+
+func trackOAuthSSO(list *[]uuid.UUID, id uuid.UUID) {
+	oauthSSOTracked.Lock()
+	defer oauthSSOTracked.Unlock()
+	*list = append(*list, id)
+}
+
 func (e *reconEnv) oauthOrg(t *testing.T, ctx context.Context) uuid.UUID {
 	t.Helper()
 	id := uuid.New()
@@ -25,6 +83,7 @@ func (e *reconEnv) oauthOrg(t *testing.T, ctx context.Context) uuid.UUID {
 VALUES ($1, $2, $2, 'enterprise', 'stripe', true, '{}', now(), now())`, id, "org-"+id.String()[:8]); err != nil {
 		t.Fatal(err)
 	}
+	trackOAuthSSO(&oauthSSOTracked.orgs, id)
 	return id
 }
 
@@ -35,6 +94,7 @@ func (e *reconEnv) oauthRow(t *testing.T, ctx context.Context, org uuid.UUID, pr
 VALUES ($1, $2, $3, $4, 'active', $5::json, now(), now())`, id, org, "p-"+id.String()[:8], protocol, config); err != nil {
 		t.Fatal(err)
 	}
+	trackOAuthSSO(&oauthSSOTracked.rows, id)
 	return id
 }
 
@@ -45,6 +105,7 @@ func (e *reconEnv) oauthUser(t *testing.T, ctx context.Context, org uuid.UUID, p
 VALUES ($1, $2, $3, $4, true, true, false, 0, now(), now())`, id, id.String()+"@example.test", provider, subject); err != nil {
 		t.Fatal(err)
 	}
+	trackOAuthSSO(&oauthSSOTracked.users, id)
 	if _, err := e.admin.Exec(ctx, `INSERT INTO public.memberships (id, user_id, org_id, role) VALUES ($1, $2, $3, 'member')`, uuid.New(), id, org); err != nil {
 		t.Fatal(err)
 	}
@@ -63,6 +124,7 @@ func (e *reconEnv) identityCount(t *testing.T, ctx context.Context, principal uu
 
 func TestBackfillOAuthSSOThenOwnedLoginHitsKey(t *testing.T) {
 	e := getReconEnv(t)
+	e.oauthSSOCleanup(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	var role string
@@ -177,6 +239,7 @@ func (e *reconEnv) verbPool(t *testing.T, ctx context.Context) {
 
 func TestVerbUsersBackfillCarriesOAuthSSOAndCountVerbPrintsOneLine(t *testing.T) {
 	e := getReconEnv(t)
+	e.oauthSSOCleanup(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	base := e.settleOAuthSSO(t, ctx)
@@ -246,6 +309,7 @@ func (e *reconEnv) keysAt(t *testing.T, ctx context.Context, principal uuid.UUID
 // as ambiguous_row. A social user in a row's org gets the row key and nothing else: no new principal.
 func TestBackfillOAuthSSOCarriesOnlyExactlyOneRowAndCountsTheRest(t *testing.T) {
 	e := getReconEnv(t)
+	e.oauthSSOCleanup(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	base := e.settleOAuthSSO(t, ctx)
@@ -309,6 +373,7 @@ func TestBackfillOAuthSSOCarriesOnlyExactlyOneRowAndCountsTheRest(t *testing.T) 
 // A skipped carry (the row key is already linked to another principal) fails the verb with exit 1 and a skip class.
 func TestVerbUsersBackfillOAuthSSOSkipFailsWithExitOne(t *testing.T) {
 	e := getReconEnv(t)
+	e.oauthSSOCleanup(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	e.settleOAuthSSO(t, ctx)
@@ -318,6 +383,7 @@ func TestVerbUsersBackfillOAuthSSOSkipFailsWithExitOne(t *testing.T) {
 	row := e.oauthRow(t, ctx, org, "oauth_github", `{}`)
 	e.oauthUser(t, ctx, org, "github", "9201")
 	other := e.seed(t, ctx, uniq("skip"), true, false)
+	trackOAuthSSO(&oauthSSOTracked.users, other)
 	e.backfill(t, ctx)
 	key := identity.ExternalKey{Issuer: "https://github.com", Provider: identity.Provider(row.String()), Subject: "9201"}
 	if _, err := e.store.CarryExtraIdentity(ctx, other, key, false); err != nil {

@@ -60,8 +60,9 @@ func readTokenRequest(w http.ResponseWriter, r *http.Request) (Provider, contrac
 	var body tokenRequest
 	data, readErr := io.ReadAll(http.MaxBytesReader(w, r.Body, maxRequestBody))
 	if readErr == nil {
-		// The api plane answers a body that is not UTF-8 before it reads a field.
-		if _, err := pyjson.DecodeBody(data); err != nil {
+		// The api plane answers a body that is not UTF-8 (and only that) before it
+		// reads a field; a syntax error keeps the answer this route always gave.
+		if _, err := pyjson.DecodeBody(data); errors.Is(err, pyjson.ErrUnicode) {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"detail": "There was an error parsing the body"})
 			return "", contracts.SecretString{}, false
 		}

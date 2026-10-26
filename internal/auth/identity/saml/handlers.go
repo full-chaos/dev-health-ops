@@ -306,8 +306,9 @@ func readJSONData(w http.ResponseWriter, r *http.Request, v any) ([]byte, bool) 
 		writeDetail(w, http.StatusRequestEntityTooLarge, "Request body too large")
 		return nil, false
 	}
-	// The api plane answers a body that is not UTF-8 before it reads a field.
-	if _, err := pyjson.DecodeBody(data); err != nil {
+	// The api plane answers a body that is not UTF-8 (and only that) before it
+	// reads a field; a syntax error keeps the answer this route always gave.
+	if _, err := pyjson.DecodeBody(data); errors.Is(err, pyjson.ErrUnicode) {
 		writeDetail(w, http.StatusBadRequest, "There was an error parsing the body")
 		return nil, false
 	}

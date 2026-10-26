@@ -140,10 +140,10 @@ func (s *KeyStates) Rows(ctx context.Context) ([]KeyStateRow, error) {
 		go s.read(s.flight, now)
 	}
 	flight := s.flight
-	rows, usable := s.snapshot(now)
+	_, usable := s.snapshot(now)
 	s.mu.Unlock()
 	if usable && !started {
-		return rows, nil
+		return s.current()
 	}
 	if flight != nil {
 		var timer <-chan time.Time
@@ -157,21 +157,42 @@ func (s *KeyStates) Rows(ctx context.Context) ([]KeyStateRow, error) {
 		case <-timer:
 		case <-ctx.Done():
 		}
-		// The age is judged again after the wait: a snapshot that was inside
-		// the bound when the wait began is not served once it is past it.
-		s.mu.Lock()
-		rows, usable = s.snapshot(s.now())
-		s.mu.Unlock()
 	}
-	if usable {
-		return rows, nil
-	}
-	return nil, failure(ReasonKeyStatesUnavailable)
+	return s.current()
 }
 
-// Close ends the read in flight and every later one; a caller with a usable
-// snapshot keeps getting it, one without is refused.
-func (s *KeyStates) Close() { s.stop() }
+// current is the one return path of Rows: the snapshot is judged against
+// MaxStale with the clock read now, never a time captured before a wait or an
+// unlock.
+func (s *KeyStates) current() ([]KeyStateRow, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rows, usable := s.snapshot(s.now())
+	if !usable {
+		return nil, failure(ReasonKeyStatesUnavailable)
+	}
+	return rows, nil
+}
+
+// Close ends the read in flight and every later one and waits, for at most the
+// read timeout, for that read to return; a caller with a usable snapshot keeps
+// getting it, one without is refused. It is idempotent and safe with no read in
+// flight.
+func (s *KeyStates) Close() {
+	s.stop()
+	s.mu.Lock()
+	flight := s.flight
+	s.mu.Unlock()
+	if flight == nil {
+		return
+	}
+	timer := time.NewTimer(s.readTimeout)
+	defer timer.Stop()
+	select {
+	case <-flight:
+	case <-timer.C:
+	}
+}
 
 // snapshot is the held rows and whether they are inside the staleness bound.
 func (s *KeyStates) snapshot(now time.Time) ([]KeyStateRow, bool) {
@@ -206,6 +227,9 @@ func (s *KeyStates) override(ctx context.Context, keys []keystore.Key) ([]keysto
 	}
 	applied, err := applyKeyStates(keys, rows)
 	if err != nil {
+		return nil, err
+	}
+	if _, err := s.current(); err != nil {
 		return nil, err
 	}
 	out := append([]keystore.Key(nil), applied...)

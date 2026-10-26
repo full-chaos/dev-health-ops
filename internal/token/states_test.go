@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -767,4 +768,95 @@ func TestKeyStatesDoNotServePastMaxStaleAfterAnInlineWait(t *testing.T) {
 	if err := <-done; !reasonIs(err, ReasonKeyStatesUnavailable) {
 		t.Fatalf("Rows = %v, want %s once the wait left the snapshot past MaxStale", err, ReasonKeyStatesUnavailable)
 	}
+}
+
+// steppedClock answers its first armed call with early and every later call
+// with late, so a test can move the clock between two reads inside one call.
+type steppedClock struct {
+	mu          sync.Mutex
+	base        time.Time
+	armed       bool
+	calls       int
+	early, late time.Duration
+}
+
+func (c *steppedClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.armed {
+		return c.base
+	}
+	c.calls++
+	if c.calls == 1 {
+		return c.base.Add(c.early)
+	}
+	return c.base.Add(c.late)
+}
+
+func (c *steppedClock) arm() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.armed = true
+}
+
+// The cached-snapshot fast path judges the age with the clock at return: a
+// snapshot inside the bound at the start of the call is not served when the
+// clock has left the bound by the return.
+func TestKeyStatesFastPathRechecksTheAgeAtReturn(t *testing.T) {
+	source := &hungStates{rows: []KeyStateRow{{KeyID: "a", State: StateActive}}}
+	clock := &steppedClock{base: time.Unix(0, 0), early: 90 * time.Millisecond, late: 110 * time.Millisecond}
+	states := NewKeyStates(KeyStatesConfig{Source: source, RefreshEvery: time.Hour, MaxStale: 100 * time.Millisecond, Now: clock.Now})
+	if _, err := states.Rows(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	clock.arm()
+	if rows, err := states.Rows(context.Background()); !reasonIs(err, ReasonKeyStatesUnavailable) || rows != nil {
+		t.Fatalf("fast path = %v, %v; want %s once the return-time clock is past MaxStale", rows, err, ReasonKeyStatesUnavailable)
+	}
+}
+
+// slowExitStates honors cancellation but takes a while to return, as a driver
+// unwinding a cancelled query does.
+type slowExitStates struct {
+	exited atomic.Bool
+	rows   []KeyStateRow
+	hang   atomic.Bool
+}
+
+func (h *slowExitStates) KeyStates(ctx context.Context) ([]KeyStateRow, error) {
+	if !h.hang.Load() {
+		return h.rows, nil
+	}
+	<-ctx.Done()
+	time.Sleep(80 * time.Millisecond)
+	h.exited.Store(true)
+	return nil, ctx.Err()
+}
+
+// Close returns only after the read in flight has returned, and is safe to
+// call again and with no read in flight.
+func TestKeyStatesCloseWaitsForTheReadToEnd(t *testing.T) {
+	source := &slowExitStates{rows: []KeyStateRow{{KeyID: "a", State: StateActive}}}
+	clock := &fakeClock{now: time.Unix(0, 0)}
+	states := NewKeyStates(KeyStatesConfig{Source: source, RefreshEvery: 10 * time.Second, MaxStale: JWKSCacheTTL,
+		ReadTimeout: 5 * time.Second, InlineWait: time.Millisecond, Now: clock.Now})
+	states.Close()
+	states = NewKeyStates(KeyStatesConfig{Source: source, RefreshEvery: 10 * time.Second, MaxStale: JWKSCacheTTL,
+		ReadTimeout: 5 * time.Second, InlineWait: time.Millisecond, Now: clock.Now})
+	if _, err := states.Rows(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	source.hang.Store(true)
+	clock.advance(11 * time.Second)
+	if _, err := states.Rows(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if states.idle() {
+		t.Fatal("no read in flight")
+	}
+	states.Close()
+	if !source.exited.Load() {
+		t.Fatal("Close returned while the cancelled read was still running")
+	}
+	states.Close()
 }

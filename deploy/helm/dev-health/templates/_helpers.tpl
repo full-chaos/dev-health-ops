@@ -1150,10 +1150,14 @@ the auth database, that is max_connections minus superuser_reserved_connections
 fails when
   (authService.replicas + surge) x authService.database.maxConns
   + every go-pgbouncer pool (one per (user, database) pair: the transaction
-    pooler counts its own role and each transaction.extraUsers entry, at the
-    transaction poolSize; the two session poolers count one pool each)
+    pooler counts its own role at transaction.poolSize and each
+    transaction.extraUsers entry at its own poolSize, else at the transaction
+    poolSize; the two session poolers count one pool each)
 exceeds it. Poolers count only while goWorkers and goWorkers.pgbouncer are on.
 A static upper bound: a pool holds server connections only while it needs them.
+Named limit: a pooler pod that rolls can run a second pod for a short time
+(each pooler Deployment has replicas 1 and the default surge); that second pod
+opens its own pools, and the check does not count it.
 */}}
 {{- define "dev-health.authConnectionBudget" -}}
 {{- $v := .Values.authService.database.connectionBudget -}}
@@ -1168,8 +1172,12 @@ A static upper bound: a pool holds server connections only while it needs them.
 {{- $pools := 0 -}}
 {{- if and .Values.goWorkers.enabled .Values.goWorkers.pgbouncer.enabled -}}
 {{- $p := .Values.goWorkers.pgbouncer -}}
-{{- $pairs := add1 (len ($p.transaction.extraUsers | default (list))) -}}
-{{- $pools = add (mul (int64 $pairs) (int64 $p.transaction.poolSize)) (add (int64 $p.queueSession.poolSize) (int64 $p.coordinatorSession.poolSize)) -}}
+{{- $txn := int64 $p.transaction.poolSize -}}
+{{- $users := $txn -}}
+{{- range $u := ($p.transaction.extraUsers | default (list)) -}}
+{{- $users = add $users (ternary (int64 $u.poolSize) $txn (hasKey $u "poolSize")) -}}
+{{- end -}}
+{{- $pools = add $users (add (int64 $p.queueSession.poolSize) (int64 $p.coordinatorSession.poolSize)) -}}
 {{- end -}}
 {{- $direct := mul (add (int64 .Values.authService.replicas) (int64 (include "dev-health.authMaxSurge" .))) (int64 (include "dev-health.authMaxConns" .)) -}}
 {{- $used := add $pools $direct -}}

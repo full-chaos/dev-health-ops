@@ -104,12 +104,12 @@ func TestPgbouncerExtraUserPoolSizeIsValidated(t *testing.T) {
 		"string":   `{"role":"r1","passwordKey":"K1","poolSize":"4"}`,
 		"fraction": `{"role":"r1","passwordKey":"K1","poolSize":1.5}`,
 	} {
-		_, out, err := renderAuth(t, authWith(extraUsersJSON(entry)...)...)
+		_, out, err := renderAuth(t, authWith(extraUsersJSON(`{"role":"devhealth_keda_readonly","passwordKey":"RIVER_KEDA_READONLY_PASSWORD"},`+entry)...)...)
 		if err == nil || !strings.Contains(out, "poolSize") {
 			t.Errorf("%s: want a schema refusal naming poolSize: err=%v out=%.300s", name, err, out)
 		}
 	}
-	_, out, err := renderAuth(t, authWith(extraUsersJSON(`{"role":"bad role","passwordKey":"K1","poolSize":2}`)...)...)
+	_, out, err := renderAuth(t, authWith(extraUsersJSON(`{"role":"devhealth_keda_readonly","passwordKey":"RIVER_KEDA_READONLY_PASSWORD"},{"role":"bad role","passwordKey":"K1","poolSize":2}`)...)...)
 	if err == nil || !strings.Contains(out, "transaction.extraUsers") || !strings.Contains(out, "bad role") {
 		t.Errorf("a sized role that cannot be a [users] key must fail naming the entry: err=%v out=%.300s", err, out)
 	}

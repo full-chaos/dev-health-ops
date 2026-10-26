@@ -182,7 +182,8 @@
                     "type": "object",
                     "properties": {
                       "role": { "type": "string", "minLength": 1 },
-                      "passwordKey": { "type": "string", "minLength": 1 }
+                      "passwordKey": { "type": "string", "minLength": 1 },
+                      "poolSize": { "type": "integer", "minimum": 1, "description": "Server connections of this role's pool. Optional: without it the entry takes goWorkers.pgbouncer.transaction.poolSize." }
                     },
                     "required": ["role", "passwordKey"],
                     "additionalProperties": false

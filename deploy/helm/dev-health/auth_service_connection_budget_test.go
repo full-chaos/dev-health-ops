@@ -31,10 +31,21 @@ func TestAuthServiceConnectionBudgetBoundary(t *testing.T) {
 	}
 }
 
-// The chart defaults fit the 97 usable connections of a default PostgreSQL.
+// The chart defaults are sized for the deployment manifest (every group at
+// max_replicas plus a full rolling restart): 16 + 4 + 50 + 14 + 24 = 108,
+// over the 97 usable connections of a default PostgreSQL. The default budget
+// is 0, so the default render passes; opting in at 97 names the excess.
 func TestAuthServiceConnectionBudgetDefaultPostgres(t *testing.T) {
-	if _, out, err := renderAuth(t, authWith("--set", "authService.database.connectionBudget=97")...); err != nil {
-		t.Fatalf("the default pools plus the auth-service must fit 97: %v\n%.500s", err, out)
+	_, out, err := renderAuth(t, authWith("--set", "authService.database.connectionBudget=97")...)
+	if err == nil || !strings.Contains(out, budgetRefusal) || !strings.Contains(out, "108") || !strings.Contains(out, "97") {
+		t.Fatalf("the chart default pools over 97 must fail with the named message: err=%v out=%.500s", err, out)
+	}
+}
+
+// The production values (16 / 36 / 10 and KEDA at 4) fit the 97.
+func TestAuthServiceConnectionBudgetProdShapeFits97(t *testing.T) {
+	if _, out, err := renderAuth(t, budgetWith("97")...); err != nil {
+		t.Fatalf("66 pooler + 24 auth-service = 90 must fit 97: %v\n%.500s", err, out)
 	}
 }
 

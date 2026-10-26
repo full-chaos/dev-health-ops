@@ -83,18 +83,22 @@ With two or more replicas the chart also renders a PodDisruptionBudget with `min
 
 The check counts every client that holds server connections on the auth database, as a static maximum:
 
-`(authService.replicas + 1 surge pod) x authService.database.maxConns` plus every go-pgbouncer pool. PgBouncer sizes a pool per (user, database) pair, so the transaction pooler counts its own role and each `goWorkers.pgbouncer.transaction.extraUsers` entry at `transaction.poolSize`; the queue-session and coordinator-session poolers count one pool each. Poolers count only while `goWorkers.enabled` and `goWorkers.pgbouncer.enabled` are on.
+`(authService.replicas + 1 surge pod) x authService.database.maxConns` plus every go-pgbouncer pool. PgBouncer sizes a pool per (user, database) pair, so the transaction pooler counts its own role at `transaction.poolSize` and each `goWorkers.pgbouncer.transaction.extraUsers` entry at its own `poolSize`, or at `transaction.poolSize` when the entry sets none; the queue-session and coordinator-session poolers count one pool each. Poolers count only while `goWorkers.enabled` and `goWorkers.pgbouncer.enabled` are on.
 
-Production shape (transaction 16, queue-session 36, coordinator-session 10, one extra user for KEDA, two replicas, pool 8):
+A `poolSize` on an `extraUsers` entry is enforced by the pooler: the chart renders a ConfigMap with a PgBouncer `[users]` file (`pool_size` per sized entry) that the transaction pooler loads after its generated config. The default KEDA read-only role has `poolSize: 4`.
 
-| Client | Connections | Source |
-|---|---|---|
-| Transaction pooler, own role | 16 | `goWorkers.pgbouncer.transaction.poolSize` |
-| Transaction pooler, KEDA read-only role | 16 | one `transaction.extraUsers` entry, same pool size |
-| Queue-session pooler | 36 | `goWorkers.pgbouncer.queueSession.poolSize` |
-| Coordinator-session pooler | 10 | `goWorkers.pgbouncer.coordinatorSession.poolSize` |
-| auth-service, 2 replicas + 1 surge pod | 24 | (2 + 1) x `authService.database.maxConns` 8 |
-| Static maximum | 102 | |
-| Usable with PostgreSQL defaults | 97 | `max_connections` 100 minus 3 reserved |
+| Client | Production values | Chart defaults | Source |
+|---|---|---|---|
+| Transaction pooler, own role | 16 | 16 | `goWorkers.pgbouncer.transaction.poolSize` |
+| Transaction pooler, KEDA read-only role | 4 | 4 | the `transaction.extraUsers` entry's `poolSize` |
+| Queue-session pooler | 36 | 50 | `goWorkers.pgbouncer.queueSession.poolSize` |
+| Coordinator-session pooler | 10 | 14 | `goWorkers.pgbouncer.coordinatorSession.poolSize` |
+| auth-service, 2 replicas + 1 surge pod | 24 | 24 | (2 + 1) x `authService.database.maxConns` 8 |
+| Static maximum | 90 | 108 | |
+| Usable with PostgreSQL defaults | 97 | 97 | `max_connections` 100 minus 3 reserved |
 
-This is an upper bound, not a measured count: a pool opens server connections only while it has work. The production values file observes 9 and 3 backends in use on the two transaction pools. With `connectionBudget: 97` this shape fails the render; the budget is there to make that visible before a change adds more, and the chart default (0) leaves every existing render unchanged. The chart default pool sizes (transaction 20, queue-session 50, coordinator-session 14) give a larger maximum than the production shape.
+The production values fit the 97 usable connections. The chart defaults do not, on purpose: the queue-session and coordinator-session defaults (50 and 14) are sized for the deployment manifest, which assumes every worker group at `max_replicas` plus a full rolling restart. Production runs below `max_replicas` and sets its own queue-session pool (36); with `connectionBudget: 97` the chart defaults fail the render with the named message, and the chart default budget (0) leaves every render unchanged.
+
+This is an upper bound, not a measured count: a pool opens server connections only while it has work. The production values file observes 9 and 3 backends in use on the two transaction pools.
+
+Named limit: a pooler pod that rolls can run a second pod for a short time (each pooler Deployment has one replica and the default surge). The second pod opens its own pools and the check does not count it. At the production values one extra pod adds up to 20 (transaction, own role plus KEDA), 36 (queue-session) or 10 (coordinator-session) connections on top of the static maximum; at the chart defaults 20, 50 or 14.

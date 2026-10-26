@@ -118,7 +118,7 @@ spec:
         {{- include "dev-health.componentSelectorLabels" (dict "component" "query-api" "context" $) | nindent 8 }}
     spec:
       {{- include "dev-health.imagePullSecrets" . | nindent 6 }}
-      serviceAccountName: {{ include "dev-health.serviceAccountName" . }}
+      {{- include "dev-health.workloadServiceAccount" (dict "ctx" . "component" "query-api" "cfg" .Values.queryApi.serviceAccount) | nindent 6 }}
       containers:
         - name: query-api
           image: {{ $queryApiImage }}

@@ -108,6 +108,7 @@ spec:
         {{- include "dev-health.componentSelectorLabels" (dict "component" $pooler.component "context" $) | nindent 8 }}
     spec:
       {{- include "dev-health.imagePullSecrets" $ | nindent 6 }}
+      automountServiceAccountToken: false
       # edoburu/pgbouncer runs as postgres (UID/GID 70) and writes its generated
       # pgbouncer.ini and userlist.txt below /etc/pgbouncer at startup. Keep the
       # root filesystem read-only, but give that exact path an fsGroup-owned

@@ -155,7 +155,7 @@ spec:
     spec:
       terminationGracePeriodSeconds: {{ $group.terminationGracePeriodSeconds }}
       {{- include "dev-health.imagePullSecrets" $ | nindent 6 }}
-      serviceAccountName: {{ include "dev-health.serviceAccountName" $ }}
+      {{- include "dev-health.workloadServiceAccount" (dict "ctx" $ "component" (printf "go-%s" $group.name) "cfg" $.Values.goWorkers.serviceAccount) | nindent 6 }}
       securityContext: {runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, seccompProfile: {type: RuntimeDefault}}
       containers:
         - name: {{ $group.name }}

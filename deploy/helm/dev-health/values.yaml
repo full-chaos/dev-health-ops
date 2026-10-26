@@ -12,12 +12,6 @@ webImage:
   tag: ""  # defaults to Chart.appVersion
   pullPolicy: IfNotPresent
 
-# -- Service account
-serviceAccount:
-  create: true
-  name: ""
-  annotations: {}
-
 # =============================================================================
 # Go HTTP api (`dho api`, the dho operator binary)
 # =============================================================================
@@ -36,6 +30,11 @@ legacyIngest:
   sunset: ""
 goApi:
   enabled: false
+  # -- This workload's own ServiceAccount (<fullname>-go-api). automountToken stays
+  #    false until the workload calls the Kubernetes API (workload-token exchange).
+  serviceAccount:
+    annotations: {}
+    automountToken: false
   replicas: 1
   # -- CHAOS-11217: where go-api reads AUTH_SESSION_ISSUE_TOKEN (sessions on only).
   #    Empty secretName = the shared Secret. Set it to a dedicated operator-created
@@ -162,6 +161,11 @@ goApi:
 #   - signingKey.secretName/key: an Ed25519 PKCS#8 PEM private key. The service
 #     refuses any key file with a group or world mode bit (ACP-ADR-02 §3).
 authService:
+  # -- This workload's own ServiceAccount (<fullname>-auth-service). automountToken stays
+  #    false until the workload calls the Kubernetes API (workload-token exchange).
+  serviceAccount:
+    annotations: {}
+    automountToken: false
   # -- The auth cutover phase, a whole number. It is the ONLY key that turns
   #    auth-service on and moves auth routes to it; rollback is phase minus 1.
   #      0  go-api only: no auth-service.
@@ -455,6 +459,11 @@ authService:
 # render-time guard would block exactly the operators managing them correctly.
 queryApi:
   enabled: false
+  # -- This workload's own ServiceAccount (<fullname>-query-api). automountToken stays
+  #    false until the workload calls the Kubernetes API (workload-token exchange).
+  serviceAccount:
+    annotations: {}
+    automountToken: false
   replicas: 1
   # -- RollingUpdate parameters of the Deployment (CHAOS-6647). Empty keeps the
   #    chart's guarantee {maxUnavailable: 0, maxSurge: 1} (never below serving
@@ -610,6 +619,11 @@ queryApi:
 # creates only its own postgresql.credentials.user login.
 goWorkers:
   enabled: true
+  # -- This workload's own ServiceAccount (<fullname>-go-<group>). automountToken stays
+  #    false until the workload calls the Kubernetes API (workload-token exchange).
+  serviceAccount:
+    annotations: {}
+    automountToken: false
   # -- Default RollingUpdate parameters of every group's Deployment (CHAOS-6647);
   #    empty keeps {maxUnavailable: 0, maxSurge: 1}. A group's own
   #    `rollingUpdate` wins. {maxUnavailable: 1, maxSurge: 0} on a single-replica
@@ -959,6 +973,11 @@ goWorkers:
 # =============================================================================
 web:
   enabled: true
+  # -- This workload's own ServiceAccount (<fullname>-web). automountToken stays
+  #    false until the workload calls the Kubernetes API (workload-token exchange).
+  serviceAccount:
+    annotations: {}
+    automountToken: false
   replicas: 2
   port: 3000
   resources:

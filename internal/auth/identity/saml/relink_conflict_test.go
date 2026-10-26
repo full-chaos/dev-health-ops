@@ -18,9 +18,9 @@ func TestProviderAlreadyLinkedIsRefusedAsAnIdentityConflict(t *testing.T) {
 		"ErrRelinkRefused":         identity.ErrRelinkRefused,
 	} {
 		t.Run(name, func(t *testing.T) {
-			mapped := lookupError(err)
+			mapped := LookupError(err)
 			if !errors.Is(mapped, ErrIdentityAmbiguous) {
-				t.Errorf("lookupError(%v) = %v; want ErrIdentityAmbiguous (the refuse path)", err, mapped)
+				t.Errorf("LookupError(%v) = %v; want ErrIdentityAmbiguous (the refuse path)", err, mapped)
 			}
 			rec := httptest.NewRecorder()
 			Handlers{}.writeError(rec, httptest.NewRequest(http.MethodPost, "/acs", nil), mapped)

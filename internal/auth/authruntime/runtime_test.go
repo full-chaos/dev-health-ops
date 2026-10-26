@@ -713,10 +713,10 @@ func TestFlagsOverrideTheEnvironment(t *testing.T) {
 	}
 }
 
-// TestRoutesAreEmptyWithoutTheSessionSecrets is the dormancy assertion at the
-// call site: without the session secrets the service mounts nothing
-// (CHAOS-4881), and with them the four session routes (CHAOS-10228) and
-// go-api's compatibility routes, login too with the lockout key.
+// TestRoutesAreEmptyWithoutTheSessionSecrets is the assertion at the call site:
+// without the session secrets the service mounts only the refresh and logout
+// stubs, and with them the four session routes and go-api's compatibility
+// routes, login too with the lockout key.
 // A route mounted any other way is a deliberate change this test names.
 func TestRoutesAreEmptyWithoutTheSessionSecrets(t *testing.T) {
 	schema, err := authschema.NewValidatedIdentifier("auth")

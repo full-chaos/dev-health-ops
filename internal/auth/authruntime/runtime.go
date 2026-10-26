@@ -84,7 +84,8 @@ const maxInFlightRequests = 64
 // social-login, and login when the lockout key is set too (until then, login
 // answers a 503 stub). Without the session secrets no token is issued: refresh
 // and logout answer the retryable 503 stub, so a go-api that proxies them never
-// meets a 404, and every other path receives the 404 envelope.
+// meets a 404, and every other path receives the 404 envelope, except the
+// well-known routes that are mounted when a token issuer URL is set.
 func sessionRoutes(
 	cfg authconfig.Config, logger *slog.Logger, pool *pgxpool.Pool, schema authschema.ValidatedIdentifier,
 	accessSigner authapi.AccessSigner, limits *authapi.Limits,

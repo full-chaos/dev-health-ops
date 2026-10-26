@@ -1221,6 +1221,40 @@ func checkSocialAnswer(owned bool, status int, body string) (map[string]any, err
 	return decoded, nil
 }
 
+// socialGitHubCalls is what go-api asks the provider on the sign-up path: GET /user only, because the stubbed account has
+// a public e-mail and /user/emails is not asked (oauthprovider.go:192-200); the refusal comes after it (api/session/social.go:77,128-131).
+const socialGitHubCalls = 1
+
+// userAndSessionState is the row counts of every table a sign-up or a session could write, for a before and after.
+func (r *runner) userAndSessionState() string {
+	r.t.Helper()
+	return venueoracle.TableRows(r.t, r.ctx, r.venue.AdminURI(r.t, r.venue.GoDB), `SELECT
+	(SELECT count(*) FROM public.users), (SELECT count(*) FROM public.refresh_tokens), (SELECT count(*) FROM auth.users),
+	(SELECT count(*) FROM auth.principals), (SELECT count(*) FROM auth.refresh_credentials)`)
+}
+
+// checkSocialRefusalEffects is the verdict on a refused social sign-up of the users-owned leg beyond its answer: the user and
+// session tables did not change (the refusal must come before any write), and the provider was asked exactly
+// socialGitHubCalls times, every request matched by the stub.
+func checkSocialRefusalEffects(before, after string, requests []providerstub.Recorded) error {
+	if before != after {
+		return fmt.Errorf("the refused social sign-up changed the user or session rows: before %q, after %q", before, after)
+	}
+	matched := 0
+	for _, recorded := range requests {
+		if !recorded.Matched {
+			return fmt.Errorf("an unmatched request reached the provider stub (%s %s)", recorded.Method, recorded.Path)
+		}
+		if recorded.Provider == "github" {
+			matched++
+		}
+	}
+	if matched != socialGitHubCalls {
+		return fmt.Errorf("the provider stub recorded %d github requests, want exactly %d", matched, socialGitHubCalls)
+	}
+	return nil
+}
+
 // socialRow signs a new user in with a GitHub token the corpus provider stub answers, through the target, and requires
 // that the stub recorded the request. It runs after every row comparison: the user it creates is not in the golden's rows.
 func (r *runner) socialRow() {
@@ -1235,6 +1269,7 @@ func (r *runner) socialRow() {
 	}
 	_ = reset.Body.Close()
 	body := `{"provider": "github", "provider_access_token": "gh-corpus"}`
+	before := r.userAndSessionState()
 	answer := venueoracle.Do(r.t, r.goBase, request("social: github new user through the provider stub", http.MethodPost, "/api/v1/auth/social-login", "", body))
 	decoded, err := checkSocialAnswer(r.usersOwned, answer.Status, answer.Body)
 	if err != nil {
@@ -1255,7 +1290,11 @@ func (r *runner) socialRow() {
 	if err := json.NewDecoder(recorded.Body).Decode(&requests); err != nil {
 		r.t.Fatalf("provider stub requests: %v", err)
 	}
-	if err := providerstub.CheckRecorded(requests, "github", 1); err != nil {
+	if r.usersOwned {
+		if err := checkSocialRefusalEffects(before, r.userAndSessionState(), requests); err != nil {
+			r.t.Error(err)
+		}
+	} else if err := providerstub.CheckRecorded(requests, "github", 1); err != nil {
 		r.t.Error(err)
 	}
 	fmt.Fprintf(&r.receipt, "social: github new user through the provider stub: status %d, stub github requests %d %s\n", answer.Status, len(requests), venueoracle.Mark(r.t != nil && !r.t.Failed()))

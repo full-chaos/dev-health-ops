@@ -12,6 +12,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/usersowned"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/authrows"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/providerstub"
 )
 
 const goldenFile = "testdata/golden/auth-flow-venue-oracle.json"
@@ -162,5 +163,27 @@ func TestGreetingByEmailIsTheOnlyDifferenceItNames(t *testing.T) {
 	}
 	if greetsByEmailOnly(target, target) {
 		t.Error("equal mails need no quirk")
+	}
+}
+
+func TestSocialRefusalEffectsAreNoWriteAndExactlyOneProviderCall(t *testing.T) {
+	user := providerstub.Recorded{Provider: "github", Method: "GET", Path: "/user", Matched: true}
+	state := "1 | 2 | 3 | 4 | 5"
+	for name, c := range map[string]struct {
+		before, after string
+		requests      []providerstub.Recorded
+		ok            bool
+	}{
+		"one call, nothing written":     {state, state, []providerstub.Recorded{user}, true},
+		"a user row written":            {state, "2 | 2 | 3 | 4 | 5", []providerstub.Recorded{user}, false},
+		"a session row written":         {state, "1 | 2 | 3 | 4 | 6", []providerstub.Recorded{user}, false},
+		"no provider call":              {state, state, nil, false},
+		"two provider calls":            {state, state, []providerstub.Recorded{user, user}, false},
+		"an unmatched request":          {state, state, []providerstub.Recorded{user, {Provider: "github", Method: "GET", Path: "/x"}}, false},
+		"another provider's call alone": {state, state, []providerstub.Recorded{{Provider: "gitlab", Matched: true}}, false},
+	} {
+		if err := checkSocialRefusalEffects(c.before, c.after, c.requests); (err == nil) != c.ok {
+			t.Errorf("%s: err = %v, want ok=%v", name, err, c.ok)
+		}
 	}
 }

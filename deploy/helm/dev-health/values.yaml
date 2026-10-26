@@ -833,10 +833,22 @@ goWorkers:
       port: 6433
       poolSize: 50
       maxClientConnections: 128
+      # -- Rolling update of this session pooler Deployment (one replica). Same
+      #    rules as transaction.rollingUpdate: empty renders NO strategy key (the
+      #    Kubernetes default, ONE surge pod) and the connection budget counts
+      #    that pod: poolSize x (1 + maxSurge). maxSurge 0 needs maxUnavailable
+      #    1 or more and makes each roll an outage of the pooler's start time.
+      rollingUpdate: {}
     coordinatorSession:
       port: 6434
       poolSize: 14
       maxClientConnections: 32
+      # -- Rolling update of this session pooler Deployment (one replica). Same
+      #    rules as transaction.rollingUpdate: empty renders NO strategy key (the
+      #    Kubernetes default, ONE surge pod) and the connection budget counts
+      #    that pod: poolSize x (1 + maxSurge). maxSurge 0 needs maxUnavailable
+      #    1 or more and makes each roll an outage of the pooler's start time.
+      rollingUpdate: {}
     resources:
       requests: {cpu: 50m, memory: 64Mi}
       limits: {cpu: 250m, memory: 256Mi}

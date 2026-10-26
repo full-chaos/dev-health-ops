@@ -1,0 +1,4 @@
+# golden-base-sha: 97c204c79a34175b7ecb81240539bd1bf1dd8cb3
+# generated-by: deploy/helm/dev-health/testdata/gen-session-golden.sh 97c204c79a34175b7ecb81240539bd1bf1dd8cb3
+default 51b244537d43078ca7f17f987d53fdcc9b35c8860a0943487a8865a4151a145b
+prod-like 6df3b727bc6dbc58825896be3e32364c3b30b9843790356ebb3c3e00ecca62a4

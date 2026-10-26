@@ -813,7 +813,6 @@ and the other enable flags say. templates/auth-service.yaml includes it once, ou
 {{- if eq (include "dev-health.authOn" (dict "flag" "localLogin" "context" .)) "true" }}
 {{- if not (include "dev-health.validSecretKey" .Values.authService.sessionKeys.loginLockout.secretKey) }}{{- fail "authService.phase >= 3 (login) needs authService.sessionKeys.loginLockout.secretKey to be a Secret key: letters, digits, '-', '_', '.'" }}{{- end }}
 {{- end }}
-{{- if and (ge (int (include "dev-health.authPhase" .)) 4) (hasKey (default dict .Values.authService.migrate) "narrowAfterFlipBack") }}{{- fail "authService.migrate.narrowAfterFlipBack is refused at authService.phase >= 4: a flip-back narrowing is not a phase 4 setting; remove it" }}{{- end }}
 {{- if and (ge (int (include "dev-health.authPhase" .)) 4) (not .Values.goApi.enabled) }}{{- fail (printf "authService.usersOwnedStage=%s needs go-api (goApi.enabled=true): go-api forwards the credential routes and refuses local user writes, and an owned auth-service must never run without it" .Values.authService.usersOwnedStage) }}{{- end }}
 {{- $_ := include "dev-health.authEdDSAIssuer" . }}
 {{- $_ := include "dev-health.authSSOOn" (dict "flag" "oidc" "context" .) }}

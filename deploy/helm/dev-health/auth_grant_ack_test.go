@@ -83,11 +83,11 @@ func TestPhase4RollbackCarriesTheGrantAcknowledgement(t *testing.T) {
 
 	docs = renderPhase(t, 3, "--set", "authService.migrate.acknowledgeGrantNarrowing="+ackDigest)
 	flag := "-ack-grant-narrowing=" + ackDigest
-	if got := jobArgs(t, authDoc(docs, "Job", "a-dev-health-auth-migrate")); !reflect.DeepEqual(got, []string{flag}) {
-		t.Errorf("phase 3 rollback: auth-migrate args = %v, want [%s]", got, flag)
+	if got := jobArgs(t, authDoc(docs, "Job", "a-dev-health-auth-migrate")); !reflect.DeepEqual(got, []string{flag, "-defer-narrowing"}) {
+		t.Errorf("phase 3 rollback: auth-migrate args = %v, want [%s -defer-narrowing] (CHAOS-11581: the flip-back release never narrows)", got, flag)
 	}
-	if got := jobArgs(t, authDoc(docs, "Job", "a-dev-health-auth-grants")); !reflect.DeepEqual(got, []string{"grants", flag}) {
-		t.Errorf("phase 3 rollback: auth-grants args = %v, want [grants %s]", got, flag)
+	if got := jobArgs(t, authDoc(docs, "Job", "a-dev-health-auth-grants")); !reflect.DeepEqual(got, []string{"grants", flag, "-defer-narrowing"}) {
+		t.Errorf("phase 3 rollback: auth-grants args = %v, want [grants %s -defer-narrowing] (CHAOS-11581: the flip-back release never narrows)", got, flag)
 	}
 	for _, target := range []struct{ kind, name string }{
 		{"Deployment", "a-dev-health-auth-service"}, {"Deployment", "a-dev-health-go-api"},

@@ -85,6 +85,12 @@ func walkHasSurrogate(value pyjson.Value) bool {
 // callers scan only a body their decoder already accepted.
 func differential(t testing.TB, doc []byte) {
 	t.Helper()
+	// DecodeBody sniffs a BOM or a NUL byte at the start as UTF-16 or UTF-32,
+	// which encoding/json refuses outright, so no handler reads such a body as
+	// text: it is outside the scanner's contract.
+	if len(doc) > 0 && (doc[0] == 0 || doc[0] == 0xff || doc[0] == 0xfe || doc[0] == 0xef) || len(doc) > 1 && doc[1] == 0 {
+		return
+	}
 	// The reference is the api plane's own reading of the bytes: DecodeBody
 	// (json.loads on bytes, raw surrogate bytes kept) then DecodeString.
 	text, err := pyjson.DecodeBody(doc)

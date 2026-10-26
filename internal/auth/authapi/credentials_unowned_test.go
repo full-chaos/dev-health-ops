@@ -72,3 +72,18 @@ func (c *countingBody) Read(p []byte) (int, error) {
 	c.reads++
 	return c.Reader.Read(p)
 }
+
+func TestUnavailableRetryAnswers503RetryAfterAndReadsNothing(t *testing.T) {
+	body := &countingBody{Reader: strings.NewReader("payload")}
+	rec := httptest.NewRecorder()
+	UnavailableRetry().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/x", body))
+	if rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Retry-After") != "1" {
+		t.Fatalf("status %d Retry-After %q; want 503 and 1", rec.Code, rec.Header().Get("Retry-After"))
+	}
+	if want := `{"detail":{"message":"` + textAuthUnavailable + `"}}`; rec.Body.String() != want {
+		t.Fatalf("body %q; want %q", rec.Body.String(), want)
+	}
+	if rec.Header().Get("Content-Type") != "application/json" || body.reads != 0 {
+		t.Fatalf("content type %q reads %d", rec.Header().Get("Content-Type"), body.reads)
+	}
+}

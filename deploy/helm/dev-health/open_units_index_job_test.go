@@ -26,7 +26,7 @@ func renderedOpenUnitsIndexArgs(t *testing.T, sets ...string) (args []string, en
 }
 
 // The open-units index Job is OFF by default and, ON, runs the build-index verb for open-units as a weight -2 pre-hook, so
-// a failed build fails the release before the migrate Job runs revision 0160.
+// a failed build fails the release before the migrate Job runs revision 0161.
 func TestOpenUnitsIndexJobIsOffByDefaultAndOrderedBeforeTheMigrateJob(t *testing.T) {
 	base := []string{"web.enabled=false"}
 	jobs, _, refusal := renderJobs(t, base...)

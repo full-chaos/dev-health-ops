@@ -1,4 +1,4 @@
--- Revision 0160 (down_revision 0159), written by hand.
+-- Revision 0161 (down_revision 0160), written by hand.
 -- recorded_at is the database clock at the moment a post_sync ledger row is inserted. The materializer rebuilds a
 -- missing post_sync outbox row only for ledger rows recorded inside its window (internal/syncreconciler, postSyncRebuildWindow),
 -- so its candidate scan is bounded by recent runs, not by all history. dispatched_at cannot serve: the finalizer writes
@@ -11,7 +11,7 @@
 -- sync_run_units a plain build here would hold a SHARE lock that stops unit writes, so `dho migrate postgres build-index
 -- open-units` (the chart's migrations.hook.openUnitsIndex Job) builds it CONCURRENTLY first and the statement below then
 -- finds it and does nothing; on a small or fresh table it builds here at once. Its definition is OpenUnitsIndexBody
--- (internal/pgmigrate/indexbuild.go); TestOpenUnitsIndexDefinitionMatchesRevision0160 keeps the two equal.
+-- (internal/pgmigrate/indexbuild.go); TestOpenUnitsIndexDefinitionMatchesRevision0161 keeps the two equal.
 
 ALTER TABLE public.sync_run_post_dispatches ADD COLUMN recorded_at timestamp with time zone NOT NULL DEFAULT '-infinity';
 ALTER TABLE public.sync_run_post_dispatches ALTER COLUMN recorded_at SET DEFAULT now();

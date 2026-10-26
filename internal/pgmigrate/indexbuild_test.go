@@ -47,11 +47,11 @@ func TestFailureStreakIndexDefinitionMatchesRevision0159(t *testing.T) {
 	}
 }
 
-// The Job's open-units definition is contained in revision 0160's statements.
-func TestOpenUnitsIndexDefinitionMatchesRevision0160(t *testing.T) {
+// The Job's open-units definition is contained in revision 0161's statements.
+func TestOpenUnitsIndexDefinitionMatchesRevision0161(t *testing.T) {
 	want := squash("CREATE INDEX IF NOT EXISTS " + pgmigrate.OpenUnitsIndexBody + ";")
-	if got := squash(chainFile(t, "0160").SQL); !strings.Contains(got, want) {
-		t.Fatalf("revision 0160 =\n%s\nwant it to contain\n%s", got, want)
+	if got := squash(chainFile(t, "0161").SQL); !strings.Contains(got, want) {
+		t.Fatalf("revision 0161 =\n%s\nwant it to contain\n%s", got, want)
 	}
 }
 

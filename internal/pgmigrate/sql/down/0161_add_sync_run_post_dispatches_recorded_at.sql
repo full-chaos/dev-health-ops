@@ -1,4 +1,4 @@
--- Revision 0160 downgrade (0160 -> 0159), the reverse of ../0160_add_sync_run_post_dispatches_recorded_at.sql.
+-- Revision 0161 downgrade (0161 -> 0160), the reverse of ../0161_add_sync_run_post_dispatches_recorded_at.sql.
 -- The migrator runs this file and the alembic_version update in one transaction.
 
 DROP INDEX IF EXISTS public.ix_sync_run_units_open_run;

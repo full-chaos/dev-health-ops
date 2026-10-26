@@ -362,7 +362,7 @@ spec:
 {{- /*
 The open-units index Job: `dho migrate postgres build-index open-units` builds
 ix_sync_run_units_open_run CONCURRENTLY, outside the upgrade transaction, so a large sync_run_units keeps taking
-unit writes while the index builds. Revision 0160 (CREATE INDEX IF NOT EXISTS) then finds it and does nothing. OFF by
+unit writes while the index builds. Revision 0161 (CREATE INDEX IF NOT EXISTS) then finds it and does nothing. OFF by
 default: a render with the flag off has no such Job. A failed or partial build (the verb exits non-zero unless the
 index is present and valid) fails the hook, which stops the release before the weight-0 migrate Job runs. Weight -2:
 after the weight -5 ConfigMap and Secret this Job reads, before the migrate Job. Size migrations.hook.openUnitsIndex.
@@ -378,7 +378,7 @@ inside the Job's activeDeadlineSeconds, or Kubernetes kills the pod mid-build an
 {{- end }}
 {{- /*
 With localBundledPostgres the Job runs on pre-upgrade only: the bundled database exists on an upgrade, and a fresh
-install builds the index in revision 0160 on an empty table.
+install builds the index in revision 0161 on an empty table.
 */}}
 ---
 apiVersion: batch/v1

@@ -276,10 +276,10 @@ func TestDropInvalidFailureStreakIndexKeepsAValidIndex(t *testing.T) {
 	}
 }
 
-// Mirrors of the failure-streak cleanup tests for the open-units index (revision 0160), on the migrated schema.
+// Mirrors of the failure-streak cleanup tests for the open-units index (revision 0161), on the migrated schema.
 // When the build fails for good and the blocker clears before the cleanup, the INVALID index the failed build left is dropped.
 func TestBuildOpenUnitsIndexFinalFailureDropsTheInvalidIndex(t *testing.T) {
-	position, _ := chainPosition(t, "0160")
+	position, _ := chainPosition(t, "0161")
 	d := newDownInstance(t)
 	uri := d.at(t, position)
 	release := holdWriter(t, uri)
@@ -305,7 +305,7 @@ func TestBuildOpenUnitsIndexFinalFailureDropsTheInvalidIndex(t *testing.T) {
 // When the blocker outlives the cleanup too, the INVALID index stays, the verb exits non-zero and logs the distinct line;
 // the next run drops it and builds a valid one.
 func TestBuildOpenUnitsIndexFinalFailureUnderHeldLockLeavesIndexForNextRun(t *testing.T) {
-	position, _ := chainPosition(t, "0160")
+	position, _ := chainPosition(t, "0161")
 	d := newDownInstance(t)
 	uri := d.at(t, position)
 	release := holdWriter(t, uri)
@@ -333,7 +333,7 @@ func TestBuildOpenUnitsIndexFinalFailureUnderHeldLockLeavesIndexForNextRun(t *te
 
 // A VALID index is never dropped by the cleanup that follows a final failed build.
 func TestDropInvalidOpenUnitsIndexKeepsAValidIndex(t *testing.T) {
-	_, length := chainPosition(t, "0160")
+	_, length := chainPosition(t, "0161")
 	d := newDownInstance(t)
 	conn := connect(t, d.at(t, length))
 	if _, valid := indexDefinition(t, conn, pgmigrate.OpenUnitsIndexName); !valid {
@@ -346,10 +346,10 @@ func TestDropInvalidOpenUnitsIndexKeepsAValidIndex(t *testing.T) {
 	}
 }
 
-// The open-units verb builds the index before revision 0160, finds it valid on a second run, repairs an INVALID leftover,
-// and revision 0160 then does nothing for it: the database holds the definition a plain walk to the head builds.
-func TestBuildOpenUnitsIndexBeforeRevision0160(t *testing.T) {
-	position, length := chainPosition(t, "0160")
+// The open-units verb builds the index before revision 0161, finds it valid on a second run, repairs an INVALID leftover,
+// and revision 0161 then does nothing for it: the database holds the definition a plain walk to the head builds.
+func TestBuildOpenUnitsIndexBeforeRevision0161(t *testing.T) {
+	position, length := chainPosition(t, "0161")
 	d := newDownInstance(t)
 	headConn := connect(t, d.at(t, length))
 	definitionOf := func(conn *pgx.Conn) (definition string, valid bool) {
@@ -370,7 +370,7 @@ WHERE c.relname = $1 AND c.relnamespace = 'public'::regnamespace`, pgmigrate.Ope
 	conn := connect(t, uri)
 	var present bool
 	if err := conn.QueryRow(context.Background(), "SELECT to_regclass('public.ix_sync_run_units_open_run') IS NOT NULL").Scan(&present); err != nil || present {
-		t.Fatalf("the index exists before revision 0160 (err %v)", err)
+		t.Fatalf("the index exists before revision 0161 (err %v)", err)
 	}
 	for _, step := range []struct{ name, damage, action string }{
 		{"first build", "", "built"},
@@ -402,18 +402,18 @@ WHERE c.relname = $1 AND c.relnamespace = 'public'::regnamespace`, pgmigrate.Ope
 	if err != nil {
 		t.Fatalf("upgrade to the head: %v", err)
 	}
-	if len(applied.Applied) == 0 || applied.Applied[0] != "0160" {
-		t.Fatalf("applied %v, want it to start at 0160", applied.Applied)
+	if len(applied.Applied) == 0 || applied.Applied[0] != "0161" {
+		t.Fatalf("applied %v, want it to start at 0161", applied.Applied)
 	}
 	if got, valid := definitionOf(conn); !valid || got != wantDefinition {
-		t.Fatalf("after revision 0160: index %q valid=%v, want %q", got, valid, wantDefinition)
+		t.Fatalf("after revision 0161: index %q valid=%v, want %q", got, valid, wantDefinition)
 	}
 }
 
 // The two indexes have their own build lock: a held streak lock does not stop an open-units build, and a held open-units lock
 // refuses an open-units run over an index that is not valid.
 func TestBuildOpenUnitsIndexHasItsOwnBuildLock(t *testing.T) {
-	position, _ := chainPosition(t, "0160")
+	position, _ := chainPosition(t, "0161")
 	d := newDownInstance(t)
 	uri := d.at(t, position)
 	holder := connect(t, uri)

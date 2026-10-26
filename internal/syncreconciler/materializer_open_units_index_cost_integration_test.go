@@ -56,7 +56,7 @@ func TestOpenUnitsIndexWriteCostAndOtherPlans(t *testing.T) {
 
 	var indexSize, tableSize int64
 	setOpenUnitsIndex(t, ctx, pool, false)
-	t.Logf("build, plain CREATE INDEX (what a plain 0160 would do under a SHARE lock): %v",
+	t.Logf("build, plain CREATE INDEX (what a plain 0161 would do under a SHARE lock): %v",
 		timeExec(t, ctx, pool, openUnitsIndexDDL))
 	setOpenUnitsIndex(t, ctx, pool, false)
 	t.Logf("build, CREATE INDEX CONCURRENTLY (what the hook does; writes do not wait): %v",

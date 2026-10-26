@@ -14,7 +14,7 @@ import (
 )
 
 // The open-units-index hook Job, RENDERED by helm with the flag on, is executed with its own args and the environment its pod
-// would see, on a database one revision before 0160. It exits 0 and the index ends valid and ready; revision 0160 then
+// would see, on a database one revision before 0161. It exits 0 and the index ends valid and ready; revision 0161 then
 // finds it and does nothing.
 func TestRenderedOpenUnitsIndexHookBuildsAValidIndex(t *testing.T) {
 	ctx := context.Background()
@@ -38,15 +38,15 @@ func TestRenderedOpenUnitsIndexHookBuildsAValidIndex(t *testing.T) {
 	}
 	position := -1
 	for i, file := range chain {
-		if file.Revision == "0160" {
+		if file.Revision == "0161" {
 			position = i
 		}
 	}
 	if position < 0 {
-		t.Fatal("the chain holds no revision 0160")
+		t.Fatal("the chain holds no revision 0161")
 	}
 	if _, err := pgmigrate.Upgrade(ctx, conn, baseline, chain[:position]); err != nil {
-		t.Fatalf("upgrade to the revision before 0160: %v", err)
+		t.Fatalf("upgrade to the revision before 0161: %v", err)
 	}
 
 	args, environment := renderedOpenUnitsIndexArgs(t, "migrations.hook.secretData.MIGRATION_DATABASE_URI="+instance.URI)
@@ -65,7 +65,7 @@ WHERE c.relname = 'ix_sync_run_units_open_run' AND c.relnamespace = 'public'::re
 	}
 	t.Logf("hook stdout: %s", stdout.String())
 	result, err := pgmigrate.Upgrade(ctx, conn, baseline, chain)
-	if err != nil || len(result.Applied) == 0 || result.Applied[0] != "0160" {
+	if err != nil || len(result.Applied) == 0 || result.Applied[0] != "0161" {
 		t.Fatalf("upgrade after the hook: %+v err %v", result, err)
 	}
 }

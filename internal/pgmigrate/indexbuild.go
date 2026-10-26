@@ -27,10 +27,10 @@ WHERE status IN ('success', 'failed')`
 
 // OpenUnitsIndexName is the partial index over the units that are not final. The materializer's dispatch and
 // finalize candidate reads probe sync_run_units once per active run; this index holds only the open units, so each
-// probe reads a small index. Revision 0160 creates it; the build-index verb builds it first without blocking writes.
+// probe reads a small index. Revision 0161 creates it; the build-index verb builds it first without blocking writes.
 const OpenUnitsIndexName = "ix_sync_run_units_open_run"
 
-// OpenUnitsIndexBody is the definition shared by the verb and revision 0160 (TestOpenUnitsIndexDefinitionMatchesRevision0160
+// OpenUnitsIndexBody is the definition shared by the verb and revision 0161 (TestOpenUnitsIndexDefinitionMatchesRevision0161
 // holds the two together). Its predicate is the complement of the materializer's finalize predicate (unit.status NOT IN
 // ('success', 'failed')); the dispatch statuses are a subset of it.
 const OpenUnitsIndexBody = OpenUnitsIndexName + ` ON public.sync_run_units (sync_run_id)
@@ -504,7 +504,7 @@ func buildIndex(ctx context.Context, resolve ResolveDSN, env cli.Env) int {
 		defaultUsage()
 		fmt.Fprint(env.Stderr, "\nUsage: dho migrate postgres build-index failure-streak|open-units\n"+
 			"\nBuilds "+FailureStreakIndexName+" (failure-streak) or "+OpenUnitsIndexName+" (open-units) CONCURRENTLY\n"+
-			"(the upgrade revision that carries it, 0159 or 0160, then finds it and does nothing).\n"+
+			"(the upgrade revision that carries it, 0159 or 0161, then finds it and does nothing).\n"+
 			"Exit 0 only when the index is present and valid.\n"+
 			"A run that finds another run holding the build lock, while the index is not valid, exits non-zero (build_index_lock_held) with no DDL.\n"+
 			"\nEnvironment:\n"+

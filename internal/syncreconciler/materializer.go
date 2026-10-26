@@ -1022,7 +1022,7 @@ RETURNING (sync_dispatch_outbox.sync_run_id IN (SELECT id FROM stale_dispatched)
 `
 
 // postSyncRebuildWindow bounds the post_sync reconstruction to ledger rows recorded recently (recorded_at is the
-// database clock at insert; migration 0160). A ledger row recorded before the window, or before 0160, is not rebuilt.
+// database clock at insert; migration 0161). A ledger row recorded before the window, or before 0161, is not rebuilt.
 const postSyncRebuildWindow = "7 days"
 
 // post_sync is reconstructed only when the once-only finalizer ledger exists and the

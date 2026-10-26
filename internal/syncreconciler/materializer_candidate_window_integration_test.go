@@ -192,7 +192,7 @@ func TestMaterializePostSyncSQLRebuildsOnlyInsideTheWindow(t *testing.T) {
 		{"just-inside-missing", "now() - interval '6 days 23 hours'", false, true},
 		{"just-outside-missing", "now() - interval '7 days 1 hour'", false, false},
 		{"old-missing", "now() - interval '40 days'", false, false},
-		{"pre-0160-missing", "'-infinity'::timestamptz", false, false},
+		{"pre-0161-missing", "'-infinity'::timestamptz", false, false},
 		{"recent-has-outbox", "now() - interval '1 day'", true, false},
 	}
 	wantRebuilt := map[string]bool{}

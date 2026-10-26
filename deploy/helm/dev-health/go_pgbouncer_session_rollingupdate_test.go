@@ -61,11 +61,10 @@ func TestSessionRollingUpdateUnsetRendersByteEqual(t *testing.T) {
 	if len(sha) != 40 {
 		t.Fatalf("golden header has no 40-character base sha: %q", sha)
 	}
-	if _, err := os.Stat("../../../.git"); err != nil {
-		t.Skip("no .git: the golden base sha cannot be checked as an ancestor of HEAD; CI checks out the full history and runs this test there")
-	}
-	if out, err := exec.Command("git", "merge-base", "--is-ancestor", sha, "HEAD").CombinedOutput(); err != nil {
-		t.Fatalf("golden base sha %s is not an ancestor of HEAD (regenerate with testdata/gen-session-golden.sh <main sha>): %v %s", sha, err, out)
+	if skip, err := checkGoldenBase("../../..", sha); skip != "" {
+		t.Skip(skip)
+	} else if err != nil {
+		t.Fatal(err)
 	}
 	for name, args := range map[string][]string{"default": goldenRenderArgs, "prod-like": goldenProdArgs} {
 		out, err := exec.Command("helm", append([]string{"template", "a", "."}, args...)...).CombinedOutput()
@@ -201,5 +200,62 @@ func TestTransactionRollingUpdateMessagesAreByteIdentical(t *testing.T) {
 		if err == nil || !strings.Contains(out, want) {
 			t.Errorf("%s: want exactly %q: err=%v out=%.400s", v, want, err, out)
 		}
+	}
+}
+
+const goldenNoGitSkip = "no .git: the golden base sha cannot be checked as an ancestor of HEAD; the go-quality legs check out full history (fetch-depth 0) and run this test there"
+
+// checkGoldenBase returns a skip message ONLY when repo has no .git at all. A sha
+// missing from the history (a shallow clone) is an error, never a skip.
+func checkGoldenBase(repo, sha string) (skip string, err error) {
+	if _, e := os.Stat(repo + "/.git"); e != nil {
+		return goldenNoGitSkip, nil
+	}
+	if out, e := exec.Command("git", "-C", repo, "cat-file", "-e", sha+"^{commit}").CombinedOutput(); e != nil {
+		return "", fmt.Errorf("golden base %s not in history: run with full history (%v %s)", sha, e, strings.TrimSpace(string(out)))
+	}
+	if out, e := exec.Command("git", "-C", repo, "merge-base", "--is-ancestor", sha, "HEAD").CombinedOutput(); e != nil {
+		return "", fmt.Errorf("golden base sha %s is not an ancestor of HEAD (regenerate with testdata/gen-session-golden.sh <main sha>): %v %s", sha, e, out)
+	}
+	return "", nil
+}
+
+func TestGoldenBaseCheckFailsOnAbsentShaAndNonAncestorAndSkipsOnlyWithoutGit(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not installed")
+	}
+	repo := t.TempDir()
+	git := func(args ...string) string {
+		t.Helper()
+		out, err := exec.Command("git", append([]string{"-C", repo, "-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false"}, args...)...).CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	git("init", "-q", "-b", "main")
+	git("commit", "-q", "--allow-empty", "-m", "base")
+	base := git("rev-parse", "HEAD")
+	git("checkout", "-q", "-b", "side")
+	git("commit", "-q", "--allow-empty", "-m", "side")
+	side := git("rev-parse", "HEAD")
+	git("checkout", "-q", "main")
+	git("commit", "-q", "--allow-empty", "-m", "main2")
+
+	if skip, err := checkGoldenBase(repo, base); skip != "" || err != nil {
+		t.Errorf("an ancestor must pass: skip=%q err=%v", skip, err)
+	}
+	absent := strings.Repeat("ab", 20)
+	skip, err := checkGoldenBase(repo, absent)
+	if skip != "" || err == nil || !strings.HasPrefix(err.Error(), "golden base "+absent+" not in history: run with full history") {
+		t.Errorf("an absent sha must FAIL with the exact message, never skip: skip=%q err=%v", skip, err)
+	}
+	skip, err = checkGoldenBase(repo, side)
+	if skip != "" || err == nil || !strings.HasPrefix(err.Error(), "golden base sha "+side+" is not an ancestor of HEAD") {
+		t.Errorf("a present non-ancestor sha must FAIL: skip=%q err=%v", skip, err)
+	}
+	skip, err = checkGoldenBase(t.TempDir(), base)
+	if skip != goldenNoGitSkip || err != nil {
+		t.Errorf("no .git must skip with the named message: skip=%q err=%v", skip, err)
 	}
 }

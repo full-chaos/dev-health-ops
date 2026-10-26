@@ -187,6 +187,8 @@
                     "maxSurge": { "type": "integer", "minimum": 0, "maximum": 10 },
                     "maxUnavailable": { "type": "integer", "minimum": 0, "maximum": 10 }
                   },
+                  "if": { "properties": { "maxSurge": { "const": 0 } }, "required": ["maxSurge"] },
+                  "then": { "properties": { "maxUnavailable": { "minimum": 1 } }, "required": ["maxUnavailable"] },
                   "additionalProperties": false
                 },
                 "extraUsers": {

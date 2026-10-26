@@ -835,7 +835,8 @@ func buildSchedulerLoopWithSources(
 	loop, err := sources.newLoop(
 		repository,
 		coordinator,
-		schedulersync.DefaultLoopConfig(registry).WithOccurrences(occurrences).WithLogger(logger),
+		schedulersync.DefaultLoopConfig(registry).WithOccurrences(occurrences).WithLogger(logger).
+			WithStartupRetryBudget(cfg.PreclaimReadinessTimeout),
 	)
 	if err != nil || loop == nil {
 		return nil, dependencyUnavailable("scheduler_sync_loop_construction_failed")

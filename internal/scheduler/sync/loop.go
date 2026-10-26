@@ -14,6 +14,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/tracing"
+	"github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	"go.opentelemetry.io/otel/attribute"
 )
 
@@ -63,6 +64,16 @@ type LoopConfig struct {
 	// nothing at all, mirroring the literal sibling scheduler/fixed.Loop's
 	// CHAOS-3903 fix -- see that package's LoopConfig.Logger.
 	Logger *slog.Logger
+	// StartupRetryBudget bounds how long the first handoff window retries while
+	// its database is transiently unreachable (refused, reset, dropped dial).
+	// Zero disables the retry; any other failure still ends Start at once.
+	StartupRetryBudget time.Duration
+}
+
+// WithStartupRetryBudget returns the config bound to a startup retry budget.
+func (config LoopConfig) WithStartupRetryBudget(budget time.Duration) LoopConfig {
+	config.StartupRetryBudget = budget
+	return config
 }
 
 // WithLogger returns the config bound to a diagnostic logger.
@@ -128,6 +139,9 @@ type Loop struct {
 	coordinator Coordinator
 	config      LoopConfig
 	clock       loopClock
+	// sleep and jitter are replaced by tests; nil uses the real wait.
+	sleep  func(context.Context, time.Duration)
+	jitter func(time.Duration) time.Duration
 
 	ready atomic.Bool
 
@@ -176,7 +190,10 @@ func newLoop(stepper HandoffStepper, coordinator Coordinator, config LoopConfig,
 	if stepper == nil || coordinator == nil || clock == nil || config.validate() != nil {
 		return nil, ErrInvalidTransactionRequest
 	}
-	loop := &Loop{stepper: stepper, coordinator: coordinator, config: config, clock: clock}
+	loop := &Loop{
+		stepper: stepper, coordinator: coordinator, config: config, clock: clock,
+		jitter: postgres.DialRetryJitter,
+	}
 	if err := config.Registry.RegisterRequired("scheduler_loop", loop.readiness); err != nil {
 		return nil, fmt.Errorf("register scheduler loop readiness: %w", err)
 	}
@@ -211,9 +228,31 @@ func (loop *Loop) Start(ctx context.Context) error {
 	loop.started, loop.cancel, loop.done = true, cancel, done
 	loop.mu.Unlock()
 
-	if err := loop.step(loopCtx, loop.clock.Now()); err != nil {
+	err := postgres.DialRetry{
+		Budget: loop.config.StartupRetryBudget,
+		Now:    loop.clock.Now,
+		Sleep:  loop.sleep,
+		Jitter: loop.jitter,
+		OnRetry: func(attempt int, elapsed, wait time.Duration) {
+			loop.setFailed()
+			loop.logger().WarnContext(ctx, "sync scheduler initial handoff unreachable, retrying",
+				"cause", health.CauseUnreachable,
+				"attempt", attempt,
+				"elapsed", elapsed.String(),
+				"retry_in", wait.String(),
+			)
+		},
+	}.Do(loopCtx, func(stepCtx context.Context) error {
+		return loop.step(stepCtx, loop.clock.Now())
+	})
+	if err != nil {
 		loop.setFailed()
-		loop.logger().ErrorContext(ctx, "sync scheduler initial handoff failed", "error", err.Error())
+		if postgres.IsTransientDialError(err) {
+			loop.logger().ErrorContext(ctx, "sync scheduler initial handoff failed",
+				"cause", health.CauseUnreachable)
+		} else {
+			loop.logger().ErrorContext(ctx, "sync scheduler initial handoff failed", "error", err.Error())
+		}
 		cancel()
 		close(done)
 		return fmt.Errorf("initial scheduler handoff: %w", err)

@@ -130,6 +130,8 @@ type Principal struct {
 	IsVerified   bool
 	AuthProvider *string
 	DisabledAt   *time.Time
+	// ServiceProvider is set by IdentityBySubject when the principal's public.users row is of the service provider.
+	ServiceProvider bool
 	// FullName is public.users.full_name, or auth.principals.display_name once auth owns users; "" and nil both mean none.
 	FullName *string
 }

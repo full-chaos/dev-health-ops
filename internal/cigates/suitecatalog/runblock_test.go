@@ -20,7 +20,7 @@ import (
 // column and refuses a "none" row whose text it sees running a catalogued or go test command. The verdict is the table.
 // The CI check never writes; `go test ./internal/cigates/suitecatalog -run TestRunBlockLockUpdate -update` regenerates it.
 
-var updateLock = flag.Bool("update", false, "rewrite ci/run_block_lock.tsv from the tree (new rows get an empty reason a reviewer must fill)")
+var updateLock = flag.Bool("update", false, "rewrite ci/run_block_lock.tsv from the tree (a new row gets empty suites and reason; CI fails until a reviewer fills both)")
 
 var lockColumns = []string{"file", "job", "step", "shell", "sha256", "suites", "reason"}
 
@@ -284,6 +284,17 @@ func lockViolations(t *testing.T, root string, catalog []row) []string {
 			}
 		}
 	}
+	named := map[string]bool{}
+	for _, r := range rows {
+		for _, id := range strings.Split(r.suites, ",") {
+			named[id] = true
+		}
+	}
+	for _, c := range catalog {
+		if c["mode"] == "ci" && !named[c["suite"]] {
+			bad = append(bad, fmt.Sprintf("catalog suite %q is named by no lock row", c["suite"]))
+		}
+	}
 	for _, r := range rows {
 		if !used[r.key()] {
 			bad = append(bad, fmt.Sprintf("stale row: %s job %s step %q matches no run step", r.file, r.job, r.step))
@@ -292,18 +303,9 @@ func lockViolations(t *testing.T, root string, catalog []row) []string {
 	return bad
 }
 
-func TestRunBlockLockUpdate(t *testing.T) {
-	if !*updateLock {
-		t.Skip("run with -update to rewrite " + lockPath)
-	}
-	root := repoRoot(t)
-	catalog, _ := readCatalog(root)
-	byCommand := map[string]string{}
-	for _, r := range catalog {
-		byCommand[r["command"]] = r["suite"]
-	}
-	steps, _ := scanSteps(t, root)
-	old, _ := readLock(root)
+// renderLock writes the table for the scanned steps: an existing row keeps its suites and reason (only shell and sha
+// move); a new step gets EMPTY suites and reason, so the check fails until a reviewer fills both.
+func renderLock(steps []runStep, old []lockRow) string {
 	prev := map[string]lockRow{}
 	for _, r := range old {
 		prev[r.key()] = r
@@ -311,18 +313,35 @@ func TestRunBlockLockUpdate(t *testing.T) {
 	var b strings.Builder
 	b.WriteString("# CHAOS-11422: the run-block lock. Every run step of every workflow and action file has one reviewed row.\n")
 	b.WriteString("# sha256 = of the run text with trailing white space stripped and one final newline. suites = catalog suite ids or none.\n")
-	b.WriteString("# Regenerate the shas with: go test ./internal/cigates/suitecatalog -run TestRunBlockLockUpdate -update. A new row has an empty reason a reviewer must fill.\n")
+	b.WriteString("# Regenerate the shas with: go test ./internal/cigates/suitecatalog -run TestRunBlockLockUpdate -update. A new row has empty suites and reason a reviewer must fill.\n")
 	b.WriteString(strings.Join(lockColumns, "\t") + "\n")
 	for _, s := range steps {
-		suites, reason := "none", ""
-		if p, ok := prev[s.file+"\t"+s.job+"\t"+s.step]; ok {
-			suites, reason = p.suites, p.reason
-		} else if ids, _ := detectedSuites(s.text, byCommand); len(ids) > 0 {
-			suites = strings.Join(ids, ",")
-		}
-		b.WriteString(strings.Join([]string{s.file, s.job, s.step, s.shell, s.sha, suites, reason}, "\t") + "\n")
+		p := prev[s.file+"\t"+s.job+"\t"+s.step]
+		b.WriteString(strings.Join([]string{s.file, s.job, s.step, s.shell, s.sha, p.suites, p.reason}, "\t") + "\n")
 	}
-	if err := os.WriteFile(filepath.Join(root, lockPath), []byte(b.String()), 0o644); err != nil {
+	return b.String()
+}
+
+func TestRunBlockLockUpdate(t *testing.T) {
+	if !*updateLock {
+		t.Skip("run with -update to rewrite " + lockPath)
+	}
+	root := repoRoot(t)
+	steps, _ := scanSteps(t, root)
+	old, _ := readLock(root)
+	if err := os.WriteFile(filepath.Join(root, lockPath), []byte(renderLock(steps, old)), 0o644); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestRenderLockLeavesANewStepEmpty(t *testing.T) {
+	steps := []runStep{{"a.yml", "j", "#1 old", "default", "s1", "x"}, {"a.yml", "j", "#2 new", "default", "s2", "y"}}
+	old := []lockRow{{"a.yml", "j", "#1 old", "default", "stale", "suite-a", "kept"}}
+	got := renderLock(steps, old)
+	if !strings.Contains(got, "a.yml\tj\t#1 old\tdefault\ts1\tsuite-a\tkept\n") {
+		t.Fatalf("a known row must keep suites and reason and take the new sha:\n%s", got)
+	}
+	if !strings.Contains(got, "a.yml\tj\t#2 new\tdefault\ts2\t\t\n") {
+		t.Fatalf("a new step must get empty suites and reason:\n%s", got)
 	}
 }

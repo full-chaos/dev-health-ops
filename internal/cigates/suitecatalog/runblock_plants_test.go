@@ -58,6 +58,7 @@ func TestEveryHiddenRunTextBreaksTheLock(t *testing.T) {
 		"double space":         `go  test ./x`,
 		"go -C":                `go -C internal test ./x`,
 		"bash -c literal":      `bash -c 'go test ./x'`,
+		"copied binary":        "cp \"$(command -v go)\" \"${RUNNER_TEMP}/cigate-base\"\n\"${RUNNER_TEMP}/cigate-base\" test ./x",
 		"plain variable":       `$RUNNER test ./x`,
 		"command substitution": `$(echo go) test ./x`,
 		"eval":                 `eval "$CMD"`,
@@ -199,6 +200,28 @@ func TestRunBlockLockPlants(t *testing.T) {
 			return strings.Join(lines, "\n")
 		})
 		wantViolation(t, root, "sha256 mismatch")
+	})
+	t.Run("a reorder that changes step indexes fails as stale and missing", func(t *testing.T) {
+		root := plantTree(t)
+		edit(t, filepath.Join(root, ".github/workflows/go-quality.yml"), func(s string) string {
+			a := "      - name: Test the session-issue Secret create script\n"
+			b := "      - name: Test the auth key-set Secret script\n"
+			i, j := strings.Index(s, a), strings.Index(s, b)
+			if i < 0 || j < i {
+				t.Fatal("steps not found in order")
+			}
+			end := strings.Index(s[j:], "\n      - name: Validate River")
+			return s[:i] + s[j:j+end+1] + s[i:j] + s[j+end+1:]
+		})
+		wantViolation(t, root, "run step has no row")
+		wantViolation(t, root, "stale row")
+	})
+	t.Run("a catalog suite named by no row is refused", func(t *testing.T) {
+		root := plantTree(t)
+		edit(t, filepath.Join(root, lockPath), func(s string) string {
+			return strings.ReplaceAll(s, "river-frozen-evidence", "none")
+		})
+		wantViolation(t, root, `catalog suite "river-frozen-evidence" is named by no lock row`)
 	})
 	t.Run("a trailing whitespace change keeps the lock green", func(t *testing.T) {
 		root := plantTree(t)

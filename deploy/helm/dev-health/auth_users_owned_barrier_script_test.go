@@ -2,12 +2,14 @@ package devhealth_test
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 )
 
 const barrierScript = "../../scripts/auth-users-owned-barrier.sh"
@@ -15,7 +17,8 @@ const barrierScript = "../../scripts/auth-users-owned-barrier.sh"
 // fakeBarrierKubectl records argv and answers `get <resource> -l ...component=<c>` from $FAKE_DIR/<resource>.<c>
 // (component "all" when the selector has none). FAKE_FAIL=<resource>.<c> makes that one call exit 1.
 const fakeBarrierKubectl = `#!/usr/bin/env bash
-printf '%s\n' "$*" >>"${FAKE_DIR}/argv"
+ALL="$*"
+printf '%s\n' "$ALL" >>"${FAKE_DIR}/argv"
 res=""; sel=""
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -27,6 +30,11 @@ done
 comp=all
 case "$sel" in *component=*) comp="${sel##*component=}" ;; esac
 key="${res}.${comp}"
+if [ "${FAKE_HANG:-}" = "$key" ]; then
+  # a hung API call: a real kubectl gives up after --request-timeout, and waits for ever without it
+  case "$ALL" in *--request-timeout=*) sleep 1; exit 1 ;; esac
+  sleep 30
+fi
 [ "${FAKE_FAIL:-}" = "$key" ] && exit 1
 [ -f "${FAKE_DIR}/${key}" ] && cat "${FAKE_DIR}/${key}"
 exit 0
@@ -52,6 +60,13 @@ type barrierRun struct {
 
 func runBarrier(t *testing.T, world map[string]string, env []string, args ...string) barrierRun {
 	t.Helper()
+	return runBarrierWithin(t, 60*time.Second, world, env, args...)
+}
+
+func runBarrierWithin(t *testing.T, limit time.Duration, world map[string]string, env []string, args ...string) barrierRun {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), limit)
+	defer cancel()
 	dir, bin := t.TempDir(), t.TempDir()
 	for name, text := range world {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(text), 0o600); err != nil {
@@ -61,11 +76,12 @@ func runBarrier(t *testing.T, world map[string]string, env []string, args ...str
 	if err := os.WriteFile(filepath.Join(bin, "kubectl"), []byte(fakeBarrierKubectl), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command("bash", append([]string{barrierScript}, args...)...)
+	cmd := exec.CommandContext(ctx, "bash", append([]string{barrierScript}, args...)...)
 	cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"), "FAKE_DIR="+dir, "RELEASE=a")
 	cmd.Env = append(cmd.Env, env...)
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
+	cmd.WaitDelay = 2 * time.Second
 	err := cmd.Run()
 	rc := 0
 	if err != nil {
@@ -167,12 +183,38 @@ func TestBarrierCallsOnlyKubectlGetJSONPath(t *testing.T) {
 			t.Fatalf("%s: kubectl called %d times", mode, len(lines))
 		}
 		for _, line := range lines {
-			if !regexp.MustCompile(`^-n dev-health get (deploy|rs|pods) -l app\.kubernetes\.io/instance=a\S* -o jsonpath=`).MatchString(line) {
+			if !regexp.MustCompile(`^-n dev-health --request-timeout=30s get (deploy|rs|pods) -l app\.kubernetes\.io/instance=a\S* -o jsonpath=`).MatchString(line) {
 				t.Errorf("%s: kubectl call outside the read-only shape: %s", mode, line)
 			}
 			if regexp.MustCompile(`\b(secret|secrets|exec|describe|apply|patch|replace|delete|logs|env)\b`).MatchString(strings.SplitN(line, "-o jsonpath=", 2)[0]) {
 				t.Errorf("%s: forbidden word in %s", mode, line)
 			}
+		}
+	}
+}
+
+// Every kubectl call carries --request-timeout=30s, so a hung API call ends the run instead of holding it.
+func TestBarrierEveryKubectlCallHasARequestTimeout(t *testing.T) {
+	for _, mode := range []string{"up-go-api", "up-owned", "down-auth"} {
+		r := runBarrier(t, goodBarrierWorld(), nil, mode)
+		for _, line := range strings.Split(strings.TrimSpace(r.argv), "\n") {
+			if !strings.Contains(line, " --request-timeout=30s ") {
+				t.Errorf("%s: kubectl call without --request-timeout=30s: %s", mode, line)
+			}
+		}
+	}
+}
+
+// A hung kubectl call fails closed within the request timeout: non-zero exit, no barrier_ok, and not a deadline kill.
+func TestBarrierFailsClosedWhenKubectlHangs(t *testing.T) {
+	for _, key := range []string{"deploy.go-api", "rs.go-api", "pods.go-api", "pods.all"} {
+		start := time.Now()
+		r := runBarrierWithin(t, 15*time.Second, goodBarrierWorld(), []string{"FAKE_HANG=" + key}, "up-go-api")
+		if time.Since(start) >= 14*time.Second {
+			t.Errorf("kubectl %s hung: the run was held to the test deadline (no --request-timeout)", key)
+		}
+		if r.rc == 0 || strings.Contains(r.stdout, "barrier_ok") {
+			t.Errorf("kubectl %s hanging passed: rc=%d", key, r.rc)
 		}
 	}
 }

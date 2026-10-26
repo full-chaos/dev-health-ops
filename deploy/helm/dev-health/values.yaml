@@ -178,8 +178,9 @@ authService:
   #      5  orgs owned: AUTH_ORGS_OWNED too. Meaning (D6358): auth-service writes
   #         the existing public organizations and memberships tables.
   #    Phase 5 is refused at render: orgs owned needs its own public-table writer
-  #    leaf. Phase 4 renders; rollback is phase minus 1 (4 -> 3) in one helm
-  #    upgrade. The chart refuses the keys this replaces (goApi.authProxy,
+  #    leaf. Phase 4 renders. Rollback from phase 4 is NOT one upgrade: stage goApi,
+  #    then deploy/scripts/auth-users-owned-barrier.sh down-auth, then phase 3 (runbook
+  #    docs/operate/runbooks/auth-users-owned-flip-and-rollback.md). The chart refuses the keys this replaces (goApi.authProxy,
   #    authService.enabled, authService.usersOwned, authService.orgsOwned).
   phase: 0
   # -- Phase 4 only (CHAOS-11606), required there and refused elsewhere: the roll order of users owned.

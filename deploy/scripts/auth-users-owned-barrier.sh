@@ -34,12 +34,13 @@ FAILS=0
 fail() { printf 'barrier check failed: %s\n' "$1" >&2; FAILS=$((FAILS + 1)); }
 
 # kget COMPONENT RESOURCE JSONPATH: the jsonpath result lands in KOUT ("" for no match); a kubectl error stops the run.
+# Every call has --request-timeout=30s: a hung API call ends in a kubectl error, which dies here (fails closed).
 # It is never called inside $(...): die must exit the main shell, or a kubectl failure would read as an empty answer.
 KOUT=""
 kget() {
   local selector="app.kubernetes.io/instance=${RELEASE}"
   [ "$1" = all ] || selector="${selector},app.kubernetes.io/component=$1"
-  KOUT="$(kubectl -n "$NAMESPACE" get "$2" -l "$selector" -o "jsonpath=$3")" || die "kubectl get $2 ($1) failed"
+  KOUT="$(kubectl -n "$NAMESPACE" --request-timeout=30s get "$2" -l "$selector" -o "jsonpath=$3")" || die "kubectl get $2 ($1) failed"
 }
 
 deployment_settled() { # COMPONENT

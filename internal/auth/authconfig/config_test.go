@@ -567,3 +567,23 @@ func TestPublicAdmissionDefaultsAndRanges(t *testing.T) {
 		}
 	}
 }
+
+// A value beyond the range of an int on any platform is refused with the
+// range message, not wrapped into an in-range one (4294967297 wraps to 1).
+func TestPublicAdmissionRefusesAValueBeyondIntRange(t *testing.T) {
+	for _, env := range []string{EnvPublicMaxInFlight, EnvPublicRateLimitBurst} {
+		for _, value := range []string{"4294967297", "2147483648", "9223372036854775808", "-2147483649"} {
+			e := baseEnv()
+			e[env] = value
+			_, err := Load(Spec{LookupEnv: lookupFrom(e)})
+			if err == nil || !strings.Contains(err.Error(), "must be between") {
+				t.Errorf("%s=%s: error = %v, want a range refusal", env, value, err)
+			}
+		}
+	}
+	e := baseEnv()
+	e[EnvPublicMaxInFlight] = "1.5"
+	if _, err := Load(Spec{LookupEnv: lookupFrom(e)}); err == nil || !strings.Contains(err.Error(), "must be an integer") {
+		t.Errorf("1.5: error = %v, want an integer refusal", err)
+	}
+}

@@ -27,6 +27,7 @@ package authconfig
 
 import (
 	"encoding/base64"
+	"errors"
 	"fmt"
 	envsecrets "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"log/slog"
@@ -398,25 +399,21 @@ func Load(spec Spec) (Config, error) {
 		return Config{}, err
 	}
 	cfg.RateLimit.Burst = int(burst)
-	publicInFlight, err := integer(
-		lookup, EnvPublicMaxInFlight, int64(defaultPublicMaxInFlight), minPublicMaxInFlight, maxPublicMaxInFlight,
-	)
-	if err != nil {
+	if cfg.Public.MaxInFlight, err = smallInteger(
+		lookup, EnvPublicMaxInFlight, defaultPublicMaxInFlight, minPublicMaxInFlight, maxPublicMaxInFlight,
+	); err != nil {
 		return Config{}, err
 	}
-	cfg.Public.MaxInFlight = int(publicInFlight)
 	if cfg.Public.PerSecond, err = float(
 		lookup, EnvPublicRateLimit, defaultPublicRateLimit, minRateLimitPerSecond, maxRateLimitPerSecond,
 	); err != nil {
 		return Config{}, err
 	}
-	publicBurst, err := integer(
-		lookup, EnvPublicRateLimitBurst, int64(defaultPublicRateLimitBurst), minRateLimitBurst, maxRateLimitBurst,
-	)
-	if err != nil {
+	if cfg.Public.Burst, err = smallInteger(
+		lookup, EnvPublicRateLimitBurst, defaultPublicRateLimitBurst, minRateLimitBurst, maxRateLimitBurst,
+	); err != nil {
 		return Config{}, err
 	}
-	cfg.Public.Burst = int(publicBurst)
 
 	// secrets.Resolve is the platform's direct-value/_FILE mutual exclusion
 	// (TRD §6, ACP-ADR-02 §4). It is reused rather than reimplemented so this
@@ -847,6 +844,28 @@ func integer(lookup secrets.LookupEnv, key string, fallback, low, high int64) (i
 		return 0, fmt.Errorf("%s must be between %d and %d", key, low, high)
 	}
 	return value, nil
+}
+
+// smallInteger is integer for a setting held as an int: the value is parsed at
+// 32 bits, so it can never wrap on the way into the int, and then range
+// checked like integer's.
+func smallInteger(lookup secrets.LookupEnv, key string, fallback, low, high int) (int, error) {
+	raw := strings.TrimSpace(valueOf(lookup, key))
+	if raw == "" {
+		return fallback, nil
+	}
+	value, err := strconv.ParseInt(raw, 10, 32)
+	if err != nil {
+		var numErr *strconv.NumError
+		if errors.As(err, &numErr) && errors.Is(numErr.Err, strconv.ErrRange) {
+			return 0, fmt.Errorf("%s must be between %d and %d", key, low, high)
+		}
+		return 0, fmt.Errorf("%s must be an integer", key)
+	}
+	if int(value) < low || int(value) > high {
+		return 0, fmt.Errorf("%s must be between %d and %d", key, low, high)
+	}
+	return int(value), nil
 }
 
 func float(lookup secrets.LookupEnv, key string, fallback, low, high float64) (float64, error) {

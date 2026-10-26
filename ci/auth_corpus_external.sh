@@ -184,6 +184,9 @@ KEPT_ON_GO_API=()
 ROUTES="${SCRIPT_DIR}/auth_corpus_acp_routes.tsv"
 # Script-internal, never read from the caller's environment: only a step that owns the users sets it to 1 (step 1e, owned_flip).
 USERS_OWNED=0
+# Script-internal too: it follows this script's own key choice (the no-keys leg leaves the keys out), never the caller env.
+SESSIONS_KEYED=1
+[ -z "${AUTH_CORPUS_OMIT_AUTH_KEYS:-}" ] || SESSIONS_KEYED=0
 
 hostport() {
   local port
@@ -237,6 +240,12 @@ probe() {
 # gate_owned AGGREGATE narrows PROBED for an aggregate auth-service mounts before it owns it: auth-service answers its
 # routes with a 503 stub until then, so go-api must keep them. Once USERS_OWNED=1 the aggregate must be served.
 gate_owned() {
+  # Without the session keys auth-service answers refresh and logout from a 503 stub that also answers OPTIONS 405.
+  if [ "$1" = sessions ] && [ "${SESSIONS_KEYED}" = 0 ] && [ "${PROBED}" = served ]; then
+    PROBED="not keyed"
+    printf 'probe sessions: mounted, not keyed: a stub, not served\n'
+    return 0
+  fi
   local owned_gated=(credentials social)
   [[ " ${owned_gated[*]} " == *" $1 "* ]] || return 0
   # The forced non-vacuity run forwards social without the posture.

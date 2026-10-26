@@ -269,8 +269,6 @@ type runner struct {
 	// for an existing address: it queues an account-exists mail the Python
 	// plane never sent.
 	notices int
-	// greetings counts the mails the owned leg's declared difference "greeting by e-mail" covered.
-	greetings int
 	// divergencesFired counts, by step, the declared step differences of ownedStepDivergences that covered an answer.
 	divergencesFired map[string]int
 	// registers is set when the current batch carried a sign-up, a resend or a forgot request: the Go plane
@@ -476,10 +474,6 @@ func (r *runner) compareMail(label string) {
 	for index := 0; same && index < len(py); index++ {
 		a, b := py[index], gv[index]
 		a.token, b.token = "", ""
-		if a != b && r.usersOwned && r.forwarded.Has(authrows.Credentials) && greetsByEmailOnly(a, b) {
-			r.greetings++
-			continue
-		}
 		same = a == b
 	}
 	fmt.Fprintf(&r.receipt, "%-70s python=%d go=%d %s\n", label+": e-mails", len(py), len(gv), venueoracle.Mark(same))
@@ -506,46 +500,6 @@ func linkMailRows(mails []sentMail, declared string) []string {
 		rows = append(rows, authrows.LinkMailRow(mail.subject, format))
 	}
 	return rows
-}
-
-// greetsByEmailOnly is the declared difference "greeting by e-mail" of the users-owned leg (CHAOS-11504):
-// auth-service's resend and forgot mails greet the user by e-mail address where the golden greets by full name. It
-// holds only when the two mails are otherwise the same, apart from the encoding a non-ASCII name needs.
-func greetsByEmailOnly(python, target sentMail) bool {
-	pyName, pyOK := greetingName(python.html)
-	goName, goOK := greetingName(target.html)
-	if !pyOK || !goOK || goName != strings.Trim(target.to, "<>") || pyName == goName {
-		return false
-	}
-	asciiName := true
-	for _, character := range pyName {
-		asciiName = asciiName && character < 0x80
-	}
-	if python.partType != target.partType && (asciiName || !strings.Contains(python.partType, "base64") || !strings.Contains(target.partType, "7bit")) {
-		return false
-	}
-	// The golden's base64 body decodes to LF and auth-service's 7bit body keeps CRLF: across encodings the line endings are
-	// the encoding's, not the content's. With one encoding a CRLF difference stays a difference.
-	if python.partType != target.partType {
-		python.html, target.html = strings.ReplaceAll(python.html, "\r\n", "\n"), strings.ReplaceAll(target.html, "\r\n", "\n")
-	}
-	python.partType, target.partType = "", ""
-	python.token, target.token = "", ""
-	python.html, target.html = greetingPattern.ReplaceAllString(python.html, "<p>Hi NAME,</p>"), greetingPattern.ReplaceAllString(target.html, "<p>Hi NAME,</p>")
-	return python == target
-}
-
-// greetingMails is the mails of the scenario whose greeting by e-mail the owned leg declares: alice's reset mail.
-const greetingMails = 1
-
-var greetingPattern = regexp.MustCompile(`<p>Hi ([^<]*),</p>`)
-
-func greetingName(html string) (string, bool) {
-	match := greetingPattern.FindStringSubmatch(html)
-	if match == nil {
-		return "", false
-	}
-	return match[1], true
 }
 
 // describeMails is the mails for a failure message: the link token of each is a credential and never printed.
@@ -1069,9 +1023,6 @@ func TestAuthFlowVenueOracle(t *testing.T) {
 		for _, problem := range divergenceVerdict(ownedStepDivergences, r.divergencesFired) {
 			t.Error(problem)
 		}
-	}
-	if r.usersOwned && r.forwarded.Has(authrows.Credentials) && r.greetings != greetingMails {
-		t.Errorf("greeting by e-mail (CHAOS-11504): covered %d mails, the scenario holds exactly %d", r.greetings, greetingMails)
 	}
 	if r.forwarded.Any() {
 		for _, problem := range r.ledger.Dead() {

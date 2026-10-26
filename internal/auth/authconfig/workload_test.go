@@ -40,7 +40,7 @@ func TestTheWorkloadExchangeIsOffByDefault(t *testing.T) {
 }
 
 func TestTheWorkloadExchangeLoadsEverySetting(t *testing.T) {
-	for _, origin := range []string{"https://kubernetes.default.svc/", "https://kubernetes.default.svc:443", "https://10.43.0.1:6443"} {
+	for _, origin := range []string{"https://kubernetes.default.svc/", "https://kubernetes.default.svc:1", "https://kubernetes.default.svc:443", "https://kubernetes.default.svc:65535", "https://10.43.0.1:6443"} {
 		accepted := workloadEnv()
 		accepted[EnvWorkloadKubeAPIURL] = origin
 		if _, err := Load(Spec{LookupEnv: lookupFrom(accepted)}); err != nil {
@@ -95,6 +95,11 @@ func TestTheWorkloadExchangeRefusesToStartWithoutEverySetting(t *testing.T) {
 		"API server with a bare fragment":           {EnvWorkloadKubeAPIURL: "https://kubernetes.default.svc#"},
 		"API server with an empty port":             {EnvWorkloadKubeAPIURL: "https://kubernetes.default.svc:"},
 		"API server with an empty port and a slash": {EnvWorkloadKubeAPIURL: "https://kubernetes.default.svc:/"},
+		"API server with a non-numeric port":        {EnvWorkloadKubeAPIURL: "https://kubernetes.default.svc:x"},
+		"API server with a port zero":               {EnvWorkloadKubeAPIURL: "https://kubernetes.default.svc:0"},
+		"API server with a port 65536":              {EnvWorkloadKubeAPIURL: "https://kubernetes.default.svc:65536"},
+		"API server with a port 99999":              {EnvWorkloadKubeAPIURL: "https://kubernetes.default.svc:99999"},
+		"API server with a signed port":             {EnvWorkloadKubeAPIURL: "https://kubernetes.default.svc:+443"},
 		"relative CA path":                          {EnvWorkloadKubeCAFile: "ca.crt"},
 		"unclean token path":                        {EnvWorkloadReviewerTokenFile: "/var/run/../token"},
 	} {
@@ -109,6 +114,30 @@ func TestTheWorkloadExchangeRefusesToStartWithoutEverySetting(t *testing.T) {
 		}
 		if strings.Contains(err.Error(), "secret-value-77") {
 			t.Errorf("%s: the refusal echoes the value", name)
+		}
+	}
+}
+
+// HTTPSOrigin is the one origin rule of the workload exchange: an exact https
+// origin with an optional port of 1 to 65535 in decimal digits.
+func TestHTTPSOriginAcceptsOnlyAnExactHTTPSOriginWithAValidPort(t *testing.T) {
+	for _, origin := range []string{
+		"https://kubernetes.default.svc", "https://kubernetes.default.svc/", "https://kubernetes.default.svc:1",
+		"https://kubernetes.default.svc:443", "https://kubernetes.default.svc:65535", "https://10.43.0.1:6443", "https://[fd00::1]:6443",
+	} {
+		if err := HTTPSOrigin(origin); err != nil {
+			t.Errorf("%s refused: %v", origin, err)
+		}
+	}
+	for _, bad := range []string{
+		"", "http://kubernetes.default.svc", "https://", "https://:443", "https://kubernetes.default.svc:", "https://kubernetes.default.svc:/",
+		"https://kubernetes.default.svc:x", "https://kubernetes.default.svc:0", "https://kubernetes.default.svc:00443",
+		"https://kubernetes.default.svc:65536", "https://kubernetes.default.svc:99999", "https://kubernetes.default.svc:+443",
+		"https://[fd00::1]:", "https://kubernetes.default.svc?", "https://kubernetes.default.svc#", "https://kubernetes.default.svc/apis",
+		"https://u:p@kubernetes.default.svc", "https://kubernetes.default.svc//",
+	} {
+		if err := HTTPSOrigin(bad); err == nil {
+			t.Errorf("%q accepted", bad)
 		}
 	}
 }

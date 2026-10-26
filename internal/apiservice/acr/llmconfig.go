@@ -229,11 +229,15 @@ func llmConfigHandler(verifier CredentialVerifier, source LLMConfigSource, logge
 }
 
 // refuseWorkloadLLMConfig answers a refused workload token: 403 for a valid
-// token of another workload, 401 for every other reason. The reason is
-// counted and logged, never sent.
+// token of another workload, 503 when the key source could not be read, 401
+// for every other reason. The reason is counted and logged, never sent.
 func refuseWorkloadLLMConfig(ctx context.Context, w http.ResponseWriter, logger *slog.Logger, reason string) {
 	countWorkloadRefused(ctx, routeLLMConfig, reason)
 	logWorkloadRefused(ctx, logger, routeLLMConfig, reason)
+	if reason == ReasonUnavailable {
+		writeDetail(w, http.StatusServiceUnavailable, "Service unavailable")
+		return
+	}
 	if reason == ReasonPrincipal {
 		countLLMConfig(ctx, "forbidden_workload")
 		writeDetail(w, http.StatusForbidden, "Forbidden")

@@ -3,6 +3,7 @@ package pyjson
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"strings"
 )
 
@@ -87,7 +88,9 @@ func hex4(data []byte, at int) (int, bool) {
 // the last matching member decides and a null there means no value. Only a
 // JSON string is scanned: an object, an array or a number is the type check's
 // answer, and the strings nested in them are not this field. A document that
-// is not an object, or does not decode, reports false.
+// is not exactly one object, or does not decode, reports false: the callers
+// have a decoder that refuses data after the object, and its error is the
+// answer, not this one.
 func MemberHasLoneSurrogateEscape(data []byte, name string, foldCase bool) bool {
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	if token, err := decoder.Token(); err != nil || token != json.Delim('{') {
@@ -107,6 +110,12 @@ func MemberHasLoneSurrogateEscape(data []byte, name string, foldCase bool) bool 
 		if key == name || (foldCase && strings.EqualFold(key, name)) {
 			kept = value
 		}
+	}
+	if token, err := decoder.Token(); err != nil || token != json.Delim('}') {
+		return false
+	}
+	if _, err := decoder.Token(); err != io.EOF {
+		return false
 	}
 	return len(kept) > 0 && kept[0] == '"' && HasLoneSurrogateEscape(kept)
 }

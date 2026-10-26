@@ -33,10 +33,20 @@ jobs:
 
 func syntheticLocked(t *testing.T) string {
 	t.Helper()
+	return syntheticLockedWith(t, map[string]string{".github/workflows/zz.yml": syntheticFlow})
+}
+
+func syntheticLockedWith(t *testing.T, files map[string]string) string {
+	t.Helper()
 	root := plantTree(t)
-	zz := filepath.Join(root, ".github/workflows/zz.yml")
-	if err := os.WriteFile(zz, []byte(syntheticFlow), 0o644); err != nil {
-		t.Fatal(err)
+	for rel, text := range files {
+		p := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
 	steps, _ := scanSteps(t, root)
 	old, _ := readLock(root)
@@ -44,7 +54,7 @@ func syntheticLocked(t *testing.T) string {
 	var out []string
 	for _, l := range strings.Split(rendered, "\n") {
 		cells := strings.Split(l, "\t")
-		if len(cells) == 7 && cells[0] == ".github/workflows/zz.yml" {
+		if len(cells) == 7 && strings.Contains(cells[0], "/zz") {
 			cells[5], cells[6] = "none", "synthetic workflow: echo only"
 			l = strings.Join(cells, "\t")
 		}
@@ -61,7 +71,7 @@ func lockOnly(t *testing.T, root string) string {
 	catalog, _ := readCatalog(root)
 	var mine []string
 	for _, v := range lockViolations(t, root, catalog) {
-		if strings.Contains(v, "zz.yml") {
+		if strings.Contains(v, "/zz") {
 			mine = append(mine, v)
 		}
 	}
@@ -148,4 +158,58 @@ func TestWholeStepLockPlants(t *testing.T) {
 			t.Fatalf("a changed sha must clear suites and reason:\n%s", got)
 		}
 	})
+}
+
+const callFlow = `name: zz
+on:
+  workflow_call:
+    inputs:
+      cmd:
+        type: string
+        default: 'echo hi'
+jobs:
+  a:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run
+        run: ${{ inputs.cmd }}
+`
+
+const actionFile = `name: zz
+inputs:
+  cmd:
+    default: 'echo hi'
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: echo ${{ inputs.cmd }}
+`
+
+func TestTriggersAndInputsAreLocked(t *testing.T) {
+	cases := []struct {
+		name  string
+		files map[string]string
+		path  string
+		edit  func(string) string
+	}{
+		{"workflow_call input default feeding a run step", map[string]string{".github/workflows/zz.yml": callFlow}, ".github/workflows/zz.yml",
+			func(s string) string { return strings.Replace(s, "'echo hi'", "'go test ./...'", 1) }},
+		{"on: trigger list", map[string]string{".github/workflows/zz.yml": syntheticFlow}, ".github/workflows/zz.yml",
+			func(s string) string { return strings.Replace(s, "on: push\n", "on: [push, pull_request]\n", 1) }},
+		{"action input default feeding a run step", map[string]string{".github/actions/zz/action.yml": actionFile}, ".github/actions/zz/action.yml",
+			func(s string) string { return strings.Replace(s, "'echo hi'", "'go test ./...'", 1) }},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			root := syntheticLockedWith(t, c.files)
+			if v := lockOnly(t, root); v != "" {
+				t.Fatalf("the synthetic files must lock clean:\n%s", v)
+			}
+			edit(t, filepath.Join(root, c.path), c.edit)
+			if v := lockOnly(t, root); !strings.Contains(v, "sha256 mismatch") {
+				t.Fatalf("want a sha256 mismatch, got:\n%s", v)
+			}
+		})
+	}
 }

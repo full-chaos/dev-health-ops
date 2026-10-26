@@ -1,4 +1,0 @@
-# ./internal/cigates/suitecatalog
-stat /var/lib/oci-cache/lane-scratch/cag-11422/ops/internal/cigates/workflows/internal/cigates/suitecatalog: directory not found
-FAIL	./internal/cigates/suitecatalog [setup failed]
-FAIL

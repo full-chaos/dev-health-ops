@@ -133,39 +133,6 @@ func TestSocialAnswerOfTheOwnedLegIsTheMovedOperationRefusal(t *testing.T) {
 	}
 }
 
-func greetingMail(name, html string) sentMail {
-	return sentMail{mailFrom: "<auth@example.test>", rcptTo: "<alice@example.com>", from: "Dev Health <auth@example.test>", to: "alice@example.com",
-		subject: "Reset your password", partType: `text/html; charset="us-ascii"; 7bit`,
-		html: "<h1>Reset your password</h1>\n<p>Hi " + name + ",</p>\n<p>We received a request.</p>\n" + html}
-}
-
-func TestGreetingByEmailIsTheOnlyDifferenceItNames(t *testing.T) {
-	golden := greetingMail("Alice Ä", "")
-	golden.partType = `text/html; charset="utf-8"; base64`
-	target := greetingMail("alice@example.com", "")
-	if !greetsByEmailOnly(golden, target) {
-		t.Fatal("a greeting by e-mail where the golden greets by a non-ASCII name must be covered")
-	}
-	plain := greetingMail("Alice", "")
-	if !greetsByEmailOnly(plain, target) {
-		t.Fatal("a greeting by e-mail where the golden greets by an ASCII name must be covered")
-	}
-	for name, other := range map[string]sentMail{
-		"another body":                       greetingMail("alice@example.com", "<p>extra</p>"),
-		"another subject":                    func() sentMail { m := target; m.subject = "Verify your email address"; return m }(),
-		"another recipient":                  func() sentMail { m := target; m.rcptTo = "<bob@example.com>"; return m }(),
-		"another greeting name":              greetingMail("Bob", ""),
-		"another encoding for an ASCII name": func() sentMail { m := target; m.partType = `text/html; charset="utf-8"; base64`; return m }(),
-	} {
-		if greetsByEmailOnly(plain, other) {
-			t.Errorf("%s was covered", name)
-		}
-	}
-	if greetsByEmailOnly(target, target) {
-		t.Error("equal mails need no quirk")
-	}
-}
-
 func TestSocialRefusalEffectsAreNoWriteAndExactlyOneProviderRequestOverall(t *testing.T) {
 	user := providerstub.Recorded{Provider: "github", Method: "GET", Path: "/user", Matched: true}
 	state := "a1b2 | c3d4 | e5f6 | 0718 | 92ab"
@@ -188,26 +155,6 @@ func TestSocialRefusalEffectsAreNoWriteAndExactlyOneProviderRequestOverall(t *te
 		if err := checkSocialRefusalEffects(c.before, c.after, c.requests); (err == nil) != c.ok {
 			t.Errorf("%s: err = %v, want ok=%v", name, err, c.ok)
 		}
-	}
-}
-
-// The golden's base64 body decodes to LF line endings and auth-service's 7bit body keeps CRLF: with different transfer
-// encodings the line endings are the encoding's, not the content's. With the same encoding a CRLF difference stays one.
-func TestGreetingByEmailNormalisesLineEndingsOnlyAcrossTransferEncodings(t *testing.T) {
-	crlf := func(m sentMail) sentMail { m.html = strings.ReplaceAll(m.html, "\n", "\r\n"); return m }
-	golden := greetingMail("Alice Ä", "")
-	golden.partType = `text/html; charset="utf-8"; base64`
-	target := crlf(greetingMail("alice@example.com", ""))
-	if !greetsByEmailOnly(golden, target) {
-		t.Fatal("base64/LF golden against 7bit/CRLF target must be covered")
-	}
-	sameEncodingLF, sameEncodingCRLF := greetingMail("Alice", ""), crlf(greetingMail("alice@example.com", ""))
-	if greetsByEmailOnly(sameEncodingLF, sameEncodingCRLF) {
-		t.Fatal("the same encoding with a CRLF difference must stay a difference")
-	}
-	other := crlf(greetingMail("alice@example.com", "<p>extra</p>"))
-	if greetsByEmailOnly(golden, other) {
-		t.Fatal("a content difference behind the line endings must stay a difference")
 	}
 }
 

@@ -27,11 +27,11 @@ type usersReader interface {
 // gap refuses the switch. The first gap is not a reason to stop counting, so
 // the refusal names all three, and the part of the third that is the
 // sso_subject_unverifiable bucket (identity.IsSSOSubjectUnverifiable). Two more own classes hold the guard
-// though a social key exists (CHAOS-11576): oauth_sso_missing_row_key (an OAuth-SSO user whose provider row has no
-// key yet) and oauth_sso_selfhosted_unbindable (a self-hosted row's user, never carried).
+// though a social key exists (CHAOS-11576): oauth_sso_missing_row_key (an OAuth-SSO user whose one provider row has no
+// key yet), oauth_sso_ambiguous_row (two or more candidate rows, none carried) and oauth_sso_selfhosted_unbindable (a self-hosted row's user, never carried).
 func checkUsersOwned(ctx context.Context, db usersReader, schema authschema.ValidatedIdentifier) error {
 	q := authschema.Quote(schema)
-	var missingInAuth, missingInPublic, noIdentity, unverifiable, oauthMissingKey, oauthSelfHosted int64
+	var missingInAuth, missingInPublic, noIdentity, unverifiable, oauthMissingKey, oauthAmbiguous, oauthSelfHosted int64
 	if err := db.QueryRow(ctx, `SELECT
   (SELECT count(*) FROM public.users u WHERE NOT EXISTS (SELECT 1 FROM `+q+`.users a WHERE a.principal_id = u.id)),
   (SELECT count(*) FROM `+q+`.users a WHERE NOT EXISTS (SELECT 1 FROM public.users u WHERE u.id = a.principal_id)),
@@ -44,15 +44,16 @@ func checkUsersOwned(ctx context.Context, db usersReader, schema authschema.Vali
      WHERE `+identity.SSOSubjectUnverifiableSQL("u")+`
        AND NOT EXISTS (SELECT 1 FROM `+q+`.external_identities e WHERE e.principal_id = u.id)),
   `+identity.OAuthSSOMissingKeySubquery(q)+`,
+  `+identity.OAuthSSOAmbiguousSubquery(q)+`,
   `+identity.OAuthSSOSelfHostedSubquery(q),
-	).Scan(&missingInAuth, &missingInPublic, &noIdentity, &unverifiable, &oauthMissingKey, &oauthSelfHosted); err != nil {
+	).Scan(&missingInAuth, &missingInPublic, &noIdentity, &unverifiable, &oauthMissingKey, &oauthAmbiguous, &oauthSelfHosted); err != nil {
 		return fmt.Errorf("authruntime: reading the users-owned guard counts failed")
 	}
-	if missingInAuth == 0 && missingInPublic == 0 && noIdentity == 0 && oauthMissingKey == 0 && oauthSelfHosted == 0 {
+	if missingInAuth == 0 && missingInPublic == 0 && noIdentity == 0 && oauthMissingKey == 0 && oauthAmbiguous == 0 && oauthSelfHosted == 0 {
 		return nil
 	}
-	return fmt.Errorf("%w: public users without an auth user=%d, auth users without a public user=%d, provider users without an external identity=%d (sso_subject_unverifiable=%d), oauth_sso_missing_row_key=%d, oauth_sso_selfhosted_unbindable=%d",
-		ErrUsersOwnedNotReady, missingInAuth, missingInPublic, noIdentity, unverifiable, oauthMissingKey, oauthSelfHosted)
+	return fmt.Errorf("%w: public users without an auth user=%d, auth users without a public user=%d, provider users without an external identity=%d (sso_subject_unverifiable=%d), oauth_sso_missing_row_key=%d, oauth_sso_ambiguous_row=%d, oauth_sso_selfhosted_unbindable=%d",
+		ErrUsersOwnedNotReady, missingInAuth, missingInPublic, noIdentity, unverifiable, oauthMissingKey, oauthAmbiguous, oauthSelfHosted)
 }
 
 // CheckUsersOwned is the readiness check that holds auth-service not ready

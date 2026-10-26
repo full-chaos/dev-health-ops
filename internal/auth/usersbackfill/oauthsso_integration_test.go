@@ -91,7 +91,7 @@ func TestBackfillOAuthSSOThenOwnedLoginHitsKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rep.Users != int(base.Total)+2 || rep.Linked != 2 || rep.SelfHostedUnbindable != 1+int(base.SelfHostedUnbindable) || len(rep.Skipped) != 0 {
+	if rep.Users != int(base.Total)+2 || rep.Linked != 1 || rep.SelfHostedUnbindable != 1+int(base.SelfHostedUnbindable) || len(rep.Skipped) != 0 {
 		t.Fatalf("report %+v", rep)
 	}
 

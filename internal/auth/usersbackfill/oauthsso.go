@@ -27,14 +27,18 @@ type OAuthSSOCandidate struct {
 // OAuthSSOKey returns the row key for a candidate. A key is carried only when
 // the row's issuer is the social issuer of its type: the row's subject
 // namespace is then the social namespace, so the key can only match the
-// account the user already holds. A row with another base_url (self-hosted) is
-// never carried: selfHosted is set and key is nil.
+// account the user already holds. The base_url is the social host exactly, or
+// with ONE trailing slash; any other spelling (self-hosted) is never carried:
+// selfHosted is set and key is nil. public.users has no column that tells an
+// OAuth-SSO user from a plain social user (go-api writes the same auth_provider
+// and subject, sso_provider_id NULL, for both): a social user in the row's org
+// gets the row key too, which only ever matches the account it already owns.
 func OAuthSSOKey(c OAuthSSOCandidate) (key *identity.ExternalKey, selfHosted bool) {
 	issuer, ok := identity.SocialIssuer(identity.Provider(c.AuthProvider))
 	if !ok {
 		return nil, false
 	}
-	if base := strings.TrimRight(c.BaseURL, "/"); base != "" && base != issuer {
+	if base := strings.TrimSuffix(c.BaseURL, "/"); base != "" && base != issuer {
 		return nil, true
 	}
 	k := identity.ExternalKey{Issuer: issuer, Provider: identity.Provider(c.RowID.String()), Subject: c.Subject}
@@ -62,6 +66,7 @@ type OAuthSSOReport struct {
 	DryRun               bool
 	Users                int
 	Linked               int
+	Ambiguous            int
 	SelfHostedUnbindable int
 	Skipped              map[string]int
 }
@@ -71,6 +76,7 @@ func (r OAuthSSOReport) Lines() []string {
 	lines := []string{
 		fmt.Sprintf("oauth_sso_users=%d", r.Users),
 		fmt.Sprintf("oauth_sso_keys_linked=%d", r.Linked),
+		fmt.Sprintf("oauth_sso_ambiguous_row=%d", r.Ambiguous),
 		fmt.Sprintf("oauth_sso_selfhosted_unbindable=%d", r.SelfHostedUnbindable),
 	}
 	classes := make([]string, 0, len(r.Skipped))
@@ -84,50 +90,66 @@ func (r OAuthSSOReport) Lines() []string {
 	return lines
 }
 
-// RunOAuthSSO carries the row key of every OAuth-SSO user. It runs after Run:
-// the principal and its social key exist. Per-key failures are counted by
-// class and the run continues; a source failure stops it.
+// RunOAuthSSO carries the row key of every OAuth-SSO user that has EXACTLY ONE
+// active candidate row (any organization it belongs to). Two or more rows are
+// ambiguous: nothing is written and the user is counted. It runs after Run: the
+// principal and its social key exist. Per-key failures are counted by class and
+// the run continues; a source failure stops it.
 func RunOAuthSSO(ctx context.Context, src OAuthSSOSource, sink OAuthSSOSink, opts Options) (OAuthSSOReport, error) {
 	batch := opts.BatchSize
 	if batch <= 0 {
 		batch = 500
 	}
 	rep := OAuthSSOReport{DryRun: opts.DryRun, Skipped: map[string]int{}}
+	var group []OAuthSSOCandidate
+	flush := func() {
+		if len(group) == 0 {
+			return
+		}
+		rep.Users++
+		selfHosted := false
+		for _, c := range group {
+			if _, sh := OAuthSSOKey(c); sh {
+				selfHosted = true
+			}
+		}
+		if selfHosted {
+			rep.SelfHostedUnbindable++
+		}
+		switch {
+		case len(group) > 1:
+			rep.Ambiguous++
+		default:
+			if key, _ := OAuthSSOKey(group[0]); key != nil {
+				linked, err := sink.CarryExtraIdentity(ctx, group[0].UserID, *key, opts.DryRun)
+				switch {
+				case err != nil:
+					rep.Skipped[classify(err)]++
+				case linked:
+					rep.Linked++
+				}
+			}
+		}
+		group = group[:0]
+	}
 	var after *OAuthSSOCursor
-	var lastUser uuid.UUID
-	var seen, lastSelfHosted bool
 	for {
 		rows, err := src.Page(ctx, after, batch)
 		if err != nil {
 			return rep, errors.New("usersbackfill: reading oauth sso candidates failed")
 		}
 		if len(rows) == 0 {
+			flush()
 			return rep, nil
 		}
 		for _, c := range rows {
 			if err := ctx.Err(); err != nil {
 				return rep, err
 			}
-			if !seen || c.UserID != lastUser {
-				seen, lastUser, lastSelfHosted = true, c.UserID, false
-				rep.Users++
+			if len(group) > 0 && group[0].UserID != c.UserID {
+				flush()
 			}
-			key, selfHosted := OAuthSSOKey(c)
-			if selfHosted && !lastSelfHosted {
-				lastSelfHosted = true
-				rep.SelfHostedUnbindable++
-			}
-			if key == nil {
-				continue
-			}
-			linked, err := sink.CarryExtraIdentity(ctx, c.UserID, *key, opts.DryRun)
-			if err != nil {
-				rep.Skipped[classify(err)]++
-				continue
-			}
-			if linked {
-				rep.Linked++
-			}
+			group = append(group, c)
 		}
 		last := rows[len(rows)-1]
 		after = &OAuthSSOCursor{User: last.UserID, Row: last.RowID}

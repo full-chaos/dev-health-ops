@@ -509,8 +509,8 @@ func TestAuthThenOpsMigrateWithoutAGrantsPassLeavesPublicUsersUnreadable(t *test
 }
 
 // The runtime role reads users.sso_provider_id (ops revision 0155): after ops migrate, the grants pass makes the SSO
-// provider binding readable. On a public schema without the column the pass still succeeds: the column grant is
-// DEFERRED, never an error, so a roll from a schema before 0155 is not blocked.
+// provider binding readable. Every caller of the grants pass runs after ops migrate, so on a public schema without
+// the column the pass fails closed, naming the column (Apply defers it instead).
 func TestGrantsPassMakesTheSSOProviderBindingReadable(t *testing.T) {
 	f := newOrderFixture(t)
 	f.authMigrate(t, "auth")
@@ -528,8 +528,26 @@ func TestGrantsPassMakesTheSSOProviderBindingReadable(t *testing.T) {
 	if _, err := conn.Exec(f.ctx, `ALTER TABLE public.users DROP COLUMN sso_provider_id`); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.grantsPass(t, "auth"); err != nil {
-		t.Fatalf("grants pass without users.sso_provider_id = %v, want success (the column grant is deferred)", err)
+	if err := f.grantsPass(t, "auth"); err == nil || !strings.Contains(err.Error(), "public.users.sso_provider_id") {
+		t.Fatalf("grants pass without users.sso_provider_id = %v, want a failure naming public.users.sso_provider_id", err)
+	}
+}
+
+// TestGrantsModeFailsClosedAndApplyDefersAnAbsentManifestColumn: on an ops schema at revision 0154 (no
+// users.sso_provider_id) the grants pass, which runs only after ops migrate, refuses and names the column; Apply,
+// which runs before ops migrate on a roll, passes and reports the column grant DEFERRED.
+func TestGrantsModeFailsClosedAndApplyDefersAnAbsentManifestColumn(t *testing.T) {
+	f := newOrderFixture(t)
+	f.dhoMigrateThrough(t, "0154")
+	logs, err := f.applyLogged(t)
+	if err != nil {
+		t.Fatalf("Apply at ops revision 0154: %v", err)
+	}
+	if !strings.Contains(logs, "DEFERRED") || !strings.Contains(logs, "sso_provider_id") {
+		t.Fatalf("Apply at 0154 did not report the sso_provider_id grant as DEFERRED:\n%s", logs)
+	}
+	if err := f.grantsPass(t, "auth"); err == nil || !strings.Contains(err.Error(), "public.users.sso_provider_id") {
+		t.Fatalf("grants pass at ops revision 0154 = %v, want a failure naming public.users.sso_provider_id", err)
 	}
 }
 
@@ -571,9 +589,9 @@ func (f *orderFixture) ssoBindingReadable(t *testing.T) bool {
 }
 
 // TestUpgradeFrom0154DefersTheSSOBindingGrantUntil0155 is the roll from an ops schema before revision 0155: auth-migrate
-// runs first, while public.users has no sso_provider_id. Apply passes and reports the column grant DEFERRED; the
-// posture check holds it PENDING. After ops migrate adds the column, Apply grants it; with the grant revoked the
-// posture check FAILS naming the column.
+// runs first, while public.users has no sso_provider_id. Apply passes and reports the column grant DEFERRED (the
+// grants pass, run only after ops migrate, refuses); the posture check holds it PENDING. After ops migrate adds the
+// column, Apply grants it; with the grant revoked the posture check FAILS naming the column.
 func TestUpgradeFrom0154DefersTheSSOBindingGrantUntil0155(t *testing.T) {
 	f := newOrderFixture(t)
 	f.dhoMigrateThrough(t, "0154")
@@ -587,8 +605,8 @@ func TestUpgradeFrom0154DefersTheSSOBindingGrantUntil0155(t *testing.T) {
 	if !strings.Contains(logs, "DEFERRED") || !strings.Contains(logs, "sso_provider_id") {
 		t.Fatalf("Apply at 0154 did not report the sso_provider_id grant as DEFERRED:\n%s", logs)
 	}
-	if err := f.grantsPass(t, "auth"); err != nil {
-		t.Fatalf("grants pass at ops revision 0154: %v", err)
+	if err := f.grantsPass(t, "auth"); err == nil || !strings.Contains(err.Error(), "public.users.sso_provider_id") {
+		t.Fatalf("grants pass at ops revision 0154 = %v, want a failure naming public.users.sso_provider_id", err)
 	}
 
 	if _, err := f.dhoMigrate(t); err != nil {

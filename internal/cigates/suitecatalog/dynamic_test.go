@@ -148,7 +148,9 @@ func dynamicWord(w string) bool {
 }
 
 // dynamicCommands names every command in a run block whose command word is not a literal. It never resolves a value.
-func dynamicCommands(run string) []string {
+type dynHit struct{ word, text string }
+
+func dynamicCommands(run string) []dynHit {
 	defined := map[string]bool{}
 	for _, m := range funcDefine.FindAllStringSubmatch(run, -1) {
 		defined[m[1]+m[2]] = true
@@ -156,7 +158,7 @@ func dynamicCommands(run string) []string {
 	for _, m := range aliasDefine.FindAllStringSubmatch(run, -1) {
 		defined[m[1]] = true
 	}
-	var out []string
+	var out []dynHit
 	for _, cmd := range splitCommands(run) {
 		words := shellWords(cmd)
 		for len(words) > 0 && (leadingKeywords[words[0]] || assignWord.MatchString(words[0])) {
@@ -174,13 +176,13 @@ func dynamicCommands(run string) []string {
 		w := words[0]
 		switch {
 		case dynamicWord(w):
-			out = append(out, "variable-built command: "+cmd)
+			out = append(out, dynHit{w, "variable-built command: " + cmd})
 		case w == "eval" || w == "xargs":
-			out = append(out, "variable-built command: "+w+" runs a string it builds: "+cmd)
+			out = append(out, dynHit{w, "variable-built command: " + w + " runs a string it builds: " + cmd})
 		case (w == "bash" || w == "sh" || w == "zsh") && len(words) > 2 && words[1] == "-c" && dynamicWord(words[2]):
-			out = append(out, "variable-built command: "+w+" -c with a non-literal string: "+cmd)
+			out = append(out, dynHit{w, "variable-built command: " + w + " -c with a non-literal string: " + cmd})
 		case defined[w]:
-			out = append(out, "variable-built command: "+w+" is a function or alias defined in the same block: "+cmd)
+			out = append(out, dynHit{w, "variable-built command: " + w + " is a function or alias defined in the same block: " + cmd})
 		}
 	}
 	return out

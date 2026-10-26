@@ -267,6 +267,7 @@ func violations(t *testing.T, root string) []string {
 			bad = append(bad, fmt.Sprintf("uncatalogued test command: %s runs %q", s.workflow, s.command))
 		}
 	}
+	bad = append(bad, dynamicViolations(t, root)...)
 	for _, f := range shellSuiteFiles(root) {
 		if !files[f] {
 			bad = append(bad, fmt.Sprintf("shell suite %s is named by no catalog row inputs", f))
@@ -329,6 +330,7 @@ func plantTree(t *testing.T) string {
 		copyFile(rel)
 	}
 	copyFile(catalogPath)
+	copyFile(exceptionsPath)
 	rows, _ := readCatalog(root)
 	for _, r := range rows {
 		for _, in := range strings.Split(r["inputs"], ";") {
@@ -573,7 +575,7 @@ func plantDynamic(t *testing.T, level, line string) string {
 		case "step":
 			step = "env:\n          RUNNER: go\n        " + step
 		case "job":
-			s = strings.Replace(s, "  go-quality-leg:\n", "  go-quality-leg:\n    env:\n      RUNNER: go\n", 1)
+			s = strings.Replace(s, "  go-quality:\n    name: go-quality\n", "  go-quality:\n    name: go-quality\n    env:\n      RUNNER: go\n", 1)
 		case "workflow":
 			s = strings.Replace(s, "\njobs:\n", "\nenv:\n  RUNNER: go\njobs:\n", 1)
 		}
@@ -642,6 +644,49 @@ func TestDynamicExceptionTable(t *testing.T) {
 			}
 			return strings.Join(keep, "\n")
 		})
-		wantViolation(t, root, "variable-built command: security-scan.yml")
+		wantViolation(t, root, "security-scan.yml: variable-built command")
 	})
+}
+
+// dynamicViolations refuses every command whose command word is not a literal, unless a reviewed exception names it.
+func dynamicViolations(t *testing.T, root string) []string {
+	t.Helper()
+	type key struct{ file, word string }
+	reviewed := map[key]string{}
+	var bad []string
+	raw, err := os.ReadFile(filepath.Join(root, exceptionsPath))
+	if err != nil {
+		return []string{fmt.Sprintf("%s: %v", exceptionsPath, err)}
+	}
+	for i, line := range strings.Split(string(raw), "\n") {
+		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, "file\t") {
+			continue
+		}
+		cells := strings.Split(line, "\t")
+		if len(cells) != 3 || cells[0] == "" || cells[1] == "" {
+			bad = append(bad, fmt.Sprintf("%s:%d: want file<TAB>word<TAB>reason", exceptionsPath, i+1))
+			continue
+		}
+		if strings.TrimSpace(cells[2]) == "" {
+			bad = append(bad, fmt.Sprintf("%s:%d: exception for %s %s has an empty reason", exceptionsPath, i+1, cells[0], cells[1]))
+		}
+		reviewed[key{cells[0], cells[1]}] = cells[2]
+	}
+	used := map[key]bool{}
+	for _, b := range allRuns(t, root) {
+		for _, h := range dynamicCommands(b.run) {
+			k := key{b.file, h.word}
+			if _, ok := reviewed[k]; ok {
+				used[k] = true
+				continue
+			}
+			bad = append(bad, fmt.Sprintf("%s: %s", b.file, h.text))
+		}
+	}
+	for k := range reviewed {
+		if !used[k] {
+			bad = append(bad, fmt.Sprintf("%s: exception for %s %s matches no workflow line", exceptionsPath, k.file, k.word))
+		}
+	}
+	return bad
 }

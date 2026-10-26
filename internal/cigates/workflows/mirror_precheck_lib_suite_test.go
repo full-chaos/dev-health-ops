@@ -2,6 +2,7 @@ package workflows_test
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -70,11 +71,20 @@ func mirrorSuiteDefects(doc yamlMap) []string {
 	if asString(job["runs-on"]) != "ubuntu-latest" {
 		out = append(out, "job precheck-lib-test must run on ubuntu-latest")
 	}
-	if n, _ := job["timeout-minutes"].(int); n == 0 || n > 10 {
-		out = append(out, "job precheck-lib-test needs a timeout-minutes of at most 10")
+	if n, _ := job["timeout-minutes"].(int); n != 5 {
+		out = append(out, "job precheck-lib-test needs a timeout-minutes of exactly 5")
 	}
 	if perms := asMap(job["permissions"]); len(perms) != 1 || asString(perms["contents"]) != "read" {
 		out = append(out, "job precheck-lib-test permissions must be exactly contents: read")
+	}
+	dockerWord := regexp.MustCompile(`(^|[\s;&|(])docker(\s|$)`)
+	for _, s := range stepsOf(job) {
+		if dockerWord.MatchString(asString(s["run"])) {
+			out = append(out, "job precheck-lib-test must run no docker command")
+		}
+		if u := strings.ToLower(asString(s["uses"])); strings.HasPrefix(u, "docker/") || strings.Contains(u, "login") {
+			out = append(out, "job precheck-lib-test must use no docker or registry-login action")
+		}
 	}
 	for _, s := range stepsOf(job) {
 		if strings.Contains(fmt.Sprint(s), "secrets.") {

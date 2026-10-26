@@ -17,11 +17,11 @@ func TestSAMLLookupErrorNamesNonMemberAndSharedNameID(t *testing.T) {
 		fmt.Errorf("w: %w", identity.ErrMultipleUsers):   ErrIdentityAmbiguous,
 		other: other,
 	} {
-		if got := lookupError(in); !errors.Is(got, want) {
-			t.Errorf("lookupError(%v) = %v, want %v", in, got, want)
+		if got := LookupError(in); !errors.Is(got, want) {
+			t.Errorf("LookupError(%v) = %v, want %v", in, got, want)
 		}
 	}
-	if got := lookupError(nil); got != nil {
-		t.Errorf("lookupError(nil) = %v, want nil", got)
+	if got := LookupError(nil); got != nil {
+		t.Errorf("LookupError(nil) = %v, want nil", got)
 	}
 }

@@ -17,7 +17,7 @@ func (u IdentityUsers) ByEmail(ctx context.Context, normalizedEmail string) (*Us
 	if err != nil || p == nil {
 		return nil, err
 	}
-	return &User{ID: p.ID, IsActive: p.IsActive, IsVerified: p.IsVerified, PasswordHash: p.PasswordHash, AuthProvider: p.AuthProvider}, nil
+	return &User{ID: p.ID, IsActive: p.IsActive, IsVerified: p.IsVerified, PasswordHash: p.PasswordHash, AuthProvider: p.AuthProvider, FullName: p.FullName}, nil
 }
 
 func (u IdentityUsers) Project(ctx context.Context, userID uuid.UUID) error {

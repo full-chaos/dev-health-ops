@@ -78,6 +78,9 @@ internal/cigates/docs	test	docs
 internal/cigates/docs	test	docs-data
 internal/cigates/docs	test	mkdocs.yml
 internal/cigates/docsprepare	test	docs-data
+internal/cigates/docsbuild	code	docs
+internal/cigates/docsbuild	code	docs-data
+internal/cigates/docsbuild	code	mkdocs.yml
 internal/cigates/docstools	code	contracts
 internal/cigates/docstools	code	deploy
 internal/cigates/docstools	code	docs
@@ -89,6 +92,7 @@ internal/cigates/docstools	test	ci
 internal/cigates/integrationshards	test	ci
 internal/cigates/metricsproof	test	ci
 internal/cigates/nopython	test	ci
+internal/cigates/outboundtransport	test	ci
 internal/cigates/proofteardown	test	ci
 internal/cigates/queuecreds	code	contracts
 internal/cigates/raceunweighted	test	ci
@@ -105,6 +109,7 @@ internal/cigates/scripts	test	docs
 internal/cigates/splitshards	test	ci
 internal/cigates/testshard	test	.github
 internal/cigates/testshard	test	ci
+internal/cigates/testshard	test	contracts
 internal/cigates/webproxyproof	test	.github
 internal/cigates/webproxyproof	test	ci
 internal/cigates/webproxyproof	test	compose.yml
@@ -153,6 +158,7 @@ internal/gqlgenguard	code	contracts
 internal/gqlgenguard	test	.github
 internal/gqlgenguard	test	ci
 internal/gqlgenguard	test	docs
+internal/httpguard	test	ci
 internal/ingressplanes	code	contracts
 internal/ingressplanes	test	ci
 internal/ingressplanes	test	compose.yml

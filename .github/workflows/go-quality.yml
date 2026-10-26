@@ -458,6 +458,9 @@ jobs:
 
       - name: Run Go quality leg
         if: steps.relevance.outputs.relevant == 'true'
+        env:
+          # CHAOS-11448: on merge_group the security packages of ci/security_fresh_packages.txt run with -count=1 (never "ok (cached)").
+          DEV_HEALTH_GO_FRESH_SECURITY: ${{ github.event_name == 'merge_group' && '1' || '' }}
         # Each stage of the leg prints UTC start/done stamps (`==> stage ...`).
         run: bash ci/check_go.sh ci-leg ${{ matrix.args }}
 

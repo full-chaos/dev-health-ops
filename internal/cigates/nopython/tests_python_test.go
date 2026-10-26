@@ -54,9 +54,7 @@ type pyOwnedEntry struct {
 	owner string
 }
 
-var pyOwnedEntries = []pyOwnedEntry{
-	{"scripts/", "CHAOS-10386/10387/10388 (docs tooling leaves)"},
-}
+var pyOwnedEntries = []pyOwnedEntry{}
 
 func (e pyOwnedEntry) covers(stem string) bool {
 	if strings.HasSuffix(e.stem, "/") {

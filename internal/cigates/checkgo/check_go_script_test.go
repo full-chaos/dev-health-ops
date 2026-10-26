@@ -140,8 +140,10 @@ func checkGoStaticDefects(src string) []string {
 	if helper := strings.SplitN(strings.SplitN(src, "run_integration_go_test() {", 2)[len(strings.SplitN(src, "run_integration_go_test() {", 2))-1], "\n}\n", 2)[0]; !strings.Contains(helper, "INTEGRATION_TEST_ENV") {
 		d = append(d, "run_integration_go_test lacks INTEGRATION_TEST_ENV")
 	}
-	if sites < 2 {
-		d = append(d, fmt.Sprintf("found %d multi-package integration go test call sites, want the shard and integration sites", sites))
+	// One site, in run_integration_packages (one go test per group), serves the shard verb and the integration verb.
+	if sites < 1 || strings.Count(src, `    run_integration_packages "${mode}" "${module_dir}" "integration package shard `) != 1 ||
+		strings.Count(src, `    run_integration_packages "" "${module_dir}" "integration (${module_dir})" `) != 1 {
+		d = append(d, fmt.Sprintf("found %d multi-package integration go test call sites, want the run_integration_packages site that the shard and integration verbs both call", sites))
 	}
 	if !strings.Contains(src, `[ "${CI:-}" = "true" ]`) || !strings.Contains(src, "TESTCONTAINERS_RYUK_DISABLED=true") {
 		d = append(d, "the Ryuk env block is not gated on CI=true")
@@ -925,7 +927,7 @@ func TestCheckGoDiscoversEveryTestName(t *testing.T) {
 	scenarios := discoveryScenarios()
 	assertAllPass(t, script, scenarios)
 	assertPlantsCaught(t, script, scenarios, []plant{
-		p("the scan drops one test name", `printf "T\037%s\037%s\n", FILENAME, substr(s, 1, RLENGTH)`, `if (s !~ /^TestZz/) printf "T\037%s\037%s\n", FILENAME, substr(s, 1, RLENGTH)`,
+		p("the scan drops one test name", `T) SCAN_TESTS["${path}"]+="${name}"$'\n' ;;`, `T) [[ "${name}" == TestZz* ]] || SCAN_TESTS["${path}"]+="${name}"$'\n' ;;`,
 			"a_new_test_name_is_planned_exactly_once", "has 0 PROVIDER-SHARD rows"),
 		p("a control byte passes the name check", `*[[:cntrl:]]*) die "go list returned unsafe ${label} test filename with a control byte`, `*[[:cntrl:]][[:cntrl:]][[:cntrl:]]*) die "go list returned unsafe ${label} test filename with a control byte`,
 			"a_control_byte_in_a_test_file_name_is_refused", "want exit 2"),

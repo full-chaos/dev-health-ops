@@ -81,6 +81,8 @@ type LegacyMatch struct {
 type Principal struct {
 	ID       uuid.UUID
 	Disabled bool
+	// ServiceProvider is a principal of the service provider: it never signs in.
+	ServiceProvider bool
 }
 
 // EmailOwner is an existing account that holds an email.

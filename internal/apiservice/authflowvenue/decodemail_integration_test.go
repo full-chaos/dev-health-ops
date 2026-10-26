@@ -19,7 +19,7 @@ func mailWithBody(subject, html string) smtpcapture.Mail {
 }
 
 func TestDecodeMailAcceptsATokenlessMailOnlyForTheAccountExistsNotice(t *testing.T) {
-	notice := decodeMail(t, tokenlessMail(accountExistsSubject))
+	notice := decodeMail(t, tokenlessMail(accountExistsSubject), false)
 	if notice.token != "" || !strings.Contains(notice.html, "hello") {
 		t.Fatalf("notice decoded as %+v", notice)
 	}

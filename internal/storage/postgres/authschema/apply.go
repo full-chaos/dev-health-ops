@@ -46,10 +46,11 @@ type Options struct {
 	// the refusal (ErrRuntimeGrantsNarrowed). It binds to that exact set of
 	// lost grants, so any other narrowing refuses again. Empty means none.
 	AcknowledgeNarrowing string
-	// RequirePublicTables makes a PublicReadColumns table that does not exist an
-	// error instead of a logged skip. Grants sets it: the grants pass runs after
-	// the ops migration, so a missing table is a failed release, not an
-	// auth-only database.
+	// RequirePublicTables makes a PublicReadColumns table or column that does
+	// not exist an error instead of a logged skip (DEFERRED for a column).
+	// Grants sets it: the grants pass runs after the ops migration, so a
+	// missing table or column is a failed release, not an auth-only database
+	// or a schema before the revision that adds the column.
 	RequirePublicTables bool
 	// UsersOwned is the users-owned switch (AUTH_USERS_OWNED): the runtime role
 	// holds UsersWriteGrant on public.users. Off, it holds no write privilege
@@ -77,6 +78,9 @@ var (
 	// ErrPublicTableMissing reports a PublicReadColumns table absent from the
 	// ops schema in a run that requires it (the grants pass).
 	ErrPublicTableMissing = errors.New("auth public read table is missing")
+	// ErrPublicColumnMissing reports a PublicReadColumns column absent from an
+	// existing ops table in a run that requires it (the grants pass).
+	ErrPublicColumnMissing = errors.New("auth public read column is missing")
 )
 
 // ValidateIdentifier reports whether a schema or role name may be emitted as

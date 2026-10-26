@@ -415,6 +415,9 @@ type SystemOneResult struct {
 	Attempts []SystemOneAttempt
 	// ModelRejected marks a returned model that was present but refused.
 	ModelRejected bool
+	// ModelFromRequest marks a clef answer that omitted the model: Model is the
+	// requested one, and the Body carries it.
+	ModelFromRequest bool
 }
 
 // AttemptCount is the number of HTTP requests sent.
@@ -678,6 +681,9 @@ func (c *TypeSafeClient) once(ctx context.Context, body []byte, lenient bool) (S
 				cause: logging.TransportFailure(readErr)}}
 	}
 
+	if c.target.provider == ClefProviderName {
+		payload = unwrapResultEnvelope(payload)
+	}
 	var probe systemOneProbe
 	if err := json.Unmarshal(payload, &probe); err != nil && lenient {
 		probe = systemOneProbe{} // nothing in a body that is not JSON is trusted
@@ -693,8 +699,49 @@ func (c *TypeSafeClient) once(ctx context.Context, body []byte, lenient bool) (S
 		out.Header.Set(typeSafeRequestIDHeader, att.RequestID)
 	}
 	out.Model, out.ModelRejected = c.cleanModel(probe.Model)
+	if c.target.provider == ClefProviderName && (len(probe.Model) == 0 || string(probe.Model) == "null") {
+		if filled, ok := withModel(payload, c.cfg.Model); ok {
+			out.Body, out.Model, out.ModelFromRequest = filled, c.cfg.Model, true
+		}
+	}
 	out.Usage = parseUsage(probe.Usage)
 	return out, att, nil
+}
+
+// unwrapResultEnvelope returns the inner object of a {"result":{...}} body that
+// has no top-level "answers": the shape of a Workers AI REST reply. Any other
+// body is returned as it is.
+func unwrapResultEnvelope(payload []byte) []byte {
+	var envelope struct {
+		Result  json.RawMessage `json:"result"`
+		Answers json.RawMessage `json:"answers"`
+	}
+	if err := json.Unmarshal(payload, &envelope); err != nil || len(envelope.Answers) != 0 {
+		return payload
+	}
+	if inner := bytes.TrimSpace(envelope.Result); len(inner) > 0 && inner[0] == '{' {
+		return inner
+	}
+	return payload
+}
+
+// withModel adds "model" to a JSON object body that has none. It reports false
+// for a body that is not an object.
+func withModel(payload []byte, model string) ([]byte, bool) {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &fields); err != nil || fields == nil {
+		return nil, false
+	}
+	encoded, err := json.Marshal(model)
+	if err != nil {
+		return nil, false
+	}
+	fields["model"] = encoded
+	filled, err := json.Marshal(fields)
+	if err != nil {
+		return nil, false
+	}
+	return filled, true
 }
 
 // classify maps a failure to a SystemOneClass and the shared *llmError. The

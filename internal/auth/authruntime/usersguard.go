@@ -23,27 +23,32 @@ type usersReader interface {
 
 // checkUsersOwned counts the gaps between public.users and the auth schema:
 // public users with no auth user, auth users with no public user, and users of
-// a provider other than local (SSO or social) with no external identity; a non-interactive service placeholder (identity.IsServicePlaceholder) is not counted. Any
+// a provider other than local (SSO or social) with no external identity; a non-interactive service placeholder (identity.IsServicePlaceholder) and an SSO account the owned store re-links at its first sign-in (identity.IsSSORelinkable) are not counted. Any
 // gap refuses the switch. The first gap is not a reason to stop counting, so
-// the refusal names all three.
+// the refusal names all three, and the part of the third that is the
+// sso_subject_unverifiable bucket (identity.IsSSOSubjectUnverifiable).
 func checkUsersOwned(ctx context.Context, db usersReader, schema authschema.ValidatedIdentifier) error {
 	q := authschema.Quote(schema)
-	var missingInAuth, missingInPublic, noIdentity int64
+	var missingInAuth, missingInPublic, noIdentity, unverifiable int64
 	if err := db.QueryRow(ctx, `SELECT
   (SELECT count(*) FROM public.users u WHERE NOT EXISTS (SELECT 1 FROM `+q+`.users a WHERE a.principal_id = u.id)),
   (SELECT count(*) FROM `+q+`.users a WHERE NOT EXISTS (SELECT 1 FROM public.users u WHERE u.id = a.principal_id)),
   (SELECT count(*) FROM public.users u
      WHERE u.auth_provider IS NOT NULL AND u.auth_provider NOT IN ('', 'local')
        AND NOT `+identity.ServicePlaceholderSQL("u")+`
+       AND NOT `+identity.SSORelinkableSQL("u")+`
+       AND NOT EXISTS (SELECT 1 FROM `+q+`.external_identities e WHERE e.principal_id = u.id)),
+  (SELECT count(*) FROM public.users u
+     WHERE `+identity.SSOSubjectUnverifiableSQL("u")+`
        AND NOT EXISTS (SELECT 1 FROM `+q+`.external_identities e WHERE e.principal_id = u.id))`,
-	).Scan(&missingInAuth, &missingInPublic, &noIdentity); err != nil {
+	).Scan(&missingInAuth, &missingInPublic, &noIdentity, &unverifiable); err != nil {
 		return fmt.Errorf("authruntime: reading the users-owned guard counts failed")
 	}
 	if missingInAuth == 0 && missingInPublic == 0 && noIdentity == 0 {
 		return nil
 	}
-	return fmt.Errorf("%w: public users without an auth user=%d, auth users without a public user=%d, provider users without an external identity=%d",
-		ErrUsersOwnedNotReady, missingInAuth, missingInPublic, noIdentity)
+	return fmt.Errorf("%w: public users without an auth user=%d, auth users without a public user=%d, provider users without an external identity=%d (sso_subject_unverifiable=%d)",
+		ErrUsersOwnedNotReady, missingInAuth, missingInPublic, noIdentity, unverifiable)
 }
 
 // CheckUsersOwned is the readiness check that holds auth-service not ready

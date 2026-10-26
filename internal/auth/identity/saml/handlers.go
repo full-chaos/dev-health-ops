@@ -15,6 +15,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
@@ -304,6 +305,13 @@ func readJSONData(w http.ResponseWriter, r *http.Request, v any) ([]byte, bool) 
 	data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
 	if err != nil {
 		writeDetail(w, http.StatusRequestEntityTooLarge, "Request body too large")
+		return nil, false
+	}
+	// The api plane answers a JSON body that is not UTF-8 (and only that) before
+	// it reads a field; a syntax error keeps the answer this route always gave,
+	// and a body of another content type is not decoded there.
+	if _, err := pyjson.DecodeBody(data); pybody.WantsJSON(r.Header.Get("Content-Type")) && errors.Is(err, pyjson.ErrUnicode) {
+		writeDetail(w, http.StatusBadRequest, "There was an error parsing the body")
 		return nil, false
 	}
 	if len(data) == 0 {

@@ -1,6 +1,7 @@
 package oidc
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -26,7 +27,7 @@ func TestSurrogateRefusalTableAuthServiceOIDCRows(t *testing.T) {
 		if line == "" || strings.HasPrefix(line, "#") || len(f) != 9 || f[1] != "sso" || !strings.Contains(f[2], "/oidc/") {
 			continue
 		}
-		id, body, want := f[0], f[3], strings.Fields(f[6])
+		id, body, want := f[0], tableBody(t, f[3]), strings.Fields(f[6])
 		row := c.activeRow()
 		env := newUnitEnv(t, &fakeProviders{before: row})
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/oidc/"+row.ID.String()+"/authorize", strings.NewReader(body))
@@ -49,8 +50,8 @@ func TestSurrogateRefusalTableAuthServiceOIDCRows(t *testing.T) {
 		}
 		driven++
 	}
-	if driven != 1 {
-		t.Fatalf("drove %d oidc rows, want 1", driven)
+	if driven != 3 {
+		t.Fatalf("drove %d oidc rows, want 3", driven)
 	}
 }
 
@@ -69,7 +70,7 @@ func TestSurrogateRefusalTableAuthServiceOAuthRows(t *testing.T) {
 		if line == "" || strings.HasPrefix(line, "#") || len(f) != 9 || f[1] != "sso" || !strings.Contains(f[2], "/oauth/") {
 			continue
 		}
-		id, body, want := f[0], f[3], strings.Fields(f[6])
+		id, body, want := f[0], tableBody(t, f[3]), strings.Fields(f[6])
 		row := c.activeRow()
 		env := newUnitEnv(t, &fakeProviders{before: row})
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/oauth/"+row.ID.String()+"/authorize", strings.NewReader(body))
@@ -83,4 +84,18 @@ func TestSurrogateRefusalTableAuthServiceOAuthRows(t *testing.T) {
 	if driven != 1 {
 		t.Fatalf("drove %d oauth rows, want 1", driven)
 	}
+}
+
+// tableBody is the body cell: text, or "hex:" and the raw bytes in hex.
+func tableBody(t *testing.T, cell string) string {
+	t.Helper()
+	encoded, isHex := strings.CutPrefix(cell, "hex:")
+	if !isHex {
+		return cell
+	}
+	raw, err := hex.DecodeString(encoded)
+	if err != nil {
+		t.Fatalf("body cell %q: %v", cell, err)
+	}
+	return string(raw)
 }

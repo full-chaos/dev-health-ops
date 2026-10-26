@@ -94,7 +94,7 @@ VALUES ($1, $2, NULL, 'service', NULL, true, true, false, 0, now(), now())`, svc
 	}
 
 	// Step 2: a reset link that exists anyway reads as an unknown link and sets no password.
-	if err := rig.links.Issue(ctx, IssueRequest{PrincipalID: svc, Purpose: PurposePasswordReset, TokenHash: linkHash("svc-reset-secret"), TTL: ResetTTL}); err != nil {
+	if err := rig.links.IssueBound(ctx, IssueRequest{PrincipalID: svc, Purpose: PurposePasswordReset, TokenHash: linkHash("svc-reset-secret"), TTL: ResetTTL}); err != nil {
 		t.Fatal(err)
 	}
 	if out, err := rig.flows.Reset(ctx, "svc-reset-secret", newPassword); err != nil || out.Kind != FlowInvalidToken {

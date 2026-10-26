@@ -104,7 +104,7 @@ func (c *credFakes) SetPasswordEndingSessions(_ context.Context, req local.Passw
 	}
 	return res, nil
 }
-func (c *credFakes) Issue(_ context.Context, req local.IssueRequest) error {
+func (c *credFakes) IssueBound(_ context.Context, req local.IssueRequest) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.issued = append(c.issued, req.PrincipalID)

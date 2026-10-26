@@ -150,3 +150,27 @@ func TestPythonBoundaryDrawsAgainWhenTheTextHoldsTheBoundary(t *testing.T) {
 		t.Fatalf("pythonBoundary with no collision = (%q, %v), want the first draw %q", got, err, first)
 	}
 }
+
+func TestLinkMailTransferEncodingFollowsTheGreetingName(t *testing.T) {
+	for name, c := range map[string]struct {
+		greeting string
+		want     string
+		charset  string
+	}{
+		"ascii name":     {"Pat Example", "Content-Transfer-Encoding: 7bit", `charset="us-ascii"`},
+		"address":        {"who@example.test", "Content-Transfer-Encoding: 7bit", `charset="us-ascii"`},
+		"non-ascii name": {"Zoë Müller 山田", "Content-Transfer-Encoding: base64", `charset="utf-8"`},
+	} {
+		html, err := RenderTemplate("password_reset", map[string]string{"full_name": c.greeting, "reset_url": "https://app.example.test/auth/reset-password?token=t"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, err := composeMIME("Dev Health <auth@example.test>", "who@example.test", "Reset your password", html)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(raw), c.want) || !strings.Contains(string(raw), c.charset) {
+			t.Errorf("%s: want %s and %s in the part headers", name, c.want, c.charset)
+		}
+	}
+}

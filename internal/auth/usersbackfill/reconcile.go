@@ -83,6 +83,14 @@ type Reconciliation struct {
 	// provider (saml, oidc, oauth) and whose auth identities include an SSO
 	// provider-row identity the public row cannot match. Printed, never gated.
 	SSOIdentityUnmatched int
+
+	// SSORelinkPending counts the not-carried SSO accounts the owned store re-links at their first sign-in
+	// (Relinkable). Printed, never gated.
+	SSORelinkPending int
+
+	// SSOSubjectUnverifiable counts the not-carried accounts of the sso_subject_unverifiable bucket
+	// (SubjectUnverifiable). Printed, never gated.
+	SSOSubjectUnverifiable int
 }
 
 // GatedTotal is the number of gated diffs: zero is the gate.
@@ -111,6 +119,8 @@ func (r Reconciliation) Lines() []string {
 		fmt.Sprintf("info.display_name_drift=%d", r.DisplayNameDrift),
 		fmt.Sprintf("info.identity_not_carried=%d", r.IdentityNotCarried),
 		fmt.Sprintf("info.sso_identity_unmatched=%d", r.SSOIdentityUnmatched),
+		fmt.Sprintf("info.sso_identity_relink_pending=%d", r.SSORelinkPending),
+		fmt.Sprintf("info.sso_subject_unverifiable=%d", r.SSOSubjectUnverifiable),
 	)
 	return lines
 }
@@ -145,6 +155,12 @@ func Reconcile(ctx context.Context, src Source, tgt Target, batch int) (Reconcil
 			skips, _, _, notCarried := rowFacts(row)
 			if notCarried {
 				rep.IdentityNotCarried++
+				if Relinkable(row) {
+					rep.SSORelinkPending++
+				}
+				if SubjectUnverifiable(row) {
+					rep.SSOSubjectUnverifiable++
+				}
 			}
 			for _, class := range skips {
 				rep.Diffs[class]++
@@ -189,6 +205,12 @@ func compareOne(ctx context.Context, tgt Target, row Row, a AuthRow, rep *Reconc
 	skips, target, key, notCarried := rowFacts(row)
 	if notCarried {
 		rep.IdentityNotCarried++
+		if Relinkable(row) {
+			rep.SSORelinkPending++
+		}
+		if SubjectUnverifiable(row) {
+			rep.SSOSubjectUnverifiable++
+		}
 	}
 	classes := append([]string(nil), skips...)
 	if a.Kind != "user" {

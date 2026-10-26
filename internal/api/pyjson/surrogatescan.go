@@ -8,12 +8,14 @@ import (
 )
 
 // HasLoneSurrogateEscape reports whether a JSON document holds a string or a
-// key with a \uD800-\uDFFF escape that is not half of a pair. It reads raw
-// bytes because encoding/json turns such an escape into U+FFFD before a
-// handler sees the string. A high escape is paired only when a low escape
-// follows at once (json.loads in CPython); an escaped backslash is not an
-// escape. A document that does not decode is outside the contract: scan a body
-// the decoder has already accepted.
+// key with a lone surrogate: a \uD800-\uDFFF escape that is not half of a
+// pair, or the three raw bytes of a surrogate (0xED 0xA0-0xBF 0x80-0xBF),
+// which the api plane reads as one (DecodeBody). It reads raw bytes because
+// encoding/json turns either form into U+FFFD before a handler sees the
+// string. A high escape is paired only when a low escape follows at once
+// (json.loads in CPython); raw halves never pair; an escaped backslash is not
+// an escape. A document that does not decode is outside the contract: scan a
+// body the decoder has already accepted.
 func HasLoneSurrogateEscape(data []byte) bool {
 	inString := false
 	for i := 0; i < len(data); {
@@ -52,6 +54,11 @@ func HasLoneSurrogateEscape(data []byte) bool {
 				}
 				return true
 			}
+		case 0xed:
+			if i+2 < len(data) && data[i+1] >= 0xa0 && data[i+1] <= 0xbf && data[i+2] >= 0x80 && data[i+2] <= 0xbf {
+				return true
+			}
+			i++
 		default:
 			i++
 		}

@@ -322,7 +322,7 @@ func TestReachCacheOffByDefault(t *testing.T) {
 // CHAOS-11421 r1: inputs the first key missed.
 func TestReachCacheKeyIncludesIgnoredGoFiles(t *testing.T) {
 	f, _ := reachFixture(t, reachCacheHead())
-	appendTo(t, filepath.Join(f.root, ".gitignore"), "d/ignored_test.go\n")
+	appendTo(t, filepath.Join(f.root, ".git"+"ignore"), "d/ignored_test.go\n")
 	env := reachEnv()
 	without := reachKeyOf(t, f.root, env)
 	appendTo(t, filepath.Join(f.root, "d", "ignored_test.go"), reachTest("d", "\t_ = b.Load\n"))

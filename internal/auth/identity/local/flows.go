@@ -140,7 +140,7 @@ func (f *Flows) issueAndSend(ctx context.Context, principal uuid.UUID, purpose P
 	if err != nil {
 		return err
 	}
-	if err := f.links.Issue(ctx, IssueRequest{PrincipalID: principal, Purpose: purpose, TokenHash: hash, TTL: ttl}); err != nil {
+	if err := f.links.IssueBound(ctx, IssueRequest{PrincipalID: principal, Purpose: purpose, TokenHash: hash, TTL: ttl}); err != nil {
 		return fmt.Errorf("local: issuing a link credential: %w", err)
 	}
 	msg := Message{Purpose: purpose, To: to, FullName: name, Secret: secret, Deliver: principal != uuid.Nil}
@@ -267,11 +267,11 @@ func (f *Flows) reissue(ctx context.Context, email string, purpose Purpose, ttl 
 	if err != nil {
 		return fmt.Errorf("local: loading the user: %w", err)
 	}
-	principal := uuid.Nil
+	principal, name := uuid.Nil, (*string)(nil)
 	if user != nil && eligible(user) {
-		principal = user.ID
+		principal, name = user.ID, user.FullName
 	}
-	return f.issueAndSend(ctx, principal, purpose, ttl, normalized, nil)
+	return f.issueAndSend(ctx, principal, purpose, ttl, normalized, name)
 }
 
 // linkDigest is the stored form of a one-time link secret: the SHA-256 of 32
@@ -292,7 +292,7 @@ func (f *Flows) Reset(ctx context.Context, secret, newPassword string) (FlowOutc
 		return FlowOutcome{Kind: FlowPolicy, Violations: v}, nil
 	}
 	link := RedeemRequest{Purpose: PurposePasswordReset, TokenHash: linkDigest(secret)}
-	id, ok, err := f.peekResetLink(ctx, link.TokenHash)
+	id, ok, err := f.accounts.PeekResetLink(ctx, link.TokenHash)
 	if err != nil {
 		return FlowOutcome{}, fmt.Errorf("local: reading a reset link: %w", err)
 	}
@@ -377,20 +377,3 @@ func (f *Flows) changeLocked(ctx context.Context, req ChangeRequest) (FlowOutcom
 // notServiceProvider is Forgot's eligibility: a service-provider account (identity.IsServiceProvider) gets no reset
 // link and is answered as an unknown address.
 func notServiceProvider(u *User) bool { return !identity.IsServiceProvider(u.AuthProvider) }
-
-// peekResetLink is PeekResetLink for Reset: the link of a service-provider account, or of an account that is gone,
-// reads as an unknown link, so that account never gets a password.
-func (f *Flows) peekResetLink(ctx context.Context, tokenHash [32]byte) (uuid.UUID, bool, error) {
-	id, ok, err := f.accounts.PeekResetLink(ctx, tokenHash)
-	if err != nil || !ok {
-		return id, ok, err
-	}
-	user, err := f.accounts.ByID(ctx, id)
-	if err != nil {
-		return uuid.Nil, false, fmt.Errorf("loading the user: %w", err)
-	}
-	if user == nil || identity.IsServiceProvider(user.AuthProvider) {
-		return uuid.Nil, false, nil
-	}
-	return id, true, nil
-}

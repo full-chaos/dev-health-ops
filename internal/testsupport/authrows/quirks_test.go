@@ -2,6 +2,7 @@ package authrows
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -269,5 +270,302 @@ func TestMissingQuirkWithNoGoldenRowToCoverIsDead(t *testing.T) {
 	dead := l.Dead()
 	if len(dead) != 1 || !strings.Contains(dead[0], "m: a live missing-row quirk covered no row") {
 		t.Fatalf("Dead = %v, want the missing-row quirk reported", dead)
+	}
+}
+
+func ownedTable() []Quirk {
+	return []Quirk{{ID: "stamp", Kind: Gap, Tracked: "CHAOS-10630", Reason: "r", Table: TableUsers, Needs: []Aggregate{LocalLogin}, Owned: NotOwned,
+		Rewrite: func(line string) (string, bool) {
+			if line == "login true" {
+				return "login false", true
+			}
+			return "", false
+		}}}
+}
+
+func TestOwnedLegFailsALastLoginFalseRow(t *testing.T) {
+	l, err := newLedger(forwarded(t, "local_login"), true, ownedTable())
+	if err != nil {
+		t.Fatal(err)
+	}
+	problems := l.Compare(TableUsers, "login true", "login false")
+	if len(problems) != 2 || !strings.Contains(problems[0], "users: unclassified difference") {
+		t.Fatalf("a never-stamped row on the owned leg must fail as unclassified: %v", problems)
+	}
+}
+
+func TestRealTableLastLoginQuirkIsNotOwnedOnly(t *testing.T) {
+	for _, q := range Quirks {
+		if q.ID == "users-last-login-not-stamped" && q.Owned != NotOwned {
+			t.Fatalf("users-last-login-not-stamped must be NotOwned, is %q", q.Owned)
+		}
+	}
+}
+
+func linkMailLines(format string, subjects ...string) string {
+	lines := make([]string, 0, len(subjects))
+	for _, subject := range subjects {
+		lines = append(lines, LinkMailRow(subject, format))
+	}
+	return strings.Join(lines, rowSeparator)
+}
+
+var linkMailSubjects = []string{"Verify your email address", "Verify your email address", "Reset your password"}
+
+// On the owned leg auth-service's link mails carry the opaque token where the golden's carry go-api's signed one: the
+// named quirk covers each such mail, once.
+func TestLinkTokenFormatQuirkCoversTheOwnedLegsMails(t *testing.T) {
+	l, err := NewLedger(forwarded(t, "sessions,local_login,credentials"), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	golden, acp := linkMailLines(LinkTokenGoAPI, linkMailSubjects...), linkMailLines(LinkTokenOpaque, linkMailSubjects...)
+	if problems := l.Compare(TableLinkMails, golden, acp); len(problems) != 0 {
+		t.Fatalf("the owned leg's opaque tokens: %v", problems)
+	}
+	if got := l.Covered(); !strings.Contains(got, "link-token-format-auth-service=3") {
+		t.Fatalf("Covered = %q, want the quirk covering 3 mails", got)
+	}
+}
+
+// Off the owned leg the quirk is not live: an opaque token there is unclassified, and so is a mail whose format is neither.
+func TestLinkTokenFormatQuirkIsOwnedLegOnly(t *testing.T) {
+	l, err := NewLedger(forwarded(t, "sessions,local_login,credentials"), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	golden := linkMailLines(LinkTokenGoAPI, linkMailSubjects...)
+	if problems := l.Compare(TableLinkMails, golden, linkMailLines(LinkTokenOpaque, linkMailSubjects...)); len(problems) == 0 {
+		t.Fatal("an opaque token off the owned leg must fail")
+	}
+	l2, _ := NewLedger(forwarded(t, "sessions,local_login,credentials"), false)
+	if problems := l2.Compare(TableLinkMails, golden, golden); len(problems) != 0 {
+		t.Fatalf("equal formats off the owned leg: %v", problems)
+	}
+	if strings.Contains(l2.Covered(), "link-token-format-auth-service") {
+		t.Fatalf("the quirk is live off the owned leg: %q", l2.Covered())
+	}
+}
+
+// The quirk covers at most the golden's link mails: one more opaque mail than the golden holds is unclassified, an
+// unknown format never is, and on the owned leg a go-api format token is no difference (the quirk then covers nothing and dies).
+func TestLinkTokenFormatQuirkIsBounded(t *testing.T) {
+	l, _ := NewLedger(forwarded(t, "sessions,local_login,credentials"), true)
+	golden := linkMailLines(LinkTokenGoAPI, linkMailSubjects...)
+	if problems := l.Compare(TableLinkMails, golden, linkMailLines(LinkTokenOpaque, append(linkMailSubjects, "Reset your password")...)); len(problems) == 0 {
+		t.Fatal("a ninth-style extra mail must be unclassified")
+	}
+	l2, _ := NewLedger(forwarded(t, "sessions,local_login,credentials"), true)
+	if problems := l2.Compare(TableLinkMails, golden, linkMailLines("other", linkMailSubjects...)); len(problems) == 0 {
+		t.Fatal("an unknown token format must be unclassified")
+	}
+	l3, _ := NewLedger(forwarded(t, "sessions,local_login,credentials"), true)
+	if problems := l3.Compare(TableLinkMails, golden, golden); len(problems) != 0 {
+		t.Fatalf("equal formats: %v", problems)
+	}
+	if dead := strings.Join(l3.Dead(), "\n"); !strings.Contains(dead, "link-token-format-auth-service") {
+		t.Fatalf("on the owned leg a go-api format token leaves the quirk covering nothing: Dead() must name it, got:\n%s", dead)
+	}
+}
+
+// The control of the dead check: opaque mails on the owned leg are covered, so the quirk is not listed dead.
+func TestLinkTokenFormatQuirkIsNotDeadWhenTheOwnedLegMailsOpaqueTokens(t *testing.T) {
+	n := len(lines(goldenRows(t)[TableLinkMails]))
+	subjects := make([]string, n)
+	for i := range subjects {
+		subjects[i] = "Verify your email address"
+	}
+	l, _ := NewLedger(forwarded(t, "sessions,local_login,credentials"), true)
+	if problems := l.Compare(TableLinkMails, linkMailLines(LinkTokenGoAPI, subjects...), linkMailLines(LinkTokenOpaque, subjects...)); len(problems) != 0 {
+		t.Fatal(problems)
+	}
+	if dead := strings.Join(l.Dead(), "\n"); strings.Contains(dead, "link-token-format-auth-service") {
+		t.Fatalf("the quirk covered mails and is listed dead:\n%s", dead)
+	}
+}
+
+// The quirk covers exactly the golden's link mails: all of them pass, one more is unclassified.
+func TestLinkTokenFormatQuirkCoversExactlyTheGoldensLinkMails(t *testing.T) {
+	n := len(lines(goldenRows(t)[TableLinkMails]))
+	subjects := make([]string, 0, n+1)
+	for i := 0; i < n+1; i++ {
+		subjects = append(subjects, "Verify your email address")
+	}
+	l, _ := NewLedger(forwarded(t, "sessions,local_login,credentials"), true)
+	if problems := l.Compare(TableLinkMails, linkMailLines(LinkTokenGoAPI, subjects[:n]...), linkMailLines(LinkTokenOpaque, subjects[:n]...)); len(problems) != 0 {
+		t.Fatalf("%d golden mails and %d opaque mails must pass: %v", n, n, problems)
+	}
+	if got := l.Covered(); !strings.Contains(got, "link-token-format-auth-service="+strconv.Itoa(n)) {
+		t.Fatalf("Covered = %q, want the quirk covering %d", got, n)
+	}
+	l2, _ := NewLedger(forwarded(t, "sessions,local_login,credentials"), true)
+	if problems := l2.Compare(TableLinkMails, linkMailLines(LinkTokenGoAPI, subjects...), linkMailLines(LinkTokenOpaque, subjects...)); len(problems) == 0 {
+		t.Fatalf("mail %d is beyond the quirk's Max and must be unclassified", n+1)
+	}
+}
+
+// Max is the number of link mails the golden's Python plane sent, counted from the frozen golden.
+func TestLinkTokenFormatQuirkMaxIsTheGoldensLinkMails(t *testing.T) {
+	golden := lines(goldenRows(t)[TableLinkMails])
+	for _, q := range Quirks {
+		if q.ID == "link-token-format-auth-service" {
+			if q.Owned != OwnedOnly || q.Table != TableLinkMails || q.Max != len(golden) {
+				t.Fatalf("the quirk = owned %q table %q max %d, want owned-only, link_mails, %d (the golden's link mails)", q.Owned, q.Table, q.Max, len(golden))
+			}
+			return
+		}
+	}
+	t.Fatal("no quirk link-token-format-auth-service")
+}
+
+const (
+	aliceGolden = "alice@example.comaliceAlice Älocaltrue true false 1 true true$2b$12$"
+	aliceTarget = "alice@example.comaliceAlice Älocaltrue true false 1 false true$2b$12$"
+	piaGolden   = "pia@example.com<null><null>localtrue true false 1 true true$2b$12$"
+	piaTarget   = "pia@example.com<null><null>localtrue true false 1 false true$2b$12$"
+	emmaGolden  = "emma@example.com<null>localtrue false false 0 false true$2b$12$"
+	emmaNull    = "emma@example.com<null><null>localtrue false false 0 false true$2b$12$"
+)
+
+// deadOf is the Dead() lines naming one quirk: the other quirks of a leg cover no row in a users-only comparison.
+func deadOf(l *Ledger, id string) []string {
+	var named []string
+	for _, line := range l.Dead() {
+		if strings.HasPrefix(line, id+":") {
+			named = append(named, line)
+		}
+	}
+	return named
+}
+
+func ownedUsersLedger(t *testing.T, owned bool) *Ledger {
+	t.Helper()
+	l, err := NewLedger(forwarded(t, "sessions,local_login,credentials"), owned)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return l
+}
+
+// The owned leg keeps the seeded expired legacy verification row of uma in public.email_verification_tokens: go-api
+// replaced it on issue, auth-service issues into auth.link_credentials and never touches the public table (no reader of
+// it is reachable while users are owned; its purge is CHAOS-11506). One named extra row, exactly.
+func TestOwnedLegCoversUmasLegacyVerificationRowOnceAndNothingElse(t *testing.T) {
+	const umaLegacy = "uma@example.comtrue false 64 1440"
+	golden := goldenRows(t)[TableEmailVerificationTokens]
+	target := golden + rowSeparator + umaLegacy
+	l := ownedUsersLedger(t, true)
+	if problems := append(l.Compare(TableEmailVerificationTokens, golden, target), deadOf(l, "email-verification-legacy-row-not-purged-owned")...); len(problems) != 0 {
+		t.Fatalf("uma's legacy row on the owned leg: %v", problems)
+	}
+	if got := l.Covered(); !strings.Contains(got, "email-verification-legacy-row-not-purged-owned=1") {
+		t.Fatalf("Covered = %q", got)
+	}
+	for name, c := range map[string]struct {
+		owned  bool
+		table  string
+		target string
+	}{
+		"not owned":                   {false, TableEmailVerificationTokens, target},
+		"two such rows":               {true, TableEmailVerificationTokens, target + rowSeparator + umaLegacy},
+		"another user":                {true, TableEmailVerificationTokens, golden + rowSeparator + "zed@example.comtrue false 64 1440"},
+		"another table":               {true, TablePasswordResetTokens, goldenRows(t)[TablePasswordResetTokens] + rowSeparator + umaLegacy},
+		"a live row of the same user": {true, TableEmailVerificationTokens, golden + rowSeparator + "uma@example.comtrue true 64 1440"},
+	} {
+		l := ownedUsersLedger(t, c.owned)
+		goldenFor := golden
+		if c.table == TablePasswordResetTokens {
+			goldenFor = goldenRows(t)[TablePasswordResetTokens]
+		}
+		if problems := l.Compare(c.table, goldenFor, c.target); len(problems) == 0 {
+			t.Errorf("%s: an extra legacy row was covered", name)
+		}
+	}
+}
+
+// The verification tokens table has no projection of its own: it is open to the one owned-leg quirk of its stale row and
+// to nothing else, so the table does not widen any other check.
+func TestCheckTableOpensTheVerificationTokensTableOnlyToTheOwnedExactOneRowQuirk(t *testing.T) {
+	entry := func(mutate func(q *Quirk)) []Quirk {
+		q := Quirk{ID: "legacy", Kind: Gap, Tracked: "CHAOS-11506", Reason: "r", Table: TableEmailVerificationTokens, Needs: []Aggregate{Credentials},
+			Owned: OwnedOnly, Max: 1, Exact: true, Extra: func(string) bool { return true }}
+		mutate(&q)
+		return []Quirk{q}
+	}
+	if problems := CheckTable(entry(func(*Quirk) {})); len(problems) != 0 {
+		t.Fatalf("the owned, exact, one-row quirk: %v", problems)
+	}
+	for name, mutate := range map[string]func(q *Quirk){
+		"not owned":             func(q *Quirk) { q.Owned = NotOwned },
+		"every leg":             func(q *Quirk) { q.Owned = "" },
+		"max 2":                 func(q *Quirk) { q.Max = 2 },
+		"not exact":             func(q *Quirk) { q.Exact = false },
+		"another table":         func(q *Quirk) { q.Table = TablePasswordResetTokens },
+		"the memberships table": func(q *Quirk) { q.Table = TableMemberships },
+	} {
+		problems := CheckTable(entry(mutate))
+		if len(problems) == 0 || !strings.Contains(strings.Join(problems, ";"), "has no projection") {
+			t.Errorf("%s: problems %v, want the no-projection problem", name, problems)
+		}
+	}
+}
+
+// CHAOS-11502 stamps public.users.last_login_at on a sign-in while users are owned: the owned leg has no last-login quirk,
+// a never-stamped row there is unclassified, and the not-owned leg keeps its own.
+func TestOwnedLegHasNoLastLoginQuirkAndTheNotOwnedLegKeepsItsOwn(t *testing.T) {
+	stamped := ownedUsersLedger(t, true)
+	if problems := stamped.Compare(TableUsers, strings.Join([]string{aliceGolden, piaGolden}, rowSeparator), strings.Join([]string{aliceGolden, piaGolden}, rowSeparator)); len(problems) != 0 {
+		t.Fatalf("stamped last logins on the owned leg: %v", problems)
+	}
+	if got := stamped.Covered(); strings.Contains(got, "users-last-login-not-stamped=") {
+		t.Fatalf("Covered = %q, no last-login quirk is live on the owned leg", got)
+	}
+	never := ownedUsersLedger(t, true)
+	if problems := never.Compare(TableUsers, aliceGolden, aliceTarget); len(problems) == 0 {
+		t.Fatal("a never-stamped last login on the owned leg must be unclassified")
+	}
+	l := ownedUsersLedger(t, false)
+	if problems := l.Compare(TableUsers, aliceGolden, aliceTarget); len(problems) != 0 {
+		t.Fatalf("the not-owned leg's last login: %v", problems)
+	}
+	if got := l.Covered(); !strings.Contains(got, "users-last-login-not-stamped=1") {
+		t.Fatalf("Covered = %q, want the not-owned quirk", got)
+	}
+}
+
+// CHAOS-11503 stores an empty full name as ” in public.users: emma's row compares exactly, with no quirk, and the old
+// NULL answer is unclassified.
+func TestEmptyFullNameComparesExactlyOnEveryLeg(t *testing.T) {
+	for _, owned := range []bool{true, false} {
+		l := ownedUsersLedger(t, owned)
+		if problems := l.Compare(TableUsers, emmaGolden, emmaGolden); len(problems) != 0 {
+			t.Errorf("owned=%v: emma's row equal to the golden's: %v", owned, problems)
+		}
+		if strings.Contains(l.Covered(), "full-name") {
+			t.Errorf("owned=%v: a full-name quirk is live: %q", owned, l.Covered())
+		}
+		stale := ownedUsersLedger(t, owned)
+		if problems := stale.Compare(TableUsers, emmaGolden, emmaNull); len(problems) == 0 {
+			t.Errorf("owned=%v: an empty full name stored as NULL must be unclassified", owned)
+		}
+	}
+}
+
+// The quirk covers exactly the golden's link mails: seven of the eight rewritten rows is a failure by name, not a pass.
+func TestLinkTokenFormatQuirkFailsWhenOnlySevenOfTheGoldensMailsAreRewritten(t *testing.T) {
+	const id = "link-token-format-auth-service"
+	n := len(lines(goldenRows(t)[TableLinkMails]))
+	subjects := make([]string, n)
+	for i := range subjects {
+		subjects[i] = "Verify your email address"
+	}
+	full, _ := NewLedger(forwarded(t, "sessions,local_login,credentials"), true)
+	if problems := append(full.Compare(TableLinkMails, linkMailLines(LinkTokenGoAPI, subjects...), linkMailLines(LinkTokenOpaque, subjects...)), deadOf(full, id)...); len(problems) != 0 {
+		t.Fatalf("all %d mails rewritten: %v", n, problems)
+	}
+	seven, _ := NewLedger(forwarded(t, "sessions,local_login,credentials"), true)
+	problems := append(seven.Compare(TableLinkMails, linkMailLines(LinkTokenGoAPI, subjects[:n-1]...), linkMailLines(LinkTokenOpaque, subjects[:n-1]...)), deadOf(seven, id)...)
+	if text := strings.Join(problems, "\n"); !strings.Contains(text, id+": covered "+strconv.Itoa(n-1)+" rows") {
+		t.Fatalf("%d of %d rewritten rows must fail by name: %v", n-1, n, problems)
 	}
 }

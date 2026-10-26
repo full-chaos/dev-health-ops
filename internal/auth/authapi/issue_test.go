@@ -12,6 +12,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/servicecred"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
+	"github.com/full-chaos/dev-health-ops/internal/edgetokenmint"
 )
 
 // fakeServiceCredentials accepts the token "good" unless refusal or err is set.
@@ -94,11 +95,12 @@ func TestIssueSessionWithoutAnOrganization(t *testing.T) {
 func TestIssueSessionRefusesAndCreatesNothing(t *testing.T) {
 	stranger := uuid.New()
 	for name, tc := range map[string]struct {
-		mutate func(*compatFixture)
-		header map[string]string
-		body   func(*compatFixture) string
-		status int
-		reason string
+		mutate    func(*compatFixture)
+		header    map[string]string
+		body      func(*compatFixture) string
+		status    int
+		reason    string
+		noProject bool
 	}{
 		"no bearer":             {header: map[string]string{}, status: http.StatusUnauthorized, reason: "invalid_credentials"},
 		"basic auth":            {header: map[string]string{"Authorization": "Basic Z29vZA=="}, status: http.StatusUnauthorized, reason: "invalid_credentials"},
@@ -110,6 +112,19 @@ func TestIssueSessionRefusesAndCreatesNothing(t *testing.T) {
 			user.IsActive = false
 			f.users.users[f.principal] = user
 		}, status: http.StatusForbidden, reason: "principal_deactivated"},
+		"service provider": {mutate: func(f *compatFixture) {
+			user := f.users.users[f.principal]
+			provider := edgetokenmint.ServiceAuthProvider
+			user.AuthProvider = &provider
+			f.users.users[f.principal] = user
+		}, status: http.StatusForbidden, reason: "not_entitled", noProject: true},
+		"service provider in an organization": {mutate: func(f *compatFixture) {
+			user := f.users.users[f.principal]
+			provider := edgetokenmint.ServiceAuthProvider
+			user.AuthProvider = &provider
+			f.users.users[f.principal] = user
+		}, body: func(f *compatFixture) string { return issueBody(f.principal, f.org.String(), "pwd") },
+			status: http.StatusForbidden, reason: "not_entitled", noProject: true},
 		"not a member": {body: func(f *compatFixture) string { return issueBody(f.principal, uuid.NewString(), "pwd") }, status: http.StatusForbidden, reason: "not_entitled"},
 		"extra member": {body: func(f *compatFixture) string {
 			return strings.TrimSuffix(issueBody(f.principal, "", "pwd"), "}") + `,"role":"owner"}`
@@ -153,7 +168,7 @@ func TestIssueSessionRefusesAndCreatesNothing(t *testing.T) {
 		if len(f.sessions.created) != 0 {
 			t.Fatalf("%s: a refused issue created %d sessions", name, len(f.sessions.created))
 		}
-		if tc.status == http.StatusUnauthorized && (len(f.projector.userCalls) != 0 || len(f.projector.orgCalls) != 0) {
+		if (tc.status == http.StatusUnauthorized || tc.noProject) && (len(f.projector.userCalls) != 0 || len(f.projector.orgCalls) != 0) {
 			t.Fatalf("%s: a refused request projected users %v orgs %v", name, f.projector.userCalls, f.projector.orgCalls)
 		}
 	}

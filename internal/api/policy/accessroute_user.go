@@ -70,7 +70,7 @@ func (a *Authenticator) accessTokenUser(ctx context.Context, claims *AccessToken
 		a.logger.WarnContext(ctx, "api user access token without a session", slog.String("user_id", id.String()))
 		return nil, errRejected
 	}
-	if err := a.checkSession(ctx, map[string]any{"sid": claims.SessionID}, id); err != nil {
+	if err := a.checkSession(ctx, map[string]any{"sid": claims.SessionID}, id, row.State.TokenVersion); err != nil {
 		return nil, err
 	}
 	user := &User{UserID: id.String(), ID: id, Email: row.Email, Username: row.Username, FullName: row.FullName,

@@ -38,6 +38,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -364,10 +365,10 @@ func TestSAMLInitiateRefusesALoneSurrogateRelayStateOnlyWhereItIsForwarded(t *te
 	}
 }
 
-// TestSAMLInitiateSurrogateRefusalTable drives the saml_* rows of
+// TestSSOSurrogateRefusalTableStackRows drives the saml_* and oauth_* rows of
 // ci/sso_surrogate_refusals.tsv against a real provider row: the status and
 // the error loc the table names must be what the route answers.
-func TestSAMLInitiateSurrogateRefusalTable(t *testing.T) {
+func TestSSOSurrogateRefusalTableStackRows(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "ci", "sso_surrogate_refusals.tsv"))
 	if err != nil {
 		t.Fatal(err)
@@ -381,11 +382,15 @@ func TestSAMLInitiateSurrogateRefusalTable(t *testing.T) {
 	providers := map[string]uuid.UUID{
 		"saml_forwarded": seedProvider(t, ctx, st.pool, orgID, providerOpts{protocol: "saml", status: "active", config: config, autoProvision: true}),
 		"saml_sealed":    seedProvider(t, ctx, st.pool, orgID, providerOpts{protocol: "saml", status: "active", config: config, autoProvision: true, disallowIdpInitiated: true}),
+		"oauth_gitlab": seedProvider(t, ctx, st.pool, orgID, providerOpts{
+			protocol: "oauth_gitlab", status: "active", config: gitlabConfig(startFakeGitLab(t).server.URL), autoProvision: true,
+			clientSecretEncryptedFallback: "gitlab-secret",
+		}),
 	}
 	driven := 0
 	for _, line := range strings.Split(string(raw), "\n") {
 		f := strings.Split(line, "\t")
-		if line == "" || strings.HasPrefix(line, "#") || f[1] != "sso" || !strings.HasPrefix(f[4], "saml_") {
+		if line == "" || strings.HasPrefix(line, "#") || f[1] != "sso" || !(strings.HasPrefix(f[4], "saml_") || strings.HasPrefix(f[4], "oauth_")) {
 			continue
 		}
 		id, request, body, setup, wantCell := f[0], f[2], f[3], f[4], strings.Fields(f[5])
@@ -394,6 +399,13 @@ func TestSAMLInitiateSurrogateRefusalTable(t *testing.T) {
 			t.Fatalf("%s: unknown setup %q", id, setup)
 		}
 		method, path, _ := strings.Cut(request, " ")
+		if encoded, isHex := strings.CutPrefix(body, "hex:"); isHex {
+			decoded, err := hex.DecodeString(encoded)
+			if err != nil {
+				t.Fatalf("%s: %v", id, err)
+			}
+			body = string(decoded)
+		}
 		req, err := http.NewRequest(method, st.server.URL+strings.Replace(path, "{provider}", provider.String(), 1), strings.NewReader(body))
 		if err != nil {
 			t.Fatal(err)
@@ -422,8 +434,8 @@ func TestSAMLInitiateSurrogateRefusalTable(t *testing.T) {
 		}
 		driven++
 	}
-	if driven != 2 {
-		t.Fatalf("drove %d saml rows, want 2", driven)
+	if driven != 5 {
+		t.Fatalf("drove %d saml and oauth rows, want 5", driven)
 	}
 }
 

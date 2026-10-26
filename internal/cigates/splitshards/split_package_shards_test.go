@@ -4,11 +4,16 @@ package splitshards_test
 
 import (
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 	"testing"
+	"unicode"
+	"unicode/utf8"
 )
 
 // The packages too big for one integration job run as name-partitioned test shards (ci/go_*_test_shards.tsv). Every test
@@ -48,6 +53,95 @@ func goTestList(t *testing.T, root, pkg string) map[string]bool {
 		}
 	}
 	return out
+}
+
+// goTestSignature is the signature rule of cmd/go for a test: one parameter of type *T or *x.T, no results, no type
+// parameters (go test refuses to build a package whose Test-named function breaks it).
+func goTestSignature(fn *ast.FuncDecl) bool {
+	if fn.Type.TypeParams.NumFields() > 0 || fn.Type.Results.NumFields() > 0 || fn.Type.Params == nil ||
+		len(fn.Type.Params.List) != 1 || len(fn.Type.Params.List[0].Names) > 1 {
+		return false
+	}
+	ptr, ok := fn.Type.Params.List[0].Type.(*ast.StarExpr)
+	if !ok {
+		return false
+	}
+	switch x := ptr.X.(type) {
+	case *ast.Ident:
+		return x.Name == "T"
+	case *ast.SelectorExpr:
+		return x.Sel.Name == "T"
+	}
+	return false
+}
+
+// parsedTestFuncs parses one Go test file and returns its top-level tests (cmd/go's rule: "Test" or "Test" plus a rune
+// that is not lower case, no receiver, goTestSignature; TestMain aside) and the first top-level init or TestMain.
+func parsedTestFuncs(t *testing.T, path string) ([]string, string) {
+	t.Helper()
+	file, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatalf("parse %s: %v", path, err)
+	}
+	var tests []string
+	hook := ""
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Recv != nil {
+			continue
+		}
+		name := fn.Name.Name
+		if name == "init" || name == "TestMain" {
+			if hook == "" {
+				hook = name
+			}
+			continue
+		}
+		if rest, ok := strings.CutPrefix(name, "Test"); ok && goTestSignature(fn) {
+			if r, _ := utf8.DecodeRuneInString(rest); rest == "" || !unicode.IsLower(r) {
+				tests = append(tests, name)
+			}
+		}
+	}
+	return tests, hook
+}
+
+// taggedOnly is the oracle for one split package, built apart from check_go.sh: the top-level tests of the test files
+// that only the integration build lists (go list -tags=integration minus plain go list), and the first `func init` or
+// `func TestMain` of such a file ("" when none). A hook changes the process the untagged tests run in, so that package
+// keeps every test in its shards.
+func taggedOnly(t *testing.T, root, pkg string) (map[string]bool, string) {
+	t.Helper()
+	files := func(tags ...string) []string {
+		args := append([]string{"list", "-e", "-mod=readonly"}, tags...)
+		args = append(args, "-f={{range .TestGoFiles}}{{println .}}{{end}}{{range .XTestGoFiles}}{{println .}}{{end}}", "./"+pkg)
+		res := freeSpec{dir: root, env: inheritedEnv(nil, "GOTOOLCHAIN="+pinnedGoToolchain(t), "GOWORK=off")}.run("go", args...)
+		if res.code != 0 {
+			t.Fatalf("go list %s: %s%s", pkg, res.stdout, res.stderr)
+		}
+		return strings.Fields(res.stdout)
+	}
+	inPlain := map[string]bool{}
+	for _, f := range files() {
+		inPlain[f] = true
+	}
+	tagged, hook := map[string]bool{}, ""
+	for _, f := range files("-tags=integration") {
+		if inPlain[f] {
+			continue
+		}
+		tests, h := parsedTestFuncs(t, filepath.Join(root, pkg, f))
+		if h != "" && hook == "" {
+			hook = pkg + "/" + f + " " + h
+		}
+		for _, n := range tests {
+			tagged[n] = true
+		}
+	}
+	if len(tagged) == 0 {
+		t.Fatalf("%s: no integration-tagged top-level test found: a vacuous oracle", pkg)
+	}
+	return tagged, hook
 }
 
 func runLines(stdout, prefix string) []string {
@@ -91,21 +185,31 @@ func TestEveryTestRunsInExactlyOneSplitPackageShard(t *testing.T) {
 				t.Errorf("a %s test is in two shards", c.name)
 			}
 			listed := goTestList(t, root, c.pkg)
-			var missing, extra []string
-			for k := range listed {
+			// Untagged tests run in the go-quality test and race legs (FULL on merge_group), so a shard runs only the
+			// integration-tagged ones, unless a tag-only hook makes the package run whole.
+			want, hook := taggedOnly(t, root, c.pkg)
+			if hook != "" {
+				want = listed
+			}
+			var missing, extra, untagged []string
+			for k := range want {
 				if !got[k] {
 					missing = append(missing, k)
 				}
 			}
 			for k := range got {
-				if !listed[k] {
+				switch {
+				case !listed[k]:
 					extra = append(extra, k)
+				case !want[k]:
+					untagged = append(untagged, k)
 				}
 			}
 			sort.Strings(missing)
 			sort.Strings(extra)
-			if len(missing) > 0 || len(extra) > 0 {
-				t.Errorf("in no shard: %v; in a shard but not compiled: %v", missing[:min(5, len(missing))], extra[:min(5, len(extra))])
+			sort.Strings(untagged)
+			if len(missing) > 0 || len(extra) > 0 || len(untagged) > 0 {
+				t.Errorf("in no shard: %v; in a shard but not compiled: %v; untagged test in a shard (%d): %v", missing[:min(5, len(missing))], extra[:min(5, len(extra))], len(untagged), untagged[:min(5, len(untagged))])
 			}
 		})
 	}

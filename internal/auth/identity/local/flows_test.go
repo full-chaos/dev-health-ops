@@ -20,6 +20,8 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
+	"github.com/full-chaos/dev-health-ops/internal/edgetokenmint"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/callseq"
 )
 
 type flowRecorder struct {
@@ -88,6 +90,10 @@ func (a *flowAccounts) SetEmailVerified(_ context.Context, id uuid.UUID) error {
 func (a *flowAccounts) PeekResetLink(_ context.Context, hash [32]byte) (uuid.UUID, bool, error) {
 	a.rec.add("PeekResetLink")
 	id, ok := a.links.redeem[hash]
+	// The port's contract: a link of an account that is gone or of the service provider reads as not ok.
+	if user := a.byID[id]; ok && (user == nil || identity.IsServiceProvider(user.AuthProvider)) {
+		return uuid.Nil, false, nil
+	}
 	if ok && a.afterPeek != nil {
 		a.afterPeek()
 	}
@@ -125,7 +131,7 @@ type flowLinks struct {
 	redeem   map[[32]byte]uuid.UUID
 }
 
-func (l *flowLinks) Issue(_ context.Context, req IssueRequest) error {
+func (l *flowLinks) IssueBound(_ context.Context, req IssueRequest) error {
 	l.rec.add("Issue")
 	l.issued = append(l.issued, req)
 	return nil
@@ -388,6 +394,36 @@ func TestResendAndForgotMakeOneCallSequenceForEveryAddress(t *testing.T) {
 	}
 }
 
+// A refused reset link (unknown, of a service-provider account, of an account that is gone) makes the one call
+// PeekResetLink and answers FlowInvalidToken, the same steps as an unknown link.
+func TestResetMakesOneCallSequenceForEveryRefusedLink(t *testing.T) {
+	sequences := map[string][]string{}
+	for _, name := range []string{"unknown", "service-provider", "gone"} {
+		rig := newFlowRig(t, true)
+		switch name {
+		case "service-provider":
+			provider := "service"
+			u := &User{ID: uuid.New(), IsActive: true, IsVerified: true, AuthProvider: &provider}
+			rig.accounts.byID[u.ID] = u
+			rig.grant("refused-secret", u.ID)
+		case "gone":
+			rig.grant("refused-secret", uuid.New())
+		}
+		out, err := rig.f.Reset(context.Background(), "refused-secret", "A-new-pass-77")
+		if err != nil || out.Kind != FlowInvalidToken {
+			t.Fatalf("%s: Reset = %+v, %v", name, out, err)
+		}
+		if len(rig.accounts.hashes) != 0 {
+			t.Errorf("%s: a password was written", name)
+		}
+		sequences[name] = rig.rec.names()
+	}
+	if want := []string{"PeekResetLink"}; !reflect.DeepEqual(sequences["unknown"], want) {
+		t.Fatalf("unknown link calls = %v, want %v", sequences["unknown"], want)
+	}
+	callseq.Same(t, "refused reset links", sequences)
+}
+
 func TestResetSetsPasswordRevokesEverySessionAndIsSingleUse(t *testing.T) {
 	rig := newFlowRig(t, true)
 	u := rig.user("r@example.com", true)
@@ -396,7 +432,7 @@ func TestResetSetsPasswordRevokesEverySessionAndIsSingleUse(t *testing.T) {
 	if err != nil || out.Kind != FlowOK {
 		t.Fatalf("Reset = %+v, %v", out, err)
 	}
-	if want := []string{"PeekResetLink", "ByID", "SetPasswordEndingSessions"}; !reflect.DeepEqual(rig.rec.names(), want) {
+	if want := []string{"PeekResetLink", "SetPasswordEndingSessions"}; !reflect.DeepEqual(rig.rec.names(), want) {
 		t.Fatalf("calls = %v, want %v", rig.rec.names(), want)
 	}
 	if rig.accounts.hashes[0] != "hash-of:A-new-pass-77" || rig.accounts.ended[0] != u.ID {
@@ -765,5 +801,97 @@ func TestForgotAndResetTreatAServiceProviderAccountAsUnknown(t *testing.T) {
 	}
 	if len(rig.accounts.hashes) != 0 {
 		t.Errorf("a password was set: %v", rig.accounts.hashes)
+	}
+}
+
+func nameOf(m Message) string {
+	if m.FullName == nil {
+		return "<nil>"
+	}
+	return *m.FullName
+}
+
+func reissueFlows() map[string]func(*flowRig, string) error {
+	return map[string]func(*flowRig, string) error{
+		"resend": func(r *flowRig, e string) error { return r.f.Resend(context.Background(), e) },
+		"forgot": func(r *flowRig, e string) error { return r.f.Forgot(context.Background(), e) },
+	}
+}
+
+func TestResendCarriesTheDisplayNameToTheMail(t *testing.T) {
+	rig := newFlowRig(t, true)
+	name := "Pat Example"
+	rig.user("pending@example.com", false).FullName = &name
+	if err := reissueFlows()["resend"](rig, "pending@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if got := nameOf(rig.mail.sent[0]); got != name {
+		t.Errorf("resend mail name = %q, want %q", got, name)
+	}
+}
+
+func TestForgotCarriesTheDisplayNameToTheMail(t *testing.T) {
+	rig := newFlowRig(t, true)
+	name := "Pat Example"
+	rig.user("pat@example.com", true).FullName = &name
+	if err := reissueFlows()["forgot"](rig, "pat@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if got := nameOf(rig.mail.sent[0]); got != name {
+		t.Errorf("forgot mail name = %q, want %q", got, name)
+	}
+}
+
+func TestResendAndForgotCarryANonASCIIDisplayName(t *testing.T) {
+	name := "Zoë Müller 山田"
+	for flow, do := range reissueFlows() {
+		rig := newFlowRig(t, true)
+		rig.user("zoe@example.com", false).FullName = &name
+		if err := do(rig, "zoe@example.com"); err != nil {
+			t.Fatal(err)
+		}
+		if got := nameOf(rig.mail.sent[0]); got != name {
+			t.Errorf("%s: mail name = %q, want %q", flow, got, name)
+		}
+	}
+}
+
+func TestResendAndForgotWithNoDisplayNameKeepTheAddressGreeting(t *testing.T) {
+	empty := ""
+	for flow, do := range reissueFlows() {
+		for label, fullName := range map[string]*string{"nil": nil, "empty": &empty} {
+			rig := newFlowRig(t, true)
+			rig.user("none@example.com", false).FullName = fullName
+			if err := do(rig, "none@example.com"); err != nil {
+				t.Fatal(err)
+			}
+			if got := rig.mail.sent[0].FullName; got != nil && *got != "" {
+				t.Errorf("%s/%s: mail name = %q, want none", flow, label, *got)
+			}
+		}
+	}
+}
+
+func TestResendAndForgotDecoysCarryNoName(t *testing.T) {
+	name := "Pat Example"
+	for flow, do := range reissueFlows() {
+		rig := newFlowRig(t, true)
+		rig.user("nobody-else@example.com", true).FullName = &name
+		if flow == "resend" {
+			rig.user("verified@example.com", true).FullName = &name
+		} else {
+			provider := edgetokenmint.ServiceAuthProvider
+			rig.user("verified@example.com", true).FullName, rig.accounts.byEmail["verified@example.com"].AuthProvider = &name, &provider
+		}
+		for _, address := range []string{"unknown@example.com", "verified@example.com"} {
+			if err := do(rig, address); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for i, msg := range rig.mail.sent {
+			if msg.Deliver || msg.FullName != nil {
+				t.Errorf("%s: decoy %d deliver=%v name=%q", flow, i, msg.Deliver, nameOf(msg))
+			}
+		}
 	}
 }

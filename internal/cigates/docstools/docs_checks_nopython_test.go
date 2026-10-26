@@ -11,6 +11,7 @@ var docsChecksPythonFiles = []string{
 	"scripts/check_built_site_links.py",
 	"scripts/check_docs_candidate_search.py",
 	"tests/docs/test_built_site_links.py",
+	"scripts/build_docs_cloudflare.py",
 }
 
 // The three docs checks ported to Go are not run from Python anywhere: the scripts are gone and no workflow, make
@@ -22,7 +23,7 @@ func TestDocsChecksRunNoPython(t *testing.T) {
 			t.Errorf("%s still exists (stat err: %v); the check is `cigate docs`", rel, err)
 		}
 	}
-	for _, rel := range []string{"Makefile", ".gitlab-ci.yml", "scripts/build_docs_cloudflare.py", ".github/workflows/docs-guards.yml", ".github/workflows/docs-cloudflare.yml"} {
+	for _, rel := range []string{"Makefile", ".gitlab-ci.yml", ".github/workflows/docs-guards.yml", ".github/workflows/docs-cloudflare.yml"} {
 		raw, err := os.ReadFile(filepath.Join(root, rel))
 		if err != nil {
 			t.Fatal(err)

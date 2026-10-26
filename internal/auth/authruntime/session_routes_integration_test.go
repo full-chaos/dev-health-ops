@@ -104,7 +104,7 @@ func newRoutesEnvDialing(t *testing.T, ctx context.Context, extra map[string]str
 	if err != nil {
 		t.Fatal(err)
 	}
-	const password = "routes-test-only-not-a-credential"
+	password := testRolePassword(t)
 	if _, err := admin.Exec(ctx, fmt.Sprintf(`CREATE ROLE %q LOGIN PASSWORD '%s'`, role, password)); err != nil {
 		t.Fatal(err)
 	}

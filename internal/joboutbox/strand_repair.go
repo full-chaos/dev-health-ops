@@ -710,8 +710,20 @@ func classifyStrandError(err error) error {
 	if errors.As(err, &pgErr) && pgErr.Code == insufficientPrivilege {
 		return ErrNotAuthorized
 	}
-	return ErrUnavailable
+	if err == nil {
+		return ErrUnavailable
+	}
+	return unavailableWithCause{cause: err}
 }
+
+// unavailableWithCause is ErrUnavailable that keeps the database cause for the
+// startup retry, which classifies it with a func its caller injects. Its text
+// and its errors.Is chain are ErrUnavailable's alone: the cause can name the
+// dial address and is never exposed to errors.Is or errors.As.
+type unavailableWithCause struct{ cause error }
+
+func (unavailableWithCause) Error() string { return ErrUnavailable.Error() }
+func (unavailableWithCause) Unwrap() error { return ErrUnavailable }
 
 const (
 	claimLive        = "claim_live"

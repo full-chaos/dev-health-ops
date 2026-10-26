@@ -507,3 +507,134 @@ func TestAuthThenOpsMigrateWithoutAGrantsPassLeavesPublicUsersUnreadable(t *test
 		t.Fatalf("public.users.email readable after the grants pass = %v, %v; want true", readable, err)
 	}
 }
+
+// The runtime role reads users.sso_provider_id (ops revision 0155): after ops migrate, the grants pass makes the SSO
+// provider binding readable. Every caller of the grants pass runs after ops migrate, so on a public schema without
+// the column the pass fails closed, naming the column (Apply defers it instead).
+func TestGrantsPassMakesTheSSOProviderBindingReadable(t *testing.T) {
+	f := newOrderFixture(t)
+	f.authMigrate(t, "auth")
+	if _, err := f.dhoMigrate(t); err != nil {
+		t.Fatalf("dho migrate: %v", err)
+	}
+	if err := f.grantsPass(t, "auth"); err != nil {
+		t.Fatalf("grants pass: %v", err)
+	}
+	conn := orderConnect(t, f.ctx, f.uri)
+	var readable bool
+	if err := conn.QueryRow(f.ctx, `SELECT has_column_privilege($1, 'public.users', 'sso_provider_id', 'SELECT')`, f.role).Scan(&readable); err != nil || !readable {
+		t.Fatalf("public.users.sso_provider_id readable after the grants pass = %v, %v; want true", readable, err)
+	}
+	if _, err := conn.Exec(f.ctx, `ALTER TABLE public.users DROP COLUMN sso_provider_id`); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.grantsPass(t, "auth"); err == nil || !strings.Contains(err.Error(), "public.users.sso_provider_id") {
+		t.Fatalf("grants pass without users.sso_provider_id = %v, want a failure naming public.users.sso_provider_id", err)
+	}
+}
+
+// TestGrantsModeFailsClosedAndApplyDefersAnAbsentManifestColumn: on an ops schema at revision 0154 (no
+// users.sso_provider_id) the grants pass, which runs only after ops migrate, refuses and names the column; Apply,
+// which runs before ops migrate on a roll, passes and reports the column grant DEFERRED.
+func TestGrantsModeFailsClosedAndApplyDefersAnAbsentManifestColumn(t *testing.T) {
+	f := newOrderFixture(t)
+	f.dhoMigrateThrough(t, "0154")
+	logs, err := f.applyLogged(t)
+	if err != nil {
+		t.Fatalf("Apply at ops revision 0154: %v", err)
+	}
+	if !strings.Contains(logs, "DEFERRED") || !strings.Contains(logs, "sso_provider_id") {
+		t.Fatalf("Apply at 0154 did not report the sso_provider_id grant as DEFERRED:\n%s", logs)
+	}
+	err = f.grantsPass(t, "auth")
+	if !errors.Is(err, ErrPublicColumnMissing) || !strings.Contains(err.Error(), "public.users.sso_provider_id") {
+		t.Fatalf("grants pass at ops revision 0154 = %v, want ErrPublicColumnMissing naming public.users.sso_provider_id", err)
+	}
+}
+
+// dhoMigrateThrough is dho migrate up to and including revision (0154: public.users has no sso_provider_id yet).
+func (f *orderFixture) dhoMigrateThrough(t *testing.T, revision string) {
+	t.Helper()
+	baseline, err := pgmigrate.LoadBaseline()
+	if err != nil {
+		t.Fatal(err)
+	}
+	chain, err := pgmigrate.LoadChain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pgmigrate.Upgrade(f.ctx, orderConnect(t, f.ctx, f.uri), baseline, pgmigrate.ChainThrough(chain, revision)); err != nil {
+		t.Fatalf("dho migrate through %s: %v", revision, err)
+	}
+}
+
+func (f *orderFixture) applyLogged(t *testing.T) (string, error) {
+	t.Helper()
+	pool, err := pgxpool.New(f.ctx, f.uri)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	var logs bytes.Buffer
+	_, err = Apply(f.ctx, pool, Options{Schema: "auth", RuntimeRole: f.role, Logger: slog.New(slog.NewTextHandler(&logs, nil))})
+	return logs.String(), err
+}
+
+func (f *orderFixture) ssoBindingReadable(t *testing.T) bool {
+	t.Helper()
+	var readable bool
+	if err := orderConnect(t, f.ctx, f.uri).QueryRow(f.ctx, `SELECT has_column_privilege($1, 'public.users', 'sso_provider_id', 'SELECT')`, f.role).Scan(&readable); err != nil {
+		t.Fatal(err)
+	}
+	return readable
+}
+
+// TestUpgradeFrom0154DefersTheSSOBindingGrantUntil0155 is the roll from an ops schema before revision 0155: auth-migrate
+// runs first, while public.users has no sso_provider_id. Apply passes and reports the column grant DEFERRED (the
+// grants pass, run only after ops migrate, refuses); the posture check holds it PENDING. After ops migrate adds the
+// column, Apply grants it; with the grant revoked the posture check FAILS naming the column.
+func TestUpgradeFrom0154DefersTheSSOBindingGrantUntil0155(t *testing.T) {
+	f := newOrderFixture(t)
+	f.dhoMigrateThrough(t, "0154")
+	if n := f.count(t, `SELECT count(*) FROM pg_attribute WHERE attrelid = 'public.users'::regclass AND attname = 'sso_provider_id' AND NOT attisdropped`); n != 0 {
+		t.Fatal("public.users already has sso_provider_id at revision 0154")
+	}
+	logs, err := f.applyLogged(t)
+	if err != nil {
+		t.Fatalf("Apply at ops revision 0154: %v", err)
+	}
+	if !strings.Contains(logs, "DEFERRED") || !strings.Contains(logs, "sso_provider_id") {
+		t.Fatalf("Apply at 0154 did not report the sso_provider_id grant as DEFERRED:\n%s", logs)
+	}
+	if err := f.grantsPass(t, "auth"); err == nil || !strings.Contains(err.Error(), "public.users.sso_provider_id") {
+		t.Fatalf("grants pass at ops revision 0154 = %v, want a failure naming public.users.sso_provider_id", err)
+	}
+
+	if _, err := f.dhoMigrate(t); err != nil {
+		t.Fatalf("dho migrate to head: %v", err)
+	}
+	if _, err := f.applyLogged(t); err != nil {
+		t.Fatalf("Apply after 0155: %v", err)
+	}
+	if !f.ssoBindingReadable(t) {
+		t.Fatal("public.users.sso_provider_id is not readable after 0155 and Apply")
+	}
+
+	conn := orderConnect(t, f.ctx, f.uri)
+	if _, err := conn.Exec(f.ctx, fmt.Sprintf(`REVOKE SELECT (sso_provider_id) ON public.users FROM %s`, Quote(mustValidatedIdentifier(f.role)))); err != nil {
+		t.Fatal(err)
+	}
+	violations, err := VerifyRuntimePosture(f.ctx, conn, Options{Schema: "auth", RuntimeRole: f.role})
+	if err != nil {
+		t.Fatalf("posture check after 0155 with the grant revoked: %v", err)
+	}
+	var named bool
+	for _, v := range violations {
+		if v.Object == "users.sso_provider_id" && v.Privilege == "SELECT" {
+			named = true
+		}
+	}
+	if !named {
+		t.Fatalf("posture check after 0155 with the grant revoked = %v; want a FAIL naming users.sso_provider_id", violations)
+	}
+}

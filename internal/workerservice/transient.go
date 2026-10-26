@@ -36,16 +36,6 @@ func startupRetryJitter(wait time.Duration) time.Duration {
 	return wait + time.Duration(rand.Int64N(2*spread+1)-spread)
 }
 
-// transientCauseAttrs is the bounded cause attribute of a retry or give-up
-// line whose failure was an unreachable endpoint, and nothing for any other
-// failure. It never carries error text.
-func transientCauseAttrs(err error) []any {
-	if isTransientDialError(err) {
-		return []any{"cause", health.CauseUnreachable}
-	}
-	return nil
-}
-
 // retryPresenceStart retries the presence registration while the failure is a
 // transient dial error. Its log lines carry only bounded fields, never error
 // text, which can name the dial address.
@@ -76,13 +66,21 @@ func retryPresenceStart(
 			if budgetExhausted {
 				reason = "retry_budget_exhausted"
 			}
-			component.logger.ErrorContext(ctx, "worker presence registration refused",
-				append([]any{
+			if isTransientDialError(err) {
+				component.logger.ErrorContext(ctx, "worker presence registration refused",
 					"error_category", "dependency_unavailable",
+					"cause", health.CauseUnreachable,
 					"reason", reason,
 					"attempts", attempt,
 					"elapsed", elapsed.String(),
-				}, transientCauseAttrs(err)...)...,
+				)
+				return
+			}
+			component.logger.ErrorContext(ctx, "worker presence registration refused",
+				"error_category", "dependency_unavailable",
+				"reason", reason,
+				"attempts", attempt,
+				"elapsed", elapsed.String(),
 			)
 		},
 	)

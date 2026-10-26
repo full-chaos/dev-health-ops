@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
+	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
 	"github.com/jackc/pgx/v5"
 	"github.com/riverqueue/river"
@@ -99,13 +100,21 @@ func (process riverWorkerProcess) logRetry(ctx context.Context, attempt int, ela
 	if process.logger == nil {
 		return
 	}
-	process.logger.WarnContext(ctx, "river workers start timed out, retrying",
-		append([]any{
+	if isTransientDialError(err) {
+		process.logger.WarnContext(ctx, "river workers start timed out, retrying",
 			"error_category", "dependency_unavailable",
+			"cause", health.CauseUnreachable,
 			"attempt", attempt,
 			"elapsed", elapsed.String(),
 			"retry_in", wait.String(),
-		}, transientCauseAttrs(err)...)...,
+		)
+		return
+	}
+	process.logger.WarnContext(ctx, "river workers start timed out, retrying",
+		"error_category", "dependency_unavailable",
+		"attempt", attempt,
+		"elapsed", elapsed.String(),
+		"retry_in", wait.String(),
 	)
 }
 
@@ -117,13 +126,21 @@ func (process riverWorkerProcess) logGiveUp(ctx context.Context, reason string, 
 	if process.logger == nil {
 		return
 	}
-	process.logger.ErrorContext(ctx, "river workers start refused",
-		append([]any{
+	if isTransientDialError(err) {
+		process.logger.ErrorContext(ctx, "river workers start refused",
 			"error_category", "dependency_unavailable",
+			"cause", health.CauseUnreachable,
 			"reason", reason,
 			"attempts", attempt,
 			"elapsed", elapsed.String(),
-		}, transientCauseAttrs(err)...)...,
+		)
+		return
+	}
+	process.logger.ErrorContext(ctx, "river workers start refused",
+		"error_category", "dependency_unavailable",
+		"reason", reason,
+		"attempts", attempt,
+		"elapsed", elapsed.String(),
 	)
 }
 

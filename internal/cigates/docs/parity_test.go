@@ -18,7 +18,7 @@ import (
 
 const (
 	makefilePath    = "Makefile"
-	buildScriptPath = "scripts/build_docs_cloudflare.py"
+	buildScriptPath = "internal/cigates/docsbuild/docsbuild.go"
 	mkdocsBuild     = "mkdocs build"
 	contentGoTest   = "go test ./internal/cigates/docs/..."
 	docsPrepare     = "docs-prepare"
@@ -37,7 +37,7 @@ var (
 	makeSubTarget = regexp.MustCompile(`\$\(MAKE\)[^\n]* (docs\\:[a-z-]+)`)
 )
 
-// scriptChain is what `build_docs_cloudflare.py --mode preview --full-check` runs, in order. The test reads the script as
+// scriptChain is what `cigate docs-build --mode preview --full-check` runs, in order. The test reads the Go source as
 // text only (never runs it) and fails when a verb of the chain is not named in it.
 var scriptChain = []string{
 	"validate-publication", mkdocsBuild, "check-built-site-links", "check-docs-search", "check-docs-accessibility",
@@ -50,7 +50,7 @@ var ciOnly = map[string]bool{"check-validated-site": true}
 // checksOf lists the checks one command line runs. A run of the build script expands to scriptChain.
 func checksOf(line string) []string {
 	switch {
-	case strings.Contains(line, "scripts/build_docs_cloudflare.py"):
+	case strings.Contains(line, "cmd/cigate docs-build"):
 		if !strings.Contains(line, "--full-check") {
 			return nil
 		}
@@ -114,7 +114,6 @@ func makeRecipe(makefile, target string, seen map[string]bool) []string {
 func localChecks(makefile string) []string {
 	var out []string
 	for _, line := range makeRecipe(makefile, `docs\:check`, map[string]bool{}) {
-		line = strings.ReplaceAll(line, "$(PYTHON)", "python")
 		out = append(out, checksOf(line)...)
 	}
 	sort.Strings(out)
@@ -190,7 +189,7 @@ func TestDocsCheckMatchesCI(t *testing.T) {
 			return d.edit(t, makefilePath, "\tgo test -mod=readonly -trimpath -count=1 ./internal/cigates/docs/...\n", "")
 		}, `CI runs "go test ./internal/cigates/docs/..." but`},
 		{"docs:check stops running the build script", func(t *testing.T, d docTree) docTree {
-			return d.edit(t, makefilePath, "check-freshness\n\t$(PYTHON) scripts/build_docs_cloudflare.py --mode preview --full-check\n", "check-freshness\n")
+			return d.edit(t, makefilePath, "check-freshness\n\tDOCS_PYTHON=$(PYTHON) go run -trimpath -mod=readonly ./cmd/cigate docs-build --mode preview --full-check\n", "check-freshness\n")
 		}, "CI runs"},
 		{"a second job builds the site again", func(t *testing.T, d docTree) docTree {
 			return d.appended(t, docsGuardsPath, "  rebuild:\n    runs-on: ubuntu-latest\n    steps:\n      - run: python -m mkdocs build --strict --config-file mkdocs.yml\n")

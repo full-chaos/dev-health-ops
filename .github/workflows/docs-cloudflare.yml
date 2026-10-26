@@ -54,7 +54,7 @@ jobs:
         run: |
           mkdir -p .build
           set -o pipefail
-          python scripts/build_docs_cloudflare.py --mode preview --full-check \
+          go run -trimpath -mod=readonly ./cmd/cigate docs-build --mode preview --full-check \
             2>&1 | tee .build/docs-cloudflare-build.log
 
       - name: Upload build evidence and diagnostics

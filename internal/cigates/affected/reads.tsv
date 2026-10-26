@@ -74,6 +74,9 @@ internal/cigates/docs	test	docs
 internal/cigates/docs	test	docs-data
 internal/cigates/docs	test	mkdocs.yml
 internal/cigates/docsprepare	test	docs-data
+internal/cigates/docsbuild	code	docs
+internal/cigates/docsbuild	code	docs-data
+internal/cigates/docsbuild	code	mkdocs.yml
 internal/cigates/docstools	code	contracts
 internal/cigates/docstools	code	deploy
 internal/cigates/docstools	code	docs

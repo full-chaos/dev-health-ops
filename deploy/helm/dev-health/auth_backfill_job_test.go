@@ -98,11 +98,11 @@ func TestAuthOrgsOwnedDefaultUnset(t *testing.T) {
 	}
 }
 
-// The owned switches come from authService.phase alone: auth-service and the Job agree in every rendered phase, and
-// the phases that would set them (4 users owned, 5 orgs owned) are refused until the public-table writer decision.
+// The owned switches come from authService.phase alone: auth-service and the Job agree in every rendered phase
+// (4 users owned included), and phase 5 (orgs owned) is refused until its own public-table writer leaf.
 func TestAuthOrgsOwnedOneKeyAllConsumers(t *testing.T) {
 	for _, verb := range []string{"users-backfill", "orgs-backfill"} {
-		for _, phase := range []string{"1", "2", "3"} {
+		for _, phase := range []string{"1", "2", "3", "4"} {
 			t.Run(verb+"/phase "+phase, func(t *testing.T) {
 				args := withSets(append(append([]string{}, backfillOn...), phase3Secrets...), "authService.backfill.verb="+verb, "authService.phase="+phase)
 				if phase != "1" {
@@ -114,10 +114,10 @@ func TestAuthOrgsOwnedOneKeyAllConsumers(t *testing.T) {
 				}
 			})
 		}
-		for _, phase := range []string{"4", "5"} {
+		for _, phase := range []string{"5"} {
 			t.Run(verb+"/phase "+phase+" refused", func(t *testing.T) {
 				_, out, err := renderAuth(t, withSets(backfillOn, "authService.backfill.verb="+verb, "authService.phase="+phase)...)
-				if err == nil || !strings.Contains(out, "phases 4 and 5 need the public-table writer decision") {
+				if err == nil || !strings.Contains(out, "phase 5 (orgs owned) needs its own public-table writer leaf") {
 					t.Fatalf("phase %s rendered: err=%v out=%.300s", phase, err, out)
 				}
 			})

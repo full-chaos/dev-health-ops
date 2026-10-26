@@ -79,7 +79,10 @@ VALUES ($1, $2, NULL, 'service', NULL, true, true, false, 0, now(), now())`, svc
 		t.Fatal(err)
 	}
 	expired := rig.account(t, ctx, "Old-pass-12345")
-	rig.env.preAged(t, ctx, expired, PurposePasswordReset, "expired-link", "now() - interval '1 hour'")
+	rig.env.preAgedBound(t, ctx, expired, PurposePasswordReset, "expired-link", "now() - interval '1 hour'")
+	for _, secret := range []string{"svc-link", "gone-link", "expired-link"} {
+		rig.env.requireBindingPasses(t, ctx, secret)
+	}
 
 	const newPassword = "A-new-pass-7788"
 	sequences := map[string][]string{}

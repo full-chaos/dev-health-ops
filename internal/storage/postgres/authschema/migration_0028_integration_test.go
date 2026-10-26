@@ -4,6 +4,7 @@ package authschema
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 )
@@ -28,5 +29,42 @@ func TestMigration0028AddsANullableIssuedTokenVersionColumn(t *testing.T) {
 	if err := env.admin.QueryRow(ctx, `SELECT count(*) FROM pg_indexes WHERE schemaname = 'auth' AND tablename = 'link_credentials'
 		AND indexdef LIKE '%issued_token_version%'`).Scan(&indexes); err != nil || indexes != 0 {
 		t.Fatalf("indexes over issued_token_version = %d, %v; want none", indexes, err)
+	}
+}
+
+// TestMigration0028IssuedTokenVersionIsWriteOnce: the value the issuer's
+// INSERT stored never changes, not even in an audit transaction: stamping a
+// row that has none, re-stamping and clearing are refused, and a consume of
+// the same row still commits.
+func TestMigration0028IssuedTokenVersionIsWriteOnce(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	env := newM10Fixture(t, ctx)
+	m10Seed(t, ctx, env)
+
+	var bound, unbound string
+	if err := env.admin.QueryRow(ctx, `INSERT INTO auth.link_credentials (principal_id, purpose, token_hash, expires_at, issued_token_version)
+		VALUES ($1, 'password_reset', $2::bytea, now() + interval '1 hour', 3) RETURNING id::text`, m10Principal, m10Hash("c1")).Scan(&bound); err != nil {
+		t.Fatal(err)
+	}
+	if err := env.admin.QueryRow(ctx, `INSERT INTO auth.link_credentials (principal_id, purpose, token_hash, expires_at)
+		VALUES ($1, 'email_verification', $2::bytea, now() + interval '1 hour') RETURNING id::text`, m10Principal, m10Hash("c2")).Scan(&unbound); err != nil {
+		t.Fatal(err)
+	}
+	for name, c := range map[string]struct{ sql, id string }{
+		"re-stamping":                {`UPDATE auth.link_credentials SET issued_token_version = 4 WHERE id = $1`, bound},
+		"clearing":                   {`UPDATE auth.link_credentials SET issued_token_version = NULL WHERE id = $1`, bound},
+		"stamping a row without one": {`UPDATE auth.link_credentials SET issued_token_version = 0 WHERE id = $1`, unbound},
+	} {
+		if err := guardedExec(ctx, env.runtime, c.sql, c.id); err == nil || !strings.Contains(err.Error(), "issued_token_version") {
+			t.Errorf("%s in an audit transaction: err = %v, want a refusal naming issued_token_version", name, err)
+		}
+	}
+	if err := guardedExec(ctx, env.runtime, `UPDATE auth.link_credentials SET issued_token_version = 3, consumed_at = now() WHERE id = $1`, bound); err != nil {
+		t.Errorf("a consume that writes the same issued_token_version was refused: %v", err)
+	}
+	var issued *int64
+	if err := env.admin.QueryRow(ctx, `SELECT issued_token_version FROM auth.link_credentials WHERE id = $1`, bound).Scan(&issued); err != nil || issued == nil || *issued != 3 {
+		t.Errorf("issued_token_version after the refusals = %v, %v; want 3", issued, err)
 	}
 }

@@ -10,8 +10,25 @@
 ALTER TABLE link_credentials ADD COLUMN issued_token_version bigint;
 
 -- issued_token_version decides whether a link redeems, so it is a security
--- column: written once by the issuer's INSERT, and any later UPDATE of it runs
--- only inside an audit transaction, as the other security columns of the row.
+-- column: any UPDATE of it runs only inside an audit transaction, as the other
+-- security columns of the row.
 CREATE TRIGGER link_credentials_issued_token_version_guard
     BEFORE UPDATE OF issued_token_version ON link_credentials
     FOR EACH ROW EXECUTE FUNCTION audit_commit_guard();
+
+-- It is also write-once: the issuer's INSERT stores it and no UPDATE changes
+-- it, not even inside an audit transaction (the guard above checks where a
+-- write happens, not which value it writes). A row without a value keeps none,
+-- so it never redeems.
+CREATE FUNCTION issued_token_version_write_once() RETURNS trigger
+LANGUAGE plpgsql
+SET search_path FROM CURRENT AS $$
+BEGIN
+    RAISE EXCEPTION '%.issued_token_version of % is written once and cannot change', TG_TABLE_NAME, OLD.id
+        USING ERRCODE = 'integrity_constraint_violation';
+END;
+$$;
+CREATE TRIGGER link_credentials_issued_token_version_write_once
+    BEFORE UPDATE OF issued_token_version ON link_credentials
+    FOR EACH ROW WHEN (NEW.issued_token_version IS DISTINCT FROM OLD.issued_token_version)
+    EXECUTE FUNCTION issued_token_version_write_once();

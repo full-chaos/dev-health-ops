@@ -543,8 +543,8 @@ func Diff(t *testing.T, goBase string, requests []Request, python []Response, op
 		same, compared, pyShown, goShown := Compare(request, pythonResponse, goResponse, compareOptions)
 		fmt.Fprintf(&receipt, "%-58s python=%d go=%d %s\n", request.Name, python[index].Status, goResponse.Status, Mark(same))
 		if !same {
-			t.Errorf("%s:\n python %d %s %v\n go     %d %s %v", request.Name, python[index].Status, pyShown.Body,
-				pick(pyShown.Headers, compared), goResponse.Status, goShown.Body, pick(goShown.Headers, compared))
+			pyShown.Status, goShown.Status = python[index].Status, goResponse.Status
+			t.Error(DescribeDifference(request.Name, pyShown, goShown, compared))
 		}
 	}
 	if orglessRefused > options.MaxOrglessRefusals {
@@ -803,7 +803,7 @@ var noRedirects = &http.Client{CheckRedirect: func(*http.Request, []*http.Reques
 
 // Do sends one request to base and reads the whole answer; a redirect is
 // returned, not followed.
-func Do(t *testing.T, base string, request Request) Response {
+func Do(t RowsReporter, base string, request Request) Response {
 	t.Helper()
 	var body io.Reader
 	if request.Body != nil {
@@ -815,7 +815,7 @@ func Do(t *testing.T, base string, request Request) Response {
 	}
 	httpRequest, err := http.NewRequest(request.Method, base+request.Path, body)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatal(RedactError(err))
 	}
 	// TestClient sends Host: testserver unless the request names one; net/http
 	// takes the Host from req.Host, never from a Host header.
@@ -829,7 +829,7 @@ func Do(t *testing.T, base string, request Request) Response {
 	}
 	response, err := noRedirects.Do(httpRequest)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatal(RedactError(err))
 	}
 	defer response.Body.Close()
 	raw, err := io.ReadAll(response.Body)

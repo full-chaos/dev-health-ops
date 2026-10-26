@@ -242,6 +242,7 @@ internal/platform/fernet	fernet_test.go	unexpressed	-	*.go
 internal/platform/otlpmetrics	labelcensus_test.go	.	tree	*.go
 internal/platform/secrets	declared_fields_test.go	internal	tree	*.go
 internal/platform/secrets	envreads_test.go	.	tree	*.go
+internal/platform/timeoutclass	timeoutclass_test.go	internal/platform/timeoutclass	dir	*
 internal/processreadiness	readiness_timeout_test.go	internal/processreadiness	dir	*
 internal/providerfoundation	classify_call_sites_test.go	unexpressed	-	-
 internal/providerfoundation	wire_sites_census_test.go	internal/providerfoundation	dir	*

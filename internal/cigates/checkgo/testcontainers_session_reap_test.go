@@ -8,6 +8,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 )
 
 func TestIntegrationGoTestRunsThroughTheSessionReapHelper(t *testing.T) {
@@ -136,7 +137,13 @@ func helperHarness(t *testing.T, sid string, signal, noSetsid bool) (exit int, m
 	raw, _ := os.ReadFile(reapLog)
 	if cp, err := os.ReadFile(childPID); err == nil {
 		if pid, err := strconv.Atoi(strings.TrimSpace(string(cp))); err == nil {
-			childAlive = syscall.Kill(pid, 0) == nil
+			// an orphaned child stays a zombie until init reaps it: poll for its exit, bounded
+			for i := 0; i < 250; i++ {
+				if childAlive = syscall.Kill(pid, 0) == nil; !childAlive {
+					break
+				}
+				time.Sleep(20 * time.Millisecond)
+			}
 			if childAlive {
 				_ = syscall.Kill(pid, syscall.SIGKILL)
 			}
@@ -199,7 +206,10 @@ func TestTcTrapNeverKillsTheHelpersOwnProcessGroup(t *testing.T) {
 		"sleep 30 &\nBYSTANDER=$!\nsleep 30 &\nTARGET=$!\n" +
 		"TC_TRAP_PID=$TARGET TC_TRAP_SID=sess-abcdef12 TC_TRAP_PGID=$(ps -o pgid= -p $$ | tr -d ' ')\n" +
 		"( tc_trap ) 2>/dev/null\nrc=$?\n" +
-		"b=dead; kill -0 $BYSTANDER 2>/dev/null && b=alive\nt=dead; kill -0 $TARGET 2>/dev/null && t=alive\n" +
+		"b=dead; kill -0 $BYSTANDER 2>/dev/null && b=alive\n" +
+		// the subshell above cannot reap the target, so it is a zombie until this shell handles SIGCHLD: poll for its exit, bounded
+		"for i in $(seq 1 200); do kill -0 $TARGET 2>/dev/null || break; sleep 0.05; done\n" +
+		"t=dead; kill -0 $TARGET 2>/dev/null && t=alive\n" +
 		"echo \"$rc $b $t\" > " + pids + "\nkill -KILL $BYSTANDER $TARGET 2>/dev/null\n"
 	if err := exec.Command("setsid", "bash", "-c", script).Run(); err != nil {
 		t.Fatal(err)

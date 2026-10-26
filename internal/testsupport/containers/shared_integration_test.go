@@ -228,6 +228,58 @@ func TestSharedServerLeakCheck(t *testing.T) {
 				"CREATE USER planted_member IDENTIFIED WITH sha256_password BY 'planted'",
 				"GRANT planted_ch_role TO planted_member")
 		}, "clickhouse new role-grant planted_member||planted_ch_role|0"},
+		{"setting with sighup context", func(t *testing.T, ctx context.Context, s *sharedServers) {
+			pgExec(t, ctx, s.pg.adminDSN, "ALTER SYSTEM SET autovacuum_naptime = '61s'", "SELECT pg_reload_conf()")
+			// The reload is asynchronous; wait until the server reports the new value.
+			deadline := time.Now().Add(20 * time.Second)
+			for {
+				conn, err := pgx.Connect(ctx, s.pg.adminDSN)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var value string
+				err = conn.QueryRow(ctx, "SELECT setting FROM pg_settings WHERE name = 'autovacuum_naptime'").Scan(&value)
+				_ = conn.Close(ctx)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if value == "61" || time.Now().After(deadline) {
+					return
+				}
+				time.Sleep(200 * time.Millisecond)
+			}
+		}, "postgres new setting autovacuum_naptime=61"},
+		{"parameter privilege", func(t *testing.T, ctx context.Context, s *sharedServers) {
+			pgExec(t, ctx, s.pg.adminDSN, "GRANT SET ON PARAMETER work_mem TO PUBLIC")
+		}, "postgres new parameter-acl work_mem"},
+		{"replication slot", func(t *testing.T, ctx context.Context, s *sharedServers) {
+			pgExec(t, ctx, s.pg.adminDSN, "SELECT pg_create_physical_replication_slot('planted_slot')")
+		}, "postgres new replication-slot planted_slot"},
+		{"role setting", func(t *testing.T, ctx context.Context, s *sharedServers) {
+			pgExec(t, ctx, s.pg.adminDSN, "ALTER ROLE worker_test SET work_mem = '5MB'")
+		}, "postgres new db-role-setting */worker_test work_mem=5MB"},
+		{"relation in the admin database", func(t *testing.T, ctx context.Context, s *sharedServers) {
+			pgExec(t, ctx, s.pg.adminDSN, "CREATE TABLE planted_admin (id int)")
+		}, "postgres new admin-db-relation public.planted_admin"},
+		{"clickhouse role", func(t *testing.T, ctx context.Context, s *sharedServers) {
+			chExec(t, ctx, s.ch.adminDSN, "CREATE ROLE planted_lone_role")
+		}, "clickhouse new role planted_lone_role"},
+		{"clickhouse quota", func(t *testing.T, ctx context.Context, s *sharedServers) {
+			chExec(t, ctx, s.ch.adminDSN, "CREATE QUOTA planted_quota FOR INTERVAL 1 hour MAX queries = 1000")
+		}, "clickhouse new quota planted_quota"},
+		{"clickhouse row policy", func(t *testing.T, ctx context.Context, s *sharedServers) {
+			chExec(t, ctx, s.ch.adminDSN, "CREATE ROW POLICY planted_policy ON system.one USING 1")
+		}, "clickhouse new row-policy planted_policy"},
+		{"clickhouse settings profile", func(t *testing.T, ctx context.Context, s *sharedServers) {
+			chExec(t, ctx, s.ch.adminDSN, "CREATE SETTINGS PROFILE planted_profile SETTINGS max_threads = 2")
+		}, "clickhouse new settings-profile planted_profile"},
+		{"clickhouse table in a shared database", func(t *testing.T, ctx context.Context, s *sharedServers) {
+			chExec(t, ctx, s.ch.adminDSN, "CREATE TABLE default.planted_table (id UInt8) ENGINE = Memory")
+		}, "clickhouse new shared-db-table default.planted_table"},
+		{"clickhouse dictionary", func(t *testing.T, ctx context.Context, s *sharedServers) {
+			chExec(t, ctx, s.ch.adminDSN, "CREATE DICTIONARY default.planted_dict (id UInt64, v String) PRIMARY KEY id "+
+				"SOURCE(NULL()) LAYOUT(FLAT()) LIFETIME(0)")
+		}, "clickhouse new dictionary default.planted_dict"},
 		{"clickhouse SQL user-defined function", func(t *testing.T, ctx context.Context, s *sharedServers) {
 			chExec(t, ctx, s.ch.adminDSN, "CREATE FUNCTION planted_udf AS (x) -> x + 1")
 		}, "clickhouse new function planted_udf"},

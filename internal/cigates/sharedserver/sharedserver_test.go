@@ -215,6 +215,16 @@ func TestGuardFlagsPlantedServerWideStatements(t *testing.T) {
 		`exec("CREATE FUNCTION planted_udf AS (x) -> x + 1")`,
 		`exec("CREATE OR REPLACE FUNCTION planted_udf AS (x) -> x * 2")`,
 		`exec("CREATE USER OR REPLACE ch_reader")`,
+		`exec("CREATE QUOTA planted_quota FOR INTERVAL 1 hour MAX queries = 1")`,
+		`exec("CREATE ROW POLICY planted_policy ON t USING 1 TO ALL")`,
+		`exec("CREATE DATABASE planted_db")`,
+		`exec("ALTER DATABASE worker_test SET work_mem = '7MB'")`,
+		"exec(\"CREATE TABLE default.planted (id UInt8) ENGINE = Memory\")",
+		"exec(\"CREATE TABLE IF NOT EXISTS `worker_test`.planted (id int)\")",
+		`exec("SELECT pg_create_physical_replication_slot('planted_slot')")`,
+		`exec("PREPARE TRANSACTION 'planted'")`,
+		`exec("GRANT SET ON PARAMETER work_mem TO PUBLIC")`,
+		`exec("COMMENT ON ROLE worker_test IS 'planted'")`,
 	}
 	allowed := []string{
 		`exec("CREATE ROLE " + role + " LOGIN")`,
@@ -225,6 +235,12 @@ func TestGuardFlagsPlantedServerWideStatements(t *testing.T) {
 		`exec("SYSTEM FLUSH LOGS")`,
 		`exec("CREATE OR REPLACE FUNCTION touch() RETURNS trigger AS $$ BEGIN RETURN NEW; END $$ LANGUAGE plpgsql")`,
 		`exec("CREATE FUNCTION f (a int) RETURNS int AS 'select a' LANGUAGE sql")`,
+		`exec(fmt.Sprintf("CREATE DATABASE %q TEMPLATE %q", goDB, sourceDB))`,
+		`exec("CREATE DATABASE IF NOT EXISTS " + database)`,
+		`exec("CREATE USER IF NOT EXISTS " + user + " IDENTIFIED BY 'x'")`,
+		`exec("CREATE TABLE only_here (id int)")`,
+		`exec("CREATE TABLE default_values (id int)")`,
+		`exec("SELECT count() FROM default.events")`,
 		`// CREATE ROLE is cluster-scoped; ALTER SYSTEM too`,
 	}
 	inFunc := func(name string, lines []string) string {
@@ -233,10 +249,12 @@ func TestGuardFlagsPlantedServerWideStatements(t *testing.T) {
 	write("internal/opted/main_test.go", "package opted\nfunc TestMain(m *testing.M) { os.Exit(containers.RunWithSharedServers(m.Run)) }\n")
 	write("internal/opted/planted_test.go", "package opted\n"+inFunc("TestPlanted", planted))
 	write("internal/opted/allowed_test.go", "package opted\n"+inFunc("TestAllowed", allowed))
-	// One file, two tests: the Isolated call covers its own func only.
+	// One file, three funcs: the Isolated call covers its own func only, so the
+	// unisolated test's statement and the helper it calls are both flagged.
 	write("internal/opted/mixed_test.go", "package opted\n"+
 		inFunc("TestIsolated", append([]string{"instance, _ := containers.StartPostgresIsolated(ctx)"}, planted...))+
-		inFunc("TestShared", []string{`exec("ALTER SYSTEM SET work_mem = '7MB'")`}))
+		inFunc("TestShared", []string{`exec("ALTER SYSTEM SET work_mem = '7MB'")`, "plantSetting(t)"})+
+		inFunc("plantSetting", []string{`exec("ALTER SYSTEM SET work_mem = '8MB'")`}))
 	write("internal/notopted/planted_test.go", "package notopted\n"+inFunc("TestPlanted", planted))
 
 	optedIn, findings := scan(t, filepath.Join(root, "internal"))
@@ -245,16 +263,18 @@ func TestGuardFlagsPlantedServerWideStatements(t *testing.T) {
 		t.Errorf("opted-in packages = %v, want [opted]", optedIn)
 	}
 	flagged := map[int]bool{}
-	mixedShared := false
 	// mixed_test.go: package line, TestIsolated (header, Isolated call,
-	// planted lines, "}"), then TestShared's header and its one statement.
+	// planted lines, "}"), TestShared (header, statement, helper call, "}"),
+	// plantSetting (header, statement).
 	mixedSharedLine := 1 + 1 + 1 + len(planted) + 1 + 1 + 1
+	mixedHelperLine := mixedSharedLine + 2 + 1 + 1
+	mixed := map[int]bool{}
 	for _, f := range findings {
 		switch {
 		case f.file == "opted/planted_test.go":
 			flagged[f.line] = true
-		case f.file == "opted/mixed_test.go" && f.line == mixedSharedLine:
-			mixedShared = true
+		case f.file == "opted/mixed_test.go" && (f.line == mixedSharedLine || f.line == mixedHelperLine):
+			mixed[f.line] = true
 		default:
 			t.Errorf("unexpected finding %s:%d %s", f.file, f.line, f.kind)
 		}
@@ -264,7 +284,10 @@ func TestGuardFlagsPlantedServerWideStatements(t *testing.T) {
 			t.Errorf("planted line not flagged: %s", line)
 		}
 	}
-	if !mixedShared {
+	if !mixed[mixedSharedLine] {
 		t.Errorf("an unisolated ALTER SYSTEM in a file whose other test takes an Isolated server was not flagged (want mixed_test.go:%d)", mixedSharedLine)
+	}
+	if !mixed[mixedHelperLine] {
+		t.Errorf("an ALTER SYSTEM in a helper of the same file, called from the unisolated test, was not flagged (want mixed_test.go:%d)", mixedHelperLine)
 	}
 }

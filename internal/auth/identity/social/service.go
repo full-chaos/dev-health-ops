@@ -261,7 +261,7 @@ func lookupReason(err error) Reason {
 }
 
 func signInTo(p identity.Principal) (Reason, error) {
-	if p.DisabledAt != nil {
+	if p.DisabledAt != nil || p.ServiceProvider {
 		return ReasonPrincipalDeactivated, ErrPrincipalDisabled
 	}
 	return ReasonAccepted, nil
@@ -296,6 +296,10 @@ func (s *Service) Link(ctx context.Context, who SignedIn, provider Provider, tok
 	if found && principal.ID != who.PrincipalID {
 		reason = ReasonIdentityConflict
 		return identity.Identity{}, identity.ErrIdentityConflict
+	}
+	if found && principal.ServiceProvider {
+		reason = ReasonPrincipalDeactivated
+		return identity.Identity{}, ErrPrincipalDisabled
 	}
 	all, err := s.store.ListIdentities(ctx, who.PrincipalID)
 	if err != nil {

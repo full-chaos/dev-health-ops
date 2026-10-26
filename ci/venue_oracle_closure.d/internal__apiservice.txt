@@ -45,6 +45,7 @@ internal/apiservice/admin
 internal/apiservice/customerpush
 internal/audit
 internal/auth/accessverify
+internal/auth/authconfig
 internal/auth/clientaddr
 internal/auth/contracts
 internal/auth/contracts/provisioning

@@ -71,6 +71,11 @@ var proofRouteSwitches = map[string]bool{
 	"GO_API_PROOF_WRITE_ROUTE_ENABLED": true,
 }
 
+var (
+	probeHostFlag     = regexp.MustCompile(`--host[ =](\S+)`)
+	probeLoopbackHost = regexp.MustCompile(`^"?(localhost|0\.0\.0\.0|::1|127(\.[0-9]+)*)"?$`)
+)
+
 var routeSwitchName = regexp.MustCompile(`^GO_API_[A-Z0-9_]+_ENABLED$`)
 
 type composeStack struct {
@@ -509,6 +514,34 @@ func composeStackFindings(text []byte) ([]string, error) {
 	if !systemLogsMounted {
 		found("system logs: clickhouse does not mount the system logs file at %s, so the system log tables have no ttl", systemLogsFileTarget)
 	}
+	probe := ""
+	if clickHouse.Healthcheck != nil && len(clickHouse.Healthcheck.Test) == 2 && clickHouse.Healthcheck.Test[0] == "CMD-SHELL" {
+		probe = clickHouse.Healthcheck.Test[1]
+	}
+	if !strings.Contains(probe, "clickhouse-client") || !strings.Contains(probe, "SELECT 1") {
+		found("clickhouse health: the probe is %q, want a CMD-SHELL clickhouse-client `SELECT 1` on the native port: clients dial 9000, and an HTTP /ping probe passes before 9000 listens", probe)
+	}
+	if strings.Contains(probe, "8123") {
+		found("clickhouse health: the probe uses the HTTP port 8123, want the native port")
+	}
+	if !strings.Contains(probe, "h=$$(hostname -i") {
+		found("clickhouse health: the probe does not take its host from hostname -i: the first-boot temporary server listens on 127.0.0.1 only and would pass a loopback probe")
+	}
+	if match := probeHostFlag.FindStringSubmatch(probe); match == nil {
+		found("clickhouse health: the probe has no --host: the client would dial loopback")
+	} else if probeLoopbackHost.MatchString(match[1]) {
+		found("clickhouse health: the probe host %s is loopback: the first-boot temporary server listens on 127.0.0.1 only and would pass it", match[1])
+	} else if match[1] != `"$$h"` {
+		found("clickhouse health: the probe host is %s, want \"$$h\" (the container's own address from hostname -i)", match[1])
+	}
+	for _, token := range strings.Fields(probe) {
+		if token == "-u" || token == "-p" || strings.HasPrefix(token, "--user") || strings.HasPrefix(token, "--password") || strings.Contains(strings.ToUpper(token), "PASSWORD") {
+			found("clickhouse health: the probe carries a credential (%q): it would show in the process list; clickhouse-client reads CLICKHOUSE_USER and CLICKHOUSE_PASSWORD from the environment", token)
+		}
+	}
+	if stack.Services["migrate"].DependsOn[clickHouseService].Condition != "service_healthy" {
+		found("migrate order: migrate waits for clickhouse with %q, want service_healthy: it dials the native port at once", stack.Services["migrate"].DependsOn[clickHouseService].Condition)
+	}
 	goAPIEnvironment := stack.Services[goAPIHost].Environment
 	if goAPIEnvironment["DEV_HEALTH_CH_API_HOST"] != clickHouseService || goAPIEnvironment[apiClickHouseUserKey] != apiClickHouseUser || goAPIEnvironment["DEV_HEALTH_CH_API_DB"] == "" {
 		found("api login: go-api has DEV_HEALTH_CH_API_HOST %q, %s %q, DEV_HEALTH_CH_API_DB %q, want host %s, user %s and a database: without them the team and identity admin routes are not mounted",
@@ -693,6 +726,78 @@ func TestComposeStackCheckSeesEachDefect(t *testing.T) {
 			old:  "      GO_API_HOME_ENABLED: \"true\"\n",
 			new:  "",
 			want: "route switch: query-api has GO_API_HOME_ENABLED \"\"",
+		},
+		{
+			name: "the ClickHouse probe is the HTTP ping again",
+			old:  "      test: [ \"CMD-SHELL\", \"h=$$(hostname -i | cut -d' ' -f1) && [ -n \\\"$$h\\\" ] && clickhouse-client --host \\\"$$h\\\" --query 'SELECT 1'\" ]\n",
+			new:  "      test: [ \"CMD\", \"wget\", \"--spider\", \"-q\", \"http://localhost:8123/ping\" ]\n",
+			want: "clickhouse health: the probe is \"\"",
+		},
+		{
+			name: "the ClickHouse probe dials 127.1",
+			old:  "--host \\\"$$h\\\" ",
+			new:  "--host 127.1 ",
+			want: "clickhouse health: the probe host 127.1 is loopback",
+		},
+		{
+			name: "the ClickHouse probe dials localhost",
+			old:  "--host \\\"$$h\\\" ",
+			new:  "--host localhost ",
+			want: "clickhouse health: the probe host localhost is loopback",
+		},
+		{
+			name: "the ClickHouse probe dials ::1",
+			old:  "--host \\\"$$h\\\" ",
+			new:  "--host ::1 ",
+			want: "clickhouse health: the probe host ::1 is loopback",
+		},
+		{
+			name: "the ClickHouse probe dials 0.0.0.0",
+			old:  "--host \\\"$$h\\\" ",
+			new:  "--host 0.0.0.0 ",
+			want: "clickhouse health: the probe host 0.0.0.0 is loopback",
+		},
+		{
+			name: "the ClickHouse probe dials a fixed address",
+			old:  "--host \\\"$$h\\\" ",
+			new:  "--host 10.1.2.3 ",
+			want: "clickhouse health: the probe host is 10.1.2.3, want",
+		},
+		{
+			name: "the ClickHouse probe has no host",
+			old:  "--host \\\"$$h\\\" ",
+			new:  "",
+			want: "clickhouse health: the probe has no --host",
+		},
+		{
+			name: "the ClickHouse probe carries --password",
+			old:  "--host \\\"$$h\\\" ",
+			new:  "--host \\\"$$h\\\" --password hunter2 ",
+			want: "clickhouse health: the probe carries a credential (\"--password\")",
+		},
+		{
+			name: "the ClickHouse probe carries --user",
+			old:  "--host \\\"$$h\\\" ",
+			new:  "--host \\\"$$h\\\" --user ch ",
+			want: "clickhouse health: the probe carries a credential (\"--user\")",
+		},
+		{
+			name: "the ClickHouse probe carries -p",
+			old:  "--host \\\"$$h\\\" ",
+			new:  "--host \\\"$$h\\\" -p hunter2 ",
+			want: "clickhouse health: the probe carries a credential (\"-p\")",
+		},
+		{
+			name: "the ClickHouse probe takes its host from nowhere",
+			old:  "h=$$(hostname -i | cut -d' ' -f1) && [ -n \\\"$$h\\\" ] && ",
+			new:  "h=10.1.2.3 && ",
+			want: "clickhouse health: the probe does not take its host from hostname -i",
+		},
+		{
+			name: "migrate does not wait for clickhouse",
+			old:  "      clickhouse:\n        condition: service_healthy\n\n  # ---------------------------------------------------------------------------\n  # Go/River workers (CHAOS-3142)",
+			new:  "      clickhouse:\n        condition: service_started\n\n  # ---------------------------------------------------------------------------\n  # Go/River workers (CHAOS-3142)",
+			want: "migrate order: migrate waits for clickhouse with \"service_started\"",
 		},
 		{
 			name: "the api's ClickHouse users file not mounted",

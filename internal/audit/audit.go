@@ -382,7 +382,7 @@ func (m Mutation) validate() error {
 	if err := m.Audit.validate(); err != nil {
 		return err
 	}
-	if appendOnlyEventTypes[m.Audit.EventType] {
+	if appendOnlyEventTypes[m.Audit.EventType] || publicPurgeEventTypes[m.Audit.EventType] {
 		return fmt.Errorf("%w: audit event_type %q is append-only and has no state mutation", ErrMutationFailed, m.Audit.EventType)
 	}
 	switch {

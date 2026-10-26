@@ -26,6 +26,8 @@ internal/auth/authruntime	test	contracts
 internal/auth/contracts	code	contracts
 internal/auth/contracts	test	docs
 internal/auth/contracts/tokencorpus	code	contracts
+internal/auth/identity/oidc	test	ci
+internal/auth/identity/saml	test	ci
 internal/auth/ratelimitvalkey	test	deploy
 internal/auth/ratelimitvalkey	test	docs
 internal/bigboycompose	test	.env.example

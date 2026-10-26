@@ -159,7 +159,7 @@ func TestResolveQueryAPIRoleDecisionTable(t *testing.T) {
 
 func sessionReadOptions() MigrationOptions {
 	options := queryAPIOptions()
-	options.QueryAPISessionRead = &SessionReadGrant{Schema: "auth", Table: "sessions", Columns: []string{"id", "principal_id", "revoked_at"}}
+	options.QueryAPISessionRead = &SessionReadGrant{Schema: "auth", Table: "sessions", Columns: []string{"id", "principal_id", "revoked_at", "legacy_token_version"}}
 	return options
 }
 
@@ -172,7 +172,7 @@ func TestQueryAPIGrantStatementsCarryTheSessionReadOnlyWhenSet(t *testing.T) {
 	with := strings.Join(queryAPIGrantStatements(sessionReadOptions()), "\n")
 	for _, want := range []string{
 		`GRANT USAGE ON SCHEMA "auth" TO "dev_health_query_api"`,
-		`GRANT SELECT ("id", "principal_id", "revoked_at") ON TABLE "auth"."sessions" TO "dev_health_query_api"`,
+		`GRANT SELECT ("id", "principal_id", "revoked_at", "legacy_token_version") ON TABLE "auth"."sessions" TO "dev_health_query_api"`,
 	} {
 		if !strings.Contains(with, want) {
 			t.Errorf("missing %s in:\n%s", want, with)

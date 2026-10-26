@@ -304,3 +304,24 @@ func TestAuthBackfillJobNameIsStableAndFollowsItsInputs(t *testing.T) {
 		}
 	}
 }
+
+// legacy-link-purge deletes go-api's link-token rows: the chart renders it only where users are owned
+// (phase 4, refused at render until the public-table writer decision) and with a slug run id.
+func TestAuthBackfillJobLegacyLinkPurgeNeedsUsersOwnedAndASlugRunID(t *testing.T) {
+	for _, phase := range []string{"1", "3"} {
+		args := withSets(append(append([]string{}, backfillOn...), phase3Secrets...), "authService.backfill.verb=legacy-link-purge", "authService.phase="+phase)
+		if phase != "1" {
+			args = append(append(args, sessionReaders...), sessionSuccessor...)
+		}
+		_, out, err := renderAuth(t, args...)
+		if err == nil || !strings.Contains(out, "legacy-link-purge needs users owned") {
+			t.Errorf("phase %s: err=%v out=%.300s", phase, err, out)
+		}
+	}
+	for _, runID := range []string{"Roll 1", "R1", "-r1", strings.Repeat("a", 64)} {
+		_, out, err := renderAuth(t, withSets(backfillOn, "authService.backfill.verb=legacy-link-purge", "authService.backfill.runId="+runID)...)
+		if err == nil || !strings.Contains(out, "must be a lowercase slug") {
+			t.Errorf("run id %q: err=%v out=%.300s", runID, err, out)
+		}
+	}
+}

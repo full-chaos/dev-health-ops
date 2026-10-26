@@ -118,6 +118,9 @@ func dependencyUnavailable(reason string) error { return dependencyFailure{reaso
 // carries the real error text; this only restores that same detail to the
 // in-process return value the classifier reads.
 func dependencyCheckFailed(err error) error {
+	if isTransientDialError(err) {
+		err = transientDialError{cause: err}
+	}
 	return fmt.Errorf("%w: %w", errWorkerDependencyUnavailable, err)
 }
 
@@ -567,8 +570,9 @@ type preclaimReadinessComponent struct {
 	// now and sleep are overridden by tests so the retry loop can be driven
 	// deterministically without real wall-clock waits. Left nil, Start uses
 	// time.Now and a context-aware time.Sleep.
-	now   func() time.Time
-	sleep func(context.Context, time.Duration)
+	now    func() time.Time
+	sleep  func(context.Context, time.Duration)
+	jitter func(time.Duration) time.Duration
 	// claim is the same execution_liveness claim tracker registered as part
 	// of component.registry's checks. Start calls claim.markRuntimeLive on
 	// it the instant readiness actually passes, so claimLivenessReady stops
@@ -598,7 +602,7 @@ func (component preclaimReadinessComponent) Start(ctx context.Context) error {
 	}
 	var latest health.Readiness
 	err := startupRetryBudget(
-		ctx, component.budget, component.now, component.sleep,
+		ctx, component.budget, component.now, component.sleep, component.jitter,
 		func(ctx context.Context) error {
 			latest = component.registry.CheckRequired(ctx)
 			if latest.Ready {
@@ -648,6 +652,7 @@ func startupRetryBudget(
 	budget time.Duration,
 	now func() time.Time,
 	sleep func(context.Context, time.Duration),
+	jitter func(time.Duration) time.Duration,
 	attempt func(context.Context) error,
 	retryable func(error) bool,
 	onRetry func(attemptNum int, elapsed, wait time.Duration, err error),
@@ -677,6 +682,9 @@ func startupRetryBudget(
 			return err
 		}
 		wait := backoff
+		if jitter != nil {
+			wait = jitter(wait)
+		}
 		if remaining := budget - elapsed; wait > remaining {
 			wait = remaining
 		}
@@ -700,7 +708,7 @@ func preclaimReadinessRetryable(readiness health.Readiness) bool {
 		return false
 	}
 	for _, status := range readiness.Checks {
-		if status.Failed && !status.TimedOut {
+		if status.Failed && !status.TimedOut && !status.Transient {
 			return false
 		}
 	}
@@ -799,6 +807,13 @@ type workerProcessComponent struct {
 	// The lifecycle runtime is built from it (platform/shell.RuntimeShutdownTimeout).
 	grace    time.Duration
 	presence workerPresenceLifecycle
+	// startBudget bounds how long Start retries the presence insert while the
+	// domain endpoint is transiently unreachable; zero means no retry.
+	startBudget time.Duration
+	logger      *slog.Logger
+	now         func() time.Time
+	sleep       func(context.Context, time.Duration)
+	jitter      func(time.Duration) time.Duration
 }
 
 type workerPresenceLifecycle interface {
@@ -824,7 +839,7 @@ func (component workerProcessComponent) Errors() <-chan error {
 
 func (component workerProcessComponent) Start(ctx context.Context) error {
 	if component.presence != nil {
-		if err := component.presence.Start(ctx); err != nil {
+		if err := retryPresenceStart(ctx, component, component.presence.Start); err != nil {
 			return err
 		}
 	}
@@ -1301,6 +1316,7 @@ func configureWorkerDependenciesWithSources(
 		registry: registry,
 		logger:   logger,
 		budget:   cfg.PreclaimReadinessTimeout,
+		jitter:   startupRetryJitter,
 		claim:    claim,
 	})
 	if len(active.queues) == 0 {
@@ -1351,6 +1367,7 @@ func configureWorkerDependenciesWithSources(
 	)
 	components = append(components, workerProcessComponent{
 		components: []lifecycle.Component{workerProcess}, budget: dependencies.workerDrainBudget, grace: dependencies.shutdownGrace, presence: presence,
+		startBudget: cfg.PreclaimReadinessTimeout, jitter: startupRetryJitter, logger: logger,
 	})
 	return components, nil
 }
@@ -2117,6 +2134,16 @@ func (dependencies *workerDependencies) postureManifestLockstepReady(ctx context
 // safe to log directly here.
 func (dependencies *workerDependencies) logDependencyCheckFailure(ctx context.Context, check string, err error) {
 	if dependencies == nil || dependencies.logger == nil || err == nil {
+		return
+	}
+	if isTransientDialError(err) {
+		// A refused or reset dial repeats on every retry and its text names the
+		// dial address, so only the bounded cause is logged.
+		dependencies.logger.ErrorContext(ctx, "worker readiness dependency check failed",
+			"error_category", "dependency_unavailable",
+			"check", check,
+			"cause", health.CauseUnreachable,
+		)
 		return
 	}
 	dependencies.logger.ErrorContext(ctx, "worker readiness dependency check failed",

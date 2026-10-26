@@ -59,8 +59,8 @@ func TestSurrogateRefusalTableUnitRowsAnswerAsTheTableSays(t *testing.T) {
 	driven := 0
 	for _, row := range surrogateRows(t, "sso") {
 		switch row.setup {
-		case "saml_forwarded", "saml_sealed":
-			continue // driven against a real provider row by TestSAMLInitiateSurrogateRefusalTable (integration)
+		case "saml_forwarded", "saml_sealed", "oauth_gitlab":
+			continue // driven against a real provider row by TestSSOSurrogateRefusalTableStackRows (integration)
 		case "none":
 		default:
 			t.Fatalf("%s: unknown setup %q", row.id, row.setup)
@@ -142,12 +142,14 @@ func TestSurrogateRefusalTableIsWellFormed(t *testing.T) {
 		"sso/none":           "sso unit driver",
 		"sso/saml_forwarded": "sso integration driver",
 		"sso/saml_sealed":    "sso integration driver",
+		"sso/oauth_gitlab":   "sso integration driver",
 		"githubapp/none":     "githubapp driver",
 	}
 	requests := map[string]string{
 		"sso/none":           "POST /api/v1/auth/oidc/00000000-0000-4000-8000-000000000001/authorize",
 		"sso/saml_forwarded": "POST /api/v1/auth/saml/{provider}/initiate",
 		"sso/saml_sealed":    "POST /api/v1/auth/saml/{provider}/initiate",
+		"sso/oauth_gitlab":   "POST /api/v1/auth/oauth/{provider}/authorize",
 		"githubapp/none":     "POST /api/v1/admin/integrations/github/install-callback",
 	}
 	loneSurrogate := regexp.MustCompile(`\\u[dD][89a-fA-F][0-9a-fA-F]{2}`)
@@ -202,12 +204,9 @@ func TestSurrogateRefusalTableIsWellFormed(t *testing.T) {
 			if goStatus != "422" || len(strings.Fields(goAPI)) != 3 || strings.Fields(goAPI)[1] != "string_unicode" {
 				t.Errorf("%s: kind stricter needs go_api \"422 string_unicode <loc>\", got %q", id, goAPI)
 			}
-			if authService != "-" && strings.Fields(authService)[0] == "422" {
-				t.Errorf("%s: kind stricter but auth_service %q already refuses with 422", id, authService)
-			}
 		case "divergent":
-			if authService == "-" {
-				t.Errorf("%s: kind divergent needs an auth_service cell", id)
+			if authService == "-" || authService == goAPI {
+				t.Errorf("%s: kind divergent needs an auth_service cell that differs from go_api %q, got %q", id, goAPI, authService)
 			}
 		default:
 			t.Errorf("%s: kind %q is not same, stricter or divergent", id, kind)

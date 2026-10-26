@@ -505,7 +505,14 @@ services:
       - ./docker/clickhouse-users.d/dho_api_ch.xml:/etc/clickhouse-server/users.d/dho_api_ch.xml:ro
       - ./docker/clickhouse-config.d/system-logs.xml:/etc/clickhouse-server/config.d/system-logs.xml:ro
     healthcheck:
-      test: [ "CMD", "wget", "--spider", "-q", "http://localhost:8123/ping" ]
+      # The native port (9000) is what `migrate`, go-api and query-api dial, so
+      # the probe dials it too. The host is the container's own non-loopback
+      # address: on a first boot the image's entrypoint runs a temporary server
+      # on 127.0.0.1 (entrypoint.sh, `--listen_host=127.0.0.1`) that would pass a
+      # loopback probe before the real listener is up. No credential is on the
+      # command line (it would show in the process list): clickhouse-client reads
+      # CLICKHOUSE_USER and CLICKHOUSE_PASSWORD from the container environment.
+      test: [ "CMD-SHELL", "h=$$(hostname -i | cut -d' ' -f1) && [ -n \"$$h\" ] && clickhouse-client --host \"$$h\" --query 'SELECT 1'" ]
       interval: 10s
       timeout: 5s
       retries: 3

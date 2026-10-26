@@ -1112,10 +1112,10 @@ check_ci_leg() {
 # compiled objects are the ones the real leg would cache.
 check_ci_leg_warm() {
   local leg="${1:-}" shard="${2:-}" count="${3:-}" module_dir plan pkg
-  local -a pkgs flags=(-mod=readonly -trimpath)
+  local -a pkgs
   case "${leg}" in
     test) plan="$(check_test_shard_plan "${shard}" "${count}")" || die "test shard plan failed" ;;
-    race) plan="$(check_race_shard_plan "${shard}" "${count}")" || die "race shard plan failed"; flags+=(-race) ;;
+    race) plan="$(check_race_shard_plan "${shard}" "${count}")" || die "race shard plan failed" ;;
     *) die "ci-leg-warm LEG must be test or race (got '${leg}')" ;;
   esac
   for module_dir in "${MODULE_DIRS[@]}"; do
@@ -1127,7 +1127,11 @@ check_ci_leg_warm() {
     printf 'go test -run ^$ (%s %s/%s): %s: %d package(s)\n' "${leg}" "${shard}" "${count}" "${module_dir}" "${#pkgs[@]}"
     (
       cd "${ROOT}/${module_dir}"
-      "${GO_ENV_OFF[@]}" GOWORK=off go test "${flags[@]}" -run '^$' "${pkgs[@]}"
+      if [ "${leg}" = race ]; then
+        "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -race -run '^$' "${pkgs[@]}"
+      else
+        "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -run '^$' "${pkgs[@]}"
+      fi
     )
   done
   printf 'ci-leg-warm %s: OK\n' "${leg}"

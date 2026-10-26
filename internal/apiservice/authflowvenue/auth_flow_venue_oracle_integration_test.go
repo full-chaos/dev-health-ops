@@ -28,6 +28,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	valkeygo "github.com/valkey-io/valkey-go"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/usersowned"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice"
@@ -1137,10 +1138,21 @@ func authScrub(text string) string {
 	return text
 }
 
-// checkSocialAnswer is the verdict on the answer of go-api's social sign-up: a session for the stubbed account. The
-// decoded session is returned for it.
+// checkSocialAnswer is the verdict on the answer of go-api's social sign-up: a session for the stubbed account, and
+// while auth-service owns users the 409 moved-operation refusal (social stays on go-api until CHAOS-11350). The decoded
+// session is returned for the first.
 func checkSocialAnswer(owned bool, status int, body string) (map[string]any, error) {
 	var decoded map[string]any
+	if owned {
+		var refusal struct {
+			Detail struct{ Message, Reason string } `json:"detail"`
+		}
+		if status != http.StatusConflict || json.Unmarshal([]byte(body), &refusal) != nil ||
+			refusal.Detail.Message != usersowned.Message || refusal.Detail.Reason != usersowned.Reason {
+			return nil, fmt.Errorf("users are owned: answered %d with %d body bytes, want the 409 moved-operation refusal", status, len(body))
+		}
+		return nil, nil
+	}
 	if status != http.StatusOK || json.Unmarshal([]byte(body), &decoded) != nil || decoded["access_token"] == nil {
 		return nil, fmt.Errorf("answered %d with %d body bytes, want 200 and a session", status, len(body))
 	}

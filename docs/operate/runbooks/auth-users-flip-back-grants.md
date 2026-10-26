@@ -43,11 +43,17 @@ not hand-run a REVOKE.
    release prints. The hook logs show `runtime grants narrowing deferred with operator acknowledgement`, with the
    number of deferred grants.
 3. **Check that no old owned pod is left (read only).** Count the pods of the owned ReplicaSet, Terminating pods
-   included:
+   included. The check first proves that its namespace, release and hash select the owned ReplicaSet: the Deployment
+   keeps the old ReplicaSet at 0 replicas (default `revisionHistoryLimit`), so exactly one must match. A wrong kube
+   context, namespace, release or hash matches none and stops, instead of reading 0 pods:
 
    ```bash
    (
      set -o pipefail
+     rs="$(kubectl get rs -n <namespace> \
+       -l app.kubernetes.io/instance=<release>,app.kubernetes.io/component=auth-service,pod-template-hash=<owned hash> \
+       -o go-template='{{len .items}}')" || { echo "STOP: kubectl failed (rc $?)"; exit 1; }
+     [ "${rs}" = 1 ] || { echo "STOP: the owned ReplicaSet is not matched exactly once: '${rs}'"; exit 1; }
      count="$(kubectl get pods -n <namespace> \
        -l app.kubernetes.io/instance=<release>,app.kubernetes.io/component=auth-service,pod-template-hash=<owned hash> \
        -o go-template='{{len .items}}')" || { echo "STOP: kubectl failed (rc $?)"; exit 1; }
@@ -59,9 +65,10 @@ not hand-run a REVOKE.
    )
    ```
 
-   Go on only when it prints `OK: 0 old owned pods` and exits 0. A `STOP` line (kubectl failed, no count read, or pods
-   left) means stop: do not start the narrowing release. If the hash was not recorded in step 1, the owned ReplicaSet is the one whose pod template sets
-   `AUTH_USERS_OWNED=true`. Read that one variable by name:
+   Go on only when it prints `OK: 0 old owned pods` and exits 0. A `STOP` line (kubectl failed, the owned ReplicaSet
+   not matched, no count read, or pods left) means stop: do not start the narrowing release. If the hash was not
+   recorded in step 1, the owned ReplicaSet is the one whose pod template sets `AUTH_USERS_OWNED=true`. Read that one
+   variable by name:
 
    ```bash
    kubectl get rs -n <namespace> -l app.kubernetes.io/instance=<release>,app.kubernetes.io/component=auth-service \
@@ -69,11 +76,18 @@ not hand-run a REVOKE.
    ```
 
    After CHAOS-11519 has merged, the phase-4 pod template carries the label `dev-health.io/auth-users-owned="true"`.
-   The same check then becomes:
+   The same check then becomes the one below. Its control requires at least one ReplicaSet with that label; until
+   CHAOS-11519 has merged no ReplicaSet has it, so this form stops: use the hash form above.
 
    ```bash
    (
      set -o pipefail
+     rs="$(kubectl get rs -n <namespace> \
+       -l app.kubernetes.io/instance=<release>,app.kubernetes.io/component=auth-service,dev-health.io/auth-users-owned=true \
+       -o go-template='{{len .items}}')" || { echo "STOP: kubectl failed (rc $?)"; exit 1; }
+     case "${rs}" in
+       '' | 0 | *[!0-9]*) echo "STOP: no owned ReplicaSet matched: '${rs}'"; exit 1 ;;
+     esac
      count="$(kubectl get pods -n <namespace> \
        -l app.kubernetes.io/instance=<release>,app.kubernetes.io/component=auth-service,dev-health.io/auth-users-owned=true \
        -o go-template='{{len .items}}')" || { echo "STOP: kubectl failed (rc $?)"; exit 1; }

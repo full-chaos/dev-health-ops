@@ -331,7 +331,7 @@ func TestChainedRewritesCoverOneTargetRowPerGoldenRow(t *testing.T) {
 	}
 }
 
-func TestOwnedLegExpectsTheGoldensUsersRowsWithNoNotOwnedQuirk(t *testing.T) {
+func TestOwnedLegExpectsTheGoldensUsersRowsWithNoQuirk(t *testing.T) {
 	golden := goldenRows(t)
 	l, err := NewLedger(forwarded(t, "sessions,local_login"), true)
 	if err != nil {
@@ -341,15 +341,11 @@ func TestOwnedLegExpectsTheGoldensUsersRowsWithNoNotOwnedQuirk(t *testing.T) {
 		t.Fatalf("users rows equal to the golden's: %v", problems)
 	}
 	if got := l.Covered(); strings.Contains(got, "users-last-login-not-stamped=") {
-		t.Fatalf("the not-owned last-login quirk is live on the owned leg: %q", got)
+		t.Fatalf("the last-login quirk is live on the owned leg: %q", got)
 	}
-	// auth-service stamps no last login on the owned leg either: its never-stamped rows are the owned quirk's, exactly
-	// the two users who sign in, and the not-owned quirk is not what covers them.
+	// CHAOS-11502 stamps the last login on public.users while users are owned: never-stamped rows are a difference there.
 	notStamped := acpRows(t, golden)[TableUsers]
-	if problems := l.Compare(TableUsers, golden[TableUsers], notStamped); len(problems) != 0 {
-		t.Fatalf("never-stamped users rows on the owned leg: %v", problems)
-	}
-	if got := l.Covered(); !strings.Contains(got, "users-last-login-not-stamped-owned=2") || strings.Contains(got, "users-last-login-not-stamped=") {
-		t.Fatalf("Covered = %q, want the owned quirk covering 2 rows and not the not-owned one", got)
+	if problems := l.Compare(TableUsers, golden[TableUsers], notStamped); len(problems) == 0 {
+		t.Fatal("never-stamped users rows passed on the owned leg")
 	}
 }

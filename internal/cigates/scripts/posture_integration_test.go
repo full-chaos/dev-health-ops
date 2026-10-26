@@ -738,3 +738,24 @@ func TestPostureIntegrationLeavesTheCallersGitConfigUntouched(t *testing.T) {
 		})
 	}
 }
+
+// Hosted runners install go through setup-go, not at /usr/local/go: the helper resolves go from the caller PATH (the
+// receipt names the binary, its hash and its version) and must not hard-code a toolchain location. In real mode the
+// missing-runner refusal comes before any go lookup, so a host without scripts/capped.sh fails closed with exit 3.
+func TestPostureIntegrationHardCodesNoToolchainPath(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join(repoRoot(t), "ci", "posture_integration.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, bad := range []string{"/usr/local/go", "/usr/local/bin"} {
+		if strings.Contains(string(b), bad) {
+			t.Fatalf("ci/posture_integration.sh must not hard-code %q", bad)
+		}
+	}
+	src := string(b)
+	runnerCheck := strings.Index(src, `runner not found`)
+	goResolve := strings.Index(src, `go_root="$(`)
+	if runnerCheck < 0 || goResolve < 0 || runnerCheck > goResolve {
+		t.Fatalf("the runner-not-found refusal must come before the go toolchain resolution (runner at %d, go at %d)", runnerCheck, goResolve)
+	}
+}

@@ -24,6 +24,7 @@ stage-signing-key init container exists.
 {{- $linkRoutes := eq (include "dev-health.authBool" (dict "value" .Values.authService.socialLinkRoutes "key" "authService.socialLinkRoutes")) "true" }}
 {{- if eq (include "dev-health.authOn" (dict "flag" "service" "context" .)) "true" }}
 {{- $a := .Values.authService }}
+{{- include "dev-health.authConnectionBudget" . }}
 {{- $loginOn := eq (include "dev-health.authOn" (dict "flag" "localLogin" "context" .)) "true" }}
 {{- $socialOn := eq (include "dev-health.authOn" (dict "flag" "social" "context" .)) "true" }}
 {{- $tokenClass := (default dict $a.accessToken).class | default "" }}
@@ -102,7 +103,7 @@ spec:
   replicas: {{ $a.replicas }}
   strategy:
     type: RollingUpdate
-    rollingUpdate: {maxUnavailable: 0, maxSurge: 1}
+    rollingUpdate: {maxUnavailable: 0, maxSurge: {{ include "dev-health.authMaxSurge" . }}}
   selector:
     matchLabels:
       {{- include "dev-health.componentSelectorLabels" (dict "component" "auth-service" "context" $) | nindent 6 }}

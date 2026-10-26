@@ -9,11 +9,14 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"go/types"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"golang.org/x/tools/go/packages"
 )
 
 // Row is one line of ci/race_excluded_packages.tsv: package, class, witness, reason.
@@ -118,13 +121,21 @@ func goList(root string) (modpath string, pkgs map[string]*goPackage, err error)
 }
 
 // scanFile names every construct of one file that starts or watches concurrent work.
-func scanFile(path string, names declNames) []string {
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, path, nil, parser.ParseComments)
-	if err != nil {
-		return []string{path + ": unparsable: " + err.Error()}
+func scanFile(path string, ts typeStore) []string {
+	tf := ts[path]
+	var untyped []string
+	if tf == nil {
+		// Not type-checked (cgo, a build constraint, a type error): say so, and still run every check that needs no types.
+		untyped = []string{filepath.Base(path) + ": the file was not type-checked, so the scan cannot judge its function values"}
+		fset := token.NewFileSet()
+		f, err := parser.ParseFile(fset, path, nil, parser.ParseComments)
+		if err != nil {
+			return append(untyped, path+": unparsable: "+err.Error())
+		}
+		tf = &typed{fset: fset, file: f, info: &types.Info{Types: map[ast.Expr]types.TypeAndValue{}, Uses: map[*ast.Ident]types.Object{}}}
 	}
-	var out []string
+	fset, f := tf.fset, tf.file
+	out := untyped
 	at := func(p token.Pos, what string) {
 		out = append(out, fmt.Sprintf("%s:%d: %s", filepath.Base(path), fset.Position(p).Line, what))
 	}
@@ -169,17 +180,17 @@ func scanFile(path string, names declNames) []string {
 				at(x.Pos(), "use of ."+x.Sel.Name)
 			}
 		case *ast.CallExpr:
-			idx, pure := pureCallees[calleeName(x)]
+			idx, pure := pureCallees[calleeKey(x, tf.info)]
 			for i, a := range x.Args {
 				switch {
 				case pure && i == idx:
 					// A pure callee runs only a function whose body is scanned: a literal, or a function of this package.
-					if id, ok := a.(*ast.Ident); !ok || !names.funcs[id.Name] {
+					if !tf.samePackageFunc(a) {
 						if _, lit := a.(*ast.FuncLit); !lit {
 							at(a.Pos(), "function value passed to "+calleeName(x)+" is a body the scan cannot see (only a literal or a function of this package is scanned)")
 						}
 					}
-				case funcValue(a, names) && !isCallbackCallee(x):
+				case tf.isFunc(a) && !isCallbackCallee(x):
 					at(a.Pos(), "function value passed as an argument: the callee may run it on another goroutine")
 				}
 			}
@@ -189,21 +200,17 @@ func scanFile(path string, names declNames) []string {
 	return out
 }
 
-// declNames are the package-level function and method names of one package: an identifier or selector that matches one, passed as
-// an argument, is a function value.
-type declNames struct{ funcs, methods map[string]bool }
-
 // pureCallees lists the callees that run a function-valued argument synchronously, on the calling goroutine only, by their documented
 // contract. It starts empty (acp threat-model ruling, CHAOS-11413); an entry needs its reason on its line. The callback check of a
 // covered-by row never consults it: a callback that is shared by several workers may pass no function value at all.
-var pureCallees = map[string]int{ // callee -> index of its function-valued argument
-	"filepath.WalkDir":      1, // walks in lexical order and calls fn on the calling goroutine (documented contract)
-	"filepath.Walk":         1, // same contract as WalkDir: fn is called on the calling goroutine
+var pureCallees = map[string]int{ // callee (go/types full name) -> index of its function-valued argument
+	"path/filepath.WalkDir": 1, // walks in lexical order and calls fn on the calling goroutine (documented contract)
+	"path/filepath.Walk":    1, // same contract as WalkDir: fn is called on the calling goroutine
 	"sort.Slice":            1, // sorts on the calling goroutine and calls less there (documented contract)
 	"sort.SliceStable":      1, // same contract as sort.Slice: less is called on the calling goroutine
 	"slices.SortFunc":       1, // sorts on the calling goroutine and calls cmp there (documented contract)
 	"slices.SortStableFunc": 1, // same contract as slices.SortFunc: cmp is called on the calling goroutine
-	"t.Run":                 1, // testing: waits for the subtest; only t.Parallel (refused here) lets it overlap its parent
+	"(*testing.T).Run":      1, // testing: waits for the subtest; only t.Parallel (refused here) lets it overlap its parent
 }
 
 // isCallbackCallee: the registration call of a callbackCallees function (CheckTree) hands over its callback on purpose; callbackProblems
@@ -227,36 +234,108 @@ func calleeName(c *ast.CallExpr) string {
 	return ""
 }
 
-func funcValue(a ast.Expr, names declNames) bool {
-	switch x := a.(type) {
-	case *ast.FuncLit:
+// typed is one parsed and type-checked file of the module (go/packages, export data for imports).
+type typed struct {
+	fset    *token.FileSet
+	file    *ast.File
+	info    *types.Info
+	pkgPath string
+}
+
+// typeStore maps an absolute file name to its typed form.
+type typeStore map[string]*typed
+
+// funcish: the type is a function, or a slice, array or map of them.
+func funcish(t types.Type) bool {
+	if t == nil {
+		return false
+	}
+	switch u := t.Underlying().(type) {
+	case *types.Signature:
 		return true
-	case *ast.Ident:
-		return names.funcs[x.Name]
-	case *ast.SelectorExpr:
-		return names.methods[x.Sel.Name]
+	case *types.Slice:
+		return funcish(u.Elem())
+	case *types.Array:
+		return funcish(u.Elem())
+	case *types.Map:
+		return funcish(u.Elem())
 	}
 	return false
 }
 
-func declNamesOf(p *goPackage, tests bool) declNames {
-	names := declNames{funcs: map[string]bool{}, methods: map[string]bool{}}
-	for _, f := range goFilesOf(p, tests) {
-		file, err := parser.ParseFile(token.NewFileSet(), filepath.Join(p.Dir, f), nil, 0)
-		if err != nil {
+// isFunc: the expression, however it is spelled (literal, variable, field, method value, call result, conversion), has a function type.
+func (tf *typed) isFunc(a ast.Expr) bool {
+	tv, ok := tf.info.Types[a]
+	return ok && !tv.IsType() && funcish(tv.Type)
+}
+
+// samePackageFunc: the expression names a package-level function of the file's own package.
+func (tf *typed) samePackageFunc(a ast.Expr) bool {
+	id, ok := a.(*ast.Ident)
+	if !ok {
+		return false
+	}
+	fn, ok := tf.info.Uses[id].(*types.Func)
+	return ok && fn.Pkg() != nil && fn.Pkg().Path() == tf.pkgPath && fn.Parent() == fn.Pkg().Scope()
+}
+
+// calleeKey resolves the callee of a call by type: "path/filepath.WalkDir", "(*testing.T).Run".
+func calleeKey(c *ast.CallExpr, info *types.Info) string {
+	var id *ast.Ident
+	switch fn := c.Fun.(type) {
+	case *ast.Ident:
+		id = fn
+	case *ast.SelectorExpr:
+		id = fn.Sel
+	default:
+		return ""
+	}
+	if f, ok := info.Uses[id].(*types.Func); ok {
+		return f.FullName()
+	}
+	return ""
+}
+
+// loadTypes parses and type-checks the packages (with their tests) once; a package that does not type-check is a problem, because the
+// scan then cannot tell a function value from anything else.
+func loadTypes(root string, importPaths []string) (typeStore, map[string][]string, error) {
+	cfg := &packages.Config{
+		Mode: packages.NeedName | packages.NeedFiles | packages.NeedCompiledGoFiles | packages.NeedImports | packages.NeedTypes |
+			packages.NeedTypesInfo | packages.NeedSyntax,
+		Dir:        root,
+		Tests:      true,
+		Env:        append(os.Environ(), "GOWORK=off", "GOFLAGS=-mod=readonly", "CGO_ENABLED=1"),
+		BuildFlags: []string{"-tags=race"},
+		ParseFile: func(fset *token.FileSet, filename string, src []byte) (*ast.File, error) {
+			return parser.ParseFile(fset, filename, src, parser.ParseComments)
+		},
+	}
+	loaded, err := packages.Load(cfg, importPaths...)
+	if err != nil {
+		return nil, nil, err
+	}
+	store := typeStore{}
+	errs := map[string][]string{}
+	for _, lp := range loaded {
+		base := strings.TrimSuffix(strings.Fields(lp.ID)[0], "_test")
+		for _, e := range lp.Errors {
+			errs[base] = append(errs[base], "does not type-check: "+e.Msg)
+		}
+		if lp.Types == nil || lp.TypesInfo == nil {
 			continue
 		}
-		for _, d := range file.Decls {
-			if fn, ok := d.(*ast.FuncDecl); ok {
-				if fn.Recv == nil {
-					names.funcs[fn.Name.Name] = true
-				} else {
-					names.methods[fn.Name.Name] = true
-				}
-			}
+		for _, f := range lp.Syntax {
+			name := lp.Fset.File(f.Pos()).Name()
+			store[name] = &typed{fset: lp.Fset, file: f, info: lp.TypesInfo, pkgPath: lp.Types.Path()}
 		}
 	}
-	return names
+	return store, errs, nil
+}
+
+// external: an import path that is neither the standard library nor this module (singleflight, otel and grpc run user code on goroutines of their own).
+func external(modpath, path string) bool {
+	first := strings.SplitN(path, "/", 2)[0]
+	return strings.Contains(first, ".") && path != modpath && !strings.HasPrefix(path, modpath+"/")
 }
 
 func goFilesOf(p *goPackage, tests bool) []string {
@@ -269,19 +348,30 @@ func goFilesOf(p *goPackage, tests bool) []string {
 	return files
 }
 
-func scanPackage(p *goPackage, tests bool) []string {
+func scanPackage(p *goPackage, tests bool, modpath string, ts typeStore, loadErrs map[string][]string) []string {
 	var out []string
 	if p.Error != nil {
 		out = append(out, "go list reports an error for the package: "+strings.TrimSpace(p.Error.Err))
+	}
+	for _, e := range loadErrs[p.ImportPath] {
+		out = append(out, e)
 	}
 	for _, group := range [][]string{p.CFiles, p.CXXFiles, p.MFiles, p.HFiles, p.FFiles, p.SFiles, p.SwigFiles, p.SwigCXXFiles, p.SysoFiles} {
 		for _, f := range group {
 			out = append(out, f+": non-Go source the scan cannot read")
 		}
 	}
-	names := declNamesOf(p, tests)
+	imports := append([]string{}, p.Imports...)
+	if tests {
+		imports = append(append(imports, p.TestImports...), p.XTestImports...)
+	}
+	for _, imp := range imports {
+		if external(modpath, imp) {
+			out = append(out, "imports out-of-module package "+imp+" (code outside the standard library and this module can run user code on goroutines of its own)")
+		}
+	}
 	for _, f := range goFilesOf(p, tests) {
-		out = append(out, scanFile(filepath.Join(p.Dir, f), names)...)
+		out = append(out, scanFile(filepath.Join(p.Dir, f), ts)...)
 	}
 	return out
 }
@@ -297,6 +387,27 @@ func Check(root string, rows []Row) ([]string, error) {
 		excluded[r.Package] = true
 	}
 	var problems []string
+	need := map[string]bool{}
+	for _, r := range rows {
+		if p := pkgs[modpath+"/"+r.Package]; p != nil {
+			need[p.ImportPath] = true
+			for _, dep := range closure(modpath, pkgs, p) {
+				need[dep] = true
+			}
+		}
+	}
+	var patterns []string
+	for k := range need {
+		patterns = append(patterns, k)
+	}
+	sort.Strings(patterns)
+	var ts typeStore
+	loadErrs := map[string][]string{}
+	if len(patterns) > 0 {
+		if ts, loadErrs, err = loadTypes(root, patterns); err != nil {
+			return nil, err
+		}
+	}
 	for _, r := range rows {
 		full := modpath + "/" + r.Package
 		p := pkgs[full]
@@ -328,12 +439,12 @@ func Check(root string, rows []Row) ([]string, error) {
 		} else if r.Witness != "-" {
 			problems = append(problems, r.Package+": class none takes witness -")
 		}
-		for _, hit := range scanPackage(p, true) {
+		for _, hit := range scanPackage(p, true, modpath, ts, loadErrs) {
 			problems = append(problems, fmt.Sprintf("%s: own file: %s", r.Package, hit))
 		}
 		if covered != "" {
 			for _, f := range goFilesOf(p, true) {
-				for _, hit := range callbackProblems(filepath.Join(p.Dir, f)) {
+				for _, hit := range callbackProblems(filepath.Join(p.Dir, f), ts) {
 					problems = append(problems, fmt.Sprintf("%s: own file: %s", r.Package, hit))
 				}
 			}
@@ -341,12 +452,12 @@ func Check(root string, rows []Row) ([]string, error) {
 		for _, dep := range closure(modpath, pkgs, p) {
 			if covered != "" {
 				for _, f := range goFilesOf(pkgs[dep], false) {
-					for _, hit := range callbackProblems(filepath.Join(pkgs[dep].Dir, f)) {
+					for _, hit := range callbackProblems(filepath.Join(pkgs[dep].Dir, f), ts) {
 						problems = append(problems, fmt.Sprintf("%s: imports %s: %s", r.Package, strings.TrimPrefix(dep, modpath+"/"), hit))
 					}
 				}
 			}
-			for _, hit := range scanPackage(pkgs[dep], false) {
+			for _, hit := range scanPackage(pkgs[dep], false, modpath, ts, loadErrs) {
 				if dep == covered {
 					continue
 				}
@@ -441,12 +552,12 @@ var callbackStdlib = map[string]bool{"os": true, "filepath": true, "path": true,
 // passed on), and its callback is a function literal or a package-level function of the same file that (1) assigns to no variable
 // it did not declare itself (assignment, op-assignment, ++/--, range-assign, index, field or pointer write) and (2) calls only
 // builtins and the callbackStdlib packages, so no helper, method or function value can write a captured variable for it.
-func callbackProblems(path string) []string {
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, path, nil, 0)
-	if err != nil {
+func callbackProblems(path string, ts typeStore) []string {
+	tf := ts[path]
+	if tf == nil {
 		return nil
 	}
+	fset, f := tf.fset, tf.file
 	top := map[string]*ast.FuncDecl{}
 	for _, d := range f.Decls {
 		if fn, ok := d.(*ast.FuncDecl); ok && fn.Recv == nil {
@@ -475,15 +586,6 @@ func callbackProblems(path string) []string {
 			std[name] = true
 		}
 	}
-	fileNames := declNames{funcs: map[string]bool{}, methods: map[string]bool{}}
-	for n := range top {
-		fileNames.funcs[n] = true
-	}
-	for _, d := range f.Decls {
-		if fn, ok := d.(*ast.FuncDecl); ok && fn.Recv != nil {
-			fileNames.methods[fn.Name.Name] = true
-		}
-	}
 	checkBody := func(callee string, ft *ast.FuncType, body *ast.BlockStmt, pos token.Pos) {
 		for _, w := range capturedWrites(ft, body) {
 			at(w.pos, callee+" callback writes captured variable "+w.name)
@@ -494,7 +596,7 @@ func callbackProblems(path string) []string {
 				return true
 			}
 			for _, a := range call.Args {
-				if funcValue(a, fileNames) {
+				if tf.isFunc(a) {
 					at(a.Pos(), callee+" callback passes a function value to "+calleeName(call)+", which may run it from several workers or write shared state")
 				}
 			}

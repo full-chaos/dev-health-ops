@@ -428,7 +428,7 @@ func TestAFunctionValueInACallbackInsideTheCoveredPackageIsRefused(t *testing.T)
 // acp ruling (CHAOS-11413): the exact set of callees that may take a function value, pinned. A new entry stays red until this list
 // names it, and until its line in scan.go carries a comment naming the stdlib contract that makes it synchronous.
 func TestThePureCalleeAllowlistIsPinnedAndEachEntryHasItsReason(t *testing.T) {
-	want := []string{"filepath.Walk", "filepath.WalkDir", "slices.SortFunc", "slices.SortStableFunc", "sort.Slice", "sort.SliceStable", "t.Run"}
+	want := []string{"(*testing.T).Run", "path/filepath.Walk", "path/filepath.WalkDir", "slices.SortFunc", "slices.SortStableFunc", "sort.Slice", "sort.SliceStable"}
 	var got []string
 	for k := range pureCallees {
 		got = append(got, k)

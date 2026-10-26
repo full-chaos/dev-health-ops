@@ -17,7 +17,6 @@ internal/jobs/metrics/prrework	none	-	synchronous code only: no concurrency in i
 internal/jobs/metrics/querybound	none	-	synchronous code only: no concurrency in its files or its in-module imports
 internal/netclass	none	-	synchronous code only: no concurrency in its files or its in-module imports
 internal/platform/dsnclass	none	-	synchronous code only: no concurrency in its files or its in-module imports
-internal/platform/errortext	none	-	synchronous code only: no concurrency in its files or its in-module imports
 internal/platform/pgident	none	-	synchronous code only: no concurrency in its files or its in-module imports
 internal/queryapi/activeteams	none	-	synchronous code only: no concurrency in its files or its in-module imports
 internal/queryapi/chpairliteral	none	-	synchronous code only: no concurrency in its files or its in-module imports

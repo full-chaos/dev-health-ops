@@ -326,10 +326,10 @@ else
 fi
 reader_ok() { # <role>: SELECT on exactly the session columns the cutover reads (a column-level grant)
   local col
-  for col in id principal_id revoked_at; do
+  for col in id principal_id revoked_at legacy_token_version; do
     [ "$(PSU -c "SELECT has_column_privilege('$1','auth.sessions','${col}','SELECT')")" = t ] || die "$2: reader $1 cannot SELECT auth.sessions.${col}"
   done
-  printf '%s: reader %s can SELECT auth.sessions(id, principal_id, revoked_at)\n' "$2" "$1"
+  printf '%s: reader %s can SELECT auth.sessions(id, principal_id, revoked_at, legacy_token_version)\n' "$2" "$1"
 }
 reader_ok devhealth_api baseline
 

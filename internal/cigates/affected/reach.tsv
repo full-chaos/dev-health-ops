@@ -70,10 +70,12 @@ internal/auth/contracts	contracts.go	deploy/helm/dev-health
 internal/auth/contracts	contracts.go	internal/api/billing
 internal/auth/contracts	contracts.go	internal/api/externalingest
 internal/auth/contracts	contracts.go	internal/api/legacyingest
+internal/auth/contracts	contracts.go	internal/api/session
 internal/auth/contracts	contracts.go	internal/api/usersowned
 internal/auth/contracts	contracts.go	internal/api/webhookintake
 internal/auth/contracts	contracts.go	internal/apiservice
 internal/auth/contracts	contracts.go	internal/apiservice/acr
+internal/auth/contracts	contracts.go	internal/apiservice/admin
 internal/auth/contracts	contracts.go	internal/audit
 internal/auth/contracts	contracts.go	internal/auth/authapi
 internal/auth/contracts	contracts.go	internal/auth/authconfig

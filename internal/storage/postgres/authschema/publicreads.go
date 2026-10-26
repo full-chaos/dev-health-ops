@@ -53,7 +53,7 @@ func PublicReadColumns() []ColumnGrant {
 // SessionReaderColumns is what a session reader role may SELECT in the auth
 // schema: column-level, on the sessions table only.
 func SessionReaderColumns() ColumnGrant {
-	return ColumnGrant{Table: "sessions", Columns: []string{"id", "principal_id", "revoked_at"}}
+	return ColumnGrant{Table: "sessions", Columns: []string{"id", "principal_id", "revoked_at", "legacy_token_version"}}
 }
 
 // TableWriteGrant is a column-level SELECT and UPDATE grant on one ops-schema

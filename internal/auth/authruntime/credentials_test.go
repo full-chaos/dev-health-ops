@@ -130,3 +130,104 @@ func TestCredentialRoutesNotOwnedWriteNothingAndNeedNoMailProvider(t *testing.T)
 		t.Fatalf("limiter store hit %d times", probe.calls)
 	}
 }
+
+func TestNotOwnedCredentialRoutesAnswer503ThroughTheServerUnderLoad(t *testing.T) {
+	schema, err := authschema.NewValidatedIdentifier("auth")
+	if err != nil {
+		t.Fatal(err)
+	}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	for name, owned := range map[string]string{"unset": "", "false": "false"} {
+		cfg := credentialConfig(t, owned)
+		routes, _, err := credentialRoutes(cfg, logger, nil, schema, mustLimits(t))
+		if err != nil {
+			t.Fatal(err)
+		}
+		release, entered := make(chan struct{}), make(chan struct{}, 1)
+		routes = append(routes, httpapi.Route{Method: http.MethodGet, Pattern: "/v1/test-hold", Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			entered <- struct{}{}
+			<-release
+		})})
+		options := apiServerOptions(cfg, logger, routes)
+		options.RateLimit, options.RateLimitBurst, options.MaxInFlight = 0.001, 1, 1
+		options.Address = "127.0.0.1:0"
+		server, err := httpapi.NewServer(options)
+		if err != nil {
+			t.Fatal(err)
+		}
+		done := make(chan struct{})
+		go func() {
+			server.Handler().ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/v1/test-hold", nil))
+			close(done)
+		}()
+		<-entered
+		for round := 0; round < 4; round++ {
+			for _, route := range routes[:6] {
+				req := httptest.NewRequest(route.Method, route.Pattern, strings.NewReader("{}"))
+				req.ContentLength = 1 << 30
+				rec := httptest.NewRecorder()
+				server.Handler().ServeHTTP(rec, req)
+				if rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Retry-After") != "1" {
+					t.Fatalf("%s round %d %s %s: %d Retry-After %q; want 503 and 1", name, round, route.Method, route.Pattern, rec.Code, rec.Header().Get("Retry-After"))
+				}
+			}
+		}
+		close(release)
+		<-done
+	}
+}
+
+func TestOnlyTheSixNotOwnedCredentialRoutesAreUnthrottled(t *testing.T) {
+	want := map[string]bool{
+		"GET /api/v1/auth/verify": true, "POST /api/v1/auth/resend-verification": true,
+		"POST /api/v1/auth/forgot-password": true, "POST /api/v1/auth/reset-password": true,
+		"POST /api/v1/auth/change-password": true, "POST /api/v1/auth/register": true,
+	}
+	schema, err := authschema.NewValidatedIdentifier("auth")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool, err := pgxpool.New(context.Background(), "postgres://auth@127.0.0.1:1/devhealth")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	census := func(label string, routes []httpapi.Route, expect bool) {
+		t.Helper()
+		got := map[string]bool{}
+		for _, route := range routes {
+			if route.Unthrottled {
+				got[route.Method+" "+route.Pattern] = true
+			}
+		}
+		if !expect {
+			if len(got) != 0 {
+				t.Fatalf("%s: unthrottled routes %v; want none", label, got)
+			}
+			return
+		}
+		if len(got) != len(want) {
+			t.Fatalf("%s: unthrottled %v; want exactly %v", label, got, want)
+		}
+		for key := range want {
+			if !got[key] {
+				t.Fatalf("%s: %s is not unthrottled", label, key)
+			}
+		}
+	}
+	for name, owned := range map[string]string{"unset": "", "false": "false", "true": "true"} {
+		cfg := credentialConfig(t, owned)
+		session, err := sessionRoutes(cfg, logger, pool, schema, nil, mustLimits(t))
+		if err != nil {
+			t.Fatal(err)
+		}
+		credentials, _, err := credentialRoutes(cfg, logger, pool, schema, mustLimits(t))
+		if err != nil {
+			t.Fatal(err)
+		}
+		census(name+" session", session, false)
+		census(name+" credentials", credentials, owned != "true")
+	}
+	census("parity set", parityRoutes(t), false)
+}

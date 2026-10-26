@@ -13,12 +13,12 @@ import (
 func NotOwnedCredentialRoutes() []httpapi.Route {
 	stub := UnavailableRetry()
 	return []httpapi.Route{
-		{Method: http.MethodGet, Pattern: PatternVerifyEmail, Handler: stub},
-		{Method: http.MethodPost, Pattern: PatternResendVerification, Handler: stub},
-		{Method: http.MethodPost, Pattern: PatternForgotPassword, Handler: stub},
-		{Method: http.MethodPost, Pattern: PatternResetPassword, Handler: stub},
-		{Method: http.MethodPost, Pattern: PatternChangePassword, Handler: stub},
-		{Method: http.MethodPost, Pattern: PatternRegister, Handler: stub},
+		{Method: http.MethodGet, Pattern: PatternVerifyEmail, Handler: stub, Unthrottled: true},
+		{Method: http.MethodPost, Pattern: PatternResendVerification, Handler: stub, Unthrottled: true},
+		{Method: http.MethodPost, Pattern: PatternForgotPassword, Handler: stub, Unthrottled: true},
+		{Method: http.MethodPost, Pattern: PatternResetPassword, Handler: stub, Unthrottled: true},
+		{Method: http.MethodPost, Pattern: PatternChangePassword, Handler: stub, Unthrottled: true},
+		{Method: http.MethodPost, Pattern: PatternRegister, Handler: stub, Unthrottled: true},
 	}
 }
 

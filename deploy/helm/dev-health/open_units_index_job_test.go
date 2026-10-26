@@ -122,3 +122,21 @@ func TestOpenUnitsIndexJobWithBundledPostgresIsPreUpgradeOnly(t *testing.T) {
 		t.Fatalf("args = %v", args)
 	}
 }
+
+// The hook Job reads no Kubernetes API, so it mounts no service account token, as the migrate and streak Jobs do.
+func TestOpenUnitsIndexJobDoesNotMountTheServiceAccountToken(t *testing.T) {
+	jobs, _, refusal := renderJobs(t, "web.enabled=false", "migrations.hook.openUnitsIndex.enabled=true", "migrations.hook.streakIndex.enabled=true")
+	if refusal != "" {
+		t.Fatalf("render refused: %s", refusal)
+	}
+	for _, name := range []string{"t-dev-health-migrate", "t-dev-health-streak-index", "t-dev-health-open-units-index"} {
+		job, ok := jobs[name]
+		if !ok {
+			t.Fatalf("no %s Job in the render", name)
+		}
+		pod := job["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
+		if v, ok := pod["automountServiceAccountToken"].(bool); !ok || v {
+			t.Errorf("%s does not set automountServiceAccountToken: false (got %v)", name, pod["automountServiceAccountToken"])
+		}
+	}
+}

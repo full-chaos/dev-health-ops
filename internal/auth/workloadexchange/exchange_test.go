@@ -3,6 +3,8 @@ package workloadexchange
 import (
 	"context"
 	"crypto/ed25519"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -11,6 +13,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -19,6 +22,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 	"github.com/full-chaos/dev-health-ops/internal/auth/workload"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/redirectprobe"
 	"github.com/full-chaos/dev-health-ops/internal/token"
 )
 
@@ -724,4 +728,68 @@ func sameKeys(m map[string]any, want []string) bool {
 	got := keysOf(m)
 	sort.Strings(want)
 	return strings.Join(got, ",") == strings.Join(want, ",")
+}
+
+// The TokenReview client follows no redirect: after one review call through
+// the client production builds, the second origin saw no request.
+func TestTheReviewClientNeverFollowsARedirectToAnotherOrigin(t *testing.T) {
+	probe := redirectprobe.New(t)
+	client := redirectprobe.Reach(reviewHTTPClient(x509.NewCertPool()))
+	resp, err := client.Post(probe.Base.URL+"/apis/authentication.k8s.io/v1/tokenreviews", "application/json", strings.NewReader("{}"))
+	if err == nil {
+		_ = resp.Body.Close()
+	}
+	probe.Assert(t)
+}
+
+// The TokenReview client trusts the configured cluster CA pool only (never the
+// system roots), uses no proxy (never one from the environment, so the
+// ServiceAccount tokens reach only the API server) and is bounded.
+func TestTheReviewClientTrustsOnlyTheClusterCAAndUsesNoProxy(t *testing.T) {
+	pool := x509.NewCertPool()
+	client := reviewHTTPClient(pool)
+	transport, ok := client.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("the review client transport is %T, want its own *http.Transport", client.Transport)
+	}
+	if transport.Proxy != nil {
+		t.Fatal("the review client has a proxy function: an environment proxy would see the ServiceAccount tokens")
+	}
+	if transport.TLSClientConfig == nil || transport.TLSClientConfig.RootCAs != pool {
+		t.Fatal("the review client does not trust exactly the configured cluster CA pool")
+	}
+	if transport.TLSClientConfig.InsecureSkipVerify || transport.TLSClientConfig.MinVersion < tls.VersionTLS12 {
+		t.Fatal("the review client weakens TLS")
+	}
+	if client.Timeout != ReviewCallTimeout || ReviewCallTimeout != 5*time.Second {
+		t.Fatalf("client Timeout %s, want ReviewCallTimeout (5 s)", client.Timeout)
+	}
+	if transport.TLSHandshakeTimeout != 2*time.Second || transport.ResponseHeaderTimeout != 3*time.Second {
+		t.Fatalf("TLS handshake %s, response header %s, want 2 s and 3 s", transport.TLSHandshakeTimeout, transport.ResponseHeaderTimeout)
+	}
+	if client.CheckRedirect == nil {
+		t.Fatal("the review client has no redirect policy")
+	}
+}
+
+// An environment proxy never sees a review: the review reaches the API server
+// directly although HTTPS_PROXY and HTTP_PROXY name a proxy.
+func TestAReviewNeverGoesThroughAnEnvironmentProxy(t *testing.T) {
+	var proxied atomic.Int64
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		proxied.Add(1)
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	t.Cleanup(proxy.Close)
+	t.Setenv("HTTPS_PROXY", proxy.URL)
+	t.Setenv("HTTP_PROXY", proxy.URL)
+	t.Setenv("NO_PROXY", "")
+	h := newHarness(t)
+	decodeAnswer(t, h.post(form(h.validSubject(), "auth-service", "").Encode()))
+	if n := proxied.Load(); n != 0 {
+		t.Fatalf("the environment proxy saw %d request(s)", n)
+	}
+	if h.review.count() != 1 {
+		t.Fatalf("the API server saw %d reviews, want 1", h.review.count())
+	}
 }

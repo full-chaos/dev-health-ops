@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-go/authverify"
+
+	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 )
 
 // TokenReview transport bounds. ReviewCallTimeout bounds the whole call.
@@ -57,6 +59,24 @@ func NewReviewValidator(cfg ReviewConfig) (authverify.SubjectTokenValidator, err
 	if !roots.AppendCertsFromPEM(bundle) {
 		return nil, errors.New("workloadexchange: the CA file holds no PEM certificate")
 	}
+	client := reviewHTTPClient(roots)
+	path := cfg.ReviewerTokenFile
+	return authverify.NewKubernetesTokenReviewValidator(authverify.KubernetesTokenReviewOptions{
+		HTTPClient:    client,
+		APIServerURL:  cfg.APIServerURL,
+		ReviewerToken: func() (string, error) { return readReviewerToken(path) },
+		Audience:      ReviewAudience,
+		TrustDomain:   cfg.TrustDomain,
+		Now:           cfg.Now,
+	})
+}
+
+// reviewHTTPClient is the TokenReview client: its own transport (only the
+// configured cluster CA pool, never the system roots; no proxy, never one from
+// the environment, so the ServiceAccount tokens reach only the API server;
+// bounded dial, TLS and header waits) and a ReviewCallTimeout bound, guarded by
+// httpguard.NoRedirects so no redirect is followed.
+func reviewHTTPClient(roots *x509.CertPool) *http.Client {
 	transport := &http.Transport{
 		Proxy:                 nil,
 		DialContext:           (&net.Dialer{Timeout: reviewDialTimeout}).DialContext,
@@ -68,22 +88,7 @@ func NewReviewValidator(cfg ReviewConfig) (authverify.SubjectTokenValidator, err
 		MaxIdleConnsPerHost:   MaxInFlightReviews,
 		IdleConnTimeout:       90 * time.Second,
 	}
-	client := &http.Client{
-		Transport: transport,
-		Timeout:   ReviewCallTimeout,
-		CheckRedirect: func(*http.Request, []*http.Request) error {
-			return errors.New("workloadexchange: a TokenReview redirect is refused")
-		},
-	}
-	path := cfg.ReviewerTokenFile
-	return authverify.NewKubernetesTokenReviewValidator(authverify.KubernetesTokenReviewOptions{
-		HTTPClient:    client,
-		APIServerURL:  cfg.APIServerURL,
-		ReviewerToken: func() (string, error) { return readReviewerToken(path) },
-		Audience:      ReviewAudience,
-		TrustDomain:   cfg.TrustDomain,
-		Now:           cfg.Now,
-	})
+	return httpguard.NoRedirects(&http.Client{Transport: transport, Timeout: ReviewCallTimeout})
 }
 
 // isHTTPSOrigin accepts only "https://host[:port]" with at most one trailing

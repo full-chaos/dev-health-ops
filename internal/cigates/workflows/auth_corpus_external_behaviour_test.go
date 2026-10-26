@@ -843,3 +843,36 @@ func TestAuthCorpusAcpOwnedLegKillsTheTestItself(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 }
+
+// auth-service reads AUTH_AUTO_CREATE_ORG_ON_REGISTER on every request, as go-api does, so a corpus case that sets it
+// must reach both: on leg acp the set recreates auth-service too (with the state, so users stay owned), and no other
+// variable, and no other leg, recreates it.
+func TestAuthCorpusSetEnvOfTheAutoOrgVariableAlsoRecreatesAuthServiceOnLegAcp(t *testing.T) {
+	fake := newFakeDocker(t)
+	_, env := setEnvFixture(t, fake)
+	if out, code := runSetEnv(t, append(env, "AUTH_CORPUS_LEG=acp"), "AUTH_AUTO_CREATE_ORG_ON_REGISTER", " OFF "); code != 0 {
+		t.Fatalf("set on leg acp: exit %d: %s", code, out)
+	}
+	calls := fake.calls(t)
+	if !strings.Contains(calls, "up --detach --no-deps --force-recreate --no-build go-api") {
+		t.Errorf("go-api was not recreated; calls:\n%s", calls)
+	}
+	if !strings.Contains(calls, "--force-recreate --no-build --wait --wait-timeout 120 auth-service") {
+		t.Errorf("auth-service was not recreated and awaited; calls:\n%s", calls)
+	}
+}
+
+func TestAuthCorpusSetEnvRecreatesAuthServiceOnlyForTheAutoOrgVariableOnLegAcp(t *testing.T) {
+	for name, c := range map[string]struct {
+		leg, variable string
+	}{"other variable on acp": {"acp", "X_NAME"}, "auto-org on the go-api leg": {"go-api", "AUTH_AUTO_CREATE_ORG_ON_REGISTER"}} {
+		fake := newFakeDocker(t)
+		_, env := setEnvFixture(t, fake)
+		if out, code := runSetEnv(t, append(env, "AUTH_CORPUS_LEG="+c.leg), c.variable, "v"); code != 0 {
+			t.Fatalf("%s: exit %d: %s", name, code, out)
+		}
+		if calls := fake.calls(t); strings.Contains(calls, "auth-service") {
+			t.Errorf("%s: auth-service was touched; calls:\n%s", name, calls)
+		}
+	}
+}

@@ -452,3 +452,21 @@ func TestAuthCorpusAcpOverrideTrustsOnlyGoAPIsPinnedAddress(t *testing.T) {
 		t.Errorf("auth-service sets AUTH_SERVICE_TRUSTED_PROXIES %d times, want once", count)
 	}
 }
+
+// The set_env recreate of auth-service needs the variable in its environment.
+func TestAuthCorpusAcpOverridePassesTheAutoOrgVariableToAuthService(t *testing.T) {
+	var override struct {
+		Services map[string]struct {
+			Environment []string `yaml:"environment"`
+		} `yaml:"services"`
+	}
+	if err := yaml.Unmarshal([]byte(readRepoFile(t, "ci", "auth_corpus_external.acp.override.yml")), &override); err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range override.Services["auth-service"].Environment {
+		if entry == "AUTH_AUTO_CREATE_ORG_ON_REGISTER" {
+			return
+		}
+	}
+	t.Errorf("auth-service's environment lacks AUTH_AUTO_CREATE_ORG_ON_REGISTER: %v", override.Services["auth-service"].Environment)
+}

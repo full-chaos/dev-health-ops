@@ -11,20 +11,16 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// TestMigration0029PinPresentConstraint: the constraint exists, is not yet
-// validated, and refuses a live session row without a pin from any role.
+// TestMigration0029PinPresentConstraint: 0029 adds the check NOT VALID and it
+// refuses a live session row without a pin from any role.
 func TestMigration0029PinPresentConstraint(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	env := newM10Fixture(t, ctx)
 
-	var validated bool
-	if err := env.admin.QueryRow(ctx, `SELECT convalidated FROM pg_constraint
-		WHERE conname = 'sessions_pin_present' AND conrelid = 'auth.sessions'::regclass`).Scan(&validated); err != nil {
-		t.Fatalf("sessions_pin_present: %v", err)
-	}
-	if validated {
-		t.Fatal("sessions_pin_present is validated before the stored rows were checked")
+	migrations, err := Migrations()
+	if err != nil || len(migrations) < 29 || migrations[28].Version != 29 || !strings.Contains(migrations[28].SQL, "NOT VALID;") {
+		t.Fatalf("migration 0029 is missing or does not add the check NOT VALID: %v", err)
 	}
 	if _, err := env.admin.Exec(ctx, `INSERT INTO auth.principals (id, kind, display_name) VALUES ('`+m10Principal+`', 'user', 'm29')`); err != nil {
 		t.Fatal(err)

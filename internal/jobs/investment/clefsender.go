@@ -21,8 +21,10 @@ var _ systemOneSender = clefSender{}
 
 // clefSettleFailure is the error of a call that clef answered (the request was
 // sent and the answer is in result) whose accounting could not be settled. The
-// reservation stays `reserved` and counts at its maximum; an operator lists it
-// (llmbudgetstale) and settles it with llmbudget.VoidReservation.
+// reservation stays `reserved` and counts at its maximum, which over-counts: the
+// safe side. Do not void it: a void records zero spend and needs proof that the
+// provider did not bill, and a 200 means it did. An operator lists the row with
+// `adminops llmbudget` (adminops/llmbudget.go); llmbudgetstale reports counts only.
 type clefSettleFailure struct {
 	result categorize.SystemOneResult
 	err    error

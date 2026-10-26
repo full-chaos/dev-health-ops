@@ -15,6 +15,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 )
@@ -76,7 +77,14 @@ func (h Handlers) Initiate(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		RelayState *string `json:"relay_state"`
 	}
-	if !readJSON(w, r, &body) {
+	data, ok := readJSONData(w, r, &body)
+	if !ok {
+		return
+	}
+	// The twin has no sealed branch: it forwards relay_state into the redirect
+	// URL for every provider, so every provider refuses a lone surrogate.
+	if pyjson.MemberHasLoneSurrogateEscape(data, "relay_state", true) {
+		writeStringUnicode(w, "relay_state")
 		return
 	}
 	relayState := ""
@@ -285,19 +293,36 @@ func (h Handlers) writeError(w http.ResponseWriter, r *http.Request, err error) 
 }
 
 func readJSON(w http.ResponseWriter, r *http.Request, v any) bool {
+	_, ok := readJSONData(w, r, v)
+	return ok
+}
+
+// readJSONData is readJSON that also returns the raw body: encoding/json has
+// already turned a lone surrogate escape into U+FFFD in v, so a caller that
+// must refuse one reads the bytes.
+func readJSONData(w http.ResponseWriter, r *http.Request, v any) ([]byte, bool) {
 	data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
 	if err != nil {
 		writeDetail(w, http.StatusRequestEntityTooLarge, "Request body too large")
-		return false
+		return nil, false
 	}
 	if len(data) == 0 {
 		data = []byte("{}")
 	}
 	if err := json.Unmarshal(data, v); err != nil {
 		writeDetail(w, http.StatusUnprocessableEntity, "Request body must be a JSON object")
-		return false
+		return nil, false
 	}
-	return true
+	return data, true
+}
+
+// writeStringUnicode answers go-api's validation error for a string field that
+// holds a lone surrogate, without echoing the input.
+func writeStringUnicode(w http.ResponseWriter, field string) {
+	writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"detail": []map[string]any{{
+		"type": "string_unicode", "loc": []string{"body", field},
+		"msg": "Input should be a valid string, unable to parse raw data as a unicode string",
+	}}})
 }
 
 func writeDetail(w http.ResponseWriter, status int, detail string) {

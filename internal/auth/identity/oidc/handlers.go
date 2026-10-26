@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
 )
 
@@ -92,6 +93,13 @@ func parseAuthorizeBody(data []byte) (authorizeBody, []fieldError) {
 		return authorizeBody{}, errs
 	}
 	body := authorizeBody{RedirectURI: optionalString(object, "redirect_uri", &errs)}
+	// encoding/json already turned a lone surrogate escape into U+FFFD, which
+	// would reach the authorization URL and the sealed state, so the raw
+	// member is read. The callback fields are not: they only end in the token
+	// exchange or the state check, never in a 2xx.
+	if pyjson.MemberHasLoneSurrogateEscape(data, "redirect_uri", false) {
+		errs = append(errs, bodyError("string_unicode", "redirect_uri", "Input should be a valid string, unable to parse raw data as a unicode string"))
+	}
 	optionalBool(object, "use_pkce", &errs)
 	return body, errs
 }

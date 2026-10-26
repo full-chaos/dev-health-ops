@@ -115,3 +115,29 @@ func FuzzHasLoneSurrogateEscape(f *testing.F) {
 	}
 	f.Fuzz(func(t *testing.T, doc []byte) { differential(t, doc) })
 }
+
+func TestMemberHasLoneSurrogateEscapeReadsOnlyTheNamedMember(t *testing.T) {
+	cases := []struct {
+		name string
+		doc  string
+		fold bool
+		want bool
+	}{
+		{"named member lone", `{"relay_state":"\ud800"}`, false, true},
+		{"named member pair", `{"relay_state":"😀"}`, false, false},
+		{"other member lone is ignored", `{"relay_state":"ok","note":"\ud800"}`, false, false},
+		{"key of another member is ignored", `{"\ud800":1,"relay_state":"ok"}`, false, false},
+		{"exact case only", `{"RELAY_STATE":"\ud800"}`, false, false},
+		{"folded case", `{"RELAY_STATE":"\ud800"}`, true, true},
+		{"folded case, both spellings, the second lone", `{"relay_state":"ok","Relay_State":"\udc00"}`, true, true},
+		{"null", `{"relay_state":null}`, true, false},
+		{"not an object", `["\ud800"]`, true, false},
+		{"does not decode", `{"relay_state":"\ud800"`, true, false},
+		{"nested object value", `{"relay_state":{"a":"\ud800"}}`, true, true},
+	}
+	for _, tc := range cases {
+		if got := pyjson.MemberHasLoneSurrogateEscape([]byte(tc.doc), "relay_state", tc.fold); got != tc.want {
+			t.Errorf("%s: %q fold=%v = %v, want %v", tc.name, tc.doc, tc.fold, got, tc.want)
+		}
+	}
+}

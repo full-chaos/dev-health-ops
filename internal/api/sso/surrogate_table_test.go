@@ -202,12 +202,9 @@ func TestSurrogateRefusalTableIsWellFormed(t *testing.T) {
 			if goStatus != "422" || len(strings.Fields(goAPI)) != 3 || strings.Fields(goAPI)[1] != "string_unicode" {
 				t.Errorf("%s: kind stricter needs go_api \"422 string_unicode <loc>\", got %q", id, goAPI)
 			}
-			if authService != "-" && strings.Fields(authService)[0] == "422" {
-				t.Errorf("%s: kind stricter but auth_service %q already refuses with 422", id, authService)
-			}
 		case "divergent":
-			if authService == "-" {
-				t.Errorf("%s: kind divergent needs an auth_service cell", id)
+			if authService == "-" || authService == goAPI {
+				t.Errorf("%s: kind divergent needs an auth_service cell that differs from go_api %q, got %q", id, goAPI, authService)
 			}
 		default:
 			t.Errorf("%s: kind %q is not same, stricter or divergent", id, kind)

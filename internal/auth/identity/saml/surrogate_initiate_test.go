@@ -37,6 +37,18 @@ func TestInitiateRefusesALoneSurrogateRelayStateAsStringUnicode(t *testing.T) {
 	}
 }
 
+// encoding/json matches the member name case-insensitively and forwards it.
+func TestInitiateRefusesALoneSurrogateRelayStateUnderAnyCaseOfTheName(t *testing.T) {
+	for _, body := range []string{`{"RELAY_STATE":"\ud800"}`, `{"Relay_State":"a\udc00"}`, `{"relay_state":"ok","RELAY_state":"\ud83d"}`} {
+		if rec, _ := initiateRequest(t, body); rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), `"string_unicode"`) {
+			t.Errorf("%s: status=%d body=%s", body, rec.Code, rec.Body.String())
+		}
+	}
+	if rec, _ := initiateRequest(t, `{"note":"\ud800","relay_state":"ok"}`); rec.Code != http.StatusOK {
+		t.Errorf("a surrogate in a member the route never reads: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestInitiateKeepsForwardingAPairedRelayState(t *testing.T) {
 	for body, want := range map[string]string{
 		`{"relay_state":"a😀b"}`:       "a😀b",

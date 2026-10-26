@@ -154,6 +154,8 @@ REQUIRED=(sessions local_login)
 # owns users, so forwarding social would refuse the corpus's new-user row.
 KEPT_ON_GO_API=(social)
 ROUTES="${SCRIPT_DIR}/auth_corpus_acp_routes.tsv"
+# Script-internal, never read from the caller's environment: only a step that owns the users sets it to 1 (none does yet).
+USERS_OWNED=0
 
 hostport() {
   local port
@@ -194,6 +196,19 @@ probe() {
   printf 'probe %s: %s (%d routes)\n' "${aggregate}" "${PROBED}" "$((mounted + missing))"
 }
 
+# gate_owned AGGREGATE narrows PROBED for an aggregate auth-service mounts before it owns it: auth-service answers its
+# routes with a 503 stub until then, so go-api must keep them. Once USERS_OWNED=1 the aggregate must be served.
+gate_owned() {
+  local owned_gated=(credentials)
+  [[ " ${owned_gated[*]} " == *" $1 "* ]] || return 0
+  if [ "${USERS_OWNED}" = 1 ]; then
+    [ "${PROBED}" = served ] || die "aggregate $1 is not served by auth-service, which owns the users"
+  elif [ "${PROBED}" = served ]; then
+    PROBED="not owned"
+    printf 'probe %s: mounted, not owned yet: stays on go-api\n' "$1"
+  fi
+}
+
 FORWARDED=()
 if [ "${LEG}" = "acp" ]; then
   AUTH_API_PORT="$(hostport auth-service 8095)"
@@ -201,6 +216,7 @@ if [ "${LEG}" = "acp" ]; then
   SERVED=()
   for aggregate in "${AGGREGATES[@]}"; do
     probe "${aggregate}"
+    gate_owned "${aggregate}"
     if [ "${PROBED}" = served ]; then
       SERVED+=("${aggregate}")
     fi

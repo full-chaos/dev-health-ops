@@ -120,6 +120,9 @@ spec:
       {{- end }}
       labels:
         {{- include "dev-health.componentSelectorLabels" (dict "component" "auth-service" "context" $) | nindent 8 }}
+        {{- if eq (include "dev-health.authOn" (dict "flag" "usersOwned" "context" $)) "true" }}
+        dev-health.io/auth-users-owned: "true"
+        {{- end }}
     spec:
       {{- include "dev-health.imagePullSecrets" . | nindent 6 }}
       {{- include "dev-health.workloadServiceAccount" (dict "ctx" . "component" "auth-service" "cfg" .Values.authService.serviceAccount) | nindent 6 }}

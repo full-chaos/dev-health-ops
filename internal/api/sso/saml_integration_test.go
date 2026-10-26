@@ -46,6 +46,9 @@ import (
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -358,6 +361,69 @@ func TestSAMLInitiateRefusesALoneSurrogateRelayStateOnlyWhereItIsForwarded(t *te
 	status, text := post(forwarded, `{"relay_state":"a\ud83d\ude00b"}`)
 	if status != http.StatusOK || !strings.Contains(text, "RelayState=a") {
 		t.Errorf("a surrogate pair: status=%d body=%s", status, text)
+	}
+}
+
+// TestSAMLInitiateSurrogateRefusalTable drives the saml_* rows of
+// ci/sso_surrogate_refusals.tsv against a real provider row: the status and
+// the error loc the table names must be what the route answers.
+func TestSAMLInitiateSurrogateRefusalTable(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "ci", "sso_surrogate_refusals.tsv"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	st := startStack(t, ctx)
+	orgID := seedOrg(t, ctx, st.pool, "enterprise")
+	idp := newSAMLIdP(t)
+	config := fmt.Sprintf(`{"entity_id":"https://idp.test/entity","sso_url":"https://idp.test/sso","certificate":%q}`, idp.certConfigValue())
+	providers := map[string]uuid.UUID{
+		"saml_forwarded": seedProvider(t, ctx, st.pool, orgID, providerOpts{protocol: "saml", status: "active", config: config, autoProvision: true}),
+		"saml_sealed":    seedProvider(t, ctx, st.pool, orgID, providerOpts{protocol: "saml", status: "active", config: config, autoProvision: true, disallowIdpInitiated: true}),
+	}
+	driven := 0
+	for _, line := range strings.Split(string(raw), "\n") {
+		f := strings.Split(line, "\t")
+		if line == "" || strings.HasPrefix(line, "#") || f[1] != "sso" || !strings.HasPrefix(f[4], "saml_") {
+			continue
+		}
+		id, request, body, setup, wantCell := f[0], f[2], f[3], f[4], strings.Fields(f[5])
+		provider, known := providers[setup]
+		if !known {
+			t.Fatalf("%s: unknown setup %q", id, setup)
+		}
+		method, path, _ := strings.Cut(request, " ")
+		req, err := http.NewRequest(method, st.server.URL+strings.Replace(path, "{provider}", provider.String(), 1), strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		text, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if want, _ := strconv.Atoi(wantCell[0]); resp.StatusCode != want {
+			t.Errorf("%s: status=%d want %s body=%s", id, resp.StatusCode, wantCell[0], text)
+		}
+		if len(wantCell) == 3 {
+			var parsed struct {
+				Detail []struct {
+					Type string `json:"type"`
+					Loc  []any  `json:"loc"`
+				} `json:"detail"`
+			}
+			if err := json.Unmarshal(text, &parsed); err != nil || len(parsed.Detail) != 1 || parsed.Detail[0].Type != wantCell[1] ||
+				fmt.Sprint(parsed.Detail[0].Loc) != "["+strings.ReplaceAll(wantCell[2], ".", " ")+"]" {
+				t.Errorf("%s: body=%s want %s %s", id, text, wantCell[1], wantCell[2])
+			}
+		}
+		driven++
+	}
+	if driven != 2 {
+		t.Fatalf("drove %d saml rows, want 2", driven)
 	}
 }
 

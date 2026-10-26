@@ -1874,7 +1874,7 @@ gotestfuncs_bin() {
 # scan_go_test_paths PATH...: the one gotestfuncs run of scan_listed_go_tests over validated paths.
 scan_go_test_paths() {
   local kind path name bin scanned
-  declare -gA SCAN_TESTS=() SCAN_HOOK=()
+  declare -gA SCAN_TESTS=() SCAN_RUNS=() SCAN_HOOK=()
   [ "$#" -gt 0 ] || return 0
   gotestfuncs_bin >/dev/null
   bin="${GOTESTFUNCS_BIN}"
@@ -1882,6 +1882,7 @@ scan_go_test_paths() {
   while IFS=$'\037' read -r kind path name; do
     case "${kind}" in
       T) SCAN_TESTS["${path}"]+="${name}"$'\n' ;;
+      X) SCAN_RUNS["${path}"]+="${name}"$'\n' ;;
       H) SCAN_HOOK["${path}"]="${name}" ;;
       "") ;;
       *) die "gotestfuncs printed an unknown record '${kind}'" ;;
@@ -1889,14 +1890,19 @@ scan_go_test_paths() {
   done <<<"${scanned}"
 }
 
-# go_test_name_ok NAME: NAME is "Test" plus identifier characters (ASCII letters, digits, '_', or any non-ASCII byte of
-# a Unicode letter or digit), so it is safe inside a `-run '^(...)$'` alternation. gotestfuncs prints Go identifiers
-# only; this refuses anything else loudly.
-go_test_name_ok() {
+# go_run_name_ok NAME: NAME is "Test", "Example" or "Fuzz" plus identifier characters (ASCII letters, digits, '_', or
+# any non-ASCII byte of a Unicode letter or digit), so it is safe inside a `-run '^(...)$'` alternation. gotestfuncs
+# prints Go identifiers only; this refuses anything else loudly.
+go_run_name_ok() {
   local LC_ALL=C rest
-  case "$1" in Test*) ;; *) return 1 ;; esac
+  case "$1" in Test*|Example*|Fuzz*) ;; *) return 1 ;; esac
   rest="${1//[A-Za-z0-9_]/}"
   [[ ! "${rest}" =~ [[:print:][:cntrl:]] ]]
+}
+
+# go_test_name_ok NAME: go_run_name_ok for a "Test" name.
+go_test_name_ok() {
+  case "$1" in Test*) go_run_name_ok "$1" ;; *) return 1 ;; esac
 }
 
 # integration_test_files MODULE_DIR PKG...: the ONE place that decides which test files of a package belong to the
@@ -1992,10 +1998,10 @@ split_plan_scope() {
 
 # discover_integration_tagged_tests MODULE_DIR PKG...: for module-relative packages ("./dir") of one module, the tests a
 # shard runs: the files integration_test_files classes as integration-only, parsed by gotestfuncs. Fills, keyed by PKG:
-# INTEGRATION_TAGGED_TESTS (newline list of the top-level tests of those files), INTEGRATION_UNTAGGED_TESTS (the same
-# for every other test file the integration build lists) and INTEGRATION_HOOK ("<key>/<file> <func>" of the first
-# `func init` or `func TestMain` in an integration-only file: that hook changes the process the untagged tests run in
-# under the tag, so the package runs whole, as before).
+# INTEGRATION_TAGGED_TESTS (newline list of the names go test runs from those files: top-level tests, fuzz targets and
+# examples with output), INTEGRATION_UNTAGGED_TESTS (the same for every other test file the integration build lists)
+# and INTEGRATION_HOOK ("<key>/<file> <func>" of the first `func init` or `func TestMain` in an integration-only file:
+# that hook changes the process the untagged tests run in under the tag, so the package selects every name it has).
 discover_integration_tagged_tests() {
   local module_dir="$1" pkg key base dir go_file path name rel
   shift
@@ -2026,31 +2032,33 @@ discover_integration_tagged_tests() {
     fi
     while IFS= read -r name; do
       [ -n "${name}" ] || continue
-      go_test_name_ok "${name}" || die "integration test discovery returned unsupported top-level test name '${name}' in ${path}"
+      go_run_name_ok "${name}" || die "integration test discovery returned unsupported top-level test name '${name}' in ${path}"
       if [ -n "${TEST_FILE_TAG_ONLY[${path}]+set}" ]; then
         INTEGRATION_TAGGED_TESTS["${pkg}"]+="${name}"$'\n'
       else
         INTEGRATION_UNTAGGED_TESTS["${pkg}"]+="${name}"$'\n'
       fi
-    done <<<"${SCAN_TESTS[${path}]-}"
+    done <<<"${SCAN_TESTS[${path}]-}${SCAN_RUNS[${path}]-}"
   done
 }
 
 # run_integration_packages MODE MODULE_DIR LABEL PKG...: runs the PKGs of one module under the integration tag
 # (CHAOS-11407). The untagged tests of these packages already run in the go-quality test legs (plain) and race legs
-# (-race), which run every package on every merge_group (plan-verdict FULL); here they ran a third time. So each
-# package runs only its integration-tagged top-level tests, through `-run`. The filtered packages are packed first-fit
-# into go test groups (-p keeps a group's packages parallel): a package joins a group only when no tagged name of it
-# is an untagged name of a group member or the reverse (a shared `-run` would run that plain test again), and while
-# the group's regex stays within regex_max bytes (Linux refuses one argument over 128 KiB, MAX_ARG_STRLEN; every
-# integration package of the root module in one regex is about 163 KB). A package with a tag-only hook (INTEGRATION_HOOK) runs
-# whole in a last go test. Receipts: SHARD-TEST <key> <Test> per selected test, SHARD-UNFILTERED <key> <file> <func>,
-# and per group SHARD-GROUP <module> <n> <key>... then SHARD-REGEX <module> <regex>.
+# (-race), which run every package on every merge_group (plan-verdict FULL); here they ran a third time. So a package
+# selects, through `-run`, only the names go test runs (tests, fuzz targets, examples with output) of its
+# integration-only test files. A package with a tag-only hook (INTEGRATION_HOOK) changes the process its untagged tests
+# run in, so it selects every name it has (it runs whole) and skips none. The packages are packed first-fit into go
+# test groups, so a shard runs one go test (-p keeps a group's packages parallel; a hook package in a separate, later
+# go test added the group's wall to its own): a package joins a group only when no name it selects is a name a group
+# member skips or the reverse (a shared `-run` would run that skipped test again), and while the group's regex stays
+# within regex_max bytes (Linux refuses one argument over 128 KiB, MAX_ARG_STRLEN; every integration package of the root
+# module in one regex is about 163 KB). Receipts: SHARD-UNFILTERED <key> <file> <func> per hook package, SHARD-TEST
+# <key> <name> per selected name, and per group SHARD-GROUP <module> <n> <key>... then SHARD-REGEX <module> <regex>.
 run_integration_packages() {
   local mode="$1" module_dir="$2" label="$3" pkg key name tests=0 result=0 status groups=0 group fits size names_len regex_max=60000
-  local -a filtered=() unfiltered=() run_pkgs=() group_pkgs=() group_keys=() group_regex=() group_size=()
+  local -a unfiltered=() run_pkgs=() group_pkgs=() group_keys=() group_regex=() group_size=()
   local -a pkgs=()
-  local -A tagged_in=() untagged_in=()
+  local -A selected_in=() skipped_in=() select_names=() skip_names=() seen=()
   shift 3
   # Sorted (C locale): the same packages give the same groups and receipts in any argument order.
   mapfile -t pkgs < <(printf '%s\n' "$@" | LC_ALL=C sort -u)
@@ -2059,16 +2067,26 @@ run_integration_packages() {
   for pkg in "${pkgs[@]}"; do
     key="${module_dir}/${pkg#./}"
     key="${key#./}"
-    [ -z "${INTEGRATION_HOOK[${pkg}]+set}" ] || continue
-    [ -n "${INTEGRATION_TAGGED_TESTS[${pkg}]-}" ] \
+    select_names["${pkg}"]="${INTEGRATION_TAGGED_TESTS[${pkg}]-}"
+    skip_names["${pkg}"]="${INTEGRATION_UNTAGGED_TESTS[${pkg}]-}"
+    if [ -n "${INTEGRATION_HOOK[${pkg}]+set}" ]; then
+      select_names["${pkg}"]+="${skip_names[${pkg}]}"
+      skip_names["${pkg}"]=""
+      [ -n "${select_names[${pkg}]}" ] \
+        || die "${label}: ${key} runs in an integration shard, but declares no test, fuzz target or example with output"
+    fi
+    [ -n "${select_names[${pkg}]}" ] \
       || die "${label}: ${key} runs in an integration shard, but no test file that only the integration build lists declares a top-level Test"
+    seen=()
     names_len=0
     while IFS= read -r name; do
       [ -n "${name}" ] || continue
+      [ -z "${seen[${name}]+set}" ] || continue
+      seen["${name}"]=1
       names_len=$((names_len + ${#name} + 1))
-    done <<<"${INTEGRATION_TAGGED_TESTS[${pkg}]}"
+    done <<<"${select_names[${pkg}]}"
     [ $((names_len + 4)) -le "${regex_max}" ] \
-      || die "${label}: the integration-tagged test names of ${key} alone exceed the ${regex_max}-byte -run budget"
+      || die "${label}: the selected test names of ${key} alone exceed the ${regex_max}-byte -run budget"
   done
   for pkg in "${pkgs[@]}"; do
     key="${module_dir}/${pkg#./}"
@@ -2076,27 +2094,28 @@ run_integration_packages() {
     if [ -n "${INTEGRATION_HOOK[${pkg}]+set}" ]; then
       printf '  SHARD-UNFILTERED %s %s\n' "${key}" "${INTEGRATION_HOOK[${pkg}]}"
       unfiltered+=("${pkg}")
-      continue
     fi
-    filtered+=("${pkg}")
+    seen=()
     while IFS= read -r name; do
       [ -n "${name}" ] || continue
+      [ -z "${seen[${name}]+set}" ] || continue
+      seen["${name}"]=1
       printf '  SHARD-TEST %s %s\n' "${key}" "${name}"
       tests=$((tests + 1))
-    done <<<"${INTEGRATION_TAGGED_TESTS[${pkg}]}"
+    done <<<"${select_names[${pkg}]}"
     for ((group = 0; group < groups; group++)); do
       fits=1
       size="${group_size[${group}]}"
       while IFS= read -r name; do
         [ -n "${name}" ] || continue
-        if [ -n "${untagged_in[${group}|${name}]+set}" ]; then fits=0; break; fi
-        [ -n "${tagged_in[${group}|${name}]+set}" ] || size=$((size + ${#name} + 1))
-      done <<<"${INTEGRATION_TAGGED_TESTS[${pkg}]}"
+        if [ -n "${skipped_in[${group}|${name}]+set}" ]; then fits=0; break; fi
+        [ -n "${selected_in[${group}|${name}]+set}" ] || size=$((size + ${#name} + 1))
+      done <<<"${select_names[${pkg}]}"
       [ "${fits}" -eq 1 ] && [ "${size}" -le "${regex_max}" ] || continue
       while IFS= read -r name; do
         [ -n "${name}" ] || continue
-        if [ -n "${tagged_in[${group}|${name}]+set}" ]; then fits=0; break; fi
-      done <<<"${INTEGRATION_UNTAGGED_TESTS[${pkg}]-}"
+        if [ -n "${selected_in[${group}|${name}]+set}" ]; then fits=0; break; fi
+      done <<<"${skip_names[${pkg}]}"
       [ "${fits}" -eq 1 ] && break
     done
     if [ "${group}" -eq "${groups}" ]; then
@@ -2105,19 +2124,19 @@ run_integration_packages() {
     fi
     while IFS= read -r name; do
       [ -n "${name}" ] || continue
-      [ -z "${tagged_in[${group}|${name}]+set}" ] || continue
-      tagged_in["${group}|${name}"]=1
+      [ -z "${selected_in[${group}|${name}]+set}" ] || continue
+      selected_in["${group}|${name}"]=1
       group_regex[group]+="${group_regex[${group}]:+|}${name}"
       group_size[group]=$((group_size[group] + ${#name} + 1))
-    done <<<"${INTEGRATION_TAGGED_TESTS[${pkg}]}"
+    done <<<"${select_names[${pkg}]}"
     while IFS= read -r name; do
       [ -n "${name}" ] || continue
-      untagged_in["${group}|${name}"]=1
-    done <<<"${INTEGRATION_UNTAGGED_TESTS[${pkg}]-}"
+      skipped_in["${group}|${name}"]=1
+    done <<<"${skip_names[${pkg}]}"
     group_pkgs[group]+="${pkg}"$'\n'
     group_keys[group]+=" ${key}"
   done
-  printf '%s: %d package(s), %d integration-tagged test(s), %d unfiltered package(s), %d go test group(s)\n' \
+  printf '%s: %d package(s), %d selected test(s), %d unfiltered package(s), %d go test group(s)\n' \
     "${label}" "${#pkgs[@]}" "${tests}" "${#unfiltered[@]}" "${groups}"
   for ((group = 0; group < groups; group++)); do
     group_regex[group]="^(${group_regex[${group}]})\$"
@@ -2131,10 +2150,6 @@ run_integration_packages() {
     run_pkgs=(-run "${group_regex[${group}]}" "${run_pkgs[@]}")
     run_integration_go_test "${module_dir}" "${run_pkgs[@]}" || { status=$?; [ "${result}" -ne 0 ] || result="${status}"; }
   done
-  if [ "${#unfiltered[@]}" -gt 0 ]; then
-    run_pkgs=("${unfiltered[@]}")
-    run_integration_go_test "${module_dir}" "${run_pkgs[@]}" || { status=$?; [ "${result}" -ne 0 ] || result="${status}"; }
-  fi
   return "${result}"
 }
 

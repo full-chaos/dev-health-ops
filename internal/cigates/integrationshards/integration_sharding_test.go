@@ -1347,7 +1347,7 @@ printf 'SPLITHOOK h [%s]\n' "${DAILY_UNFILTERED}"
 `)
 		want := []string{
 			"  SHARD-TEST p TestLegacyTagged", "  SHARD-TEST p TestTaggedASCII", "  SHARD-TEST p TestÖ",
-			"  SHARD-UNFILTERED h h/hook_test.go init",
+			"  SHARD-UNFILTERED h h/hook_test.go init", "  SHARD-TEST h TestHookTagged", "  SHARD-TEST h TestOrdinary",
 			"  SHARD-TEST q TestQTagged",
 			"CLASS TestLegacyTagged integration", "CLASS TestPlain ordinary", "CLASS TestPlainMention ordinary",
 			"CLASS TestTaggedASCII integration", "CLASS TestÖ integration",
@@ -1367,8 +1367,8 @@ printf 'SPLITHOOK h [%s]\n' "${DAILY_UNFILTERED}"
 				t.Errorf("a test file the plain build lists runs in the shard: %q", l)
 			case strings.HasPrefix(l, "  SHARD-UNFILTERED q "):
 				t.Errorf("a hook inside a comment made q unfiltered: %q", l)
-			case strings.HasPrefix(l, "  SHARD-TEST h "):
-				t.Errorf("a package with a real hook was filtered: %q", l)
+			case strings.HasPrefix(l, "  SHARD-TEST h ") && l != "  SHARD-TEST h TestHookTagged" && l != "  SHARD-TEST h TestOrdinary":
+				t.Errorf("a package with a real hook selects a name it does not declare: %q", l)
 			case strings.Contains(l, "TestFake") || strings.Contains(l, "Testable") || strings.Contains(l, "TestMethod"):
 				t.Errorf("a string, a lower-case name or a method was taken for a test: %q", l)
 			}

@@ -3,6 +3,7 @@ package categorize
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -266,5 +267,56 @@ func TestClefClientDefaultsToTheHardenedGuardedClient(t *testing.T) {
 	}
 	if client.client.Timeout != hardenedHTTPTimeout {
 		t.Fatalf("timeout = %v", client.client.Timeout)
+	}
+}
+
+const clefWrappedBody = `{"result":{"model":"clef","answers":{"q":{"type":"noul","noul":0.5}},"usage":{"input_tokens":2644,"output_tokens":358}},"success":true,"errors":[],"messages":[]}`
+
+// The REST envelope: model, usage and answers sit under "result". They are read
+// from there, and the body handed to the decision adapter is the inner object.
+func TestClefClientReadsAnAnswerWrappedInAResultEnvelope(t *testing.T) {
+	client, _, _ := newTestClef(t, func(int, *http.Request) (*http.Response, error) { return clefAnswer(200, clefWrappedBody) })
+	result, err := client.PostSystemOneDetailed(context.Background(), []byte(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Model != "clef" || !result.Usage.Reported || result.Usage.InputTokens != 2644 || result.Usage.OutputTokens != 358 {
+		t.Fatalf("result = model %q usage %+v", result.Model, result.Usage)
+	}
+	var inner map[string]any
+	if err := json.Unmarshal(result.Body, &inner); err != nil || inner["answers"] == nil || inner["result"] != nil {
+		t.Fatalf("body = %s, want the inner object with answers and no result key", result.Body)
+	}
+}
+
+// A body with "answers" at the top is the plain shape even if it has a "result"
+// key: it is left as it is.
+func TestClefClientDoesNotUnwrapABodyThatHasAnswers(t *testing.T) {
+	plain := `{"model":"clef","answers":{},"usage":{"input_tokens":1,"output_tokens":2},"result":{"model":"other"}}`
+	client, _, _ := newTestClef(t, func(int, *http.Request) (*http.Response, error) { return clefAnswer(200, plain) })
+	result, err := client.PostSystemOneDetailed(context.Background(), []byte(`{}`))
+	if err != nil || result.Model != "clef" || string(result.Body) != plain {
+		t.Fatalf("result = %q %s %v", result.Model, result.Body, err)
+	}
+}
+
+// The model is taken from the request only when the answer omits the field.
+func TestClefClientTakesTheModelFromTheRequestOnlyWhenTheAnswerOmitsIt(t *testing.T) {
+	omitted, _, _ := newTestClef(t, func(int, *http.Request) (*http.Response, error) {
+		return clefAnswer(200, `{"answers":{},"usage":{"input_tokens":1,"output_tokens":2}}`)
+	})
+	result, err := omitted.PostSystemOneDetailed(context.Background(), []byte(`{}`))
+	if err != nil || result.Model != "clef" || !strings.Contains(string(result.Body), `"model":"clef"`) {
+		t.Fatalf("omitted model: %q %s %v", result.Model, result.Body, err)
+	}
+	for name, body := range map[string]string{
+		"other model": `{"model":"clef-flash","answers":{}}`,
+		"empty model": `{"model":"","answers":{}}`,
+	} {
+		client, _, _ := newTestClef(t, func(int, *http.Request) (*http.Response, error) { return clefAnswer(200, body) })
+		got, err := client.PostSystemOneDetailed(context.Background(), []byte(`{}`))
+		if err != nil || strings.Contains(string(got.Body), `"model":"clef"`) || got.Model == "clef" {
+			t.Fatalf("%s: model %q body %s err %v: a present model must not be replaced", name, got.Model, got.Body, err)
+		}
 	}
 }

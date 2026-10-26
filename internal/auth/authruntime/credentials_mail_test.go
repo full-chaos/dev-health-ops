@@ -10,12 +10,14 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/full-chaos/dev-health-ops/internal/mail"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
 
 var mailEnvNames = []string{
 	"EMAIL_PROVIDER", "EMAIL_FROM_ADDRESS", "EMAIL_API_KEY", "RESEND_API_KEY", "SMTP_HOST", "SMTP_PORT",
-	"APP_BASE_URL", "AUTH_MAIL_ALLOW_CONSOLE",
+	"APP_BASE_URL", "AUTH_MAIL_ALLOW_CONSOLE", "SMTP_USE_TLS", "SMTP_TLS_CA_FILE", "SMTP_TLS_SERVER_NAME",
+	"SMTP_USERNAME", "SMTP_PASSWORD",
 }
 
 // mailEnv sets exactly the given variables; every other mail variable is unset (not empty) for the test.
@@ -206,4 +208,81 @@ func TestOwnedUsersAcceptAnHTTPAppBaseURLUnderTheOverride(t *testing.T) {
 
 func TestOwnedUsersRefuseAnAppBaseURLWithUserinfo(t *testing.T) {
 	wantRefusal(t, with(smtpMail(), "APP_BASE_URL", "https://sentinel-user:sentinel-pass@app.example.com"), "APP_BASE_URL", "sentinel")
+}
+
+// capturedDefaultLog routes the process-wide slog default (where internal/mail logs) into a buffer.
+func capturedDefaultLog(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	return &buf
+}
+
+func wantValueFreeRefusal(t *testing.T, env map[string]string, name, planted string) {
+	t.Helper()
+	mailEnv(t, env)
+	global := capturedDefaultLog(t)
+	var logs bytes.Buffer
+	err := ownedRoutes(t, &logs)
+	if err == nil {
+		t.Fatalf("started with a bad %s", name)
+	}
+	if !strings.Contains(err.Error(), name) {
+		t.Fatalf("error %q does not name %s", err, name)
+	}
+	for label, text := range map[string]string{"error": err.Error(), "logger": logs.String(), "default log": global.String()} {
+		if strings.Contains(text, planted) {
+			t.Fatalf("%s holds the planted value: %s", label, text)
+		}
+	}
+}
+
+func TestOwnedUsersRefuseAPaddedAppBaseURL(t *testing.T) {
+	for _, v := range []string{" https://x.test", "https://x.test ", " https://x.test ", "https://x.test\n", "\thttps://x.test"} {
+		wantRefusal(t, with(smtpMail(), "APP_BASE_URL", v), "APP_BASE_URL")
+	}
+}
+
+func TestOwnedUsersBuildTheExactLinkFromACleanAppBaseURL(t *testing.T) {
+	mailEnv(t, with(smtpMail(), "APP_BASE_URL", "https://x.test"))
+	var logs bytes.Buffer
+	if err := ownedRoutes(t, &logs); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestOwnedUsersUnsupportedProviderNeverReachesTheConstructorLog(t *testing.T) {
+	wantValueFreeRefusal(t, with(smtpMail(), "EMAIL_PROVIDER", "sentinel-provider"), "EMAIL_PROVIDER", "sentinel-provider")
+}
+
+func TestOwnedUsersBadSMTPPortIsValueFree(t *testing.T) {
+	wantValueFreeRefusal(t, with(smtpMail(), "SMTP_PORT", "sentinel-port"), "SMTP_PORT", "sentinel-port")
+}
+
+func TestOwnedUsersBadCAFileIsValueFree(t *testing.T) {
+	env := with(with(smtpMail(), "SMTP_USE_TLS", "true"), "SMTP_TLS_CA_FILE", "/nonexistent/sentinel-ca.pem")
+	wantValueFreeRefusal(t, env, "SMTP_TLS_CA_FILE", "sentinel-ca")
+}
+
+func TestOwnedUsersAnyOtherConstructorFaultIsGeneric(t *testing.T) {
+	env := with(smtpMail(), "SMTP_TLS_SERVER_NAME", "")
+	wantValueFreeRefusal(t, env, "the mail settings do not load", "sentinel")
+}
+
+func TestTheConsoleOverrideNeverLogsTheSenderAddress(t *testing.T) {
+	mailEnv(t, with(with(smtpMail(), "EMAIL_PROVIDER", "console"), "AUTH_MAIL_ALLOW_CONSOLE", "true"))
+	t.Setenv("EMAIL_FROM_ADDRESS", "sentinel-sender@example.com")
+	global := capturedDefaultLog(t)
+	provider, err := ownedUsersMailProvider(slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := quietProvider(provider).Send(context.Background(), mail.Message{To: "sentinel-rcpt@example.com", Subject: "s"}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(global.String(), "sentinel") || !strings.Contains(global.String(), "console provider") {
+		t.Fatalf("console log: %s", global.String())
+	}
 }

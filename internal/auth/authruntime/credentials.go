@@ -3,7 +3,6 @@ package authruntime
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"net/url"
 	"os"
@@ -67,9 +66,16 @@ func ownedUsersMailProvider(logger *slog.Logger) (mail.Sender, error) {
 	if err := checkAppBaseURL(os.Getenv("APP_BASE_URL"), os.Getenv(EnvMailAllowConsole) == "true"); err != nil {
 		return nil, err
 	}
-	provider, err := mail.NewSenderFromEnv(nil)
+	if raw, set := os.LookupEnv("EMAIL_PROVIDER"); set {
+		switch strings.ToLower(strings.TrimSpace(raw)) {
+		case "smtp", "resend", "console":
+		default:
+			return nil, errors.New("auth mail: EMAIL_PROVIDER is not a supported provider")
+		}
+	}
+	provider, err := mail.NewSenderFromEnv(nil, mail.Redacted())
 	if err != nil {
-		return nil, fmt.Errorf("auth mail: %w", err)
+		return nil, mailConfigError(err)
 	}
 	switch provider.Name() {
 	case "console":
@@ -85,9 +91,24 @@ func ownedUsersMailProvider(logger *slog.Logger) (mail.Sender, error) {
 	return provider, nil
 }
 
+// mailConfigError names the variable a constructor fault is about and never carries a value.
+func mailConfigError(err error) error {
+	switch {
+	case errors.Is(err, mail.ErrProviderUnsupported):
+		return errors.New("auth mail: EMAIL_PROVIDER is not a supported provider")
+	case errors.Is(err, mail.ErrSMTPPortInvalid):
+		return errors.New("auth mail: SMTP_PORT is not a valid port")
+	case errors.Is(err, mail.ErrSMTPCAFileInvalid):
+		return errors.New("auth mail: SMTP_TLS_CA_FILE is invalid")
+	case errors.Is(err, mail.ErrResendKeyMissing):
+		return errors.New("auth mail: EMAIL_API_KEY is required while EMAIL_PROVIDER=resend")
+	}
+	return errors.New("auth mail: the mail settings do not load")
+}
+
 func checkAppBaseURL(raw string, allowHTTP bool) error {
-	parsed, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil || (parsed.Scheme != "https" && !(allowHTTP && parsed.Scheme == "http")) || parsed.Hostname() == "" || parsed.User != nil {
+	parsed, err := url.Parse(raw)
+	if err != nil || raw != strings.TrimSpace(raw) || (parsed.Scheme != "https" && !(allowHTTP && parsed.Scheme == "http")) || parsed.Hostname() == "" || parsed.User != nil {
 		return errors.New("auth mail: APP_BASE_URL must be an absolute https URL without credentials while auth-service owns users (http only under " + EnvMailAllowConsole + "=true)")
 	}
 	return nil

@@ -1232,10 +1232,15 @@ migrations:
     #    localBundledPostgres the Job runs on pre-upgrade only. Pass a helm --timeout above activeDeadlineSeconds.
     streakIndex:
       enabled: false
-      activeDeadlineSeconds: 3600
-      # -- lock_timeout of each build attempt, in seconds (1 to 60).
+      activeDeadlineSeconds: 2400
+      # -- lock_timeout of the table-lock probe before each attempt, in seconds (1 to 60). The waits for older
+      #    transactions are not under it: they run up to deadlineSeconds.
       lockTimeoutSeconds: 5
-      attempts: 20
+      # -- window of the whole build in seconds: CREATE/DROP INDEX CONCURRENTLY wait for older transactions up to it.
+      #    deadlineSeconds + 360 must not exceed activeDeadlineSeconds; the migrate Job (up to 1800 s) runs after
+      #    this hook inside the same helm --timeout.
+      deadlineSeconds: 1800
+      attempts: 3
       retryDelaySeconds: 15
     backoffLimit: 2
     activeDeadlineSeconds: 1800

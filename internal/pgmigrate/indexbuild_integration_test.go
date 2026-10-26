@@ -182,6 +182,9 @@ func holdWriter(t *testing.T, uri string) (release func()) {
 	if _, err := tx.Exec(context.Background(), "LOCK TABLE public.sync_run_units IN ROW EXCLUSIVE MODE"); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := tx.Exec(context.Background(), "SELECT 'sentinel_query_text_xyz'"); err != nil {
+		t.Fatal(err)
+	}
 	var once sync.Once
 	release = func() { once.Do(func() { _ = tx.Rollback(context.Background()) }) }
 	t.Cleanup(release)
@@ -204,7 +207,7 @@ func TestBuildIndexFinalFailureDropsTheInvalidIndex(t *testing.T) {
 		release()
 	}()
 	_, err := pgmigrate.BuildFailureStreakIndex(context.Background(), conn,
-		pgmigrate.IndexBuildOptions{LockTimeout: 2 * time.Second, Attempts: 1}, slog.New(slog.NewJSONHandler(logs, nil)))
+		pgmigrate.IndexBuildOptions{LockTimeout: 2 * time.Second, Attempts: 1, Deadline: 4 * time.Second, CleanupBudget: 30 * time.Second}, slog.New(slog.NewJSONHandler(logs, nil)))
 	if err == nil {
 		t.Fatal("the build succeeded under a held writer lock")
 	}
@@ -222,10 +225,13 @@ func TestBuildIndexFinalFailureUnderHeldLockLeavesIndexForNextRun(t *testing.T) 
 	release := holdWriter(t, uri)
 
 	conn := connect(t, uri)
-	code, _, stderr := buildIndexVerb(t, uri, "--attempts=1", "--lock-timeout=1s", "--retry-delay=0s")
-	if code == cli.ExitOK {
-		t.Fatalf("exit 0 under a held writer lock; stderr %s", stderr)
+	logs := &syncBuffer{}
+	_, err := pgmigrate.BuildFailureStreakIndex(context.Background(), conn,
+		pgmigrate.IndexBuildOptions{LockTimeout: time.Second, Attempts: 1, Deadline: 3 * time.Second, CleanupBudget: 3 * time.Second}, slog.New(slog.NewJSONHandler(logs, nil)))
+	if err == nil {
+		t.Fatal("the build succeeded under a held writer lock")
 	}
+	stderr := logs.String()
 	if !strings.Contains(stderr, "build-index: invalid index left; the next run drops it") {
 		t.Fatalf("stderr lacks the leftover line: %s", stderr)
 	}

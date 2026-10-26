@@ -271,6 +271,13 @@ activeDeadlineSeconds for the prod table and pass a helm --timeout above it.
 */}}
 {{- if .Values.migrations.hook.streakIndex.enabled }}
 {{- /*
+The verb's whole run is startup (about 60 s) + the build window (deadlineSeconds) + the cleanup drop (300 s): it must end
+inside the Job's activeDeadlineSeconds, or Kubernetes kills the pod mid-build and the INVALID leftover stays.
+*/}}
+{{- if gt (add (int .Values.migrations.hook.streakIndex.deadlineSeconds) 360) (int .Values.migrations.hook.streakIndex.activeDeadlineSeconds) }}
+{{- fail "migrations.hook.streakIndex.deadlineSeconds + 360 (startup and cleanup) must not exceed migrations.hook.streakIndex.activeDeadlineSeconds" }}
+{{- end }}
+{{- /*
 With localBundledPostgres the Job runs on pre-upgrade only: the bundled database exists on an upgrade, and a fresh
 install builds the index in revision 0159 on an empty table.
 */}}
@@ -330,6 +337,7 @@ spec:
             - postgres
             - build-index
             - --lock-timeout={{ .Values.migrations.hook.streakIndex.lockTimeoutSeconds }}s
+            - --deadline={{ .Values.migrations.hook.streakIndex.deadlineSeconds }}s
             - --attempts={{ .Values.migrations.hook.streakIndex.attempts }}
             - --retry-delay={{ .Values.migrations.hook.streakIndex.retryDelaySeconds }}s
             - failure-streak

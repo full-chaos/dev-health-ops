@@ -524,6 +524,11 @@ func greetsByEmailOnly(python, target sentMail) bool {
 	if python.partType != target.partType && (asciiName || !strings.Contains(python.partType, "base64") || !strings.Contains(target.partType, "7bit")) {
 		return false
 	}
+	// The golden's base64 body decodes to LF and auth-service's 7bit body keeps CRLF: across encodings the line endings are
+	// the encoding's, not the content's. With one encoding a CRLF difference stays a difference.
+	if python.partType != target.partType {
+		python.html, target.html = strings.ReplaceAll(python.html, "\r\n", "\n"), strings.ReplaceAll(target.html, "\r\n", "\n")
+	}
 	python.partType, target.partType = "", ""
 	python.token, target.token = "", ""
 	python.html, target.html = greetingPattern.ReplaceAllString(python.html, "<p>Hi NAME,</p>"), greetingPattern.ReplaceAllString(target.html, "<p>Hi NAME,</p>")

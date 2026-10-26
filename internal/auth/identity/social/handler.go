@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
@@ -57,8 +58,15 @@ type tokenRequest struct {
 
 func readTokenRequest(w http.ResponseWriter, r *http.Request) (Provider, contracts.SecretString, bool) {
 	var body tokenRequest
-	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBody))
-	if err := decodeOne(dec, &body); err != nil || body.ProviderAccessToken.Reveal() == "" {
+	data, readErr := io.ReadAll(http.MaxBytesReader(w, r.Body, maxRequestBody))
+	if readErr == nil {
+		// The api plane answers a body that is not UTF-8 before it reads a field.
+		if _, err := pyjson.DecodeBody(data); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"detail": "There was an error parsing the body"})
+			return "", contracts.SecretString{}, false
+		}
+	}
+	if readErr != nil || decodeOne(json.NewDecoder(bytes.NewReader(data)), &body) != nil || body.ProviderAccessToken.Reveal() == "" {
 		writeDetail(w, http.StatusUnprocessableEntity, "provider and provider_access_token are required")
 		return "", contracts.SecretString{}, false
 	}

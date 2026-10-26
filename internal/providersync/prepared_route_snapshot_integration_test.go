@@ -526,10 +526,9 @@ func TestPostgresPreparedRouteSnapshotRunsUnderTheRestrictedDomainRole(t *testin
 	defer ownerPool.Close()
 	createProviderSyncFixture(t, ctx, ownerPool)
 	seedProviderSyncFixture(t, ctx, ownerPool)
-	if _, err := ownerPool.Exec(ctx, `
-CREATE TABLE public.alembic_version (version_num varchar(32) PRIMARY KEY);
-INSERT INTO public.alembic_version (version_num) VALUES ('0093')`); err != nil {
-		t.Fatal(err)
+	var ledgerRows int
+	if err := ownerPool.QueryRow(ctx, `SELECT count(*) FROM public.alembic_version`).Scan(&ledgerRows); err != nil {
+		t.Fatalf("the migrated schema must carry the migration ledger the role is kept from: %v", err)
 	}
 
 	// The venue isolates the runtime snapshot contract: the snapshot table has

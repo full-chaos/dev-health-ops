@@ -294,8 +294,8 @@ func TestProductionSAMLWiringRefusesAnAccountHoldingAnotherSubject(t *testing.T)
 		legacy := e.store(t, false)
 		first := "first-" + uuid.NewString()
 		user := uuid.New()
-		if _, err := e.admin.Exec(ctx, `INSERT INTO public.users (id, email, auth_provider, auth_provider_id, is_active, is_verified)
-VALUES ($1, $2, 'saml', $3, true, true)`, user, first+"@example.com", first); err != nil {
+		if _, err := e.admin.Exec(ctx, `INSERT INTO public.users (id, email, auth_provider, auth_provider_id, sso_provider_id, is_active, is_verified)
+VALUES ($1, $2, 'saml', $3, $4, true, true)`, user, first+"@example.com", first, e.provider.ID); err != nil {
 			t.Fatal(err)
 		}
 		e.member(t, user)

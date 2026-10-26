@@ -208,18 +208,6 @@ spec:
             {{- if $group.queues }}
             - {{ printf "--preclaim-readiness-timeout=%s" ($group.preclaimReadinessTimeout | default $.Values.goWorkers.defaultPreclaimReadinessTimeout) | quote }}
             {{- end }}
-            {{- /*
-              CHAOS-6279: the --operational-bridge-url flag this block used
-              to emit (CHAOS-4351/CHAOS-4984 history), and the
-              $group.bridgeUrl override that fed it, are deleted --
-              CHAOS-5320 already deleted the Python HTTP bridge it pointed
-              at (the HTTPDispatcher/NewHTTPBridge call chains the
-              CHAOS-4984 trace cited), and nothing constructs a bridge
-              client from cfg.OperationalBridgeURL any more (confirmed by
-              grep across internal/ and cmd/). With this block gone, no
-              worker group's command line points at the Python metrics-api
-              any more either (that Deployment is deleted, CHAOS-7520).
-            */}}
             {{- if $.Values.goWorkers.pgbouncer.enabled }}
             - "--domain-transaction-pooler=true"
             - "--queue-database-mode=session"

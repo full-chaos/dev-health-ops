@@ -871,9 +871,6 @@ goWorkers:
       # terminationGracePeriodSeconds above (7260s) both protect the
       # long-running metrics job from a scale-down SIGKILL.
       autoscaling: {enabled: true, minReplicas: 1, maxReplicas: 2, queueDepthPerReplica: 10, cooldownPeriod: 600, pollingInterval: 30}
-      # CHAOS-6279: bridgeUrl (formerly here, CHAOS-4351) is deleted -- the
-      # --operational-bridge-url flag it overrode no longer exists on the Go
-      # binaries (go-workers.yaml's own comment has the full history).
     - name: ops
       subcommand: worker
       queues: [coverage, heartbeat, retention, webhooks]
@@ -1377,17 +1374,6 @@ config:
   #    role/DSN pattern as the three roles above; password lives under
   #    goWorkers.pgbouncer.secret.data.RIVER_KEDA_READONLY_PASSWORD.
   RIVER_KEDA_READONLY_DATABASE_ROLE: "devhealth_keda_readonly"
-  # CHAOS-6279: WORKER_OPERATIONAL_BRIDGE_URL and
-  # WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE (formerly here, CUT-04) are
-  # deleted -- CHAOS-5320 already deleted the Python HTTP bridge they
-  # pointed the Go PagerDuty stream runner at, and nothing in the Go
-  # binaries reads that config any more (confirmed by grep). The matching
-  # WORKER_OPERATIONAL_BRIDGE_TOKEN Secret key (secrets.data below) is
-  # deleted from this chart's own defaults too -- CHAOS-6240 already
-  # measured zero Python-side readers; this PR confirms zero Go-side
-  # senders left either. An operator's own override of that key, if any,
-  # is untouched (this only removes the empty placeholder default). The
-  # separate deploy repo's chart is the stacked follow-up, not this one.
   # -- Where the Python edge's dispatcher forwards an operation the routing
   #    registry assigns to the Go plane. Empty auto-computes the in-cluster
   #    query-api Service URL when queryApi.enabled; with queryApi disabled and

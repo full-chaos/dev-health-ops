@@ -66,7 +66,6 @@ Design docs (read the guardrails at minimum):
 | `impersonation_session` | active | human | |
 | `internal_svc_acr_token` | active | service_account | |
 | `internal_svc_worker_token` | **unconsumed** | service_account | mint retired (CHAOS-10044); stored rows list/revoke only |
-| `worker_operational_bridge_token` | **unconsumed** | infrastructure | |
 | `acr_client_credential` | active | client_credential | |
 | `acr_device_flow_code` | active | human | |
 | `acr_web_assertion` | active | workload | |
@@ -94,9 +93,9 @@ Design docs (read the guardrails at minimum):
 | `pagerduty_webhook_signature` | active | external_source | |
 | `workload_token` | **unconsumed** | workload | |
 
-**30 classes at the Wave 0 freeze** (31 with `effective_principal_envelope`, added by CHAOS-4737 below). 6 were not in CHAOS-3273's minimum list and were discovered
+**30 classes at the Wave 0 freeze** (31 with `effective_principal_envelope`, added by CHAOS-4737 below). 5 were not in CHAOS-3273's minimum list and were discovered
 during this inventory (`new_vs_ticket: true` in the JSON):
-`internal_svc_worker_token`, `worker_operational_bridge_token`,
+`internal_svc_worker_token`,
 `acr_workload_identity_exchange`, `org_invite_token`, `license_key`, and the
 distinction between `sso_saml_exchange`/`sso_oidc_exchange` as two classes
 rather than one.
@@ -193,13 +192,12 @@ this:
 | Credential class | Route(s) | Exempted from the path prefix? |
 | --- | --- | --- |
 | `internal_svc_worker_token` (`svc_worker_*`) | none found (see below) | **No** — no HTTP validator exists for it anywhere, so if one were ever wired up at a non-`/api/v1/internal/acr/` path it would silently degrade to anonymous first. |
-| `worker_operational_bridge_token` (`WORKER_OPERATIONAL_BRIDGE_TOKEN`) | `/api/internal/worker-operational` (CHAOS-6240 deleted `/internal/worker`'s only routes along with worker_metrics.py; `/api/internal/worker-sync` was deleted separately, CHAOS-6243) | **No.** None of these paths start with `/api/v1/internal/acr/`. |
 | `external_push_ingest_token` (`fcpush_*`) | External Push data-plane endpoints | **No.** The module docstring for `external_ingest/auth.py` says as much: *"OrgIdMiddleware only understands user JWTs and takes its anonymous pass-through branch for an `fcpush_...` bearer"* — meaning the decode attempt still happens, it just fails harmlessly. |
 
 Only `internal_svc_acr_token` (`svc_acr_*`) got the fix. The fix is a path
 exemption, not a credential-class dispatch — so it only protects whatever
 happens to be mounted under `/api/v1/internal/acr/*` today. Any new route
-for `svc_worker_*`, the worker-bridge tokens, or any future opaque credential
+for `svc_worker_*` or any future opaque credential
 mounted **outside** that one path prefix inherits the original bug's shape
 by default. **The durable fix is credential-class-aware dispatch (check the
 token's own shape/prefix before choosing a decoder), not a growing exemption

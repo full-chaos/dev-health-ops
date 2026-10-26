@@ -37,6 +37,16 @@ func TestFailureStreakBuildSQLHasNoIfNotExists(t *testing.T) {
 	}
 }
 
+// The build lock is its own key: a build-index run never holds up, or reads as, a migrator.
+func TestBuildIndexLockKeyIsNotTheMigratorLock(t *testing.T) {
+	if buildIndexLockKey == lockKey {
+		t.Fatalf("build lock key %#x is the migrator's lock key", buildIndexLockKey)
+	}
+	if buildIndexLockKey != 0x64686f5f6978 {
+		t.Fatalf("build lock key %#x, want 0x64686f5f6978 (\"dho_ix\")", buildIndexLockKey)
+	}
+}
+
 func TestIndexInfoState(t *testing.T) {
 	for want, info := range map[string]indexInfo{
 		"none":      {},

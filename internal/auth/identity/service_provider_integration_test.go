@@ -45,10 +45,10 @@ func TestIdentityBySubjectFlagsAServiceProviderPrincipalAndTheStoreStillLinksIt(
 				t.Fatalf("service principal: %+v found=%v err=%v, want found with ServiceProvider set and no disabled mark", p, found, err)
 			}
 
-			if _, err := s.LinkIdentity(ctx, googleKey("more-"+uuid.NewString()), service, Actor{}); err != nil {
+			if _, err := s.LinkIdentity(ctx, ExternalKey{Issuer: "https://github.com", Provider: ProviderGitHub, Subject: "more-" + uuid.NewString()}, service, Actor{}); err != nil {
 				t.Fatalf("link to a service principal: %v, want it stored (the sign-in paths are the gate)", err)
 			}
-			if _, err := s.LinkIdentity(ctx, googleKey("more-"+uuid.NewString()), normal, Actor{}); err != nil {
+			if _, err := s.LinkIdentity(ctx, ExternalKey{Issuer: "https://github.com", Provider: ProviderGitHub, Subject: "more-" + uuid.NewString()}, normal, Actor{}); err != nil {
 				t.Fatalf("link to a normal principal: %v", err)
 			}
 		})

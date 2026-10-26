@@ -630,6 +630,13 @@ func buildSchedulerLoopWithSources(
 	}
 	database, err := sources.openDatabase(ctx, cfg)
 	if err != nil && postgres.ConfigurationRejected(err) {
+		if logger != nil {
+			logger.Error(
+				"database configuration refused; process stays live and unready",
+				"error_category", "dependency_configuration_failed",
+				"reason", err.Error(),
+			)
+		}
 		// A DECLARED configuration rejection -- most commonly no DSN supplied
 		// at all -- keeps the process live and unready, exactly as the worker
 		// does, so an operator scrapes named readiness failures instead of

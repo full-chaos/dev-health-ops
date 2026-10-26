@@ -1149,6 +1149,7 @@ func configureWorkerDependenciesWithSources(
 			}
 			return nil, dependencyUnavailable("worker_database_open_failed")
 		}
+		dependencies.logDatabaseConfigurationRefused(dependencies.databaseErr)
 		// A rejected or absent DSN configuration stays live and unready on
 		// purpose, so an operator can scrape readiness and see exactly which
 		// check names failed rather than reading a crash loop.
@@ -2388,4 +2389,15 @@ type connRecorder struct{ conn driver.Conn }
 
 func (recorder connRecorder) AppliedVersions(ctx context.Context) ([]string, error) {
 	return chgate.ConnApplied(ctx, recorder.conn)
+}
+
+func (dependencies *workerDependencies) logDatabaseConfigurationRefused(err error) {
+	if dependencies == nil || dependencies.logger == nil || err == nil {
+		return
+	}
+	dependencies.logger.Error(
+		"database configuration refused; process stays live and unready",
+		"error_category", "dependency_configuration_failed",
+		"reason", err.Error(),
+	)
 }

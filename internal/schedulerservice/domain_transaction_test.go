@@ -341,3 +341,47 @@ func TestSchedulerWarnsAboutASaturatedWorkPoolWithoutAScrape(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 	}
 }
+
+func TestSchedulerLogsARefusedDatabaseConfiguration(t *testing.T) {
+	refusal := refusedSchedulerEndpointConfig().Validate()
+	if refusal == nil {
+		t.Fatal("fixture config was not refused")
+	}
+	var out syncBuffer
+	logger := slog.New(slog.NewTextHandler(&out, nil))
+	sources := schedulerRuntimeSources{
+		openDatabase:   func(context.Context, config.Config) (schedulerDatabase, error) { return nil, refusal },
+		newRepository:  func(*pgxpool.Pool) (schedulersync.HandoffStepper, error) { return nil, errors.New("not reached") },
+		newCoordinator: schedulersync.NewOccurrenceCoordinator,
+		newLoop:        schedulersync.NewLoop,
+		newFixedLoop: func(*pgxpool.Pool, *health.Registry, *slog.Logger) (fixedScheduleRuntime, error) {
+			return &fakeFixedLoop{}, nil
+		},
+		newOccurrences: stubOccurrenceSource,
+	}
+	registry := health.NewRegistry(readinessTestCheckTimeout)
+	if _, err := buildSchedulerLoopWithSources(context.Background(), config.Config{}, registry, sources, logger); !errors.Is(err, errSchedulerDatabaseUnconfigured) {
+		t.Fatalf("error = %v, want errSchedulerDatabaseUnconfigured", err)
+	}
+	line := out.String()
+	for _, want := range []string{"level=ERROR", "database configuration refused", "domain endpoint equals the queue-control endpoint"} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("log %q lacks %q", line, want)
+		}
+	}
+	for _, secret := range []string{"s3cretpw", "pgbouncer.internal", "postgres://"} {
+		if strings.Contains(line, secret) {
+			t.Fatalf("log leaks %q: %s", secret, line)
+		}
+	}
+}
+
+func refusedSchedulerEndpointConfig() postgres.RuntimeConfig {
+	cfg := postgres.DefaultRuntimeConfig(
+		"postgres://domain_role:s3cretpw@pgbouncer.internal/app",
+		"postgres://queue_role:s3cretpw@pgbouncer.internal/app",
+		"domain_role", "queue_role",
+	)
+	cfg.DomainTransactionPooler = true
+	return cfg
+}

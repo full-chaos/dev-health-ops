@@ -190,7 +190,7 @@ func (c RuntimeConfig) Validate() error {
 		return ErrRuntimeRolesNotSeparated
 	}
 	if c.DomainTransactionPooler && sameEndpoint(domainConfig, queueConfig) {
-		return ErrQueueControlTransactionMode
+		return fmt.Errorf("%w: the transaction-pooled domain endpoint equals the queue-control endpoint", ErrQueueControlTransactionMode)
 	}
 	if c.RequireCoordinator {
 		coordinatorConfig, err := parseConfig(c.CoordinatorURI)
@@ -212,7 +212,7 @@ func (c RuntimeConfig) Validate() error {
 		// PgBouncer in transaction mode and the coordinator DSN points at that
 		// same endpoint, the coordinator is not actually direct.
 		if c.DomainTransactionPooler && sameEndpoint(domainConfig, coordinatorConfig) {
-			return ErrCoordinatorTransactionMode
+			return fmt.Errorf("%w: the transaction-pooled domain endpoint equals the coordinator endpoint", ErrCoordinatorTransactionMode)
 		}
 	}
 	return nil

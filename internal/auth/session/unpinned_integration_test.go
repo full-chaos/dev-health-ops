@@ -146,6 +146,14 @@ func TestRevokeUnpinnedRunsInBatches(t *testing.T) {
 		SELECT $1, decode(lpad(to_hex(g), 64, '0'), 'hex'), 'infinity' FROM generate_series(1, $2) g`, principal, total); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := e.admin.Exec(ctx, `ALTER TABLE auth.sessions ADD CONSTRAINT sessions_pin_present
+		CHECK (legacy_token_version IS NOT NULL OR revoked_at IS NOT NULL) NOT VALID`); err != nil {
+		t.Fatalf("restore the pin constraint: %v", err)
+	}
+	var present bool
+	if err := e.admin.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'sessions_pin_present' AND conrelid = 'auth.sessions'::regclass)`).Scan(&present); err != nil || !present {
+		t.Fatalf("the pin constraint is not in place for the revoke: %v", err)
+	}
 	if n, err := RevokeUnpinned(ctx, e.admin, e.schema); err != nil || n != total {
 		t.Fatalf("RevokeUnpinned = %d, %v; want %d", n, err, total)
 	}

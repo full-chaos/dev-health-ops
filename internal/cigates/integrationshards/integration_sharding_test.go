@@ -1230,14 +1230,20 @@ GOWORK=off go test -mod=readonly -tags=integration -list '.*' ./h | sed -nE "s/^
 		}
 		got := runDiscoveryFixture(t, files, "run_integration_packages --dry-run . fixture ./f ./h\necho '--- budget'\nrun_integration_packages --dry-run . fixture ./c1 ./c2\n")
 		collision, budget, _ := strings.Cut(got, "--- budget\n")
-		d := shardSplitDefects(collision, nil)
+		if len(budgetSplitPackages) != 0 {
+			t.Errorf("budgetSplitPackages is %v: every packages shard runs ONE go test, the allow list stays empty", sortedKeys(budgetSplitPackages))
+		}
+		d := shardSplitDefects(collision, budgetSplitPackages)
 		if !strings.Contains(strings.Join(d, "\n"), "h cannot join go test group 1: it and f share the name TestShared") {
 			t.Errorf("an injected collision is not refused by package and name: %q", d)
+		}
+		if d := shardSplitDefects(collision, map[string]bool{"h": true}); len(d) == 0 {
+			t.Error("a budget allow-list entry excuses a collision")
 		}
 		if d := shardSplitDefects(budget, map[string]bool{"c2": true}); len(d) > 0 {
 			t.Errorf("a named budget split is refused: %q", d)
 		}
-		if d := shardSplitDefects(budget, nil); len(d) == 0 {
+		if d := shardSplitDefects(budget, budgetSplitPackages); len(d) == 0 {
 			t.Error("a budget split no exception names passes")
 		}
 		if t.Failed() {
@@ -2393,9 +2399,9 @@ func TestEachPackagesShardRunsEverySelectedTestExactlyOnce(t *testing.T) {
 }
 
 // budgetSplitPackages names the packages whose selected names cannot join the first go test group of their shard within
-// the 60000-byte -run budget (today internal/llmorgsettings, packages shard 7). Such a package opens a second go test,
-// which runs after the first; every other packages shard runs ONE go test.
-var budgetSplitPackages = map[string]bool{"internal/llmorgsettings": true}
+// the 60000-byte -run budget. Such a package opens a second go test, which runs after the first. It is empty: every
+// packages shard runs ONE go test; a collision split is never allowed.
+var budgetSplitPackages = map[string]bool{}
 
 // shardSplitDefects checks one packages shard's receipts: every go test group after the first is explained by
 // `SHARD-SPLIT <module> <n> <key> <g> collision <name> <member>` or `... <g> budget <bytes>` lines (why <key> did not

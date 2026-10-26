@@ -1,5 +1,20 @@
 // Package containers provides pinned, isolated service dependencies for Go
 // integration tests. It never targets the developer's shared Compose project.
+//
+// Where a StartPostgres / StartClickHouse call gets its server, first match wins:
+//
+//  1. A remote DSN (DEV_HEALTH_TEST_POSTGRES_DSN, DEV_HEALTH_TEST_CLICKHOUSE_DSN;
+//     remote.go): a private scratch database on that server.
+//  2. Shared mode, when the package's TestMain calls RunWithSharedServers
+//     (shared.go) and DEV_HEALTH_TEST_SHARED_SERVERS is not "off": a private
+//     scratch database on ONE container per engine for the whole test binary,
+//     with a leak check of server-wide state at the end.
+//  3. Otherwise: a private container per call.
+//
+// StartPostgresIsolated / StartClickHouseIsolated always take path 3, for a
+// test that changes server-wide state. StartValkey always takes path 3.
+// DEV_HEALTH_TEST_HARNESS_TIMING=1 logs start, close and schema times to
+// stderr (timing.go).
 package containers
 
 import (
@@ -70,14 +85,24 @@ type Instance struct {
 	// httpURI is set only on a remote ClickHouse instance, where there is no
 	// container to ask for a mapped port. See ClickHouseHTTPDSN.
 	httpURI string
+
+	// engine and mode label the harness timing lines (timing.go).
+	engine string
+	mode   string
 }
 
 func (i *Instance) Close(ctx context.Context) error {
 	if i == nil {
 		return nil
 	}
+	defer TimePhase("close", i.engine, i.mode)()
 	if i.cleanup != nil {
-		return i.cleanup(ctx)
+		// A t.Cleanup often passes the test's own context, already cancelled
+		// by then. The scratch database must still be dropped, or it stays on
+		// the shared server, so the drop does not inherit the cancellation.
+		dropCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		defer cancel()
+		return i.cleanup(dropCtx)
 	}
 	if i.Container == nil {
 		return nil
@@ -86,9 +111,31 @@ func (i *Instance) Close(ctx context.Context) error {
 }
 
 func StartPostgres(ctx context.Context) (*Instance, error) {
+	return timedStart(ctx, "postgres", PostgresDSNEnv, startPostgres)
+}
+
+// StartPostgresIsolated always starts a private PostgreSQL container: also in
+// shared mode and also when a remote DSN is set. Use it for a test that changes
+// server-wide state (roles, memberships, ALTER SYSTEM) or uses Instance.Container.
+func StartPostgresIsolated(ctx context.Context) (*Instance, error) {
+	return timedStart(ctx, "postgres", "", func(ctx context.Context) (*Instance, error) {
+		return startPostgresContainer(ctx, nil)
+	})
+}
+
+func startPostgres(ctx context.Context) (*Instance, error) {
 	if dsn := remoteDSN(PostgresDSNEnv); dsn != "" {
 		return startPostgresRemote(ctx, dsn)
 	}
+	if servers := activeSharedServers(); servers != nil {
+		return servers.startPostgres(ctx)
+	}
+	return startPostgresContainer(ctx, nil)
+}
+
+// startPostgresContainer starts one PostgreSQL container; cmd, when set,
+// replaces the image's default command (the shared server raises max_connections).
+func startPostgresContainer(ctx context.Context, cmd []string) (*Instance, error) {
 	const (
 		user     = "worker_test"
 		password = "worker_test_password"
@@ -103,6 +150,7 @@ func StartPostgres(ctx context.Context) (*Instance, error) {
 			"POSTGRES_PASSWORD": password,
 			"POSTGRES_DB":       database,
 		},
+		Cmd: cmd,
 		// The official image briefly accepts connections during initdb before
 		// restarting PostgreSQL. Waiting for the second ready log prevents a
 		// listening-port race against that restart.
@@ -175,9 +223,27 @@ func ClickHouseHTTPDSN(ctx context.Context, instance *Instance) (string, error) 
 }
 
 func StartClickHouse(ctx context.Context) (*Instance, error) {
+	return timedStart(ctx, "clickhouse", ClickHouseDSNEnv, startClickHouse)
+}
+
+// StartClickHouseIsolated always starts a private ClickHouse container: also in
+// shared mode and also when a remote DSN is set. Use it for a test that changes
+// server-wide state (users, roles, grants, quotas, server SYSTEM commands).
+func StartClickHouseIsolated(ctx context.Context) (*Instance, error) {
+	return timedStart(ctx, "clickhouse", "", startClickHouseContainer)
+}
+
+func startClickHouse(ctx context.Context) (*Instance, error) {
 	if dsn := remoteDSN(ClickHouseDSNEnv); dsn != "" {
 		return startClickHouseRemote(ctx, dsn, remoteDSN(ClickHouseHTTPDSNEnv))
 	}
+	if servers := activeSharedServers(); servers != nil {
+		return servers.startClickHouse(ctx)
+	}
+	return startClickHouseContainer(ctx)
+}
+
+func startClickHouseContainer(ctx context.Context) (*Instance, error) {
 	const (
 		user     = ClickHouseUser
 		password = ClickHousePassword
@@ -275,14 +341,36 @@ func pingClickHouseOnce(ctx context.Context, uri string) error {
 }
 
 func StartValkey(ctx context.Context) (*Instance, error) {
-	return startValkey(ctx, "")
+	return timedStart(ctx, "valkey", "", func(ctx context.Context) (*Instance, error) { return startValkey(ctx, "") })
 }
 
 // StartValkeyWithACLFile starts Valkey the way the chart does when
 // valkey.acl.secretName is set: --aclfile on a file holding aclFile, which then
 // defines every user.
 func StartValkeyWithACLFile(ctx context.Context, aclFile string) (*Instance, error) {
-	return startValkey(ctx, aclFile)
+	return timedStart(ctx, "valkey", "", func(ctx context.Context) (*Instance, error) { return startValkey(ctx, aclFile) })
+}
+
+func timedStart(
+	ctx context.Context,
+	engine string,
+	dsnEnv string,
+	startFn func(context.Context) (*Instance, error),
+) (*Instance, error) {
+	mode := "container"
+	switch {
+	case dsnEnv != "" && remoteDSN(dsnEnv) != "":
+		mode = "remote"
+	case dsnEnv != "" && activeSharedServers() != nil:
+		mode = "shared"
+	}
+	done := TimePhase("start", engine, mode)
+	instance, err := startFn(ctx)
+	done()
+	if instance != nil {
+		instance.engine, instance.mode = engine, mode
+	}
+	return instance, err
 }
 
 func startValkey(ctx context.Context, aclFile string) (*Instance, error) {

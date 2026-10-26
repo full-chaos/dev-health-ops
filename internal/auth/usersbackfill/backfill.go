@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
+	"github.com/full-chaos/dev-health-ops/internal/auth/identity/saml"
 )
 
 // Row is the part of one public.users row the backfill reads.
@@ -34,6 +35,9 @@ type Row struct {
 	// account is unbound or the row is gone).
 	SSOProviderID       *uuid.UUID
 	SSOProviderProtocol *string
+	// SAMLNameIDFormat and SAMLSPNameQualifier are users.saml_nameid_format and users.saml_sp_name_qualifier: NULL until
+	// the account signs in through go-api SAML after the columns exist.
+	SAMLNameIDFormat, SAMLSPNameQualifier *string
 }
 
 // Skip classes. A skipped user is counted, not written, and fails the run.
@@ -267,15 +271,27 @@ func IsPlaceholder(row Row) bool {
 }
 
 // Relinkable is an SSO account the owned store re-links at its first sign-in: the one definition the users-owned guard
-// uses to leave it out of its identity count (identity.IsSSORelinkable). It is still reported as not carried.
+// uses to leave it out of its identity count. An OIDC account is waived by identity.IsSSORelinkable; a bound SAML
+// account is waived when its stored NameID parts key it under saml.SubjectFromStored, the runtime rule. It is still
+// reported as not carried.
 func Relinkable(row Row) bool {
-	return identity.IsSSORelinkable(row.AuthProvider, row.AuthProviderID, row.SSOProviderID, row.SSOProviderProtocol)
+	return identity.IsSSORelinkable(row.AuthProvider, row.AuthProviderID, row.SSOProviderID, row.SSOProviderProtocol) ||
+		samlKeyable(row)
 }
 
 // SubjectUnverifiable is the sso_subject_unverifiable bucket (identity.IsSSOSubjectUnverifiable): a bound SAML account
-// readiness does not waive because its NameID format was never stored.
+// readiness does not waive because its NameID parts were never stored, or do not key (a transient NameID).
 func SubjectUnverifiable(row Row) bool {
-	return identity.IsSSOSubjectUnverifiable(row.AuthProvider, row.AuthProviderID, row.SSOProviderID, row.SSOProviderProtocol)
+	return identity.IsSSOSubjectUnverifiable(row.AuthProvider, row.AuthProviderID, row.SSOProviderID, row.SSOProviderProtocol) &&
+		!samlKeyable(row)
+}
+
+func samlKeyable(row Row) bool {
+	if !identity.IsSSOSubjectUnverifiable(row.AuthProvider, row.AuthProviderID, row.SSOProviderID, row.SSOProviderProtocol) {
+		return false
+	}
+	_, err := saml.SubjectFromStored(*row.AuthProviderID, row.SAMLNameIDFormat, row.SAMLSPNameQualifier)
+	return err == nil
 }
 
 func isBcrypt(hash string) bool {

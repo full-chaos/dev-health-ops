@@ -159,6 +159,33 @@ VALUES ($1, $2, $3, $4, $5, $6, true, true, false, 0, now(), now())`, id, id.Str
 	}
 	check("the saml row with its identity", "")
 
+	// A bound SAML account whose NameID parts go-api stored is keyed by the runtime rule and waived; one that never
+	// signed in (NULL parts) and one with a transient NameID stay counted in sso_subject_unverifiable.
+	const persistent = "urn:oasis:names:tc:SAML:2.0:nameid-format:persistent"
+	signedIn := user("saml", nil, s("nameid-2@example.com"), &samlRow)
+	set(signedIn, "saml_nameid_format", persistent)
+	set(signedIn, "saml_sp_name_qualifier", "")
+	rep := backfill(0)
+	check("a bound saml account whose NameID parts were stored", "")
+	// The report counts every not-carried row: samlBound (parts never stored, identity linked above) is the one
+	// unverifiable row, the stored saml row is relink pending beside the oidc row.
+	if rep.SSOSubjectUnverifiable != 1 || rep.IdentityRelinkPending < 2 {
+		t.Fatalf("report: unverifiable=%d relink pending=%d, want 1 and at least 2", rep.SSOSubjectUnverifiable, rep.IdentityRelinkPending)
+	}
+	neverSignedIn := user("saml", nil, s("nameid-3@example.com"), &samlRow)
+	rep = backfill(0)
+	check("a bound saml account that never signed in", refused+" (sso_subject_unverifiable=1)")
+	if rep.SSOSubjectUnverifiable != 2 {
+		t.Fatalf("report unverifiable = %d, want 2 (samlBound and the account that never signed in)", rep.SSOSubjectUnverifiable)
+	}
+	set(neverSignedIn, "saml_nameid_format", persistent)
+	set(neverSignedIn, "saml_sp_name_qualifier", "sp-q")
+	check("the second saml account after its sign-in", "")
+	set(signedIn, "saml_nameid_format", "urn:oasis:names:tc:SAML:2.0:nameid-format:transient")
+	check("a transient NameID", refused+" (sso_subject_unverifiable=1)")
+	set(signedIn, "saml_nameid_format", persistent)
+	check("the transient account back on a persistent NameID", "")
+
 	unbound := user("oidc", nil, s("oidc-sub-2"), nil)
 	backfill(0)
 	check("oidc row with no provider binding", refused)

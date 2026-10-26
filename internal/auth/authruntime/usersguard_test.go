@@ -23,6 +23,10 @@ func (r countsRow) Scan(dest ...any) error {
 		return r.err
 	}
 	for i, d := range dest {
+		if c, ok := d.(*string); ok {
+			*c = "[]"
+			continue
+		}
 		*(d.(*int64)) = r.values[i]
 	}
 	return nil

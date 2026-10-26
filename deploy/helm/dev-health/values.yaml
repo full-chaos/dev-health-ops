@@ -1589,6 +1589,12 @@ valkey:
     size: 1Gi
     storageClass: ""
   maxmemory: "256mb"
+  # -- --maxmemory-policy: one of noeviction, allkeys-lru, allkeys-lfu, allkeys-random, volatile-lru, volatile-lfu,
+  #    volatile-random, volatile-ttl (the render refuses any other value). The default keeps the start arguments as
+  #    they were, so a chart upgrade alone does not restart Valkey. allkeys-* can evict keys without a TTL (the ingest
+  #    streams); volatile-* evict only keys with a TTL (rate-limit counters, idempotency markers) and refuse writes
+  #    once none is left. A change restarts Valkey.
+  maxmemoryPolicy: allkeys-lru
   # -- An ACL file for the in-chart Valkey, read from a Secret the chart does not
   #    create. Off unless enabled=true: Valkey then starts as before, with only its
   #    open default user, and nothing refers to the Secret. When enabled, Valkey

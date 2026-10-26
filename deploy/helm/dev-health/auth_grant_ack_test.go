@@ -67,3 +67,34 @@ func TestGrantNarrowingAcknowledgementMustBeADigest(t *testing.T) {
 		}
 	}
 }
+
+// Rolling back phase 4 to phase 3 narrows the runtime role's grants, so the auth-migrate hook needs the digest the
+// ratchet prints on refusal. Phase 4 alone carries no acknowledgement; the phase 3 render with the key set carries it
+// as the one flag on both Jobs and renders no users-owned switch anywhere.
+func TestPhase4RollbackCarriesTheGrantAcknowledgement(t *testing.T) {
+	docs := renderPhase(t, 4)
+	for _, job := range []string{"a-dev-health-auth-migrate", "a-dev-health-auth-grants"} {
+		for _, arg := range jobArgs(t, authDoc(docs, "Job", job)) {
+			if strings.HasPrefix(arg, "-ack-grant-narrowing") {
+				t.Errorf("phase 4 without the key: %s carries %s", job, arg)
+			}
+		}
+	}
+
+	docs = renderPhase(t, 3, "--set", "authService.migrate.acknowledgeGrantNarrowing="+ackDigest)
+	flag := "-ack-grant-narrowing=" + ackDigest
+	if got := jobArgs(t, authDoc(docs, "Job", "a-dev-health-auth-migrate")); !reflect.DeepEqual(got, []string{flag}) {
+		t.Errorf("phase 3 rollback: auth-migrate args = %v, want [%s]", got, flag)
+	}
+	if got := jobArgs(t, authDoc(docs, "Job", "a-dev-health-auth-grants")); !reflect.DeepEqual(got, []string{"grants", flag}) {
+		t.Errorf("phase 3 rollback: auth-grants args = %v, want [grants %s]", got, flag)
+	}
+	for _, target := range []struct{ kind, name string }{
+		{"Deployment", "a-dev-health-auth-service"}, {"Deployment", "a-dev-health-go-api"},
+		{"Job", "a-dev-health-auth-migrate"}, {"Job", "a-dev-health-auth-grants"},
+	} {
+		if value, set := containerEnvValue(t, authDoc(docs, target.kind, target.name), "AUTH_USERS_OWNED"); set {
+			t.Errorf("phase 3 rollback: %s sets AUTH_USERS_OWNED=%q", target.name, value)
+		}
+	}
+}

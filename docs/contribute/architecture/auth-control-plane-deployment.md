@@ -121,6 +121,20 @@ The credential routes move with users owned, not with login: auth-service mounts
 them only with `AUTH_USERS_OWNED`, and go-api refuses `AUTH_USERS_OWNED` unless
 the credential routes go to auth-service.
 
+Rolling back phase 4 narrows the runtime role's grants (the write grant on the
+public `users` table goes), and the grants ratchet refuses a narrowing without
+an acknowledgement. The rollback is one `helm upgrade` with the phase and the
+acknowledgement together:
+`helm upgrade <release> <chart> --values <values> --set authService.phase=3 --set authService.migrate.acknowledgeGrantNarrowing=<digest>`.
+The digest is the 16 hex characters the ratchet prints when it refuses (it is
+not a secret). If you do not hold it, run the phase-only upgrade
+(`--set authService.phase=3`) first: the auth-migrate hook refuses in one
+transaction, changes nothing, and the failed hook Job is kept, so read the
+digest with `kubectl logs job/<release>-auth-migrate` (the line
+"re-run with -ack-grant-narrowing=<digest>") and upgrade again with the key set.
+The key renders as `-ack-grant-narrowing=<digest>` on the auth-migrate and
+auth-grants Jobs only while it is set; clear it in the next deploy change.
+
 The chart refuses the keys the phase replaces, whatever their value:
 `goApi.authProxy.*`, `authService.enabled`, `authService.usersOwned` and
 `authService.orgsOwned`. The choices that are not steps of the ladder stay small

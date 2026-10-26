@@ -3,6 +3,7 @@ package policy
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -97,6 +98,16 @@ func NewScope(auth *Authenticator, logger *slog.Logger) *Scope {
 // acrInternalPrefix is the path prefix OrgIdMiddleware skips.
 const acrInternalPrefix = "/api/v1/internal/acr/"
 
+// writeCallerLookupFailure answers a failed caller lookup: the generic 500,
+// except an unreadable token key source, which is the 503 of ErrUnavailable.
+func writeCallerLookupFailure(w http.ResponseWriter, err error) {
+	if errors.Is(err, ErrKeySourceUnavailable) {
+		WriteAuthFailure(w, "", ErrUnavailable)
+		return
+	}
+	WriteInternal(w)
+}
+
 // principalFrom is the caller the Principal step decided for the request:
 // the user, nil for an anonymous or refused caller, or the store failure.
 // The scope never reads the Authorization header itself. With no decision
@@ -140,7 +151,7 @@ func (s *Scope) OrgScope(next http.Handler) http.Handler {
 			s.logger.ErrorContext(r.Context(), "api org scope: caller lookup failed",
 				slog.String("path", r.Pattern), slog.Bool("unavailable", isUnavailable(err)),
 				slog.String("missing_grant", MissingGrant(err)), slog.String("reason", scopeReason(err)))
-			WriteInternal(w)
+			writeCallerLookupFailure(w, err)
 			return
 		}
 		resolved := ""
@@ -231,7 +242,7 @@ func (s *Scope) Impersonation(next http.Handler) http.Handler {
 		if err != nil {
 			s.logger.ErrorContext(r.Context(), "api impersonation: caller lookup failed",
 				slog.Bool("unavailable", isUnavailable(err)), slog.String("missing_grant", MissingGrant(err)), slog.String("reason", scopeReason(err)))
-			WriteInternal(w)
+			writeCallerLookupFailure(w, err)
 			return
 		}
 		if user == nil || !user.IsSuperuser {

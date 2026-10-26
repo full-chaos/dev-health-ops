@@ -189,7 +189,7 @@ func (a routeAuth) authenticateWorkload(w http.ResponseWriter, r *http.Request, 
 	if reason == ReasonUnavailable {
 		countWorkloadRefused(ctx, a.route, reason)
 		logWorkloadRefused(ctx, a.logger, a.route, reason)
-		a.unavailable(w, r, "workload_unavailable")
+		writeDetail(w, http.StatusServiceUnavailable, "Service unavailable")
 		return Credential{}, false
 	}
 	status, outcome, detail := http.StatusUnauthorized, outcomeWorkloadRefused, "Unauthorized"

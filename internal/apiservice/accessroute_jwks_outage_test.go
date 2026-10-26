@@ -113,3 +113,18 @@ func TestGoAPIUserTokenUnknownKidWithReachableJWKSStays401(t *testing.T) {
 		t.Fatalf("answer %d %q, want 401 %s", got.Status, got.Body, genericRefusal)
 	}
 }
+
+func TestGoAPIListenerJWKSOutageAnswers503(t *testing.T) {
+	paths := []string{probeAuthenticated, probeAdmin, probeSuperuser, probeOptional}
+	for _, mode := range []string{"status503", "connectionClosed", "hang"} {
+		for _, path := range paths {
+			t.Run(mode+path, func(t *testing.T) {
+				f, token := goAPIJWKSFixture(t, mode, "probe-kid")
+				got := probeDo(f.handler, probeRequest{mode, http.MethodGet, path, bearer(token)})
+				if got.Status != http.StatusServiceUnavailable || got.Body != `{"detail":{"message":"Database temporarily unavailable"}}` {
+					t.Fatalf("listener answer %d %q, want the existing 503", got.Status, got.Body)
+				}
+			})
+		}
+	}
+}

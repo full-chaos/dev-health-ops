@@ -235,7 +235,6 @@ func refuseWorkloadLLMConfig(ctx context.Context, w http.ResponseWriter, logger 
 	countWorkloadRefused(ctx, routeLLMConfig, reason)
 	logWorkloadRefused(ctx, logger, routeLLMConfig, reason)
 	if reason == ReasonUnavailable {
-		countLLMConfig(ctx, "workload_unavailable")
 		writeDetail(w, http.StatusServiceUnavailable, "Service unavailable")
 		return
 	}

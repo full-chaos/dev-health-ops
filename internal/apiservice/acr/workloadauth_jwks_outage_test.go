@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-go/authverify"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 )
 
 func wlJWKSIssuer(t *testing.T, mode, kid string, pub ed25519.PublicKey) *httptest.Server {
@@ -77,6 +78,10 @@ func TestWorkloadJWKSOutageAnswers503OnEveryRoute(t *testing.T) {
 				auth, token := wlJWKSAuth(t, mode, wlKid, signer)
 				h := newWLHarness(t, auth)
 				before := wlCounts(t, "devhealth_acr_workload_refused_total")
+				if _, declared := before[route.key+"/"+ReasonUnavailable]; !declared {
+					t.Fatalf("series %s/%s was not declared before the first request", route.key, ReasonUnavailable)
+				}
+				internalBefore, llmBefore := internalRequestCounts(t), llmConfigRequestCounts(t)
 				rec := do(h.handler, route.path, "Bearer "+token)
 				if rec.Code != http.StatusServiceUnavailable {
 					t.Fatalf("status = %d %s, want 503", rec.Code, rec.Body.String())
@@ -86,6 +91,12 @@ func TestWorkloadJWKSOutageAnswers503OnEveryRoute(t *testing.T) {
 				}
 				if got := wlDelta(before, wlCounts(t, "devhealth_acr_workload_refused_total")); !reflect.DeepEqual(got, map[string]int64{route.key + "/" + ReasonUnavailable: 1}) {
 					t.Fatalf("refused counter delta = %v, want %s/%s once", got, route.key, ReasonUnavailable)
+				}
+				if got := wlDelta(internalBefore, internalRequestCounts(t)); len(got) != 0 {
+					t.Fatalf("an outage added internal request outcome series: %v", got)
+				}
+				if got := wlDelta(llmBefore, llmConfigRequestCounts(t)); len(got) != 0 {
+					t.Fatalf("an outage added llm-config request outcome series: %v", got)
 				}
 				if h.creds.findCalls != 0 || len(h.creds.used) != 0 || h.llm.gotToken != "" {
 					t.Fatalf("an unavailable verdict reached a store: finds %d used %v", h.creds.findCalls, h.creds.used)
@@ -125,4 +136,11 @@ func TestWorkloadUnavailableSeriesIsDeclaredAtZeroOnEveryRoute(t *testing.T) {
 			t.Errorf("no zero series for %s/%s", route.key, ReasonUnavailable)
 		}
 	}
+}
+
+func llmConfigRequestCounts(t *testing.T) map[string]int64 {
+	return counterByAttribute(t, "devhealth_acr_llm_config_requests_total", func(p metricdata.DataPoint[int64]) (string, bool) {
+		outcome, _ := p.Attributes.Value("outcome")
+		return outcome.AsString(), true
+	})
 }

@@ -3,6 +3,7 @@ package policy
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"math"
 	"net/http"
@@ -68,6 +69,12 @@ type Store interface {
 // 503 (_db_temporarily_unavailable: a timeout or a lost connection). Any
 // other store failure is a 500.
 var ErrUnavailable = errors.New("policy: database temporarily unavailable")
+
+// ErrKeySourceUnavailable marks a token verifier whose key source (the JWKS)
+// could not be read. It is an ErrUnavailable: the scope middlewares, which
+// answer a store failure with the generic 500, answer it with the 503 of
+// ErrUnavailable instead.
+var ErrKeySourceUnavailable = fmt.Errorf("%w: token key source unavailable", ErrUnavailable)
 
 // errRejected is an authentication refusal (Python returns None).
 var errRejected = errors.New("policy: credential refused")

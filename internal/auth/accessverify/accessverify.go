@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"time"
@@ -159,7 +160,7 @@ func (v *Validator) Validate(ctx context.Context, service, profile, bearer strin
 		}
 		claims, err := v.eddsa.Verify(bearer, v.now())
 		if errors.Is(err, authverify.ErrKeySourceUnavailable) {
-			return nil, v.unavailable(ctx, row.Service, row.Profile)
+			return nil, v.unavailable(ctx, row.Service, row.Profile, fmt.Errorf("%w: %w", ErrUnavailable, authverify.ErrKeySourceUnavailable))
 		}
 		if err != nil {
 			return nil, v.refuse(ctx, row.Service, row.Profile, eddsaReason(err))
@@ -175,7 +176,7 @@ func (v *Validator) Validate(ctx context.Context, service, profile, bearer strin
 		}
 		principal, err := v.legacy(ctx, bearer)
 		if errors.Is(err, ErrUnavailable) {
-			return nil, v.unavailable(ctx, row.Service, row.Profile)
+			return nil, v.unavailable(ctx, row.Service, row.Profile, ErrUnavailable)
 		}
 		if err != nil {
 			return nil, v.refuse(ctx, row.Service, row.Profile, ReasonLegacy)
@@ -187,11 +188,11 @@ func (v *Validator) Validate(ctx context.Context, service, profile, bearer strin
 	}
 }
 
-func (v *Validator) unavailable(ctx context.Context, service, profile string) error {
+func (v *Validator) unavailable(ctx context.Context, service, profile string, err error) error {
 	v.refused.Add(ctx, 1, metric.WithAttributes(attribute.String("service", service), attribute.String("profile", profile), attribute.String("reason", ReasonUnavailable)))
 	v.logger.WarnContext(ctx, "access token validator unavailable",
 		slog.String("service", service), slog.String("profile", profile))
-	return ErrUnavailable
+	return err
 }
 
 func (v *Validator) refuse(ctx context.Context, service, profile, reason string) error {

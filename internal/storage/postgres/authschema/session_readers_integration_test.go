@@ -71,8 +71,8 @@ func readerViolations(t *testing.T, ctx context.Context, env *authFixture, reade
 	return found
 }
 
-// A session reader (go-api, query-api) may SELECT exactly id, principal_id
-// and revoked_at of the auth sessions, column-level, and nothing else in the
+// A session reader (go-api, query-api) may SELECT exactly id, principal_id,
+// revoked_at and legacy_token_version of the auth sessions, column-level, and nothing else in the
 // auth schema; a re-apply restores exactly that, and the posture names any
 // widening.
 func TestSessionReaderRolesReadExactlyTheSessionColumns(t *testing.T) {

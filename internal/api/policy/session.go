@@ -100,7 +100,7 @@ func (a *Authenticator) checkSession(ctx context.Context, claims map[string]any,
 const sessionStateQuery = `SELECT principal_id, revoked_at IS NOT NULL, legacy_token_version FROM {auth_schema}.sessions WHERE id = $1`
 
 // SessionState reads the session id names, in the auth schema AuthSchema
-// names: its principal and whether it is revoked.
+// names: its principal, whether it is revoked and its token_version pin.
 func (s PGStore) SessionState(ctx context.Context, id uuid.UUID) (SessionRow, bool, error) {
 	name := s.AuthSchema
 	if name == "" {

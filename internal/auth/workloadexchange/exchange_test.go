@@ -341,6 +341,11 @@ func TestShapeFaultsAnswerInvalidRequestWithoutAReview(t *testing.T) {
 		rec := h.postWith(form(h.validSubject(), "auth-service", "").Encode(), "application/x-www-form-urlencoded", Pattern+"?subject_token=x")
 		assertInvalidRequest(t, h, rec)
 	})
+	t.Run("bare question mark", func(t *testing.T) {
+		h := newHarness(t)
+		rec := h.postWith(form(h.validSubject(), "auth-service", "").Encode(), "application/x-www-form-urlencoded", Pattern+"?")
+		assertInvalidRequest(t, h, rec)
+	})
 	t.Run("semicolon separator", func(t *testing.T) {
 		h := newHarness(t)
 		rec := h.post(strings.ReplaceAll(form(h.validSubject(), "auth-service", "").Encode(), "&", ";"))
@@ -540,13 +545,18 @@ func TestReviewConfigRefusesWhatCannotReviewSafely(t *testing.T) {
 	ca := newReviewServer(t, "x").caFile
 	token := writeTemp(t, "reviewer")
 	for name, cfg := range map[string]ReviewConfig{
-		"plain http":   {APIServerURL: "http://kubernetes.example.test", CAFile: ca, ReviewerTokenFile: token, TrustDomain: testTrustDomain},
-		"no url":       {CAFile: ca, ReviewerTokenFile: token, TrustDomain: testTrustDomain},
-		"no CA":        {APIServerURL: "https://kubernetes.example.test", ReviewerTokenFile: token, TrustDomain: testTrustDomain},
-		"absent CA":    {APIServerURL: "https://kubernetes.example.test", CAFile: ca + ".absent", ReviewerTokenFile: token, TrustDomain: testTrustDomain},
-		"CA not PEM":   {APIServerURL: "https://kubernetes.example.test", CAFile: token, ReviewerTokenFile: token, TrustDomain: testTrustDomain},
-		"no token":     {APIServerURL: "https://kubernetes.example.test", CAFile: ca, TrustDomain: testTrustDomain},
-		"no trust dom": {APIServerURL: "https://kubernetes.example.test", CAFile: ca, ReviewerTokenFile: token},
+		"plain http":    {APIServerURL: "http://kubernetes.example.test", CAFile: ca, ReviewerTokenFile: token, TrustDomain: testTrustDomain},
+		"no url":        {CAFile: ca, ReviewerTokenFile: token, TrustDomain: testTrustDomain},
+		"no CA":         {APIServerURL: "https://kubernetes.example.test", ReviewerTokenFile: token, TrustDomain: testTrustDomain},
+		"absent CA":     {APIServerURL: "https://kubernetes.example.test", CAFile: ca + ".absent", ReviewerTokenFile: token, TrustDomain: testTrustDomain},
+		"CA not PEM":    {APIServerURL: "https://kubernetes.example.test", CAFile: token, ReviewerTokenFile: token, TrustDomain: testTrustDomain},
+		"no token":      {APIServerURL: "https://kubernetes.example.test", CAFile: ca, TrustDomain: testTrustDomain},
+		"no trust dom":  {APIServerURL: "https://kubernetes.example.test", CAFile: ca, ReviewerTokenFile: token},
+		"bare query":    {APIServerURL: "https://kubernetes.example.test?", CAFile: ca, ReviewerTokenFile: token, TrustDomain: testTrustDomain},
+		"query":         {APIServerURL: "https://kubernetes.example.test?a=b", CAFile: ca, ReviewerTokenFile: token, TrustDomain: testTrustDomain},
+		"bare fragment": {APIServerURL: "https://kubernetes.example.test#", CAFile: ca, ReviewerTokenFile: token, TrustDomain: testTrustDomain},
+		"path":          {APIServerURL: "https://kubernetes.example.test/apis", CAFile: ca, ReviewerTokenFile: token, TrustDomain: testTrustDomain},
+		"userinfo":      {APIServerURL: "https://u:p@kubernetes.example.test", CAFile: ca, ReviewerTokenFile: token, TrustDomain: testTrustDomain},
 	} {
 		if _, err := NewReviewValidator(cfg); err == nil {
 			t.Errorf("%s: accepted", name)

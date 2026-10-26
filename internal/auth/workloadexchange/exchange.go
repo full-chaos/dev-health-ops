@@ -318,9 +318,9 @@ var requestFields = map[string]bool{
 }
 
 // parseRequest reads the RFC 8693 form: a closed field set, each field once,
-// no query string, at most MaxBodyBytes.
+// no query string (a bare "?" included), at most MaxBodyBytes.
 func parseRequest(r *http.Request) (exchangeRequest, bool) {
-	if r.URL.RawQuery != "" || r.Body == nil {
+	if r.URL.RawQuery != "" || r.URL.ForceQuery || r.Body == nil {
 		return exchangeRequest{}, false
 	}
 	mediaType, params, err := mime.ParseMediaType(r.Header.Get("Content-Type"))

@@ -43,8 +43,7 @@ type ReviewConfig struct {
 // at every step. The subject token is authenticated by the API server alone;
 // nothing here decodes it.
 func NewReviewValidator(cfg ReviewConfig) (authverify.SubjectTokenValidator, error) {
-	parsed, err := url.Parse(cfg.APIServerURL)
-	if err != nil || parsed.Scheme != "https" || parsed.Host == "" {
+	if !isHTTPSOrigin(cfg.APIServerURL) {
 		return nil, errors.New("workloadexchange: the API server URL must be an https origin")
 	}
 	if cfg.CAFile == "" || cfg.ReviewerTokenFile == "" || strings.TrimSpace(cfg.TrustDomain) == "" {
@@ -85,6 +84,18 @@ func NewReviewValidator(cfg ReviewConfig) (authverify.SubjectTokenValidator, err
 		TrustDomain:   cfg.TrustDomain,
 		Now:           cfg.Now,
 	})
+}
+
+// isHTTPSOrigin accepts only "https://host[:port]" with at most one trailing
+// slash: the URL must equal its own scheme and host, so no path, query (a
+// bare "?" included), fragment or userinfo can move the TokenReview path.
+func isHTTPSOrigin(raw string) bool {
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" {
+		return false
+	}
+	origin := "https://" + parsed.Host
+	return raw == origin || raw == origin+"/"
 }
 
 var errReviewerToken = errors.New("workloadexchange: the reviewer token is unavailable")

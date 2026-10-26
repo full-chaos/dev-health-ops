@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -143,4 +144,34 @@ func TestAMalformedLoginWhilePostgresIsDownAnswers503(t *testing.T) {
 	f.appendErr = pgDown
 	r := f.do(http.MethodPost, PatternCompatLogin, `{"email":"x@example.invalid","password":"p"}`, nil)
 	expectDown(t, "invalid login under pg-cut", r, r.Body.String())
+}
+
+type brokenBody struct{ err error }
+
+func (b brokenBody) Read([]byte) (int, error) { return 0, b.err }
+
+// io.EOF is in the dependency class, but the class applies to store-call
+// errors only: a login body that cannot be read, or an empty one, never
+// becomes a 503.
+func TestAnUnreadableOrEmptyLoginBodyIsNeverA503(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		body io.Reader
+		want int
+	}{
+		{"truncated body", brokenBody{io.ErrUnexpectedEOF}, http.StatusInternalServerError},
+		{"eof body", brokenBody{io.EOF}, http.StatusUnprocessableEntity},
+		{"empty body", strings.NewReader(""), http.StatusUnprocessableEntity},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newCompatFixture(t)
+			req := httptest.NewRequest(http.MethodPost, PatternCompatLogin, c.body)
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			f.server.ServeHTTP(w, req)
+			if w.Code != c.want {
+				t.Fatalf("status %d, want %d: %s", w.Code, c.want, w.Body)
+			}
+		})
+	}
 }

@@ -223,7 +223,10 @@ func (h compatHandlers) readCompatBody(w http.ResponseWriter, r *http.Request, o
 			})
 			return pybody.Body{}, false
 		}
-		h.fail(w, r, operation, err)
+		// A body that cannot be read is a client transport failure, never a
+		// dependency failure: it stays go-api's 500 whatever its error class.
+		h.rec.record(r.Context(), operation, "error", reasonStoreUnavailable, err)
+		policy.WriteInternal(w)
 		return pybody.Body{}, false
 	}
 	switch outcome {

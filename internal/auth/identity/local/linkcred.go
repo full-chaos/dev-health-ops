@@ -107,11 +107,16 @@ WHERE principal_id = $1::uuid AND purpose = $2 AND consumed_at IS NULL`, princip
 
 // PeekResetLink reads the principal a live reset credential belongs to and
 // consumes nothing: a garbage secret costs one read. ok is false for an
-// unknown, consumed or expired credential.
+// unknown, consumed or expired credential, and for one whose account is gone
+// or of the service provider: one read answers every refused link alike.
 func (l *PGLinks) PeekResetLink(ctx context.Context, tokenHash [32]byte) (uuid.UUID, bool, error) {
 	var principal uuid.UUID
-	err := l.pool.QueryRow(ctx, `SELECT principal_id FROM `+l.q+`.link_credentials
-WHERE token_hash = $1 AND purpose = $2 AND consumed_at IS NULL AND expires_at > now()`, tokenHash[:], string(PurposePasswordReset)).Scan(&principal)
+	err := l.pool.QueryRow(ctx, `SELECT c.principal_id FROM `+l.q+`.link_credentials c
+JOIN `+l.q+`.users u ON u.principal_id = c.principal_id
+JOIN `+l.q+`.principals p ON p.id = c.principal_id
+LEFT JOIN public.users pu ON pu.id = c.principal_id
+WHERE c.token_hash = $1 AND c.purpose = $2 AND c.consumed_at IS NULL AND c.expires_at > now()
+  AND NOT `+identity.ServiceProviderSQL("pu"), tokenHash[:], string(PurposePasswordReset)).Scan(&principal)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return uuid.Nil, false, nil
 	}

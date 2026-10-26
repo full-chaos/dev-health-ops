@@ -223,12 +223,22 @@ func (e *Errors) OptionalUTF8String(object *pyjson.Object, name string) (string,
 		return "", false
 	}
 	loc := []pyjson.Value{"body", name}
-	if text, isString := raw.(string); isString && pyjson.HasSurrogate(text) {
-		*e = append(*e, Error{Type: "string_unicode", Loc: loc, Input: text,
-			Msg: "Input should be a valid string, unable to parse raw data as a unicode string"})
+	if text, isString := raw.(string); isString && e.RefuseSurrogate(name, text) {
 		return "", false
 	}
 	return e.validateStringValue(raw, loc, 0, 0)
+}
+
+// RefuseSurrogate appends the string_unicode error for body field name and
+// reports true when text holds a lone surrogate. It is for a field read after
+// the provider lookup, where only the branch that uses the value is strict.
+func (e *Errors) RefuseSurrogate(name, text string) bool {
+	if !pyjson.HasSurrogate(text) {
+		return false
+	}
+	*e = append(*e, Error{Type: "string_unicode", Loc: []pyjson.Value{"body", name}, Input: text,
+		Msg: "Input should be a valid string, unable to parse raw data as a unicode string"})
+	return true
 }
 
 // RequiredString validates one required `str` field (no default) with

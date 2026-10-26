@@ -129,6 +129,11 @@ type CheckStatus struct {
 	// (the worker's preclaim-readiness) logs it, so an exit names WHICH class of failure each check
 	// hit instead of only which checks failed (CHAOS-6955).
 	Cause string
+	// Transient reports that the check failed because its dependency was
+	// unreachable right now (a refused or reset dial, a pooler with no free
+	// slot), as opposed to timing out or answering with a real error. A caller
+	// that retries startup may retry it exactly like a timeout.
+	Transient bool
 }
 
 func NewRegistry(checkTimeout time.Duration) *Registry {
@@ -477,10 +482,11 @@ func (r *Registry) CheckRequired(ctx context.Context) Readiness {
 		result := <-results
 		causes[result.name] = result.result.cause
 		statuses = append(statuses, CheckStatus{
-			Name:     result.name,
-			Failed:   result.result.failed,
-			TimedOut: result.result.timedOut,
-			Cause:    failedCause(result.result),
+			Name:      result.name,
+			Failed:    result.result.failed,
+			TimedOut:  result.result.timedOut,
+			Cause:     failedCause(result.result),
+			Transient: result.result.cause == CauseUnreachable,
 		})
 		if result.result.failed {
 			failed = append(failed, result.name)
@@ -497,6 +503,22 @@ func (r *Registry) CheckRequired(ctx context.Context) Readiness {
 // timeout (the check itself hit its own bounded context, or the caller never
 // got an answer at all before its own wait expired) as opposed to the check
 // running to completion and reporting a real error.
+// CauseUnreachable is the bounded CheckStatus.Cause of a check whose error
+// declared itself transient (see TransientError).
+const CauseUnreachable = "unreachable"
+
+// TransientError is implemented by a check error that means the dependency is
+// momentarily unreachable and a later attempt can succeed. The registry reads
+// only this bit, never the error text.
+type TransientError interface{ Transient() bool }
+
+// IsTransient reports whether err, or an error it wraps, is a TransientError
+// that answers true.
+func IsTransient(err error) bool {
+	var transient TransientError
+	return errors.As(err, &transient) && transient.Transient()
+}
+
 // failedCause is the CheckStatus.Cause of a result: empty for a pass.
 func failedCause(result checkResult) string {
 	if !result.failed {
@@ -569,6 +591,8 @@ func (c *requiredCheck) execute(
 			return false, true, "timeout"
 		case errors.Is(err, context.Canceled):
 			return false, true, "canceled"
+		case IsTransient(err):
+			return false, false, CauseUnreachable
 		default:
 			return false, false, "error"
 		}

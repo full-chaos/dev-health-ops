@@ -125,9 +125,10 @@ func (s *Store) IdentityBySubject(ctx context.Context, issuer string, provider P
 
 func (s *Store) principalByKey(ctx context.Context, key ExternalKey) (Principal, bool, error) {
 	var p Principal
-	err := s.pool.QueryRow(ctx, `SELECT p.id, p.disabled_at FROM `+s.q+`.external_identities e
+	err := s.pool.QueryRow(ctx, `SELECT p.id, p.disabled_at, `+ServiceProviderSQL("pu")+` FROM `+s.q+`.external_identities e
 JOIN `+s.q+`.principals p ON p.id = e.principal_id
-WHERE e.issuer = $1 AND e.provider = $2 AND e.subject = $3`, key.Issuer, string(key.Provider), key.Subject).Scan(&p.ID, &p.DisabledAt)
+LEFT JOIN public.users pu ON pu.id = p.id
+WHERE e.issuer = $1 AND e.provider = $2 AND e.subject = $3`, key.Issuer, string(key.Provider), key.Subject).Scan(&p.ID, &p.DisabledAt, &p.ServiceProvider)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Principal{}, false, nil
 	}
@@ -513,11 +514,12 @@ WHERE principal_id = $1 AND issuer = $2 AND provider = $3 AND subject <> $4`,
 }
 
 // lockPrincipal locks the principal row FOR UPDATE. A missing principal, or a
-// disabled one when live is set, is ErrPrincipalUnavailable.
+// disabled or service-provider one when live is set, is ErrPrincipalUnavailable.
 func (s *Store) lockPrincipal(ctx context.Context, tx audit.TxOps, principal uuid.UUID, live bool) error {
-	var disabled bool
-	err := tx.QueryRow(ctx, `SELECT disabled_at IS NOT NULL FROM `+s.q+`.principals WHERE id = $1 FOR UPDATE`, principal).Scan(&disabled)
-	if errors.Is(err, pgx.ErrNoRows) || (err == nil && live && disabled) {
+	var disabled, service bool
+	err := tx.QueryRow(ctx, `SELECT p.disabled_at IS NOT NULL, `+ServiceProviderSQL("pu")+` FROM `+s.q+`.principals p
+LEFT JOIN public.users pu ON pu.id = p.id WHERE p.id = $1 FOR UPDATE OF p`, principal).Scan(&disabled, &service)
+	if errors.Is(err, pgx.ErrNoRows) || (err == nil && live && (disabled || service)) {
 		return ErrPrincipalUnavailable
 	}
 	return err

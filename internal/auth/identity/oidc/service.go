@@ -555,7 +555,7 @@ func (s *Service) resolve(ctx context.Context, row Provider, v validated, reques
 	default:
 		return Login{}, internal(ReasonStoreUnavailable, err)
 	}
-	if !principal.Active {
+	if !principal.Active || principal.ServiceProvider {
 		return Login{}, deny(http.StatusForbidden, ReasonPrincipalDeactivated, "User account is disabled")
 	}
 

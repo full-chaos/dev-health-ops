@@ -167,7 +167,7 @@ func (a samlIdentities) IdentityBySubject(ctx context.Context, id saml.Identity,
 	case err != nil:
 		return saml.Principal{}, false, err
 	}
-	return saml.Principal{ID: principal.ID, Disabled: !principal.IsActive || principal.DisabledAt != nil}, found, nil
+	return saml.Principal{ID: principal.ID, Disabled: !principal.IsActive || principal.DisabledAt != nil, ServiceProvider: principal.ServiceProvider}, found, nil
 }
 
 func (samlIdentities) NormalizeEmail(raw string) (string, error) { return identity.NormalizeEmail(raw) }

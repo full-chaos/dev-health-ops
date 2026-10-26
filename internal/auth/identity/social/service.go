@@ -261,7 +261,7 @@ func lookupReason(err error) Reason {
 }
 
 func signInTo(p identity.Principal) (Reason, error) {
-	if p.DisabledAt != nil {
+	if p.DisabledAt != nil || p.ServiceProvider {
 		return ReasonPrincipalDeactivated, ErrPrincipalDisabled
 	}
 	return ReasonAccepted, nil

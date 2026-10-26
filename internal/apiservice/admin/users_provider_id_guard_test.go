@@ -78,8 +78,11 @@ func TestCreateUserRefusesAnInvalidProviderIDBeforeTheDatabase(t *testing.T) {
 			if code != http.StatusUnprocessableEntity || !strings.Contains(response, "auth_provider_id") {
 				t.Fatalf("status %d body %q, want 422 naming auth_provider_id", code, response)
 			}
-			if strings.Contains(response, "MARKER77") || strings.Contains(logs, "MARKER77") {
-				t.Fatalf("the provider id reached the response or the log: %q %q", response, logs)
+			if strings.Contains(response, "MARKER77") {
+				t.Fatalf("the provider id reached the response: %q", response)
+			}
+			if logs != "" {
+				t.Fatalf("the refusal path wrote a log line: %q", logs)
 			}
 		})
 	}

@@ -1159,6 +1159,23 @@ Named limit: a pooler pod that rolls can run a second pod for a short time
 (each pooler Deployment has replicas 1 and the default surge); that second pod
 opens its own pools, and the check does not count it.
 */}}
+{{/*
+One number the connection budget adds or multiplies: a whole number from min to
+max, else the render fails naming the key. The bound keeps the sum from
+wrapping, whether or not the schema ran (helm --skip-schema-validation).
+*/}}
+{{- define "dev-health.budgetTerm" -}}
+{{- $v := .value -}}
+{{- $ok := false -}}
+{{- if has (kindOf $v) (list "int" "int64" "float64") -}}
+{{- if eq (toString (int64 $v)) (toString $v) -}}
+{{- if and (ge (int64 $v) (int64 .min)) (le (int64 $v) (int64 .max)) -}}{{- $ok = true -}}{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- if not $ok -}}{{- fail (printf "%s must be a whole number from %d to %d when authService.database.connectionBudget is set: the budget adds it with the other pools" .key (int64 .min) (int64 .max)) -}}{{- end -}}
+{{- int64 $v -}}
+{{- end -}}
+
 {{- define "dev-health.authConnectionBudget" -}}
 {{- $v := .Values.authService.database.connectionBudget -}}
 {{- $ok := false -}}
@@ -1172,15 +1189,22 @@ opens its own pools, and the check does not count it.
 {{- $pools := 0 -}}
 {{- if and .Values.goWorkers.enabled .Values.goWorkers.pgbouncer.enabled -}}
 {{- $p := .Values.goWorkers.pgbouncer -}}
-{{- $txn := int64 $p.transaction.poolSize -}}
+{{- $txn := int64 (include "dev-health.budgetTerm" (dict "key" "goWorkers.pgbouncer.transaction.poolSize" "value" $p.transaction.poolSize "min" 1 "max" 1000)) -}}
 {{- $users := $txn -}}
 {{- range $u := ($p.transaction.extraUsers | default (list)) -}}
-{{- $users = add $users (ternary (int64 $u.poolSize) $txn (hasKey $u "poolSize")) -}}
+{{- if hasKey $u "poolSize" -}}
+{{- $users = add $users (int64 (include "dev-health.budgetTerm" (dict "key" "goWorkers.pgbouncer.transaction.extraUsers[].poolSize" "value" $u.poolSize "min" 1 "max" 1000))) -}}
+{{- else -}}
+{{- $users = add $users $txn -}}
 {{- end -}}
-{{- $pools = add $users (add (int64 $p.queueSession.poolSize) (int64 $p.coordinatorSession.poolSize)) -}}
 {{- end -}}
-{{- $direct := mul (add (int64 .Values.authService.replicas) (int64 (include "dev-health.authMaxSurge" .))) (int64 (include "dev-health.authMaxConns" .)) -}}
+{{- $queue := int64 (include "dev-health.budgetTerm" (dict "key" "goWorkers.pgbouncer.queueSession.poolSize" "value" $p.queueSession.poolSize "min" 1 "max" 1000)) -}}
+{{- $coordinator := int64 (include "dev-health.budgetTerm" (dict "key" "goWorkers.pgbouncer.coordinatorSession.poolSize" "value" $p.coordinatorSession.poolSize "min" 1 "max" 1000)) -}}
+{{- $pools = add $users (add $queue $coordinator) -}}
+{{- end -}}
+{{- $replicas := int64 (include "dev-health.budgetTerm" (dict "key" "authService.replicas" "value" .Values.authService.replicas "min" 0 "max" 100)) -}}
+{{- $direct := mul (add $replicas (int64 (include "dev-health.authMaxSurge" .))) (int64 (include "dev-health.authMaxConns" .)) -}}
 {{- $used := add $pools $direct -}}
-{{- if gt $used (int64 $v) -}}{{- fail (printf "authService.database.connectionBudget: %d connections are needed but the budget is %d: (authService.replicas %d + %d surge) x authService.database.maxConns %d = %d direct, plus %d go-pgbouncer pool connections. Lower a pool or add capacity before raising the budget" $used (int64 $v) (int64 .Values.authService.replicas) (int64 (include "dev-health.authMaxSurge" .)) (int64 (include "dev-health.authMaxConns" .)) $direct $pools) -}}{{- end -}}
+{{- if gt $used (int64 $v) -}}{{- fail (printf "authService.database.connectionBudget: %d connections are needed but the budget is %d: (authService.replicas %d + %d surge) x authService.database.maxConns %d = %d direct, plus %d go-pgbouncer pool connections. Lower a pool or add capacity before raising the budget" $used (int64 $v) $replicas (int64 (include "dev-health.authMaxSurge" .)) (int64 (include "dev-health.authMaxConns" .)) $direct $pools) -}}{{- end -}}
 {{- end -}}
 {{- end -}}

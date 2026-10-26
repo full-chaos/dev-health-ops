@@ -74,6 +74,7 @@
     "authService": {
       "type": "object",
       "properties": {
+        "replicas": { "type": "integer", "minimum": 0, "maximum": 100 },
         "phase": {
           "description": "CHAOS-11382: the auth cutover phase, a whole number 0..5 (values.yaml). The templates also refuse 4 and 5 and the keys it replaces.",
           "type": "integer",
@@ -172,9 +173,12 @@
           "properties": {
             "enabled": { "type": "boolean" },
             "image": { "type": "string" },
+            "queueSession": { "type": "object", "properties": { "poolSize": { "type": "integer", "minimum": 1, "maximum": 1000 } } },
+            "coordinatorSession": { "type": "object", "properties": { "poolSize": { "type": "integer", "minimum": 1, "maximum": 1000 } } },
             "transaction": {
               "type": "object",
               "properties": {
+                "poolSize": { "type": "integer", "minimum": 1, "maximum": 1000 },
                 "extraUsers": {
                   "type": "array",
                   "description": "Roles the transaction pooler authenticates in addition to its own. Both fields are required and neither may be empty: the chart writes each entry as one `\"role\" \"password\"` userlist line, so a missing role would emit a line PgBouncer silently reads as a blank user, and a missing passwordKey has no Secret value to resolve.",
@@ -183,7 +187,7 @@
                     "properties": {
                       "role": { "type": "string", "minLength": 1 },
                       "passwordKey": { "type": "string", "minLength": 1 },
-                      "poolSize": { "type": "integer", "minimum": 1, "description": "Server connections of this role's pool. Optional: without it the entry takes goWorkers.pgbouncer.transaction.poolSize." }
+                      "poolSize": { "type": "integer", "minimum": 1, "maximum": 1000, "description": "Server connections of this role's pool. Optional: without it the entry takes goWorkers.pgbouncer.transaction.poolSize." }
                     },
                     "required": ["role", "passwordKey"],
                     "additionalProperties": false

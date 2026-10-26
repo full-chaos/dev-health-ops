@@ -509,10 +509,10 @@ services:
       # the probe dials it too. The host is the container's own non-loopback
       # address: on a first boot the image's entrypoint runs a temporary server
       # on 127.0.0.1 (entrypoint.sh, `--listen_host=127.0.0.1`) that would pass a
-      # loopback probe before the real listener is up. Credentials are env refs
-      # the container shell expands ($$ stops Compose from expanding them on the
-      # host), so no value lands in `docker inspect` or the health log.
-      test: [ "CMD-SHELL", "h=$$(hostname -i | cut -d' ' -f1) && [ -n \"$$h\" ] && clickhouse-client --host \"$$h\" --user \"$$CLICKHOUSE_USER\" --password \"$$CLICKHOUSE_PASSWORD\" --query 'SELECT 1'" ]
+      # loopback probe before the real listener is up. No credential is on the
+      # command line (it would show in the process list): clickhouse-client reads
+      # CLICKHOUSE_USER and CLICKHOUSE_PASSWORD from the container environment.
+      test: [ "CMD-SHELL", "h=$$(hostname -i | cut -d' ' -f1) && [ -n \"$$h\" ] && clickhouse-client --host \"$$h\" --query 'SELECT 1'" ]
       interval: 10s
       timeout: 5s
       retries: 3

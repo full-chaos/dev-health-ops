@@ -117,11 +117,56 @@ func scanRunUnits(rows pgx.Rows) ([]runUnit, error) {
 	return units, rows.Err()
 }
 
+// querier is the read half of a pgxpool.Pool and of a pgx.Tx.
+type querier interface {
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
+// unitsSnapshotReads are the three reads of one units response: the rollup
+// rows, the filtered count and the page.
+type unitsSnapshotReads interface {
+	runUnitRollupRows(ctx context.Context, orgID string, runID uuid.UUID) ([]runUnit, error)
+	runUnitsPage(ctx context.Context, orgID string, runID uuid.UUID, filter unitFilter, offset int64, limit *int64) ([]runUnit, error)
+	countRunUnits(ctx context.Context, orgID string, runID uuid.UUID, filter unitFilter) (int64, error)
+}
+
+// unitReads runs the units reads on one querier: the pool (each read its own
+// statement) or a transaction (all reads one snapshot). Every query carries the
+// org scope in its own WHERE (unitFilter.where); the connection sets no other
+// per-session or per-transaction context.
+type unitReads struct{ q querier }
+
+// unitsSnapshot runs fn with the three reads on ONE read-only REPEATABLE READ
+// transaction, so the rollups, the filtered count and the page describe the same
+// rows however the run's units change meanwhile. A read-only transaction takes no
+// row locks and cannot fail on serialisation; it is rolled back at the end.
+func (s store) unitsSnapshot(ctx context.Context, fn func(unitsSnapshotReads) error) error {
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	return fn(unitReads{q: tx})
+}
+
+func (s store) runUnitRollupRows(ctx context.Context, orgID string, runID uuid.UUID) ([]runUnit, error) {
+	return unitReads{q: s.pool}.runUnitRollupRows(ctx, orgID, runID)
+}
+
+func (s store) runUnitsPage(ctx context.Context, orgID string, runID uuid.UUID, filter unitFilter, offset int64, limit *int64) ([]runUnit, error) {
+	return unitReads{q: s.pool}.runUnitsPage(ctx, orgID, runID, filter, offset, limit)
+}
+
+func (s store) countRunUnits(ctx context.Context, orgID string, runID uuid.UUID, filter unitFilter) (int64, error) {
+	return unitReads{q: s.pool}.countRunUnits(ctx, orgID, runID, filter)
+}
+
 // runUnitRollupRows is SyncRunService.list_units for the rollups: every unit
 // of the run in id order, without the large columns.
-func (s store) runUnitRollupRows(ctx context.Context, orgID string, runID uuid.UUID) ([]runUnit, error) {
+func (s unitReads) runUnitRollupRows(ctx context.Context, orgID string, runID uuid.UUID) ([]runUnit, error) {
 	where, args := unitFilter{}.where(orgID, runID)
-	rows, err := s.pool.Query(ctx, "SELECT "+rollupUnitColumns+runUnitFromJoin+"\nWHERE "+where+"\nORDER BY u.id", args...)
+	rows, err := s.q.Query(ctx, "SELECT "+rollupUnitColumns+runUnitFromJoin+"\nWHERE "+where+"\nORDER BY u.id", args...)
 	if err != nil {
 		return nil, err
 	}
@@ -130,7 +175,7 @@ func (s store) runUnitRollupRows(ctx context.Context, orgID string, runID uuid.U
 
 // runUnitsPage reads the full rows of the filtered units in id order,
 // skipping offset and stopping after limit (nil = no stop).
-func (s store) runUnitsPage(ctx context.Context, orgID string, runID uuid.UUID, filter unitFilter, offset int64, limit *int64) ([]runUnit, error) {
+func (s unitReads) runUnitsPage(ctx context.Context, orgID string, runID uuid.UUID, filter unitFilter, offset int64, limit *int64) ([]runUnit, error) {
 	where, args := filter.where(orgID, runID)
 	query := "SELECT " + fullUnitColumns + runUnitFromJoin + "\nWHERE " + where + "\nORDER BY u.id"
 	if limit != nil {
@@ -141,7 +186,7 @@ func (s store) runUnitsPage(ctx context.Context, orgID string, runID uuid.UUID, 
 		args = append(args, offset)
 		query += fmt.Sprintf(" OFFSET $%d", len(args))
 	}
-	rows, err := s.pool.Query(ctx, query, args...)
+	rows, err := s.q.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -149,10 +194,10 @@ func (s store) runUnitsPage(ctx context.Context, orgID string, runID uuid.UUID, 
 }
 
 // countRunUnits is the number of units the filter keeps.
-func (s store) countRunUnits(ctx context.Context, orgID string, runID uuid.UUID, filter unitFilter) (int64, error) {
+func (s unitReads) countRunUnits(ctx context.Context, orgID string, runID uuid.UUID, filter unitFilter) (int64, error) {
 	where, args := filter.where(orgID, runID)
 	var count int64
-	err := s.pool.QueryRow(ctx, "SELECT count(*) FROM sync_run_units AS u WHERE "+where, args...).Scan(&count)
+	err := s.q.QueryRow(ctx, "SELECT count(*) FROM sync_run_units AS u WHERE "+where, args...).Scan(&count)
 	return count, err
 }
 

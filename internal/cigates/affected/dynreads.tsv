@@ -161,6 +161,7 @@ internal/cigates/checkgo	ci_script_helpers_test.go
 internal/cigates/checkgo	discovery_tree_test.go
 internal/cigates/checkgo	race_solo_load_test.go
 internal/cigates/checkgo	race_solo_test.go
+internal/cigates/checkgo	testcontainers_session_reap_test.go
 internal/cigates/chparams	chparams_test.go
 internal/cigates/chpin	chpin_test.go
 internal/cigates/docmaketargets	docmaketargets_test.go
@@ -561,6 +562,7 @@ internal/teamattribution	is_primary_census_test.go
 internal/teamcreated	census_test.go
 internal/teamprovider	census_test.go
 internal/teamresolve	golden_test.go
+internal/testsupport/authrows	credentials_test.go
 internal/testsupport/authrows	golden_test.go
 internal/testsupport/authrows	responses_test.go
 internal/testsupport/chschema	contract_test.go

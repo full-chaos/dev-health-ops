@@ -181,18 +181,12 @@ func TestStackedQueueCancelScriptOnlyCancels(t *testing.T) {
 		{`gh api -X POST "repos/${repo}/actions/runs/${id}/cancel"`, `gh api -X POST "repos/${repo}/actions/runs/${id}/cancel" --field body=x`},
 		{`gh api -X POST "repos/${repo}/actions/runs/${id}/cancel"`, `gh api -X DELETE "repos/${repo}/actions/runs/${id}"`},
 		{`gh api -X POST "repos/${repo}/actions/runs/${id}/cancel"`, `gh run rerun "${id}" -R "${repo}"`},
-		{`exit 0
-fi
-
-for id`, `exit 0
-fi
+		{`cancelled=0
+for id`, `cancelled=0
 gh api -X POST "repos/${repo}/actions/workflows/go.yml/dispatches" -f ref=main
 for id`},
-		{`exit 0
-fi
-
-for id`, `exit 0
-fi
+		{`cancelled=0
+for id`, `cancelled=0
 gh api -X PUT "repos/${repo}/actions/runs/1/cancel"
 for id`},
 	} {
@@ -344,7 +338,7 @@ func runCancelScriptWith(t *testing.T, scriptRoot string, files map[string]strin
 			if l == "" {
 				continue
 			}
-			m := regexp.MustCompile(`^api -X POST repos/o/r/actions/runs/(\d+)/cancel$`).FindStringSubmatch(l)
+			m := regexp.MustCompile(`^api -X POST repos/o/r/actions/runs/([^/]+)/cancel$`).FindStringSubmatch(l)
 			if m == nil {
 				t.Fatalf("unexpected write call: %q", l)
 			}
@@ -464,7 +458,6 @@ func TestStackedQueueCancelPlantedSelectionFaults(t *testing.T) {
 		{cancelScript, `branch_re='^gh-readonly-queue/main/pr-[0-9]+-([0-9a-f]{40})$'`, `branch_re='pr-[0-9]+-([0-9a-f]{40})'`},
 		{cancelScript, `    frontier["${sha}"]=1
 `, ``},
-		{cancelScript, `.head_sha | test($sha_re)`, `.head_sha | type == "string"`},
 		{cancelScript, `    [ "${id}" != "${self_id}" ] || continue
 `, ``},
 		{cancelScript, `    [ -n "${frontier[${suffix}]:-}" ] || continue

@@ -1228,12 +1228,15 @@ func checkSocialAnswer(owned bool, status int, body string) (map[string]any, err
 // a public e-mail and /user/emails is not asked (oauthprovider.go:192-200); the refusal comes after it (api/session/social.go:77,128-131).
 const socialGitHubCalls = 1
 
-// userAndSessionState is the row counts of every table a sign-up or a session could write, for a before and after.
+// userAndSessionStateSQL is the row counts of every table a sign-up or a session could write, for a before and after.
+const userAndSessionStateSQL = `SELECT
+	(SELECT count(*) FROM public.users), (SELECT count(*) FROM public.refresh_tokens), (SELECT count(*) FROM auth.users),
+	(SELECT count(*) FROM auth.principals), (SELECT count(*) FROM auth.refresh_credentials)`
+
+// userAndSessionState is userAndSessionStateSQL on the target's database.
 func (r *runner) userAndSessionState() string {
 	r.t.Helper()
-	return venueoracle.TableRows(r.t, r.ctx, r.venue.AdminURI(r.t, r.venue.GoDB), `SELECT
-	(SELECT count(*) FROM public.users), (SELECT count(*) FROM public.refresh_tokens), (SELECT count(*) FROM auth.users),
-	(SELECT count(*) FROM auth.principals), (SELECT count(*) FROM auth.refresh_credentials)`)
+	return venueoracle.TableRows(r.t, r.ctx, r.venue.AdminURI(r.t, r.venue.GoDB), userAndSessionStateSQL)
 }
 
 // checkSocialRefusalEffects is the verdict on a refused social sign-up of the users-owned leg beyond its answer: the user and

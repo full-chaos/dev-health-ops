@@ -166,21 +166,24 @@ func TestGreetingByEmailIsTheOnlyDifferenceItNames(t *testing.T) {
 	}
 }
 
-func TestSocialRefusalEffectsAreNoWriteAndExactlyOneProviderCall(t *testing.T) {
+func TestSocialRefusalEffectsAreNoWriteAndExactlyOneProviderRequestOverall(t *testing.T) {
 	user := providerstub.Recorded{Provider: "github", Method: "GET", Path: "/user", Matched: true}
-	state := "1 | 2 | 3 | 4 | 5"
+	state := "a1b2 | c3d4 | e5f6 | 0718 | 92ab"
 	for name, c := range map[string]struct {
 		before, after string
 		requests      []providerstub.Recorded
 		ok            bool
 	}{
-		"one call, nothing written":     {state, state, []providerstub.Recorded{user}, true},
-		"a user row written":            {state, "2 | 2 | 3 | 4 | 5", []providerstub.Recorded{user}, false},
-		"a session row written":         {state, "1 | 2 | 3 | 4 | 6", []providerstub.Recorded{user}, false},
-		"no provider call":              {state, state, nil, false},
-		"two provider calls":            {state, state, []providerstub.Recorded{user, user}, false},
-		"an unmatched request":          {state, state, []providerstub.Recorded{user, {Provider: "github", Method: "GET", Path: "/x"}}, false},
-		"another provider's call alone": {state, state, []providerstub.Recorded{{Provider: "gitlab", Matched: true}}, false},
+		"one request, nothing written":     {state, state, []providerstub.Recorded{user}, true},
+		"a row changed in place":           {state, "ffff | c3d4 | e5f6 | 0718 | 92ab", []providerstub.Recorded{user}, false},
+		"a session table changed":          {state, "a1b2 | c3d4 | e5f6 | 0718 | ffff", []providerstub.Recorded{user}, false},
+		"no provider request":              {state, state, nil, false},
+		"two github requests":              {state, state, []providerstub.Recorded{user, user}, false},
+		"another provider besides github":  {state, state, []providerstub.Recorded{user, {Provider: "gitlab", Method: "GET", Path: "/user", Matched: true}}, false},
+		"another provider alone":           {state, state, []providerstub.Recorded{{Provider: "gitlab", Method: "GET", Path: "/user", Matched: true}}, false},
+		"an unmatched request besides":     {state, state, []providerstub.Recorded{user, {Provider: "github", Method: "GET", Path: "/x"}}, false},
+		"the emails path instead of /user": {state, state, []providerstub.Recorded{{Provider: "github", Method: "GET", Path: "/user/emails", Matched: true}}, false},
+		"a POST of /user":                  {state, state, []providerstub.Recorded{{Provider: "github", Method: "POST", Path: "/user", Matched: true}}, false},
 	} {
 		if err := checkSocialRefusalEffects(c.before, c.after, c.requests); (err == nil) != c.ok {
 			t.Errorf("%s: err = %v, want ok=%v", name, err, c.ok)
@@ -205,5 +208,25 @@ func TestGreetingByEmailNormalisesLineEndingsOnlyAcrossTransferEncodings(t *test
 	other := crlf(greetingMail("alice@example.com", "<p>extra</p>"))
 	if greetsByEmailOnly(golden, other) {
 		t.Fatal("a content difference behind the line endings must stay a difference")
+	}
+}
+
+// The state a refused sign-up must not change is the CONTENT of the rows: a count misses an in-place update. Every table of
+// the state is hashed over its whole row text, none is only counted.
+func TestUserAndSessionStateHashesTheContentOfEveryTable(t *testing.T) {
+	for _, table := range []string{"public.users", "public.refresh_tokens", "auth.users", "auth.principals", "auth.refresh_credentials"} {
+		hashed := "FROM " + table + " t"
+		if !strings.Contains(userAndSessionStateSQL, hashed) {
+			t.Errorf("the state does not read %s through a row alias: %s", table, userAndSessionStateSQL)
+		}
+	}
+	if strings.Contains(userAndSessionStateSQL, "count(*)") {
+		t.Errorf("the state counts rows: %s", userAndSessionStateSQL)
+	}
+	if got := strings.Count(userAndSessionStateSQL, "md5("); got != 5 {
+		t.Errorf("%d hashed tables, want 5", got)
+	}
+	if got := strings.Count(userAndSessionStateSQL, "t::text"); got < 10 {
+		t.Errorf("the whole row text is not what is hashed and ordered: %s", userAndSessionStateSQL)
 	}
 }

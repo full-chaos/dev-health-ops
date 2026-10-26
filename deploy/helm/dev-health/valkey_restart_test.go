@@ -1,18 +1,38 @@
 package devhealth_test
 
 import (
+	"fmt"
+	"os"
+	"os/exec"
 	"sort"
 	"testing"
 )
+
+// requireHelmUnderCI makes a missing helm a failure when CI is set, as the
+// byte-equal render check does for its tools; renderAuth alone skips.
+func requireHelmUnderCI(t *testing.T) {
+	t.Helper()
+	if _, err := exec.LookPath("helm"); err != nil && os.Getenv("CI") != "" {
+		t.Fatal("CI is set and helm is not installed: the Valkey render tests must run in CI")
+	}
+}
 
 // One Valkey pod runs at a time: with the default rolling update the new pod
 // starts on the same ReadWriteOnce volume and append-only file while the old
 // one still writes it.
 func TestValkeyDeploymentRecreatesBeforeItsVolumeIsReused(t *testing.T) {
-	for name, args := range map[string][]string{
+	requireHelmUnderCI(t)
+	cases := map[string][]string{
 		"persistence on":  nil,
 		"persistence off": {"--set", "valkey.persistence.enabled=false"},
-	} {
+		// The prod shape with persistence on: every auth phase the chart renders, the
+		// release-wide policy, and the ACL file step.
+		"prod-shaped phase 2 with the ACL file": phaseArgs(2, append(append([]string{}, authNetworkPolicy...), valkeyAclStep...)...),
+	}
+	for phase := 1; phase <= 3; phase++ {
+		cases[fmt.Sprintf("prod-shaped phase %d", phase)] = phaseArgs(phase, authNetworkPolicy...)
+	}
+	for name, args := range cases {
 		t.Run(name, func(t *testing.T) {
 			deployment, _ := valkeyDeployment(t, args...)
 			strategy, ok := at(deployment, "spec", "strategy").(map[string]any)
@@ -87,6 +107,7 @@ func changedDocs(t *testing.T, before, after []string) []string {
 // The ACL file is a data-store step of its own: turning it on restarts Valkey
 // and changes no other workload.
 func TestValkeyAclStepChangesOnlyTheValkeyDeployment(t *testing.T) {
+	requireHelmUnderCI(t)
 	base := valkeyStepBase()
 	got := changedDocs(t, base, append(append([]string{}, base...), valkeyAclStep...))
 	if len(got) != 1 || got[0] != "Deployment/a-dev-health-valkey" {
@@ -97,6 +118,7 @@ func TestValkeyAclStepChangesOnlyTheValkeyDeployment(t *testing.T) {
 // Moving auth-service to the ACL login is an app step of its own: it changes the
 // auth-service Deployment and not Valkey.
 func TestAuthValkeySecretSwitchChangesOnlyAuthService(t *testing.T) {
+	requireHelmUnderCI(t)
 	step1 := append(valkeyStepBase(), valkeyAclStep...)
 	got := changedDocs(t, step1, append(append([]string{}, step1...), authValkeySwitch...))
 	if len(got) != 1 || got[0] != "Deployment/a-dev-health-auth-service" {

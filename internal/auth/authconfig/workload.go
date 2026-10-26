@@ -92,10 +92,11 @@ func workloadExchange(lookup secrets.LookupEnv, tokenIssuerURL string) (Workload
 
 // httpsOrigin accepts only "https://host[:port]" with at most one trailing
 // slash: the value must equal its own scheme and host, so a path, a query (a
-// bare "?" included), a fragment or userinfo is refused.
+// bare "?" included), a fragment, userinfo or an empty port ("host:") is
+// refused.
 func httpsOrigin(raw string) error {
 	parsed, err := url.Parse(raw)
-	if err != nil || parsed.Scheme != "https" || parsed.Host == "" {
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || strings.HasSuffix(parsed.Host, ":") {
 		return errors.New("not an https origin")
 	}
 	origin := "https://" + parsed.Host

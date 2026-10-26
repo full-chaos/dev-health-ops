@@ -93,10 +93,11 @@ func reviewHTTPClient(roots *x509.CertPool) *http.Client {
 
 // isHTTPSOrigin accepts only "https://host[:port]" with at most one trailing
 // slash: the URL must equal its own scheme and host, so no path, query (a
-// bare "?" included), fragment or userinfo can move the TokenReview path.
+// bare "?" included), fragment, userinfo or empty port ("host:") can move the
+// TokenReview path.
 func isHTTPSOrigin(raw string) bool {
 	parsed, err := url.Parse(raw)
-	if err != nil || parsed.Scheme != "https" || parsed.Host == "" {
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || strings.HasSuffix(parsed.Host, ":") {
 		return false
 	}
 	origin := "https://" + parsed.Host

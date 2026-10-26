@@ -40,10 +40,12 @@ func TestTheWorkloadExchangeIsOffByDefault(t *testing.T) {
 }
 
 func TestTheWorkloadExchangeLoadsEverySetting(t *testing.T) {
-	slash := workloadEnv()
-	slash[EnvWorkloadKubeAPIURL] = "https://kubernetes.default.svc/"
-	if _, err := Load(Spec{LookupEnv: lookupFrom(slash)}); err != nil {
-		t.Fatalf("an origin with one trailing slash was refused: %v", err)
+	for _, origin := range []string{"https://kubernetes.default.svc/", "https://kubernetes.default.svc:443", "https://10.43.0.1:6443"} {
+		accepted := workloadEnv()
+		accepted[EnvWorkloadKubeAPIURL] = origin
+		if _, err := Load(Spec{LookupEnv: lookupFrom(accepted)}); err != nil {
+			t.Fatalf("origin %s was refused: %v", origin, err)
+		}
 	}
 	cfg, err := Load(Spec{LookupEnv: lookupFrom(workloadEnv())})
 	if err != nil {
@@ -84,15 +86,17 @@ func TestTheWorkloadExchangeRefusesToStartWithoutEverySetting(t *testing.T) {
 		}
 	}
 	for name, bad := range map[string]map[string]string{
-		"trust domain with whitespace":    {EnvWorkloadTrustDomain: " cluster.example.test"},
-		"trust domain too long":           {EnvWorkloadTrustDomain: strings.Repeat("a", 254)},
-		"plain http API server":           {EnvWorkloadKubeAPIURL: "http://kubernetes.default.svc"},
-		"API server with a path":          {EnvWorkloadKubeAPIURL: "https://kubernetes.default.svc/apis"},
-		"API server with credentials":     {EnvWorkloadKubeAPIURL: "https://user:secret-value-77@kubernetes.default.svc"},
-		"API server with a bare query":    {EnvWorkloadKubeAPIURL: "https://kubernetes.default.svc?"},
-		"API server with a bare fragment": {EnvWorkloadKubeAPIURL: "https://kubernetes.default.svc#"},
-		"relative CA path":                {EnvWorkloadKubeCAFile: "ca.crt"},
-		"unclean token path":              {EnvWorkloadReviewerTokenFile: "/var/run/../token"},
+		"trust domain with whitespace":              {EnvWorkloadTrustDomain: " cluster.example.test"},
+		"trust domain too long":                     {EnvWorkloadTrustDomain: strings.Repeat("a", 254)},
+		"plain http API server":                     {EnvWorkloadKubeAPIURL: "http://kubernetes.default.svc"},
+		"API server with a path":                    {EnvWorkloadKubeAPIURL: "https://kubernetes.default.svc/apis"},
+		"API server with credentials":               {EnvWorkloadKubeAPIURL: "https://user:secret-value-77@kubernetes.default.svc"},
+		"API server with a bare query":              {EnvWorkloadKubeAPIURL: "https://kubernetes.default.svc?"},
+		"API server with a bare fragment":           {EnvWorkloadKubeAPIURL: "https://kubernetes.default.svc#"},
+		"API server with an empty port":             {EnvWorkloadKubeAPIURL: "https://kubernetes.default.svc:"},
+		"API server with an empty port and a slash": {EnvWorkloadKubeAPIURL: "https://kubernetes.default.svc:/"},
+		"relative CA path":                          {EnvWorkloadKubeCAFile: "ca.crt"},
+		"unclean token path":                        {EnvWorkloadReviewerTokenFile: "/var/run/../token"},
 	} {
 		env := workloadEnv()
 		for key, value := range bad {

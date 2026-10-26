@@ -2,14 +2,22 @@ package workloadexchange
 
 import (
 	"context"
+	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
+	"math/big"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -471,7 +479,11 @@ func TestASlowReviewTimesOutWith503(t *testing.T) {
 	assertUnavailable(t, h, rec, "tokenreview_unavailable")
 }
 
-func TestAReviewAgainstAnUntrustedCertificateFailsClosed(t *testing.T) {
+// An API server without the TokenReview path (it answers 404) fails closed.
+// Every httptest TLS server shares one test certificate, so this server is
+// trusted by the configured CA: it does not prove the CA-only rule (see
+// TestAReviewToAServerOutsideTheClusterCAFailsClosed).
+func TestAnAPIServerWithoutTheTokenReviewPathFailsClosed(t *testing.T) {
 	h := newHarness(t, func(h *harness, d *Deps) {
 		other := httptest.NewTLSServer(http.NotFoundHandler())
 		t.Cleanup(other.Close)
@@ -549,21 +561,29 @@ func TestReviewConfigRefusesWhatCannotReviewSafely(t *testing.T) {
 	ca := newReviewServer(t, "x").caFile
 	token := writeTemp(t, "reviewer")
 	for name, cfg := range map[string]ReviewConfig{
-		"plain http":    {APIServerURL: "http://kubernetes.example.test", CAFile: ca, ReviewerTokenFile: token, TrustDomain: testTrustDomain},
-		"no url":        {CAFile: ca, ReviewerTokenFile: token, TrustDomain: testTrustDomain},
-		"no CA":         {APIServerURL: "https://kubernetes.example.test", ReviewerTokenFile: token, TrustDomain: testTrustDomain},
-		"absent CA":     {APIServerURL: "https://kubernetes.example.test", CAFile: ca + ".absent", ReviewerTokenFile: token, TrustDomain: testTrustDomain},
-		"CA not PEM":    {APIServerURL: "https://kubernetes.example.test", CAFile: token, ReviewerTokenFile: token, TrustDomain: testTrustDomain},
-		"no token":      {APIServerURL: "https://kubernetes.example.test", CAFile: ca, TrustDomain: testTrustDomain},
-		"no trust dom":  {APIServerURL: "https://kubernetes.example.test", CAFile: ca, ReviewerTokenFile: token},
-		"bare query":    {APIServerURL: "https://kubernetes.example.test?", CAFile: ca, ReviewerTokenFile: token, TrustDomain: testTrustDomain},
-		"query":         {APIServerURL: "https://kubernetes.example.test?a=b", CAFile: ca, ReviewerTokenFile: token, TrustDomain: testTrustDomain},
-		"bare fragment": {APIServerURL: "https://kubernetes.example.test#", CAFile: ca, ReviewerTokenFile: token, TrustDomain: testTrustDomain},
-		"path":          {APIServerURL: "https://kubernetes.example.test/apis", CAFile: ca, ReviewerTokenFile: token, TrustDomain: testTrustDomain},
-		"userinfo":      {APIServerURL: "https://u:p@kubernetes.example.test", CAFile: ca, ReviewerTokenFile: token, TrustDomain: testTrustDomain},
+		"plain http":        {APIServerURL: "http://kubernetes.example.test", CAFile: ca, ReviewerTokenFile: token, TrustDomain: testTrustDomain},
+		"no url":            {CAFile: ca, ReviewerTokenFile: token, TrustDomain: testTrustDomain},
+		"no CA":             {APIServerURL: "https://kubernetes.example.test", ReviewerTokenFile: token, TrustDomain: testTrustDomain},
+		"absent CA":         {APIServerURL: "https://kubernetes.example.test", CAFile: ca + ".absent", ReviewerTokenFile: token, TrustDomain: testTrustDomain},
+		"CA not PEM":        {APIServerURL: "https://kubernetes.example.test", CAFile: token, ReviewerTokenFile: token, TrustDomain: testTrustDomain},
+		"no token":          {APIServerURL: "https://kubernetes.example.test", CAFile: ca, TrustDomain: testTrustDomain},
+		"no trust dom":      {APIServerURL: "https://kubernetes.example.test", CAFile: ca, ReviewerTokenFile: token},
+		"bare query":        {APIServerURL: "https://kubernetes.example.test?", CAFile: ca, ReviewerTokenFile: token, TrustDomain: testTrustDomain},
+		"query":             {APIServerURL: "https://kubernetes.example.test?a=b", CAFile: ca, ReviewerTokenFile: token, TrustDomain: testTrustDomain},
+		"bare fragment":     {APIServerURL: "https://kubernetes.example.test#", CAFile: ca, ReviewerTokenFile: token, TrustDomain: testTrustDomain},
+		"path":              {APIServerURL: "https://kubernetes.example.test/apis", CAFile: ca, ReviewerTokenFile: token, TrustDomain: testTrustDomain},
+		"userinfo":          {APIServerURL: "https://u:p@kubernetes.example.test", CAFile: ca, ReviewerTokenFile: token, TrustDomain: testTrustDomain},
+		"empty port":        {APIServerURL: "https://kubernetes.example.test:", CAFile: ca, ReviewerTokenFile: token, TrustDomain: testTrustDomain},
+		"empty port, slash": {APIServerURL: "https://kubernetes.example.test:/", CAFile: ca, ReviewerTokenFile: token, TrustDomain: testTrustDomain},
+		"ipv6 empty port":   {APIServerURL: "https://[fd00::1]:", CAFile: ca, ReviewerTokenFile: token, TrustDomain: testTrustDomain},
 	} {
 		if _, err := NewReviewValidator(cfg); err == nil {
 			t.Errorf("%s: accepted", name)
+		}
+	}
+	for _, origin := range []string{"https://kubernetes.example.test", "https://kubernetes.example.test/", "https://kubernetes.example.test:443", "https://10.43.0.1:6443"} {
+		if _, err := NewReviewValidator(ReviewConfig{APIServerURL: origin, CAFile: ca, ReviewerTokenFile: token, TrustDomain: testTrustDomain}); err != nil {
+			t.Errorf("origin %s refused: %v", origin, err)
 		}
 	}
 }
@@ -791,5 +811,139 @@ func TestAReviewNeverGoesThroughAnEnvironmentProxy(t *testing.T) {
 	}
 	if h.review.count() != 1 {
 		t.Fatalf("the API server saw %d reviews, want 1", h.review.count())
+	}
+}
+
+// selfSignedTLSServer is a TLS API server whose certificate is a freshly
+// generated CA that is not the configured cluster CA; caPEM is that CA.
+func selfSignedTLSServer(t *testing.T, handler http.Handler) (*httptest.Server, []byte) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := &x509.Certificate{
+		SerialNumber:          big.NewInt(time.Now().UnixNano()),
+		Subject:               pkix.Name{CommonName: "foreign-ca"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		IPAddresses:           []net.IP{net.ParseIP("127.0.0.1")},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewUnstartedServer(handler)
+	server.TLS = &tls.Config{Certificates: []tls.Certificate{{Certificate: [][]byte{der}, PrivateKey: key}}}
+	server.StartTLS()
+	t.Cleanup(server.Close)
+	return server, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+}
+
+// RootCAs is the configured cluster CA pool only: an API server whose
+// certificate chains to another CA is refused at TLS, so the review never
+// reaches it and the exchange answers 503. The control trusts that CA and
+// reaches the same server.
+func TestAReviewToAServerOutsideTheClusterCAFailsClosed(t *testing.T) {
+	var reached atomic.Int64
+	foreign, foreignCA := selfSignedTLSServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		reached.Add(1)
+		writeReview(w, http.StatusCreated, true, []string{ReviewAudience}, "system:serviceaccount:"+testNamespace+":"+testSAName, testSAUID)
+	}))
+	withAPIServer := func(caFile func(h *harness) string) harnessOption {
+		return func(h *harness, d *Deps) {
+			validator, err := NewReviewValidator(ReviewConfig{
+				APIServerURL: foreign.URL, CAFile: caFile(h), ReviewerTokenFile: writeTemp(t, "reviewer"),
+				TrustDomain: testTrustDomain, Now: h.clock,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			d.Validator = validator
+		}
+	}
+	h := newHarness(t, withAPIServer(func(h *harness) string { return h.review.caFile }))
+	assertUnavailable(t, h, h.post(form(h.validSubject(), "auth-service", "").Encode()), "tokenreview_unavailable")
+	if n := reached.Load(); n != 0 {
+		t.Fatalf("the server outside the cluster CA saw %d request(s)", n)
+	}
+	control := newHarness(t, withAPIServer(func(*harness) string { return writeTemp(t, string(foreignCA)) }))
+	decodeAnswer(t, control.post(form(control.validSubject(), "auth-service", "").Encode()))
+	if reached.Load() != 1 {
+		t.Fatal("the control did not reach the server it trusts")
+	}
+}
+
+type deadlineRecorder struct {
+	inner    http.RoundTripper
+	deadline time.Time
+	ok       bool
+}
+
+func (d *deadlineRecorder) RoundTrip(r *http.Request) (*http.Response, error) {
+	d.deadline, d.ok = r.Context().Deadline()
+	return d.inner.RoundTrip(r)
+}
+
+// Every outgoing review request carries a context deadline at most
+// ReviewCallTimeout away, even when the caller's context has none.
+func TestTheOutgoingReviewRequestCarriesADeadline(t *testing.T) {
+	rs := newReviewServer(t, "x")
+	bundle, err := os.ReadFile(rs.caFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(bundle) {
+		t.Fatal("no CA")
+	}
+	client := reviewHTTPClient(pool)
+	recorder := &deadlineRecorder{inner: client.Transport}
+	client.Transport = recorder
+	start := time.Now()
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, rs.server.URL+"/apis/authentication.k8s.io/v1/tokenreviews",
+		strings.NewReader(`{"spec":{"token":"x","audiences":["`+ReviewAudience+`"]}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer x")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if !recorder.ok {
+		t.Fatal("the outgoing review request carries no context deadline")
+	}
+	if end := time.Now(); !recorder.deadline.After(start) || recorder.deadline.After(end.Add(ReviewCallTimeout)) {
+		t.Fatalf("deadline %s after the start, want at most ReviewCallTimeout (%s) after the call", recorder.deadline.Sub(start), ReviewCallTimeout)
+	}
+}
+
+type ctxValidator struct {
+	deadline time.Time
+	ok       bool
+}
+
+func (c *ctxValidator) Validate(ctx context.Context, _ string) (authverify.SubjectIdentity, error) {
+	c.deadline, c.ok = ctx.Deadline()
+	return authverify.SubjectIdentity{}, authverify.ErrSubjectTokenInvalid
+}
+
+// The exchange hands the validator a context bounded by ReviewCallTimeout.
+func TestTheExchangeBoundsEveryReviewByReviewCallTimeout(t *testing.T) {
+	fake := &ctxValidator{}
+	h := newHarness(t, func(_ *harness, d *Deps) { d.Validator = fake })
+	start := time.Now()
+	h.post(form(h.validSubject(), "auth-service", "").Encode())
+	if !fake.ok {
+		t.Fatal("the review context has no deadline")
+	}
+	if end := time.Now(); !fake.deadline.After(start) || fake.deadline.After(end.Add(ReviewCallTimeout)) {
+		t.Fatalf("review deadline %s after the start, want at most ReviewCallTimeout (%s) after the call", fake.deadline.Sub(start), ReviewCallTimeout)
 	}
 }

@@ -58,7 +58,11 @@ func TestACSAnswers400ForAJSONBodyThatIsNotUTF8AndLeavesTheFormAlone(t *testing.
 		}
 	}
 	form := url.Values{"SAMLResponse": {"a\xffb"}, "RelayState": {"\xed\xa0\x80"}}.Encode()
-	if rec := post("application/x-www-form-urlencoded", form); rec.Code == http.StatusBadRequest && rec.Body.String() == unreadableBody {
-		t.Errorf("the form branch answered the unreadable-body error: %s", rec.Body.String())
+	req := httptest.NewRequest(http.MethodPost, "/saml/"+p.ID.String()+"/acs", strings.NewReader(form))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	in, ok := decodeACS(rec, req)
+	if !ok || in.SAMLResponse != "a\xffb" || in.RelayState != "\xed\xa0\x80" {
+		t.Errorf("the form branch changed: ok=%v in=%q status=%d body=%s", ok, in, rec.Code, rec.Body.String())
 	}
 }

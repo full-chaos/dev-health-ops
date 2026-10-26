@@ -116,6 +116,31 @@ func TestSwitchOffLegacyFallbackRefusesAStaleBoundCarrier(t *testing.T) {
 	}
 }
 
+// TestSwitchOffLegacyFallbackRefusesACarrierBoundToAKeyRowOfAnotherProtocol: an account is bound only to a provider
+// row of its own protocol. A carrier whose provider column names the key's row while that row is of another protocol
+// is not bound, and the sign-in is refused.
+func TestSwitchOffLegacyFallbackRefusesACarrierBoundToAKeyRowOfAnotherProtocol(t *testing.T) {
+	e := getEnv(t)
+	ctx := context.Background()
+	for _, protocol := range []string{"oidc", "saml"} {
+		t.Run(protocol, func(t *testing.T) {
+			otherProtocol := map[string]string{"oidc": "saml", "saml": "oidc"}[protocol]
+			f := e.relinkFixture(t, ctx, otherProtocol)
+			raw := protocol + "-off-crossed-" + uuid.NewString()
+			e.seedBound(t, ctx, protocol, raw, &f.provider, f.org, true)
+			org := f.org
+			key := ExternalKey{Issuer: f.issuer, Provider: f.provider, Subject: raw}
+			legacy := &LegacyMatch{AuthProvider: protocol, MembershipOrg: &org}
+			if p, found, err := e.store.IdentityBySubject(ctx, key.Issuer, key.Provider, key.Subject, legacy); !errors.Is(err, ErrRelinkRefused) || found {
+				t.Fatalf("switch off, %s carrier bound to a %s key row = %+v, %v, %v; want ErrRelinkRefused", protocol, otherProtocol, p, found, err)
+			}
+			if n := e.identityRows(t, ctx, key.Subject); n != 0 {
+				t.Fatalf("identity rows = %d, want none", n)
+			}
+		})
+	}
+}
+
 // TestSwitchOffLegacyFallbackProjectsARowBoundToTheKeyProvider: a member account bound to the key's provider row is
 // projected and linked under the key, as before.
 func TestSwitchOffLegacyFallbackProjectsARowBoundToTheKeyProvider(t *testing.T) {

@@ -707,6 +707,14 @@ func (e *env) seedMembership(t *testing.T, ctx context.Context, user, org uuid.U
 	}
 }
 
+// bindSSO binds an OIDC or SAML account to its provider row, as go-api writes it since pgmigrate revision 0155.
+func (e *env) bindSSO(t *testing.T, ctx context.Context, user uuid.UUID, provider Provider) {
+	t.Helper()
+	if _, err := e.admin.Exec(ctx, `UPDATE public.users SET sso_provider_id = $2::uuid WHERE id = $1`, user, string(provider)); err != nil {
+		t.Fatalf("bind sso provider: %v", err)
+	}
+}
+
 func socialLegacy(p Provider) *LegacyMatch { return &LegacyMatch{AuthProvider: string(p)} }
 
 func TestProjectKeepsARefusedAddressAsItsPythonLowerKey(t *testing.T) {
@@ -942,10 +950,12 @@ func TestIdentityBySubjectSSOLegacyNeedsTheProviderOrgAndMembership(t *testing.T
 
 	member := "sso-" + uuid.NewString()
 	user := e.seedLegacy(t, ctx, uniqueEmail("sso"), "oidc", member, false)
+	e.bindSSO(t, ctx, user, provider)
 	e.seedMembership(t, ctx, user, org)
 
 	outsider := "out-" + uuid.NewString()
 	stranger := e.seedLegacy(t, ctx, uniqueEmail("out"), "oidc", outsider, false)
+	e.bindSSO(t, ctx, stranger, provider)
 	e.seedMembership(t, ctx, stranger, otherOrg)
 
 	for name, legacy := range map[string]*LegacyMatch{
@@ -1215,6 +1225,7 @@ func TestIdentityBySubjectSAMLLegacySubjectIsMatchedRawAndStoredComposite(t *tes
 	raw := "nameid-" + uuid.NewString()
 	composite := "saml1|urn:oasis:names:tc:SAML:2.0:nameid-format:persistent|sp|" + raw
 	user := e.seedLegacy(t, ctx, uniqueEmail("saml"), "saml", raw, false)
+	e.bindSSO(t, ctx, user, provider)
 	e.seedMembership(t, ctx, user, org)
 
 	if _, found, err := e.store.IdentityBySubject(ctx, issuer, provider, composite, &LegacyMatch{AuthProvider: "saml", MembershipOrg: &org}); err != nil || found {

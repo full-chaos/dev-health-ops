@@ -307,8 +307,14 @@ func TestSharedServerLeakCheck(t *testing.T) {
 			pgExec(t, ctx, s.pg.adminDSN, "ALTER ROLE shared_login_role NOLOGIN")
 		}, "postgres new role shared_login_role super=false inherit=true createrole=false createdb=false login=false"},
 		{"shared role gets CREATEROLE and a connection limit", func(t *testing.T, ctx context.Context, s *sharedServers) {
-			pgExec(t, ctx, s.pg.adminDSN, "ALTER ROLE pg_monitor CREATEROLE CONNECTION LIMIT 7")
-		}, "postgres new role pg_monitor super=false inherit=true createrole=true"},
+			pgExec(t, ctx, s.pg.adminDSN, "CREATE ROLE shared_attr_role")
+			baseline, err := postgresSnapshot(ctx, s.pg.adminDSN)
+			if err != nil {
+				t.Fatal(err)
+			}
+			s.pg.baseline = baseline
+			pgExec(t, ctx, s.pg.adminDSN, "ALTER ROLE shared_attr_role CREATEROLE CONNECTION LIMIT 7")
+		}, "postgres new role shared_attr_role super=false inherit=true createrole=true"},
 		{"database stops accepting connections", func(t *testing.T, ctx context.Context, s *sharedServers) {
 			pgExec(t, ctx, s.pg.adminDSN, "ALTER DATABASE template1 WITH ALLOW_CONNECTIONS false")
 		}, "postgres new database template1 allowconn=false"},

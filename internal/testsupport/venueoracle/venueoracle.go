@@ -661,6 +661,16 @@ func intendedNoStore(request Request, py, gr Response, options DiffOptions) []st
 		}
 		return nil
 	}
+	if options.CredentialsNoStore && credentialsNoStoreRoute(request) {
+		// The ACP target's credentials answers (D6129, the 10410 ruling): the same exact pair, a golden that carries
+		// neither. Any other header, value, method or route compares.
+		_, hasCacheControl := py.Headers["cache-control"]
+		_, hasPragma := py.Headers["pragma"]
+		if !hasCacheControl && !hasPragma && gr.Headers["cache-control"] == "no-store" && gr.Headers["pragma"] == "no-cache" {
+			return []string{"cache-control", "pragma"}
+		}
+		return nil
+	}
 	target, err := url.ParseRequestURI(request.Path)
 	if err != nil || !adminNoStore.Matches(&http.Request{Method: request.Method, URL: target}) {
 		return nil
@@ -672,6 +682,22 @@ func intendedNoStore(request Request, py, gr Response, options DiffOptions) []st
 		return nil
 	}
 	return []string{"cache-control"}
+}
+
+// credentialsNoStoreRoutes are the six routes whose answer carries CredentialsNoStore's headers, by method and path
+// without the query (verify carries its token there).
+var credentialsNoStoreRoutes = map[string]bool{
+	http.MethodPost + " /api/v1/auth/register":            true,
+	http.MethodGet + " /api/v1/auth/verify":               true,
+	http.MethodPost + " /api/v1/auth/resend-verification": true,
+	http.MethodPost + " /api/v1/auth/forgot-password":     true,
+	http.MethodPost + " /api/v1/auth/reset-password":      true,
+	http.MethodPost + " /api/v1/auth/change-password":     true,
+}
+
+func credentialsNoStoreRoute(request Request) bool {
+	path, _, _ := strings.Cut(request.Path, "?")
+	return credentialsNoStoreRoutes[request.Method+" "+path]
 }
 
 // acpLoginPath is the one route whose answer carries LoginNoStore's headers.

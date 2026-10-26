@@ -45,11 +45,11 @@ func TestGrantNarrowingAcknowledgementRendersOnBothJobsOnlyWhenSet(t *testing.T)
 		t.Fatalf("render: %v\n%.400s", err, out)
 	}
 	flag := "-ack-grant-narrowing=" + ackDigest
-	if got := jobArgs(t, authDoc(docs, "Job", "a-dev-health-auth-migrate")); !reflect.DeepEqual(got, []string{flag}) {
-		t.Errorf("auth-migrate args = %v, want [%s]", got, flag)
+	if got := jobArgs(t, authDoc(docs, "Job", "a-dev-health-auth-migrate")); !reflect.DeepEqual(got, []string{flag, "-defer-narrowing"}) {
+		t.Errorf("auth-migrate args = %v, want [%s -defer-narrowing]", got, flag)
 	}
-	if got := jobArgs(t, authDoc(docs, "Job", "a-dev-health-auth-grants")); !reflect.DeepEqual(got, []string{"grants", flag}) {
-		t.Errorf("auth-grants args = %v, want [grants %s]", got, flag)
+	if got := jobArgs(t, authDoc(docs, "Job", "a-dev-health-auth-grants")); !reflect.DeepEqual(got, []string{"grants", flag, "-defer-narrowing"}) {
+		t.Errorf("auth-grants args = %v, want [grants %s -defer-narrowing]", got, flag)
 	}
 }
 

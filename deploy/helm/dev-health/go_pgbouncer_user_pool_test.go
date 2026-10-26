@@ -166,7 +166,7 @@ func TestPoolSizeAtTheBoundStillFailsASmallBudget(t *testing.T) {
 	if _, out, err := renderAuth(t, authWith(poolSizeArgs("extra user", "1000")...)...); err != nil {
 		t.Fatalf("1000 renders with the budget off: %v\n%.300s", err, out)
 	}
-	_, out, err := renderAuth(t, authWith(append(poolSizeArgs("extra user", "1000"), "--set", "authService.database.connectionBudget=97")...)...)
+	_, out, err := renderAuth(t, authWith(append(append(poolSizeArgs("extra user", "1000"), "--set", "authService.database.connectionBudget=97"), sessionNoSurge...)...)...)
 	// 2 x (16 + 1000) + 50 + 14 + (2+1) x 8 = 2120
 	if err == nil || !strings.Contains(out, budgetRefusal) || !strings.Contains(out, "2120") {
 		t.Fatalf("1000 must fail the 97 budget with the sum 2120: err=%v out=%.300s", err, out)

@@ -785,7 +785,7 @@ goWorkers:
       #    surge costs +18 server connections at pool 16 + KEDA 4 (one sample),
       #    maxSurge 0 gave 3.5 times the client errors and a worker that
       #    started in the gap crash-restarted 13 to 15 s.
-      rollingUpdate: {}
+      # rollingUpdate: {}  (left unset: a default map here would replace a non-map override before the chart helper can refuse it)
       # -- Additional roles this pooler may authenticate, beyond its own
       #    RIVER_DOMAIN_DATABASE_ROLE. Each entry is
       #    {role: <postgres role>, passwordKey: <key in secret.data below>},
@@ -833,10 +833,22 @@ goWorkers:
       port: 6433
       poolSize: 50
       maxClientConnections: 128
+      # -- Rolling update of this session pooler Deployment (one replica). Same
+      #    rules as transaction.rollingUpdate: empty renders NO strategy key (the
+      #    Kubernetes default, ONE surge pod) and the connection budget counts
+      #    that pod: poolSize x (1 + maxSurge). maxSurge 0 needs maxUnavailable
+      #    1 or more and makes each roll an outage of the pooler's start time.
+      # rollingUpdate: {}  (left unset: a default map here would replace a non-map override before the chart helper can refuse it)
     coordinatorSession:
       port: 6434
       poolSize: 14
       maxClientConnections: 32
+      # -- Rolling update of this session pooler Deployment (one replica). Same
+      #    rules as transaction.rollingUpdate: empty renders NO strategy key (the
+      #    Kubernetes default, ONE surge pod) and the connection budget counts
+      #    that pod: poolSize x (1 + maxSurge). maxSurge 0 needs maxUnavailable
+      #    1 or more and makes each roll an outage of the pooler's start time.
+      # rollingUpdate: {}  (left unset: a default map here would replace a non-map override before the chart helper can refuse it)
     resources:
       requests: {cpu: 50m, memory: 64Mi}
       limits: {cpu: 250m, memory: 256Mi}

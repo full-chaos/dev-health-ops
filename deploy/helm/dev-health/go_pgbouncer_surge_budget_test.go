@@ -17,6 +17,18 @@ const (
 // KEDA 4, auth-service (2 + 1 surge) x 8 = 24. The surge pod of the transaction
 // pooler opens EVERY transaction pool again, so the transaction term counts
 // twice: 2 x (T + 4) + 36 + 10 + 24.
+// sessionNoSurge pins both session poolers to maxSurge 0 so a test that is
+// about the transaction term keeps its sum: an UNSET session pooler counts one
+// surge pod (CHAOS-11583).
+var sessionNoSurge = []string{
+	"--set-json", sessionRollingUpdateKey("queueSession") + `={"maxSurge":0,"maxUnavailable":1}`,
+	"--set-json", sessionRollingUpdateKey("coordinatorSession") + `={"maxSurge":0,"maxUnavailable":1}`,
+}
+
+func sessionRollingUpdateKey(pooler string) string {
+	return "goWorkers.pgbouncer." + pooler + ".rollingUpdate"
+}
+
 func prodShapeAt(t int, extra ...string) []string {
 	args := []string{
 		"--set", txnPoolSizeKey + "=" + itoa(t),
@@ -24,6 +36,7 @@ func prodShapeAt(t int, extra ...string) []string {
 		"--set", "goWorkers.pgbouncer.coordinatorSession.poolSize=10",
 		"--set", "authService.database.connectionBudget=" + prodShapeBudget,
 	}
+	args = append(args, sessionNoSurge...)
 	return authWith(append(args, extra...)...)
 }
 
@@ -73,11 +86,6 @@ func TestTransactionSurgeMaxSurgeZeroOverrideDropsTheCount(t *testing.T) {
 	}
 	if at(ru, "maxUnavailable") != float64(1) && at(ru, "maxUnavailable") != 1 {
 		t.Fatalf("the transaction Deployment must carry maxUnavailable 1, got %v", ru)
-	}
-	for _, name := range []string{queuePooler, coordinatorPool} {
-		if s := at(authDoc(docs, "Deployment", name), "spec", "strategy"); s != nil {
-			t.Errorf("%s keeps the default strategy, got %v", name, s)
-		}
 	}
 	// 90 is the boundary: budget 89 fails.
 	args := append(prodShapeAt(16, zero...), "--set", "authService.database.connectionBudget=89")

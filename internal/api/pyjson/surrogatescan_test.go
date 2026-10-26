@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
-	"unicode/utf8"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 )
@@ -40,6 +39,15 @@ func TestHasLoneSurrogateEscape(t *testing.T) {
 		{"truncated after the high", `{"a":"\ud800`, true},
 		{"bad hex", `{"a":"\ud8zz"}`, false},
 		{"empty", ``, false},
+		{"raw bytes of a surrogate", "{\"a\":\"x\xed\xa0\x80y\"}", true},
+		{"raw bytes of the last surrogate", "[\"\xed\xbf\xbf\"]", true},
+		{"raw bytes of a surrogate in a key", "{\"\xed\xb0\x80\":1}", true},
+		{"two raw halves are two lone surrogates", "[\"\xed\xa0\xbd\xed\xb8\x80\"]", true},
+		{"the code point before the range", "[\"\xed\x9f\xbf\"]", false},
+		{"the code point after the range", "[\"\xee\x80\x80\"]", false},
+		{"a truncated raw surrogate", "[\"\xed\xa0\"]", false},
+		{"raw valid multibyte text", "{\"a\":\"é名😀\"}", false},
+		{"raw surrogate bytes outside a string are not scanned", "[1,\xed\xa0\x80]", false},
 	}
 	for _, tc := range cases {
 		if got := pyjson.HasLoneSurrogateEscape([]byte(tc.doc)); got != tc.want {
@@ -77,13 +85,13 @@ func walkHasSurrogate(value pyjson.Value) bool {
 // callers scan only a body their decoder already accepted.
 func differential(t testing.TB, doc []byte) {
 	t.Helper()
-	// The handlers decode with encoding/json, which reads UTF-8 only: a body
-	// pyjson.Decode would re-read as UTF-16 or UTF-32 (json.detect_encoding)
-	// is not a document they accept, so the reference sees the same text.
-	if !utf8.Valid(doc) {
+	// The reference is the api plane's own reading of the bytes: DecodeBody
+	// (json.loads on bytes, raw surrogate bytes kept) then DecodeString.
+	text, err := pyjson.DecodeBody(doc)
+	if err != nil {
 		return
 	}
-	value, err := pyjson.DecodeString(string(doc))
+	value, err := pyjson.DecodeString(text)
 	if err != nil {
 		return
 	}
@@ -157,6 +165,10 @@ func TestMemberHasLoneSurrogateEscapeReadsOnlyTheNamedMember(t *testing.T) {
 		{"a second object after the object, exact key", `{"relay_state":"\ud800"}{}`, false, false},
 		{"white space after the object is fine", "{\"relay_state\":\"\\ud800\"} \n\t", true, true},
 		{"the object is not closed", `{"relay_state":"\ud800"`, true, false},
+		{"raw surrogate bytes in the kept value", "{\"relay_state\":\"a\xed\xa0\x80\"}", true, true},
+		{"raw surrogate bytes in another member", "{\"relay_state\":\"ok\",\"note\":\"\xed\xa0\x80\"}", true, false},
+		{"raw surrogate bytes in an overwritten member", "{\"RELAY_STATE\":\"\xed\xa0\x80\",\"relay_state\":\"ok\"}", true, false},
+		{"raw valid text in the kept value", "{\"relay_state\":\"é😀\"}", true, false},
 		{"an escaped key is the same key", `{"relay\u005fstate":"\ud800"}`, false, true},
 	}
 	for _, tc := range cases {
@@ -173,7 +185,7 @@ func TestMemberHasLoneSurrogateEscapeReadsOnlyTheNamedMember(t *testing.T) {
 // null replaces an earlier value with nil.
 func TestMemberHasLoneSurrogateEscapeAgreesWithEncodingJSONOnEveryBody(t *testing.T) {
 	keys := []string{"relay_state", "RELAY_STATE", "Relay_State", "relay_\u017ftate", "relay\u005fstate", "other"}
-	values := []string{`"ok"`, `"\ud800"`, `"a\ud83d\ude00b"`, `"\\ud800"`, `"\ud83d"`, `null`, `{"x":"\ud800"}`, `["\ud800"]`, `1`, `true`}
+	values := []string{"\"x\xed\xa0\x80\"", "\"é😀\"", `"ok"`, `"\ud800"`, `"a\ud83d\ude00b"`, `"\\ud800"`, `"\ud83d"`, `null`, `{"x":"\ud800"}`, `["\ud800"]`, `1`, `true`}
 	compared, refusedByDecoder := 0, 0
 	var build func(members []string, depth int)
 	build = func(members []string, depth int) {
@@ -213,4 +225,45 @@ func TestMemberHasLoneSurrogateEscapeAgreesWithEncodingJSONOnEveryBody(t *testin
 	if compared < 10000 || refusedByDecoder == 0 {
 		t.Fatalf("compared %d bodies, %d skipped as not decodable", compared, refusedByDecoder)
 	}
+}
+
+// Byte soups: every document the api plane decodes is compared, whatever the
+// source of the surrogate (an escape or raw bytes); a document it refuses
+// (invalid bytes) is outside the scanner's contract.
+func TestHasLoneSurrogateEscapeAgreesWithTheApiPlaneOnByteSoups(t *testing.T) {
+	pieces := []string{"a", "é", "😀", "\xff", "\xc0", "\xe2\x82", "\xed\xa0\x80", "\xed\xbf\xbf", "\xed\xa0\xbd", "\xed\xb8\x80", "\xed\x9f\xbf", "\xee\x80\x80",
+		`\ud800`, `\ude00`, `\ud83d\ude00`, `\\`, `\"`}
+	seen, refused := 0, 0
+	var build func(parts []string, depth int)
+	build = func(parts []string, depth int) {
+		if depth == 0 {
+			body := strings.Join(parts, "")
+			for _, shape := range []string{`{"k":"%s"}`, `["%s"]`, `{"%s":0}`} {
+				doc := []byte(strings.Replace(shape, "%s", body, 1))
+				if _, err := pyjson.DecodeBody(doc); err != nil {
+					refused++
+				} else {
+					seen++
+				}
+				differential(t, doc)
+			}
+			return
+		}
+		for _, piece := range pieces {
+			build(append(parts[:len(parts):len(parts)], piece), depth-1)
+		}
+	}
+	for depth := 0; depth <= 3; depth++ {
+		build(nil, depth)
+	}
+	if seen < 5000 || refused < 5000 {
+		t.Fatalf("%d decodable and %d refused documents compared", seen, refused)
+	}
+}
+
+func FuzzHasLoneSurrogateEscapeOnBytes(f *testing.F) {
+	for _, seed := range []string{"{\"a\":\"\xed\xa0\x80\"}", "[\"\xff\"]", "{\"a\":\"\xed\xb8\x80\\ud800\"}", "[\"é\xed\x9f\xbf\"]"} {
+		f.Add([]byte(seed))
+	}
+	f.Fuzz(func(t *testing.T, doc []byte) { differential(t, doc) })
 }

@@ -4,7 +4,9 @@ package session
 
 import (
 	"context"
+	"errors"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -32,7 +34,7 @@ func (e *env) seedPinlessExpiring(t *testing.T, ctx context.Context, sessionID, 
 	}
 }
 
-func (e *env) seedPinlessWithCredential(t *testing.T, ctx context.Context, principal uuid.UUID, expires string) uuid.UUID {
+func (e *env) seedPinlessWithCredential(t *testing.T, ctx context.Context, principal uuid.UUID, expires string) (uuid.UUID, contracts.SecretString) {
 	t.Helper()
 	sessionID := uuid.New()
 	e.seedPinlessExpiring(t, ctx, sessionID, principal, expires)
@@ -44,7 +46,7 @@ func (e *env) seedPinlessWithCredential(t *testing.T, ctx context.Context, princ
 		VALUES ($1, $2, $3, now() + interval '1 hour')`, sessionID, principal, hashCredential(credential)); err != nil {
 		t.Fatalf("seed its credential: %v", err)
 	}
-	return sessionID
+	return sessionID, credential
 }
 
 func (e *env) revokedState(t *testing.T, ctx context.Context, sessionID uuid.UUID) (bool, string, int) {
@@ -106,8 +108,8 @@ func TestRevokeUnpinnedTouchesOnlyUnpinnedRows(t *testing.T) {
 	ctx := testContext(t)
 	e := newEnv(t, ctx)
 	pinned := e.create(t, ctx, e.principal(t, ctx))
-	old := e.seedPinlessWithCredential(t, ctx, e.principal(t, ctx), "infinity")
-	older := e.seedPinlessWithCredential(t, ctx, e.principal(t, ctx), "2000-01-01T00:00:00Z")
+	old, _ := e.seedPinlessWithCredential(t, ctx, e.principal(t, ctx), "infinity")
+	older, _ := e.seedPinlessWithCredential(t, ctx, e.principal(t, ctx), "2000-01-01T00:00:00Z")
 
 	if n, err := CountUnpinned(ctx, e.admin, e.schema); err != nil || n != 2 {
 		t.Fatalf("CountUnpinned = %d, %v; want 2", n, err)
@@ -146,5 +148,86 @@ func TestRevokeUnpinnedRunsInBatches(t *testing.T) {
 	}
 	if n, err := RevokeUnpinned(ctx, e.admin, e.schema); err != nil || n != total {
 		t.Fatalf("RevokeUnpinned = %d, %v; want %d", n, err, total)
+	}
+}
+
+// Every UPDATE of a session row, against a live row with no pin. Each test
+// runs in its own Postgres container (newEnv), and seedPinless puts the
+// constraint back before it returns, so no test runs while it is off.
+
+// A refresh of a pinless session is refused with the generic reason and
+// writes nothing: the credential is not consumed and last_seen_at stays unset.
+func TestPinlessSessionRefreshWritesNothing(t *testing.T) {
+	ctx := testContext(t)
+	e := newEnv(t, ctx)
+	principal := e.principal(t, ctx)
+	sessionID, credential := e.seedPinlessWithCredential(t, ctx, principal, "infinity")
+	var before *time.Time
+	if err := e.admin.QueryRow(ctx, `SELECT last_seen_at FROM auth.sessions WHERE id = $1`, sessionID).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	result, err := e.store.Exchange(ctx, credential)
+	if err != nil || result.Reason != ReasonRevisionStale {
+		t.Fatalf("Exchange = %s, %v; want revision_stale", result.Reason, err)
+	}
+	var after *time.Time
+	var consumed int
+	if err := e.admin.QueryRow(ctx, `SELECT last_seen_at FROM auth.sessions WHERE id = $1`, sessionID).Scan(&after); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.admin.QueryRow(ctx, `SELECT count(*) FROM auth.refresh_credentials WHERE session_id = $1 AND consumed_at IS NOT NULL`, sessionID).Scan(&consumed); err != nil {
+		t.Fatal(err)
+	}
+	if (before == nil) != (after == nil) || consumed != 0 {
+		t.Fatalf("a refused refresh wrote: last_seen_at %v -> %v, consumed credentials %d", before, after, consumed)
+	}
+}
+
+// BumpRevision does not touch a pinless session: it reports it not live, and
+// the revision stays.
+func TestBumpRevisionRefusesAPinlessSession(t *testing.T) {
+	ctx := testContext(t)
+	e := newEnv(t, ctx)
+	sessionID, _ := e.seedPinlessWithCredential(t, ctx, e.principal(t, ctx), "infinity")
+	var before int64
+	if err := e.admin.QueryRow(ctx, `SELECT revision FROM auth.sessions WHERE id = $1`, sessionID).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.store.BumpRevision(ctx, sessionID, Actor{}); !errors.Is(err, ErrSessionNotLive) {
+		t.Fatalf("BumpRevision = %v, want ErrSessionNotLive", err)
+	}
+	var revision int64
+	if err := e.admin.QueryRow(ctx, `SELECT revision FROM auth.sessions WHERE id = $1`, sessionID).Scan(&revision); err != nil || revision != before {
+		t.Fatalf("revision = %d (%v), want %d", revision, err, before)
+	}
+}
+
+// Revoking a pinless session is allowed: the write sets revoked_at, which the
+// constraint accepts.
+func TestRevokeEndsAPinlessSession(t *testing.T) {
+	ctx := testContext(t)
+	e := newEnv(t, ctx)
+	principal := e.principal(t, ctx)
+	sessionID, _ := e.seedPinlessWithCredential(t, ctx, principal, "infinity")
+	if revoked, err := e.store.Revoke(ctx, sessionID, Actor{}); err != nil || !revoked {
+		t.Fatalf("Revoke = %t, %v", revoked, err)
+	}
+	other, _ := e.seedPinlessWithCredential(t, ctx, principal, "infinity")
+	if n, err := e.store.RevokeAll(ctx, principal, Actor{}); err != nil || n != 1 {
+		t.Fatalf("RevokeAll = %d, %v; want 1", n, err)
+	}
+	if revoked, _, _ := e.revokedState(t, ctx, other); !revoked {
+		t.Fatal("RevokeAll left a pinless session live")
+	}
+}
+
+// Recording a signing kid on a pinless live session fails closed with a store
+// error; no mint reaches it, because every mint follows a Create or a pin check.
+func TestRecordSigningKidOnAPinlessSessionFailsClosed(t *testing.T) {
+	ctx := testContext(t)
+	e := newEnv(t, ctx)
+	sessionID, _ := e.seedPinlessWithCredential(t, ctx, e.principal(t, ctx), "infinity")
+	if err := e.store.RecordSigningKid(ctx, sessionID, "kid-1"); !errors.Is(err, ErrStore) {
+		t.Fatalf("RecordSigningKid = %v, want ErrStore", err)
 	}
 }

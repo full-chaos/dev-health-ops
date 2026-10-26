@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/loadharness"
 )
 
@@ -68,10 +69,33 @@ func TestExampleConfigParses(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	env := func(string) string { return "x" }
+	cred := strings.Repeat("r", 43)
+	env := func(string) string { return cred }
 	cfg, err := loadharness.ParseConfig(data, env)
 	if err != nil || len(cfg.Targets) != 3 {
 		t.Fatalf("%v %+v", err, cfg)
+	}
+	var refresh *loadharness.Target
+	for i := range cfg.Targets {
+		if cfg.Targets[i].Name == "refresh" {
+			refresh = &cfg.Targets[i]
+		}
+	}
+	if refresh == nil {
+		t.Fatal("example config has no refresh target")
+	}
+	if _, ok := refresh.HeaderEnv["Authorization"]; ok || refresh.Headers["Authorization"] != "" {
+		t.Fatal("the refresh credential must go in the refresh-request.v1 body, not an Authorization header")
+	}
+	body := strings.ReplaceAll(refresh.Body, "${ENV:LOADTEST_REFRESH_CREDENTIAL}", cred)
+	if strings.Contains(body, "${") {
+		t.Fatalf("refresh body has an unexpanded placeholder: %s", refresh.Body)
+	}
+	if _, err := contracts.ParseRefreshRequest("../..", []byte(body)); err != nil {
+		t.Fatalf("refresh body is not a refresh-request.v1 document: %v", err)
+	}
+	if _, err := contracts.ParseRefreshRequest("../..", []byte(`{"schema_version":"refresh-request.v1"}`)); err == nil {
+		t.Fatal("negative control: a request without the credential was accepted")
 	}
 }
 

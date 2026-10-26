@@ -1228,19 +1228,14 @@ func checkSocialAnswer(owned bool, status int, body string) (map[string]any, err
 // a public e-mail and /user/emails is not asked (oauthprovider.go:192-200); the refusal comes after it (api/session/social.go:77,128-131).
 const socialGitHubCalls = 1
 
-// userAndSessionStateSQL is the content of every table a sign-up or a session could write: one hash of all the row texts of
-// each, so an in-place update changes it where a row count would not.
-const userAndSessionStateSQL = `SELECT
-	(SELECT md5(coalesce(string_agg(t::text, E'\n' ORDER BY t::text), '')) FROM public.users t),
-	(SELECT md5(coalesce(string_agg(t::text, E'\n' ORDER BY t::text), '')) FROM public.refresh_tokens t),
-	(SELECT md5(coalesce(string_agg(t::text, E'\n' ORDER BY t::text), '')) FROM auth.users t),
-	(SELECT md5(coalesce(string_agg(t::text, E'\n' ORDER BY t::text), '')) FROM auth.principals t),
-	(SELECT md5(coalesce(string_agg(t::text, E'\n' ORDER BY t::text), '')) FROM auth.refresh_credentials t)`
-
-// userAndSessionState is userAndSessionStateSQL on the target's database.
+// userAndSessionState is stateSQLForLeg's hash of the target's database, for the leg ci/auth_corpus_external.sh runs.
 func (r *runner) userAndSessionState() string {
 	r.t.Helper()
-	return venueoracle.TableRows(r.t, r.ctx, r.venue.AdminURI(r.t, r.venue.GoDB), userAndSessionStateSQL)
+	sql, err := stateSQLForLeg(os.Getenv("AUTH_CORPUS_LEG"))
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	return venueoracle.TableRows(r.t, r.ctx, r.venue.AdminURI(r.t, r.venue.GoDB), sql)
 }
 
 // checkSocialRefusalEffects is the verdict on a refused social sign-up of the users-owned leg beyond its answer: the CONTENT

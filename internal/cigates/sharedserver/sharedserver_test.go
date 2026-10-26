@@ -391,6 +391,10 @@ func TestGuardFlagsAnAlterBuiltFromAConcatenation(t *testing.T) {
 		`exec("ALTER ROLE IF EXISTS " + target + " NOLOGIN")`,
 		`exec("ALTER DATABASE " + target + " SET work_mem = '7MB'")`,
 		`exec("ALTER SYSTEM " + setting)`,
+		`exec("ALTER USER " + target + " NOLOGIN")`,
+		`exec("ALTER USER worker_test NOLOGIN")`,
+		`exec("ALTER GROUP " + target + " ADD USER u")`,
+		`exec("ALTER GROUP IF EXISTS g ADD USER u")`,
 	}
 	flagged := scanFixture(t, statements)
 	for index, statement := range statements {
@@ -405,6 +409,11 @@ func TestGuardFlagsAnAlterBuiltFromAConcatenation(t *testing.T) {
 func TestGuardFlagsDropsOfServerWideObjects(t *testing.T) {
 	flaggedStatements := []string{
 		`exec("DROP ROLE worker_test")`,
+		`exec("DROP USER worker_test")`,
+		`exec("DROP USER IF EXISTS " + user)`,
+		`exec("DROP GROUP g")`,
+		`exec("DROP GROUP IF EXISTS " + group)`,
+		`exec("CREATE GROUP planted_group")`,
 		`exec("DROP ROLE IF EXISTS " + role)`,
 		`exec("DROP DATABASE " + database)`,
 		`exec("DROP DATABASE IF EXISTS worker_test")`,
@@ -416,6 +425,7 @@ func TestGuardFlagsDropsOfServerWideObjects(t *testing.T) {
 	}
 	allowedStatements := []string{
 		`exec("DROP TABLE events")`,
+		`exec("CREATE GROUP " + group)`,
 		`exec("DROP TABLE IF EXISTS " + table)`,
 		`exec("DROP TABLE IF EXISTS public.events")`,
 		`exec("DROP INDEX events_idx")`,

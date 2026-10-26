@@ -387,3 +387,79 @@ func TestReachCacheKeyIncludesAReplaceTreeInsideTheRepository(t *testing.T) {
 		t.Fatal("a change in a replace tree inside the repository left the key unchanged")
 	}
 }
+
+// CHAOS-11421 r2: the key is the whole `go env -json` minus a named denylist of volatile path keys.
+func TestReachCacheKeyCoversTheCompilerEnvironment(t *testing.T) {
+	f, _ := reachFixture(t, reachCacheHead())
+	base := reachKeyOf(t, f.root, reachEnv("CGO_ENABLED=1", "CC=gcc"))
+	for name, e := range map[string][]string{
+		"CC":           reachEnv("CGO_ENABLED=1", "CC=/definitely/missing/c-compiler"),
+		"CXX":          reachEnv("CGO_ENABLED=1", "CC=gcc", "CXX=/definitely/missing/cxx"),
+		"CGO_CFLAGS":   reachEnv("CGO_ENABLED=1", "CC=gcc", "CGO_CFLAGS=-O0"),
+		"CGO_CXXFLAGS": reachEnv("CGO_ENABLED=1", "CC=gcc", "CGO_CXXFLAGS=-O0"),
+		"CGO_LDFLAGS":  reachEnv("CGO_ENABLED=1", "CC=gcc", "CGO_LDFLAGS=-s"),
+		"PKG_CONFIG":   reachEnv("CGO_ENABLED=1", "CC=gcc", "PKG_CONFIG=/definitely/missing/pkg-config"),
+		"GOFLAGS":      reachEnv("CGO_ENABLED=1", "CC=gcc", "GOFLAGS=-tags=extra"),
+	} {
+		if got := reachKeyOf(t, f.root, e); got == base {
+			t.Errorf("%s left the key unchanged: a cached result would skip the load that now fails", name)
+		}
+	}
+}
+
+func TestReachCacheKeyIgnoresVolatilePathVariables(t *testing.T) {
+	f, _ := reachFixture(t, reachCacheHead())
+	base := reachKeyOf(t, f.root, reachEnv())
+	other := reachEnv("GOCACHE="+t.TempDir(), "GOTMPDIR="+t.TempDir(), "GOPATH="+t.TempDir(), "GOTELEMETRYDIR="+t.TempDir())
+	if got := reachKeyOf(t, f.root, other); got != base {
+		t.Fatal("a different GOCACHE, GOTMPDIR, GOPATH or GOTELEMETRYDIR moved the key: a runner path would miss every restore")
+	}
+}
+
+// --reach-cache-fresh (the workflow sets it on every event but pull_request): compute, never read, still store.
+func TestReachCacheFreshNeverReadsAndOverwritesAForgedStore(t *testing.T) {
+	f, _ := reachFixture(t, reachCacheHead())
+	if res := writeTables(t, f.root); res.code != 0 {
+		t.Fatalf("plan-reads --write exited %d:\n%s%s", res.code, res.stdout, res.stderr)
+	}
+	env := reachEnv()
+	store := t.TempDir()
+	key := reachKeyOf(t, f.root, env)
+	if res := reachRun(t, f.root, env, "--reach", "--reach-cache", store); res.code != 0 {
+		t.Fatalf("seed run exit %d:\n%s%s", res.code, res.stdout, res.stderr)
+	}
+	file := filepath.Join(store, "reach-"+key+".tsv")
+	good, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := strings.SplitN(string(good), "\n", 2)[1] + "b\tghost.go\tc\n"
+	digest := sha256.Sum256([]byte(rows))
+	forged := "# reach-cache-v2 key " + key + " rows-sha256 " + hex.EncodeToString(digest[:]) + "\n" + rows
+	if err := os.WriteFile(file, []byte(forged), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	res := reachRun(t, f.root, env, "--reach", "--reach-cache", store, "--reach-cache-fresh")
+	if res.code != 0 || strings.Contains(res.stdout, "reach: reused") || !strings.Contains(res.stdout, "reach: computed for input hash "+key) {
+		t.Fatalf("a fresh run must compute and ignore the store: exit %d:\n%s%s", res.code, res.stdout, res.stderr)
+	}
+	after, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(good) {
+		t.Fatalf("a fresh green run must store its own compute over the forged file:\n%s", after)
+	}
+}
+
+func TestReachCacheFreshWithoutAStoreStillComputes(t *testing.T) {
+	f, _ := reachFixture(t, reachCacheHead())
+	if res := writeTables(t, f.root); res.code != 0 {
+		t.Fatalf("plan-reads --write exited %d:\n%s%s", res.code, res.stdout, res.stderr)
+	}
+	store := t.TempDir()
+	res := reachRun(t, f.root, reachEnv(), "--reach", "--reach-cache", store, "--reach-cache-fresh")
+	if res.code != 0 || !strings.Contains(res.stdout, "reach: computed for input hash ") || len(storeFiles(t, store)) != 1 {
+		t.Fatalf("a fresh run with an empty store: exit %d, stored %v:\n%s%s", res.code, storeFiles(t, store), res.stdout, res.stderr)
+	}
+}

@@ -529,3 +529,30 @@ func TestOwnedLegCoversUmasLegacyVerificationRowOnceAndNothingElse(t *testing.T)
 		}
 	}
 }
+
+// The verification tokens table has no projection of its own: it is open to the one owned-leg quirk of its stale row and
+// to nothing else, so the table does not widen any other check.
+func TestCheckTableOpensTheVerificationTokensTableOnlyToTheOwnedExactOneRowQuirk(t *testing.T) {
+	entry := func(mutate func(q *Quirk)) []Quirk {
+		q := Quirk{ID: "legacy", Kind: Gap, Tracked: "CHAOS-11506", Reason: "r", Table: TableEmailVerificationTokens, Needs: []Aggregate{Credentials},
+			Owned: OwnedOnly, Max: 1, Exact: true, Extra: func(string) bool { return true }}
+		mutate(&q)
+		return []Quirk{q}
+	}
+	if problems := CheckTable(entry(func(*Quirk) {})); len(problems) != 0 {
+		t.Fatalf("the owned, exact, one-row quirk: %v", problems)
+	}
+	for name, mutate := range map[string]func(q *Quirk){
+		"not owned":             func(q *Quirk) { q.Owned = NotOwned },
+		"every leg":             func(q *Quirk) { q.Owned = "" },
+		"max 2":                 func(q *Quirk) { q.Max = 2 },
+		"not exact":             func(q *Quirk) { q.Exact = false },
+		"another table":         func(q *Quirk) { q.Table = TablePasswordResetTokens },
+		"the memberships table": func(q *Quirk) { q.Table = TableMemberships },
+	} {
+		problems := CheckTable(entry(mutate))
+		if len(problems) == 0 || !strings.Contains(strings.Join(problems, ";"), "has no projection") {
+			t.Errorf("%s: problems %v, want the no-projection problem", name, problems)
+		}
+	}
+}

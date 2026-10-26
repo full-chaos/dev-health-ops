@@ -38,11 +38,13 @@ type RefusalError struct{ Reason Reason }
 func (e *RefusalError) Error() string        { return "workload: refused: " + string(e.Reason) }
 func (e *RefusalError) Is(target error) bool { return target == ErrRefused }
 
-// ReasonOf returns the Reason of a Resolve refusal, or "" for any other error.
-func ReasonOf(err error) Reason {
+// RefusalReason returns the reason word of a Resolve refusal (unknown,
+// disabled, uid_mismatch, no_audience, store_error), or "" for a nil or
+// non-refusal error. It is for logs and counters only.
+func RefusalReason(err error) string {
 	var r *RefusalError
 	if errors.As(err, &r) {
-		return r.Reason
+		return string(r.Reason)
 	}
 	return ""
 }

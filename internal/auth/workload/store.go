@@ -572,7 +572,7 @@ type ResolveInput struct {
 // Resolve maps a verified federated identity to its registered workload. It
 // reads the current rows on every call and caches nothing. Any refusal and
 // any store error is a *RefusalError: errors.Is(err, ErrRefused) holds, and the
-// Reason (ReasonOf) is for logs and counters, never for the client.
+// Reason (RefusalReason) is for logs and counters, never for the client.
 func (s *Store) Resolve(ctx context.Context, in ResolveInput) (Registration, error) {
 	reg, why, err := s.resolve(ctx, in)
 	switch {

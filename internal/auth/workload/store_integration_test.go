@@ -263,8 +263,8 @@ func TestResolveRefusals(t *testing.T) {
 		if !errors.Is(err, ErrRefused) {
 			t.Fatalf("Resolve = %v, want ErrRefused", err)
 		}
-		if got := ReasonOf(err); got != publicReason(want) {
-			t.Fatalf("ReasonOf = %q, want %q", got, publicReason(want))
+		if got := RefusalReason(err); got != string(publicReason(want)) {
+			t.Fatalf("RefusalReason = %q, want %q", got, string(publicReason(want)))
 		}
 		for _, v := range []string{in.Namespace, in.ServiceAccountName, in.ServiceAccountUID, in.Issuer, in.TrustDomain} {
 			if v != "" && strings.Contains(err.Error(), v) {
@@ -364,7 +364,7 @@ func TestResolveRefusals(t *testing.T) {
 		cancelled, cancel := context.WithCancel(ctx)
 		cancel()
 		_, err := e.reader.Resolve(cancelled, tuple("ns-x").input())
-		if !errors.Is(err, ErrRefused) || ReasonOf(err) != ReasonStoreError {
+		if !errors.Is(err, ErrRefused) || RefusalReason(err) != string(ReasonStoreError) {
 			t.Fatalf("Resolve on a dead context = %v, want ErrRefused / store_error", err)
 		}
 	})

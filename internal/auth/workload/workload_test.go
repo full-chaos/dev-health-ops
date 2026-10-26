@@ -87,15 +87,15 @@ func TestValidators(t *testing.T) {
 func TestRefusalErrorIsErrRefusedAndCarriesOnlyTheReasonWord(t *testing.T) {
 	for _, r := range []Reason{ReasonUnknown, ReasonDisabled, ReasonUIDMismatch, ReasonNoAudience, ReasonStoreError} {
 		err := error(&RefusalError{Reason: r})
-		if !errors.Is(err, ErrRefused) || ReasonOf(err) != r {
-			t.Errorf("%s: Is/ReasonOf broken", r)
+		if !errors.Is(err, ErrRefused) || RefusalReason(err) != string(r) {
+			t.Errorf("%s: Is/RefusalReason broken", r)
 		}
 		if err.Error() != "workload: refused: "+string(r) {
 			t.Errorf("%s: text %q", r, err.Error())
 		}
 	}
-	if ReasonOf(ErrRefused) != "" || ReasonOf(nil) != "" {
-		t.Error("ReasonOf of a non-refusal must be empty")
+	if RefusalReason(ErrRefused) != "" || RefusalReason(nil) != "" {
+		t.Error("RefusalReason of a non-refusal must be empty")
 	}
 	want := map[reason]Reason{reasonUnknown: ReasonUnknown, reasonBadInput: ReasonUnknown, reasonWrongKind: ReasonUnknown,
 		reasonWorkloadDisabled: ReasonDisabled, reasonPrincipalOff: ReasonDisabled, reasonBindingDisabled: ReasonDisabled,

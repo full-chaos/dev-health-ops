@@ -87,3 +87,63 @@ func TestSendInviteEmailDeliversTheInviteMessage(t *testing.T) {
 		}
 	}
 }
+
+func inviteSink(t *testing.T) (*smtpcapture.Server, *handlers) {
+	t.Helper()
+	sink := smtpcapture.Start(t)
+	host, port := sink.HostPort(t)
+	t.Setenv("EMAIL_PROVIDER", "smtp")
+	t.Setenv("EMAIL_FROM_ADDRESS", "Dev Health <invites@example.test>")
+	t.Setenv("SMTP_HOST", host)
+	t.Setenv("SMTP_PORT", strconv.Itoa(port))
+	for _, name := range []string{"EMAIL_API_KEY", "RESEND_API_KEY", "SMTP_USERNAME", "SMTP_PASSWORD", "SMTP_USE_TLS", "SMTP_TLS_CA_FILE", "SMTP_TLS_SERVER_NAME"} {
+		t.Setenv(name, "")
+		if err := os.Unsetenv(name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sender, err := mail.NewSenderFromEnv(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return sink, &handlers{
+		logger:  slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)),
+		invites: InviteConfig{Mail: sender, AppBaseURL: "https://app.example.test/", AppBaseURLSet: true},
+	}
+}
+
+// The org name and the inviter's name are set by an org admin and the mail goes to a third party: both reach the body escaped.
+func TestSendInviteEmailEscapesTheOrgAndInviterNames(t *testing.T) {
+	sink, h := inviteSink(t)
+	invite := &orgInvite{ID: uuid.New(), OrgID: uuid.New(), Email: "invitee@example.test"}
+	h.sendInviteEmail(context.Background(), `Acme <script>alert(1)</script>`, `Eve "<img src=x onerror=y>" & Co`, invite, "tok.en")
+	got := sink.Take(t).Data
+	for _, bad := range []string{"<script", "<img src=x"} {
+		if strings.Contains(got, bad) {
+			t.Errorf("markup %q reached the body:\n%s", bad, got)
+		}
+	}
+	for _, want := range []string{"Acme &lt;script&gt;alert(1)&lt;/script&gt;", "Eve &#34;&lt;img src=x onerror=y&gt;&#34; &amp; Co"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("body lacks %q:\n%s", want, got)
+		}
+	}
+}
+
+// The Subject is a header, not HTML: a line break in the org name must not start another header line.
+func TestSendInviteEmailSubjectCannotInjectAHeader(t *testing.T) {
+	for label, orgName := range map[string]string{"crlf": "Acme\r\nBcc: x@example.test", "bare lf": "Acme\nBcc: x@example.test", "bare cr": "Acme\rBcc: x@example.test"} {
+		sink, h := inviteSink(t)
+		invite := &orgInvite{ID: uuid.New(), OrgID: uuid.New(), Email: "invitee@example.test"}
+		h.sendInviteEmail(context.Background(), orgName, "Ada", invite, "tok.en")
+		got := sink.Take(t).Data
+		for _, line := range strings.Split(strings.ReplaceAll(got, "\r\n", "\n"), "\n") {
+			if strings.HasPrefix(line, "Bcc:") {
+				t.Errorf("%s: a Bcc header line was injected:\n%s", label, got)
+			}
+		}
+		if !strings.Contains(got, "Subject: You're invited to join Acme") {
+			t.Errorf("%s: the invite was not sent with the org name in the subject:\n%s", label, got)
+		}
+	}
+}

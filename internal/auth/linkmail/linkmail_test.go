@@ -366,3 +366,26 @@ func TestHostileNameStaysOutOfTheHeaders(t *testing.T) {
 		}
 	}
 }
+
+// A display name reaches the greeting escaped, in every purpose that greets by name.
+func TestHostileNameIsEscapedInEveryGreeting(t *testing.T) {
+	const hostile = `<script>alert(1)</script> & "q" 'z'`
+	for _, purpose := range []local.Purpose{local.PurposeEmailVerification, local.PurposePasswordReset, local.PurposeAccountExists} {
+		p := &fakeProvider{}
+		s := newSender(t, p, 1, 4, nil, nil)
+		m := message(purpose, true)
+		name := hostile
+		m.FullName = &name
+		if err := s.Send(context.Background(), m); err != nil {
+			t.Fatal(err)
+		}
+		closeIn(t, s)
+		if p.count() != 1 {
+			t.Fatalf("%s: %d provider calls, want 1", purpose, p.count())
+		}
+		body := p.got[0].HTML
+		if strings.Contains(body, "<script") || !strings.Contains(body, "&lt;script&gt;alert(1)&lt;/script&gt; &amp; &#34;q&#34; &#39;z&#39;") {
+			t.Errorf("%s: greeting not escaped:\n%s", purpose, body)
+		}
+	}
+}

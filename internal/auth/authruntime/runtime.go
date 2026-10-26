@@ -495,6 +495,12 @@ func configureWithRoutes(
 		}
 		closeLimited()
 	}
+	workloadRoutes, err := exchangeRoutes(cfg, logger, store.Pool(), schemaID, signer)
+	if err != nil {
+		closeStore()
+		return nil, err
+	}
+	routes = append(routes, workloadRoutes...)
 	routes = append(routes, authapi.WellKnownRoutes(authapi.WellKnownDeps{
 		Keys: signer, IssuerURL: cfg.TokenIssuerURL, Logger: logger,
 	})...)

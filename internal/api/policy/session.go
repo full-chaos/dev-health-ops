@@ -19,7 +19,7 @@ type SessionRow struct {
 	PrincipalID uuid.UUID
 	Revoked     bool
 	// LegacyTokenVersion is the users.token_version the session began at; nil
-	// for a session from before the pin existed.
+	// is refused.
 	LegacyTokenVersion *int64
 }
 
@@ -86,8 +86,9 @@ func (a *Authenticator) checkSession(ctx context.Context, claims map[string]any,
 		a.logger.WarnContext(ctx, "api access denied: session revoked", slog.String("user_id", subject.String()))
 		return errRejected
 	case row.LegacyTokenVersion == nil:
-		a.logger.InfoContext(ctx, "api access: session has no token_version pin",
+		a.logger.WarnContext(ctx, "api access denied: session has no token_version pin",
 			slog.String("user_id", subject.String()), slog.String("reason_code", "session_pin_missing"))
+		return errRejected
 	case *row.LegacyTokenVersion != userVersion:
 		a.logger.WarnContext(ctx, "api access denied: session predates the token_version", slog.String("user_id", subject.String()))
 		return errRejected

@@ -67,6 +67,7 @@ func TestTheConsoleProviderNeverLogsTheRecipient(t *testing.T) {
 	previous := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
 	defer slog.SetDefault(previous)
+	t.Setenv("EMAIL_PROVIDER", "console")
 	provider, err := mail.NewSenderFromEnv(nil)
 	if err != nil {
 		t.Fatal(err)

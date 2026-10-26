@@ -1165,6 +1165,8 @@ services:
       # reads (rate-limit keys, audit rows): its fixed address on the planes
       # network, never a subnet. Every other peer is its own client.
       TRUSTED_PROXIES: *router-address
+      # Off unless the environment says so (the acp corpus leg only; helm go-api-deployment.yaml sets it from authService.usersOwned).
+      AUTH_USERS_OWNED: ${AUTH_USERS_OWNED:-false}
       # Observability: OpenTelemetry (traces and metrics to SigNoz). Off by
       # default.
       OTEL_ENABLED: ${OTEL_ENABLED:-false}

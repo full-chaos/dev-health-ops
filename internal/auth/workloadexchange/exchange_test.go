@@ -575,13 +575,18 @@ func TestReviewConfigRefusesWhatCannotReviewSafely(t *testing.T) {
 		"userinfo":          {APIServerURL: "https://u:p@kubernetes.example.test", CAFile: ca, ReviewerTokenFile: token, TrustDomain: testTrustDomain},
 		"empty port":        {APIServerURL: "https://kubernetes.example.test:", CAFile: ca, ReviewerTokenFile: token, TrustDomain: testTrustDomain},
 		"empty port, slash": {APIServerURL: "https://kubernetes.example.test:/", CAFile: ca, ReviewerTokenFile: token, TrustDomain: testTrustDomain},
+		"non-numeric port":  {APIServerURL: "https://kubernetes.example.test:x", CAFile: ca, ReviewerTokenFile: token, TrustDomain: testTrustDomain},
+		"port zero":         {APIServerURL: "https://kubernetes.example.test:0", CAFile: ca, ReviewerTokenFile: token, TrustDomain: testTrustDomain},
+		"port 65536":        {APIServerURL: "https://kubernetes.example.test:65536", CAFile: ca, ReviewerTokenFile: token, TrustDomain: testTrustDomain},
+		"port 99999":        {APIServerURL: "https://kubernetes.example.test:99999", CAFile: ca, ReviewerTokenFile: token, TrustDomain: testTrustDomain},
+		"signed port":       {APIServerURL: "https://kubernetes.example.test:+443", CAFile: ca, ReviewerTokenFile: token, TrustDomain: testTrustDomain},
 		"ipv6 empty port":   {APIServerURL: "https://[fd00::1]:", CAFile: ca, ReviewerTokenFile: token, TrustDomain: testTrustDomain},
 	} {
 		if _, err := NewReviewValidator(cfg); err == nil {
 			t.Errorf("%s: accepted", name)
 		}
 	}
-	for _, origin := range []string{"https://kubernetes.example.test", "https://kubernetes.example.test/", "https://kubernetes.example.test:443", "https://10.43.0.1:6443"} {
+	for _, origin := range []string{"https://kubernetes.example.test", "https://kubernetes.example.test/", "https://kubernetes.example.test:1", "https://kubernetes.example.test:443", "https://kubernetes.example.test:65535", "https://10.43.0.1:6443"} {
 		if _, err := NewReviewValidator(ReviewConfig{APIServerURL: origin, CAFile: ca, ReviewerTokenFile: token, TrustDomain: testTrustDomain}); err != nil {
 			t.Errorf("origin %s refused: %v", origin, err)
 		}

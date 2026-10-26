@@ -33,6 +33,8 @@ internal/apiservice	endpoint_profile_rows_test.go
 internal/apiservice	endpoint_profile_scan_test.go
 internal/apiservice	githubapp_config.go
 internal/apiservice/admin	routeguard_test.go
+internal/apiservice/authflowvenue	auth_flow_venue_oracle_integration_test.go
+internal/apiservice/authflowvenue	linkformat_test.go
 internal/apiservice/billingvenue	billing_refund_webhook_integration_test.go
 internal/apiservice/billingvenue	billing_webhook_venue_oracle_integration_test.go
 internal/atlassianteams	absence_test.go
@@ -220,6 +222,7 @@ internal/cigates/frozengoldens	frozengoldens_test.go
 internal/cigates/integrationshards	ci_script_helpers_test.go
 internal/cigates/integrationshards	integration_sharding_test.go
 internal/cigates/integrationshards	shard_start_order_test.go
+internal/cigates/integrationshards	side_effect_hooks_test.go
 internal/cigates/livee2e	cli.go
 internal/cigates/nopython	nopython_test.go
 internal/cigates/nopython	tests_python_test.go
@@ -258,6 +261,7 @@ internal/cigates/splitshards	ci_script_helpers_test.go
 internal/cigates/splitshards	split_package_shards_test.go
 internal/cigates/testshard	providersync_test.go
 internal/cigates/testshard	raceshard_test.go
+internal/cigates/testshard	securityfresh_test.go
 internal/cigates/testshard	standin_test.go
 internal/cigates/testshard	trimpath_test.go
 internal/cigates/testshard	unweightedpkg_test.go

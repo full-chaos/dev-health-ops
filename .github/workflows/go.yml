@@ -164,6 +164,8 @@ on:
       - 'ci/auth_corpus_set_env.sh'
       - 'ci/auth_corpus_external.override.yml'
       - 'ci/auth_corpus_external.acp.override.yml'
+      # CHAOS-11596: the merge queue path set, its relevance script and the stub the venue test reads.
+      - 'ci/auth_corpus_**'
       - '.github/workflows/venue-oracles.yml'
       - 'ci/auth_k8s/**'
       # The migration matrix's evidence columns are validated by a Go

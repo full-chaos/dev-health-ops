@@ -27,19 +27,19 @@ func corpusQueueRepo(t *testing.T, withPaths bool) string {
 	root := repoRoot(t)
 	dir := t.TempDir()
 	corpusQueueGit(t, dir, "init", "-q", "-b", "main")
-	names := []string{"auth_corpus_queue_relevance.sh"}
+	names := []string{"ci/auth_corpus_queue_relevance.sh"}
 	if withPaths {
-		names = append(names, "auth_corpus_paths.txt")
+		names = append(names, "ci/auth_corpus_paths.txt")
 	}
 	for _, name := range names {
-		raw, err := os.ReadFile(filepath.Join(root, "ci", name))
+		raw, err := os.ReadFile(filepath.Join(root, name))
 		if err != nil {
 			t.Fatal(err)
 		}
 		if err := os.MkdirAll(filepath.Join(dir, "ci"), 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(filepath.Join(dir, "ci", name), raw, 0o755); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, name), raw, 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}

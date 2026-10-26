@@ -205,3 +205,35 @@ func TestAWorkloadTokenIsRefusedOnWidenedRows(t *testing.T) {
 		}
 	}
 }
+
+// Every widened row carries its exact class list: the HS256 and user access
+// tokens, plus org_context_header on the four X-Org-Id telemetry rows and
+// ops_refresh_token on logout.
+func TestWidenedRowsCarryTheirExactClassList(t *testing.T) {
+	extra := map[string]string{
+		"GET /api/v1/telemetry/status":   "org_context_header",
+		"POST /api/v1/telemetry/opt-in":  "org_context_header",
+		"POST /api/v1/telemetry/opt-out": "org_context_header",
+		"POST /api/v1/telemetry/report":  "org_context_header",
+		"POST /api/v1/auth/logout":       classRefresh,
+	}
+	widened, withExtra := 0, 0
+	for _, row := range apiRows(t) {
+		if validation, _ := row["access_token_validation"].(map[string]any); validation == nil {
+			continue
+		}
+		want := []string{classHS256, classUserTok}
+		if more, ok := extra[rowProfile(row)]; ok {
+			want = append(want, more)
+			withExtra++
+		}
+		slices.Sort(want)
+		if got := rowClasses(row); !slices.Equal(got, want) {
+			t.Errorf("%s: classes %v, want %v", row["id"], got, want)
+		}
+		widened++
+	}
+	if widened != 196 || withExtra != len(extra) {
+		t.Errorf("checked %d widened rows (%d with an extra class), want 196 and %d", widened, withExtra, len(extra))
+	}
+}

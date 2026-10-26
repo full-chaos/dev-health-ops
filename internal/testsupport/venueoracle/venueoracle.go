@@ -439,6 +439,11 @@ type DiffOptions struct {
 	// "10410 login no-store"): POST /api/v1/auth/login answers Cache-Control: no-store and Pragma: no-cache, which the
 	// go-api goldens never carried (intendedNoStore). Only the external ACP leg that forwards local login sets it.
 	LoginNoStore bool
+	// CredentialsNoStore declares the same divergence for the six credentials routes of auth-service (register, verify,
+	// resend-verification, forgot-password, reset-password, change-password), D6129 and the 10410 ruling: exactly
+	// Cache-Control: no-store and Pragma: no-cache on a golden that carries neither. Only a run that forwards the
+	// credentials aggregate sets it.
+	CredentialsNoStore bool
 	// orglessHeaderNames is set by Diff: every header name any Python answer of the run carries. A refusal's headers
 	// must come from it (or be a Volatile header or content-length); nil refuses the rule, so a direct Compare call
 	// cannot skip headers without it.

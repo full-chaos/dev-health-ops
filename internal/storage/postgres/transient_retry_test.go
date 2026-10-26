@@ -27,13 +27,13 @@ func TestDialRetryStopsOnCancelAndFinalErrors(t *testing.T) {
 	retry := DialRetry{Budget: time.Minute, Sleep: func(context.Context, time.Duration) { waits++ }}
 	final := errors.New("final")
 	calls := 0
-	if err := retry.Do(context.Background(), func(context.Context, int) error { calls++; return final }); !errors.Is(err, final) || calls != 1 || waits != 0 {
+	if err := retry.Do(context.Background(), func(context.Context) error { calls++; return final }); !errors.Is(err, final) || calls != 1 || waits != 0 {
 		t.Fatalf("final error: err=%v calls=%d waits=%d", err, calls, waits)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	calls = 0
-	if err := retry.Do(ctx, func(context.Context, int) error { calls++; return syscall.ECONNREFUSED }); !errors.Is(err, syscall.ECONNREFUSED) || calls != 1 || waits != 0 {
+	if err := retry.Do(ctx, func(context.Context) error { calls++; return syscall.ECONNREFUSED }); !errors.Is(err, syscall.ECONNREFUSED) || calls != 1 || waits != 0 {
 		t.Fatalf("canceled: err=%v calls=%d waits=%d", err, calls, waits)
 	}
 }

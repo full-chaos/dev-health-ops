@@ -276,7 +276,7 @@ func (loop *Loop) Start(ctx context.Context) error {
 				"retry_in", wait.String(),
 			)
 		},
-	}.Do(loopCtx, func(stepCtx context.Context, _ int) error {
+	}.Do(loopCtx, func(stepCtx context.Context) error {
 		err := loop.step(stepCtx, loop.clock.Now())
 		if err != nil && (errors.Is(err, ErrDegradedStage) || errors.Is(err, ErrStepEnvelopeExceeded)) {
 			absorbed = err

@@ -242,7 +242,7 @@ func (loop *Loop) Start(ctx context.Context) error {
 				"retry_in", wait.String(),
 			)
 		},
-	}.Do(loopCtx, func(stepCtx context.Context, _ int) error {
+	}.Do(loopCtx, func(stepCtx context.Context) error {
 		return loop.step(stepCtx, loop.clock.Now())
 	})
 	if err != nil {

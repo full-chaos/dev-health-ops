@@ -279,6 +279,15 @@ var postgresSnapshotQueries = []string{
 	   LEFT JOIN pg_database d ON d.oid = s.setdatabase
 	   LEFT JOIN pg_roles r ON r.oid = s.setrole`,
 	`SELECT 'tablespace ' || spcname FROM pg_tablespace`,
+	// Server settings a reload or restart applies to every database.
+	`SELECT 'setting ' || name || '=' || setting FROM pg_settings WHERE context IN ('postmaster', 'sighup')`,
+	`SELECT 'parameter-acl ' || parname || ' ' || coalesce(array_to_string(paracl, ','), '') FROM pg_parameter_acl`,
+	`SELECT 'replication-slot ' || slot_name FROM pg_replication_slots`,
+	`SELECT 'prepared-xact ' || gid FROM pg_prepared_xacts`,
+	// The admin database the shared server boots with; callers get scratch databases.
+	`SELECT 'admin-db-relation ' || n.nspname || '.' || c.relname FROM pg_class c
+	   JOIN pg_namespace n ON n.oid = c.relnamespace
+	  WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')`,
 }
 
 func postgresSnapshot(ctx context.Context, dsn string) ([]string, error) {
@@ -320,6 +329,10 @@ var clickHouseSnapshotQueries = []string{
 	        toString(with_admin_option)) FROM system.role_grants`,
 	`SELECT concat('named-collection ', name) FROM system.named_collections`,
 	`SELECT concat('function ', name) FROM system.functions WHERE origin = 'SQLUserDefined'`,
+	// Objects in databases no caller owns: the boot database and default.
+	`SELECT concat('shared-db-table ', database, '.', name) FROM system.tables
+	  WHERE database NOT IN ('system', 'INFORMATION_SCHEMA', 'information_schema')`,
+	`SELECT concat('dictionary ', database, '.', name) FROM system.dictionaries`,
 }
 
 func clickHouseSnapshot(ctx context.Context, dsn string) ([]string, error) {

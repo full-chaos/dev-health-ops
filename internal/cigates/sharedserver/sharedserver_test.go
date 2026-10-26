@@ -22,7 +22,28 @@ import (
 const (
 	optInCall = "containers.RunWithSharedServers("
 	ident     = `[A-Za-z_][A-Za-z0-9_]*`
+	// name is a literal object name; a keyword there (`IF` of IF NOT EXISTS
+	// followed by a built name) is not one, see literalName.
+	name = `(?P<name>[A-Za-z_][A-Za-z0-9_]*)`
 )
+
+// literalName reports whether a match of pattern on line names a literal
+// object: when the pattern captures a name, a keyword in that place means the
+// real name is built at run time ("CREATE DATABASE IF NOT EXISTS " + db).
+func literalName(pattern *regexp.Regexp, line string) bool {
+	index := pattern.SubexpIndex("name")
+	if index < 0 {
+		return true
+	}
+	for _, match := range pattern.FindAllStringSubmatch(line, -1) {
+		switch strings.ToUpper(match[index]) {
+		case "IF", "OR", "NOT":
+		default:
+			return true
+		}
+	}
+	return false
+}
 
 // serverWide lists statements whose effect is not limited to the caller's
 // scratch database. A name built at run time (containers.RoleName) is unique
@@ -34,9 +55,9 @@ var serverWide = []struct {
 	{"ALTER SYSTEM", regexp.MustCompile(`(?i)\bALTER\s+SYSTEM\b`)},
 	{"pg_reload_conf", regexp.MustCompile(`(?i)\bpg_reload_conf\s*\(`)},
 	{"CREATE TABLESPACE", regexp.MustCompile(`(?i)\bCREATE\s+TABLESPACE\b`)},
-	{"ALTER ROLE/USER with a literal name", regexp.MustCompile(`(?i)\bALTER\s+(ROLE|USER)\s+` + ident)},
+	{"ALTER ROLE/USER with a literal name", regexp.MustCompile(`(?i)\bALTER\s+(ROLE|USER)\s+` + name)},
 	{"CREATE access entity with a literal name", regexp.MustCompile(
-		`(?i)\bCREATE\s+(ROLE|USER|QUOTA|SETTINGS\s+PROFILE|ROW\s+POLICY)\s+(IF\s+NOT\s+EXISTS\s+|OR\s+REPLACE\s+)?` + ident)},
+		`(?i)\bCREATE\s+(ROLE|USER|QUOTA|SETTINGS\s+PROFILE|ROW\s+POLICY)\s+(IF\s+NOT\s+EXISTS\s+|OR\s+REPLACE\s+)?` + name)},
 	{"ClickHouse named collection", regexp.MustCompile(`(?i)\b(CREATE|ALTER)\s+NAMED\s+COLLECTION\b`)},
 	{"ClickHouse SQL user-defined function", regexp.MustCompile(
 		`(?i)\bCREATE\s+(OR\s+REPLACE\s+)?FUNCTION\s+(IF\s+NOT\s+EXISTS\s+)?` + ident + `\s+(ON\s+CLUSTER\s+\S+\s+)?AS\s*\(`)},
@@ -50,6 +71,15 @@ var serverWide = []struct {
 		"\\bSYSTEM\\s+(STOP|START)\\s+(TTL MERGES|MERGES|MOVES|FETCHES|REPLICATED SENDS|DISTRIBUTED SENDS|" +
 			"REPLICATION QUEUES|LISTEN)\\s*[\"`]\\s*($|[,);])")},
 	{"KILL QUERY", regexp.MustCompile(`(?i)\bKILL\s+QUERY\b`)},
+	{"CREATE/ALTER DATABASE with a literal name", regexp.MustCompile(
+		`(?i)\b(CREATE|ALTER)\s+DATABASE\s+(IF\s+NOT\s+EXISTS\s+)?` + name)},
+	{"object in a shared database (default, worker_test)", regexp.MustCompile(
+		`(?i)\bCREATE\s+(OR\s+REPLACE\s+)?(TEMPORARY\s+)?(TABLE|VIEW|MATERIALIZED\s+VIEW|DICTIONARY)\s+(IF\s+NOT\s+EXISTS\s+)?` +
+			"[`\"]?(default|worker_test)[`\"]?\\.")},
+	{"replication slot", regexp.MustCompile(`(?i)\bpg_create_(physical|logical)_replication_slot\b`)},
+	{"PREPARE TRANSACTION", regexp.MustCompile(`(?i)\bPREPARE\s+TRANSACTION\b`)},
+	{"GRANT/REVOKE ON PARAMETER", regexp.MustCompile(`(?i)\b(GRANT|REVOKE)\b.*\bON\s+PARAMETER\b`)},
+	{"COMMENT ON a cluster object", regexp.MustCompile(`(?i)\bCOMMENT\s+ON\s+(ROLE|DATABASE|TABLESPACE)\b`)},
 	{"Instance.Container access", regexp.MustCompile(`\.Container\.`)},
 }
 
@@ -118,7 +148,7 @@ func scan(t *testing.T, root string) ([]string, []finding) {
 					continue
 				}
 				for _, statement := range serverWide {
-					if statement.pattern.MatchString(line) {
+					if statement.pattern.MatchString(line) && literalName(statement.pattern, line) {
 						findings = append(findings, finding{filepath.ToSlash(relFile), number + 1, statement.name})
 					}
 				}

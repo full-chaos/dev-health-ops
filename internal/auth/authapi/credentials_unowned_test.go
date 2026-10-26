@@ -3,11 +3,11 @@ package authapi
 import (
 	"io"
 	"log/slog"
-	"time"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 )

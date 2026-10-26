@@ -14,7 +14,6 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/full-chaos/dev-health-ops/internal/auth/authapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/authconfig"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
@@ -32,8 +31,8 @@ type proxiedAuthRoute struct {
 
 // proxiedAuthRoutes is a copy of go-api's route table (internal/apiservice
 // authproxy.go sessionProxyRoutes and routeProxyRoutes); the drift test below
-// fails when the two differ. The last entry is the session issue route go-api
-// calls itself (authapi.PatternIssueSession); it is not in that table.
+// fails when the two differ. The session issue route (authapi.PatternIssueSession)
+// is not listed: go-api calls it with a service credential and never forwards it.
 var proxiedAuthRoutes = []proxiedAuthRoute{
 	{"POST /api/v1/auth/refresh", "AuthSessions", 2},
 	{"POST /api/v1/auth/logout", "AuthSessions", 2},
@@ -50,7 +49,6 @@ var proxiedAuthRoutes = []proxiedAuthRoute{
 	{"GET /api/v1/auth/saml/{provider_id}/metadata", "AuthSAML", 0},
 	{"POST /api/v1/auth/saml/{provider_id}/initiate", "AuthSAML", 0},
 	{"POST /api/v1/auth/saml/{provider_id}/acs", "AuthSAML", 0},
-	{"POST " + authapi.PatternIssueSession, "AuthSessions", 2},
 }
 
 var goAPITableLine = regexp.MustCompile(`(?m)^\t"((?:GET|POST) /[^"]+)":\s+(Auth[A-Za-z]+),$`)
@@ -69,9 +67,7 @@ func TestProxiedRouteCopyMatchesGoAPIRouteTable(t *testing.T) {
 	}
 	copied := map[string]string{}
 	for _, r := range proxiedAuthRoutes {
-		if r.key != "POST "+authapi.PatternIssueSession {
-			copied[r.key] = r.aggregate
-		}
+		copied[r.key] = r.aggregate
 	}
 	for key, aggregate := range table {
 		if copied[key] != aggregate {
@@ -142,12 +138,11 @@ func mountedAuthRoutes(t *testing.T, env map[string]string) map[string]bool {
 	return mounted
 }
 
-// pendingPhase1Gap is the phase 1 sessions gap: pods without the session keys
-// mount none of these. It is empty once they answer 503 there.
+// pendingPhase1Gap: pods without the session keys mount neither of these; a
+// separate change adds the 503 answer, and these entries go with it.
 var pendingPhase1Gap = map[string]bool{
-	"POST /api/v1/auth/refresh":           true,
-	"POST /api/v1/auth/logout":            true,
-	"POST " + authapi.PatternIssueSession: true,
+	"POST /api/v1/auth/refresh": true,
+	"POST /api/v1/auth/logout":  true,
 }
 
 func TestEveryGoAPIProxiedAuthRouteIsMountedInEveryAuthServicePhase(t *testing.T) {

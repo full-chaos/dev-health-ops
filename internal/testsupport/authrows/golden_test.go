@@ -235,8 +235,19 @@ func TestScriptExportedValueIsTheForwardedSet(t *testing.T) {
 	if assign == "" {
 		t.Fatalf("the script does not assign %s", EnvForwarded)
 	}
+	// The assignment calls the script's join helper: it runs with that helper in front of it, nothing else of the script.
+	text := string(raw)
+	start := strings.Index(text, "\njoin_comma() {")
+	if start < 0 {
+		t.Fatal("the script has no join_comma helper")
+	}
+	end := strings.Index(text[start+1:], "\n}\n")
+	if end < 0 {
+		t.Fatal("join_comma is not closed")
+	}
+	helper := text[start+1 : start+1+end+3]
 	for _, c := range []struct{ array, want string }{{"", ""}, {"sessions", "sessions"}, {"sessions local_login social", "sessions,local_login,social"}} {
-		out, err := exec.Command("bash", "-c", "FORWARDED=("+c.array+"); "+assign+`; printf '%s' "$`+EnvForwarded+`"`).Output()
+		out, err := exec.Command("bash", "-c", "set -euo pipefail\n"+helper+"\nFORWARDED=("+c.array+"); "+assign+`; printf '%s' "$`+EnvForwarded+`"`).Output()
 		if err != nil || string(out) != c.want {
 			t.Errorf("FORWARDED=(%s) exports %q (%v), want %q", c.array, out, err, c.want)
 		}

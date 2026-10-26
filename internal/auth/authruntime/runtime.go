@@ -82,7 +82,7 @@ const maxInFlightRequests = 64
 // sessionRoutes is the service's mounted route set when cfg.Session is
 // enabled, and nothing otherwise: the session routes (CHAOS-10228) and
 // go-api's compatibility refresh, logout and social-login, and login when the
-// lockout key is set too. Without the session
+// lockout key is set too (until then, login answers a 503 stub). Without the session
 // secrets the service stays as CHAOS-4881 built it, dormant: every path
 // receives the 404 envelope and no token is issued. No deployed stack sets
 // those secrets yet, and go-api routes to these only behind its AUTH_PROXY_*
@@ -178,6 +178,9 @@ func compatRoutes(
 	routes, err := authapi.CompatRoutes(deps)
 	if err != nil {
 		return nil, err
+	}
+	if !cfg.Session.LoginEnabled {
+		routes = append(routes, authapi.LoginNotEnabledRoute())
 	}
 	var link social.Domain
 	if cfg.Session.SocialLinkRoutes {

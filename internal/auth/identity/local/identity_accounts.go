@@ -68,7 +68,7 @@ func userOf(p *identity.Principal) *User {
 	if p == nil {
 		return nil
 	}
-	return &User{ID: p.ID, IsActive: p.IsActive, IsVerified: p.IsVerified, PasswordHash: p.PasswordHash, AuthProvider: p.AuthProvider}
+	return &User{ID: p.ID, IsActive: p.IsActive, IsVerified: p.IsVerified, PasswordHash: p.PasswordHash, AuthProvider: p.AuthProvider, FullName: p.FullName}
 }
 
 func (a IdentityAccounts) ByEmail(ctx context.Context, email string) (*User, error) {

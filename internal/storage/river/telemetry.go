@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/full-chaos/dev-health-ops/internal/storage/postgres"
+	"github.com/full-chaos/dev-health-ops/internal/platform/dialclass"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -288,7 +288,7 @@ func (sampler *QueueTelemetrySampler) sample(ctx context.Context) (QueueTelemetr
 // a genuine, non-transient failure, so every caller classifying retryable
 // causes by unwrapping to context.DeadlineExceeded/context.Canceled (see
 // health.Registry) saw a slow dependency exactly like a real refusal. A
-// refused or pooler-refused dial keeps postgres.ErrDialUnreachable for the
+// refused or pooler-refused dial keeps dialclass.ErrUnreachable for the
 // same reason (CHAOS-11608).
 func queueTelemetryReadFailure(err error) error {
 	switch {
@@ -296,8 +296,8 @@ func queueTelemetryReadFailure(err error) error {
 		return fmt.Errorf("%w: %w", ErrQueueTelemetryUnavailable, context.DeadlineExceeded)
 	case errors.Is(err, context.Canceled):
 		return fmt.Errorf("%w: %w", ErrQueueTelemetryUnavailable, context.Canceled)
-	case postgres.IsTransientDialError(err):
-		return fmt.Errorf("%w: %w", ErrQueueTelemetryUnavailable, postgres.ErrDialUnreachable)
+	case dialclass.IsTransient(err):
+		return fmt.Errorf("%w: %w", ErrQueueTelemetryUnavailable, dialclass.ErrUnreachable)
 	default:
 		return ErrQueueTelemetryUnavailable
 	}

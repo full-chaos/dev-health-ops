@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/full-chaos/dev-health-ops/internal/storage/postgres"
+	"github.com/full-chaos/dev-health-ops/internal/platform/dialclass"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakepg"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -57,8 +57,8 @@ func TestOnceKeepsARefusedDialTransientWithoutDriverText(t *testing.T) {
 				})
 			}
 			err := Once(context.Background(), NewPool(dialClassPool(t, addr)))
-			if !errors.Is(err, postgres.ErrDialUnreachable) || !postgres.IsTransientDialError(err) {
-				t.Fatalf("Once = %v, want a transient error wrapping postgres.ErrDialUnreachable", err)
+			if !errors.Is(err, dialclass.ErrUnreachable) || !dialclass.IsTransient(err) {
+				t.Fatalf("Once = %v, want a transient error wrapping dialclass.ErrUnreachable", err)
 			}
 			if errors.Is(err, context.DeadlineExceeded) {
 				t.Fatalf("Once = %v, a refused dial is not a timeout", err)
@@ -91,7 +91,7 @@ func TestOnceKeepsAWrongPasswordAndACancelNonTransient(t *testing.T) {
 			if err == nil {
 				t.Fatal("Once = nil, want a failure")
 			}
-			if postgres.IsTransientDialError(err) || errors.Is(err, postgres.ErrDialUnreachable) {
+			if dialclass.IsTransient(err) || errors.Is(err, dialclass.ErrUnreachable) {
 				t.Fatalf("Once = %v, classified transient", err)
 			}
 		})

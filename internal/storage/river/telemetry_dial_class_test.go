@@ -10,7 +10,7 @@ import (
 	"syscall"
 	"testing"
 
-	"github.com/full-chaos/dev-health-ops/internal/storage/postgres"
+	"github.com/full-chaos/dev-health-ops/internal/platform/dialclass"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakepg"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -43,8 +43,8 @@ func TestQueueTelemetryReadFailureKeepsOnlyTheDialClass(t *testing.T) {
 			if !errors.Is(got, ErrQueueTelemetryUnavailable) {
 				t.Fatalf("queueTelemetryReadFailure = %v, want ErrQueueTelemetryUnavailable", got)
 			}
-			if postgres.IsTransientDialError(got) != tc.transient || errors.Is(got, postgres.ErrDialUnreachable) != tc.transient {
-				t.Fatalf("queueTelemetryReadFailure(%v) = %v, transient = %v, want %v", tc.err, got, postgres.IsTransientDialError(got), tc.transient)
+			if dialclass.IsTransient(got) != tc.transient || errors.Is(got, dialclass.ErrUnreachable) != tc.transient {
+				t.Fatalf("queueTelemetryReadFailure(%v) = %v, transient = %v, want %v", tc.err, got, dialclass.IsTransient(got), tc.transient)
 			}
 			if strings.Contains(got.Error(), "secret") || strings.Contains(got.Error(), "server login") {
 				t.Fatalf("queueTelemetryReadFailure leaked driver text: %v", got)
@@ -87,8 +87,8 @@ func TestQueueTelemetrySnapshotKeepsARealRefusedDialTransient(t *testing.T) {
 				t.Fatal(err)
 			}
 			_, err = sampler.Snapshot(context.Background())
-			if !errors.Is(err, ErrQueueTelemetryUnavailable) || !errors.Is(err, postgres.ErrDialUnreachable) {
-				t.Fatalf("Snapshot = %v, want ErrQueueTelemetryUnavailable wrapping postgres.ErrDialUnreachable", err)
+			if !errors.Is(err, ErrQueueTelemetryUnavailable) || !errors.Is(err, dialclass.ErrUnreachable) {
+				t.Fatalf("Snapshot = %v, want ErrQueueTelemetryUnavailable wrapping dialclass.ErrUnreachable", err)
 			}
 			if strings.Contains(err.Error(), addr) || strings.Contains(err.Error(), "server_login_retry") {
 				t.Fatalf("Snapshot leaked driver text: %v", err)

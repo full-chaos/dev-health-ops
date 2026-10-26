@@ -44,6 +44,8 @@ type Principal struct {
 	ID     uuid.UUID
 	Email  string
 	Active bool
+	// ServiceProvider is a principal of the service provider: it never signs in.
+	ServiceProvider bool
 }
 
 // LegacyMatch scopes the fallback to accounts go-api signed in before the

@@ -130,6 +130,8 @@ type Principal struct {
 	IsVerified   bool
 	AuthProvider *string
 	DisabledAt   *time.Time
+	// ServiceProvider is set by IdentityBySubject when the principal's public.users row is of the service provider.
+	ServiceProvider bool
 }
 
 // ByEmail returns the user whose login key is normalizedEmail (the output of

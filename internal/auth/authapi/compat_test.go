@@ -167,9 +167,13 @@ var recordedJWT = regexp.MustCompile(`"<jwt .*?\}>"`)
 type fakeLoginUsers struct {
 	byEmail   map[string]*local.User
 	projected []uuid.UUID
+	err       error
 }
 
 func (f *fakeLoginUsers) ByEmail(_ context.Context, email string) (*local.User, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
 	return f.byEmail[email], nil
 }
 

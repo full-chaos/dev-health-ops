@@ -224,15 +224,17 @@ func TestLoginLimitsPerClientAddressAndPerAccount(t *testing.T) {
 	assertRateLimited(t, "21st attempt from one address", login("198.51.100.8:5000", "", "fresh@example.com"))
 }
 
-func TestMalformedLoginBodiesCostNoAllowance(t *testing.T) {
+// A refused body is charged to the address (never the account) before its
+// audit row: the burst is limited, and the account budget is untouched.
+func TestMalformedLoginBodiesAreChargedToTheAddressOnly(t *testing.T) {
 	f := newCompatFixture(t)
-	for i := 0; i < 30; i++ {
+	for i := 0; i < 10; i++ {
 		if r := f.do(http.MethodPost, PatternCompatLogin, `{"email":"not an address","password":"x"}`, nil); r.Code != http.StatusUnprocessableEntity {
 			t.Fatalf("malformed login = %d", r.Code)
 		}
 	}
 	if r := f.do(http.MethodPost, PatternCompatLogin, loginBody(compatEmail, "wrong password", ""), nil); r.Code != http.StatusUnauthorized {
-		t.Fatalf("valid body after refused ones = %d, want 401", r.Code)
+		t.Fatalf("valid body after refused ones within the budget = %d, want 401", r.Code)
 	}
 }
 

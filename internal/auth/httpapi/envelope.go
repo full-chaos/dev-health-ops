@@ -53,6 +53,11 @@ const (
 	// CodeInternal is returned for a recovered panic or an unclassified
 	// handler failure. Its message is fixed and carries no detail.
 	CodeInternal Code = "internal_error"
+	// CodeUnavailable is passed to a limiter's ErrorWriter when the counter
+	// store cannot answer (DependencyFailure). It is no transport-error.v1
+	// code: WriteError renders it as CodeInternal, so a writer that serves a
+	// 503 of its own handles it before falling back to WriteError.
+	CodeUnavailable Code = "dependency_unavailable"
 )
 
 // message is the fixed, operator-safe text for each code.

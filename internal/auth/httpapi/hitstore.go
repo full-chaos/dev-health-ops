@@ -306,8 +306,9 @@ func (l *KeyedLimiter) TestCounted(ctx context.Context, key, path string) (bool,
 
 // LimitWith rejects a request once its (keyFunc(r), r.URL.Path) pair
 // exceeds its limiter, rendering the refusal with write. A store error is
-// the Python api's unhandled-error 500 (slowapi has no swallow_errors), never
-// a silent pass: it is logged with the limit's ID (never the caller key or
+// the Python api's unhandled-error 500 (slowapi has no swallow_errors), or a
+// 503 when it is a dependency failure (DependencyFailure), never a silent
+// pass: it is logged with the limit's ID (never the caller key or
 // path) and counted in RateLimitStoreErrors.
 func LimitWith(limiter *KeyedLimiter, keyFunc KeyFunc, write ErrorWriter) func(http.Handler) http.Handler {
 	limiter.Declare()
@@ -315,7 +316,11 @@ func LimitWith(limiter *KeyedLimiter, keyFunc KeyFunc, write ErrorWriter) func(h
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			allowed, err := limiter.AllowCounted(r.Context(), keyFunc(r), r.URL.Path)
 			if err != nil {
-				write(w, r, CodeInternal)
+				if DependencyFailure(err) {
+					write(w, r, CodeUnavailable)
+				} else {
+					write(w, r, CodeInternal)
+				}
 				return
 			}
 			if !allowed {

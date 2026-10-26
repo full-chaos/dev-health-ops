@@ -88,6 +88,10 @@ func (h handlers) socialLogin(w http.ResponseWriter, r *http.Request) {
 		}
 		refuse(w, http.StatusUnauthorized, "Invalid or expired provider token")
 		return
+	case errors.Is(err, oauthprovider.ErrMissingProviderID):
+		h.Logger.WarnContext(ctx, "social login refused: the provider returned an invalid user id", "provider", provider)
+		refuse(w, http.StatusBadRequest, providerUserIDInvalid)
+		return
 	case err != nil:
 		h.fail(w, r, "fetch provider profile", err)
 		return

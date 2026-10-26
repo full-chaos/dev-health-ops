@@ -506,6 +506,12 @@ func (h handlers) oauthCallback(w http.ResponseWriter, r *http.Request) {
 	// (verifyAndClearLoginNonceCookie, loginnonce.go).
 	claims, err := h.oauthExchangeAndFetch(ctx, w, r, row, providerID, providerType, stateToken, code)
 	if err != nil {
+		if errors.Is(err, oauthprovider.ErrMissingProviderID) {
+			h.Logger.WarnContext(ctx, "sso sign-in refused: the identity provider returned an invalid user id", "protocol", "oauth")
+			h.recordSSOAuthenticatedDenial(ctx, w, r, row.OrgID, providerID, err.Error(), http.StatusBadRequest,
+				invalidProviderIDDetail(), "oauth", "provider_profile")
+			return
+		}
 		if errors.Is(err, errOAuthNoVerifiedEmail) {
 			h.recordSSOAuthenticatedDenial(ctx, w, r, row.OrgID, providerID, err.Error(), http.StatusForbidden,
 				"No verified email address is available from this OAuth provider", "oauth", "email_verification")
@@ -689,6 +695,9 @@ func (h handlers) oauthExchangeAndFetch(ctx context.Context, w http.ResponseWrit
 	}
 	claims, err := fetchOAuthUserInfo(ctx, client, providerType, accessToken)
 	if err != nil {
+		if errors.Is(err, oauthprovider.ErrMissingProviderID) {
+			return oauthClaims{}, err // refused by the callback with the invalid_provider_id answer, not the bare 500.
+		}
 		if errors.Is(err, errShape) || errors.Is(err, oauthprovider.ErrUnexpected) {
 			return oauthClaims{}, err // the bare 500, matching an uncaught Python exception.
 		}

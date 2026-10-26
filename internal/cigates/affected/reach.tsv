@@ -101,6 +101,7 @@ internal/auth/contracts	contracts.go	internal/cigates/chartgates
 internal/auth/contracts	contracts.go	internal/platform/logging
 internal/auth/contracts	contracts.go	internal/queryapi/server
 internal/auth/contracts	contracts.go	internal/testsupport/usertokens
+internal/auth/contracts	endpoint_auth_profile_selector_gate.go	internal/apiservice
 internal/auth/contracts	endpoint_auth_profile_selector_gate.go	internal/auth/contracts
 internal/auth/contracts/tokencorpus	corpus.go	internal/api/billing
 internal/auth/contracts/tokencorpus	corpus.go	internal/api/externalingest

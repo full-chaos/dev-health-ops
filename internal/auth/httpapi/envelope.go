@@ -12,7 +12,8 @@
 // # Route set
 //
 // Without the session secrets the service mounts only the refresh and logout
-// stubs and every other path answers 404. The route set is chosen at the CALL
+// stubs, plus the well-known routes (issuer URL set) and the workload exchange
+// (when on), and every other path answers 404. The route set is chosen at the CALL
 // SITE -- the runtime -- not in this package, which is fully implemented and
 // fully tested. A middleware stack that only exists once a
 // route needs it is a middleware stack nobody has ever run.

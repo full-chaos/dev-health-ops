@@ -85,7 +85,8 @@ const maxInFlightRequests = 64
 // answers a 503 stub). Without the session secrets no token is issued: refresh
 // and logout answer the retryable 503 stub, so a go-api that proxies them never
 // meets a 404, and every other path receives the 404 envelope, except the
-// well-known routes that are mounted when a token issuer URL is set.
+// well-known routes mounted when a token issuer URL is set and the workload
+// exchange when it is on.
 func sessionRoutes(
 	cfg authconfig.Config, logger *slog.Logger, pool *pgxpool.Pool, schema authschema.ValidatedIdentifier,
 	accessSigner authapi.AccessSigner, limits *authapi.Limits,

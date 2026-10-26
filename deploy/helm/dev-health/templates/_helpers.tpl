@@ -893,16 +893,27 @@ schema Job and the grants Job.
 own users (authOn "usersOwned" off; today phase 3 or lower) also defers: that is the flip-back release, whose old owned auth-service pods still serve while its pre-upgrade hooks
 run, so the users-owned grants it would revoke are kept (CHAOS-11581). authService.migrate.narrowAfterFlipBack, set in
 a LATER release after no pod of the old owned ReplicaSet is left, renders the acknowledgement without it, so that
-release narrows. The flag needs the acknowledgement and is refused at phase 4 or higher and while auth-service owns users.
+release narrows. The flag's refusals are dev-health.authNarrowAfterFlipBackGuard.
 */}}
 {{- define "dev-health.authDeferGrantNarrowing" -}}
 {{- $m := .Values.authService.migrate -}}
 {{- $narrow := eq (include "dev-health.authBool" (dict "value" $m.narrowAfterFlipBack "key" "authService.migrate.narrowAfterFlipBack")) "true" -}}
 {{- $ack := include "dev-health.authAckGrantNarrowing" . -}}
-{{- if and $narrow (not $ack) }}{{- fail "authService.migrate.narrowAfterFlipBack=true needs authService.migrate.acknowledgeGrantNarrowing: the digest a refused auth-migrate run prints for the deferred users-owned grants" }}{{- end -}}
-{{- if and $narrow (or (ge (int (include "dev-health.authPhase" .)) 4) (eq (include "dev-health.authOn" (dict "flag" "usersOwned" "context" .)) "true")) }}{{- fail "authService.migrate.narrowAfterFlipBack is refused at authService.phase 4 or higher and while auth-service owns users" }}{{- end -}}
 {{- if and $ack (not $narrow) (ne (include "dev-health.authOn" (dict "flag" "usersOwned" "context" .)) "true") -}}
 -defer-narrowing
+{{- end -}}
+{{- end }}
+
+{{/*
+The authService.migrate.narrowAfterFlipBack refusals, run on every render by auth-narrow-after-flipback-guard.yaml
+(not only when an auth-migrate Job renders): the flag needs the acknowledgement, and is refused at authService.phase 4
+or higher and while auth-service owns users.
+*/}}
+{{- define "dev-health.authNarrowAfterFlipBackGuard" -}}
+{{- $m := .Values.authService.migrate -}}
+{{- if eq (include "dev-health.authBool" (dict "value" $m.narrowAfterFlipBack "key" "authService.migrate.narrowAfterFlipBack")) "true" -}}
+{{- if not (trim (toString (default "" $m.acknowledgeGrantNarrowing))) }}{{- fail "authService.migrate.narrowAfterFlipBack=true needs authService.migrate.acknowledgeGrantNarrowing: the digest a refused auth-migrate run prints for the deferred users-owned grants" }}{{- end -}}
+{{- if or (ge (int (include "dev-health.authPhase" .)) 4) (eq (include "dev-health.authOn" (dict "flag" "usersOwned" "context" .)) "true") }}{{- fail "authService.migrate.narrowAfterFlipBack is refused at authService.phase 4 or higher and while auth-service owns users" }}{{- end -}}
 {{- end -}}
 {{- end }}
 

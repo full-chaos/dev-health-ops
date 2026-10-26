@@ -122,6 +122,9 @@ var Allowlist = []Entry{
 	{File: "internal/auth/org/store.go", Func: "Store.Create", Table: "auth.organizations", Verb: "INSERT"},
 	{File: "internal/auth/org/store.go", Func: "Store.mutate", Table: "auth.organizations", Verb: "UPDATE"},
 	// TEMPORARY: the one-time legacy refresh exchange revokes go-api's refresh tokens (authschema.LegacyRefreshTokenGrant). CHAOS-10408 removes both rows with the grant.
+	// acp ruling 2026-10-26 (CHAOS-11506): the legacy link-token purge, run only where users are owned; DELETE of go-api's public link-token rows, counted and audited.
+	{File: "internal/auth/usersbackfill/linkpurge.go", Func: "PurgeLegacyLinks", Table: "public.email_verification_tokens", Verb: "DELETE"},
+	{File: "internal/auth/usersbackfill/linkpurge.go", Func: "PurgeLegacyLinks", Table: "public.password_reset_tokens", Verb: "DELETE"},
 	{File: "internal/auth/session/legacy.go", Func: "Store.ExchangeLegacy", Table: "public.refresh_tokens", Verb: "UPDATE"},
 	{File: "internal/auth/session/legacy.go", Func: "Store.revokeFamilyTx", Table: "public.refresh_tokens", Verb: "UPDATE"},
 	{File: "internal/auth/session/legacy.go", Func: "Store.revokeLegacyFamily", Table: "public.refresh_tokens", Verb: "UPDATE"},

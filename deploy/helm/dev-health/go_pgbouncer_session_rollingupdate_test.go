@@ -36,10 +36,16 @@ const goldenBaseSha = "97c204c79a34175b7ecb81240539bd1bf1dd8cb3"
 // sha must be an ancestor of HEAD) and rendered with the SAME helm binary as the tip,
 // so a helm version change cannot make the two differ.
 func TestSessionRollingUpdateUnsetRendersByteEqual(t *testing.T) {
-	if _, err := exec.LookPath("helm"); err != nil {
-		t.Skip("helm is not installed")
+	ci := os.Getenv("CI") != ""
+	for _, tool := range []string{"helm", "git", "tar"} {
+		if _, err := exec.LookPath(tool); err != nil {
+			if ci {
+				t.Fatalf("CI is set and %s is not installed: the byte-equal check must run in CI", tool)
+			}
+			t.Skip(tool + " is not installed")
+		}
 	}
-	if skip, err := checkGoldenBase("../../..", goldenBaseSha); skip != "" {
+	if skip, err := checkGoldenBase("../../..", goldenBaseSha, ci); skip != "" {
 		t.Skip(skip)
 	} else if err != nil {
 		t.Fatal(err)
@@ -215,9 +221,12 @@ const goldenNoGitSkip = "no .git: the golden base sha cannot be checked as an an
 
 // checkGoldenBase returns a skip message ONLY when repo has no .git at all. A sha
 // missing from the history (a shallow clone) is an error, never a skip.
-func checkGoldenBase(repo, sha string) (skip string, err error) {
+func checkGoldenBase(repo, sha string, ci bool) (skip string, err error) {
 	if _, e := os.Stat(repo + "/.git"); e != nil {
 		if errors.Is(e, fs.ErrNotExist) {
+			if ci {
+				return "", fmt.Errorf("CI is set and %s/.git does not exist: the golden base check must run in CI", repo)
+			}
 			return goldenNoGitSkip, nil
 		}
 		return "", fmt.Errorf("golden base check: cannot stat %s/.git: %v", repo, e)
@@ -253,27 +262,34 @@ func TestGoldenBaseCheckFailsOnAbsentShaAndNonAncestorAndSkipsOnlyWithoutGit(t *
 	git("checkout", "-q", "main")
 	git("commit", "-q", "--allow-empty", "-m", "main2")
 
-	if skip, err := checkGoldenBase(repo, base); skip != "" || err != nil {
+	if skip, err := checkGoldenBase(repo, base, false); skip != "" || err != nil {
 		t.Errorf("an ancestor must pass: skip=%q err=%v", skip, err)
 	}
 	absent := strings.Repeat("ab", 20)
-	skip, err := checkGoldenBase(repo, absent)
+	skip, err := checkGoldenBase(repo, absent, false)
 	if skip != "" || err == nil || !strings.HasPrefix(err.Error(), "golden base "+absent+" not in history: run with full history") {
 		t.Errorf("an absent sha must FAIL with the exact message, never skip: skip=%q err=%v", skip, err)
 	}
-	skip, err = checkGoldenBase(repo, side)
+	skip, err = checkGoldenBase(repo, side, false)
 	if skip != "" || err == nil || !strings.HasPrefix(err.Error(), "golden base sha "+side+" is not an ancestor of HEAD") {
 		t.Errorf("a present non-ancestor sha must FAIL: skip=%q err=%v", skip, err)
 	}
-	skip, err = checkGoldenBase(t.TempDir(), base)
+	skip, err = checkGoldenBase(t.TempDir(), base, false)
 	if skip != goldenNoGitSkip || err != nil {
 		t.Errorf("no .git must skip with the named message: skip=%q err=%v", skip, err)
+	}
+	noGit := t.TempDir()
+	if skip, err = checkGoldenBase(noGit, base, true); skip != "" || err == nil || !strings.HasPrefix(err.Error(), "CI is set and "+noGit+"/.git does not exist") {
+		t.Errorf("CI set and no .git must FAIL, never skip: skip=%q err=%v", skip, err)
+	}
+	if skip, err = checkGoldenBase(repo, absent, true); skip != "" || err == nil || !strings.HasPrefix(err.Error(), "golden base "+absent+" not in history") {
+		t.Errorf("CI set and an absent sha must FAIL: skip=%q err=%v", skip, err)
 	}
 	notDir := t.TempDir() + "/file"
 	if e := os.WriteFile(notDir, nil, 0o600); e != nil {
 		t.Fatal(e)
 	}
-	skip, err = checkGoldenBase(notDir, base)
+	skip, err = checkGoldenBase(notDir, base, false)
 	if skip != "" || err == nil || !strings.HasPrefix(err.Error(), "golden base check: cannot stat "+notDir+"/.git:") {
 		t.Errorf("a stat error other than not-exist must FAIL, never skip: skip=%q err=%v", skip, err)
 	}

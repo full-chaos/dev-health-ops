@@ -91,7 +91,7 @@ func TestReachCacheKeyCoversEveryInput(t *testing.T) {
 		{name: "a non-Go file beside Go files", apply: func() { appendTo(t, p("b/notes.txt"), "y\n") }},
 		{name: "GOFLAGS", env: reachEnv("GOFLAGS=-mod=readonly")},
 		{name: "GOARCH", env: reachEnv("GOARCH=" + otherArch())},
-		{name: "GOOS", env: reachEnv("GOOS=plan9")},
+		{name: "GOOS", env: reachEnv("GOOS=freebsd")},
 		{name: "CGO_ENABLED", env: reachEnv("CGO_ENABLED=1")},
 		{name: "GOEXPERIMENT", env: reachEnv("GOEXPERIMENT=fieldtrack")},
 	}

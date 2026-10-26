@@ -710,9 +710,13 @@ func checkReachStored(root, cacheDir string, t *tables, reads []Read, readsGreen
 		}
 	}
 	if key != "" {
-		if rows, ok := loadReachStore(cacheDir, key); ok {
+		rows, reason, ok := loadReachStore(cacheDir, key)
+		if ok {
 			fmt.Fprintf(stdout, "plan-reads: reach: reused for input hash %s\n", key)
 			return reachDefects(t, rows), nil
+		}
+		if reason != "" {
+			fmt.Fprintf(stdout, "plan-reads: reach: store refused (%s): computed\n", reason)
 		}
 	}
 	want, st, err := reachRows(root, reads)

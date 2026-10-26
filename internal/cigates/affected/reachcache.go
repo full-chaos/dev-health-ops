@@ -1,10 +1,12 @@
 package affected
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
+	"encoding/json"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path"
@@ -20,29 +22,63 @@ import (
 // files, the generated tables, cgo and assembly sources), every file under a //go:embed path, the build tag sets, and the
 // toolchain environment. A change outside those (docs, workflows, web) leaves the key alone. A stored result is still
 // compared with reach.tsv like a computed one, and any doubt (no git, unreadable or foreign store) recomputes.
-const reachCacheSchema = "reach-cache-v1"
+const reachCacheSchema = "reach-cache-v2"
 
 var embedLine = regexp.MustCompile(`(?m)^//go:embed[ \t]+(.+)$`)
 
 func reachStoreFile(dir, key string) string { return filepath.Join(dir, "reach-"+key+".tsv") }
 
-// reachKey is the hex sha256 of every input of reachRows under root.
+// listFields are the file lists of `go list -json` that select what a build reads.
+const listFields = "ImportPath,Dir,GoFiles,CgoFiles,CFiles,CXXFiles,MFiles,HFiles,FFiles,SFiles,SwigFiles,SwigCXXFiles,SysoFiles," +
+	"IgnoredGoFiles,IgnoredOtherFiles,EmbedFiles,TestGoFiles,XTestGoFiles,TestEmbedFiles,XTestEmbedFiles"
+
+type listedPackage struct {
+	ImportPath, Dir                                                                   string
+	GoFiles, CgoFiles, CFiles, CXXFiles, MFiles, HFiles, FFiles, SFiles               []string
+	SwigFiles, SwigCXXFiles, SysoFiles, IgnoredGoFiles, IgnoredOtherFiles, EmbedFiles []string
+	TestGoFiles, XTestGoFiles, TestEmbedFiles, XTestEmbedFiles                        []string
+}
+
+func (p listedPackage) lists() [][]string {
+	return [][]string{p.GoFiles, p.CgoFiles, p.CFiles, p.CXXFiles, p.MFiles, p.HFiles, p.FFiles, p.SFiles, p.SwigFiles, p.SwigCXXFiles,
+		p.SysoFiles, p.IgnoredGoFiles, p.IgnoredOtherFiles, p.EmbedFiles, p.TestGoFiles, p.XTestGoFiles, p.TestEmbedFiles, p.XTestEmbedFiles}
+}
+
+// reachKey is the hex sha256 of every input of reachRows under root. An error means the inputs cannot be bounded (a
+// local replace outside the repository, a failing go command): the caller computes fresh and stores nothing.
 func reachKey(root string) (string, error) {
-	if _, err := os.Stat(filepath.Join(root, ".git")); err != nil {
-		return "", errors.New("no .git: the inputs of the call graph cannot be listed")
-	}
-	listed, err := exec.Command("git", "-C", root, "ls-files", "-z", "--cached", "--others", "--exclude-standard").Output()
+	realRoot, err := filepath.EvalSymlinks(root)
 	if err != nil {
-		return "", fmt.Errorf("git ls-files: %w", err)
+		return "", err
+	}
+	if err := checkLocalReplaces(realRoot); err != nil {
+		return "", err
 	}
 	var files []string
-	for _, f := range strings.Split(string(listed), "\x00") {
-		if f == "" {
-			continue
+	err = filepath.WalkDir(realRoot, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
 		}
-		if fi, err := os.Stat(filepath.Join(root, filepath.FromSlash(f))); err == nil && fi.Mode().IsRegular() {
-			files = append(files, f)
+		if d.IsDir() {
+			if d.Name() == ".git" {
+				return filepath.SkipDir
+			}
+			return nil
 		}
+		if !d.Type().IsRegular() {
+			if fi, err := os.Stat(p); err != nil || !fi.Mode().IsRegular() {
+				return nil
+			}
+		}
+		rel, err := filepath.Rel(realRoot, p)
+		if err != nil {
+			return err
+		}
+		files = append(files, filepath.ToSlash(rel))
+		return nil
+	})
+	if err != nil {
+		return "", err
 	}
 	sort.Strings(files)
 	goDirs := map[string]bool{}
@@ -52,7 +88,7 @@ func reachKey(root string) (string, error) {
 			continue
 		}
 		goDirs[path.Dir(f)] = true
-		src, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(f)))
+		src, err := os.ReadFile(filepath.Join(realRoot, filepath.FromSlash(f)))
 		if err != nil {
 			return "", err
 		}
@@ -89,55 +125,162 @@ func reachKey(root string) (string, error) {
 	}
 	h := sha256.New()
 	fmt.Fprintf(h, "%s\nrun-tags %v\n", reachCacheSchema, reachTags)
-	env, err := goEnvLine(root)
+	env, err := goEnvLine(realRoot)
 	if err != nil {
 		return "", err
 	}
 	fmt.Fprintf(h, "go-env %s\n", env)
-	for _, f := range files {
-		if !input(f) {
-			continue
+	hashFile := func(rel string) error {
+		b, err := os.ReadFile(filepath.Join(realRoot, filepath.FromSlash(rel)))
+		if err != nil {
+			fmt.Fprintf(h, "%s\x00missing\n", rel)
+			return nil
 		}
-		b, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(f)))
+		sum := sha256.Sum256(b)
+		fmt.Fprintf(h, "%s\x00%x\n", rel, sum)
+		return nil
+	}
+	for _, f := range files {
+		if input(f) {
+			if err := hashFile(f); err != nil {
+				return "", err
+			}
+		}
+	}
+	// The files the go command selects for each tag set (IgnoredGoFiles included), by name and content.
+	for _, tags := range reachTags {
+		pkgs, err := listPackages(realRoot, tags)
 		if err != nil {
 			return "", err
 		}
-		sum := sha256.Sum256(b)
-		fmt.Fprintf(h, "%s\x00%x\n", f, sum)
+		for _, p := range pkgs {
+			dir, err := filepath.Rel(realRoot, p.Dir)
+			if err != nil || strings.HasPrefix(dir, "..") {
+				return "", fmt.Errorf("package %s lies outside the repository", p.ImportPath)
+			}
+			dir = filepath.ToSlash(dir)
+			fmt.Fprintf(h, "list %s %s\n", strings.Join(tags, ","), dir)
+			for i, names := range p.lists() {
+				fmt.Fprintf(h, "  field %d %s\n", i, strings.Join(names, " "))
+				for _, n := range names {
+					if err := hashFile(path.Join(dir, n)); err != nil {
+						return "", err
+					}
+				}
+			}
+		}
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// goEnvLine is the toolchain environment the type-check and the build constraints depend on.
+// listPackages runs `go list -e -json` over the module for one tag set.
+func listPackages(root string, tags []string) ([]listedPackage, error) {
+	cmd := exec.Command("go", "list", "-e", "-tags="+strings.Join(tags, ","), "-json="+listFields, "./...")
+	cmd.Dir = root
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("go list: %w", err)
+	}
+	var pkgs []listedPackage
+	dec := json.NewDecoder(bytes.NewReader(out))
+	for dec.More() {
+		var p listedPackage
+		if err := dec.Decode(&p); err != nil {
+			return nil, fmt.Errorf("go list output: %w", err)
+		}
+		pkgs = append(pkgs, p)
+	}
+	sort.Slice(pkgs, func(i, j int) bool { return pkgs[i].Dir < pkgs[j].Dir })
+	return pkgs, nil
+}
+
+// checkLocalReplaces refuses a go.mod replace that points at a directory outside the repository: its sources are inputs the
+// key does not hash.
+func checkLocalReplaces(root string) error {
+	cmd := exec.Command("go", "mod", "edit", "-json")
+	cmd.Dir = root
+	out, err := cmd.Output()
+	if err != nil {
+		return fmt.Errorf("go mod edit: %w", err)
+	}
+	var mod struct {
+		Replace []struct {
+			Old, New struct{ Path, Version string }
+		}
+	}
+	if err := json.Unmarshal(out, &mod); err != nil {
+		return fmt.Errorf("go mod edit output: %w", err)
+	}
+	for _, r := range mod.Replace {
+		if r.New.Version != "" {
+			continue
+		}
+		target := r.New.Path
+		if !filepath.IsAbs(target) {
+			target = filepath.Join(root, filepath.FromSlash(target))
+		}
+		if resolved, err := filepath.EvalSymlinks(target); err == nil {
+			target = resolved
+		}
+		if rel, err := filepath.Rel(root, target); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return fmt.Errorf("go.mod replaces %s with %s outside the repository", r.Old.Path, r.New.Path)
+		}
+	}
+	return nil
+}
+
+// goEnvLine is the toolchain environment that selects files, types and build constraints.
 func goEnvLine(root string) (string, error) {
-	cmd := exec.Command("go", "env", "GOVERSION", "GOOS", "GOARCH", "CGO_ENABLED", "GOEXPERIMENT", "GOFLAGS", "GOWORK", "GOTOOLCHAIN")
+	cmd := exec.Command("go", "env", "-json")
 	cmd.Dir = root
 	out, err := cmd.Output()
 	if err != nil {
 		return "", fmt.Errorf("go env: %w", err)
 	}
-	return strings.Join(strings.Split(strings.TrimSpace(string(out)), "\n"), "|"), nil
+	env := map[string]string{}
+	if err := json.Unmarshal(out, &env); err != nil {
+		return "", fmt.Errorf("go env output: %w", err)
+	}
+	var parts []string
+	for _, k := range []string{"GOVERSION", "GOOS", "GOARCH", "GOAMD64", "GOARM", "GOARM64", "GO386", "GOMIPS", "GOMIPS64", "GOPPC64",
+		"GORISCV64", "GOEXPERIMENT", "GOFIPS140", "CGO_ENABLED", "GOFLAGS", "GOWORK", "GOTOOLCHAIN"} {
+		parts = append(parts, k+"="+env[k])
+	}
+	return strings.Join(parts, "|"), nil
 }
 
-func reachStoreHeader(key string) string { return "# " + reachCacheSchema + " key " + key }
+func reachRowsText(rows map[string]bool) string {
+	var b strings.Builder
+	for _, r := range sortedKeys(rows) {
+		b.WriteString(r + "\n")
+	}
+	return b.String()
+}
 
-// loadReachStore returns the rows stored for key, or false when there is no usable store (absent, foreign header, unreadable).
-func loadReachStore(dir, key string) (map[string]bool, bool) {
+// reachStoreHeader binds the rows to the key: a store whose rows were edited after it was written fails the digest.
+func reachStoreHeader(key, rows string) string {
+	sum := sha256.Sum256([]byte(rows))
+	return "# " + reachCacheSchema + " key " + key + " rows-sha256 " + hex.EncodeToString(sum[:])
+}
+
+// loadReachStore returns the rows stored for key. ok is false when there is no usable store; reason names why a file that
+// exists was refused (the empty reason: no file).
+func loadReachStore(dir, key string) (rows map[string]bool, reason string, ok bool) {
 	b, err := os.ReadFile(reachStoreFile(dir, key))
 	if err != nil {
-		return nil, false
+		return nil, "", false
 	}
-	lines := strings.Split(strings.TrimRight(string(b), "\n"), "\n")
-	if len(lines) == 0 || lines[0] != reachStoreHeader(key) {
-		return nil, false
+	head, body, found := strings.Cut(string(b), "\n")
+	if !found || head != reachStoreHeader(key, body) {
+		return nil, "its header does not bind its rows to this key", false
 	}
-	rows := map[string]bool{}
-	for _, l := range lines[1:] {
+	rows = map[string]bool{}
+	for _, l := range strings.Split(body, "\n") {
 		if l != "" {
 			rows[l] = true
 		}
 	}
-	return rows, true
+	return rows, "", true
 }
 
 // writeReachStore writes the rows for key atomically.
@@ -145,11 +288,9 @@ func writeReachStore(dir, key string, rows map[string]bool) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
+	body := reachRowsText(rows)
 	var b strings.Builder
-	b.WriteString(reachStoreHeader(key) + "\n")
-	for _, r := range sortedKeys(rows) {
-		b.WriteString(r + "\n")
-	}
+	b.WriteString(reachStoreHeader(key, body) + "\n" + body)
 	tmp, err := os.CreateTemp(dir, "reach-tmp-*")
 	if err != nil {
 		return err

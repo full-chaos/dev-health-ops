@@ -336,13 +336,15 @@ jobs:
 
       - name: Restore the plan-reads call-graph result (GitHub-hosted static leg)
         # CHAOS-11421: exact key, no restore-keys (no result of another input set is ever reused). The result is compared with
-        # reach.tsv again on a hit, so a wrong entry fails the leg and is never a green gate.
+        # reach.tsv again on a hit. The stored header binds its rows to the key (rows-sha256): a store that fails the digest is
+        # refused and the leg computes fresh. The directory is under RUNNER_TEMP, outside the workspace; only the tool (after a
+        # green computed run), this restore and the save step below touch it (reach_store_hosted_only_test.go).
         id: reach-store
         if: steps.relevance.outputs.relevant == 'true' && runner.environment == 'github-hosted' && matrix.name == 'static'
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/plan-reads-reach
-          key: plan-reads-reach-v1-${{ steps.reach-key.outputs.key }}
+          key: plan-reads-reach-v2-${{ steps.reach-key.outputs.key }}
 
       - name: Set up Helm
         # internal/cigates/chartgates renders the chart with `helm template` in the test and race legs; the
@@ -457,7 +459,7 @@ jobs:
         # no defect), only on a key miss. A pull request restores what main saved and never writes.
         if: >-
           success() && steps.relevance.outputs.relevant == 'true' && runner.environment == 'github-hosted' && matrix.name == 'static'
-          && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.reach-store.outputs.cache-hit != 'true'
+          && github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'full-chaos/dev-health-ops' && steps.reach-store.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/plan-reads-reach

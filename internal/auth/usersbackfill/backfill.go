@@ -30,6 +30,10 @@ type Row struct {
 	Superuser      bool
 	TokenVersion   int64
 	LastLoginAt    *time.Time
+	// SSOProviderID is users.sso_provider_id; SSOProviderProtocol is the protocol of that provider row (nil when the
+	// account is unbound or the row is gone).
+	SSOProviderID       *uuid.UUID
+	SSOProviderProtocol *string
 }
 
 // Skip classes. A skipped user is counted, not written, and fails the run.
@@ -67,6 +71,10 @@ type Report struct {
 	RoleGranted      int
 	RoleRevoked      int
 	Skipped          map[string]int
+
+	// IdentityRelinkPending counts the not-carried SSO accounts the owned store re-links at their first sign-in
+	// (identity.IsSSORelinkable).
+	IdentityRelinkPending int
 }
 
 // SkippedTotal is the number of users that were not written.
@@ -92,6 +100,7 @@ func (r Report) Lines() []string {
 		fmt.Sprintf("unchanged=%d", r.Unchanged),
 		fmt.Sprintf("identity_linked=%d", r.IdentityLinked),
 		fmt.Sprintf("identity_not_carried=%d", r.IdentityNotCarry),
+		fmt.Sprintf("identity_relink_pending=%d", r.IdentityRelinkPending),
 		fmt.Sprintf("display_name_drift=%d", r.DisplayNameDrift),
 		fmt.Sprintf("last_login_drift=%d", r.LastLoginDrift),
 		fmt.Sprintf("platform_role_granted=%d", r.RoleGranted),
@@ -144,6 +153,9 @@ func Run(ctx context.Context, src Source, sink Sink, opts Options) (Report, erro
 			}
 			if notCarried {
 				rep.IdentityNotCarry++
+				if Relinkable(row) {
+					rep.IdentityRelinkPending++
+				}
 			}
 			res, err := sink.BackfillUser(ctx, target, opts.DryRun)
 			if err != nil {
@@ -245,6 +257,12 @@ func mapIdentity(row Row) (key *identity.ExternalKey, class string, notCarried b
 // leave it out of its identity count (identity.IsServicePlaceholder). It is still reported as not carried.
 func IsPlaceholder(row Row) bool {
 	return identity.IsServicePlaceholder(row.ID, row.AuthProvider, row.PasswordHash, row.AuthProviderID)
+}
+
+// Relinkable is an SSO account the owned store re-links at its first sign-in: the one definition the users-owned guard
+// uses to leave it out of its identity count (identity.IsSSORelinkable). It is still reported as not carried.
+func Relinkable(row Row) bool {
+	return identity.IsSSORelinkable(row.AuthProvider, row.AuthProviderID, row.SSOProviderID, row.SSOProviderProtocol)
 }
 
 func isBcrypt(hash string) bool {

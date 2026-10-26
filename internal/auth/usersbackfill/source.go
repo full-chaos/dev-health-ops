@@ -23,9 +23,10 @@ func (s PGSource) Page(ctx context.Context, after *uuid.UUID, limit int) ([]Row,
 }
 
 func pageUsers(ctx context.Context, q querier, after *uuid.UUID, limit int) ([]Row, error) {
-	rows, err := q.Query(ctx, `SELECT id, email, full_name, password_hash, is_active, is_verified, auth_provider, auth_provider_id,
-       COALESCE(is_superuser, false), COALESCE(token_version, 0), last_login_at
-FROM public.users WHERE ($1::uuid IS NULL OR id > $1::uuid) ORDER BY id LIMIT $2`, after, limit)
+	rows, err := q.Query(ctx, `SELECT u.id, u.email, u.full_name, u.password_hash, u.is_active, u.is_verified, u.auth_provider, u.auth_provider_id,
+       COALESCE(u.is_superuser, false), COALESCE(u.token_version, 0), u.last_login_at, u.sso_provider_id, sp.protocol
+FROM public.users u LEFT JOIN public.sso_providers sp ON sp.id = u.sso_provider_id
+WHERE ($1::uuid IS NULL OR u.id > $1::uuid) ORDER BY u.id LIMIT $2`, after, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -33,7 +34,7 @@ FROM public.users WHERE ($1::uuid IS NULL OR id > $1::uuid) ORDER BY id LIMIT $2
 	var out []Row
 	for rows.Next() {
 		var r Row
-		if err := rows.Scan(&r.ID, &r.Email, &r.FullName, &r.PasswordHash, &r.Active, &r.Verified, &r.AuthProvider, &r.AuthProviderID, &r.Superuser, &r.TokenVersion, &r.LastLoginAt); err != nil {
+		if err := rows.Scan(&r.ID, &r.Email, &r.FullName, &r.PasswordHash, &r.Active, &r.Verified, &r.AuthProvider, &r.AuthProviderID, &r.Superuser, &r.TokenVersion, &r.LastLoginAt, &r.SSOProviderID, &r.SSOProviderProtocol); err != nil {
 			return nil, err
 		}
 		out = append(out, r)

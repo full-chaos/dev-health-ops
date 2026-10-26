@@ -106,7 +106,7 @@ AND attributes->>'target_kind' = 'external_identity'`, user.String()); n != 1 {
 				t.Fatalf("re-link audit rows = %d, want 1", n)
 			}
 			if n := e.count(t, ctx, `SELECT count(*) FROM auth.auth_outbox_events WHERE event_type = 'external_identity.linked'
-AND aggregate_type = 'external_identity' AND change->>'principal_id' = 'prn_' || $1`, user.String()); n != 1 {
+AND aggregate_type = 'external_identity' AND payload->'change'->>'principal_id' = 'prn_' || $1`, user.String()); n != 1 {
 				t.Fatalf("re-link outbox events = %d, want 1", n)
 			}
 			// The second sign-in hits the key and writes nothing.

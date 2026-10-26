@@ -507,3 +507,28 @@ func TestAuthThenOpsMigrateWithoutAGrantsPassLeavesPublicUsersUnreadable(t *test
 		t.Fatalf("public.users.email readable after the grants pass = %v, %v; want true", readable, err)
 	}
 }
+
+// The runtime role reads users.sso_provider_id (ops revision 0155): after ops migrate, the grants pass makes the SSO
+// provider binding readable. On a public schema without the column the pass fails loud, so the roll order is ops
+// migrate (head >= 0155) before the grants pass.
+func TestGrantsPassMakesTheSSOProviderBindingReadable(t *testing.T) {
+	f := newOrderFixture(t)
+	f.authMigrate(t, "auth")
+	if _, err := f.dhoMigrate(t); err != nil {
+		t.Fatalf("dho migrate: %v", err)
+	}
+	if err := f.grantsPass(t, "auth"); err != nil {
+		t.Fatalf("grants pass: %v", err)
+	}
+	conn := orderConnect(t, f.ctx, f.uri)
+	var readable bool
+	if err := conn.QueryRow(f.ctx, `SELECT has_column_privilege($1, 'public.users', 'sso_provider_id', 'SELECT')`, f.role).Scan(&readable); err != nil || !readable {
+		t.Fatalf("public.users.sso_provider_id readable after the grants pass = %v, %v; want true", readable, err)
+	}
+	if _, err := conn.Exec(f.ctx, `ALTER TABLE public.users DROP COLUMN sso_provider_id`); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.grantsPass(t, "auth"); err == nil || !strings.Contains(err.Error(), "sso_provider_id") {
+		t.Fatalf("grants pass without users.sso_provider_id = %v, want a failure naming the column", err)
+	}
+}

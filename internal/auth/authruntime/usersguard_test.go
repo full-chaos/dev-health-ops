@@ -66,6 +66,20 @@ func (d recordingDB) QueryRow(_ context.Context, sql string, _ ...any) pgx.Row {
 	return countsRow{}
 }
 
+func TestGuardCountsUseTheSharedSSORelinkDefinition(t *testing.T) {
+	schema, err := authschema.NewValidatedIdentifier("auth")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sql string
+	if err := checkUsersOwned(context.Background(), recordingDB{&sql}, schema); err != nil {
+		t.Fatal(err)
+	}
+	if want := "AND NOT " + identity.SSORelinkableSQL("u"); !strings.Contains(sql, want) {
+		t.Fatalf("the guard's identity count does not exclude the shared SSO relink predicate %q:\n%s", want, sql)
+	}
+}
+
 func TestGuardCountsUseTheSharedPlaceholderDefinition(t *testing.T) {
 	schema, err := authschema.NewValidatedIdentifier("auth")
 	if err != nil {

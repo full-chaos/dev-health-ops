@@ -174,7 +174,7 @@ REQUIRED=(sessions local_login)
 # owns users, so forwarding social would refuse the corpus's new-user row.
 KEPT_ON_GO_API=(social)
 ROUTES="${SCRIPT_DIR}/auth_corpus_acp_routes.tsv"
-# Script-internal, never read from the caller's environment: only a step that owns the users sets it to 1 (none does yet).
+# Script-internal, never read from the caller's environment: only a step that owns the users sets it to 1 (step 1e, owned_flip).
 USERS_OWNED=0
 
 hostport() {
@@ -244,7 +244,7 @@ if [ "${LEG}" = "acp" ]; then
   AUTH_API_PORT="$(hostport auth-service 8095)"
   printf 'step 1c: the aggregates auth-service serves\n'
   # classify probes every aggregate and sets SERVED and FORWARDED (the served ones, minus those kept on go-api, when
-  # sessions is served). Run again after step 1e: auth-service mounts the credentials routes only with users owned.
+  # sessions is served). Run again after step 1e: auth-service answers the credentials routes with a stub until it owns users, and gate_owned keeps them on go-api until USERS_OWNED=1.
   classify() {
     local aggregate
     SERVED=()
@@ -318,6 +318,9 @@ SQL
     printf 'step 1f: the aggregates auth-service serves with users owned\n'
     BEFORE_OWNED=("${FORWARDED[@]}")
     AUTH_API_PORT="$(hostport auth-service 8095)" # the recreate took a new ephemeral host port
+    # The one place the script owns the users (never read from the caller's environment): gate_owned now requires the
+    # credentials aggregate to be served and lets it be forwarded.
+    USERS_OWNED=1
     classify
     [[ " ${SERVED[*]} " == *" credentials "* ]] || die "credentials is not served by auth-service after step 1e (users owned)"
     printf 'leg acp forwards (users owned): %s\n' "${FORWARDED[*]}"

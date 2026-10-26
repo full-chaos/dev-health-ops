@@ -152,6 +152,11 @@ func TestMemberHasLoneSurrogateEscapeReadsOnlyTheNamedMember(t *testing.T) {
 		{"a string after a null", `{"relay_state":null,"relay_state":"\ud800"}`, true, true},
 		{"the long s folds to s", `{"relay_\u017ftate":"\ud800"}`, true, true},
 		{"the long s is not the name when folding is off", `{"relay_\u017ftate":"\ud800"}`, false, false},
+		{"data after the object", `{"relay_state":"\ud800"} x`, true, false},
+		{"a second object after the object", `{"relay_state":"\ud800"}{}`, true, false},
+		{"a second object after the object, exact key", `{"relay_state":"\ud800"}{}`, false, false},
+		{"white space after the object is fine", "{\"relay_state\":\"\\ud800\"} \n\t", true, true},
+		{"the object is not closed", `{"relay_state":"\ud800"`, true, false},
 		{"an escaped key is the same key", `{"relay\u005fstate":"\ud800"}`, false, true},
 	}
 	for _, tc := range cases {

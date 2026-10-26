@@ -111,3 +111,13 @@ func TestInitiateRefusesOnlyTheRelayStateThatWouldBeForwarded(t *testing.T) {
 		}
 	}
 }
+
+func TestInitiateKeepsTheDecodeErrorForDataAfterTheObject(t *testing.T) {
+	for _, body := range []string{`{"relay_state":"\ud800"} x`, `{"relay_state":"\ud800"}{}`, `{"relay_state":"\ud800"`} {
+		rec, _ := initiateRequest(t, body)
+		text := rec.Body.String()
+		if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(text, "Request body must be a JSON object") || strings.Contains(text, "string_unicode") {
+			t.Errorf("%s: status=%d body=%s", body, rec.Code, text)
+		}
+	}
+}

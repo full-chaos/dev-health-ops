@@ -81,3 +81,20 @@ func TestAuthorizeAnswersTheTypeErrorForANonStringRedirectURI(t *testing.T) {
 		}
 	}
 }
+
+// A body that is not exactly one JSON object keeps the one error it has: the
+// scan reads only a document the decoder accepted.
+func TestAuthorizeKeepsTheDecodeErrorForDataAfterTheObject(t *testing.T) {
+	c := routeCases[0]
+	for _, body := range []string{`{"redirect_uri":"\ud800"} x`, `{"redirect_uri":"\ud800"}{}`, `{"redirect_uri":"\ud800"`} {
+		row := c.activeRow()
+		env := newUnitEnv(t, &fakeProviders{before: row})
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/oidc/"+row.ID.String()+"/authorize", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		rec := env.serve(c, req)
+		text := rec.Body.String()
+		if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(text, "model_attributes_type") || strings.Contains(text, "string_unicode") {
+			t.Errorf("%s: status=%d body=%s", body, rec.Code, text)
+		}
+	}
+}

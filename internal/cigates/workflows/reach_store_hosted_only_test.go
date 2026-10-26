@@ -76,8 +76,33 @@ func reachStoreViolations(t *testing.T, root string) []string {
 	if strings.Contains(cond, "pull_request") || strings.Contains(cond, "merge_group") {
 		add("the reach store save condition %q lets a pull request or the merge queue write it", cond)
 	}
+	for name, st := range map[string]yamlMap{"restore": restore, "save": save} {
+		want := "actions/cache/" + name + "@" + cacheActionSHA
+		if got := asString(st["uses"]); got != want {
+			add("the reach store %s step must be pinned to %s (got %q)", name, want, got)
+		}
+	}
+	if !strings.Contains(cond, "github.repository == 'full-chaos/dev-health-ops'") {
+		add("the reach store save condition %q does not name the repository", cond)
+	}
 	if got := asString(asMap(save["with"])["key"]); got != "${{ steps.reach-store.outputs.cache-primary-key }}" {
 		add("the reach store save key %q is not the restore step's primary key", got)
+	}
+	// Only the hash/export step, the restore and the save may name the store: no other step of any workflow writes there.
+	for _, name := range workflowNames(t, root) {
+		for job, jv := range jobsOf(loadWf(t, root, name)) {
+			for _, st := range stepsOf(jv) {
+				text := fmt.Sprint(st)
+				if !strings.Contains(text, "plan-reads-reach") && !strings.Contains(text, "PLAN_READS_REACH_CACHE") {
+					continue
+				}
+				id := asString(st["id"])
+				if name == "go-quality.yml" && job == "go-quality-leg" && (id == "reach-key" || id == "reach-store" || usesAction(st, "actions/cache/save")) {
+					continue
+				}
+				add("step %q of %s:%s names the reach store: only the hash step, the restore and the save may", asString(st["name"]), name, job)
+			}
+		}
 	}
 	return out
 }
@@ -102,6 +127,10 @@ func TestReachStorePlantedDefectsAreCaught(t *testing.T) {
 		{"pull requests save", mutation{gq, "          && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.reach-store", "          && steps.reach-store"}, "github.event_name == 'push'"},
 		{"save on a hit", mutation{gq, " && steps.reach-store.outputs.cache-hit != 'true'", ""}, "cache-hit"},
 		{"hostPath store", mutation{gq, "path: ${{ runner.temp }}/plan-reads-reach\n          key: plan-reads-reach-v1-", "path: /mnt/go-cache/plan-reads-reach\n          key: plan-reads-reach-v1-"}, "shared hostPath"},
+		{"another step writes the store", mutation{gq, "        run: bash ci/check_go.sh ci-leg ${{ matrix.args }}\n", "        run: bash ci/check_go.sh ci-leg ${{ matrix.args }}\n\n      - name: poison\n        run: echo x > \"${RUNNER_TEMP}/plan-reads-reach/reach-x.tsv\"\n"}, "names the reach store"},
+		{"the restore pinned to a tag", mutation{gq, "actions/cache/restore@" + cacheActionSHA + " # v6.1.0\n        with:\n          path: ${{ runner.temp }}/plan-reads-reach", "actions/cache/restore@v6.1.0\n        with:\n          path: ${{ runner.temp }}/plan-reads-reach"}, "must be pinned to"},
+		{"the save pinned to another sha", mutation{gq, "actions/cache/save@" + cacheActionSHA + " # v6.1.0\n        with:\n          path: ${{ runner.temp }}/plan-reads-reach", "actions/cache/save@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n        with:\n          path: ${{ runner.temp }}/plan-reads-reach"}, "must be pinned to"},
+		{"the save names no repository", mutation{gq, " && github.repository == 'full-chaos/dev-health-ops' && steps.reach-store", " && steps.reach-store"}, "does not name the repository"},
 		{"the variable at job level", mutation{gq, "      # The default 600 s per-package go test timeout is too small for the pool.\n", "      PLAN_READS_REACH_CACHE: /mnt/go-cache/plan-reads\n      # The default 600 s per-package go test timeout is too small for the pool.\n"}, "set at job level"},
 	}
 	for _, c := range cases {

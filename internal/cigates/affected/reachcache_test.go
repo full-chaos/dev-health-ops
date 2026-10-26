@@ -1,6 +1,8 @@
 package affected_test
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -241,24 +243,35 @@ func TestReachCacheStoreIsNeverTrusted(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// Right key, one row too many: reused, compared with reach.tsv, RED.
-	write(string(good) + "b\tghost.go\tc\n")
-	if res := reachRun(t, f.root, env, "--reach", "--reach-cache", store); res.code == 0 {
-		t.Fatalf("a store with an extra row gave a green gate:\n%s%s", res.stdout, res.stderr)
-	}
-	// Right key, a row missing: RED.
-	if lines := strings.Split(strings.TrimRight(string(good), "\n"), "\n"); len(lines) > 2 {
-		write(strings.Join(lines[:len(lines)-1], "\n") + "\n")
-		if res := reachRun(t, f.root, env, "--reach", "--reach-cache", store); res.code == 0 {
-			t.Fatalf("a store with a missing row gave a green gate:\n%s%s", res.stdout, res.stderr)
+	// The header binds the rows (rows-sha256): a store whose rows were edited after it was written is refused and the
+	// gate recomputes; a cache problem alone is never a FAIL.
+	refused := func(name, body string) {
+		t.Helper()
+		write(body)
+		res := reachRun(t, f.root, env, "--reach", "--reach-cache", store)
+		if res.code != 0 || strings.Contains(res.stdout, "reach: reused") || !strings.Contains(res.stdout, "reach: computed for input hash "+key) {
+			t.Errorf("%s: want the store refused, a recompute and a green gate, exit %d:\n%s%s", name, res.code, res.stdout, res.stderr)
 		}
+	}
+	refused("an extra row", string(good)+"b\tghost.go\tc\n")
+	if lines := strings.Split(strings.TrimRight(string(good), "\n"), "\n"); len(lines) > 2 {
+		refused("a missing row", strings.Join(lines[:len(lines)-1], "\n")+"\n")
+	}
+	refused("a header without the rows digest", "# reach-cache-v2 key "+key+"\n"+strings.SplitN(string(good), "\n", 2)[1])
+	// A store whose header digest matches its rows but whose rows differ from reach.tsv is still compared: RED.
+	rows := strings.SplitN(string(good), "\n", 2)[1]
+	rows += "b\tghost.go\tc\n"
+	digest := sha256.Sum256([]byte(rows))
+	write("# reach-cache-v2 key " + key + " rows-sha256 " + hex.EncodeToString(digest[:]) + "\n" + rows)
+	if res := reachRun(t, f.root, env, "--reach", "--reach-cache", store); res.code != 1 || !strings.Contains(res.stdout, "reach: reused") {
+		t.Fatalf("a consistent store that differs from reach.tsv must be reused and compared (RED), exit %d:\n%s%s", res.code, res.stdout, res.stderr)
 	}
 	// A header of another key, an empty file, a truncated header: not reused; recomputed, green, store rewritten.
 	for name, body := range map[string]string{
 		"other key":  strings.Replace(string(good), key, strings.Repeat("0", 64), 1),
 		"empty":      "",
 		"no header":  "b\tb.go\tc\n",
-		"old schema": strings.Replace(string(good), "reach-cache-v1", "reach-cache-v0", 1),
+		"old schema": strings.Replace(string(good), "reach-cache-v2", "reach-cache-v1", 1),
 	} {
 		write(body)
 		res := reachRun(t, f.root, env, "--reach", "--reach-cache", store)
@@ -303,5 +316,74 @@ func TestReachCacheOffByDefault(t *testing.T) {
 	res := reachRun(t, f.root, reachEnv(), "--reach")
 	if res.code != 0 || strings.Contains(res.stdout, "input hash") || !strings.Contains(res.stdout, "program run(s)") {
 		t.Fatalf("without --reach-cache the gate must compute as before: exit %d:\n%s%s", res.code, res.stdout, res.stderr)
+	}
+}
+
+// CHAOS-11421 r1: inputs the first key missed.
+func TestReachCacheKeyIncludesIgnoredGoFiles(t *testing.T) {
+	f, _ := reachFixture(t, reachCacheHead())
+	appendTo(t, filepath.Join(f.root, ".gitignore"), "d/ignored_test.go\n")
+	env := reachEnv()
+	without := reachKeyOf(t, f.root, env)
+	appendTo(t, filepath.Join(f.root, "d", "ignored_test.go"), reachTest("d", "\t_ = b.Load\n"))
+	if with := reachKeyOf(t, f.root, env); with == without {
+		t.Fatal("a git-ignored .go file that the build loads left the key unchanged")
+	}
+}
+
+func TestReachCacheKeyIncludesTheFileSelectionEnvironment(t *testing.T) {
+	f, _ := reachFixture(t, reachCacheHead())
+	base := reachEnv("GOARCH=amd64", "GOAMD64=v1", "GOARM64=v8.0")
+	key := reachKeyOf(t, f.root, base)
+	for name, e := range map[string][]string{
+		"GOAMD64": reachEnv("GOARCH=amd64", "GOAMD64=v3", "GOARM64=v8.0"),
+		"GOARM64": reachEnv("GOARCH=amd64", "GOAMD64=v1", "GOARM64=v9.0"),
+	} {
+		if got := reachKeyOf(t, f.root, e); got == key {
+			t.Errorf("%s left the key unchanged", name)
+		}
+	}
+}
+
+func TestReachCacheRefusesALocalReplaceOutsideTheRepository(t *testing.T) {
+	f, work := reachFixture(t, reachCacheHead())
+	ext := filepath.Join(work, "ext")
+	if err := os.MkdirAll(ext, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string]string{"go.mod": "module ext\n", "e.go": "package ext\n"} {
+		if err := os.WriteFile(filepath.Join(ext, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if res := writeTables(t, f.root); res.code != 0 {
+		t.Fatalf("plan-reads --write exited %d:\n%s%s", res.code, res.stdout, res.stderr)
+	}
+	appendTo(t, filepath.Join(f.root, "go.mod"), "\nrequire ext v0.0.0\n\nreplace ext => ../ext\n")
+	env := reachEnv()
+	if res := reachRun(t, f.root, env, "--print-reach-key"); res.code == 0 {
+		t.Fatalf("a replace outside the repository must give no key:\n%s%s", res.stdout, res.stderr)
+	}
+	store := t.TempDir()
+	res := reachRun(t, f.root, env, "--reach", "--reach-cache", store)
+	if res.code != 0 || !strings.Contains(res.stdout, "reach: not reusable") || strings.Contains(res.stdout, "reach: reused") {
+		t.Fatalf("a replace outside the repository must compute fresh and say so: exit %d:\n%s%s", res.code, res.stdout, res.stderr)
+	}
+	if got := storeFiles(t, store); len(got) != 0 {
+		t.Fatalf("a refused cache stored %v", got)
+	}
+}
+
+func TestReachCacheKeyIncludesAReplaceTreeInsideTheRepository(t *testing.T) {
+	head := reachCacheHead()
+	head["ext/go.mod"] = "module ext\n"
+	head["ext/e.go"] = "package ext\n"
+	f, _ := reachFixture(t, head)
+	appendTo(t, filepath.Join(f.root, "go.mod"), "\nrequire ext v0.0.0\n\nreplace ext => ./ext\n")
+	env := reachEnv()
+	before := reachKeyOf(t, f.root, env)
+	appendTo(t, filepath.Join(f.root, "ext", "e.go"), "\nfunc F() {}\n")
+	if after := reachKeyOf(t, f.root, env); after == before {
+		t.Fatal("a change in a replace tree inside the repository left the key unchanged")
 	}
 }

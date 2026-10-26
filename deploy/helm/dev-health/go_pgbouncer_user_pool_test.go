@@ -114,3 +114,61 @@ func TestPgbouncerExtraUserPoolSizeIsValidated(t *testing.T) {
 		t.Errorf("a sized role that cannot be a [users] key must fail naming the entry: err=%v out=%.300s", err, out)
 	}
 }
+
+var poolSizeKeys = map[string][]string{
+	"extra user":  nil,
+	"transaction": {"--set-json", "goWorkers.pgbouncer.transaction.poolSize=%s"},
+	"queue":       {"--set-json", "goWorkers.pgbouncer.queueSession.poolSize=%s"},
+	"coordinator": {"--set-json", "goWorkers.pgbouncer.coordinatorSession.poolSize=%s"},
+}
+
+func poolSizeArgs(name, size string) []string {
+	if name == "extra user" {
+		return extraUsersJSON(`{"role":"devhealth_keda_readonly","passwordKey":"RIVER_KEDA_READONLY_PASSWORD","poolSize":` + size + `}`)
+	}
+	set := poolSizeKeys[name]
+	return []string{set[0], strings.Replace(set[1], "%s", size, 1)}
+}
+
+// A pool size above 1000 is refused by the schema, and by the budget helper
+// itself when the schema did not run, so the budget sum cannot wrap.
+func TestPoolSizeIsBoundedBySchemaAndByTheBudgetHelper(t *testing.T) {
+	for name := range poolSizeKeys {
+		for _, size := range []string{"1001", "9223372036854775807"} {
+			_, out, err := renderAuth(t, authWith(poolSizeArgs(name, size)...)...)
+			if err == nil || !strings.Contains(out, "poolSize") || !strings.Contains(out, "schema") {
+				t.Errorf("%s %s: want a schema refusal naming poolSize: err=%v out=%.300s", name, size, err, out)
+			}
+			args := append(authWith("--set", "authService.database.connectionBudget=97", "--skip-schema-validation"), poolSizeArgs(name, size)...)
+			_, out, err = renderAuth(t, args...)
+			if err == nil || !strings.Contains(out, "poolSize must be a whole number from 1 to 1000") {
+				t.Errorf("%s %s without the schema: want the helper refusal naming the key: err=%v out=%.300s", name, size, err, out)
+			}
+		}
+	}
+}
+
+func TestAuthServiceReplicasAreBoundedForTheBudget(t *testing.T) {
+	for _, size := range []string{"101", "9223372036854775807"} {
+		_, out, err := renderAuth(t, authWith("--set-json", "authService.replicas="+size)...)
+		if err == nil || !strings.Contains(out, "replicas") {
+			t.Errorf("%s: want a schema refusal naming replicas: err=%v out=%.300s", size, err, out)
+		}
+		_, out, err = renderAuth(t, authWith("--set-json", "authService.replicas="+size, "--set", "authService.database.connectionBudget=97", "--skip-schema-validation")...)
+		if err == nil || !strings.Contains(out, "authService.replicas must be a whole number from 0 to 100") {
+			t.Errorf("%s without the schema: want the helper refusal: err=%v out=%.300s", size, err, out)
+		}
+	}
+}
+
+// 1000 is the largest accepted size; it still fails a 97 budget with the sum shown.
+func TestPoolSizeAtTheBoundStillFailsASmallBudget(t *testing.T) {
+	if _, out, err := renderAuth(t, authWith(poolSizeArgs("extra user", "1000")...)...); err != nil {
+		t.Fatalf("1000 renders with the budget off: %v\n%.300s", err, out)
+	}
+	_, out, err := renderAuth(t, authWith(append(poolSizeArgs("extra user", "1000"), "--set", "authService.database.connectionBudget=97")...)...)
+	// 16 + 1000 + 50 + 14 + (2+1) x 8 = 1104
+	if err == nil || !strings.Contains(out, budgetRefusal) || !strings.Contains(out, "1104") {
+		t.Fatalf("1000 must fail the 97 budget with the sum 1104: err=%v out=%.300s", err, out)
+	}
+}

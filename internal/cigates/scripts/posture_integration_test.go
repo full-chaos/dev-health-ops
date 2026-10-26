@@ -707,3 +707,34 @@ func TestPostureIntegrationRefusesAMalformedList(t *testing.T) {
 		})
 	}
 }
+
+// A run must not rewrite the caller's .git/config (a sparse-checkout disable in the worktree would add
+// extensions.worktreeConfig to the shared config): the bytes are the same before and after, on a normal and a sparse clone.
+func TestPostureIntegrationLeavesTheCallersGitConfigUntouched(t *testing.T) {
+	for _, sparse := range []bool{false, true} {
+		name := "normal clone"
+		if sparse {
+			name = "sparse clone"
+		}
+		t.Run(name, func(t *testing.T) {
+			f := postureDemo(t)
+			if sparse {
+				f.git("sparse-checkout", "set", "--no-cone", "/*", "!/internal/empty/empty.go")
+			}
+			cfg := filepath.Join(f.dir, ".git", "config")
+			before, err := os.ReadFile(cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			res := postureDemoRun(t, f, f.dir)
+			after, err := os.ReadFile(cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(before) != string(after) {
+				t.Fatalf("the caller's .git/config changed:\n--- before\n%s\n--- after\n%s\nstdout=%q stderr=%q", before, after, res.stdout, res.stderr)
+			}
+			requireHonestPass(t, f, res, name)
+		})
+	}
+}

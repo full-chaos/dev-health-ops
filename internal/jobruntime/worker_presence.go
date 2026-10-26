@@ -49,8 +49,8 @@ type WorkerPresence struct {
 	ttl         time.Duration
 
 	mu sync.Mutex
-	// maybeRegistered is set when an INSERT failed without an answer: the row
-	// may have committed. A retried Start then accepts an existing row that is
+	// maybeRegistered is set after any failed Exec of the INSERT: the row may
+	// have committed. A retried Start then accepts an existing row that is
 	// this identity's own (same group and queues) instead of refusing it.
 	maybeRegistered bool
 	cancel          context.CancelFunc

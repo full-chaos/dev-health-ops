@@ -68,15 +68,15 @@ func (process riverWorkerProcess) Start(ctx context.Context) error {
 		ctx, process.budget, process.now, process.sleep, process.jitter,
 		startClient,
 		isRiverProducerStartTimeout,
-		func(attempt int, elapsed, wait time.Duration, _ error) {
-			process.logRetry(ctx, attempt, elapsed, wait)
+		func(attempt int, elapsed, wait time.Duration, err error) {
+			process.logRetry(ctx, attempt, elapsed, wait, err)
 		},
-		func(attempt int, elapsed time.Duration, _ error, budgetExhausted bool) {
+		func(attempt int, elapsed time.Duration, err error, budgetExhausted bool) {
 			reason := "river_producer_start_failed"
 			if budgetExhausted {
 				reason = "retry_budget_exhausted"
 			}
-			process.logGiveUp(ctx, reason, attempt, elapsed)
+			process.logGiveUp(ctx, reason, attempt, elapsed, err)
 		},
 	)
 }
@@ -95,15 +95,17 @@ func isRiverProducerStartTimeout(err error) bool {
 // level preclaim readiness retries at, because this is the expected shape of
 // a roll storm, not something an operator needs to act on unless it keeps
 // recurring until the budget runs out.
-func (process riverWorkerProcess) logRetry(ctx context.Context, attempt int, elapsed, wait time.Duration) {
+func (process riverWorkerProcess) logRetry(ctx context.Context, attempt int, elapsed, wait time.Duration, err error) {
 	if process.logger == nil {
 		return
 	}
 	process.logger.WarnContext(ctx, "river workers start timed out, retrying",
-		"error_category", "dependency_unavailable",
-		"attempt", attempt,
-		"elapsed", elapsed.String(),
-		"retry_in", wait.String(),
+		append([]any{
+			"error_category", "dependency_unavailable",
+			"attempt", attempt,
+			"elapsed", elapsed.String(),
+			"retry_in", wait.String(),
+		}, transientCauseAttrs(err)...)...,
 	)
 }
 
@@ -111,15 +113,17 @@ func (process riverWorkerProcess) logRetry(ctx context.Context, attempt int, ela
 // retryable timeout whose budget ran out. Start returns an error either way,
 // so the process exits and is restarted; this is the one place the attempt
 // count and elapsed time are recorded before that happens.
-func (process riverWorkerProcess) logGiveUp(ctx context.Context, reason string, attempt int, elapsed time.Duration) {
+func (process riverWorkerProcess) logGiveUp(ctx context.Context, reason string, attempt int, elapsed time.Duration, err error) {
 	if process.logger == nil {
 		return
 	}
 	process.logger.ErrorContext(ctx, "river workers start refused",
-		"error_category", "dependency_unavailable",
-		"reason", reason,
-		"attempts", attempt,
-		"elapsed", elapsed.String(),
+		append([]any{
+			"error_category", "dependency_unavailable",
+			"reason", reason,
+			"attempts", attempt,
+			"elapsed", elapsed.String(),
+		}, transientCauseAttrs(err)...)...,
 	)
 }
 

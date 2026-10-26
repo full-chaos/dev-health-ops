@@ -3,6 +3,7 @@ package workerservice
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"net"
@@ -174,5 +175,89 @@ func TestPresenceRetryLogsOneWarnPerRetryAndOneGiveUpWithoutTheDialAddress(t *te
 	}
 	if !bytes.Contains(exhausted.Bytes(), []byte("retry_budget_exhausted")) || bytes.Contains(exhausted.Bytes(), []byte("10.0.0.10")) {
 		t.Fatalf("give-up line must name the reason and no address: %s", exhausted.String())
+	}
+}
+
+func logRecords(t *testing.T, raw []byte) []map[string]any {
+	t.Helper()
+	var records []map[string]any
+	for _, line := range bytes.Split(bytes.TrimSpace(raw), []byte("\n")) {
+		if len(line) == 0 {
+			continue
+		}
+		var record map[string]any
+		if err := json.Unmarshal(line, &record); err != nil {
+			t.Fatalf("log line %q: %v", line, err)
+		}
+		records = append(records, record)
+	}
+	return records
+}
+
+func TestTransientRetryAndGiveUpLinesCarryTheBoundedCauseOnRiverAndPresence(t *testing.T) {
+	t.Parallel()
+	var riverLogs bytes.Buffer
+	process := newTestRiverWorkerProcess(t)
+	process.logger = slog.New(slog.NewJSONHandler(&riverLogs, nil))
+	clock := newFakeRetryClock()
+	process.budget, process.now, process.sleep = 5*time.Second, clock.Now, clock.Sleep
+	process.startClient = func(context.Context) error { return refusedDialToAddress() }
+	if err := process.Start(context.Background()); err == nil {
+		t.Fatal("want budget exhausted")
+	}
+
+	var presenceLogs bytes.Buffer
+	failing := &presenceFake{}
+	for range 40 {
+		failing.errs = append(failing.errs, refusedDialToAddress())
+	}
+	pclock := &preclaimFakeClock{}
+	component := workerProcessComponent{
+		presence: failing, startBudget: 10 * time.Second, now: pclock.now, sleep: pclock.sleep,
+		logger: slog.New(slog.NewJSONHandler(&presenceLogs, nil)),
+	}
+	if err := component.Start(context.Background()); err == nil {
+		t.Fatal("want budget exhausted")
+	}
+
+	want := map[string]bool{
+		"river workers start timed out, retrying": false,
+		"river workers start refused":             false,
+		"worker presence registration refused":    false,
+	}
+	for _, record := range append(logRecords(t, riverLogs.Bytes()), logRecords(t, presenceLogs.Bytes())...) {
+		msg, _ := record["msg"].(string)
+		if _, tracked := want[msg]; !tracked {
+			continue
+		}
+		if record["cause"] != "unreachable" {
+			t.Errorf("%q: cause = %v, want unreachable", msg, record["cause"])
+		}
+		want[msg] = true
+	}
+	for msg, seen := range want {
+		if !seen {
+			t.Errorf("no %q line was logged", msg)
+		}
+	}
+	if bytes.Contains(riverLogs.Bytes(), []byte("10.0.0.10")) || bytes.Contains(presenceLogs.Bytes(), []byte("10.0.0.10")) {
+		t.Fatalf("a retry or give-up line carries the dial address: %s %s", riverLogs.String(), presenceLogs.String())
+	}
+}
+
+func TestGenuineGiveUpLinesCarryNoUnreachableCause(t *testing.T) {
+	t.Parallel()
+	var logs bytes.Buffer
+	process := newTestRiverWorkerProcess(t)
+	process.logger = slog.New(slog.NewJSONHandler(&logs, nil))
+	process.budget = time.Minute
+	process.startClient = func(context.Context) error { return errors.New("queue and workers must be configured") }
+	if err := process.Start(context.Background()); err == nil {
+		t.Fatal("want the genuine error")
+	}
+	for _, record := range logRecords(t, logs.Bytes()) {
+		if record["cause"] != nil {
+			t.Fatalf("a genuine failure must not claim a cause: %v", record)
+		}
 	}
 }

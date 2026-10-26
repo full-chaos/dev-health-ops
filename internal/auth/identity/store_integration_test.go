@@ -1257,7 +1257,7 @@ func TestProvisionLocalAndByEmailAfterTheCutover(t *testing.T) {
 	key, _ := NormalizeEmail(email)
 	hash := testBcrypt
 	request := uuid.NewString()
-	req := LocalProvisionRequest{Email: email, FullName: "Local User", PasswordHash: &hash, Actor: SelfSignUp(&request)}
+	req := LocalProvisionRequest{Email: email, FullName: strPtr("Local User"), PasswordHash: &hash, Actor: SelfSignUp(&request)}
 
 	if _, err := e.store.ProvisionLocal(ctx, req); !errors.Is(err, ErrSignupNotAvailable) {
 		t.Fatalf("ProvisionLocal before the cutover = %v, want ErrSignupNotAvailable", err)

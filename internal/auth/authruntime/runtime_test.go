@@ -731,8 +731,8 @@ func TestRoutesAreEmptyWithoutTheSessionSecrets(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
 	dormant, err := sessionRoutes(authconfig.Config{}, logger, pool, schema, nil, nil)
-	if err != nil || len(dormant) != 0 {
-		t.Fatalf("without the session secrets: %d route(s), err %v; want none", len(dormant), err)
+	if err != nil || len(dormant) != 2 {
+		t.Fatalf("without the session secrets: %d route(s), err %v; want the 2 refresh and logout stubs", len(dormant), err)
 	}
 
 	load := func(env func(map[string]string) map[string]string) authconfig.Config {

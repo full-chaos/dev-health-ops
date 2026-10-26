@@ -35,7 +35,7 @@ func TestStreakIndexJobIsOffByDefaultAndOrderedBeforeTheMigrateJob(t *testing.T)
 		t.Fatalf("backoffLimit/activeDeadlineSeconds = %v/%v, want 0/3600", spec["backoffLimit"], spec["activeDeadlineSeconds"])
 	}
 	c := container(t, job, "streak-index")
-	want := []string{"migrate", "postgres", "build-index", "--lock-timeout=5s", "--attempts=20", "--retry-delay=15s", "failure-streak"}
+	want := []string{"migrate", "postgres", "build-index", "--lock-timeout=5s", "--deadline=1800s", "--attempts=3", "--retry-delay=15s", "failure-streak"}
 	if args := stringsOf(c["args"]); !reflect.DeepEqual(args, want) {
 		t.Fatalf("args = %v, want %v", args, want)
 	}
@@ -51,6 +51,7 @@ func TestStreakIndexJobRefusesBadBounds(t *testing.T) {
 	for name, sets := range map[string][]string{
 		"lock timeout over a minute": {"web.enabled=false", "migrations.hook.streakIndex.enabled=true", "migrations.hook.streakIndex.lockTimeoutSeconds=61"},
 		"null enabled":               {"web.enabled=false", "migrations.hook.streakIndex=null"},
+		"deadline over the job":      {"web.enabled=false", "migrations.hook.streakIndex.enabled=true", "migrations.hook.streakIndex.deadlineSeconds=3300"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, _, refusal := renderJobs(t, sets...)

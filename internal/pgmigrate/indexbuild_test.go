@@ -118,11 +118,11 @@ func TestBuildIndexRefusesAnyOtherIndexName(t *testing.T) {
 // The chart passes the flags and then the index name; an operator may type them the other way round. Both orders must
 // pass the argument parser and reach the DSN resolver (which here refuses, so nothing connects).
 func TestBuildIndexAcceptsFlagsBeforeAndAfterTheIndexName(t *testing.T) {
-	flags := []string{"--lock-timeout=5s", "--attempts=20", "--retry-delay=15s"}
+	flags := []string{"--lock-timeout=5s", "--attempts=3", "--retry-delay=15s"}
 	for name, args := range map[string][]string{
 		"chart order": append(append([]string{}, flags...), "failure-streak"),
 		"name first":  append([]string{"failure-streak"}, flags...),
-		"flags both":  {"--lock-timeout=5s", "failure-streak", "--attempts=20", "--retry-delay=15s"},
+		"flags both":  {"--lock-timeout=5s", "failure-streak", "--attempts=3", "--retry-delay=15s"},
 		"name alone":  {"failure-streak"},
 	} {
 		t.Run(name, func(t *testing.T) {

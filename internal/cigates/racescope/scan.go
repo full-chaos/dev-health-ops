@@ -34,7 +34,7 @@ var bannedImports = map[string]bool{
 }
 
 // bannedSelectors are calls that start a goroutine or a timer goroutine without a `go` statement.
-var bannedSelectors = map[string]bool{"Parallel": true, "AfterFunc": true, "NewTicker": true, "NewTimer": true, "Tick": true}
+var bannedSelectors = map[string]bool{"Parallel": true, "AfterFunc": true, "NewTicker": true, "NewTimer": true, "Tick": true, "RunParallel": true, "StartProcess": true}
 
 type goPackage struct {
 	ImportPath     string
@@ -160,12 +160,20 @@ func scanFile(path string, ts typeStore) []string {
 		if v == "C" {
 			at(imp.Pos(), "cgo file: Go and C code the scan cannot model")
 		}
+		if stdlibPath(v) {
+			if _, ok := stdlibAllowed[v]; !ok {
+				at(imp.Pos(), "imports "+v+", which is not on the stdlib allowlist (it may start goroutines or run user code on one)")
+			}
+		}
 		if v == "reflect" && strings.HasSuffix(path, "_test.go") {
 			at(imp.Pos(), "imports reflect in a test file (a method called by name, such as Parallel, is invisible to the scan)")
 		}
 		if imp.Name != nil && imp.Name.Name == "." {
 			at(imp.Pos(), "dot import of "+v+" (its calls lose their package qualifier, so the scan cannot see them)")
 		}
+	}
+	for _, pos := range tf.ifaceConversions() {
+		at(pos, "function value converted to an interface type (it may be called later from another goroutine, e.g. runtime.SetFinalizer)")
 	}
 	ast.Inspect(f, func(n ast.Node) bool {
 		switch x := n.(type) {
@@ -778,5 +786,200 @@ func capturedWrites(ft *ast.FuncType, body *ast.BlockStmt) []write {
 	return out
 }
 
-// stdlibAllowed is the deny-by-default allowlist of standard-library imports (filled by the fix commit).
-var stdlibAllowed = map[string]string{}
+// stdlibAllowed is the deny-by-default allowlist of standard-library imports (acp, CHAOS-11413): a package that is not here is refused,
+// so context (a custom parent calls the user's Err on a goroutine), net/rpc (a goroutine per request), runtime (SetFinalizer),
+// reflect, sync, net/*, os/exec and os/signal are out until someone proves them. Admitted: only what the listed packages import
+// today, each known to start no goroutine and to call user code (String, Error, MarshalJSON, Less ...) only on the calling goroutine.
+var stdlibAllowed = map[string]string{
+	"bytes":         "byte-slice helpers and Buffer: no goroutine; calls io.Reader and io.Writer methods on the calling goroutine only",
+	"encoding/hex":  "pure encode and decode of hex text: no goroutine and no callback",
+	"encoding/json": "Marshal and Unmarshal call user MarshalJSON and UnmarshalJSON on the calling goroutine; no goroutine started",
+	"errors":        "error wrapping and matching: no goroutine; Is and As call user methods on the calling goroutine",
+	"fmt":           "formatting calls user String, Error and Format methods on the calling goroutine; no goroutine started",
+	"io":            "Reader and Writer helpers: no goroutine; io.Pipe only synchronises goroutines the caller already started",
+	"io/fs":         "file-system interfaces and WalkDir: calls fn on the calling goroutine (documented); no goroutine started",
+	"log/slog":      "structured logging: the Handler is called on the calling goroutine; no goroutine started",
+	"math":          "pure numeric functions: no goroutine and no callback",
+	"net/netip":     "value types for IP addresses: no goroutine, no I/O and no callback",
+	"os":            "file and environment access: synchronous calls, no goroutine started (os.StartProcess is refused by selector)",
+	"path/filepath": "path text helpers and Walk/WalkDir: fn is called on the calling goroutine (documented); no goroutine started",
+	"regexp":        "compiled expressions: matching runs on the calling goroutine and calls no user code; no goroutine started",
+	"slices":        "slice helpers: callbacks run on the calling goroutine (documented); no goroutine started",
+	"sort":          "sorting: Less and Swap run on the calling goroutine (documented); no goroutine started",
+	"strconv":       "number and quote conversion: no goroutine and no callback",
+	"strings":       "string helpers: callbacks (Map, FieldsFunc) run on the calling goroutine; no goroutine started",
+	"testing":       "runs tests on its own goroutines but t.Run waits for the subtest; t.Parallel and b.RunParallel are refused by selector",
+	"time":          "clock and durations: Sleep blocks the calling goroutine; AfterFunc, NewTimer, NewTicker and Tick are refused by selector",
+	"unicode":       "rune classification tables: no goroutine and no callback",
+	"unicode/utf8":  "UTF-8 encode and decode: no goroutine and no callback",
+}
+
+// stdlibPath: the import path belongs to the standard library (or is the pseudo-package unsafe): its first element has no dot.
+func stdlibPath(path string) bool {
+	return path != "C" && !strings.Contains(strings.SplitN(path, "/", 2)[0], ".")
+}
+
+// typeOf: the type of an expression, also for the identifiers an assignment writes to.
+func (tf *typed) typeOf(e ast.Expr) types.Type {
+	if tv, ok := tf.info.Types[e]; ok {
+		return tv.Type
+	}
+	if id, ok := e.(*ast.Ident); ok {
+		if obj := tf.info.Uses[id]; obj != nil {
+			return obj.Type()
+		}
+		if obj := tf.info.Defs[id]; obj != nil {
+			return obj.Type()
+		}
+	}
+	return nil
+}
+
+func isInterface(t types.Type) bool {
+	if t == nil {
+		return false
+	}
+	if _, ok := t.(*types.TypeParam); ok {
+		return false
+	}
+	_, ok := t.Underlying().(*types.Interface)
+	return ok
+}
+
+// ifaceConversions: the positions where a function-typed value meets an interface-typed target, whether the conversion is written
+// (any(f)) or implied (an assignment, an argument, a return, a composite literal element).
+func (tf *typed) ifaceConversions() []token.Pos {
+	var out []token.Pos
+	check := func(target types.Type, e ast.Expr) {
+		if isInterface(target) && tf.isFunc(e) {
+			out = append(out, e.Pos())
+		}
+	}
+	ast.Inspect(tf.file, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.CallExpr:
+			tv, ok := tf.info.Types[x.Fun]
+			if !ok {
+				return true
+			}
+			if tv.IsType() {
+				if len(x.Args) == 1 {
+					check(tv.Type, x.Args[0])
+				}
+				return true
+			}
+			sig, ok := tv.Type.Underlying().(*types.Signature)
+			if !ok {
+				return true
+			}
+			np := sig.Params().Len()
+			for i, a := range x.Args {
+				var pt types.Type
+				switch {
+				case sig.Variadic() && i >= np-1 && x.Ellipsis == token.NoPos:
+					if sl, ok := sig.Params().At(np - 1).Type().(*types.Slice); ok {
+						pt = sl.Elem()
+					}
+				case i < np:
+					pt = sig.Params().At(i).Type()
+				}
+				check(pt, a)
+			}
+		case *ast.AssignStmt:
+			if x.Tok != token.DEFINE && len(x.Lhs) == len(x.Rhs) {
+				for i := range x.Lhs {
+					check(tf.typeOf(x.Lhs[i]), x.Rhs[i])
+				}
+			}
+		case *ast.ValueSpec:
+			if x.Type != nil {
+				for _, v := range x.Values {
+					check(tf.typeOf(x.Type), v)
+				}
+			}
+		case *ast.SendStmt:
+			if ct := tf.typeOf(x.Chan); ct != nil {
+				if ch, ok := ct.Underlying().(*types.Chan); ok {
+					check(ch.Elem(), x.Value)
+				}
+			}
+		case *ast.CompositeLit:
+			t := tf.typeOf(x)
+			if t == nil {
+				return true
+			}
+			switch u := t.Underlying().(type) {
+			case *types.Struct:
+				for i, el := range x.Elts {
+					if kv, ok := el.(*ast.KeyValueExpr); ok {
+						if id, ok := kv.Key.(*ast.Ident); ok {
+							for j := 0; j < u.NumFields(); j++ {
+								if u.Field(j).Name() == id.Name {
+									check(u.Field(j).Type(), kv.Value)
+								}
+							}
+						}
+					} else if i < u.NumFields() {
+						check(u.Field(i).Type(), el)
+					}
+				}
+			case *types.Slice, *types.Array, *types.Map:
+				var key, elem types.Type
+				switch m := u.(type) {
+				case *types.Slice:
+					elem = m.Elem()
+				case *types.Array:
+					elem = m.Elem()
+				case *types.Map:
+					key, elem = m.Key(), m.Elem()
+				}
+				for _, el := range x.Elts {
+					if kv, ok := el.(*ast.KeyValueExpr); ok {
+						check(key, kv.Key)
+						check(elem, kv.Value)
+					} else {
+						check(elem, el)
+					}
+				}
+			}
+		}
+		return true
+	})
+	var returns func(body *ast.BlockStmt, sig *types.Signature)
+	returns = func(body *ast.BlockStmt, sig *types.Signature) {
+		if body == nil || sig == nil {
+			return
+		}
+		ast.Inspect(body, func(n ast.Node) bool {
+			switch x := n.(type) {
+			case *ast.FuncLit:
+				s, _ := tf.typeOf(x).(*types.Signature)
+				returns(x.Body, s)
+				return false
+			case *ast.ReturnStmt:
+				if len(x.Results) == sig.Results().Len() {
+					for i, r := range x.Results {
+						check(sig.Results().At(i).Type(), r)
+					}
+				}
+			}
+			return true
+		})
+	}
+	ast.Inspect(tf.file, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.FuncDecl:
+			if fn, ok := tf.info.Defs[x.Name].(*types.Func); ok {
+				s, _ := fn.Type().(*types.Signature)
+				returns(x.Body, s)
+			}
+			return false
+		case *ast.FuncLit:
+			s, _ := tf.typeOf(x).(*types.Signature)
+			returns(x.Body, s)
+			return false
+		}
+		return true
+	})
+	return out
+}

@@ -6,9 +6,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"go/ast"
+	"go/doc"
 	"go/parser"
 	"go/token"
 	"os"
+	"os/exec"
+	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -424,7 +427,10 @@ func providerTests(t *testing.T) (map[string]bool, map[string]bool) {
 
 // goTestSignature is the signature rule of cmd/go for a test: one parameter of type *T or *x.T, no results, no type
 // parameters (go test refuses to build a package whose Test-named function breaks it).
-func goTestSignature(fn *ast.FuncDecl) bool {
+func goTestSignature(fn *ast.FuncDecl) bool { return goFuncSignature(fn, "T") }
+
+// goFuncSignature is cmd/go's isTestFunc: one parameter of type *<arg> or *x.<arg>, no results, no type parameters.
+func goFuncSignature(fn *ast.FuncDecl, arg string) bool {
 	if fn.Type.TypeParams.NumFields() > 0 || fn.Type.Results.NumFields() > 0 || fn.Type.Params == nil ||
 		len(fn.Type.Params.List) != 1 || len(fn.Type.Params.List[0].Names) > 1 {
 		return false
@@ -435,9 +441,9 @@ func goTestSignature(fn *ast.FuncDecl) bool {
 	}
 	switch x := ptr.X.(type) {
 	case *ast.Ident:
-		return x.Name == "T"
+		return x.Name == arg
 	case *ast.SelectorExpr:
-		return x.Sel.Name == "T"
+		return x.Sel.Name == arg
 	}
 	return false
 }
@@ -473,10 +479,40 @@ func parsedTestFuncs(t *testing.T, path string) ([]string, string) {
 	return tests, hook
 }
 
-// taggedFacts is the oracle for the tag filter, built apart from check_go.sh: per package key, the top-level tests of
-// the test files that only the integration build lists (go list -tags=integration minus plain go list), the top-level
-// tests of every other test file, and the first `func init`/`func TestMain` of a tag-only file ("<file> <func>"; such a
-// package runs unfiltered, because that hook changes the process its untagged tests run in).
+// parsedRunFuncs parses one Go test file and returns the other names a go test -run selects (cmd/go's load): the fuzz
+// targets ("Fuzz" or "Fuzz" plus a rune that is not lower case, one *F or *x.F parameter) and the examples with an
+// output comment (go/doc.Examples, as cmd/go; an example without one is compiled but never run).
+func parsedRunFuncs(t *testing.T, path string) []string {
+	t.Helper()
+	file, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.ParseComments|parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatalf("parse %s: %v", path, err)
+	}
+	var names []string
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Recv != nil {
+			continue
+		}
+		if rest, ok := strings.CutPrefix(fn.Name.Name, "Fuzz"); ok && goFuncSignature(fn, "F") {
+			if r, _ := utf8.DecodeRuneInString(rest); rest == "" || !unicode.IsLower(r) {
+				names = append(names, fn.Name.Name)
+			}
+		}
+	}
+	for _, e := range doc.Examples(file) {
+		if e.Output != "" || e.EmptyOutput {
+			names = append(names, "Example"+e.Name)
+		}
+	}
+	return names
+}
+
+// taggedFacts is the oracle for the tag filter, built apart from check_go.sh: per package key, the names go test runs
+// (top-level tests, fuzz targets, examples with output) of the test files that only the integration build lists (go
+// list -tags=integration minus plain go list), the same names of every other test file, and the first `func init`/`func
+// TestMain` of a tag-only file ("<file> <func>"; such a package runs unfiltered: every name of it is selected, because
+// that hook changes the process its untagged tests run in).
 type taggedFacts struct {
 	tagged, untagged map[string]map[string]bool
 	hook             map[string]string
@@ -531,6 +567,7 @@ func integrationTaggedFacts(t *testing.T) taggedFacts {
 			taggedVal.tagged[k], taggedVal.untagged[k] = map[string]bool{}, map[string]bool{}
 			for _, f := range withTag[k] {
 				tests, hook := parsedTestFuncs(t, filepath.Join(root, k, f))
+				tests = append(tests, parsedRunFuncs(t, filepath.Join(root, k, f))...)
 				into := taggedVal.untagged[k]
 				if !inPlain[f] {
 					into = taggedVal.tagged[k]
@@ -551,10 +588,11 @@ func integrationTaggedFacts(t *testing.T) taggedFacts {
 }
 
 // checkTaggedSelection checks one packages shard's dry run against the oracle: every package of the shard either runs
-// exactly its integration-tagged tests (one `SHARD-TEST <key> <Test>` line each, and the same names in the
+// exactly its integration-tagged names (one `SHARD-TEST <key> <name>` line each, and the same names in the
 // `SHARD-REGEX <module> ^(...)$` that go test receives) or, when a tag-only file declares a hook, is named by one
-// `SHARD-UNFILTERED <key> <file> <func>` line and runs whole. An untagged test, a missing tagged test, a duplicate,
-// a package of another shard or an unjustified unfiltered package is an error.
+// `SHARD-UNFILTERED <key> <file> <func>` line and selects every name it declares (tagged and untagged), so it runs
+// whole inside its go test group. An untagged name of a filtered package, a missing name, a duplicate, a package of
+// another shard or an unjustified unfiltered package is an error.
 func checkTaggedSelection(stdout string, shardKeys map[string]bool, f taggedFacts) error {
 	selected := map[string]map[string]bool{}
 	union := map[string]bool{}
@@ -564,15 +602,14 @@ func checkTaggedSelection(stdout string, shardKeys map[string]bool, f taggedFact
 			return fmt.Errorf("malformed SHARD-TEST line %q", v)
 		}
 		k, n := fs[0], fs[1]
+		hooked := f.hook[k] != ""
 		switch {
 		case !shardKeys[k]:
 			return fmt.Errorf("SHARD-TEST names %s, a package this shard does not run", k)
-		case f.hook[k] != "":
-			return fmt.Errorf("SHARD-TEST names %s %s, but %s runs unfiltered (%s)", k, n, k, f.hook[k])
-		case f.untagged[k][n] && !f.tagged[k][n]:
+		case !hooked && f.untagged[k][n] && !f.tagged[k][n]:
 			return fmt.Errorf("SHARD-TEST selects the untagged test %s %s: untagged tests run in the test and race legs, not in a shard", k, n)
-		case !f.tagged[k][n]:
-			return fmt.Errorf("SHARD-TEST names %s %s, which is no integration-tagged top-level test", k, n)
+		case !f.tagged[k][n] && !(hooked && f.untagged[k][n]):
+			return fmt.Errorf("SHARD-TEST names %s %s, which is no test, fuzz target or example the integration build runs there", k, n)
 		case selected[k][n]:
 			return fmt.Errorf("SHARD-TEST selects %s %s twice", k, n)
 		}
@@ -601,6 +638,16 @@ func checkTaggedSelection(stdout string, shardKeys map[string]bool, f taggedFact
 		if f.hook[k] != "" {
 			if !unfiltered[k] {
 				return fmt.Errorf("%s has a tag-only hook (%s) but no SHARD-UNFILTERED line", k, f.hook[k])
+			}
+			whole := map[string]bool{}
+			for n := range f.tagged[k] {
+				whole[n] = true
+			}
+			for n := range f.untagged[k] {
+				whole[n] = true
+			}
+			if !sameSet(selected[k], whole) {
+				return fmt.Errorf("%s runs unfiltered (%s) but its SHARD-TEST lines select %d of its %d names", k, f.hook[k], len(selected[k]), len(whole))
 			}
 			continue
 		}
@@ -663,7 +710,7 @@ func sameSet(a, b map[string]bool) bool {
 // discoveryFunctions are the ci/check_go.sh functions the discovery harness lifts into bash. A name the script does not
 // define is skipped, so the same test runs against an older script.
 var discoveryFunctions = []string{
-	"die", "check_listed_test_file", "scan_listed_go_tests", "scan_go_test_paths", "gotestfuncs_bin", "go_test_name_ok",
+	"die", "check_listed_test_file", "scan_listed_go_tests", "scan_go_test_paths", "gotestfuncs_bin", "go_run_name_ok", "go_test_name_ok",
 	"integration_test_files", "split_plain_test_files", "split_package_hook", "discover_integration_tagged_tests",
 	"run_integration_packages", "discover_daily_tests",
 }
@@ -762,6 +809,81 @@ func listerVsCompiledBody(pkgs []string) string {
 	return b.String()
 }
 
+// groupListBody, run after receipts.txt holds a fixture's run_integration_packages receipts, prints `LISTEDG <pkg>
+// <name>` for every name `go test -list` selects under each group's regex in each member of that group.
+const groupListBody = `
+mapfile -t regexes < <(sed -n 's/^  SHARD-REGEX \. //p' receipts.txt)
+mapfile -t groups < <(sed -n 's/^  SHARD-GROUP \. [0-9]* //p' receipts.txt)
+for i in "${!regexes[@]}"; do
+  read -r -a members <<<"${groups[${i}]}"
+  for m in "${members[@]}"; do
+    GOWORK=off go test -mod=readonly -tags=integration -list "${regexes[${i}]}" "./${m}" | sed -nE "s/^((Test|Example|Fuzz).*)$/LISTEDG ${m} \1/p"
+  done
+done
+`
+
+// groupRunDefects checks a fixture's receipts against its LISTEDG lines (groupListBody) and, for the hook packages, its
+// `ALL <pkg> <name>` lines (go test -list '.*'): each package sits in one go test group, every member lists under its
+// group's regex exactly its SHARD-TEST names (each once, nothing else), and a hook package's SHARD-TEST names are its
+// whole -list '.*' set.
+func groupRunDefects(got string, hooks []string) []string {
+	var d []string
+	want, listed, all := map[string]map[string]bool{}, map[string]map[string]int{}, map[string]map[string]bool{}
+	add := func(m map[string]map[string]bool, v string) {
+		f := strings.Fields(v)
+		if m[f[0]] == nil {
+			m[f[0]] = map[string]bool{}
+		}
+		m[f[0]][f[1]] = true
+	}
+	for _, v := range lineValues(got, "  SHARD-TEST ") {
+		add(want, v)
+	}
+	for _, v := range lineValues(got, "ALL ") {
+		add(all, v)
+	}
+	for _, v := range lineValues(got, "LISTEDG ") {
+		f := strings.Fields(v)
+		if listed[f[0]] == nil {
+			listed[f[0]] = map[string]int{}
+		}
+		listed[f[0]][f[1]]++
+	}
+	seen := map[string]bool{}
+	for _, v := range lineValues(got, "  SHARD-GROUP ") {
+		for _, m := range strings.Fields(v)[2:] {
+			if seen[m] {
+				d = append(d, m+" sits in two go test groups")
+			}
+			seen[m] = true
+		}
+	}
+	for m := range want {
+		if !seen[m] {
+			d = append(d, m+" has SHARD-TEST lines but sits in no go test group")
+		}
+		for n := range want[m] {
+			if listed[m][n] != 1 {
+				d = append(d, fmt.Sprintf("SHARD-TEST %s %s is listed %d time(s) by its group regex, want 1", m, n, listed[m][n]))
+			}
+		}
+	}
+	for m := range listed {
+		for n, c := range listed[m] {
+			if !want[m][n] {
+				d = append(d, fmt.Sprintf("a group regex selects %s %s (%d time(s)), which is no SHARD-TEST of it", m, n, c))
+			}
+		}
+	}
+	for _, h := range hooks {
+		if len(all[h]) == 0 || !sameSet(want[h], all[h]) {
+			d = append(d, fmt.Sprintf("hook package %s selects %v, go test -list '.*' lists %v", h, sortedKeys(want[h]), sortedKeys(all[h])))
+		}
+	}
+	sort.Strings(d)
+	return d
+}
+
 const mergeGroupReceipt = "CHAOS-11407 retired the receipt \"unit test re-run under -tags=integration\": the integration shards skip " +
 	"untagged tests because the go-quality test and race legs run every package on merge_group (plan-verdict FULL). " +
 	"merge_group must stay FULL, or the shards must run the untagged tests of the packages a merge_group plan leaves out"
@@ -790,9 +912,11 @@ func mergeGroupFullDefects(src string) []string {
 	return d
 }
 
-// runIntegrationPackagesDefects checks the body of run_integration_packages: after the dry-run return, exactly two
-// run_integration_go_test calls (the reaped-session helper) run, each go test group with -run of its printed
-// SHARD-REGEX and the hook packages whole; the body runs no go test itself.
+// runIntegrationPackagesDefects checks the body of run_integration_packages: after the dry-run return, exactly one
+// run_integration_go_test call (the reaped-session helper) runs, inside the group loop, so each go test group runs once
+// with -run of its printed SHARD-REGEX; a hook package is a member of a group, never a separate go test (a separate
+// call ran after the groups and added their wall to its own; CHAOS-11407 merge-queue eject). The body runs no go test
+// itself.
 func runIntegrationPackagesDefects(body string) []string {
 	var d []string
 	lines := strings.Split(body, "\n")
@@ -822,13 +946,15 @@ func runIntegrationPackagesDefects(body string) []string {
 			if at(i-2) != `mapfile -t run_pkgs <<<"${group_pkgs[${group}]%$'\n'}"` {
 				d = append(d, "the -run go test does not run the packages of its group")
 			}
-		case at(i-1) == `run_pkgs=("${unfiltered[@]}")`:
+			if at(i-3) != `for ((group = 0; group < groups; group++)); do` {
+				d = append(d, "the -run go test is not the body of the group loop")
+			}
 		default:
-			d = append(d, "a run_integration_go_test call runs neither a group with its -run nor the hook packages")
+			d = append(d, "a run_integration_go_test call runs no go test group with its -run (a separate whole-package go test?)")
 		}
 	}
-	if calls != 2 {
-		d = append(d, fmt.Sprintf("%d run_integration_go_test calls, want 2 (each group with -run, hook packages whole)", calls))
+	if calls != 1 {
+		d = append(d, fmt.Sprintf("%d run_integration_go_test calls, want 1 (one per go test group, hook packages inside their group)", calls))
 	}
 	if !strings.Contains(body, `printf '  SHARD-REGEX %s %s\n' "${module_dir}" "${group_regex[${group}]}"`) {
 		d = append(d, "the SHARD-REGEX receipt does not print the regex go test receives")
@@ -994,6 +1120,98 @@ cmp -s one.txt two.txt && echo SAME || { echo DIFFERENT; diff one.txt two.txt ||
 			t.Errorf("an over-budget package still printed plan lines: %.500s", res.stdout)
 		}
 	})
+	t.Run("a hook package joins its go test group with every test, fuzz target and example it declares", func(t *testing.T) {
+		t.Parallel()
+		files := map[string]string{
+			"a/plain_test.go": "package a\n\nimport \"testing\"\n\nfunc TestAPlain(t *testing.T) {}\n",
+			"a/tag_test.go":   "//go:build integration\n\npackage a\n\nimport \"testing\"\n\nfunc TestATagged(t *testing.T) {}\n",
+			"h/h.go":          "package h\n",
+			"h/plain_test.go": "package h\n\nimport (\n\t\"fmt\"\n\t\"testing\"\n)\n\nfunc TestHPlain(t *testing.T) {}\n\n" +
+				"func FuzzHPlain(f *testing.F) { f.Add(1); f.Fuzz(func(t *testing.T, n int) {}) }\n\n" +
+				"func Example_withOutput() {\n\tfmt.Println(\"h\")\n\t// Output: h\n}\n\nfunc Example_noOutput() {\n\tfmt.Println(\"never run\")\n}\n",
+			"h/hook_test.go": "//go:build integration\n\npackage h\n\nimport (\n\t\"os\"\n\t\"testing\"\n)\n\nfunc TestMain(m *testing.M) { os.Exit(m.Run()) }\n\n" +
+				"func TestHTagged(t *testing.T) {}\n\nfunc FuzzHTagged(f *testing.F) { f.Fuzz(func(t *testing.T, s string) {}) }\n",
+			"h/ext_test.go": "package h_test\n\nimport \"fmt\"\n\nfunc Example_external() {\n\tfmt.Println(\"x\")\n\t// Output: x\n}\n",
+		}
+		got := runDiscoveryFixture(t, files, `
+run_integration_go_test() { printf 'GOTEST'; printf ' %s' "$@"; printf '\n'; }
+run_integration_packages "" . fixture ./a ./h > receipts.txt
+cat receipts.txt
+`+groupListBody+`
+for m in a h; do
+  GOWORK=off go test -mod=readonly -tags=integration -list '.*' "./${m}" | sed -nE "s/^((Test|Example|Fuzz).*)$/ALL ${m} \1/p"
+done
+`)
+		calls, groups := lineValues(got, "GOTEST "), lineValues(got, "  SHARD-GROUP . ")
+		if len(groups) != 1 || len(calls) != 1 {
+			t.Errorf("%d go test group(s) and %d go test call(s): a hook package and a filtered package must run in ONE go test", len(groups), len(calls))
+		}
+		for _, c := range calls {
+			if !strings.Contains(" "+c+" ", " -run ") || !strings.Contains(" "+c+" ", " ./a ") || !strings.Contains(" "+c+" ", " ./h ") {
+				t.Errorf("the go test call %q is not one -run call over a and h", c)
+			}
+		}
+		if !strings.Contains(got, "  SHARD-UNFILTERED h h/hook_test.go TestMain\n") {
+			t.Error("h has no SHARD-UNFILTERED receipt")
+		}
+		all := map[string]bool{}
+		for _, v := range lineValues(got, "ALL h ") {
+			all[v] = true
+		}
+		for _, n := range []string{"TestHPlain", "TestHTagged", "FuzzHPlain", "FuzzHTagged", "Example_withOutput", "Example_external"} {
+			if !all[n] {
+				t.Errorf("control: go test -list '.*' ./h does not list %s", n)
+			}
+		}
+		if all["Example_noOutput"] || all["TestMain"] {
+			t.Error("control: go test -list '.*' ./h lists an example without output or TestMain")
+		}
+		if d := groupRunDefects(got, []string{"h"}); len(d) > 0 {
+			t.Errorf("%s", strings.Join(d, "\n"))
+		}
+		if a := lineValues(got, "  SHARD-TEST a "); len(a) != 1 || a[0] != "TestATagged" {
+			t.Errorf("the filtered package a selects %v, want [TestATagged]", a)
+		}
+		if t.Failed() {
+			t.Logf("fixture output:\n%s", got)
+		}
+	})
+	t.Run("a hook package never shares a group with a package that skips one of its names", func(t *testing.T) {
+		t.Parallel()
+		files := map[string]string{
+			"c/plain_test.go": "package c\n\nimport \"fmt\"\n\nfunc Example_shared() {\n\tfmt.Println(\"c\")\n\t// Output: c\n}\n",
+			"c/tag_test.go":   "//go:build integration\n\npackage c\n\nimport \"testing\"\n\nfunc TestCTagged(t *testing.T) {}\n",
+			"e/plain_test.go": "package e\n\nimport \"testing\"\n\nfunc FuzzOther(f *testing.F) { f.Fuzz(func(t *testing.T, n int) {}) }\n",
+			"e/tag_test.go":   "//go:build integration\n\npackage e\n\nimport \"testing\"\n\nfunc TestETagged(t *testing.T) {}\n",
+			"g/plain_test.go": "package g\n\nimport \"testing\"\n\nfunc TestGPlain(t *testing.T) {}\n",
+			"g/tag_test.go":   "//go:build integration\n\npackage g\n\nimport \"testing\"\n\nfunc TestGTagged(t *testing.T) {}\n\nfunc TestHPlain(t *testing.T) {}\n",
+			"h/plain_test.go": "package h\n\nimport (\n\t\"fmt\"\n\t\"testing\"\n)\n\nfunc TestHPlain(t *testing.T) {}\n\n" +
+				"func FuzzOther(f *testing.F) { f.Fuzz(func(t *testing.T, n int) {}) }\n\nfunc Example_shared() {\n\tfmt.Println(\"h\")\n\t// Output: h\n}\n",
+			"h/hook_test.go": "//go:build integration\n\npackage h\n\nimport \"testing\"\n\nfunc init() {}\n\nfunc TestHTagged(t *testing.T) {}\n",
+		}
+		got := runDiscoveryFixture(t, files, `
+run_integration_packages --dry-run . fixture ./c ./e ./g ./h > receipts.txt
+cat receipts.txt
+`+groupListBody+`
+GOWORK=off go test -mod=readonly -tags=integration -list '.*' ./h | sed -nE "s/^((Test|Example|Fuzz).*)$/ALL h \1/p"
+`)
+		groupOf := map[string]string{}
+		for _, v := range lineValues(got, "  SHARD-GROUP . ") {
+			f := strings.Fields(v)
+			for _, m := range f[1:] {
+				groupOf[m] = f[0]
+			}
+		}
+		if groupOf["h"] == "" || groupOf["h"] == groupOf["c"] || groupOf["h"] == groupOf["e"] {
+			t.Errorf("groups %v: h (Example_shared, FuzzOther selected) must sit in a group apart from c (plain Example_shared) and e (plain FuzzOther)", groupOf)
+		}
+		if d := groupRunDefects(got, []string{"h"}); len(d) > 0 {
+			t.Errorf("%s", strings.Join(d, "\n"))
+		}
+		if t.Failed() {
+			t.Logf("fixture output:\n%s", got)
+		}
+	})
 	t.Run("the integration verb plans bounded, collision-free groups on the real tree", func(t *testing.T) {
 		t.Parallel()
 		keys := sortedKeys(expectedPackages(t))
@@ -1086,6 +1304,8 @@ cmp -s one.txt two.txt && echo SAME || { echo DIFFERENT; diff one.txt two.txt ||
 			"a group bypasses the reap helper":        {`run_integration_go_test "${module_dir}" "${run_pkgs[@]}"`, `go test -tags=integration "${run_pkgs[@]}"`},
 			"the receipt prints another regex":        {`printf '  SHARD-REGEX %s %s\n' "${module_dir}" "${group_regex[${group}]}"`, `printf '  SHARD-REGEX %s %s\n' "${module_dir}" '^(.*)$'`},
 			"a dry run executes tests":                {`[ "${mode}" != "--dry-run" ] || return 0`, `:`},
+			"the hook packages run in a separate go test after the groups": {`return "${result}"`,
+				"run_pkgs=(\"${unfiltered[@]}\")\n  run_integration_go_test \"${module_dir}\" \"${run_pkgs[@]}\" || result=$?\n  return \"${result}\""},
 		} {
 			if !strings.Contains(m[1], plant[0]) {
 				t.Fatalf("plant %q: anchor %q is absent", name, plant[0])
@@ -1899,5 +2119,243 @@ func TestEachIntegrationShardDryRunExecutesOnlyItsManifestAssignment(t *testing.
 	}
 	if len(tests) != len(gotT) || !sameSet(gotT, integration) {
 		t.Errorf("the providersync shards run %d tests (%d distinct), want the %d integration-tagged ones", len(tests), len(gotT), len(integration))
+	}
+}
+
+// goTestCall is one recorded `go test` call: its module directory (relative to the repo root), its -run regex (when
+// it has one) and its package arguments.
+type goTestCall struct {
+	dir, run string
+	hasRun   bool
+	pkgs     []string
+}
+
+// recordingGo writes a `go` into a new directory that records every `go test` call (cwd, then each argument,
+// NUL-separated, one file per call under $GOTEST_RECORD_DIR) and runs no test; every other go command is the real go.
+func recordingGo(t *testing.T) string {
+	t.Helper()
+	realGo, err := exec.LookPath("go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	script := "#!/usr/bin/env bash\nset -euo pipefail\nif [ \"${1-}\" = test ]; then\n" +
+		"  f=\"$(mktemp \"${GOTEST_RECORD_DIR}/call.XXXXXX\")\"\n" +
+		"  { printf '%s\\0' \"$(pwd -P)\"; printf '%s\\0' \"$@\"; } > \"${f}\"\n  exit 0\nfi\n" +
+		"exec '" + realGo + "' \"$@\"\n"
+	if err := os.WriteFile(filepath.Join(dir, "go"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+// recordedCalls reads the calls recordingGo wrote into dir; root is the physical repo root.
+func recordedCalls(t *testing.T, dir, root string) []goTestCall {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var calls []goTestCall
+	for _, e := range entries {
+		raw, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		f := strings.Split(strings.TrimSuffix(string(raw), "\x00"), "\x00")
+		if len(f) < 2 || f[1] != "test" {
+			t.Fatalf("malformed go test record %q", raw)
+		}
+		rel, err := filepath.Rel(root, f[0])
+		if err != nil || strings.HasPrefix(rel, "..") {
+			t.Fatalf("go test ran in %s, outside the repo %s", f[0], root)
+		}
+		c := goTestCall{dir: filepath.ToSlash(rel)}
+		for i := 2; i < len(f); i++ {
+			switch {
+			case f[i] == "-run" && i+1 < len(f):
+				c.run, c.hasRun = f[i+1], true
+				i++
+			case strings.HasPrefix(f[i], "-"):
+			default:
+				c.pkgs = append(c.pkgs, f[i])
+			}
+		}
+		calls = append(calls, c)
+	}
+	return calls
+}
+
+// censusDefects is acp's census for one packages shard: the shard makes exactly one go test call per SHARD-GROUP line,
+// every call has -run (a hook package runs inside its group, not as a separate whole-package call), and, matching each
+// call's -run regex against the oracle names of each package it runs (tests, fuzz targets, examples with output), every
+// integration-tagged name of a filtered package and every name of a hook package runs exactly once and no other name
+// runs at all.
+func censusDefects(calls []goTestCall, groups int, keys map[string]bool, f taggedFacts) []string {
+	var d []string
+	if len(calls) != groups {
+		d = append(d, fmt.Sprintf("%d go test call(s) for %d SHARD-GROUP line(s): want one call per group", len(calls), groups))
+	}
+	count := map[string]map[string]int{}
+	for _, c := range calls {
+		var re *regexp.Regexp
+		if !c.hasRun {
+			d = append(d, "a go test call without -run runs whole packages: "+strings.Join(c.pkgs, " "))
+		} else {
+			var err error
+			if re, err = regexp.Compile(c.run); err != nil {
+				d = append(d, fmt.Sprintf("a go test call has an invalid -run %q: %v", c.run, err))
+				continue
+			}
+		}
+		for _, p := range c.pkgs {
+			key := path.Join(c.dir, strings.TrimPrefix(p, "./"))
+			if !keys[key] {
+				d = append(d, "a go test call runs "+key+", a package this shard does not run")
+				continue
+			}
+			if count[key] == nil {
+				count[key] = map[string]int{}
+			}
+			for n := range f.tagged[key] {
+				if re == nil || re.MatchString(n) {
+					count[key][n]++
+				}
+			}
+			for n := range f.untagged[key] {
+				if !f.tagged[key][n] && (re == nil || re.MatchString(n)) {
+					count[key][n]++
+				}
+			}
+		}
+	}
+	for _, key := range sortedKeys(keys) {
+		names := map[string]bool{}
+		for n := range f.tagged[key] {
+			names[n] = true
+		}
+		for n := range f.untagged[key] {
+			names[n] = true
+		}
+		for _, n := range sortedKeys(names) {
+			want := 0
+			if f.tagged[key][n] || f.hook[key] != "" {
+				want = 1
+			}
+			if got := count[key][n]; got != want {
+				d = append(d, fmt.Sprintf("%s %s runs %d time(s), want %d", key, n, got, want))
+			}
+		}
+	}
+	return d
+}
+
+// TestEachPackagesShardRunsEverySelectedTestExactlyOnce runs every packages shard for real (not --dry-run) through
+// ci/check_go.sh with a recording `go` first on PATH (go test is recorded, not run; every other go command is real),
+// then applies censusDefects to the recorded calls.
+func TestEachPackagesShardRunsEverySelectedTestExactlyOnce(t *testing.T) {
+	t.Parallel()
+	stdout, gho := realPlan(t)
+	facts := realPlanFacts(t)
+	assignments, err := checkShardPlan(stdout, gho, facts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := filepath.EvalSymlinks(rootOf(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fakeGo := recordingGo(t)
+	var shards []int
+	wants, records := map[int]map[string]bool{}, map[int]string{}
+	for s, rows := range assignments {
+		want := map[string]bool{}
+		for p := range rows {
+			if !splitPackages[p] {
+				want[p] = true
+			}
+		}
+		if len(want) > 0 {
+			shards = append(shards, s)
+			wants[s], records[s] = want, t.TempDir()
+		}
+	}
+	sort.Ints(shards)
+	if len(shards) < 2 {
+		t.Fatal("fewer than two packages shards: the census measures nothing")
+	}
+	results := make([]cmdResult, len(shards))
+	var wg sync.WaitGroup
+	for i, shard := range shards {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			results[i] = runCheckGoSharding(t, shardEnv{extra: []string{
+				"PATH=" + fakeGo + string(os.PathListSeparator) + os.Getenv("PATH"), "GOTEST_RECORD_DIR=" + records[shard],
+			}}, "integration-shard", "packages", strconv.Itoa(shard))
+		}()
+	}
+	wg.Wait()
+	tf := integrationTaggedFacts(t)
+	hookShard := 0
+	var hookCalls []goTestCall
+	for i, shard := range shards {
+		r := results[i]
+		if r.code != 0 || strings.Contains(r.stdout, "DRY RUN") {
+			t.Fatalf("packages shard %d: exit %d: %s%s", shard, r.code, r.stdout, r.stderr)
+		}
+		calls := recordedCalls(t, records[shard], root)
+		groups := len(lineValues(r.stdout, "  SHARD-GROUP "))
+		if len(calls) == 0 || groups == 0 {
+			t.Fatalf("packages shard %d recorded %d go test call(s) and %d group(s): the census measures nothing", shard, len(calls), groups)
+		}
+		if d := censusDefects(calls, groups, wants[shard], tf); len(d) > 0 {
+			t.Errorf("packages shard %d:\n  %s", shard, strings.Join(d, "\n  "))
+		}
+		for k := range wants[shard] {
+			if tf.hook[k] != "" && hookShard == 0 && groups == 1 && len(calls) == 1 {
+				hookShard, hookCalls = shard, calls
+			}
+		}
+	}
+	if hookShard == 0 {
+		t.Fatal("no one-group packages shard holds a hook package: the planted defects below measure nothing")
+	}
+	// Planted defects on the recorded calls of one shard: each must be refused.
+	keys, c := wants[hookShard], hookCalls[0]
+	hookKey, filteredPkg := "", ""
+	for _, p := range c.pkgs {
+		k := path.Join(c.dir, strings.TrimPrefix(p, "./"))
+		if tf.hook[k] != "" && hookKey == "" {
+			hookKey = k
+		}
+		if tf.hook[k] == "" && filteredPkg == "" && len(tf.untagged[k]) > 0 {
+			filteredPkg = p
+		}
+	}
+	if hookKey == "" || filteredPkg == "" {
+		t.Fatalf("shard %d: no hook package or no filtered package with untagged tests to plant on", hookShard)
+	}
+	without := func(drop string) []string {
+		var out []string
+		for _, p := range c.pkgs {
+			if p != drop {
+				out = append(out, p)
+			}
+		}
+		return out
+	}
+	whole := c
+	whole.hasRun, whole.run = false, ""
+	for name, bad := range map[string][]goTestCall{
+		"the group runs twice":                          {c, c},
+		"a package left out of its group":               {{dir: c.dir, run: c.run, hasRun: true, pkgs: without(filteredPkg)}},
+		"the hook package also runs in a separate call": {{dir: c.dir, run: c.run, hasRun: true, pkgs: without("./" + hookKey)}, {dir: c.dir, pkgs: []string{"./" + hookKey}}},
+		"a group without -run runs the untagged tests":  {whole},
+		"a hook package left out with no separate call": {{dir: c.dir, run: c.run, hasRun: true, pkgs: without("./" + hookKey)}},
+	} {
+		if len(censusDefects(bad, 1, keys, tf)) == 0 {
+			t.Errorf("planted defect not caught: %s", name)
+		}
 	}
 }

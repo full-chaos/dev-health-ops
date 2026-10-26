@@ -565,3 +565,82 @@ func TestAnOutOfModuleImportInTheClosureIsRefused(t *testing.T) {
 		t.Errorf("an out-of-module import in a test file was accepted:\n%s", got)
 	}
 }
+
+// acp delta verify of DELTA5 (CHAOS-11413): the stdlib is a deny-by-default ALLOWlist. Each plant below passed the r2b scanner with no
+// problem while go test -race reported a DATA RACE (the verifier's reproductions, same sources).
+func TestStdlibPackagesOffTheAllowlistAreRefused(t *testing.T) {
+	for name, files := range map[string]map[string]string{
+		"context: a custom parent makes propagateCancel call the user's Err on a goroutine": {
+			"a/a.go":      "package a\n\nimport \"context\"\n\ntype Ctx struct {\n\tcontext.Context\n\tN *int\n}\n\nfunc (c Ctx) Value(any) any { return nil }\n\nfunc (c Ctx) Err() error { *c.N++; return c.Context.Err() }\n\nfunc Child(parent context.Context, n *int) context.Context {\n\tc, _ := context.WithCancel(Ctx{parent, n})\n\treturn c\n}\n",
+			"a/a_test.go": "package a\n\nimport (\n\t\"context\"\n\t\"testing\"\n\t\"time\"\n)\n\nfunc TestRace(t *testing.T) {\n\tn := 0\n\tparent, cancel := context.WithCancel(context.Background())\n\t_ = Child(parent, &n)\n\tcancel()\n\tfor i := 0; i < 1000; i++ {\n\t\tn++\n\t\ttime.Sleep(time.Microsecond)\n\t}\n}\n",
+		},
+		"net/rpc: ServeCodec starts a goroutine per request that calls the user's method": {
+			"a/a.go":      "package a\n\nimport (\n\t\"bytes\"\n\t\"net/rpc\"\n\t\"net/rpc/jsonrpc\"\n\t\"time\"\n)\n\ntype Svc struct{ N int }\n\nfunc (s *Svc) Inc(arg int, reply *int) error { s.N += arg; time.Sleep(time.Millisecond); *reply = s.N; return nil }\n\ntype conn struct {\n\tr *bytes.Reader\n\tw bytes.Buffer\n}\n\nfunc (c *conn) Read(p []byte) (int, error)  { return c.r.Read(p) }\nfunc (c *conn) Write(p []byte) (int, error) { return len(p), nil }\nfunc (c *conn) Close() error                { return nil }\n\nfunc Serve(s *Svc) {\n\tsrv := rpc.NewServer()\n\t_ = srv.Register(s)\n\treq := `{\"method\":\"Svc.Inc\",\"params\":[1],\"id\":1}{\"method\":\"Svc.Inc\",\"params\":[1],\"id\":2}{\"method\":\"Svc.Inc\",\"params\":[1],\"id\":3}`\n\tsrv.ServeCodec(jsonrpc.NewServerCodec(&conn{r: bytes.NewReader([]byte(req))}))\n}\n",
+			"a/a_test.go": "package a\n\nimport \"testing\"\n\nfunc TestRace(t *testing.T) { Serve(&Svc{}) }\n",
+		},
+		"reflect in a non-test helper calls t.Parallel by name": {
+			"a/a.go":      "package a\n\nimport (\n\t\"reflect\"\n\t\"testing\"\n)\n\nfunc Mark(t *testing.T) { reflect.ValueOf(t).MethodByName(\"Para\" + \"llel\").Call(nil) }\n",
+			"a/a_test.go": "package a\n\nimport (\n\t\"testing\"\n\t\"time\"\n)\n\nvar shared int\n\nfunc TestA(t *testing.T) { Mark(t); for i := 0; i < 1000; i++ { shared++; time.Sleep(time.Microsecond) } }\nfunc TestB(t *testing.T) { Mark(t); for i := 0; i < 1000; i++ { shared++; time.Sleep(time.Microsecond) } }\n",
+		},
+		"runtime.SetFinalizer runs a function held in an interface on the finalizer goroutine": {
+			"a/a.go":      "package a\n\nimport \"runtime\"\n\nvar Hits int\n\ntype T struct{ b [64]byte }\n\nvar fin any = func(*T) { Hits++ }\n\nfunc Make() {\n\tx := &T{}\n\truntime.SetFinalizer(x, fin)\n}\n",
+			"a/a_test.go": "package a\n\nimport (\n\t\"runtime\"\n\t\"testing\"\n\t\"time\"\n)\n\nfunc TestRace(t *testing.T) {\n\tMake()\n\truntime.GC()\n\tfor i := 0; i < 2000; i++ {\n\t\tHits++\n\t\ttime.Sleep(time.Microsecond)\n\t}\n}\n",
+		},
+	} {
+		if got := problemsOf(t, files, rowA); !strings.Contains(got, "not on the stdlib allowlist") {
+			t.Errorf("%s: want a stdlib allowlist problem, got:\n%s", name, got)
+		}
+	}
+}
+
+// The allowlist is a table the test reads: the exact set is pinned, and each entry says why it starts no goroutine and runs no user
+// code on another one.
+func TestTheStdlibAllowlistIsPinnedAndEachEntryHasItsReason(t *testing.T) {
+	want := []string{"bytes", "encoding/hex", "encoding/json", "errors", "fmt", "io", "io/fs", "log/slog", "math", "net/netip", "os",
+		"path/filepath", "regexp", "slices", "sort", "strconv", "strings", "testing", "time", "unicode", "unicode/utf8"}
+	var got []string
+	for k, reason := range stdlibAllowed {
+		got = append(got, k)
+		if len(strings.TrimSpace(reason)) < 30 {
+			t.Errorf("stdlibAllowed[%q] has no reason: %q", k, reason)
+		}
+	}
+	sort.Strings(got)
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("stdlibAllowed is %v, the pinned set is %v: pin the new entry here and give it a reason naming why it starts no goroutine", got, want)
+	}
+	for _, banned := range []string{"context", "runtime", "reflect", "sync", "sync/atomic", "net", "net/http", "net/rpc", "os/exec", "os/signal", "unsafe", "plugin"} {
+		if _, ok := stdlibAllowed[banned]; ok {
+			t.Errorf("%s must not be on the allowlist", banned)
+		}
+	}
+}
+
+// A function converted to an interface type, however the conversion is spelled, runs where the scan cannot follow it.
+func TestAFuncConvertedToAnInterfaceIsRefused(t *testing.T) {
+	head := "package a\n\ntype S struct{ v any }\n\nfunc fn() {}\n\nfunc take(v any) {}\n\n"
+	for name, body := range map[string]string{
+		"var with an interface type":   "var fin any = func() {}\n\t_ = fin",
+		"var of a named func":          "var fin any = fn\n\t_ = fin",
+		"argument to an interface":     "take(func() {})",
+		"explicit conversion":          "_ = any(fn)",
+		"assignment":                   "var v any\n\tv = fn\n\t_ = v",
+		"composite literal field":      "_ = S{v: fn}",
+		"composite literal element":    "_ = []any{fn}",
+		"map literal element":          "_ = map[string]any{\"k\": fn}",
+		"append to an interface slice": "var s []any\n\ts = append(s, fn)\n\t_ = s",
+	} {
+		files := map[string]string{"a/a.go": head + "func F() int {\n\t" + body + "\n\treturn 1\n}\n", "a/a_test.go": cleanTest}
+		if got := problemsOf(t, files, rowA); !strings.Contains(got, "converted to an interface") {
+			t.Errorf("%s: want a conversion problem, got:\n%s", name, got)
+		}
+	}
+	ret := map[string]string{"a/a.go": "package a\n\nfunc fn() {}\n\nfunc G() any { return fn }\n\nfunc F() int { _ = G(); return 1 }\n", "a/a_test.go": cleanTest}
+	if got := problemsOf(t, ret, rowA); !strings.Contains(got, "converted to an interface") {
+		t.Errorf("a function returned as an interface was accepted:\n%s", got)
+	}
+	ok := map[string]string{"a/a.go": "package a\n\nfunc F() int { var x any = 1; _ = x; return 1 }\n", "a/a_test.go": cleanTest}
+	if got := problemsOf(t, ok, rowA); got != "" {
+		t.Errorf("a non-function converted to an interface was refused:\n%s", got)
+	}
+}

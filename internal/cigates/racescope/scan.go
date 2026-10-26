@@ -777,3 +777,6 @@ func capturedWrites(ft *ast.FuncType, body *ast.BlockStmt) []write {
 	})
 	return out
 }
+
+// stdlibAllowed is the deny-by-default allowlist of standard-library imports (filled by the fix commit).
+var stdlibAllowed = map[string]string{}

@@ -1228,10 +1228,14 @@ func checkSocialAnswer(owned bool, status int, body string) (map[string]any, err
 // a public e-mail and /user/emails is not asked (oauthprovider.go:192-200); the refusal comes after it (api/session/social.go:77,128-131).
 const socialGitHubCalls = 1
 
-// userAndSessionStateSQL is the row counts of every table a sign-up or a session could write, for a before and after.
+// userAndSessionStateSQL is the content of every table a sign-up or a session could write: one hash of all the row texts of
+// each, so an in-place update changes it where a row count would not.
 const userAndSessionStateSQL = `SELECT
-	(SELECT count(*) FROM public.users), (SELECT count(*) FROM public.refresh_tokens), (SELECT count(*) FROM auth.users),
-	(SELECT count(*) FROM auth.principals), (SELECT count(*) FROM auth.refresh_credentials)`
+	(SELECT md5(coalesce(string_agg(t::text, E'\n' ORDER BY t::text), '')) FROM public.users t),
+	(SELECT md5(coalesce(string_agg(t::text, E'\n' ORDER BY t::text), '')) FROM public.refresh_tokens t),
+	(SELECT md5(coalesce(string_agg(t::text, E'\n' ORDER BY t::text), '')) FROM auth.users t),
+	(SELECT md5(coalesce(string_agg(t::text, E'\n' ORDER BY t::text), '')) FROM auth.principals t),
+	(SELECT md5(coalesce(string_agg(t::text, E'\n' ORDER BY t::text), '')) FROM auth.refresh_credentials t)`
 
 // userAndSessionState is userAndSessionStateSQL on the target's database.
 func (r *runner) userAndSessionState() string {
@@ -1239,24 +1243,20 @@ func (r *runner) userAndSessionState() string {
 	return venueoracle.TableRows(r.t, r.ctx, r.venue.AdminURI(r.t, r.venue.GoDB), userAndSessionStateSQL)
 }
 
-// checkSocialRefusalEffects is the verdict on a refused social sign-up of the users-owned leg beyond its answer: the user and
-// session tables did not change (the refusal must come before any write), and the provider was asked exactly
-// socialGitHubCalls times, every request matched by the stub.
+// checkSocialRefusalEffects is the verdict on a refused social sign-up of the users-owned leg beyond its answer: the CONTENT
+// of the user and session tables did not change (the refusal must come before any write), and the provider stub recorded
+// exactly one request in all, the matched GET /user of github (socialGitHubCalls): a request to any other provider, path or
+// method fails.
 func checkSocialRefusalEffects(before, after string, requests []providerstub.Recorded) error {
 	if before != after {
 		return fmt.Errorf("the refused social sign-up changed the user or session rows: before %q, after %q", before, after)
 	}
-	matched := 0
-	for _, recorded := range requests {
-		if !recorded.Matched {
-			return fmt.Errorf("an unmatched request reached the provider stub (%s %s)", recorded.Method, recorded.Path)
-		}
-		if recorded.Provider == "github" {
-			matched++
-		}
+	if len(requests) != socialGitHubCalls {
+		return fmt.Errorf("the provider stub recorded %d requests, want exactly %d", len(requests), socialGitHubCalls)
 	}
-	if matched != socialGitHubCalls {
-		return fmt.Errorf("the provider stub recorded %d github requests, want exactly %d", matched, socialGitHubCalls)
+	only := requests[0]
+	if !only.Matched || only.Provider != "github" || only.Method != http.MethodGet || only.Path != "/user" {
+		return fmt.Errorf("the one provider request is %s %s of %s (matched %v), want the matched GET /user of github", only.Method, only.Path, only.Provider, only.Matched)
 	}
 	return nil
 }

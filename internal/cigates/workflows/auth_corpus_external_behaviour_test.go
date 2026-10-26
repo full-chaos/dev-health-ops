@@ -633,11 +633,12 @@ func TestAuthCorpusAcpOwnedLegTurnsCredentialsOnBeforeTheOwnedFlag(t *testing.T)
 	}
 }
 
-// The owned leg fails by name when credentials is still not served after step 1e.
+// The owned leg fails by name when credentials is still not served after step 1e: the gate refuses a mounted-or-not credentials
+// aggregate once the users are owned.
 func TestAuthCorpusAcpOwnedLegFailsWhenCredentialsStaysNotServed(t *testing.T) {
 	_, out, err := runAcpOwnedLeg(t, "FAKE_SERVED="+requiredServed, "FAKE_SERVED_OWNED="+requiredServed,
 		"FAKE_METRICS="+metric("sessions")+"\n"+metric("local_login"))
-	if err == nil || !strings.Contains(out, "credentials is not served by auth-service after step 1e (users owned)") {
+	if err == nil || !strings.Contains(out, "aggregate credentials is not served by auth-service, which owns the users") {
 		t.Fatalf("want a failure naming credentials, got err=%v:\n%s", err, out)
 	}
 }
@@ -970,25 +971,47 @@ func TestAuthCorpusPartlyMountedCredentialsFailTheLeg(t *testing.T) {
 	}
 }
 
-func TestAuthCorpusUsersOwnedIsScriptInternal(t *testing.T) {
+// USERS_OWNED is the script's own variable: it starts at 0, never reads the caller's environment, and only step 1e (the
+// owned_flip function) sets it to 1, once, before it probes the aggregates again.
+func TestAuthCorpusOnlyStep1eSetsUsersOwned(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join(authProofRoot(t), "ci", "auth_corpus_external.sh"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	var zero int
-	for _, line := range strings.Split(string(raw), "\n") {
+	lines := strings.Split(string(raw), "\n")
+	var zero, ones, flipStart, flipEnd, setter, reprobe int
+	for number, line := range lines {
 		trim := strings.TrimSpace(line)
 		switch {
+		case trim == "owned_flip() {":
+			flipStart = number + 1
+		case flipStart > 0 && flipEnd == 0 && line == "  }":
+			flipEnd = number + 1
+		}
+		switch {
+		case strings.HasPrefix(trim, "#"):
 		case trim == "USERS_OWNED=0":
 			zero++
-		case strings.Contains(trim, "USERS_OWNED=1") && !strings.HasPrefix(trim, "#"):
-			t.Errorf("no step owns the users yet, but the script sets: %s", trim)
+		case trim == "USERS_OWNED=1":
+			ones++
+			setter = number + 1
+		case strings.Contains(trim, "USERS_OWNED=1"):
+			t.Errorf("USERS_OWNED=1 is set inside another statement: %s", trim)
 		case strings.Contains(trim, "USERS_OWNED:-"):
 			t.Errorf("USERS_OWNED must not be read from the caller env: %s", trim)
+		}
+		if flipStart > 0 && flipEnd == 0 && trim == "classify" {
+			reprobe = number + 1
 		}
 	}
 	if zero != 1 {
 		t.Errorf("want exactly one unconditional USERS_OWNED=0, got %d", zero)
+	}
+	if ones != 1 || flipStart == 0 || flipEnd == 0 || setter <= flipStart || setter >= flipEnd {
+		t.Fatalf("want exactly one USERS_OWNED=1 and it inside owned_flip (lines %d-%d), got %d at line %d", flipStart, flipEnd, ones, setter)
+	}
+	if reprobe == 0 || reprobe < setter {
+		t.Errorf("owned_flip must set USERS_OWNED=1 before it probes again (setter line %d, classify line %d)", setter, reprobe)
 	}
 }
 

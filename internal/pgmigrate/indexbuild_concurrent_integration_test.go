@@ -133,34 +133,29 @@ type buildOutcome struct {
 	err    error
 }
 
-// A second builder (REINDEX INDEX CONCURRENTLY, one statement) turns the INVALID index VALID while this run's table-lock
-// probe waits behind it. The lock queue orders it: a session holds SHARE UPDATE EXCLUSIVE, the builder queues first, the
-// run's probe queues second. When the probe gets the lock the index is VALID: the run must not drop it.
+const plantValidSQL = "UPDATE pg_index SET indisvalid = true WHERE indexrelid = 'public.ix_sync_run_units_failure_streak'::regclass"
+
+// A fake second builder finishes the build while this run's table-lock probe waits: it holds SHARE UPDATE EXCLUSIVE (the
+// lock a concurrent build holds) and, inside that lock, turns the planted INVALID index VALID (the reverse of the plant),
+// then commits. When the probe gets the lock the index is VALID: the run must keep that same index, not drop and rebuild it.
+// (A real REINDEX INDEX CONCURRENTLY queued ahead of the probe ended in 40P01 on PG 18, so the fake keeps the order fixed.)
 func TestBuildIndexSkipsAnIndexAnotherBuilderMadeValidWhileTheProbeWaited(t *testing.T) {
 	position, _ := chainPosition(t, "0159")
 	d := newDownInstance(t)
 	uri := d.at(t, position)
 	plantInvalidIndex(t, uri)
 	observer := connect(t, uri)
+	before := streakIndexState(t, observer)
 	ctx := context.Background()
 
-	gate, err := connect(t, uri).Begin(ctx)
+	builder, err := connect(t, uri).Begin(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = gate.Rollback(context.Background()) }()
-	if _, err := gate.Exec(ctx, "LOCK TABLE public.sync_run_units IN SHARE UPDATE EXCLUSIVE MODE"); err != nil {
+	defer func() { _ = builder.Rollback(context.Background()) }()
+	if _, err := builder.Exec(ctx, "LOCK TABLE public.sync_run_units IN SHARE UPDATE EXCLUSIVE MODE"); err != nil {
 		t.Fatal(err)
 	}
-
-	builder := connect(t, uri)
-	builderPID := backendPID(t, builder)
-	builderDone := make(chan error, 1)
-	go func() {
-		_, err := builder.Exec(ctx, "REINDEX INDEX CONCURRENTLY public."+pgmigrate.FailureStreakIndexName)
-		builderDone <- err
-	}()
-	waitUntil(t, 20*time.Second, "the second builder to queue for the table lock", waitsForALock(t, observer, builderPID))
 
 	run, recorder := tracedConn(t, uri)
 	runPID := backendPID(t, run)
@@ -172,11 +167,11 @@ func TestBuildIndexSkipsAnIndexAnotherBuilderMadeValidWhileTheProbeWaited(t *tes
 	}()
 	waitUntil(t, 20*time.Second, "the run's probe to queue behind the second builder", waitsForALock(t, observer, runPID))
 
-	if err := gate.Commit(ctx); err != nil {
+	if _, err := builder.Exec(ctx, plantValidSQL); err != nil {
 		t.Fatal(err)
 	}
-	if err := <-builderDone; err != nil {
-		t.Fatalf("second builder: %v", err)
+	if err := builder.Commit(ctx); err != nil {
+		t.Fatal(err)
 	}
 	outcome := <-runDone
 	if outcome.err != nil || outcome.result.Action != "present" || !outcome.result.Valid {
@@ -187,8 +182,8 @@ func TestBuildIndexSkipsAnIndexAnotherBuilderMadeValidWhileTheProbeWaited(t *tes
 			t.Fatalf("the run sent %q over an index another builder made valid", sql)
 		}
 	}
-	if s := streakIndexState(t, observer); !s.valid {
-		t.Fatal("the index is not valid")
+	if after := streakIndexState(t, observer); after != (indexState{oid: before.oid, valid: true}) {
+		t.Fatalf("index %+v, want the same relation %d, valid", after, before.oid)
 	}
 }
 

@@ -63,6 +63,10 @@ type Route struct {
 	// shared one, so a stalled dependency behind other routes cannot refuse
 	// it. Only a route that does no dependency I/O belongs here.
 	PublicClass bool
+	// Unthrottled skips the server's body bound, in-flight cap and rate limit
+	// for this route; recovery, the deadline and the route record stay. Only a
+	// constant handler that reads no body and does no I/O belongs here.
+	Unthrottled bool
 }
 
 // RouteWriter is implemented by the writer every registered route's
@@ -533,9 +537,11 @@ func routeChain(route Route, options ServerOptions, logger *slog.Logger, write E
 
 	handler := RecoverWith(logger, route.Method+" "+route.Pattern, write)(markRoute(route))
 	handler = Deadline(options.RequestTimeout)(handler)
-	handler = MaxBodyWith(maxBody, write)(handler)
-	handler = inFlightLimit(inFlight, logger, write)(handler)
-	handler = RateLimitWith(NewBucket(perSecond, burst, options.Now), write)(handler)
+	if !route.Unthrottled {
+		handler = MaxBodyWith(maxBody, write)(handler)
+		handler = inFlightLimit(inFlight, logger, write)(handler)
+		handler = RateLimitWith(NewBucket(perSecond, burst, options.Now), write)(handler)
+	}
 	// Outermost, so a request the route's own rate limit or body bound
 	// refuses is still counted against the route it addressed.
 	pattern := route.Pattern

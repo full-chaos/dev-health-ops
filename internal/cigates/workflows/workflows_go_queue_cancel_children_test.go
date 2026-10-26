@@ -73,8 +73,16 @@ func cancelJobDefects(doc yamlMap) []string {
 	if with["ref"] != cancelCheckoutRef {
 		out = append(out, fmt.Sprintf("checkout ref is %v, want exactly %s (an immutable revision named by the event, never the group head)", with["ref"], cancelCheckoutRef))
 	}
+	if with["sparse-checkout-cone-mode"] != false {
+		out = append(out, fmt.Sprintf("checkout sparse-checkout-cone-mode is %v, want false", with["sparse-checkout-cone-mode"]))
+	}
+	for k := range with {
+		if k != "ref" && k != "sparse-checkout" && k != "persist-credentials" && k != "sparse-checkout-cone-mode" {
+			out = append(out, fmt.Sprintf("checkout with: key %q is not allowed (only ref, sparse-checkout, persist-credentials, sparse-checkout-cone-mode)", k))
+		}
+	}
 	if len(with) != 4 {
-		out = append(out, fmt.Sprintf("checkout with: has %d keys, want exactly ref, sparse-checkout, persist-credentials, sparse-checkout-cone-mode (a token: key is not allowed)", len(with)))
+		out = append(out, fmt.Sprintf("checkout with: has %d keys, want exactly 4", len(with)))
 	}
 	if _, has := co["env"]; has {
 		out = append(out, "the checkout step must not have env (the token goes to the script step only)")
@@ -138,6 +146,9 @@ func TestStackedQueueCancelJobShape(t *testing.T) {
 		{cancelGoYml, "    needs: [go-storage-integration]\n    if: " + cancelIf, "    needs: [go-storage-integration, go-container-smoke]\n    if: " + cancelIf},
 		{cancelGoYml, "          persist-credentials: false\n          sparse-checkout-cone-mode: false\n", "          sparse-checkout-cone-mode: false\n"},
 		{cancelGoYml, "          sparse-checkout: " + cancelScript + "\n", "          sparse-checkout: ci\n"},
+		{cancelGoYml, "          sparse-checkout-cone-mode: false\n", "          token: ${{ github.token }}\n"},
+		{cancelGoYml, "          sparse-checkout-cone-mode: false\n", "          sparse-checkout-cone-mode: true\n"},
+		{cancelGoYml, "          sparse-checkout-cone-mode: false\n", "          fetch-depth: 0\n"},
 		{cancelGoYml, "        with:\n          ref: " + cancelCheckoutRef + "\n          sparse-checkout: " + cancelScript + "\n", "        with:\n          sparse-checkout: " + cancelScript + "\n"},
 		{cancelGoYml, "          ref: " + cancelCheckoutRef + "\n", "          ref: ${{ github.sha }}\n"},
 		{cancelGoYml, "          ref: " + cancelCheckoutRef + "\n", "          ref: ${{ github.event.merge_group.head_sha }}\n"},
@@ -166,6 +177,8 @@ func TestStackedQueueCancelScriptOnlyCancels(t *testing.T) {
 	}
 	for _, m := range []struct{ old, new string }{
 		{`gh api -X POST "repos/${repo}/actions/runs/${id}/cancel"`, `gh api -X POST "repos/${repo}/actions/runs/${id}/rerun"`},
+		{`gh api -X POST "repos/${repo}/actions/runs/${id}/cancel"`, `gh api -X POST "repos/${repo}/actions/runs/${id}/cancel" --raw-field body=x`},
+		{`gh api -X POST "repos/${repo}/actions/runs/${id}/cancel"`, `gh api -X POST "repos/${repo}/actions/runs/${id}/cancel" --field body=x`},
 		{`gh api -X POST "repos/${repo}/actions/runs/${id}/cancel"`, `gh api -X DELETE "repos/${repo}/actions/runs/${id}"`},
 		{`gh api -X POST "repos/${repo}/actions/runs/${id}/cancel"`, `gh run rerun "${id}" -R "${repo}"`},
 		{`exit 0
@@ -218,7 +231,7 @@ func scriptVerbDefects(text string) []string {
 				posts++
 			}
 		}
-		if strings.Contains(line, " -f ") || strings.Contains(line, " -F ") || strings.Contains(line, "--input") {
+		if strings.Contains(line, " -f ") || strings.Contains(line, " -F ") || strings.Contains(line, "--input") || strings.Contains(line, "--raw-field") || strings.Contains(line, "--field") {
 			out = append(out, "no request body is allowed: "+strings.TrimSpace(line))
 		}
 	}
@@ -483,5 +496,20 @@ func TestStackedQueueCancelPlantedTruncationFaults(t *testing.T) {
 		if ok {
 			t.Errorf("planted truncation fault was not caught: %q -> %q", m.old, m.new)
 		}
+	}
+}
+
+// jq's @tsv prints an empty field as nothing, and bash read with IFS=tab merges adjacent tabs, so a run with an empty
+// head_sha would shift its name into the sha column. Such a run must not extend the chain.
+func TestStackedQueueCancelEmptyFieldsNeverShiftColumns(t *testing.T) {
+	queued := `{"workflow_runs":[
+ {"id":101,"name":"` + shaB + `","head_branch":"gh-readonly-queue/main/pr-20-` + shaRed + `","head_sha":""},
+ {"id":202,"name":"Other","head_branch":"gh-readonly-queue/main/pr-30-` + shaB + `","head_sha":"` + shaD + `"},
+ {"id":203,"name":"","head_branch":"gh-readonly-queue/main/pr-40-` + shaRed + `","head_sha":"` + shaC + `"},
+ {"id":204,"name":"Go","head_branch":"gh-readonly-queue/main/pr-50-` + shaC + `","head_sha":"` + shaD + `"}
+]}`
+	r := runCancelScriptWith(t, rootOf(t), map[string]string{"queued.1.json": queued, "in_progress.1.json": `{"workflow_runs":[]}`})
+	if got, want := strings.Join(r.ids, ","), "101,203,204"; got != want {
+		t.Fatalf("cancelled %s, want %s (101 has an empty head_sha: it is cancelled for its branch but extends nothing, so 202, whose suffix equals 101's name, stays; 203 has an empty name and a real head_sha, so its child 204 is cancelled)\n%s", got, want, r.out)
 	}
 }

@@ -51,9 +51,15 @@ func TestTheFlipBackReleaseNeverNarrows(t *testing.T) {
 	}
 }
 
-// The narrowing is a later release: with authService.migrate.narrowAfterFlipBack
-// the same two Jobs pass the acknowledgement without -defer-narrowing.
+// The narrowing is a later release: only with
+// authService.migrate.narrowAfterFlipBack do the same two Jobs pass the
+// acknowledgement without -defer-narrowing; without it, none does.
 func TestTheNarrowRendersOnlyWithTheFlag(t *testing.T) {
+	for name, args := range ackJobs(t, renderPhase(t, 3, "--set", "authService.migrate.acknowledgeGrantNarrowing="+ackDigest)) {
+		if !strings.Contains(strings.Join(args, " "), "-defer-narrowing") {
+			t.Errorf("without narrowAfterFlipBack, Job %s narrows: args = %v", name, args)
+		}
+	}
 	docs, out, err := renderAuth(t, phaseArgs(3,
 		"--set", "authService.migrate.acknowledgeGrantNarrowing="+ackDigest,
 		"--set", "authService.migrate.narrowAfterFlipBack=true")...)

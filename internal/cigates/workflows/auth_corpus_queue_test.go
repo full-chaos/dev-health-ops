@@ -150,9 +150,10 @@ func authCorpusGateViolations(t *testing.T, root string) []string {
 	return out
 }
 
-// corpusRouteFilesOutsideSet lists every non-test Go file that declares an auth-service route (httpapi.Route{) and
-// does not match a pattern of ci/auth_corpus_paths.txt; a pattern's literal prefix must exist.
-func corpusRouteFilesOutsideSet(t *testing.T, root string) []string {
+// corpusRouteFilesOutsideSet lists every non-test Go file that declares an auth-service route (httpapi.Route{ of internal/auth/httpapi) and
+// does not match a pattern of ci/auth_corpus_paths.txt (only directories `scanned` accepts: go-api declares routes with the
+// same httpapi package, so the real scan is limited to the import closure of cmd/auth-service); a pattern's literal prefix must exist.
+func corpusRouteFilesOutsideSet(t *testing.T, root string, scanned func(dir string) bool) []string {
 	t.Helper()
 	var pats []*regexp.Regexp
 	var out []string
@@ -184,17 +185,20 @@ func corpusRouteFilesOutsideSet(t *testing.T, root string) []string {
 		if err != nil {
 			return err
 		}
-		if !strings.Contains(string(raw), "httpapi.Route{") {
+		if !strings.Contains(string(raw), `/internal/auth/httpapi"`) || !strings.Contains(string(raw), "httpapi.Route{") {
 			return nil
 		}
 		rel, _ := filepath.Rel(root, p)
 		rel = filepath.ToSlash(rel)
+		if !scanned(filepath.ToSlash(filepath.Dir(rel))) {
+			return nil
+		}
 		for _, re := range pats {
 			if re.MatchString(rel) {
 				return nil
 			}
 		}
-		out = append(out, fmt.Sprintf("route file %s declares httpapi.Route{ and is outside ci/auth_corpus_paths.txt: a change to it would skip the external corpus", rel))
+		out = append(out, fmt.Sprintf("route file %s declares an auth-service httpapi.Route{ and is outside ci/auth_corpus_paths.txt: a change to it would skip the external corpus", rel))
 		return nil
 	})
 	if err != nil {
@@ -212,8 +216,32 @@ func TestAuthCorpusQueueGateFanIn(t *testing.T) {
 	expectNoViolations(t, authCorpusGateViolations(t, repoRoot(t)))
 }
 
+// authServiceClosureDirs: the module directories of the import closure of the auth-service binary, relative to root.
+func authServiceClosureDirs(t *testing.T, root string) map[string]bool {
+	t.Helper()
+	cmd := exec.Command("go", "list", "-mod=readonly", "-deps", "-f", "{{if not .Standard}}{{.Dir}}{{end}}", "./cmd/auth-service")
+	cmd.Dir = root
+	cmd.Env = append(os.Environ(), "GOWORK=off", "GOFLAGS=-mod=readonly")
+	raw, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("go list the auth-service closure: %v", err)
+	}
+	dirs := map[string]bool{}
+	for _, d := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+		if rel, err := filepath.Rel(root, d); err == nil && !strings.HasPrefix(rel, "..") {
+			dirs[filepath.ToSlash(rel)] = true
+		}
+	}
+	if len(dirs) < 10 {
+		t.Fatalf("the auth-service closure has only %d module directories: go list misread", len(dirs))
+	}
+	return dirs
+}
+
 func TestAuthCorpusQueuePathSetCoversEveryRouteFile(t *testing.T) {
-	expectNoViolations(t, corpusRouteFilesOutsideSet(t, repoRoot(t)))
+	root := repoRoot(t)
+	closure := authServiceClosureDirs(t, root)
+	expectNoViolations(t, corpusRouteFilesOutsideSet(t, root, func(dir string) bool { return closure[dir] }))
 }
 
 func TestAuthCorpusQueueNewRouteFileIsInScope(t *testing.T) {
@@ -225,7 +253,7 @@ func TestAuthCorpusQueueNewRouteFileIsInScope(t *testing.T) {
 		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(p, []byte("package x\n\nvar _ = httpapi.Route{}\n"), 0o644); err != nil {
+		if err := os.WriteFile(p, []byte("package x\n\nimport \"github.com/full-chaos/dev-health-ops/internal/auth/httpapi\"\n\nvar _ = httpapi.Route{}\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -234,7 +262,7 @@ func TestAuthCorpusQueueNewRouteFileIsInScope(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	got := corpusRouteFilesOutsideSet(t, tree)
+	got := corpusRouteFilesOutsideSet(t, tree, func(string) bool { return true })
 	joined := strings.Join(got, "\n")
 	if !strings.Contains(joined, "internal/elsewhere/newroutes.go") {
 		t.Fatalf("a route file outside the set was not reported:\n%s", joined)

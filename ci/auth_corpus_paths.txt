@@ -1,0 +1,32 @@
+# The path set of the external auth corpus (CHAOS-11596). A merge queue entry whose group touches one of these paths
+# runs ci/auth_corpus_external.sh (go-api, acp, acp-nokeys) as job auth-corpus-queue of go-auth-service.yml; its result
+# fans into the required context auth-gate. One bash glob per line, matched against the repo-relative path with
+# `case`: `*` matches any characters including `/`. A line starting with # is a comment.
+# internal/cigates/workflows (TestAuthCorpusQueuePathSetCoversEveryRouteFile) fails when a non-test Go file that declares
+# an auth-service route (httpapi.Route{ of internal/auth/httpapi) is outside this set, so a new route file cannot skip the corpus.
+#
+# auth-service: routes (internal/auth/authapi, internal/auth/authruntime, internal/auth/workloadexchange, mount in
+# internal/auth/httpapi/server.go) and its main
+cmd/auth-service/*
+internal/auth/*
+# go-api side: the proxy table that forwards to auth-service, and the venue oracle test that is the corpus
+internal/apiservice/authproxy.go
+internal/apiservice/authflowvenue/*
+# the corpus: script, overrides, set-env hook, route table, stub, mail sink and stub provider
+ci/auth_corpus_external.sh
+ci/auth_corpus_external.override.yml
+ci/auth_corpus_external.acp.override.yml
+ci/auth_corpus_set_env.sh
+ci/auth_corpus_acp_routes.tsv
+ci/auth_corpus_stub/*
+ci/auth_corpus_paths.txt
+ci/auth_corpus_queue_relevance.sh
+docker/smtpsink.Dockerfile
+docker/providerstub.Dockerfile
+internal/testsupport/smtpcapture/*
+internal/testsupport/providerstub/*
+internal/testsupport/authrows/*
+# the stack the corpus brings up, and the two workflows that schedule it
+compose.yml
+.github/workflows/go-auth-service.yml
+.github/workflows/venue-oracles.yml

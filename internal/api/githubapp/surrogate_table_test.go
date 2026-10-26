@@ -29,6 +29,9 @@ func TestSurrogateRefusalTableGithubappRowsAnswerAsTheTableSays(t *testing.T) {
 			continue
 		}
 		id, request, body, wantCell := f[0], f[2], f[3], strings.Fields(f[5])
+		if f[4] != "none" {
+			t.Fatalf("%s: setup %q, this driver runs rows with setup none", id, f[4])
+		}
 		method, path, _ := strings.Cut(request, " ")
 		if path != "/api/v1/admin/integrations/github/install-callback" {
 			t.Fatalf("%s: no handler for %s", id, request)

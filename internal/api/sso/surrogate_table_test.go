@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -124,5 +125,95 @@ func assertRefusal(t *testing.T, id string, gotStatus int, raw []byte, wantStatu
 	}
 	if strings.Contains(string(raw), "app.example") {
 		t.Errorf("%s: the refusal echoes the input: %s", id, raw)
+	}
+}
+
+// TestSurrogateRefusalTableIsWellFormed checks every column of every row of
+// ci/sso_surrogate_refusals.tsv, whatever package names it: a row no driver
+// owns, a repeated id, an unknown request, setup or body, a go_api or
+// auth_service cell that is not a status, a kind outside the three kinds or
+// one that contradicts the cells, and an empty reason are all refused.
+func TestSurrogateRefusalTableIsWellFormed(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "ci", "sso_surrogate_refusals.tsv"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	owners := map[string]string{
+		"sso/none":           "sso unit driver",
+		"sso/saml_forwarded": "sso integration driver",
+		"sso/saml_sealed":    "sso integration driver",
+		"githubapp/none":     "githubapp driver",
+	}
+	requests := map[string]string{
+		"sso/none":           "POST /api/v1/auth/oidc/00000000-0000-4000-8000-000000000001/authorize",
+		"sso/saml_forwarded": "POST /api/v1/auth/saml/{provider}/initiate",
+		"sso/saml_sealed":    "POST /api/v1/auth/saml/{provider}/initiate",
+		"githubapp/none":     "POST /api/v1/admin/integrations/github/install-callback",
+	}
+	loneSurrogate := regexp.MustCompile(`\\u[dD][89a-fA-F][0-9a-fA-F]{2}`)
+	status := regexp.MustCompile(`^[1-5][0-9][0-9]( .*)?$`)
+	ids := map[string]bool{}
+	rows := 0
+	for _, line := range strings.Split(string(raw), "\n") {
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		rows++
+		f := strings.Split(line, "\t")
+		if len(f) != 9 {
+			t.Errorf("row %q has %d columns, want 9", f[0], len(f))
+			continue
+		}
+		id, pkg, request, body, setup, goAPI, authService, kind, reason := f[0], f[1], f[2], f[3], f[4], f[5], f[6], f[7], f[8]
+		key := pkg + "/" + setup
+		if id == "" || ids[id] {
+			t.Errorf("row id %q is empty or repeated", id)
+		}
+		ids[id] = true
+		if _, owned := owners[key]; !owned {
+			t.Errorf("%s: package %q with setup %q is owned by no driver", id, pkg, setup)
+			continue
+		}
+		if request != requests[key] {
+			t.Errorf("%s: request %q, the %s drives %q", id, request, owners[key], requests[key])
+		}
+		var object map[string]any
+		if err := json.Unmarshal([]byte(body), &object); err != nil || !loneSurrogate.MatchString(body) {
+			t.Errorf("%s: body %q is not a JSON object carrying a lone surrogate escape", id, body)
+		}
+		if !status.MatchString(goAPI) {
+			t.Errorf("%s: go_api cell %q is not \"<status>\" or \"<status> <type> <loc>\"", id, goAPI)
+			continue
+		}
+		if authService != "-" && !status.MatchString(authService) {
+			t.Errorf("%s: auth_service cell %q is neither \"-\" nor a status cell", id, authService)
+			continue
+		}
+		if strings.TrimSpace(reason) == "" {
+			t.Errorf("%s: empty reason", id)
+		}
+		goStatus := strings.Fields(goAPI)[0]
+		switch kind {
+		case "same":
+			if authService == "-" || strings.Fields(authService)[0] != goStatus {
+				t.Errorf("%s: kind same but go_api %q and auth_service %q answer different statuses", id, goAPI, authService)
+			}
+		case "stricter":
+			if goStatus != "422" || len(strings.Fields(goAPI)) != 3 || strings.Fields(goAPI)[1] != "string_unicode" {
+				t.Errorf("%s: kind stricter needs go_api \"422 string_unicode <loc>\", got %q", id, goAPI)
+			}
+			if authService != "-" && strings.Fields(authService)[0] == "422" {
+				t.Errorf("%s: kind stricter but auth_service %q already refuses with 422", id, authService)
+			}
+		case "divergent":
+			if authService == "-" {
+				t.Errorf("%s: kind divergent needs an auth_service cell", id)
+			}
+		default:
+			t.Errorf("%s: kind %q is not same, stricter or divergent", id, kind)
+		}
+	}
+	if rows == 0 {
+		t.Fatal("the table has no rows")
 	}
 }

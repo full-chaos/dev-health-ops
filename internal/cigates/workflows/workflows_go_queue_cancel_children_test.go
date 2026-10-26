@@ -21,6 +21,8 @@ const (
 	cancelJobName = "cancel-stacked-queue-children"
 	cancelScript  = "ci/cancel_stacked_queue_runs.sh"
 	cancelIf      = "failure() && github.event_name == 'merge_group'"
+
+	cancelCheckoutRef = "${{ github.event.merge_group.base_sha }}"
 )
 
 func cancelJobDefects(doc yamlMap) []string {
@@ -67,6 +69,15 @@ func cancelJobDefects(doc yamlMap) []string {
 	}
 	if with["persist-credentials"] != false {
 		out = append(out, "checkout persist-credentials must be false")
+	}
+	if with["ref"] != cancelCheckoutRef {
+		out = append(out, fmt.Sprintf("checkout ref is %v, want exactly %s (an immutable revision named by the event, never the group head)", with["ref"], cancelCheckoutRef))
+	}
+	if len(with) != 4 {
+		out = append(out, fmt.Sprintf("checkout with: has %d keys, want exactly ref, sparse-checkout, persist-credentials, sparse-checkout-cone-mode (a token: key is not allowed)", len(with)))
+	}
+	if _, has := co["env"]; has {
+		out = append(out, "the checkout step must not have env (the token goes to the script step only)")
 	}
 	if asString(run["run"]) != "bash "+cancelScript {
 		out = append(out, fmt.Sprintf("step 2 run is %q, want exactly %q", asString(run["run"]), "bash "+cancelScript))
@@ -118,8 +129,8 @@ func TestStackedQueueCancelJobShape(t *testing.T) {
 		t.Fatalf("%s", strings.Join(d, "\n"))
 	}
 	for _, m := range []mutation{
-		{cancelGoYml, "    permissions:\n      actions: write\n      contents: read\n    steps:\n      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n        with:\n          sparse-checkout: " + cancelScript, "    permissions:\n      actions: write\n      contents: read\n      packages: read\n    steps:\n      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n        with:\n          sparse-checkout: " + cancelScript},
-		{cancelGoYml, "    permissions:\n      actions: write\n      contents: read\n    steps:\n      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n        with:\n          sparse-checkout: " + cancelScript, "    permissions:\n      actions: write\n      contents: write\n    steps:\n      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n        with:\n          sparse-checkout: " + cancelScript},
+		{cancelGoYml, "    permissions:\n      actions: write\n      contents: read\n    steps:\n      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n        with:\n          ref: " + cancelCheckoutRef + "\n          sparse-checkout: " + cancelScript, "    permissions:\n      actions: write\n      contents: read\n      packages: read\n    steps:\n      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n        with:\n          ref: " + cancelCheckoutRef + "\n          sparse-checkout: " + cancelScript},
+		{cancelGoYml, "    permissions:\n      actions: write\n      contents: read\n    steps:\n      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n        with:\n          ref: " + cancelCheckoutRef + "\n          sparse-checkout: " + cancelScript, "    permissions:\n      actions: write\n      contents: write\n    steps:\n      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n        with:\n          ref: " + cancelCheckoutRef + "\n          sparse-checkout: " + cancelScript},
 		{cancelGoYml, "        run: bash " + cancelScript + "\n", "        run: bash " + cancelScript + "\n      - name: Test\n        run: go test ./...\n"},
 		{cancelGoYml, "    if: " + cancelIf + "\n", "    if: failure()\n"},
 		{cancelGoYml, "    if: " + cancelIf + "\n", "    if: always() && github.event_name == 'merge_group'\n"},
@@ -127,6 +138,14 @@ func TestStackedQueueCancelJobShape(t *testing.T) {
 		{cancelGoYml, "    needs: [go-storage-integration]\n    if: " + cancelIf, "    needs: [go-storage-integration, go-container-smoke]\n    if: " + cancelIf},
 		{cancelGoYml, "          persist-credentials: false\n          sparse-checkout-cone-mode: false\n", "          sparse-checkout-cone-mode: false\n"},
 		{cancelGoYml, "          sparse-checkout: " + cancelScript + "\n", "          sparse-checkout: ci\n"},
+		{cancelGoYml, "        with:\n          ref: " + cancelCheckoutRef + "\n          sparse-checkout: " + cancelScript + "\n", "        with:\n          sparse-checkout: " + cancelScript + "\n"},
+		{cancelGoYml, "          ref: " + cancelCheckoutRef + "\n", "          ref: ${{ github.sha }}\n"},
+		{cancelGoYml, "          ref: " + cancelCheckoutRef + "\n", "          ref: ${{ github.event.merge_group.head_sha }}\n"},
+		{cancelGoYml, "          ref: " + cancelCheckoutRef + "\n", "          ref: ${{ github.event.merge_group.base_ref }}\n"},
+		{cancelGoYml, "          persist-credentials: false\n          sparse-checkout-cone-mode: false\n", "          persist-credentials: true\n          sparse-checkout-cone-mode: false\n"},
+		{cancelGoYml, "          sparse-checkout-cone-mode: false\n      - name: Cancel the runs stacked", "          sparse-checkout-cone-mode: false\n          token: ${{ github.token }}\n      - name: Cancel the runs stacked"},
+		{cancelGoYml, "        with:\n          ref: " + cancelCheckoutRef, "        env:\n          GH_TOKEN: ${{ github.token }}\n        with:\n          ref: " + cancelCheckoutRef},
+		{cancelGoYml, "    permissions:\n      actions: write\n      contents: read\n    steps:", "    env:\n      GH_TOKEN: ${{ github.token }}\n    permissions:\n      actions: write\n      contents: read\n    steps:"},
 		{cancelGoYml, "          HEAD_SHA: ${{ github.sha }}\n", "          HEAD_SHA: ${{ github.sha }}\n          SECRET: ${{ secrets.GITHUB_TOKEN }}\n"},
 		{cancelGoYml, "      - go-auth-web-proxy-proof\n      - graphql-wire-parity\n    runs-on: ubuntu-latest\n    timeout-minutes: 5\n    steps:\n      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n\n      - name: Aggregate the heavy Go results", "      - go-auth-web-proxy-proof\n      - graphql-wire-parity\n      - " + cancelJobName + "\n    runs-on: ubuntu-latest\n    timeout-minutes: 5\n    steps:\n      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n\n      - name: Aggregate the heavy Go results"},
 		{cancelGoYml, "    permissions:\n      contents: read\n      actions: read\n    runs-on: ubuntu-latest\n    timeout-minutes: 5\n    env:\n      PLAN_RESULT", "    permissions:\n      contents: read\n      actions: write\n    runs-on: ubuntu-latest\n    timeout-minutes: 5\n    env:\n      PLAN_RESULT"},
@@ -254,20 +273,37 @@ jqexpr=""
 for ((i = 0; i < ${#args[@]}; i++)); do
   [ "${args[i]}" = "--jq" ] && jqexpr="${args[i+1]}"
 done
-case "${args[*]}" in
-  *status=queued*|*status=in_progress*) echo "${args[*]}" >> "$STUB_LOG.gets" ;;&
-  *status=queued*) f="$STUB_DIR/queued.json" ;;
-  *status=in_progress*) f="$STUB_DIR/in_progress.json" ;;
-  *) echo "unexpected gh call: ${args[*]}" >&2; exit 9 ;;
+all="${args[*]}"
+status=""
+case "$all" in
+  *status=queued*) status=queued ;;
+  *status=in_progress*) status=in_progress ;;
+  *) echo "unexpected gh call: $all" >&2; exit 9 ;;
 esac
+page=1
+if [[ "$all" =~ page=([0-9]+) ]]; then page="${BASH_REMATCH[1]}"; fi
+echo "$status $page" >> "$STUB_LOG.gets"
 [ -n "${STUB_LIST_FAIL:-}" ] && exit 1
+f="$STUB_DIR/$status.$page.json"
+[ -e "$f" ] || f="$STUB_DIR/empty.json"
 jq -r "$jqexpr" "$f"
 `
 
-func runCancelScript(t *testing.T, scriptRoot string, env ...string) (string, []string, int) {
+type cancelRun struct {
+	out  string
+	rc   int
+	ids  []string
+	gets []string
+}
+
+func runCancelScriptWith(t *testing.T, scriptRoot string, files map[string]string, env ...string) cancelRun {
 	t.Helper()
 	dir := t.TempDir()
-	for name, body := range map[string]string{"gh": ghStub, "queued.json": fixtureQueued, "in_progress.json": fixtureInProgress} {
+	all := map[string]string{"gh": ghStub, "empty.json": `{"workflow_runs":[]}`, "queued.1.json": fixtureQueued, "in_progress.1.json": fixtureInProgress}
+	for k, v := range files {
+		all[k] = v
+	}
+	for name, body := range all {
 		mode := os.FileMode(0o644)
 		if name == "gh" {
 			mode = 0o755
@@ -281,10 +317,14 @@ func runCancelScript(t *testing.T, scriptRoot string, env ...string) (string, []
 	cmd.Env = append([]string{"PATH=" + withShims(dir+":/usr/bin:/bin:/usr/local/bin"), "STUB_DIR=" + dir, "STUB_LOG=" + logf,
 		"REPO=o/r", "HEAD_SHA=" + shaRed, "RUN_ID=105"}, env...)
 	out, err := cmd.CombinedOutput()
+	r := cancelRun{out: string(out)}
 	if err != nil {
-		t.Fatalf("script must exit 0, got %v\n%s", err, out)
+		ee, ok := err.(*exec.ExitError)
+		if !ok {
+			t.Fatalf("running script: %v", err)
+		}
+		r.rc = ee.ExitCode()
 	}
-	var ids []string
 	if b, err := os.ReadFile(logf); err == nil {
 		for _, l := range strings.Split(strings.TrimSpace(string(b)), "\n") {
 			if l == "" {
@@ -294,22 +334,86 @@ func runCancelScript(t *testing.T, scriptRoot string, env ...string) (string, []
 			if m == nil {
 				t.Fatalf("unexpected write call: %q", l)
 			}
-			ids = append(ids, m[1])
+			r.ids = append(r.ids, m[1])
 		}
 	}
-	sort.Strings(ids)
-	gets := 0
+	sort.Strings(r.ids)
 	if b, err := os.ReadFile(logf + ".gets"); err == nil {
-		gets = len(strings.Fields(strings.ReplaceAll(string(b), "\n", " "))) / len(strings.Fields(strings.SplitN(string(b), "\n", 2)[0]))
+		r.gets = strings.Split(strings.TrimSpace(string(b)), "\n")
 	}
-	return string(out), ids, gets
+	return r
+}
+
+func runCancelScript(t *testing.T, scriptRoot string, env ...string) (string, []string, int) {
+	t.Helper()
+	r := runCancelScriptWith(t, scriptRoot, nil, env...)
+	if r.rc != 0 {
+		t.Fatalf("script must exit 0, got %d\n%s", r.rc, r.out)
+	}
+	return r.out, r.ids, len(r.gets)
+}
+
+// stalePages builds n pages of per queued stale runs (each a child of the red entry), ids from 1000.
+func stalePages(n, per int) map[string]string {
+	files := map[string]string{}
+	id := 1000
+	for p := 1; p <= n; p++ {
+		var rows []string
+		for i := 0; i < per; i++ {
+			id++
+			rows = append(rows, fmt.Sprintf(`{"id":%d,"name":"Go","head_branch":"gh-readonly-queue/main/pr-%d-%s","head_sha":"%s"}`, id, id, shaRed, shaB))
+		}
+		files[fmt.Sprintf("queued.%d.json", p)] = `{"workflow_runs":[` + strings.Join(rows, ",") + `]}`
+	}
+	return files
+}
+
+func TestStackedQueueCancelPagesAreRequestedInOrderAndStopAtAnEmptyOne(t *testing.T) {
+	r := runCancelScriptWith(t, rootOf(t), nil)
+	if got, want := strings.Join(r.gets, ","), "queued 1,queued 2,in_progress 1,in_progress 2"; got != want {
+		t.Fatalf("list GETs %q, want %q (page 2 is empty, so each status stops there)", got, want)
+	}
+	r = runCancelScriptWith(t, rootOf(t), stalePages(3, 100))
+	if r.rc != 0 || len(r.ids) != 300 || strings.Contains(r.out, "::warning::") {
+		t.Fatalf("3 full pages then an empty one: rc=%d cancelled=%d out=%q, want rc 0, 300 cancelled, no warning", r.rc, len(r.ids), r.out)
+	}
+}
+
+func TestStackedQueueCancelTruncatedScanIsLoudAndNonZero(t *testing.T) {
+	r := runCancelScriptWith(t, rootOf(t), stalePages(5, 100))
+	if r.rc != 2 {
+		t.Fatalf("a full last page (5 x 100) must exit 2, got %d", r.rc)
+	}
+	if !strings.Contains(r.out, "::warning::stale-run scan truncated") {
+		t.Fatalf("no ::warning:: line:\n%s", r.out)
+	}
+	if len(r.ids) != 500 {
+		t.Fatalf("what was found must still be cancelled: %d of 500", len(r.ids))
+	}
+	if r = runCancelScriptWith(t, rootOf(t), stalePages(5, 100), "DRY_RUN=1"); r.rc != 2 || len(r.ids) != 0 {
+		t.Fatalf("dry run: rc=%d writes=%d, want rc 2 and 0 writes", r.rc, len(r.ids))
+	}
+	files := stalePages(4, 100)
+	files["queued.5.json"] = stalePages(1, 7)["queued.1.json"]
+	if r = runCancelScriptWith(t, rootOf(t), files); r.rc != 0 {
+		t.Fatalf("a partial page 5 is not truncated: rc=%d\n%s", r.rc, r.out)
+	}
+}
+
+func TestStackedQueueCancelMissingInputsExit1(t *testing.T) {
+	for _, v := range []string{"REPO", "HEAD_SHA", "RUN_ID"} {
+		r := runCancelScriptWith(t, rootOf(t), nil, v+"=")
+		if r.rc != 1 || len(r.ids) != 0 || !strings.Contains(r.out, v+" is required") {
+			t.Errorf("%s empty: rc=%d writes=%d out=%q, want rc 1, 0 writes, %q", v, r.rc, len(r.ids), r.out, v+" is required")
+		}
+	}
 }
 
 func TestStackedQueueCancelSelectsOnlyTheChain(t *testing.T) {
 	root := rootOf(t)
 	_, ids, gets := runCancelScript(t, root)
-	if gets != 6 {
-		t.Fatalf("run-list GETs %d, want 6 (queued and in_progress, 3 pages each at most)", gets)
+	if gets != 4 {
+		t.Fatalf("run-list GETs %d, want 4 (queued and in_progress, each stops at its empty page 2)", gets)
 	}
 	if got, want := strings.Join(ids, ","), "101,102,103,201"; got != want {
 		t.Fatalf("cancelled runs %s, want %s (children, grandchildren; never the red run 105, an unrelated entry 104, a non-queue or look-alike branch 202-206)", got, want)
@@ -351,12 +455,32 @@ func TestStackedQueueCancelPlantedSelectionFaults(t *testing.T) {
 		{cancelScript, `    [ -n "${frontier[${BASH_REMATCH[1]}]:-}" ] || continue
 `, ``},
 		{cancelScript, `for status in queued in_progress; do`, `for status in queued; do`},
-		{cancelScript, `max_pages=3`, `max_pages=30`},
+		{cancelScript, `max_pages=5`, `max_pages=50`},
 	} {
 		tmp := plantTree(t, root, []string{cancelScript}, m)
 		_, ids, gets := runCancelScript(t, tmp)
-		if strings.Join(ids, ",") == "101,102,103,201" && gets == 6 {
+		if strings.Join(ids, ",") == "101,102,103,201" && gets == 4 {
 			t.Errorf("planted selection fault was not caught: %q -> %q", m.old, m.new)
+		}
+	}
+}
+
+func TestStackedQueueCancelPlantedTruncationFaults(t *testing.T) {
+	root := rootOf(t)
+	for _, m := range []mutation{
+		{cancelScript, `max_pages=5`, `max_pages=50`},
+		{cancelScript, `exit 2`, `exit 0`},
+		{cancelScript, `::warning::stale-run scan truncated`, `stale-run scan truncated`},
+		{cancelScript, `truncated=1`, `truncated=0`},
+		{cancelScript, `-eq 100`, `-gt 100`},
+		{cancelScript, `${REPO:?REPO is required}`, `${REPO:-o/r}`},
+	} {
+		tmp := plantTree(t, root, []string{cancelScript}, m)
+		a := runCancelScriptWith(t, tmp, stalePages(5, 100))
+		b := runCancelScriptWith(t, tmp, nil, "REPO=")
+		ok := a.rc == 2 && strings.Contains(a.out, "::warning::stale-run scan truncated") && len(a.ids) == 500 && b.rc == 1
+		if ok {
+			t.Errorf("planted truncation fault was not caught: %q -> %q", m.old, m.new)
 		}
 	}
 }

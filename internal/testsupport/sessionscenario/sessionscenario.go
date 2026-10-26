@@ -106,7 +106,10 @@ type SeedUser struct {
 
 // SeedUsers is the users the seed writes: the same on every leg. For the leg that owns users, SeedDifferences are applied.
 // SeedDifferences are the seed differences of the leg that owns users, declared once.
-var SeedDifferences = []struct{ User, Column, Value, Reason string }{}
+var SeedDifferences = []struct{ User, Column, Value, Reason string }{
+	{User: olga, Column: "auth_provider_id", Value: "300",
+		Reason: "a github user with no provider id cannot be copied to the auth schema (usersbackfill skips it as an invalid identity and the users_owned guard then refuses the switch); prod has no github user without a provider id at flip time (CHAOS-11452). 300 is the id the github stub gives her (the sessions scenario)"},
+}
 
 func SeedUsers(owned bool) []SeedUser {
 	users := []SeedUser{
@@ -122,6 +125,15 @@ func SeedUsers(owned bool) []SeedUser {
 		{karl, "karl@example.com", "karl", "Karl", "local", "", true, true, false, false},
 		{lena, "lena@example.com", "lena", "Lena", "local", "", true, true, true, false},
 		{olga, "olga@example.com", "olga", "Olga", "github", "", false, true, true, false},
+	}
+	if owned {
+		for _, difference := range SeedDifferences {
+			for index := range users {
+				if users[index].ID == difference.User && difference.Column == "auth_provider_id" {
+					users[index].ProviderID = difference.Value
+				}
+			}
+		}
 	}
 	return users
 }

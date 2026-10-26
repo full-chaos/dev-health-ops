@@ -10,13 +10,17 @@ import (
 var (
 	// queryValue is the value of a query parameter inside any text: a link token rides there.
 	queryValue = regexp.MustCompile(`([?&][^=&\s"'<>#]+=)[^&\s"'<>#]*`)
+	// fragment is the part of a URL after '#': an implicit-flow redirect carries its access_token there. It follows a
+	// character of the URL itself, so "issue #1" after a space is not one.
+	fragment = regexp.MustCompile(`([^\s"'<>#])#[^\s"'<>]+`)
 	// userinfo is the user and password of a URL.
 	userinfo = regexp.MustCompile(`(://)[^/\s@"'<>]+@`)
 )
 
-// RedactText is text with the query values and the userinfo of every URL in it removed.
+// RedactText is text with the query values, the fragment and the userinfo of every URL in it removed.
 func RedactText(text string) string {
 	text = userinfo.ReplaceAllString(text, "${1}<redacted>@")
+	text = fragment.ReplaceAllString(text, "${1}#<redacted>")
 	return queryValue.ReplaceAllString(text, "${1}<redacted>")
 }
 

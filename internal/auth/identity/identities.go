@@ -514,12 +514,11 @@ WHERE principal_id = $1 AND issuer = $2 AND provider = $3 AND subject <> $4`,
 }
 
 // lockPrincipal locks the principal row FOR UPDATE. A missing principal, or a
-// disabled or service-provider one when live is set, is ErrPrincipalUnavailable.
+// disabled one when live is set, is ErrPrincipalUnavailable.
 func (s *Store) lockPrincipal(ctx context.Context, tx audit.TxOps, principal uuid.UUID, live bool) error {
-	var disabled, service bool
-	err := tx.QueryRow(ctx, `SELECT p.disabled_at IS NOT NULL, `+ServiceProviderSQL("pu")+` FROM `+s.q+`.principals p
-LEFT JOIN public.users pu ON pu.id = p.id WHERE p.id = $1 FOR UPDATE OF p`, principal).Scan(&disabled, &service)
-	if errors.Is(err, pgx.ErrNoRows) || (err == nil && live && (disabled || service)) {
+	var disabled bool
+	err := tx.QueryRow(ctx, `SELECT disabled_at IS NOT NULL FROM `+s.q+`.principals WHERE id = $1 FOR UPDATE`, principal).Scan(&disabled)
+	if errors.Is(err, pgx.ErrNoRows) || (err == nil && live && disabled) {
 		return ErrPrincipalUnavailable
 	}
 	return err

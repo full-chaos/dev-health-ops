@@ -4,7 +4,6 @@ package identity
 
 import (
 	"context"
-	"errors"
 	"testing"
 
 	"github.com/google/uuid"
@@ -12,7 +11,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/edgetokenmint"
 )
 
-func TestIdentityBySubjectFlagsAServiceProviderPrincipalAndLinkRefusesIt(t *testing.T) {
+func TestIdentityBySubjectFlagsAServiceProviderPrincipalAndTheStoreStillLinksIt(t *testing.T) {
 	for name, store := range map[string]func(*env) *Store{
 		"before the users cutover": func(e *env) *Store { return e.store },
 		"users owned":              func(e *env) *Store { return e.owned },
@@ -46,16 +45,11 @@ func TestIdentityBySubjectFlagsAServiceProviderPrincipalAndLinkRefusesIt(t *test
 				t.Fatalf("service principal: %+v found=%v err=%v, want found with ServiceProvider set and no disabled mark", p, found, err)
 			}
 
-			before := e.count(t, ctx, `SELECT count(*) FROM auth.external_identities WHERE principal_id = $1`, service)
-			_, err = s.LinkIdentity(ctx, googleKey("more-"+uuid.NewString()), service, Actor{})
-			if !errors.Is(err, ErrPrincipalUnavailable) {
-				t.Fatalf("link to a service principal: %v, want ErrPrincipalUnavailable", err)
+			if _, err := s.LinkIdentity(ctx, googleKey("more-"+uuid.NewString()), service, Actor{}); err != nil {
+				t.Fatalf("link to a service principal: %v, want it stored (the sign-in paths are the gate)", err)
 			}
-			if after := e.count(t, ctx, `SELECT count(*) FROM auth.external_identities WHERE principal_id = $1`, service); after != before {
-				t.Fatalf("identities of the service principal %d -> %d", before, after)
-			}
-			if _, err := s.LinkIdentity(ctx, googleKey("more-"+uuid.NewString()), normal, Actor{}); errors.Is(err, ErrPrincipalUnavailable) {
-				t.Fatalf("link to a normal principal refused: %v", err)
+			if _, err := s.LinkIdentity(ctx, googleKey("more-"+uuid.NewString()), normal, Actor{}); err != nil {
+				t.Fatalf("link to a normal principal: %v", err)
 			}
 		})
 	}

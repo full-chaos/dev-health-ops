@@ -71,16 +71,15 @@ var (
 type Config struct {
 	Pool   *pgxpool.Pool
 	Schema authschema.ValidatedIdentifier
-	// SuccessorKey is a 32-byte server secret, base64url without padding. It
-	// derives rotated credentials; see deriveSuccessor.
+	// SuccessorKey is a 32-byte base64url server secret deriving rotated credentials.
 	SuccessorKey contracts.SecretString
 	// RefreshTTL is a credential's idle lifetime; 0 means 7 days (go-api's).
 	RefreshTTL time.Duration
-	// SessionLifetime is an optional absolute session lifetime. 0 means no
-	// absolute cap (go-api parity: a session lives while it keeps refreshing).
-	// With a cap, a credential never outlives its session.
+	// SessionLifetime is an optional absolute session lifetime; 0 means no cap
+	// (go-api parity). With a cap, a credential never outlives its session.
 	SessionLifetime time.Duration
 	Logger          *slog.Logger
+	UsersOwned      bool // AUTH_USERS_OWNED: a sign-in stamps public.users.last_login_at
 	// Meter registers the exchange and revocation counters; nil uses the
 	// process meter.
 	Meter metric.Meter
@@ -94,6 +93,7 @@ type Store struct {
 	key             *[successorKeyBytes]byte
 	refreshTTL      time.Duration
 	sessionLifetime time.Duration
+	usersOwned      bool
 	logger          *slog.Logger
 	exchanges       metric.Int64Counter
 	revocations     metric.Int64Counter
@@ -119,7 +119,7 @@ func New(cfg Config) (*Store, error) {
 	}
 	s := &Store{
 		pool: cfg.Pool, schema: cfg.Schema, q: authschema.Quote(cfg.Schema), key: key,
-		refreshTTL: cfg.RefreshTTL, sessionLifetime: cfg.SessionLifetime, logger: cfg.Logger,
+		refreshTTL: cfg.RefreshTTL, sessionLifetime: cfg.SessionLifetime, usersOwned: cfg.UsersOwned, logger: cfg.Logger,
 	}
 	if s.refreshTTL <= 0 {
 		s.refreshTTL = defaultRefreshTTL

@@ -364,7 +364,7 @@ func (h compatHandlers) startSession(ctx context.Context, principalID uuid.UUID,
 		text := auditOrg.String()
 		event.OrganizationID = &text
 	}
-	return h.Sessions.CreateAudited(ctx, principalID, sessionOrg, amr, event)
+	return h.Sessions.CreateAudited(session.WithSignIn(ctx), principalID, sessionOrg, amr, event)
 }
 
 // userInfo is go-api's _to_user_info(user, membership).

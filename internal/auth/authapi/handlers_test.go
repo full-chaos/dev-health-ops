@@ -60,6 +60,7 @@ type fakeSessions struct {
 	byCredential    []string
 	byCredentialErr error
 	created         []createdSession
+	signIns         int
 	createErr       error
 	// ExchangeLegacy.
 	legacy          []session.LegacyRefresh
@@ -89,9 +90,12 @@ func (f *fakeSessions) RevokeByCredential(_ context.Context, credential contract
 	return f.byCredentialErr == nil, f.byCredentialErr
 }
 
-func (f *fakeSessions) CreateAudited(_ context.Context, principal uuid.UUID, org *uuid.UUID, amr []string, event audit.AuditEvent) (session.Issued, error) {
+func (f *fakeSessions) CreateAudited(ctx context.Context, principal uuid.UUID, org *uuid.UUID, amr []string, event audit.AuditEvent) (session.Issued, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if session.IsSignIn(ctx) {
+		f.signIns++
+	}
 	if f.createErr != nil {
 		return session.Issued{}, f.createErr
 	}

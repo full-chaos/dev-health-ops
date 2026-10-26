@@ -5,6 +5,7 @@ package authflowvenue_test
 import (
 	"encoding/json"
 	"os"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -68,5 +69,29 @@ func TestRecordedPlaceholderTokenIsNotAFormatOfItsOwn(t *testing.T) {
 	got := linkMailRows([]sentMail{recorded})
 	if len(got) != 1 || got[0] != authrows.LinkMailRow("Verify your email address", authrows.LinkTokenGoAPI) {
 		t.Fatalf("rows = %v, want the go-api format", got)
+	}
+}
+
+// A failure message that prints mails holds no link token in any form: the bare 43-character one, go-api's signed one,
+// or one after "token=".
+func TestDescribeMailsHoldsNoLinkToken(t *testing.T) {
+	opaque := "HBPZUFDXW596HSRDyraWzGxjt9ZH7kXADsArR5G7KzQ"
+	signed := strings.Repeat("ab", 16) + "." + strings.Repeat("cd", 32)
+	mails := []sentMail{
+		{subject: "Verify your email address", token: opaque, html: `<a href="https://app.example.test/auth/verify?token=` + opaque + `">x</a>`},
+		{subject: "Reset your password", token: signed, html: `<a href="https://app.example.test/auth/reset-password?token=` + signed + `">y</a>`},
+	}
+	text := describeMails(mails)
+	for name, shaped := range map[string]*regexp.Regexp{
+		"43-character token": regexp.MustCompile(`[A-Za-z0-9_-]{43}`),
+		"signed token":       regexp.MustCompile(`[0-9a-f]{32}\.[0-9a-f]{64}`),
+		"token= value":       regexp.MustCompile(`token=[^<>"\s]{20,}`),
+	} {
+		if found := shaped.FindString(text); found != "" {
+			t.Errorf("the description holds a %s", name)
+		}
+	}
+	if !strings.Contains(text, "Verify your email address") || !strings.Contains(text, "Reset your password") {
+		t.Errorf("the description lost the subjects: %s", text)
 	}
 }

@@ -465,7 +465,7 @@ func (r *runner) compareMail(label string) {
 	}
 	fmt.Fprintf(&r.receipt, "%-70s python=%d go=%d %s\n", label+": e-mails", len(py), len(gv), venueoracle.Mark(same))
 	if !same {
-		r.t.Errorf("%s: the planes sent different e-mail:\n python %+v\n go     %+v", label, py, gv)
+		r.t.Errorf("%s: the planes sent different e-mail:\n python %s\n go     %s", label, describeMails(py), describeMails(gv))
 	}
 }
 
@@ -480,6 +480,9 @@ func linkMailRows(mails []sentMail) []string {
 	}
 	return rows
 }
+
+// describeMails is the mails for a failure message.
+func describeMails(mails []sentMail) string { return fmt.Sprintf("%+v", mails) }
 
 func countSubject(mails []sentMail, subject string) int {
 	n := 0

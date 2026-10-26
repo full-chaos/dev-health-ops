@@ -130,6 +130,7 @@ internal/teamprovider
 internal/testsupport/authrows
 internal/testsupport/containers
 internal/testsupport/moduleroot
+internal/testsupport/pgschema
 internal/testsupport/proofprincipals
 internal/testsupport/providerstub
 internal/testsupport/pydanticecho

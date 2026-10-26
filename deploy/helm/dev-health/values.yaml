@@ -395,7 +395,7 @@ authService:
   #    roll: the same roll sets it false again and reads that the Job is gone.
   backfill:
     enabled: false
-    # -- users-backfill or orgs-backfill.
+    # -- users-backfill, orgs-backfill or legacy-link-purge (the last needs users owned; run it after the phase-4 rollout is complete).
     verb: ""
     # -- true: read and report, write nothing. A real run needs an explicit false.
     dryRun: true

@@ -8,9 +8,9 @@ import (
 	"time"
 )
 
-// TestMigration0028AdmitsTheKubernetesSATokenExchangeClass: credential_class
+// TestMigration0030AdmitsTheKubernetesSATokenExchangeClass: credential_class
 // admits kubernetes_sa_token_exchange and still refuses a class nobody defined.
-func TestMigration0028AdmitsTheKubernetesSATokenExchangeClass(t *testing.T) {
+func TestMigration0030AdmitsTheKubernetesSATokenExchangeClass(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	env := newM10Fixture(t, ctx)

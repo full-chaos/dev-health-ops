@@ -1,4 +1,4 @@
--- 0028 credential_registry.credential_class admits kubernetes_sa_token_exchange.
+-- 0030 credential_registry.credential_class admits kubernetes_sa_token_exchange.
 -- NOT ADDITIVE in one place, on purpose: it REDEFINES one CHECK, and only
 -- WIDENS it (nothing is removed from the 0023 list).
 --

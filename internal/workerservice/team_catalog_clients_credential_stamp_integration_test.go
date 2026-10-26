@@ -15,9 +15,7 @@ import (
 )
 
 // createTeamCatalogCredentialStampTables is a minimal, local Postgres
-// fixture -- NOT providersyncschema.Create's full fixture, which this
-// package's other integration tests use for end-to-end provider-unit runs --
-// because resolveTeamCatalogIntegration only ever touches sync_runs and
+// fixture, because resolveTeamCatalogIntegration only ever touches sync_runs and
 // integrations. Mirrors internal/syncdispatchruntime/
 // native_reference_discovery_integration_test.go's equally minimal
 // createReferenceDiscoveryTables for the same reason.

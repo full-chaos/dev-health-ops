@@ -68,11 +68,11 @@ func TestPostgresFailAndCompleteSurfaceDatasetUnavailabilityOnIntegrationDataset
 INSERT INTO public.sync_run_units (
 	id, org_id, sync_run_id, integration_id, source_id, provider,
 	dataset_key, cost_class, mode, since_at, before_at, status,
-	processor_flags, updated_at
+	processor_flags, updated_at, created_at, attempts
 ) VALUES (
 	$1, 'org-acme', $2, $3, $4, 'github', 'commits', 'medium',
 	'incremental', '2026-07-22T12:00:00Z', '2026-12-01T00:00:00Z',
-	'dispatching', '{"sync_git":true,"sync_commits":true}', NOW()
+	'dispatching', '{"sync_git":true,"sync_commits":true}', NOW(), NOW(), 0
 )`, unitID, firstRunID, firstIntegrationID, firstSourceID); err != nil {
 			t.Fatal(err)
 		}

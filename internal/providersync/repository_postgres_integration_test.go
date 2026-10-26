@@ -6,13 +6,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/providersyncschema"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -254,6 +255,27 @@ INSERT INTO public.sync_dispatch_outbox (
 		finalizeClaimToken, finalizeClaimExpiresAt, now,
 	); err != nil {
 		t.Fatal(err)
+	}
+	for _, refused := range []struct {
+		name, kind, status, claimToken, want string
+		claimExpires                         any
+	}{
+		{"claim token without expiry", "post_sync", "pending", "half-claim", "must change together", nil},
+		{"dispatched without a transport", "reference_discovery", "dispatched", "", "ck_sync_dispatch_outbox_dispatched_route_coherence", nil},
+	} {
+		var token any
+		if refused.claimToken != "" {
+			token = refused.claimToken
+		}
+		_, err := pool.Exec(ctx, `
+INSERT INTO public.sync_dispatch_outbox (
+    id, org_id, sync_run_id, kind, status, available_at, attempts,
+    claim_token, claim_expires_at, last_error, created_at, updated_at
+) VALUES ($1, 'org-acme', $2, $3, $4, $5, 0, $6, $7, 'transport_lost', $5, $5)`,
+			uuid.NewString(), firstRunID, refused.kind, refused.status, now, token, refused.claimExpires)
+		if err == nil || !strings.Contains(err.Error(), refused.want) {
+			t.Fatalf("outbox row %q: err=%v, want a refusal naming %q", refused.name, err, refused.want)
+		}
 	}
 	// CHAOS-3427: this watermark deliberately overshoots the unit's window end
 	// (the fixture's before_at is 2026-07-23T12:00:00Z, i.e. `now`) by 106
@@ -525,24 +547,21 @@ func seedWorkItemAliasUnit(
 INSERT INTO public.sync_run_units (
     id, org_id, sync_run_id, integration_id, source_id, provider,
     dataset_key, cost_class, mode, since_at, before_at, status,
-    processor_flags, updated_at
+    processor_flags, updated_at, created_at, attempts
 ) VALUES (
     $1, 'org-acme', $2, $3, $4, 'github', 'work-items', 'medium',
     $5, '2026-07-22T12:00:00Z', '2026-07-23T12:00:00Z',
-    'dispatching', $6::jsonb, NOW()
+    'dispatching', $6::jsonb, NOW(), NOW(), 0
 )`, unitID, firstRunID, firstIntegrationID, firstSourceID, mode, processorFlags); err != nil {
 		t.Fatal(err)
 	}
 }
 
-// createProviderSyncFixture delegates to the shared
-// internal/testsupport/providersyncschema DDL so internal/workerservice's
-// end-to-end provider-unit tests build the identical schema (CHAOS-4219).
+// createProviderSyncFixture builds the migrated Postgres schema: real columns,
+// constraints, triggers and seeded transport routes.
 func createProviderSyncFixture(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
-	if err := providersyncschema.Create(ctx, pool); err != nil {
-		t.Fatal(err)
-	}
+	pgschema.Apply(ctx, t, pool)
 }
 func seedProviderSyncFixture(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
@@ -550,32 +569,35 @@ func seedProviderSyncFixture(t *testing.T, ctx context.Context, pool *pgxpool.Po
 		sql  string
 		args []any
 	}{
-		{`INSERT INTO public.integration_credentials (id) VALUES ($1)`,
+		{`INSERT INTO public.integration_credentials (id, provider, name, created_at, updated_at)
+		  VALUES ($1, 'github', 'default', NOW(), NOW())`,
 			[]any{firstCredentialID}},
-		{`INSERT INTO public.integrations (id, org_id, credential_id, config)
-		  VALUES ($1, 'org-acme', $2, '{"api_url":"https://api.github.com"}')`,
+		{`INSERT INTO public.integrations (id, org_id, provider, credential_id, name, config, is_active, created_at, updated_at)
+		  VALUES ($1, 'org-acme', 'github', $2, 'acme', '{"api_url":"https://api.github.com"}', TRUE, NOW(), NOW())`,
 			[]any{firstIntegrationID, firstCredentialID}},
 		{`INSERT INTO public.integration_sources
-		  (id, org_id, integration_id, external_id, full_name, metadata)
-		  VALUES ($1, 'org-acme', $2, 'acme/api', 'acme/api', '{"default_branch":"main"}')`,
+		  (id, org_id, integration_id, provider, source_type, external_id, name, full_name, metadata,
+		   is_enabled, discovered_at, last_seen_at)
+		  VALUES ($1, 'org-acme', $2, 'github', 'repository', 'acme/api', 'acme/api', 'acme/api',
+		   '{"default_branch":"main"}', TRUE, NOW(), NOW())`,
 			[]any{firstSourceID, firstIntegrationID}},
 		{`INSERT INTO public.integration_datasets
-		  (id, org_id, integration_id, dataset_key, options)
-		  VALUES ($1, 'org-acme', $2, 'commits', '{"include_archived":false}')`,
+		  (id, org_id, integration_id, dataset_key, is_enabled, options)
+		  VALUES ($1, 'org-acme', $2, 'commits', TRUE, '{"include_archived":false}')`,
 			[]any{uuid.NewString(), firstIntegrationID}},
 		{`INSERT INTO public.sync_runs
-		  (id, org_id, integration_id, status, credential_id, credential_fingerprint, auth_source,
-		   total_units, completed_units, failed_units)
-		  VALUES ($1, 'org-acme', $2, 'running', $3, 'safe-fingerprint', 'integration_credential', 0, 0, 0)`,
+		  (id, org_id, integration_id, triggered_by, mode, status, credential_id, credential_fingerprint, auth_source,
+		   total_units, completed_units, failed_units, created_at)
+		  VALUES ($1, 'org-acme', $2, 'test', 'incremental', 'running', $3, 'safe-fingerprint', 'integration_credential', 0, 0, 0, NOW())`,
 			[]any{firstRunID, firstIntegrationID, firstCredentialID}},
 		{`INSERT INTO public.sync_run_units (
 			id, org_id, sync_run_id, integration_id, source_id, provider,
 			dataset_key, cost_class, mode, since_at, before_at, status,
-			processor_flags, updated_at
+			processor_flags, updated_at, created_at, attempts
 		  ) VALUES (
 			$1, 'org-acme', $2, $3, $4, 'github', 'commits', 'medium',
 			'incremental', '2026-07-22T12:00:00Z', '2026-07-23T12:00:00Z',
-			'dispatching', '{"sync_git":true,"sync_commits":true}', NOW()
+			'dispatching', '{"sync_git":true,"sync_commits":true}', NOW(), NOW(), 0
 		  )`, []any{firstUnitID, firstRunID, firstIntegrationID, firstSourceID}},
 	}
 	for _, statement := range statements {
@@ -642,11 +664,11 @@ func TestPostgresRollupCountsBothUnitsUnderConcurrentCompletion(t *testing.T) {
 INSERT INTO public.sync_run_units (
 	id, org_id, sync_run_id, integration_id, source_id, provider,
 	dataset_key, cost_class, mode, since_at, before_at, status,
-	processor_flags, updated_at
+	processor_flags, updated_at, created_at, attempts
 ) VALUES (
 	$1, 'org-acme', $2, $3, $4, 'github', 'commits', 'medium',
 	'incremental', '2026-07-22T12:00:00Z', '2026-07-23T12:00:00Z',
-	'dispatching', '{"sync_git":true,"sync_commits":true}', NOW()
+	'dispatching', '{"sync_git":true,"sync_commits":true}', NOW(), NOW(), 0
 )`, secondUnitID, firstRunID, firstIntegrationID, firstSourceID); err != nil {
 		t.Fatal(err)
 	}
@@ -727,8 +749,8 @@ func TestPostgresCompleteLandsGitHubWorkItemsFamilyWatermarks(t *testing.T) {
 	createProviderSyncFixture(t, ctx, pool)
 	seedProviderSyncFixture(t, ctx, pool)
 	if _, err := pool.Exec(ctx, `
-INSERT INTO public.integration_datasets (id, org_id, integration_id, dataset_key, options)
-VALUES ($1, 'org-acme', $2, 'work-items', '{}'::jsonb)`,
+INSERT INTO public.integration_datasets (id, org_id, integration_id, dataset_key, is_enabled, options)
+VALUES ($1, 'org-acme', $2, 'work-items', TRUE, '{}'::jsonb)`,
 		uuid.NewString(), firstIntegrationID); err != nil {
 		t.Fatal(err)
 	}
@@ -736,7 +758,7 @@ VALUES ($1, 'org-acme', $2, 'work-items', '{}'::jsonb)`,
 INSERT INTO public.sync_run_units (
     id, org_id, sync_run_id, integration_id, source_id, provider,
     dataset_key, cost_class, mode, since_at, before_at, status,
-    processor_flags, updated_at
+    processor_flags, updated_at, created_at, attempts
 ) VALUES (
     $1, 'org-acme', $2, $3, $4, 'github', 'work-items', 'medium',
     'incremental', '2026-08-19T20:00:00Z', '2026-08-20T01:00:00Z',
@@ -747,7 +769,7 @@ INSERT INTO public.sync_run_units (
       "family_dataset_work_item_history":true,
       "family_dataset_work_item_comments":true,
       "family_dataset_work_item_projects":true}'::jsonb,
-    NOW()
+    NOW(), NOW(), 0
 )`, workItemsFamilyUnitID, firstRunID, firstIntegrationID, firstSourceID); err != nil {
 		t.Fatal(err)
 	}

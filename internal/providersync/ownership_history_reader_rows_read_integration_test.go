@@ -10,13 +10,14 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2"
 )
 
-// CHAOS-9548 reader memory. An org with 88 (team, project) pairs is synced 100
+// CHAOS-9548 rows read. An org with 88 (team, project) pairs is synced 100
 // times. "Before" is what a writer did: every sync writes every pair again.
 // "After" is what a writer does now: a pair is written once. The open-row read
 // of the writers (FINAL, valid_to IS NULL) runs on both and ClickHouse's own
-// query log gives rows read and peak memory. Merges are stopped so a background
-// merge cannot flatter the "before" case.
-func TestReaderMemoryOfTheOpenOwnershipReadBeforeAndAfter(t *testing.T) {
+// query log gives the rows read; the test asserts those, and only logs peak
+// memory. Merges are stopped so a background merge cannot flatter the "before"
+// case. A missing query log or log row fails the test: no measurement is not a pass.
+func TestOpenOwnershipReadRowsReadBeforeAndAfter(t *testing.T) {
 	ctx, conn := newWorkItemEffectsConn(t)
 	if err := conn.Exec(ctx, "SYSTEM STOP MERGES team_project_ownership"); err != nil {
 		t.Fatal(err)
@@ -56,21 +57,24 @@ func TestReaderMemoryOfTheOpenOwnershipReadBeforeAndAfter(t *testing.T) {
 			t.Fatal(err)
 		}
 		if err := conn.Exec(ctx, "SYSTEM FLUSH LOGS"); err != nil {
-			t.Skipf("the query log is not readable by this user: %v", err)
+			t.Fatalf("the query log is not readable by this user: %v", err)
 		}
 		if err := conn.QueryRow(ctx, `SELECT read_rows, memory_usage FROM system.query_log
 			WHERE log_comment = ? AND type = 'QueryFinish' ORDER BY event_time_microseconds DESC LIMIT 1`, comment).Scan(&readRows, &memory); err != nil {
-			t.Skipf("the query log has no row for the read: %v", err)
+			t.Fatalf("the query log has no row for the read: %v", err)
 		}
 		return len(open), readRows, memory
 	}
 	beforeOpen, beforeRead, beforeMemory := measure("memory-before")
 	afterOpen, afterRead, afterMemory := measure("memory-after")
-	t.Logf("reader memory: pairs=%d syncs=%d", pairs, syncs)
-	t.Logf("before (every pair written at every sync): open rows=%d read_rows=%d peak_memory_bytes=%d", beforeOpen, beforeRead, beforeMemory)
-	t.Logf("after  (a pair written once):               open rows=%d read_rows=%d peak_memory_bytes=%d", afterOpen, afterRead, afterMemory)
+	t.Logf("open ownership read: pairs=%d syncs=%d", pairs, syncs)
+	t.Logf("before (every pair written at every sync): open rows=%d read_rows=%d informational_peak_memory_bytes=%d", beforeOpen, beforeRead, beforeMemory)
+	t.Logf("after  (a pair written once):               open rows=%d read_rows=%d informational_peak_memory_bytes=%d", afterOpen, afterRead, afterMemory)
 	if beforeOpen != pairs || afterOpen != pairs {
 		t.Fatalf("open rows before %d after %d, want %d for both: the read must give the same answer", beforeOpen, afterOpen, pairs)
+	}
+	if beforeRead == 0 || afterRead == 0 {
+		t.Fatalf("rows read before %d after %d: the query log gave no measurement", beforeRead, afterRead)
 	}
 	if afterRead*10 > beforeRead {
 		t.Fatalf("rows read after %d is not an order of magnitude under before %d", afterRead, beforeRead)

@@ -227,3 +227,21 @@ func ValidateThenLimit(validate RequestValidator, limiter *KeyedLimiter, keyFunc
 		})
 	}
 }
+
+// ValidateThenLimitDependency is ValidateThenLimit over LimitWithDependency.
+func ValidateThenLimitDependency(validate RequestValidator, limiter *KeyedLimiter, keyFunc KeyFunc, write ErrorWriter) func(http.Handler) http.Handler {
+	if validate == nil {
+		panic("httpapi: ValidateThenLimit needs a validator")
+	}
+	limitWith := LimitWithDependency(limiter, keyFunc, write)
+	return func(next http.Handler) http.Handler {
+		limited := limitWith(next)
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			checked, ok := validate(w, r)
+			if !ok {
+				return
+			}
+			limited.ServeHTTP(w, checked)
+		})
+	}
+}

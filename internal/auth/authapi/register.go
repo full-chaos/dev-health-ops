@@ -51,7 +51,7 @@ func (h credentialHandlers) registerRoute(flows CredentialFlows) (httpapi.Route,
 	if !ok {
 		return httpapi.Route{}, errors.New("authapi: the credential flows cannot register")
 	}
-	handler := httpapi.ValidateThenLimit(h.validateRegister, h.limits.limiter(registerIPLimit), clientKey, goAPIRefusal)(h.register(register))
+	handler := httpapi.ValidateThenLimitDependency(h.validateRegister, h.limits.limiter(registerIPLimit), clientKey, goAPIRefusal)(h.register(register))
 	return httpapi.Route{Method: http.MethodPost, Pattern: PatternRegister, Handler: handler}, nil
 }
 

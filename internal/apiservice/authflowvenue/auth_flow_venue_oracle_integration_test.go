@@ -268,6 +268,8 @@ type runner struct {
 	// for an existing address: it queues an account-exists mail the Python
 	// plane never sent.
 	notices int
+	// greetings counts the mails the owned leg's declared difference "greeting by e-mail" covered.
+	greetings int
 	// registers is set when the current batch carried a sign-up, a resend or a forgot request: the Go plane
 	// sends their mail off the request, so mails are compared in a fixed order.
 	registers bool
@@ -462,6 +464,10 @@ func (r *runner) compareMail(label string) {
 	for index := 0; same && index < len(py); index++ {
 		a, b := py[index], gv[index]
 		a.token, b.token = "", ""
+		if a != b && r.usersOwned && r.forwarded.Has(authrows.Credentials) && greetsByEmailOnly(a, b) {
+			r.greetings++
+			continue
+		}
 		same = a == b
 	}
 	fmt.Fprintf(&r.receipt, "%-70s python=%d go=%d %s\n", label+": e-mails", len(py), len(gv), venueoracle.Mark(same))
@@ -493,7 +499,37 @@ func linkMailRows(mails []sentMail, declared string) []string {
 // greetsByEmailOnly is the declared difference "greeting by e-mail" of the users-owned leg (CHAOS-TBD-GREETING):
 // auth-service's resend and forgot mails greet the user by e-mail address where the golden greets by full name. It
 // holds only when the two mails are otherwise the same, apart from the encoding a non-ASCII name needs.
-func greetsByEmailOnly(python, target sentMail) bool { return false }
+func greetsByEmailOnly(python, target sentMail) bool {
+	pyName, pyOK := greetingName(python.html)
+	goName, goOK := greetingName(target.html)
+	if !pyOK || !goOK || goName != strings.Trim(target.to, "<>") || pyName == goName {
+		return false
+	}
+	asciiName := true
+	for _, character := range pyName {
+		asciiName = asciiName && character < 0x80
+	}
+	if python.partType != target.partType && (asciiName || !strings.Contains(python.partType, "base64") || !strings.Contains(target.partType, "7bit")) {
+		return false
+	}
+	python.partType, target.partType = "", ""
+	python.token, target.token = "", ""
+	python.html, target.html = greetingPattern.ReplaceAllString(python.html, "<p>Hi NAME,</p>"), greetingPattern.ReplaceAllString(target.html, "<p>Hi NAME,</p>")
+	return python == target
+}
+
+// greetingMails is the mails of the scenario whose greeting by e-mail the owned leg declares: alice's reset mail.
+const greetingMails = 1
+
+var greetingPattern = regexp.MustCompile(`<p>Hi ([^<]*),</p>`)
+
+func greetingName(html string) (string, bool) {
+	match := greetingPattern.FindStringSubmatch(html)
+	if match == nil {
+		return "", false
+	}
+	return match[1], true
+}
 
 // describeMails is the mails for a failure message: the link token of each is a credential and never printed.
 func describeMails(mails []sentMail) string {
@@ -902,6 +938,7 @@ func TestAuthFlowVenueOracle(t *testing.T) {
 		same("register: password over 72 bytes", post, register, "", `{"email": "long@example.com", "password": "Ab1`+strings.Repeat("x", 70)+`"}`),
 	})
 	r.batch("register names", []step{
+		// All three planes answer 500 here (PostgreSQL 22021 on the lone surrogate): CHAOS-11450, no difference to classify.
 		same("register: full name with a lone surrogate", post, register, "", `{"email": "surr@example.com", "password": "Surr-pass-2026", "full_name": "\ud800"}`),
 		same("register: empty org name", post, register, "", `{"email": "emma@example.com", "password": "Emma-pass-2026", "full_name": "", "org_name": ""}`),
 		same("register: no names", post, register, "", `{"email": "ned@example.com", "password": "Ned-pass-2026"}`),
@@ -1012,6 +1049,9 @@ func TestAuthFlowVenueOracle(t *testing.T) {
 
 	if violations := policy.WriterViolations(); violations > 0 {
 		t.Errorf("%d body writes used the wrong writer for their route", violations)
+	}
+	if r.usersOwned && r.forwarded.Has(authrows.Credentials) && r.greetings != greetingMails {
+		t.Errorf("greeting by e-mail (CHAOS-TBD-GREETING): covered %d mails, the scenario holds exactly %d", r.greetings, greetingMails)
 	}
 	if r.forwarded.Any() {
 		for _, problem := range r.ledger.Dead() {

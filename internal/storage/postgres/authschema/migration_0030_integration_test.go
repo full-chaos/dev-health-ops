@@ -63,7 +63,9 @@ func TestMigration0030ValidatesThePinCheckOnlyWithoutUnrevokedPinlessRows(t *tes
 	if validated() {
 		t.Fatal("the check is validated after a refused 0030")
 	}
-	exec(`UPDATE auth.sessions SET revoked_at = now(), revoked_reason = 'pin_missing' WHERE legacy_token_version IS NULL`)
+	if err := guardedExec(ctx, env.admin, `UPDATE auth.sessions SET revoked_at = now(), revoked_reason = 'pin_missing' WHERE legacy_token_version IS NULL`); err != nil {
+		t.Fatalf("revoke the pinless row: %v", err)
+	}
 	if err := run0030(); err != nil {
 		t.Fatalf("0030 over a pinned live row and a revoked pinless row: %v", err)
 	}

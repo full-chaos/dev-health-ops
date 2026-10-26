@@ -286,3 +286,19 @@ func TestTheConsoleOverrideNeverLogsTheSenderAddress(t *testing.T) {
 		t.Fatalf("console log: %s", global.String())
 	}
 }
+
+func TestOwnedUsersRefuseAnAppBaseURLWithAQueryFragmentOrPath(t *testing.T) {
+	for _, v := range []string{"https://x.test/?a=1", "https://x.test/#f", "https://x.test/p?q", "https://x.test?", "https://x.test/#", "https://x.test/app", "https://x.test/app/", "https://x.test//"} {
+		wantRefusal(t, with(smtpMail(), "APP_BASE_URL", v), "APP_BASE_URL", "x.test")
+	}
+}
+
+func TestOwnedUsersStartWithAnOriginOnlyAppBaseURL(t *testing.T) {
+	for _, v := range []string{"https://x.test", "https://x.test/", "https://x.test:8443"} {
+		mailEnv(t, with(smtpMail(), "APP_BASE_URL", v))
+		var logs bytes.Buffer
+		if err := ownedRoutes(t, &logs); err != nil {
+			t.Fatalf("%q: %v", v, err)
+		}
+	}
+}

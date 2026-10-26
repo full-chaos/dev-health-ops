@@ -106,10 +106,11 @@ func mailConfigError(err error) error {
 	return errors.New("auth mail: the mail settings do not load")
 }
 
+// checkAppBaseURL: APP_BASE_URL is an origin only (path empty or "/", no query, no fragment); the link builder appends a route and a query to it.
 func checkAppBaseURL(raw string, allowHTTP bool) error {
 	parsed, err := url.Parse(raw)
-	if err != nil || raw != strings.TrimSpace(raw) || (parsed.Scheme != "https" && !(allowHTTP && parsed.Scheme == "http")) || parsed.Hostname() == "" || parsed.User != nil {
-		return errors.New("auth mail: APP_BASE_URL must be an absolute https URL without credentials while auth-service owns users (http only under " + EnvMailAllowConsole + "=true)")
+	if err != nil || raw != strings.TrimSpace(raw) || strings.ContainsAny(raw, "?#") || (parsed.Path != "" && parsed.Path != "/") || (parsed.Scheme != "https" && !(allowHTTP && parsed.Scheme == "http")) || parsed.Hostname() == "" || parsed.User != nil {
+		return errors.New("auth mail: APP_BASE_URL must be an https origin (no credentials, path, query or fragment) while auth-service owns users (http only under " + EnvMailAllowConsole + "=true)")
 	}
 	return nil
 }

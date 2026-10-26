@@ -1203,12 +1203,13 @@ func authScrub(text string) string {
 	return text
 }
 
-// checkSocialAnswer is the verdict on the answer of go-api's social sign-up: a session for the stubbed account, and
-// while auth-service owns users the 409 moved-operation refusal (social stays on go-api until CHAOS-11350). The decoded
-// session is returned for the first.
-func checkSocialAnswer(owned bool, status int, body string) (map[string]any, error) {
+// checkSocialAnswer is the verdict on the answer of the social sign-up: a session for the stubbed account, except while
+// auth-service owns users and go-api still serves the aggregate (forwarded false), when it is go-api's 409 moved-operation
+// refusal. Forwarded, auth-service creates the account: a session, also on the forced not-owned run, where its 403 fails.
+// The decoded session is returned for the first.
+func checkSocialAnswer(owned, forwarded bool, status int, body string) (map[string]any, error) {
 	var decoded map[string]any
-	if owned {
+	if owned && !forwarded {
 		var refusal struct {
 			Detail struct{ Message, Reason string } `json:"detail"`
 		}
@@ -1275,7 +1276,7 @@ func (r *runner) socialRow() {
 	body := `{"provider": "github", "provider_access_token": "gh-corpus"}`
 	before := r.userAndSessionState()
 	answer := venueoracle.Do(r.t, r.goBase, request("social: github new user through the provider stub", http.MethodPost, "/api/v1/auth/social-login", "", body))
-	decoded, err := checkSocialAnswer(r.usersOwned, answer.Status, answer.Body)
+	decoded, err := checkSocialAnswer(r.usersOwned, r.forwarded.Has(authrows.Social), answer.Status, answer.Body)
 	if err != nil {
 		r.t.Fatalf("social-login through the provider stub: %v", err)
 	}
@@ -1294,7 +1295,7 @@ func (r *runner) socialRow() {
 	if err := json.NewDecoder(recorded.Body).Decode(&requests); err != nil {
 		r.t.Fatalf("provider stub requests: %v", err)
 	}
-	if r.usersOwned {
+	if r.usersOwned && !r.forwarded.Has(authrows.Social) {
 		if err := checkSocialRefusalEffects(before, r.userAndSessionState(), requests); err != nil {
 			r.t.Error(err)
 		}

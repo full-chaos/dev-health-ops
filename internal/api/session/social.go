@@ -14,6 +14,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/api/usersowned"
+	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
@@ -40,6 +41,9 @@ func providerText(value pyjson.Value) (*string, error) {
 	}
 	return nil, errProviderValueType
 }
+
+// providerUserIDInvalid is the one answer to a profile whose user id is empty or unusable as an identity key.
+const providerUserIDInvalid = "The provider returned an invalid user id"
 
 // socialAccountExists is the 409 for an e-mail another account holds; it names
 // no sign-in method.
@@ -89,17 +93,22 @@ func (h handlers) socialLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	providerUserID, ok := info.ProviderUserID.(string)
+	if !ok {
+		h.fail(w, r, "provider user id", errProviderValueType)
+		return
+	}
+	if err := identity.RefuseInvalidProviderID(provider, &providerUserID); err != nil {
+		h.Logger.WarnContext(ctx, "social login refused: the provider returned an invalid user id", "provider", provider)
+		refuse(w, http.StatusBadRequest, providerUserIDInvalid)
+		return
+	}
 	tx, err := h.Pool.Begin(ctx)
 	if err != nil {
 		h.fail(w, r, "begin", err)
 		return
 	}
 	defer func() { _ = tx.Rollback(context.Background()) }()
-	providerUserID, ok := info.ProviderUserID.(string)
-	if !ok {
-		h.fail(w, r, "provider user id", errProviderValueType)
-		return
-	}
 	user, err := userByProvider(ctx, tx, providerUserID, provider)
 	if err != nil {
 		h.fail(w, r, "load user by provider", err)
@@ -189,6 +198,9 @@ func (h handlers) socialLogin(w http.ResponseWriter, r *http.Request) {
 // password, every other column at the model default.
 func (h handlers) createSocialUser(ctx context.Context, tx pgx.Tx, info *oauthprovider.UserInfo, email, provider, providerUserID string) (*userRow, error) {
 	if err := h.refuseWhileUsersOwnedErr(); err != nil {
+		return nil, err
+	}
+	if err := identity.RefuseInvalidProviderID(provider, &providerUserID); err != nil {
 		return nil, err
 	}
 	username, err := providerText(info.Username)

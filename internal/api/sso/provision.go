@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
@@ -177,6 +178,15 @@ func (h handlers) resolveIdentityKey(ctx context.Context, keyQuery string, keyAr
 	return uuid.Nil, false, nil
 }
 
+// invalidProviderIDDetail is the 400 body of a sign-in whose identity provider returned no usable user id; it names
+// no value.
+func invalidProviderIDDetail() *pyjson.Object {
+	detail := pyjson.NewObject()
+	detail.Set("message", "The identity provider returned an unusable user id")
+	detail.Set("reason", "invalid_provider_id")
+	return detail
+}
+
 func identityConflictDetail() *pyjson.Object {
 	detail := pyjson.NewObject()
 	detail.Set("message", "This account is bound to another sign-in identity")
@@ -241,6 +251,9 @@ func isUniqueViolation(err error) bool {
 // membership in the provider's organization in one transaction.
 func (h handlers) createAccountAndMembership(ctx context.Context, row *providerRow, account ssoNewAccount) (*provisionedUser, *provisionedMembership, error) {
 	if err := h.refuseWhileUsersOwned(); err != nil {
+		return nil, nil, err
+	}
+	if err := identity.RefuseInvalidProviderID(account.authProvider, account.externalID); err != nil {
 		return nil, nil, err
 	}
 	orgID, err := pythonparity.ParseUUID(row.OrgID)

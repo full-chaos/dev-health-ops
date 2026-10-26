@@ -534,7 +534,7 @@
           "note": "subject, err := h.Validator.Validate(reviewCtx, subjectToken)",
           "path": "internal/auth/workloadexchange/exchange.go"
         },
-        "description": "handler.review: the Kubernetes TokenReview API authenticates the subject_token for the audience dev-health-workload-exchange (no local decode); the workload registry then resolves the reviewed ServiceAccount and narrows the audience and actions."
+        "description": "handler.review: the Kubernetes TokenReview API authenticates the subject_token for the audience dev-health-workload-exchange; it is authenticated only by TokenReview: after a successful review its exp claim is read unverified, only to cap the issued token's lifetime, and it is never stored; the workload registry then resolves the reviewed ServiceAccount and narrows the audience and actions."
       },
       "route": "/internal/v1/token/exchange",
       "service": "dev-health-auth-service",

@@ -172,8 +172,9 @@ user access token (`at+jwt`). The auth-service workload-token exchange mints it
 **`kubernetes_sa_token_exchange`.** The Kubernetes projected ServiceAccount
 token a workload presents to auth-service's workload-token exchange
 (`POST /internal/v1/token/exchange`, form field `subject_token`, RFC 8693). The
-Kubernetes TokenReview API is its only validator, for the fixed audience
-`dev-health-workload-exchange`; nothing decodes it locally and it is never
+Kubernetes TokenReview API is its only authenticator, for the fixed audience
+`dev-health-workload-exchange`: after a successful review its `exp` claim is
+read unverified, only to cap the issued token's lifetime, and it is never
 stored. The exchange answers a `workload_token`. The route is mounted only with
 `AUTH_WORKLOAD_EXCHANGE=true`, so the class is `optional_feature`.
 

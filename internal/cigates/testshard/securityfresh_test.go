@@ -231,7 +231,7 @@ func TestTheSplitSendsSecurityPackagesToTheFreshCallOnly(t *testing.T) {
 		}
 	}
 	out, _, err = checkGo(t, freshEnv(false), append([]string{"security-fresh-split"}, args[0])...)
-	if err != nil || strings.TrimSpace(out) != "plain "+args[0] {
+	if err != nil || !strings.HasSuffix(out, "\nplain "+args[0]+"\n") || strings.Contains(out, "sec ") {
 		t.Errorf("off merge_group every package is plain: %q (%v)", out, err)
 	}
 }

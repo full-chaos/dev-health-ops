@@ -80,19 +80,17 @@ type IO struct {
 const maxInFlightRequests = 64
 
 // sessionRoutes is the service's mounted route set when cfg.Session is
-// enabled, and nothing otherwise: the session routes (CHAOS-10228) and
-// go-api's compatibility refresh, logout and social-login, and login when the
-// lockout key is set too (until then, login answers a 503 stub). Without the session
-// secrets the service stays as CHAOS-4881 built it, dormant: every path
-// receives the 404 envelope and no token is issued. No deployed stack sets
-// those secrets yet, and go-api routes to these only behind its AUTH_PROXY_*
-// flags, all off; prod enablement is a separate decision (CHAOS-3275 D1).
+// enabled: the session routes and go-api's compatibility refresh, logout and
+// social-login, and login when the lockout key is set too (until then, login
+// answers a 503 stub). Without the session secrets no token is issued: refresh
+// and logout answer the retryable 503 stub, so a go-api that proxies them never
+// meets a 404, and every other path receives the 404 envelope.
 func sessionRoutes(
 	cfg authconfig.Config, logger *slog.Logger, pool *pgxpool.Pool, schema authschema.ValidatedIdentifier,
 	accessSigner authapi.AccessSigner, limits *authapi.Limits,
 ) ([]httpapi.Route, error) {
 	if !cfg.Session.Enabled {
-		return nil, nil
+		return authapi.SessionsNotEnabledRoutes(), nil
 	}
 	sessions, err := session.New(session.Config{
 		Pool: pool, Schema: schema, Logger: logger, UsersOwned: cfg.UsersOwned,
@@ -116,6 +114,17 @@ func sessionRoutes(
 		return nil, err
 	}
 	return append(routes, compat...), nil
+}
+
+// logAPIRoutes states what the API listener serves. The refresh and logout
+// stubs of a pod without session secrets are not counted as mounted routes.
+func logAPIRoutes(ctx context.Context, logger *slog.Logger, cfg authconfig.Config, routes []httpapi.Route, extra int) {
+	real := len(routes)
+	if !cfg.Session.Enabled {
+		real -= len(authapi.SessionsNotEnabledRoutes())
+	}
+	logger.InfoContext(ctx, "auth API routes", "api_routes_mounted", real > 0, "routes", len(routes)+extra,
+		"sessions_stub", !cfg.Session.Enabled, "discovery_mounted", cfg.TokenIssuerURL != "")
 }
 
 // newAccessIssuer builds the one issuer of cfg's access token class: the HS256
@@ -507,8 +516,7 @@ func configureWithRoutes(
 	routes = append(routes, authapi.WellKnownRoutes(authapi.WellKnownDeps{
 		Keys: signer, IssuerURL: cfg.TokenIssuerURL, Logger: logger,
 	})...)
-	logger.InfoContext(ctx, "auth API routes", "api_routes_mounted", len(routes) > 0, "routes", len(routes)+len(extra),
-		"discovery_mounted", cfg.TokenIssuerURL != "")
+	logAPIRoutes(ctx, logger, cfg, routes, len(extra))
 	routes = append(routes, extra...)
 
 	apiHTTP, err := httpapi.NewServer(apiServerOptions(cfg, logger, routes))

@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/authconfig"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
@@ -89,7 +90,7 @@ func TestSessionStubsAnswer503ThroughTheServerUnderLoad(t *testing.T) {
 	})})
 	options := apiServerOptions(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), routes)
 	options.RateLimit, options.RateLimitBurst, options.MaxInFlight = 0.001, 1, 1
-	options.Address = "127.0.0.1:0"
+	options.Address, options.RequestTimeout, options.MaxBodyBytes = "127.0.0.1:0", time.Second, 1024
 	server, err := httpapi.NewServer(options)
 	if err != nil {
 		t.Fatal(err)

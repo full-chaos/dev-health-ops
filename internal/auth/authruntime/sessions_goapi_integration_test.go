@@ -39,7 +39,7 @@ func TestGoAPIProxiedRefreshLogoutMixedWindowIs503ThenOK(t *testing.T) {
 	cfg := authconfig.Config{}
 	routes := loginSessionRoutes(t, cfg, nil)
 	options := apiServerOptions(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), routes)
-	options.Address = "127.0.0.1:0"
+	options.Address, options.RequestTimeout, options.MaxBodyBytes = "127.0.0.1:0", time.Second, 1024
 	keyless, err := httpapi.NewServer(options)
 	if err != nil {
 		t.Fatal(err)

@@ -45,22 +45,38 @@ type KeyStateSource interface {
 	KeyStates(ctx context.Context) ([]KeyStateRow, error)
 }
 
+// KeyStateReadTimeout bounds one read of the durable key states. The read runs
+// apart from any request, so a stalled database holds no request for it.
+const KeyStateReadTimeout = 5 * time.Second
+
+// KeyStateInlineWait is how long the one request that starts a refresh waits
+// for it before answering from the snapshot it has: a healthy database lands
+// the new states in that call, a stalled one costs that request this much.
+const KeyStateInlineWait = 100 * time.Millisecond
+
 // KeyStatesConfig configures KeyStates. Zero durations take the defaults
-// (KeyStateRefresh, JWKSCacheTTL); a nil Now is time.Now.
+// (KeyStateRefresh, JWKSCacheTTL, KeyStateReadTimeout, KeyStateInlineWait); a
+// nil Now is time.Now.
 type KeyStatesConfig struct {
 	Source       KeyStateSource
 	RefreshEvery time.Duration
 	MaxStale     time.Duration
+	ReadTimeout  time.Duration
+	InlineWait   time.Duration
 	Now          func() time.Time
 }
 
 // KeyStates is a cached snapshot of the durable key states. A failed read
 // keeps the last good snapshot until it is MaxStale old; after that the
-// snapshot is unavailable and custody fails closed.
+// snapshot is unavailable and custody fails closed. A read never runs under
+// the lock or on a request's context: one read at a time runs on its own
+// bounded context, and a request with a usable snapshot never waits for it.
 type KeyStates struct {
 	source       KeyStateSource
 	refreshEvery time.Duration
 	maxStale     time.Duration
+	readTimeout  time.Duration
+	inlineWait   time.Duration
 	now          func() time.Time
 
 	mu        sync.Mutex
@@ -69,6 +85,8 @@ type KeyStates struct {
 	attemptAt time.Time
 	have      bool
 	attempted bool
+	// flight is the read in progress, nil when none.
+	flight chan struct{}
 
 	// deniedKids and deniedPublics latch every compromise this process has
 	// seen, from a row or from custody, for its life: no later snapshot (a
@@ -81,7 +99,8 @@ type KeyStates struct {
 // NewKeyStates returns a snapshot cache over config.Source.
 func NewKeyStates(config KeyStatesConfig) *KeyStates {
 	states := &KeyStates{
-		source: config.Source, refreshEvery: config.RefreshEvery, maxStale: config.MaxStale, now: config.Now,
+		source: config.Source, refreshEvery: config.RefreshEvery, maxStale: config.MaxStale,
+		readTimeout: config.ReadTimeout, inlineWait: config.InlineWait, now: config.Now,
 		deniedKids: map[string]bool{}, deniedPublics: map[string]bool{},
 	}
 	if states.refreshEvery <= 0 {
@@ -90,32 +109,84 @@ func NewKeyStates(config KeyStatesConfig) *KeyStates {
 	if states.maxStale <= 0 {
 		states.maxStale = JWKSCacheTTL
 	}
+	if states.readTimeout <= 0 {
+		states.readTimeout = KeyStateReadTimeout
+	}
+	if states.inlineWait <= 0 {
+		states.inlineWait = KeyStateInlineWait
+	}
 	if states.now == nil {
 		states.now = time.Now
 	}
 	return states
 }
 
-// Rows returns the current snapshot. It reads the source at most once per
-// refresh interval and latches every compromised row of a read as it lands.
+// Rows returns the current snapshot. A read starts at most once per refresh
+// interval and runs apart from the caller: with a snapshot inside the
+// staleness bound Rows returns it at once, and with none (first call, or older
+// than the bound) it waits for the read in progress, never longer than ctx.
+// Every compromised row of a read is latched as the read lands.
 func (s *KeyStates) Rows(ctx context.Context) ([]KeyStateRow, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	now := s.now()
-	if !s.attempted || now.Sub(s.attemptAt) >= s.refreshEvery {
-		s.attempted, s.attemptAt = true, now
-		rows, err := s.source.KeyStates(ctx)
-		// A failed read may still return the rows it read: their
-		// compromises latch before the read is discarded.
-		s.latch(nil, rows)
-		if err == nil {
-			s.rows, s.readAt, s.have = rows, now, true
+	started := false
+	if (!s.attempted || now.Sub(s.attemptAt) >= s.refreshEvery) && s.flight == nil {
+		s.attempted, s.attemptAt, started = true, now, true
+		s.flight = make(chan struct{})
+		go s.read(s.flight, now)
+	}
+	flight := s.flight
+	rows, usable := s.snapshot(now)
+	s.mu.Unlock()
+	if usable && !started {
+		return rows, nil
+	}
+	if flight != nil {
+		var timer <-chan time.Time
+		if usable {
+			t := time.NewTimer(s.inlineWait)
+			defer t.Stop()
+			timer = t.C
 		}
+		select {
+		case <-flight:
+		case <-timer:
+			return rows, nil
+		case <-ctx.Done():
+			if usable {
+				return rows, nil
+			}
+			return nil, failure(ReasonKeyStatesUnavailable)
+		}
+		s.mu.Lock()
+		rows, usable = s.snapshot(now)
+		s.mu.Unlock()
 	}
-	if !s.have || now.Sub(s.readAt) > s.maxStale {
-		return nil, failure(ReasonKeyStatesUnavailable)
+	if usable {
+		return rows, nil
 	}
-	return s.rows, nil
+	return nil, failure(ReasonKeyStatesUnavailable)
+}
+
+// snapshot is the held rows and whether they are inside the staleness bound.
+func (s *KeyStates) snapshot(now time.Time) ([]KeyStateRow, bool) {
+	return s.rows, s.have && now.Sub(s.readAt) <= s.maxStale
+}
+
+// read is the one read in flight. A failed read may still return rows: their
+// compromises latch before the read is discarded.
+func (s *KeyStates) read(flight chan struct{}, at time.Time) {
+	ctx, cancel := context.WithTimeout(context.Background(), s.readTimeout)
+	defer cancel()
+	rows, err := s.source.KeyStates(ctx)
+	s.latch(nil, rows)
+	s.mu.Lock()
+	if err == nil {
+		s.rows, s.readAt, s.have = rows, at, true
+	}
+	s.flight = nil
+	s.mu.Unlock()
+	close(flight)
 }
 
 // override is the custody StateOverride over this snapshot, with every

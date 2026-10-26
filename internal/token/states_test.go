@@ -561,3 +561,134 @@ func TestAFailedReadStillLatchesTheRowsItRead(t *testing.T) {
 		})
 	}
 }
+
+// hungStates blocks every read until its context ends, as a database behind a
+// blackhole does.
+type hungStates struct {
+	mu    sync.Mutex
+	reads int
+	rows  []KeyStateRow
+	hang  bool
+}
+
+func (h *hungStates) KeyStates(ctx context.Context) ([]KeyStateRow, error) {
+	h.mu.Lock()
+	h.reads++
+	hang, rows := h.hang, append([]KeyStateRow(nil), h.rows...)
+	h.mu.Unlock()
+	if hang {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	return rows, nil
+}
+
+func (h *hungStates) setHang(v bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.hang = v
+}
+
+func (h *hungStates) readCount() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.reads
+}
+
+func (s *KeyStates) idle() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.flight == nil
+}
+
+// A refresh against a hung source never holds a request: every concurrent
+// caller answers from the last good snapshot within the inline wait, the
+// source is read once, and the read ends at its own timeout.
+func TestKeyStatesRefreshAgainstAHungSourceHoldsNoRequest(t *testing.T) {
+	source := &hungStates{rows: []KeyStateRow{{KeyID: "a", State: StateActive}}}
+	clock := &fakeClock{now: time.Unix(0, 0)}
+	states := NewKeyStates(KeyStatesConfig{Source: source, RefreshEvery: 10 * time.Second, MaxStale: JWKSCacheTTL,
+		ReadTimeout: 300 * time.Millisecond, InlineWait: 20 * time.Millisecond, Now: clock.Now})
+	if _, err := states.Rows(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	source.setHang(true)
+	clock.advance(11 * time.Second)
+
+	const callers = 200
+	took := make([]time.Duration, callers)
+	var wg sync.WaitGroup
+	for i := range callers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			start := time.Now()
+			rows, err := states.Rows(context.Background())
+			took[i] = time.Since(start)
+			if err != nil || len(rows) != 1 {
+				t.Errorf("caller %d = %v, %v; want the last good snapshot", i, rows, err)
+			}
+		}()
+	}
+	wg.Wait()
+	for i, d := range took {
+		if d > 250*time.Millisecond {
+			t.Errorf("caller %d waited %s on a hung source, want well under the read timeout 300ms", i, d)
+		}
+	}
+	if got := source.readCount(); got != 2 {
+		t.Errorf("the source was read %d times, want 2 (first read + one single-flight refresh)", got)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for !states.idle() {
+		if time.Now().After(deadline) {
+			t.Fatal("the refresh goroutine did not end after its read timeout")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// With no snapshot at all, a caller waits for the read but never longer than
+// its own context, and is refused (fail closed), not served nothing.
+func TestKeyStatesColdStartAgainstAHungSourceFailsClosedAtTheCallersDeadline(t *testing.T) {
+	source := &hungStates{hang: true}
+	states := NewKeyStates(KeyStatesConfig{Source: source, ReadTimeout: 2 * time.Second})
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	rows, err := states.Rows(ctx)
+	if !reasonIs(err, ReasonKeyStatesUnavailable) || rows != nil {
+		t.Fatalf("cold read = %v, %v; want %s", rows, err, ReasonKeyStatesUnavailable)
+	}
+	if took := time.Since(start); took > time.Second {
+		t.Fatalf("cold read took %s, want about the caller's 50ms", took)
+	}
+}
+
+// A compromise that lands in a background refresh is applied by the very next
+// call, and a later hung refresh does not bring the pre-compromise state back.
+func TestKeyStatesBackgroundRefreshLatchesACompromiseAtOnce(t *testing.T) {
+	pa := ed25519.PublicKey(make32(1))
+	source := &hungStates{rows: []KeyStateRow{{KeyID: "a", State: StateActive, PublicKey: pa}}}
+	clock := &fakeClock{now: time.Unix(0, 0)}
+	states := NewKeyStates(KeyStatesConfig{Source: source, RefreshEvery: 10 * time.Second, MaxStale: JWKSCacheTTL, Now: clock.Now})
+	ctx := context.Background()
+	custody := func() []keystore.Key {
+		return []keystore.Key{{KeyID: "a", State: StateActive, Algorithm: keystore.Algorithm, PublicKey: pa}}
+	}
+	if out, err := states.override(ctx, custody()); err != nil || out[0].State != StateActive {
+		t.Fatalf("before = %v, %v", out, err)
+	}
+	source.mu.Lock()
+	source.rows = []KeyStateRow{{KeyID: "a", State: StateCompromised, PublicKey: pa}}
+	source.mu.Unlock()
+	clock.advance(11 * time.Second)
+	if out, err := states.override(ctx, custody()); err != nil || out[0].State != StateCompromised {
+		t.Fatalf("after the refresh = %v, %v; want compromised in that call", out, err)
+	}
+	source.setHang(true)
+	clock.advance(11 * time.Second)
+	if out, err := states.override(ctx, custody()); err != nil || out[0].State != StateCompromised {
+		t.Fatalf("during a hung refresh = %v, %v; want compromised", out, err)
+	}
+}

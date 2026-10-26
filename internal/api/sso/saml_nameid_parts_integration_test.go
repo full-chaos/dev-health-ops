@@ -143,3 +143,27 @@ func TestSAMLSignInTransientNameIDStaysRefused(t *testing.T) {
 		t.Fatalf("transient: %v, want ErrSubject", err)
 	}
 }
+
+// Same NameID value, a changed format and qualifier on the second sign-in: the parts follow the second assertion.
+func TestSAMLSignInSameValueChangedPartsFollowTheSecondAssertion(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	st := startStack(t, ctx)
+	idp := newSAMLIdP(t)
+	providerID := seedSAMLOrgProviderAuto(t, ctx, st, idp, nameIDSP, false)
+	const email = "changing.person@allowed.example"
+	seedBound(t, ctx, st.pool, providerID, "saml", email, "name-c")
+
+	if status := samlSignInWithNameID(t, st, idp, providerID, email, "name-c", persistentFormat, "q-one"); status != http.StatusOK {
+		t.Fatalf("first sign-in: %d", status)
+	}
+	reactivate(t, ctx, st, providerID)
+	const second = "urn:oasis:names:tc:SAML:1.1:nameid-format:unspecified"
+	if status := samlSignInWithNameID(t, st, idp, providerID, email, "name-c", second, "q-two"); status != http.StatusOK {
+		t.Fatalf("second sign-in: %d", status)
+	}
+	got := readStoredParts(t, ctx, st, email)
+	if got.value != "name-c" || got.format == nil || *got.format != second || got.spnq == nil || *got.spnq != "q-two" {
+		t.Fatalf("parts after the second assertion = %+v", got)
+	}
+}

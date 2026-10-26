@@ -2,7 +2,8 @@ package workerservice
 
 import (
 	"context"
-	"math/rand/v2"
+	"crypto/rand"
+	"encoding/binary"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
@@ -30,10 +31,15 @@ func startupRetryJitter(wait time.Duration) time.Duration {
 		return wait
 	}
 	spread := int64(wait) / 5
-	if spread == 0 {
+	if spread <= 0 {
 		return wait
 	}
-	return wait + time.Duration(rand.Int64N(2*spread+1)-spread)
+	var raw [8]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return wait
+	}
+	offset := int64(binary.BigEndian.Uint64(raw[:])%uint64(2*spread+1)) - spread
+	return wait + time.Duration(offset)
 }
 
 // retryPresenceStart retries the presence registration while the failure is a

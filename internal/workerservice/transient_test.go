@@ -159,3 +159,27 @@ func TestStartupRetryJitterBoundsAndCap(t *testing.T) {
 		t.Fatalf("total wait %v exceeds the 5s budget", total)
 	}
 }
+
+func TestStartupRetryJitterStaysInTheTwentyPercentBandAndSpreads(t *testing.T) {
+	t.Parallel()
+	const base = 10 * time.Second
+	low, high := base, base
+	seen := map[time.Duration]struct{}{}
+	for range 5000 {
+		got := startupRetryJitter(base)
+		if got < 8*time.Second || got > 12*time.Second {
+			t.Fatalf("jitter(%v) = %v, outside +/-20%%", base, got)
+		}
+		low, high = min(low, got), max(high, got)
+		seen[got] = struct{}{}
+	}
+	if low > 8500*time.Millisecond || high < 11500*time.Millisecond || len(seen) < 1000 {
+		t.Fatalf("5000 draws span [%v, %v] with %d distinct values; want the band used and spread", low, high, len(seen))
+	}
+	if got := startupRetryJitter(4); got != 4 {
+		t.Fatalf("jitter(4ns) = %v, want the wait unchanged when the spread rounds to zero", got)
+	}
+	if got := startupRetryJitter(0); got != 0 {
+		t.Fatalf("jitter(0) = %v, want 0", got)
+	}
+}

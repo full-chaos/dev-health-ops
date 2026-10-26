@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"strings"
@@ -406,5 +407,39 @@ WHERE c.relname = $1 AND c.relnamespace = 'public'::regnamespace`, pgmigrate.Ope
 	}
 	if got, valid := definitionOf(conn); !valid || got != wantDefinition {
 		t.Fatalf("after revision 0160: index %q valid=%v, want %q", got, valid, wantDefinition)
+	}
+}
+
+// The two indexes have their own build lock: a held streak lock does not stop an open-units build, and a held open-units lock
+// refuses an open-units run over an index that is not valid.
+func TestBuildOpenUnitsIndexHasItsOwnBuildLock(t *testing.T) {
+	position, _ := chainPosition(t, "0160")
+	d := newDownInstance(t)
+	uri := d.at(t, position)
+	holder := connect(t, uri)
+	hold := func(key int64) {
+		t.Helper()
+		var got bool
+		if err := holder.QueryRow(context.Background(), "SELECT pg_try_advisory_lock($1)", key).Scan(&got); err != nil || !got {
+			t.Fatalf("take lock %#x: %v %v", key, got, err)
+		}
+	}
+	hold(pgmigrate.BuildIndexLockKey)
+	conn := connect(t, uri)
+	if _, err := pgmigrate.BuildOpenUnitsIndex(context.Background(), conn,
+		pgmigrate.IndexBuildOptions{LockTimeout: time.Second, Attempts: 1, Deadline: 60 * time.Second}, slog.New(slog.NewJSONHandler(io.Discard, nil))); err != nil {
+		t.Fatalf("open-units build under a held streak lock: %v", err)
+	}
+	if _, err := holder.Exec(context.Background(), "SELECT pg_advisory_unlock_all()"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(context.Background(), "DROP INDEX public."+pgmigrate.OpenUnitsIndexName); err != nil {
+		t.Fatal(err)
+	}
+	hold(pgmigrate.OpenUnitsBuildIndexLockKey)
+	_, err := pgmigrate.BuildOpenUnitsIndex(context.Background(), conn,
+		pgmigrate.IndexBuildOptions{LockTimeout: time.Second, Attempts: 1, Deadline: 60 * time.Second}, slog.New(slog.NewJSONHandler(io.Discard, nil)))
+	if !errors.Is(err, pgmigrate.ErrBuildLockHeld) {
+		t.Fatalf("err = %v, want ErrBuildLockHeld", err)
 	}
 }

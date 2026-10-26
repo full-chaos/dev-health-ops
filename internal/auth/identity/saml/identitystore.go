@@ -34,7 +34,7 @@ func (s IdentityStore) IdentityBySubject(ctx context.Context, id Identity, legac
 // lookupError is the SAML error for an identity store lookup error.
 func lookupError(err error) error {
 	switch {
-	case errors.Is(err, identity.ErrMultipleUsers):
+	case errors.Is(err, identity.ErrMultipleUsers), errors.Is(err, identity.ErrProviderAlreadyLinked):
 		return ErrIdentityAmbiguous
 	case errors.Is(err, identity.ErrLegacyNotMember):
 		return ErrNotOrgMember

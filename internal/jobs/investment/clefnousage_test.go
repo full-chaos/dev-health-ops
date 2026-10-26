@@ -196,3 +196,57 @@ func TestABudgetAccountingRefusalOfAClefCallIsItsOwnOutcome(t *testing.T) {
 		t.Fatalf("outcomes = %v", served.outcomes)
 	}
 }
+
+// settleFailStore admits like latchStore and fails every Settle: the call was
+// sent and answered, then its accounting could not be written.
+type settleFailStore struct{ latchStore }
+
+func (store *settleFailStore) Settle(context.Context, llmbudget.SettleRequest) error {
+	return errors.New("settle is down")
+}
+
+// A Settle failure after a good 200 means the call WAS sent and paid: one
+// request left, the attempt row carries the usage the provider returned, and the
+// outcome is budget_settle_failed, not budget_accounting (which is a refusal
+// before any send).
+func TestASettleFailureAfterAGoodClefAnswerKeepsItsAttemptAndHasItsOwnOutcome(t *testing.T) {
+	for name, tc := range map[string]struct {
+		reply      func(int, []byte) (int, []byte)
+		wantInput  uint32
+		wantReason string
+	}{
+		"with usage": {clefAnswers("clef"), 2644, ""},
+		"no usage":   {clefReplyWith(dropFields("usage")), 0, "unavailable"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			stub := newClefBYO(tc.reply)
+			stub.store = &settleFailStore{}
+			served, err := stub.build().Build(context.Background(), "org-1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = served.Close() }()
+			_, err = served.categorize(context.Background(), shadowTestConfig(), shadowEntry(0, "u1", shadowTestBundle(t, "u1", 6)))
+			var failure *servedFailure
+			if !errors.As(err, &failure) || failure.class != "budget_settle_failed" || failure.deterministic || failure.calls != 1 {
+				t.Fatalf("err = %v (%+v), want the budget_settle_failed class, not deterministic, one call", err, failure)
+			}
+			conn := &attemptCaptureConn{}
+			writer, werr := chwrite.NewWriter(conn)
+			if werr != nil {
+				t.Fatal(werr)
+			}
+			served.finish(context.Background(), writer, shadowTestConfig())
+			if stub.network.count() != 1 || len(conn.rows) != 1 {
+				t.Fatalf("requests_sent=%d attempt_rows=%d, want 1 and 1", stub.network.count(), len(conn.rows))
+			}
+			row := conn.rows[0]
+			if row.HTTPStatus != 200 || row.InputTokens != tc.wantInput || row.UsageReason != tc.wantReason {
+				t.Fatalf("row = %+v", row)
+			}
+			if served.outcomes["budget_settle_failed"] != 1 || served.outcomes["budget_accounting"] != 0 || served.outcomes["transport_other"] != 0 {
+				t.Fatalf("outcomes = %v", served.outcomes)
+			}
+		})
+	}
+}

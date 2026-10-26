@@ -758,9 +758,9 @@ func TestRoutesAreEmptyWithoutTheSessionSecrets(t *testing.T) {
 		return strings.Join(got, ",")
 	}
 	sessionRoutesText := "POST /v1/token/refresh,GET /v1/sessions/current,POST /v1/sessions/revoke,POST /v1/sessions/revoke-all"
-	withoutLogin := sessionRoutesText + ",POST /api/v1/auth/refresh,POST /api/v1/auth/logout,POST /internal/v1/sessions,POST /api/v1/auth/social-login"
-	if got := mountedBy(load(sessionEnvironment)); got != withoutLogin {
-		t.Fatalf("with the session secrets: mounted %s, want %s", got, withoutLogin)
+	withLoginStub := sessionRoutesText + ",POST /api/v1/auth/refresh,POST /api/v1/auth/logout,POST /internal/v1/sessions,POST /api/v1/auth/social-login,POST /api/v1/auth/login"
+	if got := mountedBy(load(sessionEnvironment)); got != withLoginStub {
+		t.Fatalf("with the session secrets: mounted %s, want %s", got, withLoginStub)
 	}
 	withLogin := load(compatEnvironment)
 	if got, want := mountedBy(withLogin), sessionRoutesText+",POST /api/v1/auth/refresh,POST /api/v1/auth/logout,POST /api/v1/auth/login,POST /internal/v1/sessions,POST /api/v1/auth/social-login"; got != want {
@@ -771,7 +771,7 @@ func TestRoutesAreEmptyWithoutTheSessionSecrets(t *testing.T) {
 		env[authconfig.EnvSocialLinkRoutes] = "true"
 		return env
 	})
-	if got, want := mountedBy(withLink), withoutLogin+",POST /v1/identities/social,DELETE /v1/identities/social/{id}"; got != want {
+	if got, want := mountedBy(withLink), withLoginStub+",POST /v1/identities/social,DELETE /v1/identities/social/{id}"; got != want {
 		t.Fatalf("with the social link switch: mounted %s, want %s", got, want)
 	}
 }

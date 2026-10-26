@@ -464,9 +464,10 @@ func TestStackedQueueCancelPlantedSelectionFaults(t *testing.T) {
 		{cancelScript, `branch_re='^gh-readonly-queue/main/pr-[0-9]+-([0-9a-f]{40})$'`, `branch_re='pr-[0-9]+-([0-9a-f]{40})'`},
 		{cancelScript, `    frontier["${sha}"]=1
 `, ``},
+		{cancelScript, `.head_sha | test($sha_re)`, `.head_sha | type == "string"`},
 		{cancelScript, `    [ "${id}" != "${self_id}" ] || continue
 `, ``},
-		{cancelScript, `    [ -n "${frontier[${BASH_REMATCH[1]}]:-}" ] || continue
+		{cancelScript, `    [ -n "${frontier[${suffix}]:-}" ] || continue
 `, ``},
 		{cancelScript, `for status in queued in_progress; do`, `for status in queued; do`},
 	} {
@@ -499,17 +500,79 @@ func TestStackedQueueCancelPlantedTruncationFaults(t *testing.T) {
 	}
 }
 
-// jq's @tsv prints an empty field as nothing, and bash read with IFS=tab merges adjacent tabs, so a run with an empty
-// head_sha would shift its name into the sha column. Such a run must not extend the chain.
-func TestStackedQueueCancelEmptyFieldsNeverShiftColumns(t *testing.T) {
+// A run whose id is not digits or whose head_sha is not 40 lowercase hex is skipped with a ::warning:: naming the run: it is
+// never cancelled and never extends the chain. An empty run name is a valid run.
+func invalidRunsFiles() map[string]string {
 	queued := `{"workflow_runs":[
  {"id":101,"name":"` + shaB + `","head_branch":"gh-readonly-queue/main/pr-20-` + shaRed + `","head_sha":""},
  {"id":202,"name":"Other","head_branch":"gh-readonly-queue/main/pr-30-` + shaB + `","head_sha":"` + shaD + `"},
  {"id":203,"name":"","head_branch":"gh-readonly-queue/main/pr-40-` + shaRed + `","head_sha":"` + shaC + `"},
- {"id":204,"name":"Go","head_branch":"gh-readonly-queue/main/pr-50-` + shaC + `","head_sha":"` + shaD + `"}
+ {"id":204,"name":"Go","head_branch":"gh-readonly-queue/main/pr-50-` + shaC + `","head_sha":"` + shaD + `"},
+ {"id":205,"name":"Go","head_branch":"gh-readonly-queue/main/pr-60-` + shaRed + `","head_sha":"not-a-sha"},
+ {"id":206,"name":"Go","head_branch":"gh-readonly-queue/main/pr-70-not-a-sha","head_sha":"` + shaB + `"},
+ {"name":"Go","head_branch":"gh-readonly-queue/main/pr-80-` + shaRed + `","head_sha":"` + shaMn + `"},
+ {"id":"x7","name":"Go","head_branch":"gh-readonly-queue/main/pr-90-` + shaRed + `","head_sha":"` + shaMn + `"},
+ {"id":208,"name":"Go","head_branch":"gh-readonly-queue/main/pr-91-` + shaMn + `","head_sha":null}
 ]}`
-	r := runCancelScriptWith(t, rootOf(t), map[string]string{"queued.1.json": queued, "in_progress.1.json": `{"workflow_runs":[]}`})
-	if got, want := strings.Join(r.ids, ","), "101,203,204"; got != want {
-		t.Fatalf("cancelled %s, want %s (101 has an empty head_sha: it is cancelled for its branch but extends nothing, so 202, whose suffix equals 101's name, stays; 203 has an empty name and a real head_sha, so its child 204 is cancelled)\n%s", got, want, r.out)
+	return map[string]string{"queued.1.json": queued, "in_progress.1.json": `{"workflow_runs":[]}`}
+}
+
+func TestStackedQueueCancelInvalidRunsAreSkippedNeverChained(t *testing.T) {
+	r := runCancelScriptWith(t, rootOf(t), invalidRunsFiles())
+	if r.rc != 0 {
+		t.Fatalf("rc %d\n%s", r.rc, r.out)
+	}
+	if got, want := strings.Join(r.ids, ","), "203,204"; got != want {
+		t.Fatalf("cancelled %s, want %s (101, 205, 208 have an invalid head_sha and 7 has no id: skipped, never cancelled, never chained; 202 hangs on 101's name; 206 has no valid suffix; 203 has an empty name and is valid)\n%s", got, want, r.out)
+	}
+	for _, id := range []string{"101", "205", "208"} {
+		if !strings.Contains(r.out, "::warning::") || !strings.Contains(r.out, "run "+id) {
+			t.Errorf("no ::warning:: naming run %s:\n%s", id, r.out)
+		}
+	}
+	if !strings.Contains(r.out, "scanned=9 candidates=2 cancelled=2 skipped_invalid=5 truncated=no\n") {
+		t.Errorf("summary line is wrong:\n%s", r.out)
+	}
+}
+
+// One summary line per run: scanned, candidates, cancelled, skipped_invalid, truncated. Zero candidates is exit 0 and visible.
+func TestStackedQueueCancelPrintsOneSummaryLine(t *testing.T) {
+	root := rootOf(t)
+	count := func(out string) int { return strings.Count(out, "scanned=") }
+	r := runCancelScriptWith(t, root, nil)
+	if !strings.Contains(r.out, "scanned=11 candidates=4 cancelled=4 skipped_invalid=0 truncated=no\n") || count(r.out) != 1 {
+		t.Errorf("default fixture summary:\n%s", r.out)
+	}
+	r = runCancelScriptWith(t, root, nil, "DRY_RUN=1")
+	if !strings.Contains(r.out, "scanned=11 candidates=4 cancelled=0 skipped_invalid=0 truncated=no\n") || count(r.out) != 1 {
+		t.Errorf("dry run summary:\n%s", r.out)
+	}
+	r = runCancelScriptWith(t, root, nil, "STUB_POST_RC=1")
+	if !strings.Contains(r.out, "scanned=11 candidates=4 cancelled=0 skipped_invalid=0 truncated=no\n") {
+		t.Errorf("failed cancels must not count as cancelled:\n%s", r.out)
+	}
+	r = runCancelScriptWith(t, root, nil, "HEAD_SHA="+shaD)
+	if r.rc != 0 || len(r.ids) != 0 || !strings.Contains(r.out, "scanned=11 candidates=0 cancelled=0 skipped_invalid=0 truncated=no\n") {
+		t.Errorf("nothing stale must be exit 0 with a visible zero:\nrc=%d\n%s", r.rc, r.out)
+	}
+	r = runCancelScriptWith(t, root, stalePages(5, 100))
+	if r.rc != 2 || !strings.Contains(r.out, "scanned=500 candidates=500 cancelled=500 skipped_invalid=0 truncated=yes\n") {
+		t.Errorf("truncated summary: rc=%d\n%s", r.rc, r.out[len(r.out)-200:])
+	}
+}
+
+func TestStackedQueueCancelPlantedValidationFaults(t *testing.T) {
+	root := rootOf(t)
+	for _, m := range []mutation{
+		{cancelScript, `.head_sha | test($sha_re)`, `.head_sha | type == "string"`},
+		{cancelScript, `(.id | tostring) | test("^[0-9]+$")`, `(.id | tostring) | length > 0`},
+		{cancelScript, `["I", `, `["C", `},
+		{cancelScript, `skipped=$((skipped + 1))`, `skipped=$((skipped + 0))`},
+	} {
+		tmp := plantTree(t, root, []string{cancelScript}, m)
+		r := runCancelScriptWith(t, tmp, invalidRunsFiles())
+		if strings.Join(r.ids, ",") == "203,204" && strings.Contains(r.out, "skipped_invalid=5") {
+			t.Errorf("planted validation fault was not caught: %q -> %q", m.old, m.new)
+		}
 	}
 }

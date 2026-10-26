@@ -342,3 +342,33 @@ func TestRegisterRouteOrganizationSettingParsesAsGoAPIDoes(t *testing.T) {
 		}
 	}
 }
+
+func TestRegisterRefusesALoneSurrogateNameBeforeAnyStoreCall(t *testing.T) {
+	registerEnv(t, "")
+	for name, body := range map[string]string{
+		"full_name": `{"email":"a@example.com","password":"Correct-horse-battery-9","full_name":"\ud800"}`,
+		"org_name":  `{"email":"a@example.com","password":"Correct-horse-battery-9","org_name":"Team \udc00"}`,
+		"both":      `{"email":"a@example.com","password":"Correct-horse-battery-9","full_name":"x\udbff","org_name":"\ud800"}`,
+	} {
+		c := newCredFixture(t)
+		r := c.call(http.MethodPost, PatternRegister, body, nil)
+		if r.Code != http.StatusUnprocessableEntity || !strings.Contains(r.Body.String(), `"string_unicode"`) {
+			t.Fatalf("%s: %d %s", name, r.Code, r.Body.String())
+		}
+		if len(c.fakes.provisioned) != 0 || len(c.fakes.mails) != 0 {
+			t.Fatalf("%s: provisioned %d, mailed %d", name, len(c.fakes.provisioned), len(c.fakes.mails))
+		}
+		if strings.Contains(r.Body.String(), "Correct-horse") {
+			t.Fatalf("%s: the body echoes the password", name)
+		}
+	}
+}
+
+func TestRegisterAcceptsEmojiAndPairedEscapesInNames(t *testing.T) {
+	registerEnv(t, "")
+	c := newCredFixture(t)
+	r := c.call(http.MethodPost, PatternRegister, `{"email":"emoji@example.com","password":"Correct-horse-battery-9","full_name":"Ann 😀","org_name":"Ünï 名前 😀"}`, nil)
+	if r.Code != http.StatusAccepted || len(c.fakes.provisioned) != 1 {
+		t.Fatalf("%d %s provisioned %d", r.Code, r.Body.String(), len(c.fakes.provisioned))
+	}
+}

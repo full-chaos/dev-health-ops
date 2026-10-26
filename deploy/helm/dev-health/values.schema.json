@@ -179,7 +179,7 @@
               "properties": {
                 "poolSize": { "type": "integer", "minimum": 1, "maximum": 1000 },
                 "rollingUpdate": {
-                  "type": "object",
+                  "type": ["object", "null"],
                   "description": "Rolling update of the queue-session pooler Deployment. Whole numbers only: the connection budget counts surge pods. Empty renders no strategy key (the Kubernetes default, one surge pod at one replica, which the budget counts).",
                   "properties": {
                     "maxSurge": { "type": "integer", "minimum": 0, "maximum": 10 },
@@ -196,7 +196,7 @@
               "properties": {
                 "poolSize": { "type": "integer", "minimum": 1, "maximum": 1000 },
                 "rollingUpdate": {
-                  "type": "object",
+                  "type": ["object", "null"],
                   "description": "Rolling update of the coordinator-session pooler Deployment. Whole numbers only: the connection budget counts surge pods. Empty renders no strategy key (the Kubernetes default, one surge pod at one replica, which the budget counts).",
                   "properties": {
                     "maxSurge": { "type": "integer", "minimum": 0, "maximum": 10 },
@@ -213,7 +213,7 @@
               "properties": {
                 "poolSize": { "type": "integer", "minimum": 1, "maximum": 1000 },
                 "rollingUpdate": {
-                  "type": "object",
+                  "type": ["object", "null"],
                   "description": "Rolling update of the transaction pooler Deployment. Whole numbers only: the connection budget counts surge pods. Empty renders no strategy key (the Kubernetes default, one surge pod at one replica, which the budget counts).",
                   "properties": {
                     "maxSurge": { "type": "integer", "minimum": 0, "maximum": 10 },

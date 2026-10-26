@@ -299,3 +299,25 @@ func TestPgbouncerRollingUpdateNonMapIsRefusedBySchema(t *testing.T) {
 		}
 	}
 }
+
+// An explicit null is "unset": it renders the same as no key, with and without the schema.
+func TestPgbouncerRollingUpdateExplicitNullRendersAsUnset(t *testing.T) {
+	_, want, err := renderAuth(t, authWith()...)
+	if err != nil {
+		t.Fatalf("unset render: %v\n%.300s", err, want)
+	}
+	for _, pooler := range []string{"transaction", "queueSession", "coordinatorSession"} {
+		for _, skip := range []bool{false, true} {
+			args := authWith("--set-json", "goWorkers.pgbouncer."+pooler+".rollingUpdate=null")
+			if skip {
+				args = append(args, "--skip-schema-validation")
+			}
+			_, out, err := renderAuth(t, args...)
+			if err != nil {
+				t.Errorf("%s null (skip schema %v) must render: %v\n%.300s", pooler, skip, err, out)
+			} else if out != want {
+				t.Errorf("%s null (skip schema %v) must render byte-equal to unset", pooler, skip)
+			}
+		}
+	}
+}

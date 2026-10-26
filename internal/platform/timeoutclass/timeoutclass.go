@@ -8,21 +8,20 @@ import (
 	"context"
 	"errors"
 	"net"
-	"os"
 )
 
 // ErrTimeout is the bounded cause a sanitizer keeps when it drops an I/O
 // timeout's text, so the classification survives the sanitizing.
 var ErrTimeout = errors.New("postgres: endpoint timed out")
 
-// IsTimeout reports whether err is a timeout: a context deadline, an OS socket
-// deadline, a net.Error that says it timed out, or ErrTimeout. A cancellation
-// is never a timeout, even when it also wraps one.
+// IsTimeout reports whether err is a timeout: a context deadline, a net.Error
+// that says it timed out (os.ErrDeadlineExceeded, an OS socket deadline, is one),
+// or ErrTimeout. A cancellation is never a timeout, even when it also wraps one.
 func IsTimeout(err error) bool {
 	if err == nil || errors.Is(err, context.Canceled) {
 		return false
 	}
-	if errors.Is(err, ErrTimeout) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, os.ErrDeadlineExceeded) {
+	if errors.Is(err, ErrTimeout) || errors.Is(err, context.DeadlineExceeded) {
 		return true
 	}
 	var netErr net.Error

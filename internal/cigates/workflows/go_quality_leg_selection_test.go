@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -168,8 +169,14 @@ func legSelectionViolations(t *testing.T, root string) []string {
 		case "legs":
 			legsAt = i
 			run := shellCode(asString(s["run"]))
-			if !strings.Contains(run, `bash ci/go_quality_legs.sh "${EVENT_NAME}" "${CI_FULL}"`) {
-				add("step legs must run ci/go_quality_legs.sh with the event and the ci:full flag")
+			if !strings.Contains(run, "\n"+`bash ci/go_quality_legs.sh "${EVENT_NAME}" "${CI_FULL}" > "${out}"`+"\n") {
+				add("step legs must run exactly `bash ci/go_quality_legs.sh \"${EVENT_NAME}\" \"${CI_FULL}\" > \"${out}\"`: a third argument would read another leg file")
+			}
+			if n := strings.Count(run, "go_quality_legs"); n != 1 {
+				add("step legs names go_quality_legs %d times, want once (the script call): nothing else may produce or rewrite the output", n)
+			}
+			if n := strings.Count(run, "legs="); n != 1 || !strings.Contains(run, `printf 'legs=%s\n' "$(sed -n 1p "${out}")"`) {
+				add("step legs must write legs= once, from line 1 of the script output")
 			}
 			env := asMap(s["env"])
 			if asString(env["CI_FULL"]) != "${{ contains(github.event.pull_request.labels.*.name, 'ci:full') && 'true' || 'false' }}" || asString(env["EVENT_NAME"]) != "${{ github.event_name }}" {
@@ -183,6 +190,46 @@ func legSelectionViolations(t *testing.T, root string) []string {
 		add("go-quality-plan has no step `legs`")
 	} else if planAt >= 0 && legsAt > planAt {
 		add("step `legs` must come before the fallible plan step")
+	}
+
+	// (c) no other step of any job writes a `legs=` output or reads the leg file
+	for jn, jv := range jobs {
+		for _, st := range stepsOf(jv) {
+			if jn == "go-quality-plan" && asString(st["id"]) == "legs" {
+				continue
+			}
+			if r := asString(st["run"]); strings.Contains(r, "legs=") || strings.Contains(r, "go_quality_legs") {
+				add("job %s step %q writes a legs output or names the leg file: the legs step is the only producer", jn, asString(st["name"]))
+			}
+		}
+	}
+	for jn, jv := range jobs {
+		if _, ok := asMap(asMap(jv)["outputs"])["legs"]; ok && jn != "go-quality-plan" {
+			add("job %s publishes an output named legs: only go-quality-plan may", jn)
+		}
+	}
+
+	// (b) the script reads exactly ci/go_quality_legs.json and merges nothing else into the list
+	script := shellCode(readFile(t, filepath.Join(root, legsScript)))
+	if !strings.Contains(script, `legs="${3:-${here}/go_quality_legs.json}"`) {
+		add("%s must default its leg file to the literal ${here}/go_quality_legs.json", legsScript)
+	}
+	var jqLines []string
+	for _, l := range strings.Split(script, "\n") {
+		if strings.Contains(l, "jq ") {
+			jqLines = append(jqLines, strings.TrimSpace(l))
+		}
+	}
+	wantJQ := []string{
+		`matrix="$(jq -ce '[.[] | select((.heavy // false) | not)]' "${legs}")"`,
+		`matrix="$(jq -ce '.' "${legs}")"`,
+		`if ! jq -e 'type == "array" and length > 0 and any(.[]; .name == "static")' <<<"${matrix}" >/dev/null; then`,
+	}
+	if !reflect.DeepEqual(jqLines, wantJQ) {
+		add("%s runs jq as %q, want exactly %q: the matrix is the filtered leg file and nothing else", legsScript, jqLines, wantJQ)
+	}
+	if n := strings.Count(script, "go_quality_legs.json"); n != 1 {
+		add("%s names go_quality_legs.json %d times, want once", legsScript, n)
 	}
 
 	var relevance map[string]any
@@ -245,10 +292,15 @@ func TestGoQualityLegSelectionPlantedDefects(t *testing.T) {
 		want []string
 	}{
 		{"a static matrix comes back", []mutation{{legsWorkflow, "include: ${{ fromJSON(needs.go-quality-plan.outputs.legs) }}", "include:\n          - name: static\n            args: static"}}, []string{"matrix.include must be"}},
+		{"the matrix points at another output", []mutation{{legsWorkflow, "include: ${{ fromJSON(needs.go-quality-plan.outputs.legs) }}", "include: ${{ fromJSON(needs.go-quality-plan.outputs.race_policy) }}"}}, []string{"matrix.include must be"}},
+		{"the producer is handed another file", []mutation{{legsWorkflow, `"${CI_FULL}" > "${out}"`, `"${CI_FULL}" ci/other_legs.json > "${out}"`}}, []string{"third argument"}},
+		{"the script reads another file", []mutation{{legsScript, `${here}/go_quality_legs.json`, `${here}/other_legs.json`}}, []string{"literal ${here}/go_quality_legs.json"}},
+		{"a second file is concatenated into the list", []mutation{{legsScript, `matrix="$(jq -ce '.' "${legs}")"`, `matrix="$(jq -ce -s 'add' "${legs}" "${here}/extra.json")"`}}, []string{"runs jq as"}},
+		{"another step rewrites the legs output", []mutation{{legsWorkflow, "      - name: Configure self-hosted Go cache paths\n        if: vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')\n        run: |\n          echo \"GOMODCACHE=/mnt/go-cache/mod\" >> \"${GITHUB_ENV}\"\n          echo \"GOCACHE=/mnt/go-cache/build\" >> \"${GITHUB_ENV}\"\n\n      - name: Set up Go\n        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0\n        with:\n          go-version-file: go.mod\n          cache-dependency-path", "      - name: Rewrite the legs\n        run: echo 'legs=[]' >> \"${GITHUB_OUTPUT}\"\n\n      - name: Set up Go\n        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0\n        with:\n          go-version-file: go.mod\n          cache-dependency-path"}}, []string{"only producer"}},
 		{"the plan stops publishing the legs", []mutation{{legsWorkflow, "      legs: ${{ steps.legs.outputs.legs }}\n", ""}}, []string{"must publish outputs legs"}},
 		{"the legs step runs after the plan step", []mutation{{legsWorkflow, "        id: legs\n", "        id: legs2\n"}}, []string{"no step `legs`"}},
 		{"the legs step ignores the label", []mutation{{legsWorkflow, "CI_FULL: ${{ contains(github.event.pull_request.labels.*.name, 'ci:full') && 'true' || 'false' }}", "CI_FULL: 'true'"}}, []string{"ci:full label from the event"}},
-		{"a racing leg on a pull request reports green again", []mutation{{legsWorkflow, `echo "::error title=RACE LEG STARTED ON A PULL REQUEST WITHOUT ci:full::${LEG} must not be in this matrix (ci/go_quality_legs.sh)"
+		{"a racing leg on a pull request reports green again", []mutation{{legsWorkflow, `echo "::error title=RACE LEG STARTED ON A PULL REQUEST WITHOUT ci:full::${LEG} must not be in this matrix (see the legs step of go-quality-plan)"
             exit 1`, `printf 'relevant=false\n' >> "${GITHUB_OUTPUT}"
             exit 0`}}, []string{"must FAIL"}},
 		{"the race policy step is dropped", []mutation{{legsWorkflow, "name: Report the race policy", "name: Report something"}}, []string{"no step `Report the race policy`"}},

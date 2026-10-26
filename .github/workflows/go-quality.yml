@@ -254,7 +254,7 @@ jobs:
         run: |
           set -euo pipefail
           if [ "${HEAVY_ON_PR_WITHOUT_LABEL}" = "true" ]; then
-            echo "::error title=RACE LEG STARTED ON A PULL REQUEST WITHOUT ci:full::${LEG} must not be in this matrix (ci/go_quality_legs.sh)"
+            echo "::error title=RACE LEG STARTED ON A PULL REQUEST WITHOUT ci:full::${LEG} must not be in this matrix (see the legs step of go-quality-plan)"
             exit 1
           fi
           printf 'plan verdict: %s\n' "${PLAN_SELECTION}"

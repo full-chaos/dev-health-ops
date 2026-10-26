@@ -127,6 +127,15 @@ compose() {
   docker compose -p "${PROJECT}" "${COMPOSE_FILES[@]}" --profile auth "$@"
 }
 
+# join_comma prints its arguments joined with commas, no trailing newline; it assigns no IFS (semgrep bash ifs-tampering).
+join_comma() {
+  local joined="" item
+  for item in "$@"; do
+    joined="${joined:+${joined},}${item}"
+  done
+  printf '%s' "${joined}"
+}
+
 cleanup() {
   local status=$?
   if [ "${status}" -ne 0 ]; then
@@ -313,7 +322,7 @@ export DEVHEALTH_AUTH_ORACLE_SMTP_ADMIN="${SMTP_ADMIN}"
 export DEVHEALTH_AUTH_ORACLE_STUB_ADMIN="${STUB_ADMIN}"
 # The aggregates go-api forwarded, comma separated (empty on leg go-api): the corpus reads auth-service's rows for them
 # (internal/testsupport/authrows).
-DEVHEALTH_AUTH_ORACLE_FORWARDED="$(IFS=,; printf '%s' "${FORWARDED[*]:-}")"
+DEVHEALTH_AUTH_ORACLE_FORWARDED="$(join_comma ${FORWARDED[@]+"${FORWARDED[@]}"})"
 export DEVHEALTH_AUTH_ORACLE_FORWARDED
 # Whether auth-service owns users on this leg (leg acp only, step 1e): the corpus expects the users rows of go-api's golden.
 if [ "${LEG}" = "acp" ] && [ -z "${AUTH_CORPUS_USERS_UNOWNED:-}" ]; then
@@ -337,7 +346,7 @@ if [ "${LEG}" = "acp" ] && [ -z "${AUTH_CORPUS_USERS_UNOWNED:-}" ]; then
     die "the corpus test ended before it seeded"
   fi
   owned_flip
-  (IFS=,; printf '%s' "${FORWARDED[*]}") >"${FLIPPED_FILE}.tmp"
+  join_comma ${FORWARDED[@]+"${FORWARDED[@]}"} >"${FLIPPED_FILE}.tmp"
   mv "${FLIPPED_FILE}.tmp" "${FLIPPED_FILE}"
   status=0
   wait "${TEST_PID}" || status=$?

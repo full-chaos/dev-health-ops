@@ -792,6 +792,7 @@ func capturedWrites(ft *ast.FuncType, body *ast.BlockStmt) []write {
 // today, each known to start no goroutine and to call user code (String, Error, MarshalJSON, Less ...) only on the calling goroutine.
 var stdlibAllowed = map[string]string{
 	"bytes":         "byte-slice helpers and Buffer: no goroutine; calls io.Reader and io.Writer methods on the calling goroutine only",
+	"crypto/sha256": "pure hash of bytes: no goroutine and no callback",
 	"encoding/hex":  "pure encode and decode of hex text: no goroutine and no callback",
 	"encoding/json": "Marshal and Unmarshal call user MarshalJSON and UnmarshalJSON on the calling goroutine; no goroutine started",
 	"errors":        "error wrapping and matching: no goroutine; Is and As call user methods on the calling goroutine",
@@ -802,6 +803,7 @@ var stdlibAllowed = map[string]string{
 	"math":          "pure numeric functions: no goroutine and no callback",
 	"net/netip":     "value types for IP addresses: no goroutine, no I/O and no callback",
 	"os":            "file and environment access: synchronous calls, no goroutine started (os.StartProcess is refused by selector)",
+	"path":          "slash-separated path text helpers: no goroutine and no callback",
 	"path/filepath": "path text helpers and Walk/WalkDir: fn is called on the calling goroutine (documented); no goroutine started",
 	"regexp":        "compiled expressions: matching runs on the calling goroutine and calls no user code; no goroutine started",
 	"slices":        "slice helpers: callbacks run on the calling goroutine (documented); no goroutine started",

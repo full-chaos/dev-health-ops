@@ -596,8 +596,8 @@ func TestStdlibPackagesOffTheAllowlistAreRefused(t *testing.T) {
 // The allowlist is a table the test reads: the exact set is pinned, and each entry says why it starts no goroutine and runs no user
 // code on another one.
 func TestTheStdlibAllowlistIsPinnedAndEachEntryHasItsReason(t *testing.T) {
-	want := []string{"bytes", "encoding/hex", "encoding/json", "errors", "fmt", "io", "io/fs", "log/slog", "math", "net/netip", "os",
-		"path/filepath", "regexp", "slices", "sort", "strconv", "strings", "testing", "time", "unicode", "unicode/utf8"}
+	want := []string{"bytes", "crypto/sha256", "encoding/hex", "encoding/json", "errors", "fmt", "io", "io/fs", "log/slog", "math", "net/netip", "os",
+		"path", "path/filepath", "regexp", "slices", "sort", "strconv", "strings", "testing", "time", "unicode", "unicode/utf8"}
 	var got []string
 	for k, reason := range stdlibAllowed {
 		got = append(got, k)

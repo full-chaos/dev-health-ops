@@ -810,6 +810,7 @@ type workerProcessComponent struct {
 	// startBudget bounds how long Start retries the presence insert while the
 	// domain endpoint is transiently unreachable; zero means no retry.
 	startBudget time.Duration
+	logger      *slog.Logger
 	now         func() time.Time
 	sleep       func(context.Context, time.Duration)
 	jitter      func(time.Duration) time.Duration
@@ -1365,7 +1366,7 @@ func configureWorkerDependenciesWithSources(
 	)
 	components = append(components, workerProcessComponent{
 		components: []lifecycle.Component{workerProcess}, budget: dependencies.workerDrainBudget, grace: dependencies.shutdownGrace, presence: presence,
-		startBudget: cfg.PreclaimReadinessTimeout, jitter: startupRetryJitter,
+		startBudget: cfg.PreclaimReadinessTimeout, jitter: startupRetryJitter, logger: logger,
 	})
 	return components, nil
 }
@@ -2132,6 +2133,16 @@ func (dependencies *workerDependencies) postureManifestLockstepReady(ctx context
 // safe to log directly here.
 func (dependencies *workerDependencies) logDependencyCheckFailure(ctx context.Context, check string, err error) {
 	if dependencies == nil || dependencies.logger == nil || err == nil {
+		return
+	}
+	if isTransientDialError(err) {
+		// A refused or reset dial repeats on every retry and its text names the
+		// dial address, so only the bounded cause is logged.
+		dependencies.logger.ErrorContext(ctx, "worker readiness dependency check failed",
+			"error_category", "dependency_unavailable",
+			"check", check,
+			"cause", health.CauseUnreachable,
+		)
 		return
 	}
 	dependencies.logger.ErrorContext(ctx, "worker readiness dependency check failed",

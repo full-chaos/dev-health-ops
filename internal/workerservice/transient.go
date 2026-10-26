@@ -2,15 +2,11 @@ package workerservice
 
 import (
 	"context"
-	"errors"
-	"io"
 	"math/rand/v2"
-	"net"
-	"os"
-	"syscall"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/full-chaos/dev-health-ops/internal/platform/health"
+	"github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 )
 
 // transientDialError marks a startup dependency failure that a later attempt
@@ -22,37 +18,9 @@ func (e transientDialError) Error() string { return e.cause.Error() }
 func (e transientDialError) Unwrap() error { return e.cause }
 func (transientDialError) Transient() bool { return true }
 
-// isTransientDialError classifies err by type and code only, never by text.
-// Auth (28P01, 28000), permission (42501), other server answers, TLS and
-// configuration failures are final.
-func isTransientDialError(err error) bool {
-	if err == nil {
-		return false
-	}
-	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) {
-		switch pgErr.Code {
-		case "57P03", "57P01", "53300", "08P01":
-			return true
-		}
-		return len(pgErr.Code) >= 2 && pgErr.Code[:2] == "08"
-	}
-	var dnsErr *net.DNSError
-	switch {
-	case errors.As(err, &dnsErr),
-		errors.Is(err, syscall.ECONNREFUSED),
-		errors.Is(err, syscall.ECONNRESET),
-		errors.Is(err, syscall.EPIPE),
-		errors.Is(err, syscall.EHOSTUNREACH),
-		errors.Is(err, syscall.ENETUNREACH),
-		errors.Is(err, io.EOF),
-		errors.Is(err, io.ErrUnexpectedEOF),
-		errors.Is(err, os.ErrDeadlineExceeded):
-		return true
-	}
-	var netErr net.Error
-	return errors.As(err, &netErr) && netErr.Timeout()
-}
+// isTransientDialError reports whether err is a dial failure a later attempt
+// can outlast; the classification lives with the pool code that logs it.
+func isTransientDialError(err error) bool { return postgres.IsTransientDialError(err) }
 
 // startupRetryJitter spreads a retry wait by up to +/-20% so replicas that
 // started together do not redial in lockstep. Production wiring only; a nil
@@ -68,6 +36,9 @@ func startupRetryJitter(wait time.Duration) time.Duration {
 	return wait + time.Duration(rand.Int64N(2*spread+1)-spread)
 }
 
+// retryPresenceStart retries the presence registration while the failure is a
+// transient dial error. Its log lines carry only bounded fields, never error
+// text, which can name the dial address.
 func retryPresenceStart(
 	ctx context.Context, component workerProcessComponent, start func(context.Context) error,
 ) error {
@@ -75,7 +46,32 @@ func retryPresenceStart(
 		ctx, component.startBudget, component.now, component.sleep, component.jitter,
 		start,
 		isTransientDialError,
-		func(int, time.Duration, time.Duration, error) {},
-		func(int, time.Duration, error, bool) {},
+		func(attempt int, elapsed, wait time.Duration, _ error) {
+			if component.logger == nil {
+				return
+			}
+			component.logger.WarnContext(ctx, "worker presence registration unreachable, retrying",
+				"error_category", "dependency_unavailable",
+				"cause", health.CauseUnreachable,
+				"attempt", attempt,
+				"elapsed", elapsed.String(),
+				"retry_in", wait.String(),
+			)
+		},
+		func(attempt int, elapsed time.Duration, _ error, budgetExhausted bool) {
+			if component.logger == nil {
+				return
+			}
+			reason := "presence_start_failed"
+			if budgetExhausted {
+				reason = "retry_budget_exhausted"
+			}
+			component.logger.ErrorContext(ctx, "worker presence registration refused",
+				"error_category", "dependency_unavailable",
+				"reason", reason,
+				"attempts", attempt,
+				"elapsed", elapsed.String(),
+			)
+		},
 	)
 }

@@ -906,13 +906,14 @@ release narrows. The flag's refusals are dev-health.authNarrowAfterFlipBackGuard
 
 {{/*
 The authService.migrate.narrowAfterFlipBack refusals, run on every render by auth-narrow-after-flipback-guard.yaml
-(not only when an auth-migrate Job renders): the flag needs the acknowledgement, and is refused at authService.phase 4
+(not only when an auth-migrate Job renders): the flag needs the acknowledgement, checked by the same helper as the Jobs
+(dev-health.authAckGrantNarrowing), and is refused at authService.phase 4
 or higher and while auth-service owns users.
 */}}
 {{- define "dev-health.authNarrowAfterFlipBackGuard" -}}
 {{- $m := .Values.authService.migrate -}}
 {{- if eq (include "dev-health.authBool" (dict "value" $m.narrowAfterFlipBack "key" "authService.migrate.narrowAfterFlipBack")) "true" -}}
-{{- if not (trim (toString (default "" $m.acknowledgeGrantNarrowing))) }}{{- fail "authService.migrate.narrowAfterFlipBack=true needs authService.migrate.acknowledgeGrantNarrowing: the digest a refused auth-migrate run prints for the deferred users-owned grants" }}{{- end -}}
+{{- if not (include "dev-health.authAckGrantNarrowing" .) }}{{- fail "authService.migrate.narrowAfterFlipBack=true needs authService.migrate.acknowledgeGrantNarrowing: the digest a refused auth-migrate run prints for the deferred users-owned grants" }}{{- end -}}
 {{- if or (ge (int (include "dev-health.authPhase" .)) 4) (eq (include "dev-health.authOn" (dict "flag" "usersOwned" "context" .)) "true") }}{{- fail "authService.migrate.narrowAfterFlipBack is refused at authService.phase 4 or higher and while auth-service owns users" }}{{- end -}}
 {{- end -}}
 {{- end }}

@@ -2,6 +2,7 @@ package devhealth_test
 
 import (
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -31,8 +32,8 @@ func TestStreakIndexJobIsOffByDefaultAndOrderedBeforeTheMigrateJob(t *testing.T)
 		t.Fatalf("hook annotations = %v, want pre-install,pre-upgrade at weight -2", annotations)
 	}
 	spec := job["spec"].(map[string]any)
-	if spec["backoffLimit"] != 0 || spec["activeDeadlineSeconds"] != 3600 {
-		t.Fatalf("backoffLimit/activeDeadlineSeconds = %v/%v, want 0/3600", spec["backoffLimit"], spec["activeDeadlineSeconds"])
+	if spec["backoffLimit"] != 0 || spec["activeDeadlineSeconds"] != 2400 {
+		t.Fatalf("backoffLimit/activeDeadlineSeconds = %v/%v, want 0/2400", spec["backoffLimit"], spec["activeDeadlineSeconds"])
 	}
 	c := container(t, job, "streak-index")
 	want := []string{"migrate", "postgres", "build-index", "--lock-timeout=5s", "--deadline=1800s", "--attempts=3", "--retry-delay=15s", "failure-streak"}
@@ -105,5 +106,34 @@ func TestStreakIndexJobWithBundledPostgresIsPreUpgradeOnly(t *testing.T) {
 	}
 	if args := stringsOf(container(t, job, "streak-index")["args"]); args[len(args)-1] != "failure-streak" {
 		t.Fatalf("args = %v", args)
+	}
+}
+
+// The kit pins helm --timeout 90m (roll 24b PLAN-ROLL-24b.md, "./dev-health ... --timeout 90m"): the streak-index hook runs
+// first, the migrate Job (weight 0) after it, and the rollout needs a margin. The chart defaults must fit all three.
+func TestStreakIndexHookAndMigrateJobFitTheHelmTimeout(t *testing.T) {
+	const helmTimeoutSeconds, rolloutMarginSeconds, startupAndCleanupSeconds = 5400, 600, 360
+	jobs, _, refusal := renderJobs(t, "web.enabled=false", "migrations.hook.streakIndex.enabled=true")
+	if refusal != "" {
+		t.Fatalf("render refused: %s", refusal)
+	}
+	hook := jobs["t-dev-health-streak-index"]["spec"].(map[string]any)["activeDeadlineSeconds"].(int)
+	migrate := jobs["t-dev-health-migrate"]["spec"].(map[string]any)["activeDeadlineSeconds"].(int)
+	if hook+migrate+rolloutMarginSeconds > helmTimeoutSeconds {
+		t.Fatalf("hook %d + migrate %d + rollout margin %d exceeds helm --timeout %d", hook, migrate, rolloutMarginSeconds, helmTimeoutSeconds)
+	}
+	args := stringsOf(container(t, jobs["t-dev-health-streak-index"], "streak-index")["args"])
+	var window int
+	for _, a := range args {
+		if v, ok := strings.CutPrefix(a, "--deadline="); ok {
+			n, err := strconv.Atoi(strings.TrimSuffix(v, "s"))
+			if err != nil {
+				t.Fatalf("bad --deadline %q", a)
+			}
+			window = n
+		}
+	}
+	if window == 0 || window+startupAndCleanupSeconds > hook {
+		t.Fatalf("build window %d + startup and cleanup %d exceeds the hook's activeDeadlineSeconds %d", window, startupAndCleanupSeconds, hook)
 	}
 }

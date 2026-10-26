@@ -47,7 +47,7 @@ type IndexBuildOptions struct {
 }
 
 const (
-	DefaultIndexBuildDeadline  = 50 * time.Minute
+	DefaultIndexBuildDeadline  = 30 * time.Minute
 	DefaultIndexCleanupBudget  = 5 * time.Minute
 	defaultSampleEvery         = time.Second
 	defaultHeartbeatEvery      = 30 * time.Second

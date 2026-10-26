@@ -1226,7 +1226,7 @@ migrations:
     #    localBundledPostgres the Job runs on pre-upgrade only. Pass a helm --timeout above activeDeadlineSeconds.
     streakIndex:
       enabled: false
-      activeDeadlineSeconds: 3600
+      activeDeadlineSeconds: 2400
       # -- lock_timeout of the table-lock probe before each attempt, in seconds (1 to 60). The waits for older
       #    transactions are not under it: they run up to deadlineSeconds.
       lockTimeoutSeconds: 5

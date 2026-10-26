@@ -19,11 +19,11 @@ func TestFailureStreakDropBudgetIsNamedAndIgnoresLockAndRetryDelay(t *testing.T)
 	}
 }
 
-// The Job's whole run (startup, the build window, the cleanup) fits its activeDeadlineSeconds with the chart default of 3600.
+// The Job's whole run (startup, the build window, the cleanup) fits its activeDeadlineSeconds with the chart default of 2400.
 func TestDefaultBuildWindowAndCleanupFitTheJobDeadline(t *testing.T) {
 	const startup = time.Minute
-	if total := startup + DefaultIndexBuildDeadline + DefaultIndexCleanupBudget; total > 3600*time.Second {
-		t.Fatalf("default window %s + cleanup %s + startup %s = %s exceeds the 3600 s Job deadline", DefaultIndexBuildDeadline, DefaultIndexCleanupBudget, startup, total)
+	if total := startup + DefaultIndexBuildDeadline + DefaultIndexCleanupBudget; total > 2400*time.Second {
+		t.Fatalf("default window %s + cleanup %s + startup %s = %s exceeds the 2400 s Job deadline of the chart", DefaultIndexBuildDeadline, DefaultIndexCleanupBudget, startup, total)
 	}
 }
 

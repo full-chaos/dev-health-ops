@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/pgmigrate"
 )
@@ -281,6 +283,65 @@ func TestBuildIndexLogsTheExistingIndexState(t *testing.T) {
 			if lines[0]["indisvalid"] != wantValid {
 				t.Fatalf("indisvalid %v, want %v", lines[0]["indisvalid"], wantValid)
 			}
+		})
+	}
+}
+
+// Any older snapshot in the database makes CREATE INDEX CONCURRENTLY wait (virtualxid), not only a writer on the table:
+// (E3) a repeatable-read snapshot that touched ANOTHER table, (E2) one long read-committed statement with no table lock.
+// With an INVALID leftover planted, the build waits for the holder, ends "rebuilt" and VALID, and the heartbeat names the
+// holder's pid.
+func TestBuildIndexOutlastsSnapshotHoldersOnOtherTablesAndLongStatements(t *testing.T) {
+	position, _ := chainPosition(t, "0159")
+	for name, start := range map[string]func(t *testing.T, uri string) (pid uint32){
+		"E3 repeatable-read snapshot on another table": func(t *testing.T, uri string) uint32 {
+			conn := connect(t, uri)
+			tx, err := conn.BeginTx(context.Background(), pgx.TxOptions{IsoLevel: pgx.RepeatableRead})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var n int
+			if err := tx.QueryRow(context.Background(), "SELECT count(*) FROM public.alembic_version").Scan(&n); err != nil {
+				t.Fatal(err)
+			}
+			var once sync.Once
+			release := func() { once.Do(func() { _ = tx.Rollback(context.Background()) }) }
+			t.Cleanup(release)
+			time.AfterFunc(10*time.Second, release)
+			return conn.PgConn().PID()
+		},
+		"E2 one long read-committed statement": func(t *testing.T, uri string) uint32 {
+			conn := connect(t, uri)
+			go func() { _, _ = conn.Exec(context.Background(), "SELECT pg_sleep(10)") }()
+			return conn.PgConn().PID()
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			d := newDownInstance(t)
+			uri := d.at(t, position)
+			plantInvalidIndex(t, uri)
+			holderPID := start(t, uri)
+			time.Sleep(500 * time.Millisecond)
+
+			logs := &syncBuffer{}
+			conn := connect(t, uri)
+			result, err := pgmigrate.BuildFailureStreakIndex(context.Background(), conn, pgmigrate.IndexBuildOptions{
+				LockTimeout: 2 * time.Second, Attempts: 3, RetryDelay: time.Second, Deadline: 90 * time.Second,
+				SampleEvery: 200 * time.Millisecond, HeartbeatEvery: time.Second,
+			}, slog.New(slog.NewJSONHandler(logs, nil)))
+			if err != nil || !result.Valid || result.Action != "rebuilt" {
+				t.Fatalf("result %+v err %v log %s", result, err, logs.String())
+			}
+			named := false
+			for _, l := range linesWith(logLines(t, logs.String()), "build-index: waiting") {
+				if pid, _ := l["pid"].(float64); uint32(pid) == holderPID {
+					named = true
+				}
+			}
+			if !named {
+				t.Fatalf("no heartbeat line names the holder pid %d: %s", holderPID, logs.String())
+			}
+			assertBlockerLinesAreAllowlisted(t, logLines(t, logs.String()), logs.String())
 		})
 	}
 }

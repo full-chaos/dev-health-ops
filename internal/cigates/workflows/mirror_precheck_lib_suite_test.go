@@ -18,8 +18,32 @@ var mirrorSuitePaths = []string{
 	"ci/suites.tsv",
 }
 
+// The publisher job and the push filter at the base commit 977adb6f95: the suite wiring must not change either.
+const baseMirrorIf = "(github.event.pull_request.head.repo.full_name == github.repository || github.event_name != 'pull_request') && (github.event_name != 'pull_request' || needs.precheck.outputs.missing == 'true')"
+
+var basePushPaths = []string{
+	"internal/testsupport/containers/harness.go",
+	"ci/check_go.sh",
+	"tests/compatibility/river/compose.compatibility.yml",
+	"ci/builder_images.tsv",
+	"ci/builder_images.sh",
+	".github/workflows/test.yml",
+	".github/workflows/live-e2e.yml",
+	".github/workflows/mirror-test-images.yml",
+}
+
 func mirrorSuiteDefects(doc yamlMap) []string {
 	var out []string
+	var pushList []string
+	for _, p := range asList(asMap(asMap(doc["on"])["push"])["paths"]) {
+		pushList = append(pushList, asString(p))
+	}
+	if strings.Join(pushList, "\n") != strings.Join(basePushPaths, "\n") {
+		out = append(out, "push paths differ from the base list: "+strings.Join(pushList, ", "))
+	}
+	if got := strings.Join(strings.Fields(asString(asMap(jobsOf(doc)["mirror"])["if"])), " "); got != baseMirrorIf {
+		out = append(out, "the mirror publisher if differs from the base: "+got)
+	}
 	on := asMap(doc["on"])
 	for _, event := range []string{"push", "pull_request"} {
 		paths := map[string]bool{}
@@ -79,6 +103,7 @@ func TestMirrorPrecheckLibSuiteRunsOnItsTrigger(t *testing.T) {
 		{mirrorWf, "      - ci/mirror_precheck_lib_test.sh\n", allMarker},
 		{mirrorWf, "bash ci/run_shell_tests.sh mirror-precheck-lib", "true"},
 		{mirrorWf, "  precheck-lib-test:\n", "  precheck-lib-test:\n    needs: precheck\n"},
+		{mirrorWf, "      (github.event_name != 'pull_request' || needs.precheck.outputs.missing == 'true')", "      (github.event_name != 'pull_request' || needs.precheck.outputs.missing != 'true')"},
 		{mirrorWf, "  push:\n    branches: [main]\n    paths:\n", "  push:\n    branches: [main]\n    paths:\n      - ci/suites.tsv\n"},
 		{mirrorWf, "    timeout-minutes: 5\n    permissions:\n      contents: read\n    steps:\n      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n      - name: Run the precheck library suite", "    timeout-minutes: 5\n    permissions:\n      contents: read\n      packages: write\n    steps:\n      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n      - name: Run the precheck library suite"},
 	} {

@@ -100,8 +100,8 @@ type runDoc struct {
 func workflowSites(t *testing.T, root string) []site {
 	t.Helper()
 	var paths []string
-	for _, g := range []string{"workflows/*.y*ml", "actions/*/action.y*ml"} {
-		m, err := filepath.Glob(filepath.Join(root, ".github", g))
+	for _, g := range []string{filepath.Join(root, ".github", "workflows", "*.y*ml"), filepath.Join(root, ".github", "actions", "*", "action.y*ml")} {
+		m, err := filepath.Glob(g)
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -157,6 +157,7 @@ internal/cigates/workflows	workflows_go_quality_queue_skip_test.go	unexpressed
 internal/cigates/workflows	workflows_go_queue_cancel_children_test.go	unexpressed
 internal/cigates/workflows	workflows_go_queue_failfast_test.go	unexpressed
 internal/cigates/workflows	workflows_go_queue_skip_test.go	unexpressed
+internal/cigates/workflows	workflows_gowork_off_test.go	deploy/helm/dev-health
 internal/cigates/workflows	workflows_path_filters_test.go	unexpressed
 internal/cigates/workflows	workflows_wire_parity_test.go	unexpressed
 internal/fixturescli	provider_worlds_producer_integration_test.go	unexpressed

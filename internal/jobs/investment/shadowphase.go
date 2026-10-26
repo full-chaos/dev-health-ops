@@ -41,6 +41,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/chquery"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/chwrite"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/units"
+	"github.com/full-chaos/dev-health-ops/internal/llmbudget"
 )
 
 // Stop reasons of a shadow phase: a closed set, used as a log field and as a
@@ -259,6 +260,10 @@ type shadowExchange struct {
 	attempts   []categorize.SystemOneAttempt
 	usage      categorize.SystemOneUsage
 	billed     int64
+	// modelFromRequest: the answer omitted the model and the request's was used.
+	modelFromRequest bool
+	// accountingRefused: the budget guard refused or could not settle the call.
+	accountingRefused bool
 }
 
 type shadowExchangeKey struct{}
@@ -303,12 +308,17 @@ func (transport shadowTransport) PostSystemOne(ctx context.Context, body []byte)
 		if errors.As(err, &failed) {
 			exchange.attempts = failed.Attempts
 		}
+		var accounting *llmbudget.AccountingError
+		if errors.As(err, &accounting) {
+			exchange.accountingRefused = true
+		}
 		// The error goes back to the adapter as it is: the adapter reads its
 		// class. Nothing here prints it or any layer inside it.
 		return nil, nil, err
 	}
 	billed = shadowBilledNanoUSD(result.Usage)
 	exchange.attempts, exchange.usage, exchange.billed = result.Attempts, result.Usage, billed
+	exchange.modelFromRequest = result.ModelFromRequest
 	return result.Body, result.Header, nil
 }
 
@@ -634,6 +644,10 @@ func (phase *ShadowPhase) addAttempts(cfg Config, result shadowResult, record ch
 	}
 }
 
+// shadowUsageUnavailable is the usage_reason of a row whose answer reported no
+// token usage.
+const shadowUsageUnavailable = "unavailable"
+
 // attemptRecords is the attempt rows of one classification, for the shadow
 // phase and for the served decision mode (role): one row for each HTTP attempt.
 // state and modelReturned are already bounded by the caller. The last row
@@ -662,7 +676,10 @@ func attemptRecords(
 			if exchange.usage.Reported {
 				row.InputTokens, row.OutputTokens = shadowTokens(exchange.usage.InputTokens), shadowTokens(exchange.usage.OutputTokens)
 				row.BilledCostUSD = float64(exchange.billed) / 1e9
+			} else if attempt.StatusCode == http.StatusOK && attempt.Class == "" {
+				row.UsageReason = shadowUsageUnavailable
 			}
+			row.ModelFromRequest = exchange.modelFromRequest
 		}
 		rows = append(rows, row)
 	}

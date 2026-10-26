@@ -37,7 +37,12 @@ func (sender clefSender) PostSystemOneDetailed(ctx context.Context, body []byte)
 		}
 		result = posted
 		if !posted.Usage.Reported {
-			return llmbudget.Usage{}, nil
+			// An answer with no usage settles at the reserved amount (the whole
+			// body as input, no output): a success that is priced at the most it
+			// could cost. Settling it as unknown would make every later call of the
+			// org's month refuse.
+			input, output, cached := len(body), 0, 0
+			return llmbudget.UsageFrom(&input, &output, &cached, nil), nil
 		}
 		// clef lists no cache price and reports no cache reads: settling them as
 		// zero bills every input token at the full rate, an upper bound; leaving

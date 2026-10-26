@@ -87,6 +87,9 @@ const (
 	servedOutcomeRateLimited    = "rate_limited"
 	servedOutcomeRejected       = "rejected"
 	servedOutcomeTransportOther = "transport_other"
+	// servedOutcomeBudgetAccounting: the budget guard refused the call or could
+	// not account for it; nothing was sent.
+	servedOutcomeBudgetAccounting = "budget_accounting"
 	// servedOutcomeCancelled: the run context ended (a lost lease, a soft-stop
 	// expiry, the run's own deterministic stop) before the unit had an answer.
 	// The unit has no row from this run.
@@ -98,7 +101,8 @@ func servedOutcomes() []string {
 	return []string{
 		servedOutcomeOK, servedOutcomeZeroSupport, servedOutcomeEvidenceNone, servedOutcomeInvalidAnswer,
 		servedOutcomeAdapterDefect, servedOutcomeTimeout, servedOutcomeRefused, servedOutcomeServerError,
-		servedOutcomeRateLimited, servedOutcomeRejected, servedOutcomeTransportOther, servedOutcomeCancelled,
+		servedOutcomeRateLimited, servedOutcomeRejected, servedOutcomeTransportOther, servedOutcomeBudgetAccounting,
+		servedOutcomeCancelled,
 	}
 }
 
@@ -128,6 +132,9 @@ func servedOutcomeOf(state string, exchange *shadowExchange) string {
 	case "":
 		if exchange != nil && len(exchange.attempts) > 0 {
 			return servedOutcomeInvalidAnswer
+		}
+		if exchange != nil && exchange.accountingRefused {
+			return servedOutcomeBudgetAccounting
 		}
 		return servedOutcomeTransportOther
 	case categorize.SystemOneClassTimeout:

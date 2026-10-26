@@ -76,7 +76,7 @@
       "properties": {
         "replicas": { "type": "integer", "minimum": 0, "maximum": 100 },
         "phase": {
-          "description": "CHAOS-11382: the auth cutover phase, a whole number 0..5 (values.yaml). The templates also refuse 4 and 5 and the keys it replaces.",
+          "description": "CHAOS-11382: the auth cutover phase, a whole number 0..5 (values.yaml). The templates also refuse 5 and the keys it replaces.",
           "type": "integer",
           "minimum": 0,
           "maximum": 5

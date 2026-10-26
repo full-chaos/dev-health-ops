@@ -187,3 +187,23 @@ func TestSocialRefusalEffectsAreNoWriteAndExactlyOneProviderCall(t *testing.T) {
 		}
 	}
 }
+
+// The golden's base64 body decodes to LF line endings and auth-service's 7bit body keeps CRLF: with different transfer
+// encodings the line endings are the encoding's, not the content's. With the same encoding a CRLF difference stays one.
+func TestGreetingByEmailNormalisesLineEndingsOnlyAcrossTransferEncodings(t *testing.T) {
+	crlf := func(m sentMail) sentMail { m.html = strings.ReplaceAll(m.html, "\n", "\r\n"); return m }
+	golden := greetingMail("Alice Ä", "")
+	golden.partType = `text/html; charset="utf-8"; base64`
+	target := crlf(greetingMail("alice@example.com", ""))
+	if !greetsByEmailOnly(golden, target) {
+		t.Fatal("base64/LF golden against 7bit/CRLF target must be covered")
+	}
+	sameEncodingLF, sameEncodingCRLF := greetingMail("Alice", ""), crlf(greetingMail("alice@example.com", ""))
+	if greetsByEmailOnly(sameEncodingLF, sameEncodingCRLF) {
+		t.Fatal("the same encoding with a CRLF difference must stay a difference")
+	}
+	other := crlf(greetingMail("alice@example.com", "<p>extra</p>"))
+	if greetsByEmailOnly(golden, other) {
+		t.Fatal("a content difference behind the line endings must stay a difference")
+	}
+}

@@ -80,3 +80,77 @@ func TestUsersOwnedDocsPutNoDSNOnArgv(t *testing.T) {
 		}
 	}
 }
+
+// sixStubRoutes reads the routes the not-owned auth-service answers with 503 + Retry-After 1 from the Go source
+// (authapi.NotOwnedCredentialRoutes and the Pattern constants it names), so the runbook is pinned to the code.
+func sixStubRoutes(t *testing.T) []string {
+	t.Helper()
+	src, err := os.ReadFile("../../../internal/auth/authapi/credentials_unowned.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(src)
+	start := strings.Index(body, "func NotOwnedCredentialRoutes()")
+	end := strings.Index(body, "// UnavailableRetry")
+	if start < 0 || end < start {
+		t.Fatal("NotOwnedCredentialRoutes not found in credentials_unowned.go")
+	}
+	names := regexp.MustCompile(`Pattern\w+`).FindAllString(body[start:end], -1)
+	var paths []string
+	for _, file := range []string{"credentials.go", "register.go"} {
+		raw, err := os.ReadFile("../../../internal/auth/authapi/" + file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, name := range names {
+			if m := regexp.MustCompile(`\b` + name + `\s*=\s*"([^"]+)"`).FindStringSubmatch(string(raw)); m != nil {
+				paths = append(paths, m[1])
+			}
+		}
+	}
+	if len(paths) != 6 {
+		t.Fatalf("want six stub routes from the source, got %v", paths)
+	}
+	return paths
+}
+
+// During the whole goApi stage the credential writes answer 503 + Retry-After 1 (go-api forwards them, and the not-owned
+// auth-service serves the stub). The runbook names the six routes, says login and refresh are not affected, and bounds the
+// stage with a time budget, a low-traffic window and a rollback when over budget.
+func TestStageOutageIsNamedAndBounded(t *testing.T) {
+	raw, err := os.ReadFile("../../../docs/operate/runbooks/auth-users-owned-flip-and-rollback.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(raw)
+	for _, path := range sixStubRoutes(t) {
+		if !strings.Contains(text, "`"+path+"`") {
+			t.Errorf("the runbook does not name the stub route %s", path)
+		}
+	}
+	for _, want := range []string{
+		"credentials_unowned.go",
+		"whole goApi stage",
+		"Login and refresh are not affected",
+		"internal/apiservice/authproxy.go",
+		"stage time budget of 15 minutes",
+		"over budget",
+		"low-traffic window",
+		"status notice",
+		"up to 60 seconds",
+		"roll windows",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("the runbook lacks %q", want)
+		}
+	}
+	if strings.Contains(text, "- Expect up to 60 seconds of `503`") {
+		t.Error("the old rule that put the 60 s text on the whole roll is still there")
+	}
+	over := runbookStep(t, "over budget")
+	for _, want := range []string{"D1", "D2", "roll back"} {
+		if !strings.Contains(over, want) {
+			t.Errorf("the over-budget line lacks %q: %.200s", want, over)
+		}
+	}
+}

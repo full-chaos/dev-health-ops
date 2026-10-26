@@ -19,7 +19,7 @@ import (
 
 // Valkey started with the args RENDERED by helm is filled past maxmemory with
 // keys that carry a TTL, the way the rate-limit counters do. With the policy
-// prod sets (volatile-ttl) the keys without a TTL -- an ingest stream and a plain
+// planned for prod (volatile-ttl) the keys without a TTL -- an ingest stream and a plain
 // marker -- are never evicted; keys with a TTL are. The image is the test
 // harness's mirrored Valkey image: the chart's pinned digest is not in the test
 // image mirror.

@@ -22,7 +22,10 @@ func TestValkeyMaxmemoryPolicyFollowsTheValue(t *testing.T) {
 	if got := valkeyArg(t, deployment, "--maxmemory-policy"); got != "allkeys-lru" {
 		t.Errorf("default --maxmemory-policy = %q, want the unchanged allkeys-lru", got)
 	}
-	for _, policy := range []string{"volatile-ttl", "volatile-lru", "noeviction"} {
+	for _, policy := range []string{
+		"noeviction", "allkeys-lru", "allkeys-lfu", "allkeys-random",
+		"volatile-lru", "volatile-lfu", "volatile-random", "volatile-ttl",
+	} {
 		deployment, _ := valkeyDeployment(t, "--set", "valkey.maxmemoryPolicy="+policy, "--set", "valkey.maxmemory=192mb")
 		if got := valkeyArg(t, deployment, "--maxmemory-policy"); got != policy {
 			t.Errorf("--maxmemory-policy = %q, want %q", got, policy)

@@ -47,7 +47,7 @@ type Membership struct {
 
 // PGUsers reads public.users and public.memberships. The runtime role needs
 // column SELECT on users (id, email, username, full_name, is_active,
-// is_superuser, token_version) and memberships (user_id, org_id, role,
+// is_superuser, token_version, auth_provider) and memberships (user_id, org_id, role,
 // joined_at, created_at), and nothing else (authschema.PublicReadColumns). The schema is named, so the role's search_path
 // does not decide which table is read.
 type PGUsers struct{ Pool *pgxpool.Pool }

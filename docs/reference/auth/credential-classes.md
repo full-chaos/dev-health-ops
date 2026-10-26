@@ -135,6 +135,10 @@ reset). auth-service verify and reset accept only this class, never the go-api
 signed tokens (`email_verification_token`, `password_reset_token`), so a go-api
 link issued before the cutover lapses and the user asks for a new one. A
 password change does not delete other outstanding links; they lapse at expiry.
+A reset link redeems only while the user's `public.users.token_version` still
+equals the value it was issued against (`issued_token_version`); every password
+write of either service raises that counter, so a reset link issued before it
+reads as unknown afterwards.
 Purpose binding is proven by `TestVerifyAndResetRedeemOnlyTheirOwnPurpose` and
 `TestLinkCredentialOfAnotherPurposeIsNotRedeemedBothWays`. Its routes get
 profile rows when they are mounted.

@@ -122,8 +122,7 @@ spec:
         {{- include "dev-health.componentSelectorLabels" (dict "component" "auth-service" "context" $) | nindent 8 }}
     spec:
       {{- include "dev-health.imagePullSecrets" . | nindent 6 }}
-      serviceAccountName: {{ include "dev-health.serviceAccountName" . }}
-      automountServiceAccountToken: false
+      {{- include "dev-health.workloadServiceAccount" (dict "ctx" . "component" "auth-service" "cfg" .Values.authService.serviceAccount) | nindent 6 }}
       terminationGracePeriodSeconds: {{ $a.terminationGracePeriodSeconds }}
       securityContext: {runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, fsGroup: 65532, fsGroupChangePolicy: OnRootMismatch, seccompProfile: {type: RuntimeDefault}}
       initContainers:

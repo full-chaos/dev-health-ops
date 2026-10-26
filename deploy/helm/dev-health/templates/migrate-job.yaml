@@ -142,6 +142,7 @@ spec:
         {{- include "dev-health.componentSelectorLabels" (dict "component" "migrate" "context" $) | nindent 8 }}
     spec:
       {{- include "dev-health.imagePullSecrets" . | nindent 6 }}
+      automountServiceAccountToken: false
       restartPolicy: Never
       securityContext:
         runAsNonRoot: true
@@ -302,6 +303,7 @@ spec:
         {{- include "dev-health.componentSelectorLabels" (dict "component" "migrate" "context" $) | nindent 8 }}
     spec:
       {{- include "dev-health.imagePullSecrets" . | nindent 6 }}
+      automountServiceAccountToken: false
       restartPolicy: Never
       securityContext:
         runAsNonRoot: true

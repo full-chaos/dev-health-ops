@@ -17,6 +17,7 @@ spec:
       labels:
         {{- include "dev-health.componentSelectorLabels" (dict "component" "postgresql" "context" $) | nindent 8 }}
     spec:
+      automountServiceAccountToken: false
       containers:
         - name: postgresql
           image: {{ .Values.postgresql.image.repository }}:{{ .Values.postgresql.image.tag }}

@@ -161,6 +161,7 @@ spec:
         {{- include "dev-health.componentSelectorLabels" (dict "component" "route-activate" "context" $) | nindent 8 }}
     spec:
       {{- include "dev-health.imagePullSecrets" . | nindent 6 }}
+      automountServiceAccountToken: false
       restartPolicy: Never
       securityContext:
         runAsNonRoot: true

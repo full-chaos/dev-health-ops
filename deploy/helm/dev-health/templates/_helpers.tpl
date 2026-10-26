@@ -50,14 +50,19 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
 {{/*
-Service account name
+Workload ServiceAccount name: <fullname>-<component>. Call with (dict "ctx" $ "component" "web").
 */}}
-{{- define "dev-health.serviceAccountName" -}}
-{{- if .Values.serviceAccount.create }}
-{{- default (include "dev-health.fullname" .) .Values.serviceAccount.name }}
-{{- else }}
-{{- default "default" .Values.serviceAccount.name }}
+{{- define "dev-health.workloadServiceAccountName" -}}
+{{- printf "%s-%s" (include "dev-health.fullname" .ctx) .component }}
 {{- end }}
+
+{{/*
+The pod-spec lines that bind a workload to its own ServiceAccount.
+Call with (dict "ctx" $ "component" "web" "cfg" .Values.web.serviceAccount).
+*/}}
+{{- define "dev-health.workloadServiceAccount" -}}
+serviceAccountName: {{ include "dev-health.workloadServiceAccountName" . }}
+automountServiceAccountToken: {{ .cfg.automountToken | default false }}
 {{- end }}
 
 {{/*

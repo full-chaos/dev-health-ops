@@ -70,7 +70,8 @@ func TestSessionRollingUpdateUnsetRendersByteEqual(t *testing.T) {
 			}
 			return string(out)
 		}
-		base, tip := render(baseDir+"/deploy/helm/dev-health"), render(".")
+		// The Valkey Deployment gained its Recreate strategy after the base; it is not a pooler document.
+		base, tip := withoutValkeyDeployment(t, render(baseDir+"/deploy/helm/dev-health")), withoutValkeyDeployment(t, render("."))
 		if base == tip {
 			continue
 		}
@@ -89,6 +90,25 @@ func TestSessionRollingUpdateUnsetRendersByteEqual(t *testing.T) {
 			}
 		}
 	}
+}
+
+// withoutValkeyDeployment drops the one in-chart Valkey Deployment document from a render.
+func withoutValkeyDeployment(t *testing.T, render string) string {
+	t.Helper()
+	parts := strings.Split(render, "\n---\n")
+	kept := parts[:0]
+	dropped := 0
+	for _, part := range parts {
+		if strings.Contains(part, "# Source: dev-health/templates/redis.yaml\n") && strings.Contains(part, "\nkind: Deployment\n") {
+			dropped++
+			continue
+		}
+		kept = append(kept, part)
+	}
+	if dropped != 1 {
+		t.Fatalf("the render holds %d Valkey Deployment documents, want 1", dropped)
+	}
+	return strings.Join(kept, "\n---\n")
 }
 
 func TestSessionRollingUpdateSchemaAcceptsAndRefuses(t *testing.T) {

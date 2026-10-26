@@ -7,8 +7,8 @@ import (
 
 const budgetRefusal = "authService.database.connectionBudget"
 
-// prod-shape pool sizes: transaction 16 (two pairs with the default extra
-// user), queue-session 36, coordinator-session 10 = 78 pooler connections.
+// prod-shape pool sizes: transaction 16, the default KEDA extra user at its
+// own size 4, queue-session 36, coordinator-session 10 = 66 pooler connections.
 var budgetPools = []string{
 	"--set", "goWorkers.pgbouncer.transaction.poolSize=16",
 	"--set", "goWorkers.pgbouncer.queueSession.poolSize=36",
@@ -20,21 +20,35 @@ func budgetWith(budget string, extra ...string) []string {
 	return authWith(append(args, extra...)...)
 }
 
-// 78 pooler + (2 replicas + 1 surge) x 8 = 102.
+// 66 pooler + (2 replicas + 1 surge) x 8 = 90.
 func TestAuthServiceConnectionBudgetBoundary(t *testing.T) {
-	if _, out, err := renderAuth(t, budgetWith("102")...); err != nil {
+	if _, out, err := renderAuth(t, budgetWith("90")...); err != nil {
 		t.Fatalf("used == budget must render: %v\n%.400s", err, out)
 	}
-	_, out, err := renderAuth(t, budgetWith("101")...)
-	if err == nil || !strings.Contains(out, budgetRefusal) || !strings.Contains(out, "102") || !strings.Contains(out, "101") {
+	_, out, err := renderAuth(t, budgetWith("89")...)
+	if err == nil || !strings.Contains(out, budgetRefusal) || !strings.Contains(out, "90") || !strings.Contains(out, "89") {
 		t.Fatalf("used == budget+1 must fail with the named message and both figures: err=%v out=%.500s", err, out)
 	}
 }
 
+// The chart defaults fit the 97 usable connections of a default PostgreSQL.
 func TestAuthServiceConnectionBudgetDefaultPostgres(t *testing.T) {
-	_, out, err := renderAuth(t, budgetWith("97")...)
-	if err == nil || !strings.Contains(out, budgetRefusal) || !strings.Contains(out, "102") {
-		t.Fatalf("prod shape over 97 usable connections must fail: err=%v out=%.500s", err, out)
+	if _, out, err := renderAuth(t, authWith("--set", "authService.database.connectionBudget=97")...); err != nil {
+		t.Fatalf("the default pools plus the auth-service must fit 97: %v\n%.500s", err, out)
+	}
+}
+
+// The default KEDA extra user without its own size inherits the transaction
+// size: 16 + 16 + 36 + 10 + 24 = 102, over 97.
+func TestAuthServiceConnectionBudgetKedaPairAtTheDefaultSizeIsOver(t *testing.T) {
+	keda := []string{"--set-json", `goWorkers.pgbouncer.transaction.extraUsers=[{"role":"devhealth_keda_readonly","passwordKey":"RIVER_KEDA_READONLY_PASSWORD"}]`}
+	_, out, err := renderAuth(t, budgetWith("97", keda...)...)
+	if err == nil || !strings.Contains(out, budgetRefusal) || !strings.Contains(out, "102") || !strings.Contains(out, "97") {
+		t.Fatalf("a KEDA user at the inherited size must fail the 97 budget with the named message: err=%v out=%.500s", err, out)
+	}
+	sized := []string{"--set-json", `goWorkers.pgbouncer.transaction.extraUsers=[{"role":"devhealth_keda_readonly","passwordKey":"RIVER_KEDA_READONLY_PASSWORD","poolSize":4}]`}
+	if _, out, err := renderAuth(t, budgetWith("97", sized...)...); err != nil {
+		t.Fatalf("a KEDA user with its own size 4 must fit: %v\n%.500s", err, out)
 	}
 }
 
@@ -56,7 +70,7 @@ func TestAuthServiceConnectionBudgetCountsEachClause(t *testing.T) {
 		"transaction": {"--set", "goWorkers.pgbouncer.transaction.poolSize=17"},
 	}
 	for name, set := range cases {
-		_, out, err := renderAuth(t, budgetWith("102", set...)...)
+		_, out, err := renderAuth(t, budgetWith("90", set...)...)
 		if err == nil || !strings.Contains(out, budgetRefusal) {
 			t.Errorf("%s: one more connection must fail: err=%v out=%.300s", name, err, out)
 		}
@@ -64,15 +78,24 @@ func TestAuthServiceConnectionBudgetCountsEachClause(t *testing.T) {
 }
 
 func TestAuthServiceConnectionBudgetCountsEveryTransactionUser(t *testing.T) {
-	users := []string{"--set-json", `goWorkers.pgbouncer.transaction.extraUsers=[{"role":"devhealth_keda_readonly","passwordKey":"RIVER_KEDA_READONLY_PASSWORD"},{"role":"r1","passwordKey":"K1"}]`,
+	users := []string{"--set-json", `goWorkers.pgbouncer.transaction.extraUsers=[{"role":"devhealth_keda_readonly","passwordKey":"RIVER_KEDA_READONLY_PASSWORD","poolSize":4},{"role":"r1","passwordKey":"K1"}]`,
 		"--set", "goWorkers.pgbouncer.secret.data.K1=x"}
-	// Three transaction pairs (own role, keda, r1): 48 + 36 + 10 + 24 = 118.
-	if _, out, err := renderAuth(t, budgetWith("118", users...)...); err != nil {
-		t.Fatalf("used == 118 must render: %v\n%.300s", err, out)
+	// Three transaction pairs: own role 16, keda 4, r1 at the inherited 16: 36 + 36 + 10 + 24 = 106.
+	if _, out, err := renderAuth(t, budgetWith("106", users...)...); err != nil {
+		t.Fatalf("used == 106 must render: %v\n%.300s", err, out)
 	}
-	_, out, err := renderAuth(t, budgetWith("117", users...)...)
-	if err == nil || !strings.Contains(out, budgetRefusal) || !strings.Contains(out, "118") {
-		t.Fatalf("three transaction pairs need 118 over a budget of 117: err=%v out=%.300s", err, out)
+	_, out, err := renderAuth(t, budgetWith("105", users...)...)
+	if err == nil || !strings.Contains(out, budgetRefusal) || !strings.Contains(out, "106") {
+		t.Fatalf("three transaction pairs need 106 over a budget of 105: err=%v out=%.300s", err, out)
+	}
+	sized := []string{"--set-json", `goWorkers.pgbouncer.transaction.extraUsers=[{"role":"devhealth_keda_readonly","passwordKey":"RIVER_KEDA_READONLY_PASSWORD","poolSize":4},{"role":"r1","passwordKey":"K1","poolSize":2}]`,
+		"--set", "goWorkers.pgbouncer.secret.data.K1=x"}
+	// r1 at its own size 2: 16 + 4 + 2 + 36 + 10 + 24 = 92.
+	if _, out, err := renderAuth(t, budgetWith("92", sized...)...); err != nil {
+		t.Fatalf("used == 92 must render: %v\n%.300s", err, out)
+	}
+	if _, out, err := renderAuth(t, budgetWith("91", sized...)...); err == nil || !strings.Contains(out, "92") {
+		t.Fatalf("each user counts at its own size (92 over 91): err=%v out=%.300s", err, out)
 	}
 }
 

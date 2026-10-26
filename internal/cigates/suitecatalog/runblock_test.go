@@ -205,7 +205,7 @@ func scanSteps(t *testing.T, root string) ([]runStep, []string) {
 		if mapGet(top, "jobs") != nil {
 			var sub yaml.Node
 			sub.Kind = yaml.MappingNode
-			for _, k := range []string{"env", "defaults"} {
+			for _, k := range []string{"on", "env", "defaults"} {
 				if v := mapGet(top, k); v != nil {
 					sub.Content = append(sub.Content, &yaml.Node{Kind: yaml.ScalarNode, Value: k}, v)
 				}
@@ -226,7 +226,18 @@ func scanSteps(t *testing.T, root string) ([]runStep, []string) {
 			}
 		}
 		if runs := mapGet(top, "runs"); runs != nil {
-			out = append(out, runStep{rel, "-", "(action)", "-", canonicalSha(t, runs, "steps"), "", nodeKeys(runs, "steps")})
+			sub := yaml.Node{Kind: yaml.MappingNode}
+			if in := mapGet(top, "inputs"); in != nil {
+				sub.Content = append(sub.Content, &yaml.Node{Kind: yaml.ScalarNode, Value: "inputs"}, in)
+			}
+			rest := yaml.Node{Kind: yaml.MappingNode}
+			for i := 0; i+1 < len(runs.Content); i += 2 {
+				if runs.Content[i].Value != "steps" {
+					rest.Content = append(rest.Content, runs.Content[i], runs.Content[i+1])
+				}
+			}
+			sub.Content = append(sub.Content, &yaml.Node{Kind: yaml.ScalarNode, Value: "runs"}, &rest)
+			out = append(out, runStep{rel, "-", "(action)", "-", canonicalSha(t, &sub), "", nodeKeys(&sub)})
 		}
 		emit("-", mapGet(mapGet(top, "runs"), "steps"), "")
 	}
@@ -373,7 +384,7 @@ func renderLock(steps []runStep, old []lockRow) string {
 	}
 	var b strings.Builder
 	b.WriteString("# CHAOS-11422: the whole-step lock. Every step of every workflow and action file (run or uses), every job and every workflow has one reviewed row.\n")
-	b.WriteString("# sha256 = of the canonical step (or job, or workflow env and defaults) with anchors resolved, keys sorted, run text trailing-white-space stripped plus one final newline. suites = catalog suite ids or none.\n# NAMED LIMIT: the scripts a step calls are NOT covered. The lock covers workflow and action YAML only.\n")
+	b.WriteString("# sha256 = of the canonical step (or job, or workflow on, env and defaults; an action inputs and runs without steps) with anchors resolved, keys sorted, run text trailing-white-space stripped plus one final newline. suites = catalog suite ids or none.\n# NAMED LIMIT: the scripts a step calls are NOT covered. The lock covers workflow and action YAML only.\n")
 	b.WriteString("# Regenerate the shas with: go test ./internal/cigates/suitecatalog -run TestRunBlockLockUpdate -update. A new or changed row has empty suites and reason a reviewer must fill.\n")
 	b.WriteString(strings.Join(lockColumns, "\t") + "\n")
 	for _, s := range steps {

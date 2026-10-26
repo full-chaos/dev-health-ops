@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
+	"github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 )
 
 const (
@@ -79,6 +80,11 @@ type LoopConfig struct {
 	// this caller-owned dependency, so a contract-violating recorder can strand
 	// at most one goroutine without holding readiness or process shutdown.
 	Recorder ObservationRecorder
+	// StartupRetryBudget bounds how long the first step, and any run of
+	// consecutive ticks, may keep failing with a transient dial error (refused,
+	// reset, dropped) before the loop gives up and the process exits. Zero
+	// disables it; any other failure is fatal at once.
+	StartupRetryBudget time.Duration
 	// Logger names why an observation step failed. It is optional so tests and
 	// embedders need not supply one; a nil Logger discards. Without it this
 	// loop could flip readiness closed forever and emit nothing at all
@@ -146,6 +152,9 @@ type Loop struct {
 	stepper Stepper
 	config  LoopConfig
 	clock   loopClock
+	// sleep and jitter are replaced by tests; nil uses the real wait.
+	sleep  func(context.Context, time.Duration)
+	jitter func(time.Duration) time.Duration
 
 	ready atomic.Bool
 
@@ -207,7 +216,10 @@ func newLoop(stepper Stepper, config LoopConfig, clock loopClock) (*Loop, error)
 	if stepper == nil || clock == nil || config.validate() != nil {
 		return nil, ErrInvalidConfiguration
 	}
-	loop := &Loop{stepper: stepper, config: config, clock: clock, errors: make(chan error, 1)}
+	loop := &Loop{
+		stepper: stepper, config: config, clock: clock, errors: make(chan error, 1),
+		jitter: postgres.DialRetryJitter,
+	}
 	if config.Recorder != nil {
 		loop.recorderBusy = make(chan struct{}, 1)
 	}
@@ -247,10 +259,43 @@ func (loop *Loop) Start(ctx context.Context) error {
 	loop.done = done
 	loop.mu.Unlock()
 
-	if err := loop.step(loopCtx, loop.clock.Now()); err != nil {
+	// A degraded or envelope-exceeded first step is absorbed below, so it is
+	// kept out of the retry: only a failure that would end Start is retried.
+	var absorbed error
+	err := postgres.DialRetry{
+		Budget: loop.config.StartupRetryBudget,
+		Now:    loop.clock.Now,
+		Sleep:  loop.sleep,
+		Jitter: loop.jitter,
+		OnRetry: func(attempt int, elapsed, wait time.Duration) {
+			loop.setFailed()
+			loop.logger().WarnContext(ctx, "sync dispatch observer initial step unreachable, retrying",
+				"cause", health.CauseUnreachable,
+				"attempt", attempt,
+				"elapsed", elapsed.String(),
+				"retry_in", wait.String(),
+			)
+		},
+	}.Do(loopCtx, func(stepCtx context.Context) error {
+		err := loop.step(stepCtx, loop.clock.Now())
+		if err != nil && (errors.Is(err, ErrDegradedStage) || errors.Is(err, ErrStepEnvelopeExceeded)) {
+			absorbed = err
+			return nil
+		}
+		return err
+	})
+	if err == nil && absorbed != nil {
+		err = absorbed
+	}
+	if err != nil {
 		if !errors.Is(err, ErrDegradedStage) && !errors.Is(err, ErrStepEnvelopeExceeded) {
 			loop.setFailed()
-			loop.logger().ErrorContext(ctx, "sync dispatch observer initial step failed", "error", err.Error())
+			if postgres.IsTransientDialError(err) {
+				loop.logger().ErrorContext(ctx, "sync dispatch observer initial step failed",
+					"cause", health.CauseUnreachable)
+			} else {
+				loop.logger().ErrorContext(ctx, "sync dispatch observer initial step failed", "error", err.Error())
+			}
 			cancel()
 			close(done)
 			return fmt.Errorf("initial sync dispatch observation: %w", err)
@@ -293,11 +338,17 @@ func (loop *Loop) Start(ctx context.Context) error {
 
 func (loop *Loop) run(ctx context.Context, ticker loopTicker, done chan struct{}) {
 	var fatal error
+	var window postgres.TransientWindow
 	defer close(done)
 	defer ticker.Stop()
 	defer func() {
 		if fatal != nil {
-			loop.logger().ErrorContext(ctx, "sync dispatch observer step failed", "error", fatal.Error())
+			if postgres.IsTransientDialError(fatal) {
+				loop.logger().ErrorContext(ctx, "sync dispatch observer step failed",
+					"cause", health.CauseUnreachable)
+			} else {
+				loop.logger().ErrorContext(ctx, "sync dispatch observer step failed", "error", fatal.Error())
+			}
 			loop.reportError(ctx, fatal)
 		}
 	}()
@@ -343,9 +394,19 @@ func (loop *Loop) run(ctx context.Context, ticker loopTicker, done chan struct{}
 					}
 					continue
 				}
+				if !window.Exceeded(now, err, loop.config.StartupRetryBudget) {
+					loop.setFailed()
+					loop.logger().WarnContext(ctx, "sync dispatch observer step unreachable; continuing",
+						"cause", health.CauseUnreachable)
+					if loop.stepObserved != nil {
+						loop.stepObserved()
+					}
+					continue
+				}
 				fatal = fmt.Errorf("sync dispatch observation step: %w", err)
 				return
 			}
+			window.Exceeded(now, nil, 0)
 			if loop.stepObserved != nil {
 				loop.stepObserved()
 			}

@@ -837,6 +837,7 @@ func buildReconcilerDependencies(
 	}
 	loopConfig := joboutbox.DefaultReconcilerLoopConfig(registry)
 	loopConfig.Logger = logger
+	loopConfig.StartupRetryBudget = cfg.PreclaimReadinessTimeout
 	loop, err := sources.newLoop(relay, loopConfig)
 	if err != nil || loop == nil {
 		dependencies.loopErr = dependencyUnavailable("reconciler_relay_loop_construction_failed")
@@ -886,6 +887,7 @@ func buildReconcilerDependencies(
 		return dependencies
 	}
 	syncLoopConfig := syncreconciler.DefaultLoopConfig(registry)
+	syncLoopConfig.StartupRetryBudget = cfg.PreclaimReadinessTimeout
 	// CHAOS-4239: DefaultLoopConfig's flat 2s default suits a Stepper that is
 	// genuinely one bounded call (Shadow's single indexed read). The mutation
 	// pipeline is an 8-stage, 3-pool composition where each stage now carries

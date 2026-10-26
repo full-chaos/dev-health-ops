@@ -123,13 +123,14 @@ func TestRowsAreSortedUniqueAndWellFormed(t *testing.T) {
 		"unsorted":  "b\tnone\t-\tr\na\tnone\t-\tr\n",
 		"duplicate": "a\tnone\t-\tr\na\tnone\t-\tr\n",
 		"class":     "a\tmaybe\t-\tr\n",
+		"covered":   "a\tcovered-by:c\tTestX\tr\n",
 		"columns":   "a\tnone\t-\n",
 	} {
 		if _, err := Parse(write(body)); err == nil {
 			t.Errorf("%s list was accepted", name)
 		}
 	}
-	if _, err := Parse(write("# c\na\tnone\t-\tr\nb\tcovered-by:c\tTestX\tr\n")); err != nil {
+	if _, err := Parse(write("# c\na\tnone\t-\tr\nb\tnone\t-\tr\n")); err != nil {
 		t.Errorf("a well-formed list was refused: %v", err)
 	}
 }
@@ -152,8 +153,6 @@ func module(t *testing.T, files map[string]string) string {
 	}
 	return dir
 }
-
-const witnessTest = "package c\n\nimport \"testing\"\n\nfunc TestH(t *testing.T) { _ = CheckTree([]string{\"x\"}, func(string) int { return 0 }) }\n"
 
 const cleanPkg = "package a\n\nfunc F() int { return 1 }\n"
 const cleanTest = "package a\n\nimport \"testing\"\n\nfunc TestF(t *testing.T) { _ = F() }\n"
@@ -222,98 +221,15 @@ func TestAConcurrentInModuleImportIsRefusedDirectAndTransitive(t *testing.T) {
 	}
 }
 
-func coveredModule(witnessFile string) map[string]string {
-	return map[string]string{
-		"a/a.go": "package a\n\nimport \"example.test/m/c\"\n\nfunc F() int { return c.H() }\n", "a/a_test.go": cleanTest,
-		"c/c.go":           "package c\n\nimport \"sync\"\n\nvar mu sync.Mutex\n\nfunc H() int { return 1 }\n",
-		"c/" + witnessFile: witnessTest,
-	}
-}
-
-func TestACoveredByRowAllowsOnlyTheNamedPackageAndOnlyWithItsWitness(t *testing.T) {
-	covered := Row{"a", "covered-by:c", "TestH", "the pool lives in c"}
-	if got := problemsOf(t, coveredModule("c_test.go"), covered); got != "" {
-		t.Fatalf("a covered-by row with its witness was refused:\n%s", got)
-	}
-	if got := problemsOf(t, coveredModule("c_test.go"), Row{"a", "covered-by:c", "TestGone", "x"}); !strings.Contains(got, "witness test TestGone not found") {
-		t.Errorf("a missing witness was accepted:\n%s", got)
-	}
-	notRace := coveredModule("c_test.go")
-	notRace["c/c_test.go"] = "//go:build !race\n\n" + notRace["c/c_test.go"]
-	if got := problemsOf(t, notRace, covered); !strings.Contains(got, "compiled out of -race") {
-		t.Errorf("a witness compiled out of -race was accepted:\n%s", got)
-	}
-	if got := problemsOf(t, coveredModule("c_test.go"), covered, Row{"c", "none", "-", "x"}); !strings.Contains(got, "itself excluded") {
-		t.Errorf("a covered-by package that is itself excluded was accepted:\n%s", got)
-	}
-	// The named package is the only exception: the covered package's own concurrency does not excuse another dependency.
-	other := coveredModule("c_test.go")
-	other["a/a.go"] = "package a\n\nimport (\n\t\"example.test/m/b\"\n\t\"example.test/m/c\"\n)\n\nfunc F() int { return c.H() + b.G() }\n"
-	other["b/b.go"] = "package b\n\nfunc G() int { go func() {}(); return 1 }\n"
-	if got := problemsOf(t, other, covered); !strings.Contains(got, "a: imports b") || strings.Contains(got, "imports c") {
-		t.Errorf("covered-by excused the wrong package:\n%s", got)
-	}
-	// The excluded package itself gets no exception: a goroutine in its own file stays red.
-	own := coveredModule("c_test.go")
-	own["a/a_test.go"] = "package a\n\nimport \"testing\"\n\nfunc TestF(t *testing.T) { go func() {}() }\n"
-	if got := problemsOf(t, own, covered); !strings.Contains(got, "a: own file: a_test.go:5: go statement") {
-		t.Errorf("a goroutine in a covered-by package's own file was accepted:\n%s", got)
-	}
-}
-
 func TestRowsThatNameNothingRunnableAreRefused(t *testing.T) {
 	files := map[string]string{"a/a.go": cleanPkg, "a/a_test.go": cleanTest, "n/n.go": "package n\n"}
 	for want, row := range map[string]Row{
-		"no such package":                   {"gone", "none", "-", "x"},
-		"has no test":                       {"n", "none", "-", "x"},
-		"cannot be excluded":                {"internal/providersync", "none", "-", "x"},
-		"covered-by package does not exist": {"a", "covered-by:gone", "TestX", "x"},
-		"class none takes witness -":        {"a", "none", "TestX", "x"},
+		"no such package":    {"gone", "none", "-", "x"},
+		"has no test":        {"n", "none", "-", "x"},
+		"cannot be excluded": {"internal/providersync", "none", "-", "x"},
 	} {
 		if got := problemsOf(t, files, row); !strings.Contains(got, want) {
 			t.Errorf("want %q, got:\n%s", want, got)
-		}
-	}
-}
-
-func callbackModule(callback string) map[string]string {
-	return map[string]string{
-		"a/a.go":      "package a\n\nimport \"example.test/m/c\"\n\nfunc F() int {\n\tvar out []string\n\t_ = out\n\treturn c.CheckTree([]string{\"x\"}, " + callback + ")\n}\n",
-		"a/a_test.go": cleanTest,
-		"c/c.go":      "package c\n\nimport \"sync\"\n\nvar mu sync.Mutex\n\nfunc CheckTree(p []string, read func(string) int) int { return read(p[0]) }\n",
-		"c/c_test.go": witnessTest,
-	}
-}
-
-// The callback of the worker pool must write no captured variable (CHAOS-11413): two workers writing it would be a race that
-// only the excluded package's own -race run could see.
-func TestACoveredByCallbackThatWritesACapturedVariableIsRefused(t *testing.T) {
-	covered := Row{"a", "covered-by:c", "TestH", "pool in c"}
-	ok := []string{
-		`func(path string) int { n := len(path); n++; return n }`,
-		`func(path string) int { var buf []string; buf = append(buf, path); return len(buf) }`,
-		`func(path string) int { m := map[string]int{}; m[path] = 1; return m[path] }`,
-	}
-	for _, cb := range ok {
-		if got := problemsOf(t, callbackModule(cb), covered); got != "" {
-			t.Errorf("callback %s was refused:\n%s", cb, got)
-		}
-	}
-	bad := map[string]string{
-		"append to a captured slice": `func(path string) int { out = append(out, path); return 0 }`,
-		"captured counter":           `func(path string) int { out = nil; return 0 }`,
-		"captured map or field":      `func(path string) int { out[0] = path; return 0 }`,
-		"increment":                  `func(path string) int { out2++; return 0 }`,
-		"a variable, not a function": `cb`,
-	}
-	for name, cb := range bad {
-		files := callbackModule(cb)
-		files["a/a.go"] = strings.Replace(files["a/a.go"], "\treturn c.CheckTree", "\tvar out2 int\n\tcb := func(string) int { return 0 }\n\t_ = out2\n\treturn c.CheckTree", 1)
-		if name == "increment" {
-			files["a/a.go"] = strings.Replace(files["a/a.go"], "var out2 int\n", "var out2 int\n", 1)
-		}
-		if got := problemsOf(t, files, covered); !strings.Contains(got, "callback") {
-			t.Errorf("%s: no callback problem, got:\n%s", name, got)
 		}
 	}
 }
@@ -328,43 +244,6 @@ func TestADotImportInAnExcludedPackageIsRefused(t *testing.T) {
 		if got := problemsOf(t, files, rowA); !strings.Contains(got, "dot import") {
 			t.Errorf("%s: want a dot import problem, got:\n%s", name, got)
 		}
-	}
-}
-
-// r1 P1: a callback may call only builtins and the listed standard-library packages, so a helper cannot write the captured variable
-// for it (a pointer to a captured slice passed to a helper), and a CheckTree reference that is not a direct call cannot hide it.
-func TestACoveredByCallbackThatCallsAHelperOrAliasesTheCalleeIsRefused(t *testing.T) {
-	covered := Row{"a", "covered-by:c", "TestH", "pool in c"}
-	helper := func(cb string) map[string]string {
-		files := callbackModule(cb)
-		files["a/a.go"] += "\nfunc appendTo(p *[]string, s string) { *p = append(*p, s) }\n\nfunc pure(s string) int { return len(s) }\n"
-		return files
-	}
-	for name, cb := range map[string]string{
-		"helper given a pointer to a captured slice":  `func(path string) int { appendTo(&out, path); return 0 }`,
-		"helper without a captured argument":          `func(path string) int { return pure(path) }`,
-		"method call on a captured value":             `func(path string) int { out2.add(path); return 0 }`,
-		"field write":                                 `func(path string) int { st.n = 1; return 0 }`,
-		"range assign to a captured variable":         `func(path string) int { for out2 = range path {}; return 0 }`,
-		"package-level function that writes a global": `writesGlobal`,
-	} {
-		files := helper(cb)
-		files["a/a.go"] = strings.Replace(files["a/a.go"], "\\treturn c.CheckTree", "\\tvar out2 int\\n\\tst := struct{ n int }{}\\n\\t_, _ = out2, st\\n\\treturn c.CheckTree", 1)
-		files["a/a.go"] += "\nvar global []string\n\nfunc writesGlobal(p string) int { global = append(global, p); return 0 }\n"
-		files["a/a.go"] = strings.Replace(files["a/a.go"], "var out []string", "var out []string\n\tvar out2 string", 1)
-		if got := problemsOf(t, files, covered); !strings.Contains(got, "callback") {
-			t.Errorf("%s: no callback problem, got:\n%s", name, got)
-		}
-	}
-	alias := callbackModule(`func(path string) int { return len(path) }`)
-	alias["a/a.go"] = strings.Replace(alias["a/a.go"], "return c.CheckTree(", "check := c.CheckTree\n\treturn check(", 1)
-	if got := problemsOf(t, alias, covered); !strings.Contains(got, "CheckTree is used other than as a direct call") {
-		t.Errorf("an aliased CheckTree was accepted:\n%s", got)
-	}
-	pure := callbackModule(`func(path string) int { return len(strings.TrimSpace(path)) }`)
-	pure["a/a.go"] = strings.Replace(pure["a/a.go"], "import \"example.test/m/c\"", "import (\n\t\"strings\"\n\n\t\"example.test/m/c\"\n)", 1)
-	if got := problemsOf(t, pure, covered); got != "" {
-		t.Errorf("a callback that calls only the standard library was refused:\n%s", got)
 	}
 }
 
@@ -389,41 +268,6 @@ func TestWhatTheScanCannotModelIsNotExcludable(t *testing.T) {
 		if got := problemsOf(t, tc.files, rowA); !strings.Contains(got, tc.want) {
 			t.Errorf("%s: want a problem naming %q, got:\n%s", name, tc.want, got)
 		}
-	}
-}
-
-// A callback may not pass a function value to a standard-library call either (strings.Map with a closure wrote shared state).
-func TestACoveredByCallbackThatPassesAFunctionValueIsRefused(t *testing.T) {
-	covered := Row{"a", "covered-by:c", "TestH", "pool in c"}
-	files := callbackModule(`func(path string) int { return len(strings.Map(transform, path)) }`)
-	files["a/a.go"] = strings.Replace(files["a/a.go"], "import \"example.test/m/c\"", "import (\n\t\"strings\"\n\n\t\"example.test/m/c\"\n)", 1) + "\nfunc transform(r rune) rune { return r }\n"
-	if got := problemsOf(t, files, covered); !strings.Contains(got, "function value") {
-		t.Errorf("a function value passed to strings.Map was accepted:\n%s", got)
-	}
-}
-
-// The witness must still call CheckTree: a no-op body keeps its name and proves nothing.
-func TestAWitnessThatNoLongerDrivesCheckTreeIsRefused(t *testing.T) {
-	covered := Row{"a", "covered-by:c", "TestH", "pool in c"}
-	files := coveredModule("c_test.go")
-	files["c/c_test.go"] = "package c\n\nimport \"testing\"\n\nfunc TestH(t *testing.T) {}\n"
-	if got := problemsOf(t, files, covered); !strings.Contains(got, "does not call CheckTree") {
-		t.Errorf("a no-op witness was accepted:\n%s", got)
-	}
-}
-
-// The same, when the registration sits in the covered-by package itself (as goldenscan/tree.go does): that package is exempt from the
-// package-wide scan, so only the callback check can see the function value.
-func TestAFunctionValueInACallbackInsideTheCoveredPackageIsRefused(t *testing.T) {
-	covered := Row{"a", "covered-by:c", "TestH", "pool in c"}
-	files := coveredModule("c_test.go")
-	files["c/use.go"] = "package c\n\nimport \"strings\"\n\nfunc transform(r rune) rune { return r }\n\nfunc Use(paths []string) int {\n\treturn CheckTree(paths, func(path string) int { return len(strings.Map(transform, path)) })\n}\n"
-	if got := problemsOf(t, files, covered); !strings.Contains(got, "callback passes a function value") {
-		t.Errorf("a function value passed inside the callback was accepted:\n%s", got)
-	}
-	files["c/use.go"] = "package c\n\nimport \"strings\"\n\nfunc Use(paths []string) int {\n\treturn CheckTree(paths, func(path string) int { return len(strings.Map(func(r rune) rune { return r }, path)) })\n}\n"
-	if got := problemsOf(t, files, covered); !strings.Contains(got, "callback passes a function value") {
-		t.Errorf("a function literal passed inside the callback was accepted:\n%s", got)
 	}
 }
 
@@ -598,8 +442,8 @@ func TestStdlibPackagesOffTheAllowlistAreRefused(t *testing.T) {
 // The allowlist is a table the test reads: the exact set is pinned, and each entry says why it starts no goroutine and runs no user
 // code on another one.
 func TestTheStdlibAllowlistIsPinnedAndEachEntryHasItsReason(t *testing.T) {
-	want := []string{"bytes", "crypto/sha256", "encoding/hex", "encoding/json", "errors", "fmt", "io", "io/fs", "log/slog", "math", "net/netip", "os",
-		"path", "path/filepath", "regexp", "slices", "sort", "strconv", "strings", "testing", "time", "unicode", "unicode/utf8"}
+	want := []string{"bytes", "encoding/hex", "encoding/json", "errors", "fmt", "io", "io/fs", "log/slog", "math", "net/netip", "os",
+		"path/filepath", "regexp", "slices", "sort", "strconv", "strings", "testing", "time", "unicode", "unicode/utf8"}
 	var got []string
 	for k, reason := range stdlibAllowed {
 		got = append(got, k)

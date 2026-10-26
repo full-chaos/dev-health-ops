@@ -5,9 +5,8 @@
 #     value passed as an argument to a call outside racescope's pureCallees, and none of the rest in any in-module package it
 #     links (what the scan cannot model keeps a package in -race; CHAOS-11413 threat-model ruling); witness is -. Proven by
 #     internal/cigates/racescope, which fails when a listed package (or anything it imports from this module) gains one.
-#   class covered-by:<package>: the same proof, except that <package> (itself still in -race, never listed here) may hold the
-#     concurrency, and witness names a Test function of <package> that drives it and is not compiled out of -race.
-# A package leaves this file as soon as it needs a -race run. internal/providersync and internal/cigates/testshard stay in -race.
+# A package leaves this file as soon as it needs a -race run. internal/providersync, internal/cigates/testshard and
+# internal/testsupport/goldenscan/treegate stay in -race (treegate links goldenscan.CheckTree, which starts worker goroutines).
 cmd/strip-agent-attribution	none	-	synchronous code only: no concurrency in its files or its in-module imports
 internal/auth/emaildomain	none	-	synchronous code only: no concurrency in its files or its in-module imports
 internal/jobs/metrics/checkedcast	none	-	synchronous code only: no concurrency in its files or its in-module imports
@@ -24,5 +23,4 @@ internal/queryapi/deltarule	none	-	synchronous code only: no concurrency in its 
 internal/queryapi/graphqldate	none	-	synchronous code only: no concurrency in its files or its in-module imports
 internal/queryapi/graphqljson	none	-	synchronous code only: no concurrency in its files or its in-module imports
 internal/teamid	none	-	synchronous code only: no concurrency in its files or its in-module imports
-internal/testsupport/goldenscan/treegate	covered-by:internal/testsupport/goldenscan	TestCheckTreeReadsGoldensConcurrently	one regexp scan of the tree; its only concurrency is the goldenscan.CheckTree worker pool, which goldenscan race-tests with 2+ workers and 20 paths (cost_test.go)
 internal/testsupport/sqlshape	none	-	synchronous code only: no concurrency in its files or its in-module imports

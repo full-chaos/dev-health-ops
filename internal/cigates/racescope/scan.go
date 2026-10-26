@@ -81,8 +81,8 @@ func Parse(path string) ([]Row, error) {
 			return nil, fmt.Errorf("%s: %s is listed twice", path, f[0])
 		}
 		seen[f[0]] = true
-		if f[1] != "none" && !strings.HasPrefix(f[1], "covered-by:") {
-			return nil, fmt.Errorf("%s: %s has class %q, want none or covered-by:<package>", path, f[0], f[1])
+		if f[1] != "none" || f[2] != "-" {
+			return nil, fmt.Errorf("%s: %s has class %q and witness %q: only class none with witness - exists (covered-by was retired: every row is judged on its whole in-module closure)", path, f[0], f[1], f[2])
 		}
 		if len(rows) > 0 && rows[len(rows)-1].Package >= f[0] {
 			return nil, fmt.Errorf("%s: %s is not in LC_ALL=C order", path, f[0])
@@ -198,7 +198,7 @@ func scanFile(path string, ts typeStore) []string {
 							at(a.Pos(), "function value passed to "+calleeName(x)+" is a body the scan cannot see (only a literal or a function of this package is scanned)")
 						}
 					}
-				case tf.isFunc(a) && !isCallbackCallee(x):
+				case tf.isFunc(a):
 					at(a.Pos(), "function value passed as an argument: the callee may run it on another goroutine")
 				}
 			}
@@ -219,14 +219,6 @@ var pureCallees = map[string]int{ // callee (go/types full name) -> index of its
 	"slices.SortFunc":       1, // sorts on the calling goroutine and calls cmp there (documented contract)
 	"slices.SortStableFunc": 1, // same contract as slices.SortFunc: cmp is called on the calling goroutine
 	"(*testing.T).Run":      1, // testing: waits for the subtest; only t.Parallel (refused here) lets it overlap its parent
-}
-
-// isCallbackCallee: the registration call of a callbackCallees function (CheckTree) hands over its callback on purpose; callbackProblems
-// judges that callback instead.
-func isCallbackCallee(c *ast.CallExpr) bool {
-	name := calleeName(c)
-	_, watched := callbackCallees[name[strings.LastIndex(name, ".")+1:]]
-	return watched
 }
 
 func calleeName(c *ast.CallExpr) string {
@@ -356,7 +348,7 @@ func goFilesOf(p *goPackage, tests bool) []string {
 	return files
 }
 
-func scanPackage(p *goPackage, tests bool, modpath string, ts typeStore, loadErrs map[string][]string) []string {
+func scanPackage(p *goPackage, tests bool, modpath string, listed map[string]*goPackage, ts typeStore, loadErrs map[string][]string) []string {
 	var out []string
 	if p.Error != nil {
 		out = append(out, "go list reports an error for the package: "+strings.TrimSpace(p.Error.Err))
@@ -374,6 +366,9 @@ func scanPackage(p *goPackage, tests bool, modpath string, ts typeStore, loadErr
 		imports = append(append(imports, p.TestImports...), p.XTestImports...)
 	}
 	for _, imp := range imports {
+		if (imp == modpath || strings.HasPrefix(imp, modpath+"/")) && listed[imp] == nil {
+			out = append(out, "imports "+imp+", an in-module path the scan does not list (testdata, an underscore or dot directory, a nested module): it is neither scanned nor type-checked")
+		}
 		if external(modpath, imp) {
 			out = append(out, "imports out-of-module package "+imp+" (code outside the standard library and this module can run user code on goroutines of its own)")
 		}
@@ -389,10 +384,6 @@ func Check(root string, rows []Row) ([]string, error) {
 	modpath, pkgs, err := goList(root)
 	if err != nil {
 		return nil, err
-	}
-	excluded := map[string]bool{}
-	for _, r := range rows {
-		excluded[r.Package] = true
 	}
 	var problems []string
 	need := map[string]bool{}
@@ -430,45 +421,14 @@ func Check(root string, rows []Row) ([]string, error) {
 			problems = append(problems, r.Package+": has no test, so no race run to retire")
 			continue
 		}
-		covered := ""
-		if strings.HasPrefix(r.Class, "covered-by:") {
-			covered = modpath + "/" + strings.TrimPrefix(r.Class, "covered-by:")
-			c := pkgs[covered]
-			switch {
-			case c == nil:
-				problems = append(problems, r.Package+": covered-by package does not exist: "+r.Class)
-				covered = ""
-			case excluded[strings.TrimPrefix(r.Class, "covered-by:")]:
-				problems = append(problems, r.Package+": the covered-by package is itself excluded from -race: "+r.Class)
-				covered = ""
-			default:
-				problems = append(problems, witnessProblems(r, c)...)
-			}
-		} else if r.Witness != "-" {
-			problems = append(problems, r.Package+": class none takes witness -")
+		if r.Class != "none" || r.Witness != "-" {
+			problems = append(problems, r.Package+": only class none with witness - exists (covered-by was retired: every row is judged on its whole in-module closure)")
 		}
-		for _, hit := range scanPackage(p, true, modpath, ts, loadErrs) {
+		for _, hit := range scanPackage(p, true, modpath, pkgs, ts, loadErrs) {
 			problems = append(problems, fmt.Sprintf("%s: own file: %s", r.Package, hit))
 		}
-		if covered != "" {
-			for _, f := range goFilesOf(p, true) {
-				for _, hit := range callbackProblems(filepath.Join(p.Dir, f), ts) {
-					problems = append(problems, fmt.Sprintf("%s: own file: %s", r.Package, hit))
-				}
-			}
-		}
 		for _, dep := range closure(modpath, pkgs, p) {
-			if covered != "" {
-				for _, f := range goFilesOf(pkgs[dep], false) {
-					for _, hit := range callbackProblems(filepath.Join(pkgs[dep].Dir, f), ts) {
-						problems = append(problems, fmt.Sprintf("%s: imports %s: %s", r.Package, strings.TrimPrefix(dep, modpath+"/"), hit))
-					}
-				}
-			}
-			for _, hit := range scanPackage(pkgs[dep], false, modpath, ts, loadErrs) {
-				if dep == covered {
-					continue
-				}
+			for _, hit := range scanPackage(pkgs[dep], false, modpath, pkgs, ts, loadErrs) {
 				problems = append(problems, fmt.Sprintf("%s: imports %s: %s", r.Package, strings.TrimPrefix(dep, modpath+"/"), hit))
 			}
 		}
@@ -505,294 +465,12 @@ func closure(modpath string, pkgs map[string]*goPackage, p *goPackage) []string 
 	return out
 }
 
-// witnessProblems: the covered-by package keeps a Test function named by the row, in a file with no race constraint, so the race
-// run that stands in for the excluded package cannot vanish.
-func witnessProblems(r Row, covered *goPackage) []string {
-	for _, f := range append(append(append([]string{}, covered.TestGoFiles...), covered.XTestGoFiles...), covered.IgnoredGoFiles...) {
-		path := filepath.Join(covered.Dir, f)
-		raw, err := os.ReadFile(path)
-		if err != nil {
-			continue
-		}
-		fset := token.NewFileSet()
-		file, err := parser.ParseFile(fset, path, raw, parser.ParseComments)
-		if err != nil {
-			continue
-		}
-		for _, d := range file.Decls {
-			if fn, ok := d.(*ast.FuncDecl); ok && fn.Recv == nil && fn.Name.Name == r.Witness {
-				drives := false
-				ast.Inspect(fn.Body, func(n ast.Node) bool {
-					if call, ok := n.(*ast.CallExpr); ok {
-						name := calleeName(call)
-						name = name[strings.LastIndex(name, ".")+1:]
-						if _, watched := callbackCallees[name]; watched {
-							drives = true
-						}
-					}
-					return true
-				})
-				if !drives {
-					return []string{r.Package + ": witness " + r.Witness + " does not call CheckTree, so it no longer drives the worker pool"}
-				}
-				for _, cg := range file.Comments {
-					for _, c := range cg.List {
-						if strings.HasPrefix(c.Text, "//go:build") && strings.Contains(c.Text, "!race") {
-							return []string{r.Package + ": witness " + r.Witness + " is compiled out of -race by " + f}
-						}
-					}
-				}
-				return nil
-			}
-		}
-	}
-	return []string{r.Package + ": witness test " + r.Witness + " not found in " + r.Class}
-}
-
-// callbackCallees names the functions that call their callback from several goroutines, with the index of that argument. A
-// covered-by row is sound only while the callback writes nothing shared: the race detector would have to see two workers write it.
-var callbackCallees = map[string]int{"CheckTree": 1}
-
-// callbackStdlib are the only packages a callback may call into: they hold no state the callback's caller shares.
-var callbackStdlib = map[string]bool{"os": true, "filepath": true, "path": true, "strings": true, "bytes": true, "fmt": true, "errors": true, "strconv": true}
-
-// callbackProblems: in the file, a callbackCallees function is only ever called directly (never aliased through a variable or
-// passed on), and its callback is a function literal or a package-level function of the same file that (1) assigns to no variable
-// it did not declare itself (assignment, op-assignment, ++/--, range-assign, index, field or pointer write) and (2) calls only
-// builtins and the callbackStdlib packages, so no helper, method or function value can write a captured variable for it.
-func callbackProblems(path string, ts typeStore) []string {
-	tf := ts[path]
-	if tf == nil {
-		return nil
-	}
-	fset, f := tf.fset, tf.file
-	top := map[string]*ast.FuncDecl{}
-	for _, d := range f.Decls {
-		if fn, ok := d.(*ast.FuncDecl); ok && fn.Recv == nil {
-			top[fn.Name.Name] = fn
-		}
-	}
-	var out []string
-	at := func(p token.Pos, what string) {
-		out = append(out, fmt.Sprintf("%s:%d: %s", filepath.Base(path), fset.Position(p).Line, what))
-	}
-	direct := map[ast.Expr]bool{}
-	ast.Inspect(f, func(n ast.Node) bool {
-		if call, ok := n.(*ast.CallExpr); ok {
-			direct[call.Fun] = true
-		}
-		return true
-	})
-	std := map[string]bool{}
-	for _, imp := range f.Imports {
-		v := strings.Trim(imp.Path.Value, `"`)
-		name := v[strings.LastIndex(v, "/")+1:]
-		if imp.Name != nil {
-			name = imp.Name.Name
-		}
-		if callbackStdlib[v[strings.LastIndex(v, "/")+1:]] && !strings.Contains(v, ".") {
-			std[name] = true
-		}
-	}
-	checkBody := func(callee string, ft *ast.FuncType, body *ast.BlockStmt, pos token.Pos) {
-		for _, w := range capturedWrites(ft, body) {
-			at(w.pos, callee+" callback writes captured variable "+w.name)
-		}
-		ast.Inspect(body, func(n ast.Node) bool {
-			call, ok := n.(*ast.CallExpr)
-			if !ok {
-				return true
-			}
-			for _, a := range call.Args {
-				if tf.isFunc(a) {
-					at(a.Pos(), callee+" callback passes a function value to "+calleeName(call)+", which may run it from several workers or write shared state")
-				}
-			}
-			switch fn := call.Fun.(type) {
-			case *ast.Ident:
-				if !builtinFuncs[fn.Name] {
-					at(call.Pos(), callee+" callback calls "+fn.Name+", which is neither a builtin nor a standard-library function")
-				}
-			case *ast.SelectorExpr:
-				if pkg, ok := fn.X.(*ast.Ident); !ok || !std[pkg.Name] {
-					at(call.Pos(), callee+" callback calls ."+fn.Sel.Name+", which is not a function of the allowed standard-library packages")
-				}
-			case *ast.ArrayType, *ast.MapType, *ast.InterfaceType:
-			default:
-				at(call.Pos(), callee+" callback calls a function value")
-			}
-			return true
-		})
-	}
-	notUse := map[*ast.Ident]bool{}
-	ast.Inspect(f, func(n ast.Node) bool {
-		switch x := n.(type) {
-		case *ast.SelectorExpr:
-			notUse[x.Sel] = true
-		case *ast.FuncDecl:
-			notUse[x.Name] = true
-		}
-		return true
-	})
-	ast.Inspect(f, func(n ast.Node) bool {
-		switch x := n.(type) {
-		case *ast.Ident:
-			if _, watched := callbackCallees[x.Name]; watched && !notUse[x] && !direct[x] {
-				at(x.Pos(), x.Name+" is used other than as a direct call")
-			}
-		case *ast.SelectorExpr:
-			if _, watched := callbackCallees[x.Sel.Name]; watched && !direct[x] {
-				at(x.Sel.Pos(), x.Sel.Name+" is used other than as a direct call")
-			}
-		}
-		return true
-	})
-	ast.Inspect(f, func(n ast.Node) bool {
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return true
-		}
-		name := ""
-		switch fn := call.Fun.(type) {
-		case *ast.Ident:
-			name = fn.Name
-		case *ast.SelectorExpr:
-			name = fn.Sel.Name
-		}
-		idx, watched := callbackCallees[name]
-		if !watched {
-			return true
-		}
-		if len(call.Args) <= idx {
-			at(call.Pos(), name+" is called without its callback argument")
-			return true
-		}
-		switch cb := call.Args[idx].(type) {
-		case *ast.FuncLit:
-			checkBody(name, cb.Type, cb.Body, cb.Pos())
-		case *ast.Ident:
-			if fn := top[cb.Name]; fn != nil && fn.Body != nil {
-				checkBody(name, fn.Type, fn.Body, cb.Pos())
-			} else {
-				at(cb.Pos(), name+" callback "+cb.Name+" is not a package-level function of this file")
-			}
-		default:
-			at(call.Args[idx].Pos(), name+" callback is neither a package-level function nor a function literal")
-		}
-		return true
-	})
-	return out
-}
-
-var builtinFuncs = map[string]bool{"len": true, "cap": true, "append": true, "make": true, "new": true, "string": true, "int": true, "byte": true, "rune": true, "min": true, "max": true, "copy": true, "delete": true, "clear": true, "panic": true, "error": true, "bool": true, "float64": true, "int64": true, "uint64": true, "uint8": true}
-
-type write struct {
-	pos  token.Pos
-	name string
-}
-
-// capturedWrites: assignments in body to a root variable that the function did not declare (parameter, result, :=, var, range).
-func capturedWrites(ft *ast.FuncType, body *ast.BlockStmt) []write {
-	local := map[string]bool{"_": true}
-	declare := func(fl *ast.FieldList) {
-		if fl == nil {
-			return
-		}
-		for _, fld := range fl.List {
-			for _, n := range fld.Names {
-				local[n.Name] = true
-			}
-		}
-	}
-	declare(ft.Params)
-	declare(ft.Results)
-	ast.Inspect(body, func(n ast.Node) bool {
-		switch x := n.(type) {
-		case *ast.AssignStmt:
-			if x.Tok == token.DEFINE {
-				for _, l := range x.Lhs {
-					if id, ok := l.(*ast.Ident); ok {
-						local[id.Name] = true
-					}
-				}
-			}
-		case *ast.ValueSpec:
-			for _, id := range x.Names {
-				local[id.Name] = true
-			}
-		case *ast.RangeStmt:
-			if x.Tok == token.DEFINE {
-				for _, e := range []ast.Expr{x.Key, x.Value} {
-					if id, ok := e.(*ast.Ident); ok {
-						local[id.Name] = true
-					}
-				}
-			}
-		case *ast.FuncLit:
-			declare(x.Type.Params)
-			declare(x.Type.Results)
-		}
-		return true
-	})
-	root := func(e ast.Expr) string {
-		for {
-			switch x := e.(type) {
-			case *ast.Ident:
-				return x.Name
-			case *ast.IndexExpr:
-				e = x.X
-			case *ast.SelectorExpr:
-				e = x.X
-			case *ast.StarExpr:
-				e = x.X
-			case *ast.ParenExpr:
-				e = x.X
-			default:
-				return ""
-			}
-		}
-	}
-	var out []write
-	check := func(e ast.Expr, pos token.Pos) {
-		if e == nil {
-			return
-		}
-		if n := root(e); n != "" && !local[n] {
-			out = append(out, write{pos, n})
-		}
-	}
-	ast.Inspect(body, func(n ast.Node) bool {
-		switch x := n.(type) {
-		case *ast.AssignStmt:
-			if x.Tok != token.DEFINE {
-				for _, l := range x.Lhs {
-					check(l, x.Pos())
-				}
-			}
-		case *ast.IncDecStmt:
-			check(x.X, x.Pos())
-		case *ast.RangeStmt:
-			if x.Tok == token.ASSIGN {
-				check(x.Key, x.Pos())
-				check(x.Value, x.Pos())
-			}
-		case *ast.UnaryExpr:
-			if x.Op == token.AND {
-				check(x.X, x.Pos())
-			}
-		}
-		return true
-	})
-	return out
-}
-
 // stdlibAllowed is the deny-by-default allowlist of standard-library imports (acp, CHAOS-11413): a package that is not here is refused,
 // so context (a custom parent calls the user's Err on a goroutine), net/rpc (a goroutine per request), runtime (SetFinalizer),
 // reflect, sync, net/*, os/exec and os/signal are out until someone proves them. Admitted: only what the listed packages import
 // today, each known to start no goroutine and to call user code (String, Error, MarshalJSON, Less ...) only on the calling goroutine.
 var stdlibAllowed = map[string]string{
 	"bytes":         "byte-slice helpers and Buffer: no goroutine; calls io.Reader and io.Writer methods on the calling goroutine only",
-	"crypto/sha256": "pure hash of bytes: no goroutine and no callback",
 	"encoding/hex":  "pure encode and decode of hex text: no goroutine and no callback",
 	"encoding/json": "Marshal and Unmarshal call user MarshalJSON and UnmarshalJSON on the calling goroutine; no goroutine started",
 	"errors":        "error wrapping and matching: no goroutine; Is and As call user methods on the calling goroutine",
@@ -803,7 +481,6 @@ var stdlibAllowed = map[string]string{
 	"math":          "pure numeric functions: no goroutine and no callback",
 	"net/netip":     "value types for IP addresses: no goroutine, no I/O and no callback",
 	"os":            "file and environment access: synchronous calls, no goroutine started (os.StartProcess is refused by selector)",
-	"path":          "slash-separated path text helpers: no goroutine and no callback",
 	"path/filepath": "path text helpers and Walk/WalkDir: fn is called on the calling goroutine (documented); no goroutine started",
 	"regexp":        "compiled expressions: matching runs on the calling goroutine and calls no user code; no goroutine started",
 	"slices":        "slice helpers: callbacks run on the calling goroutine (documented); no goroutine started",

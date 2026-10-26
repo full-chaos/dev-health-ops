@@ -30,8 +30,9 @@ type riverWorkerProcess struct {
 	// deterministically without real wall-clock waits, the same seam
 	// preclaimReadinessComponent uses. Left nil, Start uses time.Now and a
 	// context-aware time.Sleep.
-	now   func() time.Time
-	sleep func(context.Context, time.Duration)
+	now    func() time.Time
+	sleep  func(context.Context, time.Duration)
+	jitter func(time.Duration) time.Duration
 	// startClient is process.client.Start, indirected so a test can drive the
 	// retry loop with a fake that fails the way River's real producer start
 	// does under a roll storm (context.DeadlineExceeded from the fixed 10s
@@ -64,7 +65,7 @@ func (process riverWorkerProcess) Start(ctx context.Context) error {
 		startClient = process.client.Start
 	}
 	return startupRetryBudget(
-		ctx, process.budget, process.now, process.sleep,
+		ctx, process.budget, process.now, process.sleep, process.jitter,
 		startClient,
 		isRiverProducerStartTimeout,
 		func(attempt int, elapsed, wait time.Duration, _ error) {
@@ -85,7 +86,7 @@ func (process riverWorkerProcess) Start(ctx context.Context) error {
 // per riverqueue/river/rivershared/util/timeoututil.WithTimeoutV) rather than a
 // genuine start error such as a rejected DSN or a misconfigured queue.
 func isRiverProducerStartTimeout(err error) bool {
-	return errors.Is(err, context.DeadlineExceeded)
+	return errors.Is(err, context.DeadlineExceeded) || isTransientDialError(err)
 }
 
 // logRetry reports one non-terminal attempt at starting River's producers:
@@ -172,6 +173,7 @@ func newRiverWorkerProcess(
 		// preclaim readiness uses rather than a second knob that could drift
 		// out of sync with it.
 		budget: cfg.PreclaimReadinessTimeout,
+		jitter: startupRetryJitter,
 	}, nil
 }
 

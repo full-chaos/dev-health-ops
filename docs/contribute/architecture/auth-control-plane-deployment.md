@@ -131,6 +131,8 @@ previous revision; a rollback has the mirror window. With such a release those
 pods answer 503 and `Retry-After` (a retryable answer that writes nothing);
 without it they answer 404. The commit floor of the running auth-service image:
 
+- before phase 1 to 2 and before the rollback from phase 2 to 1 (refresh and
+  logout are forwarded): at or after ca70438e;
 - before phase 2 to 3 (local login is forwarded): at or after c4d3aa6d;
 - before phase 3 to 4 (the credential routes are forwarded) and before the
   rollback from phase 4 to 3: at or after 676930d8, which c4d3aa6d includes.

@@ -138,12 +138,8 @@ func mountedAuthRoutes(t *testing.T, env map[string]string) map[string]bool {
 	return mounted
 }
 
-// pendingPhase1Gap: pods without the session keys mount neither of these; a
-// separate change adds the 503 answer, and these entries go with it.
-var pendingPhase1Gap = map[string]bool{
-	"POST /api/v1/auth/refresh": true,
-	"POST /api/v1/auth/logout":  true,
-}
+// pendingPhase1Gap lists routes a phase 1 pod does not mount yet; it is empty.
+var pendingPhase1Gap = map[string]bool{}
 
 func TestEveryGoAPIProxiedAuthRouteIsMountedInEveryAuthServicePhase(t *testing.T) {
 	for _, pc := range phaseConfigs() {
@@ -172,6 +168,7 @@ func TestEveryGoAPIProxiedAuthRouteIsMountedInEveryAuthServicePhase(t *testing.T
 
 func TestNotMountedStubsAnswer503WithRetryAfterInEveryPhase(t *testing.T) {
 	stubbed := map[int][]string{
+		1: {"POST /api/v1/auth/refresh", "POST /api/v1/auth/logout"},
 		2: {"GET /api/v1/auth/verify", "POST /api/v1/auth/login", "POST /api/v1/auth/register"},
 		3: {"GET /api/v1/auth/verify", "POST /api/v1/auth/register"},
 	}

@@ -106,8 +106,8 @@ func TestSurrogateRefusalTableUnitRowsAnswerAsTheTableSays(t *testing.T) {
 		assertRefusal(t, row.id, recorder.Code, recorder.Body.Bytes(), status, errType, loc)
 		driven++
 	}
-	if driven == 0 {
-		t.Fatal("the table drove no unit row")
+	if driven != 3 {
+		t.Fatalf("the table drove %d unit rows, want 3", driven)
 	}
 }
 

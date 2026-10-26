@@ -102,3 +102,38 @@ func TestAuthorizeOnlyReadsTheRedirectURIMemberForRawSurrogateBytes(t *testing.T
 		}
 	}
 }
+
+func serveBodyAs(t *testing.T, c routeCase, kind, body, contentType string) (int, string) {
+	t.Helper()
+	row := c.activeRow()
+	env := newUnitEnv(t, &fakeProviders{before: row})
+	step := "authorize"
+	if c.callback {
+		step = "callback"
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/"+kind+"/"+row.ID.String()+"/"+step, strings.NewReader(body))
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
+	}
+	rec := env.serve(c, req)
+	return rec.Code, rec.Body.String()
+}
+
+// The api plane reads a body as JSON only for no content type, application/json
+// and application/*+json; any other content type is a raw body it never
+// decodes, so the 400 for a body that is not UTF-8 applies to those three.
+func TestAuthorizeAnswers400ForABodyThatIsNotUTF8OnlyWhenItIsJSON(t *testing.T) {
+	c := routeCases[0]
+	const body = "{\"x\":\"\xe2\x82\"}"
+	for _, contentType := range []string{"application/json", "", "application/vnd.example+json", "application/json; charset=utf-8", "APPLICATION/JSON"} {
+		if status, text := serveBodyAs(t, c, "oidc", body, contentType); status != http.StatusBadRequest || text != `{"detail":"There was an error parsing the body"}` {
+			t.Errorf("content type %q: status=%d body=%s", contentType, status, text)
+		}
+	}
+	wantStatus, _ := serveBodyAs(t, c, "oidc", `{"x":"ok"}`, "text/plain")
+	for _, contentType := range []string{"text/plain", "application/x-www-form-urlencoded", "application/octet-stream", "multipart/form-data; boundary=x", "text/json", "application/jsonx"} {
+		if status, text := serveBodyAs(t, c, "oidc", body, contentType); status != wantStatus || strings.Contains(text, "error parsing the body") {
+			t.Errorf("content type %q: status=%d want %d body=%s", contentType, status, wantStatus, text)
+		}
+	}
+}

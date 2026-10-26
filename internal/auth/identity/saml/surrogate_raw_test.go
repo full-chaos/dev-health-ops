@@ -88,3 +88,34 @@ func TestInitiateOnlyReadsTheRelayStateMemberForRawSurrogateBytes(t *testing.T) 
 		}
 	}
 }
+
+func initiateRequestAs(t *testing.T, body, contentType string) *httptest.ResponseRecorder {
+	t.Helper()
+	p := Provider{ID: uuid.New(), OrgID: uuid.New(), Protocol: "saml", Status: "active", Config: Config{SSOURL: "https://idp.example/sso"}}
+	h := Handlers{Service: &Service{Providers: oneProvider{p}, Entitlements: allowAll{}, Flows: &flowsOnly{}, BaseURL: func() string { return "https://sp.example.com" }}}
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /saml/{provider_id}/initiate", h.Initiate)
+	req := httptest.NewRequest(http.MethodPost, "/saml/"+p.ID.String()+"/initiate", strings.NewReader(body))
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
+	}
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	return rec
+}
+
+// The api plane reads a body as JSON only for no content type, application/json
+// and application/*+json; any other content type is a raw body it never decodes.
+func TestInitiateAnswers400ForABodyThatIsNotUTF8OnlyWhenItIsJSON(t *testing.T) {
+	const body = "{\"x\":\"\xc0\"}"
+	for _, contentType := range []string{"application/json", "", "application/vnd.example+json", "application/json; charset=utf-8"} {
+		if rec := initiateRequestAs(t, body, contentType); rec.Code != http.StatusBadRequest || rec.Body.String() != unreadableBody {
+			t.Errorf("content type %q: status=%d body=%s", contentType, rec.Code, rec.Body.String())
+		}
+	}
+	for _, contentType := range []string{"text/plain", "application/x-www-form-urlencoded", "application/octet-stream", "multipart/form-data; boundary=x", "text/json"} {
+		if rec := initiateRequestAs(t, body, contentType); rec.Code != http.StatusOK || rec.Body.String() == unreadableBody {
+			t.Errorf("content type %q: status=%d body=%s", contentType, rec.Code, rec.Body.String())
+		}
+	}
+}

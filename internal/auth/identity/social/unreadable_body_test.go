@@ -49,3 +49,29 @@ func TestExchangeKeepsItsAnswerForABodyWithASyntaxError(t *testing.T) {
 		}
 	}
 }
+
+func exchangeAs(body, contentType string) *httptest.ResponseRecorder {
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
+	}
+	Handlers{}.Exchange(rec, req)
+	return rec
+}
+
+// The api plane reads a body as JSON only for no content type, application/json
+// and application/*+json; any other content type is a raw body it never decodes.
+func TestExchangeAnswers400ForABodyThatIsNotUTF8OnlyWhenItIsJSON(t *testing.T) {
+	const body = "{\"provider\":\"nope\",\"provider_access_token\":\"a\xffb\"}"
+	for _, contentType := range []string{"application/json", "", "application/vnd.example+json", "application/json; charset=utf-8"} {
+		if rec := exchangeAs(body, contentType); rec.Code != http.StatusBadRequest || strings.TrimSpace(rec.Body.String()) != `{"detail":"There was an error parsing the body"}` {
+			t.Errorf("content type %q: status=%d body=%s", contentType, rec.Code, rec.Body.String())
+		}
+	}
+	for _, contentType := range []string{"text/plain", "application/x-www-form-urlencoded", "application/octet-stream", "multipart/form-data; boundary=x", "text/json"} {
+		if rec := exchangeAs(body, contentType); rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "provider must be one of") {
+			t.Errorf("content type %q: status=%d body=%s", contentType, rec.Code, rec.Body.String())
+		}
+	}
+}

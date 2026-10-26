@@ -53,3 +53,34 @@ func TestSurrogateRefusalTableAuthServiceOIDCRows(t *testing.T) {
 		t.Fatalf("drove %d oidc rows, want 1", driven)
 	}
 }
+
+// TestSurrogateRefusalTableAuthServiceOAuthRows sends each oauth row of the
+// table to the auth service's OAuth authorize route: the route never reads
+// redirect_uri, so its answer is the one the auth_service cell names.
+func TestSurrogateRefusalTableAuthServiceOAuthRows(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "ci", "sso_surrogate_refusals.tsv"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := routeCases[2]
+	driven := 0
+	for _, line := range strings.Split(string(raw), "\n") {
+		f := strings.Split(line, "\t")
+		if line == "" || strings.HasPrefix(line, "#") || len(f) != 9 || f[1] != "sso" || !strings.Contains(f[2], "/oauth/") {
+			continue
+		}
+		id, body, want := f[0], f[3], strings.Fields(f[6])
+		row := c.activeRow()
+		env := newUnitEnv(t, &fakeProviders{before: row})
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/oauth/"+row.ID.String()+"/authorize", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		rec := env.serve(c, req)
+		if status, _ := strconv.Atoi(want[0]); rec.Code != status || strings.Contains(rec.Body.String(), "string_unicode") {
+			t.Errorf("%s: status=%d want %s body=%s", id, rec.Code, want[0], rec.Body.String())
+		}
+		driven++
+	}
+	if driven != 1 {
+		t.Fatalf("drove %d oauth rows, want 1", driven)
+	}
+}

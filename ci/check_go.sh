@@ -3942,7 +3942,8 @@ check_integration_package_shard() {
     for key in "${run_keys[@]}"; do
       printf '  SHARD-RUN %s\n' "${key}"
     done
-    INTEGRATION_KEEP_ARG_ORDER=1 run_integration_packages "${mode}" "${module_dir}" "integration package shard ${shard} (${module_dir})" "${run_pkgs[@]}"
+    local INTEGRATION_KEEP_ARG_ORDER=1
+    run_integration_packages "${mode}" "${module_dir}" "integration package shard ${shard} (${module_dir})" "${run_pkgs[@]}"
   done
 
   [ "${selected_count}" -gt 0 ] \

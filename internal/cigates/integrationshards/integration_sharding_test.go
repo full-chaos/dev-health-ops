@@ -2380,6 +2380,7 @@ func TestEachPackagesShardRunsEverySelectedTestExactlyOnce(t *testing.T) {
 	if hookKey == "" || filteredPkg == "" {
 		t.Fatalf("shard %d: no hook package or no filtered package with untagged tests to plant on", hookShard)
 	}
+	t.Logf("planted defects on shard %d: hook package %s, filtered package %s", hookShard, hookKey, filteredPkg)
 	without := func(drop string) []string {
 		var out []string
 		for _, p := range c.pkgs {

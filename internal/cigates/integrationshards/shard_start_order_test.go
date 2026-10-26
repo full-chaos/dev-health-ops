@@ -5,6 +5,7 @@ package integrationshards_test
 import (
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -161,5 +162,78 @@ func TestTheGoTestGroupsOfAShardKeepTheLongestFirstOrder(t *testing.T) {
 	}
 	if checked < 2 {
 		t.Fatalf("only %d packages shard held two or more packages: the group order check measured nothing", checked)
+	}
+}
+
+func TestTheShardPathStartsLongestFirstAndTheUnshardedVerbStillSorts(t *testing.T) {
+	t.Parallel()
+	_, weights := manifestRows(t)
+	root, err := filepath.EvalSymlinks(rootOf(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fakeGo := recordingGo(t)
+	run := func(args ...string) []goTestCall {
+		record := t.TempDir()
+		r := runCheckGoSharding(t, shardEnv{extra: []string{
+			"PATH=" + fakeGo + string(os.PathListSeparator) + os.Getenv("PATH"), "GOTEST_RECORD_DIR=" + record,
+		}}, args...)
+		if r.code != 0 {
+			t.Fatalf("%v: exit %d: %s%s", args, r.code, r.stdout, r.stderr)
+		}
+		return recordedCalls(t, record, root)
+	}
+	keyOf := func(c goTestCall, p string) string { return path.Join(c.dir, strings.TrimPrefix(p, "./")) }
+
+	shard, shardPkgs := 0, []string(nil)
+	for s, p := range packagesShardsOfThePlan(t) {
+		if len(p) >= 2 && (shard == 0 || s < shard) {
+			shard, shardPkgs = s, p
+		}
+	}
+	if shard == 0 {
+		t.Fatal("no packages shard held two packages")
+	}
+	longest := shardPkgs[0]
+	for _, p := range shardPkgs {
+		if weights[p] > weights[longest] || (weights[p] == weights[longest] && p < longest) {
+			longest = p
+		}
+	}
+	shardCalls := run("integration-shard", "packages", strconv.Itoa(shard))
+	started, headSeen := 0, false
+	for _, c := range shardCalls {
+		for i, p := range c.pkgs {
+			k := keyOf(c, p)
+			started++
+			if i > 0 {
+				prev := keyOf(c, c.pkgs[i-1])
+				if weights[prev] < weights[k] || (weights[prev] == weights[k] && prev > k) {
+					t.Errorf("shard %d go test starts %s before %s: not weight descending, then name ascending", shard, prev, k)
+				}
+			}
+			headSeen = headSeen || (i == 0 && k == longest)
+		}
+	}
+	if started != len(shardPkgs) || !headSeen {
+		t.Errorf("shard %d: the go test calls start %d package(s), first of some call is the longest %s: %v; want %d", shard, started, longest, headSeen, len(shardPkgs))
+	}
+
+	whole := run("integration")
+	sortedCalls := 0
+	for _, c := range whole {
+		keys := make([]string, 0, len(c.pkgs))
+		for _, p := range c.pkgs {
+			keys = append(keys, keyOf(c, p))
+		}
+		if len(keys) > 1 {
+			sortedCalls++
+		}
+		if !sort.StringsAreSorted(keys) {
+			t.Errorf("the unsharded integration verb starts %v: want byte order", keys)
+		}
+	}
+	if sortedCalls == 0 {
+		t.Fatal("the unsharded integration verb made no multi-package go test call: the order check measured nothing")
 	}
 }

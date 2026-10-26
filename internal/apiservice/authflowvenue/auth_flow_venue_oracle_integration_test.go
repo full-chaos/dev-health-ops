@@ -657,7 +657,7 @@ func waitForUsersOwnedFlip(t *testing.T, ctx context.Context) {
 	}
 }
 
-func seed(t *testing.T, ctx context.Context, admin *pgxpool.Pool, venue *venueoracle.Venue, deferOlga bool) map[string]map[string]any {
+func seed(t *testing.T, ctx context.Context, admin *pgxpool.Pool, venue *venueoracle.Venue, ownedLeg bool) map[string]map[string]any {
 	t.Helper()
 	raw := venue.CallPython(t, venueoracle.PythonCall{Target: "dev_health_ops.api.services.users:_hash_password",
 		Args: []any{sessionscenario.Password}})
@@ -666,12 +666,11 @@ func seed(t *testing.T, ctx context.Context, admin *pgxpool.Pool, venue *venueor
 	if err != nil || !ok {
 		t.Fatalf("password hash: %v %s", err, raw[0])
 	}
-	var tokens map[string]map[string]any
-	if deferOlga {
-		tokens = sessionscenario.SeedDeferringOlga(t, ctx, admin, hash)
-	} else {
-		tokens = sessionscenario.Seed(t, ctx, admin, hash)
+	var options []sessionscenario.SeedOption
+	if ownedLeg {
+		options = append(options, sessionscenario.OwnedLegSeed)
 	}
+	tokens := sessionscenario.Seed(t, ctx, admin, hash, options...)
 	exec := func(sql string, args ...any) {
 		t.Helper()
 		if _, err := admin.Exec(ctx, sql, args...); err != nil {
@@ -777,9 +776,8 @@ func TestAuthFlowVenueOracle(t *testing.T) {
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, venue *venueoracle.Venue) map[string]map[string]any {
 			var tokens map[string]map[string]any
 			seedAround(os.Getenv("DEVHEALTH_AUTH_ORACLE_SEEDED_FILE") != "",
-				func(deferOlga bool) { tokens = seed(t, ctx, admin, venue, deferOlga) },
-				func() { waitForUsersOwnedFlip(t, ctx) },
-				func() { sessionscenario.SeedOlga(t, ctx, admin, "") })
+				func(ownedLeg bool) { tokens = seed(t, ctx, admin, venue, ownedLeg) },
+				func() { waitForUsersOwnedFlip(t, ctx) })
 			return tokens
 		},
 	})

@@ -412,3 +412,73 @@ func TestLinkTokenFormatQuirkMaxIsTheGoldensLinkMails(t *testing.T) {
 	}
 	t.Fatal("no quirk link-token-format-auth-service")
 }
+
+const (
+	aliceGolden = "alice@example.comaliceAlice Älocaltrue true false 1 true true$2b$12$"
+	aliceTarget = "alice@example.comaliceAlice Älocaltrue true false 1 false true$2b$12$"
+	piaGolden   = "pia@example.com<null><null>localtrue true false 1 true true$2b$12$"
+	piaTarget   = "pia@example.com<null><null>localtrue true false 1 false true$2b$12$"
+	emmaGolden  = "emma@example.com<null>localtrue false false 0 false true$2b$12$"
+	emmaTarget  = "emma@example.com<null><null>localtrue false false 0 false true$2b$12$"
+)
+
+func ownedUsersLedger(t *testing.T, owned bool) *Ledger {
+	t.Helper()
+	l, err := NewLedger(forwarded(t, "sessions,local_login,credentials"), owned)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return l
+}
+
+// A sign-in through auth-service stamps no last login even while it owns users: the owned leg's quirk covers exactly the
+// rows that read as never signed in on the target, the not-owned leg's own quirk is dead there.
+func TestOwnedLegCoversTheNeverStampedLastLoginOfExactlyTwoUsers(t *testing.T) {
+	golden := strings.Join([]string{aliceGolden, piaGolden}, rowSeparator)
+	l := ownedUsersLedger(t, true)
+	if problems := append(l.Compare(TableUsers, golden, strings.Join([]string{aliceTarget, piaTarget}, rowSeparator)), l.Dead()...); len(problems) != 0 {
+		t.Fatalf("the owned leg's never-stamped last logins: %v", problems)
+	}
+	if got := l.Covered(); !strings.Contains(got, "users-last-login-not-stamped-owned=2") {
+		t.Fatalf("Covered = %q, want the owned quirk covering 2 rows", got)
+	}
+	fewer := ownedUsersLedger(t, true)
+	problems := append(fewer.Compare(TableUsers, golden, strings.Join([]string{aliceTarget, piaGolden}, rowSeparator)), fewer.Dead()...)
+	if len(problems) == 0 || !strings.Contains(strings.Join(problems, "\n"), "users-last-login-not-stamped-owned: covered 1 rows") {
+		t.Fatalf("one stamped last login must fail the exact count by name: %v", problems)
+	}
+	more := ownedUsersLedger(t, true)
+	if problems := more.Compare(TableUsers, strings.Join([]string{aliceGolden, piaGolden, "zed@example.com<null><null>localtrue true false 1 true true$2b$12$"}, rowSeparator),
+		strings.Join([]string{aliceTarget, piaTarget, "zed@example.com<null><null>localtrue true false 1 false true$2b$12$"}, rowSeparator)); len(problems) == 0 {
+		t.Fatal("a third never-stamped row is beyond the quirk's Max and must be unclassified")
+	}
+}
+
+func TestNotOwnedLegKeepsItsOwnLastLoginQuirkAndNotTheOwnedOne(t *testing.T) {
+	l := ownedUsersLedger(t, false)
+	if problems := l.Compare(TableUsers, aliceGolden, aliceTarget); len(problems) != 0 {
+		t.Fatalf("the not-owned leg's last login: %v", problems)
+	}
+	if got := l.Covered(); strings.Contains(got, "-owned") || !strings.Contains(got, "users-last-login-not-stamped=1") {
+		t.Fatalf("Covered = %q, want only the not-owned quirk", got)
+	}
+}
+
+// go-api stores the empty full name of a register request as ”, auth-service's public.users projection as NULL.
+func TestOwnedLegCoversTheEmptyFullNameStoredAsNullOnceAndNotElsewhere(t *testing.T) {
+	l := ownedUsersLedger(t, true)
+	if problems := append(l.Compare(TableUsers, emmaGolden, emmaTarget), l.Dead()...); len(problems) != 0 {
+		t.Fatalf("emma's empty full name: %v", problems)
+	}
+	if got := l.Covered(); !strings.Contains(got, "users-empty-full-name-stored-null-owned=1") {
+		t.Fatalf("Covered = %q", got)
+	}
+	notOwned := ownedUsersLedger(t, false)
+	if problems := notOwned.Compare(TableUsers, emmaGolden, emmaTarget); len(problems) == 0 {
+		t.Fatal("off the owned leg an empty full name stored as NULL is unclassified")
+	}
+	other := ownedUsersLedger(t, true)
+	if problems := other.Compare(TableUsers, "ned@example.com<null>localtrue false false 0 false true$2b$12$", "ned@example.com<null><null>localtrue false false 0 false true$2b$12$"); len(problems) == 0 {
+		t.Fatal("another user's empty full name is not the named difference")
+	}
+}

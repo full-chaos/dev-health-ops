@@ -109,6 +109,7 @@ internal/auth/contracts/tokencorpus	corpus.go	internal/apiservice/acr
 internal/auth/contracts/tokencorpus	corpus.go	internal/auth/authapi
 internal/auth/contracts/tokencorpus	corpus.go	internal/auth/contracts/tokencorpus
 internal/auth/contracts/tokencorpus	corpus.go	internal/auth/contracts/tokencorpus/gen
+internal/auth/contracts/tokencorpus	corpus.go	internal/auth/workloadexchange
 internal/auth/contracts/tokencorpus	corpus.go	internal/queryapi/server
 internal/auth/contracts/tokencorpus	corpus.go	internal/testsupport/usertokens
 internal/auth/keystore	open_unix.go	cmd/auth-migrate

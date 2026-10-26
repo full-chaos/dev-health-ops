@@ -15,11 +15,21 @@ var placeholderCopy = regexp.MustCompile(`["'` + "`" + `]service["'` + "`" + `]`
 // backfill packages must name it through IsServicePlaceholder / ServicePlaceholderSQL and carry no literal of their
 // own, so a planted copy fails here even when it matches today.
 func TestUsersOwnedGuardAndBackfillCarryNoCopyOfThePlaceholderRule(t *testing.T) {
-	uses := map[string]string{"../authruntime": "ServicePlaceholderSQL(", "../usersbackfill": "IsServicePlaceholder("}
-	for dir, want := range uses {
-		files, err := filepath.Glob(filepath.Join(dir, "*.go"))
-		if err != nil || len(files) == 0 {
-			t.Fatalf("%s: no Go files (%v)", dir, err)
+	guard, err := filepath.Glob("../authruntime/*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	backfill, err := filepath.Glob("../usersbackfill/*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, pkg := range []struct {
+		dir, want string
+		files     []string
+	}{{"../authruntime", "ServicePlaceholderSQL(", guard}, {"../usersbackfill", "IsServicePlaceholder(", backfill}} {
+		dir, want, files := pkg.dir, pkg.want, pkg.files
+		if len(files) == 0 {
+			t.Fatalf("%s: no Go files", dir)
 		}
 		used := false
 		for _, file := range files {

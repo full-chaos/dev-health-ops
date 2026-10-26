@@ -123,3 +123,43 @@ func TestTheSortDoesNotChangeTheLocaleOfTheGoTestChild(t *testing.T) {
 		t.Errorf("under the caller locale %q the shard starts %v, want byte order %v", callerLocale, order, want)
 	}
 }
+
+func TestTheGoTestGroupsOfAShardKeepTheLongestFirstOrder(t *testing.T) {
+	t.Parallel()
+	_, weights := manifestRows(t)
+	byWeight := func(a, b string) bool {
+		if weights[a] != weights[b] {
+			return weights[a] > weights[b]
+		}
+		return a < b
+	}
+	checked := 0
+	for shard, pkgs := range packagesShardsOfThePlan(t) {
+		if len(pkgs) < 2 {
+			continue
+		}
+		r := runCheckGoSharding(t, shardEnv{}, "integration-shard", "packages", strconv.Itoa(shard), "--dry-run")
+		if r.code != 0 {
+			t.Fatalf("shard %d dry run: exit %d: %s%s", shard, r.code, r.stdout, r.stderr)
+		}
+		longest := append([]string(nil), pkgs...)
+		sort.Slice(longest, func(i, j int) bool { return byWeight(longest[i], longest[j]) })
+		groups := lineValues(r.stdout, "  SHARD-GROUP . ")
+		if len(groups) == 0 {
+			t.Fatalf("shard %d prints no SHARD-GROUP line", shard)
+		}
+		for i, g := range groups {
+			keys := strings.Fields(g)[1:]
+			if !sort.SliceIsSorted(keys, func(a, b int) bool { return byWeight(keys[a], keys[b]) }) {
+				t.Errorf("shard %d go test group %d runs %v, want weight descending then name ascending", shard, i+1, keys)
+			}
+		}
+		if first := strings.Fields(groups[0])[1]; first != longest[0] {
+			t.Errorf("shard %d: go test group 1 starts %s, want the longest package %s", shard, first, longest[0])
+		}
+		checked++
+	}
+	if checked < 2 {
+		t.Fatalf("only %d packages shard held two or more packages: the group order check measured nothing", checked)
+	}
+}

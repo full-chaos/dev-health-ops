@@ -62,6 +62,7 @@ internal/bigboycompose	billing_edge_override_test.go	unexpressed	-	-
 internal/chmigrate	rollback_version_row_integration_test.go	internal/chmigrate/rollback	dir	*
 internal/chmigrate	rollback_version_row_test.go	internal/chmigrate/rollback	dir	*
 internal/cigates/affected	plan.go	unexpressed	-	-
+internal/cigates/affected	reachcache.go	unexpressed	-	-
 internal/cigates/affected	reachcache_test.go	unexpressed	-	-
 internal/cigates/affected	scan.go	unexpressed	-	-
 internal/cigates/bigboy	compose_ch_users_test.go	unexpressed	-	-

@@ -183,6 +183,11 @@ func TestGuardFlagsPlantedServerWideStatements(t *testing.T) {
 		"exec(`SYSTEM STOP MERGES`)",
 		`exec("KILL QUERY WHERE 1")`,
 		`instance.Container.Stop(ctx, nil)`,
+		`exec("CREATE NAMED COLLECTION planted_nc AS host = 'h'")`,
+		`exec("ALTER NAMED COLLECTION planted_nc SET port = 1")`,
+		`exec("CREATE FUNCTION planted_udf AS (x) -> x + 1")`,
+		`exec("CREATE OR REPLACE FUNCTION planted_udf AS (x) -> x * 2")`,
+		`exec("CREATE USER OR REPLACE ch_reader")`,
 	}
 	allowed := []string{
 		`exec("CREATE ROLE " + role + " LOGIN")`,
@@ -191,14 +196,21 @@ func TestGuardFlagsPlantedServerWideStatements(t *testing.T) {
 		`exec("SYSTEM STOP MERGES " + table)`,
 		`exec("SYSTEM STOP MERGES teams")`,
 		`exec("SYSTEM FLUSH LOGS")`,
+		`exec("CREATE OR REPLACE FUNCTION touch() RETURNS trigger AS $$ BEGIN RETURN NEW; END $$ LANGUAGE plpgsql")`,
+		`exec("CREATE FUNCTION f (a int) RETURNS int AS 'select a' LANGUAGE sql")`,
 		`// CREATE ROLE is cluster-scoped; ALTER SYSTEM too`,
 	}
+	inFunc := func(name string, lines []string) string {
+		return "func " + name + "(t *testing.T) {\n" + strings.Join(lines, "\n") + "\n}\n"
+	}
 	write("internal/opted/main_test.go", "package opted\nfunc TestMain(m *testing.M) { os.Exit(containers.RunWithSharedServers(m.Run)) }\n")
-	write("internal/opted/planted_test.go", "package opted\n"+strings.Join(planted, "\n")+"\n")
-	write("internal/opted/allowed_test.go", "package opted\n"+strings.Join(allowed, "\n")+"\n")
-	write("internal/opted/isolated_test.go", "package opted\ninstance, _ := containers.StartPostgresIsolated(ctx)\n"+
-		strings.Join(planted, "\n")+"\n")
-	write("internal/notopted/planted_test.go", "package notopted\n"+strings.Join(planted, "\n")+"\n")
+	write("internal/opted/planted_test.go", "package opted\n"+inFunc("TestPlanted", planted))
+	write("internal/opted/allowed_test.go", "package opted\n"+inFunc("TestAllowed", allowed))
+	// One file, two tests: the Isolated call covers its own func only.
+	write("internal/opted/mixed_test.go", "package opted\n"+
+		inFunc("TestIsolated", append([]string{"instance, _ := containers.StartPostgresIsolated(ctx)"}, planted...))+
+		inFunc("TestShared", []string{`exec("ALTER SYSTEM SET work_mem = '7MB'")`}))
+	write("internal/notopted/planted_test.go", "package notopted\n"+inFunc("TestPlanted", planted))
 
 	optedIn, findings := scan(t, filepath.Join(root, "internal"))
 
@@ -206,16 +218,26 @@ func TestGuardFlagsPlantedServerWideStatements(t *testing.T) {
 		t.Errorf("opted-in packages = %v, want [opted]", optedIn)
 	}
 	flagged := map[int]bool{}
+	mixedShared := false
+	// mixed_test.go: package line, TestIsolated (header, Isolated call,
+	// planted lines, "}"), then TestShared's header and its one statement.
+	mixedSharedLine := 1 + 1 + 1 + len(planted) + 1 + 1 + 1
 	for _, f := range findings {
-		if f.file != "opted/planted_test.go" {
+		switch {
+		case f.file == "opted/planted_test.go":
+			flagged[f.line] = true
+		case f.file == "opted/mixed_test.go" && f.line == mixedSharedLine:
+			mixedShared = true
+		default:
 			t.Errorf("unexpected finding %s:%d %s", f.file, f.line, f.kind)
-			continue
 		}
-		flagged[f.line] = true
 	}
 	for index, line := range planted {
-		if !flagged[index+2] {
+		if !flagged[index+3] {
 			t.Errorf("planted line not flagged: %s", line)
 		}
+	}
+	if !mixedShared {
+		t.Errorf("an unisolated ALTER SYSTEM in a file whose other test takes an Isolated server was not flagged (want mixed_test.go:%d)", mixedSharedLine)
 	}
 }

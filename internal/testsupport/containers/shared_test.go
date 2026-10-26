@@ -178,6 +178,20 @@ func TestCloseDropsWithACancelledContext(t *testing.T) {
 	}
 }
 
+// TestClickHouseSnapshotCoversServerWideEntities: named collections and SQL
+// user-defined functions live outside every database, like users and roles.
+func TestClickHouseSnapshotCoversServerWideEntities(t *testing.T) {
+	queries := strings.Join(clickHouseSnapshotQueries, "\n")
+	for _, table := range []string{
+		"system.databases", "system.users", "system.roles", "system.settings_profiles", "system.quotas",
+		"system.row_policies", "system.grants", "system.role_grants", "system.named_collections", "system.functions",
+	} {
+		if !strings.Contains(queries, table) {
+			t.Errorf("the ClickHouse leak snapshot does not read %s", table)
+		}
+	}
+}
+
 // TestClickHouseScratchDropIsSync: without SYNC an Atomic drop leaves the
 // tables' data on the shared server for minutes after Close.
 func TestClickHouseScratchDropIsSync(t *testing.T) {

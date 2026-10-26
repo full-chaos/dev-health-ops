@@ -19,6 +19,7 @@ var budgetPools = []string{
 
 func budgetWith(budget string, extra ...string) []string {
 	args := append(append([]string{}, budgetPools...), "--set", "authService.database.connectionBudget="+budget)
+	args = append(args, sessionNoSurge...)
 	return authWith(append(args, extra...)...)
 }
 
@@ -38,7 +39,7 @@ func TestAuthServiceConnectionBudgetBoundary(t *testing.T) {
 // 128, over the 97 usable connections of a default PostgreSQL. The default
 // budget is 0, so the default render passes; opting in at 97 names the excess.
 func TestAuthServiceConnectionBudgetDefaultPostgres(t *testing.T) {
-	_, out, err := renderAuth(t, authWith("--set", "authService.database.connectionBudget=97")...)
+	_, out, err := renderAuth(t, authWith(append([]string{"--set", "authService.database.connectionBudget=97"}, sessionNoSurge...)...)...)
 	if err == nil || !strings.Contains(out, budgetRefusal) || !strings.Contains(out, "128") || !strings.Contains(out, "97") {
 		t.Fatalf("the chart default pools over 97 must fail with the named message: err=%v out=%.500s", err, out)
 	}

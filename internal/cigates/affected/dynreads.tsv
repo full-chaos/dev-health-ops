@@ -15,6 +15,7 @@ cmd/registrydump	main.go
 cmd/strip-agent-attribution	main.go
 cmd/strip-agent-attribution	main_test.go
 deploy/helm/dev-health	auth_phase_test.go
+deploy/helm/dev-health	go_pgbouncer_session_rollingupdate_test.go
 internal/adminops	users_password_fixtures_test.go
 internal/api/credentials	probes.go
 internal/api/policy	principalonce_test.go
@@ -172,6 +173,8 @@ internal/cigates/docmaketargets	docmaketargets_test.go
 internal/cigates/docs	docs_helpers_test.go
 internal/cigates/docs	parity_test.go
 internal/cigates/docs	repo_paths_test.go
+internal/cigates/docsbuild	docsbuild.go
+internal/cigates/docsbuild	docsbuild_test.go
 internal/cigates/docsprepare	docsprepare.go
 internal/cigates/docsprepare	docsprepare_test.go
 internal/cigates/docstools	a1_pyhelp.go
@@ -247,6 +250,7 @@ internal/cigates/scripts	posture_integration_test.go
 internal/cigates/scripts	relevance_step_script_test.go
 internal/cigates/scripts	shard_row_files_merge_test.go
 internal/cigates/scripts	tmp_dirs_removed_test.go
+internal/cigates/sharedserver	sharedserver_test.go
 internal/cigates/splitshards	ci_script_helpers_test.go
 internal/cigates/testshard	providersync_test.go
 internal/cigates/testshard	raceshard_test.go

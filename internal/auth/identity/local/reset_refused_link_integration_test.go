@@ -71,15 +71,18 @@ VALUES ($1, $2, NULL, 'service', NULL, true, true, false, 0, now(), now())`, svc
 	if _, err := store.BackfillUser(ctx, identity.BackfillTarget{ID: svc, Email: svcEmail, Active: true, Verified: true}, false); err != nil {
 		t.Fatal(err)
 	}
-	if err := rig.links.Issue(ctx, IssueRequest{PrincipalID: svc, Purpose: PurposePasswordReset, TokenHash: linkHash("svc-link"), TTL: ResetTTL}); err != nil {
+	if err := rig.links.IssueBound(ctx, IssueRequest{PrincipalID: svc, Purpose: PurposePasswordReset, TokenHash: linkHash("svc-link"), TTL: ResetTTL}); err != nil {
 		t.Fatal(err)
 	}
 	gone := rig.env.principal(t, ctx)
-	if err := rig.links.Issue(ctx, IssueRequest{PrincipalID: gone, Purpose: PurposePasswordReset, TokenHash: linkHash("gone-link"), TTL: ResetTTL}); err != nil {
+	if err := rig.links.IssueBound(ctx, IssueRequest{PrincipalID: gone, Purpose: PurposePasswordReset, TokenHash: linkHash("gone-link"), TTL: ResetTTL}); err != nil {
 		t.Fatal(err)
 	}
 	expired := rig.account(t, ctx, "Old-pass-12345")
-	rig.env.preAged(t, ctx, expired, PurposePasswordReset, "expired-link", "now() - interval '1 hour'")
+	rig.env.preAgedBound(t, ctx, expired, PurposePasswordReset, "expired-link", "now() - interval '1 hour'")
+	for _, secret := range []string{"svc-link", "gone-link", "expired-link"} {
+		rig.env.requireBindingPasses(t, ctx, secret)
+	}
 
 	const newPassword = "A-new-pass-7788"
 	sequences := map[string][]string{}
@@ -100,7 +103,7 @@ VALUES ($1, $2, NULL, 'service', NULL, true, true, false, 0, now(), now())`, svc
 	}
 
 	ok := expired
-	if err := rig.links.Issue(ctx, IssueRequest{PrincipalID: ok, Purpose: PurposePasswordReset, TokenHash: linkHash("ok-link"), TTL: ResetTTL}); err != nil {
+	if err := rig.links.IssueBound(ctx, IssueRequest{PrincipalID: ok, Purpose: PurposePasswordReset, TokenHash: linkHash("ok-link"), TTL: ResetTTL}); err != nil {
 		t.Fatal(err)
 	}
 	if out, err := flows.Reset(ctx, "ok-link", newPassword); err != nil || out.Kind != FlowOK || out.PrincipalID != ok {

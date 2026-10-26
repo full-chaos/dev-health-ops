@@ -151,8 +151,9 @@ var approvedSecretColumns = map[string]string{
 // approvedSecretTableColumns approves one column of one table, of one type,
 // where the name alone would also admit the same name elsewhere.
 var approvedSecretTableColumns = map[string]struct{ dataType, reason string }{
-	"sessions.legacy_token_version": {"bigint", "the go-api token_version the session is pinned to, a number, not material"},
-	"users.legacy_token_version":    {"bigint", "the user's current go-api token_version, a number, not material"},
+	"sessions.legacy_token_version":         {"bigint", "the go-api token_version the session is pinned to, a number, not material"},
+	"users.legacy_token_version":            {"bigint", "the user's current go-api token_version, a number, not material"},
+	"link_credentials.issued_token_version": {"bigint", "the go-api token_version a link was issued against, a number, not material"},
 }
 
 // approvedSecretSuffixes are the shapes that are safe by construction.

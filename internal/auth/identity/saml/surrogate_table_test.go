@@ -1,6 +1,7 @@
 package saml
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -24,7 +25,7 @@ func TestSurrogateRefusalTableAuthServiceSAMLRows(t *testing.T) {
 		if line == "" || strings.HasPrefix(line, "#") || len(f) != 9 || f[1] != "sso" || !strings.Contains(f[2], "/saml/") {
 			continue
 		}
-		id, body, want := f[0], f[3], strings.Fields(f[6])
+		id, body, want := f[0], tableBody(t, f[3]), strings.Fields(f[6])
 		rec, _ := initiateRequest(t, body)
 		if status, _ := strconv.Atoi(want[0]); rec.Code != status {
 			t.Errorf("%s: status=%d want %s body=%s", id, rec.Code, want[0], rec.Body.String())
@@ -43,7 +44,21 @@ func TestSurrogateRefusalTableAuthServiceSAMLRows(t *testing.T) {
 		}
 		driven++
 	}
-	if driven != 2 {
-		t.Fatalf("drove %d saml rows, want 2", driven)
+	if driven != 4 {
+		t.Fatalf("drove %d saml rows, want 4", driven)
 	}
+}
+
+// tableBody is the body cell: text, or "hex:" and the raw bytes in hex.
+func tableBody(t *testing.T, cell string) string {
+	t.Helper()
+	encoded, isHex := strings.CutPrefix(cell, "hex:")
+	if !isHex {
+		return cell
+	}
+	raw, err := hex.DecodeString(encoded)
+	if err != nil {
+		t.Fatalf("body cell %q: %v", cell, err)
+	}
+	return string(raw)
 }

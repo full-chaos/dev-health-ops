@@ -835,7 +835,8 @@ func buildSchedulerLoopWithSources(
 	loop, err := sources.newLoop(
 		repository,
 		coordinator,
-		schedulersync.DefaultLoopConfig(registry).WithOccurrences(occurrences).WithLogger(logger),
+		schedulersync.DefaultLoopConfig(registry).WithOccurrences(occurrences).WithLogger(logger).
+			WithStartupRetry(cfg.PreclaimReadinessTimeout, syncStartupRetry, postgres.MaskUnreachable, postgres.DialRetryJitter),
 	)
 	if err != nil || loop == nil {
 		return nil, dependencyUnavailable("scheduler_sync_loop_construction_failed")
@@ -950,4 +951,21 @@ func (component schedulerRuntime) Shutdown(ctx context.Context) error {
 		saturationErr = component.saturation.Shutdown(ctx)
 	}
 	return errors.Join(fixedErr, saturationErr, component.loop.Shutdown(ctx))
+}
+
+// syncStartupRetry runs the sync scheduler loop's first handoff window under
+// the shared startup dial retry.
+func syncStartupRetry(
+	ctx context.Context,
+	budget time.Duration,
+	seams schedulersync.StartupRetrySeams,
+	step func(context.Context) error,
+) error {
+	return postgres.DialRetry{
+		Budget:  budget,
+		Now:     seams.Now,
+		Sleep:   seams.Sleep,
+		Jitter:  seams.Jitter,
+		OnRetry: seams.OnRetry,
+	}.Do(ctx, step)
 }

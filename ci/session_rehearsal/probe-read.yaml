@@ -8,9 +8,11 @@ metadata:
 spec:
   restartPolicy: Never
   terminationGracePeriodSeconds: 0
+  securityContext: {runAsNonRoot: true, runAsUser: 70, runAsGroup: 70, seccompProfile: {type: RuntimeDefault}}
   containers:
     - name: probe
       image: ${LOCAL_PG}
+      securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, runAsNonRoot: true, runAsUser: 70, runAsGroup: 70, capabilities: {drop: [ALL]}, seccompProfile: {type: RuntimeDefault}}
       command:
         - sh
         - -c

@@ -197,6 +197,7 @@ var unguardedColumns = map[string]map[string]string{
 	"link_credentials": {
 		"id": "lifecycle", "created_at": "lifecycle",
 		"principal_id": "security", "purpose": "security", "token_hash": "security", "expires_at": "security", "consumed_at": "security",
+		"issued_token_version": "security",
 	},
 	"sso_flow_states": {
 		"id": "lifecycle", "protocol": "lifecycle", "provider_id": "lifecycle", "flow_hash": "lifecycle", "binding_hash": "lifecycle",

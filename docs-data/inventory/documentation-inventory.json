@@ -6145,7 +6145,7 @@
     },
     {
       "source_repo": "full-chaos/dev-health-ops",
-      "source_path": "scripts/build_docs_cloudflare.py",
+      "source_path": "internal/cigates/docsbuild/docsbuild.go",
       "artifact_type": "tooling",
       "current_url": null,
       "current_nav_location": [],

@@ -32,7 +32,9 @@ var (
 	}
 )
 
-func liveE2ENoPythonViolations(t *testing.T, root string) []string {
+// extraTracked are paths added to the tracked-file list, so a planted case can stand in for a tracked Python file the real tree
+// no longer has.
+func liveE2ENoPythonViolations(t *testing.T, root string, extraTracked ...string) []string {
 	t.Helper()
 	var out []string
 	doc := loadWf(t, root, e2eWorkflow)
@@ -96,7 +98,7 @@ func liveE2ENoPythonViolations(t *testing.T, root string) []string {
 	if tp, err := trackedPaths(repoRoot(t), repoRoot(t)); err != nil {
 		out = append(out, "cannot list tracked files: "+err.Error())
 	} else {
-		tracked = tp
+		tracked = append(append([]string{}, tp...), extraTracked...)
 	}
 	for _, p := range sortedKeysBool(listed) {
 		re, err := githubGlobToRegexp(p)
@@ -193,6 +195,8 @@ func TestLiveE2ENoPythonPlantedDefects(t *testing.T) {
 	const prove = "ci/lib/go_api_prove_e2e.sh"
 	const runTests = "ci/run_tests.sh"
 	files := append([]string{wf, runTests}, liveE2EScripts...)
+	// the real tree tracks no Python file, so the case that needs one plants it in the tracked-file list
+	plantedTracked := map[string][]string{"a broad filter glob matches Python files": {"scripts/planted_tool.py"}}
 	cases := []struct {
 		name string
 		muts []mutation
@@ -216,7 +220,7 @@ func TestLiveE2ENoPythonPlantedDefects(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			tree := plantTree(t, root, files, c.muts...)
-			expectViolation(t, liveE2ENoPythonViolations(t, tree), c.want...)
+			expectViolation(t, liveE2ENoPythonViolations(t, tree, plantedTracked[c.name]...), c.want...)
 		})
 	}
 	t.Run("a comment that names uv is not a violation", func(t *testing.T) {

@@ -1,4 +1,4 @@
--- 0028 every new session row carries its token_version pin. ADDITIVE ONLY. See
+-- 0029 every new session row carries its token_version pin. ADDITIVE ONLY. See
 -- 0001's header.
 --
 -- sessions.legacy_token_version is written once, at insert (0016). A row from

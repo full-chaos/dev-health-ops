@@ -161,7 +161,7 @@ func TestResetEndsEveryCredentialClass(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := rig.links.Issue(ctx, IssueRequest{PrincipalID: id, Purpose: PurposePasswordReset, TokenHash: linkHash("reset-secret"), TTL: ResetTTL}); err != nil {
+	if err := rig.links.IssueBound(ctx, IssueRequest{PrincipalID: id, Purpose: PurposePasswordReset, TokenHash: linkHash("reset-secret"), TTL: ResetTTL}); err != nil {
 		t.Fatal(err)
 	}
 	before := rig.revocations(t, ctx)
@@ -257,7 +257,7 @@ func TestAFailedStepRollsTheWholePasswordChangeBack(t *testing.T) {
 			if _, err := rig.env.admin.Exec(ctx, fmt.Sprintf(revoke, `"`+role+`"`)); err != nil {
 				t.Fatal(err)
 			}
-			if err := rig.links.Issue(ctx, IssueRequest{PrincipalID: id, Purpose: PurposePasswordReset, TokenHash: linkHash("reset-secret"), TTL: ResetTTL}); err != nil {
+			if err := rig.links.IssueBound(ctx, IssueRequest{PrincipalID: id, Purpose: PurposePasswordReset, TokenHash: linkHash("reset-secret"), TTL: ResetTTL}); err != nil {
 				t.Fatal(err)
 			}
 			if _, err := rig.flows.Reset(ctx, "reset-secret", "A-new-pass-77"); err == nil {
@@ -297,10 +297,10 @@ func TestAPasswordChangeEndsTheEarlierResetLinksOnly(t *testing.T) {
 	ctx := context.Background()
 	rig := newEndRig(t, ctx)
 	id := rig.account(t, ctx, "Old-pass-12345")
-	if err := rig.links.Issue(ctx, IssueRequest{PrincipalID: id, Purpose: PurposePasswordReset, TokenHash: linkHash("earlier-reset"), TTL: ResetTTL}); err != nil {
+	if err := rig.links.IssueBound(ctx, IssueRequest{PrincipalID: id, Purpose: PurposePasswordReset, TokenHash: linkHash("earlier-reset"), TTL: ResetTTL}); err != nil {
 		t.Fatal(err)
 	}
-	if err := rig.links.Issue(ctx, IssueRequest{PrincipalID: id, Purpose: PurposeEmailVerification, TokenHash: linkHash("verify"), TTL: VerificationTTL}); err != nil {
+	if err := rig.links.IssueBound(ctx, IssueRequest{PrincipalID: id, Purpose: PurposeEmailVerification, TokenHash: linkHash("verify"), TTL: VerificationTTL}); err != nil {
 		t.Fatal(err)
 	}
 	if out, err := rig.flows.Change(ctx, ChangeRequest{PrincipalID: id, Current: "Old-pass-12345", New: "Brand-new-pass-42"}); err != nil || out.Kind != FlowOK {
@@ -342,7 +342,7 @@ func TestANoSidGoAPIAccessTokenIsRefusedAfterResetAndChange(t *testing.T) {
 	if !rig.accepts(t, ctx, reset, 3) {
 		t.Fatal("the token is refused before the reset")
 	}
-	if err := rig.links.Issue(ctx, IssueRequest{PrincipalID: reset, Purpose: PurposePasswordReset, TokenHash: linkHash("reset-secret"), TTL: ResetTTL}); err != nil {
+	if err := rig.links.IssueBound(ctx, IssueRequest{PrincipalID: reset, Purpose: PurposePasswordReset, TokenHash: linkHash("reset-secret"), TTL: ResetTTL}); err != nil {
 		t.Fatal(err)
 	}
 	if out, err := rig.flows.Reset(ctx, "reset-secret", "A-new-pass-77"); err != nil || out.Kind != FlowOK {
@@ -379,7 +379,7 @@ func TestAnOlderResetCannotOverwriteAChangeMadeBetweenItsReadAndItsWrite(t *test
 	rig := newEndRig(t, ctx)
 	id := rig.account(t, ctx, "Old-pass-12345")
 	digest := linkHash("reset-secret")
-	if err := rig.links.Issue(ctx, IssueRequest{PrincipalID: id, Purpose: PurposePasswordReset, TokenHash: digest, TTL: ResetTTL}); err != nil {
+	if err := rig.links.IssueBound(ctx, IssueRequest{PrincipalID: id, Purpose: PurposePasswordReset, TokenHash: digest, TTL: ResetTTL}); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok, err := rig.accounts.PeekResetLink(ctx, digest); err != nil || !ok {
@@ -410,7 +410,7 @@ func TestAResetConsumesItsLinkInTheSameWriteAsThePassword(t *testing.T) {
 	ctx := context.Background()
 	rig := newEndRig(t, ctx)
 	id := rig.account(t, ctx, "Old-pass-12345")
-	if err := rig.links.Issue(ctx, IssueRequest{PrincipalID: id, Purpose: PurposePasswordReset, TokenHash: linkHash("reset-secret"), TTL: ResetTTL}); err != nil {
+	if err := rig.links.IssueBound(ctx, IssueRequest{PrincipalID: id, Purpose: PurposePasswordReset, TokenHash: linkHash("reset-secret"), TTL: ResetTTL}); err != nil {
 		t.Fatal(err)
 	}
 	if out, err := rig.flows.Reset(ctx, "reset-secret", "A-new-pass-77"); err != nil || out.Kind != FlowOK {

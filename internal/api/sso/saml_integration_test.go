@@ -38,6 +38,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -398,6 +399,13 @@ func TestSSOSurrogateRefusalTableStackRows(t *testing.T) {
 			t.Fatalf("%s: unknown setup %q", id, setup)
 		}
 		method, path, _ := strings.Cut(request, " ")
+		if encoded, isHex := strings.CutPrefix(body, "hex:"); isHex {
+			decoded, err := hex.DecodeString(encoded)
+			if err != nil {
+				t.Fatalf("%s: %v", id, err)
+			}
+			body = string(decoded)
+		}
 		req, err := http.NewRequest(method, st.server.URL+strings.Replace(path, "{provider}", provider.String(), 1), strings.NewReader(body))
 		if err != nil {
 			t.Fatal(err)
@@ -426,8 +434,8 @@ func TestSSOSurrogateRefusalTableStackRows(t *testing.T) {
 		}
 		driven++
 	}
-	if driven != 3 {
-		t.Fatalf("drove %d saml and oauth rows, want 3", driven)
+	if driven != 5 {
+		t.Fatalf("drove %d saml and oauth rows, want 5", driven)
 	}
 }
 

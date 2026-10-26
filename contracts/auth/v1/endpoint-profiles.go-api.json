@@ -4,12 +4,17 @@
   "rows": [
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/apiservice/admin/credentialdelete.go:59; internal/apiservice/admin/credentialdelete.go:72); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -69,12 +74,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/apiservice/admin/ipallowlist.go:275; internal/apiservice/admin/ipallowlist.go:269); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -134,12 +144,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13); the route invalidates the in-process model list cache for the organization (internal/apiservice/admin/llmsettings.go:576; cache type internal/apiservice/admin/llmmodels.go:62) (not an authorization-decision cache)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -199,12 +214,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": "admin.orgs",
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "platform route, behaviour today: only a superuser passes, any other caller answers 403 (internal/api/policy/guard.go:137); the handler does not scope by the caller's organization",
@@ -262,12 +282,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "platform route, behaviour today: only a superuser passes, any other caller answers 403 (internal/api/policy/guard.go:137); the handler does not scope by the caller's organization; a missing target answers 404 (internal/apiservice/admin/featureflags.go:494)",
@@ -327,12 +352,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": "members.manage",
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": null,
@@ -392,12 +422,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/apiservice/admin/retention.go:288; internal/apiservice/admin/retention.go:296); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -457,12 +492,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": "settings.write",
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/apiservice/admin/settings.go:404; internal/apiservice/admin/settings.go:91); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -520,12 +560,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/syncadmin/syncadmin.go:368 (missing; malformed uuid 404s at :359; body via writeConfigNotFound :188); internal/api/syncadmin/store.go:114 (configByID: WHERE org_id=$1 AND id=$2, called with orgID(r) at syncadmin.go:362)); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -585,12 +630,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": "teams.write",
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/teamsidentity/teamsidentity.go:337; internal/api/teamsidentity/store.go:125); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -648,12 +698,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": null,
@@ -753,12 +808,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": null,
@@ -819,12 +879,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": null,
@@ -885,12 +950,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -950,12 +1020,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": null,
@@ -1016,12 +1091,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": null,
@@ -1082,12 +1162,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/apiservice/admin/auditlogs.go:343; internal/apiservice/admin/auditlogs.go:337); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -1147,12 +1232,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -1212,12 +1302,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/syncadmin/backfill_detail.go:36; internal/api/syncadmin/store.go:461 (backfillJobByID WHERE id=$1 AND org_id=$2, called at backfill_detail.go:30)); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -1277,12 +1372,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -1342,12 +1442,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/credentials/credentials.go:247; internal/api/credentials/credentials.go:221); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -1407,12 +1512,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/apiservice/customerpush/reads.go:347; internal/api/externalingest/status.go:183); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -1472,12 +1582,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -1537,12 +1652,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the path segment is a fixed mode, not a resource id; the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -1602,12 +1722,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -1667,12 +1792,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/apiservice/customerpush/reads.go:174; internal/apiservice/customerpush/reads.go:172); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -1732,12 +1862,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/apiservice/customerpush/reads.go:174; internal/apiservice/customerpush/reads.go:172); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -1797,12 +1932,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/apiservice/customerpush/reads.go:174; internal/apiservice/customerpush/reads.go:172); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -1862,12 +2002,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -1927,12 +2072,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "platform route, behaviour today: only a superuser passes, any other caller answers 403 (internal/api/policy/guard.go:137); the handler does not scope by the caller's organization",
@@ -1992,12 +2142,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -2057,12 +2212,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "valkey: cache-aside of the impersonation session keyed by the caller (internal/apiservice/admin/impersonationcache.go:175): a missing client, an open circuit or an absent key reads Postgres, a Valkey error opens a short circuit that bypasses the cache, a stored negative entry answers without Postgres (impersonationcache.go:126)",
       "disclosure_behavior": "no path resource id, behaviour today: any authenticated caller may call it; a caller who is not a superuser answers 200 with is_impersonating false and no cache or database read (internal/apiservice/admin/impersonation.go:321)",
@@ -2122,12 +2282,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": "integrations.read",
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -2185,12 +2350,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": "integrations.read",
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -2248,12 +2418,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": "integrations.read",
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -2311,12 +2486,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": "integrations.read",
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/apiservice/admin/pagerduty_bindings.go:499; internal/apiservice/admin/pagerduty_bindings.go:497); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -2374,12 +2554,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": "integrations.read",
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/integrationsadmin/routes.go:154 and internal/api/integrationsadmin/routes.go:161; internal/api/integrationsadmin/store.go:64); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -2437,12 +2622,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": "integrations.read",
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/integrationsadmin/routes.go:154 and internal/api/integrationsadmin/routes.go:161; internal/api/integrationsadmin/store.go:64); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -2500,12 +2690,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": "integrations.read",
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/integrationsadmin/routes.go:154 and internal/api/integrationsadmin/routes.go:161; internal/api/integrationsadmin/store.go:64); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -2563,12 +2758,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -2628,12 +2828,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/apiservice/admin/ipallowlist.go:275; internal/apiservice/admin/ipallowlist.go:269); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -2693,12 +2898,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -2758,12 +2968,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -2823,12 +3038,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13); the route reads the in-process model list cache (internal/apiservice/admin/llmmodels.go:62) (not an authorization-decision cache)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -2888,12 +3108,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -2953,12 +3178,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -3018,12 +3248,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -3083,12 +3318,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -3148,12 +3388,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -3213,12 +3458,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": "admin.orgs",
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "platform route, behaviour today: only a superuser passes, any other caller answers 403 (internal/api/policy/guard.go:137); the handler does not scope by the caller's organization",
@@ -3276,12 +3526,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": "admin.orgs",
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "platform route, behaviour today: only a superuser passes, any other caller answers 403 (internal/api/policy/guard.go:137); the handler does not scope by the caller's organization; a missing target answers 404 (internal/apiservice/admin/orgs.go:150)",
@@ -3339,12 +3594,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "platform route, behaviour today: only a superuser passes, any other caller answers 403 (internal/api/policy/guard.go:137); the handler does not scope by the caller's organization",
@@ -3404,12 +3664,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": "members.read",
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": null,
@@ -3469,12 +3734,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "platform route, behaviour today: only a superuser passes, any other caller answers 403 (internal/api/policy/guard.go:137); the handler does not scope by the caller's organization",
@@ -3534,12 +3804,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "platform route, behaviour today: only a superuser passes, any other caller answers 403 (internal/api/policy/guard.go:137); the handler does not scope by the caller's organization",
@@ -3599,12 +3874,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -3664,12 +3944,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/apiservice/admin/retention.go:288; internal/apiservice/admin/retention.go:296); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -3729,12 +4014,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": "settings.read",
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the path segment is a fixed mode, not a resource id; the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -3792,12 +4082,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": "settings.read",
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/apiservice/admin/settings.go:222; internal/apiservice/admin/settings.go:66); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -3855,12 +4150,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -3920,12 +4220,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -3985,12 +4290,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -4050,12 +4360,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/syncadmin/syncadmin.go:368 (missing; malformed uuid 404s at :359; body via writeConfigNotFound :188); internal/api/syncadmin/store.go:114 (configByID: WHERE org_id=$1 AND id=$2, called with orgID(r) at syncadmin.go:362)); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -4115,12 +4430,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/syncadmin/syncadmin.go:368 (missing; malformed uuid 404s at :359; body via writeConfigNotFound :188); internal/api/syncadmin/store.go:114 (configByID: WHERE org_id=$1 AND id=$2, called with orgID(r) at syncadmin.go:362)); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -4180,12 +4500,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/syncadmin/syncadmin.go:368 (missing; malformed uuid 404s at :359; body via writeConfigNotFound :188); internal/api/syncadmin/store.go:114 (configByID: WHERE org_id=$1 AND id=$2, called with orgID(r) at syncadmin.go:362)); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -4245,12 +4570,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/syncadmin/syncadmin.go:368 (missing; malformed uuid 404s at :359; body via writeConfigNotFound :188); internal/api/syncadmin/store.go:114 (configByID: WHERE org_id=$1 AND id=$2, called with orgID(r) at syncadmin.go:362)); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -4310,12 +4640,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/syncadmin/runs.go:560 (malformed uuid 404 at :551); internal/api/syncadmin/store.go:312 (syncRunByID WHERE id=$1 AND org_id=$2, called at runs.go:554)); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -4375,12 +4710,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/syncadmin/units.go:65 (malformed uuid 404 at :54); internal/api/syncadmin/store.go:312 (syncRunByID WHERE id=$1 AND org_id=$2, called at units.go:59); units read store runUnits org=$2 (units.go:68)); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -4440,12 +4780,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -4505,12 +4850,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": "teams.read",
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -4568,12 +4918,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": "teams.read",
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/teamsidentity/teamsidentity.go:529; internal/api/teamsidentity/store.go:125); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -4631,12 +4986,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/teamsidentity/members_discover.go:726; internal/api/teamsidentity/members_discover.go:720 (GetTeam -> store.go:125)); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -4696,12 +5056,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/teamsidentity/members_infer.go:392; internal/api/teamsidentity/members_infer.go:386 (GetTeam -> store.go:125)); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -4761,12 +5126,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -4826,12 +5196,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": null,
@@ -4892,12 +5267,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:115; internal/api/policy/orgless.go:26)",
@@ -4957,12 +5337,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:115; internal/api/policy/orgless.go:26)",
@@ -5063,12 +5448,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:115; internal/api/policy/orgless.go:26)",
@@ -5169,12 +5559,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; once any body-first validation has run, a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:115; internal/api/policy/orgless.go:26)",
@@ -5234,12 +5629,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": null,
@@ -5341,12 +5741,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:115; internal/api/policy/orgless.go:26)",
@@ -5406,12 +5811,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": null,
@@ -5472,12 +5882,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": null,
@@ -5538,12 +5953,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:115; internal/api/policy/orgless.go:26)",
@@ -5603,12 +6023,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": null,
@@ -5669,12 +6094,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: no authorization read (internal/api/billing/routes.go:87)",
       "disclosure_behavior": null,
@@ -5735,12 +6165,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: no authorization read (internal/api/billing/routes.go:96)",
       "disclosure_behavior": null,
@@ -5801,12 +6236,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:115; internal/api/policy/orgless.go:26)",
@@ -5866,12 +6306,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": null,
@@ -5932,12 +6377,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:115; internal/api/policy/orgless.go:26)",
@@ -5997,12 +6447,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:115; internal/api/policy/orgless.go:26)",
@@ -6062,12 +6517,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:115; internal/api/policy/orgless.go:26)",
@@ -6494,12 +6954,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": null,
@@ -6560,12 +7025,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:115; internal/api/policy/orgless.go:26)",
@@ -6626,14 +7096,15 @@
     {
       "accepted_credential_classes": [
         "ops_access_token_hs256",
-        "org_context_header"
+        "org_context_header",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "class_disambiguator": {
-        "kind": "dedicated_header",
-        "name": "X-Org-Id"
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
       },
       "classification": "protected",
       "gaps": [],
@@ -6727,10 +7198,15 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
+      },
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
       },
       "classification": "protected",
       "gaps": [],
@@ -7170,12 +7646,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/credentials/credentials.go:518; internal/api/credentials/credentials.go:221); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -7235,12 +7716,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/apiservice/customerpush/reads.go:174; internal/apiservice/customerpush/reads.go:172); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -7300,12 +7786,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "platform route, behaviour today: once any body-first validation has run, only a superuser passes, any other caller answers 403 (internal/api/policy/guard.go:137); the handler does not scope by the caller's organization; a missing target answers 404 (internal/apiservice/admin/featureflags.go:535)",
@@ -7365,12 +7856,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": "integrations.write",
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/integrationsadmin/routes.go:154 and internal/api/integrationsadmin/routes.go:161; internal/api/integrationsadmin/store.go:64); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -7428,12 +7924,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": "integrations.write",
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/integrationsadmin/routes.go:154 and internal/api/integrationsadmin/routes.go:161; internal/api/integrationsadmin/store.go:64); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -7491,12 +7992,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": "integrations.write",
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/integrationsadmin/routes.go:154 and internal/api/integrationsadmin/routes.go:161; source: internal/api/integrationsadmin/routes.go:479 and internal/api/integrationsadmin/routes.go:486; internal/api/integrationsadmin/store.go:64; source: internal/api/integrationsadmin/store.go:143); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -7554,12 +8060,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/apiservice/admin/ipallowlist.go:275; internal/apiservice/admin/ipallowlist.go:269); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -7619,12 +8130,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": "admin.orgs",
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "platform route, behaviour today: once any body-first validation has run, only a superuser passes, any other caller answers 403 (internal/api/policy/guard.go:137); the handler does not scope by the caller's organization; a missing target answers 404 (internal/apiservice/admin/orgs.go:367)",
@@ -7682,12 +8198,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "platform route, behaviour today: once any body-first validation has run, only a superuser passes, any other caller answers 403 (internal/api/policy/guard.go:137); the handler does not scope by the caller's organization; a missing target answers 404 (internal/apiservice/admin/featureflags.go:403)",
@@ -7747,12 +8268,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": "members.manage",
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": null,
@@ -7812,12 +8338,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/apiservice/admin/retention.go:288; internal/apiservice/admin/retention.go:296); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -7877,12 +8408,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13); the route also uses in-process sync.Map operatorControlledKeySets dataset_selection.go:176 (static provider registry, not org data) (not an authorization-decision cache)",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/syncadmin/update_config.go:106 (missing, errConfigNotFound; malformed uuid :96; body writeConfigNotFound syncadmin.go:188); internal/api/syncadmin/update_config.go:147 (SELECT ... WHERE org_id=$1 AND id=$2, re-read :165)); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -7942,12 +8478,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": "teams.write",
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/teamsidentity/teamsidentity.go:591; internal/api/teamsidentity/teamsidentity.go:585 (GetTeam -> store.go:125)); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -8005,12 +8546,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": null,
@@ -8071,12 +8617,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": null,
@@ -8137,12 +8688,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": null,
@@ -8203,12 +8759,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; once any body-first validation has run, a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:115; internal/api/policy/orgless.go:26)",
@@ -8268,12 +8829,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -8333,12 +8899,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/credentials/connection.go:180 (by id) and :202 (by name); internal/api/credentials/connection.go:92 (by id) and :120 (by name)); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -8398,12 +8969,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -8463,12 +9039,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/apiservice/customerpush/reads.go:174; internal/apiservice/customerpush/reads.go:172); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -8528,12 +9109,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/apiservice/customerpush/reads.go:174; internal/apiservice/customerpush/reads.go:172); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -8593,12 +9179,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -8658,12 +9249,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/apiservice/customerpush/writes.go:580; internal/apiservice/customerpush/writes.go:578); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -8723,12 +9319,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/apiservice/customerpush/writes.go:580; internal/apiservice/customerpush/writes.go:578); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -8788,12 +9389,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/teamsidentity/teamsidentity.go:718; internal/api/teamsidentity/teamsidentity.go:708 (GetTeam -> store.go:125)); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -8853,12 +9459,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "valkey: after the commit the route writes the impersonation-session cache entry through (internal/apiservice/admin/impersonation.go:220; internal/apiservice/admin/impersonationcache.go:197); the route does not read the cache; a failed write is logged and opens the cache circuit, and the read side then falls back to Postgres (impersonationcache.go:115, :203)",
       "disclosure_behavior": "platform route, behaviour today: once any body-first validation has run, only a superuser passes, any other caller answers 403 (internal/api/policy/guard.go:137); the target user is looked up by id and a missing target answers 404 (internal/apiservice/admin/impersonation.go:138); the caller's own organization is not read",
@@ -8918,12 +9529,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "valkey: the route reads the open session from Postgres (internal/apiservice/admin/impersonation.go:260) and after the commit writes the negative cache entry through (internal/apiservice/admin/impersonationcache.go:149); a failed write is logged and opens the cache circuit, and the read side then falls back to Postgres (impersonationcache.go:203)",
       "disclosure_behavior": "platform route, behaviour today: only a superuser passes, any other caller answers 403 (internal/api/policy/guard.go:137); the route acts on the caller's own open session and answers 400 when there is none (internal/apiservice/admin/impersonation.go:267)",
@@ -8983,12 +9599,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": "integrations.write",
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -9046,12 +9667,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": "integrations.write",
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13); the route also uses Valkey key github_app_install_state:<jti> GET internal/api/githubapp/routes.go:261, SET :269 (replay guard; unavailable cache is logged and request proceeds) (not an authorization-decision cache)",
       "disclosure_behavior": null,
@@ -9111,12 +9737,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -9176,12 +9807,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": "integrations.write",
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -9239,12 +9875,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": "integrations.write",
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -9302,12 +9943,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": "integrations.write",
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -9365,12 +10011,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": "integrations.write",
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -9428,12 +10079,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": "integrations.write",
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -9491,12 +10147,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -9556,12 +10217,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": "integrations.write",
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": null,
@@ -9621,12 +10287,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": "integrations.write",
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/apiservice/admin/pagerduty_bindings.go:402; internal/apiservice/admin/pagerduty_bindings.go:411); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -9684,12 +10355,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": "integrations.write",
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": null,
@@ -9749,12 +10425,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": "integrations.write",
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": null,
@@ -9814,12 +10495,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/integrationsadmin/routes.go:154 and internal/api/integrationsadmin/routes.go:161 (via handoff.go:150); internal/api/integrationsadmin/store.go:64 (via handoff.go:150)); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -9879,12 +10565,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/integrationsadmin/routes.go:154 and 161 (via discover.go:67); internal/api/integrationsadmin/store.go:64 (via discover.go:67)); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -9944,12 +10635,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/integrationsadmin/routes.go:154 and internal/api/integrationsadmin/routes.go:161 (via handoff.go:150); internal/api/integrationsadmin/store.go:64 (via handoff.go:150)); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -10009,12 +10705,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -10074,12 +10775,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the path segment is a fixed mode, not a resource id; the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -10139,12 +10845,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -10204,12 +10915,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": "admin.orgs",
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "platform route, behaviour today: once any body-first validation has run, only a superuser passes, any other caller answers 403 (internal/api/policy/guard.go:137); the handler does not scope by the caller's organization",
@@ -10267,12 +10983,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "platform route, behaviour today: once any body-first validation has run, only a superuser passes, any other caller answers 403 (internal/api/policy/guard.go:137); the handler does not scope by the caller's organization; a missing target answers 404 (internal/apiservice/admin/featureflags.go:299)",
@@ -10332,12 +11053,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": "members.invite",
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": null,
@@ -10397,12 +11123,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": "members.manage",
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": null,
@@ -10462,12 +11193,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": "members.manage",
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": null,
@@ -10527,12 +11263,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -10592,12 +11333,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": null,
@@ -10658,12 +11404,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": "settings.write",
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -10721,12 +11472,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -10786,12 +11542,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -10851,12 +11612,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/syncadmin/syncadmin.go:368 (missing; malformed uuid 404s at :359; body via writeConfigNotFound :188); internal/api/syncadmin/store.go:114 (configByID: WHERE org_id=$1 AND id=$2, called with orgID(r) at syncadmin.go:362)); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -10916,12 +11682,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/syncadmin/syncadmin.go:368 (missing; malformed uuid 404s at :359; body via writeConfigNotFound :188); internal/api/syncadmin/store.go:114 (configByID: WHERE org_id=$1 AND id=$2, called with orgID(r) at syncadmin.go:362)); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -10981,12 +11752,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": "teams.write",
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -11044,12 +11820,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the path segment is a fixed mode, not a resource id; the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -11109,12 +11890,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": null,
@@ -11175,12 +11961,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/teamsidentity/member_confirm.go:377; internal/api/teamsidentity/member_confirm.go:371 (GetTeam -> store.go:125)); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -11240,12 +12031,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/teamsidentity/member_confirm.go:272; internal/api/teamsidentity/member_confirm.go:266 (GetTeam -> store.go:125)); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -11305,12 +12101,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": null,
@@ -11371,12 +12172,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -11436,12 +12242,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": null,
@@ -11502,12 +12313,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; once any body-first validation has run, a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:115; internal/api/policy/orgless.go:26)",
@@ -11567,12 +12383,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; once any body-first validation has run, a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:115; internal/api/policy/orgless.go:26)",
@@ -11711,15 +12532,16 @@
     {
       "accepted_credential_classes": [
         "ops_access_token_hs256",
-        "ops_refresh_token"
+        "ops_refresh_token",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
       "class_disambiguator": {
-        "kind": "authorization_scheme",
-        "name": "Bearer"
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: no authorization read (internal/api/session/session.go:148)",
@@ -11781,12 +12603,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; once any body-first validation has run, a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:115; internal/api/policy/orgless.go:26)",
@@ -11969,12 +12796,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; once any body-first validation has run, a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:115; internal/api/policy/orgless.go:26)",
@@ -12034,12 +12866,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:115; internal/api/policy/orgless.go:26)",
@@ -12382,12 +13219,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; once any body-first validation has run, a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:115; internal/api/policy/orgless.go:26)",
@@ -12447,12 +13289,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": null,
@@ -12513,12 +13360,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": null,
@@ -12579,12 +13431,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; once any body-first validation has run, a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:115; internal/api/policy/orgless.go:26)",
@@ -12644,12 +13501,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: no authorization read (internal/api/session/session.go:146)",
       "disclosure_behavior": null,
@@ -12710,12 +13572,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": null,
@@ -12776,12 +13643,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:115; internal/api/policy/orgless.go:26)",
@@ -12841,12 +13713,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": null,
@@ -12907,12 +13784,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:115; internal/api/policy/orgless.go:26)",
@@ -12972,12 +13854,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "platform route, behaviour today: only a superuser passes, any other caller answers 403 (internal/api/policy/guard.go:137); the caller's own organization is not read",
@@ -13076,12 +13963,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": null,
@@ -13142,12 +14034,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:115; internal/api/policy/orgless.go:26)",
@@ -13207,12 +14104,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:115; internal/api/policy/orgless.go:26)",
@@ -13272,12 +14174,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:115; internal/api/policy/orgless.go:26)",
@@ -13337,12 +14244,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:115; internal/api/policy/orgless.go:26); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -13402,12 +14314,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:115; internal/api/policy/orgless.go:26); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -13467,12 +14384,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:115; internal/api/policy/orgless.go:26); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -14064,14 +14986,15 @@
     {
       "accepted_credential_classes": [
         "ops_access_token_hs256",
-        "org_context_header"
+        "org_context_header",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "class_disambiguator": {
-        "kind": "dedicated_header",
-        "name": "X-Org-Id"
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
       },
       "classification": "protected",
       "gaps": [],
@@ -14127,14 +15050,15 @@
     {
       "accepted_credential_classes": [
         "ops_access_token_hs256",
-        "org_context_header"
+        "org_context_header",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "class_disambiguator": {
-        "kind": "dedicated_header",
-        "name": "X-Org-Id"
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
       },
       "classification": "protected",
       "gaps": [],
@@ -14190,14 +15114,15 @@
     {
       "accepted_credential_classes": [
         "ops_access_token_hs256",
-        "org_context_header"
+        "org_context_header",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "class_disambiguator": {
-        "kind": "dedicated_header",
-        "name": "X-Org-Id"
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
       },
       "classification": "protected",
       "gaps": [],
@@ -14306,12 +15231,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13); the route invalidates the in-process model list cache for the organization (internal/apiservice/admin/llmsettings.go:548; cache type internal/apiservice/admin/llmmodels.go:62) (not an authorization-decision cache)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -14371,12 +15301,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -14436,12 +15371,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -14501,12 +15441,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -14566,12 +15511,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": "settings.write",
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the path segment is a fixed mode, not a resource id; the route acts only in the caller's effective organization; once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -14629,12 +15579,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/syncadmin/syncadmin.go:368 (missing; malformed uuid 404s at :359; body via writeConfigNotFound :188); internal/api/syncadmin/store.go:114 (configByID: WHERE org_id=$1 AND id=$2, called with orgID(r) at syncadmin.go:362)); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
@@ -14733,12 +15688,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": null,

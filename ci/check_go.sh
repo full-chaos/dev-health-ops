@@ -2068,8 +2068,19 @@ run_integration_packages() {
   local -a pkgs=()
   local -A selected_in=() skipped_in=() select_names=() skip_names=() seen=()
   shift 3
-  # Sorted (C locale): the same packages give the same groups and receipts in any argument order.
-  mapfile -t pkgs < <(printf '%s\n' "$@" | LC_ALL=C sort -u)
+  # Sorted (C locale): the same packages give the same groups and receipts in any argument order. A caller that sets
+  # INTEGRATION_KEEP_ARG_ORDER=1 has already put the packages in the order go test must start them (longest first,
+  # CHAOS-11411): the first-fit packs them in that order and a repeated package keeps its first place.
+  if [ -n "${INTEGRATION_KEEP_ARG_ORDER:-}" ]; then
+    local -A arg_seen=()
+    for pkg in "$@"; do
+      [ -z "${arg_seen[${pkg}]+set}" ] || continue
+      arg_seen["${pkg}"]=1
+      pkgs+=("${pkg}")
+    done
+  else
+    mapfile -t pkgs < <(printf '%s\n' "$@" | LC_ALL=C sort -u)
+  fi
   discover_integration_tagged_tests "${module_dir}" "${pkgs[@]}"
   # Every refusal comes before the first receipt line, so a refused run prints no plan.
   for pkg in "${pkgs[@]}"; do
@@ -3931,7 +3942,7 @@ check_integration_package_shard() {
     for key in "${run_keys[@]}"; do
       printf '  SHARD-RUN %s\n' "${key}"
     done
-    run_integration_packages "${mode}" "${module_dir}" "integration package shard ${shard} (${module_dir})" "${run_pkgs[@]}"
+    INTEGRATION_KEEP_ARG_ORDER=1 run_integration_packages "${mode}" "${module_dir}" "integration package shard ${shard} (${module_dir})" "${run_pkgs[@]}"
   done
 
   [ "${selected_count}" -gt 0 ] \

@@ -482,8 +482,8 @@ func (h *Harness) run(pairs []pair) map[string]answers {
 			var pyShown, goShown venueoracle.Response
 			same, compared, pyShown, goShown = venueoracle.Compare(p.python, pyResponses[index], goResponse,
 				venueoracle.DiffOptions{Normalize: func(_ venueoracle.Request, body string) string { return Normalize(body) }})
-			detail = fmt.Sprintf("python %d %s %v\n go     %d %s %v", pyResponses[index].Status, pyShown.Body,
-				pickHeaders(pyShown.Headers, compared), goResponse.Status, goShown.Body, pickHeaders(goShown.Headers, compared))
+			detail = venueoracle.RedactText(fmt.Sprintf("python %d %s %v\n go     %d %s %v", pyResponses[index].Status, pyShown.Body,
+				pickHeaders(pyShown.Headers, compared), goResponse.Status, goShown.Body, pickHeaders(goShown.Headers, compared)))
 			h.recording.Answers = append(h.recording.Answers,
 				RecordedAnswer{Name: p.name, Status: pyResponses[index].Status, Body: Normalize(pyResponses[index].Body)})
 			out[p.name] = answers{python: pyResponses[index], goSide: goResponse}
@@ -504,7 +504,7 @@ func (h *Harness) run(pairs []pair) map[string]answers {
 			if want.Status == 500 && pydanticecho.GenericPython500(want.Body) && (goResponse.Status == 422 || goResponse.Status == 400) && strings.Contains(goBody, `"loc"`) && pydanticecho.Strip(goBody) == goBody {
 				same = true
 			}
-			detail = fmt.Sprintf("python %d %s\n go     %d %s", want.Status, want.Body, goResponse.Status, goBody)
+			detail = venueoracle.RedactText(fmt.Sprintf("python %d %s\n go     %d %s", want.Status, want.Body, goResponse.Status, goBody))
 			// A replay has only the Go plane: later steps read its tokens
 			// for both sides.
 			out[p.name] = answers{python: goResponse, goSide: goResponse}

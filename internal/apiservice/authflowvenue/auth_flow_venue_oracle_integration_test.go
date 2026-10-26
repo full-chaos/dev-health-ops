@@ -348,8 +348,7 @@ func (r *runner) batch(label string, steps []step) map[string][2]venueoracle.Res
 		}
 		fmt.Fprintf(&r.receipt, "%-70s python=%d go=%d %s\n", s.name, pyResponses[index].Status, goProjected.Status, venueoracle.Mark(same))
 		if !same {
-			r.t.Errorf("%s:\n python %d %s %v\n go     %d %s %v", s.name, pyShown.Status, pyShown.Body, pick(pyShown.Headers, compared),
-				goShown.Status, goShown.Body, pick(goShown.Headers, compared))
+			r.t.Error(venueoracle.DescribeDifference(s.name, pyShown, goShown, compared))
 		}
 		out[s.name] = [2]venueoracle.Response{pyResponses[index], goResponse}
 	}
@@ -368,7 +367,7 @@ func (r *runner) checkUniformLength(name string, goResponse venueoracle.Response
 		r.t.Errorf("%s: uniform sign-up answer has content-length %q, want %q", name, got, want)
 	}
 	if goResponse.Body != signUpAnswer {
-		r.t.Errorf("%s: uniform sign-up answer body %q, want %q", name, goResponse.Body, signUpAnswer)
+		r.t.Errorf("%s: uniform sign-up answer body %q, want %q", name, venueoracle.RedactText(goResponse.Body), signUpAnswer)
 	}
 	if r.signUpLength == "" {
 		r.signUpLength = got
@@ -1268,8 +1267,11 @@ func (r *runner) socialRow() {
 		r.t.Fatal("DEVHEALTH_AUTH_ORACLE_STUB_ADMIN is not set: an external run starts the corpus provider stub")
 	}
 	reset, err := http.Post(admin+"/reset", "application/json", nil)
-	if err != nil || reset.StatusCode != http.StatusNoContent {
-		r.t.Fatalf("provider stub reset: %v", err)
+	if err != nil {
+		r.t.Fatalf("provider stub reset: %s", venueoracle.RedactError(err))
+	}
+	if reset.StatusCode != http.StatusNoContent {
+		r.t.Fatalf("provider stub reset: status %d", reset.StatusCode)
 	}
 	_ = reset.Body.Close()
 	body := `{"provider": "github", "provider_access_token": "gh-corpus"}`
@@ -1287,7 +1289,7 @@ func (r *runner) socialRow() {
 	}
 	recorded, err := http.Get(admin + "/requests")
 	if err != nil {
-		r.t.Fatalf("provider stub requests: %v", err)
+		r.t.Fatalf("provider stub requests: %s", venueoracle.RedactError(err))
 	}
 	defer recorded.Body.Close()
 	var requests []providerstub.Recorded

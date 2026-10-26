@@ -133,6 +133,9 @@ without it they answer 404. The commit floor of the running auth-service image:
 - before phase 3 to 4 (the credential routes are forwarded) and before the
   rollback from phase 4 to 3: at or after 676930d8, which c4d3aa6d includes.
 
+Sign-in answers 503 during the move from phase 1 to 2 and back, until the
+auth-service and go-api pods run the same phase.
+
 The chart cannot read the running image, so check it before the upgrade.
 
 Rolling back phase 4 narrows the runtime role's grants (the write grant on the

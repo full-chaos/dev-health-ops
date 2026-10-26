@@ -46,7 +46,7 @@ func (a StoreIdentities) IdentityBySubject(ctx context.Context, key ExternalKey,
 	if err != nil {
 		return Principal{}, err
 	}
-	return Principal{ID: p.ID, Email: email, Active: p.IsActive && p.DisabledAt == nil}, nil
+	return Principal{ID: p.ID, Email: email, Active: p.IsActive && p.DisabledAt == nil, ServiceProvider: p.ServiceProvider}, nil
 }
 
 // lookupError is the OIDC error for an identity store lookup error.

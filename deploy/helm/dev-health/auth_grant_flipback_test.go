@@ -93,17 +93,29 @@ func TestNarrowAfterFlipBackIsRefusedWithoutTheAck(t *testing.T) {
 }
 
 // The refusal does not depend on an auth Job rendering: with auth-migrate
-// off, narrowAfterFlipBack without the acknowledgement still fails the render.
+// off, narrowAfterFlipBack without a valid acknowledgement still fails the
+// render, with the same acknowledgement check as the Jobs.
 func TestNarrowAfterFlipBackIsRefusedWithAuthMigrateOff(t *testing.T) {
-	_, out, err := renderAuth(t, phaseArgs(3,
-		"--set", "authService.migrate.enabled=false",
-		"--set", "authService.migrate.narrowAfterFlipBack=true")...)
-	if err == nil {
-		t.Fatal("render with authService.migrate.enabled=false, narrowAfterFlipBack and no acknowledgement succeeded")
-	}
-	for _, name := range []string{"narrowAfterFlipBack", "acknowledgeGrantNarrowing"} {
-		if !strings.Contains(out, name) {
-			t.Errorf("refusal does not name %s:\n%.600s", name, out)
+	for _, tc := range []struct {
+		name  string
+		extra []string
+		names []string
+	}{
+		{"no acknowledgement", nil, []string{"narrowAfterFlipBack", "acknowledgeGrantNarrowing"}},
+		{"acknowledgement not a digest", []string{"--set", "authService.migrate.acknowledgeGrantNarrowing=not-a-digest"}, []string{"acknowledgeGrantNarrowing"}},
+	} {
+		args := append([]string{
+			"--set", "authService.migrate.enabled=false",
+			"--set", "authService.migrate.narrowAfterFlipBack=true"}, tc.extra...)
+		_, out, err := renderAuth(t, phaseArgs(3, args...)...)
+		if err == nil {
+			t.Errorf("%s: render with authService.migrate.enabled=false and narrowAfterFlipBack succeeded", tc.name)
+			continue
+		}
+		for _, name := range tc.names {
+			if !strings.Contains(out, name) {
+				t.Errorf("%s: refusal does not name %s:\n%.600s", tc.name, name, out)
+			}
 		}
 	}
 }

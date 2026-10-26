@@ -185,7 +185,7 @@ func TestClickHouseSnapshotCoversServerWideEntities(t *testing.T) {
 	for _, table := range []string{
 		"system.databases", "system.users", "system.roles", "system.settings_profiles", "system.quotas",
 		"system.row_policies", "system.grants", "system.role_grants", "system.named_collections", "system.functions",
-		"system.tables", "system.dictionaries",
+		"system.tables", "system.dictionaries", "system.workloads", "system.resources", "system.masking_policies",
 	} {
 		if !strings.Contains(queries, table) {
 			t.Errorf("the ClickHouse leak snapshot does not read %s", table)
@@ -200,6 +200,7 @@ func TestPostgresSnapshotCoversServerWideKinds(t *testing.T) {
 	for _, catalog := range []string{
 		"pg_database", "pg_roles", "pg_auth_members", "pg_file_settings", "pg_db_role_setting", "pg_tablespace",
 		"pg_settings", "'postmaster', 'sighup'", "pg_parameter_acl", "pg_replication_slots", "pg_prepared_xacts", "pg_class",
+		"pg_subscription", "pg_replication_origin", "pg_shdescription", "pg_shseclabel",
 	} {
 		if !strings.Contains(queries, catalog) {
 			t.Errorf("the PostgreSQL leak snapshot does not read %s", catalog)

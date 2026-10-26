@@ -255,6 +255,19 @@ func TestGuardFlagsPlantedServerWideStatements(t *testing.T) {
 		`exec("PREPARE TRANSACTION 'planted'")`,
 		`exec("GRANT SET ON PARAMETER work_mem TO PUBLIC")`,
 		`exec("COMMENT ON ROLE worker_test IS 'planted'")`,
+		`exec("CREATE SUBSCRIPTION planted_sub CONNECTION 'host=x' PUBLICATION p WITH (connect = false)")`,
+		`exec("SELECT pg_replication_origin_create('planted_origin')")`,
+		`exec("SECURITY LABEL ON ROLE worker_test IS 'x'")`,
+		`exec("SELECT pg_terminate_backend(pid) FROM pg_stat_activity")`,
+		`exec("SELECT pg_cancel_backend(123)")`,
+		`exec("SELECT pg_stat_reset_shared('bgwriter')")`,
+		`exec("SELECT pg_stat_reset_slru()")`,
+		`exec("SELECT pg_switch_wal()")`,
+		`exec("CHECKPOINT")`,
+		`exec("CREATE WORKLOAD planted_workload")`,
+		`exec("CREATE RESOURCE planted_resource (WRITE DISK default)")`,
+		`exec("CREATE MASKING POLICY planted_mp ON t UPDATE c = 0 TO ALL")`,
+		`exec("ALTER QUOTA planted_quota FOR INTERVAL 1 hour MAX queries = 2")`,
 	}
 	allowed := []string{
 		`exec("CREATE ROLE " + role + " LOGIN")`,
@@ -271,6 +284,9 @@ func TestGuardFlagsPlantedServerWideStatements(t *testing.T) {
 		`exec("CREATE TABLE only_here (id int)")`,
 		`exec("CREATE TABLE default_values (id int)")`,
 		`exec("SELECT count() FROM default.events")`,
+		`exec("SELECT pg_stat_reset()")`,
+		`t.Log("waiting for the next CHECKPOINT of the pool")`,
+		`exec("CREATE TABLE workload_runs (id int)")`,
 		`// CREATE ROLE is cluster-scoped; ALTER SYSTEM too`,
 	}
 	inFunc := func(name string, lines []string) string {

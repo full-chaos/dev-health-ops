@@ -280,6 +280,22 @@ func TestSharedServerLeakCheck(t *testing.T) {
 			chExec(t, ctx, s.ch.adminDSN, "CREATE DICTIONARY default.planted_dict (id UInt64, v String) PRIMARY KEY id "+
 				"SOURCE(NULL()) LAYOUT(FLAT()) LIFETIME(0)")
 		}, "clickhouse new dictionary default.planted_dict"},
+		{"subscription", func(t *testing.T, ctx context.Context, s *sharedServers) {
+			pgExec(t, ctx, s.pg.adminDSN, "CREATE SUBSCRIPTION planted_sub CONNECTION 'host=127.0.0.1 dbname=none' "+
+				"PUBLICATION planted_pub WITH (connect = false, enabled = false, create_slot = false, slot_name = NONE)")
+		}, "postgres new subscription planted_sub"},
+		{"replication origin", func(t *testing.T, ctx context.Context, s *sharedServers) {
+			pgExec(t, ctx, s.pg.adminDSN, "SELECT pg_replication_origin_create('planted_origin')")
+		}, "postgres new replication-origin planted_origin"},
+		{"comment on a shared object", func(t *testing.T, ctx context.Context, s *sharedServers) {
+			pgExec(t, ctx, s.pg.adminDSN, "COMMENT ON ROLE worker_test IS 'planted'")
+		}, "postgres new shared-comment pg_authid "},
+		{"clickhouse workload", func(t *testing.T, ctx context.Context, s *sharedServers) {
+			chExec(t, ctx, s.ch.adminDSN, "CREATE WORKLOAD planted_workload")
+		}, "clickhouse new workload planted_workload"},
+		{"clickhouse resource", func(t *testing.T, ctx context.Context, s *sharedServers) {
+			chExec(t, ctx, s.ch.adminDSN, "CREATE RESOURCE planted_resource (WRITE DISK default, READ DISK default)")
+		}, "clickhouse new resource planted_resource"},
 		{"clickhouse SQL user-defined function", func(t *testing.T, ctx context.Context, s *sharedServers) {
 			chExec(t, ctx, s.ch.adminDSN, "CREATE FUNCTION planted_udf AS (x) -> x + 1")
 		}, "clickhouse new function planted_udf"},
@@ -362,6 +378,167 @@ func TestSharedServerUserCannotCreateNamedCollections(t *testing.T) {
 			t.Errorf("CREATE NAMED COLLECTION as the harness user: %v; want a privilege refusal", err)
 		}
 	})
+}
+
+// TestSharedServerRefusesKindsTheImageCannotCreate: kinds the snapshot reads
+// although no test can create one on the pinned images.
+func TestSharedServerRefusesKindsTheImageCannotCreate(t *testing.T) {
+	ctx := sharedCtx(t)
+	runShared(t, func() {
+		pg := mustStart(t, StartPostgres, ctx)
+		ch := mustStart(t, StartClickHouse, ctx)
+		defer mustClose(t, ctx, pg)
+		defer mustClose(t, ctx, ch)
+		servers := activeSharedServers()
+		conn, err := pgx.Connect(ctx, servers.pg.adminDSN)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = conn.Close(context.Background()) }()
+		var pgErr *pgconn.PgError
+		if _, err := conn.Exec(ctx, "SECURITY LABEL ON ROLE worker_test IS 'planted'"); !errors.As(err, &pgErr) || pgErr.Code != "22023" {
+			t.Errorf("SECURITY LABEL on the PostgreSQL image: %v; want SQLSTATE 22023 (no label provider loaded)", err)
+		}
+		if _, err := conn.Exec(ctx, "BEGIN"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := conn.Exec(ctx, "PREPARE TRANSACTION 'planted'"); !errors.As(err, &pgErr) || pgErr.Code != "55000" {
+			t.Errorf("PREPARE TRANSACTION on the PostgreSQL image: %v; want SQLSTATE 55000 (max_prepared_transactions = 0)", err)
+		}
+		_, _ = conn.Exec(ctx, "ROLLBACK")
+		options, err := clickhousego.ParseDSN(servers.ch.adminDSN)
+		if err != nil {
+			t.Fatal(err)
+		}
+		chConn, err := clickhousego.Open(options)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = chConn.Close() }()
+		err = chConn.Exec(ctx, "CREATE MASKING POLICY planted_mp ON system.one UPDATE dummy = 0 TO ALL")
+		if err == nil || !strings.Contains(err.Error(), "code: 344") {
+			t.Errorf("CREATE MASKING POLICY on the ClickHouse image: %v; want code 344 (Cloud only)", err)
+		}
+	})
+}
+
+// sharedCatalogCoverage maps every PostgreSQL shared catalog
+// (pg_class WHERE relisshared AND relkind = 'r') to the snapshot text that reads
+// it, or to the reason it is not read.
+var sharedCatalogCoverage = map[string]struct{ read, reason string }{
+	"pg_auth_members":       {read: "pg_auth_members"},
+	"pg_authid":             {read: "pg_roles"},
+	"pg_database":           {read: "pg_database"},
+	"pg_db_role_setting":    {read: "pg_db_role_setting"},
+	"pg_parameter_acl":      {read: "pg_parameter_acl"},
+	"pg_replication_origin": {read: "pg_replication_origin"},
+	"pg_shdescription":      {read: "pg_shdescription"},
+	"pg_shseclabel":         {read: "pg_shseclabel"},
+	"pg_subscription":       {read: "pg_subscription"},
+	"pg_tablespace":         {read: "pg_tablespace"},
+	"pg_shdepend":           {reason: "dependency rows of objects in the other shared catalogs; a change there is a change in a catalog read above"},
+}
+
+// createPrivilegeCoverage maps every ClickHouse CREATE privilege
+// (system.privileges) to the snapshot text that reads the kind it creates, or
+// to the reason it is not read.
+var createPrivilegeCoverage = map[string]struct{ read, reason string }{
+	"CREATE DATABASE":                  {read: "system.databases"},
+	"CREATE TABLE":                     {read: "system.tables"},
+	"CREATE VIEW":                      {read: "system.tables"},
+	"CREATE DICTIONARY":                {read: "system.dictionaries"},
+	"CREATE FUNCTION":                  {read: "system.functions"},
+	"CREATE WORKLOAD":                  {read: "system.workloads"},
+	"CREATE RESOURCE":                  {read: "system.resources"},
+	"CREATE NAMED COLLECTION":          {read: "system.named_collections"},
+	"CREATE USER":                      {read: "system.users"},
+	"CREATE ROLE":                      {read: "system.roles"},
+	"CREATE ROW POLICY":                {read: "system.row_policies"},
+	"CREATE QUOTA":                     {read: "system.quotas"},
+	"CREATE SETTINGS PROFILE":          {read: "system.settings_profiles"},
+	"CREATE MASKING POLICY":            {read: "system.masking_policies"},
+	"CREATE TEMPORARY TABLE":           {reason: "session-scoped: gone when the creating connection closes"},
+	"CREATE ARBITRARY TEMPORARY TABLE": {reason: "session-scoped: gone when the creating connection closes"},
+	"CREATE TEMPORARY VIEW":            {reason: "session-scoped: gone when the creating connection closes"},
+}
+
+// TestSharedServerKindEnumerationIsCovered is the class sweep: it enumerates
+// the server-wide kinds from each pinned image and fails on a kind with no
+// snapshot read and no reason, or on a read the snapshot does not make.
+func TestSharedServerKindEnumerationIsCovered(t *testing.T) {
+	ctx := sharedCtx(t)
+	runShared(t, func() {
+		pg := mustStart(t, StartPostgres, ctx)
+		ch := mustStart(t, StartClickHouse, ctx)
+		defer mustClose(t, ctx, pg)
+		defer mustClose(t, ctx, ch)
+		servers := activeSharedServers()
+		conn, err := pgx.Connect(ctx, servers.pg.adminDSN)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = conn.Close(context.Background()) }()
+		rows, err := conn.Query(ctx, "SELECT relname::text FROM pg_class WHERE relisshared AND relkind = 'r' ORDER BY 1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		catalogs, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("PostgreSQL shared catalogs: %v", catalogs)
+		checkCoverage(t, "PostgreSQL shared catalog", catalogs, sharedCatalogCoverage, strings.Join(postgresSnapshotQueries, "\n"))
+
+		options, err := clickhousego.ParseDSN(servers.ch.adminDSN)
+		if err != nil {
+			t.Fatal(err)
+		}
+		chConn, err := clickhousego.Open(options)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = chConn.Close() }()
+		result, err := chConn.Query(ctx, "SELECT toString(privilege) FROM system.privileges WHERE toString(privilege) LIKE 'CREATE %' ORDER BY 1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var privileges []string
+		for result.Next() {
+			var privilege string
+			if err := result.Scan(&privilege); err != nil {
+				t.Fatal(err)
+			}
+			privileges = append(privileges, privilege)
+		}
+		if err := result.Err(); err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("ClickHouse CREATE privileges: %v", privileges)
+		checkCoverage(t, "ClickHouse CREATE privilege", privileges, createPrivilegeCoverage, strings.Join(clickHouseSnapshotQueries, "\n"))
+	})
+}
+
+func checkCoverage(t *testing.T, kind string, found []string, coverage map[string]struct{ read, reason string }, queries string) {
+	t.Helper()
+	if len(found) == 0 {
+		t.Fatalf("no %s enumerated", kind)
+	}
+	seen := map[string]bool{}
+	for _, name := range found {
+		seen[name] = true
+		entry, ok := coverage[name]
+		switch {
+		case !ok:
+			t.Errorf("%s %s has no snapshot read and no reason", kind, name)
+		case entry.read != "" && !strings.Contains(queries, entry.read):
+			t.Errorf("%s %s: the snapshot does not read %s", kind, name, entry.read)
+		}
+	}
+	for name := range coverage {
+		if !seen[name] {
+			t.Errorf("%s %s is in the coverage table but the image does not have it", kind, name)
+		}
+	}
 }
 
 func TestIsolatedGetsAPrivateServerInSharedMode(t *testing.T) {

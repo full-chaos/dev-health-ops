@@ -267,8 +267,12 @@ func bootSharedClickHouse(ctx context.Context) (*sharedServer, error) {
 // postgresSnapshotQueries read every cluster-wide object a test could leave
 // behind on a shared server. Each returns one text column.
 var postgresSnapshotQueries = []string{
-	`SELECT 'database ' || datname FROM pg_database`,
-	`SELECT 'role ' || rolname FROM pg_roles`,
+	`SELECT 'database ' || datname || ' allowconn=' || datallowconn FROM pg_database`,
+	// Every role attribute but the password: a test that ALTERs a shared role in place changes a row.
+	`SELECT 'role ' || rolname || ' super=' || rolsuper || ' inherit=' || rolinherit || ' createrole=' || rolcreaterole ||
+	        ' createdb=' || rolcreatedb || ' login=' || rolcanlogin || ' replication=' || rolreplication ||
+	        ' bypassrls=' || rolbypassrls || ' connlimit=' || rolconnlimit || ' valid=' || coalesce(rolvaliduntil::text, '')
+	   FROM pg_roles`,
 	`SELECT 'membership ' || m.rolname || ' in ' || r.rolname
 	   FROM pg_auth_members a JOIN pg_roles m ON m.oid = a.member JOIN pg_roles r ON r.oid = a.roleid`,
 	`SELECT 'alter-system ' || name || '=' || coalesce(setting, '') FROM pg_file_settings

@@ -186,6 +186,12 @@ func (a routeAuth) authenticateWorkload(w http.ResponseWriter, r *http.Request, 
 		a.logger.DebugContext(ctx, "acr internal: workload token accepted", slog.String("route", a.route))
 		return Credential{PrincipalID: subject}, true
 	}
+	if reason == ReasonUnavailable {
+		countWorkloadRefused(ctx, a.route, reason)
+		logWorkloadRefused(ctx, a.logger, a.route, reason)
+		a.unavailable(w, r, "workload_unavailable")
+		return Credential{}, false
+	}
 	status, outcome, detail := http.StatusUnauthorized, outcomeWorkloadRefused, "Unauthorized"
 	if reason == ReasonPrincipal {
 		status, outcome, detail = http.StatusForbidden, outcomeWorkloadForbidden, "Forbidden"

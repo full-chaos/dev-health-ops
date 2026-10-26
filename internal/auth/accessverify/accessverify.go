@@ -158,6 +158,9 @@ func (v *Validator) Validate(ctx context.Context, service, profile, bearer strin
 			return nil, v.refuse(ctx, row.Service, row.Profile, ReasonNotConfigured)
 		}
 		claims, err := v.eddsa.Verify(bearer, v.now())
+		if errors.Is(err, authverify.ErrKeySourceUnavailable) {
+			return nil, v.unavailable(ctx, row.Service, row.Profile)
+		}
 		if err != nil {
 			return nil, v.refuse(ctx, row.Service, row.Profile, eddsaReason(err))
 		}
@@ -172,10 +175,7 @@ func (v *Validator) Validate(ctx context.Context, service, profile, bearer strin
 		}
 		principal, err := v.legacy(ctx, bearer)
 		if errors.Is(err, ErrUnavailable) {
-			v.refused.Add(ctx, 1, metric.WithAttributes(attribute.String("service", row.Service), attribute.String("profile", row.Profile), attribute.String("reason", ReasonUnavailable)))
-			v.logger.WarnContext(ctx, "access token validator unavailable",
-				slog.String("service", row.Service), slog.String("profile", row.Profile))
-			return nil, ErrUnavailable
+			return nil, v.unavailable(ctx, row.Service, row.Profile)
 		}
 		if err != nil {
 			return nil, v.refuse(ctx, row.Service, row.Profile, ReasonLegacy)
@@ -185,6 +185,13 @@ func (v *Validator) Validate(ctx context.Context, service, profile, bearer strin
 	default:
 		return nil, v.refuse(ctx, row.Service, row.Profile, ReasonAlgNotAllowed)
 	}
+}
+
+func (v *Validator) unavailable(ctx context.Context, service, profile string) error {
+	v.refused.Add(ctx, 1, metric.WithAttributes(attribute.String("service", service), attribute.String("profile", profile), attribute.String("reason", ReasonUnavailable)))
+	v.logger.WarnContext(ctx, "access token validator unavailable",
+		slog.String("service", service), slog.String("profile", profile))
+	return ErrUnavailable
 }
 
 func (v *Validator) refuse(ctx context.Context, service, profile, reason string) error {

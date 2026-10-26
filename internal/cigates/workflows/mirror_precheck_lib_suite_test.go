@@ -98,18 +98,33 @@ func TestMirrorPrecheckLibSuiteRunsOnItsTrigger(t *testing.T) {
 	if d := mirrorSuiteDefects(loadWf(t, root, "mirror-test-images.yml")); len(d) > 0 {
 		t.Fatalf("%s", strings.Join(d, "\n"))
 	}
-	for _, m := range []mutation{
-		{mirrorWf, "      - ci/mirror_precheck_lib.sh\n", allMarker},
-		{mirrorWf, "      - ci/mirror_precheck_lib_test.sh\n", allMarker},
-		{mirrorWf, "bash ci/run_shell_tests.sh mirror-precheck-lib", "true"},
-		{mirrorWf, "  precheck-lib-test:\n", "  precheck-lib-test:\n    needs: precheck\n"},
-		{mirrorWf, "      (github.event_name != 'pull_request' || needs.precheck.outputs.missing == 'true')", "      (github.event_name != 'pull_request' || needs.precheck.outputs.missing != 'true')"},
-		{mirrorWf, "  push:\n    branches: [main]\n    paths:\n", "  push:\n    branches: [main]\n    paths:\n      - ci/suites.tsv\n"},
-		{mirrorWf, "    timeout-minutes: 5\n    permissions:\n      contents: read\n    steps:\n      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n      - name: Run the precheck library suite", "    timeout-minutes: 5\n    permissions:\n      contents: read\n      packages: write\n    steps:\n      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n      - name: Run the precheck library suite"},
+	const (
+		pushLine = "  push:\n    branches: [main]\n    paths:\n"
+		perms    = "    timeout-minutes: 5\n    permissions:\n      contents: read\n    steps:\n      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n      - name: Run the precheck library suite\n        run: bash ci/run_shell_tests.sh mirror-precheck-lib\n"
+	)
+	for _, c := range []struct {
+		m    mutation
+		want string
+	}{
+		{mutation{mirrorWf, "      - ci/mirror_precheck_lib.sh\n", allMarker}, "pull_request paths lack ci/mirror_precheck_lib.sh"},
+		{mutation{mirrorWf, "      - ci/mirror_precheck_lib_test.sh\n", allMarker}, "pull_request paths lack ci/mirror_precheck_lib_test.sh"},
+		{mutation{mirrorWf, "bash ci/run_shell_tests.sh mirror-precheck-lib", "true"}, "does not run"},
+		{mutation{mirrorWf, "  precheck-lib-test:\n", "  precheck-lib-test:\n    needs: precheck\n"}, "must not wait on another job"},
+		{mutation{mirrorWf, "(github.event_name != 'pull_request' || needs.precheck.outputs.missing == 'true')", "(github.event_name != 'pull_request' || needs.precheck.outputs.missing != 'true')"}, "publisher if differs from the base"},
+		{mutation{mirrorWf, pushLine, pushLine + "      - ci/suites.tsv\n"}, "push paths must not list ci/suites.tsv"},
+		{mutation{mirrorWf, perms, strings.Replace(perms, "contents: read\n", "contents: read\n      packages: write\n", 1)}, "permissions must be exactly contents: read"},
+		{mutation{mirrorWf, perms, strings.Replace(perms, "timeout-minutes: 5", "timeout-minutes: 6", 1)}, "timeout-minutes of exactly 5"},
+		{mutation{mirrorWf, perms, strings.Replace(perms, "timeout-minutes: 5", "timeout-minutes: 10", 1)}, "timeout-minutes of exactly 5"},
+		{mutation{mirrorWf, perms, perms + "      - name: Pull\n        run: docker pull alpine\n"}, "must run no docker command"},
+		{mutation{mirrorWf, perms, perms + "      - name: Compose\n        run: docker compose up -d\n"}, "must run no docker command"},
+		{mutation{mirrorWf, perms, perms + "      - uses: docker/login-action@v3\n"}, "must use no docker or registry-login action"},
+		{mutation{mirrorWf, perms, perms + "      - uses: some-org/registry-login@v1\n"}, "must use no docker or registry-login action"},
+		{mutation{mirrorWf, perms, perms + "      - env:\n          TOKEN: ${{ secrets.GHCR_TOKEN }}\n        run: true\n"}, "must use no secret"},
 	} {
-		tmp := plantTree(t, root, []string{mirrorWf}, m)
-		if d := mirrorSuiteDefects(loadWf(t, tmp, "mirror-test-images.yml")); len(d) == 0 {
-			t.Errorf("planted defect was not caught: %q -> %q", m.old, m.new)
+		tmp := plantTree(t, root, []string{mirrorWf}, c.m)
+		d := strings.Join(mirrorSuiteDefects(loadWf(t, tmp, "mirror-test-images.yml")), "\n")
+		if !strings.Contains(d, c.want) {
+			t.Errorf("planted defect was not caught with %q: got %q", c.want, d)
 		}
 	}
 }

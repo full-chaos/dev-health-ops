@@ -3,6 +3,7 @@ package joboutbox
 import (
 	"bytes"
 	"context"
+	"errors"
 	"log/slog"
 	"testing"
 	"time"
@@ -29,6 +30,10 @@ func newStartupRetryLoop(
 		Registry:           registry,
 		Logger:             slog.New(slog.NewTextHandler(logs, nil)),
 		StartupRetryBudget: budget,
+		StartupRetry:       testStartupRetry,
+		IsTransientDial:    postgres.IsTransientDialError,
+		MaskUnreachable:    postgres.MaskUnreachable,
+		StartupJitter:      postgres.DialRetryJitter,
 	}, clock)
 	if err != nil {
 		t.Fatal(err)
@@ -39,3 +44,28 @@ func newStartupRetryLoop(
 }
 
 func postgresTransient(err error) bool { return postgres.IsTransientDialError(err) }
+
+func testStartupRetry(
+	ctx context.Context,
+	budget time.Duration,
+	seams StartupRetrySeams,
+	step func(context.Context) error,
+) error {
+	return postgres.DialRetry{
+		Budget:  budget,
+		Now:     seams.Now,
+		Sleep:   seams.Sleep,
+		Jitter:  seams.Jitter,
+		OnRetry: seams.OnRetry,
+	}.Do(ctx, step)
+}
+
+// strandCause returns the database cause a strand classification keeps for
+// the startup retry.
+func strandCause(err error) error {
+	var withCause unavailableWithCause
+	if errors.As(err, &withCause) {
+		return withCause.cause
+	}
+	return err
+}

@@ -14,8 +14,6 @@ import (
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/rivertype"
-
-	"github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 )
 
 const (
@@ -712,19 +710,20 @@ func classifyStrandError(err error) error {
 	if errors.As(err, &pgErr) && pgErr.Code == insufficientPrivilege {
 		return ErrNotAuthorized
 	}
-	if postgres.IsTransientDialError(err) {
-		return transientUnavailable{cause: err}
+	if err == nil {
+		return ErrUnavailable
 	}
-	return ErrUnavailable
+	return unavailableWithCause{cause: err}
 }
 
-// transientUnavailable is ErrUnavailable that keeps a transient dial cause
-// visible to errors.Is/As (so startup can retry it) while its text stays the
-// sentinel's, which never names the dial address.
-type transientUnavailable struct{ cause error }
+// unavailableWithCause is ErrUnavailable that keeps the database cause for the
+// startup retry, which classifies it with a func its caller injects. Its text
+// and its errors.Is chain are ErrUnavailable's alone: the cause can name the
+// dial address and is never exposed to errors.Is or errors.As.
+type unavailableWithCause struct{ cause error }
 
-func (transientUnavailable) Error() string     { return ErrUnavailable.Error() }
-func (e transientUnavailable) Unwrap() []error { return []error{ErrUnavailable, e.cause} }
+func (unavailableWithCause) Error() string { return ErrUnavailable.Error() }
+func (unavailableWithCause) Unwrap() error { return ErrUnavailable }
 
 const (
 	claimLive        = "claim_live"

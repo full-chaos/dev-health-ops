@@ -92,8 +92,11 @@ func TestRepositoryKeepsATransientDialCauseButNotItsText(t *testing.T) {
 			if !errors.Is(err, ErrUnavailable) || err.Error() != ErrUnavailable.Error() {
 				t.Fatalf("err = %v, want the bare ErrUnavailable text", err)
 			}
-			if !postgresTransient(err) {
+			if !postgresTransient(strandCause(err)) {
 				t.Fatalf("a refused dial must stay classifiable as transient: %v", err)
+			}
+			if postgresTransient(err) {
+				t.Fatalf("the cause must not be visible through the error chain: %v", err)
 			}
 		})
 	}
@@ -107,7 +110,7 @@ func TestClassifyStrandErrorKeepsPermanentCausesFinal(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			err := classifyStrandError(permanent)
-			if postgresTransient(err) {
+			if postgresTransient(strandCause(err)) {
 				t.Fatalf("%s must not be transient: %v", name, err)
 			}
 			if name == "permission" && !errors.Is(err, ErrNotAuthorized) {
@@ -268,5 +271,38 @@ func assertExitErrorHasNoAddress(t *testing.T, err error, address string) {
 	}
 	if !errors.Is(err, syscall.ECONNREFUSED) || !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("exit error %q must still unwrap to the refused dial and ErrUnavailable", text)
+	}
+}
+
+func TestStartupRetryFuncsAreRequiredWithABudget(t *testing.T) {
+	full := func() ReconcilerLoopConfig {
+		return ReconcilerLoopConfig{
+			PollInterval:       minReconcilerPollInterval,
+			Limit:              7,
+			Registry:           health.NewRegistry(time.Second),
+			StartupRetryBudget: time.Minute,
+			StartupRetry:       testStartupRetry,
+			IsTransientDial:    func(error) bool { return false },
+			MaskUnreachable:    func(err error) error { return err },
+			StartupJitter:      func(wait time.Duration) time.Duration { return wait },
+		}
+	}
+	stepper := loopStepFunc(func(context.Context, time.Time, int) (StepResult, error) { return StepResult{}, nil })
+	if _, err := newReconcilerLoop(stepper, full(), &testReconcilerClock{}); err != nil {
+		t.Fatalf("a full config must construct: %v", err)
+	}
+	for name, clear := range map[string]func(*ReconcilerLoopConfig){
+		"StartupRetry":    func(c *ReconcilerLoopConfig) { c.StartupRetry = nil },
+		"IsTransientDial": func(c *ReconcilerLoopConfig) { c.IsTransientDial = nil },
+		"MaskUnreachable": func(c *ReconcilerLoopConfig) { c.MaskUnreachable = nil },
+		"StartupJitter":   func(c *ReconcilerLoopConfig) { c.StartupJitter = nil },
+	} {
+		t.Run("Nil"+name, func(t *testing.T) {
+			config := full()
+			clear(&config)
+			if _, err := newReconcilerLoop(stepper, config, &testReconcilerClock{}); !errors.Is(err, ErrInvalidConfiguration) {
+				t.Fatalf("nil %s with a budget: err = %v, want ErrInvalidConfiguration", name, err)
+			}
+		})
 	}
 }

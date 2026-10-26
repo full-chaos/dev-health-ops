@@ -838,6 +838,10 @@ func buildReconcilerDependencies(
 	loopConfig := joboutbox.DefaultReconcilerLoopConfig(registry)
 	loopConfig.Logger = logger
 	loopConfig.StartupRetryBudget = cfg.PreclaimReadinessTimeout
+	loopConfig.StartupRetry = outboxStartupRetry
+	loopConfig.IsTransientDial = postgres.IsTransientDialError
+	loopConfig.MaskUnreachable = postgres.MaskUnreachable
+	loopConfig.StartupJitter = postgres.DialRetryJitter
 	loop, err := sources.newLoop(relay, loopConfig)
 	if err != nil || loop == nil {
 		dependencies.loopErr = dependencyUnavailable("reconciler_relay_loop_construction_failed")
@@ -1292,4 +1296,21 @@ func buildUnreclaimableSweep(
 		Idle: syncreconciler.DefaultUnreclaimableIdle,
 		Mode: mode,
 	})
+}
+
+// outboxStartupRetry runs the outbox loop's first step under the shared
+// startup dial retry.
+func outboxStartupRetry(
+	ctx context.Context,
+	budget time.Duration,
+	seams joboutbox.StartupRetrySeams,
+	step func(context.Context) error,
+) error {
+	return postgres.DialRetry{
+		Budget:  budget,
+		Now:     seams.Now,
+		Sleep:   seams.Sleep,
+		Jitter:  seams.Jitter,
+		OnRetry: seams.OnRetry,
+	}.Do(ctx, step)
 }

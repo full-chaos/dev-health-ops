@@ -2,8 +2,12 @@ package authruntime
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
+	"net/url"
 	"os"
+	"strings"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -48,6 +52,47 @@ func quietProvider(provider mail.Sender) mail.Sender {
 	return provider
 }
 
+// EnvMailAllowConsole is the explicit development override: with it exactly "true", users-owned start-up accepts
+// the console mail provider, which delivers nothing. The chart never renders it.
+const EnvMailAllowConsole = "AUTH_MAIL_ALLOW_CONSOLE"
+
+// ownedUsersMailProvider builds go-api's mail provider for the verify and reset mails and refuses to start while
+// they could not reach a user: no real provider, a provider missing its settings, no from-address, or an
+// APP_BASE_URL that is not an absolute http(s) URL (links would point at the built-in localhost default). Every
+// refusal names a variable and never a value.
+func ownedUsersMailProvider(logger *slog.Logger) (mail.Sender, error) {
+	if from, set := os.LookupEnv("EMAIL_FROM_ADDRESS"); !set || strings.TrimSpace(from) == "" {
+		return nil, errors.New("auth mail: EMAIL_FROM_ADDRESS is required while auth-service owns users")
+	}
+	if err := checkAppBaseURL(os.Getenv("APP_BASE_URL")); err != nil {
+		return nil, err
+	}
+	provider, err := mail.NewSenderFromEnv(nil)
+	if err != nil {
+		return nil, fmt.Errorf("auth mail: %w", err)
+	}
+	switch provider.Name() {
+	case "console":
+		if os.Getenv(EnvMailAllowConsole) != "true" {
+			return nil, errors.New("auth mail: EMAIL_PROVIDER must name a real provider (smtp or resend) while auth-service owns users; the console provider delivers no mail (development only: " + EnvMailAllowConsole + "=true)")
+		}
+		logger.Warn("auth mail: " + EnvMailAllowConsole + " is set: the console provider is in use and no verify or reset mail is delivered")
+	case "smtp":
+		if host, set := os.LookupEnv("SMTP_HOST"); !set || strings.TrimSpace(host) == "" {
+			return nil, errors.New("auth mail: SMTP_HOST is required while EMAIL_PROVIDER=smtp and auth-service owns users")
+		}
+	}
+	return provider, nil
+}
+
+func checkAppBaseURL(raw string) error {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Hostname() == "" {
+		return errors.New("auth mail: APP_BASE_URL must be an absolute http(s) URL while auth-service owns users")
+	}
+	return nil
+}
+
 // credentialRoutes mounts go-api's password and e-mail verification routes
 // when the session secrets and AUTH_USERS_OWNED are set, and nothing
 // otherwise. The returned component closes the link-mail sender.
@@ -76,7 +121,7 @@ func credentialRoutes(
 	if err != nil {
 		return nil, nil, err
 	}
-	provider, err := mail.NewSenderFromEnv(nil)
+	provider, err := ownedUsersMailProvider(logger)
 	if err != nil {
 		return nil, nil, err
 	}

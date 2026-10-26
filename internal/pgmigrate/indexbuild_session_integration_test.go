@@ -4,6 +4,7 @@ package pgmigrate_test
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/url"
 	"strings"
@@ -14,11 +15,6 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/pgmigrate"
-)
-
-const (
-	backendChangedText = "backend changed"
-	lockNotHeldText    = "build lock was not held"
 )
 
 // plantSearchPath puts public ahead of pg_catalog, so the test's public functions shadow the catalog functions of the same
@@ -112,8 +108,8 @@ func TestBuildIndexRefusesWhenTheBackendChangesUnderTheBuildLock(t *testing.T) {
 		t.Fatal(err)
 	}
 	outcome := <-runDone
-	if outcome.err == nil || !strings.Contains(outcome.err.Error(), backendChangedText) {
-		t.Fatalf("result %+v err %v, want a refusal naming %q", outcome.result, outcome.err, backendChangedText)
+	if !errors.Is(outcome.err, pgmigrate.ErrBackendChanged) {
+		t.Fatalf("result %+v err %v, want ErrBackendChanged", outcome.result, outcome.err)
 	}
 	if outcome.result.Attempts != 1 || outcome.result.Valid {
 		t.Fatalf("result %+v, want one attempt and no retry", outcome.result)
@@ -123,15 +119,26 @@ func TestBuildIndexRefusesWhenTheBackendChangesUnderTheBuildLock(t *testing.T) {
 			t.Fatalf("the run sent %q after the backend changed", sql)
 		}
 	}
+	releaseRefused := false
 	for _, line := range logLines(t, logs.String()) {
 		if msg, _ := line["msg"].(string); strings.Contains(msg, "dropped") {
 			t.Fatalf("the run logged %q after the backend changed", msg)
 		}
+		if line["reason"] == "backend_changed" {
+			releaseRefused = true
+		}
+	}
+	if !releaseRefused {
+		t.Fatalf("the release did not report the changed backend:\n%s", logs.String())
 	}
 	if after := streakIndexState(t, observer); after != before {
 		t.Fatalf("index %+v after the refusal, want it untouched %+v", after, before)
 	}
 
+	// The refused run cannot unlock from a changed backend; its session end releases the lock.
+	if err := run.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
 	setPlantedDelta(t, observer, 0)
 	gate = holdTableLock(t, uri)
 	verbDone := make(chan string, 1)
@@ -163,7 +170,7 @@ func TestBuildIndexReportsAnUnlockThatReturnsFalse(t *testing.T) {
 	uri := d.at(t, length)
 	observer := connect(t, uri)
 	if _, err := observer.Exec(context.Background(),
-		"CREATE FUNCTION public.pg_advisory_unlock(bigint) RETURNS boolean LANGUAGE sql AS 'SELECT pg_catalog.pg_advisory_unlock($1) AND false'"); err != nil {
+		"CREATE FUNCTION public.pg_advisory_unlock(key bigint) RETURNS boolean LANGUAGE plpgsql AS 'BEGIN PERFORM pg_catalog.pg_advisory_unlock(key); RETURN false; END'"); err != nil {
 		t.Fatal(err)
 	}
 	run, _ := tracedConn(t, plantSearchPath(t, uri))
@@ -171,8 +178,8 @@ func TestBuildIndexReportsAnUnlockThatReturnsFalse(t *testing.T) {
 	result, err := pgmigrate.BuildFailureStreakIndex(context.Background(), run,
 		pgmigrate.IndexBuildOptions{LockTimeout: 2 * time.Second, Attempts: 1, Deadline: 30 * time.Second},
 		slog.New(slog.NewJSONHandler(logs, nil)))
-	if err == nil || !strings.Contains(err.Error(), lockNotHeldText) {
-		t.Fatalf("result %+v err %v, want an error naming %q", result, err, lockNotHeldText)
+	if !errors.Is(err, pgmigrate.ErrBuildLockLost) {
+		t.Fatalf("result %+v err %v, want ErrBuildLockLost", result, err)
 	}
 	warned := false
 	for _, line := range logLines(t, logs.String()) {

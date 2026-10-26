@@ -37,6 +37,39 @@ const buildIndexLockKey int64 = 0x64686f5f6978
 // valid. The run sends no DDL: an INVALID index then may be the other run's build in progress.
 var ErrBuildLockHeld = errors.New("another build-index run holds the lock")
 
+// ErrBackendChanged refuses a run whose session moved to another PostgreSQL backend under the build lock, as a
+// transaction-mode pooler moves it: the lock then guards nothing, so the run sends no further DDL.
+var ErrBackendChanged = errors.New("the database backend changed under the build lock: build-index needs a direct or session-mode PostgreSQL connection")
+
+// ErrBuildLockLost reports a release that found the build lock not held by the run's backend.
+var ErrBuildLockLost = errors.New("the build lock was not held at release")
+
+// lockedSession is the one connection that holds the build lock and sends every DDL and the unlock, with the backend pid
+// read in the statement that took the lock.
+type lockedSession struct {
+	conn *pgx.Conn
+	pid  int32
+}
+
+func (s lockedSession) sameBackend(ctx context.Context) error {
+	var pid int32
+	if err := s.conn.QueryRow(ctx, "SELECT pg_backend_pid()").Scan(&pid); err != nil {
+		return fmt.Errorf("read the backend pid: %w", err)
+	}
+	if pid != s.pid {
+		return fmt.Errorf("%w (pid %d at the lock, %d now)", ErrBackendChanged, s.pid, pid)
+	}
+	return nil
+}
+
+// exec runs one DDL statement within the window, after it checks that the session is still on the backend that holds the lock.
+func (s lockedSession) exec(ctx context.Context, sql string, windowEnd time.Time, restoreLock time.Duration) error {
+	if err := s.sameBackend(ctx); err != nil {
+		return err
+	}
+	return execWithinWindow(ctx, s.conn, sql, windowEnd, restoreLock)
+}
+
 // IndexBuildOptions bound how long one attempt may wait for the table lock, how long the whole build may wait for
 // older transactions, and how often a failed attempt is retried.
 type IndexBuildOptions struct {
@@ -83,6 +116,10 @@ type IndexBuildResult struct {
 // One run at a time acts: a run takes the build lock without waiting. A run that misses it reads the state once and
 // returns "present" over a valid index, else ErrBuildLockHeld, with no DDL. The winner reads the state again after each
 // table-lock probe, so an index a builder outside the lock made valid during the probe wait is kept.
+//
+// The lock is a session lock: the connection must stay on one backend (a direct or session-mode connection). The winner
+// reads pg_backend_pid() with the lock, before each DDL and before the unlock; a change returns ErrBackendChanged with no
+// further DDL. An unlock that answers false returns ErrBuildLockLost.
 func BuildFailureStreakIndex(ctx context.Context, conn *pgx.Conn, options IndexBuildOptions, logger *slog.Logger) (IndexBuildResult, error) {
 	result := IndexBuildResult{Index: FailureStreakIndexName}
 	if options.Attempts < 1 {
@@ -105,7 +142,8 @@ func BuildFailureStreakIndex(ctx context.Context, conn *pgx.Conn, options IndexB
 		return result, errors.New("public.sync_run_units does not exist: the database is not at the baseline")
 	}
 	var locked bool
-	if err := conn.QueryRow(ctx, "SELECT pg_try_advisory_lock($1)", buildIndexLockKey).Scan(&locked); err != nil {
+	var pid int32
+	if err := conn.QueryRow(ctx, "SELECT pg_try_advisory_lock($1), pg_backend_pid()", buildIndexLockKey).Scan(&locked, &pid); err != nil {
 		return result, fmt.Errorf("take the build lock: %w", err)
 	}
 	if !locked {
@@ -120,19 +158,29 @@ func BuildFailureStreakIndex(ctx context.Context, conn *pgx.Conn, options IndexB
 		}
 		return result, ErrBuildLockHeld
 	}
-	defer releaseBuildLock(ctx, conn, logger)
+	session := lockedSession{conn: conn, pid: pid}
+	err := buildUnderLock(ctx, session, options, logger, &result)
+	if releaseErr := releaseBuildLock(ctx, session, logger); releaseErr != nil && err == nil {
+		err = releaseErr
+	}
+	return result, err
+}
+
+// buildUnderLock is the winner's run: every statement goes through the session that holds the build lock.
+func buildUnderLock(ctx context.Context, session lockedSession, options IndexBuildOptions, logger *slog.Logger, result *IndexBuildResult) error {
+	conn := session.conn
 	windowEnd := time.Now().Add(options.Deadline)
 	watch := startBlockerWatch(ctx, conn, options, logger)
 	defer watch.stop()
 
 	info, err := readIndexInfo(ctx, conn)
 	if err != nil {
-		return result, err
+		return err
 	}
 	logIndexInfo(logger, "start", 0, info)
 	if info.ready() {
 		result.Action, result.Valid = "present", true
-		return result, nil
+		return nil
 	}
 	result.Action = "built"
 	var lastErr error
@@ -141,12 +189,12 @@ func BuildFailureStreakIndex(ctx context.Context, conn *pgx.Conn, options IndexB
 		if attempt > 1 {
 			select {
 			case <-ctx.Done():
-				return result, ctx.Err()
+				return ctx.Err()
 			case <-time.After(options.RetryDelay):
 			}
 		}
 		if info, err = readIndexInfo(ctx, conn); err != nil {
-			return result, err
+			return err
 		}
 		if attempt > 1 {
 			logIndexInfo(logger, "retry", attempt, info)
@@ -155,10 +203,14 @@ func BuildFailureStreakIndex(ctx context.Context, conn *pgx.Conn, options IndexB
 			lastErr = nil
 			break
 		}
-		stage, err := runBuildAttempt(ctx, conn, &result, windowEnd, options.LockTimeout)
+		stage, err := runBuildAttempt(ctx, session, result, windowEnd, options.LockTimeout)
 		if err == nil {
 			lastErr = nil
 			break
+		}
+		if errors.Is(err, ErrBackendChanged) {
+			logger.Warn("build-index: the backend changed under the build lock; no further DDL", "attempt", attempt, "stage", stage)
+			return fmt.Errorf("attempt %d: %w", attempt, err)
 		}
 		lastErr = err
 		if stage == "drop" {
@@ -175,27 +227,27 @@ func BuildFailureStreakIndex(ctx context.Context, conn *pgx.Conn, options IndexB
 		}
 	}
 	if lastErr != nil {
-		dropInvalidFailureStreakIndex(ctx, conn, options, logger)
-		return result, fmt.Errorf("the index was not built after %d attempts: %w", result.Attempts, lastErr)
+		dropInvalidFailureStreakIndex(ctx, session, options, logger)
+		return fmt.Errorf("the index was not built after %d attempts: %w", result.Attempts, lastErr)
 	}
 	info, err = readIndexInfo(ctx, conn)
 	if err != nil {
-		return result, err
+		return err
 	}
 	if !info.ready() {
-		return result, fmt.Errorf("index %s is not valid after the build (exists=%t)", FailureStreakIndexName, info.exists)
+		return fmt.Errorf("index %s is not valid after the build (exists=%t)", FailureStreakIndexName, info.exists)
 	}
 	result.Valid = true
-	return result, nil
+	return nil
 }
 
 // runBuildAttempt runs one attempt: probe the table lock, read the state, drop an INVALID leftover, build. stage names
 // where it failed. The state is read after the probe: the probe can wait behind a builder that ends with a valid index.
-func runBuildAttempt(ctx context.Context, conn *pgx.Conn, result *IndexBuildResult, windowEnd time.Time, lock time.Duration) (stage string, err error) {
-	if err := probeTableLock(ctx, conn); err != nil {
+func runBuildAttempt(ctx context.Context, session lockedSession, result *IndexBuildResult, windowEnd time.Time, lock time.Duration) (stage string, err error) {
+	if err := probeTableLock(ctx, session.conn); err != nil {
 		return "probe", err
 	}
-	info, err := readIndexInfo(ctx, conn)
+	info, err := readIndexInfo(ctx, session.conn)
 	if err != nil {
 		return "state", err
 	}
@@ -205,11 +257,11 @@ func runBuildAttempt(ctx context.Context, conn *pgx.Conn, result *IndexBuildResu
 	}
 	if info.exists {
 		result.Action = "rebuilt"
-		if err := execWithinWindow(ctx, conn, failureStreakDropSQL, windowEnd, lock); err != nil {
+		if err := session.exec(ctx, failureStreakDropSQL, windowEnd, lock); err != nil {
 			return "drop", err
 		}
 	}
-	if err := execWithinWindow(ctx, conn, failureStreakBuildSQL, windowEnd, lock); err != nil {
+	if err := session.exec(ctx, failureStreakBuildSQL, windowEnd, lock); err != nil {
 		return "build", err
 	}
 	return "", nil
@@ -230,12 +282,30 @@ func probeTableLock(ctx context.Context, conn *pgx.Conn) error {
 	return tx.Commit(ctx)
 }
 
-func releaseBuildLock(ctx context.Context, conn *pgx.Conn, logger *slog.Logger) {
+// releaseBuildLock unlocks on the backend that took the lock. A changed backend (ErrBackendChanged) and an unlock that
+// answers false (ErrBuildLockLost) are errors with their own reason; a failed statement is only logged, as the session end
+// releases the lock.
+func releaseBuildLock(ctx context.Context, session lockedSession, logger *slog.Logger) error {
 	releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), statementTimeoutResetLimit)
 	defer cancel()
-	if _, err := conn.Exec(releaseCtx, "SELECT pg_advisory_unlock($1)", buildIndexLockKey); err != nil {
-		logger.Warn("build-index: build lock not released; the session end releases it", "sqlstate", sqlState(err))
+	if err := session.sameBackend(releaseCtx); err != nil {
+		if errors.Is(err, ErrBackendChanged) {
+			logger.Warn("build-index: build lock not released", "reason", "backend_changed")
+			return err
+		}
+		logger.Warn("build-index: build lock not released; the session end releases it", "reason", "backend_pid_unread", "sqlstate", sqlState(err))
+		return nil
 	}
+	var released bool
+	if err := session.conn.QueryRow(releaseCtx, "SELECT pg_advisory_unlock($1)", buildIndexLockKey).Scan(&released); err != nil {
+		logger.Warn("build-index: build lock not released; the session end releases it", "reason", "unlock_failed", "sqlstate", sqlState(err))
+		return nil
+	}
+	if !released {
+		logger.Warn("build-index: build lock was not held at release", "reason", "unlock_returned_false")
+		return ErrBuildLockLost
+	}
+	return nil
 }
 
 func ms(d time.Duration) string { return strconv.FormatInt(d.Milliseconds(), 10) }
@@ -291,13 +361,13 @@ func failureStreakDropBudget(options IndexBuildOptions) time.Duration {
 // and must not stay. DROP INDEX CONCURRENTLY waits on the same open transactions that can fail the build, so it runs under
 // lock_timeout = 0 within a bounded budget (it outlives a cancelled ctx). A VALID index is never dropped. A failure here is
 // logged with its SQLSTATE only; the next run drops the leftover at the start of its first attempt.
-func dropInvalidFailureStreakIndex(ctx context.Context, conn *pgx.Conn, options IndexBuildOptions, logger *slog.Logger) {
+func dropInvalidFailureStreakIndex(ctx context.Context, session lockedSession, options IndexBuildOptions, logger *slog.Logger) {
 	budget := failureStreakDropBudget(options)
 	windowEnd := time.Now().Add(budget)
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), budget+statementTimeoutResetLimit)
 	defer cancel()
 	for attempt := 1; attempt <= failureStreakDropAttempts; attempt++ {
-		info, err := readIndexInfo(ctx, conn)
+		info, err := readIndexInfo(ctx, session.conn)
 		if err != nil {
 			logger.Warn("build-index: invalid index left; the next run drops it", "stage", "state", "attempt", attempt, "sqlstate", sqlState(err), "index", FailureStreakIndexName)
 			return
@@ -305,8 +375,11 @@ func dropInvalidFailureStreakIndex(ctx context.Context, conn *pgx.Conn, options 
 		if !info.exists || info.ready() {
 			return
 		}
-		if err := execWithinWindow(ctx, conn, failureStreakDropSQL, windowEnd, options.LockTimeout); err == nil {
+		if err := session.exec(ctx, failureStreakDropSQL, windowEnd, options.LockTimeout); err == nil {
 			logger.Info("build-index: dropped the invalid index after the final failure", "attempt", attempt)
+			return
+		} else if errors.Is(err, ErrBackendChanged) {
+			logger.Warn("build-index: invalid index left; the next run drops it", "stage", "backend", "attempt", attempt, "index", FailureStreakIndexName)
 			return
 		} else {
 			logger.Warn("build-index: drop of the invalid index failed", "attempt", attempt, "sqlstate", sqlState(err))
@@ -386,7 +459,10 @@ func buildIndex(ctx context.Context, resolve ResolveDSN, env cli.Env) int {
 			"A run that finds another run holding the build lock, while the index is not valid, exits non-zero (build_index_lock_held) with no DDL.\n"+
 			"\nEnvironment:\n"+
 			"  MIGRATION_DATABASE_URI (or _FILE, or the DEV_HEALTH_MIGRATION_PG_* component form)   elevated DSN, direct to PostgreSQL\n"+
-			"  POSTGRES_URI (or _FILE)                   used when MIGRATION_DATABASE_URI is not configured\n")
+			"  POSTGRES_URI (or _FILE)                   used when MIGRATION_DATABASE_URI is not configured\n"+
+			"\nBoth must reach PostgreSQL directly or through a session-mode pooler: the build lock is a session lock. Under a\n"+
+			"transaction-mode pooler the session can move to another backend; the run then exits non-zero\n"+
+			"(build_index_session_changed) with no further DDL. An unlock that answers false exits non-zero (build_index_lock_lost).\n")
 	}
 	if err := flags.Parse(env.Args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -427,6 +503,12 @@ func buildIndex(ctx context.Context, resolve ResolveDSN, env cli.Env) int {
 	result, err := BuildFailureStreakIndex(ctx, conn, options, logger)
 	if errors.Is(err, ErrBuildLockHeld) {
 		return writeError(env.Stderr, "build_index_lock_held", err.Error())
+	}
+	if errors.Is(err, ErrBackendChanged) {
+		return writeError(env.Stderr, "build_index_session_changed", boundary.Redact(err).Error())
+	}
+	if errors.Is(err, ErrBuildLockLost) {
+		return writeError(env.Stderr, "build_index_lock_lost", boundary.Redact(err).Error())
 	}
 	if err != nil {
 		return writeError(env.Stderr, "build_index_failed", boundary.Redact(err).Error())

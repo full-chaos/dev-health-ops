@@ -502,6 +502,50 @@
       "tenant_requirement": "none"
     },
     {
+      "accepted_credential_classes": [
+        "kubernetes_sa_token_exchange"
+      ],
+      "classification": "protected",
+      "current_state_cache_behavior": "No cache: the Kubernetes TokenReview API and the workload registry rows are read on every exchange.",
+      "disclosure_behavior": "Every refusal after a valid request shape is the same 400 {\"error\":\"invalid_grant\"}; a malformed request is 400 {\"error\":\"invalid_request\"}; a TokenReview, signer or audit failure is 503 {\"error\":\"temporarily_unavailable\"}. No credential, claim or reason text is in any answer; the reason is only in the log line and the auth.workload.exchanges counter.",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "POST /internal/v1/token/exchange [dev-health-auth-service @api]",
+      "issued_credential": [
+        {
+          "algorithm": "EdDSA",
+          "anchor": {
+            "line": 20,
+            "note": "claims := contracts.WorkloadTokenClaims{",
+            "path": "internal/auth/workloadexchange/mint.go"
+          },
+          "audience": "the narrowed request audience: auth-service or dev-health-api, and one the workload is registered for",
+          "class_id": "workload_token",
+          "direction": "returned_to_caller",
+          "issuer": "AUTH_TOKEN_ISSUER_URL",
+          "lifetime_seconds": 300,
+          "note": "workload-token.v1 for the resolved workload principal; the lifetime is at most 300 s and never past the subject token's expiry; the jti is bound to the binding and registry revision by the auth.workload.token_issued audit row."
+        }
+      ],
+      "method": "POST",
+      "primary_validator": {
+        "anchor": {
+          "line": 274,
+          "note": "subject, err := h.Validator.Validate(reviewCtx, subjectToken)",
+          "path": "internal/auth/workloadexchange/exchange.go"
+        },
+        "description": "handler.review: the Kubernetes TokenReview API authenticates the subject_token for the audience dev-health-workload-exchange (no local decode); the workload registry then resolves the reviewed ServiceAccount and narrows the audience and actions."
+      },
+      "route": "/internal/v1/token/exchange",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/workloadexchange/exchange.go",
+        "line": 143
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "none"
+    },
+    {
       "accepted_credential_classes": [],
       "classification": "public",
       "disclosure_behavior": "An unknown, expired, used or wrong-purpose secret is the same 400; no detail names which.",
@@ -1050,5 +1094,5 @@
     }
   ],
   "schema_version": "endpoint-profile.v1",
-  "source_commit": "c2caed1bae92dcd25251c56aa5aa52890027eef0"
+  "source_commit": "58a2c7d5a5336c502a16dbb366f9ec5bc56c325f"
 }

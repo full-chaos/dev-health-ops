@@ -21,11 +21,21 @@ func postureKeys(t *testing.T, root string) []string {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if len(b) == 0 || b[len(b)-1] != '\n' {
+		t.Fatal("the posture list must end with a newline: a last line without one is dropped by a line reader")
+	}
+	if strings.ContainsAny(string(b), "\r") {
+		t.Fatal("the posture list must not contain a carriage return")
+	}
 	var keys []string
 	for _, l := range strings.Split(string(b), "\n") {
-		if l = strings.TrimSpace(l); l != "" && !strings.HasPrefix(l, "#") {
-			keys = append(keys, l)
+		if l == "" || strings.HasPrefix(l, "#") {
+			continue
 		}
+		if strings.ContainsAny(l, " \t") {
+			t.Fatalf("the posture list line %q must not contain spaces or tabs", l)
+		}
+		keys = append(keys, l)
 	}
 	return keys
 }
@@ -423,6 +433,11 @@ func goBinary(t *testing.T) string {
 // postureDemoRun runs the helper copy committed in the fixture with a pass-through test runner, from cwd.
 func postureDemoRun(t *testing.T, f postureFixture, cwd string, extraEnv ...string) cmdResult {
 	t.Helper()
+	return postureDemoRunArgs(t, f, cwd, nil, extraEnv...)
+}
+
+func postureDemoRunArgs(t *testing.T, f postureFixture, cwd string, args []string, extraEnv ...string) cmdResult {
+	t.Helper()
 	pass := filepath.Join(t.TempDir(), "runner.sh")
 	if err := os.WriteFile(pass, []byte("#!/bin/sh\nshift 5\nexec \"$@\"\n"), 0o700); err != nil {
 		t.Fatal(err)
@@ -439,7 +454,7 @@ func postureDemoRun(t *testing.T, f postureFixture, cwd string, extraEnv ...stri
 	if !hasPath {
 		env = append(env, "PATH="+filepath.Dir(goBinary(t))+string(os.PathListSeparator)+"/usr/bin:/bin")
 	}
-	return cmdSpec{dir: cwd, env: env}.run("bash", filepath.Join(f.dir, "ci", "posture_integration.sh"), "--run", "--paths", paths, "--test-runner", pass)
+	return cmdSpec{dir: cwd, env: env}.run("bash", append([]string{filepath.Join(f.dir, "ci", "posture_integration.sh"), "--run", "--paths", paths, "--test-runner", pass}, args...)...)
 }
 
 func postureRow(res cmdResult, prefix string) string {
@@ -504,6 +519,13 @@ func TestPostureIntegrationSimulatedModeMarksEveryLine(t *testing.T) {
 		if !strings.HasPrefix(l, "SIMULATED") || strings.Contains(l, "RECEIPT") {
 			t.Fatalf("line %q must start SIMULATED and not say RECEIPT; stdout=%q", l, res.stdout)
 		}
+	}
+	if sum := postureRow(res, "SIMULATED-SUMMARY "); !strings.Contains(sum, " packages=2 partial=no") {
+		t.Fatalf("the summary must carry packages= and partial=no, got %q", sum)
+	}
+	part := postureDemoRunArgs(t, f, f.dir, []string{"--only", "internal/ok"})
+	if sum := postureRow(part, "SIMULATED-SUMMARY "); !strings.Contains(sum, " packages=1 partial=yes") {
+		t.Fatalf("a --only run must say packages=1 partial=yes, got %q (stdout=%q stderr=%q)", sum, part.stdout, part.stderr)
 	}
 	bad := cmdSpec{dir: f.dir, env: []string{shimBasePath()}}.run("bash", filepath.Join(f.dir, "ci", "posture_integration.sh"), "--nope")
 	if bad.code != 2 || !strings.Contains(bad.stderr, "--test-runner") {
@@ -637,5 +659,51 @@ func TestPostureIntegrationLeavesNoWorktreeBehind(t *testing.T) {
 	out, err := exec.Command("git", "-C", f.dir, "worktree", "list", "--porcelain").Output()
 	if err != nil || strings.Count(string(out), "worktree ") != 1 {
 		t.Fatalf("worktrees after a run: %q err=%v", out, err)
+	}
+}
+
+// A non-cone sparse-checkout in the caller repo is copied into a new worktree; the helper must disable it there so the
+// tests of HEAD all run, not the subset the caller's patterns leave on disk.
+func TestPostureIntegrationSparseCheckoutCannotHideATest(t *testing.T) {
+	f := postureDemo(t)
+	second := filepath.Join(t.TempDir(), "real.marker")
+	body := "package ok\n\nimport (\n\t\"os\"\n\t\"testing\"\n)\n\nfunc TestReal(t *testing.T) {\n\tif err := os.WriteFile(\"" + second + "\", []byte(\"x\"), 0o600); err != nil {\n\t\tt.Fatal(err)\n\t}\n}\n"
+	if err := os.WriteFile(filepath.Join(f.dir, "internal", "ok", "real_test.go"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f.git("add", ".")
+	f.git("commit", "-q", "-m", "second test")
+	f.git("sparse-checkout", "set", "--no-cone", "/*", "!/internal/ok/real_test.go")
+	if st := f.git("status", "--porcelain"); st != "" {
+		t.Fatalf("the plant must leave git status clean, got %q", st)
+	}
+	res := postureDemoRun(t, f, f.dir)
+	row := postureRow(res, "SIMULATED internal/ok ")
+	_, e1 := os.Stat(f.marker)
+	_, e2 := os.Stat(second)
+	if !strings.Contains(row, " PASS ") || !strings.Contains(row, "tests=2") || e1 != nil || e2 != nil {
+		t.Fatalf("both committed tests must run: row=%q markers=%v/%v stdout=%q stderr=%q", row, e1, e2, res.stdout, res.stderr)
+	}
+}
+
+// The list file is read strictly: a last line without a newline, a carriage return or a space makes the helper refuse
+// (exit 3, no package line) instead of dropping or mangling a key.
+func TestPostureIntegrationRefusesAMalformedList(t *testing.T) {
+	for name, content := range map[string]string{
+		"no final newline": "internal/empty\ninternal/ok",
+		"carriage return":  "internal/empty\r\ninternal/ok\n",
+		"trailing space":   "internal/empty\ninternal/ok \n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := postureDemo(t)
+			if err := os.WriteFile(filepath.Join(f.dir, "ci", "posture_integration_packages.tsv"), []byte(content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			paths := posturePaths(t, "internal/ok/ok_test.go")
+			res := cmdSpec{dir: f.dir, env: []string{shimBasePath()}}.run("bash", filepath.Join(f.dir, "ci", "posture_integration.sh"), "--paths", paths)
+			if res.code != 3 || strings.Contains(res.stdout, "POSTURE ") || strings.Contains(res.stdout, "NONE ") {
+				t.Fatalf("exit %d stdout=%q stderr=%q, want 3 and no verdict", res.code, res.stdout, res.stderr)
+			}
+		})
 	}
 }

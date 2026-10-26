@@ -29,6 +29,8 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -
 ROOT="$(cd -- "${SCRIPT_DIR}/.." >/dev/null 2>&1 && pwd -P)"
 # From /dev/urandom: compose adopts a resource that already carries the project name, so it must not be guessable.
 PROJECT="authcorpus$(od -An -N6 -tx1 /dev/urandom | tr -d ' \n')"
+# The override tags the images this run builds with the project, so the trap removes exactly its own two.
+export AUTH_CORPUS_PROJECT="${PROJECT}"
 WORK="$(mktemp -d)"
 STATE="${WORK}/state.env"
 SEEDED_FILE="${WORK}/seeded"
@@ -136,6 +138,11 @@ cleanup() {
   fi
   # Bounded: a hung docker daemon must not hold the step until the job timeout.
   timeout --kill-after=10 "${AUTH_CORPUS_DOWN_SECONDS:-180}" docker compose -p "${PROJECT}" "${COMPOSE_FILES[@]}" --profile auth down --volumes --remove-orphans >/dev/null 2>&1 || true
+  # Exactly the two images this run built, by name, after down: no prune and no other image (the dev stack's own :local
+  # images share tags with other projects and stay).
+  for image in "authcorpus-providerstub:${PROJECT}" "authcorpus-smtpsink:${PROJECT}"; do
+    timeout --kill-after=5 60 docker image rm "${image}" >/dev/null 2>&1 || true
+  done
   [ -z "${TEST_PID}" ] || kill "${TEST_PID}" 2>/dev/null || true
   rm -rf -- "${WORK}"
   exit "${status}"

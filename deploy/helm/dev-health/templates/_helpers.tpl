@@ -1158,16 +1158,15 @@ fails when
     pooler counts its own role at transaction.poolSize and each
     transaction.extraUsers entry at its own poolSize, else at the transaction
     poolSize, ALL of them times (1 + the rollout surge pods of the transaction
-    pooler): a surge pod opens every one of those pools again; the two session
-    poolers count one pool each)
+    pooler): a surge pod opens every one of those pools again; the queue-session
+    and coordinator-session poolers count poolSize x (1 + their own surge pods))
 exceeds it. Poolers count only while goWorkers and goWorkers.pgbouncer are on.
 A static upper bound: a pool holds server connections only while it needs them.
-Named assumption (CHAOS-11521 kind measurement, not a counted term): the two
-session poolers add +0 while they roll. Their old pod keeps its clients until it
-is stopped (24 to 31 s, the 30 s grace period), so the surge pod opens no server
-connection; the measured total stayed at the baseline in every session-pooler
-case. The transaction pooler is different: its surge pod serves new connections
-at once (+18 measured), so it is counted.
+Every pooler counts its surge pod (CHAOS-11583): rollingUpdate.maxSurge when set,
+else 1. CHAOS-11521 kind measurement: a session pooler's surge pod opened no
+server connection (the old pod keeps its clients until it is stopped, 24 to 31 s),
+so for the session poolers the count is an upper bound; the transaction pooler's
+surge pod serves new connections at once (+18 measured).
 */}}
 {{/*
 One number the connection budget adds or multiplies: a whole number from min to
@@ -1197,7 +1196,9 @@ maxUnavailable of 1 or more (Kubernetes refuses both at 0). Takes
 */}}
 {{- define "dev-health.pgbouncerRollingUpdate" -}}
 {{- $pooler := .pooler -}}
-{{- $ru := (get .ctx.Values.goWorkers.pgbouncer $pooler).rollingUpdate | default dict -}}
+{{- $ru := (get .ctx.Values.goWorkers.pgbouncer $pooler).rollingUpdate -}}
+{{- if and (not (kindIs "invalid" $ru)) (not (kindIs "map" $ru)) -}}{{- fail (printf "goWorkers.pgbouncer.%s.rollingUpdate must be a map of maxSurge and maxUnavailable, or unset" $pooler) -}}{{- end -}}
+{{- $ru = $ru | default dict -}}
 {{- if $ru -}}
 {{- $out := dict -}}
 {{- range $k := list "maxSurge" "maxUnavailable" -}}

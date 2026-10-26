@@ -3,7 +3,9 @@ package devhealth_test
 import (
 	"bufio"
 	"crypto/sha256"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"strings"
@@ -209,7 +211,10 @@ const goldenNoGitSkip = "no .git: the golden base sha cannot be checked as an an
 // missing from the history (a shallow clone) is an error, never a skip.
 func checkGoldenBase(repo, sha string) (skip string, err error) {
 	if _, e := os.Stat(repo + "/.git"); e != nil {
-		return goldenNoGitSkip, nil
+		if errors.Is(e, fs.ErrNotExist) {
+			return goldenNoGitSkip, nil
+		}
+		return "", fmt.Errorf("golden base check: cannot stat %s/.git: %v", repo, e)
 	}
 	if out, e := exec.Command("git", "-C", repo, "cat-file", "-e", sha+"^{commit}").CombinedOutput(); e != nil {
 		return "", fmt.Errorf("golden base %s not in history: run with full history (%v %s)", sha, e, strings.TrimSpace(string(out)))
@@ -257,5 +262,28 @@ func TestGoldenBaseCheckFailsOnAbsentShaAndNonAncestorAndSkipsOnlyWithoutGit(t *
 	skip, err = checkGoldenBase(t.TempDir(), base)
 	if skip != goldenNoGitSkip || err != nil {
 		t.Errorf("no .git must skip with the named message: skip=%q err=%v", skip, err)
+	}
+	notDir := t.TempDir() + "/file"
+	if e := os.WriteFile(notDir, nil, 0o600); e != nil {
+		t.Fatal(e)
+	}
+	skip, err = checkGoldenBase(notDir, base)
+	if skip != "" || err == nil || !strings.HasPrefix(err.Error(), "golden base check: cannot stat "+notDir+"/.git:") {
+		t.Errorf("a stat error other than not-exist must FAIL, never skip: skip=%q err=%v", skip, err)
+	}
+}
+
+// A non-map rollingUpdate (false, a string, a list) must reach the helper and be
+// refused, for every pooler: the chart default must not replace an explicit value.
+func TestPgbouncerRollingUpdateNonMapIsRefusedByTheHelper(t *testing.T) {
+	for _, pooler := range []string{"transaction", "queueSession", "coordinatorSession"} {
+		for name, v := range map[string]string{"false": `false`, "string": `"x"`, "list": `[1]`} {
+			set := []string{"--set-json", "goWorkers.pgbouncer." + pooler + ".rollingUpdate=" + v, "--skip-schema-validation"}
+			_, out, err := renderAuth(t, authWith(set...)...)
+			want := "goWorkers.pgbouncer." + pooler + ".rollingUpdate must be a map of maxSurge and maxUnavailable, or unset"
+			if err == nil || !strings.Contains(out, want) {
+				t.Errorf("%s %s: want the helper refusal %q: err=%v out=%.300s", pooler, name, want, err, out)
+			}
+		}
 	}
 }

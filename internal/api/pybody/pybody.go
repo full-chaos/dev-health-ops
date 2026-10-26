@@ -61,7 +61,7 @@ func Read(r *http.Request) (Body, Outcome, *Error, error) {
 	if len(raw) == 0 {
 		return Body{Missing: true}, Ready, nil, nil
 	}
-	if !wantsJSON(r.Header.Get("Content-Type")) {
+	if !WantsJSON(r.Header.Get("Content-Type")) {
 		text := string(raw)
 		return Body{Raw: &text}, Ready, nil, nil
 	}
@@ -89,9 +89,9 @@ func Read(r *http.Request) (Body, Outcome, *Error, error) {
 	return Body{Value: value}, Ready, nil, nil
 }
 
-// wantsJSON is FastAPI's rule: no content type, or application/json or
+// WantsJSON is FastAPI's rule: no content type, or application/json or
 // application/*+json.
-func wantsJSON(contentType string) bool {
+func WantsJSON(contentType string) bool {
 	if contentType == "" {
 		return true
 	}

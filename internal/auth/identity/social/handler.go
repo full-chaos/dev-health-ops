@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
@@ -62,7 +63,7 @@ func readTokenRequest(w http.ResponseWriter, r *http.Request) (Provider, contrac
 	if readErr == nil {
 		// The api plane answers a body that is not UTF-8 (and only that) before it
 		// reads a field; a syntax error keeps the answer this route always gave.
-		if _, err := pyjson.DecodeBody(data); errors.Is(err, pyjson.ErrUnicode) {
+		if _, err := pyjson.DecodeBody(data); pybody.WantsJSON(r.Header.Get("Content-Type")) && errors.Is(err, pyjson.ErrUnicode) {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"detail": "There was an error parsing the body"})
 			return "", contracts.SecretString{}, false
 		}

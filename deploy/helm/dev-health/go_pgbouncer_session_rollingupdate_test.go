@@ -1,8 +1,7 @@
 package devhealth_test
 
 import (
-	"bufio"
-	"crypto/sha256"
+	"bytes"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -30,51 +29,58 @@ var goldenProdArgs = append(append([]string{}, goldenRenderArgs...),
 	"--set", "goWorkers.pgbouncer.transaction.poolSize=16", "--set", "goWorkers.pgbouncer.queueSession.poolSize=36",
 	"--set", "goWorkers.pgbouncer.coordinatorSession.poolSize=10")
 
-func readGolden(t *testing.T) (sha string, sums map[string]string) {
-	t.Helper()
-	f, err := os.Open("testdata/session-pooler-golden.txt")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer f.Close()
-	sums = map[string]string{}
-	sc := bufio.NewScanner(f)
-	for sc.Scan() {
-		line := sc.Text()
-		if v, ok := strings.CutPrefix(line, "# golden-base-sha: "); ok {
-			sha = v
-		} else if !strings.HasPrefix(line, "#") {
-			if k, v, ok := strings.Cut(line, " "); ok {
-				sums[k] = v
-			}
-		}
-	}
-	return sha, sums
-}
+const goldenBaseSha = "97c204c79a34175b7ecb81240539bd1bf1dd8cb3"
 
 // CHAOS-11583: with rollingUpdate unset on the session poolers the whole render is
-// byte-equal to main. The golden is made by testdata/gen-session-golden.sh from a
-// named main sha, which must be an ancestor of HEAD.
+// byte-equal to the base chart. The base chart is taken from git history (the base
+// sha must be an ancestor of HEAD) and rendered with the SAME helm binary as the tip,
+// so a helm version change cannot make the two differ.
 func TestSessionRollingUpdateUnsetRendersByteEqual(t *testing.T) {
 	if _, err := exec.LookPath("helm"); err != nil {
 		t.Skip("helm is not installed")
 	}
-	sha, sums := readGolden(t)
-	if len(sha) != 40 {
-		t.Fatalf("golden header has no 40-character base sha: %q", sha)
-	}
-	if skip, err := checkGoldenBase("../../..", sha); skip != "" {
+	if skip, err := checkGoldenBase("../../..", goldenBaseSha); skip != "" {
 		t.Skip(skip)
 	} else if err != nil {
 		t.Fatal(err)
 	}
+	baseDir := t.TempDir()
+	tarball, err := exec.Command("git", "-C", "../../..", "archive", goldenBaseSha, "deploy/helm/dev-health").Output()
+	if err != nil {
+		t.Fatalf("git archive %s: %v", goldenBaseSha, err)
+	}
+	untar := exec.Command("tar", "-x", "-C", baseDir)
+	untar.Stdin = bytes.NewReader(tarball)
+	if out, err := untar.CombinedOutput(); err != nil {
+		t.Fatalf("tar: %v %s", err, out)
+	}
 	for name, args := range map[string][]string{"default": goldenRenderArgs, "prod-like": goldenProdArgs} {
-		out, err := exec.Command("helm", append([]string{"template", "a", "."}, args...)...).CombinedOutput()
-		if err != nil {
-			t.Fatalf("%s render: %v\n%.300s", name, err, out)
+		render := func(dir string) string {
+			cmd := exec.Command("helm", append([]string{"template", "a", "."}, args...)...)
+			cmd.Dir = dir
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("%s render in %s: %v\n%.300s", name, dir, err, out)
+			}
+			return string(out)
 		}
-		if got := fmt.Sprintf("%x", sha256.Sum256(out)); got != sums[name] {
-			t.Errorf("%s render differs from main %s: sha256 %s, golden %s", name, sha[:10], got, sums[name])
+		base, tip := render(baseDir+"/deploy/helm/dev-health"), render(".")
+		if base == tip {
+			continue
+		}
+		bl, tl := strings.Split(base, "\n"), strings.Split(tip, "\n")
+		for i := 0; i < len(bl) || i < len(tl); i++ {
+			var b, c string
+			if i < len(bl) {
+				b = bl[i]
+			}
+			if i < len(tl) {
+				c = tl[i]
+			}
+			if b != c {
+				t.Errorf("%s render differs from base %s at line %d:\n  base: %s\n  tip:  %s", name, goldenBaseSha[:10], i+1, b, c)
+				break
+			}
 		}
 	}
 }
@@ -220,7 +226,7 @@ func checkGoldenBase(repo, sha string) (skip string, err error) {
 		return "", fmt.Errorf("golden base %s not in history: run with full history (%v %s)", sha, e, strings.TrimSpace(string(out)))
 	}
 	if out, e := exec.Command("git", "-C", repo, "merge-base", "--is-ancestor", sha, "HEAD").CombinedOutput(); e != nil {
-		return "", fmt.Errorf("golden base sha %s is not an ancestor of HEAD (regenerate with testdata/gen-session-golden.sh <main sha>): %v %s", sha, e, out)
+		return "", fmt.Errorf("golden base sha %s is not an ancestor of HEAD (set goldenBaseSha to a main sha that HEAD contains): %v %s", sha, e, out)
 	}
 	return "", nil
 }

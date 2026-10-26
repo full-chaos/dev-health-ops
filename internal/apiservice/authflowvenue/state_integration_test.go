@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/providerstub"
 )
 
@@ -29,18 +30,19 @@ func TestUserAndSessionStateFailsTheRefusalCheckOnAnInPlaceUpdateIntegration(t *
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = conn.Close(context.Background()) })
+	// The public tables are the migrated schema, never hand-written DDL (CHAOS-6769); the auth tables are not in the public
+	// schema the guard reads and hold only the columns the state query names.
+	pgschema.ApplyURI(ctx, t, instance.URI)
 	for _, statement := range []string{
-		`CREATE TABLE public.users (id int PRIMARY KEY, email text)`,
-		`CREATE TABLE public.refresh_tokens (id int PRIMARY KEY, revoked boolean)`,
 		`CREATE SCHEMA auth`,
-		`CREATE TABLE auth.users (principal_id int PRIMARY KEY, last_login_at timestamptz)`,
-		`CREATE TABLE auth.principals (id int PRIMARY KEY, display_name text)`,
-		`CREATE TABLE auth.refresh_credentials (id int PRIMARY KEY, consumed boolean)`,
-		`INSERT INTO public.users VALUES (1, 'a@example.com'), (2, 'b@example.com')`,
-		`INSERT INTO public.refresh_tokens VALUES (1, false)`,
-		`INSERT INTO auth.users VALUES (1, NULL)`,
-		`INSERT INTO auth.principals VALUES (1, 'A')`,
-		`INSERT INTO auth.refresh_credentials VALUES (1, false)`,
+		`CREATE TABLE auth.users (principal_id uuid PRIMARY KEY, last_login_at timestamptz)`,
+		`CREATE TABLE auth.principals (id uuid PRIMARY KEY, display_name text)`,
+		`CREATE TABLE auth.refresh_credentials (id uuid PRIMARY KEY, consumed boolean)`,
+		`INSERT INTO public.users (id, email, auth_provider) VALUES ('00000000-0000-4000-8000-0000000000b1', 'a@example.com', 'local'), ('00000000-0000-4000-8000-0000000000b2', 'b@example.com', 'local')`,
+		`INSERT INTO public.refresh_tokens (id, user_id, token_hash, family_id, expires_at) VALUES ('00000000-0000-4000-8000-0000000000c1', '00000000-0000-4000-8000-0000000000b1', 'hash-1', '00000000-0000-4000-8000-0000000000d1', now() + interval '1 day')`,
+		`INSERT INTO auth.users VALUES ('00000000-0000-4000-8000-0000000000b1', NULL)`,
+		`INSERT INTO auth.principals VALUES ('00000000-0000-4000-8000-0000000000b1', 'A')`,
+		`INSERT INTO auth.refresh_credentials VALUES ('00000000-0000-4000-8000-0000000000e1', false)`,
 	} {
 		if _, err := conn.Exec(ctx, statement); err != nil {
 			t.Fatalf("fixture %q: %v", statement, err)
@@ -63,11 +65,11 @@ func TestUserAndSessionStateFailsTheRefusalCheckOnAnInPlaceUpdateIntegration(t *
 		t.Fatalf("an untouched state failed the check: %v", err)
 	}
 	for name, update := range map[string]string{
-		"a public.users row":              `UPDATE public.users SET email = 'changed@example.com' WHERE id = 2`,
-		"a public.refresh_tokens row":     `UPDATE public.refresh_tokens SET revoked = true WHERE id = 1`,
-		"an auth.users row":               `UPDATE auth.users SET last_login_at = now() WHERE principal_id = 1`,
-		"an auth.principals row":          `UPDATE auth.principals SET display_name = 'B' WHERE id = 1`,
-		"an auth.refresh_credentials row": `UPDATE auth.refresh_credentials SET consumed = true WHERE id = 1`,
+		"a public.users row":              `UPDATE public.users SET email = 'changed@example.com' WHERE id = '00000000-0000-4000-8000-0000000000b2'`,
+		"a public.refresh_tokens row":     `UPDATE public.refresh_tokens SET revoked_at = now() WHERE id = '00000000-0000-4000-8000-0000000000c1'`,
+		"an auth.users row":               `UPDATE auth.users SET last_login_at = now() WHERE principal_id = '00000000-0000-4000-8000-0000000000b1'`,
+		"an auth.principals row":          `UPDATE auth.principals SET display_name = 'B' WHERE id = '00000000-0000-4000-8000-0000000000b1'`,
+		"an auth.refresh_credentials row": `UPDATE auth.refresh_credentials SET consumed = true WHERE id = '00000000-0000-4000-8000-0000000000e1'`,
 	} {
 		if _, err := conn.Exec(ctx, update); err != nil {
 			t.Fatalf("%s: %v", name, err)

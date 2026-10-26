@@ -791,41 +791,44 @@ func mergeGroupFullDefects(src string) []string {
 }
 
 // runIntegrationPackagesDefects checks the body of run_integration_packages: after the dry-run return, exactly two
-// go test lines run, the filtered packages with -run of the printed SHARD-REGEX and the hook packages whole.
+// run_integration_go_test calls (the reaped-session helper) run, each go test group with -run of its printed
+// SHARD-REGEX and the hook packages whole; the body runs no go test itself.
 func runIntegrationPackagesDefects(body string) []string {
 	var d []string
 	lines := strings.Split(body, "\n")
-	dryReturn, goTests := -1, 0
+	dryReturn, calls := -1, 0
+	at := func(i int) string {
+		if i < 0 {
+			return ""
+		}
+		return strings.TrimSpace(lines[i])
+	}
 	for i, l := range lines {
 		l = strings.TrimSpace(l)
 		if l == `[ "${mode}" != "--dry-run" ] || return 0` {
 			dryReturn = i
 		}
-		if !strings.Contains(l, "go test -mod=readonly -trimpath -tags=integration -count=1") {
+		if regexp.MustCompile(`\bgo test\b`).MatchString(l) {
+			d = append(d, "run_integration_packages runs go test itself instead of through run_integration_go_test: "+l)
+		}
+		if !strings.HasPrefix(l, `run_integration_go_test "${module_dir}" "${run_pkgs[@]}"`) {
 			continue
 		}
-		goTests++
-		prev := ""
-		if i > 0 {
-			prev = strings.TrimSpace(lines[i-1])
-		}
+		calls++
 		switch {
 		case dryReturn < 0 || i < dryReturn:
 			d = append(d, "a go test runs before the dry-run return")
-		case strings.HasSuffix(l, `-run "${group_regex[${group}]}" "${run_pkgs[@]}"`):
-			if prev != `mapfile -t run_pkgs <<<"${group_pkgs[${group}]%$'\n'}"` {
+		case at(i-1) == `run_pkgs=(-run "${group_regex[${group}]}" "${run_pkgs[@]}")`:
+			if at(i-2) != `mapfile -t run_pkgs <<<"${group_pkgs[${group}]%$'\n'}"` {
 				d = append(d, "the -run go test does not run the packages of its group")
 			}
-		case strings.HasSuffix(l, `-timeout=30m "${run_pkgs[@]}"`) && !strings.Contains(l, "-run"):
-			if prev != `run_pkgs=("${unfiltered[@]}")` {
-				d = append(d, "the go test without -run runs packages other than the hook packages")
-			}
+		case at(i-1) == `run_pkgs=("${unfiltered[@]}")`:
 		default:
-			d = append(d, "unexpected go test line: "+l)
+			d = append(d, "a run_integration_go_test call runs neither a group with its -run nor the hook packages")
 		}
 	}
-	if goTests != 2 {
-		d = append(d, fmt.Sprintf("%d go test lines, want 2 (each group with -run, hook packages whole)", goTests))
+	if calls != 2 {
+		d = append(d, fmt.Sprintf("%d run_integration_go_test calls, want 2 (each group with -run, hook packages whole)", calls))
 	}
 	if !strings.Contains(body, `printf '  SHARD-REGEX %s %s\n' "${module_dir}" "${group_regex[${group}]}"`) {
 		d = append(d, "the SHARD-REGEX receipt does not print the regex go test receives")
@@ -1078,8 +1081,9 @@ cmp -s one.txt two.txt && echo SAME || { echo DIFFERENT; diff one.txt two.txt ||
 			t.Fatalf("run_integration_packages: %v", d)
 		}
 		for name, plant := range map[string][2]string{
-			"the filtered go test drops -run":         {`-run "${group_regex[${group}]}" "${run_pkgs[@]}"`, `"${run_pkgs[@]}"`},
+			"the filtered go test drops -run":         {`run_pkgs=(-run "${group_regex[${group}]}" "${run_pkgs[@]}")`, `run_pkgs=("${run_pkgs[@]}")`},
 			"the filtered go test runs the hook list": {`mapfile -t run_pkgs <<<"${group_pkgs[${group}]%$'\n'}"`, `run_pkgs=("${unfiltered[@]}")`},
+			"a group bypasses the reap helper":        {`run_integration_go_test "${module_dir}" "${run_pkgs[@]}"`, `go test -tags=integration "${run_pkgs[@]}"`},
 			"the receipt prints another regex":        {`printf '  SHARD-REGEX %s %s\n' "${module_dir}" "${group_regex[${group}]}"`, `printf '  SHARD-REGEX %s %s\n' "${module_dir}" '^(.*)$'`},
 			"a dry run executes tests":                {`[ "${mode}" != "--dry-run" ] || return 0`, `:`},
 		} {

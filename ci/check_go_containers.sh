@@ -26,13 +26,16 @@ readonly CONTAINER_SECURITY_ARGS=(
 ACTIVE_CONTAINER=""
 
 usage() {
-  cat <<'EOF'
-Usage: ci/check_go_containers.sh [smoke|reproducible|all]
-
-  smoke         Build every worker target and verify non-root runtime behavior.
-  reproducible  Build every target twice from scratch and compare image IDs.
-  all           Run smoke and reproducibility checks (default).
-EOF
+  printf '%s\n' \
+    'Usage: ci/check_go_containers.sh [smoke|reproducible|all|build-shared DIR|verify-images [TARGET...]]' \
+    '' \
+    '  smoke         Build every worker target and verify non-root runtime behavior.' \
+    '  reproducible  Build every target twice from scratch and compare image IDs.' \
+    '  all           Run smoke and reproducibility checks (default).' \
+    '  build-shared  Build every target once; write receipt.tsv, ids.txt and images.tar into DIR.' \
+    '  verify-images Check loaded <prefix>-<target>:ci ids against GO_IMAGES_EXPECTED (target=id,...).' \
+    '' \
+    'GO_IMAGES_PREBUILT=1: smoke uses the loaded images and fails unless each id is the expected one.'
 }
 
 die() {
@@ -116,21 +119,92 @@ cleanup_active_container() {
 
 trap cleanup_active_container EXIT
 
+# Prints the image id GO_IMAGES_EXPECTED ("target=id,target=id") names for a target; fails when it names none.
+expected_image_id() {
+  local want="$1"
+  local rest="${GO_IMAGES_EXPECTED:-},"
+  local pair
+  while [ -n "${rest}" ]; do
+    pair="${rest%%,*}"
+    rest="${rest#*,}"
+    if [ "${pair%%=*}" = "${want}" ] && [ "${pair}" != "${want}" ]; then
+      printf '%s' "${pair#*=}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# Fails closed: the loaded image must exist and its id must equal the id the build job reported for that target.
+verify_loaded_image() {
+  local target="$1"
+  local tag="${IMAGE_PREFIX}-${target}:ci"
+  local expected
+  local loaded
+  expected="$(expected_image_id "${target}")" \
+    || die "no expected image id for ${target} (GO_IMAGES_EXPECTED is unset or does not name it)"
+  [[ "${expected}" =~ ^sha256:[0-9a-f]{64}$ ]] \
+    || die "the expected image id for ${target} is not a sha256 id: ${expected}"
+  loaded="$(docker image inspect --format '{{.Id}}' "${tag}")" \
+    || die "${tag} is not loaded"
+  printf 'image-receipt consumer=%s target=%s platform=%s id=%s expected=%s\n' \
+    "${GO_IMAGES_CONSUMER:-verify}" "${target}" "${DOCKER_DEFAULT_PLATFORM:-host}" "${loaded}" "${expected}"
+  [ "${loaded}" = "${expected}" ] \
+    || die "${tag} is ${loaded}, but the build job reported ${expected}"
+}
+
+verify_images() {
+  local target
+  local -a targets=("$@")
+  [ "${#targets[@]}" -gt 0 ] || targets=("${ALL_TARGETS[@]}")
+  for target in "${targets[@]}"; do
+    verify_loaded_image "${target}"
+  done
+}
+
+# One build per target with the fixed metadata, then one docker save of all of them. The ids go to ids.txt in the
+# form GO_IMAGES_EXPECTED takes; the workflow passes them to the consumers as a job output.
+build_shared() {
+  local out="${1:?build-shared needs an output directory}"
+  local target
+  local id
+  local ids=""
+  local -a tags=()
+  mkdir -p "${out}"
+  : >"${out}/receipt.tsv"
+  for target in "${ALL_TARGETS[@]}"; do
+    build_target "${target}" "${IMAGE_PREFIX}-${target}:ci" --provenance=false
+    id="$(docker image inspect --format '{{.Id}}' "${IMAGE_PREFIX}-${target}:ci")"
+    printf '%s\t%s\t%s\n' "${target}" "${DOCKER_DEFAULT_PLATFORM:-host}" "${id}" >>"${out}/receipt.tsv"
+    printf 'shared image %s %s\n' "${target}" "${id}"
+    ids="${ids:+${ids},}${target}=${id}"
+    tags+=("${IMAGE_PREFIX}-${target}:ci")
+  done
+  printf '%s' "${ids}" >"${out}/ids.txt"
+  docker save --output "${out}/images.tar" "${tags[@]}"
+}
+
 build_target() {
   local target="$1"
   local tag="$2"
   shift 2
 
-  docker build \
-    --file "${DOCKERFILE}" \
-    --target "${target}" \
-    --build-arg "VERSION=${VERSION}" \
-    --build-arg "COMMIT=${COMMIT}" \
-    --build-arg "BUILD_TIME=${BUILD_TIME}" \
-    --build-arg "SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH}" \
-    --tag "${tag}" \
-    "$@" \
-    "${ROOT}"
+  if [ "${GO_IMAGES_PREBUILT:-}" = 1 ]; then
+    [ "${tag}" = "${IMAGE_PREFIX}-${target}:ci" ] \
+      || die "prebuilt images serve only ${IMAGE_PREFIX}-<target>:ci, not ${tag}"
+    verify_loaded_image "${target}"
+  else
+    docker build \
+      --file "${DOCKERFILE}" \
+      --target "${target}" \
+      --build-arg "VERSION=${VERSION}" \
+      --build-arg "COMMIT=${COMMIT}" \
+      --build-arg "BUILD_TIME=${BUILD_TIME}" \
+      --build-arg "SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH}" \
+      --tag "${tag}" \
+      "$@" \
+      "${ROOT}"
+  fi
   # A leg that selects a platform (the CI arm64 leg sets
   # DOCKER_DEFAULT_PLATFORM) must have built THAT architecture: an image of
   # the host's architecture would pass every check below without the
@@ -794,6 +868,13 @@ case "${1:-all}" in
   all)
     smoke
     reproducible
+    ;;
+  build-shared)
+    build_shared "${2:-}"
+    ;;
+  verify-images)
+    shift
+    verify_images "$@"
     ;;
   -h|--help|help)
     usage

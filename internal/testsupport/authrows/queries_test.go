@@ -54,18 +54,12 @@ func TestProjectionRoutingSessionsForwardedReadsAuthRefreshAndAudit(t *testing.T
 }
 
 func TestAFlowedAggregateWithoutAProjectionFails(t *testing.T) {
-	for _, text := range []string{"credentials", "sessions,oidc", "saml", "sessions,local_login,credentials,social,oidc,saml"} {
+	for _, text := range []string{"oidc", "sessions,oidc", "saml", "sessions,local_login,credentials,social,oidc,saml"} {
 		f := forwarded(t, text)
 		for _, table := range []string{TableUsers, TableRefreshTokens, TableAuditLogs} {
 			if _, _, err := Query(table, "PUBLIC", f); err == nil {
 				t.Errorf("forwarded %s: %s was read without a projection", text, table)
 			}
-		}
-	}
-	credentials := forwarded(t, "sessions,credentials")
-	for _, table := range []string{TableEmailVerificationTokens, TablePasswordResetTokens} {
-		if _, _, err := Query(table, "PUBLIC", credentials); err == nil {
-			t.Errorf("%s was read with credentials forwarded and no link-credential projection", table)
 		}
 	}
 	if _, _, err := Query("tokens_of_a_new_table", "PUBLIC", forwarded(t, "sessions")); err == nil {

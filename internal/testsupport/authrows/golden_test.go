@@ -95,7 +95,7 @@ func acpRows(t *testing.T, golden map[string]string) map[string]string {
 func TestQuirksCoverTheGoldenAndTheExpectedTargetRowsExactly(t *testing.T) {
 	golden := goldenRows(t)
 	acp := acpRows(t, golden)
-	l, err := NewLedger(forwarded(t, "sessions,local_login"))
+	l, err := NewLedger(forwarded(t, "sessions,local_login"), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,7 +116,7 @@ func TestQuirksCoverTheGoldenAndTheExpectedTargetRowsExactly(t *testing.T) {
 func TestQuirksReportARowTheGoldenDoesNotHold(t *testing.T) {
 	golden := goldenRows(t)
 	acp := acpRows(t, golden)
-	l, err := NewLedger(forwarded(t, "sessions,local_login"))
+	l, err := NewLedger(forwarded(t, "sessions,local_login"), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,7 +174,7 @@ func TestEveryProjectedTableIsAGoldenComparison(t *testing.T) {
 func TestQuirkExtraRowsAreLimitedToTheirCount(t *testing.T) {
 	golden := goldenRows(t)
 	acp := acpRows(t, golden)
-	l, err := NewLedger(forwarded(t, "sessions,local_login"))
+	l, err := NewLedger(forwarded(t, "sessions,local_login"), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -267,7 +267,7 @@ func TestOrganizationChoiceQuirksRewriteOnlyAlicesSignInRows(t *testing.T) {
 		}
 	}
 	acp := acpRows(t, golden)
-	l, err := NewLedger(forwarded(t, "sessions,local_login"))
+	l, err := NewLedger(forwarded(t, "sessions,local_login"), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -279,7 +279,7 @@ func TestOrganizationChoiceQuirksRewriteOnlyAlicesSignInRows(t *testing.T) {
 	if problems := l.Compare(TableRefreshTokens, golden[TableRefreshTokens], moreRevoked); len(problems) != 2 {
 		t.Errorf("a changed revoked count was classified: %v", problems)
 	}
-	l, err = NewLedger(forwarded(t, "sessions,local_login"))
+	l, err = NewLedger(forwarded(t, "sessions,local_login"), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -297,7 +297,7 @@ func TestChainedRewritesCoverOneTargetRowPerGoldenRow(t *testing.T) {
 	golden := goldenRows(t)
 	acp := acpRows(t, golden)
 	run := func(goldenRefresh, acpRefresh string) (problems []string, covered string) {
-		l, err := NewLedger(forwarded(t, "sessions,local_login"))
+		l, err := NewLedger(forwarded(t, "sessions,local_login"), false)
 		if err != nil {
 			t.Fatal(err)
 		}

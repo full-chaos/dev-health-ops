@@ -80,6 +80,7 @@ internal/cigates/chconstructor	chconstructor_test.go	.	tree	*.go
 internal/cigates/checkgo	race_excluded_receipts_test.go	unexpressed	-	-
 internal/cigates/checkgo	support_test.go	unexpressed	-	-
 internal/cigates/docs	docs_helpers_test.go	unexpressed	-	-
+internal/cigates/docs	parity_test.go	internal/cigates/docs	dir	*
 internal/cigates/docsprepare	docsprepare.go	unexpressed	-	-
 internal/cigates/docstools	dc_pub.go	unexpressed	-	-
 internal/cigates/docstools	dc_pub_test.go	unexpressed	-	*.md
@@ -211,6 +212,7 @@ internal/jobs/workgraph	error_attr_census_test.go	internal/jobs/workgraph	tree	*
 internal/jobs/workgraph/units	pr_link_protection_test.go	internal	tree	*.go
 internal/jobs/workgraph/writercontract	writercontract_test.go	internal	tree	*
 internal/llmorgsettings	baseurl_reader_guard_test.go	unexpressed	-	-
+internal/loadharness	profiles_test.go	internal/loadharness/testdata	dir	*
 internal/loadharness	profiles_test.go	internal/loadharness/testdata/abuse	dir	*
 internal/localgit	blame.go	unexpressed	-	-
 internal/localgit	refs.go	unexpressed	-	-

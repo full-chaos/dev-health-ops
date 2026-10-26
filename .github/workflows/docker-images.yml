@@ -242,6 +242,13 @@ jobs:
   #
   # The target list is ci/check_go_containers.sh's ALL_TARGETS, kept whole on
   # purpose: a second, shorter list is how the next target goes unpublished.
+  #
+  # CHAOS-11415: go.yml builds its Go images once (go-container-build) and reuses them in
+  # smoke, scans and proofs. These jobs do not reuse that build: they build the publish
+  # path with the real commit metadata (VERSION, COMMIT, BUILD_TIME, SOURCE_DATE_EPOCH
+  # below), while go.yml's images carry the fixed phase1-ci metadata that its smoke asserts,
+  # and the two workflows run side by side in a merge group with no order between them.
+  # image-queue-gate judges these builds as they are.
   # ---------------------------------------------------------------------------
   go-build:
     name: Build Go Image

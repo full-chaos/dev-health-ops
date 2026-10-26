@@ -50,14 +50,19 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
 {{/*
-Service account name
+Workload ServiceAccount name: <fullname>-<component>. Call with (dict "ctx" $ "component" "web").
 */}}
-{{- define "dev-health.serviceAccountName" -}}
-{{- if .Values.serviceAccount.create }}
-{{- default (include "dev-health.fullname" .) .Values.serviceAccount.name }}
-{{- else }}
-{{- default "default" .Values.serviceAccount.name }}
+{{- define "dev-health.workloadServiceAccountName" -}}
+{{- printf "%s-%s" (include "dev-health.fullname" .ctx) .component }}
 {{- end }}
+
+{{/*
+The pod-spec lines that bind a workload to its own ServiceAccount.
+Call with (dict "ctx" $ "component" "web" "cfg" .Values.web.serviceAccount).
+*/}}
+{{- define "dev-health.workloadServiceAccount" -}}
+serviceAccountName: {{ include "dev-health.workloadServiceAccountName" . }}
+automountServiceAccountToken: {{ .cfg.automountToken | default false }}
 {{- end }}
 
 {{/*
@@ -1135,4 +1140,44 @@ a bool, null or a fraction is not.
 {{- end -}}
 {{- if not $ok -}}{{- fail "authService.database.maxConns must be a whole number from 1 to 32: it is the connection pool of each auth-service replica, replicas x maxConns (plus one surge pod while rolling) is what the auth database must hold" -}}{{- end -}}
 {{- int64 $v -}}
+{{- end -}}
+
+{{/*
+The rolling-update surge of the auth-service Deployment: the one figure the
+connection budget and the Deployment strategy share.
+*/}}
+{{- define "dev-health.authMaxSurge" -}}1{{- end -}}
+
+{{/*
+authService.database.connectionBudget: the connections the release may hold on
+the auth database, that is max_connections minus superuser_reserved_connections
+(Postgres defaults 100 - 3 = 97). 0 turns the check off. Above 0 the render
+fails when
+  (authService.replicas + surge) x authService.database.maxConns
+  + every go-pgbouncer pool (one per (user, database) pair: the transaction
+    pooler counts its own role and each transaction.extraUsers entry, at the
+    transaction poolSize; the two session poolers count one pool each)
+exceeds it. Poolers count only while goWorkers and goWorkers.pgbouncer are on.
+A static upper bound: a pool holds server connections only while it needs them.
+*/}}
+{{- define "dev-health.authConnectionBudget" -}}
+{{- $v := .Values.authService.database.connectionBudget -}}
+{{- $ok := false -}}
+{{- if has (kindOf $v) (list "int" "int64" "float64") -}}
+{{- if eq (toString (int64 $v)) (toString $v) -}}
+{{- if ge (int64 $v) 0 -}}{{- $ok = true -}}{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- if not $ok -}}{{- fail "authService.database.connectionBudget must be a whole number of 0 or more (0 = no check): the connections the auth database may hold, max_connections minus superuser_reserved_connections" -}}{{- end -}}
+{{- if gt (int64 $v) 0 -}}
+{{- $pools := 0 -}}
+{{- if and .Values.goWorkers.enabled .Values.goWorkers.pgbouncer.enabled -}}
+{{- $p := .Values.goWorkers.pgbouncer -}}
+{{- $pairs := add1 (len ($p.transaction.extraUsers | default (list))) -}}
+{{- $pools = add (mul (int64 $pairs) (int64 $p.transaction.poolSize)) (add (int64 $p.queueSession.poolSize) (int64 $p.coordinatorSession.poolSize)) -}}
+{{- end -}}
+{{- $direct := mul (add (int64 .Values.authService.replicas) (int64 (include "dev-health.authMaxSurge" .))) (int64 (include "dev-health.authMaxConns" .)) -}}
+{{- $used := add $pools $direct -}}
+{{- if gt $used (int64 $v) -}}{{- fail (printf "authService.database.connectionBudget: %d connections are needed but the budget is %d: (authService.replicas %d + %d surge) x authService.database.maxConns %d = %d direct, plus %d go-pgbouncer pool connections. Lower a pool or add capacity before raising the budget" $used (int64 $v) (int64 .Values.authService.replicas) (int64 (include "dev-health.authMaxSurge" .)) (int64 (include "dev-health.authMaxConns" .)) $direct $pools) -}}{{- end -}}
+{{- end -}}
 {{- end -}}

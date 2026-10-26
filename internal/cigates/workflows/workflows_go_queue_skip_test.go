@@ -61,7 +61,7 @@ func TestMainPushShardSkipIsKeyedOnAGreenQueueRun(t *testing.T) {
 func queueRunsJSON(sha string, runs ...[2]string) string {
 	var entries []string
 	for _, run := range runs {
-		entries = append(entries, fmt.Sprintf(`{"id":%s,"head_sha":"%s","conclusion":"%s"}`, run[0], sha, run[1]))
+		entries = append(entries, fmt.Sprintf(`{"id":%s,"head_sha":"%s","conclusion":"%s","event":"merge_group","head_repository":{"full_name":"full-chaos/dev-health-ops"}}`, run[0], sha, run[1]))
 	}
 	return `{"workflow_runs":[` + strings.Join(entries, ",") + `]}`
 }
@@ -88,7 +88,7 @@ for a in "$@"; do
 done
 echo "$url" >> "$STUB_DIR/calls"
 case "$url" in
-  *workflows/go.yml/runs*) [ -f "$STUB_DIR/fail-runs" ] && exit 1; file="$STUB_DIR/runs.json" ;;
+  *workflows/*/runs*) [ -f "$STUB_DIR/fail-runs" ] && exit 1; file="$STUB_DIR/runs.json" ;;
   */actions/runs/*/jobs*) id=${url#*actions/runs/}; id=${id%%/*}; file="$STUB_DIR/jobs-$id.json"; [ -f "$file" ] || exit 1 ;;
   *) exit 1 ;;
 esac

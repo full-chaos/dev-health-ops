@@ -22,6 +22,7 @@ internal/auth/authapi	test	contracts
 internal/auth/authconfig	test	contracts
 internal/auth/authruntime	test	contracts
 internal/auth/contracts	code	contracts
+internal/auth/contracts	test	docs
 internal/auth/contracts/tokencorpus	code	contracts
 internal/auth/ratelimitvalkey	test	deploy
 internal/auth/ratelimitvalkey	test	docs

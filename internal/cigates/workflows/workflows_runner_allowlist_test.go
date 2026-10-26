@@ -71,6 +71,7 @@ var heavyGatedJobs = map[[2]string]string{
 	{"go.yml", "dind-smoke-test"}:                          heavyGate,
 	{"go.yml", "go-auth-compose-proof"}:                    heavyGate + " && " + goDocsSkip,
 	{"go.yml", "go-auth-web-proxy-proof"}:                  heavyGate + " && " + goDocsSkip,
+	{"go.yml", "go-container-build"}:                       heavyGate + " && " + goDocsSkip,
 	{"go.yml", "go-container-reproducibility"}:             heavyGate + " && " + goDocsSkip,
 	{"go.yml", "go-container-reproducibility-self-hosted"}: heavyGate + " && " + goDocsSkip,
 	{"go.yml", "go-container-security"}:                    heavyGate + " && " + goDocsSkip,

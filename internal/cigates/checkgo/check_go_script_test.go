@@ -128,16 +128,17 @@ func checkGoStaticDefects(src string) []string {
 	if n := strings.Count(src, "    check_multi_replica_workers\n"); n != 4 {
 		d = append(d, fmt.Sprintf("check_multi_replica_workers has %d bare call sites, want 4 (one public verb plus fast, ci, all)", n))
 	}
-	// every multi-package `go test -tags=integration` line carries INTEGRATION_TEST_ENV (one Ryuk session per invocation)
+	// every multi-package integration `go test` runs through run_integration_go_test, whose go test line carries
+	// INTEGRATION_TEST_ENV (one Ryuk session per invocation) and one reaped testcontainers session id (CHAOS-10036)
 	siteRe := regexp.MustCompile(`\bgo test\b.*-tags=integration`)
-	sites := 0
+	sites := strings.Count(src, `    run_integration_go_test "${module_dir}" "${run_pkgs[@]}"`)
 	for _, line := range strings.Split(src, "\n") {
 		if siteRe.MatchString(line) && strings.Contains(line, `"${run_pkgs[@]}"`) {
-			sites++
-			if !strings.Contains(line, "INTEGRATION_TEST_ENV") {
-				d = append(d, "a multi-package integration `go test` without INTEGRATION_TEST_ENV shares one Ryuk session across packages: "+strings.TrimSpace(line))
-			}
+			d = append(d, "a multi-package integration `go test` outside run_integration_go_test has no session reap: "+strings.TrimSpace(line))
 		}
+	}
+	if helper := strings.SplitN(strings.SplitN(src, "run_integration_go_test() {", 2)[len(strings.SplitN(src, "run_integration_go_test() {", 2))-1], "\n}\n", 2)[0]; !strings.Contains(helper, "INTEGRATION_TEST_ENV") {
+		d = append(d, "run_integration_go_test lacks INTEGRATION_TEST_ENV")
 	}
 	if sites < 2 {
 		d = append(d, fmt.Sprintf("found %d multi-package integration go test call sites, want the shard and integration sites", sites))
@@ -176,7 +177,7 @@ func TestCheckGoStaticContract(t *testing.T) {
 		{"ci drops the race detector", "    check_test\n    check_race\n    check_build\n", "    check_test\n    check_build\n", "`ci` case block runs"},
 		{"multi-replica gate loses the cold flag", "-tags=integration -count=1 -timeout=5m", "-tags=integration -timeout=5m", "check_multi_replica_workers lacks"},
 		{"multi-replica proof not required", "measured zero jobs", "measured nothing", "check_multi_replica_workers lacks"},
-		{"a multi-package call site without the env", `${INTEGRATION_TEST_ENV[@]+"${INTEGRATION_TEST_ENV[@]}"} go test -mod=readonly -trimpath -tags=integration -count=1 -timeout=30m "${run_pkgs[@]}"`, `go test -mod=readonly -trimpath -tags=integration -count=1 -timeout=30m "${run_pkgs[@]}"`, "without INTEGRATION_TEST_ENV"},
+		{"a multi-package call site outside the reap helper", `run_integration_go_test "${module_dir}" "${run_pkgs[@]}"`, `go test -tags=integration "${run_pkgs[@]}"`, "outside run_integration_go_test"},
 	}
 	for _, pl := range plants {
 		pl := pl

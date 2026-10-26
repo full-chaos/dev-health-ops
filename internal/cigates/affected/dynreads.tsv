@@ -38,6 +38,7 @@ internal/atlassianteams	absence_test.go
 internal/atlassianteams	vendored_documents_test.go
 internal/atlassianteams	vendored_patch_chain_test.go
 internal/audit	drill_pitr_integration_test.go
+internal/auth/authapi	hung_read_test.go
 internal/auth/authapi	issuer_eddsa_test.go
 internal/auth/authconfig	config_test.go
 internal/auth/authruntime	audit_request_id_scan_test.go
@@ -82,6 +83,7 @@ internal/auth/contracts	provisioning_event_goldens_test.go
 internal/auth/contracts	provisioning_resources_test.go
 internal/auth/contracts	reason_code_vocabulary_test.go
 internal/auth/contracts	reject_location_test.go
+internal/auth/contracts	retired_credential_class_test.go
 internal/auth/contracts	schema_dialect_test.go
 internal/auth/contracts	session_goldens_test.go
 internal/auth/contracts	session_hardening_test.go
@@ -162,10 +164,12 @@ internal/cigates/checkgo	ci_script_helpers_test.go
 internal/cigates/checkgo	discovery_tree_test.go
 internal/cigates/checkgo	race_solo_load_test.go
 internal/cigates/checkgo	race_solo_test.go
+internal/cigates/checkgo	testcontainers_session_reap_test.go
 internal/cigates/chparams	chparams_test.go
 internal/cigates/chpin	chpin_test.go
 internal/cigates/docmaketargets	docmaketargets_test.go
 internal/cigates/docs	docs_helpers_test.go
+internal/cigates/docs	parity_test.go
 internal/cigates/docs	repo_paths_test.go
 internal/cigates/docsprepare	docsprepare.go
 internal/cigates/docsprepare	docsprepare_test.go
@@ -203,6 +207,7 @@ internal/cigates/docstools	refusals_test.go
 internal/cigates/docstools	validate_inventory_argparse_test.go
 internal/cigates/docstools	validate_inventory_review.go
 internal/cigates/docstools	validate_inventory_review_cases_test.go
+internal/cigates/docstools	validatedsite.go
 internal/cigates/emitscan	scan.go
 internal/cigates/frozengoldens	frozengoldens.go
 internal/cigates/frozengoldens	frozengoldens_test.go
@@ -266,6 +271,7 @@ internal/cigates/workflows	race_pool_routing_test.go
 internal/cigates/workflows	ttl_registry_test.go
 internal/cigates/workflows	workflows_common_test.go
 internal/cigates/workflows	workflows_go_integration_pr_scope_test.go
+internal/cigates/workflows	workflows_go_quality_queue_skip_test.go
 internal/cigates/workflows	workflows_go_queue_skip_test.go
 internal/cigates/workflows	workflows_go_resolver_test.go
 internal/cigates/workflows	workflows_path_filters_test.go
@@ -562,6 +568,7 @@ internal/teamattribution	is_primary_census_test.go
 internal/teamcreated	census_test.go
 internal/teamprovider	census_test.go
 internal/teamresolve	golden_test.go
+internal/testsupport/authrows	credentials_test.go
 internal/testsupport/authrows	golden_test.go
 internal/testsupport/authrows	responses_test.go
 internal/testsupport/chschema	contract_test.go

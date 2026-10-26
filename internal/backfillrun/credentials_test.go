@@ -13,7 +13,7 @@ import (
 // connection string (URI and keyword, userinfo, pool parameters valid, invalid and
 // zero, service and password files) no login or password the driver resolved reaches
 // its output.
-func TestRedactsResolvedCredentialsOverEveryConnectionForm(t *testing.T) {
+func TestBackfillRunRedactsResolvedCredentialsOverEveryConnectionForm(t *testing.T) {
 	refusing := fakepg.StartRefusing(t)
 	refusing.RunGrid(t, true, func(t *testing.T, dsn string) string {
 		values := map[string]string{"POSTGRES_URI": dsn}

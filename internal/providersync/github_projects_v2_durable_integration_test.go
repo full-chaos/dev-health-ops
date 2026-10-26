@@ -73,9 +73,9 @@ WHERE id = $1`, firstIntegrationID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := pool.Exec(ctx, `
-INSERT INTO public.integration_datasets (id, org_id, integration_id, dataset_key, options)
+INSERT INTO public.integration_datasets (id, org_id, integration_id, dataset_key, options, is_enabled)
 VALUES ($1, $3, $2, 'work-items',
-        '{"include_issues":false,"include_pull_requests":false,"fetch_comments":false,"fetch_milestones":false}'::jsonb)`,
+        '{"include_issues":false,"include_pull_requests":false,"fetch_comments":false,"fetch_milestones":false}'::jsonb, TRUE)`,
 		firstCredentialID, firstIntegrationID, durableOrgID); err != nil {
 		t.Fatal(err)
 	}
@@ -360,7 +360,7 @@ func insertGitHubProjectsV2DurableUnit(
 INSERT INTO public.sync_run_units (
     id, org_id, sync_run_id, integration_id, source_id, provider,
     dataset_key, cost_class, mode, since_at, before_at, status,
-    processor_flags, updated_at
+    processor_flags, updated_at, created_at, attempts
 ) VALUES (
     $1, '6f1c2d3e-4a5b-4c6d-8e9f-0a1b2c3d4e5f', $2, $3, $4, 'github', 'work-items', 'medium',
     'incremental', $5, $6, 'dispatching',
@@ -369,7 +369,7 @@ INSERT INTO public.sync_run_units (
       "family_dataset_work_item_projects":true,
       "family_dataset_work_item_history":true,
       "family_dataset_work_item_comments":true}'::jsonb,
-    $6
+    $6, NOW(), 0
 )`, unitID, firstRunID, firstIntegrationID, firstSourceID,
 		before.Add(-24*time.Hour), before); err != nil {
 		t.Fatal(err)

@@ -47,6 +47,9 @@ spec:
             {{- with include "dev-health.authAckGrantNarrowing" . }}
             - {{ . | quote }}
             {{- end }}
+            {{- with include "dev-health.authDeferGrantNarrowing" . }}
+            - {{ . | quote }}
+            {{- end }}
           imagePullPolicy: {{ $m.image.pullPolicy }}
           env:
             - name: AUTH_MIGRATION_DATABASE_URI

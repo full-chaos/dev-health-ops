@@ -40,7 +40,7 @@ func insertFixtures(ids map[string]string) []struct {
 		{"platform_role_assignments", `INSERT INTO auth.platform_role_assignments (principal_id, role_key) VALUES ($1, 'cap.platform')`, []any{ids["principal"]}},
 		{"service_accounts", `INSERT INTO auth.service_accounts (principal_id, organization_id, name, owner_principal_id) VALUES ($1, $2, 'cap-svc', $3)`, []any{ids["svcPrincipal"], ids["org"], ids["principal"]}},
 		{"workloads", `INSERT INTO auth.workloads (principal_id, organization_id, name) VALUES ($1, $2, 'cap-wl')`, []any{ids["wlPrincipal"], ids["org"]}},
-		{"sessions", `INSERT INTO auth.sessions (id, principal_id, token_hash, expires_at) VALUES ($1, $2, '\xdeadbeef'::bytea, now() + interval '1 hour')`, []any{ids["session"], ids["principal"]}},
+		{"sessions", `INSERT INTO auth.sessions (id, principal_id, token_hash, expires_at, legacy_token_version) VALUES ($1, $2, '\xdeadbeef'::bytea, now() + interval '1 hour', 0)`, []any{ids["session"], ids["principal"]}},
 		{"refresh_credentials", `INSERT INTO auth.refresh_credentials (session_id, principal_id, token_hash, expires_at) VALUES ($1, $2, '\xfeedface'::bytea, now() + interval '1 day')`, []any{ids["session"], ids["principal"]}},
 		{"link_credentials", `INSERT INTO auth.link_credentials (principal_id, purpose, token_hash, expires_at) VALUES ($1, 'password_reset', decode(rpad('cafe0001', 64, '0'), 'hex'), now() + interval '1 hour')`, []any{ids["principal"]}},
 		{"login_attempts", `INSERT INTO auth.login_attempts (identifier_hash) VALUES (decode(rpad('cafe0002', 64, '0'), 'hex'))`, nil},

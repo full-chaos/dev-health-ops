@@ -325,3 +325,24 @@ func TestSinksRefuseAComputedAtOlderThanTheTableRetention(t *testing.T) {
 		})
 	}
 }
+
+func TestWriteAttemptsCarriesUsageReasonAndModelFromRequest(t *testing.T) {
+	conn := &shadowConn{}
+	writer := newShadowWriter(t, conn)
+	row := attemptRow("a")
+	row.UsageReason, row.ModelFromRequest = "unavailable", true
+	plain := attemptRow("b")
+	if _, err := writer.WriteAttempts(t.Context(), "org-1", []AttemptRecord{row, plain}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(conn.statements[0], "usage_reason, model_from_request") {
+		t.Fatalf("statement does not name the new columns: %s", conn.statements[0])
+	}
+	rows := conn.batches[0].rows
+	if len(rows[0]) != columnCount(conn.statements[0]) {
+		t.Fatalf("row appends %d values for %d columns", len(rows[0]), columnCount(conn.statements[0]))
+	}
+	if rows[0][24] != "unavailable" || rows[0][25] != uint8(1) || rows[1][24] != "" || rows[1][25] != uint8(0) {
+		t.Fatalf("tail values = %v %v / %v %v", rows[0][24], rows[0][25], rows[1][24], rows[1][25])
+	}
+}

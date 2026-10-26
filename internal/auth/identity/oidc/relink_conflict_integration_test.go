@@ -43,3 +43,28 @@ func TestOwnedRelinkBesideAHeldSubjectAnswersIdentityConflict(t *testing.T) {
 		t.Fatalf("identity rows = %d, want only the held one", n)
 	}
 }
+
+// Switch off: a go-api account projected with one subject at this provider row, whose public row now carries another
+// subject, signs in with the new one. The legacy projection refuses with identity.ErrProviderAlreadyLinked; the
+// callback answers 409 identity_conflict and writes nothing.
+func TestSwitchOffProjectionBesideAHeldSubjectAnswersIdentityConflict(t *testing.T) {
+	h := newHarness(t, harnessOpts{signup: false})
+	ctx := context.Background()
+	email := uniqueEmail("projected-held")
+	first := "sub-first-" + uuid.NewString()
+	user := h.seedPublicUser(t, email, "oidc", first)
+	h.seedMembership(t, user, h.orgID, "member")
+	s := h.start(t)
+	if login, failure := h.finish(t, s, h.sign(t, h.claims(s.nonce, first, email))); failure != nil || login.PrincipalID != user {
+		t.Fatalf("first sign-in = %+v, %v; want the projected account %v", login, failure, user)
+	}
+	second := "sub-second-" + uuid.NewString()
+	if _, err := h.env.admin.Exec(ctx, `UPDATE public.users SET auth_provider_id = $2 WHERE id = $1`, user, second); err != nil {
+		t.Fatal(err)
+	}
+	before := h.snapshot(t)
+	s2 := h.start(t)
+	_, failure := h.finish(t, s2, h.sign(t, h.claims(s2.nonce, second, email)))
+	wantDenied(t, failure, http.StatusConflict, ReasonIdentityConflict)
+	wantUnchanged(t, h, before)
+}

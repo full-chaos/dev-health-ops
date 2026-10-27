@@ -10,6 +10,7 @@ import (
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/trace/noop"
 )
 
@@ -47,6 +48,49 @@ func TestTheStartupLineNamesTheCollectorByHostAndPortOnly(t *testing.T) {
 			}
 			if line["otlp_endpoint"] != tc.want {
 				t.Errorf("otlp_endpoint = %v, want %q", line["otlp_endpoint"], tc.want)
+			}
+			for _, leaked := range []string{"ops-user", "c4n4ry"} {
+				if strings.Contains(logs.String(), leaked) {
+					t.Errorf("the log carries %q:\n%s", leaked, logs.String())
+				}
+			}
+		})
+	}
+}
+
+// A malformed endpoint never reaches the exporter (whose URL parser logs the
+// raw value outside the service logger): tracing stays off, the failure is
+// counted and the log names no part of the value.
+func TestAMalformedEndpointNeverReachesTheExporter(t *testing.T) {
+	for _, endpoint := range []string{
+		"http://ops-user:c4n4ry-pw@127.0.0.1:c4n4ry-port",
+		"http://ops-user:c4n4ry-pw@[::1",
+		"ops-user:c4n4ry-pw@",
+	} {
+		t.Run(endpoint, func(t *testing.T) {
+			t.Setenv("OTEL_ENABLED", "true")
+			t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", endpoint)
+			t.Setenv("OTEL_SAMPLE_RATE", "0")
+			built := false
+			previous := exporterFor
+			exporterFor = func(ctx context.Context, endpoint string) (sdktrace.SpanExporter, error) {
+				built = true
+				return previous(ctx, endpoint)
+			}
+			t.Cleanup(func() {
+				exporterFor = previous
+				otel.SetTracerProvider(noop.NewTracerProvider())
+				otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator())
+			})
+			before := initFailures.final.Load()
+			var logs bytes.Buffer
+			component := InitWithServiceName(slog.New(slog.NewJSONHandler(&logs, nil)), "auth-service")
+			_ = component.Shutdown(context.Background())
+			if built {
+				t.Error("the exporter was built from a malformed endpoint")
+			}
+			if initFailures.final.Load() != before+1 {
+				t.Errorf("init failures moved by %d, want 1", initFailures.final.Load()-before)
 			}
 			for _, leaked := range []string{"ops-user", "c4n4ry"} {
 				if strings.Contains(logs.String(), leaked) {

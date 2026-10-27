@@ -76,7 +76,7 @@ func (h *handlers) orgDeletionClickHousePreflight(ctx context.Context) (*orgDele
 	if err != nil {
 		return nil, &orgDeletionRefusedError{refusalOpenFailed, err}
 	}
-	if err := checkOrgDeletionPrivileges(ctx, conn); err != nil {
+	if err := h.checkOrgDeletionPrivileges(ctx, conn); err != nil {
 		_ = conn.Close()
 		return nil, &orgDeletionRefusedError{refusalPrivilegeMissing, err}
 	}
@@ -91,31 +91,44 @@ func (h *handlers) orgDeletionClickHousePreflight(ctx context.Context) (*orgDele
 	return &orgDeletionClickHouse{conn: conn, tables: tables}, nil
 }
 
-// checkOrgDeletionPrivileges reads the login's effective grants (its own and
-// its roles', SHOW GRANTS FOR CURRENT_USER FINAL: self-inspection needs no
-// privilege, unlike system.grants) for the connection's database.
-func checkOrgDeletionPrivileges(ctx context.Context, conn driver.Conn) error {
+// checkOrgDeletionPrivileges checks the login's effective grants for the
+// connection's database. A grant read that fails is a refusal too.
+func (h *handlers) checkOrgDeletionPrivileges(ctx context.Context, conn driver.Conn) error {
 	var database string
 	if err := conn.QueryRow(ctx, "SELECT currentDatabase()").Scan(&database); err != nil {
 		return fmt.Errorf("read current database: %w", err)
 	}
+	read := h.readGrants
+	if read == nil {
+		read = showGrantsFinal
+	}
+	lines, err := read(ctx, conn)
+	if err != nil {
+		return err
+	}
+	return orgDeletionGrantProblem(database, lines)
+}
+
+// showGrantsFinal reads the login's own and its roles' grants (SHOW GRANTS FOR
+// CURRENT_USER FINAL: self-inspection needs no privilege, unlike system.grants).
+func showGrantsFinal(ctx context.Context, conn driver.Conn) ([]string, error) {
 	rows, err := conn.Query(ctx, "SHOW GRANTS FOR CURRENT_USER FINAL")
 	if err != nil {
-		return fmt.Errorf("read current grants: %w", err)
+		return nil, fmt.Errorf("read current grants: %w", err)
 	}
 	defer rows.Close()
 	var lines []string
 	for rows.Next() {
 		var line string
 		if err := rows.Scan(&line); err != nil {
-			return fmt.Errorf("scan grant row: %w", err)
+			return nil, fmt.Errorf("scan grant row: %w", err)
 		}
 		lines = append(lines, line)
 	}
 	if err := rows.Err(); err != nil {
-		return fmt.Errorf("read grants: %w", err)
+		return nil, fmt.Errorf("read grants: %w", err)
 	}
-	return orgDeletionGrantProblem(database, lines)
+	return lines, nil
 }
 
 var grantLinePattern = regexp.MustCompile(`(?i)^(GRANT|REVOKE)\s+(.+?)\s+ON\s+(\S+)\s+(?:TO|FROM)\s`)

@@ -38,10 +38,20 @@ func TestOrgsDeleteRefusesWithoutAUsableClickHouse(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = conn.Close() })
-	const selectOnlyPassword = "orgdel-cli-select-pw-41ab"
+	const (
+		selectOnlyPassword = "orgdel-cli-select-pw-41ab"
+		revokedPassword    = "orgdel-cli-revoked-pw-77c2"
+		otherDBPassword    = "orgdel-cli-otherdb-pw-0e5d"
+	)
 	for _, statement := range []string{
 		"CREATE USER orgdel_cli_select IDENTIFIED WITH plaintext_password BY '" + selectOnlyPassword + "'",
 		"GRANT SELECT ON " + containers.ClickHouseDatabase + ".* TO orgdel_cli_select",
+		"CREATE USER orgdel_cli_revoked IDENTIFIED WITH plaintext_password BY '" + revokedPassword + "'",
+		"GRANT SELECT, ALTER DELETE ON " + containers.ClickHouseDatabase + ".* TO orgdel_cli_revoked",
+		"REVOKE ALTER DELETE ON " + containers.ClickHouseDatabase + ".backfill_log FROM orgdel_cli_revoked",
+		"CREATE DATABASE IF NOT EXISTS orgdel_cli_other",
+		"CREATE USER orgdel_cli_otherdb IDENTIFIED WITH plaintext_password BY '" + otherDBPassword + "'",
+		"GRANT SELECT, ALTER DELETE ON orgdel_cli_other.* TO orgdel_cli_otherdb",
 	} {
 		if err := conn.Exec(ctx, statement); err != nil {
 			t.Fatalf("%s: %v", statement, err)
@@ -89,6 +99,8 @@ func TestOrgsDeleteRefusesWithoutAUsableClickHouse(t *testing.T) {
 		{name: "no CLICKHOUSE_URI, dry run", args: []string{"--org-id", targetOrg, "--dry-run"}, reason: "dsn_unset"},
 		{name: "--analytics-db that cannot connect", args: []string{"--org-id", targetOrg, "--analytics-db", login("orgdel_cli_closed", "orgdel-cli-closed-pw-93fe", "127.0.0.1:1")}, reason: "open_failed", secret: "orgdel-cli-closed-pw-93fe"},
 		{name: "login without ALTER DELETE", env: map[string]string{"CLICKHOUSE_URI": login("orgdel_cli_select", selectOnlyPassword, "")}, args: []string{"--org-id", targetOrg}, reason: "privilege_missing", secret: selectOnlyPassword},
+		{name: "partial revoke of ALTER DELETE", env: map[string]string{"CLICKHOUSE_URI": login("orgdel_cli_revoked", revokedPassword, "")}, args: []string{"--org-id", targetOrg}, reason: "privilege_missing", secret: revokedPassword},
+		{name: "grants on a database other than the DSN's", env: map[string]string{"CLICKHOUSE_URI": login("orgdel_cli_otherdb", otherDBPassword, "")}, args: []string{"--org-id", targetOrg}, reason: "privilege_missing", secret: otherDBPassword},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			db.seedOrganizations(t, false)

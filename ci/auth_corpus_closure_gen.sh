@@ -6,6 +6,7 @@
 # Third-party and standard-library packages are out, and so are test-only imports. The directory of each file a closure package
 # embeds (go:embed) is a row as well: embedding reaches into subdirectories.
 set -euo pipefail
+export LC_ALL=C
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 roots=(./internal/api/session ./internal/api/sso ./internal/api/policy ./internal/apiservice ./cmd/dho ./cmd/auth-service)
 cd "${root}"
@@ -18,4 +19,4 @@ go list -deps -f '{{if not .Standard}}{{with .Module}}{{if eq .Path "'"${module}
     path="${path#"${module}"/}"
     [ "${kind}" = E ] && path="${path%/*}"
     printf '%s\n' "${path}"
-  done | LC_ALL=C sort -u
+  done | sort -u

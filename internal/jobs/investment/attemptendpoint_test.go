@@ -148,3 +148,18 @@ func TestAPlatformJevAttemptRowHasTheTypesafeProviderAndNoEndpoint(t *testing.T)
 		}
 	}
 }
+
+// The platform shadow phase writes jev rows: typesafe, with no clef endpoint.
+func TestAPlatformJevShadowAttemptRowHasTheTypesafeProviderAndNoEndpoint(t *testing.T) {
+	phase := newTestShadowPhase(t, newFakeJev(t, nil), shadowTestSettings(), debugLogger(&syncBuffer{}))
+	store := &memoryShadowStore{}
+	phase.run(context.Background(), store, shadowTestConfig(), shadowTestEntries(t, "u1"))
+	if len(store.attempts) == 0 {
+		t.Fatal("no shadow attempt row was written")
+	}
+	for _, row := range store.attempts {
+		if row.Role != chwrite.RoleShadow || row.Provider != "typesafe" || row.EndpointType != "" || row.GatewayID != "" {
+			t.Fatalf("row role=%q provider=%q endpoint_type=%q gateway_id=%q", row.Role, row.Provider, row.EndpointType, row.GatewayID)
+		}
+	}
+}

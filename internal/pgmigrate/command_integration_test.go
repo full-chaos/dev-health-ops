@@ -16,7 +16,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/pgmigrate"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
 // TestCommandEndToEnd drives `dho migrate postgres status|upgrade` through
@@ -27,15 +26,7 @@ import (
 // table there.
 func TestCommandEndToEnd(t *testing.T) {
 	ctx := context.Background()
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatalf("start postgres: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := instance.Close(context.Background()); err != nil {
-			t.Errorf("close postgres: %v", err)
-		}
-	})
+	instance := sharedInstance(t)
 	admin := connect(t, instance.URI)
 
 	verb := func(name, uri string) (int, map[string]any, string) {
@@ -182,15 +173,7 @@ func TestCommandEndToEnd(t *testing.T) {
 // nor a moved head behind.
 func TestChainRevision(t *testing.T) {
 	ctx := context.Background()
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatalf("start postgres: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := instance.Close(context.Background()); err != nil {
-			t.Errorf("close postgres: %v", err)
-		}
-	})
+	instance := sharedInstance(t)
 	admin := connect(t, instance.URI)
 	baseline, err := pgmigrate.LoadBaseline()
 	if err != nil {

@@ -24,6 +24,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)"
 ROOT="$(cd -- "${SCRIPT_DIR}/.." >/dev/null 2>&1 && pwd -P)"
+# shellcheck source=ci/lib/pull_base_image.sh
+source "${ROOT}/ci/lib/pull_base_image.sh"
 
 readonly KIND_VERSION="v0.33.0"
 readonly KIND_SHA256_AMD64="aee6151561422756b764a4ae28e7f44cda5af5a9eead3cc9985112b1de8d8e0d"
@@ -80,7 +82,7 @@ cleanup() {
   # A signal that lands while `kind create cluster` is mid-flight can leave the node container
   # behind a delete that ran too early: remove it by its exact, pid-unique name.
   docker rm --force --volumes "${CLUSTER}-control-plane" >/dev/null 2>&1 || true
-  docker image rm "${LOCAL_SVC}" "${LOCAL_MIG}" >/dev/null 2>&1 || true
+  docker image rm "${LOCAL_SVC}" "${LOCAL_MIG}" ${PINNED_BASE_TAG:+"${PINNED_BASE_TAG}"} >/dev/null 2>&1 || true
   rm -rf "${WORK}"
   exit "${status}"
 }
@@ -123,8 +125,10 @@ export PATH="${WORK}/bin:${PATH}"
 printf 'tools: kind %s, %s, kubectl %s\n' "${KIND_VERSION}" "$(helm version --short)" "$(kubectl version --client -o yaml | grep gitVersion)"
 
 printf 'step 1: build the images from this tree and create the cluster\n'
+pull_pinned_base_image "${ROOT}/docker/go-worker.Dockerfile" || die "base image pull failed"
 build() {
-  BUILDX_NO_DEFAULT_ATTESTATIONS=1 docker build --file "${ROOT}/docker/go-worker.Dockerfile" --target "$1" \
+  BUILDX_NO_DEFAULT_ATTESTATIONS=1 docker build --pull=false --build-arg GO_BUILD_IMAGE="${PINNED_BASE_TAG}" \
+    --file "${ROOT}/docker/go-worker.Dockerfile" --target "$1" \
     --build-arg VERSION=k8s-proof --build-arg COMMIT=0000000000000000000000000000000000000000 \
     --build-arg BUILD_TIME=1970-01-01T00:00:00Z --build-arg SOURCE_DATE_EPOCH=0 \
     --tag "$2" "${ROOT}"

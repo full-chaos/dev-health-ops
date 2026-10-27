@@ -68,7 +68,20 @@ func (s *spyReleaseImpactObserver) ObserveReleaseImpactDegradedMissingTelemetry(
 	return nil
 }
 
-const releaseImpactFixtureDay = "2026-08-20"
+// releaseImpactFixtureDay is two days back from the clock: telemetry_signal_bucket deletes a bucket 90 days after
+// bucket_start, so a fixed day ages out of the table.
+func releaseImpactFixtureDay() time.Time {
+	return time.Now().UTC().Truncate(24*time.Hour).AddDate(0, 0, -2)
+}
+
+// settleTelemetryBuckets merges the seeded buckets before the executor reads them, so a bucket the TTL would
+// delete is gone on every run, not only when a background merge wins.
+func settleTelemetryBuckets(t *testing.T, ctx context.Context, conn driver.Conn) {
+	t.Helper()
+	if err := conn.Exec(ctx, "OPTIMIZE TABLE telemetry_signal_bucket FINAL"); err != nil {
+		t.Fatalf("optimize telemetry_signal_bucket: %v", err)
+	}
+}
 
 func releaseImpactParityClasses() []releaseImpactParityClass {
 	return []releaseImpactParityClass{
@@ -141,10 +154,7 @@ func releaseImpactParityClasses() []releaseImpactParityClass {
 func TestReleaseImpactParityClassBattery(t *testing.T) {
 	ctx := context.Background()
 	conn := migratedClickHouse(t, ctx, OperationalOrderingRevision)
-	day, err := time.Parse("2006-01-02", releaseImpactFixtureDay)
-	if err != nil {
-		t.Fatalf("parse fixture day: %v", err)
-	}
+	day := releaseImpactFixtureDay()
 
 	classes := releaseImpactParityClasses()
 	coverage := make(map[string]struct {
@@ -156,6 +166,7 @@ func TestReleaseImpactParityClassBattery(t *testing.T) {
 		t.Run(class.name, func(t *testing.T) {
 			orgID := deterministicOrgIDForClass(class.name)
 			class.seed(t, ctx, conn, orgID, day)
+			settleTelemetryBuckets(t, ctx, conn)
 
 			observer := &spyReleaseImpactObserver{}
 			executor, err := NewReleaseImpactExecutor(ctx, conn, observer, nil)
@@ -164,7 +175,7 @@ func TestReleaseImpactParityClassBattery(t *testing.T) {
 			}
 
 			scope, err := json.Marshal(releaseImpactScope{
-				Version: ScopeVersion, Day: releaseImpactFixtureDay,
+				Version: ScopeVersion, Day: day.Format("2006-01-02"),
 				BackfillDays: 1, RecomputationWindowDays: 1,
 			})
 			if err != nil {

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/streamrunner"
 )
@@ -32,14 +33,16 @@ func TestProductTelemetryStoresTimestampsAtTheDriverRangeEdgesExactly(t *testing
 	}
 	const gone = "gone" // accepted by the intake, deleted by the table TTL
 	cases := map[string]string{
-		"1899-12-31T00:00:00Z":      "1899-12-31 00:00:00.000",
-		"1900-01-01T00:00:00":       "1900-01-01 00:00:00.000",
-		"2026-09-23T02:00:00+05:30": "2026-09-22 20:30:00.000",
-		"2105-08-11T06:28:16.999Z":  "2105-08-11 06:28:16.999", // last timestamp the TTL keeps
-		"2105-08-11T06:28:17Z":      gone,                      // first timestamp the TTL deletes
-		"2262-04-11T23:47:16.854Z":  gone,
-		"2263-01-01T00:00:00Z":      "", // refused, never stored
+		"1899-12-31T00:00:00Z":     "1899-12-31 00:00:00.000",
+		"1900-01-01T00:00:00":      "1900-01-01 00:00:00.000",
+		"2105-08-11T06:28:16.999Z": "2105-08-11 06:28:16.999", // last timestamp the TTL keeps
+		"2105-08-11T06:28:17Z":     gone,                      // first timestamp the TTL deletes
+		"2262-04-11T23:47:16.854Z": gone,
+		"2263-01-01T00:00:00Z":     "", // refused, never stored
 	}
+	// A timestamp with an offset, from the clock: a fixed one would be past the 180-day TTL one day.
+	recent := time.Now().UTC().Add(-24 * time.Hour).Truncate(time.Second)
+	cases[recent.In(time.FixedZone("", 5*3600+30*60)).Format(time.RFC3339)] = recent.Format("2006-01-02 15:04:05.000")
 	ids := map[string]string{}
 	n := 0
 	for ts, want := range cases {

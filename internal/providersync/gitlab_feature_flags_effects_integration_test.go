@@ -44,7 +44,8 @@ func TestGitLabFeatureFlagsEffectsAgainstMigratedSchema(t *testing.T) {
 	claim := nativeTestClaim("gitlab", "feature-flags")
 	// Deliberately include sub-millisecond digits: DateTime64(3) quantizes
 	// these on insert, and readback must compare the stored representation.
-	now := time.Date(2026, 8, 10, 12, 0, 0, 123456789, time.UTC)
+	// From the clock: feature_flag_event deletes a row 90 days after event_ts.
+	now := time.Now().UTC().Truncate(time.Second).Add(123456789 * time.Nanosecond)
 
 	t.Run("feature flag exact readback and version conflict", func(t *testing.T) {
 		created := now.Add(-24 * time.Hour)
@@ -162,7 +163,7 @@ WHERE org_id = ? AND dedupe_key = ?`, claim.OrgID, "gitlab-event-replay").Scan(&
 			TargetType: "file", TargetID: "group/project:checkout.go", EdgeType: "guards",
 			RepoID: "", Provider: "gitlab", Provenance: "native", Confidence: 0.875,
 			Evidence: "flag", DiscoveredAt: now.Add(-time.Minute), LastSynced: now,
-			EventAt: now.Add(-time.Minute), Day: "2026-08-10", OrgID: claim.OrgID,
+			EventAt: now.Add(-time.Minute), Day: now.Add(-time.Minute).Format("2006-01-02"), OrgID: claim.OrgID,
 		}
 		effect := gitlabFeatureFlagsIntegrationEffect(t, "work_graph_edges", EffectReplaySafe, []launchDarklyEdgeRow{edge})
 		assertGitLabFeatureFlagsInspection(t, ctx, sink, claim, effect, EffectAbsent)

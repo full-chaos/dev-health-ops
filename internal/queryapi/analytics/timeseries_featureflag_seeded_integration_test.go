@@ -81,6 +81,10 @@ func seedReleaseImpact(t *testing.T, ctx context.Context, conn stdclickhouse.Con
 	if err := conn.Exec(ctx, insert); err != nil {
 		t.Fatalf("seed release_impact_daily: %v", err)
 	}
+	// Merge before the reads, so a row the TTL would delete is gone on every run, not only when a background merge wins.
+	if err := conn.Exec(ctx, "OPTIMIZE TABLE release_impact_daily FINAL"); err != nil {
+		t.Fatalf("optimize release_impact_daily: %v", err)
+	}
 }
 
 func TestFeatureFlagTimeseries_SeededRealClickHouse_ExactBuckets(t *testing.T) {
@@ -109,24 +113,33 @@ func TestFeatureFlagTimeseries_SeededRealClickHouse_ExactBuckets(t *testing.T) {
 	}
 	defer func() { _ = client.Close() }()
 
+	// The days come from the clock: release_impact_daily deletes a row 365 days after its day. monday is the
+	// first Monday from the 2nd of the month two months back (the 2nd to the 8th), so monday-1 .. monday+4 share
+	// one month: the WEEK bucket starts on monday and the MONTH bucket is that month's 1st.
+	back := time.Now().UTC().AddDate(0, 0, -60)
+	second := time.Date(back.Year(), back.Month(), 2, 0, 0, 0, 0, time.UTC)
+	monday := second.AddDate(0, 0, (int(time.Monday)-int(second.Weekday())+7)%7)
+	d := func(offset int) string { return monday.AddDate(0, 0, offset).Format("2006-01-02") }
+	firstOfMonth := time.Date(monday.Year(), monday.Month(), 1, 0, 0, 0, 0, time.UTC)
+
 	const org, other = "chaos-6842-flags", "chaos-6842-flags-OTHER-ORG"
 	seedReleaseImpact(t, ctx, conn, []releaseImpactSeed{
-		// repo-a, 2026-01-05 (Monday): one row of every measure.
-		{org: org, day: "2026-01-05", release: "r1", repo: "repo-a", friction: fp(0.03), errorRate: fp(0.015), activation: fp(0.40), coverage: 0.5},
-		// repo-a, 2026-01-06: every nullable input NULL: the all-NULL bucket.
-		{org: org, day: "2026-01-06", release: "r2", repo: "repo-a", friction: nil, errorRate: nil, activation: nil, coverage: 0.25},
-		// repo-a, 2026-01-07: two releases the same day: AVG of the two.
-		{org: org, day: "2026-01-07", release: "r3", repo: "repo-a", friction: fp(0.02), errorRate: fp(0.01), activation: fp(0.25), coverage: 0.5},
-		{org: org, day: "2026-01-07", release: "r4", repo: "repo-a", friction: fp(0.06), errorRate: fp(0.03), activation: fp(0.75), coverage: 0.75},
-		// repo-a, 2026-01-08: the last day of the window (inclusive).
-		{org: org, day: "2026-01-08", release: "r5", repo: "repo-a", friction: fp(0.05), errorRate: fp(0.02), activation: fp(0.5), coverage: 1},
-		// repo-b, 2026-01-05: a second dimension value.
-		{org: org, day: "2026-01-05", release: "r6", repo: "repo-b", friction: fp(-0.01), errorRate: fp(0), activation: fp(0), coverage: 0.125},
+		// repo-a, monday: one row of every measure.
+		{org: org, day: d(0), release: "r1", repo: "repo-a", friction: fp(0.03), errorRate: fp(0.015), activation: fp(0.40), coverage: 0.5},
+		// repo-a, monday+1: every nullable input NULL: the all-NULL bucket.
+		{org: org, day: d(1), release: "r2", repo: "repo-a", friction: nil, errorRate: nil, activation: nil, coverage: 0.25},
+		// repo-a, monday+2: two releases the same day: AVG of the two.
+		{org: org, day: d(2), release: "r3", repo: "repo-a", friction: fp(0.02), errorRate: fp(0.01), activation: fp(0.25), coverage: 0.5},
+		{org: org, day: d(2), release: "r4", repo: "repo-a", friction: fp(0.06), errorRate: fp(0.03), activation: fp(0.75), coverage: 0.75},
+		// repo-a, monday+3: the last day of the window (inclusive).
+		{org: org, day: d(3), release: "r5", repo: "repo-a", friction: fp(0.05), errorRate: fp(0.02), activation: fp(0.5), coverage: 1},
+		// repo-b, monday: a second dimension value.
+		{org: org, day: d(0), release: "r6", repo: "repo-b", friction: fp(-0.01), errorRate: fp(0), activation: fp(0), coverage: 0.125},
 		// Outside the window on both sides: must never count.
-		{org: org, day: "2026-01-04", release: "r7", repo: "repo-a", friction: fp(9), errorRate: fp(9), activation: fp(9), coverage: 9},
-		{org: org, day: "2026-01-09", release: "r8", repo: "repo-a", friction: fp(9), errorRate: fp(9), activation: fp(9), coverage: 9},
+		{org: org, day: d(-1), release: "r7", repo: "repo-a", friction: fp(9), errorRate: fp(9), activation: fp(9), coverage: 9},
+		{org: org, day: d(4), release: "r8", repo: "repo-a", friction: fp(9), errorRate: fp(9), activation: fp(9), coverage: 9},
 		// Another organisation, inside the window: must never count.
-		{org: other, day: "2026-01-05", release: "r9", repo: "repo-a", friction: fp(9), errorRate: fp(9), activation: fp(9), coverage: 9},
+		{org: other, day: d(0), release: "r9", repo: "repo-a", friction: fp(9), errorRate: fp(9), activation: fp(9), coverage: 9},
 	})
 
 	// value is the expected bucket value; nil means SQL NULL.
@@ -186,39 +199,41 @@ func TestFeatureFlagTimeseries_SeededRealClickHouse_ExactBuckets(t *testing.T) {
 		}
 	}
 
-	// end is the EXCLUSIVE end of a request built by hand: the last day read is 2026-01-08.
-	const start, end = "2026-01-05", "2026-01-09"
+	// end is the EXCLUSIVE end of a request built by hand: the last day read is monday+3.
+	start, end := d(0), d(4)
 	check("FLAG_ACTIVATION_RATE", run(MeasureFlagActivationRate, BucketIntervalDay, start, end), map[string][]bucket{
-		"repo-a": {{"2026-01-05", fp(40)}, {"2026-01-06", nil}, {"2026-01-07", fp(50)}, {"2026-01-08", fp(50)}},
-		"repo-b": {{"2026-01-05", fp(0)}},
+		"repo-a": {{d(0), fp(40)}, {d(1), nil}, {d(2), fp(50)}, {d(3), fp(50)}},
+		"repo-b": {{d(0), fp(0)}},
 	})
 	check("FLAG_FRICTION_DELTA", run(MeasureFlagFrictionDelta, BucketIntervalDay, start, end), map[string][]bucket{
-		"repo-a": {{"2026-01-05", fp(3)}, {"2026-01-06", nil}, {"2026-01-07", fp(4)}, {"2026-01-08", fp(5)}},
-		"repo-b": {{"2026-01-05", fp(-1)}},
+		"repo-a": {{d(0), fp(3)}, {d(1), nil}, {d(2), fp(4)}, {d(3), fp(5)}},
+		"repo-b": {{d(0), fp(-1)}},
 	})
 	check("FLAG_ERROR_RATE_DELTA", run(MeasureFlagErrorRateDelta, BucketIntervalDay, start, end), map[string][]bucket{
-		"repo-a": {{"2026-01-05", fp(1.5)}, {"2026-01-06", nil}, {"2026-01-07", fp(2)}, {"2026-01-08", fp(2)}},
-		"repo-b": {{"2026-01-05", fp(0)}},
+		"repo-a": {{d(0), fp(1.5)}, {d(1), nil}, {d(2), fp(2)}, {d(3), fp(2)}},
+		"repo-b": {{d(0), fp(0)}},
 	})
 	// coverage_ratio is non-nullable, so no bucket is ever NULL.
 	check("FLAG_COVERAGE_RATIO", run(MeasureFlagCoverageRatio, BucketIntervalDay, start, end), map[string][]bucket{
-		"repo-a": {{"2026-01-05", fp(50)}, {"2026-01-06", fp(25)}, {"2026-01-07", fp(62.5)}, {"2026-01-08", fp(100)}},
-		"repo-b": {{"2026-01-05", fp(12.5)}},
+		"repo-a": {{d(0), fp(50)}, {d(1), fp(25)}, {d(2), fp(62.5)}, {d(3), fp(100)}},
+		"repo-b": {{d(0), fp(12.5)}},
 	})
-	// WEEK truncates to the Monday (2026-01-05 is one): all four repo-a days
+	// WEEK truncates to the Monday: all four repo-a days
 	// fall in one bucket, whose AVG is over the five non-NULL rows of the
 	// measure's rows that week: (0.40 + 0.25 + 0.75 + 0.5) / 4 * 100 = 47.5 (the NULL row is ignored).
 	check("FLAG_ACTIVATION_RATE by WEEK", run(MeasureFlagActivationRate, BucketIntervalWeek, start, end), map[string][]bucket{
-		"repo-a": {{"2026-01-05", fp(47.5)}},
-		"repo-b": {{"2026-01-05", fp(0)}},
+		"repo-a": {{d(0), fp(47.5)}},
+		"repo-b": {{d(0), fp(0)}},
 	})
 	// MONTH truncates to the 1st; the window still bounds the rows.
+	month := firstOfMonth.Format("2006-01-02")
 	check("FLAG_COVERAGE_RATIO by MONTH", run(MeasureFlagCoverageRatio, BucketIntervalMonth, start, end), map[string][]bucket{
-		"repo-a": {{"2026-01-01", fp((0.5 + 0.25 + 0.5 + 0.75 + 1) / 5 * 100)}},
-		"repo-b": {{"2026-01-01", fp(12.5)}},
+		"repo-a": {{month, fp((0.5 + 0.25 + 0.5 + 0.75 + 1) / 5 * 100)}},
+		"repo-b": {{month, fp(12.5)}},
 	})
-	// A window that holds no seeded day yields no buckets, not zeros.
-	if got := run(MeasureFlagActivationRate, BucketIntervalDay, "2026-02-01", "2026-02-28"); len(got) != 0 {
+	// A window that holds no seeded day (the next month) yields no buckets, not zeros.
+	next := firstOfMonth.AddDate(0, 1, 0)
+	if got := run(MeasureFlagActivationRate, BucketIntervalDay, next.Format("2006-01-02"), next.AddDate(0, 0, 27).Format("2006-01-02")); len(got) != 0 {
 		t.Errorf("an empty window returned %v, want no series", got)
 	}
 }

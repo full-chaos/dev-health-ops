@@ -355,3 +355,15 @@ func TestAuthServiceChartSecretMailCheckIsScoped(t *testing.T) {
 		t.Fatalf("an external Secret is not checked: %v\n%.700s", err, out)
 	}
 }
+
+// A literal under a *_KEY name is refused by the secret-like rule whatever the name list says; a secretKeyRef is
+// refused only by the list, so this is the test of the list.
+func TestAuthServiceExtraEnvRefusesTheMailNamesAsSecretReferences(t *testing.T) {
+	for _, name := range authServiceMailNames {
+		extra := fmt.Sprintf(`authService.extraEnv=[{"name":%q,"valueFrom":{"secretKeyRef":{"name":"x","key":"y"}}}]`, name)
+		_, out, err := renderAuth(t, phaseArgs(4, "--set-json", extra)...)
+		if err == nil || !strings.Contains(out, "authService.extraEnv must not set") {
+			t.Fatalf("extraEnv secretKeyRef %s was not refused: %v\n%.300s", name, err, out)
+		}
+	}
+}

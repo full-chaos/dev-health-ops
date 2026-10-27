@@ -87,10 +87,12 @@ func LegacyRefreshTokenGrant() TableWriteGrant {
 // as 0 and updated only by a password change, which adds 1 in the same
 // transaction (go-api's own reset does), so go-api tokens minted before it end.
 // last_login_at is updated only by a sign-in, with updated_at, as go-api's does.
+// sso_provider_id (ops revision 0155) is inserted only: the provider row an OIDC or
+// SAML account belongs to, never rewritten. Before 0155 its grant is DEFERRED.
 func UsersWriteGrant() (insert, update []string) {
 	return []string{
 			"id", "email", "username", "password_hash", "full_name", "auth_provider", "auth_provider_id",
-			"is_active", "is_verified", "is_superuser", "token_version", "created_at", "updated_at",
+			"is_active", "is_verified", "is_superuser", "token_version", "created_at", "updated_at", "sso_provider_id",
 		},
 		[]string{"password_hash", "is_verified", "token_version", "last_login_at", "updated_at"}
 }
@@ -177,6 +179,14 @@ func usersWriteStatements(ctx context.Context, conn querier, options Options, lo
 	role := quoteIdentifier(roleID)
 	table := quoteIdentifier(mustValidatedIdentifier(publicSchema)) + "." + quoteIdentifier(mustValidatedIdentifier("users"))
 	insert, update := UsersWriteGrant()
+	insert, err = presentUsersWriteColumns(ctx, conn, options, logger, "INSERT", insert)
+	if err != nil {
+		return nil, err
+	}
+	update, err = presentUsersWriteColumns(ctx, conn, options, logger, "UPDATE", update)
+	if err != nil {
+		return nil, err
+	}
 	insertColumns, err := quotedColumns(insert)
 	if err != nil {
 		return nil, err
@@ -190,6 +200,30 @@ func usersWriteStatements(ctx context.Context, conn querier, options Options, lo
 		fmt.Sprintf(`GRANT INSERT (%s) ON TABLE %s TO %s`, strings.Join(insertColumns, ", "), table, role),
 		fmt.Sprintf(`GRANT UPDATE (%s) ON TABLE %s TO %s`, strings.Join(updateColumns, ", "), table, role),
 	}, nil
+}
+
+// presentUsersWriteColumns is the UsersWriteGrant columns of one privilege that
+// public.users has. An absent column (a schema before the ops revision that adds
+// it) is refused by the grants pass (RequirePublicTables), naming it; Apply skips
+// it and logs it DEFERRED, and the posture check holds it PENDING.
+func presentUsersWriteColumns(ctx context.Context, conn querier, options Options, logger *slog.Logger, privilege string, columns []string) ([]string, error) {
+	present := make([]string, 0, len(columns))
+	for _, column := range columns {
+		exists, err := publicColumnExists(ctx, conn, "users", column)
+		if err != nil {
+			return nil, err
+		}
+		if !exists && options.RequirePublicTables {
+			return nil, fmt.Errorf("%w: %s.users.%s", ErrPublicColumnMissing, publicSchema, column)
+		}
+		if !exists {
+			logger.WarnContext(ctx, "users-owned write grant DEFERRED: the column does not exist yet",
+				"schema", publicSchema, "table", "users", "column", column, "privilege", privilege, "state", "DEFERRED")
+			continue
+		}
+		present = append(present, column)
+	}
+	return present, nil
 }
 
 // DeleteGrant is the switch-gated purge access to one ops-schema table:
@@ -550,6 +584,18 @@ func publicReadViolations(ctx context.Context, conn *pgx.Conn, options Options) 
 		if usersExist {
 			for _, privilege := range []string{"INSERT", "UPDATE"} {
 				for column := range usersDeclared[privilege] {
+					present, err := publicColumnExists(ctx, conn, "users", column)
+					if err != nil {
+						return nil, err
+					}
+					if !present {
+						// PENDING: a DEFERRED write grant of a column a later ops revision adds.
+						if options.Logger != nil {
+							options.Logger.InfoContext(ctx, "users-owned write grant PENDING: the column does not exist yet",
+								"schema", publicSchema, "table", "users", "column", column, "privilege", privilege, "state", "PENDING")
+						}
+						continue
+					}
 					var held bool
 					if err := conn.QueryRow(ctx,
 						`SELECT has_column_privilege($1, format('%I.%I', $2::text, $3::text), $4, $5)`,

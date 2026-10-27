@@ -78,7 +78,7 @@ func TestClefAttemptWithAMalformedCfRayFallsThroughWithoutError(t *testing.T) {
 }
 
 func TestEveryClefAttemptOfARetriedCallHasItsOwnRequestID(t *testing.T) {
-	client, _, _ := newTestClef(t, func(call int, _ *http.Request) (*http.Response, error) {
+	client, transport, _ := newTestClef(t, func(call int, _ *http.Request) (*http.Response, error) {
 		if call == 1 {
 			return clefAnswer(500, "")
 		}
@@ -93,6 +93,39 @@ func TestEveryClefAttemptOfARetriedCallHasItsOwnRequestID(t *testing.T) {
 	}
 	if result.RequestID != result.Attempts[1].RequestID {
 		t.Fatalf("result id = %q, want the id of the last attempt", result.RequestID)
+	}
+	for index, att := range result.Attempts {
+		if got := transport.requests[index].Header.Get("X-Request-Id"); got != att.RequestID || att.RequestIDSource != RequestIDSourceClient {
+			t.Fatalf("attempt %d: X-Request-Id %q, stored id %q source %q, want the same id and client", index+1, got, att.RequestID, att.RequestIDSource)
+		}
+	}
+}
+
+func TestAnAIGIDRepeatedInOneCallFallsThroughToTheClientIDLikeARay(t *testing.T) {
+	client, transport, _ := newTestClef(t, func(call int, _ *http.Request) (*http.Response, error) {
+		var resp *http.Response
+		if call == 1 {
+			resp, _ = clefAnswer(500, "")
+		} else {
+			resp, _ = clefAnswer(200, clefOKBody("clef"))
+		}
+		resp.Header["Cf-Aig-Log-Id"] = []string{"shared-aig-1"}
+		return resp, nil
+	})
+	client.target.viaGateway = true
+	result, err := client.PostSystemOneDetailed(context.Background(), []byte(`{"model":"clef"}`))
+	if err != nil || len(result.Attempts) != 2 {
+		t.Fatalf("err %v attempts %d, want 2", err, len(result.Attempts))
+	}
+	first, second := result.Attempts[0], result.Attempts[1]
+	if first.RequestID != "shared-aig-1" || first.RequestIDSource != RequestIDSourceAIG {
+		t.Fatalf("first attempt id %q source %q, want shared-aig-1 and aig", first.RequestID, first.RequestIDSource)
+	}
+	if second.RequestID == first.RequestID || second.RequestIDSource != RequestIDSourceClient {
+		t.Fatalf("second attempt id %q source %q, want a different id and client", second.RequestID, second.RequestIDSource)
+	}
+	if sent := transport.requests[1].Header.Get("X-Request-Id"); sent != second.RequestID {
+		t.Fatalf("second attempt id %q, want the id it sent %q", second.RequestID, sent)
 	}
 }
 
@@ -131,8 +164,8 @@ func (failingRandom) Read([]byte) (int, error) {
 
 func TestAFailedRandomSourceGivesANonRandomClientIDWithoutPanic(t *testing.T) {
 	uuid.SetRand(failingRandom{})
-	defer uuid.SetRand(nil)
-	client, _, logs := newTestClef(t, func(int, *http.Request) (*http.Response, error) {
+	t.Cleanup(func() { uuid.SetRand(nil) })
+	client, transport, logs := newTestClef(t, func(int, *http.Request) (*http.Response, error) {
 		return clefAnswer(200, clefOKBody("clef"))
 	})
 	var ids []string
@@ -151,6 +184,12 @@ func TestAFailedRandomSourceGivesANonRandomClientIDWithoutPanic(t *testing.T) {
 			if att.RequestID == "" || att.RequestIDSource != RequestIDSourceClient {
 				t.Fatalf("call %d: id %q source %q, want a non-empty id and client", call, att.RequestID, att.RequestIDSource)
 			}
+			if clean, rejected := client.cleanRequestID(att.RequestID); clean != att.RequestID || rejected {
+				t.Fatalf("call %d: cleanRequestID refused the fallback id %q", call, att.RequestID)
+			}
+			if sent := transport.requests[call-1].Header.Get("X-Request-Id"); sent != att.RequestID {
+				t.Fatalf("call %d: X-Request-Id %q, want the stored id %q", call, sent, att.RequestID)
+			}
 			ids = append(ids, att.RequestID)
 		}()
 	}
@@ -167,6 +206,9 @@ func TestAFailedRandomSourceGivesANonRandomClientIDWithoutPanic(t *testing.T) {
 			if strings.Contains(line, id) {
 				t.Fatalf("a request id value is in a Warn line: %s", line)
 			}
+		}
+		if strings.Contains(strings.ToLower(line), "x-request-id") || strings.Contains(line, clefToken) {
+			t.Fatalf("a header name or the token is in a Warn line: %s", line)
 		}
 	}
 	if warns != 2 {

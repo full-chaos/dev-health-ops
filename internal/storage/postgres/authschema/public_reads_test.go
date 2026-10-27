@@ -18,6 +18,7 @@ func TestPublicReadColumnsMatchTheReviewedList(t *testing.T) {
 		"organizations":                {"id", "slug", "name", "is_active", "tier"},
 		"saml_assertion_replays":       {"provider_id", "assertion_id", "expires_at"},
 		"org_licenses":                 {"org_id", "tier", "features_override"},
+		"org_activity":                 {"org_id", "has_data", "computed_at", "refreshed_at"},
 		"internal_service_credentials": {"id", "service_name", "token_hash", "scopes", "expires_at", "revoked_at"},
 	}
 	got := map[string][]string{}

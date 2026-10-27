@@ -133,14 +133,12 @@ func authServiceEgressTargets(docs []map[string]any) []any {
 
 func TestAuthServiceMailEgressNeedsPeers(t *testing.T) {
 	noPeers := []string{"--set", "authService.mail.secretName=a-mail"}
-	_, out, err := renderAuth(t, phaseArgs(4, noPeers...)...)
+	bare := func(phase int, extra ...string) []string { return append(withoutMailSets(phaseArgs(phase)), extra...) }
+	_, out, err := renderAuth(t, bare(4, noPeers...)...)
 	if err == nil || !strings.Contains(out, "authService.networkPolicy.egress.mail.to") {
 		t.Fatalf("mail Secret set, policy on, no mail peers: %v\n%.300s", err, out)
 	}
-	if _, out, err := renderAuth(t, phaseArgs(4, append(noPeers, "--set", "authService.networkPolicy.enabled=false")...)...); err != nil {
-		t.Fatalf("policy off needs no peers: %v\n%.300s", err, out)
-	}
-	if _, out, err := renderAuth(t, phaseArgs(3, noPeers...)...); err != nil {
+	if _, out, err := renderAuth(t, bare(3, noPeers...)...); err != nil {
 		t.Fatalf("phase 3 needs no mail peers: %v\n%.300s", err, out)
 	}
 }

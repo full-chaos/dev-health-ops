@@ -735,7 +735,7 @@ rendered one, a Secret reference included, and put a literal in the manifest. au
 names and proves each is refused.
 */}}
 {{- define "dev-health.authServiceEnvNames" -}}
-{{- $names := list "AUTH_DATABASE_URI" "AUTH_JWT_SECRET_KEY" "AUTH_SESSION_SUCCESSOR_KEY" "AUTH_LOGIN_LOCKOUT_KEY" "AUTH_SOCIAL_LINK_ROUTES" "AUTH_ACCESS_TOKEN_CLASS" "AUTH_TOKEN_ISSUER_URL" "AUTH_JWT_AUDIENCE" "AUTH_USERS_OWNED" "AUTH_ORGS_OWNED" "AUTH_VALKEY_URI" "AUTH_SERVICE_TRUSTED_PROXIES" -}}
+{{- $names := list "AUTH_DATABASE_URI" "AUTH_JWT_SECRET_KEY" "AUTH_SESSION_SUCCESSOR_KEY" "AUTH_LOGIN_LOCKOUT_KEY" "AUTH_SOCIAL_LINK_ROUTES" "AUTH_ACCESS_TOKEN_CLASS" "AUTH_TOKEN_ISSUER_URL" "AUTH_JWT_AUDIENCE" "AUTH_USERS_OWNED" "AUTH_ORGS_OWNED" "AUTH_VALKEY_URI" "AUTH_SERVICE_TRUSTED_PROXIES" "EMAIL_PROVIDER" "EMAIL_FROM_ADDRESS" "EMAIL_API_KEY" "APP_BASE_URL" "AUTH_MAIL_ALLOW_CONSOLE" -}}
 {{- range $provider := list "GITHUB" "GITLAB" "GOOGLE" }}{{- range $suffix := list "CLIENT_ID" "CLIENT_SECRET" }}{{- $names = append $names (printf "SOCIAL_%s_%s" $provider $suffix) }}{{- end }}{{- end -}}
 {{- toJson $names -}}
 {{- end -}}
@@ -783,7 +783,7 @@ and the other enable flags say. templates/auth-service.yaml includes it once, ou
 {{- define "dev-health.authValidate" -}}
 {{- $a := .Values.authService -}}
 {{- $session := default dict $a.sessionKeys -}}
-{{- $keys := list (list "authService.database.secretKey" (default dict $a.database).secretKey) (list "authService.migrate.secretKey" (default dict $a.migrate).secretKey) (list "authService.signingKey.secretKey" (default dict $a.signingKey).secretKey) (list "authService.valkey.secretKey" (default dict $a.valkey).secretKey) (list "authService.sessionKeys.successor.secretKey" (default dict $session.successor).secretKey) (list "authService.sessionKeys.loginLockout.secretKey" (default dict $session.loginLockout).secretKey) (list "goApi.sessionIssue.secretKey" (default dict .Values.goApi.sessionIssue).secretKey) -}}
+{{- $keys := list (list "authService.database.secretKey" (default dict $a.database).secretKey) (list "authService.migrate.secretKey" (default dict $a.migrate).secretKey) (list "authService.signingKey.secretKey" (default dict $a.signingKey).secretKey) (list "authService.valkey.secretKey" (default dict $a.valkey).secretKey) (list "authService.sessionKeys.successor.secretKey" (default dict $session.successor).secretKey) (list "authService.sessionKeys.loginLockout.secretKey" (default dict $session.loginLockout).secretKey) (list "authService.mail.keys.provider" (default dict (default dict $a.mail).keys).provider) (list "authService.mail.keys.fromAddress" (default dict (default dict $a.mail).keys).fromAddress) (list "authService.mail.keys.apiKey" (default dict (default dict $a.mail).keys).apiKey) (list "authService.mail.keys.appBaseURL" (default dict (default dict $a.mail).keys).appBaseURL) (list "goApi.sessionIssue.secretKey" (default dict .Values.goApi.sessionIssue).secretKey) -}}
 {{- range $keys }}
 {{- if not (include "dev-health.validSecretKey" (index . 1)) }}{{- fail (printf "%s must be a Secret key: letters, digits, '-', '_' and '.', at most 253 characters, not '.', '..' or a name that starts with '..'" (index . 0)) }}{{- end }}
 {{- end }}
@@ -837,6 +837,32 @@ Call with (dict "flag" "oidc"|"saml" "context" $).
 {{- $key := printf "authService.sso.%s" .flag -}}
 {{- $sso := default dict .context.Values.authService.sso -}}
 {{- if eq (include "dev-health.authBool" (dict "value" (index $sso .flag) "key" $key)) "true" }}{{- fail (printf "%s=true is refused: the chart does not render auth-service's SSO settings (state key, base URL, encryption key) yet, so its %s routes would not mount" $key (upper .flag)) }}{{- end -}}
+{{- end -}}
+
+{{/*
+"" when one authService.networkPolicy.egress.mail.to entry is acceptable, else the reason. Call with the entry. A peer
+selects pods, namespaces or one address block; an empty selector admits everything of its kind and an empty entry
+admits every destination. An ipBlock is one CIDR: one "/", an integer prefix, IPv4 /8 or longer, IPv6 /32 or longer,
+and no IPv4-mapped (::ffff:) or NAT64 (64:ff9b:) form, so no entry can name the whole internet.
+*/}}
+{{- define "dev-health.authMailPeerProblem" -}}
+{{- if not (kindIs "map" .) -}}is not an object
+{{- else if and (not (and (kindIs "map" .podSelector) (gt (len .podSelector) 0))) (not (and (kindIs "map" .namespaceSelector) (gt (len .namespaceSelector) 0))) (not (kindIs "map" .ipBlock)) -}}has no non-empty podSelector, namespaceSelector or ipBlock
+{{- else if kindIs "map" .ipBlock -}}
+{{- $cidr := toString .ipBlock.cidr -}}
+{{- if not (regexMatch "^[0-9a-fA-F:.]+/[0-9]{1,3}$" $cidr) -}}ipBlock.cidr must be one address/prefix
+{{- else -}}
+{{- $parts := splitList "/" $cidr -}}
+{{- $ip := lower (index $parts 0) -}}
+{{- $prefix := int (index $parts 1) -}}
+{{- if contains ":" $ip -}}
+{{- if or (hasPrefix "::ffff:" $ip) (hasPrefix "0:0:0:0:0:ffff:" $ip) (hasPrefix "64:ff9b:" $ip) -}}ipBlock.cidr is an IPv4-mapped or NAT64 form
+{{- else if or (lt $prefix 32) (gt $prefix 128) -}}ipBlock.cidr prefix must be 32 to 128 for IPv6
+{{- end -}}
+{{- else if or (lt $prefix 8) (gt $prefix 32) -}}ipBlock.cidr prefix must be 8 to 32 for IPv4
+{{- end -}}
+{{- end -}}
+{{- end -}}
 {{- end -}}
 
 {{/*

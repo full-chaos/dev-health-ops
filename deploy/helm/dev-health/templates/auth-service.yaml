@@ -30,6 +30,7 @@ stage-signing-key init container exists.
 {{- $tokenClass := (default dict $a.accessToken).class | default "" }}
 {{- if and $loginOn (not (trim (toString $a.sessionKeys.loginLockout.secretName))) }}{{- fail "authService.phase >= 3 (login) needs authService.sessionKeys.loginLockout.secretName: without the lockout key auth-service mounts no login route, and go-api would forward sign-in to a 404" }}{{- end }}
 {{- if and $socialOn (not (trim (toString $a.social.secretName))) }}{{- fail "authService.phase >= 3 (social sign-in) needs authService.social.secretName: the Secret with the SOCIAL_<PROVIDER>_CLIENT_ID and _CLIENT_SECRET keys go-api reads, so auth-service signs in with the same providers" }}{{- end }}
+{{- if and (eq (include "dev-health.authOn" (dict "flag" "usersOwned" "context" .)) "true") (not (trim (toString (default dict $a.mail).secretName))) }}{{- fail "authService.phase >= 4 (users owned) needs authService.mail.secretName: the Secret holding EMAIL_PROVIDER, EMAIL_FROM_ADDRESS, EMAIL_API_KEY and APP_BASE_URL for the verify and reset mails; auth-service refuses to start without a usable mail setting" }}{{- end }}
 {{- if not $a.database.secretName }}{{- fail "authService.database.secretName is required: the Secret holding the runtime login's DSN (key authService.database.secretKey)" }}{{- end }}
 {{- if and $a.sessionKeys.successor.secretName (not $a.valkey.secretName) }}{{- fail "authService.valkey.secretName is required while authService.sessionKeys.successor.secretName is set: the session routes count the compatibility refresh in the shared rate-limit store, and an in-process limiter is per replica and so no limit" }}{{- end }}
 {{- if and (eq (include "dev-health.authProxyOn" .) "true") (not $a.trustedProxies) }}{{- fail "authService.trustedProxies is required while go-api forwards auth routes to it (authService.phase >= 2): without it every proxied caller is keyed by go-api's pod address, one rate-limit bucket for all users" }}{{- end }}
@@ -251,6 +252,18 @@ spec:
             - name: AUTH_USERS_OWNED
               value: "true"
           {{- end }}
+          {{- if eq (include "dev-health.authOn" (dict "flag" "usersOwned" "context" .)) "true" }}
+          {{- $m := default dict $a.mail }}
+          {{- $mk := default dict $m.keys }}
+            - name: EMAIL_PROVIDER
+              valueFrom: {secretKeyRef: {name: {{ $m.secretName | quote }}, key: {{ $mk.provider | quote }}}}
+            - name: EMAIL_FROM_ADDRESS
+              valueFrom: {secretKeyRef: {name: {{ $m.secretName | quote }}, key: {{ $mk.fromAddress | quote }}}}
+            - name: EMAIL_API_KEY
+              valueFrom: {secretKeyRef: {name: {{ $m.secretName | quote }}, key: {{ $mk.apiKey | quote }}, optional: true}}
+            - name: APP_BASE_URL
+              valueFrom: {secretKeyRef: {name: {{ $m.secretName | quote }}, key: {{ $mk.appBaseURL | quote }}}}
+          {{- end }}
           {{- if eq (include "dev-health.authOn" (dict "flag" "orgsOwned" "context" .)) "true" }}
             - name: AUTH_ORGS_OWNED
               value: "true"
@@ -354,6 +367,12 @@ data:
 {{- if $a.networkPolicy.enabled }}
 {{- if not $a.networkPolicy.egress.database.to }}{{- fail "authService.networkPolicy.egress.database.to is required while authService.networkPolicy.enabled (the default; set it false only when another layer enforces the boundary): the auth pods are excluded from the release-wide policy, so an empty list would cut the service off from its database" }}{{- end }}
 {{- if and $a.valkey.secretName (not $a.networkPolicy.egress.valkey.to) }}{{- fail "authService.networkPolicy.egress.valkey.to is required while authService.valkey.secretName is set and authService.networkPolicy.enabled: the auth pods get no egress but DNS and the database, so an empty list would cut the service off from its rate-limit store" }}{{- end }}
+{{- $mailOn := and (eq (include "dev-health.authOn" (dict "flag" "usersOwned" "context" .)) "true") (trim (toString (default dict $a.mail).secretName)) }}
+{{- if and $mailOn (not $a.networkPolicy.egress.mail.to) }}{{- fail "authService.networkPolicy.egress.mail.to is required while authService.mail.secretName is set at authService.phase >= 4 and authService.networkPolicy.enabled: the auth pods get no egress but DNS, the database and the listed peers, so the mail provider would be unreachable" }}{{- end }}
+{{- range $i, $peer := $a.networkPolicy.egress.mail.to }}
+{{- $problem := include "dev-health.authMailPeerProblem" $peer }}
+{{- if $problem }}{{- fail (printf "authService.networkPolicy.egress.mail.to[%d] %s" $i $problem) }}{{- end }}
+{{- end }}
 {{- range (concat $a.networkPolicy.allowedFrom $a.networkPolicy.metricsFrom) }}
 {{- if not (or (and .matchLabels (gt (len .matchLabels) 0)) (and .matchExpressions (gt (len .matchExpressions) 0))) }}
 {{- fail "authService.networkPolicy.allowedFrom and metricsFrom entries need a non-empty matchLabels or matchExpressions: an empty podSelector admits every pod in the namespace" }}
@@ -434,6 +453,13 @@ spec:
       ports:
         - protocol: TCP
           port: {{ $a.networkPolicy.egress.valkey.port }}
+    {{- end }}
+    {{- if and $mailOn $a.networkPolicy.egress.mail.to }}
+    # The mail provider
+    - to:
+        {{- toYaml $a.networkPolicy.egress.mail.to | nindent 8 }}
+      ports:
+        {{- toYaml $a.networkPolicy.egress.mail.ports | nindent 8 }}
     {{- end }}
     {{- with $a.networkPolicy.egress.keyCustody.to }}
     # Key custody service (KMS)

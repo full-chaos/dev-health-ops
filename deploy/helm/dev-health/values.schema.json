@@ -75,6 +75,22 @@
       "type": "object",
       "properties": {
         "replicas": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "mail": {
+          "description": "The Secret and key names of the verify and reset mail setting, read by secretKeyRef from phase 4.",
+          "type": "object",
+          "properties": {
+            "secretName": { "type": "string" },
+            "keys": {
+              "type": "object",
+              "properties": {
+                "provider": { "type": "string" },
+                "fromAddress": { "type": "string" },
+                "apiKey": { "type": "string" },
+                "appBaseURL": { "type": "string" }
+              }
+            }
+          }
+        },
         "drain": {
           "description": "CHAOS-11648: seconds the old auth-service pod keeps serving before SIGTERM (native preStop sleep, Kubernetes >= 1.30). 0 renders no hook.",
           "type": "object",

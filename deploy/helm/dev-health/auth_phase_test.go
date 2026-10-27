@@ -19,10 +19,10 @@ import (
 // that go-api's and auth-service's own start-up parsers accept what the chart renders, with every route go-api
 // forwards mounted by auth-service.
 
-var phase3Secrets = []string{
+var phase3Secrets = append([]string{
 	"--set", "authService.sessionKeys.loginLockout.secretName=auth-lockout",
 	"--set", "authService.social.secretName=auth-social",
-}
+}, mailSets()...) // the mail setting renders only from phase 4 and is inert below it
 
 // phaseArgs renders go-api, query-api, the migrate Job and the River hooks beside auth-service, with every
 // precondition the phase needs.

@@ -65,6 +65,9 @@ func composeExec(dir string, env []string, timeout time.Duration, name string, a
 	defer cancel()
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir, cmd.Env = dir, env
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+	cmd.WaitDelay = 5 * time.Second
 	var so, se bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &so, &se
 	err := cmd.Run()
@@ -72,7 +75,19 @@ func composeExec(dir string, env []string, timeout time.Duration, name string, a
 	if ee, ok := err.(*exec.ExitError); ok && ctx.Err() == nil {
 		r.code, err = ee.ExitCode(), nil
 	}
+	if err != nil && ctx.Err() != nil {
+		err = fmt.Errorf("killed after %s: %w\nthe last output (stdout, then stderr):\n%s\n--\n%s", timeout, err, composeOutputTail(r.stdout), composeOutputTail(r.stderr))
+	}
 	return r, err
+}
+
+// composeOutputTail is the last 4 KB of a script's output with the credential replaced: the last STEP line names the step that hung.
+func composeOutputTail(s string) string {
+	s = strings.ReplaceAll(s, composeCHSentinel, "[redacted]")
+	if len(s) > 4096 {
+		s = s[len(s)-4096:]
+	}
+	return s
 }
 
 func composeWrite(g *guard, p, body string, mode os.FileMode) {

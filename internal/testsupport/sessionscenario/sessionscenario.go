@@ -494,7 +494,7 @@ func (h *Harness) run(pairs []pair) map[string]answers {
 			want := h.golden.Answers[h.cursor]
 			h.cursor++
 			if refused, ok := socialLinkRefusals[p.name]; ok {
-				want = RecordedAnswer{Name: p.name, Status: http.StatusConflict, Body: refused.body}
+				want = RecordedAnswer{Name: p.name, Status: refused.status, Body: refused.body}
 			}
 			goBody := Normalize(goResponse.Body)
 			// The Go api never writes input or ctx of a validation error.
@@ -971,13 +971,18 @@ func TableRows(t *testing.T, ctx context.Context, uri, query string) string {
 
 // socialLinkRefusals are the golden steps where Python linked a social identity to an account by
 // e-mail alone and signed in. Go refuses them (CHAOS-10940), so the replay expects the refusal instead.
-type socialRefusal struct{ body, reason string }
+type socialRefusal struct {
+	status       int
+	body, reason string
+}
 
 var socialLinkRefusals = map[string]socialRefusal{
-	"social: github email of a local user":                  {socialAccountExistsBody, "Python linked the identity by e-mail and signed in (CHAOS-10940); Go refuses with the provider-free 409"},
-	"social: github email of a github user with another id": {socialAccountExistsBody, "Python replaced the stored provider id and signed in (CHAOS-10940); Go refuses with the provider-free 409"},
-	"social: github email of a github user without an id":   {socialAccountExistsBody, "Python set the missing provider id and signed in (CHAOS-10940); Go refuses with the provider-free 409"},
-	"social: gitlab email of a github user":                 {socialAccountExistsBody, "Python's 409 named the existing sign-in method; Go's names none"},
+	"social: github email of a local user":                  {http.StatusConflict, socialAccountExistsBody, "Python linked the identity by e-mail and signed in (CHAOS-10940); Go refuses with the provider-free 409"},
+	"social: github email of a github user with another id": {http.StatusConflict, socialAccountExistsBody, "Python replaced the stored provider id and signed in (CHAOS-10940); Go refuses with the provider-free 409"},
+	"social: github email of a github user without an id":   {http.StatusConflict, socialAccountExistsBody, "Python set the missing provider id and signed in (CHAOS-10940); Go refuses with the provider-free 409"},
+	"social: gitlab email of a github user":                 {http.StatusConflict, socialAccountExistsBody, "Python's 409 named the existing sign-in method; Go's names none"},
+	"social: github no id": {http.StatusBadRequest, `{"detail":{"message":"The provider returned an invalid user id"}}`,
+		"Python raised on a profile without an id and answered 500; Go refuses with 400 (CHAOS-11619)"},
 }
 
 // socialAccountExistsBody is the 409 Go answers for an e-mail another account holds: Python named the existing

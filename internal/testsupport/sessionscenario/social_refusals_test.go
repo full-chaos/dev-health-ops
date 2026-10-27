@@ -19,10 +19,13 @@ func TestSocialLinkRefusalsEachMatchAGoldenStepAndChangeIt(t *testing.T) {
 			t.Errorf("override %q matches no golden step", name)
 			continue
 		}
+		if refusal.status == 0 {
+			t.Errorf("override %q has no status", name)
+		}
 		if refusal.reason == "" {
 			t.Errorf("override %q has no reason", name)
 		}
-		if recorded.Status == http.StatusConflict && recorded.Body == refusal.body {
+		if recorded.Status == refusal.status && recorded.Body == refusal.body {
 			t.Errorf("override %q equals the golden answer: it changes nothing", name)
 		}
 	}

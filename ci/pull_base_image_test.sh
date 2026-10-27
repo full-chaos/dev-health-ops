@@ -62,7 +62,7 @@ run() {
   shift
   set +e
   # shellcheck disable=SC2016
-  OUT="$(env -i PATH="${T}/bin:${PATH}" HOME="${T}" TMPDIR="${T}" LC_ALL=C "$@" FAKE_DIR="${FAKE_DIR}" FAKE_LOG="${FAKE_LOG}" \
+  OUT="$(env -i PATH="${T}/bin:/usr/bin:/bin" HOME="${T}" TMPDIR="${T}" LC_ALL=C "$@" FAKE_DIR="${FAKE_DIR}" FAKE_LOG="${FAKE_LOG}" \
     PULL_BACKOFF_SECS="0 0" bash -c 'source "$1"; pull_pinned_base_image "$2"; r=$?; echo "TAG=${PINNED_BASE_TAG:-}"; exit "$r"' _ "${LIB}" "${DF:-${T}/Dockerfile}" 2>&1)"
   RC=$?
   set -e
@@ -128,7 +128,7 @@ cp "${T}/Dockerfile2" "${T}/Dockerfile.keep"
 FAKE_DIR="${T}/d.t10"; mkdir -p "${FAKE_DIR}"; FAKE_LOG="${FAKE_DIR}/log"; : > "${FAKE_LOG}"
 C="sha256:$(printf 'c%.0s' {1..64})"
 # shellcheck disable=SC2016
-OUT="$(env -i PATH="${T}/bin:${PATH}" HOME="${T}" TMPDIR="${T}" LC_ALL=C FAKE_DIR="${FAKE_DIR}" FAKE_LOG="${FAKE_LOG}" FAKE_SEEN_DIGEST="${C}" PULL_BACKOFF_SECS="0 0" bash -c 'source "$1"; pull_pinned_base_image "$2"' _ "${LIB}" "${T}/Dockerfile2" 2>&1)" && R=0 || R=$?
+OUT="$(env -i PATH="${T}/bin:/usr/bin:/bin" HOME="${T}" TMPDIR="${T}" LC_ALL=C FAKE_DIR="${FAKE_DIR}" FAKE_LOG="${FAKE_LOG}" FAKE_SEEN_DIGEST="${C}" PULL_BACKOFF_SECS="0 0" bash -c 'source "$1"; pull_pinned_base_image "$2"' _ "${LIB}" "${T}/Dockerfile2" 2>&1)" && R=0 || R=$?
 if { [ "${R}" = 0 ] && grep -q "^docker pull mirror.gcr.io/library/golang@${C}\$" "${FAKE_LOG}"; }; then ok "t10 digest is read from the Dockerfile"; else bad "t10"; fi
 
 for s in ci/check_auth_k8s.sh ci/check_session_cutover_rehearsal.sh; do

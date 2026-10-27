@@ -2,6 +2,7 @@ package categorize
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
@@ -37,14 +38,9 @@ func requireClientID(t *testing.T, att SystemOneAttempt, transport *clefTranspor
 	if att.RequestIDSource != RequestIDSourceClient {
 		t.Fatalf("source = %q, want client", att.RequestIDSource)
 	}
-	for _, values := range transport.requests[0].Header {
-		for _, value := range values {
-			if value == att.RequestID {
-				return
-			}
-		}
+	if got := transport.requests[0].Header.Get("X-Request-Id"); got != att.RequestID {
+		t.Fatalf("X-Request-Id = %q, want the attempt's request id %q", got, att.RequestID)
 	}
-	t.Fatal("the client id is not sent as a request header")
 }
 
 func TestClefAttemptTakesCfRayWhenNoGatewayRouted(t *testing.T) {
@@ -97,5 +93,76 @@ func TestEveryClefAttemptOfARetriedCallHasItsOwnRequestID(t *testing.T) {
 	}
 	if result.RequestID != result.Attempts[1].RequestID {
 		t.Fatalf("result id = %q, want the id of the last attempt", result.RequestID)
+	}
+}
+
+func TestAPeerIDRepeatedInOneCallDoesNotCollapseTwoAttempts(t *testing.T) {
+	client, transport, _ := newTestClef(t, func(call int, _ *http.Request) (*http.Response, error) {
+		var resp *http.Response
+		if call == 1 {
+			resp, _ = clefAnswer(500, "")
+		} else {
+			resp, _ = clefAnswer(200, clefOKBody("clef"))
+		}
+		resp.Header["Cf-Ray"] = []string{"shared-ray-1"}
+		return resp, nil
+	})
+	result, err := client.PostSystemOneDetailed(context.Background(), []byte(`{"model":"clef"}`))
+	if err != nil || len(result.Attempts) != 2 {
+		t.Fatalf("err %v attempts %d, want 2", err, len(result.Attempts))
+	}
+	first, second := result.Attempts[0], result.Attempts[1]
+	if first.RequestID != "shared-ray-1" || first.RequestIDSource != RequestIDSourceRay {
+		t.Fatalf("first attempt id %q source %q, want shared-ray-1 and ray", first.RequestID, first.RequestIDSource)
+	}
+	if second.RequestID == first.RequestID || second.RequestIDSource != RequestIDSourceClient {
+		t.Fatalf("second attempt id %q source %q, want a different id and client", second.RequestID, second.RequestIDSource)
+	}
+	if sent := transport.requests[1].Header.Get("X-Request-Id"); sent != second.RequestID {
+		t.Fatalf("second attempt id %q, want the id it sent %q", second.RequestID, sent)
+	}
+}
+
+type failingRandom struct{}
+
+func (failingRandom) Read([]byte) (int, error) {
+	return 0, errors.New("injected random-source failure")
+}
+
+func TestAFailedRandomSourceGivesANonRandomClientIDWithoutPanic(t *testing.T) {
+	uuid.SetRand(failingRandom{})
+	defer uuid.SetRand(nil)
+	client, _, logs := newTestClef(t, func(int, *http.Request) (*http.Response, error) {
+		return clefAnswer(200, clefOKBody("clef"))
+	})
+	var ids []string
+	for call := 1; call <= 2; call++ {
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Fatalf("call %d panicked: %v", call, r)
+				}
+			}()
+			result, err := client.PostSystemOneDetailed(context.Background(), []byte(`{"model":"clef"}`))
+			if err != nil || len(result.Attempts) != 1 {
+				t.Fatalf("call %d: err %v attempts %d", call, err, len(result.Attempts))
+			}
+			att := result.Attempts[0]
+			if att.RequestID == "" || att.RequestIDSource != RequestIDSourceClient {
+				t.Fatalf("call %d: id %q source %q, want a non-empty id and client", call, att.RequestID, att.RequestIDSource)
+			}
+			ids = append(ids, att.RequestID)
+		}()
+	}
+	if len(ids) == 2 && ids[0] == ids[1] {
+		t.Fatalf("two calls gave the same id %q", ids[0])
+	}
+	if !strings.Contains(logs.String(), `"level":"WARN"`) {
+		t.Fatal("no Warn line for the random-source failure")
+	}
+	for _, id := range ids {
+		if strings.Contains(logs.String(), id) {
+			t.Fatal("a request id value is in the log")
+		}
 	}
 }

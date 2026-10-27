@@ -810,7 +810,12 @@ func closeAndAwaitDrain(t *testing.T, writer *RequestUsageWriter, timeout time.D
 	t.Helper()
 	writer.Close(timeout)
 	if afterClose != nil {
-		t.Cleanup(afterClose)
+		afterClose()
+	}
+	select {
+	case <-writer.done:
+	case <-time.After(30 * time.Second):
+		t.Fatal("writer still draining after the hang ceiling")
 	}
 }
 

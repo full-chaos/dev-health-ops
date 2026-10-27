@@ -139,9 +139,17 @@ func adminFieldViolations(row map[string]any, scopes map[string]string, root str
 	case impersonationRoutes[id] != "" && policy != impersonationRoutes[id]:
 		bad("an impersonation route has impersonation_policy %q, want %q", policy, impersonationRoutes[id])
 	case impersonationRoutes[id] != "":
+	case tenancy == "org_scoped" && strings.HasSuffix(id, "@internal]") && policy == "subject_to_impersonation_override":
+		bad("an internal-listener org-scoped route claims subject_to_impersonation_override (the internal listener runs no impersonation middleware)")
+		if !gapNames(row, "credential_binding") {
+			bad("an internal-listener org-scoped route has no credential_binding gap")
+		}
 	case tenancy == "org_scoped" && strings.HasSuffix(id, "@internal]") && policy == "not_applicable_non_main_app":
 		if !gapNames(row, "impersonation_policy") {
 			bad("an internal-listener org-scoped route is not_applicable_non_main_app without a gaps entry naming impersonation_policy")
+		}
+		if !gapNames(row, "credential_binding") {
+			bad("an internal-listener org-scoped route has no credential_binding gap")
 		}
 	case tenancy == "org_scoped" && policy != "subject_to_impersonation_override":
 		bad("an org-scoped route has impersonation_policy %q", policy)
@@ -485,4 +493,130 @@ func TestInternalListenerOrgScopedRowNeedsItsImpersonationGap(t *testing.T) {
 		return
 	}
 	t.Fatal("the internal entitlement row is missing")
+}
+
+const (
+	internalFlipMessage = "claims subject_to_impersonation_override"
+	internalGapMessage  = "no credential_binding gap"
+)
+
+var internalOrgScopedIDs = []string{
+	"GET /api/v1/internal/acr/entitlements/{org_id} [dev-health-ops-api @internal]",
+	"GET /api/v1/internal/acr/orgs/{org_id}/llm-config [dev-health-ops-api @internal]",
+}
+
+var internalACRCacheIDs = append([]string{"GET /api/v1/internal/acr/health [dev-health-ops-api @internal]"}, internalOrgScopedIDs...)
+
+func violationsContain(violations []string, want string) bool {
+	for _, v := range violations {
+		if strings.Contains(v, want) {
+			return true
+		}
+	}
+	return false
+}
+
+func cloneRow(t *testing.T, row map[string]any) map[string]any {
+	t.Helper()
+	raw, err := json.Marshal(row)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out map[string]any
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+func dropGap(row map[string]any, field string) {
+	var kept []any
+	gaps, _ := row["gaps"].([]any)
+	for _, gap := range gaps {
+		if text, ok := gap.(string); ok && strings.HasPrefix(strings.TrimSpace(text), field+":") {
+			continue
+		}
+		kept = append(kept, gap)
+	}
+	row["gaps"] = kept
+}
+
+func rowsByID(t *testing.T, ids []string) map[string]map[string]any {
+	t.Helper()
+	found := map[string]map[string]any{}
+	for _, row := range coveredRows(t) {
+		id, _ := row["id"].(string)
+		for _, want := range ids {
+			if id == want {
+				found[id] = row
+			}
+		}
+	}
+	for _, want := range ids {
+		if found[want] == nil {
+			t.Fatalf("the row %q is missing", want)
+		}
+	}
+	return found
+}
+
+func TestInternalOrgScopedRowsPlantedImpersonationAndCredentialGap(t *testing.T) {
+	root := testRoot(t)
+	scopes := catalogScopes(t)
+	for id, row := range rowsByID(t, internalOrgScopedIDs) {
+		t.Run(id, func(t *testing.T) {
+			if got := adminFieldViolations(cloneRow(t, row), scopes, root); len(got) != 0 {
+				t.Fatalf("the unmodified row has violations: %v", got)
+			}
+			flipped := cloneRow(t, row)
+			flipped["impersonation_policy"] = "subject_to_impersonation_override"
+			got := adminFieldViolations(flipped, scopes, root)
+			if !violationsContain(got, internalFlipMessage) {
+				t.Fatalf("a flip to subject_to_impersonation_override was not rejected for that reason: %v", got)
+			}
+			ungapped := cloneRow(t, row)
+			dropGap(ungapped, "credential_binding")
+			got = adminFieldViolations(ungapped, scopes, root)
+			if !violationsContain(got, internalGapMessage) {
+				t.Fatalf("a dropped credential_binding gap was not rejected for that reason: %v", got)
+			}
+			both := cloneRow(t, flipped)
+			dropGap(both, "credential_binding")
+			got = adminFieldViolations(both, scopes, root)
+			if !violationsContain(got, internalFlipMessage) || !violationsContain(got, internalGapMessage) {
+				t.Fatalf("the flip with the dropped gap did not report both: %v", got)
+			}
+		})
+	}
+}
+
+func TestInternalACRRowsNameBothCredentialPaths(t *testing.T) {
+	for id, row := range rowsByID(t, internalACRCacheIDs) {
+		cache, _ := row["current_state_cache_behavior"].(string)
+		for _, want := range []string{
+			cachePrefix,
+			"svc_acr_ credential: store read every request, no cache",
+			"workload token: signature verify only, no store read",
+		} {
+			if !strings.Contains(cache, want) {
+				t.Errorf("%s: cache text lacks %q: %q", id, want, cache)
+			}
+		}
+		if strings.HasPrefix(cache, noReadPrefix) {
+			t.Errorf("%s: cache text still says no authorization read: %q", id, cache)
+		}
+	}
+	llm := rowsByID(t, internalOrgScopedIDs[1:])[internalOrgScopedIDs[1]]
+	validator, _ := llm["primary_validator"].(map[string]any)
+	text, _ := validator["description"].(string)
+	for _, banned := range []string{"routeAuth", "keyed", "limiter"} {
+		if strings.Contains(text, banned) {
+			t.Errorf("the llm-config validator text names %q: %q", banned, text)
+		}
+	}
+	for _, want := range []string{"llmConfigHandler", "llm_config:read"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("the llm-config validator text lacks %q: %q", want, text)
+		}
+	}
 }

@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -186,6 +187,34 @@ WHERE u.email = $1 AND m.org_id = $2), '')`, email, orgID).Scan(&role)
 			}
 			if n := userCount(email); n != 0 {
 				t.Fatalf("role %q left %d user rows, want 0", role, n)
+			}
+		}
+	})
+
+	// CHAOS-11619: a non-local provider needs a valid provider id. The Python API stored an empty or missing one
+	// (201); Go refuses with 422 before any write. No Python-parity request sends a non-local provider, so the
+	// frozen goldens and the divergence list need no row; this Go-only row is the contract pin.
+	t.Run("a non-local provider add with an empty or missing provider id is refused and writes no user", func(t *testing.T) {
+		for name, c := range map[string]struct{ email, provider, id string }{
+			"github empty":   {"refused-gh-empty@example.com", "github", `,"auth_provider_id":""`},
+			"github missing": {"refused-gh-missing@example.com", "github", ``},
+			"oidc blank":     {"refused-oidc-blank@example.com", "oidc", `,"auth_provider_id":" "`},
+		} {
+			response := create("super", "", `{"email":"`+c.email+`","auth_provider":"`+c.provider+`"`+c.id+`}`)
+			if response.Status != http.StatusUnprocessableEntity || !strings.Contains(response.Body, "auth_provider_id") {
+				t.Fatalf("%s: status = %d, want 422 naming auth_provider_id: %s", name, response.Status, response.Body)
+			}
+			if n := userCount(c.email); n != 0 {
+				t.Fatalf("%s left %d user rows, want 0", name, n)
+			}
+		}
+		for name, body := range map[string]string{
+			"github valid id":    `{"email":"ok-gh@example.com","auth_provider":"github","auth_provider_id":"12345"}`,
+			"local without id":   `{"email":"ok-local@example.com","auth_provider":"local"}`,
+			"service without id": `{"email":"ok-service@example.com","auth_provider":"service"}`,
+		} {
+			if response := create("super", "", body); response.Status != http.StatusCreated {
+				t.Fatalf("%s: status = %d, want 201: %s", name, response.Status, response.Body)
 			}
 		}
 	})

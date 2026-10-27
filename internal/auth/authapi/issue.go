@@ -165,6 +165,10 @@ func (h compatHandlers) issueSession(w http.ResponseWriter, r *http.Request) {
 		h.rec.refuse(w, r, opSessionIssue, refusal{http.StatusForbidden, reasonDeactivated}, nil)
 		return
 	}
+	if identity.IsServiceProvider(user.AuthProvider) {
+		h.rec.refuse(w, r, opSessionIssue, refusal{http.StatusForbidden, reasonNotEntitled}, nil)
+		return
+	}
 	role := roleText(nil, false)
 	if req.organization != nil {
 		value, member, err := h.Users.Role(ctx, req.principal, *req.organization)

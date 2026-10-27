@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
+	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
 	"github.com/jackc/pgx/v5"
 	"github.com/riverqueue/river"
@@ -30,8 +31,9 @@ type riverWorkerProcess struct {
 	// deterministically without real wall-clock waits, the same seam
 	// preclaimReadinessComponent uses. Left nil, Start uses time.Now and a
 	// context-aware time.Sleep.
-	now   func() time.Time
-	sleep func(context.Context, time.Duration)
+	now    func() time.Time
+	sleep  func(context.Context, time.Duration)
+	jitter func(time.Duration) time.Duration
 	// startClient is process.client.Start, indirected so a test can drive the
 	// retry loop with a fake that fails the way River's real producer start
 	// does under a roll storm (context.DeadlineExceeded from the fixed 10s
@@ -64,18 +66,18 @@ func (process riverWorkerProcess) Start(ctx context.Context) error {
 		startClient = process.client.Start
 	}
 	return startupRetryBudget(
-		ctx, process.budget, process.now, process.sleep,
+		ctx, process.budget, process.now, process.sleep, process.jitter,
 		startClient,
 		isRiverProducerStartTimeout,
-		func(attempt int, elapsed, wait time.Duration, _ error) {
-			process.logRetry(ctx, attempt, elapsed, wait)
+		func(attempt int, elapsed, wait time.Duration, err error) {
+			process.logRetry(ctx, attempt, elapsed, wait, err)
 		},
-		func(attempt int, elapsed time.Duration, _ error, budgetExhausted bool) {
+		func(attempt int, elapsed time.Duration, err error, budgetExhausted bool) {
 			reason := "river_producer_start_failed"
 			if budgetExhausted {
 				reason = "retry_budget_exhausted"
 			}
-			process.logGiveUp(ctx, reason, attempt, elapsed)
+			process.logGiveUp(ctx, reason, attempt, elapsed, err)
 		},
 	)
 }
@@ -85,7 +87,7 @@ func (process riverWorkerProcess) Start(ctx context.Context) error {
 // per riverqueue/river/rivershared/util/timeoututil.WithTimeoutV) rather than a
 // genuine start error such as a rejected DSN or a misconfigured queue.
 func isRiverProducerStartTimeout(err error) bool {
-	return errors.Is(err, context.DeadlineExceeded)
+	return errors.Is(err, context.DeadlineExceeded) || isTransientDialError(err)
 }
 
 // logRetry reports one non-terminal attempt at starting River's producers:
@@ -94,8 +96,18 @@ func isRiverProducerStartTimeout(err error) bool {
 // level preclaim readiness retries at, because this is the expected shape of
 // a roll storm, not something an operator needs to act on unless it keeps
 // recurring until the budget runs out.
-func (process riverWorkerProcess) logRetry(ctx context.Context, attempt int, elapsed, wait time.Duration) {
+func (process riverWorkerProcess) logRetry(ctx context.Context, attempt int, elapsed, wait time.Duration, err error) {
 	if process.logger == nil {
+		return
+	}
+	if isTransientDialError(err) {
+		process.logger.WarnContext(ctx, "river workers start timed out, retrying",
+			"error_category", "dependency_unavailable",
+			"cause", health.CauseUnreachable,
+			"attempt", attempt,
+			"elapsed", elapsed.String(),
+			"retry_in", wait.String(),
+		)
 		return
 	}
 	process.logger.WarnContext(ctx, "river workers start timed out, retrying",
@@ -110,8 +122,18 @@ func (process riverWorkerProcess) logRetry(ctx context.Context, attempt int, ela
 // retryable timeout whose budget ran out. Start returns an error either way,
 // so the process exits and is restarted; this is the one place the attempt
 // count and elapsed time are recorded before that happens.
-func (process riverWorkerProcess) logGiveUp(ctx context.Context, reason string, attempt int, elapsed time.Duration) {
+func (process riverWorkerProcess) logGiveUp(ctx context.Context, reason string, attempt int, elapsed time.Duration, err error) {
 	if process.logger == nil {
+		return
+	}
+	if isTransientDialError(err) {
+		process.logger.ErrorContext(ctx, "river workers start refused",
+			"error_category", "dependency_unavailable",
+			"cause", health.CauseUnreachable,
+			"reason", reason,
+			"attempts", attempt,
+			"elapsed", elapsed.String(),
+		)
 		return
 	}
 	process.logger.ErrorContext(ctx, "river workers start refused",
@@ -172,6 +194,7 @@ func newRiverWorkerProcess(
 		// preclaim readiness uses rather than a second knob that could drift
 		// out of sync with it.
 		budget: cfg.PreclaimReadinessTimeout,
+		jitter: startupRetryJitter,
 	}, nil
 }
 

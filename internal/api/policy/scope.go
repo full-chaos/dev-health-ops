@@ -140,7 +140,7 @@ func (s *Scope) OrgScope(next http.Handler) http.Handler {
 			s.logger.ErrorContext(r.Context(), "api org scope: caller lookup failed",
 				slog.String("path", r.Pattern), slog.Bool("unavailable", isUnavailable(err)),
 				slog.String("missing_grant", MissingGrant(err)), slog.String("reason", scopeReason(err)))
-			WriteInternal(w)
+			writeCallerLookupFailure(w, err)
 			return
 		}
 		resolved := ""
@@ -231,7 +231,7 @@ func (s *Scope) Impersonation(next http.Handler) http.Handler {
 		if err != nil {
 			s.logger.ErrorContext(r.Context(), "api impersonation: caller lookup failed",
 				slog.Bool("unavailable", isUnavailable(err)), slog.String("missing_grant", MissingGrant(err)), slog.String("reason", scopeReason(err)))
-			WriteInternal(w)
+			writeCallerLookupFailure(w, err)
 			return
 		}
 		if user == nil || !user.IsSuperuser {

@@ -6,15 +6,11 @@
 package smtpcapture
 
 import (
-	"bufio"
-	"bytes"
 	"fmt"
 	"net"
-	"os"
 	"regexp"
 	"strconv"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 )
@@ -32,26 +28,10 @@ type Mail struct {
 // message byte-for-byte. It is the oracle's mail sink: both planes send the
 // same message to it and the raw wire bytes are compared, which is strictly
 // more precise than reading either back through a mail catcher's parsed view.
-type Server struct {
-	listener net.Listener
-	mu       sync.Mutex
-	mails    []Mail
-	accepts  int
-}
-
-// EnvListen names the address the sink listens on when a test asks for it; unset, the sink listens on loopback.
-const EnvListen = "DEVHEALTH_AUTH_ORACLE_SMTP_LISTEN"
+type Server struct{ *Sink }
 
 // DefaultListen is the loopback address with a free port.
 const DefaultListen = "127.0.0.1:0"
-
-// ListenAddr is the address a test's sink listens on: EnvListen when set, loopback otherwise.
-func ListenAddr() string {
-	if addr := os.Getenv(EnvListen); addr != "" {
-		return addr
-	}
-	return DefaultListen
-}
 
 func Start(t *testing.T) *Server { return StartAt(t, DefaultListen) }
 
@@ -68,44 +48,18 @@ func ValidateListen(addr string) error {
 	return nil
 }
 
-// ValidateExternalListen is ValidateListen plus a fixed port: an already-running target is configured with the
-// sink's address before the test starts, so a random port cannot reach it.
-func ValidateExternalListen(addr string) error {
-	if err := ValidateListen(addr); err != nil {
-		return err
-	}
-	_, port, _ := net.SplitHostPort(addr)
-	if number, _ := strconv.Atoi(port); number == 0 {
-		return fmt.Errorf("listen address %q has port 0: set %s to a fixed port", addr, EnvListen)
-	}
-	return nil
-}
-
 // StartAt starts the sink on addr.
 func StartAt(t *testing.T, addr string) *Server {
 	t.Helper()
 	if err := ValidateListen(addr); err != nil {
 		t.Fatal(err)
 	}
-	listener, err := net.Listen("tcp", addr)
+	sink, err := NewSink(addr)
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := &Server{listener: listener}
-	t.Cleanup(func() { _ = listener.Close() })
-	go func() {
-		for {
-			conn, err := listener.Accept()
-			if err != nil {
-				return
-			}
-			server.mu.Lock()
-			server.accepts++
-			server.mu.Unlock()
-			go server.serve(conn)
-		}
-	}()
-	return server
+	t.Cleanup(sink.Close)
+	return &Server{sink}
 }
 
 func (server *Server) HostPort(t *testing.T) (string, int) {
@@ -148,56 +102,6 @@ func (server *Server) AssertNone(t *testing.T) {
 	defer server.mu.Unlock()
 	if len(server.mails) != 0 {
 		t.Fatalf("the SMTP server received a message that must have been refused: %q", server.mails[0].Data)
-	}
-}
-
-func (server *Server) serve(conn net.Conn) {
-	defer conn.Close()
-	reader := bufio.NewReader(conn)
-	reply := func(line string) { _, _ = conn.Write([]byte(line + "\r\n")) }
-	reply("220 capture.smtp.test ESMTP")
-	var current Mail
-	for {
-		line, err := reader.ReadString('\n')
-		if err != nil {
-			return
-		}
-		trimmed := strings.TrimRight(line, "\r\n")
-		upper := strings.ToUpper(trimmed)
-		switch {
-		case strings.HasPrefix(upper, "EHLO"), strings.HasPrefix(upper, "HELO"):
-			reply("250 capture.smtp.test")
-		case strings.HasPrefix(upper, "MAIL FROM:"):
-			current = Mail{MailFrom: trimmed[len("MAIL FROM:"):]}
-			reply("250 OK")
-		case strings.HasPrefix(upper, "RCPT TO:"):
-			current.RcptTo = append(current.RcptTo, trimmed[len("RCPT TO:"):])
-			reply("250 OK")
-		case upper == "DATA":
-			reply("354 go ahead")
-			var data bytes.Buffer
-			for {
-				dataLine, err := reader.ReadString('\n')
-				if err != nil {
-					return
-				}
-				if dataLine == ".\r\n" {
-					break
-				}
-				data.WriteString(strings.TrimPrefix(dataLine, ".")) // dot-unstuff
-			}
-			current.Data = data.String()
-			server.mu.Lock()
-			server.mails = append(server.mails, current)
-			server.mu.Unlock()
-			current = Mail{}
-			reply("250 OK queued")
-		case upper == "QUIT":
-			reply("221 bye")
-			return
-		default:
-			reply("250 OK")
-		}
 	}
 }
 

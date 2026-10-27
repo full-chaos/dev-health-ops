@@ -33,12 +33,14 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/proofprincipals"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pydanticecho"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -88,13 +90,66 @@ var SocialEnv = []string{"SOCIAL_GITHUB_CLIENT_ID=gh-client", "SOCIAL_GITHUB_CLI
 
 func strPtr(s string) *string { return &s }
 
+// SeedOption changes what Seed writes.
+type SeedOption int
+
+const (
+	// OwnedLegSeed is the seed of the leg where auth-service owns users: SeedDifferences applied, nothing else changed.
+	OwnedLegSeed SeedOption = iota + 1
+)
+
+// SeedUser is one users row of the seed.
+type SeedUser struct {
+	ID, Email, Username, FullName, Provider, ProviderID string
+	HasHash                                             bool
+	Active, Verified, Superuser                         bool
+}
+
+// SeedUsers is the users the seed writes: the same on every leg. For the leg that owns users, SeedDifferences are applied.
+// SeedDifferences are the seed differences of the leg that owns users, declared once.
+var SeedDifferences = []struct{ User, Column, Value, Reason string }{
+	{User: olga, Column: "auth_provider_id", Value: "300",
+		Reason: "a github user with no provider id cannot be copied to the auth schema (usersbackfill skips it as an invalid identity and the users_owned guard then refuses the switch); prod has no github user without a provider id at flip time (CHAOS-11452). 300 is the id the github stub gives her (the sessions scenario)"},
+}
+
+func SeedUsers(owned bool) []SeedUser {
+	users := []SeedUser{
+		{alice, "alice@example.com", "alice", "Alice Ä", "local", "", true, true, true, false},
+		{bob, "bob@example.com", "bob", "", "local", "", true, true, true, true},
+		{carol, "carol@example.com", "carol", "Carol", "local", "", true, true, false, false},
+		{dave, "dave@example.com", "dave", "Dave", "local", "", true, false, true, false},
+		{erin, "erin@example.com", "erin", "Erin", "local", "", false, true, true, false},
+		{frank, "frank@example.com", "frank", "Frank", "github", "100", false, true, true, false},
+		{grace, "Grace@Example.COM", "grace", "Grace", "local", "", true, true, true, false},
+		{heidi, "heidi@example.com", "heidi", "Heidi", "", "", true, true, false, false},
+		{judy, "judy@example.com", "judy", "Judy", "local", "", true, true, true, false},
+		{karl, "karl@example.com", "karl", "Karl", "local", "", true, true, false, false},
+		{lena, "lena@example.com", "lena", "Lena", "local", "", true, true, true, false},
+		{olga, "olga@example.com", "olga", "Olga", "github", "", false, true, true, false},
+	}
+	if owned {
+		for _, difference := range SeedDifferences {
+			for index := range users {
+				if users[index].ID == difference.User && difference.Column == "auth_provider_id" {
+					users[index].ProviderID = difference.Value
+				}
+			}
+		}
+	}
+	return users
+}
+
 // Seed writes the organizations, users and memberships on admin, the
 // passwords hashed as passwordHash, every timestamp anchored at a fixed
 // instant so answers that carry one (joined_at) are the same on every run,
 // and returns the seed access tokens to
 // mint: name -> create_access_token keyword arguments.
-func Seed(t *testing.T, ctx context.Context, admin *pgxpool.Pool, passwordHash string) map[string]map[string]any {
+//
+// OwnedLegSeed seeds the one difference the leg that owns users needs (SeedDifferences): a switch to auth-service
+// owning users cannot copy a github user with no provider id.
+func Seed(t *testing.T, ctx context.Context, admin *pgxpool.Pool, passwordHash string, options ...SeedOption) map[string]map[string]any {
 	t.Helper()
+	owned := slices.Contains(options, OwnedLegSeed)
 	hash := passwordHash
 	exec := func(sql string, args ...any) {
 		t.Helper()
@@ -111,42 +166,24 @@ func Seed(t *testing.T, ctx context.Context, admin *pgxpool.Pool, passwordHash s
 		exec(`INSERT INTO organizations (id, slug, name, tier, is_active, settings, managed_by, created_at, updated_at)
 VALUES ($1, $2, $3, coalesce($4, 'community'), $5, '{}', 'self', '2026-08-01 00:00:00+00'::timestamptz, '2026-08-01 00:00:00+00'::timestamptz)`, org.id, org.slug, org.name, org.tier, org.active)
 	}
-	type user struct {
-		id, email, username, fullName, provider, providerID string
-		hash                                                bool
-		active, verified, superuser                         bool
-	}
-	for _, u := range []user{
-		{alice, "alice@example.com", "alice", "Alice Ä", "local", "", true, true, true, false},
-		{bob, "bob@example.com", "bob", "", "local", "", true, true, true, true},
-		{carol, "carol@example.com", "carol", "Carol", "local", "", true, true, false, false},
-		{dave, "dave@example.com", "dave", "Dave", "local", "", true, false, true, false},
-		{erin, "erin@example.com", "erin", "Erin", "local", "", false, true, true, false},
-		{frank, "frank@example.com", "frank", "Frank", "github", "100", false, true, true, false},
-		{grace, "Grace@Example.COM", "grace", "Grace", "local", "", true, true, true, false},
-		{heidi, "heidi@example.com", "heidi", "Heidi", "", "", true, true, false, false},
-		{judy, "judy@example.com", "judy", "Judy", "local", "", true, true, true, false},
-		{karl, "karl@example.com", "karl", "Karl", "local", "", true, true, false, false},
-		{lena, "lena@example.com", "lena", "Lena", "local", "", true, true, true, false},
-		{olga, "olga@example.com", "olga", "Olga", "github", "", false, true, true, false},
-	} {
+	for _, u := range SeedUsers(owned) {
 		var passwordHash, provider, providerID, fullName *string
-		if u.hash {
+		if u.HasHash {
 			passwordHash = &hash
 		}
-		if u.provider != "" {
-			provider = strPtr(u.provider)
+		if u.Provider != "" {
+			provider = strPtr(u.Provider)
 		}
-		if u.providerID != "" {
-			providerID = strPtr(u.providerID)
+		if u.ProviderID != "" {
+			providerID = strPtr(u.ProviderID)
 		}
-		if u.fullName != "" {
-			fullName = strPtr(u.fullName)
+		if u.FullName != "" {
+			fullName = strPtr(u.FullName)
 		}
 		exec(`INSERT INTO users (id, email, username, password_hash, full_name, auth_provider, auth_provider_id,
 	is_active, is_verified, is_superuser, token_version, created_at, updated_at)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 0, '2026-08-01 00:00:00+00'::timestamptz - interval '1 day', '2026-08-01 00:00:00+00'::timestamptz - interval '1 day')`,
-			u.id, u.email, u.username, passwordHash, fullName, provider, providerID, u.active, u.verified, u.superuser)
+			u.ID, u.Email, u.Username, passwordHash, fullName, provider, providerID, u.Active, u.Verified, u.Superuser)
 	}
 	for _, m := range []struct {
 		user, org, role string
@@ -445,8 +482,8 @@ func (h *Harness) run(pairs []pair) map[string]answers {
 			var pyShown, goShown venueoracle.Response
 			same, compared, pyShown, goShown = venueoracle.Compare(p.python, pyResponses[index], goResponse,
 				venueoracle.DiffOptions{Normalize: func(_ venueoracle.Request, body string) string { return Normalize(body) }})
-			detail = fmt.Sprintf("python %d %s %v\n go     %d %s %v", pyResponses[index].Status, pyShown.Body,
-				pickHeaders(pyShown.Headers, compared), goResponse.Status, goShown.Body, pickHeaders(goShown.Headers, compared))
+			detail = venueoracle.RedactText(fmt.Sprintf("python %d %s %v\n go     %d %s %v", pyResponses[index].Status, pyShown.Body,
+				pickHeaders(pyShown.Headers, compared), goResponse.Status, goShown.Body, pickHeaders(goShown.Headers, compared)))
 			h.recording.Answers = append(h.recording.Answers,
 				RecordedAnswer{Name: p.name, Status: pyResponses[index].Status, Body: Normalize(pyResponses[index].Body)})
 			out[p.name] = answers{python: pyResponses[index], goSide: goResponse}
@@ -457,7 +494,7 @@ func (h *Harness) run(pairs []pair) map[string]answers {
 			want := h.golden.Answers[h.cursor]
 			h.cursor++
 			if refused, ok := socialLinkRefusals[p.name]; ok {
-				want = RecordedAnswer{Name: p.name, Status: http.StatusConflict, Body: refused.body}
+				want = RecordedAnswer{Name: p.name, Status: refused.status, Body: refused.body}
 			}
 			goBody := Normalize(goResponse.Body)
 			// The Go api never writes input or ctx of a validation error.
@@ -467,7 +504,7 @@ func (h *Harness) run(pairs []pair) map[string]answers {
 			if want.Status == 500 && pydanticecho.GenericPython500(want.Body) && (goResponse.Status == 422 || goResponse.Status == 400) && strings.Contains(goBody, `"loc"`) && pydanticecho.Strip(goBody) == goBody {
 				same = true
 			}
-			detail = fmt.Sprintf("python %d %s\n go     %d %s", want.Status, want.Body, goResponse.Status, goBody)
+			detail = venueoracle.RedactText(fmt.Sprintf("python %d %s\n go     %d %s", want.Status, want.Body, goResponse.Status, goBody))
 			// A replay has only the Go plane: later steps read its tokens
 			// for both sides.
 			out[p.name] = answers{python: goResponse, goSide: goResponse}
@@ -819,7 +856,7 @@ func Run(h *Harness) string {
 	h.compareRows("users", `SELECT email, coalesce(username, '<null>'), coalesce(full_name, '<null>'),
 		coalesce(auth_provider, '<null>'), coalesce(auth_provider_id, '<null>'), is_active, is_verified, is_superuser, token_version,
 		last_login_at IS NOT NULL, updated_at >= created_at, password_hash IS NULL FROM users
-		WHERE auth_provider IS DISTINCT FROM 'service' ORDER BY email`)
+		WHERE `+proofprincipals.ComparedSQL("users")+` ORDER BY email`)
 	h.compareRows("login_attempts", `SELECT email, attempt_count, first_attempt_at IS NOT NULL, coalesce(first_attempt_at = created_at, false),
 		locked_until IS NOT NULL, coalesce(locked_until > now(), false), updated_at >= created_at FROM login_attempts ORDER BY email`)
 	h.compareRows("refresh_tokens", `SELECT u.email, coalesce(o.slug, '<null>'), rt.revoked_at IS NOT NULL,
@@ -934,13 +971,18 @@ func TableRows(t *testing.T, ctx context.Context, uri, query string) string {
 
 // socialLinkRefusals are the golden steps where Python linked a social identity to an account by
 // e-mail alone and signed in. Go refuses them (CHAOS-10940), so the replay expects the refusal instead.
-type socialRefusal struct{ body, reason string }
+type socialRefusal struct {
+	status       int
+	body, reason string
+}
 
 var socialLinkRefusals = map[string]socialRefusal{
-	"social: github email of a local user":                  {socialAccountExistsBody, "Python linked the identity by e-mail and signed in (CHAOS-10940); Go refuses with the provider-free 409"},
-	"social: github email of a github user with another id": {socialAccountExistsBody, "Python replaced the stored provider id and signed in (CHAOS-10940); Go refuses with the provider-free 409"},
-	"social: github email of a github user without an id":   {socialAccountExistsBody, "Python set the missing provider id and signed in (CHAOS-10940); Go refuses with the provider-free 409"},
-	"social: gitlab email of a github user":                 {socialAccountExistsBody, "Python's 409 named the existing sign-in method; Go's names none"},
+	"social: github email of a local user":                  {http.StatusConflict, socialAccountExistsBody, "Python linked the identity by e-mail and signed in (CHAOS-10940); Go refuses with the provider-free 409"},
+	"social: github email of a github user with another id": {http.StatusConflict, socialAccountExistsBody, "Python replaced the stored provider id and signed in (CHAOS-10940); Go refuses with the provider-free 409"},
+	"social: github email of a github user without an id":   {http.StatusConflict, socialAccountExistsBody, "Python set the missing provider id and signed in (CHAOS-10940); Go refuses with the provider-free 409"},
+	"social: gitlab email of a github user":                 {http.StatusConflict, socialAccountExistsBody, "Python's 409 named the existing sign-in method; Go's names none"},
+	"social: github no id": {http.StatusBadRequest, `{"detail":{"message":"The provider returned an invalid user id"}}`,
+		"Python raised on a profile without an id and answered 500; Go refuses with 400 (CHAOS-11619)"},
 }
 
 // socialAccountExistsBody is the 409 Go answers for an e-mail another account holds: Python named the existing

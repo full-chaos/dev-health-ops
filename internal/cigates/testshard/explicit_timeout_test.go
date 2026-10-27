@@ -59,8 +59,8 @@ func readCheckGo(t *testing.T) string {
 
 func TestTheShardedTestLegNamesEveryGoTestTimeout(t *testing.T) {
 	missing, seen := callsMissingTimeout(t, readCheckGo(t))
-	if seen != 3 {
-		t.Fatalf("saw %d go test line(s) in %v, want 3 (the batch, the heavy package alone, the one fresh census run): the scan is stale", seen, explicitTimeoutFunctions)
+	if seen != 4 {
+		t.Fatalf("saw %d go test line(s) in %v, want 4 (the batch, the merge_group security batch, the heavy package alone, the one fresh census run): the scan is stale", seen, explicitTimeoutFunctions)
 	}
 	for _, line := range missing {
 		t.Errorf("go test without an explicit -timeout: %s", line)

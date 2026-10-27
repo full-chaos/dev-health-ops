@@ -1406,3 +1406,19 @@ func TestTypeSafeAClosedConnectionIsATransportFailureNotARefusal(t *testing.T) {
 		t.Fatalf("error=%+v", se)
 	}
 }
+
+// The envelope and the model fill are clef-only: the jev client reads its body
+// as it is.
+func TestTypeSafeClientKeepsAWrappedOrModelLessBodyAsItIs(t *testing.T) {
+	for name, body := range map[string]string{
+		"wrapped":  `{"result":{"model":"jev-1.13.0","answers":{},"usage":{"input_tokens":1,"output_tokens":2}},"success":true}`,
+		"no model": `{"answers":{},"usage":{"input_tokens":1,"output_tokens":2}}`,
+		"no usage": `{"model":"jev-1.13.0","answers":{}}`,
+	} {
+		h := newTS(t, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(body)) })
+		res, err := h.client.SendBody(context.Background(), tsBody)
+		if err != nil || string(res.Body) != body || (name == "wrapped" && (res.Model != "" || res.Usage.Reported)) || (name == "no model" && res.Model != "") {
+			t.Fatalf("%s: model %q usage %+v body %s err %v", name, res.Model, res.Usage, res.Body, err)
+		}
+	}
+}

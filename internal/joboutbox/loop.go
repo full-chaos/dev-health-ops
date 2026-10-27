@@ -48,7 +48,32 @@ type ReconcilerLoopConfig struct {
 	// need not supply one; a nil Logger discards. Without it this loop could
 	// flip readiness closed forever and emit nothing at all (CHAOS-3907).
 	Logger *slog.Logger
+	// StartupRetryBudget bounds how long the first step retries while the
+	// database is transiently unreachable (refused, reset, dropped dial). Zero
+	// disables the retry; any other failure still ends Start at once.
+	StartupRetryBudget time.Duration
+	// The four funcs below are the startup retry, handed in by the caller so
+	// this package does not import the database layer. All four are required
+	// whenever StartupRetryBudget is above zero; a nil one is
+	// ErrInvalidConfiguration, never a silent no-retry.
+	StartupRetry    StartupRetryFunc
+	IsTransientDial func(error) bool
+	MaskUnreachable func(error) error
+	StartupJitter   func(time.Duration) time.Duration
 }
+
+// StartupRetrySeams carries the clock, wait, jitter and log hook that a
+// StartupRetryFunc must use.
+type StartupRetrySeams struct {
+	Now     func() time.Time
+	Sleep   func(context.Context, time.Duration)
+	Jitter  func(time.Duration) time.Duration
+	OnRetry func(attempt int, elapsed, wait time.Duration)
+}
+
+// StartupRetryFunc runs step, retrying a transient dial failure inside budget,
+// and returns the last error unchanged.
+type StartupRetryFunc func(ctx context.Context, budget time.Duration, seams StartupRetrySeams, step func(context.Context) error) error
 
 func DefaultReconcilerLoopConfig(registry *health.Registry) ReconcilerLoopConfig {
 	return ReconcilerLoopConfig{
@@ -62,6 +87,11 @@ func (config ReconcilerLoopConfig) validate() error {
 	if config.Registry == nil ||
 		config.PollInterval < minReconcilerPollInterval || config.PollInterval > maxReconcilerPollInterval ||
 		config.Limit < minReconcilerLimit || config.Limit > maxReconcilerLimit {
+		return ErrInvalidConfiguration
+	}
+	if config.StartupRetryBudget > 0 &&
+		(config.StartupRetry == nil || config.IsTransientDial == nil ||
+			config.MaskUnreachable == nil || config.StartupJitter == nil) {
 		return ErrInvalidConfiguration
 	}
 	return nil
@@ -131,6 +161,9 @@ type ReconcilerLoop struct {
 	stepper RelayStepper
 	config  ReconcilerLoopConfig
 	clock   reconcilerClock
+	// sleep and jitter are replaced by tests; nil uses the real wait.
+	sleep  func(context.Context, time.Duration)
+	jitter func(time.Duration) time.Duration
 
 	ready atomic.Bool
 
@@ -202,6 +235,7 @@ func newReconcilerLoop(
 		config:  config,
 		clock:   clock,
 		errors:  make(chan error, 1),
+		jitter:  config.StartupJitter,
 	}
 	if err := config.Registry.RegisterRequired("reconciler_loop", loop.readiness); err != nil {
 		return nil, fmt.Errorf("register reconciler readiness: %w", err)
@@ -233,7 +267,10 @@ func (loop *ReconcilerLoop) Start(ctx context.Context) error {
 	loop.started = true
 	loop.mu.Unlock()
 
-	if err := loop.step(ctx, loop.clock.Now()); err != nil {
+	if err := loop.startupStep(ctx); err != nil {
+		if loop.config.MaskUnreachable != nil {
+			err = loop.config.MaskUnreachable(err)
+		}
 		loop.setFailed()
 		loop.logger().ErrorContext(ctx, "outbox reconciler initial step failed", "error", err.Error())
 		return fmt.Errorf("initial outbox reconciliation: %w", err)
@@ -258,6 +295,51 @@ func (loop *ReconcilerLoop) Start(ctx context.Context) error {
 	go loop.run(loopCtx, ticker, done)
 	return nil
 }
+
+// startupStep runs the first step, retrying a transient dial failure inside
+// the startup budget when one is configured.
+func (loop *ReconcilerLoop) startupStep(ctx context.Context) error {
+	step := func(stepCtx context.Context) error {
+		err := loop.step(stepCtx, loop.clock.Now())
+		if err == nil || loop.config.IsTransientDial == nil {
+			return err
+		}
+		cause := err
+		var withCause unavailableWithCause
+		if errors.As(err, &withCause) {
+			cause = withCause.cause
+		}
+		if loop.config.IsTransientDial(cause) {
+			return transientStartupError{err: err, cause: cause}
+		}
+		return err
+	}
+	if loop.config.StartupRetry == nil || loop.config.StartupRetryBudget <= 0 {
+		return step(ctx)
+	}
+	return loop.config.StartupRetry(ctx, loop.config.StartupRetryBudget, StartupRetrySeams{
+		Now:    loop.clock.Now,
+		Sleep:  loop.sleep,
+		Jitter: loop.jitter,
+		OnRetry: func(attempt int, elapsed, wait time.Duration) {
+			loop.setFailed()
+			loop.logger().WarnContext(ctx, "outbox reconciler initial step unreachable, retrying",
+				"cause", health.CauseUnreachable,
+				"attempt", attempt,
+				"elapsed", elapsed,
+				"retry_in", wait,
+			)
+		},
+	}, step)
+}
+
+// transientStartupError marks a first-step failure whose cause is a transient
+// dial error. Its text is the step error's; Unwrap exposes the cause to the
+// caller's retry.
+type transientStartupError struct{ err, cause error }
+
+func (e transientStartupError) Error() string   { return e.err.Error() }
+func (e transientStartupError) Unwrap() []error { return []error{e.err, e.cause} }
 
 func (loop *ReconcilerLoop) run(ctx context.Context, ticker reconcilerTicker, done chan struct{}) {
 	defer close(done)

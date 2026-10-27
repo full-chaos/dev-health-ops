@@ -593,15 +593,6 @@ default, an unknown flag is rejected at startup with exit status 2, and the
 manifests in this directory pass their configuration in `command:` so
 `docker compose config` shows what each container actually runs.
 
-CHAOS-6279: `--operational-bridge-url`, `--operational-bridge-allow-insecure`,
-and `WORKER_OPERATIONAL_BRIDGE_TOKEN` (formerly documented here as a
-`sync.team_autoimport` dependency) are deleted -- that HTTP bridge no
-longer exists (CHAOS-5320 deleted the Python side it called into), and no
-constructor in this binary reads any of the three any more (confirmed by
-grep). `--operational-bridge-timeout` survives only as a generic HTTP
-client timeout for two unrelated callers (the billing email sender, the
-native heartbeat dispatcher).
-
 ### Provider credentials the Go executor can decrypt
 
 `internal/providerfoundation.CredentialResolver` reads
@@ -1200,7 +1191,7 @@ sides:
 **Auth session read.** While auth-service owns sessions (`authService.phase` 2 or
 more, `AUTH_PROXY_SESSIONS`), the manifest also holds USAGE on the auth schema
 (`AUTH_DATABASE_SCHEMA`, default `auth`) and column SELECT on
-`sessions(id, principal_id, revoked_at)`: the same list auth-migrate grants a
+`sessions(id, principal_id, revoked_at, legacy_token_version)`: the same list auth-migrate grants a
 session reader (`authschema.SessionReaderColumns`), declared once in
 `postgres.QueryAPISessionReadFor`. `dho migrate river` emits it after the role's
 REVOKE, so the role ends with exactly the manifest plus that read; auth-migrate's

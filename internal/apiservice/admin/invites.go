@@ -15,6 +15,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/auth/signedtoken"
+	"github.com/full-chaos/dev-health-ops/internal/mail"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
@@ -243,7 +244,7 @@ func (h *handlers) sendInviteEmail(ctx context.Context, orgName, inviter string,
 	// The address is not logged: it is the invitee's, and the invite id
 	// identifies the row.
 	h.invites.Send(ctx, h.logger, "admin: failed to send invite email", invite.Email,
-		"You're invited to join "+orgName, "invite", map[string]string{
+		"You're invited to join "+mail.SubjectText(orgName), "invite", map[string]string{
 			"org_name": orgName, "inviter_name": inviter, "accept_url": h.invites.Link("/accept-invite", token),
 		}, "invite_id", invite.ID.String(), "org_id", invite.OrgID.String())
 }

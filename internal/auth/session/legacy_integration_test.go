@@ -378,10 +378,7 @@ func TestExchangeRefusesAPinlessSessionWithoutRotating(t *testing.T) {
 		t.Fatal(err)
 	}
 	sessionID := uuid.New()
-	if _, err := e.admin.Exec(ctx, `INSERT INTO auth.sessions (id, principal_id, token_hash, expires_at, amr)
-		VALUES ($1, $2, $3, 'infinity', '{pwd}')`, sessionID, principal, hashCredential(contracts.NewSecretString("pinless-handle"))); err != nil {
-		t.Fatalf("seed a pinless session: %v", err)
-	}
+	e.seedPinless(t, ctx, sessionID, principal)
 	if _, err := e.admin.Exec(ctx, `INSERT INTO auth.refresh_credentials (session_id, principal_id, token_hash, expires_at)
 		VALUES ($1, $2, $3, now() + interval '1 hour')`, sessionID, principal, hashCredential(credential)); err != nil {
 		t.Fatalf("seed its credential: %v", err)

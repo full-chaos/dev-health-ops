@@ -33,8 +33,8 @@ func m10Seed(t *testing.T, ctx context.Context, env *authFixture) {
 	t.Helper()
 	for _, statement := range []string{
 		`INSERT INTO auth.principals (id, kind, display_name) VALUES ('` + m10Principal + `', 'user', 'm10')`,
-		`INSERT INTO auth.sessions (id, principal_id, token_hash, expires_at)
-		 VALUES ('` + m10Session + `', '` + m10Principal + `', '\x0a'::bytea, now() + interval '1 hour')`,
+		`INSERT INTO auth.sessions (id, principal_id, token_hash, expires_at, legacy_token_version)
+		 VALUES ('` + m10Session + `', '` + m10Principal + `', '\x0a'::bytea, now() + interval '1 hour', 0)`,
 	} {
 		if _, err := env.admin.Exec(ctx, statement); err != nil {
 			t.Fatalf("seed %q: %v", statement, err)

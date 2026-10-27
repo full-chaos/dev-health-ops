@@ -128,6 +128,10 @@ type FileSource struct {
 	KeyID string
 	// States, when set, gives the key its effective state (see StateOverride).
 	States StateOverride
+	// Reads bounds and shares the key-file reads. Set it once and keep it in
+	// every copy of the value so the reads are shared; nil bounds each read
+	// but shares none.
+	Reads *FileReads
 }
 
 var (
@@ -154,7 +158,7 @@ func (s FileSource) Describe(ctx context.Context) (Metadata, error) {
 		return Metadata{}, failure(ReasonKeyIDUnconfigured, nil)
 	}
 
-	pemBytes, err := readCustodiedFile(s.Path, MaxKeyFileBytes)
+	pemBytes, err := s.Reads.readFile(ctx, s.Path, MaxKeyFileBytes)
 	if err != nil {
 		return Metadata{}, err
 	}

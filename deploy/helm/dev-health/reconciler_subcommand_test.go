@@ -17,7 +17,7 @@ func TestDefaultReconcilerGroupRunsTheDhoVerb(t *testing.T) {
 		t.Fatalf("default render failed: %v\n%s", err, output)
 	}
 	rendered := string(output)
-	start := strings.Index(rendered, "name: reconciler-test-dev-health-go-reconciler\n")
+	start := strings.Index(rendered, "kind: Deployment\nmetadata:\n  name: reconciler-test-dev-health-go-reconciler\n")
 	if start < 0 {
 		t.Fatalf("no reconciler Deployment in the default render")
 	}

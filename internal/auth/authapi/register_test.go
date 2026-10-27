@@ -15,6 +15,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity/local"
 )
@@ -340,5 +342,93 @@ func TestRegisterRouteOrganizationSettingParsesAsGoAPIDoes(t *testing.T) {
 		if got := c.fakes.provisioned[0].OrganizationName != nil; got != wantOrg {
 			t.Fatalf("setting %q: organization = %v, want %v", value, got, wantOrg)
 		}
+	}
+}
+
+func TestRegisterCarriesAbsentAndEmptyFullNameApart(t *testing.T) {
+	registerEnv(t, "")
+	for name, tc := range map[string]struct {
+		body  string
+		empty bool
+		set   bool
+	}{
+		"absent": {body: `{"email":"a1@example.com","password":"Correct-horse-battery-9"}`},
+		"empty":  {body: `{"email":"a2@example.com","password":"Correct-horse-battery-9","full_name":""}`, set: true, empty: true},
+		"named":  {body: `{"email":"a3@example.com","password":"Correct-horse-battery-9","full_name":"Ann"}`, set: true},
+	} {
+		c := newCredFixture(t)
+		if got := c.call(http.MethodPost, PatternRegister, tc.body, nil); got.Code != http.StatusAccepted {
+			t.Fatalf("%s: status %d %s", name, got.Code, got.Body)
+		}
+		if len(c.fakes.provisioned) != 1 {
+			t.Fatalf("%s: %d provisions", name, len(c.fakes.provisioned))
+		}
+		got := c.fakes.provisioned[0].FullName
+		switch {
+		case !tc.set && got != nil:
+			t.Errorf("%s: full name %q, want nil", name, *got)
+		case tc.set && (got == nil || (*got == "") != tc.empty):
+			t.Errorf("%s: full name %v", name, got)
+		}
+	}
+}
+
+func TestUserInfoFullNameNullVersusEmpty(t *testing.T) {
+	empty := ""
+	for name, tc := range map[string]struct {
+		in   *string
+		want string
+	}{"null": {nil, `"full_name":null`}, "empty": {&empty, `"full_name":""`}} {
+		raw, err := json.Marshal(userInfo(uuid.New(), UserState{Email: "a@example.com", FullName: tc.in}, nil))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(strings.ReplaceAll(string(raw), " ", ""), tc.want) {
+			t.Errorf("%s: %s lacks %s", name, raw, tc.want)
+		}
+	}
+}
+
+func TestRegisterRefusesALoneSurrogateNameBeforeAnyStoreCall(t *testing.T) {
+	registerEnv(t, "")
+	for name, body := range map[string]string{
+		"full_name": `{"email":"a@example.com","password":"Correct-horse-battery-9","full_name":"\ud800"}`,
+		"org_name":  `{"email":"a@example.com","password":"Correct-horse-battery-9","org_name":"Team \udc00"}`,
+		"both":      `{"email":"a@example.com","password":"Correct-horse-battery-9","full_name":"x\udbff","org_name":"\ud800"}`,
+	} {
+		c := newCredFixture(t)
+		r := c.call(http.MethodPost, PatternRegister, body, nil)
+		if r.Code != http.StatusUnprocessableEntity || !strings.Contains(r.Body.String(), `"string_unicode"`) {
+			t.Fatalf("%s: %d %s", name, r.Code, r.Body.String())
+		}
+		if len(c.fakes.provisioned) != 0 || len(c.fakes.mails) != 0 {
+			t.Fatalf("%s: provisioned %d, mailed %d", name, len(c.fakes.provisioned), len(c.fakes.mails))
+		}
+		if strings.Contains(r.Body.String(), "Correct-horse") {
+			t.Fatalf("%s: the body echoes the password", name)
+		}
+	}
+}
+
+func TestRegisterAcceptsEmojiAndPairedEscapesInNames(t *testing.T) {
+	registerEnv(t, "")
+	c := newCredFixture(t)
+	r := c.call(http.MethodPost, PatternRegister, `{"email":"emoji@example.com","password":"Correct-horse-battery-9","full_name":"Ann 😀","org_name":"Ünï 名前 😀"}`, nil)
+	if r.Code != http.StatusAccepted || len(c.fakes.provisioned) != 1 {
+		t.Fatalf("%d %s provisioned %d", r.Code, r.Body.String(), len(c.fakes.provisioned))
+	}
+}
+
+// The names below are written as JSON escapes (a surrogate pair), not as literal characters.
+func TestRegisterAcceptsEscapedSurrogatePairsInNames(t *testing.T) {
+	registerEnv(t, "")
+	c := newCredFixture(t)
+	r := c.call(http.MethodPost, PatternRegister, `{"email":"pairs@example.com","password":"Correct-horse-battery-9","full_name":"\ud83d\ude00","org_name":"\ud83c\uddf3\ud83c\uddf1 Team"}`, nil)
+	if r.Code != http.StatusAccepted || len(c.fakes.provisioned) != 1 {
+		t.Fatalf("%d %s provisioned %d", r.Code, r.Body.String(), len(c.fakes.provisioned))
+	}
+	got := c.fakes.provisioned[0]
+	if got.FullName == nil || *got.FullName != "\U0001F600" || got.OrganizationName == nil || *got.OrganizationName != "\U0001F1F3\U0001F1F1 Team" {
+		t.Fatalf("the pairs did not decode to the characters: %+v", got)
 	}
 }

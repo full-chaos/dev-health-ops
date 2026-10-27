@@ -1,6 +1,8 @@
 package mail
 
 import (
+	"html"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -74,5 +76,125 @@ func TestRenderInviteMatchesTheKnownShape(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("rendered invite lacks %q:\n%s", want, got)
 		}
+	}
+}
+
+var hostileValues = map[string]string{
+	"script":          `<script>alert(1)</script>`,
+	"ampersand":       `a & b`,
+	"double quote":    `say "hi"`,
+	"single quote":    `it's`,
+	"address":         `Tom <t@example.test>`,
+	"already escaped": `&lt;b&gt;`,
+	"attribute break": `"><img src=x onerror=alert(1)>`,
+	"non-ascii":       "Zoë 山田",
+	"empty":           ``,
+}
+
+// Deliberate: Go escapes every substituted value, frozen Python did not.
+func TestRenderTemplateEscapesEveryField(t *testing.T) {
+	fields := map[string]map[string]string{
+		"verification":   {"full_name": "", "verification_url": "https://app.example.test/auth/verify?token=t"},
+		"password_reset": {"full_name": "", "reset_url": "https://app.example.test/auth/reset-password?token=t"},
+		"account_exists": {"full_name": "", "signin_url": "https://app.example.test/auth/signin", "reset_url": "https://app.example.test/auth/forgot-password"},
+		"invite":         {"org_name": "", "inviter_name": "", "accept_url": "https://app.example.test/accept-invite?token=t"},
+	}
+	for name, base := range fields {
+		for field := range base {
+			for label, hostile := range hostileValues {
+				context := map[string]string{}
+				for k, v := range base {
+					context[k] = v
+				}
+				context[field] = hostile
+				got, err := RenderTemplate(name, context)
+				if err != nil {
+					t.Fatalf("%s/%s/%s: %v", name, field, label, err)
+				}
+				if hostile != "" && strings.Contains(got, hostile) && html.EscapeString(hostile) != hostile {
+					t.Errorf("%s/%s/%s: the raw value reached the body:\n%s", name, field, label, got)
+				}
+				if want := html.EscapeString(hostile); !strings.Contains(got, want) {
+					t.Errorf("%s/%s/%s: body lacks the escaped value %q", name, field, label, want)
+				}
+				if strings.Contains(got, "<script") || strings.Contains(got, "<img src=x") {
+					t.Errorf("%s/%s/%s: markup from the value landed in the body", name, field, label)
+				}
+			}
+		}
+	}
+}
+
+// A URL field is escaped too: & in a query string becomes &amp;, which an href decodes back.
+func TestRenderTemplateEscapesUrlFieldsToo(t *testing.T) {
+	got, err := RenderTemplate("verification", map[string]string{"full_name": "x", "verification_url": "https://app.example.test/v?a=1&b=2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, `href="https://app.example.test/v?a=1&amp;b=2"`) || strings.Contains(got, "a=1&b=2") {
+		t.Fatalf("url not escaped:\n%s", got)
+	}
+}
+
+// Census: every replacement field of every shipped template is escaped, and a *_url field sits only inside an href or src attribute.
+func TestEveryTemplateFieldIsEscapedAndUrlFieldsSitInAttributes(t *testing.T) {
+	entries, err := templateFiles.ReadDir("templates")
+	if err != nil || len(entries) == 0 {
+		t.Fatalf("templates: %v (%d)", err, len(entries))
+	}
+	fieldPattern := regexp.MustCompile(`\{([A-Za-z_][A-Za-z0-9_]*)\}`)
+	for _, entry := range entries {
+		name := strings.TrimSuffix(entry.Name(), ".html")
+		raw, err := templateFiles.ReadFile("templates/" + entry.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		context := map[string]string{}
+		for _, match := range fieldPattern.FindAllStringSubmatch(string(raw), -1) {
+			context[match[1]] = `<i>&"'` + match[1]
+		}
+		if len(context) == 0 {
+			t.Errorf("%s: no replacement field found: the census measured nothing", name)
+			continue
+		}
+		got, err := RenderTemplate(name, context)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if strings.Contains(got, "<i>") {
+			t.Errorf("%s: a field reached the body unescaped:\n%s", name, got)
+		}
+		for field := range context {
+			if !strings.HasSuffix(field, "_url") {
+				continue
+			}
+			for _, at := range regexp.MustCompile(regexp.QuoteMeta("{"+field+"}")).FindAllStringIndex(string(raw), -1) {
+				prefix := string(raw[:at[0]])
+				if !strings.HasSuffix(prefix, `href="`) && !strings.HasSuffix(prefix, `src="`) {
+					t.Errorf("%s: url field %s is not inside an href or src attribute", name, field)
+				}
+			}
+		}
+	}
+}
+
+// The escape is the only difference between the Go render and the Python str.format render.
+func TestEscapedRenderIsTheRawRenderOfEscapedValues(t *testing.T) {
+	context := map[string]string{"org_name": "École <b>&amp;</b>", "inviter_name": `René "Rene" O'Brien`, "accept_url": "http://localhost:3000/accept-invite?token=a%2Fb.c&x=1"}
+	escaped := map[string]string{}
+	for k, v := range context {
+		escaped[k] = html.EscapeString(v)
+	}
+	want, err := renderTemplate("invite", escaped, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := RenderTemplate("invite", context)
+	if err != nil || got != want {
+		t.Fatalf("got %q (%v), want %q", got, err, want)
+	}
+	raw, err := renderTemplate("invite", context, false)
+	if err != nil || raw == got {
+		t.Fatalf("the raw render equals the escaped one: the escape did nothing (%v)", err)
 	}
 }

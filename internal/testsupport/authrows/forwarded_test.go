@@ -56,3 +56,25 @@ func TestFromEnvRefusesAnUnsetVariableAndReadsAnEmptyOne(t *testing.T) {
 		t.Fatalf("sessions,social: %v, %s", err, f)
 	}
 }
+
+func TestUsersOwnedFromEnvRefusesUnsetAndJunk(t *testing.T) {
+	t.Setenv(EnvUsersOwned, "x")
+	if err := os.Unsetenv(EnvUsersOwned); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := UsersOwnedFromEnv(); err == nil {
+		t.Fatal("an unset variable was read as a value")
+	}
+	for _, bad := range []string{"", "maybe", "TRUE", "1"} {
+		t.Setenv(EnvUsersOwned, bad)
+		if _, err := UsersOwnedFromEnv(); err == nil {
+			t.Fatalf("%q was accepted", bad)
+		}
+	}
+	for text, want := range map[string]bool{"true": true, "false": false} {
+		t.Setenv(EnvUsersOwned, text)
+		if got, err := UsersOwnedFromEnv(); err != nil || got != want {
+			t.Fatalf("%q: %v, %v", text, got, err)
+		}
+	}
+}

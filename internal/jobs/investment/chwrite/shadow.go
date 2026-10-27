@@ -224,6 +224,16 @@ type AttemptRecord struct {
 	LatencyMS         uint32
 	RetryWaitMS       uint32
 	ComputedAt        time.Time
+	// UsageReason is "unavailable" when the provider answered with no token
+	// usage (the token counts are then zero, not measured), else empty. A closed
+	// code, never text from a response.
+	UsageReason string
+	// ModelFromRequest is true when the provider omitted the returned model and
+	// ModelReturned was taken from the request.
+	ModelFromRequest bool
+	// RequestIDSource is where RequestID came from: aig, ray or client; empty
+	// for a provider whose id is its own header.
+	RequestIDSource string
 }
 
 // WriteAttempts inserts llm_categorization_attempts rows in ONE batch,
@@ -249,7 +259,7 @@ func (w *Writer) WriteAttempts(ctx context.Context, orgID string, records []Atte
 		org_id, run_id, work_unit_id, role, config, rubric_sha256, provider, api_mode,
 		model_requested, model_returned, attempt, kind, http_status, error_class, state,
 		request_id, input_tokens, output_tokens, cached_input_tokens, billed_cost_usd,
-		rates_version, latency_ms, retry_wait_ms, computed_at
+		rates_version, latency_ms, retry_wait_ms, computed_at, usage_reason, model_from_request, request_id_source
 	)`)
 	if err != nil {
 		return 0, shadowTableError("prepare llm_categorization_attempts batch", err)
@@ -261,7 +271,7 @@ func (w *Writer) WriteAttempts(ctx context.Context, orgID string, records []Atte
 			record.Attempt, record.Kind, record.HTTPStatus, record.ErrorClass, record.State,
 			record.RequestID, record.InputTokens, record.OutputTokens, record.CachedInputTokens,
 			record.BilledCostUSD, record.RatesVersion, record.LatencyMS, record.RetryWaitMS,
-			record.ComputedAt.UTC(),
+			record.ComputedAt.UTC(), record.UsageReason, modelFromRequestByte(record.ModelFromRequest), record.RequestIDSource,
 		); err != nil {
 			return 0, fmt.Errorf("append llm_categorization_attempts row: %w", err)
 		}
@@ -270,6 +280,13 @@ func (w *Writer) WriteAttempts(ctx context.Context, orgID string, records []Atte
 		return 0, shadowTableError("send llm_categorization_attempts batch", err)
 	}
 	return len(records), nil
+}
+
+func modelFromRequestByte(fromRequest bool) uint8 {
+	if fromRequest {
+		return 1
+	}
+	return 0
 }
 
 // AttemptBuffer collects the attempt rows of one run, up to a row cap. It is

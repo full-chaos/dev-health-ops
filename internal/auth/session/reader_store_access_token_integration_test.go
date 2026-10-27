@@ -35,7 +35,7 @@ import (
 // TestRoutedUserAccessTokenOnRealStores is go-api's profile-routed path on a
 // real Postgres: the users row and the memberships role read from public, the
 // auth-service session read as a session reader role that holds only the
-// column grant auth-migrate gives it (id, principal_id, revoked_at).
+// column grant auth-migrate gives it (id, principal_id, revoked_at, legacy_token_version).
 func TestRoutedUserAccessTokenOnRealStores(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
@@ -124,8 +124,12 @@ func TestRoutedUserAccessTokenOnRealStores(t *testing.T) {
 
 	api := readerStoreLogin(t, ctx, admin, roles["routed_api"])
 	var pin *int64
-	if err := api.QueryRow(ctx, `SELECT legacy_token_version FROM acp.sessions WHERE id = $1`, live.Session.ID).Scan(&pin); err == nil {
-		t.Fatal("the api role reads sessions.legacy_token_version: the session reader grant is wider than id, principal_id, revoked_at")
+	if err := api.QueryRow(ctx, `SELECT legacy_token_version FROM acp.sessions WHERE id = $1`, live.Session.ID).Scan(&pin); err != nil || pin == nil || *pin != 2 {
+		t.Fatalf("the api role reads the session pin = %v, %v; want 2", pin, err)
+	}
+	var expires *time.Time
+	if err := api.QueryRow(ctx, `SELECT expires_at FROM acp.sessions WHERE id = $1`, live.Session.ID).Scan(&expires); err == nil {
+		t.Fatal("the api role reads sessions.expires_at: the session reader grant is wider than its columns")
 	}
 	store := policy.PGStore{Pool: api, AuthSchema: schemaName}
 	keyText := strings.Repeat("routed-store-signing-", 2)
@@ -194,6 +198,15 @@ func TestRoutedUserAccessTokenOnRealStores(t *testing.T) {
 		if _, err := auth.Authenticate(routed, token); !policy.IsRefusal(err) {
 			t.Errorf("%s: err = %v, want a refusal", name, err)
 		}
+	}
+	if _, err := admin.Exec(ctx, `UPDATE public.users SET token_version = token_version + 1 WHERE id = $1`, principal); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := auth.Authenticate(routed, mint(live.Session.ID, &org)); !policy.IsRefusal(err) {
+		t.Errorf("a session older than the token_version: err = %v, want a refusal", err)
+	}
+	if _, err := admin.Exec(ctx, `UPDATE public.users SET token_version = token_version - 1 WHERE id = $1`, principal); err != nil {
+		t.Fatal(err)
 	}
 	if _, err := auth.Authenticate(ctx, mint(live.Session.ID, &org)); !policy.IsRefusal(err) {
 		t.Errorf("no profile: err = %v, want a refusal", err)

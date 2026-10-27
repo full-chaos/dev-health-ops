@@ -21,15 +21,17 @@ docs\:check-links:
 	go run -trimpath -mod=readonly ./cmd/cigate docs check-docs-links
 
 # `docs:check` is the gate. It must stay equivalent to what CI enforces, so that a
-# green run here means a green run there. CI's docs jobs are:
-#   .github/workflows/docs-guards.yml     -> publication + IA, strict build, rendered
-#                                            links/anchors/assets, search acceptance,
-#                                            structural accessibility, objective facts
-#   .github/workflows/docs-cloudflare.yml -> the same chain via --full-check, then
-#                                            Cloudflare asset preparation
-# `build_docs_cloudflare.py --full-check` runs that whole chain, so it stands in for
-# both jobs here; run `--help` on it to see the individual steps. Adding a step to
-# either workflow without adding it here is what makes this target lie.
+# green run here means a green run there. CI's docs checks are:
+#   .github/workflows/docs-guards.yml  job docs-content-guards -> go test ./internal/cigates/docs/...
+#                                      job docs-guards         -> publication + IA, strict build, rendered
+#                                         links/anchors/assets, search acceptance, structural accessibility,
+#                                         code prerequisites, freshness inventory (it uploads the checked site)
+#                                      job docs-preview (PRs)  -> reuses that site, then candidate facts and
+#                                         Cloudflare asset preparation
+# `cigate docs-build pre|post --full-check` wraps the MkDocs call (Go never runs Python): the publication gate before it, the site
+# checks, candidate facts and the asset preparation after it;
+# the code-prerequisite and freshness checks are separate lines below. internal/cigates/docs/parity_test.go fails when
+# either side has a check the other lacks.
 #
 # Deliberately excluded: `docs:check-external-links` reaches the public internet and is
 # `continue-on-error` in CI, so it would make this gate flaky rather than meaningful.
@@ -40,7 +42,12 @@ docs\:check-links:
 # command you expect.
 docs\:check:
 	@$(MAKE) --no-print-directory docs\:check-fast
-	$(PYTHON) scripts/build_docs_cloudflare.py --mode preview --full-check
+	go test -mod=readonly -trimpath -count=1 ./internal/cigates/docs/...
+	go run -trimpath -mod=readonly ./cmd/cigate docs check-code-prerequisites
+	go run -trimpath -mod=readonly ./cmd/cigate docs check-freshness
+	go run -trimpath -mod=readonly ./cmd/cigate docs-build pre --mode preview --full-check
+	$(PYTHON) -m mkdocs build --strict --config-file mkdocs.yml
+	go run -trimpath -mod=readonly ./cmd/cigate docs-build post --mode preview --full-check
 
 # Fast inner loop while editing pages: catches taxonomy drift, queue-mapping drift,
 # and broken relative links/anchors without a full site build. Not sufficient before
@@ -83,7 +90,9 @@ docs\:serve:
 	$(PYTHON) -m mkdocs serve --strict --config-file mkdocs.yml --dev-addr 127.0.0.1:8001
 
 docs\:build-preview:
-	$(PYTHON) scripts/build_docs_cloudflare.py --mode preview
+	go run -trimpath -mod=readonly ./cmd/cigate docs-build pre --mode preview
+	$(PYTHON) -m mkdocs build --strict --config-file mkdocs.yml
+	go run -trimpath -mod=readonly ./cmd/cigate docs-build post --mode preview
 
 docs\:preview:
 	@$(MAKE) --no-print-directory docs\:build-preview
@@ -103,7 +112,9 @@ docs\:version:
 		echo 'PREVIEW_ALIAS must be 47 characters or fewer for the dev-health-docs preview hostname.'; \
 		exit 2; \
 	}
-	$(PYTHON) scripts/build_docs_cloudflare.py --mode preview --full-check
+	go run -trimpath -mod=readonly ./cmd/cigate docs-build pre --mode preview --full-check
+	$(PYTHON) -m mkdocs build --strict --config-file mkdocs.yml
+	go run -trimpath -mod=readonly ./cmd/cigate docs-build post --mode preview --full-check
 	$(WRANGLER) versions upload \
 		--config wrangler.jsonc \
 		--preview-alias "$(PREVIEW_ALIAS)" \
@@ -115,7 +126,9 @@ docs\:upload-preview:
 # Production creates a separate production-mode version without preview noindex headers,
 # then immediately deploys that version to 100% of traffic.
 docs\:deploy:
-	$(PYTHON) scripts/build_docs_cloudflare.py --mode production --full-check
+	go run -trimpath -mod=readonly ./cmd/cigate docs-build pre --mode production --full-check
+	$(PYTHON) -m mkdocs build --strict --config-file mkdocs.yml
+	go run -trimpath -mod=readonly ./cmd/cigate docs-build post --mode production --full-check
 	$(WRANGLER) deploy \
 		--config wrangler.jsonc \
 		--strict \

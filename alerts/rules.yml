@@ -1039,3 +1039,47 @@ groups:
             because other services register a check of the same name.
             Next: the "Rate-limit store down" section of
             docs/reference/auth/readiness-and-slo.md.
+
+  # ---------------------------------------------------------------------------
+  # In-chart Valkey (rate-limit counters, ingest streams). The series come from
+  # the collector's redis receiver, which writes dotted names only
+  # (redis.keys.evicted, redis.memory.used), so the rules select them by
+  # __name__. Imported into SigNoz by hand:
+  # docs/operate/runbooks/auth-service-scrape-and-alerts.md.
+  # ---------------------------------------------------------------------------
+  - name: valkey
+    interval: 1m
+    rules:
+      - alert: ValkeyKeysEvicted
+        expr: |
+          sum(increase({__name__="redis.keys.evicted"}[10m])) > 0
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Valkey evicted keys at maxmemory"
+          description: |
+            The in-chart Valkey evicted about {{ $value | humanize }} keys in ten
+            minutes because it reached maxmemory. With volatile-ttl it evicts
+            keys with a TTL (rate-limit counters, idempotency and replay
+            markers), so limits hold less strictly; with allkeys-lru it can also
+            drop ingest streams. Next: redis.memory.used and redis.db.keys, then
+            valkey.maxmemory; import and checks in
+            docs/operate/runbooks/auth-service-scrape-and-alerts.md.
+
+      # 0.8 x maxmemory 192mb set by roll step S-V1 (CHAOS-11630); change both together
+      - alert: ValkeyMemoryNearMaxmemory
+        expr: |
+          max({__name__="redis.memory.used"}) > 161061274
+        for: 10m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Valkey used memory above 80% of maxmemory for ten minutes"
+          description: |
+            redis.memory.used is {{ $value | humanize1024 }}B, above 161061274
+            bytes (80% of maxmemory 192mb) for ten minutes; eviction starts at
+            maxmemory. Next: redis.db.keys and redis.keys.evicted, then
+            valkey.maxmemory (container limit 256Mi); import and checks in
+            docs/operate/runbooks/auth-service-scrape-and-alerts.md.

@@ -27,6 +27,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
+	"github.com/full-chaos/dev-health-ops/internal/auth/workloadexchange"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 )
@@ -492,6 +493,32 @@ func TestAuthProxyLeavesUnmappedAuthRoutesInGoAPI(t *testing.T) {
 	}
 }
 
+// The workload-token exchange is internal to auth-service: every proxied
+// pattern is a public /api/v1/auth route, none is the exchange, and a request
+// for the exchange path at go-api never reaches auth-service.
+func TestAuthProxyNeverForwardsTheWorkloadExchange(t *testing.T) {
+	for _, routes := range []map[string]AuthAggregate{sessionProxyRoutes, routeProxyRoutes} {
+		for key := range routes {
+			_, pattern, _ := strings.Cut(key, " ")
+			if !strings.HasPrefix(pattern, "/api/v1/auth/") || pattern == workloadexchange.Pattern {
+				t.Errorf("proxied pattern %s is outside /api/v1/auth/ or is the exchange", pattern)
+			}
+		}
+	}
+	stub := newStubUpstream(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusTeapot) })
+	handler := proxyFixture(t, mustProxyConfig(t, allOn(stub.URL)))
+	for _, target := range []string{workloadexchange.Pattern, "/api/v1/auth/../.." + workloadexchange.Pattern, "/api/v1/auth" + workloadexchange.Pattern} {
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, proxyCall{method: http.MethodPost, target: target, body: "grant_type=x"}.request(t))
+		if recorder.Code == http.StatusTeapot {
+			t.Errorf("POST %s was forwarded", target)
+		}
+	}
+	if seen := stub.requests(); len(seen) != 0 {
+		t.Errorf("upstream saw %d exchange requests (first %s %s)", len(seen), seen[0].method, seen[0].path)
+	}
+}
+
 // Flags off: go-api answers every mapped route itself, auth-service sees
 // nothing, and the requests count as local.
 func TestAuthProxyFlagsOffServeEveryRouteLocally(t *testing.T) {
@@ -610,9 +637,10 @@ func TestAuthProxyFailsClosed(t *testing.T) {
 		timeout        time.Duration
 		status         int
 		body           string
+		retryAfter     string
 	}{
-		{"unreachable", closed, 0, http.StatusServiceUnavailable, `{"detail":"Authentication service unavailable"}`},
-		{"timeout", slow.URL, 200 * time.Millisecond, http.StatusGatewayTimeout, `{"detail":"Authentication service timed out"}`},
+		{"unreachable", closed, 0, http.StatusServiceUnavailable, `{"detail":"Authentication service unavailable"}`, "1"},
+		{"timeout", slow.URL, 200 * time.Millisecond, http.StatusGatewayTimeout, `{"detail":"Authentication service timed out"}`, ""},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			cfg := mustProxyConfig(t, allOn(testCase.upstream))
@@ -628,6 +656,9 @@ func TestAuthProxyFailsClosed(t *testing.T) {
 				if recorder.Header().Get("X-Request-ID") == "" {
 					t.Errorf("%s: the refusal has no correlation id", call.target)
 				}
+				if got := recorder.Header().Get("Retry-After"); got != testCase.retryAfter {
+					t.Errorf("%s %s: Retry-After %q, want %q", call.method, call.target, got, testCase.retryAfter)
+				}
 			}
 			after := proxyMetrics(t)
 			series := proxySeries(AuthSessions, "upstream_error")
@@ -635,6 +666,25 @@ func TestAuthProxyFailsClosed(t *testing.T) {
 				t.Errorf("%s moved by %v, want 2", series, delta)
 			}
 		})
+	}
+}
+
+// A request go-api cannot build for auth-service is a 503 refusal, and every
+// 503 refusal tells the client when to retry.
+func TestAuthProxyBuildRequestRefusalCarriesRetryAfter(t *testing.T) {
+	proxy := newAuthProxy(mustProxyConfig(t, allOn("http://127.0.0.1:1")), quietLogger())
+	request, err := http.NewRequest(http.MethodGet, "/api/v1/auth/login", http.NoBody)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Method = "BAD METHOD"
+	recorder := httptest.NewRecorder()
+	proxy.forward(recorder, request, AuthSessions, &proxyState{})
+	if recorder.Code != http.StatusServiceUnavailable || recorder.Body.String() != `{"detail":"Authentication service unavailable"}` {
+		t.Fatalf("unbuildable request = %d %q, want 503 and go-api's refusal", recorder.Code, recorder.Body.String())
+	}
+	if got := recorder.Header().Get("Retry-After"); got != "1" {
+		t.Errorf("Retry-After %q, want 1", got)
 	}
 }
 
@@ -662,6 +712,9 @@ func TestAuthProxyFailsClosedOnAnIncompleteUpstreamAnswer(t *testing.T) {
 			handler.ServeHTTP(recorder, proxyCalls[2].request(t))
 			if recorder.Code != http.StatusBadGateway || recorder.Body.String() != `{"detail":"Authentication service unavailable"}` {
 				t.Fatalf("incomplete upstream answer = %d %.120q, want 502 and go-api's refusal", recorder.Code, recorder.Body.String())
+			}
+			if got := recorder.Header().Get("Retry-After"); got != "" {
+				t.Errorf("502 refusal carries Retry-After %q, want none", got)
 			}
 			after := proxyMetrics(t)
 			series := proxySeries(AuthLocalLogin, "upstream_error")

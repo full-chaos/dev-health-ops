@@ -18,5 +18,6 @@
   "doc/NetworkPolicy/a-dev-health-auth-migrate": "rendered",
   "doc/NetworkPolicy/a-dev-health-auth-service": "rendered",
   "doc/PodDisruptionBudget/a-dev-health-auth-service": "rendered",
-  "doc/Service/a-dev-health-auth-service": "rendered"
+  "doc/Service/a-dev-health-auth-service": "rendered",
+  "doc/ServiceAccount/a-dev-health-auth-service": "rendered"
 }

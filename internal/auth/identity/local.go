@@ -21,8 +21,10 @@ const passwordAlgorithm = "bcrypt"
 // LocalProvisionRequest is a new local (email and password) user. A
 // self-service registration passes Actor: SelfSignUp(requestID).
 type LocalProvisionRequest struct {
-	Email        string
-	FullName     string
+	Email string
+	// FullName is stored as given in public.users (nil is NULL, "" is '');
+	// the principal display name is "" for nil.
+	FullName     *string
 	PasswordHash *string
 	Actor        Actor
 	// Organization, when set, adds a new public organization named so and the
@@ -65,7 +67,7 @@ func (s *Store) ProvisionLocal(ctx context.Context, req LocalProvisionRequest) (
 		Apply: func(ctx context.Context, tx audit.TxOps) error {
 			// The 0013 create guard counts these two rows as the state change.
 			if _, err := tx.Exec(ctx, `INSERT INTO `+s.q+`.principals (id, kind, display_name) VALUES ($1, 'user', $2)`,
-				principal, req.FullName); err != nil {
+				principal, derefOrEmpty(req.FullName)); err != nil {
 				return err
 			}
 			if _, err := tx.Exec(ctx, `INSERT INTO `+s.q+`.users

@@ -273,7 +273,7 @@ func runWindowEquivalenceArm(
 INSERT INTO public.sync_run_units (
     id, org_id, sync_run_id, integration_id, source_id, provider,
     dataset_key, cost_class, mode, since_at, before_at, status,
-    processor_flags, updated_at
+    processor_flags, updated_at, created_at, attempts
 ) VALUES (
     $1, $2, $3, $4, $5, 'github', 'work-items', 'medium',
     'incremental', $6, $7, 'dispatching',
@@ -282,7 +282,7 @@ INSERT INTO public.sync_run_units (
       "family_dataset_work_item_projects":true,
       "family_dataset_work_item_history":true,
       "family_dataset_work_item_comments":true}'::jsonb,
-    $7
+    $7, NOW(), 0
 )`, unitID, windowEquivalenceOrgID, firstRunID, firstIntegrationID, firstSourceID,
 			window.since, window.before); err != nil {
 			t.Fatal(err)
@@ -544,9 +544,9 @@ UPDATE public.integrations SET config = '{"api_url":"https://api.github.com"}'::
 		t.Fatal(err)
 	}
 	if _, err := pool.Exec(ctx, `
-INSERT INTO public.integration_datasets (id, org_id, integration_id, dataset_key, options)
+INSERT INTO public.integration_datasets (id, org_id, integration_id, dataset_key, options, is_enabled)
 VALUES ($1, $3, $2, 'work-items',
-        '{"include_issues":true,"include_pull_requests":false,"fetch_comments":true,"fetch_milestones":false}'::jsonb)`,
+        '{"include_issues":true,"include_pull_requests":false,"fetch_comments":true,"fetch_milestones":false}'::jsonb, TRUE)`,
 		firstCredentialID, firstIntegrationID, windowEquivalenceOrgID); err != nil {
 		t.Fatal(err)
 	}

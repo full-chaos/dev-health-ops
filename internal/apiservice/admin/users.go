@@ -15,6 +15,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
+	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/auth/passwordhash"
 	"github.com/full-chaos/dev-health-ops/internal/auth/passwordpolicy"
 )
@@ -271,6 +272,20 @@ func (h *handlers) createUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if password != "" && refusePasswordPolicy(w, password) {
+		return
+	}
+
+	provider, providerID := "local", (*string)(nil)
+	if authProviderPresent {
+		provider = authProvider
+	}
+	if authProviderIDPresent {
+		providerID = &authProviderID
+	}
+	if identity.RefuseInvalidProviderID(provider, providerID) != nil {
+		invalid := pybody.Errors{{Type: "value_error", Loc: []pyjson.Value{"body", "auth_provider_id"},
+			Msg: "Value error, auth_provider_id must be a valid provider id when auth_provider is not local"}}
+		policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail(invalid), nil)
 		return
 	}
 

@@ -1,6 +1,8 @@
 {{- if .Values.valkey.enabled }}
 {{- if and .Values.valkey.acl.enabled (or (not .Values.valkey.acl.secretName) (not .Values.valkey.acl.secretKey)) }}{{- fail "valkey.acl.enabled needs valkey.acl.secretName and valkey.acl.secretKey: the ACL file is read from that Secret key, and Valkey does not start without the file it was told to load" }}{{- end }}
 {{- if and .Values.valkey.acl.enabled (not .Values.networkPolicy.enabled) }}{{- fail "valkey.acl.enabled needs networkPolicy.enabled=true: the ACL file keeps the default user open to every key, so the network policy is what bounds who can reach the auth rate-limit counters" }}{{- end }}
+{{- $policies := list "noeviction" "allkeys-lru" "allkeys-lfu" "allkeys-random" "volatile-lru" "volatile-lfu" "volatile-random" "volatile-ttl" }}
+{{- if not (has (toString .Values.valkey.maxmemoryPolicy) $policies) }}{{- fail (printf "valkey.maxmemoryPolicy must be one of %s; got %q" (join ", " $policies) (toString .Values.valkey.maxmemoryPolicy)) }}{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -10,6 +12,9 @@ metadata:
     {{- include "dev-health.componentLabels" (dict "component" "valkey" "context" $) | nindent 4 }}
 spec:
   replicas: 1
+  {{- /* A rolling update would start the new pod beside the old one on the same ReadWriteOnce volume and append-only file. */}}
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       {{- include "dev-health.componentSelectorLabels" (dict "component" "valkey" "context" $) | nindent 6 }}
@@ -18,6 +23,7 @@ spec:
       labels:
         {{- include "dev-health.componentSelectorLabels" (dict "component" "valkey" "context" $) | nindent 8 }}
     spec:
+      automountServiceAccountToken: false
       containers:
         - name: valkey
           image: {{ .Values.valkey.image.repository }}:{{ .Values.valkey.image.tag }}
@@ -27,7 +33,7 @@ spec:
             - --maxmemory
             - {{ .Values.valkey.maxmemory | quote }}
             - --maxmemory-policy
-            - allkeys-lru
+            - {{ .Values.valkey.maxmemoryPolicy }}
             {{- if .Values.valkey.acl.enabled }}
             - --aclfile
             - /etc/valkey-acl/{{ .Values.valkey.acl.secretKey }}

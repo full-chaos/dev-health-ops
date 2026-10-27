@@ -4,11 +4,14 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/proofprincipals"
 )
 
 // the corpus's public queries as the test holds them on main (CHAOS-10160), reduced to what Query reads.
+var publicUsers = `SELECT email, token_version, last_login_at IS NOT NULL, updated_at >= created_at FROM users WHERE ` + proofprincipals.ComparedSQL("users") + ` ORDER BY email`
+
 const (
-	publicUsers   = `SELECT email, token_version, last_login_at IS NOT NULL, updated_at >= created_at FROM users WHERE auth_provider IS DISTINCT FROM 'service' ORDER BY email`
 	publicRefresh = `SELECT u.email FROM refresh_tokens rt JOIN users u ON u.id = rt.user_id`
 	publicAudit   = `SELECT 1 FROM audit_logs a`
 )
@@ -54,18 +57,12 @@ func TestProjectionRoutingSessionsForwardedReadsAuthRefreshAndAudit(t *testing.T
 }
 
 func TestAFlowedAggregateWithoutAProjectionFails(t *testing.T) {
-	for _, text := range []string{"credentials", "sessions,oidc", "saml", "sessions,local_login,credentials,social,oidc,saml"} {
+	for _, text := range []string{"oidc", "sessions,oidc", "saml", "sessions,local_login,credentials,social,oidc,saml"} {
 		f := forwarded(t, text)
 		for _, table := range []string{TableUsers, TableRefreshTokens, TableAuditLogs} {
 			if _, _, err := Query(table, "PUBLIC", f); err == nil {
 				t.Errorf("forwarded %s: %s was read without a projection", text, table)
 			}
-		}
-	}
-	credentials := forwarded(t, "sessions,credentials")
-	for _, table := range []string{TableEmailVerificationTokens, TablePasswordResetTokens} {
-		if _, _, err := Query(table, "PUBLIC", credentials); err == nil {
-			t.Errorf("%s was read with credentials forwarded and no link-credential projection", table)
 		}
 	}
 	if _, _, err := Query("tokens_of_a_new_table", "PUBLIC", forwarded(t, "sessions")); err == nil {

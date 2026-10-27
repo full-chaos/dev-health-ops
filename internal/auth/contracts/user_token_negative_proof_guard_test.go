@@ -30,6 +30,7 @@ const (
 	proofMCP       = "internal/queryapi/server/user_tokens_refused_test.go"
 	proofIssue     = "internal/auth/authapi/issue_user_tokens_test.go"
 	proofRefresh   = "internal/auth/authapi/refresh_user_tokens_test.go"
+	proofExchange  = "internal/auth/workloadexchange/user_tokens_refused_test.go"
 	pushRoutes     = "TestExternalPushAuthenticatedRoutesRefuseUserTokens"
 	legacyTest     = "TestLegacyIngestRefusesUserTokens"
 	acrTest        = "TestInternalACRRoutesRefuseUserTokens"
@@ -39,6 +40,7 @@ const (
 	buildInfoTest  = "TestBuildInfoRefusesUserTokens"
 	issueTest      = "TestIssueSessionRefusesUserTokens"
 	refreshTest    = "TestRefreshRowsRefuseUserTokens"
+	exchangeTest   = "TestTheExchangeRefusesUserTokens"
 	exemptExchange = "the credential is the social provider's own token in the request body, sent to the provider; no bearer of ours is read; a user flow, outside this leaf"
 )
 
@@ -69,6 +71,7 @@ var negativeProofs = map[string]negativeProof{
 	"query-api|GET /buildinfo [dev-health-query-api @query,internal]":                         {file: proofMCP, test: buildInfoTest},
 	"query-api|POST /query [dev-health-query-api @mcp]":                                       {file: proofMCP, test: mcpTest},
 	"auth-service|POST /internal/v1/sessions [dev-health-auth-service @api]":                  {file: proofIssue, test: issueTest},
+	"auth-service|POST /internal/v1/token/exchange [dev-health-auth-service @api]":            {file: proofExchange, test: exchangeTest},
 	"auth-service|POST /v1/token/refresh [dev-health-auth-service @api]":                      {file: proofRefresh, test: refreshTest},
 	"auth-service|POST /api/v1/auth/refresh [dev-health-auth-service @api]":                   {file: proofRefresh, test: refreshTest},
 	"auth-service|POST /api/v1/auth/logout [dev-health-auth-service @api]":                    {file: proofRefresh, test: refreshTest},
@@ -174,7 +177,7 @@ func TestEveryNegativeProofNamesARealTestThatSendsUserTokens(t *testing.T) {
 	}
 }
 
-// The census: 25 derived rows = 24 proven + 1 exempt. A change to either count is a decision, made here.
+// The census: 26 derived rows = 25 proven + 1 exempt. A change to either count is a decision, made here.
 func TestNegativeProofCensus(t *testing.T) {
 	proven, exempt := 0, 0
 	for _, proof := range negativeProofs {
@@ -184,7 +187,7 @@ func TestNegativeProofCensus(t *testing.T) {
 			proven++
 		}
 	}
-	if len(derivedRows(t)) != 25 || proven != 24 || exempt != 1 {
-		t.Fatalf("derived %d rows, %d proven, %d exempt; want 25, 24, 1", len(derivedRows(t)), proven, exempt)
+	if len(derivedRows(t)) != 26 || proven != 25 || exempt != 1 {
+		t.Fatalf("derived %d rows, %d proven, %d exempt; want 26, 25, 1", len(derivedRows(t)), proven, exempt)
 	}
 }

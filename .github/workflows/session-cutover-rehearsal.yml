@@ -15,6 +15,7 @@ on:
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - 'ci/check_session_cutover_rehearsal.sh'
+      - 'ci/lib/pull_base_image.sh'
       - 'ci/session_rehearsal/**'
       - '.github/workflows/session-cutover-rehearsal.yml'
       - 'deploy/helm/dev-health/templates/auth-*.yaml'

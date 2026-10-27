@@ -33,6 +33,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)"
 ROOT="$(cd -- "${SCRIPT_DIR}/.." >/dev/null 2>&1 && pwd -P)"
+# shellcheck source=ci/lib/pull_base_image.sh
+source "${ROOT}/ci/lib/pull_base_image.sh"
 
 readonly KIND_VERSION="v0.33.0"
 readonly KIND_SHA256_AMD64="aee6151561422756b764a4ae28e7f44cda5af5a9eead3cc9985112b1de8d8e0d"
@@ -88,6 +90,8 @@ cleanup() {
   fi
   "${WORK}/kind" delete cluster --name "${CLUSTER}" >/dev/null 2>&1 || true
   docker rm --force --volumes "${CLUSTER}-control-plane" >/dev/null 2>&1 || true
+  # best effort: the tag is absent when the pull never succeeded, and a cleanup failure must not mask the exit status
+  [ -z "${PINNED_BASE_TAG:-}" ] || docker image rm "${PINNED_BASE_TAG}" >/dev/null 2>&1 || true
   rm -rf "${WORK}"
   exit "${status}"
 }
@@ -113,8 +117,10 @@ export PATH="${WORK}/bin:${PATH}"
 
 # --- images and cluster --------------------------------------------------------------------------
 printf 'step 1: build dho, auth-service and auth-migrate from this tree; create the cluster\n'
+pull_pinned_base_image "${ROOT}/docker/go-worker.Dockerfile" || die "base image pull failed"
 build() {
-  BUILDX_NO_DEFAULT_ATTESTATIONS=1 docker build --file "${ROOT}/docker/go-worker.Dockerfile" --target "$1" \
+  BUILDX_NO_DEFAULT_ATTESTATIONS=1 docker build --pull=false --build-arg GO_BUILD_IMAGE="${PINNED_BASE_TAG}" \
+    --file "${ROOT}/docker/go-worker.Dockerfile" --target "$1" \
     --build-arg VERSION=rehearsal --build-arg COMMIT=0000000000000000000000000000000000000000 \
     --build-arg BUILD_TIME=1970-01-01T00:00:00Z --build-arg SOURCE_DATE_EPOCH=0 \
     --tag "$2" "${ROOT}"
@@ -151,8 +157,8 @@ if [ -n "${PRESTOP}" ]; then
   HELM_BASE+=(--set "goApi.drain.preStopSeconds=${PRESTOP}")
 fi
 # The session routes count in the shared store and the proxied flip trusts the forwarded address from the go-api pods,
-# so the layer names the store Secret, the pod network (kind's default pod subnet) and the auth-service policy peers.
-printf 'authService:\n  valkey:\n    secretName: auth-ratelimit\n  trustedProxies: ["10.244.0.0/16"]\n  networkPolicy:\n    enabled: true\n    egress:\n      database:\n        to: [{podSelector: {matchLabels: {app.kubernetes.io/name: dev-health, app.kubernetes.io/instance: %s, app.kubernetes.io/component: postgresql}}}]\n      valkey:\n        to: [{podSelector: {matchLabels: {app.kubernetes.io/name: dev-health, app.kubernetes.io/instance: %s, app.kubernetes.io/component: valkey}}}]\n' "${RELEASE}" "${RELEASE}" >"${WORK}/authprereq.yaml"
+# so the layer names the store Secret, the single node's pod range (kind's default, the first /24 of 10.244.0.0/16; the wide-range ack) and the auth-service policy peers.
+printf 'authService:\n  valkey:\n    secretName: auth-ratelimit\n  trustedProxies: ["10.244.0.0/24"]\n  trustedProxiesWideAccepted: true\n  networkPolicy:\n    enabled: true\n    egress:\n      database:\n        to: [{podSelector: {matchLabels: {app.kubernetes.io/name: dev-health, app.kubernetes.io/instance: %s, app.kubernetes.io/component: postgresql}}}]\n      valkey:\n        to: [{podSelector: {matchLabels: {app.kubernetes.io/name: dev-health, app.kubernetes.io/instance: %s, app.kubernetes.io/component: valkey}}}]\n' "${RELEASE}" "${RELEASE}" >"${WORK}/authprereq.yaml"
 HELM_SESSION=(-f "${WORK}/secrets-session.yaml" -f "${WORK}/successor.yaml" -f "${WORK}/authprereq.yaml")
 
 # --- rev 1: objects only, no hooks, so PostgreSQL exists before the hooks need it -------------------
@@ -326,10 +332,10 @@ else
 fi
 reader_ok() { # <role>: SELECT on exactly the session columns the cutover reads (a column-level grant)
   local col
-  for col in id principal_id revoked_at; do
+  for col in id principal_id revoked_at legacy_token_version; do
     [ "$(PSU -c "SELECT has_column_privilege('$1','auth.sessions','${col}','SELECT')")" = t ] || die "$2: reader $1 cannot SELECT auth.sessions.${col}"
   done
-  printf '%s: reader %s can SELECT auth.sessions(id, principal_id, revoked_at)\n' "$2" "$1"
+  printf '%s: reader %s can SELECT auth.sessions(id, principal_id, revoked_at, legacy_token_version)\n' "$2" "$1"
 }
 reader_ok devhealth_api baseline
 

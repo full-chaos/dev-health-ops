@@ -63,6 +63,45 @@ type LoopConfig struct {
 	// nothing at all, mirroring the literal sibling scheduler/fixed.Loop's
 	// CHAOS-3903 fix -- see that package's LoopConfig.Logger.
 	Logger *slog.Logger
+	// StartupRetryBudget bounds how long the first handoff window retries while
+	// its database is transiently unreachable (refused, reset, dropped dial).
+	// Zero disables the retry; any other failure still ends Start at once.
+	StartupRetryBudget time.Duration
+	// The three funcs below are the startup retry, handed in by the caller so
+	// this package does not import the database layer. All three are required
+	// whenever StartupRetryBudget is above zero; a nil one is
+	// ErrInvalidTransactionRequest, never a silent no-retry.
+	StartupRetry    StartupRetryFunc
+	MaskUnreachable func(error) error
+	StartupJitter   func(time.Duration) time.Duration
+}
+
+// StartupRetrySeams carries the clock, wait, jitter and log hook that a
+// StartupRetryFunc must use.
+type StartupRetrySeams struct {
+	Now     func() time.Time
+	Sleep   func(context.Context, time.Duration)
+	Jitter  func(time.Duration) time.Duration
+	OnRetry func(attempt int, elapsed, wait time.Duration)
+}
+
+// StartupRetryFunc runs step, retrying a transient dial failure inside budget,
+// and returns the last error unchanged.
+type StartupRetryFunc func(ctx context.Context, budget time.Duration, seams StartupRetrySeams, step func(context.Context) error) error
+
+// WithStartupRetry returns the config bound to a startup retry budget and the
+// funcs that run it.
+func (config LoopConfig) WithStartupRetry(
+	budget time.Duration,
+	retry StartupRetryFunc,
+	mask func(error) error,
+	jitter func(time.Duration) time.Duration,
+) LoopConfig {
+	config.StartupRetryBudget = budget
+	config.StartupRetry = retry
+	config.MaskUnreachable = mask
+	config.StartupJitter = jitter
+	return config
 }
 
 // WithLogger returns the config bound to a diagnostic logger.
@@ -93,6 +132,10 @@ func (config LoopConfig) validate() error {
 		config.StepTimeout < minLoopStepTimeout || config.StepTimeout > maxLoopStepTimeout ||
 		config.MaxBackoff < config.PollInterval || config.MaxBackoff > maxLoopPollInterval ||
 		config.Limit < minimumSnapshotLimit || config.Limit > maximumSnapshotLimit {
+		return ErrInvalidTransactionRequest
+	}
+	if config.StartupRetryBudget > 0 &&
+		(config.StartupRetry == nil || config.MaskUnreachable == nil || config.StartupJitter == nil) {
 		return ErrInvalidTransactionRequest
 	}
 	return nil
@@ -128,6 +171,9 @@ type Loop struct {
 	coordinator Coordinator
 	config      LoopConfig
 	clock       loopClock
+	// sleep and jitter are replaced by tests; nil uses the real wait.
+	sleep  func(context.Context, time.Duration)
+	jitter func(time.Duration) time.Duration
 
 	ready atomic.Bool
 
@@ -176,7 +222,10 @@ func newLoop(stepper HandoffStepper, coordinator Coordinator, config LoopConfig,
 	if stepper == nil || coordinator == nil || clock == nil || config.validate() != nil {
 		return nil, ErrInvalidTransactionRequest
 	}
-	loop := &Loop{stepper: stepper, coordinator: coordinator, config: config, clock: clock}
+	loop := &Loop{
+		stepper: stepper, coordinator: coordinator, config: config, clock: clock,
+		jitter: config.StartupJitter,
+	}
 	if err := config.Registry.RegisterRequired("scheduler_loop", loop.readiness); err != nil {
 		return nil, fmt.Errorf("register scheduler loop readiness: %w", err)
 	}
@@ -211,7 +260,32 @@ func (loop *Loop) Start(ctx context.Context) error {
 	loop.started, loop.cancel, loop.done = true, cancel, done
 	loop.mu.Unlock()
 
-	if err := loop.step(loopCtx, loop.clock.Now()); err != nil {
+	step := func(stepCtx context.Context) error {
+		return loop.step(stepCtx, loop.clock.Now())
+	}
+	var err error
+	if loop.config.StartupRetry == nil || loop.config.StartupRetryBudget <= 0 {
+		err = step(loopCtx)
+	} else {
+		err = loop.config.StartupRetry(loopCtx, loop.config.StartupRetryBudget, StartupRetrySeams{
+			Now:    loop.clock.Now,
+			Sleep:  loop.sleep,
+			Jitter: loop.jitter,
+			OnRetry: func(attempt int, elapsed, wait time.Duration) {
+				loop.setFailed()
+				loop.logger().WarnContext(ctx, "sync scheduler initial handoff unreachable, retrying",
+					"cause", health.CauseUnreachable,
+					"attempt", attempt,
+					"elapsed", elapsed,
+					"retry_in", wait,
+				)
+			},
+		}, step)
+	}
+	if err != nil {
+		if loop.config.MaskUnreachable != nil {
+			err = loop.config.MaskUnreachable(err)
+		}
 		loop.setFailed()
 		loop.logger().ErrorContext(ctx, "sync scheduler initial handoff failed", "error", err.Error())
 		cancel()

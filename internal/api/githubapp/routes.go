@@ -149,7 +149,7 @@ func parseCallbackBody(body pybody.Body) (callbackBody, pybody.Errors) {
 	} else if value, valid := problems.DefaultedMinInt(object, "installation_id", 1); valid {
 		out.installationID = value
 	}
-	if value, present := problems.OptionalString(object, "setup_action", 0, 0); present {
+	if value, present := problems.OptionalUTF8String(object, "setup_action"); present {
 		out.setupAction = &value
 	}
 	out.state, _ = problems.RequiredString(object, "state", 0, 0)

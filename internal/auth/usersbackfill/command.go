@@ -32,7 +32,7 @@ func Command() cli.Command {
 	return cli.Command{
 		Name:    "auth",
 		Kind:    cli.Group,
-		Summary: "auth control plane operator verbs: users-backfill, users-reconcile, orgs-backfill",
+		Summary: "auth control plane operator verbs: users-backfill, users-reconcile, oauth-sso-count, orgs-backfill, legacy-link-purge",
 		Children: []cli.Command{{
 			Name:    "users-backfill",
 			Kind:    cli.Verb,
@@ -44,10 +44,20 @@ func Command() cli.Command {
 			Summary: "compare public.users with the auth schema in one read-only snapshot (counts only; exit 1 on any gated diff)",
 			Run:     runReconcile,
 		}, {
+			Name:    "oauth-sso-count",
+			Kind:    cli.Verb,
+			Summary: "count OAuth-SSO users by row-key state for the users-owned runbook (read-only; counts only; one line)",
+			Run:     runOAuthSSOCount,
+		}, {
 			Name:    "orgs-backfill",
 			Kind:    cli.Verb,
 			Summary: "copy public.organizations and public.memberships into the auth schema (idempotent; counts only; run users-backfill first)",
 			Run:     runOrgs,
+		}, {
+			Name:    "legacy-link-purge",
+			Kind:    cli.Verb,
+			Summary: "delete go-api's legacy public link-token rows once users are owned (idempotent; counts only; refused unless AUTH_USERS_OWNED is true)",
+			Run:     runLegacyLinkPurge,
 		}},
 	}
 }
@@ -84,17 +94,54 @@ func run(ctx context.Context, env cli.Env) int {
 		fmt.Fprintln(env.Stderr, "users-backfill: could not build the identity store")
 		return cli.ExitFailure
 	}
-	rep, err := Run(ctx, PGSource{Pool: pool}, store, Options{DryRun: *dryRun, BatchSize: *batch})
+	opts := Options{DryRun: *dryRun, BatchSize: *batch}
+	rep, err := Run(ctx, PGSource{Pool: pool}, store, opts)
 	for _, line := range rep.Lines() {
 		fmt.Fprintln(env.Stdout, line)
 	}
-	switch {
-	case err != nil:
+	if err != nil {
 		fmt.Fprintln(env.Stderr, "users-backfill: stopped before the last page")
 		return cli.ExitFailure
-	case rep.SkippedTotal() > 0:
+	}
+	// The row keys of OAuth-SSO users follow the users: their principals and social keys exist now.
+	sso, err := RunOAuthSSO(ctx, PGOAuthSSOSource{Pool: pool}, store, opts)
+	for _, line := range sso.Lines() {
+		fmt.Fprintln(env.Stdout, line)
+	}
+	if err != nil {
+		fmt.Fprintln(env.Stderr, "users-backfill: stopped before the last oauth sso page")
 		return cli.ExitFailure
 	}
+	if rep.SkippedTotal() > 0 || len(sso.Skipped) > 0 {
+		return cli.ExitFailure
+	}
+	return cli.ExitOK
+}
+
+func runOAuthSSOCount(ctx context.Context, env cli.Env) int {
+	flags := flag.NewFlagSet("dho auth oauth-sso-count", flag.ContinueOnError)
+	flags.SetOutput(env.Stderr)
+	if err := flags.Parse(env.Args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return cli.ExitOK
+		}
+		return cli.ExitUsage
+	}
+	if flags.NArg() != 0 {
+		fmt.Fprintln(env.Stderr, "argument error: positional arguments are not accepted")
+		return cli.ExitUsage
+	}
+	pool, schema, code := connectFn(ctx, env, "oauth-sso-count")
+	if code != cli.ExitOK {
+		return code
+	}
+	defer pool.Close()
+	count, err := identity.ReadOAuthSSOCount(ctx, pool, authschema.Quote(schema))
+	if err != nil {
+		fmt.Fprintln(env.Stderr, "oauth-sso-count: reading the counts failed")
+		return cli.ExitFailure
+	}
+	fmt.Fprintln(env.Stdout, count.Line())
 	return cli.ExitOK
 }
 
@@ -245,4 +292,48 @@ func orgsVerdict(rep OrgReport, err error) (int, []string) {
 		return cli.ExitFailure, notes
 	}
 	return cli.ExitOK, notes
+}
+
+// runLegacyLinkPurge is the mirror image of users-backfill: it refuses unless
+// users are owned, because only then can no reader redeem a legacy row.
+func runLegacyLinkPurge(ctx context.Context, env cli.Env) int {
+	flags := flag.NewFlagSet("dho auth legacy-link-purge", flag.ContinueOnError)
+	flags.SetOutput(env.Stderr)
+	dryRun := flags.Bool("dry-run", false, "count and report; delete and write nothing")
+	// The auth-backfill Job passes -batch to every verb; the purge has no pages.
+	batch := flags.Int("batch", 500, "accepted for the backfill Job; unused")
+	runID := flags.String("run-id", "", "names this run in its audit row (lowercase letters, digits, . _ -; at most 63)")
+	if err := flags.Parse(env.Args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return cli.ExitOK
+		}
+		return cli.ExitUsage
+	}
+	runIDSet := false
+	flags.Visit(func(f *flag.Flag) { runIDSet = runIDSet || f.Name == "run-id" })
+	if flags.NArg() != 0 || *batch < 1 || *batch > 10000 || (runIDSet && !runIDPattern.MatchString(*runID)) {
+		fmt.Fprintln(env.Stderr, "argument error: positional arguments are not accepted, -batch must be 1..10000 and -run-id must be a short lowercase slug")
+		return cli.ExitUsage
+	}
+	if owned, err := authconfig.UsersOwnedFromLookup(env.Lookup); err != nil {
+		fmt.Fprintln(env.Stderr, "legacy-link-purge: AUTH_USERS_OWNED must be true or false")
+		return cli.ExitFailure
+	} else if !owned {
+		fmt.Fprintln(env.Stderr, "legacy-link-purge: refused: AUTH_USERS_OWNED is not true, go-api still serves these rows")
+		return cli.ExitRefused
+	}
+	pool, schema, code := connectFn(ctx, env, "legacy-link-purge")
+	if code != cli.ExitOK {
+		return code
+	}
+	defer pool.Close()
+	rep, err := PurgeLegacyLinks(ctx, pool, schema, PurgeOptions{DryRun: *dryRun, RunID: *runID})
+	if err != nil {
+		fmt.Fprintln(env.Stderr, "legacy-link-purge: stopped; nothing was deleted and no audit row was written")
+		return cli.ExitFailure
+	}
+	for _, line := range rep.Lines() {
+		fmt.Fprintln(env.Stdout, line)
+	}
+	return cli.ExitOK
 }

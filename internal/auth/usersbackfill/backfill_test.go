@@ -13,6 +13,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/auth/policycatalog"
+	"github.com/full-chaos/dev-health-ops/internal/edgetokenmint"
 )
 
 func str(s string) *string { return &s }
@@ -234,5 +235,57 @@ func TestPlatformAdminRoleNameIsTheCatalogName(t *testing.T) {
 	role, err := policycatalog.Default().Role(identity.PlatformAdminRole)
 	if err != nil || role.Scope != policycatalog.ScopePlatform {
 		t.Fatalf("role key is not a platform role of the catalog: %+v %v", role, err)
+	}
+}
+
+func TestPlaceholderIsTheSharedDefinitionAndStaysNotCarried(t *testing.T) {
+	s := func(v string) *string { return &v }
+	prove := uuid.MustParse(edgetokenmint.ProvePrincipalID)
+	for name, c := range map[string]struct {
+		row  Row
+		want bool
+	}{
+		"proof principal, service, no credential": {Row{ID: prove, AuthProvider: s("service")}, true},
+		"another id, same shape":                  {Row{ID: uuid.New(), AuthProvider: s("service")}, false},
+		"service with a password hash":            {Row{ID: prove, AuthProvider: s("service"), PasswordHash: s("$2b$12$x")}, false},
+		"service with a provider id":              {Row{ID: prove, AuthProvider: s("service"), AuthProviderID: s("sub")}, false},
+		"saml, no credential":                     {Row{ID: prove, AuthProvider: s("saml")}, false},
+		"local":                                   {Row{ID: prove, AuthProvider: s("local")}, false},
+	} {
+		if got := IsPlaceholder(c.row); got != c.want {
+			t.Errorf("%s: IsPlaceholder = %v, want %v", name, got, c.want)
+		}
+		if got := IsPlaceholder(c.row); got != identity.IsServicePlaceholder(c.row.ID, c.row.AuthProvider, c.row.PasswordHash, c.row.AuthProviderID) {
+			t.Errorf("%s: IsPlaceholder diverges from identity.IsServicePlaceholder", name)
+		}
+		if c.row.AuthProvider != nil && *c.row.AuthProvider != "local" {
+			if _, _, notCarried := mapIdentity(c.row); !notCarried {
+				t.Errorf("%s: a provider row with no social identity must stay identity_not_carried", name)
+			}
+		}
+	}
+}
+
+func TestRunCarriesNoPasswordHashForAServiceProviderRow(t *testing.T) {
+	hash, err := bcrypt.GenerateFromPassword([]byte("service-row-password"), bcrypt.MinCost)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := func(v string) *string { return &v }
+	h := string(hash)
+	service := Row{ID: uuid.New(), Email: "svc@example.test", Active: true, AuthProvider: s("service"), PasswordHash: &h}
+	local := Row{ID: uuid.New(), Email: "local@example.test", Active: true, AuthProvider: s("local"), PasswordHash: &h}
+	rows := []Row{service, local}
+	sort.Slice(rows, func(i, j int) bool { return rows[i].ID.String() < rows[j].ID.String() })
+	sink := &memSink{seen: map[uuid.UUID]identity.BackfillTarget{}}
+	rep, err := Run(context.Background(), pagedSource{rows: rows}, sink, Options{})
+	if err != nil || rep.SkippedTotal() != 0 {
+		t.Fatalf("Run = %v, %v", rep.Lines(), err)
+	}
+	if got := sink.seen[service.ID].PasswordHash; got != nil {
+		t.Errorf("the backfill passed a password hash to its auth sink for a service-provider row (%d bytes)", len(*got))
+	}
+	if got := sink.seen[local.ID].PasswordHash; got == nil || *got != h {
+		t.Error("the backfill must still carry a local row's password hash")
 	}
 }

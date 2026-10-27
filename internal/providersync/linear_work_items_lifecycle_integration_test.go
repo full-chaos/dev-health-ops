@@ -51,19 +51,19 @@ func TestLinearTypedCompletionAtomicallyAuditsFiveAliasesAndWatermarks(t *testin
 	}
 	if _, err := pool.Exec(ctx, `
 INSERT INTO public.integration_datasets
-  (id, org_id, integration_id, dataset_key, options)
-VALUES ($1, 'org-acme', $2, 'work-items', '{}'::jsonb)`, uuid.NewString(), firstIntegrationID); err != nil {
+  (id, org_id, integration_id, dataset_key, options, is_enabled)
+VALUES ($1, 'org-acme', $2, 'work-items', '{}'::jsonb, TRUE)`, uuid.NewString(), firstIntegrationID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := pool.Exec(ctx, `
 INSERT INTO public.sync_run_units (
     id, org_id, sync_run_id, integration_id, source_id, provider,
     dataset_key, cost_class, mode, since_at, before_at, status,
-    processor_flags, updated_at
+    processor_flags, updated_at, created_at, attempts
 ) VALUES (
     $1, 'org-acme', $2, $3, $4, 'linear', 'work-items', 'medium',
     'incremental', '2026-08-09T12:00:00Z', '2026-08-10T12:00:00Z',
-    'dispatching', $5::jsonb, $6)`,
+    'dispatching', $5::jsonb, $6, NOW(), 0)`,
 		unitID, firstRunID, firstIntegrationID, firstSourceID, string(linearFlags), now); err != nil {
 		t.Fatal(err)
 	}
@@ -139,11 +139,11 @@ WHERE org_id = 'org-acme' AND source_id = 'acme/api'
 INSERT INTO public.sync_run_units (
     id, org_id, sync_run_id, integration_id, source_id, provider,
     dataset_key, cost_class, mode, since_at, before_at, status,
-    processor_flags, updated_at
+    processor_flags, updated_at, created_at, attempts
 ) VALUES (
     $1, 'org-acme', $2, $3, $4, 'linear', 'work-items', 'medium',
     'incremental', '2026-08-09T12:00:00Z', '2026-08-10T12:00:00Z',
-    'dispatching', $5::jsonb, $6)`,
+    'dispatching', $5::jsonb, $6, NOW(), 0)`,
 		badUnitID, firstRunID, firstIntegrationID, firstSourceID, badFlags, now); err != nil {
 		t.Fatal(err)
 	}

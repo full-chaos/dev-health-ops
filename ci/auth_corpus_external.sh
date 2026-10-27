@@ -166,13 +166,55 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# CHAOS-11670: `compose up --build` fails now and then for a reason outside the product. up_service retries it ONCE, and only
+# when its captured output names one of these classes (the texts are from venue-oracles runs on main):
+#   1 "port is already allocated"            (run 40283712992, job 121442426149: a host port taken between compose's pick and its bind)
+#   2 a layer fetch failure from the image mirror (run 40273038441, job 121409808895: BuildKit "failed to copy: httpReadSeeker ...")
+#   3 a Go module proxy read failure          (run 40431223738, job 121949107695: "go: <module>@<version>: read https://proxy.golang.org/...: stream error ... INTERNAL_ERROR")
+# Any other failure is never retried. The retry runs `down` for this project only, without --volumes.
+infra_class() {
+  if grep -aqF 'port is already allocated' "$1"; then
+    echo 1
+  elif grep -aqF 'failed to copy: httpReadSeeker: failed open: could not fetch content descriptor' "$1"; then
+    echo 2
+  elif grep -aqE 'go: [^ ]+@[^ ]+: read "https://proxy\.golang\.org/[^"]*": stream error: stream ID [0-9]+; INTERNAL_ERROR; received from peer' "$1"; then
+    echo 3
+  fi
+}
+
+# up_once SERVICE LOGFILE: one bounded up --build; its output goes to the console and to LOGFILE; returns up's status.
+up_once() {
+  local status=0
+  set +e
+  { timeout --kill-after=10 "${AUTH_CORPUS_UP_SECONDS:-1500}" docker compose -p "${PROJECT}" "${COMPOSE_FILES[@]}" --profile auth up --build --detach --wait --wait-timeout 900 "$1"; } 2>&1 | tee -- "$2"
+  status="${PIPESTATUS[0]}"
+  set -e
+  return "${status}"
+}
+
+# up_service go-api|auth-service
+up_service() {
+  local service="$1" log="${WORK}/up-$1.log" status=0 class
+  up_once "${service}" "${log}" || status=$?
+  [ "${status}" -ne 0 ] || return 0
+  class="$(infra_class "${log}")"
+  [ -n "${class}" ] || return "${status}"
+  printf 'AUTH-CORPUS-INFRA-RETRY class=%s step=%s\n' "${class}" "${service}"
+  timeout --kill-after=10 "${AUTH_CORPUS_DOWN_SECONDS:-180}" docker compose -p "${PROJECT}" "${COMPOSE_FILES[@]}" --profile auth down --remove-orphans || true
+  # down removed go-api too: the auth-service step starts it again before it tries auth-service again.
+  if [ "${service}" = "auth-service" ]; then
+    up_once go-api "${WORK}/up-go-api-retry.log" || return $?
+  fi
+  up_once "${service}" "${log}"
+}
+
 # compose.yml's migrate service refuses a database that already holds objects but no alembic_version table, and
 # auth-migrate creates the auth schema: leg acp starts go-api (and with it migrate) first and auth-service after it.
 printf 'step 1: up --build --wait go-api (project %s)\n' "${PROJECT}"
-timeout --kill-after=10 "${AUTH_CORPUS_UP_SECONDS:-1500}" docker compose -p "${PROJECT}" "${COMPOSE_FILES[@]}" --profile auth up --build --detach --wait --wait-timeout 900 go-api
+up_service go-api
 if [ "${LEG}" = "acp" ]; then
   printf 'step 1b: up --build --wait auth-service\n'
-  timeout --kill-after=10 "${AUTH_CORPUS_UP_SECONDS:-1500}" docker compose -p "${PROJECT}" "${COMPOSE_FILES[@]}" --profile auth up --build --detach --wait --wait-timeout 900 auth-service
+  up_service auth-service
 fi
 
 AGGREGATES=(sessions local_login credentials social oidc saml)

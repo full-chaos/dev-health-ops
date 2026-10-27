@@ -20,7 +20,8 @@ if [ "$1" != "test" ]; then exec "${FAKE_REAL_GO}" "$@"; fi
 case " $* " in *" -list "*) cat "${FAKE_GO_LISTING}"; exit 0 ;; esac
 if [ -n "${DEV_HEALTH_MULTI_REPLICA_PROOF-}" ]; then printf 3 > "${DEV_HEALTH_MULTI_REPLICA_PROOF}"; exit 0; fi
 mode="${FAKE_MODE-}"
-case " $* " in *" -run "*) mode="" ;; esac
+sliced=0
+case " $* " in *" -run "*) mode=""; sliced=1 ;; esac
 mod="github.com/full-chaos/dev-health-ops"
 pkgs=()
 for a in "$@"; do
@@ -30,15 +31,15 @@ for a in "$@"; do
   esac
 done
 rc=0
-first=1
 for p in "${pkgs[@]}"; do
   rel="${p#"${mod}/"}"
-  case "${mode}" in
+  if grep -q "^${rel}"$'\t' "${FAKE_CENSUS}"; then mode_here=""; else mode_here="${mode}"; fi
+  case "${mode_here}" in
     raw-ok|raw-fail) printf 'RAWLINE-NOT-JSON %s\n' "${rel}" ;;
   esac
-  if [ "${mode}" = raw-fail ]; then rc=1; first=0; continue; fi
-  if [ "${first}" = 1 ] && [ "${mode}" = fail-event ]; then
-    first=0
+  if [ "${mode_here}" = raw-fail ]; then rc=1; continue; fi
+  if [ "${mode_here}" = fail-event ] && [ "${done_fail-0}" = 0 ]; then
+    done_fail=1
     printf '{"Action":"output","Package":"%s","Test":"TestPasses","Output":"PASSING-OUTPUT\\n"}\n' "${p}"
     printf '{"Action":"pass","Package":"%s","Test":"TestPasses","Elapsed":0.25}\n' "${p}"
     printf '{"Action":"output","Package":"%s","Test":"TestBreaks","Output":"FAILING-OUTPUT\\n"}\n' "${p}"
@@ -48,12 +49,12 @@ for p in "${pkgs[@]}"; do
     rc=1
     continue
   fi
-  first=0
   printf '{"Action":"output","Package":"%s","Output":"PASS\\n"}\n' "${p}"
   printf '{"Action":"output","Package":"%s","Output":"ok  \\t%s\\t0.010s\\n"}\n' "${p}" "${p}"
   while IFS=$'\t' read -r rp name; do
     [ "${rp}" = "${rel}" ] && printf '{"Action":"pass","Package":"%s","Test":"%s"}\n' "${p}" "${name}"
   done < <(grep -v '^#' "${FAKE_CENSUS}" | grep -v '^$')
+  if [ "${sliced}" = 1 ]; then printf '{"Action":"pass","Package":"%s","Test":"TestFake","Elapsed":0.01}\n' "${p}"; fi
   printf '{"Action":"pass","Package":"%s","Elapsed":0.01}\n' "${p}"
 done
 exit "${rc}"
@@ -122,7 +123,7 @@ func TestALegKeepsANonJSONLineAndStaysGreenOnExitZero(t *testing.T) {
 	for _, leg := range []string{"test", "race"} {
 		res, _ := runLegWithFakeGo(t, leg, 1, "raw-ok")
 		if res.code != 0 {
-			t.Fatalf("%s leg: go test printed a non-JSON line and exited 0, the leg exited %d: %s", leg, res.code, tail(res.stderr+res.stdout, 1500))
+			t.Fatalf("%s leg: go test printed a non-JSON line and exited 0, the leg exited %d: %s", leg, res.code, tail(res.stderr, 1200)+"\n--- stdout:\n"+tail(res.stdout, 800))
 		}
 		if !strings.Contains(res.stdout, "RAWLINE-NOT-JSON") {
 			t.Errorf("%s leg: the non-JSON line is not in the plain log: %s", leg, tail(res.stdout, 800))
@@ -135,7 +136,7 @@ func TestALegStaysRedWhenGoTestExitsOneAfterANonJSONLine(t *testing.T) {
 	for _, leg := range []string{"test", "race"} {
 		res, _ := runLegWithFakeGo(t, leg, 1, "raw-fail")
 		if res.code == 0 {
-			t.Fatalf("%s leg: go test exited 1 and the leg exited 0 (the converter decided the verdict): %s", leg, tail(res.stderr+res.stdout, 1500))
+			t.Fatalf("%s leg: go test exited 1 and the leg exited 0 (the converter decided the verdict): %s", leg, tail(res.stderr, 1200)+"\n--- stdout:\n"+tail(res.stdout, 800))
 		}
 		if !strings.Contains(res.stdout, "RAWLINE-NOT-JSON") {
 			t.Errorf("%s leg: the non-JSON line is not in the plain log", leg)
@@ -148,7 +149,7 @@ func TestALegWithAFailEventIsRedAndKeepsElapsedInTheJSON(t *testing.T) {
 	for _, leg := range []string{"test", "race"} {
 		res, legJSON := runLegWithFakeGo(t, leg, 1, "fail-event")
 		if res.code == 0 {
-			t.Fatalf("%s leg: go test exited 1 with a fail event and the leg exited 0: %s", leg, tail(res.stderr+res.stdout, 1500))
+			t.Fatalf("%s leg: go test exited 1 with a fail event and the leg exited 0: %s", leg, tail(res.stderr, 1200)+"\n--- stdout:\n"+tail(res.stdout, 800))
 		}
 		if !strings.Contains(legJSON, `"Action":"fail"`) || !strings.Contains(legJSON, `"Test":"TestBreaks"`) || !strings.Contains(legJSON, `"Elapsed":0.5`) {
 			t.Errorf("%s leg: the leg JSON lacks the fail event with its Elapsed: %q", leg, tail(legJSON, 600))
@@ -168,20 +169,57 @@ func TestALegWithAFailEventIsRedAndKeepsElapsedInTheJSON(t *testing.T) {
 	}
 }
 
-func TestAGreenLegLogHoldsOnlyOkLinesAndNoPassLine(t *testing.T) {
+func legConverter(t *testing.T) string {
+	t.Helper()
+	script, err := os.ReadFile(scriptPath(t, "ci/check_go.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const open = "GO_TEST_LEG_JQ='"
+	i := strings.Index(string(script), open)
+	if i < 0 {
+		t.Fatal("ci/check_go.sh has no GO_TEST_LEG_JQ")
+	}
+	rest := string(script)[i+len(open):]
+	j := strings.Index(rest, "'\n")
+	if j < 0 {
+		t.Fatal("GO_TEST_LEG_JQ is not closed")
+	}
+	return rest[:j]
+}
+
+func TestTheLegConverterRebuildsThePlainLog(t *testing.T) {
 	t.Parallel()
-	res, legJSON := runLegWithFakeGo(t, "test", 1, "")
-	if res.code != 0 {
-		t.Fatalf("a plain green test shard exited %d: %s", res.code, tail(res.stderr+res.stdout, 1500))
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("jq is not installed")
 	}
-	if strings.Contains(res.stdout, "\nPASS\n") {
-		t.Errorf("the test binary's PASS line reached the plain log (plain go test prints only the ok line)")
+	events := strings.Join([]string{
+		`{"Action":"start","Package":"p"}`,
+		`{"Action":"run","Package":"p","Test":"TestA"}`,
+		`{"Action":"output","Package":"p","Test":"TestA","Output":"=== RUN   TestA\n"}`,
+		`{"Action":"output","Package":"p","Test":"TestA","Output":"    a_test.go:1: passing log\n"}`,
+		`{"Action":"output","Package":"p","Test":"TestA","Output":"--- PASS: TestA (0.00s)\n"}`,
+		`{"Action":"pass","Package":"p","Test":"TestA","Elapsed":0}`,
+		`{"Action":"output","Package":"p","Test":"TestB","Output":"=== RUN   TestB\n"}`,
+		`{"Action":"output","Package":"p","Test":"TestB","Output":"    b_test.go:2: failing log\n"}`,
+		`{"Action":"output","Package":"p","Test":"TestB","Output":"--- FAIL: TestB (0.00s)\n"}`,
+		`{"Action":"fail","Package":"p","Test":"TestB","Elapsed":0}`,
+		`{"Action":"output","Package":"p","Test":"TestC","Output":"never ended\n"}`,
+		"a line that is not an event",
+		`42`,
+		`{"Action":"output","Package":"p","Output":"PASS\n"}`,
+		`{"Action":"output","Package":"p","Output":"FAIL\tp\t0.010s\n"}`,
+		`{"Action":"fail","Package":"p","Elapsed":0.01}`,
+	}, "\n") + "\n"
+	cmd := exec.Command("jq", "-nR", "--unbuffered", "-rj", legConverter(t))
+	cmd.Stdin = strings.NewReader(events)
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("the converter failed: %v", err)
 	}
-	if !strings.Contains(res.stdout, "ok  \tgithub.com/full-chaos/dev-health-ops/") {
-		t.Errorf("no ok line in the plain log: %s", tail(res.stdout, 800))
-	}
-	if !strings.Contains(legJSON, `"Action":"pass"`) {
-		t.Errorf("the leg JSON holds no pass event: %q", tail(legJSON, 400))
+	want := "    b_test.go:2: failing log\n--- FAIL: TestB (0.00s)\na line that is not an event\n42\nFAIL\tp\t0.010s\nnever ended\n"
+	if string(out) != want {
+		t.Fatalf("converter output:\n%q\nwant:\n%q", out, want)
 	}
 }
 

@@ -4,7 +4,9 @@ package syncreconciler
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -23,9 +25,6 @@ const (
 	backfillDueDiscoveries    = 30000
 	backfillTerminalDiscovery = 300000
 	backfillLedgerRows        = 300000
-
-	backfillStatementCeiling = 100 * time.Millisecond
-	backfillStepCeiling      = 300 * time.Millisecond
 )
 
 func seedBackfillBudgetPopulation(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
@@ -77,7 +76,45 @@ func seedBackfillBudgetPopulation(t *testing.T, ctx context.Context, pool *pgxpo
 	}
 }
 
-func timeBackfillStatement(t *testing.T, ctx context.Context, pool *pgxpool.Pool, name, sql string, args ...any) time.Duration {
+// backfillHistoryTables are the tables that grow with history; CHAOS-11430 was an unbounded read of them.
+var backfillHistoryTables = []string{"sync_run_units", "sync_runs", "sync_run_reference_discoveries", "sync_run_post_dispatches"}
+
+type backfillPlanNode struct {
+	NodeType     string             `json:"Node Type"`
+	RelationName string             `json:"Relation Name"`
+	IndexName    string             `json:"Index Name"`
+	SharedHit    int64              `json:"Shared Hit Blocks"`
+	SharedRead   int64              `json:"Shared Read Blocks"`
+	ActualRows   float64            `json:"Actual Rows"`
+	ActualLoops  float64            `json:"Actual Loops"`
+	RowsFiltered float64            `json:"Rows Removed by Filter"`
+	RowsRecheck  float64            `json:"Rows Removed by Index Recheck"`
+	Plans        []backfillPlanNode `json:"Plans"`
+}
+
+type backfillPlan struct {
+	root          backfillPlanNode
+	executionTime time.Duration
+	indexes       map[string]bool
+	seqScans      []string
+	historyRows   int64 // rows a scan node read from a history table: (returned + removed by filter or recheck) x loops
+}
+
+func (plan backfillPlan) blocks() int64 { return plan.root.SharedHit + plan.root.SharedRead }
+
+func isBackfillHistoryTable(name string) bool {
+	for _, table := range backfillHistoryTables {
+		if table == name {
+			return true
+		}
+	}
+	return false
+}
+
+// explainBackfillStatement runs EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) in a rolled-back transaction with jit off (as Step
+// sets it) and summarizes the plan: indexes used, Seq Scans on history tables, rows read from history tables and the
+// statement's shared hit+read blocks. Blocks and rows depend on the plan and the data, not on host load.
+func explainBackfillStatement(t *testing.T, ctx context.Context, pool *pgxpool.Pool, name, sql string, args ...any) backfillPlan {
 	t.Helper()
 	tx, err := pool.Begin(ctx)
 	if err != nil {
@@ -87,36 +124,52 @@ func timeBackfillStatement(t *testing.T, ctx context.Context, pool *pgxpool.Pool
 	if _, err := tx.Exec(ctx, "SET LOCAL jit = off"); err != nil {
 		t.Fatal(err)
 	}
-	rows, err := tx.Query(ctx, "EXPLAIN (ANALYZE, BUFFERS) "+strings.Replace(sql, "RETURNING", "RETURNING", 1), args...)
-	if err != nil {
+	var raw []byte
+	if err := tx.QueryRow(ctx, "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) "+sql, args...).Scan(&raw); err != nil {
 		t.Fatalf("%s explain: %v", name, err)
 	}
-	var plan []string
-	for rows.Next() {
-		var line string
-		if err := rows.Scan(&line); err != nil {
-			t.Fatal(err)
+	var decoded []struct {
+		Plan          backfillPlanNode `json:"Plan"`
+		ExecutionTime float64          `json:"Execution Time"`
+	}
+	if err := json.Unmarshal(raw, &decoded); err != nil || len(decoded) != 1 {
+		t.Fatalf("%s explain json: %v (%d plans)", name, err, len(decoded))
+	}
+	plan := backfillPlan{
+		root:          decoded[0].Plan,
+		executionTime: time.Duration(decoded[0].ExecutionTime * float64(time.Millisecond)),
+		indexes:       map[string]bool{},
+	}
+	var lines []string
+	var walk func(node backfillPlanNode, depth int)
+	walk = func(node backfillPlanNode, depth int) {
+		if node.IndexName != "" {
+			plan.indexes[node.IndexName] = true
 		}
-		plan = append(plan, line)
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		t.Fatalf("%s explain rows: %v", name, err)
-	}
-	var elapsed time.Duration
-	for _, line := range plan {
-		var ms float64
-		if _, err := fmt.Sscanf(strings.TrimSpace(line), "Execution Time: %f ms", &ms); err == nil {
-			elapsed = time.Duration(ms * float64(time.Millisecond))
+		if isBackfillHistoryTable(node.RelationName) {
+			if node.NodeType == "Seq Scan" {
+				plan.seqScans = append(plan.seqScans, node.RelationName)
+			}
+			plan.historyRows += int64((node.ActualRows + node.RowsFiltered + node.RowsRecheck) * node.ActualLoops)
+		}
+		lines = append(lines, fmt.Sprintf("%s%s %s %s rows=%.2f removed=%.0f loops=%.0f blocks=%d",
+			strings.Repeat("  ", depth), node.NodeType, node.RelationName, node.IndexName,
+			node.ActualRows, node.RowsFiltered+node.RowsRecheck, node.ActualLoops, node.SharedHit+node.SharedRead))
+		for _, child := range node.Plans {
+			walk(child, depth+1)
 		}
 	}
-	t.Logf("%s: %v\n%s", name, elapsed, strings.Join(plan, "\n"))
-	return elapsed
+	walk(plan.root, 0)
+	t.Logf("%s: blocks=%d history_rows_read=%d execution=%v (load-dependent, not asserted)\n%s",
+		name, plan.blocks(), plan.historyRows, plan.executionTime, strings.Join(lines, "\n"))
+	return plan
 }
 
-// TestMaterializerStatementsFitTheStageBudgetAtBackfillScale is the CHAOS-11430 proof:
-// each candidate statement stays under backfillStatementCeiling and the real Step under
-// backfillStepCeiling (2x margin on the 600 ms stage budget) on a backfill-shaped history.
+// TestMaterializerStatementsFitTheStageBudgetAtBackfillScale is the CHAOS-11430 guard on a backfill-shaped history. It
+// asserts what does not move with host load: each candidate statement's plan uses the index the fix relies on, does no
+// Seq Scan on a history table, and stays under a shared-block and a history-rows-read bound (about 2x the measured max
+// of the fixed code, except post_sync blocks = 50000, sized to admit a legal nested-loop plan of ~40k blocks; for
+// post_sync the split from the code before the fix comes from the index, no-Seq-Scan and rows checks). Wall times are logged only; the Step context timeout is a hang ceiling, not a budget.
 func TestMaterializerStatementsFitTheStageBudgetAtBackfillScale(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Minute)
 	defer cancel()
@@ -144,28 +197,45 @@ func TestMaterializerStatementsFitTheStageBudgetAtBackfillScale(t *testing.T) {
 	now := time.Now().UTC()
 	cutoff := now.Add(-time.Minute)
 	limit := maximumStepLimit
-	// Measurement: seed, VACUUM ANALYZE, one untimed warm-up pass of the four statements, then the timed pass
-	// below (EXPLAIN ANALYZE "Execution Time" per statement, rolled-back tx, jit off, warm cache), then ONE real
-	// Step (wall clock, committed, runs last). The statement sum and Step differ because Step is a single
-	// transaction of the same four statements plus the runaway report and commit, with no EXPLAIN overhead.
-	timeBackfillStatement(t, ctx, pool, "warmup-dispatch", materializeDispatchSQL, now, cutoff, limit)
-	timeBackfillStatement(t, ctx, pool, "warmup-finalize", materializeFinalizeSQL, now, limit)
-	timeBackfillStatement(t, ctx, pool, "warmup-discovery", materializeDiscoverySQL, now, limit, cutoff)
-	timeBackfillStatement(t, ctx, pool, "warmup-post_sync", materializePostSyncSQL, now, limit)
-	timings := map[string]time.Duration{
-		"dispatch":  timeBackfillStatement(t, ctx, pool, "dispatch", materializeDispatchSQL, now, cutoff, limit),
-		"finalize":  timeBackfillStatement(t, ctx, pool, "finalize", materializeFinalizeSQL, now, limit),
-		"discovery": timeBackfillStatement(t, ctx, pool, "discovery", materializeDiscoverySQL, now, limit, cutoff),
-		"post_sync": timeBackfillStatement(t, ctx, pool, "post_sync", materializePostSyncSQL, now, limit),
+	statements := []struct {
+		name        string
+		sql         string
+		args        []any
+		indexes     []string
+		maxBlocks   int64
+		maxHistRows int64
+	}{
+		// Bounds measured on this seed (fixed code / code before CHAOS-11430). Blocks: dispatch 121k / 457k, finalize 91k /
+		// 91k, discovery 2.8k / 2.8k, post_sync 5.3k / 8.9k. History rows read: dispatch 60k / 560k, finalize 60k / 60k,
+		// discovery 60k / 60k, post_sync 10k / 300k. finalize and discovery did not regress at this scale: their bounds
+		// guard a future one.
+		{"dispatch", materializeDispatchSQL, []any{now, cutoff, limit}, []string{"ix_sync_run_units_open_run"}, 245000, 120000},
+		{"finalize", materializeFinalizeSQL, []any{now, limit}, []string{"ix_sync_run_units_open_run"}, 180000, 120000},
+		{"discovery", materializeDiscoverySQL, []any{now, limit, cutoff}, nil, 6000, 120000},
+		{"post_sync", materializePostSyncSQL, []any{now, limit}, []string{"ix_sync_run_post_dispatches_recorded"}, 50000, 20000},
 	}
-	var sum time.Duration
-	for name, elapsed := range timings {
-		sum += elapsed
-		if elapsed > backfillStatementCeiling {
-			t.Errorf("%s took %v, want <= %v", name, elapsed, backfillStatementCeiling)
+	for _, statement := range statements {
+		plan := explainBackfillStatement(t, ctx, pool, statement.name, statement.sql, statement.args...)
+		for _, index := range statement.indexes {
+			if !plan.indexes[index] {
+				used := make([]string, 0, len(plan.indexes))
+				for name := range plan.indexes {
+					used = append(used, name)
+				}
+				sort.Strings(used)
+				t.Errorf("%s plan does not use %s (uses %v)", statement.name, index, used)
+			}
+		}
+		if len(plan.seqScans) > 0 {
+			t.Errorf("%s plan does a Seq Scan on %v", statement.name, plan.seqScans)
+		}
+		if plan.blocks() > statement.maxBlocks {
+			t.Errorf("%s read %d shared blocks, want <= %d", statement.name, plan.blocks(), statement.maxBlocks)
+		}
+		if plan.historyRows > statement.maxHistRows {
+			t.Errorf("%s read %d history-table rows, want <= %d", statement.name, plan.historyRows, statement.maxHistRows)
 		}
 	}
-	t.Logf("statement sum %v", sum)
 
 	materializer, err := NewMaterializer(pool)
 	if err != nil {
@@ -177,9 +247,5 @@ func TestMaterializerStatementsFitTheStageBudgetAtBackfillScale(t *testing.T) {
 	if _, err := materializer.Step(stepCtx, now, cutoff, limit); err != nil {
 		t.Fatalf("Step: %v", err)
 	}
-	step := time.Since(started)
-	t.Logf("Step wall time %v", step)
-	if step > backfillStepCeiling {
-		t.Errorf("Step took %v, want <= %v (600 ms stage budget with 2x margin)", step, backfillStepCeiling)
-	}
+	t.Logf("Step wall time %v (load-dependent, not asserted)", time.Since(started))
 }

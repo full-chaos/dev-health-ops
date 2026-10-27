@@ -266,7 +266,7 @@ func Execute(parent context.Context, args []string, lookup secrets.LookupEnv, st
 	ctx, stop := lifecycle.SignalContext(parent)
 	defer stop()
 
-	components, err := configure(ctx, cfg, logger)
+	components, err := configureTraced(ctx, cfg, logger)
 	if err != nil {
 		logger.ErrorContext(
 			ctx, "configure runtime dependencies",
@@ -442,6 +442,8 @@ func configureWithRoutes(
 	for name, source := range map[string]health.MetricsSource{
 		"api_rate_limit_store":      httpapi.RateLimitStoreErrors,
 		"api_rate_limit_rejections": httpapi.RateLimitRejections,
+		"otel_init_failures":        traceInitFailures(),
+		"otel_spans":                traceSpanCounts(),
 	} {
 		if err := registry.RegisterMetrics(name, source); err != nil {
 			closeStore()

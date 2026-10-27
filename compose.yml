@@ -1452,6 +1452,7 @@ services:
       AUTH_USERS_OWNED: ${AUTH_USERS_OWNED:-false}
       AUTH_SIGNING_KEY_FILE: /run/auth/signing/envelope-private-key.pem
       AUTH_SIGNING_KEY_ID: ${AUTH_SIGNING_KEY_ID:-auth-signing-local}
+      OTEL_ENABLED: ${OTEL_ENABLED:-false}
     volumes:
       - type: volume
         source: auth_signing_keys

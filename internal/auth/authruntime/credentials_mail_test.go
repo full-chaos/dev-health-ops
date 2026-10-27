@@ -191,6 +191,11 @@ func TestMain(m *testing.M) {
 	for name, value := range smtpMail() {
 		_ = os.Setenv(name, value)
 	}
+	// The service initialises tracing from the process environment; a test
+	// that wants spans turns it on and points it at its own receiver.
+	if _, set := os.LookupEnv("OTEL_ENABLED"); !set {
+		_ = os.Setenv("OTEL_ENABLED", "false")
+	}
 	os.Exit(m.Run())
 }
 

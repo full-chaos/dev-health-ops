@@ -172,7 +172,7 @@ func TestALegStaysRedWhenGoTestExitsOneAfterANonJSONLine(t *testing.T) {
 	}
 }
 
-func TestALegWithAFailEventIsRedAndKeepsElapsedInTheJSON(t *testing.T) {
+func TestALegWithAFailEventIsRedKeepsElapsedAndEveryOutputLine(t *testing.T) {
 	t.Parallel()
 	for _, leg := range []string{"test", "race"} {
 		res, legJSON := runLegWithFakeGo(t, leg, 1, "fail-event")
@@ -188,32 +188,15 @@ func TestALegWithAFailEventIsRedAndKeepsElapsedInTheJSON(t *testing.T) {
 		if !strings.Contains(res.stdout, "FAILING-OUTPUT") {
 			t.Errorf("%s leg: the failing test's output is not in the plain log: %s", leg, tail(res.stdout, 800))
 		}
-		if !strings.Contains(res.stdout, "PASSING-OUTPUT") {
-			t.Errorf("%s leg: a passing test's output is not in the plain log (every Output field is kept)", leg)
-		}
-		if !strings.Contains(res.stdout, "FAIL\t") {
-			t.Errorf("%s leg: the package FAIL line is not in the plain log", leg)
-		}
-	}
-}
-
-func TestALegKeepsEveryOutputLineInStreamOrder(t *testing.T) {
-	t.Parallel()
-	for _, leg := range []string{"test", "race"} {
-		res, _ := runLegWithFakeGo(t, leg, 1, "fail-event")
 		pass, fail := strings.Index(res.stdout, "PASSING-OUTPUT"), strings.Index(res.stdout, "FAILING-OUTPUT")
 		if pass < 0 || fail < 0 || pass > fail {
 			t.Errorf("%s leg: a passing test's output (at %d) must be in the plain log before the failing test's (at %d), as the stream has them", leg, pass, fail)
 		}
-	}
-}
-
-func TestALegKeepsAFailingTestsOwnPassShapedLine(t *testing.T) {
-	t.Parallel()
-	for _, leg := range []string{"test", "race"} {
-		res, _ := runLegWithFakeGo(t, leg, 1, "fail-event")
 		if !strings.Contains(res.stdout, "--- PASS: this is real output from a failing test") {
 			t.Errorf("%s leg: a line of a failing test that starts with \"--- PASS:\" is missing from the plain log", leg)
+		}
+		if !strings.Contains(res.stdout, "FAIL\t") {
+			t.Errorf("%s leg: the package FAIL line is not in the plain log", leg)
 		}
 	}
 }

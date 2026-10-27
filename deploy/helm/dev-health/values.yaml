@@ -1681,6 +1681,18 @@ clickhouse:
     user: "ch"
     password: "ch"
     database: "default"
+  # -- The CLICKHOUSE_PASSWORD env of the StatefulSet. With `enabled: false` (the default) it stays the
+  #    plain env value. `true` renders the Secret <fullname>-clickhouse-credentials (key CLICKHOUSE_PASSWORD,
+  #    the same value as credentials.password) and makes the env a secretKeyRef on it, so the value is not in
+  #    the StatefulSet spec. `existingSecret.name` names a Secret created outside the release that holds the
+  #    password under `key`: the StatefulSet reads it, the chart renders no credentials Secret, `enabled` has
+  #    no effect (existingSecret wins), and secrets.create must be false (the render fails otherwise). The
+  #    value does not change. Switching any of it restarts the pod.
+  credentialsSecret:
+    enabled: false
+    existingSecret:
+      name: ""
+      key: CLICKHOUSE_PASSWORD
   # Extra ClickHouse users.d files, as a map of filename -> XML content
   # (CHAOS-6181). Each renders into one ConfigMap key. The ConfigMap is mounted as
   # a DIRECTORY at /etc/clickhouse-server/usersd-cm and an initContainer links each

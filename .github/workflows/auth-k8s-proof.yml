@@ -59,7 +59,7 @@ jobs:
           mb="$(git merge-base "${BASE_SHA}" "${HEAD_SHA}")"
           relevant=false
           if git diff --name-only --no-renames "${mb}" "${HEAD_SHA}" \
-            | grep -E '^(deploy/helm/dev-health/|docker/go-worker\.Dockerfile$|ci/check_auth_k8s\.sh$|ci/lib/pull_base_image\.sh$|ci/auth_k8s/|\.github/workflows/auth-k8s-proof\.yml$)'; then
+            | grep -E '^(deploy/helm/dev-health/|docker/go-worker\.Dockerfile$|ci/check_auth_k8s\.sh$|ci/lib/pull_base_image\.sh$|ci/lib/retry\.sh$|ci/auth_k8s/|\.github/workflows/auth-k8s-proof\.yml$)'; then
             relevant=true
           elif bash ci/check_go.sh auth relevant "${mb}" "${HEAD_SHA}" | tee relevance.txt | grep -qx 'relevant=true'; then
             relevant=true

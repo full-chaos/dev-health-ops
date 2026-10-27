@@ -86,7 +86,7 @@ cleanup() {
   # A signal that lands while `kind create cluster` is mid-flight can leave the node container
   # behind a delete that ran too early: remove it by its exact, pid-unique name.
   docker rm --force --volumes "${CLUSTER}-control-plane" >/dev/null 2>&1 || true
-  docker image rm "${LOCAL_SVC}" "${LOCAL_MIG}" ${PINNED_BASE_TAG:+"${PINNED_BASE_TAG}"} >/dev/null 2>&1 || true
+  docker image rm "${LOCAL_SVC}" "${LOCAL_MIG}" ${PINNED_BASE_TAG:+"${PINNED_BASE_TAG}"} ${PINNED_RUNTIME_TAG:+"${PINNED_RUNTIME_TAG}"} >/dev/null 2>&1 || true
   rm -rf "${WORK}"
   exit "${status}"
 }
@@ -130,8 +130,10 @@ printf 'tools: kind %s, %s, kubectl %s\n' "${KIND_VERSION}" "$(helm version --sh
 
 printf 'step 1: build the images from this tree and create the cluster\n'
 pull_pinned_base_image "${ROOT}/docker/go-worker.Dockerfile" || die "base image pull failed"
+pull_pinned_runtime_image "${ROOT}/docker/go-worker.Dockerfile" || die "runtime image pull failed"
 build() {
   BUILDX_NO_DEFAULT_ATTESTATIONS=1 docker build --pull=false --build-arg GO_BUILD_IMAGE="${PINNED_BASE_TAG}" \
+    --build-arg GO_RUNTIME_IMAGE="${PINNED_RUNTIME_TAG}" \
     --file "${ROOT}/docker/go-worker.Dockerfile" --target "$1" \
     --build-arg VERSION=k8s-proof --build-arg COMMIT=0000000000000000000000000000000000000000 \
     --build-arg BUILD_TIME=1970-01-01T00:00:00Z --build-arg SOURCE_DATE_EPOCH=0 \

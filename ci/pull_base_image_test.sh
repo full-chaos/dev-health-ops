@@ -54,14 +54,15 @@ bad() { printf 'FAIL %s\n' "$1"; fails=$((fails + 1)); }
 
 [ -f "${LIB}" ] || { printf 'FAIL ci/lib/pull_base_image.sh is missing\n'; exit 1; }
 
-# run <name> <env assignments...> -> sets RC, OUT, and per-source counts
+# run <name> <env assignments...> -> sets RC, OUT, and per-source counts. The helper runs under env -i with a
+# fixed PATH/HOME/TMPDIR/LC_ALL, so no hosted-runner variable (GITHUB_*, RUNNER_*, CI, PULL_*, DOCKER_*) can change a case.
 run() {
   FAKE_DIR="${T}/d.$1"; rm -rf "${FAKE_DIR}"; mkdir -p "${FAKE_DIR}"
   FAKE_LOG="${FAKE_DIR}/log"; : > "${FAKE_LOG}"
   shift
   set +e
   # shellcheck disable=SC2016
-  OUT="$(env "$@" FAKE_DIR="${FAKE_DIR}" FAKE_LOG="${FAKE_LOG}" PATH="${T}/bin:${PATH}" \
+  OUT="$(env -i PATH="${T}/bin:${PATH}" HOME="${T}" TMPDIR="${T}" LC_ALL=C "$@" FAKE_DIR="${FAKE_DIR}" FAKE_LOG="${FAKE_LOG}" \
     PULL_BACKOFF_SECS="0 0" bash -c 'source "$1"; pull_pinned_base_image "$2"; r=$?; echo "TAG=${PINNED_BASE_TAG:-}"; exit "$r"' _ "${LIB}" "${DF:-${T}/Dockerfile}" 2>&1)"
   RC=$?
   set -e
@@ -119,14 +120,15 @@ TAG1="$(printf '%s\n' "${OUT}" | sed -n 's/^TAG=//p')"
 run t8 "${SEEN}"
 TAG2="$(printf '%s\n' "${OUT}" | sed -n 's/^TAG=//p')"
 if { [ -n "${TAG1}" ] && [ "${TAG1}" != "${TAG2}" ]; }; then ok "t8 local tag differs per process (${TAG1} vs ${TAG2})"; else bad "t8 tag collision (${TAG1} / ${TAG2})"; fi
-GITHUB_RUN_ID=777 run t9 "${SEEN}"
+run t9 GITHUB_RUN_ID=777 "${SEEN}"
 if printf '%s\n' "${OUT}" | grep -q '^TAG=.*777'; then ok "t9 tag carries the run id"; else bad "t9 run id"; fi
 
 sed 's/golang:1.27.3-alpine@sha256:a*/golang:9.9@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc/' "${T}/Dockerfile" > "${T}/Dockerfile2"
 cp "${T}/Dockerfile2" "${T}/Dockerfile.keep"
 FAKE_DIR="${T}/d.t10"; mkdir -p "${FAKE_DIR}"; FAKE_LOG="${FAKE_DIR}/log"; : > "${FAKE_LOG}"
 C="sha256:$(printf 'c%.0s' {1..64})"
-OUT="$(FAKE_DIR="${FAKE_DIR}" FAKE_LOG="${FAKE_LOG}" FAKE_SEEN_DIGEST="${C}" PATH="${T}/bin:${PATH}" PULL_BACKOFF_SECS="0 0" bash -c 'source "$1"; pull_pinned_base_image "$2"' _ "${LIB}" "${T}/Dockerfile2" 2>&1)" && R=0 || R=$?
+# shellcheck disable=SC2016
+OUT="$(env -i PATH="${T}/bin:${PATH}" HOME="${T}" TMPDIR="${T}" LC_ALL=C FAKE_DIR="${FAKE_DIR}" FAKE_LOG="${FAKE_LOG}" FAKE_SEEN_DIGEST="${C}" PULL_BACKOFF_SECS="0 0" bash -c 'source "$1"; pull_pinned_base_image "$2"' _ "${LIB}" "${T}/Dockerfile2" 2>&1)" && R=0 || R=$?
 if { [ "${R}" = 0 ] && grep -q "^docker pull mirror.gcr.io/library/golang@${C}\$" "${FAKE_LOG}"; }; then ok "t10 digest is read from the Dockerfile"; else bad "t10"; fi
 
 for s in ci/check_auth_k8s.sh ci/check_session_cutover_rehearsal.sh; do

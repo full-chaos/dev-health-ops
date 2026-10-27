@@ -52,6 +52,8 @@ func TestSeedProductTelemetryWritesTheGeneratedRows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The merge applies the table's TTL now, so the read never races a background merge.
+	clickHouseHTTP(t, ch.httpDSN, "OPTIMIZE TABLE product_telemetry_events FINAL")
 	for i, org := range orgs {
 		sessions := max(1, 3-(i%3))
 		want, err := fixturesgen.GenerateProductTelemetry(fixturesgen.ProductTelemetrySpec{OrgID: org, Days: 400, SessionsPerDay: sessions, Seed: &seed, EndTime: end})

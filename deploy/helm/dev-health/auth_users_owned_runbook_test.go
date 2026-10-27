@@ -131,6 +131,9 @@ func TestStageOutageIsNamedAndBounded(t *testing.T) {
 	for _, want := range []string{
 		"credentials_unowned.go",
 		"whole goApi stage",
+		"a valid request answers `503` with `Retry-After: 1`",
+		"go-api validates the body first and answers `422` to an invalid one",
+		"internal/apiservice/authproxy.go:147-149",
 		"Login and refresh are not affected",
 		"internal/apiservice/authproxy.go",
 		"stage time budget of 15 minutes",
@@ -143,6 +146,9 @@ func TestStageOutageIsNamedAndBounded(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Errorf("the runbook lacks %q", want)
 		}
+	}
+	if strings.Contains(text, "six credential routes answer `503`") {
+		t.Error("the stage outage line still says the routes simply answer 503: an invalid body is answered 422 by go-api first")
 	}
 	if strings.Contains(text, "- Expect up to 60 seconds of `503`") {
 		t.Error("the old rule that put the 60 s text on the whole roll is still there")

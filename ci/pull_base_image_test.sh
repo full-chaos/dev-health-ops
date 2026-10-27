@@ -17,35 +17,35 @@ ARG GO_RUNTIME_IMAGE="gcr.io/distroless/static-debian12:nonroot@${OTHER}"
 FROM \${GO_BUILD_IMAGE} AS build
 DF
 
-cat > "${T}/bin/docker" <<'STUB'
-#!/usr/bin/env bash
-# Stub: any shape it does not know exits 99 loudly. `docker login` is never expected.
-echo "docker $*" >> "${FAKE_LOG}"
-bump() { local f="${FAKE_DIR}/$1.n"; local n=0; [ -f "$f" ] && n="$(cat "$f")"; n=$((n + 1)); echo "$n" > "$f"; echo "$n"; }
-case "$1" in
-  pull)
-    ref="$2"
-    case "${ref}" in
-      mirror.gcr.io/*) key=mirror; fails="${FAKE_FAIL_MIRROR:-0}" ;;
-      docker.io/*) key=dockerio; fails="${FAKE_FAIL_DOCKERIO:-0}" ;;
-      *) echo "stub: unknown source ${ref}" >&2; exit 99 ;;
-    esac
-    n="$(bump "${key}")"
-    if [ "${key}" = dockerio ] && [ "${FAKE_RATELIMIT_DOCKERIO:-0}" = 1 ]; then
-      echo "toomanyrequests: You have reached your pull rate limit" >&2; exit 1
-    fi
-    if [ "${n}" -le "${fails}" ]; then echo "error: not found" >&2; exit 1; fi
-    echo "pulled ${ref}"; exit 0 ;;
-  image)
-    case "$2" in
-      inspect) [ "${FAKE_INSPECT_RC:-0}" = 0 ] || { echo "inspect failed" >&2; exit "${FAKE_INSPECT_RC}"; }; for d in ${FAKE_SEEN_DIGEST//,/ }; do echo "x@${d}"; done; exit 0 ;;
-      rm) exit 0 ;;
-    esac ;;
-  tag) exit "${FAKE_TAG_RC:-0}" ;;
-esac
-echo "stub: unexpected invocation: $*" >&2
-exit 99
-STUB
+# shellcheck disable=SC2016
+printf '%s\n' \
+  '#!/usr/bin/env bash' \
+  '# Stub: any shape it does not know exits 99 loudly. `docker login` is never expected.' \
+  'echo "docker $*" >> "${FAKE_LOG}"' \
+  'bump() { local f="${FAKE_DIR}/$1.n"; local n=0; [ -f "$f" ] && n="$(cat "$f")"; n=$((n + 1)); echo "$n" > "$f"; echo "$n"; }' \
+  'case "$1" in' \
+  '  pull)' \
+  '    ref="$2"' \
+  '    case "${ref}" in' \
+  '      mirror.gcr.io/*) key=mirror; fails="${FAKE_FAIL_MIRROR:-0}" ;;' \
+  '      docker.io/*) key=dockerio; fails="${FAKE_FAIL_DOCKERIO:-0}" ;;' \
+  '      *) echo "stub: unknown source ${ref}" >&2; exit 99 ;;' \
+  '    esac' \
+  '    n="$(bump "${key}")"' \
+  '    if [ "${key}" = dockerio ] && [ "${FAKE_RATELIMIT_DOCKERIO:-0}" = 1 ]; then' \
+  '      echo "toomanyrequests: You have reached your pull rate limit" >&2; exit 1' \
+  '    fi' \
+  '    if [ "${n}" -le "${fails}" ]; then echo "error: not found" >&2; exit 1; fi' \
+  '    echo "pulled ${ref}"; exit 0 ;;' \
+  '  image)' \
+  '    case "$2" in' \
+  '      inspect) [ "${FAKE_INSPECT_RC:-0}" = 0 ] || { echo "inspect failed" >&2; exit "${FAKE_INSPECT_RC}"; }; for d in ${FAKE_SEEN_DIGEST//,/ }; do echo "x@${d}"; done; exit 0 ;;' \
+  '      rm) exit 0 ;;' \
+  '    esac ;;' \
+  '  tag) exit "${FAKE_TAG_RC:-0}" ;;' \
+  'esac' \
+  'echo "stub: unexpected invocation: $*" >&2' \
+  'exit 99' > "${T}/bin/docker"
 chmod +x "${T}/bin/docker"
 
 fails=0

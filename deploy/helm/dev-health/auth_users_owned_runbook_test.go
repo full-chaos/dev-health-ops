@@ -96,12 +96,17 @@ func sixStubRoutes(t *testing.T) []string {
 		t.Fatal("NotOwnedCredentialRoutes not found in credentials_unowned.go")
 	}
 	names := regexp.MustCompile(`Pattern\w+`).FindAllString(body[start:end], -1)
+	// Two literal reads, so the read is bounded (a concatenated path would need a dynreads.tsv row).
+	credentials, err := os.ReadFile("../../../internal/auth/authapi/credentials.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	register, err := os.ReadFile("../../../internal/auth/authapi/register.go")
+	if err != nil {
+		t.Fatal(err)
+	}
 	var paths []string
-	for _, file := range []string{"credentials.go", "register.go"} {
-		raw, err := os.ReadFile("../../../internal/auth/authapi/" + file)
-		if err != nil {
-			t.Fatal(err)
-		}
+	for _, raw := range [][]byte{credentials, register} {
 		for _, name := range names {
 			if m := regexp.MustCompile(`\b` + name + `\s*=\s*"([^"]+)"`).FindStringSubmatch(string(raw)); m != nil {
 				paths = append(paths, m[1])

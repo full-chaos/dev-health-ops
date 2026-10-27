@@ -1,0 +1,4 @@
+# Every file under ci/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
+# python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
+# header-before-stamp set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
+b3c455916266ecc560d9224c096eafa5b00ffc7ed153ebc7223e0f3dbb99c2c7	hand-written	pull_base_image.golden

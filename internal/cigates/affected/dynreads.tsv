@@ -135,6 +135,8 @@ internal/cigates/affected	md_bounded_test.go
 internal/cigates/affected	plan.go
 internal/cigates/affected	reach.go
 internal/cigates/affected	reach_test.go
+internal/cigates/affected	reachcache.go
+internal/cigates/affected	reachcache_test.go
 internal/cigates/affected	scan.go
 internal/cigates/affected	tables.go
 internal/cigates/affectedmatrix	affected_helpers_test.go
@@ -221,6 +223,7 @@ internal/cigates/frozengoldens	frozengoldens.go
 internal/cigates/frozengoldens	frozengoldens_test.go
 internal/cigates/integrationshards	ci_script_helpers_test.go
 internal/cigates/integrationshards	integration_sharding_test.go
+internal/cigates/integrationshards	side_effect_hooks_test.go
 internal/cigates/livee2e	cli.go
 internal/cigates/nopython	nopython_test.go
 internal/cigates/nopython	tests_python_test.go

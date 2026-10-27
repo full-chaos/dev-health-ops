@@ -1235,9 +1235,11 @@ check_race_weights_rows() {
 # check_plan_reads: the declared-read guard of the plan verdict (`cmd/cigate plan-reads`) over the whole tree: every
 # package that names a path of a declared class in a string literal has a reads.tsv row, and --reach recomputes
 # reach.tsv (the programs that call each code-scope unbounded site: go/packages, SSA and RTA over the module; about
-# 3 min and an 8 GB live heap on 4 cores, so the GC holds it under GOMEMLIMIT) and fails on any difference. It runs in the static leg, which runs on every change.
+# 3 min and an 8 GB live heap on 4 cores, so the GC holds it under GOMEMLIMIT) and fails on any difference. It runs in the static leg, which runs on every change. With PLAN_READS_REACH_CACHE set (the
+# GitHub-hosted legs only, go-quality.yml) a pull request reuses a store of the same input hash; PLAN_READS_REACH_FRESH (every
+# other event) computes fresh and only stores (CHAOS-11421).
 check_plan_reads() {
-  (cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOWORK=off GOMEMLIMIT="${GOMEMLIMIT:-10GiB}" go run -mod=readonly -trimpath ./cmd/cigate plan-reads --root "${ROOT}" --reach)
+  (cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOWORK=off GOMEMLIMIT="${GOMEMLIMIT:-10GiB}" go run -mod=readonly -trimpath ./cmd/cigate plan-reads --root "${ROOT}" --reach ${PLAN_READS_REACH_CACHE:+--reach-cache "${PLAN_READS_REACH_CACHE}"} ${PLAN_READS_REACH_FRESH:+--reach-cache-fresh})
 }
 
 ci_leg_stage() {
@@ -1937,7 +1939,7 @@ PROVIDER_ORDINARY_TEST_WEIGHT=0
 # scan_listed_go_tests validates the test file names `go list` returned for one package directory, then parses every
 # file in ONE gotestfuncs run (go/parser, so a comment or a string can neither hide nor invent a function). It fills two
 # globals keyed by source path: SCAN_TESTS (newline-separated top-level test names, file order; TestMain is not one)
-# and SCAN_HOOK (the first `func init` or `func TestMain` of the file). The names are validated before any file is read.
+# and SCAN_HOOK (the first `func init` or `func TestMain` of the file, else its first unreviewed package-level side effect). The names are validated before any file is read.
 scan_listed_go_tests() {
   local label="$1" dir="$2" listed="$3" go_file
   local -a paths=()
@@ -1982,12 +1984,15 @@ gotestfuncs_bin() {
 
 # scan_go_test_paths PATH...: the one gotestfuncs run of scan_listed_go_tests over validated paths.
 scan_go_test_paths() {
-  local kind path name bin scanned
+  local kind path name bin scanned reviewed="${ROOT}/ci/integration_side_effect_reviewed.tsv"
+  local -a reviewed_args=()
   declare -gA SCAN_TESTS=() SCAN_RUNS=() SCAN_HOOK=()
   [ "$#" -gt 0 ] || return 0
   gotestfuncs_bin >/dev/null
   bin="${GOTESTFUNCS_BIN}"
-  scanned="$(printf '%s\0' "$@" | xargs -0 "${bin}")" || die "gotestfuncs could not parse the listed test files"
+  # A package-level side effect no reviewed row covers is a hook too (CHAOS-11429); a root without the table reviews none.
+  [ ! -f "${reviewed}" ] || reviewed_args=(-root "${ROOT}" -reviewed "${reviewed}")
+  scanned="$(printf '%s\0' "$@" | xargs -0 "${bin}" ${reviewed_args[@]+"${reviewed_args[@]}"})" || die "gotestfuncs could not parse the listed test files"
   while IFS=$'\037' read -r kind path name; do
     case "${kind}" in
       T) SCAN_TESTS["${path}"]+="${name}"$'\n' ;;
@@ -2068,18 +2073,23 @@ integration_test_files() {
 }
 
 # split_package_hook KEY LISTED: "<key>/<file> <func>" of the first integration-tagged test file of a split package that
-# declares `func init` or `func TestMain` (SCAN_HOOK of its scan; the class from integration_test_files), or nothing. Such a
+# declares `func init` or `func TestMain`, else an unreviewed package-level side effect (SCAN_HOOK of its scan; the class from
+# integration_test_files), or nothing. Such a
 # package keeps every test in its shards, as run_integration_packages keeps such a package whole.
 split_package_hook() {
-  local key="$1" listed="$2" go_file source_file
+  local key="$1" listed="$2" go_file source_file effect=""
   while IFS= read -r go_file; do
     [ -n "${go_file}" ] || continue
     source_file="${ROOT}/${key}/${go_file}"
     if [ -n "${TEST_FILE_TAG_ONLY[${source_file}]+set}" ] && [ -n "${SCAN_HOOK[${source_file}]+set}" ]; then
-      printf '%s/%s %s\n' "${key}" "${go_file}" "${SCAN_HOOK[${source_file}]}"
-      return 0
+      if [[ "${SCAN_HOOK[${source_file}]}" != *:* ]]; then
+        printf '%s/%s %s\n' "${key}" "${go_file}" "${SCAN_HOOK[${source_file}]}"
+        return 0
+      fi
+      [ -n "${effect}" ] || effect="${key}/${go_file} ${SCAN_HOOK[${source_file}]}"
     fi
   done <<<"${listed}"
+  [ -z "${effect}" ] || printf '%s\n' "${effect}"
 }
 
 # split_test_runs_here CLASS UNFILTERED: true for a test a split shard runs (CHAOS-11407): an integration-tagged test,
@@ -2133,7 +2143,9 @@ discover_integration_tagged_tests() {
   scan_go_test_paths ${paths[@]+"${paths[@]}"}
   for path in ${paths[@]+"${paths[@]}"}; do
     pkg="${path_pkg[${path}]}"
-    if [ -n "${TEST_FILE_TAG_ONLY[${path}]+set}" ] && [ -n "${SCAN_HOOK[${path}]+set}" ] && [ -z "${INTEGRATION_HOOK[${pkg}]+set}" ]; then
+    # A func init or TestMain names the package's hook over a package-level side effect, whatever the file order.
+    if [ -n "${TEST_FILE_TAG_ONLY[${path}]+set}" ] && [ -n "${SCAN_HOOK[${path}]+set}" ] \
+      && { [ -z "${INTEGRATION_HOOK[${pkg}]+set}" ] || { [[ "${INTEGRATION_HOOK[${pkg}]}" == *:* ]] && [[ "${SCAN_HOOK[${path}]}" != *:* ]]; }; }; then
       key="${module_dir}/${pkg#./}"
       key="${key#./}"
       rel="${key}/${path##*/}"

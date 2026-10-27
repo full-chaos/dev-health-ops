@@ -53,6 +53,7 @@ func TestSwitchOffProjectionBesideAHeldSubjectAnswersIdentityConflict(t *testing
 	email := uniqueEmail("projected-held")
 	first := "sub-first-" + uuid.NewString()
 	user := h.seedPublicUser(t, email, "oidc", first)
+	h.bindSSO(t, user, h.providerID)
 	h.seedMembership(t, user, h.orgID, "member")
 	s := h.start(t)
 	if login, failure := h.finish(t, s, h.sign(t, h.claims(s.nonce, first, email))); failure != nil || login.PrincipalID != user {

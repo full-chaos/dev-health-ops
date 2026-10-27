@@ -488,7 +488,7 @@ func (h handlers) oidcCallback(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	user, membership, err := h.provisionOrGetUser(ctx, row, email, claims.fullName, providerID, claims.externalID)
+	user, membership, err := h.provisionOrGetUser(ctx, row, email, claims.fullName, providerID, claims.externalID, nil)
 	if err != nil {
 		if errors.Is(err, errIdentityConflict) {
 			h.recordSSOAuthenticatedDenial(ctx, w, r, row.OrgID, providerID, err.Error(), http.StatusConflict,

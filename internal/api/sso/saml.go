@@ -480,6 +480,9 @@ func parseSAMLCertificate(raw string) (*x509.Certificate, error) {
 // what actually reaches an observable outcome).
 type samlClaims struct {
 	email, fullName, externalID string
+	// nameIDFormat and spNameQualifier are the assertion NameID's own attributes; with externalID (the NameID value)
+	// they are the parts of the identity key saml.Subject builds.
+	nameIDFormat, spNameQualifier string
 }
 
 // processSAMLResponse is process_saml_response, delegating XML parsing,
@@ -695,9 +698,11 @@ VALUES ($1::uuid, $2, $3)`, row.ID, assertion.ID, assertion.Conditions.NotOnOrAf
 		return samlClaims{}, err // an unrelated DB error: the bare 500 (h.fail wraps it upstream).
 	}
 
-	var nameID string
+	var nameID, nameIDFormat, spNameQualifier string
 	if assertion.Subject != nil && assertion.Subject.NameID != nil {
 		nameID = assertion.Subject.NameID.Value
+		nameIDFormat = assertion.Subject.NameID.Format
+		spNameQualifier = assertion.Subject.NameID.SPNameQualifier
 	}
 	attributes := map[string]string{}
 	for _, statement := range assertion.AttributeStatements {
@@ -726,7 +731,8 @@ VALUES ($1::uuid, $2, $3)`, row.ID, assertion.ID, assertion.Conditions.NotOnOrAf
 	if fullName == "" {
 		fullName = mapped["name"]
 	}
-	return samlClaims{email: email, fullName: fullName, externalID: nameID}, nil
+	return samlClaims{email: email, fullName: fullName, externalID: nameID,
+		nameIDFormat: nameIDFormat, spNameQualifier: spNameQualifier}, nil
 }
 
 func toAnyMap(in map[string]string) map[string]any {
@@ -854,7 +860,7 @@ func (h handlers) samlACSCallback(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	user, membership, err := h.provisionOrGetUser(ctx, row, email, claims.fullName, providerID, claims.externalID)
+	user, membership, err := h.provisionOrGetUser(ctx, row, email, claims.fullName, providerID, claims.externalID, &samlNameIDParts{format: claims.nameIDFormat, spNameQualifier: claims.spNameQualifier})
 	if err != nil {
 		if errors.Is(err, errIdentityConflict) {
 			h.recordSSOAuthenticatedDenial(ctx, w, r, row.OrgID, providerID, err.Error(), http.StatusConflict,

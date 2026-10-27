@@ -18,6 +18,8 @@ import (
 // path, a query or a fragment in the configured endpoint never reach the log.
 func TestTheStartupLineNamesTheCollectorByHostAndPortOnly(t *testing.T) {
 	for _, tc := range []struct{ endpoint, want string }{
+		// The value prod gives go-api, query-api and the workers (deploy values.prod.yaml).
+		{"http://10.0.0.151:4317", "10.0.0.151:4317"},
 		{"http://ops-user:c4n4ry-pw@127.0.0.1:4317/v1/traces?c4n4ry-q=1#c4n4ry-f", "127.0.0.1:4317"},
 		{"https://collector.internal:4317/c4n4ry-path", "collector.internal:4317"},
 		{"http://[::1]:4317", "[::1]:4317"},

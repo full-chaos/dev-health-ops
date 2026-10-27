@@ -53,7 +53,7 @@ else
   # Default: a passing plain run prints one summary line per package argument, so the leg's unweighted guard sees coverage.
   case " $* " in *" -race "*|*" -json "*) ;; *) for a in "$@"; do case "$a" in -*|test) ;; *) printf 'ok  \t%%s\t0.01s\n' "$a" ;; esac; done ;; esac
   # A -json run (the legs' stages) prints the same summary lines as output events, which the leg's converter turns back into the log.
-  case " $* " in *" -race "*) ;; *" -json "*) for a in "$@"; do case "$a" in -*|test) ;; *) printf '{"Action":"output","Package":"p","Output":"ok  \t%%s\t0.01s\n"}\n' "$a" ;; esac; done ;; esac
+  case " $* " in *" -race "*) ;; *" -json "*) for a in "$@"; do case "$a" in -*|test) ;; *) printf '{"Action":"output","Package":"p","Output":"ok  \\t%%s\\t0.01s\\n"}\n' "$a" ;; esac; done ;; esac
 fi
 case " $* " in *" -json "*) printf '{"Time":"2026-01-01T00:00:00Z","Action":"pass","Package":"p","Test":"TestFake","Elapsed":0.01}\n' ;; esac
 [ -z "${FAKE_GO_FAIL:-}" ] || exit 1

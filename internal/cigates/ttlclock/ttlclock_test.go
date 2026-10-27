@@ -451,8 +451,8 @@ func repoTTLTables(t *testing.T, root string) map[string]ttlTable {
 	return tables
 }
 
-// scanTree walks root: it checks every integration test that names a TTL table, and (RED STUB: not yet) every
-// *_test.go holding the marker. scanned counts the table-naming integration tests.
+// scanTree walks root: it checks every integration test that names a TTL table, and every
+// *_test.go holding the marker, so an orphan comment cannot hide in a file that is not a finding. scanned counts the table-naming integration tests.
 func scanTree(root string, tables map[string]ttlTable, today time.Time) (problems []string, scannedFiles int, err error) {
 	err = filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
@@ -472,6 +472,7 @@ func scanTree(root string, tables map[string]ttlTable, today time.Time) (problem
 		if err != nil {
 			return err
 		}
+		marked := bytes.Contains(source, []byte(markerPrefix))
 		candidate := false
 		if bytes.Contains(source, []byte("integration")) {
 			for table := range tables {
@@ -481,10 +482,12 @@ func scanTree(root string, tables map[string]ttlTable, today time.Time) (problem
 				}
 			}
 		}
-		if !candidate {
+		if !marked && !candidate {
 			return nil
 		}
-		scannedFiles++
+		if candidate {
+			scannedFiles++
+		}
 		rel, _ := filepath.Rel(root, path)
 		problems = append(problems, checkSites(filepath.ToSlash(rel), source, tables, today)...)
 		return nil

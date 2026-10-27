@@ -42,7 +42,7 @@ func run(t *testing.T, env []string, name string, args ...string) (string, strin
 	t.Helper()
 	cmd := exec.Command(name, args...)
 	cmd.Dir = repoRoot(t)
-	cmd.Env = append(os.Environ(), env...)
+	cmd.Env = append(append(os.Environ(), reportOnlyEnv+"="), env...)
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	err := cmd.Run()

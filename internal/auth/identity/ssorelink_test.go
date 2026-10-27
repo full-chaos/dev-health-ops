@@ -11,7 +11,7 @@ import (
 
 // ssoRelinkShape is one public.users row for the relink rule. bound names the protocol of the provider row the
 // account is bound to ("" = unbound). relinkable is the readiness waiver (IsSSORelinkable); unverifiable is the
-// bound SAML account with a keyable value whose NameID format go-api never stored.
+// bound SAML account with a keyable value (the candidate set; the stored NameID parts narrow it in usersbackfill and the guard).
 type ssoRelinkShape struct {
 	name              string
 	provider, subject *string

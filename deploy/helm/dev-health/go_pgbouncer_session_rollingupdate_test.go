@@ -70,7 +70,13 @@ func TestSessionRollingUpdateUnsetRendersByteEqual(t *testing.T) {
 			}
 			return string(out)
 		}
-		base, tip := render(baseDir+"/deploy/helm/dev-health"), render(".")
+		// The Valkey Deployment gained its Recreate strategy after the base: that one block is left out of
+		// both sides, and the rest of the document is compared like every other document.
+		base, baseValkey := splitValkeyDeployment(t, render(baseDir+"/deploy/helm/dev-health"))
+		tip, tipValkey := splitValkeyDeployment(t, render("."))
+		if b, c := withoutSpecStrategy(t, baseValkey, false), withoutSpecStrategy(t, tipValkey, true); b != c {
+			t.Errorf("%s render: the Valkey Deployment differs from base %s beyond spec.strategy:\n  base: %q\n  tip:  %q", name, goldenBaseSha[:10], b, c)
+		}
 		if base == tip {
 			continue
 		}
@@ -89,6 +95,57 @@ func TestSessionRollingUpdateUnsetRendersByteEqual(t *testing.T) {
 			}
 		}
 	}
+}
+
+// splitValkeyDeployment returns a render without the one in-chart Valkey Deployment document, and that document.
+func splitValkeyDeployment(t *testing.T, render string) (rest, valkey string) {
+	t.Helper()
+	parts := strings.Split(render, "\n---\n")
+	kept := parts[:0]
+	found := 0
+	for _, part := range parts {
+		if strings.Contains(part, "# Source: dev-health/templates/redis.yaml\n") && strings.Contains(part, "\nkind: Deployment\n") {
+			found++
+			valkey = part
+			continue
+		}
+		kept = append(kept, part)
+	}
+	if found != 1 {
+		t.Fatalf("the render holds %d Valkey Deployment documents, want 1", found)
+	}
+	return strings.Join(kept, "\n---\n"), valkey
+}
+
+// withoutSpecStrategy removes the spec.strategy block (the line "  strategy:" under "spec:" and the deeper
+// lines after it) and nothing else; want says whether the document must have one.
+func withoutSpecStrategy(t *testing.T, doc string, want bool) string {
+	t.Helper()
+	lines := strings.Split(doc, "\n")
+	var kept []string
+	inSpec, skipping, found := false, false, 0
+	for _, line := range lines {
+		indent := len(line) - len(strings.TrimLeft(line, " "))
+		if skipping {
+			if line != "" && indent > 2 {
+				continue
+			}
+			skipping = false
+		}
+		if indent == 0 && line != "" {
+			inSpec = line == "spec:"
+		}
+		if inSpec && line == "  strategy:" {
+			found++
+			skipping = true
+			continue
+		}
+		kept = append(kept, line)
+	}
+	if want && found != 1 || !want && found != 0 {
+		t.Fatalf("the Valkey Deployment has %d spec.strategy blocks, want %v", found, want)
+	}
+	return strings.Join(kept, "\n")
 }
 
 func TestSessionRollingUpdateSchemaAcceptsAndRefuses(t *testing.T) {

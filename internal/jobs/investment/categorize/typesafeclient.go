@@ -74,6 +74,8 @@ type systemOneTarget struct {
 	provider ProviderKind
 	url      string
 	bearer   secrets.Hidden
+	// viaGateway is true when the URL is an AI Gateway route. No target sets it yet.
+	viaGateway bool
 }
 
 // TypeSafeClientConfig configures TypeSafeClient.
@@ -112,6 +114,9 @@ const (
 	// is about 10 KB; this stops a hostile or broken peer from filling memory.
 	maxSystemOneResponseBytes = 4 << 20
 	typeSafeRequestIDHeader   = "x-typesafe-request-id"
+	clefRequestIDHeader       = "X-Request-Id"
+	cfAIGLogIDHeader          = "cf-aig-log-id"
+	cfRayHeader               = "cf-ray"
 	maxLoggedRequestIDLen     = 64
 )
 
@@ -389,6 +394,9 @@ type SystemOneAttempt struct {
 	// Class is "" for the attempt that succeeded, else a SystemOneClass.
 	Class     string
 	RequestID string
+	// RequestIDSource is where RequestID came from: aig, ray or client. Only the
+	// clef target sets it; the jev target keeps its own header and leaves it empty.
+	RequestIDSource string
 	// RequestIDRejected is true when the peer sent a request id that was
 	// refused (it held the API key); RequestID is then empty.
 	RequestIDRejected bool
@@ -611,6 +619,10 @@ func (c *TypeSafeClient) once(ctx context.Context, body []byte, lenient bool) (S
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+c.target.bearer.Reveal())
+	if c.target.provider == ClefProviderName {
+		att.RequestID, att.RequestIDSource = newClientRequestID(), RequestIDSourceClient
+		req.Header.Set(clefRequestIDHeader, att.RequestID)
+	}
 
 	started := time.Now()
 	resp, err := tracedLLMDo(c.client, req, c.target.provider, c.cfg.Model)
@@ -636,7 +648,11 @@ func (c *TypeSafeClient) once(ctx context.Context, body []byte, lenient bool) (S
 	}
 	defer resp.Body.Close()
 	att.StatusCode = resp.StatusCode
-	att.RequestID, att.RequestIDRejected = c.cleanRequestID(resp.Header.Get(typeSafeRequestIDHeader))
+	if c.target.provider == ClefProviderName {
+		att.RequestID, att.RequestIDSource = c.clefRequestID(resp.Header, att.RequestID)
+	} else {
+		att.RequestID, att.RequestIDRejected = c.cleanRequestID(resp.Header.Get(typeSafeRequestIDHeader))
+	}
 
 	payload, readErr := io.ReadAll(io.LimitReader(resp.Body, maxSystemOneResponseBytes+1))
 	if readErr == nil && len(payload) > maxSystemOneResponseBytes {

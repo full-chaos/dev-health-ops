@@ -3,22 +3,11 @@ package categorize
 import (
 	"context"
 	"net/http"
-	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 )
-
-// attemptSource reads RequestIDSource by name so the file compiles before the field exists.
-func attemptSource(t *testing.T, att SystemOneAttempt) string {
-	t.Helper()
-	field := reflect.ValueOf(att).FieldByName("RequestIDSource")
-	if !field.IsValid() {
-		t.Fatal("SystemOneAttempt has no RequestIDSource field")
-	}
-	return field.String()
-}
 
 func clefWithHeaders(t *testing.T, headers map[string]string) (SystemOneAttempt, *clefTransport) {
 	t.Helper()
@@ -45,8 +34,8 @@ func requireClientID(t *testing.T, att SystemOneAttempt, transport *clefTranspor
 	if err != nil || parsed.Version() != 7 {
 		t.Fatalf("request id = %q, want a UUID v7", att.RequestID)
 	}
-	if got := attemptSource(t, att); got != "client" {
-		t.Fatalf("source = %q, want client", got)
+	if att.RequestIDSource != RequestIDSourceClient {
+		t.Fatalf("source = %q, want client", att.RequestIDSource)
 	}
 	for _, values := range transport.requests[0].Header {
 		for _, value := range values {
@@ -60,15 +49,15 @@ func requireClientID(t *testing.T, att SystemOneAttempt, transport *clefTranspor
 
 func TestClefAttemptTakesCfRayWhenNoGatewayRouted(t *testing.T) {
 	att, _ := clefWithHeaders(t, map[string]string{"cf-ray": "8a1b2c3d4e5f6789-AMS"})
-	if att.RequestID != "8a1b2c3d4e5f6789-AMS" || attemptSource(t, att) != "ray" {
-		t.Fatalf("id %q source %q, want the cf-ray value and ray", att.RequestID, attemptSource(t, att))
+	if att.RequestID != "8a1b2c3d4e5f6789-AMS" || att.RequestIDSource != RequestIDSourceRay {
+		t.Fatalf("id %q source %q, want the cf-ray value and ray", att.RequestID, att.RequestIDSource)
 	}
 }
 
 func TestClefAttemptIgnoresCfAigLogIDWhenTheCallIsNotRoutedThroughTheGateway(t *testing.T) {
 	att, _ := clefWithHeaders(t, map[string]string{"cf-aig-log-id": "log-1234", "cf-ray": "8a1b2c3d4e5f6789-AMS"})
-	if att.RequestID != "8a1b2c3d4e5f6789-AMS" || attemptSource(t, att) != "ray" {
-		t.Fatalf("id %q source %q, want the cf-ray value and ray", att.RequestID, attemptSource(t, att))
+	if att.RequestID != "8a1b2c3d4e5f6789-AMS" || att.RequestIDSource != RequestIDSourceRay {
+		t.Fatalf("id %q source %q, want the cf-ray value and ray", att.RequestID, att.RequestIDSource)
 	}
 }
 

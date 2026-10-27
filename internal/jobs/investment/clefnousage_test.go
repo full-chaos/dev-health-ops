@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"reflect"
 	"sync"
 	"testing"
 
@@ -262,14 +261,8 @@ func TestEveryClefAttemptRowHasARequestIDAndAValidSource(t *testing.T) {
 		if row.RequestID == "" {
 			t.Fatalf("row %d has an empty request_id", index+1)
 		}
-		field := reflect.ValueOf(row).FieldByName("RequestIDSource")
-		if !field.IsValid() {
-			t.Fatal("AttemptRecord has no RequestIDSource field")
-		}
-		switch field.String() {
-		case "aig", "ray", "client":
-		default:
-			t.Fatalf("row %d request_id_source = %q, want aig, ray or client", index+1, field.String())
+		if row.RequestIDSource != "client" {
+			t.Fatalf("row %d request_id_source = %q, want client (the fake sends no id header)", index+1, row.RequestIDSource)
 		}
 	}
 }

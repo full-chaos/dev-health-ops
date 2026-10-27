@@ -2,9 +2,8 @@
 // schema that internal/goapiproof's integration tests and
 // cmd/go-api-routing's end-to-end verb tests share.
 //
-// ONE copy, for the reason providersyncschema exists: the alternative was
-// a second hand-kept DDL in the cmd package, drifting from this one with
-// nothing to notice. The DDL below mirrors alembic migrations 0114, 0127
+// ONE copy: the alternative was a second hand-kept DDL in the cmd package,
+// drifting from this one with nothing to notice. The DDL below mirrors alembic migrations 0114, 0127
 // and 0128 (and the later ones listed on DDL) as a FROZEN schema. The 0128
 // upgrade and downgrade are proven only by the migration runner itself; no test
 // compares this DDL with a migrated database.

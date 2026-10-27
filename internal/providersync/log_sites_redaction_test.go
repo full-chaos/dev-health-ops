@@ -240,10 +240,7 @@ func isSlogLogCall(callee *types.Func) bool {
 // in the log-site packages and fails on any argument that is not a named
 // scalar field (a map, a struct, a nested value).
 func TestEveryLogSiteLogsOnlyScalars(t *testing.T) {
-	loaded, err := packages.Load(&packages.Config{
-		Mode: packages.NeedName | packages.NeedFiles | packages.NeedSyntax | packages.NeedTypes | packages.NeedTypesInfo,
-		Dir:  "../..",
-	}, logSitePackages...)
+	loaded, err := censusLoad(logSitePackages...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -316,10 +313,7 @@ func TestEveryLogSiteLogsOnlyScalars(t *testing.T) {
 // classifier's vocabulary word for a protected key. route_completed must be
 // built from routeCompletedLog.attrs alone.
 func TestLogLinesOfPreparedRecoveryCarryOnlyOwnValues(t *testing.T) {
-	loaded, err := packages.Load(&packages.Config{
-		Mode: packages.NeedName | packages.NeedFiles | packages.NeedSyntax | packages.NeedTypes | packages.NeedTypesInfo,
-		Dir:  "../..",
-	}, "./internal/providersync")
+	loaded, err := censusLoad("./internal/providersync")
 	if err != nil || packages.PrintErrors(loaded) > 0 {
 		t.Fatalf("load: %v", err)
 	}
@@ -446,10 +440,7 @@ func protectedWordSpellings(word string) []string {
 // TestSensitiveKeyErrorIsBuiltOnlyFromTheClassifier pins that the fallback's
 // key field can only hold what preparedRouteSensitiveKey returned.
 func TestSensitiveKeyErrorIsBuiltOnlyFromTheClassifier(t *testing.T) {
-	loaded, err := packages.Load(&packages.Config{
-		Mode: packages.NeedName | packages.NeedFiles | packages.NeedSyntax | packages.NeedTypes | packages.NeedTypesInfo,
-		Dir:  "../..",
-	}, "./internal/providersync")
+	loaded, err := censusLoad("./internal/providersync")
 	if err != nil || packages.PrintErrors(loaded) > 0 {
 		t.Fatalf("load: %v", err)
 	}

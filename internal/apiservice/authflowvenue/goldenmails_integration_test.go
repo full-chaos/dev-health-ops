@@ -109,25 +109,33 @@ func TestTargetLinkMailsAreReadByTheirTokens(t *testing.T) {
 	}
 }
 
-// While auth-service owns users, go-api's social sign-up (still served by go-api until CHAOS-11350) refuses to create the
-// user: 409 with the moved-operation detail, and no session. Every other leg expects the session.
-func TestSocialAnswerOfTheOwnedLegIsTheMovedOperationRefusal(t *testing.T) {
+// While auth-service owns users and go-api still serves the social aggregate, go-api's social sign-up refuses to create the
+// user: 409 with the moved-operation detail, and no session. When auth-service serves the aggregate (forwarded) it creates the
+// account and answers a session, owned or not (a forced forward without the posture is the non-vacuity run: 403 fails).
+func TestSocialAnswerFollowsWhoServesTheAggregate(t *testing.T) {
 	refusal := `{"detail":{"message":"` + usersowned.Message + `","reason":"` + usersowned.Reason + `"}}`
 	session := `{"access_token":"x","user":{"email":"corpus-social@example.com"}}`
+	signupUnavailable := `{"detail":{"message":"Sign-up is not available","reason":"signup_unavailable"}}`
 	for name, c := range map[string]struct {
-		owned  bool
-		status int
-		body   string
-		ok     bool
+		owned, forwarded bool
+		status           int
+		body             string
+		ok               bool
 	}{
-		"owned refuses":                     {true, 409, refusal, true},
-		"owned with a session is wrong":     {true, 200, session, false},
-		"owned with another 409 is wrong":   {true, 409, `{"detail":"An account with this email already exists."}`, false},
-		"owned with another status":         {true, 500, refusal, false},
-		"not owned gets the session":        {false, 200, session, true},
-		"not owned with the refusal is bad": {false, 409, refusal, false},
+		"owned and kept refuses":                      {true, false, 409, refusal, true},
+		"owned and kept with a session is wrong":      {true, false, 200, session, false},
+		"owned and kept with another 409 is wrong":    {true, false, 409, `{"detail":"An account with this email already exists."}`, false},
+		"owned and kept with another status":          {true, false, 500, refusal, false},
+		"owned and forwarded gets the session":        {true, true, 200, session, true},
+		"owned and forwarded with the refusal":        {true, true, 409, refusal, false},
+		"owned and forwarded with signup refused":     {true, true, 403, signupUnavailable, false},
+		"not owned gets the session":                  {false, false, 200, session, true},
+		"not owned with the refusal is bad":           {false, false, 409, refusal, false},
+		"not owned and forced gets 403: the negative": {false, true, 403, signupUnavailable, false},
+		"not owned and forwarded gets the session":    {false, true, 200, session, true},
 	} {
-		if _, err := checkSocialAnswer(c.owned, c.status, c.body); (err == nil) != c.ok {
+		_, err := checkSocialAnswer(c.owned, c.forwarded, c.status, c.body)
+		if (err == nil) != c.ok {
 			t.Errorf("%s: err = %v, want ok=%v", name, err, c.ok)
 		}
 	}

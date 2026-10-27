@@ -70,6 +70,8 @@ internal/bigboycompose	billing_edge_override_test.go	unexpressed	-	-
 internal/chmigrate	rollback_version_row_integration_test.go	internal/chmigrate/rollback	dir	*
 internal/chmigrate	rollback_version_row_test.go	internal/chmigrate/rollback	dir	*
 internal/cigates/affected	plan.go	unexpressed	-	-
+internal/cigates/affected	reachcache.go	unexpressed	-	-
+internal/cigates/affected	reachcache_test.go	unexpressed	-	-
 internal/cigates/affected	scan.go	unexpressed	-	-
 internal/cigates/bigboy	compose_ch_users_test.go	unexpressed	-	-
 internal/cigates/bigboy	compose_one_file_test.go	unexpressed	-	-
@@ -143,6 +145,7 @@ internal/cigates/testshard	trimpath_test.go	.github/workflows	dir	*
 internal/cigates/testshard	trimpath_test.go	unexpressed	-	-
 internal/cigates/weightsfiles	race_weights_files_test.go	unexpressed	-	-
 internal/cigates/weightsfiles	support_test.go	unexpressed	-	-
+internal/cigates/workflows	auth_corpus_external_behaviour_test.go	unexpressed	-	-
 internal/cigates/workflows	chart_started_selector_test.go	unexpressed	-	-
 internal/cigates/workflows	providerstub_not_release_test.go	.github/workflows	dir	*
 internal/cigates/workflows	race_json_artifact_test.go	unexpressed	-	-

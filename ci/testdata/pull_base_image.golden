@@ -1,0 +1,100 @@
+=== t1 rc=0 mirror=3 dockerio=0
+base-image pull: source=mirror.gcr.io try=1/3 rc=1 elapsed=Ns digest=-
+base-image pull: source=mirror.gcr.io try=2/3 rc=1 elapsed=Ns digest=-
+base-image pull: source=mirror.gcr.io try=3/3 rc=0 elapsed=Ns digest=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+TAG=dho-go-build-base:local-PID
+=== t2 rc=0 mirror=3 dockerio=1
+base-image pull: source=mirror.gcr.io try=1/3 rc=1 elapsed=Ns digest=-
+base-image pull: source=mirror.gcr.io try=2/3 rc=1 elapsed=Ns digest=-
+base-image pull: source=mirror.gcr.io try=3/3 rc=1 elapsed=Ns digest=-
+base-image pull: source=docker.io try=1/3 rc=0 elapsed=Ns digest=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+TAG=dho-go-build-base:local-PID
+=== t3 rc=1 mirror=3 dockerio=3
+base-image pull: source=mirror.gcr.io try=1/3 rc=1 elapsed=Ns digest=-
+base-image pull: source=mirror.gcr.io try=2/3 rc=1 elapsed=Ns digest=-
+base-image pull: source=mirror.gcr.io try=3/3 rc=1 elapsed=Ns digest=-
+base-image pull: source=docker.io try=1/3 rc=1 elapsed=Ns digest=-
+base-image pull: source=docker.io try=2/3 rc=1 elapsed=Ns digest=-
+base-image pull: source=docker.io try=3/3 rc=1 elapsed=Ns digest=-
+FAIL: base image golang@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa could not be pulled from: mirror.gcr.io (3 tries), docker.io (3 tries)
+TAG=
+=== t4 rc=1 mirror=3 dockerio=3
+base-image pull: source=mirror.gcr.io try=1/3 rc=65 elapsed=Ns digest=mismatch
+base-image pull: source=mirror.gcr.io try=2/3 rc=65 elapsed=Ns digest=mismatch
+base-image pull: source=mirror.gcr.io try=3/3 rc=65 elapsed=Ns digest=mismatch
+base-image pull: source=docker.io try=1/3 rc=65 elapsed=Ns digest=mismatch
+base-image pull: source=docker.io try=2/3 rc=65 elapsed=Ns digest=mismatch
+base-image pull: source=docker.io try=3/3 rc=65 elapsed=Ns digest=mismatch
+FAIL: base image golang@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa could not be pulled from: mirror.gcr.io (3 tries), docker.io (3 tries)
+TAG=
+=== t4b rc=0 mirror=1 dockerio=0
+base-image pull: source=mirror.gcr.io try=1/3 rc=0 elapsed=Ns digest=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+TAG=dho-go-build-base:local-PID
+=== t4c rc=1 mirror=3 dockerio=3
+base-image pull: source=mirror.gcr.io try=1/3 rc=65 elapsed=Ns digest=mismatch
+base-image pull: source=mirror.gcr.io try=2/3 rc=65 elapsed=Ns digest=mismatch
+base-image pull: source=mirror.gcr.io try=3/3 rc=65 elapsed=Ns digest=mismatch
+base-image pull: source=docker.io try=1/3 rc=65 elapsed=Ns digest=mismatch
+base-image pull: source=docker.io try=2/3 rc=65 elapsed=Ns digest=mismatch
+base-image pull: source=docker.io try=3/3 rc=65 elapsed=Ns digest=mismatch
+FAIL: base image golang@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa could not be pulled from: mirror.gcr.io (3 tries), docker.io (3 tries)
+TAG=
+=== t4d rc=1 mirror=1 dockerio=0
+base-image pull: source=mirror.gcr.io try=1/3 rc=0 elapsed=Ns digest=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+FAIL: docker tag of mirror.gcr.io/library/golang@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa to dho-go-build-base:local-PID failed rc=42
+TAG=
+=== t4e rc=1 mirror=3 dockerio=3
+base-image pull: source=mirror.gcr.io try=1/3 rc=3 elapsed=Ns digest=inspect-failed
+base-image pull: source=mirror.gcr.io try=2/3 rc=3 elapsed=Ns digest=inspect-failed
+base-image pull: source=mirror.gcr.io try=3/3 rc=3 elapsed=Ns digest=inspect-failed
+base-image pull: source=docker.io try=1/3 rc=3 elapsed=Ns digest=inspect-failed
+base-image pull: source=docker.io try=2/3 rc=3 elapsed=Ns digest=inspect-failed
+base-image pull: source=docker.io try=3/3 rc=3 elapsed=Ns digest=inspect-failed
+FAIL: base image golang@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa could not be pulled from: mirror.gcr.io (3 tries), docker.io (3 tries)
+TAG=
+=== t4f rc=1 mirror=0 dockerio=0
+sed: can't read TMP/missing-Dockerfile: No such file or directory
+FAIL: cannot read TMP/missing-Dockerfile
+TAG=
+=== t4g rc=1 mirror=0 dockerio=0
+FAIL: GO_BUILD_IMAGE in TMP/Dockerfile.nomirror is not a mirror.gcr.io ref: gcr.io/library/golang:1@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+TAG=
+=== t4h rc=1 mirror=3 dockerio=3
+base-image pull: source=mirror.gcr.io try=1/3 rc=1 elapsed=Ns digest=-
+base-image pull: source=mirror.gcr.io try=2/3 rc=1 elapsed=Ns digest=-
+base-image pull: source=mirror.gcr.io try=3/3 rc=1 elapsed=Ns digest=-
+base-image pull: source=docker.io try=1/3 rc=1 elapsed=Ns digest=-
+base-image pull: source=docker.io try=2/3 rc=1 elapsed=Ns digest=-
+base-image pull: source=docker.io try=3/3 rc=1 elapsed=Ns digest=-
+FAIL: base image golang@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa could not be pulled from: mirror.gcr.io (3 tries), docker.io (3 tries)
+TAG=
+=== t5 rc=1 mirror=3 dockerio=3
+base-image pull: source=mirror.gcr.io try=1/3 rc=1 elapsed=Ns digest=-
+base-image pull: source=mirror.gcr.io try=2/3 rc=1 elapsed=Ns digest=-
+base-image pull: source=mirror.gcr.io try=3/3 rc=1 elapsed=Ns digest=-
+base-image pull: source=docker.io try=1/3 rc=1 elapsed=Ns digest=-
+base-image pull: source=docker.io try=1/3 rate-limited (anonymous pull refused)
+base-image pull: source=docker.io try=2/3 rc=1 elapsed=Ns digest=-
+base-image pull: source=docker.io try=2/3 rate-limited (anonymous pull refused)
+base-image pull: source=docker.io try=3/3 rc=1 elapsed=Ns digest=-
+base-image pull: source=docker.io try=3/3 rate-limited (anonymous pull refused)
+FAIL: base image golang@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa could not be pulled from: mirror.gcr.io (3 tries), docker.io (3 tries)
+TAG=
+=== t6 rc=1 mirror=3 dockerio=3
+base-image pull: source=mirror.gcr.io try=1/3 rc=1 elapsed=Ns digest=-
+base-image pull: source=mirror.gcr.io try=2/3 rc=1 elapsed=Ns digest=-
+base-image pull: source=mirror.gcr.io try=3/3 rc=1 elapsed=Ns digest=-
+base-image pull: source=docker.io try=1/3 rc=1 elapsed=Ns digest=-
+base-image pull: source=docker.io try=2/3 rc=1 elapsed=Ns digest=-
+base-image pull: source=docker.io try=3/3 rc=1 elapsed=Ns digest=-
+FAIL: base image golang@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa could not be pulled from: mirror.gcr.io (3 tries), docker.io (3 tries)
+TAG=
+=== t7 rc=0 mirror=1 dockerio=0
+base-image pull: source=mirror.gcr.io try=1/3 rc=0 elapsed=Ns digest=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+TAG=dho-go-build-base:local-PID
+=== t8 rc=0 mirror=1 dockerio=0
+base-image pull: source=mirror.gcr.io try=1/3 rc=0 elapsed=Ns digest=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+TAG=dho-go-build-base:local-PID
+=== t9 rc=0 mirror=1 dockerio=0
+base-image pull: source=mirror.gcr.io try=1/3 rc=0 elapsed=Ns digest=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+TAG=dho-go-build-base:777-PID

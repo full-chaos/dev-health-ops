@@ -45,7 +45,7 @@ func newAccessStack(t *testing.T) *accessStack {
 	routes = append(routes,
 		httpapi.Route{Method: http.MethodGet, Pattern: "/v1/access-ok", Unthrottled: true,
 			Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })},
-		httpapi.Route{Method: http.MethodPost, Pattern: "/v1/access-body", Unthrottled: true,
+		httpapi.Route{Method: http.MethodPost, Pattern: "/v1/access-body", RateLimitPerSecond: 1000, RateLimitBurst: 1000,
 			Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if _, err := io.Copy(io.Discard, r.Body); err != nil {
 					return

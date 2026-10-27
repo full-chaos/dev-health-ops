@@ -56,6 +56,8 @@ type barrierRun struct {
 	rc             int
 	stdout, stderr string
 	argv           string
+	// deadline is true when the test deadline killed the run instead of the script ending on its own.
+	deadline bool
 }
 
 func runBarrier(t *testing.T, world map[string]string, env []string, args ...string) barrierRun {
@@ -87,12 +89,14 @@ func runBarrierWithin(t *testing.T, limit time.Duration, world map[string]string
 	if err != nil {
 		if exit, ok := err.(*exec.ExitError); ok {
 			rc = exit.ExitCode()
+		} else if ctx.Err() != nil {
+			rc = -1
 		} else {
 			t.Fatalf("run: %v", err)
 		}
 	}
 	argv, _ := os.ReadFile(filepath.Join(dir, "argv"))
-	return barrierRun{rc, out.String(), errb.String(), string(argv)}
+	return barrierRun{rc, out.String(), errb.String(), string(argv), ctx.Err() != nil}
 }
 
 func TestBarrierPassesAndPrintsTheTime(t *testing.T) {
@@ -208,10 +212,9 @@ func TestBarrierEveryKubectlCallHasARequestTimeout(t *testing.T) {
 // A hung kubectl call fails closed within the request timeout: non-zero exit, no barrier_ok, and not a deadline kill.
 func TestBarrierFailsClosedWhenKubectlHangs(t *testing.T) {
 	for _, key := range []string{"deploy.go-api", "rs.go-api", "pods.go-api", "pods.all"} {
-		start := time.Now()
 		r := runBarrierWithin(t, 15*time.Second, goodBarrierWorld(), []string{"FAKE_HANG=" + key}, "up-go-api")
-		if time.Since(start) >= 14*time.Second {
-			t.Errorf("kubectl %s hung: the run was held to the test deadline (no --request-timeout)", key)
+		if r.deadline {
+			t.Errorf("kubectl %s hung: the test deadline killed the run (no --request-timeout)", key)
 		}
 		if r.rc == 0 || strings.Contains(r.stdout, "barrier_ok") {
 			t.Errorf("kubectl %s hanging passed: rc=%d", key, r.rc)

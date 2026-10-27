@@ -735,7 +735,7 @@ rendered one, a Secret reference included, and put a literal in the manifest. au
 names and proves each is refused.
 */}}
 {{- define "dev-health.authServiceEnvNames" -}}
-{{- $names := list "AUTH_DATABASE_URI" "AUTH_JWT_SECRET_KEY" "AUTH_SESSION_SUCCESSOR_KEY" "AUTH_LOGIN_LOCKOUT_KEY" "AUTH_SOCIAL_LINK_ROUTES" "AUTH_ACCESS_TOKEN_CLASS" "AUTH_TOKEN_ISSUER_URL" "AUTH_JWT_AUDIENCE" "AUTH_USERS_OWNED" "AUTH_ORGS_OWNED" "AUTH_VALKEY_URI" "AUTH_SERVICE_TRUSTED_PROXIES" "EMAIL_PROVIDER" "EMAIL_FROM_ADDRESS" "APP_BASE_URL" "AUTH_MAIL_ALLOW_CONSOLE" -}}
+{{- $names := list "AUTH_DATABASE_URI" "AUTH_JWT_SECRET_KEY" "AUTH_SESSION_SUCCESSOR_KEY" "AUTH_LOGIN_LOCKOUT_KEY" "AUTH_SOCIAL_LINK_ROUTES" "AUTH_ACCESS_TOKEN_CLASS" "AUTH_TOKEN_ISSUER_URL" "AUTH_JWT_AUDIENCE" "AUTH_USERS_OWNED" "AUTH_ORGS_OWNED" "AUTH_VALKEY_URI" "AUTH_SERVICE_TRUSTED_PROXIES" "OTEL_ENABLED" "OTEL_EXPORTER_OTLP_ENDPOINT" "OTEL_SAMPLE_RATE" "OTEL_SERVICE_NAME" "EMAIL_PROVIDER" "EMAIL_FROM_ADDRESS" "APP_BASE_URL" "AUTH_MAIL_ALLOW_CONSOLE" -}}
 {{- /* EMAIL_API_KEY is appended, not listed, so the worker allow-list keeps the only listed spelling (a chartgates planted defect edits it). */ -}}
 {{- $names = (append (append $names "EMAIL_API_KEY") "RESEND_API_KEY") -}}
 {{- range $provider := list "GITHUB" "GITLAB" "GOOGLE" }}{{- range $suffix := list "CLIENT_ID" "CLIENT_SECRET" }}{{- $names = append $names (printf "SOCIAL_%s_%s" $provider $suffix) }}{{- end }}{{- end -}}
@@ -1125,9 +1125,18 @@ namespace, HTTPS, then networkPolicy.extraEgress. The auth pods never use these 
 {{- end }}
 
 {{/*
+The integer value of a dotted IPv4 address (validated by the caller).
+*/}}
+{{- define "dev-health.ipv4Int" -}}
+{{- $o := splitList "." (toString .) -}}
+{{- add (add (mul (int (index $o 0)) 16777216) (mul (int (index $o 1)) 65536)) (add (mul (int (index $o 2)) 256) (int (index $o 3))) -}}
+{{- end -}}
+
+{{/*
 One authService.trustedProxies entry is what internal/auth/clientaddr ParseTrust accepts (a bare IP address, or a strict CIDR
 network: canonical prefix digits, no host bits, no zone), so a rendered value never stops auth-service at start. Prints "true" when
-the entry is valid, nothing otherwise. The chart refuses /0 and IPv4-mapped forms on top of this.
+the entry is valid, nothing otherwise. The chart refuses /0 and IPv4-mapped forms on top of this. An exclusion entry
+("!<address>") is this check on its address, plus the IPv4-only rules in auth-service.yaml.
 */}}
 {{- define "dev-health.trustedProxyEntry" -}}
 {{- $parts := splitList "/" (toString .) -}}
@@ -1349,4 +1358,103 @@ Kubernetes default of 25 percent rounds up to one pod at one replica). Takes
 {{- $used := add $pools $direct -}}
 {{- if gt $used (int64 $v) -}}{{- fail (printf "authService.database.connectionBudget: %d connections are needed but the budget is %d: (authService.replicas %d + %d surge) x authService.database.maxConns %d = %d direct, plus %d go-pgbouncer pool connections (%s). Lower a pool or add capacity before raising the budget" $used (int64 $v) $replicas (int64 (include "dev-health.authMaxSurge" .)) (int64 (include "dev-health.authMaxConns" .)) $direct $pools $txnDetail) -}}{{- end -}}
 {{- end -}}
+{{- end -}}
+
+{{/*
+Why an OTLP egress ipBlock cidr is refused, or "" when it is acceptable. The prefix is parsed as a number: an IPv4
+prefix must be /8 to /32 and an IPv6 prefix /32 to /128, so no spelling of 0.0.0.0/0 or ::/0 passes. An IPv6 cidr
+written with an embedded dotted IPv4 part is refused; any other is expanded to its 8 groups and refused when it
+overlaps the IPv4-mapped range ::ffff:0:0/96 or the NAT64 ranges 64:ff9b::/96 and 64:ff9b:1::/48 (inside them or
+containing them), in any spelling. Call with the cidr string.
+*/}}
+{{- define "dev-health.otlpPeerCidrProblem" -}}
+{{- $parts := splitList "/" (lower (trim (toString .))) -}}
+{{- if ne (len $parts) 2 -}}
+it needs exactly one "/" and a prefix
+{{- else -}}
+{{- $addr := index $parts 0 -}}
+{{- $bits := index $parts 1 -}}
+{{- if not (regexMatch "^[0-9]{1,3}$" $bits) -}}
+the prefix is not a number
+{{- else -}}
+{{- $prefix := atoi $bits -}}
+{{- if contains ":" $addr -}}
+{{- if or (lt $prefix 32) (gt $prefix 128) -}}
+an IPv6 prefix must be from /32 to /128
+{{- else if contains "." $addr -}}
+an IPv6 address with an embedded IPv4 part (the mapped or compatible range) is not a collector address
+{{- else -}}
+{{- $groups := include "dev-health.ipv6Groups" $addr | fromJsonArray -}}
+{{- if ne (len $groups) 8 -}}
+the IPv6 address does not parse
+{{- else -}}
+{{- $reason := "" -}}
+{{- range $r := list (list (list 0 0 0 0 0 65535 0 0) 96 "the IPv4-mapped IPv6 range ::ffff:0:0/96") (list (list 100 65435 0 0 0 0 0 0) 96 "the NAT64 range 64:ff9b::/96") (list (list 100 65435 1 0 0 0 0 0) 48 "the NAT64 range 64:ff9b:1::/48") -}}
+{{- if and (not $reason) (eq (include "dev-health.ipv6Overlaps" (dict "a" $groups "p" $prefix "b" (index $r 0) "q" (index $r 1))) "true") -}}
+{{- $reason = printf "it overlaps %s, which is not a collector address" (index $r 2) -}}
+{{- end -}}
+{{- end -}}
+{{- $reason -}}
+{{- end -}}
+{{- end -}}
+{{- else -}}
+{{- if or (lt $prefix 8) (gt $prefix 32) -}}
+an IPv4 prefix must be from /8 to /32
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+The 8 groups of a lower-case IPv6 address as a JSON list of numbers, "::" expanded; [] when it does not parse.
+*/}}
+{{- define "dev-health.ipv6Groups" -}}
+{{- $hex := dict "0" 0 "1" 1 "2" 2 "3" 3 "4" 4 "5" 5 "6" 6 "7" 7 "8" 8 "9" 9 "a" 10 "b" 11 "c" 12 "d" 13 "e" 14 "f" 15 -}}
+{{- $halves := splitList "::" . -}}
+{{- $raw := list -}}
+{{- if eq (len $halves) 1 -}}
+{{- $raw = splitList ":" . -}}
+{{- else if eq (len $halves) 2 -}}
+{{- $left := list -}}
+{{- if ne (index $halves 0) "" }}{{- $left = splitList ":" (index $halves 0) }}{{- end -}}
+{{- $right := list -}}
+{{- if ne (index $halves 1) "" }}{{- $right = splitList ":" (index $halves 1) }}{{- end -}}
+{{- $fill := sub 8 (add (len $left) (len $right)) | int -}}
+{{- if gt $fill 0 -}}
+{{- $raw = $left -}}
+{{- range until $fill }}{{- $raw = append $raw "0" }}{{- end -}}
+{{- $raw = concat $raw $right -}}
+{{- end -}}
+{{- end -}}
+{{- $out := list -}}
+{{- $ok := eq (len $raw) 8 -}}
+{{- range $g := $raw -}}
+{{- if not (regexMatch "^[0-9a-f]{1,4}$" $g) -}}
+{{- $ok = false -}}
+{{- else -}}
+{{- $v := 0 -}}
+{{- range $c := splitList "" $g }}{{- $v = add (mul $v 16) (get $hex $c) }}{{- end -}}
+{{- $out = append $out $v -}}
+{{- end -}}
+{{- end -}}
+{{- if and $ok (eq (len $out) 8) -}}{{- toJson $out -}}{{- else -}}[]{{- end -}}
+{{- end -}}
+
+{{/*
+"true" when the IPv6 prefixes a/p and b/q (8 groups each) overlap: they agree on their first min(p, q) bits.
+*/}}
+{{- define "dev-health.ipv6Overlaps" -}}
+{{- $m := min (int .p) (int .q) -}}
+{{- $full := div $m 16 | int -}}
+{{- $rem := mod $m 16 | int -}}
+{{- $same := true -}}
+{{- range $i := until $full -}}
+{{- if ne (int (index $.a $i)) (int (index $.b $i)) }}{{- $same = false }}{{- end -}}
+{{- end -}}
+{{- if and $same (gt $rem 0) -}}
+{{- $shift := index (list 1 2 4 8 16 32 64 128 256 512 1024 2048 4096 8192 16384 32768 65536) (sub 16 $rem | int) -}}
+{{- if ne (div (int (index .a $full)) $shift) (div (int (index .b $full)) $shift) }}{{- $same = false }}{{- end -}}
+{{- end -}}
+{{- if $same }}true{{- end -}}
 {{- end -}}

@@ -26,6 +26,10 @@ stays Ready (a pod is Ready only when every container is). No probes on the expo
 {{- if not (regexMatch "@sha256:[0-9a-f]{64}$" (toString $exporter.image)) }}
 {{- fail (printf "goWorkers.pgbouncer.transaction.exporter.image %q must be pinned by an immutable sha256 digest (repo@sha256:<64 lowercase-hex-digit digest>)" (toString $exporter.image)) }}
 {{- end }}
+{{- /* Both containers share the pod network namespace: the same port means the exporter can never bind. */}}
+{{- if eq (toString $exporter.port) (toString .Values.goWorkers.pgbouncer.transaction.port) }}
+{{- fail (printf "goWorkers.pgbouncer.transaction.exporter.port must differ from the transaction pooler port (goWorkers.pgbouncer.transaction.port): both are %v, and the exporter shares the pooler pod's network namespace" $exporter.port) }}
+{{- end }}
 {{- range $exporter.metricsFrom }}
 {{- if not (or .matchLabels .matchExpressions) }}
 {{- fail "goWorkers.pgbouncer.transaction.exporter.metricsFrom entries need a non-empty matchLabels or matchExpressions: an empty podSelector admits every pod in the namespace" }}

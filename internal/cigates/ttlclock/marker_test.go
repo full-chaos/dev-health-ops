@@ -3,6 +3,7 @@ package ttlclock
 import (
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -137,5 +138,27 @@ func TestSitesAreClockFreeLiteralsStayGreen(t *testing.T) {
 func TestAllowTSVIsGone(t *testing.T) {
 	if _, err := os.Stat("allow.tsv"); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("allow.tsv must not exist (one mechanism: //ttlclock:allow site comments), stat err = %v", err)
+	}
+}
+
+func TestWalkChecksEveryFileHoldingTheMarker(t *testing.T) {
+	root := t.TempDir()
+	write := func(name, body string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(root, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("plain_test.go", "package p\n\n//ttlclock:allow never reaches a TTL table: stale tables=events_ttl\nvar x = 1\n")
+	write("integ_test.go", withMarker(siteSource, siteNever))
+	problems, scannedFiles, err := scanTree(root, plantedTables, plantedToday)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if scannedFiles != 1 {
+		t.Errorf("scanned table-naming integration tests = %d, want 1", scannedFiles)
+	}
+	if len(problems) != 1 || !strings.Contains(problems[0], "plain_test.go:3: no date literal") {
+		t.Errorf("problems = %q, want exactly the orphan marker in plain_test.go (a non-integration file holding the marker)", problems)
 	}
 }

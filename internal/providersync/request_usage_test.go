@@ -1048,6 +1048,89 @@ func TestShutdownDrainRetriesUntilItsBound(t *testing.T) {
 	}
 }
 
+// TestCloseLogsTheUnsentLineBeforeItReturnsWhenAWriteHangs closes a writer
+// while a write to a hung store is in flight: the drain still names the rows
+// it could not store before Close returns.
+func TestCloseLogsTheUnsentLineBeforeItReturnsWhenAWriteHangs(t *testing.T) {
+	t.Parallel()
+	hung := &hangingRequestUsageSink{release: make(chan struct{}), started: make(chan struct{})}
+	logs := &syncBuffer{}
+	writer := NewRequestUsageWriter(hung, slog.New(slog.NewTextHandler(logs, nil)))
+	writer.cadence = 5 * time.Millisecond
+	writer.writeTimeout = 10 * time.Second
+	writer.Start()
+	t.Cleanup(func() {
+		close(hung.release)
+		writer.Close(time.Second)
+	})
+	writer.Offer([]RequestUsageRow{{Transport: requestTransportREST, Requests: 1}})
+	select {
+	case <-hung.started:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the first write never started")
+	}
+	writer.Close(10 * time.Millisecond)
+	select {
+	case <-writer.done:
+	default:
+		t.Fatalf("Close returned before the drain ended: logs=%s", logs.String())
+	}
+	requests, _, found := namedByLastLine(logs.String(), "unsent")
+	if !found || requests != 1 {
+		t.Fatalf("unsent line: %s", logs.String())
+	}
+}
+
+// cancelAwareRequestUsageSink holds each write until its context ends and
+// reports how the first write's context ended.
+type cancelAwareRequestUsageSink struct {
+	once     sync.Once
+	started  chan struct{}
+	firstErr chan error
+}
+
+func (sink *cancelAwareRequestUsageSink) WriteRequestUsage(ctx context.Context, _ []RequestUsageRow) error {
+	first := false
+	sink.once.Do(func() {
+		first = true
+		close(sink.started)
+	})
+	<-ctx.Done()
+	if first {
+		sink.firstErr <- ctx.Err()
+	}
+	return ctx.Err()
+}
+
+// TestCloseCancelsTheInFlightWrite closes a writer while a write is in flight:
+// Close cancels that write's context, so a store that honours its context
+// returns and leaves no goroutine behind.
+func TestCloseCancelsTheInFlightWrite(t *testing.T) {
+	t.Parallel()
+	sink := &cancelAwareRequestUsageSink{started: make(chan struct{}), firstErr: make(chan error, 1)}
+	logs := &syncBuffer{}
+	writer := NewRequestUsageWriter(sink, slog.New(slog.NewTextHandler(logs, nil)))
+	writer.cadence = 5 * time.Millisecond
+	writer.writeTimeout = 10 * time.Second
+	writer.Start()
+	t.Cleanup(func() { writer.Close(time.Second) })
+	writer.Offer([]RequestUsageRow{{Transport: requestTransportREST, Requests: 1}})
+	select {
+	case <-sink.started:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the first write never started")
+	}
+	writer.Close(10 * time.Millisecond)
+	select {
+	case err := <-sink.firstErr:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("the in-flight write ended with %v, want it cancelled by Close", err)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("the in-flight write still runs after the hang ceiling: its goroutine leaks")
+	}
+}
+
 // TestRepeatingWriterNoticesAreRateLimited fails the store on every write:
 // within one notice interval one failure line is logged; the next line,
 // after the interval, reports the lines it suppressed and still names the

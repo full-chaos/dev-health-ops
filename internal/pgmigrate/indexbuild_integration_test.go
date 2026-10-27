@@ -443,3 +443,31 @@ func TestBuildOpenUnitsIndexHasItsOwnBuildLock(t *testing.T) {
 		t.Fatalf("err = %v, want ErrBuildLockHeld", err)
 	}
 }
+
+// From the database at revision 0159 the chain applies 0160 and then 0161 in order, and 0161 leaves its column and its index.
+func TestTheChainAppliesRevisions0160And0161InOrderFrom0159(t *testing.T) {
+	position, _ := chainPosition(t, "0160")
+	d := newDownInstance(t)
+	conn := connect(t, d.at(t, position))
+	baseline, err := pgmigrate.LoadBaseline()
+	if err != nil {
+		t.Fatal(err)
+	}
+	chain, err := pgmigrate.LoadChain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	applied, err := pgmigrate.Upgrade(context.Background(), conn, baseline, chain)
+	if err != nil {
+		t.Fatalf("upgrade from 0159: %v", err)
+	}
+	if len(applied.Applied) < 2 || applied.Applied[0] != "0160" || applied.Applied[1] != "0161" {
+		t.Fatalf("applied %v, want it to start 0160, 0161", applied.Applied)
+	}
+	var column, index bool
+	if err := conn.QueryRow(context.Background(), `SELECT
+EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'sync_run_post_dispatches' AND column_name = 'recorded_at'),
+to_regclass('public.`+pgmigrate.OpenUnitsIndexName+`') IS NOT NULL`).Scan(&column, &index); err != nil || !column || !index {
+		t.Fatalf("after 0161: recorded_at=%v open-units index=%v err=%v", column, index, err)
+	}
+}

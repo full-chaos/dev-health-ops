@@ -1756,3 +1756,10 @@ postgresql:
     user: "devhealth"
     password: "devhealth"
     database: "devhealth"
+  # -- Client authentication. The ConfigMap <fullname>-postgresql-hba always renders
+  #    with the store: every client, the local socket and loopback included, gives a
+  #    scram-sha-256 password. Only `enabled: true` passes it to the server as
+  #    hba_file; while false, the pg_hba.conf initdb wrote on the volume (socket and
+  #    loopback: trust) stays in force. Switching it restarts the pod.
+  hba:
+    enabled: false

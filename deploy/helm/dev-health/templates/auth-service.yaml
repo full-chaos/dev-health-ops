@@ -38,6 +38,12 @@ stage-signing-key init container exists.
 {{- range $a.trustedProxies }}
 {{- $entry := toString . }}
 {{- if or (not (include "dev-health.trustedProxyEntry" $entry)) (regexMatch "/0$" $entry) (regexMatch "^(?i)::ffff:" $entry) }}{{- fail "authService.trustedProxies entries must each be one IP address or CIDR network, never a /0 network or an IPv4-mapped form: a trusted peer picks the client address of every request" }}{{- end }}
+{{- if contains "/" $entry }}
+{{- $bits := int (index (splitList "/" $entry) 1) }}
+{{- $v6 := contains ":" $entry }}
+{{- if or (and (not $v6) (lt $bits 24)) (and $v6 (lt $bits 64)) }}{{- fail (printf "authService.trustedProxies entry %q is wider than a /24 (IPv4) or a /64 (IPv6): the node pod range is the widest list allowed, even with authService.trustedProxiesWideAccepted" $entry) }}{{- end }}
+{{- if and (or (and (not $v6) (lt $bits 28)) (and $v6 (lt $bits 124))) (ne (toString $a.trustedProxiesWideAccepted) "true") }}{{- fail (printf "authService.trustedProxies entry %q is wider than a /28 (IPv4) or a /124 (IPv6): every address in it is believed as a proxy that names the client. It is allowed only with authService.trustedProxiesWideAccepted=true, and only while the auth-service NetworkPolicy admits go-api's pods alone on the API port; prefer the go-api pod addresses" $entry) }}{{- end }}
+{{- end }}
 {{- end }}
 {{- $ks := $a.keySet }}
 {{- $ksOn := and $ks $ks.enabled }}

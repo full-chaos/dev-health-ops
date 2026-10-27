@@ -151,8 +151,8 @@ if [ -n "${PRESTOP}" ]; then
   HELM_BASE+=(--set "goApi.drain.preStopSeconds=${PRESTOP}")
 fi
 # The session routes count in the shared store and the proxied flip trusts the forwarded address from the go-api pods,
-# so the layer names the store Secret, the pod network (kind's default pod subnet) and the auth-service policy peers.
-printf 'authService:\n  valkey:\n    secretName: auth-ratelimit\n  trustedProxies: ["10.244.0.0/16"]\n  networkPolicy:\n    enabled: true\n    egress:\n      database:\n        to: [{podSelector: {matchLabels: {app.kubernetes.io/name: dev-health, app.kubernetes.io/instance: %s, app.kubernetes.io/component: postgresql}}}]\n      valkey:\n        to: [{podSelector: {matchLabels: {app.kubernetes.io/name: dev-health, app.kubernetes.io/instance: %s, app.kubernetes.io/component: valkey}}}]\n' "${RELEASE}" "${RELEASE}" >"${WORK}/authprereq.yaml"
+# so the layer names the store Secret, the single node's pod range (kind's default, the first /24 of 10.244.0.0/16; the wide-range ack) and the auth-service policy peers.
+printf 'authService:\n  valkey:\n    secretName: auth-ratelimit\n  trustedProxies: ["10.244.0.0/24"]\n  trustedProxiesWideAccepted: true\n  networkPolicy:\n    enabled: true\n    egress:\n      database:\n        to: [{podSelector: {matchLabels: {app.kubernetes.io/name: dev-health, app.kubernetes.io/instance: %s, app.kubernetes.io/component: postgresql}}}]\n      valkey:\n        to: [{podSelector: {matchLabels: {app.kubernetes.io/name: dev-health, app.kubernetes.io/instance: %s, app.kubernetes.io/component: valkey}}}]\n' "${RELEASE}" "${RELEASE}" >"${WORK}/authprereq.yaml"
 HELM_SESSION=(-f "${WORK}/secrets-session.yaml" -f "${WORK}/successor.yaml" -f "${WORK}/authprereq.yaml")
 
 # --- rev 1: objects only, no hooks, so PostgreSQL exists before the hooks need it -------------------

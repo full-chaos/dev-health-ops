@@ -253,8 +253,16 @@ authService:
   #    value names the client. Required from authService.phase 2 (go-api forwards auth routes), because otherwise every proxied caller
   #    shares the proxy's own address in the rate-limit keys. List the go-api pods' network only: the render refuses
   #    0.0.0.0/0, ::/0 and IPv4-mapped forms. Trust is safe because the auth-service NetworkPolicy admits go-api's pods
-  #    and no other pod on the API port while a proxy flag is on.
+  #    and no other pod on the API port while a proxy flag is on. Width: an entry of /28 or longer (IPv6 /124) is always
+  #    allowed; /24../27 (IPv6 /64../123), such as the node pod range, needs trustedProxiesWideAccepted; anything wider is
+  #    refused even with it. Pod addresses change at a restart, so a range is the only stable value: the NetworkPolicy
+  #    above is then the whole boundary.
   trustedProxies: []
+  # -- Permission to list an entry wider than a /28 (IPv6 /124), up to the node pod range (/24, IPv6 /64). A wide entry (/24..
+  #    /27, IPv6 /64../123) needs it at ANY phase, the proxy off included, because the list is rendered into the env whatever the
+  #    phase; an entry wider than the pod range is refused at every phase. With only narrow entries, or no list, the ack
+  #    changes nothing.
+  trustedProxiesWideAccepted: false
   signingKey:
     secretName: ""
     secretKey: signing-key.pem

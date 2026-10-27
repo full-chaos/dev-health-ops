@@ -112,8 +112,9 @@ func mustRequest(t *testing.T, method, url, body string) *http.Request {
 	return request
 }
 
-// A client's X-Request-ID never reaches a log line or a response of the auth
-// API: the transport id is minted by the server too.
+// A caller's X-Request-ID never reaches a response of the auth API, and a
+// log line only as caller_request_id: the transport id is minted by the
+// server too.
 func TestTheClientRequestIDIsNeverLoggedOrEchoed(t *testing.T) {
 	logs := &safeBuffer{}
 	front := httptest.NewServer(sessionStack(t, logs))
@@ -140,7 +141,41 @@ func TestTheClientRequestIDIsNeverLoggedOrEchoed(t *testing.T) {
 			t.Errorf("%s: response body echoes the client request id", path)
 		}
 	}
-	if strings.Contains(logs.String(), caller) {
-		t.Fatalf("a log line carries the client request id: %s", logs.String())
+	// The peer (127.0.0.1) is a trusted proxy here, so its X-Request-ID is
+	// go-api's id: it appears only as caller_request_id of the access line.
+	callerField := `"caller_request_id":"` + caller + `"`
+	if got := strings.Count(logs.String(), callerField); got != 2 {
+		t.Errorf("caller_request_id appears %d times, want once per access line (2): %s", got, logs.String())
+	}
+	if strings.Contains(strings.ReplaceAll(logs.String(), callerField, ""), caller) {
+		t.Fatalf("a log line carries the client request id outside caller_request_id: %s", logs.String())
+	}
+
+	// A peer outside the trusted proxies: its X-Request-ID reaches no log
+	// field and no response; the access line says only "untrusted".
+	untrustedLogs := &safeBuffer{}
+	untrusted := sessionStack(t, untrustedLogs)
+	for _, path := range []string{"/v1/token/refresh", "/v1/nothing"} {
+		request := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{}`))
+		request.RemoteAddr = "198.51.100.7:1234"
+		request.Header.Set(httpapi.RequestIDHeader, caller)
+		response := httptest.NewRecorder()
+		untrusted.ServeHTTP(response, request)
+		for name, values := range response.Header() {
+			for _, value := range values {
+				if strings.Contains(value, caller) {
+					t.Errorf("untrusted %s: response header %s echoes the client request id", path, name)
+				}
+			}
+		}
+		if strings.Contains(response.Body.String(), caller) {
+			t.Errorf("untrusted %s: response body echoes the client request id", path)
+		}
+	}
+	if got := strings.Count(untrustedLogs.String(), `"caller_request_id":"untrusted"`); got != 2 {
+		t.Errorf("caller_request_id \"untrusted\" appears %d times, want once per access line (2): %s", got, untrustedLogs.String())
+	}
+	if strings.Contains(untrustedLogs.String(), caller) {
+		t.Fatalf("a log line carries an untrusted peer's request id: %s", untrustedLogs.String())
 	}
 }

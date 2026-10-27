@@ -77,6 +77,7 @@ Design docs (read the guardrails at minimum):
 | `github_webhook_signature` | active | external_source | |
 | `gitlab_webhook_signature` | active | external_source | |
 | `jira_webhook_signature` | active | external_source | |
+| `kubernetes_sa_token_exchange` | optional_feature | workload | |
 | `github_app_installation_token` | active | external_source | |
 | `pagerduty_oauth_credential` | active | external_source | |
 | `llm_api_keys` | active | infrastructure | |
@@ -135,6 +136,10 @@ reset). auth-service verify and reset accept only this class, never the go-api
 signed tokens (`email_verification_token`, `password_reset_token`), so a go-api
 link issued before the cutover lapses and the user asks for a new one. A
 password change does not delete other outstanding links; they lapse at expiry.
+A reset link redeems only while the user's `public.users.token_version` still
+equals the value it was issued against (`issued_token_version`); every password
+write of either service raises that counter, so a reset link issued before it
+reads as unknown afterwards.
 Purpose binding is proven by `TestVerifyAndResetRedeemOnlyTheirOwnPurpose` and
 `TestLinkCredentialOfAnotherPurposeIsNotRedeemedBothWays`. Its routes get
 profile rows when they are mounted.
@@ -160,9 +165,18 @@ for one internal service caller. Its wire contract is `workload-token.v1`:
 header {alg EdDSA, typ `workload+jwt`, kid}; claims iss, aud (exactly one
 service), sub, principal_type `workload`, jti, iat, nbf, exp; no `org_id`, no
 `sid`, no `scope`; lifetime at most 300 seconds. Its typ separates it from the
-user access token (`at+jwt`). Nothing mints or verifies it yet, so the class is
-`unconsumed`. The document parser `ParseWorkloadToken` is under
+user access token (`at+jwt`). The auth-service workload-token exchange mints it
+(`POST /internal/v1/token/exchange`, mounted only with `AUTH_WORKLOAD_EXCHANGE=true`). The document parser `ParseWorkloadToken` is under
 `FuzzParseWorkloadToken`.
+
+**`kubernetes_sa_token_exchange`.** The Kubernetes projected ServiceAccount
+token a workload presents to auth-service's workload-token exchange
+(`POST /internal/v1/token/exchange`, form field `subject_token`, RFC 8693). The
+Kubernetes TokenReview API is its only authenticator, for the fixed audience
+`dev-health-workload-exchange`: after a successful review its `exp` claim is
+read unverified, only to cap the issued token's lifetime, and it is never
+stored. The exchange answers a `workload_token`. The route is mounted only with
+`AUTH_WORKLOAD_EXCHANGE=true`, so the class is `optional_feature`.
 
 ## The CHAOS-3271 class: credentials that reach a validator that is not their own
 

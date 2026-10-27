@@ -370,6 +370,15 @@ authService:
     #    clear it in the next deploy change: a run that narrows nothing ignores
     #    it, a run that narrows a different set is refused.
     acknowledgeGrantNarrowing: ""
+    # -- CHAOS-11581: while auth-service does not own users (today phase 3 or
+    #    lower) every Job that passes the acknowledgement also passes
+    #    -defer-narrowing, so the 4->3 flip-back
+    #    release keeps the users-owned grants while its old owned auth-service
+    #    pods still serve. Set true in a LATER release, after no pod of the old
+    #    owned ReplicaSet is left (runbook), with the acknowledgement of the
+    #    deferred grants: that release narrows them. Refused while auth-service
+    #    owns users.
+    narrowAfterFlipBack: false
     hookEvents: [pre-install, pre-upgrade]
     # -- CHAOS-10581: the grants-only pass (`auth-migrate grants`) after the ops
     #    migrate Job, on migrations.hook.events. It fails the release when a
@@ -1602,6 +1611,12 @@ valkey:
     size: 1Gi
     storageClass: ""
   maxmemory: "256mb"
+  # -- --maxmemory-policy: one of noeviction, allkeys-lru, allkeys-lfu, allkeys-random, volatile-lru, volatile-lfu,
+  #    volatile-random, volatile-ttl (the render refuses any other value). The default keeps the start arguments as
+  #    they were, so a chart upgrade alone does not restart Valkey. allkeys-* can evict keys without a TTL (the ingest
+  #    streams); volatile-* evict only keys with a TTL (rate-limit counters, idempotency markers) and refuse writes
+  #    once none is left. A change restarts Valkey.
+  maxmemoryPolicy: allkeys-lru
   # -- An ACL file for the in-chart Valkey, read from a Secret the chart does not
   #    create. Off unless enabled=true: Valkey then starts as before, with only its
   #    open default user, and nothing refers to the Secret. When enabled, Valkey

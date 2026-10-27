@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -35,7 +36,7 @@ var attemptColumns = []string{
 	"http_status UInt16", "error_class LowCardinality(String)", "state LowCardinality(String)",
 	"request_id String", "input_tokens UInt32", "output_tokens UInt32", "cached_input_tokens UInt32",
 	"billed_cost_usd Float64", "rates_version LowCardinality(String)", "latency_ms UInt32",
-	"retry_wait_ms UInt32", "computed_at DateTime64(3)",
+	"retry_wait_ms UInt32", "computed_at DateTime64(3)", "usage_reason LowCardinality(String)", "model_from_request UInt8",
 }
 
 func tableColumns(t *testing.T, ctx context.Context, conn driver.Conn, table string) []string {
@@ -398,5 +399,75 @@ func TestTheSevenColumnAttemptReaderCountsSevenDistinctAttempts(t *testing.T) {
 	}
 	if fiveColumnGroups >= 7 {
 		t.Fatalf("the old five-column grouping saw %d groups: this test would not catch it", fiveColumnGroups)
+	}
+}
+
+// Migration 142 adds its two columns to a table that already holds rows: the old
+// row reads the defaults, and a row the real writer appends reads back what it
+// carried (UInt8 for the flag).
+func TestAttemptColumnsAddedToATableWithRowsAreWrittenAndReadBack(t *testing.T) {
+	writer, conn, ctx := newTestWriter(t)
+	down, err := os.ReadFile("../../../chmigrate/rollback/142_llm_attempts_usage_reason.down.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, statement := range chmigrate.SplitStatements(string(down)) {
+		if err := conn.Exec(ctx, statement); err != nil {
+			t.Fatalf("rollback of 142: %s: %v", statement, err)
+		}
+	}
+	for _, column := range tableColumns(t, ctx, conn, "llm_categorization_attempts") {
+		if strings.HasPrefix(column, "usage_reason ") || strings.HasPrefix(column, "model_from_request ") {
+			t.Fatalf("the rollback left %s", column)
+		}
+	}
+	if err := conn.Exec(ctx, `INSERT INTO llm_categorization_attempts (
+		org_id, run_id, work_unit_id, role, config, rubric_sha256, provider, api_mode, model_requested, model_returned,
+		attempt, kind, http_status, error_class, state, request_id, input_tokens, output_tokens, cached_input_tokens,
+		billed_cost_usd, rates_version, latency_ms, retry_wait_ms, computed_at
+	) VALUES (?, 'run-old', 'wu-old', 'served', 'cfg', 'r', 'byo-clef', 'systemone', 'clef', 'clef',
+		1, 'first', 200, '', 'ok', '', 10, 2, 0, 0.5, 'v', 7, 0, now64(3))`, testOrgID); err != nil {
+		t.Fatalf("a row of the old shape: %v", err)
+	}
+
+	chain, err := chmigrate.LoadChain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	applied := false
+	for _, file := range chain {
+		if file.Version != "142_llm_attempts_usage_reason.sql" {
+			continue
+		}
+		for _, statement := range chmigrate.SplitStatements(file.SQL) {
+			if err := conn.Exec(ctx, statement); err != nil {
+				t.Fatalf("142 on a table with rows: %s: %v", statement, err)
+			}
+		}
+		applied = true
+	}
+	if !applied {
+		t.Fatal("the chain does not hold migration 142")
+	}
+
+	fresh := attemptRow("wu-new")
+	fresh.RunID, fresh.UsageReason, fresh.ModelFromRequest = "run-new", "unavailable", true
+	if n, err := writer.WriteAttempts(ctx, testOrgID, []AttemptRecord{fresh}); err != nil || n != 1 {
+		t.Fatalf("WriteAttempts: %d %v", n, err)
+	}
+
+	read := func(unit string) (reason string, flag uint8, typ string) {
+		t.Helper()
+		if err := conn.QueryRow(ctx, `SELECT usage_reason, model_from_request, toTypeName(model_from_request)
+			FROM llm_categorization_attempts WHERE org_id = ? AND work_unit_id = ?`, testOrgID, unit).Scan(&reason, &flag, &typ); err != nil {
+			t.Fatalf("read %s: %v", unit, err)
+		}
+		return reason, flag, typ
+	}
+	if reason, flag, typ := read("wu-old"); reason != "" || flag != 0 || typ != "UInt8" {
+		t.Fatalf("old row reads %q %d %s, want the defaults", reason, flag, typ)
+	}
+	if reason, flag, _ := read("wu-new"); reason != "unavailable" || flag != 1 {
+		t.Fatalf("new row reads %q %d, want unavailable 1", reason, flag)
 	}
 }

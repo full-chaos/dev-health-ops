@@ -11,10 +11,10 @@ import (
 	"math"
 	"strings"
 	"time"
-	"unicode"
-	"unicode/utf8"
 
 	gooidc "github.com/coreos/go-oidc/v3/oidc"
+
+	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 )
 
 const (
@@ -324,22 +324,9 @@ func numericDate(value any) (time.Time, bool) {
 	return time.Unix(int64(sec), int64(frac*1e9)).UTC(), true
 }
 
-// validSubject is the external identity key rule for a subject: non-empty,
-// bounded, valid UTF-8, no control character, no white space at either end.
-// A subject is compared exactly; it is never normalized.
-func validSubject(v string) bool {
-	if v == "" || len(v) > maxSubjectBytes || !utf8.ValidString(v) {
-		return false
-	}
-	for _, r := range v {
-		if unicode.IsControl(r) || r == utf8.RuneError {
-			return false
-		}
-	}
-	first, _ := utf8.DecodeRuneInString(v)
-	last, _ := utf8.DecodeLastRuneInString(v)
-	return !unicode.IsSpace(first) && !unicode.IsSpace(last)
-}
+// validSubject is the external identity key rule for a subject (identity.ValidSubject). A subject is compared
+// exactly; it is never normalized.
+func validSubject(v string) bool { return identity.ValidSubject(v) }
 
 // verifyIDToken checks the header, the signature against the issuer's JWKS,
 // and then every claim.

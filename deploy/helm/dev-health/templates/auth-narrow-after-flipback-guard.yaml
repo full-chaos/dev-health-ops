@@ -1,0 +1,5 @@
+{{- /*
+Runs the authService.migrate.narrowAfterFlipBack refusals on every render, so a values file that sets the flag fails
+even when no auth-migrate Job renders (authService.migrate.enabled=false, the grants hook off). Renders nothing.
+*/ -}}
+{{- include "dev-health.authNarrowAfterFlipBackGuard" . }}

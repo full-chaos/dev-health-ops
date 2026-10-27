@@ -38,6 +38,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -109,10 +110,12 @@ func (idp *samlIdP) certConfigValue() string {
 
 type samlResponseOpts struct {
 	spEntityID, acsURL, email, fullName, nameID string
-	notOnOrAfter                                time.Time
-	notBefore                                   time.Time
-	skipSign                                    bool
-	tamperAfterSign                             bool
+	// nameIDFormat and spNameQualifier, when set, replace the NameID attributes the assertion maker wrote.
+	nameIDFormat, spNameQualifier string
+	notOnOrAfter                  time.Time
+	notBefore                     time.Time
+	skipSign                      bool
+	tamperAfterSign               bool
 	// noSubjectConfirmation strips every SubjectConfirmation element
 	// BEFORE signing, so the returned assertion is genuinely, validly
 	// signed with zero of them -- proving r1's P2 finding (Go accepted
@@ -234,6 +237,12 @@ func (idp *samlIdP) signedSAMLResponse(t *testing.T, opts samlResponseOpts) stri
 	}
 	if !opts.confirmationOnlyNotOnOrAfter.IsZero() {
 		req.Assertion.Subject.SubjectConfirmations[0].SubjectConfirmationData.NotOnOrAfter = opts.confirmationOnlyNotOnOrAfter
+	}
+	if opts.nameIDFormat != "" {
+		req.Assertion.Subject.NameID.Format = opts.nameIDFormat
+	}
+	if opts.spNameQualifier != "" {
+		req.Assertion.Subject.NameID.SPNameQualifier = opts.spNameQualifier
 	}
 	if opts.noSubjectConfirmation {
 		req.Assertion.Subject.SubjectConfirmations = nil
@@ -398,6 +407,13 @@ func TestSSOSurrogateRefusalTableStackRows(t *testing.T) {
 			t.Fatalf("%s: unknown setup %q", id, setup)
 		}
 		method, path, _ := strings.Cut(request, " ")
+		if encoded, isHex := strings.CutPrefix(body, "hex:"); isHex {
+			decoded, err := hex.DecodeString(encoded)
+			if err != nil {
+				t.Fatalf("%s: %v", id, err)
+			}
+			body = string(decoded)
+		}
 		req, err := http.NewRequest(method, st.server.URL+strings.Replace(path, "{provider}", provider.String(), 1), strings.NewReader(body))
 		if err != nil {
 			t.Fatal(err)
@@ -426,8 +442,8 @@ func TestSSOSurrogateRefusalTableStackRows(t *testing.T) {
 		}
 		driven++
 	}
-	if driven != 3 {
-		t.Fatalf("drove %d saml and oauth rows, want 3", driven)
+	if driven != 5 {
+		t.Fatalf("drove %d saml and oauth rows, want 5", driven)
 	}
 }
 

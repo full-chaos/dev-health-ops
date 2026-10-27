@@ -37,7 +37,8 @@ func TestEdgeVerifier_ChecksTheSessionOfASidToken(t *testing.T) {
 		users *fakeSessionUsers
 		want  string
 	}{
-		{name: "live", users: &fakeSessionUsers{fakeUsers: activeUserStore(), row: policy.SessionRow{PrincipalID: subject}, found: true}, want: "ok"},
+		{name: "live", users: &fakeSessionUsers{fakeUsers: activeUserStore(), row: policy.SessionRow{PrincipalID: subject, LegacyTokenVersion: pinZero()}, found: true}, want: "ok"},
+		{name: "no pin", users: &fakeSessionUsers{fakeUsers: activeUserStore(), row: policy.SessionRow{PrincipalID: subject}, found: true}, want: "refused"},
 		{name: "revoked", users: &fakeSessionUsers{fakeUsers: activeUserStore(), row: policy.SessionRow{PrincipalID: subject, Revoked: true}, found: true}, want: "refused"},
 		{name: "missing", users: &fakeSessionUsers{fakeUsers: activeUserStore()}, want: "refused"},
 		{name: "lookup unavailable", users: &fakeSessionUsers{fakeUsers: activeUserStore(), err: errors.Join(policy.ErrUnavailable, errors.New("dial"))}, want: "unavailable"},
@@ -66,3 +67,5 @@ func TestEdgeVerifier_ChecksTheSessionOfASidToken(t *testing.T) {
 		})
 	}
 }
+
+func pinZero() *int64 { v := int64(0); return &v }

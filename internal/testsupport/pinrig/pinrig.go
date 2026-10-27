@@ -107,12 +107,20 @@ func (r *PinRig) SignIn(t *testing.T, ctx context.Context, user uuid.UUID) uuid.
 // the pin existed has none.
 func (r *PinRig) ClearPin(t *testing.T, ctx context.Context, sid uuid.UUID) {
 	t.Helper()
-	if _, err := r.admin.Exec(ctx, `ALTER TABLE auth.sessions DISABLE TRIGGER sessions_legacy_token_version_write_once`); err != nil {
-		t.Fatal(err)
+	for _, statement := range []string{
+		`ALTER TABLE auth.sessions DROP CONSTRAINT sessions_pin_present`,
+		`ALTER TABLE auth.sessions DISABLE TRIGGER sessions_legacy_token_version_write_once`,
+	} {
+		if _, err := r.admin.Exec(ctx, statement); err != nil {
+			t.Fatal(err)
+		}
 	}
 	_, err := r.admin.Exec(ctx, `UPDATE auth.sessions SET legacy_token_version = NULL WHERE id = $1`, sid)
-	if _, e2 := r.admin.Exec(ctx, `ALTER TABLE auth.sessions ENABLE TRIGGER sessions_legacy_token_version_write_once`); e2 != nil || err != nil {
-		t.Fatalf("clear pin: %v %v", err, e2)
+	_, e2 := r.admin.Exec(ctx, `ALTER TABLE auth.sessions ENABLE TRIGGER sessions_legacy_token_version_write_once`)
+	_, e3 := r.admin.Exec(ctx, `ALTER TABLE auth.sessions ADD CONSTRAINT sessions_pin_present
+		CHECK (legacy_token_version IS NOT NULL OR revoked_at IS NOT NULL) NOT VALID`)
+	if err != nil || e2 != nil || e3 != nil {
+		t.Fatalf("clear pin: %v %v %v", err, e2, e3)
 	}
 }
 

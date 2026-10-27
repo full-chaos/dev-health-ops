@@ -54,6 +54,7 @@ internal/auth/sessionid
 internal/auth/signedtoken
 internal/chmigrate
 internal/cli
+internal/edgetokenmint
 internal/egressguard
 internal/entitlements
 internal/httpguard
@@ -80,6 +81,7 @@ internal/platform/config
 internal/platform/credshape
 internal/platform/dbphase
 internal/platform/dbspan
+internal/platform/dialclass
 internal/platform/dsnclass
 internal/platform/errortext
 internal/platform/errortext/hardened
@@ -129,6 +131,8 @@ internal/teamprovider
 internal/testsupport/authrows
 internal/testsupport/containers
 internal/testsupport/moduleroot
+internal/testsupport/pgschema
+internal/testsupport/proofprincipals
 internal/testsupport/providerstub
 internal/testsupport/pydanticecho
 internal/testsupport/sessionscenario

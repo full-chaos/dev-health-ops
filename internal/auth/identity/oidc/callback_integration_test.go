@@ -175,6 +175,7 @@ func TestExistingSSOAccountSignsInBySubject(t *testing.T) {
 	h := newHarness(t, harnessOpts{signup: false})
 	email := uniqueEmail("legacy")
 	user := h.seedPublicUser(t, email, "oidc", "sub-legacy")
+	h.bindSSO(t, user, h.providerID)
 	h.seedMembership(t, user, h.orgID, "admin")
 	before := h.snapshot(t)
 	s := h.start(t)
@@ -210,6 +211,7 @@ func TestExistingSSOAccountNeedsProviderOrgMembership(t *testing.T) {
 	t.Run("member of another organization only", func(t *testing.T) {
 		h := newHarness(t, harnessOpts{signup: false})
 		user := h.seedPublicUser(t, uniqueEmail("elsewhere"), "oidc", "sub-elsewhere")
+		h.bindSSO(t, user, h.providerID)
 		h.seedMembership(t, user, h.seedOrg(t), "owner")
 		before := h.snapshot(t)
 		s := h.start(t)
@@ -450,6 +452,7 @@ func TestDisabledAccountIsRefused(t *testing.T) {
 	h := newHarness(t, harnessOpts{signup: false})
 	email := uniqueEmail("disabled")
 	user := h.seedPublicUser(t, email, "oidc", "sub-disabled")
+	h.bindSSO(t, user, h.providerID)
 	h.seedMembership(t, user, h.orgID, "member")
 	if _, err := h.env.admin.Exec(context.Background(), `UPDATE public.users SET is_active = false WHERE id = $1`, user); err != nil {
 		t.Fatal(err)

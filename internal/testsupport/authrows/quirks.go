@@ -27,6 +27,19 @@ const (
 	OwnedOnly Ownership = "owned"
 )
 
+// TableLinkMails is the comparison of the link mails the planes send: one line per mail, its subject and the format of
+// its link token. It has no SQL projection; the test builds both sides.
+const TableLinkMails = "link_mails"
+
+// The formats a link token comes in: go-api's (and Python's) signed token, auth-service's opaque one.
+const (
+	LinkTokenGoAPI  = "go-api"
+	LinkTokenOpaque = "opaque"
+)
+
+// LinkMailRow is the line of a link mail with subject and a token of format.
+func LinkMailRow(subject, format string) string { return subject + " link token " + format }
+
 // rowSeparator joins the rows of venueoracle.TableRows.
 const rowSeparator = " | "
 
@@ -57,6 +70,12 @@ type Quirk struct {
 	Owned Ownership
 }
 
+// legacyVerificationQuirk is the one quirk allowed on a table that has no projection of its own: the owned leg's single
+// stale row of public.email_verification_tokens (CHAOS-11506). Nothing else widens the tables a quirk may name.
+func legacyVerificationQuirk(q Quirk) bool {
+	return q.Table == TableEmailVerificationTokens && q.Owned == OwnedOnly && q.Max == 1 && q.Exact
+}
+
 // CheckTable is every way table is malformed, in the order of the table.
 func CheckTable(table []Quirk) []string {
 	var problems []string
@@ -79,7 +98,7 @@ func CheckTable(table []Quirk) []string {
 		if q.Kind == Gap && strings.TrimSpace(q.Tracked) == "" {
 			problems = append(problems, q.ID+": a gap names the ticket that closes it")
 		}
-		if !projected[q.Table] {
+		if !projected[q.Table] && q.Table != TableLinkMails && !legacyVerificationQuirk(q) {
 			problems = append(problems, fmt.Sprintf("%s: table %q has no projection", q.ID, q.Table))
 		}
 		if len(q.Needs) == 0 {

@@ -13,6 +13,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/proofprincipals"
 )
 
 // the public tables are the migrated schema (pgschema); the auth tables hold only the columns the projections name
@@ -138,7 +139,7 @@ INSERT INTO auth.security_audit_events VALUES
 
 func TestAuthRowsLastLoginReadsAuthUsersIntegration(t *testing.T) {
 	conn := fixture(t, `INSERT INTO auth.users VALUES ('00000000-0000-4000-8000-0000000000b1', now());`)
-	got := run(t, conn, TableUsers, `SELECT email, last_login_at IS NOT NULL FROM users WHERE auth_provider IS DISTINCT FROM 'service' ORDER BY email`)
+	got := run(t, conn, TableUsers, `SELECT email, last_login_at IS NOT NULL FROM users WHERE `+proofprincipals.ComparedSQL("users")+` ORDER BY email`)
 	want := []string{"a@example.com|true", "b@example.com|false"}
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("users rows %v, want %v", got, want)
@@ -221,5 +222,16 @@ func TestAuthRowsCredentialsAuditProjectionFailsNamingAnUnmappedEventIntegration
 	}
 	if err == nil || !strings.Contains(err.Error(), "auth.user.unheard_of") {
 		t.Fatalf("an unmapped credentials event must fail the query naming it, got %v", err)
+	}
+}
+
+// The corpus leaves the proof principals out of the users comparison by identity: a row of provider service with the same
+// shape and another id is still read.
+func TestAuthRowsComparesASameShapedNonProofServiceRowIntegration(t *testing.T) {
+	conn := fixture(t, `INSERT INTO users (id, email, auth_provider) VALUES ('00000000-0000-4000-8000-00000000e0e3', 'lookalike@example.com', 'service')`)
+	got := run(t, conn, TableUsers, `SELECT email, last_login_at IS NOT NULL FROM users WHERE `+proofprincipals.ComparedSQL("users")+` ORDER BY email`)
+	want := []string{"a@example.com|false", "b@example.com|false", "lookalike@example.com|false"}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("users rows %v, want %v (the proof principals out, the look-alike in)", got, want)
 	}
 }

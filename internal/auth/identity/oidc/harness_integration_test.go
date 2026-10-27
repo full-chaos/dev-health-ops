@@ -430,13 +430,23 @@ VALUES ($1, $2, $3, $4)`, uuid.New(), userID, orgID, role); err != nil {
 	}
 }
 
-// seedOIDCMember seeds a go-api account of this subject as a member of the
-// provider's organization, so its sign-in is a membership hit.
+// seedOIDCMember seeds a go-api account of this subject, bound to the provider
+// row, as a member of the provider's organization, so its sign-in is a
+// membership hit.
 func (h *harness) seedOIDCMember(t *testing.T, subject, email string) uuid.UUID {
 	t.Helper()
 	user := h.seedPublicUser(t, email, "oidc", subject)
+	h.bindSSO(t, user, h.providerID)
 	h.seedMembership(t, user, h.orgID, "member")
 	return user
+}
+
+// bindSSO binds a go-api OIDC or SAML account to its provider row, as go-api writes it since pgmigrate revision 0155.
+func (h *harness) bindSSO(t *testing.T, user, provider uuid.UUID) {
+	t.Helper()
+	if _, err := h.env.admin.Exec(context.Background(), `UPDATE public.users SET sso_provider_id = $2 WHERE id = $1`, user, provider); err != nil {
+		t.Fatalf("bind sso provider: %v", err)
+	}
 }
 
 // link creates a go-api account, projects it and links key to it, through

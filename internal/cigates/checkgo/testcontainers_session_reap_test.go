@@ -17,8 +17,9 @@ func TestIntegrationGoTestRunsThroughTheSessionReapHelper(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := string(text)
-	if got := strings.Count(s, `run_integration_go_test "${module_dir}" "${run_pkgs[@]}"`); got != 2 {
-		t.Errorf("integration go test call sites through run_integration_go_test = %d; want 2", got)
+	// One call site: each go test group of run_integration_packages, which the shard and integration verbs both call.
+	if got := strings.Count(s, `run_integration_go_test "${module_dir}" "${run_pkgs[@]}"`); got != 1 {
+		t.Errorf("integration go test call sites through run_integration_go_test = %d; want 1", got)
 	}
 	start := strings.Index(s, "run_integration_go_test() {")
 	if start < 0 {

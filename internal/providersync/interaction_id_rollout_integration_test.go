@@ -372,11 +372,11 @@ func rolloutProof(t *testing.T, oldShape, interactionsLanded bool) {
 INSERT INTO public.sync_run_units (
     id, org_id, sync_run_id, integration_id, source_id, provider,
     dataset_key, cost_class, mode, since_at, before_at, status,
-    processor_flags, updated_at
+    processor_flags, updated_at, created_at, attempts
 ) VALUES (
     $1, 'org-acme', $2, $3, $4, 'gitlab', 'work-items', 'medium',
     'incremental', '2026-07-01T00:00:00Z', '2026-07-31T23:59:59Z',
-    'dispatching', $5::jsonb, NOW()
+    'dispatching', $5::jsonb, NOW(), NOW(), 0
 )`, secondUnitID, firstRunID, firstIntegrationID, firstSourceID, string(flagsJSON)); err != nil {
 		t.Fatal(err)
 	}

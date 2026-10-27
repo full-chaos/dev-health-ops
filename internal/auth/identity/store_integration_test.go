@@ -707,6 +707,14 @@ func (e *env) seedMembership(t *testing.T, ctx context.Context, user, org uuid.U
 	}
 }
 
+// bindSSO binds an OIDC or SAML account to its provider row, as go-api writes it since pgmigrate revision 0155.
+func (e *env) bindSSO(t *testing.T, ctx context.Context, user uuid.UUID, provider Provider) {
+	t.Helper()
+	if _, err := e.admin.Exec(ctx, `UPDATE public.users SET sso_provider_id = $2::uuid WHERE id = $1`, user, string(provider)); err != nil {
+		t.Fatalf("bind sso provider: %v", err)
+	}
+}
+
 func socialLegacy(p Provider) *LegacyMatch { return &LegacyMatch{AuthProvider: string(p)} }
 
 func TestProjectKeepsARefusedAddressAsItsPythonLowerKey(t *testing.T) {
@@ -942,10 +950,12 @@ func TestIdentityBySubjectSSOLegacyNeedsTheProviderOrgAndMembership(t *testing.T
 
 	member := "sso-" + uuid.NewString()
 	user := e.seedLegacy(t, ctx, uniqueEmail("sso"), "oidc", member, false)
+	e.bindSSO(t, ctx, user, provider)
 	e.seedMembership(t, ctx, user, org)
 
 	outsider := "out-" + uuid.NewString()
 	stranger := e.seedLegacy(t, ctx, uniqueEmail("out"), "oidc", outsider, false)
+	e.bindSSO(t, ctx, stranger, provider)
 	e.seedMembership(t, ctx, stranger, otherOrg)
 
 	for name, legacy := range map[string]*LegacyMatch{
@@ -1215,6 +1225,7 @@ func TestIdentityBySubjectSAMLLegacySubjectIsMatchedRawAndStoredComposite(t *tes
 	raw := "nameid-" + uuid.NewString()
 	composite := "saml1|urn:oasis:names:tc:SAML:2.0:nameid-format:persistent|sp|" + raw
 	user := e.seedLegacy(t, ctx, uniqueEmail("saml"), "saml", raw, false)
+	e.bindSSO(t, ctx, user, provider)
 	e.seedMembership(t, ctx, user, org)
 
 	if _, found, err := e.store.IdentityBySubject(ctx, issuer, provider, composite, &LegacyMatch{AuthProvider: "saml", MembershipOrg: &org}); err != nil || found {
@@ -1495,8 +1506,8 @@ func TestASessionCanNameAProjectedOrganization(t *testing.T) {
 	e.seedMembership(t, ctx, user, org)
 	e.project(t, ctx, user)
 	insert := func() error {
-		_, err := e.runtime.Exec(ctx, `INSERT INTO auth.sessions (principal_id, organization_id, token_hash, expires_at)
-VALUES ($1, $2, $3, now() + interval '1 hour')`, user, org, []byte(uuid.NewString()))
+		_, err := e.runtime.Exec(ctx, `INSERT INTO auth.sessions (principal_id, organization_id, token_hash, expires_at, legacy_token_version)
+VALUES ($1, $2, $3, now() + interval '1 hour', 0)`, user, org, []byte(uuid.NewString()))
 		return err
 	}
 	if err := insert(); err == nil {
@@ -1736,5 +1747,38 @@ func TestIdentityBySubjectNamesThePrincipalOfAProviderAlreadyLinkedRefusal(t *te
 	p, found, err := e.store.IdentityBySubject(ctx, issuer, ProviderGitLab, second, socialLegacy(ProviderGitLab))
 	if !errors.Is(err, ErrProviderAlreadyLinked) || found || p.ID != user {
 		t.Fatalf("second subject = %+v, %v, %v; want ErrProviderAlreadyLinked naming %v", p, found, err, user)
+	}
+}
+
+func TestByEmailReturnsTheStoredFullNameInBothReadModes(t *testing.T) {
+	e := getEnv(t)
+	ctx := context.Background()
+
+	legacyEmail := uniqueEmail("fullname-legacy")
+	legacyID := e.seedUser(t, ctx, legacyEmail, true, true)
+	if _, err := e.admin.Exec(ctx, `UPDATE public.users SET full_name = $2 WHERE id = $1`, legacyID, "Zoë Müller 山田"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := e.store.ByEmail(ctx, legacyEmail)
+	if err != nil || got == nil || got.FullName == nil || *got.FullName != "Zoë Müller 山田" {
+		t.Fatalf("legacy ByEmail = %+v, %v; want full name from public.users.full_name", got, err)
+	}
+	unnamed := uniqueEmail("fullname-null")
+	e.seedUser(t, ctx, unnamed, true, true)
+	if got, err := e.store.ByEmail(ctx, unnamed); err != nil || got == nil || got.FullName != nil {
+		t.Fatalf("legacy ByEmail of a NULL full_name = %+v, %v; want a nil name", got, err)
+	}
+
+	ownedEmail := "fullname-owned-" + uuid.NewString()[:8] + "@example.com"
+	hash := testBcrypt
+	request := uuid.NewString()
+	id, err := e.owned.ProvisionLocal(ctx, LocalProvisionRequest{Email: ownedEmail, FullName: strPtr("Zoë Müller 山田"), PasswordHash: &hash, Actor: SelfSignUp(&request)})
+	if err != nil {
+		t.Fatalf("ProvisionLocal: %v", err)
+	}
+	key, _ := NormalizeEmail(ownedEmail)
+	got, err = e.owned.ByEmail(ctx, key)
+	if err != nil || got == nil || got.ID != id || got.FullName == nil || *got.FullName != "Zoë Müller 山田" {
+		t.Fatalf("owned ByEmail = %+v, %v; want full name from auth.principals.display_name", got, err)
 	}
 }

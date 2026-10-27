@@ -6,13 +6,18 @@
 # Overrides (tests): PULL_TRIES, PULL_TIMEOUT_SECS, PULL_BACKOFF_SECS (space list, one per gap).
 
 pull_pinned_base_image() {
-  local dockerfile="$1" ref repo digest src tag_part n=0 try rc out seen start rest
+  local dockerfile="$1" ref repo digest src tag tag_part n=0 try rc out seen start rest listed
   local tries="${PULL_TRIES:-3}" tmo="${PULL_TIMEOUT_SECS:-120}"
   local -a backoff sources=() failed=()
-  read -r -a backoff <<< "${PULL_BACKOFF_SECS:-5 15}"
+  unset PINNED_BASE_TAG
+  read -r -a backoff <<< "${PULL_BACKOFF_SECS:-5 15}" || backoff=(0)
+  [ "${#backoff[@]}" -gt 0 ] || backoff=(0)
 
-  ref="$(sed -n 's/^ARG GO_BUILD_IMAGE="\(.*\)"$/\1/p' "${dockerfile}")"
+  ref="$(sed -n 's/^ARG GO_BUILD_IMAGE="\(.*\)"$/\1/p' "${dockerfile}")" \
+    || { printf 'FAIL: cannot read %s\n' "${dockerfile}" >&2; return 1; }
   [ -n "${ref}" ] || { printf 'FAIL: ARG GO_BUILD_IMAGE not found in %s\n' "${dockerfile}" >&2; return 1; }
+  case "${ref}" in mirror.gcr.io/*) ;; *)
+    printf 'FAIL: GO_BUILD_IMAGE in %s is not a mirror.gcr.io ref: %s\n' "${dockerfile}" "${ref}" >&2; return 1 ;; esac
   digest="${ref##*@}"
   rest="${ref%@*}"
   tag_part="${rest%%:*}"
@@ -30,15 +35,29 @@ pull_pinned_base_image() {
       out="$(timeout "${tmo}" docker pull "${src}/${repo}@${digest}" 2>&1)" || rc=$?
       seen="-"
       if [ "${rc}" -eq 0 ]; then
-        if docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "${src}/${repo}@${digest}" 2>/dev/null \
-          | sed 's/.*@//' | grep -qxF "${digest}"; then seen="${digest}"; else seen="mismatch"; fi
-        [ "${seen}" = "${digest}" ] || { rc=65; out="digest mismatch: wanted ${digest}"; }
+        rc=0
+        listed="$(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "${src}/${repo}@${digest}" 2>&1)" || rc=$?
+        if [ "${rc}" -ne 0 ]; then
+          seen="inspect-failed"
+        elif printf '%s\n' "${listed}" | sed 's/.*@//' | grep -qxF "${digest}"; then
+          seen="${digest}"
+        else
+          seen="mismatch"
+        fi
+        [ "${seen}" = "${digest}" ] || { [ "${rc}" -ne 0 ] || rc=65; out="digest check failed: wanted ${digest}, ${seen}"; }
       fi
       printf 'base-image pull: source=%s try=%d/%d rc=%d elapsed=%ds digest=%s\n' \
         "${src}" "${try}" "${tries}" "${rc}" "$((SECONDS - start))" "${seen}"
       if [ "${rc}" -eq 0 ]; then
-        PINNED_BASE_TAG="dho-go-build-base:${GITHUB_RUN_ID:-local}-$$"
-        docker tag "${src}/${repo}@${digest}" "${PINNED_BASE_TAG}"
+        tag="dho-go-build-base:${GITHUB_RUN_ID:-local}-$$"
+        rc=0
+        docker tag "${src}/${repo}@${digest}" "${tag}" || rc=$?
+        if [ "${rc}" -ne 0 ]; then
+          unset PINNED_BASE_TAG
+          printf 'FAIL: docker tag of %s/%s@%s to %s failed rc=%d\n' "${src}" "${repo}" "${digest}" "${tag}" "${rc}" >&2
+          return 1
+        fi
+        PINNED_BASE_TAG="${tag}"
         export PINNED_BASE_TAG
         return 0
       fi

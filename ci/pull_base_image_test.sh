@@ -38,10 +38,10 @@ case "$1" in
     echo "pulled ${ref}"; exit 0 ;;
   image)
     case "$2" in
-      inspect) for d in ${FAKE_SEEN_DIGEST//,/ }; do echo "x@${d}"; done; exit 0 ;;
+      inspect) [ "${FAKE_INSPECT_RC:-0}" = 0 ] || { echo "inspect failed" >&2; exit "${FAKE_INSPECT_RC}"; }; for d in ${FAKE_SEEN_DIGEST//,/ }; do echo "x@${d}"; done; exit 0 ;;
       rm) exit 0 ;;
     esac ;;
-  tag) exit 0 ;;
+  tag) exit "${FAKE_TAG_RC:-0}" ;;
 esac
 echo "stub: unexpected invocation: $*" >&2
 exit 99
@@ -62,7 +62,7 @@ run() {
   set +e
   # shellcheck disable=SC2016
   OUT="$(env "$@" FAKE_DIR="${FAKE_DIR}" FAKE_LOG="${FAKE_LOG}" PATH="${T}/bin:${PATH}" \
-    PULL_BACKOFF_SECS="0 0" bash -c 'source "$1"; pull_pinned_base_image "$2"; r=$?; echo "TAG=${PINNED_BASE_TAG:-}"; exit "$r"' _ "${LIB}" "${T}/Dockerfile" 2>&1)"
+    PULL_BACKOFF_SECS="0 0" bash -c 'source "$1"; pull_pinned_base_image "$2"; r=$?; echo "TAG=${PINNED_BASE_TAG:-}"; exit "$r"' _ "${LIB}" "${DF:-${T}/Dockerfile}" 2>&1)"
   RC=$?
   set -e
   PULLS_MIRROR="$(grep -c '^docker pull mirror.gcr.io/' "${FAKE_LOG}" || true)"
@@ -88,6 +88,22 @@ run t4b "FAKE_SEEN_DIGEST=${OTHER},${DIGEST}"
 if [ "${RC}" = 0 ] && [ "${PULLS_MIRROR}" = 1 ]; then ok "t4b 2 RepoDigests, 2nd matches: pass"; else bad "t4b (rc=${RC} m=${PULLS_MIRROR})"; fi
 run t4c "FAKE_SEEN_DIGEST=${OTHER},sha256:$(printf 'd%.0s' {1..64})"
 if [ "${RC}" != 0 ] && [ "${PULLS_MIRROR}" = 3 ] && [ "${PULLS_DOCKERIO}" = 3 ] && printf '%s\n' "${OUT}" | grep -q 'digest=mismatch'; then ok "t4c 2 RepoDigests, none match: failed try, digest=mismatch"; else bad "t4c (rc=${RC})"; fi
+
+run t4d FAKE_TAG_RC=42 "${SEEN}"
+if [ "${RC}" = 1 ] && printf '%s\n' "${OUT}" | grep -q "^FAIL: docker tag of mirror.gcr.io/library/golang@${DIGEST} to dho-go-build-base:local-[0-9]* failed rc=42" && printf '%s\n' "${OUT}" | grep -qx 'TAG='; then ok "t4d docker tag rc 42: helper rc 1, named line, PINNED_BASE_TAG unset"; else bad "t4d (rc=${RC}): ${OUT}"; fi
+
+run t4e FAKE_INSPECT_RC=3 "${SEEN}"
+if [ "${RC}" != 0 ] && [ "${PULLS_MIRROR}" = 3 ] && [ "${PULLS_DOCKERIO}" = 3 ] && printf '%s\n' "${OUT}" | grep -q 'digest=inspect-failed' && printf '%s\n' "${OUT}" | grep -q 'rc=3 '; then ok "t4e docker image inspect rc 3: failed try (digest=inspect-failed), no tag"; else bad "t4e (rc=${RC}): ${OUT}"; fi
+
+DF="${T}/missing-Dockerfile" run t4f "${SEEN}"
+if [ "${RC}" = 1 ] && printf '%s\n' "${OUT}" | grep -q '^FAIL: cannot read .*missing-Dockerfile' && [ "${PULLS_MIRROR}" = 0 ]; then ok "t4f unreadable Dockerfile: named failure, no pull"; else bad "t4f (rc=${RC}): ${OUT}"; fi
+
+printf 'ARG GO_BUILD_IMAGE="gcr.io/library/golang:1@%s"\n' "${DIGEST}" > "${T}/Dockerfile.nomirror"
+DF="${T}/Dockerfile.nomirror" run t4g "${SEEN}"
+if [ "${RC}" = 1 ] && printf '%s\n' "${OUT}" | grep -q '^FAIL: GO_BUILD_IMAGE in .* is not a mirror.gcr.io ref' && [ "${PULLS_MIRROR}" = 0 ]; then ok "t4g non-mirror ref: named failure, no pull"; else bad "t4g (rc=${RC}): ${OUT}"; fi
+
+run t4h PINNED_BASE_TAG=stale-tag FAKE_FAIL_MIRROR=9 FAKE_FAIL_DOCKERIO=9 "${SEEN}"
+if [ "${RC}" = 1 ] && printf '%s\n' "${OUT}" | grep -qx 'TAG='; then ok "t4h failure clears a stale PINNED_BASE_TAG"; else bad "t4h (rc=${RC}): ${OUT}"; fi
 
 run t5 FAKE_FAIL_MIRROR=9 FAKE_RATELIMIT_DOCKERIO=1 "${SEEN}"
 if { [ "${RC}" != 0 ] && printf '%s\n' "${OUT}" | grep -q 'rate-limited'; }; then ok "t5 docker.io rate-limit refusal is a named failed try"; else bad "t5 (rc=${RC})"; fi

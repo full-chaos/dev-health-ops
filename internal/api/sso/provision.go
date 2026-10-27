@@ -97,26 +97,28 @@ FROM users WHERE id = $1::uuid`, userID).Scan(&id, &existingEmail, &username, &e
 		return nil, nil, err
 	}
 
-	membership, err := h.membershipOrJoin(ctx, row, id)
-	if err != nil {
-		return nil, nil, err
-	}
-
 	newFullName := existingFullName
 	if name != "" && stringOrEmpty(existingFullName) == "" {
 		newFullName = &name
 	}
 	// While auth-service owns users the sign-in goes on and writes no public.users row. The two SAML NameID
 	// columns ride in this one UPDATE: its own row lock covers them, and no other column is touched. An OIDC
-	// sign-in passes NULL and keeps both as they are.
+	// sign-in passes NULL and keeps both as they are. The UPDATE runs inside membershipOrJoin, in the join's
+	// transaction when the account joins.
+	var update func(ctx context.Context, db dbExecer) error
 	if h.refuseWhileUsersOwned() == nil {
-		if _, err := h.Pool.Exec(ctx, `UPDATE users SET full_name = $2, last_login_at = $3, updated_at = $3,
+		update = func(ctx context.Context, db dbExecer) error {
+			_, err := db.Exec(ctx, `UPDATE users SET full_name = $2, last_login_at = $3, updated_at = $3,
 	saml_nameid_format = COALESCE($4::text, saml_nameid_format),
 	saml_sp_name_qualifier = COALESCE($5::text, saml_sp_name_qualifier)
 WHERE id = $1::uuid`,
-			id, newFullName, now, saml.formatArg(), saml.qualifierArg()); err != nil {
-			return nil, nil, err
+				id, newFullName, now, saml.formatArg(), saml.qualifierArg())
+			return err
 		}
+	}
+	membership, err := h.membershipOrJoin(ctx, row, id, update)
+	if err != nil {
+		return nil, nil, err
 	}
 
 	return &provisionedUser{id: id, email: existingEmail, username: username, fullName: newFullName,
@@ -317,14 +319,31 @@ VALUES ($1, $2, $3, $4, $5, $5, $5)`, uuid.New(), orgID, newID, role, now); err 
 		&provisionedMembership{orgID: orgID, role: role}, nil
 }
 
+// dbExecer is the Exec of a pool or a transaction.
+type dbExecer interface {
+	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
+}
+
 // membershipOrJoin returns the account's membership in the provider's
 // organization. With auto-provision on, an account that has no membership in
 // any organization joins in one transaction; a member of another organization
-// only is refused.
-func (h handlers) membershipOrJoin(ctx context.Context, row *providerRow, userID uuid.UUID) (*provisionedMembership, error) {
+// only is refused. update is the sign-in's write to the user row, run once the
+// membership is settled: when the account joins it runs in the join's
+// transaction, so a failure of the update leaves no membership behind (a
+// committed join followed by a failing update made every later sign-in fail
+// the same way); otherwise it runs on the pool. nil means no write.
+func (h handlers) membershipOrJoin(ctx context.Context, row *providerRow, userID uuid.UUID, update func(ctx context.Context, db dbExecer) error) (*provisionedMembership, error) {
 	membership, err := h.requireMembership(ctx, userID, row.OrgID)
 	if !errors.Is(err, errMembershipRequired) || !row.AutoProvision {
-		return membership, err
+		if err != nil {
+			return nil, err
+		}
+		if update != nil {
+			if err := update(ctx, h.Pool); err != nil {
+				return nil, err
+			}
+		}
+		return membership, nil
 	}
 	orgID, err := pythonparity.ParseUUID(row.OrgID)
 	if err != nil {
@@ -351,6 +370,11 @@ func (h handlers) membershipOrJoin(ctx context.Context, row *providerRow, userID
 	if _, err := tx.Exec(ctx, `INSERT INTO memberships (id, org_id, user_id, role, joined_at, created_at, updated_at)
 VALUES ($1, $2, $3, $4, $5, $5, $5)`, uuid.New(), orgID, userID, role, now); err != nil {
 		return nil, err
+	}
+	if update != nil {
+		if err := update(ctx, tx); err != nil {
+			return nil, err
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, err

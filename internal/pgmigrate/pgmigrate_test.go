@@ -158,7 +158,7 @@ func TestChainNames(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, file := range chain {
-		if file.Revision <= applicationHead(baseline) {
+		if !revisionLess(applicationHead(baseline), file.Revision) {
 			t.Fatalf("%s is not after the baseline head %s", file.Name, applicationHead(baseline))
 		}
 	}

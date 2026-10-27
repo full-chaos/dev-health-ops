@@ -9,7 +9,7 @@ lifecycle: active
 
 # Auth-service scrape check and alert import
 
-This runbook is the login-flip gate for monitoring: the auth-service operator `/metrics` is scraped, and the three `auth_service_rate_limit` rules from `alerts/rules.yml` are loaded in SigNoz. Both steps are done by the owner. Nothing here is run by a lane or a script. No Prometheus loads `alerts/rules.yml` in prod: the file is the text of record, and the rules are created in SigNoz from it.
+This runbook is the login-flip gate for monitoring: the auth-service operator `/metrics` is scraped, and the three `auth_service_rate_limit` rules from `alerts/rules.yml` are loaded in SigNoz. Both steps are done by the owner. Nothing here is run by a lane or a script. No Prometheus loads `alerts/rules.yml` in prod: the file is the text of record, and the rules are created in SigNoz from it in the builder form given below.
 
 ## Before you start
 
@@ -30,36 +30,74 @@ If a series is missing: the collector scrape did not reach the port. Check the c
 
 ## Step 2: load the three rules
 
-Create each rule in SigNoz (Alerts, New alert, import JSON). The JSON below is the text of the three rules in `alerts/rules.yml`. The evaluation window is 5 minutes with "all the times" matching: this is the `for: 5m` of the file. The notification channel is left empty on purpose: pick the platform channel at import. Field names follow the SigNoz rule schema; if your SigNoz version rejects a field, keep the query, the 5 minute window, the severity and the labels, and set the rest in the form.
+Create each rule in SigNoz (Alerts, New alert, import JSON). The JSON below is the builder threshold rule form of the three rules in `alerts/rules.yml`. PromQL rules do not evaluate on this SigNoz (D6417: its ClickHouse has no `timeSeriesLastToGrid`, so every PromQL query returns HTTP 400), so none of the rules in this runbook is a PromQL rule. These three blocks are derived from `alerts/rules.yml` and are not yet imported: run Step 3 on each rule before you save it. The notification channel is left empty on purpose: the rules route by notification policy (`usePolicy`). Field names follow the SigNoz rule schema; if your SigNoz version rejects a field, keep the metric, the filter, the group-by key, the threshold, the window, the severity and the labels, and set the rest in the form.
 
-### AuthServiceRateLimitStoreErrors
+Notes on the derivation:
+
+- `AuthServiceRateLimitStoreErrors` is `rate` of the counter, summed per `limit`, above 0 for the 5 minute window with "all the times" matching: this is the `for: 5m` of the file.
+- `AuthServiceRateLimitStoreErrorsHigh` is `increase` of the same counter, summed per `limit`, above 20. The window is 10 minutes because a builder rule takes its aggregation range from its window.
+- `AuthServiceRateLimitStoreNotReady` is one query on `dev_health_runtime_check_failed` with `check = 'valkey'` and `service.name = 'auth-service'` (an exact match, so `auth-service-operator` is left out), max per replica, equal to 1. A builder rule has no join, so the filter on `service.name` replaces the join with `dev_health_runtime_info` in the file. It is grouped by `service.instance.id`, the resource attribute that the scrape's `instance` label comes from. The values of the `check` attribute were not visible in the SigNoz field lookup when this was written: Step 3 checks them.
 
 ```json
 {
   "alert": "AuthServiceRateLimitStoreErrors",
   "alertType": "METRIC_BASED_ALERT",
-  "ruleType": "promql_rule",
-  "version": "v4",
-  "evalWindow": "5m0s",
-  "frequency": "30s",
+  "ruleType": "threshold_rule",
+  "schemaVersion": "v2alpha1",
   "condition": {
     "compositeQuery": {
-      "queryType": "promql",
+      "queryType": "builder",
       "panelType": "graph",
       "unit": "",
-      "promQueries": {
-        "A": {
-          "name": "A",
-          "query": "sum by (limit) (rate(dev_health_api_rate_limit_store_errors_total{limit=~\"auth_svc_.*\"}[5m])) > 0",
-          "legend": "{{limit}}",
-          "disabled": false
+      "queries": [
+        {
+          "type": "builder_query",
+          "spec": {
+            "name": "A",
+            "signal": "metrics",
+            "stepInterval": 60,
+            "aggregations": [
+              {
+                "metricName": "dev_health_api_rate_limit_store_errors_total",
+                "timeAggregation": "rate",
+                "spaceAggregation": "sum"
+              }
+            ],
+            "filter": {
+              "expression": "limit REGEXP 'auth_svc_.*'"
+            },
+            "groupBy": [
+              {
+                "name": "limit"
+              }
+            ],
+            "disabled": false
+          }
         }
-      }
+      ]
     },
-    "op": "1",
-    "target": 0,
-    "matchType": "2",
-    "selectedQueryName": "A"
+    "selectedQueryName": "A",
+    "thresholds": {
+      "kind": "basic",
+      "spec": [
+        {
+          "name": "warning",
+          "target": 0,
+          "op": "above",
+          "matchType": "all_the_times"
+        }
+      ]
+    }
+  },
+  "evaluation": {
+    "kind": "rolling",
+    "spec": {
+      "evalWindow": "5m",
+      "frequency": "30s"
+    }
+  },
+  "notificationSettings": {
+    "usePolicy": true
   },
   "labels": {
     "severity": "warning",
@@ -68,39 +106,70 @@ Create each rule in SigNoz (Alerts, New alert, import JSON). The JSON below is t
   "annotations": {
     "summary": "auth-service rate-limit store errors on {{$labels.limit}}",
     "description": "The shared rate-limit store failed for limiter {{$labels.limit}}. Limited auth routes answer a closed 500 while it fails, by design. Next: Rate-limit store down in docs/reference/auth/readiness-and-slo.md."
-  },
-  "preferredChannels": []
+  }
 }
 ```
-
-### AuthServiceRateLimitStoreErrorsHigh
 
 ```json
 {
   "alert": "AuthServiceRateLimitStoreErrorsHigh",
   "alertType": "METRIC_BASED_ALERT",
-  "ruleType": "promql_rule",
-  "version": "v4",
-  "evalWindow": "5m0s",
-  "frequency": "30s",
+  "ruleType": "threshold_rule",
+  "schemaVersion": "v2alpha1",
   "condition": {
     "compositeQuery": {
-      "queryType": "promql",
+      "queryType": "builder",
       "panelType": "graph",
       "unit": "",
-      "promQueries": {
-        "A": {
-          "name": "A",
-          "query": "sum by (limit) (increase(dev_health_api_rate_limit_store_errors_total{limit=~\"auth_svc_.*\"}[10m])) > 20",
-          "legend": "{{limit}}",
-          "disabled": false
+      "queries": [
+        {
+          "type": "builder_query",
+          "spec": {
+            "name": "A",
+            "signal": "metrics",
+            "stepInterval": 60,
+            "aggregations": [
+              {
+                "metricName": "dev_health_api_rate_limit_store_errors_total",
+                "timeAggregation": "increase",
+                "spaceAggregation": "sum"
+              }
+            ],
+            "filter": {
+              "expression": "limit REGEXP 'auth_svc_.*'"
+            },
+            "groupBy": [
+              {
+                "name": "limit"
+              }
+            ],
+            "disabled": false
+          }
         }
-      }
+      ]
     },
-    "op": "1",
-    "target": 0,
-    "matchType": "2",
-    "selectedQueryName": "A"
+    "selectedQueryName": "A",
+    "thresholds": {
+      "kind": "basic",
+      "spec": [
+        {
+          "name": "critical",
+          "target": 20,
+          "op": "above",
+          "matchType": "all_the_times"
+        }
+      ]
+    }
+  },
+  "evaluation": {
+    "kind": "rolling",
+    "spec": {
+      "evalWindow": "10m",
+      "frequency": "30s"
+    }
+  },
+  "notificationSettings": {
+    "usePolicy": true
   },
   "labels": {
     "severity": "critical",
@@ -109,65 +178,93 @@ Create each rule in SigNoz (Alerts, New alert, import JSON). The JSON below is t
   "annotations": {
     "summary": "Auth rate-limit store is failing at volume",
     "description": "Limit {{$labels.limit}}: more than 20 store errors in ten minutes; callers on that route are being refused."
-  },
-  "preferredChannels": []
+  }
 }
 ```
-
-### AuthServiceRateLimitStoreNotReady
 
 ```json
 {
   "alert": "AuthServiceRateLimitStoreNotReady",
   "alertType": "METRIC_BASED_ALERT",
-  "ruleType": "promql_rule",
-  "version": "v4",
-  "evalWindow": "5m0s",
-  "frequency": "30s",
+  "ruleType": "threshold_rule",
+  "schemaVersion": "v2alpha1",
   "condition": {
     "compositeQuery": {
-      "queryType": "promql",
+      "queryType": "builder",
       "panelType": "graph",
       "unit": "",
-      "promQueries": {
-        "A": {
-          "name": "A",
-          "query": "max by (instance) (dev_health_runtime_check_failed{check=\"valkey\"} and on (instance) dev_health_runtime_info{service=\"auth-service\"}) == 1",
-          "legend": "{{instance}}",
-          "disabled": false
+      "queries": [
+        {
+          "type": "builder_query",
+          "spec": {
+            "name": "A",
+            "signal": "metrics",
+            "stepInterval": 60,
+            "aggregations": [
+              {
+                "metricName": "dev_health_runtime_check_failed",
+                "timeAggregation": "max",
+                "spaceAggregation": "max"
+              }
+            ],
+            "filter": {
+              "expression": "check = 'valkey' AND service.name = 'auth-service'"
+            },
+            "groupBy": [
+              {
+                "name": "service.instance.id"
+              }
+            ],
+            "disabled": false
+          }
         }
-      }
+      ]
     },
-    "op": "1",
-    "target": 0,
-    "matchType": "2",
-    "selectedQueryName": "A"
+    "selectedQueryName": "A",
+    "thresholds": {
+      "kind": "basic",
+      "spec": [
+        {
+          "name": "critical",
+          "target": 1,
+          "op": "equal",
+          "matchType": "all_the_times"
+        }
+      ]
+    }
+  },
+  "evaluation": {
+    "kind": "rolling",
+    "spec": {
+      "evalWindow": "5m",
+      "frequency": "30s"
+    }
+  },
+  "notificationSettings": {
+    "usePolicy": true
   },
   "labels": {
     "severity": "critical",
     "team": "platform"
   },
   "annotations": {
-    "summary": "auth-service cannot reach its rate-limit store ({{$labels.instance}})",
-    "description": "The required readiness check valkey has failed for five minutes on {{$labels.instance}}: /readyz answers 503 and limited auth routes answer a closed 500. Next: Rate-limit store down in docs/reference/auth/readiness-and-slo.md."
-  },
-  "preferredChannels": []
+    "summary": "auth-service cannot reach its rate-limit store",
+    "description": "The required readiness check valkey has failed for five minutes on a replica: /readyz answers 503 and limited auth routes answer a closed 500. The alert is grouped by service.instance.id. Next: Rate-limit store down in docs/reference/auth/readiness-and-slo.md."
+  }
 }
 ```
 
-Expected after import: three rules in the alert list, state "inactive" (not firing), with the severities above.
-
 ## Step 3: prove the rules read live series
 
-1. Open each rule and run its query in the editor over the last hour.
+1. Open each rule and run its builder query in the editor over the last hour.
 2. Expected: `AuthServiceRateLimitStoreErrors` and `AuthServiceRateLimitStoreErrorsHigh` return series with value 0 (or no data points above 0). `AuthServiceRateLimitStoreNotReady` returns no series above 0 while the store is healthy.
-3. A query that returns "no data" and not zero means the series is not scraped: go back to Step 1.
+3. A query that returns "no data" and not zero means that the filter or the metric name does not match what SigNoz stores, the series is not scraped, or the collector is down: go back to Step 1. For `AuthServiceRateLimitStoreNotReady`, also look at the values of the `check` and `service.name` attributes before you change the filter. Stop and report; do not save the rule.
 
 No test of a firing alert is run in prod. The rule shapes are checked in CI against the series the service really writes.
 
 ## Valkey memory and eviction rules
 
-The `valkey` group in `alerts/rules.yml` watches the in-chart Valkey that holds the auth-service rate-limit counters. The series come from the collector's redis receiver (`redis.keys.evicted`, `redis.memory.used`). Its rule text is the text of record, and the two rules are saved in SigNoz as builder threshold rules, which are the JSON below. PromQL rules do not evaluate on this SigNoz (D6417: its ClickHouse has no `timeSeriesLastToGrid`, so every PromQL query returns HTTP 400). Other SigNoz rules in this runbook (10807 part B) use the builder form too. Import the two rules in the same way as Step 2, with the JSON below. The rules carry no channel: they route by notification policy (`usePolicy`).
+The `valkey` group in `alerts/rules.yml` watches the in-chart Valkey that holds the auth-service rate-limit counters. The series come from the collector's redis receiver (`redis.keys.evicted`, `redis.memory.used`). Its rule text is the text of record, and the two rules are saved in SigNoz as builder threshold rules, which are the JSON below. PromQL rules do not evaluate on this SigNoz (D6417, see Step 2), so these two rules are saved in the builder form too. Import the two rules in the same way as Step 2, with the JSON below. The rules carry no channel: they route by notification policy (`usePolicy`).
 
 The memory threshold is 161061274 bytes: 80% of the maxmemory 192mb (201326592 bytes) that the roll step for CHAOS-11630 sets. Change the rule and `valkey.maxmemory` together. Until that roll step runs, the live maxmemory is larger (256 MiB), so the memory rule is only stricter.
 
@@ -301,7 +398,7 @@ The memory threshold is 161061274 bytes: 80% of the maxmemory 192mb (201326592 b
 
 Checks after import:
 
-1. Run each builder query over the last hour. A result of "no data" (and not 0) means that the metric name does not match what SigNoz stores. Stop and report; do not save the rule. Expected: `redis.memory.used` (max) near 2 MiB, and `redis.keys.evicted` (increase, sum) 0.
+1. Run each builder query over the last hour. A result of "no data" (and not 0) means that the metric name does not match what SigNoz stores, the metric is not scraped, or the collector is down. Stop and report; do not save the rule. Expected: `redis.memory.used` (max) near 2 MiB, and `redis.keys.evicted` (increase, sum) 0.
 2. Planted threshold, memory rule only: create a temporary copy of the memory rule with the target set to 1000000 bytes, which is below the normal used memory of about 2 MiB. Wait one evaluation window and check that the copy fires. Then delete the copy. Do not edit the real rule. The eviction rule is not planted in prod, because a real eviction is the only way to make it fire.
 3. Expected after the check: both rules are "inactive".
 

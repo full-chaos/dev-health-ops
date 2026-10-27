@@ -101,6 +101,8 @@ internal/cigates/integrationshards	free_run_test.go	unexpressed
 internal/cigates/nopython	trackedfiles_test.go	unexpressed
 internal/cigates/outboundtransport	outboundtransport_test.go	unexpressed
 internal/cigates/proofteardown	harness_test.go	unexpressed
+internal/cigates/racescope	racescope_test.go	unexpressed
+internal/cigates/racescope	scan.go	unexpressed
 internal/cigates/raceunweighted	raceunweighted_test.go	unexpressed
 internal/cigates/releasetag	parity_test.go	cmd/cigate
 internal/cigates/releasetag	parity_test.go	unexpressed
@@ -110,6 +112,7 @@ internal/cigates/routing	chart_test.go	unexpressed
 internal/cigates/routing	cut_test.go	unexpressed
 internal/cigates/routing	deps.go	unexpressed
 internal/cigates/routing	pinned_test.go	unexpressed
+internal/cigates/scripts	auth_corpus_queue_relevance_test.go	unexpressed
 internal/cigates/scripts	auth_queue_relevance_test.go	unexpressed
 internal/cigates/scripts	ci_script_helpers_test.go	unexpressed
 internal/cigates/scripts	free_run_test.go	unexpressed
@@ -135,6 +138,8 @@ internal/cigates/workflows	aggregate_gate_results_test.go	unexpressed
 internal/cigates/workflows	auth_compose_proof_test.go	unexpressed
 internal/cigates/workflows	auth_corpus_external_behaviour_test.go	unexpressed
 internal/cigates/workflows	auth_corpus_external_test.go	unexpressed
+internal/cigates/workflows	auth_corpus_queue_test.go	cmd/auth-service
+internal/cigates/workflows	auth_corpus_queue_test.go	unexpressed
 internal/cigates/workflows	auth_relevance_step_test.go	unexpressed
 internal/cigates/workflows	chart_started_selector_test.go	unexpressed
 internal/cigates/workflows	ci_script_helpers_test.go	unexpressed

@@ -170,8 +170,8 @@ func authViolations(t *testing.T, root string) []string {
 		needs = append(needs, asString(n))
 	}
 	sort.Strings(needs)
-	if !reflect.DeepEqual(needs, []string{"auth-changes", "auth-fuzz", "auth-go-quality", "auth-test"}) {
-		out = append(out, fmt.Sprintf("auth-gate.needs must fan in auth-changes, auth-go-quality, auth-test, auth-fuzz, got %v", needs))
+	if !reflect.DeepEqual(needs, []string{"auth-changes", "auth-corpus-queue", "auth-fuzz", "auth-go-quality", "auth-test"}) {
+		out = append(out, fmt.Sprintf("auth-gate.needs must fan in auth-changes, auth-go-quality, auth-test, auth-fuzz, auth-corpus-queue, got %v", needs))
 	}
 	gateSteps := stepsOf(gate)
 	if len(gateSteps) == 0 || !gatePairRe.MatchString(shellCode(asString(gateSteps[0]["run"]))) {

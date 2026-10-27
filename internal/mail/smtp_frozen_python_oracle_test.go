@@ -182,7 +182,8 @@ func TestSMTPSenderMatchesFrozenPythonSMTPProvider(t *testing.T) {
 			html := c.HTML
 			if c.Template != "" {
 				var err error
-				html, err = RenderTemplate(c.Template, c.Context)
+				// The recorded Python answers wrote the values raw: replay them against the unescaped render (the Go escape is pinned in template_test.go).
+				html, err = renderTemplate(c.Template, c.Context, false)
 				if err != nil {
 					t.Fatalf("RenderTemplate: %v", err)
 				}

@@ -253,8 +253,16 @@ authService:
   #    value names the client. Required from authService.phase 2 (go-api forwards auth routes), because otherwise every proxied caller
   #    shares the proxy's own address in the rate-limit keys. List the go-api pods' network only: the render refuses
   #    0.0.0.0/0, ::/0 and IPv4-mapped forms. Trust is safe because the auth-service NetworkPolicy admits go-api's pods
-  #    and no other pod on the API port while a proxy flag is on.
+  #    and no other pod on the API port while a proxy flag is on. Width: an entry of /28 or longer (IPv6 /124) is always
+  #    allowed; /24../27 (IPv6 /64../123), such as the node pod range, needs trustedProxiesWideAccepted; anything wider is
+  #    refused even with it. Pod addresses change at a restart, so a range is the only stable value: the NetworkPolicy
+  #    above is then the whole boundary.
   trustedProxies: []
+  # -- Permission to list an entry wider than a /28 (IPv6 /124), up to the node pod range (/24, IPv6 /64). A wide entry (/24..
+  #    /27, IPv6 /64../123) needs it at ANY phase, the proxy off included, because the list is rendered into the env whatever the
+  #    phase; an entry wider than the pod range is refused at every phase. With only narrow entries, or no list, the ack
+  #    changes nothing.
+  trustedProxiesWideAccepted: false
   signingKey:
     secretName: ""
     secretKey: signing-key.pem
@@ -1300,6 +1308,28 @@ migrations:
       #    deadlineSeconds + 360 must not exceed activeDeadlineSeconds; the migrate Job (up to 1800 s) runs after
       #    this hook inside the same helm --timeout.
       deadlineSeconds: 1800
+      attempts: 3
+      retryDelaySeconds: 15
+    # -- Build ix_sync_run_units_open_run CONCURRENTLY in a
+    #    weight -2 pre-hook Job (`dho migrate postgres build-index
+    #    open-units`), BEFORE the migrate Job runs revision 0161 (which
+    #    then finds the index and does nothing; its plain build would hold a
+    #    SHARE lock on sync_run_units). OFF = no such Job in the render; turn it
+    #    on for the roll that carries revision 0161 on a database with a large
+    #    sync_run_units. The Job fails, and so does the release before the
+    #    migrate Job, unless the index ends present and valid. With
+    #    localBundledPostgres the Job runs on pre-upgrade only. Pass a helm --timeout above activeDeadlineSeconds.
+    openUnitsIndex:
+      enabled: false
+      # -- The index is small (about 2 MiB at 830k units), so the Job is short. The hook budget is
+      #    streakIndex 2400 + openUnitsIndex 600 + the migrate Job 1800 + a 600 s rollout margin = 5400 s, the
+      #    helm --timeout of 90m; a larger value here needs a smaller streakIndex or a larger helm --timeout.
+      activeDeadlineSeconds: 600
+      # -- lock_timeout of the table-lock probe before each attempt, in seconds (1 to 60). The waits for older
+      #    transactions are not under it: they run up to deadlineSeconds.
+      lockTimeoutSeconds: 5
+      # -- window of the whole build in seconds; deadlineSeconds + 360 must not exceed activeDeadlineSeconds.
+      deadlineSeconds: 240
       attempts: 3
       retryDelaySeconds: 15
     backoffLimit: 2

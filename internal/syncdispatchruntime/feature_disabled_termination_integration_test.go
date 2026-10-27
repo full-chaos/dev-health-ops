@@ -416,13 +416,14 @@ func waitForBlockedAdvisoryLock(t *testing.T, ctx context.Context, pool *pgxpool
 		var waiting int
 		if err := pool.QueryRow(ctx, `
 			SELECT count(*) FROM pg_stat_activity
-			WHERE (wait_event_type = 'Lock' AND wait_event = 'advisory'
+			WHERE datname = current_database()
+			  AND ((wait_event_type = 'Lock' AND wait_event = 'advisory'
 			       AND query LIKE '%pg_advisory_xact_lock%')
 			   -- a bounded wait (CHAOS-6889, acquireAdvisoryLocksBounded) polls
 			   -- pg_try_advisory_xact_lock instead of parking in the lock queue
 			   OR (query LIKE '%pg_try_advisory_xact_lock%'
 			       AND state IN ('active', 'idle in transaction')
-			       AND pid <> pg_backend_pid())`,
+			       AND pid <> pg_backend_pid()))`,
 		).Scan(&waiting); err != nil {
 			t.Fatal(err)
 		}
@@ -448,7 +449,8 @@ func waitForBlockedSyncRunsLock(t *testing.T, ctx context.Context, pool *pgxpool
 		var waiting int
 		if err := pool.QueryRow(ctx, `
 			SELECT count(*) FROM pg_stat_activity
-			WHERE wait_event_type = 'Lock'
+			WHERE datname = current_database()
+			  AND wait_event_type = 'Lock'
 			  AND query LIKE '%FROM public.sync_runs WHERE id = $1 FOR UPDATE%'`,
 		).Scan(&waiting); err != nil {
 			t.Fatal(err)

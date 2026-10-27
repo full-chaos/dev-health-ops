@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/full-chaos/dev-health-ops/internal/mail"
 )
 
 // CHAOS-5353: the seven billing email bodies, ported verbatim from the Python
@@ -112,20 +114,20 @@ func RenderBillingEmail(
 		context["tier"] = attributes.Tier
 	case EmailTypeTrialStarted:
 		tier := displayTier(attributes.Tier)
-		subject = fmt.Sprintf("Your %s trial has started", tier)
+		subject = fmt.Sprintf("Your %s trial has started", mail.SubjectText(tier))
 		context["tier"] = tier
 		context["trial_end_date"] = attributes.TrialEndDate
 		context["dashboard_url"] = base + "/"
 	case EmailTypeTrialExpiring:
 		tier := displayTier(attributes.Tier)
-		subject = fmt.Sprintf("Your %s trial ends in %d days", tier, attributes.DaysRemaining)
+		subject = fmt.Sprintf("Your %s trial ends in %d days", mail.SubjectText(tier), attributes.DaysRemaining)
 		context["tier"] = tier
 		context["days_remaining"] = fmt.Sprintf("%d", attributes.DaysRemaining)
 		context["trial_end_date"] = attributes.TrialEndDate
 		context["upgrade_url"] = base + "/billing"
 	case EmailTypeTrialExpired:
 		tier := displayTier(attributes.Tier)
-		subject = fmt.Sprintf("Your %s trial has ended", tier)
+		subject = fmt.Sprintf("Your %s trial has ended", mail.SubjectText(tier))
 		context["tier"] = tier
 		context["upgrade_url"] = base + "/billing"
 	default:
@@ -139,7 +141,11 @@ func RenderBillingEmail(
 		// than silently rendering an empty body.
 		return RenderedEmail{}, fmt.Errorf("operational billing email template is missing: %w", err)
 	}
-	html, err := formatTemplate(string(raw), context)
+	escaped := make(map[string]string, len(context))
+	for field, value := range context {
+		escaped[field] = mail.EscapeHTML(value)
+	}
+	html, err := formatTemplate(string(raw), escaped)
 	if err != nil {
 		return RenderedEmail{}, err
 	}

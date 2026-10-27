@@ -137,3 +137,45 @@ func TestStreakIndexHookAndMigrateJobFitTheHelmTimeout(t *testing.T) {
 		t.Fatalf("build window %d + startup and cleanup %d exceeds the hook's activeDeadlineSeconds %d", window, startupAndCleanupSeconds, hook)
 	}
 }
+
+// Every pre-upgrade index hook runs before the migrate Job, one after the other, so with all of them on their deadlines
+// plus the migrate Job and the rollout margin must fit helm --timeout 90m, and each hook's build window must fit its own deadline.
+func TestAllIndexHooksAndMigrateJobFitTheHelmTimeout(t *testing.T) {
+	const helmTimeoutSeconds, rolloutMarginSeconds, startupAndCleanupSeconds = 5400, 600, 360
+	jobs, _, refusal := renderJobs(t, "web.enabled=false", "migrations.hook.streakIndex.enabled=true", "migrations.hook.openUnitsIndex.enabled=true")
+	if refusal != "" {
+		t.Fatalf("render refused: %s", refusal)
+	}
+	total := jobs["t-dev-health-migrate"]["spec"].(map[string]any)["activeDeadlineSeconds"].(int) + rolloutMarginSeconds
+	for name, containerName := range map[string]string{"t-dev-health-streak-index": "streak-index", "t-dev-health-open-units-index": "open-units-index"} {
+		job, ok := jobs[name]
+		if !ok {
+			t.Fatalf("no %s Job with the flag on", name)
+		}
+		deadline := job["spec"].(map[string]any)["activeDeadlineSeconds"].(int)
+		total += deadline
+		window := 0
+		for _, a := range stringsOf(container(t, job, containerName)["args"]) {
+			if v, ok := strings.CutPrefix(a, "--deadline="); ok {
+				n, err := strconv.Atoi(strings.TrimSuffix(v, "s"))
+				if err != nil {
+					t.Fatalf("bad --deadline %q", a)
+				}
+				window = n
+			}
+		}
+		if window == 0 || window+startupAndCleanupSeconds > deadline {
+			t.Fatalf("%s: build window %d + startup and cleanup %d exceeds activeDeadlineSeconds %d", name, window, startupAndCleanupSeconds, deadline)
+		}
+	}
+	if total > helmTimeoutSeconds {
+		t.Fatalf("hooks + migrate + rollout margin = %d exceeds helm --timeout %d", total, helmTimeoutSeconds)
+	}
+}
+
+func TestOpenUnitsIndexJobRefusesAWindowThatDoesNotFitItsDeadline(t *testing.T) {
+	_, _, refusal := renderJobs(t, "web.enabled=false", "migrations.hook.openUnitsIndex.enabled=true", "migrations.hook.openUnitsIndex.deadlineSeconds=300")
+	if !strings.Contains(refusal, "openUnitsIndex.deadlineSeconds") {
+		t.Fatalf("refusal = %.300s", refusal)
+	}
+}

@@ -1043,7 +1043,7 @@ func TestIdentityBySubjectLegacyKeyHeldByAnotherPrincipalIsAConflict(t *testing.
 func TestProvisionFederated(t *testing.T) {
 	e := getEnv(t)
 	ctx := context.Background()
-	key := ExternalKey{Issuer: "https://idp.example.com/" + uuid.NewString()[:8], Provider: Provider(uuid.NewString()), Subject: "new-" + uuid.NewString()}
+	key := ExternalKey{Issuer: "https://idp.example.com/" + uuid.NewString()[:8], Provider: e.seedSSOProvider(t, ctx, e.seedOrg(t, ctx), "oidc"), Subject: "new-" + uuid.NewString()}
 	email := "New.User-" + uuid.NewString()[:8] + "@Example.com"
 	request := uuid.NewString()
 	req := ProvisionRequest{Key: key, Email: email, FullName: "New User", Actor: SelfSignUp(&request), LegacyProvider: "oidc", LegacySubject: key.Subject}

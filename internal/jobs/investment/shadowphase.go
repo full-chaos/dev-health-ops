@@ -673,7 +673,7 @@ func attemptRecords(
 			Provider: identity.Provider, APIMode: identity.API, ModelRequested: identity.Model,
 			Attempt: shadowAttemptNumber(index), Kind: shadowAttemptKindFirst,
 			HTTPStatus: shadowHTTPStatus(attempt.StatusCode), ErrorClass: shadowErrorClass(attempt.Class),
-			RequestID: shadowRequestID(attempt.RequestID), RatesVersion: shadowRatesVersion,
+			RequestID: shadowRequestID(attempt.RequestID), RequestIDSource: shadowRequestIDSource(attempt.RequestIDSource), RatesVersion: shadowRatesVersion,
 			LatencyMS: shadowMillis(attempt.Latency), RetryWaitMS: shadowMillis(attempt.WaitBefore),
 			ComputedAt: cfg.ComputedAt,
 		}

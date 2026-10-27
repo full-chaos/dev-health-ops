@@ -210,6 +210,7 @@ func TestDomainAuthorizationRequiresExactCanaryAndReconcilerPrivileges(t *testin
 		"GRANT SELECT, UPDATE ON TABLE public.sync_configurations TO " + authorizedDomainRole,
 		"GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_run_reference_discoveries TO " + authorizedDomainRole,
 		"GRANT SELECT, INSERT ON TABLE public.sync_run_post_dispatches, public.sync_compute_checkpoints TO " + authorizedDomainRole,
+		"GRANT SELECT, INSERT, UPDATE ON TABLE public.org_activity TO " + authorizedDomainRole,
 		"GRANT SELECT (completion_key), INSERT (completion_key) ON TABLE public.worker_job_completion_fences TO " + authorizedDomainRole,
 		"GRANT UPDATE (is_active, updated_at) ON TABLE public.integration_credentials TO " + authorizedDomainRole,
 	} {

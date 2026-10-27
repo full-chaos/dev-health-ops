@@ -223,6 +223,7 @@ func TestRuntimeAuthorizationBindsSeparateLeastPrivilegeRolePools(t *testing.T) 
 		"GRANT SELECT, UPDATE ON TABLE public.sync_configurations TO " + runtimeAuthorizationDomainRole,
 		"GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_run_reference_discoveries TO " + runtimeAuthorizationDomainRole,
 		"GRANT SELECT, INSERT ON TABLE public.sync_run_post_dispatches, public.sync_compute_checkpoints TO " + runtimeAuthorizationDomainRole,
+		"GRANT SELECT, INSERT, UPDATE ON TABLE public.org_activity TO " + runtimeAuthorizationDomainRole,
 		"GRANT SELECT (completion_key), INSERT (completion_key) ON TABLE public.worker_job_completion_fences TO " + runtimeAuthorizationDomainRole,
 		"GRANT UPDATE (is_active, updated_at) ON TABLE public.integration_credentials TO " + runtimeAuthorizationDomainRole,
 		"GRANT SELECT, UPDATE, DELETE ON TABLE public.worker_job_outbox TO " + runtimeAuthorizationQueueRole,

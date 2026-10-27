@@ -107,3 +107,25 @@ func TestACategorizeClefConfigNeedsTheTokenAndTheExactAccountURL(t *testing.T) {
 		}
 	}
 }
+
+func TestClefEndpointIsDerivedFromTheValidatedBaseURL(t *testing.T) {
+	if EndpointTypeWorkersAI != "workers_ai" {
+		t.Fatalf("EndpointTypeWorkersAI = %q", EndpointTypeWorkersAI)
+	}
+	for _, raw := range []string{testClefBase, testClefBase + "/"} {
+		endpointType, gatewayID, ok := ClefEndpoint(raw)
+		if !ok || endpointType != EndpointTypeWorkersAI || gatewayID != "" {
+			t.Errorf("%q = %q, %q, %v; want workers_ai with no gateway id", raw, endpointType, gatewayID, ok)
+		}
+	}
+	for name, raw := range map[string]string{
+		"gateway host": "https://gateway.ai.cloudflare.com/v1/" + testClefAccount + "/my-gateway/workers-ai",
+		"http":         "http://api.cloudflare.com/client/v4/accounts/" + testClefAccount + "/ai",
+		"query":        testClefBase + "?a=b",
+		"empty":        "",
+	} {
+		if endpointType, gatewayID, ok := ClefEndpoint(raw); ok || endpointType != "" || gatewayID != "" {
+			t.Errorf("%s: %q = %q, %q, %v; want a refusal with empty values", name, raw, endpointType, gatewayID, ok)
+		}
+	}
+}

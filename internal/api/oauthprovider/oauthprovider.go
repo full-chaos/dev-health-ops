@@ -106,6 +106,10 @@ func (e *UserInfoError) Error() string { return "oauth user info: " + e.Reason }
 // ErrUnexpected is an exception Python does not catch around the fetch.
 var ErrUnexpected = errors.New("oauthprovider: provider response raised an uncaught exception")
 
+// ErrMissingProviderID is a profile with no user id, or a JSON null one. It wraps ErrUnexpected, so a caller that
+// tests for that keeps its behavior; a caller that can refuse the sign-in tests for this one.
+var ErrMissingProviderID = fmt.Errorf("%w: the profile has no user id", ErrUnexpected)
+
 // Client fetches profiles.
 type Client struct {
 	HTTP      *http.Client
@@ -119,15 +123,38 @@ func NewClient() *Client {
 
 // FetchUserInfo is create_oauth_provider(provider, ...).fetch_user_info(token).
 func (c *Client) FetchUserInfo(ctx context.Context, provider, accessToken string) (*UserInfo, error) {
+	var info *UserInfo
+	var err error
 	switch provider {
 	case GitHub:
-		return c.github(ctx, accessToken)
+		info, err = c.github(ctx, accessToken)
 	case GitLab:
-		return c.gitlab(ctx, accessToken)
+		info, err = c.gitlab(ctx, accessToken)
 	case Google:
-		return c.google(ctx, accessToken)
+		info, err = c.google(ctx, accessToken)
+	default:
+		return nil, fmt.Errorf("oauthprovider: unsupported provider %q", provider)
 	}
-	return nil, fmt.Errorf("oauthprovider: unsupported provider %q", provider)
+	if err != nil {
+		return nil, err
+	}
+	cleanProfileText(info)
+	return info, nil
+}
+
+// cleanProfileText makes the free text of a profile storable before any caller writes it. A lone surrogate in the
+// user name, the full name or the avatar URL becomes U+FFFD (the value auth-service's decoder gives the same escape;
+// PostgreSQL refuses the WTF-8 bytes). A lone surrogate in the email makes the address unusable as an identity key:
+// it is no verified email, so the callers refuse the sign-in with their existing unverified-email answer.
+func cleanProfileText(info *UserInfo) {
+	for _, field := range []*pyjson.Value{&info.Username, &info.FullName, &info.AvatarURL} {
+		if text, ok := (*field).(string); ok {
+			*field = pyjson.ReplaceLoneSurrogates(text)
+		}
+	}
+	if text, ok := info.Email.(string); ok && pyjson.HasLoneSurrogate(text) {
+		info.EmailVerified = false
+	}
 }
 
 // get performs one GET. A transport failure or a non-2xx status is a
@@ -199,9 +226,9 @@ func (c *Client) github(ctx context.Context, token string) (*UserInfo, error) {
 		verified = true // githubPrimaryEmail (below) never returns an unverified email -- see its own doc comment.
 	}
 	id, present := user.Get("id")
-	if !present {
-		// str(user_data["id"]) outside any handler: KeyError.
-		return nil, ErrUnexpected
+	if !present || id == nil {
+		// str(user_data["id"]) outside any handler: KeyError. A JSON null id is no id either: str(None) is "None".
+		return nil, ErrMissingProviderID
 	}
 	login, _ := user.Get("login")
 	name, _ := user.Get("name")
@@ -331,8 +358,11 @@ func requiredFields(data pyjson.Value) (*pyjson.Object, pyjson.Value, pyjson.Val
 	}
 	id, hasID := user.Get("id")
 	email, hasEmail := user.Get("email")
-	if !hasID || !hasEmail {
+	if !hasEmail {
 		return nil, nil, nil, &UserInfoError{Reason: "user info response missing required fields"}
+	}
+	if !hasID || id == nil {
+		return nil, nil, nil, ErrMissingProviderID
 	}
 	return user, id, email, nil
 }

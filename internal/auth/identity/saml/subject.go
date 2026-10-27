@@ -59,6 +59,24 @@ func Subject(n NameID) (string, error) {
 	return out, nil
 }
 
+// ErrNameIDNotCaptured reports an account whose NameID Format and SPNameQualifier were never stored: it has not
+// signed in since go-api began writing them, so its subject cannot be keyed.
+var ErrNameIDNotCaptured = errors.New("saml: NameID format not captured")
+
+// SubjectFromStored keys an account from the columns go-api stores at SAML sign-in (public.users.auth_provider_id,
+// saml_nameid_format, saml_sp_name_qualifier). A NULL format is ErrNameIDNotCaptured; every other outcome is
+// Subject's own, so readiness and the sign-in relink share one rule.
+func SubjectFromStored(value string, format, spNameQualifier *string) (string, error) {
+	if format == nil {
+		return "", ErrNameIDNotCaptured
+	}
+	n := NameID{Format: *format, Value: value}
+	if spNameQualifier != nil {
+		n.SPNameQualifier = *spNameQualifier
+	}
+	return Subject(n)
+}
+
 // ParseSubject is the inverse of Subject.
 func ParseSubject(s string) (NameID, error) {
 	parts := strings.Split(s, "|")

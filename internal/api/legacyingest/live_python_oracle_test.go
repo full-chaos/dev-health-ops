@@ -281,3 +281,5 @@ func normalizedRows(rows [][]any) string {
 	}
 	return strings.Join(out, "\n")
 }
+
+func (f *fakeStore) Release(context.Context, string) error { return nil }

@@ -231,6 +231,16 @@ type AttemptRecord struct {
 	// ModelFromRequest is true when the provider omitted the returned model and
 	// ModelReturned was taken from the request.
 	ModelFromRequest bool
+	// RequestIDSource is where RequestID came from: aig, ray or client; empty
+	// for a provider whose id is its own header.
+	RequestIDSource string
+	// EndpointType is the clef endpoint type (workers_ai or ai_gateway) the
+	// call was sent to, derived from the validated base_url; empty for any other
+	// backend and for a row written before this column.
+	EndpointType string
+	// GatewayID is the AI Gateway id of the endpoint; empty when the endpoint
+	// has none.
+	GatewayID string
 }
 
 // WriteAttempts inserts llm_categorization_attempts rows in ONE batch,
@@ -256,7 +266,7 @@ func (w *Writer) WriteAttempts(ctx context.Context, orgID string, records []Atte
 		org_id, run_id, work_unit_id, role, config, rubric_sha256, provider, api_mode,
 		model_requested, model_returned, attempt, kind, http_status, error_class, state,
 		request_id, input_tokens, output_tokens, cached_input_tokens, billed_cost_usd,
-		rates_version, latency_ms, retry_wait_ms, computed_at, usage_reason, model_from_request
+		rates_version, latency_ms, retry_wait_ms, computed_at, usage_reason, model_from_request, request_id_source, endpoint_type, gateway_id
 	)`)
 	if err != nil {
 		return 0, shadowTableError("prepare llm_categorization_attempts batch", err)
@@ -268,7 +278,8 @@ func (w *Writer) WriteAttempts(ctx context.Context, orgID string, records []Atte
 			record.Attempt, record.Kind, record.HTTPStatus, record.ErrorClass, record.State,
 			record.RequestID, record.InputTokens, record.OutputTokens, record.CachedInputTokens,
 			record.BilledCostUSD, record.RatesVersion, record.LatencyMS, record.RetryWaitMS,
-			record.ComputedAt.UTC(), record.UsageReason, modelFromRequestByte(record.ModelFromRequest),
+			record.ComputedAt.UTC(), record.UsageReason, modelFromRequestByte(record.ModelFromRequest), record.RequestIDSource,
+			record.EndpointType, record.GatewayID,
 		); err != nil {
 			return 0, fmt.Errorf("append llm_categorization_attempts row: %w", err)
 		}

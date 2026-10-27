@@ -276,6 +276,7 @@ usage() {
   test-shard-unweighted-guard SHARD COUNT LOGFILE
          Fail when a package of the shard ran 30 s or more in LOGFILE (its go
          test log) and has no row in ci/go_test_weights.tsv; prints the row.
+         With DEV_HEALTH_GO_UNWEIGHTED_REPORT_ONLY=1 (merge_group) it warns and exits 0; an unusable log still fails.
   build  Run go build ./... in every Go module.
   contract
          Validate the job contract tree and, when DEV_HEALTH_CONTRACT_BASE is
@@ -775,13 +776,24 @@ check_test_shard_wall_guard() {
 # check_test_shard_unweighted_guard SHARD COUNT LOGFILE [partial] (CHAOS-10498): fails when a package of the shard ran 30 s or more in
 # LOGFILE (the leg's go test log) and has no row in ci/go_test_weights.tsv, and prints the row to add. A package with no row weighs
 # 1, so an unweighted heavy package unbalances the shards without anyone seeing it; this makes it red on the leg that ran it.
+# DEV_HEALTH_GO_UNWEIGHTED_REPORT_ONLY=1 (go-quality.yml sets it on merge_group only, CHAOS-11682) turns a named package (awk exit 1) into a
+# ::warning:: plus a step-summary line and exit 0: a package the entry did not touch must not eject it. An unusable log (awk exit 2) fails always.
 check_test_shard_unweighted_guard() {
   local shard="${1:-}" count="${2:-}" log="${3:-}" partial="${4:-}" plan
   check_test_shard_args "${shard}" "${count}"
   { [ -f "${log}" ] && [ -r "${log}" ]; } || die "test-shard-unweighted-guard needs the shard's go test log as a readable file, got '${log}'"
   plan="$(check_test_shard_plan "${shard}" "${count}")"
-  awk -v weights="${GO_TEST_WEIGHTS}" -v thresh="${DEV_HEALTH_GO_TEST_UNWEIGHTED_SLOW_SECONDS:-30}" -v label="${GO_TEST_WEIGHTS#"${ROOT}/"}" -v partial="${partial:+1}" \
-    -f "${GO_TEST_UNWEIGHTED_SLOW_AWK:-${ROOT}/ci/go_test_unweighted_slow.awk}" <(printf '%s\n' "${plan}") "${log}"
+  local out rc=0
+  out="$(awk -v weights="${GO_TEST_WEIGHTS}" -v thresh="${DEV_HEALTH_GO_TEST_UNWEIGHTED_SLOW_SECONDS:-30}" -v label="${GO_TEST_WEIGHTS#"${ROOT}/"}" -v partial="${partial:+1}" \
+    -f "${GO_TEST_UNWEIGHTED_SLOW_AWK:-${ROOT}/ci/go_test_unweighted_slow.awk}" <(printf '%s\n' "${plan}") "${log}" 2>&1)" || rc=$?
+  if [ "${rc}" -ne 1 ] || [ "${DEV_HEALTH_GO_UNWEIGHTED_REPORT_ONLY:-}" != "1" ]; then
+    [ -z "${out}" ] || printf '%s\n' "${out}" >&2
+    return "${rc}"
+  fi
+  printf '::warning::report only (merge_group): %s\n' "${out}" >&2
+  if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+    printf 'unweighted-slow guard (report only, add the row in a pull request):\n%s\n' "${out}" >> "${GITHUB_STEP_SUMMARY}" || true
+  fi
 }
 
 # CHAOS-11448: merge_group runs the security packages of ci/security_fresh_packages.txt with -count=1 (their tests always execute);
@@ -1027,6 +1039,21 @@ check_race_shard_args() {
   { [ "${shard}" -ge 1 ] && [ "${count}" -ge 1 ] && [ "${shard}" -le "${count}" ]; } \
     || die "race shard ${shard} is outside 1..${count}"
   [ -d "${GO_RACE_WEIGHTS_DIR}" ] || die "race shards need ${GO_RACE_WEIGHTS_DIR}"
+  [ -f "${GO_RACE_EXCLUDED_PACKAGES}" ] || die "race shards need ${GO_RACE_EXCLUDED_PACKAGES}"
+}
+
+# CHAOS-11413: packages the race legs do not run (ci/race_excluded_packages.tsv, proven by internal/cigates/racescope). The test legs
+# still run them once. race_shard_packages drops them before the weight split, so no race leg plans them, solo or not.
+GO_RACE_EXCLUDED_PACKAGES="${GO_RACE_EXCLUDED_PACKAGES:-${ROOT}/ci/race_excluded_packages.tsv}"
+race_excluded_filter() {
+  local module_dir="$1" modpath="$2"
+  if [ "${module_dir}" != "." ]; then
+    cat
+    return
+  fi
+  awk -F'\t' -v mod="${modpath}" -v list="${GO_RACE_EXCLUDED_PACKAGES}" '
+    BEGIN { while ((getline line < list) > 0) { if (line ~ /^[[:space:]]*(#|$)/) continue; split(line, f, "\t"); skip[mod "/" f[1]] = 1 } close(list) }
+    !($0 in skip)'
 }
 
 # race_shard_packages SHARD COUNT MODULE_DIR MODPATH [solo]: the import paths of the race slice (or, with solo, of its solo
@@ -1036,6 +1063,7 @@ race_shard_packages() {
   (cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -mod=readonly ./...) \
     | { if [ "${module_dir}" = "." ]; then grep -vx "${modpath}/internal/providersync"; else cat; fi; } \
     | quality_filter "${module_dir}" "${modpath}" \
+    | race_excluded_filter "${module_dir}" "${modpath}" \
     | awk -v mod="${modpath}" -v shard="${shard}" -v count="${count}" -v weights=<(race_weights_rows) -v solo="${GO_RACE_SOLO}" -v part="${part}" -f "${ROOT}/ci/go_race_shard.awk"
 }
 
@@ -1235,9 +1263,11 @@ check_race_weights_rows() {
 # check_plan_reads: the declared-read guard of the plan verdict (`cmd/cigate plan-reads`) over the whole tree: every
 # package that names a path of a declared class in a string literal has a reads.tsv row, and --reach recomputes
 # reach.tsv (the programs that call each code-scope unbounded site: go/packages, SSA and RTA over the module; about
-# 3 min and an 8 GB live heap on 4 cores, so the GC holds it under GOMEMLIMIT) and fails on any difference. It runs in the static leg, which runs on every change.
+# 3 min and an 8 GB live heap on 4 cores, so the GC holds it under GOMEMLIMIT) and fails on any difference. It runs in the static leg, which runs on every change. With PLAN_READS_REACH_CACHE set (the
+# GitHub-hosted legs only, go-quality.yml) a pull request reuses a store of the same input hash; PLAN_READS_REACH_FRESH (every
+# other event) computes fresh and only stores (CHAOS-11421).
 check_plan_reads() {
-  (cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOWORK=off GOMEMLIMIT="${GOMEMLIMIT:-10GiB}" go run -mod=readonly -trimpath ./cmd/cigate plan-reads --root "${ROOT}" --reach)
+  (cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOWORK=off GOMEMLIMIT="${GOMEMLIMIT:-10GiB}" go run -mod=readonly -trimpath ./cmd/cigate plan-reads --root "${ROOT}" --reach ${PLAN_READS_REACH_CACHE:+--reach-cache "${PLAN_READS_REACH_CACHE}"} ${PLAN_READS_REACH_FRESH:+--reach-cache-fresh})
 }
 
 ci_leg_stage() {
@@ -1880,11 +1910,14 @@ QAPISERVER_INTEGRATION_PACKAGE_KEY="internal/queryapi/server"
 # one `go test` of it takes 1,122 s alone, 21 of the 25 minutes of its isolated job.
 REMAINING_INTEGRATION_PACKAGE_KEY="internal/jobs/metrics/remaining"
 # Packages that get a shard of their own at their TRUE weight (CHAOS-8935).
-# One `go test` starts packages in alphabetical order, so a long package that
-# sorts last starts minutes late and sets the shard's wall time, not its weight.
+# One `go test` starts packages in the order of its arguments, four at a time, so a long
+# package that starts last starts minutes late and sets the shard's wall time, not its weight
+# (CHAOS-11411: the arguments are now sorted longest weight first; an isolated package needs no order).
 # internal/jobs/metrics/remaining (CHAOS-9631) runs 1,053-1,164 s on its own and
 # sat in a shard with 20 other packages whose job took 22-25 of the 25 minutes.
-INTEGRATION_ISOLATED_PACKAGE_KEYS=" ${DEV_HEALTH_GO_INTEGRATION_ISOLATED_KEYS:-internal/workerservice internal/queryapi/server internal/jobs/metrics/remaining} "
+# internal/fixturescli (CHAOS-11411) runs 1,145-1,168 s of the 1,263 s test phase of its shard, next to three other
+# packages that run at the same time: it sets the Go workflow wall, so it gets a shard of its own as well.
+INTEGRATION_ISOLATED_PACKAGE_KEYS=" ${DEV_HEALTH_GO_INTEGRATION_ISOLATED_KEYS:-internal/workerservice internal/queryapi/server internal/jobs/metrics/remaining internal/fixturescli} "
 DAILY_TEST_SHARD_COUNT=0
 DAILY_INTEGRATION_TEST_WEIGHT=0
 DAILY_ORDINARY_TEST_WEIGHT=0
@@ -2181,8 +2214,19 @@ run_integration_packages() {
   local -a pkgs=()
   local -A selected_in=() skipped_in=() select_names=() skip_names=() seen=()
   shift 3
-  # Sorted (C locale): the same packages give the same groups and receipts in any argument order.
-  mapfile -t pkgs < <(printf '%s\n' "$@" | LC_ALL=C sort -u)
+  # Sorted (C locale): the same packages give the same groups and receipts in any argument order. A caller that sets
+  # INTEGRATION_KEEP_ARG_ORDER=1 has already put the packages in the order go test must start them (longest first,
+  # CHAOS-11411): the first-fit packs them in that order and a repeated package keeps its first place.
+  if [ -n "${INTEGRATION_KEEP_ARG_ORDER:-}" ]; then
+    local -A arg_seen=()
+    for pkg in "$@"; do
+      [ -z "${arg_seen[${pkg}]+set}" ] || continue
+      arg_seen["${pkg}"]=1
+      pkgs+=("${pkg}")
+    done
+  else
+    mapfile -t pkgs < <(printf '%s\n' "$@" | LC_ALL=C sort -u)
+  fi
   discover_integration_tagged_tests "${module_dir}" "${pkgs[@]}"
   # Every refusal comes before the first receipt line, so a refused run prints no plan.
   for pkg in "${pkgs[@]}"; do
@@ -3983,6 +4027,29 @@ check_integration_prepull() {
   done
 }
 
+# sort_integration_shard_packages orders the caller's run_pkgs/run_keys (bash dynamic scope) longest package first:
+# manifest weight descending, then key ascending in byte order. One go test starts its packages in argument order, four
+# at a time, so a long package that starts last sets the shard wall (CHAOS-8935). LC_ALL=C is local to this function:
+# it must not reach the go test child, which keeps the caller's locale.
+sort_integration_shard_packages() {
+  local i j tmp_pkg tmp_key LC_ALL=C
+  for ((i = 1; i < ${#run_keys[@]}; i++)); do
+    tmp_pkg="${run_pkgs[${i}]}"
+    tmp_key="${run_keys[${i}]}"
+    for ((j = i - 1; j >= 0; j--)); do
+      if [ "${INTEGRATION_SHARD_WEIGHTS[${run_keys[${j}]}]}" -gt "${INTEGRATION_SHARD_WEIGHTS[${tmp_key}]}" ] \
+        || { [ "${INTEGRATION_SHARD_WEIGHTS[${run_keys[${j}]}]}" -eq "${INTEGRATION_SHARD_WEIGHTS[${tmp_key}]}" ] \
+          && [[ ! "${run_keys[${j}]}" > "${tmp_key}" ]]; }; then
+        break
+      fi
+      run_pkgs[j + 1]="${run_pkgs[${j}]}"
+      run_keys[j + 1]="${run_keys[${j}]}"
+    done
+    run_pkgs[j + 1]="${tmp_pkg}"
+    run_keys[j + 1]="${tmp_key}"
+  done
+}
+
 check_integration_package_shard() {
   local shard="$1" mode="$2"
   local index module_dir pkg key
@@ -4014,11 +4081,14 @@ check_integration_package_shard() {
     done
     [ "${#run_pkgs[@]}" -gt 0 ] || continue
 
+    sort_integration_shard_packages
+
     printf 'go test integration package shard %s: %s -> %s\n' \
       "${shard}" "${module_dir}" "${run_pkgs[*]}"
     for key in "${run_keys[@]}"; do
       printf '  SHARD-RUN %s\n' "${key}"
     done
+    local INTEGRATION_KEEP_ARG_ORDER=1
     run_integration_packages "${mode}" "${module_dir}" "integration package shard ${shard} (${module_dir})" "${run_pkgs[@]}"
   done
 
@@ -4477,7 +4547,7 @@ auth_relevant() {
 auth_path_relevant() {
   local file="$1" closure="$2" dir
   case "${file}" in
-    cmd/auth-service/*|cmd/auth-migrate/*|internal/auth/*|internal/audit/*|internal/storage/postgres/authschema/*|contracts/auth/*|go.mod|go.sum|ci/check_go.sh|cmd/cigate/*|internal/cigates/*|ci/auth_gate_scope_exempt.txt|ci/auth_closure_allow.tsv|ci/auth_queue_relevance.sh|.github/workflows/go-auth-service.yml)
+    cmd/auth-service/*|cmd/auth-migrate/*|internal/auth/*|internal/audit/*|internal/storage/postgres/authschema/*|contracts/auth/*|go.mod|go.sum|ci/check_go.sh|cmd/cigate/*|internal/cigates/*|ci/auth_gate_scope_exempt.txt|ci/auth_closure_allow.tsv|ci/auth_queue_relevance.sh|ci/auth_corpus_queue_relevance.sh|ci/auth_corpus_paths.txt|.github/workflows/go-auth-service.yml)
       return 0
       ;;
   esac
@@ -4502,7 +4572,7 @@ auth_path_relevant() {
 check_auth_paths_selftest() {
   local closure inside outside file
   closure="$(printf 'internal/auth/authruntime\ninternal/platform/secrets\n')"
-  inside=(internal/authnew/a.go internal/some/auth_helper/x.go internal/audit/audit.go internal/auth/contracts/deleted_package/x.go cmd/auth-service/main.go internal/auth/authruntime/runtime.go internal/platform/secrets/secrets.go internal/auth/authruntime/testdata/fixture.txt internal/platform/secrets/testdata/nested/golden.json contracts/auth/v1/README.md go.mod ci/check_go.sh ci/auth_queue_relevance.sh)
+  inside=(internal/authnew/a.go internal/some/auth_helper/x.go internal/audit/audit.go internal/auth/contracts/deleted_package/x.go cmd/auth-service/main.go internal/auth/authruntime/runtime.go internal/platform/secrets/secrets.go internal/auth/authruntime/testdata/fixture.txt internal/platform/secrets/testdata/nested/golden.json contracts/auth/v1/README.md go.mod ci/check_go.sh ci/auth_queue_relevance.sh ci/auth_corpus_queue_relevance.sh ci/auth_corpus_paths.txt)
   outside=(internal/providersync/sync.go docs/index.md web/README.md internal/platform/other/x.go internal/platform/secretsx/y.go src/dev_health_ops/cli.py)
   for file in "${inside[@]}"; do
     auth_path_relevant "${file}" "${closure}" || die "auth path filter: ${file} must select the auth gates and does not"

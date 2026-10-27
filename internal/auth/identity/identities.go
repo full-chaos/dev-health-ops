@@ -289,7 +289,7 @@ func (s *Store) ProvisionFederated(ctx context.Context, req ProvisionRequest) (_
 	if err := req.Key.Validate(); err != nil {
 		return uuid.Nil, err
 	}
-	emailLower, err := NormalizeEmail(req.Email)
+	emailLower, err := NormalizeFederatedEmail(req.Email)
 	if err != nil {
 		return uuid.Nil, err
 	}
@@ -324,6 +324,10 @@ VALUES ($1, $2, $3, clock_timestamp())`, principal, req.Email, emailLower); err 
 	})
 	switch {
 	case err == nil:
+	case errors.Is(err, ErrLegacyProjection):
+		return uuid.Nil, ErrLegacyProjection
+	case isPublicSSOIdentityCollision(err):
+		return uuid.Nil, ErrIdentityTaken
 	case isEmailCollision(err), isPublicEmailCollision(err):
 		return uuid.Nil, ErrEmailTaken
 	case errors.Is(err, ErrIdentityTaken), isUniqueViolation(err, externalIdentityKeyIndex):

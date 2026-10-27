@@ -142,6 +142,7 @@ internal/auth/workloadexchange	tokenreview.go	internal/auth/workloadexchange
 internal/auth/workloadexchange	tokenreview.go	internal/cigates/chartgates
 internal/cigates	governance.go	cmd/cigate
 internal/cigates	governance.go	internal/cigates/scripts
+internal/cigates/abstime	abstime.go	internal/cigates/abstime
 internal/cigates/affected	plan.go	cmd/cigate
 internal/cigates/affected	plan.go	internal/cigates/affected
 internal/cigates/affected	plan.go	internal/cigates/affectedmatrix
@@ -149,6 +150,11 @@ internal/cigates/affected	plan.go	internal/cigates/affectedmodule
 internal/cigates/affected	plan.go	internal/cigates/affectedreject
 internal/cigates/affected	plan.go	internal/cigates/scripts
 internal/cigates/affected	reach.go	cmd/cigate
+internal/cigates/affected	reachcache.go	cmd/cigate
+internal/cigates/affected	reachcache.go	internal/cigates/affectedmatrix
+internal/cigates/affected	reachcache.go	internal/cigates/affectedmodule
+internal/cigates/affected	reachcache.go	internal/cigates/affectedreject
+internal/cigates/affected	reachcache.go	internal/cigates/scripts
 internal/cigates/affected	scan.go	cmd/cigate
 internal/cigates/affected	scan.go	internal/cigates/affected
 internal/cigates/affected	scan.go	internal/cigates/affectedmatrix
@@ -212,6 +218,7 @@ internal/cigates/frozengoldens	frozengoldens.go	internal/cigates/frozengoldens
 internal/cigates/livee2e	cli.go	cmd/cigate
 internal/cigates/livee2e	cli.go	internal/cigates/livee2e
 internal/cigates/queuecreds	scan.go	internal/cigates/queuecreds
+internal/cigates/racescope	scan.go	internal/cigates/racescope
 internal/cigates/releasetag	releasetag.go	cmd/cigate
 internal/cigates/releasetag	releasetag.go	internal/cigates/releasetag
 internal/cigates/routing	deps.go	cmd/cigate

@@ -36,7 +36,8 @@ var attemptColumns = []string{
 	"http_status UInt16", "error_class LowCardinality(String)", "state LowCardinality(String)",
 	"request_id String", "input_tokens UInt32", "output_tokens UInt32", "cached_input_tokens UInt32",
 	"billed_cost_usd Float64", "rates_version LowCardinality(String)", "latency_ms UInt32",
-	"retry_wait_ms UInt32", "computed_at DateTime64(3)", "usage_reason LowCardinality(String)", "model_from_request UInt8",
+	"retry_wait_ms UInt32", "computed_at DateTime64(3)", "usage_reason LowCardinality(String)", "model_from_request UInt8", "request_id_source LowCardinality(String)",
+	"endpoint_type LowCardinality(String)", "gateway_id String",
 }
 
 func tableColumns(t *testing.T, ctx context.Context, conn driver.Conn, table string) []string {

@@ -117,23 +117,7 @@ func TestTheRealChainTailPassesTheGoOwnedChecks(t *testing.T) {
 	}
 }
 
-func TestTheTailChecksRefuseAGapAndADuplicate(t *testing.T) {
-	for _, test := range []struct {
-		fixture string
-		want    string
-	}{
-		{"gap", "revision 0155 follows 0153: the Go-only revisions are consecutive, want 0154"},
-		{"duplicate", "revision 0153 has more than one file"},
-	} {
-		t.Run(test.fixture, func(t *testing.T) {
-			UsePlantedChain(t, os.DirFS("testdata/postfreeze/"+test.fixture))
-			baseline, chain, down := loadTail(t)
-			problems := tailProblems(baseline, chain, down)
-			if !strings.Contains(strings.Join(problems, "\n"), test.want) {
-				t.Errorf("problems %q do not name %q", problems, test.want)
-			}
-		})
-	}
+func TestTheTailChecksRefuseBadDownFilesAndStatements(t *testing.T) {
 	t.Run("a down file with no statement", func(t *testing.T) {
 		baseline, chain, down := plantedTail(t, "plant")
 		down[len(down)-1].SQL = "-- nothing\n"

@@ -31,7 +31,7 @@ func FrozenChainFS(t testing.TB, extra fs.FS) fs.FS {
 		}
 		for _, entry := range entries {
 			match := chainName.FindStringSubmatch(entry.Name())
-			if entry.IsDir() || match == nil || match[1] > FrozenHead {
+			if entry.IsDir() || match == nil || revisionLess(FrozenHead, match[1]) {
 				continue
 			}
 			data, err := fs.ReadFile(chainFiles, dir+"/"+entry.Name())
@@ -72,14 +72,18 @@ func UsePlantedChain(t testing.TB, extra fs.FS) {
 	UseChainFS(t, FrozenChainFS(t, extra))
 }
 
-// DropInvalidFailureStreakIndex runs the cleanup that follows a final failed build.
-func DropInvalidFailureStreakIndex(ctx context.Context, conn *pgx.Conn, options IndexBuildOptions, logger *slog.Logger) {
+// DropInvalidUnitsIndex runs the cleanup that follows a final failed build of the index the verb names.
+func DropInvalidUnitsIndex(ctx context.Context, conn *pgx.Conn, verb string, options IndexBuildOptions, logger *slog.Logger) {
+	index, _ := unitsIndexByVerb(verb)
 	var pid int32
 	if err := conn.QueryRow(ctx, "SELECT pg_backend_pid()").Scan(&pid); err != nil {
 		panic(err)
 	}
-	dropInvalidFailureStreakIndex(ctx, lockedSession{conn: conn, pid: pid}, options, logger)
+	dropInvalidUnitsIndex(ctx, lockedSession{conn: conn, pid: pid}, index, options, logger)
 }
 
 // BuildIndexLockKey is the advisory lock key one build-index run holds.
 const BuildIndexLockKey = buildIndexLockKey
+
+// OpenUnitsBuildIndexLockKey is the advisory lock key one open-units build-index run holds.
+const OpenUnitsBuildIndexLockKey = openUnitsBuildIndexLockKey

@@ -384,8 +384,8 @@ type attemptCaptureBatch struct {
 // Append reads the values in the column order of chwrite.WriteAttempts. A
 // change of that order fails the type assertions here.
 func (batch *attemptCaptureBatch) Append(values ...any) error {
-	if len(values) != 26 {
-		return fmt.Errorf("attempt row has %d values, want 26", len(values))
+	if len(values) != 29 {
+		return fmt.Errorf("attempt row has %d values, want 29", len(values))
 	}
 	batch.conn.rows = append(batch.conn.rows, chwrite.AttemptRecord{
 		RunID: values[1].(string), WorkUnitID: values[2].(string), Role: values[3].(string),
@@ -397,6 +397,7 @@ func (batch *attemptCaptureBatch) Append(values ...any) error {
 		BilledCostUSD: values[19].(float64), RatesVersion: values[20].(string),
 		LatencyMS: values[21].(uint32), RetryWaitMS: values[22].(uint32), ComputedAt: values[23].(time.Time),
 		UsageReason: values[24].(string), ModelFromRequest: values[25].(uint8) == 1,
+		RequestIDSource: values[26].(string), EndpointType: values[27].(string), GatewayID: values[28].(string),
 	})
 	return nil
 }

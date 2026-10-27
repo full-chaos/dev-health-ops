@@ -756,7 +756,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/apiservice/admin/users.go",
-        "line": 76
+        "line": 77
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -5183,7 +5183,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/apiservice/admin/users.go",
-        "line": 69
+        "line": 70
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -5254,7 +5254,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/apiservice/admin/users.go",
-        "line": 70
+        "line": 71
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -8604,7 +8604,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/apiservice/admin/users.go",
-        "line": 72
+        "line": 73
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -12229,7 +12229,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/apiservice/admin/users.go",
-        "line": 71
+        "line": 72
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -12300,7 +12300,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/apiservice/admin/users.go",
-        "line": 73
+        "line": 74
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -14636,7 +14636,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 119,
+          "line": 120,
           "note": "Pattern:",
           "path": "internal/api/legacyingest/legacyingest.go"
         },
@@ -14669,7 +14669,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/legacyingest/legacyingest.go",
-        "line": 119
+        "line": 120
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped"
@@ -14690,7 +14690,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 119,
+          "line": 120,
           "note": "Pattern:",
           "path": "internal/api/legacyingest/legacyingest.go"
         },
@@ -14723,7 +14723,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/legacyingest/legacyingest.go",
-        "line": 119
+        "line": 120
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped"
@@ -14744,7 +14744,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 119,
+          "line": 120,
           "note": "Pattern:",
           "path": "internal/api/legacyingest/legacyingest.go"
         },
@@ -14777,7 +14777,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/legacyingest/legacyingest.go",
-        "line": 119
+        "line": 120
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped"
@@ -14798,7 +14798,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 119,
+          "line": 120,
           "note": "Pattern:",
           "path": "internal/api/legacyingest/legacyingest.go"
         },
@@ -14831,7 +14831,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/legacyingest/legacyingest.go",
-        "line": 119
+        "line": 120
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped"
@@ -14852,7 +14852,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 119,
+          "line": 120,
           "note": "Pattern:",
           "path": "internal/api/legacyingest/legacyingest.go"
         },
@@ -14885,7 +14885,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/legacyingest/legacyingest.go",
-        "line": 119
+        "line": 120
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped"
@@ -14906,7 +14906,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 119,
+          "line": 120,
           "note": "Pattern:",
           "path": "internal/api/legacyingest/legacyingest.go"
         },
@@ -14939,7 +14939,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/legacyingest/legacyingest.go",
-        "line": 119
+        "line": 120
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped"
@@ -14978,7 +14978,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/producttelemetry/producttelemetry.go",
-        "line": 107
+        "line": 106
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"

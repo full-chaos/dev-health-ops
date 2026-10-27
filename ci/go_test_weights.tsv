@@ -19,15 +19,19 @@ internal/cigates/bigboy	35
 internal/cigates/chartgates	126
 internal/cigates/checkgo	160
 internal/cigates/docstools	34
+internal/cigates/emitscan	34
 internal/cigates/integrationshards	165
 internal/cigates/outboundtransport	89
 internal/cigates/proofteardown	19
+internal/cigates/racescope	30
 internal/cigates/raceunweighted	140
 internal/cigates/releasetag	7
 internal/cigates/scripts	164
+internal/cigates/sharedserver	26
 internal/cigates/splitshards	195
 internal/cigates/testshard	290
 internal/cigates/weightsfiles	57
+internal/cigates/workflowpaths	21
 internal/cigates/workflows	117
 internal/fixturescli	6
 internal/goapicli/restprove	12
@@ -52,6 +56,7 @@ internal/queryapi/investmentexplain	19
 internal/queryapiservice	13
 internal/storage/clickhouse	3
 internal/storedversion	29
+internal/streamhandlers	32
 internal/streamrunnerservice	22
 internal/synccli	71
 internal/syncdispatchruntime	23

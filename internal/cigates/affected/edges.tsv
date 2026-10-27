@@ -59,6 +59,7 @@ internal/cigates/affected	ci_script_helpers_test.go	unexpressed
 internal/cigates/affected	plan.go	unexpressed
 internal/cigates/affected	plan_wiring_test.go	unexpressed
 internal/cigates/affected	reach.go	unexpressed
+internal/cigates/affected	reachcache.go	unexpressed
 internal/cigates/affected	scan.go	unexpressed
 internal/cigates/affectedmatrix	ci_script_helpers_test.go	unexpressed
 internal/cigates/affectedmodule	ci_script_helpers_test.go	unexpressed
@@ -99,6 +100,8 @@ internal/cigates/integrationshards	free_run_test.go	unexpressed
 internal/cigates/nopython	trackedfiles_test.go	unexpressed
 internal/cigates/outboundtransport	outboundtransport_test.go	unexpressed
 internal/cigates/proofteardown	harness_test.go	unexpressed
+internal/cigates/racescope	racescope_test.go	unexpressed
+internal/cigates/racescope	scan.go	unexpressed
 internal/cigates/raceunweighted	raceunweighted_test.go	unexpressed
 internal/cigates/releasetag	parity_test.go	cmd/cigate
 internal/cigates/releasetag	parity_test.go	unexpressed
@@ -108,6 +111,7 @@ internal/cigates/routing	chart_test.go	unexpressed
 internal/cigates/routing	cut_test.go	unexpressed
 internal/cigates/routing	deps.go	unexpressed
 internal/cigates/routing	pinned_test.go	unexpressed
+internal/cigates/scripts	auth_corpus_queue_relevance_test.go	unexpressed
 internal/cigates/scripts	auth_queue_relevance_test.go	unexpressed
 internal/cigates/scripts	ci_script_helpers_test.go	unexpressed
 internal/cigates/scripts	free_run_test.go	unexpressed
@@ -133,11 +137,14 @@ internal/cigates/workflows	aggregate_gate_results_test.go	unexpressed
 internal/cigates/workflows	auth_compose_proof_test.go	unexpressed
 internal/cigates/workflows	auth_corpus_external_behaviour_test.go	unexpressed
 internal/cigates/workflows	auth_corpus_external_test.go	unexpressed
+internal/cigates/workflows	auth_corpus_queue_test.go	cmd/auth-service
+internal/cigates/workflows	auth_corpus_queue_test.go	unexpressed
 internal/cigates/workflows	auth_relevance_step_test.go	unexpressed
 internal/cigates/workflows	chart_started_selector_test.go	unexpressed
 internal/cigates/workflows	ci_script_helpers_test.go	unexpressed
 internal/cigates/workflows	docs_only_step_test.go	unexpressed
 internal/cigates/workflows	go_api_tools_build_inputs_test.go	unexpressed
+internal/cigates/workflows	go_quality_leg_selection_test.go	unexpressed
 internal/cigates/workflows	go_workers_compose_proof_test.go	unexpressed
 internal/cigates/workflows	governance_context_test.go	unexpressed
 internal/cigates/workflows	image_reuse_exec_norace_test.go	unexpressed
@@ -147,8 +154,10 @@ internal/cigates/workflows	workflows_auth_service_test.go	unexpressed
 internal/cigates/workflows	workflows_builder_images_test.go	unexpressed
 internal/cigates/workflows	workflows_go_integration_pr_scope_test.go	unexpressed
 internal/cigates/workflows	workflows_go_quality_queue_skip_test.go	unexpressed
+internal/cigates/workflows	workflows_go_queue_cancel_children_test.go	unexpressed
 internal/cigates/workflows	workflows_go_queue_failfast_test.go	unexpressed
 internal/cigates/workflows	workflows_go_queue_skip_test.go	unexpressed
+internal/cigates/workflows	workflows_gowork_off_test.go	deploy/helm/dev-health
 internal/cigates/workflows	workflows_path_filters_test.go	unexpressed
 internal/cigates/workflows	workflows_wire_parity_test.go	unexpressed
 internal/fixturescli	provider_worlds_producer_integration_test.go	unexpressed
@@ -182,11 +191,8 @@ internal/platform/shell	otlp_push_test.go	unexpressed
 internal/platform/shell	stop_bound_test.go	unexpressed
 internal/platform/tracing	environment_proxy_test.go	unexpressed
 internal/providerfoundation	environment_proxy_test.go	unexpressed
-internal/providersync	log_sites_redaction_test.go	internal/providersync
-internal/providersync	log_sites_redaction_test.go	unexpressed
-internal/providersync	prepared_route_projection_test.go	internal/providersync
+internal/providersync	census_load_test.go	unexpressed
 internal/providersync	project_id_test.go	unexpressed
-internal/providersync	redirect_decorator_derived_test.go	**/internal/providersync
 internal/providersync	work_item_row_base_census_test.go	unexpressed
 internal/queryapi/principal	verifier.go	unexpressed
 internal/queryapi/scancensus	census_test.go	internal/queryapi/...

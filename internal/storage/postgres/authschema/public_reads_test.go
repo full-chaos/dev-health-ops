@@ -11,7 +11,7 @@ import (
 func TestPublicReadColumnsMatchTheReviewedList(t *testing.T) {
 	want := map[string][]string{
 		"users": {"id", "email", "password_hash", "full_name", "username", "auth_provider", "auth_provider_id",
-			"is_active", "is_verified", "is_superuser", "token_version", "last_login_at", "sso_provider_id"},
+			"is_active", "is_verified", "is_superuser", "token_version", "last_login_at", "sso_provider_id", "saml_nameid_format", "saml_sp_name_qualifier"},
 		"memberships": {"user_id", "org_id", "role", "joined_at", "created_at"},
 		"sso_providers": {"id", "org_id", "protocol", "status", "allow_idp_initiated", "auto_provision_users",
 			"config", "allowed_domains", "encrypted_secrets", "is_default", "created_at"},
@@ -76,7 +76,7 @@ func TestLegacyRefreshTokenGrantIsRevokeOnlyAndNamesItsRemoval(t *testing.T) {
 func TestUsersWriteGrantIsTheReviewedColumns(t *testing.T) {
 	insert, update := UsersWriteGrant()
 	wantInsert := []string{"id", "email", "username", "password_hash", "full_name", "auth_provider", "auth_provider_id",
-		"is_active", "is_verified", "is_superuser", "token_version", "created_at", "updated_at"}
+		"is_active", "is_verified", "is_superuser", "token_version", "created_at", "updated_at", "sso_provider_id"}
 	wantUpdate := []string{"password_hash", "is_verified", "token_version", "last_login_at", "updated_at"}
 	if !reflect.DeepEqual(insert, wantInsert) || !reflect.DeepEqual(update, wantUpdate) {
 		t.Fatalf("UsersWriteGrant = %v / %v, want %v / %v", insert, update, wantInsert, wantUpdate)
@@ -89,7 +89,7 @@ func TestUsersWriteGrantIsTheReviewedColumns(t *testing.T) {
 	have := map[string]bool{}
 	for _, column := range update {
 		have[column] = true
-		if column == "email" || column == "is_active" {
+		if column == "email" || column == "is_active" || column == "sso_provider_id" {
 			t.Errorf("UPDATE must not include %s", column)
 		}
 	}

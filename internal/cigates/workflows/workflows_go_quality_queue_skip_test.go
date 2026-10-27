@@ -332,8 +332,9 @@ func TestGoQualityLegSkipIsPushOnlyNeverStaticAndKeepsReceipts(t *testing.T) {
 		t.Error("a job-level if on the legs would report them skipped")
 	}
 	var names []string
-	for _, e := range asList(asMap(asMap(leg["strategy"])["matrix"])["include"]) {
-		names = append(names, asString(asMap(e)["name"]))
+	// CHAOS-11418: the full leg list (the one a push and a queue entry run) lives in ci/go_quality_legs.json.
+	for _, e := range goQualityLegList(t, repoRoot(t)) {
+		names = append(names, asString(e["name"]))
 	}
 	if strings.Join(names, ",") != strings.Join(qualityLegNames, ",") {
 		t.Errorf("matrix legs %v differ from the pinned list %v", names, qualityLegNames)

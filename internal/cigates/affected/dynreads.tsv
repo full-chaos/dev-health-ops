@@ -129,12 +129,15 @@ internal/chmigrate	team_daily_counters_float64_integration_test.go
 internal/chmigrate	teams_provider_identity_integration_test.go
 internal/chmigrate	testops_test_flake_counts_integration_test.go
 internal/chmigrate	work_item_metrics_nullable_integration_test.go
+internal/cigates/abstime	abstime.go
 internal/cigates/affected	ci_script_helpers_test.go
 internal/cigates/affected	go_affected_integration_test.go
 internal/cigates/affected	md_bounded_test.go
 internal/cigates/affected	plan.go
 internal/cigates/affected	reach.go
 internal/cigates/affected	reach_test.go
+internal/cigates/affected	reachcache.go
+internal/cigates/affected	reachcache_test.go
 internal/cigates/affected	scan.go
 internal/cigates/affected	tables.go
 internal/cigates/affectedmatrix	affected_helpers_test.go
@@ -221,6 +224,7 @@ internal/cigates/frozengoldens	frozengoldens.go
 internal/cigates/frozengoldens	frozengoldens_test.go
 internal/cigates/integrationshards	ci_script_helpers_test.go
 internal/cigates/integrationshards	integration_sharding_test.go
+internal/cigates/integrationshards	shard_start_order_test.go
 internal/cigates/integrationshards	side_effect_hooks_test.go
 internal/cigates/livee2e	cli.go
 internal/cigates/nopython	nopython_test.go
@@ -232,6 +236,7 @@ internal/cigates/queuecreds	gate_test.go
 internal/cigates/queuecreds	queuerows_test.go
 internal/cigates/queuecreds	scan.go
 internal/cigates/queuecreds	scan_test.go
+internal/cigates/racescope	scan.go
 internal/cigates/raceunweighted	raceunweighted_test.go
 internal/cigates/releasetag	parity_test.go
 internal/cigates/releasetag	releasetag.go
@@ -242,6 +247,7 @@ internal/cigates/routing	deps.go
 internal/cigates/routing	parity_test.go
 internal/cigates/routing	planes_test.go
 internal/cigates/routing	tools_test.go
+internal/cigates/scripts	auth_corpus_queue_relevance_test.go
 internal/cigates/scripts	auth_queue_relevance_test.go
 internal/cigates/scripts	chmigrate_history_frozen_test.go
 internal/cigates/scripts	ci_script_helpers_test.go
@@ -255,6 +261,7 @@ internal/cigates/scripts	posture_integration_test.go
 internal/cigates/scripts	relevance_step_script_test.go
 internal/cigates/scripts	shard_row_files_merge_test.go
 internal/cigates/scripts	tmp_dirs_removed_test.go
+internal/cigates/sharedserver	batch_a_test.go
 internal/cigates/sharedserver	sharedserver_test.go
 internal/cigates/splitshards	ci_script_helpers_test.go
 internal/cigates/splitshards	split_package_shards_test.go
@@ -265,6 +272,7 @@ internal/cigates/testshard	standin_test.go
 internal/cigates/testshard	trimpath_test.go
 internal/cigates/testshard	unweightedpkg_test.go
 internal/cigates/testshard	weightscensus_test.go
+internal/cigates/ttlclock	ttlclock_test.go
 internal/cigates/webproxyproof	proof_test.go
 internal/cigates/weightsfiles	ci_script_helpers_test.go
 internal/cigates/weightsfiles	race_weights_files_test.go
@@ -272,6 +280,8 @@ internal/cigates/workflowpaths	workflow_path_filters_test.go
 internal/cigates/workflows	auth_compose_proof_test.go
 internal/cigates/workflows	auth_corpus_external_behaviour_test.go
 internal/cigates/workflows	auth_corpus_external_test.go
+internal/cigates/workflows	auth_corpus_queue_test.go
+internal/cigates/workflows	chart_started_filter_test.go
 internal/cigates/workflows	chart_started_selector_test.go
 internal/cigates/workflows	ci_script_helpers_test.go
 internal/cigates/workflows	docker_images_fanin_behaviour_test.go
@@ -284,6 +294,7 @@ internal/cigates/workflows	ttl_registry_test.go
 internal/cigates/workflows	workflows_common_test.go
 internal/cigates/workflows	workflows_go_integration_pr_scope_test.go
 internal/cigates/workflows	workflows_go_quality_queue_skip_test.go
+internal/cigates/workflows	workflows_go_queue_cancel_children_test.go
 internal/cigates/workflows	workflows_go_queue_skip_test.go
 internal/cigates/workflows	workflows_go_resolver_test.go
 internal/cigates/workflows	workflows_path_filters_test.go

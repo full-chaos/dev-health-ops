@@ -62,8 +62,7 @@ type ValkeyStreams struct {
 const openTimeout = 5 * time.Second
 
 var (
-	errNoStream    = errors.New("producttelemetry: Valkey is not configured")
-	errUnencodable = errors.New("producttelemetry: stream key or field is not encodable as UTF-8")
+	errNoStream = errors.New("producttelemetry: Valkey is not configured")
 )
 
 func (s *ValkeyStreams) open() (valkeygo.Client, error) {
@@ -147,9 +146,18 @@ func (h handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	} else {
 		var err error
 		stream, err = h.write(r.Context(), batch, ingestionID)
-		if err != nil {
+		switch {
+		case errors.Is(err, errNoStream):
+			// Not configured: a retry cannot help, so the batch is accepted as
+			// Python does.
 			h.logger.WarnContext(r.Context(), "Product telemetry stream unavailable", slog.String("error", err.Error()))
 			stream = "disabled"
+		case err != nil:
+			// Python accepts and drops here; this is a deliberate deviation
+			// (CHAOS-11643): the client retries.
+			h.logger.WarnContext(r.Context(), "Product telemetry stream unavailable, answering 503", slog.String("error", err.Error()))
+			policy.WriteDetail(w, http.StatusServiceUnavailable, "Product telemetry stream unavailable; retry", http.Header{"Retry-After": {streamRetryAfter}})
+			return
 		}
 	}
 	out := pyjson.NewObject()
@@ -224,17 +232,15 @@ func (h handler) write(ctx context.Context, batch batch, ingestionID string) (st
 	if h.streams == nil {
 		return "", errNoStream
 	}
-	// The Python Redis client UTF-8 encodes the key and every field before
-	// it sends anything; a lone surrogate fails that encode, so no entry is
-	// written and the batch is accepted with stream "disabled".
-	if pyjson.HasSurrogate(stream) || pyjson.HasSurrogate(orgHash) {
-		return "", errUnencodable
-	}
 	err = h.streams.Append(ctx, stream, [][2]string{
 		{"ingestion_id", ingestionID}, {"source", batch.source}, {"org_id_hash", orgHash}, {"events", encoded},
 	})
 	return stream, err
 }
+
+// streamRetryAfter is the Retry-After of a stream-unavailable 503, as the
+// auth proxy's own 503 refusal.
+const streamRetryAfter = "1"
 
 // writeJSON is the shared JSONResponse writer (policy.WriteJSON), which
 // logs a body it cannot serialize and answers the unhandled-error 500.

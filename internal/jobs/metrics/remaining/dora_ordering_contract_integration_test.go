@@ -653,7 +653,20 @@ func showCreateTable(
 		ctx, "SHOW CREATE TABLE `"+table+"`").Scan(&ddl); err != nil {
 		t.Fatalf("show create table %s: %v", table, err)
 	}
-	return ddl
+	// SHOW CREATE TABLE names the table with its database. The DDL is replayed
+	// on a different store, and on a shared server that name would address the
+	// source store's scratch database, not the target's.
+	var database string
+	if err := conn.QueryRow(ctx, "SELECT currentDatabase()").Scan(&database); err != nil {
+		t.Fatalf("read the current database: %v", err)
+	}
+	for _, qualifier := range []string{"`" + database + "`.", database + "."} {
+		if strings.Contains(ddl, qualifier+"`"+table+"`") || strings.Contains(ddl, qualifier+table) {
+			return strings.Replace(ddl, qualifier, "", 1)
+		}
+	}
+	t.Fatalf("show create table %s: no %q qualifier in %q", table, database, ddl)
+	return ""
 }
 
 // freshMigratedClickHouse builds an UNCACHED store, for tests that mutate the

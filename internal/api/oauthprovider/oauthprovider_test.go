@@ -152,7 +152,7 @@ func TestGitLabAndGoogleRequiredFields(t *testing.T) {
 	if info, err := unverified.FetchUserInfo(context.Background(), Google, "tok"); err != nil || info.EmailVerified {
 		t.Fatalf("google: verified_email false, want EmailVerified false: %+v %v", info, err)
 	}
-	for _, body := range []string{`{"id": 1}`, `{"email": "x@x.com"}`, `[]`, `"text"`, `5`, `null`} {
+	for _, body := range []string{`{"id": 1}`, `[]`, `"text"`, `5`, `null`} {
 		client := fakeClient(t, map[string]route{"/gl/api/v4/user": {200, body}})
 		var userInfoErr *UserInfoError
 		if _, err := client.FetchUserInfo(context.Background(), GitLab, "tok"); !errors.As(err, &userInfoErr) {

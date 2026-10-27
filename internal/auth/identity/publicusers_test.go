@@ -2,6 +2,7 @@ package identity
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -43,3 +44,20 @@ func TestFederatedPublicUserMatchesWhatGoAPIWrites(t *testing.T) {
 }
 
 func strPtr(s string) *string { return &s }
+
+// CHAOS-11619: the public.users row of a federated provisioning never carries
+// a provider id ValidSubject refuses; a valid one is written as before.
+func TestFederatedPublicUserRefusesAnInvalidSubject(t *testing.T) {
+	id := uuid.New()
+	key := ExternalKey{Issuer: "https://idp.example.test", Provider: "6f0c2d58-6b43-4b8e-9a8e-3a6f7a1c9d11", Subject: "sub-1"}
+	for name, subject := range map[string]string{"edge whitespace": " sub-1", "control": "sub\x01", "too long": strings.Repeat("a", 1025)} {
+		req := ProvisionRequest{Key: key, LegacyProvider: "oidc", LegacySubject: subject}
+		if _, err := federatedPublicUser(id, "d@example.test", req); !errors.Is(err, ErrLegacyProjection) {
+			t.Errorf("%s: err = %v, want ErrLegacyProjection", name, err)
+		}
+	}
+	social := ProvisionRequest{Key: ExternalKey{Issuer: "https://github.com", Provider: ProviderGitHub, Subject: " 12345"}}
+	if _, err := federatedPublicUser(id, "e@example.test", social); !errors.Is(err, ErrLegacyProjection) {
+		t.Errorf("social edge whitespace: err = %v, want ErrLegacyProjection", err)
+	}
+}

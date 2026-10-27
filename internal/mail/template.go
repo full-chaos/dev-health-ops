@@ -3,6 +3,7 @@ package mail
 import (
 	"embed"
 	"fmt"
+	"html"
 	"strings"
 )
 
@@ -17,10 +18,16 @@ var templateFiles embed.FS
 // RenderTemplate is EmailService.render_template (email.py): it substitutes
 // context into the named template with the same `str.format` rules Python
 // applies -- `{field}` is replaced by the field's value, `{{` and `}}` are
-// literal braces -- and, exactly like Python, performs NO HTML escaping: a
-// value containing markup lands in the message as markup. That is the source
-// system's behavior, ported as it is; escaping here would make the two
-// planes send different bytes for the same input.
+// literal braces.
+//
+// One deliberate difference from the Python original: every substituted value
+// is HTML-escaped (EscapeHTML), the URL fields included (& in a query string
+// becomes &amp;, which an href decodes back). Python wrote values raw. That
+// let a name set by one user (an org's name, an inviter's name sent to a third
+// party) put markup into a mail another person receives, so the Go plane does
+// not. For the same input and the same Go code the go-api and auth-service
+// mails are byte-equal; they differ from the old Python bytes only where a
+// value holds one of & < > ' ".
 //
 // Only plain `{identifier}` replacement fields are supported. Python's format
 // mini-language (`{x!r}`, `{x:>10}`, attribute and index access) is not: no
@@ -28,12 +35,37 @@ var templateFiles embed.FS
 // silently rendered differently. A field with no value in context is an
 // error, as `str.format` raises KeyError for it.
 func RenderTemplate(name string, context map[string]string) (string, error) {
+	return renderTemplate(name, context, true)
+}
+
+// renderTemplate is RenderTemplate with the escape switchable: the frozen
+// Python oracle tests render with escape false, because the Python answers
+// they replay wrote values raw; the escape itself is pinned in template_test.go.
+func renderTemplate(name string, context map[string]string, escape bool) (string, error) {
 	raw, err := templateFiles.ReadFile("templates/" + name + ".html")
 	if err != nil {
 		return "", fmt.Errorf("email template %q not found", name)
 	}
-	return formatTemplate(string(raw), context)
+	values := context
+	if escape {
+		values = make(map[string]string, len(context))
+		for field, value := range context {
+			values[field] = EscapeHTML(value)
+		}
+	}
+	return formatTemplate(string(raw), values)
 }
+
+// SubjectText makes a user-controlled value safe for the Subject header: a
+// line break would start another header line, so each CR and LF becomes a
+// space. A subject is a header, not HTML, so it is not HTML-escaped.
+func SubjectText(value string) string {
+	return strings.NewReplacer("\r", " ", "\n", " ").Replace(value)
+}
+
+// EscapeHTML is the one escape every mail value goes through: & < > ' and "
+// become &amp; &lt; &gt; &#39; and &#34;.
+func EscapeHTML(value string) string { return html.EscapeString(value) }
 
 func formatTemplate(template string, context map[string]string) (string, error) {
 	var out strings.Builder

@@ -232,5 +232,6 @@ func (byo *orgCategorizeBYO) buildClef(ctx context.Context, orgID string, cfg ll
 		return nil, refuseBYO("")
 	}
 	served.byo = true
+	served.endpointType, served.gatewayID, _ = llmorgsettings.ClefEndpoint(cfg.BaseURL)
 	return served, nil
 }

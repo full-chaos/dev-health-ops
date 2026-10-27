@@ -62,6 +62,9 @@ on:
       # internal/pgmigrate //go:embed-s its sql/ chain directory, so a file
       # there is an input of the Go build and its tests.
       - 'internal/pgmigrate/sql/**'
+      # internal/pgmigrate's chain_manifest.tsv pins the sha256 of each chain file; a test reads it, so a change to it
+      # is an input of the Go tests.
+      - 'internal/pgmigrate/chain_manifest.tsv'
       # internal/chmigrate //go:embed-s its sql/ chain directory, so a file
       # there is an input of the Go build and its tests.
       - 'internal/chmigrate/sql/**'
@@ -137,6 +140,8 @@ on:
       - 'ci/*.tsv'
       - 'ci/*.awk'
       - 'ci/security_fresh_packages.txt'
+      # CHAOS-11418: the go-quality leg list; a change to it alone changes which legs go-quality starts
+      - 'ci/go_quality_legs.json'
       - 'ci/*.d/**'
       # CHAOS-6926: the per-package venue weights the legs are balanced by.
       # CHAOS-6690: the go-quality race shards read these; a change to either
@@ -147,9 +152,11 @@ on:
       - 'internal/cigates/chparams/testdata/*.txt'
       - 'internal/cigates/frozengoldens/*.tsv'
       - 'internal/cigates/emitscan/*.tsv'
+      - 'internal/cigates/abstime/*.tsv'
       - 'internal/cigates/outboundtransport/*.tsv'
       - 'internal/platform/otlpmetrics/*.tsv'
       - 'internal/cigates/chconstructor/*.tsv'
+      - 'internal/cigates/ttlclock/*.tsv'
       - 'ci/check_venue_oracle_registry.sh'
       - 'ci/lib/venue_oracle_registry.sh'
       - 'ci/check_go_containers.sh'
@@ -164,6 +171,8 @@ on:
       - 'ci/auth_corpus_set_env.sh'
       - 'ci/auth_corpus_external.override.yml'
       - 'ci/auth_corpus_external.acp.override.yml'
+      # CHAOS-11596: the merge queue path set, its relevance script and the stub the venue test reads.
+      - 'ci/auth_corpus_**'
       - '.github/workflows/venue-oracles.yml'
       - 'ci/auth_k8s/**'
       # The migration matrix's evidence columns are validated by a Go
@@ -789,6 +798,36 @@ jobs:
             echo "${cancelled} cancelled by fail-fast; a cancelled shard is not a pass."
           } | tee -a "${summary}" || true
           exit 0
+
+  # Merge queue only. GitHub rebuilds the entries stacked on a red entry but leaves their old runs running; this job
+  # cancels those stale runs (strict gh-readonly-queue branch chain from this entry's head_sha, POST .../cancel only).
+  # It is the only job with actions: write and is not a required context. The one script it runs comes from the
+  # target branch's tip (never the merge group, which carries queued PR changes); no credential is persisted by the
+  # checkout and GH_TOKEN is set in the script step's env only.
+  cancel-stacked-queue-children:
+    name: cancel-stacked-queue-children
+    needs: [go-storage-integration]
+    if: failure() && github.event_name == 'merge_group'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    continue-on-error: true
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.merge_group.base_ref }}
+          sparse-checkout: ci/cancel_stacked_queue_runs.sh
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+      - name: Cancel the runs stacked on this red entry
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.sha }}
+          RUN_ID: ${{ github.run_id }}
+        run: bash ci/cancel_stacked_queue_runs.sh
 
 
   # CHAOS-11415: the six Go image targets are built ONCE per platform here and every other consumer in this

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"html"
 	"strconv"
 	"strings"
 
@@ -172,16 +171,9 @@ func stringField(fields map[string]json.RawMessage, name string, fallback string
 		if err != nil {
 			return "", fmt.Errorf("%w: %s is not decodable: %v", ErrMalformedAttributes, name, err)
 		}
-		// R60 confirmation-pass fix (codex P1, chaos-5402-r60-confirm):
-		// this composite path is a NEW way for org/Stripe-controlled text
-		// to reach an email body (a composite value used to be DROPPED
-		// entirely, never reaching the template) -- formatTemplate itself
-		// does no escaping (byte-for-byte port of Python's plain
-		// str.format), and all 7 templates (templates/*.html) are
-		// genuinely HTML documents. Escape here, on the NEW path only;
-		// the pre-existing scalar-field path above is intentionally left
-		// unchanged (a separate, pre-existing gap, ticketed separately).
-		return html.EscapeString(canonical), nil
+		// The canonical text is returned raw: RenderBillingEmail escapes every
+		// value it substitutes (once), the composite ones included.
+		return canonical, nil
 	}
 	return trimmed, nil
 }

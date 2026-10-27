@@ -10,10 +10,29 @@ import (
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/jackc/puddle/v2"
 	"github.com/valkey-io/valkey-go"
 )
 
 var errStore = errors.New("store unavailable")
+
+// closedPoolError is what a request in flight gets when the process closes the
+// pool under it: a real pgxpool, closed, then used. Construction is lazy, so no
+// database is needed.
+func closedPoolError(t *testing.T) error {
+	t.Helper()
+	pool, err := pgxpool.New(context.Background(), "postgres://u@127.0.0.1:1/db")
+	if err != nil {
+		t.Fatalf("pgxpool.New: %v", err)
+	}
+	pool.Close()
+	_, err = pool.Exec(context.Background(), "select 1")
+	if err == nil {
+		t.Fatal("a closed pool answered")
+	}
+	return err
+}
 
 func TestDependencyFailureClassifiesEachStoreErrorClass(t *testing.T) {
 	for _, c := range []struct {
@@ -40,6 +59,9 @@ func TestDependencyFailureClassifiesEachStoreErrorClass(t *testing.T) {
 		{"client cancel", fmt.Errorf("query: %w", context.Canceled), false},
 		{"cancel inside a connect error", fmt.Errorf("%w", errors.Join(context.Canceled, &net.OpError{Op: "dial"})), false},
 		{"plain error", errors.New("dial tcp: connection refused"), false},
+		{"closed pool value", fmt.Errorf("%w: load: %w", errStore, puddle.ErrClosedPool), true},
+		{"closed pgx pool", closedPoolError(t), true},
+		{"closed pool is no cancel", errors.Join(context.Canceled, puddle.ErrClosedPool), false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			if got := DependencyFailure(c.err); got != c.want {

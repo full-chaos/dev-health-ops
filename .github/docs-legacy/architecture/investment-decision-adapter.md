@@ -361,6 +361,7 @@ source text.
 | `config` | Stamp of the candidate (shadow and served decision rows) |
 | `kind` | `first`, `retry`, `repair`, `fallback` |
 | `attempt`, `http_status`, `error_class`, `request_id` | One HTTP attempt |
+| `request_id_source` | Where `request_id` came from: `aig` (AI Gateway log id), `ray` (Cloudflare ray id) or `client` (id minted for the attempt, also sent as `X-Request-Id`). Clef attempts always have an id; empty for other providers |
 | `state` | Final decision state, on the last attempt of a classification only; empty on others |
 | `input_tokens`, `output_tokens`, `cached_input_tokens`, `billed_cost_usd`, `rates_version` | Usage and rated cost; tokens and cost on the last attempt row only |
 | `latency_ms`, `retry_wait_ms` | Timing |

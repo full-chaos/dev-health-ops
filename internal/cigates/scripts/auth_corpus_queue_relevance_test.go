@@ -131,11 +131,12 @@ func corpusQueueRunEnv(t *testing.T, dir string, extra []string, args ...string)
 	cmd := exec.Command("bash", append([]string{filepath.Join(dir, "ci", "auth_corpus_queue_relevance.sh")}, args...)...)
 	cmd.Dir = dir
 	cmd.Env = append([]string{"PATH=" + corpusQueueBinDir(dir) + ":/usr/bin:/bin:/usr/local/bin", "HOME=" + t.TempDir()}, extra...)
-	var stdout strings.Builder
-	cmd.Stdout = &stdout
+	var stdout, stderr strings.Builder
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("the script must always exit 0: %v", err)
 	}
+	t.Logf("script stderr: %s", strings.TrimSpace(stderr.String()))
 	return strings.TrimSpace(stdout.String())
 }
 

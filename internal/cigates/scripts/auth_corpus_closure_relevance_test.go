@@ -260,17 +260,23 @@ func corpusFixtureRepo(t *testing.T) (dir string, env []string) {
 		t.Skip("no go on PATH")
 	}
 	files := map[string]string{
-		"go.mod":                            "module example.com/fix\n\ngo 1.21\n",
-		"internal/api/session/s.go":         "package session\n\nimport _ \"example.com/fix/internal/liba\"\n",
-		"internal/api/sso/s.go":             "package sso\n\nimport \"embed\"\n\n//go:embed templates/*.html\nvar T embed.FS\n",
-		"internal/api/sso/templates/a.html": "<p>a</p>\n",
-		"internal/api/policy/p.go":          "package policy\n",
-		"internal/apiservice/a.go":          "package apiservice\n",
-		"cmd/dho/main.go":                   "package main\n\nimport _ \"example.com/fix/internal/libb\"\n\nfunc main() {}\n",
-		"cmd/auth-service/main.go":          "package main\n\nfunc main() {}\n",
-		"internal/liba/a.go":                "package liba\n",
-		"internal/libb/b.go":                "package libb\n",
-		"internal/unrelated/u.go":           "package unrelated\n",
+		"go.mod":                                      "module example.com/fix\n\ngo 1.21\n",
+		"internal/api/session/s.go":                   "package session\n\nimport _ \"example.com/fix/internal/liba\"\n",
+		"internal/api/sso/s.go":                       "package sso\n\nimport \"embed\"\n\n//go:embed templates/*.html\nvar T embed.FS\n",
+		"internal/api/sso/templates/a.html":           "<p>a</p>\n",
+		"internal/api/policy/p.go":                    "package policy\n",
+		"internal/apiservice/a.go":                    "package apiservice\n",
+		"cmd/dho/main.go":                             "package main\n\nimport _ \"example.com/fix/internal/libb\"\n\nfunc main() {}\n",
+		"cmd/auth-service/main.go":                    "package main\n\nfunc main() {}\n",
+		"cmd/dev-health-worker-migrate/main.go":       "package main\n\nfunc main() {}\n",
+		"cmd/auth-migrate/main.go":                    "package main\n\nfunc main() {}\n",
+		"internal/apiservice/authflowvenue/doc.go":    "package authflowvenue\n",
+		"internal/apiservice/authflowvenue/v_test.go": "//go:build integration\n\npackage authflowvenue\n\nimport _ \"example.com/fix/internal/testsupport/venueoracle\"\n",
+		"internal/testsupport/venueoracle/v.go":       "package venueoracle\n",
+		"internal/testsupport/unrelated/u.go":         "package unrelated\n",
+		"internal/liba/a.go":                          "package liba\n",
+		"internal/libb/b.go":                          "package libb\n",
+		"internal/unrelated/u.go":                     "package unrelated\n",
 	}
 	for name, body := range files {
 		full := filepath.Join(dir, name)

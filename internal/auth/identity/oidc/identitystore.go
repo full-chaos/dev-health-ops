@@ -63,7 +63,7 @@ func lookupError(err error) error {
 // EmailInUse reports whether any account holds the normalized address. It
 // only refuses; it never selects an account.
 func (a StoreIdentities) EmailInUse(ctx context.Context, email string) (bool, error) {
-	normalized, err := identity.NormalizeEmail(email)
+	normalized, err := identity.NormalizeFederatedEmail(email)
 	if err != nil {
 		return false, err
 	}

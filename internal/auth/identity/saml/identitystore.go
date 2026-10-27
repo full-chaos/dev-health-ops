@@ -46,7 +46,7 @@ func LookupError(err error) error {
 
 // NormalizeEmail is the identity store's email rule.
 func (s IdentityStore) NormalizeEmail(raw string) (string, error) {
-	return identity.NormalizeEmail(raw)
+	return identity.NormalizeFederatedEmail(raw)
 }
 
 // PrincipalByEmail reports the account holding email and the sign-in method

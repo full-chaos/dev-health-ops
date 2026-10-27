@@ -33,6 +33,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)"
 ROOT="$(cd -- "${SCRIPT_DIR}/.." >/dev/null 2>&1 && pwd -P)"
+# shellcheck source=ci/lib/pull_base_image.sh
+source "${ROOT}/ci/lib/pull_base_image.sh"
 
 readonly KIND_VERSION="v0.33.0"
 readonly KIND_SHA256_AMD64="aee6151561422756b764a4ae28e7f44cda5af5a9eead3cc9985112b1de8d8e0d"
@@ -88,6 +90,8 @@ cleanup() {
   fi
   "${WORK}/kind" delete cluster --name "${CLUSTER}" >/dev/null 2>&1 || true
   docker rm --force --volumes "${CLUSTER}-control-plane" >/dev/null 2>&1 || true
+  # best effort: the tag is absent when the pull never succeeded, and a cleanup failure must not mask the exit status
+  [ -z "${PINNED_BASE_TAG:-}" ] || docker image rm "${PINNED_BASE_TAG}" >/dev/null 2>&1 || true
   rm -rf "${WORK}"
   exit "${status}"
 }
@@ -113,8 +117,10 @@ export PATH="${WORK}/bin:${PATH}"
 
 # --- images and cluster --------------------------------------------------------------------------
 printf 'step 1: build dho, auth-service and auth-migrate from this tree; create the cluster\n'
+pull_pinned_base_image "${ROOT}/docker/go-worker.Dockerfile" || die "base image pull failed"
 build() {
-  BUILDX_NO_DEFAULT_ATTESTATIONS=1 docker build --file "${ROOT}/docker/go-worker.Dockerfile" --target "$1" \
+  BUILDX_NO_DEFAULT_ATTESTATIONS=1 docker build --pull=false --build-arg GO_BUILD_IMAGE="${PINNED_BASE_TAG}" \
+    --file "${ROOT}/docker/go-worker.Dockerfile" --target "$1" \
     --build-arg VERSION=rehearsal --build-arg COMMIT=0000000000000000000000000000000000000000 \
     --build-arg BUILD_TIME=1970-01-01T00:00:00Z --build-arg SOURCE_DATE_EPOCH=0 \
     --tag "$2" "${ROOT}"

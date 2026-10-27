@@ -383,6 +383,9 @@ data:
 {{- if and $a.valkey.secretName (not $a.networkPolicy.egress.valkey.to) }}{{- fail "authService.networkPolicy.egress.valkey.to is required while authService.valkey.secretName is set and authService.networkPolicy.enabled: the auth pods get no egress but DNS and the database, so an empty list would cut the service off from its rate-limit store" }}{{- end }}
 {{- $mailOn := and (eq (include "dev-health.authOn" (dict "flag" "usersOwned" "context" .)) "true") (trim (toString (default dict $a.mail).secretName)) }}
 {{- if and $mailOn (not $a.networkPolicy.egress.mail.to) }}{{- fail "authService.networkPolicy.egress.mail.to is required while authService.mail.secretName is set at authService.phase >= 4 and authService.networkPolicy.enabled: the auth pods get no egress but DNS, the database and the listed peers, so the mail provider would be unreachable" }}{{- end }}
+{{- $wide := 0 }}
+{{- range $a.networkPolicy.egress.mail.to }}{{- if and (kindIs "map" .) (kindIs "map" .ipBlock) (hasSuffix "/0" (toString .ipBlock.cidr)) }}{{- $wide = add1 $wide }}{{- end }}{{- end }}
+{{- if and (gt $wide 0) (ne $wide (len $a.networkPolicy.egress.mail.to)) }}{{- fail "authService.networkPolicy.egress.mail.to: a whole-internet ipBlock (0.0.0.0/0 or ::/0) must be the only kind of peer in the list: the one mail rule then carries TCP 443 alone, so a narrow peer would silently lose its own ports" }}{{- end }}
 {{- range $i, $peer := $a.networkPolicy.egress.mail.to }}
 {{- $problem := include "dev-health.authMailPeerProblem" (dict "peer" $peer "ports" $a.networkPolicy.egress.mail.ports) }}
 {{- if $problem }}{{- fail (printf "authService.networkPolicy.egress.mail.to[%d] %s" $i $problem) }}{{- end }}

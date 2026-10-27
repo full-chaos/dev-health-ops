@@ -67,8 +67,7 @@ func TestSiteMovedLiteralStillPasses(t *testing.T) {
 }
 
 func TestSiteOrphanMarkerIsRed(t *testing.T) {
-	clock := strings.Replace(siteSource, "time.Date(2026, time.August, 10, 12, 0, 0, 0, time.UTC)", "time.Now()", 1)
-	wantOne(t, "no date literal near it", siteProblems(t, withMarker(clock, siteNever)), "p/p_test.go:8: no date literal")
+	wantOne(t, "no date literal near it", siteProblems(t, strings.Replace(withMarker(siteSource, siteNever), "time.Date(2026, time.August, 10, 12, 0, 0, 0, time.UTC)", "time.Now()", 1)), "p/p_test.go:8: no date literal")
 	apart := strings.Replace(withMarker(siteSource, siteNever), siteNever+"\n", siteNever+"\n\n", 1)
 	wantOne(t, "a blank line between marker and literal", siteProblems(t, apart), "no date literal")
 	wantOne(t, "...and the literal is unmarked", siteProblems(t, apart), "date literal 2026-08-10")
@@ -88,7 +87,7 @@ func TestSiteEmptyReasonIsRed(t *testing.T) {
 
 func TestSiteNotAMarker(t *testing.T) {
 	for _, marker := range []string{"//ttlclock:allowed never reaches a TTL table: x tables=events_ttl", "/* ttlclock:allow never reaches a TTL table: x tables=events_ttl */", "// ttlclock:allow never reaches a TTL table: x tables=events_ttl"} {
-		wantOne(t, marker, siteProblems(t, withMarker(siteSource, marker)), "p/p_test.go:8: date literal 2026-08-10")
+		wantOne(t, marker, siteProblems(t, withMarker(siteSource, marker)), "p/p_test.go:9: date literal 2026-08-10")
 	}
 }
 

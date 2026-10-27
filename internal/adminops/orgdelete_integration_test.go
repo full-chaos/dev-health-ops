@@ -301,6 +301,7 @@ func neutral(dataType, id string) string {
 	case "text", "character varying", "character":
 		return "'x'"
 	case "timestamp with time zone", "timestamp without time zone":
+		//ttlclock:allow never reaches a TTL table: Postgres neutral() value for the date columns of the org rows; the ClickHouse reseed writes only git_blame and backfill_log, stamped with now64()/today() tables=llm_categorization_attempts,work_unit_investment_shadow
 		return "'2000-01-01 00:00:00+00'"
 	case "integer", "bigint", "smallint", "numeric", "double precision", "real":
 		return "0"
@@ -309,6 +310,7 @@ func neutral(dataType, id string) string {
 	case "json", "jsonb", "ARRAY":
 		return "'{}'"
 	case "date":
+		//ttlclock:allow never reaches a TTL table: Postgres neutral() value for the date columns of the org rows; the ClickHouse reseed writes only git_blame and backfill_log, stamped with now64()/today() tables=llm_categorization_attempts,work_unit_investment_shadow
 		return "'2000-01-01'"
 	}
 	return "NULL"

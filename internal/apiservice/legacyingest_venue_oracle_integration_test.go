@@ -114,8 +114,11 @@ func TestLegacyIngestVenueOracle(t *testing.T) {
 	t.Cleanup(func() { _ = server.Shutdown(ctx) })
 	goBase := "http://" + server.Address()
 
+	//ttlclock:allow never reaches a TTL table: request body for the legacy ingest route (no TTL table); every telemetry_signal_bucket request is stamped 2099-06-15 tables=telemetry_signal_bucket
 	commit := `{"hash":"abc","message":"m","author_name":"a","author_email":"a@example.test","author_when":"2026-01-01T00:00:00+02:00","committer_when":1767225600.5,"extra":true}`
+	//ttlclock:allow never reaches a TTL table: request body for the legacy ingest route (no TTL table); every telemetry_signal_bucket request is stamped 2099-06-15 tables=telemetry_signal_bucket
 	deployment := `{"deployment_id":"d1","status":"success","environment":"prod","started_at":"2026-01-01T00:00:00Z","pull_request_number":"7","release_ref_confidence":1}`
+	//ttlclock:allow never reaches a TTL table: request body for the legacy ingest route (no TTL table); every telemetry_signal_bucket request is stamped 2099-06-15 tables=telemetry_signal_bucket
 	incident := `{"incident_id":"i1","status":"open","started_at":"2026-01-01T00:00:00Z"}`
 	body := func(items string) string {
 		return `{"org_id":"org-venue","repo_url":"https://example.test/r.git","items":[` + items + `]}`
@@ -134,21 +137,28 @@ func TestLegacyIngestVenueOracle(t *testing.T) {
 		}
 		return venueoracle.Request{Name: name, Method: "POST", Path: "/api/v1/ingest/" + route, Headers: all, Body: venueoracle.B64(text)}
 	}
+	//ttlclock:allow never reaches a TTL table: request body for the legacy ingest route (no TTL table); every telemetry_signal_bucket request is stamped 2099-06-15 tables=telemetry_signal_bucket
 	pullRequest := `{"number":"12","title":"t","body":null,"state":"merged","author_name":"a","created_at":"2026-01-01T00:00:00Z","merged_at":1767225600,"additions":3,"reviews":[{"review_id":"r1","reviewer":"u","state":"APPROVED","submitted_at":"2026-01-01T00:00:00.25Z"},{"review_id":"r2","reviewer":"v","state":"COMMENTED","submitted_at":"2026-01-01T01:00:00+05:30"}]}`
+	//ttlclock:allow never reaches a TTL table: request body for the legacy ingest route (no TTL table); every telemetry_signal_bucket request is stamped 2099-06-15 tables=telemetry_signal_bucket
 	workItem := `{"work_item_id":"jira:ABC-1","provider":"jira","title":"t","labels":["x","y"],"story_points":"2.5","created_at":"2026-01-01T00:00:00Z","url":"https://example.test/i"}`
 	workItemsBody := func(items string) string { return `{"org_id":"org-venue","items":[` + items + `]}` }
+	//ttlclock:allow never reaches a TTL table: request body for the legacy ingest route (no TTL table); every telemetry_signal_bucket request is stamped 2099-06-15 tables=telemetry_signal_bucket
 	unicodeBody := `{"org_id":"org-é😀","repo_url":"r","items":[{"incident_id":"é\u0000😀","status":"open","started_at":"2026-01-01T00:00:00Z"}]}`
 	requests := []venueoracle.Request{
 		signed("commits accepted", "commits", body(commit), nil),
 		signed("deployments accepted", "deployments", body(deployment), nil),
 		signed("incidents accepted", "incidents", body(incident), nil),
+		//ttlclock:allow never reaches a TTL table: request body for the legacy ingest route (no TTL table); every telemetry_signal_bucket request is stamped 2099-06-15 tables=telemetry_signal_bucket
 		signed("two items, defaults", "commits", body(commit+`,{"hash":"h2","message":"","author_name":"","author_email":"","author_when":"2026-01-01"}`), nil),
 		signed("unicode org and text", "incidents", unicodeBody, nil),
 		signed("pull requests accepted", "pull-requests", body(pullRequest), nil),
+		//ttlclock:allow never reaches a TTL table: request body for the legacy ingest route (no TTL table); every telemetry_signal_bucket request is stamped 2099-06-15 tables=telemetry_signal_bucket
 		signed("pull request without reviews, defaults", "pull-requests", body(`{"number":1,"title":"t","state":"open","author_name":"a","created_at":"2026-01-01"}`), nil),
 		signed("pull request shape errors", "pull-requests", body(`{"number":"x","reviews":[{"review_id":1},"y"],"created_at":"2026-13-01"}`), nil),
 		signed("work items accepted", "work-items", workItemsBody(workItem), nil),
+		//ttlclock:allow never reaches a TTL table: request body for the legacy ingest route (no TTL table); every telemetry_signal_bucket request is stamped 2099-06-15 tables=telemetry_signal_bucket
 		signed("work item defaults", "work-items", workItemsBody(`{"work_item_id":"w","provider":"github","title":"t","created_at":"2026-01-01T00:00:00Z"}`), nil),
+		//ttlclock:allow never reaches a TTL table: request body for the legacy ingest route (no TTL table); every telemetry_signal_bucket request is stamped 2099-06-15 tables=telemetry_signal_bucket
 		signed("work item enum errors", "work-items", workItemsBody(`{"work_item_id":"w","provider":"bitbucket","title":"t","type":"Bug","status":"open","created_at":"2026-01-01T00:00:00Z"}`), nil),
 		signed("work items need no repo_url", "work-items", `{"org_id":"o","items":[`+workItem+`]}`, nil),
 		signed("no api key", "commits", body(commit), map[string]string{"X-API-Key": ""}),

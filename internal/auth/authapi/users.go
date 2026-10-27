@@ -174,10 +174,34 @@ type OrgActivityReader interface {
 // OrgActivity reads public.org_activity for orgIDs (one query). A missing row is
 // Unknown: the projection is written when an organization's metrics finalize, and
 // an organization without one has not been established.
-func (p PGUsers) OrgActivity(_ context.Context, orgIDs []uuid.UUID) (map[uuid.UUID]orgactivity.Activity, error) {
+func (p PGUsers) OrgActivity(ctx context.Context, orgIDs []uuid.UUID) (map[uuid.UUID]orgactivity.Activity, error) {
 	out := make(map[uuid.UUID]orgactivity.Activity, len(orgIDs))
 	for _, id := range orgIDs {
 		out[id] = orgactivity.Activity{Unknown: true}
+	}
+	if len(orgIDs) == 0 {
+		return out, nil
+	}
+	rows, err := p.Pool.Query(ctx, `SELECT org_id, has_data, computed_at FROM public.org_activity WHERE org_id = ANY($1)`, orgIDs)
+	if err != nil {
+		return nil, fmt.Errorf("%w: reading public.org_activity: %w", errUsersStore, err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id uuid.UUID
+		var hasData bool
+		var computedAt *time.Time
+		if err := rows.Scan(&id, &hasData, &computedAt); err != nil {
+			return nil, fmt.Errorf("%w: reading public.org_activity: %w", errUsersStore, err)
+		}
+		if computedAt != nil {
+			value := computedAt.UTC()
+			computedAt = &value
+		}
+		out[id] = orgactivity.Activity{HasData: hasData, Last: computedAt}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("%w: reading public.org_activity: %w", errUsersStore, err)
 	}
 	return out, nil
 }
@@ -188,6 +212,29 @@ func (p PGUsers) OrgActivity(_ context.Context, orgIDs []uuid.UUID) (map[uuid.UU
 // metrics, then the earliest join. The activity comes from the projection; a
 // missing row, or a failed read of it, makes the activity unknown, which ranks
 // nobody, so the earliest join decides, with a WARN (go-api's fallback).
-func (h compatHandlers) chooseLoginMembership(_ context.Context, memberships []Membership, requested *uuid.UUID) *Membership {
-	return chooseMembership(memberships, requested)
+func (h compatHandlers) chooseLoginMembership(ctx context.Context, memberships []Membership, requested *uuid.UUID) *Membership {
+	reader, ok := h.Users.(OrgActivityReader)
+	if requested != nil || len(memberships) < 2 || !ok {
+		return chooseMembership(memberships, requested)
+	}
+	ids := make([]uuid.UUID, len(memberships))
+	candidates := make([]orgactivity.Membership, len(memberships))
+	for index, m := range memberships {
+		ids[index] = m.OrgID
+		candidates[index] = orgactivity.Membership{OrgID: m.OrgID, JoinedAt: m.JoinedAt, CreatedAt: m.CreatedAt}
+	}
+	activities, err := reader.OrgActivity(ctx, ids)
+	if err != nil {
+		h.rec.logger.WarnContext(ctx, "org activity unreadable, active organization chosen by earliest join",
+			"memberships", len(memberships))
+		return chooseMembership(memberships, nil)
+	}
+	if orgactivity.AnyUnknown(candidates, activities) {
+		h.rec.logger.WarnContext(ctx, "org activity unknown, active organization chosen by earliest join",
+			"memberships", len(memberships))
+	}
+	if index := orgactivity.Select(candidates, nil, activities); index >= 0 {
+		return &memberships[index]
+	}
+	return nil
 }

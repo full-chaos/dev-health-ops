@@ -208,6 +208,7 @@ func TestTheLegConverterRebuildsThePlainLog(t *testing.T) {
 		"a line that is not an event",
 		`42`,
 		`{"Action":"output","Package":"p","Output":"PASS\n"}`,
+		`{"Action":"output","Package":"p","Output":"testing: warning: no tests to run\n"}`,
 		`{"Action":"output","Package":"p","Output":"FAIL\tp\t0.010s\n"}`,
 		`{"Action":"fail","Package":"p","Elapsed":0.01}`,
 	}, "\n") + "\n"

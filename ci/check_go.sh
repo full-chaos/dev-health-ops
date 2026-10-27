@@ -556,7 +556,7 @@ leg_json_file() {
 # go_test_leg LOG LEGJSON ARG...: `go test -json ARG...` of one stage of a test or race leg (run it from the module directory).
 # The raw stream, JSON events and any other line, is appended to LEGJSON (/dev/null when the leg keeps no timings). The plain
 # go test log is rebuilt on stdout and in LOG by a converter that never fails and never decides the verdict: a line that is not a
-# JSON event passes through raw, a passing test's own output is dropped (plain go test hides it), a failing test's output is
+# JSON event passes through raw, the test binary's own PASS and no-tests lines and a passing test's output are dropped (plain go test hides them), a failing test's output is
 # printed when it fails, and whatever is still buffered when the stream ends is printed last. The converter cannot end early
 # (a failed jq drains the pipe), so go test is never killed by a broken pipe. The stage's rc is go test's own, read from
 # PIPESTATUS right after the pipe: neither tee nor jq can change it.
@@ -571,7 +571,7 @@ foreach (((inputs | ev), {Action: "__end"})) as $e ({buf: {}, emit: ""};
   | ($p + "\u0000" + $t) as $k
   | (($e.Output // "") | tostring) as $o
   | if $a == "__end" then .emit = ([.buf[]] | join("")) | .buf = {}
-    elif $a == "output" and $t == "" then .emit = (if ($o | test("^PASS\n?$")) then "" else $o end)
+    elif $a == "output" and $t == "" then .emit = (if ($o | test("^(PASS|testing: warning: no tests to run)\n?$")) then "" else $o end)
     elif $a == "output" then .emit = "" | (if ($o | keep) then .buf[$k] = ((.buf[$k] // "") + $o) else . end)
     elif $a == "fail" and $t != "" then .emit = (.buf[$k] // "") | del(.buf[$k])
     elif ($a == "pass" or $a == "skip") and $t != "" then .emit = "" | del(.buf[$k])

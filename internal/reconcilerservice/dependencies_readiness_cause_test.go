@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"net"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -172,5 +174,34 @@ func TestDependencyCheckFailedIsStillTheReconcilerDependencySentinel(t *testing.
 	}
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("dependencyCheckFailed(...) = %v, want errors.Is(_, context.DeadlineExceeded)", err)
+	}
+}
+
+type ioTimeoutFake struct{}
+
+func (ioTimeoutFake) Error() string   { return "dial tcp 10.0.0.9:5432: i/o timeout secret-host" }
+func (ioTimeoutFake) Timeout() bool   { return true }
+func (ioTimeoutFake) Temporary() bool { return false }
+
+// CHAOS-11617: an OS socket deadline or net timeout reads cause=timeout, timed_out=true on every check that
+// goes through dependencyCheckFailed -- the form a context deadline has. (A raw refused dial is CHAOS-11644.)
+func TestReconcilerReadinessRefusalClassifiesIOTimeoutsAsTimeoutAcrossChecks(t *testing.T) {
+	for failureName, failure := range map[string]error{
+		"os_deadline":    os.ErrDeadlineExceeded,
+		"net_op_error":   &net.OpError{Op: "dial", Net: "tcp", Err: os.ErrDeadlineExceeded},
+		"net_error_fake": ioTimeoutFake{},
+	} {
+		for checkName, build := range map[string]func(error) *fakeReconcilerDatabase{
+			"domain_postgres": func(err error) *fakeReconcilerDatabase { return &fakeReconcilerDatabase{domainErr: err} },
+			"queue_postgres":  func(err error) *fakeReconcilerDatabase { return &fakeReconcilerDatabase{queueErr: err} },
+			"river_schema":    func(err error) *fakeReconcilerDatabase { return &fakeReconcilerDatabase{schemaErr: err} },
+		} {
+			t.Run(checkName+"/"+failureName, func(t *testing.T) {
+				cause, timedOut := reconcilerReadinessCauseHarness(t, build(failure), checkName)
+				if cause != "timeout" || !timedOut {
+					t.Fatalf("%s refused with an I/O timeout, got cause=%q timed_out=%v, want cause=timeout timed_out=true", checkName, cause, timedOut)
+				}
+			})
+		}
 	}
 }

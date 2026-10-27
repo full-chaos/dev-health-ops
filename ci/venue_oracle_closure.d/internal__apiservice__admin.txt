@@ -102,6 +102,7 @@ internal/platform/pgident
 internal/platform/queuecontrol
 internal/platform/secrets
 internal/platform/shell
+internal/platform/timeoutclass
 internal/platform/tracing
 internal/platform/version
 internal/platform/workersignals

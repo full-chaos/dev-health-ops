@@ -37,6 +37,23 @@ var inviteTokenPattern = regexp.MustCompile(`token=([0-9a-f]{32}\.[0-9a-f]{64})`
 // envelope and headers exactly, the HTML part decoded (the transfer encoding
 // is proven byte for byte by the mail package's own oracle), and the invite
 // token pulled out so it can be compared as a shape, not a random value.
+// venueInviteOrgName and venueInviterName are the user-controlled values the venue seeds into the invite mail body.
+const (
+	venueInviteOrgName = "Café Org & Söhne"
+	venueInviterName   = "Olivia Öwner"
+)
+
+// pythonBodyAsGoWrites is a NAMED DIVERGENCE from Python (CHAOS-11587): the Go mail renderers HTML-escape every
+// substituted value, the frozen Python one wrote them raw. It applies the escape to the two seeded values in the
+// Python body and nothing else, so the escape is the ONLY difference left to compare: any other difference still
+// fails, and Go ceasing to escape fails too (the escaped Python body no longer equals the Go body).
+func pythonBodyAsGoWrites(body string) string {
+	for _, value := range []string{venueInviteOrgName, venueInviterName} {
+		body = strings.ReplaceAll(body, value, mailpkg.EscapeHTML(value))
+	}
+	return body
+}
+
 type decodedInviteMail struct {
 	MailFrom    string
 	RcptTo      string
@@ -232,7 +249,7 @@ func TestCreateOrgInviteVenueOracle(t *testing.T) {
 			// A non-ASCII org name: the subject and body take the encoded
 			// paths. The plain org takes the ASCII ones.
 			exec(`INSERT INTO organizations (id, slug, name, tier, managed_by, is_active, created_at, updated_at)
-VALUES ($1, 'venue-invite-org', $2, 'community', 'stripe', true, now(), now())`, orgID, "Café Org & Söhne")
+VALUES ($1, 'venue-invite-org', $2, 'community', 'stripe', true, now(), now())`, orgID, venueInviteOrgName)
 			exec(`INSERT INTO organizations (id, slug, name, tier, managed_by, is_active, created_at, updated_at)
 VALUES ($1, 'venue-invite-plain', 'Plain Invite Org', 'community', 'stripe', true, now(), now())`, plainOrgID)
 			exec(`INSERT INTO organizations (id, slug, name, tier, managed_by, is_active, created_at, updated_at)
@@ -393,12 +410,24 @@ VALUES ($1, $2, $3, $4, now(), now(), now())`, nextID(), row.org, row.user, row.
 	if !reflect.DeepEqual(recipients(pythonMails), recipients(goMails)) {
 		t.Fatalf("the planes mailed different recipients:\n python: %q\n go:     %q", recipients(pythonMails), recipients(goMails))
 	}
+	declared := 0
 	for i := range pythonMails {
 		py, gv := pythonMails[i], goMails[i]
 		py.Token, gv.Token = "", ""
+		if escaped := pythonBodyAsGoWrites(py.HTML); escaped != py.HTML {
+			declared++
+			py.HTML = escaped
+			if !strings.Contains(gv.HTML, mailpkg.EscapeHTML(venueInviteOrgName)) || strings.Contains(gv.HTML, venueInviteOrgName) {
+				t.Errorf("invite email %d: the Go body does not carry the escaped org name %q", i+1, mailpkg.EscapeHTML(venueInviteOrgName))
+			}
+		}
 		if py != gv {
 			t.Errorf("invite email %d differs:\n python: %+v\n go:     %+v", i+1, py, gv)
 		}
+	}
+
+	if declared == 0 {
+		t.Fatal("the named escape divergence matched no Python invite body: the venue no longer seeds an org name with markup characters")
 	}
 
 	// The token: each plane's own emails carry a token that is exactly

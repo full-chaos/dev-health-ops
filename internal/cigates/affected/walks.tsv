@@ -234,6 +234,8 @@ internal/migrationmatrix	restendpoints.go	unexpressed	-	-
 internal/operationalordering	finalreads_test.go	unexpressed	-	*.go
 internal/operationalordering	one_resolver_test.go	.	tree	*.go
 internal/ownershipwindow	ownershipwindow_test.go	internal/ownershipwindow	dir	*
+internal/pgmigrate	chain_integrity_test.go	internal/pgmigrate/testdata/postfreeze/duplicate	tree	*
+internal/pgmigrate	chain_integrity_test.go	internal/pgmigrate/testdata/postfreeze/gap	tree	*
 internal/pgmigrate	chain_tail_integration_test.go	internal/pgmigrate/testdata/postfreeze/two	tree	*
 internal/pgmigrate	chain_tail_test.go	unexpressed	-	-
 internal/pgmigrate	handddl_guard_integration_test.go	.	tree	*_test.go

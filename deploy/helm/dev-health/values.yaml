@@ -1750,6 +1750,13 @@ postgresql:
     user: "devhealth"
     password: "devhealth"
     database: "devhealth"
+  # -- The POSTGRES_PASSWORD env of the StatefulSet. The Secret <fullname>-postgresql-credentials
+  #    (key POSTGRES_PASSWORD, the same value as credentials.password) always renders with the
+  #    store. While `enabled` is false the StatefulSet keeps the plain env value; `true` makes
+  #    it a secretKeyRef on that Secret, so the value is not in the StatefulSet spec. The value
+  #    does not change. Switching it restarts the pod.
+  credentialsSecret:
+    enabled: false
   # -- Client authentication. The ConfigMap <fullname>-postgresql-hba always renders
   #    with the store: every client, the local socket and loopback included, gives a
   #    scram-sha-256 password. Only `enabled: true` passes it to the server as

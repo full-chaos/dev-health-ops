@@ -281,6 +281,7 @@ internal/cigates/workflows	auth_compose_proof_test.go
 internal/cigates/workflows	auth_corpus_external_behaviour_test.go
 internal/cigates/workflows	auth_corpus_external_test.go
 internal/cigates/workflows	auth_corpus_queue_test.go
+internal/cigates/workflows	chart_started_filter_test.go
 internal/cigates/workflows	chart_started_selector_test.go
 internal/cigates/workflows	ci_script_helpers_test.go
 internal/cigates/workflows	docker_images_fanin_behaviour_test.go

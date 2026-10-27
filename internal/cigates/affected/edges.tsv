@@ -145,6 +145,7 @@ internal/cigates/workflows	chart_started_selector_test.go	unexpressed
 internal/cigates/workflows	ci_script_helpers_test.go	unexpressed
 internal/cigates/workflows	docs_only_step_test.go	unexpressed
 internal/cigates/workflows	go_api_tools_build_inputs_test.go	unexpressed
+internal/cigates/workflows	go_quality_leg_selection_test.go	unexpressed
 internal/cigates/workflows	go_workers_compose_proof_test.go	unexpressed
 internal/cigates/workflows	governance_context_test.go	unexpressed
 internal/cigates/workflows	image_reuse_exec_norace_test.go	unexpressed
@@ -157,6 +158,7 @@ internal/cigates/workflows	workflows_go_quality_queue_skip_test.go	unexpressed
 internal/cigates/workflows	workflows_go_queue_cancel_children_test.go	unexpressed
 internal/cigates/workflows	workflows_go_queue_failfast_test.go	unexpressed
 internal/cigates/workflows	workflows_go_queue_skip_test.go	unexpressed
+internal/cigates/workflows	workflows_gowork_off_test.go	deploy/helm/dev-health
 internal/cigates/workflows	workflows_path_filters_test.go	unexpressed
 internal/cigates/workflows	workflows_wire_parity_test.go	unexpressed
 internal/fixturescli	provider_worlds_producer_integration_test.go	unexpressed

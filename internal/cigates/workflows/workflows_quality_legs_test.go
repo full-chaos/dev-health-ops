@@ -94,9 +94,9 @@ func qualityLegViolations(t *testing.T, root string) []string {
 	jobs := jobsOf(doc)
 	leg := asMap(jobs["go-quality-leg"])
 	var args, names []string
-	for _, e := range asList(asMap(asMap(leg["strategy"])["matrix"])["include"]) {
-		args = append(args, asString(asMap(e)["args"]))
-		names = append(names, asString(asMap(e)["name"]))
+	for _, e := range goQualityLegList(t, root) {
+		args = append(args, asString(e["args"]))
+		names = append(names, asString(e["name"]))
 	}
 	uniq := map[string]bool{}
 	for _, n := range names {
@@ -216,8 +216,8 @@ func TestGoQualityLegs(t *testing.T) {
 
 func TestGoQualityLegsPlantedDefects(t *testing.T) {
 	root := repoRoot(t)
-	const cg, wf = "ci/check_go.sh", ".github/workflows/go-quality.yml"
-	files := []string{cg, wf}
+	const cg, wf, legs = "ci/check_go.sh", ".github/workflows/go-quality.yml", "ci/go_quality_legs.json"
+	files := []string{cg, wf, legs}
 	cases := []struct {
 		name string
 		muts []mutation
@@ -225,7 +225,7 @@ func TestGoQualityLegsPlantedDefects(t *testing.T) {
 	}{
 		{"a leg drops the ratchets stage", []mutation{{cg, "      ci_leg_stage ratchets check_ratchets\n", ""}}, []string{"differ from `check_go.sh ci`", "check_ratchets"}},
 		{"a stage runs in two legs", []mutation{{cg, "      ci_leg_stage \"test ${2:-}/${3:-}\" check_test_shard \"${2:-}\" \"${3:-}\"\n", "      ci_leg_stage \"test ${2:-}/${3:-}\" check_test_shard \"${2:-}\" \"${3:-}\"\n      ci_leg_stage vet2 check_vet\n"}}, []string{"runs in two legs", "check_vet"}},
-		{"a race entry goes missing from the matrix", []mutation{{wf, "args: race 2 4", "args: race 5 4"}}, []string{"not 1..N of N"}},
+		{"a race entry goes missing from the matrix", []mutation{{legs, `"args": "race 2 4"`, `"args": "race 5 4"`}}, []string{"not 1..N of N"}},
 		{"fail-fast comes back on", []mutation{{wf, "fail-fast: false", "fail-fast: true"}}, []string{"fail-fast must be false"}},
 		{"the fan-in can skip", []mutation{{wf, "\n    if: always()\n", "\n    if: success()\n"}}, []string{"fan-in must be always()"}},
 		{"the pool timeout grows past 45", []mutation{{wf, "&& 45 || 30 }}", "&& 90 || 30 }}"}}, []string{"timeout-minutes must be <= 30"}},

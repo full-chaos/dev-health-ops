@@ -2390,10 +2390,16 @@ func TestEachPackagesShardRunsEverySelectedTestExactlyOnce(t *testing.T) {
 		if d := censusDefects(calls, groups, wants[shard], tf); len(d) > 0 {
 			t.Errorf("packages shard %d:\n  %s", shard, strings.Join(d, "\n  "))
 		}
-		for k := range wants[shard] {
-			if tf.hookOf(k) != "" && hookShard == 0 && groups == 1 && len(calls) == 1 {
-				hookShard, hookCalls = shard, calls
+		hasHook, hasFiltered := false, false
+		if groups == 1 && len(calls) == 1 {
+			for _, p := range calls[0].pkgs {
+				k := path.Join(calls[0].dir, strings.TrimPrefix(p, "./"))
+				hasHook = hasHook || tf.hookOf(k) != ""
+				hasFiltered = hasFiltered || (tf.hookOf(k) == "" && len(tf.untagged[k]) > 0)
 			}
+		}
+		if hasHook && hasFiltered && hookShard == 0 {
+			hookShard, hookCalls = shard, calls
 		}
 	}
 	if hookShard == 0 {
@@ -2414,6 +2420,7 @@ func TestEachPackagesShardRunsEverySelectedTestExactlyOnce(t *testing.T) {
 	if hookKey == "" || filteredPkg == "" {
 		t.Fatalf("shard %d: no hook package or no filtered package with untagged tests to plant on", hookShard)
 	}
+	t.Logf("planted defects on shard %d: hook package %s, filtered package %s", hookShard, hookKey, filteredPkg)
 	without := func(drop string) []string {
 		var out []string
 		for _, p := range c.pkgs {

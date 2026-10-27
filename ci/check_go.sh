@@ -1882,11 +1882,14 @@ QAPISERVER_INTEGRATION_PACKAGE_KEY="internal/queryapi/server"
 # one `go test` of it takes 1,122 s alone, 21 of the 25 minutes of its isolated job.
 REMAINING_INTEGRATION_PACKAGE_KEY="internal/jobs/metrics/remaining"
 # Packages that get a shard of their own at their TRUE weight (CHAOS-8935).
-# One `go test` starts packages in alphabetical order, so a long package that
-# sorts last starts minutes late and sets the shard's wall time, not its weight.
+# One `go test` starts packages in the order of its arguments, four at a time, so a long
+# package that starts last starts minutes late and sets the shard's wall time, not its weight
+# (CHAOS-11411: the arguments are now sorted longest weight first; an isolated package needs no order).
 # internal/jobs/metrics/remaining (CHAOS-9631) runs 1,053-1,164 s on its own and
 # sat in a shard with 20 other packages whose job took 22-25 of the 25 minutes.
-INTEGRATION_ISOLATED_PACKAGE_KEYS=" ${DEV_HEALTH_GO_INTEGRATION_ISOLATED_KEYS:-internal/workerservice internal/queryapi/server internal/jobs/metrics/remaining} "
+# internal/fixturescli (CHAOS-11411) runs 1,145-1,168 s of the 1,263 s test phase of its shard, next to three other
+# packages that run at the same time: it sets the Go workflow wall, so it gets a shard of its own as well.
+INTEGRATION_ISOLATED_PACKAGE_KEYS=" ${DEV_HEALTH_GO_INTEGRATION_ISOLATED_KEYS:-internal/workerservice internal/queryapi/server internal/jobs/metrics/remaining internal/fixturescli} "
 DAILY_TEST_SHARD_COUNT=0
 DAILY_INTEGRATION_TEST_WEIGHT=0
 DAILY_ORDINARY_TEST_WEIGHT=0
@@ -2183,8 +2186,19 @@ run_integration_packages() {
   local -a pkgs=()
   local -A selected_in=() skipped_in=() select_names=() skip_names=() seen=()
   shift 3
-  # Sorted (C locale): the same packages give the same groups and receipts in any argument order.
-  mapfile -t pkgs < <(printf '%s\n' "$@" | LC_ALL=C sort -u)
+  # Sorted (C locale): the same packages give the same groups and receipts in any argument order. A caller that sets
+  # INTEGRATION_KEEP_ARG_ORDER=1 has already put the packages in the order go test must start them (longest first,
+  # CHAOS-11411): the first-fit packs them in that order and a repeated package keeps its first place.
+  if [ -n "${INTEGRATION_KEEP_ARG_ORDER:-}" ]; then
+    local -A arg_seen=()
+    for pkg in "$@"; do
+      [ -z "${arg_seen[${pkg}]+set}" ] || continue
+      arg_seen["${pkg}"]=1
+      pkgs+=("${pkg}")
+    done
+  else
+    mapfile -t pkgs < <(printf '%s\n' "$@" | LC_ALL=C sort -u)
+  fi
   discover_integration_tagged_tests "${module_dir}" "${pkgs[@]}"
   # Every refusal comes before the first receipt line, so a refused run prints no plan.
   for pkg in "${pkgs[@]}"; do
@@ -3985,6 +3999,29 @@ check_integration_prepull() {
   done
 }
 
+# sort_integration_shard_packages orders the caller's run_pkgs/run_keys (bash dynamic scope) longest package first:
+# manifest weight descending, then key ascending in byte order. One go test starts its packages in argument order, four
+# at a time, so a long package that starts last sets the shard wall (CHAOS-8935). LC_ALL=C is local to this function:
+# it must not reach the go test child, which keeps the caller's locale.
+sort_integration_shard_packages() {
+  local i j tmp_pkg tmp_key LC_ALL=C
+  for ((i = 1; i < ${#run_keys[@]}; i++)); do
+    tmp_pkg="${run_pkgs[${i}]}"
+    tmp_key="${run_keys[${i}]}"
+    for ((j = i - 1; j >= 0; j--)); do
+      if [ "${INTEGRATION_SHARD_WEIGHTS[${run_keys[${j}]}]}" -gt "${INTEGRATION_SHARD_WEIGHTS[${tmp_key}]}" ] \
+        || { [ "${INTEGRATION_SHARD_WEIGHTS[${run_keys[${j}]}]}" -eq "${INTEGRATION_SHARD_WEIGHTS[${tmp_key}]}" ] \
+          && [[ ! "${run_keys[${j}]}" > "${tmp_key}" ]]; }; then
+        break
+      fi
+      run_pkgs[j + 1]="${run_pkgs[${j}]}"
+      run_keys[j + 1]="${run_keys[${j}]}"
+    done
+    run_pkgs[j + 1]="${tmp_pkg}"
+    run_keys[j + 1]="${tmp_key}"
+  done
+}
+
 check_integration_package_shard() {
   local shard="$1" mode="$2"
   local index module_dir pkg key
@@ -4016,11 +4053,14 @@ check_integration_package_shard() {
     done
     [ "${#run_pkgs[@]}" -gt 0 ] || continue
 
+    sort_integration_shard_packages
+
     printf 'go test integration package shard %s: %s -> %s\n' \
       "${shard}" "${module_dir}" "${run_pkgs[*]}"
     for key in "${run_keys[@]}"; do
       printf '  SHARD-RUN %s\n' "${key}"
     done
+    local INTEGRATION_KEEP_ARG_ORDER=1
     run_integration_packages "${mode}" "${module_dir}" "integration package shard ${shard} (${module_dir})" "${run_pkgs[@]}"
   done
 

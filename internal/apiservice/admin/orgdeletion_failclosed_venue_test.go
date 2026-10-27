@@ -116,7 +116,7 @@ VALUES ($1, 'venue-fc-super@example.com', true, true, true, 0, now(), now())`, s
 	selectOnlyURI := withClickHouseLogin(t, adminCH, selectOnlyUser, "orgdel-fc-select", "")
 	closedURI := withClickHouseLogin(t, adminCH, "", "", "127.0.0.1:1")
 
-	state := func(org uuid.UUID) string {
+	state := func(t *testing.T, org uuid.UUID) string {
 		t.Helper()
 		pg := venue.AdminURI(t, venue.GoDB)
 		id := org.String()
@@ -129,43 +129,43 @@ VALUES ($1, 'venue-fc-super@example.com', true, true, true, 0, now(), now())`, s
 		}, " ")
 	}
 	bearer := map[string]string{"Authorization": "Bearer " + venue.Tokens["super"]}
-	del := func(base string, org uuid.UUID, query string) venueoracle.Response {
+	del := func(t *testing.T, base string, org uuid.UUID, query string) venueoracle.Response {
 		t.Helper()
 		return venueoracle.Do(t, base, venueoracle.Request{
 			Name: "delete org " + org.String() + query, Method: "DELETE",
 			Path: "/api/v1/admin/orgs/" + org.String() + query, Headers: bearer,
 		})
 	}
-	wantDetail := func(response venueoracle.Response, status int, detail string) {
+	wantDetail := func(t *testing.T, response venueoracle.Response, status int, detail string) {
 		t.Helper()
 		want := fmt.Sprintf(`{"detail":%q}`, detail)
 		if response.Status != status || strings.TrimSpace(response.Body) != want {
 			t.Errorf("status %d body %s, want %d %s", response.Status, response.Body, status, want)
 		}
 	}
-	controlBefore := state(orgs["control"])
+	controlBefore := state(t, orgs["control"])
 
 	noDSN, _ := startGoServer(t, ctx, venue, jwtKey)
 	closed, _ := startGoServer(t, ctx, venue, jwtKey, func(deps *apiservice.Deps) { deps.ClickHouseDSN = closedURI })
 
 	t.Run("no dsn, real delete", func(t *testing.T) {
-		before := state(orgs["nodsn"])
-		wantDetail(del(noDSN, orgs["nodsn"], ""), http.StatusServiceUnavailable, orgDeletionRefusedDetail)
-		if after := state(orgs["nodsn"]); after != before {
+		before := state(t, orgs["nodsn"])
+		wantDetail(t, del(t, noDSN, orgs["nodsn"], ""), http.StatusServiceUnavailable, orgDeletionRefusedDetail)
+		if after := state(t, orgs["nodsn"]); after != before {
 			t.Errorf("the refused delete changed rows: %s -> %s", before, after)
 		}
 	})
 	t.Run("no dsn, dry run", func(t *testing.T) {
-		before := state(orgs["dryrun"])
-		wantDetail(del(noDSN, orgs["dryrun"], "?dry_run=true"), http.StatusServiceUnavailable, orgDeletionRefusedDetail)
-		if after := state(orgs["dryrun"]); after != before {
+		before := state(t, orgs["dryrun"])
+		wantDetail(t, del(t, noDSN, orgs["dryrun"], "?dry_run=true"), http.StatusServiceUnavailable, orgDeletionRefusedDetail)
+		if after := state(t, orgs["dryrun"]); after != before {
 			t.Errorf("the refused dry run changed rows: %s -> %s", before, after)
 		}
 	})
 	t.Run("dsn that cannot connect", func(t *testing.T) {
-		before := state(orgs["closed"])
-		wantDetail(del(closed, orgs["closed"], ""), http.StatusServiceUnavailable, orgDeletionRefusedDetail)
-		if after := state(orgs["closed"]); after != before {
+		before := state(t, orgs["closed"])
+		wantDetail(t, del(t, closed, orgs["closed"], ""), http.StatusServiceUnavailable, orgDeletionRefusedDetail)
+		if after := state(t, orgs["closed"]); after != before {
 			t.Errorf("the refused delete changed rows: %s -> %s", before, after)
 		}
 	})
@@ -178,15 +178,15 @@ VALUES ($1, 'venue-fc-super@example.com', true, true, true, 0, now(), now())`, s
 			deps.Decryptor = decryptor
 			deps.PagerDuty = providerfoundation.PagerDutyRevokeConfig{ClientID: "venue-fc-pagerduty", RevokeURL: fakeServer.URL}
 		})
-		before := state(orgs["selectonly"])
+		before := state(t, orgs["selectonly"])
 		if !strings.Contains(before, "pagerduty=1") {
 			t.Fatalf("seed: %s", before)
 		}
-		wantDetail(del(selectOnly, orgs["selectonly"], ""), http.StatusServiceUnavailable, orgDeletionRefusedDetail)
+		wantDetail(t, del(t, selectOnly, orgs["selectonly"], ""), http.StatusServiceUnavailable, orgDeletionRefusedDetail)
 		if got := fake.count(); got != 0 {
 			t.Errorf("the refused delete made %d PagerDuty revoke call(s), want 0", got)
 		}
-		if after := state(orgs["selectonly"]); after != before {
+		if after := state(t, orgs["selectonly"]); after != before {
 			t.Errorf("the refused delete changed rows: %s -> %s", before, after)
 		}
 	})
@@ -203,8 +203,8 @@ VALUES ($1, 'venue-fc-super@example.com', true, true, true, 0, now(), now())`, s
 			t.Fatal("setup: a count of orgdel_fc_broken by a uuid string succeeded; the table does not make the purge fail")
 		}
 
-		wantDetail(del(admin, org, ""), http.StatusInternalServerError, orgDeletionIncompleteDetail)
-		if got := state(org); !strings.HasPrefix(got, "organizations=0 settings=0 jobs_enabled=0 ") {
+		wantDetail(t, del(t, admin, org, ""), http.StatusInternalServerError, orgDeletionIncompleteDetail)
+		if got := state(t, org); !strings.HasPrefix(got, "organizations=0 settings=0 jobs_enabled=0 ") {
 			t.Errorf("after the 500 the Postgres purge is not committed: %s", got)
 		}
 
@@ -215,7 +215,7 @@ VALUES ($1, 'venue-fc-super@example.com', true, true, true, 0, now(), now())`, s
 		if got := venueoracle.CHRows(t, ctx, adminCH, "SELECT count() FROM backfill_log WHERE org_id = '"+org.String()+"'"); got != "1" {
 			t.Fatalf("seed before the re-run: backfill_log rows = %s, want 1", got)
 		}
-		again := del(admin, org, "")
+		again := del(t, admin, org, "")
 		if again.Status != http.StatusOK {
 			t.Fatalf("re-run: status %d body %s, want 200", again.Status, again.Body)
 		}
@@ -227,11 +227,11 @@ VALUES ($1, 'venue-fc-super@example.com', true, true, true, 0, now(), now())`, s
 		if err := json.Unmarshal([]byte(again.Body), &plan); err != nil || plan.ClickHouse.Total < 1 {
 			t.Errorf("re-run: clickhouse total = %d (err %v), want >= 1; body %s", plan.ClickHouse.Total, err, again.Body)
 		}
-		if got := state(org); got != "organizations=0 settings=0 jobs_enabled=0 pagerduty=0 ch_backfill_log=0" {
+		if got := state(t, org); got != "organizations=0 settings=0 jobs_enabled=0 pagerduty=0 ch_backfill_log=0" {
 			t.Errorf("after the re-run: %s", got)
 		}
 	})
-	if after := state(orgs["control"]); after != controlBefore {
+	if after := state(t, orgs["control"]); after != controlBefore {
 		t.Errorf("the control org changed: %s -> %s", controlBefore, after)
 	}
 	venueoracle.WriteGoOnlyProof(t, "Go's org delete refuses (503, nothing touched) without a usable ClickHouse and answers 500 when the purge fails after the Postgres commit; the re-run purges")

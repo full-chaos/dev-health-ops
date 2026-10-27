@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-var authServiceMailNames = []string{"EMAIL_PROVIDER", "EMAIL_FROM_ADDRESS", "EMAIL_API_KEY", "APP_BASE_URL", "AUTH_MAIL_ALLOW_CONSOLE"}
+var authServiceMailNames = []string{"EMAIL_PROVIDER", "EMAIL_FROM_ADDRESS", "EMAIL_API_KEY", "RESEND_API_KEY", "APP_BASE_URL", "AUTH_MAIL_ALLOW_CONSOLE"}
 
 const mailPeers = `authService.networkPolicy.egress.mail.to=[{"podSelector":{"matchLabels":{"app":"mail-relay"}}}]`
 
@@ -58,6 +58,7 @@ func TestAuthServiceMailEnvAtPhase4(t *testing.T) {
 		"EMAIL_FROM_ADDRESS": "secret:a-mail/EMAIL_FROM_ADDRESS",
 		"APP_BASE_URL":       "secret:a-mail/APP_BASE_URL",
 		"EMAIL_API_KEY":      "secret:a-mail/EMAIL_API_KEY?",
+		"RESEND_API_KEY":     "secret:a-mail/RESEND_API_KEY?",
 	}
 	for name, value := range want {
 		if env[name] != value {
@@ -277,5 +278,80 @@ func TestAuthServiceMailEgressRefusesAnotherSlashZeroForm(t *testing.T) {
 		if out, err := mailRender(t, []string{mailPeer(cidr, except)}); err == nil {
 			t.Fatalf("%q accepted\n%.200s", cidr, out)
 		}
+	}
+}
+
+// chartSecretMail points the mail setting at the Secret the chart creates (secrets.create is the default),
+// whose content the render can read.
+func chartSecretMail(data map[string]string) []string {
+	args := []string{"--set", "authService.mail.secretName=a-dev-health-secrets"}
+	for key, value := range data {
+		args = append(args, "--set", fmt.Sprintf("secrets.data.%s=%s", key, value))
+	}
+	return args
+}
+
+var resendMail = map[string]string{
+	"EMAIL_PROVIDER": "resend", "EMAIL_FROM_ADDRESS": "noreply@example.com", "APP_BASE_URL": "https://app.example.com", "EMAIL_API_KEY": "k",
+}
+
+func mailWith(base map[string]string, set map[string]string, drop ...string) map[string]string {
+	out := map[string]string{}
+	for k, v := range base {
+		out[k] = v
+	}
+	for k, v := range set {
+		out[k] = v
+	}
+	for _, k := range drop {
+		delete(out, k)
+	}
+	return out
+}
+
+func TestAuthServiceChartSecretMailRendersWithAUsableSetting(t *testing.T) {
+	for name, data := range map[string]map[string]string{
+		"email key":  resendMail,
+		"resend key": mailWith(resendMail, map[string]string{"RESEND_API_KEY": "k"}, "EMAIL_API_KEY"),
+	} {
+		if _, out, err := renderAuth(t, phaseArgs(4, chartSecretMail(data)...)...); err != nil {
+			t.Fatalf("%s: a usable setting was refused: %v\n%.300s", name, err, out)
+		}
+	}
+}
+
+func TestAuthServiceChartSecretMailRefusesAnUnusableSetting(t *testing.T) {
+	cases := map[string]struct {
+		data map[string]string
+		want string
+	}{
+		"no from address":    {mailWith(resendMail, nil, "EMAIL_FROM_ADDRESS"), "EMAIL_FROM_ADDRESS"},
+		"empty from address": {mailWith(resendMail, map[string]string{"EMAIL_FROM_ADDRESS": ""}), "EMAIL_FROM_ADDRESS"},
+		"no base url":        {mailWith(resendMail, nil, "APP_BASE_URL"), "APP_BASE_URL"},
+		"no provider":        {mailWith(resendMail, nil, "EMAIL_PROVIDER"), "EMAIL_PROVIDER"},
+		"console provider":   {mailWith(resendMail, map[string]string{"EMAIL_PROVIDER": "console"}), "console"},
+		"upper console":      {mailWith(resendMail, map[string]string{"EMAIL_PROVIDER": "CONSOLE"}), "console"},
+		"smtp provider":      {mailWith(resendMail, map[string]string{"EMAIL_PROVIDER": "smtp"}), "the chart wires resend only"},
+		"unknown provider":   {mailWith(resendMail, map[string]string{"EMAIL_PROVIDER": "pigeon"}), "EMAIL_PROVIDER"},
+		"resend with no key": {mailWith(resendMail, nil, "EMAIL_API_KEY"), "EMAIL_API_KEY"},
+	}
+	for name, tc := range cases {
+		_, out, err := renderAuth(t, phaseArgs(4, chartSecretMail(tc.data)...)...)
+		if err == nil || !strings.Contains(out, tc.want) || !strings.Contains(out, "secrets.data") {
+			t.Fatalf("%s: err=%v want %q\n%.300s", name, err, tc.want, out)
+		}
+	}
+}
+
+func TestAuthServiceChartSecretMailCheckIsScoped(t *testing.T) {
+	bad := mailWith(resendMail, map[string]string{"EMAIL_PROVIDER": "console"})
+	if _, out, err := renderAuth(t, phaseArgs(3, chartSecretMail(bad)...)...); err != nil {
+		t.Fatalf("phase 3 is not checked: %v\n%.300s", err, out)
+	}
+	if _, out, err := renderAuth(t, phaseArgs(4, append(chartSecretMail(bad), "--set", "authService.mail.secretName=a-other")...)...); err != nil {
+		t.Fatalf("another Secret is not checked: %v\n%.300s", err, out)
+	}
+	if _, out, err := renderAuth(t, phaseArgs(4, append(chartSecretMail(bad), "--set", "secrets.create=false", "--set", "secrets.externalSecretName=a-dev-health-secrets", "--set", "hs256Secret.externalSecretName=a-hs256")...)...); err != nil {
+		t.Fatalf("an external Secret is not checked: %v\n%.700s", err, out)
 	}
 }

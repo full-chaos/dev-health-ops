@@ -845,8 +845,8 @@ Call with (dict "flag" "oidc"|"saml" "context" $).
 "" when one authService.networkPolicy.egress.mail.to entry is acceptable, else the reason. Call with
 (dict "peer" <entry> "ports" <authService.networkPolicy.egress.mail.ports>). A peer selects pods, namespaces or one
 address block; an empty selector admits everything of its kind and an empty entry admits every destination. An
-ipBlock is one CIDR: one "/", an integer prefix, IPv4 /8 or longer, IPv6 /32 or longer, and no IPv4-mapped (::ffff:)
-or NAT64 (64:ff9b:) form. The one exception (D6427, a provider with no fixed addresses): exactly 0.0.0.0/0 or ::/0,
+ipBlock is one CIDR checked by dev-health.otlpPeerCidrProblem (IPv4 /8 or longer, IPv6 /32 or longer, nothing that
+overlaps the IPv4-mapped or NAT64 ranges, in any spelling). The one exception (D6427, a provider with no fixed addresses): exactly 0.0.0.0/0 or ::/0,
 only with ports [TCP 443] alone and an except list holding every private, shared, link-local and loopback network
 below, and for IPv6 also the mapped and NAT64 ranges that would reach internal IPv4 addresses.
 */}}
@@ -875,11 +875,8 @@ below, and for IPv6 also the mapped and NAT64 ranges that would reach internal I
 {{- else if not (and (eq (len $ports) 1) (kindIs "map" $port) (eq (upper (toString (default "TCP" $port.protocol))) "TCP") (hasKey $port "port") (eq (int $port.port) 443) (not (hasKey $port "endPort"))) -}}an ipBlock with prefix 0 is accepted only with authService.networkPolicy.egress.mail.ports of TCP 443 alone
 {{- else if $missing -}}ipBlock.cidr {{ $cidr }} needs except entries {{ join ", " $missing }}
 {{- end -}}
-{{- else if $v6 -}}
-{{- if or (hasPrefix "::ffff:" $ip) (hasPrefix "0:0:0:0:0:ffff:" $ip) (hasPrefix "64:ff9b:" $ip) -}}ipBlock.cidr is an IPv4-mapped or NAT64 form
-{{- else if or (lt $prefix 32) (gt $prefix 128) -}}ipBlock.cidr prefix must be 32 to 128 for IPv6
-{{- end -}}
-{{- else if or (lt $prefix 8) (gt $prefix 32) -}}ipBlock.cidr prefix must be 8 to 32 for IPv4
+{{- else -}}
+{{- include "dev-health.otlpPeerCidrProblem" $cidr -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}

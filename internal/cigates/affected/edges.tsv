@@ -111,6 +111,7 @@ internal/cigates/routing	chart_test.go	unexpressed
 internal/cigates/routing	cut_test.go	unexpressed
 internal/cigates/routing	deps.go	unexpressed
 internal/cigates/routing	pinned_test.go	unexpressed
+internal/cigates/scripts	auth_corpus_closure_relevance_test.go	unexpressed
 internal/cigates/scripts	auth_corpus_queue_relevance_test.go	unexpressed
 internal/cigates/scripts	auth_queue_relevance_test.go	unexpressed
 internal/cigates/scripts	ci_script_helpers_test.go	unexpressed

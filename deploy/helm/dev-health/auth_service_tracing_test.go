@@ -128,6 +128,12 @@ func TestAuthServiceTracingRefusals(t *testing.T) {
 			want string
 		}{append(append([]string{}, tracingOn...), "--set-json", `authService.networkPolicy.egress.otlp.to=[{"ipBlock":{"cidr":"`+cidr+`"}}]`), "authService.networkPolicy.egress.otlp.to"}
 	}
+	// An embedded dotted IPv4 part is named as such, not only as an address that does not parse.
+	for _, cidr := range []string{"::ffff:0.0.0.0/96", "::ffff:10.0.0.151/128"} {
+		c := cases["peer cidr "+cidr]
+		c.want = "embedded IPv4 part"
+		cases["peer cidr "+cidr] = c
+	}
 	for _, name := range []string{"OTEL_ENABLED", "OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_SAMPLE_RATE", "OTEL_SERVICE_NAME"} {
 		cases["extraEnv "+name] = struct {
 			args []string

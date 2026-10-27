@@ -128,6 +128,16 @@ func TestComposeExecKillPrintsTheProcessGroupSnapshotWithoutArguments(t *testing
 	if !strings.Contains(snapshot, "STAT") || !strings.Contains(snapshot, "WCHAN") {
 		t.Errorf("the snapshot has no state columns: %q", snapshot)
 	}
+	_, rows, _ := strings.Cut(snapshot, "COMMAND")
+	groups := map[string]bool{}
+	for _, row := range strings.Split(rows, "\n") {
+		if f := strings.Fields(row); len(f) >= 7 {
+			groups[f[2]] = true
+		}
+	}
+	if len(groups) != 1 {
+		t.Errorf("the snapshot lists %d process groups, want only the group of the script: %q", len(groups), snapshot)
+	}
 	if strings.Contains(snapshot, "31337") || strings.Contains(msg, composeCHSentinel) {
 		t.Errorf("the snapshot prints an argument or an environment value: %q", snapshot)
 	}

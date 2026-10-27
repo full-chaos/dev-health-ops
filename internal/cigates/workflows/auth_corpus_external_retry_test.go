@@ -120,6 +120,17 @@ func TestAuthCorpusExternalUpRetriesAtMostOnce(t *testing.T) {
 	if len(r.ups) != 2 || r.retryDowns != 1 {
 		t.Errorf("want 2 up calls and 1 retry down, got ups=%q retryDowns=%d", r.ups, r.retryDowns)
 	}
+	if n := strings.Count(r.out, corpusInfraTexts["1"]); n != 2 {
+		t.Errorf("both attempts' output must be in the log: want the class text twice, got %d:\n%s", n, r.out)
+	}
+}
+
+// compose output with CRLF line ends is still a class line.
+func TestAuthCorpusExternalUpRetriesWhenTheOutputHasCRLFLineEnds(t *testing.T) {
+	r := runCorpusWithFailingUp(t, "go-api", 1, corpusInfraTexts["1"]+"\r", " go-api")
+	if r.err != nil || len(r.ups) != 2 || r.retryMarker != "AUTH-CORPUS-INFRA-RETRY class=1 step=go-api" {
+		t.Errorf("a CRLF class line must be retried once: err=%v ups=%q line=%q\n%s", r.err, r.ups, r.retryMarker, r.out)
+	}
 }
 
 // A retry down removes go-api too, so the auth-service step brings go-api back before it tries auth-service again.

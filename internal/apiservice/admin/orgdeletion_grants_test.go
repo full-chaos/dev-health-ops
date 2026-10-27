@@ -68,3 +68,46 @@ func TestGrantPrivilegesKeepsColumnListsWhole(t *testing.T) {
 		t.Fatalf("grantPrivileges = %q, want %q", got, want)
 	}
 }
+
+// showGrantsFinal26_6ProdDhoApp is the prod text, verbatim: SHOW GRANTS FOR
+// dho_app FINAL on ClickHouse Cloud 26.6 (service "production"), read by the
+// fcs lead 2026-10-27T22:47:15Z through the read-only clickhouse MCP (FOR
+// dho_app by the MCP identity, not FOR CURRENT_USER; same output shape). Source
+// file lead-ch-showgrants-final-dho_app-26.6.txt, sha256
+// e7c30d37aec2e9cebfd6a723652499f9b1a536528384302e6d1f22665380fbcf.
+var showGrantsFinal26_6ProdDhoApp = []string{
+	"GRANT SELECT, INSERT, ALTER DELETE, OPTIMIZE ON default.* TO dho_app",
+	"GRANT SELECT ON system.columns TO dho_app",
+	"GRANT SELECT ON system.parts TO dho_app",
+	"GRANT SELECT ON system.tables TO dho_app",
+}
+
+// The prod login's real grants let it purge its database, and every fail-closed
+// variant of the same text refuses.
+func TestOrgDeletionGrantProblemOnTheProd26_6Text(t *testing.T) {
+	if err := orgDeletionGrantProblem("default", showGrantsFinal26_6ProdDhoApp); err != nil {
+		t.Fatalf("prod 26.6 text: %v, want the purge allowed", err)
+	}
+	without := func(old, new string) []string {
+		out := append([]string(nil), showGrantsFinal26_6ProdDhoApp...)
+		out[0] = strings.Replace(out[0], old, new, 1)
+		return out
+	}
+	for name, tc := range map[string]struct {
+		database string
+		lines    []string
+	}{
+		"another database":   {"analytics", showGrantsFinal26_6ProdDhoApp},
+		"no ALTER DELETE":    {"default", without("ALTER DELETE, ", "")},
+		"no SELECT":          {"default", without("SELECT, ", "")},
+		"partial revoke":     {"default", append(append([]string(nil), showGrantsFinal26_6ProdDhoApp...), "REVOKE ALTER DELETE ON default.teams FROM dho_app")},
+		"role line only":     {"default", []string{"GRANT dho_app_role TO dho_app"}},
+		"unparseable":        {"default", []string{"GRANTS FOR dho_app FINAL", "SELECT, INSERT, ALTER DELETE, OPTIMIZE ON default.*"}},
+		"grant on one table": {"default", without("ON default.*", "ON default.teams")},
+		"system tables only": {"default", showGrantsFinal26_6ProdDhoApp[1:]},
+	} {
+		if err := orgDeletionGrantProblem(tc.database, tc.lines); err == nil {
+			t.Errorf("%s: the purge was allowed, want a refusal", name)
+		}
+	}
+}

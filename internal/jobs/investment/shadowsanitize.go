@@ -106,11 +106,11 @@ func shadowRequestID(id string) string {
 	return ""
 }
 
-// shadowRequestIDSource keeps one of the three closed sources and drops any
+// shadowRequestIDSource keeps one of the four closed sources and drops any
 // other value.
 func shadowRequestIDSource(source string) string {
 	switch source {
-	case "aig", "ray", "client":
+	case "aig", "ray", "client", "header":
 		return source
 	}
 	return ""

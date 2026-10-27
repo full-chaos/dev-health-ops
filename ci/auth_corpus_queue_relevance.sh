@@ -8,6 +8,10 @@
 #   Row form 1: `dir/*` is a bash glob, its star crosses slashes. Row form 2: `=dir/*.go` matches one directory only.
 #   A malformed row prints corpus=true: a CR, leading or trailing whitespace, only `=`, a `=` after the first character, or an `=` row
 #   with no slash, an empty directory part or last element, a glob character in the directory part, or `//`.
+# CHAOS-11670: the entry is ALSO relevant when a changed file sits in a directory listed in ci/auth_corpus_closure.txt (one
+#   repo package directory per row: the go list -deps closure of the auth route packages, made by ci/auth_corpus_closure_gen.sh).
+#   A closure row is a plain relative path of [A-Za-z0-9._/-] segments; any other row (a glob character, whitespace, a leading
+#   or trailing slash, an empty, . or .. segment) and a missing or empty table print corpus=true.
 # Changed paths are read with git diff -z and core.quotePath=false, so any file name is matched as written.
 # It fails closed: bad input, a git error or a missing or empty path list all print corpus=true.
 set -uo pipefail
@@ -50,6 +54,15 @@ while IFS= read -r line || [ -n "${line}" ]; do
   globs+=("${line}")
 done <"${root}/ci/auth_corpus_paths.txt" 2>/dev/null
 [ "${#globs[@]}" -gt 0 ] || run_corpus "ci/auth_corpus_paths.txt is missing or has no rows"
+declare -A closure_dirs=()
+closure_table="${root}/ci/auth_corpus_closure.txt"
+while IFS= read -r line || [ -n "${line}" ]; do
+  { [ -n "${line}" ] && [[ ${line} != \#* ]]; } || continue
+  [[ ${line} =~ ^[A-Za-z0-9._/-]+$ ]] || run_corpus "malformed row in ci/auth_corpus_closure.txt"
+  case "/${line}/" in */./* | */../* | *//*) run_corpus "malformed row in ci/auth_corpus_closure.txt" ;; esac
+  closure_dirs["${line}"]=1
+done <"${closure_table}" 2>/dev/null
+[ "${#closure_dirs[@]}" -gt 0 ] || run_corpus "ci/auth_corpus_closure.txt is missing or has no rows"
 mb="$(git -C "${root}" merge-base "${tip}" "${head}")" || run_corpus "no merge base of ${tip} and ${head}"
 # -z and core.quotePath=false: a path with a non-ASCII byte, a tab, a quote or a backslash is read as written, never quoted.
 changed_file="$(mktemp)" || run_corpus "no temporary file"
@@ -77,5 +90,15 @@ while IFS= read -r -d '' file; do
         ;;
     esac
   done
+  case "${file}" in
+    */*)
+      dir=${file%/*}
+      if [ -n "${dir}" ] && [ -n "${closure_dirs["${dir}"]+x}" ]; then
+        printf 'auth corpus relevance: %s is in the closure directory %s\n' "${file}" "${dir}" >&2
+        echo corpus=true
+        exit 0
+      fi
+      ;;
+  esac
 done <"${changed_file}"
 echo corpus=false

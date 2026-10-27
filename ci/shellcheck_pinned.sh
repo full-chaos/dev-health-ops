@@ -141,6 +141,7 @@ FILES=(
   "${ROOT}/ci/auth_corpus_set_env.sh"
   # CHAOS-11596: the merge queue relevance of the external auth corpus.
   "${ROOT}/ci/auth_corpus_queue_relevance.sh"
+  "${ROOT}/ci/auth_corpus_closure_gen.sh"
   "${ROOT}/ci/run_tests.sh"
   "${ROOT}/docker/init-extra-dbs.sh"
   "${ROOT}/.github/docs-legacy/examples/customer-push/generic-runner.sh"

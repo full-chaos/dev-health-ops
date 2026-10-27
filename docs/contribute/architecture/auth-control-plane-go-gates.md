@@ -55,7 +55,7 @@ tree still reports its old path.
 
 | Job | Runs | Content |
 | --- | --- | --- |
-| `auth-changes` | always | Computes `relevant`. A merge queue entry is judged by `ci/auth_queue_relevance.sh`: the pull request rule over the whole group (merge base with the target branch tip to the entry head), and any error makes it relevant. A push to main and every other event is always relevant. It also computes `corpus` (CHAOS-11596): on a merge queue entry, `ci/auth_corpus_queue_relevance.sh` judges the group against the globs of `ci/auth_corpus_paths.txt`; any other event is `corpus=false`. |
+| `auth-changes` | always | Computes `relevant`. A merge queue entry is judged by `ci/auth_queue_relevance.sh`: the pull request rule over the whole group (merge base with the target branch tip to the entry head), and any error makes it relevant. A push to main and every other event is always relevant. It also computes `corpus` (CHAOS-11596): on a merge queue entry, `ci/auth_corpus_queue_relevance.sh` judges the group against the globs of `ci/auth_corpus_paths.txt` and, since CHAOS-11670, against the package directories of `ci/auth_corpus_closure.txt` (the `go list -deps` closure of the go-api auth route packages and both binaries, made by `ci/auth_corpus_closure_gen.sh`; a Go test fails when it drifts); any other event is `corpus=false`. |
 | `auth-go-quality` | when relevant | `paths-selftest`, `scope-selftest`, `fmt`, `vet`, `fuzz-registry`, `vuln`. |
 | `auth-test` | when relevant | `test`, `race`, `race-integration`, `middleware`. |
 | `auth-fuzz (<target>)` | when relevant | One matrix job per fuzz target, so each parser has its own CI-visible name. |

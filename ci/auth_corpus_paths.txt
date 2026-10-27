@@ -3,9 +3,9 @@
 # fans into the required context auth-gate. One bash glob per line, matched against the repo-relative path with
 # `case`: `*` matches any characters including `/`, except in a row that starts with `=`, which matches one directory only
 # (the file's directory must equal the row's directory part). A line starting with # is a comment.
-# NOT in the set, by design: the rest of the Go packages go-api and the migrate binaries are built from (cmd, internal and
-# contracts are copied whole into the images). A row for them would run the corpus on almost every Go change; the set
-# is the auth-service route set plus the corpus's own inputs.
+# The Go packages the auth route packages and both binaries import are NOT listed here: ci/auth_corpus_closure.txt (CHAOS-11670,
+# the go list -deps closure, generated) names them and ci/auth_corpus_queue_relevance.sh reads it beside this file. This file is
+# the floor: the auth-service route set plus the corpus's own inputs and the images' non-Go inputs.
 # internal/cigates/workflows (TestAuthCorpusQueuePathSetCoversEveryRouteFile, TestAuthCorpusQueuePathSetCoversEveryDirectInput) fails when a non-test Go file that declares
 # an auth-service route (httpapi.Route{ of internal/auth/httpapi) is outside this set, so a new route file cannot skip the corpus.
 #
@@ -33,6 +33,8 @@ ci/auth_corpus_set_env.sh
 ci/auth_corpus_acp_routes.tsv
 ci/auth_corpus_stub/*
 ci/auth_corpus_paths.txt
+ci/auth_corpus_closure.txt
+ci/auth_corpus_closure_gen.sh
 ci/auth_corpus_queue_relevance.sh
 docker/smtpsink.Dockerfile
 docker/providerstub.Dockerfile

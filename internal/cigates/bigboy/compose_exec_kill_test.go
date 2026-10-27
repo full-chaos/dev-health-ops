@@ -3,7 +3,9 @@ package bigboy_test
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -53,18 +55,39 @@ func TestComposeExecKillNamesTheLastStepAndHidesTheCredential(t *testing.T) {
 	}
 }
 
-// The kill reaches the children of the script: a child that holds the output
-// pipes does not keep the run alive.
+// The kill reaches the children of the script: a child of the script is dead
+// when the run returns, and it did not hold the run until the wait delay.
 func TestComposeExecKillReachesTheProcessGroup(t *testing.T) {
-	dir, script := composeHangScript(t, "echo \"STEP group rc=0 00:00:00\"\nsleep 20 &\nwait\n")
+	dir, script := composeHangScript(t, "echo \"STEP group rc=0 00:00:00\"\nsleep 20 &\necho $! > \"$PWD/child.pid\"\nwait\n")
 	started := time.Now()
 	_, err := composeExec(dir, composeHangEnv, time.Second, "bash", script)
 	if err == nil {
 		t.Fatal("a step that never returns gave no error")
 	}
-	if elapsed := time.Since(started); elapsed > 8*time.Second {
+	if elapsed := time.Since(started); elapsed > 4*time.Second {
 		t.Errorf("a child of the script held the run for %s after the kill", elapsed)
 	}
+	pid := composeChildPID(t, dir)
+	t.Cleanup(func() { _ = syscall.Kill(pid, syscall.SIGKILL) })
+	for i := 0; i < 20 && syscall.Kill(pid, 0) == nil; i++ {
+		time.Sleep(50 * time.Millisecond)
+	}
+	if syscall.Kill(pid, 0) == nil {
+		t.Errorf("a child of the script (pid %d) is still alive after the kill", pid)
+	}
+}
+
+func composeChildPID(t *testing.T, dir string) int {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(dir, "child.pid"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+	if err != nil || pid <= 1 {
+		t.Fatalf("child pid %q: %v", raw, err)
+	}
+	return pid
 }
 
 // A child that left the process group still cannot hold the run past the wait

@@ -162,7 +162,7 @@ func TestStackedQueueCancelJobShape(t *testing.T) {
 		{cancelGoYml, "    permissions:\n      actions: write\n      contents: read\n    steps:", "    env:\n      GH_TOKEN: ${{ github.token }}\n    permissions:\n      actions: write\n      contents: read\n    steps:"},
 		{cancelGoYml, "          HEAD_SHA: ${{ github.sha }}\n", "          HEAD_SHA: ${{ github.sha }}\n          SECRET: ${{ secrets.GITHUB_TOKEN }}\n"},
 		{cancelGoYml, "      - go-auth-web-proxy-proof\n      - graphql-wire-parity\n    runs-on: ubuntu-latest\n    timeout-minutes: 5\n    steps:\n      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n\n      - name: Aggregate the heavy Go results", "      - go-auth-web-proxy-proof\n      - graphql-wire-parity\n      - " + cancelJobName + "\n    runs-on: ubuntu-latest\n    timeout-minutes: 5\n    steps:\n      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n\n      - name: Aggregate the heavy Go results"},
-		{cancelGoYml, "    permissions:\n      contents: read\n      actions: read\n    runs-on: ubuntu-latest\n    timeout-minutes: 5\n    env:\n      PLAN_RESULT", "    permissions:\n      contents: read\n      actions: write\n    runs-on: ubuntu-latest\n    timeout-minutes: 5\n    env:\n      PLAN_RESULT"},
+		{cancelGoYml, "    permissions:\n      actions: read\n    runs-on: ubuntu-latest\n    timeout-minutes: 5\n    env:\n      PLAN_RESULT", "    permissions:\n      actions: write\n    runs-on: ubuntu-latest\n    timeout-minutes: 5\n    env:\n      PLAN_RESULT"},
 	} {
 		tmp := plantTree(t, root, []string{cancelGoYml}, m)
 		d := loadWf(t, tmp, "go.yml")

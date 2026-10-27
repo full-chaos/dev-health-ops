@@ -600,7 +600,8 @@ func (writer *RequestUsageWriter) drain() {
 // most the write deadline whatever the sink does; a write still running then,
 // or when ctx is cancelled, is cancelled and its rows stay buffered for a
 // byte-identical re-send. A cancel is not logged: the drain reports the rows.
-// A ctx that has already ended never reaches the sink.
+// A ctx that has already ended never reaches the sink and is not logged: the
+// drain's unsent line names those rows.
 func (writer *RequestUsageWriter) write(ctx context.Context) bool {
 	writer.reportDropped(false)
 	if overflow := len(writer.buffer) - writer.bufferRows; overflow > 0 {
@@ -612,16 +613,13 @@ func (writer *RequestUsageWriter) write(ctx context.Context) bool {
 	if len(writer.buffer) == 0 {
 		return true
 	}
-	if err := ctx.Err(); err != nil {
-		if !errors.Is(err, context.Canceled) {
-			writer.notice(slog.LevelWarn, "provider_sync.request_usage_flush_failed", writer.buffer, errRequestUsageWriteTimeout)
-		}
-		return false
-	}
 	writeContext, cancel := context.WithTimeout(ctx, writer.writeTimeout)
 	defer cancel()
 	batch := append([]RequestUsageRow(nil), writer.buffer...)
 	result := make(chan error, 1)
+	if writeContext.Err() != nil {
+		return false
+	}
 	go func() {
 		defer func() {
 			if recovered := recover(); recovered != nil {

@@ -834,8 +834,8 @@ func TestWriterSurvivesAPanickingStoreAndAHungWrite(t *testing.T) {
 		t.Fatalf("logs=%s", logs.String())
 	}
 	hung := &hangingRequestUsageSink{release: make(chan struct{}), started: make(chan struct{})}
-	t.Cleanup(func() { close(hung.release) })
 	hangingWriter, hangingLogs := newTestRequestUsageWriter(t, hung)
+	t.Cleanup(func() { close(hung.release) })
 	hangingWriter.Offer([]RequestUsageRow{{Transport: requestTransportREST, Requests: 1}})
 	<-hung.started
 	closed := make(chan struct{})

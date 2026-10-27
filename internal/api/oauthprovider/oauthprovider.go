@@ -106,6 +106,10 @@ func (e *UserInfoError) Error() string { return "oauth user info: " + e.Reason }
 // ErrUnexpected is an exception Python does not catch around the fetch.
 var ErrUnexpected = errors.New("oauthprovider: provider response raised an uncaught exception")
 
+// ErrMissingProviderID is a profile with no user id, or a JSON null one. It wraps ErrUnexpected, so a caller that
+// tests for that keeps its behavior; a caller that can refuse the sign-in tests for this one.
+var ErrMissingProviderID = fmt.Errorf("%w: the profile has no user id", ErrUnexpected)
+
 // Client fetches profiles.
 type Client struct {
 	HTTP      *http.Client
@@ -199,9 +203,9 @@ func (c *Client) github(ctx context.Context, token string) (*UserInfo, error) {
 		verified = true // githubPrimaryEmail (below) never returns an unverified email -- see its own doc comment.
 	}
 	id, present := user.Get("id")
-	if !present {
-		// str(user_data["id"]) outside any handler: KeyError.
-		return nil, ErrUnexpected
+	if !present || id == nil {
+		// str(user_data["id"]) outside any handler: KeyError. A JSON null id is no id either: str(None) is "None".
+		return nil, ErrMissingProviderID
 	}
 	login, _ := user.Get("login")
 	name, _ := user.Get("name")
@@ -331,8 +335,11 @@ func requiredFields(data pyjson.Value) (*pyjson.Object, pyjson.Value, pyjson.Val
 	}
 	id, hasID := user.Get("id")
 	email, hasEmail := user.Get("email")
-	if !hasID || !hasEmail {
+	if !hasEmail {
 		return nil, nil, nil, &UserInfoError{Reason: "user info response missing required fields"}
+	}
+	if !hasID || id == nil {
+		return nil, nil, nil, ErrMissingProviderID
 	}
 	return user, id, email, nil
 }

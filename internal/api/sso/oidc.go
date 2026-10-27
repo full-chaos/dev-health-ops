@@ -89,6 +89,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/api/usersowned"
+	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
@@ -502,6 +503,12 @@ func (h handlers) oidcCallback(w http.ResponseWriter, r *http.Request) {
 		if errors.Is(err, usersowned.ErrRefused) {
 			h.recordSSOAuthenticatedDenial(ctx, w, r, row.OrgID, providerID, err.Error(), http.StatusConflict,
 				usersowned.Detail(), "oidc", "provisioning")
+			return
+		}
+		if errors.Is(err, identity.ErrInvalidProviderID) {
+			h.Logger.WarnContext(ctx, "sso sign-in refused: the identity provider returned an invalid user id", "protocol", "oidc")
+			h.recordSSOAuthenticatedDenial(ctx, w, r, row.OrgID, providerID, err.Error(), http.StatusBadRequest,
+				invalidProviderIDDetail(), "oidc", "provisioning")
 			return
 		}
 		var processing ssoProcessing

@@ -150,6 +150,9 @@ func federatedPublicUser(id uuid.UUID, emailLower string, req ProvisionRequest) 
 	default:
 		return publicUser{}, ErrLegacyProjection
 	}
+	if RefuseInvalidProviderID(u.AuthProvider, u.AuthProviderID) != nil {
+		return publicUser{}, ErrLegacyProjection
+	}
 	return u, nil
 }
 

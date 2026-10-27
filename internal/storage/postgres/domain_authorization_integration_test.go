@@ -101,7 +101,7 @@ func TestDomainAuthorizationRequiresExactCanaryAndReconcilerPrivileges(t *testin
 		// keeps its own, unchanged declarations for the first two.
 		"CREATE TABLE public.sync_run_reference_discoveries (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.sync_run_post_dispatches (id uuid PRIMARY KEY)",
-		"CREATE TABLE public.org_activity (org_id uuid PRIMARY KEY)",
+		"CREATE TABLE public.org_activity (org_id uuid PRIMARY KEY, has_data boolean NOT NULL, computed_at timestamptz, refreshed_at timestamptz NOT NULL)",
 		"CREATE TABLE public.sync_compute_checkpoints (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.job_runs (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.backfill_jobs (id uuid PRIMARY KEY)",

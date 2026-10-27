@@ -92,6 +92,7 @@ internal/mintcli/edgetoken
 internal/mintcli/envelope
 internal/netclass
 internal/operationalordering
+internal/orgactivity/chread
 internal/ownershipwindow
 internal/pgmigrate
 internal/pgmigrate/schemagate

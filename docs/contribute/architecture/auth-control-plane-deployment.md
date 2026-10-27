@@ -111,16 +111,50 @@ rollback is the phase minus 1.
 | 1 | auth-service dark | auth-service, its migrate and grants Jobs and policies; `AUTH_DATABASE_SCHEMA` on go-api, query-api and the River hooks. No route reaches the service. |
 | 2 | Sessions | Phase 1 plus `AUTH_PROXY_URL`, `AUTH_PROXY_SESSIONS` and `AUTH_SESSION_ISSUE_TOKEN` on go-api (from phase 2 every `AUTH_PROXY_*` flag is rendered `"true"` or `"false"`, so an env entry beats `goApi.envFrom`), `AUTH_PROXY_SESSIONS` on query-api, the migrate Job and the River hooks, the session keys on auth-service, and the auth-service API port open to go-api only. Needs the session readers, the successor key and the rate-limit store. |
 | 3 | Login and social sign-in | Phase 2 plus `AUTH_PROXY_LOCAL_LOGIN` and `AUTH_PROXY_SOCIAL` on go-api, and on auth-service `AUTH_LOGIN_LOCKOUT_KEY` (`authService.sessionKeys.loginLockout`) and the six optional `SOCIAL_<PROVIDER>_CLIENT_ID` / `_CLIENT_SECRET` keys (`authService.social.secretName`). |
-| 4 | Users owned | Phase 3 plus `AUTH_PROXY_CREDENTIALS` and `AUTH_USERS_OWNED` (go-api, auth-service, the migrate, grants and backfill Jobs). **Refused at render.** |
+| 4 | Users owned | Phase 3 plus `AUTH_PROXY_CREDENTIALS` and `AUTH_USERS_OWNED` (go-api, auth-service, the migrate, grants and backfill Jobs). Renders (D6358); roll back with phase 3 in one `helm upgrade`. |
 | 5 | Orgs owned | Phase 4 plus `AUTH_ORGS_OWNED` (auth-service and the backfill Job). **Refused at render.** |
 
 Phases 4 and 5 mean (D6358) that auth-service becomes the writer of the existing
 public `users` table (4) and of the public `organizations` and `memberships`
-tables (5): no auth-schema copy, no projection. The service does not do that
-yet, so the chart refuses both phases until the public-table writer decision.
-The credential routes move with users owned, not with login: auth-service mounts
-them only with `AUTH_USERS_OWNED`, and go-api refuses `AUTH_USERS_OWNED` unless
-the credential routes go to auth-service.
+tables (5): no auth-schema copy, no projection. Phase 4 renders. The service does
+not write the organizations and memberships tables yet, so the chart refuses
+phase 5 until its own public-table writer leaf.
+The credential routes move with users owned, not with login: go-api refuses
+`AUTH_USERS_OWNED` unless the credential routes go to auth-service. auth-service
+mounts them from phase 2 and answers 503 until users are owned.
+
+Before each upgrade that turns on a forwarded route, the running auth-service
+release must already mount that route and answer 503 with `Retry-After` until it
+serves it. One `helm upgrade` rolls go-api and auth-service together, so for a
+short time go-api pods that forward a route meet auth-service pods of the
+previous revision; a rollback has the mirror window. With such a release those
+pods answer 503 and `Retry-After` (a retryable answer that writes nothing);
+without it they answer 404. The commit floor of the running auth-service image:
+
+- before phase 1 to 2 and before the rollback from phase 2 to 1 (refresh and
+  logout are forwarded): at or after ca70438e;
+- before phase 2 to 3 (local login is forwarded): at or after c4d3aa6d;
+- before phase 3 to 4 (the credential routes are forwarded) and before the
+  rollback from phase 4 to 3: at or after 676930d8, which c4d3aa6d includes.
+
+Sign-in answers 503 during the move from phase 1 to 2 and back, until the
+auth-service and go-api pods run the same phase.
+
+The chart cannot read the running image, so check it before the upgrade.
+
+Rolling back phase 4 narrows the runtime role's grants (the write grant on the
+public `users` table goes), and the grants ratchet refuses a narrowing without
+an acknowledgement. The rollback is one `helm upgrade` with the phase and the
+acknowledgement together:
+`helm upgrade <release> <chart> --values <values> --set authService.phase=3 --set authService.migrate.acknowledgeGrantNarrowing=<digest>`.
+The digest is the 16 hex characters the ratchet prints when it refuses (it is
+not a secret). If you do not hold it, run the phase-only upgrade
+(`--set authService.phase=3`) first: the auth-migrate hook refuses in one
+transaction, changes nothing, and the failed hook Job is kept, so read the
+digest with `kubectl logs job/<release>-auth-migrate` (the line
+"re-run with -ack-grant-narrowing=<digest>") and upgrade again with the key set.
+The key renders as `-ack-grant-narrowing=<digest>` on the auth-migrate and
+auth-grants Jobs only while it is set; clear it in the next deploy change.
 
 The chart refuses the keys the phase replaces, whatever their value:
 `goApi.authProxy.*`, `authService.enabled`, `authService.usersOwned` and

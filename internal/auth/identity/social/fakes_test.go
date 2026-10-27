@@ -32,6 +32,9 @@ type account struct {
 	public bool
 	// clientID is the OAuth client the token was issued to.
 	clientID string
+	// rawEmail, when set, is written into the Google profile as the raw JSON
+	// text of the email member, so a lone surrogate escape reaches the decoder.
+	rawEmail string
 	// profileOf serves this other token's profile from the user endpoint
 	// while the token check reports this account.
 	profileOf string
@@ -190,6 +193,11 @@ func (f *fakeProviders) googleUser(w http.ResponseWriter, r *http.Request) {
 	a, ok := f.profile(bearerToken(r), Google)
 	if !ok {
 		http.Error(w, "{}", http.StatusUnauthorized)
+		return
+	}
+	if a.rawEmail != "" {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"` + a.googleID + `","email":"` + a.rawEmail + `","verified_email":true,"name":"Test User"}`))
 		return
 	}
 	reply(w, map[string]any{"id": a.googleID, "email": a.email, "verified_email": a.verified, "name": "Test User"})

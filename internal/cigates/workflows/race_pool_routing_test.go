@@ -234,13 +234,8 @@ func TestRaceLegsTurnSetupGoCacheOffOnThePool(t *testing.T) {
 
 // Only the four race legs are budgeted for the pool (queue measured 7-10 min hosted vs under 1 min pool): static and test stay hosted.
 func TestOnlyTheFourRaceLegsCarryThePoolFlag(t *testing.T) {
-	leg := goQualityLeg(t)
-	strategy, _ := leg["strategy"].(map[string]any)
-	matrix, _ := strategy["matrix"].(map[string]any)
-	include, _ := matrix["include"].([]any)
 	got := map[string]bool{}
-	for _, e := range include {
-		entry, _ := e.(map[string]any)
+	for _, entry := range goQualityLegList(t, authProofRoot(t)) {
 		name, _ := entry["name"].(string)
 		if pool, _ := entry["pool"].(bool); pool {
 			got[name] = true

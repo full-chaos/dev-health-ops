@@ -231,8 +231,8 @@ type AttemptRecord struct {
 	// ModelFromRequest is true when the provider omitted the returned model and
 	// ModelReturned was taken from the request.
 	ModelFromRequest bool
-	// RequestIDSource is where RequestID came from: aig, ray or client; empty
-	// for a provider whose id is its own header.
+	// RequestIDSource is where RequestID came from: aig, ray or client (clef),
+	// or header (the jev response header). Empty means unknown.
 	RequestIDSource string
 	// EndpointType is the clef endpoint type (workers_ai or ai_gateway) the
 	// call was sent to, derived from the validated base_url; empty for any other

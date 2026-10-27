@@ -9,7 +9,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -65,6 +67,16 @@ func composeExec(dir string, env []string, timeout time.Duration, name string, a
 	defer cancel()
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir, cmd.Env = dir, env
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	var snapshotMu sync.Mutex
+	snapshot := ""
+	cmd.Cancel = func() error {
+		snapshotMu.Lock()
+		snapshot = composeGroupSnapshot(cmd.Process.Pid)
+		snapshotMu.Unlock()
+		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	}
+	cmd.WaitDelay = 5 * time.Second
 	var so, se bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &so, &se
 	err := cmd.Run()
@@ -72,7 +84,40 @@ func composeExec(dir string, env []string, timeout time.Duration, name string, a
 	if ee, ok := err.(*exec.ExitError); ok && ctx.Err() == nil {
 		r.code, err = ee.ExitCode(), nil
 	}
+	if err != nil && ctx.Err() != nil {
+		snapshotMu.Lock()
+		group := snapshot
+		snapshotMu.Unlock()
+		err = fmt.Errorf("killed after %s: %w\nprocess group at the kill (taken before it):\n%s\nthe last output (stdout, then stderr):\n%s\n--\n%s", timeout, err, group, composeOutputTail(r.stdout), composeOutputTail(r.stderr))
+	}
 	return r, err
+}
+
+// composeGroupSnapshot lists the processes of one process group: pid, parent, state, kernel wait channel, age and command name. The
+// output format has no argument column and no environment, so no value can leak. ps is the absolute path: the test PATH is stubs only.
+func composeGroupSnapshot(pgid int) string {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "/usr/bin/ps", "-e", "-o", "pid=,ppid=,pgid=,stat=,wchan:20=,etime=,comm=").Output()
+	if err != nil {
+		return fmt.Sprintf("(ps failed: %v)", err)
+	}
+	rows := []string{"   PID   PPID   PGID STAT WCHAN                ELAPSED COMMAND"}
+	for _, line := range strings.Split(string(out), "\n") {
+		if f := strings.Fields(line); len(f) >= 7 && f[2] == strconv.Itoa(pgid) {
+			rows = append(rows, line)
+		}
+	}
+	return strings.Join(rows, "\n")
+}
+
+// composeOutputTail is the last 4 KB of a script's output with the credential replaced: the last STEP line names the step that hung.
+func composeOutputTail(s string) string {
+	s = strings.ReplaceAll(s, composeCHSentinel, "[redacted]")
+	if len(s) > 4096 {
+		s = s[len(s)-4096:]
+	}
+	return s
 }
 
 func composeWrite(g *guard, p, body string, mode os.FileMode) {

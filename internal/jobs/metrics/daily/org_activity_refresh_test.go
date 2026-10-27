@@ -114,7 +114,6 @@ func TestAHungOrPanickingOrgActivityRefreshNeitherFailsNorDelaysTheFinalize(t *t
 			handler.SetTouchedDaysDrainer(drainer)
 			handler.SetOrgActivityRefresher(refresher)
 			handler.orgActivityTimeoutOverride = 200 * time.Millisecond
-			start := time.Now()
 			execution := finalizeExecutionFor(testRunID)
 			execution.Attempt, execution.Definition.MaxAttempts = 1, 4
 			done := make(chan error, 1)
@@ -126,9 +125,6 @@ func TestAHungOrPanickingOrgActivityRefreshNeitherFailsNorDelaysTheFinalize(t *t
 				}
 			case <-time.After(5 * time.Second):
 				t.Fatal("the finalize is still waiting for the refresh after 5s")
-			}
-			if elapsed := time.Since(start); elapsed > 5*time.Second {
-				t.Fatalf("the finalize waited %s for the refresh", elapsed)
 			}
 			if len(drainer.passes) != 1 {
 				t.Fatalf("drain passes = %v, want the pass that follows the end of the run", drainer.passes)

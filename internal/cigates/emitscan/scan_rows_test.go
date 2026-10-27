@@ -278,13 +278,31 @@ const (
 // warm-up; a failing pair is measured once more, since a spike can only raise a ratio by chance, a quadratic always does.
 func linearByRatio(t *testing.T, id string, small, factor int, bound float64, source func(int) string) {
 	t.Helper()
+	costRatio(t, id, small, small*factor, bound, source)
+}
+
+// costRatio is linearByRatio for two named sizes: source(n) builds the input of size n, and the cost of the big size over
+// the small one must stay under bound. A source that does not parse, or that trips the census budget, ends the scan
+// early and measures nothing, so it fails the test.
+func costRatio(t *testing.T, id string, small, big int, bound float64, source func(int) string) {
+	t.Helper()
+	hung := false
 	least := func(n int) time.Duration {
 		src := header + source(n)
 		best := time.Duration(1<<63 - 1)
 		for i := 0; i < ratioSamples; i++ {
 			start := cpuTime(t)
-			scanSource(t, src)
-			if d := cpuTime(t) - start; d < best {
+			got := scanSource(t, src)
+			d := cpuTime(t) - start
+			if strings.Contains(rules(got), "R0") || tripped(got) {
+				t.Fatalf("%s: n=%d: the scan did not read the whole source (findings %v)", id, n, got)
+			}
+			if d > hangCeiling*raceSlowdown {
+				t.Errorf("%s: n=%d one scan used %s cpu, want < %s", id, n, d, hangCeiling*raceSlowdown)
+				hung = true
+				return d
+			}
+			if d < best {
 				best = d
 			}
 		}
@@ -293,18 +311,17 @@ func linearByRatio(t *testing.T, id string, small, factor int, bound float64, so
 	scanSource(t, header+source(small))
 	var ratio float64
 	for attempt := 0; attempt < 2; attempt++ {
-		lo, hi := least(small), least(small*factor)
-		ratio = float64(hi) / float64(lo)
-		t.Logf("%s: n=%d %s cpu, n=%d %s cpu, ratio %.2f (bound %.0f)", id, small, lo, small*factor, hi, ratio, bound)
-		if hi > hangCeiling*raceSlowdown {
-			t.Errorf("%s: n=%d used %s cpu, want < %s", id, small*factor, hi, hangCeiling*raceSlowdown)
+		lo, hi := least(small), least(big)
+		if hung {
 			return
 		}
+		ratio = float64(hi) / float64(lo)
+		t.Logf("%s: n=%d %s cpu, n=%d %s cpu, ratio %.2f (bound %.2f)", id, small, lo, big, hi, ratio, bound)
 		if ratio < bound {
 			return
 		}
 	}
-	t.Errorf("%s: %dx the input cost %.2fx the cpu, want < %.0fx (linear is about %dx)", id, factor, ratio, bound, factor)
+	t.Errorf("%s: n=%d over n=%d cost %.2fx the cpu, want < %.2fx", id, big, small, ratio, bound)
 }
 
 // Finding the function that holds a metric-options call costs O(1) per node, however deep non-function nesting goes, and
@@ -326,6 +343,16 @@ func TestMetricFunctionMarkingIsLinearAndKeepsItsScope(t *testing.T) {
 
 	linearByRatio(t, "N nested calls each holding a metric closure", 6000, 8, 20, func(n int) string {
 		return "func f(c metric.Int64Counter, v string) {\n\t_ = " + strings.Repeat("g(func() { _ = metric.WithAttributes() }, ", n) + "0" + strings.Repeat(")", n) + "\n}\n"
+	})
+
+	// The same 24000 closures, in chains of depth n (the parser stops near depth 1000): work that is linear in the closures costs the same at any depth, a
+	// scan of the open functions at every metric call costs more as the chains deepen.
+	costRatio(t, "24000 closures in chains of depth n", 25, 800, 1.6, func(n int) string {
+		var b strings.Builder
+		for i := 0; i < 24000/n; i++ {
+			fmt.Fprintf(&b, "func f%d(c metric.Int64Counter) {\n%s%s}\n", i, strings.Repeat("func() {\n\t_ = metric.WithAttributes()\n", n), strings.Repeat("}()\n", n))
+		}
+		return b.String()
 	})
 
 	closure := "func f(c metric.Int64Counter, v string) {\n\tx := attribute.String(\"user_id\", v)\n\t_ = x\n\tfunc() {\n\t\t_ = metric.WithAttributes()\n\t}()\n}\n"

@@ -71,6 +71,11 @@ func TestAMalformedEndpointNeverReachesTheExporter(t *testing.T) {
 		"ops-user:c4n4ry-pw@127.0.0.1:4317",
 		"127.0.0.1:4317/c4n4ry-path",
 		"127.0.0.1:4317?c4n4ry-q=1",
+		"127.0.0.1:c4n4ry-port",
+		"127.0.0.1:0",
+		"127.0.0.1:70000",
+		"127.0.0.1:",
+		"collector",
 	} {
 		t.Run(endpoint, func(t *testing.T) {
 			t.Setenv("OTEL_ENABLED", "true")
@@ -103,5 +108,44 @@ func TestAMalformedEndpointNeverReachesTheExporter(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// The final-flush warning (a sampled span, a collector that does not answer)
+// names the collector by host:port only.
+func TestTheFlushTimeoutWarningNamesTheCollectorByHostAndPortOnly(t *testing.T) {
+	address := closedPort(t)
+	t.Setenv("OTEL_ENABLED", "true")
+	t.Setenv("OTEL_SAMPLE_RATE", "1")
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://ops-user:c4n4ry-pw@"+address+"/v1/traces?c4n4ry-q=1#c4n4ry-f")
+	t.Cleanup(func() {
+		otel.SetTracerProvider(noop.NewTracerProvider())
+		otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator())
+	})
+	var logs bytes.Buffer
+	component := InitWithServiceName(slog.New(slog.NewJSONHandler(&logs, nil)), "flush-test")
+	_, span := otel.Tracer("flush-test").Start(context.Background(), "buffered")
+	span.End()
+	if err := component.Shutdown(context.Background()); err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+	var warning map[string]any
+	for _, raw := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
+		if strings.Contains(raw, "final flush timed out") {
+			if err := json.Unmarshal([]byte(raw), &warning); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if warning == nil {
+		t.Fatalf("no final-flush warning:\n%s", logs.String())
+	}
+	if warning["endpoint"] != address {
+		t.Errorf("endpoint = %v, want %q", warning["endpoint"], address)
+	}
+	for _, leaked := range []string{"ops-user", "c4n4ry"} {
+		if strings.Contains(logs.String(), leaked) {
+			t.Errorf("the log carries %q:\n%s", leaked, logs.String())
+		}
 	}
 }

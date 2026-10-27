@@ -6,9 +6,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -22,6 +24,8 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/authconfig"
+	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
+	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
 )
 
 // exportedSpan is one span as it crossed the wire, with its resource's
@@ -364,5 +368,76 @@ func TestAMalformedCollectorEndpointLeavesTracingOffAndUnnamed(t *testing.T) {
 		if strings.Contains(logs.String(), leaked) {
 			t.Errorf("the log carries %q:\n%s", leaked, logs.String())
 		}
+	}
+}
+
+// A request still in flight when the service stops has its span flushed: the
+// tracing component stops after the API listener has drained.
+func TestARequestInFlightAtShutdownHasItsSpanFlushed(t *testing.T) {
+	receiver, address := startReceiver(t)
+	t.Setenv("OTEL_ENABLED", "true")
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://"+address)
+	t.Setenv("OTEL_SAMPLE_RATE", "1")
+	ports := reservePorts(t, 2)
+	cfg, err := authconfig.Load(authconfig.Spec{LookupEnv: lookupFrom(map[string]string{
+		authconfig.EnvDatabaseURI:        "postgres://auth@127.0.0.1:1/devhealth",
+		authconfig.EnvSigningKeyFile:     filepath.Join(t.TempDir(), "absent-signing-key.pem"),
+		authconfig.EnvSigningKeyID:       "drain-test",
+		authconfig.EnvAPIAddress:         ports[0],
+		authconfig.EnvOperatorAddress:    ports[1],
+		authconfig.EnvHealthCheckTimeout: "1s",
+		authconfig.EnvShutdownTimeout:    "10s",
+	})})
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	logs := &safeBuffer{}
+	logger := slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	entered, release := make(chan struct{}), make(chan struct{})
+	hold := httpapi.Route{Method: http.MethodGet, Pattern: "/v1/drain-hold", Unthrottled: true,
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			close(entered)
+			<-release
+			w.WriteHeader(http.StatusNoContent)
+		})}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	components, err := tracedComponents(ctx, logger, func() ([]lifecycle.Component, error) {
+		return configureWithRoutes(ctx, cfg, logger, []httpapi.Route{hold})
+	})
+	if err != nil {
+		t.Fatalf("configure: %v", err)
+	}
+	runtime, err := lifecycle.New(lifecycle.Options{Logger: logger, ShutdownTimeout: 10 * time.Second, Components: components})
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- runtime.Run(ctx) }()
+	awaitBoundAddress(t, logs, "auth-api-http")
+	go func() {
+		response, err := http.Get("http://" + ports[0] + "/v1/drain-hold")
+		if err == nil {
+			_ = response.Body.Close()
+		}
+	}()
+	<-entered
+	cancel()
+	// The stop is under way while the request is still being served.
+	time.Sleep(300 * time.Millisecond)
+	close(release)
+	select {
+	case <-done:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the runtime did not stop within 30s")
+	}
+	found := false
+	for _, s := range receiver.received() {
+		if s.span.GetName() == "GET /v1/drain-hold" && s.service == "auth-service" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("the in-flight request's span did not reach the receiver; got %d spans; logs:\n%s", len(receiver.received()), logs.String())
 	}
 }

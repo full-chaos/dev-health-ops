@@ -58,3 +58,41 @@ func TestLoadDownChainSortsRevisionsAsIntegers(t *testing.T) {
 		t.Errorf("LoadDownChain order = %v, want %v", got, want)
 	}
 }
+
+// Production records two alembic_version rows: the cutover head 0066 and the application head. Decide reads the rows
+// as a set, so neither the row order nor the row that comes first changes the plan.
+func TestDecideTwoHeadsAtTheRealChainHead(t *testing.T) {
+	baseline, err := LoadBaseline()
+	if err != nil {
+		t.Fatal(err)
+	}
+	chain, err := LoadChain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	history, err := LoadHistory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	known := KnownRevisions(history, baseline, chain)
+	last, before := chain[len(chain)-1], chain[len(chain)-2]
+	for name, test := range map[string]struct {
+		versions []string
+		head     string
+		pending  []string
+	}{
+		"cutover row first, last chain revision second": {[]string{cutoverRevision, last.Revision}, last.Revision, []string{}},
+		"last chain revision first":                     {[]string{last.Revision, cutoverRevision}, last.Revision, []string{}},
+		"one revision behind":                           {[]string{cutoverRevision, before.Revision}, before.Revision, []string{last.Revision}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			plan := Decide(Observation{HasVersionTable: true, Versions: test.versions, PublicTables: baseline.Tables()}, baseline, chain, known)
+			if plan.State != StateAtHead || plan.ApplicationHead != test.head {
+				t.Fatalf("state %d, application head %q; want StateAtHead at %s", plan.State, plan.ApplicationHead, test.head)
+			}
+			if got := revisionsOf(plan.Pending); !reflect.DeepEqual(got, test.pending) {
+				t.Errorf("pending %v, want %v", got, test.pending)
+			}
+		})
+	}
+}

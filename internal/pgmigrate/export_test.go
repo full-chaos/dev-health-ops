@@ -31,7 +31,7 @@ func FrozenChainFS(t testing.TB, extra fs.FS) fs.FS {
 		}
 		for _, entry := range entries {
 			match := chainName.FindStringSubmatch(entry.Name())
-			if entry.IsDir() || match == nil || match[1] > FrozenHead {
+			if entry.IsDir() || match == nil || revisionLess(FrozenHead, match[1]) {
 				continue
 			}
 			data, err := fs.ReadFile(chainFiles, dir+"/"+entry.Name())

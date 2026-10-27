@@ -100,7 +100,7 @@ func chainSource() fs.FS {
 func ChainThrough(chain []ChainFile, revision string) []ChainFile {
 	var out []ChainFile
 	for _, file := range chain {
-		if file.Revision <= revision {
+		if !revisionLess(revision, file.Revision) {
 			out = append(out, file)
 		}
 	}
@@ -111,7 +111,7 @@ func ChainThrough(chain []ChainFile, revision string) []ChainFile {
 func ChainAbove(chain []ChainFile, revision string) []ChainFile {
 	var out []ChainFile
 	for _, file := range chain {
-		if file.Revision > revision {
+		if revisionLess(revision, file.Revision) {
 			out = append(out, file)
 		}
 	}
@@ -201,13 +201,16 @@ var chainName = regexp.MustCompile(`^([0-9]{4,})_[a-z0-9_]+\.sql$`)
 
 var chainHeader = regexp.MustCompile(`^-- (?:Alembic )?[Rr]evision ([0-9]{4,})(?: \(down_revision ([0-9]{4,})\))?`)
 
-// sortChain orders the chain by revision as an integer: "10000" is after "9999".
+// revisionLess orders revisions as integers: "10000" is after "9999". Every revision is digits only
+// (chainName), so a string compare is wrong as soon as two widths meet.
+func revisionLess(a, b string) bool {
+	x, _ := strconv.ParseUint(a, 10, 64)
+	y, _ := strconv.ParseUint(b, 10, 64)
+	return x < y
+}
+
 func sortChain(chain []ChainFile) {
-	sort.SliceStable(chain, func(i, j int) bool {
-		a, _ := strconv.ParseUint(chain[i].Revision, 10, 64)
-		b, _ := strconv.ParseUint(chain[j].Revision, 10, 64)
-		return a < b
-	})
+	sort.SliceStable(chain, func(i, j int) bool { return revisionLess(chain[i].Revision, chain[j].Revision) })
 }
 
 // LoadChain returns the revisions after the head, in order. It fails closed on a chain Decide would

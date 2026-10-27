@@ -56,6 +56,7 @@ type User struct {
 	IsVerified   bool
 	PasswordHash *string
 	AuthProvider *string
+	FullName     *string
 }
 
 // Users is the B2 identity lookup. ByEmail takes the normalized email and

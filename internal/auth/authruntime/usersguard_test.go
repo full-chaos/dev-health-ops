@@ -3,6 +3,7 @@ package authruntime
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -13,7 +14,7 @@ import (
 )
 
 type countsRow struct {
-	values [3]int64
+	values [7]int64
 	err    error
 }
 
@@ -21,8 +22,14 @@ func (r countsRow) Scan(dest ...any) error {
 	if r.err != nil {
 		return r.err
 	}
-	for i, d := range dest {
-		*(d.(*int64)) = r.values[i]
+	n := 0
+	for _, d := range dest {
+		if c, ok := d.(*string); ok {
+			*c = "[]"
+			continue
+		}
+		*(d.(*int64)) = r.values[n]
+		n++
 	}
 	return nil
 }
@@ -39,17 +46,19 @@ func TestCheckUsersOwnedNamesEveryGapAndOnlyCounts(t *testing.T) {
 	if err := checkUsersOwned(context.Background(), countsDB{countsRow{}}, schema); err != nil {
 		t.Fatalf("no gap: %v", err)
 	}
-	for name, values := range map[string][3]int64{
-		"public user without an auth user": {2, 0, 0},
-		"auth user without a public user":  {0, 3, 0},
-		"provider user without identity":   {0, 0, 4},
-		"all three":                        {1, 2, 3},
+	for name, values := range map[string][7]int64{
+		"public user without an auth user": {2, 0, 0, 0, 0, 0, 0},
+		"auth user without a public user":  {0, 3, 0, 0, 0, 0, 0},
+		"provider user without identity":   {0, 0, 4, 0, 0, 0, 0},
+		"all three":                        {1, 2, 3, 0, 0, 0, 0},
+		"unverifiable SAML subjects":       {0, 0, 2, 2, 0, 0, 0},
 	} {
 		err := checkUsersOwned(context.Background(), countsDB{countsRow{values: values}}, schema)
 		if !errors.Is(err, ErrUsersOwnedNotReady) {
 			t.Fatalf("%s: err = %v, want ErrUsersOwnedNotReady", name, err)
 		}
-		if !strings.Contains(err.Error(), "without an auth user=") || !strings.Contains(err.Error(), "external identity=") {
+		if !strings.Contains(err.Error(), "without an auth user=") || !strings.Contains(err.Error(), "external identity=") ||
+			!strings.Contains(err.Error(), fmt.Sprintf("(sso_subject_unverifiable=%d)", values[3])) {
 			t.Fatalf("%s: the refusal does not name the counts: %v", name, err)
 		}
 	}
@@ -66,6 +75,23 @@ func (d recordingDB) QueryRow(_ context.Context, sql string, _ ...any) pgx.Row {
 	return countsRow{}
 }
 
+func TestGuardCountsUseTheSharedSSORelinkDefinition(t *testing.T) {
+	schema, err := authschema.NewValidatedIdentifier("auth")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sql string
+	if err := checkUsersOwned(context.Background(), recordingDB{&sql}, schema); err != nil {
+		t.Fatal(err)
+	}
+	if want := "AND NOT " + identity.SSORelinkableSQL("u"); !strings.Contains(sql, want) {
+		t.Fatalf("the guard's identity count does not exclude the shared SSO relink predicate %q:\n%s", want, sql)
+	}
+	if want := "WHERE " + identity.SSOSubjectUnverifiableSQL("u"); !strings.Contains(sql, want) {
+		t.Fatalf("the guard does not count the shared sso_subject_unverifiable bucket %q:\n%s", want, sql)
+	}
+}
+
 func TestGuardCountsUseTheSharedPlaceholderDefinition(t *testing.T) {
 	schema, err := authschema.NewValidatedIdentifier("auth")
 	if err != nil {
@@ -80,5 +106,54 @@ func TestGuardCountsUseTheSharedPlaceholderDefinition(t *testing.T) {
 	}
 	if strings.Count(sql, "'service'") != 1 {
 		t.Fatalf("the guard names the placeholder literal outside the shared predicate:\n%s", sql)
+	}
+}
+
+func TestCheckUsersOwnedCountsOAuthSSOAsOwnClass(t *testing.T) {
+	schema, err := authschema.NewValidatedIdentifier("auth")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, c := range map[string]struct {
+		values [7]int64
+		want   string
+	}{
+		"missing row key":     {[7]int64{0, 0, 0, 0, 2, 0, 0}, "oauth_sso_missing_row_key=2"},
+		"ambiguous row":       {[7]int64{0, 0, 0, 0, 0, 6, 0}, "oauth_sso_ambiguous_row=6"},
+		"self-hosted unbound": {[7]int64{0, 0, 0, 0, 0, 0, 3}, "oauth_sso_selfhosted_unbindable=3"},
+		"all with other gaps": {[7]int64{1, 0, 0, 0, 4, 6, 5}, "oauth_sso_missing_row_key=4, oauth_sso_ambiguous_row=6, oauth_sso_selfhosted_unbindable=5"},
+	} {
+		err := checkUsersOwned(context.Background(), countsDB{countsRow{values: c.values}}, schema)
+		if !errors.Is(err, ErrUsersOwnedNotReady) {
+			t.Fatalf("%s: err = %v, want ErrUsersOwnedNotReady", name, err)
+		}
+		if !strings.Contains(err.Error(), c.want) {
+			t.Fatalf("%s: the refusal does not name %q: %v", name, c.want, err)
+		}
+	}
+}
+
+func TestGuardCountsUseTheSharedOAuthSSODefinition(t *testing.T) {
+	schema, err := authschema.NewValidatedIdentifier("auth")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sql string
+	if err := checkUsersOwned(context.Background(), recordingDB{&sql}, schema); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"SELECT count(*) FROM flag WHERE missing)",
+		"SELECT count(*) FROM flag WHERE ambiguous)",
+		"SELECT count(*) FROM flag WHERE selfh)",
+		"'https://github.com'",
+		`"auth".external_identities e`,
+	} {
+		if !strings.Contains(sql, want) {
+			t.Fatalf("the guard SQL does not contain the literal %q", want)
+		}
+	}
+	if strings.Count(sql, "WITH cand AS") != 3 {
+		t.Fatalf("the guard SQL carries %d OAuth-SSO candidate sets, want 3", strings.Count(sql, "WITH cand AS"))
 	}
 }

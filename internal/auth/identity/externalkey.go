@@ -84,11 +84,16 @@ func (k ExternalKey) Validate() error {
 	default:
 		return ErrInvalidExternalKey
 	}
-	if !validPart(k.Issuer, maxIssuerBytes) || !validPart(k.Subject, maxSubjectBytes) {
+	if !validPart(k.Issuer, maxIssuerBytes) || !ValidSubject(k.Subject) {
 		return ErrInvalidExternalKey
 	}
 	return nil
 }
+
+// ValidSubject is the key rule for a subject: non-empty, at most 1024 bytes, valid UTF-8, no control character or
+// U+FFFD, no white space at either end. Validate, the OIDC subject check and the SSO relink rule all call it;
+// SubjectKeyableSQL is its PostgreSQL twin.
+func ValidSubject(v string) bool { return validPart(v, maxSubjectBytes) }
 
 func validPart(v string, maxBytes int) bool {
 	if v == "" || len(v) > maxBytes || !utf8.ValidString(v) {

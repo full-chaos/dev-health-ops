@@ -152,7 +152,7 @@ var attributeVocabulary = map[string][]string{
 		"grant_created", "grant_revoked", "credential_issued", "credential_rotated", "credential_revoked",
 		"session_revoked", "organization_created", "organization_updated", "principal_disabled",
 		"principal_enabled", "principal_projected", "principal_provisioned", "email_verified", "password_changed", "password_reset",
-		"identity_linked", "identity_unlinked", "identity_projected", "policy_revision_activated",
+		"identity_linked", "identity_unlinked", "identity_projected", "identity_relinked", "policy_revision_activated",
 		"entitlement_snapshot_applied", "denied_no_membership", "denied_no_grant", "denied_policy",
 		"accepted", "invalid_credentials", "account_locked", "principal_deactivated", "email_unverified",
 		"email_collision", "signup_unavailable", "identity_conflict",

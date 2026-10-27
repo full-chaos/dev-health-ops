@@ -218,10 +218,7 @@ func TestSinkReadKeysAreRouteSignalsNotText(t *testing.T) {
 // table, the base column list's value) to a call AND decodes that
 // destination's pinned row type.
 func TestProjectionStatementsAreTheSinksOwnInserts(t *testing.T) {
-	loaded, err := packages.Load(&packages.Config{
-		Mode: packages.NeedName | packages.NeedFiles | packages.NeedSyntax | packages.NeedTypes | packages.NeedTypesInfo,
-		Dir:  "../..",
-	}, "./internal/providersync")
+	loaded, err := censusLoad("./internal/providersync")
 	if err != nil || packages.PrintErrors(loaded) > 0 {
 		t.Fatalf("load: %v", err)
 	}

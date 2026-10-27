@@ -267,11 +267,11 @@ func (f *Flows) reissue(ctx context.Context, email string, purpose Purpose, ttl 
 	if err != nil {
 		return fmt.Errorf("local: loading the user: %w", err)
 	}
-	principal := uuid.Nil
+	principal, name := uuid.Nil, (*string)(nil)
 	if user != nil && eligible(user) {
-		principal = user.ID
+		principal, name = user.ID, user.FullName
 	}
-	return f.issueAndSend(ctx, principal, purpose, ttl, normalized, nil)
+	return f.issueAndSend(ctx, principal, purpose, ttl, normalized, name)
 }
 
 // linkDigest is the stored form of a one-time link secret: the SHA-256 of 32

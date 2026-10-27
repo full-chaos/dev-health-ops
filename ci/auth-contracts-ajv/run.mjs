@@ -99,6 +99,7 @@ const APPROVED_AUDIT = [
   "identity_linked",
   "identity_unlinked",
   "identity_projected",
+  "identity_relinked",
   "password_reset",
   "policy_revision_activated",
   "entitlement_snapshot_applied",

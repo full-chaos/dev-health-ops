@@ -11,8 +11,6 @@ import (
 	"sort"
 	"strings"
 	"testing"
-
-	"golang.org/x/tools/go/packages"
 )
 
 // The decorators of this package are DERIVED by type, not listed: a decorator is a named struct type of this package with a Do
@@ -66,7 +64,7 @@ func TestTheDecoratorProbesAreGeneratedFromTheDerivedDecorators(t *testing.T) {
 
 func generateDecoratorProbes(t *testing.T, root string) string {
 	t.Helper()
-	loaded, err := packages.Load(&packages.Config{Dir: root, Mode: packages.NeedName | packages.NeedSyntax | packages.NeedTypes | packages.NeedTypesInfo | packages.NeedImports}, "./internal/providersync")
+	loaded, err := censusLoad("./internal/providersync")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +150,7 @@ func isDecoratorType(named *types.Named) bool {
 
 func decoratorProblems(t *testing.T, root, pattern string) ([]string, int) {
 	t.Helper()
-	loaded, err := packages.Load(&packages.Config{Dir: root, Mode: packages.NeedName | packages.NeedFiles | packages.NeedSyntax | packages.NeedTypes | packages.NeedTypesInfo | packages.NeedImports}, pattern)
+	loaded, err := censusLoad(pattern)
 	if err != nil {
 		t.Fatal(err)
 	}

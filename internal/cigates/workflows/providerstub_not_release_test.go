@@ -13,12 +13,17 @@ import (
 
 const providerStubName = "providerstub"
 
+// corpusToolNames are the corpus-only images: the provider stub and the mail sink (docker/smtpsink.Dockerfile).
+var corpusToolNames = []string{providerStubName, "smtpsink"}
+
 // providerStubInRelease is every way the release inputs name the stub: texts maps a path to its content.
 func providerStubInRelease(texts map[string]string) []string {
 	var problems []string
 	for path, text := range texts {
-		if strings.Contains(text, providerStubName) {
-			problems = append(problems, path+" names "+providerStubName+": a release image input must not carry the corpus provider stub")
+		for _, name := range corpusToolNames {
+			if strings.Contains(text, name) {
+				problems = append(problems, path+" names "+name+": a release image input must not carry a corpus tool")
+			}
 		}
 	}
 	return problems
@@ -61,6 +66,13 @@ func TestProviderStubIsNotInAReleaseImage(t *testing.T) {
 	}
 	if !strings.Contains(string(dockerfile), "AS providerstub") || !strings.Contains(string(dockerfile), "corpus") {
 		t.Error("docker/providerstub.Dockerfile must stay the corpus-only stage and say so")
+	}
+	sink, err := os.ReadFile(filepath.Join(root, "docker", "smtpsink.Dockerfile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(sink), "AS smtpsink") || !strings.Contains(string(sink), "Corpus-only") {
+		t.Error("docker/smtpsink.Dockerfile must stay the corpus-only stage and say so")
 	}
 }
 

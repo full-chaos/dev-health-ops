@@ -18,8 +18,8 @@ func TestMigration0014CreateGuardCountsAnInsertedSession(t *testing.T) {
 	if _, err := env.runtime.Exec(ctx, `INSERT INTO auth.principals (id, kind) VALUES ($1, 'user')`, principal); err != nil {
 		t.Fatal(err)
 	}
-	insert := `INSERT INTO auth.sessions (id, principal_id, token_hash, expires_at, auth_time, amr)
-		VALUES ($1, $2, $3, now() + interval '1 hour', now(), ARRAY['pwd']) ON CONFLICT (id) DO NOTHING`
+	insert := `INSERT INTO auth.sessions (id, principal_id, token_hash, expires_at, auth_time, amr, legacy_token_version)
+		VALUES ($1, $2, $3, now() + interval '1 hour', now(), ARRAY['pwd'], 0) ON CONFLICT (id) DO NOTHING`
 	counted := func(id string, hash []byte) string {
 		t.Helper()
 		var got string

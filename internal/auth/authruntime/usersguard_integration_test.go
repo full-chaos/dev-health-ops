@@ -46,7 +46,7 @@ func TestUsersOwnedGuardCountsEachGapInLivePostgres(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const password = "guard-test-only-not-a-credential"
+	password := testRolePassword(t)
 	if _, err := admin.Exec(ctx, fmt.Sprintf(`CREATE ROLE %q LOGIN PASSWORD '%s'`, role, password)); err != nil {
 		t.Fatal(err)
 	}

@@ -64,8 +64,10 @@ var errProjectedConcurrently = errors.New("identity: projected concurrently")
 // SSO key: AuthProvider is the public.users.auth_provider value of that login
 // (oidc, saml, or the OAuth provider type), and MembershipOrg is the org of the
 // key's sso_providers row. The stored subject counts in every org: more than
-// one user carrying it is ErrMultipleUsers. The one user must then be a member
-// of that org, else ErrLegacyNotMember.
+// one user carrying it is ErrMultipleUsers. For oidc and saml only the carriers
+// of ssoCarrierScopeSQL count, and the one carrier must be bound to the key's
+// provider row, else ErrRelinkRefused. The one user must then be a member of
+// that org, else ErrLegacyNotMember.
 //
 // Subject, when set, is the raw value matched against
 // public.users.auth_provider_id, for a login whose key subject is not what
@@ -93,15 +95,19 @@ type Identity struct {
 // is linked to it under audit.Commit (reason identity_projected). found is
 // false when nothing matches; a disabled principal is found with DisabledAt
 // set. A legacy user that holds another identity at the key's provider is
-// ErrProviderAlreadyLinked with that user's ID.
+// ErrProviderAlreadyLinked with that user's ID. After the cutover the legacy
+// fallback is the SSO re-link only (relinkOwned).
 func (s *Store) IdentityBySubject(ctx context.Context, issuer string, provider Provider, subject string, legacy *LegacyMatch) (Principal, bool, error) {
 	key := ExternalKey{Issuer: issuer, Provider: provider, Subject: subject}
 	if err := key.Validate(); err != nil {
 		return Principal{}, false, err
 	}
 	p, found, err := s.principalByKey(ctx, key)
-	if err != nil || found || legacy == nil || s.ownsUsers {
+	if err != nil || found || legacy == nil {
 		return p, found, err
+	}
+	if s.ownsUsers {
+		return s.relinkOwned(ctx, key, *legacy)
 	}
 	userID, found, err := s.legacyUser(ctx, key, *legacy)
 	if err != nil || !found {
@@ -125,9 +131,10 @@ func (s *Store) IdentityBySubject(ctx context.Context, issuer string, provider P
 
 func (s *Store) principalByKey(ctx context.Context, key ExternalKey) (Principal, bool, error) {
 	var p Principal
-	err := s.pool.QueryRow(ctx, `SELECT p.id, p.disabled_at FROM `+s.q+`.external_identities e
+	err := s.pool.QueryRow(ctx, `SELECT p.id, p.disabled_at, `+ServiceProviderSQL("pu")+` FROM `+s.q+`.external_identities e
 JOIN `+s.q+`.principals p ON p.id = e.principal_id
-WHERE e.issuer = $1 AND e.provider = $2 AND e.subject = $3`, key.Issuer, string(key.Provider), key.Subject).Scan(&p.ID, &p.DisabledAt)
+LEFT JOIN public.users pu ON pu.id = p.id
+WHERE e.issuer = $1 AND e.provider = $2 AND e.subject = $3`, key.Issuer, string(key.Provider), key.Subject).Scan(&p.ID, &p.DisabledAt, &p.ServiceProvider)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Principal{}, false, nil
 	}
@@ -152,17 +159,21 @@ func (s *Store) legacyUser(ctx context.Context, key ExternalKey, legacy LegacyMa
 		if legacy.AuthProvider != string(key.Provider) || legacy.MembershipOrg != nil {
 			return uuid.Nil, false, ErrInvalidLegacyMatch
 		}
-		rows, err = s.pool.Query(ctx, `SELECT id, true FROM public.users WHERE auth_provider = $1 AND auth_provider_id = $2`,
+		rows, err = s.pool.Query(ctx, `SELECT id, true, true FROM public.users WHERE auth_provider = $1 AND auth_provider_id = $2`,
 			legacy.AuthProvider, stored)
 	default:
 		if legacy.AuthProvider == "" || legacy.MembershipOrg == nil {
 			return uuid.Nil, false, ErrInvalidLegacyMatch
 		}
+		bound, scope := `true`, `true`
+		if isSSORelinkProtocol(legacy.AuthProvider) {
+			bound, scope = ssoBoundToKeySQL("u", "$3"), ssoCarrierScopeSQL("u", "$3")
+		}
 		rows, err = s.pool.Query(ctx, `SELECT u.id, EXISTS (SELECT 1 FROM public.sso_providers sp
     JOIN public.memberships m ON m.org_id = sp.org_id
-    WHERE sp.id = $3::uuid AND sp.org_id = $4 AND m.user_id = u.id)
+    WHERE sp.id = $3::uuid AND sp.org_id = $4 AND m.user_id = u.id), `+bound+`
 FROM public.users u
-WHERE u.auth_provider = $1 AND u.auth_provider_id = $2`,
+WHERE u.auth_provider = $1 AND u.auth_provider_id = $2 AND `+scope,
 			legacy.AuthProvider, stored, string(key.Provider), *legacy.MembershipOrg)
 	}
 	if err != nil {
@@ -170,10 +181,10 @@ WHERE u.auth_provider = $1 AND u.auth_provider_id = $2`,
 	}
 	defer rows.Close()
 	var found []uuid.UUID
-	var member bool
+	var member, bound bool
 	for rows.Next() {
 		var id uuid.UUID
-		if err := rows.Scan(&id, &member); err != nil {
+		if err := rows.Scan(&id, &member, &bound); err != nil {
 			return uuid.Nil, false, s.storeErr(ctx, "scan legacy user", err)
 		}
 		found = append(found, id)
@@ -186,6 +197,8 @@ WHERE u.auth_provider = $1 AND u.auth_provider_id = $2`,
 		return uuid.Nil, false, nil
 	case len(found) > 1:
 		return uuid.Nil, false, ErrMultipleUsers
+	case !bound:
+		return uuid.Nil, false, ErrRelinkRefused
 	case !member:
 		return uuid.Nil, false, ErrLegacyNotMember
 	}

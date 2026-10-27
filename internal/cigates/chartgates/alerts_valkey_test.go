@@ -89,38 +89,68 @@ var (
 	runbookJSONBlock = regexp.MustCompile("(?s)```json\n(.*?)\n```")
 	exprThreshold    = regexp.MustCompile(`> (\d+)$`)
 	exprRange        = regexp.MustCompile(`\[(\d+[smh])\]`)
+	exprMetricName   = regexp.MustCompile(`__name__="([^"]+)"`)
+	exprOuterFunc    = regexp.MustCompile(`^(\w+)\(`)
 )
 
-// importRule is the part of a SigNoz rule JSON the import must keep equal to
-// the rule text.
+// importRule is the part of a SigNoz builder threshold rule JSON the import
+// must keep equal to the rule text.
 type importRule struct {
-	Alert      string `json:"alert"`
-	EvalWindow string `json:"evalWindow"`
-	Condition  struct {
+	Alert     string `json:"alert"`
+	RuleType  string `json:"ruleType"`
+	Condition struct {
 		CompositeQuery struct {
-			PromQueries map[string]struct {
-				Query string `json:"query"`
-			} `json:"promQueries"`
+			QueryType string `json:"queryType"`
+			Queries   []struct {
+				Spec struct {
+					Aggregations []struct {
+						MetricName       string `json:"metricName"`
+						TimeAggregation  string `json:"timeAggregation"`
+						SpaceAggregation string `json:"spaceAggregation"`
+					} `json:"aggregations"`
+				} `json:"spec"`
+			} `json:"queries"`
 		} `json:"compositeQuery"`
-		Target    float64 `json:"target"`
-		MatchType string  `json:"matchType"`
+		Thresholds struct {
+			Spec []struct {
+				Target    float64 `json:"target"`
+				Op        string  `json:"op"`
+				MatchType string  `json:"matchType"`
+			} `json:"spec"`
+		} `json:"thresholds"`
 	} `json:"condition"`
+	Evaluation struct {
+		Spec struct {
+			EvalWindow string `json:"evalWindow"`
+		} `json:"spec"`
+	} `json:"evaluation"`
 	Labels map[string]string `json:"labels"`
 }
 
-// The import JSON in the runbook is what is saved in SigNoz: its query,
-// target, window, match type and labels must equal the rule text. The window
-// is the rule's `for` (match "all the times") or, without a `for`, the range of
-// its increase (match "at least once").
-func valkeyRunbookImportMatchesRules(g *guard) {
+// valkeyRunbookSection is the "Valkey memory and eviction rules" section only.
+// The other rules in the runbook (Step 2) keep their own form.
+func valkeyRunbookSection(g *guard) (string, bool) {
 	section := g.read(valkeyRunbook)
-	if i := strings.Index(section, "## Valkey memory and eviction rules"); i >= 0 {
-		section = section[i:]
-		if j := strings.Index(section[1:], "\n## "); j >= 0 {
-			section = section[:j+1]
-		}
-	} else {
+	i := strings.Index(section, "## Valkey memory and eviction rules")
+	if i < 0 {
 		g.failf("%s has no section \"Valkey memory and eviction rules\"", valkeyRunbook)
+		return "", false
+	}
+	section = section[i:]
+	if j := strings.Index(section[1:], "\n## "); j >= 0 {
+		section = section[:j+1]
+	}
+	return section, true
+}
+
+// The import JSON in the runbook is the builder threshold rule saved in
+// SigNoz (PromQL rules do not evaluate there): its metric, aggregations,
+// threshold, operator, window, match type and labels must equal the rule text.
+// The window is the rule's `for` (match "all the times") or, without a `for`,
+// the range of its increase (match "at least once").
+func valkeyRunbookImportMatchesRules(g *guard) {
+	section, ok := valkeyRunbookSection(g)
+	if !ok {
 		return
 	}
 	imports := map[string]importRule{}
@@ -143,18 +173,30 @@ func valkeyRunbookImportMatchesRules(g *guard) {
 			continue
 		}
 		expr := oneLine(str(rule["expr"]))
-		q := imp.Condition.CompositeQuery.PromQueries["A"].Query
-		g.expect(len(imp.Condition.CompositeQuery.PromQueries) == 1 && q == expr, "%s import query %q, want the rule expr %q", name, q, expr)
-		th := exprThreshold.FindStringSubmatch(expr)
-		if th == nil {
-			g.failf("%s expr %q has no `> N` threshold", name, expr)
-		} else {
-			want, _ := strconv.ParseFloat(th[1], 64)
-			g.expect(imp.Condition.Target == want, "%s import target %v, want the rule threshold %v", name, imp.Condition.Target, want)
+		g.expect(imp.RuleType == "threshold_rule" && imp.Condition.CompositeQuery.QueryType == "builder", "%s import is ruleType %q queryType %q, want threshold_rule and builder", name, imp.RuleType, imp.Condition.CompositeQuery.QueryType)
+		metric, outer := "", ""
+		if m := exprMetricName.FindStringSubmatch(expr); m != nil {
+			metric = m[1]
 		}
-		window, match := str(rule["for"]), "2"
+		if m := exprOuterFunc.FindStringSubmatch(expr); m != nil {
+			outer = m[1]
+		}
+		timeAgg := outer
+		if strings.Contains(expr, "increase(") {
+			timeAgg = "increase"
+		}
+		qs := imp.Condition.CompositeQuery.Queries
+		if len(qs) != 1 || len(qs[0].Spec.Aggregations) != 1 {
+			g.failf("%s import has %d builder queries, want 1 with 1 aggregation", name, len(qs))
+		} else {
+			a := qs[0].Spec.Aggregations[0]
+			g.expect(a.MetricName == metric, "%s import metricName %q, want the rule metric %q", name, a.MetricName, metric)
+			g.expect(a.TimeAggregation == timeAgg, "%s import timeAggregation %q, want %q", name, a.TimeAggregation, timeAgg)
+			g.expect(a.SpaceAggregation == outer, "%s import spaceAggregation %q, want %q", name, a.SpaceAggregation, outer)
+		}
+		window, match := str(rule["for"]), "all_the_times"
 		if window == "" {
-			match = "1"
+			match = "at_least_once"
 			if r := exprRange.FindStringSubmatch(expr); r != nil {
 				window = r[1]
 			}
@@ -162,15 +204,41 @@ func valkeyRunbookImportMatchesRules(g *guard) {
 		d, err := time.ParseDuration(window)
 		if err != nil {
 			g.failf("%s has no window to compare (for %q): %v", name, str(rule["for"]), err)
-		} else {
-			g.expect(imp.EvalWindow == d.String(), "%s import evalWindow %q, want %q", name, imp.EvalWindow, d.String())
+		} else if got, perr := time.ParseDuration(imp.Evaluation.Spec.EvalWindow); perr != nil || got != d {
+			g.failf("%s import evalWindow %q, want %q", name, imp.Evaluation.Spec.EvalWindow, window)
 		}
-		g.expect(imp.Condition.MatchType == match, "%s import matchType %q, want %q", name, imp.Condition.MatchType, match)
+		th := exprThreshold.FindStringSubmatch(expr)
+		if th == nil {
+			g.failf("%s expr %q has no `> N` threshold", name, expr)
+		}
+		specs := imp.Condition.Thresholds.Spec
+		if len(specs) != 1 {
+			g.failf("%s import has %d thresholds, want 1", name, len(specs))
+		} else {
+			if th != nil {
+				want, _ := strconv.ParseFloat(th[1], 64)
+				g.expect(specs[0].Target == want, "%s import target %v, want the rule threshold %v", name, specs[0].Target, want)
+			}
+			g.expect(specs[0].Op == "above", "%s import op %q, want above", name, specs[0].Op)
+			g.expect(specs[0].MatchType == match, "%s import matchType %q, want %q", name, specs[0].MatchType, match)
+		}
 		labels := mp(rule["labels"])
 		g.expect(len(imp.Labels) == len(labels), "%s import labels %v, want %v", name, imp.Labels, labels)
 		for k, v := range labels {
 			g.expect(imp.Labels[k] == str(v), "%s import label %s=%q, want %q", name, k, imp.Labels[k], str(v))
 		}
+	}
+}
+
+// Scope: the Valkey section ONLY. Step 2 of the runbook still holds PromQL
+// blocks, so this guard must not read the whole file.
+func valkeySectionHasNoPromQLRule(g *guard) {
+	section, ok := valkeyRunbookSection(g)
+	if !ok {
+		return
+	}
+	for _, banned := range []string{"promql_rule", "promQueries", `"queryType": "promql"`} {
+		g.expect(!strings.Contains(section, banned), "the Valkey runbook section contains %q: PromQL rules do not evaluate on this SigNoz", banned)
 	}
 }
 
@@ -183,6 +251,7 @@ func TestValkeyAlertGuardsRealTree(t *testing.T) {
 		check{"valkey-memory-threshold-comment", valkeyMemoryThresholdCommentPinned},
 		check{"valkey-alerts-routed", valkeyAlertsRouted},
 		check{"valkey-runbook-import-matches-rules", valkeyRunbookImportMatchesRules},
+		check{"valkey-runbook-section-has-no-promql-rule", valkeySectionHasNoPromQLRule},
 	)
 }
 
@@ -198,9 +267,14 @@ func TestValkeyAlertGuardsPlantedDefects(t *testing.T) {
 		{"third-rule-in-the-group", rules, appendText(rulesRel, "      - alert: ValkeyExtra\n        expr: up == 0\n"), valkeyAlertsAreTheGroup, "want exactly"},
 		{"second-valkey-group", rules, appendText(rulesRel, "  - name: valkey\n    rules:\n      - alert: ValkeyUnnoticedExtra\n        expr: up == 0\n"), valkeyAlertsAreTheGroup, "groups are named valkey"},
 		{"runbook-target-drift", []string{rulesRel, valkeyRunbook}, mut(valkeyRunbook, `"target": 161061274,`, `"target": 999999999,`), valkeyRunbookImportMatchesRules, "import target"},
-		{"runbook-query-drift", []string{rulesRel, valkeyRunbook}, mut(valkeyRunbook, `[10m])) > 0",`, `[5m])) > 0",`), valkeyRunbookImportMatchesRules, "import query"},
-		{"runbook-window-drift", []string{rulesRel, valkeyRunbook}, mut(valkeyRunbook, `"evalWindow": "10m0s",`, `"evalWindow": "5m0s",`), valkeyRunbookImportMatchesRules, "import evalWindow"},
-		{"runbook-match-drift", []string{rulesRel, valkeyRunbook}, mut(valkeyRunbook, "\"target\": 161061274,\n    \"matchType\": \"2\",", "\"target\": 161061274,\n    \"matchType\": \"1\","), valkeyRunbookImportMatchesRules, "import matchType"},
-		{"runbook-label-drift", []string{rulesRel, valkeyRunbook}, mut(valkeyRunbook, "\"matchType\": \"1\",\n    \"selectedQueryName\": \"A\"\n  },\n  \"labels\": {\n    \"severity\": \"warning\",", "\"matchType\": \"1\",\n    \"selectedQueryName\": \"A\"\n  },\n  \"labels\": {\n    \"severity\": \"critical\","), valkeyRunbookImportMatchesRules, "import label severity"},
+		{"runbook-metric-drift", []string{rulesRel, valkeyRunbook}, mut(valkeyRunbook, `"metricName": "redis.keys.evicted"`, `"metricName": "redis.keys.evicted_total"`), valkeyRunbookImportMatchesRules, "import metricName"},
+		{"runbook-time-aggregation-drift", []string{rulesRel, valkeyRunbook}, mut(valkeyRunbook, `"timeAggregation": "increase"`, `"timeAggregation": "rate"`), valkeyRunbookImportMatchesRules, "import timeAggregation"},
+		{"runbook-space-aggregation-drift", []string{rulesRel, valkeyRunbook}, mut(valkeyRunbook, `"spaceAggregation": "sum"`, `"spaceAggregation": "avg"`), valkeyRunbookImportMatchesRules, "import spaceAggregation"},
+		{"runbook-window-drift", []string{rulesRel, valkeyRunbook}, mut(valkeyRunbook, `"evalWindow": "10m"`, `"evalWindow": "5m"`), valkeyRunbookImportMatchesRules, "import evalWindow"},
+		{"runbook-match-drift", []string{rulesRel, valkeyRunbook}, mut(valkeyRunbook, `"matchType": "all_the_times"`, `"matchType": "at_least_once"`), valkeyRunbookImportMatchesRules, "import matchType"},
+		{"runbook-op-drift", []string{rulesRel, valkeyRunbook}, mut(valkeyRunbook, `"op": "above"`, `"op": "below"`), valkeyRunbookImportMatchesRules, "import op"},
+		{"runbook-label-drift", []string{rulesRel, valkeyRunbook}, mutAll(valkeyRunbook, `"severity": "warning"`, `"severity": "critical"`), valkeyRunbookImportMatchesRules, "import label severity"},
+		{"runbook-promql-queries-added", []string{rulesRel, valkeyRunbook}, mut(valkeyRunbook, `"alert": "ValkeyKeysEvicted",`, `"alert": "ValkeyKeysEvicted", "promQueries": {},`), valkeySectionHasNoPromQLRule, "promQueries"},
+		{"runbook-rule-type-back-to-promql", []string{rulesRel, valkeyRunbook}, mut(valkeyRunbook, `"ruleType": "threshold_rule"`, `"ruleType": "promql_rule"`), valkeySectionHasNoPromQLRule, "promql_rule"},
 	})
 }

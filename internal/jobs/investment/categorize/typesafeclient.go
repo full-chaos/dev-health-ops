@@ -394,8 +394,9 @@ type SystemOneAttempt struct {
 	// Class is "" for the attempt that succeeded, else a SystemOneClass.
 	Class     string
 	RequestID string
-	// RequestIDSource is where RequestID came from: aig, ray or client. Only the
-	// clef target sets it; the jev target keeps its own header and leaves it empty.
+	// RequestIDSource is where RequestID came from: aig, ray or client (the clef
+	// target) or header (the jev response header). Empty means unknown: no id, or a
+	// target that has none.
 	RequestIDSource string
 	// RequestIDRejected is true when the peer sent a request id that was
 	// refused (it held the API key); RequestID is then empty.
@@ -653,6 +654,9 @@ func (c *TypeSafeClient) once(ctx context.Context, body []byte, lenient bool, ca
 		att.RequestID, att.RequestIDSource = c.clefRequestID(resp.Header, att.RequestID, call)
 	} else {
 		att.RequestID, att.RequestIDRejected = c.cleanRequestID(resp.Header.Get(typeSafeRequestIDHeader))
+		if att.RequestID != "" {
+			att.RequestIDSource = RequestIDSourceHeader
+		}
 	}
 
 	payload, readErr := io.ReadAll(io.LimitReader(resp.Body, maxSystemOneResponseBytes+1))

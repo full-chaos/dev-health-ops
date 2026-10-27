@@ -34,10 +34,24 @@ func TestAuthServicePodCarriesTheUsersOwnedLabelFromPhase4Only(t *testing.T) {
 	}
 }
 
-// A flip-back narrowing is not a phase 4 setting: the render refuses it and names the value.
+// A flip-back narrowing is not a phase 4 setting: main's guard (dev-health.authNarrowAfterFlipBackGuard) refuses it
+// and names the value, with or without the acknowledgement.
 func TestNarrowAfterFlipBackIsRefusedFromPhase4(t *testing.T) {
-	_, out, err := renderAuth(t, goAPIWithAuth(append([]string{"--set", "authService.phase=4", "--set", "authService.migrate.narrowAfterFlipBack=true"}, phase3Secrets...)...)...)
-	if err == nil || !strings.Contains(out, "authService.migrate.narrowAfterFlipBack") {
-		t.Errorf("phase 4: narrowAfterFlipBack rendered: err=%v out=%.300s", err, out)
+	cases := map[string]struct {
+		extra []string
+		want  string
+	}{
+		"with the acknowledgement": {
+			[]string{"--set", "authService.migrate.acknowledgeGrantNarrowing=" + ackDigest},
+			"authService.migrate.narrowAfterFlipBack is refused at authService.phase 4 or higher and while auth-service owns users",
+		},
+		"without the acknowledgement": {nil, "authService.migrate.narrowAfterFlipBack=true needs authService.migrate.acknowledgeGrantNarrowing"},
+	}
+	for name, tc := range cases {
+		args := append([]string{"--set", "authService.phase=4", "--set", "authService.migrate.narrowAfterFlipBack=true"}, tc.extra...)
+		_, out, err := renderAuth(t, goAPIWithAuth(append(args, phase3Secrets...)...)...)
+		if err == nil || !strings.Contains(out, tc.want) {
+			t.Errorf("%s: want a render failure containing %q: err=%v out=%.300s", name, tc.want, err, out)
+		}
 	}
 }

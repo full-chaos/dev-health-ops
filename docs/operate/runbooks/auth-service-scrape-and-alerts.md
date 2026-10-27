@@ -165,6 +165,96 @@ Expected after import: three rules in the alert list, state "inactive" (not firi
 
 No test of a firing alert is run in prod. The rule shapes are checked in CI against the series the service really writes.
 
+## Valkey memory and eviction rules
+
+The `valkey` group in `alerts/rules.yml` watches the in-chart Valkey that holds the auth-service rate-limit counters. The series come from the collector's redis receiver (`redis.keys.evicted`, `redis.memory.used`). The receiver writes dotted names only, so the queries select them by `__name__`. Import the two rules in the same way as Step 2, with the platform channel picked at import.
+
+The memory threshold is 161061274 bytes: 80% of the maxmemory 192mb (201326592 bytes) that the roll step for CHAOS-11630 sets. Change the rule and `valkey.maxmemory` together. Until that roll step runs, the live maxmemory is larger (256 MiB), so the memory rule is only stricter.
+
+```json
+{
+  "alert": "ValkeyKeysEvicted",
+  "alertType": "METRIC_BASED_ALERT",
+  "ruleType": "promql_rule",
+  "version": "v4",
+  "evalWindow": "10m0s",
+  "frequency": "1m0s",
+  "condition": {
+    "compositeQuery": {
+      "queryType": "promql",
+      "panelType": "graph",
+      "unit": "",
+      "promQueries": {
+        "A": {
+          "name": "A",
+          "query": "sum(increase({__name__=\"redis.keys.evicted\"}[10m])) > 0",
+          "legend": "evicted keys (10m)",
+          "disabled": false
+        }
+      }
+    },
+    "op": "1",
+    "target": 0,
+    "matchType": "1",
+    "selectedQueryName": "A"
+  },
+  "labels": {
+    "severity": "warning",
+    "team": "platform"
+  },
+  "annotations": {
+    "summary": "Valkey evicted keys at maxmemory",
+    "description": "The in-chart Valkey evicted keys because it reached maxmemory. Next: redis.memory.used and redis.db.keys, then valkey.maxmemory."
+  },
+  "preferredChannels": []
+}
+```
+
+```json
+{
+  "alert": "ValkeyMemoryNearMaxmemory",
+  "alertType": "METRIC_BASED_ALERT",
+  "ruleType": "promql_rule",
+  "version": "v4",
+  "evalWindow": "10m0s",
+  "frequency": "1m0s",
+  "condition": {
+    "compositeQuery": {
+      "queryType": "promql",
+      "panelType": "graph",
+      "unit": "bytes",
+      "promQueries": {
+        "A": {
+          "name": "A",
+          "query": "max({__name__=\"redis.memory.used\"}) > 161061274",
+          "legend": "used_memory",
+          "disabled": false
+        }
+      }
+    },
+    "op": "1",
+    "target": 161061274,
+    "matchType": "2",
+    "selectedQueryName": "A"
+  },
+  "labels": {
+    "severity": "warning",
+    "team": "platform"
+  },
+  "annotations": {
+    "summary": "Valkey used memory above 80% of maxmemory for ten minutes",
+    "description": "redis.memory.used is above 161061274 bytes (80% of maxmemory 192mb) for ten minutes. Next: redis.db.keys and redis.keys.evicted, then valkey.maxmemory (container limit 256Mi)."
+  },
+  "preferredChannels": []
+}
+```
+
+Checks after import:
+
+1. Run each query in the editor over the last hour. A result of "no data" (and not 0) means that the `__name__` form or the metric name does not match what SigNoz stores. Stop and report; do not save the rule.
+2. Planted threshold, memory rule only: set the target and the query threshold to 1000000 bytes, which is below the normal used memory of about 2 MiB. Wait one evaluation window and check that the rule fires. Then set both back to 161061274. The eviction rule is not planted in prod, because a real eviction is the only way to make it fire.
+3. Expected after the restore: both rules are "inactive".
+
 ## Rollback
 
 - A rule that pages wrongly: disable that rule in SigNoz. Do not delete it. The file `alerts/rules.yml` stays the text of record.

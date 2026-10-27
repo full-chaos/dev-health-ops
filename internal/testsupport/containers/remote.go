@@ -34,6 +34,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 
 	clickhousego "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/jackc/pgx/v5"
@@ -334,6 +335,14 @@ func assertSingleHostPostgres(dsn string, env string) error {
 // startPostgresRemote creates a scratch database on the server named by dsn
 // and returns an Instance addressed at it. Close drops it again.
 func startPostgresRemote(ctx context.Context, dsn string) (*Instance, error) {
+	return startPostgresRemoteFrom(ctx, dsn, "", nil)
+}
+
+// startPostgresRemoteFrom is startPostgresRemote with the scratch database cut
+// from template (a database name; "" means an empty one). lock, when set, is
+// held around the CREATE: PostgreSQL refuses a CREATE DATABASE from a template
+// that another CREATE is still copying.
+func startPostgresRemoteFrom(ctx context.Context, dsn string, template string, lock sync.Locker) (*Instance, error) {
 	database, err := scratchName()
 	if err != nil {
 		return nil, err
@@ -348,6 +357,12 @@ func startPostgresRemote(ctx context.Context, dsn string) (*Instance, error) {
 	// statement is built here rather than concatenated at the Exec call so the
 	// query passed to the driver is a single prepared value.
 	createStatement, dropStatement := postgresScratchDDL(database)
+	if template != "" {
+		if err := assertSafeIdentifier(template); err != nil {
+			return nil, err
+		}
+		createStatement += " TEMPLATE " + pgx.Identifier{template}.Sanitize()
+	}
 
 	// Rewrite the DSN BEFORE creating anything. Done afterwards, a DSN this
 	// rewrite cannot handle leaves the database created with no Instance to
@@ -371,7 +386,14 @@ func startPostgresRemote(ctx context.Context, dsn string) (*Instance, error) {
 	// whole design here -- the race itself cannot be closed, because there is
 	// no way to create and register atomically across a network.
 	logScratch("creating", "postgres", database)
-	if _, err := admin.Exec(ctx, createStatement); err != nil {
+	if lock != nil {
+		lock.Lock()
+	}
+	_, err = admin.Exec(ctx, createStatement)
+	if lock != nil {
+		lock.Unlock()
+	}
+	if err != nil {
 		return nil, fmt.Errorf("create scratch database %q: %w", database, err)
 	}
 	logScratch("created", "postgres", database)

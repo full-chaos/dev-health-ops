@@ -252,6 +252,10 @@ func (f *FakeProvider) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		write(200, `["not-an-object", {"email": "x@example.com", "primary": true, "verified": true}]`)
 	case "/github/user gh-no-id":
 		write(200, `{"login": "noid", "email": "noid@example.com"}`)
+	case "/github/user gh-surrogate-name":
+		write(200, `{"id": 901, "login": "sur\ud800", "name": "Sur\ud800", "email": "sur-name@example.com"}`)
+	case "/github/user gh-surrogate-email":
+		write(200, `{"id": 902, "login": "sure", "name": "Sur E", "email": "sur\ud800@example.com"}`)
 	case "/github/user gh-not-json":
 		write(200, `not json`)
 	case "/gitlab/api/v4/user gl-frank":

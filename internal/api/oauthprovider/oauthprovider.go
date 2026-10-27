@@ -123,15 +123,38 @@ func NewClient() *Client {
 
 // FetchUserInfo is create_oauth_provider(provider, ...).fetch_user_info(token).
 func (c *Client) FetchUserInfo(ctx context.Context, provider, accessToken string) (*UserInfo, error) {
+	var info *UserInfo
+	var err error
 	switch provider {
 	case GitHub:
-		return c.github(ctx, accessToken)
+		info, err = c.github(ctx, accessToken)
 	case GitLab:
-		return c.gitlab(ctx, accessToken)
+		info, err = c.gitlab(ctx, accessToken)
 	case Google:
-		return c.google(ctx, accessToken)
+		info, err = c.google(ctx, accessToken)
+	default:
+		return nil, fmt.Errorf("oauthprovider: unsupported provider %q", provider)
 	}
-	return nil, fmt.Errorf("oauthprovider: unsupported provider %q", provider)
+	if err != nil {
+		return nil, err
+	}
+	cleanProfileText(info)
+	return info, nil
+}
+
+// cleanProfileText makes the free text of a profile storable before any caller writes it. A lone surrogate in the
+// user name, the full name or the avatar URL becomes U+FFFD (the value auth-service's decoder gives the same escape;
+// PostgreSQL refuses the WTF-8 bytes). A lone surrogate in the email makes the address unusable as an identity key:
+// it is no verified email, so the callers refuse the sign-in with their existing unverified-email answer.
+func cleanProfileText(info *UserInfo) {
+	for _, field := range []*pyjson.Value{&info.Username, &info.FullName, &info.AvatarURL} {
+		if text, ok := (*field).(string); ok {
+			*field = pyjson.ReplaceLoneSurrogates(text)
+		}
+	}
+	if text, ok := info.Email.(string); ok && pyjson.HasLoneSurrogate(text) {
+		info.EmailVerified = false
+	}
 }
 
 // get performs one GET. A transport failure or a non-2xx status is a

@@ -183,12 +183,12 @@ PRODUCT_LINE='^dependency failed to start: |is unhealthy|exited \([1-9][0-9]*\)|
 infra_class() {
   local text
   text="$(tr -d '\r' <"$1")"
-  if grep -aEq "${PRODUCT_LINE}" <<<"${text}"; then
+  if LC_ALL=C grep -aEq "${PRODUCT_LINE}" <<<"${text}"; then
     return 0
   fi
   local n
   for n in "${!INFRA_CLASSES[@]}"; do
-    if grep -aEq "${INFRA_CLASSES[n]}" <<<"${text}"; then
+    if LC_ALL=C grep -aEq "${INFRA_CLASSES[n]}" <<<"${text}"; then
       echo $((n + 1))
       return 0
     fi

@@ -15,6 +15,8 @@
 # Changed paths are read with git diff -z and core.quotePath=false, so any file name is matched as written.
 # It fails closed: bad input, a git error or a missing or empty path list all print corpus=true.
 set -uo pipefail
+# CHAOS-11670: byte semantics for every pattern below (ranges, ?, [..]): a table row with a non-ASCII letter must not pass in any locale.
+export LC_ALL=C
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" || {
   echo corpus=true
   exit 0
@@ -58,7 +60,9 @@ declare -A closure_dirs=()
 closure_table="${root}/ci/auth_corpus_closure.txt"
 while IFS= read -r line || [ -n "${line}" ]; do
   { [ -n "${line}" ] && [[ ${line} != \#* ]]; } || continue
-  [[ ${line} =~ ^[A-Za-z0-9._/-]+$ ]] || run_corpus "malformed row in ci/auth_corpus_closure.txt"
+  case ${line} in
+    *[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._/-]*) run_corpus "malformed row in ci/auth_corpus_closure.txt" ;;
+  esac
   case "/${line}/" in */./* | */../* | *//*) run_corpus "malformed row in ci/auth_corpus_closure.txt" ;; esac
   closure_dirs["${line}"]=1
 done <"${closure_table}" 2>/dev/null

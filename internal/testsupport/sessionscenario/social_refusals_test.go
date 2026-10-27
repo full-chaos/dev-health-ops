@@ -1,7 +1,6 @@
 package sessionscenario
 
 import (
-	"net/http"
 	"testing"
 )
 

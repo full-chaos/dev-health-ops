@@ -58,16 +58,16 @@ func TestComposeExecKillNamesTheLastStepAndHidesTheCredential(t *testing.T) {
 // The kill reaches the children of the script: a child of the script is dead
 // when the run returns, and it did not hold the run until the wait delay.
 func TestComposeExecKillReachesTheProcessGroup(t *testing.T) {
-	dir, script := composeHangScript(t, "echo \"STEP group rc=0 00:00:00\"\nsleep 20 &\necho $! > \"$PWD/child.pid\"\nwait\n")
+	dir, script := composeHangScript(t, "echo \"STEP group rc=0 00:00:00\"\nsleep 20 &\necho \"CHILD $!\"\nwait\n")
 	started := time.Now()
-	_, err := composeExec(dir, composeHangEnv, time.Second, "bash", script)
+	r, err := composeExec(dir, composeHangEnv, time.Second, "bash", script)
 	if err == nil {
 		t.Fatal("a step that never returns gave no error")
 	}
 	if elapsed := time.Since(started); elapsed > 4*time.Second {
 		t.Errorf("a child of the script held the run for %s after the kill", elapsed)
 	}
-	pid := composeChildPID(t, dir)
+	pid := composeChildPID(t, r.stdout)
 	t.Cleanup(func() { _ = syscall.Kill(pid, syscall.SIGKILL) })
 	for i := 0; i < 20 && syscall.Kill(pid, 0) == nil; i++ {
 		time.Sleep(50 * time.Millisecond)
@@ -77,15 +77,15 @@ func TestComposeExecKillReachesTheProcessGroup(t *testing.T) {
 	}
 }
 
-func composeChildPID(t *testing.T, dir string) int {
+func composeChildPID(t *testing.T, stdout string) int {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.Join(dir, "child.pid"))
-	if err != nil {
-		t.Fatal(err)
+	_, rest, ok := strings.Cut(stdout, "CHILD ")
+	if !ok {
+		t.Fatalf("the script did not report its child: %q", stdout)
 	}
-	pid, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+	pid, err := strconv.Atoi(strings.TrimSpace(strings.SplitN(rest, "\n", 2)[0]))
 	if err != nil || pid <= 1 {
-		t.Fatalf("child pid %q: %v", raw, err)
+		t.Fatalf("child pid in %q: %v", rest, err)
 	}
 	return pid
 }

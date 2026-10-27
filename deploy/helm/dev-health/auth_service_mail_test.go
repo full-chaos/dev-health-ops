@@ -188,3 +188,94 @@ func TestAuthServiceMailEgressRefusesAnEmptyPeer(t *testing.T) {
 		t.Fatalf("an empty peer was accepted: %v\n%.200s", err, out)
 	}
 }
+
+var (
+	mailV4Except = []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "169.254.0.0/16", "127.0.0.0/8"}
+	mailV6Except = []string{"fc00::/7", "fe80::/10", "::1/128", "::ffff:0:0/96", "64:ff9b::/96"}
+)
+
+func mailPeer(cidr string, except []string) string {
+	quoted := make([]string, len(except))
+	for i, e := range except {
+		quoted[i] = fmt.Sprintf("%q", e)
+	}
+	return fmt.Sprintf(`{"ipBlock":{"cidr":%q,"except":[%s]}}`, cidr, strings.Join(quoted, ","))
+}
+
+func mailRender(t *testing.T, peers []string, extra ...string) (string, error) {
+	t.Helper()
+	args := append([]string{"--set", "authService.mail.secretName=a-mail", "--set-json", "authService.networkPolicy.egress.mail.to=[" + strings.Join(peers, ",") + "]"}, extra...)
+	_, out, err := renderAuth(t, phaseArgs(4, args...)...)
+	return out, err
+}
+
+func without(list []string, drop string) []string {
+	var out []string
+	for _, e := range list {
+		if e != drop {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+func TestAuthServiceMailEgressAcceptsTheWholeInternetOnlyInTheExactShape(t *testing.T) {
+	v4, v6 := mailPeer("0.0.0.0/0", mailV4Except), mailPeer("::/0", mailV6Except)
+	for name, peers := range map[string][]string{"v4": {v4}, "v6": {v6}, "both": {v4, v6}} {
+		if out, err := mailRender(t, peers); err != nil {
+			t.Fatalf("%s: the exact shape was refused: %v\n%.300s", name, err, out)
+		}
+	}
+	extraEntries := append(append([]string{}, mailV4Except...), "203.0.113.0/24")
+	if out, err := mailRender(t, []string{mailPeer("0.0.0.0/0", extraEntries)}); err != nil {
+		t.Fatalf("a longer except list was refused: %v\n%.300s", err, out)
+	}
+}
+
+func TestAuthServiceMailEgressRefusesAWholeInternetPeerMissingAnExceptEntry(t *testing.T) {
+	for _, drop := range mailV4Except {
+		if out, err := mailRender(t, []string{mailPeer("0.0.0.0/0", without(mailV4Except, drop))}); err == nil || !strings.Contains(out, "authService.networkPolicy.egress.mail.to") {
+			t.Fatalf("v4 /0 without except %s accepted: %v\n%.200s", drop, err, out)
+		}
+	}
+	for _, drop := range mailV6Except {
+		if out, err := mailRender(t, []string{mailPeer("::/0", without(mailV6Except, drop))}); err == nil || !strings.Contains(out, "authService.networkPolicy.egress.mail.to") {
+			t.Fatalf("v6 /0 without except %s accepted: %v\n%.200s", drop, err, out)
+		}
+	}
+	if out, err := mailRender(t, []string{`{"ipBlock":{"cidr":"0.0.0.0/0"}}`}); err == nil {
+		t.Fatalf("a /0 with no except list accepted\n%.200s", out)
+	}
+}
+
+func TestAuthServiceMailEgressRefusesAWholeInternetPeerOnAnyOtherPort(t *testing.T) {
+	v4 := mailPeer("0.0.0.0/0", mailV4Except)
+	for name, ports := range map[string]string{
+		"port 80":    `[{"protocol":"TCP","port":80}]`,
+		"port 25":    `[{"protocol":"TCP","port":25}]`,
+		"extra port": `[{"protocol":"TCP","port":443},{"protocol":"TCP","port":25}]`,
+		"udp 443":    `[{"protocol":"UDP","port":443}]`,
+		"no ports":   `[]`,
+		"port range": `[{"protocol":"TCP","port":443,"endPort":465}]`,
+	} {
+		out, err := mailRender(t, []string{v4}, "--set-json", "authService.networkPolicy.egress.mail.ports="+ports)
+		if err == nil || !strings.Contains(out, "authService.networkPolicy.egress.mail") {
+			t.Fatalf("%s: a /0 peer accepted: %v\n%.200s", name, err, out)
+		}
+	}
+	if out, err := mailRender(t, []string{mailPeer("10.1.2.0/24", nil)}, "--set-json", `authService.networkPolicy.egress.mail.ports=[{"protocol":"TCP","port":587}]`); err != nil {
+		t.Fatalf("a narrow peer on 587 was refused: %v\n%.200s", err, out)
+	}
+}
+
+func TestAuthServiceMailEgressRefusesAnotherSlashZeroForm(t *testing.T) {
+	for _, cidr := range []string{"1.2.3.4/0", "0:0:0:0:0:0:0:0/0", "::1/0"} {
+		except := mailV4Except
+		if strings.Contains(cidr, ":") {
+			except = mailV6Except
+		}
+		if out, err := mailRender(t, []string{mailPeer(cidr, except)}); err == nil {
+			t.Fatalf("%q accepted\n%.200s", cidr, out)
+		}
+	}
+}

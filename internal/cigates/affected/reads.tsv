@@ -96,6 +96,7 @@ internal/cigates/outboundtransport	test	ci
 internal/cigates/proofteardown	test	ci
 internal/cigates/queuecreds	code	contracts
 internal/cigates/raceunweighted	test	ci
+internal/cigates/racescope	test	ci
 internal/cigates/routing	test	ci
 internal/cigates/routing	test	compose.yml
 internal/cigates/routing	test	deploy

@@ -8,8 +8,8 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/google/uuid"
 
+	"github.com/full-chaos/dev-health-ops/internal/orgactivity/chread"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
-	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
 // activity is OrganizationActivity.
@@ -22,7 +22,7 @@ type activity struct {
 }
 
 // metricTables are the tables _load_org_activity reads, in its order.
-var metricTables = []string{"repo_metrics_daily", "user_metrics_daily", "team_metrics_daily", "work_item_metrics_daily"}
+var metricTables = chread.Tables
 
 // orgActivity is _load_org_activity: per organization, whether any metric
 // row exists and the newest computed_at across the four daily tables. A
@@ -70,22 +70,9 @@ func (h handlers) orgActivity(ctx context.Context, orgIDs []uuid.UUID) map[uuid.
 }
 
 // activityStatement counts the metric rows of one organization in table and
-// takes their newest computed_at.
-//
-// A team-keyed daily table can hold retraction rows (package liverow): the
-// newest row of a key the compute no longer produces, with 0 in every count.
-// Such a row is not data. For those tables the statement reads the newest row
-// of each key (FINAL) and keeps the measurements only, so an organization
-// whose only newest rows are retraction rows has no data, and a retraction
-// row does not make its metrics look newer than its last measurement.
-func activityStatement(table string) string {
-	source, where := table, "org_id = {org_id:String}"
-	if liverow.Registered(table) {
-		source += " FINAL"
-		where += " AND " + liverow.Predicate(table, "")
-	}
-	return "SELECT count() AS row_count, max(computed_at) AS last_metrics_at FROM " + source + " WHERE " + where
-}
+// takes their newest computed_at (the statement is shared with the projection
+// writer, internal/orgactivity/chread).
+func activityStatement(table string) string { return chread.Statement(table) }
 
 // minTime is datetime.min in UTC, the sort value of a missing timestamp.
 var minTime = time.Date(1, 1, 1, 0, 0, 0, 0, time.UTC)

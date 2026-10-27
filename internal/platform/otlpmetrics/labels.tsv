@@ -13,6 +13,7 @@ auth.workload.mutations	outcome,verb	code: internal/auth/workload/store.go
 auth.workload.resolves	outcome	code: internal/auth/workload/store.go
 credential_mapping_rejected_total	missing_field,provider	code: internal/providerfoundation/credential_mapping_metrics.go
 credential_origin_departures_total	action,site	code: internal/httpguard/origin.go
+daily_finalize_org_activity_refresh_failed_total		code: internal/jobs/metrics/daily/daily.go
 daily_finalize_org_day_deferred_total		code: internal/jobs/metrics/daily/finalize_org_day_gate.go
 daily_finalize_org_day_defer_seconds	outcome	code: internal/jobs/metrics/daily/finalize_org_day_gate.go
 devhealth_acr_internal_requests_total	outcome,route	code: internal/apiservice/acr/internalauth.go

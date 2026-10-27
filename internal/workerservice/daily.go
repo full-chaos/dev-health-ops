@@ -18,6 +18,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/remaining"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/workitemengine"
+	"github.com/full-chaos/dev-health-ops/internal/orgactivity/refresh"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/riverqueue/river"
@@ -373,6 +374,9 @@ func buildDailyWorker(
 					_ = clickhouseConnection.Close()
 					return workerFamily{}, errWorkerDependencyUnavailable
 				}
+				handler.SetOrgActivityRefresher(&refresh.Refresher{
+					CH: clickhouseConnection, DB: postgresDatabase.pools.Domain, Logger: logger,
+				})
 				drainTriggers.finalize = handler
 				// CHAOS-4290: RUN-scoped native families. dailyNativeFamilyRegistrations
 				// is a pure function (see the partition case's comment on why the

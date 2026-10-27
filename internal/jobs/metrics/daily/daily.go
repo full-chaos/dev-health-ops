@@ -23,7 +23,10 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/metric"
 )
 
 var (
@@ -1367,6 +1370,85 @@ type FinalizeHandler struct {
 	// touchedDrainer starts runs for the pending touched days when a run
 	// ends (CHAOS-8846). Optional: nil is no pass.
 	touchedDrainer TouchedDaysDrainer
+	// orgActivity refreshes the organization's activity projection when a
+	// run ends. Optional: nil is no refresh.
+	orgActivity OrgActivityRefresher
+	// orgActivityTimeoutOverride replaces orgActivityRefreshTimeout in tests.
+	orgActivityTimeoutOverride time.Duration
+}
+
+// OrgActivityRefresher upserts the row of public.org_activity for one
+// organization (internal/orgactivity.Refresher): the projection the auth plane
+// reads to choose a login organization. It is the one writer of that table.
+type OrgActivityRefresher interface {
+	Refresh(ctx context.Context, orgID uuid.UUID) error
+	// RefreshMissing writes the rows of up to limit organizations that have none (the first fill, and new organizations).
+	RefreshMissing(ctx context.Context, limit int) (written, skipped int, err error)
+}
+
+// orgActivityFillBatch bounds the organizations one finalize fills.
+const orgActivityFillBatch = 25
+
+// SetOrgActivityRefresher attaches the refresh of the activity projection that
+// runs after a finalize completes. A failed refresh never fails the finalize:
+// the row keeps its last value and the next finalize writes it again.
+func (handler *FinalizeHandler) SetOrgActivityRefresher(refresher OrgActivityRefresher) {
+	if handler != nil {
+		handler.orgActivity = refresher
+	}
+}
+
+// OrgActivityRefreshFailedCounter counts refreshes of the org activity projection that failed, timed out or were
+// skipped after a finalize completed. A failure never fails or delays the finalize.
+const OrgActivityRefreshFailedCounter = "daily_finalize_org_activity_refresh_failed_total"
+
+// orgActivityRefreshTimeout bounds the whole refresh (the run's organization and the fill of the organizations without
+// a row): the finalize is already complete and the drain has started, so the bound only frees the worker slot.
+const orgActivityRefreshTimeout = 30 * time.Second
+
+func (handler *FinalizeHandler) orgActivityTimeout() time.Duration {
+	if handler.orgActivityTimeoutOverride > 0 {
+		return handler.orgActivityTimeoutOverride
+	}
+	return orgActivityRefreshTimeout
+}
+
+func countOrgActivityRefreshFailed(ctx context.Context) {
+	meter := otel.GetMeterProvider().Meter("github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily")
+	if counter, err := meter.Int64Counter(OrgActivityRefreshFailedCounter, metric.WithUnit("{refresh}"),
+		metric.WithDescription("org activity projection refreshes that failed, timed out or were skipped after a finalize completed")); err == nil {
+		counter.Add(context.WithoutCancel(ctx), 1)
+	}
+}
+
+// refreshOrgActivity refreshes the projection of the run's organization once the run has ended, then fills up to
+// orgActivityFillBatch organizations that have no row. It runs after CompleteFinalize and the drain pass, under its
+// own timeout, and logs and counts every failure: it cannot fail or delay the finalize.
+func (handler *FinalizeHandler) refreshOrgActivity(ctx context.Context, run Run) {
+	if handler.orgActivity == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), handler.orgActivityTimeout())
+	defer cancel()
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			countOrgActivityRefreshFailed(ctx)
+			slog.Default().ErrorContext(ctx, "daily finalize: the org activity refresh panicked",
+				"run_id", run.ID, "organization_id", run.OrganizationID)
+		}
+	}()
+	if orgID, err := uuid.Parse(run.OrganizationID); err == nil {
+		if err := handler.orgActivity.Refresh(ctx, orgID); err != nil {
+			countOrgActivityRefreshFailed(ctx)
+			slog.Default().WarnContext(ctx, "daily finalize: the org activity projection was not refreshed",
+				"run_id", run.ID, "organization_id", run.OrganizationID, "error", err)
+		}
+	}
+	if _, skipped, err := handler.orgActivity.RefreshMissing(ctx, orgActivityFillBatch); err != nil || skipped > 0 {
+		countOrgActivityRefreshFailed(ctx)
+		slog.Default().WarnContext(ctx, "daily finalize: organizations without an activity row were not all filled",
+			"run_id", run.ID, "skipped", skipped, "error", err)
+	}
 }
 
 // SetStaleKeyRetractor attaches the run-level retraction of stale team keys
@@ -1863,6 +1945,9 @@ func (handler *FinalizeHandler) Work(ctx context.Context, execution *jobruntime.
 	// end of a run is what frees the slots of the pass before it, so a backlog
 	// drains batch after batch and stops when a pass starts no run.
 	handler.drainTouchedDaysAfterEnd(ctx, claim.Run)
+	// The completion is written and the drain has started: the activity
+	// projection is refreshed last, so it can neither fail nor delay either.
+	handler.refreshOrgActivity(ctx, claim.Run)
 	return nil
 }
 

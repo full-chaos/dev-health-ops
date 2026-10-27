@@ -56,13 +56,14 @@ func TestAuthServiceTracingIsOffByDefault(t *testing.T) {
 
 func TestAuthServiceTracingOnRendersTheExportAndItsEgress(t *testing.T) {
 	for name, peer := range map[string]string{
-		"node ipBlock":       `[{"ipBlock":{"cidr":"10.0.0.151/32"}}]`,
-		"v6 host ipBlock":    `[{"ipBlock":{"cidr":"2001:db8::7/128"}}]`,
-		"v4 /8 ipBlock":      `[{"ipBlock":{"cidr":"10.0.0.0/8"}}]`,
-		"v6 /32 ipBlock":     `[{"ipBlock":{"cidr":"2001:db8::/32"}}]`,
-		"v6 next to NAT64":   `[{"ipBlock":{"cidr":"64:ff9a::/32"}}]`,
-		"collector selector": `[{"podSelector":{"matchLabels":{"app.kubernetes.io/name":"otel-collector"}}}]`,
-		"namespace and pods": `[{"namespaceSelector":{"matchLabels":{"kubernetes.io/metadata.name":"observability"}},"podSelector":{"matchLabels":{"app":"collector"}}}]`,
+		"node ipBlock":        `[{"ipBlock":{"cidr":"10.0.0.151/32"}}]`,
+		"v6 host ipBlock":     `[{"ipBlock":{"cidr":"2001:db8::7/128"}}]`,
+		"v4 /8 ipBlock":       `[{"ipBlock":{"cidr":"10.0.0.0/8"}}]`,
+		"v6 /32 ipBlock":      `[{"ipBlock":{"cidr":"2001:db8::/32"}}]`,
+		"v6 next to NAT64":    `[{"ipBlock":{"cidr":"64:ff9a::/32"}}]`,
+		"v6 beside NAT64 /48": `[{"ipBlock":{"cidr":"64:ff9b:100::/40"}}]`,
+		"collector selector":  `[{"podSelector":{"matchLabels":{"app.kubernetes.io/name":"otel-collector"}}}]`,
+		"namespace and pods":  `[{"namespaceSelector":{"matchLabels":{"kubernetes.io/metadata.name":"observability"}},"podSelector":{"matchLabels":{"app":"collector"}}}]`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			deployment, policy := tracingDocs(t, append(append([]string{}, tracingOn...), "--set-json", "authService.networkPolicy.egress.otlp.to="+peer)...)

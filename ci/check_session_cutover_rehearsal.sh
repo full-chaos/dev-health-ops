@@ -90,6 +90,8 @@ cleanup() {
   fi
   "${WORK}/kind" delete cluster --name "${CLUSTER}" >/dev/null 2>&1 || true
   docker rm --force --volumes "${CLUSTER}-control-plane" >/dev/null 2>&1 || true
+  # best effort: the tag is absent when the pull never succeeded, and a cleanup failure must not mask the exit status
+  [ -z "${PINNED_BASE_TAG:-}" ] || docker image rm "${PINNED_BASE_TAG}" >/dev/null 2>&1 || true
   rm -rf "${WORK}"
   exit "${status}"
 }

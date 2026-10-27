@@ -135,6 +135,7 @@ for s in ci/check_auth_k8s.sh ci/check_session_cutover_rehearsal.sh; do
   if { [ -n "${p}" ] && [ -n "${b}" ] && [ "${p}" -lt "${b}" ]; }; then ok "${s} pre-pulls before its first build"; else bad "${s} does not pre-pull before building"; fi
   # shellcheck disable=SC2016
   if grep -qF 'GO_BUILD_IMAGE="${PINNED_BASE_TAG}"' "${ROOT}/${s}" && grep -q -- '--pull=false' "${ROOT}/${s}"; then ok "${s} builds from the local tag"; else bad "${s} build args"; fi
+  if grep -E 'docker image rm' "${ROOT}/${s}" | grep -qF 'PINNED_BASE_TAG'; then ok "${s} removes PINNED_BASE_TAG in its cleanup"; else bad "${s} cleanup leaves the pulled base tag"; fi
 done
 
 [ "${fails}" = 0 ] || { printf '%s check(s) failed\n' "${fails}"; exit 1; }

@@ -43,6 +43,7 @@ for p in "${pkgs[@]}"; do
     printf '{"Action":"output","Package":"%s","Test":"TestPasses","Output":"PASSING-OUTPUT\\n"}\n' "${p}"
     printf '{"Action":"pass","Package":"%s","Test":"TestPasses","Elapsed":0.25}\n' "${p}"
     printf '{"Action":"output","Package":"%s","Test":"TestBreaks","Output":"FAILING-OUTPUT\\n"}\n' "${p}"
+    printf '{"Action":"output","Package":"%s","Test":"TestBreaks","Output":"--- PASS: this is real output from a failing test\\n"}\n' "${p}"
     printf '{"Action":"fail","Package":"%s","Test":"TestBreaks","Elapsed":0.5}\n' "${p}"
     printf '{"Action":"output","Package":"%s","Output":"FAIL\\t%s\\t0.500s\\n"}\n' "${p}" "${p}"
     printf '{"Action":"fail","Package":"%s","Elapsed":0.5}\n' "${p}"
@@ -77,6 +78,33 @@ func runLegWithFakeGo(t *testing.T, leg string, shard int, mode string) (cmdResu
 		t.Fatal(err)
 	}
 	legDir := filepath.Join(work, "leg-json")
+	count := "3"
+	if leg == "race" {
+		count = "4"
+	}
+	goMode := mode
+	switch mode {
+	case "jq-fail":
+		// The leg's converter call (jq -nR ...) fails the way a jq out of memory does; every other jq call is the real jq.
+		realJQ, err := exec.LookPath("jq")
+		if err != nil {
+			t.Skip("jq is not installed")
+		}
+		fakeJQ := "#!/usr/bin/env bash\ncase \" $* \" in *\" -nR \"*) echo 'jq: error: cannot allocate memory' >&2; exit 5 ;; esac\nexec " + realJQ + " \"$@\"\n"
+		if err := os.WriteFile(filepath.Join(bin, "jq"), []byte(fakeJQ), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		goMode = ""
+	case "raw-full":
+		// The leg's raw file is a symlink to /dev/full: every write fails with ENOSPC.
+		if err := os.MkdirAll(legDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink("/dev/full", filepath.Join(legDir, leg+"-"+shard1(shard)+"-of-"+count+".json")); err != nil {
+			t.Fatal(err)
+		}
+		goMode = ""
+	}
 	weights, err := os.ReadFile(filepath.Join(repo, "ci", "go_providersync_race_weights.tsv"))
 	if err != nil {
 		t.Fatal(err)
@@ -94,12 +122,8 @@ func runLegWithFakeGo(t *testing.T, leg string, shard int, mode string) (cmdResu
 	env := inheritedEnv([]string{"PATH", "TMPDIR", "GO_RACE_EXCLUDED_TESTS", "GO_QUALITY_SELECTION_FILE", "DEV_HEALTH_GO_UNWEIGHTED_REPORT_ONLY"},
 		"DEV_HEALTH_GO_UNWEIGHTED_REPORT_ONLY=1",
 		"PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"), "TMPDIR="+work, "FAKE_REAL_GO="+realGo,
-		"FAKE_CENSUS="+filepath.Join(repo, "ci", "race_excluded_tests.tsv"), "FAKE_MODE="+mode, "FAKE_GO_LISTING="+listPath,
+		"FAKE_CENSUS="+filepath.Join(repo, "ci", "race_excluded_tests.tsv"), "FAKE_MODE="+goMode, "FAKE_GO_LISTING="+listPath,
 		"GO_TEST_LEG_JSON_DIR="+legDir, "GO_TEST_JSON_DIR="+filepath.Join(work, "ps-json"))
-	count := "3"
-	if leg == "race" {
-		count = "4"
-	}
 	res := cmdSpec{dir: repo, env: env}.run("bash", script, "ci-leg", leg, shard1(shard), count)
 	raw, _ := os.ReadFile(filepath.Join(legDir, leg+"-"+shard1(shard)+"-of-"+count+".json"))
 	return res, string(raw)
@@ -160,11 +184,61 @@ func TestALegWithAFailEventIsRedAndKeepsElapsedInTheJSON(t *testing.T) {
 		if !strings.Contains(res.stdout, "FAILING-OUTPUT") {
 			t.Errorf("%s leg: the failing test's output is not in the plain log: %s", leg, tail(res.stdout, 800))
 		}
-		if strings.Contains(res.stdout, "PASSING-OUTPUT") {
-			t.Errorf("%s leg: a passing test's output reached the plain log (plain go test hides it)", leg)
+		if !strings.Contains(res.stdout, "PASSING-OUTPUT") {
+			t.Errorf("%s leg: a passing test's output is not in the plain log (every Output field is kept)", leg)
 		}
 		if !strings.Contains(res.stdout, "FAIL\t") {
 			t.Errorf("%s leg: the package FAIL line is not in the plain log", leg)
+		}
+	}
+}
+
+func TestALegKeepsEveryOutputLineInStreamOrder(t *testing.T) {
+	t.Parallel()
+	for _, leg := range []string{"test", "race"} {
+		res, _ := runLegWithFakeGo(t, leg, 1, "fail-event")
+		pass, fail := strings.Index(res.stdout, "PASSING-OUTPUT"), strings.Index(res.stdout, "FAILING-OUTPUT")
+		if pass < 0 || fail < 0 || pass > fail {
+			t.Errorf("%s leg: a passing test's output (at %d) must be in the plain log before the failing test's (at %d), as the stream has them", leg, pass, fail)
+		}
+	}
+}
+
+func TestALegKeepsAFailingTestsOwnPassShapedLine(t *testing.T) {
+	t.Parallel()
+	for _, leg := range []string{"test", "race"} {
+		res, _ := runLegWithFakeGo(t, leg, 1, "fail-event")
+		if !strings.Contains(res.stdout, "--- PASS: this is real output from a failing test") {
+			t.Errorf("%s leg: a line of a failing test that starts with \"--- PASS:\" is missing from the plain log", leg)
+		}
+	}
+}
+
+func TestALegWhenTheConverterFailsIsRedAndTheLogHoldsTheRawStream(t *testing.T) {
+	t.Parallel()
+	for _, leg := range []string{"test", "race"} {
+		res, _ := runLegWithFakeGo(t, leg, 1, "jq-fail")
+		if res.code == 0 {
+			t.Fatalf("%s leg: the JSON converter failed and the leg exited 0: %s", leg, tail(res.stderr, 1200))
+		}
+		if !strings.Contains(res.stderr, "go_test_leg: JSON converter failed") {
+			t.Errorf("%s leg: the failure does not name the converter: %s", leg, tail(res.stderr, 800))
+		}
+		if !strings.Contains(res.stdout, `"Action":"output"`) {
+			t.Errorf("%s leg: the raw stream is not in the plain log after the converter failed: %s", leg, tail(res.stdout, 600))
+		}
+	}
+}
+
+func TestALegWithAnUnwritableRawFileIsRedWithANamedError(t *testing.T) {
+	t.Parallel()
+	for _, leg := range []string{"test", "race"} {
+		res, _ := runLegWithFakeGo(t, leg, 1, "raw-full")
+		if res.code == 0 {
+			t.Fatalf("%s leg: the raw file could not be written and the leg exited 0: %s", leg, tail(res.stderr, 1200))
+		}
+		if !strings.Contains(res.stderr, "go_test_leg: the raw file write failed") {
+			t.Errorf("%s leg: the failure does not name the raw file: %s", leg, tail(res.stderr, 800))
 		}
 	}
 }
@@ -188,7 +262,7 @@ func legConverter(t *testing.T) string {
 	return rest[:j]
 }
 
-func TestTheLegConverterRebuildsThePlainLog(t *testing.T) {
+func TestTheLegConverterKeepsEveryOutputVerbatimInStreamOrder(t *testing.T) {
 	t.Parallel()
 	if _, err := exec.LookPath("jq"); err != nil {
 		t.Skip("jq is not installed")
@@ -207,6 +281,7 @@ func TestTheLegConverterRebuildsThePlainLog(t *testing.T) {
 		`{"Action":"output","Package":"p","Test":"TestC","Output":"never ended\n"}`,
 		"a line that is not an event",
 		`42`,
+		`{"x":1}`,
 		`{"Action":"output","Package":"p","Output":"PASS\n"}`,
 		`{"Action":"output","Package":"p","Output":"testing: warning: no tests to run\n"}`,
 		`{"Action":"output","Package":"p","Output":"FAIL\tp\t0.010s\n"}`,
@@ -218,7 +293,8 @@ func TestTheLegConverterRebuildsThePlainLog(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the converter failed: %v", err)
 	}
-	want := "    b_test.go:2: failing log\n--- FAIL: TestB (0.00s)\na line that is not an event\n42\nFAIL\tp\t0.010s\nnever ended\n"
+	want := "=== RUN   TestA\n    a_test.go:1: passing log\n--- PASS: TestA (0.00s)\n=== RUN   TestB\n    b_test.go:2: failing log\n--- FAIL: TestB (0.00s)\nnever ended\n" +
+		"a line that is not an event\n42\n{\"x\":1}\nPASS\ntesting: warning: no tests to run\nFAIL\tp\t0.010s\n"
 	if string(out) != want {
 		t.Fatalf("converter output:\n%q\nwant:\n%q", out, want)
 	}
@@ -253,13 +329,16 @@ func legSiteViolations(script string) []string {
 		}
 	}
 	h := body("go_test_leg")
-	for _, need := range []string{" -json ", `rc="${PIPESTATUS[0]}"`, `return "${rc}"`, `fromjson?`, "|| cat >/dev/null", `tee -a "${legjson}"`} {
-		if !strings.Contains(script, need) || (need != "fromjson?" && !strings.Contains(h, need)) {
+	for _, need := range []string{" -json ", `rc="${ps[0]}"`, `"${ps[1]}"`, `"${ps[2]}"`, `"${ps[3]}"`, `return "${rc}"`, "go_test_leg: JSON converter failed", "go_test_leg: the raw file write failed"} {
+		if !strings.Contains(h, need) {
 			out = append(out, "go_test_leg lacks "+need)
 		}
 	}
-	if !strings.Contains(h, "| tee -a \"${log}\"\n  rc=\"${PIPESTATUS[0]}\"\n") {
-		out = append(out, "go_test_leg does not read PIPESTATUS right after the last tee")
+	if !strings.Contains(script, "fromjson?") {
+		out = append(out, "the converter does not pass non-JSON lines through (fromjson?)")
+	}
+	if !strings.Contains(h, "| tee -a \"${log}\"\n  ps=(\"${PIPESTATUS[@]}\")\n") {
+		out = append(out, "go_test_leg does not copy every PIPESTATUS element right after the last tee")
 	}
 	return out
 }
@@ -276,8 +355,9 @@ func TestEveryLegStageGoesThroughTheJSONHelperAndKeepsGoTestsRC(t *testing.T) {
 	text := string(script)
 	for name, mut := range map[string][2]string{
 		"a race site back to the plain pipe": {`go_test_leg "${racelog}" "${legjson}" -race -count=1 `, `"${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -race -count=1 `},
-		"no explicit rc":                     {`rc="${PIPESTATUS[0]}"`, `rc=$?`},
-		"a converter that can end early":     {"|| cat >/dev/null", "|| true"},
+		"no explicit status copy":            {`ps=("${PIPESTATUS[@]}")`, `ps=($?)`},
+		"a converter failure is not named":   {"go_test_leg: JSON converter failed", "go_test_leg: converter note"},
+		"a raw file failure is not named":    {"go_test_leg: the raw file write failed", "go_test_leg: raw file note"},
 	} {
 		if len(legSiteViolations(strings.Replace(text, mut[0], mut[1], 1))) == 0 {
 			t.Errorf("the guard misses: %s", name)

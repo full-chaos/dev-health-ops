@@ -107,7 +107,7 @@ func tracedService(t *testing.T, env map[string]string, paths ...string) ([]expo
 	t.Helper()
 	receiver, address := startReceiver(t)
 	t.Setenv("OTEL_ENABLED", "true")
-	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", address)
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://"+address)
 	t.Setenv("OTEL_SAMPLE_RATE", "1")
 	ports := reservePorts(t, 2)
 	if env == nil {
@@ -234,7 +234,7 @@ func TestTracingOffExportsNothing(t *testing.T) {
 		t.Run(value, func(t *testing.T) {
 			receiver, address := startReceiver(t)
 			t.Setenv("OTEL_ENABLED", value)
-			t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", address)
+			t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://"+address)
 			t.Setenv("OTEL_SAMPLE_RATE", "1")
 			ports := reservePorts(t, 2)
 			env := brokenEnvironment(t, ports[0], ports[1])
@@ -280,7 +280,6 @@ func startupLine(t *testing.T, logs string) map[string]any {
 func TestTheStartupLineNamesTheCollectorByHostAndPortOnly(t *testing.T) {
 	for _, tc := range []struct{ endpoint, want string }{
 		{"http://ops-user:c4n4ry-pw@127.0.0.1:4317/v1/traces?c4n4ry-q=1", "127.0.0.1:4317"},
-		{"ops-user:c4n4ry-pw@127.0.0.1:4317", "127.0.0.1:4317"},
 		{"https://collector.internal:4317/c4n4ry-path", "collector.internal:4317"},
 		{"127.0.0.1:4317", "127.0.0.1:4317"},
 	} {
@@ -335,5 +334,35 @@ func TestWithNoOTELVariablesTheServiceStartsWithTheDefaults(t *testing.T) {
 	line := startupLine(t, logs.String())
 	if line["otlp_endpoint"] != "localhost:4317" || line["service_name"] != "auth-service" {
 		t.Errorf("startup line = %v, want localhost:4317 and auth-service", line)
+	}
+}
+
+// An endpoint that is neither a URL nor a bare host:port (userinfo or a path
+// without a scheme) leaves tracing off with a warning that names no part of it.
+func TestAMalformedCollectorEndpointLeavesTracingOffAndUnnamed(t *testing.T) {
+	t.Setenv("OTEL_ENABLED", "true")
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "ops-user:c4n4ry-pw@127.0.0.1:4317")
+	t.Setenv("OTEL_SAMPLE_RATE", "1")
+	t.Cleanup(func() { otel.SetTracerProvider(noop.NewTracerProvider()) })
+	ports := reservePorts(t, 2)
+	env := brokenEnvironment(t, ports[0], ports[1])
+	env[authconfig.EnvLogLevel] = "info"
+	logs, stop := runService(t, env)
+	client := &http.Client{Timeout: 10 * time.Second}
+	defer client.CloseIdleConnections()
+	awaitResponse(t, client, "http://"+ports[1]+"/healthz").Body.Close()
+	if code := stop(); code != 0 {
+		t.Fatalf("Execute exited %d", code)
+	}
+	if strings.Contains(logs.String(), "OpenTelemetry tracing initialised") {
+		t.Errorf("tracing started from a malformed endpoint:\n%s", logs.String())
+	}
+	if !strings.Contains(logs.String(), "OpenTelemetry initialisation failed") {
+		t.Errorf("no warning for the malformed endpoint:\n%s", logs.String())
+	}
+	for _, leaked := range []string{"ops-user", "c4n4ry"} {
+		if strings.Contains(logs.String(), leaked) {
+			t.Errorf("the log carries %q:\n%s", leaked, logs.String())
+		}
 	}
 }

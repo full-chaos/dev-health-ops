@@ -66,6 +66,9 @@ func TestAMalformedEndpointNeverReachesTheExporter(t *testing.T) {
 		"http://ops-user:c4n4ry-pw@127.0.0.1:c4n4ry-port",
 		"http://ops-user:c4n4ry-pw@[::1",
 		"ops-user:c4n4ry-pw@",
+		"ops-user:c4n4ry-pw@127.0.0.1:4317",
+		"127.0.0.1:4317/c4n4ry-path",
+		"127.0.0.1:4317?c4n4ry-q=1",
 	} {
 		t.Run(endpoint, func(t *testing.T) {
 			t.Setenv("OTEL_ENABLED", "true")

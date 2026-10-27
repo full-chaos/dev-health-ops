@@ -84,9 +84,14 @@ func TestUsersOwnedApplyDefersTheSSOProviderInsertBefore0155(t *testing.T) {
 	if !strings.Contains(logs, "users-owned write grant DEFERRED") || !strings.Contains(logs, "column=sso_provider_id") {
 		t.Fatalf("Apply at 0154 did not report the sso_provider_id write grant as DEFERRED:\n%s", logs)
 	}
-	violations, err := VerifyRuntimePosture(f.ctx, orderConnect(t, f.ctx, f.uri), Options{Schema: "auth", RuntimeRole: f.role, UsersOwned: true})
+	var postureLogs bytes.Buffer
+	violations, err := VerifyRuntimePosture(f.ctx, orderConnect(t, f.ctx, f.uri), Options{Schema: "auth", RuntimeRole: f.role, UsersOwned: true,
+		Logger: slog.New(slog.NewTextHandler(&postureLogs, nil))})
 	if err != nil {
 		t.Fatalf("posture check at 0154: %v", err)
+	}
+	if !strings.Contains(postureLogs.String(), "users-owned write grant PENDING") || !strings.Contains(postureLogs.String(), "column=sso_provider_id") {
+		t.Fatalf("posture check at 0154 did not log the sso_provider_id write grant as PENDING:\n%s", postureLogs.String())
 	}
 	for _, v := range violations {
 		if strings.Contains(v.Object, "sso_provider_id") {

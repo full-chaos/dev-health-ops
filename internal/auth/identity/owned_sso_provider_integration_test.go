@@ -133,15 +133,16 @@ func TestOwnedSSOProvisioningOfASubjectHeldAtTheProviderRowIsIdentityTaken(t *te
 	}
 }
 
-// writeCounts counts the rows a provisioning writes: auth principals, auth users, identities, public users, and the
-// provisioning audit rows.
-func (e *env) writeCounts(t *testing.T, ctx context.Context) [5]int {
+// writeCounts counts the rows a provisioning writes: auth principals, auth users, identities, public users, the
+// provisioning audit rows, and the auth outbox events.
+func (e *env) writeCounts(t *testing.T, ctx context.Context) [6]int {
 	t.Helper()
-	return [5]int{
+	return [6]int{
 		e.count(t, ctx, `SELECT count(*) FROM auth.principals`),
 		e.count(t, ctx, `SELECT count(*) FROM auth.users`),
 		e.count(t, ctx, `SELECT count(*) FROM auth.external_identities`),
 		e.count(t, ctx, `SELECT count(*) FROM public.users`),
 		e.count(t, ctx, `SELECT count(*) FROM auth.security_audit_events WHERE event_type = 'auth.principal.provisioned'`),
+		e.count(t, ctx, `SELECT count(*) FROM auth.auth_outbox_events`),
 	}
 }

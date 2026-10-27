@@ -8,9 +8,9 @@ import (
 	"testing"
 )
 
-// A stub kubectl for the step-6 pod pick of ci/check_auth_k8s.sh, in the state just after the step-5 upgrade: the pod
-// of the old ReplicaSet is still listed first (the API lists pods by name), phase Running, Ready, with a
-// deletionTimestamp; the two pods of the current ReplicaSet are Ready. The dbg ephemeral container starts only after
+// A stub kubectl for the step-6 pod pick of ci/check_auth_k8s.sh, in the state just after the step-5 upgrade, pods
+// listed by name as the API does: a terminating and a live Ready pod of the old ReplicaSet first, then of the current
+// ReplicaSet a terminating Ready pod, a pod not yet Ready and one Ready pod (the only acceptable pick). The dbg ephemeral container starts only after
 // its state was read DBG_POLLS times; before that its logs are "not available".
 const podPickKubectl = `#!/usr/bin/env bash
 set -euo pipefail
@@ -54,6 +54,11 @@ const podPickRS = `{"items":[
 const podPickPods = `{"items":[
  {"metadata":{"name":"ap-dev-health-auth-service-7d8f855979-hdgz7","labels":{"pod-template-hash":"7d8f855979"},
   "deletionTimestamp":"2026-10-27T19:42:00Z"},
+  "status":{"phase":"Running","conditions":[{"type":"Ready","status":"True"}]}},
+ {"metadata":{"name":"ap-dev-health-auth-service-7d8f855979-kq2mp","labels":{"pod-template-hash":"7d8f855979"}},
+  "status":{"phase":"Running","conditions":[{"type":"Ready","status":"True"}]}},
+ {"metadata":{"name":"ap-dev-health-auth-service-8f489f88b-aaaa1","labels":{"pod-template-hash":"8f489f88b"},
+  "deletionTimestamp":"2026-10-27T19:42:01Z"},
   "status":{"phase":"Running","conditions":[{"type":"Ready","status":"True"}]}},
  {"metadata":{"name":"ap-dev-health-auth-service-8f489f88b-fx8sc","labels":{"pod-template-hash":"8f489f88b"}},
   "status":{"phase":"Running","conditions":[{"type":"Ready","status":"False"}]}},

@@ -44,6 +44,10 @@ func corpusQueueRepo(t *testing.T, withPaths bool) string {
 			t.Fatal(err)
 		}
 	}
+	// CHAOS-11670: the script also reads the closure table; a fixed one keeps every case here independent of the real table.
+	if err := os.WriteFile(filepath.Join(dir, "ci", "auth_corpus_closure.txt"), []byte("# test table\ninternal/closurepkg\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	corpusQueueGit(t, dir, "add", "-A")
 	corpusQueueGit(t, dir, "commit", "-q", "-m", "base")
 	return dir

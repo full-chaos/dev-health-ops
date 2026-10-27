@@ -1,0 +1,66 @@
+# The path set of the external auth corpus (CHAOS-11596). A merge queue entry whose group touches one of these paths
+# runs ci/auth_corpus_external.sh (go-api, acp, acp-nokeys, acp-social-unowned) as job auth-corpus-queue of go-auth-service.yml; its result
+# fans into the required context auth-gate. One bash glob per line, matched against the repo-relative path with
+# `case`: `*` matches any characters including `/`, except in a row that starts with `=`, which matches one directory only
+# (the file's directory must equal the row's directory part). A line starting with # is a comment.
+# NOT in the set, by design: the rest of the Go packages go-api and the migrate binaries are built from (cmd, internal and
+# contracts are copied whole into the images). A row for them would run the corpus on almost every Go change; the set
+# is the auth-service route set plus the corpus's own inputs.
+# internal/cigates/workflows (TestAuthCorpusQueuePathSetCoversEveryRouteFile, TestAuthCorpusQueuePathSetCoversEveryDirectInput) fails when a non-test Go file that declares
+# an auth-service route (httpapi.Route{ of internal/auth/httpapi) is outside this set, so a new route file cannot skip the corpus.
+#
+# auth-service: routes (internal/auth/authapi, internal/auth/authruntime, internal/auth/workloadexchange, mount in
+# internal/auth/httpapi/server.go) and its main
+cmd/auth-service/*
+internal/auth/*
+# go-api side: the api command, route assembly and proxy table (the top-level package only: a row that starts with =
+# matches one directory, its star does not cross a slash), the dho entry that lists the api command (cmd/dho/main.go:48),
+# and the venue oracle test that is the corpus
+=internal/apiservice/*.go
+cmd/dho/main.go
+# the go-api auth route declarations and wrappers: internal/api/session (every /api/v1/auth/* route, guard policy, limiters,
+# proxy wrap; session.go:138-163), internal/api/sso (oidc and saml routes; sso.go:119,180) and internal/api/policy (the guard that
+# wraps every route); service.go mounts them at :229 and :249
+internal/api/session/*
+internal/api/sso/*
+internal/api/policy/*
+internal/apiservice/authflowvenue/*
+# the corpus: script, overrides, set-env hook, route table, stub, mail sink and stub provider
+ci/auth_corpus_external.sh
+ci/auth_corpus_external.override.yml
+ci/auth_corpus_external.acp.override.yml
+ci/auth_corpus_set_env.sh
+ci/auth_corpus_acp_routes.tsv
+ci/auth_corpus_stub/*
+ci/auth_corpus_paths.txt
+ci/auth_corpus_queue_relevance.sh
+docker/smtpsink.Dockerfile
+docker/providerstub.Dockerfile
+internal/testsupport/smtpcapture/*
+internal/testsupport/providerstub/*
+internal/testsupport/authrows/*
+# the session key the corpus script reads (sed over its const Key)
+internal/testsupport/sessionscenario/*
+# the images the corpus builds (compose services go-api, migrate, auth-service, auth-migrate, the stub and the sink):
+# the Dockerfile, the module files and what it copies besides the Go trees
+docker/go-worker.Dockerfile
+go.mod
+go.sum
+third_party/vendor/atlassian/*
+src/dev_health_ops/config/status_mapping.yaml
+src/dev_health_ops/config/complexity.yaml
+deploy/go-workers/*
+# auth-service closure and its schema, contracts and migrate binary (the same trees ci/check_go.sh auth_path_relevant
+# names beside internal/auth)
+cmd/auth-migrate/*
+internal/audit/*
+internal/storage/postgres/authschema/*
+contracts/auth/*
+# files the compose stack mounts into postgres and clickhouse
+docker/init-extra-dbs.sh
+docker/clickhouse-users.d/*
+docker/clickhouse-config.d/*
+# the stack the corpus brings up, and the two workflows that schedule it
+compose.yml
+.github/workflows/go-auth-service.yml
+.github/workflows/venue-oracles.yml

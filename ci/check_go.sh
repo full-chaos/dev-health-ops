@@ -4535,7 +4535,7 @@ auth_relevant() {
 auth_path_relevant() {
   local file="$1" closure="$2" dir
   case "${file}" in
-    cmd/auth-service/*|cmd/auth-migrate/*|internal/auth/*|internal/audit/*|internal/storage/postgres/authschema/*|contracts/auth/*|go.mod|go.sum|ci/check_go.sh|cmd/cigate/*|internal/cigates/*|ci/auth_gate_scope_exempt.txt|ci/auth_closure_allow.tsv|ci/auth_queue_relevance.sh|.github/workflows/go-auth-service.yml)
+    cmd/auth-service/*|cmd/auth-migrate/*|internal/auth/*|internal/audit/*|internal/storage/postgres/authschema/*|contracts/auth/*|go.mod|go.sum|ci/check_go.sh|cmd/cigate/*|internal/cigates/*|ci/auth_gate_scope_exempt.txt|ci/auth_closure_allow.tsv|ci/auth_queue_relevance.sh|ci/auth_corpus_queue_relevance.sh|ci/auth_corpus_paths.txt|.github/workflows/go-auth-service.yml)
       return 0
       ;;
   esac
@@ -4560,7 +4560,7 @@ auth_path_relevant() {
 check_auth_paths_selftest() {
   local closure inside outside file
   closure="$(printf 'internal/auth/authruntime\ninternal/platform/secrets\n')"
-  inside=(internal/authnew/a.go internal/some/auth_helper/x.go internal/audit/audit.go internal/auth/contracts/deleted_package/x.go cmd/auth-service/main.go internal/auth/authruntime/runtime.go internal/platform/secrets/secrets.go internal/auth/authruntime/testdata/fixture.txt internal/platform/secrets/testdata/nested/golden.json contracts/auth/v1/README.md go.mod ci/check_go.sh ci/auth_queue_relevance.sh)
+  inside=(internal/authnew/a.go internal/some/auth_helper/x.go internal/audit/audit.go internal/auth/contracts/deleted_package/x.go cmd/auth-service/main.go internal/auth/authruntime/runtime.go internal/platform/secrets/secrets.go internal/auth/authruntime/testdata/fixture.txt internal/platform/secrets/testdata/nested/golden.json contracts/auth/v1/README.md go.mod ci/check_go.sh ci/auth_queue_relevance.sh ci/auth_corpus_queue_relevance.sh ci/auth_corpus_paths.txt)
   outside=(internal/providersync/sync.go docs/index.md web/README.md internal/platform/other/x.go internal/platform/secretsx/y.go src/dev_health_ops/cli.py)
   for file in "${inside[@]}"; do
     auth_path_relevant "${file}" "${closure}" || die "auth path filter: ${file} must select the auth gates and does not"

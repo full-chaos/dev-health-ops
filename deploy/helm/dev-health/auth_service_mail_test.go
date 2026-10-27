@@ -387,3 +387,13 @@ func TestAuthServiceMailEgressRefusesAWholeInternetPeerBesideAnyOtherPeer(t *tes
 		t.Fatalf("the v4 and v6 pair alone was refused: %v\n%.200s", err, out)
 	}
 }
+
+func TestAuthServiceMailEgressRefusesAPrefixThatContainsTheMappedOrNAT64Range(t *testing.T) {
+	for _, cidr := range []string{"::/32", "0:0::/64", "64:ff9b::/32", "::/33", "0::/48", "::ffff:0:0/80", "64:ff9b::/40", "0:0:0:0:0:ffff::/96", "64:ff9b:1::/48", "::ffff:10.0.0.0/104"} {
+		peers := fmt.Sprintf(`authService.networkPolicy.egress.mail.to=[{"ipBlock":{"cidr":%q}}]`, cidr)
+		_, out, err := renderAuth(t, phaseArgs(4, "--set", "authService.mail.secretName=a-mail", "--set-json", peers)...)
+		if err == nil || !strings.Contains(out, "authService.networkPolicy.egress.mail.to") {
+			t.Fatalf("cidr %q accepted: %v\n%.200s", cidr, err, out)
+		}
+	}
+}

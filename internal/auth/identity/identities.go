@@ -289,7 +289,7 @@ func (s *Store) ProvisionFederated(ctx context.Context, req ProvisionRequest) (_
 	if err := req.Key.Validate(); err != nil {
 		return uuid.Nil, err
 	}
-	emailLower, err := NormalizeEmail(req.Email)
+	emailLower, err := NormalizeFederatedEmail(req.Email)
 	if err != nil {
 		return uuid.Nil, err
 	}

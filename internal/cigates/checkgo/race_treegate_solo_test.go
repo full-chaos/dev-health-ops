@@ -1,14 +1,26 @@
 package checkgo_test
 
 import (
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
 // goldenscan/treegate is one CPU-bound regexp scan of the whole tree. Run beside the heavy packages that a heaviest-first leg
-// starts together, it took more than the 10 minute go test timeout; alone it takes a few minutes. It must run alone in its leg.
-func TestTreegateRunsAloneInExactlyOneRaceLeg(t *testing.T) {
+// starts together, it took more than the 10 minute go test timeout; alone it takes a few minutes. It must run alone in its leg,
+// or (CHAOS-11413) in no race leg at all: ci/race_excluded_packages.tsv lists it, and internal/cigates/racescope proves why that is safe.
+func TestTreegateRunsAloneInExactlyOneRaceLegOrInNone(t *testing.T) {
 	root := repoRoot(t)
+	excluded, err := os.ReadFile(filepath.Join(root, "ci", "race_excluded_packages.tsv"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(string(excluded), "\n") {
+		if strings.HasPrefix(line, "internal/testsupport/goldenscan/treegate\t") {
+			return
+		}
+	}
 	solo := filepath.Join(root, "ci", "go_race_solo.tsv")
 	weights := mergedWeights(t, root)
 	mod, pkgs := raceModulePackages(t, root)

@@ -72,7 +72,7 @@ func LoadDownChain() ([]DownFile, error) {
 		}
 		out = append(out, DownFile{Revision: match[1], Name: entry.Name(), SQL: string(data)})
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Revision < out[j].Revision })
+	sort.SliceStable(out, func(i, j int) bool { return revisionLess(out[i].Revision, out[j].Revision) })
 	return out, nil
 }
 

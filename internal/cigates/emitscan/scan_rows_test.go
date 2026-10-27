@@ -267,21 +267,93 @@ func TestPartiallyReadableConstIsAFinding(t *testing.T) {
 	}
 }
 
+const (
+	ratioSamples = 5
+	hangCeiling  = 5 * time.Second
+)
+
+// linearByRatio times one scan at small and at factor*small in this process, so a busy host stretches both alike:
+// linear work gives a ratio near factor, quadratic work near factor squared; bound sits between, with margin both
+// sides (the fixed cost of a scan pulls both ratios down). Each size takes the least of ratioSamples CPU times after a
+// warm-up; a failing pair is measured once more, since a spike can only raise a ratio by chance, a quadratic always does.
+func linearByRatio(t *testing.T, id string, small, factor int, bound float64, source func(int) string) {
+	t.Helper()
+	costRatio(t, id, small, small*factor, bound, source)
+}
+
+// costRatio is linearByRatio for two named sizes: source(n) builds the input of size n, and the cost of the big size over
+// the small one must stay under bound. A source that does not parse, or that trips the census budget, ends the scan
+// early and measures nothing, so it fails the test.
+func costRatio(t *testing.T, id string, small, big int, bound float64, source func(int) string) {
+	t.Helper()
+	hung := false
+	least := func(n int) time.Duration {
+		src := header + source(n)
+		best := time.Duration(1<<63 - 1)
+		for i := 0; i < ratioSamples; i++ {
+			start := cpuTime(t)
+			got := scanSource(t, src)
+			d := cpuTime(t) - start
+			if strings.Contains(rules(got), "R0") || tripped(got) {
+				t.Fatalf("%s: n=%d: the scan did not read the whole source (findings %v)", id, n, got)
+			}
+			if d > hangCeiling*raceSlowdown {
+				t.Errorf("%s: n=%d one scan used %s cpu, want < %s", id, n, d, hangCeiling*raceSlowdown)
+				hung = true
+				return d
+			}
+			if d < best {
+				best = d
+			}
+		}
+		return best
+	}
+	scanSource(t, header+source(small))
+	var ratio float64
+	for attempt := 0; attempt < 2; attempt++ {
+		lo, hi := least(small), least(big)
+		if hung {
+			return
+		}
+		ratio = float64(hi) / float64(lo)
+		t.Logf("%s: n=%d %s cpu, n=%d %s cpu, ratio %.2f (bound %.2f)", id, small, lo, big, hi, ratio, bound)
+		if ratio < bound {
+			return
+		}
+	}
+	t.Errorf("%s: n=%d over n=%d cost %.2fx the cpu, want < %.2fx", id, big, small, ratio, bound)
+}
+
 // Finding the function that holds a metric-options call costs O(1) per node, however deep non-function nesting goes, and
 // a metric call in a closure still marks the constructors of every function around it, and only those.
 func TestMetricFunctionMarkingIsLinearAndKeepsItsScope(t *testing.T) {
 	const depth = 20000
-	deep := "func f(c metric.Int64Counter, v string) {\n\tx := attribute.String(\"user_id\", v)\n\t_ = x\n\t_ = " +
-		strings.Repeat("metric.WithAttributes(", depth) + strings.Repeat(")", depth) + "\n\t_ = " +
-		strings.Repeat("metric.WithAttributes(", depth) + strings.Repeat(")", depth) + "\n}\n"
+	deepAt := func(n int) string {
+		return "func f(c metric.Int64Counter, v string) {\n\tx := attribute.String(\"user_id\", v)\n\t_ = x\n\t_ = " +
+			strings.Repeat("metric.WithAttributes(", n) + strings.Repeat(")", n) + "\n\t_ = " +
+			strings.Repeat("metric.WithAttributes(", n) + strings.Repeat(")", n) + "\n}\n"
+	}
+	deep := deepAt(depth)
 	var got []emitscan.Finding
-	timed(t, "2 x 20000 nested metric calls", 600*time.Millisecond, func() string { got = scanSource(t, header+deep); return "" })
+	linearByRatio(t, "2 x N nested metric calls", depth/4, 6, 18, deepAt)
+	got = scanSource(t, header+deep)
 	if !hasFinding(got, "R2", "user_id") && !tripped(got) {
 		t.Errorf("deep nesting: findings = %v, want R2 user_id or the census finding", got)
 	}
 
-	flaggedClosures := "func f(c metric.Int64Counter, v string) {\n\t_ = " + strings.Repeat("g(func() { _ = metric.WithAttributes() }, ", 24000) + "0" + strings.Repeat(")", 24000) + "\n}\n"
-	timed(t, "24000 nested calls each holding a metric closure", 600*time.Millisecond, func() string { scanSource(t, header+flaggedClosures); return "" })
+	linearByRatio(t, "N nested calls each holding a metric closure", 6000, 8, 20, func(n int) string {
+		return "func f(c metric.Int64Counter, v string) {\n\t_ = " + strings.Repeat("g(func() { _ = metric.WithAttributes() }, ", n) + "0" + strings.Repeat(")", n) + "\n}\n"
+	})
+
+	// The same 24000 closures, in chains of depth n (the parser stops near depth 1000): work that is linear in the closures costs the same at any depth, a
+	// scan of the open functions at every metric call costs more as the chains deepen.
+	costRatio(t, "24000 closures in chains of depth n", 25, 800, 1.6, func(n int) string {
+		var b strings.Builder
+		for i := 0; i < 24000/n; i++ {
+			fmt.Fprintf(&b, "func f%d(c metric.Int64Counter) {\n%s%s}\n", i, strings.Repeat("func() {\n\t_ = metric.WithAttributes()\n", n), strings.Repeat("}()\n", n))
+		}
+		return b.String()
+	})
 
 	closure := "func f(c metric.Int64Counter, v string) {\n\tx := attribute.String(\"user_id\", v)\n\t_ = x\n\tfunc() {\n\t\t_ = metric.WithAttributes()\n\t}()\n}\n"
 	if got := scanSource(t, header+closure); !hasFinding(got, "R2", "user_id") {

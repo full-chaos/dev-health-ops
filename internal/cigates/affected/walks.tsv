@@ -147,6 +147,8 @@ internal/cigates/testshard	trimpath_test.go	unexpressed	-	-
 internal/cigates/weightsfiles	race_weights_files_test.go	unexpressed	-	-
 internal/cigates/weightsfiles	support_test.go	unexpressed	-	-
 internal/cigates/workflows	auth_corpus_external_behaviour_test.go	unexpressed	-	-
+internal/cigates/workflows	auth_corpus_queue_test.go	unexpressed	-	*.go
+internal/cigates/workflows	auth_corpus_queue_test.go	unexpressed	-	-
 internal/cigates/workflows	chart_started_selector_test.go	unexpressed	-	-
 internal/cigates/workflows	providerstub_not_release_test.go	.github/workflows	dir	*
 internal/cigates/workflows	race_json_artifact_test.go	unexpressed	-	-
@@ -234,6 +236,8 @@ internal/migrationmatrix	restendpoints.go	unexpressed	-	-
 internal/operationalordering	finalreads_test.go	unexpressed	-	*.go
 internal/operationalordering	one_resolver_test.go	.	tree	*.go
 internal/ownershipwindow	ownershipwindow_test.go	internal/ownershipwindow	dir	*
+internal/pgmigrate	chain_integrity_test.go	internal/pgmigrate/testdata/postfreeze/duplicate	tree	*
+internal/pgmigrate	chain_integrity_test.go	internal/pgmigrate/testdata/postfreeze/gap	tree	*
 internal/pgmigrate	chain_tail_integration_test.go	internal/pgmigrate/testdata/postfreeze/two	tree	*
 internal/pgmigrate	chain_tail_test.go	unexpressed	-	-
 internal/pgmigrate	handddl_guard_integration_test.go	.	tree	*_test.go

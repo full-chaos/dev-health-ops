@@ -61,6 +61,8 @@ type fakeGitLab struct {
 	tokenStatus, userStatus                      int // 0 means 200.
 	// omitID drops the "id" key from the profile; nullID sends it as JSON null.
 	omitID, nullID bool
+	// rawUser, when set, is sent as the profile body as it is (an escape the encoder cannot produce).
+	rawUser string
 	// confirmed is D2745 P1-1: GitLab's own confirmed_at signal. true by
 	// default so every EXISTING test (a verified account) is unaffected;
 	// set false only by the test that specifically exercises the refusal.
@@ -112,6 +114,11 @@ func (g *fakeGitLab) serveUser(w http.ResponseWriter, r *http.Request) {
 	if g.userStatus != 0 {
 		w.WriteHeader(g.userStatus)
 		_, _ = w.Write([]byte(`{"error":"forbidden"}`))
+		return
+	}
+	if g.rawUser != "" {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(g.rawUser))
 		return
 	}
 	body := map[string]any{

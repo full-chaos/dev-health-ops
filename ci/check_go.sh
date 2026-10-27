@@ -1027,6 +1027,21 @@ check_race_shard_args() {
   { [ "${shard}" -ge 1 ] && [ "${count}" -ge 1 ] && [ "${shard}" -le "${count}" ]; } \
     || die "race shard ${shard} is outside 1..${count}"
   [ -d "${GO_RACE_WEIGHTS_DIR}" ] || die "race shards need ${GO_RACE_WEIGHTS_DIR}"
+  [ -f "${GO_RACE_EXCLUDED_PACKAGES}" ] || die "race shards need ${GO_RACE_EXCLUDED_PACKAGES}"
+}
+
+# CHAOS-11413: packages the race legs do not run (ci/race_excluded_packages.tsv, proven by internal/cigates/racescope). The test legs
+# still run them once. race_shard_packages drops them before the weight split, so no race leg plans them, solo or not.
+GO_RACE_EXCLUDED_PACKAGES="${GO_RACE_EXCLUDED_PACKAGES:-${ROOT}/ci/race_excluded_packages.tsv}"
+race_excluded_filter() {
+  local module_dir="$1" modpath="$2"
+  if [ "${module_dir}" != "." ]; then
+    cat
+    return
+  fi
+  awk -F'\t' -v mod="${modpath}" -v list="${GO_RACE_EXCLUDED_PACKAGES}" '
+    BEGIN { while ((getline line < list) > 0) { if (line ~ /^[[:space:]]*(#|$)/) continue; split(line, f, "\t"); skip[mod "/" f[1]] = 1 } close(list) }
+    !($0 in skip)'
 }
 
 # race_shard_packages SHARD COUNT MODULE_DIR MODPATH [solo]: the import paths of the race slice (or, with solo, of its solo
@@ -1036,6 +1051,7 @@ race_shard_packages() {
   (cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -mod=readonly ./...) \
     | { if [ "${module_dir}" = "." ]; then grep -vx "${modpath}/internal/providersync"; else cat; fi; } \
     | quality_filter "${module_dir}" "${modpath}" \
+    | race_excluded_filter "${module_dir}" "${modpath}" \
     | awk -v mod="${modpath}" -v shard="${shard}" -v count="${count}" -v weights=<(race_weights_rows) -v solo="${GO_RACE_SOLO}" -v part="${part}" -f "${ROOT}/ci/go_race_shard.awk"
 }
 
@@ -4519,7 +4535,7 @@ auth_relevant() {
 auth_path_relevant() {
   local file="$1" closure="$2" dir
   case "${file}" in
-    cmd/auth-service/*|cmd/auth-migrate/*|internal/auth/*|internal/audit/*|internal/storage/postgres/authschema/*|contracts/auth/*|go.mod|go.sum|ci/check_go.sh|cmd/cigate/*|internal/cigates/*|ci/auth_gate_scope_exempt.txt|ci/auth_closure_allow.tsv|ci/auth_queue_relevance.sh|.github/workflows/go-auth-service.yml)
+    cmd/auth-service/*|cmd/auth-migrate/*|internal/auth/*|internal/audit/*|internal/storage/postgres/authschema/*|contracts/auth/*|go.mod|go.sum|ci/check_go.sh|cmd/cigate/*|internal/cigates/*|ci/auth_gate_scope_exempt.txt|ci/auth_closure_allow.tsv|ci/auth_queue_relevance.sh|ci/auth_corpus_queue_relevance.sh|ci/auth_corpus_paths.txt|.github/workflows/go-auth-service.yml)
       return 0
       ;;
   esac
@@ -4544,7 +4560,7 @@ auth_path_relevant() {
 check_auth_paths_selftest() {
   local closure inside outside file
   closure="$(printf 'internal/auth/authruntime\ninternal/platform/secrets\n')"
-  inside=(internal/authnew/a.go internal/some/auth_helper/x.go internal/audit/audit.go internal/auth/contracts/deleted_package/x.go cmd/auth-service/main.go internal/auth/authruntime/runtime.go internal/platform/secrets/secrets.go internal/auth/authruntime/testdata/fixture.txt internal/platform/secrets/testdata/nested/golden.json contracts/auth/v1/README.md go.mod ci/check_go.sh ci/auth_queue_relevance.sh)
+  inside=(internal/authnew/a.go internal/some/auth_helper/x.go internal/audit/audit.go internal/auth/contracts/deleted_package/x.go cmd/auth-service/main.go internal/auth/authruntime/runtime.go internal/platform/secrets/secrets.go internal/auth/authruntime/testdata/fixture.txt internal/platform/secrets/testdata/nested/golden.json contracts/auth/v1/README.md go.mod ci/check_go.sh ci/auth_queue_relevance.sh ci/auth_corpus_queue_relevance.sh ci/auth_corpus_paths.txt)
   outside=(internal/providersync/sync.go docs/index.md web/README.md internal/platform/other/x.go internal/platform/secretsx/y.go src/dev_health_ops/cli.py)
   for file in "${inside[@]}"; do
     auth_path_relevant "${file}" "${closure}" || die "auth path filter: ${file} must select the auth gates and does not"

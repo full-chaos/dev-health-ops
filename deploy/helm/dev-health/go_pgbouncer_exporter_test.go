@@ -273,3 +273,27 @@ func TestPgbouncerExporterSchemaRefusesUnknownKeys(t *testing.T) {
 		}
 	}
 }
+
+// The exporter shares the pod network namespace with PgBouncer: its listen port must not be the pooler port.
+func TestPgbouncerExporterPortMustDifferFromThePoolerPort(t *testing.T) {
+	const msg = "goWorkers.pgbouncer.transaction.exporter.port must differ from the transaction pooler port"
+	for _, set := range [][]string{
+		{"--set", "goWorkers.pgbouncer.transaction.exporter.port=6432"},
+		{"--set", "goWorkers.pgbouncer.transaction.port=9127"},
+	} {
+		_, out, err := renderAuth(t, authWith(append(append([]string{}, exporterOn...), set...)...)...)
+		if err == nil || !strings.Contains(out, msg) {
+			t.Errorf("%v: the render must fail with %q, got err=%v\n%.300s", set, msg, err, out)
+		}
+	}
+	docs, out, err := renderAuth(t, authWith(append(append([]string{}, exporterOn...), "--set", "goWorkers.pgbouncer.transaction.exporter.port=9127")...)...)
+	if err != nil {
+		t.Fatalf("exporter port 9127 must render: %v\n%.300s", err, out)
+	}
+	if at(containerNamed(at(authDoc(docs, "Deployment", transactionPooler), "spec", "template", "spec"), "exporter"), "ports", 0, "containerPort") != 9127 {
+		t.Error("the exporter must listen on 9127")
+	}
+	if _, out, err := renderAuth(t, authWith("--set", "goWorkers.pgbouncer.transaction.exporter.port=6432")...); err != nil {
+		t.Errorf("a disabled exporter is not checked: %v\n%.300s", err, out)
+	}
+}

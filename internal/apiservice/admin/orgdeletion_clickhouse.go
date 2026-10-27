@@ -91,6 +91,22 @@ func (h *handlers) orgDeletionClickHousePreflight(ctx context.Context) (*orgDele
 	return &orgDeletionClickHouse{conn: conn, tables: tables}, nil
 }
 
+// OrgDeletionPreflight runs the org deletion's ClickHouse preflight once (go-api
+// start): "" when DELETE /orgs/{org_id} could purge, else the refusal reason.
+func OrgDeletionPreflight(ctx context.Context, dsn string) string {
+	h := &handlers{clickHouseDSN: dsn}
+	ch, err := h.orgDeletionClickHousePreflight(ctx)
+	if err != nil {
+		var refused *orgDeletionRefusedError
+		if errors.As(err, &refused) {
+			return refused.reason
+		}
+		return "preflight_failed"
+	}
+	_ = ch.conn.Close()
+	return ""
+}
+
 // checkOrgDeletionPrivileges checks the login's effective grants for the
 // connection's database. A grant read that fails is a refusal too.
 func (h *handlers) checkOrgDeletionPrivileges(ctx context.Context, conn driver.Conn) error {

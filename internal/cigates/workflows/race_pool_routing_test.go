@@ -257,7 +257,7 @@ func TestOnlyTheFourRaceLegsCarryThePoolFlag(t *testing.T) {
 	}
 }
 
-const raceTimeoutPool, raceTimeoutDefault = "'25m'", "'10m'"
+const raceTimeoutPool, raceTimeoutDefault = "'25m'", "'15m'"
 
 func raceTimeoutExpr(term, pool, other string) string {
 	return "${{ (" + term + ") && " + pool + " || " + other + " }}"

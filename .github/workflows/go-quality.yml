@@ -235,7 +235,7 @@ jobs:
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository_owner }}
       TESTCONTAINERS_RYUK_DISABLED: ${{ (matrix.pool && vars.CI_RACE_RUNNER != '' && github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'full-chaos/dev-health-ops') && 'true' || 'false' }}
       # The default 600 s per-package go test timeout is too small for the pool.
-      DEV_HEALTH_GO_RACE_TEST_TIMEOUT: ${{ (matrix.pool && vars.CI_RACE_RUNNER != '' && github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'full-chaos/dev-health-ops') && '25m' || '10m' }}
+      DEV_HEALTH_GO_RACE_TEST_TIMEOUT: ${{ (matrix.pool && vars.CI_RACE_RUNNER != '' && github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'full-chaos/dev-health-ops') && '25m' || '15m' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

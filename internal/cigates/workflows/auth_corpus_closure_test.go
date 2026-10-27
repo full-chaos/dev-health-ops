@@ -238,3 +238,40 @@ func writeNUL(path string, items []string) error {
 	}
 	return os.WriteFile(path, b.Bytes(), 0o644)
 }
+
+// The generator pins the C locale itself, before its first command: its sort, read and sed are byte-exact whatever
+// the caller's locale.
+func TestAuthCorpusClosureGeneratorPinsTheCLocale(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join(authProofRoot(t), corpusClosureGen))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, line := range strings.Split(string(raw), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "export LC_ALL=C" {
+			return
+		}
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") || strings.HasPrefix(trimmed, "set -") {
+			continue
+		}
+		t.Fatalf("line %d runs a command before `export LC_ALL=C`: %s", i+1, line)
+	}
+	t.Fatal(corpusClosureGen + " never runs `export LC_ALL=C`")
+}
+
+func TestAuthCorpusClosureGeneratorOutputIgnoresTheLocale(t *testing.T) {
+	root := authProofRoot(t)
+	run := func(locale string) string {
+		cmd := exec.Command("bash", corpusClosureGen)
+		cmd.Dir = root
+		cmd.Env = append(os.Environ(), "LC_ALL="+locale)
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("LC_ALL=%s: %v", locale, err)
+		}
+		return string(out)
+	}
+	if c, u := run("C"), run("en_US.UTF-8"); c != u {
+		t.Fatal("the generator prints a different table under en_US.UTF-8 than under C")
+	}
+}

@@ -137,3 +137,45 @@ func TestAuthCorpusExternalAuthServiceStepRetryRestartsGoAPIFirst(t *testing.T) 
 		}
 	}
 }
+
+// A class line next to a product line is a product failure: no retry.
+func TestAuthCorpusExternalUpDoesNotRetryAClassLineBesideAProductLine(t *testing.T) {
+	for class, text := range corpusInfraTexts {
+		t.Run("class"+class, func(t *testing.T) {
+			r := runCorpusWithFailingUp(t, "go-api", 1, text+"\n"+corpusProductText, " go-api")
+			if r.err == nil {
+				t.Fatalf("a product failure must fail the run:\n%s", r.out)
+			}
+			if len(r.ups) != 1 || r.retryDowns != 0 || r.retryMarker != "" {
+				t.Errorf("want 1 up and no retry; got ups=%q retryDowns=%d line=%q", r.ups, r.retryDowns, r.retryMarker)
+			}
+		})
+	}
+}
+
+// The class texts are matched as whole lines: the same words inside another line, or a changed host, are not a class.
+func TestAuthCorpusExternalUpClassPatternsAreAnchored(t *testing.T) {
+	near := map[string]string{
+		"prefix":       "log: " + corpusInfraTexts["1"],
+		"suffix":       corpusInfraTexts["2"] + " (see the build log)",
+		"other host":   strings.Replace(corpusInfraTexts["3"], "proxy.golang.org", "proxy.example.com", 1),
+		"other stream": strings.Replace(corpusInfraTexts["3"], "INTERNAL_ERROR", "CANCEL", 1),
+		"other bind":   strings.Replace(corpusInfraTexts["1"], "127.0.0.1", "10.0.0.1", 1),
+	}
+	for name, text := range near {
+		t.Run(name, func(t *testing.T) {
+			r := runCorpusWithFailingUp(t, "go-api", 1, text, " go-api")
+			if r.err == nil || len(r.ups) != 1 || r.retryMarker != "" {
+				t.Errorf("a near-miss text must not be retried: err=%v ups=%q line=%q", r.err, r.ups, r.retryMarker)
+			}
+		})
+	}
+}
+
+// The first attempt's whole output stays in the job log.
+func TestAuthCorpusExternalUpKeepsTheFirstAttemptOutput(t *testing.T) {
+	r := runCorpusWithFailingUp(t, "go-api", 1, corpusInfraTexts["2"], " go-api")
+	if r.err != nil || strings.Count(r.out, corpusInfraTexts["2"]) != 1 {
+		t.Errorf("want the first attempt's text once in the output, err=%v:\n%s", r.err, r.out)
+	}
+}

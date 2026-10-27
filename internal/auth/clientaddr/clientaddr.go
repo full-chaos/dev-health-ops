@@ -40,10 +40,10 @@ type Trust struct {
 
 // ParseTrust reads a comma-separated list of IP addresses, networks and
 // exclusions. A network must be a strict CIDR (no host bits). An exclusion is
-// "!" and one IP address, never a network; it must lie inside a listed network
-// and must not also be listed as an address. An empty value trusts no peer.
-// "*", a hostname, an empty entry, a non-strict CIDR or a bad exclusion is an
-// error, so a typo cannot widen the trust.
+// "!" and one IP address, never a network or an IPv4-mapped form; it must lie
+// inside a listed network and must not also be listed as an address. An empty
+// value trusts no peer. "*", a hostname, an empty entry, a non-strict CIDR or a
+// bad exclusion is an error, so a typo cannot widen the trust.
 func ParseTrust(value string) (Trust, error) {
 	t := Trust{addrs: map[netip.Addr]bool{}, except: map[netip.Addr]bool{}}
 	if strings.TrimSpace(value) == "" {
@@ -66,7 +66,10 @@ func ParseTrust(value string) (Trust, error) {
 			if err != nil || addr.Zone() != "" {
 				return Trust{}, fmt.Errorf("%s entry %d is not an excluded IP address (\"!\" and one address, never a network)", Env, index+1)
 			}
-			exclusions = append(exclusions, exclusion{addr.Unmap(), index + 1})
+			if addr.Is4In6() {
+				return Trust{}, fmt.Errorf("%s entry %d is an IPv4-mapped exclusion: give it as IPv4", Env, index+1)
+			}
+			exclusions = append(exclusions, exclusion{addr, index + 1})
 		case strings.Contains(entry, "/"):
 			prefix, err := netip.ParsePrefix(entry)
 			if err != nil || prefix.Addr().Zone() != "" {

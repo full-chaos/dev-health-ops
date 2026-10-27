@@ -13,7 +13,8 @@ import (
 
 var explicitTimeoutFunctions = []string{"check_test_shard", "go_test_json_run"}
 
-var goTestWithoutTimeout = regexp.MustCompile(`go test (?:[^\n]*\s)?-mod=readonly`)
+// A stage of the leg is a plain go test line or a go_test_leg call (CHAOS-11684: the helper adds -json and the rest of the flags).
+var goTestWithoutTimeout = regexp.MustCompile(`go test (?:[^\n]*\s)?-mod=readonly|go_test_leg "`)
 
 // functionBody is the text of the shell function name in script, from its opening line to the first line that is a lone `}`.
 func functionBody(t *testing.T, script, name string) string {
@@ -68,7 +69,7 @@ func TestTheShardedTestLegNamesEveryGoTestTimeout(t *testing.T) {
 }
 
 func TestAGoTestLineWithoutATimeoutIsReported(t *testing.T) {
-	script := strings.Replace(readCheckGo(t), "-trimpath -timeout 10m ${rest}", "-trimpath ${rest}", 1)
+	script := strings.Replace(readCheckGo(t), "-timeout 10m ${rest}", "${rest}", 1)
 	missing, _ := callsMissingTimeout(t, script)
 	if len(missing) != 1 || !strings.Contains(missing[0], "check_test_shard") {
 		t.Fatalf("want exactly the planted check_test_shard line, got %v", missing)

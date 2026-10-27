@@ -188,7 +188,7 @@ var measuredNames = map[string]bool{"elapsed": true, "took": true, "waited": tru
 var comparisons = map[token.Token]bool{token.GTR: true, token.GEQ: true, token.LSS: true, token.LEQ: true}
 
 // findAssertions returns every comparison in file that has a measured duration on exactly one side. A duration is
-// measured when it holds time.Since, time.Until, a Sub call, a Getrusage call or an Elapsed field, or a variable
+// measured when it holds time.Since, time.Until, a Getrusage call or an Elapsed field (never a Sub call: that is mostly timestamp arithmetic on fake clocks and dates), or a variable
 // assigned from one in the same top-level declaration. A comparison of two measured durations is a ratio, not an
 // absolute budget. A comparison with the literal 0 is a sign check.
 func findAssertions(fset *token.FileSet, file *ast.File, rel string) []finding {
@@ -304,7 +304,7 @@ func measured(n ast.Node, tracked map[string]bool) bool {
 		case *ast.CallExpr:
 			if sel, ok := x.Fun.(*ast.SelectorExpr); ok {
 				switch sel.Sel.Name {
-				case "Since", "Until", "Sub", "Getrusage":
+				case "Since", "Until", "Getrusage":
 					found = true
 				}
 			}

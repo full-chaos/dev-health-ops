@@ -75,9 +75,14 @@ func TestPlantedElapsedVariableAgainstAConstantIsRefused(t *testing.T) {
 	}
 }
 
-func TestPlantedTakenFromSubIsRefused(t *testing.T) {
-	root := writeTree(t, map[string]string{"p/x_test.go": head + "func TestSub(t *testing.T) {\n\ta, b := time.Now(), time.Now()\n\ttook := b.Sub(a)\n\tif took > time.Second {\n\t\tt.Fatal(\"x\")\n\t}\n}\n"})
-	wantOne(t, check(t, root, nil), "TestSub")
+func TestPlantedTakenFromUntilIsRefused(t *testing.T) {
+	root := writeTree(t, map[string]string{"p/x_test.go": head + "func TestUntil(t *testing.T) {\n\tleft := time.Until(time.Now().Add(time.Hour))\n\tif left < time.Minute {\n\t\tt.Fatal(\"x\")\n\t}\n}\n"})
+	wantOne(t, check(t, root, nil), "TestUntil")
+}
+
+func TestTimestampArithmeticWithSubIsNotAMeasurement(t *testing.T) {
+	root := writeTree(t, map[string]string{"p/x_test.go": head + "func TestStamps(t *testing.T) {\n\ta, b := time.Now(), time.Now()\n\tif b.Sub(a) > time.Hour {\n\t\tt.Fatal(\"x\")\n\t}\n}\n"})
+	wantClean(t, check(t, root, nil))
 }
 
 func TestPlantedSliceOfTimingsIsRefused(t *testing.T) {

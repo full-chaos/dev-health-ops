@@ -165,7 +165,9 @@ func (a samlIdentities) IdentityBySubject(ctx context.Context, id saml.Identity,
 	return saml.Principal{ID: principal.ID, Disabled: !principal.IsActive || principal.DisabledAt != nil, ServiceProvider: principal.ServiceProvider}, found, nil
 }
 
-func (samlIdentities) NormalizeEmail(raw string) (string, error) { return identity.NormalizeEmail(raw) }
+func (samlIdentities) NormalizeEmail(raw string) (string, error) {
+	return identity.NormalizeFederatedEmail(raw)
+}
 
 func (a samlIdentities) PrincipalByEmail(ctx context.Context, email string) (saml.EmailOwner, bool, error) {
 	principal, err := a.store.ByEmail(ctx, email)

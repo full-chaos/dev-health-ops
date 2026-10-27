@@ -142,7 +142,7 @@ func (s *Service) Exchange(ctx context.Context, provider Provider, token contrac
 		reason = ReasonEmailUnverified
 		return ExchangeResult{}, ErrEmailUnverified
 	}
-	email, err := identity.NormalizeEmail(profile.Email)
+	email, err := identity.NormalizeFederatedEmail(profile.Email)
 	if err != nil {
 		reason = ReasonEmailUnverified
 		return ExchangeResult{}, ErrEmailUnverified

@@ -982,7 +982,7 @@ func createKernelIntegrationFixture(
 		// not -- it failed closed here until these were added.
 		"CREATE TABLE public.sync_run_reference_discoveries (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.sync_run_post_dispatches (id uuid PRIMARY KEY)",
-		"CREATE TABLE public.org_activity (id uuid PRIMARY KEY)",
+		"CREATE TABLE public.org_activity (org_id uuid PRIMARY KEY)",
 		"CREATE TABLE public.sync_coverage_projections (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.organizations (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.users (id bigint PRIMARY KEY)",

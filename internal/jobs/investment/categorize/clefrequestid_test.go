@@ -157,12 +157,19 @@ func TestAFailedRandomSourceGivesANonRandomClientIDWithoutPanic(t *testing.T) {
 	if len(ids) == 2 && ids[0] == ids[1] {
 		t.Fatalf("two calls gave the same id %q", ids[0])
 	}
-	if !strings.Contains(logs.String(), `"level":"WARN"`) {
-		t.Fatal("no Warn line for the random-source failure")
-	}
-	for _, id := range ids {
-		if strings.Contains(logs.String(), id) {
-			t.Fatal("a request id value is in the log")
+	warns := 0
+	for _, line := range strings.Split(logs.String(), "\n") {
+		if !strings.Contains(line, `"level":"WARN"`) {
+			continue
 		}
+		warns++
+		for _, id := range ids {
+			if strings.Contains(line, id) {
+				t.Fatalf("a request id value is in a Warn line: %s", line)
+			}
+		}
+	}
+	if warns != 2 {
+		t.Fatalf("Warn lines = %d, want one for each of the 2 failed mints", warns)
 	}
 }

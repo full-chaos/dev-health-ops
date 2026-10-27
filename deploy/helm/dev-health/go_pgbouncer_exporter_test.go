@@ -224,9 +224,10 @@ func TestPgbouncerExporterMetricsFromAdmitsOnlyTheScraperOnItsPort(t *testing.T)
 	off := renderPoolers(t)
 	np := authDoc(docs, "NetworkPolicy", transactionPooler)
 	var rule any
-	for _, r := range at(np, "spec", "ingress").([]any) {
+	ruleAt := -1
+	for i, r := range at(np, "spec", "ingress").([]any) {
 		if at(r, "ports", 0, "port") == 9127 {
-			rule = r
+			rule, ruleAt = r, i
 		}
 	}
 	if rule == nil {
@@ -239,8 +240,8 @@ func TestPgbouncerExporterMetricsFromAdmitsOnlyTheScraperOnItsPort(t *testing.T)
 		t.Errorf("exporter rule ports = %v", at(rule, "ports"))
 	}
 	var rest []any
-	for _, r := range at(np, "spec", "ingress").([]any) {
-		if r != rule {
+	for i, r := range at(np, "spec", "ingress").([]any) {
+		if i != ruleAt {
 			rest = append(rest, r)
 		}
 	}

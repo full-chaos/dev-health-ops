@@ -15,7 +15,7 @@ import (
 )
 
 // authService.phase is the one auth cutover key. These tests pin the exact auth environment each rendered phase gives
-// every workload (goldens under testdata/auth_phase), the refusal of the keys it replaces and of phases 4 and 5, and
+// every workload (goldens under testdata/auth_phase), the refusal of the keys it replaces and of phase 5, and
 // that go-api's and auth-service's own start-up parsers accept what the chart renders, with every route go-api
 // forwards mounted by auth-service.
 
@@ -129,7 +129,7 @@ func renderPhase(t *testing.T, phase int, extra ...string) []map[string]any {
 }
 
 func TestAuthPhaseRendersExactFlagSet(t *testing.T) {
-	for phase := 0; phase <= 3; phase++ {
+	for phase := 0; phase <= 4; phase++ {
 		t.Run(fmt.Sprintf("phase %d", phase), func(t *testing.T) {
 			got := authSnapshot(t, renderPhase(t, phase))
 			path := filepath.Join("testdata", "auth_phase", fmt.Sprintf("phase%d.golden.json", phase))
@@ -164,6 +164,7 @@ func TestAuthPhaseLadder(t *testing.T) {
 		1: nil,
 		2: {"AUTH_PROXY_SESSIONS"},
 		3: {"AUTH_PROXY_LOCAL_LOGIN", "AUTH_PROXY_SESSIONS", "AUTH_PROXY_SOCIAL"},
+		4: {"AUTH_PROXY_CREDENTIALS", "AUTH_PROXY_LOCAL_LOGIN", "AUTH_PROXY_SESSIONS", "AUTH_PROXY_SOCIAL"},
 	}
 	for phase, want := range ladder {
 		docs := renderPhase(t, phase)
@@ -198,8 +199,8 @@ func TestAuthPhaseZeroIsTheDefaultRender(t *testing.T) {
 	}
 }
 
-func TestAuthPhase45Refused(t *testing.T) {
-	for _, phase := range []int{4, 5} {
+func TestAuthPhase5Refused(t *testing.T) {
+	for _, phase := range []int{5} {
 		for name, args := range map[string][]string{
 			"alone":             append(append([]string{}, authBase...), "--set", fmt.Sprintf("authService.phase=%d", phase)),
 			"with every input":  phaseArgs(3, "--set", fmt.Sprintf("authService.phase=%d", phase)),
@@ -208,9 +209,9 @@ func TestAuthPhase45Refused(t *testing.T) {
 			t.Run(fmt.Sprintf("phase %d %s", phase, name), func(t *testing.T) {
 				_, out, err := renderAuth(t, args...)
 				if err == nil {
-					t.Fatal("rendered; phases 4 and 5 must be refused")
+					t.Fatal("rendered; phase 5 must be refused")
 				}
-				if !strings.Contains(out, fmt.Sprintf("authService.phase %d: phases 4 and 5 need the public-table writer decision (D6358)", phase)) {
+				if !strings.Contains(out, fmt.Sprintf("authService.phase %d: phase 5 (orgs owned) needs its own public-table writer leaf (D6358)", phase)) {
 					t.Fatalf("the refusal does not name the decision: %.400s", out)
 				}
 			})
@@ -393,7 +394,7 @@ func TestAuthPhaseStartupAgrees(t *testing.T) {
 		extra []string
 	}
 	variants := map[string]variant{
-		"phase 0": {0, nil}, "phase 1": {1, nil}, "phase 2": {2, nil}, "phase 3": {3, nil},
+		"phase 0": {0, nil}, "phase 1": {1, nil}, "phase 2": {2, nil}, "phase 3": {3, nil}, "phase 4": {4, nil},
 		"phase 2 eddsa":       {2, []string{"--set", "authService.accessToken.class=eddsa", "--set", "authService.accessToken.issuerURL=https://auth.example"}},
 		"phase 3 link routes": {3, []string{"--set", "authService.socialLinkRoutes=true"}},
 	}
@@ -451,8 +452,8 @@ func TestAuthPhaseStartupAgrees(t *testing.T) {
 					t.Errorf("auth-service mounts %s, but go-api does not forward it", aggregate)
 				}
 			}
-			if cfg.UsersOwned || cfg.OrgsOwned || goUsersOwned {
-				t.Errorf("a rendered phase sets an owned switch: auth-service users=%v orgs=%v, go-api users=%v", cfg.UsersOwned, cfg.OrgsOwned, goUsersOwned)
+			if wantUsers := v.phase >= 4; cfg.UsersOwned != wantUsers || goUsersOwned != wantUsers || cfg.OrgsOwned {
+				t.Errorf("%s: owned switches auth-service users=%v orgs=%v, go-api users=%v; want users=%v and orgs=false", name, cfg.UsersOwned, cfg.OrgsOwned, goUsersOwned, wantUsers)
 			}
 			for _, job := range []string{"a-dev-health-auth-migrate", "a-dev-health-auth-grants"} {
 				doc := authDoc(docs, "Job", job)
@@ -526,7 +527,7 @@ func TestAuthServiceExtraEnvRefusesEveryRenderedName(t *testing.T) {
 			}
 		}
 	}
-	// The owned switches render only from phases 4 and 5 (refused at render), so no render above can show them.
+	// AUTH_USERS_OWNED renders from phase 4 and AUTH_ORGS_OWNED from phase 5 (refused at render), so the renders above show neither.
 	for _, name := range []string{"AUTH_USERS_OWNED", "AUTH_ORGS_OWNED"} {
 		names[name] = configs["phase 3 with link routes"]
 	}
@@ -624,7 +625,7 @@ func TestGoAPIExtraEnvRefusesEveryRenderedName(t *testing.T) {
 			}
 		}
 	}
-	// AUTH_USERS_OWNED renders only from phase 4 (refused at render).
+	// AUTH_USERS_OWNED renders only from phase 4, which the renders above do not use.
 	names["AUTH_USERS_OWNED"] = configs["phase 3 with legacy ingest"]
 	if len(names) < 19 {
 		t.Fatalf("only %d go-api env names rendered: %v", len(names), names)

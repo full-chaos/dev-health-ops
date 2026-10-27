@@ -83,8 +83,9 @@ binary): the native sleep action, a Kubernetes >= 1.30 feature. Same shape as go
 {{- if not (regexMatch "^[0-9]{1,3}$" $sleepRaw) }}{{- fail (printf "authService.drain.preStopSeconds must be whole seconds from 0 to 600 (0 renders no drain hook), got %q" $sleepRaw) }}{{- end }}
 {{- if gt (int $sleepRaw) 600 }}{{- fail (printf "authService.drain.preStopSeconds must be whole seconds from 0 to 600 (0 renders no drain hook), got %q" $sleepRaw) }}{{- end }}
 {{- $shutdownRaw := toString $a.shutdownTimeout }}
-{{- if not (regexMatch "^[1-9][0-9]{0,4}s$" $shutdownRaw) }}{{- fail (printf "authService.shutdownTimeout must be whole seconds from 1s to 10800s, got %q" $shutdownRaw) }}{{- end }}
-{{- if gt (int (trimSuffix "s" $shutdownRaw)) 10800 }}{{- fail (printf "authService.shutdownTimeout must be whole seconds from 1s to 10800s, got %q" $shutdownRaw) }}{{- end }}
+{{- /* The service parser's bound (authconfig minShutdownTimeout 500ms, maxShutdownTimeout 10m): a longer value renders but the pod then fails at start. */}}
+{{- if not (regexMatch "^[1-9][0-9]{0,2}s$" $shutdownRaw) }}{{- fail (printf "authService.shutdownTimeout must be whole seconds from 1s to 600s (the service refuses more than 10 m), got %q" $shutdownRaw) }}{{- end }}
+{{- if gt (int (trimSuffix "s" $shutdownRaw)) 600 }}{{- fail (printf "authService.shutdownTimeout must be whole seconds from 1s to 600s (the service refuses more than 10 m), got %q" $shutdownRaw) }}{{- end }}
 {{- $graceRaw := toString $a.terminationGracePeriodSeconds }}
 {{- if not (regexMatch "^[1-9][0-9]{0,5}$" $graceRaw) }}{{- fail (printf "authService.terminationGracePeriodSeconds must be whole seconds from 1 to 86400, got %q" $graceRaw) }}{{- end }}
 {{- if gt (int $graceRaw) 86400 }}{{- fail (printf "authService.terminationGracePeriodSeconds must be whole seconds from 1 to 86400, got %q" $graceRaw) }}{{- end }}

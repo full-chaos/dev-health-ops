@@ -101,10 +101,7 @@ func TestReleaseImpactMatchesTheFrozenPythonGolden(t *testing.T) {
 
 	golden := loadReleaseImpactGolden(t)
 
-	day, err := time.Parse("2006-01-02", releaseImpactFixtureDay)
-	if err != nil {
-		t.Fatalf("parse fixture day: %v", err)
-	}
+	day := releaseImpactFixtureDay()
 
 	classes := map[string]bool{
 		"normal_computation_with_resolved_deltas": true,
@@ -118,13 +115,14 @@ func TestReleaseImpactMatchesTheFrozenPythonGolden(t *testing.T) {
 		t.Run(class.name, func(t *testing.T) {
 			orgID := deterministicOrgIDForClass(class.name)
 			class.seed(t, ctx, conn, orgID, day)
+			settleTelemetryBuckets(t, ctx, conn)
 
 			executor, err := NewReleaseImpactExecutor(ctx, conn, nil, nil)
 			if err != nil {
 				t.Fatalf("construct executor: %v", err)
 			}
 			scope, err := json.Marshal(releaseImpactScope{
-				Version: ScopeVersion, Day: releaseImpactFixtureDay,
+				Version: ScopeVersion, Day: day.Format("2006-01-02"),
 				BackfillDays: 1, RecomputationWindowDays: 1,
 			})
 			if err != nil {

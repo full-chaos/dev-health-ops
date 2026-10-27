@@ -125,3 +125,5 @@ func TestLegacyIngestControlTheConfiguredKeyReachesTheStore(t *testing.T) {
 		t.Fatal("an authenticated batch never reached the stream store: the counters detect nothing")
 	}
 }
+
+func (s *countingStore) Release(context.Context, string) error { return nil }

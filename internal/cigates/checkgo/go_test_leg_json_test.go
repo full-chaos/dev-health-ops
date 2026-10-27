@@ -16,6 +16,16 @@ import (
 // is go test's own, whatever the converter and the tee do, and a line that is not a JSON event passes through raw.
 
 const legFakeGo = `#!/usr/bin/env bash
+# go list is this stand-in's slow part and gives the same answer for every case: one answer per directory and arguments.
+if [ "$1" = "list" ] && [ -n "${FAKE_GO_LIST_CACHE:-}" ]; then
+  key="$({ printf '%s\0' "${PWD}" "$@"; } | sha256sum | cut -c1-64)"
+  if [ -f "${FAKE_GO_LIST_CACHE}/${key}" ]; then cat "${FAKE_GO_LIST_CACHE}/${key}"; exit 0; fi
+  tmp="$(mktemp "${FAKE_GO_LIST_CACHE}/.${key}.XXXXXX")" || exit 1
+  "${FAKE_REAL_GO}" "$@" > "${tmp}"; rc=$?
+  cat "${tmp}"
+  if [ "${rc}" -eq 0 ]; then mv -f "${tmp}" "${FAKE_GO_LIST_CACHE}/${key}"; else rm -f "${tmp}"; fi
+  exit "${rc}"
+fi
 if [ "$1" != "test" ]; then exec "${FAKE_REAL_GO}" "$@"; fi
 case " $* " in *" -list "*) cat "${FAKE_GO_LISTING}"; exit 0 ;; esac
 if [ -n "${DEV_HEALTH_MULTI_REPLICA_PROOF-}" ]; then printf 3 > "${DEV_HEALTH_MULTI_REPLICA_PROOF}"; exit 0; fi
@@ -60,6 +70,9 @@ done
 exit "${rc}"
 `
 
+// legGoListCache is the directory of go list answers the stand-in go shares between the cases of the one parent test.
+var legGoListCache string
+
 func runLegWithFakeGo(t *testing.T, leg string, shard int, mode string) (cmdResult, string) {
 	t.Helper()
 	script := scriptPath(t, "ci/check_go.sh")
@@ -73,7 +86,7 @@ func runLegWithFakeGo(t *testing.T, leg string, shard int, mode string) (cmdResu
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(bin, "go"), []byte(withGoListCache(legFakeGo, realGo)), 0o755); err != nil {
+	if err := os.WriteFile(filepath.Join(bin, "go"), []byte(legFakeGo), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	legDir := filepath.Join(work, "leg-json")
@@ -121,7 +134,7 @@ func runLegWithFakeGo(t *testing.T, leg string, shard int, mode string) (cmdResu
 	env := inheritedEnv([]string{"PATH", "TMPDIR", "GO_RACE_EXCLUDED_TESTS", "GO_QUALITY_SELECTION_FILE", "DEV_HEALTH_GO_UNWEIGHTED_REPORT_ONLY"},
 		"DEV_HEALTH_GO_UNWEIGHTED_REPORT_ONLY=1",
 		"PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"), "TMPDIR="+work, "FAKE_REAL_GO="+realGo,
-		"FAKE_CENSUS="+filepath.Join(repo, "ci", "race_excluded_tests.tsv"), "FAKE_MODE="+goMode, "FAKE_GO_LISTING="+listPath,
+		"FAKE_CENSUS="+filepath.Join(repo, "ci", "race_excluded_tests.tsv"), "FAKE_MODE="+goMode, "FAKE_GO_LISTING="+listPath, "FAKE_GO_LIST_CACHE="+legGoListCache,
 		"GO_TEST_LEG_JSON_DIR="+legDir, "GO_TEST_JSON_DIR="+filepath.Join(work, "ps-json"))
 	// A stage that never ends is a failure of the leg under test, not a hang of this test.
 	res := cmdSpec{dir: repo, env: env}.run("timeout", "150", "bash", script, "ci-leg", leg, shard1(shard), count)
@@ -150,6 +163,7 @@ func itoa(n int) string {
 // two failure-plumbing cases run on the test leg only (the call-site guard below pins the race sites).
 func TestTheLegStageKeepsGoTestsVerdictAndEveryOutputLine(t *testing.T) {
 	t.Parallel()
+	legGoListCache = t.TempDir()
 	const passShaped = "--- PASS: this is real output from a failing test"
 	for _, c := range []struct {
 		name, leg, mode string

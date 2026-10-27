@@ -222,7 +222,7 @@ func runShardWithFakeGo(t *testing.T, shard int, slowPackage string, extraEnv ..
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(bin, "go"), []byte(withGoListCache(shardFakeGo, realGo)), 0o755); err != nil {
+	if err := os.WriteFile(filepath.Join(bin, "go"), []byte(shardFakeGo), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	logPath := filepath.Join(work, "go_test.log")

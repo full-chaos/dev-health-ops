@@ -26,15 +26,9 @@ func TestMain(m *testing.M) {
 	}
 	noPythonDir = dir
 	os.Setenv("CIGATES_NO_PYTHON_DIR", dir)
-	listCache, err := os.MkdirTemp("", "checkgo-golist-")
-	if err != nil {
-		panic(err)
-	}
-	os.Setenv("FAKE_GO_LIST_CACHE", listCache)
 	os.Setenv("PATH", withShims(os.Getenv("PATH")))
 	code := m.Run()
 	os.RemoveAll(dir)
-	os.RemoveAll(listCache)
 	os.Exit(code)
 }
 

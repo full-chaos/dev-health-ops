@@ -32,7 +32,7 @@ func loadChainError(t *testing.T) string {
 func TestLoadChainRefusesAGap(t *testing.T) {
 	UsePlantedChain(t, os.DirFS("testdata/postfreeze/gap"))
 	got := loadChainError(t)
-	if !strings.Contains(got, "gap") || !strings.Contains(got, "0155") || !strings.Contains(got, "0154") {
+	if !strings.Contains(got, "gap in the chain") || !strings.Contains(got, "0155") || !strings.Contains(got, "0154") {
 		t.Errorf("LoadChain error %q does not name the gap before 0155 (want 0154)", got)
 	}
 }
@@ -85,7 +85,7 @@ func TestLoadChainRefusesAChainThatDoesNotStartAfterTheBaseline(t *testing.T) {
 	UseChainFS(t, plantedFiles(map[string]string{
 		"sql/0140_first.sql": "-- Revision 0140 (down_revision 0139), planted.\nSELECT 1;\n",
 	}))
-	if got := loadChainError(t); !strings.Contains(got, "0139") {
+	if got := loadChainError(t); !strings.Contains(got, "gap in the chain") || !strings.Contains(got, "0139") {
 		t.Errorf("LoadChain error %q does not name the missing 0139 after the baseline 0138", got)
 	}
 }

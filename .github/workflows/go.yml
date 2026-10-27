@@ -62,6 +62,9 @@ on:
       # internal/pgmigrate //go:embed-s its sql/ chain directory, so a file
       # there is an input of the Go build and its tests.
       - 'internal/pgmigrate/sql/**'
+      # internal/pgmigrate's chain_manifest.tsv pins the sha256 of each chain file; a test reads it, so a change to it
+      # is an input of the Go tests.
+      - 'internal/pgmigrate/chain_manifest.tsv'
       # internal/chmigrate //go:embed-s its sql/ chain directory, so a file
       # there is an input of the Go build and its tests.
       - 'internal/chmigrate/sql/**'

@@ -127,6 +127,8 @@ var rbWants = []rbWant{
 }
 
 var (
+	exprRange       = regexp.MustCompile(`\[(\d+[smh])\]`)
+	exprMetricName  = regexp.MustCompile(`__name__="([^"]+)"`)
 	rbExprHead      = regexp.MustCompile(`^(\w+)(?: by \(([\w, ]+)\))? ?\(`)
 	rbExprThreshold = regexp.MustCompile(`(>|==) (\d+)$`)
 	rbExprMatcher   = regexp.MustCompile(`(\w+)(=~|=)"([^"]*)"`)

@@ -554,41 +554,51 @@ leg_json_file() {
 }
 
 # go_test_leg LOG LEGJSON ARG...: `go test -json ARG...` of one stage of a test or race leg (run it from the module directory).
-# The raw stream, JSON events and any other line, is appended to LEGJSON (/dev/null when the leg keeps no timings). The plain
-# go test log is rebuilt on stdout and in LOG by a converter that never fails and never decides the verdict: a line that is not a
-# JSON event passes through raw, the test binary's own PASS and no-tests lines and a passing test's output are dropped (plain go test hides them), a failing test's output is
-# printed when it fails, and whatever is still buffered when the stream ends is printed last. The converter cannot end early
-# (a failed jq drains the pipe), so go test is never killed by a broken pipe. The stage's rc is go test's own, read from
-# PIPESTATUS right after the pipe: neither tee nor jq can change it.
-# shellcheck disable=SC2016
+# The plain log, on stdout and in LOG, is every Output field of the event stream verbatim, in stream order (the -v form: more
+# lines than plain go test, never fewer). A line that is not a JSON event passes through raw. The raw stream is kept in a stage
+# temp file and appended to LEGJSON (/dev/null when the leg keeps no timings) when the stage ends. Every element of the pipe is
+# read right after it: go test's own status is the stage status; a failed converter, a failed copy of the raw stream, a failed
+# write of the plain log or of LEGJSON is named on stderr and makes the stage fail (rc 70) when go test passed. A failed converter
+# drains its input (go test is never killed by a broken pipe) and the raw stream is printed into the plain log, so the log is
+# never empty.
 GO_TEST_LEG_JQ='
-def ev: ((fromjson? | select(type == "object")) // {Action: "output", Output: (. + "\n")});
-def keep: (tostring | test("^(=== (RUN|PAUSE|CONT|NAME)|\\s*--- (PASS|SKIP))") | not);
-foreach (((inputs | ev), {Action: "__end"})) as $e ({buf: {}, emit: ""};
-  (($e.Action // "") | tostring) as $a
-  | (($e.Package // "") | tostring) as $p
-  | (($e.Test // "") | tostring) as $t
-  | ($p + "\u0000" + $t) as $k
-  | (($e.Output // "") | tostring) as $o
-  | if $a == "__end" then .emit = ([.buf[]] | join("")) | .buf = {}
-    elif $a == "output" and $t == "" then .emit = (if ($o | test("^(PASS|testing: warning: no tests to run)\n?$")) then "" else $o end)
-    elif $a == "output" then .emit = "" | (if ($o | keep) then .buf[$k] = ((.buf[$k] // "") + $o) else . end)
-    elif $a == "fail" and $t != "" then .emit = (.buf[$k] // "") | del(.buf[$k])
-    elif ($a == "pass" or $a == "skip") and $t != "" then .emit = "" | del(.buf[$k])
-    else .emit = "" end;
-  .emit)'
+inputs
+| ((fromjson? | select(type == "object" and ((.Action | type) == "string"))) // {Action: "output", Output: (. + "\n")})
+| select(.Action == "output")
+| ((.Output // "") | tostring)'
 go_test_leg() {
-  local log="$1" legjson="$2" rc
+  local log="$1" legjson="$2" rc raw problem=0
+  local -a ps
   shift 2
   command -v jq >/dev/null 2>&1 || die "the test and race legs need jq to read go test -json"
-  mkdir -p -- "$(dirname -- "${legjson}")"
+  raw="$(mktemp "${TMPDIR:-/tmp}/dev-health-leg-raw.XXXXXX")" || die "go_test_leg: no temp file for the raw go test -json stream"
   set +e
   "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -json "$@" 2>&1 \
-    | tee -a "${legjson}" \
-    | { jq -nR --unbuffered -rj "${GO_TEST_LEG_JQ}" || cat >/dev/null; } \
+    | tee "${raw}" \
+    | { jq -nR --unbuffered -rj "${GO_TEST_LEG_JQ}"; jqrc=$?; [ "${jqrc}" -eq 0 ] || cat >/dev/null; exit "${jqrc}"; } \
     | tee -a "${log}"
-  rc="${PIPESTATUS[0]}"
+  ps=("${PIPESTATUS[@]}")
   set -e
+  rc="${ps[0]}"
+  if [ "${ps[2]}" -ne 0 ]; then
+    printf 'go_test_leg: JSON converter failed (jq rc %s): the raw go test -json stream follows in the plain log\n' "${ps[2]}" >&2
+    cat "${raw}" | tee -a "${log}" || true
+    problem=1
+  fi
+  if [ "${ps[1]}" -ne 0 ]; then
+    printf 'go_test_leg: the copy of the raw stream failed (tee rc %s)\n' "${ps[1]}" >&2
+    problem=1
+  fi
+  if [ "${ps[3]}" -ne 0 ]; then
+    printf 'go_test_leg: the plain log write failed (tee rc %s)\n' "${ps[3]}" >&2
+    problem=1
+  fi
+  if [ "${legjson}" != /dev/null ] && ! cat "${raw}" >>"${legjson}"; then
+    printf 'go_test_leg: the raw file write failed: %s\n' "${legjson}" >&2
+    problem=1
+  fi
+  rm -f -- "${raw}"
+  if [ "${problem}" -ne 0 ] && [ "${rc}" -eq 0 ]; then rc=70; fi
   return "${rc}"
 }
 

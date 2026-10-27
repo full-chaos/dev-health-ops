@@ -154,3 +154,28 @@ func TestOAuthCallbackForcedUserUpdateFailureLeavesNoMembership(t *testing.T) {
 		t.Fatalf("after the failure is gone: status=%d body=%v, want 200", status, body)
 	}
 }
+
+// A provider subject with a lone surrogate is refused with the invalid_provider_id answer (the answer social login
+// gives) BEFORE any lookup: PostgreSQL would refuse the bytes in the identity query (a 500). New user or existing,
+// nothing is written and the provider row is not marked failed.
+func TestOAuthCallbackRefusesASurrogateProviderIDBeforeTheLookup(t *testing.T) {
+	for name, seed := range map[string]bool{"new user": false, "existing user": true} {
+		t.Run(name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+			defer cancel()
+			const email = "surrogate.subject@example.test"
+			st, _, providerID, _ := oauthStack(t, ctx, oauthProfileWith(`7\ud800`, email, "Eve", ""))
+			if seed {
+				seedAccount(t, ctx, st.pool, email, "gitlab", "42")
+			}
+			before := snapshotRows(t, ctx, st)
+			status, body := oauthCallbackOnce(t, st, providerID)
+			detail, _ := body["detail"].(map[string]any)
+			if status != http.StatusBadRequest || detail["reason"] != "invalid_provider_id" {
+				t.Fatalf("status=%d body=%v, want 400 with reason invalid_provider_id", status, body)
+			}
+			assertNoRowsWritten(t, ctx, st, before)
+			assertProviderRowUnchanged(t, ctx, st.pool, providerID, "active")
+		})
+	}
+}

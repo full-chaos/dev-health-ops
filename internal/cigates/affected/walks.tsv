@@ -138,6 +138,7 @@ internal/cigates/scripts	registry_guard_script_test.go	unexpressed	-	-
 internal/cigates/scripts	relevance_step_script_test.go	unexpressed	-	-
 internal/cigates/scripts	shard_row_files_merge_test.go	unexpressed	-	-
 internal/cigates/scripts	tmp_dirs_removed_test.go	unexpressed	-	-
+internal/cigates/sharedserver	batch_a_test.go	unexpressed	-	-
 internal/cigates/sharedserver	sharedserver_test.go	unexpressed	-	*_test.go
 internal/cigates/splitshards	support_test.go	unexpressed	-	-
 internal/cigates/testshard	raceweightsdir_test.go	ci/go_race_weights.d	dir	*

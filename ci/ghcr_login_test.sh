@@ -44,7 +44,7 @@ call() {
     FAKE_COUNT="${d}/count" FAKE_SLEEP_LOG="${d}/sleeps" FAKE_ARGV="${d}/argv" FAKE_STDIN="${d}/stdin" FAKE_ENV="${d}/env")
   [ "${mode}" = hosted ] && base+=("${HOSTED[@]}")
   set +e
-  env -i "${base[@]}" "${extra[@]}" bash "${flags[@]}" "${SCRIPT}" >"${d}/out" 2>&1
+  env -i "${base[@]}" "${extra[@]}" timeout 60 bash "${flags[@]}" "${SCRIPT}" </dev/null >"${d}/out" 2>&1
   RC=$?
   set -e
   OUT="$(cat "${d}/out")"

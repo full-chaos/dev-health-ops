@@ -45,9 +45,9 @@ for p in "${pkgs[@]}"; do
   rel="${p#"${mod}/"}"
   if grep -q "^${rel}"$'\t' "${FAKE_CENSUS}"; then mode_here=""; else mode_here="${mode}"; fi
   case "${mode_here}" in
-    raw-ok|mixed-fail) printf 'RAWLINE-NOT-JSON %s\n' "${rel}" ;;
+    mixed-fail|mixed-green) printf 'RAWLINE-NOT-JSON %s\n' "${rel}" ;;
   esac
-  if [ "${mode_here}" = mixed-fail ] && [ "${done_fail-0}" = 0 ]; then
+  if { [ "${mode_here}" = mixed-fail ] || [ "${mode_here}" = mixed-green ]; } && [ "${done_fail-0}" = 0 ]; then
     done_fail=1
     printf '{"Action":"output","Package":"%s","Test":"TestPasses","Output":"PASSING-OUTPUT\\n"}\n' "${p}"
     printf '{"Action":"pass","Package":"%s","Test":"TestPasses","Elapsed":0.25}\n' "${p}"
@@ -56,7 +56,7 @@ for p in "${pkgs[@]}"; do
     printf '{"Action":"fail","Package":"%s","Test":"TestBreaks","Elapsed":0.5}\n' "${p}"
     printf '{"Action":"output","Package":"%s","Output":"FAIL\\t%s\\t0.500s\\n"}\n' "${p}" "${p}"
     printf '{"Action":"fail","Package":"%s","Elapsed":0.5}\n' "${p}"
-    rc=1
+    [ "${mode_here}" = mixed-fail ] && rc=1
     continue
   fi
   printf '{"Action":"output","Package":"%s","Output":"PASS\\n"}\n' "${p}"
@@ -96,7 +96,7 @@ func runLegWithFakeGo(t *testing.T, leg string, shard int, mode string) (cmdResu
 	}
 	goMode := mode
 	switch mode {
-	case "jq-fail":
+	case "jq-and-raw-fail":
 		// The leg's converter call (jq -nR ...) fails the way a jq out of memory does; every other jq call is the real jq.
 		realJQ, err := exec.LookPath("jq")
 		if err != nil {
@@ -106,8 +106,7 @@ func runLegWithFakeGo(t *testing.T, leg string, shard int, mode string) (cmdResu
 		if err := os.WriteFile(filepath.Join(bin, "jq"), []byte(fakeJQ), 0o755); err != nil {
 			t.Fatal(err)
 		}
-		goMode = ""
-	case "raw-full":
+
 		// The leg's raw file is a symlink to /dev/full: every write fails with ENOSPC.
 		if err := os.MkdirAll(legDir, 0o755); err != nil {
 			t.Fatal(err)
@@ -138,7 +137,7 @@ func runLegWithFakeGo(t *testing.T, leg string, shard int, mode string) (cmdResu
 		"GO_TEST_LEG_JSON_DIR="+legDir, "GO_TEST_JSON_DIR="+filepath.Join(work, "ps-json"))
 	// A stage that never ends is a failure of the leg under test, not a hang of this test.
 	res := cmdSpec{dir: repo, env: env}.run("timeout", "150", "bash", script, "ci-leg", leg, shard1(shard), count)
-	if mode == "raw-full" {
+	if mode == "jq-and-raw-fail" {
 		return res, "" // the raw file is /dev/full: reading it never ends
 	}
 	raw, _ := os.ReadFile(filepath.Join(legDir, leg+"-"+shard1(shard)+"-of-"+count+".json"))
@@ -169,27 +168,20 @@ func TestTheLegStageKeepsGoTestsVerdictAndEveryOutputLine(t *testing.T) {
 		name, leg, mode string
 		check           func(t *testing.T, res cmdResult, legJSON string)
 	}{
-		{"test leg, non-JSON line, exit 0: green, the line is in the log", "test", "raw-ok", greenWithRawLine},
-		{"race leg, non-JSON line, exit 0: green, the line is in the log", "race", "raw-ok", greenWithRawLine},
-		{"test leg, non-JSON line + fail event, exit 1: red, every line kept, Elapsed in the leg file", "test", "mixed-fail", redWithEveryLine(passShaped)},
-		{"race leg, non-JSON line + fail event, exit 1: red, every line kept, Elapsed in the leg file", "race", "mixed-fail", redWithEveryLine(passShaped)},
-		{"test leg, converter fails: red, named, the raw stream is in the plain log", "test", "jq-fail", func(t *testing.T, res cmdResult, _ string) {
+		{"test leg, non-JSON line + fail events, go exits 1: red, every line kept, Elapsed in the leg file", "test", "mixed-fail", everyLineAndVerdict(true, passShaped)},
+		{"race leg, the same stream, go exits 0: green (the verdict is go's, not the events'), every line kept", "race", "mixed-green", everyLineAndVerdict(false, passShaped)},
+		{"test leg, converter fails and the raw file is unwritable: red, both named, the raw stream is in the plain log", "test", "jq-and-raw-fail", func(t *testing.T, res cmdResult, _ string) {
 			if res.code == 0 {
-				t.Fatalf("the JSON converter failed and the leg exited 0: %s", tail(res.stderr, 1200))
+				t.Fatalf("the JSON converter failed, the raw file could not be written, and the leg exited 0: %s", tail(res.stderr, 1200))
 			}
 			if !strings.Contains(res.stderr, "go_test_leg: JSON converter failed") {
 				t.Errorf("the failure does not name the converter: %s", tail(res.stderr, 800))
 			}
-			if !strings.Contains(res.stdout, `"Action":"output"`) {
-				t.Errorf("the raw stream is not in the plain log after the converter failed: %s", tail(res.stdout, 600))
-			}
-		}},
-		{"test leg, raw file unwritable: red, named", "test", "raw-full", func(t *testing.T, res cmdResult, _ string) {
-			if res.code == 0 {
-				t.Fatalf("the raw file could not be written and the leg exited 0: %s", tail(res.stderr, 1200))
-			}
 			if !strings.Contains(res.stderr, "go_test_leg: the raw file write failed") {
 				t.Errorf("the failure does not name the raw file: %s", tail(res.stderr, 800))
+			}
+			if !strings.Contains(res.stdout, `"Action":"output"`) {
+				t.Errorf("the raw stream is not in the plain log after the converter failed: %s", tail(res.stdout, 600))
 			}
 		}},
 	} {
@@ -200,21 +192,16 @@ func TestTheLegStageKeepsGoTestsVerdictAndEveryOutputLine(t *testing.T) {
 	}
 }
 
-func greenWithRawLine(t *testing.T, res cmdResult, _ string) {
-	t.Helper()
-	if res.code != 0 {
-		t.Fatalf("go test printed a non-JSON line and exited 0, the leg exited %d: %s", res.code, tail(res.stderr, 1200)+"\n--- stdout:\n"+tail(res.stdout, 800))
-	}
-	if !strings.Contains(res.stdout, "RAWLINE-NOT-JSON") {
-		t.Errorf("the non-JSON line is not in the plain log: %s", tail(res.stdout, 800))
-	}
-}
-
-func redWithEveryLine(passShaped string) func(t *testing.T, res cmdResult, legJSON string) {
+// everyLineAndVerdict checks one stand-in leg run whose stream holds a non-JSON line, a passing test, and a failing test: the leg's
+// status is go test's own (red when it exited 1, green when it exited 0), and the plain log holds every line.
+func everyLineAndVerdict(red bool, passShaped string) func(t *testing.T, res cmdResult, legJSON string) {
 	return func(t *testing.T, res cmdResult, legJSON string) {
 		t.Helper()
-		if res.code == 0 {
+		if red && res.code == 0 {
 			t.Fatalf("go test exited 1 and the leg exited 0: %s", tail(res.stderr, 1200)+"\n--- stdout:\n"+tail(res.stdout, 800))
+		}
+		if !red && res.code != 0 {
+			t.Fatalf("go test exited 0 and the leg exited %d (the verdict is go test's, not the events'): %s", res.code, tail(res.stderr, 1200)+"\n--- stdout:\n"+tail(res.stdout, 800))
 		}
 		if !strings.Contains(res.stdout, "RAWLINE-NOT-JSON") {
 			t.Errorf("the non-JSON line is not in the plain log")

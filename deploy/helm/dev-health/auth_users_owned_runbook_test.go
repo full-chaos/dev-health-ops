@@ -189,7 +189,7 @@ func TestOverlapWindowsAreNamed(t *testing.T) {
 		}
 	}
 	for _, bad := range []string{
-		"six credential routes are stubbed: a valid request answers `503`",
+		"For the whole goApi stage, from the start of U1 to the end of U3, six credential routes are stubbed",
 		"auth-service returns to the phase 3 form and go-api still forwards, so the credential routes answer `503` until the stubs are up",
 	} {
 		if strings.Contains(text, bad) {

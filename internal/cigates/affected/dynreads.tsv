@@ -264,9 +264,9 @@ internal/cigates/scripts	tmp_dirs_removed_test.go
 internal/cigates/sharedserver	batch_a_test.go
 internal/cigates/sharedserver	sharedserver_test.go
 internal/cigates/splitshards	ci_script_helpers_test.go
+internal/cigates/splitshards	split_package_shards_test.go
 internal/cigates/suitecatalog	runblock_test.go
 internal/cigates/suitecatalog	suitecatalog_test.go
-internal/cigates/splitshards	split_package_shards_test.go
 internal/cigates/testshard	providersync_test.go
 internal/cigates/testshard	raceshard_test.go
 internal/cigates/testshard	securityfresh_test.go

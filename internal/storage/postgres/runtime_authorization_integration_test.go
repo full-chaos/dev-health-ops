@@ -115,6 +115,7 @@ func TestRuntimeAuthorizationBindsSeparateLeastPrivilegeRolePools(t *testing.T) 
 		// keeps its own, unchanged declarations for the first two.
 		"CREATE TABLE public.sync_run_reference_discoveries (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.sync_run_post_dispatches (id uuid PRIMARY KEY)",
+		"CREATE TABLE public.org_activity (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.sync_compute_checkpoints (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.job_runs (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.backfill_jobs (id bigint PRIMARY KEY)",

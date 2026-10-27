@@ -420,8 +420,16 @@ func (p *authProxy) refuse(w http.ResponseWriter, r *http.Request, aggregate Aut
 		slog.String("aggregate", string(aggregate)), slog.String("route", r.Pattern),
 		slog.String("reason", reason), slog.Int("status", status), slog.String("request_id", httpapi.LoggableRequestID(r.Context())),
 		slog.String("upstream_request_id", upstreamID), slog.String("error", upstreamErrorText(err)))
-	policy.WriteDetail(w, status, detail, nil)
+	var extra http.Header
+	if status == http.StatusServiceUnavailable {
+		extra = http.Header{"Retry-After": {authProxyRetryAfter}}
+	}
+	policy.WriteDetail(w, status, detail, extra)
 }
+
+// authProxyRetryAfter is the Retry-After of a 503 refusal; auth-service's own
+// 503s send the same value.
+const authProxyRetryAfter = "1"
 
 // upstreamRequestIDPattern is auth-service's request id wire form.
 var upstreamRequestIDPattern = regexp.MustCompile(`^req_[A-Za-z0-9_-]{26}$`)

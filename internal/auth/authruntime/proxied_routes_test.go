@@ -10,6 +10,7 @@ import (
 	"os"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -52,17 +53,41 @@ var proxiedAuthRoutes = []proxiedAuthRoute{
 	{"POST /api/v1/auth/saml/{provider_id}/acs", "AuthSAML", 0},
 }
 
-var goAPITableLine = regexp.MustCompile(`(?m)^\t"((?:GET|POST) /[^"]+)":\s+(Auth[A-Za-z]+),$`)
+var goAPITableLine = regexp.MustCompile(`(?m)^\t"([A-Z]+ /[^"]+)":\s+(Auth[A-Za-z]+),$`)
 
-// chartLadderPhase is the first authService.phase that turns each go-api
-// aggregate on (the dev-health.authOn ladder in the chart); 0 means the chart
-// never turns it on.
-var chartLadderPhase = map[string]int{
-	"AuthSessions": 2, "AuthLocalLogin": 3, "AuthCredentials": 4, "AuthSocial": 3, "AuthOIDC": 0, "AuthSAML": 0,
+// goAPIAggregateLadderKey names each go-api aggregate by its ladder key in the chart; an aggregate the chart
+// refuses to turn on (OIDC, SAML) has none.
+var goAPIAggregateLadderKey = map[string]string{
+	"AuthSessions": "sessions", "AuthLocalLogin": "localLogin", "AuthCredentials": "credentials", "AuthSocial": "social",
+}
+
+var chartLadder = regexp.MustCompile(`\$ladder := dict ([^\n]*?) -}}`)
+
+// chartLadderPhases reads the first phase of each ladder flag from the chart helper.
+func chartLadderPhases(t *testing.T) map[string]int {
+	t.Helper()
+	source, err := os.ReadFile("../../../deploy/helm/dev-health/templates/_helpers.tpl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := chartLadder.FindSubmatch(source)
+	if m == nil {
+		t.Fatal("the chart's authOn ladder was not found: the helper layout changed, update this test")
+	}
+	fields := strings.Fields(string(m[1]))
+	phases := map[string]int{}
+	for i := 0; i+1 < len(fields); i += 2 {
+		n, err := strconv.Atoi(fields[i+1])
+		if err != nil {
+			t.Fatalf("ladder value %q: %v", fields[i+1], err)
+		}
+		phases[strings.Trim(fields[i], `"`)] = n
+	}
+	return phases
 }
 
 // driftProblems compares go-api's route table source with the copy.
-func driftProblems(source []byte, copied []proxiedAuthRoute) []string {
+func driftProblems(source []byte, copied []proxiedAuthRoute, ladder map[string]int) []string {
 	table := map[string]string{}
 	for _, m := range goAPITableLine.FindAllSubmatch(source, -1) {
 		table[string(m[1])] = string(m[2])
@@ -80,6 +105,11 @@ func driftProblems(source []byte, copied []proxiedAuthRoute) []string {
 			problems = append(problems, fmt.Sprintf("go-api forwards %s (%s) but proxiedAuthRoutes has %q: add it, with its first phase", key, aggregate, have[key]))
 		}
 	}
+	for _, r := range copied {
+		if want := ladder[goAPIAggregateLadderKey[r.aggregate]]; r.fromPhase != want {
+			problems = append(problems, fmt.Sprintf("%s is listed from phase %d but the chart turns %s on at phase %d", r.key, r.fromPhase, r.aggregate, want))
+		}
+	}
 	for key := range have {
 		if _, ok := table[key]; !ok {
 			problems = append(problems, fmt.Sprintf("proxiedAuthRoutes lists %s but go-api's table does not", key))
@@ -94,7 +124,7 @@ func TestProxiedRouteCopyMatchesGoAPIRouteTable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, problem := range driftProblems(source, proxiedAuthRoutes) {
+	for _, problem := range driftProblems(source, proxiedAuthRoutes, chartLadderPhases(t)) {
 		t.Error(problem)
 	}
 }
@@ -114,7 +144,7 @@ func TestDriftSeesARouteOfAnyMethodInTheTable(t *testing.T) {
 	}
 	for _, method := range []string{"DELETE", "PUT", "PATCH"} {
 		source := []byte(fmt.Sprintf(driftFixture, method+" /api/v1/auth/account"))
-		if len(driftProblems(source, copied)) == 0 {
+		if len(driftProblems(source, copied, chartLadderPhases(t))) == 0 {
 			t.Errorf("a %s route in go-api's table is not drift", method)
 		}
 	}
@@ -134,7 +164,7 @@ func TestDriftComparesTheFirstPhaseWithTheChartLadder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(driftProblems(source, copied)) == 0 {
+	if len(driftProblems(source, copied, chartLadderPhases(t))) == 0 {
 		t.Error("resend-verification listed from phase 5 while the chart ladder turns credentials on at phase 4 is not drift")
 	}
 }

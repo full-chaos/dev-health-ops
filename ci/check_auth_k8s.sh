@@ -57,6 +57,10 @@ readonly LOCAL_MIG="auth-proof/auth-migrate:ci"
 readonly NS="auth-proof"
 readonly CLUSTER="auth-proof-$$"
 readonly RELEASE="ap"
+# Bounded waits (tries x interval in seconds): the pick of a Ready pod of the current ReplicaSet, and the debug
+# container of step 6 running to completion.
+readonly POD_PICK_TRIES=60 POD_PICK_INTERVAL=2
+readonly DBG_WAIT_TRIES=60 DBG_WAIT_INTERVAL=1
 WORK="$(mktemp -d)"
 readonly WORK
 
@@ -218,28 +222,37 @@ ready="$(K get deploy "${RELEASE}-dev-health-auth-service" -o jsonpath='{.status
 [ "$(K get pdb "${RELEASE}-dev-health-auth-service" -o jsonpath='{.spec.minAvailable}')" = 1 ] || die "the PodDisruptionBudget does not hold minAvailable 1"
 [ "$(K get pdb "${RELEASE}-dev-health-auth-service" -o jsonpath='{.status.disruptionsAllowed}')" = 1 ] || die "the PodDisruptionBudget does not allow exactly one disruption"
 printf 'capacity defaults: 2 ready replicas, --database-max-conns=8, PodDisruptionBudget minAvailable 1 allows 1 disruption\n'
-# The pod the proof inspects: Ready, not terminating, and of the Deployment's current ReplicaSet. Right after the
-# upgrade a pod of the old ReplicaSet can still be listed (phase Running during its preStop drain), and the API
-# lists pods by name, so it can come first.
+# The pods the proof inspects are the Ready, non-terminating pods of the Deployment's current ReplicaSet: the one
+# whose deployment.kubernetes.io/revision is the Deployment's own revision. Right after the upgrade a pod of the old
+# ReplicaSet can still be listed (phase Running during its preStop drain), and the API lists pods by name, so it can
+# come first.
+current_auth_hash() {
+  local deploy="${RELEASE}-dev-health-auth-service" revision
+  revision="$(K get deploy "${deploy}" -o jsonpath='{.metadata.annotations.deployment\.kubernetes\.io/revision}')"
+  K get rs -l app.kubernetes.io/component=auth-service -o json | jq -r --arg d "${deploy}" --arg r "${revision}" \
+    '[.items[] | select(any(.metadata.ownerReferences[]?; .kind == "Deployment" and .name == $d))
+      | select(.metadata.annotations["deployment.kubernetes.io/revision"] == $r)][0].metadata.labels["pod-template-hash"] // empty'
+}
+current_auth_pods() { # <pod-template-hash> <name|ip>: one line per Ready, non-terminating pod of that hash
+  K get pod -l app.kubernetes.io/component=auth-service -o json | jq -r --arg h "$1" --arg f "$2" \
+    '.items[] | select(.metadata.labels["pod-template-hash"] == $h) | select(.metadata.deletionTimestamp == null)
+      | select(any(.status.conditions[]?; .type == "Ready" and .status == "True"))
+      | if $f == "ip" then .status.podIP else .metadata.name end'
+}
 current_auth_pod() {
-  local deploy="${RELEASE}-dev-health-auth-service" revision="" hash="" pod=""
-  for _ in $(seq 1 60); do
-    revision="$(K get deploy "${deploy}" -o jsonpath='{.metadata.annotations.deployment\.kubernetes\.io/revision}')"
-    hash="$(K get rs -l app.kubernetes.io/component=auth-service -o json | jq -r --arg d "${deploy}" --arg r "${revision}" \
-      '[.items[] | select(any(.metadata.ownerReferences[]?; .kind == "Deployment" and .name == $d))
-        | select(.metadata.annotations["deployment.kubernetes.io/revision"] == $r)][0].metadata.labels["pod-template-hash"] // empty')"
+  local hash="" pods=""
+  for _ in $(seq 1 "${POD_PICK_TRIES}"); do
+    hash="$(current_auth_hash)"
     if [ -n "${hash}" ]; then
-      pod="$(K get pod -l app.kubernetes.io/component=auth-service -o json | jq -r --arg h "${hash}" \
-        '[.items[] | select(.metadata.labels["pod-template-hash"] == $h) | select(.metadata.deletionTimestamp == null)
-          | select(any(.status.conditions[]?; .type == "Ready" and .status == "True"))][0].metadata.name // empty')"
-      if [ -n "${pod}" ]; then
-        printf '%s\n' "${pod}"
+      pods="$(current_auth_pods "${hash}" name)"
+      if [ -n "${pods}" ]; then
+        printf '%s\n' "${pods%%$'\n'*}"
         return 0
       fi
     fi
-    sleep 2
+    sleep "${POD_PICK_INTERVAL}"
   done
-  die "no Ready, non-terminating auth-service pod of the current ReplicaSet after 60 tries (revision '${revision}', pod-template-hash '${hash}')"
+  die "no Ready, non-terminating auth-service pod of the current ReplicaSet (pod-template-hash '${hash}') after ${POD_PICK_TRIES} tries every ${POD_PICK_INTERVAL}s"
 }
 POD="$(current_auth_pod)" || exit 1
 POD_IP="$(K get pod "${POD}" -o jsonpath='{.status.podIP}')"
@@ -269,12 +282,12 @@ grep -q 'rc=0' <<<"${body}" || die "/readyz did not answer 200"
 # output can be read; a container that never runs fails the proof with its last state.
 await_debug_container() {
   local state=""
-  for _ in $(seq 1 60); do
+  for _ in $(seq 1 "${DBG_WAIT_TRIES}"); do
     state="$(K get pod "$1" -o json | jq -r --arg c "$2" '[.status.ephemeralContainerStatuses[]? | select(.name == $c)][0].state // {} | keys[0] // empty')"
     [ "${state}" = terminated ] && return 0
-    sleep 1
+    sleep "${DBG_WAIT_INTERVAL}"
   done
-  die "the ephemeral container $2 in pod $1 did not run to completion after 60 tries (last state '${state}')"
+  die "the ephemeral container $2 in pod $1 did not run to completion after ${DBG_WAIT_TRIES} tries every ${DBG_WAIT_INTERVAL}s (last state '${state}')"
 }
 printf 'step 6: the staged signing key is 0400 and owned by uid 65532\n'
 # shellcheck disable=SC2016
@@ -353,9 +366,10 @@ fi
 
 # The Service routes to the pod, by name, on both published ports.
 printf 'step 8b: the Service reaches the pod (DNS name, endpoints, both ports)\n'
-# Every Ready pod of the Deployment must be a ready endpoint of the Service, and nothing else.
-pod_ips="$(K get pod -l app.kubernetes.io/component=auth-service -o json \
-  | jq -r '.items[] | select(.metadata.deletionTimestamp == null) | select(.status.phase == "Running" and ([.status.conditions[] | select(.type == "Ready" and .status == "True")] | length) == 1) | .status.podIP' | sort)"
+# Every Ready, non-terminating pod of the current ReplicaSet must be a ready endpoint of the Service, and nothing else.
+auth_hash="$(current_auth_hash)"
+[ -n "${auth_hash}" ] || die "the auth-service Deployment has no ReplicaSet of its current revision"
+pod_ips="$(current_auth_pods "${auth_hash}" ip | sort)"
 ep_ips="$(K get endpointslice -l "kubernetes.io/service-name=${RELEASE}-dev-health-auth-service" -o json \
   | jq -r '.items[].endpoints[] | select(.conditions.ready == true) | .addresses[]' | sort)"
 printf 'Ready pod IPs: %s\nService endpoint IPs: %s\n' "$(tr '\n' ' ' <<<"${pod_ips}")" "$(tr '\n' ' ' <<<"${ep_ips}")"

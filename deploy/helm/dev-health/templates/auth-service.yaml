@@ -77,10 +77,32 @@ stage-signing-key init container exists.
 {{- if not $a.signingKey.keyId }}{{- fail "authService.signingKey.keyId is required: every signing key carries a kid and a JWKS entry from day one (ACP-ADR-02 §5)" }}{{- end }}
 {{- end }}
 {{- if eq (int $a.port) (int $a.operatorPort) }}{{- fail "authService.port and authService.operatorPort must differ: the operator surface is never exposed on the API port" }}{{- end }}
-{{- if not (regexMatch "^[0-9]+s$" (toString $a.shutdownTimeout)) }}{{- fail "authService.shutdownTimeout must be whole seconds such as 20s" }}{{- end }}
-{{- if ge (int (trimSuffix "s" (toString $a.shutdownTimeout))) (int $a.terminationGracePeriodSeconds) }}{{- fail "authService.shutdownTimeout must be below authService.terminationGracePeriodSeconds: the kubelet kills the pod at the grace period, so a longer shutdown bound is never reached" }}{{- end }}
+{{- /*
+CHAOS-11648: the old auth-service pod keeps serving while its endpoint is removed. kubelet sends SIGTERM
+and the endpoint removal in parallel, so a login that reached the pod in the SIGTERM second was cut. preStop
+runs BEFORE SIGTERM and counts inside terminationGracePeriodSeconds, so the grace must cover the sleep, the
+shutdown timeout the chart passes (--shutdown-timeout) and 5 s. The image is distroless (no shell, no sleep
+binary): the native sleep action, a Kubernetes >= 1.30 feature. Same shape as go-api (CHAOS-10718).
+*/}}
+{{- /* Bounded BEFORE any arithmetic: Sprig's add wraps near int64 max. */}}
+{{- $sleepRaw := toString $a.drain.preStopSeconds }}
+{{- if not (regexMatch "^[0-9]{1,3}$" $sleepRaw) }}{{- fail (printf "authService.drain.preStopSeconds must be whole seconds from 0 to 600 (0 renders no drain hook), got %q" $sleepRaw) }}{{- end }}
+{{- if gt (int $sleepRaw) 600 }}{{- fail (printf "authService.drain.preStopSeconds must be whole seconds from 0 to 600 (0 renders no drain hook), got %q" $sleepRaw) }}{{- end }}
+{{- $shutdownRaw := toString $a.shutdownTimeout }}
+{{- /* The service parser's bound (authconfig minShutdownTimeout 500ms, maxShutdownTimeout 10m): a longer value renders but the pod then fails at start. */}}
+{{- if not (regexMatch "^[1-9][0-9]{0,2}s$" $shutdownRaw) }}{{- fail (printf "authService.shutdownTimeout must be whole seconds from 1s to 600s (the service refuses more than 10 m), got %q" $shutdownRaw) }}{{- end }}
+{{- if gt (int (trimSuffix "s" $shutdownRaw)) 600 }}{{- fail (printf "authService.shutdownTimeout must be whole seconds from 1s to 600s (the service refuses more than 10 m), got %q" $shutdownRaw) }}{{- end }}
+{{- $graceRaw := toString $a.terminationGracePeriodSeconds }}
+{{- if not (regexMatch "^[1-9][0-9]{0,5}$" $graceRaw) }}{{- fail (printf "authService.terminationGracePeriodSeconds must be whole seconds from 1 to 86400, got %q" $graceRaw) }}{{- end }}
+{{- if gt (int $graceRaw) 86400 }}{{- fail (printf "authService.terminationGracePeriodSeconds must be whole seconds from 1 to 86400, got %q" $graceRaw) }}{{- end }}
+{{- $sleep := int $sleepRaw }}
+{{- $shutdown := int (trimSuffix "s" $shutdownRaw) }}
+{{- $minGrace := add $sleep $shutdown 5 }}
+{{- if lt (int $graceRaw) $minGrace }}
+{{- fail (printf "authService.terminationGracePeriodSeconds=%s is below authService.drain.preStopSeconds (%d) + authService.shutdownTimeout (%d) + 5 = %d: kubelet counts the preStop hook inside the grace period and kills the pod when it ends, so the ordered shutdown would be cut" $graceRaw $sleep $shutdown $minGrace) }}
+{{- end }}
 {{- range $a.extraArgs }}
-{{- if has (regexSplit "[=[:space:]]" (trimAll "-" (lower (trim (toString .)))) -1 | first) (list "signing-key-file" "signing-key-id" "signing-keyset-file" "database-max-conns") }}{{- fail (printf "authService.extraArgs must not set %s: the chart renders the signing key flags (authService.signingKey or authService.keySet) and the pool bound (authService.database.maxConns)" .) }}{{- end }}
+{{- if has (regexSplit "[=[:space:]]" (trimAll "-" (lower (trim (toString .)))) -1 | first) (list "signing-key-file" "signing-key-id" "signing-keyset-file" "database-max-conns" "shutdown-timeout") }}{{- fail (printf "authService.extraArgs must not set %s: the chart renders the signing key flags (authService.signingKey or authService.keySet) and the pool bound (authService.database.maxConns), and authService.shutdownTimeout owns --shutdown-timeout (the grace-period guard reads that value)" .) }}{{- end }}
 {{- end }}
 {{- if and $ksOn $a.podAnnotations (hasKey $a.podAnnotations "checksum/keyset") }}{{- fail "authService.podAnnotations must not set checksum/keyset: the chart sets it from the key-set manifest" }}{{- end }}
 {{- range $a.extraEnv }}
@@ -88,6 +110,7 @@ stage-signing-key init container exists.
 {{- if eq .name "AUTH_VALKEY_URI" }}{{- fail "authService.extraEnv must not set AUTH_VALKEY_URI: use authService.valkey, which reaches the container by secretKeyRef" }}{{- end }}
 {{- if has .name (list "AUTH_JWT_SECRET_KEY" "AUTH_SESSION_SUCCESSOR_KEY") }}{{- fail (printf "authService.extraEnv must not set %s: use authService.sessionKeys, which reaches the container by secretKeyRef" .name) }}{{- end }}
 {{- if eq (upper (trim .name)) "AUTH_USERS_OWNED" }}{{- fail "authService.extraEnv must not set AUTH_USERS_OWNED: authService.phase renders it, for the auth-migrate, grants and backfill Jobs too, so the write grant on public.users follows the switch" }}{{- end }}
+{{- if eq (upper (trim .name)) "AUTH_SERVICE_SHUTDOWN_TIMEOUT" }}{{- fail "authService.extraEnv must not set AUTH_SERVICE_SHUTDOWN_TIMEOUT: authService.shutdownTimeout owns it, and the grace-period guard reads that value" }}{{- end }}
 {{- if eq (upper (trim .name)) "AUTH_DATABASE_MAX_CONNS" }}{{- fail "authService.extraEnv must not set AUTH_DATABASE_MAX_CONNS: use authService.database.maxConns, which the render checks" }}{{- end }}
 {{- if eq (upper (trim .name)) "AUTH_ORGS_OWNED" }}{{- fail "authService.extraEnv must not set AUTH_ORGS_OWNED: authService.phase renders it, for the backfill Job too" }}{{- end }}
 {{- if has (upper (trim .name)) (list "AUTH_ACCESS_TOKEN_CLASS" "AUTH_TOKEN_ISSUER_URL" "AUTH_JWT_AUDIENCE") }}{{- fail (printf "authService.extraEnv must not set %s: use authService.accessToken, which go-api reads too" .name) }}{{- end }}
@@ -129,7 +152,7 @@ spec:
     spec:
       {{- include "dev-health.imagePullSecrets" . | nindent 6 }}
       {{- include "dev-health.workloadServiceAccount" (dict "ctx" . "component" "auth-service" "cfg" .Values.authService.serviceAccount) | nindent 6 }}
-      terminationGracePeriodSeconds: {{ $a.terminationGracePeriodSeconds }}
+      terminationGracePeriodSeconds: {{ $graceRaw }}
       securityContext: {runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, fsGroup: 65532, fsGroupChangePolicy: OnRootMismatch, seccompProfile: {type: RuntimeDefault}}
       initContainers:
         - name: stage-signing-key
@@ -158,10 +181,16 @@ spec:
         - name: auth-service
           image: {{ include "dev-health.authServiceImage" . }}
           imagePullPolicy: {{ $a.image.pullPolicy }}
+          {{- if gt $sleep 0 }}
+          lifecycle:
+            preStop:
+              sleep:
+                seconds: {{ $sleep }}
+          {{- end }}
           args:
             - {{ printf "--http-addr=:%v" $a.port | quote }}
             - {{ printf "--operator-http-addr=:%v" $a.operatorPort | quote }}
-            - {{ printf "--shutdown-timeout=%s" $a.shutdownTimeout | quote }}
+            - {{ printf "--shutdown-timeout=%s" $shutdownRaw | quote }}
             - {{ printf "--database-schema=%s" (include "dev-health.authDatabaseSchema" .) | quote }}
             - {{ printf "--database-max-conns=%s" (include "dev-health.authMaxConns" .) | quote }}
             {{- if $ksOn }}

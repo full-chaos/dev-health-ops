@@ -307,11 +307,18 @@ authService:
     loginLockout:
       secretName: ""
       secretKey: AUTH_LOGIN_LOCKOUT_KEY
-  # -- Whole seconds ("20s"). Must stay below terminationGracePeriodSeconds: the whole
-  #    ordered shutdown (readiness gate, API, operator, database) is bounded
-  #    by it.
+  # -- CHAOS-11648: the old pod keeps serving for preStopSeconds while its endpoint is removed, then
+  #    gets SIGTERM (the go-api drain, CHAOS-10718). 0 renders no hook, maximum 600. Native sleep
+  #    action: Kubernetes >= 1.30 (the image has no shell).
+  drain:
+    preStopSeconds: 10
+  # -- The graceful-shutdown budget the chart passes to auth-service (--shutdown-timeout). Whole
+  #    seconds, 1s to 600s (the service refuses more than 10 m). Three quarters of it is reserved for the API listener to drain requests
+  #    in flight; the readiness gate, operator listener, outbox, limiter and database share the rest.
   shutdownTimeout: 20s
-  terminationGracePeriodSeconds: 30
+  # -- Must be at least drain.preStopSeconds + shutdownTimeout + 5: kubelet counts the preStop hook
+  #    inside it. The render fails below that. Maximum 86400.
+  terminationGracePeriodSeconds: 35
   # -- Extra flags after the rendered ones. Credentials never go here.
   extraArgs: []
   # -- Extra environment entries. Refused: any name the chart renders for

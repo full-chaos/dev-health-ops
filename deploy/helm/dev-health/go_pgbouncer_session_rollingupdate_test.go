@@ -26,6 +26,9 @@ var goldenProdArgs = append(append([]string{}, goldenRenderArgs...),
 	"--set", "authService.signingKey.secretName=auth-key", "--set", "authService.signingKey.keyId=auth-2026-10",
 	"--set", "authService.migrate.secretName=auth-migrate-db", "--set", "authService.migrate.secretKey=MIGRATION_URI",
 	"--set-json", `authService.networkPolicy.egress.database.to=[{"podSelector":{"matchLabels":{"app":"auth-postgres"}}}]`,
+	// CHAOS-11648 changed the auth-service drain defaults after the base sha; with the drain off and the old
+	// grace the render is the base's, so this check still isolates the pooler change.
+	"--set", "authService.drain.preStopSeconds=0", "--set", "authService.terminationGracePeriodSeconds=30",
 	"--set", "goWorkers.pgbouncer.transaction.poolSize=16", "--set", "goWorkers.pgbouncer.queueSession.poolSize=36",
 	"--set", "goWorkers.pgbouncer.coordinatorSession.poolSize=10")
 

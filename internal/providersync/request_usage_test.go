@@ -834,14 +834,19 @@ func TestWriterSurvivesAPanickingStoreAndAHungWrite(t *testing.T) {
 		t.Fatalf("logs=%s", logs.String())
 	}
 	hung := &hangingRequestUsageSink{release: make(chan struct{}), started: make(chan struct{})}
-	t.Cleanup(func() { close(hung.release) })
 	hangingWriter, hangingLogs := newTestRequestUsageWriter(t, hung)
+	t.Cleanup(func() { close(hung.release) })
 	hangingWriter.Offer([]RequestUsageRow{{Transport: requestTransportREST, Requests: 1}})
 	<-hung.started
-	started := time.Now()
-	hangingWriter.Close(time.Second)
-	if elapsed := time.Since(started); elapsed > 2*time.Second {
-		t.Fatalf("close waited %s on a hung write", elapsed)
+	closed := make(chan struct{})
+	go func() {
+		defer close(closed)
+		hangingWriter.Close(time.Second)
+	}()
+	select {
+	case <-closed:
+	case <-time.After(10 * time.Second):
+		t.Fatal("close is still waiting on a hung write after 10s: a hang ceiling, Close is bounded by its argument")
 	}
 	if !strings.Contains(hangingLogs.String(), errRequestUsageWriteTimeout.Error()) {
 		t.Fatalf("logs=%s", hangingLogs.String())

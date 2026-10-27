@@ -103,3 +103,32 @@ func TestComposeExecKillIsBoundedForAChildOutsideTheGroup(t *testing.T) {
 		t.Errorf("a child outside the group held the run for %s after the kill", elapsed)
 	}
 }
+
+// On a kill the failure holds a snapshot of the process group taken BEFORE the
+// kill: the planted step is in it by its command name, with its state, and no
+// argument or environment value is printed.
+func TestComposeExecKillPrintsTheProcessGroupSnapshotWithoutArguments(t *testing.T) {
+	dir, script := composeHangScript(t,
+		"cp /bin/sleep \"$PWD/planted-step\"\n"+
+			"echo \"STEP snapshot rc=0 00:00:00\"\n"+
+			"exec \"$PWD/planted-step\" 31337\n")
+	_, err := composeExec(dir, append([]string{"HANG_SECRET=" + composeCHSentinel}, composeHangEnv...), time.Second, "bash", script)
+	if err == nil {
+		t.Fatal("a step that never returns gave no error")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "process group at the kill") {
+		t.Fatalf("the failure has no process group snapshot: %.300s", msg)
+	}
+	_, snapshot, _ := strings.Cut(msg, "process group at the kill")
+	snapshot, _, _ = strings.Cut(snapshot, "the last output")
+	if !strings.Contains(snapshot, "planted-step") {
+		t.Errorf("the planted step is not in the snapshot: %q", snapshot)
+	}
+	if !strings.Contains(snapshot, "STAT") || !strings.Contains(snapshot, "WCHAN") {
+		t.Errorf("the snapshot has no state columns: %q", snapshot)
+	}
+	if strings.Contains(snapshot, "31337") || strings.Contains(msg, composeCHSentinel) {
+		t.Errorf("the snapshot prints an argument or an environment value: %q", snapshot)
+	}
+}

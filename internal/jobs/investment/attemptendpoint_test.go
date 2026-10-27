@@ -138,3 +138,13 @@ func TestShadowGatewayIDKeepsOnlyShapedIDs(t *testing.T) {
 		}
 	}
 }
+
+// The platform jev row names its backend as typesafe and has no clef endpoint.
+func TestAPlatformJevAttemptRowHasTheTypesafeProviderAndNoEndpoint(t *testing.T) {
+	served := newTestServed(t, newFakeJev(t, nil), &syncBuffer{})
+	for _, row := range servedRowsOf(t, served) {
+		if row.Provider != "typesafe" || row.APIMode != "systemone" || row.EndpointType != "" || row.GatewayID != "" {
+			t.Fatalf("row provider=%q api=%q endpoint_type=%q gateway_id=%q", row.Provider, row.APIMode, row.EndpointType, row.GatewayID)
+		}
+	}
+}

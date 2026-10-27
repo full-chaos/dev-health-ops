@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
@@ -20,12 +21,28 @@ var batchA = []string{
 	"internal/workerservice",
 }
 
+// repoScan walks the module's internal tree once for every test of this
+// package that needs the real tree; the walk is most of the package's run time.
+var (
+	repoScanOnce     sync.Once
+	repoScanOptedIn  []string
+	repoScanFindings []finding
+)
+
+func repoScan(t *testing.T) ([]string, []finding) {
+	t.Helper()
+	repoScanOnce.Do(func() {
+		root, err := moduleroot.Root()
+		if err != nil {
+			t.Fatal(err)
+		}
+		repoScanOptedIn, repoScanFindings = scan(t, filepath.Join(root, "internal"))
+	})
+	return repoScanOptedIn, repoScanFindings
+}
+
 func TestBatchAPackagesRunOnSharedServers(t *testing.T) {
-	root, err := moduleroot.Root()
-	if err != nil {
-		t.Fatal(err)
-	}
-	optedIn, _ := scan(t, filepath.Join(root, "internal"))
+	optedIn, _ := repoScan(t)
 	have := map[string]bool{}
 	for _, dir := range optedIn {
 		have["internal/"+dir] = true
@@ -88,7 +105,7 @@ func TestSharedServerPackagesPollActivityByDatabase(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	optedIn, _ := scan(t, filepath.Join(root, "internal"))
+	optedIn, _ := repoScan(t)
 	dirs := make([]string, 0, len(optedIn))
 	for _, dir := range optedIn {
 		if dir != "cigates/sharedserver" {

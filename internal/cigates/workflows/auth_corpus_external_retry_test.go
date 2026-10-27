@@ -190,3 +190,24 @@ func TestAuthCorpusExternalUpKeepsTheFirstAttemptOutput(t *testing.T) {
 		t.Errorf("want the first attempt's text once in the output, err=%v:\n%s", r.err, r.out)
 	}
 }
+
+// The class and product-line patterns are byte patterns: the grep calls run with LC_ALL=C, so a letter outside a
+// bracket range in the caller's locale cannot make a near-miss line a class line.
+func TestAuthCorpusExternalUpClassPatternsIgnoreTheLocale(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join(authProofRoot(t), "ci", "auth_corpus_external.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for _, line := range strings.Split(string(raw), "\n") {
+		if strings.Contains(line, "grep -aE") {
+			n++
+			if !strings.Contains(line, "LC_ALL=C grep -aE") {
+				t.Errorf("a pattern grep without LC_ALL=C: %s", strings.TrimSpace(line))
+			}
+		}
+	}
+	if n != 2 {
+		t.Errorf("want 2 pattern greps in ci/auth_corpus_external.sh, found %d", n)
+	}
+}

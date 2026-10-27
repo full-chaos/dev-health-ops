@@ -3,7 +3,9 @@ package scripts_test
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -126,5 +128,69 @@ func TestAuthCorpusQueueRealTableCoversEmbeddedFiles(t *testing.T) {
 				t.Fatalf("change %q: got %q, want %q", c.path, got, c.want)
 			}
 		})
+	}
+}
+
+// corpusClosureRunLocale runs the relevance script with LC_ALL=locale in its environment, over a table of exactly table.
+func corpusClosureRunLocale(t *testing.T, locale, table string, paths ...string) string {
+	t.Helper()
+	dir := corpusQueueRepo(t, true)
+	if err := os.WriteFile(filepath.Join(dir, "ci", "auth_corpus_closure.txt"), []byte(table), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	corpusQueueGit(t, dir, "add", "-A")
+	corpusQueueGit(t, dir, "commit", "-q", "-m", "table")
+	tip := corpusQueueGit(t, dir, "rev-parse", "HEAD")
+	head := corpusQueueCommit(t, dir, paths...)
+	cmd := exec.Command("bash", filepath.Join(dir, "ci", "auth_corpus_queue_relevance.sh"), tip, head)
+	cmd.Dir = dir
+	cmd.Env = []string{"PATH=/usr/bin:/bin:/usr/local/bin", "HOME=" + t.TempDir(), "LC_ALL=" + locale}
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("the script must always exit 0: %v", err)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// The row check is byte-exact ASCII whatever the caller's locale: a letter outside [A-Za-z] is never inside a range.
+func TestAuthCorpusQueueClosureRowIsAsciiInEveryLocale(t *testing.T) {
+	for _, locale := range []string{"C", "C.UTF-8", "en_US.UTF-8"} {
+		for _, row := range []string{"internal/é", "internal/É", "é", "internal/aéb", "internal/а"} {
+			t.Run(fmt.Sprintf("%s %q", locale, row), func(t *testing.T) {
+				if got := corpusClosureRunLocale(t, locale, "internal/good\n"+row+"\n", "docs/a.md"); got != "corpus=true" {
+					t.Fatalf("LC_ALL=%s row %q: got %q, want corpus=true (refused, fails closed)", locale, row, got)
+				}
+			})
+		}
+		t.Run(locale+" a well-formed table", func(t *testing.T) {
+			if got := corpusClosureRunLocale(t, locale, "internal/good\n", "docs/a.md"); got != "corpus=false" {
+				t.Fatalf("LC_ALL=%s: got %q, want corpus=false", locale, got)
+			}
+		})
+	}
+}
+
+// The script pins the C locale itself, before its first pattern match or read.
+func TestAuthCorpusQueueRelevanceScriptPinsTheCLocale(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join(repoRoot(t), "ci", "auth_corpus_queue_relevance.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pin := -1
+	for i, line := range strings.Split(string(raw), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "export LC_ALL=C" {
+			pin = i
+			break
+		}
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") || strings.HasPrefix(trimmed, "set -") {
+			continue
+		}
+		if strings.Contains(trimmed, "[[") || strings.Contains(trimmed, "case ") || strings.Contains(trimmed, "read ") || strings.Contains(trimmed, "$(") {
+			t.Fatalf("line %d reaches a pattern match, a read or a command before `export LC_ALL=C`: %s", i+1, line)
+		}
+	}
+	if pin < 0 {
+		t.Fatal("ci/auth_corpus_queue_relevance.sh never runs `export LC_ALL=C`")
 	}
 }

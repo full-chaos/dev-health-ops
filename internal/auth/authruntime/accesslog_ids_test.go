@@ -272,3 +272,32 @@ func TestAnInboundAuthRequestIDIsNeverReadOrLogged(t *testing.T) {
 		t.Errorf("the inbound %s reached the log:\n%s", requestid.Header, stack.logs.String())
 	}
 }
+
+// Trust is decided first: an untrusted peer's header is never parsed or
+// counted, so repeated values from it log "untrusted"; from a trusted peer
+// they log "invalid".
+func TestTrustIsDecidedBeforeTheCallerIDIsCounted(t *testing.T) {
+	cases := []struct {
+		name, peer, want string
+	}{
+		{"untrusted peer, two values", accessUntrustedPeer, "untrusted"},
+		{"trusted peer, two values", accessTrustedPeer, "invalid"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			stack := newAccessStack(t)
+			request := httptest.NewRequest(http.MethodGet, "/v1/access-ok", nil)
+			request.RemoteAddr = tc.peer
+			request.Header.Add(httpapi.RequestIDHeader, accessCallerID)
+			request.Header.Add(httpapi.RequestIDHeader, accessCallerID)
+			stack.serve(request)
+			line := stack.onlyLine(t)
+			if line["caller_request_id"] != tc.want {
+				t.Errorf("caller_request_id = %v, want %q", line["caller_request_id"], tc.want)
+			}
+			if strings.Contains(stack.logs.String(), accessCallerID) {
+				t.Errorf("a repeated caller id reached the log:\n%s", stack.logs.String())
+			}
+		})
+	}
+}

@@ -52,8 +52,8 @@ func authCorpusQueueViolations(t *testing.T, root string) []string {
 	for _, l := range asList(asMap(strategy["matrix"])["leg"]) {
 		legs = append(legs, asString(l))
 	}
-	if strings.Join(legs, ",") != "go-api,acp,acp-nokeys" {
-		out = append(out, fmt.Sprintf("auth-corpus-queue legs must be go-api,acp,acp-nokeys, got %v", legs))
+	if strings.Join(legs, ",") != "go-api,acp,acp-nokeys,acp-social-unowned" {
+		out = append(out, fmt.Sprintf("auth-corpus-queue legs must be go-api,acp,acp-nokeys,acp-social-unowned, got %v", legs))
 	}
 	if _, ok := job["continue-on-error"]; ok {
 		out = append(out, "auth-corpus-queue sets continue-on-error: a red leg must stay red")
@@ -79,6 +79,19 @@ func authCorpusQueueViolations(t *testing.T, root string) []string {
 		if !strings.Contains(body, want) {
 			out = append(out, fmt.Sprintf("auth-corpus-queue no-keys leg lacks the inverted exit form %q", want))
 		}
+	}
+	for _, want := range []string{
+		"if: matrix.leg != 'acp-nokeys' && matrix.leg != 'acp-social-unowned'",
+		"matrix.leg == 'acp-social-unowned'",
+		"AUTH_CORPUS_USERS_UNOWNED=1 AUTH_CORPUS_FORCE_SOCIAL=1 bash ci/auth_corpus_external.sh acp",
+		"social-login through the provider stub: answered 403 with",
+	} {
+		if !strings.Contains(body, want) {
+			out = append(out, fmt.Sprintf("auth-corpus-queue forced-social leg lacks %q: the leg must be a negative leg (exit 1 plus the by-name line)", want))
+		}
+	}
+	if n := strings.Count(body, `if [ "${status}" -eq 0 ]`); n != 2 {
+		out = append(out, fmt.Sprintf("auth-corpus-queue needs the inverted exit check in both negative legs, found %d", n))
 	}
 	gate := asMap(jobs["auth-gate"])
 	var needs []string
@@ -282,10 +295,16 @@ func TestAuthCorpusQueuePlantedDefects(t *testing.T) {
 	}{
 		{"job runs on pull requests too", []mutation{{wf, corpusQueueIf, "needs.auth-changes.outputs.corpus == 'true'"}}, []string{"auth-corpus-queue.if must be exactly"}},
 		{"job loses its timeout", []mutation{{wf, "  auth-corpus-queue:\n    name: auth-corpus-queue (${{ matrix.leg }})\n    needs: [auth-changes]\n    if: " + corpusQueueIf + "\n    runs-on: ubuntu-latest\n    timeout-minutes: 30\n", "  auth-corpus-queue:\n    name: auth-corpus-queue (${{ matrix.leg }})\n    needs: [auth-changes]\n    if: " + corpusQueueIf + "\n    runs-on: ubuntu-latest\n"}}, []string{"timeout-minutes"}},
-		{"job hides a red leg behind continue-on-error", []mutation{{wf, "    timeout-minutes: 30\n    strategy:\n      fail-fast: false\n      matrix:\n        leg: [go-api, acp, acp-nokeys]", "    timeout-minutes: 30\n    continue-on-error: true\n    strategy:\n      fail-fast: false\n      matrix:\n        leg: [go-api, acp, acp-nokeys]"}}, []string{"continue-on-error"}},
+		{"job hides a red leg behind continue-on-error", []mutation{{wf, "    timeout-minutes: 30\n    strategy:\n      fail-fast: false\n      matrix:\n        leg: [go-api, acp, acp-nokeys, acp-social-unowned]", "    timeout-minutes: 30\n    continue-on-error: true\n    strategy:\n      fail-fast: false\n      matrix:\n        leg: [go-api, acp, acp-nokeys, acp-social-unowned]"}}, []string{"continue-on-error"}},
 		{"a leg is retried", []mutation{{wf, `run: bash ci/auth_corpus_external.sh "${{ matrix.leg }}"`, `run: bash ci/auth_corpus_external.sh "${{ matrix.leg }}" || bash ci/auth_corpus_external.sh "${{ matrix.leg }}"`}}, []string{"runs the corpus script more than once"}},
 		{"a leg is hidden behind || true", []mutation{{wf, `run: bash ci/auth_corpus_external.sh "${{ matrix.leg }}"`, `run: bash ci/auth_corpus_external.sh "${{ matrix.leg }}" || true`}}, []string{"retry or error-hiding"}},
 		{"no-keys leg loses the by-name grep", []mutation{{wf, "required aggregate sessions is not served by auth-service", "required aggregate"}}, []string{"inverted exit form"}},
+		{"forced-social leg loses its by-name grep", []mutation{{wf, "social-login through the provider stub: answered 403 with", "social-login"}}, []string{"forced-social leg lacks"}},
+		{"forced-social leg is no longer inverted", []mutation{{wf, `if [ "${status}" -eq 0 ]; then
+            echo "ERROR: leg acp passed with social forwarded and users not owned"`, `if [ "${status}" -eq 99 ]; then
+            echo "ERROR: leg acp passed with social forwarded and users not owned"`}}, []string{"inverted exit check in both negative legs"}},
+		{"the plain run step also runs the forced-social leg", []mutation{{wf, "if: matrix.leg != 'acp-nokeys' && matrix.leg != 'acp-social-unowned'", "if: matrix.leg != 'acp-nokeys'"}}, []string{"forced-social leg lacks"}},
+		{"forced-social leg loses the force switch", []mutation{{wf, "AUTH_CORPUS_USERS_UNOWNED=1 AUTH_CORPUS_FORCE_SOCIAL=1 bash", "AUTH_CORPUS_USERS_UNOWNED=1 bash"}}, []string{"forced-social leg lacks"}},
 		{"gate stops waiting for the corpus job", []mutation{{wf, "needs: [auth-changes, auth-go-quality, auth-test, auth-fuzz, auth-corpus-queue]", "needs: [auth-changes, auth-go-quality, auth-test, auth-fuzz]"}}, []string{"auth-gate.needs must include auth-corpus-queue"}},
 	}
 	for _, c := range shape {

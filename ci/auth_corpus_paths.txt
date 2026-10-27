@@ -1,5 +1,5 @@
 # The path set of the external auth corpus (CHAOS-11596). A merge queue entry whose group touches one of these paths
-# runs ci/auth_corpus_external.sh (go-api, acp, acp-nokeys) as job auth-corpus-queue of go-auth-service.yml; its result
+# runs ci/auth_corpus_external.sh (go-api, acp, acp-nokeys, acp-social-unowned) as job auth-corpus-queue of go-auth-service.yml; its result
 # fans into the required context auth-gate. One bash glob per line, matched against the repo-relative path with
 # `case`: `*` matches any characters including `/`. A line starting with # is a comment.
 # NOT in the set, by design: the rest of the Go packages go-api and the migrate binaries are built from (cmd, internal and

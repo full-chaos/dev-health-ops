@@ -210,7 +210,7 @@ func TestRaceLegRunsItsSoloPackageLastAndInItsOwnGoTest(t *testing.T) {
 	if err := os.MkdirAll(bin, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(bin, "go"), []byte(fmt.Sprintf(soloStandInGo, realGo)), 0o755); err != nil {
+	if err := os.WriteFile(filepath.Join(bin, "go"), []byte(withGoListCache(fmt.Sprintf(soloStandInGo, realGo), realGo)), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	listPath := filepath.Join(dir, "listing.txt")

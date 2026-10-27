@@ -501,7 +501,7 @@ func recordedGoTestRaw(work, script string, env []string, verb ...string) ([]str
 		"if [ \"$1\" != \"test\" ]; then exec \"" + realGo + "\" \"$@\"; fi\n" +
 		"printf '%s|%s\\n' \"${TESTCONTAINERS_RYUK_DISABLED-<unset>}\" \"$*\" >> \"${FAKE_GO_LOG}\"\n" +
 		"if [ -n \"${FAKE_PROOF-}\" ] && [ -n \"${DEV_HEALTH_MULTI_REPLICA_PROOF-}\" ]; then printf '%s' \"${FAKE_PROOF}\" > \"${DEV_HEALTH_MULTI_REPLICA_PROOF}\"; fi\nexit 0\n"
-	if err := os.WriteFile(filepath.Join(bin, "go"), []byte(fake), 0o755); err != nil {
+	if err := os.WriteFile(filepath.Join(bin, "go"), []byte(withGoListCache(fake, realGo)), 0o755); err != nil {
 		return nil, cmdResult{}, err
 	}
 	logPath := filepath.Join(work, "go_test.log")

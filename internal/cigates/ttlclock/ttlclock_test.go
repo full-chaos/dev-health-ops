@@ -452,7 +452,7 @@ func repoTTLTables(t *testing.T, root string) map[string]ttlTable {
 }
 
 // checkWalked checks one *_test.go the tree walk read: every integration test that names a TTL table (candidate
-// is true for it), RED STUB: and not yet every other file that holds the marker.
+// is true for it), and every other file that holds the marker, so an orphan comment cannot hide in a file that is not a finding.
 func checkWalked(rel string, source []byte, tables map[string]ttlTable, today time.Time) (problems []string, candidate bool) {
 	if bytes.Contains(source, []byte("integration")) {
 		for table := range tables {
@@ -462,10 +462,10 @@ func checkWalked(rel string, source []byte, tables map[string]ttlTable, today ti
 			}
 		}
 	}
-	if !candidate {
+	if !candidate && !bytes.Contains(source, []byte(markerPrefix)) {
 		return nil, false
 	}
-	return checkSites(rel, source, tables, today), true
+	return checkSites(rel, source, tables, today), candidate
 }
 
 func TestIntegrationTestsWriteTTLTablesWithClockDates(t *testing.T) {

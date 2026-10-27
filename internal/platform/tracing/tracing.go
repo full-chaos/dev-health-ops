@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"net"
 	"net/url"
 	"os"
 	"strconv"
@@ -267,13 +268,20 @@ func enabledFromEnv() bool {
 
 // endpointHostPort is the collector address as a log line may carry it: host
 // and port only, so userinfo, a path, a query or a fragment in the configured
-// endpoint never reaches a log. "invalid" when no host can be read.
+// endpoint never reaches a log. Without a scheme the endpoint must be a bare
+// host:port (the exporter's own parser logs any other value raw). "invalid"
+// when neither form holds.
 func endpointHostPort(endpoint string) string {
-	target := endpoint
-	if !strings.Contains(target, "://") {
-		target = "//" + target
+	if !strings.Contains(endpoint, "://") {
+		if strings.ContainsAny(endpoint, "@/?#") {
+			return "invalid"
+		}
+		if _, _, err := net.SplitHostPort(endpoint); err != nil {
+			return "invalid"
+		}
+		return endpoint
 	}
-	parsed, err := url.Parse(target)
+	parsed, err := url.Parse(endpoint)
 	if err != nil || parsed.Host == "" {
 		return "invalid"
 	}

@@ -102,3 +102,29 @@ func TestAuthCorpusQueueClosureSkipsFileNamesItCannotNameAsADirectory(t *testing
 		}
 	}
 }
+
+// The real table (not the fixed one of the other cases): a change to a file that a closure package embeds from a
+// subdirectory (go:embed) runs the corpus.
+func TestAuthCorpusQueueRealTableCoversEmbeddedFiles(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join(repoRoot(t), "ci", "auth_corpus_closure.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	table := string(raw)
+	cases := []struct {
+		path, want string
+	}{
+		{"internal/mail/templates/new_template.html", "corpus=true"},
+		{"internal/pgmigrate/sql/9999_new.sql", "corpus=true"},
+		{"internal/pgmigrate/sql/down/9999_new.sql", "corpus=true"},
+		{"internal/chmigrate/sql/9999_new.sql", "corpus=true"},
+		{"docs/index.md", "corpus=false"},
+	}
+	for _, c := range cases {
+		t.Run(c.path, func(t *testing.T) {
+			if got := corpusClosureRun(t, &table, c.path); got != c.want {
+				t.Fatalf("change %q: got %q, want %q", c.path, got, c.want)
+			}
+		})
+	}
+}

@@ -42,15 +42,23 @@ func corpusRun(t *testing.T, root, name string, args ...string) string {
 	return stdout.String()
 }
 
-// corpusGoListClosure is the oracle: the repo packages (module path prefix cut) of `go list -deps` of the roots.
+// corpusGoListClosure is the oracle: the repo packages (module path prefix cut) of `go list -deps` of the roots, and
+// the directory of each embedded file of those packages (go:embed reaches into subdirectories).
 func corpusGoListClosure(t *testing.T, root string) []string {
 	t.Helper()
-	args := append([]string{"list", "-deps", "-f", `{{if not .Standard}}{{with .Module}}{{if eq .Path "` + corpusModule + `"}}{{$.ImportPath}}{{end}}{{end}}{{end}}`}, corpusClosureRoots...)
+	tmpl := `{{if not .Standard}}{{with .Module}}{{if eq .Path "` + corpusModule + `"}}P {{$.ImportPath}}{{"\n"}}{{range $.EmbedFiles}}E {{$.ImportPath}}/{{.}}{{"\n"}}{{end}}{{end}}{{end}}{{end}}`
+	args := append([]string{"list", "-deps", "-f", tmpl}, corpusClosureRoots...)
 	var dirs []string
 	for _, line := range strings.Split(corpusRun(t, root, "go", args...), "\n") {
-		if line = strings.TrimSpace(line); line != "" {
-			dirs = append(dirs, strings.TrimPrefix(line, corpusModule+"/"))
+		kind, path, ok := strings.Cut(strings.TrimSpace(line), " ")
+		if !ok {
+			continue
 		}
+		path = strings.TrimPrefix(path, corpusModule+"/")
+		if kind == "E" {
+			path = filepath.Dir(path)
+		}
+		dirs = append(dirs, path)
 	}
 	sort.Strings(dirs)
 	out := dirs[:0]
@@ -135,6 +143,7 @@ func TestAuthCorpusClosureTableHasTheRootsAndTheNamedCandidates(t *testing.T) {
 	for _, c := range []string{"sessionissue", "usersowned", "authmail", "oauthprovider", "registerorg", "clientip", "ratelimit", "pyheaders", "standinkey", "audit"} {
 		want = append(want, "internal/api/"+c)
 	}
+	want = append(want, "internal/mail/templates", "internal/pgmigrate/sql", "internal/pgmigrate/sql/down", "internal/chmigrate/sql")
 	want = append(want, "internal/audit", "internal/platform/config", "internal/apiservice/acr", "internal/apiservice/admin", "internal/apiservice/customerpush")
 	for _, w := range want {
 		if !have[w] {

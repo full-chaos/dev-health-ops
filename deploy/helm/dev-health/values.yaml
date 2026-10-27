@@ -470,6 +470,22 @@ authService:
       keyCustody:
         to: []
         port: 443
+      # -- Peers of the OTLP/gRPC trace collector, `to` entries plus port. Rendered only while
+      #    authService.tracing.enabled, and then required when the policy is on. An ipBlock (the node
+      #    InternalIP of a hostPort collector) and a podSelector/namespaceSelector are both accepted;
+      #    0.0.0.0/0 and ::/0 are refused.
+      otlp:
+        to: []
+        port: 4317
+  # -- Span export (OTLP/gRPC). Off by default: OTEL_ENABLED="false" is always rendered, so the
+  #    service never dials the package default (localhost:4317). On, the chart renders
+  #    OTEL_EXPORTER_OTLP_ENDPOINT, OTEL_SAMPLE_RATE (a number from 0 to 1, as a string) and
+  #    OTEL_SERVICE_NAME=auth-service, and opens networkPolicy.egress.otlp. Spans carry the
+  #    method, the route pattern, the status and the listener: no URL, query, header or caller id.
+  tracing:
+    enabled: false
+    endpoint: ""
+    sampleRate: "1"
 
 # =============================================================================
 # Query API (Go query plane, CHAOS-5616)

@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -144,6 +145,13 @@ func InitWithServiceName(logger *slog.Logger, defaultName string) Component {
 		logger.Warn("OpenTelemetry initialisation failed", "error", err)
 		return Component{}
 	}
+	// The exporter's own URL parser logs the raw value it refuses, userinfo
+	// included, outside this logger: a malformed URL never reaches it.
+	if endpointHostPort(endpoint) == "invalid" {
+		initFailures.record()
+		logger.Warn("OpenTelemetry initialisation failed", "error", "OTEL_EXPORTER_OTLP_ENDPOINT is not a host:port or a URL")
+		return Component{}
+	}
 
 	provider, err := buildProvider(serviceName, environment, endpoint, sampleRate)
 	if err != nil {
@@ -155,7 +163,7 @@ func InitWithServiceName(logger *slog.Logger, defaultName string) Component {
 	otel.SetTracerProvider(provider)
 	otel.SetTextMapPropagator(propagation.TraceContext{})
 	logger.Info("OpenTelemetry tracing initialised",
-		"otlp_endpoint", endpoint,
+		"otlp_endpoint", endpointHostPort(endpoint),
 		"service_name", serviceName,
 		"sample_rate", sampleRate,
 	)
@@ -255,6 +263,21 @@ func enabledFromEnv() bool {
 	default:
 		return true
 	}
+}
+
+// endpointHostPort is the collector address as a log line may carry it: host
+// and port only, so userinfo, a path, a query or a fragment in the configured
+// endpoint never reaches a log. "invalid" when no host can be read.
+func endpointHostPort(endpoint string) string {
+	target := endpoint
+	if !strings.Contains(target, "://") {
+		target = "//" + target
+	}
+	parsed, err := url.Parse(target)
+	if err != nil || parsed.Host == "" {
+		return "invalid"
+	}
+	return parsed.Host
 }
 
 func stringEnv(name, fallback string) string {

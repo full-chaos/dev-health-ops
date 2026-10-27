@@ -3,6 +3,7 @@ package devhealth_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,6 +20,8 @@ const barrierScript = "../../scripts/auth-users-owned-barrier.sh"
 const fakeBarrierKubectl = `#!/usr/bin/env bash
 ALL="$*"
 printf '%s\n' "$ALL" >>"${FAKE_DIR}/argv"
+TPL=""
+for a in "$@"; do case "$a" in jsonpath=*) TPL="${a#jsonpath=}" ;; esac; done
 res=""; sel=""
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -36,22 +39,169 @@ if [ "${FAKE_HANG:-}" = "$key" ]; then
   sleep 30
 fi
 [ "${FAKE_FAIL:-}" = "$key" ] && exit 1
+# a fixture <key>.json (a kubectl List) is rendered FROM the jsonpath the script asked for, so a field the jsonpath does
+# not name is not seen; any other file is canned text.
+if [ -f "${FAKE_DIR}/${key}.json" ]; then
+  python3 "${FAKE_BIN}/jsonpath.py" "${FAKE_DIR}/${key}.json" "$TPL" || exit 1
+  exit 0
+fi
 [ -f "${FAKE_DIR}/${key}" ] && cat "${FAKE_DIR}/${key}"
 exit 0
 `
 
+// fakeJSONPathPy renders the small jsonpath subset the barrier uses ({range}, {.a.b[*].c}, {"\n"}) the way kubectl does:
+// arrays and objects print as compact JSON, a missing field prints nothing.
+const fakeJSONPathPy = `#!/usr/bin/env python3
+# A small kubectl jsonpath renderer for the barrier test fake: {range PATH}...{end}, {.a.b[*].c}, {"\n"} and literal text.
+# Arrays and objects print as compact JSON, a missing field prints nothing, like kubectl.
+import json, re, sys
+
+def split_path(path):
+    parts, cur, i = [], "", 0
+    while i < len(path):
+        c = path[i]
+        if c == "\\" and i + 1 < len(path):
+            cur += path[i + 1]; i += 2; continue
+        if c in ".[":
+            if cur: parts.append(cur)
+            cur = ""
+            if c == "[":
+                j = path.index("]", i)
+                parts.append(path[i:j + 1]); i = j + 1; continue
+            i += 1; continue
+        cur += c; i += 1
+    if cur: parts.append(cur)
+    return parts
+
+def walk(nodes, parts):
+    for p in parts:
+        nxt = []
+        for n in nodes:
+            if p == "[*]":
+                if isinstance(n, list): nxt.extend(n)
+            elif isinstance(n, dict) and p in n:
+                nxt.append(n[p])
+        nodes = nxt
+    return nodes
+
+def fmt(v):
+    if isinstance(v, (dict, list)): return json.dumps(v, separators=(",", ":"))
+    if isinstance(v, bool): return "true" if v else "false"
+    return str(v)
+
+def tokens(tpl):
+    out, i = [], 0
+    while i < len(tpl):
+        if tpl[i] == "{":
+            j = tpl.index("}", i)
+            out.append(("expr", tpl[i + 1:j])); i = j + 1
+        else:
+            j = tpl.find("{", i)
+            j = len(tpl) if j < 0 else j
+            out.append(("lit", tpl[i:j])); i = j
+    return out
+
+def render(toks, pos, ctx):
+    res = ""
+    while pos < len(toks):
+        kind, val = toks[pos]
+        if kind == "lit": res += val; pos += 1; continue
+        if val == "end": return res, pos
+        if val.startswith("range "):
+            nodes = walk([ctx], split_path(val[6:].strip().lstrip(".")))
+            end = pos + 1; depth = 1
+            while depth:
+                k, v = toks[end]
+                if k == "expr" and v.startswith("range "): depth += 1
+                if k == "expr" and v == "end": depth -= 1
+                end += 1
+            for n in nodes:
+                r, _ = render(toks[pos + 1:end - 1] + [("expr", "end")], 0, n)
+                res += r
+            pos = end; continue
+        if val.startswith('"'):
+            res += json.loads(val.replace("\\n", "\\n")); pos += 1; continue
+        nodes = walk([ctx], split_path(val.lstrip(".")))
+        res += " ".join(fmt(n) for n in nodes); pos += 1
+    return res, pos
+
+if __name__ == "__main__":
+    data = json.load(open(sys.argv[1]))
+    toks = tokens(sys.argv[2])
+    sys.stdout.write(render(toks, 0, data)[0])
+`
+
 func goodBarrierWorld() map[string]string {
 	return map[string]string{
-		"deploy.go-api":       "3 3 3 3 3 3\n",
-		"rs.go-api":           "rs-old||4\nrs-new|3|5\n",
-		"pods.go-api":         "p1||true|true\np2||true|true\np3||true|true\n",
-		"pods.all":            "p1|go-api|[\"api\"];||\nm1|migrate|[\"migrate\"];||\n",
-		"jobs.all":            "",
-		"cronjobs.all":        "",
+		"deploy.go-api": "3 3 3 3 3 3\n",
+		"rs.go-api":     "rs-old||4\nrs-new|3|5\n",
+		"pods.go-api":   "p1||true|true\np2||true|true\np3||true|true\n",
+		"pods.all.json": podList(
+			podItem("p1", "go-api", map[string]any{"containers": []any{map[string]any{"name": "api", "command": []any{"api"}}}}),
+			podItem("m1", "migrate", map[string]any{"containers": []any{map[string]any{"name": "m", "command": []any{"migrate"}}}})),
+		"jobs.all.json":       podList(),
+		"cronjobs.all.json":   podList(),
 		"pods.auth-service":   "a1|\na2|\n",
 		"deploy.auth-service": "2 2 2 2 2 2\n",
 		"rs.auth-service":     "as-old||7\nas-new|2|8\n",
 	}
+}
+
+// podList, podItem, jobItem, cronJobItem and worldAdd build the kubectl List fixtures. A pod spec is a map with containers,
+// initContainers and ephemeralContainers (each a list of {name, command, args} maps, fields present only when set).
+func podList(items ...map[string]any) string {
+	list := []any{}
+	for _, item := range items {
+		list = append(list, item)
+	}
+	raw, _ := json.Marshal(map[string]any{"items": list})
+	return string(raw)
+}
+
+func podItem(name, component string, spec map[string]any) map[string]any {
+	return map[string]any{
+		"metadata": map[string]any{"name": name, "labels": map[string]any{"app.kubernetes.io/component": component}},
+		"spec":     spec,
+	}
+}
+
+func jobItem(name string, spec map[string]any) map[string]any {
+	return map[string]any{"metadata": map[string]any{"name": name}, "spec": map[string]any{"template": map[string]any{"spec": spec}}}
+}
+
+func cronJobItem(name string, spec map[string]any) map[string]any {
+	return map[string]any{"metadata": map[string]any{"name": name},
+		"spec": map[string]any{"jobTemplate": map[string]any{"spec": map[string]any{"template": map[string]any{"spec": spec}}}}}
+}
+
+func worldAdd(t *testing.T, world map[string]string, key string, item map[string]any) {
+	t.Helper()
+	var list map[string]any
+	if err := json.Unmarshal([]byte(world[key]), &list); err != nil {
+		t.Fatal(err)
+	}
+	list["items"] = append(list["items"].([]any), item)
+	raw, _ := json.Marshal(list)
+	world[key] = string(raw)
+}
+
+func ctr(command, args []any) map[string]any {
+	c := map[string]any{"name": "c"}
+	if command != nil {
+		c["command"] = command
+	}
+	if args != nil {
+		c["args"] = args
+	}
+	return c
+}
+
+func strs(words ...string) []any {
+	out := make([]any, len(words))
+	for i, w := range words {
+		out[i] = w
+	}
+	return out
 }
 
 type barrierRun struct {
@@ -80,8 +230,11 @@ func runBarrierWithin(t *testing.T, limit time.Duration, world map[string]string
 	if err := os.WriteFile(filepath.Join(bin, "kubectl"), []byte(fakeBarrierKubectl), 0o700); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(bin, "jsonpath.py"), []byte(fakeJSONPathPy), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	cmd := exec.CommandContext(ctx, "bash", append([]string{barrierScript}, args...)...)
-	cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"), "FAKE_DIR="+dir, "RELEASE=a")
+	cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"), "FAKE_DIR="+dir, "FAKE_BIN="+bin, "RELEASE=a")
 	cmd.Env = append(cmd.Env, env...)
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
@@ -146,7 +299,7 @@ func TestBarrierFailsOnEachBrokenState(t *testing.T) {
 		{"observedGeneration behind", "up-go-api", func(w map[string]string) { w["deploy.go-api"] = "4 3 3 3 3 3\n" }},
 		{"no Deployment", "up-go-api", func(w map[string]string) { w["deploy.go-api"] = "" }},
 		{"an admin users Job", "up-go-api", func(w map[string]string) {
-			w["pods.all"] += "j1|operator|[\"admin\",\"users\",\"create\"];||\n"
+			worldAdd(t, w, "pods.all.json", podItem("j1", "operator", map[string]any{"containers": []any{ctr(nil, strs("admin", "users", "create"))}}))
 		}},
 		{"an auth-service pod already owned", "up-owned", func(w map[string]string) { w["pods.auth-service"] = "a1|true\na2|\n" }},
 		{"an owned auth-service pod on the way down", "down-auth", func(w map[string]string) { w["pods.auth-service"] = "a1|true\na2|\n" }},
@@ -224,24 +377,27 @@ func TestBarrierFailsClosedWhenKubectlHangs(t *testing.T) {
 	}
 }
 
-// The admin users scan reads every container of every pod, Job and CronJob template in the namespace (no release label:
-// an ad-hoc pod has none). One segment per container holds that container's command and args as kubectl prints them
-// (JSON arrays, `;` after each container); fields: name|component|containers|initContainers|ephemeralContainers.
+// The admin users scan reads every container of every pod, Job and CronJob template in the namespace (no release label: an
+// ad-hoc pod has none). The fake renders FROM the jsonpath the script sends, so a spec field the jsonpath does not name
+// (command, args, initContainers, ephemeralContainers) is invisible to the script, as with kubectl.
 func TestBarrierRefusesAdminUsersInEveryContainerShape(t *testing.T) {
-	rows := map[string]string{
-		"command only":           "x1|operator|[\"dho\",\"admin\",\"users\",\"create\"];||\n",
-		"args only":              "x1|operator|[\"admin\",\"users\",\"create\"];||\n",
-		"command and args split": "x1|operator|[\"dho\"][\"admin\",\"users\",\"create\"];||\n",
-		"sh -c one string":       "x1|operator|[\"sh\",\"-c\"][\"dho admin users create x\"];||\n",
-		"any users subcommand":   "x1|operator|[\"dho\",\"admin\",\"users\",\"list\"];||\n",
-		"init container":         "x1|operator||[\"dho\",\"admin\",\"users\",\"create\"];|\n",
-		"ephemeral container":    "x1|operator|||[\"dho\",\"admin\",\"users\",\"create\"];\n",
-		"second container":       "x1|operator|[\"sleep\"];[\"dho\",\"admin\",\"users\",\"create\"];||\n",
+	verb := strs("dho", "admin", "users", "create")
+	specs := map[string]map[string]any{
+		"command only":           {"containers": []any{ctr(verb, nil)}},
+		"args only":              {"containers": []any{ctr(nil, strs("admin", "users", "create"))}},
+		"command and args split": {"containers": []any{ctr(strs("dho"), strs("admin", "users", "create"))}},
+		"sh -c in the args":      {"containers": []any{ctr(strs("sh", "-c"), strs("dho admin users create x"))}},
+		"sh -c in the command":   {"containers": []any{ctr(strs("sh", "-c", "dho admin users create x"), nil)}},
+		"any users subcommand":   {"containers": []any{ctr(strs("dho", "admin", "users", "list"), nil)}},
+		"init container":         {"containers": []any{ctr(strs("sleep"), nil)}, "initContainers": []any{ctr(verb, nil)}},
+		"init container args":    {"containers": []any{ctr(strs("sleep"), nil)}, "initContainers": []any{ctr(nil, strs("admin", "users", "create"))}},
+		"ephemeral container":    {"containers": []any{ctr(strs("sleep"), nil)}, "ephemeralContainers": []any{ctr(verb, nil)}},
+		"second container":       {"containers": []any{ctr(strs("sleep"), nil), ctr(verb, nil)}},
 	}
-	for name, row := range rows {
+	for name, spec := range specs {
 		t.Run(name, func(t *testing.T) {
 			world := goodBarrierWorld()
-			world["pods.all"] += row
+			worldAdd(t, world, "pods.all.json", podItem("x1", "operator", spec))
 			r := runBarrier(t, world, nil, "up-go-api")
 			if r.rc == 0 || strings.Contains(r.stdout, "barrier_ok") {
 				t.Fatalf("passed: rc=%d stdout=%q stderr=%q", r.rc, r.stdout, r.stderr)
@@ -251,17 +407,23 @@ func TestBarrierRefusesAdminUsersInEveryContainerShape(t *testing.T) {
 }
 
 func TestBarrierAdminUsersInJobAndCronJobTemplates(t *testing.T) {
-	for _, key := range []string{"jobs.all", "cronjobs.all"} {
-		for _, row := range []string{
-			"t1|-|[\"dho\",\"admin\",\"users\",\"create\"];||\n",
-			"t1|-|[\"sh\",\"-c\"][\"dho admin users create\"];||\n",
-			"t1|-||[\"dho\",\"admin\",\"users\",\"create\"];|\n",
-		} {
+	verb := strs("dho", "admin", "users", "create")
+	specs := map[string]map[string]any{
+		"command":        {"containers": []any{ctr(verb, nil)}},
+		"sh -c":          {"containers": []any{ctr(strs("sh", "-c", "dho admin users create"), nil)}},
+		"init container": {"containers": []any{ctr(strs("sleep"), nil)}, "initContainers": []any{ctr(verb, nil)}},
+	}
+	for name, spec := range specs {
+		for _, kind := range []string{"jobs", "cronjobs"} {
 			world := goodBarrierWorld()
-			world[key] += row
+			if kind == "jobs" {
+				worldAdd(t, world, "jobs.all.json", jobItem("t1", spec))
+			} else {
+				worldAdd(t, world, "cronjobs.all.json", cronJobItem("t1", spec))
+			}
 			r := runBarrier(t, world, nil, "up-go-api")
 			if r.rc == 0 || strings.Contains(r.stdout, "barrier_ok") {
-				t.Errorf("%s %q passed: rc=%d stdout=%q", key, row, r.rc, r.stdout)
+				t.Errorf("%s %s passed: rc=%d stdout=%q", kind, name, r.rc, r.stdout)
 			}
 		}
 	}
@@ -269,23 +431,30 @@ func TestBarrierAdminUsersInJobAndCronJobTemplates(t *testing.T) {
 
 // Controls: none of these is an admin users verb in one container of a pod that is not go-api or auth-service.
 func TestBarrierAllowsWhatIsNotAnAdminUsersVerb(t *testing.T) {
-	rows := map[string]string{
-		"admin and users in different containers": "x1|operator|[\"admin\"];[\"users\"];||\n",
-		"the verb in a go-api pod":                "x1|go-api|[\"dho\",\"admin\",\"users\",\"create\"];||\n",
-		"the verb in an auth-service pod":         "x1|auth-service|[\"dho\",\"admin\",\"users\",\"create\"];||\n",
-		"words that only contain the names":       "x1|operator|[\"administer\",\"users2\"];||\n",
-		"a hyphenated users name":                 "x1|operator|[\"dho\",\"admin\",\"users-export\"];||\n",
-		"an unrelated command":                    "x1|operator|[\"dho\",\"worker\"];||\n",
+	verb := strs("dho", "admin", "users", "create")
+	cases := map[string]map[string]any{
+		"admin and users in different containers": {"containers": []any{ctr(strs("admin"), nil), ctr(strs("users"), nil)}},
+		"words that only contain the names":       {"containers": []any{ctr(strs("administer", "users2"), nil)}},
+		"a hyphenated users name":                 {"containers": []any{ctr(strs("dho", "admin", "users-export"), nil)}},
+		"an unrelated command":                    {"containers": []any{ctr(strs("dho", "worker"), nil)}},
 	}
-	for name, row := range rows {
+	for name, spec := range cases {
 		t.Run(name, func(t *testing.T) {
 			world := goodBarrierWorld()
-			world["pods.all"] += row
+			worldAdd(t, world, "pods.all.json", podItem("x1", "operator", spec))
 			r := runBarrier(t, world, nil, "up-go-api")
 			if r.rc != 0 || !strings.Contains(r.stdout, "barrier_ok") {
 				t.Fatalf("refused: rc=%d stdout=%q stderr=%q", r.rc, r.stdout, r.stderr)
 			}
 		})
+	}
+	for _, component := range []string{"go-api", "auth-service"} {
+		world := goodBarrierWorld()
+		worldAdd(t, world, "pods.all.json", podItem("x1", component, map[string]any{"containers": []any{ctr(verb, nil)}}))
+		r := runBarrier(t, world, nil, "up-go-api")
+		if r.rc != 0 || !strings.Contains(r.stdout, "barrier_ok") {
+			t.Errorf("the verb in a %s pod was refused: rc=%d stdout=%q stderr=%q", component, r.rc, r.stdout, r.stderr)
+		}
 	}
 }
 

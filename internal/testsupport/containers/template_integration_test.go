@@ -38,6 +38,55 @@ func templateBuild(ctx context.Context, uri string) error {
 	return nil
 }
 
+// mustServers is the shared server set of the running shared-mode body. A nil
+// here means shared mode is not active (or the PostgreSQL server never
+// started): fail with a name instead of a nil dereference that would kill the
+// test binary and hide every later test.
+func mustServers(t *testing.T) *sharedServers {
+	t.Helper()
+	servers := activeSharedServers()
+	if servers == nil || servers.pg == nil {
+		t.Fatal("shared mode is not active or the shared PostgreSQL server did not start")
+	}
+	return servers
+}
+
+func mustTemplateClone(t *testing.T, ctx context.Context, key string, build func(context.Context, string) error) *Instance {
+	t.Helper()
+	clone, err := StartPostgresFromTemplate(ctx, key, build)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if clone == nil {
+		t.Fatal("StartPostgresFromTemplate returned no instance")
+	}
+	return clone
+}
+
+// requireFingerprint fails unless rows holds the state templateBuild made. An
+// empty fingerprint on both sides of a comparison would make it pass for the
+// wrong reason.
+func requireFingerprint(t *testing.T, rows []string) {
+	t.Helper()
+	for _, want := range []string{
+		"relation public.tpl_t kind=r",
+		"rows public.tpl_t=1",
+		"sequence public.tpl_seq last=1 called=true",
+		"extension pg_trgm ",
+	} {
+		found := false
+		for _, row := range rows {
+			if strings.Contains(row, want) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("the fingerprint lacks a row with %q (%d rows)", want, len(rows))
+		}
+	}
+}
+
 func templateName(t *testing.T, key string) string {
 	t.Helper()
 	name, err := templateDatabaseName(key)
@@ -65,11 +114,8 @@ func templateRun(t *testing.T, key string, plant func(ctx context.Context, serve
 	captureTemplateLog(t)
 	ran := false
 	code := RunWithSharedServers(func() int {
-		clone, err := StartPostgresFromTemplate(ctx, key, templateBuild)
-		if err != nil {
-			t.Fatal(err)
-		}
-		plant(ctx, activeSharedServers(), clone)
+		clone := mustTemplateClone(t, ctx, key, templateBuild)
+		plant(ctx, mustServers(t), clone)
 		mustClose(t, ctx, clone)
 		ran = true
 		return 0
@@ -91,6 +137,7 @@ func referenceFingerprint(t *testing.T, ctx context.Context) []string {
 	if err != nil {
 		t.Fatal(err)
 	}
+	requireFingerprint(t, rows)
 	return rows
 }
 
@@ -99,15 +146,13 @@ func TestTemplateCloneEqualsAFreshBuild(t *testing.T) {
 	runShared(t, func() {
 		captureTemplateLog(t)
 		want := referenceFingerprint(t, ctx)
-		clone, err := StartPostgresFromTemplate(ctx, templateFixtureHex, templateBuild)
-		if err != nil {
-			t.Fatal(err)
-		}
+		clone := mustTemplateClone(t, ctx, templateFixtureHex, templateBuild)
 		defer mustClose(t, ctx, clone)
 		got, err := pgTemplateFingerprint(ctx, clone.URI)
 		if err != nil {
 			t.Fatal(err)
 		}
+		requireFingerprint(t, got)
 		if diff := diffSnapshots(want, got); len(diff) != 0 {
 			t.Errorf("clone differs from a fresh build: %v", diff)
 		}
@@ -121,13 +166,10 @@ func TestTemplateHasNoClientSessionAndNoConnections(t *testing.T) {
 		name := templateName(t, templateFixtureHex)
 		clones := make([]*Instance, 0, 3)
 		for range 3 {
-			clone, err := StartPostgresFromTemplate(ctx, templateFixtureHex, templateBuild)
-			if err != nil {
-				t.Fatal(err)
-			}
+			clone := mustTemplateClone(t, ctx, templateFixtureHex, templateBuild)
 			clones = append(clones, clone)
 		}
-		admin := activeSharedServers().pg.adminDSN
+		admin := mustServers(t).pg.adminDSN
 		conn, err := pgx.Connect(ctx, admin)
 		if err != nil {
 			t.Fatal(err)
@@ -151,7 +193,7 @@ func TestTemplateHasNoClientSessionAndNoConnections(t *testing.T) {
 		if got := clientSessionCount(types); got != 0 {
 			t.Errorf("%d client sessions on the template", got)
 		}
-		if _, err := pgx.Connect(ctx, dsnFor(t, activeSharedServers(), name)); err == nil {
+		if _, err := pgx.Connect(ctx, dsnFor(t, mustServers(t), name)); err == nil {
 			t.Error("a connection to the template succeeded")
 		}
 		for _, clone := range clones {
@@ -195,10 +237,7 @@ func TestTemplateParallelClonesUnderRace(t *testing.T) {
 			for i := range 16 {
 				t.Run(fmt.Sprint(i), func(t *testing.T) {
 					t.Parallel()
-					clone, err := StartPostgresFromTemplate(ctx, templateFixtureHex, templateBuild)
-					if err != nil {
-						t.Fatal(err)
-					}
+					clone := mustTemplateClone(t, ctx, templateFixtureHex, templateBuild)
 					defer mustClose(t, ctx, clone)
 					mu.Lock()
 					if seen[clone.URI] {
@@ -210,6 +249,7 @@ func TestTemplateParallelClonesUnderRace(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
+					requireFingerprint(t, got)
 					if diff := diffSnapshots(want, got); len(diff) != 0 {
 						t.Errorf("clone differs: %v", diff)
 					}
@@ -231,13 +271,10 @@ func TestNewKeyMakesNewTemplateAndKeepsTheOld(t *testing.T) {
 	code := RunWithSharedServers(func() int {
 		var clones []*Instance
 		for _, key := range []string{templateFixtureHex, templateOtherHex, templateFixtureHex} {
-			clone, err := StartPostgresFromTemplate(ctx, key, counting)
-			if err != nil {
-				t.Fatal(err)
-			}
+			clone := mustTemplateClone(t, ctx, key, counting)
 			clones = append(clones, clone)
 		}
-		conn, err := pgx.Connect(ctx, activeSharedServers().pg.adminDSN)
+		conn, err := pgx.Connect(ctx, mustServers(t).pg.adminDSN)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -333,13 +370,10 @@ func TestTemplateOffCreatesNoTemplate(t *testing.T) {
 	runShared(t, func() {
 		captureTemplateLog(t)
 		for range 2 {
-			clone, err := StartPostgresFromTemplate(ctx, templateFixtureHex, counting)
-			if err != nil {
-				t.Fatal(err)
-			}
+			clone := mustTemplateClone(t, ctx, templateFixtureHex, counting)
 			defer mustClose(t, ctx, clone)
 		}
-		conn, err := pgx.Connect(ctx, activeSharedServers().pg.adminDSN)
+		conn, err := pgx.Connect(ctx, mustServers(t).pg.adminDSN)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -366,19 +400,16 @@ func TestTemplateIsNotBuiltOnAServerThisBinaryDidNotStart(t *testing.T) {
 		log := captureTemplateLog(t)
 		first := mustStart(t, StartPostgres, ctx)
 		defer mustClose(t, ctx, first)
-		activeSharedServers().pg.startedHere = false
-		clone, err := StartPostgresFromTemplate(ctx, templateFixtureHex, counting)
-		if err != nil {
-			t.Fatal(err)
-		}
+		mustServers(t).pg.startedHere = false
+		clone := mustTemplateClone(t, ctx, templateFixtureHex, counting)
 		defer mustClose(t, ctx, clone)
 		if want := "containers: postgres template fallback: server not started by this binary"; !strings.Contains(log.String(), want) {
 			t.Errorf("log %q lacks %q", log, want)
 		}
-		if names := activeSharedServers().templates.names(); len(names) != 0 {
+		if names := mustServers(t).templates.names(); len(names) != 0 {
 			t.Errorf("templates registered on a server not started here: %v", names)
 		}
-		activeSharedServers().pg.startedHere = true
+		mustServers(t).pg.startedHere = true
 	})
 	if got := builds.Load(); got != 1 {
 		t.Errorf("builds = %d, want 1 (the chain on the clone's own database)", got)

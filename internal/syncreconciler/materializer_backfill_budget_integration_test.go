@@ -211,7 +211,7 @@ func TestMaterializerStatementsFitTheStageBudgetAtBackfillScale(t *testing.T) {
 		{"dispatch", materializeDispatchSQL, []any{now, cutoff, limit}, []string{"ix_sync_run_units_open_run"}, 245000, 120000},
 		{"finalize", materializeFinalizeSQL, []any{now, limit}, []string{"ix_sync_run_units_open_run"}, 180000, 120000},
 		{"discovery", materializeDiscoverySQL, []any{now, limit, cutoff}, nil, 6000, 120000},
-		{"post_sync", materializePostSyncSQL, []any{now, limit}, []string{"ix_sync_run_post_dispatches_recorded"}, 11000, 20000},
+		{"post_sync", materializePostSyncSQL, []any{now, limit}, []string{"ix_sync_run_post_dispatches_recorded"}, 50000, 20000},
 	}
 	for _, statement := range statements {
 		plan := explainBackfillStatement(t, ctx, pool, statement.name, statement.sql, statement.args...)

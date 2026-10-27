@@ -842,22 +842,40 @@ Call with (dict "flag" "oidc"|"saml" "context" $).
 {{- end -}}
 
 {{/*
-"" when one authService.networkPolicy.egress.mail.to entry is acceptable, else the reason. Call with the entry. A peer
-selects pods, namespaces or one address block; an empty selector admits everything of its kind and an empty entry
-admits every destination. An ipBlock is one CIDR: one "/", an integer prefix, IPv4 /8 or longer, IPv6 /32 or longer,
-and no IPv4-mapped (::ffff:) or NAT64 (64:ff9b:) form, so no entry can name the whole internet.
+"" when one authService.networkPolicy.egress.mail.to entry is acceptable, else the reason. Call with
+(dict "peer" <entry> "ports" <authService.networkPolicy.egress.mail.ports>). A peer selects pods, namespaces or one
+address block; an empty selector admits everything of its kind and an empty entry admits every destination. An
+ipBlock is one CIDR: one "/", an integer prefix, IPv4 /8 or longer, IPv6 /32 or longer, and no IPv4-mapped (::ffff:)
+or NAT64 (64:ff9b:) form. The one exception (D6427, a provider with no fixed addresses): exactly 0.0.0.0/0 or ::/0,
+only with ports [TCP 443] alone and an except list holding every private, shared, link-local and loopback network
+below, and for IPv6 also the mapped and NAT64 ranges that would reach internal IPv4 addresses.
 */}}
 {{- define "dev-health.authMailPeerProblem" -}}
-{{- if not (kindIs "map" .) -}}is not an object
-{{- else if and (not (and (kindIs "map" .podSelector) (gt (len .podSelector) 0))) (not (and (kindIs "map" .namespaceSelector) (gt (len .namespaceSelector) 0))) (not (kindIs "map" .ipBlock)) -}}has no non-empty podSelector, namespaceSelector or ipBlock
-{{- else if kindIs "map" .ipBlock -}}
-{{- $cidr := toString .ipBlock.cidr -}}
+{{- $peer := .peer -}}
+{{- if not (kindIs "map" $peer) -}}is not an object
+{{- else if and (not (and (kindIs "map" $peer.podSelector) (gt (len $peer.podSelector) 0))) (not (and (kindIs "map" $peer.namespaceSelector) (gt (len $peer.namespaceSelector) 0))) (not (kindIs "map" $peer.ipBlock)) -}}has no non-empty podSelector, namespaceSelector or ipBlock
+{{- else if kindIs "map" $peer.ipBlock -}}
+{{- $cidr := toString $peer.ipBlock.cidr -}}
 {{- if not (regexMatch "^[0-9a-fA-F:.]+/[0-9]{1,3}$" $cidr) -}}ipBlock.cidr must be one address/prefix
 {{- else -}}
 {{- $parts := splitList "/" $cidr -}}
 {{- $ip := lower (index $parts 0) -}}
 {{- $prefix := int (index $parts 1) -}}
-{{- if contains ":" $ip -}}
+{{- $v6 := contains ":" $ip -}}
+{{- if eq $prefix 0 -}}
+{{- $required := ternary (list "fc00::/7" "fe80::/10" "::1/128" "::ffff:0:0/96" "64:ff9b::/96") (list "10.0.0.0/8" "172.16.0.0/12" "192.168.0.0/16" "100.64.0.0/10" "169.254.0.0/16" "127.0.0.0/8") $v6 -}}
+{{- $except := list -}}
+{{- range ($peer.ipBlock.except | default list) }}{{- $except = append $except (lower (toString .)) }}{{- end -}}
+{{- $missing := list -}}
+{{- range $required }}{{- if not (has . $except) }}{{- $missing = append $missing . }}{{- end }}{{- end -}}
+{{- $ports := .ports | default list -}}
+{{- $port := dict -}}
+{{- if eq (len $ports) 1 }}{{- $port = index $ports 0 }}{{- end -}}
+{{- if not (or (and $v6 (eq $ip "::")) (and (not $v6) (eq $ip "0.0.0.0"))) -}}ipBlock.cidr with prefix 0 must be exactly 0.0.0.0/0 or ::/0
+{{- else if not (and (eq (len $ports) 1) (kindIs "map" $port) (eq (upper (toString (default "TCP" $port.protocol))) "TCP") (hasKey $port "port") (eq (int $port.port) 443) (not (hasKey $port "endPort"))) -}}an ipBlock with prefix 0 is accepted only with authService.networkPolicy.egress.mail.ports of TCP 443 alone
+{{- else if $missing -}}ipBlock.cidr {{ $cidr }} needs except entries {{ join ", " $missing }}
+{{- end -}}
+{{- else if $v6 -}}
 {{- if or (hasPrefix "::ffff:" $ip) (hasPrefix "0:0:0:0:0:ffff:" $ip) (hasPrefix "64:ff9b:" $ip) -}}ipBlock.cidr is an IPv4-mapped or NAT64 form
 {{- else if or (lt $prefix 32) (gt $prefix 128) -}}ipBlock.cidr prefix must be 32 to 128 for IPv6
 {{- end -}}

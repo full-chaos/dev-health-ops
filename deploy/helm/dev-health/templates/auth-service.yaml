@@ -370,7 +370,7 @@ data:
 {{- $mailOn := and (eq (include "dev-health.authOn" (dict "flag" "usersOwned" "context" .)) "true") (trim (toString (default dict $a.mail).secretName)) }}
 {{- if and $mailOn (not $a.networkPolicy.egress.mail.to) }}{{- fail "authService.networkPolicy.egress.mail.to is required while authService.mail.secretName is set at authService.phase >= 4 and authService.networkPolicy.enabled: the auth pods get no egress but DNS, the database and the listed peers, so the mail provider would be unreachable" }}{{- end }}
 {{- range $i, $peer := $a.networkPolicy.egress.mail.to }}
-{{- $problem := include "dev-health.authMailPeerProblem" $peer }}
+{{- $problem := include "dev-health.authMailPeerProblem" (dict "peer" $peer "ports" $a.networkPolicy.egress.mail.ports) }}
 {{- if $problem }}{{- fail (printf "authService.networkPolicy.egress.mail.to[%d] %s" $i $problem) }}{{- end }}
 {{- end }}
 {{- range (concat $a.networkPolicy.allowedFrom $a.networkPolicy.metricsFrom) }}

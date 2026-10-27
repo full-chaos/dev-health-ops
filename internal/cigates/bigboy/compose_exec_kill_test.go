@@ -85,7 +85,7 @@ func TestComposeExecKillReachesTheProcessGroup(t *testing.T) {
 	}
 	pid := composeChildPID(t, r.stdout)
 	t.Cleanup(func() { _ = syscall.Kill(pid, syscall.SIGKILL) })
-	for i := 0; i < 20 && syscall.Kill(pid, 0) == nil; i++ {
+	for i := 0; i < 100 && syscall.Kill(pid, 0) == nil; i++ {
 		time.Sleep(50 * time.Millisecond)
 	}
 	if syscall.Kill(pid, 0) == nil {

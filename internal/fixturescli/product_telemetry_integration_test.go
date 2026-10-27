@@ -46,7 +46,8 @@ func TestSeedProductTelemetryWritesTheGeneratedRows(t *testing.T) {
 	ch := startClickHouse(t)
 	conn := nativeConn(t, ch)
 	seed := int64(11)
-	end := mustTime("2026-09-26T07:31:22Z")
+	// The ceiling keeps the oldest row inside the TTL only for an end at the clock, as the verb seeds.
+	end := time.Now().UTC().Truncate(time.Millisecond)
 	orgs := []string{"6ba7b810-9dad-11d1-80b4-00c04fd430c8", "org-two"}
 	counts, err := SeedProductTelemetry(t.Context(), conn, orgs, 400, 3, &seed, end, discardLogger())
 	if err != nil {

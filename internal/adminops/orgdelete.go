@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"unicode/utf16"
 
@@ -20,7 +21,9 @@ import (
 // Postgres rows and ClickHouse rows are counted and, unless --dry-run, deleted;
 // the plan prints as JSON (sorted keys, two-space indent, as Python's
 // json.dumps(..., indent=2, sort_keys=True)). A failure prints "Error: ..." on
-// stdout and exits 1.
+// stdout and exits 1: also a refusal for no usable ClickHouse (nothing deleted)
+// and a ClickHouse purge that failed after the Postgres commit (run it again).
+// The refusal and done lines are logged on stderr.
 func runOrgsDelete(ctx context.Context, env cli.Env) int {
 	flags := newAccountFlags(env, "dho admin orgs delete")
 	var orgID, analyticsDB optString
@@ -43,6 +46,7 @@ func runOrgsDelete(ctx context.Context, env cli.Env) int {
 	if code != 0 {
 		return code
 	}
+	op.Logger = slog.New(slog.NewTextHandler(env.Stderr, nil)).With(slog.String("caller", "cli"))
 	plan, err := op.DeleteOrg(ctx, orgID.value, *dryRun, deleteConfig)
 	if err != nil {
 		// Python prints "Error: <text>" for every failure of the deletion, a

@@ -675,9 +675,13 @@ func (o Operator) DeleteOrg(ctx context.Context, orgID string, dryRun bool, conf
 		return nil, refuse("Invalid organization id")
 	}
 	httpDoer := revokeDoer(config.HTTPDoer)
+	var db pgDB = o.Pool
+	if o.db != nil {
+		db = o.db
+	}
 	h := &handlers{
-		store:         o.store(o.Pool),
-		logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
+		store:         o.store(db),
+		logger:        o.logger(),
 		clickHouseDSN: config.ClickHouseDSN,
 		decryptor:     config.Decryptor,
 		pagerDuty:     config.PagerDuty,
@@ -685,6 +689,14 @@ func (o Operator) DeleteOrg(ctx context.Context, orgID string, dryRun bool, conf
 	}
 	result, err := h.deleteOrganizationData(ctx, orgUUID, dryRun)
 	if err != nil {
+		var refused *orgDeletionRefusedError
+		if errors.As(err, &refused) {
+			return nil, refuse("%s", orgDeletionRefusedDetail)
+		}
+		var incomplete *orgDeletionIncompleteError
+		if errors.As(err, &incomplete) {
+			return nil, refuse("%s", orgDeletionIncompleteDetail)
+		}
 		return nil, err
 	}
 	plain, _ := plainJSON(result.json()).(map[string]any)

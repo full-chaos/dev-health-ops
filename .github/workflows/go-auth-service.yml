@@ -43,6 +43,7 @@ jobs:
     timeout-minutes: 10
     outputs:
       relevant: ${{ steps.relevance.outputs.relevant }}
+      corpus: ${{ steps.corpus.outputs.corpus }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -91,6 +92,34 @@ jobs:
           git diff --name-only "${mb}" "${HEAD_SHA}"
           bash ci/check_go.sh auth relevant "${mb}" "${HEAD_SHA}" | tee relevance.txt
           grep -E '^relevant=(true|false)$' relevance.txt >> "${GITHUB_OUTPUT}"
+
+      # CHAOS-11596: a separate verdict for the external auth corpus (auth-corpus-queue). Its path set is
+      # ci/auth_corpus_paths.txt, not the auth import closure above. The corpus runs on merge queue entries only: a pull
+      # request does not run it, and venue-oracles.yml runs it on a push to main. Fail closed: any fetch, merge-base or
+      # rule error = corpus=true.
+      - name: Does the change touch the external auth corpus path set?
+        id: corpus
+        env:
+          EVENT: ${{ github.event_name }}
+          MG_BASE_REF: ${{ github.event.merge_group.base_ref }}
+          MG_HEAD_SHA: ${{ github.event.merge_group.head_sha }}
+        run: |
+          set -euo pipefail
+          if [ "${EVENT}" != "merge_group" ]; then
+            echo "corpus=false" >> "${GITHUB_OUTPUT}"
+            echo "the external auth corpus runs on merge queue entries only (${EVENT} is not one)"
+            exit 0
+          fi
+          if [[ "${MG_BASE_REF}" == refs/heads/* ]] \
+            && git fetch --no-tags origin "+${MG_BASE_REF}:refs/remotes/origin/auth-corpus-base" \
+            && tip="$(git rev-parse --verify 'refs/remotes/origin/auth-corpus-base^{commit}')"; then
+            bash ci/auth_corpus_queue_relevance.sh "${tip}" "${MG_HEAD_SHA}" > corpus.txt || echo "corpus=true" > corpus.txt
+          else
+            echo "cannot resolve the target branch ${MG_BASE_REF}: the external auth corpus runs"
+            echo "corpus=true" > corpus.txt
+          fi
+          cat corpus.txt
+          grep -xE 'corpus=(true|false)' corpus.txt >> "${GITHUB_OUTPUT}"
 
   auth-go-quality:
     needs: [auth-changes]
@@ -196,13 +225,74 @@ jobs:
             exit 1
           fi
 
+  # CHAOS-11596: the external auth corpus (ci/auth_corpus_external.sh, the same four legs venue-oracles.yml runs on main)
+  # on a merge queue entry that touches ci/auth_corpus_paths.txt. Only the queue runs it (0 jobs on a pull request), and
+  # a red leg ejects the entry before main. No retry: a red leg stays red. Its result fans into `auth-gate`.
+  auth-corpus-queue:
+    name: auth-corpus-queue (${{ matrix.leg }})
+    needs: [auth-changes]
+    if: github.event_name == 'merge_group' && needs.auth-changes.outputs.corpus == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        leg: [go-api, acp, acp-nokeys, acp-social-unowned]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: '**/go.sum'
+      - name: Run the auth-flow corpus against the external go-api
+        if: matrix.leg != 'acp-nokeys' && matrix.leg != 'acp-social-unowned'
+        run: bash ci/auth_corpus_external.sh "${{ matrix.leg }}"
+      # Non-vacuity: leg acp without the auth-service keys must fail, and by name (not pass as "unserved").
+      - name: Leg acp without the auth-service keys fails by name
+        if: matrix.leg == 'acp-nokeys'
+        env:
+          NOKEYS_LOG: ${{ runner.temp }}/acp-nokeys.log
+        run: |
+          status=0
+          AUTH_CORPUS_OMIT_AUTH_KEYS=1 bash ci/auth_corpus_external.sh acp >"${NOKEYS_LOG}" 2>&1 || status=$?
+          tail -n 60 "${NOKEYS_LOG}"
+          if [ "${status}" -eq 0 ]; then
+            echo "ERROR: leg acp passed without the auth-service keys"
+            exit 1
+          fi
+          grep -a 'required aggregate sessions is not served by auth-service' "${NOKEYS_LOG}" || {
+            echo "ERROR: leg acp failed, but not on the required aggregate sessions"
+            exit 1
+          }
+
+      # Non-vacuity: social forwarded without the users-owned posture must fail, and by name: auth-service refuses the
+      # new-user row (403), so the social row cannot pass.
+      - name: Leg acp with social forwarded without the posture fails by name
+        if: matrix.leg == 'acp-social-unowned'
+        env:
+          SOCIAL_LOG: ${{ runner.temp }}/acp-social-unowned.log
+        run: |
+          status=0
+          AUTH_CORPUS_USERS_UNOWNED=1 AUTH_CORPUS_FORCE_SOCIAL=1 bash ci/auth_corpus_external.sh acp >"${SOCIAL_LOG}" 2>&1 || status=$?
+          tail -n 60 "${SOCIAL_LOG}"
+          if [ "${status}" -eq 0 ]; then
+            echo "ERROR: leg acp passed with social forwarded and users not owned"
+            exit 1
+          fi
+          grep -a 'social-login through the provider stub: answered 403 with' "${SOCIAL_LOG}" || {
+            echo "ERROR: leg acp failed, but not on the social row"
+            exit 1
+          }
+
   auth-gate:
     if: always()
-    needs: [auth-changes, auth-go-quality, auth-test, auth-fuzz]
+    needs: [auth-changes, auth-go-quality, auth-test, auth-fuzz, auth-corpus-queue]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
       RELEVANT: ${{ needs.auth-changes.outputs.relevant }}
+      CORPUS_RELEVANT: ${{ needs.auth-changes.outputs.corpus }}
+      CORPUS: ${{ needs.auth-corpus-queue.result }}
       CHANGES: ${{ needs.auth-changes.result }}
       QUALITY: ${{ needs.auth-go-quality.result }}
       TEST: ${{ needs.auth-test.result }}
@@ -216,6 +306,13 @@ jobs:
             exit 0
           fi
           [ "${CHANGES}" = "success" ] || { echo "auth-changes: ${CHANGES}" >&2; exit 1; }
+          # CHAOS-11596: a skipped corpus job passes ONLY when the relevance step said the entry does not touch the corpus
+          # path set; a skip (or any non-success) with corpus=true fails, also when the auth gates are not relevant.
+          case "${CORPUS_RELEVANT}" in
+            true) [ "${CORPUS}" = "success" ] || { echo "auth-corpus-queue: ${CORPUS}: a skipped corpus leg with relevant=true fails the gate" >&2; exit 1; } ;;
+            false) echo "the change is outside the external auth corpus path set (auth-corpus-queue=${CORPUS})" ;;
+            *) echo "auth-changes produced no corpus verdict" >&2; exit 1 ;;
+          esac
           if [ "${RELEVANT}" = "false" ]; then
             echo "the change is outside the auth service tree: gate jobs skipped by design (quality=${QUALITY} test=${TEST} fuzz=${FUZZ})"
             exit 0

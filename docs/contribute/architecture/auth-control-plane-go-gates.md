@@ -55,11 +55,12 @@ tree still reports its old path.
 
 | Job | Runs | Content |
 | --- | --- | --- |
-| `auth-changes` | always | Computes `relevant`. A merge queue entry is judged by `ci/auth_queue_relevance.sh`: the pull request rule over the whole group (merge base with the target branch tip to the entry head), and any error makes it relevant. A push to main and every other event is always relevant. |
+| `auth-changes` | always | Computes `relevant`. A merge queue entry is judged by `ci/auth_queue_relevance.sh`: the pull request rule over the whole group (merge base with the target branch tip to the entry head), and any error makes it relevant. A push to main and every other event is always relevant. It also computes `corpus` (CHAOS-11596): on a merge queue entry, `ci/auth_corpus_queue_relevance.sh` judges the group against the globs of `ci/auth_corpus_paths.txt`; any other event is `corpus=false`. |
 | `auth-go-quality` | when relevant | `paths-selftest`, `scope-selftest`, `fmt`, `vet`, `fuzz-registry`, `vuln`. |
 | `auth-test` | when relevant | `test`, `race`, `race-integration`, `middleware`. |
 | `auth-fuzz (<target>)` | when relevant | One matrix job per fuzz target, so each parser has its own CI-visible name. |
-| `auth-gate` | **always** | Fans in. Succeeds when the change is not relevant or the pull request is a draft without `ci:full`; fails when `auth-changes` failed, or when a relevant change has any gate job that did not succeed (failed, cancelled **or skipped**). |
+| `auth-corpus-queue (<leg>)` | merge queue entry with `corpus=true` | The external auth corpus, `ci/auth_corpus_external.sh` legs `go-api`, `acp`, `acp-nokeys`, `acp-social-unowned` (the same legs `venue-oracles.yml` runs on main). Never on a pull request. No retry. |
+| `auth-gate` | **always** | Fans in. Succeeds when the change is not relevant or the pull request is a draft without `ci:full`; fails when `auth-changes` failed, or when a relevant change has any gate job that did not succeed (failed, cancelled **or skipped**), or when the corpus verdict is `true` and `auth-corpus-queue` did not succeed (a skip with `corpus=true` fails, also when the auth gates are not relevant). |
 
 Relevance is decided inside the workflow, not in the trigger, so `auth-gate`
 reports a conclusion on every pull request and can be a required check without

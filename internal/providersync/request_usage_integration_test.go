@@ -19,7 +19,8 @@ import (
 // unit and a re-sent duplicate row, then reads the admin-analytics sums back.
 func TestRequestUsageRowsLandOnceInClickHouse(t *testing.T) {
 	ctx, conn := newWorkItemEffectsConn(t)
-	now := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
+	// From the clock: provider_request_usage deletes a row 395 days after window_started_at.
+	now := time.Now().UTC().Truncate(time.Second)
 	claim, session := completeRouteSession(t, now, false)
 	descriptor, _ := Descriptor("launchdarkly", "feature-flags")
 	sink := ClickHouseRequestUsageSink{Conn: conn}

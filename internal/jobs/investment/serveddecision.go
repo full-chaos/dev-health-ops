@@ -219,8 +219,13 @@ type servedClassifier interface {
 // used by one Materializer.Run, then closed.
 type ServedDecision struct {
 	// byo marks the backend of an org's own model (newBYOSystemOne); jev is false.
-	byo        bool
-	classifier servedClassifier
+	byo bool
+	// endpointType and gatewayID name the clef endpoint of the backend, derived
+	// from the validated base_url at construction; empty for any other backend.
+	// They are recorded on the attempt rows and never change a request.
+	endpointType string
+	gatewayID    string
+	classifier   servedClassifier
 	// identity and stamp are fixed at construction from configured values only,
 	// never from a response field.
 	identity decision.Identity
@@ -371,6 +376,7 @@ func (served *ServedDecision) categorize(ctx context.Context, cfg Config, entry 
 	modelReturned := shadowModelID(classification.ModelReturned)
 	rows := attemptRecords(cfg, chwrite.RoleServed, served.identity, served.stamp, unit.workUnitID, result.exchange, state, modelReturned)
 	for _, row := range rows {
+		row.EndpointType, row.GatewayID = shadowEndpointType(served.endpointType), shadowGatewayID(served.gatewayID)
 		served.attempts.Add(row)
 	}
 

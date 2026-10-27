@@ -58,8 +58,25 @@ const EnvMailAllowConsole = "AUTH_MAIL_ALLOW_CONSOLE"
 // ownedUsersMailProvider builds go-api's mail provider for the verify and reset mails and refuses to start while
 // they could not reach a user: no real provider, a provider missing its settings, no from-address, or an
 // APP_BASE_URL that is not an absolute https URL (http only under the console override; an unset one would
-// point the links at the built-in localhost default). Every refusal names a variable and never a value.
+// point the links at the built-in localhost default). Every refusal names a variable and never a value, and carries
+// mailConfigReason as its DependencyReason so the start log names it.
 func ownedUsersMailProvider(logger *slog.Logger) (mail.Sender, error) {
+	provider, err := buildOwnedUsersMailProvider(logger)
+	if err != nil {
+		return nil, mailConfigInvalid{err}
+	}
+	return provider, nil
+}
+
+// mailConfigReason is the stable start-log reason for an owned-users mail refusal.
+const mailConfigReason = "auth_mail_config_invalid"
+
+type mailConfigInvalid struct{ error }
+
+func (e mailConfigInvalid) Unwrap() error          { return e.error }
+func (mailConfigInvalid) DependencyReason() string { return mailConfigReason }
+
+func buildOwnedUsersMailProvider(logger *slog.Logger) (mail.Sender, error) {
 	if from, set := os.LookupEnv("EMAIL_FROM_ADDRESS"); !set || strings.TrimSpace(from) == "" {
 		return nil, errors.New("auth mail: EMAIL_FROM_ADDRESS is required while auth-service owns users")
 	}

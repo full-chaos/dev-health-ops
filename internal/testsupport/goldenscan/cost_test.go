@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math/rand"
 	"reflect"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -179,7 +180,11 @@ func TestCheckTreeReadsGoldensConcurrently(t *testing.T) {
 		mu.Unlock()
 		return []byte(`{"name": "x"}`), nil
 	}
-	paths := []string{"a/1.json", "a/2.json", "a/3.json", "a/4.json"}
+	// Twice as many paths as workers: some worker reads more than one golden, whatever GOMAXPROCS is.
+	var paths []string
+	for i := 0; i < 2*max(2, runtime.GOMAXPROCS(0)); i++ {
+		paths = append(paths, fmt.Sprintf("a/%d.json", i))
+	}
 	problems, err := CheckTree(paths, read, nil)
 	if err != nil || len(problems) != 0 {
 		t.Fatalf("CheckTree: %v %v", err, problems)

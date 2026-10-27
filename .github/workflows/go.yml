@@ -150,9 +150,11 @@ on:
       - 'internal/cigates/chparams/testdata/*.txt'
       - 'internal/cigates/frozengoldens/*.tsv'
       - 'internal/cigates/emitscan/*.tsv'
+      - 'internal/cigates/abstime/*.tsv'
       - 'internal/cigates/outboundtransport/*.tsv'
       - 'internal/platform/otlpmetrics/*.tsv'
       - 'internal/cigates/chconstructor/*.tsv'
+      - 'internal/cigates/ttlclock/*.tsv'
       - 'ci/check_venue_oracle_registry.sh'
       - 'ci/lib/venue_oracle_registry.sh'
       - 'ci/check_go_containers.sh'
@@ -167,6 +169,8 @@ on:
       - 'ci/auth_corpus_set_env.sh'
       - 'ci/auth_corpus_external.override.yml'
       - 'ci/auth_corpus_external.acp.override.yml'
+      # CHAOS-11596: the merge queue path set, its relevance script and the stub the venue test reads.
+      - 'ci/auth_corpus_**'
       - '.github/workflows/venue-oracles.yml'
       - 'ci/auth_k8s/**'
       # The migration matrix's evidence columns are validated by a Go

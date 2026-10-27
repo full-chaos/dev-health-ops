@@ -114,6 +114,19 @@ func (t Trust) Resolve(r *http.Request) netip.Addr {
 	return forwarded.Unmap()
 }
 
+// TrustsPeer reports whether the socket peer of r is a trusted proxy.
+func (t Trust) TrustsPeer(r *http.Request) bool {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	peer, err := netip.ParseAddr(host)
+	if err != nil {
+		return false
+	}
+	return t.trusts(peer.WithZone("").Unmap())
+}
+
 type key struct{}
 
 type userAgentKey struct{}

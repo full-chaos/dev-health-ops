@@ -253,6 +253,10 @@ type ServerOptions struct {
 	// this process's own root sampler, so an outside client cannot force
 	// recording by sending a sampled traceparent.
 	TrustRemoteSampling bool
+	// AccessAttrs, when set, adds fields to every access line: it gets the
+	// request as the listener received it and the answer's header. It must
+	// return only bounded, log-safe values. Nil keeps the line as it is.
+	AccessAttrs func(r *http.Request, answer http.Header) []slog.Attr
 }
 
 // Server is the auth API listener. It is a lifecycle.Component so the runtime,
@@ -518,6 +522,7 @@ func buildHandler(options ServerOptions, logger *slog.Logger) (http.Handler, err
 		listener = "auth-api-http"
 	}
 	observer := newAccessObserver(logger, listener, options.TrustRemoteSampling)
+	observer.attrs = options.AccessAttrs
 	return RequestIDWith(accept)(observer.wrap(RecoverWith(logger, "<unrouted>", write)(handler))), nil
 }
 

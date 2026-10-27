@@ -129,6 +129,7 @@ internal/chmigrate	team_daily_counters_float64_integration_test.go
 internal/chmigrate	teams_provider_identity_integration_test.go
 internal/chmigrate	testops_test_flake_counts_integration_test.go
 internal/chmigrate	work_item_metrics_nullable_integration_test.go
+internal/cigates/abstime	abstime.go
 internal/cigates/affected	ci_script_helpers_test.go
 internal/cigates/affected	go_affected_integration_test.go
 internal/cigates/affected	md_bounded_test.go
@@ -235,6 +236,7 @@ internal/cigates/queuecreds	gate_test.go
 internal/cigates/queuecreds	queuerows_test.go
 internal/cigates/queuecreds	scan.go
 internal/cigates/queuecreds	scan_test.go
+internal/cigates/racescope	scan.go
 internal/cigates/raceunweighted	raceunweighted_test.go
 internal/cigates/releasetag	parity_test.go
 internal/cigates/releasetag	releasetag.go
@@ -245,6 +247,7 @@ internal/cigates/routing	deps.go
 internal/cigates/routing	parity_test.go
 internal/cigates/routing	planes_test.go
 internal/cigates/routing	tools_test.go
+internal/cigates/scripts	auth_corpus_queue_relevance_test.go
 internal/cigates/scripts	auth_queue_relevance_test.go
 internal/cigates/scripts	chmigrate_history_frozen_test.go
 internal/cigates/scripts	ci_script_helpers_test.go
@@ -269,6 +272,7 @@ internal/cigates/testshard	standin_test.go
 internal/cigates/testshard	trimpath_test.go
 internal/cigates/testshard	unweightedpkg_test.go
 internal/cigates/testshard	weightscensus_test.go
+internal/cigates/ttlclock	ttlclock_test.go
 internal/cigates/webproxyproof	proof_test.go
 internal/cigates/weightsfiles	ci_script_helpers_test.go
 internal/cigates/weightsfiles	race_weights_files_test.go
@@ -276,6 +280,7 @@ internal/cigates/workflowpaths	workflow_path_filters_test.go
 internal/cigates/workflows	auth_compose_proof_test.go
 internal/cigates/workflows	auth_corpus_external_behaviour_test.go
 internal/cigates/workflows	auth_corpus_external_test.go
+internal/cigates/workflows	auth_corpus_queue_test.go
 internal/cigates/workflows	chart_started_selector_test.go
 internal/cigates/workflows	ci_script_helpers_test.go
 internal/cigates/workflows	docker_images_fanin_behaviour_test.go

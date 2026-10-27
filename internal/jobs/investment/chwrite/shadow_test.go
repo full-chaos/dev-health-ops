@@ -346,3 +346,24 @@ func TestWriteAttemptsCarriesUsageReasonAndModelFromRequest(t *testing.T) {
 		t.Fatalf("tail values = %v %v / %v %v", rows[0][24], rows[0][25], rows[1][24], rows[1][25])
 	}
 }
+
+func TestWriteAttemptsCarriesTheEndpointColumns(t *testing.T) {
+	conn := &shadowConn{}
+	writer := newShadowWriter(t, conn)
+	row := attemptRow("a")
+	row.EndpointType, row.GatewayID = "workers_ai", "gw-1"
+	plain := attemptRow("b")
+	if _, err := writer.WriteAttempts(t.Context(), "org-1", []AttemptRecord{row, plain}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(conn.statements[0], "request_id_source, endpoint_type, gateway_id") {
+		t.Fatalf("statement does not name the endpoint columns last: %s", conn.statements[0])
+	}
+	rows := conn.batches[0].rows
+	if len(rows[0]) != columnCount(conn.statements[0]) || len(rows[0]) != 29 {
+		t.Fatalf("row appends %d values for %d columns, want 29", len(rows[0]), columnCount(conn.statements[0]))
+	}
+	if rows[0][27] != "workers_ai" || rows[0][28] != "gw-1" || rows[1][27] != "" || rows[1][28] != "" {
+		t.Fatalf("endpoint values = %v %v / %v %v", rows[0][27], rows[0][28], rows[1][27], rows[1][28])
+	}
+}

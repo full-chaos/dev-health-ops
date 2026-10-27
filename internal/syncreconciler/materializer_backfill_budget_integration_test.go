@@ -167,8 +167,9 @@ func explainBackfillStatement(t *testing.T, ctx context.Context, pool *pgxpool.P
 
 // TestMaterializerStatementsFitTheStageBudgetAtBackfillScale is the CHAOS-11430 guard on a backfill-shaped history. It
 // asserts what does not move with host load: each candidate statement's plan uses the index the fix relies on, does no
-// Seq Scan on a history table, and stays under a shared-block and a history-rows-read bound (about 2x the fixed code).
-// Wall times are logged only; the Step context timeout is a hang ceiling, not a budget.
+// Seq Scan on a history table, and stays under a shared-block and a history-rows-read bound (about 2x the measured max
+// of the fixed code, except post_sync blocks = 50000, sized to admit a legal nested-loop plan of ~40k blocks; for
+// post_sync the split from the code before the fix comes from the index, no-Seq-Scan and rows checks). Wall times are logged only; the Step context timeout is a hang ceiling, not a budget.
 func TestMaterializerStatementsFitTheStageBudgetAtBackfillScale(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Minute)
 	defer cancel()

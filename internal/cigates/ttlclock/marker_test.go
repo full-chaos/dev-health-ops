@@ -3,7 +3,6 @@ package ttlclock
 import (
 	"errors"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -142,23 +141,17 @@ func TestAllowTSVIsGone(t *testing.T) {
 }
 
 func TestWalkChecksEveryFileHoldingTheMarker(t *testing.T) {
-	root := t.TempDir()
-	write := func(name, body string) {
-		t.Helper()
-		if err := os.WriteFile(filepath.Join(root, name), []byte(body), 0o600); err != nil {
-			t.Fatal(err)
-		}
+	plain := "package p\n\n//ttlclock:allow never reaches a TTL table: stale tables=events_ttl\nvar x = 1\n"
+	problems, candidate := checkWalked("p/plain_test.go", []byte(plain), plantedTables, plantedToday)
+	if candidate || len(problems) != 1 || !strings.Contains(problems[0], "p/plain_test.go:3: no date literal") {
+		t.Errorf("a non-integration file holding the marker: problems = %q candidate = %v, want exactly the orphan and no candidate", problems, candidate)
 	}
-	write("plain_test.go", "package p\n\n//ttlclock:allow never reaches a TTL table: stale tables=events_ttl\nvar x = 1\n")
-	write("integ_test.go", withMarker(siteSource, siteNever))
-	problems, scannedFiles, err := scanTree(root, plantedTables, plantedToday)
-	if err != nil {
-		t.Fatal(err)
+	problems, candidate = checkWalked("p/other_test.go", []byte("package p\n\nvar x = 1\n"), plantedTables, plantedToday)
+	if candidate || len(problems) != 0 {
+		t.Errorf("an unrelated file: problems = %q candidate = %v, want none", problems, candidate)
 	}
-	if scannedFiles != 1 {
-		t.Errorf("scanned table-naming integration tests = %d, want 1", scannedFiles)
-	}
-	if len(problems) != 1 || !strings.Contains(problems[0], "plain_test.go:3: no date literal") {
-		t.Errorf("problems = %q, want exactly the orphan marker in plain_test.go (a non-integration file holding the marker)", problems)
+	problems, candidate = checkWalked("p/p_test.go", []byte(withMarker(siteSource, siteNever)), plantedTables, plantedToday)
+	if !candidate || len(problems) != 0 {
+		t.Errorf("a marked finding file: problems = %q candidate = %v, want none and a candidate", problems, candidate)
 	}
 }

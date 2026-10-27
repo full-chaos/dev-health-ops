@@ -451,10 +451,30 @@ func repoTTLTables(t *testing.T, root string) map[string]ttlTable {
 	return tables
 }
 
-// scanTree walks root: it checks every integration test that names a TTL table, and every
-// *_test.go holding the marker, so an orphan comment cannot hide in a file that is not a finding. scanned counts the table-naming integration tests.
-func scanTree(root string, tables map[string]ttlTable, today time.Time) (problems []string, scannedFiles int, err error) {
-	err = filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+// checkWalked checks one *_test.go the tree walk read: every integration test that names a TTL table (candidate
+// is true for it), RED STUB: and not yet every other file that holds the marker.
+func checkWalked(rel string, source []byte, tables map[string]ttlTable, today time.Time) (problems []string, candidate bool) {
+	if bytes.Contains(source, []byte("integration")) {
+		for table := range tables {
+			if bytes.Contains(source, []byte(table)) {
+				candidate = true
+				break
+			}
+		}
+	}
+	if !candidate {
+		return nil, false
+	}
+	return checkSites(rel, source, tables, today), true
+}
+
+func TestIntegrationTestsWriteTTLTablesWithClockDates(t *testing.T) {
+	root := moduleRoot(t)
+	tables := repoTTLTables(t, root)
+	today := time.Now().UTC().Truncate(24 * time.Hour)
+	var problems []string
+	scannedFiles := 0
+	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -472,33 +492,14 @@ func scanTree(root string, tables map[string]ttlTable, today time.Time) (problem
 		if err != nil {
 			return err
 		}
-		marked := bytes.Contains(source, []byte(markerPrefix))
-		candidate := false
-		if bytes.Contains(source, []byte("integration")) {
-			for table := range tables {
-				if bytes.Contains(source, []byte(table)) {
-					candidate = true
-					break
-				}
-			}
-		}
-		if !marked && !candidate {
-			return nil
-		}
+		rel, _ := filepath.Rel(root, path)
+		found, candidate := checkWalked(filepath.ToSlash(rel), source, tables, today)
 		if candidate {
 			scannedFiles++
 		}
-		rel, _ := filepath.Rel(root, path)
-		problems = append(problems, checkSites(filepath.ToSlash(rel), source, tables, today)...)
+		problems = append(problems, found...)
 		return nil
 	})
-	return problems, scannedFiles, err
-}
-
-func TestIntegrationTestsWriteTTLTablesWithClockDates(t *testing.T) {
-	root := moduleRoot(t)
-	tables := repoTTLTables(t, root)
-	problems, scannedFiles, err := scanTree(root, tables, time.Now().UTC().Truncate(24*time.Hour))
 	if err != nil {
 		t.Fatal(err)
 	}

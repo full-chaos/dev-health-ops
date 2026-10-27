@@ -27,6 +27,7 @@ internal/api/policy/*
 internal/apiservice/authflowvenue/*
 # the corpus: script, overrides, set-env hook, route table, stub, mail sink and stub provider
 ci/auth_corpus_external.sh
+ci/auth_corpus_set.sh
 ci/auth_corpus_external.override.yml
 ci/auth_corpus_external.acp.override.yml
 ci/auth_corpus_set_env.sh

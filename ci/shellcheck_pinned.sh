@@ -139,6 +139,8 @@ FILES=(
   # CHAOS-10160: the external auth corpus job and its set-env hook.
   "${ROOT}/ci/auth_corpus_external.sh"
   "${ROOT}/ci/auth_corpus_set_env.sh"
+  # CHAOS-11670: the shared set (roots, tested package) both corpus scripts source.
+  "${ROOT}/ci/auth_corpus_set.sh"
   # CHAOS-11596: the merge queue relevance of the external auth corpus.
   "${ROOT}/ci/auth_corpus_queue_relevance.sh"
   "${ROOT}/ci/run_tests.sh"

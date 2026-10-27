@@ -40,6 +40,9 @@ fi
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)"
 ROOT="$(cd -- "${SCRIPT_DIR}/.." >/dev/null 2>&1 && pwd -P)"
+# CHAOS-11670: the tested package comes from the set the relevance script lists the closure of (ci/auth_corpus_set.sh).
+# shellcheck source=ci/auth_corpus_set.sh
+source "${SCRIPT_DIR}/auth_corpus_set.sh"
 # From /dev/urandom: compose adopts a resource that already carries the project name, so it must not be guessable.
 PROJECT="authcorpus$(od -An -N6 -tx1 /dev/urandom | tr -d ' \n')"
 # The override tags the images this run builds with the project, so the trap removes exactly its own two.
@@ -423,14 +426,14 @@ if [ "${LEG}" = "acp" ] && [ -z "${AUTH_CORPUS_USERS_UNOWNED:-}" ]; then
 else
   export DEVHEALTH_AUTH_ORACLE_USERS_OWNED=false
 fi
-TEST_CMD=(go test -trimpath -tags integration -count=1 -v -run '^TestAuthFlowVenueOracle$' ./internal/apiservice/authflowvenue)
+TEST_CMD=(go test -trimpath -tags integration -count=1 -v -run '^TestAuthFlowVenueOracle$' "${AUTH_CORPUS_TEST_PACKAGE}")
 if [ "${LEG}" = "acp" ] && [ -z "${AUTH_CORPUS_USERS_UNOWNED:-}" ]; then
   # The owned leg: the test seeds, signals, and waits; the flip (step 1e and 1f) runs once the users exist.
   export DEVHEALTH_AUTH_ORACLE_SEEDED_FILE="${SEEDED_FILE}" DEVHEALTH_AUTH_ORACLE_FLIPPED_FILE="${FLIPPED_FILE}"
   # The test runs as its own compiled binary, so the pid kept here is the test itself and cleanup kills that pid and nothing else.
   TEST_BIN="${WORK}/authflowvenue.test"
-  (cd "${ROOT}" && go test -c -trimpath -tags integration -o "${TEST_BIN}" ./internal/apiservice/authflowvenue)
-  (cd "${ROOT}/internal/apiservice/authflowvenue" && exec "${TEST_BIN}" -test.v -test.count=1 -test.run '^TestAuthFlowVenueOracle$') &
+  (cd "${ROOT}" && go test -c -trimpath -tags integration -o "${TEST_BIN}" "${AUTH_CORPUS_TEST_PACKAGE}")
+  (cd "${ROOT}/${AUTH_CORPUS_TEST_PACKAGE#./}" && exec "${TEST_BIN}" -test.v -test.count=1 -test.run '^TestAuthFlowVenueOracle$') &
   TEST_PID=$!
   while [ ! -e "${SEEDED_FILE}" ] && kill -0 "${TEST_PID}" 2>/dev/null; do sleep 1; done
   if [ ! -e "${SEEDED_FILE}" ]; then

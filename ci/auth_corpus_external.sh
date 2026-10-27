@@ -40,6 +40,9 @@ fi
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)"
 ROOT="$(cd -- "${SCRIPT_DIR}/.." >/dev/null 2>&1 && pwd -P)"
+# CHAOS-11670: the tested package comes from the set the relevance script lists the closure of (ci/auth_corpus_set.sh).
+# shellcheck source=ci/auth_corpus_set.sh
+source "${SCRIPT_DIR}/auth_corpus_set.sh"
 # From /dev/urandom: compose adopts a resource that already carries the project name, so it must not be guessable.
 PROJECT="authcorpus$(od -An -N6 -tx1 /dev/urandom | tr -d ' \n')"
 # The override tags the images this run builds with the project, so the trap removes exactly its own two.
@@ -166,13 +169,68 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# CHAOS-11670: `compose up --build` fails now and then for a reason outside the product. up_service retries it ONCE, and only
+# when its output has a whole line of one of these classes (the texts are from venue-oracles runs on main) and no product line:
+#   1 port already allocated      (run 40283712992, job 121442426149)
+#   2 image mirror layer fetch    (run 40273038441, job 121409808895)
+#   3 Go module proxy read error  (run 40431223738, job 121949107695)
+# A product line is a container that is unhealthy or exited non-zero, or a service that did not complete. Any other failure is
+# never retried. The retry runs `down` for this project only, without --volumes. Each attempt has its own log file; the whole
+# first attempt stays in the job log (up_once copies the output to the console).
+INFRA_CLASSES=(
+  '^Error response from daemon: failed to set up container networking: driver failed programming external connectivity on endpoint [A-Za-z0-9_.-]+ \([0-9a-f]+\): Bind for 127\.0\.0\.1:[0-9]+ failed: port is already allocated$'
+  '^#[0-9]+ ERROR: failed to copy: httpReadSeeker: failed open: could not fetch content descriptor sha256:[0-9a-f]{64} \(application/vnd\.oci\.image\.layer\.v1\.tar\+gzip\) from remote: not found$'
+  '^#[0-9]+ [0-9.]+ go: [^ ]+@[^ ]+: read "https://proxy\.golang\.org/[^"]*": stream error: stream ID [0-9]+; INTERNAL_ERROR; received from peer$'
+)
+PRODUCT_LINE='^dependency failed to start: |is unhealthy|exited \([1-9][0-9]*\)|didn.t complete successfully'
+infra_class() {
+  local text
+  text="$(tr -d '\r' <"$1")"
+  if LC_ALL=C grep -aEq "${PRODUCT_LINE}" <<<"${text}"; then
+    return 0
+  fi
+  local n
+  for n in "${!INFRA_CLASSES[@]}"; do
+    if LC_ALL=C grep -aEq "${INFRA_CLASSES[n]}" <<<"${text}"; then
+      echo $((n + 1))
+      return 0
+    fi
+  done
+}
+
+# up_once SERVICE LOGFILE: one bounded up --build; its output goes to the console and to LOGFILE; returns up's status.
+up_once() {
+  local status=0
+  set +e
+  { timeout --kill-after=10 "${AUTH_CORPUS_UP_SECONDS:-1500}" docker compose -p "${PROJECT}" "${COMPOSE_FILES[@]}" --profile auth up --build --detach --wait --wait-timeout 900 "$1"; } 2>&1 | tee -- "$2"
+  status="${PIPESTATUS[0]}"
+  set -e
+  return "${status}"
+}
+
+# up_service go-api|auth-service
+up_service() {
+  local service="$1" log="${WORK}/up-$1.1.log" status=0 class
+  up_once "${service}" "${log}" || status=$?
+  [ "${status}" -ne 0 ] || return 0
+  class="$(infra_class "${log}")"
+  [ -n "${class}" ] || return "${status}"
+  printf 'AUTH-CORPUS-INFRA-RETRY class=%s step=%s\n' "${class}" "${service}"
+  timeout --kill-after=10 "${AUTH_CORPUS_DOWN_SECONDS:-180}" docker compose -p "${PROJECT}" "${COMPOSE_FILES[@]}" --profile auth down --remove-orphans || true
+  # down removed go-api too: the auth-service step starts it again before it tries auth-service again.
+  if [ "${service}" = "auth-service" ]; then
+    up_once go-api "${WORK}/up-go-api-retry.log" || return $?
+  fi
+  up_once "${service}" "${WORK}/up-${service}.2.log"
+}
+
 # compose.yml's migrate service refuses a database that already holds objects but no alembic_version table, and
 # auth-migrate creates the auth schema: leg acp starts go-api (and with it migrate) first and auth-service after it.
 printf 'step 1: up --build --wait go-api (project %s)\n' "${PROJECT}"
-timeout --kill-after=10 "${AUTH_CORPUS_UP_SECONDS:-1500}" docker compose -p "${PROJECT}" "${COMPOSE_FILES[@]}" --profile auth up --build --detach --wait --wait-timeout 900 go-api
+up_service go-api
 if [ "${LEG}" = "acp" ]; then
   printf 'step 1b: up --build --wait auth-service\n'
-  timeout --kill-after=10 "${AUTH_CORPUS_UP_SECONDS:-1500}" docker compose -p "${PROJECT}" "${COMPOSE_FILES[@]}" --profile auth up --build --detach --wait --wait-timeout 900 auth-service
+  up_service auth-service
 fi
 
 AGGREGATES=(sessions local_login credentials social oidc saml)
@@ -368,14 +426,14 @@ if [ "${LEG}" = "acp" ] && [ -z "${AUTH_CORPUS_USERS_UNOWNED:-}" ]; then
 else
   export DEVHEALTH_AUTH_ORACLE_USERS_OWNED=false
 fi
-TEST_CMD=(go test -trimpath -tags integration -count=1 -v -run '^TestAuthFlowVenueOracle$' ./internal/apiservice/authflowvenue)
+TEST_CMD=(go test -trimpath -tags integration -count=1 -v -run '^TestAuthFlowVenueOracle$' "${AUTH_CORPUS_TEST_PACKAGE}")
 if [ "${LEG}" = "acp" ] && [ -z "${AUTH_CORPUS_USERS_UNOWNED:-}" ]; then
   # The owned leg: the test seeds, signals, and waits; the flip (step 1e and 1f) runs once the users exist.
   export DEVHEALTH_AUTH_ORACLE_SEEDED_FILE="${SEEDED_FILE}" DEVHEALTH_AUTH_ORACLE_FLIPPED_FILE="${FLIPPED_FILE}"
   # The test runs as its own compiled binary, so the pid kept here is the test itself and cleanup kills that pid and nothing else.
   TEST_BIN="${WORK}/authflowvenue.test"
-  (cd "${ROOT}" && go test -c -trimpath -tags integration -o "${TEST_BIN}" ./internal/apiservice/authflowvenue)
-  (cd "${ROOT}/internal/apiservice/authflowvenue" && exec "${TEST_BIN}" -test.v -test.count=1 -test.run '^TestAuthFlowVenueOracle$') &
+  (cd "${ROOT}" && go test -c -trimpath -tags integration -o "${TEST_BIN}" "${AUTH_CORPUS_TEST_PACKAGE}")
+  (cd "${ROOT}/${AUTH_CORPUS_TEST_PACKAGE#./}" && exec "${TEST_BIN}" -test.v -test.count=1 -test.run '^TestAuthFlowVenueOracle$') &
   TEST_PID=$!
   while [ ! -e "${SEEDED_FILE}" ] && kill -0 "${TEST_PID}" 2>/dev/null; do sleep 1; done
   if [ ! -e "${SEEDED_FILE}" ]; then

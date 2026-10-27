@@ -20,13 +20,13 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 )
 
-// TestUsersOwnedGuardWaivesOnlyKeyableBoundOIDCUsers runs the real users backfill and then the guard, both as the
+// TestUsersOwnedGuardWaivesOnlyKeyableBoundSSOUsers runs the real users backfill and then the guard, both as the
 // auth runtime role. An OIDC user bound to an OIDC provider row (users.sso_provider_id) with a subject the sign-in
 // path can key is re-linked at its first owned sign-in, so the guard is ready with it and no identity. A bound SAML
-// user is never waived: go-api stores only the NameID value, not its format, so its key cannot be verified; it holds
-// the guard until it has an identity. Each other shape (unbound, no subject, a subject the key rule refuses, bound to
+// user is waived only when the NameID parts go-api stored at sign-in key under saml.SubjectFromStored; one that never
+// signed in (NULL parts) or has a transient NameID holds the guard until it has an identity. Each other shape (unbound, no subject, a subject the key rule refuses, bound to
 // a row of another protocol) and a social user with no subject is refused until the row is repaired.
-func TestUsersOwnedGuardWaivesOnlyKeyableBoundOIDCUsers(t *testing.T) {
+func TestUsersOwnedGuardWaivesOnlyKeyableBoundSSOUsers(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	instance, err := containers.StartPostgres(ctx)
@@ -158,6 +158,33 @@ VALUES ($1, $2, $3, $4, $5, $6, true, true, false, 0, now(), now())`, id, id.Str
 		t.Fatalf("link the saml identity: %v", err)
 	}
 	check("the saml row with its identity", "")
+
+	// A bound SAML account whose NameID parts go-api stored is keyed by the runtime rule and waived; one that never
+	// signed in (NULL parts) and one with a transient NameID stay counted in sso_subject_unverifiable.
+	const persistent = "urn:oasis:names:tc:SAML:2.0:nameid-format:persistent"
+	signedIn := user("saml", nil, s("nameid-2@example.com"), &samlRow)
+	set(signedIn, "saml_nameid_format", persistent)
+	set(signedIn, "saml_sp_name_qualifier", "")
+	rep := backfill(0)
+	check("a bound saml account whose NameID parts were stored", "")
+	// The report counts every not-carried row: samlBound (parts never stored, identity linked above) is the one
+	// unverifiable row, the stored saml row is relink pending beside the oidc row.
+	if rep.SSOSubjectUnverifiable != 1 || rep.IdentityRelinkPending < 2 {
+		t.Fatalf("report: unverifiable=%d relink pending=%d, want 1 and at least 2", rep.SSOSubjectUnverifiable, rep.IdentityRelinkPending)
+	}
+	neverSignedIn := user("saml", nil, s("nameid-3@example.com"), &samlRow)
+	rep = backfill(0)
+	check("a bound saml account that never signed in", refused+" (sso_subject_unverifiable=1)")
+	if rep.SSOSubjectUnverifiable != 2 {
+		t.Fatalf("report unverifiable = %d, want 2 (samlBound and the account that never signed in)", rep.SSOSubjectUnverifiable)
+	}
+	set(neverSignedIn, "saml_nameid_format", persistent)
+	set(neverSignedIn, "saml_sp_name_qualifier", "sp-q")
+	check("the second saml account after its sign-in", "")
+	set(signedIn, "saml_nameid_format", "urn:oasis:names:tc:SAML:2.0:nameid-format:transient")
+	check("a transient NameID", refused+" (sso_subject_unverifiable=1)")
+	set(signedIn, "saml_nameid_format", persistent)
+	check("the transient account back on a persistent NameID", "")
 
 	unbound := user("oidc", nil, s("oidc-sub-2"), nil)
 	backfill(0)

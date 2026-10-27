@@ -22,8 +22,14 @@ func (r countsRow) Scan(dest ...any) error {
 	if r.err != nil {
 		return r.err
 	}
-	for i, d := range dest {
-		*(d.(*int64)) = r.values[i]
+	n := 0
+	for _, d := range dest {
+		if c, ok := d.(*string); ok {
+			*c = "[]"
+			continue
+		}
+		*(d.(*int64)) = r.values[n]
+		n++
 	}
 	return nil
 }

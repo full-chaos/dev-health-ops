@@ -102,7 +102,7 @@ func TestProvisionFederatedRefusesAnSSOAccountItCannotProject(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	email := uniqueEmailCom("proj-sso")
-	key := ExternalKey{Issuer: "https://idp.example.test", Provider: Provider(uuid.NewString()), Subject: "sso-" + uuid.NewString()}
+	key := ExternalKey{Issuer: "https://idp.example.test", Provider: e.seedSSOProvider(t, ctx, e.seedOrg(t, ctx), "oidc"), Subject: "sso-" + uuid.NewString()}
 	if _, err := e.owned.ProvisionFederated(ctx, ProvisionRequest{Key: key, Email: email, Actor: SelfSignUp(nil)}); !errors.Is(err, ErrLegacyProjection) {
 		t.Fatalf("err = %v, want ErrLegacyProjection", err)
 	}

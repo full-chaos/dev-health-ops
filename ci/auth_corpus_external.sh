@@ -167,19 +167,32 @@ cleanup() {
 trap cleanup EXIT
 
 # CHAOS-11670: `compose up --build` fails now and then for a reason outside the product. up_service retries it ONCE, and only
-# when its captured output names one of these classes (the texts are from venue-oracles runs on main):
-#   1 "port is already allocated"            (run 40283712992, job 121442426149: a host port taken between compose's pick and its bind)
-#   2 a layer fetch failure from the image mirror (run 40273038441, job 121409808895: BuildKit "failed to copy: httpReadSeeker ...")
-#   3 a Go module proxy read failure          (run 40431223738, job 121949107695: "go: <module>@<version>: read https://proxy.golang.org/...: stream error ... INTERNAL_ERROR")
-# Any other failure is never retried. The retry runs `down` for this project only, without --volumes.
+# when its output has a whole line of one of these classes (the texts are from venue-oracles runs on main) and no product line:
+#   1 port already allocated      (run 40283712992, job 121442426149)
+#   2 image mirror layer fetch    (run 40273038441, job 121409808895)
+#   3 Go module proxy read error  (run 40431223738, job 121949107695)
+# A product line is a container that is unhealthy or exited non-zero, or a service that did not complete. Any other failure is
+# never retried. The retry runs `down` for this project only, without --volumes. Each attempt has its own log file; the whole
+# first attempt stays in the job log (up_once copies the output to the console).
+INFRA_CLASSES=(
+  '^Error response from daemon: failed to set up container networking: driver failed programming external connectivity on endpoint [A-Za-z0-9_.-]+ \([0-9a-f]+\): Bind for 127\.0\.0\.1:[0-9]+ failed: port is already allocated$'
+  '^#[0-9]+ ERROR: failed to copy: httpReadSeeker: failed open: could not fetch content descriptor sha256:[0-9a-f]{64} \(application/vnd\.oci\.image\.layer\.v1\.tar\+gzip\) from remote: not found$'
+  '^#[0-9]+ [0-9.]+ go: [^ ]+@[^ ]+: read "https://proxy\.golang\.org/[^"]*": stream error: stream ID [0-9]+; INTERNAL_ERROR; received from peer$'
+)
+PRODUCT_LINE='^dependency failed to start: |is unhealthy|exited \([1-9][0-9]*\)|didn.t complete successfully'
 infra_class() {
-  if grep -aqF 'port is already allocated' "$1"; then
-    echo 1
-  elif grep -aqF 'failed to copy: httpReadSeeker: failed open: could not fetch content descriptor' "$1"; then
-    echo 2
-  elif grep -aqE 'go: [^ ]+@[^ ]+: read "https://proxy\.golang\.org/[^"]*": stream error: stream ID [0-9]+; INTERNAL_ERROR; received from peer' "$1"; then
-    echo 3
+  local text
+  text="$(tr -d '\r' <"$1")"
+  if grep -aEq "${PRODUCT_LINE}" <<<"${text}"; then
+    return 0
   fi
+  local n
+  for n in "${!INFRA_CLASSES[@]}"; do
+    if grep -aEq "${INFRA_CLASSES[n]}" <<<"${text}"; then
+      echo $((n + 1))
+      return 0
+    fi
+  done
 }
 
 # up_once SERVICE LOGFILE: one bounded up --build; its output goes to the console and to LOGFILE; returns up's status.
@@ -194,7 +207,7 @@ up_once() {
 
 # up_service go-api|auth-service
 up_service() {
-  local service="$1" log="${WORK}/up-$1.log" status=0 class
+  local service="$1" log="${WORK}/up-$1.1.log" status=0 class
   up_once "${service}" "${log}" || status=$?
   [ "${status}" -ne 0 ] || return 0
   class="$(infra_class "${log}")"
@@ -205,7 +218,7 @@ up_service() {
   if [ "${service}" = "auth-service" ]; then
     up_once go-api "${WORK}/up-go-api-retry.log" || return $?
   fi
-  up_once "${service}" "${log}"
+  up_once "${service}" "${WORK}/up-${service}.2.log"
 }
 
 # compose.yml's migrate service refuses a database that already holds objects but no alembic_version table, and

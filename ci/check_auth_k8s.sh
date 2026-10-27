@@ -218,7 +218,30 @@ ready="$(K get deploy "${RELEASE}-dev-health-auth-service" -o jsonpath='{.status
 [ "$(K get pdb "${RELEASE}-dev-health-auth-service" -o jsonpath='{.spec.minAvailable}')" = 1 ] || die "the PodDisruptionBudget does not hold minAvailable 1"
 [ "$(K get pdb "${RELEASE}-dev-health-auth-service" -o jsonpath='{.status.disruptionsAllowed}')" = 1 ] || die "the PodDisruptionBudget does not allow exactly one disruption"
 printf 'capacity defaults: 2 ready replicas, --database-max-conns=8, PodDisruptionBudget minAvailable 1 allows 1 disruption\n'
-POD="$(K get pod -l app.kubernetes.io/component=auth-service --field-selector=status.phase=Running -o jsonpath='{.items[0].metadata.name}')"
+# The pod the proof inspects: Ready, not terminating, and of the Deployment's current ReplicaSet. Right after the
+# upgrade a pod of the old ReplicaSet can still be listed (phase Running during its preStop drain), and the API
+# lists pods by name, so it can come first.
+current_auth_pod() {
+  local deploy="${RELEASE}-dev-health-auth-service" revision="" hash="" pod=""
+  for _ in $(seq 1 60); do
+    revision="$(K get deploy "${deploy}" -o jsonpath='{.metadata.annotations.deployment\.kubernetes\.io/revision}')"
+    hash="$(K get rs -l app.kubernetes.io/component=auth-service -o json | jq -r --arg d "${deploy}" --arg r "${revision}" \
+      '[.items[] | select(any(.metadata.ownerReferences[]?; .kind == "Deployment" and .name == $d))
+        | select(.metadata.annotations["deployment.kubernetes.io/revision"] == $r)][0].metadata.labels["pod-template-hash"] // empty')"
+    if [ -n "${hash}" ]; then
+      pod="$(K get pod -l app.kubernetes.io/component=auth-service -o json | jq -r --arg h "${hash}" \
+        '[.items[] | select(.metadata.labels["pod-template-hash"] == $h) | select(.metadata.deletionTimestamp == null)
+          | select(any(.status.conditions[]?; .type == "Ready" and .status == "True"))][0].metadata.name // empty')"
+      if [ -n "${pod}" ]; then
+        printf '%s\n' "${pod}"
+        return 0
+      fi
+    fi
+    sleep 2
+  done
+  die "no Ready, non-terminating auth-service pod of the current ReplicaSet after 60 tries (revision '${revision}', pod-template-hash '${hash}')"
+}
+POD="$(current_auth_pod)" || exit 1
 POD_IP="$(K get pod "${POD}" -o jsonpath='{.status.podIP}')"
 printf 'pod %s ip %s\n' "${POD}" "${POD_IP}"
 
@@ -242,6 +265,17 @@ grep -q '"status":"ok"' <<<"${body}" || die "/readyz is not ok"
 grep -q 'rc=0' <<<"${body}" || die "/readyz did not answer 200"
 
 # --- 3. the staged key, read through an ephemeral container -------------------------------
+# await_debug_container <pod> <container>: wait until the ephemeral container has run (terminated), so its whole
+# output can be read; a container that never runs fails the proof with its last state.
+await_debug_container() {
+  local state=""
+  for _ in $(seq 1 60); do
+    state="$(K get pod "$1" -o json | jq -r --arg c "$2" '[.status.ephemeralContainerStatuses[]? | select(.name == $c)][0].state // {} | keys[0] // empty')"
+    [ "${state}" = terminated ] && return 0
+    sleep 1
+  done
+  die "the ephemeral container $2 in pod $1 did not run to completion after 60 tries (last state '${state}')"
+}
 printf 'step 6: the staged signing key is 0400 and owned by uid 65532\n'
 # shellcheck disable=SC2016
 K debug "${POD}" --image="${LOCAL_PG}" --target=auth-service -c dbg -q --profile=general -- sh -c '
@@ -250,7 +284,7 @@ K debug "${POD}" --image="${LOCAL_PG}" --target=auth-service -c dbg -q --profile
       stat -c "%a %u %g %n" "$p/root/run/auth/signing/signing-key.pem"; break
     fi
   done' >/dev/null
-sleep 5
+await_debug_container "${POD}" dbg
 key_stat="$(K logs "${POD}" -c dbg | tail -n 1)"
 printf 'staged key (mode uid gid path): %s\n' "${key_stat}"
 case "${key_stat}" in
@@ -321,7 +355,7 @@ fi
 printf 'step 8b: the Service reaches the pod (DNS name, endpoints, both ports)\n'
 # Every Ready pod of the Deployment must be a ready endpoint of the Service, and nothing else.
 pod_ips="$(K get pod -l app.kubernetes.io/component=auth-service -o json \
-  | jq -r '.items[] | select(.status.phase == "Running" and ([.status.conditions[] | select(.type == "Ready" and .status == "True")] | length) == 1) | .status.podIP' | sort)"
+  | jq -r '.items[] | select(.metadata.deletionTimestamp == null) | select(.status.phase == "Running" and ([.status.conditions[] | select(.type == "Ready" and .status == "True")] | length) == 1) | .status.podIP' | sort)"
 ep_ips="$(K get endpointslice -l "kubernetes.io/service-name=${RELEASE}-dev-health-auth-service" -o json \
   | jq -r '.items[].endpoints[] | select(.conditions.ready == true) | .addresses[]' | sort)"
 printf 'Ready pod IPs: %s\nService endpoint IPs: %s\n' "$(tr '\n' ' ' <<<"${pod_ips}")" "$(tr '\n' ' ' <<<"${ep_ips}")"

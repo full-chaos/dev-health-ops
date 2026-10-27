@@ -809,7 +809,7 @@ and the other enable flags say. templates/auth-service.yaml includes it once, ou
 {{- if eq (include "dev-health.authOn" (dict "flag" "localLogin" "context" .)) "true" }}
 {{- if not (include "dev-health.validSecretKey" .Values.authService.sessionKeys.loginLockout.secretKey) }}{{- fail "authService.phase >= 3 (login) needs authService.sessionKeys.loginLockout.secretKey to be a Secret key: letters, digits, '-', '_', '.'" }}{{- end }}
 {{- end }}
-{{- if and (eq (include "dev-health.authOn" (dict "flag" "usersOwned" "context" .)) "true") (hasKey (default dict .Values.authService.migrate) "narrowAfterFlipBack") }}{{- fail "authService.migrate.narrowAfterFlipBack is refused at authService.phase >= 4: a flip-back narrowing is not a phase 4 setting; remove it" }}{{- end }}
+{{- if and (eq (include "dev-health.authOn" (dict "flag" "usersOwned" "context" .)) "true") (eq (include "dev-health.authBool" (dict "value" .Values.authService.migrate.narrowAfterFlipBack "key" "authService.migrate.narrowAfterFlipBack")) "true") }}{{- fail "authService.migrate.narrowAfterFlipBack is refused at authService.phase >= 4: a flip-back narrowing is not a phase 4 setting; remove it" }}{{- end }}
 {{- $_ := include "dev-health.authEdDSAIssuer" . }}
 {{- $_ := include "dev-health.authSSOOn" (dict "flag" "oidc" "context" .) }}
 {{- $_ := include "dev-health.authSSOOn" (dict "flag" "saml" "context" .) }}

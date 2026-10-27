@@ -44,10 +44,7 @@ func corpusQueueRepo(t *testing.T, withPaths bool) string {
 			t.Fatal(err)
 		}
 	}
-	// CHAOS-11670: the script also reads the closure table; a fixed one keeps every case here independent of the real table.
-	if err := os.WriteFile(filepath.Join(dir, "ci", "auth_corpus_closure.txt"), []byte("# test table\ninternal/closurepkg\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	corpusQueueFakeGo(t, dir)
 	corpusQueueGit(t, dir, "add", "-A")
 	corpusQueueGit(t, dir, "commit", "-q", "-m", "base")
 	return dir
@@ -71,9 +68,46 @@ func corpusQueueCommit(t *testing.T, dir string, paths ...string) string {
 
 func corpusQueueRun(t *testing.T, dir string, args ...string) string {
 	t.Helper()
+	return corpusQueueRunEnv(t, dir, nil, args...)
+}
+
+// corpusQueueBinDir is where corpusQueueRepo puts the fake go of the repository at dir (outside the repository).
+func corpusQueueBinDir(dir string) string { return dir + ".bin" }
+
+// corpusQueueFakeGo installs a fake `go` for the relevance script (CHAOS-11670: it runs go list -deps live). `go list -m`
+// prints example.com/x; `go list -deps ...` prints FAKE_GO_LIST (default: the one closure package internal/closurepkg).
+// FAKE_GO_MODE: fail (rc 1), empty (no output), nomod (go list -m fails). FAKE_GO_ENVLOG, when set, receives the
+// GOFLAGS, GOTOOLCHAIN and LC_ALL the script gave it; FAKE_GO_ARGLOG receives the arguments of go list -deps.
+func corpusQueueFakeGo(t *testing.T, dir string) {
+	t.Helper()
+	bin := corpusQueueBinDir(dir)
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fake := `#!/bin/sh
+if [ -n "$FAKE_GO_ENVLOG" ]; then printf 'GOFLAGS=%s GOTOOLCHAIN=%s LC_ALL=%s\n' "$GOFLAGS" "$GOTOOLCHAIN" "$LC_ALL" >> "$FAKE_GO_ENVLOG"; fi
+if [ "$1 $2" = "list -m" ]; then
+  [ "$FAKE_GO_MODE" = nomod ] && exit 1
+  echo example.com/x; exit 0
+fi
+if [ -n "$FAKE_GO_ARGLOG" ]; then printf '%s\n' "$*" >> "$FAKE_GO_ARGLOG"; fi
+case "$FAKE_GO_MODE" in
+  fail) echo "go: boom" >&2; exit 1 ;;
+  empty) exit 0 ;;
+esac
+if [ -n "${FAKE_GO_LIST+x}" ]; then printf '%s\n' "$FAKE_GO_LIST"; else echo "P example.com/x/internal/closurepkg"; fi
+`
+	if err := os.WriteFile(filepath.Join(bin, "go"), []byte(fake), 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// corpusQueueRunEnv runs the relevance script with the fake go first on PATH and the given extra environment.
+func corpusQueueRunEnv(t *testing.T, dir string, extra []string, args ...string) string {
+	t.Helper()
 	cmd := exec.Command("bash", append([]string{filepath.Join(dir, "ci", "auth_corpus_queue_relevance.sh")}, args...)...)
 	cmd.Dir = dir
-	cmd.Env = []string{"PATH=/usr/bin:/bin:/usr/local/bin", "HOME=" + t.TempDir()}
+	cmd.Env = append([]string{"PATH=" + corpusQueueBinDir(dir) + ":/usr/bin:/bin:/usr/local/bin", "HOME=" + t.TempDir()}, extra...)
 	var stdout strings.Builder
 	cmd.Stdout = &stdout
 	if err := cmd.Run(); err != nil {

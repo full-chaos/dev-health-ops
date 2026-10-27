@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"reflect"
 	"sync"
 	"testing"
 
@@ -248,5 +249,27 @@ func TestASettleFailureAfterAGoodClefAnswerKeepsItsAttemptAndHasItsOwnOutcome(t 
 				t.Fatalf("outcomes = %v", served.outcomes)
 			}
 		})
+	}
+}
+
+// Every clef attempt row names a request id and where it came from.
+func TestEveryClefAttemptRowHasARequestIDAndAValidSource(t *testing.T) {
+	rows, errs := servedClefRun(t, clefAnswers("clef"), &latchStore{})
+	if errs[0] != nil || errs[1] != nil || len(rows) != 2 {
+		t.Fatalf("errs %v rows %d", errs, len(rows))
+	}
+	for index, row := range rows {
+		if row.RequestID == "" {
+			t.Fatalf("row %d has an empty request_id", index+1)
+		}
+		field := reflect.ValueOf(row).FieldByName("RequestIDSource")
+		if !field.IsValid() {
+			t.Fatal("AttemptRecord has no RequestIDSource field")
+		}
+		switch field.String() {
+		case "aig", "ray", "client":
+		default:
+			t.Fatalf("row %d request_id_source = %q, want aig, ray or client", index+1, field.String())
+		}
 	}
 }

@@ -300,7 +300,7 @@ WITH rel AS (
   SELECT c.oid, c.relkind, n.nspname, c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
    WHERE n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname NOT LIKE 'pg_toast%' AND n.nspname NOT LIKE 'pg_temp%'
 )
-SELECT 'relation ' || nspname || '.' || relname || ' kind=' || relkind FROM rel
+SELECT 'relation ' || nspname || '.' || relname || ' kind=' || relkind::text FROM rel
 UNION ALL SELECT 'column ' || r.nspname || '.' || r.relname || '.' || a.attname || ' ' || format_type(a.atttypid, a.atttypmod) ||
          ' notnull=' || a.attnotnull || ' default=' || coalesce(md5(pg_get_expr(d.adbin, d.adrelid)), '')
   FROM rel r JOIN pg_attribute a ON a.attrelid = r.oid AND a.attnum > 0 AND NOT a.attisdropped

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -208,5 +209,21 @@ func TestTemplateFingerprintDiffNamesTheChange(t *testing.T) {
 	}
 	if same := templateDiff("dh_tpl_x", before, before); len(same) != 0 {
 		t.Errorf("equal fingerprints gave a diff: %v", same)
+	}
+}
+
+// PostgreSQL has no single || for text and the "char" type of the catalog
+// columns relkind, contype, prokind and attalign (SQLSTATE 42725), so each
+// such column enters the fingerprint text through ::text.
+func TestFingerprintQueryCastsCatalogCharColumnsToText(t *testing.T) {
+	pattern := regexp.MustCompile(`\|\|\s*(?:\w+\.)?(relkind|contype|prokind|attalign|typtype|tgtype|polcmd)\b(::text)?`)
+	matches := pattern.FindAllStringSubmatch(pgTemplateFingerprintQuery, -1)
+	if len(matches) == 0 {
+		t.Fatal("the query concatenates no catalog char column; the check proves nothing, update it")
+	}
+	for _, match := range matches {
+		if match[2] != "::text" {
+			t.Errorf("%q is concatenated without ::text", strings.TrimSpace(match[0]))
+		}
 	}
 }

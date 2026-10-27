@@ -48,6 +48,9 @@ func TestMain(m *testing.M) {
 	if _, set := os.LookupEnv("ENVIRONMENT"); !set {
 		_ = os.Setenv("ENVIRONMENT", "test")
 	}
+	// configure refuses a bad TRUSTED_PROXIES at start: no test reads the outer value; a test sets its own.
+	_ = os.Unsetenv("TRUSTED_PROXIES")
+	_ = os.Unsetenv("TRUSTED_PROXIES_NETWORK_FENCED")
 	// RunTests is m.Run, and fails the run when a test that ran did not use its golden.
 	os.Exit(venueoracle.RunTests(m))
 }

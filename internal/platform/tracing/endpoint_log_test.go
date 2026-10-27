@@ -23,6 +23,8 @@ func TestTheStartupLineNamesTheCollectorByHostAndPortOnly(t *testing.T) {
 		{"http://ops-user:c4n4ry-pw@127.0.0.1:4317/v1/traces?c4n4ry-q=1#c4n4ry-f", "127.0.0.1:4317"},
 		{"https://collector.internal:4317/c4n4ry-path", "collector.internal:4317"},
 		{"http://[::1]:4317", "[::1]:4317"},
+		{"[::1]:4317", "[::1]:4317"},
+		{"http://collector.internal", "collector.internal"},
 		{"127.0.0.1:4317", "127.0.0.1:4317"},
 		{"collector.internal:4317", "collector.internal:4317"},
 	} {
@@ -83,6 +85,13 @@ func TestAMalformedEndpointNeverReachesTheExporter(t *testing.T) {
 		"[]:4317",
 		"http://:4317",
 		"http://[]:4317/v1/traces",
+		"[ops-user:c4n4ry-pw]:4317",
+		"[c4n4ry-host]:4317",
+		"http://[ops-user:c4n4ry]:4317",
+		"http://127.0.0.1:0",
+		"http://127.0.0.1:70000",
+		"http://127.0.0.1:",
+		"https://collector.internal:/c4n4ry-path",
 	} {
 		t.Run(endpoint, func(t *testing.T) {
 			t.Setenv("OTEL_ENABLED", "true")

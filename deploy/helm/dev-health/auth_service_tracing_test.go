@@ -60,6 +60,7 @@ func TestAuthServiceTracingOnRendersTheExportAndItsEgress(t *testing.T) {
 		"v6 host ipBlock":    `[{"ipBlock":{"cidr":"2001:db8::7/128"}}]`,
 		"v4 /8 ipBlock":      `[{"ipBlock":{"cidr":"10.0.0.0/8"}}]`,
 		"v6 /32 ipBlock":     `[{"ipBlock":{"cidr":"2001:db8::/32"}}]`,
+		"v6 next to NAT64":   `[{"ipBlock":{"cidr":"64:ff9a::/32"}}]`,
 		"collector selector": `[{"podSelector":{"matchLabels":{"app.kubernetes.io/name":"otel-collector"}}}]`,
 		"namespace and pods": `[{"namespaceSelector":{"matchLabels":{"kubernetes.io/metadata.name":"observability"}},"podSelector":{"matchLabels":{"app":"collector"}}}]`,
 	} {
@@ -117,6 +118,9 @@ func TestAuthServiceTracingRefusals(t *testing.T) {
 		"0:0:0:0:0:0:0:0/0", "::0/0", " ::/0", "0.0.0.0/1", "128.0.0.0/1", "10.0.0.0/7", "::/1", "2001:db8::/31",
 		"::ffff:0:0/96", "0:0:0:0:0:ffff:0:0/96", "::FFFF:0:0/96", "0::ffff:0:0/96", "::ffff:0.0.0.0/96", "::ffff:10.0.0.151/128",
 		"10.0.0.151", "10.0.0.151/x", "10.0.0.151/32/1", "10.0.0.151/", "10.0.0.151/33", "2001:db8::7/129",
+		"::/32", "0:0::/64",
+		"64:ff9b::/96", "64:ff9b::a00:97/128", "0064:FF9B:0000::/96", "64:ff9b::/32", "64:ff9b::/64", "64:ff9b:0:0:0:0:0:0/96",
+		"64:ff9b:1::/48", "64:ff9b:1:2::/64", "64:ff9b:1:0:0:0:0:7/128", "64:ff9b:0::/40",
 	} {
 		cases["peer cidr "+cidr] = struct {
 			args []string

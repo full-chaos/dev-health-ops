@@ -1,8 +1,8 @@
 # file	func	reason
 # Every current absolute time assertion (CHAOS-11684 census at origin/main 19d64f3b); PR-B removes the convert rows. A row with no finding is refused (stale).
 # internal/cigates/emitscan/scan_rows_test.go costRatio bound 1.6 is a ratio, not an absolute assertion: no row (D6418 stated deviation, parser depth cap).
-cmd/auth-migrate/wait_test.go	TestDatabaseWaitGivesUpAtTheBound	found by the gate, not by the census: pending CHAOS-11684 re-census and conversion
-cmd/auth-migrate/wait_test.go	TestDatabaseWaitHoldsTheBound	found by the gate, not by the census: pending CHAOS-11684 re-census and conversion
+cmd/auth-migrate/wait_test.go	TestDatabaseWaitGivesUpAtTheBound	not wall time: fake clock (cmd/auth-migrate/wait_test.go:105)
+cmd/auth-migrate/wait_test.go	TestDatabaseWaitHoldsTheBound	not wall time: fake clock (cmd/auth-migrate/wait_test.go:156)
 internal/api/credentials/installation_token_test.go	TestInstallationTokenAttemptTimesOutAndIsRetried	pending CHAOS-11684 conversion
 internal/api/session/linkjobs_test.go	TestQueueLinkJobReturnsBeforeTheWork	pending CHAOS-11684 conversion
 internal/api/syncadmin/backfill_submit_integration_test.go	TestBackfillSubmitReturnsAtOnceForAWideWindowAndManyRequests	pending CHAOS-11684 conversion
@@ -34,8 +34,8 @@ internal/goapiproof/credentialecho_test.go	TestSentSecretsScansALargeBodyQuickly
 internal/gqlgenguard/racebudget_test.go	TestMain	pending CHAOS-11684 conversion
 internal/ingressplanes/real_nginx_wait_integration_test.go	TestWaitForRouter_IsLoudWhenTheBoundIsHit	pending CHAOS-11684 conversion
 internal/jobs/dimensionfold/fold_test.go	TestFoldTableTimeoutReleasesTheRun	pending CHAOS-11684 conversion
-internal/jobs/investment/nativeexecutor_test.go	TestCategorizeFanOutIsBoundedByLimit	found by the gate, not by the census: pending CHAOS-11684 re-census and conversion
-internal/jobs/investment/shadowphase_test.go	TestAPanicOfThePhaseLoopLeavesNoGoroutineBehind	found by the gate, not by the census: pending CHAOS-11684 re-census and conversion
+internal/jobs/investment/nativeexecutor_test.go	TestCategorizeFanOutIsBoundedByLimit	not wall time: poll counter (internal/jobs/investment/nativeexecutor_test.go:552)
+internal/jobs/investment/shadowphase_test.go	TestAPanicOfThePhaseLoopLeavesNoGoroutineBehind	not wall time: poll counter (internal/jobs/investment/shadowphase_test.go:912)
 internal/jobs/investment/shadowphase_test.go	TestAPhaseThatRunsOutOfBudgetStopsAndSaysSo	pending CHAOS-11684 conversion
 internal/jobs/investment/shadowphase_test.go	TestAShadowWriteInsideThePhaseEndsWithTheBudget	pending CHAOS-11684 conversion
 internal/jobs/investment/shadowphase_test.go	TestNothingIsWrittenAfterTheRunContextIsCancelled	pending CHAOS-11684 conversion
@@ -53,9 +53,9 @@ internal/platform/tracing/flush_test.go	TestAnUnreachableCollectorCostsTheStopAt
 internal/providerfoundation/body_classification_test.go	TestDoUnauthenticatedStalledErrorBodyReturnsWithinBoundAndIsClosed	pending CHAOS-11684 conversion
 internal/providerfoundation/http_gate_wait_test.go	TestAGateWaitWithinTheBoundIsSleptOutInPlace	lower-bound wait proof: load only lengthens it
 internal/providerfoundation/http_gate_wait_test.go	TestInPlaceGateWaitsAreBoundedInTotal	lower-bound wait proof: load only lengthens it
-internal/providersync/chunked_wall_bound_test.go	TestChunkedAttemptStopsOnTheWallBoundNotTheOldEightChunks	found by the gate, not by the census: pending CHAOS-11684 re-census and conversion
+internal/providersync/chunked_wall_bound_test.go	TestChunkedAttemptStopsOnTheWallBoundNotTheOldEightChunks	not wall time: fake clock (internal/providersync/chunked_wall_bound_test.go:134)
 internal/providersync/chunked_wall_bound_test.go	TestChunkedAttemptWallBoundUsesTheProcessClockWhenNoClockIsInjected	lower-bound wait proof: load only lengthens it
-internal/providersync/chunked_wall_bound_test.go	TestNonStreamingChunkedExecutorStopsOnTheWallBoundAndReportsElapsed	found by the gate, not by the census: pending CHAOS-11684 re-census and conversion
+internal/providersync/chunked_wall_bound_test.go	TestNonStreamingChunkedExecutorStopsOnTheWallBoundAndReportsElapsed	not wall time: fake clock (internal/providersync/chunked_wall_bound_test.go:359)
 internal/providersync/inprocess_test.go	TestInProcessBackoffGateWaitsOutAPenaltyAndCapsIt	measured hosted margin 10.0 (>= 3), CHAOS-11684 census
 internal/providersync/inprocess_test.go	TestInProcessGatePenaltyClearsOnTheWallClockAndTheRequestGoesOut	lower-bound wait proof: load only lengthens it
 internal/providersync/jira_atlassian_comments_default_test.go	TestJiraAtlassianCommentsOneBlockedReadEndsAtTheStopTime	pending CHAOS-11684 conversion
@@ -65,7 +65,7 @@ internal/providersync/ownership_interval_compaction_scale_test.go	TestCompaction
 internal/providersync/request_usage_test.go	TestOfferDropsAndCountsWhenTheQueueIsFull	measured hosted margin 100.0 (>= 3), CHAOS-11684 census
 internal/providersync/request_usage_test.go	TestWriterCloseIsBoundedWhenItsLoggerIsStuck	measured hosted margin 16.7 (>= 3), CHAOS-11684 census
 internal/providersync/request_usage_test.go	TestWriterSurvivesAPanickingStoreAndAHungWrite	pending CHAOS-11684 conversion
-internal/providersync/syncunit_budget_exhaustion_oracle_test.go	budgetDeferralExhausted	found by the gate, not by the census: pending CHAOS-11684 re-census and conversion
+internal/providersync/syncunit_budget_exhaustion_oracle_test.go	budgetDeferralExhausted	not wall time: pure fn of now (internal/providersync/syncunit_budget_exhaustion_oracle_test.go:96)
 internal/queryapi/analytics/investmentownershipteam_rule_test.go	TestOwnershipTeamSourceRendersTheOneOwnershipRule	not a performance budget: clock or stamp skew
 internal/queryapi/server/mcp_route_test.go	TestMCPEveryStageOfTheDocumentPathIsBoundedUnderTheBodyCap	pending CHAOS-11684 conversion
 internal/queryapi/server/mcp_route_test.go	TestMCPFragmentGraphIsSizedExactlyBeforeAnyStageWalksIt	pending CHAOS-11684 conversion
@@ -74,7 +74,7 @@ internal/queryapi/server/mcp_route_test.go	TestMCPRefusesSelfDoublingFragmentsBe
 internal/queryapi/server/posture_readiness_test.go	TestReadyzAnswersWithinTheProbeBudgetWhileThePostureQueryIsSlow	pending CHAOS-11684 conversion
 internal/queryapi/server/server_test.go	TestObserveProbe_BoundsSlowDependencyCheck	pending CHAOS-11684 conversion
 internal/reconcilerservice/readiness_pool_wiring_test.go	TestDomainReadinessChecksRunOnTheReadinessPoolNotTheWorkPool	lower-bound wait proof: load only lengthens it
-internal/scheduler/fixed/engine_test.go	TestIntervalScheduleWaitsAFullPeriodAfterItsBaseline	found by the gate, not by the census: pending CHAOS-11684 re-census and conversion
+internal/scheduler/fixed/engine_test.go	TestIntervalScheduleWaitsAFullPeriodAfterItsBaseline	not wall time: schedule timestamps (internal/scheduler/fixed/engine_test.go:671)
 internal/scheduler/sync/failure_streaks_integration_test.go	TestFailureStreakReadThatCannotFinishLeavesTheTransactionUsable	pending CHAOS-11684 conversion
 internal/scheduler/sync/work_item_ran_before_integration_test.go	TestLoadWorkItemLastSuccessAtLivePostgres	not a performance budget: clock or stamp skew
 internal/schedulerservice/readiness_pool_wiring_test.go	TestDomainReadinessChecksRunOnTheReadinessPoolNotTheWorkPool	lower-bound wait proof: load only lengthens it

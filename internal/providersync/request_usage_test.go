@@ -1181,7 +1181,8 @@ func (handler holdingDroppedLineHandler) Handle(ctx context.Context, record slog
 
 // TestTheDrainNeverHandsTheStoreAnEndedContext holds the drain's write in its
 // dropped-rows line until the drain deadline has passed: the write must give
-// up without calling the store, and the unsent line still names the rows.
+// up without calling the store, and before Close returns one unsent line, and
+// no failed-write line, names the rows.
 func TestTheDrainNeverHandsTheStoreAnEndedContext(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
@@ -1218,12 +1219,15 @@ func TestTheDrainNeverHandsTheStoreAnEndedContext(t *testing.T) {
 		case <-time.After(30 * time.Second):
 			t.Fatal("Close still waits after the hang ceiling")
 		}
+		atClose := logs.String()
+		if requests, _, found := namedByLastLine(atClose, "unsent"); !found || requests != 1 ||
+			strings.Count(atClose, "msg=provider_sync.request_usage_unsent") != 1 ||
+			strings.Contains(atClose, "msg=provider_sync.request_usage_flush_failed") {
+			t.Fatalf("when Close returned, want one unsent line naming the row and no failed-write line: %s", atClose)
+		}
 		synctest.Wait()
 		if got := sink.expiredWrites(); got != 0 {
 			t.Fatalf("the store was handed an ended context %d time(s): logs=%s", got, logs.String())
-		}
-		if requests, _, found := namedByLastLine(logs.String(), "unsent"); !found || requests != 1 {
-			t.Fatalf("unsent line: %s", logs.String())
 		}
 	})
 }

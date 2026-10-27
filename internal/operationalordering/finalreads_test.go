@@ -57,8 +57,8 @@ var classifiedDynamicFinalReads = map[string]struct {
 		"readOwnershipRows and the tombstone check of deleteOwnershipTombstones read one of the two fixed ownership tables of ownershipCompactionSpecs (team_project_ownership, team_repo_ownership); no operational table. FINAL is the current-row read there: each table is a ReplacingMergeTree(updated_at), the tool verifies the engine and sorting key on the server before it reads, and the compaction rewrites a key by inserting it again with a later updated_at, so only FINAL drops the superseded version"},
 	"queryapi/datahealth/coverage.go": {1,
 		"lineageSource reads the team-keyed daily rollups of the lineage registry that have a live-row rule (work_item_metrics_daily, team_metrics_daily); no operational table"},
-	"api/session/activity.go": {1,
-		"activityStatement reads the team-keyed daily rollups among its four fixed metric tables (team_metrics_daily, work_item_metrics_daily); no operational table"},
+	"orgactivity/chread/chread.go": {1,
+		"Statement reads the team-keyed daily rollups among its four fixed metric tables (team_metrics_daily, work_item_metrics_daily); no operational table"},
 	"storedversion/storedversion.go": {1,
 		"Apply reads the tables of the stored-version spec set; the operational writers are explicitly out of that set (storedversion/writers_test.go outOfScopeWriters)"},
 }

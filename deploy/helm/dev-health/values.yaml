@@ -1764,6 +1764,13 @@ postgresql:
   #    does not change. Switching it restarts the pod.
   credentialsSecret:
     enabled: false
+    # -- An EXISTING Secret (created outside the release) that holds the password under `key`.
+    #    With `name` set, the StatefulSet reads it, the chart renders no credentials Secret and
+    #    does not use credentials.password, and `enabled` has no effect (existingSecret wins).
+    #    Needs secrets.create=false (the render fails otherwise). Empty `name` changes nothing.
+    existingSecret:
+      name: ""
+      key: POSTGRES_PASSWORD
   # -- Client authentication. The ConfigMap <fullname>-postgresql-hba always renders
   #    with the store: every client, the local socket and loopback included, gives a
   #    scram-sha-256 password. Only `enabled: true` passes it to the server as

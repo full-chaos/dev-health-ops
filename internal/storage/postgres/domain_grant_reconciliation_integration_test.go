@@ -127,6 +127,18 @@ func reconciliationTables() []domainTable {
 			},
 		},
 		{
+			// The activity projection the daily finalize upserts (migration 0162): INSERT ... ON CONFLICT DO UPDATE
+			// needs INSERT and UPDATE, a read needs SELECT, and the domain role holds no DELETE.
+			name: "org_activity",
+			ddl: `CREATE TABLE public.org_activity (
+				org_id uuid PRIMARY KEY, has_data boolean NOT NULL, computed_at timestamptz, refreshed_at timestamptz NOT NULL)`,
+			exercise: []string{
+				"SELECT org_id FROM public.org_activity WHERE org_id = gen_random_uuid()",
+				"INSERT INTO public.org_activity (org_id, has_data, computed_at, refreshed_at) VALUES (gen_random_uuid(), false, NULL, now()) " +
+					"ON CONFLICT (org_id) DO UPDATE SET has_data = EXCLUDED.has_data, computed_at = EXCLUDED.computed_at, refreshed_at = EXCLUDED.refreshed_at",
+			},
+		},
+		{
 			name: "backfill_jobs",
 			ddl: `CREATE TABLE public.backfill_jobs (
 				id uuid PRIMARY KEY, org_id text NOT NULL, sync_config_id uuid NOT NULL,

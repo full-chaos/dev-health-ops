@@ -22,6 +22,7 @@ internal/cigates/docstools	34
 internal/cigates/integrationshards	165
 internal/cigates/outboundtransport	89
 internal/cigates/proofteardown	19
+internal/cigates/racescope	30
 internal/cigates/raceunweighted	140
 internal/cigates/releasetag	7
 internal/cigates/scripts	164

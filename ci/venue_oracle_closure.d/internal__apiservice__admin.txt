@@ -80,6 +80,7 @@ internal/llmorgsettings
 internal/mail
 internal/netclass
 internal/operationalordering
+internal/orgactivity/chread
 internal/ownershipwindow
 internal/pgmigrate
 internal/pgmigrate/schemagate

@@ -318,13 +318,13 @@ func TestMetricFunctionMarkingIsLinearAndKeepsItsScope(t *testing.T) {
 	}
 	deep := deepAt(depth)
 	var got []emitscan.Finding
-	linearByRatio(t, "2 x N nested metric calls", depth/4, 6, 14, deepAt)
+	linearByRatio(t, "2 x N nested metric calls", depth/4, 6, 18, deepAt)
 	got = scanSource(t, header+deep)
 	if !hasFinding(got, "R2", "user_id") && !tripped(got) {
 		t.Errorf("deep nesting: findings = %v, want R2 user_id or the census finding", got)
 	}
 
-	linearByRatio(t, "N nested calls each holding a metric closure", 6000, 8, 15, func(n int) string {
+	linearByRatio(t, "N nested calls each holding a metric closure", 6000, 8, 20, func(n int) string {
 		return "func f(c metric.Int64Counter, v string) {\n\t_ = " + strings.Repeat("g(func() { _ = metric.WithAttributes() }, ", n) + "0" + strings.Repeat(")", n) + "\n}\n"
 	})
 

@@ -1,7 +1,8 @@
 # The path set of the external auth corpus (CHAOS-11596). A merge queue entry whose group touches one of these paths
 # runs ci/auth_corpus_external.sh (go-api, acp, acp-nokeys, acp-social-unowned) as job auth-corpus-queue of go-auth-service.yml; its result
 # fans into the required context auth-gate. One bash glob per line, matched against the repo-relative path with
-# `case`: `*` matches any characters including `/`. A line starting with # is a comment.
+# `case`: `*` matches any characters including `/`, except in a row that starts with `=`, which matches one directory only
+# (the file's directory must equal the row's directory part). A line starting with # is a comment.
 # NOT in the set, by design: the rest of the Go packages go-api and the migrate binaries are built from (cmd, internal and
 # contracts are copied whole into the images). A row for them would run the corpus on almost every Go change; the set
 # is the auth-service route set plus the corpus's own inputs.
@@ -12,8 +13,11 @@
 # internal/auth/httpapi/server.go) and its main
 cmd/auth-service/*
 internal/auth/*
-# go-api side: the proxy table that forwards to auth-service, and the venue oracle test that is the corpus
-internal/apiservice/authproxy.go
+# go-api side: the api command, route assembly and proxy table (the top-level package only: a row that starts with =
+# matches one directory, its star does not cross a slash), the dho entry that lists the api command (cmd/dho/main.go:48),
+# and the venue oracle test that is the corpus
+=internal/apiservice/*.go
+cmd/dho/main.go
 internal/apiservice/authflowvenue/*
 # the corpus: script, overrides, set-env hook, route table, stub, mail sink and stub provider
 ci/auth_corpus_external.sh

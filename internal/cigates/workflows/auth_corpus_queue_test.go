@@ -25,6 +25,16 @@ const (
 
 var corpusQueueFiles = []string{corpusQueueWorkflow, corpusQueuePaths}
 
+// corpusRowRegexp turns a row of ci/auth_corpus_paths.txt into a regexp: a star crosses slashes, except in a row that
+// starts with "=", which matches one directory only (a star stays inside the last path element).
+func corpusRowRegexp(row string) *regexp.Regexp {
+	star := ".*"
+	if rest, flat := strings.CutPrefix(row, "="); flat {
+		row, star = rest, "[^/]*"
+	}
+	return regexp.MustCompile("^" + strings.ReplaceAll(regexp.QuoteMeta(row), `\*`, star) + "$")
+}
+
 // authCorpusQueueViolations reads the workflow shape: job, legs, timeouts, no retry, inverted no-keys leg.
 func authCorpusQueueViolations(t *testing.T, root string) []string {
 	t.Helper()
@@ -175,8 +185,8 @@ func corpusRouteFilesOutsideSet(t *testing.T, root string, scanned func(dir stri
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		pats = append(pats, regexp.MustCompile("^"+strings.ReplaceAll(regexp.QuoteMeta(line), `\*`, ".*")+"$"))
-		prefix := line
+		pats = append(pats, corpusRowRegexp(line))
+		prefix := strings.TrimPrefix(line, "=")
 		if i := strings.Index(prefix, "*"); i >= 0 {
 			prefix = strings.TrimRight(prefix[:i], "/")
 		}
@@ -381,7 +391,7 @@ func corpusInputsOutsideSet(t *testing.T, root string) []string {
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		pats = append(pats, regexp.MustCompile("^"+strings.ReplaceAll(regexp.QuoteMeta(line), `\*`, ".*")+"$"))
+		pats = append(pats, corpusRowRegexp(line))
 	}
 	// Go and contract trees the images copy whole: go-api's own closure is not part of the set (cost; see the path list).
 	closureRoots := map[string]bool{"cmd": true, "internal": true, "contracts": true}
@@ -425,4 +435,41 @@ func TestAuthCorpusQueueDirectInputScanCatchesAMissingRow(t *testing.T) {
 		t.Fatal(err)
 	}
 	expectViolation(t, corpusInputsOutsideSet(t, tree), "internal/testsupport/sessionscenario/sessionscenario.go")
+}
+
+func TestAuthCorpusQueuePathSetHasTheGoAPIRouteAssembly(t *testing.T) {
+	root := repoRoot(t)
+	// The api command is defined in internal/apiservice/service.go and listed in cmd/dho/main.go: the corpus runs `dho api`.
+	if !strings.Contains(readFile(t, filepath.Join(root, "internal/apiservice/service.go")), "func Command() cli.Command") ||
+		!strings.Contains(readFile(t, filepath.Join(root, "internal/apiservice/service.go")), "func Routes(deps Deps") {
+		t.Fatal("internal/apiservice/service.go no longer defines the api command and Routes: the pin below is stale")
+	}
+	if !strings.Contains(readFile(t, filepath.Join(root, "cmd/dho/main.go")), "apiservice.Command()") {
+		t.Fatal("cmd/dho/main.go no longer lists apiservice.Command(): the pin below is stale")
+	}
+	var pats []*regexp.Regexp
+	for _, line := range strings.Split(readFile(t, filepath.Join(root, corpusQueuePaths)), "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" && !strings.HasPrefix(line, "#") {
+			pats = append(pats, corpusRowRegexp(line))
+		}
+	}
+	matches := func(p string) bool {
+		for _, re := range pats {
+			if re.MatchString(p) {
+				return true
+			}
+		}
+		return false
+	}
+	for _, in := range []string{"internal/apiservice/service.go", "internal/apiservice/authproxy.go", "internal/apiservice/service_test.go", "cmd/dho/main.go", "internal/apiservice/authflowvenue/x.go"} {
+		if !matches(in) {
+			t.Errorf("%s matches no row of ci/auth_corpus_paths.txt: a go-api route assembly change would skip the external corpus", in)
+		}
+	}
+	for _, out := range []string{"internal/apiservice/admin/x.go", "internal/queryapi/x.go", "cmd/dho/other_test.go"} {
+		if matches(out) {
+			t.Errorf("%s matches a row of ci/auth_corpus_paths.txt: the go-api rows must stay flat", out)
+		}
+	}
 }

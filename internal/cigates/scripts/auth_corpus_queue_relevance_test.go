@@ -107,6 +107,11 @@ func TestAuthCorpusQueueRelevance(t *testing.T) {
 		{"the postgres init script the compose stack mounts", []string{"docker/init-extra-dbs.sh"}, "corpus=true"},
 		{"a clickhouse user file the compose stack mounts", []string{"docker/clickhouse-users.d/dho_api_ch.xml"}, "corpus=true"},
 		{"a clickhouse config file the compose stack mounts", []string{"docker/clickhouse-config.d/system-logs.xml"}, "corpus=true"},
+		{"the go-api route assembly", []string{"internal/apiservice/service.go"}, "corpus=true"},
+		{"a test file in the go-api package", []string{"internal/apiservice/service_test.go"}, "corpus=true"},
+		{"the dho entry that lists the api command", []string{"cmd/dho/main.go"}, "corpus=true"},
+		{"a go-api area subpackage is not in the flat row", []string{"internal/apiservice/admin/x.go"}, "corpus=false"},
+		{"the query api", []string{"internal/queryapi/x.go"}, "corpus=false"},
 		{"docs only", []string{"docs/index.md"}, "corpus=false"},
 		{"an unrelated package", []string{"internal/providersync/sync.go"}, "corpus=false"},
 		{"unrelated and a route file in one group", []string{"docs/a.md", "internal/auth/httpapi/x.go"}, "corpus=true"},
@@ -141,5 +146,46 @@ func TestAuthCorpusQueueRelevanceFailsClosed(t *testing.T) {
 	head2 := corpusQueueCommit(t, noPaths, "docs/a.md")
 	if got := corpusQueueRun(t, noPaths, tip2, head2); got != "corpus=true" {
 		t.Errorf("missing path list: got %q, want corpus=true", got)
+	}
+}
+
+// corpusQueueRunWithRows runs the script over a group that changes the given paths, with a path list of exactly rows.
+func corpusQueueRunWithRows(t *testing.T, rows []string, paths ...string) string {
+	t.Helper()
+	dir := corpusQueueRepo(t, false)
+	if err := os.WriteFile(filepath.Join(dir, "ci", "auth_corpus_paths.txt"), []byte(strings.Join(rows, "\n")+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	corpusQueueGit(t, dir, "add", "-A")
+	corpusQueueGit(t, dir, "commit", "-q", "-m", "rows")
+	tip := corpusQueueGit(t, dir, "rev-parse", "HEAD")
+	head := corpusQueueCommit(t, dir, paths...)
+	return corpusQueueRun(t, dir, tip, head)
+}
+
+func TestAuthCorpusQueueFlatRowMatchesOneDirectoryOnly(t *testing.T) {
+	cases := []struct {
+		name string
+		rows []string
+		path string
+		want string
+	}{
+		{"flat row matches a file of its directory", []string{"=a/*.go"}, "a/x.go", "corpus=true"},
+		{"flat row does not match a subdirectory file", []string{"=a/*.go"}, "a/b/x.go", "corpus=false"},
+		{"flat row does not match a sibling that shares the prefix", []string{"=a/*.go"}, "ab/x.go", "corpus=false"},
+		{"flat row does not match another extension", []string{"=a/*.go"}, "a/x.txt", "corpus=false"},
+		{"a row without the prefix keeps the crossing star", []string{"a/*"}, "a/b/x.go", "corpus=true"},
+		{"a row without the prefix and a deeper file", []string{"a/*.go"}, "a/b/c/x.go", "corpus=true"},
+		{"a flat row beside a crossing row for the subtree", []string{"=a/*.go", "a/b/*"}, "a/b/x.go", "corpus=true"},
+		{"a row that is only the prefix is refused (fails closed)", []string{"=", "z/*"}, "docs/a.md", "corpus=true"},
+		{"a prefix in the middle of a row is refused (fails closed)", []string{"a/=b/*"}, "docs/a.md", "corpus=true"},
+		{"a flat row without a slash is refused (fails closed)", []string{"=*.go"}, "docs/a.md", "corpus=true"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := corpusQueueRunWithRows(t, c.rows, c.path); got != c.want {
+				t.Fatalf("rows %v, change %s: got %q, want %q", c.rows, c.path, got, c.want)
+			}
+		})
 	}
 }

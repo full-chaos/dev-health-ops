@@ -3,8 +3,11 @@
 # Prints exactly one line, corpus=true or corpus=false, and exits 0.
 #
 # Whether a merge queue entry must run the external auth corpus (CHAOS-11596). It judges the WHOLE group ahead of the
-# entry: the diff runs from merge-base(target branch tip, entry head) to the entry head, against the globs of
-# ci/auth_corpus_paths.txt. It fails closed: bad input, a git error or a missing or empty path list all print corpus=true.
+# entry: the diff runs from merge-base(target branch tip, entry head) to the entry head, against the rows of
+# ci/auth_corpus_paths.txt.
+#   Row form 1: `dir/*` is a bash glob, its star crosses slashes. Row form 2: `=dir/*.go` matches one directory only.
+#   A malformed row (only `=`, a `=` after the first character, or an `=` row with no slash) prints corpus=true.
+# It fails closed: bad input, a git error or a missing or empty path list all print corpus=true.
 set -uo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" || {
   echo corpus=true
@@ -21,7 +24,11 @@ head=$2
 [[ $tip =~ ^[0-9a-f]{40}$ && $head =~ ^[0-9a-f]{40}$ ]] || run_corpus "both arguments must be full commit shas"
 globs=()
 while IFS= read -r line; do
-  [ -n "${line}" ] && [[ ${line} != \#* ]] && globs+=("${line}")
+  { [ -n "${line}" ] && [[ ${line} != \#* ]]; } || continue
+  if [[ ${line} == "=" || ${line:1} == *=* || (${line} == =* && ${line} != */*) ]]; then
+    run_corpus "malformed row in ci/auth_corpus_paths.txt: ${line}"
+  fi
+  globs+=("${line}")
 done <"${root}/ci/auth_corpus_paths.txt" 2>/dev/null
 [ "${#globs[@]}" -gt 0 ] || run_corpus "ci/auth_corpus_paths.txt is missing or has no rows"
 mb="$(git -C "${root}" merge-base "${tip}" "${head}")" || run_corpus "no merge base of ${tip} and ${head}"
@@ -30,9 +37,18 @@ printf 'auth corpus relevance (merge_group): judging %s..%s (the whole group)\n'
 while IFS= read -r file; do
   [ -n "${file}" ] || continue
   for glob in "${globs[@]}"; do
+    flat=0
+    pat=${glob}
+    if [[ ${glob} == =* ]]; then
+      flat=1
+      pat=${glob#=}
+    fi
     # shellcheck disable=SC2254 # the unquoted glob is the point
     case "${file}" in
-      ${glob})
+      ${pat})
+        if [ "${flat}" = 1 ] && [ "${file%/*}" != "${pat%/*}" ]; then
+          continue
+        fi
         printf 'auth corpus relevance: %s matches %s\n' "${file}" "${glob}" >&2
         echo corpus=true
         exit 0

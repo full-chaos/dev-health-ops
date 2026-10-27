@@ -7,16 +7,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
-
-func createBudgetCASTables(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
-	t.Helper()
-	pgschema.Apply(ctx, t, pool)
-}
 
 const budgetCASTestUnit = "00000000-0000-4000-8000-0000000000f0"
 const budgetCASTestRunID = "00000000-0000-4000-8000-0000000000f1"
@@ -36,17 +30,13 @@ func withBudgetCASPool(t *testing.T, fn func(ctx context.Context, pool *pgxpool.
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	instance := pgschema.Start(ctx, t)
 	defer instance.Close(context.Background())
 	pool, err := pgxpool.New(ctx, instance.URI)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	createBudgetCASTables(t, ctx, pool)
 	fn(ctx, pool)
 }
 

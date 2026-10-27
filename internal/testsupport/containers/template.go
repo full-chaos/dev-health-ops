@@ -91,7 +91,7 @@ func StartPostgresFromTemplate(ctx context.Context, key string, build func(ctx c
 		return nil, err
 	}
 	return timedStart(ctx, "postgres", PostgresDSNEnv, func(ctx context.Context) (*Instance, error) {
-		return startPostgresRemoteFrom(ctx, server.adminDSN, name, &entry.cloneMu)
+		return startPostgresRemoteFrom(ctx, server.adminDSN, name)
 	})
 }
 
@@ -128,7 +128,6 @@ type templateEntry struct {
 	done        bool
 	err         error
 	fingerprint []string
-	cloneMu     sync.Mutex
 }
 
 // templateRegistry holds the templates of one shared server, by key.

@@ -549,8 +549,9 @@ func (c *TypeSafeClient) send(ctx context.Context, body []byte, lenient bool) (S
 	}
 	var attempts []SystemOneAttempt
 	var wait time.Duration
+	call := &clefCall{start: time.Now().UTC(), seen: map[string]struct{}{}}
 	for attempt := 0; attempt <= typeSafeMaxRetries; attempt++ {
-		result, att, err := c.once(withLLMAttempt(ctx, attempt+1), body, lenient)
+		result, att, err := c.once(withLLMAttempt(ctx, attempt+1), body, lenient, call)
 		att.WaitBefore = wait
 		attempts = append(attempts, att)
 		if err == nil {
@@ -611,7 +612,7 @@ type systemOneUsageProbe struct {
 
 // once sends one attempt. On failure it returns a *SystemOneError that wraps
 // the classified *llmError.
-func (c *TypeSafeClient) once(ctx context.Context, body []byte, lenient bool) (SystemOneResult, SystemOneAttempt, *SystemOneError) {
+func (c *TypeSafeClient) once(ctx context.Context, body []byte, lenient bool, call *clefCall) (SystemOneResult, SystemOneAttempt, *SystemOneError) {
 	var att SystemOneAttempt
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.target.url, bytes.NewReader(body))
 	if err != nil {
@@ -620,7 +621,7 @@ func (c *TypeSafeClient) once(ctx context.Context, body []byte, lenient bool) (S
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+c.target.bearer.Reveal())
 	if c.target.provider == ClefProviderName {
-		att.RequestID, att.RequestIDSource = newClientRequestID(), RequestIDSourceClient
+		att.RequestID, att.RequestIDSource = c.newClientRequestID(ctx, call), RequestIDSourceClient
 		req.Header.Set(clefRequestIDHeader, att.RequestID)
 	}
 
@@ -649,7 +650,7 @@ func (c *TypeSafeClient) once(ctx context.Context, body []byte, lenient bool) (S
 	defer resp.Body.Close()
 	att.StatusCode = resp.StatusCode
 	if c.target.provider == ClefProviderName {
-		att.RequestID, att.RequestIDSource = c.clefRequestID(resp.Header, att.RequestID)
+		att.RequestID, att.RequestIDSource = c.clefRequestID(resp.Header, att.RequestID, call)
 	} else {
 		att.RequestID, att.RequestIDRejected = c.cleanRequestID(resp.Header.Get(typeSafeRequestIDHeader))
 	}

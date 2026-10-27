@@ -1,10 +1,9 @@
 //go:build integration
 
-package pgschema_test
+package containers_test
 
 import (
 	"context"
-	"os"
 	"testing"
 	"time"
 
@@ -14,8 +13,17 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 )
 
-func TestMain(m *testing.M) {
-	os.Exit(containers.RunWithSharedServers(m.Run))
+func runShared(t *testing.T, body func()) {
+	t.Helper()
+	ran := false
+	code := containers.RunWithSharedServers(func() int {
+		body()
+		ran = true
+		return 0
+	})
+	if !ran || code != 0 {
+		t.Fatalf("shared run: ran %v, exit code %d", ran, code)
+	}
 }
 
 func tableColumns(ctx context.Context, t *testing.T, uri string) []string {
@@ -42,6 +50,11 @@ func tableColumns(ctx context.Context, t *testing.T, uri string) []string {
 func TestStartEqualsAFreshApplyAndSurvivesParallelCallers(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
+	runShared(t, func() { startEqualsAFreshApply(ctx, t) })
+}
+
+func startEqualsAFreshApply(ctx context.Context, t *testing.T) {
+	t.Helper()
 	plain, err := containers.StartPostgres(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -76,9 +89,11 @@ func TestStartTemplateOffBuildsTheChainOnTheCallersOwnDatabase(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	t.Setenv(containers.PostgresTemplateEnv, "off")
-	instance := pgschema.Start(ctx, t)
-	defer func() { _ = instance.Close(context.Background()) }()
-	if len(tableColumns(ctx, t, instance.URI)) == 0 {
-		t.Error("Start with the template off returned an unmigrated database")
-	}
+	runShared(t, func() {
+		instance := pgschema.Start(ctx, t)
+		defer func() { _ = instance.Close(context.Background()) }()
+		if len(tableColumns(ctx, t, instance.URI)) == 0 {
+			t.Error("Start with the template off returned an unmigrated database")
+		}
+	})
 }

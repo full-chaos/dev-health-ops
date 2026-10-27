@@ -546,3 +546,13 @@ func TestIntegrationTestsWriteTTLTablesWithClockDates(t *testing.T) {
 		t.Logf("fix: derive the seeded dates from time.Now() (or now64()/today() in SQL) inside the TTL; a literal that never reaches a TTL table, or a deliberate edge case, gets an %s row with its reason and computed expiry", allowFile)
 	}
 }
+
+// checkSites is the entry point of the site-comment check (CHAOS-11715); red stub: it delegates to the allow.tsv
+// check with no row, so every literal is unlisted.
+func checkSites(rel string, source []byte, tables map[string]ttlTable, today time.Time) []string {
+	found, err := scanFile(rel, source, tables)
+	if err != nil {
+		return []string{err.Error()}
+	}
+	return check(found, nil, tables, today, func(string) bool { return true })
+}

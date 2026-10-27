@@ -1,6 +1,7 @@
 package scripts_test
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -112,6 +113,14 @@ func TestAuthCorpusQueueRelevance(t *testing.T) {
 		{"the dho entry that lists the api command", []string{"cmd/dho/main.go"}, "corpus=true"},
 		{"a go-api area subpackage is not in the flat row", []string{"internal/apiservice/admin/x.go"}, "corpus=false"},
 		{"the query api", []string{"internal/queryapi/x.go"}, "corpus=false"},
+		{"the go-api session routes, guard policy and limiters", []string{"internal/api/session/session.go"}, "corpus=true"},
+		{"the go-api sso routes", []string{"internal/api/sso/sso.go"}, "corpus=true"},
+		{"the go-api policy guard that wraps every route", []string{"internal/api/policy/guard.go"}, "corpus=true"},
+		{"a non-ASCII file name under the auth tree", []string{"internal/auth/\u00e9.go"}, "corpus=true"},
+		{"a tab in a file name under the auth tree", []string{"internal/auth/a\tb.go"}, "corpus=true"},
+		{"a double quote in a file name under the auth tree", []string{"internal/auth/a\"b.go"}, "corpus=true"},
+		{"a backslash in a file name under the auth tree", []string{"internal/auth/a\\b.go"}, "corpus=true"},
+		{"a non-ASCII file name outside the set", []string{"docs/\u00e9.md"}, "corpus=false"},
 		{"docs only", []string{"docs/index.md"}, "corpus=false"},
 		{"an unrelated package", []string{"internal/providersync/sync.go"}, "corpus=false"},
 		{"unrelated and a route file in one group", []string{"docs/a.md", "internal/auth/httpapi/x.go"}, "corpus=true"},
@@ -185,6 +194,28 @@ func TestAuthCorpusQueueFlatRowMatchesOneDirectoryOnly(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			if got := corpusQueueRunWithRows(t, c.rows, c.path); got != c.want {
 				t.Fatalf("rows %v, change %s: got %q, want %q", c.rows, c.path, got, c.want)
+			}
+		})
+	}
+}
+
+// The same table as internal/cigates/workflows corpusRowTable: each malformed row makes the script print corpus=true
+// for a change that no row would match; each well-formed row keeps its own answer.
+func TestAuthCorpusQueueMalformedRowsFailClosed(t *testing.T) {
+	bad := []string{"=", "a/=b/*", "=*.go", "=/", "=a/", "=internal/apiservice/", "=/x.go", "=a/*/x.go", "=a/?/x.go", "=a/[b]/x.go", "=a//x.go",
+		"a/*\r", "=a/*.go\r", "a/* ", "=a/*.go\t", " a/*", "\ta/*"}
+	for _, row := range bad {
+		t.Run(fmt.Sprintf("%q", row), func(t *testing.T) {
+			if got := corpusQueueRunWithRows(t, []string{"z/*", row}, "docs/a.md"); got != "corpus=true" {
+				t.Fatalf("row %q: got %q, want corpus=true (refused, fails closed)", row, got)
+			}
+		})
+	}
+	good := []string{"=a/*.go", "=internal/apiservice/*.go", "a/*", "cmd/dho/main.go", "compose.yml"}
+	for _, row := range good {
+		t.Run(fmt.Sprintf("good %q", row), func(t *testing.T) {
+			if got := corpusQueueRunWithRows(t, []string{row}, "docs/a.md"); got != "corpus=false" {
+				t.Fatalf("row %q: got %q, want corpus=false for an unrelated change", row, got)
 			}
 		})
 	}

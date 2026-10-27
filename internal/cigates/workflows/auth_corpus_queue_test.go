@@ -35,6 +35,53 @@ func corpusRowRegexp(row string) *regexp.Regexp {
 	return regexp.MustCompile("^" + strings.ReplaceAll(regexp.QuoteMeta(row), `\*`, star) + "$")
 }
 
+// corpusRows returns the rows of ci/auth_corpus_paths.txt exactly as written: only an empty line and a line that starts
+// with # are skipped. Nothing is trimmed, so a row with trailing whitespace or a CR stays a row (and is a problem).
+func corpusRows(t *testing.T, root string) []string {
+	t.Helper()
+	var rows []string
+	for _, line := range strings.Split(readFile(t, filepath.Join(root, corpusQueuePaths)), "\n") {
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		rows = append(rows, line)
+	}
+	return rows
+}
+
+// corpusRowProblem is the model of the script's refusal of a malformed row (ci/auth_corpus_queue_relevance.sh): the
+// script prints corpus=true for each row this function reports. It returns "" for a well-formed row.
+func corpusRowProblem(row string) string {
+	switch {
+	case strings.ContainsRune(row, '\r'):
+		return "carriage return"
+	case row != strings.TrimLeft(row, " \t") || row != strings.TrimRight(row, " \t"):
+		return "leading or trailing whitespace"
+	case row == "=":
+		return "only the = prefix"
+	case strings.Contains(row[1:], "="):
+		return "= after the first character"
+	}
+	flat, ok := strings.CutPrefix(row, "=")
+	if !ok {
+		return ""
+	}
+	i := strings.LastIndex(flat, "/")
+	switch {
+	case i < 0:
+		return "= row without a slash"
+	case i == 0:
+		return "= row with an empty directory part"
+	case strings.ContainsAny(flat[:i], "*?["):
+		return "= row with a glob character in its directory part"
+	case strings.Contains(flat, "//"):
+		return "= row with an empty path element"
+	case i == len(flat)-1:
+		return "= row whose last element is empty"
+	}
+	return ""
+}
+
 // authCorpusQueueViolations reads the workflow shape: job, legs, timeouts, no retry, inverted no-keys leg.
 func authCorpusQueueViolations(t *testing.T, root string) []string {
 	t.Helper()
@@ -180,11 +227,7 @@ func corpusRouteFilesOutsideSet(t *testing.T, root string, scanned func(dir stri
 	t.Helper()
 	var pats []*regexp.Regexp
 	var out []string
-	for _, line := range strings.Split(readFile(t, filepath.Join(root, corpusQueuePaths)), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
+	for _, line := range corpusRows(t, root) {
 		pats = append(pats, corpusRowRegexp(line))
 		prefix := strings.TrimPrefix(line, "=")
 		if i := strings.Index(prefix, "*"); i >= 0 {
@@ -386,11 +429,7 @@ func corpusDirectInputs(t *testing.T, root string) []string {
 func corpusInputsOutsideSet(t *testing.T, root string) []string {
 	t.Helper()
 	var pats []*regexp.Regexp
-	for _, line := range strings.Split(readFile(t, filepath.Join(root, corpusQueuePaths)), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
+	for _, line := range corpusRows(t, root) {
 		pats = append(pats, corpusRowRegexp(line))
 	}
 	// Go and contract trees the images copy whole: go-api's own closure is not part of the set (cost; see the path list).
@@ -448,11 +487,8 @@ func TestAuthCorpusQueuePathSetHasTheGoAPIRouteAssembly(t *testing.T) {
 		t.Fatal("cmd/dho/main.go no longer lists apiservice.Command(): the pin below is stale")
 	}
 	var pats []*regexp.Regexp
-	for _, line := range strings.Split(readFile(t, filepath.Join(root, corpusQueuePaths)), "\n") {
-		line = strings.TrimSpace(line)
-		if line != "" && !strings.HasPrefix(line, "#") {
-			pats = append(pats, corpusRowRegexp(line))
-		}
+	for _, line := range corpusRows(t, root) {
+		pats = append(pats, corpusRowRegexp(line))
 	}
 	matches := func(p string) bool {
 		for _, re := range pats {
@@ -470,6 +506,95 @@ func TestAuthCorpusQueuePathSetHasTheGoAPIRouteAssembly(t *testing.T) {
 	for _, out := range []string{"internal/apiservice/admin/x.go", "internal/queryapi/x.go", "cmd/dho/other_test.go"} {
 		if matches(out) {
 			t.Errorf("%s matches a row of ci/auth_corpus_paths.txt: the go-api rows must stay flat", out)
+		}
+	}
+}
+
+// Rows the script refuses (it prints corpus=true) and rows it accepts; the same table is run against the script in
+// internal/cigates/scripts (TestAuthCorpusQueueMalformedRowsFailClosed).
+var corpusRowTable = []struct {
+	row     string
+	problem bool
+}{
+	{"=", true}, {"a/=b/*", true}, {"=*.go", true}, {"=/", true}, {"=a/", true}, {"=internal/apiservice/", true},
+	{"=/x.go", true}, {"=a/*/x.go", true}, {"=a/?/x.go", true}, {"=a/[b]/x.go", true}, {"=a//x.go", true},
+	{"a/*\r", true}, {"=a/*.go\r", true}, {"a/* ", true}, {"=a/*.go\t", true}, {" a/*", true}, {"\ta/*", true},
+	{"=a/*.go", false}, {"=internal/apiservice/*.go", false}, {"a/*", false}, {"cmd/dho/main.go", false}, {"compose.yml", false},
+}
+
+func TestAuthCorpusQueueRowModelRefusesWhatTheScriptRefuses(t *testing.T) {
+	for _, c := range corpusRowTable {
+		if got := corpusRowProblem(c.row) != ""; got != c.problem {
+			t.Errorf("row %q: model says problem=%v, want %v", c.row, got, c.problem)
+		}
+	}
+}
+
+func TestAuthCorpusQueuePathsFileRowsAreWellFormed(t *testing.T) {
+	var out []string
+	for _, row := range corpusRows(t, repoRoot(t)) {
+		if p := corpusRowProblem(row); p != "" {
+			out = append(out, fmt.Sprintf("row %q of ci/auth_corpus_paths.txt is malformed (%s): the script would run the corpus on every entry", row, p))
+		}
+	}
+	expectNoViolations(t, out)
+}
+
+func TestAuthCorpusQueueRowReaderKeepsWhitespaceRows(t *testing.T) {
+	root := repoRoot(t)
+	tree := plantTree(t, root, corpusQueueFiles)
+	rows := readFile(t, filepath.Join(tree, corpusQueuePaths)) + "internal/auth/x/* \n"
+	if err := os.WriteFile(filepath.Join(tree, corpusQueuePaths), []byte(rows), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, r := range corpusRows(t, tree) {
+		if r == "internal/auth/x/* " && corpusRowProblem(r) != "" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("a row with trailing whitespace was trimmed away or not reported: a bad row would hide")
+	}
+}
+
+// service.go mounts the go-api auth routes from internal/api/session and internal/api/sso, and wraps every route in
+// internal/api/policy's guard: a change in any of them changes what the corpus sees.
+func TestAuthCorpusQueuePathSetHasTheGoAPIAuthRouteDeclarations(t *testing.T) {
+	root := repoRoot(t)
+	service := readFile(t, filepath.Join(root, "internal/apiservice/service.go"))
+	var pats []*regexp.Regexp
+	for _, row := range corpusRows(t, root) {
+		pats = append(pats, corpusRowRegexp(row))
+	}
+	matches := func(p string) bool {
+		for _, re := range pats {
+			if re.MatchString(p) {
+				return true
+			}
+		}
+		return false
+	}
+	for _, pkg := range []string{"session", "sso", "policy"} {
+		if !strings.Contains(service, `/internal/api/`+pkg+`"`) {
+			t.Fatalf("internal/apiservice/service.go no longer imports internal/api/%s: the pin below is stale", pkg)
+		}
+		entries, err := os.ReadDir(filepath.Join(root, "internal/api", pkg))
+		if err != nil {
+			t.Fatal(err)
+		}
+		seen := 0
+		for _, e := range entries {
+			if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") {
+				continue
+			}
+			seen++
+			if p := "internal/api/" + pkg + "/" + e.Name(); !matches(p) {
+				t.Errorf("%s matches no row of ci/auth_corpus_paths.txt: the go-api auth routes, guard and limiters would change with no corpus run", p)
+			}
+		}
+		if seen == 0 {
+			t.Fatalf("internal/api/%s has no Go file: the pin is vacuous", pkg)
 		}
 	}
 }

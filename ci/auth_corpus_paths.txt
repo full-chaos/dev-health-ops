@@ -18,6 +18,12 @@ internal/auth/*
 # and the venue oracle test that is the corpus
 =internal/apiservice/*.go
 cmd/dho/main.go
+# the go-api auth route declarations and wrappers: internal/api/session (every /api/v1/auth/* route, guard policy, limiters,
+# proxy wrap; session.go:138-163), internal/api/sso (oidc and saml routes; sso.go:119,180) and internal/api/policy (the guard that
+# wraps every route); service.go mounts them at :229 and :249
+internal/api/session/*
+internal/api/sso/*
+internal/api/policy/*
 internal/apiservice/authflowvenue/*
 # the corpus: script, overrides, set-env hook, route table, stub, mail sink and stub provider
 ci/auth_corpus_external.sh

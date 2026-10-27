@@ -142,6 +142,7 @@ internal/auth/workloadexchange	tokenreview.go	internal/auth/workloadexchange
 internal/auth/workloadexchange	tokenreview.go	internal/cigates/chartgates
 internal/cigates	governance.go	cmd/cigate
 internal/cigates	governance.go	internal/cigates/scripts
+internal/cigates/abstime	abstime.go	internal/cigates/abstime
 internal/cigates/affected	plan.go	cmd/cigate
 internal/cigates/affected	plan.go	internal/cigates/affected
 internal/cigates/affected	plan.go	internal/cigates/affectedmatrix

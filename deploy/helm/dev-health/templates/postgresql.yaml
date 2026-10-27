@@ -1,4 +1,22 @@
 {{- if .Values.postgresql.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "dev-health.fullname" . }}-postgresql-hba
+  namespace: {{ include "dev-health.namespace" . }}
+  labels:
+    {{- include "dev-health.componentLabels" (dict "component" "postgresql" "context" $) | nindent 4 }}
+data:
+  pg_hba.conf: |
+    # Chart-owned client authentication (postgresql.hba). Every client gives a
+    # scram-sha-256 password: the local socket and loopback too. No replication line.
+    # TYPE  DATABASE  USER  ADDRESS        METHOD
+    local   all       all                  scram-sha-256
+    host    all       all   127.0.0.1/32   scram-sha-256
+    host    all       all   ::1/128        scram-sha-256
+    host    all       all   0.0.0.0/0      scram-sha-256
+    host    all       all   ::/0           scram-sha-256
+---
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -18,9 +36,22 @@ spec:
         {{- include "dev-health.componentSelectorLabels" (dict "component" "postgresql" "context" $) | nindent 8 }}
     spec:
       automountServiceAccountToken: false
+      {{- if .Values.postgresql.hba.enabled }}
+      volumes:
+        - name: pg-hba
+          configMap:
+            name: {{ include "dev-health.fullname" . }}-postgresql-hba
+      {{- end }}
       containers:
         - name: postgresql
           image: {{ .Values.postgresql.image.repository }}:{{ .Values.postgresql.image.tag }}
+          {{- if .Values.postgresql.hba.enabled }}
+          {{- /* The entrypoint runs `postgres` with these. hba_file takes effect only at
+                 server start; a later edit of the ConfigMap needs pg_reload_conf(). */}}
+          args:
+            - -c
+            - hba_file=/etc/postgresql/hba/pg_hba.conf
+          {{- end }}
           ports:
             - name: postgres
               containerPort: 5432
@@ -45,11 +76,20 @@ spec:
               value: /var/lib/postgresql/pgdata
           resources:
             {{- toYaml .Values.postgresql.resources | nindent 12 }}
-          {{- if .Values.postgresql.persistence.enabled }}
+          {{- if or .Values.postgresql.persistence.enabled .Values.postgresql.hba.enabled }}
           volumeMounts:
+            {{- if .Values.postgresql.persistence.enabled }}
             - name: postgres-data
               mountPath: /var/lib/postgresql
+            {{- end }}
+            {{- if .Values.postgresql.hba.enabled }}
+            - name: pg-hba
+              mountPath: /etc/postgresql/hba
+              readOnly: true
+            {{- end }}
           {{- end }}
+          {{- /* pg_isready gets an answer without a password, so the probes stay
+                 green when every rule asks for one. */}}
           livenessProbe:
             exec:
               command:

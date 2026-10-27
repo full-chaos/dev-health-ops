@@ -276,6 +276,7 @@ usage() {
   test-shard-unweighted-guard SHARD COUNT LOGFILE
          Fail when a package of the shard ran 30 s or more in LOGFILE (its go
          test log) and has no row in ci/go_test_weights.tsv; prints the row.
+         With DEV_HEALTH_GO_UNWEIGHTED_REPORT_ONLY=1 (merge_group) it warns and exits 0; an unusable log still fails.
   build  Run go build ./... in every Go module.
   contract
          Validate the job contract tree and, when DEV_HEALTH_CONTRACT_BASE is
@@ -775,13 +776,24 @@ check_test_shard_wall_guard() {
 # check_test_shard_unweighted_guard SHARD COUNT LOGFILE [partial] (CHAOS-10498): fails when a package of the shard ran 30 s or more in
 # LOGFILE (the leg's go test log) and has no row in ci/go_test_weights.tsv, and prints the row to add. A package with no row weighs
 # 1, so an unweighted heavy package unbalances the shards without anyone seeing it; this makes it red on the leg that ran it.
+# DEV_HEALTH_GO_UNWEIGHTED_REPORT_ONLY=1 (go-quality.yml sets it on merge_group only, CHAOS-11682) turns a named package (awk exit 1) into a
+# ::warning:: plus a step-summary line and exit 0: a package the entry did not touch must not eject it. An unusable log (awk exit 2) fails always.
 check_test_shard_unweighted_guard() {
   local shard="${1:-}" count="${2:-}" log="${3:-}" partial="${4:-}" plan
   check_test_shard_args "${shard}" "${count}"
   { [ -f "${log}" ] && [ -r "${log}" ]; } || die "test-shard-unweighted-guard needs the shard's go test log as a readable file, got '${log}'"
   plan="$(check_test_shard_plan "${shard}" "${count}")"
-  awk -v weights="${GO_TEST_WEIGHTS}" -v thresh="${DEV_HEALTH_GO_TEST_UNWEIGHTED_SLOW_SECONDS:-30}" -v label="${GO_TEST_WEIGHTS#"${ROOT}/"}" -v partial="${partial:+1}" \
-    -f "${GO_TEST_UNWEIGHTED_SLOW_AWK:-${ROOT}/ci/go_test_unweighted_slow.awk}" <(printf '%s\n' "${plan}") "${log}"
+  local out rc=0
+  out="$(awk -v weights="${GO_TEST_WEIGHTS}" -v thresh="${DEV_HEALTH_GO_TEST_UNWEIGHTED_SLOW_SECONDS:-30}" -v label="${GO_TEST_WEIGHTS#"${ROOT}/"}" -v partial="${partial:+1}" \
+    -f "${GO_TEST_UNWEIGHTED_SLOW_AWK:-${ROOT}/ci/go_test_unweighted_slow.awk}" <(printf '%s\n' "${plan}") "${log}" 2>&1)" || rc=$?
+  if [ "${rc}" -ne 1 ] || [ "${DEV_HEALTH_GO_UNWEIGHTED_REPORT_ONLY:-}" != "1" ]; then
+    [ -z "${out}" ] || printf '%s\n' "${out}" >&2
+    return "${rc}"
+  fi
+  printf '::warning::report only (merge_group): %s\n' "${out}" >&2
+  if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+    printf 'unweighted-slow guard (report only, add the row in a pull request):\n%s\n' "${out}" >> "${GITHUB_STEP_SUMMARY}" || true
+  fi
 }
 
 # CHAOS-11448: merge_group runs the security packages of ci/security_fresh_packages.txt with -count=1 (their tests always execute);

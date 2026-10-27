@@ -34,6 +34,8 @@ type clefNetwork struct {
 	requests []*http.Request
 	bodies   [][]byte
 	reply    func(call int, body []byte) (int, []byte)
+	// header is added to every response.
+	header http.Header
 }
 
 func (network *clefNetwork) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -44,7 +46,11 @@ func (network *clefNetwork) RoundTrip(req *http.Request) (*http.Response, error)
 	call := len(network.requests)
 	network.mu.Unlock()
 	status, payload := network.reply(call, body)
-	return &http.Response{StatusCode: status, Header: http.Header{}, Body: io.NopCloser(bytes.NewReader(payload))}, nil
+	header := http.Header{}
+	for key, values := range network.header {
+		header[key] = values
+	}
+	return &http.Response{StatusCode: status, Header: header, Body: io.NopCloser(bytes.NewReader(payload))}, nil
 }
 
 func (network *clefNetwork) count() int {

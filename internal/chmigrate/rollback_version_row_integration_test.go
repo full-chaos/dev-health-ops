@@ -45,6 +45,8 @@ var rollbackRehearsals = []rollbackRehearsal{
 	{"141_work_item_row_view.down.sql", "work_item_metrics_daily", "row_view", "*", "*"},
 	{"142_llm_attempts_usage_reason.down.sql", "llm_categorization_attempts", "usage_reason", "*", ""},
 	{"143_llm_attempts_request_id_source.down.sql", "llm_categorization_attempts", "request_id_source", "*", ""},
+	{"144_llm_attempts_endpoint.down.sql", "llm_categorization_attempts", "endpoint_type", "*", ""},
+	{"144_llm_attempts_endpoint.down.sql", "llm_categorization_attempts", "gateway_id", "*", ""},
 }
 
 // Every operator rollback file is rehearsed through the production migrator: the

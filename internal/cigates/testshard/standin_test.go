@@ -209,6 +209,7 @@ func runCheckGoIn(t *testing.T, root string, extraEnv []string, fail bool, args 
 		t.Fatal(err)
 	}
 	env := append(os.Environ(),
+		reportOnlyEnv+"=",
 		"PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"FAKE_GO_LOG="+log, "FAKE_GO_LIST_LOG="+listLog, "TMPDIR="+filepath.Join(dir, "tmp"),
 		"GO_TEST_JSON_DIR="+filepath.Join(dir, "json"), "FAKE_GO_LIST_REPLAY="+replay, "FAKE_GO_LIST_CACHE="+goListCache, "FAKE_GO_LIST_CACHE_ROOT="+repoRoot(t))

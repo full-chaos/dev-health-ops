@@ -33,7 +33,7 @@ func (r *recordingOrgActivity) Refresh(ctx context.Context, orgID uuid.UUID) err
 }
 
 func (r *recordingOrgActivity) RefreshMissing(_ context.Context, limit int) (int, int, error) {
-	if limit != orgActivityFillBatch {
+	if limit != 25 {
 		return 0, 0, errors.New("unexpected batch")
 	}
 	r.fills++
@@ -117,8 +117,15 @@ func TestAHungOrPanickingOrgActivityRefreshNeitherFailsNorDelaysTheFinalize(t *t
 			start := time.Now()
 			execution := finalizeExecutionFor(testRunID)
 			execution.Attempt, execution.Definition.MaxAttempts = 1, 4
-			if err := handler.Work(context.Background(), execution); err != nil {
-				t.Fatalf("Work = %v, want nil: the finalize completed", err)
+			done := make(chan error, 1)
+			go func() { done <- handler.Work(context.Background(), execution) }()
+			select {
+			case err := <-done:
+				if err != nil {
+					t.Fatalf("Work = %v, want nil: the finalize completed", err)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("the finalize is still waiting for the refresh after 5s")
 			}
 			if elapsed := time.Since(start); elapsed > 5*time.Second {
 				t.Fatalf("the finalize waited %s for the refresh", elapsed)

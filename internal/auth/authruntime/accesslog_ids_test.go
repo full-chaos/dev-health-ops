@@ -36,7 +36,12 @@ type accessStack struct {
 
 func newAccessStack(t *testing.T) *accessStack {
 	t.Helper()
-	trust, err := clientaddr.ParseTrust("192.0.2.0/28")
+	return newAccessStackTrusting(t, "192.0.2.0/28")
+}
+
+func newAccessStackTrusting(t *testing.T, trusted string) *accessStack {
+	t.Helper()
+	trust, err := clientaddr.ParseTrust(trusted)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -222,6 +227,21 @@ func TestTheCallerIDIsTrustedOnlyFromATrustedProxyPeer(t *testing.T) {
 				t.Errorf("an untrusted caller id reached the log:\n%s", stack.logs.String())
 			}
 		})
+	}
+}
+
+// An excluded address inside the trusted range (the node's own address) is not a proxy: its caller id is not believed.
+func TestTheCallerIDFromAnExcludedPeerIsUntrusted(t *testing.T) {
+	stack := newAccessStackTrusting(t, "192.0.2.0/28,!192.0.2.1")
+	request := httptest.NewRequest(http.MethodGet, "/v1/access-ok", nil)
+	request.RemoteAddr = accessTrustedPeer
+	request.Header.Set(httpapi.RequestIDHeader, accessCallerID)
+	stack.serve(request)
+	if got := stack.onlyLine(t)["caller_request_id"]; got != "untrusted" {
+		t.Errorf("caller_request_id = %v, want \"untrusted\"", got)
+	}
+	if strings.Contains(stack.logs.String(), accessCallerID) {
+		t.Errorf("the excluded peer's caller id reached the log:\n%s", stack.logs.String())
 	}
 }
 

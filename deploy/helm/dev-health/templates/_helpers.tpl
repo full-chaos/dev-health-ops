@@ -1079,9 +1079,18 @@ namespace, HTTPS, then networkPolicy.extraEgress. The auth pods never use these 
 {{- end }}
 
 {{/*
+The integer value of a dotted IPv4 address (validated by the caller).
+*/}}
+{{- define "dev-health.ipv4Int" -}}
+{{- $o := splitList "." (toString .) -}}
+{{- add (add (mul (int (index $o 0)) 16777216) (mul (int (index $o 1)) 65536)) (add (mul (int (index $o 2)) 256) (int (index $o 3))) -}}
+{{- end -}}
+
+{{/*
 One authService.trustedProxies entry is what internal/auth/clientaddr ParseTrust accepts (a bare IP address, or a strict CIDR
 network: canonical prefix digits, no host bits, no zone), so a rendered value never stops auth-service at start. Prints "true" when
-the entry is valid, nothing otherwise. The chart refuses /0 and IPv4-mapped forms on top of this.
+the entry is valid, nothing otherwise. The chart refuses /0 and IPv4-mapped forms on top of this. An exclusion entry
+("!<address>") is this check on its address, plus the IPv4-only rules in auth-service.yaml.
 */}}
 {{- define "dev-health.trustedProxyEntry" -}}
 {{- $parts := splitList "/" (toString .) -}}

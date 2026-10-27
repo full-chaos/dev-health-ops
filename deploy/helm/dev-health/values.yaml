@@ -255,14 +255,18 @@ authService:
   #    shares the proxy's own address in the rate-limit keys. List the go-api pods' network only: the render refuses
   #    0.0.0.0/0, ::/0 and IPv4-mapped forms. Trust is safe because the auth-service NetworkPolicy admits go-api's pods
   #    and no other pod on the API port while a proxy flag is on. Width: an entry of /28 or longer (IPv6 /124) is always
-  #    allowed; /24../27 (IPv6 /64../123), such as the node pod range, needs trustedProxiesWideAccepted; anything wider is
-  #    refused even with it. Pod addresses change at a restart, so a range is the only stable value: the NetworkPolicy
-  #    above is then the whole boundary.
+  #    allowed; an IPv4 /24../27, such as the node pod range, needs trustedProxiesWideAccepted AND its node exclusions;
+  #    anything wider, and any IPv6 network wider than a /124, is refused even with it. Pod addresses change at a restart,
+  #    so a range is the only stable value: the NetworkPolicy above is then the boundary for pods.
+  #    Exclusions: an entry "!<IPv4 address>" inside a listed IPv4 network is never trusted. The node pod range holds the
+  #    node's own addresses (its network address and the bridge at the next one), from which a host process or a
+  #    hostNetwork pod reaches the API port past the go-api pod selector, so a /24../27 renders only with both listed:
+  #    ["10.42.0.0/24", "!10.42.0.0", "!10.42.0.1"]. Needs an auth-service image that reads "!" entries (CHAOS-11703).
   trustedProxies: []
-  # -- Permission to list an entry wider than a /28 (IPv6 /124), up to the node pod range (/24, IPv6 /64). A wide entry (/24..
-  #    /27, IPv6 /64../123) needs it at ANY phase, the proxy off included, because the list is rendered into the env whatever the
-  #    phase; an entry wider than the pod range is refused at every phase. With only narrow entries, or no list, the ack
-  #    changes nothing.
+  # -- Permission to list an IPv4 entry wider than a /28, up to the node pod range (/24). A wide entry (/24../27) needs it at
+  #    ANY phase, the proxy off included, because the list is rendered into the env whatever the phase, and it needs its node
+  #    exclusions "!<network address>" and "!<network address + 1>" in the same list; an entry wider than the pod range, and an
+  #    IPv6 network wider than a /124, is refused at every phase. With only narrow entries, or no list, the ack changes nothing.
   trustedProxiesWideAccepted: false
   signingKey:
     secretName: ""
@@ -1698,6 +1702,18 @@ clickhouse:
     user: "ch"
     password: "ch"
     database: "default"
+  # -- The CLICKHOUSE_PASSWORD env of the StatefulSet. With `enabled: false` (the default) it stays the
+  #    plain env value. `true` renders the Secret <fullname>-clickhouse-credentials (key CLICKHOUSE_PASSWORD,
+  #    the same value as credentials.password) and makes the env a secretKeyRef on it, so the value is not in
+  #    the StatefulSet spec. `existingSecret.name` names a Secret created outside the release that holds the
+  #    password under `key`: the StatefulSet reads it, the chart renders no credentials Secret, `enabled` has
+  #    no effect (existingSecret wins), and secrets.create must be false (the render fails otherwise). The
+  #    value does not change. Switching any of it restarts the pod.
+  credentialsSecret:
+    enabled: false
+    existingSecret:
+      name: ""
+      key: CLICKHOUSE_PASSWORD
   # Extra ClickHouse users.d files, as a map of filename -> XML content
   # (CHAOS-6181). Each renders into one ConfigMap key. The ConfigMap is mounted as
   # a DIRECTORY at /etc/clickhouse-server/usersd-cm and an initContainer links each

@@ -177,8 +177,9 @@ authService:
   #         public users table; no auth-schema copy, no projection.
   #      5  orgs owned: AUTH_ORGS_OWNED too. Meaning (D6358): auth-service writes
   #         the existing public organizations and memberships tables.
-  #    Phases 4 and 5 are refused at render: they need the public-table writer
-  #    decision first. The chart refuses the keys this replaces (goApi.authProxy,
+  #    Phase 5 is refused at render: orgs owned needs its own public-table writer
+  #    leaf. Phase 4 renders; rollback is phase minus 1 (4 -> 3) in one helm
+  #    upgrade. The chart refuses the keys this replaces (goApi.authProxy,
   #    authService.enabled, authService.usersOwned, authService.orgsOwned).
   phase: 0
   # -- Two replicas keep the service up through one pod loss or node drain
@@ -1744,6 +1745,13 @@ postgresql:
     user: "devhealth"
     password: "devhealth"
     database: "devhealth"
+  # -- The POSTGRES_PASSWORD env of the StatefulSet. The Secret <fullname>-postgresql-credentials
+  #    (key POSTGRES_PASSWORD, the same value as credentials.password) always renders with the
+  #    store. While `enabled` is false the StatefulSet keeps the plain env value; `true` makes
+  #    it a secretKeyRef on that Secret, so the value is not in the StatefulSet spec. The value
+  #    does not change. Switching it restarts the pod.
+  credentialsSecret:
+    enabled: false
   # -- Client authentication. The ConfigMap <fullname>-postgresql-hba always renders
   #    with the store: every client, the local socket and loopback included, gives a
   #    scram-sha-256 password. Only `enabled: true` passes it to the server as

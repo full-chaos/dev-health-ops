@@ -713,8 +713,8 @@ serve it).
 
 {{/*
 authService.phase, the one auth cutover key (values.yaml lists the phases). It refuses the keys it replaces, refuses
-any value that is not a whole number from 0 to 5, refuses phases 4 and 5 (D6358: they wait for the public-table writer
-decision), and renders the phase. Every ladder read goes through dev-health.authOn, so every render runs these checks.
+any value that is not a whole number from 0 to 5, refuses phase 5 (D6358: orgs owned waits for its own public-table writer
+leaf), and renders the phase. Every ladder read goes through dev-health.authOn, so every render runs these checks.
 */}}
 {{- define "dev-health.authPhase" -}}
 {{- $v := .Values -}}
@@ -724,7 +724,7 @@ decision), and renders the phase. Every ladder read goes through dev-health.auth
 {{- if hasKey $v.authService "orgsOwned" }}{{- fail "authService.orgsOwned is replaced by authService.phase: orgs owned is phase 5; remove authService.orgsOwned" }}{{- end -}}
 {{- $p := $v.authService.phase -}}
 {{- if not (and (has (kindOf $p) (list "int" "int64" "float64")) (eq (float64 $p) (floor (float64 $p))) (ge (float64 $p) 0.0) (le (float64 $p) 5.0)) }}{{- fail (printf "authService.phase must be a whole number from 0 to 5, got %s %v" (kindOf $p) $p) }}{{- end -}}
-{{- if ge (int $p) 4 }}{{- fail (printf "authService.phase %d: phases 4 and 5 need the public-table writer decision (D6358): auth-service does not yet write the existing public users, organizations and memberships tables, so phase 3 is the highest phase this chart renders" (int $p)) }}{{- end -}}
+{{- if ge (int $p) 5 }}{{- fail (printf "authService.phase %d: phase 5 (orgs owned) needs its own public-table writer leaf (D6358): auth-service does not yet write the existing public organizations and memberships tables, so phase 4 is the highest phase this chart renders" (int $p)) }}{{- end -}}
 {{- int $p -}}
 {{- end -}}
 
@@ -819,8 +819,8 @@ and the other enable flags say. templates/auth-service.yaml includes it once, ou
 {{/*
 "true" when authService.phase turns the ladder flag on, else "". Call with (dict "flag" <name> "context" $).
 The ladder (each flag is on from its phase up): service 1, sessions 2, localLogin 3, social 3, credentials 4,
-usersOwned 4, orgsOwned 5. credentials moves with usersOwned: auth-service mounts the credential routes only with
-AUTH_USERS_OWNED, and go-api refuses AUTH_USERS_OWNED unless the credential routes go to auth-service.
+usersOwned 4, orgsOwned 5. credentials moves with usersOwned: go-api refuses AUTH_USERS_OWNED unless the credential routes
+go to auth-service. auth-service mounts them from phase 2 (a 503 stub until users are owned).
 */}}
 {{- define "dev-health.authOn" -}}
 {{- $ladder := dict "service" 1 "sessions" 2 "localLogin" 3 "social" 3 "credentials" 4 "usersOwned" 4 "orgsOwned" 5 -}}

@@ -857,7 +857,11 @@ func TestTheUnsentLineIsReadAfterADrainThatOutlivesClose(t *testing.T) {
 	})
 	writer.Start()
 	writer.Offer([]RequestUsageRow{{Transport: requestTransportREST, Requests: 1}})
-	<-handler.held
+	select {
+	case <-handler.held:
+	case <-time.After(30 * time.Second):
+		t.Fatal("writer never reached flush_failed")
+	}
 	closeAndAwaitDrain(t, writer, 10*time.Millisecond, release)
 	if !strings.Contains(logs.String(), "request usage write panicked: store driver bug") ||
 		!strings.Contains(logs.String(), "msg=provider_sync.request_usage_unsent") {

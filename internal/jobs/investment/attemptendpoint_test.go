@@ -82,8 +82,17 @@ func TestRecordingTheEndpointChangesNothingSent(t *testing.T) {
 		t.Fatalf("Build: %v", err)
 	}
 	defer func() { _ = served.Close() }()
-	servedRowsOf(t, served)
+	rows := servedRowsOf(t, served)
 	req := stub.network.requests[0]
+	if req.Header.Get("Content-Type") != "application/json" {
+		t.Errorf("Content-Type differs: %q", req.Header.Get("Content-Type"))
+	}
+	if req.Header.Get("Authorization") != "Bearer "+testClefToken {
+		t.Error("Authorization differs")
+	}
+	if id := req.Header.Get("X-Request-Id"); id == "" || id != rows[0].RequestID {
+		t.Errorf("X-Request-Id differs from the id of the attempt row: %q", id)
+	}
 	var names []string
 	for name := range req.Header {
 		names = append(names, name)

@@ -72,3 +72,20 @@ func Wire(ctx context.Context) string {
 func WireOf(id uuid.UUID) string {
 	return WirePrefix + wireEncoding.EncodeToString(id[:])
 }
+
+// LoggableWire is v as it may appear in a log line: v when it has the wire
+// form ("req_" and 26 characters of A-Z, 2-7), "" when empty, else "invalid".
+func LoggableWire(v string) string {
+	if v == "" {
+		return ""
+	}
+	if len(v) != len(WirePrefix)+26 || v[:len(WirePrefix)] != WirePrefix {
+		return "invalid"
+	}
+	for i := len(WirePrefix); i < len(v); i++ {
+		if c := v[i]; !(c >= 'A' && c <= 'Z' || c >= '2' && c <= '7') {
+			return "invalid"
+		}
+	}
+	return v
+}

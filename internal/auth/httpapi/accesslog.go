@@ -105,6 +105,8 @@ type accessObserver struct {
 	spans    spanObserver
 	requests metric.Int64Counter
 	duration metric.Float64Histogram
+	// attrs adds a server's own fields to each line (ServerOptions.AccessAttrs).
+	attrs func(r *http.Request, answer http.Header) []slog.Attr
 }
 
 // newAccessObserver builds the instruments from the process's current meter
@@ -141,7 +143,7 @@ func (o *accessObserver) wrap(next http.Handler) http.Handler {
 		// still a request that reached the route.
 		defer func() {
 			o.spans.finish(span, boundedMethod(r.Method), match.pattern, recorder.status, !returned, match.notFoundCause.Load(), match.graphQL.load())
-			o.observe(r, match.pattern, recorder.status, time.Now().Sub(start), match.graphQL.load())
+			o.observe(r, match.pattern, recorder.status, time.Now().Sub(start), match.graphQL.load(), recorder.Header())
 		}()
 		next.ServeHTTP(recorder, r.WithContext(context.WithValue(spanCtx, observedRouteKey{}, match)))
 		returned = true
@@ -153,7 +155,7 @@ func (o *accessObserver) wrap(next http.Handler) http.Handler {
 	})
 }
 
-func (o *accessObserver) observe(r *http.Request, pattern string, status int, elapsed time.Duration, doc *graphQLDocument) {
+func (o *accessObserver) observe(r *http.Request, pattern string, status int, elapsed time.Duration, doc *graphQLDocument, answer http.Header) {
 	if pattern == "" {
 		pattern = UnmatchedRoute
 	}
@@ -186,6 +188,9 @@ func (o *accessObserver) observe(r *http.Request, pattern string, status int, el
 		slog.String("listener", o.listener),
 		slog.String("request_id", LoggableRequestID(ctx)),
 		slog.String("peer", peerHost(r.RemoteAddr)),
+	}
+	if o.attrs != nil {
+		line = append(line, o.attrs(r, answer)...)
 	}
 	o.logger.LogAttrs(ctx, slog.LevelInfo, "http request", append(line, doc.logAttrs()...)...)
 }
@@ -237,6 +242,18 @@ func loggableRequestID(id string) bool {
 		return true
 	}
 	return false
+}
+
+// LoggableID is id as it may appear in a log line, by LoggableRequestID's rule:
+// "" when empty, id when it is a canonical UUID or 32 hex, else "invalid".
+func LoggableID(id string) string {
+	if id == "" {
+		return ""
+	}
+	if !loggableRequestID(id) {
+		return invalidRequestID
+	}
+	return id
 }
 
 func allHex(s string) bool {

@@ -724,6 +724,9 @@ func apiServerOptions(cfg authconfig.Config, logger *slog.Logger, routes []httpa
 		// A GET route does not also answer HEAD: every method the API serves
 		// is one its endpoint profile names.
 		ExplicitHead: true,
+		// Each access line also carries this service's wire id and the
+		// caller's id, which join it to go-api's proxy line.
+		AccessAttrs: accessLogIDs(cfg.TrustedProxies),
 	}
 }
 

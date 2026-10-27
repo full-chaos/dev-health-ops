@@ -112,8 +112,9 @@ func mustRequest(t *testing.T, method, url, body string) *http.Request {
 	return request
 }
 
-// A client's X-Request-ID never reaches a log line or a response of the auth
-// API: the transport id is minted by the server too.
+// A caller's X-Request-ID never reaches a response of the auth API, and a
+// log line only as caller_request_id: the transport id is minted by the
+// server too.
 func TestTheClientRequestIDIsNeverLoggedOrEchoed(t *testing.T) {
 	logs := &safeBuffer{}
 	front := httptest.NewServer(sessionStack(t, logs))
@@ -140,7 +141,13 @@ func TestTheClientRequestIDIsNeverLoggedOrEchoed(t *testing.T) {
 			t.Errorf("%s: response body echoes the client request id", path)
 		}
 	}
-	if strings.Contains(logs.String(), caller) {
-		t.Fatalf("a log line carries the client request id: %s", logs.String())
+	// The peer (127.0.0.1) is a trusted proxy here, so its X-Request-ID is
+	// go-api's id: it appears only as caller_request_id of the access line.
+	callerField := `"caller_request_id":"` + caller + `"`
+	if got := strings.Count(logs.String(), callerField); got != 2 {
+		t.Errorf("caller_request_id appears %d times, want once per access line (2): %s", got, logs.String())
+	}
+	if strings.Contains(strings.ReplaceAll(logs.String(), callerField, ""), caller) {
+		t.Fatalf("a log line carries the client request id outside caller_request_id: %s", logs.String())
 	}
 }

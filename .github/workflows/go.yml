@@ -150,6 +150,7 @@ on:
       - 'internal/cigates/chparams/testdata/*.txt'
       - 'internal/cigates/frozengoldens/*.tsv'
       - 'internal/cigates/emitscan/*.tsv'
+      - 'internal/cigates/abstime/*.tsv'
       - 'internal/cigates/outboundtransport/*.tsv'
       - 'internal/platform/otlpmetrics/*.tsv'
       - 'internal/cigates/chconstructor/*.tsv'

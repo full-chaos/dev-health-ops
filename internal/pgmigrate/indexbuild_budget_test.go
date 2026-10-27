@@ -6,15 +6,15 @@ import (
 	"time"
 )
 
-func TestFailureStreakDropBudgetIsNamedAndIgnoresLockAndRetryDelay(t *testing.T) {
-	want := failureStreakDropBudget(IndexBuildOptions{})
+func TestUnitsIndexDropBudgetIsNamedAndIgnoresLockAndRetryDelay(t *testing.T) {
+	want := unitsIndexDropBudget(IndexBuildOptions{})
 	if want != DefaultIndexCleanupBudget || want > 5*time.Minute {
 		t.Fatalf("default budget %s, want the %s cap", want, DefaultIndexCleanupBudget)
 	}
-	if got := failureStreakDropBudget(IndexBuildOptions{LockTimeout: time.Minute, RetryDelay: 20 * time.Minute}); got != want {
+	if got := unitsIndexDropBudget(IndexBuildOptions{LockTimeout: time.Minute, RetryDelay: 20 * time.Minute}); got != want {
 		t.Fatalf("budget depends on LockTimeout or RetryDelay: %s vs %s", got, want)
 	}
-	if got := failureStreakDropBudget(IndexBuildOptions{CleanupBudget: 3 * time.Second}); got != 3*time.Second {
+	if got := unitsIndexDropBudget(IndexBuildOptions{CleanupBudget: 3 * time.Second}); got != 3*time.Second {
 		t.Fatalf("explicit budget ignored: %s", got)
 	}
 }
@@ -28,12 +28,14 @@ func TestDefaultBuildWindowAndCleanupFitTheJobDeadline(t *testing.T) {
 }
 
 // IF NOT EXISTS over an INVALID index is a silent no-op that reports success.
-func TestFailureStreakBuildSQLHasNoIfNotExists(t *testing.T) {
-	if strings.Contains(failureStreakBuildSQL, "IF NOT EXISTS") {
-		t.Fatalf("build SQL %q must not use IF NOT EXISTS", failureStreakBuildSQL)
-	}
-	if !strings.Contains(failureStreakBuildSQL, "CREATE INDEX CONCURRENTLY ") || !strings.Contains(failureStreakDropSQL, "DROP INDEX CONCURRENTLY IF EXISTS") {
-		t.Fatalf("build/drop SQL not concurrent: %q / %q", failureStreakBuildSQL, failureStreakDropSQL)
+func TestUnitsIndexBuildSQLHasNoIfNotExists(t *testing.T) {
+	for _, index := range unitsIndexes {
+		if strings.Contains(index.buildSQL(), "IF NOT EXISTS") {
+			t.Fatalf("build SQL %q must not use IF NOT EXISTS", index.buildSQL())
+		}
+		if !strings.Contains(index.buildSQL(), "CREATE INDEX CONCURRENTLY ") || !strings.Contains(index.dropSQL(), "DROP INDEX CONCURRENTLY IF EXISTS") {
+			t.Fatalf("build/drop SQL not concurrent: %q / %q", index.buildSQL(), index.dropSQL())
+		}
 	}
 }
 

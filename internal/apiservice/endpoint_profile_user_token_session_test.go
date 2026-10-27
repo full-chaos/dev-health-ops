@@ -26,8 +26,7 @@ func TestUserTokenOnAWidenedRowFollowsTheSessionTokenVersionPin(t *testing.T) {
 		"pin older than the user token_version": {uuid.MustParse("00000000-0000-4000-8000-0000000000e1"), i64ptr(2), http.StatusUnauthorized},
 		"pin newer than the user token_version": {uuid.MustParse("00000000-0000-4000-8000-0000000000e2"), i64ptr(4), http.StatusUnauthorized},
 		"pin equal to the user token_version":   {uuid.MustParse("00000000-0000-4000-8000-0000000000e3"), i64ptr(3), http.StatusOK},
-		// This row is expected to change once sessions without a pin are refused.
-		"passes while unpinned": {uuid.MustParse("00000000-0000-4000-8000-0000000000e4"), nil, http.StatusOK},
+		"refused while unpinned":                {uuid.MustParse("00000000-0000-4000-8000-0000000000e4"), nil, http.StatusUnauthorized},
 	}
 	for _, tc := range sessions {
 		store.sessions[tc.sid] = policy.SessionRow{PrincipalID: probeUser, LegacyTokenVersion: tc.pin}

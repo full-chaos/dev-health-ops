@@ -74,6 +74,8 @@ type systemOneTarget struct {
 	provider ProviderKind
 	url      string
 	bearer   secrets.Hidden
+	// viaGateway is true when the URL is an AI Gateway route. No target sets it yet.
+	viaGateway bool
 }
 
 // TypeSafeClientConfig configures TypeSafeClient.
@@ -112,6 +114,9 @@ const (
 	// is about 10 KB; this stops a hostile or broken peer from filling memory.
 	maxSystemOneResponseBytes = 4 << 20
 	typeSafeRequestIDHeader   = "x-typesafe-request-id"
+	clefRequestIDHeader       = "X-Request-Id"
+	cfAIGLogIDHeader          = "cf-aig-log-id"
+	cfRayHeader               = "cf-ray"
 	maxLoggedRequestIDLen     = 64
 )
 
@@ -389,6 +394,9 @@ type SystemOneAttempt struct {
 	// Class is "" for the attempt that succeeded, else a SystemOneClass.
 	Class     string
 	RequestID string
+	// RequestIDSource is where RequestID came from: aig, ray or client. Only the
+	// clef target sets it; the jev target keeps its own header and leaves it empty.
+	RequestIDSource string
 	// RequestIDRejected is true when the peer sent a request id that was
 	// refused (it held the API key); RequestID is then empty.
 	RequestIDRejected bool
@@ -541,8 +549,9 @@ func (c *TypeSafeClient) send(ctx context.Context, body []byte, lenient bool) (S
 	}
 	var attempts []SystemOneAttempt
 	var wait time.Duration
+	call := &clefCall{start: time.Now().UTC(), seen: map[string]struct{}{}}
 	for attempt := 0; attempt <= typeSafeMaxRetries; attempt++ {
-		result, att, err := c.once(withLLMAttempt(ctx, attempt+1), body, lenient)
+		result, att, err := c.once(withLLMAttempt(ctx, attempt+1), body, lenient, call)
 		att.WaitBefore = wait
 		attempts = append(attempts, att)
 		if err == nil {
@@ -603,7 +612,7 @@ type systemOneUsageProbe struct {
 
 // once sends one attempt. On failure it returns a *SystemOneError that wraps
 // the classified *llmError.
-func (c *TypeSafeClient) once(ctx context.Context, body []byte, lenient bool) (SystemOneResult, SystemOneAttempt, *SystemOneError) {
+func (c *TypeSafeClient) once(ctx context.Context, body []byte, lenient bool, call *clefCall) (SystemOneResult, SystemOneAttempt, *SystemOneError) {
 	var att SystemOneAttempt
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.target.url, bytes.NewReader(body))
 	if err != nil {
@@ -611,6 +620,10 @@ func (c *TypeSafeClient) once(ctx context.Context, body []byte, lenient bool) (S
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+c.target.bearer.Reveal())
+	if c.target.provider == ClefProviderName {
+		att.RequestID, att.RequestIDSource = c.newClientRequestID(ctx, call), RequestIDSourceClient
+		req.Header.Set(clefRequestIDHeader, att.RequestID)
+	}
 
 	started := time.Now()
 	resp, err := tracedLLMDo(c.client, req, c.target.provider, c.cfg.Model)
@@ -636,7 +649,11 @@ func (c *TypeSafeClient) once(ctx context.Context, body []byte, lenient bool) (S
 	}
 	defer resp.Body.Close()
 	att.StatusCode = resp.StatusCode
-	att.RequestID, att.RequestIDRejected = c.cleanRequestID(resp.Header.Get(typeSafeRequestIDHeader))
+	if c.target.provider == ClefProviderName {
+		att.RequestID, att.RequestIDSource = c.clefRequestID(resp.Header, att.RequestID, call)
+	} else {
+		att.RequestID, att.RequestIDRejected = c.cleanRequestID(resp.Header.Get(typeSafeRequestIDHeader))
+	}
 
 	payload, readErr := io.ReadAll(io.LimitReader(resp.Body, maxSystemOneResponseBytes+1))
 	if readErr == nil && len(payload) > maxSystemOneResponseBytes {

@@ -1119,7 +1119,7 @@ CREATE TABLE sync_compute_checkpoints (
 );
 CREATE TABLE sync_run_post_dispatches (
  id uuid PRIMARY KEY, org_id text NOT NULL, sync_run_id uuid NOT NULL, kind text NOT NULL,
- dispatched_at timestamptz NOT NULL,
+ dispatched_at timestamptz NOT NULL, recorded_at timestamptz NOT NULL DEFAULT now(),
  UNIQUE (sync_run_id, kind)
 );
 CREATE TABLE sync_coverage_projections (

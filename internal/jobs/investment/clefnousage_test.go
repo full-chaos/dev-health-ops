@@ -250,3 +250,19 @@ func TestASettleFailureAfterAGoodClefAnswerKeepsItsAttemptAndHasItsOwnOutcome(t 
 		})
 	}
 }
+
+// Every clef attempt row names a request id and where it came from.
+func TestEveryClefAttemptRowHasARequestIDAndAValidSource(t *testing.T) {
+	rows, errs := servedClefRun(t, clefAnswers("clef"), &latchStore{})
+	if errs[0] != nil || errs[1] != nil || len(rows) != 2 {
+		t.Fatalf("errs %v rows %d", errs, len(rows))
+	}
+	for index, row := range rows {
+		if row.RequestID == "" {
+			t.Fatalf("row %d has an empty request_id", index+1)
+		}
+		if row.RequestIDSource != "client" {
+			t.Fatalf("row %d request_id_source = %q, want client (the fake sends no id header)", index+1, row.RequestIDSource)
+		}
+	}
+}

@@ -97,10 +97,11 @@ func (i *Issuer) Preflight(ctx context.Context) error {
 }
 
 // unavailableCompat answers a failed preflight on a go-api route with
-// go-api's own 503: {"detail": {"message": ...}} and no Retry-After.
+// go-api's own 503, {"detail": {"message": ...}}, with Retry-After: 1 (a store that is
+// closing or down answers again within a second or a rolled pod).
 func (h compatHandlers) unavailableCompat(w http.ResponseWriter, r *http.Request, operation string, err error) {
 	h.rec.record(r.Context(), operation, "error", reasonDependency, err)
-	policy.WriteDetail(w, http.StatusServiceUnavailable, policy.ErrorDetail(textAuthUnavailable), nil)
+	policy.WriteDetail(w, http.StatusServiceUnavailable, policy.ErrorDetail(textAuthUnavailable), http.Header{"Retry-After": {"1"}})
 }
 
 // failMint answers a failed mint on a go-api route: go-api's 503 when the

@@ -7,12 +7,13 @@ import (
 	"net"
 
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/puddle/v2"
 	"github.com/valkey-io/valkey-go"
 )
 
 // DependencyFailure reports whether err says a store the request needs
 // (Postgres or the Valkey counter store) cannot answer: a refused or lost
-// connection, a timeout, a closed client, or a server that is down, starting
+// connection, a timeout, a closed client or pool, or a server that is down, starting
 // or out of resources. The answer is a 503 the client may retry. A client
 // that went away (context.Canceled) is no dependency failure. A store call
 // that ran out of time (context.DeadlineExceeded) is one. Classification is by
@@ -43,6 +44,7 @@ func DependencyFailure(err error) bool {
 		errors.As(err, &valkeyErr),
 		errors.As(err, &netErr),
 		errors.Is(err, valkey.ErrClosing),
+		errors.Is(err, puddle.ErrClosedPool),
 		errors.Is(err, valkey.ErrNoAddr),
 		errors.Is(err, io.EOF),
 		errors.Is(err, io.ErrUnexpectedEOF):

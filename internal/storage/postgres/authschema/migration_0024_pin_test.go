@@ -78,13 +78,18 @@ func TestMigration24RepositoryKeyPatternEqualsMigration20(t *testing.T) {
 // validates. Only at version 24 and only for those four; every other byte of
 // each definition must still match the snapshot after the step.
 func acceptValidation(version int, constraints map[string]string) map[string]string {
-	if version != 24 {
+	names := validatedConstraints
+	switch version {
+	case 24:
+	case 31:
+		names = []string{"sessions_pin_present"}
+	default:
 		return constraints
 	}
 	out := make(map[string]string, len(constraints))
 	for key, definition := range constraints {
 		out[key] = definition
-		for _, name := range validatedConstraints {
+		for _, name := range names {
 			if strings.HasSuffix(key, "."+name) {
 				out[key] = strings.TrimSuffix(definition, " NOT VALID")
 			}

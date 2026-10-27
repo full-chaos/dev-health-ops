@@ -474,3 +474,27 @@ func (hostileStateClassifier) Classify(context.Context, units.TextBundle) (decis
 		EvidenceSpanID: "E1_1", EvidenceHandle: "E1",
 	}, nil
 }
+
+func TestShadowRequestIDSourceKeepsOnlyTheClosedSources(t *testing.T) {
+	for _, kept := range []string{"aig", "ray", "client"} {
+		if got := shadowRequestIDSource(kept); got != kept {
+			t.Fatalf("shadowRequestIDSource(%q) = %q, want it kept", kept, got)
+		}
+	}
+	for _, dropped := range []string{"", "AIG", "x", "ray ", "client\n", strings.Repeat("a", 65)} {
+		if got := shadowRequestIDSource(dropped); got != "" {
+			t.Fatalf("shadowRequestIDSource(%q) = %q, want an empty string", dropped, got)
+		}
+	}
+}
+
+func TestAnAttemptWithAnInvalidRequestIDSourceGivesARowWithNoSource(t *testing.T) {
+	exchange := &shadowExchange{attempts: []categorize.SystemOneAttempt{
+		{StatusCode: 200, RequestID: "req-1", RequestIDSource: "ray"},
+		{StatusCode: 200, RequestID: "req-2", RequestIDSource: "not a source"},
+	}}
+	rows := attemptRecords(shadowTestConfig(), "served", decision.Identity{}, "cfg", "u1", exchange, "ok", "clef")
+	if len(rows) != 2 || rows[0].RequestIDSource != "ray" || rows[1].RequestIDSource != "" || rows[1].RequestID != "req-2" {
+		t.Fatalf("rows = %+v", rows)
+	}
+}

@@ -7,6 +7,7 @@
 # Test name, TAB, milliseconds. Sorted (LC_ALL=C), no duplicates; `go test -list` names every row (see check_providersync_race_shard).
 TestAbsenceProofCensus	1880
 TestBuildEffectBatchSizeBoundsReportTheTypedError	9580
+TestCensusLoadSharesOneLoadAcrossPatterns	5380
 TestCompactionPlanStopsAtItsDeadline	1220
 TestCompactionPlannerEqualsThe9556Planner	27770
 TestCompactionPlansHeavyOverlapInBoundedTime	11620

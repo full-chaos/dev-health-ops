@@ -90,8 +90,8 @@ func TestEdDSASignerOutageLoginWritesNothing(t *testing.T) {
 	before := e.stateDigest(t, ctx)
 	for _, password := range []string{"outage-route-password", "wrong"} {
 		got := e.doWith(t, "/api/v1/auth/login", `{"email":"`+email+`","password":"`+password+`"}`, header)
-		if got.status != http.StatusServiceUnavailable || strings.TrimSpace(string(got.body)) != goAPIUnavailable || got.header.Get("Retry-After") != "" {
-			t.Fatalf("login (%d chars) = %d %s, Retry-After %q; want go-api's 503", len(password), got.status, got.body, got.header.Get("Retry-After"))
+		if got.status != http.StatusServiceUnavailable || strings.TrimSpace(string(got.body)) != goAPIUnavailable || got.header.Get("Retry-After") != "1" {
+			t.Fatalf("login (%d chars) = %d %s, Retry-After %q; want go-api's 503 with Retry-After 1", len(password), got.status, got.body, got.header.Get("Retry-After"))
 		}
 	}
 	expectUnchanged(t, before, e.stateDigest(t, ctx))

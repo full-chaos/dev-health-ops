@@ -545,7 +545,7 @@ func configureWithRoutes(
 	return append(components,
 		outboxLoop,
 		announcedListener{listener: operatorHTTP, logger: logger},
-		announcedListener{listener: apiHTTP, logger: logger},
+		announcedListener{listener: apiHTTP, logger: logger, budget: cfg.ShutdownTimeout * 3 / 4},
 		health.Gate{Registry: registry},
 	), nil
 }
@@ -575,7 +575,13 @@ type listener interface {
 type announcedListener struct {
 	listener listener
 	logger   *slog.Logger
+	// budget is the part of the shutdown timeout reserved for this listener (zero:
+	// an equal share, which for the API listener is too short for a slow request
+	// in flight). The components after it share the rest.
+	budget time.Duration
 }
+
+func (a announcedListener) ShutdownBudget() time.Duration { return a.budget }
 
 func (a announcedListener) Name() string { return a.listener.Name() }
 

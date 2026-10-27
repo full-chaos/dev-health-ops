@@ -51,6 +51,7 @@ internal/auth/contracts/provisioning
 internal/auth/edgetoken
 internal/auth/emaildomain
 internal/auth/httpapi
+internal/auth/identity
 internal/auth/passwordhash
 internal/auth/passwordpolicy
 internal/auth/ratelimitvalkey
@@ -60,6 +61,7 @@ internal/auth/sessionid
 internal/auth/signedtoken
 internal/chmigrate
 internal/cli
+internal/edgetokenmint
 internal/egressguard
 internal/entitlements
 internal/httpguard
@@ -86,6 +88,7 @@ internal/platform/config
 internal/platform/credshape
 internal/platform/dbphase
 internal/platform/dbspan
+internal/platform/dialclass
 internal/platform/dsnclass
 internal/platform/errortext
 internal/platform/errortext/hardened

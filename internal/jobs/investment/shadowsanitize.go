@@ -105,6 +105,16 @@ func shadowRequestID(id string) string {
 	return ""
 }
 
+// shadowRequestIDSource keeps one of the three closed sources and drops any
+// other value.
+func shadowRequestIDSource(source string) string {
+	switch source {
+	case "aig", "ray", "client":
+		return source
+	}
+	return ""
+}
+
 // shadowModelID keeps a model-id-shaped value. "?" and "~" are the marks of
 // the adapter's own bound (an unsafe rune, a cut).
 func shadowModelID(model string) string {

@@ -538,10 +538,9 @@ func readRunawayDispatchWakeups(
 // TestMaterializerDoesNotRepublishAStaleUnitsRunEveryTickWhileItsJobIsQueued closes
 // that loop the way the relay does.
 const materializeDispatchSQL = `
-WITH candidates AS (
-	SELECT DISTINCT run.id, run.org_id
+WITH active AS MATERIALIZED (
+	SELECT run.id, run.org_id
 	FROM public.sync_runs AS run
-	JOIN public.sync_run_units AS unit ON unit.sync_run_id = run.id
 	WHERE run.status NOT IN ('success', 'partial_failed', 'failed')
 		AND (
 			run.triggered_by <> 'schedule'
@@ -551,16 +550,26 @@ WITH candidates AS (
 				WHERE occurrence.sync_run_id = run.id
 			)
 		)
-		AND (
-			unit.status = 'planned'
-			OR (unit.status = 'dispatching' AND unit.updated_at <= $2)
-			OR (
-				unit.status = 'retrying'
-				AND unit.available_at IS NOT NULL
-				AND unit.available_at <= $1
+),
+candidates AS (
+	SELECT active.id, active.org_id
+	FROM active
+	CROSS JOIN LATERAL (
+		SELECT 1
+		FROM public.sync_run_units AS unit
+		WHERE unit.sync_run_id = active.id
+			AND (
+				unit.status = 'planned'
+				OR (unit.status = 'dispatching' AND unit.updated_at <= $2)
+				OR (
+					unit.status = 'retrying'
+					AND unit.available_at IS NOT NULL
+					AND unit.available_at <= $1
+				)
 			)
-		)
-	ORDER BY run.id
+		LIMIT 1
+	) AS dispatchable
+	ORDER BY active.id
 	LIMIT $3
 )
 INSERT INTO public.sync_dispatch_outbox (
@@ -1012,6 +1021,10 @@ WHERE sync_dispatch_outbox.status <> 'pending'
 RETURNING (sync_dispatch_outbox.sync_run_id IN (SELECT id FROM stale_dispatched)) AS recovered
 `
 
+// postSyncRebuildWindow bounds the post_sync reconstruction to ledger rows recorded recently (recorded_at is the
+// database clock at insert; migration 0161). A ledger row recorded before the window, or before 0161, is not rebuilt.
+const postSyncRebuildWindow = "7 days"
+
 // post_sync is reconstructed only when the once-only finalizer ledger exists and the
 // outbox row does not. An existing row in any state is immutable here.
 const materializePostSyncSQL = `
@@ -1023,8 +1036,9 @@ WITH candidates AS (
 		ON outbox.sync_run_id = ledger.sync_run_id
 		AND outbox.kind = 'post_sync'
 	WHERE ledger.kind = 'post_sync'
+		AND ledger.recorded_at >= now() - interval '` + postSyncRebuildWindow + `'
 		AND outbox.id IS NULL
-	ORDER BY ledger.dispatched_at, ledger.sync_run_id
+	ORDER BY ledger.recorded_at, ledger.sync_run_id
 	LIMIT $2
 )
 INSERT INTO public.sync_dispatch_outbox (

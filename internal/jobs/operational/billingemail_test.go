@@ -241,3 +241,66 @@ func TestFormatTemplateHandlesEscapedBraces(t *testing.T) {
 		t.Fatalf("got %q, want %q", got, want)
 	}
 }
+
+// Every value the billing mails substitute is HTML-escaped: the owner's name
+// and the organization's name are set by users, the attributes by Stripe.
+func TestRenderBillingEmailEscapesEveryValue(t *testing.T) {
+	const hostile = `<img src=x onerror=alert(1)> & "q" 'z'`
+	const escaped = `&lt;img src=x onerror=alert(1)&gt; &amp; &#34;q&#34; &#39;z&#39;`
+	attributes := BillingAttributes{
+		AmountCents: 1999, Currency: "usd", AttemptCount: 2, InvoiceURL: "https://x.test/i?a=1&b=2",
+		OldTier: hostile, NewTier: hostile, Tier: hostile, TrialEndDate: hostile, DaysRemaining: 3,
+	}
+	for _, emailType := range []string{
+		EmailTypeInvoiceReceipt, EmailTypePaymentFailed, EmailTypeSubscriptionChanged, EmailTypeSubscriptionCanceled,
+		EmailTypeTrialStarted, EmailTypeTrialExpiring, EmailTypeTrialExpired,
+	} {
+		t.Run(emailType, func(t *testing.T) {
+			rendered, err := RenderBillingEmail(emailType, attributes, OwnerContact{Email: "a@b.test", FullName: hostile, OrgName: "Acme </p><script>alert(2)</script>"}, "https://app.example.test")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(rendered.HTML, "<img src=x") || strings.Contains(rendered.HTML, "<script") {
+				t.Fatalf("markup reached the body:\n%s", rendered.HTML)
+			}
+			if !strings.Contains(rendered.HTML, escaped) && emailType != EmailTypeInvoiceReceipt && emailType != EmailTypePaymentFailed {
+				t.Errorf("body lacks the escaped value:\n%s", rendered.HTML)
+			}
+			if !strings.Contains(rendered.HTML, "Acme &lt;/p&gt;&lt;script&gt;alert(2)&lt;/script&gt;") && strings.Contains(rendered.HTML, "{org_name}") {
+				t.Errorf("org name not escaped:\n%s", rendered.HTML)
+			}
+			if strings.Contains(rendered.HTML, "a=1&b=2") {
+				t.Errorf("url field not escaped:\n%s", rendered.HTML)
+			}
+		})
+	}
+}
+
+// The owner's greeting is escaped in every template that greets by name.
+func TestRenderBillingEmailEscapesTheOwnerName(t *testing.T) {
+	for _, emailType := range []string{
+		EmailTypeInvoiceReceipt, EmailTypePaymentFailed, EmailTypeSubscriptionChanged, EmailTypeSubscriptionCanceled,
+		EmailTypeTrialStarted, EmailTypeTrialExpiring, EmailTypeTrialExpired,
+	} {
+		rendered, err := RenderBillingEmail(emailType, BillingAttributes{Currency: "usd"}, OwnerContact{Email: "a@b.test", FullName: "<b>Pat</b>", OrgName: "O&Co"}, "https://app.example.test")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(rendered.HTML, "<b>Pat</b>") {
+			t.Errorf("%s: owner name raw in the body", emailType)
+		}
+	}
+}
+
+// A line break in a tier name cannot start another Subject header line.
+func TestRenderBillingEmailSubjectTakesNoLineBreak(t *testing.T) {
+	for _, emailType := range []string{EmailTypeTrialStarted, EmailTypeTrialExpiring, EmailTypeTrialExpired} {
+		rendered, err := RenderBillingEmail(emailType, BillingAttributes{Tier: "Team\r\nBcc: x@example.test"}, OwnerContact{Email: "a@b.test", FullName: "A", OrgName: "B"}, "https://app.example.test")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.ContainsAny(rendered.Subject, "\r\n") {
+			t.Errorf("%s: subject has a line break: %q", emailType, rendered.Subject)
+		}
+	}
+}

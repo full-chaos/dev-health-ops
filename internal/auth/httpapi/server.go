@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -261,6 +262,9 @@ type Server struct {
 	logger *slog.Logger
 	server *http.Server
 	errors chan error
+	// active counts requests being served, so Shutdown can wait for handlers to
+	// end after it closes their connections.
+	active atomic.Int64
 
 	mu       sync.RWMutex
 	listener net.Listener
@@ -302,8 +306,12 @@ func NewServer(options ServerOptions) (*Server, error) {
 	}
 	server := &Server{name: name, logger: logger, errors: make(chan error, 1)}
 	server.server = &http.Server{
-		Addr:    options.Address,
-		Handler: handler,
+		Addr: options.Address,
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			server.active.Add(1)
+			defer server.active.Add(-1)
+			handler.ServeHTTP(w, r)
+		}),
 		// ReadHeaderTimeout bounds a slow-header (Slowloris) client.
 		ReadHeaderTimeout: 5 * time.Second,
 		// ReadTimeout bounds a slow body.
@@ -608,7 +616,11 @@ func (s *Server) Start(ctx context.Context) error {
 		return fmt.Errorf("listen for %s on %s: %w", s.name, s.server.Addr, err)
 	}
 	s.listener = listener
-	s.server.BaseContext = func(net.Listener) context.Context { return ctx }
+	// SIGTERM cancels ctx, but a request in flight must finish: Shutdown drains
+	// it within its budget. A cancelled request context fails the store call under
+	// it and the caller would get a 500.
+	requestBase := context.WithoutCancel(ctx)
+	s.server.BaseContext = func(net.Listener) context.Context { return requestBase }
 	go func() {
 		if serveErr := s.server.Serve(listener); serveErr != nil &&
 			!errors.Is(serveErr, http.ErrServerClosed) {
@@ -630,10 +642,31 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	if !started {
 		return nil
 	}
-	if err := s.server.Shutdown(ctx); err != nil {
-		return fmt.Errorf("shutdown %s: %w", s.name, err)
+	// The drain ends a little before the component's own deadline, so the hard close
+	// below and the wait for handlers fit inside it: the runtime stops the store
+	// only after this returns, and must find no handler still running.
+	drainCtx := ctx
+	if deadline, ok := ctx.Deadline(); ok {
+		reserve := min(time.Until(deadline)/10, 250*time.Millisecond)
+		var cancel context.CancelFunc
+		drainCtx, cancel = context.WithDeadline(ctx, deadline.Add(-reserve))
+		defer cancel()
 	}
-	return nil
+	err := s.server.Shutdown(drainCtx)
+	if err == nil {
+		return nil
+	}
+	// The drain budget ran out with requests still in flight: close their
+	// connections, which cancels their request contexts, and wait for the handlers.
+	_ = s.server.Close()
+	for s.active.Load() > 0 {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("shutdown %s: %w", s.name, ctx.Err())
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+	return fmt.Errorf("shutdown %s: %w", s.name, err)
 }
 
 // Errors lets the lifecycle runtime terminate when serving fails after bind.

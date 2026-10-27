@@ -49,20 +49,20 @@ func TestQueryExecutedProofEvidenceDistinguishesRealFromEmptySuccess(t *testing.
 	sourceID := uuid.NewString()
 	runID := uuid.NewString()
 	if _, err := pool.Exec(ctx,
-		`INSERT INTO public.integration_credentials (id) VALUES ($1)`, credentialID,
+		`INSERT INTO public.integration_credentials (id, provider, name, created_at, updated_at) VALUES ($1, 'github', 'default', NOW(), NOW())`, credentialID,
 	); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := pool.Exec(ctx,
-		`INSERT INTO public.integrations (id, org_id, credential_id, config)
-		 VALUES ($1, 'org-acme', $2, '{}')`, integrationID, credentialID,
+		`INSERT INTO public.integrations (id, org_id, credential_id, config, provider, name, is_active, created_at, updated_at)
+		 VALUES ($1, 'org-acme', $2, '{}', 'github', 'acme', TRUE, NOW(), NOW())`, integrationID, credentialID,
 	); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := pool.Exec(ctx,
 		`INSERT INTO public.integration_sources
-		 (id, org_id, integration_id, external_id, full_name, metadata)
-		 VALUES ($1, 'org-acme', $2, 'acme/api', 'acme/api', '{}')`,
+		 (id, org_id, integration_id, external_id, full_name, metadata, provider, source_type, name, is_enabled, discovered_at, last_seen_at)
+		 VALUES ($1, 'org-acme', $2, 'acme/api', 'acme/api', '{}', 'github', 'repository', 'src', TRUE, NOW(), NOW())`,
 		sourceID, integrationID,
 	); err != nil {
 		t.Fatal(err)
@@ -70,8 +70,8 @@ func TestQueryExecutedProofEvidenceDistinguishesRealFromEmptySuccess(t *testing.
 	if _, err := pool.Exec(ctx,
 		`INSERT INTO public.sync_runs
 		 (id, org_id, integration_id, status, credential_id, credential_fingerprint, auth_source,
-		  total_units, completed_units, failed_units)
-		 VALUES ($1, 'org-acme', $2, 'success', $3, 'safe-fingerprint', 'integration_credential', 0, 0, 0)`,
+		  total_units, completed_units, failed_units, triggered_by, mode, created_at)
+		 VALUES ($1, 'org-acme', $2, 'success', $3, 'safe-fingerprint', 'integration_credential', 0, 0, 0, 'test', 'incremental', NOW())`,
 		runID, integrationID, credentialID,
 	); err != nil {
 		t.Fatal(err)
@@ -132,10 +132,10 @@ func TestQueryExecutedProofEvidenceDistinguishesRealFromEmptySuccess(t *testing.
 		if _, err := pool.Exec(ctx, `
 INSERT INTO public.sync_run_units (
 	id, org_id, sync_run_id, integration_id, source_id, provider,
-	dataset_key, cost_class, mode, status, processor_flags, result, updated_at
+	dataset_key, cost_class, mode, status, processor_flags, result, updated_at, created_at, attempts
 ) VALUES (
 	$1, 'org-acme', $2, $3, $4, $5, $6, 'medium', 'incremental', $7,
-	'{}', $8, NOW()
+	'{}', $8, NOW(), NOW(), 0
 )`,
 			uuid.NewString(), runID, integrationID, sourceID,
 			seed.provider, seed.dataset, seed.status, seed.result,

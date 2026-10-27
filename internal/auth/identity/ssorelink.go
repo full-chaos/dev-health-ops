@@ -39,17 +39,21 @@ func isSSOBound(authProvider *string, ssoProviderID *uuid.UUID, boundProtocol *s
 // IsSSORelinkable is the one definition of a go-api SSO account that readiness waives because the owned store
 // re-links it at its first sign-in: it holds only when that sign-in can key it. The account is OIDC (its stored
 // subject IS the key subject), bound to an existing OIDC provider row, and its subject passes ValidSubject, the rule
-// IdentityBySubject and the OIDC subject check apply. A SAML account is never waived: go-api stores only the NameID
-// value, not its format, so a transient NameID cannot be told apart (IsSSOSubjectUnverifiable counts it). The
-// users-owned guard leaves a relinkable account out of its identity count.
+// IdentityBySubject and the OIDC subject check apply. A SAML account is not waived here: its key needs the NameID
+// Format and SPNameQualifier that go-api stores at SAML sign-in, so usersbackfill.Relinkable and the users-owned guard
+// waive it only when saml.SubjectFromStored keys those parts (a transient NameID or an account that never signed in
+// stays in IsSSOSubjectUnverifiable's bucket). The users-owned guard leaves a relinkable account out of its identity
+// count.
 func IsSSORelinkable(authProvider, authProviderID *string, ssoProviderID *uuid.UUID, boundProtocol *string) bool {
 	return isSSOBound(authProvider, ssoProviderID, boundProtocol) && *authProvider == "oidc" &&
 		authProviderID != nil && ValidSubject(*authProviderID)
 }
 
 // IsSSOSubjectUnverifiable is the readiness bucket sso_subject_unverifiable: a SAML account bound to an existing SAML
-// provider row whose stored NameID value passes ValidSubject, but whose NameID format go-api never stored. It is
-// not waived (fail closed) and holds the users-owned guard until it has an identity.
+// provider row whose stored NameID value passes ValidSubject. It is the candidate set: the guard and the backfill
+// report leave out the accounts whose stored NameID parts key under saml.SubjectFromStored; an account that never
+// signed in (NULL parts) or has a transient NameID stays counted (fail closed) and holds the users-owned guard until
+// it has an identity.
 func IsSSOSubjectUnverifiable(authProvider, authProviderID *string, ssoProviderID *uuid.UUID, boundProtocol *string) bool {
 	return isSSOBound(authProvider, ssoProviderID, boundProtocol) && *authProvider == "saml" &&
 		authProviderID != nil && ValidSubject(*authProviderID)
@@ -102,12 +106,11 @@ func (s *Store) relinkOwned(ctx context.Context, key ExternalKey, legacy LegacyM
 	if legacy.Subject != "" {
 		stored = legacy.Subject
 	}
-	rows, err := s.pool.Query(ctx, `SELECT u.id, `+ssoBoundSQL("u")+` AND coalesce(u.sso_provider_id = $3::uuid, false)
+	rows, err := s.pool.Query(ctx, `SELECT u.id, `+ssoBoundToKeySQL("u", "$3")+`
        AND EXISTS (SELECT 1 FROM `+s.q+`.users a WHERE a.principal_id = u.id)
 FROM public.users u
 WHERE u.auth_provider = $1 AND u.auth_provider_id = $2
-  AND (u.sso_provider_id IS NULL OR u.sso_provider_id = $3::uuid
-       OR NOT EXISTS (SELECT 1 FROM public.sso_providers p WHERE p.id = u.sso_provider_id AND p.protocol = u.auth_provider))`,
+  AND `+ssoCarrierScopeSQL("u", "$3"),
 		legacy.AuthProvider, stored, string(key.Provider))
 	if err != nil {
 		return Principal{}, false, s.storeErr(ctx, "read relink user", err)

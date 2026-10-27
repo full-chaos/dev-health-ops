@@ -172,7 +172,7 @@ func admit(w http.ResponseWriter, r *http.Request, write httpapi.ErrorWriter, ro
 // exceeded. Please try again later."}} with no Retry-After; a store error is
 // the unhandled-error 500 {"detail":"Internal Server Error"} carrying the
 // unhandled-error marker, or, for a dependency failure, the 503 of
-// unavailableCompat. The /v1 routes answer the service's own envelope
+// unavailableCompat, which carries Retry-After: 1. The /v1 routes answer the service's own envelope
 // (httpapi.WriteError) instead.
 func goAPIRefusal(w http.ResponseWriter, _ *http.Request, code httpapi.Code) {
 	status, body := http.StatusInternalServerError, `{"detail":"Internal Server Error"}`
@@ -181,6 +181,7 @@ func goAPIRefusal(w http.ResponseWriter, _ *http.Request, code httpapi.Code) {
 		status, body = http.StatusTooManyRequests, `{"detail":{"message":"Rate limit exceeded. Please try again later."}}`
 	case httpapi.CodeUnavailable:
 		status, body = http.StatusServiceUnavailable, `{"detail":{"message":"`+textAuthUnavailable+`"}}`
+		w.Header().Set("Retry-After", "1")
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Content-Length", strconv.Itoa(len(body)))

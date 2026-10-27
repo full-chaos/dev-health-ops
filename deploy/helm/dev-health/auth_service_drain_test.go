@@ -67,6 +67,7 @@ func TestAuthServiceGraceBoundAtEachEdge(t *testing.T) {
 		{"default", 10, true, 20, 35, "authService.drain.preStopSeconds (10) + authService.shutdownTimeout (20) + 5 = 35"},
 		{"preStop off", 0, false, 20, 25, "authService.drain.preStopSeconds (0) + authService.shutdownTimeout (20) + 5 = 25"},
 		{"preStop at its maximum", 600, true, 20, 625, "authService.drain.preStopSeconds (600) + authService.shutdownTimeout (20) + 5 = 625"},
+		{"shutdown at the parser maximum", 10, true, 600, 615, "authService.drain.preStopSeconds (10) + authService.shutdownTimeout (600) + 5 = 615"},
 		{"longer shutdown", 10, true, 90, 105, "authService.drain.preStopSeconds (10) + authService.shutdownTimeout (90) + 5 = 105"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -99,7 +100,9 @@ func TestAuthServiceDrainRefusals(t *testing.T) {
 		"preStop text":       {[]string{"--set-string", "authService.drain.preStopSeconds=abc"}, "preStopSeconds"},
 		"preStop huge":       {[]string{"--set-string", "authService.drain.preStopSeconds=99999999999999999999"}, "preStopSeconds"},
 		"shutdown zero":      {[]string{"--set", "authService.shutdownTimeout=0s"}, "shutdownTimeout"},
-		"shutdown over 3 h":  {[]string{"--set", "authService.shutdownTimeout=10801s", "--set", "authService.terminationGracePeriodSeconds=86400"}, "shutdownTimeout"},
+		"shutdown 601s":      {[]string{"--set", "authService.shutdownTimeout=601s", "--set", "authService.terminationGracePeriodSeconds=700"}, "shutdownTimeout"},
+		"shutdown 10801s":    {[]string{"--set", "authService.shutdownTimeout=10801s", "--set", "authService.terminationGracePeriodSeconds=86400"}, "shutdownTimeout"},
+		"shutdown 1000s":     {[]string{"--set", "authService.shutdownTimeout=1000s", "--set", "authService.terminationGracePeriodSeconds=2000"}, "shutdownTimeout"},
 		"grace zero":         {[]string{"--set", "authService.terminationGracePeriodSeconds=0"}, "terminationGracePeriodSeconds"},
 		"extraArgs shutdown": {[]string{"--set", "authService.extraArgs[0]=--shutdown-timeout=5s"}, "authService.extraArgs must not set --shutdown-timeout=5s"},
 		"extraEnv shutdown":  {[]string{"--set", "authService.extraEnv[0].name=AUTH_SERVICE_SHUTDOWN_TIMEOUT", "--set", "authService.extraEnv[0].value=5s"}, "AUTH_SERVICE_SHUTDOWN_TIMEOUT"},

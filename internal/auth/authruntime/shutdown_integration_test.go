@@ -115,7 +115,8 @@ func TestShutdownInFlightRefreshNever500IntegrationDuringShutdown(t *testing.T) 
 	base = "http://" + base
 
 	var statuses sync.Map
-	var sent atomic.Int64
+	var sent, answered, allowedErrors, failedOutside atomic.Int64
+	var unexpected sync.Map
 	var stopping atomic.Bool
 	var wg sync.WaitGroup
 	body := `{"email":"` + email + `","password":"shutdown-password"}`
@@ -131,8 +132,17 @@ func TestShutdownInFlightRefreshNever500IntegrationDuringShutdown(t *testing.T) 
 				sent.Add(1)
 				response, err := client.Do(request)
 				if err != nil {
+					// A transport error is allowed only once shutdown has begun (the listener
+					// is closed); before it, a dropped request is a failure.
+					if stopping.Load() {
+						allowedErrors.Add(1)
+					} else {
+						failedOutside.Add(1)
+						unexpected.Store(err.Error(), true)
+					}
 					return
 				}
+				answered.Add(1)
 				_, _ = io.Copy(io.Discard, response.Body)
 				_ = response.Body.Close()
 				count, _ := statuses.LoadOrStore(response.StatusCode, new(atomic.Int64))
@@ -154,7 +164,16 @@ func TestShutdownInFlightRefreshNever500IntegrationDuringShutdown(t *testing.T) 
 	if count, ok := statuses.Load(http.StatusInternalServerError); ok {
 		t.Fatalf("%d requests answered 500 during shutdown", count.(*atomic.Int64).Load())
 	}
-	if sent.Load() == 0 {
-		t.Fatal("no request was sent")
+	unexpected.Range(func(key, _ any) bool {
+		t.Errorf("a request failed outside the shutdown window: %v", key)
+		return true
+	})
+	if sent.Load() == 0 || answered.Load() == 0 {
+		t.Fatalf("sent %d, answered %d: the test saw no answer", sent.Load(), answered.Load())
 	}
+	if got := answered.Load() + allowedErrors.Load() + failedOutside.Load(); got != sent.Load() {
+		t.Fatalf("sent %d but answered %d + errors after shutdown began %d + errors before %d: requests are unaccounted for",
+			sent.Load(), answered.Load(), allowedErrors.Load(), failedOutside.Load())
+	}
+	t.Logf("sent %d, answered %d, errors after shutdown began %d", sent.Load(), answered.Load(), allowedErrors.Load())
 }

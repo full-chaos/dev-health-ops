@@ -259,13 +259,19 @@ authService:
   #    from-address, an https origin as APP_BASE_URL). A resend provider with
   #    no key fails when a mail is sent, not at start. The console override
   #    AUTH_MAIL_ALLOW_CONSOLE is never rendered and authService.extraEnv
-  #    refuses it.
+  #    refuses it. When secretName is the Secret this chart creates
+  #    (secrets.create=true), the render also reads secrets.data: it fails
+  #    without EMAIL_FROM_ADDRESS and APP_BASE_URL, with EMAIL_PROVIDER empty,
+  #    console or smtp (the chart wires resend only), or resend with neither
+  #    key. The chart cannot read a Secret it did not create.
   mail:
     secretName: ""
     keys:
       provider: EMAIL_PROVIDER
       fromAddress: EMAIL_FROM_ADDRESS
       apiKey: EMAIL_API_KEY
+      # -- Resend reads EMAIL_API_KEY, else RESEND_API_KEY (internal/mail/sender.go).
+      resendApiKey: RESEND_API_KEY
       appBaseURL: APP_BASE_URL
   # -- AUTH_SERVICE_TRUSTED_PROXIES: the peers (IP addresses or strict CIDR networks) whose single X-Forwarded-For
   #    value names the client. Required from authService.phase 2 (go-api forwards auth routes), because otherwise every proxied caller

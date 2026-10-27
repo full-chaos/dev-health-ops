@@ -86,6 +86,7 @@
                 "provider": { "type": "string" },
                 "fromAddress": { "type": "string" },
                 "apiKey": { "type": "string" },
+                "resendApiKey": { "type": "string" },
                 "appBaseURL": { "type": "string" }
               }
             }

@@ -737,7 +737,7 @@ names and proves each is refused.
 {{- define "dev-health.authServiceEnvNames" -}}
 {{- $names := list "AUTH_DATABASE_URI" "AUTH_JWT_SECRET_KEY" "AUTH_SESSION_SUCCESSOR_KEY" "AUTH_LOGIN_LOCKOUT_KEY" "AUTH_SOCIAL_LINK_ROUTES" "AUTH_ACCESS_TOKEN_CLASS" "AUTH_TOKEN_ISSUER_URL" "AUTH_JWT_AUDIENCE" "AUTH_USERS_OWNED" "AUTH_ORGS_OWNED" "AUTH_VALKEY_URI" "AUTH_SERVICE_TRUSTED_PROXIES" "EMAIL_PROVIDER" "EMAIL_FROM_ADDRESS" "APP_BASE_URL" "AUTH_MAIL_ALLOW_CONSOLE" -}}
 {{- /* EMAIL_API_KEY is appended, not listed, so the worker allow-list keeps the only listed spelling (a chartgates planted defect edits it). */ -}}
-{{- $names = (append $names "EMAIL_API_KEY") -}}
+{{- $names = (append (append $names "EMAIL_API_KEY") "RESEND_API_KEY") -}}
 {{- range $provider := list "GITHUB" "GITLAB" "GOOGLE" }}{{- range $suffix := list "CLIENT_ID" "CLIENT_SECRET" }}{{- $names = append $names (printf "SOCIAL_%s_%s" $provider $suffix) }}{{- end }}{{- end -}}
 {{- toJson $names -}}
 {{- end -}}
@@ -785,7 +785,7 @@ and the other enable flags say. templates/auth-service.yaml includes it once, ou
 {{- define "dev-health.authValidate" -}}
 {{- $a := .Values.authService -}}
 {{- $session := default dict $a.sessionKeys -}}
-{{- $keys := list (list "authService.database.secretKey" (default dict $a.database).secretKey) (list "authService.migrate.secretKey" (default dict $a.migrate).secretKey) (list "authService.signingKey.secretKey" (default dict $a.signingKey).secretKey) (list "authService.valkey.secretKey" (default dict $a.valkey).secretKey) (list "authService.sessionKeys.successor.secretKey" (default dict $session.successor).secretKey) (list "authService.sessionKeys.loginLockout.secretKey" (default dict $session.loginLockout).secretKey) (list "authService.mail.keys.provider" (default dict (default dict $a.mail).keys).provider) (list "authService.mail.keys.fromAddress" (default dict (default dict $a.mail).keys).fromAddress) (list "authService.mail.keys.apiKey" (default dict (default dict $a.mail).keys).apiKey) (list "authService.mail.keys.appBaseURL" (default dict (default dict $a.mail).keys).appBaseURL) (list "goApi.sessionIssue.secretKey" (default dict .Values.goApi.sessionIssue).secretKey) -}}
+{{- $keys := list (list "authService.database.secretKey" (default dict $a.database).secretKey) (list "authService.migrate.secretKey" (default dict $a.migrate).secretKey) (list "authService.signingKey.secretKey" (default dict $a.signingKey).secretKey) (list "authService.valkey.secretKey" (default dict $a.valkey).secretKey) (list "authService.sessionKeys.successor.secretKey" (default dict $session.successor).secretKey) (list "authService.sessionKeys.loginLockout.secretKey" (default dict $session.loginLockout).secretKey) (list "authService.mail.keys.provider" (default dict (default dict $a.mail).keys).provider) (list "authService.mail.keys.fromAddress" (default dict (default dict $a.mail).keys).fromAddress) (list "authService.mail.keys.apiKey" (default dict (default dict $a.mail).keys).apiKey) (list "authService.mail.keys.resendApiKey" (default dict (default dict $a.mail).keys).resendApiKey) (list "authService.mail.keys.appBaseURL" (default dict (default dict $a.mail).keys).appBaseURL) (list "goApi.sessionIssue.secretKey" (default dict .Values.goApi.sessionIssue).secretKey) -}}
 {{- range $keys }}
 {{- if not (include "dev-health.validSecretKey" (index . 1)) }}{{- fail (printf "%s must be a Secret key: letters, digits, '-', '_' and '.', at most 253 characters, not '.', '..' or a name that starts with '..'" (index . 0)) }}{{- end }}
 {{- end }}

@@ -2,7 +2,10 @@
 # runs ci/auth_corpus_external.sh (go-api, acp, acp-nokeys) as job auth-corpus-queue of go-auth-service.yml; its result
 # fans into the required context auth-gate. One bash glob per line, matched against the repo-relative path with
 # `case`: `*` matches any characters including `/`. A line starting with # is a comment.
-# internal/cigates/workflows (TestAuthCorpusQueuePathSetCoversEveryRouteFile) fails when a non-test Go file that declares
+# NOT in the set, by design: the rest of the Go packages go-api and the migrate binaries are built from (cmd, internal and
+# contracts are copied whole into the images). A row for them would run the corpus on almost every Go change; the set
+# is the auth-service route set plus the corpus's own inputs.
+# internal/cigates/workflows (TestAuthCorpusQueuePathSetCoversEveryRouteFile, TestAuthCorpusQueuePathSetCoversEveryDirectInput) fails when a non-test Go file that declares
 # an auth-service route (httpapi.Route{ of internal/auth/httpapi) is outside this set, so a new route file cannot skip the corpus.
 #
 # auth-service: routes (internal/auth/authapi, internal/auth/authruntime, internal/auth/workloadexchange, mount in
@@ -26,6 +29,27 @@ docker/providerstub.Dockerfile
 internal/testsupport/smtpcapture/*
 internal/testsupport/providerstub/*
 internal/testsupport/authrows/*
+# the session key the corpus script reads (sed over its const Key)
+internal/testsupport/sessionscenario/*
+# the images the corpus builds (compose services go-api, migrate, auth-service, auth-migrate, the stub and the sink):
+# the Dockerfile, the module files and what it copies besides the Go trees
+docker/go-worker.Dockerfile
+go.mod
+go.sum
+third_party/vendor/atlassian/*
+src/dev_health_ops/config/status_mapping.yaml
+src/dev_health_ops/config/complexity.yaml
+deploy/go-workers/*
+# auth-service closure and its schema, contracts and migrate binary (the same trees ci/check_go.sh auth_path_relevant
+# names beside internal/auth)
+cmd/auth-migrate/*
+internal/audit/*
+internal/storage/postgres/authschema/*
+contracts/auth/*
+# files the compose stack mounts into postgres and clickhouse
+docker/init-extra-dbs.sh
+docker/clickhouse-users.d/*
+docker/clickhouse-config.d/*
 # the stack the corpus brings up, and the two workflows that schedule it
 compose.yml
 .github/workflows/go-auth-service.yml

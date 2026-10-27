@@ -118,9 +118,9 @@ func authCorpusGateViolations(t *testing.T, root string) []string {
 	}
 	run := asString(steps[0]["run"])
 	type c struct {
-		name                                                  string
+		name                                                 string
 		changes, rel, corpusRel, quality, test, fuzz, corpus string
-		wantFail                                              bool
+		wantFail                                             bool
 	}
 	ok := "success"
 	cases := []c{
@@ -305,4 +305,105 @@ func TestAuthCorpusQueuePlantedDefects(t *testing.T) {
 			expectViolation(t, authCorpusGateViolations(t, plantTree(t, root, corpusQueueFiles, c.muts...)), c.want...)
 		})
 	}
+}
+
+// corpusDirectInputs lists the repo paths the corpus reads or builds from directly, outside the Go import closures:
+// the ${ROOT}/ literals of the corpus script, the Dockerfile and bind-mount sources of compose.yml and of the two
+// overrides, and what docker/go-worker.Dockerfile copies into the image.
+func corpusDirectInputs(t *testing.T, root string) []string {
+	t.Helper()
+	seen := map[string]bool{}
+	add := func(p string) {
+		p = strings.TrimPrefix(strings.TrimSuffix(strings.TrimPrefix(p, "./"), "/"), "/")
+		if p != "" && p != "." {
+			seen[p] = true
+		}
+	}
+	for _, m := range regexp.MustCompile(`\$\{ROOT\}/([A-Za-z0-9_./-]+)`).FindAllStringSubmatch(readFile(t, filepath.Join(root, "ci/auth_corpus_external.sh")), -1) {
+		add(m[1])
+	}
+	mount := regexp.MustCompile(`(?m)^\s+- (\./docker/[^:\s]+):`)
+	dockerfile := regexp.MustCompile(`(?m)^\s+dockerfile: (\S+)`)
+	local := regexp.MustCompile(`(?m)^\s+- (\./ci/[^:\s]+):`)
+	for _, f := range []string{"compose.yml", "ci/auth_corpus_external.override.yml", "ci/auth_corpus_external.acp.override.yml"} {
+		text := readFile(t, filepath.Join(root, f))
+		for _, re := range []*regexp.Regexp{mount, dockerfile, local} {
+			for _, m := range re.FindAllStringSubmatch(text, -1) {
+				add(m[1])
+			}
+		}
+	}
+	for _, line := range strings.Split(readFile(t, filepath.Join(root, "docker/go-worker.Dockerfile")), "\n") {
+		f := strings.Fields(line)
+		if len(f) < 3 || f[0] != "COPY" || strings.Contains(line, "--from=") {
+			continue
+		}
+		for _, src := range f[1 : len(f)-1] {
+			if !strings.HasPrefix(src, "-") {
+				add(src)
+			}
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for p := range seen {
+		out = append(out, p)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// corpusInputsOutsideSet returns the direct inputs that no row of the path list matches (a directory input is matched
+// by a row for something under it).
+func corpusInputsOutsideSet(t *testing.T, root string) []string {
+	t.Helper()
+	var pats []*regexp.Regexp
+	for _, line := range strings.Split(readFile(t, filepath.Join(root, corpusQueuePaths)), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		pats = append(pats, regexp.MustCompile("^"+strings.ReplaceAll(regexp.QuoteMeta(line), `\*`, ".*")+"$"))
+	}
+	// Go and contract trees the images copy whole: go-api's own closure is not part of the set (cost; see the path list).
+	closureRoots := map[string]bool{"cmd": true, "internal": true, "contracts": true}
+	var out []string
+	for _, in := range corpusDirectInputs(t, root) {
+		if closureRoots[in] {
+			continue
+		}
+		probe := []string{in, in + "/x"}
+		ok := false
+		for _, re := range pats {
+			for _, p := range probe {
+				if re.MatchString(p) {
+					ok = true
+				}
+			}
+		}
+		if !ok {
+			out = append(out, fmt.Sprintf("corpus input %s matches no row of ci/auth_corpus_paths.txt: a change to it would skip the external corpus", in))
+		}
+	}
+	return out
+}
+
+func TestAuthCorpusQueuePathSetCoversEveryDirectInput(t *testing.T) {
+	root := repoRoot(t)
+	inputs := corpusDirectInputs(t, root)
+	for _, want := range []string{"internal/testsupport/sessionscenario/sessionscenario.go", "docker/go-worker.Dockerfile", "docker/providerstub.Dockerfile", "docker/smtpsink.Dockerfile", "go.mod", "go.sum", "docker/init-extra-dbs.sh"} {
+		if !containsStr(inputs, want) {
+			t.Fatalf("the input scan no longer finds %s (it found %v): the scan is vacuous", want, inputs)
+		}
+	}
+	expectNoViolations(t, corpusInputsOutsideSet(t, root))
+}
+
+func TestAuthCorpusQueueDirectInputScanCatchesAMissingRow(t *testing.T) {
+	root := repoRoot(t)
+	tree := plantTree(t, root, append([]string{"ci/auth_corpus_external.sh", "compose.yml", "ci/auth_corpus_external.override.yml", "ci/auth_corpus_external.acp.override.yml", "docker/go-worker.Dockerfile"}, corpusQueuePaths))
+	rows := strings.Replace(readFile(t, filepath.Join(tree, corpusQueuePaths)), "internal/testsupport/sessionscenario/*\n", "", 1)
+	if err := os.WriteFile(filepath.Join(tree, corpusQueuePaths), []byte(rows+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	expectViolation(t, corpusInputsOutsideSet(t, tree), "internal/testsupport/sessionscenario/sessionscenario.go")
 }

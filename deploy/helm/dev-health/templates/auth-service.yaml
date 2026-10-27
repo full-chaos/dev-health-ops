@@ -110,7 +110,10 @@ binary): the native sleep action, a Kubernetes >= 1.30 feature. Same shape as go
 {{- if not (regexMatch "^(0(\\.[0-9]+)?|1(\\.0+)?)$" (toString $a.tracing.sampleRate)) }}{{- fail (printf "authService.tracing.sampleRate must be a number from 0 to 1, got %q" (toString $a.tracing.sampleRate)) }}{{- end }}
 {{- if and $a.networkPolicy.enabled (not $a.networkPolicy.egress.otlp.to) }}{{- fail "authService.networkPolicy.egress.otlp.to is required while authService.tracing.enabled and authService.networkPolicy.enabled: the auth pods get no other egress, so the spans would never leave the pod" }}{{- end }}
 {{- range $a.networkPolicy.egress.otlp.to }}
-{{- if has (toString (dig "ipBlock" "cidr" "" .)) (list "0.0.0.0/0" "::/0") }}{{- fail "authService.networkPolicy.egress.otlp.to must not open the whole internet (0.0.0.0/0 or ::/0): name the collector's address or pods" }}{{- end }}
+{{- with (dig "ipBlock" "cidr" "" .) }}
+{{- $problem := include "dev-health.otlpPeerCidrProblem" . }}
+{{- if $problem }}{{- fail (printf "authService.networkPolicy.egress.otlp.to: ipBlock cidr %q is refused: %s. Name the collector's address (an IPv4 /8 to /32 or an IPv6 /32 to /128) or its pods" (toString .) $problem) }}{{- end }}
+{{- end }}
 {{- end }}
 {{- end }}
 {{- range $a.extraEnv }}

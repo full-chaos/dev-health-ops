@@ -276,8 +276,8 @@ func endpointHostPort(endpoint string) string {
 		if strings.ContainsAny(endpoint, "@/?#") {
 			return "invalid"
 		}
-		_, port, err := net.SplitHostPort(endpoint)
-		if err != nil {
+		host, port, err := net.SplitHostPort(endpoint)
+		if err != nil || host == "" {
 			return "invalid"
 		}
 		if number, err := strconv.Atoi(port); err != nil || number < 1 || number > 65535 {
@@ -286,7 +286,7 @@ func endpointHostPort(endpoint string) string {
 		return endpoint
 	}
 	parsed, err := url.Parse(endpoint)
-	if err != nil || parsed.Host == "" {
+	if err != nil || parsed.Hostname() == "" {
 		return "invalid"
 	}
 	return parsed.Host

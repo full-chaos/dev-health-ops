@@ -1304,3 +1304,59 @@ Kubernetes default of 25 percent rounds up to one pod at one replica). Takes
 {{- if gt $used (int64 $v) -}}{{- fail (printf "authService.database.connectionBudget: %d connections are needed but the budget is %d: (authService.replicas %d + %d surge) x authService.database.maxConns %d = %d direct, plus %d go-pgbouncer pool connections (%s). Lower a pool or add capacity before raising the budget" $used (int64 $v) $replicas (int64 (include "dev-health.authMaxSurge" .)) (int64 (include "dev-health.authMaxConns" .)) $direct $pools $txnDetail) -}}{{- end -}}
 {{- end -}}
 {{- end -}}
+
+{{/*
+Why an OTLP egress ipBlock cidr is refused, or "" when it is acceptable. The prefix is parsed as a number: an IPv4
+prefix must be /8 to /32 and an IPv6 prefix /32 to /128, so no spelling of 0.0.0.0/0 or ::/0 passes. The IPv4-mapped
+IPv6 range (::ffff:0:0/96) is refused in any spelling: an embedded dotted IPv4 part, and the hex form after "::" is
+expanded. Call with the cidr string.
+*/}}
+{{- define "dev-health.otlpPeerCidrProblem" -}}
+{{- $parts := splitList "/" (lower (trim (toString .))) -}}
+{{- if ne (len $parts) 2 -}}
+it needs exactly one "/" and a prefix
+{{- else -}}
+{{- $addr := index $parts 0 -}}
+{{- $bits := index $parts 1 -}}
+{{- if not (regexMatch "^[0-9]{1,3}$" $bits) -}}
+the prefix is not a number
+{{- else -}}
+{{- $prefix := atoi $bits -}}
+{{- if contains ":" $addr -}}
+{{- if or (lt $prefix 32) (gt $prefix 128) -}}
+an IPv6 prefix must be from /32 to /128
+{{- else if contains "." $addr -}}
+an IPv6 address with an embedded IPv4 part (the mapped or compatible range) is not a collector address
+{{- else -}}
+{{- $halves := splitList "::" $addr -}}
+{{- $groups := list -}}
+{{- if eq (len $halves) 1 -}}
+{{- $groups = splitList ":" $addr -}}
+{{- else if eq (len $halves) 2 -}}
+{{- $left := list -}}
+{{- if ne (index $halves 0) "" }}{{- $left = splitList ":" (index $halves 0) }}{{- end -}}
+{{- $right := list -}}
+{{- if ne (index $halves 1) "" }}{{- $right = splitList ":" (index $halves 1) }}{{- end -}}
+{{- $fill := sub 8 (add (len $left) (len $right)) | int -}}
+{{- $groups = $left -}}
+{{- if gt $fill 0 }}{{- range until $fill }}{{- $groups = append $groups "0" }}{{- end }}{{- end -}}
+{{- $groups = concat $groups $right -}}
+{{- end -}}
+{{- if ne (len $groups) 8 -}}
+the IPv6 address does not parse
+{{- else -}}
+{{- $g := list -}}
+{{- range $groups }}{{- $g = append $g (regexReplaceAll "^0+" . "") }}{{- end -}}
+{{- if and (eq (join "" (slice $g 0 5)) "") (eq (index $g 5) "ffff") -}}
+the IPv4-mapped IPv6 range (::ffff:0:0/96) is not a collector address
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- else -}}
+{{- if or (lt $prefix 8) (gt $prefix 32) -}}
+an IPv4 prefix must be from /8 to /32
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}

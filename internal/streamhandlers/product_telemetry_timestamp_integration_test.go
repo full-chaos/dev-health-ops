@@ -33,8 +33,14 @@ func TestProductTelemetryStoresTimestampsAtTheDriverRangeEdgesExactly(t *testing
 	}
 	const gone = "gone" // accepted by the intake, deleted by the table TTL
 	cases := map[string]string{
-		"1899-12-31T00:00:00Z":     "1899-12-31 00:00:00.000",
-		"1900-01-01T00:00:00":      "1900-01-01 00:00:00.000",
+		//ttlclock:allow driver range edge kept on purpose: toDateTime wraps the pre-1970 value to 2036-02-06, so the row lives until the wrapped TTL 2036-08-04; named, not fixed
+		"1899-12-31T00:00:00Z":
+		//ttlclock:allow driver range edge kept on purpose: toDateTime wraps the pre-1970 value to 2036-02-06, so the row lives until the wrapped TTL 2036-08-04; named, not fixed
+		"1899-12-31 00:00:00.000",
+		//ttlclock:allow driver range edge kept on purpose: toDateTime wraps the pre-1970 value to 2036-02-07, so the row lives until the wrapped TTL 2036-08-05; named, not fixed
+		"1900-01-01T00:00:00":
+		//ttlclock:allow driver range edge kept on purpose: toDateTime wraps the pre-1970 value to 2036-02-07, so the row lives until the wrapped TTL 2036-08-05; named, not fixed
+		"1900-01-01 00:00:00.000",
 		"2105-08-11T06:28:16.999Z": "2105-08-11 06:28:16.999", // last timestamp the TTL keeps
 		"2105-08-11T06:28:17Z":     gone,                      // first timestamp the TTL deletes
 		"2262-04-11T23:47:16.854Z": gone,

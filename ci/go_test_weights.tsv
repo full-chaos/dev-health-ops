@@ -25,9 +25,11 @@ internal/cigates/proofteardown	19
 internal/cigates/raceunweighted	140
 internal/cigates/releasetag	7
 internal/cigates/scripts	164
+internal/cigates/sharedserver	26
 internal/cigates/splitshards	195
 internal/cigates/testshard	290
 internal/cigates/weightsfiles	57
+internal/cigates/workflowpaths	21
 internal/cigates/workflows	117
 internal/fixturescli	6
 internal/goapicli/restprove	12

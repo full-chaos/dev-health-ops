@@ -22,11 +22,10 @@ func NotOwnedCredentialRoutes() []httpapi.Route {
 	}
 }
 
-// UnavailableRetry answers go-api's 503 unavailable shape plus Retry-After: 1.
+// UnavailableRetry answers go-api's 503 unavailable shape (goAPIRefusal, which carries Retry-After: 1).
 // It reads no body and touches no limiter, flow, store or mail sender.
 func UnavailableRetry() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Retry-After", "1")
 		goAPIRefusal(w, r, httpapi.CodeUnavailable)
 	})
 }

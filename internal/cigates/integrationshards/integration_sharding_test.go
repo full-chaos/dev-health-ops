@@ -516,6 +516,9 @@ func parsedRunFuncs(t *testing.T, path string) []string {
 type taggedFacts struct {
 	tagged, untagged map[string]map[string]bool
 	hook             map[string]string
+	// effect is, per package without an init or TestMain hook, "<key>/<file> <finding>" of the first package-level
+	// side effect gotestfuncs reports in a tag-only file that no reviewed row covers.
+	effect map[string]string
 }
 
 var (
@@ -558,7 +561,8 @@ func integrationTaggedFacts(t *testing.T) taggedFacts {
 		if withTag == nil || plain == nil {
 			return
 		}
-		taggedVal = taggedFacts{tagged: map[string]map[string]bool{}, untagged: map[string]map[string]bool{}, hook: map[string]string{}}
+		taggedVal = taggedFacts{tagged: map[string]map[string]bool{}, untagged: map[string]map[string]bool{}, hook: map[string]string{}, effect: map[string]string{}}
+		tagOnly := map[string][]string{}
 		for _, k := range keys {
 			inPlain := map[string]bool{}
 			for _, f := range plain[k] {
@@ -570,6 +574,7 @@ func integrationTaggedFacts(t *testing.T) taggedFacts {
 				tests = append(tests, parsedRunFuncs(t, filepath.Join(root, k, f))...)
 				into := taggedVal.untagged[k]
 				if !inPlain[f] {
+					tagOnly[k] = append(tagOnly[k], f)
 					into = taggedVal.tagged[k]
 					if hook != "" && taggedVal.hook[k] == "" {
 						taggedVal.hook[k] = k + "/" + f + " " + hook
@@ -580,11 +585,46 @@ func integrationTaggedFacts(t *testing.T) taggedFacts {
 				}
 			}
 		}
+		// Package-level side effects of the tag-only files, from the lister apart from the script that prints the
+		// receipts: the first unreviewed one of a package without an init or TestMain hook keeps it unfiltered.
+		var paths []string
+		owner := map[string][2]string{}
+		for _, k := range keys {
+			for _, f := range tagOnly[k] {
+				abs := filepath.Join(root, k, f)
+				paths = append(paths, abs)
+				owner[abs] = [2]string{k, f}
+			}
+		}
+		args := append([]string{"run", "-mod=readonly", "./ci/tools/gotestfuncs/main.go", "-root", root, "-reviewed", filepath.Join(root, sideEffectTable)}, paths...)
+		res := freeSpec{dir: root, env: env}.run("go", args...)
+		if res.code != 0 {
+			taggedErr += "gotestfuncs: " + res.stdout + res.stderr
+			return
+		}
+		for _, l := range strings.Split(strings.TrimSpace(res.stdout), "\n") {
+			f := strings.Split(l, "\x1f")
+			if len(f) != 3 || f[0] != "H" {
+				continue
+			}
+			if o, ok := owner[f[1]]; ok && taggedVal.hook[o[0]] == "" && taggedVal.effect[o[0]] == "" {
+				taggedVal.effect[o[0]] = o[0] + "/" + o[1] + " " + f[2]
+			}
+		}
 	})
 	if taggedErr != "" || taggedVal.tagged == nil {
 		t.Fatalf("tagged-test discovery failed: %s", taggedErr)
 	}
 	return taggedVal
+}
+
+// hookOf is "<key>/<file> <what>" of the tag-only file that keeps the package unfiltered: the first init or TestMain,
+// else the first package-level side effect, or "".
+func (f taggedFacts) hookOf(k string) string {
+	if f.hook[k] != "" {
+		return f.hook[k]
+	}
+	return f.effect[k]
 }
 
 // checkTaggedSelection checks one packages shard's dry run against the oracle: every package of the shard either runs
@@ -602,7 +642,7 @@ func checkTaggedSelection(stdout string, shardKeys map[string]bool, f taggedFact
 			return fmt.Errorf("malformed SHARD-TEST line %q", v)
 		}
 		k, n := fs[0], fs[1]
-		hooked := f.hook[k] != ""
+		hooked := f.hookOf(k) != ""
 		switch {
 		case !shardKeys[k]:
 			return fmt.Errorf("SHARD-TEST names %s, a package this shard does not run", k)
@@ -629,15 +669,15 @@ func checkTaggedSelection(stdout string, shardKeys map[string]bool, f taggedFact
 			return fmt.Errorf("malformed SHARD-UNFILTERED line %q", v)
 		}
 		k := fs[0]
-		if !shardKeys[k] || f.hook[k] != fs[1]+" "+fs[2] || unfiltered[k] {
-			return fmt.Errorf("SHARD-UNFILTERED %q has no matching tag-only hook in this shard (oracle: %q)", v, f.hook[k])
+		if !shardKeys[k] || f.hookOf(k) != fs[1]+" "+fs[2] || unfiltered[k] {
+			return fmt.Errorf("SHARD-UNFILTERED %q has no matching tag-only hook in this shard (oracle: %q)", v, f.hookOf(k))
 		}
 		unfiltered[k] = true
 	}
 	for k := range shardKeys {
-		if f.hook[k] != "" {
+		if f.hookOf(k) != "" {
 			if !unfiltered[k] {
-				return fmt.Errorf("%s has a tag-only hook (%s) but no SHARD-UNFILTERED line", k, f.hook[k])
+				return fmt.Errorf("%s has a tag-only hook (%s) but no SHARD-UNFILTERED line", k, f.hookOf(k))
 			}
 			whole := map[string]bool{}
 			for n := range f.tagged[k] {
@@ -647,7 +687,7 @@ func checkTaggedSelection(stdout string, shardKeys map[string]bool, f taggedFact
 				whole[n] = true
 			}
 			if !sameSet(selected[k], whole) {
-				return fmt.Errorf("%s runs unfiltered (%s) but its SHARD-TEST lines select %d of its %d names", k, f.hook[k], len(selected[k]), len(whole))
+				return fmt.Errorf("%s runs unfiltered (%s) but its SHARD-TEST lines select %d of its %d names", k, f.hookOf(k), len(selected[k]), len(whole))
 			}
 			continue
 		}
@@ -2085,7 +2125,7 @@ func TestEachIntegrationShardDryRunExecutesOnlyItsManifestAssignment(t *testing.
 			t.Errorf("packages shard %d: %v", shard, err)
 		}
 		for _, k := range sortedKeys(wants[shard]) {
-			if plantShard == 0 && tf.hook[k] == "" && len(tf.untagged[k]) > 0 && len(tf.tagged[k]) > 1 {
+			if plantShard == 0 && tf.hookOf(k) == "" && len(tf.untagged[k]) > 0 && len(tf.tagged[k]) > 1 {
 				plantShard, plantKey = shard, k
 			}
 		}
@@ -2105,7 +2145,7 @@ func TestEachIntegrationShardDryRunExecutesOnlyItsManifestAssignment(t *testing.
 		}
 	}
 	for k := range wants[plantShard] {
-		if tf.hook[k] == "" && filteredKey == "" {
+		if tf.hookOf(k) == "" && filteredKey == "" {
 			filteredKey = k
 		}
 	}
@@ -2277,7 +2317,7 @@ func censusDefects(calls []goTestCall, groups int, keys map[string]bool, f tagge
 		}
 		for _, n := range sortedKeys(names) {
 			want := 0
-			if f.tagged[key][n] || f.hook[key] != "" {
+			if f.tagged[key][n] || f.hookOf(key) != "" {
 				want = 1
 			}
 			if got := count[key][n]; got != want {
@@ -2350,10 +2390,16 @@ func TestEachPackagesShardRunsEverySelectedTestExactlyOnce(t *testing.T) {
 		if d := censusDefects(calls, groups, wants[shard], tf); len(d) > 0 {
 			t.Errorf("packages shard %d:\n  %s", shard, strings.Join(d, "\n  "))
 		}
-		for k := range wants[shard] {
-			if tf.hook[k] != "" && hookShard == 0 && groups == 1 && len(calls) == 1 {
-				hookShard, hookCalls = shard, calls
+		hasHook, hasFiltered := false, false
+		if groups == 1 && len(calls) == 1 {
+			for _, p := range calls[0].pkgs {
+				k := path.Join(calls[0].dir, strings.TrimPrefix(p, "./"))
+				hasHook = hasHook || tf.hookOf(k) != ""
+				hasFiltered = hasFiltered || (tf.hookOf(k) == "" && len(tf.untagged[k]) > 0)
 			}
+		}
+		if hasHook && hasFiltered && hookShard == 0 {
+			hookShard, hookCalls = shard, calls
 		}
 	}
 	if hookShard == 0 {
@@ -2364,16 +2410,17 @@ func TestEachPackagesShardRunsEverySelectedTestExactlyOnce(t *testing.T) {
 	hookKey, filteredPkg := "", ""
 	for _, p := range c.pkgs {
 		k := path.Join(c.dir, strings.TrimPrefix(p, "./"))
-		if tf.hook[k] != "" && hookKey == "" {
+		if tf.hookOf(k) != "" && hookKey == "" {
 			hookKey = k
 		}
-		if tf.hook[k] == "" && filteredPkg == "" && len(tf.untagged[k]) > 0 {
+		if tf.hookOf(k) == "" && filteredPkg == "" && len(tf.untagged[k]) > 0 {
 			filteredPkg = p
 		}
 	}
 	if hookKey == "" || filteredPkg == "" {
 		t.Fatalf("shard %d: no hook package or no filtered package with untagged tests to plant on", hookShard)
 	}
+	t.Logf("planted defects on shard %d: hook package %s, filtered package %s", hookShard, hookKey, filteredPkg)
 	without := func(drop string) []string {
 		var out []string
 		for _, p := range c.pkgs {

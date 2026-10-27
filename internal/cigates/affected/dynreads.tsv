@@ -135,6 +135,8 @@ internal/cigates/affected	md_bounded_test.go
 internal/cigates/affected	plan.go
 internal/cigates/affected	reach.go
 internal/cigates/affected	reach_test.go
+internal/cigates/affected	reachcache.go
+internal/cigates/affected	reachcache_test.go
 internal/cigates/affected	scan.go
 internal/cigates/affected	tables.go
 internal/cigates/affectedmatrix	affected_helpers_test.go
@@ -221,6 +223,8 @@ internal/cigates/frozengoldens	frozengoldens.go
 internal/cigates/frozengoldens	frozengoldens_test.go
 internal/cigates/integrationshards	ci_script_helpers_test.go
 internal/cigates/integrationshards	integration_sharding_test.go
+internal/cigates/integrationshards	shard_start_order_test.go
+internal/cigates/integrationshards	side_effect_hooks_test.go
 internal/cigates/livee2e	cli.go
 internal/cigates/nopython	nopython_test.go
 internal/cigates/nopython	tests_python_test.go
@@ -254,6 +258,7 @@ internal/cigates/scripts	posture_integration_test.go
 internal/cigates/scripts	relevance_step_script_test.go
 internal/cigates/scripts	shard_row_files_merge_test.go
 internal/cigates/scripts	tmp_dirs_removed_test.go
+internal/cigates/sharedserver	batch_a_test.go
 internal/cigates/sharedserver	sharedserver_test.go
 internal/cigates/splitshards	ci_script_helpers_test.go
 internal/cigates/splitshards	split_package_shards_test.go
@@ -283,6 +288,7 @@ internal/cigates/workflows	ttl_registry_test.go
 internal/cigates/workflows	workflows_common_test.go
 internal/cigates/workflows	workflows_go_integration_pr_scope_test.go
 internal/cigates/workflows	workflows_go_quality_queue_skip_test.go
+internal/cigates/workflows	workflows_go_queue_cancel_children_test.go
 internal/cigates/workflows	workflows_go_queue_skip_test.go
 internal/cigates/workflows	workflows_go_resolver_test.go
 internal/cigates/workflows	workflows_path_filters_test.go

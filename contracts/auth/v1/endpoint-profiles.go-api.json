@@ -756,7 +756,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/apiservice/admin/users.go",
-        "line": 76
+        "line": 77
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -5183,7 +5183,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/apiservice/admin/users.go",
-        "line": 69
+        "line": 70
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -5254,7 +5254,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/apiservice/admin/users.go",
-        "line": 70
+        "line": 71
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -8604,7 +8604,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/apiservice/admin/users.go",
-        "line": 72
+        "line": 73
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -12229,7 +12229,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/apiservice/admin/users.go",
-        "line": 71
+        "line": 72
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -12300,7 +12300,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/apiservice/admin/users.go",
-        "line": 73
+        "line": 74
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",

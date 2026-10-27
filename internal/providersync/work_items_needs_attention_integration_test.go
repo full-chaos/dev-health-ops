@@ -43,8 +43,8 @@ func TestPostgresWorkItemsNeedsAttentionStampAfterThreeEqualFailures(t *testing.
 	seedProviderSyncFixture(t, ctx, pool)
 	for _, key := range workitemcontract.FamilyDatasets() {
 		if _, err := pool.Exec(ctx, `
-INSERT INTO public.integration_datasets (id, org_id, integration_id, dataset_key, options)
-VALUES ($1, 'org-acme', $2, $3, '{}'::jsonb)`, uuid.NewString(), firstIntegrationID, key); err != nil {
+INSERT INTO public.integration_datasets (id, org_id, integration_id, dataset_key, options, is_enabled)
+VALUES ($1, 'org-acme', $2, $3, '{}'::jsonb, TRUE)`, uuid.NewString(), firstIntegrationID, key); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -61,7 +61,7 @@ VALUES ($1, 'org-acme', $2, $3, '{}'::jsonb)`, uuid.NewString(), firstIntegratio
 INSERT INTO public.sync_run_units (
     id, org_id, sync_run_id, integration_id, source_id, provider,
     dataset_key, cost_class, mode, since_at, before_at, status,
-    processor_flags, updated_at
+    processor_flags, updated_at, created_at, attempts
 ) VALUES (
     $1, 'org-acme', $2, $3, $4, 'github', 'work-items', 'medium',
     'incremental', '2026-07-22T12:00:00Z', '2026-07-23T12:00:00Z',
@@ -72,7 +72,7 @@ INSERT INTO public.sync_run_units (
       "family_dataset_work_item_history":true,
       "family_dataset_work_item_comments":true,
       "family_dataset_work_item_projects":true}'::jsonb,
-    NOW()
+    NOW(), NOW(), 0
 )`, unitID, firstRunID, firstIntegrationID, firstSourceID); err != nil {
 			t.Fatal(err)
 		}
@@ -198,8 +198,8 @@ func TestPostgresWorkItemsNeedsAttentionReadsLegacyFailuresAsUnclassified(t *tes
 	createProviderSyncFixture(t, ctx, pool)
 	seedProviderSyncFixture(t, ctx, pool)
 	if _, err := pool.Exec(ctx, `
-INSERT INTO public.integration_datasets (id, org_id, integration_id, dataset_key, options)
-VALUES ($1, 'org-acme', $2, 'work-items', '{}'::jsonb)`, uuid.NewString(), firstIntegrationID); err != nil {
+INSERT INTO public.integration_datasets (id, org_id, integration_id, dataset_key, options, is_enabled)
+VALUES ($1, 'org-acme', $2, 'work-items', '{}'::jsonb, TRUE)`, uuid.NewString(), firstIntegrationID); err != nil {
 		t.Fatal(err)
 	}
 	base := time.Date(2026, time.August, 1, 0, 0, 0, 0, time.UTC)
@@ -207,8 +207,8 @@ VALUES ($1, 'org-acme', $2, 'work-items', '{}'::jsonb)`, uuid.NewString(), first
 		if _, err := pool.Exec(ctx, `
 INSERT INTO public.sync_run_units (
     id, org_id, sync_run_id, integration_id, source_id, provider,
-    dataset_key, cost_class, mode, status, result, updated_at
-) VALUES ($1, 'org-acme', $2, $3, $4, 'github', 'work-items', 'medium', 'incremental', 'failed', $5::json, $6)`,
+    dataset_key, cost_class, mode, status, result, updated_at, created_at, attempts
+) VALUES ($1, 'org-acme', $2, $3, $4, 'github', 'work-items', 'medium', 'incremental', 'failed', $5::json, $6, NOW(), 0)`,
 			uuid.NewString(), firstRunID, firstIntegrationID, firstSourceID, result, base.Add(time.Duration(i)*time.Hour)); err != nil {
 			t.Fatal(err)
 		}
@@ -275,11 +275,11 @@ func TestPostgresWorkItemsNeedsAttentionStampOfAMissingDatasetRowIsNotLoggedAsSt
 INSERT INTO public.sync_run_units (
     id, org_id, sync_run_id, integration_id, source_id, provider,
     dataset_key, cost_class, mode, since_at, before_at, status,
-    processor_flags, updated_at
+    processor_flags, updated_at, created_at, attempts
 ) VALUES (
     $1, 'org-acme', $2, $3, $4, 'github', 'work-items', 'medium',
     'incremental', '2026-07-22T12:00:00Z', '2026-07-23T12:00:00Z',
-    'dispatching', '{"sync_prs":true}'::jsonb, NOW()
+    'dispatching', '{"sync_prs":true}'::jsonb, NOW(), NOW(), 0
 )`, unitID, firstRunID, firstIntegrationID, firstSourceID); err != nil {
 			t.Fatal(err)
 		}

@@ -165,6 +165,146 @@ Expected after import: three rules in the alert list, state "inactive" (not firi
 
 No test of a firing alert is run in prod. The rule shapes are checked in CI against the series the service really writes.
 
+## Valkey memory and eviction rules
+
+The `valkey` group in `alerts/rules.yml` watches the in-chart Valkey that holds the auth-service rate-limit counters. The series come from the collector's redis receiver (`redis.keys.evicted`, `redis.memory.used`). Its rule text is the text of record, and the two rules are saved in SigNoz as builder threshold rules, which are the JSON below. PromQL rules do not evaluate on this SigNoz (D6417: its ClickHouse has no `timeSeriesLastToGrid`, so every PromQL query returns HTTP 400). Other SigNoz rules in this runbook (10807 part B) use the builder form too. Import the two rules in the same way as Step 2, with the JSON below. The rules carry no channel: they route by notification policy (`usePolicy`).
+
+The memory threshold is 161061274 bytes: 80% of the maxmemory 192mb (201326592 bytes) that the roll step for CHAOS-11630 sets. Change the rule and `valkey.maxmemory` together. Until that roll step runs, the live maxmemory is larger (256 MiB), so the memory rule is only stricter.
+
+```json
+{
+  "alert": "ValkeyKeysEvicted",
+  "alertType": "METRIC_BASED_ALERT",
+  "ruleType": "threshold_rule",
+  "schemaVersion": "v2alpha1",
+  "condition": {
+    "compositeQuery": {
+      "queryType": "builder",
+      "panelType": "graph",
+      "unit": "",
+      "queries": [
+        {
+          "type": "builder_query",
+          "spec": {
+            "name": "A",
+            "signal": "metrics",
+            "stepInterval": 60,
+            "aggregations": [
+              {
+                "metricName": "redis.keys.evicted",
+                "timeAggregation": "increase",
+                "spaceAggregation": "sum"
+              }
+            ],
+            "disabled": false
+          }
+        }
+      ]
+    },
+    "selectedQueryName": "A",
+    "thresholds": {
+      "kind": "basic",
+      "spec": [
+        {
+          "name": "warning",
+          "target": 0,
+          "op": "above",
+          "matchType": "at_least_once"
+        }
+      ]
+    }
+  },
+  "evaluation": {
+    "kind": "rolling",
+    "spec": {
+      "evalWindow": "10m",
+      "frequency": "1m"
+    }
+  },
+  "notificationSettings": {
+    "usePolicy": true
+  },
+  "labels": {
+    "severity": "warning",
+    "team": "platform"
+  },
+  "annotations": {
+    "summary": "Valkey evicted keys at maxmemory",
+    "description": "The in-chart Valkey evicted keys because it reached maxmemory. Next: redis.memory.used and redis.db.keys, then valkey.maxmemory."
+  }
+}
+```
+
+```json
+{
+  "alert": "ValkeyMemoryNearMaxmemory",
+  "alertType": "METRIC_BASED_ALERT",
+  "ruleType": "threshold_rule",
+  "schemaVersion": "v2alpha1",
+  "condition": {
+    "compositeQuery": {
+      "queryType": "builder",
+      "panelType": "graph",
+      "unit": "bytes",
+      "queries": [
+        {
+          "type": "builder_query",
+          "spec": {
+            "name": "A",
+            "signal": "metrics",
+            "stepInterval": 60,
+            "aggregations": [
+              {
+                "metricName": "redis.memory.used",
+                "timeAggregation": "max",
+                "spaceAggregation": "max"
+              }
+            ],
+            "disabled": false
+          }
+        }
+      ]
+    },
+    "selectedQueryName": "A",
+    "thresholds": {
+      "kind": "basic",
+      "spec": [
+        {
+          "name": "warning",
+          "target": 161061274,
+          "op": "above",
+          "matchType": "all_the_times"
+        }
+      ]
+    }
+  },
+  "evaluation": {
+    "kind": "rolling",
+    "spec": {
+      "evalWindow": "10m",
+      "frequency": "1m"
+    }
+  },
+  "notificationSettings": {
+    "usePolicy": true
+  },
+  "labels": {
+    "severity": "warning",
+    "team": "platform"
+  },
+  "annotations": {
+    "summary": "Valkey used memory above 80% of maxmemory for ten minutes",
+    "description": "redis.memory.used is above 161061274 bytes (80% of maxmemory 192mb) for ten minutes. Next: redis.db.keys and redis.keys.evicted, then valkey.maxmemory (container limit 256Mi)."
+  }
+}
+```
+
+Checks after import:
+
+1. Run each builder query over the last hour. A result of "no data" (and not 0) means that the metric name does not match what SigNoz stores. Stop and report; do not save the rule. Expected: `redis.memory.used` (max) near 2 MiB, and `redis.keys.evicted` (increase, sum) 0.
+2. Planted threshold, memory rule only: create a temporary copy of the memory rule with the target set to 1000000 bytes, which is below the normal used memory of about 2 MiB. Wait one evaluation window and check that the copy fires. Then delete the copy. Do not edit the real rule. The eviction rule is not planted in prod, because a real eviction is the only way to make it fire.
+3. Expected after the check: both rules are "inactive".
+
 ## Rollback
 
 - A rule that pages wrongly: disable that rule in SigNoz. Do not delete it. The file `alerts/rules.yml` stays the text of record.

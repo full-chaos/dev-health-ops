@@ -22,7 +22,7 @@ import (
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	valkeystore "github.com/full-chaos/dev-health-ops/internal/storage/valkey"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/providersyncschema"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -118,15 +118,7 @@ func TestProviderUnitAllArtifactsUnreadableTerminalizesOnFirstAttempt(t *testing
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	if err := providersyncschema.Create(ctx, pool); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := pool.Exec(ctx, `ALTER TABLE public.integration_credentials
-		   ADD COLUMN org_id text, ADD COLUMN provider text, ADD COLUMN name text,
-		   ADD COLUMN is_active boolean NOT NULL DEFAULT TRUE,
-		   ADD COLUMN credentials_encrypted text, ADD COLUMN config jsonb`); err != nil {
-		t.Fatal(err)
-	}
+	pgschema.Apply(ctx, t, pool)
 
 	clickhouse, err := containers.StartClickHouse(ctx)
 	if err != nil {
@@ -202,32 +194,33 @@ func TestProviderUnitAllArtifactsUnreadableTerminalizesOnFirstAttempt(t *testing
 		args []any
 	}{
 		{`INSERT INTO public.integration_credentials
-		   (id, org_id, provider, name, is_active, credentials_encrypted, config)
-		   VALUES ($1, $2, 'github', 'default', TRUE, $3, $4::jsonb)`,
+		   (id, org_id, provider, name, is_active, credentials_encrypted, config, created_at, updated_at)
+		   VALUES ($1, $2, 'github', 'default', TRUE, $3, $4::jsonb, NOW(), NOW())`,
 			[]any{credentialID, orgID, ciphertext.Reveal(), string(credentialConfig)}},
-		{`INSERT INTO public.integrations (id, org_id, credential_id, config)
-		   VALUES ($1, $2, $3, '{}'::jsonb)`, []any{integrationID, orgID, credentialID}},
+		{`INSERT INTO public.integrations (id, org_id, provider, credential_id, name, config, is_active, created_at, updated_at)
+		   VALUES ($1, $2, 'github', $3, 'acme', '{}'::jsonb, TRUE, NOW(), NOW())`, []any{integrationID, orgID, credentialID}},
 		{`INSERT INTO public.integration_sources
-		   (id, org_id, integration_id, external_id, full_name, metadata)
-		   VALUES ($1, $2, $3, $4, $4, '{}'::jsonb)`,
+		   (id, org_id, integration_id, provider, source_type, external_id, name, full_name, metadata,
+		    is_enabled, discovered_at, last_seen_at)
+		   VALUES ($1, $2, $3, 'github', 'repository', $4, $4, $4, '{}'::jsonb, TRUE, NOW(), NOW())`,
 			[]any{sourceID, orgID, integrationID, "acme/totality-repo"}},
 		{`INSERT INTO public.integration_datasets
-		   (id, org_id, integration_id, dataset_key, options)
-		   VALUES ($1, $2, $3, 'cicd', '{}'::jsonb)`,
+		   (id, org_id, integration_id, dataset_key, is_enabled, options)
+		   VALUES ($1, $2, $3, 'cicd', TRUE, '{}'::jsonb)`,
 			[]any{uuid.NewString(), orgID, integrationID}},
 		{`INSERT INTO public.sync_runs
-		   (id, org_id, integration_id, status, credential_id, credential_fingerprint, auth_source,
-		    total_units, completed_units, failed_units)
-		   VALUES ($1, $2, $3, 'running', $4, 'fingerprint', 'integration_credential', 0, 0, 0)`,
+		   (id, org_id, integration_id, triggered_by, mode, status, credential_id, credential_fingerprint, auth_source,
+		    total_units, completed_units, failed_units, created_at)
+		   VALUES ($1, $2, $3, 'test', 'incremental', 'running', $4, 'fingerprint', 'integration_credential', 0, 0, 0, NOW())`,
 			[]any{runID, orgID, integrationID, credentialID}},
 		{`INSERT INTO public.sync_run_units (
 		     id, org_id, sync_run_id, integration_id, source_id, provider,
 		     dataset_key, cost_class, mode, since_at, before_at, status,
-		     processor_flags, updated_at
+		     processor_flags, updated_at, created_at, attempts
 		   ) VALUES (
 		     $1, $2, $3, $4, $5, 'github', 'cicd', $6, 'incremental',
 		     '2026-08-01T00:00:00Z', '2026-08-02T00:00:00Z', 'dispatching',
-		     '{}'::jsonb, NOW()
+		     '{}'::jsonb, NOW(), NOW(), 0
 		   )`,
 			[]any{unitID, orgID, runID, integrationID, sourceID, string(capability.CostClass)}},
 	} {

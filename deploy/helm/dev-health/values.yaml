@@ -263,8 +263,16 @@ authService:
   #    value names the client. Required from authService.phase 2 (go-api forwards auth routes), because otherwise every proxied caller
   #    shares the proxy's own address in the rate-limit keys. List the go-api pods' network only: the render refuses
   #    0.0.0.0/0, ::/0 and IPv4-mapped forms. Trust is safe because the auth-service NetworkPolicy admits go-api's pods
-  #    and no other pod on the API port while a proxy flag is on.
+  #    and no other pod on the API port while a proxy flag is on. Width: an entry of /28 or longer (IPv6 /124) is always
+  #    allowed; /24../27 (IPv6 /64../123), such as the node pod range, needs trustedProxiesWideAccepted; anything wider is
+  #    refused even with it. Pod addresses change at a restart, so a range is the only stable value: the NetworkPolicy
+  #    above is then the whole boundary.
   trustedProxies: []
+  # -- Permission to list an entry wider than a /28 (IPv6 /124), up to the node pod range (/24, IPv6 /64). A wide entry (/24..
+  #    /27, IPv6 /64../123) needs it at ANY phase, the proxy off included, because the list is rendered into the env whatever the
+  #    phase; an entry wider than the pod range is refused at every phase. With only narrow entries, or no list, the ack
+  #    changes nothing.
+  trustedProxiesWideAccepted: false
   signingKey:
     secretName: ""
     secretKey: signing-key.pem
@@ -309,11 +317,18 @@ authService:
     loginLockout:
       secretName: ""
       secretKey: AUTH_LOGIN_LOCKOUT_KEY
-  # -- Whole seconds ("20s"). Must stay below terminationGracePeriodSeconds: the whole
-  #    ordered shutdown (readiness gate, API, operator, database) is bounded
-  #    by it.
+  # -- CHAOS-11648: the old pod keeps serving for preStopSeconds while its endpoint is removed, then
+  #    gets SIGTERM (the go-api drain, CHAOS-10718). 0 renders no hook, maximum 600. Native sleep
+  #    action: Kubernetes >= 1.30 (the image has no shell).
+  drain:
+    preStopSeconds: 10
+  # -- The graceful-shutdown budget the chart passes to auth-service (--shutdown-timeout). Whole
+  #    seconds, 1s to 600s (the service refuses more than 10 m). Three quarters of it is reserved for the API listener to drain requests
+  #    in flight; the readiness gate, operator listener, outbox, limiter and database share the rest.
   shutdownTimeout: 20s
-  terminationGracePeriodSeconds: 30
+  # -- Must be at least drain.preStopSeconds + shutdownTimeout + 5: kubelet counts the preStop hook
+  #    inside it. The render fails below that. Maximum 86400.
+  terminationGracePeriodSeconds: 35
   # -- Extra flags after the rendered ones. Credentials never go here.
   extraArgs: []
   # -- Extra environment entries. Refused: any name the chart renders for
@@ -1312,6 +1327,28 @@ migrations:
       deadlineSeconds: 1800
       attempts: 3
       retryDelaySeconds: 15
+    # -- Build ix_sync_run_units_open_run CONCURRENTLY in a
+    #    weight -2 pre-hook Job (`dho migrate postgres build-index
+    #    open-units`), BEFORE the migrate Job runs revision 0161 (which
+    #    then finds the index and does nothing; its plain build would hold a
+    #    SHARE lock on sync_run_units). OFF = no such Job in the render; turn it
+    #    on for the roll that carries revision 0161 on a database with a large
+    #    sync_run_units. The Job fails, and so does the release before the
+    #    migrate Job, unless the index ends present and valid. With
+    #    localBundledPostgres the Job runs on pre-upgrade only. Pass a helm --timeout above activeDeadlineSeconds.
+    openUnitsIndex:
+      enabled: false
+      # -- The index is small (about 2 MiB at 830k units), so the Job is short. The hook budget is
+      #    streakIndex 2400 + openUnitsIndex 600 + the migrate Job 1800 + a 600 s rollout margin = 5400 s, the
+      #    helm --timeout of 90m; a larger value here needs a smaller streakIndex or a larger helm --timeout.
+      activeDeadlineSeconds: 600
+      # -- lock_timeout of the table-lock probe before each attempt, in seconds (1 to 60). The waits for older
+      #    transactions are not under it: they run up to deadlineSeconds.
+      lockTimeoutSeconds: 5
+      # -- window of the whole build in seconds; deadlineSeconds + 360 must not exceed activeDeadlineSeconds.
+      deadlineSeconds: 240
+      attempts: 3
+      retryDelaySeconds: 15
     backoffLimit: 2
     activeDeadlineSeconds: 1800
     resources:
@@ -1599,6 +1636,12 @@ valkey:
     size: 1Gi
     storageClass: ""
   maxmemory: "256mb"
+  # -- --maxmemory-policy: one of noeviction, allkeys-lru, allkeys-lfu, allkeys-random, volatile-lru, volatile-lfu,
+  #    volatile-random, volatile-ttl (the render refuses any other value). The default keeps the start arguments as
+  #    they were, so a chart upgrade alone does not restart Valkey. allkeys-* can evict keys without a TTL (the ingest
+  #    streams); volatile-* evict only keys with a TTL (rate-limit counters, idempotency markers) and refuse writes
+  #    once none is left. A change restarts Valkey.
+  maxmemoryPolicy: allkeys-lru
   # -- An ACL file for the in-chart Valkey, read from a Secret the chart does not
   #    create. Off unless enabled=true: Valkey then starts as before, with only its
   #    open default user, and nothing refers to the Secret. When enabled, Valkey

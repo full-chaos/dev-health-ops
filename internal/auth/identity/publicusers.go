@@ -31,17 +31,32 @@ type publicUser struct {
 	AuthProvider   string
 	AuthProviderID *string
 	Verified       bool
+	// SSOProviderID is the provider row an OIDC or SAML account belongs to
+	// (go-api writes it since ops revision 0155); nil for every other account.
+	SSOProviderID *uuid.UUID
 }
 
 // insertPublicUser writes the public.users row inside the audit.Commit that
 // writes the auth rows, so either both exist or neither does. The row carries
-// exactly authschema.UsersWriteGrant's insert columns.
+// exactly authschema.UsersWriteGrant's insert columns. An OIDC or SAML row is
+// bound only to a provider row of its own protocol: any other provider row, or
+// none, is ErrLegacyProjection and nothing is written.
 func insertPublicUser(ctx context.Context, tx audit.TxOps, u publicUser) error {
+	if u.SSOProviderID != nil {
+		var protocol string
+		err := tx.QueryRow(ctx, `SELECT protocol FROM public.sso_providers WHERE id = $1`, *u.SSOProviderID).Scan(&protocol)
+		if errors.Is(err, pgx.ErrNoRows) || err == nil && protocol != u.AuthProvider {
+			return ErrLegacyProjection
+		}
+		if err != nil {
+			return err
+		}
+	}
 	_, err := tx.Exec(ctx, `INSERT INTO public.users
 	(id, email, username, password_hash, full_name, auth_provider, auth_provider_id,
-	 is_active, is_verified, is_superuser, token_version, created_at, updated_at)
-VALUES ($1, $2, NULLIF($3, ''), $4, $5, $6, $7, true, $8, false, 0, now(), now())`,
-		u.ID, u.Email, u.Username, u.PasswordHash, u.FullName, u.AuthProvider, u.AuthProviderID, u.Verified)
+	 is_active, is_verified, is_superuser, token_version, created_at, updated_at, sso_provider_id)
+VALUES ($1, $2, NULLIF($3, ''), $4, $5, $6, $7, true, $8, false, 0, now(), now(), $9)`,
+		u.ID, u.Email, u.Username, u.PasswordHash, u.FullName, u.AuthProvider, u.AuthProviderID, u.Verified, u.SSOProviderID)
 	return err
 }
 
@@ -88,11 +103,25 @@ func updatePublicVerified(ctx context.Context, tx audit.TxOps, id uuid.UUID) err
 	return nil
 }
 
-// isPublicEmailCollision is a unique violation on a public.users index: the
-// address is held by a go-api user ("Email already registered").
+// publicSSOIdentityIndex is the ops index of an OIDC or SAML account's key
+// (sso_provider_id, auth_provider_id), revision 0155.
+const publicSSOIdentityIndex = "ix_users_sso_identity"
+
+// isPublicEmailCollision is a unique violation on a public.users index other
+// than publicSSOIdentityIndex: the address is held by a go-api user ("Email
+// already registered").
 func isPublicEmailCollision(err error) bool {
 	var pgErr *pgconn.PgError
-	return errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.SchemaName == "public" && pgErr.TableName == "users"
+	return errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.SchemaName == "public" && pgErr.TableName == "users" &&
+		pgErr.ConstraintName != publicSSOIdentityIndex
+}
+
+// isPublicSSOIdentityCollision is a unique violation on publicSSOIdentityIndex:
+// a go-api account already holds the subject at the provider row.
+func isPublicSSOIdentityCollision(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.SchemaName == "public" && pgErr.TableName == "users" &&
+		pgErr.ConstraintName == publicSSOIdentityIndex
 }
 
 // federatedPublicUser maps a federated provisioning to its public.users row.
@@ -111,7 +140,17 @@ func federatedPublicUser(id uuid.UUID, emailLower string, req ProvisionRequest) 
 		u.AuthProvider = req.LegacyProvider
 		subject := req.LegacySubject
 		u.AuthProviderID = &subject
+		if isSSORelinkProtocol(req.LegacyProvider) {
+			provider, err := uuid.Parse(string(req.Key.Provider))
+			if err != nil {
+				return publicUser{}, ErrLegacyProjection
+			}
+			u.SSOProviderID = &provider
+		}
 	default:
+		return publicUser{}, ErrLegacyProjection
+	}
+	if RefuseInvalidProviderID(u.AuthProvider, u.AuthProviderID) != nil {
 		return publicUser{}, ErrLegacyProjection
 	}
 	return u, nil

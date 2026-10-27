@@ -145,3 +145,28 @@ func TestReconcilePrintsRelinkPendingAndNeverGatesIt(t *testing.T) {
 		t.Fatalf("lines:\n%s", strings.Join(rep.Lines(), "\n"))
 	}
 }
+
+func TestSAMLWithStoredNameIDPartsIsRelinkableAndOthersStayUnverifiable(t *testing.T) {
+	bound := uuid.New()
+	const persistent = "urn:oasis:names:tc:SAML:2.0:nameid-format:persistent"
+	const transient = "urn:oasis:names:tc:SAML:2.0:nameid-format:transient"
+	row := func(format *string) Row {
+		return Row{ID: uuid.New(), Email: "u@example.test", Active: true, AuthProvider: str("saml"), AuthProviderID: str("nameid-1"),
+			SSOProviderID: &bound, SSOProviderProtocol: str("saml"), SAMLNameIDFormat: format, SAMLSPNameQualifier: str("")}
+	}
+	for name, c := range map[string]struct {
+		row                    Row
+		relinkable, unverified bool
+	}{
+		"captured persistent": {row(str(persistent)), true, false},
+		"never captured":      {row(nil), false, true},
+		"captured transient":  {row(str(transient)), false, true},
+	} {
+		if got := Relinkable(c.row); got != c.relinkable {
+			t.Errorf("%s: Relinkable = %v, want %v", name, got, c.relinkable)
+		}
+		if got := SubjectUnverifiable(c.row); got != c.unverified {
+			t.Errorf("%s: SubjectUnverifiable = %v, want %v", name, got, c.unverified)
+		}
+	}
+}

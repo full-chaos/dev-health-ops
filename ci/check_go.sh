@@ -1235,9 +1235,11 @@ check_race_weights_rows() {
 # check_plan_reads: the declared-read guard of the plan verdict (`cmd/cigate plan-reads`) over the whole tree: every
 # package that names a path of a declared class in a string literal has a reads.tsv row, and --reach recomputes
 # reach.tsv (the programs that call each code-scope unbounded site: go/packages, SSA and RTA over the module; about
-# 3 min and an 8 GB live heap on 4 cores, so the GC holds it under GOMEMLIMIT) and fails on any difference. It runs in the static leg, which runs on every change.
+# 3 min and an 8 GB live heap on 4 cores, so the GC holds it under GOMEMLIMIT) and fails on any difference. It runs in the static leg, which runs on every change. With PLAN_READS_REACH_CACHE set (the
+# GitHub-hosted legs only, go-quality.yml) a pull request reuses a store of the same input hash; PLAN_READS_REACH_FRESH (every
+# other event) computes fresh and only stores (CHAOS-11421).
 check_plan_reads() {
-  (cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOWORK=off GOMEMLIMIT="${GOMEMLIMIT:-10GiB}" go run -mod=readonly -trimpath ./cmd/cigate plan-reads --root "${ROOT}" --reach)
+  (cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOWORK=off GOMEMLIMIT="${GOMEMLIMIT:-10GiB}" go run -mod=readonly -trimpath ./cmd/cigate plan-reads --root "${ROOT}" --reach ${PLAN_READS_REACH_CACHE:+--reach-cache "${PLAN_READS_REACH_CACHE}"} ${PLAN_READS_REACH_FRESH:+--reach-cache-fresh})
 }
 
 ci_leg_stage() {
@@ -1880,11 +1882,14 @@ QAPISERVER_INTEGRATION_PACKAGE_KEY="internal/queryapi/server"
 # one `go test` of it takes 1,122 s alone, 21 of the 25 minutes of its isolated job.
 REMAINING_INTEGRATION_PACKAGE_KEY="internal/jobs/metrics/remaining"
 # Packages that get a shard of their own at their TRUE weight (CHAOS-8935).
-# One `go test` starts packages in alphabetical order, so a long package that
-# sorts last starts minutes late and sets the shard's wall time, not its weight.
+# One `go test` starts packages in the order of its arguments, four at a time, so a long
+# package that starts last starts minutes late and sets the shard's wall time, not its weight
+# (CHAOS-11411: the arguments are now sorted longest weight first; an isolated package needs no order).
 # internal/jobs/metrics/remaining (CHAOS-9631) runs 1,053-1,164 s on its own and
 # sat in a shard with 20 other packages whose job took 22-25 of the 25 minutes.
-INTEGRATION_ISOLATED_PACKAGE_KEYS=" ${DEV_HEALTH_GO_INTEGRATION_ISOLATED_KEYS:-internal/workerservice internal/queryapi/server internal/jobs/metrics/remaining} "
+# internal/fixturescli (CHAOS-11411) runs 1,145-1,168 s of the 1,263 s test phase of its shard, next to three other
+# packages that run at the same time: it sets the Go workflow wall, so it gets a shard of its own as well.
+INTEGRATION_ISOLATED_PACKAGE_KEYS=" ${DEV_HEALTH_GO_INTEGRATION_ISOLATED_KEYS:-internal/workerservice internal/queryapi/server internal/jobs/metrics/remaining internal/fixturescli} "
 DAILY_TEST_SHARD_COUNT=0
 DAILY_INTEGRATION_TEST_WEIGHT=0
 DAILY_ORDINARY_TEST_WEIGHT=0
@@ -1937,7 +1942,7 @@ PROVIDER_ORDINARY_TEST_WEIGHT=0
 # scan_listed_go_tests validates the test file names `go list` returned for one package directory, then parses every
 # file in ONE gotestfuncs run (go/parser, so a comment or a string can neither hide nor invent a function). It fills two
 # globals keyed by source path: SCAN_TESTS (newline-separated top-level test names, file order; TestMain is not one)
-# and SCAN_HOOK (the first `func init` or `func TestMain` of the file). The names are validated before any file is read.
+# and SCAN_HOOK (the first `func init` or `func TestMain` of the file, else its first unreviewed package-level side effect). The names are validated before any file is read.
 scan_listed_go_tests() {
   local label="$1" dir="$2" listed="$3" go_file
   local -a paths=()
@@ -1982,12 +1987,15 @@ gotestfuncs_bin() {
 
 # scan_go_test_paths PATH...: the one gotestfuncs run of scan_listed_go_tests over validated paths.
 scan_go_test_paths() {
-  local kind path name bin scanned
+  local kind path name bin scanned reviewed="${ROOT}/ci/integration_side_effect_reviewed.tsv"
+  local -a reviewed_args=()
   declare -gA SCAN_TESTS=() SCAN_RUNS=() SCAN_HOOK=()
   [ "$#" -gt 0 ] || return 0
   gotestfuncs_bin >/dev/null
   bin="${GOTESTFUNCS_BIN}"
-  scanned="$(printf '%s\0' "$@" | xargs -0 "${bin}")" || die "gotestfuncs could not parse the listed test files"
+  # A package-level side effect no reviewed row covers is a hook too (CHAOS-11429); a root without the table reviews none.
+  [ ! -f "${reviewed}" ] || reviewed_args=(-root "${ROOT}" -reviewed "${reviewed}")
+  scanned="$(printf '%s\0' "$@" | xargs -0 "${bin}" ${reviewed_args[@]+"${reviewed_args[@]}"})" || die "gotestfuncs could not parse the listed test files"
   while IFS=$'\037' read -r kind path name; do
     case "${kind}" in
       T) SCAN_TESTS["${path}"]+="${name}"$'\n' ;;
@@ -2068,18 +2076,23 @@ integration_test_files() {
 }
 
 # split_package_hook KEY LISTED: "<key>/<file> <func>" of the first integration-tagged test file of a split package that
-# declares `func init` or `func TestMain` (SCAN_HOOK of its scan; the class from integration_test_files), or nothing. Such a
+# declares `func init` or `func TestMain`, else an unreviewed package-level side effect (SCAN_HOOK of its scan; the class from
+# integration_test_files), or nothing. Such a
 # package keeps every test in its shards, as run_integration_packages keeps such a package whole.
 split_package_hook() {
-  local key="$1" listed="$2" go_file source_file
+  local key="$1" listed="$2" go_file source_file effect=""
   while IFS= read -r go_file; do
     [ -n "${go_file}" ] || continue
     source_file="${ROOT}/${key}/${go_file}"
     if [ -n "${TEST_FILE_TAG_ONLY[${source_file}]+set}" ] && [ -n "${SCAN_HOOK[${source_file}]+set}" ]; then
-      printf '%s/%s %s\n' "${key}" "${go_file}" "${SCAN_HOOK[${source_file}]}"
-      return 0
+      if [[ "${SCAN_HOOK[${source_file}]}" != *:* ]]; then
+        printf '%s/%s %s\n' "${key}" "${go_file}" "${SCAN_HOOK[${source_file}]}"
+        return 0
+      fi
+      [ -n "${effect}" ] || effect="${key}/${go_file} ${SCAN_HOOK[${source_file}]}"
     fi
   done <<<"${listed}"
+  [ -z "${effect}" ] || printf '%s\n' "${effect}"
 }
 
 # split_test_runs_here CLASS UNFILTERED: true for a test a split shard runs (CHAOS-11407): an integration-tagged test,
@@ -2133,7 +2146,9 @@ discover_integration_tagged_tests() {
   scan_go_test_paths ${paths[@]+"${paths[@]}"}
   for path in ${paths[@]+"${paths[@]}"}; do
     pkg="${path_pkg[${path}]}"
-    if [ -n "${TEST_FILE_TAG_ONLY[${path}]+set}" ] && [ -n "${SCAN_HOOK[${path}]+set}" ] && [ -z "${INTEGRATION_HOOK[${pkg}]+set}" ]; then
+    # A func init or TestMain names the package's hook over a package-level side effect, whatever the file order.
+    if [ -n "${TEST_FILE_TAG_ONLY[${path}]+set}" ] && [ -n "${SCAN_HOOK[${path}]+set}" ] \
+      && { [ -z "${INTEGRATION_HOOK[${pkg}]+set}" ] || { [[ "${INTEGRATION_HOOK[${pkg}]}" == *:* ]] && [[ "${SCAN_HOOK[${path}]}" != *:* ]]; }; }; then
       key="${module_dir}/${pkg#./}"
       key="${key#./}"
       rel="${key}/${path##*/}"
@@ -2171,8 +2186,19 @@ run_integration_packages() {
   local -a pkgs=()
   local -A selected_in=() skipped_in=() select_names=() skip_names=() seen=()
   shift 3
-  # Sorted (C locale): the same packages give the same groups and receipts in any argument order.
-  mapfile -t pkgs < <(printf '%s\n' "$@" | LC_ALL=C sort -u)
+  # Sorted (C locale): the same packages give the same groups and receipts in any argument order. A caller that sets
+  # INTEGRATION_KEEP_ARG_ORDER=1 has already put the packages in the order go test must start them (longest first,
+  # CHAOS-11411): the first-fit packs them in that order and a repeated package keeps its first place.
+  if [ -n "${INTEGRATION_KEEP_ARG_ORDER:-}" ]; then
+    local -A arg_seen=()
+    for pkg in "$@"; do
+      [ -z "${arg_seen[${pkg}]+set}" ] || continue
+      arg_seen["${pkg}"]=1
+      pkgs+=("${pkg}")
+    done
+  else
+    mapfile -t pkgs < <(printf '%s\n' "$@" | LC_ALL=C sort -u)
+  fi
   discover_integration_tagged_tests "${module_dir}" "${pkgs[@]}"
   # Every refusal comes before the first receipt line, so a refused run prints no plan.
   for pkg in "${pkgs[@]}"; do
@@ -3973,6 +3999,29 @@ check_integration_prepull() {
   done
 }
 
+# sort_integration_shard_packages orders the caller's run_pkgs/run_keys (bash dynamic scope) longest package first:
+# manifest weight descending, then key ascending in byte order. One go test starts its packages in argument order, four
+# at a time, so a long package that starts last sets the shard wall (CHAOS-8935). LC_ALL=C is local to this function:
+# it must not reach the go test child, which keeps the caller's locale.
+sort_integration_shard_packages() {
+  local i j tmp_pkg tmp_key LC_ALL=C
+  for ((i = 1; i < ${#run_keys[@]}; i++)); do
+    tmp_pkg="${run_pkgs[${i}]}"
+    tmp_key="${run_keys[${i}]}"
+    for ((j = i - 1; j >= 0; j--)); do
+      if [ "${INTEGRATION_SHARD_WEIGHTS[${run_keys[${j}]}]}" -gt "${INTEGRATION_SHARD_WEIGHTS[${tmp_key}]}" ] \
+        || { [ "${INTEGRATION_SHARD_WEIGHTS[${run_keys[${j}]}]}" -eq "${INTEGRATION_SHARD_WEIGHTS[${tmp_key}]}" ] \
+          && [[ ! "${run_keys[${j}]}" > "${tmp_key}" ]]; }; then
+        break
+      fi
+      run_pkgs[j + 1]="${run_pkgs[${j}]}"
+      run_keys[j + 1]="${run_keys[${j}]}"
+    done
+    run_pkgs[j + 1]="${tmp_pkg}"
+    run_keys[j + 1]="${tmp_key}"
+  done
+}
+
 check_integration_package_shard() {
   local shard="$1" mode="$2"
   local index module_dir pkg key
@@ -4004,11 +4053,14 @@ check_integration_package_shard() {
     done
     [ "${#run_pkgs[@]}" -gt 0 ] || continue
 
+    sort_integration_shard_packages
+
     printf 'go test integration package shard %s: %s -> %s\n' \
       "${shard}" "${module_dir}" "${run_pkgs[*]}"
     for key in "${run_keys[@]}"; do
       printf '  SHARD-RUN %s\n' "${key}"
     done
+    local INTEGRATION_KEEP_ARG_ORDER=1
     run_integration_packages "${mode}" "${module_dir}" "integration package shard ${shard} (${module_dir})" "${run_pkgs[@]}"
   done
 

@@ -43,10 +43,14 @@ internal/apiservice
 internal/apiservice/acr
 internal/apiservice/admin
 internal/apiservice/customerpush
+internal/audit
 internal/auth/accessverify
+internal/auth/clientaddr
+internal/auth/contracts/provisioning
 internal/auth/edgetoken
 internal/auth/emaildomain
 internal/auth/httpapi
+internal/auth/identity
 internal/auth/passwordhash
 internal/auth/passwordpolicy
 internal/auth/ratelimitvalkey
@@ -54,6 +58,7 @@ internal/auth/sessionid
 internal/auth/signedtoken
 internal/chmigrate
 internal/cli
+internal/edgetokenmint
 internal/egressguard
 internal/entitlements
 internal/httpguard
@@ -80,6 +85,7 @@ internal/platform/config
 internal/platform/credshape
 internal/platform/dbphase
 internal/platform/dbspan
+internal/platform/dialclass
 internal/platform/dsnclass
 internal/platform/errortext
 internal/platform/errortext/hardened
@@ -110,6 +116,7 @@ internal/storage/clickhouse/engineclause
 internal/storage/clickhouse/liverow
 internal/storage/postgres
 internal/storage/postgres/aclguard
+internal/storage/postgres/authschema
 internal/storage/river
 internal/storage/roleacl
 internal/storage/valkey
@@ -141,3 +148,4 @@ internal/workitemcontract
 ~internal/pgmigrate/baseline
 ~internal/pgmigrate/sql
 ~internal/pgmigrate/sql/down
+~internal/storage/postgres/authschema/migrations

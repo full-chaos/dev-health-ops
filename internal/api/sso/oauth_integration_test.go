@@ -59,6 +59,8 @@ type fakeGitLab struct {
 
 	email, username, fullName, avatarURL, userID string
 	tokenStatus, userStatus                      int // 0 means 200.
+	// omitID drops the "id" key from the profile; nullID sends it as JSON null.
+	omitID, nullID bool
 	// confirmed is D2745 P1-1: GitLab's own confirmed_at signal. true by
 	// default so every EXISTING test (a verified account) is unaffected;
 	// set false only by the test that specifically exercises the refusal.
@@ -117,6 +119,12 @@ func (g *fakeGitLab) serveUser(w http.ResponseWriter, r *http.Request) {
 	}
 	if g.confirmed {
 		body["confirmed_at"] = "2026-01-01T00:00:00Z"
+	}
+	if g.omitID {
+		delete(body, "id")
+	}
+	if g.nullID {
+		body["id"] = nil
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(body)
@@ -535,6 +543,47 @@ func TestOAuthCallbackRefusesAnUnverifiedEmail(t *testing.T) {
 	}
 	if count != 0 {
 		t.Fatalf("users: got %d rows for an unverified email, want 0 -- never link or provision by it", count)
+	}
+}
+
+// CHAOS-11619: a profile with no usable provider id (no "id" key, a JSON null, an empty string) is refused with the
+// fixed 400 invalid_provider_id answer through the no-provider-flip bucket, and writes no user.
+func TestOAuthCallbackRefusesAProfileWithoutAUsableUserID(t *testing.T) {
+	for name, set := range map[string]func(g *fakeGitLab){
+		"no id key": func(g *fakeGitLab) { g.omitID = true },
+		"null id":   func(g *fakeGitLab) { g.nullID = true },
+		"empty id":  func(g *fakeGitLab) { g.userID = "" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			defer cancel()
+			st := startStack(t, ctx)
+			orgID := seedOrg(t, ctx, st.pool, "enterprise")
+			gitlab := startFakeGitLab(t)
+			set(gitlab)
+			providerID := seedProvider(t, ctx, st.pool, orgID, providerOpts{
+				protocol: "oauth_gitlab", status: "active", config: gitlabConfig(gitlab.server.URL), autoProvision: true,
+			})
+			client := newCookieClient(t)
+			status, authResp := postJSONWithClient(t, client, st.server, "/api/v1/auth/oauth/"+providerID.String()+"/authorize", map[string]any{})
+			if status != http.StatusOK {
+				t.Fatalf("authorize: %d %v", status, authResp)
+			}
+			status, body := postJSONWithClient(t, client, st.server, "/api/v1/auth/oauth/"+providerID.String()+"/callback",
+				map[string]any{"code": "c", "state": authResp["state"]})
+			detail, _ := body["detail"].(map[string]any)
+			if status != http.StatusBadRequest || detail["reason"] != "invalid_provider_id" {
+				t.Fatalf("status=%d body=%v, want 400 with reason invalid_provider_id", status, body)
+			}
+			assertProviderRowUnchanged(t, ctx, st.pool, providerID, "active")
+			var count int
+			if err := st.pool.QueryRow(ctx, `SELECT count(*) FROM users WHERE email = $1`, gitlab.email).Scan(&count); err != nil {
+				t.Fatal(err)
+			}
+			if count != 0 {
+				t.Fatalf("users: %d rows for a profile without a usable id, want 0", count)
+			}
+		})
 	}
 }
 

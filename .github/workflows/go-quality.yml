@@ -235,7 +235,7 @@ jobs:
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository_owner }}
       TESTCONTAINERS_RYUK_DISABLED: ${{ (matrix.pool && vars.CI_RACE_RUNNER != '' && github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'full-chaos/dev-health-ops') && 'true' || 'false' }}
       # The default 600 s per-package go test timeout is too small for the pool.
-      DEV_HEALTH_GO_RACE_TEST_TIMEOUT: ${{ (matrix.pool && vars.CI_RACE_RUNNER != '' && github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'full-chaos/dev-health-ops') && '25m' || '10m' }}
+      DEV_HEALTH_GO_RACE_TEST_TIMEOUT: ${{ (matrix.pool && vars.CI_RACE_RUNNER != '' && github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'full-chaos/dev-health-ops') && '25m' || '15m' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -359,6 +359,39 @@ jobs:
         if: (steps.relevance.outputs.relevant == 'true' || steps.relevance.outputs.warm == 'true') && runner.environment == 'github-hosted'
         run: echo "DEV_HEALTH_GO_CACHE=${HOME}/.cache/go-build" >> "${GITHUB_ENV}"
 
+      - name: Point the plan-reads call graph at its store (GitHub-hosted static leg)
+        # CHAOS-11421: the static leg recomputes reach.tsv from the call graph (about 4 min, 13 to 15 GiB) on every change.
+        # Only a pull request may READ a stored result (the restore below); a merge-queue run and a push to main always
+        # compute fresh (PLAN_READS_REACH_FRESH makes the tool ignore any store), and a push to main saves what it computed.
+        # The key here is coarse (a hash of the Go files, go.mod/go.sum and the read tables); the tool itself names the
+        # stored file by the exact input hash and refuses a store of another hash, so this key never causes a stale reuse.
+        # GitHub-hosted legs only: the self-hosted pool shares a hostPath any pull request job can write, so it never
+        # restores or saves a store and recomputes every time.
+        id: reach-key
+        if: steps.relevance.outputs.relevant == 'true' && runner.environment == 'github-hosted' && matrix.name == 'static'
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REACH_KEY: plan-reads-reach-v3-${{ hashFiles('**/*.go', '**/go.mod', '**/go.sum', 'internal/cigates/affected/*.tsv') }}
+        run: |
+          set -euo pipefail
+          printf 'key=%s\n' "${REACH_KEY}" >> "${GITHUB_OUTPUT}"
+          echo "PLAN_READS_REACH_CACHE=${RUNNER_TEMP}/plan-reads-reach" >> "${GITHUB_ENV}"
+          if [ "${EVENT_NAME}" != "pull_request" ]; then
+            echo "PLAN_READS_REACH_FRESH=1" >> "${GITHUB_ENV}"
+          fi
+
+      - name: Restore the plan-reads call-graph result (pull requests, GitHub-hosted static leg)
+        # CHAOS-11421: exact key, no restore-keys. The result is compared with reach.tsv again on a hit. The stored header
+        # binds its rows to the exact input hash (rows-sha256): a store that fails the digest is refused and the leg
+        # computes fresh. The directory is under RUNNER_TEMP, outside the workspace; only the tool (after a green computed
+        # run), this restore and the save step below touch it (reach_store_hosted_only_test.go).
+        id: reach-store
+        if: steps.relevance.outputs.relevant == 'true' && runner.environment == 'github-hosted' && matrix.name == 'static' && github.event_name == 'pull_request'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/plan-reads-reach
+          key: ${{ steps.reach-key.outputs.key }}
+
       - name: Compile this leg's packages into the cache on a queue-skipped push (key miss only)
         id: warm-build
         if: steps.relevance.outputs.warm == 'true' && runner.environment == 'github-hosted' && steps.go-cache.outputs.cache-hit != 'true'
@@ -390,6 +423,7 @@ jobs:
           bash ci/check_migration_matrix.sh contract
           bash ci/check_migration_matrix_test.sh
           bash ci/go_worker_fixture_test.sh
+          bash ci/pull_base_image_test.sh
 
       - name: Check the gqlgen output has not drifted from its hand-edits
         if: steps.relevance.outputs.relevant == 'true' && matrix.name == 'static'
@@ -475,6 +509,18 @@ jobs:
           path: go-test-json/
           retention-days: 7
           if-no-files-found: warn
+
+      - name: Save the plan-reads call-graph result (main pushes, GitHub-hosted static leg)
+        # CHAOS-11421: only a push to main saves, only after the leg passed, and what it saves is a FRESH compute (the push
+        # run never reads a store). A pull request restores what main saved and never writes. A key that already exists is
+        # kept (the save logs a warning and the step passes).
+        if: >-
+          success() && steps.relevance.outputs.relevant == 'true' && runner.environment == 'github-hosted' && matrix.name == 'static'
+          && github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'full-chaos/dev-health-ops'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/plan-reads-reach
+          key: ${{ steps.reach-key.outputs.key }}
 
       - name: Save this leg's Go build and module cache (main pushes, GitHub-hosted legs)
         # CHAOS-10486: only a push to main saves, and only on a key miss (a key is immutable); a failed leg still saves,

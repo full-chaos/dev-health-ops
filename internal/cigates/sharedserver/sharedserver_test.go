@@ -15,8 +15,6 @@ import (
 	"sort"
 	"strings"
 	"testing"
-
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 )
 
 const (
@@ -199,11 +197,7 @@ func topLevelFuncs(lines []string) []int {
 }
 
 func TestSharedServerPackagesIsolateServerWideStatements(t *testing.T) {
-	root, err := moduleroot.Root()
-	if err != nil {
-		t.Fatal(err)
-	}
-	optedIn, findings := scan(t, filepath.Join(root, "internal"))
+	optedIn, findings := repoScan(t)
 	// This package's own fixtures name the opt-in call and every planted
 	// statement in string literals; it is not a package that runs on a shared server.
 	const self = "cigates/sharedserver"

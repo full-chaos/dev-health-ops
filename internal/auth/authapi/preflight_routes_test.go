@@ -20,14 +20,14 @@ import (
 )
 
 // expectGoAPIUnavailable asserts go-api's own 503 for a session it cannot
-// issue: its detail bytes and no Retry-After.
+// issue: its detail bytes plus Retry-After: 1 (CHAOS-11648: a caller retries within a second).
 func expectGoAPIUnavailable(t *testing.T, response *httptest.ResponseRecorder) {
 	t.Helper()
 	if response.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status %d, want 503: %s", response.Code, response.Body)
 	}
-	if got := response.Header().Get("Retry-After"); got != "" {
-		t.Fatalf("Retry-After %q on a go-api route", got)
+	if got := response.Header().Get("Retry-After"); got != "1" {
+		t.Fatalf("Retry-After %q on a go-api 503, want 1", got)
 	}
 	want := map[string]any{"detail": map[string]any{"message": sessionissue.UnavailableText}}
 	if got := decodeObject(t, response.Body.Bytes()); !reflect.DeepEqual(got, want) {

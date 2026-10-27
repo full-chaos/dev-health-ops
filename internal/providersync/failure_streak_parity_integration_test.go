@@ -50,18 +50,18 @@ func TestPostgresSourceFailureStreakMatchesTheLegacyWindowQuery(t *testing.T) {
 	seedProviderSyncFixture(t, ctx, pool)
 	secondSource := uuid.NewString()
 	if _, err := pool.Exec(ctx, `INSERT INTO public.integration_sources
-		  (id, org_id, integration_id, external_id, full_name, metadata)
-		  VALUES ($1, 'org-acme', $2, 'acme/web', 'acme/web', '{}')`, secondSource, firstIntegrationID); err != nil {
+		  (id, org_id, integration_id, external_id, full_name, metadata, provider, source_type, name, is_enabled, discovered_at, last_seen_at)
+		  VALUES ($1, 'org-acme', $2, 'acme/web', 'acme/web', '{}', 'github', 'repository', 'src', TRUE, NOW(), NOW())`, secondSource, firstIntegrationID); err != nil {
 		t.Fatal(err)
 	}
 	for _, source := range []string{firstSourceID, secondSource} {
 		if _, err := pool.Exec(ctx, `
-INSERT INTO public.sync_run_units (id, org_id, sync_run_id, integration_id, source_id, provider, dataset_key, cost_class, mode, status, result, updated_at)
+INSERT INTO public.sync_run_units (id, org_id, sync_run_id, integration_id, source_id, provider, dataset_key, cost_class, mode, status, result, updated_at, created_at, attempts)
 SELECT gen_random_uuid(), 'org-acme', $1, $2, $3, 'github',
        CASE WHEN g % 11 = 0 THEN 'commits' ELSE 'work-items' END, 'medium', 'incremental',
        CASE WHEN g % 7 = 0 THEN 'running' WHEN g % 3 = 0 THEN 'success' ELSE 'failed' END,
        CASE WHEN g % 3 = 1 THEN '{"cause_class":"rate_limited"}'::json ELSE '{}'::json END,
-       timestamptz '2026-08-01 00:00:00+00' + ((g / 3) * interval '1 minute')
+       timestamptz '2026-08-01 00:00:00+00' + ((g / 3) * interval '1 minute'), now(), 0
 FROM generate_series(1, 60) AS g`, firstRunID, firstIntegrationID, source); err != nil {
 			t.Fatal(err)
 		}

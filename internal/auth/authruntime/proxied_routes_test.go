@@ -2,6 +2,7 @@ package authruntime
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -53,31 +54,88 @@ var proxiedAuthRoutes = []proxiedAuthRoute{
 
 var goAPITableLine = regexp.MustCompile(`(?m)^\t"((?:GET|POST) /[^"]+)":\s+(Auth[A-Za-z]+),$`)
 
+// chartLadderPhase is the first authService.phase that turns each go-api
+// aggregate on (the dev-health.authOn ladder in the chart); 0 means the chart
+// never turns it on.
+var chartLadderPhase = map[string]int{
+	"AuthSessions": 2, "AuthLocalLogin": 3, "AuthCredentials": 4, "AuthSocial": 3, "AuthOIDC": 0, "AuthSAML": 0,
+}
+
+// driftProblems compares go-api's route table source with the copy.
+func driftProblems(source []byte, copied []proxiedAuthRoute) []string {
+	table := map[string]string{}
+	for _, m := range goAPITableLine.FindAllSubmatch(source, -1) {
+		table[string(m[1])] = string(m[2])
+	}
+	var problems []string
+	if len(table) == 0 {
+		return []string{"no route found in go-api's route table: the table layout changed, update this test"}
+	}
+	have := map[string]string{}
+	for _, r := range copied {
+		have[r.key] = r.aggregate
+	}
+	for key, aggregate := range table {
+		if have[key] != aggregate {
+			problems = append(problems, fmt.Sprintf("go-api forwards %s (%s) but proxiedAuthRoutes has %q: add it, with its first phase", key, aggregate, have[key]))
+		}
+	}
+	for key := range have {
+		if _, ok := table[key]; !ok {
+			problems = append(problems, fmt.Sprintf("proxiedAuthRoutes lists %s but go-api's table does not", key))
+		}
+	}
+	sort.Strings(problems)
+	return problems
+}
+
 func TestProxiedRouteCopyMatchesGoAPIRouteTable(t *testing.T) {
 	source, err := os.ReadFile("../../apiservice/authproxy.go")
 	if err != nil {
 		t.Fatal(err)
 	}
-	table := map[string]string{}
-	for _, m := range goAPITableLine.FindAllSubmatch(source, -1) {
-		table[string(m[1])] = string(m[2])
+	for _, problem := range driftProblems(source, proxiedAuthRoutes) {
+		t.Error(problem)
 	}
-	if len(table) == 0 {
-		t.Fatal("no route found in go-api's route table: the table layout changed, update this test")
-	}
-	copied := map[string]string{}
+}
+
+const driftFixture = "var sessionProxyRoutes = map[string]AuthAggregate{\n" +
+	"\t\"POST /api/v1/auth/refresh\": AuthSessions,\n" +
+	"\t\"%s\": AuthCredentials,\n" +
+	"}\n"
+
+// A route of any method in go-api's table that the copy lacks is drift.
+func TestDriftSeesARouteOfAnyMethodInTheTable(t *testing.T) {
+	var copied []proxiedAuthRoute
 	for _, r := range proxiedAuthRoutes {
-		copied[r.key] = r.aggregate
-	}
-	for key, aggregate := range table {
-		if copied[key] != aggregate {
-			t.Errorf("go-api forwards %s (%s) but proxiedAuthRoutes has %q: add it, with its first phase", key, aggregate, copied[key])
+		if r.key == "POST /api/v1/auth/refresh" {
+			copied = append(copied, r)
 		}
 	}
-	for key := range copied {
-		if _, ok := table[key]; !ok {
-			t.Errorf("proxiedAuthRoutes lists %s but go-api's table does not", key)
+	for _, method := range []string{"DELETE", "PUT", "PATCH"} {
+		source := []byte(fmt.Sprintf(driftFixture, method+" /api/v1/auth/account"))
+		if len(driftProblems(source, copied)) == 0 {
+			t.Errorf("a %s route in go-api's table is not drift", method)
 		}
+	}
+}
+
+// The copy's first phase of a route must equal the chart ladder's phase of its aggregate.
+func TestDriftComparesTheFirstPhaseWithTheChartLadder(t *testing.T) {
+	var copied []proxiedAuthRoute
+	for _, r := range proxiedAuthRoutes {
+		r2 := r
+		if r.key == "POST /api/v1/auth/resend-verification" {
+			r2.fromPhase = 5
+		}
+		copied = append(copied, r2)
+	}
+	source, err := os.ReadFile("../../apiservice/authproxy.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(driftProblems(source, copied)) == 0 {
+		t.Error("resend-verification listed from phase 5 while the chart ladder turns credentials on at phase 4 is not drift")
 	}
 }
 

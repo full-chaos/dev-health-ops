@@ -168,7 +168,7 @@ func InitWithServiceName(logger *slog.Logger, defaultName string) Component {
 		"service_name", serviceName,
 		"sample_rate", sampleRate,
 	)
-	return Component{provider: provider, logger: logger, endpoint: endpoint}
+	return Component{provider: provider, logger: logger, endpoint: endpointHostPort(endpoint)}
 }
 
 // buildProvider is newProvider behind a func value: the one seam a test uses to make
@@ -276,7 +276,11 @@ func endpointHostPort(endpoint string) string {
 		if strings.ContainsAny(endpoint, "@/?#") {
 			return "invalid"
 		}
-		if _, _, err := net.SplitHostPort(endpoint); err != nil {
+		_, port, err := net.SplitHostPort(endpoint)
+		if err != nil {
+			return "invalid"
+		}
+		if number, err := strconv.Atoi(port); err != nil || number < 1 || number > 65535 {
 			return "invalid"
 		}
 		return endpoint

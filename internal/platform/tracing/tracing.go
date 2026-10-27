@@ -22,6 +22,7 @@ import (
 	"log/slog"
 	"math"
 	"net"
+	"net/netip"
 	"net/url"
 	"os"
 	"strconv"
@@ -269,19 +270,23 @@ func enabledFromEnv() bool {
 // endpointHostPort is the collector address as a log line may carry it: host
 // and port only, so userinfo, a path, a query or a fragment in the configured
 // endpoint never reaches a log. Without a scheme the endpoint must be a bare
-// host:port (the exporter's own parser logs any other value raw). "invalid"
-// when neither form holds.
+// host:port (the exporter's own parser logs any other value raw): a non-empty
+// host, an IP literal inside brackets, a port from 1 to 65535. A URL needs a
+// host, an IP literal inside brackets, and a port from 1 to 65535 when a ":"
+// follows the host. "invalid" when none of this holds.
 func endpointHostPort(endpoint string) string {
 	if !strings.Contains(endpoint, "://") {
 		if strings.ContainsAny(endpoint, "@/?#") {
 			return "invalid"
 		}
 		host, port, err := net.SplitHostPort(endpoint)
-		if err != nil || host == "" {
+		if err != nil || host == "" || !validPort(port) {
 			return "invalid"
 		}
-		if number, err := strconv.Atoi(port); err != nil || number < 1 || number > 65535 {
-			return "invalid"
+		if strings.HasPrefix(endpoint, "[") {
+			if _, err := netip.ParseAddr(host); err != nil {
+				return "invalid"
+			}
 		}
 		return endpoint
 	}
@@ -289,7 +294,21 @@ func endpointHostPort(endpoint string) string {
 	if err != nil || parsed.Hostname() == "" {
 		return "invalid"
 	}
+	if strings.HasPrefix(parsed.Host, "[") {
+		if _, err := netip.ParseAddr(parsed.Hostname()); err != nil {
+			return "invalid"
+		}
+	}
+	if strings.HasSuffix(parsed.Host, ":") || (parsed.Port() != "" && !validPort(parsed.Port())) {
+		return "invalid"
+	}
 	return parsed.Host
+}
+
+// validPort reports whether port is a TCP port number from 1 to 65535.
+func validPort(port string) bool {
+	number, err := strconv.Atoi(port)
+	return err == nil && number >= 1 && number <= 65535
 }
 
 func stringEnv(name, fallback string) string {

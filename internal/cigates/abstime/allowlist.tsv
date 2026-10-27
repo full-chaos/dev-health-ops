@@ -62,7 +62,6 @@ internal/providersync/ownership_interval_compaction_integration_test.go	TestComp
 internal/providersync/ownership_interval_compaction_scale_test.go	TestCompactionPlanStopsAtItsDeadline	measured hosted margin 6.6 (>= 3), CHAOS-11684 census
 internal/providersync/request_usage_test.go	TestOfferDropsAndCountsWhenTheQueueIsFull	measured hosted margin 100.0 (>= 3), CHAOS-11684 census
 internal/providersync/request_usage_test.go	TestWriterCloseIsBoundedWhenItsLoggerIsStuck	measured hosted margin 16.7 (>= 3), CHAOS-11684 census
-internal/providersync/request_usage_test.go	TestWriterSurvivesAPanickingStoreAndAHungWrite	pending CHAOS-11684 conversion
 internal/providersync/syncunit_budget_exhaustion_oracle_test.go	budgetDeferralExhausted	not wall time: pure fn of now (internal/providersync/syncunit_budget_exhaustion_oracle_test.go:96)
 internal/queryapi/analytics/investmentownershipteam_rule_test.go	TestOwnershipTeamSourceRendersTheOneOwnershipRule	not a performance budget: clock or stamp skew
 internal/queryapi/server/mcp_route_test.go	TestMCPEveryStageOfTheDocumentPathIsBoundedUnderTheBodyCap	pending CHAOS-11684 conversion

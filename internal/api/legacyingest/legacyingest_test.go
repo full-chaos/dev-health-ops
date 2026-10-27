@@ -182,9 +182,10 @@ func TestIdempotencyKey(t *testing.T) {
 }
 
 func TestValkeyFailuresDegrade(t *testing.T) {
-	// A failing claim goes on (Python logs and skips the check); a failing
-	// stream write still answers 202, the payload just is not streamed.
-	store := &scriptedStore{claim: func(string) (bool, error) { return false, errors.New("down") }, appendError: errors.New("down")}
+	// A failing claim goes on (Python logs and skips the check); with no
+	// store the payload is accepted and not streamed. A failing stream write
+	// is a 503 (TestStreamWriteFailureAnswers503).
+	store := &scriptedStore{claim: func(string) (bool, error) { return false, errors.New("down") }}
 	if got := post(t, store, map[string]string{"X-Idempotency-Key": "k"}); got.Code != 202 {
 		t.Fatalf("%d %s", got.Code, got.Body.String())
 	}
@@ -245,3 +246,5 @@ func TestTelemetryInsertFailureIsTheUnhandled500(t *testing.T) {
 		t.Fatalf("%d %s", got.Code, got.Body.String())
 	}
 }
+
+func (s *scriptedStore) Release(context.Context, string) error { return nil }

@@ -3,6 +3,8 @@ package chartgates_test
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
+	"io"
 	"regexp"
 	"strconv"
 	"strings"
@@ -136,6 +138,55 @@ var (
 	rbBlockHead     = regexp.MustCompile("(?s)```json\n(.*?)\n```")
 )
 
+// rbMatcherKeys maps a label of the rule text to its builder filter key (the
+// scrape's service label is the resource attribute service.name).
+var rbMatcherKeys = map[string]string{"limit": "limit", "check": "check", "service": "service.name"}
+
+// rbRequiredKeys are the keys whose zero value is legal JSON, so a decode into
+// the struct cannot tell a missing key from a written zero.
+var rbRequiredKeys = [][]any{
+	{"condition", "compositeQuery", "unit"},
+	{"condition", "compositeQuery", "queries", 0, "spec", "disabled"},
+	{"condition", "thresholds", "spec", 0, "target"},
+	{"notificationSettings", "usePolicy"},
+}
+
+func rbMissingKeys(block string) []string {
+	var root any
+	if err := json.Unmarshal([]byte(block), &root); err != nil {
+		return nil
+	}
+	var missing []string
+	for _, path := range rbRequiredKeys {
+		v, ok := root, true
+		for _, k := range path {
+			switch key := k.(type) {
+			case string:
+				m, isMap := v.(map[string]any)
+				if !isMap {
+					ok = false
+					break
+				}
+				v, ok = m[key]
+			case int:
+				a, isList := v.([]any)
+				if !isList || key >= len(a) {
+					ok = false
+					break
+				}
+				v = a[key]
+			}
+			if !ok {
+				break
+			}
+		}
+		if !ok {
+			missing = append(missing, fmt.Sprint(path))
+		}
+	}
+	return missing
+}
+
 func rbRuleAndInterval(g *guard, name string) (doc, string) {
 	for _, grp := range ruleGroups(g) {
 		for _, r := range list(grp["rules"]) {
@@ -168,6 +219,13 @@ func runbookBuilderRulesMatchRules(g *guard) {
 		if err := dec.Decode(&r); err != nil {
 			g.failf("an import JSON block in %s does not parse (no unknown field is allowed): %v", valkeyRunbook, err)
 			continue
+		}
+		if err := dec.Decode(&struct{}{}); err != io.EOF {
+			g.failf("the import JSON block of %s in %s has text after its JSON value", r.Alert, valkeyRunbook)
+			continue
+		}
+		for _, missing := range rbMissingKeys(m[1]) {
+			g.failf("%s import has no %s key: a zero value must be written out", r.Alert, missing)
 		}
 		if _, dup := imports[r.Alert]; dup {
 			g.failf("the runbook imports %s twice", r.Alert)
@@ -253,9 +311,13 @@ func runbookBuilderRulesMatchRules(g *guard) {
 				g.expect(head[2] == "", "%s expr groups by %q, the table says no grouping", name, head[2])
 			}
 			for _, m := range rbExprMatcher.FindAllStringSubmatch(expr, -1) {
-				if m[1] != "__name__" {
-					g.expect(strings.Contains(gotFilter, m[3]), "%s import filter %q does not carry the rule matcher value %q", name, gotFilter, m[3])
+				if m[1] == "__name__" {
+					continue
 				}
+				key, ok := rbMatcherKeys[m[1]]
+				op := map[string]string{"=": "=", "=~": "REGEXP"}[m[2]]
+				frag := key + " " + op + " '" + m[3] + "'"
+				g.expect(ok && op != "" && strings.Contains(gotFilter, frag), "%s import filter %q does not carry the rule matcher %s%s%q as %q", name, gotFilter, m[1], m[2], m[3], frag)
 			}
 		}
 
@@ -413,6 +475,11 @@ func TestRunbookBuilderGuardsPlantedDefects(t *testing.T) {
 		plant("filter-dropped-service", notReady, ` AND service.name = 'auth-service'`, ``, "import filter"),
 		plant("group-by", notReady, `"name": "service.instance.id"`, `"name": "k8s.pod.name"`, "groupBy"),
 		plant("unknown-field", valkeyEvictedAlert, `"alert": "ValkeyKeysEvicted",`, `"alert": "ValkeyKeysEvicted", "version": "v4",`, "does not parse"),
+		plant("trailing-text-after-json", storeErrors, "\n}", "\n}\ntrailing", "text after its JSON value"),
+		plant("zero-target-removed", storeErrors, "          \"target\": 0,\n", "", "no [condition thresholds spec 0 target] key"),
+		plant("zero-unit-removed", errorsHigh, "      \"unit\": \"\",\n", "", "no [condition compositeQuery unit] key"),
+		plant("false-disabled-removed", notReady, "],\n            \"disabled\": false", "]", "no [condition compositeQuery queries 0 spec disabled] key"),
+		planted{"promql-query-type-in-step-2", both, mutBlock(storeErrors, `"queryType": "builder"`, `"queryType": "promql"`), runbookHasNoPromQLRule, `queryType\": \"promql`},
 		planted{"promql-block-in-step-2", both, mutBlock(storeErrors, `"ruleType": "threshold_rule"`, `"ruleType": "promql_rule"`), runbookHasNoPromQLRule, "promql_rule"},
 		planted{"promql-queries-in-valkey", both, mutBlock(valkeyEvictedAlert, `"alert": "ValkeyKeysEvicted",`, `"alert": "ValkeyKeysEvicted", "promQueries": {},`), runbookHasNoPromQLRule, "promQueries"},
 		planted{"step-3-no-data-line-loses-collector", both, mut(valkeyRunbook, "or the collector is down", "or something else"), runbookNoDataNamesScrapeAndCollector, "scrape and a collector gap"},

@@ -367,3 +367,21 @@ func TestAuthServiceExtraEnvRefusesTheMailNamesAsSecretReferences(t *testing.T) 
 		}
 	}
 }
+
+func TestAuthServiceMailEgressRefusesAWholeInternetPeerBesideAnyOtherPeer(t *testing.T) {
+	v4, v6 := mailPeer("0.0.0.0/0", mailV4Except), mailPeer("::/0", mailV6Except)
+	for name, peers := range map[string][]string{
+		"narrow cidr":  {v4, mailPeer("10.1.2.0/24", nil)},
+		"pod selector": {v4, `{"podSelector":{"matchLabels":{"app":"mail-relay"}}}`},
+		"both and one": {v4, v6, mailPeer("203.0.113.7/32", nil)},
+		"v6 and pod":   {`{"podSelector":{"matchLabels":{"app":"mail-relay"}}}`, v6},
+	} {
+		out, err := mailRender(t, peers)
+		if err == nil || !strings.Contains(out, "authService.networkPolicy.egress.mail.to") {
+			t.Fatalf("%s: a mixed list was accepted: %v\n%.200s", name, err, out)
+		}
+	}
+	if out, err := mailRender(t, []string{v4, v6}); err != nil {
+		t.Fatalf("the v4 and v6 pair alone was refused: %v\n%.200s", err, out)
+	}
+}

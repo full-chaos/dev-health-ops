@@ -45,7 +45,9 @@ func goodBarrierWorld() map[string]string {
 		"deploy.go-api":       "3 3 3 3 3 3\n",
 		"rs.go-api":           "rs-old||4\nrs-new|3|5\n",
 		"pods.go-api":         "p1||true|true\np2||true|true\np3||true|true\n",
-		"pods.all":            "p1|go-api|[\"api\"]\nm1|migrate|[\"migrate\"]\n",
+		"pods.all":            "p1|go-api|[\"api\"];||\nm1|migrate|[\"migrate\"];||\n",
+		"jobs.all":            "",
+		"cronjobs.all":        "",
 		"pods.auth-service":   "a1|\na2|\n",
 		"deploy.auth-service": "2 2 2 2 2 2\n",
 		"rs.auth-service":     "as-old||7\nas-new|2|8\n",
@@ -144,7 +146,7 @@ func TestBarrierFailsOnEachBrokenState(t *testing.T) {
 		{"observedGeneration behind", "up-go-api", func(w map[string]string) { w["deploy.go-api"] = "4 3 3 3 3 3\n" }},
 		{"no Deployment", "up-go-api", func(w map[string]string) { w["deploy.go-api"] = "" }},
 		{"an admin users Job", "up-go-api", func(w map[string]string) {
-			w["pods.all"] += "j1|operator|[\"admin\",\"users\",\"create\"]\n"
+			w["pods.all"] += "j1|operator|[\"admin\",\"users\",\"create\"];||\n"
 		}},
 		{"an auth-service pod already owned", "up-owned", func(w map[string]string) { w["pods.auth-service"] = "a1|true\na2|\n" }},
 		{"an owned auth-service pod on the way down", "down-auth", func(w map[string]string) { w["pods.auth-service"] = "a1|true\na2|\n" }},
@@ -164,7 +166,7 @@ func TestBarrierFailsOnEachBrokenState(t *testing.T) {
 
 // A kubectl error is never a pass, whichever call it hits.
 func TestBarrierFailsClosedWhenKubectlFails(t *testing.T) {
-	for _, key := range []string{"deploy.go-api", "rs.go-api", "pods.go-api", "pods.all"} {
+	for _, key := range []string{"deploy.go-api", "rs.go-api", "pods.go-api", "pods.all", "jobs.all", "cronjobs.all"} {
 		r := runBarrier(t, goodBarrierWorld(), []string{"FAKE_FAIL=" + key}, "up-go-api")
 		if r.rc == 0 || strings.Contains(r.stdout, "barrier_ok") {
 			t.Errorf("kubectl %s failing passed: rc=%d", key, r.rc)
@@ -187,7 +189,7 @@ func TestBarrierCallsOnlyKubectlGetJSONPath(t *testing.T) {
 			t.Fatalf("%s: kubectl called %d times", mode, len(lines))
 		}
 		for _, line := range lines {
-			if !regexp.MustCompile(`^-n dev-health --request-timeout=30s get (deploy|rs|pods) -l app\.kubernetes\.io/instance=a\S* -o jsonpath=`).MatchString(line) {
+			if !regexp.MustCompile(`^-n dev-health --request-timeout=30s get (deploy|rs|pods|jobs|cronjobs) (-l app\.kubernetes\.io/instance=a\S* )?-o jsonpath=`).MatchString(line) {
 				t.Errorf("%s: kubectl call outside the read-only shape: %s", mode, line)
 			}
 			if regexp.MustCompile(`\b(secret|secrets|exec|describe|apply|patch|replace|delete|logs|env)\b`).MatchString(strings.SplitN(line, "-o jsonpath=", 2)[0]) {
@@ -219,5 +221,70 @@ func TestBarrierFailsClosedWhenKubectlHangs(t *testing.T) {
 		if r.rc == 0 || strings.Contains(r.stdout, "barrier_ok") {
 			t.Errorf("kubectl %s hanging passed: rc=%d", key, r.rc)
 		}
+	}
+}
+
+// The admin users scan reads every container of every pod, Job and CronJob template in the namespace (no release label:
+// an ad-hoc pod has none). One segment per container holds that container's command and args as kubectl prints them
+// (JSON arrays, `;` after each container); fields: name|component|containers|initContainers|ephemeralContainers.
+func TestBarrierRefusesAdminUsersInEveryContainerShape(t *testing.T) {
+	rows := map[string]string{
+		"command only":           "x1|operator|[\"dho\",\"admin\",\"users\",\"create\"];||\n",
+		"args only":              "x1|operator|[\"admin\",\"users\",\"create\"];||\n",
+		"command and args split": "x1|operator|[\"dho\"][\"admin\",\"users\",\"create\"];||\n",
+		"sh -c one string":       "x1|operator|[\"sh\",\"-c\"][\"dho admin users create x\"];||\n",
+		"any users subcommand":   "x1|operator|[\"dho\",\"admin\",\"users\",\"list\"];||\n",
+		"init container":         "x1|operator||[\"dho\",\"admin\",\"users\",\"create\"];|\n",
+		"ephemeral container":    "x1|operator|||[\"dho\",\"admin\",\"users\",\"create\"];\n",
+		"second container":       "x1|operator|[\"sleep\"];[\"dho\",\"admin\",\"users\",\"create\"];||\n",
+	}
+	for name, row := range rows {
+		t.Run(name, func(t *testing.T) {
+			world := goodBarrierWorld()
+			world["pods.all"] += row
+			r := runBarrier(t, world, nil, "up-go-api")
+			if r.rc == 0 || strings.Contains(r.stdout, "barrier_ok") {
+				t.Fatalf("passed: rc=%d stdout=%q stderr=%q", r.rc, r.stdout, r.stderr)
+			}
+		})
+	}
+}
+
+func TestBarrierAdminUsersInJobAndCronJobTemplates(t *testing.T) {
+	for _, key := range []string{"jobs.all", "cronjobs.all"} {
+		for _, row := range []string{
+			"t1|-|[\"dho\",\"admin\",\"users\",\"create\"];||\n",
+			"t1|-|[\"sh\",\"-c\"][\"dho admin users create\"];||\n",
+			"t1|-||[\"dho\",\"admin\",\"users\",\"create\"];|\n",
+		} {
+			world := goodBarrierWorld()
+			world[key] += row
+			r := runBarrier(t, world, nil, "up-go-api")
+			if r.rc == 0 || strings.Contains(r.stdout, "barrier_ok") {
+				t.Errorf("%s %q passed: rc=%d stdout=%q", key, row, r.rc, r.stdout)
+			}
+		}
+	}
+}
+
+// Controls: none of these is an admin users verb in one container of a pod that is not go-api or auth-service.
+func TestBarrierAllowsWhatIsNotAnAdminUsersVerb(t *testing.T) {
+	rows := map[string]string{
+		"admin and users in different containers": "x1|operator|[\"admin\"];[\"users\"];||\n",
+		"the verb in a go-api pod":                "x1|go-api|[\"dho\",\"admin\",\"users\",\"create\"];||\n",
+		"the verb in an auth-service pod":         "x1|auth-service|[\"dho\",\"admin\",\"users\",\"create\"];||\n",
+		"words that only contain the names":       "x1|operator|[\"administer\",\"users2\"];||\n",
+		"a hyphenated users name":                 "x1|operator|[\"dho\",\"admin\",\"users-export\"];||\n",
+		"an unrelated command":                    "x1|operator|[\"dho\",\"worker\"];||\n",
+	}
+	for name, row := range rows {
+		t.Run(name, func(t *testing.T) {
+			world := goodBarrierWorld()
+			world["pods.all"] += row
+			r := runBarrier(t, world, nil, "up-go-api")
+			if r.rc != 0 || !strings.Contains(r.stdout, "barrier_ok") {
+				t.Fatalf("refused: rc=%d stdout=%q stderr=%q", r.rc, r.stdout, r.stderr)
+			}
+		})
 	}
 }

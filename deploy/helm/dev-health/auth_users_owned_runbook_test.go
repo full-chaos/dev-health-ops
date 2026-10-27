@@ -165,3 +165,35 @@ func TestStageOutageIsNamedAndBounded(t *testing.T) {
 		}
 	}
 }
+
+// The roll windows overlap old and new pods; the runbook says so, cites where the local handler is chosen, and names what the
+// barrier cannot see.
+func TestOverlapWindowsAreNamed(t *testing.T) {
+	raw, err := os.ReadFile("../../../docs/operate/runbooks/auth-users-owned-flip-and-rollback.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(raw)
+	for _, want := range []string{
+		"The U1 overlap",
+		"The D1 overlap",
+		"internal/apiservice/authproxy.go:264-267",
+		"not in a pod spec",
+		"cannot see",
+		"kubectl exec",
+		"any users subcommand",
+		"namespace",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("the runbook lacks %q", want)
+		}
+	}
+	for _, bad := range []string{
+		"six credential routes are stubbed: a valid request answers `503`",
+		"auth-service returns to the phase 3 form and go-api still forwards, so the credential routes answer `503` until the stubs are up",
+	} {
+		if strings.Contains(text, bad) {
+			t.Errorf("the runbook still makes an unqualified claim: %q", bad)
+		}
+	}
+}

@@ -14,10 +14,21 @@ type recordingOrgActivity struct {
 	refreshed           []string
 	fills               int
 	refreshErr, fillErr error
+	// block makes Refresh wait for its context to end (a ClickHouse that does not answer).
+	block bool
+	// panics makes Refresh panic.
+	panics bool
 }
 
-func (r *recordingOrgActivity) Refresh(_ context.Context, orgID uuid.UUID) error {
+func (r *recordingOrgActivity) Refresh(ctx context.Context, orgID uuid.UUID) error {
 	r.refreshed = append(r.refreshed, orgID.String())
+	if r.panics {
+		panic("refresh panicked")
+	}
+	if r.block {
+		<-ctx.Done()
+		return ctx.Err()
+	}
 	return r.refreshErr
 }
 

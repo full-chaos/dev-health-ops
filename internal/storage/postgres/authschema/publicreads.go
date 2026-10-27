@@ -46,7 +46,7 @@ func PublicReadColumns() []ColumnGrant {
 		// The login organization choice ranks a user's organizations by their metrics
 		// activity; the metrics finalize job projects it here (computed_at is its
 		// freshness), so auth-service never reads ClickHouse.
-		{Table: "org_activity", Columns: []string{"org_id", "has_data", "computed_at", "refreshed_at"}},
+		{Table: "org_activity", Columns: []string{"org_id", "has_data", "computed_at"}},
 		// The session issue route checks go-api's auth-session-issuer
 		// service credential by its hash (last_used_at is not read or
 		// stamped).

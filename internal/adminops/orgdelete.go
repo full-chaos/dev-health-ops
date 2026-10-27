@@ -13,6 +13,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/admin"
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
@@ -46,7 +47,7 @@ func runOrgsDelete(ctx context.Context, env cli.Env) int {
 	if code != 0 {
 		return code
 	}
-	op.Logger = slog.New(slog.NewTextHandler(env.Stderr, nil)).With(slog.String("caller", "cli"))
+	op.Logger = logging.NewJSON(env.Stderr, slog.LevelInfo).With(slog.String("caller", "cli"))
 	plan, err := op.DeleteOrg(ctx, orgID.value, *dryRun, deleteConfig)
 	if err != nil {
 		// Python prints "Error: <text>" for every failure of the deletion, a

@@ -125,7 +125,7 @@ func TestOrgsDeleteRefusesWithoutAUsableClickHouse(t *testing.T) {
 			if code != cli.ExitFailure || stdout.String() != orgDeleteRefusedLine {
 				t.Errorf("exit %d stdout %q, want exit %d and %q", code, stdout.String(), cli.ExitFailure, orgDeleteRefusedLine)
 			}
-			for _, want := range []string{"admin: org deletion refused", "reason=" + tc.reason, "org_id=" + targetOrg} {
+			for _, want := range []string{`"msg":"admin: org deletion refused"`, `"reason":"` + tc.reason + `"`, `"org_id":"` + targetOrg + `"`, `"caller":"cli"`} {
 				if !strings.Contains(stderr.String(), want) {
 					t.Errorf("stderr %q lacks %q", stderr.String(), want)
 				}

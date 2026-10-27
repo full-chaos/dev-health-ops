@@ -306,7 +306,7 @@ func NewServer(options ServerOptions) (*Server, error) {
 	}
 	server := &Server{name: name, logger: logger, errors: make(chan error, 1)}
 	server.server = &http.Server{
-		Addr:    options.Address,
+		Addr: options.Address,
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			server.active.Add(1)
 			defer server.active.Add(-1)

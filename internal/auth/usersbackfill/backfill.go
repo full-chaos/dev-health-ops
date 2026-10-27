@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
+	"github.com/full-chaos/dev-health-ops/internal/auth/identity/saml"
 )
 
 // Row is the part of one public.users row the backfill reads.
@@ -30,6 +31,13 @@ type Row struct {
 	Superuser      bool
 	TokenVersion   int64
 	LastLoginAt    *time.Time
+	// SSOProviderID is users.sso_provider_id; SSOProviderProtocol is the protocol of that provider row (nil when the
+	// account is unbound or the row is gone).
+	SSOProviderID       *uuid.UUID
+	SSOProviderProtocol *string
+	// SAMLNameIDFormat and SAMLSPNameQualifier are users.saml_nameid_format and users.saml_sp_name_qualifier: NULL until
+	// the account signs in through go-api SAML after the columns exist.
+	SAMLNameIDFormat, SAMLSPNameQualifier *string
 }
 
 // Skip classes. A skipped user is counted, not written, and fails the run.
@@ -67,6 +75,14 @@ type Report struct {
 	RoleGranted      int
 	RoleRevoked      int
 	Skipped          map[string]int
+
+	// IdentityRelinkPending counts the not-carried SSO accounts the owned store re-links at their first sign-in
+	// (identity.IsSSORelinkable).
+	IdentityRelinkPending int
+	// SSOSubjectUnverifiable counts the not-carried SAML accounts readiness cannot waive: their stored NameID
+	// parts are missing (never signed in) or do not key, e.g. a transient NameID (SubjectUnverifiable); each holds the
+	// users-owned guard until it has an identity.
+	SSOSubjectUnverifiable int
 }
 
 // SkippedTotal is the number of users that were not written.
@@ -92,6 +108,8 @@ func (r Report) Lines() []string {
 		fmt.Sprintf("unchanged=%d", r.Unchanged),
 		fmt.Sprintf("identity_linked=%d", r.IdentityLinked),
 		fmt.Sprintf("identity_not_carried=%d", r.IdentityNotCarry),
+		fmt.Sprintf("identity_relink_pending=%d", r.IdentityRelinkPending),
+		fmt.Sprintf("sso_subject_unverifiable=%d", r.SSOSubjectUnverifiable),
 		fmt.Sprintf("display_name_drift=%d", r.DisplayNameDrift),
 		fmt.Sprintf("last_login_drift=%d", r.LastLoginDrift),
 		fmt.Sprintf("platform_role_granted=%d", r.RoleGranted),
@@ -144,6 +162,12 @@ func Run(ctx context.Context, src Source, sink Sink, opts Options) (Report, erro
 			}
 			if notCarried {
 				rep.IdentityNotCarry++
+				if Relinkable(row) {
+					rep.IdentityRelinkPending++
+				}
+				if SubjectUnverifiable(row) {
+					rep.SSOSubjectUnverifiable++
+				}
 			}
 			res, err := sink.BackfillUser(ctx, target, opts.DryRun)
 			if err != nil {
@@ -201,7 +225,8 @@ func Map(row Row) (target identity.BackfillTarget, class string, notCarried bool
 	if row.FullName != nil {
 		target.DisplayName = *row.FullName
 	}
-	if row.PasswordHash != nil {
+	// A service-provider row never carries a password into the auth schema (identity.IsServiceProvider).
+	if row.PasswordHash != nil && !identity.IsServiceProvider(row.AuthProvider) {
 		if !isBcrypt(*row.PasswordHash) {
 			return target, SkipUnknownHashFormat, false
 		}
@@ -232,10 +257,42 @@ func mapIdentity(row Row) (key *identity.ExternalKey, class string, notCarried b
 			return nil, SkipInvalidIdentity, false
 		}
 		key = &k
+	case IsPlaceholder(row):
+		notCarried = true
 	default:
 		notCarried = true
 	}
 	return key, "", notCarried
+}
+
+// IsPlaceholder is a non-interactive service placeholder row: the one definition the users-owned guard uses to
+// leave it out of its identity count (identity.IsServicePlaceholder). It is still reported as not carried.
+func IsPlaceholder(row Row) bool {
+	return identity.IsServicePlaceholder(row.ID, row.AuthProvider, row.PasswordHash, row.AuthProviderID)
+}
+
+// Relinkable is an SSO account the owned store re-links at its first sign-in: the one definition the users-owned guard
+// uses to leave it out of its identity count. An OIDC account is waived by identity.IsSSORelinkable; a bound SAML
+// account is waived when its stored NameID parts key it under saml.SubjectFromStored, the runtime rule. It is still
+// reported as not carried.
+func Relinkable(row Row) bool {
+	return identity.IsSSORelinkable(row.AuthProvider, row.AuthProviderID, row.SSOProviderID, row.SSOProviderProtocol) ||
+		samlKeyable(row)
+}
+
+// SubjectUnverifiable is the sso_subject_unverifiable bucket (identity.IsSSOSubjectUnverifiable): a bound SAML account
+// readiness does not waive because its NameID parts were never stored, or do not key (a transient NameID).
+func SubjectUnverifiable(row Row) bool {
+	return identity.IsSSOSubjectUnverifiable(row.AuthProvider, row.AuthProviderID, row.SSOProviderID, row.SSOProviderProtocol) &&
+		!samlKeyable(row)
+}
+
+func samlKeyable(row Row) bool {
+	if !identity.IsSSOSubjectUnverifiable(row.AuthProvider, row.AuthProviderID, row.SSOProviderID, row.SSOProviderProtocol) {
+		return false
+	}
+	_, err := saml.SubjectFromStored(*row.AuthProviderID, row.SAMLNameIDFormat, row.SAMLSPNameQualifier)
+	return err == nil
 }
 
 func isBcrypt(hash string) bool {

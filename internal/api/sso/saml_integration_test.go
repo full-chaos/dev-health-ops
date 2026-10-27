@@ -38,6 +38,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -46,6 +47,9 @@ import (
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -106,10 +110,12 @@ func (idp *samlIdP) certConfigValue() string {
 
 type samlResponseOpts struct {
 	spEntityID, acsURL, email, fullName, nameID string
-	notOnOrAfter                                time.Time
-	notBefore                                   time.Time
-	skipSign                                    bool
-	tamperAfterSign                             bool
+	// nameIDFormat and spNameQualifier, when set, replace the NameID attributes the assertion maker wrote.
+	nameIDFormat, spNameQualifier string
+	notOnOrAfter                  time.Time
+	notBefore                     time.Time
+	skipSign                      bool
+	tamperAfterSign               bool
 	// noSubjectConfirmation strips every SubjectConfirmation element
 	// BEFORE signing, so the returned assertion is genuinely, validly
 	// signed with zero of them -- proving r1's P2 finding (Go accepted
@@ -232,6 +238,12 @@ func (idp *samlIdP) signedSAMLResponse(t *testing.T, opts samlResponseOpts) stri
 	if !opts.confirmationOnlyNotOnOrAfter.IsZero() {
 		req.Assertion.Subject.SubjectConfirmations[0].SubjectConfirmationData.NotOnOrAfter = opts.confirmationOnlyNotOnOrAfter
 	}
+	if opts.nameIDFormat != "" {
+		req.Assertion.Subject.NameID.Format = opts.nameIDFormat
+	}
+	if opts.spNameQualifier != "" {
+		req.Assertion.Subject.NameID.SPNameQualifier = opts.spNameQualifier
+	}
 	if opts.noSubjectConfirmation {
 		req.Assertion.Subject.SubjectConfirmations = nil
 	}
@@ -317,6 +329,121 @@ func TestSAMLMetadataAndInitiate(t *testing.T) {
 	redirectURL, _ := authResp["redirect_url"].(string)
 	if !strings.HasPrefix(redirectURL, "https://idp.test/sso?") || !strings.Contains(redirectURL, "SAMLRequest=") {
 		t.Fatalf("redirect_url = %q, want the configured sso_url with a SAMLRequest param", redirectURL)
+	}
+}
+
+// A lone surrogate in relay_state is refused as string_unicode where the
+// value goes into the redirect_url query (allow_idp_initiated); where the
+// route replaces it with its own sealed token it is still ignored.
+func TestSAMLInitiateRefusesALoneSurrogateRelayStateOnlyWhereItIsForwarded(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	st := startStack(t, ctx)
+	orgID := seedOrg(t, ctx, st.pool, "enterprise")
+	idp := newSAMLIdP(t)
+	config := fmt.Sprintf(`{"entity_id":"https://idp.test/entity","sso_url":"https://idp.test/sso","certificate":%q}`, idp.certConfigValue())
+	forwarded := seedProvider(t, ctx, st.pool, orgID, providerOpts{protocol: "saml", status: "active", config: config, autoProvision: true})
+	sealed := seedProvider(t, ctx, st.pool, orgID, providerOpts{protocol: "saml", status: "active", config: config, autoProvision: true, disallowIdpInitiated: true})
+
+	post := func(id uuid.UUID, raw string) (int, string) {
+		t.Helper()
+		resp, err := http.Post(st.server.URL+"/api/v1/auth/saml/"+id.String()+"/initiate", "application/json", strings.NewReader(raw))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		text, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp.StatusCode, string(text)
+	}
+	for _, escape := range []string{`\ud800`, `\udbff`, `\udc00`, `\udfff`} {
+		status, text := post(forwarded, `{"relay_state":"a`+escape+`b"}`)
+		if status != http.StatusUnprocessableEntity || !strings.Contains(text, `"string_unicode"`) || !strings.Contains(text, `"relay_state"`) {
+			t.Errorf("forwarded %s: status=%d body=%s", escape, status, text)
+		}
+		if status, text = post(sealed, `{"relay_state":"a`+escape+`b"}`); status != http.StatusOK || !strings.Contains(text, "redirect_url") {
+			t.Errorf("sealed %s: status=%d body=%s", escape, status, text)
+		}
+	}
+	status, text := post(forwarded, `{"relay_state":"a\ud83d\ude00b"}`)
+	if status != http.StatusOK || !strings.Contains(text, "RelayState=a") {
+		t.Errorf("a surrogate pair: status=%d body=%s", status, text)
+	}
+}
+
+// TestSSOSurrogateRefusalTableStackRows drives the saml_* and oauth_* rows of
+// ci/sso_surrogate_refusals.tsv against a real provider row: the status and
+// the error loc the table names must be what the route answers.
+func TestSSOSurrogateRefusalTableStackRows(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "ci", "sso_surrogate_refusals.tsv"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	st := startStack(t, ctx)
+	orgID := seedOrg(t, ctx, st.pool, "enterprise")
+	idp := newSAMLIdP(t)
+	config := fmt.Sprintf(`{"entity_id":"https://idp.test/entity","sso_url":"https://idp.test/sso","certificate":%q}`, idp.certConfigValue())
+	providers := map[string]uuid.UUID{
+		"saml_forwarded": seedProvider(t, ctx, st.pool, orgID, providerOpts{protocol: "saml", status: "active", config: config, autoProvision: true}),
+		"saml_sealed":    seedProvider(t, ctx, st.pool, orgID, providerOpts{protocol: "saml", status: "active", config: config, autoProvision: true, disallowIdpInitiated: true}),
+		"oauth_gitlab": seedProvider(t, ctx, st.pool, orgID, providerOpts{
+			protocol: "oauth_gitlab", status: "active", config: gitlabConfig(startFakeGitLab(t).server.URL), autoProvision: true,
+			clientSecretEncryptedFallback: "gitlab-secret",
+		}),
+	}
+	driven := 0
+	for _, line := range strings.Split(string(raw), "\n") {
+		f := strings.Split(line, "\t")
+		if line == "" || strings.HasPrefix(line, "#") || f[1] != "sso" || !(strings.HasPrefix(f[4], "saml_") || strings.HasPrefix(f[4], "oauth_")) {
+			continue
+		}
+		id, request, body, setup, wantCell := f[0], f[2], f[3], f[4], strings.Fields(f[5])
+		provider, known := providers[setup]
+		if !known {
+			t.Fatalf("%s: unknown setup %q", id, setup)
+		}
+		method, path, _ := strings.Cut(request, " ")
+		if encoded, isHex := strings.CutPrefix(body, "hex:"); isHex {
+			decoded, err := hex.DecodeString(encoded)
+			if err != nil {
+				t.Fatalf("%s: %v", id, err)
+			}
+			body = string(decoded)
+		}
+		req, err := http.NewRequest(method, st.server.URL+strings.Replace(path, "{provider}", provider.String(), 1), strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		text, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if want, _ := strconv.Atoi(wantCell[0]); resp.StatusCode != want {
+			t.Errorf("%s: status=%d want %s body=%s", id, resp.StatusCode, wantCell[0], text)
+		}
+		if len(wantCell) == 3 {
+			var parsed struct {
+				Detail []struct {
+					Type string `json:"type"`
+					Loc  []any  `json:"loc"`
+				} `json:"detail"`
+			}
+			if err := json.Unmarshal(text, &parsed); err != nil || len(parsed.Detail) != 1 || parsed.Detail[0].Type != wantCell[1] ||
+				fmt.Sprint(parsed.Detail[0].Loc) != "["+strings.ReplaceAll(wantCell[2], ".", " ")+"]" {
+				t.Errorf("%s: body=%s want %s %s", id, text, wantCell[1], wantCell[2])
+			}
+		}
+		driven++
+	}
+	if driven != 5 {
+		t.Fatalf("drove %d saml and oauth rows, want 5", driven)
 	}
 }
 

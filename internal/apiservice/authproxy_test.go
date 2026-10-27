@@ -27,6 +27,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
+	"github.com/full-chaos/dev-health-ops/internal/auth/workloadexchange"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 )
@@ -489,6 +490,32 @@ func TestAuthProxyLeavesUnmappedAuthRoutesInGoAPI(t *testing.T) {
 	}
 	if seen := stub.requests(); len(seen) != 0 {
 		t.Errorf("upstream saw %d unmapped requests (first %s %s)", len(seen), seen[0].method, seen[0].path)
+	}
+}
+
+// The workload-token exchange is internal to auth-service: every proxied
+// pattern is a public /api/v1/auth route, none is the exchange, and a request
+// for the exchange path at go-api never reaches auth-service.
+func TestAuthProxyNeverForwardsTheWorkloadExchange(t *testing.T) {
+	for _, routes := range []map[string]AuthAggregate{sessionProxyRoutes, routeProxyRoutes} {
+		for key := range routes {
+			_, pattern, _ := strings.Cut(key, " ")
+			if !strings.HasPrefix(pattern, "/api/v1/auth/") || pattern == workloadexchange.Pattern {
+				t.Errorf("proxied pattern %s is outside /api/v1/auth/ or is the exchange", pattern)
+			}
+		}
+	}
+	stub := newStubUpstream(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusTeapot) })
+	handler := proxyFixture(t, mustProxyConfig(t, allOn(stub.URL)))
+	for _, target := range []string{workloadexchange.Pattern, "/api/v1/auth/../.." + workloadexchange.Pattern, "/api/v1/auth" + workloadexchange.Pattern} {
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, proxyCall{method: http.MethodPost, target: target, body: "grant_type=x"}.request(t))
+		if recorder.Code == http.StatusTeapot {
+			t.Errorf("POST %s was forwarded", target)
+		}
+	}
+	if seen := stub.requests(); len(seen) != 0 {
+		t.Errorf("upstream saw %d exchange requests (first %s %s)", len(seen), seen[0].method, seen[0].path)
 	}
 }
 

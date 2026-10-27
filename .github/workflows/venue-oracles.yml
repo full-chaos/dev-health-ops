@@ -233,7 +233,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        leg: [go-api, acp, acp-nokeys]
+        leg: [go-api, acp, acp-nokeys, acp-social-unowned]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -244,7 +244,7 @@ jobs:
           cache-dependency-path: '**/go.sum'
 
       - name: Run the auth-flow corpus against the external go-api
-        if: matrix.leg != 'acp-nokeys'
+        if: matrix.leg != 'acp-nokeys' && matrix.leg != 'acp-social-unowned'
         run: bash ci/auth_corpus_external.sh "${{ matrix.leg }}"
 
       # Non-vacuity: leg acp without the auth-service keys must fail, and by name (not pass as "unserved").
@@ -262,5 +262,24 @@ jobs:
           fi
           grep -a 'required aggregate sessions is not served by auth-service' "${NOKEYS_LOG}" || {
             echo "ERROR: leg acp failed, but not on the required aggregate sessions"
+            exit 1
+          }
+
+      # Non-vacuity: social forwarded without the users-owned posture must fail, and by name: auth-service refuses the
+      # new-user row (403), so the social row cannot pass.
+      - name: Leg acp with social forwarded without the posture fails by name
+        if: matrix.leg == 'acp-social-unowned'
+        env:
+          SOCIAL_LOG: ${{ runner.temp }}/acp-social-unowned.log
+        run: |
+          status=0
+          AUTH_CORPUS_USERS_UNOWNED=1 AUTH_CORPUS_FORCE_SOCIAL=1 bash ci/auth_corpus_external.sh acp >"${SOCIAL_LOG}" 2>&1 || status=$?
+          tail -n 60 "${SOCIAL_LOG}"
+          if [ "${status}" -eq 0 ]; then
+            echo "ERROR: leg acp passed with social forwarded and users not owned"
+            exit 1
+          fi
+          grep -a 'social-login through the provider stub: answered 403 with' "${SOCIAL_LOG}" || {
+            echo "ERROR: leg acp failed, but not on the social row"
             exit 1
           }

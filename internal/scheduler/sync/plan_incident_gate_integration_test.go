@@ -611,6 +611,40 @@ func TestDropCanonicalIncidentDatasetsCountsEachDatasetAndLocksTheFeatureRows(t 
 	}
 }
 
+// Every attempt through the production gate counts each left-out dataset on
+// sync_plan_gate_total, while the skip WARN is written once for the same
+// configuration, day and skipped set.
+func TestDropCanonicalIncidentDatasetsCountsEveryAttemptWhileWarningOncePerDay(t *testing.T) {
+	config := startIncidentGateConfig(t, "pagerduty", nil, nil)
+	config.setIncidentFeature(t, false)
+	logs := captureIncidentGateSignals(t)
+	ctx := context.Background()
+	datasets := []PlanDataset{{Key: "incidents"}, {Key: "services"}}
+	const attempts = 5
+	for attempt := 1; attempt <= attempts; attempt++ {
+		tx, err := config.fixture.pool.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, skipped, err := dropCanonicalIncidentDatasetsWhenFeatureOff(ctx, tx, config.occurrence.OrgID, config.integrationID,
+			"pagerduty", datasets, config.occurrence.ScheduledFor)
+		if rollbackErr := tx.Rollback(ctx); rollbackErr != nil {
+			t.Fatal(rollbackErr)
+		}
+		if !errors.Is(err, ErrOccurrenceIneligible) || len(skipped) != len(datasets) {
+			t.Fatalf("attempt %d: skipped=%v err=%v, want 2 skipped and ErrOccurrenceIneligible", attempt, skipped, err)
+		}
+		for _, dataset := range datasets {
+			if got := globalPlanGateTelemetry.snapshotForTest("pagerduty", dataset.Key, planGateOutcomeFeatureDisabled); got != uint64(attempt) {
+				t.Fatalf("attempt %d: feature_disabled count for %s = %d, want %d", attempt, dataset.Key, got, attempt)
+			}
+		}
+	}
+	if lines := skipWarnLines(logs); len(lines) != 1 {
+		t.Fatalf("skip WARN lines after %d same-day attempts = %d, want 1:\n%s", attempts, len(lines), logs.String())
+	}
+}
+
 // A key with no row that the canonical-incident gate drops is not planned, so
 // it is not counted as planned without a row (CHAOS-10088).
 func TestNativeMaterializerCountsOnlyPlannedDatasetsWithoutARow(t *testing.T) {

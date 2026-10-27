@@ -8,7 +8,7 @@ import (
 // The session readers' grant is the reviewed one, written out here
 // independently of SessionReaderColumns.
 func TestSessionReaderColumnsAreTheReviewedOnes(t *testing.T) {
-	want := ColumnGrant{Table: "sessions", Columns: []string{"id", "principal_id", "revoked_at"}}
+	want := ColumnGrant{Table: "sessions", Columns: []string{"id", "principal_id", "revoked_at", "legacy_token_version"}}
 	if got := SessionReaderColumns(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("SessionReaderColumns() = %+v, want %+v", got, want)
 	}

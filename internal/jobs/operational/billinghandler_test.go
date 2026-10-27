@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"html"
 	"os"
 	"strings"
 	"testing"
@@ -541,7 +540,7 @@ func TestDecodeBillingAttributesPreservesCompositeStringFields(t *testing.T) {
 	for _, test := range []struct {
 		name          string
 		raw           string
-		wantCanonical string // the canonical JSON shape, BEFORE HTML-escaping (see below)
+		wantCanonical string // the canonical JSON shape
 	}{
 		{"ticket's exact repro: a list of one string", `{"tier":["Team"]}`, `["Team"]`},
 		{"a list of strings", `{"old_tier":["Team","Enterprise"]}`, `["Team","Enterprise"]`},
@@ -562,13 +561,10 @@ func TestDecodeBillingAttributesPreservesCompositeStringFields(t *testing.T) {
 			case strings.Contains(test.raw, `"new_tier"`):
 				got = decoded.NewTier
 			}
-			// html.EscapeString: the composite path HTML-escapes its
-			// output (TestDecodeBillingAttributesCompositeValuesAreHTMLEscaped
-			// below is the dedicated proof of THAT behavior) -- this test
-			// is about canonical-JSON SHAPE (key sort order, value
-			// preservation), so it escapes its own expectation rather
-			// than hand-writing every `"` as `&#34;`.
-			want := html.EscapeString(test.wantCanonical)
+			// The decoded attribute is the raw canonical JSON text; the
+			// rendered email escapes it exactly once
+			// (TestCompositeAttributesAreEscapedExactlyOnceInTheEmail).
+			want := test.wantCanonical
 			if got != want {
 				t.Fatalf("rendered = %q, want %q", got, want)
 			}
@@ -576,28 +572,23 @@ func TestDecodeBillingAttributesPreservesCompositeStringFields(t *testing.T) {
 	}
 }
 
-// TestDecodeBillingAttributesCompositeValuesAreHTMLEscaped is the R60
-// confirmation-pass fix (chaos-5402-r60-confirm-20260909T123757, NOT CLEAN):
-// canonicalJSON's output is interpolated into an HTML email template
-// (billingemail.go's formatTemplate, which does ZERO escaping of its own,
-// by design -- it's a byte-for-byte port of Python's plain str.format).
-// Before this fix, a composite value used to be DROPPED entirely (never
-// reached the template); R60 makes it REACH the template, which means it
-// now needs the escaping the template itself never provides. All 7 email
-// templates (`templates/*.html`) are genuinely HTML documents (verified:
-// `<!doctype html>`), so every composite value is escaped unconditionally.
-// Scalar string fields are UNCHANGED -- this is scoped to the NEW path only.
-func TestDecodeBillingAttributesCompositeValuesAreHTMLEscaped(t *testing.T) {
-	decoded, err := DecodeBillingAttributes([]byte(`{"tier":["<script>alert(1)</script>"]}`))
+// TestCompositeAttributesAreEscapedExactlyOnceInTheEmail: a composite value
+// decodes to raw canonical JSON text and RenderBillingEmail escapes it once.
+func TestCompositeAttributesAreEscapedExactlyOnceInTheEmail(t *testing.T) {
+	decoded, err := DecodeBillingAttributes([]byte(`{"tier":["<script>alert(1)</script> & co"]}`))
 	if err != nil {
 		t.Fatalf("DecodeBillingAttributes: %v", err)
 	}
-	if strings.Contains(decoded.Tier, "<script>") {
-		t.Fatalf("rendered = %q, contains an unescaped <script> tag", decoded.Tier)
+	if want := `["<script>alert(1)</script> & co"]`; decoded.Tier != want {
+		t.Fatalf("decoded = %q, want the raw canonical text %q", decoded.Tier, want)
 	}
-	want := `[&#34;&lt;script&gt;alert(1)&lt;/script&gt;&#34;]`
-	if decoded.Tier != want {
-		t.Fatalf("rendered = %q, want %q", decoded.Tier, want)
+	rendered, err := RenderBillingEmail(EmailTypeSubscriptionCanceled, decoded, OwnerContact{Email: "a@b.test", FullName: "A", OrgName: "B"}, "https://x.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `[&#34;&lt;script&gt;alert(1)&lt;/script&gt; &amp; co&#34;]`
+	if !strings.Contains(rendered.HTML, want) || strings.Contains(rendered.HTML, "&amp;amp;") || strings.Contains(rendered.HTML, "<script") {
+		t.Fatalf("composite value not escaped exactly once:\n%s", rendered.HTML)
 	}
 }
 
@@ -640,9 +631,7 @@ func TestDecodeBillingAttributesCanonicalJSONHandlesEveryValueShape(t *testing.T
 			if err != nil {
 				t.Fatalf("DecodeBillingAttributes(%s) = %v, want nil error", test.raw, err)
 			}
-			// html.EscapeString: see the comment on the same call in
-			// TestDecodeBillingAttributesPreservesCompositeStringFields.
-			want := html.EscapeString(test.want)
+			want := test.want
 			if decoded.Tier != want {
 				t.Fatalf("rendered = %q, want %q", decoded.Tier, want)
 			}

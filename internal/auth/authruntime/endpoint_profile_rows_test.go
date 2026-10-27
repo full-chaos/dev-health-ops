@@ -3,6 +3,7 @@ package authruntime
 import (
 	"context"
 	"encoding/json"
+	"encoding/pem"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -23,6 +24,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/authapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/authconfig"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
+	"github.com/full-chaos/dev-health-ops/internal/auth/workloadexchange"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
@@ -64,6 +66,9 @@ func servedAuthRoutesWithIssuer(t *testing.T, issuer string) map[string]bool {
 	}
 	if issuer != "" {
 		env[authconfig.EnvTokenIssuerURL] = issuer
+		// The workload-token exchange needs the token issuer: the probe turns it
+		// on whenever an issuer is set.
+		exchangeEnvironment(t, env)
 	}
 	cfg, err := authconfig.Load(authconfig.Spec{LookupEnv: lookupFrom(ssoEnvironment(compatEnvironment(env)))})
 	if err != nil {
@@ -115,6 +120,9 @@ func servedAuthRoutesWithIssuer(t *testing.T, issuer string) map[string]bool {
 	}
 	for _, route := range append(routes, credentials...) {
 		registered["api"] = append(registered["api"], route.Pattern)
+	}
+	if cfg.WorkloadExchange.Enabled {
+		registered["api"] = append(registered["api"], workloadexchange.Pattern)
 	}
 	seenWellKnown := map[string]bool{}
 	for _, route := range authapi.WellKnownRoutes(authapi.WellKnownDeps{IssuerURL: issuer}) {
@@ -230,7 +238,7 @@ func plantedMissingRow(t *testing.T, served map[string]bool, other string) {
 // servedAuthRouteCount is every route the probe serves: four session routes, two social link routes,
 // four compatibility routes, the session issue route, the eight federated sign-in routes, the six credentials routes and the three operator
 // paths on GET and HEAD, and GET and HEAD of the JWKS and the discovery document.
-const servedAuthRouteCount = 35
+const servedAuthRouteCount = 36
 
 // compareServedToRows returns the served routes with no row and the rows for
 // routes nothing serves, per method and listener.
@@ -327,8 +335,9 @@ func TestAuthEndpointProfileAnchorsStillPointAtTheirSymbols(t *testing.T) {
 		"/v1/sessions/revoke": "PatternRevoke", "/v1/sessions/revoke-all": "PatternRevokeAll",
 		"/api/v1/auth/login": "PatternCompatLogin", "/api/v1/auth/refresh": "PatternCompatRefresh",
 		"/api/v1/auth/logout": "PatternCompatLogout", "/api/v1/auth/social-login": "PatternCompatSocialLogin",
-		"/internal/v1/sessions":  "PatternIssueSession",
-		"/.well-known/jwks.json": "PatternJWKS", "/.well-known/openid-configuration": "PatternDiscovery",
+		"/internal/v1/sessions":       "PatternIssueSession",
+		"/internal/v1/token/exchange": "Pattern",
+		"/.well-known/jwks.json":      "PatternJWKS", "/.well-known/openid-configuration": "PatternDiscovery",
 		"/v1/identities/social": "PatternSocialLink", "/v1/identities/social/{id}": "PatternSocialUnlink",
 		"/api/v1/auth/verify": "PatternVerifyEmail", "/api/v1/auth/resend-verification": "PatternResendVerification",
 		"/api/v1/auth/forgot-password": "PatternForgotPassword", "/api/v1/auth/reset-password": "PatternResetPassword",
@@ -480,7 +489,8 @@ func TestTheRowGateRefusesAPlantedMissingRowForEachWellKnownRoute(t *testing.T) 
 func TestWithoutAnIssuerTheDiscoveryRowsAreStale(t *testing.T) {
 	served := servedAuthRoutesWithIssuer(t, "")
 	missing, stale := compareServedToRows(t, served, loadAuthServiceRows(t))
-	wantStale := []string{"GET /.well-known/openid-configuration@api", "HEAD /.well-known/openid-configuration@api"}
+	// The workload-token exchange needs the issuer too, so its row is stale as well.
+	wantStale := []string{"GET /.well-known/openid-configuration@api", "HEAD /.well-known/openid-configuration@api", "POST /internal/v1/token/exchange@api"}
 	if len(missing) != 0 || strings.Join(stale, ",") != strings.Join(wantStale, ",") {
 		t.Errorf("without an issuer: missing %v stale %v, want stale %v", missing, stale, wantStale)
 	}
@@ -497,4 +507,29 @@ func TestAWellKnownRowWithNoRouteIsStale(t *testing.T) {
 	if len(stale) != 1 || stale[0] != "GET /.well-known/unmounted@api" {
 		t.Errorf("stale = %v, want the unmounted route", stale)
 	}
+}
+
+// exchangeEnvironment turns the workload-token exchange on for the probe: a
+// throwaway CA bundle and reviewer token file, so configure builds the route.
+// The probe sends no valid request, so nothing reaches TokenReview.
+func exchangeEnvironment(t *testing.T, env map[string]string) {
+	t.Helper()
+	tls := httptest.NewTLSServer(http.NotFoundHandler())
+	certificate := tls.Certificate().Raw
+	tls.Close()
+	dir := t.TempDir()
+	ca := filepath.Join(dir, "ca.crt")
+	if err := os.WriteFile(ca, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certificate}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	reviewer := filepath.Join(dir, "token")
+	if err := os.WriteFile(reviewer, []byte("probe-reviewer"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env[authconfig.EnvWorkloadExchange] = "true"
+	env[authconfig.EnvWorkloadTrustDomain] = "cluster.example.test"
+	env[authconfig.EnvWorkloadClusterIssuer] = "https://kubernetes.default.svc.cluster.local"
+	env[authconfig.EnvWorkloadKubeAPIURL] = "https://kubernetes.default.svc"
+	env[authconfig.EnvWorkloadKubeCAFile] = ca
+	env[authconfig.EnvWorkloadReviewerTokenFile] = reviewer
 }

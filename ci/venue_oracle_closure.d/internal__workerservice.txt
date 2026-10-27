@@ -92,6 +92,7 @@ internal/platform/config
 internal/platform/credshape
 internal/platform/dbphase
 internal/platform/dbspan
+internal/platform/dialclass
 internal/platform/dsnclass
 internal/platform/errortext
 internal/platform/errortext/hardened
@@ -155,12 +156,12 @@ internal/testsupport/chschema
 internal/testsupport/containers
 internal/testsupport/egressallow
 internal/testsupport/fakehttp
+internal/testsupport/fakepg
 internal/testsupport/moduleroot
 internal/testsupport/pgschema
 internal/testsupport/pgseed
 internal/testsupport/poolpg
 internal/testsupport/programoracle
-internal/testsupport/providersyncschema
 internal/testsupport/proxycapture
 internal/testsupport/pydanticecho
 internal/testsupport/venueoracle

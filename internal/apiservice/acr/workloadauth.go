@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"strings"
 	"time"
@@ -22,7 +23,7 @@ const (
 	outcomeWorkloadForbidden = "workload_forbidden"
 )
 
-// Workload refusal reasons: the authverify reasons plus the two go-api adds.
+// Workload refusal reasons: the authverify reasons plus the go-api adds (principal, not_configured, unavailable).
 // The set is closed; an authverify reason outside it counts as contract.
 const (
 	ReasonContract      = "contract"
@@ -34,11 +35,12 @@ const (
 	ReasonExpired       = "expired"
 	ReasonPrincipal     = "principal"
 	ReasonNotConfigured = "not_configured"
+	ReasonUnavailable   = "unavailable"
 )
 
 var workloadReasons = []string{
 	ReasonContract, ReasonUnknownKid, ReasonSignature, ReasonIssuer, ReasonAudience,
-	ReasonNotYetValid, ReasonExpired, ReasonPrincipal, ReasonNotConfigured,
+	ReasonNotYetValid, ReasonExpired, ReasonPrincipal, ReasonNotConfigured, ReasonUnavailable,
 }
 
 var workloadRoutes = []string{routeHealth, routeEntitlement, routeLLMConfig}
@@ -141,6 +143,9 @@ func (w *WorkloadAuth) decide(token string) (subject, reason string) {
 		now = w.Now
 	}
 	claims, err := w.Verifier.Verify(token, now())
+	if errors.Is(err, authverify.ErrKeySourceUnavailable) {
+		return "", ReasonUnavailable
+	}
 	if err != nil {
 		return "", workloadReason(err)
 	}

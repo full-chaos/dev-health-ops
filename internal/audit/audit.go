@@ -179,8 +179,13 @@ const OffStreamLinkCredentialLifecycle = "link_credential_lifecycle"
 // are not a provisioning aggregate.
 const OffStreamSigningKeyLifecycle = "signing_key_lifecycle"
 
+// OffStreamWorkloadRegistry marks a workload registry change that has no
+// provisioning event yet: allowed actions and deployment bindings.
+const OffStreamWorkloadRegistry = "workload_registry"
+
 var offStreamReasons = map[string]bool{
 	OffStreamSessionLifecycle: true, OffStreamLinkCredentialLifecycle: true, OffStreamSigningKeyLifecycle: true,
+	OffStreamWorkloadRegistry: true,
 }
 
 // TxOps is what a mutation may do inside the transaction.
@@ -377,7 +382,7 @@ func (m Mutation) validate() error {
 	if err := m.Audit.validate(); err != nil {
 		return err
 	}
-	if appendOnlyEventTypes[m.Audit.EventType] {
+	if appendOnlyEventTypes[m.Audit.EventType] || publicPurgeEventTypes[m.Audit.EventType] {
 		return fmt.Errorf("%w: audit event_type %q is append-only and has no state mutation", ErrMutationFailed, m.Audit.EventType)
 	}
 	switch {

@@ -395,7 +395,13 @@ func (c *CachedPostureCheck) execute(flight *postureFlight) {
 		attrs = append(attrs, slog.String("outcome", "refused"), slog.String("detail", err.Error()))
 		c.logger.LogAttrs(ctx, slog.LevelError, "role posture check", attrs...)
 	default:
-		attrs = append(attrs, slog.String("outcome", "unanswered"), slog.String("detail", err.Error()))
+		detail := err.Error()
+		if IsTransientDialError(err) {
+			// An unreachable endpoint's text names the dial address and repeats on
+			// every retry; only the bounded cause is logged.
+			detail = "unreachable"
+		}
+		attrs = append(attrs, slog.String("outcome", "unanswered"), slog.String("detail", detail))
 		c.logger.LogAttrs(ctx, slog.LevelWarn, "role posture check", attrs...)
 	}
 }

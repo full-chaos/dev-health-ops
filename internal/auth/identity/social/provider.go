@@ -106,7 +106,7 @@ type Profile struct {
 	Email         string
 	EmailVerified bool
 	Username      string
-	FullName      string
+	FullName      *string
 }
 
 // ProviderError is a refused or failed provider call. It never carries a
@@ -237,6 +237,13 @@ func integerID(n json.Number) (string, bool) {
 	return s, true
 }
 
+func optionalPointer(v any) *string {
+	if s, ok := v.(string); ok {
+		return &s
+	}
+	return nil
+}
+
 func optionalString(v any) string {
 	s, _ := v.(string)
 	return s
@@ -299,7 +306,7 @@ func (c *ProviderClient) github(ctx context.Context, creds ClientCredentials, to
 	}
 	profile := Profile{
 		ExternalKey: identity.ExternalKey{Issuer: SocialIssuer(GitHub), Provider: GitHub, Subject: subject},
-		Username:    optionalString(user.Login), FullName: optionalString(user.Name),
+		Username:    optionalString(user.Login), FullName: optionalPointer(user.Name),
 	}
 	// GitHub lets only a verified address be the public profile email.
 	if email := optionalString(user.Email); email != "" {
@@ -383,7 +390,7 @@ func (c *ProviderClient) gitlab(ctx context.Context, creds ClientCredentials, to
 		Email:       email,
 		// GitLab's account confirmation timestamp (go-api D2745).
 		EmailVerified: email != "" && optionalString(user.ConfirmedAt) != "",
-		Username:      optionalString(user.Username), FullName: optionalString(user.Name),
+		Username:      optionalString(user.Username), FullName: optionalPointer(user.Name),
 	}, nil
 }
 
@@ -429,7 +436,7 @@ func (c *ProviderClient) google(ctx context.Context, creds ClientCredentials, to
 		ExternalKey:   identity.ExternalKey{Issuer: SocialIssuer(Google), Provider: Google, Subject: subject},
 		Email:         email,
 		EmailVerified: email != "" && verified,
-		FullName:      optionalString(user.Name),
+		FullName:      optionalPointer(user.Name),
 	}, nil
 }
 

@@ -44,7 +44,7 @@ func (r *recordingEnder) PeekResetLink(context.Context, [32]byte) (uuid.UUID, bo
 	return uuid.Nil, false, nil
 }
 
-func (r *recordingEnder) ConsumeResetLinkInTx(context.Context, audit.TxOps, uuid.UUID, [32]byte) error {
+func (r *recordingEnder) ConsumeBoundResetLinkInTx(context.Context, audit.TxOps, uuid.UUID, [32]byte) error {
 	r.consumed++
 	return nil
 }
@@ -95,7 +95,7 @@ func TestIdentityAccountsPassesTheHashNotThePasswordAndOneRequestID(t *testing.T
 	if _, err := acc.ProvisionLocal(ctx, ProvisionLocalRequest{Email: "a@example.com", FullName: &name, PasswordHash: "$2b$12$hash"}); err != nil {
 		t.Fatal(err)
 	}
-	if store.provisioned.PasswordHash == nil || *store.provisioned.PasswordHash != "$2b$12$hash" || store.provisioned.FullName != "Ada" {
+	if store.provisioned.PasswordHash == nil || *store.provisioned.PasswordHash != "$2b$12$hash" || store.provisioned.FullName == nil || *store.provisioned.FullName != "Ada" {
 		t.Errorf("provisioned %+v", store.provisioned)
 	}
 	if err := acc.SetEmailVerified(ctx, uuid.New()); err != nil || !store.verifiedAt.Equal(fixed) {
@@ -132,5 +132,20 @@ func TestIdentityAccountsPassesTheHashNotThePasswordAndOneRequestID(t *testing.T
 	store.principal = nil
 	if u, _ := acc.ByEmail(ctx, "x"); u != nil {
 		t.Error("an unknown user must map to nil")
+	}
+}
+
+func TestIdentityAccountsCopiesThePrincipalFullNameToTheUser(t *testing.T) {
+	name := "Zoë Müller 山田"
+	store := &recordingStore{principal: &identity.Principal{ID: uuid.New(), IsActive: true, FullName: &name}}
+	acc := IdentityAccounts{Store: store}
+	ctx := context.Background()
+	byEmail, err := acc.ByEmail(ctx, "a@example.com")
+	if err != nil || byEmail == nil || byEmail.FullName == nil || *byEmail.FullName != name {
+		t.Errorf("ByEmail user = %+v, %v; want the full name", byEmail, err)
+	}
+	byID, err := acc.ByID(ctx, uuid.New())
+	if err != nil || byID == nil || byID.FullName == nil || *byID.FullName != name {
+		t.Errorf("ByID user = %+v, %v; want the full name", byID, err)
 	}
 }

@@ -242,6 +242,18 @@ jobs:
   #
   # The target list is ci/check_go_containers.sh's ALL_TARGETS, kept whole on
   # purpose: a second, shorter list is how the next target goes unpublished.
+  #
+  # CHAOS-11415: go.yml builds its Go images once (go-container-build) and reuses them in
+  # smoke, scans and proofs. These jobs do not reuse that build: they build the publish
+  # path with the real commit metadata (VERSION, COMMIT, BUILD_TIME, SOURCE_DATE_EPOCH
+  # below), while go.yml's images carry the fixed phase1-ci metadata that its smoke asserts,
+  # and the two workflows run side by side in a merge group with no order between them.
+  # image-queue-gate judges these builds as they are.
+  #
+  # CHAOS-11516: on a merge_group run go-build keeps one real-metadata canary leg (auth-service, linux/amd64): nothing is
+  # pushed from the queue, and go.yml's go-container-build builds the same Dockerfile, targets and platforms in every
+  # non-docs-only entry (go-queue-gate judges it). go-build-dho-arm64 and go-api-tools-build, which go.yml does not
+  # build, are unchanged. A main push, a release, a dispatch and a ci:full pull request build every leg.
   # ---------------------------------------------------------------------------
   go-build:
     name: Build Go Image
@@ -269,7 +281,11 @@ jobs:
       (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
       needs.changes.outputs.code == 'true') &&
       needs.resolve.outputs.promoted != 'true'
-    runs-on: ${{ matrix.runner }}
+    # ubuntu-26.04-arm is not a real enterprise hosted label (chris 2026-09-04 16:59): an arm64 leg is routed to the ARC
+    # pool (fork-PR-safe, variable-gated) and falls back to ubuntu-latest (x64), where buildx/QEMU cross-builds it. No
+    # matrix `include` supplies the runner: an include that matches no combination (the queue matrix is amd64 only)
+    # would add a leg with no target.
+    runs-on: ${{ matrix.platform == 'linux/arm64' && ((vars.SELF_HOSTED_IMAGE_BUILDS == 'enabled' || vars.SELF_HOSTED_RUNNERS == 'enabled') && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')) && fromJSON('["self-hosted","oci-arc-runners"]') || 'ubuntu-latest' }}
     # Every matrix leg checks out the SAME ref, so they all resolve the
     # same commit -- reusing the existing `commit` output is safe here
     # despite GitHub's per-matrix-leg output ambiguity in general.
@@ -278,25 +294,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target:
-          - operator
-          - contractcheck
-          - migrate
-          - dho
-          - auth-service
-          - auth-migrate
-        platform: [linux/amd64, linux/arm64]
-        include:
-          - platform: linux/amd64
-            runner: ubuntu-latest
-          - platform: linux/arm64
-            # ubuntu-26.04-arm is not a real enterprise hosted label (chris
-            # 2026-09-04 16:59) -- routed to the ARC pool instead, same
-            # fork-PR-safe variable-gated shape used elsewhere in this repo.
-            # Falls back to ubuntu-latest (x64): docker/build-push-action's
-            # `platforms:` cross-builds via buildx/QEMU on x64 same as any
-            # other foreign-platform target in this workflow.
-            runner: ${{ ((vars.SELF_HOSTED_IMAGE_BUILDS == 'enabled' || vars.SELF_HOSTED_RUNNERS == 'enabled') && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')) && fromJSON('["self-hosted","oci-arc-runners"]') || 'ubuntu-latest' }}
+        # CHAOS-11516: a merge_group run builds one canary leg. Nothing is pushed from the queue, and go.yml's
+        # go-container-build builds all six targets on both platforms in every non-docs-only entry (same Dockerfile).
+        # Every other event keeps the whole publish set.
+        target: ${{ fromJSON(github.event_name == 'merge_group' && '["auth-service"]' || '["operator","contractcheck","migrate","dho","auth-service","auth-migrate"]') }}
+        platform: ${{ fromJSON(github.event_name == 'merge_group' && '["linux/amd64"]' || '["linux/amd64","linux/arm64"]') }}
         # CHAOS-4906 (runner contract v1.6): (dho, linux/arm64) is built
         # by the dedicated go-build-dho-arm64/-self-hosted pair below
         # instead -- the self-hosted-pool pilot for this workflow (re-added

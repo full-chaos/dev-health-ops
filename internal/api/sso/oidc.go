@@ -298,7 +298,7 @@ func (h handlers) initiateOIDCAuth(w http.ResponseWriter, r *http.Request) {
 		policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail(errs), nil)
 		return
 	}
-	redirectURI, redirectSet := errs.OptionalString(object, "redirect_uri", 0, 0)
+	redirectURI, redirectSet := errs.OptionalUTF8String(object, "redirect_uri")
 	usePKCE, pkceSet := errs.DefaultedBool(object, "use_pkce")
 	if !pkceSet {
 		usePKCE = true
@@ -487,7 +487,7 @@ func (h handlers) oidcCallback(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	user, membership, err := h.provisionOrGetUser(ctx, row, email, claims.fullName, providerID, claims.externalID)
+	user, membership, err := h.provisionOrGetUser(ctx, row, email, claims.fullName, providerID, claims.externalID, nil)
 	if err != nil {
 		if errors.Is(err, errIdentityConflict) {
 			h.recordSSOAuthenticatedDenial(ctx, w, r, row.OrgID, providerID, err.Error(), http.StatusConflict,

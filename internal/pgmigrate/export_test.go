@@ -1,9 +1,13 @@
 package pgmigrate
 
 import (
+	"context"
 	"io/fs"
+	"log/slog"
 	"testing"
 	"testing/fstest"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // UseChainFS makes LoadChain and LoadDownChain read fsys (layout sql/ and sql/down/) until the test ends. Tests
@@ -67,3 +71,15 @@ func UsePlantedChain(t testing.TB, extra fs.FS) {
 	t.Helper()
 	UseChainFS(t, FrozenChainFS(t, extra))
 }
+
+// DropInvalidFailureStreakIndex runs the cleanup that follows a final failed build.
+func DropInvalidFailureStreakIndex(ctx context.Context, conn *pgx.Conn, options IndexBuildOptions, logger *slog.Logger) {
+	var pid int32
+	if err := conn.QueryRow(ctx, "SELECT pg_backend_pid()").Scan(&pid); err != nil {
+		panic(err)
+	}
+	dropInvalidFailureStreakIndex(ctx, lockedSession{conn: conn, pid: pid}, options, logger)
+}
+
+// BuildIndexLockKey is the advisory lock key one build-index run holds.
+const BuildIndexLockKey = buildIndexLockKey

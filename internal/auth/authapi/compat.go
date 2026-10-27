@@ -170,17 +170,37 @@ const (
 // provider); nil for a route that is no sign-in.
 type signInAudit func(ctx context.Context) error
 
+// errAnswered is returned by a signInAudit that already wrote the response
+// (a refused charge): refuseBody then writes nothing more.
+var errAnswered = errors.New("authapi: the response was written")
+
 // refuseBody answers a refused body: a sign-in route audits it first and
-// answers go-api's 500 when it cannot.
+// answers go-api's 503 (500 for a failure that is no dependency) when it
+// cannot. An audit that answered itself (errAnswered) ends the request.
 func (h compatHandlers) refuseBody(w http.ResponseWriter, r *http.Request, operation string, audited signInAudit, write func()) {
 	if audited != nil {
 		if err := audited(r.Context()); err != nil {
-			h.fail(w, r, operation, err)
+			if !errors.Is(err, errAnswered) {
+				h.fail(w, r, operation, err)
+			}
 			return
 		}
 	}
 	h.rec.record(r.Context(), operation, "denied", reasonMalformed, nil)
 	write()
+}
+
+// loginBodyRefused is bodyRefused for the password login route: the caller's
+// address is charged to the login IP limiter first, so a burst of malformed
+// bodies is limited before each one costs an audit write. A refused charge
+// answers itself.
+func (h compatHandlers) loginBodyRefused(w http.ResponseWriter, r *http.Request) signInAudit {
+	return func(ctx context.Context) error {
+		if !admit(w, r, goAPIRefusal, PatternCompatLogin, charge{h.loginIP, clientKey(r)}) {
+			return errAnswered
+		}
+		return h.auditSignInFailed(ctx, uuid.Nil, nil, reasonMalformed, providerLocal)
+	}
 }
 
 // bodyRefused is the signInAudit of a refused sign-in body.
@@ -203,7 +223,10 @@ func (h compatHandlers) readCompatBody(w http.ResponseWriter, r *http.Request, o
 			})
 			return pybody.Body{}, false
 		}
-		h.fail(w, r, operation, err)
+		// A body that cannot be read is a client transport failure, never a
+		// dependency failure: it stays go-api's 500 whatever its error class.
+		h.rec.record(r.Context(), operation, "error", reasonStoreUnavailable, err)
+		policy.WriteInternal(w)
 		return pybody.Body{}, false
 	}
 	switch outcome {
@@ -230,9 +253,17 @@ func (h compatHandlers) signInTransportRefusal(provider string) httpapi.ErrorWri
 	return func(w http.ResponseWriter, r *http.Request, code httpapi.Code) {
 		switch code {
 		case httpapi.CodePayloadTooLarge, httpapi.CodeInvalidRequest:
+			if provider == providerLocal &&
+				!admit(w, r, goAPIRefusal, PatternCompatLogin, charge{h.loginIP, clientKey(r)}) {
+				return
+			}
 			if err := h.auditSignInFailed(r.Context(), uuid.Nil, nil, reasonMalformed, provider); err != nil {
 				h.rec.record(r.Context(), "transport", "error", reasonStoreUnavailable, err)
-				httpapi.WriteError(w, r, httpapi.CodeInternal)
+				if httpapi.DependencyFailure(err) {
+					goAPIRefusal(w, r, httpapi.CodeUnavailable)
+				} else {
+					httpapi.WriteError(w, r, httpapi.CodeInternal)
+				}
 				return
 			}
 		}
@@ -266,9 +297,14 @@ func (h compatHandlers) refuseCompat(w http.ResponseWriter, r *http.Request, ope
 	policy.WriteDetail(w, status, policy.ErrorDetail(text), nil)
 }
 
-// fail records a failure and writes go-api's generic 500. The error is logged
+// fail records a failure and writes go-api's 503 for a dependency failure
+// (httpapi.DependencyFailure) or its generic 500 for any other. The error is logged
 // by class only.
 func (h compatHandlers) fail(w http.ResponseWriter, r *http.Request, operation string, err error) {
+	if httpapi.DependencyFailure(err) {
+		h.unavailableCompat(w, r, operation, err)
+		return
+	}
 	h.rec.record(r.Context(), operation, "error", reasonStoreUnavailable, err)
 	policy.WriteInternal(w)
 }

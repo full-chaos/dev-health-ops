@@ -46,15 +46,20 @@ type Options struct {
 	// the refusal (ErrRuntimeGrantsNarrowed). It binds to that exact set of
 	// lost grants, so any other narrowing refuses again. Empty means none.
 	AcknowledgeNarrowing string
-	// RequirePublicTables makes a PublicReadColumns table that does not exist an
-	// error instead of a logged skip. Grants sets it: the grants pass runs after
-	// the ops migration, so a missing table is a failed release, not an
-	// auth-only database.
+	// RequirePublicTables makes a PublicReadColumns table or column that does
+	// not exist an error instead of a logged skip (DEFERRED for a column).
+	// Grants sets it: the grants pass runs after the ops migration, so a
+	// missing table or column is a failed release, not an auth-only database
+	// or a schema before the revision that adds the column.
 	RequirePublicTables bool
 	// UsersOwned is the users-owned switch (AUTH_USERS_OWNED): the runtime role
 	// holds UsersWriteGrant on public.users. Off, it holds no write privilege
 	// there, and the grants pass revokes any it held.
 	UsersOwned bool
+	// DeferNarrowing keeps, with the acknowledgement, every lost grant the
+	// users-owned switch gives (the 4->3 flip-back release, whose old owned
+	// pods still serve); the rest narrows. See defer_narrowing.go.
+	DeferNarrowing bool
 }
 
 // Result reports what a run did.
@@ -77,6 +82,9 @@ var (
 	// ErrPublicTableMissing reports a PublicReadColumns table absent from the
 	// ops schema in a run that requires it (the grants pass).
 	ErrPublicTableMissing = errors.New("auth public read table is missing")
+	// ErrPublicColumnMissing reports a PublicReadColumns column absent from an
+	// existing ops table in a run that requires it (the grants pass).
+	ErrPublicColumnMissing = errors.New("auth public read column is missing")
 )
 
 // ValidateIdentifier reports whether a schema or role name may be emitted as
@@ -312,7 +320,8 @@ func applyGrantsAndVerify(ctx context.Context, conn pooledConn, options Options,
 	// removed from the manifest in a later release, a restored backup -- is
 	// corrected by the next migrate run rather than persisting because no new
 	// migration happened to be pending.
-	if err := ApplyRuntimeGrants(ctx, conn.Conn(), options); err != nil {
+	var retained []GrantRecord
+	if err := applyRuntimeGrants(ctx, conn.Conn(), RuntimePosture(), options, &retained); err != nil {
 		return result, err
 	}
 	logger.InfoContext(
@@ -339,6 +348,7 @@ func applyGrantsAndVerify(ctx context.Context, conn pooledConn, options Options,
 	if err != nil {
 		return result, err
 	}
+	violations = excuseRetained(violations, retained)
 	if len(violations) > 0 {
 		logger.ErrorContext(
 			ctx, "runtime role can escalate beyond its declared posture",

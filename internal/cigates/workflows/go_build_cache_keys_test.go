@@ -19,7 +19,7 @@ var cacheLayoutRE = regexp.MustCompile(`^go-quality-v([0-9]+)-`)
 
 const minCacheLayout = 2
 
-const hostedOnlyIf = "steps.relevance.outputs.relevant == 'true' && runner.environment == 'github-hosted'"
+const hostedOnlyIf = "(steps.relevance.outputs.relevant == 'true' || steps.relevance.outputs.warm == 'true') && runner.environment == 'github-hosted'"
 
 const cacheActionSHA = "55cc8345863c7cc4c66a329aec7e433d2d1c52a9"
 
@@ -84,10 +84,10 @@ func goCacheViolations(t *testing.T, root string) []string {
 			if c, ok := asMap(s["with"])["cache"].(bool); !ok || c {
 				add("go-quality.yml:go-quality-leg: setup-go must set `cache: false`")
 			}
-		case usesAction(s, "actions/cache/restore"):
+		case usesAction(s, "actions/cache/restore") && !strings.Contains(asString(asMap(s["with"])["path"]), "plan-reads-reach"):
 			restoreAt, restore = i, s
 			pinned("actions/cache/restore", s)
-		case usesAction(s, "actions/cache/save"):
+		case usesAction(s, "actions/cache/save") && !strings.Contains(asString(asMap(s["with"])["path"]), "plan-reads-reach"):
 			saveAt, save = i, s
 			pinned("actions/cache/save", s)
 		case strings.Contains(asString(s["run"]), "bash ci/check_go.sh ci-leg ${{ matrix.args }}"):
@@ -231,9 +231,9 @@ func TestGoCacheGuardPlantedDefectsAreCaught(t *testing.T) {
 		{"go-quality back on setup-go's cache", mutation{gq, "          cache: false\n\n      - name: Restore this leg's", "          cache: true\n\n      - name: Restore this leg's"}, "go-quality-leg: setup-go must set `cache: false`"},
 		{"the key loses the leg", mutation{gq, "key: go-quality-v2-${{ matrix.name }}-", "key: go-quality-v2-"}, "${{ matrix.name }}"},
 		{"the key loses go.sum", mutation{gq, "-${{ hashFiles('**/go.sum') }}", ""}, "hashFiles"},
-		{"restore on self-hosted too", mutation{gq, "steps.relevance.outputs.relevant == 'true' && runner.environment == 'github-hosted'\n        uses: actions/cache/restore", "steps.relevance.outputs.relevant == 'true'\n        uses: actions/cache/restore"}, "GitHub-hosted legs only, if: exactly"},
+		{"restore on self-hosted too", mutation{gq, "steps.relevance.outputs.warm == 'true') && runner.environment == 'github-hosted'\n        uses: actions/cache/restore", "steps.relevance.outputs.warm == 'true')\n        uses: actions/cache/restore"}, "GitHub-hosted legs only, if: exactly"},
 		{"pull requests save", mutation{gq, "&& github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.go-cache", "&& steps.go-cache"}, "github.event_name == 'push'"},
-		{"save on a hit", mutation{gq, " && steps.go-cache.outputs.cache-hit != 'true'", ""}, "cache-hit"},
+		{"save on a hit", mutation{gq, " && steps.go-cache.outputs.cache-hit != 'true'\n        uses: actions/cache/save", "\n        uses: actions/cache/save"}, "cache-hit"},
 		{"save a different key", mutation{gq, "key: ${{ steps.go-cache.outputs.cache-primary-key }}", "key: go-quality-other"}, "not the restore step's primary key"},
 		{"save loses the module cache", mutation{gq, "            ~/go/pkg/mod\n          key: ${{ steps.go-cache", "          key: ${{ steps.go-cache"}, "paths differ"},
 		{"no step exports the restored dir", mutation{gq, `echo "DEV_HEALTH_GO_CACHE=${HOME}/.cache/go-build" >> "${GITHUB_ENV}"`, `echo "X=1" >> "${GITHUB_ENV}"`}, "no step exports DEV_HEALTH_GO_CACHE"},
@@ -267,10 +267,10 @@ func TestGoCacheGuardPinsTheCacheActionsAndTheSetupGoStep(t *testing.T) {
 		want string
 	}{
 		{"restore pinned to another SHA", []mutation{{gq, "actions/cache/restore@" + cacheActionSHA, "actions/cache/restore@" + wrongSHA}}, "actions/cache/restore must be pinned to"},
-		{"save pinned to another SHA", []mutation{{gq, "actions/cache/save@" + cacheActionSHA, "actions/cache/save@" + wrongSHA}}, "actions/cache/save must be pinned to"},
+		{"save pinned to another SHA", []mutation{{gq, "actions/cache/save@" + cacheActionSHA + " # v6.1.0\n        with:\n          path: |", "actions/cache/save@" + wrongSHA + " # v6.1.0\n        with:\n          path: |"}}, "actions/cache/save must be pinned to"},
 		{"restore pinned to a tag", []mutation{{gq, "actions/cache/restore@" + cacheActionSHA + " # v6.1.0", "actions/cache/restore@v6.1.0"}}, "actions/cache/restore must be pinned to"},
-		{"save pinned to a tag", []mutation{{gq, "actions/cache/save@" + cacheActionSHA + " # v6.1.0", "actions/cache/save@v6.1.0"}}, "actions/cache/save must be pinned to"},
-		{"restore also runs on the pool", []mutation{{gq, "relevant == 'true' && runner.environment == 'github-hosted'\n        uses: actions/cache/restore", "relevant == 'true' && runner.environment == 'github-hosted' || matrix.pool\n        uses: actions/cache/restore"}}, "GitHub-hosted legs only, if: exactly"},
+		{"save pinned to a tag", []mutation{{gq, "actions/cache/save@" + cacheActionSHA + " # v6.1.0\n        with:\n          path: |", "actions/cache/save@v6.1.0\n        with:\n          path: |"}}, "actions/cache/save must be pinned to"},
+		{"restore also runs on the pool", []mutation{{gq, "warm == 'true') && runner.environment == 'github-hosted'\n        uses: actions/cache/restore", "warm == 'true') && runner.environment == 'github-hosted' || matrix.pool\n        uses: actions/cache/restore"}}, "GitHub-hosted legs only, if: exactly"},
 		{"export also runs on the pool", []mutation{{gq, "runner.environment == 'github-hosted'\n        run: echo \"DEV_HEALTH_GO_CACHE", "runner.environment == 'github-hosted' || matrix.pool\n        run: echo \"DEV_HEALTH_GO_CACHE"}}, "GitHub-hosted legs only, if: exactly"},
 		{"the setup-go id is renamed", []mutation{{gq, "        id: setup-go\n", "        id: setup-golang\n"}}, "no step with id \"setup-go\""},
 		{"the setup-go id moves to another step", []mutation{

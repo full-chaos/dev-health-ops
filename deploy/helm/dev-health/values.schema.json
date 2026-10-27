@@ -74,6 +74,7 @@
     "authService": {
       "type": "object",
       "properties": {
+        "replicas": { "type": "integer", "minimum": 0, "maximum": 100 },
         "phase": {
           "description": "CHAOS-11382: the auth cutover phase, a whole number 0..5 (values.yaml). The templates also refuse 4 and 5 and the keys it replaces.",
           "type": "integer",
@@ -102,6 +103,7 @@
                 "enabled": { "type": "boolean" },
                 "activeDeadlineSeconds": { "type": "integer", "minimum": 60 },
                 "lockTimeoutSeconds": { "type": "integer", "minimum": 1, "maximum": 60 },
+                "deadlineSeconds": { "type": "integer", "minimum": 60 },
                 "attempts": { "type": "integer", "minimum": 1 },
                 "retryDelaySeconds": { "type": "integer", "minimum": 0 }
               },
@@ -172,9 +174,55 @@
           "properties": {
             "enabled": { "type": "boolean" },
             "image": { "type": "string" },
+            "queueSession": {
+              "type": "object",
+              "properties": {
+                "poolSize": { "type": "integer", "minimum": 1, "maximum": 1000 },
+                "rollingUpdate": {
+                  "type": ["object", "null"],
+                  "description": "Rolling update of the queue-session pooler Deployment. Whole numbers only: the connection budget counts surge pods. Empty renders no strategy key (the Kubernetes default, one surge pod at one replica, which the budget counts).",
+                  "properties": {
+                    "maxSurge": { "type": "integer", "minimum": 0, "maximum": 10 },
+                    "maxUnavailable": { "type": "integer", "minimum": 0, "maximum": 10 }
+                  },
+                  "if": { "properties": { "maxSurge": { "const": 0 } }, "required": ["maxSurge"] },
+                  "then": { "properties": { "maxUnavailable": { "minimum": 1 } }, "required": ["maxUnavailable"] },
+                  "additionalProperties": false
+                }
+              }
+            },
+            "coordinatorSession": {
+              "type": "object",
+              "properties": {
+                "poolSize": { "type": "integer", "minimum": 1, "maximum": 1000 },
+                "rollingUpdate": {
+                  "type": ["object", "null"],
+                  "description": "Rolling update of the coordinator-session pooler Deployment. Whole numbers only: the connection budget counts surge pods. Empty renders no strategy key (the Kubernetes default, one surge pod at one replica, which the budget counts).",
+                  "properties": {
+                    "maxSurge": { "type": "integer", "minimum": 0, "maximum": 10 },
+                    "maxUnavailable": { "type": "integer", "minimum": 0, "maximum": 10 }
+                  },
+                  "if": { "properties": { "maxSurge": { "const": 0 } }, "required": ["maxSurge"] },
+                  "then": { "properties": { "maxUnavailable": { "minimum": 1 } }, "required": ["maxUnavailable"] },
+                  "additionalProperties": false
+                }
+              }
+            },
             "transaction": {
               "type": "object",
               "properties": {
+                "poolSize": { "type": "integer", "minimum": 1, "maximum": 1000 },
+                "rollingUpdate": {
+                  "type": ["object", "null"],
+                  "description": "Rolling update of the transaction pooler Deployment. Whole numbers only: the connection budget counts surge pods. Empty renders no strategy key (the Kubernetes default, one surge pod at one replica, which the budget counts).",
+                  "properties": {
+                    "maxSurge": { "type": "integer", "minimum": 0, "maximum": 10 },
+                    "maxUnavailable": { "type": "integer", "minimum": 0, "maximum": 10 }
+                  },
+                  "if": { "properties": { "maxSurge": { "const": 0 } }, "required": ["maxSurge"] },
+                  "then": { "properties": { "maxUnavailable": { "minimum": 1 } }, "required": ["maxUnavailable"] },
+                  "additionalProperties": false
+                },
                 "extraUsers": {
                   "type": "array",
                   "description": "Roles the transaction pooler authenticates in addition to its own. Both fields are required and neither may be empty: the chart writes each entry as one `\"role\" \"password\"` userlist line, so a missing role would emit a line PgBouncer silently reads as a blank user, and a missing passwordKey has no Secret value to resolve.",
@@ -182,7 +230,8 @@
                     "type": "object",
                     "properties": {
                       "role": { "type": "string", "minLength": 1 },
-                      "passwordKey": { "type": "string", "minLength": 1 }
+                      "passwordKey": { "type": "string", "minLength": 1 },
+                      "poolSize": { "type": "integer", "minimum": 1, "maximum": 1000, "description": "Server connections of this role's pool. Optional: without it the entry takes goWorkers.pgbouncer.transaction.poolSize." }
                     },
                     "required": ["role", "passwordKey"],
                     "additionalProperties": false

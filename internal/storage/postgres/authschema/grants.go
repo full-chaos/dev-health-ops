@@ -87,6 +87,7 @@ func RuntimePosture() []TablePrivilege {
 		{Table: "platform_role_assignments", Select: true, Insert: true, Delete: true},
 		{Table: "service_accounts", Select: true, Insert: true, Update: true},
 		{Table: "workloads", Select: true, Insert: true, Update: true},
+		{Table: "workload_bindings", Select: true},
 
 		// Session lifecycle.
 		{Table: "sessions", Select: true, Insert: true, Update: true, Delete: true},
@@ -151,7 +152,7 @@ func runtimeSequences() []string {
 // deliberately not rewritten here, and are caught instead by
 // VerifyRuntimePosture, which Apply calls and fails on.
 func ApplyRuntimeGrants(ctx context.Context, conn *pgx.Conn, options Options) error {
-	return applyRuntimeGrants(ctx, conn, RuntimePosture(), options)
+	return applyRuntimeGrants(ctx, conn, RuntimePosture(), options, nil)
 }
 
 // applyRuntimeGrants takes the manifest as a parameter so a test can hand it a
@@ -170,7 +171,11 @@ func ApplyRuntimeGrants(ctx context.Context, conn *pgx.Conn, options Options) er
 // says the manifest has not regressed from the previous deployment, not that
 // the manifest is right (CHAOS-4885 is the functional half). Only DIRECT grants
 // are compared; see snapshotDirectGrants.
-func applyRuntimeGrants(ctx context.Context, conn querier, manifest []TablePrivilege, options Options) error {
+//
+// With Options.DeferNarrowing it stores in *retained (when not nil) the
+// acknowledged lost records it kept (retainUsersOwnedGrants), which the
+// posture check then excuses.
+func applyRuntimeGrants(ctx context.Context, conn querier, manifest []TablePrivilege, options Options, retained *[]GrantRecord) error {
 	schemaID, err := NewValidatedIdentifier(options.Schema)
 	if err != nil {
 		return err
@@ -247,6 +252,11 @@ func applyRuntimeGrants(ctx context.Context, conn querier, manifest []TablePrivi
 		return err
 	}
 	publicStatements = append(publicStatements, registerWrite...)
+	linkPurge, err := legacyLinkPurgeStatements(ctx, conn, options, logger)
+	if err != nil {
+		return err
+	}
+	publicStatements = append(publicStatements, linkPurge...)
 
 	tx, err := conn.Begin(ctx)
 	if err != nil {
@@ -305,11 +315,26 @@ func applyRuntimeGrants(ctx context.Context, conn querier, manifest []TablePrivi
 			)
 			return &NarrowingError{Schema: options.Schema, Role: options.RuntimeRole, Lost: lost, Digest: digest}
 		}
+		var kept []GrantRecord
+		if options.DeferNarrowing {
+			kept, err = retainUsersOwnedGrants(ctx, tx, lost, roleID)
+			if err != nil {
+				return err
+			}
+			logger.WarnContext(
+				ctx, "runtime grants narrowing deferred with operator acknowledgement",
+				"schema", options.Schema, "runtime_role", options.RuntimeRole,
+				"deferred", len(kept), "digest", digest,
+			)
+		}
 		logger.WarnContext(
 			ctx, "runtime grants narrowed with operator acknowledgement",
 			"schema", options.Schema, "runtime_role", options.RuntimeRole,
-			"narrowed", len(lost), "digest", digest,
+			"narrowed", len(lost)-len(kept), "digest", digest,
 		)
+		if retained != nil {
+			*retained = kept
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("%w: committing the runtime grants: %v", ErrMigrationFailed, redactPGError(err))

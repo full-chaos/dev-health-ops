@@ -13,7 +13,31 @@ import (
 //
 // A step is checked by the COMMAND it runs, not by its name: a step whose checker was replaced by `echo` must be refused.
 
-func pyCmd(stem string) string { return "python scripts/" + stem + "." + "py" }
+// buildCmd is the Go side of the docs build: `pre` before MkDocs, `post` (checks, asset preparation) after it. MkDocs is its
+// own command line between them, because Go never runs Python.
+const (
+	buildCmd      = "go run -trimpath -mod=readonly ./cmd/cigate docs-build"
+	preCmd        = buildCmd + " pre"
+	postCmd       = buildCmd + " post"
+	mkdocsCmdLine = "python -m mkdocs build --strict --config-file mkdocs.yml"
+)
+
+// commandIndex is the position of the first command line that starts with command and carries every arg, or -1.
+func commandIndex(run, command string, args ...string) int {
+	for i, line := range commandLines(run) {
+		if !strings.HasPrefix(line, command) {
+			continue
+		}
+		ok := true
+		for _, a := range args {
+			ok = ok && strings.Contains(line, a)
+		}
+		if ok {
+			return i
+		}
+	}
+	return -1
+}
 
 // goCmd is a Go docs check run through the cigate binary (the ported checks).
 func goCmd(verb string) string { return "go run -trimpath -mod=readonly ./cmd/cigate docs " + verb }
@@ -240,9 +264,14 @@ func docsGuardsGuard(d docTree) []string {
 			out = append(out, fmt.Sprintf("step %q must stream through tee under set -o pipefail", c.step))
 		}
 	}
-	var uploads []map[string]any
+	var uploads, site []map[string]any
 	for _, s := range steps {
-		if strings.HasPrefix(asString(s["uses"]), "actions/upload-artifact@") {
+		if !strings.HasPrefix(asString(s["uses"]), "actions/upload-artifact@") {
+			continue
+		}
+		if strings.HasPrefix(asString(asMap(s["with"])["name"]), "docs-site-") {
+			site = append(site, s)
+		} else {
 			uploads = append(uploads, s)
 		}
 	}
@@ -256,6 +285,38 @@ func docsGuardsGuard(d docTree) []string {
 			out = append(out, "the evidence artifact must include .build/docs-*.log")
 		}
 	}
+	// The validated site is uploaded only after every check passed (no if: the default is success()), stamped with its revision.
+	if len(site) != 1 {
+		out = append(out, fmt.Sprintf("want exactly one validated-site upload step, got %d", len(site)))
+	} else if _, ok := site[0]["if"]; ok {
+		out = append(out, "the validated site must be uploaded only after every check passed: no if: on the upload step")
+	}
+	if names := []string{"Stamp the validated site with its revision", "Upload the validated site"}; len(steps) > 2 {
+		var order []string
+		for _, s := range steps {
+			order = append(order, asString(s["name"]))
+		}
+		last := func(n string) int {
+			for i, o := range order {
+				if o == n {
+					return i
+				}
+			}
+			return -1
+		}
+		for _, c := range docsGuardsChecks {
+			if last(names[0]) < last(c.step) || last(c.step) < 0 {
+				out = append(out, fmt.Sprintf("the validated-site stamp must come after the check %q", c.step))
+			}
+		}
+		if last(names[1]) < last(names[0]) || last(names[0]) < 0 {
+			out = append(out, "the validated site must be uploaded after it is stamped")
+		}
+	}
+	if !strings.Contains(runs["Stamp the validated site with its revision"], `"$GITHUB_SHA" > .build/docs-validated.sha`) {
+		out = append(out, "the stamp step must write $GITHUB_SHA to .build/docs-validated.sha")
+	}
+	out = append(out, docsPreviewFindings(wf)...)
 	// The Go guards of the docs content run on every docs change, in a job that installs no Python.
 	content := asMap(jobs[contentJob])
 	if content == nil {
@@ -344,7 +405,7 @@ func TestDocsGuardsWorkflowContract(t *testing.T) {
 			return d.edit(t, docsGuardsPath, "--css docs/stylesheets/extra.css", "")
 		}, `step "Check structural accessibility invariants" does not run the command`},
 		{"the evidence upload is not always", func(t *testing.T, d docTree) docTree {
-			return d.edit(t, docsGuardsPath, "        if: always()\n        uses: actions/upload-artifact", "        uses: actions/upload-artifact")
+			return d.editFirst(t, docsGuardsPath, "        if: always()\n        uses: actions/upload-artifact", "        uses: actions/upload-artifact")
 		}, "the evidence artifact must be uploaded with if: always()"},
 		{"the external link check joins the gate", func(t *testing.T, d docTree) docTree {
 			return d.edit(t, docsGuardsPath, "      - name: Check freshness inventory", "      - name: Extra\n        run: "+goCmd("check-external-links")+" --built-site .build/docs\n      - name: Check freshness inventory")
@@ -440,6 +501,35 @@ func TestDocsGuardsWorkflowContract(t *testing.T) {
 			}, fmt.Sprintf("step %q must not carry an if", step)})
 		}
 	}
+	plants = append(plants,
+		plantCase{"the validated site is uploaded even when a check failed", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, docsGuardsPath, "      - name: Upload the validated site\n", "      - name: Upload the validated site\n        if: always()\n")
+		}, "no if: on the upload step"},
+		plantCase{"the stamp step is removed", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, docsGuardsPath, "      - name: Stamp the validated site with its revision\n        run: printf '%s\\n' \"$GITHUB_SHA\" > .build/docs-validated.sha\n", "")
+		}, "stamp"},
+		plantCase{"docs-preview stops needing docs-guards", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, docsGuardsPath, "    needs: docs-guards\n", "")
+		}, "docs-preview must need docs-guards"},
+		plantCase{"docs-preview runs on every event", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, docsGuardsPath, "    if: github.event_name == 'pull_request'\n", "")
+		}, "pull requests only"},
+		plantCase{"docs-preview downloads another revision's site", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, docsGuardsPath, "          name: docs-site-${{ github.sha }}\n          path: .build\n", "          name: docs-site-main\n          path: .build\n")
+		}, "its own revision"},
+		plantCase{"docs-preview builds the site again", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, docsGuardsPath, "      - name: Check candidate facts\n        run: |\n", "      - name: Check candidate facts\n        run: |\n          python -m mkdocs build --strict\n")
+		}, "must not build the site again or run Python"},
+		plantCase{"docs-preview runs the docs build again", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, docsGuardsPath, "      - name: Check candidate facts\n        run: |\n", "      - name: Check candidate facts\n        run: |\n          go run -trimpath -mod=readonly ./cmd/cigate docs-build post --mode preview\n")
+		}, "must not build the site again or run Python"},
+		plantCase{"docs-preview stops checking the stamp", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, docsGuardsPath, "docs check-validated-site", "docs check-candidate-facts")
+		}, "check-validated-site"},
+		plantCase{"docs-preview prepares another revision", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, docsGuardsPath, `--source-revision "$GITHUB_SHA"`, `--source-revision main`)
+		}, "--source-revision"},
+	)
 	assertGuard(t, docsGuardsGuard, plants)
 }
 
@@ -506,8 +596,20 @@ func cloudflareGuard(d docTree) []string {
 	out = append(out, maskFindings("the preview build", nil, []map[string]any{preview})...)
 	out = append(out, conditionFindings("the preview build", []map[string]any{preview}, nil)...)
 	mustContain(&out, "the preview build step", prun, "set -o pipefail")
-	if !runsCommand(prun, pyCmd("build_docs_cloudflare"), "--mode preview --full-check") {
-		out = append(out, "the preview build step does not run "+pyCmd("build_docs_cloudflare")+" --mode preview --full-check (an echo of it is refused)")
+	pre := commandIndex(prun, preCmd, "--mode preview --full-check")
+	mk := commandIndex(prun, mkdocsCmdLine)
+	post := commandIndex(prun, postCmd, "--mode preview --full-check")
+	if pre < 0 {
+		out = append(out, "the preview build step does not run "+preCmd+" --mode preview --full-check (an echo of it is refused)")
+	}
+	if mk < 0 {
+		out = append(out, "the preview build step does not run "+mkdocsCmdLine+" (an echo of it is refused)")
+	}
+	if post < 0 {
+		out = append(out, "the preview build step does not run "+postCmd+" --mode preview --full-check (an echo of it is refused)")
+	}
+	if pre >= 0 && mk >= 0 && post >= 0 && !(pre < mk && mk < post) {
+		out = append(out, "the preview build step must run pre, then mkdocs, then post, in that order")
 	}
 	mustContain(&out, "the preview build step", prun, "| tee ")
 	if cwf, err := parseYAML(d, cloudflarePath); err != nil {
@@ -553,7 +655,7 @@ func TestCloudflareWorkflowGates(t *testing.T) {
 			return d.edit(t, cloudflarePath, "  smoke-production:\n", "  extra:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo hi\n\n  smoke-production:\n")
 		}, "exactly the jobs"},
 		{"the preview build status is masked by || true", func(t *testing.T, d docTree) docTree {
-			return d.edit(t, cloudflarePath, pyCmd("build_docs_cloudflare")+" --mode preview --full-check", pyCmd("build_docs_cloudflare")+" --mode preview --full-check || true")
+			return d.edit(t, cloudflarePath, mkdocsCmdLine, mkdocsCmdLine+" || true")
 		}, `the preview build step "Build and prepare validated preview assets" masks a failing command status ("|| true")`},
 		{"the preview build step sets continue-on-error", func(t *testing.T, d docTree) docTree {
 			return d.edit(t, cloudflarePath, "      - name: Build and prepare validated preview assets\n", "      - name: Build and prepare validated preview assets\n        continue-on-error: true\n")
@@ -561,11 +663,23 @@ func TestCloudflareWorkflowGates(t *testing.T) {
 		{"the preview build step carries if: false", func(t *testing.T, d docTree) docTree {
 			return d.edit(t, cloudflarePath, "      - name: Build and prepare validated preview assets\n", "      - name: Build and prepare validated preview assets\n        if: false\n")
 		}, "must not carry an if"},
-		{"the preview build is replaced by an echo", func(t *testing.T, d docTree) docTree {
-			return d.edit(t, cloudflarePath, pyCmd("build_docs_cloudflare")+" --mode preview --full-check", "echo "+pyCmd("build_docs_cloudflare")+" --mode preview --full-check")
-		}, "does not run"},
+		{"the pre step is replaced by an echo", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, cloudflarePath, preCmd+" --mode preview --full-check", "echo "+preCmd+" --mode preview --full-check")
+		}, "does not run " + preCmd},
+		{"the post step is replaced by an echo", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, cloudflarePath, postCmd+" --mode preview --full-check", "echo "+postCmd+" --mode preview --full-check")
+		}, "does not run " + postCmd},
+		{"the mkdocs line is replaced by an echo", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, cloudflarePath, "          "+mkdocsCmdLine, "          echo "+mkdocsCmdLine)
+		}, "does not run " + mkdocsCmdLine},
+		{"the mkdocs line is dropped", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, cloudflarePath, "          "+mkdocsCmdLine+" \\\n            2>&1 | tee -a .build/docs-cloudflare-build.log\n", "")
+		}, "does not run " + mkdocsCmdLine},
+		{"the post step is moved before mkdocs", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, cloudflarePath, "          "+mkdocsCmdLine+" \\\n            2>&1 | tee -a .build/docs-cloudflare-build.log\n          "+postCmd+" --mode preview --full-check \\\n", "          "+postCmd+" --mode preview --full-check \\\n            2>&1 | tee -a .build/docs-cloudflare-build.log\n          "+mkdocsCmdLine+" \\\n")
+		}, "pre, then mkdocs, then post"},
 		{"the preview build loses pipefail", func(t *testing.T, d docTree) docTree {
-			return d.edit(t, cloudflarePath, "          set -o pipefail\n          "+pyCmd("build_docs_cloudflare")+" --mode preview", "          "+pyCmd("build_docs_cloudflare")+" --mode preview")
+			return d.edit(t, cloudflarePath, "          set -o pipefail\n          "+preCmd, "          "+preCmd)
 		}, "set -o pipefail"},
 		{"preview-or-build gains a second setup-go step", func(t *testing.T, d docTree) docTree {
 			text, _ := d.read(cloudflarePath)
@@ -589,4 +703,64 @@ func TestCloudflareWorkflowGates(t *testing.T) {
 			return d.added(cloudflarePath, text[:i]+text[i+j:])
 		}, "preview-or-build must set up Go exactly once, found 0"},
 	})
+}
+
+// docsPreviewFindings: the preview job of docs-guards.yml reuses the site docs-guards validated and never builds it again.
+func docsPreviewFindings(wf map[string]any) []string {
+	var out []string
+	job := asMap(asMap(wf["jobs"])["docs-preview"])
+	if job == nil {
+		return []string{"missing the job docs-preview: a pull request would get no Cloudflare preview assets"}
+	}
+	if asString(job["needs"]) != "docs-guards" {
+		out = append(out, "docs-preview must need docs-guards (the site it reuses is that job's output)")
+	}
+	if asString(job["if"]) != "github.event_name == 'pull_request'" {
+		out = append(out, "docs-preview must run on pull requests only")
+	}
+	steps := workflowSteps(wf, "docs-preview")
+	out = append(out, maskFindings("docs-preview", job, steps)...)
+	downloads := 0
+	for _, s := range steps {
+		if strings.HasPrefix(asString(s["uses"]), "actions/download-artifact@") {
+			downloads++
+			if asString(asMap(s["with"])["name"]) != "docs-site-${{ github.sha }}" {
+				out = append(out, "docs-preview must download the validated site of its own revision (docs-site-${{ github.sha }})")
+			}
+			if _, ok := s["if"]; ok {
+				out = append(out, "the validated-site download must not carry an if")
+			}
+		}
+		run := strings.ToLower(asString(s["run"]))
+		for _, forbidden := range []string{"mkdocs", "pip ", "python", "scripts/", ".py", "docs-build"} {
+			if strings.Contains(run, forbidden) {
+				out = append(out, fmt.Sprintf("docs-preview must not build the site again or run Python (%q in step %q)", forbidden, asString(s["name"])))
+			}
+		}
+		if strings.HasPrefix(asString(s["uses"]), "actions/setup-python@") {
+			out = append(out, "docs-preview installs no Python, so it cannot build the site")
+		}
+	}
+	if downloads != 1 {
+		out = append(out, fmt.Sprintf("docs-preview must download the validated site once, found %d", downloads))
+	}
+	runs := stepRuns(steps)
+	for _, c := range []expectedCheck{
+		{"Check the validated site is for this revision", goCmd("check-validated-site"), []string{"--site-dir .build/docs", "--stamp .build/docs-validated.sha", `--revision "$GITHUB_SHA"`}},
+		{"Check candidate facts", goCmd("check-candidate-facts"), nil},
+		{"Prepare validated preview assets", "go run -trimpath -mod=readonly ./cmd/cigate docs-prepare", []string{"--source .build/docs", "--mode preview", `--source-revision "$GITHUB_SHA"`}},
+	} {
+		run, ok := runs[c.step]
+		if !ok {
+			out = append(out, fmt.Sprintf("docs-preview is missing the step %q", c.step))
+			continue
+		}
+		if !runsCommand(run, c.command, c.args...) {
+			out = append(out, fmt.Sprintf("docs-preview step %q does not run %q with %v", c.step, c.command, c.args))
+		}
+		if !strings.Contains(run, "set -o pipefail") || !strings.Contains(run, "| tee ") {
+			out = append(out, fmt.Sprintf("docs-preview step %q must stream through tee under set -o pipefail", c.step))
+		}
+	}
+	return out
 }

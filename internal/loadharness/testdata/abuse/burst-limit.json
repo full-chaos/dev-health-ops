@@ -4,7 +4,7 @@
     {
       "name": "login-burst", "method": "POST", "path": "/api/v1/auth/login",
       "headers": {"Content-Type": "application/json"},
-      "body": "{\"email\":\"loadtest-burst@example.invalid\",\"password\":\"wrong-password\"}",
+      "body": "{\"email\":\"loadtest-burst@example.com\",\"password\":\"wrong-password\"}",
       "expect_status": [401, 429], "forbid_status": [200], "forbid_5xx": true, "max_error_rate": 0, "require_status": [401, 429]
     }
   ]

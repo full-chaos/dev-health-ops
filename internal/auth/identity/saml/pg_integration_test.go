@@ -285,6 +285,14 @@ VALUES ($1, $2, $3, $4, $5, true, true, false, 0, now(), now())`, id, email, has
 	return id
 }
 
+// bindSSO binds a go-api SAML account to this provider row, as go-api writes it since pgmigrate revision 0155.
+func (h *harness) bindSSO(user uuid.UUID) {
+	h.t.Helper()
+	if _, err := h.db.admin.Exec(context.Background(), `UPDATE public.users SET sso_provider_id = $2 WHERE id = $1`, user, h.provider.ID); err != nil {
+		h.t.Fatal(err)
+	}
+}
+
 // linkedUser creates a projected account with an identity at this provider.
 func (h *harness) linkedUser(email, nameID string) uuid.UUID {
 	h.t.Helper()
@@ -633,6 +641,7 @@ func TestSAMLLegacyAccountSignsInBySubject(t *testing.T) {
 	email := uniqueEmail("legacy")
 	nameID := "legacy-" + uuid.NewString()
 	legacy := h.goAPIUser(email, "saml", &nameID, false)
+	h.bindSSO(legacy)
 
 	t.Run("not a member of the provider's organization", func(t *testing.T) {
 		for asserted, address := range map[string]string{"the account's email": email, "a free email": uniqueEmail("free")} {

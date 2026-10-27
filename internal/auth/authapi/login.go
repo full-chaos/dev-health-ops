@@ -55,7 +55,7 @@ type loginInput struct {
 // (internal/api/session/limits.go): EmailStr, a password of at most 128
 // characters and an optional organization id.
 func (h compatHandlers) readLogin(w http.ResponseWriter, r *http.Request) (loginInput, bool) {
-	body, ok := h.readCompatBody(w, r, opCompatLogin, h.bodyRefused(providerLocal))
+	body, ok := h.readCompatBody(w, r, opCompatLogin, h.loginBodyRefused(w, r))
 	if !ok {
 		return loginInput{}, false
 	}
@@ -69,7 +69,7 @@ func (h compatHandlers) readLogin(w http.ResponseWriter, r *http.Request) (login
 		}
 	}
 	if len(errs) > 0 {
-		h.refuseBody(w, r, opCompatLogin, h.bodyRefused(providerLocal), func() {
+		h.refuseBody(w, r, opCompatLogin, h.loginBodyRefused(w, r), func() {
 			policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail(errs), nil)
 		})
 		return loginInput{}, false
@@ -255,7 +255,9 @@ func (h compatHandlers) auditOrganization(ctx context.Context, principal uuid.UU
 // auditSignInFailed is the one path every refused sign-in (password or
 // social) writes its auth.login.failed row through. A known principal is
 // projected first, since the row references it; one go-api no longer holds is
-// recorded without a subject.
+// recorded without a subject. The row names the principal of every refused known
+// account whose go-api user can be projected, on purpose (go-api parity);
+// TestCompatLoginRefusalsTakeOneStepSequence pins the steps.
 func (h compatHandlers) auditSignInFailed(ctx context.Context, principal uuid.UUID, requested *uuid.UUID, reason, provider string) error {
 	org, err := h.auditOrganization(ctx, principal, requested)
 	if err != nil {
@@ -364,7 +366,7 @@ func (h compatHandlers) startSession(ctx context.Context, principalID uuid.UUID,
 		text := auditOrg.String()
 		event.OrganizationID = &text
 	}
-	return h.Sessions.CreateAudited(ctx, principalID, sessionOrg, amr, event)
+	return h.Sessions.CreateAudited(session.WithSignIn(ctx), principalID, sessionOrg, amr, event)
 }
 
 // userInfo is go-api's _to_user_info(user, membership).

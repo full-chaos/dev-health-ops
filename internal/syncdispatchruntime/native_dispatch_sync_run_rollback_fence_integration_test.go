@@ -143,7 +143,8 @@ func waitForBlockedOutboxLock(t *testing.T, ctx context.Context, pool *pgxpool.P
 		var waiting int
 		if err := pool.QueryRow(ctx, `
 			SELECT count(*) FROM pg_stat_activity
-			WHERE wait_event_type = 'Lock'
+			WHERE datname = current_database()
+			  AND wait_event_type = 'Lock'
 			  AND query LIKE '%LOCK TABLE public.worker_job_outbox%'`,
 		).Scan(&waiting); err != nil {
 			t.Fatal(err)

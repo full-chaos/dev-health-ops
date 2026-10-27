@@ -4,6 +4,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/egressallow"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
@@ -12,5 +13,5 @@ import (
 // golden: a frozen answer no test compares is a comparison that stopped.
 func TestMain(m *testing.M) {
 	egressallow.LocalTests()
-	os.Exit(venueoracle.RunTests(m))
+	os.Exit(containers.RunWithSharedServers(func() int { return venueoracle.RunTests(m) }))
 }

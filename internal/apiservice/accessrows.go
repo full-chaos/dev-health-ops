@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"slices"
 
+	"github.com/full-chaos/dev-health-go/authverify"
+
 	authv1 "github.com/full-chaos/dev-health-ops/contracts/auth/v1"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/auth/accessverify"
@@ -75,6 +77,8 @@ var errUnexpectedAccessResult = errors.New("access verify: result of an unexpect
 func (r routedAccessVerify) Validate(ctx context.Context, service, profile, bearer string) (*policy.RoutedResult, error) {
 	result, err := r.validator.Validate(ctx, service, profile, bearer)
 	switch {
+	case errors.Is(err, authverify.ErrKeySourceUnavailable):
+		return nil, fmt.Errorf("%w: %w", policy.ErrKeySourceUnavailable, err)
 	case errors.Is(err, accessverify.ErrUnavailable):
 		return nil, fmt.Errorf("%w: %w", policy.ErrUnavailable, err)
 	case err != nil:

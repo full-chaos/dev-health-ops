@@ -61,7 +61,7 @@ func Read(r *http.Request) (Body, Outcome, *Error, error) {
 	if len(raw) == 0 {
 		return Body{Missing: true}, Ready, nil, nil
 	}
-	if !wantsJSON(r.Header.Get("Content-Type")) {
+	if !WantsJSON(r.Header.Get("Content-Type")) {
 		text := string(raw)
 		return Body{Raw: &text}, Ready, nil, nil
 	}
@@ -89,9 +89,9 @@ func Read(r *http.Request) (Body, Outcome, *Error, error) {
 	return Body{Value: value}, Ready, nil, nil
 }
 
-// wantsJSON is FastAPI's rule: no content type, or application/json or
+// WantsJSON is FastAPI's rule: no content type, or application/json or
 // application/*+json.
-func wantsJSON(contentType string) bool {
+func WantsJSON(contentType string) bool {
 	if contentType == "" {
 		return true
 	}
@@ -212,6 +212,33 @@ func (e *Errors) OptionalString(object *pyjson.Object, name string, minLength, m
 		return "", false
 	}
 	return e.validateStringValue(raw, []pyjson.Value{"body", name}, minLength, maxLength)
+}
+
+// OptionalUTF8String is OptionalString(object, name, 0, 0) for a field whose
+// sink is strict UTF-8 text (a Postgres text column): a lone surrogate is
+// string_unicode, as on a bounded str, instead of being kept.
+func (e *Errors) OptionalUTF8String(object *pyjson.Object, name string) (string, bool) {
+	raw, ok := object.Get(name)
+	if !ok || raw == nil {
+		return "", false
+	}
+	loc := []pyjson.Value{"body", name}
+	if text, isString := raw.(string); isString && e.RefuseSurrogate(name, text) {
+		return "", false
+	}
+	return e.validateStringValue(raw, loc, 0, 0)
+}
+
+// RefuseSurrogate appends the string_unicode error for body field name and
+// reports true when text holds a lone surrogate. It is for a field read after
+// the provider lookup, where only the branch that uses the value is strict.
+func (e *Errors) RefuseSurrogate(name, text string) bool {
+	if !pyjson.HasSurrogate(text) {
+		return false
+	}
+	*e = append(*e, Error{Type: "string_unicode", Loc: []pyjson.Value{"body", name}, Input: text,
+		Msg: "Input should be a valid string, unable to parse raw data as a unicode string"})
+	return true
 }
 
 // RequiredString validates one required `str` field (no default) with

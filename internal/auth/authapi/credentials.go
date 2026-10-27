@@ -125,13 +125,13 @@ func CredentialRoutes(deps CredentialDeps) ([]httpapi.Route, error) {
 	}
 	write := goAPIRefusal
 	limited := func(validate httpapi.RequestValidator, limit httpapi.Limit, key httpapi.KeyFunc, next http.HandlerFunc) http.Handler {
-		return httpapi.ValidateThenLimit(validate, deps.Limits.limiter(limit), key, write)(next)
+		return httpapi.ValidateThenLimitDependency(validate, deps.Limits.limiter(limit), key, write)(next)
 	}
 	// mailLimited is limited with a per-client-address cap in front of the
 	// per-account budget: validate, the address cap, the account budget.
 	mailLimited := func(validate httpapi.RequestValidator, ipLimit, accountLimit httpapi.Limit, next http.HandlerFunc) http.Handler {
-		account := httpapi.LimitWith(deps.Limits.limiter(accountLimit), h.credentialAuthKey, write)(next)
-		return httpapi.ValidateThenLimit(validate, deps.Limits.limiter(ipLimit), clientKey, write)(account)
+		account := httpapi.LimitWithDependency(deps.Limits.limiter(accountLimit), h.credentialAuthKey, write)(next)
+		return httpapi.ValidateThenLimitDependency(validate, deps.Limits.limiter(ipLimit), clientKey, write)(account)
 	}
 	h.resetIP, h.resetToken = deps.Limits.limiter(resetIPLimit), deps.Limits.limiter(resetTokenLimit)
 	h.change = limited(h.validateChange, changePasswordLimit, h.changePasswordKey, h.changePassword)

@@ -109,13 +109,13 @@ func (s FileSource) Sign(ctx context.Context, kid string, message []byte) ([]byt
 		return nil, failure(ReasonKeyUnknown, nil)
 	}
 	if s.States == nil {
-		return signWithFile(s.Path, message)
+		return signWithFile(ctx, s.Reads, s.Path, message)
 	}
 	key, err := s.effectiveActive(ctx)
 	if err != nil {
 		return nil, err
 	}
-	signature, signer, err := signWithFileKey(s.Path, message)
+	signature, signer, err := signWithFileKey(ctx, s.Reads, s.Path, message)
 	if err != nil {
 		return nil, err
 	}
@@ -139,15 +139,15 @@ func (s FileSource) effectiveActive(ctx context.Context) (Key, error) {
 	return keys[0], nil
 }
 
-func signWithFile(path string, message []byte) ([]byte, error) {
-	signature, _, err := signWithFileKey(path, message)
+func signWithFile(ctx context.Context, reads *FileReads, path string, message []byte) ([]byte, error) {
+	signature, _, err := signWithFileKey(ctx, reads, path, message)
 	return signature, err
 }
 
 // signWithFileKey signs and also returns the public half of the key that
 // signed, so a caller can check it is the key it read before.
-func signWithFileKey(path string, message []byte) ([]byte, ed25519.PublicKey, error) {
-	pemBytes, err := readCustodiedFile(path, MaxKeyFileBytes)
+func signWithFileKey(ctx context.Context, reads *FileReads, path string, message []byte) ([]byte, ed25519.PublicKey, error) {
+	pemBytes, err := reads.readFile(ctx, path, MaxKeyFileBytes)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -180,6 +180,7 @@ type FileCustody struct {
 	manifestPath string
 	states       StateOverride
 	compromised  *latch
+	reads        *FileReads
 }
 
 // NewFileCustody returns custody for the manifest at path.
@@ -190,7 +191,13 @@ func NewFileCustody(path string) *FileCustody {
 // NewFileCustodyWithStates returns custody for the manifest at path whose key
 // states come from states (nil: the manifest's own).
 func NewFileCustodyWithStates(path string, states StateOverride) *FileCustody {
-	return &FileCustody{manifestPath: path, states: states, compromised: &latch{kids: map[string]bool{}, publics: map[string]bool{}}}
+	return NewFileCustodyWithReads(path, states, &FileReads{})
+}
+
+// NewFileCustodyWithReads is NewFileCustodyWithStates with the file reader
+// the custody shares.
+func NewFileCustodyWithReads(path string, states StateOverride, reads *FileReads) *FileCustody {
+	return &FileCustody{manifestPath: path, states: states, compromised: &latch{kids: map[string]bool{}, publics: map[string]bool{}}, reads: reads}
 }
 
 var _ Custody = (*FileCustody)(nil)
@@ -274,7 +281,7 @@ func (c *FileCustody) readSet(ctx context.Context) ([]manifestEntry, []Key, erro
 	keys := make([]Key, 0, len(entries))
 	publics := map[string]bool{}
 	for _, entry := range entries {
-		pemBytes, err := readCustodiedFile(c.keyPath(entry), MaxKeyFileBytes)
+		pemBytes, err := c.reads.readFile(ctx, c.keyPath(entry), MaxKeyFileBytes)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -312,7 +319,7 @@ func (c *FileCustody) Sign(ctx context.Context, kid string, message []byte) ([]b
 	if beforeSign != nil {
 		beforeSign()
 	}
-	signature, signer, err := signWithFileKey(c.keyPath(entry), message)
+	signature, signer, err := signWithFileKey(ctx, c.reads, c.keyPath(entry), message)
 	if err != nil {
 		return nil, err
 	}
@@ -380,11 +387,11 @@ func (c *FileCustody) load(ctx context.Context) ([]manifestEntry, error) {
 	if c.manifestPath == "" {
 		return nil, failure(ReasonPathUnconfigured, nil)
 	}
-	raw, err := readCustodiedFile(c.manifestPath, MaxManifestBytes)
+	raw, err := c.reads.readFile(ctx, c.manifestPath, MaxManifestBytes)
 	if err != nil {
 		return nil, err
 	}
-	c.latchCompromisedEntries(raw)
+	c.latchCompromisedEntries(ctx, raw)
 	return parseManifest(raw)
 }
 
@@ -398,7 +405,7 @@ func (c *FileCustody) load(ctx context.Context) ([]manifestEntry, error) {
 // other error is ignored. Not reached, and refused whole by the strict parse:
 // content after the first syntax error, a top level that is not an object, a
 // "keys" value that is not an array, a byte-order mark.
-func (c *FileCustody) latchCompromisedEntries(raw []byte) {
+func (c *FileCustody) latchCompromisedEntries(ctx context.Context, raw []byte) {
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	if token, err := decoder.Token(); err != nil || token != json.Delim('{') {
 		return
@@ -425,7 +432,7 @@ func (c *FileCustody) latchCompromisedEntries(raw []byte) {
 			continue
 		}
 		for decoder.More() {
-			if !c.latchEntry(decoder) {
+			if !c.latchEntry(ctx, decoder) {
 				return
 			}
 		}
@@ -437,7 +444,7 @@ func (c *FileCustody) latchCompromisedEntries(raw []byte) {
 
 // latchEntry reads one keys[] element and latches it when it is a compromised
 // entry, also when a syntax error ends it early (then it returns false).
-func (c *FileCustody) latchEntry(decoder *json.Decoder) bool {
+func (c *FileCustody) latchEntry(ctx context.Context, decoder *json.Decoder) bool {
 	token, err := decoder.Token()
 	if err != nil {
 		return false
@@ -458,7 +465,7 @@ func (c *FileCustody) latchEntry(decoder *json.Decoder) bool {
 			if !bareFileName(file) {
 				continue
 			}
-			pemBytes, err := readCustodiedFile(c.keyPath(manifestEntry{File: file}), MaxKeyFileBytes)
+			pemBytes, err := c.reads.readFile(ctx, c.keyPath(manifestEntry{File: file}), MaxKeyFileBytes)
 			if err != nil {
 				continue
 			}

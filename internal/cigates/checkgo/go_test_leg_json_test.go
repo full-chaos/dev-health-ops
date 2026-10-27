@@ -35,10 +35,9 @@ for p in "${pkgs[@]}"; do
   rel="${p#"${mod}/"}"
   if grep -q "^${rel}"$'\t' "${FAKE_CENSUS}"; then mode_here=""; else mode_here="${mode}"; fi
   case "${mode_here}" in
-    raw-ok|raw-fail) printf 'RAWLINE-NOT-JSON %s\n' "${rel}" ;;
+    raw-ok|mixed-fail) printf 'RAWLINE-NOT-JSON %s\n' "${rel}" ;;
   esac
-  if [ "${mode_here}" = raw-fail ]; then rc=1; continue; fi
-  if [ "${mode_here}" = fail-event ] && [ "${done_fail-0}" = 0 ]; then
+  if [ "${mode_here}" = mixed-fail ] && [ "${done_fail-0}" = 0 ]; then
     done_fail=1
     printf '{"Action":"output","Package":"%s","Test":"TestPasses","Output":"PASSING-OUTPUT\\n"}\n' "${p}"
     printf '{"Action":"pass","Package":"%s","Test":"TestPasses","Elapsed":0.25}\n' "${p}"
@@ -74,7 +73,7 @@ func runLegWithFakeGo(t *testing.T, leg string, shard int, mode string) (cmdResu
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(bin, "go"), []byte(legFakeGo), 0o755); err != nil {
+	if err := os.WriteFile(filepath.Join(bin, "go"), []byte(withGoListCache(legFakeGo, realGo)), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	legDir := filepath.Join(work, "leg-json")
@@ -146,86 +145,78 @@ func itoa(n int) string {
 	return string(b)
 }
 
-func TestALegKeepsANonJSONLineAndStaysGreenOnExitZero(t *testing.T) {
+// One stand-in leg run per case (each run is a whole `ci-leg` stage, about 4 s, and the package runs them one at a time): the
+// two legs differ in their stage function, so the stream cases that depend on it run on both; the helper is one function, so the
+// two failure-plumbing cases run on the test leg only (the call-site guard below pins the race sites).
+func TestTheLegStageKeepsGoTestsVerdictAndEveryOutputLine(t *testing.T) {
 	t.Parallel()
-	for _, leg := range []string{"test", "race"} {
-		res, _ := runLegWithFakeGo(t, leg, 1, "raw-ok")
-		if res.code != 0 {
-			t.Fatalf("%s leg: go test printed a non-JSON line and exited 0, the leg exited %d: %s", leg, res.code, tail(res.stderr, 1200)+"\n--- stdout:\n"+tail(res.stdout, 800))
-		}
-		if !strings.Contains(res.stdout, "RAWLINE-NOT-JSON") {
-			t.Errorf("%s leg: the non-JSON line is not in the plain log: %s", leg, tail(res.stdout, 800))
-		}
+	const passShaped = "--- PASS: this is real output from a failing test"
+	for _, c := range []struct {
+		name, leg, mode string
+		check           func(t *testing.T, res cmdResult, legJSON string)
+	}{
+		{"test leg, non-JSON line, exit 0: green, the line is in the log", "test", "raw-ok", greenWithRawLine},
+		{"race leg, non-JSON line, exit 0: green, the line is in the log", "race", "raw-ok", greenWithRawLine},
+		{"test leg, non-JSON line + fail event, exit 1: red, every line kept, Elapsed in the leg file", "test", "mixed-fail", redWithEveryLine(passShaped)},
+		{"race leg, non-JSON line + fail event, exit 1: red, every line kept, Elapsed in the leg file", "race", "mixed-fail", redWithEveryLine(passShaped)},
+		{"test leg, converter fails: red, named, the raw stream is in the plain log", "test", "jq-fail", func(t *testing.T, res cmdResult, _ string) {
+			if res.code == 0 {
+				t.Fatalf("the JSON converter failed and the leg exited 0: %s", tail(res.stderr, 1200))
+			}
+			if !strings.Contains(res.stderr, "go_test_leg: JSON converter failed") {
+				t.Errorf("the failure does not name the converter: %s", tail(res.stderr, 800))
+			}
+			if !strings.Contains(res.stdout, `"Action":"output"`) {
+				t.Errorf("the raw stream is not in the plain log after the converter failed: %s", tail(res.stdout, 600))
+			}
+		}},
+		{"test leg, raw file unwritable: red, named", "test", "raw-full", func(t *testing.T, res cmdResult, _ string) {
+			if res.code == 0 {
+				t.Fatalf("the raw file could not be written and the leg exited 0: %s", tail(res.stderr, 1200))
+			}
+			if !strings.Contains(res.stderr, "go_test_leg: the raw file write failed") {
+				t.Errorf("the failure does not name the raw file: %s", tail(res.stderr, 800))
+			}
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			res, legJSON := runLegWithFakeGo(t, c.leg, 1, c.mode)
+			c.check(t, res, legJSON)
+		})
 	}
 }
 
-func TestALegStaysRedWhenGoTestExitsOneAfterANonJSONLine(t *testing.T) {
-	t.Parallel()
-	for _, leg := range []string{"test", "race"} {
-		res, _ := runLegWithFakeGo(t, leg, 1, "raw-fail")
-		if res.code == 0 {
-			t.Fatalf("%s leg: go test exited 1 and the leg exited 0 (the converter decided the verdict): %s", leg, tail(res.stderr, 1200)+"\n--- stdout:\n"+tail(res.stdout, 800))
-		}
-		if !strings.Contains(res.stdout, "RAWLINE-NOT-JSON") {
-			t.Errorf("%s leg: the non-JSON line is not in the plain log", leg)
-		}
+func greenWithRawLine(t *testing.T, res cmdResult, _ string) {
+	t.Helper()
+	if res.code != 0 {
+		t.Fatalf("go test printed a non-JSON line and exited 0, the leg exited %d: %s", res.code, tail(res.stderr, 1200)+"\n--- stdout:\n"+tail(res.stdout, 800))
+	}
+	if !strings.Contains(res.stdout, "RAWLINE-NOT-JSON") {
+		t.Errorf("the non-JSON line is not in the plain log: %s", tail(res.stdout, 800))
 	}
 }
 
-func TestALegWithAFailEventIsRedKeepsElapsedAndEveryOutputLine(t *testing.T) {
-	t.Parallel()
-	for _, leg := range []string{"test", "race"} {
-		res, legJSON := runLegWithFakeGo(t, leg, 1, "fail-event")
+func redWithEveryLine(passShaped string) func(t *testing.T, res cmdResult, legJSON string) {
+	return func(t *testing.T, res cmdResult, legJSON string) {
+		t.Helper()
 		if res.code == 0 {
-			t.Fatalf("%s leg: go test exited 1 with a fail event and the leg exited 0: %s", leg, tail(res.stderr, 1200)+"\n--- stdout:\n"+tail(res.stdout, 800))
+			t.Fatalf("go test exited 1 and the leg exited 0: %s", tail(res.stderr, 1200)+"\n--- stdout:\n"+tail(res.stdout, 800))
 		}
-		if !strings.Contains(legJSON, `"Action":"fail"`) || !strings.Contains(legJSON, `"Test":"TestBreaks"`) || !strings.Contains(legJSON, `"Elapsed":0.5`) {
-			t.Errorf("%s leg: the leg JSON lacks the fail event with its Elapsed: %q", leg, tail(legJSON, 600))
+		if !strings.Contains(res.stdout, "RAWLINE-NOT-JSON") {
+			t.Errorf("the non-JSON line is not in the plain log")
 		}
-		if !strings.Contains(legJSON, `"Elapsed":0.25`) {
-			t.Errorf("%s leg: the leg JSON lacks the passing test's Elapsed: %q", leg, tail(legJSON, 600))
-		}
-		if !strings.Contains(res.stdout, "FAILING-OUTPUT") {
-			t.Errorf("%s leg: the failing test's output is not in the plain log: %s", leg, tail(res.stdout, 800))
+		if !strings.Contains(legJSON, `"Action":"fail"`) || !strings.Contains(legJSON, `"Test":"TestBreaks"`) || !strings.Contains(legJSON, `"Elapsed":0.5`) || !strings.Contains(legJSON, `"Elapsed":0.25`) {
+			t.Errorf("the leg file lacks the fail event or a passing test's Elapsed: %q", tail(legJSON, 600))
 		}
 		pass, fail := strings.Index(res.stdout, "PASSING-OUTPUT"), strings.Index(res.stdout, "FAILING-OUTPUT")
 		if pass < 0 || fail < 0 || pass > fail {
-			t.Errorf("%s leg: a passing test's output (at %d) must be in the plain log before the failing test's (at %d), as the stream has them", leg, pass, fail)
+			t.Errorf("a passing test's output (at %d) must be in the plain log before the failing test's (at %d), as the stream has them", pass, fail)
 		}
-		if !strings.Contains(res.stdout, "--- PASS: this is real output from a failing test") {
-			t.Errorf("%s leg: a line of a failing test that starts with \"--- PASS:\" is missing from the plain log", leg)
+		if !strings.Contains(res.stdout, passShaped) {
+			t.Errorf("a line of a failing test that starts with \"--- PASS:\" is missing from the plain log")
 		}
 		if !strings.Contains(res.stdout, "FAIL\t") {
-			t.Errorf("%s leg: the package FAIL line is not in the plain log", leg)
-		}
-	}
-}
-
-func TestALegWhenTheConverterFailsIsRedAndTheLogHoldsTheRawStream(t *testing.T) {
-	t.Parallel()
-	for _, leg := range []string{"test", "race"} {
-		res, _ := runLegWithFakeGo(t, leg, 1, "jq-fail")
-		if res.code == 0 {
-			t.Fatalf("%s leg: the JSON converter failed and the leg exited 0: %s", leg, tail(res.stderr, 1200))
-		}
-		if !strings.Contains(res.stderr, "go_test_leg: JSON converter failed") {
-			t.Errorf("%s leg: the failure does not name the converter: %s", leg, tail(res.stderr, 800))
-		}
-		if !strings.Contains(res.stdout, `"Action":"output"`) {
-			t.Errorf("%s leg: the raw stream is not in the plain log after the converter failed: %s", leg, tail(res.stdout, 600))
-		}
-	}
-}
-
-func TestALegWithAnUnwritableRawFileIsRedWithANamedError(t *testing.T) {
-	t.Parallel()
-	for _, leg := range []string{"test", "race"} {
-		res, _ := runLegWithFakeGo(t, leg, 1, "raw-full")
-		if res.code == 0 {
-			t.Fatalf("%s leg: the raw file could not be written and the leg exited 0: %s", leg, tail(res.stderr, 1200))
-		}
-		if !strings.Contains(res.stderr, "go_test_leg: the raw file write failed") {
-			t.Errorf("%s leg: the failure does not name the raw file: %s", leg, tail(res.stderr, 800))
+			t.Errorf("the package FAIL line is not in the plain log")
 		}
 	}
 }

@@ -58,7 +58,6 @@ internal/providersync/chunked_wall_bound_test.go	TestChunkedAttemptWallBoundUses
 internal/providersync/chunked_wall_bound_test.go	TestNonStreamingChunkedExecutorStopsOnTheWallBoundAndReportsElapsed	not wall time: fake clock (internal/providersync/chunked_wall_bound_test.go:359)
 internal/providersync/inprocess_test.go	TestInProcessBackoffGateWaitsOutAPenaltyAndCapsIt	measured hosted margin 10.0 (>= 3), CHAOS-11684 census
 internal/providersync/inprocess_test.go	TestInProcessGatePenaltyClearsOnTheWallClockAndTheRequestGoesOut	lower-bound wait proof: load only lengthens it
-internal/providersync/jira_atlassian_comments_default_test.go	TestJiraAtlassianCommentsOneBlockedReadEndsAtTheStopTime	pending CHAOS-11684 conversion
 internal/providersync/ownership_interval_compaction_integration_test.go	TestCompactOwnershipIntervalsPlanTimeoutWritesNothing	measured hosted margin 4.1 (>= 3), CHAOS-11684 census
 internal/providersync/ownership_interval_compaction_scale_test.go	TestCompactionPlanStopsAtItsDeadline	measured hosted margin 6.6 (>= 3), CHAOS-11684 census
 internal/providersync/request_usage_test.go	TestOfferDropsAndCountsWhenTheQueueIsFull	measured hosted margin 100.0 (>= 3), CHAOS-11684 census

@@ -455,13 +455,14 @@ func TestJiraAtlassianCommentsExplicitZeroLimitIsStillBoundedByBudget(t *testing
 // work item still lands (before the fix the read ran to the unit deadline and
 // the next changelog read failed: error, zero effects).
 func TestJiraAtlassianCommentsOneBlockedReadEndsAtTheStopTime(t *testing.T) {
+	// The blocked read ends at the stop (half the window, jira_atlassian_route.go:513); a read that ran to the unit
+	// deadline would lose every work item, so the work item rows and the markers are the oracle, with no clock compare.
 	doer := &jiraBudgetDoer{t: t, issues: 5, perIssue: 3, commentDelay: time.Hour}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
 	defer cancel()
-	started := time.Now()
 	batch := collectJiraCommentsCtx(t, ctx, jiraCommentsClaim(nil), doer.Do)
-	if elapsed := time.Since(started); elapsed >= time.Second {
-		t.Fatalf("unit ran into its deadline: %v", elapsed)
+	if doer.comments != 1 {
+		t.Fatalf("comment reads=%d want 1: only the first read starts before the stop, the rest are time-skipped", doer.comments)
 	}
 	if got := jiraWorkItemEffectRows(t, batch); got != 5 {
 		t.Fatalf("work item rows=%d want=5", got)

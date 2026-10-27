@@ -111,7 +111,8 @@ func TestEveryAttributeKeyHasAClosedValueRule(t *testing.T) {
 		_, enumerated := vocab[key]
 		_, isID := attributeIDRules[key]
 		_, isNumber := attributeNumberKeys[key]
-		if n := b2i(enumerated) + b2i(isID) + b2i(isNumber); n != 1 {
+		_, isList := attributeListRules[key]
+		if n := b2i(enumerated) + b2i(isID) + b2i(isNumber) + b2i(isList); n != 1 {
 			t.Errorf("attribute key %q has %d value rules, want exactly 1", key, n)
 		}
 	}
@@ -181,6 +182,47 @@ func TestSessionIssuedAttributesAreAllowed(t *testing.T) {
 		"another source": {"source": "web"},
 		"unknown amr":    {"amr": []string{"password"}},
 		"empty amr":      {"amr": []string{}},
+	} {
+		if err := ValidateAttributes(bad); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}
+
+// The auth.workload.token_issued row: exactly the jti, the principal, the
+// binding, the registry revision, the audience and the narrowed actions. No
+// key holds token, claim or key bytes.
+func TestWorkloadTokenIssuedAttributesAreAllowed(t *testing.T) {
+	ok := map[string]any{
+		"jti": "3f2504e0-4f89-41d3-9a0c-0305e82c3301", "principal_id": "6f1c2d3e-4a5b-4c6d-8e7f-901a2b3c4d5e",
+		"binding_id": "7a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d", "revision": int64(3), "audience": "auth-service",
+		"actions": []string{"workloads.read", "repositories.contents.read"},
+	}
+	if err := ValidateAttributes(ok); err != nil {
+		t.Fatalf("the issued workload token attributes are refused: %v", err)
+	}
+	if err := ValidateAttributes(map[string]any{"actions": []string{}}); err != nil {
+		t.Fatalf("an empty action list is refused: %v", err)
+	}
+	if !appendOnlyEventTypes[EventWorkloadTokenIssued] {
+		t.Fatal("auth.workload.token_issued is not append-only")
+	}
+	tooMany := make([]string, maxAttributeListLength+1)
+	for i := range tooMany {
+		tooMany[i] = "workloads.read"
+	}
+	for name, bad := range map[string]map[string]any{
+		"jti not a uuid":           {"jti": "eyJhbGciOiJFZERTQSJ9"},
+		"principal wire id":        {"principal_id": "prn_AAAA"},
+		"binding not a uuid":       {"binding_id": "binding-1"},
+		"revision as text":         {"revision": "3"},
+		"audience not a workload":  {"audience": "query-api"},
+		"action with a token":      {"actions": []string{"eyJhbGciOiJFZERTQSJ9.eyJ"}},
+		"action as text":           {"actions": "workloads.read"},
+		"action list over the cap": {"actions": tooMany},
+		"a token key":              {"access_token": "x"},
+		"a subject token key":      {"subject_token": "x"},
+		"a service account key":    {"service_account_name": "dev-health-go-api"},
 	} {
 		if err := ValidateAttributes(bad); err == nil {
 			t.Errorf("%s: accepted", name)

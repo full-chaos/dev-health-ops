@@ -10,7 +10,8 @@
     },
     {
       "name": "refresh", "method": "POST", "path": "/v1/token/refresh", "weight": 1,
-      "header_env": {"Authorization": {"env": "LOADTEST_REFRESH_CREDENTIAL", "prefix": "Bearer "}}
+      "headers": {"Content-Type": "application/json"},
+      "body": "{\"schema_version\":\"refresh-request.v1\",\"refresh_credential\":\"${ENV:LOADTEST_REFRESH_CREDENTIAL}\"}"
     }
   ]
 }

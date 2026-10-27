@@ -79,3 +79,53 @@ func TestSyncSchedulerLoopReceivesTheComposedLoggerFromSchedulerCompositionRoot(
 		t.Fatalf("composed logger output omitted the failure cause: %s", output)
 	}
 }
+
+// TestProductionSchedulerLoopGetsARetryBudgetAndEveryRetryFunc proves the
+// startup retry cannot ship switched off: the config the production loader
+// returns with no environment set reaches the sync loop with a budget above
+// zero and every retry func set.
+func TestProductionSchedulerLoopGetsARetryBudgetAndEveryRetryFunc(t *testing.T) {
+	cfg, err := config.Load(config.Spec{
+		Service:   schedulerSpec.Service,
+		LookupEnv: func(string) (string, bool) { return "", false },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	database := &fakeSchedulerDatabase{pool: &pgxpool.Pool{}, coordinatorPool: &pgxpool.Pool{}}
+	var captured schedulersync.LoopConfig
+	sources := schedulerRuntimeSources{
+		openDatabase: func(context.Context, config.Config) (schedulerDatabase, error) { return database, nil },
+		newRepository: func(*pgxpool.Pool) (schedulersync.HandoffStepper, error) {
+			return schedulerHandoffStepperFunc(func(
+				context.Context, time.Time, int, schedulersync.Coordinator,
+			) (schedulersync.HandoffResult, error) {
+				return schedulersync.HandoffResult{}, nil
+			}), nil
+		},
+		newCoordinator: func() schedulersync.Coordinator {
+			return schedulersync.CoordinatorFunc(func(
+				context.Context, schedulersync.HandoffTransaction, schedulersync.Occurrence,
+			) (schedulersync.HandoffOutcome, error) {
+				return schedulersync.OccurrenceMinted, nil
+			})
+		},
+		newLoop: func(stepper schedulersync.HandoffStepper, coordinator schedulersync.Coordinator, config schedulersync.LoopConfig) (*schedulersync.Loop, error) {
+			captured = config
+			return schedulersync.NewLoop(stepper, coordinator, config)
+		},
+		newOccurrences: stubOccurrenceSource,
+		newFixedLoop: func(*pgxpool.Pool, *health.Registry, *slog.Logger) (fixedScheduleRuntime, error) {
+			return &fakeFixedLoop{}, nil
+		},
+	}
+	if _, err := buildSchedulerLoopWithSources(context.Background(), cfg, health.NewRegistry(readinessTestCheckTimeout), sources, slog.New(slog.NewJSONHandler(&bytes.Buffer{}, nil))); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.PreclaimReadinessTimeout <= 0 || captured.StartupRetryBudget != cfg.PreclaimReadinessTimeout {
+		t.Fatalf("budget = %v, want the production default %v above zero", captured.StartupRetryBudget, cfg.PreclaimReadinessTimeout)
+	}
+	if captured.StartupRetry == nil || captured.MaskUnreachable == nil || captured.StartupJitter == nil {
+		t.Fatalf("the sync loop is missing a retry func: %+v", captured)
+	}
+}

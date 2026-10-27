@@ -25,16 +25,18 @@ func (s IdentityStore) IdentityBySubject(ctx context.Context, id Identity, legac
 	}
 	p, found, err := s.Identities.IdentityBySubject(ctx, id.Issuer, identity.Provider(id.Provider), id.Subject, match)
 	if err != nil || !found {
-		return Principal{}, false, lookupError(err)
+		return Principal{}, false, LookupError(err)
 	}
-	out := Principal{ID: p.ID, Disabled: p.DisabledAt != nil || !p.IsActive}
+	out := Principal{ID: p.ID, Disabled: p.DisabledAt != nil || !p.IsActive, ServiceProvider: p.ServiceProvider}
 	return out, true, nil
 }
 
-// lookupError is the SAML error for an identity store lookup error.
-func lookupError(err error) error {
+// LookupError is the SAML error for an identity store lookup error: more than one account carrying the subject, or
+// an account that already holds another subject at the provider row, is ErrIdentityAmbiguous (the refuse path); one
+// outside the provider organization is ErrNotOrgMember. Every saml.Store over the identity store maps through it.
+func LookupError(err error) error {
 	switch {
-	case errors.Is(err, identity.ErrMultipleUsers):
+	case errors.Is(err, identity.ErrMultipleUsers), errors.Is(err, identity.ErrProviderAlreadyLinked):
 		return ErrIdentityAmbiguous
 	case errors.Is(err, identity.ErrLegacyNotMember):
 		return ErrNotOrgMember
@@ -44,7 +46,7 @@ func lookupError(err error) error {
 
 // NormalizeEmail is the identity store's email rule.
 func (s IdentityStore) NormalizeEmail(raw string) (string, error) {
-	return identity.NormalizeEmail(raw)
+	return identity.NormalizeFederatedEmail(raw)
 }
 
 // PrincipalByEmail reports the account holding email and the sign-in method

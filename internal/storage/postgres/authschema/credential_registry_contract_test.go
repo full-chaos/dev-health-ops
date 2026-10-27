@@ -63,6 +63,11 @@ func TestCredentialScopeShapeMatchesThePrincipalContract(t *testing.T) {
 	}
 }
 
+// checkOnlyRetiredClasses are classes removed from principal.v1 and the
+// registry (CHAOS-6761) that the CHECK still admits: migrations 0008/0017/0022/0023
+// are immutable, and a superset CHECK is harmless. The CHECK must still carry each.
+var checkOnlyRetiredClasses = []string{"worker_operational_bridge_token"}
+
 // TestCredentialClassCheckEqualsThePrincipalContractsVocabulary: migration 0008
 // closes credential_class (the last migration that redefines the CHECK, 0017,
 // is the one compared) to the vocabulary principal.v1 carries, so a stored
@@ -91,6 +96,7 @@ func TestCredentialClassCheckEqualsThePrincipalContractsVocabulary(t *testing.T)
 	if len(want) == 0 {
 		t.Fatal("principal.v1 declares no credential classes; the comparison would be vacuous")
 	}
+	want = append(append([]string{}, want...), checkOnlyRetiredClasses...)
 	migrations, err := Migrations()
 	if err != nil {
 		t.Fatal(err)

@@ -2,6 +2,7 @@ package identity
 
 import (
 	"errors"
+	"strings"
 	"unicode/utf8"
 
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
@@ -25,4 +26,15 @@ func NormalizeEmail(raw string) (string, error) {
 		return "", ErrInvalidEmail
 	}
 	return pythonparity.Strip(pythonparity.Lower(string(normalized))), nil
+}
+
+// NormalizeFederatedEmail is NormalizeEmail for an address a provider or IdP
+// reports. It also refuses U+FFFD anywhere: encoding/json turns a lone
+// surrogate escape into it, so the result is not the provider's address, and a
+// real one is no mailbox of ours. Local sign-in keeps NormalizeEmail.
+func NormalizeFederatedEmail(raw string) (string, error) {
+	if strings.ContainsRune(raw, utf8.RuneError) {
+		return "", ErrInvalidEmail
+	}
+	return NormalizeEmail(raw)
 }

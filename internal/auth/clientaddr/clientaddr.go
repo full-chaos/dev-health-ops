@@ -3,7 +3,10 @@
 //
 // The address is the socket peer, unless the peer is a configured trusted
 // proxy (AUTH_SERVICE_TRUSTED_PROXIES) that sent exactly one X-Forwarded-For
-// value holding exactly one address: then it is that address. The go-api
+// value holding exactly one address: then it is that address. An excluded
+// address ("!<address>" entry) is never a proxy, even inside a listed network:
+// the node pod range holds the node's own addresses, from which a host process
+// or a hostNetwork pod reaches the service. The go-api
 // proxy sends one value it resolved itself (internal/apiservice/authproxy.go),
 // so a chain, a second header or an unparsable value is not a proxy's answer
 // and falls back to the peer. X-Forwarded-Proto and the other forwarded
@@ -32,17 +35,25 @@ const Env = "AUTH_SERVICE_TRUSTED_PROXIES"
 type Trust struct {
 	addrs    map[netip.Addr]bool
 	prefixes []netip.Prefix
+	except   map[netip.Addr]bool
 }
 
-// ParseTrust reads a comma-separated list of IP addresses and networks. A
-// network must be a strict CIDR (no host bits). An empty value trusts no
-// peer. "*", a hostname, an empty entry or a non-strict CIDR is an error, so
-// a typo cannot widen the trust.
+// ParseTrust reads a comma-separated list of IP addresses, networks and
+// exclusions. A network must be a strict CIDR (no host bits). An exclusion is
+// "!" and one IP address, never a network or an IPv4-mapped form; it must lie
+// inside a listed network and must not also be listed as an address. An empty
+// value trusts no peer. "*", a hostname, an empty entry, a non-strict CIDR or a
+// bad exclusion is an error, so a typo cannot widen the trust.
 func ParseTrust(value string) (Trust, error) {
-	t := Trust{addrs: map[netip.Addr]bool{}}
+	t := Trust{addrs: map[netip.Addr]bool{}, except: map[netip.Addr]bool{}}
 	if strings.TrimSpace(value) == "" {
 		return t, nil
 	}
+	type exclusion struct {
+		addr  netip.Addr
+		entry int
+	}
+	var exclusions []exclusion
 	for index, raw := range strings.Split(value, ",") {
 		entry := strings.TrimSpace(raw)
 		switch {
@@ -50,6 +61,15 @@ func ParseTrust(value string) (Trust, error) {
 			return Trust{}, fmt.Errorf("%s entry %d is empty", Env, index+1)
 		case entry == "*":
 			return Trust{}, fmt.Errorf("%s entry %d is \"*\": name each proxy address or network", Env, index+1)
+		case strings.HasPrefix(entry, "!"):
+			addr, err := netip.ParseAddr(entry[1:])
+			if err != nil || addr.Zone() != "" {
+				return Trust{}, fmt.Errorf("%s entry %d is not an excluded IP address (\"!\" and one address, never a network)", Env, index+1)
+			}
+			if addr.Is4In6() {
+				return Trust{}, fmt.Errorf("%s entry %d is an IPv4-mapped exclusion: give it as IPv4", Env, index+1)
+			}
+			exclusions = append(exclusions, exclusion{addr, index + 1})
 		case strings.Contains(entry, "/"):
 			prefix, err := netip.ParsePrefix(entry)
 			if err != nil || prefix.Addr().Zone() != "" {
@@ -70,22 +90,38 @@ func ParseTrust(value string) (Trust, error) {
 			t.addrs[addr.Unmap()] = true
 		}
 	}
+	for _, x := range exclusions {
+		if t.addrs[x.addr] {
+			return Trust{}, fmt.Errorf("%s entry %d excludes an address the list also trusts", Env, x.entry)
+		}
+		if !t.inPrefixes(x.addr) {
+			return Trust{}, fmt.Errorf("%s entry %d excludes an address outside every listed network", Env, x.entry)
+		}
+		t.except[x.addr] = true
+	}
 	return t, nil
 }
 
-// Len is the number of trusted entries.
+// Len is the number of trusted entries; exclusions are not counted.
 func (t Trust) Len() int { return len(t.addrs) + len(t.prefixes) }
 
-func (t Trust) trusts(peer netip.Addr) bool {
-	if t.addrs[peer] {
-		return true
-	}
+func (t Trust) inPrefixes(peer netip.Addr) bool {
 	for _, prefix := range t.prefixes {
 		if prefix.Contains(peer) {
 			return true
 		}
 	}
 	return false
+}
+
+func (t Trust) trusts(peer netip.Addr) bool {
+	if t.except[peer] {
+		return false
+	}
+	if t.addrs[peer] {
+		return true
+	}
+	return t.inPrefixes(peer)
 }
 
 // Resolve is the client address of r: the zero Addr when the peer address
@@ -112,6 +148,19 @@ func (t Trust) Resolve(r *http.Request) netip.Addr {
 		return peer
 	}
 	return forwarded.Unmap()
+}
+
+// TrustsPeer reports whether the socket peer of r is a trusted proxy.
+func (t Trust) TrustsPeer(r *http.Request) bool {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	peer, err := netip.ParseAddr(host)
+	if err != nil {
+		return false
+	}
+	return t.trusts(peer.WithZone("").Unmap())
 }
 
 type key struct{}

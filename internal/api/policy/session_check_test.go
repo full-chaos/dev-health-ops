@@ -36,8 +36,19 @@ func withSID(id uuid.UUID) func(jwt.MapClaims) {
 	return func(c jwt.MapClaims) { c["sid"] = sessionid.Wire(id) }
 }
 
+func i64(v int64) *int64 { return &v }
+
+func withTV(version int) func(jwt.MapClaims) {
+	return func(c jwt.MapClaims) { c["sid"] = sessionid.Wire(liveSessionID); c["tv"] = version }
+}
+
+func pinSession(s *sessionStore, userVersion int64, pin *int64) {
+	s.users[userID] = UserState{IsActive: true, TokenVersion: userVersion}
+	s.rows[liveSessionID] = SessionRow{PrincipalID: userID, LegacyTokenVersion: pin}
+}
+
 func newSessionStore() *sessionStore {
-	return &sessionStore{fakeStore: newStore(), rows: map[uuid.UUID]SessionRow{liveSessionID: {PrincipalID: userID}}}
+	return &sessionStore{fakeStore: newStore(), rows: map[uuid.UUID]SessionRow{liveSessionID: {PrincipalID: userID, LegacyTokenVersion: i64(0)}}}
 }
 
 func outcomeOf(err error) string {
@@ -80,6 +91,10 @@ func TestCheckClaimsEndsATokenWhoseSessionIsRevoked(t *testing.T) {
 		{name: "sid null", claims: func(c jwt.MapClaims) { c["sid"] = nil }, want: "refused"},
 		{name: "session lookup unavailable", claims: withSID(liveSessionID), store: func(s *sessionStore) { s.err = errors.Join(ErrUnavailable, errors.New("dial")) }, want: "unavailable", wantReads: 1},
 		{name: "session lookup other failure", claims: withSID(liveSessionID), store: func(s *sessionStore) { s.err = errors.New("syntax") }, want: "internal", wantReads: 1},
+		{name: "pin equal to the row", claims: withTV(2), store: func(s *sessionStore) { pinSession(s, 2, i64(2)) }, want: "ok", wantReads: 1},
+		{name: "pin older than the row", claims: withTV(2), store: func(s *sessionStore) { pinSession(s, 2, i64(1)) }, want: "refused", wantReads: 1},
+		{name: "pin newer than the row", claims: withTV(2), store: func(s *sessionStore) { pinSession(s, 2, i64(3)) }, want: "refused", wantReads: 1},
+		{name: "no pin", claims: withTV(2), store: func(s *sessionStore) { pinSession(s, 2, nil) }, want: "refused", wantReads: 1},
 		{name: "inactive user, sid not read", claims: withSID(liveSessionID), store: func(s *sessionStore) { s.users[userID] = UserState{} }, want: "refused"},
 	} {
 		t.Run(test.name, func(t *testing.T) {

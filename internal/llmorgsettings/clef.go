@@ -65,3 +65,20 @@ func ClefPostURL(baseURL, model string) (string, bool) {
 	}
 	return "https://" + clefHost + "/client/v4/accounts/" + account + "/ai/run/@cf/cloudflare/" + segment, true
 }
+
+// Endpoint types an LLM attempt row can record.
+const (
+	EndpointTypeWorkersAI = "workers_ai"
+	EndpointTypeAIGateway = "ai_gateway"
+)
+
+// ClefEndpoint derives the endpoint type and the gateway id of a saved clef
+// base_url, for the attempt row. It only reads the URL ParseClefBaseURL accepts:
+// that is a Workers AI account URL, which holds no gateway id. It never changes
+// where a request goes.
+func ClefEndpoint(baseURL string) (endpointType, gatewayID string, ok bool) {
+	if _, ok := ParseClefBaseURL(baseURL); !ok {
+		return "", "", false
+	}
+	return EndpointTypeWorkersAI, "", true
+}

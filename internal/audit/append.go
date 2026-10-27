@@ -16,8 +16,9 @@ import (
 // writes only these, and Commit refuses them. A type is added here, in
 // review, with the code that writes it.
 var appendOnlyEventTypes = map[string]bool{
-	EventLoginFailed:       true,
-	EventSigningKeyRefused: true,
+	EventLoginFailed:         true,
+	EventSigningKeyRefused:   true,
+	EventWorkloadTokenIssued: true,
 }
 
 // EventLoginFailed is a refused sign-in: wrong or unknown credentials, a
@@ -28,6 +29,11 @@ const EventLoginFailed = "auth.login.failed"
 // EventSigningKeyRefused is a signing-key rotation verb the state machine
 // refused: nothing changed.
 const EventSigningKeyRefused = "auth.signing_key.refused"
+
+// EventWorkloadTokenIssued is a workload token the exchange issued: it
+// records which binding and registry revision the token's jti came from. The
+// token itself is stateless, so no security state changes.
+const EventWorkloadTokenIssued = "auth.workload.token_issued"
 
 // ErrNotAppendOnly reports an Append of an event type outside
 // appendOnlyEventTypes. Nothing is written.

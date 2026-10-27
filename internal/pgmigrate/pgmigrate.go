@@ -57,6 +57,7 @@ import (
 	"path"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync/atomic"
 )
@@ -99,7 +100,7 @@ func chainSource() fs.FS {
 func ChainThrough(chain []ChainFile, revision string) []ChainFile {
 	var out []ChainFile
 	for _, file := range chain {
-		if file.Revision <= revision {
+		if !revisionLess(revision, file.Revision) {
 			out = append(out, file)
 		}
 	}
@@ -110,7 +111,7 @@ func ChainThrough(chain []ChainFile, revision string) []ChainFile {
 func ChainAbove(chain []ChainFile, revision string) []ChainFile {
 	var out []ChainFile
 	for _, file := range chain {
-		if file.Revision > revision {
+		if revisionLess(revision, file.Revision) {
 			out = append(out, file)
 		}
 	}
@@ -198,7 +199,24 @@ type ChainFile struct {
 
 var chainName = regexp.MustCompile(`^([0-9]{4,})_[a-z0-9_]+\.sql$`)
 
-// LoadChain returns the revisions after the head, in order.
+var chainHeader = regexp.MustCompile(`^-- (?:Alembic )?[Rr]evision ([0-9]{4,})(?: \(down_revision ([0-9]{4,})\))?`)
+
+// revisionLess orders revisions as integers: "10000" is after "9999". Every revision is digits only
+// (chainName), so a string compare is wrong as soon as two widths meet.
+func revisionLess(a, b string) bool {
+	x, _ := strconv.ParseUint(a, 10, 64)
+	y, _ := strconv.ParseUint(b, 10, 64)
+	return x < y
+}
+
+func sortChain(chain []ChainFile) {
+	sort.SliceStable(chain, func(i, j int) bool { return revisionLess(chain[i].Revision, chain[j].Revision) })
+}
+
+// LoadChain returns the revisions after the head, in order. It fails closed on a chain Decide would
+// apply wrongly (it applies only the files after the recorded head): a duplicate revision, a gap,
+// a file whose first line does not name its revision and its down_revision, or a down_revision that
+// is not the predecessor (the first file continues the baseline's application head).
 func LoadChain() ([]ChainFile, error) {
 	source := chainSource()
 	entries, err := fs.ReadDir(source, "sql")
@@ -214,14 +232,57 @@ func LoadChain() ([]ChainFile, error) {
 		if match == nil {
 			return nil, fmt.Errorf("sql/%s is not named <revision>_<slug>.sql", entry.Name())
 		}
+		if _, err := strconv.ParseUint(match[1], 10, 64); err != nil {
+			return nil, fmt.Errorf("sql/%s: the revision is not a number: %w", entry.Name(), err)
+		}
 		data, err := fs.ReadFile(source, "sql/"+entry.Name())
 		if err != nil {
 			return nil, err
 		}
 		chain = append(chain, ChainFile{Revision: match[1], Name: entry.Name(), SQL: string(data)})
 	}
-	sort.Slice(chain, func(i, j int) bool { return chain[i].Revision < chain[j].Revision })
+	sortChain(chain)
+	if err := checkChain(chain); err != nil {
+		return nil, err
+	}
 	return chain, nil
+}
+
+func checkChain(chain []ChainFile) error {
+	if len(chain) == 0 {
+		return nil
+	}
+	baseline, err := LoadBaseline()
+	if err != nil {
+		return fmt.Errorf("load the baseline to check the chain: %w", err)
+	}
+	previous := applicationHead(baseline)
+	for index, file := range chain {
+		if index > 0 && chain[index-1].Revision == file.Revision {
+			return fmt.Errorf("sql/: revision %s has more than one file (%s, %s)", file.Revision, chain[index-1].Name, file.Name)
+		}
+		have, _ := strconv.ParseUint(file.Revision, 10, 64)
+		before, err := strconv.ParseUint(previous, 10, 64)
+		if err != nil {
+			return fmt.Errorf("sql/: the revision before %s is %q, not a number", file.Name, previous)
+		}
+		if have != before+1 {
+			return fmt.Errorf("sql/: gap in the chain: revision %s follows %s, want %0*d", file.Revision, previous, len(previous), before+1)
+		}
+		header, _, _ := strings.Cut(file.SQL, "\n")
+		match := chainHeader.FindStringSubmatch(header)
+		if match == nil || match[2] == "" {
+			return fmt.Errorf("sql/%s: the first line must be a header naming the revision and its down_revision, \"-- Revision %s (down_revision %s)\"", file.Name, file.Revision, previous)
+		}
+		if match[1] != file.Revision {
+			return fmt.Errorf("sql/%s: the header names revision %s, the file name says %s", file.Name, match[1], file.Revision)
+		}
+		if match[2] != previous {
+			return fmt.Errorf("sql/%s: down_revision %s is not the predecessor %s", file.Name, match[2], previous)
+		}
+		previous = file.Revision
+	}
+	return nil
 }
 
 // State is what a database holds before an upgrade.

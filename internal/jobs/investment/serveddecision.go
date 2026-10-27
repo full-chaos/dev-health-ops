@@ -87,6 +87,12 @@ const (
 	servedOutcomeRateLimited    = "rate_limited"
 	servedOutcomeRejected       = "rejected"
 	servedOutcomeTransportOther = "transport_other"
+	// servedOutcomeBudgetAccounting: the budget guard refused the call before it
+	// was sent; nothing was sent.
+	servedOutcomeBudgetAccounting = "budget_accounting"
+	// servedOutcomeBudgetSettleFailed: the call was sent and answered; its
+	// accounting could not be settled.
+	servedOutcomeBudgetSettleFailed = "budget_settle_failed"
 	// servedOutcomeCancelled: the run context ended (a lost lease, a soft-stop
 	// expiry, the run's own deterministic stop) before the unit had an answer.
 	// The unit has no row from this run.
@@ -98,7 +104,8 @@ func servedOutcomes() []string {
 	return []string{
 		servedOutcomeOK, servedOutcomeZeroSupport, servedOutcomeEvidenceNone, servedOutcomeInvalidAnswer,
 		servedOutcomeAdapterDefect, servedOutcomeTimeout, servedOutcomeRefused, servedOutcomeServerError,
-		servedOutcomeRateLimited, servedOutcomeRejected, servedOutcomeTransportOther, servedOutcomeCancelled,
+		servedOutcomeRateLimited, servedOutcomeRejected, servedOutcomeTransportOther, servedOutcomeBudgetAccounting,
+		servedOutcomeBudgetSettleFailed, servedOutcomeCancelled,
 	}
 }
 
@@ -126,8 +133,14 @@ func servedOutcomeOf(state string, exchange *shadowExchange) string {
 	}
 	switch categorize.SystemOneClass(last) {
 	case "":
+		if exchange != nil && exchange.settleFailed {
+			return servedOutcomeBudgetSettleFailed
+		}
 		if exchange != nil && len(exchange.attempts) > 0 {
 			return servedOutcomeInvalidAnswer
+		}
+		if exchange != nil && exchange.accountingRefused {
+			return servedOutcomeBudgetAccounting
 		}
 		return servedOutcomeTransportOther
 	case categorize.SystemOneClassTimeout:
@@ -206,8 +219,13 @@ type servedClassifier interface {
 // used by one Materializer.Run, then closed.
 type ServedDecision struct {
 	// byo marks the backend of an org's own model (newBYOSystemOne); jev is false.
-	byo        bool
-	classifier servedClassifier
+	byo bool
+	// endpointType and gatewayID name the clef endpoint of the backend, derived
+	// from the validated base_url at construction; empty for any other backend.
+	// They are recorded on the attempt rows and never change a request.
+	endpointType string
+	gatewayID    string
+	classifier   servedClassifier
 	// identity and stamp are fixed at construction from configured values only,
 	// never from a response field.
 	identity decision.Identity
@@ -358,6 +376,7 @@ func (served *ServedDecision) categorize(ctx context.Context, cfg Config, entry 
 	modelReturned := shadowModelID(classification.ModelReturned)
 	rows := attemptRecords(cfg, chwrite.RoleServed, served.identity, served.stamp, unit.workUnitID, result.exchange, state, modelReturned)
 	for _, row := range rows {
+		row.EndpointType, row.GatewayID = shadowEndpointType(served.endpointType), shadowGatewayID(served.gatewayID)
 		served.attempts.Add(row)
 	}
 

@@ -16,8 +16,10 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/auth/clientaddr"
+	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
+	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
@@ -135,7 +137,8 @@ var scopeCodes = map[string]string{
 
 // admit counts each charge in order and reports whether the request may go
 // on. The first refusal answers 429 and stops (the later limiters do not
-// count it); a store error answers the generic 500 and stops, never a pass.
+// count it); a store error stops, never a pass: a dependency failure (see
+// httpapi.DependencyFailure) answers 503, any other error the generic 500.
 // The refusal names no limit and no key. route is the fixed route name the
 // counter is scoped to, never the request path, so a path parameter cannot
 // multiply the budget.
@@ -148,7 +151,11 @@ func admit(w http.ResponseWriter, r *http.Request, write httpapi.ErrorWriter, ro
 	for _, c := range charges {
 		allowed, err := c.limiter.AllowCounted(r.Context(), c.key, scope)
 		if err != nil {
-			write(w, r, httpapi.CodeInternal)
+			if httpapi.DependencyFailure(err) {
+				write(w, r, httpapi.CodeUnavailable)
+			} else {
+				write(w, r, httpapi.CodeInternal)
+			}
 			return false
 		}
 		if !allowed {
@@ -164,12 +171,17 @@ func admit(w http.ResponseWriter, r *http.Request, write httpapi.ErrorWriter, ro
 // plane answered. A rate limit is 429 {"detail":{"message":"Rate limit
 // exceeded. Please try again later."}} with no Retry-After; a store error is
 // the unhandled-error 500 {"detail":"Internal Server Error"} carrying the
-// unhandled-error marker. The /v1 routes answer the service's own envelope
+// unhandled-error marker, or, for a dependency failure, the 503 of
+// unavailableCompat, which carries Retry-After: 1. The /v1 routes answer the service's own envelope
 // (httpapi.WriteError) instead.
 func goAPIRefusal(w http.ResponseWriter, _ *http.Request, code httpapi.Code) {
 	status, body := http.StatusInternalServerError, `{"detail":"Internal Server Error"}`
-	if code == httpapi.CodeRateLimited {
+	switch code {
+	case httpapi.CodeRateLimited:
 		status, body = http.StatusTooManyRequests, `{"detail":{"message":"Rate limit exceeded. Please try again later."}}`
+	case httpapi.CodeUnavailable:
+		status, body = http.StatusServiceUnavailable, `{"detail":{"message":"`+textAuthUnavailable+`"}}`
+		w.Header().Set("Retry-After", "1")
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Content-Length", strconv.Itoa(len(body)))
@@ -229,4 +241,21 @@ func (l *Limits) secretKey(r *http.Request, secret string) string {
 // principalKey is the client address and the digest of a principal id.
 func (l *Limits) principalKey(r *http.Request, principal string) string {
 	return clientKey(r) + ":" + l.digest("principal", principal)
+}
+
+// v1Refusal is the limiter's ErrorWriter on a /v1 route: a counter-store
+// failure is the service's own 503 (error.v1, retryable), any other refusal
+// the transport envelope.
+func v1Refusal(w http.ResponseWriter, r *http.Request, code httpapi.Code) {
+	if code != httpapi.CodeUnavailable {
+		httpapi.WriteError(w, r, code)
+		return
+	}
+	retry := retryAfterSeconds
+	w.Header().Set("Retry-After", "1")
+	writeJSON(w, http.StatusServiceUnavailable, errorDocument{
+		SchemaVersion: contracts.ErrorSurface, Status: http.StatusServiceUnavailable, ReasonCode: reasonDependency,
+		RequestID: requestid.Wire(r.Context()), OccurredAt: contracts.Timestamp{Time: time.Now().UTC()},
+		RetryAfterSeconds: &retry,
+	})
 }

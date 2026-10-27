@@ -45,6 +45,7 @@ internal/apiservice/admin
 internal/apiservice/customerpush
 internal/audit
 internal/auth/accessverify
+internal/auth/authconfig
 internal/auth/clientaddr
 internal/auth/contracts
 internal/auth/contracts/provisioning
@@ -54,6 +55,7 @@ internal/auth/emaildomain
 internal/auth/httpapi
 internal/auth/identity
 internal/auth/identity/local
+internal/auth/keystore
 internal/auth/linkmail
 internal/auth/passwordhash
 internal/auth/passwordpolicy
@@ -62,6 +64,7 @@ internal/auth/requestid
 internal/auth/session
 internal/auth/sessionid
 internal/auth/signedtoken
+internal/auth/workloadexchange
 internal/chmigrate
 internal/cli
 internal/edgetokenmint
@@ -89,6 +92,7 @@ internal/mintcli/edgetoken
 internal/mintcli/envelope
 internal/netclass
 internal/operationalordering
+internal/orgactivity/chread
 internal/ownershipwindow
 internal/pgmigrate
 internal/pgmigrate/schemagate
@@ -98,6 +102,7 @@ internal/platform/config
 internal/platform/credshape
 internal/platform/dbphase
 internal/platform/dbspan
+internal/platform/dialclass
 internal/platform/dsnclass
 internal/platform/errortext
 internal/platform/errortext/hardened
@@ -154,6 +159,7 @@ internal/testsupport/proxycapture
 internal/testsupport/pydanticecho
 internal/testsupport/usertokens
 internal/testsupport/venueoracle
+internal/token
 internal/workitemcontract
 ~internal/api/externalingest/testdata
 ~internal/api/recordvalidation/testdata

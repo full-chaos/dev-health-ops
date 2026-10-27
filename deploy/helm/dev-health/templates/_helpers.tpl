@@ -50,14 +50,19 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
 {{/*
-Service account name
+Workload ServiceAccount name: <fullname>-<component>. Call with (dict "ctx" $ "component" "web").
 */}}
-{{- define "dev-health.serviceAccountName" -}}
-{{- if .Values.serviceAccount.create }}
-{{- default (include "dev-health.fullname" .) .Values.serviceAccount.name }}
-{{- else }}
-{{- default "default" .Values.serviceAccount.name }}
+{{- define "dev-health.workloadServiceAccountName" -}}
+{{- printf "%s-%s" (include "dev-health.fullname" .ctx) .component }}
 {{- end }}
+
+{{/*
+The pod-spec lines that bind a workload to its own ServiceAccount.
+Call with (dict "ctx" $ "component" "web" "cfg" .Values.web.serviceAccount).
+*/}}
+{{- define "dev-health.workloadServiceAccount" -}}
+serviceAccountName: {{ include "dev-health.workloadServiceAccountName" . }}
+automountServiceAccountToken: {{ .cfg.automountToken | default false }}
 {{- end }}
 
 {{/*
@@ -708,8 +713,8 @@ serve it).
 
 {{/*
 authService.phase, the one auth cutover key (values.yaml lists the phases). It refuses the keys it replaces, refuses
-any value that is not a whole number from 0 to 5, refuses phases 4 and 5 (D6358: they wait for the public-table writer
-decision), and renders the phase. Every ladder read goes through dev-health.authOn, so every render runs these checks.
+any value that is not a whole number from 0 to 5, refuses phase 5 (D6358: orgs owned waits for its own public-table writer
+leaf), and renders the phase. Every ladder read goes through dev-health.authOn, so every render runs these checks.
 */}}
 {{- define "dev-health.authPhase" -}}
 {{- $v := .Values -}}
@@ -719,7 +724,7 @@ decision), and renders the phase. Every ladder read goes through dev-health.auth
 {{- if hasKey $v.authService "orgsOwned" }}{{- fail "authService.orgsOwned is replaced by authService.phase: orgs owned is phase 5; remove authService.orgsOwned" }}{{- end -}}
 {{- $p := $v.authService.phase -}}
 {{- if not (and (has (kindOf $p) (list "int" "int64" "float64")) (eq (float64 $p) (floor (float64 $p))) (ge (float64 $p) 0.0) (le (float64 $p) 5.0)) }}{{- fail (printf "authService.phase must be a whole number from 0 to 5, got %s %v" (kindOf $p) $p) }}{{- end -}}
-{{- if ge (int $p) 4 }}{{- fail (printf "authService.phase %d: phases 4 and 5 need the public-table writer decision (D6358): auth-service does not yet write the existing public users, organizations and memberships tables, so phase 3 is the highest phase this chart renders" (int $p)) }}{{- end -}}
+{{- if ge (int $p) 5 }}{{- fail (printf "authService.phase %d: phase 5 (orgs owned) needs its own public-table writer leaf (D6358): auth-service does not yet write the existing public organizations and memberships tables, so phase 4 is the highest phase this chart renders" (int $p)) }}{{- end -}}
 {{- int $p -}}
 {{- end -}}
 
@@ -730,7 +735,7 @@ rendered one, a Secret reference included, and put a literal in the manifest. au
 names and proves each is refused.
 */}}
 {{- define "dev-health.authServiceEnvNames" -}}
-{{- $names := list "AUTH_DATABASE_URI" "AUTH_JWT_SECRET_KEY" "AUTH_SESSION_SUCCESSOR_KEY" "AUTH_LOGIN_LOCKOUT_KEY" "AUTH_SOCIAL_LINK_ROUTES" "AUTH_ACCESS_TOKEN_CLASS" "AUTH_TOKEN_ISSUER_URL" "AUTH_JWT_AUDIENCE" "AUTH_USERS_OWNED" "AUTH_ORGS_OWNED" "AUTH_VALKEY_URI" "AUTH_SERVICE_TRUSTED_PROXIES" -}}
+{{- $names := list "AUTH_DATABASE_URI" "AUTH_JWT_SECRET_KEY" "AUTH_SESSION_SUCCESSOR_KEY" "AUTH_LOGIN_LOCKOUT_KEY" "AUTH_SOCIAL_LINK_ROUTES" "AUTH_ACCESS_TOKEN_CLASS" "AUTH_TOKEN_ISSUER_URL" "AUTH_JWT_AUDIENCE" "AUTH_USERS_OWNED" "AUTH_ORGS_OWNED" "AUTH_VALKEY_URI" "AUTH_SERVICE_TRUSTED_PROXIES" "OTEL_ENABLED" "OTEL_EXPORTER_OTLP_ENDPOINT" "OTEL_SAMPLE_RATE" "OTEL_SERVICE_NAME" -}}
 {{- range $provider := list "GITHUB" "GITLAB" "GOOGLE" }}{{- range $suffix := list "CLIENT_ID" "CLIENT_SECRET" }}{{- $names = append $names (printf "SOCIAL_%s_%s" $provider $suffix) }}{{- end }}{{- end -}}
 {{- toJson $names -}}
 {{- end -}}
@@ -814,8 +819,8 @@ and the other enable flags say. templates/auth-service.yaml includes it once, ou
 {{/*
 "true" when authService.phase turns the ladder flag on, else "". Call with (dict "flag" <name> "context" $).
 The ladder (each flag is on from its phase up): service 1, sessions 2, localLogin 3, social 3, credentials 4,
-usersOwned 4, orgsOwned 5. credentials moves with usersOwned: auth-service mounts the credential routes only with
-AUTH_USERS_OWNED, and go-api refuses AUTH_USERS_OWNED unless the credential routes go to auth-service.
+usersOwned 4, orgsOwned 5. credentials moves with usersOwned: go-api refuses AUTH_USERS_OWNED unless the credential routes
+go to auth-service. auth-service mounts them from phase 2 (a 503 stub until users are owned).
 */}}
 {{- define "dev-health.authOn" -}}
 {{- $ladder := dict "service" 1 "sessions" 2 "localLogin" 3 "social" 3 "credentials" 4 "usersOwned" 4 "orgsOwned" 5 -}}
@@ -880,6 +885,36 @@ schema Job and the grants Job.
 {{- if $ack -}}
 {{- if not (regexMatch "^[0-9a-f]{16}$" $ack) }}{{- fail "authService.migrate.acknowledgeGrantNarrowing must be the 16 lowercase hex characters of the digest a refused auth-migrate run prints" }}{{- end -}}
 -ack-grant-narrowing={{ $ack }}
+{{- end -}}
+{{- end }}
+
+{{/*
+-defer-narrowing for both auth-migrate Jobs, or "". A Job that passes the acknowledgement while auth-service does not
+own users (authOn "usersOwned" off; today phase 3 or lower) also defers: that is the flip-back release, whose old owned auth-service pods still serve while its pre-upgrade hooks
+run, so the users-owned grants it would revoke are kept (CHAOS-11581). authService.migrate.narrowAfterFlipBack, set in
+a LATER release after no pod of the old owned ReplicaSet is left, renders the acknowledgement without it, so that
+release narrows. The flag's refusals are dev-health.authNarrowAfterFlipBackGuard.
+*/}}
+{{- define "dev-health.authDeferGrantNarrowing" -}}
+{{- $m := .Values.authService.migrate -}}
+{{- $narrow := eq (include "dev-health.authBool" (dict "value" $m.narrowAfterFlipBack "key" "authService.migrate.narrowAfterFlipBack")) "true" -}}
+{{- $ack := include "dev-health.authAckGrantNarrowing" . -}}
+{{- if and $ack (not $narrow) (ne (include "dev-health.authOn" (dict "flag" "usersOwned" "context" .)) "true") -}}
+-defer-narrowing
+{{- end -}}
+{{- end }}
+
+{{/*
+The authService.migrate.narrowAfterFlipBack refusals, run on every render by auth-narrow-after-flipback-guard.yaml
+(not only when an auth-migrate Job renders): the flag needs the acknowledgement, checked by the same helper as the Jobs
+(dev-health.authAckGrantNarrowing), and is refused at authService.phase 4
+or higher and while auth-service owns users.
+*/}}
+{{- define "dev-health.authNarrowAfterFlipBackGuard" -}}
+{{- $m := .Values.authService.migrate -}}
+{{- if eq (include "dev-health.authBool" (dict "value" $m.narrowAfterFlipBack "key" "authService.migrate.narrowAfterFlipBack")) "true" -}}
+{{- if not (include "dev-health.authAckGrantNarrowing" .) }}{{- fail "authService.migrate.narrowAfterFlipBack=true needs authService.migrate.acknowledgeGrantNarrowing: the digest a refused auth-migrate run prints for the deferred users-owned grants" }}{{- end -}}
+{{- if or (ge (int (include "dev-health.authPhase" .)) 4) (eq (include "dev-health.authOn" (dict "flag" "usersOwned" "context" .)) "true") }}{{- fail "authService.migrate.narrowAfterFlipBack is refused at authService.phase 4 or higher and while auth-service owns users" }}{{- end -}}
 {{- end -}}
 {{- end }}
 
@@ -1044,9 +1079,18 @@ namespace, HTTPS, then networkPolicy.extraEgress. The auth pods never use these 
 {{- end }}
 
 {{/*
+The integer value of a dotted IPv4 address (validated by the caller).
+*/}}
+{{- define "dev-health.ipv4Int" -}}
+{{- $o := splitList "." (toString .) -}}
+{{- add (add (mul (int (index $o 0)) 16777216) (mul (int (index $o 1)) 65536)) (add (mul (int (index $o 2)) 256) (int (index $o 3))) -}}
+{{- end -}}
+
+{{/*
 One authService.trustedProxies entry is what internal/auth/clientaddr ParseTrust accepts (a bare IP address, or a strict CIDR
 network: canonical prefix digits, no host bits, no zone), so a rendered value never stops auth-service at start. Prints "true" when
-the entry is valid, nothing otherwise. The chart refuses /0 and IPv4-mapped forms on top of this.
+the entry is valid, nothing otherwise. The chart refuses /0 and IPv4-mapped forms on top of this. An exclusion entry
+("!<address>") is this check on its address, plus the IPv4-only rules in auth-service.yaml.
 */}}
 {{- define "dev-health.trustedProxyEntry" -}}
 {{- $parts := splitList "/" (toString .) -}}
@@ -1135,4 +1179,236 @@ a bool, null or a fraction is not.
 {{- end -}}
 {{- if not $ok -}}{{- fail "authService.database.maxConns must be a whole number from 1 to 32: it is the connection pool of each auth-service replica, replicas x maxConns (plus one surge pod while rolling) is what the auth database must hold" -}}{{- end -}}
 {{- int64 $v -}}
+{{- end -}}
+
+{{/*
+The rolling-update surge of the auth-service Deployment: the one figure the
+connection budget and the Deployment strategy share.
+*/}}
+{{- define "dev-health.authMaxSurge" -}}1{{- end -}}
+
+{{/*
+authService.database.connectionBudget: the connections the release may hold on
+the auth database, that is max_connections minus superuser_reserved_connections
+(Postgres defaults 100 - 3 = 97). 0 turns the check off. Above 0 the render
+fails when
+  (authService.replicas + surge) x authService.database.maxConns
+  + every go-pgbouncer pool (one per (user, database) pair: the transaction
+    pooler counts its own role at transaction.poolSize and each
+    transaction.extraUsers entry at its own poolSize, else at the transaction
+    poolSize, ALL of them times (1 + the rollout surge pods of the transaction
+    pooler): a surge pod opens every one of those pools again; the queue-session
+    and coordinator-session poolers count poolSize x (1 + their own surge pods))
+exceeds it. Poolers count only while goWorkers and goWorkers.pgbouncer are on.
+A static upper bound: a pool holds server connections only while it needs them.
+Every pooler counts its surge pod (CHAOS-11583): rollingUpdate.maxSurge when set,
+else 1. CHAOS-11521 kind measurement: a session pooler's surge pod opened no
+server connection (the old pod keeps its clients until it is stopped, 24 to 31 s),
+so for the session poolers the count is an upper bound; the transaction pooler's
+surge pod serves new connections at once (+18 measured).
+*/}}
+{{/*
+One number the connection budget adds or multiplies: a whole number from min to
+max, else the render fails naming the key. The bound keeps the sum from
+wrapping, whether or not the schema ran (helm --skip-schema-validation).
+*/}}
+{{- define "dev-health.budgetTerm" -}}
+{{- $v := .value -}}
+{{- $ok := false -}}
+{{- if has (kindOf $v) (list "int" "int64" "float64") -}}
+{{- if eq (toString (int64 $v)) (toString $v) -}}
+{{- if and (ge (int64 $v) (int64 .min)) (le (int64 $v) (int64 .max)) -}}{{- $ok = true -}}{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- if not $ok -}}{{- fail (printf "%s must be a whole number from %d to %d when authService.database.connectionBudget is set: the budget adds it with the other pools" .key (int64 .min) (int64 .max)) -}}{{- end -}}
+{{- int64 $v -}}
+{{- end -}}
+
+{{/*
+goWorkers.pgbouncer.<pooler>.rollingUpdate (pooler: transaction, queueSession or
+coordinatorSession), validated, as a JSON object for the Deployment's
+rollingUpdate; empty when unset (no strategy key: the Kubernetes default, 25
+percent, which is one surge pod at one replica). Whole numbers only (the budget
+counts surge pods, a percentage cannot be counted) and maxSurge 0 needs
+maxUnavailable of 1 or more (Kubernetes refuses both at 0). Takes
+(dict "ctx" . "pooler" "<name>").
+*/}}
+{{- define "dev-health.pgbouncerRollingUpdate" -}}
+{{- $pooler := .pooler -}}
+{{- $ru := (get .ctx.Values.goWorkers.pgbouncer $pooler).rollingUpdate -}}
+{{- if and (not (kindIs "invalid" $ru)) (not (kindIs "map" $ru)) -}}{{- fail (printf "goWorkers.pgbouncer.%s.rollingUpdate must be a map of maxSurge and maxUnavailable, or unset" $pooler) -}}{{- end -}}
+{{- $ru = $ru | default dict -}}
+{{- if $ru -}}
+{{- $out := dict -}}
+{{- range $k := list "maxSurge" "maxUnavailable" -}}
+{{- if hasKey $ru $k -}}
+{{- $v := get $ru $k -}}
+{{- $ok := false -}}
+{{- if has (kindOf $v) (list "int" "int64" "float64") -}}
+{{- if and (eq (toString (int64 $v)) (toString $v)) (ge (int64 $v) 0) (le (int64 $v) 10) -}}{{- $ok = true -}}{{- end -}}
+{{- end -}}
+{{- if not $ok -}}{{- fail (printf "goWorkers.pgbouncer.%s.rollingUpdate.%s must be a whole number from 0 to 10: the connection budget counts surge pods, a percentage cannot be counted" $pooler $k) -}}{{- end -}}
+{{- $_ := set $out $k (int64 $v) -}}
+{{- end -}}
+{{- end -}}
+{{- range $k, $_ := $ru -}}
+{{- if not (has $k (list "maxSurge" "maxUnavailable")) -}}{{- fail (printf "goWorkers.pgbouncer.%s.rollingUpdate.%s is not a known key: use maxSurge and maxUnavailable" $pooler $k) -}}{{- end -}}
+{{- end -}}
+{{- if and (hasKey $out "maxSurge") (eq (int64 (get $out "maxSurge")) 0) (lt (int64 (default 0 (get $out "maxUnavailable"))) 1) -}}{{- fail (printf "goWorkers.pgbouncer.%s.rollingUpdate: maxSurge 0 needs maxUnavailable of 1 or more (Kubernetes refuses a rolling update that may neither surge nor remove a pod)" $pooler) -}}{{- end -}}
+{{- toJson $out -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Surge pods of a pgbouncer pooler during a rollout, the figure the budget check
+and the Deployment share: rollingUpdate.maxSurge when set, else 1 (the
+Kubernetes default of 25 percent rounds up to one pod at one replica). Takes
+(dict "ctx" . "pooler" "<name>").
+*/}}
+{{- define "dev-health.pgbouncerSurge" -}}
+{{- $j := include "dev-health.pgbouncerRollingUpdate" . -}}
+{{- if $j -}}
+{{- $ru := fromJson $j -}}
+{{- if hasKey $ru "maxSurge" -}}{{- int64 (get $ru "maxSurge") -}}{{- else -}}1{{- end -}}
+{{- else -}}1{{- end -}}
+{{- end -}}
+
+{{- define "dev-health.authConnectionBudget" -}}
+{{- $v := .Values.authService.database.connectionBudget -}}
+{{- $ok := false -}}
+{{- if has (kindOf $v) (list "int" "int64" "float64") -}}
+{{- if eq (toString (int64 $v)) (toString $v) -}}
+{{- if ge (int64 $v) 0 -}}{{- $ok = true -}}{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- if not $ok -}}{{- fail "authService.database.connectionBudget must be a whole number of 0 or more (0 = no check): the connections the auth database may hold, max_connections minus superuser_reserved_connections" -}}{{- end -}}
+{{- if gt (int64 $v) 0 -}}
+{{- $pools := 0 -}}
+{{- $txnDetail := "no go-pgbouncer pools" -}}
+{{- if and .Values.goWorkers.enabled .Values.goWorkers.pgbouncer.enabled -}}
+{{- $p := .Values.goWorkers.pgbouncer -}}
+{{- $txn := int64 (include "dev-health.budgetTerm" (dict "key" "goWorkers.pgbouncer.transaction.poolSize" "value" $p.transaction.poolSize "min" 1 "max" 1000)) -}}
+{{- $users := $txn -}}
+{{- range $u := ($p.transaction.extraUsers | default (list)) -}}
+{{- if hasKey $u "poolSize" -}}
+{{- $users = add $users (int64 (include "dev-health.budgetTerm" (dict "key" "goWorkers.pgbouncer.transaction.extraUsers[].poolSize" "value" $u.poolSize "min" 1 "max" 1000))) -}}
+{{- else -}}
+{{- $users = add $users $txn -}}
+{{- end -}}
+{{- end -}}
+{{- $queue := int64 (include "dev-health.budgetTerm" (dict "key" "goWorkers.pgbouncer.queueSession.poolSize" "value" $p.queueSession.poolSize "min" 1 "max" 1000)) -}}
+{{- $coordinator := int64 (include "dev-health.budgetTerm" (dict "key" "goWorkers.pgbouncer.coordinatorSession.poolSize" "value" $p.coordinatorSession.poolSize "min" 1 "max" 1000)) -}}
+{{- $surge := int64 (include "dev-health.pgbouncerSurge" (dict "ctx" . "pooler" "transaction")) -}}
+{{- $queueSurge := int64 (include "dev-health.pgbouncerSurge" (dict "ctx" . "pooler" "queueSession")) -}}
+{{- $coordinatorSurge := int64 (include "dev-health.pgbouncerSurge" (dict "ctx" . "pooler" "coordinatorSession")) -}}
+{{- $txnTotal := mul $users (add1 $surge) -}}
+{{- $queueTotal := mul $queue (add1 $queueSurge) -}}
+{{- $coordinatorTotal := mul $coordinator (add1 $coordinatorSurge) -}}
+{{- $pools = add $txnTotal (add $queueTotal $coordinatorTotal) -}}
+{{- $txnDetail = printf "transaction pooler pools %d x (1 + %d surge pod) = %d, queue-session pool %d x (1 + %d surge pod) = %d, coordinator-session pool %d x (1 + %d surge pod) = %d" $users $surge $txnTotal $queue $queueSurge $queueTotal $coordinator $coordinatorSurge $coordinatorTotal -}}
+{{- end -}}
+{{- $replicas := int64 (include "dev-health.budgetTerm" (dict "key" "authService.replicas" "value" .Values.authService.replicas "min" 0 "max" 100)) -}}
+{{- $direct := mul (add $replicas (int64 (include "dev-health.authMaxSurge" .))) (int64 (include "dev-health.authMaxConns" .)) -}}
+{{- $used := add $pools $direct -}}
+{{- if gt $used (int64 $v) -}}{{- fail (printf "authService.database.connectionBudget: %d connections are needed but the budget is %d: (authService.replicas %d + %d surge) x authService.database.maxConns %d = %d direct, plus %d go-pgbouncer pool connections (%s). Lower a pool or add capacity before raising the budget" $used (int64 $v) $replicas (int64 (include "dev-health.authMaxSurge" .)) (int64 (include "dev-health.authMaxConns" .)) $direct $pools $txnDetail) -}}{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Why an OTLP egress ipBlock cidr is refused, or "" when it is acceptable. The prefix is parsed as a number: an IPv4
+prefix must be /8 to /32 and an IPv6 prefix /32 to /128, so no spelling of 0.0.0.0/0 or ::/0 passes. An IPv6 cidr
+written with an embedded dotted IPv4 part is refused; any other is expanded to its 8 groups and refused when it
+overlaps the IPv4-mapped range ::ffff:0:0/96 or the NAT64 ranges 64:ff9b::/96 and 64:ff9b:1::/48 (inside them or
+containing them), in any spelling. Call with the cidr string.
+*/}}
+{{- define "dev-health.otlpPeerCidrProblem" -}}
+{{- $parts := splitList "/" (lower (trim (toString .))) -}}
+{{- if ne (len $parts) 2 -}}
+it needs exactly one "/" and a prefix
+{{- else -}}
+{{- $addr := index $parts 0 -}}
+{{- $bits := index $parts 1 -}}
+{{- if not (regexMatch "^[0-9]{1,3}$" $bits) -}}
+the prefix is not a number
+{{- else -}}
+{{- $prefix := atoi $bits -}}
+{{- if contains ":" $addr -}}
+{{- if or (lt $prefix 32) (gt $prefix 128) -}}
+an IPv6 prefix must be from /32 to /128
+{{- else if contains "." $addr -}}
+an IPv6 address with an embedded IPv4 part (the mapped or compatible range) is not a collector address
+{{- else -}}
+{{- $groups := include "dev-health.ipv6Groups" $addr | fromJsonArray -}}
+{{- if ne (len $groups) 8 -}}
+the IPv6 address does not parse
+{{- else -}}
+{{- $reason := "" -}}
+{{- range $r := list (list (list 0 0 0 0 0 65535 0 0) 96 "the IPv4-mapped IPv6 range ::ffff:0:0/96") (list (list 100 65435 0 0 0 0 0 0) 96 "the NAT64 range 64:ff9b::/96") (list (list 100 65435 1 0 0 0 0 0) 48 "the NAT64 range 64:ff9b:1::/48") -}}
+{{- if and (not $reason) (eq (include "dev-health.ipv6Overlaps" (dict "a" $groups "p" $prefix "b" (index $r 0) "q" (index $r 1))) "true") -}}
+{{- $reason = printf "it overlaps %s, which is not a collector address" (index $r 2) -}}
+{{- end -}}
+{{- end -}}
+{{- $reason -}}
+{{- end -}}
+{{- end -}}
+{{- else -}}
+{{- if or (lt $prefix 8) (gt $prefix 32) -}}
+an IPv4 prefix must be from /8 to /32
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+The 8 groups of a lower-case IPv6 address as a JSON list of numbers, "::" expanded; [] when it does not parse.
+*/}}
+{{- define "dev-health.ipv6Groups" -}}
+{{- $hex := dict "0" 0 "1" 1 "2" 2 "3" 3 "4" 4 "5" 5 "6" 6 "7" 7 "8" 8 "9" 9 "a" 10 "b" 11 "c" 12 "d" 13 "e" 14 "f" 15 -}}
+{{- $halves := splitList "::" . -}}
+{{- $raw := list -}}
+{{- if eq (len $halves) 1 -}}
+{{- $raw = splitList ":" . -}}
+{{- else if eq (len $halves) 2 -}}
+{{- $left := list -}}
+{{- if ne (index $halves 0) "" }}{{- $left = splitList ":" (index $halves 0) }}{{- end -}}
+{{- $right := list -}}
+{{- if ne (index $halves 1) "" }}{{- $right = splitList ":" (index $halves 1) }}{{- end -}}
+{{- $fill := sub 8 (add (len $left) (len $right)) | int -}}
+{{- if gt $fill 0 -}}
+{{- $raw = $left -}}
+{{- range until $fill }}{{- $raw = append $raw "0" }}{{- end -}}
+{{- $raw = concat $raw $right -}}
+{{- end -}}
+{{- end -}}
+{{- $out := list -}}
+{{- $ok := eq (len $raw) 8 -}}
+{{- range $g := $raw -}}
+{{- if not (regexMatch "^[0-9a-f]{1,4}$" $g) -}}
+{{- $ok = false -}}
+{{- else -}}
+{{- $v := 0 -}}
+{{- range $c := splitList "" $g }}{{- $v = add (mul $v 16) (get $hex $c) }}{{- end -}}
+{{- $out = append $out $v -}}
+{{- end -}}
+{{- end -}}
+{{- if and $ok (eq (len $out) 8) -}}{{- toJson $out -}}{{- else -}}[]{{- end -}}
+{{- end -}}
+
+{{/*
+"true" when the IPv6 prefixes a/p and b/q (8 groups each) overlap: they agree on their first min(p, q) bits.
+*/}}
+{{- define "dev-health.ipv6Overlaps" -}}
+{{- $m := min (int .p) (int .q) -}}
+{{- $full := div $m 16 | int -}}
+{{- $rem := mod $m 16 | int -}}
+{{- $same := true -}}
+{{- range $i := until $full -}}
+{{- if ne (int (index $.a $i)) (int (index $.b $i)) }}{{- $same = false }}{{- end -}}
+{{- end -}}
+{{- if and $same (gt $rem 0) -}}
+{{- $shift := index (list 1 2 4 8 16 32 64 128 256 512 1024 2048 4096 8192 16384 32768 65536) (sub 16 $rem | int) -}}
+{{- if ne (div (int (index .a $full)) $shift) (div (int (index .b $full)) $shift) }}{{- $same = false }}{{- end -}}
+{{- end -}}
+{{- if $same }}true{{- end -}}
 {{- end -}}

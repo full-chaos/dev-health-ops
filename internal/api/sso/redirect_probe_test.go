@@ -47,7 +47,7 @@ func TestTheDefaultClientNeverFollowsARedirectToAnotherOrigin(t *testing.T) {
 
 // The default IdP client's own policy (Python parity: no redirect on discovery and JWKS reads, which no callee guard
 // covers) is pinned on its own.
-func TestTheDefaultIdPClientRefusesRedirectsOnItsOwn(t *testing.T) {
+func TestTheDefaultSSOIdPClientRefusesRedirectsOnItsOwn(t *testing.T) {
 	if defaultOIDCClient().CheckRedirect == nil || defaultOIDCClient().CheckRedirect(nil, nil) != http.ErrUseLastResponse {
 		t.Fatal("the default IdP client follows redirects")
 	}

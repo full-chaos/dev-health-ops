@@ -98,11 +98,11 @@ func TestAuthOrgsOwnedDefaultUnset(t *testing.T) {
 	}
 }
 
-// The owned switches come from authService.phase alone: auth-service and the Job agree in every rendered phase, and
-// the phases that would set them (4 users owned, 5 orgs owned) are refused until the public-table writer decision.
+// The owned switches come from authService.phase alone: auth-service and the Job agree in every rendered phase
+// (4 users owned included), and phase 5 (orgs owned) is refused until its own public-table writer leaf.
 func TestAuthOrgsOwnedOneKeyAllConsumers(t *testing.T) {
 	for _, verb := range []string{"users-backfill", "orgs-backfill"} {
-		for _, phase := range []string{"1", "2", "3"} {
+		for _, phase := range []string{"1", "2", "3", "4"} {
 			t.Run(verb+"/phase "+phase, func(t *testing.T) {
 				args := withSets(append(append([]string{}, backfillOn...), phase3Secrets...), "authService.backfill.verb="+verb, "authService.phase="+phase)
 				if phase != "1" {
@@ -114,10 +114,10 @@ func TestAuthOrgsOwnedOneKeyAllConsumers(t *testing.T) {
 				}
 			})
 		}
-		for _, phase := range []string{"4", "5"} {
+		for _, phase := range []string{"5"} {
 			t.Run(verb+"/phase "+phase+" refused", func(t *testing.T) {
 				_, out, err := renderAuth(t, withSets(backfillOn, "authService.backfill.verb="+verb, "authService.phase="+phase)...)
-				if err == nil || !strings.Contains(out, "phases 4 and 5 need the public-table writer decision") {
+				if err == nil || !strings.Contains(out, "phase 5 (orgs owned) needs its own public-table writer leaf") {
 					t.Fatalf("phase %s rendered: err=%v out=%.300s", phase, err, out)
 				}
 			})
@@ -303,4 +303,60 @@ func TestAuthBackfillJobNameIsStableAndFollowsItsInputs(t *testing.T) {
 			t.Errorf("%s did not change the Job name %s", change, jobName(first))
 		}
 	}
+}
+
+// legacy-link-purge deletes go-api's link-token rows: the chart renders it only where users are owned
+// (authService.phase >= 4) and with a slug run id.
+func TestAuthBackfillJobLegacyLinkPurgeNeedsUsersOwnedAndASlugRunID(t *testing.T) {
+	for _, phase := range []string{"1", "3"} {
+		args := withSets(append(append([]string{}, backfillOn...), phase3Secrets...), "authService.backfill.verb=legacy-link-purge", "authService.phase="+phase)
+		if phase != "1" {
+			args = append(append(args, sessionReaders...), sessionSuccessor...)
+		}
+		_, out, err := renderAuth(t, args...)
+		if err == nil || !strings.Contains(out, "legacy-link-purge needs users owned") {
+			t.Errorf("phase %s: err=%v out=%.300s", phase, err, out)
+		}
+	}
+	for _, runID := range []string{"Roll 1", "R1", "-r1", strings.Repeat("a", 64)} {
+		_, out, err := renderAuth(t, withSets(backfillOn, "authService.backfill.verb=legacy-link-purge", "authService.backfill.runId="+runID)...)
+		if err == nil || !strings.Contains(out, "must be a lowercase slug") {
+			t.Errorf("run id %q: err=%v out=%.300s", runID, err, out)
+		}
+	}
+}
+
+// Where users are owned (phase 4) the backfill Job runs `dho auth legacy-link-purge` with the slug run id and
+// carries AUTH_USERS_OWNED=true; the Job is the one purge step, so a render without it must fail this test.
+func TestAuthBackfillJobLegacyLinkPurgeRendersWhereUsersAreOwned(t *testing.T) {
+	for _, runID := range []string{"r1", "roll-1.a_b", strings.Repeat("a", 63)} {
+		t.Run(runID, func(t *testing.T) {
+			args := withSets(append(append([]string{}, backfillOn...), phase3Secrets...),
+				"authService.backfill.verb=legacy-link-purge", "authService.backfill.runId="+runID, "authService.phase=4")
+			args = append(append(args, sessionReaders...), sessionSuccessor...)
+			service, job := renderBackfill(t, args)
+			got := jobArgs(t, job)
+			if len(got) < 4 || got[0] != "auth" || got[1] != "legacy-link-purge" || !strings.HasPrefix(got[2], "--batch=") {
+				t.Fatalf("purge Job args = %v, want auth legacy-link-purge --batch=N ...", got)
+			}
+			if !containsString(got, "--run-id="+runID) {
+				t.Errorf("purge Job args = %v, want --run-id=%s", got, runID)
+			}
+			if value, set := containerEnvValue(t, job, "AUTH_USERS_OWNED"); !set || value != "true" {
+				t.Errorf("purge Job AUTH_USERS_OWNED=%q set=%v; want true", value, set)
+			}
+			if err := ownedSwitchesAgree(t, service, job); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+}
+
+func containsString(list []string, want string) bool {
+	for _, s := range list {
+		if s == want {
+			return true
+		}
+	}
+	return false
 }

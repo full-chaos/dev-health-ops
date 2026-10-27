@@ -173,7 +173,7 @@ spec:
         {{- toYaml $annotations | nindent 8 }}
     spec:
       {{- include "dev-health.imagePullSecrets" . | nindent 6 }}
-      serviceAccountName: {{ include "dev-health.serviceAccountName" . }}
+      {{- include "dev-health.workloadServiceAccount" (dict "ctx" . "component" "go-api" "cfg" .Values.goApi.serviceAccount) | nindent 6 }}
       terminationGracePeriodSeconds: {{ $graceRaw }}
       securityContext: {runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, seccompProfile: {type: RuntimeDefault}}
       containers:

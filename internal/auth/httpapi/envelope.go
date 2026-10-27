@@ -9,12 +9,13 @@
 // ACP-ADR-01 §3 pins the router: net/http with http.ServeMux and explicit
 // method-and-path registration. No third-party router, in this wave or later.
 //
-// # Dormancy
+// # Route set
 //
-// CHAOS-4881 builds this service DORMANT: nothing in production calls it and
-// no business route is mounted. The dormancy lives at the CALL SITE -- the
-// runtime passes an empty route set -- not in this package, which is fully
-// implemented and fully tested. A middleware stack that only exists once a
+// Without the session secrets the service mounts only the refresh and logout
+// stubs, plus the well-known routes (issuer URL set) and the workload exchange
+// (when on), and every other path answers 404. The route set is chosen at the CALL
+// SITE -- the runtime -- not in this package, which is fully implemented and
+// fully tested. A middleware stack that only exists once a
 // route needs it is a middleware stack nobody has ever run.
 package httpapi
 
@@ -53,6 +54,11 @@ const (
 	// CodeInternal is returned for a recovered panic or an unclassified
 	// handler failure. Its message is fixed and carries no detail.
 	CodeInternal Code = "internal_error"
+	// CodeUnavailable is passed to a limiter's ErrorWriter when the counter
+	// store cannot answer (DependencyFailure). It is no transport-error.v1
+	// code: WriteError renders it as CodeInternal, so a writer that serves a
+	// 503 of its own handles it before falling back to WriteError.
+	CodeUnavailable Code = "dependency_unavailable"
 )
 
 // message is the fixed, operator-safe text for each code.

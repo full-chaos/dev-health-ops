@@ -11,6 +11,8 @@ cmd/gqlgen-guard	test	contracts
 deploy/helm/dev-health	test	compose.yml
 deploy/helm/dev-health	test	deploy
 deploy/helm/dev-health	test	docs
+internal/api/githubapp	test	ci
+internal/api/sso	test	ci
 internal/api/webhookintake	test	contracts
 internal/apiservice	code	contracts
 internal/apiservice	test	ci
@@ -21,8 +23,12 @@ internal/auth/authapi	test	ci
 internal/auth/authapi	test	contracts
 internal/auth/authconfig	test	contracts
 internal/auth/authruntime	test	contracts
+internal/auth/authruntime	test	deploy
 internal/auth/contracts	code	contracts
+internal/auth/contracts	test	docs
 internal/auth/contracts/tokencorpus	code	contracts
+internal/auth/identity/oidc	test	ci
+internal/auth/identity/saml	test	ci
 internal/auth/ratelimitvalkey	test	deploy
 internal/auth/ratelimitvalkey	test	docs
 internal/bigboycompose	test	.env.example
@@ -73,6 +79,9 @@ internal/cigates/docs	test	docs
 internal/cigates/docs	test	docs-data
 internal/cigates/docs	test	mkdocs.yml
 internal/cigates/docsprepare	test	docs-data
+internal/cigates/docsbuild	code	docs
+internal/cigates/docsbuild	code	docs-data
+internal/cigates/docsbuild	code	mkdocs.yml
 internal/cigates/docstools	code	contracts
 internal/cigates/docstools	code	deploy
 internal/cigates/docstools	code	docs
@@ -84,9 +93,11 @@ internal/cigates/docstools	test	ci
 internal/cigates/integrationshards	test	ci
 internal/cigates/metricsproof	test	ci
 internal/cigates/nopython	test	ci
+internal/cigates/outboundtransport	test	ci
 internal/cigates/proofteardown	test	ci
 internal/cigates/queuecreds	code	contracts
 internal/cigates/raceunweighted	test	ci
+internal/cigates/racescope	test	ci
 internal/cigates/routing	test	ci
 internal/cigates/routing	test	compose.yml
 internal/cigates/routing	test	deploy
@@ -95,6 +106,7 @@ internal/cigates/scripts	test	README.md
 internal/cigates/scripts	test	ci
 internal/cigates/scripts	test	compose.yml
 internal/cigates/scripts	test	contracts
+internal/cigates/scripts	test	docker
 internal/cigates/scripts	test	deploy
 internal/cigates/scripts	test	docs
 internal/cigates/splitshards	test	ci
@@ -102,6 +114,7 @@ internal/cigates/suitecatalog	test	.github
 internal/cigates/suitecatalog	test	ci
 internal/cigates/testshard	test	.github
 internal/cigates/testshard	test	ci
+internal/cigates/testshard	test	contracts
 internal/cigates/webproxyproof	test	.github
 internal/cigates/webproxyproof	test	ci
 internal/cigates/webproxyproof	test	compose.yml
@@ -150,6 +163,7 @@ internal/gqlgenguard	code	contracts
 internal/gqlgenguard	test	.github
 internal/gqlgenguard	test	ci
 internal/gqlgenguard	test	docs
+internal/httpguard	test	ci
 internal/ingressplanes	code	contracts
 internal/ingressplanes	test	ci
 internal/ingressplanes	test	compose.yml
@@ -173,6 +187,7 @@ internal/jobs/workgraph	test	contracts
 internal/migrationmatrix	code	contracts
 internal/migrationmatrix	test	ci
 internal/platform/credshape	test	contracts
+internal/platform/secrets	test	ci
 internal/providersync	test	README.md
 internal/providersync	test	contracts
 internal/providersync	test	docs

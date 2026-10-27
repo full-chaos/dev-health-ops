@@ -1,10 +1,30 @@
 {{- if .Values.clickhouse.enabled }}
+{{- $existing := .Values.clickhouse.credentialsSecret.existingSecret }}
+{{- if and $existing.name .Values.secrets.create }}
+{{- fail "clickhouse.credentialsSecret.existingSecret.name needs secrets.create=false: with the chart-owned shared Secret the URI Secrets would embed clickhouse.credentials.password, which this setting stops the chart from using" }}
+{{- end }}
 {{- $replicas := .Values.clickhouse.replicas }}
 {{- if not (or (kindIs "float64" $replicas) (kindIs "int64" $replicas) (kindIs "int" $replicas)) }}
 {{- fail (printf "clickhouse.replicas must be a nonnegative whole number, got %s (0 is allowed and keeps the volume claim)" (toString $replicas)) }}
 {{- end }}
 {{- if or (lt (float64 $replicas) 0.0) (ne (float64 $replicas) (floor (float64 $replicas))) }}
 {{- fail (printf "clickhouse.replicas must be a nonnegative whole number, got %v" $replicas) }}
+{{- end }}
+{{- if and .Values.clickhouse.credentialsSecret.enabled (not $existing.name) }}
+{{- /* The same value as the CLICKHOUSE_PASSWORD env below, for the StatefulSet to read by
+       secretKeyRef. Rendered only with the switch on: with it off the render is what it
+       was. With existingSecret.name set the chart reads that Secret instead and renders none. */}}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "dev-health.fullname" . }}-clickhouse-credentials
+  namespace: {{ include "dev-health.namespace" . }}
+  labels:
+    {{- include "dev-health.componentLabels" (dict "component" "clickhouse" "context" $) | nindent 4 }}
+type: Opaque
+stringData:
+  CLICKHOUSE_PASSWORD: {{ .Values.clickhouse.credentials.password | quote }}
+---
 {{- end }}
 apiVersion: apps/v1
 kind: StatefulSet
@@ -41,6 +61,7 @@ spec:
         {{- end }}
       {{- end }}
     spec:
+      automountServiceAccountToken: false
       {{- if .Values.clickhouse.usersd }}
       initContainers:
         {{- /* CHAOS-6474: users.d is an emptyDir (the image entrypoint still writes its own
@@ -75,7 +96,19 @@ spec:
             - name: CLICKHOUSE_USER
               value: {{ .Values.clickhouse.credentials.user | quote }}
             - name: CLICKHOUSE_PASSWORD
+              {{- if $existing.name }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $existing.name | quote }}
+                  key: {{ $existing.key | default "CLICKHOUSE_PASSWORD" | quote }}
+              {{- else if .Values.clickhouse.credentialsSecret.enabled }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "dev-health.fullname" . }}-clickhouse-credentials
+                  key: CLICKHOUSE_PASSWORD
+              {{- else }}
               value: {{ .Values.clickhouse.credentials.password | quote }}
+              {{- end }}
             - name: CLICKHOUSE_DB
               value: {{ .Values.clickhouse.credentials.database | quote }}
             - name: CLICKHOUSE_LISTEN_HOST

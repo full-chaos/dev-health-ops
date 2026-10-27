@@ -71,6 +71,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/api/usersowned"
+	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
@@ -505,6 +506,12 @@ func (h handlers) oauthCallback(w http.ResponseWriter, r *http.Request) {
 	// (verifyAndClearLoginNonceCookie, loginnonce.go).
 	claims, err := h.oauthExchangeAndFetch(ctx, w, r, row, providerID, providerType, stateToken, code)
 	if err != nil {
+		if errors.Is(err, oauthprovider.ErrMissingProviderID) {
+			h.Logger.WarnContext(ctx, "sso sign-in refused: the identity provider returned an invalid user id", "protocol", "oauth")
+			h.recordSSOAuthenticatedDenial(ctx, w, r, row.OrgID, providerID, err.Error(), http.StatusBadRequest,
+				invalidProviderIDDetail(), "oauth", "provider_profile")
+			return
+		}
 		if errors.Is(err, errOAuthNoVerifiedEmail) {
 			h.recordSSOAuthenticatedDenial(ctx, w, r, row.OrgID, providerID, err.Error(), http.StatusForbidden,
 				"No verified email address is available from this OAuth provider", "oauth", "email_verification")
@@ -598,6 +605,12 @@ func (h handlers) oauthCallback(w http.ResponseWriter, r *http.Request) {
 				usersowned.Detail(), "oauth", "provisioning")
 			return
 		}
+		if errors.Is(err, identity.ErrInvalidProviderID) {
+			h.Logger.WarnContext(ctx, "sso sign-in refused: the identity provider returned an invalid user id", "protocol", "oauth")
+			h.recordSSOAuthenticatedDenial(ctx, w, r, row.OrgID, providerID, err.Error(), http.StatusBadRequest,
+				invalidProviderIDDetail(), "oauth", "provisioning")
+			return
+		}
 		h.fail(w, r, "oauth provisioning", err)
 		return
 	}
@@ -682,6 +695,9 @@ func (h handlers) oauthExchangeAndFetch(ctx context.Context, w http.ResponseWrit
 	}
 	claims, err := fetchOAuthUserInfo(ctx, client, providerType, accessToken)
 	if err != nil {
+		if errors.Is(err, oauthprovider.ErrMissingProviderID) {
+			return oauthClaims{}, err // refused by the callback with the invalid_provider_id answer, not the bare 500.
+		}
 		if errors.Is(err, errShape) || errors.Is(err, oauthprovider.ErrUnexpected) {
 			return oauthClaims{}, err // the bare 500, matching an uncaught Python exception.
 		}
@@ -720,6 +736,14 @@ func (h handlers) oauthProvisionUser(ctx context.Context, row *providerRow, prov
 		isSuperuser                                   bool
 		tokenVersion                                  int64
 	)
+	// A non-empty subject that is not a valid identity key (a lone surrogate, edge white space, ...) is refused before
+	// any lookup, as social login does (session/social.go), so PostgreSQL never sees its bytes in the identity query.
+	// An empty subject keeps its answer: the lookup is skipped for it and the creation check refuses it.
+	if claims.externalID != "" {
+		if err := identity.RefuseInvalidProviderID(authProviderValue, &claims.externalID); err != nil {
+			return nil, nil, err
+		}
+	}
 	userID, found, err := h.resolveSSOIdentity(ctx, authProviderValue, claims.externalID, claims.email)
 	if err != nil {
 		return nil, nil, err
@@ -758,11 +782,6 @@ FROM users WHERE id = $1::uuid`, userID).Scan(&id, &existingEmail, &username, &e
 		return nil, nil, err
 	}
 
-	membership, err := h.membershipOrJoin(ctx, row, id)
-	if err != nil {
-		return nil, nil, err
-	}
-
 	newAvatarURL := existingAvatarURL
 	if claims.avatarURL != "" && stringOrEmpty(existingAvatarURL) == "" {
 		newAvatarURL = &claims.avatarURL
@@ -771,13 +790,21 @@ FROM users WHERE id = $1::uuid`, userID).Scan(&id, &existingEmail, &username, &e
 	if claims.fullName != "" && stringOrEmpty(existingFullName) == "" {
 		newFullName = &claims.fullName
 	}
-	// While auth-service owns users the sign-in goes on and writes no public.users row.
+	// While auth-service owns users the sign-in goes on and writes no public.users row. The UPDATE runs inside
+	// membershipOrJoin, in the join's transaction when the account joins, so a failing UPDATE leaves no
+	// membership behind.
+	var update func(ctx context.Context, db dbExecer) error
 	if h.refuseWhileUsersOwned() == nil {
-		if _, err := h.Pool.Exec(ctx, `UPDATE users SET avatar_url = $2, full_name = $3,
+		update = func(ctx context.Context, db dbExecer) error {
+			_, err := db.Exec(ctx, `UPDATE users SET avatar_url = $2, full_name = $3,
 	last_login_at = $4, updated_at = $4 WHERE id = $1::uuid`,
-			id, newAvatarURL, newFullName, now); err != nil {
-			return nil, nil, err
+				id, newAvatarURL, newFullName, now)
+			return err
 		}
+	}
+	membership, err := h.membershipOrJoin(ctx, row, id, update)
+	if err != nil {
+		return nil, nil, err
 	}
 
 	return &provisionedUser{id: id, email: existingEmail, username: username, fullName: newFullName,

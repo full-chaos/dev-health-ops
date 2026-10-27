@@ -45,6 +45,9 @@ type Server struct {
 	// fails) or firstErrorsInResult (the result set starts, then the echo arrives
 	// while the rows are read).
 	first firstStatement
+	// poolerRefusal answers every login with SQLSTATE 08P01, as a pooler does
+	// while it cannot reach its server.
+	poolerRefusal bool
 	// connections counts the connections that reached the server.
 	connections atomic.Int64
 }
@@ -58,14 +61,25 @@ func (s *Server) Connections() int { return int(s.connections.Load()) }
 // with SQLSTATE 28P01.
 func New(t testing.TB) *Server { return newServer(t, false, false, firstFails) }
 
+// NewPoolerRefusing is New for a pooler that cannot reach its server: every login
+// is answered with SQLSTATE 08P01, the code pgbouncer sends while
+// server_login_retry holds, after the client's password was read.
+func NewPoolerRefusing(t testing.TB) *Server {
+	return startServer(t, &Server{poolerRefusal: true, first: firstFails})
+}
+
 func newServer(t testing.TB, acceptLogin, failPing bool, first firstStatement) *Server {
+	return startServer(t, &Server{acceptLogin: acceptLogin, failPing: failPing, first: first})
+}
+
+func startServer(t testing.TB, server *Server) *Server {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("fakepg listen: %v", err)
 	}
 	t.Cleanup(func() { _ = listener.Close() })
-	server := &Server{Host: "127.0.0.1", Port: listener.Addr().(*net.TCPAddr).Port, acceptLogin: acceptLogin, failPing: failPing, first: first}
+	server.Host, server.Port = "127.0.0.1", listener.Addr().(*net.TCPAddr).Port
 	go func() {
 		for {
 			conn, err := listener.Accept()
@@ -73,7 +87,7 @@ func newServer(t testing.TB, acceptLogin, failPing bool, first firstStatement) *
 				return
 			}
 			server.connections.Add(1)
-			go serve(conn, acceptLogin, failPing, first)
+			go serve(conn, server.acceptLogin, server.failPing, server.poolerRefusal, server.first)
 		}
 	}()
 	return server
@@ -86,7 +100,7 @@ func Start(t testing.TB) (host string, port int) {
 	return server.Host, server.Port
 }
 
-func serve(conn net.Conn, acceptLogin, failPing bool, first firstStatement) {
+func serve(conn net.Conn, acceptLogin, failPing, poolerRefusal bool, first firstStatement) {
 	defer conn.Close()
 	reader := bufio.NewReader(conn)
 	var params map[string]string
@@ -136,6 +150,10 @@ func serve(conn net.Conn, acceptLogin, failPing bool, first firstStatement) {
 	password := strings.TrimRight(string(payload), "\x00")
 	if acceptLogin {
 		serveAccepted(conn, reader, params["user"], password, failPing, first)
+		return
+	}
+	if poolerRefusal {
+		writeError(conn, "FATAL", "08P01", "server login has been failing, try again later (server_login_retry)")
 		return
 	}
 	writeError(conn, "FATAL", "28P01", fmt.Sprintf("password authentication failed for user %q (password %q)", params["user"], password))

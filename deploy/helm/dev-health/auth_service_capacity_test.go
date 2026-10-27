@@ -51,8 +51,8 @@ func TestAuthServiceCapacityDefaults(t *testing.T) {
 }
 
 // Steady pool is replicas x maxConns; a rollout adds one surge pod (planning figure, terminating pods can overlap it)
-// (maxSurge 1), so the ceiling is (replicas + 1) x maxConns. The chart pins no
-// auth database budget; this test fixes only the figures the chart itself owns.
+// (maxSurge 1), so the ceiling is (replicas + 1) x maxConns. The budget check
+// is in auth_service_connection_budget_test.go; this test fixes the chart figures.
 func TestAuthServiceConnectionCeiling(t *testing.T) {
 	docs, out, err := renderAuth(t, authBase...)
 	if err != nil {

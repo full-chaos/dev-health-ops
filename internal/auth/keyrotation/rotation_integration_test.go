@@ -213,8 +213,8 @@ func (e *env) session(t *testing.T, ctx context.Context, principal string, issue
 		revokedAt, reason = issued, "session_revoked"
 	}
 	if _, err := e.admin.Exec(ctx, `
-		INSERT INTO auth.sessions (id, principal_id, token_hash, issued_at, expires_at, revoked_at, revoked_reason)
-		VALUES ($1, $2, $3, $4, $4::timestamptz + interval '30 days', $5, $6)`,
+		INSERT INTO auth.sessions (id, principal_id, token_hash, issued_at, expires_at, revoked_at, revoked_reason, legacy_token_version)
+		VALUES ($1, $2, $3, $4, $4::timestamptz + interval '30 days', $5, $6, 0)`,
 		id, principal, []byte(id), issued, revokedAt, reason); err != nil {
 		t.Fatalf("seed session: %v", err)
 	}

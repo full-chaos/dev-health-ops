@@ -2,6 +2,7 @@ package testshard_test
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -10,8 +11,6 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-
-	"gopkg.in/yaml.v3"
 )
 
 // CHAOS-10355: the go-quality test leg runs as three weighted shards (`check_go.sh ci-leg test K 3`). These guards drive the
@@ -42,7 +41,7 @@ func run(t *testing.T, env []string, name string, args ...string) (string, strin
 	t.Helper()
 	cmd := exec.Command(name, args...)
 	cmd.Dir = repoRoot(t)
-	cmd.Env = append(os.Environ(), env...)
+	cmd.Env = append(append(os.Environ(), reportOnlyEnv+"="), env...)
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	err := cmd.Run()
@@ -227,24 +226,16 @@ func TestBadShardArgumentsFail(t *testing.T) {
 // and the ci-leg verb takes that shape (and refuses the bare `test` and an out-of-range shard).
 func TestWorkflowTestLegsMatchTheCiLegArguments(t *testing.T) {
 	t.Parallel()
-	raw, err := os.ReadFile(filepath.Join(repoRoot(t), ".github", "workflows", "go-quality.yml"))
+	raw, err := os.ReadFile(filepath.Join(repoRoot(t), "ci", "go_quality_legs.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	var wf struct {
-		Jobs map[string]struct {
-			Strategy struct {
-				Matrix struct {
-					Include []map[string]any `yaml:"include"`
-				} `yaml:"matrix"`
-			} `yaml:"strategy"`
-		} `yaml:"jobs"`
-	}
-	if err := yaml.Unmarshal(raw, &wf); err != nil {
+	var legs []map[string]any
+	if err := json.Unmarshal(raw, &legs); err != nil {
 		t.Fatal(err)
 	}
 	var args, names []string
-	for _, e := range wf.Jobs["go-quality-leg"].Strategy.Matrix.Include {
+	for _, e := range legs {
 		a, _ := e["args"].(string)
 		n, _ := e["name"].(string)
 		if a == "test" || strings.HasPrefix(a, "test ") {

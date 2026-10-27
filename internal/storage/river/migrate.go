@@ -1016,6 +1016,9 @@ func runtimeGrantStatements(options MigrationOptions) []string {
 		// transactions that write sync_run_units and read by the scheduler's
 		// evidence refresh. No DELETE: the ledger is monotone by construction.
 		"DO $$ BEGIN IF to_regclass('public.sync_executed_proof_ledger') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_executed_proof_ledger TO " + domainRole + "; END IF; END $$",
+		// The activity projection the daily finalize upserts (migration 0162): INSERT ... ON CONFLICT DO UPDATE, no
+		// DELETE (the row goes with its organization by foreign key). Matches domainPosture's org_activity entry.
+		"DO $$ BEGIN IF to_regclass('public.org_activity') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.org_activity TO " + domainRole + "; END IF; END $$",
 		// CHAOS-6622: DELETE for the Jira rename watermark move (see
 		// domainPosture's sync_watermarks entry).
 		"DO $$ BEGIN IF to_regclass('public.sync_watermarks') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.sync_watermarks TO " + domainRole + "; END IF; END $$",

@@ -361,6 +361,7 @@ source text.
 | `config` | Stamp of the candidate (shadow and served decision rows) |
 | `kind` | `first`, `retry`, `repair`, `fallback` |
 | `attempt`, `http_status`, `error_class`, `request_id` | One HTTP attempt |
+| `request_id_source` | Where `request_id` came from: `aig` (AI Gateway log id), `ray` (Cloudflare ray id) or `client` (id minted for the attempt, also sent as `X-Request-Id`), all clef; or `header` (the jev response header `x-typesafe-request-id`). Clef attempts always have an id. Empty means unknown: no id (no header, or a refused one), a BYO text provider, or a row written before `header` existed |
 | `state` | Final decision state, on the last attempt of a classification only; empty on others |
 | `input_tokens`, `output_tokens`, `cached_input_tokens`, `billed_cost_usd`, `rates_version` | Usage and rated cost; tokens and cost on the last attempt row only |
 | `latency_ms`, `retry_wait_ms` | Timing |
@@ -413,7 +414,7 @@ served mode; `TYPESAFE_API_KEY` reaches the heavy group only.
 
 | Signal | Name | Labels |
 | --- | --- | --- |
-| Metric | `dev_health_investment_served_outcomes_total` | `model`, `outcome` (closed set of 12: `ok`, `zero_support`, `evidence_none`, `invalid_answer`, `adapter_defect`, `timeout`, `refused`, `server_error`, `rate_limited`, `rejected`, `transport_other`, `cancelled`) |
+| Metric | `dev_health_investment_served_outcomes_total` | `model`, `outcome` (closed set of 14: `ok`, `zero_support`, `evidence_none`, `invalid_answer`, `adapter_defect`, `timeout`, `refused`, `server_error`, `rate_limited`, `rejected`, `transport_other`, `budget_accounting`, `budget_settle_failed`, `cancelled`) |
 | Metrics (shadow) | `dev_health_investment_shadow_attempts_total`, `..._attempt_latency_seconds`, `..._phase_stops_total`, `..._phase_cancelled_runs_total`, `..._panics_recovered_total`, `..._attempt_write_errors_total`, `..._attempt_rows_dropped_total` | closed sets in `jobruntime/telemetry.go` |
 | Span | `dev_health.llm.request` | One span for each HTTP attempt of every LLM provider (shared `tracedLLMDo`). Attributes: `llm.provider`, `llm.model`, `llm.role` (`served` / `shadow`, when set), `llm.attempt`, `llm.batch.operation` (`upload` / `create` / `retrieve` / `content` / `cancel`, on a provider Batch API call only), `http.response.status_code`, `error.class` |
 | Log | `investment served decision complete`, `investment shadow phase complete` | scalar fields only |

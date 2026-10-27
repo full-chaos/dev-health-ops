@@ -27,6 +27,7 @@ var responseModelRoutes = map[string]bool{
 	"POST /api/v1/auth/saml/{provider_id}/initiate":   true,
 	"POST /api/v1/auth/saml/{provider_id}/acs":        true,
 	"POST /internal/v1/sessions":                      false,
+	"POST /internal/v1/token/exchange":                false,
 	"POST /v1/token/refresh":                          false,
 	"GET /v1/sessions/current":                        false,
 	"POST /v1/sessions/revoke":                        false,

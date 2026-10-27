@@ -48,10 +48,14 @@ type WorkerPresence struct {
 	queuesJSON  string
 	ttl         time.Duration
 
-	mu     sync.Mutex
-	cancel context.CancelFunc
-	done   chan struct{}
-	errors chan error
+	mu sync.Mutex
+	// maybeRegistered is set after any failed Exec of the INSERT: the row may
+	// have committed. A retried Start then accepts an existing row that is
+	// this identity's own (same group and queues) instead of refusing it.
+	maybeRegistered bool
+	cancel          context.CancelFunc
+	done            chan struct{}
+	errors          chan error
 }
 
 // NewWorkerPresence validates and canonicalizes the worker identity and the
@@ -81,15 +85,24 @@ func (presence *WorkerPresence) Start(ctx context.Context) error {
 	if presence.cancel != nil {
 		return errors.New("worker presence is already started")
 	}
+	conflict := `ON CONFLICT (instance_id) DO NOTHING`
+	if presence.maybeRegistered {
+		conflict = `ON CONFLICT (instance_id) DO UPDATE SET
+			heartbeat_at = statement_timestamp(), expires_at = statement_timestamp() + $4::interval
+		WHERE public.worker_instances.worker_group = EXCLUDED.worker_group
+			AND public.worker_instances.queues::text = EXCLUDED.queues::text
+			AND public.worker_instances.state = 'accepting'`
+	}
 	result, err := presence.pool.Exec(ctx, `
 		INSERT INTO public.worker_instances (
 			instance_id, worker_group, queues, state, started_at, heartbeat_at, expires_at
 		) VALUES ($1, $2, $3, 'accepting', statement_timestamp(), statement_timestamp(),
 			statement_timestamp() + $4::interval)
-		ON CONFLICT (instance_id) DO NOTHING`,
+		`+conflict,
 		presence.instanceID, presence.workerGroup, presence.queuesJSON, presence.ttl.String(),
 	)
 	if err != nil {
+		presence.maybeRegistered = true
 		return err
 	}
 	if result.RowsAffected() != 1 {

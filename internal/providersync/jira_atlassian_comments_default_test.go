@@ -357,13 +357,15 @@ func TestJiraAtlassianCommentsFetchErrorStillHoldsWatermarkNextToBudget(t *testi
 // run the unit into its deadline, which is terminal and loses every work item.
 // A TIME budget stops the comment reads at half of the work window.
 func TestJiraAtlassianCommentsTimeBudgetKeepsUnitBeforeDeadline(t *testing.T) {
-	doer := &jiraBudgetDoer{t: t, issues: 60, perIssue: 3, commentDelay: 25 * time.Millisecond}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	// The stop is half the window (jira_atlassian_route.go:513), so the reads end at 3s and the other half is the
+	// reserve for the tail. No clock is compared: a unit that ran into its deadline loses every work item, so the
+	// work item rows, the skipped count and the read count are the oracle.
+	doer := &jiraBudgetDoer{t: t, issues: 60, perIssue: 3, commentDelay: 100 * time.Millisecond}
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
 	defer cancel()
-	started := time.Now()
 	batch := collectJiraCommentsCtx(t, ctx, jiraCommentsClaim(nil), doer.Do)
-	if time.Since(started) >= time.Second {
-		t.Fatalf("unit ran into its deadline: %v", time.Since(started))
+	if doer.comments >= 60 {
+		t.Fatalf("comment reads=%d want fewer than 60: the time budget did not cut the reads", doer.comments)
 	}
 	if got := jiraWorkItemEffectRows(t, batch); got != 60 {
 		t.Fatalf("work item rows=%d want=60", got)
@@ -453,13 +455,14 @@ func TestJiraAtlassianCommentsExplicitZeroLimitIsStillBoundedByBudget(t *testing
 // work item still lands (before the fix the read ran to the unit deadline and
 // the next changelog read failed: error, zero effects).
 func TestJiraAtlassianCommentsOneBlockedReadEndsAtTheStopTime(t *testing.T) {
+	// The blocked read ends at the stop (half the window, jira_atlassian_route.go:513); a read that ran to the unit
+	// deadline would lose every work item, so the work item rows and the markers are the oracle, with no clock compare.
 	doer := &jiraBudgetDoer{t: t, issues: 5, perIssue: 3, commentDelay: time.Hour}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
 	defer cancel()
-	started := time.Now()
 	batch := collectJiraCommentsCtx(t, ctx, jiraCommentsClaim(nil), doer.Do)
-	if elapsed := time.Since(started); elapsed >= time.Second {
-		t.Fatalf("unit ran into its deadline: %v", elapsed)
+	if doer.comments != 1 {
+		t.Fatalf("comment reads=%d want 1: only the first read starts before the stop, the rest are time-skipped", doer.comments)
 	}
 	if got := jiraWorkItemEffectRows(t, batch); got != 5 {
 		t.Fatalf("work item rows=%d want=5", got)

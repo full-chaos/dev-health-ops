@@ -15,6 +15,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/authconfig"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
+	"github.com/full-chaos/dev-health-ops/internal/token"
 )
 
 // goAPITwinAliases maps an auth-service route key to the go-api key of its
@@ -34,6 +35,7 @@ var goOnlyRoutes = map[string]struct {
 	"DELETE /v1/identities/social/{id}":      {false, "auth-service native route; no go-api twin; writes no policy body"},
 	"GET /v1/sessions/current":               {false, "auth-service native route; no go-api twin; writes no policy body"},
 	"POST /internal/v1/sessions":             {false, "internal session issue route; no go-api twin; writes no policy body"},
+	"POST /internal/v1/token/exchange":       {false, "internal workload-token exchange; no go-api twin; writes no policy body"},
 	"POST /v1/identities/social":             {false, "auth-service native route; no go-api twin; writes no policy body"},
 	"POST /v1/sessions/revoke-all":           {false, "auth-service native route; no go-api twin; writes no policy body"},
 	"POST /v1/sessions/revoke":               {false, "auth-service native route; no go-api twin; writes no policy body"},
@@ -47,13 +49,16 @@ var goOnlyRoutes = map[string]struct {
 
 func parityRoutes(t *testing.T) []httpapi.Route {
 	t.Helper()
-	env := ssoEnvironment(compatEnvironment(map[string]string{
+	env := map[string]string{
 		authconfig.EnvDatabaseURI:      "postgres://auth@127.0.0.1:1/devhealth",
 		authconfig.EnvSigningKeyFile:   "/nonexistent",
 		authconfig.EnvSigningKeyID:     "parity-test",
 		authconfig.EnvUsersOwned:       "true",
 		authconfig.EnvSocialLinkRoutes: "true",
-	}))
+		authconfig.EnvTokenIssuerURL:   "https://issuer.example.test",
+	}
+	exchangeEnvironment(t, env)
+	env = ssoEnvironment(compatEnvironment(env))
 	cfg, err := authconfig.Load(authconfig.Spec{LookupEnv: lookupFrom(env)})
 	if err != nil {
 		t.Fatal(err)
@@ -79,7 +84,11 @@ func parityRoutes(t *testing.T) []httpapi.Route {
 	for _, component := range components {
 		t.Cleanup(func() { _ = component.Shutdown(context.Background()) })
 	}
-	return append(routes, credentials...)
+	exchange, err := exchangeRoutes(cfg, logger, pool, schema, token.NewFileSigner(token.FileConfig{KeyPath: "/nonexistent", KeyID: "parity-test"}))
+	if err != nil {
+		t.Fatalf("exchangeRoutes: %v", err)
+	}
+	return append(append(routes, credentials...), exchange...)
 }
 
 func TestAuthServiceResponseModelTableMatchesGoAPI(t *testing.T) {

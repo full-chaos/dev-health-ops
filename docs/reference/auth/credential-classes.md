@@ -66,7 +66,6 @@ Design docs (read the guardrails at minimum):
 | `impersonation_session` | active | human | |
 | `internal_svc_acr_token` | active | service_account | |
 | `internal_svc_worker_token` | **unconsumed** | service_account | mint retired (CHAOS-10044); stored rows list/revoke only |
-| `worker_operational_bridge_token` | **unconsumed** | infrastructure | |
 | `acr_client_credential` | active | client_credential | |
 | `acr_device_flow_code` | active | human | |
 | `acr_web_assertion` | active | workload | |
@@ -78,6 +77,7 @@ Design docs (read the guardrails at minimum):
 | `github_webhook_signature` | active | external_source | |
 | `gitlab_webhook_signature` | active | external_source | |
 | `jira_webhook_signature` | active | external_source | |
+| `kubernetes_sa_token_exchange` | optional_feature | workload | |
 | `github_app_installation_token` | active | external_source | |
 | `pagerduty_oauth_credential` | active | external_source | |
 | `llm_api_keys` | active | infrastructure | |
@@ -92,10 +92,11 @@ Design docs (read the guardrails at minimum):
 | `internal_svc_authsess_token` | active | service_account | |
 | `link_credential` | active | human | |
 | `pagerduty_webhook_signature` | active | external_source | |
+| `workload_token` | **unconsumed** | workload | |
 
-**30 classes at the Wave 0 freeze** (31 with `effective_principal_envelope`, added by CHAOS-4737 below). 6 were not in CHAOS-3273's minimum list and were discovered
+**30 classes at the Wave 0 freeze** (31 with `effective_principal_envelope`, added by CHAOS-4737 below). 5 were not in CHAOS-3273's minimum list and were discovered
 during this inventory (`new_vs_ticket: true` in the JSON):
-`internal_svc_worker_token`, `worker_operational_bridge_token`,
+`internal_svc_worker_token`,
 `acr_workload_identity_exchange`, `org_invite_token`, `license_key`, and the
 distinction between `sso_saml_exchange`/`sso_oidc_exchange` as two classes
 rather than one.
@@ -135,6 +136,10 @@ reset). auth-service verify and reset accept only this class, never the go-api
 signed tokens (`email_verification_token`, `password_reset_token`), so a go-api
 link issued before the cutover lapses and the user asks for a new one. A
 password change does not delete other outstanding links; they lapse at expiry.
+A reset link redeems only while the user's `public.users.token_version` still
+equals the value it was issued against (`issued_token_version`); every password
+write of either service raises that counter, so a reset link issued before it
+reads as unknown afterwards.
 Purpose binding is proven by `TestVerifyAndResetRedeemOnlyTheirOwnPurpose` and
 `TestLinkCredentialOfAnotherPurposeIsNotRedeemedBothWays`. Its routes get
 profile rows when they are mounted.
@@ -154,6 +159,24 @@ iat, nbf, exp, optional org_id and scope. It carries no role, email, profile,
 superuser bit or token version: authorization is checked per request. Its
 lifetime is at most the 60 min HS256-compat ceiling. The class is
 `unconsumed`: nothing mints or verifies it yet.
+
+**`workload_token` (CHAOS-10782).** The EdDSA workload token of TRD section 11
+for one internal service caller. Its wire contract is `workload-token.v1`:
+header {alg EdDSA, typ `workload+jwt`, kid}; claims iss, aud (exactly one
+service), sub, principal_type `workload`, jti, iat, nbf, exp; no `org_id`, no
+`sid`, no `scope`; lifetime at most 300 seconds. Its typ separates it from the
+user access token (`at+jwt`). The auth-service workload-token exchange mints it
+(`POST /internal/v1/token/exchange`, mounted only with `AUTH_WORKLOAD_EXCHANGE=true`). The document parser `ParseWorkloadToken` is under
+`FuzzParseWorkloadToken`.
+
+**`kubernetes_sa_token_exchange`.** The Kubernetes projected ServiceAccount
+token a workload presents to auth-service's workload-token exchange
+(`POST /internal/v1/token/exchange`, form field `subject_token`, RFC 8693). The
+Kubernetes TokenReview API is its only authenticator, for the fixed audience
+`dev-health-workload-exchange`: after a successful review its `exp` claim is
+read unverified, only to cap the issued token's lifetime, and it is never
+stored. The exchange answers a `workload_token`. The route is mounted only with
+`AUTH_WORKLOAD_EXCHANGE=true`, so the class is `optional_feature`.
 
 ## The CHAOS-3271 class: credentials that reach a validator that is not their own
 
@@ -183,13 +206,12 @@ this:
 | Credential class | Route(s) | Exempted from the path prefix? |
 | --- | --- | --- |
 | `internal_svc_worker_token` (`svc_worker_*`) | none found (see below) | **No** — no HTTP validator exists for it anywhere, so if one were ever wired up at a non-`/api/v1/internal/acr/` path it would silently degrade to anonymous first. |
-| `worker_operational_bridge_token` (`WORKER_OPERATIONAL_BRIDGE_TOKEN`) | `/api/internal/worker-operational` (CHAOS-6240 deleted `/internal/worker`'s only routes along with worker_metrics.py; `/api/internal/worker-sync` was deleted separately, CHAOS-6243) | **No.** None of these paths start with `/api/v1/internal/acr/`. |
 | `external_push_ingest_token` (`fcpush_*`) | External Push data-plane endpoints | **No.** The module docstring for `external_ingest/auth.py` says as much: *"OrgIdMiddleware only understands user JWTs and takes its anonymous pass-through branch for an `fcpush_...` bearer"* — meaning the decode attempt still happens, it just fails harmlessly. |
 
 Only `internal_svc_acr_token` (`svc_acr_*`) got the fix. The fix is a path
 exemption, not a credential-class dispatch — so it only protects whatever
 happens to be mounted under `/api/v1/internal/acr/*` today. Any new route
-for `svc_worker_*`, the worker-bridge tokens, or any future opaque credential
+for `svc_worker_*` or any future opaque credential
 mounted **outside** that one path prefix inherits the original bug's shape
 by default. **The durable fix is credential-class-aware dispatch (check the
 token's own shape/prefix before choosing a decoder), not a growing exemption

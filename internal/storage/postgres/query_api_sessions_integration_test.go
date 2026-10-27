@@ -50,7 +50,7 @@ func startQueryAPISessionsHarness(t *testing.T, ctx context.Context, withAuthSch
 	if withAuthSchema {
 		statements = append(statements,
 			"CREATE SCHEMA auth",
-			"CREATE TABLE auth.sessions (id uuid PRIMARY KEY, principal_id uuid, revoked_at timestamptz, token_hash text)",
+			"CREATE TABLE auth.sessions (id uuid PRIMARY KEY, principal_id uuid, revoked_at timestamptz, legacy_token_version bigint, token_hash text)",
 			"CREATE TABLE auth.principals (id uuid PRIMARY KEY)",
 		)
 	}
@@ -204,7 +204,7 @@ func TestQueryAPIRoleCannotReadOtherAuthColumnsOrTables(t *testing.T) {
 		t.Fatalf("the migrate leg: %v", err)
 	}
 	pool := connectAs(t, ctx, h.uri, h.role, queryAPISessionsPassword)
-	if _, err := pool.Exec(ctx, "SELECT id, principal_id, revoked_at FROM auth.sessions WHERE id = gen_random_uuid()"); err != nil {
+	if _, err := pool.Exec(ctx, "SELECT id, principal_id, revoked_at, legacy_token_version FROM auth.sessions WHERE id = gen_random_uuid()"); err != nil {
 		t.Fatalf("the declared session columns must read: %v", err)
 	}
 	for _, statement := range []string{

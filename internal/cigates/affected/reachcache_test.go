@@ -1,0 +1,519 @@
+package affected_test
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"testing"
+)
+
+// CHAOS-11421: `plan-reads --reach --reach-cache DIR` reuses the stored reach rows only for a tree whose every input
+// hashes to the same key, and a reused result is still compared with reach.tsv. These tests run the built cigate on a
+// fixture module (the planted faults of reach_test.go's style).
+
+func reachEnv(extra ...string) []string {
+	return inheritedEnv([]string{"GOFLAGS", "GOWORK", "GOTOOLCHAIN"}, append([]string{"GOFLAGS=-mod=mod", "GOWORK=off", "GOTOOLCHAIN=local",
+		"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null"}, extra...)...)
+}
+
+func reachRun(t *testing.T, root string, env []string, args ...string) cmdResult {
+	t.Helper()
+	return cmdSpec{dir: root, env: env}.run(cigate(t), append([]string{"plan-reads", "--root", root}, args...)...)
+}
+
+func reachKeyOf(t *testing.T, root string, env []string) string {
+	t.Helper()
+	res := reachRun(t, root, env, "--print-reach-key")
+	key := strings.TrimSpace(res.stdout)
+	if res.code != 0 || len(key) != 64 {
+		t.Fatalf("--print-reach-key exited %d:\n%s%s", res.code, res.stdout, res.stderr)
+	}
+	return key
+}
+
+func appendTo(t *testing.T, path, text string) {
+	t.Helper()
+	old, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, append(old, text...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func reachCacheHead() map[string]string {
+	return map[string]string{
+		"b/b.go":         reachReader,
+		"b/embed.go":     "package b\n\nimport \"embed\"\n\n//go:embed assets/*.txt\nvar assets embed.FS\n",
+		"b/assets/x.txt": "x\n",
+		"b/notes.txt":    "notes\n",
+		"c/c_test.go":    reachCaller,
+		"d/d_test.go":    reachTest("d", "\t_ = b.Name()\n"),
+		"e/e.go":         "package e\n",
+		"f/f.go":         "package f\n",
+	}
+}
+
+func TestReachCacheKeyCoversEveryInput(t *testing.T) {
+	f, _ := reachFixture(t, reachCacheHead())
+	if res := writeTables(t, f.root); res.code != 0 {
+		t.Fatalf("plan-reads --write exited %d:\n%s%s", res.code, res.stdout, res.stderr)
+	}
+	env := reachEnv("CGO_ENABLED=0")
+	base := reachKeyOf(t, f.root, env)
+	if again := reachKeyOf(t, f.root, env); again != base {
+		t.Fatalf("the key is not stable: %s then %s", base, again)
+	}
+	p := func(rel string) string { return filepath.Join(f.root, filepath.FromSlash(rel)) }
+	changes := []struct {
+		name  string
+		apply func()
+		env   []string
+		undo  func()
+	}{
+		{name: "a .go file", apply: func() { appendTo(t, p("b/b.go"), "\n// x\n") }},
+		{name: "a _test.go file", apply: func() { appendTo(t, p("c/c_test.go"), "\n// x\n") }},
+		{name: "a new untracked .go file", apply: func() { appendTo(t, p("e/new.go"), "package e\n") }},
+		{name: "go.mod", apply: func() { appendTo(t, p("go.mod"), "\n// x\n") }},
+		{name: "go.sum", apply: func() { appendTo(t, p("go.sum"), "x\n") }},
+		{name: "edges.tsv", apply: func() { appendTo(t, p(tablesDir+"edges.tsv"), "# x\n") }},
+		{name: "dynreads.tsv", apply: func() { appendTo(t, p(tablesDir+"dynreads.tsv"), "# x\n") }},
+		{name: "reach.tsv", apply: func() { appendTo(t, p(tablesDir+"reach.tsv"), "# x\n") }},
+		{name: "reads.tsv", apply: func() { appendTo(t, p(tablesDir+"reads.tsv"), "# x\n") }},
+		{name: "a go:embed file", apply: func() { appendTo(t, p("b/assets/x.txt"), "y\n") }},
+		{name: "a non-Go file beside Go files", apply: func() { appendTo(t, p("b/notes.txt"), "y\n") }},
+		{name: "GOFLAGS", env: reachEnv("GOFLAGS=-mod=readonly")},
+		{name: "GOARCH", env: reachEnv("GOARCH=" + otherArch())},
+		{name: "GOOS", env: reachEnv("GOOS=freebsd")},
+		{name: "CGO_ENABLED", env: reachEnv("CGO_ENABLED=1")},
+		{name: "GOEXPERIMENT", env: reachEnv("GOEXPERIMENT=fieldtrack")},
+	}
+	for _, c := range changes {
+		t.Run(c.name, func(t *testing.T) {
+			if c.apply != nil {
+				snap := snapshotTree(t, f.root)
+				c.apply()
+				defer restoreTree(t, f.root, snap)
+			}
+			e := env
+			if c.env != nil {
+				e = c.env
+			}
+			if got := reachKeyOf(t, f.root, e); got == base {
+				t.Fatalf("changing %s kept the key %s: a stale result would be reused", c.name, base)
+			}
+		})
+	}
+	for _, rel := range []string{"docs/a.md", ".github/workflows/go.yml", "ci/check_go.sh", "web/readme.txt"} {
+		snap := snapshotTree(t, f.root)
+		appendTo(t, p(rel), "\nchanged\n")
+		got := reachKeyOf(t, f.root, env)
+		restoreTree(t, f.root, snap)
+		if got != base {
+			t.Errorf("changing %s moved the key: a change outside the Go inputs must reuse", rel)
+		}
+	}
+}
+
+func otherArch() string {
+	if runtime.GOARCH == "amd64" {
+		return "arm64"
+	}
+	return "amd64"
+}
+
+func snapshotTree(t *testing.T, root string) map[string][]byte {
+	t.Helper()
+	out := map[string][]byte{}
+	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if d.Name() == ".git" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		b, err := os.ReadFile(path)
+		out[path] = b
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+func restoreTree(t *testing.T, root string, snap map[string][]byte) {
+	t.Helper()
+	now := snapshotTree(t, root)
+	for path := range now {
+		if _, ok := snap[path]; !ok {
+			if err := os.Remove(path); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	for path, b := range snap {
+		if err := os.WriteFile(path, b, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func storeFiles(t *testing.T, dir string) []string {
+	t.Helper()
+	m, err := filepath.Glob(filepath.Join(dir, "reach-*.tsv"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return m
+}
+
+// A stale store never gives a green gate: a changed input misses and the gate goes red on the changed call graph.
+func TestReachCacheReusesOnlyAnUnchangedTree(t *testing.T) {
+	head := reachCacheHead()
+	head["cmd/tool/main.go"] = "package main\n\nimport \"m/b\"\n\nfunc main() { _, _ = b.Load() }\n"
+	f, _ := reachFixture(t, head)
+	if res := writeTables(t, f.root); res.code != 0 {
+		t.Fatalf("plan-reads --write exited %d:\n%s%s", res.code, res.stdout, res.stderr)
+	}
+	env := reachEnv()
+	store := t.TempDir()
+	key := reachKeyOf(t, f.root, env)
+
+	first := reachRun(t, f.root, env, "--reach", "--reach-cache", store)
+	if first.code != 0 || !strings.Contains(first.stdout, "plan-reads: reach: computed for input hash "+key) {
+		t.Fatalf("first run: exit %d, want a computed receipt for %s:\n%s%s", first.code, key, first.stdout, first.stderr)
+	}
+	if got := storeFiles(t, store); len(got) != 1 || filepath.Base(got[0]) != "reach-"+key+".tsv" {
+		t.Fatalf("a green computed run must store reach-%s.tsv, store holds %v", key, got)
+	}
+	second := reachRun(t, f.root, env, "--reach", "--reach-cache", store)
+	if second.code != 0 || !strings.Contains(second.stdout, "plan-reads: reach: reused for input hash "+key) {
+		t.Fatalf("second run: exit %d, want a reused receipt for %s:\n%s%s", second.code, key, second.stdout, second.stderr)
+	}
+	if strings.Contains(second.stdout, "program run(s)") {
+		t.Fatalf("a reused run must not compute the call graph:\n%s", second.stdout)
+	}
+
+	// An input of the tables moves the key: recomputed, still green (a comment row).
+	appendTo(t, filepath.Join(f.root, tablesDir, "edges.tsv"), "# x\n")
+	third := reachRun(t, f.root, env, "--reach", "--reach-cache", store)
+	if third.code != 0 || strings.Contains(third.stdout, "reach: reused") || !strings.Contains(third.stdout, "reach: computed for input hash ") {
+		t.Fatalf("a changed edges.tsv must recompute: exit %d:\n%s%s", third.code, third.stdout, third.stderr)
+	}
+
+	// The call graph changes (c's test stops calling the site) while reach.tsv is stale: a different key, recomputed, RED.
+	if err := os.WriteFile(filepath.Join(f.root, "c", "c_test.go"), []byte(reachTest("c", "\t_ = b.Name()\n")), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fourth := reachRun(t, f.root, env, "--reach", "--reach-cache", store)
+	if fourth.code == 0 || strings.Contains(fourth.stdout, "reach: reused") || !strings.Contains(fourth.stdout, "does not call for") {
+		t.Fatalf("a changed .go file must recompute and fail on the stale reach.tsv: exit %d:\n%s%s", fourth.code, fourth.stdout, fourth.stderr)
+	}
+}
+
+func TestReachCacheStoreIsNeverTrusted(t *testing.T) {
+	f, _ := reachFixture(t, reachCacheHead())
+	if res := writeTables(t, f.root); res.code != 0 {
+		t.Fatalf("plan-reads --write exited %d:\n%s%s", res.code, res.stdout, res.stderr)
+	}
+	env := reachEnv()
+	store := t.TempDir()
+	key := reachKeyOf(t, f.root, env)
+	if res := reachRun(t, f.root, env, "--reach", "--reach-cache", store); res.code != 0 {
+		t.Fatalf("seed run exit %d:\n%s%s", res.code, res.stdout, res.stderr)
+	}
+	file := filepath.Join(store, "reach-"+key+".tsv")
+	good, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	write := func(b string) {
+		if err := os.WriteFile(file, []byte(b), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The header binds the rows (rows-sha256): a store whose rows were edited after it was written is refused and the
+	// gate recomputes; a cache problem alone is never a FAIL.
+	refused := func(name, body string) {
+		t.Helper()
+		write(body)
+		res := reachRun(t, f.root, env, "--reach", "--reach-cache", store)
+		if res.code != 0 || strings.Contains(res.stdout, "reach: reused") || !strings.Contains(res.stdout, "reach: computed for input hash "+key) {
+			t.Errorf("%s: want the store refused, a recompute and a green gate, exit %d:\n%s%s", name, res.code, res.stdout, res.stderr)
+		}
+	}
+	refused("an extra row", string(good)+"b\tghost.go\tc\n")
+	if lines := strings.Split(strings.TrimRight(string(good), "\n"), "\n"); len(lines) > 2 {
+		refused("a missing row", strings.Join(lines[:len(lines)-1], "\n")+"\n")
+	}
+	refused("a header without the rows digest", "# reach-cache-v2 key "+key+"\n"+strings.SplitN(string(good), "\n", 2)[1])
+	// A store whose header digest matches its rows but whose rows differ from reach.tsv is still compared: RED.
+	rows := strings.SplitN(string(good), "\n", 2)[1]
+	rows += "b\tghost.go\tc\n"
+	digest := sha256.Sum256([]byte(rows))
+	write("# reach-cache-v2 key " + key + " rows-sha256 " + hex.EncodeToString(digest[:]) + "\n" + rows)
+	if res := reachRun(t, f.root, env, "--reach", "--reach-cache", store); res.code != 1 || !strings.Contains(res.stdout, "reach: reused") {
+		t.Fatalf("a consistent store that differs from reach.tsv must be reused and compared (RED), exit %d:\n%s%s", res.code, res.stdout, res.stderr)
+	}
+	// A header of another key, an empty file, a truncated header: not reused; recomputed, green, store rewritten.
+	for name, body := range map[string]string{
+		"other key":  strings.Replace(string(good), key, strings.Repeat("0", 64), 1),
+		"empty":      "",
+		"no header":  "b\tb.go\tc\n",
+		"old schema": strings.Replace(string(good), "reach-cache-v2", "reach-cache-v1", 1),
+	} {
+		write(body)
+		res := reachRun(t, f.root, env, "--reach", "--reach-cache", store)
+		if res.code != 0 || strings.Contains(res.stdout, "reach: reused") || !strings.Contains(res.stdout, "reach: computed for input hash "+key) {
+			t.Errorf("%s: want a recompute and a green gate, exit %d:\n%s%s", name, res.code, res.stdout, res.stderr)
+		}
+	}
+}
+
+func TestReachCacheStoresNothingOnARedRun(t *testing.T) {
+	f, _ := reachFixture(t, reachCacheHead())
+	if res := writeTables(t, f.root); res.code != 0 {
+		t.Fatalf("plan-reads --write exited %d:\n%s%s", res.code, res.stdout, res.stderr)
+	}
+	reach := filepath.Join(f.root, tablesDir, "reach.tsv")
+	b, err := os.ReadFile(reach)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimRight(string(b), "\n"), "\n")
+	if len(lines) < 2 {
+		t.Fatalf("fixture reach.tsv has no row to remove:\n%s", b)
+	}
+	if err := os.WriteFile(reach, []byte(strings.Join(lines[:len(lines)-1], "\n")+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	store := t.TempDir()
+	res := reachRun(t, f.root, reachEnv(), "--reach", "--reach-cache", store)
+	if res.code != 1 || !strings.Contains(res.stdout, "missing row") {
+		t.Fatalf("a reach.tsv with a row removed must fail with the missing row (exit 1):\n%s%s", res.stdout, res.stderr)
+	}
+	if got := storeFiles(t, store); len(got) != 0 {
+		t.Fatalf("a red run stored %v", got)
+	}
+}
+
+func TestReachCacheOffByDefault(t *testing.T) {
+	f, _ := reachFixture(t, reachCacheHead())
+	if res := writeTables(t, f.root); res.code != 0 {
+		t.Fatalf("plan-reads --write exited %d:\n%s%s", res.code, res.stdout, res.stderr)
+	}
+	res := reachRun(t, f.root, reachEnv(), "--reach")
+	if res.code != 0 || strings.Contains(res.stdout, "input hash") || !strings.Contains(res.stdout, "program run(s)") {
+		t.Fatalf("without --reach-cache the gate must compute as before: exit %d:\n%s%s", res.code, res.stdout, res.stderr)
+	}
+}
+
+// CHAOS-11421 r1: inputs the first key missed.
+func TestReachCacheKeyIncludesIgnoredGoFiles(t *testing.T) {
+	f, _ := reachFixture(t, reachCacheHead())
+	appendTo(t, filepath.Join(f.root, ".git"+"ignore"), "d/ignored_test.go\n")
+	env := reachEnv()
+	without := reachKeyOf(t, f.root, env)
+	appendTo(t, filepath.Join(f.root, "d", "ignored_test.go"), reachTest("d", "\t_ = b.Load\n"))
+	if with := reachKeyOf(t, f.root, env); with == without {
+		t.Fatal("a git-ignored .go file that the build loads left the key unchanged")
+	}
+}
+
+func TestReachCacheKeyIncludesTheFileSelectionEnvironment(t *testing.T) {
+	f, _ := reachFixture(t, reachCacheHead())
+	base := reachEnv("GOARCH=amd64", "GOAMD64=v1", "GOARM64=v8.0")
+	key := reachKeyOf(t, f.root, base)
+	for name, e := range map[string][]string{
+		"GOAMD64": reachEnv("GOARCH=amd64", "GOAMD64=v3", "GOARM64=v8.0"),
+		"GOARM64": reachEnv("GOARCH=amd64", "GOAMD64=v1", "GOARM64=v9.0"),
+	} {
+		if got := reachKeyOf(t, f.root, e); got == key {
+			t.Errorf("%s left the key unchanged", name)
+		}
+	}
+}
+
+func TestReachCacheRefusesALocalReplaceOutsideTheRepository(t *testing.T) {
+	f, work := reachFixture(t, reachCacheHead())
+	ext := filepath.Join(work, "ext")
+	if err := os.MkdirAll(ext, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string]string{"go.mod": "module ext\n", "e.go": "package ext\n"} {
+		if err := os.WriteFile(filepath.Join(ext, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if res := writeTables(t, f.root); res.code != 0 {
+		t.Fatalf("plan-reads --write exited %d:\n%s%s", res.code, res.stdout, res.stderr)
+	}
+	appendTo(t, filepath.Join(f.root, "go.mod"), "\nrequire ext v0.0.0\n\nreplace ext => ../ext\n")
+	env := reachEnv()
+	if res := reachRun(t, f.root, env, "--print-reach-key"); res.code == 0 {
+		t.Fatalf("a replace outside the repository must give no key:\n%s%s", res.stdout, res.stderr)
+	}
+	store := t.TempDir()
+	res := reachRun(t, f.root, env, "--reach", "--reach-cache", store)
+	if res.code != 0 || !strings.Contains(res.stdout, "reach: not reusable") || strings.Contains(res.stdout, "reach: reused") {
+		t.Fatalf("a replace outside the repository must compute fresh and say so: exit %d:\n%s%s", res.code, res.stdout, res.stderr)
+	}
+	if got := storeFiles(t, store); len(got) != 0 {
+		t.Fatalf("a refused cache stored %v", got)
+	}
+}
+
+func TestReachCacheKeyIncludesAReplaceTreeInsideTheRepository(t *testing.T) {
+	head := reachCacheHead()
+	head["ext/go.mod"] = "module ext\n"
+	head["ext/e.go"] = "package ext\n"
+	f, _ := reachFixture(t, head)
+	appendTo(t, filepath.Join(f.root, "go.mod"), "\nrequire ext v0.0.0\n\nreplace ext => ./ext\n")
+	env := reachEnv()
+	before := reachKeyOf(t, f.root, env)
+	appendTo(t, filepath.Join(f.root, "ext", "e.go"), "\nfunc F() {}\n")
+	if after := reachKeyOf(t, f.root, env); after == before {
+		t.Fatal("a change in a replace tree inside the repository left the key unchanged")
+	}
+}
+
+// CHAOS-11421 r2: the key is the whole `go env -json` minus a named denylist of volatile path keys.
+func TestReachCacheKeyCoversTheCompilerEnvironment(t *testing.T) {
+	f, _ := reachFixture(t, reachCacheHead())
+	// The first go command in the fixture may add go.sum; take that key once before comparing.
+	reachKeyOf(t, f.root, reachEnv())
+	base := reachKeyOf(t, f.root, reachEnv("CGO_ENABLED=1", "CC=gcc"))
+	for name, e := range map[string][]string{
+		"CC":           reachEnv("CGO_ENABLED=1", "CC=/definitely/missing/c-compiler"),
+		"CXX":          reachEnv("CGO_ENABLED=1", "CC=gcc", "CXX=/definitely/missing/cxx"),
+		"CGO_CFLAGS":   reachEnv("CGO_ENABLED=1", "CC=gcc", "CGO_CFLAGS=-O0"),
+		"CGO_CXXFLAGS": reachEnv("CGO_ENABLED=1", "CC=gcc", "CGO_CXXFLAGS=-O0"),
+		"CGO_LDFLAGS":  reachEnv("CGO_ENABLED=1", "CC=gcc", "CGO_LDFLAGS=-s"),
+		"PKG_CONFIG":   reachEnv("CGO_ENABLED=1", "CC=gcc", "PKG_CONFIG=/definitely/missing/pkg-config"),
+		"GOFLAGS":      reachEnv("CGO_ENABLED=1", "CC=gcc", "GOFLAGS=-tags=extra"),
+	} {
+		if got := reachKeyOf(t, f.root, e); got == base {
+			t.Errorf("%s left the key unchanged: a cached result would skip the load that now fails", name)
+		}
+	}
+}
+
+func TestReachCacheKeyIgnoresVolatilePathVariables(t *testing.T) {
+	f, _ := reachFixture(t, reachCacheHead())
+	// The first go command in the fixture may add go.sum; take that key once before comparing.
+	reachKeyOf(t, f.root, reachEnv())
+	base := reachKeyOf(t, f.root, reachEnv())
+	other := reachEnv("GOCACHE="+t.TempDir(), "GOTMPDIR="+t.TempDir(), "GOPATH="+t.TempDir(), "GOTELEMETRYDIR="+t.TempDir())
+	if got := reachKeyOf(t, f.root, other); got != base {
+		t.Fatal("a different GOCACHE, GOTMPDIR, GOPATH or GOTELEMETRYDIR moved the key: a runner path would miss every restore")
+	}
+}
+
+// --reach-cache-fresh (the workflow sets it on every event but pull_request): compute, never read, still store.
+func TestReachCacheFreshNeverReadsAndOverwritesAForgedStore(t *testing.T) {
+	f, _ := reachFixture(t, reachCacheHead())
+	if res := writeTables(t, f.root); res.code != 0 {
+		t.Fatalf("plan-reads --write exited %d:\n%s%s", res.code, res.stdout, res.stderr)
+	}
+	env := reachEnv()
+	store := t.TempDir()
+	key := reachKeyOf(t, f.root, env)
+	if res := reachRun(t, f.root, env, "--reach", "--reach-cache", store); res.code != 0 {
+		t.Fatalf("seed run exit %d:\n%s%s", res.code, res.stdout, res.stderr)
+	}
+	file := filepath.Join(store, "reach-"+key+".tsv")
+	good, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := strings.SplitN(string(good), "\n", 2)[1] + "b\tghost.go\tc\n"
+	digest := sha256.Sum256([]byte(rows))
+	forged := "# reach-cache-v2 key " + key + " rows-sha256 " + hex.EncodeToString(digest[:]) + "\n" + rows
+	if err := os.WriteFile(file, []byte(forged), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	res := reachRun(t, f.root, env, "--reach", "--reach-cache", store, "--reach-cache-fresh")
+	if res.code != 0 || strings.Contains(res.stdout, "reach: reused") || !strings.Contains(res.stdout, "reach: computed for input hash "+key) {
+		t.Fatalf("a fresh run must compute and ignore the store: exit %d:\n%s%s", res.code, res.stdout, res.stderr)
+	}
+	after, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(good) {
+		t.Fatalf("a fresh green run must store its own compute over the forged file:\n%s", after)
+	}
+}
+
+func TestReachCacheFreshWithoutAStoreStillComputes(t *testing.T) {
+	f, _ := reachFixture(t, reachCacheHead())
+	if res := writeTables(t, f.root); res.code != 0 {
+		t.Fatalf("plan-reads --write exited %d:\n%s%s", res.code, res.stdout, res.stderr)
+	}
+	store := t.TempDir()
+	res := reachRun(t, f.root, reachEnv(), "--reach", "--reach-cache", store, "--reach-cache-fresh")
+	if res.code != 0 || !strings.Contains(res.stdout, "reach: computed for input hash ") || len(storeFiles(t, store)) != 1 {
+		t.Fatalf("a fresh run with an empty store: exit %d, stored %v:\n%s%s", res.code, storeFiles(t, store), res.stdout, res.stderr)
+	}
+}
+
+// A restored store that holds only another exact key (a coarse-key hit of a different environment) is a miss.
+func TestReachCacheAStoreOfAnotherExactKeyIsAMiss(t *testing.T) {
+	f, _ := reachFixture(t, reachCacheHead())
+	if res := writeTables(t, f.root); res.code != 0 {
+		t.Fatalf("plan-reads --write exited %d:\n%s%s", res.code, res.stdout, res.stderr)
+	}
+	store := t.TempDir()
+	seed := reachEnv("CGO_ENABLED=1", "CC=gcc")
+	if res := reachRun(t, f.root, seed, "--reach", "--reach-cache", store); res.code != 0 {
+		t.Fatalf("seed run exit %d:\n%s%s", res.code, res.stdout, res.stderr)
+	}
+	other := reachEnv("CGO_ENABLED=1", "CC=gcc", "CGO_CFLAGS=-O0")
+	key := reachKeyOf(t, f.root, other)
+	res := reachRun(t, f.root, other, "--reach", "--reach-cache", store)
+	if res.code != 0 || strings.Contains(res.stdout, "reach: reused") || !strings.Contains(res.stdout, "reach: computed for input hash "+key) {
+		t.Fatalf("a store of another exact key must be a miss and a fresh compute: exit %d:\n%s%s", res.code, res.stdout, res.stderr)
+	}
+	if got := storeFiles(t, store); len(got) != 2 {
+		t.Fatalf("both exact keys should now be stored, got %v", got)
+	}
+}
+
+// A corrupt restored file (binary, truncated, a directory in its place) is a miss and a fresh compute, never a FAIL.
+func TestReachCacheACorruptStoreIsAMissNotAFailure(t *testing.T) {
+	f, _ := reachFixture(t, reachCacheHead())
+	if res := writeTables(t, f.root); res.code != 0 {
+		t.Fatalf("plan-reads --write exited %d:\n%s%s", res.code, res.stdout, res.stderr)
+	}
+	env := reachEnv()
+	key := reachKeyOf(t, f.root, env)
+	for name, body := range map[string][]byte{"binary": {0x00, 0xff, 0xfe, 0x01}, "truncated header": []byte("# reach-cache-v2 key " + key[:10])} {
+		store := t.TempDir()
+		if err := os.WriteFile(filepath.Join(store, "reach-"+key+".tsv"), body, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		res := reachRun(t, f.root, env, "--reach", "--reach-cache", store)
+		if res.code != 0 || strings.Contains(res.stdout, "reach: reused") || !strings.Contains(res.stdout, "reach: computed for input hash "+key) {
+			t.Errorf("%s: want a miss and a fresh compute, exit %d:\n%s%s", name, res.code, res.stdout, res.stderr)
+		}
+	}
+	dirStore := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dirStore, "reach-"+key+".tsv"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	res := reachRun(t, f.root, env, "--reach", "--reach-cache", dirStore)
+	if res.code != 0 || strings.Contains(res.stdout, "reach: reused") {
+		t.Errorf("a directory in the store path must not fail the gate: exit %d:\n%s%s", res.code, res.stdout, res.stderr)
+	}
+}

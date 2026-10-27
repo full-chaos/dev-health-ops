@@ -16,9 +16,7 @@ import (
 // integration_credentials table, transcribed column for column (id,
 // org_id, provider, name, is_active, credentials_encrypted, config, plus
 // the three last_test_*/created_at/updated_at columns ResolveEncrypted
-// never reads but the real table always carries) -- NOT the stub (id uuid
-// PK only) internal/testsupport/providersyncschema/schema.go deliberately
-// keeps out of its own scope. A hand-typed schema that silently drifts
+// never reads but the real table always carries). A hand-typed schema that silently drifts
 // from the real one is exactly the false-pass class AGENTS.md warns about;
 // this table is what ResolveEncrypted's own SELECT actually runs against.
 const integrationCredentialsDDL = `

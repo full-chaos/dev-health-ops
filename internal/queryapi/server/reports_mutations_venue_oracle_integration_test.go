@@ -266,7 +266,13 @@ func startGoMutationServer(t *testing.T, ctx context.Context, venue *venueoracle
 		t.Fatal(err)
 	}
 	t.Cleanup(admin.Close)
-	const role = "venue_qapi_writer"
+	// Per call: on a shared server (containers.RunWithSharedServers) both
+	// venue tests of this file run at once and a fixed name would collide.
+	role, err := containers.RoleName("venue_qapi_writer", &containers.Instance{URI: venue.AdminURI(t, venue.SourceDB)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { containers.DropRole(admin, role, t.Logf) })
 	const password = "venue_qapi_password"
 	for _, statement := range []string{
 		"CREATE ROLE " + role + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + password + "'",

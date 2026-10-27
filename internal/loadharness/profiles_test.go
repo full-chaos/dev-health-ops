@@ -2,16 +2,20 @@ package loadharness
 
 import (
 	"context"
+	"encoding/json"
 	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 )
 
 func loadProfile(t *testing.T, name string) Config {
@@ -279,5 +283,53 @@ func TestRequireDegrade(t *testing.T) {
 	got := ApplyRequireDegrade(Report{AssertOK: true, Fault: &FaultResult{TimeToDegradeMs: ptr(int64(1200))}})
 	if !got.AssertOK || got.Assertions[0].Name != "require_degrade" {
 		t.Fatalf("%+v", got)
+	}
+}
+
+var harnessTokenRE = regexp.MustCompile(`\$\{[^}]*\}`)
+
+func TestHarnessLoginEmailsPassTheLoginValidator(t *testing.T) {
+	if _, err := identity.NormalizeEmail("loadtest@example.invalid"); err == nil {
+		t.Fatal("the login validator accepts a special-use domain; the test cannot detect it")
+	}
+	reserved := []string{"@example.com", "@example.net", "@example.org"}
+	files, _ := filepath.Glob(filepath.Join("testdata", "*.json"))
+	more, _ := filepath.Glob(filepath.Join("testdata", "abuse", "*.json"))
+	found := 0
+	for _, f := range append(files, more...) {
+		raw, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := ParseConfig(raw, func(string) string { return "x" })
+		if err != nil {
+			t.Fatalf("%s: %v", f, err)
+		}
+		for _, tg := range cfg.Targets {
+			body := harnessTokenRE.ReplaceAllStringFunc(tg.Body, func(m string) string {
+				if m == "${SEQ}" {
+					return "1"
+				}
+				return "x"
+			})
+			var doc map[string]any
+			if json.Unmarshal([]byte(body), &doc) != nil {
+				continue
+			}
+			email, ok := doc["email"].(string)
+			if !ok {
+				continue
+			}
+			found++
+			if _, err := identity.NormalizeEmail(email); err != nil {
+				t.Errorf("%s/%s: login e-mail %q is refused by the login validator", f, tg.Name, email)
+			}
+			if !slices.ContainsFunc(reserved, func(d string) bool { return strings.HasSuffix(email, d) }) {
+				t.Errorf("%s/%s: login e-mail %q is not in the RFC 2606 example set", f, tg.Name, email)
+			}
+		}
+	}
+	if found < 4 {
+		t.Fatalf("found %d harness login e-mails, want at least 4", found)
 	}
 }

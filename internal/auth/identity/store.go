@@ -130,6 +130,10 @@ type Principal struct {
 	IsVerified   bool
 	AuthProvider *string
 	DisabledAt   *time.Time
+	// ServiceProvider is set by IdentityBySubject when the principal's public.users row is of the service provider.
+	ServiceProvider bool
+	// FullName is public.users.full_name, or auth.principals.display_name once auth owns users; "" and nil both mean none.
+	FullName *string
 }
 
 // ByEmail returns the user whose login key is normalizedEmail (the output of
@@ -159,13 +163,19 @@ func (s *Store) ByID(ctx context.Context, id uuid.UUID) (*Principal, error) {
 	return s.readPrincipal(ctx, "read user by id", legacyPrincipalSelect+`WHERE id = $1`, id)
 }
 
-const legacyPrincipalSelect = `SELECT id, password_hash, is_active, is_verified, auth_provider
+const legacyPrincipalSelect = `SELECT id, password_hash, is_active, is_verified, auth_provider, full_name
 FROM public.users `
 
+// ownedPrincipalSelect reads auth.users. A user whose public.users row is of the service provider (any row,
+// IsServiceProvider) reads with no password and that provider, never as "local": no local sign-in path accepts it.
 func (s *Store) ownedPrincipalSelect() string {
-	return `SELECT u.principal_id, u.password_hash, p.disabled_at IS NULL, u.email_verified_at IS NOT NULL,
-       CASE WHEN u.password_hash IS NULL THEN NULL ELSE 'local' END
+	service := ServiceProviderSQL("pu")
+	return `SELECT u.principal_id, CASE WHEN ` + service + ` THEN NULL ELSE u.password_hash END,
+       p.disabled_at IS NULL, u.email_verified_at IS NOT NULL,
+       CASE WHEN ` + service + ` THEN pu.auth_provider WHEN u.password_hash IS NULL THEN NULL ELSE 'local' END,
+       p.display_name
 FROM ` + s.q + `.users u JOIN ` + s.q + `.principals p ON p.id = u.principal_id
+LEFT JOIN public.users pu ON pu.id = u.principal_id
 `
 }
 
@@ -181,7 +191,7 @@ func (s *Store) readPrincipal(ctx context.Context, op, sql string, arg any) (*Pr
 			return nil, ErrMultipleUsers
 		}
 		var p Principal
-		if err := rows.Scan(&p.ID, &p.PasswordHash, &p.IsActive, &p.IsVerified, &p.AuthProvider); err != nil {
+		if err := rows.Scan(&p.ID, &p.PasswordHash, &p.IsActive, &p.IsVerified, &p.AuthProvider, &p.FullName); err != nil {
 			return nil, s.storeErr(ctx, op, err)
 		}
 		found = &p

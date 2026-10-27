@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
@@ -48,9 +49,10 @@ func stringOrEmpty(value *string) string {
 // disagree).
 //
 // Existing accounts are selected by (auth_provider, sso provider, auth_provider_id)
-// and only full_name and last_login_at are written; the identity columns are never
-// rewritten (resolveProviderIdentity).
-func (h handlers) provisionOrGetUser(ctx context.Context, row *providerRow, email, name string, providerID uuid.UUID, externalID string) (*provisionedUser, *provisionedMembership, error) {
+// and only full_name, last_login_at and updated_at are written, plus the SAML NameID
+// format and SPNameQualifier of a SAML sign-in (saml_nameid_format, saml_sp_name_qualifier);
+// the identity columns are never rewritten (resolveProviderIdentity).
+func (h handlers) provisionOrGetUser(ctx context.Context, row *providerRow, email, name string, providerID uuid.UUID, externalID string, saml *samlNameIDParts) (*provisionedUser, *provisionedMembership, error) {
 	authProviderValue := "oidc"
 	if row.Protocol == "saml" {
 		authProviderValue = "saml"
@@ -88,14 +90,9 @@ FROM users WHERE id = $1::uuid`, userID).Scan(&id, &existingEmail, &username, &e
 		}
 		return h.createAccountAndMembership(ctx, row, ssoNewAccount{
 			email: email, authProvider: authProviderValue, externalID: externalIDPtr, fullName: fullNamePtr,
-			ssoProviderID: &providerID,
+			ssoProviderID: &providerID, saml: saml,
 		})
 	}
-	if err != nil {
-		return nil, nil, err
-	}
-
-	membership, err := h.membershipOrJoin(ctx, row, id)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -104,12 +101,24 @@ FROM users WHERE id = $1::uuid`, userID).Scan(&id, &existingEmail, &username, &e
 	if name != "" && stringOrEmpty(existingFullName) == "" {
 		newFullName = &name
 	}
-	// While auth-service owns users the sign-in goes on and writes no public.users row.
+	// While auth-service owns users the sign-in goes on and writes no public.users row. The two SAML NameID
+	// columns ride in this one UPDATE: its own row lock covers them, and no other column is touched. An OIDC
+	// sign-in passes NULL and keeps both as they are. The UPDATE runs inside membershipOrJoin, in the join's
+	// transaction when the account joins.
+	var update func(ctx context.Context, db dbExecer) error
 	if h.refuseWhileUsersOwned() == nil {
-		if _, err := h.Pool.Exec(ctx, `UPDATE users SET full_name = $2, last_login_at = $3, updated_at = $3 WHERE id = $1::uuid`,
-			id, newFullName, now); err != nil {
-			return nil, nil, err
+		update = func(ctx context.Context, db dbExecer) error {
+			_, err := db.Exec(ctx, `UPDATE users SET full_name = $2, last_login_at = $3, updated_at = $3,
+	saml_nameid_format = COALESCE($4::text, saml_nameid_format),
+	saml_sp_name_qualifier = COALESCE($5::text, saml_sp_name_qualifier)
+WHERE id = $1::uuid`,
+				id, newFullName, now, saml.formatArg(), saml.qualifierArg())
+			return err
 		}
+	}
+	membership, err := h.membershipOrJoin(ctx, row, id, update)
+	if err != nil {
+		return nil, nil, err
 	}
 
 	return &provisionedUser{id: id, email: existingEmail, username: username, fullName: newFullName,
@@ -177,6 +186,15 @@ func (h handlers) resolveIdentityKey(ctx context.Context, keyQuery string, keyAr
 	return uuid.Nil, false, nil
 }
 
+// invalidProviderIDDetail is the 400 body of a sign-in whose identity provider returned no usable user id; it names
+// no value.
+func invalidProviderIDDetail() *pyjson.Object {
+	detail := pyjson.NewObject()
+	detail.Set("message", "The identity provider returned an unusable user id")
+	detail.Set("reason", "invalid_provider_id")
+	return detail
+}
+
 func identityConflictDetail() *pyjson.Object {
 	detail := pyjson.NewObject()
 	detail.Set("message", "This account is bound to another sign-in identity")
@@ -223,6 +241,27 @@ type ssoNewAccount struct {
 	externalID, fullName, username, avatarURL *string
 	// ssoProviderID is the OIDC or SAML provider whose identity the account holds; nil for OAuth.
 	ssoProviderID *uuid.UUID
+	// saml carries the NameID Format and SPNameQualifier of a SAML sign-up; nil for OIDC and OAuth.
+	saml *samlNameIDParts
+}
+
+// samlNameIDParts are the NameID attributes the identity key needs besides the NameID value. An empty string
+// is stored as an empty string: the assertion carried none, which is not the same as never captured (NULL).
+// The values are never logged.
+type samlNameIDParts struct{ format, spNameQualifier string }
+
+func (p *samlNameIDParts) formatArg() *string {
+	if p == nil {
+		return nil
+	}
+	return &p.format
+}
+
+func (p *samlNameIDParts) qualifierArg() *string {
+	if p == nil {
+		return nil
+	}
+	return &p.spNameQualifier
 }
 
 func jitRole(row *providerRow) string {
@@ -243,6 +282,9 @@ func (h handlers) createAccountAndMembership(ctx context.Context, row *providerR
 	if err := h.refuseWhileUsersOwned(); err != nil {
 		return nil, nil, err
 	}
+	if err := identity.RefuseInvalidProviderID(account.authProvider, account.externalID); err != nil {
+		return nil, nil, err
+	}
 	orgID, err := pythonparity.ParseUUID(row.OrgID)
 	if err != nil {
 		return nil, nil, err
@@ -256,9 +298,10 @@ func (h handlers) createAccountAndMembership(ctx context.Context, row *providerR
 	defer func() { _ = tx.Rollback(context.Background()) }()
 	if _, err := tx.Exec(ctx, `INSERT INTO users
 	(id, email, username, full_name, avatar_url, auth_provider, auth_provider_id, sso_provider_id, is_active, is_verified, is_superuser,
-	 token_version, last_login_at, created_at, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $9, true, true, false, 0, $8, $8, $8)`,
-		newID, account.email, account.username, account.fullName, account.avatarURL, account.authProvider, account.externalID, now, account.ssoProviderID); err != nil {
+	 token_version, last_login_at, created_at, updated_at, saml_nameid_format, saml_sp_name_qualifier)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $9, true, true, false, 0, $8, $8, $8, $10, $11)`,
+		newID, account.email, account.username, account.fullName, account.avatarURL, account.authProvider, account.externalID, now, account.ssoProviderID,
+		account.saml.formatArg(), account.saml.qualifierArg()); err != nil {
 		if isUniqueViolation(err) {
 			return nil, nil, errIdentityConflict
 		}
@@ -276,14 +319,31 @@ VALUES ($1, $2, $3, $4, $5, $5, $5)`, uuid.New(), orgID, newID, role, now); err 
 		&provisionedMembership{orgID: orgID, role: role}, nil
 }
 
+// dbExecer is the Exec of a pool or a transaction.
+type dbExecer interface {
+	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
+}
+
 // membershipOrJoin returns the account's membership in the provider's
 // organization. With auto-provision on, an account that has no membership in
 // any organization joins in one transaction; a member of another organization
-// only is refused.
-func (h handlers) membershipOrJoin(ctx context.Context, row *providerRow, userID uuid.UUID) (*provisionedMembership, error) {
+// only is refused. update is the sign-in's write to the user row, run once the
+// membership is settled: when the account joins it runs in the join's
+// transaction, so a failure of the update leaves no membership behind (a
+// committed join followed by a failing update made every later sign-in fail
+// the same way); otherwise it runs on the pool. nil means no write.
+func (h handlers) membershipOrJoin(ctx context.Context, row *providerRow, userID uuid.UUID, update func(ctx context.Context, db dbExecer) error) (*provisionedMembership, error) {
 	membership, err := h.requireMembership(ctx, userID, row.OrgID)
 	if !errors.Is(err, errMembershipRequired) || !row.AutoProvision {
-		return membership, err
+		if err != nil {
+			return nil, err
+		}
+		if update != nil {
+			if err := update(ctx, h.Pool); err != nil {
+				return nil, err
+			}
+		}
+		return membership, nil
 	}
 	orgID, err := pythonparity.ParseUUID(row.OrgID)
 	if err != nil {
@@ -310,6 +370,11 @@ func (h handlers) membershipOrJoin(ctx context.Context, row *providerRow, userID
 	if _, err := tx.Exec(ctx, `INSERT INTO memberships (id, org_id, user_id, role, joined_at, created_at, updated_at)
 VALUES ($1, $2, $3, $4, $5, $5, $5)`, uuid.New(), orgID, userID, role, now); err != nil {
 		return nil, err
+	}
+	if update != nil {
+		if err := update(ctx, tx); err != nil {
+			return nil, err
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, err

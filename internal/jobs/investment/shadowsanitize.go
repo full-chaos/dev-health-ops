@@ -17,6 +17,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/categorize"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/categorize/decision"
+	"github.com/full-chaos/dev-health-ops/internal/llmorgsettings"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
 
@@ -100,6 +101,35 @@ func shadowShaped(value string, maxBytes int, extra string) bool {
 // whole: a cut value would still be made of the peer's bytes.
 func shadowRequestID(id string) string {
 	if shadowShaped(id, shadowMaxIDBytes, "._-") {
+		return id
+	}
+	return ""
+}
+
+// shadowRequestIDSource keeps one of the four closed sources and drops any
+// other value.
+func shadowRequestIDSource(source string) string {
+	switch source {
+	case "aig", "ray", "client", "header":
+		return source
+	}
+	return ""
+}
+
+// shadowEndpointType keeps one of the two closed endpoint types and drops any
+// other value.
+func shadowEndpointType(endpointType string) string {
+	switch endpointType {
+	case llmorgsettings.EndpointTypeWorkersAI, llmorgsettings.EndpointTypeAIGateway:
+		return endpointType
+	}
+	return ""
+}
+
+// shadowGatewayID keeps a gateway-id-shaped value (empty stays empty) and drops
+// any other value whole.
+func shadowGatewayID(id string) string {
+	if id == "" || shadowShaped(id, shadowMaxIDBytes, "_-") {
 		return id
 	}
 	return ""

@@ -14,3 +14,13 @@ var ActionsV1 []byte
 //
 //go:embed roles.v1.json
 var RolesV1 []byte
+
+// Audiences is audiences.json's exact byte content.
+//
+//go:embed audiences.json
+var Audiences []byte
+
+// WorkloadRegistryV1 is workload-registry.json's exact byte content.
+//
+//go:embed workload-registry.json
+var WorkloadRegistryV1 []byte

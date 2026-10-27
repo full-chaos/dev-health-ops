@@ -9,6 +9,8 @@ on:
       - 'requirements-docs.txt'
       - 'scripts/check_freshness_inventory.py'
       - 'docs-data/**'
+      - 'Makefile'
+      - 'wrangler.jsonc'
       - '.github/workflows/docs-guards.yml'
       - '.github/workflows/docs-cloudflare.yml'
   pull_request:
@@ -19,6 +21,8 @@ on:
       - 'requirements-docs.txt'
       - 'scripts/check_freshness_inventory.py'
       - 'docs-data/**'
+      - 'Makefile'
+      - 'wrangler.jsonc'
       - '.github/workflows/docs-guards.yml'
       - '.github/workflows/docs-cloudflare.yml'
   merge_group:
@@ -133,6 +137,22 @@ jobs:
           go run -trimpath -mod=readonly ./cmd/cigate docs check-freshness \
             2>&1 | tee .build/docs-freshness-inventory.log
 
+      # The site above was built and checked for this revision. Stamp it and hand it to docs-preview, so a pull request
+      # builds and checks the site once. The stamp is the revision the checks ran for; the preview job refuses any other.
+      - name: Stamp the validated site with its revision
+        run: printf '%s\n' "$GITHUB_SHA" > .build/docs-validated.sha
+
+      - name: Upload the validated site
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: docs-site-${{ github.sha }}
+          path: |
+            .build/docs
+            .build/docs-validated.sha
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 1
+
       - name: Upload documentation quality evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
@@ -142,6 +162,70 @@ jobs:
             .build/docs-*.log
             .build/docs-*.tsv
             .build/docs-*.md
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 14
+
+  # Pull requests only: the Cloudflare preview assets from the site docs-guards just validated. This job runs the checks only
+  # the preview has (candidate facts) and prepares the assets; it does not build or check the site again. A site that is
+  # missing, or stamped for another revision, fails this job; it is never rebuilt or reused across revisions.
+  docs-preview:
+    name: docs-preview
+    if: github.event_name == 'pull_request'
+    needs: docs-guards
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          # CHAOS-10486: no setup-go cache here. Its key is shared by every workflow, and a job that compiles little or
+          # nothing saved it first and left the heavy jobs an empty entry.
+          cache: false
+
+      - name: Download the validated site
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: docs-site-${{ github.sha }}
+          path: .build
+
+      - name: Check the validated site is for this revision
+        run: |
+          set -o pipefail
+          go run -trimpath -mod=readonly ./cmd/cigate docs check-validated-site \
+            --site-dir .build/docs \
+            --stamp .build/docs-validated.sha \
+            --revision "$GITHUB_SHA" \
+            2>&1 | tee .build/docs-validated-site.log
+
+      - name: Check candidate facts
+        run: |
+          set -o pipefail
+          go run -trimpath -mod=readonly ./cmd/cigate docs check-candidate-facts \
+            2>&1 | tee .build/docs-candidate-facts.log
+
+      - name: Prepare validated preview assets
+        run: |
+          set -o pipefail
+          go run -trimpath -mod=readonly ./cmd/cigate docs-prepare \
+            --source .build/docs \
+            --output .build/docs-cloudflare \
+            --mode preview \
+            --redirects docs-data/redirects.tsv \
+            --source-revision "$GITHUB_SHA" \
+            2>&1 | tee .build/docs-cloudflare-build.log
+
+      - name: Upload build evidence and diagnostics
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: docs-cloudflare-preview-${{ github.sha }}
+          path: |
+            .build/docs-cloudflare/**
+            .build/docs-cloudflare-build.log
+            .build/docs-validated-site.log
+            .build/docs-candidate-facts.log
           include-hidden-files: true
           if-no-files-found: warn
           retention-days: 14

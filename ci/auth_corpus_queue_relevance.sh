@@ -8,15 +8,19 @@
 #   Row form 1: `dir/*` is a bash glob, its star crosses slashes. Row form 2: `=dir/*.go` matches one directory only.
 #   A malformed row prints corpus=true: a CR, leading or trailing whitespace, only `=`, a `=` after the first character, or an `=` row
 #   with no slash, an empty directory part or last element, a glob character in the directory part, or `//`.
-# CHAOS-11670: the entry is ALSO relevant when a changed file sits in a directory listed in ci/auth_corpus_closure.txt (one
-#   repo package directory per row: the go list -deps closure of the auth route packages, made by ci/auth_corpus_closure_gen.sh).
-#   A closure row is a plain relative path of [A-Za-z0-9._/-] segments; any other row (a glob character, whitespace, a leading
-#   or trailing slash, an empty, . or .. segment) and a missing or empty table print corpus=true.
+# CHAOS-11670: the entry is ALSO relevant when a changed file sits in a directory of the LIVE `go list -deps` closure of the
+#   roots below (the auth route packages and both binaries): the repo module's packages, plus the directory of every file those
+#   packages embed. The script runs go itself, in the checkout, with GOFLAGS=-mod=readonly, GOTOOLCHAIN=local and LC_ALL=C, once,
+#   only when the floor did not already match. It fails closed (one named line, corpus=true): no go, go list failing or timing
+#   out, an empty list, a root that does not exist, or a directory that is not a plain relative path of [A-Za-z0-9._/-] segments.
 # Changed paths are read with git diff -z and core.quotePath=false, so any file name is matched as written.
 # It fails closed: bad input, a git error or a missing or empty path list all print corpus=true.
+# Roots of the closure (CHAOS-11670): the go-api auth route packages, the apiservice top level and both binaries.
+roots=(./internal/api/session ./internal/api/sso ./internal/api/policy ./internal/apiservice ./cmd/dho ./cmd/auth-service)
 set -uo pipefail
 # CHAOS-11670: byte semantics for every pattern below (ranges, ?, [..]): a table row with a non-ASCII letter must not pass in any locale.
 export LC_ALL=C
+export GOFLAGS=-mod=readonly GOTOOLCHAIN=local
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" || {
   echo corpus=true
   exit 0
@@ -56,17 +60,6 @@ while IFS= read -r line || [ -n "${line}" ]; do
   globs+=("${line}")
 done <"${root}/ci/auth_corpus_paths.txt" 2>/dev/null
 [ "${#globs[@]}" -gt 0 ] || run_corpus "ci/auth_corpus_paths.txt is missing or has no rows"
-declare -A closure_dirs=()
-closure_table="${root}/ci/auth_corpus_closure.txt"
-while IFS= read -r line || [ -n "${line}" ]; do
-  { [ -n "${line}" ] && [[ ${line} != \#* ]]; } || continue
-  case ${line} in
-    *[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._/-]*) run_corpus "malformed row in ci/auth_corpus_closure.txt" ;;
-  esac
-  case "/${line}/" in */./* | */../* | *//*) run_corpus "malformed row in ci/auth_corpus_closure.txt" ;; esac
-  closure_dirs["${line}"]=1
-done <"${closure_table}" 2>/dev/null
-[ "${#closure_dirs[@]}" -gt 0 ] || run_corpus "ci/auth_corpus_closure.txt is missing or has no rows"
 mb="$(git -C "${root}" merge-base "${tip}" "${head}")" || run_corpus "no merge base of ${tip} and ${head}"
 # -z and core.quotePath=false: a path with a non-ASCII byte, a tab, a quote or a backslash is read as written, never quoted.
 changed_file="$(mktemp)" || run_corpus "no temporary file"
@@ -94,6 +87,34 @@ while IFS= read -r -d '' file; do
         ;;
     esac
   done
+done <"${changed_file}"
+
+# The floor did not match: judge the live closure of the roots.
+for r in "${roots[@]}"; do
+  [ -d "${root}/${r#./}" ] || run_corpus "closure root ${r} does not exist"
+done
+command -v go >/dev/null 2>&1 || run_corpus "closure unavailable: go is not on PATH"
+module="$(cd "${root}" && go list -m 2>/dev/null)" || run_corpus "closure unavailable: go list -m failed"
+case "${module}" in '' | *[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._/-]*) run_corpus "closure unavailable: odd module path" ;; esac
+golist_file="$(mktemp)" || run_corpus "no temporary file"
+trap 'rm -f "${changed_file}" "${golist_file}"' EXIT
+# P: a package of the repo module in the closure. E: a file such a package embeds (go:embed reaches into subdirectories).
+(cd "${root}" && timeout 300 go list -deps -f '{{if not .Standard}}{{with .Module}}{{if eq .Path "'"${module}"'"}}P {{$.ImportPath}}{{"\n"}}{{range $.EmbedFiles}}E {{$.ImportPath}}/{{.}}{{"\n"}}{{end}}{{end}}{{end}}{{end}}' "${roots[@]}") >"${golist_file}" 2>/dev/null \
+  || run_corpus "closure unavailable: go list -deps failed"
+declare -A closure_dirs=()
+while IFS= read -r line || [ -n "${line}" ]; do
+  [ -n "${line}" ] || continue
+  kind=${line%% *}
+  path=${line#* }
+  case "${kind}" in P | E) ;; *) run_corpus "closure unavailable: unexpected go list line" ;; esac
+  case "${path}" in "${module}"/*) path=${path#"${module}"/} ;; *) run_corpus "closure unavailable: a package outside the module" ;; esac
+  [ "${kind}" = E ] && path=${path%/*}
+  case "${path}" in '' | *[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._/-]*) run_corpus "closure unavailable: malformed directory" ;; esac
+  case "/${path}/" in */./* | */../* | *//*) run_corpus "closure unavailable: malformed directory" ;; esac
+  closure_dirs["${path}"]=1
+done <"${golist_file}"
+[ "${#closure_dirs[@]}" -gt 0 ] || run_corpus "closure unavailable: go list printed no package"
+while IFS= read -r -d '' file; do
   case "${file}" in
     */*)
       dir=${file%/*}

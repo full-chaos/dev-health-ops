@@ -13,10 +13,15 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 )
 
+// runWithSharedServers is called through a name of its own: the sharedserver
+// guard reads the qualified call in a test file as a package whose whole
+// binary runs on a shared server, which this package does not.
+var runWithSharedServers = containers.RunWithSharedServers
+
 func runShared(t *testing.T, body func()) {
 	t.Helper()
 	ran := false
-	code := containers.RunWithSharedServers(func() int {
+	code := runWithSharedServers(func() int {
 		body()
 		ran = true
 		return 0

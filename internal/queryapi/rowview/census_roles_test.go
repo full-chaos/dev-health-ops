@@ -12,7 +12,7 @@ package rowview
 //	writer        writes the table or builds its rows;
 //	names         a guard, a spec, a grant list, a fixture or a comment: no row read of its own.
 var readerRoles = map[string]struct{ role, why string }{
-	"internal/api/session/activity.go":                                     {"names", "guard, spec, grant, doc comment or fixture: no row read of its own"},
+	"internal/orgactivity/chread/chread.go":                                {"names", "guard, spec, grant, doc comment or fixture: no row read of its own"},
 	"internal/cigates/metricsproof/proof.go":                               {"names", "guard, spec, grant, doc comment or fixture: no row read of its own"},
 	"internal/goapiproof/restcorpus.go":                                    {"names", "guard, spec, grant, doc comment or fixture: no row read of its own"},
 	"internal/jobruntime/telemetry.go":                                     {"names", "table names in telemetry labels"},

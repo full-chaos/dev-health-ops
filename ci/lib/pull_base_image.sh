@@ -71,6 +71,8 @@ pull_pinned_base_image() {
     done
     failed+=("${src} (${tries} tries)")
   done
-  printf 'FAIL: base image %s@%s could not be pulled from: %s\n' "${repo##*/}" "${digest}" "$(IFS=,; printf '%s' "${failed[*]}" | sed 's/,/, /g')" >&2
+  listed=""
+  for src in "${failed[@]}"; do listed="${listed:+${listed}, }${src}"; done
+  printf 'FAIL: base image %s@%s could not be pulled from: %s\n' "${repo##*/}" "${digest}" "${listed}" >&2
   return 1
 }

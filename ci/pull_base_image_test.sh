@@ -131,6 +131,8 @@ C="sha256:$(printf 'c%.0s' {1..64})"
 OUT="$(env -i PATH="${T}/bin:/usr/bin:/bin" HOME="${T}" TMPDIR="${T}" LC_ALL=C FAKE_DIR="${FAKE_DIR}" FAKE_LOG="${FAKE_LOG}" FAKE_SEEN_DIGEST="${C}" PULL_BACKOFF_SECS="0 0" bash -c 'source "$1"; pull_pinned_base_image "$2"' _ "${LIB}" "${T}/Dockerfile2" 2>&1)" && R=0 || R=$?
 if { [ "${R}" = 0 ] && grep -q "^docker pull mirror.gcr.io/library/golang@${C}\$" "${FAKE_LOG}"; }; then ok "t10 digest is read from the Dockerfile"; else bad "t10"; fi
 
+if grep -q 'IFS' "${LIB}"; then bad "helper sets or reads IFS (semgrep ifs-tampering)"; else ok "helper sets no IFS"; fi
+
 for s in ci/check_auth_k8s.sh ci/check_session_cutover_rehearsal.sh; do
   p="$(grep -n 'pull_pinned_base_image' "${ROOT}/${s}" | head -1 | cut -d: -f1 || true)"
   b="$(grep -n '^build ' "${ROOT}/${s}" | head -1 | cut -d: -f1 || true)"

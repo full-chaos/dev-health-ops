@@ -336,10 +336,12 @@ func TestAuthServiceChartSecretMailRefusesAnUnusableSetting(t *testing.T) {
 		"resend with no key": {mailWith(resendMail, nil, "EMAIL_API_KEY"), "EMAIL_API_KEY"},
 	}
 	for name, tc := range cases {
-		_, out, err := renderAuth(t, phaseArgs(4, chartSecretMail(tc.data)...)...)
-		if err == nil || !strings.Contains(out, tc.want) || !strings.Contains(out, "secrets.data") {
-			t.Fatalf("%s: err=%v want %q\n%.300s", name, err, tc.want, out)
-		}
+		t.Run(strings.ReplaceAll(name, " ", "_"), func(t *testing.T) {
+			_, out, err := renderAuth(t, phaseArgs(4, chartSecretMail(tc.data)...)...)
+			if err == nil || !strings.Contains(out, tc.want) || !strings.Contains(out, "secrets.data") {
+				t.Fatalf("%s: err=%v want %q\n%.300s", name, err, tc.want, out)
+			}
+		})
 	}
 }
 

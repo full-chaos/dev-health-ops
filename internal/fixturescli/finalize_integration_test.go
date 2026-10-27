@@ -309,6 +309,7 @@ func TestFinalizeSyntheticWritesTheFrozenPythonRows(t *testing.T) {
 	requireNonVacuous(t, "Go", got, targets)
 	assertRelations(t, uri)
 	got["integration_datasets"] = withoutStateStamp(t, got["integration_datasets"])
+	got["sync_run_post_dispatches"] = withoutRecordedAt(t, got["sync_run_post_dispatches"])
 	if !reflect.DeepEqual(got, frozen) {
 		t.Fatalf("the rows the Go verb wrote differ from the frozen Python rows:\n%s", diffTables(frozen, got))
 	}
@@ -545,6 +546,30 @@ func withoutStateStamp(t *testing.T, rows []string) []string {
 		}
 		delete(decoded, "state_changed_at")
 		delete(decoded, "state_changed_by")
+		text, err := json.Marshal(decoded)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out[index] = string(text)
+	}
+	return out
+}
+
+// withoutRecordedAt checks that every sync_run_post_dispatches row the Go verb wrote carries the database clock in
+// recorded_at (revision 0161; the insert does not name the column, so its default fills it, and the Python producer
+// predates the column), then drops it so the rest of the row compares with the frozen Python row.
+func withoutRecordedAt(t *testing.T, rows []string) []string {
+	t.Helper()
+	out := make([]string, len(rows))
+	for index, row := range rows {
+		var decoded map[string]any
+		if err := json.Unmarshal([]byte(row), &decoded); err != nil {
+			t.Fatalf("decode sync_run_post_dispatches row %q: %v", row, err)
+		}
+		if decoded["recorded_at"] != "<ts>" {
+			t.Errorf("sync_run_post_dispatches row %q has no recorded_at stamp", row)
+		}
+		delete(decoded, "recorded_at")
 		text, err := json.Marshal(decoded)
 		if err != nil {
 			t.Fatal(err)

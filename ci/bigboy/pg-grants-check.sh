@@ -5,13 +5,15 @@
 # An added-privileges read-back (a privilege held), not an exactness check: exactness is the readiness gate's job (CheckAPIAuthorization).
 # CHAOS-8371 (D4566 class rules): bigboy reaches Postgres with `docker compose exec -T postgres` (compose verbs only, never a container
 # name); psql runs with `-w` and NO PGPASSWORD (the approved read-only psql form): no password is set, read or expanded anywhere, host or container.
+# prod (D6422): the bundled Postgres asks loopback clients for a scram-sha-256 password, so the pod shell hands its own POSTGRES_PASSWORD to
+# psql on 127.0.0.1. The sh -c script is single-quoted: the host never expands, passes or prints it.
 # Read-only. PG_OK when every expected privilege is held; PG_FAIL lists the missing ones. Role/table names only, no secrets.
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
 MODE=${1:?bigboy|prod}; EXP=${2:?expect file}
 run_psql() {
   if [ "$MODE" = bigboy ]; then (R=$(cd "${BIGBOY_ROOT:-/home/ubuntu/devhealth}" && pwd); cd "$R"; unset $(compgen -v | grep '^COMPOSE_') 2>/dev/null; docker compose -p dev-health --project-directory "$R" --env-file ops/.env --env-file _records/images.env -f "$HERE/compose.bigboy.yml" exec -T postgres sh -c 'psql -w -U $POSTGRES_USER -d ${POSTGRES_DB:-devhealth} -X -A -t')
-  else KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl -n dev-health exec -i dev-health-ops-postgresql-0 -- sh -c 'psql -w -U "$POSTGRES_USER" -d "$POSTGRES_DB" -X -q -A -t'; fi
+  else KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl -n dev-health exec -i dev-health-ops-postgresql-0 -- sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" psql -w -h 127.0.0.1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -X -q -A -t'; fi
 }
 SQL=""; N=0
 while read -r role table privs; do

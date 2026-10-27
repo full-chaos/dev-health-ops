@@ -874,6 +874,19 @@ goWorkers:
           passwordKey: RIVER_KEDA_READONLY_PASSWORD
           # KEDA only runs a count query against river_job.
           poolSize: 4
+      # -- CHAOS-11638: a pgbouncer_exporter sidecar in the transaction pooler pod (SHOW POOLS: cl_waiting per pool). Off by default.
+      #    It connects over a pod-local Unix socket as the console user `pgbouncer` (no password: same UID as PgBouncer). Turning it
+      #    on rolls the transaction pooler (one replica: its start time is an outage of the pooler). image must be digest-pinned.
+      #    metricsFrom: pod selectors admitted to `port` by the pooler NetworkPolicy (only when networkPolicy.enabled).
+      #    The image must ship /bin/sh and /bin/pgbouncer_exporter (the container command is a supervisor loop around the binary).
+      exporter:
+        enabled: false
+        image: ""
+        port: 9127
+        resources:
+          requests: {cpu: 10m, memory: 16Mi}
+          limits: {cpu: 50m, memory: 64Mi}
+        metricsFrom: []
     queueSession:
       port: 6433
       poolSize: 50

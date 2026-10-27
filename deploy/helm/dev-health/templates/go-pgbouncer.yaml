@@ -14,6 +14,24 @@ only the digest needs to be a well-formed 64 lowercase-hex-digit sha256.
 {{- if not (regexMatch "@sha256:[0-9a-f]{64}$" .Values.goWorkers.pgbouncer.image) }}
 {{- fail (printf "goWorkers.pgbouncer.image %q must be pinned by an immutable sha256 digest (repo@sha256:<64 lowercase-hex-digit digest>)" .Values.goWorkers.pgbouncer.image) }}
 {{- end }}
+{{- /*
+CHAOS-11638: an optional pgbouncer_exporter sidecar in the TRANSACTION pooler pod only. It reads SHOW POOLS (cl_waiting per
+(database, user)) over a Unix socket on a pod-local emptyDir as the reserved console user `pgbouncer`: PgBouncer admits that user
+with NO password when the peer has its own UID (the pod runs both containers as 70). So no stats role, no password, no Secret key.
+The exporter container runs a supervisor loop (sh in the image) so a failing exporter binary never ends the container: the pooler pod
+stays Ready (a pod is Ready only when every container is). No probes on the exporter.
+*/}}
+{{- $exporter := .Values.goWorkers.pgbouncer.transaction.exporter | default dict }}
+{{- if $exporter.enabled }}
+{{- if not (regexMatch "@sha256:[0-9a-f]{64}$" (toString $exporter.image)) }}
+{{- fail (printf "goWorkers.pgbouncer.transaction.exporter.image %q must be pinned by an immutable sha256 digest (repo@sha256:<64 lowercase-hex-digit digest>)" (toString $exporter.image)) }}
+{{- end }}
+{{- range $exporter.metricsFrom }}
+{{- if not (or .matchLabels .matchExpressions) }}
+{{- fail "goWorkers.pgbouncer.transaction.exporter.metricsFrom entries need a non-empty matchLabels or matchExpressions: an empty podSelector admits every pod in the namespace" }}
+{{- end }}
+{{- end }}
+{{- end }}
 {{- $secretName := include "dev-health.goPgbouncerSecretName" . }}
 {{- $postgresHost := include "dev-health.goPgbouncerPostgresHost" . }}
 {{- $postgresPort := include "dev-health.goPgbouncerPostgresPort" . }}
@@ -116,7 +134,7 @@ stringData:
 ---
 {{- end }}
 {{- $poolers := list
-  (dict "name" "transaction" "component" "go-pgbouncer-transaction" "port" .Values.goWorkers.pgbouncer.transaction.port "poolMode" "transaction" "poolSize" .Values.goWorkers.pgbouncer.transaction.poolSize "maxClientConnections" .Values.goWorkers.pgbouncer.transaction.maxClientConnections "rollingUpdate" (include "dev-health.pgbouncerRollingUpdate" (dict "ctx" . "pooler" "transaction")) "role" .Values.config.RIVER_DOMAIN_DATABASE_ROLE "passwordKey" "RIVER_DOMAIN_DATABASE_PASSWORD" "userlistSecret" $userlistSecret "usersIni" $usersIni "usersConfigName" $usersConfigName)
+  (dict "name" "transaction" "component" "go-pgbouncer-transaction" "port" .Values.goWorkers.pgbouncer.transaction.port "poolMode" "transaction" "poolSize" .Values.goWorkers.pgbouncer.transaction.poolSize "maxClientConnections" .Values.goWorkers.pgbouncer.transaction.maxClientConnections "rollingUpdate" (include "dev-health.pgbouncerRollingUpdate" (dict "ctx" . "pooler" "transaction")) "role" .Values.config.RIVER_DOMAIN_DATABASE_ROLE "passwordKey" "RIVER_DOMAIN_DATABASE_PASSWORD" "userlistSecret" $userlistSecret "usersIni" $usersIni "usersConfigName" $usersConfigName "exporter" (and $exporter.enabled true))
   (dict "name" "queue-session" "component" "go-pgbouncer-queue-session" "port" .Values.goWorkers.pgbouncer.queueSession.port "poolMode" "session" "poolSize" .Values.goWorkers.pgbouncer.queueSession.poolSize "maxClientConnections" .Values.goWorkers.pgbouncer.queueSession.maxClientConnections "rollingUpdate" (include "dev-health.pgbouncerRollingUpdate" (dict "ctx" . "pooler" "queueSession")) "role" .Values.config.RIVER_QUEUE_DATABASE_ROLE "passwordKey" "RIVER_QUEUE_DATABASE_PASSWORD")
   (dict "name" "coordinator-session" "component" "go-pgbouncer-coordinator-session" "port" .Values.goWorkers.pgbouncer.coordinatorSession.port "poolMode" "session" "poolSize" .Values.goWorkers.pgbouncer.coordinatorSession.poolSize "maxClientConnections" .Values.goWorkers.pgbouncer.coordinatorSession.maxClientConnections "rollingUpdate" (include "dev-health.pgbouncerRollingUpdate" (dict "ctx" . "pooler" "coordinatorSession")) "role" .Values.config.RIVER_COORDINATOR_DATABASE_ROLE "passwordKey" "RIVER_COORDINATOR_DATABASE_PASSWORD")
 }}
@@ -183,6 +201,10 @@ spec:
             - {name: LOG_CONNECTIONS, value: "0"}
             - {name: LOG_DISCONNECTIONS, value: "0"}
             - {name: LOG_POOLER_ERRORS, value: "1"}
+            {{- if $pooler.exporter }}
+            # CHAOS-11638: the console socket for the exporter sidecar (the image writes unix_socket_dir from this; unset = no socket).
+            - {name: UNIX_SOCKET_DIR, value: /var/run/pgbouncer}
+            {{- end }}
             {{- with $pooler.userlistSecret }}
             # CHAOS-5616: AUTH_FILE moves auth_file off the generated-config
             # emptyDir onto the chart-rendered, read-only userlist below, which
@@ -211,8 +233,33 @@ spec:
             {{- if $pooler.usersIni }}
             - {name: users, mountPath: /etc/pgbouncer-users, readOnly: true}
             {{- end }}
+            {{- if $pooler.exporter }}
+            - {name: console-socket, mountPath: /var/run/pgbouncer}
+            {{- end }}
           resources:
             {{- toYaml $.Values.goWorkers.pgbouncer.resources | nindent 12 }}
+        {{- if $pooler.exporter }}
+        - name: exporter
+          image: {{ $exporter.image | quote }}
+          imagePullPolicy: {{ $.Values.goWorkers.pgbouncer.pullPolicy }}
+          # CHAOS-11638: the container never exits on an exporter failure. A pod Ready gate counts EVERY container, so an exiting
+          # exporter took the pooler out of its Service (proof v2 C7: ~55 % client errors). The image's own sh supervises the binary,
+          # restarts it after 5 s and logs the exit code; only a pod stop (TERM/INT) ends the loop. No probes on this container.
+          command:
+            - /bin/sh
+            - -c
+            - 'trap ''kill "$p" 2>/dev/null; exit 0'' TERM INT; while :; do /bin/pgbouncer_exporter "$@" & p=$!; wait "$p"; echo "exporter exited rc=$?"; sleep 5 & wait $!; done'
+            - exporter-loop
+          args:
+            - --pgBouncer.connectionString=user=pgbouncer dbname=pgbouncer host=/var/run/pgbouncer port={{ $pooler.port }} sslmode=disable
+            - --web.listen-address=:{{ $exporter.port }}
+          ports: [{name: metrics, containerPort: {{ $exporter.port }}}]
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          volumeMounts:
+            - {name: console-socket, mountPath: /var/run/pgbouncer, readOnly: true}
+          resources:
+            {{- toYaml $exporter.resources | nindent 12 }}
+        {{- end }}
       volumes:
         - name: generated-config
           emptyDir: {}
@@ -227,6 +274,10 @@ spec:
         {{- if $pooler.usersIni }}
         - name: users
           configMap: {name: {{ $pooler.usersConfigName }}}
+        {{- end }}
+        {{- if $pooler.exporter }}
+        - name: console-socket
+          emptyDir: {}
         {{- end }}
 ---
 apiVersion: v1
@@ -269,6 +320,14 @@ spec:
     ScaledObject's trigger metadata, password via TriggerAuthentication --
     see go-worker-keda.yaml). Queue-session and coordinator-session
     poolers stay go-worker-only. */}}
+    {{- if and $pooler.exporter $exporter.metricsFrom }}
+    # CHAOS-11638: only the named scrapers reach the exporter port; the pooler port rules above are unchanged.
+    - from:
+        {{- range $exporter.metricsFrom }}
+        - podSelector: {{ toJson . }}
+        {{- end }}
+      ports: [{protocol: TCP, port: {{ $exporter.port }}}]
+    {{- end }}
     {{- if and $anyAutoscale (eq $pooler.name "transaction") }}
     - from:
         - namespaceSelector:

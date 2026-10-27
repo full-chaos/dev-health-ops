@@ -216,8 +216,7 @@ type writeOutcome int
 
 const (
 	writeDone writeOutcome = iota
-	// writeSkipped: no Valkey is configured, or the key or payload cannot be
-	// encoded (a lone surrogate); a retry cannot help, so it stays a 202.
+	// writeSkipped: no Valkey is configured; the batch stays a 202.
 	writeSkipped
 	// writeFailed: the stream write errored; a retry may succeed.
 	writeFailed
@@ -229,11 +228,10 @@ const streamRetryAfter = "1"
 
 func streamRetryHeader() http.Header { return http.Header{"Retry-After": {streamRetryAfter}} }
 
-// write is write_to_stream: it reports whether the entry was written. A key
-// or field the Python Redis client cannot encode as UTF-8 (a lone
-// surrogate) is not written.
+// write is write_to_stream: it reports whether the entry was written. A lone
+// surrogate never gets here: the model serialization refuses it first (500).
 func (h handler) write(ctx context.Context, stream, ingestionID, payload string) writeOutcome {
-	if h.store == nil || pyjson.HasSurrogate(stream) || pyjson.HasSurrogate(payload) {
+	if h.store == nil {
 		return writeSkipped
 	}
 	if err := h.store.Append(ctx, stream, ingestionID, payload); err != nil {

@@ -62,8 +62,7 @@ type ValkeyStreams struct {
 const openTimeout = 5 * time.Second
 
 var (
-	errNoStream    = errors.New("producttelemetry: Valkey is not configured")
-	errUnencodable = errors.New("producttelemetry: stream key or field is not encodable as UTF-8")
+	errNoStream = errors.New("producttelemetry: Valkey is not configured")
 )
 
 func (s *ValkeyStreams) open() (valkeygo.Client, error) {
@@ -148,9 +147,9 @@ func (h handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		var err error
 		stream, err = h.write(r.Context(), batch, ingestionID)
 		switch {
-		case errors.Is(err, errNoStream) || errors.Is(err, errUnencodable):
-			// Not configured, or a value no client can encode: a retry cannot
-			// help, so the batch is accepted as Python does.
+		case errors.Is(err, errNoStream):
+			// Not configured: a retry cannot help, so the batch is accepted as
+			// Python does.
 			h.logger.WarnContext(r.Context(), "Product telemetry stream unavailable", slog.String("error", err.Error()))
 			stream = "disabled"
 		case err != nil:
@@ -232,12 +231,6 @@ func (h handler) write(ctx context.Context, batch batch, ingestionID string) (st
 	}
 	if h.streams == nil {
 		return "", errNoStream
-	}
-	// The Python Redis client UTF-8 encodes the key and every field before
-	// it sends anything; a lone surrogate fails that encode, so no entry is
-	// written and the batch is accepted with stream "disabled".
-	if pyjson.HasSurrogate(stream) || pyjson.HasSurrogate(orgHash) {
-		return "", errUnencodable
 	}
 	err = h.streams.Append(ctx, stream, [][2]string{
 		{"ingestion_id", ingestionID}, {"source", batch.source}, {"org_id_hash", orgHash}, {"events", encoded},

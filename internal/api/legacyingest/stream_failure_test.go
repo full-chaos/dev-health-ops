@@ -128,8 +128,44 @@ func TestStreamWriteFailureWithReleaseFailureStillAnswers503(t *testing.T) {
 	}
 }
 
-func TestNoStoreAndUnencodablePayloadStayAccepted(t *testing.T) {
+func TestNoStoreStaysAccepted(t *testing.T) {
 	if got := postRoute(t, nil, io.Discard, "commits", commitsBody, nil); got.Code != http.StatusAccepted {
 		t.Fatalf("no store = %d, want 202", got.Code)
+	}
+}
+
+// A lone surrogate is serialized by the model before anything is written:
+// the unhandled 500, as the Python api answers. Nothing is streamed and no
+// claim is released (the claim is not refused by the stream).
+func TestLoneSurrogateIsTheUnhandled500BeforeAnyWrite(t *testing.T) {
+	for _, tc := range []struct{ name, body string }{
+		{"message", strings.Replace(commitsBody, `"message":"m"`, `"message":"\ud800"`, 1)},
+		{"org_id", strings.Replace(commitsBody, `"org_id":"org-1"`, `"org_id":"o\ud800"`, 1)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &downStore{}
+			got := postRoute(t, store, io.Discard, "commits", tc.body, map[string]string{"X-Idempotency-Key": "k3"})
+			if got.Code != http.StatusInternalServerError || got.Body.String() != `{"detail":"Internal Server Error"}` {
+				t.Fatalf("status %d body %s, want the 500 detail", got.Code, got.Body.String())
+			}
+			if store.appends != 0 || len(store.released) != 0 {
+				t.Fatalf("appends = %d released = %v, want none", store.appends, store.released)
+			}
+		})
+	}
+}
+
+// write skips only when no store is configured: a key or payload with a
+// lone surrogate never reaches it (the model refuses it first), so a
+// surrogate check there is dead code.
+func TestWriteSkipsOnlyWhenNoStoreIsConfigured(t *testing.T) {
+	surrogate := string([]byte{0xed, 0xa0, 0x80})
+	store := &downStore{}
+	h := handler{store: store, logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	if got := h.write(context.Background(), "ingest:o"+surrogate+":commits", "id", "p"+surrogate); got != writeDone || store.appends != 1 {
+		t.Fatalf("outcome %v appends %d, want writeDone and one append", got, store.appends)
+	}
+	if got := (handler{logger: h.logger}).write(context.Background(), "s", "id", "p"); got != writeSkipped {
+		t.Fatalf("no store: outcome %v, want writeSkipped", got)
 	}
 }

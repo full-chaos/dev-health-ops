@@ -33,13 +33,18 @@ var nonRandomIDCounter atomic.Uint64
 // and does not retry a UUID: it returns a NON-random id made of the "nr" prefix,
 // the call start time (UTC, nanoseconds) and a process-wide counter, which is
 // unique for each attempt in one process. It logs one Warn without the id.
+// Every id it returns is added to call.seen, so a later peer id equal to it is refused.
 func (c *TypeSafeClient) newClientRequestID(ctx context.Context, call *clefCall) string {
-	if id, err := uuid.NewV7(); err == nil {
-		return id.String()
+	var id string
+	if minted, err := uuid.NewV7(); err == nil {
+		id = minted.String()
+	} else {
+		c.logger.WarnContext(ctx, "clef client: the random source failed; the request id of this attempt is not random",
+			slog.String("provider", string(c.target.provider)))
+		id = "nr" + strconv.FormatInt(call.start.UnixNano(), 10) + "-" + strconv.FormatUint(nonRandomIDCounter.Add(1), 10)
 	}
-	c.logger.WarnContext(ctx, "clef client: the random source failed; the request id of this attempt is not random",
-		slog.String("provider", string(c.target.provider)))
-	return "nr" + strconv.FormatInt(call.start.UnixNano(), 10) + "-" + strconv.FormatUint(nonRandomIDCounter.Add(1), 10)
+	call.seen[id] = struct{}{}
+	return id
 }
 
 // clefRequestID picks the id of a clef attempt: the AI Gateway log id (only

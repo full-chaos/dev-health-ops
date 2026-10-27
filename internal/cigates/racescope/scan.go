@@ -92,11 +92,42 @@ func Parse(path string) ([]Row, error) {
 	return rows, nil
 }
 
+// goEnv is the environment of the child go tool: ten named variables the go command needs, read one by one, plus the three this scan
+// pins. The rest of the process environment (tokens, keys, DSNs) is never read and never forwarded.
+func goEnv() []string {
+	env := []string{"GOWORK=off", "GOFLAGS=-mod=readonly", "CGO_ENABLED=1"}
+	add := func(name, value string) {
+		if value != "" {
+			env = append(env, name+"="+value)
+		}
+	}
+	add("PATH", os.Getenv("PATH"))
+	add("HOME", os.Getenv("HOME"))
+	add("TMPDIR", os.Getenv("TMPDIR"))
+	add("GOROOT", os.Getenv("GOROOT"))
+	add("GOPATH", os.Getenv("GOPATH"))
+	add("GOCACHE", os.Getenv("GOCACHE"))
+	add("GOMODCACHE", os.Getenv("GOMODCACHE"))
+	add("GOTMPDIR", os.Getenv("GOTMPDIR"))
+	add("GOENV", os.Getenv("GOENV"))
+	add("GOTOOLCHAIN", os.Getenv("GOTOOLCHAIN"))
+	add("GOPROXY", os.Getenv("GOPROXY"))
+	add("GOSUMDB", os.Getenv("GOSUMDB"))
+	add("GONOSUMDB", os.Getenv("GONOSUMDB"))
+	add("GOPRIVATE", os.Getenv("GOPRIVATE"))
+	add("GOOS", os.Getenv("GOOS"))
+	add("GOARCH", os.Getenv("GOARCH"))
+	add("GOEXPERIMENT", os.Getenv("GOEXPERIMENT"))
+	add("CC", os.Getenv("CC"))
+	add("CXX", os.Getenv("CXX"))
+	return env
+}
+
 func goList(root string) (modpath string, pkgs map[string]*goPackage, err error) {
 	run := func(args ...string) ([]byte, error) {
 		cmd := exec.Command("go", args...)
 		cmd.Dir = root
-		cmd.Env = append(os.Environ(), "GOWORK=off", "GOFLAGS=-mod=readonly", "CGO_ENABLED=1")
+		cmd.Env = goEnv()
 		return cmd.Output()
 	}
 	out, err := run("list", "-m")
@@ -104,7 +135,7 @@ func goList(root string) (modpath string, pkgs map[string]*goPackage, err error)
 		return "", nil, fmt.Errorf("go list -m: %w", err)
 	}
 	modpath = strings.TrimSpace(string(out))
-	out, err = run("list", "-e", "-tags", "race", "-json", "./...")
+	out, err = run("list", "-e", "-json", "./...")
 	if err != nil {
 		return "", nil, fmt.Errorf("go list ./...: %w", err)
 	}
@@ -302,10 +333,9 @@ func loadTypes(root string, importPaths []string) (typeStore, map[string][]strin
 	cfg := &packages.Config{
 		Mode: packages.NeedName | packages.NeedFiles | packages.NeedCompiledGoFiles | packages.NeedImports | packages.NeedTypes |
 			packages.NeedTypesInfo | packages.NeedSyntax,
-		Dir:        root,
-		Tests:      true,
-		Env:        append(os.Environ(), "GOWORK=off", "GOFLAGS=-mod=readonly", "CGO_ENABLED=1"),
-		BuildFlags: []string{"-tags=race"},
+		Dir:   root,
+		Tests: true,
+		Env:   goEnv(),
 		ParseFile: func(fset *token.FileSet, filename string, src []byte) (*ast.File, error) {
 			return parser.ParseFile(fset, filename, src, parser.ParseComments)
 		},

@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -41,6 +42,7 @@ func shippedRows(t *testing.T, root string) []Row {
 
 // Every package the -race legs skip is proven free of concurrency in its own files and in its in-module import closure.
 func TestEveryRaceExcludedPackageIsProvenFreeOfConcurrency(t *testing.T) {
+	t.Parallel()
 	root := repoRoot(t)
 	problems, err := Check(root, shippedRows(t, root))
 	if err != nil {
@@ -51,13 +53,13 @@ func TestEveryRaceExcludedPackageIsProvenFreeOfConcurrency(t *testing.T) {
 	}
 }
 
-func planFor(t *testing.T, root, plan string, shard int) map[string]bool {
+func planFor(t *testing.T, root, plan string, shard, count int) map[string]bool {
 	t.Helper()
-	cmd := exec.Command("bash", "ci/check_go.sh", plan, string(rune('0'+shard)), "4")
+	cmd := exec.Command("bash", "ci/check_go.sh", plan, strconv.Itoa(shard), strconv.Itoa(count))
 	cmd.Dir = root
 	out, err := cmd.Output()
 	if err != nil {
-		t.Fatalf("ci/check_go.sh %s %d 4: %v", plan, shard, err)
+		t.Fatalf("ci/check_go.sh %s %d %d: %v", plan, shard, count, err)
 	}
 	keys := map[string]bool{}
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
@@ -70,16 +72,16 @@ func planFor(t *testing.T, root, plan string, shard int) map[string]bool {
 
 // The race legs run no listed package and the test legs run every one of them once: the retired receipt is the race run only.
 func TestRaceLegsSkipTheListedPackagesAndTestLegsStillRunThem(t *testing.T) {
+	t.Parallel()
 	root := repoRoot(t)
 	rows := shippedRows(t, root)
+	// One shard of one is the whole plan: two script calls instead of eight, and every package appears exactly once.
 	race, test := map[string]int{}, map[string]int{}
-	for shard := 1; shard <= 4; shard++ {
-		for k := range planFor(t, root, "race-shard-plan", shard) {
-			race[k]++
-		}
-		for k := range planFor(t, root, "test-shard-plan", shard) {
-			test[k]++
-		}
+	for k := range planFor(t, root, "race-shard-plan", 1, 1) {
+		race[k]++
+	}
+	for k := range planFor(t, root, "test-shard-plan", 1, 1) {
+		test[k]++
 	}
 	for _, r := range rows {
 		if race[r.Package] != 0 {
@@ -96,6 +98,7 @@ func TestRaceLegsSkipTheListedPackagesAndTestLegsStillRunThem(t *testing.T) {
 
 // A package that is excluded from -race is not also a solo package: the solo row would be dead.
 func TestNoRaceExcludedPackageIsAlsoSolo(t *testing.T) {
+	t.Parallel()
 	root := repoRoot(t)
 	solo, err := os.ReadFile(filepath.Join(root, "ci", "go_race_solo.tsv"))
 	if err != nil {
@@ -111,6 +114,7 @@ func TestNoRaceExcludedPackageIsAlsoSolo(t *testing.T) {
 }
 
 func TestRowsAreSortedUniqueAndWellFormed(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	write := func(body string) string {
 		p := filepath.Join(dir, "rows.tsv")
@@ -170,6 +174,7 @@ func problemsOf(t *testing.T, files map[string]string, rows ...Row) string {
 var rowA = Row{"a", "none", "-", "pure"}
 
 func TestAPureSynchronousPackageIsAccepted(t *testing.T) {
+	t.Parallel()
 	if got := problemsOf(t, map[string]string{"a/a.go": cleanPkg, "a/a_test.go": cleanTest}, rowA); got != "" {
 		t.Fatalf("a clean package was refused:\n%s", got)
 	}
@@ -177,6 +182,7 @@ func TestAPureSynchronousPackageIsAccepted(t *testing.T) {
 
 // Planted faults: each one turns the guard red.
 func TestPlantedConcurrencyInAnExcludedPackageIsRefused(t *testing.T) {
+	t.Parallel()
 	for name, tc := range map[string]struct {
 		files map[string]string
 		want  string
@@ -197,6 +203,7 @@ func TestPlantedConcurrencyInAnExcludedPackageIsRefused(t *testing.T) {
 }
 
 func TestAConcurrentInModuleImportIsRefusedDirectAndTransitive(t *testing.T) {
+	t.Parallel()
 	direct := map[string]string{
 		"a/a.go": "package a\n\nimport \"example.test/m/b\"\n\nfunc F() int { return b.G() }\n", "a/a_test.go": cleanTest,
 		"b/b.go": "package b\n\nfunc G() int { go func() {}(); return 1 }\n",
@@ -222,6 +229,7 @@ func TestAConcurrentInModuleImportIsRefusedDirectAndTransitive(t *testing.T) {
 }
 
 func TestRowsThatNameNothingRunnableAreRefused(t *testing.T) {
+	t.Parallel()
 	files := map[string]string{"a/a.go": cleanPkg, "a/a_test.go": cleanTest, "n/n.go": "package n\n"}
 	for want, row := range map[string]Row{
 		"no such package":    {"gone", "none", "-", "x"},
@@ -236,6 +244,7 @@ func TestRowsThatNameNothingRunnableAreRefused(t *testing.T) {
 
 // r1 P1: a dot import hides the package qualifier, so a timer goroutine (or any banned call) is a bare identifier.
 func TestADotImportInAnExcludedPackageIsRefused(t *testing.T) {
+	t.Parallel()
 	for name, files := range map[string]map[string]string{
 		"dot-imported time in a package file": {"a/a.go": "package a\n\nimport . \"time\"\n\nfunc F() int { AfterFunc(0, func() {}); return 1 }\n", "a/a_test.go": cleanTest},
 		"dot-imported time in a test file":    {"a/a.go": cleanPkg, "a/a_test.go": "package a\n\nimport (\n\t. \"time\"\n\t\"testing\"\n)\n\nfunc TestF(t *testing.T) { NewTicker(1) }\n"},
@@ -249,6 +258,7 @@ func TestADotImportInAnExcludedPackageIsRefused(t *testing.T) {
 // Threat-model ruling (acp, r2b): a package is excludable only if the scan can model all of it. Each case below is an ordinary-code
 // escape the reviewer reproduced with a real data race.
 func TestWhatTheScanCannotModelIsNotExcludable(t *testing.T) {
+	t.Parallel()
 	cgo := "package a\n\n/*\nvoid f(void) {}\n*/\nimport \"C\"\n\nfunc F() int { go func() { C.f() }(); return 1 }\n"
 	for name, tc := range map[string]struct {
 		files map[string]string
@@ -272,6 +282,7 @@ func TestWhatTheScanCannotModelIsNotExcludable(t *testing.T) {
 // acp ruling (CHAOS-11413): the exact set of callees that may take a function value, pinned. A new entry stays red until this list
 // names it, and until its line in scan.go carries a comment naming the stdlib contract that makes it synchronous.
 func TestThePureCalleeAllowlistIsPinnedAndEachEntryHasItsReason(t *testing.T) {
+	t.Parallel()
 	want := []string{"(*testing.T).Run", "path/filepath.Walk", "path/filepath.WalkDir", "slices.SortFunc", "slices.SortStableFunc", "sort.Slice", "sort.SliceStable"}
 	var got []string
 	for k := range pureCallees {
@@ -303,6 +314,7 @@ func TestThePureCalleeAllowlistIsPinnedAndEachEntryHasItsReason(t *testing.T) {
 
 // What a pure callee runs is scanned as package source: a goroutine inside a WalkDir callback, or t.Parallel inside a t.Run body.
 func TestPlantedConcurrencyInsideAPureCalleesFunctionIsRefused(t *testing.T) {
+	t.Parallel()
 	for name, tc := range map[string]struct{ src, want string }{
 		"goroutine inside a WalkDir callback": {"package a\n\nimport \"path/filepath\"\n\nfunc F() int {\n\t_ = filepath.WalkDir(\".\", func(p string, d int, err error) error { go func() {}(); return nil })\n\treturn 1\n}\n", "go statement"},
 		"t.Parallel inside a t.Run body":      {"package a\n\nimport \"testing\"\n\nfunc F(t *testing.T) { t.Run(\"x\", func(t *testing.T) { t.Parallel() }) }\n", "use of .Parallel"},
@@ -316,6 +328,7 @@ func TestPlantedConcurrencyInsideAPureCalleesFunctionIsRefused(t *testing.T) {
 // A pure callee may take only a function literal or a same-package function: its body is scanned. A value from another package, a
 // field, a variable or an interface method is a body the scan never sees.
 func TestAPureCalleeGivenAFunctionTheScanCannotSeeIsRefused(t *testing.T) {
+	t.Parallel()
 	head := "package a\n\nimport \"sort\"\n\nfunc local(i, j int) bool { return i < j }\n\ntype S struct{ less func(i, j int) bool }\n\n"
 	for name, call := range map[string]string{
 		"field of a struct":        `var s S; sort.Slice([]int{1}, s.less)`,
@@ -342,6 +355,7 @@ func TestAPureCalleeGivenAFunctionTheScanCannotSeeIsRefused(t *testing.T) {
 
 // Fail closed on what the scan cannot read: linkname, non-Go sources, plugins.
 func TestLinknameNonGoSourcesAndPluginsAreRefused(t *testing.T) {
+	t.Parallel()
 	for name, tc := range map[string]struct {
 		files map[string]string
 		want  string
@@ -362,6 +376,7 @@ func TestLinknameNonGoSourcesAndPluginsAreRefused(t *testing.T) {
 // acp final verify (CHAOS-11413): a function value is judged by its TYPE, not by how it is spelled. A package-level func variable, a
 // local variable, a struct field or a call result handed to a callee that runs it elsewhere (singleflight.DoChan) raced under -race.
 func TestAFunctionValueOfAnySpellingPassedToACalleeIsRefused(t *testing.T) {
+	t.Parallel()
 	head := "package a\n\ntype G struct{}\n\nfunc (G) DoChan(key string, fn func() (any, error)) {}\n\ntype J struct{ fn func() (any, error) }\n\nvar work = func() (any, error) { return nil, nil }\n\nfunc pick() func() (any, error) { return work }\n\n"
 	for name, body := range map[string]string{
 		"package-level func variable": `var g G; g.DoChan("k", work)`,
@@ -383,6 +398,7 @@ func TestAFunctionValueOfAnySpellingPassedToACalleeIsRefused(t *testing.T) {
 
 // t.Run is pinned by the type of its receiver (*testing.T), not by the receiver's name; a method named Run on another type is not pure.
 func TestThePinnedTRunIsResolvedByType(t *testing.T) {
+	t.Parallel()
 	okTest := "package a\n\nimport \"testing\"\n\nfunc TestF(tt *testing.T) { tt.Run(\"x\", func(u *testing.T) {}) }\n"
 	if got := problemsOf(t, map[string]string{"a/a.go": cleanPkg, "a/a_test.go": okTest}, rowA); got != "" {
 		t.Errorf("tt.Run on a *testing.T was refused:\n%s", got)
@@ -395,6 +411,7 @@ func TestThePinnedTRunIsResolvedByType(t *testing.T) {
 
 // Code outside the standard library and this module (singleflight, otel, grpc) runs user code on goroutines of its own.
 func TestAnOutOfModuleImportInTheClosureIsRefused(t *testing.T) {
+	t.Parallel()
 	own := map[string]string{"a/a.go": "package a\n\nimport \"golang.org/x/sync/singleflight\"\n\nvar g singleflight.Group\n\nfunc F() int { return 1 }\n", "a/a_test.go": cleanTest}
 	if got := problemsOf(t, own, rowA); !strings.Contains(got, "out-of-module") {
 		t.Errorf("an out-of-module import in the package was accepted:\n%s", got)
@@ -408,6 +425,7 @@ func TestAnOutOfModuleImportInTheClosureIsRefused(t *testing.T) {
 // acp delta verify of DELTA5 (CHAOS-11413): the stdlib is a deny-by-default ALLOWlist. Each plant below passed the r2b scanner with no
 // problem while go test -race reported a DATA RACE (the verifier's reproductions, same sources).
 func TestStdlibPackagesOffTheAllowlistAreRefused(t *testing.T) {
+	t.Parallel()
 	for name, files := range map[string]map[string]string{
 		"context: a custom parent makes propagateCancel call the user's Err on a goroutine": {
 			"a/a.go":      "package a\n\nimport \"context\"\n\ntype Ctx struct {\n\tcontext.Context\n\tN *int\n}\n\nfunc (c Ctx) Value(any) any { return nil }\n\nfunc (c Ctx) Err() error { *c.N++; return c.Context.Err() }\n\nfunc Child(parent context.Context, n *int) context.Context {\n\tc, _ := context.WithCancel(Ctx{parent, n})\n\treturn c\n}\n",
@@ -435,6 +453,7 @@ func TestStdlibPackagesOffTheAllowlistAreRefused(t *testing.T) {
 // The allowlist is a table the test reads: the exact set is pinned, and each entry says why it starts no goroutine and runs no user
 // code on another one.
 func TestTheStdlibAllowlistIsPinnedAndEachEntryHasItsReason(t *testing.T) {
+	t.Parallel()
 	want := []string{"bytes", "encoding/hex", "encoding/json", "errors", "fmt", "io", "io/fs", "log/slog", "math", "net/netip", "os",
 		"path/filepath", "regexp", "slices", "sort", "strconv", "strings", "testing", "time", "unicode", "unicode/utf8"}
 	var got []string
@@ -457,6 +476,7 @@ func TestTheStdlibAllowlistIsPinnedAndEachEntryHasItsReason(t *testing.T) {
 
 // A function converted to an interface type, however the conversion is spelled, runs where the scan cannot follow it.
 func TestAFuncConvertedToAnInterfaceIsRefused(t *testing.T) {
+	t.Parallel()
 	head := "package a\n\ntype S struct{ v any }\n\nfunc fn() {}\n\nfunc take(v any) {}\n\n"
 	for name, body := range map[string]string{
 		"var with an interface type":   "var fin any = func() {}\n\t_ = fin",
@@ -487,6 +507,7 @@ func TestAFuncConvertedToAnInterfaceIsRefused(t *testing.T) {
 // acp delta verify of DELTA6 (CHAOS-11413), F1: an in-module import path that go list ./... does not list (testdata, an underscore
 // directory, a nested module reached by replace) was neither scanned nor refused. The verifier's plants, same sources.
 func TestAnInModuleImportThatGoListDoesNotListIsRefused(t *testing.T) {
+	t.Parallel()
 	for name, files := range map[string]map[string]string{
 		"testdata": map[string]string{
 			"a/a.go":            "package a\n\nimport \"example.test/m/a/testdata/h\"\n\nfunc F(p *int) { h.Spawn(p) }\n",
@@ -515,6 +536,7 @@ func TestAnInModuleImportThatGoListDoesNotListIsRefused(t *testing.T) {
 // F2: a covered-by row skipped every hit of the covered package, and the callback check was syntactic only. Rows are now judged on
 // their full in-module closure, so a package that starts goroutines which call the row's code leaves the list, whatever the row says.
 func TestARowWhoseClosureStartsGoroutinesIsRefusedEvenWhenItNamesACoveringPackage(t *testing.T) {
+	t.Parallel()
 	covered := Row{"a", "covered-by:c", "TestH", "the pool lives in c"}
 	for name, files := range map[string]map[string]string{
 		"covered-fmt-writer": map[string]string{

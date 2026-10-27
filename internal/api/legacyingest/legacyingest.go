@@ -276,7 +276,7 @@ func (h handler) releaseIdempotencyKey(ctx context.Context, claimKey string) {
 		return
 	}
 	if err := h.store.Release(ctx, claimKey); err != nil {
-		h.logger.WarnContext(ctx, "Ingest: idempotency claim not released: "+claimKey, slog.String("error", err.Error()))
+		h.logger.WarnContext(ctx, "Ingest: idempotency claim not released", slog.String("error", err.Error()))
 	}
 }
 

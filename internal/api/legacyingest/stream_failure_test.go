@@ -119,12 +119,15 @@ func TestStreamWriteFailureReleasesTheIdempotencyClaim(t *testing.T) {
 func TestStreamWriteFailureWithReleaseFailureStillAnswers503(t *testing.T) {
 	store := &downStore{appendErr: errors.New("valkey down"), releaseErr: errors.New("valkey down")}
 	var logs bytes.Buffer
-	got := postRoute(t, store, &logs, "commits", commitsBody, map[string]string{"X-Idempotency-Key": "k2"})
+	got := postRoute(t, store, &logs, "commits", commitsBody, map[string]string{"X-Idempotency-Key": "k2\ninjected-line"})
 	if got.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want 503", got.Code)
 	}
 	if !strings.Contains(logs.String(), "idempotency claim not released") {
 		t.Fatalf("no named WARN for the unreleased claim, logs: %s", logs.String())
+	}
+	if strings.Contains(logs.String(), "injected-line") || strings.Contains(logs.String(), "k2") {
+		t.Fatalf("the client's idempotency key reached the log: %s", logs.String())
 	}
 }
 

@@ -288,3 +288,31 @@ func TestBarrierAllowsWhatIsNotAnAdminUsersVerb(t *testing.T) {
 		})
 	}
 }
+
+// The fake answers canned text, so the jsonpath the script sends is pinned here: the admin users scan asks, for pods, Jobs
+// and CronJobs, for command and args of containers, initContainers and ephemeralContainers (pods only for the last).
+func TestBarrierAdminUsersScanAsksForEveryContainerField(t *testing.T) {
+	r := runBarrier(t, goodBarrierWorld(), nil, "up-go-api")
+	want := map[string][]string{
+		"get pods":     {"{.command}{.args}", ".spec.containers[*]", ".spec.initContainers[*]", ".spec.ephemeralContainers[*]"},
+		"get jobs":     {"{.command}{.args}", ".spec.template.spec.containers[*]", ".spec.template.spec.initContainers[*]"},
+		"get cronjobs": {"{.command}{.args}", ".spec.jobTemplate.spec.template.spec.containers[*]", ".spec.jobTemplate.spec.template.spec.initContainers[*]"},
+	}
+	for verb, parts := range want {
+		found := false
+		for _, line := range strings.Split(r.argv, "\n") {
+			if !strings.Contains(line, verb+" -o jsonpath=") {
+				continue
+			}
+			found = true
+			for _, part := range parts {
+				if !strings.Contains(line, part) {
+					t.Errorf("%s: the jsonpath lacks %q: %s", verb, part, line)
+				}
+			}
+		}
+		if !found {
+			t.Errorf("no namespace-wide `%s -o jsonpath=` call (the scan must not depend on the release label)", verb)
+		}
+	}
+}

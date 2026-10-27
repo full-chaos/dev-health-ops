@@ -23,7 +23,7 @@ import (
 func TestUserCRUDAndPasswordChangeMatchesThePythonAPI(t *testing.T) {
 	// CHAOS-7204: Go records the client IP behind a trusted peer only; Python records
 	// the header's first hop. Trust this test's loopback peer so both planes agree.
-	t.Setenv("TRUSTED_PROXIES", "127.0.0.1,::1,testclient")
+	t.Setenv("TRUSTED_PROXIES", "127.0.0.1,::1")
 	ctx := context.Background()
 	golden := venueoracle.OpenGolden(t, adminRunValuesGolden("users", t.Name(), "de576d358c41c012c6bc4d8eecaed870d6cb3306c3032242650fb6b335c72cf4"))
 	root := repoRoot(t)

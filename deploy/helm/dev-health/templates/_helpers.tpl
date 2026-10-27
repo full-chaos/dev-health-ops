@@ -1087,6 +1087,62 @@ The integer value of a dotted IPv4 address (validated by the caller).
 {{- end -}}
 
 {{/*
+One trusted proxy list, checked as internal/auth/clientaddr ParseTrust reads it (auth-service, and go-api through
+internal/api/clientip), so a rendered list never stops either service at start, plus the node pod range rule (CHAOS-11703):
+a wide IPv4 entry holds the node's own addresses (the network address, the bridge at the next one), from which a host
+process or a hostNetwork pod reaches the port past the pod selector, so it needs "!<network>" and "!<network+1>" beside it.
+dict: key (the values key the messages name), entries (list of strings), ackKey ("" = no ack band: a wide IPv4 entry needs
+only its node exclusions), ack (bool), peer (what the port admits, for the node message). Prints nothing; fails on a bad list.
+*/}}
+{{- define "dev-health.trustedProxyList" -}}
+{{- $p := . }}
+{{- $trusted := list }}
+{{- $excluded := list }}
+{{- range $p.entries }}
+{{- $entry := toString . }}
+{{- if hasPrefix "!" $entry }}
+{{- $addr := trimPrefix "!" $entry }}
+{{- if or (contains "/" $addr) (contains ":" $addr) (not (include "dev-health.trustedProxyEntry" $addr)) }}{{- fail (printf "%s exclusion entries must each be \"!\" and one IPv4 address, never a network, an IPv6 or an IPv4-mapped address: %q is not" $p.key $entry) }}{{- end }}
+{{- $excluded = append $excluded $addr }}
+{{- else }}
+{{- if or (not (include "dev-health.trustedProxyEntry" $entry)) (regexMatch "/0$" $entry) (regexMatch "^(?i)::ffff:" $entry) }}{{- fail (printf "%s entries must each be one IP address or CIDR network, never a /0 network or an IPv4-mapped form: a trusted peer picks the client address of every request" $p.key) }}{{- end }}
+{{- if contains "/" $entry }}
+{{- $bits := int (index (splitList "/" $entry) 1) }}
+{{- $v6 := contains ":" $entry }}
+{{- if or (and (not $v6) (lt $bits 24)) (and $v6 (lt $bits 64)) }}{{- fail (printf "%s entry %q is wider than a /24 (IPv4) or a /64 (IPv6): the node pod range is the widest list allowed%s" $p.key $entry (ternary (printf ", even with %s" $p.ackKey) "" (ne $p.ackKey ""))) }}{{- end }}
+{{- if and $v6 (lt $bits 124) }}{{- fail (printf "%s entry %q is an IPv6 network wider than a /124: the render cannot name its node exclusions, %s" $p.key $entry (ternary (printf "so %s does not allow it; list the go-api pod addresses" $p.ackKey) "so it is refused; list the proxy addresses" (ne $p.ackKey ""))) }}{{- end }}
+{{- if and $p.ackKey (lt $bits 28) (not $p.ack) }}{{- fail (printf "%s entry %q is wider than a /28 (IPv4) or a /124 (IPv6): every address in it is believed as a proxy that names the client. It is allowed only with %s=true, with its node exclusions beside it, and only while the auth-service NetworkPolicy admits go-api's pods alone on the API port; prefer the go-api pod addresses" $p.key $entry $p.ackKey) }}{{- end }}
+{{- end }}
+{{- $trusted = append $trusted $entry }}
+{{- end }}
+{{- end }}
+{{- /* An exclusion mirrors clientaddr.ParseTrust: inside a listed network, never also listed as an address. IPv4 only, so the render can check it. */}}
+{{- range $x := $excluded }}
+{{- if has $x $trusted }}{{- fail (printf "%s exclusion entries must not name an address the list also trusts: \"!%s\"" $p.key $x) }}{{- end }}
+{{- $xv := int (include "dev-health.ipv4Int" $x) }}
+{{- $inside := false }}
+{{- range $trusted }}
+{{- if and (contains "/" .) (not (contains ":" .)) }}
+{{- $parts := splitList "/" . }}
+{{- $nv := int (include "dev-health.ipv4Int" (index $parts 0)) }}
+{{- $size := 1 }}
+{{- range until (int (sub 32 (int (index $parts 1)))) }}{{- $size = mul $size 2 }}{{- end }}
+{{- if and (ge $xv $nv) (lt $xv (add $nv $size)) }}{{- $inside = true }}{{- end }}
+{{- end }}
+{{- end }}
+{{- if not $inside }}{{- fail (printf "%s exclusion entries must each lie inside a listed IPv4 network: \"!%s\" does not" $p.key $x) }}{{- end }}
+{{- end }}
+{{- range $trusted }}
+{{- if and (contains "/" .) (not (contains ":" .)) (lt (int (index (splitList "/" .) 1)) 28) }}
+{{- $net := index (splitList "/" .) 0 }}
+{{- $o := splitList "." $net }}
+{{- $bridge := printf "%s.%s.%s.%d" (index $o 0) (index $o 1) (index $o 2) (add1 (int (index $o 3))) }}
+{{- if not (and (has $net $excluded) (has $bridge $excluded)) }}{{- fail (printf "%s entry %q needs its node exclusions \"!%s\" and \"!%s\" in the same list: the range holds the node's own addresses, from which a host process or a hostNetwork pod reaches %s" $p.key . $net $bridge $p.peer) }}{{- end }}
+{{- end }}
+{{- end }}
+{{- end -}}
+
+{{/*
 One authService.trustedProxies entry is what internal/auth/clientaddr ParseTrust accepts (a bare IP address, or a strict CIDR
 network: canonical prefix digits, no host bits, no zone), so a rendered value never stops auth-service at start. Prints "true" when
 the entry is valid, nothing otherwise. The chart refuses /0 and IPv4-mapped forms on top of this. An exclusion entry

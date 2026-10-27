@@ -147,9 +147,18 @@ func (h handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	} else {
 		var err error
 		stream, err = h.write(r.Context(), batch, ingestionID)
-		if err != nil {
+		switch {
+		case errors.Is(err, errNoStream) || errors.Is(err, errUnencodable):
+			// Not configured, or a value no client can encode: a retry cannot
+			// help, so the batch is accepted as Python does.
 			h.logger.WarnContext(r.Context(), "Product telemetry stream unavailable", slog.String("error", err.Error()))
 			stream = "disabled"
+		case err != nil:
+			// Python accepts and drops here; this is a deliberate deviation
+			// (CHAOS-11643): the client retries.
+			h.logger.WarnContext(r.Context(), "Product telemetry stream unavailable, answering 503", slog.String("error", err.Error()))
+			policy.WriteDetail(w, http.StatusServiceUnavailable, "Product telemetry stream unavailable; retry", http.Header{"Retry-After": {streamRetryAfter}})
+			return
 		}
 	}
 	out := pyjson.NewObject()
@@ -235,6 +244,10 @@ func (h handler) write(ctx context.Context, batch batch, ingestionID string) (st
 	})
 	return stream, err
 }
+
+// streamRetryAfter is the Retry-After of a stream-unavailable 503, as the
+// auth proxy's own 503 refusal.
+const streamRetryAfter = "1"
 
 // writeJSON is the shared JSONResponse writer (policy.WriteJSON), which
 // logs a body it cannot serialize and answers the unhandled-error 500.

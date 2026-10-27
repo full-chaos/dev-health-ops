@@ -45,6 +45,7 @@ type Store interface {
 	Append(ctx context.Context, stream, ingestionID, payload string) error
 	// Claim is SET key 1 NX EX 86400: whether the key was newly set.
 	Claim(ctx context.Context, key string) (bool, error)
+	Release(ctx context.Context, key string) error
 }
 
 // ValkeyStore is Store over a Valkey client.
@@ -167,7 +168,8 @@ func (h handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !h.authenticate(w, r, raw) {
 		return
 	}
-	if !h.claimIdempotencyKey(w, r) {
+	idempotencyKey, ok := h.claimIdempotencyKey(w, r)
+	if !ok {
 		return
 	}
 	parsed, problems := h.route.parse(body)
@@ -179,6 +181,8 @@ func (h handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.telemetry(w, r, parsed)
 		return
 	}
+	// A refusal after the claim must free it, or the client's retry is a 409.
+	refused := func() { h.releaseIdempotencyKey(r.Context(), idempotencyKey) }
 	// model_dump_json runs before anything is written: a value it cannot
 	// serialize (a lone surrogate) is the unhandled 500.
 	payload, err := pyjson.MarshalModel(parsed.Dump)
@@ -189,7 +193,15 @@ func (h handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	ingestionID := uuid.NewString()
 	stream := "ingest:" + parsed.OrgID + ":" + h.route.kind
-	if !h.write(r.Context(), stream, ingestionID, string(payload)) {
+	switch h.write(r.Context(), stream, ingestionID, string(payload)) {
+	case writeFailed:
+		// Python answers 202 here and drops the payload (accept-and-warn);
+		// this is a deliberate deviation (CHAOS-11643): the client retries.
+		refused()
+		h.logger.WarnContext(r.Context(), "Ingest "+ingestionID+": stream unavailable, answering 503")
+		policy.WriteDetail(w, http.StatusServiceUnavailable, "Ingest stream unavailable; retry", streamRetryHeader())
+		return
+	case writeSkipped:
 		h.logger.WarnContext(r.Context(), "Ingest "+ingestionID+": Redis unavailable, payload not streamed")
 	}
 	out := pyjson.NewObject()
@@ -200,38 +212,74 @@ func (h handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	policy.WriteModel(w, http.StatusAccepted, out, nil)
 }
 
+type writeOutcome int
+
+const (
+	writeDone writeOutcome = iota
+	// writeSkipped: no Valkey is configured, or the key or payload cannot be
+	// encoded (a lone surrogate); a retry cannot help, so it stays a 202.
+	writeSkipped
+	// writeFailed: the stream write errored; a retry may succeed.
+	writeFailed
+)
+
+// streamRetryAfter is the Retry-After of a stream-unavailable 503, as the
+// auth proxy's own 503 refusal.
+const streamRetryAfter = "1"
+
+func streamRetryHeader() http.Header { return http.Header{"Retry-After": {streamRetryAfter}} }
+
 // write is write_to_stream: it reports whether the entry was written. A key
 // or field the Python Redis client cannot encode as UTF-8 (a lone
 // surrogate) is not written.
-func (h handler) write(ctx context.Context, stream, ingestionID, payload string) bool {
+func (h handler) write(ctx context.Context, stream, ingestionID, payload string) writeOutcome {
 	if h.store == nil || pyjson.HasSurrogate(stream) || pyjson.HasSurrogate(payload) {
-		return false
+		return writeSkipped
 	}
 	if err := h.store.Append(ctx, stream, ingestionID, payload); err != nil {
 		h.logger.ErrorContext(ctx, "Failed to write to stream "+stream, slog.String("error", err.Error()))
-		return false
+		return writeFailed
 	}
-	return true
+	return writeDone
 }
 
 // claimIdempotencyKey is check_idempotency: an X-Idempotency-Key is
 // remembered for a day and a repeat is a 409; with no Valkey, or a Valkey
-// that fails, the request goes on, as the Python api degrades.
-func (h handler) claimIdempotencyKey(w http.ResponseWriter, r *http.Request) bool {
+// that fails, the request goes on, as the Python api degrades. It returns
+// the key it claimed ("" when none), and false when it answered.
+func (h handler) claimIdempotencyKey(w http.ResponseWriter, r *http.Request) (string, bool) {
 	key := r.Header.Get("X-Idempotency-Key")
 	if key == "" || h.store == nil {
-		return true
+		return "", true
 	}
-	claimed, err := h.store.Claim(r.Context(), "idem:"+latin1(key))
+	claimKey := "idem:" + latin1(key)
+	claimed, err := h.store.Claim(r.Context(), claimKey)
 	switch {
 	case err != nil:
 		h.logger.WarnContext(r.Context(), "Redis unavailable for idempotency check, skipping", slog.String("error", err.Error()))
-		return true
+		return "", true
 	case !claimed:
 		policy.WriteDetail(w, http.StatusConflict, "Duplicate request", nil)
-		return false
+		return "", false
 	}
-	return true
+	return claimKey, true
+}
+
+// Release implements Store: DEL frees a claim whose request was refused,
+// so a retry with the same key is not a 409.
+func (s ValkeyStore) Release(ctx context.Context, key string) error {
+	return s.Client.Do(ctx, s.Client.B().Del().Key(key).Build()).Error()
+}
+
+// releaseIdempotencyKey frees a claim best effort; a failed DEL leaves the
+// key to expire, so a retry inside the day is a 409.
+func (h handler) releaseIdempotencyKey(ctx context.Context, claimKey string) {
+	if claimKey == "" || h.store == nil {
+		return
+	}
+	if err := h.store.Release(ctx, claimKey); err != nil {
+		h.logger.WarnContext(ctx, "Ingest: idempotency claim not released: "+claimKey, slog.String("error", err.Error()))
+	}
 }
 
 // telemetry is the telemetry route's tail: the rows are written to

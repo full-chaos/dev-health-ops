@@ -125,7 +125,7 @@ func runLegWithFakeGo(t *testing.T, leg string, shard int, mode string) (cmdResu
 		"FAKE_CENSUS="+filepath.Join(repo, "ci", "race_excluded_tests.tsv"), "FAKE_MODE="+goMode, "FAKE_GO_LISTING="+listPath,
 		"GO_TEST_LEG_JSON_DIR="+legDir, "GO_TEST_JSON_DIR="+filepath.Join(work, "ps-json"))
 	// A stage that never ends is a failure of the leg under test, not a hang of this test.
-	res := cmdSpec{dir: repo, env: env}.run("timeout", "240", "bash", script, "ci-leg", leg, shard1(shard), count)
+	res := cmdSpec{dir: repo, env: env}.run("timeout", "150", "bash", script, "ci-leg", leg, shard1(shard), count)
 	raw, _ := os.ReadFile(filepath.Join(legDir, leg+"-"+shard1(shard)+"-of-"+count+".json"))
 	return res, string(raw)
 }

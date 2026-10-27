@@ -32,6 +32,10 @@ func corpusQueueRepo(t *testing.T, withPaths bool) string {
 	if withPaths {
 		names = append(names, "ci/auth_corpus_paths.txt")
 	}
+	// CHAOS-11670: the shared set of the corpus (roots, tested package) beside the script, once it exists.
+	if _, err := os.Stat(filepath.Join(root, "ci", "auth_corpus_set.sh")); err == nil {
+		names = append(names, "ci/auth_corpus_set.sh")
+	}
 	for _, name := range names {
 		raw, err := os.ReadFile(filepath.Join(root, name))
 		if err != nil {
@@ -46,7 +50,7 @@ func corpusQueueRepo(t *testing.T, withPaths bool) string {
 	}
 	corpusQueueFakeGo(t, dir)
 	// the six roots of the live closure exist in the tree (the script refuses a missing root)
-	for _, r := range []string{"internal/api/session", "internal/api/sso", "internal/api/policy", "internal/apiservice", "cmd/dho", "cmd/auth-service"} {
+	for _, r := range []string{"internal/api/session", "internal/api/sso", "internal/api/policy", "internal/apiservice", "cmd/dho", "cmd/auth-service", "cmd/dev-health-worker-migrate", "cmd/auth-migrate", "internal/apiservice/authflowvenue"} {
 		if err := os.MkdirAll(filepath.Join(dir, r), 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -100,6 +104,16 @@ if [ "$1 $2" = "list -m" ]; then
   echo example.com/x; exit 0
 fi
 if [ -n "$FAKE_GO_ARGLOG" ]; then printf '%s\n' "$*" >> "$FAKE_GO_ARGLOG"; fi
+case " $* " in
+  *" -test "*)
+    # the list of the tested package (go list -deps -test -tags integration PKG)
+    case "$FAKE_GO_MODE" in
+      failtest) echo "go: boom (test list)" >&2; exit 1 ;;
+      emptytest) exit 0 ;;
+    esac
+    if [ -n "${FAKE_GO_TEST_LIST+x}" ]; then printf '%s\n' "$FAKE_GO_TEST_LIST"; else echo "P example.com/x/internal/testsupport/venueoracle"; fi
+    exit 0 ;;
+esac
 case "$FAKE_GO_MODE" in
   fail) echo "go: boom" >&2; exit 1 ;;
   empty) exit 0 ;;

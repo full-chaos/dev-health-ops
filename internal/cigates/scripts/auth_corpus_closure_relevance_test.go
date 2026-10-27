@@ -17,7 +17,11 @@ import (
 
 var corpusLiveRoots = []string{
 	"./internal/api/session", "./internal/api/sso", "./internal/api/policy", "./internal/apiservice", "./cmd/dho", "./cmd/auth-service",
+	"./cmd/dev-health-worker-migrate", "./cmd/auth-migrate",
 }
+
+// corpusLiveTestPackage is the package the corpus runs `go test -tags integration` on (ci/auth_corpus_external.sh).
+const corpusLiveTestPackage = "./internal/apiservice/authflowvenue"
 
 // corpusLiveRun runs the script over a group that changes paths, with the fake go answering FAKE_GO_LIST etc. (extra env).
 func corpusLiveRun(t *testing.T, extra []string, paths ...string) string {
@@ -167,7 +171,11 @@ func TestAuthCorpusQueueLiveClosurePinsTheGoEnvironmentAndRoots(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+	envLines := strings.Split(strings.TrimSpace(string(raw)), "\n")
+	if len(envLines) < 3 {
+		t.Errorf("want go run for go list -m and both go list -deps calls, got %d lines", len(envLines))
+	}
+	for _, line := range envLines {
 		if line != "GOFLAGS=-mod=readonly GOTOOLCHAIN=local LC_ALL=C" {
 			t.Errorf("go ran with %q, want GOFLAGS=-mod=readonly GOTOOLCHAIN=local LC_ALL=C", line)
 		}
@@ -176,8 +184,15 @@ func TestAuthCorpusQueueLiveClosurePinsTheGoEnvironmentAndRoots(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(args), "list -deps -f ") || !strings.HasSuffix(strings.TrimSpace(string(args)), strings.Join(corpusLiveRoots, " ")) {
-		t.Errorf("go list arguments: %s", args)
+	lines := strings.Split(strings.TrimSpace(string(args)), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("want two go list -deps calls (the roots, the tested package), got %d: %s", len(lines), args)
+	}
+	if !strings.HasPrefix(lines[0], "list -deps -f ") || !strings.HasSuffix(lines[0], strings.Join(corpusLiveRoots, " ")) || strings.Contains(lines[0], " -test ") {
+		t.Errorf("first go list call: %s", lines[0])
+	}
+	if !strings.HasPrefix(lines[1], "list -deps -test -tags integration -f ") || !strings.HasSuffix(lines[1], " "+corpusLiveTestPackage) {
+		t.Errorf("second go list call (the tested package with its tests and the integration tag): %s", lines[1])
 	}
 }
 
@@ -282,6 +297,9 @@ func TestAuthCorpusQueueLiveClosureOnAFixtureModule(t *testing.T) {
 		{"a root itself", "internal/api/policy/new.go", "corpus=true"},
 		{"an embedded-file directory", "internal/api/sso/templates/new.html", "corpus=true"},
 		{"a package no root imports", "internal/unrelated/new.go", "corpus=false"},
+		{"a test-support package of the tested package (integration tag)", "internal/testsupport/venueoracle/new.go", "corpus=true"},
+		{"the other cmd built into the corpus image", "cmd/dev-health-worker-migrate/new.go", "corpus=true"},
+		{"a test-support package nothing tests with", "internal/testsupport/unrelated/new.go", "corpus=false"},
 		{"docs", "docs/a.md", "corpus=false"},
 	}
 	for _, c := range cases {
@@ -296,7 +314,7 @@ func TestAuthCorpusQueueLiveClosureOnAFixtureModule(t *testing.T) {
 	}
 	t.Run("a missing root", func(t *testing.T) {
 		dir, env := corpusFixtureRepo(t)
-		corpusQueueGit(t, dir, "rm", "-q", "-r", "cmd/auth-service")
+		corpusQueueGit(t, dir, "rm", "-q", "-r", "cmd/auth-migrate")
 		corpusQueueGit(t, dir, "commit", "-q", "-m", "drop a root")
 		tip := corpusQueueGit(t, dir, "rev-parse", "HEAD")
 		head := corpusQueueCommit(t, dir, "docs/a.md")
@@ -350,10 +368,35 @@ func TestAuthCorpusQueueLiveClosureOnTheRealTree(t *testing.T) {
 	if len(pkgs) < 50 || len(embeds) == 0 {
 		t.Fatalf("the closure looks wrong: %d packages, %d embed dirs", len(pkgs), len(embeds))
 	}
+	// the second live set: the tested package with its tests and the integration tag
+	var testPkgs []string
+	for _, line := range strings.Split(run("list", "-deps", "-test", "-tags", "integration", "-f", tmpl, corpusLiveTestPackage), "\n") {
+		kind, path, ok := strings.Cut(strings.TrimSpace(line), " ")
+		if !ok {
+			continue
+		}
+		path, _, _ = strings.Cut(strings.TrimPrefix(path, mod), " ")
+		path = strings.TrimSuffix(path, ".test")
+		if kind == "E" {
+			path = filepath.Dir(path)
+		}
+		if !in[path] {
+			testPkgs = append(testPkgs, path)
+		}
+		in[path] = true
+	}
+	sort.Strings(testPkgs)
+	for _, must := range []string{"internal/testsupport/venueoracle", "internal/testsupport/proofprincipals"} {
+		if !in[must] {
+			t.Fatalf("%s is not in the tested package's closure (the oracle expected it)", must)
+		}
+	}
 	var outside []string
 	for _, line := range strings.Split(run("list", "-f", "{{.ImportPath}}", "./..."), "\n") {
 		p := strings.TrimPrefix(strings.TrimSpace(line), mod)
-		if p == "" || in[p] || strings.HasPrefix(p, "internal/auth") || strings.HasPrefix(p, "internal/audit") || strings.HasPrefix(p, "internal/testsupport") ||
+		if p == "" || in[p] || strings.HasPrefix(p, "internal/auth") || strings.HasPrefix(p, "internal/audit") ||
+			p == "internal/testsupport/smtpcapture" || strings.HasPrefix(p, "internal/testsupport/smtpcapture/") || strings.HasPrefix(p, "internal/testsupport/providerstub") ||
+			p == "internal/testsupport/authrows" || p == "internal/testsupport/sessionscenario" ||
 			strings.HasPrefix(p, "cmd/auth-") || strings.HasPrefix(p, "contracts/auth") || strings.HasPrefix(p, "internal/storage/postgres/authschema") {
 			continue
 		}
@@ -365,6 +408,19 @@ func TestAuthCorpusQueueLiveClosureOnTheRealTree(t *testing.T) {
 	}
 	wrapper := "#!/bin/sh\ncd '" + root + "' || exit 1\nexec '" + goBin + "' \"$@\"\n"
 	env := []string{"GOCACHE=" + strings.TrimSpace(run("env", "GOCACHE")), "GOMODCACHE=" + strings.TrimSpace(run("env", "GOMODCACHE")), "GOPATH=" + strings.TrimSpace(run("env", "GOPATH"))}
+	t.Run("an edit to the oracle support packages", func(t *testing.T) {
+		for _, d := range []string{"internal/testsupport/venueoracle", "internal/testsupport/proofprincipals"} {
+			d2 := corpusQueueRepo(t, true)
+			if err := os.WriteFile(filepath.Join(corpusQueueBinDir(d2), "go"), []byte(wrapper), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			tip := corpusQueueGit(t, d2, "rev-parse", "HEAD")
+			head := corpusQueueCommit(t, d2, d+"/zz_live_probe.txt")
+			if got := corpusQueueRunEnv(t, d2, env, tip, head); got != "corpus=true" {
+				t.Errorf("%s: got %q, want corpus=true", d, got)
+			}
+		}
+	})
 	for k, v := range map[string][]string{"closure": {pkgs[0], pkgs[len(pkgs)/2], pkgs[len(pkgs)-1]}, "embed": {embeds[0], embeds[len(embeds)-1]}} {
 		for _, d := range v {
 			t.Run(k+" "+d, func(t *testing.T) {
@@ -392,5 +448,59 @@ func TestAuthCorpusQueueLiveClosureOnTheRealTree(t *testing.T) {
 				t.Fatalf("outside %s: got %q, want corpus=false", d, got)
 			}
 		})
+	}
+}
+
+// CHAOS-11670 (second live set): the corpus runs `go test -tags integration` on one package; that package's test
+// dependencies (internal/testsupport/venueoracle and friends) are in the closure too, with the same fail-closed rules.
+func TestAuthCorpusQueueTestedPackageClosure(t *testing.T) {
+	list := "FAKE_GO_TEST_LIST=P example.com/x/internal/apiservice/authflowvenue\nP example.com/x/internal/testsupport/venueoracle\nP example.com/x/internal/testsupport/proofprincipals\nE example.com/x/internal/testsupport/venueoracle/data/a.json"
+	cases := []struct {
+		name  string
+		paths []string
+		want  string
+	}{
+		{"the oracle support package", []string{"internal/testsupport/venueoracle/external.go"}, "corpus=true"},
+		{"the proof principals", []string{"internal/testsupport/proofprincipals/proofprincipals.go"}, "corpus=true"},
+		{"a file the oracle embeds", []string{"internal/testsupport/venueoracle/data/new.json"}, "corpus=true"},
+		{"the tested package", []string{"internal/apiservice/authflowvenue/extra_test.go"}, "corpus=true"},
+		{"another testsupport package nobody tests with", []string{"internal/testsupport/unrelated/x.go"}, "corpus=false"},
+		{"docs", []string{"docs/a.md"}, "corpus=false"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := corpusLiveRun(t, []string{list}, c.paths...); got != c.want {
+				t.Fatalf("change %q: got %q, want %q", c.paths, got, c.want)
+			}
+		})
+	}
+}
+
+func TestAuthCorpusQueueTestedPackageListFailsClosed(t *testing.T) {
+	cases := []struct {
+		name  string
+		extra []string
+	}{
+		{"the test list fails", []string{"FAKE_GO_MODE=failtest"}},
+		{"the test list is empty", []string{"FAKE_GO_MODE=emptytest"}},
+		{"a line that is neither P nor E", []string{"FAKE_GO_TEST_LIST=P example.com/x/internal/a\nX example.com/x/internal/b"}},
+		{"a package of another module", []string{"FAKE_GO_TEST_LIST=P example.com/x/internal/a\nP other.com/y/b"}},
+		{"a non-ASCII directory", []string{"FAKE_GO_TEST_LIST=P example.com/x/internal/\u00e9"}},
+		{"a dot-dot directory", []string{"FAKE_GO_TEST_LIST=P example.com/x/../a"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := corpusLiveRun(t, c.extra, "docs/a.md"); got != "corpus=true" {
+				t.Fatalf("got %q, want corpus=true (fails closed)", got)
+			}
+		})
+	}
+}
+
+// A test variant of a package prints as `PATH [PATH.test]` and the test main as `PATH.test`: both name a real directory.
+func TestAuthCorpusQueueTestedPackageVariantsMapToTheirDirectory(t *testing.T) {
+	list := "FAKE_GO_TEST_LIST=P example.com/x/internal/apiservice/authflowvenue [example.com/x/internal/apiservice/authflowvenue.test]\nP example.com/x/internal/testsupport/venueoracle [example.com/x/internal/apiservice/authflowvenue.test]"
+	if got := corpusLiveRun(t, []string{list}, "internal/testsupport/venueoracle/x.go"); got != "corpus=true" {
+		t.Fatalf("a test variant row: got %q, want corpus=true", got)
 	}
 }

@@ -21,7 +21,13 @@ const corpusModule = "github.com/full-chaos/dev-health-ops"
 // The roots ruled for CHAOS-11670 (acp): the go-api auth route packages, the apiservice top level, both binaries.
 var corpusClosureRoots = []string{
 	"./internal/api/session", "./internal/api/sso", "./internal/api/policy", "./internal/apiservice", "./cmd/dho", "./cmd/auth-service",
+	"./cmd/dev-health-worker-migrate", "./cmd/auth-migrate",
 }
+
+// The package the corpus runs `go test -tags integration` on.
+const corpusTestPackage = "./internal/apiservice/authflowvenue"
+
+const corpusSetFile = "ci/auth_corpus_set.sh"
 
 func corpusRun(t *testing.T, root, name string, args ...string) string {
 	t.Helper()
@@ -37,28 +43,94 @@ func corpusRun(t *testing.T, root, name string, args ...string) string {
 	return stdout.String()
 }
 
-func corpusRootsOfTheScript(t *testing.T, root string) []string {
+// corpusSetValue reads `NAME=value` or `NAME=(v1 v2 ...)` from ci/auth_corpus_set.sh, the one source of the roots and of
+// the tested package for both ci/auth_corpus_external.sh and ci/auth_corpus_queue_relevance.sh.
+func corpusSetValue(t *testing.T, root, name string) []string {
 	t.Helper()
-	for _, line := range strings.Split(readFile(t, filepath.Join(root, "ci", "auth_corpus_queue_relevance.sh")), "\n") {
-		if rest, ok := strings.CutPrefix(strings.TrimSpace(line), "roots=("); ok {
-			return strings.Fields(strings.TrimSuffix(rest, ")"))
+	for _, line := range strings.Split(readFile(t, filepath.Join(root, corpusSetFile)), "\n") {
+		rest, ok := strings.CutPrefix(strings.TrimSpace(line), name+"=")
+		if !ok {
+			continue
 		}
+		rest = strings.Trim(rest, "()")
+		var out []string
+		for _, f := range strings.Fields(rest) {
+			out = append(out, strings.Trim(f, `"`))
+		}
+		return out
 	}
-	t.Fatal("ci/auth_corpus_queue_relevance.sh has no roots=(...) line")
+	t.Fatalf("%s has no %s=", corpusSetFile, name)
 	return nil
 }
 
-// The six roots the live closure starts from exist in the tree, and the script names exactly them.
-func TestAuthCorpusClosureRootsExistAndTheScriptNamesThem(t *testing.T) {
+// The roots of the live closure exist in the tree, and the shared set names exactly them.
+func TestAuthCorpusClosureRootsExistAndTheSetNamesThem(t *testing.T) {
 	root := authProofRoot(t)
-	got := corpusRootsOfTheScript(t, root)
+	got := corpusSetValue(t, root, "AUTH_CORPUS_ROOTS")
 	if strings.Join(got, " ") != strings.Join(corpusClosureRoots, " ") {
-		t.Fatalf("the script's roots %v differ from the ruled roots %v", got, corpusClosureRoots)
+		t.Fatalf("the set's roots %v differ from the ruled roots %v", got, corpusClosureRoots)
 	}
 	for _, r := range corpusClosureRoots {
 		out := corpusRun(t, root, "go", "list", "-f", "{{.ImportPath}}", r)
 		if !strings.HasPrefix(strings.TrimSpace(out), corpusModule+"/"+strings.TrimPrefix(r, "./")) {
 			t.Errorf("root %s: go list printed %q", r, out)
+		}
+	}
+}
+
+// Every command the corpus images build (the go build loop of docker/go-worker.Dockerfile) is a root.
+func TestAuthCorpusClosureRootsCoverTheImageBuildList(t *testing.T) {
+	root := authProofRoot(t)
+	text := readFile(t, filepath.Join(root, "docker", "go-worker.Dockerfile"))
+	i := strings.Index(text, "for command in")
+	j := strings.Index(text[i:], "; do")
+	if i < 0 || j < 0 {
+		t.Fatal("docker/go-worker.Dockerfile has no `for command in ... ; do` build loop")
+	}
+	roots := map[string]bool{}
+	for _, r := range corpusSetValue(t, root, "AUTH_CORPUS_ROOTS") {
+		roots[r] = true
+	}
+	n := 0
+	for _, f := range strings.Fields(strings.ReplaceAll(text[i+len("for command in"):i+j], "\\", " ")) {
+		n++
+		if !roots["./cmd/"+f] {
+			t.Errorf("the corpus images build cmd/%s but it is not in AUTH_CORPUS_ROOTS", f)
+		}
+	}
+	if n < 4 {
+		t.Errorf("the build loop lists %d commands, want at least 4", n)
+	}
+}
+
+// ONE source: both scripts source ci/auth_corpus_set.sh; the tested package is the one the test command runs and the one
+// the relevance script lists with its test dependencies.
+func TestAuthCorpusSetIsTheOneSourceOfTheTestedPackage(t *testing.T) {
+	root := authProofRoot(t)
+	if got := corpusSetValue(t, root, "AUTH_CORPUS_TEST_PACKAGE"); len(got) != 1 || got[0] != corpusTestPackage {
+		t.Fatalf("AUTH_CORPUS_TEST_PACKAGE = %v, want [%s]", got, corpusTestPackage)
+	}
+	for _, name := range []string{"ci/auth_corpus_external.sh", "ci/auth_corpus_queue_relevance.sh"} {
+		text := readFile(t, filepath.Join(root, name))
+		if !strings.Contains(text, "auth_corpus_set.sh") {
+			t.Errorf("%s does not source ci/auth_corpus_set.sh", name)
+		}
+		if !strings.Contains(text, "${AUTH_CORPUS_TEST_PACKAGE}") {
+			t.Errorf("%s does not use ${AUTH_CORPUS_TEST_PACKAGE}", name)
+		}
+	}
+	ext := readFile(t, filepath.Join(root, "ci/auth_corpus_external.sh"))
+	if strings.Contains(ext, "./internal/apiservice/authflowvenue") {
+		t.Error("ci/auth_corpus_external.sh still names the tested package literally")
+	}
+	rel := readFile(t, filepath.Join(root, "ci/auth_corpus_queue_relevance.sh"))
+	if !strings.Contains(rel, "-test -tags integration") {
+		t.Error("the relevance script does not list the tested package with -test -tags integration")
+	}
+	out := corpusRun(t, root, "go", "list", "-deps", "-test", "-tags", "integration", "-f", "{{.ImportPath}}", corpusTestPackage)
+	for _, must := range []string{"/internal/testsupport/venueoracle", "/internal/testsupport/proofprincipals"} {
+		if !strings.Contains(out, corpusModule+must) {
+			t.Errorf("go list -deps -test -tags integration %s does not reach %s", corpusTestPackage, must)
 		}
 	}
 }
